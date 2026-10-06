@@ -1,0 +1,46 @@
+{
+  "tag": "android-13.0.0_r1",
+  "purpose": "Source-compiled runtime engine experiment; device ABI must be separately verified",
+  "archives": [
+    {
+      "destination": "art",
+      "url": "https://android.googlesource.com/platform/art/+archive/refs/tags/android-13.0.0_r1.tar.gz",
+      "sha256": "f677abb36a68d7720350c05954ba55eb6d9e8dda797740d405bbc06592f8bd93"
+    },
+    {
+      "destination": "libbase/include",
+      "url": "https://android.googlesource.com/platform/system/libbase/+archive/refs/tags/android-13.0.0_r1/include.tar.gz",
+      "sha256": "a460f2036c981c434205897b852063289843b600ee29038fc60d1bed99b1fcb0"
+    },
+    {
+      "destination": "libnativehelper/include",
+      "url": "https://android.googlesource.com/platform/libnativehelper/+archive/refs/tags/android-13.0.0_r1/include.tar.gz",
+      "sha256": "f534e4c6a7dccbbcc25b3a2ab504bed88a87c990ddec4fbf9678972ad7bad9d9"
+    },
+    {
+      "destination": "libnativehelper/header_only_include",
+      "url": "https://android.googlesource.com/platform/libnativehelper/+archive/refs/tags/android-13.0.0_r1/header_only_include.tar.gz",
+      "sha256": "d3a64769db2a1cc3b23e8b44424b34c8d43abb9691db9b3b74b12ab32191e2e8"
+    },
+    {
+      "destination": "libcxx/include",
+      "url": "https://android.googlesource.com/platform/external/libcxx/+archive/refs/tags/android-13.0.0_r1/include.tar.gz",
+      "sha256": "80e9d29293dcb6089f7a528c64197affe4fa0b842fcfd625572ae96fb7a4f5ef"
+    },
+    {
+      "destination": "bionic/platform",
+      "url": "https://android.googlesource.com/platform/bionic/+archive/refs/tags/android-13.0.0_r1/libc/platform.tar.gz",
+      "sha256": "47dafd087bbb354e27af1d6e37de74090318d2c08d8c3e1f8e5d3a5df63e8448"
+    },
+    {
+      "destination": "bionic/include",
+      "url": "https://android.googlesource.com/platform/bionic/+archive/refs/tags/android-13.0.0_r1/libc/include.tar.gz",
+      "sha256": "8225868fc249d52d12454ea832f47102b4ebd2b36d50491eb0883e26ddd925b5"
+    },
+    {
+      "destination": "external/dlmalloc",
+      "url": "https://android.googlesource.com/platform/external/dlmalloc/+archive/refs/tags/android-13.0.0_r1.tar.gz",
+      "sha256": "6e55500235a720045c097c52c0d88efd62b1024161e950b4bc638d4d27e7adbd"
+    }
+  ]
+}

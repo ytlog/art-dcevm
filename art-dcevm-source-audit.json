@@ -1,0 +1,835 @@
+{
+  "review_date": "2026-10-04",
+  "scope": "AOSP release-tag source review, not device runtime validation. Extension presence is not equivalent to a support guarantee.",
+  "retrieval": "Public Gitiles ?format=TEXT retrieved using curl with certificate validation, then base64-decoded. Android 8.x conclusions use ti_redefine.cc and VMDebug.java; ti_extension.cc was not retrieved for 8.x.",
+  "sources": [
+    {
+      "tag": "android-10.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-10.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "d97819c67400a9c536ea96424334ee1424f2e8642a7c0bddb4ec0b4f05412fd1",
+      "line_count": 487,
+      "markers": {}
+    },
+    {
+      "tag": "android-10.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-10.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "93d7de371f9e5e1235cd09bccee4f89379857817126d50ccefb3b1c3be57604d",
+      "line_count": 1624,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          678
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          739,
+          753,
+          765,
+          775
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          823,
+          830,
+          837,
+          844,
+          853
+        ]
+      }
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "openjdkjvmti/OpenjdkJvmTi.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/OpenjdkJvmTi.cc",
+      "sha256": "42ee3c6666711a5f97ed8c344fcbec2f15d0ea7e8a3e005139ecd1c38089271b",
+      "line_count": 1715,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          93,
+          1122,
+          1486
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          1349
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1346
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1348
+        ]
+      }
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "openjdkjvmti/art_jvmti.h",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/art_jvmti.h",
+      "sha256": "aab7a3ef2dd1fd38e02f6ba34dbefd88c50e7e164532aa9374ccd16e5cb2721c",
+      "line_count": 349,
+      "markers": {}
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "runtime/native/dalvik_system_VMDebug.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/runtime/native/dalvik_system_VMDebug.cc",
+      "sha256": "6322007ccc71ca364c40ab26db949c80f267e93e08468e1c39ed51ca7e89558f",
+      "line_count": 673,
+      "markers": {}
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "runtime/runtime.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/runtime/runtime.cc",
+      "sha256": "89565a74ee032cd150aca56d8cd7b564be4c69ab4ce2ae54515b5e2abe32bba7",
+      "line_count": 3068,
+      "markers": {
+        "GetJniIdType()": [
+          3031
+        ]
+      }
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "2ade31e995a63621e1ca79eb1c41779b79fd34c759c4af28ccb980c725b01cbf",
+      "line_count": 711,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          424,
+          642
+        ],
+        "com.android.art.UNSAFE.class.structurally_redefine_class_direct": [
+          458
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          406
+        ],
+        "GetJniIdType()": [
+          401,
+          632
+        ],
+        "Only supports additive changes": [
+          426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          448,
+          481
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          449,
+          482
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          446,
+          479
+        ]
+      }
+    },
+    {
+      "tag": "android-11.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "a335f4c2639abeee9028657fb970233183934be8bb38d1b6dfb6c708c18a2147",
+      "line_count": 3130,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          944,
+          1005
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1040,
+          1046,
+          1064
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1109,
+          1116,
+          1124,
+          1132,
+          1141
+        ]
+      }
+    },
+    {
+      "tag": "android-12.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-12.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "bd5c54fe020ef90a9f40a4d9829fa3317de0cc0e9e285c5d487d4a13e1ab0c92",
+      "line_count": 785,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          424,
+          716
+        ],
+        "com.android.art.UNSAFE.class.structurally_redefine_class_direct": [
+          458
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          406
+        ],
+        "GetJniIdType()": [
+          401,
+          706
+        ],
+        "Only supports additive changes": [
+          426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          448,
+          481
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          449,
+          482
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          446,
+          479
+        ]
+      }
+    },
+    {
+      "tag": "android-12.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-12.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "89fd3cb942960de6e6f9f2786f30bad87883eebd75c57870128bc67d0ce8fba2",
+      "line_count": 3157,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          941,
+          1002
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1037,
+          1043,
+          1061
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1106,
+          1113,
+          1121,
+          1129,
+          1138
+        ]
+      }
+    },
+    {
+      "tag": "android-12.1.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-12.1.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "bd5c54fe020ef90a9f40a4d9829fa3317de0cc0e9e285c5d487d4a13e1ab0c92",
+      "line_count": 785,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          424,
+          716
+        ],
+        "com.android.art.UNSAFE.class.structurally_redefine_class_direct": [
+          458
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          406
+        ],
+        "GetJniIdType()": [
+          401,
+          706
+        ],
+        "Only supports additive changes": [
+          426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          448,
+          481
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          449,
+          482
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          446,
+          479
+        ]
+      }
+    },
+    {
+      "tag": "android-12.1.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-12.1.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "89fd3cb942960de6e6f9f2786f30bad87883eebd75c57870128bc67d0ce8fba2",
+      "line_count": 3157,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          941,
+          1002
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1037,
+          1043,
+          1061
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1106,
+          1113,
+          1121,
+          1129,
+          1138
+        ]
+      }
+    },
+    {
+      "tag": "android-13.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-13.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "bd5c54fe020ef90a9f40a4d9829fa3317de0cc0e9e285c5d487d4a13e1ab0c92",
+      "line_count": 785,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          424,
+          716
+        ],
+        "com.android.art.UNSAFE.class.structurally_redefine_class_direct": [
+          458
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          406
+        ],
+        "GetJniIdType()": [
+          401,
+          706
+        ],
+        "Only supports additive changes": [
+          426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          448,
+          481
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          449,
+          482
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          446,
+          479
+        ]
+      }
+    },
+    {
+      "tag": "android-13.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-13.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "b53a2bcff0f87f1a31569da1c24c9445729d7adc08f78165048e5fe046d69d49",
+      "line_count": 3100,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          939,
+          1000
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1035,
+          1041,
+          1059
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1113,
+          1120,
+          1128,
+          1136,
+          1145
+        ]
+      }
+    },
+    {
+      "tag": "android-14.0.0_r1",
+      "path": "openjdkjvmti/OpenjdkJvmTi.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/OpenjdkJvmTi.cc",
+      "sha256": "7a921bb443faf48ac577284f41787fcab53a74ce3587a7d36fe7847ea5067450",
+      "line_count": 1665,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          1116,
+          1427
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          1343
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1340
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1342
+        ]
+      }
+    },
+    {
+      "tag": "android-14.0.0_r1",
+      "path": "openjdkjvmti/art_jvmti.h",
+      "url": "https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/art_jvmti.h",
+      "sha256": "a98844a07a5464d74a47cdfcdf11f2886273abf4a933f589bef7af6c9f3887f2",
+      "line_count": 358,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          75
+        ],
+        "IsJavaDebuggableAtInit()": [
+          78
+        ]
+      }
+    },
+    {
+      "tag": "android-14.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "8c7eb5f4ab1c84800f48ba41b0dcc508f559ca229e5e7ee300fc741d8341a9ca",
+      "line_count": 783,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          423,
+          714
+        ],
+        "com.android.art.UNSAFE.class.structurally_redefine_class_direct": [
+          457
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          405
+        ],
+        "GetJniIdType()": [
+          401,
+          705
+        ],
+        "IsFullJvmtiAvailable()": [
+          401,
+          705
+        ],
+        "Only supports additive changes": [
+          425
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          447,
+          480
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          448,
+          481
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          445,
+          478
+        ]
+      }
+    },
+    {
+      "tag": "android-14.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "0d093afff18de02c8cd9bef6a3c1524b66d03a919d584b2d95ca0870aa4a1dc3",
+      "line_count": 3167,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          951,
+          1012
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1047,
+          1053,
+          1071
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1125,
+          1132,
+          1140,
+          1148,
+          1157
+        ]
+      }
+    },
+    {
+      "tag": "android-15.0.0_r1",
+      "path": "openjdkjvmti/OpenjdkJvmTi.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-15.0.0_r1/openjdkjvmti/OpenjdkJvmTi.cc",
+      "sha256": "3e6c0e458d2d317856d9b6d8423272c1fd6bae8be8e3527184749dc8f1912c42",
+      "line_count": 1664,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          1115,
+          1426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          1342
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1339
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1341
+        ]
+      }
+    },
+    {
+      "tag": "android-15.0.0_r1",
+      "path": "openjdkjvmti/art_jvmti.h",
+      "url": "https://android.googlesource.com/platform/art/+/android-15.0.0_r1/openjdkjvmti/art_jvmti.h",
+      "sha256": "a98844a07a5464d74a47cdfcdf11f2886273abf4a933f589bef7af6c9f3887f2",
+      "line_count": 358,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          75
+        ],
+        "IsJavaDebuggableAtInit()": [
+          78
+        ]
+      }
+    },
+    {
+      "tag": "android-15.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-15.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "e2a0d058d8c3008268991e7af28c32c97114e9b53aa7390b60e02ffb2eb9f44d",
+      "line_count": 751,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          423,
+          682
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          405
+        ],
+        "GetJniIdType()": [
+          401,
+          673
+        ],
+        "IsFullJvmtiAvailable()": [
+          401,
+          673
+        ],
+        "Only supports additive changes": [
+          425
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          447
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          448
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          445
+        ]
+      }
+    },
+    {
+      "tag": "android-15.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-15.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "d5937b1e1691282388735cf93f28e21289d3018d07eac34f1f660d94927fc76d",
+      "line_count": 3154,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          945,
+          1006
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1041,
+          1047,
+          1065
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1110,
+          1117,
+          1125,
+          1133,
+          1142
+        ]
+      }
+    },
+    {
+      "tag": "android-16.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-16.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "e2a0d058d8c3008268991e7af28c32c97114e9b53aa7390b60e02ffb2eb9f44d",
+      "line_count": 751,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          423,
+          682
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          405
+        ],
+        "GetJniIdType()": [
+          401,
+          673
+        ],
+        "IsFullJvmtiAvailable()": [
+          401,
+          673
+        ],
+        "Only supports additive changes": [
+          425
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          447
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          448
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          445
+        ]
+      }
+    },
+    {
+      "tag": "android-16.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-16.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "2a594f736693368e19c13670d3072ef70943493b9524e419195d393edf467a14",
+      "line_count": 3141,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          946,
+          1007
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1042,
+          1048,
+          1066
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1110,
+          1116,
+          1124,
+          1132,
+          1140
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "openjdkjvmti/OpenjdkJvmTi.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/OpenjdkJvmTi.cc",
+      "sha256": "3e6c0e458d2d317856d9b6d8423272c1fd6bae8be8e3527184749dc8f1912c42",
+      "line_count": 1664,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          1115,
+          1426
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          1342
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1339
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1341
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "openjdkjvmti/art_jvmti.h",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/art_jvmti.h",
+      "sha256": "8b03a7146097adbc57b269a9445fb25191d6c7e4b27cd3f04892d5818d03e341",
+      "line_count": 358,
+      "markers": {
+        "IsFullJvmtiAvailable()": [
+          75
+        ],
+        "IsJavaDebuggableAtInit()": [
+          78
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "runtime/native/dalvik_system_VMDebug.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/runtime/native/dalvik_system_VMDebug.cc",
+      "sha256": "8f836c27ccf58b282aaeedf40f5dc3d8bb2b3ebaa81b7b944db0f1f2cc2bbb37",
+      "line_count": 834,
+      "markers": {
+        "IsJavaDebuggableAtInit()": [
+          715
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "runtime/runtime.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/runtime/runtime.cc",
+      "sha256": "5b10319787af6fbcee27e6bac3e1a7637f18392e669bb52cd04db831ebe3a083",
+      "line_count": 3695,
+      "markers": {
+        "GetJniIdType()": [
+          3488
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "e2a0d058d8c3008268991e7af28c32c97114e9b53aa7390b60e02ffb2eb9f44d",
+      "line_count": 751,
+      "markers": {
+        "com.android.art.class.structurally_redefine_classes": [
+          423,
+          682
+        ],
+        "com.android.art.class.is_structurally_modifiable_class": [
+          405
+        ],
+        "GetJniIdType()": [
+          401,
+          673
+        ],
+        "IsFullJvmtiAvailable()": [
+          401,
+          673
+        ],
+        "Only supports additive changes": [
+          425
+        ],
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          447
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          448
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          445
+        ]
+      }
+    },
+    {
+      "tag": "android-17.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "34d1c458b1bab66c1d5da356ff710defb6a73197508d12a6f215e66352735beb",
+      "line_count": 3149,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          947,
+          1008
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          1043,
+          1049,
+          1067
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          1111,
+          1117,
+          1125,
+          1133,
+          1141
+        ]
+      }
+    },
+    {
+      "tag": "android-8.0.0_r1",
+      "path": "runtime/openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-8.0.0_r1/runtime/openjdkjvmti/ti_redefine.cc",
+      "sha256": "ec3fd91f1d19bb8673b057aa3ceeb4640863c25c733148863f9e8804522a98d3",
+      "line_count": 1484,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          573
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          636,
+          650,
+          662,
+          673
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          721,
+          728,
+          735,
+          742,
+          751
+        ]
+      }
+    },
+    {
+      "tag": "android-8.0.0_r1",
+      "path": "dalvik/src/main/java/dalvik/system/VMDebug.java",
+      "url": "https://android.googlesource.com/platform/libcore/+/android-8.0.0_r1/dalvik/src/main/java/dalvik/system/VMDebug.java",
+      "sha256": "3920c3fecbab4e386a64e067c3634fa4269bdac793c2ce623c10738b85e646e5",
+      "line_count": 493,
+      "markers": {
+        "attachAgent(String agent)": [
+          492
+        ]
+      }
+    },
+    {
+      "tag": "android-8.1.0_r1",
+      "path": "runtime/openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-8.1.0_r1/runtime/openjdkjvmti/ti_redefine.cc",
+      "sha256": "a420acea3d1574030074bdde5921c7df4d7fbd4fa9ebebef729508beef5ae314",
+      "line_count": 1517,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          601
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          662,
+          676,
+          688,
+          699
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          747,
+          754,
+          761,
+          768,
+          777
+        ]
+      }
+    },
+    {
+      "tag": "android-8.1.0_r1",
+      "path": "dalvik/src/main/java/dalvik/system/VMDebug.java",
+      "url": "https://android.googlesource.com/platform/libcore/+/android-8.1.0_r1/dalvik/src/main/java/dalvik/system/VMDebug.java",
+      "sha256": "3920c3fecbab4e386a64e067c3634fa4269bdac793c2ce623c10738b85e646e5",
+      "line_count": 493,
+      "markers": {
+        "attachAgent(String agent)": [
+          492
+        ]
+      }
+    },
+    {
+      "tag": "android-9.0.0_r1",
+      "path": "openjdkjvmti/ti_extension.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-9.0.0_r1/openjdkjvmti/ti_extension.cc",
+      "sha256": "125ff4a28358bd316e95f07648d47f27db4ff5a00c73e51e788ad5d4a5b42be1",
+      "line_count": 412,
+      "markers": {}
+    },
+    {
+      "tag": "android-9.0.0_r1",
+      "path": "openjdkjvmti/ti_redefine.cc",
+      "url": "https://android.googlesource.com/platform/art/+/android-9.0.0_r1/openjdkjvmti/ti_redefine.cc",
+      "sha256": "e3350566424b6a1da60b7ba7b79271b3a7e8d57d63597fdf47be1b3bc19962d1",
+      "line_count": 1556,
+      "markers": {
+        "UNSUPPORTED_REDEFINITION_METHOD_DELETED": [
+          627
+        ],
+        "UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED": [
+          688,
+          702,
+          714,
+          725
+        ],
+        "UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED": [
+          773,
+          780,
+          787,
+          794,
+          803
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,494 @@
+#include "platform/android13/source_engine_loader.h"
+#include <dlfcn.h>
+#include <limits>
+#include "hooks/shadow_hook_engine.h"
+#include "platform/android13/builds/cas_tkq1_221114_001.h"
+#include "support/elf_modules.h"
+#include "platform/android13/retired_method_hooks.h"
+#include "platform/android13/retired_field_hooks.h"
+#include "platform/android13/validation_hooks.h"
+
+namespace artdcevm::android13 {
+namespace {
+void* source_library = nullptr;
+using Redefine = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
+Redefine source_redefine = nullptr;
+bool load_attempted = false, ready = false;
+void* graph_inline_hook_token = nullptr;
+}
+std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibration) {
+  if (ready) return {};
+  if (load_attempted) return "Source initialization previously failed; restart the process";
+  load_attempted = true;
+  if (!path || !calibration) return "Source library path and ABI calibration are required";
+  if (FindLoadedModule("libart.so").build_id != cas::kArtBuildId ||
+      FindLoadedModule("libopenjdkjvmti.so").build_id != cas::kJvmtiBuildId)
+    return "Unsupported ART/JVMTI build for the source engine";
+  ShadowHookEngine symbols;
+  std::string error;
+  if (!symbols.Initialize(&error)) return error;
+  using Loader = void* (*)(const char*, int, const void*);
+  auto loader = reinterpret_cast<Loader>(dlsym(RTLD_DEFAULT, "__loader_dlopen"));
+  if (!loader) loader = reinterpret_cast<Loader>(symbols.FindSymbol("linker64", "__loader_dlopen"));
+  void* caller = symbols.FindSymbol("libopenjdkjvmti.so", cas::kCheckFields);
+  if (!loader || !caller) return "Required named linker/ART symbol is unavailable";
+  void* library = loader(path, RTLD_NOW | RTLD_LOCAL, caller);
+  if (!library) {
+    const char* detail = dlerror();
+    return detail ? detail : "Source engine dlopen failed";
+  }
+  using Probe = int (*)(JNIEnv*, jobject);
+  auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
+  auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
+  auto commit = reinterpret_cast<ValidationHooks::Commit>(dlsym(library, "ArtDcevmSourceCommit"));
+  auto in_place_finalize = reinterpret_cast<ValidationHooks::InPlaceFinalize>(
+      dlsym(library, "ArtDcevmSourceInvalidateInPlaceCommit"));
+  auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
+  auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
+  auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
+  void* instance_allocation = dlsym(library, "ArtDcevmSourceInstanceAllocation");
+  using ConfigureInstanceAllocation = void** (*)(bool (*)());
+  auto configure_instance_allocation = reinterpret_cast<ConfigureInstanceAllocation>(
+      dlsym(library, "ArtDcevmSourceConfigureInstanceAllocation"));
+  auto allocator = dlsym(library, "ArtDcevmSourceHierarchyAllocator");
+  using ConfigureAllocator = void** (*)(bool (*)());
+  auto configure_allocator = reinterpret_cast<ConfigureAllocator>(dlsym(library, "ArtDcevmSourceConfigureHierarchyAllocator"));
+  using ConfigureVerification = void** (*)(int);
+  auto configure_verification = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyVerification"));
+  void* verify = dlsym(library, "ArtDcevmSourceHierarchyVerify");
+  void* resolve = dlsym(library, "ArtDcevmSourceHierarchyResolve");
+  void* find = dlsym(library, "ArtDcevmSourceHierarchyFind");
+  void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
+  void* batch_allocate = dlsym(library, "ArtDcevmSourceHierarchyAllocateSubtree");
+  void* batch_verify = dlsym(library, "ArtDcevmSourceHierarchyRun");
+  void* loader_delete = dlsym(library, cas::kDeleteClassLoader);
+  using ConfigureLoaderDelete = void** (*)();
+  auto configure_loader_delete = reinterpret_cast<ConfigureLoaderDelete>(
+      dlsym(library, "ArtDcevmSourceConfigureClassLoaderDeletion"));
+  void* async_deoptimizeable = dlsym(library, "ArtDcevmSourceIsAsyncDeoptimizeable");
+  auto configure_async_deoptimizeable = reinterpret_cast<ConfigureLoaderDelete>(
+      dlsym(library, "ArtDcevmSourceConfigureAsyncDeoptimizeable"));
+  void* suspend_from_code = dlsym(library, "ArtDcevmSourceTestSuspendFromCode");
+  auto configure_suspend_from_code = reinterpret_cast<ConfigureLoaderDelete>(
+      dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
+  auto configure_batch = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyBatch"));
+  if (!probe || !redefine || !commit || !in_place_finalize || !methods || !fields || !classes || !instance_allocation
+      || !configure_instance_allocation || !allocator || !configure_allocator
+      || !configure_verification || !verify || !resolve || !find || !lookup
+      || !batch_allocate || !batch_verify || !configure_batch
+      || !loader_delete || !configure_loader_delete
+      || !async_deoptimizeable || !configure_async_deoptimizeable
+      || !suspend_from_code || !configure_suspend_from_code) {
+    dlclose(library); return "Source engine exports are incomplete";
+  }
+  // Check the SDK's dedicated calibration object before installing source callbacks.
+  int code = probe(jni, calibration);
+  if (code != 0 || jni->ExceptionCheck()) {
+    dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
+  }
+  // Retain this DSO after any hook attempt, even if rollback fails.
+  source_library = library;
+  ValidationHooks dispatcher;
+  if (!dispatcher.Install(symbols, &error)) return error;
+  if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
+  if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
+  void* instance_allocation_target = symbols.FindSymbol("libopenjdkjvmti.so", cas::kCollectNewInstances);
+  if (!instance_allocation_target) return "Missing named structural instance allocator";
+  void** original_instance_allocation = configure_instance_allocation(ValidationHooks::InSourceTransaction);
+  if (!original_instance_allocation || !symbols.Install(instance_allocation_target,
+      instance_allocation, original_instance_allocation, &error)) return error;
+  void* allocator_target = symbols.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
+  if (!allocator_target) return "Missing named structural class allocator";
+  // ShadowHook publishes the original trampoline into the proxy's own slot as
+  // part of installation; no post-install window leaves its callback null.
+  void** original_allocator = configure_allocator(ValidationHooks::InSourceTransaction);
+  if (!original_allocator || !symbols.Install(allocator_target, allocator, original_allocator, &error)) return error;
+  const char* verification_symbols[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass, cas::kLookupClass};
+  void* verification_proxies[]{verify, resolve, find, lookup};
+  for (int i = 0; i < 4; ++i) {
+    void* target = symbols.FindSymbol("libart.so", verification_symbols[i]);
+    if (!target) return std::string("Missing hierarchy verification symbol: ") + verification_symbols[i];
+    if (!symbols.Install(target, verification_proxies[i], configure_verification(i), &error)) return error;
+  }
+  const char* batch_symbols[]{cas::kAllocateSubtree, cas::kRedefineRun};
+  void* batch_proxies[]{batch_allocate, batch_verify};
+  for (int i = 0; i < 2; ++i) {
+    void* target = symbols.FindSymbol("libopenjdkjvmti.so", batch_symbols[i]);
+    if (!target) return std::string("Missing hierarchy batch symbol: ") + batch_symbols[i];
+    if (!symbols.Install(target, batch_proxies[i], configure_batch(i), &error)) return error;
+  }
+  void* loader_delete_target = symbols.FindSymbol("libart.so", cas::kDeleteClassLoader);
+  if (!loader_delete_target || !symbols.Install(loader_delete_target, loader_delete,
+      configure_loader_delete(), &error))
+    return error.empty() ? "Missing named ClassLoader deletion symbol" : error;
+  void* async_deoptimizeable_target = symbols.FindSymbol("libart.so", cas::kIsAsyncDeoptimizeable);
+  if (!async_deoptimizeable_target || !symbols.Install(async_deoptimizeable_target,
+      async_deoptimizeable, configure_async_deoptimizeable(), &error))
+    return error.empty() ? "Missing named ART async deoptimization symbol" : error;
+  void* suspend_from_code_target = symbols.FindSymbol("libart.so", cas::kTestSuspendFromCode);
+  if (!suspend_from_code_target || !symbols.Install(suspend_from_code_target,
+      suspend_from_code, configure_suspend_from_code(), &error))
+    return error.empty() ? "Missing named ART suspend entrypoint" : error;
+  ValidationHooks::ConfigureSource(fields, methods, classes, commit, in_place_finalize);
+  source_redefine = redefine;
+  ready = true;
+  return {};
+}
+bool SourceEngineAvailable() { return ready; }
+int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
+  if (!ready) return JVMTI_ERROR_NOT_AVAILABLE;
+  if (definitions.empty() || definitions.size() > static_cast<size_t>(std::numeric_limits<jint>::max()))
+    return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  JNIEnv* jni = nullptr;
+  if (vm_->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
+    return JVMTI_ERROR_UNATTACHED_THREAD;
+  std::vector<jvmtiClassDefinition> native;
+  native.reserve(definitions.size());
+  for (size_t i = 0; i < definitions.size(); ++i) {
+    const auto& definition = definitions[i];
+    if (!definition.klass || definition.dex.empty() ||
+        definition.dex.size() > static_cast<size_t>(std::numeric_limits<jint>::max()))
+      return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+    for (size_t j = 0; j < i; ++j)
+      if (jni->IsSameObject(definition.klass, definitions[j].klass)) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+    native.push_back({definition.klass, static_cast<jint>(definition.dex.size()), definition.dex.data()});
+  }
+  std::vector<jclass> transaction_roots;
+  transaction_roots.reserve(definitions.size());
+  for (size_t i = 0; i < definitions.size(); ++i) {
+    const auto& definition = definitions[i];
+    auto root = static_cast<jclass>(jni->NewGlobalRef(definition.klass));
+    if (!root) {
+      for (jclass transaction_root : transaction_roots) jni->DeleteGlobalRef(transaction_root);
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    transaction_roots.push_back(root);
+  }
+  SourceTransactionScope transaction;
+  const int result = source_redefine(env_, static_cast<jint>(native.size()), native.data());
+  // The named ClassLinker deletion hook prunes native retired pointers before
+  // ART frees a loader's LinearAlloc. The roots are needed only for this transaction.
+  for (jclass root : transaction_roots) jni->DeleteGlobalRef(root);
+  return result;
+}
+}
+
+// Diagnostics only. All class mutations go through NativeBridge.apply.
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
+  return artdcevm::android13::ValidationHooks::SourceCommitCalls();
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_inPlaceInvalidationCalls(
+    JNIEnv*, jclass) {
+  return artdcevm::android13::ValidationHooks::SourceInPlaceCalls();
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_rejectedCalls(JNIEnv*, jclass) {
+  return artdcevm::android13::RejectedRetiredInvocations();
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_checkJniMode(
+    JNIEnv* env, jclass, jint requested) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, int);
+  auto mode = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceCheckJniMode"));
+  return mode ? mode(env, requested) : -1;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_readBarrierCalls(JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceReadBarrierCalls"));
+  return fn ? static_cast<jlong>(fn()) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDeleteCalls(JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceClassLoaderDeleteCount"));
+  return fn ? static_cast<jlong>(fn()) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredPrunedCount(
+    JNIEnv*, jclass, jint kind) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)(int);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceRetiredPrunedCount"));
+  return fn ? static_cast<jlong>(fn(kind)) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlotCount(
+    JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = size_t (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceRetiredFieldSlotCount"));
+  return fn ? static_cast<jlong>(fn()) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitMethodState(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitMethodState"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotMethodState(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAotMethodState"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotExperiment(
+    JNIEnv* env, jclass, jobject executable, jboolean enable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject, bool);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAotExperiment"));
+  return fn ? fn(env, executable, enable == JNI_TRUE) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotFrameState(
+    JNIEnv* env, jclass, jobject thread, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAotFrameState"));
+  return fn ? fn(env, thread, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptProbe(
+    JNIEnv* env, jclass, jobject thread, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAotSuspendDeoptProbe"));
+  return fn ? fn(env, thread, executable) : -1;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptHits(
+    JNIEnv*, jclass, jboolean reset) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = uint64_t (*)(bool);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAotSuspendDeoptHits"));
+  return fn ? static_cast<jlong>(fn(reset == JNI_TRUE)) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitActiveFrameState(
+    JNIEnv* env, jclass, jobject thread, jobject caller, jobject callee) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject, jobject, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitActiveFrameState"));
+  return fn ? fn(env, thread, caller, callee) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineState(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitInlineState"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineExperiment(
+    JNIEnv* env, jclass, jboolean enable) {
+  if (!artdcevm::android13::source_library ||
+      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
+          artdcevm::android13::cas::kCompilerBuildId) return -10;
+  using Fn = int (*)(JNIEnv*, bool);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitInlineExperiment"));
+  return fn ? fn(env, enable == JNI_TRUE) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCodeKind(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitCodeKind"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCacheDetail(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitCacheDetail"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invalidateAllJit(
+    JNIEnv* env, jclass) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = int (*)(JNIEnv*);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceInvalidateAllJit"));
+  return fn ? fn(env) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_forceOptimizedJit(
+    JNIEnv* env, jclass, jobject executable) {
+  if (!artdcevm::android13::source_library ||
+      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
+          artdcevm::android13::cas::kCompilerBuildId) return -10;
+  using Fn = int (*)(JNIEnv*, jobject);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceForceOptimizedJit"));
+  return fn ? fn(env, executable) : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCompilerOptionsState(
+    JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library ||
+      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
+          artdcevm::android13::cas::kCompilerBuildId) return -10;
+  using Fn = int (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceJitCompilerOptionsState"));
+  return fn ? fn() : -1;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_configureGraphInlineProbe(
+    JNIEnv* env, jclass, jobject caller, jobject callee, jboolean enable) {
+  if (!artdcevm::android13::source_library ||
+      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
+          artdcevm::android13::cas::kCompilerBuildId) return -10;
+  using Pause = int (*)(bool);
+  using Configure = int (*)(JNIEnv*, jobject, jobject, void*);
+  auto pause = reinterpret_cast<Pause>(dlsym(artdcevm::android13::source_library,
+                                            "ArtDcevmSourcePauseJitForGraphHook"));
+  auto configure = reinterpret_cast<Configure>(dlsym(artdcevm::android13::source_library,
+                                                    "ArtDcevmSourceConfigureGraphInlineProbe"));
+  void* replacement = dlsym(artdcevm::android13::source_library,
+                            "ArtDcevmSourceHGraphInlineInto");
+  if (!pause || !configure || !replacement) return -1;
+  artdcevm::ShadowHookEngine hooks;
+  std::string error;
+  if (!hooks.Initialize(&error)) return -2;
+  if (pause(true) != 1) return -3;
+  int result = 1;
+  if (enable == JNI_TRUE) {
+    if (artdcevm::android13::graph_inline_hook_token != nullptr) {
+      result = -4;
+    } else {
+      void* target = hooks.FindSymbol("libart-compiler.so",
+                                      artdcevm::android13::cas::kHGraphInlineInto);
+      if (target == nullptr) {
+        result = -5;
+      } else {
+        void* original = nullptr;
+        void* token = hooks.Install(target, replacement, &original, &error);
+        if (token == nullptr || original == nullptr) {
+          if (token != nullptr) hooks.Remove(token, &error);
+          result = -6;
+        } else if (configure(env, caller, callee, original) != 1) {
+          hooks.Remove(token, &error);
+          result = -7;
+        } else {
+          artdcevm::android13::graph_inline_hook_token = token;
+        }
+      }
+    }
+  } else if (artdcevm::android13::graph_inline_hook_token != nullptr) {
+    if (!hooks.Remove(artdcevm::android13::graph_inline_hook_token, &error)) {
+      result = -8;
+    } else {
+      configure(env, nullptr, nullptr, nullptr);
+      artdcevm::android13::graph_inline_hook_token = nullptr;
+    }
+  }
+  if (pause(false) != 1) return -9;
+  return result;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_graphInlineHits(
+    JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return -1;
+  using Fn = uint64_t (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceGraphInlineHits"));
+  return fn ? static_cast<jlong>(fn()) : -1;
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_allMethodsDeoptimized(
+    JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return false;
+  using Fn = bool (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceAllMethodsDeoptimized"));
+  return fn && fn();
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeMode(
+    JNIEnv*, jclass, jboolean enable, jboolean force_reject) {
+  if (!artdcevm::android13::source_library) return false;
+  using Fn = bool (*)(bool, bool);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceFieldReadProbeMode"));
+  return fn && fn(enable, force_reject);
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeHits(
+    JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)();
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceFieldReadProbeHits"));
+  return fn ? static_cast<jlong>(fn()) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invokeGuardDiagnostics(
+    JNIEnv*, jclass, jint index) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)(int);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+                                      "ArtDcevmSourceInvokeGuardDiagnostics"));
+  return fn ? static_cast<jlong>(fn(index)) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_receiverGuardTransactionDiagnostics(
+    JNIEnv*, jclass, jint index) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)(int);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+      "ArtDcevmSourceReceiverGuardTransactionDiagnostics"));
+  return fn ? static_cast<jlong>(fn(index)) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_compiledPrecommitDiagnostics(
+    JNIEnv*, jclass, jint index) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)(int);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
+      "ArtDcevmSourceCompiledPrecommitDiagnostics"));
+  return fn ? static_cast<jlong>(fn(index)) : 0;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_hierarchyDiagnostics(JNIEnv*, jclass, jint index) {
+  if (!artdcevm::android13::source_library) return 0;
+  using Fn = uint64_t (*)(int);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceHierarchyDiagnostics"));
+  return fn ? static_cast<jlong>(fn(index)) : 0;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_artdcevm_testing_ForegroundStressActivity_enableDeoptTracing(JNIEnv*, jclass) {
+  if (!artdcevm::android13::source_library) return false;
+  using Fn = void (*)(bool);
+  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceSetDeoptTracing"));
+  if (fn) fn(true);
+  return fn != nullptr;
+}

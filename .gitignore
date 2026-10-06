@@ -1,0 +1,7 @@
+.gradle/
+**/build/
+**/.cxx/
+local.properties
+runtime-libs/
+*.hprof
+__pycache__/

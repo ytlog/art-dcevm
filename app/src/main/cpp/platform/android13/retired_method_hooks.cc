@@ -1,0 +1,253 @@
+#include "platform/android13/retired_method_hooks.h"
+#include <atomic>
+#include <cstdarg>
+#include <cstdint>
+#include <dlfcn.h>
+#include <jni.h>
+#include <vector>
+
+namespace artdcevm::android13 {
+namespace {
+using GuardMethod = bool (*)(void*, void*, void*);
+using GuardReflection = bool (*)(const void*, jobject);
+using GuardHandle = bool (*)(void*, void*, void*);
+GuardMethod guard_method;
+GuardReflection guard_reflection;
+GuardHandle guard_handle;
+bool (*guard_id)(jmethodID);
+bool (*guard_jni_id)(JNIEnv*, jmethodID);
+bool (*guard_receiver_method)(const void*, jobject, void*);
+bool (*guard_receiver_id)(const void*, jobject, jmethodID);
+bool (*guard_jni_executable)(JNIEnv*, jobject);
+void (*deliver_exception)(void*);
+bool (*needs_dispatch_checks)();
+bool (*guard_nterp)(void*, void*, uint16_t*);
+void* original_nterp;
+void* original_deopt;
+void (*trace_deopt)(void*, void*, void*, bool, int);
+void* original_resolve;
+void* original_resolve_handles;
+void* checked_resolve;
+void* checked_resolve_handles;
+void* original_invoke;
+void* original_jvalues;
+void* original_varargs;
+void* original_id_jvalues;
+void* original_id_varargs;
+void* original_direct_jvalues;
+void* original_direct_varargs;
+void* original_direct_id_jvalues;
+void* original_direct_id_varargs;
+void* original_reflection;
+void* original_handle;
+void* original_exact;
+void* original_frame;
+void* original_obsolete;
+void* original_check_jni;
+void* original_check_constructor;
+void* original_constructor;
+void* original_new_a[2];
+void* original_new_v[2];
+std::atomic<int> rejected{0};
+
+void Deopt(void* thread, void* frame, void* result, bool from_code, int type) {
+  trace_deopt(thread, frame, result, from_code, type);
+  using Fn = void (*)(void*, void*, void*, bool, int);
+  reinterpret_cast<Fn>(original_deopt)(thread, frame, result, from_code, type);
+}
+size_t Nterp(void* thread, void* caller, uint16_t* dex_pc) {
+  if (guard_nterp(thread, caller, dex_pc)) { ++rejected; return 0; }
+  using Fn = size_t (*)(void*, void*, uint16_t*);
+  return reinterpret_cast<Fn>(original_nterp)(thread, caller, dex_pc);
+}
+void* Resolve(void* linker, void* thread, uint32_t index, void* caller, int type) {
+  using Fn = void* (*)(void*, void*, uint32_t, void*, int);
+  return reinterpret_cast<Fn>(needs_dispatch_checks() ? checked_resolve : original_resolve)(
+      linker, thread, index, caller, type);
+}
+void* ResolveHandles(void* linker, uint32_t index, void* dex_cache, void* loader, void* caller, int type) {
+  using Fn = void* (*)(void*, uint32_t, void*, void*, void*, int);
+  return reinterpret_cast<Fn>(needs_dispatch_checks() ? checked_resolve_handles : original_resolve_handles)(
+      linker, index, dex_cache, loader, caller, type);
+}
+void Invoke(void* method, void* thread, uint32_t* args, uint32_t size, void* result, const char* shorty) {
+  if (guard_method(method, thread, result)) { ++rejected; return; }
+  using Fn = void (*)(void*, void*, uint32_t*, uint32_t, void*, const char*);
+  reinterpret_cast<Fn>(original_invoke)(method, thread, args, size, result, shorty);
+}
+// ART JValue is an eight-byte union returned in x0 on this pinned arm64 ABI.
+uint64_t VirtualJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
+  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
+  return reinterpret_cast<Fn>(original_jvalues)(access, receiver, method, args);
+}
+uint64_t VirtualVarArgs(const void* access, jobject receiver, void* method, va_list args) {
+  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
+  return reinterpret_cast<Fn>(original_varargs)(access, receiver, method, args);
+}
+uint64_t IdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
+  if (guard_id(method)) { ++rejected; return 0; }
+  if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
+  return reinterpret_cast<Fn>(original_id_jvalues)(access, receiver, method, args);
+}
+uint64_t IdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
+  if (guard_id(method)) { ++rejected; return 0; }
+  if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
+  return reinterpret_cast<Fn>(original_id_varargs)(access, receiver, method, args);
+}
+uint64_t DirectJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
+  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
+  return reinterpret_cast<Fn>(original_direct_jvalues)(access, receiver, method, args);
+}
+uint64_t DirectVarArgs(const void* access, jobject receiver, void* method, va_list args) {
+  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
+  return reinterpret_cast<Fn>(original_direct_varargs)(access, receiver, method, args);
+}
+uint64_t DirectIdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
+  if (guard_id(method)) { ++rejected; return 0; }
+  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
+  return reinterpret_cast<Fn>(original_direct_id_jvalues)(access, receiver, method, args);
+}
+uint64_t DirectIdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
+  if (guard_id(method)) { ++rejected; return 0; }
+  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
+  return reinterpret_cast<Fn>(original_direct_id_varargs)(access, receiver, method, args);
+}
+jobject Reflect(const void* access, jobject method, jobject receiver, jobject args, size_t frames) {
+  if (guard_reflection(access, method)) { ++rejected; return nullptr; }
+  using Fn = jobject (*)(const void*, jobject, jobject, jobject, size_t);
+  return reinterpret_cast<Fn>(original_reflection)(access, method, receiver, args, frames);
+}
+using InvokeHandle = bool (*)(void*, void*, void*, void*, const void*, void*);
+bool Handle(void* thread, void* frame, void* handle, void* type, const void* args, void* result) {
+  if (guard_handle(thread, handle, result)) { ++rejected; return false; }
+  return reinterpret_cast<InvokeHandle>(original_handle)(thread, frame, handle, type, args, result);
+}
+bool Exact(void* thread, void* frame, void* handle, void* type, const void* args, void* result) {
+  if (guard_handle(thread, handle, result)) { ++rejected; return false; }
+  return reinterpret_cast<InvokeHandle>(original_exact)(thread, frame, handle, type, args, result);
+}
+void WithFrame(void* thread, void* handle, void* frame) {
+  if (guard_handle(thread, handle, nullptr)) { ++rejected; return; }
+  using Fn = void (*)(void*, void*, void*);
+  reinterpret_cast<Fn>(original_frame)(thread, handle, frame);
+}
+uint64_t Obsolete(void* method, void* thread) {
+  if (guard_method(method, thread, nullptr)) { ++rejected; deliver_exception(thread); }
+  using Fn = uint64_t (*)(void*, void*);
+  return reinterpret_cast<Fn>(original_obsolete)(method, thread);
+}
+bool CheckJniMethod(void* check, void* access, jobject receiver, jclass cls,
+                    jmethodID method, int primitive, int invoke) {
+  // CheckJNI normally aborts on an obsolete declaring class. Convert only known
+  // removed members into an ordinary pending exception; preserve all other checks.
+  if (guard_id(method)) { ++rejected; return false; }
+  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return false; }
+  using Fn = bool (*)(void*, void*, jobject, jclass, jmethodID, int, int);
+  return reinterpret_cast<Fn>(original_check_jni)(check, access, receiver, cls, method, primitive, invoke);
+}
+bool CheckConstructor(void* check, jmethodID method) {
+  if (guard_id(method)) { ++rejected; return false; }
+  using Fn = bool (*)(void*, jmethodID);
+  return reinterpret_cast<Fn>(original_check_constructor)(check, method);
+}
+jobject Constructor(JNIEnv* env, jobject constructor, jobjectArray args) {
+  if (guard_jni_executable(env, constructor)) { ++rejected; return nullptr; }
+  using Fn = jobject (*)(JNIEnv*, jobject, jobjectArray);
+  return reinterpret_cast<Fn>(original_constructor)(env, constructor, args);
+}
+template <int indexed> jobject NewA(JNIEnv* env, jclass cls, jmethodID method, const jvalue* args) {
+  if (guard_jni_id(env, method)) { ++rejected; return nullptr; }
+  using Fn = jobject (*)(JNIEnv*, jclass, jmethodID, const jvalue*);
+  return reinterpret_cast<Fn>(original_new_a[indexed])(env, cls, method, args);
+}
+template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, va_list args) {
+  if (guard_jni_id(env, method)) { ++rejected; return nullptr; }
+  using Fn = jobject (*)(JNIEnv*, jclass, jmethodID, va_list);
+  return reinterpret_cast<Fn>(original_new_v[indexed])(env, cls, method, args);
+}
+}
+
+bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
+  guard_method = reinterpret_cast<GuardMethod>(dlsym(library, "ArtDcevmGuardMethod"));
+  guard_reflection = reinterpret_cast<GuardReflection>(dlsym(library, "ArtDcevmGuardReflection"));
+  guard_handle = reinterpret_cast<GuardHandle>(dlsym(library, "ArtDcevmGuardMethodHandle"));
+  guard_id = reinterpret_cast<bool (*)(jmethodID)>(dlsym(library, "ArtDcevmGuardMethodId"));
+  guard_jni_id = reinterpret_cast<decltype(guard_jni_id)>(dlsym(library, "ArtDcevmGuardJniMethodId"));
+  guard_receiver_method = reinterpret_cast<decltype(guard_receiver_method)>(dlsym(library, "ArtDcevmGuardRunnableMethodReceiver"));
+  guard_receiver_id = reinterpret_cast<decltype(guard_receiver_id)>(dlsym(library, "ArtDcevmGuardRunnableMethodIdReceiver"));
+  guard_jni_executable = reinterpret_cast<decltype(guard_jni_executable)>(dlsym(library, "ArtDcevmGuardJniExecutable"));
+  deliver_exception = reinterpret_cast<void (*)(void*)>(dlsym(library, "ArtDcevmGuardDeliverException"));
+  if (!guard_method || !guard_reflection || !guard_handle || !guard_id || !deliver_exception ||
+      !guard_jni_id || !guard_jni_executable || !guard_receiver_method || !guard_receiver_id) {
+    *error = "Retired method guard exports are incomplete"; return false;
+  }
+  trace_deopt = reinterpret_cast<decltype(trace_deopt)>(dlsym(library, "ArtDcevmSourceTraceDeopt"));
+  needs_dispatch_checks = reinterpret_cast<decltype(needs_dispatch_checks)>(dlsym(library, "ArtDcevmSourceNeedsDispatchChecks"));
+  guard_nterp = reinterpret_cast<decltype(guard_nterp)>(dlsym(library, "ArtDcevmGuardNterpInvoke"));
+  auto configure_resolver = reinterpret_cast<void (*)(void*)>(dlsym(library, "ArtDcevmSourceConfigureDispatchResolver"));
+  checked_resolve = hooks.FindSymbol("libart.so", "_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE");
+  checked_resolve_handles = hooks.FindSymbol("libart.so", "_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEjNS_6HandleINS_6mirror8DexCacheEEENS5_INS6_11ClassLoaderEEES4_NS_10InvokeTypeE");
+  if (!trace_deopt || !needs_dispatch_checks || !guard_nterp || !configure_resolver || !checked_resolve || !checked_resolve_handles) {
+    *error = "Dispatch validation symbols are incomplete"; return false;
+  }
+  configure_resolver(checked_resolve);
+  struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
+  Entry entries[] = {
+    {"_ZN3art11interpreter30EnterInterpreterFromDeoptimizeEPNS_6ThreadEPNS_11ShadowFrameEPNS_6JValueEbNS_24DeoptimizationMethodTypeE", reinterpret_cast<void*>(Deopt), &original_deopt},
+    {"NterpGetMethod", reinterpret_cast<void*>(Nterp), &original_nterp},
+    {"_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE0EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE", reinterpret_cast<void*>(Resolve), &original_resolve},
+    {"_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE0EEEPNS_9ArtMethodEjNS_6HandleINS_6mirror8DexCacheEEENS5_INS6_11ClassLoaderEEES4_NS_10InvokeTypeE", reinterpret_cast<void*>(ResolveHandles), &original_resolve_handles},
+    {"_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc", reinterpret_cast<void*>(Invoke), &original_invoke},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(VirtualJValues), &original_jvalues},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(VirtualVarArgs), &original_varargs},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(IdJValues), &original_id_jvalues},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(IdVarArgs), &original_id_varargs},
+    {"_ZN3art17InvokeWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(DirectJValues), &original_direct_jvalues},
+    {"_ZN3art17InvokeWithVarArgsIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(DirectVarArgs), &original_direct_varargs},
+    {"_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(DirectIdJValues), &original_direct_id_jvalues},
+    {"_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(DirectIdVarArgs), &original_direct_id_varargs},
+    {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflection},
+    {"_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", reinterpret_cast<void*>(Handle), &original_handle},
+    {"_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", reinterpret_cast<void*>(Exact), &original_exact},
+    {"_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE", reinterpret_cast<void*>(WithFrame), &original_frame},
+    {"artInvokeObsoleteMethod", reinterpret_cast<void*>(Obsolete), &original_obsolete},
+    {"_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE", reinterpret_cast<void*>(CheckJniMethod), &original_check_jni},
+    {"_ZN3art12_GLOBAL__N_111ScopedCheck16CheckConstructorEP10_jmethodID", reinterpret_cast<void*>(CheckConstructor), &original_check_constructor},
+    {"_ZN3artL24Constructor_newInstance0EP7_JNIEnvP8_jobjectP13_jobjectArray", reinterpret_cast<void*>(Constructor), &original_constructor},
+    {"_ZN3art3JNIILb0EE10NewObjectAEP7_JNIEnvP7_jclassP10_jmethodIDPK6jvalue", reinterpret_cast<void*>(NewA<0>), &original_new_a[0]},
+    {"_ZN3art3JNIILb1EE10NewObjectAEP7_JNIEnvP7_jclassP10_jmethodIDPK6jvalue", reinterpret_cast<void*>(NewA<1>), &original_new_a[1]},
+    {"_ZN3art3JNIILb0EE10NewObjectVEP7_JNIEnvP7_jclassP10_jmethodIDSt9__va_list", reinterpret_cast<void*>(NewV<0>), &original_new_v[0]},
+    {"_ZN3art3JNIILb1EE10NewObjectVEP7_JNIEnvP7_jclassP10_jmethodIDSt9__va_list", reinterpret_cast<void*>(NewV<1>), &original_new_v[1]},
+  };
+  for (auto& entry : entries) {
+    entry.target = hooks.FindSymbol("libart.so", entry.symbol);
+    if (!entry.target) { *error = std::string("Missing invocation symbol: ") + entry.symbol; return false; }
+  }
+  std::vector<void*> tokens;
+  for (const auto& entry : entries) {
+    void* token = hooks.Install(entry.target, entry.proxy, entry.original, error);
+    if (!token) {
+      for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
+        std::string rollback;
+        if (!hooks.Remove(*it, &rollback)) *error += "; unhook failed: " + rollback;
+      }
+      return false;
+    }
+    tokens.push_back(token);
+  }
+  return true;
+}
+int RejectedRetiredInvocations() { return rejected.load(); }
+}

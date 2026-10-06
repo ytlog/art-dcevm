@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light">
+<title>ART 对齐 DCEVM · 无 root 应用内方案</title>
+<style>
+:root{--bg:#0a101b;--panel:#121e2e;--line:#34445b;--text:#edf4ff;--muted:#b1c0d5;--accent:#75ded5;--gold:#f4cc89;--red:#ffb0ad;--code:#1b2b40}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1260px;margin:auto;padding:48px 36px 80px}header{padding-bottom:30px;border-bottom:1px solid var(--line)}.eyebrow{color:var(--accent);font-size:13px;letter-spacing:.12em;font-weight:600}h1{font-size:clamp(30px,4vw,50px);line-height:1.2;letter-spacing:-.035em;margin:14px 0 20px}h2{font-size:26px;line-height:1.4;margin:0 0 20px}h3{font-size:19px;line-height:1.5;margin:0 0 10px}p{margin:10px 0}.lead{font-size:19px;max-width:1040px}.muted,.note{color:var(--muted)}.note{font-size:14px}.tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.tag{border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:13px;color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:10px 24px;padding:24px 0}a{color:var(--accent);text-underline-offset:4px;overflow-wrap:anywhere}nav a{text-decoration:none;font-size:14px}section{margin-top:38px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:2px 5px;border-radius:4px;font-size:.88em;overflow-wrap:anywhere}strong{font-weight:650}.cards,.lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.card,.lane{padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.card p,.lane p{font-size:15px;color:var(--muted)}.label{font-size:12px;letter-spacing:.08em;color:var(--accent);margin-bottom:10px}.callout{padding:16px 20px;border-left:3px solid var(--gold);background:var(--panel);margin:22px 0}.callout p{margin:0}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;font-size:14px;text-align:left;min-width:840px}th{background:var(--panel);color:var(--muted);font-weight:600}th,td{padding:14px 16px;vertical-align:top;border-bottom:1px solid var(--line)}tbody tr:last-child td{border-bottom:0}td:first-child{font-weight:600;min-width:125px}.yes{color:var(--accent)}.partial{color:var(--gold)}.no{color:var(--red)}.architecture{border:1px solid var(--line);border-radius:16px;padding:24px;background:var(--panel)}.bar{padding:14px 20px;border:1px solid var(--line);border-radius:10px;text-align:center}.bar strong{display:block}.bar span{font-size:14px;color:var(--muted)}.arrow{text-align:center;color:var(--accent);font-size:22px;margin:7px}.hook-strip{margin-top:18px;padding-top:16px;border-top:1px dashed var(--line);font-size:14px;color:var(--muted)}.flow{counter-reset:flow;list-style:none;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.flow li{counter-increment:flow;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.flow li:before{content:counter(flow,decimal-leading-zero);display:block;color:var(--accent);font:600 13px/1.5 ui-monospace,monospace;margin-bottom:10px}.flow strong,.flow span{display:block}.flow span{color:var(--muted);font-size:14px;margin-top:8px}.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.two ul{padding-left:20px;margin:8px 0}li{margin:6px 0}.sources{font-size:14px;color:var(--muted)}.sources li{margin-bottom:12px}details{border-bottom:1px solid var(--line);padding:16px 0}summary{cursor:pointer;font-weight:600}footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+@media(prefers-color-scheme:light){:root{--bg:#f8fafc;--panel:#edf3f8;--line:#c6d1dd;--text:#172a3e;--muted:#475d73;--accent:#006e69;--gold:#80500e;--red:#a93130;--code:#e2eaf3}}
+@media(max-width:850px){main{padding:28px 18px 56px}.cards,.lanes,.flow,.two{grid-template-columns:1fr}.architecture{padding:16px}h2{font-size:23px}.lead{font-size:17px}}
+@media print{:root{--bg:white;--panel:#f4f6f8;--line:#bbc4ce;--text:#132538;--muted:#354c62;--accent:#006961;--gold:#80500e;--red:#972e2e;--code:#edf1f5}main{padding:10px;max-width:none}nav{display:none}h2,h3{break-after:avoid}.card,.lane,.flow li{break-inside:avoid}.table-wrap{overflow:visible}table{min-width:0;font-size:11px}th,td{padding:8px}.cards,.lanes,.flow,.two{grid-template-columns:1fr}a{color:inherit}}
+</style></head>
+<body><main>
+<header>
+<div class="eyebrow">ANDROID RUNTIME / DYNAMIC CODE EVOLUTION · 2026-10-04 修订</div>
+<h1>无 root，在应用内对齐 DCEVM</h1>
+<p class="lead"><strong>采用“标准 JVMTI + ART 增量结构扩展 + 构建期兼容层”三条路径。</strong>目标是在 Android 8.0–17 上实现保留进程和业务状态的开发期热更新；原生结构能力按运行时探测启用，跨版本能力由预先接入的编译改写提供。</p>
+<p class="muted">完整 DCEVM 语义不能作为所有版本、所有类和所有调用方式的统一承诺：成员的物理删除、已有对象的真实继承关系变化，以及未改写的反射/JNI 透明访问，仍有明确边界。</p>
+<div class="tags"><span class="tag">普通应用 UID · 仅自身进程</span><span class="tag">允许 debuggable=true</span><span class="tag">允许构建期 SDK</span><span class="tag">API 26–37</span><span class="tag">源码已核对 · 设备待验证</span></div>
+</header>
+<nav aria-label="目录"><a href="#scope">权限边界</a><a href="#versions">版本矩阵</a><a href="#alignment">DCEVM 对齐</a><a href="#architecture">架构</a><a href="#evolution">结构演进</a><a href="#hooks">Hook 边界</a><a href="#transaction">更新流程</a><a href="#delivery">实施验收</a><a href="#sources">依据</a></nav>
+
+<section id="scope"><h2>先固定实施边界</h2>
+<div class="cards">
+<article class="card"><div class="label">主交付</div><h3>自有调试应用</h3><p>APK 从启动时就可调试，在构建期接入插件与 SDK，Agent 随 APK 打包。在应用内完成加载、探测和更新；无 root、无系统签名、无系统分区修改。</p></article>
+<article class="card"><div class="label">补丁作用域</div><h3>明确可更新的业务代码</h3><p>声明热更新类与调用方范围。Framework、核心类及第三方未纳管代码不纳入统一结构更新承诺。多进程各自建立会话，不承诺跨进程原子更新。</p></article>
+<article class="card"><div class="label">兼容交付</div><h3>正式版只保留受控适配</h3><p><code>debuggable=false</code> 不能走公开的完整 JVMTI attach 路径；<code>profileable</code> 也不等价。可保留构建期分派能力，但不能宣称正式版具有完整 DCEVM 能力。</p></article>
+</div>
+<p class="note">普通权限不禁止应用修改自身可写内存或在条件允许时执行自身 Native Hook；约束在加载入口、系统策略和正确性。ADB 可用于开发传输和测试，但 shell 权限不计入运行时必需能力。<a href="#s-artti">ART TI 依据</a></p>
+<div class="callout"><p><strong>对齐基准：</strong>DCEVM 的方法体替换、成员增删、存活状态保留和类身份连续性；继承层级单列。DCEVM 自身 full/light 版本也有差异，不能把它当作“任意结构变更均合法”的单一规范。<a href="#s-dcevm">项目说明</a></p></div>
+</section>
+
+<section id="versions"><h2>Android 8.0 到 17：版本与能力矩阵</h2>
+<p>截至 2026-10-04，最新稳定<strong>大版本</strong>为 Android 17 / API 37。下表按各版 <code>android-版本_r1</code> 源码标签核对；不是 OEM 或所有 QPR/APEX 构建的实测认证。<a href="#s-release">官方发布依据</a></p>
+<div class="table-wrap"><table><thead><tr><th>系统 / API</th><th>应用内接入</th><th>ART/JVMTI 差异</th><th>本方案落点</th></tr></thead><tbody>
+<tr><td>8.0 / 26</td><td>已有 ART TI；无公开 <code>Debug.attachJvmtiAgent</code>。</td><td>标准重定义拒绝成员增删。源码存在隐藏 <code>VMDebug.attachAgent(String)</code>。<a href="#s-o">源码</a></td><td>隔离的 O 版本自附加适配器；失败时已预置兼容层的类仍可走 C。若只用公开 API，本版预先选择 C。</td></tr>
+<tr><td>8.1 / 27</td><td>同 8.0，隐藏单参数入口需设备验证。</td><td>仍为非结构化重定义；不能套用 API 28 的公开方法或参数签名。<a href="#s-o">源码</a></td><td>独立验证 8.1；attach 成功不代表具备结构能力。</td></tr>
+<tr><td>9 / 28</td><td>新增公开 <code>Debug.attachJvmtiAgent</code>，仅调试应用。</td><td>支持标准方法体重定义；无本方案所需的结构扩展。开始非 SDK 接口限制。<a href="#s-pq">依据</a></td><td>方法体用标准 JVMTI，结构变化用构建期兼容层。</td></tr>
+<tr><td>10 / 29</td><td>沿用公开 attach。</td><td>发布标签仍无结构化入口；2019 年开发分支的提交不等于 Android 10 发布能力。<a href="#s-pq">源码</a></td><td>同 9；原生代码定位还需考虑 APEX 模块布局。</td></tr>
+<tr><td>11 / 30</td><td>公开 attach。</td><td>出现批量 <code>com.android.art.class.structurally_redefine_classes</code>：只增方法/字段，禁止删除及层级变化；需索引式 JNI ID 和完整调试条件。<a href="#s-r">源码</a></td><td>增加可探测的原生结构后端；静态/实例字段及虚方法分别验证。</td></tr>
+<tr><td>12 / 31</td><td>公开 attach。</td><td>结构扩展约束延续 11；ART 可通过 Google Play 系统更新演进。<a href="#s-st">源码</a> <a href="#s-mainline">模块依据</a></td><td>能力缓存加入 ART 构建标识，不只使用 SDK_INT。</td></tr>
+<tr><td>12L / 32</td><td>公开 attach。</td><td>核对 <code>android-12.1.0_r1</code>，结构扩展契约与 12 相同。<a href="#s-st">源码</a></td><td>保留独立测试项，不遗漏 12L。</td></tr>
+<tr><td>13 / 33</td><td>公开 attach。</td><td>仍为增量结构能力，不等于完整 DCEVM。<a href="#s-st">源码</a></td><td>三条路径按实测能力选择。</td></tr>
+<tr><td>14 / 34</td><td>公开 attach。</td><td>完整 JVMTI 判断使用启动时可调试状态；结构扩展仍需索引式 JNI ID。target ≥ 34 的文件式动态代码加载要求文件只读。<a href="#s-u">源码</a> <a href="#s-dcl">规则</a></td><td>从 APK 启动状态满足条件；正确创建只读补丁文件，不依赖事后翻转 debug 标志。</td></tr>
+<tr><td>15 / 35</td><td>公开 attach。</td><td>批量结构入口保留；旧 <code>UNSAFE…structurally_redefine_class_direct</code> 已移除。支持 16 KB 页面设备。<a href="#s-vbw">源码</a> <a href="#s-pagesize">规则</a></td><td>只选择批量入口；Agent 和 Hook 库均验证 4 KB / 16 KB。</td></tr>
+<tr><td>16 / 36</td><td>公开 attach。</td><td>标签中批量增量契约及类限制延续；未解锁物理删除、签名替换或层级变化。<a href="#s-vbw">源码</a></td><td>重跑 ART 构建探测、编译模式与 OEM 回归。</td></tr>
+<tr><td>17 / 37</td><td>公开 attach。</td><td>批量增量契约仍在。运行于 17 且 target ≥ 37 时，反射修改 static final 抛异常，JNI 写入会使应用崩溃。<a href="#s-vbw">源码</a> <a href="#s-final">规则</a></td><td>不采用反射/JNI 回填 static final；补测分代 GC、内存和旧版本回收。</td></tr>
+</tbody></table></div>
+<p class="note"><strong>11+ 是带条件的源码能力：</strong>必须同时满足扩展可枚举、类级检查通过、该 ART/OEM 构建用例通过。索引式 JNI ID 通常由可调试运行时启动流程配置；不能把 <code>jmethodID/jfieldID</code> 当裸指针，也不私自切换它的表示。</p>
+<p class="note">Android Studio Apply Changes 的产品范围与底层扩展不同：其文档仍将字段增删列为需重启。本方案的字段新增是自行实现并验证 ART 扩展，不用 IDE 支持范围代替运行时证据。<a href="#s-studio">官方说明</a></p>
+</section>
+
+<section id="alignment"><h2>与 DCEVM 按语义逐项对齐</h2>
+<p>“逻辑支持”只对构建期纳管范围有效；“原生支持”由 ART 完成元数据、对象引用和执行状态的一致性处理。补丁结果中分开报告。</p>
+<div class="table-wrap"><table><thead><tr><th>目标能力</th><th>A · 标准 JVMTI</th><th>B · ART 原生增量扩展</th><th>C · 构建期兼容层</th></tr></thead><tbody>
+<tr><td>替换方法体</td><td class="yes">支持，受类可修改性约束</td><td class="yes">支持</td><td class="yes">通过稳定分派入口支持</td></tr>
+<tr><td>新增方法</td><td class="no">不支持结构增加</td><td class="yes">11+ 条件支持真实增加</td><td class="partial">新 MethodId + 版本实现；不成为原生反射成员</td></tr>
+<tr><td>新增实例 / 静态字段</td><td class="no">不支持</td><td class="yes">11+ 条件支持；ART 迁移实例/静态状态</td><td class="partial">HotState / 类状态槽；需改写读写方</td></tr>
+<tr><td>删除方法 / 字段</td><td class="no">不支持</td><td class="partial">保留旧成员，逻辑停用；不物理删除</td><td class="partial">墓碑标记，新代码不再可见；保留旧版本兼容入口</td></tr>
+<tr><td>改签名 / 字段类型</td><td class="no">不支持原位修改</td><td class="partial">保留旧描述符，增加新成员和桥接；不是原位替换</td><td class="partial">新成员 ID + 显式状态转换；未适配边界拒绝</td></tr>
+<tr><td>改父类 / 接口集合</td><td class="no">不支持</td><td class="no">扩展明确拒绝</td><td class="no">不承诺真实类型关系变化；适配器仅解决受控边界</td></tr>
+<tr><td>身份与状态保留</td><td class="yes">原对象与字段保持</td><td class="partial">ART 迁移修复；身份、锁与 JNI 句柄需验证</td><td class="partial">外层对象身份保持；演进状态存入附属槽</td></tr>
+<tr><td>活动栈帧</td><td class="yes">旧帧继续旧代码，新调用用新定义</td><td class="partial">ART 管理 obsolete 方法、去优化与引用修复</td><td class="partial">旧实现延迟回收；状态兼容有独立协议</td></tr>
+<tr><td>反射 / JNI 透明性</td><td class="partial">原 schema 内按运行时规则更新</td><td class="partial">真实新增成员可见；缓存 ID、Unsafe 偏移等需验证/限制</td><td class="no">未改写反射/JNI 看不到逻辑新增成员</td></tr>
+<tr><td>更新与回退</td><td class="partial">可装回旧方法体；不回滚业务副作用</td><td class="partial">物理 schema 单调增长；旧 Dex 不能删除新增成员</td><td class="partial">可切兼容版本；不可逆状态需迁移或重启</td></tr>
+</tbody></table></div>
+<div class="callout"><p><strong>可承诺的结果：</strong>在声明的业务范围内，跨 Android 8–17 提供接近 DCEVM 的编辑体验；在通过验证的 11+ 运行时上增加真实成员演进能力。若要求“任意类、无改写、物理增删、层级变化、原生反射/JNI 全透明”同时成立，本约束下没有可保证的通用实现。</p></div>
+</section>
+
+<section id="architecture"><h2>架构：统一规划，按能力执行</h2>
+<div class="architecture" role="group" aria-label="热更新架构：构建与能力探测决定三个后端，Hook 只作外围适配">
+<div class="bar"><strong>构建插件 / 增量编译器</strong><span>基线 APK 身份 · 单类 Dex · 成员差异 · 调用/内联依赖闭包 · 迁移计划</span></div><div class="arrow" aria-hidden="true">↓</div>
+<div class="bar"><strong>应用内 SDK + PatchPlanner</strong><span>核验基线 → 探测能力与扩展 → 判定原生/逻辑语义 → 选择一个提交域</span></div><div class="arrow" aria-hidden="true">↓</div>
+<div class="lanes">
+<article class="lane"><div class="label">A / BASELINE</div><h3>标准 JVMTI 后端</h3><p>方法体变化，批量调用 <code>RedefineClasses</code>。安全点、obsolete 方法及 JIT/AOT 一致性由 ART 处理。</p><p>8.x 适配成功时可用，9+ 公开 attach；始终检查 capability 与类可修改性。</p></article>
+<article class="lane"><div class="label">B / NATIVE ADDITIVE</div><h3>结构化重定义后端</h3><p>调用枚举得到的 <code>com.android.art.class.structurally_redefine_classes</code>，schema 只增不减。</p><p>11+ 候选；ART 负责分派表、实例迁移、JNI ID、GC 引用、反射和去优化。</p></article>
+<article class="lane"><div class="label">C / PORTABLE</div><h3>构建期演进后端</h3><p>稳定类外壳 + 分派表 + 版本实现 + HotState；把结构变化转换为受控逻辑演进。</p><p>8–17 通用设计目标；不依赖 ART 私有布局，初始 APK 和调用方必须已纳管。</p></article>
+</div>
+<div class="hook-strip"><strong>可选适配：</strong>PLT / Inline Hook → 自有 Native 边界、诊断和特定构建适配。每个 Hook 独立验证并匹配 ELF/ART 构建；不承担通用类演进协议。</div>
+</div>
+<p class="note"><strong>构建时固定每个更新域的模型：</strong>需要在 8–17 上持续结构演进的业务类选 <code>portable</code>，结构变化一直走 C；需要真实反射/JNI 成员语义的类选 <code>native</code>，走 A/B，B 不可用时拒绝结构变化或重部署。不能等扩展失败后，才把已运行的原生对象无迁移地转成逻辑槽。A/B 的 VM 提交与 C 的分派发布不是自动原子事务；跨后端有强一致依赖时拒绝或等待业务静默窗口。</p>
+</section>
+
+<section id="evolution"><h2>结构演进具体怎么做</h2><div class="two">
+<article class="card"><h3>B：使用 ART 的真实能力</h3><ul>
+<li>先查 <code>IsModifiableClass</code>，再查扩展 <code>is_structurally_modifiable_class</code>。原始类型、数组、接口、代理类及部分核心类有源码限制。</li>
+<li>每个 <code>jvmtiClassDefinition</code> 提供只含一个类定义的 Dex；批量提交依赖集合。不能将 JVM class 文件直接传给 ART。</li>
+<li>保留旧成员描述符与修饰符。删除变成逻辑停用；签名/类型变化变成新增与桥接。原生反射仍能看到保留的旧成员。</li>
+<li>已有字段值由 ART 保留/迁移；新增实例字段不能期待对旧对象重跑构造器，静态字段也不假设重跑 <code>&lt;clinit&gt;</code>。非默认初始化使用显式版本迁移协议。</li>
+<li>Unsafe 缓存偏移、直接解释 JNI ID 的库、带指针式 JNI ID 标记的类/子类可能无法迁移；检出即拒绝，不能仅绕过检查。</li>
+</ul></article>
+<article class="card"><h3>C：用编译改写覆盖旧版本</h3><ul>
+<li>首次构建加入固定分派桥和 <code>HotState</code> 引用；后续实现使用唯一类名或版本加载器，外壳及真实继承关系固定。</li>
+<li>新方法映射为 <code>MethodId → implementation</code>，新字段映射为 <code>FieldId → typed slot</code>；ID 包含加载器身份，避免同名类冲突。</li>
+<li>删除使用墓碑；字段改类型分配新 ID，转换器决定迁移或拒绝。旧调用留桥或明确报链接错误，不偷偷套用新签名。</li>
+<li>优先对象自持 HotState，让 GC 处理对象环；全局“弱 key、强 value 且 value 反向引用 key”仍可能泄漏。</li>
+<li>纳管读写、直接/虚调用和受控反射访问；JNI、序列化、ORM、依赖注入及未改写库通过固定接口桥接，否则列为不支持边界。</li>
+</ul></article>
+</div>
+<details open><summary>编译器与语言语义不能省略</summary><p>保存 Kotlin 编译器、D8/R8 配置与符号映射；热更新域避免抹掉稳定桥的优化。Kotlin inline 和常量变化必须更新受影响调用方。suspend 状态机、lambda 捕获、data class、默认参数、enum 变化应按最终 Dex 分类。</p><p>保持构造器父类初始化序列、final 发布语义、volatile、对象锁及异常行为。状态转换器不能在任意 ART 暂停窗口中运行阻塞业务逻辑；17 / target 37 不允许以反射/JNI 写 static final 补救。</p></details>
+<details><summary>类加载与身份</summary><p>同名类放进新 ClassLoader 会形成不同类型，原对象、强转、instanceof 和 JNI 句柄不会自动迁移。C 只替换外壳背后的实现，B 的真实迁移交给 ART。新增独立类需规划加载器可见性、包访问与桥接，原 AppClassLoader 不会自动看见子加载器类。</p></details>
+</section>
+
+<section id="hooks"><h2>PLT Hook 与 Inline Hook 能补到哪一层</h2>
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>能覆盖</th><th>不能自动覆盖</th><th>项目用途</th></tr></thead><tbody>
+<tr><td>PLT / GOT Hook<br><a href="https://github.com/bytedance/bhook">ByteHook</a></td><td>经过目标 ELF 导入重定位槽的 Native 外部调用；可处理后续加载库。</td><td>同库直接调用、内联代码、直接系统调用及绕过槽的函数指针。Java 方法/字段和 JNI 函数表调用不普遍经过 PLT。</td><td>自有 Native 依赖替换、加载时机观测与诊断，不作为类重定义主入口。</td></tr>
+<tr><td>Native Inline Hook<br><a href="https://github.com/bytedance/android-inline-hook">ShadowHook</a></td><td>目标机器码入口或指令，覆盖部分不走 PLT 的直接调用；应用内在可用内存策略下可实施。</td><td>内联副本、已执行的栈帧及 JIT 换址后的代码；自身不提供安全点、对象迁移、GC 或 JNI/反射一致性。</td><td>自有 Native 函数替换；少量逐构建验证的 ART 点作为实验适配。</td></tr>
+<tr><td>Java / ArtMethod 入口替换</td><td>配合 ART 适配拦截部分 Java 调用。</td><td>AOT/JIT 内联、去虚化和不同解释/编译入口可能绕过；改 entrypoint 不会增加字段、扩展对象或改变类层级。</td><td>独立研究项，需另证去优化、重编译和入口生命周期，不替代 A/B/C。</td></tr>
+</tbody></table></div>
+<p>ByteHook 当前声明 Android 4.1–17，支持 ARM 与 x86 ABI；ShadowHook 声明同一系统范围，但仅支持 armeabi-v7a / arm64-v8a。<strong>Hook 库的系统支持不等于 libart 私有函数或本项目语义已兼容。</strong>需验证 RELRO/页面权限、指令重定位、缓存同步、BTI/PAC/CFI 相关约束及 16 KB 页面，不能按 API 硬编码偏移。</p>
+<div class="callout"><p><strong>“Hook 掉校验”补不齐 DCEVM：</strong>字段删除、层级变化影响对象大小、字段偏移、引用扫描、分派表、内联代码、栈帧和外部句柄。绕过错误返回没有实现这些协议。特定构建上可研究重实现 ART 内部逻辑，但工作量与维护性质已接近逐版本运行时补丁。</p></div>
+</section>
+
+<section id="transaction"><h2>一次补丁的执行流程</h2>
+<ol class="flow">
+<li><strong>生成与分类</strong><span>比较最终 Dex，计算调用/内联/类型依赖闭包，标记方法体、原生增量、逻辑演进或需重启。</span></li>
+<li><strong>核验与探测</strong><span>匹配 APK、epoch、加载器、ABI 与 ART 构建；查潜在能力，申请后读回；扩展及专用探针通过才启用。</span></li>
+<li><strong>准备与隔离</strong><span>校验 Dex、准备状态转换及版本实现；按只读规则创建文件。预加载/类初始化可能有副作用，不能称完全无副作用预检。</span></li>
+<li><strong>执行选定提交域</strong><span>A/B 使用批量 VM 调用；C 原子发布不可变分派快照。强状态迁移先关闭受控入口、排空旧任务，超时拒绝。</span></li>
+<li><strong>确认与恢复</strong><span>核对行为、字段值、版本与错误码。标准 RedefineClasses 的原子安装不包含业务迁移、I/O 或其他进程。</span></li>
+<li><strong>旧版本延迟回收</strong><span>A/B 遵从 ART obsolete 生命周期；C 追踪活动调用与延续对象。不可逆状态失败不能声称已自动回滚。</span></li>
+</ol>
+<div class="two"><article><h3>选择规则</h3><p>先匹配构建清单中的更新域模型：<code>native</code> 的纯方法体变化选 A，合法追加且 B 探测通过选 B；<code>portable</code> 的纳管变化选 C。其余返回 <code>RESTART_REQUIRED</code> 或明确拒绝原因，不在失败后擅自改变对象表示。结果同时报告实际后端和语义等级。</p><p class="note">原因码包括 <code>AGENT_UNAVAILABLE</code>、<code>STRUCTURAL_EXTENSION_MISSING</code>、<code>CLASS_UNMODIFIABLE</code>、<code>POINTER_JNI_ID</code>、<code>CALLSITE_NOT_COVERED</code>、<code>HIERARCHY_CHANGE</code>、<code>STATE_MIGRATION_REQUIRED</code>。</p></article>
+<article><h3>原子性与回退边界</h3><p>C 的同步调用链固定 epoch；跨线程任务/协程需显式携带上下文，或在迁移前排空，ThreadLocal 不足以覆盖协程恢复。允许新旧并行时，状态格式需双方兼容。</p><p>B 成功增加的物理成员不能删除回退；可保留 schema 回退行为。有不可逆状态/I/O 时需前向修复或重启。业务状态迁移采用协作协议，不能把 <code>SuspendThreadList</code> 当完整 ART 提交协议。</p></article></div>
+</section>
+
+<section id="delivery"><h2>实施顺序与验收门槛</h2>
+<div class="table-wrap"><table><thead><tr><th>阶段</th><th>交付</th><th>验收门槛</th></tr></thead><tbody>
+<tr><td>P0 · 能力探针</td><td>调试 APK、8.x 适配、9+ attach、构建身份与 capabilities/extensions 报告、独立探针类。</td><td>非 root 的实际 user 构建确认 A/B；缺扩展和不支持类可靠拒绝。先覆盖 8.0、8.1、10、11、14、15、17 边界。</td></tr>
+<tr><td>P1 · 方法体</td><td>增量 Dex、加载器定位、批量重定义、错误报告与行为回退。</td><td>冷启动/JIT 热身均正确；旧帧、新调用、静态值、对象身份及异常满足契约。</td></tr>
+<tr><td>P2 · 原生追加</td><td>11+ 增加方法/实例字段/静态字段、依赖类批量更新、迁移限制检查。</td><td>新旧实例、子类、反射、JNI ID、持锁对象、并发分配/GC 通过；删除与层级变化明确失败。</td></tr>
+<tr><td>P3 · 兼容层</td><td>固定外壳、桥、状态槽、成员墓碑、加载器映射及 Kotlin 依赖改写。</td><td>8–17 纳管用例达到相同逻辑契约；未改写调用与反射/JNI 边界准确识别；反复更新无持续泄漏。</td></tr>
+<tr><td>P4 · Hook 固化</td><td>只对已证明必要的 Native/ART 点 Hook，建立构建白名单与失效关闭。</td><td>关闭 Hook 不破坏基本路径；未知 ART、QPR、OEM、ABI 或页面配置不得盲目启用。</td></tr>
+</tbody></table></div>
+<p><strong>版本覆盖：</strong>API 26、27、28、29、30、31、32、33、34、35、36、37 均保留独立记录。ARM64 真机优先，按目标设备补测 ARM32；x86_64 模拟器测试 A/B/C，不能代替 ARM Inline Hook 验证；补测 16 KB 页面。</p>
+<p><strong>运行时与语义：</strong>user 构建调试 APK、目标 OEM 和 ART/APEX 更新状态；解释执行、JIT 热身、安装/AOT 相关产物、长栈、锁、线程/协程、GC；同名不同加载器、调用种类、新旧实例、identityHashCode、monitor、引用、static final、构造器、&lt;clinit&gt;、JNI/反射缓存、坏 Dex、缺扩展、内存不足及更新中断。</p>
+<p><strong>量化指标：</strong>attach 成功率、各操作成功/拒绝分布、暂停/更新延迟 P50/P95/P99、启动与稳态开销、每次更新内存增量、Dex/加载器回收趋势。阈值由 P0 基线确定，不虚构“零开销”“全机型成功”或已达到的性能。</p>
+<p class="note">范围外：Manifest、资源 ID、SO ABI、系统 Framework、任意真实继承变化和所有框架缓存的自动迁移；这些变更按策略重启/重部署。资源与 UI 状态适配独立规划。</p>
+</section>
+
+<section id="sources" class="sources"><h2>依据与证据范围</h2>
+<p>官方文档用于公开契约，发布标签源码用于内部扩展和版本边界。源码存在、扩展可枚举、设备测试通过是三个不同层级；本次完成文档/源码研究，尚未运行 Android 探针。源码摘要、SHA-256 和行定位见 <a href="art-dcevm-source-audit.json">art-dcevm-source-audit.json</a>。</p>
+<ol>
+<li id="s-release"><a href="https://android-developers.googleblog.com/2026/06/Android-17.html">Android 17 is here，2026-06-16</a>；<a href="https://developer.android.com/about/versions/17">Android 17 官方页</a>。以稳定大版本 17 收口，不将 QPR Beta 作为稳定版。</li>
+<li id="s-artti"><a href="https://source.android.com/docs/core/runtime/art-ti">ART TI</a>；<a href="https://developer.android.com/reference/android/os/Debug#attachJvmtiAgent(java.lang.String,%20java.lang.String,%20java.lang.ClassLoader)">Debug.attachJvmtiAgent，API 28</a>；<a href="https://docs.oracle.com/en/java/javase/17/docs/specs/jvmti.html#RedefineClasses">JVMTI 重定义契约</a>。</li>
+<li id="s-dcevm"><a href="https://github.com/dcevm/dcevm">DCEVM 及 full/light 范围</a>。实现阶段需固定具体对照版本与用例。</li>
+<li id="s-o">8.0：<a href="https://android.googlesource.com/platform/art/+/android-8.0.0_r1/runtime/openjdkjvmti/ti_redefine.cc">重定义</a>、<a href="https://android.googlesource.com/platform/libcore/+/android-8.0.0_r1/dalvik/src/main/java/dalvik/system/VMDebug.java#492">VMDebug</a>；8.1：<a href="https://android.googlesource.com/platform/art/+/android-8.1.0_r1/runtime/openjdkjvmti/ti_redefine.cc">重定义</a>、<a href="https://android.googlesource.com/platform/libcore/+/android-8.1.0_r1/dalvik/src/main/java/dalvik/system/VMDebug.java#492">VMDebug</a>。</li>
+<li id="s-pq"><a href="https://android.googlesource.com/platform/art/+/android-9.0.0_r1/openjdkjvmti/ti_extension.cc">9 扩展列表</a>；<a href="https://android.googlesource.com/platform/art/+/android-10.0.0_r1/openjdkjvmti/ti_extension.cc">10 扩展列表</a>、<a href="https://android.googlesource.com/platform/art/+/android-10.0.0_r1/openjdkjvmti/ti_redefine.cc">10 重定义实现</a>；<a href="https://developer.android.com/guide/app-compatibility/restrictions-non-sdk-interfaces">非 SDK 限制</a>。</li>
+<li id="s-r">11：<a href="https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/ti_extension.cc#399">结构扩展注册</a>、<a href="https://android.googlesource.com/platform/art/+/android-11.0.0_r1/openjdkjvmti/ti_redefine.cc#428">类限制与实现</a>、<a href="https://android.googlesource.com/platform/art/+/android-11.0.0_r1/runtime/runtime.cc#1076">启动时 JNI ID 选择</a>。批量入口与旧单类 UNSAFE 测试入口不同。</li>
+<li id="s-st">结构扩展：<a href="https://android.googlesource.com/platform/art/+/android-12.0.0_r1/openjdkjvmti/ti_extension.cc#399">12</a>、<a href="https://android.googlesource.com/platform/art/+/android-12.1.0_r1/openjdkjvmti/ti_extension.cc#399">12L</a>、<a href="https://android.googlesource.com/platform/art/+/android-13.0.0_r1/openjdkjvmti/ti_extension.cc#399">13</a>。</li>
+<li id="s-u">14：<a href="https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/ti_extension.cc#399">扩展</a>、<a href="https://android.googlesource.com/platform/art/+/android-14.0.0_r1/openjdkjvmti/art_jvmti.h#74">IsFullJvmtiAvailable / IsJavaDebuggableAtInit</a>。</li>
+<li id="s-vbw">结构扩展：<a href="https://android.googlesource.com/platform/art/+/android-15.0.0_r1/openjdkjvmti/ti_extension.cc#399">15</a>、<a href="https://android.googlesource.com/platform/art/+/android-16.0.0_r1/openjdkjvmti/ti_extension.cc#399">16</a>、<a href="https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/ti_extension.cc#399">17</a>；<a href="https://android.googlesource.com/platform/art/+/android-17.0.0_r1/openjdkjvmti/ti_redefine.cc#1100">17 层级检查及完整实现</a>。</li>
+<li id="s-mainline"><a href="https://source.android.com/docs/core/ota/modular-system/art">ART APEX 模块</a>；<a href="https://android-developers.googleblog.com/2026/06/Android-17.html">Android 17 发布说明：12+ ART 更新和分代 GC</a>。</li>
+<li id="s-dcl"><a href="https://developer.android.com/about/versions/14/behavior-changes-14#safer-dynamic-code-loading">14 动态加载只读要求</a>：打开新文件后先设只读，再通过已打开描述符写入，核验内容后加载；不覆盖使用中的补丁。</li>
+<li id="s-pagesize"><a href="https://developer.android.com/guide/practices/page-sizes">16 KB 页面支持</a>，不可硬编码页面为 4096。</li>
+<li id="s-final"><a href="https://developer.android.com/about/versions/17/behavior-changes-17#static-final-fields">17 / target 37：static final 不可修改</a>。</li>
+<li id="s-studio"><a href="https://developer.android.com/studio/run#apply-changes">Apply Changes 平台依赖与产品限制</a>：新增方法要求 11+，字段增删等仍列为需重启。</li>
+</ol></section>
+<footer>设计方案，尚非已实现的 SDK。运行时负责其支持的真实结构变化，构建期负责跨版本逻辑演进，Hook 负责有限适配；最终支持列表由设备证据决定。</footer>
+</main></body></html>

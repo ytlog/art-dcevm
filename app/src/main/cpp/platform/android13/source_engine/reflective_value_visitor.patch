@@ -1,0 +1,11 @@
+--- reflective_value_visitor.h
++++ reflective_value_visitor.h
+@@ -139,6 +139,8 @@
+  public:
+   HeapReflectiveSourceInfo(ReflectionSourceType t, mirror::Object* src)
+       : ReflectionSourceInfo(t), src_(src) {}
++  // Source-only accessor; adds no fields or virtual methods to the ART ABI.
++  ObjPtr<mirror::Object> GetObject() const { return src_; }
+   void Describe(std::ostream& os) const override;
+ 
+  private:

@@ -1,0 +1,25 @@
+#pragma once
+namespace artdcevm::android13::cas {
+// Extracted from the connected phone, not inferred from API level or security patch date.
+inline constexpr char kArtBuildId[] = "14fc77b24db0b351b919c97009dc86bf";
+inline constexpr char kJvmtiBuildId[] = "2fe21c45581b9c8b0519b71cbde32938";
+inline constexpr char kCompilerBuildId[] = "578147d9e59c98c6bc3c6faf9d27c9e6";
+inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_7HInvokeE";
+inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";
+inline constexpr char kCheckMethods[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv";
+inline constexpr char kCheckClass[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition10CheckClassEv";
+inline constexpr char kCollectNewInstances[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition28CollectAndCreateNewInstancesEPNS_20RedefinitionDataIterE";
+inline constexpr char kAllocateSubtree[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE";
+inline constexpr char kRedefineRun[] = "_ZN12openjdkjvmti9Redefiner3RunEv";
+inline constexpr char kAllocateClass[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition22AllocateNewClassObjectEN3art6HandleINS2_6mirror5ClassEEES6_NS3_INS4_8DexCacheEEEt";
+inline constexpr char kVerifyClass[] = "_ZN3art8verifier13ClassVerifier11VerifyClassEPNS_6ThreadEPNS0_12VerifierDepsEPKNS_7DexFileENS_6HandleINS_6mirror5ClassEEENS9_INSA_8DexCacheEEENS9_INSA_11ClassLoaderEEERKNS_3dex8ClassDefEPNS_17CompilerCallbacksENS0_15HardFailLogModeEjPNSt3__112basic_stringIcNSO_11char_traitsIcEENSO_9allocatorIcEEEE";
+inline constexpr char kVerifierResolve[] = "_ZN3art8verifier12RegTypeCache12ResolveClassEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE";
+inline constexpr char kFindClass[] = "_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror11ClassLoaderEEE";
+inline constexpr char kLookupClass[] = "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE";
+inline constexpr char kDeleteClassLoader[] = "_ZN3art11ClassLinker17DeleteClassLoaderEPNS_6ThreadERKNS0_15ClassLoaderDataEb";
+inline constexpr char kIsAsyncDeoptimizeable[] = "_ZNK3art7Runtime21IsAsyncDeoptimizeableEm";
+inline constexpr char kTestSuspendFromCode[] = "artTestSuspendFromCode";
+inline constexpr char kCollectMappings[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition32CollectNewFieldAndMethodMappingsERKNS_20RedefinitionDataIterEPNSt3__13mapIPN3art9ArtMethodES9_NS5_4lessIS9_EENS5_9allocatorINS5_4pairIKS9_S9_EEEEEEPNS6_IPNS7_8ArtFieldESK_NSA_ISK_EENSC_INSD_IKSK_SK_EEEEEE";
+inline constexpr char kStructuralCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE";
+inline constexpr char kInPlaceCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition18UpdateClassInPlaceERKNS_20RedefinitionDataIterE";
+}

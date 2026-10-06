@@ -1,0 +1,3 @@
+jvmti.h: AOSP ART android-13.0.0_r1
+https://android.googlesource.com/platform/art/+/android-13.0.0_r1/openjdkjvmti/include/jvmti.h
+License and copyright notices are preserved in the header.
