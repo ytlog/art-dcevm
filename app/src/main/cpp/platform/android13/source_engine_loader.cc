@@ -15,7 +15,9 @@ using Redefine = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Redefine source_redefine = nullptr;
 Redefine source_standard_redefine = nullptr;
 bool load_attempted = false, ready = false;
+#ifdef ARTDCEVM_TESTING
 void* graph_inline_hook_token = nullptr;
+#endif
 }
 std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibration) {
   if (ready) return {};
@@ -189,6 +191,7 @@ int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
 }
 }
 
+#ifdef ARTDCEVM_TESTING
 // Diagnostics for the in-app regression harness; primary mutation uses an independent Agent.
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
@@ -508,3 +511,4 @@ Java_dev_artdcevm_testing_ForegroundStressActivity_enableDeoptTracing(JNIEnv*, j
   if (fn) fn(true);
   return fn != nullptr;
 }
+#endif  // ARTDCEVM_TESTING

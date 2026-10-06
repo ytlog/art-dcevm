@@ -21,7 +21,7 @@ android {
         // Prefab also places the same Maven artifact in the native output directory.
         pickFirsts += ['**/libshadowhook.so', '**/libshadowhook_nothing.so']
     } }
-    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
+    sourceSets.debug.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
     if (providers.gradleProperty('sourceEngine13').isPresent()) {
         sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/sourceEngine').get().asFile
     }
@@ -38,7 +38,7 @@ def patchTask = tasks.register('compilePatchFixtures', Exec) {
         '--java', System.getProperty('java.home'),
         '--out', layout.buildDirectory.dir('generated/patchAssets').get().asFile
 }
-tasks.named('preBuild').configure { dependsOn patchTask }
+tasks.configureEach { if (name == 'preDebugBuild') dependsOn patchTask }
 if (providers.gradleProperty('sourceEngine13').isPresent()) {
     def sourceEngine = tasks.register('buildSourceEngine13', Exec) {
         inputs.file rootProject.file('tools/android13/build-source-engine.py')
