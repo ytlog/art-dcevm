@@ -6,13 +6,13 @@
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
 `jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
 校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
-Hook 按整批所需能力路由到普通、ART 增量或源码结构事务。`RetransformClasses` 不在此入口范围内。
+Hook 对整个批次先做校验，再交给源码结构事务；事务按转换回调产生的最终 DEX 执行 ART 校验和提交。`RetransformClasses` 不在此入口范围内。
 原有 `RuntimeBackend.apply/analyze/enableEvolution` 暂供仓库内部诊断与回归测试使用。
 独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
-本次标准入口双加载顺序的设备结果见 `evidence/standard-jvmti/20261006T134127Z/result.json`；
+本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 方法体转新增字段的设备结果见 `evidence/standard-jvmti/20261006T140229Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
-`evidence/source-engine/20261006T134228Z/run.json` 和
-`evidence/source-engine/20261006T134153Z/run.json`。
+`evidence/source-engine/20261006T140256Z/run.json` 和
+`evidence/source-engine/20261006T140659Z/run.json`。
 
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 

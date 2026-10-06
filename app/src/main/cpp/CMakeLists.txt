@@ -22,3 +22,6 @@ target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/
 add_library(artdcevm_restricted_test SHARED testing/standard_jvmti_client.cc)
 target_compile_definitions(artdcevm_restricted_test PRIVATE ARTDCEVM_RESTRICTED_CLIENT=1)
 target_include_directories(artdcevm_restricted_test PRIVATE ../../../../third_party/jvmti)
+add_library(artdcevm_second_client_test SHARED testing/standard_jvmti_client.cc)
+target_compile_definitions(artdcevm_second_client_test PRIVATE ARTDCEVM_SECOND_CLIENT=1)
+target_include_directories(artdcevm_second_client_test PRIVATE ../../../../third_party/jvmti)

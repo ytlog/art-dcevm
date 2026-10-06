@@ -207,11 +207,8 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
   std::string error;
   result = static_cast<jvmtiError>(PlanEvolution(caller, jni, batch, &plan, &error));
   if (result != JVMTI_ERROR_NONE) return result;
-  if (plan.required_features == 0)
-    return original_redefine_(caller, count, definitions);
-  constexpr uint32_t additive = evolution::kAddField | evolution::kAddMethod;
-  if ((plan.required_features & ~additive) == 0)
-    return structural_ ? structural_(caller, count, definitions) : JVMTI_ERROR_NOT_AVAILABLE;
+  // ART invokes ClassFileLoadHook after this route, and a callback may change
+  // the structural requirements. The source transaction validates the final DEX.
   return static_cast<jvmtiError>(RedefineWithSource(caller, vm_, count, definitions));
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {

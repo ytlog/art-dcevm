@@ -26,15 +26,18 @@ install = command('install', '-r', str(apk))
 install.check_returncode()
 result = {'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'serial': args.serial}
 for first in (False, True):
-    command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
-    run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'clientFirst', str(first).lower(),
-                  'dev.artdcevm.lab/dev.artdcevm.testing.StandardJvmtiInstrumentation')
-    (output / ('client-first.txt' if first else 'enhancer-first.txt')).write_text(run.stdout + run.stderr)
-    result['clientFirst' if first else 'enhancerFirst'] = (
-        run.returncode == 0 and '"passed":true' in run.stdout and
-        ('"clientFirst":true' if first else '"clientFirst":false') in run.stdout and
-        'INSTRUMENTATION_CODE: -1' in run.stdout)
+    for transform in (False, True):
+        command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
+        run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'clientFirst',
+                      str(first).lower(), '-e', 'transformCase', str(transform).lower(),
+                      'dev.artdcevm.lab/dev.artdcevm.testing.StandardJvmtiInstrumentation')
+        name = ('clientFirst' if first else 'enhancerFirst') + ('Transform' if transform else '')
+        (output / (name + '.txt')).write_text(run.stdout + run.stderr)
+        result[name] = (run.returncode == 0 and '"passed":true' in run.stdout and
+                        ('"clientFirst":true' if first else '"clientFirst":false') in run.stdout and
+                        'INSTRUMENTATION_CODE: -1' in run.stdout)
 (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))
 print(output)
-raise SystemExit(0 if result['clientFirst'] and result['enhancerFirst'] else 1)
+raise SystemExit(0 if all(result[name] for name in (
+    'enhancerFirst', 'enhancerFirstTransform', 'clientFirst', 'clientFirstTransform')) else 1)
