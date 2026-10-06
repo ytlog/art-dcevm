@@ -30,7 +30,7 @@ apk = ROOT / 'app/build/outputs/apk/debug/app-debug.apk'
 if not apk.exists():
     p.error('Build :app:assembleDebug first')
 timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-out = ROOT / 'evidence/runs' / timestamp
+out = ROOT / 'build/evidence/runs' / timestamp
 out.mkdir(parents=True, exist_ok=True)
 
 def adb(*command, timeout=120):

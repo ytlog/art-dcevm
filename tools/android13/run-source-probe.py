@@ -21,7 +21,7 @@ apk = ROOT / 'app/build/outputs/apk/debug/app-debug.apk'
 with zipfile.ZipFile(apk) as archive:
     if 'lib/arm64-v8a/libartdcevm_source13.so' not in archive.namelist():
         p.error('Build the APK with -PsourceEngine13 first')
-out = ROOT / 'evidence/source-engine' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+out = ROOT / 'build/evidence/source-engine' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 out.mkdir(parents=True)
 meta = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
         'fullDcevmComplete': False, 'hookOrder': args.hook_order, 'suite': args.suite,

@@ -36,7 +36,7 @@ source = root / f'app/build/generated/patchAssets/{variant}/dev/artdcevm/gc/{kla
 if not source.is_file():
     parser.error('Build patch fixtures before preparing the AOT probe')
 
-out = root / 'evidence/device-aot' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+out = root / 'build/evidence/device-aot' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 out.mkdir(parents=True)
 if args.active_frame or args.interface_removal or args.parent_swap:
     extra_classes = (['AotSwapParent', 'AotSwapAlternate', 'AotSwapCaller'] if args.parent_swap

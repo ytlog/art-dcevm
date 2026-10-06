@@ -15,7 +15,7 @@ sdk = next(line.split('=', 1)[1] for line in (root / 'local.properties').read_te
            if line.startswith('sdk.dir='))
 adb = str(Path(sdk) / 'platform-tools/adb')
 apk = root / 'app/build/outputs/apk/debug/app-debug.apk'
-output = root / 'evidence/standard-jvmti' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+output = root / 'build/evidence/standard-jvmti' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 output.mkdir(parents=True)
 
 def command(*parts):

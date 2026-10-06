@@ -29,7 +29,7 @@ if result.returncode:
 report = json.loads(result.stdout)
 report['sanitizers'] = ['AddressSanitizer', 'UndefinedBehaviorSanitizer']
 report['scope'] = 'host schema parser and migration planner; not Android runtime mutation'
-evidence = root / 'evidence/host'
+evidence = root / 'build/evidence/host'
 evidence.mkdir(parents=True, exist_ok=True)
 (evidence / 'evolution-tests.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
 print(json.dumps({key: value for key, value in report.items() if key != 'plans'}, ensure_ascii=False))

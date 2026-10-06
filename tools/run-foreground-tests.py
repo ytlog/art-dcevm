@@ -30,7 +30,7 @@ if args.no_deopt_tracing and args.stress != 'source':
 report_name = 'foreground-stress.json' if args.stress else 'conformance.json'
 sdk = next(line.split('=', 1)[1] for line in (ROOT / 'local.properties').read_text().splitlines() if line.startswith('sdk.dir='))
 adb = str(Path(sdk) / 'platform-tools/adb')
-out = ROOT / 'evidence/ui' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+out = ROOT / 'build/evidence/ui' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 out.mkdir(parents=True)
 meta = {'serial': args.serial, 'passed': False, 'fullDcevmComplete': False,
         'localApkSha256': hashlib.sha256((ROOT / 'app/build/outputs/apk/debug/app-debug.apk').read_bytes()).hexdigest(),
