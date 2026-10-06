@@ -21,7 +21,7 @@ class ValidationHooks {
   static uint64_t SourceCommitCalls();
   static uint64_t SourceInPlaceCalls();
 };
-// Only EVOLVE_SCHEMA enters this scope; stock body/additive calls retain ART policy.
+// Only source transactions enter this scope; body/additive calls retain ART policy.
 class SourceTransactionScope {
  public:
   SourceTransactionScope();

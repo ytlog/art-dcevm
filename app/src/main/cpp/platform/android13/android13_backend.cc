@@ -5,15 +5,30 @@
 #include "platform/android13/evolution_planner.h"
 #include "platform/android13/source_engine_loader.h"
 #include "platform/android13/builds/cas_tkq1_221114_001.h"
+#include "core/transaction_lock.h"
 #include <cstring>
 #include <elf.h>
 #include <iomanip>
 #include <link.h>
 #include <sstream>
 #include <sys/system_properties.h>
+#include <new>
 
 namespace artdcevm::android13 {
 namespace {
+Android13Backend* routed_backend = nullptr;
+jvmtiError RedefineHook(jvmtiEnv* caller, jint count,
+                        const jvmtiClassDefinition* definitions) {
+  auto* backend = routed_backend;
+  if (artdcevm::internal_redefinition)
+    return backend->original_redefine()(caller, count, definitions);
+  try {
+    std::lock_guard<std::mutex> lock(artdcevm::TransactionMutex());
+    return backend->RouteRedefinition(caller, count, definitions);
+  } catch (const std::bad_alloc&) {
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+}
 std::string Quote(const std::string& s) {
   std::string r = "\"";
   for (unsigned char c : s) {
@@ -69,6 +84,7 @@ std::string Android13Backend::Capabilities() const {
     << ",\"methodBody\":" << (caps_.can_redefine_classes ? "true" : "false")
     << ",\"nativeAdditive\":" << (structural_ && modifiable_ ? "true" : "false")
     << ",\"evolutionAvailable\":" << (evolution_ && evolution_->Available() ? "true" : "false")
+    << ",\"standardRedefineRouted\":" << (redefine_hook_ ? "true" : "false")
     << ",\"nativeDelete\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"fieldTypeEvolution\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"methodSignatureEvolution\":" << (evolution_ && evolution_->Available() ? "true" : "false")
@@ -141,11 +157,62 @@ int Android13Backend::EnableValidationHooks() {
 int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject calibration) {
   if (!env_ || !vm_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
   if (!caps_.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
-  if (evolution_ && evolution_->Available()) return JVMTI_ERROR_NONE;
+  if (redefine_hook_) return JVMTI_ERROR_NONE;
+  if (routing_attempted_) return JVMTI_ERROR_NOT_AVAILABLE;
   evolution_error_ = InitializeSourceEngine(jni, path, calibration);
   if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
   evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
+  routing_attempted_ = true;
+  void* target = hook_engine_.FindSymbol("libopenjdkjvmti.so", cas::kRedefineClasses);
+  if (!target) {
+    evolution_error_ = "Missing named RedefineClasses symbol; restart the process";
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  }
+  routed_backend = this;
+  redefine_hook_ = hook_engine_.Install(target, reinterpret_cast<void*>(RedefineHook),
+                                        reinterpret_cast<void**>(&original_redefine_), &evolution_error_);
+  if (!redefine_hook_) {
+    routed_backend = nullptr;
+    evolution_error_ += "; restart the process";
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  }
   return JVMTI_ERROR_NONE;
+}
+jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
+                                                const jvmtiClassDefinition* definitions) {
+  // Preserve ART's argument and zero-count semantics before inspecting any class.
+  if (!caller || count <= 0 || !definitions)
+    return original_redefine_(caller, count, definitions);
+  jvmtiCapabilities caller_caps{};
+  jvmtiError result = caller->GetCapabilities(&caller_caps);
+  if (result != JVMTI_ERROR_NONE) return result;
+  if (!caller_caps.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
+  JNIEnv* jni = nullptr;
+  if (vm_->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
+    return JVMTI_ERROR_UNATTACHED_THREAD;
+  std::vector<Definition> batch;
+  batch.reserve(count);
+  for (jint i = 0; i < count; ++i) {
+    const auto& definition = definitions[i];
+    if (!definition.klass || definition.class_byte_count <= 0 || !definition.class_bytes)
+      return original_redefine_(caller, count, definitions);
+    jboolean modifiable = JNI_FALSE;
+    result = caller->IsModifiableClass(definition.klass, &modifiable);
+    if (result != JVMTI_ERROR_NONE) return result;
+    if (!modifiable) return JVMTI_ERROR_UNMODIFIABLE_CLASS;
+    batch.push_back({definition.klass, std::vector<unsigned char>(definition.class_bytes,
+                   definition.class_bytes + definition.class_byte_count)});
+  }
+  BatchPlan plan;
+  std::string error;
+  result = static_cast<jvmtiError>(PlanEvolution(caller, jni, batch, &plan, &error));
+  if (result != JVMTI_ERROR_NONE) return result;
+  if (plan.required_features == 0)
+    return original_redefine_(caller, count, definitions);
+  constexpr uint32_t additive = evolution::kAddField | evolution::kAddMethod;
+  if ((plan.required_features & ~additive) == 0)
+    return structural_ ? structural_(caller, count, definitions) : JVMTI_ERROR_NOT_AVAILABLE;
+  return static_cast<jvmtiError>(RedefineWithSource(caller, vm_, count, definitions));
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {
   if (!env_) return "{\"code\":116,\"detail\":\"Agent is not attached\"}";

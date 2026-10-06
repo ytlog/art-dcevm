@@ -25,3 +25,9 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti ../../../../third_party/shadowhook/src/include)
 target_link_libraries(artdcevm PRIVATE log dl shadowhook)
+# A separate Agent exercises only the public JVMTI function table.
+add_library(artdcevm_client_test SHARED testing/standard_jvmti_client.cc)
+target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/jvmti)
+add_library(artdcevm_restricted_test SHARED testing/standard_jvmti_client.cc)
+target_compile_definitions(artdcevm_restricted_test PRIVATE ARTDCEVM_RESTRICTED_CLIENT=1)
+target_include_directories(artdcevm_restricted_test PRIVATE ../../../../third_party/jvmti)

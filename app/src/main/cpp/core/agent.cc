@@ -1,5 +1,6 @@
 #include "platform/backend_factory.h"
 #include "jvmti.h"
+#include "core/transaction_lock.h"
 #include <memory>
 #include <mutex>
 #include <limits>
@@ -7,12 +8,12 @@
 
 namespace {
 std::unique_ptr<artdcevm::RuntimeBackend> backend;
-std::mutex engine_mutex;
 }
+using artdcevm::TransactionMutex;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*, void*) { return JNI_VERSION_1_6; }
 extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
-  std::lock_guard<std::mutex> lock(engine_mutex);
+  std::lock_guard<std::mutex> lock(TransactionMutex());
   if (backend) return JNI_OK;
   auto candidate = artdcevm::CreateBackend();
   if (!candidate || candidate->Attach(vm) != JNI_OK) return JNI_ERR;
@@ -21,15 +22,15 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_capabilities(JNIEnv* env, jclass) {
-  std::lock_guard<std::mutex> lock(engine_mutex);
+  std::lock_guard<std::mutex> lock(TransactionMutex());
   return env->NewStringUTF(backend ? backend->Capabilities().c_str() : "{\"attached\":false}");
 }
 extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_errorName(JNIEnv* env, jclass, jint code) {
-  std::lock_guard<std::mutex> lock(engine_mutex);
+  std::lock_guard<std::mutex> lock(TransactionMutex());
   return env->NewStringUTF(backend ? backend->ErrorName(code).c_str() : "NO_BACKEND");
 }
 extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_enableValidationHooks(JNIEnv*, jclass) {
-  std::lock_guard<std::mutex> lock(engine_mutex);
+  std::lock_guard<std::mutex> lock(TransactionMutex());
   return backend ? backend->EnableValidationHooks() : JVMTI_ERROR_INVALID_ENVIRONMENT;
 }
 extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_initializeEvolution(
@@ -40,7 +41,7 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_initiali
   auto release = [env, path](const char* value) { env->ReleaseStringUTFChars(path, value); };
   std::unique_ptr<const char, decltype(release)> owned(bytes, release);
   try {
-    std::lock_guard<std::mutex> lock(engine_mutex);
+    std::lock_guard<std::mutex> lock(TransactionMutex());
     return backend ? backend->InitializeEvolution(env, bytes, calibration) : JVMTI_ERROR_INVALID_ENVIRONMENT;
   } catch (const std::bad_alloc&) { return JVMTI_ERROR_OUT_OF_MEMORY; }
 }
@@ -72,7 +73,8 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_apply(JN
     std::vector<artdcevm::Definition> defs;
     int error = DecodeDefinitions(env, classes, dexes, &defs);
     if (error) return error;
-    std::lock_guard<std::mutex> lock(engine_mutex);
+    std::lock_guard<std::mutex> lock(TransactionMutex());
+    artdcevm::InternalRedefinitionScope internal;
     return backend ? backend->Apply(static_cast<artdcevm::Operation>(operation), defs) : JVMTI_ERROR_INVALID_ENVIRONMENT;
   } catch (const std::bad_alloc&) { return JVMTI_ERROR_OUT_OF_MEMORY; }
 }
@@ -81,7 +83,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_analy
     std::vector<artdcevm::Definition> defs;
     int error = DecodeDefinitions(env, classes, dexes, &defs);
     if (env->ExceptionCheck()) return nullptr;
-    std::lock_guard<std::mutex> lock(engine_mutex);
+    std::lock_guard<std::mutex> lock(TransactionMutex());
     if (!backend) error = JVMTI_ERROR_INVALID_ENVIRONMENT;
     std::string result = error ? "{\"code\":" + std::to_string(error) + "}" : backend->Analyze(env, defs);
     if (env->ExceptionCheck()) return nullptr;

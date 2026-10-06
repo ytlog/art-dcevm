@@ -16,6 +16,10 @@ class Android13Backend final : public RuntimeBackend {
   std::string ErrorName(int error) const override;
   int EnableValidationHooks() override;
   int InitializeEvolution(JNIEnv* jni, const char* module_path, jobject calibration) override;
+  jvmtiError RouteRedefinition(jvmtiEnv* caller, jint count,
+                                const jvmtiClassDefinition* definitions);
+  using RedefineFn = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
+  RedefineFn original_redefine() const { return original_redefine_; }
  private:
   jvmtiEnv* env_ = nullptr;
   JavaVM* vm_ = nullptr;
@@ -31,5 +35,8 @@ class Android13Backend final : public RuntimeBackend {
   ValidationHooks validation_hooks_;
   std::string hook_error_;
   std::string evolution_error_;
+  RedefineFn original_redefine_ = nullptr;
+  void* redefine_hook_ = nullptr;
+  bool routing_attempted_ = false;
 };
 }

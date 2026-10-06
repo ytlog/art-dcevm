@@ -135,6 +135,27 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   return {};
 }
 bool SourceEngineAvailable() { return ready; }
+int RedefineWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
+                       const jvmtiClassDefinition* definitions) {
+  if (!ready) return JVMTI_ERROR_NOT_AVAILABLE;
+  JNIEnv* jni = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
+    return JVMTI_ERROR_UNATTACHED_THREAD;
+  std::vector<jclass> roots;
+  roots.reserve(count);
+  for (jint i = 0; i < count; ++i) {
+    auto root = static_cast<jclass>(jni->NewGlobalRef(definitions[i].klass));
+    if (!root) {
+      for (jclass retained : roots) jni->DeleteGlobalRef(retained);
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    roots.push_back(root);
+  }
+  SourceTransactionScope transaction;
+  const int result = source_redefine(env, count, definitions);
+  for (jclass root : roots) jni->DeleteGlobalRef(root);
+  return result;
+}
 int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
   if (!ready) return JVMTI_ERROR_NOT_AVAILABLE;
   if (definitions.empty() || definitions.size() > static_cast<size_t>(std::numeric_limits<jint>::max()))
@@ -153,23 +174,7 @@ int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
       if (jni->IsSameObject(definition.klass, definitions[j].klass)) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
     native.push_back({definition.klass, static_cast<jint>(definition.dex.size()), definition.dex.data()});
   }
-  std::vector<jclass> transaction_roots;
-  transaction_roots.reserve(definitions.size());
-  for (size_t i = 0; i < definitions.size(); ++i) {
-    const auto& definition = definitions[i];
-    auto root = static_cast<jclass>(jni->NewGlobalRef(definition.klass));
-    if (!root) {
-      for (jclass transaction_root : transaction_roots) jni->DeleteGlobalRef(transaction_root);
-      return JVMTI_ERROR_OUT_OF_MEMORY;
-    }
-    transaction_roots.push_back(root);
-  }
-  SourceTransactionScope transaction;
-  const int result = source_redefine(env_, static_cast<jint>(native.size()), native.data());
-  // The named ClassLinker deletion hook prunes native retired pointers before
-  // ART frees a loader's LinearAlloc. The roots are needed only for this transaction.
-  for (jclass root : transaction_roots) jni->DeleteGlobalRef(root);
-  return result;
+  return RedefineWithSource(env_, vm_, static_cast<jint>(native.size()), native.data());
 }
 }
 
