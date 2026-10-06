@@ -12,7 +12,7 @@ Hook 对整个批次先做校验，再交给源码结构事务；事务按转换
 本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 方法体转新增字段的设备结果见 `evidence/standard-jvmti/20261006T140229Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 `evidence/source-engine/20261006T140256Z/run.json` 和
-`evidence/source-engine/20261006T140659Z/run.json`。
+`evidence/source-engine/20261006T141455Z/run.json`。
 
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 

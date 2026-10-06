@@ -2,7 +2,7 @@
 
 记录时间：2026-10-06。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前已验证 APK SHA-256：`7b64fca8ba1940e0a4070c475fe977b3008103f69d1d9a8cd92ad9c383ea05fe`。
 
-本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 通过 validation-first 完整回归及 source-first 收窄回归：[完整结果](evidence/source-engine/20261006T140256Z/run.json)、[收窄结果](evidence/source-engine/20261006T140659Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
+本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 在两种 Hook 顺序下均通过完整回归，各完成 31 次结构提交和 135 项修饰符检查：[validation-first](evidence/source-engine/20261006T140256Z/run.json)、[source-first](evidence/source-engine/20261006T141455Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
 
 ## 明确不支持或会拒绝的情况
 
