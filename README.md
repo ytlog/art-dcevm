@@ -2,6 +2,18 @@
 
 目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。当前仅开发连接手机的 Android 13 / API 33 / arm64 后端，不需要 root，也不改系统分区。
 
+标准 JVMTI 入口的使用方式：在用户 Agent 第一次重定义前调用一次
+`DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
+`jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
+校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
+Hook 按整批所需能力路由到普通、ART 增量或源码结构事务。`RetransformClasses` 不在此入口范围内。
+原有 `RuntimeBackend.apply/analyze/enableEvolution` 暂供仓库内部诊断与回归测试使用。
+独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
+本次标准入口双加载顺序的设备结果见 `evidence/standard-jvmti/20261006T134127Z/result.json`；
+ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
+`evidence/source-engine/20261006T134228Z/run.json` 和
+`evidence/source-engine/20261006T134153Z/run.json`。
+
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 
 非调试 AOT 安全边界现有直接设备证据：`dex2oat64 --compiler-filter=speed` 生成的活动父类调用者为 AOT 帧（状态 7）。父类替换在旧定义完整时返回 66；旧调用随后返回 14，帧退出后重试提交 0，后续旧调用抛出 `IncompatibleClassChangeError`。两种 Hook 顺序均通过，见 `evidence/device-aot/20261006T091108Z/result.json`、`evidence/source-engine/20261006T091127Z/probe.json` 与 `evidence/source-engine/20261006T091149Z/probe.json`。这验证了安全拒绝和重试，尚未实现活动非调试 AOT 帧的即时 DeOPT。
@@ -72,7 +84,7 @@ app/src/main/cpp/
   testing/                     JNI 全局引用、方法/字段 ID 一致性探针
 fixtures/                      方法体、增删、类型、继承、元数据的单类补丁源码
 tests/host/                    本地解析器及迁移计划测试，启用内存/未定义行为检测
-third_party/                   固定来源、保留许可证的 JVMTI/ShadowHook 源码
+third_party/                   固定来源、保留许可证的 JVMTI 头文件
 tools/android13/               固定源码归档、平台 libc++ 构建、独立设备验证
 evidence/                      构建、设备与实际运行证据
 ```
@@ -221,4 +233,4 @@ python3 tools/run-foreground-tests.py --serial DEVICE_001 --stress stock --round
 
 APK 中包含测试用单类 DEX。生产补丁分发、签名、访问控制和发布系统不在当前原型中。`fullDcevmComplete` 在报告中保持 `false`，直到完整能力及一致性验收通过。
 
-来源：[AOSP Android 13 重定义实现](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_redefine.cc)、[ShadowHook](https://github.com/bytedance/android-inline-hook/tree/854c775c2c3676e57a0f383597ebf420b5204161)。第三方代码的版本和许可证见 `third_party/*/ORIGIN.txt` 及原始头文件。
+来源：[AOSP Android 13 重定义实现](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_redefine.cc)、[ShadowHook 官方集成说明](https://github.com/bytedance/android-inline-hook/blob/main/doc/manual.md)。ShadowHook 2.0.1 由 Maven Central/Prefab 提供，编译使用 Android SDK 37；仓库内 JVMTI 头文件的来源和许可证见 `third_party/jvmti/ORIGIN.txt`。

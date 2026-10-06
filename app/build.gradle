@@ -1,7 +1,7 @@
 plugins { id 'com.android.application' }
 android {
     namespace 'dev.artdcevm'
-    compileSdk 35
+    compileSdk 37
     ndkVersion '27.2.12479018'
     defaultConfig {
         applicationId 'dev.artdcevm.lab'
@@ -15,18 +15,27 @@ android {
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
     externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '4.3.4' } }
-    packaging { jniLibs { useLegacyPackaging true } }
-    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/patchAssets')
+    buildFeatures { prefab true }
+    packaging { jniLibs {
+        useLegacyPackaging true
+        // Prefab also places the same Maven artifact in the native output directory.
+        pickFirsts += ['**/libshadowhook.so', '**/libshadowhook_nothing.so']
+    } }
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
     if (providers.gradleProperty('sourceEngine13').isPresent()) {
-        sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/sourceEngine')
+        sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/sourceEngine').get().asFile
     }
+}
+dependencies {
+    implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
 def patchTask = tasks.register('compilePatchFixtures', Exec) {
     inputs.dir rootProject.file('fixtures')
     inputs.file rootProject.file('tools/build-fixtures.py')
     outputs.dir layout.buildDirectory.dir('generated/patchAssets')
     commandLine 'python3', rootProject.file('tools/build-fixtures.py'),
-        '--sdk', android.sdkDirectory, '--java', System.getProperty('java.home'),
+        '--sdk', androidComponents.sdkComponents.sdkDirectory.get().asFile,
+        '--java', System.getProperty('java.home'),
         '--out', layout.buildDirectory.dir('generated/patchAssets').get().asFile
 }
 tasks.named('preBuild').configure { dependsOn patchTask }

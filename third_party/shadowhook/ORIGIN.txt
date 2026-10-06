@@ -1,4 +1,0 @@
-https://github.com/bytedance/android-inline-hook
-Tag: v2.0.1
-Commit: 854c775c2c3676e57a0f383597ebf420b5204161
-Vendored native sources and upstream documentation only; MIT license retained.
