@@ -12,7 +12,7 @@ public final class BackendRegistry {
     public static RuntimeBackend open(Context context) throws Exception {
         if (Build.VERSION.SDK_INT == 33 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0]))
             return new Android13Backend(context);
-        if (Build.VERSION.SDK_INT >= 33) return new PublicJvmtiBackend(context);
+        if (Build.VERSION.SDK_INT >= 30) return new PublicJvmtiBackend(context);
         throw new UnsupportedOperationException("No backend implemented for API " + Build.VERSION.SDK_INT);
     }
 }

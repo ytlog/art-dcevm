@@ -29,7 +29,8 @@ public final class PublicJvmtiSuite {
                     "public attach uses the selected backend");
             require(capabilities.getBoolean("methodBody"), "body capability");
             require(!capabilities.getBoolean("evolutionAvailable"), "source engine must be unavailable");
-            require(backend.enableEvolution().code == 98, "source engine refusal");
+            if (backend.id().startsWith("public-jvmti"))
+                require(backend.enableEvolution().code == 98, "source engine refusal");
             Evolving instance = new Evolving(41);
             require(instance.compute() == 42, "original body");
             StandardJvmtiClient.attach(context);
@@ -43,6 +44,20 @@ public final class PublicJvmtiSuite {
                 require(structureCode == 0, "advertised additive redefine");
                 require(Evolving.class.getField("added").getLong(instance) == 0,
                         "existing instance field default");
+                Evolving.class.getField("added").setLong(instance, 9);
+                int deletionCode = backend.apply(new PatchRequest(PatchRequest.Operation.REDEFINE_STRUCTURE,
+                        new Class<?>[]{Evolving.class}, new byte[][]{fixture("delete")})).code;
+                result.put("deletionProbeCode", deletionCode);
+                if (deletionCode == 0) {
+                    require(instance.compute() == 45, "deleted schema uses new method body");
+                    try {
+                        Evolving.class.getField("added");
+                        throw new AssertionError("deleted field remains visible");
+                    } catch (NoSuchFieldException expected) { }
+                } else {
+                    require(Evolving.class.getField("added").getLong(instance) == 9 &&
+                            instance.compute() == 44, "rejected deletion leaves old schema intact");
+                }
             } else {
                 require(structureCode == 98, "unavailable structure is explicit");
             }

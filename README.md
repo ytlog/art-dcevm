@@ -2,7 +2,7 @@
 
 验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
 
-目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整源码演进后端目前只针对 Android 13 / API 33 / arm64 的固定 ART 构建；API 33 以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
+目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整源码演进后端目前只针对 Android 13 / API 33 / arm64 的固定 ART 构建；Android 11 / API 30 及以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
 
 标准 JVMTI 入口的使用方式：在用户 Agent 第一次重定义前调用一次
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
@@ -122,7 +122,7 @@ Java 公共 API 不暴露 `ArtMethod`、`ArtField`、对象布局或私有地址
 | 私有 Hook | `ValidationHooks` + `HookEngine` | Build ID 匹配、回调计数、保持原有语义 |
 | `analyze(request)` | 当前类快照 + DEX 解析 + `MigrationPlan` | 成员身份映射、完整批次校验、结构变化识别；不提交变更 |
 
-API 33/arm64 保留专用后端，其私有 Hook 匹配 `libart.so` 与 `libopenjdkjvmti.so` 的 GNU Build ID。其他 API 33+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、源码事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 仍要求完整源码演进，因此在公开后端会失败。API 34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换，结果见 [兼容性设备报告](build/evidence/compatibility/20261007/)。其他设备仍需逐台回归。**扩展名称相同不代表私有 ABI 可复用。**
+API 33/arm64 保留专用后端，其私有 Hook 匹配 `libart.so` 与 `libopenjdkjvmti.so` 的 GNU Build ID。其他 API 30+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、源码事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 仍要求完整源码演进，因此在公开后端会失败。API 30、34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换；API 30 的独立测试 APK 还验证了成员删除被拒绝时的事务状态，结果见本地 `build/evidence/compatibility/20261007/`。其他设备仍需逐台回归。**扩展名称相同不代表私有 ABI 可复用。**
 
 公开 JVMTI 入口的调用方式如下。附加后，用户 Agent 用自己的 `jvmtiEnv::RedefineClasses` 提交完整定义；增量结构扩展需要从自身的 JVMTI 环境获取 ART 扩展函数。
 
@@ -231,7 +231,19 @@ python3 tools/run-foreground-tests.py --serial DEVICE_001 --stress stock --round
 
 脚本仅安装并操作 `dev.artdcevm.lab`，每次测试先结束该应用进程，保证补丁从初始类开始。手机需允许 USB 安装。测试运行于普通应用 UID，未声明额外权限。报告会保存到 `build/evidence/runs/`；失败或进程崩溃时保留已经完成的检查。
 
-跨版本验证可先用 Android Studio 模拟器安装 x86_64 系统镜像，分别启动 API 34/35/36 AVD，再对各设备运行 `tools/run-public-jvmti.py`。云端 arm64 实机可参考 [Firebase Test Lab 设备目录](https://firebase.google.com/docs/test-lab/android/available-testing-devices) 和 [instrumentation 命令行测试](https://firebase.google.com/docs/test-lab/android/command-line)；目前仓库的 instrumentation 与应用打在同一 debug APK，上传前仍需拆出测试 APK，并取得项目及计费权限。云端测试也不能替代新 ART 构建的 Build ID、源码 ABI 和私有事务校准。
+跨版本验证可先用 Android Studio 模拟器安装 x86_64 系统镜像，分别启动 API 30/34/35/36 AVD，再对各设备运行 `tools/run-public-jvmti.py`。这条路径只验证公开 JVMTI，不验证 ARM 私有 Hook。ARM 优先使用实体设备或 [Firebase Test Lab ARM 虚拟设备](https://firebase.google.com/docs/test-lab/android/avds)；先从[设备目录](https://firebase.google.com/docs/test-lab/android/available-testing-devices)选择支持 arm64 和目标 API 的型号，再运行独立的测试 APK：
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+gcloud firebase test android models list --filter=virtual
+gcloud firebase test android models describe MODEL_ID
+gcloud firebase test android run --type instrumentation \
+  --app app/build/outputs/apk/debug/app-debug.apk \
+  --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+  --device model=MODEL_ID,version=OS_VERSION_ID
+```
+
+运行前需在 `gcloud` 中登录并选择有 Test Lab 权限的项目；型号和版本以实时目录为准。`PublicJvmtiCloudTest` 使用标准 AndroidJUnitRunner，测试结果为一个 JUnit 用例，`ArtDcevmCloud` 日志包含实际 SDK、ABI、能力位、方法体与新增成员结果，以及删除请求的返回码。该测试 APK 使用公开 JVMTI 路径，不把扩展存在误报为完整 DCEVM；新 ART 构建的私有事务仍须单独做 Build ID、源码 ABI 校准和 ARM 真机回归。[Test Lab 命令说明](https://firebase.google.com/docs/test-lab/android/command-line)。
 
 持续绘制测试每次提交前要求新的 `View.onDraw`，虚拟屏幕模式还要求 ImageReader 收到实际渲染缓冲。它使用普通应用可创建的私有 VirtualDisplay，不读取其他应用或锁屏内容；手机熄屏时也能排查 ViewRoot、Choreographer 与结构提交的交互。它不替代物理屏幕前台验收，后者运行时需解锁并保持亮屏。`--callbacks-only` 仅用于诊断帧回调，不计为持续绘制通过。
 

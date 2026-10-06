@@ -20,7 +20,7 @@ int PublicBackend::Attach(JavaVM* vm) {
   if (env_) return JNI_OK;
   char sdk[PROP_VALUE_MAX]{};
   __system_property_get("ro.build.version.sdk", sdk);
-  if (std::atoi(sdk) < 33) return JNI_ERR;
+  if (std::atoi(sdk) < 30) return JNI_ERR;
   if (vm->GetEnv(reinterpret_cast<void**>(&env_), JVMTI_VERSION_1_2) != JNI_OK) return JNI_ERR;
   sdk_ = sdk;
   jvmtiCapabilities potential{};

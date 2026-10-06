@@ -9,10 +9,11 @@ android {
     ndkVersion '27.2.12479018'
     defaultConfig {
         applicationId 'dev.artdcevm.lab'
-        minSdk 26
+        minSdk 30
         targetSdk 33
         versionCode 1
         versionName '0.1.0-dev'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk { abiFilters targetAbi }
         externalNativeBuild { cmake { cppFlags '-std=c++17 -Wall -Wextra -Werror' } }
     }
@@ -32,6 +33,8 @@ android {
 }
 dependencies {
     if (targetAbi == 'arm64-v8a') implementation 'com.bytedance.android:shadowhook:2.0.1'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'junit:junit:4.13.2'
 }
 def patchTask = tasks.register('compilePatchFixtures', Exec) {
     inputs.dir rootProject.file('fixtures')

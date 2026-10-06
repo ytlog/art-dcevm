@@ -30,7 +30,7 @@ for variant in sorted((root / 'fixtures').iterdir()):
         for klass in sorted(classes.rglob('*.class')):
             dexdir = Path(work) / ('dex-' + klass.stem)
             dexdir.mkdir()
-            subprocess.run([str(Path(a.sdk)/'build-tools/35.0.0/d8'), '--min-api', '33', '--lib',
+            subprocess.run([str(Path(a.sdk)/'build-tools/35.0.0/d8'), '--min-api', '30', '--lib',
                             str(Path(a.sdk)/'platforms/android-35/android.jar'),
                             '--output', str(dexdir), str(klass)], check=True, env=env)
             dest = out / variant.name / klass.relative_to(classes).with_suffix('.dex')
