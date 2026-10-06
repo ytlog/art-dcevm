@@ -18,9 +18,9 @@ import android.os.Process;
 import android.util.Log;
 import android.view.Choreographer;
 import android.view.View;
-import dev.artdcevm.api.PatchRequest;
-import dev.artdcevm.api.PatchResult;
-import dev.artdcevm.api.RuntimeBackend;
+import dev.artdcevm.internal.PatchRequest;
+import dev.artdcevm.internal.PatchResult;
+import dev.artdcevm.internal.RuntimeBackend;
 import dev.artdcevm.engine.BackendRegistry;
 import dalvik.system.InMemoryDexClassLoader;
 import java.io.ByteArrayOutputStream;
@@ -58,6 +58,7 @@ public final class ForegroundStressActivity extends Activity implements Choreogr
     private static native boolean enableDeoptTracing();
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        System.loadLibrary("artdcevm_test_support");
         setShowWhenLocked(true);
         setTurnScreenOn(true);
         requireDrawing = !getIntent().getBooleanExtra("callbacksOnly", false);

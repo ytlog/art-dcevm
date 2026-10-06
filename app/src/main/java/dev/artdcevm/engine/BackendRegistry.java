@@ -2,7 +2,7 @@ package dev.artdcevm.engine;
 
 import android.content.Context;
 import android.os.Build;
-import dev.artdcevm.api.RuntimeBackend;
+import dev.artdcevm.internal.RuntimeBackend;
 import dev.artdcevm.platform.android13.Android13Backend;
 
 /** The only OS-selection point. Implementations and their policies live in platform packages. */

@@ -280,10 +280,12 @@ extern "C" __attribute__((visibility("default"))) uint64_t ArtDcevmSourceRetired
       artdcevm::android13::source::RetiredMethodCount();
 }
 
-extern "C" __attribute__((visibility("default"))) jvmtiError ArtDcevmSourceRedefine(
-    jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+jvmtiError RedefineSourceTransaction(jvmtiEnv* env, jint count,
+    const jvmtiClassDefinition* definitions, bool allow_transform_hierarchy) {
   artdcevm::android13::source::HierarchyTransactionScope hierarchy_scope;
-  const bool needs_receiver_guard = NeedsReceiverGuard(count, definitions);
+  // ART runs ClassFileLoadHook after entry. The standard API cannot know whether
+  // a callback will remove an existing parent or interface, so arm the guard first.
+  const bool needs_receiver_guard = allow_transform_hierarchy || NeedsReceiverGuard(count, definitions);
   const bool already_guarded = ArtDcevmSourceReceiverGuardEnabled();
   const bool previously_required = ArtDcevmSourceReceiverGuardRequired();
   if (needs_receiver_guard && !already_guarded &&
@@ -300,17 +302,28 @@ extern "C" __attribute__((visibility("default"))) jvmtiError ArtDcevmSourceRedef
       ? JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED
       : OriginalStructuralRedefine(env, count, definitions);
   if (needs_receiver_guard) {
-    if (result != JVMTI_ERROR_NONE) {
+    const bool retain = result == JVMTI_ERROR_NONE &&
+        artdcevm::android13::source::HasHierarchyNarrowing();
+    if (!retain) {
       ArtDcevmSourceRequireReceiverGuard(previously_required);
       if (!already_guarded) {
         ArtDcevmSourceFieldReadProbeMode(false, false);
-        guard_failed_rollbacks.fetch_add(1, std::memory_order_relaxed);
+        if (result != JVMTI_ERROR_NONE)
+          guard_failed_rollbacks.fetch_add(1, std::memory_order_relaxed);
       }
     } else {
       guard_committed_retention.fetch_add(1, std::memory_order_relaxed);
     }
   }
   return result;
+}
+extern "C" __attribute__((visibility("default"))) jvmtiError ArtDcevmSourceRedefine(
+    jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+  return RedefineSourceTransaction(env, count, definitions, false);
+}
+extern "C" __attribute__((visibility("default"))) jvmtiError ArtDcevmSourceRedefineStandard(
+    jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+  return RedefineSourceTransaction(env, count, definitions, true);
 }
 
 extern "C" __attribute__((visibility("default"))) void ArtDcevmSourceCommit(

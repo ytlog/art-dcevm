@@ -187,11 +187,6 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
   jvmtiError result = caller->GetCapabilities(&caller_caps);
   if (result != JVMTI_ERROR_NONE) return result;
   if (!caller_caps.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
-  JNIEnv* jni = nullptr;
-  if (vm_->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
-    return JVMTI_ERROR_UNATTACHED_THREAD;
-  std::vector<Definition> batch;
-  batch.reserve(count);
   for (jint i = 0; i < count; ++i) {
     const auto& definition = definitions[i];
     if (!definition.klass || definition.class_byte_count <= 0 || !definition.class_bytes)
@@ -200,16 +195,11 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
     result = caller->IsModifiableClass(definition.klass, &modifiable);
     if (result != JVMTI_ERROR_NONE) return result;
     if (!modifiable) return JVMTI_ERROR_UNMODIFIABLE_CLASS;
-    batch.push_back({definition.klass, std::vector<unsigned char>(definition.class_bytes,
-                   definition.class_bytes + definition.class_byte_count)});
   }
-  BatchPlan plan;
-  std::string error;
-  result = static_cast<jvmtiError>(PlanEvolution(caller, jni, batch, &plan, &error));
-  if (result != JVMTI_ERROR_NONE) return result;
-  // ART invokes ClassFileLoadHook after this route, and a callback may change
-  // the structural requirements. The source transaction validates the final DEX.
-  return static_cast<jvmtiError>(RedefineWithSource(caller, vm_, count, definitions));
+  // Schema snapshots can initialize dependent classes while ART is preparing
+  // a multi-class hierarchy change. ART validates the final transformed DEX
+  // inside one transaction, so do not pre-plan against mutable live classes.
+  return static_cast<jvmtiError>(RedefineStandardWithSource(caller, vm_, count, definitions));
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {
   if (!env_) return "{\"code\":116,\"detail\":\"Agent is not attached\"}";

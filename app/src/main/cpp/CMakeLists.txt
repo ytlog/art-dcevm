@@ -5,9 +5,7 @@ if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
 endif()
 find_package(shadowhook REQUIRED CONFIG)
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
-  support/elf_modules.cc hooks/shadow_hook_engine.cc testing/native_test_bridge.cc
-  testing/special_members_probe.cc testing/storage_probe.cc testing/native_implementation_probe.cc testing/hierarchy_probe.cc
-  testing/static_visibility_probe.cc
+  support/elf_modules.cc hooks/shadow_hook_engine.cc
   evolution/dex_schema.cc evolution/migration_plan.cc
   platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc
   platform/android13/schema_snapshot.cc platform/android13/evolution_planner.cc
@@ -16,6 +14,11 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)
 target_link_libraries(artdcevm PRIVATE log dl shadowhook::shadowhook)
+add_library(artdcevm_test_support SHARED testing/native_test_bridge.cc
+  testing/special_members_probe.cc testing/storage_probe.cc testing/native_implementation_probe.cc
+  testing/hierarchy_probe.cc testing/static_visibility_probe.cc)
+target_compile_features(artdcevm_test_support PRIVATE cxx_std_17)
+target_include_directories(artdcevm_test_support PRIVATE ../../../../third_party/jvmti)
 # A separate Agent exercises only the public JVMTI function table.
 add_library(artdcevm_client_test SHARED testing/standard_jvmti_client.cc)
 target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/jvmti)

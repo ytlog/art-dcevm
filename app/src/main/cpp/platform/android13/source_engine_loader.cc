@@ -13,6 +13,7 @@ namespace {
 void* source_library = nullptr;
 using Redefine = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Redefine source_redefine = nullptr;
+Redefine source_standard_redefine = nullptr;
 bool load_attempted = false, ready = false;
 void* graph_inline_hook_token = nullptr;
 }
@@ -40,6 +41,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   using Probe = int (*)(JNIEnv*, jobject);
   auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
+  auto standard_redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefineStandard"));
   auto commit = reinterpret_cast<ValidationHooks::Commit>(dlsym(library, "ArtDcevmSourceCommit"));
   auto in_place_finalize = reinterpret_cast<ValidationHooks::InPlaceFinalize>(
       dlsym(library, "ArtDcevmSourceInvalidateInPlaceCommit"));
@@ -72,7 +74,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto configure_suspend_from_code = reinterpret_cast<ConfigureLoaderDelete>(
       dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
   auto configure_batch = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyBatch"));
-  if (!probe || !redefine || !commit || !in_place_finalize || !methods || !fields || !classes || !instance_allocation
+  if (!probe || !redefine || !standard_redefine || !commit || !in_place_finalize || !methods || !fields || !classes || !instance_allocation
       || !configure_instance_allocation || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup
       || !batch_allocate || !batch_verify || !configure_batch
@@ -131,12 +133,13 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     return error.empty() ? "Missing named ART suspend entrypoint" : error;
   ValidationHooks::ConfigureSource(fields, methods, classes, commit, in_place_finalize);
   source_redefine = redefine;
+  source_standard_redefine = standard_redefine;
   ready = true;
   return {};
 }
 bool SourceEngineAvailable() { return ready; }
-int RedefineWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
-                       const jvmtiClassDefinition* definitions) {
+int RedefineSource(Redefine redefine, jvmtiEnv* env, JavaVM* vm, jint count,
+                   const jvmtiClassDefinition* definitions) {
   if (!ready) return JVMTI_ERROR_NOT_AVAILABLE;
   JNIEnv* jni = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
@@ -152,9 +155,17 @@ int RedefineWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
     roots.push_back(root);
   }
   SourceTransactionScope transaction;
-  const int result = source_redefine(env, count, definitions);
+  const int result = redefine(env, count, definitions);
   for (jclass root : roots) jni->DeleteGlobalRef(root);
   return result;
+}
+int RedefineWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
+                       const jvmtiClassDefinition* definitions) {
+  return RedefineSource(source_redefine, env, vm, count, definitions);
+}
+int RedefineStandardWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
+                               const jvmtiClassDefinition* definitions) {
+  return RedefineSource(source_standard_redefine, env, vm, count, definitions);
 }
 int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
   if (!ready) return JVMTI_ERROR_NOT_AVAILABLE;
@@ -178,7 +189,7 @@ int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
 }
 }
 
-// Diagnostics only. All class mutations go through NativeBridge.apply.
+// Diagnostics for the in-app regression harness; primary mutation uses an independent Agent.
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
   return artdcevm::android13::ValidationHooks::SourceCommitCalls();

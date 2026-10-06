@@ -6,13 +6,13 @@
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
 `jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
 校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
-Hook 对整个批次先做校验，再交给源码结构事务；事务按转换回调产生的最终 DEX 执行 ART 校验和提交。`RetransformClasses` 不在此入口范围内。
-原有 `RuntimeBackend.apply/analyze/enableEvolution` 暂供仓库内部诊断与回归测试使用。
+Hook 检查调用者能力和类参数，再把完整批次交给源码结构事务；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
+对外 Java API 只保留 `DcevmRuntime.initialize`；原有 `RuntimeBackend.apply/analyze/enableEvolution` 已移入内部包，供仓库诊断与回归测试使用。Native 测试探针位于独立的 `libartdcevm_test_support.so`。
 独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
-本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 方法体转新增字段的设备结果见 `evidence/standard-jvmti/20261006T140229Z/result.json`；
+本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 转换新增字段和移除父类的设备结果见 `evidence/standard-jvmti/20261006T152124Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
-`evidence/source-engine/20261006T140256Z/run.json` 和
-`evidence/source-engine/20261006T141455Z/run.json`。
+`evidence/source-engine/20261006T152139Z/run.json` 和
+`evidence/source-engine/20261006T152545Z/run.json`。两组完整套件的主要重定义调用已由独立测试 Agent 通过标准 JVMTI 入口执行；少量前置失败及旧路径对照仍使用内部接口。
 
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 
@@ -26,7 +26,7 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 
 当前 APK `4fe0ac9f…` 在目标手机上通过 validation-first 与 source-first 两种 Hook 顺序的完整源码演进回归，各完成 31 次结构提交及 135 项修饰符检查，分别见 `evidence/source-engine/20261006T104741Z/probe.json` 与 `evidence/source-engine/20261006T105256Z/probe.json`。按已验证的大多数常用类变更范围，可作为当前设备上可调试应用开发阶段的初步 class redefine 能力；遇到不支持的活动编译帧或类关系时仍需按返回码拒绝并重试，不能把此判断扩大为完整 DCEVM 语义。
 
-**目前是可构建的实验实现，还不是完整 DCEVM。** 公共后端支持标准 JVMTI 方法体重定义、ART 增量结构扩展及结构演进分析。打包可选源码模块并调用 `enableEvolution()` 后，公共 `EVOLVE_SCHEMA` 已支持经过目标手机验证的方法/字段删除与重新添加、方法签名变更、字段类型变更、字段/方法的 static 与实例形式互换、native 与 Java 方法实现互换、保留旧可赋值关系的继承扩展、移除旧父类、成员在 public、protected、包可见之间转换、实例与静态 Java 方法同步声明位的双向转换，以及方法、字段和类 `final` 位的双向转换；抽象基类中单个方法的 abstract 与具体实现双向转换也已验证。类级 abstract 与具体类切换可用；类与方法的 abstract 位同时切换也已通过手机验证。实例方法的 private/direct 与 public/virtual 双向转换已通过手机验证，包含已加载的覆写子类和普通子类；private↔protected↔包可见也已验证，跨包子类覆写关系会随可见性重新链接。静态方法的 private→protected→包可见→public→private 往返和实例及静态字段的 private↔public/protected/包可见转换通过手机验证，保留旧值并更新反射标志及新解析访问；独立探针确认 private↔public 转换前的调用点与目标方法都存在 JIT 代码，且编译调用点在转换后按新的子类关系分派，见 `evidence/source-engine/20261005T054149Z/probe.json`。若具体类变为抽象类时仍有直属实例存活且方法保持具体，会保守地对进程持续启用解释执行；若该实例将继承抽象方法，事务以错误码 71 拒绝。已加载子类覆写将变为 `final` 的方法时，事务以错误码 71 拒绝。未初始化或未打包模块时返回 `JVMTI_ERROR_NOT_AVAILABLE`，不自动降级。
+**目前是可构建的实验实现，还不是完整 DCEVM。** 标准 JVMTI 入口使用源码结构事务；内部后端保留 ART 原生增量接口和结构演进分析。打包源码模块并初始化后，该事务已支持经过目标手机验证的方法/字段删除与重新添加、方法签名变更、字段类型变更、字段/方法的 static 与实例形式互换、native 与 Java 方法实现互换、保留旧可赋值关系的继承扩展、移除旧父类、成员在 public、protected、包可见之间转换、实例与静态 Java 方法同步声明位的双向转换，以及方法、字段和类 `final` 位的双向转换；抽象基类中单个方法的 abstract 与具体实现双向转换也已验证。类级 abstract 与具体类切换可用；类与方法的 abstract 位同时切换也已通过手机验证。实例方法的 private/direct 与 public/virtual 双向转换已通过手机验证，包含已加载的覆写子类和普通子类；private↔protected↔包可见也已验证，跨包子类覆写关系会随可见性重新链接。静态方法的 private→protected→包可见→public→private 往返和实例及静态字段的 private↔public/protected/包可见转换通过手机验证，保留旧值并更新反射标志及新解析访问；独立探针确认 private↔public 转换前的调用点与目标方法都存在 JIT 代码，且编译调用点在转换后按新的子类关系分派，见 `evidence/source-engine/20261005T054149Z/probe.json`。若具体类变为抽象类时仍有直属实例存活且方法保持具体，会保守地对进程持续启用解释执行；若该实例将继承抽象方法，事务以错误码 71 拒绝。已加载子类覆写将变为 `final` 的方法时，事务以错误码 71 拒绝。未初始化或未打包模块时返回 `JVMTI_ERROR_NOT_AVAILABLE`，不自动降级。
 
 本地解析器和迁移计划已通过 ASan/UBSan 测试，包含 7 组实际 DEX 样例和 10,000 个变异输入，见 `evidence/host/evolution-tests.json`。此前 APK `0f79a212…` 在两种 Hook 初始化顺序下均通过完整源码演进检查，见 `evidence/source-engine/20261006T023011Z/probe.json` 和 `evidence/source-engine/20261006T023330Z/probe.json`；前一 APK `c0ec74c6…` 补充直接子接口默认方法 `findSpecial` 的正向验证；再前一 APK `84e86492…` 新增父类与子类间接口关系转移及缓存直接 `findSpecial` 校验；前一 APK `0977eeca…` 验证了接口关系移除与普通成员演进的混合批次及无效事务回滚；再前一 APK `d553a503…` 验证了两个独立类的批量接口移除与恢复，并保留 `findSpecial` 和 `unreflectSpecial` 缓存句柄验证；前一 APK 对两种 Hook 顺序各通过 1001 项完整回归，见 `evidence/source-engine/20261006T041600Z/probe.json` 与 `evidence/source-engine/20261006T041944Z/probe.json`；前一 APK `97b5b013…` 新增普通父类缓存 `findSpecial` 和 `unreflectSpecial` 的关系守卫：子类移除父类后旧句柄抛出 `IncompatibleClassChangeError`，恢复父类后旧句柄重新可用；两种 Hook 顺序的专项见 `evidence/source-engine/20261006T043516Z/probe.json` 与 `evidence/source-engine/20261006T043530Z/probe.json`，完整回归见 `evidence/source-engine/20261006T043547Z/probe.json` 与 `evidence/source-engine/20261006T043919Z/probe.json`。 前一 APK `16624886…` 进一步覆盖三级继承：孙类缓存的两种特殊调用句柄在中间类移除目标祖先后拒绝，在继承关系恢复后重新可用；两种 Hook 顺序见 `evidence/source-engine/20261006T044450Z/probe.json` 与 `evidence/source-engine/20261006T044506Z/probe.json`。 前一 APK `9eb141ad…` 另验证已绑定普通父类特殊句柄的 `invokeExact` 调用点在提交前达到 JIT 状态 2，移除父类后抛出 `IncompatibleClassChangeError`，恢复后重新返回 1；两种 Hook 顺序见 `evidence/source-engine/20261006T045808Z/probe.json` 与 `evidence/source-engine/20261006T045827Z/probe.json`。前一 APK `1e72d533…` 在后台 GC 下对混合字段及方法退役、类加载器卸载执行 256 轮，两种 Hook 顺序均通过；每轮弱引用清空，字段和方法登记各清理 256 次，字段令牌槽保持 1 个，见 `evidence/source-engine/20261006T044759Z/probe.json` 与 `evidence/source-engine/20261006T044857Z/probe.json`。此前 APK `23c7a5a8…` 通过 64 轮测试。前一 APK `53cac534…` 新增无关父类替换往返：`NarrowSubject` 从 `NarrowParent` 改为 `NarrowAlternate` 再恢复。旧调用点在提交前 JIT 状态为 2；替换后旧类型调用及缓存特殊句柄被拒绝，存活对象与子类保留自身字段并得到新父类字段默认值 0，新对象通过新父类构造器得到 29；恢复后新父类句柄失效、旧句柄重新可用。两种 Hook 顺序见 `evidence/source-engine/20261006T051133Z/probe.json` 与 `evidence/source-engine/20261006T051152Z/probe.json`。前一 APK `6cc760cc…` 进一步在同一 ART 事务中更新两个类：新父类增加 `revision` 字段并改变方法体，子类同时切换到该父类。两类结构更新计数增加 2，依赖分配计数增加 2；存活对象新字段为 0，新对象初始化为 5，旧 JIT 调用被拒绝，缓存特殊句柄在恢复父类后随之切换。类定义两种顺序与 Hook 两种顺序的四种组合均通过，见 `evidence/source-engine/20261006T051909Z/probe.json`、`evidence/source-engine/20261006T051931Z/probe.json`、`evidence/source-engine/20261006T052016Z/probe.json` 和 `evidence/source-engine/20261006T052035Z/probe.json`。前一 APK `4c477b8e…` 还在有效双类父类替换前分别注入无效的新父类和子类 DEX：两次均返回错误码 60，结构提交增量为 0；需要预先启用的接收者守卫激活及回滚各一次，旧 JIT 调用与原层级不变，之后有效批次仍可提交。两种类定义顺序和两种 Hook 顺序全部通过，见 `evidence/source-engine/20261006T052519Z/probe.json`、`evidence/source-engine/20261006T052551Z/probe.json`、`evidence/source-engine/20261006T052553Z/probe.json` 和 `evidence/source-engine/20261006T052554Z/probe.json`。当前 APK `7f636b4b…` 在双类父类替换期间让旧父类调用和子类新方法调用两个线程持续运行，两调用点提交前均有 JIT 代码（状态 2）。四种 Hook 与类定义顺序组合在提交后分别观察至少 100 次旧调用拒绝和 100 次新值 21；错误值、意外异常及守卫帧漏判均为 0，见 `evidence/source-engine/20261006T052939Z/probe.json`、`evidence/source-engine/20261006T053004Z/probe.json`、`evidence/source-engine/20261006T053005Z/probe.json` 和 `evidence/source-engine/20261006T053007Z/probe.json`。单独的收窄用例确认两个旧调用点提交前均有 JIT 代码，正式版移除旧父类返回 0，自动 DeOPT 并保留接收者保护；存活旧对象和子类保留自身字段，新方法正常分派，旧父类字段、方法、数组及绑定句柄访问被拒绝，见 `evidence/source-engine/20261005T124514Z/probe.json`。没有旧实例时，旧字节码在提交后新建对象的失效访问也被拒绝，见 `evidence/source-engine/20261005T124539Z/probe.json`。此前版本对接口关系丢失的事务拒绝并回滚保护，见 `evidence/source-engine/20261005T124558Z/probe.json`；当前实验版已将接口丢失纳入提交前保护。
 
@@ -153,7 +153,7 @@ PatchResult result = backend.apply(request);
 
 ## Hook 的当前作用
 
-`ValidationHooks` 统一管理本机 `libopenjdkjvmti.so` 的 `CheckFields()`、`CheckMethods()`、`CollectNewFieldAndMethodMappings()` 和 `UpdateClassStructurally()`。初始化探针和源码引擎复用相同 Hook，不重复安装。普通方法体/增量请求保留原 ART 校验；只有公共 `EVOLVE_SCHEMA` 的线程事务范围会路由到自有源码实现。
+`ValidationHooks` 统一管理本机 `libopenjdkjvmti.so` 的 `CheckFields()`、`CheckMethods()`、`CollectNewFieldAndMethodMappings()` 和 `UpdateClassStructurally()`。初始化探针和源码引擎复用相同 Hook，不重复安装。普通方法体/增量请求保留原 ART 校验；标准 JVMTI 入口和内部 `EVOLVE_SCHEMA` 的线程事务范围会路由到自有源码实现。
 
 当前手机已验证校验、映射与结构提交回调，且 Hook 后的重定义与方法执行正确。Hook 地址由 ShadowHook 按 ELF 符号解析，不使用 SO 基址加偏移；映射回调目前仅转发不透明参数，不读取私有布局。ClassLoader 删除回调也通过命名符号 Inline Hook 安装，在 ART 释放对应 LinearAlloc 前清理退役成员指针。Agent 使用 `Debug.attachJvmtiAgent("libartdcevm.so", null, appClassLoader)` 加载，由应用 ClassLoader 解析库名；避免传入安装目录中含 `=` 的完整路径，后者会被该 API 的参数检查拒绝。
 
@@ -163,7 +163,7 @@ PatchResult result = backend.apply(request);
 
 `-PsourceEngine13` 构建额外的 `libartdcevm_source13.so`。源码来自锁定的 `android-13.0.0_r1` 归档，下载地址及 SHA-256 保存在 `tools/android13/sources.lock.json`；原始文件和许可证保存在构建缓存中。它使用该平台的 libc++ 头文件，和 NDK 主库之间仅传递 JNI 类型、不透明指针和基本 C 类型。
 
-设备 ART 负责分配、停止线程及事务准备。公共 `EVOLVE_SCHEMA` 通过共享 Inline Hook 调用自有库中从 AOSP 源码编译、应用了 `ti_redefine.patch` 的校验与提交实现；其他操作继续调用原函数。访问守卫覆盖退役成员的反射、JNI、MethodHandle、字段 VarHandle 和过时方法入口，包括 CheckJNI 在分派前的检查。函数地址来自 ELF 动态符号表或普通符号表，数据结构访问来自源码声明，不使用反汇编推导出的固定地址或字段偏移。
+设备 ART 负责分配、停止线程及事务准备。标准 JVMTI 入口与内部 `EVOLVE_SCHEMA` 通过共享 Inline Hook 调用自有库中从 AOSP 源码编译、应用了 `ti_redefine.patch` 的校验与提交实现。访问守卫覆盖退役成员的反射、JNI、MethodHandle、字段 VarHandle 和过时方法入口，包括 CheckJNI 在分派前的检查。函数地址来自 ELF 动态符号表或普通符号表，数据结构访问来自源码声明，不使用反汇编推导出的固定地址或字段偏移。
 
 独立测试已证实自有提交回调执行 23 次，具体覆盖：
 
@@ -187,7 +187,7 @@ PatchResult result = backend.apply(request);
 
 这些结果来自固定手机上的实验用例，尚不代表所有调用种类或完整 DCEVM 语义已覆盖。其他未测的修饰符组合仍待实现或验证。接口移除虽在目标手机实验性启用，缓存引用、并发和三代变更的已测路径通过，但更大批次及其他调用形式仍未穷尽；旧父类移除也尚未穷尽所有编译路径。删除方法的动态类已验证在 GC 后卸载：ART 的 ClassLoader 删除回调先清除退役方法指针，再释放 LinearAlloc；两种 Hook 顺序下旧反射 Method 均被拒绝且弱引用清空。删除字段的动态卸载、八轮重复装载和后台 GC 并发的 32 轮专项已通过；混合删除及缓存反射对象和句柄的保活/释放也已验证。当前 APK 在两种 Hook 顺序下通过后台 GC 的 256 轮混合字段/方法退役与类加载器卸载，原生堆采样末值均低于首值；测试报告保留逐轮记录，因此 Java 堆采样增长不能直接归因为元数据泄漏。其他引用形式及更长时段运行仍需验证，元数据回收总括标志仍为 `false`。
 
-全部源码演进测试现在经过 `RuntimeBackend.apply(EVOLVE_SCHEMA)`，原来的测试专用 JNI 变更入口已经移除。初始化、预览、普通重定义和源码演进均使用 `core/agent.cc` 中同一个事务锁，并复用公共后端持有的 JVMTI 环境。线程事务标记通过 RAII 恢复。SDK 内部 `SourceAbiProbe` 校准类用于初始化检查，不依赖业务样例类的值或结构。
+源码演进完整回归的主要重定义请求现由独立测试 Agent 通过标准 JVMTI 入口提交；初始化前拒绝和旧路径对照仍走内部 `RuntimeBackend`。两条路径使用同一个进程事务锁，线程事务标记通过 RAII 恢复。内部 `SourceAbiProbe` 校准类用于初始化检查，不依赖业务样例类的值或结构。
 
 static/实例切换会使已验证字节码的旧分派假设失效。方法映射以名称、描述符和 static 属性共同匹配；不兼容的旧方法保持退役。第一次这类提交之后，按符号名安装的 `NterpGetMethod` 和两种未检查的 `ClassLinker::ResolveMethod` 入口使用系统 ART 的完整调用类型/访问检查，阻止将新静态方法误当作虚表条目。源码提交继续清理 DexCache、解释器缓存并去优化旧代码。
 

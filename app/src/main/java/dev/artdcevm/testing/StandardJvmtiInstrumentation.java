@@ -5,6 +5,8 @@ import android.os.Bundle;
 import android.os.Debug;
 import dev.artdcevm.api.DcevmRuntime;
 import dev.artdcevm.fixture.Evolving;
+import dev.artdcevm.fixture.NarrowParent;
+import dev.artdcevm.fixture.NarrowSubject;
 import dev.artdcevm.fixture.Peer;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -14,13 +16,16 @@ import org.json.JSONObject;
 
 /** Independent Agent conformance: this client only invokes the standard JVMTI function table. */
 public final class StandardJvmtiInstrumentation extends Instrumentation {
-    private static native int redefine(Class<?>[] classes, byte[][] dexes);
+    private static int redefine(Class<?>[] classes, byte[][] dexes) {
+        return StandardJvmtiClient.redefine(classes, dexes);
+    }
     private static native int redefineRestricted(Class<?>[] classes, byte[][] dexes);
     private static native int redefinePeer(Class<?>[] classes, byte[][] dexes);
     private static native int enableTransform(Class<?> target, byte[] dex);
     private static native int disableTransform();
     private boolean clientFirst;
     private boolean transformCase;
+    private boolean transformHierarchyCase;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
@@ -28,6 +33,8 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 arguments.getString("clientFirst", "false"));
         transformCase = arguments != null && Boolean.parseBoolean(
                 arguments.getString("transformCase", "false"));
+        transformHierarchyCase = arguments != null && Boolean.parseBoolean(
+                arguments.getString("transformHierarchyCase", "false"));
         start();
     }
 
@@ -42,6 +49,36 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
             DcevmRuntime.initialize(getTargetContext());
             DcevmRuntime.initialize(getTargetContext());
             if (!clientFirst) attachClient();
+            if (transformHierarchyCase) {
+                NarrowSubject subject = new NarrowSubject();
+                NarrowParent oldAlias = subject;
+                require(oldAlias.inherited() == 14, "hierarchy baseline");
+                require(enableTransform(NarrowSubject.class, asset(
+                        "hier-narrow-simple/dev/artdcevm/fixture/NarrowSubject.dex")) == 0,
+                        "enable hierarchy transform");
+                int transformedResult;
+                int callbackCount;
+                try {
+                    transformedResult = redefine(new Class<?>[]{NarrowSubject.class},
+                            new byte[][]{asset("hier-narrow-restore/dev/artdcevm/fixture/NarrowSubject.dex")});
+                } finally {
+                    callbackCount = disableTransform();
+                }
+                boolean oldCallRejected = false;
+                try { oldAlias.inherited(); }
+                catch (IncompatibleClassChangeError expected) { oldCallRejected = true; }
+                report.put("transformHierarchyResult", transformedResult)
+                        .put("transformHierarchyCallbacks", callbackCount)
+                        .put("oldCallRejected", oldCallRejected);
+                require(transformedResult == 0 && callbackCount == 1, "hierarchy transform result");
+                require(NarrowSubject.class.getSuperclass() == Object.class &&
+                        subject.compute() == 19 && oldCallRejected, "hierarchy transform behavior");
+                report.put("clientFirst", clientFirst).put("passed", true);
+                Bundle result = new Bundle();
+                result.putString("stream", report.toString());
+                finish(-1, result);
+                return;
+            }
             if (transformCase) {
                 require(enableTransform(Evolving.class, patch("add")) == 0, "enable transform");
                 int transformedResult;
@@ -127,9 +164,7 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
     }
 
     private void attachClient() throws Exception {
-        System.loadLibrary("artdcevm_client_test");
-        Debug.attachJvmtiAgent("libartdcevm_client_test.so", null,
-                getTargetContext().getClassLoader());
+        StandardJvmtiClient.attach(getTargetContext());
     }
 
     private byte[] patch(String name) throws Exception {

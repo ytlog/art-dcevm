@@ -4,9 +4,9 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Process;
 import android.util.Log;
-import dev.artdcevm.api.PatchRequest;
-import dev.artdcevm.api.PatchResult;
-import dev.artdcevm.api.RuntimeBackend;
+import dev.artdcevm.internal.PatchRequest;
+import dev.artdcevm.internal.PatchResult;
+import dev.artdcevm.internal.RuntimeBackend;
 import dev.artdcevm.engine.BackendRegistry;
 import dev.artdcevm.fixture.Child;
 import dev.artdcevm.fixture.Evolving;
@@ -31,7 +31,10 @@ public final class ConformanceSuite {
     private final JSONArray checks = new JSONArray();
     private int failures;
     private static volatile int sink;
-    public ConformanceSuite(Context context) { this.context = context; }
+    public ConformanceSuite(Context context) {
+        this.context = context;
+        System.loadLibrary("artdcevm_test_support");
+    }
 
     public JSONObject run() {
         try {

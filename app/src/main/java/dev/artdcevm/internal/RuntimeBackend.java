@@ -1,4 +1,4 @@
-package dev.artdcevm.api;
+package dev.artdcevm.internal;
 
 import org.json.JSONObject;
 

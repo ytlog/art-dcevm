@@ -49,7 +49,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_redefinePeer(
 #else
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_redefine(
+Java_dev_artdcevm_testing_StandardJvmtiClient_redefineNative(
 #endif
     JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {
   if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;

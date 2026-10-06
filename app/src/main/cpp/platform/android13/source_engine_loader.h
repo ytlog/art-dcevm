@@ -7,6 +7,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
 bool SourceEngineAvailable();
 int RedefineWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
                        const jvmtiClassDefinition* definitions);
+int RedefineStandardWithSource(jvmtiEnv* env, JavaVM* vm, jint count,
+                               const jvmtiClassDefinition* definitions);
 class SourceClassRedefiner final : public ClassRedefiner {
  public:
   SourceClassRedefiner(JavaVM* vm, jvmtiEnv* env) : vm_(vm), env_(env) {}

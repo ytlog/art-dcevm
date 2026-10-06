@@ -2,6 +2,8 @@ package dev.artdcevm.api;
 
 import android.content.Context;
 import dev.artdcevm.engine.BackendRegistry;
+import dev.artdcevm.internal.PatchResult;
+import dev.artdcevm.internal.RuntimeBackend;
 
 /** Installs ART's standard RedefineClasses routing before a user Agent redefines classes. */
 public final class DcevmRuntime {

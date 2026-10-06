@@ -14,8 +14,10 @@ class HierarchyTransactionScope {
   ~HierarchyTransactionScope();
  private:
   bool previous_;
+  bool previous_narrowed_;
 };
 bool HasHierarchyChange();
+bool HasHierarchyNarrowing();
 // Allocation remains in the device ART. This scope remembers unpublished
 // replacements so a requested parent is allocated once, before its new child.
 class HierarchyAllocationScope {

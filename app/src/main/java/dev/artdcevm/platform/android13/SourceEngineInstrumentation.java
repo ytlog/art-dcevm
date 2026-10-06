@@ -6,9 +6,9 @@ import android.os.Debug;
 import android.os.Process;
 import android.util.Log;
 import dev.artdcevm.engine.BackendRegistry;
-import dev.artdcevm.api.RuntimeBackend;
-import dev.artdcevm.api.PatchRequest;
-import dev.artdcevm.api.PatchResult;
+import dev.artdcevm.internal.RuntimeBackend;
+import dev.artdcevm.internal.PatchRequest;
+import dev.artdcevm.internal.PatchResult;
 import dev.artdcevm.fixture.Evolving;
 import dev.artdcevm.fixture.Child;
 import dev.artdcevm.fixture.DeletionControl;
@@ -28,6 +28,7 @@ import dev.artdcevm.fixture.HierarchyMore;
 import dev.artdcevm.fixture.NarrowParent;
 import dev.artdcevm.fixture.NarrowAlternate;
 import dev.artdcevm.fixture.NarrowSubject;
+import dev.artdcevm.testing.StandardJvmtiClient;
 import dev.artdcevm.fixture.NarrowChild;
 import dev.artdcevm.fixture.NarrowHotCaller;
 import dev.artdcevm.fixture.NarrowParentHotCaller;
@@ -109,13 +110,15 @@ import org.json.JSONObject;
 @android.annotation.TargetApi(33)
 public final class SourceEngineInstrumentation extends Instrumentation {
     private RuntimeBackend backend;
+    private boolean standardClientAttached;
     private String hookOrder;
     private String suite;
     private int redefine(Class<?> target, byte[] dex) {
         return redefineBatch(new Class<?>[]{target}, new byte[][]{dex});
     }
     private int redefineBatch(Class<?>[] targets, byte[][] dexes) {
-        return backend.apply(new PatchRequest(PatchRequest.Operation.EVOLVE_SCHEMA, targets, dexes)).code;
+        return standardClientAttached ? StandardJvmtiClient.redefine(targets, dexes)
+                : backend.apply(new PatchRequest(PatchRequest.Operation.EVOLVE_SCHEMA, targets, dexes)).code;
     }
     private static native int commitCalls();
     private static native int inPlaceInvalidationCalls();
@@ -156,6 +159,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
         start();
     }
     @Override public void onStart() {
+        System.loadLibrary("artdcevm_test_support");
         JSONObject report = new JSONObject();
         boolean passed = false;
         try {
@@ -164,7 +168,8 @@ public final class SourceEngineInstrumentation extends Instrumentation {
             save(report);
             backend = BackendRegistry.open(getTargetContext());
             Evolving fixture = new Evolving(37);
-            report.put("executionPath", "RuntimeBackend.apply(EVOLVE_SCHEMA)").put("hookOrder", hookOrder);
+            report.put("executionPath", "independent Agent JVMTI RedefineClasses")
+                    .put("hookOrder", hookOrder);
             boolean beforeInit = redefine(Evolving.class, patch("body")) == 98 && fixture.compute() == 38;
             report.put("uninitializedEvolutionRejected", beforeInit); save(report);
             if (!beforeInit) throw new AssertionError("Uninitialized backend mutated class");
@@ -175,6 +180,8 @@ public final class SourceEngineInstrumentation extends Instrumentation {
             report.put("probeResult", initialized.toString()).put("readOnlyProbePassed", initializedOk)
                     .put("capabilities", backend.capabilities()); save(report);
             if (!initializedOk) throw new AssertionError("Source initialization: " + backend.capabilities());
+            StandardJvmtiClient.attach(getTargetContext());
+            standardClientAttached = true;
             boolean repeat = backend.enableEvolution().installed() && backend.enableValidationHooks().installed();
             report.put("repeatedInitializationIdempotent", repeat); save(report);
             if (!repeat) throw new AssertionError("Repeated initialization");

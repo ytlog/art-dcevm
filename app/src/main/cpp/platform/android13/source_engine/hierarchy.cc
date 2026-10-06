@@ -12,11 +12,22 @@
 #include <android/log.h>
 
 namespace artdcevm::android13::source {
-namespace { thread_local bool hierarchy_changed = false; }
+namespace {
+thread_local bool hierarchy_changed = false;
+thread_local bool hierarchy_narrowed = false;
+}
 extern "C" bool ArtDcevmSourceReceiverGuardEnabled();
-HierarchyTransactionScope::HierarchyTransactionScope() : previous_(hierarchy_changed) { hierarchy_changed = false; }
-HierarchyTransactionScope::~HierarchyTransactionScope() { hierarchy_changed = previous_; }
+HierarchyTransactionScope::HierarchyTransactionScope()
+    : previous_(hierarchy_changed), previous_narrowed_(hierarchy_narrowed) {
+  hierarchy_changed = false;
+  hierarchy_narrowed = false;
+}
+HierarchyTransactionScope::~HierarchyTransactionScope() {
+  hierarchy_changed = previous_;
+  hierarchy_narrowed = previous_narrowed_;
+}
 bool HasHierarchyChange() { return hierarchy_changed; }
+bool HasHierarchyNarrowing() { return hierarchy_narrowed; }
 jvmtiError CheckHierarchyAdditions(art::Handle<art::mirror::Class> current,
     const art::DexFile& dex, art::MutableHandle<art::mirror::Class>* desired_super,
     bool* changed, std::string* error) {
@@ -40,9 +51,10 @@ jvmtiError CheckHierarchyAdditions(art::Handle<art::mirror::Class> current,
   if (parent->IsInterface() || parent->IsFinal() || !current->CanAccess(parent))
     return fail("Invalid or inaccessible superclass");
   if (parent->IsSubClass(current.Get())) return fail("Cyclic superclass change");
-  if (!parent->IsSubClass(current->GetSuperClass()) &&
-      !ArtDcevmSourceReceiverGuardEnabled())
+  bool loses_parent = !parent->IsSubClass(current->GetSuperClass());
+  if (loses_parent && !ArtDcevmSourceReceiverGuardEnabled())
     return fail("Removing a superclass requires the active receiver guard");
+  hierarchy_narrowed |= loses_parent;
   if (*changed && !parent->IsInitialized())
     return fail("Initialize the added superclass before applying this evolution");
   // Resolve every direct interface before ART pauses class definition. Keep
@@ -67,6 +79,7 @@ jvmtiError CheckHierarchyAdditions(art::Handle<art::mirror::Class> current,
     for (const auto& iface : interfaces) retained |= old_interface->IsAssignableFrom(iface.Get());
     if (!retained && !ArtDcevmSourceReceiverGuardEnabled())
       return fail("Removing an interface requires the active receiver guard");
+    hierarchy_narrowed |= !retained;
   }
   const auto* old_types = current->GetInterfaceTypeList();
   uint32_t old_count = old_types ? old_types->Size() : 0;

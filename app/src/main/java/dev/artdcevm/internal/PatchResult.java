@@ -1,4 +1,4 @@
-package dev.artdcevm.api;
+package dev.artdcevm.internal;
 
 public final class PatchResult {
     public final int code;

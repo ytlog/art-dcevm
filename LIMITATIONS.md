@@ -1,8 +1,8 @@
 # Class redefine 未支持与未充分验证的能力
 
-记录时间：2026-10-06。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前已验证 APK SHA-256：`7b64fca8ba1940e0a4070c475fe977b3008103f69d1d9a8cd92ad9c383ea05fe`。
+记录时间：2026-10-06。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前已验证 APK SHA-256：`94f410dbd8ed12343bf75d5c8210734d436433b32e312740cfc02414e6660a84`。
 
-本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 在两种 Hook 顺序下均通过完整回归，各完成 31 次结构提交和 135 项修饰符检查：[validation-first](evidence/source-engine/20261006T140256Z/run.json)、[source-first](evidence/source-engine/20261006T141455Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
+本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 在两种 Hook 顺序下均通过完整回归，主要重定义由独立 Agent 走标准 JVMTI 入口，各完成 31 次结构提交和 135 项修饰符检查：[validation-first](evidence/source-engine/20261006T152139Z/run.json)、[source-first](evidence/source-engine/20261006T152545Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
 
 ## 明确不支持或会拒绝的情况
 
@@ -19,7 +19,7 @@
 
 | 能力或风险 | 已有证据与缺口 | 完成判据 |
 | --- | --- | --- |
-| 标准 `RedefineClasses` 的转换回调与多环境并发 | 独立 Agent 的 `ClassFileLoadHook` 把方法体补丁改成新增字段补丁、两个 Agent 并发修改不同类，均在两种加载顺序下通过；其他结构转换、同类并发和回调组合尚未验证。[设备结果](evidence/standard-jvmti/20261006T140229Z/result.json) | 覆盖转换后的层级及成员删除、同类竞争与多个回调，并确认最终 DEX 的守卫、错误码和事务原子性。 |
+| 标准 `RedefineClasses` 的转换回调与多环境并发 | 独立 Agent 的 `ClassFileLoadHook` 把方法体补丁改成新增字段补丁，以及把原定义补丁改成移除父类补丁，两个 Agent 并发修改不同类，均在两种加载顺序下通过；其他结构转换、同类并发和回调组合尚未验证。[设备结果](evidence/standard-jvmti/20261006T152124Z/result.json) | 覆盖转换后的接口及成员删除、同类竞争与多个回调，并确认最终 DEX 的守卫、错误码和事务原子性。 |
 | boot JIT 帧内联应用方法，且暂停时尚未执行到内联点 | 预检已有保守扫描；`ArrayList.forEach` → 应用回调实验没有产生目标内联帧，目标 `HGraph::InlineInto` 命中 0 次。[诊断](evidence/source-engine/20261006T084146Z/probe.json) | 构造真实目标帧，在两种 Hook 顺序下证明继续执行失效指令前已切换，或旧定义未改动时安全拒绝。按用户要求暂缓，详见 [TODO.md](TODO.md)。 |
 | 更广的 AOT/JIT 编译调用形态 | 已验证部分应用 AOT 活动帧、JIT 内联帧和两个并发内联帧；优化内联、更多并发帧、不同调用形式混合以及长期编译策略未穷尽。非调试 AOT 即时 DeOPT 仍不支持。[编译执行记录](README.md) | 为每类目标形态取得实际机器码栈、提交结果及恢复后返回值，并覆盖双 Hook 顺序。 |
 | 接口移除和旧父类移除的全部语义 | 已测接口默认方法、缓存特殊句柄、三代关系、部分 AOT 与批次；其他默认方法、缓存接口引用、较大批次和优化调用形态未穷尽。总括标志 `hierarchyChange=false`。[当前状态](evidence/status.json) | 扩大调用与缓存矩阵，验证新旧类型关系、异常、对象状态和无效批次原子性。 |
