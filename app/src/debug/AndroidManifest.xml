@@ -8,4 +8,5 @@
   <instrumentation android:name="dev.artdcevm.ConformanceInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="DCEVM conformance" android:functionalTest="true"/>
   <instrumentation android:name="dev.artdcevm.platform.android13.SourceEngineInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="ART source ABI probe" android:functionalTest="true"/>
   <instrumentation android:name="dev.artdcevm.testing.StandardJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Standard JVMTI Agent conformance" android:functionalTest="true"/>
+  <instrumentation android:name="dev.artdcevm.testing.PublicJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Public JVMTI compatibility" android:functionalTest="true"/>
 </manifest>

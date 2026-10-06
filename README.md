@@ -1,18 +1,19 @@
 # ART DCEVM 实验工程
 
-目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。当前仅开发连接手机的 Android 13 / API 33 / arm64 后端，不需要 root，也不改系统分区。
+目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整源码演进后端目前只针对 Android 13 / API 33 / arm64 的固定 ART 构建；API 33 以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
 
 标准 JVMTI 入口的使用方式：在用户 Agent 第一次重定义前调用一次
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
 `jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
 校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
 Hook 检查调用者能力和类参数，再把完整批次交给源码结构事务；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
-对外 Java API 只保留 `DcevmRuntime.initialize`；原有 `RuntimeBackend.apply/analyze/enableEvolution` 已移入内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](evidence/build/20261006T154308Z-variant-boundary.json)
+对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](evidence/build/20261006T154308Z-variant-boundary.json)
 独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
 本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 转换新增字段和移除父类的设备结果见 `evidence/standard-jvmti/20261006T153842Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 `evidence/source-engine/20261006T153859Z/run.json` 和
 `evidence/source-engine/20261006T154308Z/run.json`。两组完整套件的主要重定义调用已由独立测试 Agent 通过标准 JVMTI 入口执行；少量前置失败及旧路径对照仍使用内部接口。
+加入跨版本公开后端后，Android 13 / arm64 的完整源码演进套件再次通过：[本次报告](evidence/source-engine/20261006T213857Z/run.json)。
 
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 
@@ -53,6 +54,7 @@ app/src/main/java/dev/artdcevm/
   api/                         应用侧契约、不可变补丁请求、结果
   engine/                      版本注册与稳定 JNI 协议
   platform/android13/          API 33 的 attach、debuggable 策略
+  platform/jvmti/               未校准 ART 构建的公开 JVMTI 后端
   testing/                     一致性测试与 JNI 探针
   fixture/                     APK 中的原始业务类
 app/src/main/cpp/
@@ -118,20 +120,16 @@ Java 公共 API 不暴露 `ArtMethod`、`ArtField`、对象布局或私有地址
 | 私有 Hook | `ValidationHooks` + `HookEngine` | Build ID 匹配、回调计数、保持原有语义 |
 | `analyze(request)` | 当前类快照 + DEX 解析 + `MigrationPlan` | 成员身份映射、完整批次校验、结构变化识别；不提交变更 |
 
-API 33 之外的系统在注册入口明确拒绝。API 33 的公开/扩展能力由运行时探测；私有 Hook 额外匹配 `libart.so` 与 `libopenjdkjvmti.so` 的 GNU Build ID。探测到扩展或匹配构建只代表允许尝试，**不代表已经通过设备测试**。
+API 33/arm64 保留专用后端，其私有 Hook 匹配 `libart.so` 与 `libopenjdkjvmti.so` 的 GNU Build ID。其他 API 33+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、源码事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 仍要求完整源码演进，因此在公开后端会失败。API 34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换，结果见 [兼容性设备报告](evidence/compatibility/20261007/)。其他设备仍需逐台回归。**扩展名称相同不代表私有 ABI 可复用。**
 
-公共 API 的调用方式如下。`targets` 与 `dexFiles` 一一对应，每份 DEX 包含一个目标类。
+公开 JVMTI 入口的调用方式如下。附加后，用户 Agent 用自己的 `jvmtiEnv::RedefineClasses` 提交完整定义；增量结构扩展需要从自身的 JVMTI 环境获取 ART 扩展函数。
 
 ```java
-RuntimeBackend backend = BackendRegistry.open(context);
-PatchResult ready = backend.enableEvolution();
-if (!ready.installed()) throw new IllegalStateException(ready.toString());
-
-PatchRequest request = new PatchRequest(
-        PatchRequest.Operation.EVOLVE_SCHEMA, targets, dexFiles);
-JSONObject preview = backend.analyze(request);
-PatchResult result = backend.apply(request);
+JSONObject capabilities = DcevmRuntime.attachPublicJvmti(context);
+if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No JVMTI redefine capability");
 ```
+
+完整源码演进仍用 `DcevmRuntime.initialize(context)`；内部诊断的 `PatchRequest` 要求目标类与单类 DEX 一一对应。
 
 `capabilities()` 分别报告 `evolutionAvailable`、`nativeDelete`、`fieldTypeEvolution`、`methodSignatureEvolution` 等能力。构造器、原生方法、类初始化器删除和 static/实例互换分别由 `constructorDeletion`、`nativeMethodDeletion`、`classInitializerDeletion`、`memberStorageChange` 表示。`nativeImplementationChange` 表示 native 与 Java 方法实现互换。`hierarchyAddition` 和 `hierarchyBatchDependencies` 表示保留旧可赋值关系的继承扩展与同批祖先依赖；`hierarchyNarrowing` 表示目标手机已启用旧父类移除。接口关系移除已在目标手机实验性启用；缓存接口引用形式未完成验证，因此总括字段 `hierarchyChange` 保持 `false`。`memberVisibilityWidening` 与 `memberVisibilityNarrowing` 表示字段和方法在 public、protected、包可见之间转换。新解析的跨包非法调用返回 `IllegalAccessError`；已解析的旧调用可能保留访问，也可能在重新解析时被拒绝，若继续执行则使用新成员实现。静态方法 public→private 的跨包专项现通过命名 Nterp Hook 调用 ART checked resolver，旧解析和新加载的调用者均返回 `IllegalAccessError`。旧调用者在转换前确实达到 JIT 编译状态（状态 2），且未启用全局 DeOPT；两种 Hook 顺序均通过，见 `evidence/source-engine/20261005T190443Z/probe.json` 和 `evidence/source-engine/20261005T190520Z/probe.json`。在 public 时创建的旧静态 `MethodHandle` 转换后执行新方法体并返回 75；转换后新建的 public 句柄被拒绝。缓存与新查询的 JNI `jmethodID` 均在 CheckJNI 关闭和开启两态下通过普通、`A`、`V` 三种静态调用并返回新值 75，见 `evidence/source-engine/20261005T193440Z/probe.json` 和 `evidence/source-engine/20261005T193538Z/probe.json`。其他调用形式的旧解析权限收窄仍待验证。已加载跨包子类的覆写关系在实测可见性收窄后重新链接；子类同名方法保留为自身方法。`javaMethodSynchronizationChange` 表示实例与静态 Java 方法同步声明位双向转换，已验证旧反射对象、旧 `MethodHandle` 和实际监视器行为；`instanceMethodSynchronizationChange` 保留实例方法的单独标志。`methodFinalTransition` 表示方法 `final` 位双向转换；已加载的覆写子类使添加 `final` 返回错误码 71，且事务不提交。`fieldFinalTransition` 表示实例与静态字段 `final` 位双向转换；对旧字节码的写入检查由命名 Nterp 字段入口的 Inline Hook 补齐。`fieldVolatileTransition` 表示实例与静态字段 `volatile` 位双向转换；旧对象值、缓存/新反射修饰符、旧 `VarHandle` 读写与已 JIT 编译的旧字节码读取在两种 Hook 顺序下通过，见 `evidence/source-engine/20261006T000250Z/probe.json` 与 `evidence/source-engine/20261006T000310Z/probe.json`。`classFinalTransition` 表示类 `final` 位双向转换；添加时若已有加载的子类则返回错误码 70，事务不提交。`classAbstractConservativeTransition` 表示类级 abstract 与具体类切换；若具体类变抽象时有直属实例存活，使用进程级解释执行回退，当前持续到进程结束。`privatePublicInstanceMethodTransition` 表示实例方法的 private/direct 与 public/virtual 双向转换，包含已加载的覆写子类和普通子类；结构事务重建子类并重新链接 vtable。`privateMethodTransitionNoSubclass` 是先前已验证的较窄能力标志，仍保留兼容。`privateFieldVisibilityTransition` 表示实例和静态字段 private↔public 双向转换；已验证旧值、缓存反射、JIT 热读取、外部新解析读写及恢复 private 后的新解析拒绝。验证器在事务内通过命名符号 Hook 读取未发布的新类，避免把新 DEX 的虚调用解析到旧 private 方法。`combinedAbstractTransition` 表示类与方法 abstract 位同批变更；若旧直属实例将继承抽象方法，ART 对象预分配后、事务提交前以错误码 71 拒绝。预检通过命名符号 Inline Hook 接入，原 ART 负责堆收集与分配。现存字段值在转换后保留，常量表达式初始化的 `final` 字段仍可能被 Java 编译器直接内联为常量，因而读取该方法体与读取字段存储可得到不同值。`abstractMethodTransition` 表示保持类为 abstract 时，实例方法的 abstract 与具体实现双向转换；已有覆写仍分派到子类，已加载子类若依赖即将变为抽象的方法则返回错误码 71，事务不提交。当前还允许单独改变 static 位或 native 位；实例/静态方法和实例/静态字段的 private 与 protected/包可见性转换已验证；其他未测的修饰符组合尚未验证，`memberModifierChange` 仍为 `false`。元数据回收同样仍为 `false`。`evolutionError` 保留初始化错误。`analyze()` 是预览；提交仍由 ART 在事务内重新校验。
 
@@ -149,7 +147,7 @@ PatchResult result = backend.apply(request);
 - `libart.so`: `14fc77b24db0b351b919c97009dc86bf`。
 - `libopenjdkjvmti.so`: `2fe21c45581b9c8b0519b71cbde32938`。
 
-以后添加 Android 14 时，新建 `platform/android14/` 的 Java 包和 C++ 目录，实现 `RuntimeBackend`，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时新增其 `builds/` 配置及源码 ABI 校验。未实现的能力单独拒绝；不能因两个版本扩展名称相同就默认私有 ABI 相同。
+以后为 Android 14 等版本补齐源码演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时新增其 `builds/` 配置、源码 ABI 校验与设备回归；公开 JVMTI 后端不推断私有 ART 对象布局。
 
 ## Hook 的当前作用
 
@@ -215,10 +213,12 @@ python3 tools/android13/run-source-probe.py --serial DEVICE_001 --suite interfac
 
 ## 构建和测试
 
-需要 JDK 17、Android SDK 35 / Build Tools 35.0.0、NDK 27.2.12479018、CMake 4.3.4。`local.properties` 中设置本机 `sdk.dir`。Gradle Wrapper 8.11.1，AGP 8.9.1。当前只打包 arm64。
+需要 JDK 17、Android SDK 35 / Build Tools 35.0.0、NDK 27.2.12479018、CMake 4.3.4。`local.properties` 中设置本机 `sdk.dir`。Gradle Wrapper 8.11.1，AGP 8.9.1。默认打包 arm64；`-PtargetAbi=x86_64` 构建模拟器 APK。两个 ABI 分开构建，因为 ShadowHook 的 Prefab 库只提供 arm 架构。
 
 ```sh
 ./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug -PtargetAbi=x86_64
+python3 tools/run-public-jvmti.py --serial emulator-5554
 python3 tools/test-evolution-host.py
 python3 tools/run-device-tests.py --serial DEVICE_001
 python3 tools/run-foreground-tests.py --serial DEVICE_001
@@ -228,6 +228,8 @@ python3 tools/run-foreground-tests.py --serial DEVICE_001 --stress stock --round
 ```
 
 脚本仅安装并操作 `dev.artdcevm.lab`，每次测试先结束该应用进程，保证补丁从初始类开始。手机需允许 USB 安装。测试运行于普通应用 UID，未声明额外权限。报告会保存到 `evidence/runs/`；失败或进程崩溃时保留已经完成的检查。
+
+跨版本验证可先用 Android Studio 模拟器安装 x86_64 系统镜像，分别启动 API 34/35/36 AVD，再对各设备运行 `tools/run-public-jvmti.py`。云端 arm64 实机可参考 [Firebase Test Lab 设备目录](https://firebase.google.com/docs/test-lab/android/available-testing-devices) 和 [instrumentation 命令行测试](https://firebase.google.com/docs/test-lab/android/command-line)；目前仓库的 instrumentation 与应用打在同一 debug APK，上传前仍需拆出测试 APK，并取得项目及计费权限。云端测试也不能替代新 ART 构建的 Build ID、源码 ABI 和私有事务校准。
 
 持续绘制测试每次提交前要求新的 `View.onDraw`，虚拟屏幕模式还要求 ImageReader 收到实际渲染缓冲。它使用普通应用可创建的私有 VirtualDisplay，不读取其他应用或锁屏内容；手机熄屏时也能排查 ViewRoot、Choreographer 与结构提交的交互。它不替代物理屏幕前台验收，后者运行时需解锁并保持亮屏。`--callbacks-only` 仅用于诊断帧回调，不计为持续绘制通过。
 

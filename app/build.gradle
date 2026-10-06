@@ -1,4 +1,8 @@
 plugins { id 'com.android.application' }
+def targetAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
+if (!(targetAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException("Unsupported targetAbi: $targetAbi")
+if (targetAbi != 'arm64-v8a' && providers.gradleProperty('sourceEngine13').isPresent())
+    throw new GradleException('sourceEngine13 requires targetAbi=arm64-v8a')
 android {
     namespace 'dev.artdcevm'
     compileSdk 37
@@ -9,7 +13,7 @@ android {
         targetSdk 33
         versionCode 1
         versionName '0.1.0-dev'
-        ndk { abiFilters 'arm64-v8a' }
+        ndk { abiFilters targetAbi }
         externalNativeBuild { cmake { cppFlags '-std=c++17 -Wall -Wextra -Werror' } }
     }
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
@@ -27,7 +31,7 @@ android {
     }
 }
 dependencies {
-    implementation 'com.bytedance.android:shadowhook:2.0.1'
+    if (targetAbi == 'arm64-v8a') implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
 def patchTask = tasks.register('compilePatchFixtures', Exec) {
     inputs.dir rootProject.file('fixtures')

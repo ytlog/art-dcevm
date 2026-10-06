@@ -1,6 +1,6 @@
 # Class redefine 未支持与未充分验证的能力
 
-记录时间：2026-10-06。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前已验证 APK SHA-256：`5cf0062300b6e4aae3c32f642f9e1911bf7d7585e541d3aae3d07b3f708be123`。
+记录时间：2026-10-07。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前完整源码演进回归 APK SHA-256：`f3087a3ae14d68c72dcf8d5e4dfc6092a0089090e1573c5a8ac86a33facbab5b`。
 
 本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 在两种 Hook 顺序下均通过完整回归，主要重定义由独立 Agent 走标准 JVMTI 入口，各完成 31 次结构提交和 135 项修饰符检查：[validation-first](evidence/source-engine/20261006T153859Z/run.json)、[source-first](evidence/source-engine/20261006T154308Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
 
@@ -12,7 +12,7 @@
 | 添加方法 `final`，但已有加载的子类覆写它 | 返回 71，事务不提交。这是已验证的冲突拒绝，不应强行提交。[专项](evidence/source-engine/20261006T093015Z/probe.json) | 若需支持，必须定义并实现现存子类及旧调用点的一致语义。 |
 | 添加类 `final`，但已有加载的子类 | 返回 70，事务不提交。这是类关系冲突。[能力说明](README.md#能力与版本选择) | 同上，不能仅改修饰符位。 |
 | 类或方法变为 abstract 后，存活的直属实例或已加载子类将继承未实现的抽象方法 | 事务返回 71，旧定义不变。[能力说明](README.md#能力与版本选择) | 需要先消除依赖，或设计安全的对象迁移和分派语义。 |
-| 非当前 Android 13 / arm64 / 固定 ART Build-ID 的系统 | 平台入口或私有 Hook 校验拒绝；尚无其他版本后端。[版本选择](README.md#能力与版本选择) | 对每个新版本建立独立后端、源码 ABI 校准和设备回归。 |
+| 非当前 Android 13 / arm64 / 固定 ART Build-ID 的系统 | API 33+ 进入公开 JVMTI 后端：可用标准方法体替换，ART 暴露结构扩展时可新增成员；完整源码演进和私有 Hook 拒绝。API 34/35/36 x86_64 模拟器已通过基础回归。[设备报告](evidence/compatibility/20261007/) | 对每个新版本建立独立私有后端、源码 ABI 校准及 arm64 设备回归，才可对齐现有 Android 13 类演进能力。 |
 | 未打包或未启用源码演进模块时的 `EVOLVE_SCHEMA` | 明确返回不可用，不自动退化成较弱的重定义。[公共 API](README.md#能力与版本选择) | 构建时加入 `-PsourceEngine13`，运行时调用 `enableEvolution()`。 |
 
 ## 已有部分实现，但仍缺关键验证
