@@ -26,6 +26,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
     platform/android13/dex_cache_method_lookup.cc
+    platform/android13/checked_method_provider.cc
+    platform/android13/method_lookup.cc
     platform/android13/method_invoke.cc
     platform/android13/method_access.cc
     platform/android13/dex_cache_method_reader.cc

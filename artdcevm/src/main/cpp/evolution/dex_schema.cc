@@ -73,6 +73,7 @@ class Reader {
     MappedDexMethodReference result;
     result.class_index = U16(item);
     result.proto_index = U16(item + 2);
+    result.proto_id = begin_ + Item(protos_,result.proto_index);
     result.declaring_class = Type(result.class_index);
     if (result.declaring_class.front() != 'L' && result.declaring_class.front() != '[')
       Fail("Invalid method declaring type");

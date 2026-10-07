@@ -97,9 +97,9 @@ int main(int argc, char** argv) {
   using artdcevm::evolution::MappedDexMethodReference;
   using artdcevm::evolution::ReadMappedDexMethodReference;
   const MappedDexMetadata view{dex.data(),dex.size(),dex.data(),dex.size(),UINT32_MAX};
-  const MappedDexMethodReference reference_sentinel{42,77,"Lsentinel;","sentinel","()V"};
+  const MappedDexMethodReference reference_sentinel{42,77,nullptr,"Lsentinel;","sentinel","()V"};
   auto same_reference=[](const auto& a,const auto& b) {
-    return a.class_index==b.class_index && a.proto_index==b.proto_index &&
+    return a.class_index==b.class_index && a.proto_index==b.proto_index && a.proto_id==b.proto_id &&
            a.declaring_class==b.declaring_class && a.name==b.name && a.descriptor==b.descriptor;
   };
   size_t reference_failures=0;

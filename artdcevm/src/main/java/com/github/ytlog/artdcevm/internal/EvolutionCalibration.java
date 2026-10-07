@@ -18,5 +18,7 @@ final class EvolutionCalibration {
     private int privateAccessCalibration() { return value; }
     /** 校准 static 调用类别，不修改已校准存储。 */
     public static int staticInvokeCalibration() { return 7; }
+    /** 校准带数组/参数列表及非 int 返回值的 Signature 异常格式化。 */
+    public long signatureLookupCalibration(String[] values, int count) { return count; }
     interface InvocationContract { int invoke(); }
 }

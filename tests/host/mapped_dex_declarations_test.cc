@@ -102,6 +102,8 @@ int main(int argc, char** argv) {
                                        index,&shared,&error));
     assert(ReadMappedDexMethodReference({no_classes.data(),no_classes.size(),original.data(),original.size(),UINT32_MAX},
                                        index,&without_class,&error));
+    assert(standard.proto_id==original.data()+U32(original,76)+size_t{standard.proto_index}*12);
+    assert(shared.proto_id==compact.data()+U32(compact,76)+size_t{shared.proto_index}*12);
     assert(standard.class_index==shared.class_index && standard.proto_index==shared.proto_index &&
            standard.declaring_class==shared.declaring_class && standard.name==shared.name &&
            standard.descriptor==shared.descriptor && standard.descriptor==without_class.descriptor);

@@ -40,6 +40,8 @@ struct MappedDexMetadata {
 struct MappedDexMethodReference {
   uint16_t class_index = 0;
   uint16_t proto_index = 0;
+  // Borrowed 12-byte ProtoId; valid while the immutable DEX mapping is live.
+  const unsigned char* proto_id = nullptr;
   std::string declaring_class;
   std::string name;
   std::string descriptor;
