@@ -6,6 +6,7 @@
 #include "support/elf_modules.h"
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_field_hooks.h"
+#include "platform/android13/hierarchy_batch_hooks.h"
 #include "platform/android13/validation_hooks.h"
 
 namespace artdcevm::android13 {
@@ -69,8 +70,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   void* resolve = dlsym(library, "ArtDcevmSourceHierarchyResolve");
   void* find = dlsym(library, "ArtDcevmSourceHierarchyFind");
   void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
-  void* batch_allocate = dlsym(library, "ArtDcevmSourceHierarchyAllocateSubtree");
-  void* batch_verify = dlsym(library, "ArtDcevmSourceHierarchyRun");
   void* loader_delete = dlsym(library, cas::kDeleteClassLoader);
   using ConfigureLoaderDelete = void** (*)();
   auto configure_loader_delete = reinterpret_cast<ConfigureLoaderDelete>(
@@ -81,12 +80,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   void* suspend_from_code = dlsym(library, "ArtDcevmSourceTestSuspendFromCode");
   auto configure_suspend_from_code = reinterpret_cast<ConfigureLoaderDelete>(
       dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
-  auto configure_batch = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyBatch"));
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
       !invalidate_jit || !methods || !fields || !classes || !instance_allocation
       || !configure_instance_allocation || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup
-      || !batch_allocate || !batch_verify || !configure_batch
       || !loader_delete || !configure_loader_delete
       || !async_deoptimizeable || !configure_async_deoptimizeable
       || !suspend_from_code || !configure_suspend_from_code) {
@@ -122,13 +119,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     if (!target) return std::string("Missing hierarchy verification symbol: ") + verification_symbols[i];
     if (!symbols.Install(target, verification_proxies[i], configure_verification(i), &error)) return error;
   }
-  const char* batch_symbols[]{cas::kAllocateSubtree, cas::kRedefineRun};
-  void* batch_proxies[]{batch_allocate, batch_verify};
-  for (int i = 0; i < 2; ++i) {
-    void* target = symbols.FindSymbol("libopenjdkjvmti.so", batch_symbols[i]);
-    if (!target) return std::string("Missing hierarchy batch symbol: ") + batch_symbols[i];
-    if (!symbols.Install(target, batch_proxies[i], configure_batch(i), &error)) return error;
-  }
+  if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   void* loader_delete_target = symbols.FindSymbol("libart.so", cas::kDeleteClassLoader);
   if (!loader_delete_target || !symbols.Install(loader_delete_target, loader_delete,
       configure_loader_delete(), &error))

@@ -232,13 +232,13 @@ extern "C" bool ArtDcevmSourceOriginalHierarchySubtree(void* definition, void* h
 extern "C" jvmtiError ArtDcevmSourceOriginalHierarchyRun(void* driver) {
   return reinterpret_cast<jvmtiError (*)(void*)>(original_run)(driver);
 }
+extern "C" bool ArtDcevmSourceHasHierarchyChange() {
+  return artdcevm::android13::source::HasHierarchyChange();
+}
 extern "C" bool ArtDcevmSourceHierarchyAllocateSubtree(void* definition, void* holder, void* data) {
-  if (!source_transaction() || !artdcevm::android13::source::HasHierarchyChange())
-    return ArtDcevmSourceOriginalHierarchySubtree(definition, holder, data);
   return SourceSubtreeAllocate(definition, holder, data);
 }
 extern "C" jvmtiError ArtDcevmSourceHierarchyRun(void* driver) {
-  if (!source_transaction()) return ArtDcevmSourceOriginalHierarchyRun(driver);
   return SourceHierarchyRun(driver);
 }
 extern "C" void** ArtDcevmSourceConfigureHierarchyAllocator(bool (*active)()) {

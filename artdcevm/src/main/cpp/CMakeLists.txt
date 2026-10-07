@@ -9,6 +9,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc
+    platform/android13/hierarchy_batch_hooks.cc
     platform/android13/schema_snapshot.cc platform/android13/evolution_planner.cc
     platform/android13/validation_hooks.cc platform/android13/source_engine_loader.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
