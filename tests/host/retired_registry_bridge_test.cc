@@ -15,7 +15,6 @@ class Hooks:public artdcevm::HookEngine { public:
  bool available=true;bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{
   if(!available)return nullptr;
-  if(std::strstr(name,"ContainsUnsafe"))return reinterpret_cast<void*>(Contains);
   if(std::strstr(name,"CurrentFromGdb"))return reinterpret_cast<void*>(Current);
   if(std::strstr(name,"ThrowNewException"))return reinterpret_cast<void*>(Throw);
   if(std::strstr(name,"QuickDeliverException"))return reinterpret_cast<void*>(Deliver);
@@ -31,11 +30,12 @@ bool ConfigureRetiredMemberGuard(const RetiredMemberGuardFunctions& f){return f.
 int main(){
  Hooks hooks;std::string error;
  hooks.available=false;
- assert(!g::ConfigureRetiredMethodRegistry(hooks,&error));
- assert(!g::ConfigureRetiredFieldRegistry(hooks,&error));
+ assert(!g::ConfigureRetiredMethodRegistry(hooks,Contains,&error));
+ assert(!g::ConfigureRetiredFieldRegistry(nullptr,&error));
+ assert(!g::ConfigureRetiredMethodRegistry(hooks,nullptr,&error));
  hooks.available=true;
- assert(g::ConfigureRetiredFieldRegistry(hooks,&error));
- assert(g::ConfigureRetiredMethodRegistry(hooks,&error));
+ assert(g::ConfigureRetiredFieldRegistry(Contains,&error));
+ assert(g::ConfigureRetiredMethodRegistry(hooks,Contains,&error));
  int method,field;assert(g::RetiredMethodCount()==0);
  g::RetireMethodPointer(&method);g::RetireMethodPointer(&method);
  assert(g::IsRetiredMethodPointer(&method)&&g::RetiredMethodCount()==1);

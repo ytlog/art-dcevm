@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "platform/android13/mutex_abi.h"
 namespace artdcevm::android13::compiler_diagnostics_abi {
 // Borrowed platform libc++ v1 storage; no host STL constructors/destructors.
 struct Vector { void* begin;void* end;void* capacity; };
@@ -30,8 +31,7 @@ struct Instrumentation {
  struct UnorderedSet {void* buckets;size_t bucket_count;void* first;size_t size;float max_load;} deoptimized;
  size_t alloc_counter;bool alloc_instrumented;
 };
-struct Mutex {void* vtable;const char* name;uint8_t level;bool respond;
- int32_t state,owner;uint32_t recursion;bool recursive,timeout;uint32_t monitor;};
+using Mutex = mutex_abi::Mutex;
 struct Compat {Tree disabled,reported;Mutex lock;};
 // Starts exactly at Runtime::instrumentation_ (existing calibrated getter).
 struct RuntimePolicy {

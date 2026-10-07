@@ -1,12 +1,13 @@
 #pragma once
 
 #include "api/hook_engine.h"
+#include "platform/android13/allocator_membership.h"
 #include <cstddef>
 #include <string>
 
 namespace artdcevm::android13 {
 
-bool ConfigureRetiredMethodRegistry(HookEngine& hooks, std::string* error);
+bool ConfigureRetiredMethodRegistry(HookEngine& hooks, AllocatorContains contains, std::string* error);
 void RetireMethodPointer(void*) noexcept;
 bool IsRetiredMethodPointer(void* method);
 size_t RetiredMethodCount();

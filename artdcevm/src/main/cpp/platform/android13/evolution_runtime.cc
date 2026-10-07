@@ -3,6 +3,7 @@
 #include <cstring>
 #include "platform/android13/owned_calibration.h"
 #include "platform/android13/reflection_bindings.h"
+#include "platform/android13/allocator_membership.h"
 #include "platform/android13/transaction_metadata.h"
 #include "platform/android13/member_decode_abi.h"
 #include "platform/android13/field_copy_metadata.h"
@@ -111,8 +112,6 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
       !ConfigureTransactionMetadataReader(symbols, device_profile, &error)) return error;
   if (!ConfigureRuntimeAccess(symbols, device_profile, &error) ||
       !ConfigureJniMethodTargets(symbols, device_profile, &error) ||
-      !ConfigureRetiredMethodRegistry(symbols, &error) ||
-      !ConfigureRetiredFieldRegistry(symbols, &error) ||
       !ConfigureRedefinitionFailures(symbols, &error) ||
       !ConfigureEvolutionFieldCopy(symbols, device_profile, &error) ||
       !ConfigureEvolutionFieldValidation(symbols, device_profile, &error) ||
@@ -128,7 +127,16 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
       !ConfigureThreadSuspendScopes(symbols, device_profile, &error) ||
       !ConfigureFrameRecovery(symbols, device_profile, &error) ||
       !CalibrateOwnedBootstrap(symbols, jni, calibration, &error)) return error;
-  if(!symbols.Configure(jni,device_profile,&error) ||
+  AllocatorContains membership=nullptr;
+#ifdef ARTDCEVM_FORCE_ALLOCATOR_MEMBERSHIP_TEST
+  constexpr bool force_arena=true;
+#else
+  constexpr bool force_arena=false;
+#endif
+  if(!ConfigureAllocatorMembership(symbols,device_profile,jni,calibration,&membership,&error,force_arena) ||
+      !ConfigureRetiredMethodRegistry(symbols,membership,&error) ||
+      !ConfigureRetiredFieldRegistry(membership,&error) ||
+      !symbols.Configure(jni,device_profile,&error) ||
       !symbols::CheckEvolutionSymbols(symbols,&error)) return error;
   // Every proxy is owned by this DSO. Named device functions are bound above;
   // public JNI/JVMTI calibration completes before any evolution hook attempt.

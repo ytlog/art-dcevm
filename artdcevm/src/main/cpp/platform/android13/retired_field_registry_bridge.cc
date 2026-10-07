@@ -2,7 +2,6 @@
 
 #include <cstdlib>
 #include "platform/android13/retired_field_registry.h"
-#include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -26,11 +25,9 @@ size_t PruneRetiredFields(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredFieldRegistry(HookEngine& hooks, std::string* error) {
-  auto contains = reinterpret_cast<RetiredFieldRegistry::ContainsUnsafe>(
-      hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
+bool ConfigureRetiredFieldRegistry(AllocatorContains contains, std::string* error) {
   if (!contains) {
-    *error = "Missing named retired-field LinearAlloc symbol";
+    *error = "Missing calibrated allocator membership for retired-field registry";
     return false;
   }
   contains_unsafe = contains;

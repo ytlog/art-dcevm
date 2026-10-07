@@ -4,7 +4,6 @@
 #include "platform/android13/retired_method_registry.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_member_guard.h"
-#include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -25,11 +24,9 @@ size_t PruneRetiredMethods(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredMethodRegistry(HookEngine& hooks, std::string* error) {
-  auto contains = reinterpret_cast<RetiredMethodRegistry::ContainsUnsafe>(
-      hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
+bool ConfigureRetiredMethodRegistry(HookEngine& hooks, AllocatorContains contains, std::string* error) {
   if (!contains) {
-    *error = "Missing named LinearAlloc symbol for retired-method registry";
+    *error = "Missing calibrated allocator membership for retired-method registry";
     return false;
   }
   RetiredMemberGuardFunctions functions{

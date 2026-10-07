@@ -1,13 +1,14 @@
 #pragma once
 
 #include "api/hook_engine.h"
+#include "platform/android13/allocator_membership.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace artdcevm::android13 {
 
-bool ConfigureRetiredFieldRegistry(HookEngine& hooks, std::string* error);
+bool ConfigureRetiredFieldRegistry(AllocatorContains contains, std::string* error);
 size_t PruneRetiredFields(const void* allocator) noexcept;
 size_t RetiredFieldSlotCount();
 void RetireFieldPointer(void*) noexcept;
