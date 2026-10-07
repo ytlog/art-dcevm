@@ -221,7 +221,9 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
     if (!definition.klass || definition.class_byte_count <= 0 || !definition.class_bytes)
       return original_redefine_(caller, count, definitions);
     jboolean modifiable = JNI_FALSE;
-    result = caller->IsModifiableClass(definition.klass, &modifiable);
+    result = evolution_ && evolution_->Available()
+        ? caller->IsModifiableClass(definition.klass, &modifiable)
+        : modifiable_(caller, definition.klass, &modifiable);
     if (result != JVMTI_ERROR_NONE) return result;
     if (!modifiable) return JVMTI_ERROR_UNMODIFIABLE_CLASS;
   }
