@@ -14,5 +14,4 @@ int DiagnosticJitInlineState(JNIEnv*,jobject);
 int DiagnosticJitCodeKind(JNIEnv*,jobject);
 int DiagnosticJitCacheDetail(JNIEnv*,jobject);
 int DiagnosticInvalidateAllJit(JNIEnv*);
-int ClassifyDiagnosticCompiledEntry(const void* entry);
 }

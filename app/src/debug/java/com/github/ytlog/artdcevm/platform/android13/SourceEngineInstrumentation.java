@@ -4808,7 +4808,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 .put("optimizedInlineAfter", after)
                 .put("optimizedInlineRestore", restored); save(report);
         hierarchyCheck(report, "optimized_jit_inline_caller_invalidated_after_evolution",
-                enabled == 1 && optionsState == 4 && before == 41 && probeInstalled == 1
+                enabled == 1 && optionsState == 5 && before == 41 && probeInstalled == 1
                         && inlineHits > 0 && (cacheBefore & 16) != 0 && compiledBefore == 41
                         && code == 0 && structuralAfter > structuralBefore
                         && inPlaceAfter == inPlaceBefore
@@ -4887,6 +4887,10 @@ public final class SourceEngineInstrumentation extends Instrumentation {
     }
     private boolean testJitActiveInlineFrame(JSONObject report) throws Exception {
         report.put("hierarchyChecks", new JSONArray()).put("phase", "jit_active_inline_frame"); save(report);
+        long deoptHitsBefore = aotSuspendDeoptHits(false);
+        long[] precommitBefore = new long[6];
+        for (int index = 0; index < precommitBefore.length; ++index)
+            precommitBefore[index] = compiledPrecommitDiagnostics(index);
         InlineActiveCallee callee = new InlineActiveCallee();
         Method caller = InlineActiveCaller.class.getMethod(
                 "call", InlineActiveCallee.class, int.class);
@@ -4979,7 +4983,12 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 .put("activeInlineSecondOldError", String.valueOf(secondOldError.get()))
                 .put("activeInlineSecondWorkerAlive", secondWorker.isAlive())
                 .put("activeInlineNewValue", newValue)
-                .put("activeInlineProbeRemoved", removed).put("activeInlineRestored", restored); save(report);
+                .put("activeInlineProbeRemoved", removed).put("activeInlineRestored", restored);
+        JSONArray precommitDelta = new JSONArray();
+        for (int index = 0; index < precommitBefore.length; ++index)
+            precommitDelta.put(compiledPrecommitDiagnostics(index) - precommitBefore[index]);
+        report.put("activeInlinePrecommitDelta", precommitDelta)
+                .put("activeInlineSuspendDeoptHits", aotSuspendDeoptHits(false) - deoptHitsBefore); save(report);
         hierarchyCheck(report, "jit_active_inlined_caller_old_frame_new_body",
                 before == 41 && enabled == 1 && probe == 1 && inlineHits > 0
                         && (cacheBefore & 16) != 0 && entered && frameState == 15

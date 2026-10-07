@@ -3,6 +3,7 @@
 #include "platform/android13/member_decode.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/instrumentation_listener.h"
+#include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
@@ -42,6 +43,7 @@ void* original_new_v[2];
 std::atomic<int> rejected{0};
 
 void Deopt(void* thread, void* frame, void* result, bool from_code, int type) {
+  AcknowledgeEvolutionSuspendDeopt(thread, frame, from_code);
   TraceDeopt(thread, frame, result, from_code, type);
   using Fn = void (*)(void*, void*, void*, bool, int);
   reinterpret_cast<Fn>(original_deopt)(thread, frame, result, from_code, type);

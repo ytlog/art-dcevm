@@ -23,6 +23,7 @@ uint32_t Ref(void* p){assert(uintptr_t(p)<=UINT32_MAX);return uint32_t(uintptr_t
 void* Root(void* p){return reinterpret_cast<void*>(uintptr_t(*static_cast<uint32_t*>(p)));}
 void* Current(){return thread;}
 bool enabled,required,suspended;size_t adds,removes,deopts,undeopts,resolves,throws;
+bool recoverable=true;
 void* instrumentation=reinterpret_cast<void*>(42);void* declared;void* moved;
 unsigned char frame[80]{};std::string text;const char* name="value";
 void* Resolve(void* linker,uint16_t type,void*){assert(linker==reinterpret_cast<void*>(43)&&type==0);++resolves;uint32_t p=Ref(moved);std::memcpy(frame+72,&p,4);return declared;}
@@ -55,6 +56,7 @@ class Hooks:public artdcevm::HookEngine {
 };
 }
 namespace artdcevm::android13 {
+bool CheckEvolutionCompiledFramesRecoverable(){assert(suspended);return recoverable;}
 bool ReceiverGuardEnabled(){return enabled;}bool ReceiverGuardRequired(){return required;}
 void SetReceiverGuardEnabled(bool v){assert(suspended);enabled=v;}void SetReceiverGuardRequired(bool v){required=v;}
 void* RuntimeInstrumentation(){return instrumentation;}void* RuntimeClassLinker(){return reinterpret_cast<void*>(43);}
@@ -68,7 +70,8 @@ OwnedSuspendAll::~OwnedSuspendAll(){assert(suspended);suspended=false;}
 int main(){ auto profile=MatchedProfileForTest();
  arena=static_cast<unsigned char*>(mmap(reinterpret_cast<void*>(0x22000000),65536,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0));assert(arena!=MAP_FAILED&&uintptr_t(arena)+65536<=UINT32_MAX);
  Hooks hooks;std::string error;assert(!g::ConfigureInstrumentationListener(hooks,g::DeviceProfile{},&error));if (!g::ConfigureInstrumentationListener(hooks,profile,&error)) {std::cerr<<error<<"\n";std::abort();}
- assert(g::SetReceiverGuardMode(true));assert(enabled&&adds==1&&deopts==1);assert(g::SetReceiverGuardMode(true,true)&&adds==1);
+ recoverable=false;assert(!g::SetReceiverGuardMode(true));assert(!enabled&&adds==0&&deopts==0);
+ recoverable=true;assert(g::SetReceiverGuardMode(true));assert(enabled&&adds==1&&deopts==1);assert(g::SetReceiverGuardMode(true,true)&&adds==1);
  required=true;assert(!g::SetReceiverGuardMode(false));assert(enabled&&removes==0);required=false;
  auto* owner=New<Class>();auto* unrelated=New<Class>();auto* object=New<Class>();object->object.klass=Ref(owner);auto* changed=New<Class>();changed->object.klass=Ref(unrelated);
  auto* field=New<g::field_copy_abi::ArtField>();field->declaring_class=Ref(owner);uint32_t object_root=Ref(object);a::Handle handle{&object_root};uint64_t value=55;

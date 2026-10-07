@@ -8,6 +8,6 @@ public final class InlineActiveCallee {
     public static final AtomicBoolean release = new AtomicBoolean(false);
 
     public int value(int input) {
-        return input < 0 ? 3 : input + 3;
+        return input < 0 ? 2 - input : input + 3;
     }
 }

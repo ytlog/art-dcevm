@@ -4,6 +4,7 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/handle_root_scope.h"
+#include "platform/android13/frame_recovery.h"
 #include "platform/symbols/android13.h"
 #include <atomic>
 #include <cstring>
@@ -48,13 +49,19 @@ struct AotVisitor final:stack_abi::Visitor {
   uintptr_t target; bool safe=false;
 };
 bool Allow(const void*,uintptr_t pc) {
-  if (!ReceiverGuardRequired() && !probe_enabled.load(std::memory_order_acquire)) return false;
+  if (!ReceiverGuardEnabled() && !probe_enabled.load(std::memory_order_acquire)) return false;
   void* self=CurrentHierarchyThread(); if (!self) return false;
   AotVisitor visitor(self,pc); visitor.Walk();
-  if (visitor.safe) hits.fetch_add(1,std::memory_order_relaxed);
-  return visitor.safe;
+  bool safe=visitor.safe && IsEvolutionPcRecoverable(self,pc);
+  if (safe) hits.fetch_add(1,std::memory_order_relaxed);
+  return safe;
 }
-bool Proxy(const void* runtime,uintptr_t pc) { return original_is_async(runtime,pc) || Allow(runtime,pc); }
+bool Proxy(const void* runtime,uintptr_t pc) {
+  bool owned=ReceiverGuardEnabled() || probe_enabled.load(std::memory_order_acquire);
+  if (original_is_async(runtime,pc))
+    return !owned || IsEvolutionPcRecoverable(CurrentHierarchyThread(),pc);
+  return Allow(runtime,pc);
+}
 void SetProbe(bool enabled) { probe_enabled.store(enabled,std::memory_order_release); }
 uint64_t Hits() { return hits.load(std::memory_order_relaxed); }
 }

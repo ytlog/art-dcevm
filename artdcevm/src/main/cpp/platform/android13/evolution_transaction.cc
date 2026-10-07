@@ -12,6 +12,7 @@
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include "platform/android13/stack_access.h"
+#include "platform/android13/frame_recovery.h"
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/thread_suspend_scope.h"
 #include "platform/android13/validation_hooks.h"
@@ -20,6 +21,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
+#if defined(ARTDCEVM_TESTING) && defined(__ANDROID__)
+#include <android/log.h>
+#define DRAIN_LOG(...) __android_log_print(ANDROID_LOG_ERROR,"ArtDcevmRecovery",__VA_ARGS__)
+#else
+#define DRAIN_LOG(...) ((void)0)
+#endif
 namespace artdcevm::android13 {
 namespace {
 using Class=validation_abi::ClassPrefix;
@@ -82,14 +89,8 @@ struct InputHierarchy {
     return true;
   }
 };
-bool HeaderInline(const void* raw) {
-  if(!raw) return false;uint32_t data=Read<uint32_t>(raw);
-  if(!(data&transaction_abi::kCodeInfo)) return false;
-  auto* code=static_cast<const unsigned char*>(raw)+sizeof(transaction_abi::QuickHeader);
-  return (*(code-(data&transaction_abi::kCodeInfoOffset))&transaction_abi::kHasInlineInfo)!=0;
-}
 enum class Scan {kNone,kMarked,kUnsupported};
-struct ActiveScan { void* self;void* marked=nullptr;Scan result=Scan::kNone; };
+struct ActiveScan { void* self;void* marked=nullptr;Scan result=Scan::kNone;uint64_t token=0; };
 struct Visitor final:stack_abi::Visitor {
   Visitor(void* self,ActiveScan& state):stack_abi::Visitor(self,nullptr,stack_abi::WalkKind::kIncludeInlined),state(state) {}
   bool VisitFrame() override {
@@ -103,33 +104,59 @@ struct Visitor final:stack_abi::Visitor {
     void* cache=RuntimeJitCodeCache();
     bool app=!runtime && !native && Loader(read_root(method))!=nullptr;
     bool carrier=physical && !runtime && !native && !app && header && cache &&
-        contains_pc(cache,reinterpret_cast<const void*>(pc)) && HeaderInline(header);
+        contains_pc(cache,reinterpret_cast<const void*>(pc));
+    if(carrier) {stack_abi::CodeInfo info{};carrier=ReadEvolutionCodeInfo(Read<void*>(quick_frame),header,pc,&info) && info.inline_infos.rows!=0;}
     if(runtime || native || !header || (!app && !carrier)) {barrier_above|=barrier;return true;}
     if(carrier) ++compiled_counts[5];
     const void* code=oat_code(method,8);
     bool aot=code && header==static_cast<const unsigned char*>(code)-stack_abi::kCodeOffset;
     if(barrier_above) {++compiled_counts[2];if(aot) ++compiled_counts[1];return true;}
-    if(carrier && !private_contains_pc(cache,reinterpret_cast<const void*>(pc))) return Unsupported();
+    if(carrier && !private_contains_pc(cache,reinterpret_cast<const void*>(pc))) return Unsupported("nonprivate-carrier");
     if(aot) {
       void* klass=read_root(method);
       void* dex_cache=(flags&0x40000)?obsolete_cache(method):reinterpret_cast<void*>(uintptr_t{Read<uint32_t>(klass,offsetof(Class,dex_cache))});
       const void* dex=dex_cache?reinterpret_cast<void*>(Read<uint64_t>(dex_cache,offsetof(validation_abi::DexCachePrefix,dex_file))):nullptr;
       const void* oat_dex=dex?Read<const void*>(dex,offsetof(stack_abi::DexPrefix,oat_dex)):nullptr;
       const void* oat=oat_dex?Read<const void*>(oat_dex):nullptr;
-      if(!oat || !debuggable(oat)) return Unsupported();
+      if(!oat || !debuggable(oat)) return Unsupported("nondebug-aot");
     }
-    if(!MarkEvolutionSuspendDeopt(thread)) return Unsupported();
+    if(!IsEvolutionPcRecoverable(thread,pc)) return Unsupported("pc-recovery");
+    if(!MarkEvolutionSuspendDeopt(thread,&state.token)) return Unsupported("mark-busy");
     state.marked=thread;state.result=Scan::kMarked;++compiled_counts[0];barrier_above|=barrier;return false;
   }
-  bool Unsupported() {state.result=Scan::kUnsupported;++compiled_counts[4];return false;}
+  bool Unsupported(const char* reason) {(void)reason;DRAIN_LOG("drain-reject=%s thread=%p method=%p pc=%zx",reason,thread,Method(),size_t(pc));state.result=Scan::kUnsupported;++compiled_counts[4];return false;}
   ActiveScan& state;bool barrier_above=false;void** previous_quick=nullptr;
 };
+struct RecoveryVisitor final:stack_abi::Visitor {
+  explicit RecoveryVisitor(void* thread):Visitor(thread,nullptr,stack_abi::WalkKind::kIncludeInlined) {}
+  bool Flush() {return !app_carrier || maps_safe;}
+  bool VisitFrame() override {
+    if(quick_frame!=carrier) {
+      if(!Flush()) {safe=false;return false;}
+      carrier=quick_frame;app_carrier=false;maps_safe=true;
+    }
+    if(!quick_frame) return true;
+    void* method=Method();if(!method) return true;
+    if(Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
+       (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
+    // Every inlinee AND its physical carrier must have recoverable maps when
+    // this machine frame contains an application method, including boot carriers.
+    app_carrier|=Loader(read_root(method))!=nullptr;
+    maps_safe&=IsEvolutionFrameRecoverable(*this);
+    return true;
+  }
+  void** carrier=nullptr;bool app_carrier=false,maps_safe=true,safe=true;
+};
+void CheckRecoveryThread(void* thread,void* raw) {
+  auto* safe=static_cast<bool*>(raw);if(!*safe) return;
+  RecoveryVisitor visitor(thread);visitor.Walk();*safe=visitor.safe&&visitor.Flush();
+}
 void ScanThread(void* thread,void* raw) {
   auto& state=*static_cast<ActiveScan*>(raw);
   if(state.result!=Scan::kNone || thread==state.self) return;
   Visitor visitor(thread,state);visitor.Walk();
 }
-Scan MarkActive(void** marked) {
+Scan MarkActive(void** marked,uint64_t* token) {
   void* self=CurrentHierarchyThread();ActiveScan state{self};
   NativeSuspendScope native(self);Require(native.Supported());
   { OwnedSuspendAll suspended("ART DCEVM active compiled precommit check");
@@ -138,13 +165,23 @@ Scan MarkActive(void** marked) {
     for_each(Read<void*>(*runtime_instance,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ScanThread,&state);
     unlock(*list_lock,self);
   }
-  *marked=state.marked;if(state.result==Scan::kNone) ++compiled_counts[3];return state.result;
+  *marked=state.marked;*token=state.token;if(state.result==Scan::kNone) ++compiled_counts[3];return state.result;
 }
 class HierarchyStateScope {
  public:HierarchyStateScope():previous(BeginHierarchyTransaction()) {}
  ~HierarchyStateScope() {EndHierarchyTransaction(previous);}
  private:uint32_t previous;
 };
+}
+bool CheckEvolutionCompiledFramesRecoverable() {
+  void* self=CurrentHierarchyThread();bool safe=true;
+  lock(*list_lock,self);
+  for_each(Read<void*>(*runtime_instance,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),CheckRecoveryThread,&safe);
+  unlock(*list_lock,self);
+  // One failed preflight is one unsupported decision, regardless of how many
+  // threads/inline frames the suspended scan observed before rejecting it.
+  if(!safe) ++compiled_counts[4];
+  return safe;
 }
 bool NeedsEvolutionReceiverGuard(jint count,const jvmtiClassDefinition* definitions) {
   if(count<=0 || !definitions) return false;
@@ -179,27 +216,53 @@ bool NeedsEvolutionReceiverGuard(jint count,const jvmtiClassDefinition* definiti
   return false;
 }
 bool DrainEvolutionCompiledFrames() {
+  // A previous timed-out execution owns its slot and protection until the
+  // interpreter entry acknowledges its converted anchor. Never reuse it early.
+  if(EvolutionSuspendDeoptInFlight()) {DRAIN_LOG("drain-reject=inflight");return false;}
   for(int frame=0;frame<64;++frame) {
-    void* marked=nullptr;Scan scan=MarkActive(&marked);
+    void* marked=nullptr;uint64_t token=0;Scan scan=MarkActive(&marked,&token);
     if(scan==Scan::kNone) return true;
     if(scan==Scan::kUnsupported) return false;
-    for(int ms=0;ms<100 && EvolutionSuspendDeoptPending(marked);++ms) usleep(1000);
-    if(EvolutionSuspendDeoptPending(marked)) {CancelEvolutionSuspendDeopt(marked);return false;}
+    for(int ms=0;ms<100 && EvolutionSuspendDeoptPending(marked,token);++ms) usleep(1000);
+    if(EvolutionSuspendDeoptPending(marked,token)) {
+      // Cancellation only succeeds while queued. Claimed/Executing are retained:
+      // the caller must not roll back protection while a deopt is in progress.
+      DRAIN_LOG("drain-reject=timeout thread=%p token=%llu phase=%u",marked,static_cast<unsigned long long>(token),static_cast<unsigned>(EvolutionSuspendDeoptState(marked,token)));
+      CancelEvolutionSuspendDeopt(marked,token);
+      if(EvolutionSuspendDeoptState(marked,token)==SuspendDeoptState::kRejected)
+        ReleaseEvolutionSuspendDeopt(marked,token);
+      return false;
+    }
+    auto state=EvolutionSuspendDeoptState(marked,token);
+    if(state!=SuspendDeoptState::kCompleted) {
+      DRAIN_LOG("drain-reject=not-completed thread=%p token=%llu phase=%u",marked,static_cast<unsigned long long>(token),static_cast<unsigned>(state));
+      ReleaseEvolutionSuspendDeopt(marked,token);return false;
+    }
+    if(!ReleaseEvolutionSuspendDeopt(marked,token)) {DRAIN_LOG("drain-reject=release-mismatch");return false;}
+    // Ack covers the chosen physical anchor, not every lower quick fragment.
     usleep(1000);
   }
-  return false;
+  DRAIN_LOG("drain-reject=64-anchors");return false;
 }
 jvmtiError RedefineEvolutionTransaction(jvmtiEnv* env,jint count,const jvmtiClassDefinition* definitions,bool transform) {
   HierarchyStateScope scope;
   bool needs=transform || NeedsEvolutionReceiverGuard(count,definitions);
   bool already=ReceiverGuardEnabled(),previous=ReceiverGuardRequired();
-  if(needs && !already && !SetReceiverGuardMode(true,false)) return JVMTI_ERROR_INTERNAL;
+  // A newly enabled listener checks maps atomically with installation. Only
+  // the already-enabled path needs an independent transaction preflight.
+  if(needs && already) {
+    NativeSuspendScope native(CurrentHierarchyThread());Require(native.Supported());
+    OwnedSuspendAll suspended("ART DCEVM compiled recovery preflight");
+    if(!CheckEvolutionCompiledFramesRecoverable()) return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+  }
+  if(needs && !already && !SetReceiverGuardMode(true,false))
+    return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
   if(needs) SetReceiverGuardRequired(true);
   if(needs && !already) ++guard_counts[0];
   jvmtiError result=needs && !DrainEvolutionCompiledFrames()?JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED:redefine(env,count,definitions);
   if(needs) {
     if(result==JVMTI_ERROR_NONE && HasHierarchyNarrowing()) ++guard_counts[2];
-    else {
+    else if(!EvolutionSuspendDeoptInFlight()) {
       SetReceiverGuardRequired(previous);
       if(!already) {SetReceiverGuardMode(false,false);if(result!=JVMTI_ERROR_NONE) ++guard_counts[1];}
     }

@@ -11,7 +11,7 @@ public final class InlineActiveCallee {
         if (input < 0) {
             entered.countDown();
             while (!release.get()) Thread.yield();
-            return 1;
+            return -input;
         }
         return input + 1;
     }

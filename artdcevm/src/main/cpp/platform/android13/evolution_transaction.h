@@ -11,6 +11,9 @@ bool ConfigureEvolutionTransactions(HookEngine&,const DeviceProfile& profile,std
 jvmtiError RedefineEvolutionTransaction(jvmtiEnv*,jint,const jvmtiClassDefinition*,bool allow_transform_hierarchy);
 bool NeedsEvolutionReceiverGuard(jint,const jvmtiClassDefinition*);
 bool DrainEvolutionCompiledFrames();
+// Caller already owns SuspendAll; takes only the thread-list lock. Must run
+// before any instrumentation install can deoptimize an existing compiled frame.
+bool CheckEvolutionCompiledFramesRecoverable();
 uint64_t EvolutionGuardTransactionDiagnostics(int index);
 uint64_t EvolutionCompiledPrecommitDiagnostics(int index);
 }

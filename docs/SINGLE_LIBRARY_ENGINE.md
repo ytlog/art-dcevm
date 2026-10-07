@@ -20,7 +20,7 @@
 
 优化内联诊断保持 Runtime、CompilerOptions 与 HGraph 的 debuggable 状态，覆盖 SSA、寄存器存活分析和机器码生成全过程。增强库只在显式诊断编译的线程范围内代理命名 `HInliner::Run`，绕过其调试图禁用内联的入口条件，其余内联判断与预算更新继续调用设备命名函数。这样既生成真实内联机器码，也保留活动帧恢复所需的环境值。编译失败或结束会恢复线程内诊断范围；关闭实验才移除 Hook、使实验代码失效并还原保存的设置。普通非实验编译保持原有边界，AOT 诊断另有独立协议。
 
-CodeInfo 的固定成员声明与标志语义分别核对。设备导出的两 bool `StackMapStream::BeginMethod` 与所考察的 [Google 固定源码声明](https://android.googlesource.com/platform/art/+/5410335486f5d93c87ea7a015bcbf38f08413ac6/compiler/optimizing/stack_map_stream.h)参数数量相同，但真实内联优化产物的 flags 为 3，与该版本的调试标志假设不一致；相同符号签名不能证明 flag 语义相同，诊断分类仍需核对。当前 Runtime debuggable 状态不能证明旧机器码的编译属性；空 instruction 的栈溢出检查或 native debug 行也可能没有 vreg 映射。不能以全局状态、单个活动 PC 或表行位置来保证产物所有未来暂停点都可恢复。
+CodeInfo 的固定成员声明与标志语义分别核对。设备命名构造器的真实编译对照为：baseline 产物 flags=6、无内联，优化内联产物 flags=3；因此诊断使用 bit 2（值 4）区分 baseline，bit 0 区分内联，不把两个产物共有的 bit 1 当作 baseline 或 debuggable 资格。仅凭 `BeginMethod` 符号中 bool 参数的数量不能匹配源码版本的标志含义。当前 Runtime debuggable 状态也不能证明旧机器码的编译属性；空 instruction 的栈溢出检查或 native debug 行可能没有 vreg 映射。活动帧仍按原 ART 资格协议和实际 PC 的完整恢复映射检查，不能以单个活动 PC 或表行位置推断产物所有未来暂停点都可恢复。
 
 ## 验证状态与历史
 

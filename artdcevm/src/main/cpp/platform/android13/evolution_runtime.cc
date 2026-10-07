@@ -26,6 +26,7 @@
 #include "platform/android13/structural_commit.h"
 #include "platform/android13/hierarchy_allocation.h"
 #include "platform/android13/suspend_deopt_hooks.h"
+#include "platform/android13/frame_recovery.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
@@ -98,7 +99,7 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
   if (load_attempted) return "Evolution initialization previously failed; restart the process";
   load_attempted = true;
   if (!jni || !calibration) return "JNI and ABI calibration are required";
-  ShadowHookEngine symbols;
+  static ShadowHookEngine symbols;
   std::string error;
   if (!symbols.Initialize(&error) || !MatchDeviceProfile(&device_profile, &error) ||
       !symbols::CheckEvolutionSymbols(symbols, &error) ||
@@ -120,6 +121,7 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
       !ConfigureEvolutionMethodValidation(symbols, device_profile, &error) ||
       !ConfigureEvolutionClassValidation(symbols, device_profile, &error) ||
       !ConfigureThreadSuspendScopes(symbols, device_profile, &error) ||
+      !ConfigureFrameRecovery(symbols, device_profile, &error) ||
       !CalibrateOwnedBootstrap(symbols, jni, calibration, &error)) return error;
   // Every proxy is owned by this DSO. Named device functions are bound above;
   // public JNI/JVMTI calibration completes before any evolution hook attempt.

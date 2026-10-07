@@ -32,7 +32,7 @@ void Walk(void* raw,bool transitions){assert(!transitions);auto* v=static_cast<s
 void* GetMethod(const void* v){return frames.at(static_cast<const stack_abi::Visitor*>(v)->depth).method;}
 namespace artdcevm::android13 {
 void* CurrentHierarchyThread(){return self;}void* RuntimeInstance(){return &runtime;}void* RuntimeJitCodeCache(){return has_cache?&cache:nullptr;}
-void SetAsyncDeoptProbe(bool b){probe=b;}bool MarkEvolutionSuspendDeopt(void* t){assert(t==target&&target_suspended);++marks;if(!mark_ok)return false;pending=t;return true;}
+void SetAsyncDeoptProbe(bool b){probe=b;}bool MarkEvolutionSuspendDeopt(void* t,uint64_t*){assert(t==target&&target_suspended);++marks;if(!mark_ok)return false;pending=t;return true;}
 void ResetEvolutionSuspendDeopt(){++resets;pending=nullptr;}uint64_t EvolutionSuspendDeoptHits(){return hits;}
 NativeObjectAccess::NativeObjectAccess(JNIEnv*):self_(self),supported_(supported),transitioned_((*reinterpret_cast<uint32_t*>(self)>>24)==92){if(transitioned_)Runnable(self);}
 NativeObjectAccess::~NativeObjectAccess(){if(transitioned_)Native(self);}void* NativeObjectAccess::Decode(jobject object)const{assert(*reinterpret_cast<uint32_t*>(self)==0);return object;}

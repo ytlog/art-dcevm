@@ -6,6 +6,7 @@
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/thread_suspend_scope.h"
+#include "platform/android13/evolution_transaction.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -155,6 +156,7 @@ bool SetReceiverGuardMode(bool enable,bool reject) {
   if (enable==ReceiverGuardEnabled()) return true;
   auto* instrumentation=RuntimeInstrumentation();
   if (enable) {
+    if (!CheckEvolutionCompiledFramesRecoverable()) return false;
     field_hits=0;invalid_hits=0;invoke_checks=0;invoke_rejections=0;frame_misses=0;
     force_reject=reject;add_listener(instrumentation,&listener,kEvents);deopt_all(instrumentation,"artdcevm-field-read-probe");
   } else { remove_listener(instrumentation,&listener,kEvents);undeopt_all(instrumentation,"artdcevm-field-read-probe");force_reject=false; }

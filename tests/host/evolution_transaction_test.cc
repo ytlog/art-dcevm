@@ -6,6 +6,7 @@
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/stack_access.h"
+#include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/validation_hooks.h"
@@ -23,6 +24,7 @@ using Map=validation_abi::DexMappingPrefix;
 alignas(8) unsigned char self[384]{},worker[384]{};
 runtime_access_abi::RuntimePrefix runtime{};void* runtime_ptr=&runtime;int list,mutex;void* mutex_ptr=&mutex;
 bool locked=false,suspended=false,enabled=false,required=false,mode_ok=true,narrow=false,engine_narrow=false,debug=true,private_pc=true,busy=false,timeout=false,no_progress=false;
+SuspendDeoptState request_state=SuspendDeoptState::kIdle;bool executing_timeout=false,rejected=false,recovery=true;
 uint32_t hierarchy=9;int starts=0,ends=0,constructs=0,destroys=0,opens=0,strings=0,dex_destroys=0,engine_calls=0,marks=0,cancels=0,lookups=0;
 jvmtiError engine_result=JVMTI_ERROR_NONE;void* pending=nullptr;void* marked_method=nullptr;
 std::vector<std::string> events;
@@ -39,7 +41,7 @@ void Unlock(void* p,void* t){assert(p==mutex_ptr&&t==self&&locked);locked=false;
 void ForEach(void* p,void(*fn)(void*,void*),void* x){assert(p==&list&&locked);events.push_back("foreach");fn(self,x);fn(worker,x);}
 void Construct(void* raw,void* t,void* context,stack_abi::WalkKind kind,bool check){assert(check);auto* v=static_cast<stack_abi::Visitor*>(raw);std::memset(static_cast<unsigned char*>(raw)+8,0,sizeof(*v)-8);v->thread=t;v->context=context;v->kind=kind;void* foreign=reinterpret_cast<void*>(0x1234);std::memcpy(raw,&foreign,8);}
 Frame& Active(const void* v){return frames.at(static_cast<const stack_abi::Visitor*>(v)->depth);}
-void Walk(void* raw,bool transitions){auto* v=static_cast<stack_abi::Visitor*>(raw);assert(!transitions);if(v->thread!=worker)return;assert(locked&&suspended&&v->kind==stack_abi::WalkKind::kIncludeInlined);for(size_t i=0;i<frames.size();++i){auto& f=frames[i];v->depth=i;v->header=f.header;v->pc=f.pc;v->quick_frame=f.quick?reinterpret_cast<void**>(uintptr_t(0x5000+8*f.physical)):nullptr;if(!v->VisitFrame())break;}}
+void Walk(void* raw,bool transitions){auto* v=static_cast<stack_abi::Visitor*>(raw);assert(!transitions);if(v->thread!=worker)return;assert(locked&&suspended&&v->kind==stack_abi::WalkKind::kIncludeInlined);for(size_t i=0;i<frames.size();++i){auto& f=frames[i];v->depth=i;v->header=f.header;v->pc=f.pc;static void* quick_methods[16];quick_methods[f.physical]=f.method;v->quick_frame=f.quick?&quick_methods[f.physical]:nullptr;if(!v->VisitFrame())break;}}
 void* GetMethod(const void* v){return Active(v).method;}
 uintptr_t ReturnPc(const void* v){return Active(v).ret;}
 void* Root(void* m){return declaring.at(m);}
@@ -54,9 +56,11 @@ struct Dex {virtual ~Dex(){++dex_destroys;}const unsigned char* begin;size_t siz
 device_dex_abi::OwnedPointer Open(const void*,const unsigned char* b,size_t n,const BorrowedPlatformString*,uint32_t checksum,const void* oat,bool verify,bool sum,device_dex_abi::PlatformError* error,device_dex_abi::OwnedPointer container){assert(checksum==0&&!oat&&verify&&sum&&!container.object);++opens;assert(error->bytes[0]==0);if(n<112)return {};return device_dex_abi::OwnedPointer(new Dex(b,n));}
 void DestroyString(void* raw){assert(raw);++strings;}
 namespace artdcevm::android13 {
+bool ReadEvolutionCodeInfo(void*,const void* header,uintptr_t,stack_abi::CodeInfo* info){*info={};info->inline_infos.rows=static_cast<const uint32_t*>(header)[-3]?1:0;return true;}
+bool IsEvolutionFrameRecoverable(const stack_abi::Visitor&){return recovery;}bool IsEvolutionPcRecoverable(void*,uintptr_t){return recovery;}
 void* CurrentHierarchyThread(){return self;}void* RuntimeClassLinker(){return &list;}void* RuntimeJitCodeCache(){return &mutex;}
 bool ReceiverGuardEnabled(){return enabled;}bool ReceiverGuardRequired(){return required;}void SetReceiverGuardRequired(bool b){required=b;}
-bool SetReceiverGuardMode(bool b,bool reject){assert(!reject);if(b&&!mode_ok)return false;enabled=b;return true;}
+bool SetReceiverGuardMode(bool b,bool reject){assert(!reject);if(b&&!mode_ok)return false;if(b&&!enabled){NativeSuspendScope native_scope(self);assert(native_scope.Supported());OwnedSuspendAll suspended_scope("guard recovery preflight");if(!CheckEvolutionCompiledFramesRecoverable())return false;}enabled=b;return true;}
 uint32_t BeginHierarchyTransaction(){auto previous=hierarchy;hierarchy=0;narrow=false;return previous;}void EndHierarchyTransaction(uint32_t previous){hierarchy=previous;}bool HasHierarchyNarrowing(){return narrow;}
 bool IsValidationSubclassOf(void* source,void* target){return source==target||parents[source]==target;}
 bool IsValidationAssignableFrom(void* target,void* source){return target==source||parents[source]==target;}
@@ -64,9 +68,12 @@ void* ReadHeapReference(void* p,size_t off,bool){if(off==offsetof(Class,class_lo
 NativeObjectAccess::NativeObjectAccess(JNIEnv*):self_(self),supported_(true),transitioned_(false){}NativeObjectAccess::~NativeObjectAccess(){assert(!transitioned_);}void* NativeObjectAccess::Decode(jobject o)const{return o;}
 HandleRootScope::HandleRootScope(void* t,uint32_t n):thread_(t),count_(n){assert(t==self);roots[this].resize(n);}HandleRootScope::~HandleRootScope(){roots.erase(this);}void HandleRootScope::Set(size_t i,void* p){roots[this].at(i)=p;}void* HandleRootScope::Get(size_t i){return roots[this].at(i);}
 JNIEnv* ValidationHooks::TransactionJni(){return nullptr;}
-bool MarkEvolutionSuspendDeopt(void* t){assert(locked&&suspended&&t==worker);if(busy||pending)return false;pending=t;++marks;for(auto& f:frames){if(loaders[declaring[f.method]]){marked_method=f.method;break;}}return true;}
-bool EvolutionSuspendDeoptPending(void* t){assert(!locked&&!suspended);if(pending==t&&!timeout){pending=nullptr;if(!no_progress)frames.clear();}return pending==t;}
-void CancelEvolutionSuspendDeopt(void* t){assert(pending==t);pending=nullptr;++cancels;}
+bool MarkEvolutionSuspendDeopt(void* t,uint64_t* token){if(token)*token=256;assert(locked&&suspended&&t==worker);if(request_state==SuspendDeoptState::kCompleted||request_state==SuspendDeoptState::kRejected)pending=nullptr;if(busy||pending)return false;pending=t;request_state=SuspendDeoptState::kQueued;++marks;for(auto& f:frames){if(loaders[declaring[f.method]]){marked_method=f.method;break;}}return true;}
+bool EvolutionSuspendDeoptPending(void* t,uint64_t token){assert(token==256);assert(!locked&&!suspended);if(pending==t&&!timeout){request_state=rejected?SuspendDeoptState::kRejected:SuspendDeoptState::kCompleted;if(!no_progress&&!rejected)frames.clear();}if(executing_timeout)request_state=SuspendDeoptState::kExecuting;return pending==t&&(request_state==SuspendDeoptState::kQueued||request_state==SuspendDeoptState::kExecuting);}
+void CancelEvolutionSuspendDeopt(void* t,uint64_t token){assert(token==256);assert(pending==t);if(request_state==SuspendDeoptState::kQueued){request_state=SuspendDeoptState::kRejected;++cancels;}}
+SuspendDeoptState EvolutionSuspendDeoptState(void* t,uint64_t){return pending==t?request_state:SuspendDeoptState::kIdle;}
+bool EvolutionSuspendDeoptInFlight(){return request_state==SuspendDeoptState::kClaimed||request_state==SuspendDeoptState::kExecuting;}
+bool ReleaseEvolutionSuspendDeopt(void* t,uint64_t){if(t!=pending||(request_state!=SuspendDeoptState::kCompleted&&request_state!=SuspendDeoptState::kRejected))return false;pending=nullptr;request_state=SuspendDeoptState::kIdle;return true;}
 }
 class Hooks:public artdcevm::HookEngine{public:bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char* n)override{
 #define FN(part,f) if(std::strstr(n,part))return reinterpret_cast<void*>(f)
@@ -74,7 +81,7 @@ FN("StackVisitorC2",Construct);FN("WalkStack",Walk);FN("GetMethodEv",GetMethod);
 #undef FN
 if(std::strstr(n,"Runtime9instance"))return &runtime_ptr;if(std::strstr(n,"thread_list_lock"))return &mutex_ptr;return nullptr;}
 void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}};
-void Reset(){assert(!pending&&!locked&&!suspended);frames.clear();enabled=required=false;mode_ok=debug=private_pc=true;busy=timeout=no_progress=engine_narrow=false;engine_result=JVMTI_ERROR_NONE;events.clear();empty_instrumentation_map={};void* map=&empty_instrumentation_map;std::memcpy(worker+transaction_abi::kThreadInstrumentationStack,&map,sizeof(map));}
+void Reset(){assert(!pending&&!locked&&!suspended);frames.clear();enabled=required=false;mode_ok=debug=private_pc=recovery=true;busy=timeout=no_progress=engine_narrow=executing_timeout=rejected=false;request_state=SuspendDeoptState::kIdle;engine_result=JVMTI_ERROR_NONE;events.clear();empty_instrumentation_map={};void* map=&empty_instrumentation_map;std::memcpy(worker+transaction_abi::kThreadInstrumentationStack,&map,sizeof(map));}
 void Put(std::vector<unsigned char>& b,size_t off,uint32_t value){std::memcpy(b.data()+off,&value,4);}
 int main(){ auto profile=MatchedProfileForTest();runtime.thread_list=&list;Hooks hooks;std::string error;assert(!ConfigureThreadSuspendScopes(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureThreadSuspendScopes(hooks,profile,&error));assert(starts==0&&ends==0&&constructs==0&&destroys==0);assert(!ConfigureStackAccess(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureStackAccess(hooks,profile,&error));if(!ConfigureEvolutionTransactions(hooks,profile,&error)){std::fprintf(stderr,"%s\n",error.c_str());assert(false);}assert(dex_destroys==0&&opens==0&&strings==0);
 // Native/Runnable nesting and unsupported states are exercised directly.
@@ -98,6 +105,10 @@ Reset();private_pc=false;frames={{&runtime_method,header,0x9000,0,1},{&boot_meth
 Reset();frames={{&boot_method,header}};private_pc=false;assert(!DrainEvolutionCompiledFrames());
 Reset();frames={{&method,header}};busy=true;assert(!DrainEvolutionCompiledFrames());
 Reset();frames={{&method,header}};timeout=true;before=cancels;assert(!DrainEvolutionCompiledFrames()&&cancels==before+1);
+Reset();frames={{&method,header}};recovery=false;before=engine_calls;auto unsupported_before=EvolutionCompiledPrecommitDiagnostics(4);assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&!enabled&&!required&&!pending);assert(EvolutionCompiledPrecommitDiagnostics(4)==unsupported_before+1);
+ Reset();frames={{&method,header}};enabled=required=true;recovery=false;unsupported_before=EvolutionCompiledPrecommitDiagnostics(4);before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&enabled&&required&&!pending);assert(EvolutionCompiledPrecommitDiagnostics(4)==unsupported_before+1);
+Reset();frames={{&method,header}};rejected=true;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&!enabled&&!required&&!pending);
+Reset();frames={{&method,header}};timeout=executing_timeout=true;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&enabled&&required&&pending);assert(!DrainEvolutionCompiledFrames());request_state=SuspendDeoptState::kCompleted;assert(ReleaseEvolutionSuspendDeopt(worker));
 Reset();frames={{&method,header}};no_progress=true;before=marks;assert(!DrainEvolutionCompiledFrames()&&marks==before+64);
 // Real fixed AOT metadata graph and exit-barrier tree. A current frame's own barrier is insufficient.
 void* low=mmap(reinterpret_cast<void*>(0x24000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);assert(low==reinterpret_cast<void*>(0x24000000));auto* cache=new(low)validation_abi::DexCachePrefix{};stack_abi::DexPrefix dex{};stack_abi::OatDexPrefix oat{&list};dex.oat_dex=&oat;cache->dex_file=reinterpret_cast<uint64_t>(&dex);app.dex_cache=uint32_t(reinterpret_cast<uintptr_t>(cache));codes[&method]=code+5;
@@ -106,7 +117,7 @@ selective_abi::MapNode node{};node.key=77;selective_abi::Tree tree{&node,&node.b
 Reset();before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_NONE&&engine_calls==before+1&&!enabled&&!required&&hierarchy==9);
 Reset();engine_narrow=true;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_NONE&&enabled&&required);
 Reset();engine_result=JVMTI_ERROR_FAILS_VERIFICATION;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==engine_result&&!enabled&&!required);
-Reset();mode_ok=false;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_INTERNAL&&engine_calls==before&&hierarchy==9);
+Reset();mode_ok=false;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&hierarchy==9);
 Reset();frames={{&method,header}};debug=false;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&!enabled&&!required);
 Reset();enabled=required=true;engine_result=JVMTI_ERROR_FAILS_VERIFICATION;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==engine_result&&enabled&&required);
 // Genuine DEX table format, verifier result remains owned by the original opener.

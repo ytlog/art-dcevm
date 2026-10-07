@@ -10,7 +10,7 @@ public final class InlineActiveCallee {
     public int value(int input) {
         if (input < 0) {
             while (!release.get()) Thread.yield();
-            return 2;
+            return 1 - input;
         }
         return input + 2;
     }

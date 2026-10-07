@@ -16,12 +16,13 @@ using namespace artdcevm::android13;
 using Method=art_method_abi::ArtMethod;
 using Class=validation_abi::ClassPrefix;
 using Cache=validation_abi::DexCachePrefix;
-struct Frame {void* method;uintptr_t pc;const void* header;bool quick=true,inlined=false;uint8_t debug=1;uintptr_t return_pc=0;};
+struct Frame {void* method;uintptr_t pc;const void* header;bool quick=true,inlined=false;uint8_t debug=1;uintptr_t return_pc=0;uint32_t info_flags=3;bool info_ok=true,frame_safe=true;};
 std::unordered_map<void*,std::vector<Frame>> stacks;
 std::unordered_map<void*,void*> declaring,loaders;
 std::unordered_map<void*,const void*> codes;
 void* current=nullptr;bool required=false,original_result=false,oat_debug=true;
-size_t walks=0,original_calls=0,cache_calls=0,code_calls=0,contexts_deleted=0;
+bool recoverable=true;size_t recovery_checks=0;
+size_t walks=0,original_calls=0,cache_calls=0,code_calls=0,contexts_deleted=0,flag_calls=0;
 std::vector<std::string> events;
 bool locked=false;
 selective_abi::RuntimePrefix runtime{};void* runtime_ptr=&runtime;int mutex_marker=0,list_marker=0;void* lock_ptr=&mutex_marker;
@@ -44,7 +45,7 @@ void Walk(void* raw,bool transitions){auto* visitor=static_cast<stack_abi::Visit
  if(locked){assert(transitions&&visitor->kind==stack_abi::WalkKind::kIncludeInlined);events.push_back("walk");}
  else assert(!transitions&&visitor->kind==stack_abi::WalkKind::kSkipInlined);
  auto& frames=stacks[visitor->thread];for(size_t i=0;i<frames.size();++i){auto& frame=frames[i];if(frame.inlined&&visitor->kind==stack_abi::WalkKind::kSkipInlined)continue;
- visitor->depth=i;visitor->pc=frame.pc;visitor->header=frame.header;visitor->quick_frame=frame.quick?&frame.method:nullptr;
+ visitor->depth=i;visitor->pc=frame.pc;visitor->header=frame.header;visitor->quick_frame=frame.quick?(frame.inlined&&i?&frames[i-1].method:&frame.method):nullptr;
  visitor->shadow_frame=frame.quick?nullptr:reinterpret_cast<void*>(0x5511);visitor->inline_frames.end.row=uint32_t(i);
  if(!visitor->VisitFrame())break;}}
 void* GetMethod(const void* visitor){return Active(static_cast<const stack_abi::Visitor*>(visitor)).method;}
@@ -54,6 +55,13 @@ const void* OatCode(void* method,size_t pointer_size){assert(pointer_size==8);++
 bool Debuggable(const void*){return oat_debug;}
 bool Original(const void*,uintptr_t){++original_calls;return original_result;}
 namespace artdcevm::android13 {void* CurrentHierarchyThread(){return current;}bool ReceiverGuardRequired(){return required;}
+bool ReceiverGuardEnabled(){return required;}
+bool IsEvolutionPcRecoverable(void* thread,uintptr_t){assert(thread==current&&thread);++recovery_checks;return recoverable;}
+bool IsEvolutionFrameRecoverable(const stack_abi::Visitor& visitor){assert(locked);return recoverable&&Active(&visitor).frame_safe;}
+bool ReadEvolutionCodeInfo(void* outer,const void* header,uintptr_t pc,stack_abi::CodeInfo* info){
+ assert(locked);for(auto& entry:stacks)for(size_t i=0;i<entry.second.size();++i){auto& f=entry.second[i];if(f.pc!=pc||f.header!=header)continue;
+ assert(outer==(f.inlined&&i?entry.second[i-1].method:f.method));*info={};info->flags=f.info_flags;return header&&f.info_ok;}
+ assert(false);return false;}
 void* ReadHeapReference(void* object,size_t offset,bool){assert(offset==offsetof(Class,class_loader));return loaders.at(object);}}
 struct Context {virtual ~Context(){assert(locked);++contexts_deleted;events.push_back("delete");}};
 void* MakeContext(){assert(locked);events.push_back("context");return new Context;}
@@ -62,7 +70,7 @@ void Unlock(void* mutex,void* self){assert(locked&&mutex==lock_ptr&&self==curren
 void ForEach(void* list,void (*fn)(void*,void*),void* data){assert(locked&&list==&list_marker);events.push_back("foreach");fn(thread1,data);fn(thread2,data);}
 void Instrument(void* receiver,void* thread,bool force){assert(locked&&!force&&receiver==&runtime.instrumentation);events.push_back(thread==thread1?"instrument1":"instrument2");}
 uintptr_t ReturnPc(const void* visitor){return Active(static_cast<const stack_abi::Visitor*>(visitor)).return_pc;}
-uint8_t* FlagAddr(const void* visitor){return &Active(static_cast<const stack_abi::Visitor*>(visitor)).debug;}
+uint8_t* FlagAddr(const void* visitor){auto& f=Active(static_cast<const stack_abi::Visitor*>(visitor));assert(f.info_ok&&f.frame_safe&&(f.info_flags&stack_abi::kHasShouldDeoptimizeFlag));++flag_calls;return &f.debug;}
 void CheckSelectiveTree(){
  auto find=selective_abi::FindFrame;selective_abi::MapNode root{},left{},right{};
  root.key=7;left.key=3;right.key=11;root.base.left=&left.base;root.base.right=&right.base;
@@ -99,6 +107,8 @@ int main(){ auto profile=MatchedProfileForTest();CheckSelectiveTree();Hooks hook
  current=thread1;stacks[thread1]={{&method,pc,header}};
  size_t before=walks;original_result=true;assert(proxy(&runtime,pc)&&walks==before&&AsyncDeoptProbeHits()==0);original_result=false;assert(!proxy(&runtime,pc)&&walks==before);
  SetAsyncDeoptProbe(true);current=nullptr;assert(!proxy(&runtime,pc)&&walks==before);current=thread1;
+ original_result=true;recoverable=false;assert(!proxy(&runtime,pc));recoverable=true;assert(proxy(&runtime,pc));original_result=false;
+ recoverable=false;assert(!proxy(&runtime,pc)&&AsyncDeoptProbeHits()==0);recoverable=true;
  assert(proxy(&runtime,pc)&&AsyncDeoptProbeHits()==1);before=walks;assert(!proxy(&runtime,pc+8)&&walks==before+1&&AsyncDeoptProbeHits()==1);
  stacks[thread1][0].quick=false;assert(!proxy(&runtime,pc));stacks[thread1][0].quick=true;
  for(void* bad:{static_cast<void*>(&native),static_cast<void*>(&runtime_method),static_cast<void*>(&boot_method),static_cast<void*>(nullptr)}){stacks[thread1][0].method=bad;assert(!proxy(&runtime,pc));}stacks[thread1][0].method=&method;
@@ -115,13 +125,17 @@ int main(){ auto profile=MatchedProfileForTest();CheckSelectiveTree();Hooks hook
  stacks[thread1]={{&native,pc,header},{&method,pc,header}};assert(!proxy(&runtime,pc));
  SetAsyncDeoptProbe(false);required=true;stacks[thread1]={{&method,pc,header}};assert(proxy(&runtime,pc)&&AsyncDeoptProbeHits()==3);required=false;
  // A physical boot frame may contain an inlined app method, which selective deopt must include.
- uint32_t flagged=selective_abi::kShouldDeoptimizeMask,plain=0;
+ uint32_t flagged=0,plain=0x80000000,baseline=0,nterp_header=0,unknown_header=0;
  stacks[thread1]={{&boot_method,1,&flagged},{&method,2,&flagged,true,true,0x41},{&native,3,&flagged},{&runtime_method,4,&flagged},{&method,5,&flagged,false}};
- stacks[thread2]={{&method,6,&plain,true,false,1,77},{&method,7,nullptr,true,false,1,80}};
+ stacks[thread1].push_back({&method,8,&baseline,true,false,0x20,0,6});
+ stacks[thread2]={{&method,6,&plain,true,false,1,77,1},{&method,7,&nterp_header,true,false,1,80,0,false},
+                  {&method,9,&baseline,true,false,1,81,6,true,false},{&method,10,&unknown_header,true,false,1,82,3,false}};
  selective_abi::MapNode node{};node.key=77;node.value.force_deopt_id=123;selective_abi::MapNode right{};right.key=80;right.value.force_deopt_id=456;node.base.right=&right.base;
- selective_abi::Tree tree{&node,&node.base,2};void* tree_ptr=&tree;
+ selective_abi::MapNode unsafe{},unknown{};unsafe.key=81;unknown.key=82;right.base.right=&unsafe.base;unsafe.base.right=&unknown.base;
+ selective_abi::Tree tree{&node,&node.base,4};void* tree_ptr=&tree;
  std::memcpy(thread2+selective_abi::kThreadInstrumentationStack,&tree_ptr,sizeof(tree_ptr));std::memcpy(thread1+selective_abi::kThreadInstrumentationStack,&tree_ptr,sizeof(tree_ptr));runtime.services.thread_list=&list_marker;
- events.clear();DeoptimizeApplicationFrames();assert(!locked&&contexts_deleted==2);assert(stacks[thread1][1].debug==(0x41|selective_abi::kDebugFlag));assert(stacks[thread1][0].debug==1&&stacks[thread1][2].debug==1&&stacks[thread1][3].debug==1&&stacks[thread1][4].debug==1);assert(node.value.force_deopt_id==UINT64_MAX&&right.value.force_deopt_id==UINT64_MAX);
+ events.clear();DeoptimizeApplicationFrames();assert(!locked&&contexts_deleted==2);assert(stacks[thread1][1].debug==(0x41|selective_abi::kDebugFlag));assert(stacks[thread1][0].debug==1&&stacks[thread1][2].debug==1&&stacks[thread1][3].debug==1&&stacks[thread1][4].debug==1);assert(stacks[thread1][5].debug==(0x20|selective_abi::kDebugFlag));assert(flag_calls==2);
+ assert(node.value.force_deopt_id==UINT64_MAX&&right.value.force_deopt_id==UINT64_MAX&&unsafe.value.force_deopt_id==UINT64_MAX&&unknown.value.force_deopt_id==UINT64_MAX);
  std::vector<std::string> expected{"lock","foreach","instrument1","context","construct","walk","delete","instrument2","context","construct","walk","delete","unlock"};assert(events==expected);
- assert(original_calls>15&&code_calls==6);munmap(low,4096);
+ assert(original_calls>15&&code_calls==7&&recovery_checks>3);munmap(low,4096);
  puts("compiled-frame deopt: real ctor/vtable walk, async original priority and AOT/obsolete boundaries, inlined app flags, frame-map sentinel, lock/context lifetime passed");}

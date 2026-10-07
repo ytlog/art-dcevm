@@ -20,7 +20,6 @@ struct Frame { void* receiver; void* method; uintptr_t return_pc; bool interpret
 struct MapNode { TreeNode base; uintptr_t key; Frame value; };
 struct Tree { void* begin; TreeNode* root; size_t size; };
 inline constexpr size_t kThreadInstrumentationStack=304;
-inline constexpr uint32_t kShouldDeoptimizeMask=0x80000000;
 inline constexpr uint8_t kDebugFlag=2;
 inline Frame* FindFrame(void* raw,uintptr_t key) {
   auto* tree=static_cast<Tree*>(raw);

@@ -1,6 +1,7 @@
 #include "platform/android13/selective_deopt.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include "platform/android13/stack_access.h"
+#include "platform/android13/frame_recovery.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
@@ -26,7 +27,12 @@ struct AppVisitor final:stack_abi::Visitor {
         (Read<uint32_t>(m,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
     void* klass=root(m);
     if (!klass || !ReadHeapReference(klass,offsetof(validation_abi::ClassPrefix,class_loader))) return true;
-    if (header && (Read<uint32_t>(header,0)&selective_abi::kShouldDeoptimizeMask)) {
+    stack_abi::CodeInfo info{};
+    // The named device decoder establishes native code ownership. The carrier
+    // owns the slot even when the selected application method is an inlinee.
+    bool has_flag=ReadEvolutionCodeInfo(Read<void*>(quick_frame,0),header,pc,&info) &&
+        (info.flags&stack_abi::kHasShouldDeoptimizeFlag) && IsEvolutionFrameRecoverable(*this);
+    if (has_flag) {
       uint8_t* flag=flag_addr(this); *flag|=selective_abi::kDebugFlag;
     } else {
       auto* frame=selective_abi::FindFrame(frames,return_pc(this));

@@ -34,6 +34,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/structural_reflective.cc
     platform/android13/stack_access.cc
     platform/android13/async_deopt_hooks.cc
+    platform/android13/frame_recovery.cc
     platform/android13/pending_suspend_deopt.cc
     platform/android13/suspend_deopt_hooks.cc
     platform/android13/retired_method_registry.cc

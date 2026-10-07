@@ -9,6 +9,12 @@ struct BitRegion { void* data; size_t bit_start; size_t bit_size; };
 template<size_t Columns> struct BitTable {
   BitRegion region; uint32_t rows; uint16_t columns[Columns+1];
 };
+// Fixed first three CodeInfo flags from primary ART bf4f61e6f7ceea1a00494d543e8cc13b20dd443f.
+// Matched device oracle (2026-10-07): optimized inline=3, baseline=6.
+// No device debuggable flag is declared or inferred from this schema.
+inline constexpr uint32_t kHasInlineInfo=1;
+inline constexpr uint32_t kHasShouldDeoptimizeFlag=2;
+inline constexpr uint32_t kIsBaseline=4;
 struct CodeInfo {
   uint32_t flags, code_size, frame_size, core_mask, fp_mask, dex_regs, table_flags;
   BitTable<8> stack_maps;
