@@ -16,4 +16,7 @@ final class EvolutionCalibration {
     public int compute() { return value + 1; }
     /** 校准同包其他类访问 private 成员时的 IllegalAccessError。 */
     private int privateAccessCalibration() { return value; }
+    /** 校准 static 调用类别，不修改已校准存储。 */
+    public static int staticInvokeCalibration() { return 7; }
+    interface InvocationContract { int invoke(); }
 }

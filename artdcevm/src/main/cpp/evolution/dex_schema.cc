@@ -81,6 +81,11 @@ class Reader {
     result.descriptor = Prototype(result.proto_index);
     return result;
   }
+  bool SupportsDefaultMethods() {
+    Initialize();
+    if(std::memcmp(begin_,"cdex001\0",8)==0)return (U32(0x70)&1)!=0;
+    return std::memcmp(begin_+4,"037",3)>=0;
+  }
  private:
   void Initialize() {
     if (!begin_ || !data_) Fail("Missing DEX mapping");
@@ -292,6 +297,14 @@ bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, s
 
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
   return ReadDex(dex, output, error, true);
+}
+
+bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata& view,bool* output,std::string* error) {
+  try {
+    const bool supported=Reader(view).SupportsDefaultMethods();
+    *output=supported;error->clear();return true;
+  } catch(const std::bad_alloc&) {throw;}
+  catch(const std::exception& failure) {*error=failure.what();return false;}
 }
 
 bool ReadMappedDexMethodReference(const MappedDexMetadata& view, uint32_t index,

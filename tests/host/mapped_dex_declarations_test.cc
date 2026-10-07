@@ -140,6 +140,20 @@ int main(int argc, char** argv) {
   Put(owner_mapping,U32(compact,60)+size_t{owner_string}*4,static_cast<uint32_t>(owner_data.size()));
   owner_data.push_back(1);owner_data.push_back('I');owner_data.push_back(0);
   reject_reference({owner_mapping.data(),owner_mapping.size(),owner_data.data(),owner_data.size(),0},0);
+  // Default methods depend on the StandardDex version or CompactDex feature bit.
+  for(const char* version:{"035","037","038","039","040"}) {
+    auto dex=original;std::memcpy(dex.data()+4,version,3);bool supported=false;
+    assert(ReadMappedDexSupportsDefaultMethods({dex.data(),dex.size(),dex.data(),dex.size(),0},&supported,&error));
+    assert(supported==(std::strcmp(version,"037")>=0));
+  }
+  for(uint32_t flags:{0u,1u,2u,3u}) {
+    auto dex=compact;Put(dex,0x70,flags);bool supported=false;
+    assert(ReadMappedDexSupportsDefaultMethods({dex.data(),dex.size(),original.data(),original.size(),0},&supported,&error));
+    assert(supported==((flags&1)!=0));
+  }
+  bool unchanged=true;
+  assert(!ReadMappedDexSupportsDefaultMethods({compact.data(),0x70,original.data(),original.size(),0},&unchanged,&error));
+  assert(unchanged && !error.empty());
   // A second compact mapping can borrow exactly the same shared data region.
   auto compact2 = compact;
   Same(expected, Parse(compact2, original));
@@ -182,5 +196,5 @@ int main(int argc, char** argv) {
     if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), 0}, &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
   }
-  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, selected multiclass, external/array method references without class_defs, bounds and 10000 mutations passed\n";
+  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 10000 mutations passed\n";
 }

@@ -1,5 +1,6 @@
 #include "platform/android13/method_access.h"
 #include "platform/android13/art_method_abi.h"
+#include "platform/android13/calibration_exception.h"
 #include "platform/android13/dex_cache_method_reader.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"
@@ -59,19 +60,7 @@ struct Frame {
   explicit Frame(JNIEnv* e):env(e),valid(e->PushLocalFrame(16)==JNI_OK){}
   ~Frame(){if(valid)env->PopLocalFrame(nullptr);}
 };
-bool ExpectedError(JNIEnv* env,jclass type,jmethodID get_message,const char* kind,const char* member) {
-  auto exception=env->ExceptionOccurred();
-  if(!exception)return false;
-  env->ExceptionClear();
-  bool valid=env->IsInstanceOf(exception,type);
-  auto message=valid?static_cast<jstring>(env->CallObjectMethod(exception,get_message)):nullptr;
-  const char* text=message?env->GetStringUTFChars(message,nullptr):nullptr;
-  valid=valid && text && std::strstr(text,kind) && std::strstr(text,member);
-  if(text)env->ReleaseStringUTFChars(message,text);
-  if(message)env->DeleteLocalRef(message);
-  env->DeleteLocalRef(exception);
-  return valid && !env->ExceptionCheck();
-}
+
 }
 MethodAccessResult CheckResolvedMethodAccess(void* linker,void* cache_handle,uint32_t index,
     void* method,void* referrer,uint32_t invoke_type,std::string* error) {
@@ -126,9 +115,9 @@ bool ConfigureMethodAccess(HookEngine& hooks,const DeviceProfile& profile,JNIEnv
      Check(bound,RuntimeClassLinker(),roots.Slot(1),method_index,method,nullptr,kVirtual,error)!=MethodAccessResult::Allowed ||
      env->ExceptionCheck())return Fail(error,"Method access allowed calibration failed");
   if(Check(bound,RuntimeClassLinker(),roots.Slot(1),hidden_index,hidden,referring,1,error)!=MethodAccessResult::Exception ||
-     !ExpectedError(env,error_class,get_message,"is inaccessible to class","privateAccessCalibration"))return Fail(error,"Method member access error calibration failed");
+     !ConsumeCalibrationException(env,error_class,get_message,{"is inaccessible to class","privateAccessCalibration"}))return Fail(error,"Method member access error calibration failed");
   if(Check(bound,RuntimeClassLinker(),roots.Slot(1),method_index,method,boot,kVirtual,error)!=MethodAccessResult::Exception ||
-     !ExpectedError(env,error_class,get_message,"Illegal class access","compute"))return Fail(error,"Method class access error calibration failed");
+     !ConsumeCalibrationException(env,error_class,get_message,{"Illegal class access","compute"}))return Fail(error,"Method class access error calibration failed");
   functions=bound;ready.store(true,std::memory_order_release);return true;
 }
 }

@@ -30,13 +30,17 @@ bool ReadCache(void* cache,uint32_t index,void** output) {
   const auto count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+offsetof(Cache,num_methods)),__ATOMIC_RELAXED);
   return Lookup(reinterpret_cast<const std::atomic<Pair>*>(address),count,index,output);
 }
-bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
+bool ReadMapping(void* cache,evolution::MappedDexMetadata* output,std::string* error) {
   const auto address=Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file));
   if(!address)return Fail(error,"Explicit DexCache has no DEX file");
   const auto map=Read<validation_abi::DexMappingPrefix>(reinterpret_cast<const void*>(address),0);
-  return evolution::ReadMappedDexMethodReference(
-      {map.begin,map.size,map.data_begin,map.data_size,0},index,output,error);
+  *output={map.begin,map.size,map.data_begin,map.data_size,0};return true;
 }
+bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
+  evolution::MappedDexMetadata map{};
+  return ReadMapping(cache,&map,error) && evolution::ReadMappedDexMethodReference(map,index,output,error);
+}
+
 void* HandleValue(void* slot) {
   return reinterpret_cast<void*>(static_cast<uintptr_t>(Read<uint32_t>(slot,0)));
 }
@@ -69,6 +73,12 @@ bool ReadCachedMethodReference(void* cache,uint32_t index,evolution::MappedDexMe
   if(!ready.load(std::memory_order_acquire) || !cache || !output || !error)
     return Fail(error,"DexCache method reference reader unavailable");
   return ReadReference(cache,index,output,error);
+}
+bool ReadCachedDexSupportsDefaultMethods(void* cache,bool* output,std::string* error) {
+  if(!ready.load(std::memory_order_acquire) || !cache || !output || !error)
+    return Fail(error,"DexCache default-method declaration reader unavailable");
+  evolution::MappedDexMetadata map{};
+  return ReadMapping(cache,&map,error) && evolution::ReadMappedDexSupportsDefaultMethods(map,output,error);
 }
 MethodClassResolution ResolveCachedMethodClass(void* linker,void* cache_handle,void* loader_handle,
     uint32_t method_index,bool cached_method,HandleRootScope& output,size_t slot,std::string* error) {

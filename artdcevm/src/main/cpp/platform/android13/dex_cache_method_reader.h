@@ -15,6 +15,7 @@ bool ReadCachedMethod(void* cache,uint32_t index,void** output);
 // Same root/lock requirements. Reads the explicit cache's immutable DEX metadata,
 // never the referrer's cache. The result owns strings; allocation may throw.
 bool ReadCachedMethodReference(void* cache,uint32_t index,evolution::MappedDexMethodReference*,std::string*);
+bool ReadCachedDexSupportsDefaultMethods(void* cache,bool*,std::string*);
 enum class MethodClassResolution { Unavailable, Resolved, Exception };
 // Cache/loader are rooted Handle slots. Result is rooted before returning;
 // Exception preserves the exception installed by ART. Caller holds mutator lock.

@@ -2,3 +2,5 @@
 -keep class com.github.ytlog.artdcevm.api.DcevmRuntime { *; }
 -keep class com.github.ytlog.artdcevm.internal.EvolutionCalibration { *; }
 -keep class com.github.ytlog.artdcevm.internal.CalibrationFixture { *; }
+
+-keep class com.github.ytlog.artdcevm.internal.EvolutionCalibration$InvocationContract { *; }

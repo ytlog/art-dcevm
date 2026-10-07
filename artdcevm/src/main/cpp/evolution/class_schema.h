@@ -48,6 +48,7 @@ struct MappedDexMethodReference {
 // unchanged on format errors; bad_alloc propagates to the ART/JVMTI boundary.
 bool ReadMappedDexMethodReference(const MappedDexMetadata&, uint32_t index,
                                   MappedDexMethodReference*, std::string*);
+bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata&,bool*,std::string*);
 bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::string*);
 
 // Reads metadata only. ART must still verify method bodies, annotations and encoded values.
