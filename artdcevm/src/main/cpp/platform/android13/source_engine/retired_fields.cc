@@ -36,16 +36,13 @@
 #include "thread-current-inl.h"
 #include "runtime.h"
 #include "write_barrier.h"
-#include <atomic>
 
 namespace artdcevm::android13::source {
 namespace {
 // The managed Field keeps an opaque token across GC. Its native registry lives
 // in the enhancement library and is configured before any source transaction.
 artdcevm::android13::RetiredFieldCallbacks field_registry{};
-std::atomic<bool> final_field_addition_seen{false};
 }
-void MarkFinalFieldAddition() { final_field_addition_seen.store(true, std::memory_order_release); }
 void RetireField(art::ArtField* field) {
   field_registry.retire(field);
 }
@@ -57,7 +54,7 @@ extern "C" void ArtDcevmSourceConfigureRetiredFields(
 
 extern "C" bool ArtDcevmGuardNterpFinalFieldPut(void* thread, void* caller, uint16_t* dex_pc) {
   using namespace artdcevm::android13::source;
-  if (!final_field_addition_seen.load(std::memory_order_acquire)) return false;
+  if (!field_registry.final_guard_enabled()) return false;
   auto* method = static_cast<art::ArtMethod*>(caller);
   auto* self = static_cast<art::Thread*>(thread);
   const auto* inst = art::Instruction::At(dex_pc);
@@ -186,8 +183,8 @@ extern "C" bool ArtDcevmGuardMethodHandleFieldPut(void* target_field) {
   art::ArtField* field = static_cast<art::ArtField*>(target_field);
   art::Thread* self = art::Thread::Current();
   if (artdcevm::android13::source::GuardField(field, self)) return true;
-  if (!artdcevm::android13::source::final_field_addition_seen.load(
-          std::memory_order_acquire) || !field->IsFinal()) return false;
+  if (!artdcevm::android13::source::field_registry.final_guard_enabled() ||
+      !field->IsFinal()) return false;
   self->ThrowNewException("Ljava/lang/IllegalAccessError;",
                           "MethodHandle setter targets a final field");
   return true;

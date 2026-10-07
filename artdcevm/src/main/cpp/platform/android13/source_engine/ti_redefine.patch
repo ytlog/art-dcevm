@@ -1,104 +1,90 @@
 --- ti_redefine.cc
 +++ ti_redefine.cc
-@@ -30,6 +30,12 @@
+@@ -30,6 +30,13 @@
   */
 
  #include "ti_redefine.h"
-+#include "platform/android13/modifier_policy_abi.h"
-+#include "platform/android13/modifier_evolution_policy.h"
 +#include "retired_methods.h"
 +#include "retired_fields.h"
 +#include "hierarchy.h"
 +extern "C" bool ArtDcevmSourceCheckFields(void*);
++extern "C" bool ArtDcevmSourceCheckMethods(void*);
++extern "C" bool ArtDcevmSourceCheckClass(void*);
++extern "C" void* ArtDcevmSourceMappedJniMethod(void*);
 
  #include <algorithm>
  #include <atomic>
-@@ -975,10 +981,77 @@
-         return false;
-       }
-     } else if (new_method.GetAccessFlags() != old_iter->GetAccessFlags()) {
+@@ -924,231 +930,15 @@
+ }
+
+ bool Redefiner::ClassRedefinition::CheckMethods() {
+-  art::StackHandleScope<1> hs(driver_->self_);
+-  art::Handle<art::mirror::Class> h_klass(hs.NewHandle(GetMirrorClass()));
+-  DCHECK_EQ(dex_file_->NumClassDefs(), 1u);
+-
+-  // Make sure we have the same number of methods (or the same or greater if we're structural).
+-  art::ClassAccessor accessor(*dex_file_, dex_file_->GetClassDef(0));
+-  uint32_t num_new_method = accessor.NumMethods();
+-  uint32_t num_old_method = h_klass->GetDeclaredMethodsSlice(art::kRuntimePointerSize).size();
+-  const bool is_structural = driver_->IsStructuralRedefinition();
+-  if (!is_structural && num_new_method != num_old_method) {
+-    bool bigger = num_new_method > num_old_method;
+-    RecordFailure(bigger ? ERR(UNSUPPORTED_REDEFINITION_METHOD_ADDED)
+-                         : ERR(UNSUPPORTED_REDEFINITION_METHOD_DELETED),
+-                  StringPrintf("Total number of declared methods changed from %d to %d",
+-                               num_old_method,
+-                               num_new_method));
+-    return false;
+-  }
+-
+-  // Skip all of the fields. We should have already checked this.
+-  // Check each of the methods. NB we don't need to specifically check for removals since the 2 dex
+-  // files have the same number of methods, which means there must be an equal amount of additions
+-  // and removals. We should have already checked the fields.
+-  const art::DexFile& old_dex_file = h_klass->GetDexFile();
+-  art::ClassAccessor old_accessor(old_dex_file, *h_klass->GetClassDef());
+-  // We need this to check for methods going missing in structural cases.
+-  std::vector<bool> seen_old_methods(
+-      (kCheckAllMethodsSeenOnce || is_structural) ? old_accessor.NumMethods() : 0, false);
+-  const auto old_methods = old_accessor.GetMethods();
+-  for (const art::ClassAccessor::Method& new_method : accessor.GetMethods()) {
+-    // Get the data on the method we are searching for
+-    MethodNameAndSignature new_method_id(dex_file_.get(), new_method.GetIndex());
+-    const auto old_iter =
+-        std::find_if(old_methods.cbegin(), old_methods.cend(), [&](const auto& current_old_method) {
+-          MethodNameAndSignature old_method_id(&old_dex_file, current_old_method.GetIndex());
+-          return old_method_id == new_method_id;
+-        });
+-
+-    if (!new_method.IsStaticOrDirect()) {
+-      RecordHasVirtualMembers();
+-    }
+-    if (old_iter == old_methods.cend()) {
+-      if (is_structural) {
+-        RecordNewMethodAdded();
+-      } else {
+-        RecordFailure(
+-            ERR(UNSUPPORTED_REDEFINITION_METHOD_ADDED),
+-            StringPrintf("Unknown virtual method %s was added!", new_method_id.ToString().c_str()));
+-        return false;
+-      }
+-    } else if (new_method.GetAccessFlags() != old_iter->GetAccessFlags()) {
 -      RecordFailure(
 -          ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
 -          StringPrintf("method %s had different access flags", new_method_id.ToString().c_str()));
 -      return false;
-+      using artdcevm::android13::ModifierEvolutionAction;
-+      auto action = static_cast<ModifierEvolutionAction>(ArtDcevmSourceMethodModifierPolicy(
-+          old_iter->GetAccessFlags(), new_method.GetAccessFlags(),
-+          is_structural, new_method.IsStaticOrDirect()));
-+      if (action == ModifierEvolutionAction::kReject) {
-+        RecordFailure(
-+            ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
-+            StringPrintf("method %s had different access flags", new_method_id.ToString().c_str()));
-+        return false;
-+      }
-+      if (action == ModifierEvolutionAction::kCheckFinalOverride) {
-+        bool loaded_override = false;
-+        art::ClassFuncVisitor visitor(
-+            [&](art::ObjPtr<art::mirror::Class> subtype)
-+                REQUIRES_SHARED(art::Locks::mutator_lock_) {
-+              if (subtype == h_klass.Get() || !subtype->IsLoaded() ||
-+                  !h_klass->IsAssignableFrom(subtype) ||
-+                  !subtype->CanAccessMember(h_klass.Get(), old_iter->GetAccessFlags())) {
-+                return true;
-+              }
-+              for (art::ArtMethod& candidate : subtype->GetVirtualMethods(art::kRuntimePointerSize)) {
-+                if (candidate.GetNameView() == new_method_id.name_ &&
-+                    candidate.GetSignature() == new_method_id.sig_) {
-+                  loaded_override = true;
-+                  return false;
-+                }
-+              }
-+              return true;
-+            });
-+        driver_->runtime_->GetClassLinker()->VisitClasses(&visitor);
-+        if (loaded_override) {
-+          RecordFailure(ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
-+                        StringPrintf("Loaded subclass overrides %s", new_method_id.ToString().c_str()));
-+          return false;
-+        }
-+      }
-+      if (action == ModifierEvolutionAction::kCheckAbstractDependents) {
-+        bool dependent_concrete_subclass = false;
-+        art::ClassFuncVisitor visitor(
-+            [&](art::ObjPtr<art::mirror::Class> subtype)
-+                REQUIRES_SHARED(art::Locks::mutator_lock_) {
-+              if (subtype == h_klass.Get() || !subtype->IsLoaded() || subtype->IsAbstract() ||
-+                  !h_klass->IsAssignableFrom(subtype)) {
-+                return true;
-+              }
-+              bool has_concrete_override = false;
-+              for (auto cursor = subtype; cursor != h_klass.Get(); cursor = cursor->GetSuperClass()) {
-+                for (art::ArtMethod& candidate : cursor->GetVirtualMethods(art::kRuntimePointerSize)) {
-+                  if (candidate.GetDeclaringClass() == cursor &&
-+                      candidate.GetNameView() == new_method_id.name_ &&
-+                      candidate.GetSignature() == new_method_id.sig_) {
-+                    has_concrete_override = !candidate.IsAbstract();
-+                    break;
-+                  }
-+                }
-+                if (has_concrete_override) break;
-+              }
-+              if (!has_concrete_override) {
-+                dependent_concrete_subclass = true;
-+                return false;
-+              }
-+              return true;
-+            });
-+        driver_->runtime_->GetClassLinker()->VisitClasses(&visitor);
-+        if (dependent_concrete_subclass) {
-+          RecordFailure(ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
-+                        StringPrintf("Concrete subclass inherits %s", new_method_id.ToString().c_str()));
-+          return false;
-+        }
-+      }
-+      RecordNewMethodAdded();
-     } else if (kCheckAllMethodsSeenOnce || is_structural) {
-       // We only need this if we are structural.
-       size_t off = std::distance(old_methods.cbegin(), old_iter);
-@@ -991,81 +1064,25 @@
-   if ((kCheckAllMethodsSeenOnce || is_structural) &&
-       !std::all_of(seen_old_methods.cbegin(), seen_old_methods.cend(), [](auto x) { return x; })) {
-     DCHECK(is_structural) << "We should have hit an earlier failure before getting here!";
+-    } else if (kCheckAllMethodsSeenOnce || is_structural) {
+-      // We only need this if we are structural.
+-      size_t off = std::distance(old_methods.cbegin(), old_iter);
+-      DCHECK(!seen_old_methods[off])
+-          << "field at " << off << "("
+-          << MethodNameAndSignature(&old_dex_file, old_iter->GetIndex()) << ") already seen?";
+-      seen_old_methods[off] = true;
+-    }
+-  }
+-  if ((kCheckAllMethodsSeenOnce || is_structural) &&
+-      !std::all_of(seen_old_methods.cbegin(), seen_old_methods.cend(), [](auto x) { return x; })) {
+-    DCHECK(is_structural) << "We should have hit an earlier failure before getting here!";
 -    auto first_fail =
 -        std::find_if(seen_old_methods.cbegin(), seen_old_methods.cend(), [](auto x) { return !x; });
 -    auto off = std::distance(seen_old_methods.cbegin(), first_fail);
@@ -109,17 +95,9 @@
 -        StringPrintf("Method %s missing!",
 -                     MethodNameAndSignature(&old_dex_file, fail->GetIndex()).ToString().c_str()));
 -    return false;
-+    // The structural-change flag drives class and instance recreation even for removals.
-+    RecordNewMethodAdded();
-+  }
-+  // The in-place JVMTI stack walker cannot replace ArtMethod for a live JIT
-+  // inlined logical frame. Keep the previous Class/ArtMethod/DexCache alive by
-+  // routing source evolution through the structural transaction even when
-+  // the method declarations are unchanged. The device owns the actual swap.
-+  if (is_structural && !IsStructuralRedefinition()) {
-+    RecordNewMethodAdded();
-   }
-   return true;
+-  }
+-  return true;
++  return ArtDcevmSourceCheckMethods(this);
  }
 
  bool Redefiner::ClassRedefinition::CheckFields() {
@@ -184,79 +162,94 @@
 
  bool Redefiner::ClassRedefinition::CheckClass() {
 -  art::StackHandleScope<1> hs(driver_->self_);
-+  art::StackHandleScope<2> hs(driver_->self_);
-   // Easy check that only 1 class def is present.
-   if (dex_file_->NumClassDefs() != 1) {
-     RecordFailure(ERR(ILLEGAL_ARGUMENT),
-@@ -1089,10 +1106,37 @@
-   }
-
-   // Check the access flags didn't change.
+-  // Easy check that only 1 class def is present.
+-  if (dex_file_->NumClassDefs() != 1) {
+-    RecordFailure(ERR(ILLEGAL_ARGUMENT),
+-                  StringPrintf("Expected 1 class def in dex file but found %d",
+-                               dex_file_->NumClassDefs()));
+-    return false;
+-  }
+-  // Get the ClassDef from the new DexFile.
+-  // Since the dex file has only a single class def the index is always 0.
+-  const art::dex::ClassDef& def = dex_file_->GetClassDef(0);
+-  // Get the class as it is now.
+-  art::Handle<art::mirror::Class> current_class(hs.NewHandle(GetMirrorClass()));
+-
+-  // Check whether the class object has been successfully acquired.
+-  if (!lock_acquired_) {
+-      std::string storage;
+-      RecordFailure(ERR(INTERNAL),
+-                    StringPrintf("Failed to lock class object '%s'",
+-                                 current_class->GetDescriptor(&storage)));
+-      return false;
+-  }
+-
+-  // Check the access flags didn't change.
 -  if (def.GetJavaAccessFlags() != (current_class->GetAccessFlags() & art::kAccValidClassFlags)) {
 -    RecordFailure(ERR(UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED),
 -                  "Cannot change modifiers of class by redefinition");
 -    return false;
-+  const uint32_t old_flags = current_class->GetAccessFlags() & art::kAccValidClassFlags;
-+  const uint32_t new_flags = def.GetJavaAccessFlags();
-+  if (new_flags != old_flags) {
-+    using artdcevm::android13::ModifierEvolutionAction;
-+    auto action = static_cast<ModifierEvolutionAction>(ArtDcevmSourceClassModifierPolicy(
-+        old_flags, new_flags, driver_->IsStructuralRedefinition()));
-+    if (action == ModifierEvolutionAction::kReject) {
-+      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED),
-+                    "Cannot change modifiers of class by redefinition");
-+      return false;
-+    }
-+    if (action == ModifierEvolutionAction::kCheckLoadedSubclass) {
-+      bool loaded_subclass = false;
-+      art::ClassFuncVisitor visitor(
-+          [&](art::ObjPtr<art::mirror::Class> subtype)
-+              REQUIRES_SHARED(art::Locks::mutator_lock_) {
-+            if (subtype != current_class.Get() && subtype->IsLoaded() &&
-+                current_class->IsAssignableFrom(subtype)) {
-+              loaded_subclass = true;
-+              return false;
-+            }
-+            return true;
-+          });
-+      driver_->runtime_->GetClassLinker()->VisitClasses(&visitor);
-+      if (loaded_subclass) {
-+        RecordFailure(ERR(UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED),
-+                      "A loaded subclass prevents making this class final");
-+        return false;
-+      }
-+    }
-+    RecordNewMethodAdded();
-   }
+-  }
+-
+-  // Check class name.
+-  // These should have been checked by the dexfile verifier on load.
+-  DCHECK_NE(def.class_idx_, art::dex::TypeIndex::Invalid()) << "Invalid type index";
+-  const char* descriptor = dex_file_->StringByTypeIdx(def.class_idx_);
+-  DCHECK(descriptor != nullptr) << "Invalid dex file structure!";
+-  if (!current_class->DescriptorEquals(descriptor)) {
+-    std::string storage;
+-    RecordFailure(ERR(NAMES_DONT_MATCH),
+-                  StringPrintf("expected file to contain class called '%s' but found '%s'!",
+-                               current_class->GetDescriptor(&storage),
+-                               descriptor));
+-    return false;
+-  }
+-  if (current_class->IsObjectClass()) {
+-    if (def.superclass_idx_ != art::dex::TypeIndex::Invalid()) {
+-      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED), "Superclass added!");
+-      return false;
+-    }
+-  } else {
+-    const char* super_descriptor = dex_file_->StringByTypeIdx(def.superclass_idx_);
+-    DCHECK(descriptor != nullptr) << "Invalid dex file structure!";
+-    if (!current_class->GetSuperClass()->DescriptorEquals(super_descriptor)) {
+-      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED), "Superclass changed");
+-      return false;
+-    }
+-  }
+-  const art::dex::TypeList* interfaces = dex_file_->GetInterfacesList(def);
+-  if (interfaces == nullptr) {
+-    if (current_class->NumDirectInterfaces() != 0) {
+-      // TODO Support this for kStructural.
+-      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED), "Interfaces added");
+-      return false;
+-    }
+-  } else {
+-    DCHECK(!current_class->IsProxyClass());
+-    const art::dex::TypeList* current_interfaces = current_class->GetInterfaceTypeList();
+-    if (current_interfaces == nullptr || current_interfaces->Size() != interfaces->Size()) {
+-      // TODO Support this for kStructural.
+-      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED), "Interfaces added or removed");
+-      return false;
+-    }
+-    // The order of interfaces is (barely) meaningful so we error if it changes.
+-    const art::DexFile& orig_dex_file = current_class->GetDexFile();
+-    for (uint32_t i = 0; i < interfaces->Size(); i++) {
+-      if (strcmp(
+-            dex_file_->StringByTypeIdx(interfaces->GetTypeItem(i).type_idx_),
+-            orig_dex_file.StringByTypeIdx(current_interfaces->GetTypeItem(i).type_idx_)) != 0) {
+-        RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED),
+-                      "Interfaces changed or re-ordered");
+-        return false;
+-      }
+-    }
+-  }
+-  return true;
++  return ArtDcevmSourceCheckClass(this);
+ }
 
-   // Check class name.
-@@ -1107,6 +1151,25 @@
-                                current_class->GetDescriptor(&storage),
-                                descriptor));
-     return false;
-+  }
-+  if (driver_->IsStructuralRedefinition()) {
-+    bool changed = false;
-+    std::string error;
-+    art::MutableHandle<art::mirror::Class> parent(hs.NewHandle(current_class->GetSuperClass()));
-+    jvmtiError result = artdcevm::android13::source::CheckHierarchyAdditions(
-+        current_class, *dex_file_, &parent, &changed, &error);
-+    if (result != OK) { RecordFailure(result, error); return false; }
-+    if (!parent->DescriptorEquals(
-+            dex_file_->StringByTypeIdx(def.superclass_idx_))) {
-+      RecordFailure(ERR(INTERNAL), "Hierarchy validation selected a different superclass");
-+      return false;
-+    }
-+    if (changed && artdcevm::android13::source::HierarchyAllocationScope::Current() == nullptr) {
-+      RecordFailure(ERR(NOT_AVAILABLE), "The source transaction hook did not establish allocation context");
-+      return false;
-+    }
-+    if (changed) RecordNewMethodAdded();
-+    return true;
-   }
-   if (current_class->IsObjectClass()) {
-     if (def.superclass_idx_ != art::dex::TypeIndex::Invalid()) {
-@@ -1706,97 +1769,35 @@
+ bool Redefiner::ClassRedefinition::CheckRedefinable() {
+@@ -1706,97 +1496,35 @@
    return parents(l.Ptr()) < parents(r.Ptr());
  }
 
@@ -381,7 +374,7 @@
    return true;
  }
 
-@@ -1844,147 +1845,22 @@
+@@ -1844,147 +1572,22 @@
    return true;
  }
 
@@ -543,7 +536,7 @@
  }
 
  uint32_t Redefiner::ClassRedefinition::GetNewClassSize(art::ClassAccessor& accessor) {
-@@ -2429,91 +2305,15 @@
+@@ -2429,91 +2032,15 @@
    DISALLOW_COPY_AND_ASSIGN(ScopedSuspendAllocations);
  };
 
@@ -643,7 +636,7 @@
 
  void Redefiner::ClassRedefinition::UpdateMethods(art::ObjPtr<art::mirror::Class> mclass,
                                                   const art::dex::ClassDef& class_def) {
-@@ -2582,10 +2382,20 @@
+@@ -2582,10 +2109,20 @@
    for (auto [new_cls, old_cls] :
         art::ZipLeft(data.GetNewClasses()->Iterate(), data.GetOldClasses()->Iterate())) {
      for (art::ArtField& f : old_cls->GetSFields()) {
@@ -666,7 +659,7 @@
      }
      auto new_methods = new_cls->GetMethods(art::kRuntimePointerSize);
      for (art::ArtMethod& m : old_cls->GetMethods(art::kRuntimePointerSize)) {
-@@ -2595,11 +2405,29 @@
+@@ -2595,11 +2132,29 @@
            new_methods.begin(),
            new_methods.end(),
            [&](art::ArtMethod& cand) REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -700,7 +693,7 @@
      }
    }
  }
-@@ -2642,19 +2470,26 @@
+@@ -2642,19 +2197,26 @@
                         art::ObjPtr<art::mirror::Object> source,
                         art::ObjPtr<art::mirror::Class> source_class)
      REQUIRES(art::Locks::mutator_lock_) {
@@ -740,7 +733,7 @@
    }
  }
 
-@@ -2741,6 +2576,17 @@
+@@ -2741,6 +2303,17 @@
    // ahold of the old classes so copy them now.
    std::vector<art::ObjPtr<art::mirror::Class>> old_classes_vec(old_classes->Iterate().begin(),
                                                                 old_classes->Iterate().end());
@@ -758,7 +751,7 @@
    // Copy over the static fields of the class and all the instance fields.
    for (auto [new_class, old_class] : art::ZipLeft(new_classes->Iterate(), old_classes->Iterate())) {
      CHECK(!new_class.IsNull());
-@@ -2771,13 +2617,18 @@
+@@ -2771,13 +2344,18 @@
      // implementation here since we don't want to race with any threads doing
      // RegisterNatives.
      for (art::ArtMethod& m : old_class->GetMethods(art::kRuntimePointerSize)) {
@@ -784,7 +777,7 @@
        }
        m.SetIsObsolete();
        cl->SetEntryPointsForObsoleteMethod(&m);
-@@ -2861,6 +2712,14 @@
+@@ -2861,6 +2439,14 @@
        [&](art::ArtField* f, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(f != nullptr) << info;
          auto it = field_map.find(f);
@@ -799,7 +792,7 @@
          if (UNLIKELY(could_change_resolution_of(f, info))) {
            // Dex-cache Resolution might change. Just clear the resolved value.
            VLOG(plugin) << "Clearing resolution " << info << " for (field) " << f->PrettyField();
-@@ -2875,11 +2734,21 @@
+@@ -2875,11 +2461,27 @@
        [&](art::ArtMethod* m, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(m != nullptr) << info;
          auto it = method_map.find(m);
@@ -820,8 +813,14 @@
 +          artdcevm::android13::source::UpdateReflectedMethodModifiers(info, it->second);
            VLOG(plugin) << "Updating " << info << " object for (method) "
                        << it->second->PrettyMethod();
++          if (info.GetType() == art::ReflectionSourceType::kSourceJniMethodId) {
++            // JNI stores canonical interface methods, never a copied default
++            // whose storage belongs to a different class than DeclaringClass.
++            return static_cast<art::ArtMethod*>(
++                ArtDcevmSourceMappedJniMethod(it->second));
++          }
            return it->second;
-@@ -2923,6 +2792,11 @@
+@@ -2923,6 +2519,11 @@
      // TODO We might want to have some way to tell the JIT not to wait the kJitSamplesBatchSize
      // invokes to start compiling things again.
      jit->GetCodeCache()->InvalidateAllCompiledCode();

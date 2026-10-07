@@ -1,6 +1,7 @@
 // Compiled separately against the pinned AOSP platform headers and libc++.
 // Only JNI and plain C values cross the NDK/platform C++ ABI boundary.
 #include "ti_redefine.h"
+#include "platform/android13/jni_method_targets_abi.h"
 #include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include "hierarchy.h"
 #include "retired_fields.h"
@@ -36,12 +37,22 @@ namespace { StructuralRedefine call_device_structural_redefine = nullptr; }
 extern "C" void ArtDcevmSourceConfigureStructuralRedefine(StructuralRedefine callback) {
   call_device_structural_redefine = callback;
 }
+static_assert(sizeof(art::PointerSize) == sizeof(size_t));
+static_assert(static_cast<size_t>(art::PointerSize::k64) == 8);
+namespace {
+artdcevm::android13::JniMethodTarget jni_method_target = nullptr;
+}
+extern "C" void ArtDcevmSourceConfigureJniMethodTargets(
+    artdcevm::android13::JniMethodTarget callback) {
+  jni_method_target = callback;
+}
+extern "C" void* ArtDcevmSourceMappedJniMethod(void* replacement) {
+  auto* method = static_cast<art::ArtMethod*>(replacement);
+  return jni_method_target(method, method->IsCopied());
+}
+
 extern "C" void SourceStructuralCommit(void*, const void*)
     __asm__(ARTDCEVM_A13_SOURCE_STRUCTURAL_COMMIT);
-extern "C" bool SourceCheckMethods(void*)
-    __asm__(ARTDCEVM_A13_SOURCE_CHECK_METHODS);
-extern "C" bool SourceCheckClass(void*)
-    __asm__(ARTDCEVM_A13_SOURCE_CHECK_CLASS);
 extern "C" bool SourceCollectNewInstances(void*, void*)
     __asm__(ARTDCEVM_A13_SOURCE_COLLECT_NEW_INSTANCES);
 namespace {
@@ -337,10 +348,6 @@ extern "C" __attribute__((visibility("default"))) void ArtDcevmSourceCommit(
   SourceStructuralCommit(redefinition, data);
 }
 
-extern "C" __attribute__((visibility("default"))) bool ArtDcevmSourceCheckMethods(void* redefinition) {
-  return SourceCheckMethods(redefinition);
-}
-extern "C" bool ArtDcevmSourceCheckClass(void* redefinition) { return SourceCheckClass(redefinition); }
 
 // Test-only, current-thread switch. Production guards never change CheckJNI.
 extern "C" int ArtDcevmSourceCheckJniMode(JNIEnv* env, int requested) {

@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include "platform/android13/retired_field_registry.h"
+#include "platform/android13/final_field_guard_state.h"
 #include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
@@ -36,7 +37,8 @@ bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
     return false;
   }
   contains_unsafe = contains;
-  const RetiredFieldCallbacks callbacks{Retire, TokenFor, Resolve, Count, SlotCount};
+  const RetiredFieldCallbacks callbacks{
+      Retire, TokenFor, Resolve, Count, SlotCount, FinalFieldGuardEnabled};
   configure(&callbacks);
   return true;
 }

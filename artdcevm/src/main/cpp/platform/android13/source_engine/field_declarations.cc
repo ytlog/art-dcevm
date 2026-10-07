@@ -1,8 +1,9 @@
 #include "ti_redefine.h"
 #include "dex/dex_file.h"
-#include "retired_fields.h"
 #include "platform/android13/field_validation_abi.h"
 #include "platform/android13/redefinition_art_abi.h"
+#include "platform/android13/platform_string_abi.h"
+#include <cstring>
 
 namespace {
 artdcevm::android13::FieldValidation validate = nullptr;
@@ -35,20 +36,43 @@ struct FieldDeclarationBridge {
     static_assert(offsetof(Original, has_virtuals_) == offsetof(Fixed, has_virtuals));
     static_assert(offsetof(Original, lock_acquired_) == offsetof(Fixed, lock_acquired));
   }
-  static void Failure(void* definition, int error, const char* message) {
-    static_cast<Redefiner::ClassRedefinition*>(definition)->RecordFailure(
-        static_cast<jvmtiError>(error), message);
+  static int ProbeFailure(artdcevm::android13::FieldValidationFailure record) {
+    using Text = artdcevm::android13::BorrowedPlatformString;
+    using Fixed = artdcevm::android13::redefinition_abi::ClassRedefinition;
+    static_assert(sizeof(std::string) == sizeof(Text));
+    static_assert(alignof(std::string) == alignof(Text));
+#ifdef _LIBCPP_ABI_ALTERNATE_STRING_LAYOUT
+#error Platform error strings require the Android 13 ABI v1 string layout
+#endif
+    std::string native(64, 'x');
+    Text representation("");
+    std::memcpy(&representation, &native, sizeof(representation));
+    if ((representation.capacity_tag & 1) != 1 || representation.length != native.size() ||
+        representation.data != native.c_str()) return 1;
+    // Exercise the named device recorder against a local, empty transaction.
+    // No real class is modified; both short and long class signatures and error
+    // strings must produce the same error text and result as the source contract.
+    for (const char* signature : {"LP;", "Lartdcevm/NamedFailureLayoutCalibration;"}) {
+      std::string class_name(signature);
+      for (const char* message : {"", "short", "Long error text exceeding the platform small-string buffer"}) {
+        std::string error;
+        Redefiner driver(nullptr, nullptr, nullptr, RedefinitionType::kStructural, &error);
+        Fixed definition{};
+        definition.driver = &driver;
+        std::memcpy(definition.class_signature, &class_name, sizeof(class_name));
+        record(&definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED, message);
+        if (driver.result_ != JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED ||
+            error != std::string("Unable to perform redefinition of '") + signature + "': " + message)
+          return 2;
+      }
+    }
+    return 0;
   }
 };
 }
-extern "C" int ArtDcevmSourceProbeFieldValidationLayout() {
+extern "C" int ArtDcevmSourceProbeFieldValidationLayout(
+    artdcevm::android13::FieldValidationFailure record) {
   openjdkjvmti::FieldDeclarationBridge::Verify();
   DexFileLayoutProbe::Verify();
-  return 0;
-}
-extern "C" void ArtDcevmSourceFieldValidationFailure(void* definition, int error, const char* message) {
-  openjdkjvmti::FieldDeclarationBridge::Failure(definition, error, message);
-}
-extern "C" void ArtDcevmSourceMarkFinalFieldGuard() {
-  artdcevm::android13::source::MarkFinalFieldAddition();
+  return openjdkjvmti::FieldDeclarationBridge::ProbeFailure(record);
 }

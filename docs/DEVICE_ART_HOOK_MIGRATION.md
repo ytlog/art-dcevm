@@ -26,9 +26,13 @@
 
 当前状态：以上代理尚未完成。这个文件记录迁移边界，不表示现有源码引擎已被替换。
 
-字段校验和声明读取已移入增强库。命名 `CheckFields` Inline Hook 在演进事务内调用 `CheckEvolutionFields`，普通事务调用设备原函数。旧字段由公共 JVMTI 读取；替换 DEX 由增强库解析。事务的 `ClassRedefinition` 与 `DexFile` 前缀使用 Android 13 arm64 固定声明，以 `memcpy` 访问，不解释跨库 `std::string` 或智能指针；过渡源码编译对照每个访问偏移与大小。增强库决定删除、新增、类型、存储形式及受支持的修饰符变化，写入实例成员标记，并按名称调用设备 `RecordNewFieldAdded`。源码侧原字段遍历已删除，仅剩布局编译校验、错误记录与 final 守卫标记桥接。设备 ABI 探针尚未直接覆盖这两个私有对象布局，其他厂商仍需独立适配和验证。
+字段校验和声明读取已移入增强库。命名 `CheckFields` Inline Hook 在演进事务内调用 `CheckEvolutionFields`，普通事务调用设备原函数。旧字段由公共 JVMTI 读取，替换 DEX 由自有解析器读取。字段、方法和类校验共用固定 `ClassRedefinition` / `DexFile` 输入路径，以 `memcpy` 访问，不解释跨库 STL 对象；过渡源码编译对照访问偏移与大小。增强库决定字段演进，写入实例成员标记并按名称调用设备 `RecordNewFieldAdded`。final 旧引用守卫的启用状态也由增强库独占，源码守卫仅回调读取；旧 final 状态及标记桥接已删除。
 
-方法和类的修饰符决策由增强库 `modifier_evolution_policy.cc` 实现。源码侧方法判断链已删除，过渡适配器只传递整数和布尔值；final、abstract 变化触发的已加载子类约束仍由源码访问 ART 类型。方法声明遍历、层级校验、错误记录和结构标记尚待迁移。
+错误记录由增强库调用命名设备 `Redefiner::RecordFailure`。Android 13 平台 libc++ ABI v1 的长字符串声明在此调用期借用 NUL 结尾文本；原函数只同步读取两个 const 参数的 `c_str()`，不保留或析构借用对象。初始化校准用本地空事务核对短／长类签名、空／短／长错误消息、结果码及完整错误文本。这个校准仍依赖已匹配的目标设备私有布局，不能代替其他厂商的独立适配；源码错误函数已删除。
+
+命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。源码窄桥仍提供旧 DEX 的字节 region 与 class-def index、原 class flags、已加载子类约束及需要 Handle 保护的层级解析，必须继续迁移。
+
+结构提交对 JNI 方法 ID 的映射现在遵循 ART 的 canonical 规则：目标为 copied 方法时，增强库按命名符号调用设备 `ArtMethod::GetCanonicalMethod`；其他反射目标保留原映射。这避免 JNI ID 管理器按声明接口的数组偏移写入子类中 copied 方法的存储。回归用例显式注册全部声明方法 ID，再执行声明方法与接口默认方法的往返，防止校验读取方式改变后遗漏这条路径。
 
 Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强库 `nterp_dispatch.cc` 实现。代理按固定 DEX 35c/3rc 格式读取方法索引，通过命名设备符号检查缓存和未解析的调用；源码旧解码实现和状态已删除。过渡源码仅在初始化时提供 `ClassLinker*` 并转发启用状态回调，仍待移除该访问器。
 

@@ -98,7 +98,7 @@ subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i', str(engine / 'ti_re
 subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(engine / 'selective_deopt.patch')],
                cwd=generated, check=True, capture_output=True, text=True)
 sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_declarations.cc',
-           engine / 'modifier_policy.cc', engine / 'retired_methods.cc',
+           engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc', engine / 'retired_methods.cc',
            engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
 commands = []
 objects = []

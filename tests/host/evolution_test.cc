@@ -100,6 +100,19 @@ int main(int argc, char** argv) {
     Check(sync != metadata.methods.end() && (sync->access & 0x20), "Synchronized flag normalization");
     auto ctor = std::find_if(metadata.methods.begin(), metadata.methods.end(), [](const Member& m) { return m.name == "<init>"; });
     Check(ctor != metadata.methods.end() && ctor->access == 1, "Constructor ART flag must not appear as a Java modifier");
+    ClassSchema declarations;
+    std::string declaration_error;
+    auto metadata_bytes = Read(root + "/metadata/com/github/ytlog/artdcevm/fixture/SchemaSubject.dex");
+    Check(ReadDexDeclarations(metadata_bytes, &declarations, &declaration_error),
+          "Exact DEX declarations: " + declaration_error);
+    auto raw_sync = std::find_if(declarations.methods.begin(), declarations.methods.end(),
+        [](const Member& m) { return m.name == "synchronizedMethod"; });
+    Check(raw_sync != declarations.methods.end() && (raw_sync->access & 0x20000) &&
+          !(raw_sync->access & 0x20), "Raw declared-synchronized bit must survive validation parse");
+    auto raw_ctor = std::find_if(declarations.methods.begin(), declarations.methods.end(),
+        [](const Member& m) { return m.name == "<init>"; });
+    Check(raw_ctor != declarations.methods.end() && raw_ctor->access == 0x10001,
+          "Original constructor DEX bit must survive validation parse");
     auto storage = body; storage.fields[0].access ^= kStatic;
     auto storage_plan = Plan(body, storage); MappingInvariants(storage_plan);
     Check(storage_plan.required_features & kChangeStorage, "Static/instance change must allocate new storage");

@@ -79,6 +79,17 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefineNative(
 }
 #if !defined(ARTDCEVM_RESTRICTED_CLIENT) && !defined(ARTDCEVM_SECOND_CLIENT)
 extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_registerMethodIdsNative(
+    JNIEnv*, jclass, jclass target) {
+  if (!client_env) return -JVMTI_ERROR_INVALID_ENVIRONMENT;
+  jint count = 0;
+  jmethodID* ids = nullptr;
+  auto result = client_env->GetClassMethods(target, &count, &ids);
+  if (ids) client_env->Deallocate(reinterpret_cast<unsigned char*>(ids));
+  // Deallocating the returned array leaves ART's persistent JNI IDs registered.
+  return result == JVMTI_ERROR_NONE ? count : -result;
+}
+extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_unsafeDirectNative(
     JNIEnv* jni, jclass, jclass target, jbyteArray dex) {
   if (!client_env || !target || !dex) return JVMTI_ERROR_NULL_POINTER;

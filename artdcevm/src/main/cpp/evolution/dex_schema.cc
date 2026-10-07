@@ -29,28 +29,44 @@ bool ReadType(const std::string& s, size_t* at, bool allow_void) {
 }
 class Reader {
  public:
-  explicit Reader(const std::vector<unsigned char>& bytes) : bytes_(bytes) {}
+  explicit Reader(const std::vector<unsigned char>& bytes, bool declaration_flags = false)
+      : begin_(bytes.data()), size_(bytes.size()), data_(bytes.data()), data_length_(bytes.size()),
+        declaration_flags_(declaration_flags) {}
+  explicit Reader(const MappedDexMetadata& view)
+      : begin_(view.begin), size_(view.size), data_(view.data_begin), data_length_(view.data_size),
+        declaration_flags_(true), mapped_(true), class_def_index_(view.class_def_index) {}
   ClassSchema Read() {
+    if (!begin_ || !data_) Fail("Missing DEX mapping");
     Range(0, 0x70);
-    if (std::memcmp(bytes_.data(), "dex\n", 4) != 0 || bytes_[7] != 0)
-      Fail("Not a standard DEX file");
-    std::string version(reinterpret_cast<const char*>(bytes_.data() + 4), 3);
-    if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040")
-      Fail("Unsupported DEX version: " + version);
-    if (U32(32) != bytes_.size() || U32(36) != 0x70 || U32(40) != 0x12345678)
+    const bool compact = mapped_ && std::memcmp(begin_, "cdex001\0", 8) == 0;
+    if (!compact && (std::memcmp(begin_, "dex\n", 4) != 0 || begin_[7] != 0))
+      Fail("Not a supported DEX file");
+    const size_t header_size = compact ? 0x88 : 0x70;
+    Range(0, header_size);
+    if (!compact) {
+      std::string version(reinterpret_cast<const char*>(begin_ + 4), 3);
+      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040")
+        Fail("Unsupported DEX version: " + version);
+    }
+    if (U32(36) != header_size || U32(40) != 0x12345678 || (!mapped_ && U32(32) != size_))
       Fail("Invalid DEX size, header size or endianness");
-    uint32_t a = 1, b = 0;
-    for (size_t i = 12; i < bytes_.size(); ++i) { a = (a + bytes_[i]) % 65521; b = (b + a) % 65521; }
-    if (U32(8) != ((b << 16) | a)) Fail("DEX checksum mismatch");
-    data_size_ = U32(104); data_off_ = U32(108);
-    Range(data_off_, data_size_);
-    if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
-        static_cast<size_t>(data_off_) + data_size_ != bytes_.size()) Fail("Invalid DEX data section");
+    data_size_ = U32(104); data_off_ = compact ? 0 : U32(108);
+    if (!mapped_) {
+      uint32_t a = 1, b = 0;
+      for (size_t i = 12; i < size_; ++i) { a = (a + begin_[i]) % 65521; b = (b + a) % 65521; }
+      if (U32(8) != ((b << 16) | a)) Fail("DEX checksum mismatch");
+      Range(data_off_, data_size_);
+      if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
+          static_cast<size_t>(data_off_) + data_size_ != size_) Fail("Invalid DEX data section");
+    } else if (data_off_ > data_length_) {
+      Fail("Invalid mapped DEX data range");
+    }
+    table_start_ = header_size;
     strings_ = Table(56, 4); types_ = Table(64, 4); protos_ = Table(72, 12);
     fields_ = Table(80, 8); methods_ = Table(88, 8);
     auto classes = Table(96, 32);
-    if (classes.count != 1) Fail("Redefinition requires exactly one class definition");
-    size_t def = classes.offset;
+    if (!mapped_ && classes.count != 1) Fail("Redefinition requires exactly one class definition");
+    size_t def = Item(classes, class_def_index_);
     class_type_ = U32(def);
     ClassSchema result;
     result.descriptor = Type(class_type_);
@@ -80,27 +96,41 @@ class Reader {
   }
  private:
   struct IdTable { uint32_t offset, count, width; };
-  const std::vector<unsigned char>& bytes_;
+  const unsigned char* begin_;
+  const size_t size_;
+  const unsigned char* data_;
+  const size_t data_length_;
+  const bool declaration_flags_;
+  bool mapped_ = false;
+  uint32_t class_def_index_ = 0;
+  size_t table_start_ = 0x70;
   uint32_t data_off_ = 0, data_size_ = 0, class_type_ = 0;
   IdTable strings_{}, types_{}, protos_{}, fields_{}, methods_{};
   [[noreturn]] static void Fail(const std::string& text) { throw std::runtime_error(text); }
   void Range(size_t offset, size_t size) const {
-    if (offset > bytes_.size() || size > bytes_.size() - offset) Fail("DEX range outside file");
+    if (offset > size_ || size > size_ - offset) Fail("DEX range outside file");
   }
   void DataRange(size_t offset, size_t size) const {
-    Range(offset, size);
-    if (offset < data_off_ || offset - data_off_ > data_size_ || size > data_size_ - (offset - data_off_))
+    if (offset > data_length_ || size > data_length_ - offset || offset < data_off_ ||
+        (!mapped_ && (offset - data_off_ > data_size_ || size > data_size_ - (offset - data_off_))))
       Fail("DEX item outside data section");
   }
-  uint16_t U16(size_t off) const { Range(off, 2); return bytes_[off] | (uint16_t{bytes_[off + 1]} << 8); }
+  uint16_t U16(size_t off) const { Range(off, 2); return begin_[off] | (uint16_t{begin_[off + 1]} << 8); }
   uint32_t U32(size_t off) const {
     Range(off, 4);
-    return bytes_[off] | (uint32_t{bytes_[off + 1]} << 8) | (uint32_t{bytes_[off + 2]} << 16) | (uint32_t{bytes_[off + 3]} << 24);
+    return begin_[off] | (uint32_t{begin_[off + 1]} << 8) | (uint32_t{begin_[off + 2]} << 16) | (uint32_t{begin_[off + 3]} << 24);
+  }
+  uint16_t DataU16(size_t off) const {
+    DataRange(off, 2); return data_[off] | (uint16_t{data_[off + 1]} << 8);
+  }
+  uint32_t DataU32(size_t off) const {
+    DataRange(off, 4);
+    return data_[off] | (uint32_t{data_[off + 1]} << 8) | (uint32_t{data_[off + 2]} << 16) | (uint32_t{data_[off + 3]} << 24);
   }
   uint32_t Leb(size_t* cursor) const {
     uint32_t result = 0;
     for (unsigned i = 0; i < 5; ++i) {
-      DataRange(*cursor, 1); uint8_t byte = bytes_[(*cursor)++];
+      DataRange(*cursor, 1); uint8_t byte = data_[(*cursor)++];
       if (i == 4 && (byte & 0xf0)) Fail("Overflowing ULEB128");
       result |= uint32_t{byte & 0x7fu} << (7 * i);
       if (!(byte & 0x80)) return result;
@@ -110,7 +140,8 @@ class Reader {
   IdTable Table(size_t header_offset, uint32_t width) const {
     uint32_t count = U32(header_offset), offset = U32(header_offset + 4);
     if ((count == 0) != (offset == 0)) Fail("Inconsistent ID table size/offset");
-    if (count && (offset < 0x70 || offset % 4 || offset > data_off_ || count > (data_off_ - offset) / width))
+    if (count && (offset < table_start_ || offset % 4 ||
+        (!mapped_ && (offset > data_off_ || count > (data_off_ - offset) / width))))
       Fail("Invalid ID table range");
     Range(offset, size_t{count} * width);
     return {offset, count, width};
@@ -124,7 +155,7 @@ class Reader {
     uint32_t units = Leb(&cursor), read = 0;
     size_t start = cursor;
     for (;;) {
-      DataRange(cursor, 1); uint8_t byte = bytes_[cursor++];
+      DataRange(cursor, 1); uint8_t byte = data_[cursor++];
       if (byte == 0) break;
       ++read;
       if (byte < 0x80) continue;
@@ -132,7 +163,7 @@ class Reader {
       if (!more) Fail("Invalid modified UTF-8 lead byte");
       uint32_t scalar = byte & (more == 1 ? 0x1f : 0x0f);
       for (unsigned n = 0; n < more; ++n) {
-        DataRange(cursor, 1); uint8_t next = bytes_[cursor++];
+        DataRange(cursor, 1); uint8_t next = data_[cursor++];
         if ((next & 0xc0) != 0x80) Fail("Invalid modified UTF-8 continuation");
         scalar = (scalar << 6) | (next & 0x3f);
       }
@@ -140,7 +171,7 @@ class Reader {
         Fail("Overlong modified UTF-8 string");
     }
     if (read != units) Fail("String UTF-16 length mismatch");
-    return std::string(reinterpret_cast<const char*>(bytes_.data() + start), cursor - start - 1);
+    return std::string(reinterpret_cast<const char*>(data_ + start), cursor - start - 1);
   }
   std::string Type(uint32_t index) const {
     std::string value = String(U32(Item(types_, index)));
@@ -150,12 +181,12 @@ class Reader {
   std::vector<std::string> TypeList(uint32_t offset, bool interfaces) const {
     if (!offset) return {};
     if (offset % 4) Fail("Unaligned type list");
-    DataRange(offset, 4); uint32_t count = U32(offset);
+    DataRange(offset, 4); uint32_t count = DataU32(offset);
     DataRange(size_t{offset} + 4, size_t{count} * 2);
     std::vector<std::string> result;
     std::set<std::string> seen;
     for (uint32_t i = 0; i < count; ++i) {
-      auto value = Type(U16(size_t{offset} + 4 + size_t{i} * 2));
+      auto value = Type(DataU16(size_t{offset} + 4 + size_t{i} * 2));
       if (!IsTypeDescriptor(value, false) || (interfaces && (value.front() != 'L' || !seen.insert(value).second)))
         Fail("Invalid parameter/interface type");
       result.push_back(std::move(value));
@@ -192,17 +223,17 @@ class Reader {
       std::string name = String(U32(item + 4)), descriptor = Prototype(U16(item + 2));
       bool is_direct = (access & (kStatic | 0x0002)) || name == "<init>" || name == "<clinit>";
       if (name.empty() || direct != is_direct) Fail("Method dispatch category mismatch");
-      if (code) {
+      if (!mapped_ && code) {
         if (code % 4 || (access & (kNative | kAbstract))) Fail("Invalid method code offset/flags");
         DataRange(code, 16);
-        DataRange(size_t{code} + 16, size_t{U32(size_t{code} + 12)} * 2);
-      } else if (!(access & (kNative | kAbstract))) Fail("Concrete method has no code");
+        DataRange(size_t{code} + 16, size_t{DataU32(size_t{code} + 12)} * 2);
+      } else if (!mapped_ && !(access & (kNative | kAbstract))) Fail("Concrete method has no code");
       // Match Android 13 JVMTI GetMethodModifiers / Executable.fixMethodFlags.
       uint32_t java_access = access & ~uint32_t{0x0020};
       if (access & 0x20000) java_access |= 0x0020;
       if (access & kAbstract) java_access &= ~kNative;
       java_access &= 0xffff;
-      methods->push_back({std::move(name), std::move(descriptor), java_access, index});
+      methods->push_back({std::move(name), std::move(descriptor), declaration_flags_ ? access : java_access, index});
     }
   }
   static void Unique(const std::vector<Member>& members) {
@@ -223,9 +254,10 @@ bool IsMethodDescriptor(const std::string& value) {
   if (at >= value.size() || value[at++] != ')') return false;
   return ReadType(value, &at, true) && at == value.size();
 }
-bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
+static bool ReadDex(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error,
+                    bool declaration_flags) {
   try {
-    auto schema = Reader(dex).Read();
+    auto schema = Reader(dex, declaration_flags).Read();
     *output = std::move(schema);
     error->clear();
     return true;
@@ -237,4 +269,26 @@ bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, s
     return false;
   }
 }
+bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
+  return ReadDex(dex, output, error, false);
+}
+
+bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
+  return ReadDex(dex, output, error, true);
+}
+
+bool ReadMappedDexDeclarations(const MappedDexMetadata& view, ClassSchema* output, std::string* error) {
+  try {
+    auto schema = Reader(view).Read();
+    *output = std::move(schema);
+    error->clear();
+    return true;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
 }

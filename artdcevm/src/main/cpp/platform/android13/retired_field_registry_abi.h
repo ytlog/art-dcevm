@@ -14,6 +14,7 @@ struct RetiredFieldCallbacks {
   void* (*resolve)(uint32_t);
   size_t (*count)();
   size_t (*slot_count)();
+  bool (*final_guard_enabled)();
 };
 
 }  // namespace artdcevm::android13

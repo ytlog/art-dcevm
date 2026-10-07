@@ -16,7 +16,10 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/field_validation.h"
-#include "platform/android13/modifier_policy_binding.h"
+#include "platform/android13/redefinition_failure.h"
+#include "platform/android13/jni_method_targets.h"
+#include "platform/android13/method_validation.h"
+#include "platform/android13/class_validation.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -78,6 +81,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     return "Missing named structural redefine entrypoint or source callback";
   }
   configure_structural(CallDeviceStructuralRedefine);
+  if (!ConfigureJniMethodTargets(symbols, library, &error)) {
+    dlclose(library);
+    return error;
+  }
   using Probe = int (*)(JNIEnv*, jobject);
   auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
@@ -87,10 +94,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       dlsym(library, "ArtDcevmSourceGetJitCodeCache"));
   auto invalidate_jit = reinterpret_cast<ValidationHooks::InvalidateJit>(
       symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
-  auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
-  auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
-      !invalidate_jit || !methods || !classes) {
+      !invalidate_jit) {
     dlclose(library); return "Source engine exports are incomplete";
   }
   // The source probe may touch a reflected Field, so initialize its opaque
@@ -106,8 +111,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (code != 0 || jni->ExceptionCheck()) {
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
-  if (!ConfigureEvolutionFieldValidation(symbols, library, &error) ||
-      !ConfigureEvolutionModifierPolicy(library, &error)) {
+  if (!ConfigureRedefinitionFailures(symbols, &error) ||
+      !ConfigureEvolutionFieldValidation(symbols, library, &error) ||
+      !ConfigureEvolutionMethodValidation(symbols, library, &error) ||
+      !ConfigureEvolutionClassValidation(symbols, library, &error)) {
     dlclose(library);
     return error;
   }
@@ -123,7 +130,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallClassLoaderHooks(symbols, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
-  ValidationHooks::ConfigureSource(methods, classes, commit,
+  ValidationHooks::ConfigureSource(commit,
                                    get_jit_code_cache, invalidate_jit);
   source_redefine = redefine;
   source_standard_redefine = standard_redefine;
@@ -147,7 +154,7 @@ int RedefineSource(Redefine redefine, jvmtiEnv* env, JavaVM* vm, jint count,
     }
     roots.push_back(root);
   }
-  SourceTransactionScope transaction(env);
+  SourceTransactionScope transaction(env, jni);
   const int result = redefine(env, count, definitions);
   for (jclass root : roots) jni->DeleteGlobalRef(root);
   return result;

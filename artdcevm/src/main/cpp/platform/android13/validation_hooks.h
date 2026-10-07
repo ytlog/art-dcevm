@@ -14,10 +14,11 @@ class ValidationHooks {
   using InvalidateJit = void (*)(void*);
   bool Install(HookEngine& hooks, std::string* error);
   bool installed() const;
-  static void ConfigureSource(Check methods, Check classes, Commit commit,
+  static void ConfigureSource(Commit commit,
                               GetJitCodeCache get_jit_code_cache, InvalidateJit invalidate_jit);
   static bool InSourceTransaction();
   static jvmtiEnv* TransactionEnvironment();
+  static JNIEnv* TransactionJni();
   static uint64_t FieldCalls();
   static uint64_t MethodCalls();
   static uint64_t MappingCalls();
@@ -27,11 +28,12 @@ class ValidationHooks {
 // Only source transactions enter this scope; body/additive calls retain ART policy.
 class SourceTransactionScope {
  public:
-  explicit SourceTransactionScope(jvmtiEnv* env);
+  SourceTransactionScope(jvmtiEnv* env, JNIEnv* jni);
   ~SourceTransactionScope();
   SourceTransactionScope(const SourceTransactionScope&) = delete;
   SourceTransactionScope& operator=(const SourceTransactionScope&) = delete;
  private:
   jvmtiEnv* previous_;
+  JNIEnv* previous_jni_;
 };
 }

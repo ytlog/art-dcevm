@@ -1,5 +1,7 @@
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/field_validation.h"
+#include "platform/android13/method_validation.h"
+#include "platform/android13/class_validation.h"
 #include "platform/symbols/android13.h"
 #include "support/elf_modules.h"
 #include <atomic>
@@ -16,7 +18,7 @@ std::atomic<uint64_t> field_calls{0}, method_calls{0}, mapping_calls{0}, source_
 std::atomic<uint64_t> source_in_place_calls{0};
 bool hooks_installed = false, attempted = false;
 thread_local jvmtiEnv* source_environment = nullptr;
-ValidationHooks::Check source_methods = nullptr, source_classes = nullptr;
+thread_local JNIEnv* source_jni = nullptr;
 ValidationHooks::Commit source_commit = nullptr;
 ValidationHooks::GetJitCodeCache source_jit_code_cache = nullptr;
 ValidationHooks::InvalidateJit invalidate_jit = nullptr;
@@ -27,11 +29,11 @@ bool CheckFields(void* redef) {
 }
 bool CheckMethods(void* redef) {
   ++method_calls;
-  return ValidationHooks::InSourceTransaction() ? source_methods(redef)
+  return ValidationHooks::InSourceTransaction() ? CheckEvolutionMethods(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_methods)(redef);
 }
 bool CheckClass(void* redef) {
-  return ValidationHooks::InSourceTransaction() ? source_classes(redef)
+  return ValidationHooks::InSourceTransaction() ? CheckEvolutionClass(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_classes)(redef);
 }
 void CommitHook(void* redef, const void* iterator) {
@@ -93,22 +95,28 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
   return true;
 }
 bool ValidationHooks::installed() const { return hooks_installed; }
-void ValidationHooks::ConfigureSource(Check methods, Check classes, Commit commit,
+void ValidationHooks::ConfigureSource(Commit commit,
                                       GetJitCodeCache get_jit_code_cache,
                                       InvalidateJit invalidate) {
-  source_methods = methods; source_classes = classes; source_commit = commit;
+  source_commit = commit;
   source_jit_code_cache = get_jit_code_cache;
   invalidate_jit = invalidate;
 }
 bool ValidationHooks::InSourceTransaction() { return source_environment != nullptr; }
 jvmtiEnv* ValidationHooks::TransactionEnvironment() { return source_environment; }
+JNIEnv* ValidationHooks::TransactionJni() { return source_jni; }
 uint64_t ValidationHooks::FieldCalls() { return field_calls.load(); }
 uint64_t ValidationHooks::MethodCalls() { return method_calls.load(); }
 uint64_t ValidationHooks::MappingCalls() { return mapping_calls.load(); }
 uint64_t ValidationHooks::SourceCommitCalls() { return source_commit_calls.load(); }
 uint64_t ValidationHooks::SourceInPlaceCalls() { return source_in_place_calls.load(); }
-SourceTransactionScope::SourceTransactionScope(jvmtiEnv* env) : previous_(source_environment) {
+SourceTransactionScope::SourceTransactionScope(jvmtiEnv* env, JNIEnv* jni)
+    : previous_(source_environment), previous_jni_(source_jni) {
   source_environment = env;
+  source_jni = jni;
 }
-SourceTransactionScope::~SourceTransactionScope() { source_environment = previous_; }
+SourceTransactionScope::~SourceTransactionScope() {
+  source_environment = previous_;
+  source_jni = previous_jni_;
+}
 }

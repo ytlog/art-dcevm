@@ -2858,6 +2858,9 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                     && classMethod.getDeclaringClass() == InterfaceSubject.class && classValue == 88);
             MethodHandle classHandle = MethodHandles.lookup().findVirtual(
                     InterfaceSubject.class, "defaultValue", MethodType.methodType(int.class));
+            int registeredIds = StandardJvmtiClient.registerMethodIds(InterfaceSubject.class);
+            report.put("defaultShadowRegisteredMethodIds", registeredIds); save(report);
+            hierarchyCheck(report, "interface_default_shadow_registered_jni_method_ids", registeredIds > 0);
             before = commitCalls();
             int restored = redefine(InterfaceSubject.class, asset(
                     "hier-interface-restore/com/github/ytlog/artdcevm/fixture/InterfaceSubject.dex"));

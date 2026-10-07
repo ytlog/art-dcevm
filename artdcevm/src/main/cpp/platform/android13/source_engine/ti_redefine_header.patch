@@ -1,18 +1,22 @@
 --- ti_redefine.h
 +++ ti_redefine.h
-@@ -113,6 +113,7 @@
+@@ -113,6 +113,9 @@
                                                      jint data_size);
 
   private:
 +  friend struct FieldDeclarationBridge;
++  friend struct MethodValidationBridge;
++  friend struct ClassValidationBridge;
    class ClassRedefinition {
     public:
      ClassRedefinition(Redefiner* driver,
-@@ -272,6 +273,7 @@
+@@ -272,6 +275,9 @@
        return driver_->IsStructuralRedefinition() && (added_fields_ || added_methods_);
      }
 
     private:
 +    friend struct FieldDeclarationBridge;
++    friend struct MethodValidationBridge;
++    friend struct ClassValidationBridge;
      void UpdateClassStructurally(const RedefinitionDataIter& cur_data)
          REQUIRES(art::Locks::mutator_lock_);
