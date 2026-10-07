@@ -57,3 +57,5 @@
 - `CopyFields` 没有独立动态导出。字段删除和类型变化不能通过只 Hook `CheckFields` 来实现：设备提交仍按旧字段都存在于新布局的前提复制；必须在自有 `UpdateClassStructurally` 代理中处理字段匹配、默认值和回滚边界，并保持旧引用失效语义。
 
 设备库副本仅保存在已忽略的 `build/evidence/device-symbols/20261007/`，不作为构建输入或提交内容。
+
+同一设备另有 `UNSAFE.class.structurally_redefine_class_direct` JVMTI 扩展。隔离探针在新增字段后尝试由此删除字段，两种 Agent 装载顺序均返回 `JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`，因此该扩展不能替代自有删除事务代理；详见 `docs/VERIFICATION.md` 的直接扩展探针记录。

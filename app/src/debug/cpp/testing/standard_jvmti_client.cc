@@ -79,6 +79,38 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefineNative(
 }
 #if !defined(ARTDCEVM_RESTRICTED_CLIENT) && !defined(ARTDCEVM_SECOND_CLIENT)
 extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_unsafeDirectNative(
+    JNIEnv* jni, jclass, jclass target, jbyteArray dex) {
+  if (!client_env || !target || !dex) return JVMTI_ERROR_NULL_POINTER;
+  jint count = 0;
+  jvmtiExtensionFunctionInfo* functions = nullptr;
+  if (client_env->GetExtensionFunctions(&count, &functions) != JVMTI_ERROR_NONE)
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  using Direct = jvmtiError (*)(jvmtiEnv*, jclass, const unsigned char*, jint);
+  Direct direct = nullptr;
+  jint direct_parameters = -1;
+  for (jint i = 0; i < count; ++i) {
+    auto& f = functions[i];
+    if (std::strcmp(f.id, "com.android.art.UNSAFE.class.structurally_redefine_class_direct") == 0) {
+      direct = reinterpret_cast<Direct>(f.func);
+      direct_parameters = f.param_count;
+    }
+    client_env->Deallocate(reinterpret_cast<unsigned char*>(f.id));
+    client_env->Deallocate(reinterpret_cast<unsigned char*>(f.short_description));
+    for (jint j = 0; j < f.param_count; ++j)
+      client_env->Deallocate(reinterpret_cast<unsigned char*>(f.params[j].name));
+    client_env->Deallocate(reinterpret_cast<unsigned char*>(f.params));
+    client_env->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
+  }
+  client_env->Deallocate(reinterpret_cast<unsigned char*>(functions));
+  if (!direct) return JVMTI_ERROR_NOT_AVAILABLE;
+  if (direct_parameters != 3) return 1000 + direct_parameters;
+  jint size = jni->GetArrayLength(dex);
+  std::vector<unsigned char> bytes(size);
+  jni->GetByteArrayRegion(dex, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
+  return direct(client_env, target, bytes.data(), size);
+}
+extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiInstrumentation_enableTransform(
     JNIEnv* jni, jclass, jclass target, jbyteArray dex) {
   if (!client_env || !target || !dex) return JVMTI_ERROR_NULL_POINTER;

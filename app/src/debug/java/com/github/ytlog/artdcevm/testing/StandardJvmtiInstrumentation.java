@@ -27,6 +27,7 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
     private boolean transformCase;
     private boolean transformHierarchyCase;
     private boolean publicOnly;
+    private boolean directProbe;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
@@ -38,6 +39,8 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 arguments.getString("transformHierarchyCase", "false"));
         publicOnly = arguments != null && Boolean.parseBoolean(
                 arguments.getString("publicOnly", "false"));
+        directProbe = arguments != null && Boolean.parseBoolean(
+                arguments.getString("directProbe", "false"));
         start();
     }
 
@@ -57,6 +60,29 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 DcevmRuntime.initialize(getTargetContext());
             }
             if (!clientFirst) attachClient();
+            if (directProbe) {
+                int addResult = redefine(new Class<?>[]{Evolving.class},
+                        new byte[][]{patch("add")});
+                require(addResult == 0, "direct probe setup");
+                int directResult = StandardJvmtiClient.unsafeDirect(Evolving.class,
+                        patch("delete"));
+                boolean addedFieldPresent;
+                try {
+                    Evolving.class.getField("added");
+                    addedFieldPresent = true;
+                } catch (NoSuchFieldException expected) {
+                    addedFieldPresent = false;
+                }
+                report.put("clientFirst", clientFirst)
+                        .put("directResult", directResult)
+                        .put("postDirectCompute", instance.compute())
+                        .put("addedFieldPresent", addedFieldPresent)
+                        .put("passed", true);
+                Bundle result = new Bundle();
+                result.putString("stream", report.toString());
+                finish(-1, result);
+                return;
+            }
             if (transformHierarchyCase) {
                 NarrowSubject subject = new NarrowSubject();
                 NarrowParent oldAlias = subject;

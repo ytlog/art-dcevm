@@ -12,7 +12,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
 parser.add_argument('--public-only', action='store_true',
                     help='Check public body/additive JVMTI behavior without the source engine')
+parser.add_argument('--direct-probe', action='store_true',
+                    help='Check whether the device UNSAFE direct extension accepts deletion')
 args = parser.parse_args()
+if args.public_only and args.direct_probe:
+    parser.error('--public-only and --direct-probe are mutually exclusive')
 sdk = next(line.split('=', 1)[1] for line in (root / 'local.properties').read_text().splitlines()
            if line.startswith('sdk.dir='))
 adb = str(Path(sdk) / 'platform-tools/adb')
@@ -28,25 +32,31 @@ install = command('install', '-r', str(apk))
 install.check_returncode()
 result = {'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'serial': args.serial}
 for first in (False, True):
-    for mode in (('baseline', 'transform') if args.public_only else
+    for mode in (('baseline',) if args.direct_probe else
+                 ('baseline', 'transform') if args.public_only else
                  ('baseline', 'transform', 'transformHierarchy')):
         command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
         run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'clientFirst',
                       str(first).lower(), '-e', 'transformCase', str(mode == 'transform').lower(),
                       '-e', 'transformHierarchyCase', str(mode == 'transformHierarchy').lower(),
-                      '-e', 'publicOnly', str(args.public_only).lower(),
+                      '-e', 'publicOnly', str(args.public_only or args.direct_probe).lower(),
+                      '-e', 'directProbe', str(args.direct_probe).lower(),
                       'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation')
         name = ('clientFirst' if first else 'enhancerFirst') + (
             '' if mode == 'baseline' else mode[0].upper() + mode[1:])
         (output / (name + '.txt')).write_text(run.stdout + run.stderr)
         result[name] = (run.returncode == 0 and '"passed":true' in run.stdout and
                         (not args.public_only or '"publicOnly":true' in run.stdout) and
+                        (not args.direct_probe or ('"directResult":64' in run.stdout and
+                             '"postDirectCompute":40' in run.stdout and
+                             '"addedFieldPresent":true' in run.stdout)) and
                         ('"clientFirst":true' if first else '"clientFirst":false') in run.stdout and
                         'INSTRUMENTATION_CODE: -1' in run.stdout)
 (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))
 print(output)
-required = ('enhancerFirst', 'enhancerFirstTransform', 'clientFirst', 'clientFirstTransform')
-if not args.public_only:
+required = ('enhancerFirst', 'clientFirst') if args.direct_probe else (
+    'enhancerFirst', 'enhancerFirstTransform', 'clientFirst', 'clientFirstTransform')
+if not args.public_only and not args.direct_probe:
     required += ('enhancerFirstTransformHierarchy', 'clientFirstTransformHierarchy')
 raise SystemExit(0 if all(result[name] for name in required) else 1)
