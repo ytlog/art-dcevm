@@ -51,6 +51,8 @@ if (providers.gradleProperty('sourceEngine13').isPresent()) {
         inputs.file rootProject.file('tools/android13/build-source-engine.py')
         inputs.file rootProject.file('tools/android13/sources.lock.json')
         inputs.dir rootProject.file('app/src/main/cpp/platform/android13/source_engine')
+        // Only the opt-in, device-pinned source engine links against local ART libraries.
+        // The default APK and public JVMTI backend build without them.
         inputs.files(['libopenjdkjvmti.so', 'libart.so', 'libartbase.so', 'libdexfile.so', 'libbase.so', 'libc++.so']
                 .collect { rootProject.file('local/android13/art-libs/' + it) })
         outputs.file rootProject.file('build/art13-source/libartdcevm_source13.so')

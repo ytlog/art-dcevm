@@ -195,7 +195,7 @@ static/实例切换会使已验证字节码的旧分派假设失效。方法映�
 
 完整移植重定义事务的早期实验触发了 `Invalid allocator type`，记录在 `build/evidence/source-engine/20261004T143908Z/`。这说明基本类/线程探针无法验证完整 Heap ABI。当前实现通过复用原 ART 的分配与事务准备避免该路径；源码归档版本和 API 等级均不作为完整私有 ABI 兼容保证。
 
-构建前，需从当前目标手机的 `/apex/com.android.art/lib64/` 提取 `libart.so`、`libopenjdkjvmti.so`、`libartbase.so`、`libdexfile.so`、`libbase.so`、`libc++.so`，放在本机专用的 `local/android13/art-libs/`，作为源码引擎的链接输入。`local/` 被 Git 忽略；这些库不会被打包或替换系统库。
+只有显式启用 `-PsourceEngine13`、构建固定设备的 Android 13 源码演进模块时，才需要从目标手机的 `/apex/com.android.art/lib64/` 提取 `libart.so`、`libopenjdkjvmti.so`、`libartbase.so`、`libdexfile.so`、`libbase.so`、`libc++.so`，放在本机专用的 `local/android13/art-libs/` 作为链接输入。`local/` 被 Git 忽略；这些库不会被打包或替换系统库。普通贡献者及 GitHub 构建不需要该目录，可直接运行 `./gradlew :app:assembleDebug`；此 APK 仅包含主库，在非固定 Android 13 / arm64 构建上可选择公开 JVMTI 后端。它不包含私有源码演进模块，不能用来验收完整 DCEVM 功能。
 
 ```sh
 ./gradlew -PsourceEngine13 :app:assembleDebug
