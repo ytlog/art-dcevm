@@ -15,6 +15,8 @@
 | 事务预检、活动帧排空、选择性与挂起去优化 | 自有 StackVisitor、线程 scope、请求状态与监听器协调；命名设备原栈遍历、挂起与反优化函数。不安全的活动编译帧继续拒绝。 |
 | 初始化校准和测试诊断 | 自有校准与 debug 诊断直接调用命名设备函数和公开 JNI/JVMTI，不回调源码模块。 |
 
+活动编译帧由共享 `frame_recovery` 使用设备命名 CodeInfo/StackMap 解码检查实际 PC 的完整恢复映射；JIT 诊断通过设备缓存遍历确认物理代码归属。优化内联实验保留调试图及其 SSA/存活环境，只在显式编译范围内代理 HInliner 的入口内联策略，不临时切换 graph 或 Runtime 为非调试状态。恢复解码和 JIT 诊断不再使用上游 header 原始 mask；诊断 flag 分类及选择性去优化栈槽资格仍在核对。具体协议及未证明的未来暂停点边界见 [单库架构](SINGLE_LIBRARY_ENGINE.md#活动编译帧与诊断编译)。
+
 ## 启用条件与验证边界
 
 `DeviceProfile` 严格匹配目标设备已加载的四个库 GNU Build ID：`libart.so`、`libopenjdkjvmti.so`、`libdexfile.so`、平台 `libc++.so`。只有匹配固定 `android13-cas-arm64-release-baker-20261007` 声明集后，才读取私有对象；编译器实验另行核对 `libart-compiler.so`。未知构建不能仅凭相同 API 等级或同名符号启用私有增强。
