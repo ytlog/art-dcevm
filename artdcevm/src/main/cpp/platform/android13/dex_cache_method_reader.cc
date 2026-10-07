@@ -34,7 +34,7 @@ bool ReadMapping(void* cache,evolution::MappedDexMetadata* output,std::string* e
   const auto address=Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file));
   if(!address)return Fail(error,"Explicit DexCache has no DEX file");
   const auto map=Read<validation_abi::DexMappingPrefix>(reinterpret_cast<const void*>(address),0);
-  *output={map.begin,map.size,map.data_begin,map.data_size,0};return true;
+  return dex_mapping_abi::Normalize(33,map,0,output,error);
 }
 bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
   evolution::MappedDexMetadata map{};

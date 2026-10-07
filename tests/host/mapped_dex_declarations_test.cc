@@ -1,4 +1,5 @@
 #include "evolution/class_schema.h"
+#include "platform/dex_mapping_abi.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -7,6 +8,7 @@
 #include <iterator>
 #include <random>
 using namespace artdcevm::evolution;
+namespace dex_mapping_abi = artdcevm::dex_mapping_abi;
 namespace {
 uint32_t U32(const std::vector<unsigned char>& bytes, size_t off) {
   uint32_t value; std::memcpy(&value, bytes.data() + off, sizeof(value)); return value;
@@ -59,6 +61,34 @@ int main(int argc, char** argv) {
   ClassSchema expected; std::string error;
   assert(ReadDexDeclarations(original, &expected, &error));
   Same(expected, Parse(original, original));
+  // The source size slot changes semantics at API 35. Its zero/nonzero junk
+  // must never determine a modern file extent; legacy APIs keep their extent.
+  auto normalize = [&](int api, const dex_mapping_abi::Prefix& prefix) {
+    MappedDexMetadata view{};
+    assert(dex_mapping_abi::Normalize(api, prefix, 0, &view, &error));
+    ClassSchema value;
+    assert(ReadMappedDexDeclarations(view, &value, &error));
+    Same(expected, value);
+    return view;
+  };
+  for (int api = 30; api <= 37; ++api) {
+    dex_mapping_abi::Prefix prefix{nullptr, original.data(), original.size(), original.data(), original.size()};
+    if (api >= 35) prefix.size = 0;
+    assert(normalize(api, prefix).size == original.size());
+    if (api >= 35) { prefix.size = SIZE_MAX; assert(normalize(api, prefix).size == original.size()); }
+  }
+  auto reject_mapping = [&](int api, const dex_mapping_abi::Prefix& prefix) {
+    MappedDexMetadata unchanged{nullptr, 123, nullptr, 456, 789};
+    assert(!dex_mapping_abi::Normalize(api, prefix, 0, &unchanged, &error));
+    assert(unchanged.size == 123 && unchanged.data_size == 456 && unchanged.class_def_index == 789 && !error.empty());
+  };
+  dex_mapping_abi::Prefix prefix{nullptr, original.data(), original.size(), original.data(), original.size()};
+  reject_mapping(29, prefix); reject_mapping(38, prefix);
+  prefix.size = 0; reject_mapping(33, prefix);
+  prefix.data_size = 0x6f; reject_mapping(35, prefix);
+  prefix.data_size = original.size() - 1; reject_mapping(35, prefix);
+  prefix.data_size = SIZE_MAX; reject_mapping(35, prefix);
+
   auto sync = std::find_if(expected.methods.begin(), expected.methods.end(), [](const auto& m) { return m.name == "synchronizedMethod"; });
   assert(sync != expected.methods.end() && (sync->access & 0x20000) && !(sync->access & 0x20));
   // Live DEX checksums and code items may be transformed by ART. Old metadata
@@ -90,6 +120,11 @@ int main(int argc, char** argv) {
   for (size_t header : {size_t{56}, size_t{64}, size_t{72}, size_t{80}, size_t{88}, size_t{96}})
     if (U32(compact, header)) Put(compact, header + 4, U32(compact, header + 4) + 24);
   Same(expected, Parse(compact, original));
+  for (int api = 30; api <= 34; ++api)
+    normalize(api, {nullptr, compact.data(), compact.size(), original.data(), original.size()});
+  for (int api = 35; api <= 37; ++api)
+    reject_mapping(api, {nullptr, compact.data(), 0, original.data(), original.size()});
+
   // Method references include external owners and do not require class_defs.
   auto no_classes = compact;
   Put(no_classes, 96, 0); Put(no_classes, 100, 0);
@@ -181,6 +216,12 @@ int main(int argc, char** argv) {
   for (size_t off : {size_t{56}, size_t{64}, size_t{72}, size_t{80}, size_t{88}, size_t{96}})
     Put(first_container, off + 4, U32(container, header_offset + off + 4));
   Same(expected, Parse(first_container, first_container));
+
+  for (int api = 35; api <= 37; ++api) {
+    const auto view = container_view();
+    assert(normalize(api, {nullptr, view.begin, 0, view.data_begin, view.data_size}).size == view.size);
+    normalize(api, {nullptr, first_container.data(), SIZE_MAX, first_container.data(), first_container.size()});
+  }
   const auto valid_container = container;
   for (auto mutation : {std::pair<size_t, uint32_t>{0x70, UINT32_MAX}, {0x74, 0},
                         {32, 0x70}, {32, UINT32_MAX}, {36, 0x70}, {104, 1}, {108, 4}, {92, UINT32_MAX}}) {
@@ -262,5 +303,5 @@ int main(int argc, char** argv) {
     if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), 0}, &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
   }
-  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, DEX041 container first/later headers and shared IDs, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 20000 CompactDex/container mutations passed\n";
+  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, API30-37 mapping extents, DEX041 container first/later headers and shared IDs, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 20000 CompactDex/container mutations passed\n";
 }

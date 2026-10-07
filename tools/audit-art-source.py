@@ -164,6 +164,14 @@ def main():
             'compactDexDefaultMethodsFeatureDeclaration': re.findall(
                 r'kDefaultMethods\s*=\s*(0x[0-9a-fA-F]+|\d+)',
                 content.get('libdexfile/dex/compact_dex_file.h', '')),
+            'dexFileMappingSizeSource': ('header-file-size'
+                if 'size_t unused_size_' in content['libdexfile/dex/dex_file.h']
+                else 'stored-size'),
+            'dexFileUsesDataArrayRef': bool(re.search(
+                r'ArrayRef<const uint8_t>\s+const data_', content['libdexfile/dex/dex_file.h'])),
+            'dexFileSizeGetterBody': re.findall(
+                r'size_t Size\(\) const \{ return (header_->file_size_|size_); \}',
+                content['libdexfile/dex/dex_file.h']),
             'compactDexImplementationFile': 'libdexfile/dex/compact_dex_file.cc' if major < 17 else None,
             'compactDexDefaultMethodsReadsFeatureFlags': ('GetHeader().GetFeatureFlags()' in
                 content['libdexfile/dex/compact_dex_file.cc']) if major < 17 else None,

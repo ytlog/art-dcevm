@@ -1,6 +1,7 @@
 #pragma once
 
 #include "evolution/class_schema.h"
+#include "platform/dex_mapping_abi.h"
 #include <cstdint>
 
 namespace artdcevm::android13 {
@@ -53,14 +54,8 @@ struct DexCachePrefix {
   uint64_t dex_file;
 };
 #pragma pack(pop)
-// libdexfile/dex/dex_file.h: vptr followed by the four immutable ranges.
-struct DexMappingPrefix {
-  const void* vtable;
-  const unsigned char* begin;
-  size_t size;
-  const unsigned char* data_begin;
-  size_t data_size;
-};
+// The fixed API 33 declaration retains its historical public type name.
+using DexMappingPrefix = dex_mapping_abi::Prefix;
 static_assert(alignof(ClassPrefix) == 4);
 static_assert(offsetof(ClassPrefix, dex_cache) == 16);
 static_assert(offsetof(ClassPrefix, access_flags) == 64);
