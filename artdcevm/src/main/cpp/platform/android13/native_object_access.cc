@@ -36,6 +36,7 @@ NativeObjectAccess::NativeObjectAccess(JNIEnv* env) : self_(nullptr), supported_
 NativeObjectAccess::~NativeObjectAccess() {
   if (transitioned_) leave_runnable(self_);
 }
+void* DecodeRunnableObject(void* thread, jobject object) { return decode_object(thread, object); }
 void* NativeObjectAccess::Decode(jobject object) const {
   if (!supported_) std::abort();
   return decode_object(self_, object);

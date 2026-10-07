@@ -51,8 +51,8 @@ extern "C" uint64_t ArtDcevmSourceReadBarrierCalls() {
 #include <cstring>
 namespace { std::atomic<bool> trace_deopt{false}; }
 namespace {
-std::atomic<uint64_t> debuggable_aot_async_deopts{0};
-std::atomic<bool> probe_suspend_deopt_enabled{false};
+void (*set_async_probe)(bool) = nullptr;
+uint64_t (*async_hits)() = nullptr;
 }
 // Verify the fixed declarations while the transitional source module exists.
 namespace suspend_abi = artdcevm::android13::suspend_abi;
@@ -116,7 +116,7 @@ extern "C" int ArtDcevmSourceAotSuspendDeoptProbe(JNIEnv* env, jobject peer, job
           return true;
         }, target, nullptr, art::StackVisitor::StackWalkKind::kSkipInlinedFrames);
     if (aot_frame) {
-      probe_suspend_deopt_enabled.store(true, std::memory_order_release);
+      set_async_probe(true);
       aot_frame = ArtDcevmSourceMarkSuspendDeoptThread(target);
     }
   }
@@ -126,45 +126,15 @@ extern "C" int ArtDcevmSourceAotSuspendDeoptProbe(JNIEnv* env, jobject peer, job
 extern "C" uint64_t ArtDcevmSourceAotSuspendDeoptHits(bool reset) {
   if (reset) {
     reset_pending_suspend_deopt();
-    probe_suspend_deopt_enabled.store(false, std::memory_order_release);
+    set_async_probe(false);
   }
   return suspend_deopt_hits();
 }
-extern "C" uint64_t ArtDcevmSourceDebuggableAotAsyncDeopts() {
-  return debuggable_aot_async_deopts.load(std::memory_order_relaxed);
+extern "C" void ArtDcevmSourceConfigureAsyncDeopt(void (*set_probe)(bool), uint64_t (*hits)()) {
+  set_async_probe = set_probe;
+  async_hits = hits;
 }
-extern "C" bool ArtDcevmSourceReceiverGuardRequired();
-extern "C" bool ArtDcevmSourceAllowDebuggableAotDeopt(
-    const art::Runtime* runtime, uintptr_t pc) {
-  if (!ArtDcevmSourceReceiverGuardRequired() &&
-      !probe_suspend_deopt_enabled.load(std::memory_order_acquire)) return false;
-  art::Thread* self = art::Thread::Current();
-  if (self == nullptr) return false;
-  bool safe_aot_frame = false;
-  art::StackVisitor::WalkStack(
-      [&](const art::StackVisitor* frame) REQUIRES_SHARED(art::Locks::mutator_lock_) {
-        if (frame->GetCurrentQuickFrame() == nullptr ||
-            frame->GetCurrentQuickFramePc() != pc) return true;
-        art::ArtMethod* method = frame->GetMethod();
-        if (method == nullptr || method->IsRuntimeMethod() || method->IsNative() ||
-            method->GetDeclaringClass()->GetClassLoader() == nullptr) return false;
-        const art::DexFile* dex = method->GetDexFile();
-        const art::OatDexFile* oat_dex = dex == nullptr ? nullptr : dex->GetOatDexFile();
-        const art::OatFile* oat = oat_dex == nullptr ? nullptr : oat_dex->GetOatFile();
-        if (oat == nullptr || !oat->IsDebuggable()) return false;
-        const void* code = method->GetOatMethodQuickCode(
-            runtime->GetClassLinker()->GetImagePointerSize());
-        if (code == nullptr) return false;
-        const auto* header = art::OatQuickMethodHeader::FromEntryPoint(code);
-        // The pinned device's AOT header uses a vendor layout. Compare the
-        // runtime-provided header identity; do not decode its size flags here.
-        safe_aot_frame = frame->GetCurrentOatQuickMethodHeader() == header &&
-            pc >= reinterpret_cast<uintptr_t>(code);
-        return false;
-      }, self, nullptr, art::StackVisitor::StackWalkKind::kSkipInlinedFrames);
-  if (safe_aot_frame) debuggable_aot_async_deopts.fetch_add(1, std::memory_order_relaxed);
-  return safe_aot_frame;
-}
+extern "C" uint64_t ArtDcevmSourceDebuggableAotAsyncDeopts() { return async_hits(); }
 // 0: no JIT, 1: JIT available but this Method has no code, 2: code cached.
 // This reads ART's source-declared JIT API; it does not derive an address.
 extern "C" int ArtDcevmSourceJitMethodState(JNIEnv* env, jobject executable) {
@@ -454,8 +424,10 @@ std::atomic<uint64_t> invalid_receiver_hits{0};
 std::atomic<uint64_t> invoke_receiver_checks{0};
 std::atomic<uint64_t> invoke_receiver_rejections{0};
 std::atomic<uint64_t> invoke_frame_misses{0};
-std::atomic<bool> field_probe_enabled{false};
-std::atomic<bool> receiver_guard_required{false};
+bool (*read_receiver_enabled)() = nullptr;
+void (*write_receiver_enabled)(bool) = nullptr;
+bool (*read_receiver_required)() = nullptr;
+void (*write_receiver_required)(bool) = nullptr;
 bool field_probe_force_reject = false;
 void GuardFieldReceiver(art::Thread* thread, art::Handle<art::mirror::Object> receiver,
                         art::ArtField* field) {
@@ -547,22 +519,29 @@ class FieldReadProbe final : public art::instrumentation::InstrumentationListene
 };
 FieldReadProbe field_read_probe;
 }
+extern "C" void ArtDcevmSourceConfigureReceiverState(bool (*enabled)(), void (*set_enabled)(bool),
+    bool (*required)(), void (*set_required)(bool)) {
+  read_receiver_enabled = enabled;
+  write_receiver_enabled = set_enabled;
+  read_receiver_required = required;
+  write_receiver_required = set_required;
+}
 extern "C" bool ArtDcevmSourceReceiverGuardEnabled() {
-  return field_probe_enabled.load(std::memory_order_acquire);
+  return (read_receiver_enabled != nullptr && read_receiver_enabled());
 }
 extern "C" bool ArtDcevmSourceReceiverGuardRequired() {
-  return receiver_guard_required.load(std::memory_order_acquire);
+  return (read_receiver_required != nullptr && read_receiver_required());
 }
 extern "C" void ArtDcevmSourceRequireReceiverGuard(bool required) {
-  receiver_guard_required.store(required, std::memory_order_release);
+  write_receiver_required(required);
 }
 extern "C" bool ArtDcevmSourceFieldReadProbeMode(bool enable, bool force_reject) {
   auto* self = art::Thread::Current();
   art::ScopedThreadStateChange stsc(self, art::ThreadState::kNative);
   art::ScopedSuspendAll ssa("ART DCEVM field read probe");
   auto* instrumentation = art::Runtime::Current()->GetInstrumentation();
-  if (!enable && receiver_guard_required.load(std::memory_order_acquire)) return false;
-  if (enable == field_probe_enabled.load(std::memory_order_acquire)) return true;
+  if (!enable && (read_receiver_required != nullptr && read_receiver_required())) return false;
+  if (enable == (read_receiver_enabled != nullptr && read_receiver_enabled())) return true;
   if (enable) {
     field_probe_hits.store(0, std::memory_order_relaxed);
     invalid_receiver_hits.store(0, std::memory_order_relaxed);
@@ -583,54 +562,8 @@ extern "C" bool ArtDcevmSourceFieldReadProbeMode(bool enable, bool force_reject)
     instrumentation->UndeoptimizeEverything("artdcevm-field-read-probe");
     field_probe_force_reject = false;
   }
-  field_probe_enabled.store(enable, std::memory_order_release);
+  write_receiver_enabled(enable);
   return true;
-}
-namespace {
-bool GuardJniFieldReceiver(const art::ScopedObjectAccessAlreadyRunnable& soa,
-                           jobject receiver, art::ArtField* field) {
-  if (!field_probe_enabled.load(std::memory_order_acquire) || receiver == nullptr ||
-      field == nullptr || field->IsStatic()) return false;
-  art::ObjPtr<art::mirror::Object> object(soa.Decode<art::mirror::Object>(receiver));
-  if (object == nullptr || field->GetDeclaringClass()->IsAssignableFrom(object->GetClass()))
-    return false;
-  soa.Self()->ThrowNewException("Ljava/lang/IncompatibleClassChangeError;",
-                                 "JNI field receiver has lost its declaring class");
-  return true;
-}
-bool GuardJniMethodReceiver(const art::ScopedObjectAccessAlreadyRunnable& soa,
-                            jobject receiver, art::ArtMethod* method) {
-  if (!field_probe_enabled.load(std::memory_order_acquire) || receiver == nullptr ||
-      method == nullptr || method->IsStatic()) return false;
-  art::ObjPtr<art::mirror::Object> object(soa.Decode<art::mirror::Object>(receiver));
-  if (object == nullptr || method->GetDeclaringClass()->IsAssignableFrom(object->GetClass()))
-    return false;
-  soa.Self()->ThrowNewException("Ljava/lang/IncompatibleClassChangeError;",
-                                 "JNI method receiver has lost its declaring class");
-  return true;
-}
-}
-extern "C" bool ArtDcevmGuardJniFieldReceiver(JNIEnv* env, jobject receiver, jfieldID id) {
-  art::ScopedObjectAccess soa(env);
-  return GuardJniFieldReceiver(soa, receiver, art::jni::DecodeArtField(id));
-}
-extern "C" bool ArtDcevmGuardRunnableFieldReceiver(const void* access, jobject receiver,
-                                                     jfieldID id) {
-  return GuardJniFieldReceiver(
-      *static_cast<const art::ScopedObjectAccessAlreadyRunnable*>(access), receiver,
-      art::jni::DecodeArtField(id));
-}
-extern "C" bool ArtDcevmGuardRunnableMethodReceiver(const void* access, jobject receiver,
-                                                      void* method) {
-  return GuardJniMethodReceiver(
-      *static_cast<const art::ScopedObjectAccessAlreadyRunnable*>(access), receiver,
-      static_cast<art::ArtMethod*>(method));
-}
-extern "C" bool ArtDcevmGuardRunnableMethodIdReceiver(const void* access, jobject receiver,
-                                                        jmethodID id) {
-  return GuardJniMethodReceiver(
-      *static_cast<const art::ScopedObjectAccessAlreadyRunnable*>(access), receiver,
-      art::jni::DecodeArtMethod(id));
 }
 extern "C" uint64_t ArtDcevmSourceFieldReadProbeHits() {
   return field_probe_hits.load(std::memory_order_relaxed);

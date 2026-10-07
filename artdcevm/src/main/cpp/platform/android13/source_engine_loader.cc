@@ -11,6 +11,12 @@
 #include "platform/android13/class_loader_hooks.h"
 #include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/async_deopt_hooks.h"
+#include "platform/android13/member_access_guards.h"
+#include "platform/android13/structural_member_mapping.h"
+#include "platform/android13/structural_reflective.h"
+#include "platform/android13/selective_deopt.h"
+#include "platform/android13/structural_commit.h"
+#include "platform/android13/hierarchy_allocation.h"
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
@@ -100,7 +106,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
   auto standard_redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefineStandard"));
-  auto commit = reinterpret_cast<ValidationHooks::Commit>(dlsym(library, "ArtDcevmSourceCommit"));
+  auto commit = CommitEvolutionStructurally;
   auto invalidate_jit = reinterpret_cast<ValidationHooks::InvalidateJit>(
       symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
   if (!probe || !redefine || !standard_redefine || !commit ||
@@ -129,6 +135,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       !ConfigureNativeObjectAccess(symbols, library, jni, calibration, &error) ||
       !CalibrateJniIdDecode(library, jni, calibration, &error) ||
       !ConfigureMemberDecode(symbols, library, jni, calibration, &error) ||
+      !ConfigureMemberAccessGuards(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionMethodValidation(symbols, library, &error) ||
       !ConfigureEvolutionClassValidation(symbols, library, &error)) {
     dlclose(library);
@@ -147,12 +154,16 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
   if (!ConfigureStructuralMethodUpdates(symbols, library, &error)) return error;
+  if (!ConfigureStructuralMemberMappings(symbols, library, &error)) return error;
+  if (!ConfigureStructuralReflectiveTargets(symbols, library, &error)) return error;
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   if (!InstallHierarchyResolutionHooks(symbols, library, &error)) return error;
   if (!InstallClassLoaderHooks(symbols, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
+  if (!ConfigureSelectiveDeopt(symbols, library, &error)) return error;
+  if (!ConfigureStructuralCommit(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
   ValidationHooks::ConfigureSource(commit,
                                    RuntimeJitCodeCache, invalidate_jit);
@@ -505,9 +516,7 @@ Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_co
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_hierarchyDiagnostics(JNIEnv*, jclass, jint index) {
   if (!artdcevm::android13::source_library) return 0;
-  using Fn = uint64_t (*)(int);
-  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceHierarchyDiagnostics"));
-  return fn ? static_cast<jlong>(fn(index)) : 0;
+  return static_cast<jlong>(artdcevm::android13::HierarchyDiagnostics(index));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

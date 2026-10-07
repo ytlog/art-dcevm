@@ -6,6 +6,8 @@
 namespace artdcevm::android13 {
 bool ConfigureNativeObjectAccess(HookEngine& hooks, void* implementation, JNIEnv* env,
                                  jobject calibration, std::string* error);
+// The current thread is already Runnable and holds the mutator lock.
+void* DecodeRunnableObject(void* thread, jobject object);
 // JNI native and already-runnable entrypoints only. Unsupported states are
 // detected before any transition, so callers can retain their original scope.
 class NativeObjectAccess {

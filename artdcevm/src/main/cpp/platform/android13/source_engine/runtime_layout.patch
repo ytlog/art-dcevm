@@ -1,9 +1,11 @@
 --- runtime.h
 +++ runtime.h
-@@ -1490,5 +1490,6 @@
+@@ -1489,6 +1489,8 @@
+
    // Note: See comments on GetFaultMessage.
    friend std::string GetFaultMessageForAbortLogging();
 +  friend struct RuntimeLayoutProbe;
++  friend struct SelectiveLayoutProbe;
    friend class Dex2oatImageTest;
    friend class ScopedThreadPoolUsage;
    friend class OatFileAssistantTest;

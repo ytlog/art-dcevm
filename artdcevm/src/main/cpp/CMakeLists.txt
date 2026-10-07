@@ -13,6 +13,14 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/hierarchy_resolution_hooks.cc
     platform/android13/class_loader_hooks.cc
     platform/android13/instance_allocation_hooks.cc
+    platform/android13/object_replacement_map.cc
+    platform/android13/structural_commit.cc
+    platform/android13/selective_deopt.cc
+    platform/android13/member_access_guards.cc
+    platform/android13/hierarchy_allocation.cc
+    platform/android13/structural_member_mapping.cc
+    platform/android13/structural_reflective.cc
+    platform/android13/stack_access.cc
     platform/android13/async_deopt_hooks.cc
     platform/android13/pending_suspend_deopt.cc
     platform/android13/suspend_deopt_hooks.cc

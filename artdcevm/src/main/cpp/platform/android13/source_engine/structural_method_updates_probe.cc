@@ -2,9 +2,30 @@
 #include "mirror/class-inl.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/android13/jni_method_targets_abi.h"
+#include "scoped_thread_state_change-inl.h"
 #include <cstring>
+#include <initializer_list>
 namespace {
 template<class T> T Read(void* base,size_t offset) { T value; std::memcpy(&value,static_cast<unsigned char*>(base)+offset,sizeof(value)); return value; }
+}
+extern "C" bool ArtDcevmSourceProbeJniMethodTargets(
+    artdcevm::android13::JniMethodTarget canonicalize) {
+  static_assert(sizeof(art::PointerSize)==sizeof(size_t));
+  static_assert(static_cast<size_t>(art::PointerSize::k64)==8);
+  static_assert(art::ArtMethod::AccessFlagsOffset().Int32Value()==
+      offsetof(artdcevm::android13::art_method_abi::ArtMethod,access_flags));
+  static_assert(art::kAccCopied==0x1000000 && art::kAccIntrinsic==0x80000000);
+  if (!canonicalize || art::kIsDebugBuild) return false;
+  art::ScopedObjectAccess soa(art::Thread::Current());
+  // These unpublished native declarations only exercise passthrough flags;
+  // calling GetCanonicalMethod on a fabricated copied method would be invalid.
+  art::ArtMethod method;
+  for (uint32_t flags : {uint32_t{0}, art::kAccIntrinsic, art::kAccCopied | art::kAccIntrinsic}) {
+    method.SetAccessFlags(flags);
+    if (method.IsCopied() || canonicalize(&method)!=&method) return false;
+  }
+  return true;
 }
 extern "C" bool ArtDcevmSourceProbeStructuralMethodUpdates(void* raw)
     REQUIRES_SHARED(art::Locks::mutator_lock_) {

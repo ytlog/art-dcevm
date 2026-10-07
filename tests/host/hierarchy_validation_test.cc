@@ -90,8 +90,10 @@ void* GetValidationClass(void*){return nodes[subject];}
 bool ReadValidationClassMetadata(void*,ValidationMetadata*){std::abort();}
 void* ReadHeapReference(void* object,size_t at,bool is_volatile){assert(!is_volatile);Index(object);return reinterpret_cast<void*>(static_cast<uintptr_t>(Read<uint32_t>(object,at)));}
 }
-extern "C" bool ArtDcevmSourceReceiverGuardEnabled(){return guard;}
-extern "C" bool ArtDcevmSourceHasHierarchyAllocationContext(){return context;}
+namespace artdcevm::android13 {
+bool ReceiverGuardEnabled(){return guard;}
+bool HasHierarchyAllocationContext(){return context;}
+}
 extern "C" void ArtDcevmSourceConfigureHierarchyState(android13::BeginHierarchyState begin,android13::EndHierarchyState end,
     android13::HierarchyStateQuery changed,android13::HierarchyStateQuery narrowed){source_begin=begin;source_end=end;source_changed=changed;source_narrowed=narrowed;}
 extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*calibrate)(void*)){return calibrate(thread_bytes);}
@@ -139,7 +141,7 @@ int main(){
   uint32_t nested=source_begin();assert(!source_changed()&&!source_narrowed());source_end(nested);assert(source_changed()&&source_narrowed());
   std::thread isolated([]{assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());auto prior=android13::BeginHierarchyTransaction();assert(prior==0);android13::EndHierarchyTransaction(prior);});isolated.join();source_end(previous);
   replacement.superclass=names[NewParent];replacement.interfaces.clear();guard=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Removing an interface requires the active receiver guard");guard=true;check(0);assert(changed);
-  context=false;check(JVMTI_ERROR_NOT_AVAILABLE,"The source transaction hook did not establish allocation context");context=true;
+  context=false;check(JVMTI_ERROR_NOT_AVAILABLE,"The device transaction hook did not establish allocation context");context=true;
   subject=Object;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"The Object root cannot evolve its hierarchy");subject=Base;
   replacement.superclass.clear();check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Missing superclass");
   assert(finds>15 && gcs>15);assert(munmap(arena,1024*1024)==0);dlclose(implementation);

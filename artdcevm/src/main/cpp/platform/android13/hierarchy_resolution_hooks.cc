@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <dlfcn.h>
+#include "platform/android13/hierarchy_allocation.h"
 #include <vector>
 #include "platform/android13/validation_hooks.h"
 #include "platform/symbols/android13.h"
@@ -13,19 +13,12 @@ namespace {
 // The source implementation checks their sizes when compiled.
 using Verify = uint32_t (*)(void*, void*, const void*, void*, void*, void*,
                             const void*, void*, uint32_t, uint32_t, void*);
-using BeginVerify = bool (*)(void*, void*, void*);
-using EndVerify = void (*)(void*);
 using Resolve = void* (*)(void*, const char*, void*);
 using LinkerLookup = void* (*)(void*, void*, const char*, void*);
 Verify original_verify = nullptr;
-BeginVerify begin_verify = nullptr;
-EndVerify end_verify = nullptr;
 Resolve original_resolve = nullptr;
-Resolve replacement_resolve = nullptr;
 LinkerLookup original_find = nullptr;
-LinkerLookup replacement_find = nullptr;
 LinkerLookup original_lookup = nullptr;
-LinkerLookup replacement_lookup = nullptr;
 
 uint32_t VerifyProxy(void* thread, void* deps, const void* dex, void* klass,
                      void* cache, void* loader, const void* def, void* callbacks,
@@ -33,17 +26,15 @@ uint32_t VerifyProxy(void* thread, void* deps, const void* dex, void* klass,
   if (!ValidationHooks::InSourceTransaction())
     return original_verify(thread, deps, dex, klass, cache, loader, def,
                            callbacks, log_level, api, error);
-  alignas(std::max_align_t) std::byte storage[64];
-  const bool active = begin_verify(storage, klass, cache);
+  HierarchyVerificationView view(klass, cache);
   const uint32_t result = original_verify(thread, deps, dex, klass, cache,
                                           loader, def, callbacks, log_level, api, error);
-  if (active) end_verify(storage);
   return result;
 }
 
 void* ResolveProxy(void* cache, const char* descriptor, void* loader) {
   if (ValidationHooks::InSourceTransaction()) {
-    void* replacement = replacement_resolve(cache, descriptor, loader);
+    void* replacement = HierarchyVerificationView::Resolve(descriptor, loader, false);
     if (replacement) return replacement;
   }
   return original_resolve(cache, descriptor, loader);
@@ -51,7 +42,7 @@ void* ResolveProxy(void* cache, const char* descriptor, void* loader) {
 
 void* FindProxy(void* linker, void* thread, const char* descriptor, void* loader) {
   if (ValidationHooks::InSourceTransaction()) {
-    void* replacement = replacement_find(linker, thread, descriptor, loader);
+    void* replacement = HierarchyVerificationView::Resolve(descriptor, HierarchyRootPool::Get(loader), true);
     if (replacement) return replacement;
   }
   return original_find(linker, thread, descriptor, loader);
@@ -59,7 +50,7 @@ void* FindProxy(void* linker, void* thread, const char* descriptor, void* loader
 
 void* LookupProxy(void* linker, void* thread, const char* descriptor, void* loader) {
   if (ValidationHooks::InSourceTransaction()) {
-    void* replacement = replacement_lookup(linker, thread, descriptor, loader);
+    void* replacement = HierarchyVerificationView::Resolve(descriptor, loader, true);
     if (replacement) return replacement;
   }
   return original_lookup(linker, thread, descriptor, loader);
@@ -68,25 +59,7 @@ void* LookupProxy(void* linker, void* thread, const char* descriptor, void* load
 
 bool InstallHierarchyResolutionHooks(HookEngine& hooks, void* implementation,
                                      std::string* error) {
-  auto begin = reinterpret_cast<BeginVerify>(
-      dlsym(implementation, "ArtDcevmSourceBeginHierarchyVerify"));
-  auto end = reinterpret_cast<EndVerify>(
-      dlsym(implementation, "ArtDcevmSourceEndHierarchyVerify"));
-  auto resolve = reinterpret_cast<Resolve>(
-      dlsym(implementation, "ArtDcevmSourceHierarchyResolveReplacement"));
-  auto find = reinterpret_cast<LinkerLookup>(
-      dlsym(implementation, "ArtDcevmSourceHierarchyFindReplacement"));
-  auto lookup = reinterpret_cast<LinkerLookup>(
-      dlsym(implementation, "ArtDcevmSourceHierarchyLookupReplacement"));
-  if (!begin || !end || !resolve || !find || !lookup) {
-    *error = "Hierarchy resolution callbacks are incomplete";
-    return false;
-  }
-  begin_verify = begin;
-  end_verify = end;
-  replacement_resolve = resolve;
-  replacement_find = find;
-  replacement_lookup = lookup;
+  (void)implementation;  // All verifier state belongs to the enhancement.
   struct Entry { const char* name; void* proxy; void** original; };
   const Entry entries[]{
       {cas::kVerifyClass, reinterpret_cast<void*>(VerifyProxy),

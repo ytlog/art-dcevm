@@ -1,6 +1,7 @@
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_member_guard.h"
 #include "platform/android13/member_decode.h"
+#include "platform/android13/member_access_guards.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
@@ -13,10 +14,6 @@
 
 namespace artdcevm::android13 {
 namespace {
-using GuardHandle = bool (*)(void*, void*, void*);
-GuardHandle guard_handle;
-bool (*guard_receiver_method)(const void*, jobject, void*);
-bool (*guard_receiver_id)(const void*, jobject, jmethodID);
 void* original_nterp;
 void* original_deopt;
 void (*trace_deopt)(void*, void*, void*, bool, int);
@@ -73,49 +70,49 @@ void Invoke(void* method, void* thread, uint32_t* args, uint32_t size, void* res
 // ART JValue is an eight-byte union returned in x0 on this pinned arm64 ABI.
 uint64_t VirtualJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
   if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
-  if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_jvalues)(access, receiver, method, args);
 }
 uint64_t VirtualVarArgs(const void* access, jobject receiver, void* method, va_list args) {
   if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
-  if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
   return reinterpret_cast<Fn>(original_varargs)(access, receiver, method, args);
 }
 uint64_t IdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
   if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
-  if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodIdReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(original_id_jvalues)(access, receiver, method, args);
 }
 uint64_t IdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
   if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
-  if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodIdReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(original_id_varargs)(access, receiver, method, args);
 }
 uint64_t DirectJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
   if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
-  if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  if (receiver != nullptr && GuardRunnableMethodReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_direct_jvalues)(access, receiver, method, args);
 }
 uint64_t DirectVarArgs(const void* access, jobject receiver, void* method, va_list args) {
   if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
-  if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
+  if (receiver != nullptr && GuardRunnableMethodReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
   return reinterpret_cast<Fn>(original_direct_varargs)(access, receiver, method, args);
 }
 uint64_t DirectIdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
   if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
-  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  if (receiver != nullptr && GuardRunnableMethodIdReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(original_direct_id_jvalues)(access, receiver, method, args);
 }
 uint64_t DirectIdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
   if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
-  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
+  if (receiver != nullptr && GuardRunnableMethodIdReceiver(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(original_direct_id_varargs)(access, receiver, method, args);
 }
@@ -126,15 +123,15 @@ jobject Reflect(const void* access, jobject method, jobject receiver, jobject ar
 }
 using InvokeHandle = bool (*)(void*, void*, void*, void*, const void*, void*);
 bool Handle(void* thread, void* frame, void* handle, void* type, const void* args, void* result) {
-  if (guard_handle(thread, handle, result)) { ++rejected; return false; }
+  if (GuardMethodHandleTarget(thread, handle, result)) { ++rejected; return false; }
   return reinterpret_cast<InvokeHandle>(original_handle)(thread, frame, handle, type, args, result);
 }
 bool Exact(void* thread, void* frame, void* handle, void* type, const void* args, void* result) {
-  if (guard_handle(thread, handle, result)) { ++rejected; return false; }
+  if (GuardMethodHandleTarget(thread, handle, result)) { ++rejected; return false; }
   return reinterpret_cast<InvokeHandle>(original_exact)(thread, frame, handle, type, args, result);
 }
 void WithFrame(void* thread, void* handle, void* frame) {
-  if (guard_handle(thread, handle, nullptr)) { ++rejected; return; }
+  if (GuardMethodHandleTarget(thread, handle, nullptr)) { ++rejected; return; }
   using Fn = void (*)(void*, void*, void*);
   reinterpret_cast<Fn>(original_frame)(thread, handle, frame);
 }
@@ -148,7 +145,7 @@ bool CheckJniMethod(void* check, void* access, jobject receiver, jclass cls,
   // CheckJNI normally aborts on an obsolete declaring class. Convert only known
   // removed members into an ordinary pending exception; preserve all other checks.
   if (GuardRunnableMethodId(method)) { ++rejected; return false; }
-  if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return false; }
+  if (receiver != nullptr && GuardRunnableMethodIdReceiver(access, receiver, method)) { ++rejected; return false; }
   using Fn = bool (*)(void*, void*, jobject, jclass, jmethodID, int, int);
   return reinterpret_cast<Fn>(original_check_jni)(check, access, receiver, cls, method, primitive, invoke);
 }
@@ -175,12 +172,6 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
-  guard_handle = reinterpret_cast<GuardHandle>(dlsym(library, "ArtDcevmGuardMethodHandle"));
-  guard_receiver_method = reinterpret_cast<decltype(guard_receiver_method)>(dlsym(library, "ArtDcevmGuardRunnableMethodReceiver"));
-  guard_receiver_id = reinterpret_cast<decltype(guard_receiver_id)>(dlsym(library, "ArtDcevmGuardRunnableMethodIdReceiver"));
-  if (!guard_handle || !guard_receiver_method || !guard_receiver_id) {
-    *error = "Retired method guard exports are incomplete"; return false;
-  }
   trace_deopt = reinterpret_cast<decltype(trace_deopt)>(dlsym(library, "ArtDcevmSourceTraceDeopt"));
   auto configure_dispatch = reinterpret_cast<void (*)(void (*)())>(
       dlsym(library, "ArtDcevmSourceConfigureDispatchChecks"));

@@ -24,7 +24,7 @@
 3. 其他系统或厂商使用独立的符号和 ABI 声明；未验证布局或缺符号时拒绝私有增强，公开 JVMTI 路径仍可用。
 4. 只有上述条件满足后，删除 `source_engine/`、`build-source-engine.py`、`sources.lock.json`、`sourceEngine13` Gradle 分支、源码模块装载和相应的测试专用入口。不能以减少构建文件为由提前删除仍承载演进语义的实现。
 
-当前状态：以上代理尚未完成。这个文件记录迁移边界，不表示现有源码引擎已被替换。
+当前状态：校验、层级分配／验证视图、结构提交／引用修复、成员守卫及选择性去优化已由增强库拥有。事务入口协调、Instrumentation 监听器和反射 Field 更新仍承担源码行为；源码引擎尚未完全替换。下文各阶段记录以最后一节为准。
 
 字段校验和声明读取已移入增强库。命名 `CheckFields` Inline Hook 在演进事务内调用 `CheckEvolutionFields`，普通事务调用设备原函数。旧字段由公共 JVMTI 读取，替换 DEX 由自有解析器读取。字段、方法和类校验共用固定 `ClassRedefinition` / `DexFile` 输入路径，以 `memcpy` 访问，不解释跨库 STL 对象；过渡源码编译对照访问偏移与大小。增强库决定字段演进，写入实例成员标记并按名称调用设备 `RecordNewFieldAdded`。final 旧引用守卫的启用状态也由增强库独占，源码守卫仅回调读取；旧 final 状态及标记桥接已删除。
 
@@ -105,3 +105,16 @@ RuntimeAccess 按名称解析设备 Runtime::instance_，使用锁定 Android 13
 NativeObjectAccess 使用命名 artJniMethodEnd／Start 委托设备完成 Native↔Runnable 转换、checkpoint、GC flip 和锁记账，Runnable 嵌套不转换。JNI receiver 与 thread state 使用固定源码声明；原 pending exception、local segment 和 cookie 保持。被 Hook 的 Field 18 个 get／set 和 Constructor.newInstance0 在锁定注册表及设备真实 flags 中均为 FAST_NATIVE，合法反射调用在 Runnable；JNI 表入口支持 Native 与 Runnable。增强库拥有反射与方法／字段 ID 的 Native／Runnable 退休守卫，源码旧 wrapper 及 dlsym 删除。Method registry 为空时仍不解码 ID，没有引入重复状态。MethodHandle、VarHandle、receiver 与 Nterp final-field 规则仍待迁出。
 
 结构提交的旧方法处理也由增强库完整拥有：按 name／signature／static 找 replacement，保留仍为 native 的绑定，跳过声明类仍为活接口的 copied defaults，按原 relaxed fetch_or 设置 obsolete／dont-compile，并命名调用设备 SetEntryPointsForObsoleteMethod。JNI canonicalization 的 copied／intrinsic 重叠位判断也迁到增强库。source callback 不传平台 map。复制的 UpdateClass／UpdateClassInPlace／UpdateMethods／UpdateFields／FindAndAllocateObsoleteMethods 已无生产入口，与独占 obsolete visitor、mapping 和名字签名 helper 一起删除；设备原地提交行为继续委托原函数。结构引用修复／发布与回滚、层级分配／验证视图及 selective deopt 仍承担源码行为，尚不能删除源码构建或 SO。
+
+
+## 结构提交、层级分配与编译帧代理（2026-10-07）
+
+结构提交代理现由增强库拥有。增强库建立方法／字段退役映射和对象替换表，按原暂停边界复制字段、更新方法与反射／JNI 目标，调用设备命名 ReplaceReferences，随后保留旧类、失效 JIT 并清空解释器缓存。平台 const 对象表使用锁定 libc++ 节点、桶与指针 hash 声明借用，不把 NDK unordered_map 传入 ART。设备原结构事务仍负责收集、暂停和发布边界；源码复制的提交、映射和辅助更新实现已删除。
+
+层级批次使用增强库 Handle 根池，递归按父类优先分配，复用设备原分配入口。根池通过 anchor link 扩展，避免覆盖设备临时 HandleScope；解析返回后重读根槽。验证视图优先当前祖先链，再使用同 loader 的批次替换；缓存刷新只针对明确的未发布 DexCache。源码分配算法、查找视图与诊断转发删除，事务 Scope 暂时保留状态回调。
+
+MethodHandle／VarHandle、JNI 接收者和 Nterp final 写入规则迁入增强库，复用统一退役注册表、对象解码与异常路径。Runtime 监听器仍在源码，仅读取增强库拥有的 guard 状态并调用已有 guard；它是下一阶段的剩余生产行为。
+
+增强库使用固定 StackVisitor 声明及设备命名构造／WalkStack／GetMethod 调用栈遍历，保留平台析构和上下文生命周期。异步去优化代理先调用原函数，再检查应用 AOT 帧；选择性去优化使用设备 InstrumentThreadStack，按锁定 instrumentation stack 树结构定位记录，通过字节复制写入 force_deopt_id。不依据反汇编推断偏移或地址。静态与真实设备校准暂时仍编入源码模块。
+
+剩余生产行为为事务入口的预检／guard 回滚／活动帧排空／挂起去优化协调、InstrumentationListener 的事件处理与注册、mirror::Field::VisitTarget 的反射对象更新。其后还须迁移测试和校准支持，删除源码编译、Gradle property、独立 SO 与装载分支；当前通过回归不代表完整迁移目标已经完成。

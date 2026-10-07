@@ -8,9 +8,9 @@
 namespace artdcevm::android13 {
 namespace {
 FieldCopyAccess access{};
-void Copy(bool is_static, void* target, void* target_class, void* source, void* source_class) {
-  CopyAndClearEvolutionFields(access, is_static, target, target_class, source, source_class);
 }
+void CopyEvolutionFields(bool is_static, void* target, void* target_class, void* source, void* source_class) {
+  CopyAndClearEvolutionFields(access, is_static, target, target_class, source, source_class);
 }
 bool ConfigureEvolutionFieldCopy(HookEngine& hooks, void* implementation, JNIEnv* jni,
     jobject calibration, std::string* error) {
@@ -22,9 +22,7 @@ bool ConfigureEvolutionFieldCopy(HookEngine& hooks, void* implementation, JNIEnv
       dlsym(implementation, "ArtDcevmSourceProbeFieldCopyMetadata"));
   auto storage = reinterpret_cast<ProbeStorage>(
       dlsym(implementation, "ArtDcevmSourceProbeFieldCopyStorage"));
-  auto configure = reinterpret_cast<ConfigureFieldCopy>(
-      dlsym(implementation, "ArtDcevmSourceConfigureFieldCopy"));
-  if (!layout || !metadata || !storage || !configure) {
+  if (!layout || !metadata || !storage) {
     *error = "Missing field-copy source declaration calibration";
     return false;
   }
@@ -41,7 +39,6 @@ bool ConfigureEvolutionFieldCopy(HookEngine& hooks, void* implementation, JNIEnv
     *error = "Field-copy declaration calibration failed at step " + std::to_string(code);
     return false;
   }
-  configure(Copy);
   return true;
 }
 }

@@ -1,0 +1,37 @@
+#include "platform/android13/stack_access.h"
+#include <cstring>
+#include <dlfcn.h>
+namespace artdcevm::android13 {
+namespace {
+using Construct = void (*)(void*,void*,void*,stack_abi::WalkKind,bool);
+Construct construct;
+void (*walk)(void*,bool);
+void* (*method)(const void*);
+}
+namespace stack_abi {
+Visitor::Visitor(void* t,void* c,WalkKind k) {
+  // Device constructor initializes the complete POD cache. Its base vptr is
+  // restored to our declaration before the derived constructor installs its vptr.
+  void* own_vptr; std::memcpy(&own_vptr,reinterpret_cast<unsigned char*>(this),sizeof(own_vptr));
+  construct(this,t,c,k,true);
+  std::memcpy(reinterpret_cast<unsigned char*>(this),&own_vptr,sizeof(own_vptr));
+}
+void Visitor::Walk(bool transitions) { walk(this,transitions); }
+void* Visitor::Method() const { return method(this); }
+}
+bool ConfigureStackAccess(HookEngine& hooks,void* source,std::string* error) {
+  auto c=reinterpret_cast<Construct>(hooks.FindSymbol("libart.so","_ZN3art12StackVisitorC2EPNS_6ThreadEPNS_7ContextENS0_13StackWalkKindEb"));
+  auto w=reinterpret_cast<void (*)(void*,bool)>(hooks.FindSymbol("libart.so","_ZN3art12StackVisitor9WalkStackILNS0_16CountTransitionsE0EEEvb"));
+  auto m=reinterpret_cast<void* (*)(const void*)>(hooks.FindSymbol("libart.so","_ZNK3art12StackVisitor9GetMethodEv"));
+  using Probe=bool (*)(void (*)(void*));
+  auto probe=reinterpret_cast<Probe>(dlsym(source,"ArtDcevmSourceProbeStackAccess"));
+  if (!c || !w || !m || !probe) { *error="Missing named stack traversal or fixed declaration probe"; return false; }
+  construct=c; walk=w; method=m;
+  auto test=+[](void* self) { struct Test final:stack_abi::Visitor {
+    explicit Test(void* thread):Visitor(thread,nullptr,stack_abi::WalkKind::kSkipInlined) {}
+    bool VisitFrame() override { (void)Method(); return true; }
+  }; Test visitor(self); visitor.Walk(); };
+  if (!probe(test)) { *error="Fixed stack declaration calibration failed"; return false; }
+  return true;
+}
+}

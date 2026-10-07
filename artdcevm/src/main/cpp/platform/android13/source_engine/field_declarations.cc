@@ -4,6 +4,7 @@
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/platform_string_abi.h"
 #include <cstring>
+#include <new>
 
 namespace {
 artdcevm::android13::FieldValidation validate = nullptr;
@@ -56,7 +57,11 @@ struct FieldDeclarationBridge {
       std::string class_name(signature);
       for (const char* message : {"", "short", "Long error text exceeding the platform small-string buffer"}) {
         std::string error;
-        Redefiner driver(nullptr, nullptr, nullptr, RedefinitionType::kStructural, &error);
+        // This empty calibration driver owns no redefinitions or native memory.
+        // Do not instantiate the deleted copied ClassRedefinition destructor.
+        alignas(Redefiner) unsigned char driver_storage[sizeof(Redefiner)];
+        auto& driver = *new (driver_storage) Redefiner(
+            nullptr, nullptr, nullptr, RedefinitionType::kStructural, &error);
         Fixed definition{};
         definition.driver = &driver;
         std::memcpy(definition.class_signature, &class_name, sizeof(class_name));

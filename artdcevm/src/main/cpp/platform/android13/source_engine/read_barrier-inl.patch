@@ -3,7 +3,7 @@
 @@ -248,8 +248,11 @@
    }
  }
- 
+
 +// The device ART owns Heap/collector layout and the GC slow path. Calling its
 +// exported C entrypoint preserves the read barrier without embedding Heap ABI.
 +extern "C" mirror::Object* ArtDcevmSourceReadBarrierMark(mirror::Object* obj);
@@ -11,5 +11,5 @@
 -  return Runtime::Current()->GetHeap()->ConcurrentCopyingCollector()->MarkFromReadBarrier(obj);
 +  return ArtDcevmSourceReadBarrierMark(obj);
  }
- 
+
  inline bool ReadBarrier::IsGray(mirror::Object* obj, uintptr_t* fake_address_dependency) {

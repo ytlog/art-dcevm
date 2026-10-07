@@ -1,7 +1,6 @@
 // Compiled separately against the pinned AOSP platform headers and libc++.
 // Only JNI and plain C values cross the NDK/platform C++ ABI boundary.
 #include "ti_redefine.h"
-#include "platform/android13/jni_method_targets_abi.h"
 #include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include "hierarchy.h"
 #include "retired_fields.h"
@@ -39,27 +38,7 @@ extern "C" void ArtDcevmSourceConfigureStructuralRedefine(StructuralRedefine cal
 }
 static_assert(sizeof(art::PointerSize) == sizeof(size_t));
 static_assert(static_cast<size_t>(art::PointerSize::k64) == 8);
-namespace {
-artdcevm::android13::JniMethodTarget jni_method_target = nullptr;
-}
-extern "C" void ArtDcevmSourceConfigureJniMethodTargets(
-    artdcevm::android13::JniMethodTarget callback) {
-  jni_method_target = callback;
-}
-extern "C" void* ArtDcevmSourceMappedJniMethod(void* replacement) {
-  return jni_method_target(replacement);
-}
 
-namespace { void (*update_structural_methods)(void*, void*) = nullptr; }
-extern "C" void ArtDcevmSourceConfigureStructuralMethodUpdates(void (*callback)(void*, void*)) {
-  update_structural_methods = callback;
-}
-extern "C" void ArtDcevmSourceUpdateStructuralMethods(void* old_class, void* new_class) {
-  update_structural_methods(old_class, new_class);
-}
-
-extern "C" void SourceStructuralCommit(void*, const void*)
-    __asm__(ARTDCEVM_A13_SOURCE_STRUCTURAL_COMMIT);
 namespace {
 std::atomic<uint64_t> guard_precommit_activations{0};
 std::atomic<uint64_t> guard_failed_rollbacks{0};
@@ -296,7 +275,7 @@ jvmtiError RedefineSourceTransaction(jvmtiEnv* env, jint count,
   if (needs_receiver_guard && !already_guarded)
     guard_precommit_activations.fetch_add(1, std::memory_order_relaxed);
   // Let the device ART own allocation, Heap access, suspension and transaction setup.
-  // The loader routes only the structural commit through ArtDcevmSourceCommit.
+  // The enhancement owns the structural commit proxy.
   // Drain active app compiled frames at their own suspend entrypoints before
   // ART starts mutation. Unsupported or non-cooperating frames reject the
   // transaction while all old class definitions are still intact.
@@ -327,12 +306,6 @@ extern "C" __attribute__((visibility("default"))) jvmtiError ArtDcevmSourceRedef
     jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   return RedefineSourceTransaction(env, count, definitions, true);
 }
-
-extern "C" __attribute__((visibility("default"))) void ArtDcevmSourceCommit(
-    void* redefinition, const void* data) {
-  SourceStructuralCommit(redefinition, data);
-}
-
 
 // Test-only, current-thread switch. Production guards never change CheckJNI.
 extern "C" int ArtDcevmSourceCheckJniMode(JNIEnv* env, int requested) {

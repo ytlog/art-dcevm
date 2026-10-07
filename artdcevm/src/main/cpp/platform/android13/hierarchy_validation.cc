@@ -1,4 +1,6 @@
 #include "platform/android13/hierarchy_validation.h"
+#include "platform/android13/hierarchy_allocation.h"
+#include "platform/android13/member_access_guards.h"
 #include "platform/android13/hierarchy_validation_abi.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/heap_reference.h"
@@ -16,8 +18,6 @@ thread_local uint32_t state=0;
 constexpr uint32_t kChanged=1,kNarrowed=2;
 using FindClass=uintptr_t(*)(void*,void*,const char*,void*);
 FindClass find_class=nullptr;
-bool (*receiver_guard)()=nullptr;
-bool (*allocation_context)()=nullptr;
 using Class=validation_abi::ClassPrefix;
 template<class T> T Read(void* object,size_t offset) { T value;std::memcpy(&value,static_cast<unsigned char*>(object)+offset,sizeof(value));return value; }
 uint32_t Flags(void* klass) { return Read<uint32_t>(klass,offsetof(Class,access_flags)); }
@@ -56,7 +56,7 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
     return fail("Invalid or inaccessible superclass");
   if(IsValidationSubclassOf(roots.Get(2),roots.Get(0))) return fail("Cyclic superclass change");
   const bool loses_parent=!IsValidationSubclassOf(roots.Get(2),Parent(roots.Get(0)));
-  if(loses_parent && !receiver_guard()) return fail("Removing a superclass requires the active receiver guard");
+  if(loses_parent && !ReceiverGuardEnabled()) return fail("Removing a superclass requires the active receiver guard");
   if(loses_parent) state|=kNarrowed;
   if(*changed && !Initialized(roots.Get(2))) return fail("Initialize the added superclass before applying this evolution");
   for(size_t i=0;i<replacement.interfaces.size();++i) {
@@ -71,24 +71,22 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
     bool retained=IsValidationAssignableFrom(old_interface,roots.Get(2));
     for(size_t j=0;j<replacement.interfaces.size();++j)
       retained|=IsValidationAssignableFrom(old_interface,roots.Get(3+j));
-    if(!retained && !receiver_guard()) return fail("Removing an interface requires the active receiver guard");
+    if(!retained && !ReceiverGuardEnabled()) return fail("Removing an interface requires the active receiver guard");
     if(!retained) state|=kNarrowed;
   }
   *changed|=current.interfaces!=replacement.interfaces;
   if(*changed) state|=kChanged;
-  if(*changed && !allocation_context()) { *error="The source transaction hook did not establish allocation context";return JVMTI_ERROR_NOT_AVAILABLE; }
+  if(*changed && !HasHierarchyAllocationContext()) { *error="The device transaction hook did not establish allocation context";return JVMTI_ERROR_NOT_AVAILABLE; }
   return JVMTI_ERROR_NONE;
 }
 bool ConfigureHierarchyValidation(HookEngine& hooks,void* implementation,std::string* error) {
   auto find=reinterpret_cast<FindClass>(hooks.FindSymbol("libart.so",cas::kFindClass));
-  auto guard=reinterpret_cast<bool(*)()>(dlsym(implementation,"ArtDcevmSourceReceiverGuardEnabled"));
-  auto context=reinterpret_cast<bool(*)()>(dlsym(implementation,"ArtDcevmSourceHasHierarchyAllocationContext"));
   auto configure=reinterpret_cast<ConfigureHierarchyState>(dlsym(implementation,"ArtDcevmSourceConfigureHierarchyState"));
-  if(!find || !guard || !context || !configure || !RuntimeClassLinker()) {
-    *error="Missing named hierarchy resolver, receiver/context predicates or state forwarding";return false;
+  if(!find || !configure || !RuntimeClassLinker()) {
+    *error="Missing named hierarchy resolver or state forwarding";return false;
   }
   if(!ConfigureHandleRootScopes(hooks,implementation,error)) return false;
-  find_class=find;receiver_guard=guard;allocation_context=context;
+  find_class=find;
   configure(BeginHierarchyTransaction,EndHierarchyTransaction,HasHierarchyChange,HasHierarchyNarrowing);
   return true;
 }

@@ -1,0 +1,10 @@
+--- stack.h
++++ stack.h
+@@ -307,6 +307,7 @@
+   }
+
+  private:
++  friend struct StackLayoutProbe;
+   // Private constructor known in the case that num_frames_ has already been computed.
+   StackVisitor(Thread* thread,
+                Context* context,

@@ -3,11 +3,11 @@
 @@ -403,6 +403,10 @@
    ProfilingInfo* GetProfilingInfo(ArtMethod* method, Thread* self);
    void ResetHotnessCounter(ArtMethod* method, Thread* self);
- 
+
 +  // Source-only diagnostic accessor; adds no fields or virtual methods.
 +  void ArtDcevmVisitAllMethods(const std::function<void(const void*, ArtMethod*)>& cb)
 +      REQUIRES(Locks::jit_lock_) { VisitAllMethods(cb); }
 +
   private:
    JitCodeCache();
- 
+

@@ -19,18 +19,23 @@ void* Canonicalize(void* method) {
 }
 }
 
+void* CanonicalizeJniMethod(void* method) { return Canonicalize(method); }
+
 bool ConfigureJniMethodTargets(HookEngine& hooks, void* implementation, std::string* error) {
-  using Configure = void (*)(JniMethodTarget);
-  auto configure = reinterpret_cast<Configure>(
-      dlsym(implementation, "ArtDcevmSourceConfigureJniMethodTargets"));
+  using Probe = bool (*)(JniMethodTarget);
+  auto probe = reinterpret_cast<Probe>(
+      dlsym(implementation, "ArtDcevmSourceProbeJniMethodTargets"));
   auto canonical = reinterpret_cast<CanonicalMethod>(
       hooks.FindSymbol("libart.so", cas::kGetCanonicalMethod));
-  if (!configure || !canonical) {
-    *error = "Missing JNI method-target bridge or named ART canonical-method function";
+  if (!probe || !canonical) {
+    *error = "Missing JNI method-target calibration or named ART canonical-method function";
     return false;
   }
   canonical_method = canonical;
-  configure(Canonicalize);
+  if (!probe(Canonicalize)) {
+    *error = "JNI method-target fixed declaration calibration failed";
+    return false;
+  }
   return true;
 }
 }

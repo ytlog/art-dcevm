@@ -59,15 +59,13 @@ void UpdateStructuralMethods(void* old_class, void* new_class) {
   }
 }
 bool ConfigureStructuralMethodUpdates(HookEngine& hooks, void* implementation, std::string* error) {
-  using Configure=void (*)(void (*)(void*,void*));
-  auto configure=reinterpret_cast<Configure>(dlsym(implementation,"ArtDcevmSourceConfigureStructuralMethodUpdates"));
   auto p=reinterpret_cast<bool (*)(void*)>(dlsym(implementation,"ArtDcevmSourceProbeStructuralMethodUpdates"));
   auto s=reinterpret_cast<Same>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
   auto r=reinterpret_cast<Root>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto o=reinterpret_cast<Obsolete>(hooks.FindSymbol("libart.so","_ZNK3art11ClassLinker31SetEntryPointsForObsoleteMethodEPNS_9ArtMethodE"));
-  if (!configure || !p || !s || !r || !o || !DispatchClassLinker()) {
+  if (!p || !s || !r || !o || !DispatchClassLinker()) {
     *error="Missing named structural method update functions or ClassLinker"; return false;
   }
-  same=s; root=r; obsolete=o; probe=p; configure(UpdateStructuralMethods); return true;
+  same=s; root=r; obsolete=o; probe=p; return true;
 }
 }

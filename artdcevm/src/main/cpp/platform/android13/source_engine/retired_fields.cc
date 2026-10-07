@@ -18,26 +18,11 @@
 #include "retired_fields.h"
 #include "platform/android13/retired_field_registry_abi.h"
 #include "art_field-inl.h"
-#include "art_method-inl.h"
-#include "class_linker-inl.h"
-#include "common_throws.h"
-#include "dex/dex_instruction-inl.h"
-#include "dex/dex_instruction_utils.h"
-#include "handle_scope.h"
 #include "mirror/class-inl.h"
 #include "mirror/field-inl.h"
-#include "mirror/var_handle.h"
-#include "method_handles-inl.h"
 #include "reflective_value_visitor.h"
-#include "scoped_thread_state_change-inl.h"
-#include "jni/jni_id_manager.h"
-#include "jni/jni_internal.h"
-#include "jvalue.h"
-#include "thread-current-inl.h"
-#include "runtime.h"
 #include "write_barrier.h"
-
-static_assert(sizeof(art::JValue) == sizeof(uint64_t));
+#include <algorithm>
 
 namespace artdcevm::android13::source {
 namespace {
@@ -54,32 +39,8 @@ extern "C" void ArtDcevmSourceConfigureRetiredFields(
   field_registry = *callbacks;
 }
 
-extern "C" bool ArtDcevmGuardNterpFinalFieldPut(void* thread, void* caller, uint16_t* dex_pc) {
-  using namespace artdcevm::android13::source;
-  if (!field_registry.final_guard_enabled()) return false;
-  auto* method = static_cast<art::ArtMethod*>(caller);
-  auto* self = static_cast<art::Thread*>(thread);
-  const auto* inst = art::Instruction::At(dex_pc);
-  const bool instance_put = art::IsInstructionIPut(inst->Opcode());
-  const bool static_put = art::IsInstructionSPut(inst->Opcode());
-  if (!instance_put && !static_put) return false;
-  uint32_t index = instance_put ? inst->VRegC_22c() : inst->VRegB_21c();
-  art::StackHandleScope<2> hs(self);
-  auto cache = hs.NewHandle(method->GetDexCache());
-  auto loader = hs.NewHandle(method->GetClassLoader());
-  auto* field = art::Runtime::Current()->GetClassLinker()->ResolveFieldJLS(index, cache, loader);
-  if (field == nullptr) return self->IsExceptionPending();
-  if (field->IsFinal() && !field->CanBeChangedBy(method)) {
-    art::ThrowIllegalAccessErrorFinalField(method, field);
-    return true;
-  }
-  return false;
-}
 bool IsRetiredField(art::ArtField* field) {
   return field_registry.token_for(field) != 0;
-}
-bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) {
-  return field_registry.guard(field, thread, result);
 }
 }
 
@@ -113,42 +74,4 @@ void Field::VisitTarget(ReflectiveValueVisitor* visitor) {
 extern "C" void ArtDcevmSourceVisitField(void* field, void* visitor) {
   static_cast<art::mirror::Field*>(field)->VisitTarget(
       static_cast<art::ReflectiveValueVisitor*>(visitor));
-}
-extern "C" bool ArtDcevmSourceReceiverGuardEnabled();
-extern "C" bool ArtDcevmGuardFieldVarHandle(void* handle, int mode, void* frame,
-                                             const void* operands, void* result) {
-  auto* field_handle = static_cast<art::mirror::FieldVarHandle*>(handle);
-  art::ArtField* field = field_handle->GetArtField();
-  art::Thread* self = art::Thread::Current();
-  if (artdcevm::android13::source::GuardField(field, self, static_cast<art::JValue*>(result)))
-    return true;
-  using VarHandle = art::mirror::VarHandle;
-  if (field->IsFinal() && mode >= 0 &&
-      mode <= static_cast<int>(VarHandle::AccessMode::kLast) &&
-      VarHandle::GetAccessModeTemplate(static_cast<VarHandle::AccessMode>(mode)) !=
-          VarHandle::AccessModeTemplate::kGet) {
-    if (result != nullptr) static_cast<art::JValue*>(result)->SetJ(0);
-    self->ThrowNewException("Ljava/lang/UnsupportedOperationException;",
-                            "Final field does not support VarHandle write access");
-    return true;
-  }
-  if (!ArtDcevmSourceReceiverGuardEnabled() || field->IsStatic()) return false;
-  art::ShadowFrameGetter getter(*static_cast<art::ShadowFrame*>(frame),
-                                static_cast<const art::InstructionOperands*>(operands));
-  art::ObjPtr<art::mirror::Object> receiver = getter.GetReference();
-  if (receiver == nullptr || field->GetDeclaringClass()->IsAssignableFrom(receiver->GetClass()))
-    return false;
-  self->ThrowNewException("Ljava/lang/IncompatibleClassChangeError;",
-                          "VarHandle receiver has lost its field declaring class");
-  return true;
-}
-extern "C" bool ArtDcevmGuardMethodHandleFieldPut(void* target_field) {
-  art::ArtField* field = static_cast<art::ArtField*>(target_field);
-  art::Thread* self = art::Thread::Current();
-  if (artdcevm::android13::source::GuardField(field, self)) return true;
-  if (!artdcevm::android13::source::field_registry.final_guard_enabled() ||
-      !field->IsFinal()) return false;
-  self->ThrowNewException("Ljava/lang/IllegalAccessError;",
-                          "MethodHandle setter targets a final field");
-  return true;
 }

@@ -4,5 +4,6 @@
 #include <string>
 
 namespace artdcevm::android13 {
+void* CanonicalizeJniMethod(void*);
 bool ConfigureJniMethodTargets(HookEngine& hooks, void* implementation, std::string* error);
 }
