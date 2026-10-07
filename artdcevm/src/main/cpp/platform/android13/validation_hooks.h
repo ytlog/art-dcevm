@@ -9,11 +9,12 @@ class ValidationHooks {
  public:
   using Check = bool (*)(void*);
   using Commit = void (*)(void*, const void*);
-  using InPlaceFinalize = void (*)();
+  using GetJitCodeCache = void* (*)();
+  using InvalidateJit = void (*)(void*);
   bool Install(HookEngine& hooks, std::string* error);
   bool installed() const;
   static void ConfigureSource(Check fields, Check methods, Check classes, Commit commit,
-                              InPlaceFinalize in_place_finalize);
+                              GetJitCodeCache get_jit_code_cache, InvalidateJit invalidate_jit);
   static bool InSourceTransaction();
   static uint64_t FieldCalls();
   static uint64_t MethodCalls();

@@ -17,7 +17,8 @@ bool hooks_installed = false, attempted = false;
 thread_local bool source_transaction = false;
 ValidationHooks::Check source_fields = nullptr, source_methods = nullptr, source_classes = nullptr;
 ValidationHooks::Commit source_commit = nullptr;
-ValidationHooks::InPlaceFinalize source_in_place_finalize = nullptr;
+ValidationHooks::GetJitCodeCache source_jit_code_cache = nullptr;
+ValidationHooks::InvalidateJit invalidate_jit = nullptr;
 bool CheckFields(void* redef) {
   ++field_calls;
   return source_transaction ? source_fields(redef)
@@ -43,7 +44,10 @@ void CommitHook(void* redef, const void* iterator) {
 void InPlaceHook(void* redef, const void* iterator) {
   reinterpret_cast<ValidationHooks::Commit>(original_in_place)(redef, iterator);
   if (source_transaction) {
-    source_in_place_finalize();
+    // ART owns the commit and its JIT suspension. Invalidate callers that may
+    // still contain a previously inlined body before the transaction resumes.
+    void* code_cache = source_jit_code_cache();
+    if (code_cache != nullptr) invalidate_jit(code_cache);
     ++source_in_place_calls;
   }
 }
@@ -89,9 +93,11 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
 }
 bool ValidationHooks::installed() const { return hooks_installed; }
 void ValidationHooks::ConfigureSource(Check fields, Check methods, Check classes, Commit commit,
-                                      InPlaceFinalize in_place_finalize) {
+                                      GetJitCodeCache get_jit_code_cache,
+                                      InvalidateJit invalidate) {
   source_fields = fields; source_methods = methods; source_classes = classes; source_commit = commit;
-  source_in_place_finalize = in_place_finalize;
+  source_jit_code_cache = get_jit_code_cache;
+  invalidate_jit = invalidate;
 }
 bool ValidationHooks::InSourceTransaction() { return source_transaction; }
 uint64_t ValidationHooks::FieldCalls() { return field_calls.load(); }

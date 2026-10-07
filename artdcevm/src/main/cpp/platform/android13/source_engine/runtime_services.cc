@@ -340,13 +340,11 @@ extern "C" int ArtDcevmSourceInvalidateAllJit(JNIEnv* env) {
   jit->GetCodeCache()->InvalidateAllCompiledCode();
   return 1;
 }
-// Called by the named device JVMTI in-place commit hook while ART still owns
-// the redefinition transaction and JIT is suspended. A body-only update can
-// invalidate methods that inlined the old body in an isolated non-debuggable
-// compilation window; invalidating only the redefined ArtMethod is insufficient.
-extern "C" void ArtDcevmSourceInvalidateInPlaceCommit() {
+// Transitional ABI accessor for the enhancement library. The enhancement
+// library resolves and calls JitCodeCache::InvalidateAllCompiledCode by name.
+extern "C" void* ArtDcevmSourceGetJitCodeCache() {
   auto* jit = art::Runtime::Current()->GetJit();
-  if (jit != nullptr) jit->GetCodeCache()->InvalidateAllCompiledCode();
+  return jit == nullptr ? nullptr : jit->GetCodeCache();
 }
 extern "C" int ArtDcevmSourceForceOptimizedJit(JNIEnv* env, jobject executable) {
   auto* runtime = art::Runtime::Current();

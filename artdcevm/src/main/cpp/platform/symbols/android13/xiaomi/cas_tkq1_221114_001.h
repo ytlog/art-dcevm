@@ -20,6 +20,7 @@ inline constexpr char kLookupClass[] = "_ZN3art11ClassLinker11LookupClassEPNS_6T
 inline constexpr char kDeleteClassLoader[] = "_ZN3art11ClassLinker17DeleteClassLoaderEPNS_6ThreadERKNS0_15ClassLoaderDataEb";
 inline constexpr char kIsAsyncDeoptimizeable[] = "_ZNK3art7Runtime21IsAsyncDeoptimizeableEm";
 inline constexpr char kTestSuspendFromCode[] = "artTestSuspendFromCode";
+inline constexpr char kInvalidateAllCompiledCode[] = "_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv";
 inline constexpr char kCollectMappings[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition32CollectNewFieldAndMethodMappingsERKNS_20RedefinitionDataIterEPNSt3__13mapIPN3art9ArtMethodES9_NS5_4lessIS9_EENS5_9allocatorINS5_4pairIKS9_S9_EEEEEEPNS6_IPNS7_8ArtFieldESK_NSA_ISK_EENSC_INSD_IKSK_SK_EEEEEE";
 inline constexpr char kStructuralCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE";
 inline constexpr char kInPlaceCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition18UpdateClassInPlaceERKNS_20RedefinitionDataIterE";

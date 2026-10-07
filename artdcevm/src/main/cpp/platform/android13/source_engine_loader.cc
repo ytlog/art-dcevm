@@ -49,8 +49,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
   auto standard_redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefineStandard"));
   auto commit = reinterpret_cast<ValidationHooks::Commit>(dlsym(library, "ArtDcevmSourceCommit"));
-  auto in_place_finalize = reinterpret_cast<ValidationHooks::InPlaceFinalize>(
-      dlsym(library, "ArtDcevmSourceInvalidateInPlaceCommit"));
+  auto get_jit_code_cache = reinterpret_cast<ValidationHooks::GetJitCodeCache>(
+      dlsym(library, "ArtDcevmSourceGetJitCodeCache"));
+  auto invalidate_jit = reinterpret_cast<ValidationHooks::InvalidateJit>(
+      symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
   auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
@@ -80,7 +82,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto configure_suspend_from_code = reinterpret_cast<ConfigureLoaderDelete>(
       dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
   auto configure_batch = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyBatch"));
-  if (!probe || !redefine || !standard_redefine || !commit || !in_place_finalize || !methods || !fields || !classes || !instance_allocation
+  if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
+      !invalidate_jit || !methods || !fields || !classes || !instance_allocation
       || !configure_instance_allocation || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup
       || !batch_allocate || !batch_verify || !configure_batch
@@ -138,7 +141,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!suspend_from_code_target || !symbols.Install(suspend_from_code_target,
       suspend_from_code, configure_suspend_from_code(), &error))
     return error.empty() ? "Missing named ART suspend entrypoint" : error;
-  ValidationHooks::ConfigureSource(fields, methods, classes, commit, in_place_finalize);
+  ValidationHooks::ConfigureSource(fields, methods, classes, commit,
+                                   get_jit_code_cache, invalidate_jit);
   source_redefine = redefine;
   source_standard_redefine = standard_redefine;
   ready = true;

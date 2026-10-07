@@ -26,6 +26,8 @@
 
 当前状态：以上代理尚未完成。这个文件记录迁移边界，不表示现有源码引擎已被替换。
 
+原地提交后的全局 JIT 缓存失效现已由增强库的 `InPlaceHook` 实现：它调用设备原提交后，按命名符号调用设备 `JitCodeCache::InvalidateAllCompiledCode`。过渡期源码模块仅返回 `JitCodeCache*`；这条路径仍需在最终迁移中用固定声明和布局探针去掉该访问器。
+
 ## 目标设备符号核对（2026-10-07）
 
 在 Android 13 真机 `DEVICE_001` 上读取 `/apex/com.android.art/lib64/` 的设备库，Build ID 分别为 `libopenjdkjvmti.so` 的 `2fe21c45581b9c8b0519b71cbde32938` 和 `libart.so` 的 `14fc77b24db0b351b919c97009dc86bf`。用 NDK `llvm-readelf --dyn-syms --wide` 核对动态符号表：

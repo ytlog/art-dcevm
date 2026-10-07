@@ -29,7 +29,8 @@ bool CheckSourceSymbols(HookEngine& hooks, std::string* error) {
   const char* art[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass,
                     cas::kLookupClass, cas::kDeleteClassLoader,
                     cas::kIsAsyncDeoptimizeable, cas::kTestSuspendFromCode,
-                    cas::kCheckedResolve, cas::kCheckedResolveHandles};
+                    cas::kCheckedResolve, cas::kCheckedResolveHandles,
+                    cas::kInvalidateAllCompiledCode};
   for (const char* name : art)
     if (!Require(hooks, Library::kArt, name, error)) return false;
   for (const char* name : cas::kRetiredMethodHooks)
