@@ -1,6 +1,7 @@
 #include "platform/android13/retired_method_registry_bridge.h"
 
 #include <dlfcn.h>
+#include <cstdlib>
 #include "platform/android13/retired_method_registry.h"
 #include "platform/symbols/android13.h"
 
@@ -9,10 +10,15 @@ namespace {
 RetiredMethodRegistry registry;
 RetiredMethodRegistry::ContainsUnsafe contains_unsafe = nullptr;
 
-void Retire(void* method) { registry.Retire(method); }
+void Retire(void* method) noexcept {
+  try { registry.Retire(method); } catch (...) { std::abort(); }
+}
 bool Contains(void* method) { return registry.Contains(method); }
 size_t Count() { return registry.Count(); }
-size_t Prune(const void* allocator) { return registry.Prune(allocator, contains_unsafe); }
+size_t Prune(const void* allocator) noexcept {
+  try { return registry.Prune(allocator, contains_unsafe); }
+  catch (...) { std::abort(); }
+}
 }  // namespace
 
 bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,

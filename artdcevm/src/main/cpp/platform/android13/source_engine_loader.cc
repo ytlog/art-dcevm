@@ -9,6 +9,7 @@
 #include "platform/android13/hierarchy_batch_hooks.h"
 #include "platform/android13/class_loader_hooks.h"
 #include "platform/android13/retired_method_registry_bridge.h"
+#include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
 
 namespace artdcevm::android13 {
@@ -87,15 +88,21 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       || !suspend_from_code || !configure_suspend_from_code) {
     dlclose(library); return "Source engine exports are incomplete";
   }
+  // The source probe may touch a reflected Field, so initialize its opaque
+  // registries first. No ART hook is installed until the layout probe passes.
+  if (!ConfigureRetiredMethodRegistry(symbols, library, &error) ||
+      !ConfigureRetiredFieldRegistry(symbols, library, &error)) {
+    dlclose(library);
+    return error;
+  }
   // Exercise the compiled AOSP object layout against JNI-visible values before
-  // installing any source callbacks. Symbol names alone do not establish ABI safety.
+  // installing any source hooks. Symbol names alone do not establish ABI safety.
   int code = probe(jni, calibration);
   if (code != 0 || jni->ExceptionCheck()) {
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
   // Retain this DSO after any hook attempt, even if rollback fails.
   source_library = library;
-  if (!ConfigureRetiredMethodRegistry(symbols, library, &error)) return error;
   ValidationHooks dispatcher;
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;

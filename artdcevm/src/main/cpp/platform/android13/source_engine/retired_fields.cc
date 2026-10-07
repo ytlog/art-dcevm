@@ -16,6 +16,7 @@
 
 // Field member replacements below adapt the AOSP mirror/field.cc implementation.
 #include "retired_fields.h"
+#include "platform/android13/retired_field_registry_abi.h"
 #include "art_field-inl.h"
 #include "art_method-inl.h"
 #include "class_linker-inl.h"
@@ -32,43 +33,26 @@
 #include "jni/jni_id_manager.h"
 #include "jni/jni_internal.h"
 #include "jvalue.h"
-#include "linear_alloc.h"
 #include "thread-current-inl.h"
 #include "runtime.h"
 #include "write_barrier.h"
 #include <atomic>
-#include <mutex>
-#include <unordered_map>
-#include <vector>
 
 namespace artdcevm::android13::source {
 namespace {
-// A DEX field index fits in 16 bits. The high bit marks a source-engine retirement
-// token, not a memory offset. Keeping the token in the managed Field survives GC
-// without a native map keyed by movable Java object addresses.
-constexpr uint32_t kRetiredTag = uint32_t{1} << 31;
-std::unordered_map<art::ArtField*, uint32_t> retired;
-std::vector<art::ArtField*> retired_by_index;
-std::vector<uint32_t> free_retired_indices;
-std::mutex retired_mutex;
+// The managed Field keeps an opaque token across GC. Its native registry lives
+// in the enhancement library and is configured before any source transaction.
+artdcevm::android13::RetiredFieldCallbacks field_registry{};
 std::atomic<bool> final_field_addition_seen{false};
 }
 void MarkFinalFieldAddition() { final_field_addition_seen.store(true, std::memory_order_release); }
 void RetireField(art::ArtField* field) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  if (retired.find(field) != retired.end()) return;
-  uint32_t index;
-  if (!free_retired_indices.empty()) {
-    index = free_retired_indices.back();
-    free_retired_indices.pop_back();
-    CHECK(retired_by_index[index] == nullptr);
-    retired_by_index[index] = field;
-  } else {
-    CHECK_LT(retired_by_index.size(), kRetiredTag);
-    index = retired_by_index.size();
-    retired_by_index.push_back(field);
-  }
-  retired.emplace(field, index | kRetiredTag);
+  field_registry.retire(field);
+}
+
+extern "C" void ArtDcevmSourceConfigureRetiredFields(
+    const artdcevm::android13::RetiredFieldCallbacks* callbacks) {
+  field_registry = *callbacks;
 }
 
 extern "C" bool ArtDcevmGuardNterpFinalFieldPut(void* thread, void* caller, uint16_t* dex_pc) {
@@ -93,30 +77,16 @@ extern "C" bool ArtDcevmGuardNterpFinalFieldPut(void* thread, void* caller, uint
   return false;
 }
 bool IsRetiredField(art::ArtField* field) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return retired.find(field) != retired.end();
+  return field_registry.token_for(field) != 0;
 }
 size_t RetiredFieldCount() {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return retired.size();
+  return field_registry.count();
 }
 extern "C" size_t ArtDcevmSourceRetiredFieldSlotCount() {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return retired_by_index.size();
+  return field_registry.slot_count();
 }
 size_t PruneRetiredFields(const art::LinearAlloc* allocator) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  size_t removed = 0;
-  for (auto it = retired.begin(); it != retired.end(); ) {
-    if (!allocator->ContainsUnsafe(it->first)) { ++it; continue; }
-    uint32_t index = it->second & ~kRetiredTag;
-    CHECK_LT(index, retired_by_index.size());
-    retired_by_index[index] = nullptr;
-    free_retired_indices.push_back(index);
-    it = retired.erase(it);
-    ++removed;
-  }
-  return removed;
+  return field_registry.prune(allocator);
 }
 bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) {
   if (!IsRetiredField(field)) return false;
@@ -134,12 +104,10 @@ namespace art::mirror {
 ArtField* Field::GetArtField() {
   using namespace artdcevm::android13::source;
   uint32_t index = GetArtFieldIndex();
-  if ((index & kRetiredTag) != 0) {
-    std::lock_guard<std::mutex> lock(retired_mutex);
-    index &= ~kRetiredTag;
-    CHECK_LT(index, retired_by_index.size());
-    CHECK(retired_by_index[index] != nullptr);
-    return retired_by_index[index];
+  if ((index & artdcevm::android13::kRetiredFieldTag) != 0) {
+    auto* field = static_cast<ArtField*>(field_registry.resolve(index));
+    CHECK(field != nullptr);
+    return field;
   }
   auto declaring_class = GetDeclaringClass();
   return IsStatic() ? declaring_class->GetStaticField(index)
@@ -151,12 +119,7 @@ void Field::VisitTarget(ReflectiveValueVisitor* visitor) {
   ArtField* replacement = visitor->VisitField(
       original, HeapReflectiveSourceInfo(kSourceJavaLangReflectField, this));
   CHECK(replacement != nullptr);
-  uint32_t retired_token = 0;
-  {
-    std::lock_guard<std::mutex> lock(retired_mutex);
-    auto retired_entry = retired.find(replacement);
-    if (retired_entry != retired.end()) retired_token = retired_entry->second;
-  }
+  uint32_t retired_token = field_registry.token_for(replacement);
   if (retired_token != 0) {
     SetArtFieldIndex<false>(retired_token);
     return;

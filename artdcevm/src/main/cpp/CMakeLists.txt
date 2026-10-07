@@ -13,6 +13,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/class_loader_hooks.cc
     platform/android13/retired_method_registry.cc
     platform/android13/retired_method_registry_bridge.cc
+    platform/android13/retired_field_registry.cc
+    platform/android13/retired_field_registry_bridge.cc
     platform/android13/schema_snapshot.cc platform/android13/evolution_planner.cc
     platform/android13/validation_hooks.cc platform/android13/source_engine_loader.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
