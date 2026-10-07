@@ -52,9 +52,9 @@ Java 初始化函数负责附加增强库自身的 JVMTI Agent 入口，加载�
   → 原 ART 普通重定义路径
 ```
 
-优先在 `openjdkjvmti::Redefiner::RedefineClasses` 的**命名 ELF 符号**上安装 Inline Hook。该函数由库内部直接调用，单纯 PLT Hook 不保证覆盖。当前工程已有按动态符号表或普通符号表查找、再安装 Inline Hook 的机制；继续遵守固定 Build ID 与源码 ABI 校准要求，不依据反汇编计算地址或对象偏移。
+优先在 `openjdkjvmti::Redefiner::RedefineClasses` 的**命名 ELF 符号**上安装 Inline Hook。该函数由库内部直接调用，单纯 PLT Hook 不保证覆盖。当前工程已有按动态符号表或普通符号表查找、再安装 Inline Hook 的机制；继续遵守命名符号预检与源码 ABI 校准要求，不依据反汇编计算地址或对象偏移。
 
-Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留调用者原始的 `jvmtiEnv*`、类数组、DEX 和返回码语义。不得把外部 Agent 的请求改用增强库自己的 JVMTI 环境执行，以免改变能力检查及事件归属。若目标符号、Build ID、源码模块或校准失败，初始化应明确失败，不能宣称已完成增强。
+Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留调用者原始的 `jvmtiEnv*`、类数组、DEX 和返回码语义。不得把外部 Agent 的请求改用增强库自己的 JVMTI 环境执行，以免改变能力检查及事件归属。若目标符号、源码模块或校准失败，初始化应明确失败，不能宣称已完成增强。
 
 ## 整批请求的路由
 

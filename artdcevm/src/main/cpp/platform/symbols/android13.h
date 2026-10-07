@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/symbols/art_symbol_profile.h"
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h"
 
 // Android 13 currently has one verified private ART profile. Keep the callers

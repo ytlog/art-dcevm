@@ -1,11 +1,7 @@
 #pragma once
 #include <string>
 namespace artdcevm::symbols::android13::xiaomi::cas {
-// Extracted from the connected phone, not inferred from API level or security patch date.
-inline constexpr char kArtBuildId[] = "14fc77b24db0b351b919c97009dc86bf";
-inline constexpr char kJvmtiBuildId[] = "2fe21c45581b9c8b0519b71cbde32938";
 inline constexpr char kRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
-inline constexpr char kCompilerBuildId[] = "578147d9e59c98c6bc3c6faf9d27c9e6";
 inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_7HInvokeE";
 inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";
 inline constexpr char kCheckMethods[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv";

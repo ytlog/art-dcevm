@@ -57,12 +57,8 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
   if (hooks_installed) return true;
   if (attempted) { *error = "Hook initialization previously failed; restart the process"; return false; }
   attempted = true;
-  if (!symbols::FindProfile(33, FindLoadedModule("libart.so").build_id,
-                            FindLoadedModule("libopenjdkjvmti.so").build_id)) {
-    *error = "Private hooks require the exact cas ART and JVMTI build IDs";
-    return false;
-  }
   if (!hooks.Initialize(error)) return false;
+  if (!symbols::CheckValidationSymbols(hooks, error)) return false;
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
   Entry entries[] = {
     {cas::kCheckFields, reinterpret_cast<void*>(CheckFields), &original_fields},

@@ -1,11 +1,10 @@
 #pragma once
 
-#include <string_view>
+#include <string>
 #include "api/hook_engine.h"
 
 namespace artdcevm::symbols {
 
-// A profile is tied to actual ELF builds, not just an Android API level.
 enum class Library { kArt, kJvmti, kCompiler, kLinker };
 enum class HookRoute { kInline, kPlt };
 
@@ -27,17 +26,10 @@ struct NamedSymbol {
   HookRoute route;
 };
 
-struct ArtSymbolProfile {
-  int sdk;
-  const char* vendor;
-  const char* build;
-  const char* art_build_id;
-  const char* jvmti_build_id;
-  const char* compiler_build_id;
-};
-
-const ArtSymbolProfile* FindProfile(int sdk, std::string_view art_build_id,
-                                    std::string_view jvmti_build_id);
+// Presence is only the first gate. Source ABI layout is checked by
+// ArtDcevmSourceProbe before any source callbacks are installed.
+bool CheckValidationSymbols(HookEngine& hooks, std::string* error);
+bool CheckSourceSymbols(HookEngine& hooks, std::string* error);
 void* FindSymbol(HookEngine& hooks, NamedSymbol symbol);
 
 }  // namespace artdcevm::symbols

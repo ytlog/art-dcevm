@@ -17,6 +17,12 @@ Redefine source_standard_redefine = nullptr;
 bool load_attempted = false, ready = false;
 #ifdef ARTDCEVM_TESTING
 void* graph_inline_hook_token = nullptr;
+bool CompilerSymbolsAvailable() {
+  ShadowHookEngine hooks;
+  std::string error;
+  return hooks.Initialize(&error) &&
+      hooks.FindSymbol("libart-compiler.so", cas::kHGraphInlineInto) != nullptr;
+}
 #endif
 }
 std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibration) {
@@ -24,12 +30,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (load_attempted) return "Source initialization previously failed; restart the process";
   load_attempted = true;
   if (!path || !calibration) return "Source library path and ABI calibration are required";
-  if (!symbols::FindProfile(33, FindLoadedModule("libart.so").build_id,
-                            FindLoadedModule("libopenjdkjvmti.so").build_id))
-    return "Unsupported ART/JVMTI build for the source engine";
   ShadowHookEngine symbols;
   std::string error;
   if (!symbols.Initialize(&error)) return error;
+  if (!symbols::CheckSourceSymbols(symbols, &error)) return error;
   using Loader = void* (*)(const char*, int, const void*);
   auto loader = reinterpret_cast<Loader>(dlsym(RTLD_DEFAULT, "__loader_dlopen"));
   if (!loader) loader = reinterpret_cast<Loader>(symbols.FindSymbol("linker64", "__loader_dlopen"));
@@ -85,7 +89,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       || !suspend_from_code || !configure_suspend_from_code) {
     dlclose(library); return "Source engine exports are incomplete";
   }
-  // Check the SDK's dedicated calibration object before installing source callbacks.
+  // Exercise the compiled AOSP object layout against JNI-visible values before
+  // installing any source callbacks. Symbol names alone do not establish ABI safety.
   int code = probe(jni, calibration);
   if (code != 0 || jni->ExceptionCheck()) {
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
@@ -323,8 +328,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineExperiment(
     JNIEnv* env, jclass, jboolean enable) {
   if (!artdcevm::android13::source_library ||
-      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
-          artdcevm::android13::cas::kCompilerBuildId) return -10;
+      !artdcevm::android13::CompilerSymbolsAvailable()) return -10;
   using Fn = int (*)(JNIEnv*, bool);
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
                                       "ArtDcevmSourceJitInlineExperiment"));
@@ -361,8 +365,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_forceOptimizedJit(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library ||
-      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
-          artdcevm::android13::cas::kCompilerBuildId) return -10;
+      !artdcevm::android13::CompilerSymbolsAvailable()) return -10;
   using Fn = int (*)(JNIEnv*, jobject);
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
                                       "ArtDcevmSourceForceOptimizedJit"));
@@ -372,8 +375,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitCompilerOptionsState(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library ||
-      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
-          artdcevm::android13::cas::kCompilerBuildId) return -10;
+      !artdcevm::android13::CompilerSymbolsAvailable()) return -10;
   using Fn = int (*)();
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
                                       "ArtDcevmSourceJitCompilerOptionsState"));
@@ -383,8 +385,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_configureGraphInlineProbe(
     JNIEnv* env, jclass, jobject caller, jobject callee, jboolean enable) {
   if (!artdcevm::android13::source_library ||
-      artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
-          artdcevm::android13::cas::kCompilerBuildId) return -10;
+      !artdcevm::android13::CompilerSymbolsAvailable()) return -10;
   using Pause = int (*)(bool);
   using Configure = int (*)(JNIEnv*, jobject, jobject, void*);
   auto pause = reinterpret_cast<Pause>(dlsym(artdcevm::android13::source_library,

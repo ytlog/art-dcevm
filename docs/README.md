@@ -2,12 +2,12 @@
 
 验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
 
-目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整源码演进后端目前只针对 Android 13 / API 33 / arm64 的固定 ART 构建；Android 11 / API 30 及以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
+目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整源码演进后端目前只针对 Android 13 / API 33 / arm64 的已验证 ART 构建；Android 11 / API 30 及以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
 
 标准 JVMTI 入口的使用方式：在用户 Agent 第一次重定义前调用一次
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
 `jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
-校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
+检查目标 ART/JVMTI 必需命名符号与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
 Hook 检查调用者能力和类参数，再把完整批次交给源码结构事务；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
 对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](../build/evidence/build/20261006T154308Z-variant-boundary.json)
 独立用户 Agent 的设备回归入口为 `com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation`。
@@ -92,7 +92,7 @@ artdcevm/src/main/cpp/
       read_barrier-inl.patch    将读屏障慢路径委托给目标 ART
       reflective_value_visitor.patch 源码访问器，用于更新已缓存 Method 的修饰符
       runtime_services.cc      系统 GC 入口调用与诊断计数
-  platform/symbols/            按系统、厂商、Build ID 组织的私有符号配置
+  platform/symbols/            按系统、厂商组织的私有符号配置
 app/src/debug/cpp/testing/      仅演示应用使用的 JNI 与独立 Agent 探针
 app/src/debug/java/            演示应用的测试入口与业务样例
 fixtures/                      方法体、增删、类型、继承、元数据的单类补丁源码
@@ -126,12 +126,12 @@ Java 公共 API 不暴露 `ArtMethod`、`ArtField`、对象布局或私有地址
 |---|---|---|
 | `REDEFINE_BODY` | `JvmtiBodyRedefiner` → `RedefineClasses` | 方法体、旧栈帧、已缓存反射/JNI ID |
 | `REDEFINE_STRUCTURE` | `ArtAdditiveRedefiner` → ART 扩展 | 增加字段/方法、已有实例与子类迁移、静态状态、锁、GC |
-| `enableEvolution()` | 固定构建校验、SDK ABI 校准、幂等模块初始化 | 不依赖业务类结构；两种 Hook 初始化顺序 |
+| `enableEvolution()` | 命名符号校验、SDK ABI 校准、幂等模块初始化 | 不依赖业务类结构；两种 Hook 初始化顺序 |
 | `EVOLVE_SCHEMA` | `SourceClassRedefiner`：成员删除/重新添加、类型/签名及存储形式变化、native/Java 互换、继承扩展、旧父类移除、非 private 可见性转换 | 旧引用失效语义、旧对象、批次、并发调用、同批祖先依赖；旧父类移除和实验性接口移除在目标手机上启用，接口缓存引用路径仍待验证 |
-| 私有 Hook | `ValidationHooks` + `HookEngine` | Build ID 匹配、回调计数、保持原有语义 |
+| 私有 Hook | `ValidationHooks` + `HookEngine` | 命名符号预检、回调计数、保持原有语义 |
 | `analyze(request)` | 当前类快照 + DEX 解析 + `MigrationPlan` | 成员身份映射、完整批次校验、结构变化识别；不提交变更 |
 
-API 33/arm64 保留专用后端，其私有 Hook 匹配 `libart.so` 与 `libopenjdkjvmti.so` 的 GNU Build ID。其他 API 30+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、源码事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 仍要求完整源码演进，因此在公开后端会失败。API 30、34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换；API 30 的独立测试 APK 还验证了成员删除被拒绝时的事务状态，结果见本地 `build/evidence/compatibility/20261007/`。其他设备仍需逐台回归。**扩展名称相同不代表私有 ABI 可复用。**
+API 33/arm64 保留专用后端，其私有 Hook 预检 `libart.so` 与 `libopenjdkjvmti.so` 的必需命名符号，源码引擎在安装 Hook 前执行对象布局探针。其他 API 30+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、源码事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 仍要求完整源码演进，因此在公开后端会失败。API 30、34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换；API 30 的独立测试 APK 还验证了成员删除被拒绝时的事务状态，结果见本地 `build/evidence/compatibility/20261007/`。其他设备仍需逐台回归。布局探针检查 Thread/Runtime、类描述符、字段数量、实例/静态字段、字段偏移、方法身份及 JNI ID 与 ART 对象的对应关系；它不能穷尽 Heap、GC、编译器和事务内部布局。未知 ART 构建仍可能在源码模块加载或探针运行时因私有 ABI 差异崩溃，因此不能仅凭探针通过宣称完整 DCEVM 兼容。**扩展名称相同不代表私有 ABI 可复用。**
 
 公开 JVMTI 入口的调用方式如下。附加后，用户 Agent 用自己的 `jvmtiEnv::RedefineClasses` 提交完整定义；增量结构扩展需要从自身的 JVMTI 环境获取 ART 扩展函数。
 
@@ -152,13 +152,9 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 该解析器读取类、字段、方法及继承元数据，检查相关索引、偏移、长度和 checksum；它不是 ART 的完整 DEX 验证器。代码体、注解、encoded values 仍须由提交实现交给 ART 验证。`analyze()` 是只读预览，后续提交实现必须在自己的事务中重新验证基线，不能直接执行已经过时的客户端预览结果。
 
-当前构建配置 `platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h` 对应：
+当前符号表 `platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h` 源自小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。运行时不比较 Build ID；同名符号并不能单独证明 ABI 兼容，其他设备仍需布局探测和回归。
 
-- 小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。
-- `libart.so`: `14fc77b24db0b351b919c97009dc86bf`。
-- `libopenjdkjvmti.so`: `2fe21c45581b9c8b0519b71cbde32938`。
-
-以后为 Android 14 等版本补齐源码演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时，在 `platform/symbols/android<版本>/<厂商>/<构建>.h` 添加命名符号和 Build ID，并注册 `ArtSymbolProfile`；对应实现仍需源码 ABI 校验与设备回归。Android 11、12、14、15、16、17 目前没有经过验证的私有配置，不能仅按 API 等级套用 Android 13 的符号。公开 JVMTI 后端不推断私有 ART 对象布局。
+以后为 Android 14 等版本补齐源码演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时，在 `platform/symbols/android<版本>/<厂商>/<构建>.h` 添加命名符号，并为对应源码 ABI 编写布局探针；对应实现仍需源码 ABI 校验与设备回归。Android 11、12、14、15、16、17 目前没有经过验证的私有配置，不能仅按 API 等级套用 Android 13 的符号。公开 JVMTI 后端不推断私有 ART 对象布局。
 
 ## Hook 的当前作用
 
@@ -204,9 +200,9 @@ static/实例切换会使已验证字节码的旧分派假设失效。方法映�
 
 完整移植重定义事务的早期实验触发了 `Invalid allocator type`，记录在 `build/evidence/source-engine/20261004T143908Z/`。这说明基本类/线程探针无法验证完整 Heap ABI。当前实现通过复用原 ART 的分配与事务准备避免该路径；源码归档版本和 API 等级均不作为完整私有 ABI 兼容保证。
 
-`-PsourceEngine13` 不再读取本机复制的六个设备 SO。构建脚本在 `build/art13-source/link-stubs/` 生成只有 SONAME 的临时链接占位库，让源码引擎保留对系统库的 `DT_NEEDED` 和未定义 ART 符号；占位库不会打包进 APK。运行时由设备自己的 ART 库解析符号，精确 Build ID 检查和 ABI 探针仍是启用条件。这消除了构建机的设备 SO 输入，但源码引擎仍依赖目标设备的私有 ART ABI。普通贡献者可直接运行 `./gradlew :app:assembleDebug`；若要构建源码演进模块，运行 `./gradlew -PsourceEngine13 :app:assembleDebug`，构建器会按锁文件下载并校验 AOSP 源码。
+`-PsourceEngine13` 不再读取本机复制的六个设备 SO。构建脚本在 `build/art13-source/link-stubs/` 生成只有 SONAME 的临时链接占位库，让源码引擎保留对系统库的 `DT_NEEDED` 和未定义 ART 符号；占位库不会打包进 APK。运行时由设备自己的 ART 库解析符号，必需命名符号检查和 ABI 布局探针是启用条件。这消除了构建机的设备 SO 输入，但源码引擎仍依赖目标设备的私有 ART ABI。普通贡献者可直接运行 `./gradlew :app:assembleDebug`；若要构建源码演进模块，运行 `./gradlew -PsourceEngine13 :app:assembleDebug`，构建器会按锁文件下载并校验 AOSP 源码。
 
-`platform/symbols/` 是私有 ELF 符号层：`art_symbol_profile.h` 定义库、Hook 路由和精确构建配置；`android13/xiaomi/` 存放已验证的小米构建符号。新增系统或厂商时先加独立配置，再对实际 ELF 的调用点检查 PLT 重定位覆盖范围。标准 JVMTI 的 `RedefineClasses` 和当前同库直接调用入口必须保留 Inline Hook；只在所有目标调用点都经过导入表时使用 PLT Hook。
+`platform/symbols/` 是私有 ELF 符号层：`art_symbol_compat.h` 定义库、Hook 路由和符号检查接口；`android13/xiaomi/` 存放已验证的小米构建符号。新增系统或厂商时先加独立配置，再对实际 ELF 的调用点检查 PLT 重定位覆盖范围。标准 JVMTI 的 `RedefineClasses` 和当前同库直接调用入口必须保留 Inline Hook；只在所有目标调用点都经过导入表时使用 PLT Hook。
 
 ```sh
 ./gradlew -PsourceEngine13 :app:assembleDebug
@@ -254,7 +250,7 @@ gcloud firebase test android run --type instrumentation \
   --device model=MODEL_ID,version=OS_VERSION_ID
 ```
 
-运行前需在 `gcloud` 中登录并选择有 Test Lab 权限的项目；型号和版本以实时目录为准。`PublicJvmtiCloudTest` 使用标准 AndroidJUnitRunner，测试结果为一个 JUnit 用例，`ArtDcevmCloud` 日志包含实际 SDK、ABI、能力位、方法体与新增成员结果，以及删除请求的返回码。该测试 APK 使用公开 JVMTI 路径，不把扩展存在误报为完整 DCEVM；新 ART 构建的私有事务仍须单独做 Build ID、源码 ABI 校准和 ARM 真机回归。[Test Lab 命令说明](https://firebase.google.com/docs/test-lab/android/command-line)。
+运行前需在 `gcloud` 中登录并选择有 Test Lab 权限的项目；型号和版本以实时目录为准。`PublicJvmtiCloudTest` 使用标准 AndroidJUnitRunner，测试结果为一个 JUnit 用例，`ArtDcevmCloud` 日志包含实际 SDK、ABI、能力位、方法体与新增成员结果，以及删除请求的返回码。该测试 APK 使用公开 JVMTI 路径，不把扩展存在误报为完整 DCEVM；新 ART 构建的私有事务仍须单独做命名符号检查、源码 ABI 校准和 ARM 真机回归。[Test Lab 命令说明](https://firebase.google.com/docs/test-lab/android/command-line)。
 
 持续绘制测试每次提交前要求新的 `View.onDraw`，虚拟屏幕模式还要求 ImageReader 收到实际渲染缓冲。它使用普通应用可创建的私有 VirtualDisplay，不读取其他应用或锁屏内容；手机熄屏时也能排查 ViewRoot、Choreographer 与结构提交的交互。它不替代物理屏幕前台验收，后者运行时需解锁并保持亮屏。`--callbacks-only` 仅用于诊断帧回调，不计为持续绘制通过。
 

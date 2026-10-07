@@ -5,6 +5,7 @@
 #include "platform/android13/evolution_planner.h"
 #include "platform/android13/source_engine_loader.h"
 #include "platform/symbols/android13.h"
+#include "hooks/shadow_hook_engine.h"
 #include "core/transaction_lock.h"
 #include <cstring>
 #include <elf.h>
@@ -79,6 +80,11 @@ int Android13Backend::Attach(JavaVM* vm) {
 std::string Android13Backend::Capabilities() const {
   auto art = FindLoadedModule("libart.so");
   auto jvmti = FindLoadedModule("libopenjdkjvmti.so");
+  ShadowHookEngine symbol_lookup;
+  std::string symbol_error;
+  bool private_hooks_supported = validation_hooks_.installed() ||
+      (symbol_lookup.Initialize(&symbol_error) &&
+       symbols::CheckValidationSymbols(symbol_lookup, &symbol_error));
   std::ostringstream s;
   s << "{\"backend\":\"android13-arm64\",\"attached\":" << (env_ ? "true" : "false")
     << ",\"methodBody\":" << (caps_.can_redefine_classes ? "true" : "false")
@@ -118,7 +124,7 @@ std::string Android13Backend::Capabilities() const {
     << ",\"artPath\":" << Quote(art.path)
     << ",\"artBuildId\":" << Quote(art.build_id)
     << ",\"jvmtiBuildId\":" << Quote(jvmti.build_id)
-    << ",\"privateHooksSupported\":" << (symbols::FindProfile(33, art.build_id, jvmti.build_id) ? "true" : "false")
+    << ",\"privateHooksSupported\":" << (private_hooks_supported ? "true" : "false")
     << ",\"validationHooksInstalled\":" << (validation_hooks_.installed() ? "true" : "false")
     << ",\"hookFieldCalls\":" << ValidationHooks::FieldCalls()
     << ",\"hookMethodCalls\":" << ValidationHooks::MethodCalls()

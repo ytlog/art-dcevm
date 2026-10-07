@@ -21,8 +21,8 @@ compiler = toolchain / 'aarch64-linux-android33-clang++'
 
 # Empty SONAME stubs provide DT_NEEDED entries at link time. All ART symbols
 # remain undefined in the source engine and resolve from the device at load
-# time. The loader checks exact build IDs before loading, then runs the ABI
-# probe before installing hooks. No device library is a build input.
+# time. The loader checks required named symbols before loading, then runs the
+# object-layout ABI probe before installing source hooks. No device library is a build input.
 stub_dir = OUT / 'link-stubs'
 stub_dir.mkdir(exist_ok=True)
 required_libs = ('libopenjdkjvmti.so', 'libart.so', 'libartbase.so',
