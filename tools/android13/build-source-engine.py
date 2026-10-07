@@ -88,12 +88,16 @@ flags += ['-I' + str(engine)]
 flags += ['-I' + str(ROOT / 'artdcevm/src/main/cpp')]
 generated = OUT / 'modified'
 generated.mkdir(exist_ok=True)
+shutil.copyfile(OUT / 'art/openjdkjvmti/ti_redefine.h', generated / 'ti_redefine.h')
+subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i', str(engine / 'ti_redefine_header.patch')],
+               cwd=generated, check=True, capture_output=True, text=True)
+flags = ['-I' + str(generated)] + flags
 shutil.copyfile(OUT / 'art/openjdkjvmti/ti_redefine.cc', generated / 'ti_redefine.cc')
 subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i', str(engine / 'ti_redefine.patch')],
                cwd=generated, check=True, capture_output=True, text=True)
 subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(engine / 'selective_deopt.patch')],
                cwd=generated, check=True, capture_output=True, text=True)
-sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'retired_methods.cc',
+sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_declarations.cc', engine / 'retired_methods.cc',
            engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
 commands = []
 objects = []

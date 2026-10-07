@@ -15,6 +15,7 @@
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
+#include "platform/android13/field_validation.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -86,10 +87,9 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto invalidate_jit = reinterpret_cast<ValidationHooks::InvalidateJit>(
       symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
-  auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
-      !invalidate_jit || !methods || !fields || !classes) {
+      !invalidate_jit || !methods || !classes) {
     dlclose(library); return "Source engine exports are incomplete";
   }
   // The source probe may touch a reflected Field, so initialize its opaque
@@ -105,6 +105,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (code != 0 || jni->ExceptionCheck()) {
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
+  if (!ConfigureEvolutionFieldValidation(symbols, library, &error)) {
+    dlclose(library);
+    return error;
+  }
   // Retain this DSO after any hook attempt, even if rollback fails.
   source_library = library;
   ValidationHooks dispatcher;
@@ -117,7 +121,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallClassLoaderHooks(symbols, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
-  ValidationHooks::ConfigureSource(fields, methods, classes, commit,
+  ValidationHooks::ConfigureSource(methods, classes, commit,
                                    get_jit_code_cache, invalidate_jit);
   source_redefine = redefine;
   source_standard_redefine = standard_redefine;

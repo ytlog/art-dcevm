@@ -13,7 +13,7 @@ class ValidationHooks {
   using InvalidateJit = void (*)(void*);
   bool Install(HookEngine& hooks, std::string* error);
   bool installed() const;
-  static void ConfigureSource(Check fields, Check methods, Check classes, Commit commit,
+  static void ConfigureSource(Check methods, Check classes, Commit commit,
                               GetJitCodeCache get_jit_code_cache, InvalidateJit invalidate_jit);
   static bool InSourceTransaction();
   static uint64_t FieldCalls();

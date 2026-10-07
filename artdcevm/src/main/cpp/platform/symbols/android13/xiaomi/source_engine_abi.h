@@ -10,8 +10,6 @@
   "_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE"
 #define ARTDCEVM_A13_SOURCE_CHECK_METHODS \
   "_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition12CheckMethodsEv"
-#define ARTDCEVM_A13_SOURCE_CHECK_FIELDS \
-  "_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition11CheckFieldsEv"
 #define ARTDCEVM_A13_SOURCE_CHECK_CLASS \
   "_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition10CheckClassEv"
 #define ARTDCEVM_A13_SOURCE_COLLECT_NEW_INSTANCES \

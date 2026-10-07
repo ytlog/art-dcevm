@@ -1,0 +1,10 @@
+--- ti_redefine.h
++++ ti_redefine.h
+@@ -113,6 +113,7 @@
+                                                     jint data_size);
+
+  private:
++  friend struct FieldDeclarationBridge;
+   class ClassRedefinition {
+    public:
+     ClassRedefinition(Redefiner* driver,

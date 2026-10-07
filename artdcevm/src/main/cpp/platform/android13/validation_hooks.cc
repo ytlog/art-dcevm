@@ -1,4 +1,5 @@
 #include "platform/android13/validation_hooks.h"
+#include "platform/android13/field_validation.h"
 #include "platform/symbols/android13.h"
 #include "support/elf_modules.h"
 #include <atomic>
@@ -15,13 +16,13 @@ std::atomic<uint64_t> field_calls{0}, method_calls{0}, mapping_calls{0}, source_
 std::atomic<uint64_t> source_in_place_calls{0};
 bool hooks_installed = false, attempted = false;
 thread_local bool source_transaction = false;
-ValidationHooks::Check source_fields = nullptr, source_methods = nullptr, source_classes = nullptr;
+ValidationHooks::Check source_methods = nullptr, source_classes = nullptr;
 ValidationHooks::Commit source_commit = nullptr;
 ValidationHooks::GetJitCodeCache source_jit_code_cache = nullptr;
 ValidationHooks::InvalidateJit invalidate_jit = nullptr;
 bool CheckFields(void* redef) {
   ++field_calls;
-  return source_transaction ? source_fields(redef)
+  return source_transaction ? CheckEvolutionFields(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_fields)(redef);
 }
 bool CheckMethods(void* redef) {
@@ -92,10 +93,10 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
   return true;
 }
 bool ValidationHooks::installed() const { return hooks_installed; }
-void ValidationHooks::ConfigureSource(Check fields, Check methods, Check classes, Commit commit,
+void ValidationHooks::ConfigureSource(Check methods, Check classes, Commit commit,
                                       GetJitCodeCache get_jit_code_cache,
                                       InvalidateJit invalidate) {
-  source_fields = fields; source_methods = methods; source_classes = classes; source_commit = commit;
+  source_methods = methods; source_classes = classes; source_commit = commit;
   source_jit_code_cache = get_jit_code_cache;
   invalidate_jit = invalidate;
 }

@@ -7,6 +7,7 @@ inline constexpr char kStructuralRedefineClasses[] = ARTDCEVM_A13_ORIGINAL_STRUC
 inline constexpr char kIsStructurallyModifiableClass[] = "_ZN12openjdkjvmti9Redefiner17IsModifiableClassEP9_jvmtiEnvP7_jclassPh";
 inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_7HInvokeE";
 inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";
+inline constexpr char kRecordNewFieldAdded[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition19RecordNewFieldAddedEv";
 inline constexpr char kCheckMethods[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv";
 inline constexpr char kCheckClass[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition10CheckClassEv";
 inline constexpr char kCollectNewInstances[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition28CollectAndCreateNewInstancesEPNS_20RedefinitionDataIterE";

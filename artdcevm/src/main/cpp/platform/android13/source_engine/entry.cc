@@ -40,8 +40,6 @@ extern "C" void SourceStructuralCommit(void*, const void*)
     __asm__(ARTDCEVM_A13_SOURCE_STRUCTURAL_COMMIT);
 extern "C" bool SourceCheckMethods(void*)
     __asm__(ARTDCEVM_A13_SOURCE_CHECK_METHODS);
-extern "C" bool SourceCheckFields(void*)
-    __asm__(ARTDCEVM_A13_SOURCE_CHECK_FIELDS);
 extern "C" bool SourceCheckClass(void*)
     __asm__(ARTDCEVM_A13_SOURCE_CHECK_CLASS);
 extern "C" bool SourceCollectNewInstances(void*, void*)
@@ -341,9 +339,6 @@ extern "C" __attribute__((visibility("default"))) void ArtDcevmSourceCommit(
 
 extern "C" __attribute__((visibility("default"))) bool ArtDcevmSourceCheckMethods(void* redefinition) {
   return SourceCheckMethods(redefinition);
-}
-extern "C" __attribute__((visibility("default"))) bool ArtDcevmSourceCheckFields(void* redefinition) {
-  return SourceCheckFields(redefinition);
 }
 extern "C" bool ArtDcevmSourceCheckClass(void* redefinition) { return SourceCheckClass(redefinition); }
 
