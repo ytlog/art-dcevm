@@ -5,6 +5,7 @@
 #include "platform/android13/reflection_bindings.h"
 #include "platform/android13/allocator_membership.h"
 #include "platform/android13/dex_cache_method_reader.h"
+#include "platform/android13/method_access.h"
 #include "platform/android13/transaction_metadata.h"
 #include "platform/android13/member_decode_abi.h"
 #include "platform/android13/field_copy_metadata.h"
@@ -135,6 +136,7 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
   constexpr bool force_arena=false;
 #endif
   if(!ConfigureDexCacheMethodReader(symbols,device_profile,jni,calibration,&error) ||
+      !ConfigureMethodAccess(symbols,device_profile,jni,calibration,&error) ||
       !ConfigureAllocatorMembership(symbols,device_profile,jni,calibration,&membership,&error,force_arena) ||
       !ConfigureRetiredMethodRegistry(symbols,membership,&error) ||
       !ConfigureRetiredFieldRegistry(membership,&error) ||

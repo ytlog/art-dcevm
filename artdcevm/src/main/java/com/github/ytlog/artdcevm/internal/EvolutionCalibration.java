@@ -14,4 +14,6 @@ final class EvolutionCalibration {
     public static int counter = 7;
     /** 提供可通过反射/JNI 解析的真实实例方法，返回值依赖已校准字段。 */
     public int compute() { return value + 1; }
+    /** 校准同包其他类访问 private 成员时的 IllegalAccessError。 */
+    private int privateAccessCalibration() { return value; }
 }

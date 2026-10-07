@@ -170,6 +170,8 @@ bool IsValidationSubclassOf(void* source, void* target) { return Subclass(source
 bool CanAccessValidationClass(void* source, void* target) {
   return (Flags(target)&1) || same_package(source,reinterpret_cast<uintptr_t>(target));
 }
+bool CanAccessValidationMember(void* source,void* declaring,uint32_t flags) { return Accessible(source,declaring,flags); }
+void* ReadValidationMethodClass(void* method) { return read_root(method); }
 bool CheckMethodDependentGuard(void* definition,const char* name,const char* descriptor,uint32_t old_flags,int action) {
   Guard guard(GetValidationClass(definition),name,descriptor,old_flags,action); visit(linker,&guard); return !guard.invalid;
 }
