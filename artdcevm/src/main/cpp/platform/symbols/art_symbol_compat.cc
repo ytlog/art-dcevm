@@ -22,7 +22,8 @@ bool CheckValidationSymbols(HookEngine& hooks, std::string* error) {
 
 bool CheckSourceSymbols(HookEngine& hooks, std::string* error) {
   if (!CheckValidationSymbols(hooks, error)) return false;
-  const char* jvmti[]{cas::kRedefineClasses, cas::kCollectNewInstances,
+  const char* jvmti[]{cas::kRedefineClasses, cas::kStructuralRedefineClasses,
+                      cas::kCollectNewInstances,
                       cas::kAllocateSubtree, cas::kRedefineRun, cas::kAllocateClass};
   for (const char* name : jvmti)
     if (!Require(hooks, Library::kJvmti, name, error)) return false;

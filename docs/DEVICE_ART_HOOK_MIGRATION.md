@@ -28,6 +28,8 @@
 
 原地提交后的全局 JIT 缓存失效现已由增强库的 `InPlaceHook` 实现：它调用设备原提交后，按命名符号调用设备 `JitCodeCache::InvalidateAllCompiledCode`。过渡期源码模块仅返回 `JitCodeCache*`；这条路径仍需在最终迁移中用固定声明和布局探针去掉该访问器。
 
+源码事务调用的设备 `Redefiner::StructurallyRedefineClasses` 现由增强库按命名符号解析，并通过增强库回调供源码实现调用；源码模块不再强链接该设备入口。源码侧事务前检查与修改后的提交实现仍待迁出。
+
 继承批次的 `Redefiner::Run` 与 `FinishNewClassAllocations` 现由增强库安装命名 Inline Hook 并实现分派代理。非演进事务调用设备原函数；演进事务按需调用旧层级实现。源码实现需要原函数行为时，回调增强库，由增强库持有并调用设备 trampoline。层级选择与缓存修复仍在源码模块，尚未达到移除条件。
 
 `ClassRedefinition::AllocateNewClassObject` 也由同一增强库代理分派：普通事务直接调用设备原函数，有层级变化的源码演进事务才交给源码侧选择新父类。增强库只转发固定 arm64 ABI 的不透明参数，源码侧在编译时检查相关 `Handle` 与 `ObjPtr` 大小；层级实现仍待迁出。

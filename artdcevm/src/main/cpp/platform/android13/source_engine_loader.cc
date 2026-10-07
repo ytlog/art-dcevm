@@ -22,6 +22,11 @@ void* source_library = nullptr;
 using Redefine = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Redefine source_redefine = nullptr;
 Redefine source_standard_redefine = nullptr;
+Redefine device_structural_redefine = nullptr;
+jvmtiError CallDeviceStructuralRedefine(jvmtiEnv* env, jint count,
+                                        const jvmtiClassDefinition* definitions) {
+  return device_structural_redefine(env, count, definitions);
+}
 bool load_attempted = false, ready = false;
 #ifdef ARTDCEVM_TESTING
 void* graph_inline_hook_token = nullptr;
@@ -61,6 +66,16 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     return "Missing named ART read barrier or source callback";
   }
   configure_read_barrier(read_barrier_mark);
+  using ConfigureStructural = void (*)(Redefine);
+  auto configure_structural = reinterpret_cast<ConfigureStructural>(
+      dlsym(library, "ArtDcevmSourceConfigureStructuralRedefine"));
+  device_structural_redefine = reinterpret_cast<Redefine>(
+      symbols.FindSymbol("libopenjdkjvmti.so", cas::kStructuralRedefineClasses));
+  if (!configure_structural || !device_structural_redefine) {
+    dlclose(library);
+    return "Missing named structural redefine entrypoint or source callback";
+  }
+  configure_structural(CallDeviceStructuralRedefine);
   using Probe = int (*)(JNIEnv*, jobject);
   auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));

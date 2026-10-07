@@ -29,11 +29,13 @@
 #include <cstring>
 #include <unistd.h>
 
-// Source-declared C++ ABI aliases: no object offsets or code addresses are derived
-// from a binary. The first symbol is linked from the phone's JVMTI implementation;
-// the second is our source-compiled structural commit in this shared library.
-extern "C" jvmtiError OriginalStructuralRedefine(jvmtiEnv*, jint, const jvmtiClassDefinition*)
-    __asm__(ARTDCEVM_A13_ORIGINAL_STRUCTURAL_REDEFINE);
+// Device structural redefinition is supplied by the enhancement library after
+// named-symbol lookup. These aliases below name our source-compiled functions.
+using StructuralRedefine = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
+namespace { StructuralRedefine call_device_structural_redefine = nullptr; }
+extern "C" void ArtDcevmSourceConfigureStructuralRedefine(StructuralRedefine callback) {
+  call_device_structural_redefine = callback;
+}
 extern "C" void SourceStructuralCommit(void*, const void*)
     __asm__(ARTDCEVM_A13_SOURCE_STRUCTURAL_COMMIT);
 extern "C" bool SourceCheckMethods(void*)
@@ -306,7 +308,7 @@ jvmtiError RedefineSourceTransaction(jvmtiEnv* env, jint count,
   // transaction while all old class definitions are still intact.
   jvmtiError result = needs_receiver_guard && !DrainActiveAppCompiledFrames()
       ? JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED
-      : OriginalStructuralRedefine(env, count, definitions);
+      : call_device_structural_redefine(env, count, definitions);
   if (needs_receiver_guard) {
     const bool retain = result == JVMTI_ERROR_NONE &&
         artdcevm::android13::source::HasHierarchyNarrowing();
