@@ -271,11 +271,7 @@ extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void
 
 namespace {
 using Verify = decltype(&art::verifier::ClassVerifier::VerifyClass);
-using Resolve = art::ObjPtr<art::mirror::Class> (*)(void*, const char*, art::ObjPtr<art::mirror::ClassLoader>);
 void* original_verify = nullptr;
-void* original_resolve = nullptr;
-void* original_find = nullptr;
-void* original_lookup = nullptr;
 // Verification sees the unpublished replacement through a thread-local view.
 // The borrowed Handle remains rooted by CheckVerification for the entire call.
 struct VerificationView {
@@ -284,13 +280,8 @@ struct VerificationView {
 };
 thread_local VerificationView* verification_view = nullptr;
 }
-extern "C" void** ArtDcevmSourceConfigureHierarchyVerification(int index) {
-  switch (index) {
-    case 0: return &original_verify;
-    case 1: return &original_resolve;
-    case 2: return &original_find;
-    default: return &original_lookup;
-  }
+extern "C" void** ArtDcevmSourceConfigureHierarchyVerification() {
+  return &original_verify;
 }
 extern "C" art::verifier::FailureKind ArtDcevmSourceHierarchyVerify(
     art::Thread* self, art::verifier::VerifierDeps* deps, const art::DexFile* dex,
@@ -320,8 +311,10 @@ extern "C" art::verifier::FailureKind ArtDcevmSourceHierarchyVerify(
   verification_view = view.previous;
   return result;
 }
-extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyResolve(
-    void* type_cache, const char* descriptor, art::ObjPtr<art::mirror::ClassLoader> loader) {
+extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyResolveReplacement(
+    void*, const char* descriptor, art::ObjPtr<art::mirror::ClassLoader> loader) {
+  static_assert(sizeof(art::ObjPtr<art::mirror::Class>) == sizeof(void*));
+  static_assert(sizeof(art::ObjPtr<art::mirror::ClassLoader>) == sizeof(void*));
   for (auto* view = verification_view; view; view = view->previous) {
     for (art::ObjPtr<art::mirror::Class> klass(view->klass->Get());
          klass != nullptr; klass = klass->GetSuperClass()) {
@@ -331,7 +324,7 @@ extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyResolve(
       }
     }
   }
-  return reinterpret_cast<Resolve>(original_resolve)(type_cache, descriptor, loader);
+  return nullptr;
 }
 extern "C" uint64_t ArtDcevmSourceHierarchyDiagnostics(int index) {
   return index == 0 ? parent_selections.load() : index == 1 ? verifier_resolutions.load()
@@ -357,17 +350,12 @@ art::ObjPtr<art::mirror::Class> VerificationClass(const char* descriptor,
 }
 // ResolveClass can be inlined into RegTypeCache::From by the device compiler.
 // Intercept its named linker calls too, under the same verifier-only view.
-extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyFind(
-    void* linker, art::Thread* self, const char* descriptor, art::Handle<art::mirror::ClassLoader> loader) {
-  auto replacement = VerificationClass(descriptor, loader.Get());
-  if (replacement != nullptr) return replacement;
-  using Fn = art::ObjPtr<art::mirror::Class> (*)(void*, art::Thread*, const char*, art::Handle<art::mirror::ClassLoader>);
-  return reinterpret_cast<Fn>(original_find)(linker, self, descriptor, loader);
+extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyFindReplacement(
+    void*, art::Thread*, const char* descriptor, art::Handle<art::mirror::ClassLoader> loader) {
+  static_assert(sizeof(art::Handle<art::mirror::ClassLoader>) == sizeof(void*));
+  return VerificationClass(descriptor, loader.Get());
 }
-extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyLookup(
-    void* linker, art::Thread* self, const char* descriptor, art::ObjPtr<art::mirror::ClassLoader> loader) {
-  auto replacement = VerificationClass(descriptor, loader);
-  if (replacement != nullptr) return replacement;
-  using Fn = art::ObjPtr<art::mirror::Class> (*)(void*, art::Thread*, const char*, art::ObjPtr<art::mirror::ClassLoader>);
-  return reinterpret_cast<Fn>(original_lookup)(linker, self, descriptor, loader);
+extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyLookupReplacement(
+    void*, art::Thread*, const char* descriptor, art::ObjPtr<art::mirror::ClassLoader> loader) {
+  return VerificationClass(descriptor, loader);
 }

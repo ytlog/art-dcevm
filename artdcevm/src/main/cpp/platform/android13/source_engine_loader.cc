@@ -7,6 +7,7 @@
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/hierarchy_batch_hooks.h"
+#include "platform/android13/hierarchy_resolution_hooks.h"
 #include "platform/android13/class_loader_hooks.h"
 #include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/async_deopt_hooks.h"
@@ -72,15 +73,12 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
   auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
-  using ConfigureVerification = void** (*)(int);
+  using ConfigureVerification = void** (*)();
   auto configure_verification = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyVerification"));
   void* verify = dlsym(library, "ArtDcevmSourceHierarchyVerify");
-  void* resolve = dlsym(library, "ArtDcevmSourceHierarchyResolve");
-  void* find = dlsym(library, "ArtDcevmSourceHierarchyFind");
-  void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
       !invalidate_jit || !methods || !fields || !classes
-      || !configure_verification || !verify || !resolve || !find || !lookup) {
+      || !configure_verification || !verify) {
     dlclose(library); return "Source engine exports are incomplete";
   }
   // The source probe may touch a reflected Field, so initialize its opaque
@@ -104,13 +102,12 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
-  const char* verification_symbols[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass, cas::kLookupClass};
-  void* verification_proxies[]{verify, resolve, find, lookup};
-  for (int i = 0; i < 4; ++i) {
-    void* target = symbols.FindSymbol("libart.so", verification_symbols[i]);
-    if (!target) return std::string("Missing hierarchy verification symbol: ") + verification_symbols[i];
-    if (!symbols.Install(target, verification_proxies[i], configure_verification(i), &error)) return error;
-  }
+  void* verify_target = symbols.FindSymbol("libart.so", cas::kVerifyClass);
+  void** verify_original = configure_verification();
+  if (!verify_target || !verify_original ||
+      !symbols.Install(verify_target, verify, verify_original, &error))
+    return error.empty() ? "Missing named hierarchy verification symbol" : error;
+  if (!InstallHierarchyResolutionHooks(symbols, library, &error)) return error;
   if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;

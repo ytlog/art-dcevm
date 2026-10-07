@@ -10,6 +10,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc
     platform/android13/hierarchy_batch_hooks.cc
+    platform/android13/hierarchy_resolution_hooks.cc
     platform/android13/class_loader_hooks.cc
     platform/android13/instance_allocation_hooks.cc
     platform/android13/async_deopt_hooks.cc
