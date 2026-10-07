@@ -7,6 +7,7 @@
 #include "platform/symbols/android13.h"
 #include "hooks/shadow_hook_engine.h"
 #include "core/transaction_lock.h"
+#include <algorithm>
 #include <cstring>
 #include <elf.h>
 #include <iomanip>
@@ -60,8 +61,6 @@ int Android13Backend::Attach(JavaVM* vm) {
   for (int i = 0; i < count; ++i) {
     auto& f = functions[i];
     extensions_.emplace_back(f.id);
-    if (std::strcmp(f.id, "com.android.art.class.structurally_redefine_classes") == 0)
-      structural_ = reinterpret_cast<StructuralFn>(f.func);
     if (std::strcmp(f.id, "com.android.art.class.is_structurally_modifiable_class") == 0)
       modifiable_ = reinterpret_cast<ModifiableFn>(f.func);
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.id));
@@ -71,6 +70,18 @@ int Android13Backend::Attach(JavaVM* vm) {
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
   }
   env_->Deallocate(reinterpret_cast<unsigned char*>(functions));
+  // The structural extension advertises support, while the named device
+  // implementation is the actual call target. Do not assume an extension
+  // function pointer is the same entry point as ART's private implementation.
+  if (std::find(extensions_.begin(), extensions_.end(),
+                "com.android.art.class.structurally_redefine_classes") != extensions_.end()) {
+    ShadowHookEngine symbols;
+    std::string error;
+    if (symbols.Initialize(&error)) {
+      structural_ = reinterpret_cast<StructuralFn>(symbols.FindSymbol(
+          "libopenjdkjvmti.so", cas::kStructuralRedefineClasses));
+    }
+  }
   body_ = std::make_unique<JvmtiBodyRedefiner>(env_, caps_.can_redefine_classes != 0);
   additive_ = std::make_unique<ArtAdditiveRedefiner>(env_, structural_, modifiable_);
   __android_log_print(ANDROID_LOG_INFO, "ArtDcevm", "Android 13 attached: redefine=%d structural=%d", caps_.can_redefine_classes, structural_ != nullptr);
