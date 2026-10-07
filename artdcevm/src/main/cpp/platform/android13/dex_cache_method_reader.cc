@@ -22,13 +22,7 @@ template<class T>T Read(const void* object,size_t offset) {
 }
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
 bool ReadCache(void* cache,uint32_t index,void** output) {
-  using namespace dex_cache_method_abi;
-  // AllocArray publishes the initialized array after its count with volatile
-  // stores. Acquire the pointer before consulting the count or the pairs.
-  auto* bytes=static_cast<const unsigned char*>(cache);
-  const auto address=__atomic_load_n(reinterpret_cast<const uint64_t*>(bytes+offsetof(Cache,methods)),__ATOMIC_ACQUIRE);
-  const auto count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+offsetof(Cache,num_methods)),__ATOMIC_RELAXED);
-  return Lookup(reinterpret_cast<const std::atomic<Pair>*>(address),count,index,output);
+  return method_cache::ReadCache(33,cache,sizeof(dex_cache_method_abi::Cache),0,index,output);
 }
 bool ReadMapping(void* cache,evolution::MappedDexMetadata* output,std::string* error) {
   const auto address=Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file));

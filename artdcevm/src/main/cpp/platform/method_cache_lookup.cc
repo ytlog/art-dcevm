@@ -40,4 +40,27 @@ bool LookupDual(int api,const std::atomic<uintptr_t>* full,const void* pairs,
     if(spins>10000)std::this_thread::sleep_for(std::chrono::nanoseconds(100000));
   }
 }
+bool ReadCache(int api,const void* cache,size_t extent,uint32_t method_count,
+               uint32_t index,void** output) {
+  if(!output)return false;
+  *output=nullptr;
+  if(api<30 || api>37 || !cache || reinterpret_cast<uintptr_t>(cache)%alignof(uint64_t))return false;
+  const size_t size=api<=33?sizeof(LegacyCache):sizeof(DualCache);
+  if(extent<size || reinterpret_cast<uintptr_t>(cache)>std::numeric_limits<uintptr_t>::max()-size)return false;
+  const auto* bytes=static_cast<const unsigned char*>(cache);
+  auto pointer=[&](size_t offset) {
+    return __atomic_load_n(reinterpret_cast<const uint64_t*>(bytes+offset),__ATOMIC_ACQUIRE);
+  };
+  if(api<=33) {
+    const auto address=pointer(offsetof(LegacyCache,methods));
+    const uint32_t count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+offsetof(LegacyCache,num_methods)),__ATOMIC_RELAXED);
+    return Lookup(reinterpret_cast<const std::atomic<Pair>*>(address),count,index,output);
+  }
+  const auto full=pointer(offsetof(DualCache,methods_array));
+  // The unused pointer is not read after choosing the full-array branch.
+  const auto pairs=full?0:pointer(offsetof(DualCache,methods));
+  return LookupDual(api,reinterpret_cast<const std::atomic<uintptr_t>*>(full),
+                    reinterpret_cast<const void*>(pairs),method_count,index,output);
+}
+
 }

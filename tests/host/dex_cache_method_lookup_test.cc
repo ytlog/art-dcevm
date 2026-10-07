@@ -95,6 +95,56 @@ int main() {
     assert(modern::LookupDual(35,nullptr,sequence.get(),method_count,collision,&result) && (!result || result==&second));
   }
   sequence_writer.join();
+  // Exercise actual source-declared managed fields, rather than only tables.
+  alignas(8) modern::LegacyCache legacy{};
+  legacy.methods=reinterpret_cast<uintptr_t>(table.get());legacy.num_methods=g::kSlots;
+  table[index].store({reinterpret_cast<uintptr_t>(&first),index},std::memory_order_release);
+  for(int api=30;api<=33;++api) {
+    assert(modern::ReadCache(api,&legacy,sizeof(legacy),0,index,&result) && result==&first);
+    assert(!modern::ReadCache(api,&legacy,sizeof(legacy)-1,0,index,&result) && !result);
+  }
+  alignas(8) modern::DualCache dual{};
+  full[index].store(0,std::memory_order_relaxed);
+  dual.methods_array=reinterpret_cast<uintptr_t>(full.get());
+  for(int api=34;api<=37;++api) {
+    dual.methods=reinterpret_cast<uintptr_t>(bad_sequence);
+    assert(modern::ReadCache(api,&dual,sizeof(dual),method_count,index,&result) && !result);
+    assert(!modern::ReadCache(api,&dual,sizeof(dual)-1,method_count,index,&result) && !result);
+    dual.methods_array=0;
+    dual.methods=reinterpret_cast<uintptr_t>(api==34?static_cast<const void*>(table.get()):sequence.get());
+    store_sequence(index,reinterpret_cast<uintptr_t>(&first));
+    assert(modern::ReadCache(api,&dual,sizeof(dual),method_count,index,&result) && result==&first);
+    dual.methods_array=reinterpret_cast<uintptr_t>(full.get());
+  }
+  assert(!modern::ReadCache(29,&legacy,sizeof(legacy),0,index,&result));
+  assert(!modern::ReadCache(38,&dual,sizeof(dual),method_count,index,&result));
+  assert(!modern::ReadCache(33,nullptr,sizeof(legacy),0,index,&result));
+  assert(!modern::ReadCache(33,reinterpret_cast<const char*>(&legacy)+4,sizeof(legacy),0,index,&result));
+  assert(!modern::ReadCache(33,&legacy,sizeof(legacy),0,index,nullptr));
+  assert(!modern::ReadCache(33,reinterpret_cast<const void*>(UINTPTR_MAX-7),sizeof(legacy),0,index,&result));
+  // AllocArray publishes the count before its array pointer. Acquiring the
+  // pointer must make the table and matching count visible to cache readers.
+  alignas(8) modern::LegacyCache published{};
+  auto* published_pointer=reinterpret_cast<uint64_t*>(reinterpret_cast<unsigned char*>(&published)+offsetof(modern::LegacyCache,methods));
+  std::thread publisher([&] {
+    __atomic_store_n(&published.num_methods,g::kSlots,__ATOMIC_RELAXED);
+    __atomic_store_n(published_pointer,reinterpret_cast<uintptr_t>(table.get()),__ATOMIC_RELEASE);
+  });
+  while(!__atomic_load_n(published_pointer,__ATOMIC_ACQUIRE)){}
+  assert(modern::ReadCache(33,&published,sizeof(published),0,index,&result) && result==&first);
+  publisher.join();
+  for(int api=34;api<=37;++api) {
+    alignas(8) modern::DualCache modern_publication{};
+    auto* array_pointer=reinterpret_cast<uint64_t*>(reinterpret_cast<unsigned char*>(&modern_publication)+offsetof(modern::DualCache,methods_array));
+    full[index].store(0,std::memory_order_relaxed);
+    std::thread publish_full([&] {
+      full[index].store(reinterpret_cast<uintptr_t>(&first),std::memory_order_relaxed);
+      __atomic_store_n(array_pointer,reinterpret_cast<uintptr_t>(full.get()),__ATOMIC_RELEASE);
+    });
+    while(!__atomic_load_n(array_pointer,__ATOMIC_ACQUIRE)){}
+    assert(modern::ReadCache(api,&modern_publication,sizeof(modern_publication),method_count,index,&result) && result==&first);
+    publish_full.join();
+  }
   // ART changes the pointer and index together. A reader must never report
   // the pointer from a colliding index, including during concurrent updates.
   std::atomic<bool> start{false};
@@ -111,5 +161,5 @@ int main() {
     assert(g::Lookup(table.get(),g::kSlots,collision,&result) && (!result || result==&second));
   }
   writer.join();
-  std::cout<<"DexCache method pairs: cache misses, index collisions, bounds, full-array precedence/empty entries and API35-37 sequence locks and concurrent pair/full/sequence identity passed\n";
+  std::cout<<"DexCache method pairs: cache misses, index collisions, bounds, full-array precedence/empty entries and API35-37 sequence locks and concurrent pair/full/sequence identity, API30-37 field reads and table publication passed\n";
 }

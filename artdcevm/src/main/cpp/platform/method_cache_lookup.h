@@ -34,6 +34,11 @@ inline constexpr uint64_t kSequenceMask=0xffffffff00000000ull;
 inline constexpr uint64_t kSequenceLock=0x8000000000000000ull;
 // method_count comes from the verified DEX NumMethodIds, not a legacy count
 // field. An allocated full array wins even when its selected entry is null.
+// Read the source-declared cache pointer fields atomically. Legacy counts are
+// read after acquiring their array publication; modern method_count is supplied
+// by the verified DEX. extent belongs to the live, calibrated managed object.
+bool ReadCache(int api,const void* cache,size_t extent,uint32_t method_count,
+               uint32_t index,void** output);
 bool LookupDual(int api,const std::atomic<uintptr_t>* full,const void* pairs,
                 uint32_t method_count,uint32_t index,void** output);
 }
