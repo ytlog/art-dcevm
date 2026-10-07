@@ -18,7 +18,7 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 `build/evidence/source-engine/20261006T154308Z/run.json`。两组完整套件的主要重定义调用已由独立测试 Agent 通过标准 JVMTI 入口执行；少量前置失败及旧路径对照仍使用内部接口。
 迁移前加入跨版本公开后端后，Android 13 / arm64 的完整源码演进套件再次通过：[历史报告](../build/evidence/source-engine/20261006T213857Z/run.json)。
 
-当前默认 NDK 构建只生成增强引擎 `libartdcevm.so`，不下载或编译 AOSP，不加载独立源码引擎，也不需要 `-PsourceEngine13`。自有 `evolution_runtime` 通过命名设备函数及 Hook 代理处理演进。无源码首版 APK `b051…` 已通过标准入口六种组合与完整 `source-first` 回归，后续最终回归仍在进行；最终结果以 [VERIFICATION.md](VERIFICATION.md) 为准。
+当前默认 NDK 构建只生成增强引擎 `libartdcevm.so`，不下载或编译 AOSP，不加载独立源码引擎，也不需要 `-PsourceEngine13`。自有 `evolution_runtime` 通过命名设备函数及 Hook 代理处理演进。当前无源码候选的最终完整回归矩阵仍在运行，尚未给出全部组合通过结论；最终结果以 [VERIFICATION.md](VERIFICATION.md) 为准。
 
 下面的 2026-10-04 至 2026-10-06 专项、APK 哈希和 `build/evidence/source-engine/` 链接是迁移前历史证据。历史报告目录与 Hook 顺序名继续保留，不表示现行实现包含源码 SO。
 
