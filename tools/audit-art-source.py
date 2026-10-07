@@ -19,19 +19,29 @@ INTERFACES = {
     'runtime/instrumentation.h': ('GetCodeForInvoke', 'InitializeMethodsCode', 'InstrumentThreadStack'),
     'runtime/jit/jit.h': ('CompileMethod',),
     'runtime/jit/jit_code_cache.h': ('VisitAllMethods',),
-    'runtime/mirror/class.h': ('GetDirectInterface',),
+    'runtime/mirror/class.h': ('GetDirectInterface', 'CanAccessMember', 'CheckResolvedMethodAccess'),
     'runtime/mirror/var_handle.h': ('GetAccessModeTemplate',),
     'runtime/art_field.h': ('GetName', 'GetTypeDescriptor'),
     'compiler/optimizing/inliner.h': ('TryInline',),
-    'runtime/class_linker.h': ('ResolveMethod',),
-    'runtime/class_linker-inl.h': ('ResolveMethod',),
-    'runtime/class_linker.cc': ('ResolveMethod', 'DeleteClassLoader'),
+    'runtime/class_linker.h': ('ResolveMethod', 'ResolveMethodId', 'ResolveMethodWithChecks',
+                              'ThrowIfInvokeClassMismatch'),
+    'runtime/class_linker-inl.h': ('ResolveMethod', 'ResolveMethodId', 'ResolveMethodWithChecks',
+                                  'CheckInvokeClassMismatch', 'ThrowIfInvokeClassMismatch'),
+    'runtime/class_linker.cc': ('ResolveMethod', 'ResolveMethodId', 'ResolveMethodWithoutInvokeType',
+                              'DeleteClassLoader'),
     'runtime/linear_alloc.h': ('ContainsUnsafe',),
     'runtime/linear_alloc.cc': ('ContainsUnsafe',),
     'runtime/linear_alloc-inl.h': ('ContainsUnsafe', 'Contains', 'Alloc'),
     'libartbase/base/arena_allocator.h': ('Contains', 'GetArenaPool'),
     'libartbase/base/arena_allocator.cc': ('Contains',),
     'runtime/base/mutex.h': ('Mutex',),
+    'runtime/mirror/class-inl.h': ('ResolvedMethodAccessTest', 'CanAccessMember'),
+    'runtime/common_throws.h': ('ThrowIllegalAccessErrorClassForMethodDispatch',
+                                'ThrowIllegalAccessErrorMethod', 'ThrowIncompatibleClassChangeError'),
+    'libdexfile/dex/standard_dex_file.cc': ('SupportsDefaultMethods',),
+    'libdexfile/dex/compact_dex_file.cc': ('SupportsDefaultMethods',),
+    'libdexfile/dex/dex_file.h': ('SupportsDefaultMethods',),
+    'libdexfile/dex/compact_dex_file.h': ('GetFeatureFlags',),
 }
 
 
@@ -78,11 +88,14 @@ def main():
             continue
         major = int(tag.split('-')[1].split('.')[0])
         oat = 'runtime/oat/' if major >= 15 else 'runtime/'
+        # Android 17 removed CompactDex from the official libdexfile tree.
+        compact_sources = {'libdexfile/dex/compact_dex_file.h', 'libdexfile/dex/compact_dex_file.cc'}
         files = ['openjdkjvmti/ti_redefine.h', 'openjdkjvmti/ti_redefine.cc',
                  'openjdkjvmti/ti_extension.cc', 'runtime/art_method.h',
                  oat + 'oat_quick_method_header.h', oat + 'stack_map.h', 'runtime/Android.bp',
                  *(name for name in INTERFACES
-                   if name != ('runtime/linear_alloc.cc' if major >= 14 else 'runtime/linear_alloc-inl.h'))]
+                   if name != ('runtime/linear_alloc.cc' if major >= 14 else 'runtime/linear_alloc-inl.h')
+                   and (major < 17 or name not in compact_sources))]
         content = {}
         for name in files:
             path = args.source_dir / tag / name
@@ -146,6 +159,17 @@ def main():
             'compilerBundledIntoArt': bool(re.search(
                 r'name:\s*"libart",(?:(?!\n\}).)*?whole_static_libs:\s*\[[^]]*"libart-compiler"',
                 content['runtime/Android.bp'], re.DOTALL)),
+            'defaultMethodsDexVersionDeclaration': re.findall(
+                r'kDefaultMethodsVersion\s*=\s*(\d+)', content['libdexfile/dex/dex_file.h']),
+            'compactDexDefaultMethodsFeatureDeclaration': re.findall(
+                r'kDefaultMethods\s*=\s*(0x[0-9a-fA-F]+|\d+)',
+                content.get('libdexfile/dex/compact_dex_file.h', '')),
+            'compactDexImplementationFile': 'libdexfile/dex/compact_dex_file.cc' if major < 17 else None,
+            'compactDexDefaultMethodsReadsFeatureFlags': ('GetHeader().GetFeatureFlags()' in
+                content['libdexfile/dex/compact_dex_file.cc']) if major < 17 else None,
+            'methodResolverDeclarationFamily': ('separate-id-and-checks'
+                if re.search(r'\bResolveMethodWithChecks\s*\(', content['runtime/class_linker.h'])
+                else 'templated-resolve-mode'),
         })
     # Preserve unrelated previously fetched sources and their provenance.
     merged = dict(cached)
