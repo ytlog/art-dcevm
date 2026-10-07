@@ -11,7 +11,6 @@ inline constexpr uint32_t kRetiredFieldTag = uint32_t{1} << 31;
 struct RetiredFieldCallbacks {
   void (*retire)(void*);
   uint32_t (*token_for)(void*);
-  void* (*resolve)(uint32_t);
   bool (*final_guard_enabled)();
   bool (*guard)(void*, void*, void*);
 };

@@ -1,12 +1,15 @@
 --- ti_redefine.cc
 +++ ti_redefine.cc
-@@ -30,6 +30,13 @@
+@@ -30,6 +30,16 @@
   */
 
  #include "ti_redefine.h"
 +#include "retired_methods.h"
 +#include "retired_fields.h"
 +#include "hierarchy.h"
++#include "platform/android13/allocation_validation_abi.h"
++#include "platform/android13/art_method_abi.h"
++#include "platform/android13/validation_metadata_abi.h"
 +extern "C" bool ArtDcevmSourceCheckFields(void*);
 +extern "C" bool ArtDcevmSourceCheckMethods(void*);
 +extern "C" bool ArtDcevmSourceCheckClass(void*);
@@ -14,7 +17,7 @@
 
  #include <algorithm>
  #include <atomic>
-@@ -924,231 +931,15 @@
+@@ -924,231 +934,15 @@
  }
 
  bool Redefiner::ClassRedefinition::CheckMethods() {
@@ -249,14 +252,33 @@
  }
 
  bool Redefiner::ClassRedefinition::CheckRedefinable() {
-@@ -1706,97 +1497,35 @@
+@@ -1389,6 +1183,7 @@
+   RedefinitionDataIter end() REQUIRES_SHARED(art::Locks::mutator_lock_);
+
+  private:
++  friend struct AllocationValidationProbe;
+   mutable art::Handle<art::mirror::ObjectArray<art::mirror::Object>> arr_;
+   std::vector<Redefiner::ClassRedefinition>* redefinitions_;
+   // Used to mark a particular redefinition as fully initialized.
+@@ -1601,9 +1396,12 @@
+   }
+
+  private:
++  friend struct AllocationValidationProbe;
+   int32_t idx_;
+   RedefinitionDataHolder& holder_;
+ };
++
++#include "allocation_validation_probe.inc"
+
+ RedefinitionDataIter RedefinitionDataHolder::begin() {
+   return RedefinitionDataIter(0, *this);
+@@ -1706,99 +1504,7 @@
    return parents(l.Ptr()) < parents(r.Ptr());
  }
 
-+extern "C" bool ArtDcevmSourceOriginalInstanceAllocation(void* definition, void* data);
-+
- bool Redefiner::ClassRedefinition::CollectAndCreateNewInstances(
-     /*out*/ RedefinitionDataIter* cur_data) {
+-bool Redefiner::ClassRedefinition::CollectAndCreateNewInstances(
+-    /*out*/ RedefinitionDataIter* cur_data) {
 -  if (!cur_data->IsInitialStructural()) {
 -    // An earlier structural redefinition already remade all the instances.
 -    return true;
@@ -346,35 +368,13 @@
 -    new_instances_arr->Set(i, new_instance);
 -  }
 -  cur_data->SetNewInstanceObjects(new_instances_arr.Get());
-+  // Device ART performs the heap walk and all allocations using its own ABI.
-+  if (!ArtDcevmSourceOriginalInstanceAllocation(this, cur_data)) return false;
-+  if (!cur_data->IsInitialStructural()) return true;
-+  art::ObjPtr<art::mirror::ObjectArray<art::mirror::Object>> old_instances(
-+      cur_data->GetOldInstanceObjects());
-+  art::ObjPtr<art::mirror::ObjectArray<art::mirror::Class>> old_classes(
-+      cur_data->GetOldClasses());
-+  art::ObjPtr<art::mirror::ObjectArray<art::mirror::Class>> new_classes(
-+      cur_data->GetNewClasses());
-+  DCHECK_EQ(old_classes->GetLength(), new_classes->GetLength());
-+  for (auto old_instance : old_instances->Iterate()) {
-+    for (int32_t class_index = 0; class_index < old_classes->GetLength(); ++class_index) {
-+      if (old_instance->GetClass() != old_classes->Get(class_index)) continue;
-+      art::ObjPtr<art::mirror::Class> new_type = new_classes->Get(class_index);
-+      if (!new_type->IsAbstract()) break;
-+      for (int32_t method_index = 0; method_index < new_type->GetVTableLength(); ++method_index) {
-+        if (new_type->GetVTableEntry(method_index, art::kRuntimePointerSize)->IsAbstract()) {
-+          RecordFailure(ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
-+                        "A direct instance would inherit an abstract method");
-+          return false;
-+        }
-+      }
-+      break;
-+    }
-+  }
-   return true;
- }
+-  return true;
+-}
++
 
-@@ -1844,147 +1573,22 @@
+ bool Redefiner::ClassRedefinition::FinishRemainingCommonAllocations(
+     /*out*/RedefinitionDataIter* cur_data) {
+@@ -1844,147 +1550,22 @@
    return true;
  }
 
@@ -536,7 +536,23 @@
  }
 
  uint32_t Redefiner::ClassRedefinition::GetNewClassSize(art::ClassAccessor& accessor) {
-@@ -2429,91 +2033,15 @@
+@@ -2187,15 +1768,6 @@
+   return true;
+ }
+
+-bool Redefiner::CollectAndCreateNewInstances(RedefinitionDataHolder& holder) {
+-  for (RedefinitionDataIter data = holder.begin(); data != holder.end(); ++data) {
+-    // Allocate the data this redefinition requires.
+-    if (!data.GetRedefinition().CollectAndCreateNewInstances(&data)) {
+-      return false;
+-    }
+-  }
+-  return true;
+-}
+
+ bool Redefiner::FinishAllNewClassAllocations(RedefinitionDataHolder& holder) {
+   for (RedefinitionDataIter data = holder.begin(); data != holder.end(); ++data) {
+@@ -2429,91 +2001,15 @@
    DISALLOW_COPY_AND_ASSIGN(ScopedSuspendAllocations);
  };
 
@@ -636,7 +652,7 @@
 
  void Redefiner::ClassRedefinition::UpdateMethods(art::ObjPtr<art::mirror::Class> mclass,
                                                   const art::dex::ClassDef& class_def) {
-@@ -2582,10 +2110,20 @@
+@@ -2582,10 +2078,20 @@
    for (auto [new_cls, old_cls] :
         art::ZipLeft(data.GetNewClasses()->Iterate(), data.GetOldClasses()->Iterate())) {
      for (art::ArtField& f : old_cls->GetSFields()) {
@@ -659,7 +675,7 @@
      }
      auto new_methods = new_cls->GetMethods(art::kRuntimePointerSize);
      for (art::ArtMethod& m : old_cls->GetMethods(art::kRuntimePointerSize)) {
-@@ -2595,127 +2133,42 @@
+@@ -2595,127 +2101,42 @@
            new_methods.begin(),
            new_methods.end(),
            [&](art::ArtMethod& cand) REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -816,7 +832,7 @@
  }
 
  void Redefiner::ClassRedefinition::UpdateClassStructurally(const RedefinitionDataIter& holder) {
-@@ -2741,6 +2194,17 @@
+@@ -2741,6 +2162,17 @@
    // ahold of the old classes so copy them now.
    std::vector<art::ObjPtr<art::mirror::Class>> old_classes_vec(old_classes->Iterate().begin(),
                                                                 old_classes->Iterate().end());
@@ -834,7 +850,7 @@
    // Copy over the static fields of the class and all the instance fields.
    for (auto [new_class, old_class] : art::ZipLeft(new_classes->Iterate(), old_classes->Iterate())) {
      CHECK(!new_class.IsNull());
-@@ -2771,13 +2235,18 @@
+@@ -2771,13 +2203,18 @@
      // implementation here since we don't want to race with any threads doing
      // RegisterNatives.
      for (art::ArtMethod& m : old_class->GetMethods(art::kRuntimePointerSize)) {
@@ -860,7 +876,7 @@
        }
        m.SetIsObsolete();
        cl->SetEntryPointsForObsoleteMethod(&m);
-@@ -2861,6 +2330,14 @@
+@@ -2861,6 +2298,14 @@
        [&](art::ArtField* f, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(f != nullptr) << info;
          auto it = field_map.find(f);
@@ -875,7 +891,7 @@
          if (UNLIKELY(could_change_resolution_of(f, info))) {
            // Dex-cache Resolution might change. Just clear the resolved value.
            VLOG(plugin) << "Clearing resolution " << info << " for (field) " << f->PrettyField();
-@@ -2875,13 +2352,29 @@
+@@ -2875,13 +2320,29 @@
        [&](art::ArtMethod* m, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(m != nullptr) << info;
          auto it = method_map.find(m);
@@ -905,7 +921,7 @@
            return it->second;
          }
          return m;
-@@ -2923,6 +2416,11 @@
+@@ -2923,6 +2384,11 @@
      // TODO We might want to have some way to tell the JIT not to wait the kJitSamplesBatchSize
      // invokes to start compiling things again.
      jit->GetCodeCache()->InvalidateAllCompiledCode();

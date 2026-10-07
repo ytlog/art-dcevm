@@ -1,5 +1,6 @@
 #include "platform/android13/class_validation.h"
 #include "platform/android13/class_validation_abi.h"
+#include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/redefinition_failure.h"
@@ -11,7 +12,6 @@
 #include <new>
 namespace artdcevm::android13 {
 namespace {
-ClassSubclassGuard subclass_guard = nullptr;
 ClassHierarchyGuard hierarchy_guard = nullptr;
 using RecordNewMethod = void (*)(void*);
 RecordNewMethod record_new_method = nullptr;
@@ -51,7 +51,7 @@ bool CheckEvolutionClass(void* definition) {
                                "Cannot change modifiers of class by redefinition");
       return false;
     }
-    if (action == ModifierEvolutionAction::kCheckLoadedSubclass && !subclass_guard(definition)) {
+    if (action == ModifierEvolutionAction::kCheckLoadedSubclass && !CheckLoadedSubclassGuard(definition)) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                                "A loaded subclass prevents making this class final");
       return false;
@@ -87,16 +87,15 @@ bool CheckEvolutionClass(void* definition) {
   }
 }
 bool ConfigureEvolutionClassValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto subclass = reinterpret_cast<ClassSubclassGuard>(dlsym(implementation, "ArtDcevmSourceClassSubclassGuard"));
   auto hierarchy = reinterpret_cast<ClassHierarchyGuard>(dlsym(implementation, "ArtDcevmSourceClassHierarchyGuard"));
   auto configure = reinterpret_cast<ConfigureClassValidation>(dlsym(implementation, "ArtDcevmSourceConfigureClassValidation"));
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!subclass || !hierarchy || !configure || !record) {
-    *error = "Missing class access/subclass/hierarchy adapter or named structural marker";
+  if (!hierarchy || !configure || !record) {
+    *error = "Missing class hierarchy/validation callback or named structural marker";
     return false;
   }
-  subclass_guard = subclass; hierarchy_guard = hierarchy; record_new_method = record;
+  hierarchy_guard = hierarchy; record_new_method = record;
   configure(CheckEvolutionClass);
   return true;
 }

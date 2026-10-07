@@ -19,9 +19,11 @@ T Read(const void* object, size_t offset) {
 }
 }
 
-bool ReadValidationMetadata(void* definition, ValidationMetadata* output) {
+void* GetValidationClass(void* definition) {
+  return get_mirror_class ? reinterpret_cast<void*>(get_mirror_class(definition)) : nullptr;
+}
+bool ReadValidationClassMetadata(void* klass, ValidationMetadata* output) {
   using namespace validation_abi;
-  auto* klass = reinterpret_cast<const void*>(get_mirror_class(definition));
   if (!klass) return false;
   // Match Class::GetDexFile: it explicitly reads this immutable DexCache link
   // without a read barrier. From-space and to-space caches name the same native
@@ -37,7 +39,13 @@ bool ReadValidationMetadata(void* definition, ValidationMetadata* output) {
       static_cast<uint16_t>(Read<int32_t>(klass, offsetof(ClassPrefix, dex_class_def_index)))},
       Read<uint32_t>(klass, offsetof(ClassPrefix, access_flags))};
   if (!metadata.dex.begin || metadata.dex.size < 0x70 || !metadata.dex.data_begin) return false;
-  if (!probe_metadata(definition, &metadata)) return false;
+  *output = metadata;
+  return true;
+}
+bool ReadValidationMetadata(void* definition, ValidationMetadata* output) {
+  ValidationMetadata metadata{};
+  if (!ReadValidationClassMetadata(GetValidationClass(definition), &metadata) ||
+      !probe_metadata(definition, &metadata)) return false;
   *output = metadata;
   return true;
 }

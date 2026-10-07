@@ -12,7 +12,7 @@ for sanitizer in ('address,undefined', 'thread'):
     name = sanitizer.replace(',', '-')
     binary = out / f'heap_reference_{name}_test'
     command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
-               '-Wall', '-Wextra', '-Werror', '-pthread',
+               '-Wall', '-Wextra', '-Werror', '-pthread', '-DARTDCEVM_TESTING',
                f'-fsanitize={sanitizer}', '-fno-omit-frame-pointer', '-I', str(cpp),
                str(root / 'tests/host/heap_reference_test.cc'),
                str(cpp / 'platform/android13/heap_reference.cc'), '-o', str(binary)]

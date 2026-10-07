@@ -1,12 +1,8 @@
 #include "ti_redefine.h"
-#include "art_method-inl.h"
-#include "class_linker-inl.h"
 #include "mirror/class-inl.h"
 #include "platform/android13/method_validation_abi.h"
-#include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/validation_metadata_abi.h"
 #include "mirror/dex_cache.h"
-#include "runtime.h"
 #include <type_traits>
 
 namespace art {
@@ -18,6 +14,13 @@ struct ClassOffsets {
     static_assert(offsetof(mirror::Class, super_class_) == offsetof(Fixed, super_class));
     static_assert(offsetof(mirror::Class, ifields_) == offsetof(Fixed, ifields));
     static_assert(offsetof(mirror::Class, sfields_) == offsetof(Fixed, sfields));
+    static_assert(offsetof(mirror::Class, methods_) == offsetof(Fixed, methods));
+    static_assert(offsetof(mirror::Class, iftable_) == offsetof(Fixed, iftable));
+    static_assert(offsetof(mirror::Class, vtable_) == offsetof(Fixed, vtable));
+    static_assert(offsetof(mirror::Class, primitive_type_) == offsetof(Fixed, primitive_type));
+    static_assert(offsetof(mirror::Class, status_) == offsetof(Fixed, status));
+    static_assert(offsetof(mirror::Class, copied_methods_offset_) == offsetof(Fixed, copied_methods_offset));
+    static_assert(offsetof(mirror::Class, virtual_methods_offset_) == offsetof(Fixed, virtual_methods_offset));
     static_assert(offsetof(mirror::Class, dex_type_idx_) == offsetof(Fixed, dex_type_index));
     static_assert(offsetof(mirror::Class, access_flags_) == offsetof(Fixed, access_flags));
     static_assert(offsetof(mirror::Class, dex_class_def_idx_) == offsetof(Fixed, dex_class_def_index));
@@ -74,53 +77,9 @@ struct MethodValidationBridge {
         owned.dex.class_def_index == klass->GetDexClassDefIndex() &&
         owned.access_flags == klass->GetAccessFlags();
   }
-  static bool Guard(void* definition, const char* name, const char* descriptor,
-                    uint32_t old_flags, int action) {
-    auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
-    art::StackHandleScope<1> hs(redef->driver_->self_);
-    auto klass = hs.NewHandle(redef->GetMirrorClass());
-    using Action = artdcevm::android13::ModifierEvolutionAction;
-    const bool final = action == static_cast<int>(Action::kCheckFinalOverride);
-    bool invalid = false;
-    art::ClassFuncVisitor visitor([&](art::ObjPtr<art::mirror::Class> subtype)
-        REQUIRES_SHARED(art::Locks::mutator_lock_) {
-      if (subtype == klass.Get() || !subtype->IsLoaded() || !klass->IsAssignableFrom(subtype))
-        return true;
-      if (final) {
-        if (!subtype->CanAccessMember(klass.Get(), old_flags)) return true;
-        for (art::ArtMethod& candidate : subtype->GetVirtualMethods(art::kRuntimePointerSize)) {
-          if (candidate.GetNameView() == name && candidate.GetSignature().ToString() == descriptor) {
-            invalid = true;
-            return false;
-          }
-        }
-      } else {
-        if (subtype->IsAbstract()) return true;
-        bool concrete = false;
-        for (auto cursor = subtype; cursor != klass.Get(); cursor = cursor->GetSuperClass()) {
-          for (art::ArtMethod& candidate : cursor->GetVirtualMethods(art::kRuntimePointerSize)) {
-            if (candidate.GetDeclaringClass() == cursor && candidate.GetNameView() == name &&
-                candidate.GetSignature().ToString() == descriptor) {
-              concrete = !candidate.IsAbstract();
-              break;
-            }
-          }
-          if (concrete) break;
-        }
-        if (!concrete) { invalid = true; return false; }
-      }
-      return true;
-    });
-    redef->driver_->runtime_->GetClassLinker()->VisitClasses(&visitor);
-    return !invalid;
-  }
 };
 }
 extern "C" bool ArtDcevmSourceProbeValidationMetadata(void* definition,
     const artdcevm::android13::ValidationMetadata* owned) {
   return openjdkjvmti::MethodValidationBridge::CompareMetadata(definition, *owned);
-}
-extern "C" bool ArtDcevmSourceMethodDependentGuard(void* definition, const char* name,
-    const char* descriptor, uint32_t old_flags, int action) {
-  return openjdkjvmti::MethodValidationBridge::Guard(definition, name, descriptor, old_flags, action);
 }

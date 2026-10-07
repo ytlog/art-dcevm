@@ -73,8 +73,8 @@ bool ReadValidationMetadata(void*, ValidationMetadata* output) {
   output->access_flags = raw_flags;
   return true;
 }
+bool CheckLoadedSubclassGuard(void*) { return subclass_valid; }
 }
-extern "C" bool ArtDcevmSourceClassSubclassGuard(void*) { return subclass_valid; }
 extern "C" int ArtDcevmSourceClassHierarchyGuard(void*, bool* changed, const char** error) {
   *changed = hierarchy_changed; *error = "Typed hierarchy guard diagnostic"; return hierarchy_code;
 }

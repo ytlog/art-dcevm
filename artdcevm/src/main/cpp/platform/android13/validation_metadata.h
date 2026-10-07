@@ -9,4 +9,6 @@ bool ConfigureValidationMetadata(HookEngine& hooks, void* implementation, std::s
 // The source transaction owns the shared mutator lock. No managed pointer is
 // retained beyond this call or across a JNI/JVMTI call or ART suspension point.
 bool ReadValidationMetadata(void* definition, ValidationMetadata* output);
+void* GetValidationClass(void* definition);
+bool ReadValidationClassMetadata(void* klass, ValidationMetadata* output);
 }

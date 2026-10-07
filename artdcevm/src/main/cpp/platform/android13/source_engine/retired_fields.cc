@@ -83,23 +83,9 @@ bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) 
 }
 }
 
-// These two replacements are compiled as mirror::Field member functions to use
-// the pinned source declarations, including their private setters. No layout
-// offsets are supplied by this project. The loader hooks the corresponding ELF
-// symbols so every Field visitor understands the retirement token.
+// The remaining Field visitor uses the device GetArtField symbol. Its installed
+// enhancement hook owns field-array lookup and retirement-token decoding.
 namespace art::mirror {
-ArtField* Field::GetArtField() {
-  using namespace artdcevm::android13::source;
-  uint32_t index = GetArtFieldIndex();
-  if ((index & artdcevm::android13::kRetiredFieldTag) != 0) {
-    auto* field = static_cast<ArtField*>(field_registry.resolve(index));
-    CHECK(field != nullptr);
-    return field;
-  }
-  auto declaring_class = GetDeclaringClass();
-  return IsStatic() ? declaring_class->GetStaticField(index)
-                    : declaring_class->GetInstanceField(index);
-}
 void Field::VisitTarget(ReflectiveValueVisitor* visitor) {
   using namespace artdcevm::android13::source;
   ArtField* original = GetArtField();
@@ -124,9 +110,6 @@ void Field::VisitTarget(ReflectiveValueVisitor* visitor) {
 }
 }
 
-extern "C" void* ArtDcevmSourceGetArtField(void* field) {
-  return static_cast<art::mirror::Field*>(field)->GetArtField();
-}
 extern "C" void ArtDcevmSourceVisitField(void* field, void* visitor) {
   static_cast<art::mirror::Field*>(field)->VisitTarget(
       static_cast<art::ReflectiveValueVisitor*>(visitor));

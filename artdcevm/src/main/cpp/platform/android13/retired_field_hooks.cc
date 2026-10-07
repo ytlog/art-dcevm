@@ -1,4 +1,5 @@
 #include "platform/android13/retired_field_hooks.h"
+#include "platform/android13/member_decode.h"
 #include "platform/symbols/android13.h"
 #include <dlfcn.h>
 #include <jni.h>
@@ -15,7 +16,6 @@ bool (*guard_reflection)(JNIEnv*, jobject);
 bool (*guard_varhandle)(void*, int, void*, const void*, void*);
 bool (*guard_method_handle_put)(void*);
 bool (*guard_final_put)(void*, void*, uint16_t*);
-void* (*get_field)(void*);
 void (*visit_field)(void*, void*);
 void* original_field;
 void* original_visit;
@@ -26,7 +26,7 @@ void* original_nterp_instance;
 void* original_nterp_static;
 struct Entry { std::string symbol; void* proxy; void** original; void* target = nullptr; };
 
-void* GetField(void* field) { return get_field(field); }
+void* GetField(void* field) { return DecodeReflectedField(field); }
 void VisitField(void* field, void* visitor) { visit_field(field, visitor); }
 bool VarHandle(void* handle, int mode, void* frame, const void* operands, void* result) {
   if (guard_varhandle(handle, mode, frame, operands, result)) return false;
@@ -121,11 +121,10 @@ bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* err
   guard_method_handle_put = reinterpret_cast<decltype(guard_method_handle_put)>(
       dlsym(library, "ArtDcevmGuardMethodHandleFieldPut"));
   guard_final_put = reinterpret_cast<decltype(guard_final_put)>(dlsym(library, "ArtDcevmGuardNterpFinalFieldPut"));
-  get_field = reinterpret_cast<decltype(get_field)>(dlsym(library, "ArtDcevmSourceGetArtField"));
   visit_field = reinterpret_cast<decltype(visit_field)>(dlsym(library, "ArtDcevmSourceVisitField"));
   if (!guard_jni || !guard_receiver_jni || !guard_receiver_runnable || !guard_id ||
       !guard_reflection || !guard_varhandle || !guard_method_handle_put ||
-      !guard_final_put || !get_field || !visit_field) {
+      !guard_final_put || !visit_field) {
     *error = "Retired field guard exports are incomplete"; return false;
   }
   std::vector<Entry> entries{

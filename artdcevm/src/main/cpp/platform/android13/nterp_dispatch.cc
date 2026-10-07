@@ -32,6 +32,7 @@ bool ConfigureNterpDispatch(void* linker, CheckedDispatchResolver resolver) {
   checked_resolver = resolver;
   return true;
 }
+void* DispatchClassLinker() { return class_linker; }
 void RequireDispatchChecks() { dispatch_checks.store(true, std::memory_order_release); }
 bool NeedsDispatchChecks() { return dispatch_checks.load(std::memory_order_acquire); }
 bool GuardNterpInvoke(void* thread, void* caller, uint16_t* dex_pc) {

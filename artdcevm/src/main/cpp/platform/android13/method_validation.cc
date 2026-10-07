@@ -1,5 +1,6 @@
 #include "platform/android13/method_validation.h"
 #include "platform/android13/method_validation_abi.h"
+#include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/redefinition_input.h"
@@ -14,7 +15,6 @@
 namespace artdcevm::android13 {
 namespace {
 
-MethodDependentGuard dependents = nullptr;
 using RecordNewMethod = void (*)(void*);
 RecordNewMethod record_new_method = nullptr;
 }
@@ -62,7 +62,7 @@ bool CheckEvolutionMethods(void* definition) {
       }
       if ((action == ModifierEvolutionAction::kCheckFinalOverride ||
            action == ModifierEvolutionAction::kCheckAbstractDependents) &&
-          !dependents(definition, method.name.c_str(), method.descriptor.c_str(),
+          !CheckMethodDependentGuard(definition, method.name.c_str(), method.descriptor.c_str(),
                       old->access, static_cast<int>(action))) {
         const std::string message = std::string(action == ModifierEvolutionAction::kCheckFinalOverride
             ? "Loaded subclass overrides " : "Concrete subclass inherits ") + method.name + method.descriptor;
@@ -81,15 +81,14 @@ bool CheckEvolutionMethods(void* definition) {
   }
 }
 bool ConfigureEvolutionMethodValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto guard = reinterpret_cast<MethodDependentGuard>(dlsym(implementation, "ArtDcevmSourceMethodDependentGuard"));
   auto configure = reinterpret_cast<ConfigureMethodValidation>(dlsym(implementation, "ArtDcevmSourceConfigureMethodValidation"));
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!guard || !configure || !record) {
-    *error = "Missing method declaration/loaded-subclass adapter or named structural method marker";
+  if (!configure || !record) {
+    *error = "Missing method validation callback or named structural method marker";
     return false;
   }
-  dependents = guard; record_new_method = record;
+  record_new_method = record;
   configure(CheckEvolutionMethods);
   return true;
 }

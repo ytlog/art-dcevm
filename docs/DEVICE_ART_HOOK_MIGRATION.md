@@ -30,7 +30,7 @@
 
 错误记录由增强库调用命名设备 `Redefiner::RecordFailure`。Android 13 平台 libc++ ABI v1 的长字符串声明在此调用期借用 NUL 结尾文本；原函数只同步读取两个 const 参数的 `c_str()`，不保留或析构借用对象。初始化校准用本地空事务核对短／长类签名、空／短／长错误消息、结果码及完整错误文本。这个校准仍依赖已匹配的目标设备私有布局，不能代替其他厂商的独立适配；源码错误函数已删除。
 
-命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。旧 DEX 字节区间、class-def index 和 live class flags 现由增强库通过命名 `GetMirrorClass` 和锁定源码的 Class／DexCache／DexFile 固定前缀读取，不再从源码数据桥取得。静态声明校验及每次真实事务的源码 getter 比对仍暂时保留；这是 release ObjPtr 与非 poisoned heap-reference 的已匹配设备适配。已加载子类约束及需要 Handle 保护的层级解析仍在源码窄桥，必须继续迁移。
+命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。旧 DEX 字节区间、class-def index 和 live class flags 现由增强库通过命名 `GetMirrorClass` 和锁定源码的 Class／DexCache／DexFile 固定前缀读取，不再从源码数据桥取得。静态声明校验及每次真实事务的源码 getter 比对仍暂时保留；这是 release ObjPtr 与非 poisoned heap-reference 的已匹配设备适配。已加载子类约束已迁入增强库；需要 Handle 保护的层级解析仍在源码窄桥，必须继续迁移。
 
 结构提交对 JNI 方法 ID 的映射现在遵循 ART 的 canonical 规则：目标为 copied 方法时，增强库按命名符号调用设备 `ArtMethod::GetCanonicalMethod`；其他反射目标保留原映射。这避免 JNI ID 管理器按声明接口的数组偏移写入子类中 copied 方法的存储。回归用例显式注册全部声明方法 ID，再执行声明方法与接口默认方法的往返，防止校验读取方式改变后遗漏这条路径。
 
@@ -46,7 +46,7 @@ Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强�
 
 验证期间的 `ClassVerifier::VerifyClass`、`RegTypeCache::ResolveClass`、`ClassLinker::FindClass` 与 `LookupClass` 现由增强库安装命名 Hook 并代理。`VerifyClass` 代理在源码事务中请源码回调建立临时验证视图，调用设备原函数后关闭该视图；解析代理从源码回调查询未发布的替换类，未命中时调用设备原函数。源码仍负责视图中的类型化 ART 访问与缓存刷新，尚待迁出。
 
-`CollectAndCreateNewInstances` 也已改由增强库安装命名 Inline Hook 并分派：非演进事务调用设备原函数，演进事务调用现有实例收集实现。源码实现需要设备原分配步骤时，回调增强库；源码侧不再持有设备 trampoline。
+`CollectAndCreateNewInstances` 由增强库安装命名 Inline Hook 并完整代理：先调用设备原函数完成收集和分配，失败时直接返回；演进事务成功后，由增强库核对初始结构批次，拒绝直接实例将继承抽象方法的替换。复制的源码分配函数、回调和导出已删除；平台 Holder／Iterator／vector<bool> 声明和真实事务只读比对仍暂时保留。
 
 `Runtime::IsAsyncDeoptimizeable` 的 Inline Hook 现由增强库实现完整代理：先调用设备原函数；原函数拒绝时，才调用现有的可调试 AOT 栈帧安全判断。源码侧不再持有或调用原函数 trampoline；判断内部仍依赖 AOSP 类型化栈访问，须继续迁移。
 
@@ -85,3 +85,13 @@ Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强�
 字段存储按源码 offset 及 volatile flags 实现 1／2／4／8 字节 relaxed／seq_cst 原子读写，浮点数保持原始位；引用写入遵循已校准的未 poisoned HeapReference32 编码，非 null 值标记 owner card。card 地址来自命名 `Thread::CurrentFromGdb` 和固定源码 `Thread::CardTableOffset<8>()` 的 biased pointer，shift 与 dirty 值均对照锁定源码声明，不从二进制推断。源／目标的最终全字段写屏障与原 monitor 转移顺序保持一致。
 
 初始化探针对照真实声明类／父类链、所有实例和静态字段、实际字段值及 Thread card table；对私有临时对象做 primitive 写入／清零与 card 校准。monitor 的整个 LockWord 只能在原结构提交的暂停边界中迁移，校准使用对齐的 native headers，避免在共享锁下移植真实对象的 GC 状态。源码校准继续验证 release Baker、ObjPtr／heap reference 非 poisoned、所有字段布局、数组 stride 和 monitor/card 常量，尚待最终去除。旧计数 wrapper 和未使用的 field registry count／slot callbacks 也已删除。
+
+## 已加载类约束、实例检查与反射解码迁移（2026-10-07）
+
+增强库通过命名 `ClassLinker::VisitClasses` 遍历已加载类，保留 final 类子类拒绝、方法 final override 与 abstract implementation 约束。固定 Class／ArtMethod／IfTable 声明处理父类、接口、成员访问和 copied virtual methods；native declaring-class GcRoot 使用命名 `artReadBarrierForRootSlow`，不把它当作托管对象字段。方法名与完整 signature 从声明类 DEX 读取，不生成 JNI ID。遍历持有 ClassLinker 锁，增强 visitor 无分配、无 JNI、无挂起；源码旧判断循环删除。ClassLinker receiver 复用现有 Nterp 初始化值，其源码访问器仍待最后迁移。
+
+实例代理完整委托设备原收集／分配行为，只增加分配成功后的抽象方法检查。固定借用的 Holder、Iterator、Handle 和平台 bit-vector 声明不调用 NDK STL 操作；Handle 每次读取 rooted slot，遵循源码无 heap barrier 的 StackReference 语义，托管数组使用增强 Baker reader。初始结构批次、类和实例数组及抽象类外部 vtable 均与真实源码 getter 比对。删除两处已失去入口的复制 allocator，避免保留不再参与生产事务的 AOSP 默认分配实现。
+
+`mirror::Field::GetArtField` 现由增强库 Hook 自行读取 native 字段数组或解析注册表退休令牌。源码 Field visitor 使用设备命名 getter，运行时进入增强 Hook；旧成员实现和导出删除。Runnable 反射方法守卫调用命名 `ArtMethod::FromReflectedMethod` 后进入增强核心 Guard；JNI Native scope、接收者与 MethodHandle 操作仍在源码。校准仅读取已登记成员的反射对象和真实解码结果。
+
+测试用的读屏障诊断累计源码和增强库各自真实 gray-owner marker 调用；增强计数只编入测试构建。迁移后不能继续仅统计源码慢路径，否则并发 GC 验收会遗漏增强 getter 已执行的屏障。源码构建的过渡 Gradle 输入也包含共享固定声明头，避免修改 C callback ABI 后仍沿用旧 SO。结构发布／回滚、层级视图、引用修复及活动帧处理仍需迁出，源码构建和独立 SO 尚未删除。

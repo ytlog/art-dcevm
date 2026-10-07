@@ -22,6 +22,10 @@
 #include "platform/android13/class_validation.h"
 #include "platform/android13/validation_metadata.h"
 #include "platform/android13/field_copy_binding.h"
+#include "platform/android13/loaded_class_guards.h"
+#include "platform/android13/member_decode.h"
+#include "platform/android13/heap_reference.h"
+#include "platform/android13/nterp_dispatch.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -117,16 +121,25 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       !ConfigureEvolutionFieldCopy(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionFieldValidation(symbols, library, &error) ||
       !ConfigureValidationMetadata(symbols, library, &error) ||
+      !ConfigureMemberDecode(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionMethodValidation(symbols, library, &error) ||
       !ConfigureEvolutionClassValidation(symbols, library, &error)) {
     dlclose(library);
     return error;
+  }
+  using ProbeLoadedGuards = int (*)();
+  auto loaded_probe = reinterpret_cast<ProbeLoadedGuards>(
+      dlsym(library, "ArtDcevmSourceProbeLoadedClassGuards"));
+  if (!loaded_probe || loaded_probe() != 0) {
+    dlclose(library);
+    return "Loaded-class guard ABI calibration failed";
   }
   // Retain this DSO after any hook attempt, even if rollback fails.
   source_library = library;
   ValidationHooks dispatcher;
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
+  if (!ConfigureLoadedClassGuards(symbols, DispatchClassLinker(), &error)) return error;
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
@@ -221,7 +234,7 @@ Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_re
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)();
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceReadBarrierCalls"));
-  return fn ? static_cast<jlong>(fn()) : 0;
+  return static_cast<jlong>(artdcevm::android13::HeapReferenceMarkCalls() + (fn ? fn() : 0));
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDeleteCalls(JNIEnv*, jclass) {

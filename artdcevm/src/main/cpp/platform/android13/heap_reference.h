@@ -2,9 +2,13 @@
 
 #include "api/hook_engine.h"
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace artdcevm::android13 {
+#ifdef ARTDCEVM_TESTING
+uint64_t HeapReferenceMarkCalls();
+#endif
 bool ConfigureHeapReferenceReader(HookEngine& hooks, std::string* error);
 // Equivalent to release Baker GetFieldObject<...,kWithReadBarrier>. The caller
 // holds the mutator lock and provides a rooted, to-space owner and aligned

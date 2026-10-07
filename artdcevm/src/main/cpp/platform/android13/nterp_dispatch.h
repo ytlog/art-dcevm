@@ -14,6 +14,7 @@ using CheckedDispatchResolver = void* (*)(void*, void*, uint32_t, void*, Dispatc
 bool DecodeNterpDispatch(const uint16_t* instruction, uint32_t* index,
                          DispatchInvokeType* type);
 bool ConfigureNterpDispatch(void* class_linker, CheckedDispatchResolver resolver);
+void* DispatchClassLinker();
 void RequireDispatchChecks();
 bool NeedsDispatchChecks();
 bool GuardNterpInvoke(void* thread, void* caller, uint16_t* dex_pc);

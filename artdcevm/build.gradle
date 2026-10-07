@@ -30,6 +30,7 @@ if (providers.gradleProperty('sourceEngine13').isPresent()) {
         inputs.file rootProject.file('tools/android13/build-source-engine.py')
         inputs.file rootProject.file('tools/android13/sources.lock.json')
         inputs.dir file('src/main/cpp/platform/android13/source_engine')
+        inputs.files fileTree('src/main/cpp') { include '**/*.h' }
         outputs.file rootProject.file('build/art13-source/libartdcevm_source13.so')
         outputs.file rootProject.file('build/art13-source/build-report.json')
         commandLine 'python3', rootProject.file('tools/android13/build-source-engine.py')

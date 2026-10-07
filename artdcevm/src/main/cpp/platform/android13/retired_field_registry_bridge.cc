@@ -16,11 +16,11 @@ void Retire(void* field) noexcept {
   try { registry.Retire(field); } catch (...) { std::abort(); }
 }
 uint32_t TokenFor(void* field) { return registry.TokenFor(field); }
-void* Resolve(uint32_t token) { return registry.Resolve(token); }
 }  // namespace
 
 size_t RetiredFieldSlotCount() { return registry.SlotCount(); }
 bool IsRetiredFieldPointer(void* field) { return registry.TokenFor(field) != 0; }
+void* ResolveRetiredFieldToken(uint32_t token) { return registry.Resolve(token); }
 
 size_t PruneRetiredFields(const void* allocator) noexcept {
   try { return registry.Prune(allocator, contains_unsafe); }
@@ -40,7 +40,7 @@ bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
   }
   contains_unsafe = contains;
   const RetiredFieldCallbacks callbacks{
-      Retire, TokenFor, Resolve, FinalFieldGuardEnabled, GuardRetiredField};
+      Retire, TokenFor, FinalFieldGuardEnabled, GuardRetiredField};
   configure(&callbacks);
   return true;
 }

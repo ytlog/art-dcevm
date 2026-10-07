@@ -125,5 +125,6 @@ int main() {
   RacingWrite(false); RacingWrite(true);
   mode = Mode::kRelocate;
   VolatilePublication();
+  assert(heap::HeapReferenceMarkCalls() == marks.load());
   std::cout << "Baker heap-reference reader: gray/null/lock bits, acquire publication, volatile publication, relocation and racing writes passed\n";
 }

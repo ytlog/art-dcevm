@@ -18,21 +18,6 @@ extern "C" void ArtDcevmSourceConfigureClassValidation(artdcevm::android13::Clas
 extern "C" bool ArtDcevmSourceCheckClass(void* definition) { return validate(definition); }
 namespace openjdkjvmti {
 struct ClassValidationBridge {
-  static bool Subclasses(void* definition) {
-    auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
-    art::StackHandleScope<1> hs(redef->driver_->self_);
-    auto current = hs.NewHandle(redef->GetMirrorClass());
-    bool loaded = false;
-    art::ClassFuncVisitor visitor([&](art::ObjPtr<art::mirror::Class> subtype)
-        REQUIRES_SHARED(art::Locks::mutator_lock_) {
-      if (subtype != current.Get() && subtype->IsLoaded() && current->IsAssignableFrom(subtype)) {
-        loaded = true; return false;
-      }
-      return true;
-    });
-    redef->driver_->runtime_->GetClassLinker()->VisitClasses(&visitor);
-    return !loaded;
-  }
   static int Hierarchy(void* definition, bool* changed, const char** error) {
     auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
     art::StackHandleScope<2> hs(redef->driver_->self_);
@@ -55,9 +40,6 @@ struct ClassValidationBridge {
     return result;
   }
 };
-}
-extern "C" bool ArtDcevmSourceClassSubclassGuard(void* definition) {
-  return openjdkjvmti::ClassValidationBridge::Subclasses(definition);
 }
 extern "C" int ArtDcevmSourceClassHierarchyGuard(void* definition, bool* changed, const char** error) {
   return openjdkjvmti::ClassValidationBridge::Hierarchy(definition, changed, error);

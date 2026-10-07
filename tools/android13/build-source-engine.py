@@ -100,6 +100,7 @@ subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(engine / 'selec
 sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_declarations.cc',
            engine / 'field_copy_entry.cc', engine / 'heap_reference_probe.cc',
            engine / 'field_copy_metadata_probe.cc', engine / 'field_copy_storage_probe.cc',
+           engine / 'loaded_class_guards_probe.cc', engine / 'member_decode_probe.cc',
            engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc', engine / 'retired_methods.cc',
            engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
 commands = []

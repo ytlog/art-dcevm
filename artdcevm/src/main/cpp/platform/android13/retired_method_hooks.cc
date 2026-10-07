@@ -1,5 +1,6 @@
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_member_guard.h"
+#include "platform/android13/member_decode.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
 #include <atomic>
@@ -11,9 +12,7 @@
 
 namespace artdcevm::android13 {
 namespace {
-using GuardReflection = bool (*)(const void*, jobject);
 using GuardHandle = bool (*)(void*, void*, void*);
-GuardReflection guard_reflection;
 GuardHandle guard_handle;
 bool (*guard_id)(jmethodID);
 bool (*guard_jni_id)(JNIEnv*, jmethodID);
@@ -123,7 +122,7 @@ uint64_t DirectIdVarArgs(const void* access, jobject receiver, jmethodID method,
   return reinterpret_cast<Fn>(original_direct_id_varargs)(access, receiver, method, args);
 }
 jobject Reflect(const void* access, jobject method, jobject receiver, jobject args, size_t frames) {
-  if (guard_reflection(access, method)) { ++rejected; return nullptr; }
+  if (GuardRunnableExecutable(access, method)) { ++rejected; return nullptr; }
   using Fn = jobject (*)(const void*, jobject, jobject, jobject, size_t);
   return reinterpret_cast<Fn>(original_reflection)(access, method, receiver, args, frames);
 }
@@ -178,14 +177,13 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
-  guard_reflection = reinterpret_cast<GuardReflection>(dlsym(library, "ArtDcevmGuardReflection"));
   guard_handle = reinterpret_cast<GuardHandle>(dlsym(library, "ArtDcevmGuardMethodHandle"));
   guard_id = reinterpret_cast<bool (*)(jmethodID)>(dlsym(library, "ArtDcevmGuardMethodId"));
   guard_jni_id = reinterpret_cast<decltype(guard_jni_id)>(dlsym(library, "ArtDcevmGuardJniMethodId"));
   guard_receiver_method = reinterpret_cast<decltype(guard_receiver_method)>(dlsym(library, "ArtDcevmGuardRunnableMethodReceiver"));
   guard_receiver_id = reinterpret_cast<decltype(guard_receiver_id)>(dlsym(library, "ArtDcevmGuardRunnableMethodIdReceiver"));
   guard_jni_executable = reinterpret_cast<decltype(guard_jni_executable)>(dlsym(library, "ArtDcevmGuardJniExecutable"));
-  if (!guard_reflection || !guard_handle || !guard_id ||
+  if (!guard_handle || !guard_id ||
       !guard_jni_id || !guard_jni_executable || !guard_receiver_method || !guard_receiver_id) {
     *error = "Retired method guard exports are incomplete"; return false;
   }

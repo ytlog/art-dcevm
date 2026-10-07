@@ -37,6 +37,15 @@ struct ClassPrefix {
   int32_t clinit_thread_id;
   int32_t dex_class_def_index;
   int32_t dex_type_index;
+  uint32_t num_reference_instance_fields;
+  uint32_t num_reference_static_fields;
+  uint32_t object_size;
+  uint32_t object_size_alloc_fast_path;
+  uint32_t primitive_type;
+  uint32_t reference_instance_offsets;
+  uint32_t status;
+  uint16_t copied_methods_offset;
+  uint16_t virtual_methods_offset;
 };
 struct DexCachePrefix {
   ObjectPrefix object;
@@ -58,6 +67,8 @@ static_assert(offsetof(ClassPrefix, dex_cache) == 16);
 static_assert(offsetof(ClassPrefix, access_flags) == 64);
 static_assert(offsetof(ClassPrefix, dex_class_def_index) == 80);
 static_assert(offsetof(ClassPrefix, dex_type_index) == 84);
+static_assert(offsetof(ClassPrefix, status) == 112);
+static_assert(offsetof(ClassPrefix, virtual_methods_offset) == 118);
 static_assert(offsetof(DexCachePrefix, dex_file) == 16);
 static_assert(sizeof(DexMappingPrefix) == 40);
 }

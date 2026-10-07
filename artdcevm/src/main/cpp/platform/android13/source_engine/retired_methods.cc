@@ -55,14 +55,10 @@ extern "C" bool ArtDcevmGuardMethodId(jmethodID id) {
   return artdcevm::android13::source::Guard(art::jni::DecodeArtMethod(id), art::Thread::Current());
 }
 
-extern "C" bool ArtDcevmGuardReflection(const void* access, jobject executable) {
-  auto& soa = *static_cast<const art::ScopedObjectAccessAlreadyRunnable*>(access);
-  auto method = soa.Decode<art::mirror::Executable>(executable)->GetArtMethod();
-  return artdcevm::android13::source::Guard(method, soa.Self());
-}
 extern "C" bool ArtDcevmGuardJniExecutable(JNIEnv* env, jobject executable) {
   art::ScopedObjectAccess soa(env);
-  return ArtDcevmGuardReflection(&soa, executable);
+  return artdcevm::android13::source::Guard(
+      art::ArtMethod::FromReflectedMethod(soa, executable), soa.Self());
 }
 extern "C" bool ArtDcevmGuardJniMethodId(JNIEnv* env, jmethodID method) {
   art::ScopedObjectAccess soa(env);

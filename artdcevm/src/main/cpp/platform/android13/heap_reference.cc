@@ -1,12 +1,22 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/heap_reference_abi.h"
 #include <cstdint>
+#ifdef ARTDCEVM_TESTING
+#include <atomic>
+#endif
 
 namespace artdcevm::android13 {
 namespace {
 using Mark = void* (*)(void*);
 Mark mark = nullptr;
+#ifdef ARTDCEVM_TESTING
+std::atomic<uint64_t> mark_calls{0};
+#endif
 }
+
+#ifdef ARTDCEVM_TESTING
+uint64_t HeapReferenceMarkCalls() { return mark_calls.load(std::memory_order_relaxed); }
+#endif
 
 bool ConfigureHeapReferenceReader(HookEngine& hooks, std::string* error) {
   auto target = reinterpret_cast<Mark>(
@@ -33,6 +43,10 @@ void* ReadHeapReference(void* object, size_t offset, bool is_volatile) {
   auto* target = reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
   // The locked source also invokes Mark(nullptr) for gray owners. The device
   // collector owns this null path and all relocation/forwarding decisions.
-  return gray ? mark(target) : target;
+  if (!gray) return target;
+#ifdef ARTDCEVM_TESTING
+  mark_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+  return mark(target);
 }
 }
