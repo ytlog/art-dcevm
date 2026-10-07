@@ -51,6 +51,15 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     const char* detail = dlerror();
     return detail ? detail : "Source engine dlopen failed";
   }
+  using ConfigureReadBarrier = void (*)(void*);
+  auto configure_read_barrier = reinterpret_cast<ConfigureReadBarrier>(
+      dlsym(library, "ArtDcevmSourceConfigureReadBarrier"));
+  void* read_barrier_mark = symbols.FindSymbol("libart.so", cas::kReadBarrierMark);
+  if (!configure_read_barrier || !read_barrier_mark) {
+    dlclose(library);
+    return "Missing named ART read barrier or source callback";
+  }
+  configure_read_barrier(read_barrier_mark);
   using Probe = int (*)(JNIEnv*, jobject);
   auto probe = reinterpret_cast<Probe>(dlsym(library, "ArtDcevmSourceProbe"));
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));

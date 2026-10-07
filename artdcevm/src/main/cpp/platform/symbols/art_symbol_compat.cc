@@ -30,6 +30,7 @@ bool CheckSourceSymbols(HookEngine& hooks, std::string* error) {
                     cas::kLookupClass, cas::kDeleteClassLoader,
                     cas::kLinearAllocContainsUnsafe,
                     cas::kIsAsyncDeoptimizeable, cas::kTestSuspendFromCode,
+                    cas::kReadBarrierMark,
                     cas::kCheckedResolve, cas::kCheckedResolveHandles,
                     cas::kInvalidateAllCompiledCode};
   for (const char* name : art)

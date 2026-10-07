@@ -1,12 +1,17 @@
 #include <atomic>
 #include <cstdint>
 namespace art::mirror { class Object; }
-// Exported by the device libart. No Heap or collector object crosses this boundary.
-extern "C" art::mirror::Object* artReadBarrierMark(art::mirror::Object* object);
-namespace { std::atomic<uint64_t> read_barrier_calls{0}; }
+namespace {
+using ReadBarrierMark = art::mirror::Object* (*)(art::mirror::Object*);
+ReadBarrierMark device_read_barrier_mark = nullptr;
+std::atomic<uint64_t> read_barrier_calls{0};
+}
+extern "C" void ArtDcevmSourceConfigureReadBarrier(void* function) {
+  device_read_barrier_mark = reinterpret_cast<ReadBarrierMark>(function);
+}
 extern "C" art::mirror::Object* ArtDcevmSourceReadBarrierMark(art::mirror::Object* object) {
   read_barrier_calls.fetch_add(1, std::memory_order_relaxed);
-  return artReadBarrierMark(object);
+  return device_read_barrier_mark(object);
 }
 extern "C" uint64_t ArtDcevmSourceReadBarrierCalls() {
   return read_barrier_calls.load(std::memory_order_relaxed);
