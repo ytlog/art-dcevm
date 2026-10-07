@@ -46,7 +46,6 @@ extern "C" bool SourceCollectNewInstances(void*, void*)
     __asm__(ARTDCEVM_A13_SOURCE_COLLECT_NEW_INSTANCES);
 namespace {
 void* original_instance_allocation = nullptr;
-bool (*source_transaction_active)() = nullptr;
 std::atomic<uint64_t> guard_precommit_activations{0};
 std::atomic<uint64_t> guard_failed_rollbacks{0};
 std::atomic<uint64_t> guard_committed_retention{0};
@@ -226,8 +225,7 @@ extern "C" uint64_t ArtDcevmSourceReceiverGuardTransactionDiagnostics(int index)
     default: return 0;
   }
 }
-extern "C" void** ArtDcevmSourceConfigureInstanceAllocation(bool (*active)()) {
-  source_transaction_active = active;
+extern "C" void** ArtDcevmSourceConfigureInstanceAllocation() {
   return &original_instance_allocation;
 }
 extern "C" bool ArtDcevmSourceOriginalInstanceAllocation(void* definition, void* data) {
@@ -235,8 +233,6 @@ extern "C" bool ArtDcevmSourceOriginalInstanceAllocation(void* definition, void*
   return reinterpret_cast<Fn>(original_instance_allocation)(definition, data);
 }
 extern "C" bool ArtDcevmSourceInstanceAllocation(void* definition, void* data) {
-  if (!source_transaction_active || !source_transaction_active())
-    return ArtDcevmSourceOriginalInstanceAllocation(definition, data);
   return SourceCollectNewInstances(definition, data);
 }
 

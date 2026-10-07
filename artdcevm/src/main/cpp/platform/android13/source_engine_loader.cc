@@ -8,6 +8,7 @@
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/hierarchy_batch_hooks.h"
 #include "platform/android13/class_loader_hooks.h"
+#include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
@@ -60,10 +61,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
   auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
-  void* instance_allocation = dlsym(library, "ArtDcevmSourceInstanceAllocation");
-  using ConfigureInstanceAllocation = void** (*)(bool (*)());
-  auto configure_instance_allocation = reinterpret_cast<ConfigureInstanceAllocation>(
-      dlsym(library, "ArtDcevmSourceConfigureInstanceAllocation"));
   auto allocator = dlsym(library, "ArtDcevmSourceHierarchyAllocator");
   using ConfigureAllocator = void** (*)(bool (*)());
   auto configure_allocator = reinterpret_cast<ConfigureAllocator>(dlsym(library, "ArtDcevmSourceConfigureHierarchyAllocator"));
@@ -81,8 +78,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto configure_suspend_from_code = reinterpret_cast<ConfigureLoaderDelete>(
       dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
-      !invalidate_jit || !methods || !fields || !classes || !instance_allocation
-      || !configure_instance_allocation || !allocator || !configure_allocator
+      !invalidate_jit || !methods || !fields || !classes
+      || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup
       || !async_deoptimizeable || !configure_async_deoptimizeable
       || !suspend_from_code || !configure_suspend_from_code) {
@@ -107,11 +104,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
-  void* instance_allocation_target = symbols.FindSymbol("libopenjdkjvmti.so", cas::kCollectNewInstances);
-  if (!instance_allocation_target) return "Missing named structural instance allocator";
-  void** original_instance_allocation = configure_instance_allocation(ValidationHooks::InSourceTransaction);
-  if (!original_instance_allocation || !symbols.Install(instance_allocation_target,
-      instance_allocation, original_instance_allocation, &error)) return error;
+  if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   void* allocator_target = symbols.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
   if (!allocator_target) return "Missing named structural class allocator";
   // ShadowHook publishes the original trampoline into the proxy's own slot as
