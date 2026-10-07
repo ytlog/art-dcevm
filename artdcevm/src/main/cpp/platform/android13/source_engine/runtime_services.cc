@@ -46,30 +46,41 @@ extern "C" uint64_t ArtDcevmSourceReadBarrierCalls() {
 #include "optimizing/nodes.h"
 #include "jvalue.h"
 #include "platform/android13/pending_suspend_deopt_abi.h"
+#include "platform/android13/suspend_deopt_art_abi.h"
 #include <android/log.h>
 #include <cstring>
 namespace { std::atomic<bool> trace_deopt{false}; }
 namespace {
 std::atomic<uint64_t> debuggable_aot_async_deopts{0};
 std::atomic<bool> probe_suspend_deopt_enabled{false};
-std::atomic<uint64_t> suspend_deopt_hits{0};
 }
-extern "C" [[noreturn]] void artDeoptimize(art::Thread* self);
+// Verify the fixed declarations while the transitional source module exists.
+namespace suspend_abi = artdcevm::android13::suspend_abi;
+static_assert(sizeof(suspend_abi::JValue) == sizeof(art::JValue));
+static_assert(alignof(suspend_abi::JValue) == alignof(art::JValue));
+static_assert(sizeof(suspend_abi::ThrowablePtr) == sizeof(art::ObjPtr<art::mirror::Throwable>));
+static_assert(alignof(suspend_abi::ThrowablePtr) == alignof(art::ObjPtr<art::mirror::Throwable>));
+static_assert(static_cast<int>(suspend_abi::MethodType::kDefault) ==
+              static_cast<int>(art::DeoptimizationMethodType::kDefault));
+static_assert(sizeof(suspend_abi::MethodType) == sizeof(art::DeoptimizationMethodType));
 namespace {
 artdcevm::android13::MarkPendingSuspendDeopt mark_pending_suspend_deopt = nullptr;
 artdcevm::android13::IsPendingSuspendDeopt is_pending_suspend_deopt = nullptr;
 artdcevm::android13::CancelPendingSuspendDeopt cancel_pending_suspend_deopt = nullptr;
 artdcevm::android13::ResetPendingSuspendDeopt reset_pending_suspend_deopt = nullptr;
+artdcevm::android13::SuspendDeoptHits suspend_deopt_hits = nullptr;
 }
 extern "C" void ArtDcevmSourceConfigureSuspendDeopt(
     artdcevm::android13::MarkPendingSuspendDeopt mark,
     artdcevm::android13::IsPendingSuspendDeopt pending,
     artdcevm::android13::CancelPendingSuspendDeopt cancel,
-    artdcevm::android13::ResetPendingSuspendDeopt reset) {
+    artdcevm::android13::ResetPendingSuspendDeopt reset,
+    artdcevm::android13::SuspendDeoptHits hits) {
   mark_pending_suspend_deopt = mark;
   is_pending_suspend_deopt = pending;
   cancel_pending_suspend_deopt = cancel;
   reset_pending_suspend_deopt = reset;
+  suspend_deopt_hits = hits;
 }
 extern "C" bool ArtDcevmSourceMarkSuspendDeoptThread(art::Thread* thread) {
   return mark_pending_suspend_deopt(thread);
@@ -79,14 +90,6 @@ extern "C" bool ArtDcevmSourceSuspendDeoptPending(art::Thread* thread) {
 }
 extern "C" void ArtDcevmSourceCancelSuspendDeoptThread(art::Thread* thread) {
   cancel_pending_suspend_deopt(thread);
-}
-extern "C" void ArtDcevmSourceFinishPendingSuspendDeopt(art::Thread* self) {
-  suspend_deopt_hits.fetch_add(1, std::memory_order_relaxed);
-  art::JValue result;
-  result.SetJ(0);
-  self->PushDeoptimizationContext(result, false, nullptr, false,
-      art::DeoptimizationMethodType::kDefault);
-  artDeoptimize(self);
 }
 extern "C" int ArtDcevmSourceAotSuspendDeoptProbe(JNIEnv* env, jobject peer, jobject executable) {
   art::Thread* self = art::Thread::Current();
@@ -125,7 +128,7 @@ extern "C" uint64_t ArtDcevmSourceAotSuspendDeoptHits(bool reset) {
     reset_pending_suspend_deopt();
     probe_suspend_deopt_enabled.store(false, std::memory_order_release);
   }
-  return suspend_deopt_hits.load(std::memory_order_acquire);
+  return suspend_deopt_hits();
 }
 extern "C" uint64_t ArtDcevmSourceDebuggableAotAsyncDeopts() {
   return debuggable_aot_async_deopts.load(std::memory_order_relaxed);

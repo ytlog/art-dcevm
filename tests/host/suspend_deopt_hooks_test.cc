@@ -1,5 +1,6 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/pending_suspend_deopt_abi.h"
+#include "platform/android13/suspend_deopt_art_abi.h"
 #include "platform/symbols/android13.h"
 
 #include <cassert>
@@ -14,6 +15,21 @@ CancelPendingSuspendDeopt cancel_pending;
 ResetPendingSuspendDeopt reset_pending;
 int original_calls = 0;
 int finish_calls = 0;
+int context_calls = 0;
+SuspendDeoptHits hits;
+void PushContext(void* thread, const suspend_abi::JValue& result, bool reference,
+                 suspend_abi::ThrowablePtr exception, bool from_code,
+                 suspend_abi::MethodType method_type) {
+  assert(!is_pending(thread));
+  assert(result.bits == 0 && !reference && exception.reference == 0 && !from_code);
+  assert(method_type == suspend_abi::MethodType::kDefault);
+  assert(original_calls > context_calls);
+  ++context_calls;
+}
+void Deoptimize(void*) {
+  assert(context_calls == finish_calls + 1);
+  ++finish_calls;
+}
 void Original(void*) { ++original_calls; }
 
 class FakeHooks final : public artdcevm::HookEngine {
@@ -23,8 +39,13 @@ class FakeHooks final : public artdcevm::HookEngine {
   bool Initialize(std::string*) override { return true; }
   void* FindSymbol(const char* library, const char* symbol) override {
     assert(std::strcmp(library, "libart.so") == 0);
+    if (missing) return nullptr;
+    if (std::strcmp(symbol, cas::kPushDeoptimizationContext) == 0)
+      return reinterpret_cast<void*>(PushContext);
+    if (std::strcmp(symbol, cas::kDeoptimize) == 0)
+      return reinterpret_cast<void*>(Deoptimize);
     assert(std::strcmp(symbol, cas::kTestSuspendFromCode) == 0);
-    return missing ? nullptr : reinterpret_cast<void*>(Original);
+    return reinterpret_cast<void*>(Original);
   }
   void* Install(void* target, void* replacement, void** original, std::string*) override {
     *original = target;
@@ -37,18 +58,12 @@ class FakeHooks final : public artdcevm::HookEngine {
 
 extern "C" void ArtDcevmSourceConfigureSuspendDeopt(MarkPendingSuspendDeopt mark,
     IsPendingSuspendDeopt pending, CancelPendingSuspendDeopt cancel,
-    ResetPendingSuspendDeopt reset) {
+    ResetPendingSuspendDeopt reset, SuspendDeoptHits count) {
   mark_pending = mark;
   is_pending = pending;
   cancel_pending = cancel;
   reset_pending = reset;
-}
-
-extern "C" void ArtDcevmSourceFinishPendingSuspendDeopt(void* thread) {
-  // The proxy must consume ownership before invoking the non-returning ART path.
-  assert(!is_pending(thread));
-  assert(original_calls > finish_calls);
-  ++finish_calls;
+  hits = count;
 }
 
 int main() {
@@ -81,5 +96,6 @@ int main() {
   reset_pending();
   hooks.proxy(&target);
   assert(finish_calls == 1);
+  assert(context_calls == 1 && hits() == 1);
   dlclose(implementation);
 }
