@@ -44,8 +44,6 @@ extern "C" uint64_t ArtDcevmSourceReadBarrierCalls() {
 #include <cstring>
 namespace { std::atomic<bool> trace_deopt{false}; }
 namespace {
-using AsyncDeoptimizeable = bool (*)(const art::Runtime*, uintptr_t);
-AsyncDeoptimizeable original_async_deoptimizeable = nullptr;
 std::atomic<uint64_t> debuggable_aot_async_deopts{0};
 using SuspendFromCode = void (*)(art::Thread*);
 SuspendFromCode original_suspend_from_code = nullptr;
@@ -120,18 +118,12 @@ extern "C" uint64_t ArtDcevmSourceAotSuspendDeoptHits(bool reset) {
   }
   return suspend_deopt_hits.load(std::memory_order_acquire);
 }
-extern "C" void** ArtDcevmSourceConfigureAsyncDeoptimizeable() {
-  return reinterpret_cast<void**>(&original_async_deoptimizeable);
-}
 extern "C" uint64_t ArtDcevmSourceDebuggableAotAsyncDeopts() {
   return debuggable_aot_async_deopts.load(std::memory_order_relaxed);
 }
 extern "C" bool ArtDcevmSourceReceiverGuardRequired();
-extern "C" bool ArtDcevmSourceIsAsyncDeoptimizeable(
+extern "C" bool ArtDcevmSourceAllowDebuggableAotDeopt(
     const art::Runtime* runtime, uintptr_t pc) {
-  AsyncDeoptimizeable original = original_async_deoptimizeable;
-  if (original == nullptr) return false;
-  if (original(runtime, pc)) return true;
   if (!ArtDcevmSourceReceiverGuardRequired() &&
       !probe_suspend_deopt_enabled.load(std::memory_order_acquire)) return false;
   art::Thread* self = art::Thread::Current();
