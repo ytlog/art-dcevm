@@ -27,7 +27,8 @@ struct ClassSchema {
 };
 
 // Borrowed regions from an already verified ART DEX. CompactDex shares a data
-// region outside its ID-table mapping. No JNI member IDs are created.
+// region outside its ID-table mapping. DEX 041 uses the full container as
+// data_begin; begin/size select its header/file. No JNI member IDs are created.
 struct MappedDexMetadata {
   const unsigned char* begin;
   size_t size;

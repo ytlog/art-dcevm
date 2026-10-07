@@ -84,8 +84,8 @@ class Reader {
   }
   bool SupportsDefaultMethods() {
     Initialize();
-    if(std::memcmp(begin_,"cdex001\0",8)==0)return (U32(0x70)&1)!=0;
-    return std::memcmp(begin_+4,"037",3)>=0;
+    if(std::memcmp(header_,"cdex001\0",8)==0)return (HeaderU32(0x70)&1)!=0;
+    return std::memcmp(header_+4,"037",3)>=0;
   }
  private:
   void Initialize() {
@@ -94,16 +94,32 @@ class Reader {
     const bool compact = mapped_ && std::memcmp(begin_, "cdex001\0", 8) == 0;
     if (!compact && (std::memcmp(begin_, "dex\n", 4) != 0 || begin_[7] != 0))
       Fail("Not a supported DEX file");
-    const size_t header_size = compact ? 0x88 : 0x70;
+    const bool container = !compact && std::memcmp(begin_ + 4, "041", 3) == 0;
+    const size_t header_size = compact ? 0x88 : (container ? 0x78 : 0x70);
     Range(0, header_size);
     if (!compact) {
       std::string version(reinterpret_cast<const char*>(begin_ + 4), 3);
-      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040")
+      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040" && !(mapped_ && container))
         Fail("Unsupported DEX version: " + version);
     }
-    if (U32(36) != header_size || U32(40) != 0x12345678 || (!mapped_ && U32(32) != size_))
+    if (HeaderU32(36) != header_size || HeaderU32(40) != 0x12345678 || (!mapped_ && HeaderU32(32) != size_))
       Fail("Invalid DEX size, header size or endianness");
-    data_size_ = U32(104); data_off_ = compact ? 0 : U32(108);
+    data_size_ = HeaderU32(104); data_off_ = compact ? 0 : HeaderU32(108);
+    if (container) {
+      const size_t container_size = HeaderU32(0x70), header_offset = HeaderU32(0x74);
+      const size_t file_size = HeaderU32(32);
+      const uintptr_t header_address = reinterpret_cast<uintptr_t>(begin_);
+      const uintptr_t data_address = reinterpret_cast<uintptr_t>(data_);
+      if (container_size > data_length_ || header_offset > container_size ||
+          file_size < header_size || file_size > size_ ||
+          file_size > container_size - header_offset ||
+          header_address < data_address || header_address - data_address != header_offset ||
+          data_size_ != 0 || data_off_ != 0)
+        Fail("Invalid DEX container mapping");
+      // AOSP DexFile::GetSection uses DataBegin for v041 ID tables.
+      // Keep header reads separate because Begin may select a later header.
+      begin_ = data_; size_ = container_size; data_length_ = container_size;
+    }
     if (!mapped_) {
       uint32_t a = 1, b = 0;
       for (size_t i = 12; i < size_; ++i) { a = (a + begin_[i]) % 65521; b = (b + a) % 65521; }
@@ -120,9 +136,11 @@ class Reader {
   }
   struct IdTable { uint32_t offset, count, width; };
   const unsigned char* begin_;
-  const size_t size_;
+  size_t size_;
+  const unsigned char* const header_ = begin_;
+  const size_t header_length_ = size_;
   const unsigned char* data_;
-  const size_t data_length_;
+  size_t data_length_;
   const bool declaration_flags_;
   bool mapped_ = false;
   uint32_t class_def_index_ = 0;
@@ -139,6 +157,11 @@ class Reader {
       Fail("DEX item outside data section");
   }
   uint16_t U16(size_t off) const { Range(off, 2); return begin_[off] | (uint16_t{begin_[off + 1]} << 8); }
+  uint32_t HeaderU32(size_t off) const {
+    if (off > header_length_ || 4 > header_length_ - off) Fail("DEX header outside mapping");
+    return header_[off] | (uint32_t{header_[off + 1]} << 8) |
+        (uint32_t{header_[off + 2]} << 16) | (uint32_t{header_[off + 3]} << 24);
+  }
   uint32_t U32(size_t off) const {
     Range(off, 4);
     return begin_[off] | (uint32_t{begin_[off + 1]} << 8) | (uint32_t{begin_[off + 2]} << 16) | (uint32_t{begin_[off + 3]} << 24);
@@ -161,7 +184,7 @@ class Reader {
     Fail("Unterminated ULEB128");
   }
   IdTable Table(size_t header_offset, uint32_t width) const {
-    uint32_t count = U32(header_offset), offset = U32(header_offset + 4);
+    uint32_t count = HeaderU32(header_offset), offset = HeaderU32(header_offset + 4);
     if ((count == 0) != (offset == 0)) Fail("Inconsistent ID table size/offset");
     if (count && (offset < table_start_ || offset % 4 ||
         (!mapped_ && (offset > data_off_ || count > (data_off_ - offset) / width))))

@@ -142,6 +142,57 @@ int main(int argc, char** argv) {
   Put(owner_mapping,U32(compact,60)+size_t{owner_string}*4,static_cast<uint32_t>(owner_data.size()));
   owner_data.push_back(1);owner_data.push_back('I');owner_data.push_back(0);
   reject_reference({owner_mapping.data(),owner_mapping.size(),owner_data.data(),owner_data.size(),0},0);
+  // v041 offsets are container-relative, including ID tables and ProtoId.
+  // Select a later header while borrowing metadata from the earlier region.
+  auto container = original;
+  const size_t header_offset = (container.size() + 3) & ~size_t{3};
+  container.resize(header_offset);
+  container.insert(container.end(), original.begin(), original.begin() + data_start);
+  container.insert(container.begin() + header_offset + 0x70, 8, 0);
+  auto header_put = [&](size_t off, uint32_t value) { Put(container, header_offset + off, value); };
+  std::memcpy(container.data() + header_offset + 4, "041", 3);
+  header_put(36, 0x78); header_put(32, static_cast<uint32_t>(container.size() - header_offset));
+  header_put(104, 0); header_put(108, 0);
+  header_put(0x70, static_cast<uint32_t>(container.size()));
+  header_put(0x74, static_cast<uint32_t>(header_offset));
+  for (size_t off : {size_t{56}, size_t{64}, size_t{72}, size_t{80}, size_t{88}, size_t{96}})
+    if (U32(original, off)) header_put(off + 4, static_cast<uint32_t>(header_offset + U32(original, off + 4) + 8));
+  auto container_view = [&]() { return MappedDexMetadata{container.data() + header_offset,
+      container.size() - header_offset, container.data(), container.size(), 0}; };
+  ClassSchema container_schema;
+  assert(ReadMappedDexDeclarations(container_view(), &container_schema, &error));
+  Same(expected, container_schema);
+  for (uint32_t index = 0; index < U32(original, 88); ++index) {
+    MappedDexMethodReference old_ref, new_ref;
+    assert(ReadMappedDexMethodReference({original.data(), original.size(), original.data(), original.size(), 0}, index, &old_ref, &error));
+    assert(ReadMappedDexMethodReference(container_view(), index, &new_ref, &error));
+    assert(old_ref.name == new_ref.name && old_ref.descriptor == new_ref.descriptor &&
+           old_ref.declaring_class == new_ref.declaring_class);
+    assert(new_ref.proto_id == container.data() + U32(container, header_offset + 76) + size_t{new_ref.proto_index} * 12);
+  }
+  bool container_defaults = false;
+  assert(ReadMappedDexSupportsDefaultMethods(container_view(), &container_defaults, &error) && container_defaults);
+  // A first header (offset zero) may share the later header's ID tables.
+  auto first_container = container;
+  std::memcpy(first_container.data() + 4, "041", 3);
+  Put(first_container, 36, 0x78); Put(first_container, 32, static_cast<uint32_t>(first_container.size()));
+  Put(first_container, 104, 0); Put(first_container, 108, 0);
+  Put(first_container, 0x70, static_cast<uint32_t>(first_container.size())); Put(first_container, 0x74, 0);
+  for (size_t off : {size_t{56}, size_t{64}, size_t{72}, size_t{80}, size_t{88}, size_t{96}})
+    Put(first_container, off + 4, U32(container, header_offset + off + 4));
+  Same(expected, Parse(first_container, first_container));
+  const auto valid_container = container;
+  for (auto mutation : {std::pair<size_t, uint32_t>{0x70, UINT32_MAX}, {0x74, 0},
+                        {32, 0x70}, {32, UINT32_MAX}, {36, 0x70}, {104, 1}, {108, 4}, {92, UINT32_MAX}}) {
+    container = valid_container; header_put(mutation.first, mutation.second);
+    Reject(container_view());
+    reject_reference(container_view(), 0);
+  }
+  container = valid_container;
+  auto short_container = container_view(); --short_container.data_size;
+  Reject(short_container);
+  auto short_header = container_view(); short_header.size = 0x77;
+  Reject(short_header);
   // Default methods depend on the StandardDex version or CompactDex feature bit.
   for(const char* version:{"035","037","038","039","040"}) {
     auto dex=original;std::memcpy(dex.data()+4,version,3);bool supported=false;
@@ -182,6 +233,19 @@ int main(int argc, char** argv) {
   Put(bad, 88, UINT32_MAX); Reject({bad.data(), bad.size(), original.data(), original.size(), 0});
   Put(bad, 88, U32(compact, 88)); Put(bad, 92, UINT32_MAX);
   Reject({bad.data(), bad.size(), original.data(), original.size(), 0});
+  // Exercise container-relative bounds with deterministic mutations too.
+  std::mt19937 container_random(0xdce041);
+  for (unsigned i = 0; i < 10000; ++i) {
+    container = valid_container;
+    for (unsigned n = 0; n < 1 + container_random() % 8; ++n)
+      container[container_random() % container.size()] ^= 1 + container_random() % 255;
+    ClassSchema value; value.descriptor = "Lsentinel;";
+    if (!ReadMappedDexDeclarations(container_view(), &value, &error))
+      assert(value.descriptor == "Lsentinel;" && !error.empty());
+    MappedDexMethodReference reference; reference.name = "sentinel";
+    if (!ReadMappedDexMethodReference(container_view(), container_random() % U32(original, 88), &reference, &error))
+      assert(reference.name == "sentinel" && !error.empty());
+  }
   // Mutations hit separate metadata/data bounds, strings and ULEB decoding.
   std::mt19937 random(0xdce013);
   for (unsigned i = 0; i < 10000; ++i) {
@@ -198,5 +262,5 @@ int main(int argc, char** argv) {
     if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), 0}, &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
   }
-  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 10000 mutations passed\n";
+  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, DEX041 container first/later headers and shared IDs, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 20000 CompactDex/container mutations passed\n";
 }
