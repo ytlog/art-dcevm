@@ -1,6 +1,6 @@
 # ART DCEVM 实验工程
 
-验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
+验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。Android 11–17 的公开路径矩阵、16 KB 构建和 AOSP 私有声明差异见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
 
 目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整演进后端目前只针对 Android 13 / API 33 / arm64 的已验证 ART 构建；Android 11 / API 30 及以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
 

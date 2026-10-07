@@ -1,38 +1,136 @@
 #!/usr/bin/env python3
-"""Run the portable JVMTI instrumentation on one local/emulated Android device."""
+"""Verify portable JVMTI behavior, preserving device identity and failure evidence."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
-import sys
+import time
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--serial', required=True)
-parser.add_argument('--apk', default='app/build/outputs/apk/debug/app-debug.apk')
-args = parser.parse_args()
-root = Path(__file__).resolve().parents[1]
-apk = (root / args.apk).resolve()
-if not apk.is_file():
-    parser.error(f'APK does not exist: {apk}')
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = 'dev.artdcevm.lab'
 
-def adb(*parts, timeout=180):
-    return subprocess.run(['adb', '-s', args.serial, *parts], capture_output=True,
-                          text=True, timeout=timeout, check=True)
 
-try:
-    adb('install', '-r', str(apk))
-    adb('shell', 'am', 'force-stop', 'dev.artdcevm.lab')
-    output = adb('shell', 'am', 'instrument', '-w', '-r',
-                 'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.PublicJvmtiInstrumentation').stdout
-    match = re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$', output, re.MULTILINE)
-    report = json.loads(match.group(1)) if match else {'passed': False, 'error': output}
-    report['instrumentationCode'] = re.search(r'^INSTRUMENTATION_CODE: (.*)$', output, re.MULTILINE).group(1)
-    report['apkSha256'] = hashlib.sha256(apk.read_bytes()).hexdigest()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--serial', required=True)
+    parser.add_argument('--apk', default='app/build/outputs/apk/debug/app-debug.apk')
+    parser.add_argument('--adb', default=shutil.which('adb'))
+    parser.add_argument('--expected-sdk', type=int)
+    parser.add_argument('--expected-abi', choices=('arm64-v8a', 'x86_64'))
+    parser.add_argument('--expected-page-size', type=int, choices=(4096, 16384))
+    parser.add_argument('--skip-install', action='store_true')
+    parser.add_argument('--standard', action='store_true',
+                        help='Also run both Agent load orders and transformation callbacks')
+    parser.add_argument('--boot-timeout', type=int, default=180)
+    parser.add_argument('--output', type=Path,
+                        help='Evidence directory; defaults to build/evidence/compatibility/<UTC timestamp>')
+    args = parser.parse_args()
+    apk = (ROOT / args.apk).resolve()
+    if not apk.is_file():
+        parser.error(f'APK does not exist: {apk}')
+    if not args.adb:
+        parser.error('adb not found; pass --adb')
+    if args.boot_timeout <= 0:
+        parser.error('--boot-timeout must be positive')
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    out = args.output or ROOT / 'build/evidence/compatibility' / stamp
+    out.mkdir(parents=True, exist_ok=True)
+    report = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+              'startedUtc': stamp, 'scope': 'public-jvmti', 'passed': False, 'tests': {}}
+
+    def adb(label, *parts, timeout=180):
+        try:
+            run = subprocess.run([args.adb, '-s', args.serial, *parts], capture_output=True,
+                                 text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            def decode(value):
+                return value.decode(errors='replace') if isinstance(value, bytes) else value or ''
+            (out / f'{label}.txt').write_text(decode(error.stdout) + decode(error.stderr))
+            raise RuntimeError(f'{label} timed out after {timeout}s') from error
+        (out / f'{label}.txt').write_text(run.stdout + run.stderr)
+        if run.returncode:
+            raise RuntimeError(f'{label} failed ({run.returncode}): {run.stderr or run.stdout}')
+        return run.stdout.strip()
+
+    def instrumentation(name, runner, *options):
+        adb(f'{name}-stop', 'shell', 'am', 'force-stop', PACKAGE)
+        raw = adb(name, 'shell', 'am', 'instrument', '-w', '-r', *options,
+                  f'{PACKAGE}/com.github.ytlog.artdcevm.testing.{runner}')
+        stream = re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$', raw, re.MULTILINE)
+        code = re.search(r'^INSTRUMENTATION_CODE: (.*)$', raw, re.MULTILINE)
+        if not stream or not code:
+            raise RuntimeError(f'{name}: no complete instrumentation report; see {out / (name + ".txt")}')
+        result = json.loads(stream.group(1))
+        if not isinstance(result, dict):
+            raise RuntimeError(f'{name}: instrumentation report is not an object')
+        result['instrumentationCode'] = code.group(1).strip()
+        report['tests'][name] = result
+        if result.get('passed') is not True or result['instrumentationCode'] != '-1':
+            raise RuntimeError(f'{name}: {result.get("error", "instrumentation failed")}')
+        return result
+
+    try:
+        # ADB can accept commands before system_server's package manager is ready.
+        adb("wait-for-device", "wait-for-device", timeout=args.boot_timeout)
+        deadline = time.monotonic() + args.boot_timeout
+        while adb('boot', 'shell', 'getprop', 'sys.boot_completed', timeout=10) != '1':
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Android boot did not complete')
+            time.sleep(1)
+        device = {}
+        for key, prop in (('sdk', 'ro.build.version.sdk'), ('abi', 'ro.product.cpu.abi'),
+                          ('fingerprint', 'ro.build.fingerprint'), ('release', 'ro.build.version.release'),
+                          ('sdkFull', 'ro.build.version.sdk_full')):
+            device[key] = adb(key, 'shell', 'getprop', prop, timeout=10)
+        device['sdk'] = int(device['sdk'])
+        device['pageSize'] = int(adb('page-size', 'shell', 'getconf', 'PAGESIZE', timeout=10))
+        report['device'] = device
+        if args.expected_sdk is not None and device['sdk'] != args.expected_sdk:
+            raise RuntimeError(f'Expected SDK {args.expected_sdk}, connected SDK {device["sdk"]}')
+        if args.expected_abi is not None and device['abi'] != args.expected_abi:
+            raise RuntimeError(f'Expected ABI {args.expected_abi}, connected ABI {device["abi"]}')
+        if args.expected_page_size is not None and device['pageSize'] != args.expected_page_size:
+            raise RuntimeError(f'Expected page size {args.expected_page_size}, connected page size {device["pageSize"]}')
+        if not args.skip_install:
+            adb('install', 'install', '-r', str(apk))
+        installed_path = adb('installed-path', 'shell', 'pm', 'path', PACKAGE)
+        base = next((line[8:] for line in installed_path.splitlines()
+                     if line.startswith('package:') and line.endswith('/base.apk')), None)
+        if not base:
+            raise RuntimeError('Installed base APK not found')
+        hash_output = adb('installed-hash', 'shell', 'sha256sum', base)
+        if not re.match(r'^[0-9a-f]{64}\s', hash_output):
+            raise RuntimeError('No valid SHA-256 for installed APK')
+        installed = hash_output.split()[0]
+        report['installedApkSha256'] = installed
+        if installed != report['apkSha256']:
+            raise RuntimeError('Installed APK hash differs from the supplied APK')
+        result = instrumentation('portable', 'PublicJvmtiInstrumentation')
+        if any(result.get(key) != device[key] for key in ('sdk', 'abi', 'pageSize')):
+            raise RuntimeError('Runtime report does not match the connected device')
+        if args.standard:
+            for first in (False, True):
+                for transform in (False, True):
+                    name = ('client-first' if first else 'enhancer-first') + (
+                        '-transform' if transform else '')
+                    result = instrumentation(name, 'StandardJvmtiInstrumentation',
+                        '-e', 'publicOnly', 'true', '-e', 'clientFirst', str(first).lower(),
+                        '-e', 'transformCase', str(transform).lower())
+                    if result.get('publicOnly') is not True or result.get('clientFirst') != first:
+                        raise RuntimeError(f'{name}: incorrect test mode')
+        report['passed'] = True
+    except (RuntimeError, ValueError, OSError) as error:
+        report['error'] = str(error)
+    finally:
+        (out / 'result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    sys.exit(0 if report.get('passed') is True and report['instrumentationCode'] == '-1' else 1)
-except (subprocess.CalledProcessError, subprocess.TimeoutExpired, AttributeError) as error:
-    detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
-    print(f'Public JVMTI test failed: {detail}', file=sys.stderr)
-    sys.exit(1)
+    print(f'Evidence: {out}')
+    return 0 if report['passed'] else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -60,6 +60,14 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 DcevmRuntime.initialize(getTargetContext());
             }
             if (!clientFirst) attachClient();
+            JSONObject capabilities = new TestRuntimeBackend(getTargetContext()).capabilities();
+            if (publicOnly && !capabilities.optBoolean("standardRedefineRouted")) {
+                runPortableStandard(report, instance, peer);
+                Bundle result = new Bundle();
+                result.putString("stream", report.toString());
+                finish(-1, result);
+                return;
+            }
             if (directProbe) {
                 int addResult = redefine(new Class<?>[]{Evolving.class},
                         new byte[][]{patch("add")});
@@ -208,6 +216,87 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
 
     private void attachClient() throws Exception {
         StandardJvmtiClient.attach(getTargetContext());
+    }
+
+    /** Standard ART rejects schema changes; only the calibrated enhanced route widens it. */
+    private void runPortableStandard(JSONObject report, Evolving instance, Peer peer) throws Exception {
+        report.put("clientFirst", clientFirst).put("publicOnly", true)
+                .put("standardRedefineRouted", false);
+        if (transformCase) {
+            require(enableTransform(Evolving.class, patch("body")) == 0, "enable portable transform");
+            int code;
+            int callbacks;
+            try {
+                // The callback removes the requested added field before standard ART validation.
+                code = redefine(new Class<?>[]{Evolving.class}, new byte[][]{patch("add")});
+            } finally {
+                callbacks = disableTransform();
+            }
+            report.put("transformResult", code).put("transformCallbacks", callbacks);
+            require(code == 0 && callbacks == 1 && instance.compute() == 39,
+                    "portable transform body and state");
+            try {
+                Evolving.class.getField("added");
+                throw new AssertionError("portable callback left an added field");
+            } catch (NoSuchFieldException expected) { }
+        } else {
+            System.loadLibrary("artdcevm_second_client_test");
+            Debug.attachJvmtiAgent("libartdcevm_second_client_test.so", null,
+                    getTargetContext().getClassLoader());
+            System.loadLibrary("artdcevm_restricted_test");
+            Debug.attachJvmtiAgent("libartdcevm_restricted_test.so", null,
+                    getTargetContext().getClassLoader());
+            require(redefineRestricted(new Class<?>[]{Evolving.class},
+                    new byte[][]{patch("body")}) == 99, "portable capability denial");
+            require(instance.compute() == 38, "portable denial atomicity");
+            byte[] body = patch("body");
+            byte[] peerBody = asset("peer-body/com/github/ytlog/artdcevm/fixture/Peer.dex");
+            AtomicInteger code = new AtomicInteger(-1);
+            AtomicInteger peerCode = new AtomicInteger(-1);
+            CountDownLatch start = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                try { start.await(); code.set(redefine(new Class<?>[]{Evolving.class},
+                        new byte[][]{body})); }
+                catch (InterruptedException failure) { Thread.currentThread().interrupt(); }
+            }, "portable-client");
+            Thread peerWorker = new Thread(() -> {
+                try { start.await(); peerCode.set(redefinePeer(new Class<?>[]{Peer.class},
+                        new byte[][]{peerBody})); }
+                catch (InterruptedException failure) { Thread.currentThread().interrupt(); }
+            }, "portable-peer");
+            worker.start(); peerWorker.start(); start.countDown();
+            worker.join(10000); peerWorker.join(10000);
+            report.put("bodyResult", code.get()).put("peerBodyResult", peerCode.get());
+            require(!worker.isAlive() && !peerWorker.isAlive(), "portable concurrent workers completed");
+            // ART rejects overlapping redefinitions with INTERNAL (113) while one is in progress.
+            // Verify the rejected transaction did not commit, then retry after both workers exit.
+            require((code.get() == 0 || code.get() == 113) &&
+                    (peerCode.get() == 0 || peerCode.get() == 113) &&
+                    (code.get() == 0 || peerCode.get() == 0), "portable concurrent Agent results");
+            require(instance.compute() == (code.get() == 0 ? 39 : 38) &&
+                    peer.compute() == (peerCode.get() == 0 ? 12 : 11), "portable contention atomicity");
+            if (code.get() == 113)
+                require(redefine(new Class<?>[]{Evolving.class}, new byte[][]{body}) == 0,
+                        "portable body retry after contention");
+            if (peerCode.get() == 113)
+                require(redefinePeer(new Class<?>[]{Peer.class}, new byte[][]{peerBody}) == 0,
+                        "portable peer retry after contention");
+            report.put("contentionRetry", code.get() == 113 || peerCode.get() == 113);
+            require(instance.compute() == 39 && peer.compute() == 12, "portable concurrent behavior");
+            int schemaCode = redefine(new Class<?>[]{Evolving.class}, new byte[][]{patch("add")});
+            report.put("standardSchemaResult", schemaCode);
+            require(schemaCode == 64 && instance.compute() == 39, "portable schema refusal");
+            int invalidCode = redefine(new Class<?>[]{Evolving.class, Peer.class},
+                    new byte[][]{patch("portable-body"), new byte[]{1, 2, 3, 4}});
+            report.put("invalidBatchResult", invalidCode);
+            require(invalidCode != 0 && instance.compute() == 39 && peer.compute() == 12,
+                    "portable batch rollback");
+            require(redefine(new Class<?>[]{Evolving.class, Peer.class},
+                    new byte[][]{patch("portable-body"), peerBody}) == 0,
+                    "portable valid batch after rejection");
+            require(instance.compute() == 44 && peer.compute() == 12, "portable valid batch behavior");
+        }
+        report.put("passed", true);
     }
 
     private byte[] patch(String name) throws Exception {

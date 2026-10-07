@@ -2,6 +2,8 @@ package com.github.ytlog.artdcevm.testing;
 
 import android.content.Context;
 import android.os.Build;
+import android.system.Os;
+import android.system.OsConstants;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchRequest;
@@ -22,14 +24,25 @@ public final class PublicJvmtiSuite {
             TestRuntimeBackend backend = new TestRuntimeBackend(context);
             JSONObject capabilities = backend.capabilities();
             result.put("sdk", Build.VERSION.SDK_INT).put("abi", Build.SUPPORTED_ABIS[0])
+                    .put("pageSize", Os.sysconf(OsConstants._SC_PAGESIZE))
                     .put("fingerprint", Build.FINGERPRINT).put("capabilities", capabilities);
             require(capabilities.getBoolean("attached"), "agent attach");
             require(publicCapabilities.getString("backend").equals(capabilities.getString("backend")),
                     "public attach uses the selected backend");
             require(capabilities.getBoolean("methodBody"), "body capability");
             require(!capabilities.getBoolean("evolutionAvailable"), "source engine must be unavailable");
-            if (backend.id().startsWith("public-jvmti"))
-                require(backend.enableEvolution().code == 98, "source engine refusal");
+            if (backend.id().startsWith("public-jvmti")) {
+                require(backend.enableEvolution().code == 98, "uncalibrated evolution refusal");
+                try {
+                    DcevmRuntime.initialize(context);
+                    throw new AssertionError("uncalibrated full evolution initialization succeeded");
+                } catch (IllegalStateException expected) {
+                    require(expected.getMessage().contains("98"), "explicit unsupported initialization");
+                    result.put("fullInitializationRejected", true);
+                }
+                require(DcevmRuntime.attachPublicJvmti(context).getBoolean("methodBody"),
+                        "public attach remains usable after full initialization refusal");
+            }
             Evolving instance = new Evolving(41);
             require(instance.compute() == 42, "original body");
             StandardJvmtiClient.attach(context);

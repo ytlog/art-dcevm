@@ -9,7 +9,10 @@ android {
         minSdk 30
         consumerProguardFiles 'consumer-rules.pro'
         ndk { abiFilters targetAbi }
-        externalNativeBuild { cmake { cppFlags '-std=c++17 -Wall -Wextra -Werror' } }
+        externalNativeBuild { cmake {
+            cppFlags '-std=c++17 -Wall -Wextra -Werror'
+            arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+        } }
     }
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }

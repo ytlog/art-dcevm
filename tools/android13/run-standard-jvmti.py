@@ -10,6 +10,7 @@ import subprocess
 root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
+parser.add_argument('--apk', default='app/build/outputs/apk/debug/app-debug.apk')
 parser.add_argument('--public-only', action='store_true',
                     help='Check public body/additive JVMTI behavior without enabling the evolution runtime')
 parser.add_argument('--direct-probe', action='store_true',
@@ -20,7 +21,9 @@ if args.public_only and args.direct_probe:
 sdk = next(line.split('=', 1)[1] for line in (root / 'local.properties').read_text().splitlines()
            if line.startswith('sdk.dir='))
 adb = str(Path(sdk) / 'platform-tools/adb')
-apk = root / 'app/build/outputs/apk/debug/app-debug.apk'
+apk = (root / args.apk).resolve()
+if not apk.is_file():
+    parser.error(f'APK does not exist: {apk}')
 output = root / 'build/evidence/standard-jvmti' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 output.mkdir(parents=True)
 

@@ -11,13 +11,16 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser()
 p.add_argument('--serial', required=True)
+p.add_argument('--apk', default='app/build/outputs/apk/debug/app-debug.apk')
 p.add_argument('--hook-order', choices=['validation-first', 'source-first'], default='validation-first')
 p.add_argument('--suite', choices=['all', 'hierarchy', 'narrow', 'narrow-empty', 'narrow-commit', 'narrow-roundtrip', 'narrow-concurrent', 'narrow-special', 'narrow-swap', 'narrow-swap-batch', 'narrow-swap-batch-reverse', 'narrow-swap-concurrent', 'narrow-swap-concurrent-reverse', 'jit-parent-swap-spin', 'interface-remove', 'interface-roundtrip', 'interface-concurrent', 'interface-batch', 'interface-three-batch', 'interface-transfer', 'interface-mixed-batch', 'interface-default', 'interface-default-checkjni', 'interface-default-shadow', 'interface-default-special', 'loader-baseline', 'loader-evolved', 'loader-retired', 'loader-field-cycles', 'loader-field-concurrent', 'loader-mixed', 'loader-mixed-long', 'loader-mixed-cache', 'aot-loader', 'aot-experiment', 'aot-active-evolve', 'aot-active-frame', 'aot-compiled-caller', 'aot-interface-remove', 'aot-interface-default', 'aot-parent-swap', 'aot-parent-swap-two', 'aot-parent-swap-nondebug', 'aot-suspend-deopt', 'jit-inline', 'jit-inline-optimized', 'jit-inline-active', 'jit-boot-inline-diagnostic', 'field-read', 'jni-receiver', 'modifier', 'volatile', 'private', 'private-visibility'], default='all')
 p.add_argument('--skip-install', action='store_true', help='Verify the installed APK hash and retain its dexopt state')
 args = p.parse_args()
 sdk = next(line.split('=', 1)[1] for line in (ROOT / 'local.properties').read_text().splitlines() if line.startswith('sdk.dir='))
 adb = str(Path(sdk) / 'platform-tools/adb')
-apk = ROOT / 'app/build/outputs/apk/debug/app-debug.apk'
+apk = (ROOT / args.apk).resolve()
+if not apk.is_file():
+    p.error(f'APK does not exist: {apk}')
 with zipfile.ZipFile(apk) as archive:
     if 'lib/arm64-v8a/libartdcevm.so' not in archive.namelist():
         p.error('Build the arm64 enhancement APK first')
