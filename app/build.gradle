@@ -1,8 +1,6 @@
 plugins { id 'com.android.application' }
 def targetAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
 if (!(targetAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException("Unsupported targetAbi: $targetAbi")
-if (targetAbi != 'arm64-v8a' && providers.gradleProperty('sourceEngine13').isPresent())
-    throw new GradleException('sourceEngine13 requires targetAbi=arm64-v8a')
 android {
     namespace 'dev.artdcevm'
     compileSdk 37
@@ -19,20 +17,12 @@ android {
     }
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
-    externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '4.3.4' } }
-    buildFeatures { prefab true }
-    packaging { jniLibs {
-        useLegacyPackaging true
-        // Prefab also places the same Maven artifact in the native output directory.
-        pickFirsts += ['**/libshadowhook.so', '**/libshadowhook_nothing.so']
-    } }
+    externalNativeBuild { cmake { path file('src/debug/cpp/CMakeLists.txt'); version '4.3.4' } }
+    packaging { jniLibs { useLegacyPackaging true } }
     sourceSets.debug.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
-    if (providers.gradleProperty('sourceEngine13').isPresent()) {
-        sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/sourceEngine').get().asFile
-    }
 }
 dependencies {
-    if (targetAbi == 'arm64-v8a') implementation 'com.bytedance.android:shadowhook:2.0.1'
+    implementation project(':artdcevm')
     androidTestImplementation 'androidx.test:runner:1.5.2'
     androidTestImplementation 'junit:junit:4.13.2'
 }
@@ -46,19 +36,3 @@ def patchTask = tasks.register('compilePatchFixtures', Exec) {
         '--out', layout.buildDirectory.dir('generated/patchAssets').get().asFile
 }
 tasks.configureEach { if (name == 'preDebugBuild') dependsOn patchTask }
-if (providers.gradleProperty('sourceEngine13').isPresent()) {
-    def sourceEngine = tasks.register('buildSourceEngine13', Exec) {
-        inputs.file rootProject.file('tools/android13/build-source-engine.py')
-        inputs.file rootProject.file('tools/android13/sources.lock.json')
-        inputs.dir rootProject.file('app/src/main/cpp/platform/android13/source_engine')
-        outputs.file rootProject.file('build/art13-source/libartdcevm_source13.so')
-        outputs.file rootProject.file('build/art13-source/build-report.json')
-        commandLine 'python3', rootProject.file('tools/android13/build-source-engine.py')
-    }
-    def packageEngine = tasks.register('packageSourceEngine13', Copy) {
-        dependsOn sourceEngine
-        from rootProject.file('build/art13-source/libartdcevm_source13.so')
-        into layout.buildDirectory.dir('generated/sourceEngine/arm64-v8a')
-    }
-    tasks.named('preBuild').configure { dependsOn packageEngine }
-}

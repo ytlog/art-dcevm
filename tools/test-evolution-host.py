@@ -13,7 +13,7 @@ p.add_argument('--assets', type=Path, default=root / 'app/build/generated/patchA
 args = p.parse_args()
 out = root / 'build/host-evolution'
 out.mkdir(parents=True, exist_ok=True)
-cpp = root / 'app/src/main/cpp'
+cpp = root / 'artdcevm/src/main/cpp'
 command = [args.cxx, '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp),
            str(root / 'tests/host/evolution_test.cc'), str(cpp / 'evolution/dex_schema.cc'),

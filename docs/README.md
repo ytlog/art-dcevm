@@ -49,17 +49,23 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 
 前一 APK 在手机重新解锁后通过实体屏幕 200 次结构提交与 611 次绘制，焦点丢失为 0，见 `build/evidence/ui/20261006T033815Z/run.json`。此前一次复测因休眠锁屏未获得焦点，见 `build/evidence/ui/20261006T031328Z/run.json`；此前 APK 的启动竞态也已通过。焦点中断后恢复及更广的系统调用栈尚未覆盖。
 
+## Gradle 模块
+
+- `:artdcevm` 是可复用的 Android Library，包含 `DcevmRuntime`、后端、Agent 和 Native 实现；Release AAR 的 Native 部分只包含 `libartdcevm.so`；ShadowHook 2.0.1 通过 Gradle 传递依赖提供。
+- `:app` 是演示与设备测试应用，通过 `implementation project(':artdcevm')` 使用增强库。补丁 fixture、instrumentation 和测试页面保留在应用模块。
+- `-PsourceEngine13` 的可选源码模块由 `:artdcevm` 构建并随其 AAR 打包；默认构建不包含该源码模块。
+
+构建命令：`./gradlew :artdcevm:assembleRelease :app:assembleDebug`。
+
 ## 目录与接口
 
 ```text
-app/src/main/java/dev/artdcevm/
+artdcevm/src/main/java/dev/artdcevm/
   api/                         应用侧契约、不可变补丁请求、结果
   engine/                      版本注册与稳定 JNI 协议
   platform/android13/          API 33 的 attach、debuggable 策略
   platform/jvmti/               未校准 ART 构建的公开 JVMTI 后端
-  testing/                     一致性测试与 JNI 探针
-  fixture/                     APK 中的原始业务类
-app/src/main/cpp/
+artdcevm/src/main/cpp/
   api/runtime_backend.h        平台后端契约
   api/class_redefiner.h         整批类变更事务接口
   api/hook_engine.h             查找符号、安装和移除 Hook
@@ -84,8 +90,9 @@ app/src/main/cpp/
       read_barrier-inl.patch    将读屏障慢路径委托给目标 ART
       reflective_value_visitor.patch 源码访问器，用于更新已缓存 Method 的修饰符
       runtime_services.cc      系统 GC 入口调用与诊断计数
-    builds/                    精确运行时构建配置
-  testing/                     JNI 全局引用、方法/字段 ID 一致性探针
+  platform/symbols/            按系统、厂商、Build ID 组织的私有符号配置
+app/src/debug/cpp/testing/      仅演示应用使用的 JNI 与独立 Agent 探针
+app/src/debug/java/            演示应用的测试入口与业务样例
 fixtures/                      方法体、增删、类型、继承、元数据的单类补丁源码
 tests/host/                    本地解析器及迁移计划测试，启用内存/未定义行为检测
 third_party/                   固定来源、保留许可证的 JVMTI 头文件

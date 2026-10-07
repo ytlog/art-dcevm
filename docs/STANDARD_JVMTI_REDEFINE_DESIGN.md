@@ -94,11 +94,11 @@ Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留
 
 ## 参考实现位置
 
-- 当前 App 初始化：`app/src/main/java/dev/artdcevm/platform/android13/Android13Backend.java`
-- 当前 Agent 与事务锁：`app/src/main/cpp/core/agent.cc`
-- 当前后端分流：`app/src/main/cpp/platform/android13/android13_backend.cc`
-- 当前源码事务入口：`app/src/main/cpp/platform/android13/source_engine_loader.cc`
-- 当前命名符号 Hook：`app/src/main/cpp/hooks/shadow_hook_engine.cc`
+- 当前库初始化：`artdcevm/src/main/java/dev/artdcevm/platform/android13/Android13Backend.java`
+- 当前 Agent 与事务锁：`artdcevm/src/main/cpp/core/agent.cc`
+- 当前后端分流：`artdcevm/src/main/cpp/platform/android13/android13_backend.cc`
+- 当前源码事务入口：`artdcevm/src/main/cpp/platform/android13/source_engine_loader.cc`
+- 当前命名符号 Hook：`artdcevm/src/main/cpp/hooks/shadow_hook_engine.cc`
 - ART 标准入口源码：`build/art13-source/art/openjdkjvmti/OpenjdkJvmTi.cc`、`build/art13-source/art/openjdkjvmti/ti_redefine.cc`
 
 外部依据：[Android ART TI](https://source.android.com/docs/core/runtime/art-ti)、[JVMTI `RedefineClasses` 规范](https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html)。

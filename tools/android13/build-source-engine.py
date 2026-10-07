@@ -66,7 +66,7 @@ shutil.copytree(OUT / 'art/runtime', runtime_overlay, dirs_exist_ok=True)
 for header_patch in ['read_barrier-inl.patch', 'reflective_value_visitor.patch',
                      'jit_code_cache.patch']:
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i',
-                    str(ROOT / 'app/src/main/cpp/platform/android13/source_engine' / header_patch)],
+                    str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine' / header_patch)],
                    cwd=runtime_overlay, check=True, capture_output=True, text=True)
 includes = ['modified/runtime', 'art/compiler', 'art/libartbase', 'art/libdexfile', 'art/openjdkjvmti',
             'art/openjdkjvmti/include', 'art/libartpalette/include', 'art/cmdline',
@@ -83,7 +83,7 @@ flags = ['-std=c++17', '-fPIC', '-O2', '-fno-rtti', '-fno-exceptions',
          '-Wno-invalid-offsetof', '-Wno-deprecated-builtins', '-nostdinc++',
          '-isystem', str(OUT / 'libcxx/include'), '-isystem', str(OUT / 'bionic/include')]
 flags += ['-D' + define for define in defines] + ['-I' + str(OUT / inc) for inc in includes]
-engine = ROOT / 'app/src/main/cpp/platform/android13/source_engine'
+engine = ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine'
 flags += ['-I' + str(engine)]
 generated = OUT / 'modified'
 generated.mkdir(exist_ok=True)
