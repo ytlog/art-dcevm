@@ -25,3 +25,13 @@
 4. 只有上述条件满足后，删除 `source_engine/`、`build-source-engine.py`、`sources.lock.json`、`sourceEngine13` Gradle 分支、源码模块装载和相应的测试专用入口。不能以减少构建文件为由提前删除仍承载演进语义的实现。
 
 当前状态：以上代理尚未完成。这个文件记录迁移边界，不表示现有源码引擎已被替换。
+
+## 目标设备符号核对（2026-10-07）
+
+在 Android 13 真机 `DEVICE_001` 上读取 `/apex/com.android.art/lib64/` 的设备库，Build ID 分别为 `libopenjdkjvmti.so` 的 `2fe21c45581b9c8b0519b71cbde32938` 和 `libart.so` 的 `14fc77b24db0b351b919c97009dc86bf`。用 NDK `llvm-readelf --dyn-syms --wide` 核对动态符号表：
+
+- `ClassRedefinition::RecordNewFieldAdded`、`RecordNewMethodAdded`、`CheckFields`、`CheckMethods`、`CollectNewFieldAndMethodMappings` 与 `UpdateClassStructurally` 均有命名导出。前两个可供自有校验代理报告结构变化；名称存在仍不能代替事务对象布局探针。
+- `libart.so` 导出 `jit::JitCodeCache::InvalidateAllCompiledCode` 和 `LinearAlloc::ContainsUnsafe`。取得接收者对象仍需固定源码声明与运行时校验，不能从二进制推算成员偏移。
+- `CopyFields` 没有独立动态导出。字段删除和类型变化不能通过只 Hook `CheckFields` 来实现：设备提交仍按旧字段都存在于新布局的前提复制；必须在自有 `UpdateClassStructurally` 代理中处理字段匹配、默认值和回滚边界，并保持旧引用失效语义。
+
+设备库副本仅保存在已忽略的 `build/evidence/device-symbols/20261007/`，不作为构建输入或提交内容。
