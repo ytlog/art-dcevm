@@ -9,6 +9,10 @@
 #include "thread-current-inl.h"
 #include "verifier/class_verifier.h"
 #include <atomic>
+#include <cstddef>
+#include <cstring>
+#include <new>
+#include <type_traits>
 #include <vector>
 #include <android/log.h>
 
@@ -106,7 +110,6 @@ using AllocateClassFn = art::ObjPtr<art::mirror::Class> (*)(void*,
     art::Handle<art::mirror::Class>, art::Handle<art::mirror::Class>,
     art::Handle<art::mirror::DexCache>, uint16_t);
 void* original_allocate_address = nullptr;
-bool (*source_transaction)() = nullptr;
 thread_local artdcevm::android13::source::HierarchyAllocationScope* allocation_scope = nullptr;
 void* original_batch_allocate = nullptr;
 void* original_run = nullptr;
@@ -241,8 +244,7 @@ extern "C" bool ArtDcevmSourceHierarchyAllocateSubtree(void* definition, void* h
 extern "C" jvmtiError ArtDcevmSourceHierarchyRun(void* driver) {
   return SourceHierarchyRun(driver);
 }
-extern "C" void** ArtDcevmSourceConfigureHierarchyAllocator(bool (*active)()) {
-  source_transaction = active;
+extern "C" void** ArtDcevmSourceConfigureHierarchyAllocator() {
   return &original_allocate_address;
 }
 extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void* redef,
@@ -270,31 +272,38 @@ extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void
 }
 
 namespace {
-using Verify = decltype(&art::verifier::ClassVerifier::VerifyClass);
-void* original_verify = nullptr;
 // Verification sees the unpublished replacement through a thread-local view.
-// The borrowed Handle remains rooted by CheckVerification for the entire call.
+// The copied Handle continues to reference the root owned by CheckVerification.
 struct VerificationView {
-  const art::Handle<art::mirror::Class>* klass;
+  art::Handle<art::mirror::Class> klass;
   VerificationView* previous;
 };
 thread_local VerificationView* verification_view = nullptr;
+template <typename HandleType>
+HandleType HandleFromAbi(const void* argument) {
+  static_assert(sizeof(HandleType) == sizeof(void*));
+  if constexpr (std::is_trivially_copyable_v<HandleType>) {
+    HandleType result;
+    std::memcpy(&result, &argument, sizeof(result));
+    return result;
+  } else {
+    // A nontrivial by-value Handle is passed indirectly by the arm64 C++ ABI.
+    return *reinterpret_cast<const HandleType*>(argument);
+  }
 }
-extern "C" void** ArtDcevmSourceConfigureHierarchyVerification() {
-  return &original_verify;
 }
-extern "C" art::verifier::FailureKind ArtDcevmSourceHierarchyVerify(
-    art::Thread* self, art::verifier::VerifierDeps* deps, const art::DexFile* dex,
-    art::Handle<art::mirror::Class> klass, art::Handle<art::mirror::DexCache> cache,
-    art::Handle<art::mirror::ClassLoader> loader, const art::dex::ClassDef& def,
-    art::CompilerCallbacks* callbacks, art::verifier::HardFailLogMode log_level,
-    uint32_t api, std::string* error) {
-  auto original = reinterpret_cast<Verify>(original_verify);
-  if (!source_transaction() || klass.IsNull())
-    return original(self, deps, dex, klass, cache, loader, def, callbacks, log_level, api, error);
-  VerificationView view{&klass, verification_view};
+extern "C" bool ArtDcevmSourceBeginHierarchyVerify(
+    void* storage, const void* klass_argument, const void* cache_argument) {
+  static_assert(sizeof(VerificationView) <= 64);
+  static_assert(alignof(VerificationView) <= alignof(std::max_align_t));
+  static_assert(sizeof(art::verifier::FailureKind) <= sizeof(uint32_t));
+  static_assert(sizeof(art::verifier::HardFailLogMode) <= sizeof(uint32_t));
+  auto klass = HandleFromAbi<art::Handle<art::mirror::Class>>(klass_argument);
+  if (klass.IsNull()) return false;
+  auto cache = HandleFromAbi<art::Handle<art::mirror::DexCache>>(cache_argument);
+  auto* view = new (storage) VerificationView{klass, verification_view};
   ++verifier_entries;
-  verification_view = &view;
+  verification_view = view;
   if (allocation_scope) allocation_scope->RefreshVerificationCache(cache);
   if (allocation_scope && klass->GetSuperClass() != nullptr) {
     std::string name, parent_name;
@@ -307,16 +316,20 @@ extern "C" art::verifier::FailureKind ArtDcevmSourceHierarchyVerify(
         allocation_scope->Find(klass->GetDescriptor(&name), klass->GetClassLoader()) == klass.Get(),
         static_cast<unsigned long long>(verification_cache_updates.load()));
   }
-  auto result = original(self, deps, dex, klass, cache, loader, def, callbacks, log_level, api, error);
-  verification_view = view.previous;
-  return result;
+  return true;
+}
+extern "C" void ArtDcevmSourceEndHierarchyVerify(void* storage) {
+  auto* view = reinterpret_cast<VerificationView*>(storage);
+  CHECK(verification_view == view);
+  verification_view = view->previous;
+  view->~VerificationView();
 }
 extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyResolveReplacement(
     void*, const char* descriptor, art::ObjPtr<art::mirror::ClassLoader> loader) {
   static_assert(sizeof(art::ObjPtr<art::mirror::Class>) == sizeof(void*));
   static_assert(sizeof(art::ObjPtr<art::mirror::ClassLoader>) == sizeof(void*));
   for (auto* view = verification_view; view; view = view->previous) {
-    for (art::ObjPtr<art::mirror::Class> klass(view->klass->Get());
+    for (art::ObjPtr<art::mirror::Class> klass(view->klass.Get());
          klass != nullptr; klass = klass->GetSuperClass()) {
       if (klass->GetClassLoader() == loader && klass->DescriptorEquals(descriptor)) {
         ++verifier_resolutions;
@@ -337,7 +350,7 @@ art::ObjPtr<art::mirror::Class> VerificationClass(const char* descriptor,
   for (auto* view = verification_view; view; view = view->previous) {
     // Multiple obsolete generations share descriptor and loader. The class
     // under verification already points at its exact unpublished ancestry.
-    for (art::ObjPtr<art::mirror::Class> klass(view->klass->Get());
+    for (art::ObjPtr<art::mirror::Class> klass(view->klass.Get());
          klass != nullptr; klass = klass->GetSuperClass()) {
       if (klass->GetClassLoader() == loader && klass->DescriptorEquals(descriptor)) {
         ++verifier_resolutions;

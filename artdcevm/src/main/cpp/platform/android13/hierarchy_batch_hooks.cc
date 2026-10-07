@@ -15,7 +15,7 @@ using Allocate = bool (*)(void*, void*, void*);
 using AllocateClass = void* (*)(void*, void*, void*, void*, uint16_t);
 using Run = jvmtiError (*)(void*);
 using ConfigureOriginal = void** (*)(int);
-using ConfigureClassOriginal = void** (*)(bool (*)());
+using ConfigureClassOriginal = void** (*)();
 Allocate original_allocate = nullptr;
 AllocateClass original_class_allocate = nullptr;
 Run original_run = nullptr;
@@ -66,7 +66,7 @@ bool InstallHierarchyBatchHooks(HookEngine& hooks, void* implementation,
   void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
   void** source_allocate_original = configure(0);
   void** source_run_original = configure(1);
-  void** source_class_original = configure_class(ValidationHooks::InSourceTransaction);
+  void** source_class_original = configure_class();
   if (!allocate_target || !run_target || !class_target || !source_allocate_original ||
       !source_run_original || !source_class_original) {
     *error = "Missing named hierarchy batch symbol or original slot";

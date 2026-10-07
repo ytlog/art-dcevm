@@ -73,12 +73,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
   auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
-  using ConfigureVerification = void** (*)();
-  auto configure_verification = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyVerification"));
-  void* verify = dlsym(library, "ArtDcevmSourceHierarchyVerify");
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
-      !invalidate_jit || !methods || !fields || !classes
-      || !configure_verification || !verify) {
+      !invalidate_jit || !methods || !fields || !classes) {
     dlclose(library); return "Source engine exports are incomplete";
   }
   // The source probe may touch a reflected Field, so initialize its opaque
@@ -102,11 +98,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
-  void* verify_target = symbols.FindSymbol("libart.so", cas::kVerifyClass);
-  void** verify_original = configure_verification();
-  if (!verify_target || !verify_original ||
-      !symbols.Install(verify_target, verify, verify_original, &error))
-    return error.empty() ? "Missing named hierarchy verification symbol" : error;
   if (!InstallHierarchyResolutionHooks(symbols, library, &error)) return error;
   if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;

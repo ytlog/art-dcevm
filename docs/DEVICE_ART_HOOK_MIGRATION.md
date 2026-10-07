@@ -32,7 +32,7 @@
 
 `ClassRedefinition::AllocateNewClassObject` 也由同一增强库代理分派：普通事务直接调用设备原函数，有层级变化的源码演进事务才交给源码侧选择新父类。增强库只转发固定 arm64 ABI 的不透明参数，源码侧在编译时检查相关 `Handle` 与 `ObjPtr` 大小；层级实现仍待迁出。
 
-验证期间的 `RegTypeCache::ResolveClass`、`ClassLinker::FindClass` 与 `LookupClass` 现由增强库安装命名 Hook 并代理。演进事务中，源码回调仅查询未发布的替换类；未命中时代理调用设备原函数。`ClassVerifier::VerifyClass` 的验证视图生命周期仍在源码代理中，尚待迁出。
+验证期间的 `ClassVerifier::VerifyClass`、`RegTypeCache::ResolveClass`、`ClassLinker::FindClass` 与 `LookupClass` 现由增强库安装命名 Hook 并代理。`VerifyClass` 代理在源码事务中请源码回调建立临时验证视图，调用设备原函数后关闭该视图；解析代理从源码回调查询未发布的替换类，未命中时调用设备原函数。源码仍负责视图中的类型化 ART 访问与缓存刷新，尚待迁出。
 
 `CollectAndCreateNewInstances` 也已改由增强库安装命名 Inline Hook 并分派：非演进事务调用设备原函数，演进事务调用现有实例收集实现。源码实现仍通过已传入的 trampoline 委托设备完成原有分配步骤。
 
