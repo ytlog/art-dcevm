@@ -34,7 +34,16 @@ class CheckedMethodResolution {
   virtual void ThrowMissingMethod(const MethodResolutionContext&) = 0;
 };
 
-// Source-defined checked Handle ResolveMethod ordering. A null result means
+// Source-defined checked Handle ResolveMethod ordering: capture the cache
+// before resolving the referenced class. A null result means
 // the provider installed ART's exception. This is not an unchecked resolver.
 void* ResolveCheckedMethod(const MethodResolutionContext&, CheckedMethodResolution&);
+
+// android-16/17 ClassLinker::ResolveMethodWithChecks ordering: resolve/check
+// the referenced class before reading the method cache (resolution may fill it).
+// The version provider supplies the normalized non-null referrer, its own
+// cache/loader context, and access checks against the already rooted class.
+// Proxy constructors must be normalized by that provider before this call.
+// This is the checked operation, never the unchecked ResolveMethodId fast path.
+void* ResolveCheckedReferrerMethod(const MethodResolutionContext&, CheckedMethodResolution&);
 }

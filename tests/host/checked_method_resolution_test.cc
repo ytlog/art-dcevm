@@ -9,7 +9,7 @@ struct Provider final:g::CheckedMethodResolution {
   g::MethodResolutionContext expected;
   int result=7,incompatible=8;
   bool cached=false,missing=false,class_failure=false,class_mismatch=false,access_failure=false,
-       method_mismatch=false,other_kind=false;
+       method_mismatch=false,other_kind=false,cache_during_resolution=false;
   std::string exception;
   std::vector<std::string> calls;
   explicit Provider(g::MethodResolutionContext context):expected(context){}
@@ -21,7 +21,9 @@ struct Provider final:g::CheckedMethodResolution {
   }
   void* CachedMethod(const g::MethodResolutionContext& c)override{Record(c,"cached");return cached?&result:nullptr;}
   bool ResolveAndRootClass(const g::MethodResolutionContext& c)override {
-    Record(c,"class");if(class_failure)exception="NoClassDefFoundError";return !class_failure;
+    Record(c,"class");if(class_failure)exception="NoClassDefFoundError";
+    if(!class_failure && cache_during_resolution)cached=true;
+    return !class_failure;
   }
   bool RejectClassInvokeType(const g::MethodResolutionContext& c)override {
     Record(c,"class-type");if(class_mismatch)exception="IncompatibleClassChangeError";return class_mismatch;
@@ -78,5 +80,38 @@ int main() {
   Provider absent(context);absent.missing=true;
   assert(!g::ResolveCheckedMethod(context,absent) && absent.exception=="NoSuchMethodError");
   Calls(absent,{"cached","class","class-type","find","other-kind","throw-missing"});
-  std::cout<<"checked method resolution: explicit context, nullable referrer, cached checks and exception precedence passed\n";
+  // A class-resolution side effect changes which lookup branch is used by
+  // ResolveMethodWithChecks. The old explicit-Handle snapshot stays unchanged.
+  Provider old_filled(context);old_filled.cache_during_resolution=true;
+  assert(g::ResolveCheckedMethod(context,old_filled)==&old_filled.result);
+  Calls(old_filled,{"cached","class","class-type","find","access","method-type"});
+  Provider new_filled(context);new_filled.cache_during_resolution=true;
+  assert(g::ResolveCheckedReferrerMethod(context,new_filled)==&new_filled.result);
+  Calls(new_filled,{"class","class-type","cached","access","method-type"});
+  Provider modern_hit(context);modern_hit.cached=true;
+  assert(g::ResolveCheckedReferrerMethod(context,modern_hit)==&modern_hit.result);
+  Calls(modern_hit,{"class","class-type","cached","access","method-type"});
+  Provider modern_fresh(context);
+  assert(g::ResolveCheckedReferrerMethod(context,modern_fresh)==&modern_fresh.result);
+  Calls(modern_fresh,{"class","class-type","cached","find","access","method-type"});
+  Provider modern_class_failure(context);modern_class_failure.cached=true;modern_class_failure.class_failure=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_class_failure) && modern_class_failure.exception=="NoClassDefFoundError");
+  Calls(modern_class_failure,{"class"});
+  Provider modern_wrong_class(context);modern_wrong_class.cached=true;modern_wrong_class.class_mismatch=true;
+  modern_wrong_class.access_failure=true;modern_wrong_class.method_mismatch=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_wrong_class) && modern_wrong_class.exception=="IncompatibleClassChangeError");
+  Calls(modern_wrong_class,{"class","class-type"});
+  Provider modern_access(context);modern_access.cached=true;modern_access.access_failure=true;modern_access.method_mismatch=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_access) && modern_access.exception=="IllegalAccessError");
+  Calls(modern_access,{"class","class-type","cached","access"});
+  Provider modern_wrong_method(context);modern_wrong_method.method_mismatch=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_wrong_method) && modern_wrong_method.exception=="IncompatibleClassChangeError");
+  Calls(modern_wrong_method,{"class","class-type","cached","find","access","method-type","throw-type"});
+  Provider modern_alternate(context);modern_alternate.missing=true;modern_alternate.other_kind=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_alternate) && modern_alternate.exception=="IncompatibleClassChangeError");
+  Calls(modern_alternate,{"class","class-type","cached","find","other-kind","throw-type"});
+  Provider modern_absent(context);modern_absent.missing=true;
+  assert(!g::ResolveCheckedReferrerMethod(context,modern_absent) && modern_absent.exception=="NoSuchMethodError");
+  Calls(modern_absent,{"class","class-type","cached","find","other-kind","throw-missing"});
+  std::cout<<"checked method resolution: explicit context, nullable referrer, cached checks, class-first referrer checks, cache publication during class resolution and exception precedence passed\n";
 }

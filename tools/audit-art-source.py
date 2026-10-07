@@ -142,6 +142,17 @@ def main():
                                 break
                         matches.append({'line': index + 1, 'text': ' '.join(excerpt)})
                 declarations[name + ':' + method] = matches
+        checked_referrer = re.search(
+            r'inline ArtMethod\* ClassLinker::ResolveMethodWithChecks\(.*?(?=\ninline |\Z)',
+            content['runtime/class_linker-inl.h'], re.DOTALL)
+        checked_referrer_order = None
+        if checked_referrer:
+            body = checked_referrer.group(0)
+            operations = ('ResolveType', 'ThrowIfInvokeClassMismatch', 'GetResolvedMethod',
+                          'FindResolvedMethod', 'CanAccessMember', 'CheckIncompatibleClassChange',
+                          'FindIncompatibleMethod', 'ThrowNoSuchMethodError')
+            positions = [(body.find(name + '('), name) for name in operations]
+            checked_referrer_order = [name for position, name in sorted(positions) if position >= 0]
         versions.append({
             'tag': tag, 'commit': commit,
             'artMethodHasDexCodeItemOffset': 'uint32_t dex_code_item_offset_' in content['runtime/art_method.h'],
@@ -175,6 +186,7 @@ def main():
             'compactDexImplementationFile': 'libdexfile/dex/compact_dex_file.cc' if major < 17 else None,
             'compactDexDefaultMethodsReadsFeatureFlags': ('GetHeader().GetFeatureFlags()' in
                 content['libdexfile/dex/compact_dex_file.cc']) if major < 17 else None,
+            'checkedReferrerResolverOperationOrder': checked_referrer_order,
             'methodResolverDeclarationFamily': ('separate-id-and-checks'
                 if re.search(r'\bResolveMethodWithChecks\s*\(', content['runtime/class_linker.h'])
                 else 'templated-resolve-mode'),
