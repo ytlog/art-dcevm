@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARIES = ('libart.so', 'libartd.so', 'libopenjdkjvmti.so', 'libopenjdkjvmtid.so',
@@ -145,9 +146,22 @@ def main():
         report['errors'].append(str(error))
     report['finishedUtc'] = datetime.now(timezone.utc).isoformat()
     report['scope'] = 'Device ELF and named symbols only; not runtime calibration or proof of loaded library'
-    (out / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
+    manifest = out / 'manifest.json'
+    manifest.write_text(json.dumps(report, indent=2) + '\n')
+    if report['complete']:
+        report['assetStorageComplete'] = False
+        try:
+            storage = run('runtime-assets', [sys.executable, str(ROOT / 'tools/store-art-runtime-libs.py'),
+                                            str(manifest)], required=False)
+            if storage.returncode:
+                raise RuntimeError('Runtime asset storage failed; see runtime-assets.txt')
+            report['assetStorageComplete'] = True
+            report['runtimeAssetDirectory'] = storage.stdout.strip()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            report['errors'].append(str(error))
+        manifest.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
-    return 0 if report['complete'] else 1
+    return 0 if report['complete'] and not report['errors'] else 1
 
 
 if __name__ == '__main__':

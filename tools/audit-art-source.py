@@ -13,6 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 TAGS = [f'android-{v}.0.0_r1' for v in range(11, 18)]
 TAGS.insert(2, 'android-12.1.0_r1')
 BASE = 'https://android.googlesource.com/platform/art/'
+INTERFACES = {
+    'runtime/thread_list.h': ('SuspendThreadByPeer',),
+    'runtime/thread.h': ('HandleScopeVisitRoots',),
+    'runtime/instrumentation.h': ('GetCodeForInvoke', 'InitializeMethodsCode', 'InstrumentThreadStack'),
+    'runtime/jit/jit.h': ('CompileMethod',),
+    'runtime/jit/jit_code_cache.h': ('VisitAllMethods',),
+    'runtime/mirror/class.h': ('GetDirectInterface',),
+    'runtime/mirror/var_handle.h': ('GetAccessModeTemplate',),
+    'runtime/art_field.h': ('GetName', 'GetTypeDescriptor'),
+    'compiler/optimizing/inliner.h': ('TryInline',),
+}
 
 
 def main():
@@ -20,7 +31,14 @@ def main():
     parser.add_argument('--source-dir', type=Path, default=ROOT / 'build/evidence/aosp-compatibility')
     parser.add_argument('--proxy', help='Optional HTTPS proxy for curl')
     parser.add_argument('--offline', action='store_true', help='Require previously verified cached sources')
+    parser.add_argument('--tag', action='append',
+                        help='Explicit official release tag; repeat to audit device-matched builds')
     args = parser.parse_args()
+    tags = args.tag or TAGS
+    if any(not re.fullmatch(r'android-\d+\.\d+\.\d+_r\d+', tag) for tag in tags):
+        parser.error('--tag must be an Android release tag such as android-11.0.0_r46')
+    if len(set(tags)) != len(tags):
+        parser.error('Duplicate --tag values')
     args.source_dir.mkdir(parents=True, exist_ok=True)
     refs_path = args.source_dir / 'refs.json'
     manifest_path = args.source_dir / 'source-manifest.json'
@@ -42,7 +60,7 @@ def main():
     sources = []
     versions = []
     errors = []
-    for tag in TAGS:
+    for tag in tags:
         try:
             ref = refs['refs/tags/' + tag]
             commit = ref.get('peeled', ref['value'])
@@ -53,7 +71,7 @@ def main():
         oat = 'runtime/oat/' if major >= 15 else 'runtime/'
         files = ['openjdkjvmti/ti_redefine.h', 'openjdkjvmti/ti_redefine.cc',
                  'openjdkjvmti/ti_extension.cc', 'runtime/art_method.h',
-                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h']
+                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h', *INTERFACES]
         content = {}
         for name in files:
             path = args.source_dir / tag / name
@@ -83,6 +101,21 @@ def main():
         redefine = content['openjdkjvmti/ti_redefine.h']
         implementation = content['openjdkjvmti/ti_redefine.cc']
         extensions = content['openjdkjvmti/ti_extension.cc']
+        declarations = {}
+        # Preserve source excerpts for review; do not infer object offsets or ABI compatibility.
+        for name, methods in INTERFACES.items():
+            lines = content[name].splitlines()
+            for method in methods:
+                matches = []
+                for index, line in enumerate(lines):
+                    if re.search(r'\b' + method + r'\s*\(', line) and not line.lstrip().startswith('//'):
+                        excerpt = []
+                        for following in lines[index:index + 12]:
+                            excerpt.append(following.strip())
+                            if ';' in following or '{' in following:
+                                break
+                        matches.append({'line': index + 1, 'text': ' '.join(excerpt)})
+                declarations[name + ':' + method] = matches
         versions.append({
             'tag': tag, 'commit': commit,
             'artMethodHasDexCodeItemOffset': 'uint32_t dex_code_item_offset_' in content['runtime/art_method.h'],
@@ -94,13 +127,14 @@ def main():
             'structuralExtensionDeclared': all(name in extensions for name in (
                 'com.android.art.class.structurally_redefine_classes',
                 'com.android.art.class.is_structurally_modifiable_class')),
+            'interfaceDeclarationExcerpts': declarations,
         })
     # Preserve unrelated previously fetched sources and their provenance.
     merged = dict(cached)
     merged.update({(x['tag'], x['path']): x for x in sources})
     manifest_path.write_text(json.dumps(list(merged.values()), indent=2) + '\n')
     report = {'scope': 'AOSP source declarations only; no device compatibility claim',
-              'complete': not errors and len(versions) == len(TAGS),
+              'complete': not errors and len(versions) == len(tags),
               'versions': versions, 'errors': errors}
     (args.source_dir / 'audit.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

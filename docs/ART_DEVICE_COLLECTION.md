@@ -51,4 +51,4 @@ python3 tools/audit-art-device-matrix.py build/evidence/art-devices/*/manifest.j
 
 矩阵审计先核验 ELF 与符号清单哈希，再统计当前 Android 13 后端的 87 个 C++ 符号字面量是否存在。包含可选能力，缺失不直接等于运行失败；跨库存在也不保证调用方指定库能解析该符号。后续逐个核对实际解析库与固定 AOSP 声明，不通过反汇编推导函数地址或字段偏移。在线 AOSP 固定源码审计继续使用 `tools/audit-art-source.py`。任何新增 Profile 都需真实运行行为回归后才能开放。
 
-设备 SO、CLI、原始日志、矩阵均保存在已忽略的 `build/evidence/`，不提交。
+原始采集的 SO、CLI、日志、矩阵均保存在已忽略的 `build/evidence/`。完整采集通过核验后，工具自动将 SO 同步到工程根目录的 `assets/runtime_lib/`，按 API/厂商/型号/系统构建与库集合哈希分类，详见其中的 README。两个位置的设备 SO 均不提交；`assets/runtime_lib` 是参考资料，不自动打入 APK。

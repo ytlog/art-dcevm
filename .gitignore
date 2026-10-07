@@ -7,3 +7,5 @@ local.properties
 local/
 *.hprof
 __pycache__/
+/assets/runtime_lib/*
+!/assets/runtime_lib/README.md
