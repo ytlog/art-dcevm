@@ -29,6 +29,9 @@ INTERFACES = {
     'runtime/linear_alloc.h': ('ContainsUnsafe',),
     'runtime/linear_alloc.cc': ('ContainsUnsafe',),
     'runtime/linear_alloc-inl.h': ('ContainsUnsafe', 'Contains', 'Alloc'),
+    'libartbase/base/arena_allocator.h': ('Contains', 'GetArenaPool'),
+    'libartbase/base/arena_allocator.cc': ('Contains',),
+    'runtime/base/mutex.h': ('Mutex',),
 }
 
 
