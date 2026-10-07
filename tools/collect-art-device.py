@@ -93,7 +93,23 @@ def main():
         candidates = ' '.join(shlex.quote(d + '/' + n) for d in DIRECTORIES for n in LIBRARIES)
         paths = adb('library-paths', 'shell',
                     f'for f in {candidates}; do if [ -f "$f" ]; then readlink -f "$f"; fi; done')
-        for index, path in enumerate(sorted(set(paths.splitlines()))):
+        paths = sorted(set(paths.splitlines()))
+        hashes = adb('remote-library-sha256', 'shell',
+                     'sha256sum ' + ' '.join(shlex.quote(path) for path in paths)) if paths else ''
+        remote_hashes = {path: digest for digest, path in
+                         re.findall(r'^([0-9a-f]{64})\s+\*?(.+)$', hashes, re.MULTILINE)}
+        cache = {}
+        asset_root = (ROOT / 'assets/runtime_lib').resolve()
+        for stored_manifest in asset_root.glob('api-*/*/*/*/manifest.json'):
+            try:
+                stored = json.loads(stored_manifest.read_text())
+                for library in stored['libraries']:
+                    source = (stored_manifest.parent / library['file']).resolve()
+                    if source.is_relative_to(asset_root):
+                        cache.setdefault(library['sha256'], source)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        for index, path in enumerate(paths):
             name = Path(path).name
             if name not in LIBRARIES or not path.startswith(('/apex/', '/system/')):
                 raise RuntimeError(f'Unexpected device library path: {path}')
@@ -103,7 +119,19 @@ def main():
             entry = dict(path=path, name=name, file=str(local.relative_to(out)), complete=False)
             report['libraries'].append(entry)
             try:
-                if args.compress:
+                expected_hash = remote_hashes.get(path)
+                if not expected_hash:
+                    raise RuntimeError('Device did not report a SHA-256 for this library')
+                entry['deviceSha256'] = expected_hash
+                cached_file = cache.get(expected_hash)
+                reusable = (cached_file and cached_file.is_file() and
+                            hashlib.sha256(cached_file.read_bytes()).hexdigest() == expected_hash)
+                if reusable:
+                    shutil.copyfile(cached_file, local)
+                    entry['reusedAsset'] = str(cached_file.relative_to(ROOT))
+                    (out / f'pull-{index}.txt').write_text(
+                        f'Verified local device asset reused; remote SHA-256={expected_hash}\n')
+                elif args.compress:
                     transfer = subprocess.run(
                         [args.adb, '-s', args.serial, 'exec-out',
                          'gzip -c ' + shlex.quote(path)], capture_output=True, timeout=args.pull_timeout)
@@ -118,6 +146,8 @@ def main():
                 data = local.read_bytes()
                 if data[:4] != b'\x7fELF':
                     raise RuntimeError('Pulled library is not ELF')
+                if hashlib.sha256(data).hexdigest() != expected_hash:
+                    raise RuntimeError('ELF content differs from device-reported SHA-256')
                 entry.update(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
                 notes = run(f'notes-{index}', [args.readelf, '--notes', '--file-header', str(local)]).stdout
                 match = re.search(r'Build ID:\s*([0-9a-fA-F]+)', notes)

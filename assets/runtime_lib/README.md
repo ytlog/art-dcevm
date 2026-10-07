@@ -6,6 +6,8 @@
 
 每个构建的 `manifest.json` 记录来源（Firebase 或 local）、设备指纹、API、厂商、型号、页大小、采集时间、远端路径、SHA-256 和 GNU Build ID；根目录 `index.json` 汇总已存储的设备。只有完整采集且通过哈希核验的库集合才能进入本目录。原始日志、符号清单与失败记录仍保存在 `build/evidence/`。
 
+后续设备先实际读取每个 SO 的 SHA-256。与已有真机参考文件完全相同且本地哈希复核通过时，复用相同字节，减少云端传输；不同内容仍从当前真机提取。原始 evidence manifest 的 `deviceSha256`、`reusedAsset` 记录该过程，系统版本或型号相同不足以触发复用。
+
 ```sh
 python3 tools/store-art-runtime-libs.py <完整采集的 manifest.json> [...]
 ```
