@@ -28,6 +28,10 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/jni_method_targets.cc
     platform/android13/validation_metadata.cc
     platform/android13/field_copy.cc
+    platform/android13/field_copy_binding.cc
+    platform/android13/field_copy_metadata.cc
+    platform/android13/field_copy_storage.cc
+    platform/android13/heap_reference.cc
     platform/android13/method_validation.cc platform/android13/class_validation.cc
     platform/android13/modifier_evolution_policy.cc
     platform/android13/validation_hooks.cc platform/android13/source_engine_loader.cc

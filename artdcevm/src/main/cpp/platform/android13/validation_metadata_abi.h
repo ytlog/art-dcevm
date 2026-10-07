@@ -36,6 +36,7 @@ struct ClassPrefix {
   uint32_t class_size;
   int32_t clinit_thread_id;
   int32_t dex_class_def_index;
+  int32_t dex_type_index;
 };
 struct DexCachePrefix {
   ObjectPrefix object;
@@ -56,6 +57,7 @@ static_assert(alignof(ClassPrefix) == 4);
 static_assert(offsetof(ClassPrefix, dex_cache) == 16);
 static_assert(offsetof(ClassPrefix, access_flags) == 64);
 static_assert(offsetof(ClassPrefix, dex_class_def_index) == 80);
+static_assert(offsetof(ClassPrefix, dex_type_index) == 84);
 static_assert(offsetof(DexCachePrefix, dex_file) == 16);
 static_assert(sizeof(DexMappingPrefix) == 40);
 }

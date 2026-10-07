@@ -36,9 +36,6 @@ void RetireMethod(art::ArtMethod* method) {
 bool IsRetiredMethod(art::ArtMethod* method) {
   return contains_method(method);
 }
-size_t RetiredMethodCount() {
-  return retired_method_count();
-}
 bool HasRetiredMethods() {
   return retired_method_count() != 0;
 }

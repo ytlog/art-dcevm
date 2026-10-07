@@ -10,5 +10,4 @@ bool IsRetiredMethod(art::ArtMethod* method) REQUIRES_SHARED(art::Locks::mutator
 void UpdateReflectedMethodModifiers(const art::ReflectionSourceInfo&, art::ArtMethod*)
     REQUIRES(art::Locks::mutator_lock_);
 void RequireDispatchChecks() REQUIRES(art::Locks::mutator_lock_);
-size_t RetiredMethodCount() REQUIRES_SHARED(art::Locks::mutator_lock_);
 }

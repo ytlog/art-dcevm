@@ -78,9 +78,6 @@ extern "C" bool ArtDcevmGuardNterpFinalFieldPut(void* thread, void* caller, uint
 bool IsRetiredField(art::ArtField* field) {
   return field_registry.token_for(field) != 0;
 }
-size_t RetiredFieldCount() {
-  return field_registry.count();
-}
 bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) {
   return field_registry.guard(field, thread, result);
 }

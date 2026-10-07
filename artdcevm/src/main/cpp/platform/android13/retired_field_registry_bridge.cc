@@ -17,8 +17,6 @@ void Retire(void* field) noexcept {
 }
 uint32_t TokenFor(void* field) { return registry.TokenFor(field); }
 void* Resolve(uint32_t token) { return registry.Resolve(token); }
-size_t Count() { return registry.Count(); }
-size_t SlotCount() { return registry.SlotCount(); }
 }  // namespace
 
 size_t RetiredFieldSlotCount() { return registry.SlotCount(); }
@@ -42,7 +40,7 @@ bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
   }
   contains_unsafe = contains;
   const RetiredFieldCallbacks callbacks{
-      Retire, TokenFor, Resolve, Count, SlotCount, FinalFieldGuardEnabled, GuardRetiredField};
+      Retire, TokenFor, Resolve, FinalFieldGuardEnabled, GuardRetiredField};
   configure(&callbacks);
   return true;
 }

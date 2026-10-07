@@ -14,6 +14,11 @@ struct ClassOffsets {
   static void VerifyValidation() {
     using Fixed = artdcevm::android13::validation_abi::ClassPrefix;
     static_assert(offsetof(mirror::Class, dex_cache_) == offsetof(Fixed, dex_cache));
+    static_assert(offsetof(mirror::Class, class_loader_) == offsetof(Fixed, class_loader));
+    static_assert(offsetof(mirror::Class, super_class_) == offsetof(Fixed, super_class));
+    static_assert(offsetof(mirror::Class, ifields_) == offsetof(Fixed, ifields));
+    static_assert(offsetof(mirror::Class, sfields_) == offsetof(Fixed, sfields));
+    static_assert(offsetof(mirror::Class, dex_type_idx_) == offsetof(Fixed, dex_type_index));
     static_assert(offsetof(mirror::Class, access_flags_) == offsetof(Fixed, access_flags));
     static_assert(offsetof(mirror::Class, dex_class_def_idx_) == offsetof(Fixed, dex_class_def_index));
     static_assert(sizeof(mirror::Object) == sizeof(artdcevm::android13::validation_abi::ObjectPrefix));

@@ -74,6 +74,14 @@ Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强�
 
 ## 结构复制与退役核心守卫迁移（2026-10-07）
 
-增强库拥有 `CopyAndClearEvolutionFields` 的完整复制调度：对每个旧声明类，从新层级顶端按类加载器和 descriptor 搜索匹配类，在同一 static／instance 存储中按名字与完整类型匹配字段。删除、类型变化和存储互换的旧字段不复制；新增或新父类字段保持原分配状态。完成全部复制后移交 monitor，对目标执行写屏障，再清零所有旧字段并对源执行写屏障。此路径无分配、无递归、无 STL 跨库对象；源码五个旧复制 helper 的实现已删除。过渡适配器仍提供借用元数据、ART 类型化字段读写、monitor 操作和 GC 写屏障，结构事务整体与这些低层操作仍需迁移。
+增强库拥有 `CopyAndClearEvolutionFields` 的完整复制调度：对每个旧声明类，从新层级顶端按类加载器和 descriptor 搜索匹配类，在同一 static／instance 存储中按名字与完整类型匹配字段。删除、类型变化和存储互换的旧字段不复制；新增或新父类字段保持原分配状态。完成全部复制后移交 monitor，对目标执行写屏障，再清零所有旧字段并对源执行写屏障。此路径无分配、无递归、无 STL 跨库对象；源码五个旧复制 helper 的实现已删除。字段元数据、原始值读写、monitor 操作和 GC card 标记也已迁入增强库；旧适配器删除，源码只保留提交入口转发和初始化声明校准。结构事务整体仍需迁移。
 
 退役方法／字段的核心守卫现由增强库拥有：查询自有注册表，对退役成员清零完整八字节 JValue，并按命名设备 `Thread::ThrowNewException` 抛出原来的 NoSuchMethodError／NoSuchFieldError。缺省线程通过命名 `Thread::CurrentFromGdb` 查询；异常交付通过命名 `QuickDeliverException`。增强 Hook 直接调用自有方法守卫，源码 JNI／反射／MethodHandle 解码后转发守卫回调；对应两个源码核心导出已删除。字段槽计数也直接读取增强注册表，删除旧计数桥和未使用的源码汇总导出。类型化解码、接收者与 final 检查仍需迁移。
+
+## 字段复制底层访问迁移（2026-10-07）
+
+增强库按固定 Class／ArtField／LengthPrefixedArray 声明枚举字段，按命名设备 `ArtField::GetName` / `GetTypeDescriptor` 读取文本；类 descriptor 自行从标准／CompactDex 的 native mapping 读取，Object 根类使用固定 descriptor。父类和 loader 通过自有 Baker reader 获取，保留灰对象标记后的身份，避免比较 from-space 与 to-space loader 引用。普通 getter 的 monitor acquire、灰对象命名 `artReadBarrierMark`、普通／volatile 引用读取与默认不 CAS 回写语义已保留。
+
+字段存储按源码 offset 及 volatile flags 实现 1／2／4／8 字节 relaxed／seq_cst 原子读写，浮点数保持原始位；引用写入遵循已校准的未 poisoned HeapReference32 编码，非 null 值标记 owner card。card 地址来自命名 `Thread::CurrentFromGdb` 和固定源码 `Thread::CardTableOffset<8>()` 的 biased pointer，shift 与 dirty 值均对照锁定源码声明，不从二进制推断。源／目标的最终全字段写屏障与原 monitor 转移顺序保持一致。
+
+初始化探针对照真实声明类／父类链、所有实例和静态字段、实际字段值及 Thread card table；对私有临时对象做 primitive 写入／清零与 card 校准。monitor 的整个 LockWord 只能在原结构提交的暂停边界中迁移，校准使用对齐的 native headers，避免在共享锁下移植真实对象的 GC 状态。源码校准继续验证 release Baker、ObjPtr／heap reference 非 poisoned、所有字段布局、数组 stride 和 monitor/card 常量，尚待最终去除。旧计数 wrapper 和未使用的 field registry count／slot callbacks 也已删除。

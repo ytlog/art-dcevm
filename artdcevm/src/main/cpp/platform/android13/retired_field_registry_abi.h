@@ -12,8 +12,6 @@ struct RetiredFieldCallbacks {
   void (*retire)(void*);
   uint32_t (*token_for)(void*);
   void* (*resolve)(uint32_t);
-  size_t (*count)();
-  size_t (*slot_count)();
   bool (*final_guard_enabled)();
   bool (*guard)(void*, void*, void*);
 };

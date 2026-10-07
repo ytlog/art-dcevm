@@ -25,5 +25,5 @@ struct FieldCopyAccess {
   void (*barrier)(void*);
 };
 using EvolutionFieldCopy = void (*)(bool, void*, void*, void*, void*);
-using ConfigureFieldCopy = void (*)(EvolutionFieldCopy, FieldCopyAccess*);
+using ConfigureFieldCopy = void (*)(EvolutionFieldCopy);
 }

@@ -21,7 +21,7 @@
 #include "platform/android13/method_validation.h"
 #include "platform/android13/class_validation.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/android13/field_copy.h"
+#include "platform/android13/field_copy_binding.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -114,7 +114,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
   if (!ConfigureRedefinitionFailures(symbols, &error) ||
-      !ConfigureEvolutionFieldCopy(library, &error) ||
+      !ConfigureEvolutionFieldCopy(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionFieldValidation(symbols, library, &error) ||
       !ConfigureValidationMetadata(symbols, library, &error) ||
       !ConfigureEvolutionMethodValidation(symbols, library, &error) ||

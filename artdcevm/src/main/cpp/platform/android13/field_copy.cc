@@ -1,9 +1,7 @@
 #include "platform/android13/field_copy.h"
 #include <cstring>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
-FieldCopyAccess access{};
 void* MatchingClass(const FieldCopyAccess& ops, void* target, const CopyClassView& old,
                     bool is_static) noexcept {
   for (auto* cursor = target; cursor != nullptr;) {
@@ -24,9 +22,7 @@ CopyFieldView MatchingField(const FieldCopyAccess& ops, void* destination, bool 
   }
   return {};
 }
-void Copy(bool is_static, void* target, void* target_class, void* source, void* source_class) {
-  CopyAndClearEvolutionFields(access, is_static, target, target_class, source, source_class);
-}
+
 }
 void CopyAndClearEvolutionFields(const FieldCopyAccess& ops, bool is_static,
     void* target, void* target_class, void* source, void* source_class) noexcept {
@@ -61,17 +57,5 @@ void CopyAndClearEvolutionFields(const FieldCopyAccess& ops, bool is_static,
     cursor = old.parent;
   }
   ops.barrier(source);
-}
-bool ConfigureEvolutionFieldCopy(void* implementation, std::string* error) {
-  auto configure = reinterpret_cast<ConfigureFieldCopy>(
-      dlsym(implementation, "ArtDcevmSourceConfigureFieldCopy"));
-  if (!configure) { *error = "Missing GC-safe field-copy access adapter"; return false; }
-  configure(Copy, &access);
-  if (!access.klass || !access.field || !access.read || !access.write ||
-      !access.transfer_monitor || !access.barrier) {
-    *error = "Incomplete GC-safe field-copy access adapter";
-    return false;
-  }
-  return true;
 }
 }
