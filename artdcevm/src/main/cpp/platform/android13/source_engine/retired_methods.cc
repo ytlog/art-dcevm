@@ -20,7 +20,6 @@ namespace {
 void (*retire_method)(void*) = nullptr;
 bool (*contains_method)(void*) = nullptr;
 size_t (*retired_method_count)() = nullptr;
-size_t (*prune_methods)(const void*) = nullptr;
 bool dispatch_checks = false;
 bool Guard(art::ArtMethod* method, art::Thread* self, art::JValue* result = nullptr)
     REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -39,21 +38,16 @@ bool IsRetiredMethod(art::ArtMethod* method) {
 size_t RetiredMethodCount() {
   return retired_method_count();
 }
-size_t PruneRetiredMethods(const art::LinearAlloc* allocator) {
-  return prune_methods(allocator);
-}
 bool HasRetiredMethods() {
   return retired_method_count() != 0;
 }
 void RequireDispatchChecks() { dispatch_checks = true; }
 bool NeedsDispatchChecks() { return dispatch_checks; }
 extern "C" void ArtDcevmSourceConfigureRetiredMethods(
-    void (*retire)(void*), bool (*contains)(void*), size_t (*count)(),
-    size_t (*prune)(const void*)) {
+    void (*retire)(void*), bool (*contains)(void*), size_t (*count)()) {
   retire_method = retire;
   contains_method = contains;
   retired_method_count = count;
-  prune_methods = prune;
 }
 }
 

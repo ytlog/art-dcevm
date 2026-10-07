@@ -94,8 +94,7 @@ subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i', str(engine / 'ti_re
 subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(engine / 'selective_deopt.patch')],
                cwd=generated, check=True, capture_output=True, text=True)
 sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'retired_methods.cc',
-           engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc',
-           engine / 'lifecycle.cc']
+           engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
 commands = []
 objects = []
 for source in sources:
@@ -109,8 +108,7 @@ for source in sources:
     objects.append(str(obj))
 
 exports = OUT / 'source-engine.map'
-exports.write_text('{ global: ArtDcevmSource*; ArtDcevmGuard*; '
-                   '_ZN3art11ClassLinker17DeleteClassLoader*; local: *; };\n')
+exports.write_text('{ global: ArtDcevmSource*; ArtDcevmGuard*; local: *; };\n')
 library = OUT / 'libartdcevm_source13.so'
 command = [str(compiler), '-shared', '-nostdlib++', '-Wl,--no-as-needed', '-Wl,-Bsymbolic',
            '-Wl,--version-script=' + str(exports), '-Wl,-soname,' + library.name,

@@ -114,7 +114,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   if (!InstallHierarchyResolutionHooks(symbols, library, &error)) return error;
-  if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
+  if (!InstallClassLoaderHooks(symbols, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
   ValidationHooks::ConfigureSource(fields, methods, classes, commit,
@@ -208,20 +208,12 @@ Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_re
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDeleteCalls(JNIEnv*, jclass) {
-  if (!artdcevm::android13::source_library) return 0;
-  using Fn = uint64_t (*)();
-  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
-                                      "ArtDcevmSourceClassLoaderDeleteCount"));
-  return fn ? static_cast<jlong>(fn()) : 0;
+  return artdcevm::android13::ClassLoaderDeleteCalls();
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_retiredPrunedCount(
     JNIEnv*, jclass, jint kind) {
-  if (!artdcevm::android13::source_library) return 0;
-  using Fn = uint64_t (*)(int);
-  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
-                                      "ArtDcevmSourceRetiredPrunedCount"));
-  return fn ? static_cast<jlong>(fn(kind)) : 0;
+  return artdcevm::android13::RetiredPrunedCount(kind);
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlotCount(

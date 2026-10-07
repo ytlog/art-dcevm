@@ -1,7 +1,7 @@
 #pragma once
 #include "base/locks.h"
 #include <cstddef>
-namespace art { class ArtMethod; class LinearAlloc; class ReflectionSourceInfo; }
+namespace art { class ArtMethod; class ReflectionSourceInfo; }
 namespace artdcevm::android13::source {
 // Metadata addresses are native pointers obtained from ART objects, never derived offsets.
 // Readers hold the shared mutator lock; structural commit writes under the exclusive lock.
@@ -12,6 +12,4 @@ void UpdateReflectedMethodModifiers(const art::ReflectionSourceInfo&, art::ArtMe
 void RequireDispatchChecks() REQUIRES(art::Locks::mutator_lock_);
 bool NeedsDispatchChecks() REQUIRES_SHARED(art::Locks::mutator_lock_);
 size_t RetiredMethodCount() REQUIRES_SHARED(art::Locks::mutator_lock_);
-size_t PruneRetiredMethods(const art::LinearAlloc* allocator)
-    REQUIRES_SHARED(art::Locks::mutator_lock_);
 }

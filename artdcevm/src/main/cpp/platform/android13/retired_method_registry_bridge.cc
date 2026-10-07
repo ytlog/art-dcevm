@@ -15,16 +15,16 @@ void Retire(void* method) noexcept {
 }
 bool Contains(void* method) { return registry.Contains(method); }
 size_t Count() { return registry.Count(); }
-size_t Prune(const void* allocator) noexcept {
+}  // namespace
+
+size_t PruneRetiredMethods(const void* allocator) noexcept {
   try { return registry.Prune(allocator, contains_unsafe); }
   catch (...) { std::abort(); }
 }
-}  // namespace
 
 bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
                                     std::string* error) {
-  using Configure = void (*)(void (*)(void*), bool (*)(void*), size_t (*)(),
-                             size_t (*)(const void*));
+  using Configure = void (*)(void (*)(void*), bool (*)(void*), size_t (*)());
   auto configure = reinterpret_cast<Configure>(
       dlsym(implementation, "ArtDcevmSourceConfigureRetiredMethods"));
   auto contains = reinterpret_cast<RetiredMethodRegistry::ContainsUnsafe>(
@@ -34,7 +34,7 @@ bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
     return false;
   }
   contains_unsafe = contains;
-  configure(Retire, Contains, Count, Prune);
+  configure(Retire, Contains, Count);
   return true;
 }
 

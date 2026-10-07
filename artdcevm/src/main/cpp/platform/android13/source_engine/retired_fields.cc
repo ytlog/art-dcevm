@@ -85,9 +85,6 @@ size_t RetiredFieldCount() {
 extern "C" size_t ArtDcevmSourceRetiredFieldSlotCount() {
   return field_registry.slot_count();
 }
-size_t PruneRetiredFields(const art::LinearAlloc* allocator) {
-  return field_registry.prune(allocator);
-}
 bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) {
   if (!IsRetiredField(field)) return false;
   if (result) result->SetJ(0);

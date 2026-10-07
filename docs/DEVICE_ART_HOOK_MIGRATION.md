@@ -44,7 +44,7 @@
 
 源码模块的读屏障慢路径现通过增强库按名称解析的设备 `artReadBarrierMark` 调用。源码侧继续计数，并保留临时的读屏障补丁；此改动只去掉该入口的强链接引用，尚未去掉源码模块。
 
-`ClassLinker::DeleteClassLoader` 也改由增强库安装命名 Inline Hook 并实现代理。代理先调用现有源码侧的退役成员清理，再调用设备原销毁函数。源码侧仍读取私有 `ClassLoaderData`；此访问必须继续迁入自有代码后，才能删除源码模块。
+`ClassLinker::DeleteClassLoader` 由增强库安装命名 Inline Hook、按 Android 13 固定源码声明读取 `ClassLoaderData` 中的 allocator、清理退役成员注册表，再调用设备原销毁函数。源码侧的 `lifecycle.cc`、卸载计数器和清理回调已删除；完整类卸载路径仍需源码演进 APK 回归。
 
 退役方法与字段的指针注册表现已移到增强库。源码侧通过纯 C 回调注册、查询和清理；字段注册表还管理反射 `Field` 使用的带标签令牌与空槽复用。增强库清理时按名称调用设备 `LinearAlloc::ContainsUnsafe`，不传递 C++ 容器跨越两个库的 ABI。类型化 ART 访问守卫仍在源码模块。
 
