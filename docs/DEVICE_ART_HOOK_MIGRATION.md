@@ -30,6 +30,8 @@
 
 继承批次的 `Redefiner::Run` 与 `FinishNewClassAllocations` 现由增强库安装命名 Inline Hook 并实现分派代理。非演进事务调用设备原函数；演进事务按需调用旧层级实现，旧实现内部仍可通过已传入的原函数 trampoline 委托设备。层级选择与缓存修复仍在源码模块，尚未达到移除条件。
 
+`ClassLinker::DeleteClassLoader` 也改由增强库安装命名 Inline Hook 并实现代理。代理先调用现有源码侧的退役成员清理，再调用设备原销毁函数。源码侧仍读取私有 `ClassLoaderData` 并持有退役注册表；此访问和注册表必须继续迁入自有代码后，才能删除源码模块。
+
 ## 目标设备符号核对（2026-10-07）
 
 在 Android 13 真机 `DEVICE_001` 上读取 `/apex/com.android.art/lib64/` 的设备库，Build ID 分别为 `libopenjdkjvmti.so` 的 `2fe21c45581b9c8b0519b71cbde32938` 和 `libart.so` 的 `14fc77b24db0b351b919c97009dc86bf`。用 NDK `llvm-readelf --dyn-syms --wide` 核对动态符号表：

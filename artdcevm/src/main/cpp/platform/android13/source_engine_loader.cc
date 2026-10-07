@@ -7,6 +7,7 @@
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/hierarchy_batch_hooks.h"
+#include "platform/android13/class_loader_hooks.h"
 #include "platform/android13/validation_hooks.h"
 
 namespace artdcevm::android13 {
@@ -70,10 +71,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   void* resolve = dlsym(library, "ArtDcevmSourceHierarchyResolve");
   void* find = dlsym(library, "ArtDcevmSourceHierarchyFind");
   void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
-  void* loader_delete = dlsym(library, cas::kDeleteClassLoader);
   using ConfigureLoaderDelete = void** (*)();
-  auto configure_loader_delete = reinterpret_cast<ConfigureLoaderDelete>(
-      dlsym(library, "ArtDcevmSourceConfigureClassLoaderDeletion"));
   void* async_deoptimizeable = dlsym(library, "ArtDcevmSourceIsAsyncDeoptimizeable");
   auto configure_async_deoptimizeable = reinterpret_cast<ConfigureLoaderDelete>(
       dlsym(library, "ArtDcevmSourceConfigureAsyncDeoptimizeable"));
@@ -84,7 +82,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       !invalidate_jit || !methods || !fields || !classes || !instance_allocation
       || !configure_instance_allocation || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup
-      || !loader_delete || !configure_loader_delete
       || !async_deoptimizeable || !configure_async_deoptimizeable
       || !suspend_from_code || !configure_suspend_from_code) {
     dlclose(library); return "Source engine exports are incomplete";
@@ -120,10 +117,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     if (!symbols.Install(target, verification_proxies[i], configure_verification(i), &error)) return error;
   }
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
-  void* loader_delete_target = symbols.FindSymbol("libart.so", cas::kDeleteClassLoader);
-  if (!loader_delete_target || !symbols.Install(loader_delete_target, loader_delete,
-      configure_loader_delete(), &error))
-    return error.empty() ? "Missing named ClassLoader deletion symbol" : error;
+  if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
   void* async_deoptimizeable_target = symbols.FindSymbol("libart.so", cas::kIsAsyncDeoptimizeable);
   if (!async_deoptimizeable_target || !symbols.Install(async_deoptimizeable_target,
       async_deoptimizeable, configure_async_deoptimizeable(), &error))
