@@ -165,6 +165,11 @@ bool ConfigureLoadedClassGuards(HookEngine& hooks, void* class_linker, std::stri
 bool CheckLoadedSubclassGuard(void* definition) {
   Guard guard(GetValidationClass(definition),nullptr,nullptr,0,0); visit(linker,&guard); return !guard.invalid;
 }
+bool IsValidationAssignableFrom(void* target, void* source) { return Assignable(target,source); }
+bool IsValidationSubclassOf(void* source, void* target) { return Subclass(source,target); }
+bool CanAccessValidationClass(void* source, void* target) {
+  return (Flags(target)&1) || same_package(source,reinterpret_cast<uintptr_t>(target));
+}
 bool CheckMethodDependentGuard(void* definition,const char* name,const char* descriptor,uint32_t old_flags,int action) {
   Guard guard(GetValidationClass(definition),name,descriptor,old_flags,action); visit(linker,&guard); return !guard.invalid;
 }

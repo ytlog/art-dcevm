@@ -1,4 +1,5 @@
 #include "hierarchy.h"
+#include "platform/android13/hierarchy_validation_abi.h"
 #include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include "class_linker-inl.h"
 #include "dex/dex_file-inl.h"
@@ -16,87 +17,22 @@
 #include <vector>
 #include <android/log.h>
 
-namespace artdcevm::android13::source {
 namespace {
-thread_local bool hierarchy_changed = false;
-thread_local bool hierarchy_narrowed = false;
+artdcevm::android13::BeginHierarchyState begin_state = nullptr;
+artdcevm::android13::EndHierarchyState end_state = nullptr;
+artdcevm::android13::HierarchyStateQuery changed_state = nullptr;
+artdcevm::android13::HierarchyStateQuery narrowed_state = nullptr;
 }
-extern "C" bool ArtDcevmSourceReceiverGuardEnabled();
-HierarchyTransactionScope::HierarchyTransactionScope()
-    : previous_(hierarchy_changed), previous_narrowed_(hierarchy_narrowed) {
-  hierarchy_changed = false;
-  hierarchy_narrowed = false;
+extern "C" void ArtDcevmSourceConfigureHierarchyState(
+    artdcevm::android13::BeginHierarchyState begin, artdcevm::android13::EndHierarchyState end,
+    artdcevm::android13::HierarchyStateQuery changed, artdcevm::android13::HierarchyStateQuery narrowed) {
+  begin_state = begin; end_state = end; changed_state = changed; narrowed_state = narrowed;
 }
-HierarchyTransactionScope::~HierarchyTransactionScope() {
-  hierarchy_changed = previous_;
-  hierarchy_narrowed = previous_narrowed_;
-}
-bool HasHierarchyChange() { return hierarchy_changed; }
-bool HasHierarchyNarrowing() { return hierarchy_narrowed; }
-jvmtiError CheckHierarchyAdditions(art::Handle<art::mirror::Class> current,
-    const art::DexFile& dex, art::MutableHandle<art::mirror::Class>* desired_super,
-    bool* changed, std::string* error) {
-  auto* self = art::Thread::Current();
-  auto* linker = art::Runtime::Current()->GetClassLinker();
-  art::VariableSizedHandleScope hs(self);
-  auto loader = hs.NewHandle(current->GetClassLoader());
-  auto fail = [&](const char* message) {
-    if (self->IsExceptionPending()) self->ClearException();
-    *error = message;
-    return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-  };
-  const auto& def = dex.GetClassDef(0);
-  if (current->IsObjectClass()) return fail("The Object root cannot evolve its hierarchy");
-  if (!def.superclass_idx_.IsValid()) return fail("Missing superclass");
-  const char* name = dex.StringByTypeIdx(def.superclass_idx_);
-  *changed = !current->GetSuperClass()->DescriptorEquals(name);
-  desired_super->Assign(linker->FindClass(self, name, loader));
-  if (desired_super->IsNull()) return fail("Cannot resolve requested superclass");
-  auto parent = desired_super->Get();
-  if (parent->IsInterface() || parent->IsFinal() || !current->CanAccess(parent))
-    return fail("Invalid or inaccessible superclass");
-  if (parent->IsSubClass(current.Get())) return fail("Cyclic superclass change");
-  bool loses_parent = !parent->IsSubClass(current->GetSuperClass());
-  if (loses_parent && !ArtDcevmSourceReceiverGuardEnabled())
-    return fail("Removing a superclass requires the active receiver guard");
-  hierarchy_narrowed |= loses_parent;
-  if (*changed && !parent->IsInitialized())
-    return fail("Initialize the added superclass before applying this evolution");
-  // Resolve every direct interface before ART pauses class definition. Keep
-  // handles across FindClass calls, which may allocate and run a GC.
-  std::vector<art::Handle<art::mirror::Class>> interfaces;
-  const auto* types = dex.GetInterfacesList(def);
-  if (types) {
-    for (uint32_t i = 0; i < types->Size(); ++i) {
-      auto iface = hs.NewHandle(linker->FindClass(self,
-          dex.StringByTypeIdx(types->GetTypeItem(i).type_idx_), loader));
-      if (iface.IsNull() || !iface->IsInterface() || !current->CanAccess(iface.Get()))
-        return fail("Invalid or inaccessible interface");
-      interfaces.push_back(iface);
-    }
-  }
-  // Retain assignability, including old transitive interfaces and interfaces
-  // now inherited through the added parent or through a new subinterface.
-  auto old_table = current->GetIfTable();
-  for (int32_t i = 0; i < old_table->Count(); ++i) {
-    auto old_interface = old_table->GetInterface(i);
-    bool retained = old_interface->IsAssignableFrom(desired_super->Get());
-    for (const auto& iface : interfaces) retained |= old_interface->IsAssignableFrom(iface.Get());
-    if (!retained && !ArtDcevmSourceReceiverGuardEnabled())
-      return fail("Removing an interface requires the active receiver guard");
-    hierarchy_narrowed |= !retained;
-  }
-  const auto* old_types = current->GetInterfaceTypeList();
-  uint32_t old_count = old_types ? old_types->Size() : 0;
-  uint32_t new_count = types ? types->Size() : 0;
-  *changed |= old_count != new_count;
-  for (uint32_t i = 0; i < old_count && i < new_count; ++i) {
-    const char* old_name = current->GetDexFile().StringByTypeIdx(old_types->GetTypeItem(i).type_idx_);
-    *changed |= !interfaces[i]->DescriptorEquals(old_name);
-  }
-  hierarchy_changed |= *changed;
-  return JVMTI_ERROR_NONE;
-}
+namespace artdcevm::android13::source {
+HierarchyTransactionScope::HierarchyTransactionScope() : previous_(begin_state()) {}
+HierarchyTransactionScope::~HierarchyTransactionScope() { end_state(previous_); }
+bool HasHierarchyChange() { return changed_state(); }
+bool HasHierarchyNarrowing() { return narrowed_state(); }
 }
 
 namespace {
@@ -239,6 +175,7 @@ extern "C" bool ArtDcevmSourceOriginalHierarchySubtree(void* definition, void* h
 extern "C" jvmtiError ArtDcevmSourceOriginalHierarchyRun(void* driver) {
   return call_original_run(driver);
 }
+extern "C" bool ArtDcevmSourceHasHierarchyAllocationContext() { return allocation_scope != nullptr; }
 extern "C" bool ArtDcevmSourceHasHierarchyChange() {
   return artdcevm::android13::source::HasHierarchyChange();
 }

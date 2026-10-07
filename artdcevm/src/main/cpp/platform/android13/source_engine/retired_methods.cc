@@ -50,21 +50,6 @@ extern "C" void ArtDcevmSourceConfigureRetiredMethods(
 }
 }
 
-extern "C" bool ArtDcevmGuardMethodId(jmethodID id) {
-  if (!artdcevm::android13::source::HasRetiredMethods()) return false;
-  return artdcevm::android13::source::Guard(art::jni::DecodeArtMethod(id), art::Thread::Current());
-}
-
-extern "C" bool ArtDcevmGuardJniExecutable(JNIEnv* env, jobject executable) {
-  art::ScopedObjectAccess soa(env);
-  return artdcevm::android13::source::Guard(
-      art::ArtMethod::FromReflectedMethod(soa, executable), soa.Self());
-}
-extern "C" bool ArtDcevmGuardJniMethodId(JNIEnv* env, jmethodID method) {
-  art::ScopedObjectAccess soa(env);
-  return ArtDcevmGuardMethodId(method);
-}
-
 extern "C" bool ArtDcevmGuardMethodHandle(void* thread, void* slot, void* result) {
   auto object = static_cast<art::StackReference<art::mirror::Object>*>(slot)->AsMirrorPtr();
   auto handle = art::ObjPtr<art::mirror::MethodHandle>::DownCast(object);
@@ -138,9 +123,8 @@ static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kDirect) =
 static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kVirtual) == art::kVirtual);
 static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kSuper) == art::kSuper);
 static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kInterface) == art::kInterface);
-extern "C" void* ArtDcevmSourceConfigureDispatchChecks(void (*require)()) {
+extern "C" void ArtDcevmSourceConfigureDispatchChecks(void (*require)()) {
   artdcevm::android13::source::require_dispatch_checks = require;
-  return art::Runtime::Current()->GetClassLinker();
 }
 
 // The pinned Executable declaration explicitly grants this source helper access.

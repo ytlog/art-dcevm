@@ -75,8 +75,11 @@ bool ReadValidationMetadata(void*, ValidationMetadata* output) {
 }
 bool CheckLoadedSubclassGuard(void*) { return subclass_valid; }
 }
-extern "C" int ArtDcevmSourceClassHierarchyGuard(void*, bool* changed, const char** error) {
-  *changed = hierarchy_changed; *error = "Typed hierarchy guard diagnostic"; return hierarchy_code;
+namespace artdcevm::android13 {
+int CheckEvolutionHierarchy(void*, const evolution::ClassSchema&, const evolution::ClassSchema&,
+                           bool* changed, std::string* error) {
+  *changed = hierarchy_changed; *error = "Owned hierarchy guard diagnostic"; return hierarchy_code;
+}
 }
 extern "C" void ArtDcevmSourceConfigureClassValidation(android13::ClassValidation value) { callback = value; }
 int main(int argc, char** argv) {
@@ -109,7 +112,7 @@ int main(int argc, char** argv) {
   const auto descriptor = live.descriptor; live.descriptor = "Lother/Class;";
   assert(!run() && failure_code == JVMTI_ERROR_NAMES_DONT_MATCH); live.descriptor = descriptor;
   hierarchy_code = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-  assert(!run() && failure_code == hierarchy_code && failure_message == "Typed hierarchy guard diagnostic"); hierarchy_code = 0;
+  assert(!run() && failure_code == hierarchy_code && failure_message == "Owned hierarchy guard diagnostic"); hierarchy_code = 0;
   hierarchy_changed = true; assert(!run() && failure_code == JVMTI_ERROR_INTERNAL); hierarchy_changed = false;
   Put(bytes, U32(bytes, 100) + 4, live.access | 0x10); Checksum(bytes);
   subclass_valid = false;

@@ -1,6 +1,6 @@
 --- ti_redefine.cc
 +++ ti_redefine.cc
-@@ -30,6 +30,16 @@
+@@ -30,6 +30,17 @@
   */
 
  #include "ti_redefine.h"
@@ -14,10 +14,340 @@
 +extern "C" bool ArtDcevmSourceCheckMethods(void*);
 +extern "C" bool ArtDcevmSourceCheckClass(void*);
 +extern "C" void* ArtDcevmSourceMappedJniMethod(void*);
++extern "C" void ArtDcevmSourceUpdateStructuralMethods(void*, void*);
 
  #include <algorithm>
  #include <atomic>
-@@ -924,231 +934,15 @@
+@@ -135,208 +146,7 @@
+
+ namespace openjdkjvmti {
+
+-// Debug check to force us to directly check we saw all methods and fields exactly once directly.
+-// Normally we don't need to do this since if any are missing the count will be different
+-constexpr bool kCheckAllMethodsSeenOnce = art::kIsDebugBuild;
+-
+ using android::base::StringPrintf;
+-
+-// A helper that fills in a classes obsolete_methods_ and obsolete_dex_caches_ classExt fields as
+-// they are created. This ensures that we can always call any method of an obsolete ArtMethod object
+-// almost as soon as they are created since the GetObsoleteDexCache method will succeed.
+-class ObsoleteMap {
+- public:
+-  art::ArtMethod* FindObsoleteVersion(art::ArtMethod* original) const
+-      REQUIRES(art::Locks::mutator_lock_, art::Roles::uninterruptible_) {
+-    auto method_pair = id_map_.find(original);
+-    if (method_pair != id_map_.end()) {
+-      art::ArtMethod* res = obsolete_methods_->GetElementPtrSize<art::ArtMethod*>(
+-          method_pair->second, art::kRuntimePointerSize);
+-      DCHECK(res != nullptr);
+-      return res;
+-    } else {
+-      return nullptr;
+-    }
+-  }
+-
+-  void RecordObsolete(art::ArtMethod* original, art::ArtMethod* obsolete)
+-      REQUIRES(art::Locks::mutator_lock_, art::Roles::uninterruptible_) {
+-    DCHECK(original != nullptr);
+-    DCHECK(obsolete != nullptr);
+-    int32_t slot = next_free_slot_++;
+-    DCHECK_LT(slot, obsolete_methods_->GetLength());
+-    DCHECK(nullptr ==
+-           obsolete_methods_->GetElementPtrSize<art::ArtMethod*>(slot, art::kRuntimePointerSize));
+-    DCHECK(nullptr == obsolete_dex_caches_->Get(slot));
+-    obsolete_methods_->SetElementPtrSize(slot, obsolete, art::kRuntimePointerSize);
+-    obsolete_dex_caches_->Set(slot, original_dex_cache_);
+-    id_map_.insert({original, slot});
+-  }
+-
+-  ObsoleteMap(art::ObjPtr<art::mirror::PointerArray> obsolete_methods,
+-              art::ObjPtr<art::mirror::ObjectArray<art::mirror::DexCache>> obsolete_dex_caches,
+-              art::ObjPtr<art::mirror::DexCache> original_dex_cache)
+-      : next_free_slot_(0),
+-        obsolete_methods_(obsolete_methods),
+-        obsolete_dex_caches_(obsolete_dex_caches),
+-        original_dex_cache_(original_dex_cache) {
+-    // Figure out where the first unused slot in the obsolete_methods_ array is.
+-    while (obsolete_methods_->GetElementPtrSize<art::ArtMethod*>(
+-        next_free_slot_, art::kRuntimePointerSize) != nullptr) {
+-      DCHECK(obsolete_dex_caches_->Get(next_free_slot_) != nullptr);
+-      next_free_slot_++;
+-    }
+-    // Check that the same slot in obsolete_dex_caches_ is free.
+-    DCHECK(obsolete_dex_caches_->Get(next_free_slot_) == nullptr);
+-  }
+-
+-  struct ObsoleteMethodPair {
+-    art::ArtMethod* old_method;
+-    art::ArtMethod* obsolete_method;
+-  };
+-
+-  class ObsoleteMapIter {
+-   public:
+-    using iterator_category = std::forward_iterator_tag;
+-    using value_type = ObsoleteMethodPair;
+-    using difference_type = ptrdiff_t;
+-    using pointer = void;    // Unsupported.
+-    using reference = void;  // Unsupported.
+-
+-    ObsoleteMethodPair operator*() const
+-        REQUIRES(art::Locks::mutator_lock_, art::Roles::uninterruptible_) {
+-      art::ArtMethod* obsolete = map_->obsolete_methods_->GetElementPtrSize<art::ArtMethod*>(
+-          iter_->second, art::kRuntimePointerSize);
+-      DCHECK(obsolete != nullptr);
+-      return { iter_->first, obsolete };
+-    }
+-
+-    bool operator==(ObsoleteMapIter other) const {
+-      return map_ == other.map_ && iter_ == other.iter_;
+-    }
+-
+-    bool operator!=(ObsoleteMapIter other) const {
+-      return !(*this == other);
+-    }
+-
+-    ObsoleteMapIter operator++(int) {
+-      ObsoleteMapIter retval = *this;
+-      ++(*this);
+-      return retval;
+-    }
+-
+-    ObsoleteMapIter operator++() {
+-      ++iter_;
+-      return *this;
+-    }
+-
+-   private:
+-    ObsoleteMapIter(const ObsoleteMap* map,
+-                    std::unordered_map<art::ArtMethod*, int32_t>::const_iterator iter)
+-        : map_(map), iter_(iter) {}
+-
+-    const ObsoleteMap* map_;
+-    std::unordered_map<art::ArtMethod*, int32_t>::const_iterator iter_;
+-
+-    friend class ObsoleteMap;
+-  };
+-
+-  ObsoleteMapIter end() const {
+-    return ObsoleteMapIter(this, id_map_.cend());
+-  }
+-
+-  ObsoleteMapIter begin() const {
+-    return ObsoleteMapIter(this, id_map_.cbegin());
+-  }
+-
+- private:
+-  int32_t next_free_slot_;
+-  std::unordered_map<art::ArtMethod*, int32_t> id_map_;
+-  // Pointers to the fields in mirror::ClassExt. These can be held as ObjPtr since this is only used
+-  // when we have an exclusive mutator_lock_ (i.e. all threads are suspended).
+-  art::ObjPtr<art::mirror::PointerArray> obsolete_methods_;
+-  art::ObjPtr<art::mirror::ObjectArray<art::mirror::DexCache>> obsolete_dex_caches_;
+-  art::ObjPtr<art::mirror::DexCache> original_dex_cache_;
+-};
+-
+-// This visitor walks thread stacks and allocates and sets up the obsolete methods. It also does
+-// some basic soundness checks that the obsolete method is valid.
+-class ObsoleteMethodStackVisitor : public art::StackVisitor {
+- protected:
+-  ObsoleteMethodStackVisitor(
+-      art::Thread* thread,
+-      art::LinearAlloc* allocator,
+-      const std::unordered_set<art::ArtMethod*>& obsoleted_methods,
+-      ObsoleteMap* obsolete_maps)
+-        : StackVisitor(thread,
+-                       /*context=*/nullptr,
+-                       StackVisitor::StackWalkKind::kIncludeInlinedFrames),
+-          allocator_(allocator),
+-          obsoleted_methods_(obsoleted_methods),
+-          obsolete_maps_(obsolete_maps) { }
+-
+-  ~ObsoleteMethodStackVisitor() override {}
+-
+- public:
+-  // Returns true if we successfully installed obsolete methods on this thread, filling
+-  // obsolete_maps_ with the translations if needed. Returns false and fills error_msg if we fail.
+-  // The stack is cleaned up when we fail.
+-  static void UpdateObsoleteFrames(
+-      art::Thread* thread,
+-      art::LinearAlloc* allocator,
+-      const std::unordered_set<art::ArtMethod*>& obsoleted_methods,
+-      ObsoleteMap* obsolete_maps)
+-        REQUIRES(art::Locks::mutator_lock_) {
+-    ObsoleteMethodStackVisitor visitor(thread,
+-                                       allocator,
+-                                       obsoleted_methods,
+-                                       obsolete_maps);
+-    visitor.WalkStack();
+-  }
+-
+-  bool VisitFrame() override REQUIRES(art::Locks::mutator_lock_) {
+-    art::ScopedAssertNoThreadSuspension snts("Fixing up the stack for obsolete methods.");
+-    art::ArtMethod* old_method = GetMethod();
+-    if (obsoleted_methods_.find(old_method) != obsoleted_methods_.end()) {
+-      // We cannot ensure that the right dex file is used in inlined frames so we don't support
+-      // redefining them.
+-      DCHECK(!IsInInlinedFrame()) << "Inlined frames are not supported when using redefinition: "
+-                                  << old_method->PrettyMethod() << " is inlined into "
+-                                  << GetOuterMethod()->PrettyMethod();
+-      art::ArtMethod* new_obsolete_method = obsolete_maps_->FindObsoleteVersion(old_method);
+-      if (new_obsolete_method == nullptr) {
+-        // Create a new Obsolete Method and put it in the list.
+-        art::Runtime* runtime = art::Runtime::Current();
+-        art::ClassLinker* cl = runtime->GetClassLinker();
+-        auto ptr_size = cl->GetImagePointerSize();
+-        const size_t method_size = art::ArtMethod::Size(ptr_size);
+-        auto* method_storage = allocator_->Alloc(art::Thread::Current(), method_size);
+-        CHECK(method_storage != nullptr) << "Unable to allocate storage for obsolete version of '"
+-                                         << old_method->PrettyMethod() << "'";
+-        new_obsolete_method = new (method_storage) art::ArtMethod();
+-        new_obsolete_method->CopyFrom(old_method, ptr_size);
+-        DCHECK_EQ(new_obsolete_method->GetDeclaringClass(), old_method->GetDeclaringClass());
+-        new_obsolete_method->SetIsObsolete();
+-        new_obsolete_method->SetDontCompile();
+-        cl->SetEntryPointsForObsoleteMethod(new_obsolete_method);
+-        obsolete_maps_->RecordObsolete(old_method, new_obsolete_method);
+-      }
+-      DCHECK(new_obsolete_method != nullptr);
+-      SetMethod(new_obsolete_method);
+-    }
+-    return true;
+-  }
+-
+- private:
+-  // The linear allocator we should use to make new methods.
+-  art::LinearAlloc* allocator_;
+-  // The set of all methods which could be obsoleted.
+-  const std::unordered_set<art::ArtMethod*>& obsoleted_methods_;
+-  // A map from the original to the newly allocated obsolete method for frames on this thread. The
+-  // values in this map are added to the obsolete_methods_ (and obsolete_dex_caches_) fields of
+-  // the redefined classes ClassExt as it is filled.
+-  ObsoleteMap* obsolete_maps_;
+-};
+
+ template <RedefinitionType kType>
+ jvmtiError
+@@ -801,119 +611,6 @@
+   return current_dex_cache.Ptr();
+ }
+
+-struct CallbackCtx {
+-  ObsoleteMap* obsolete_map;
+-  art::LinearAlloc* allocator;
+-  std::unordered_set<art::ArtMethod*> obsolete_methods;
+-
+-  explicit CallbackCtx(ObsoleteMap* map, art::LinearAlloc* alloc)
+-      : obsolete_map(map), allocator(alloc) {}
+-};
+-
+-void DoAllocateObsoleteMethodsCallback(art::Thread* t, void* vdata) NO_THREAD_SAFETY_ANALYSIS {
+-  CallbackCtx* data = reinterpret_cast<CallbackCtx*>(vdata);
+-  ObsoleteMethodStackVisitor::UpdateObsoleteFrames(t,
+-                                                   data->allocator,
+-                                                   data->obsolete_methods,
+-                                                   data->obsolete_map);
+-}
+-
+-// This creates any ArtMethod* structures needed for obsolete methods and ensures that the stack is
+-// updated so they will be run.
+-// TODO Rewrite so we can do this only once regardless of how many redefinitions there are.
+-void Redefiner::ClassRedefinition::FindAndAllocateObsoleteMethods(
+-    art::ObjPtr<art::mirror::Class> art_klass) {
+-  DCHECK(!IsStructuralRedefinition());
+-  art::ScopedAssertNoThreadSuspension ns("No thread suspension during thread stack walking");
+-  art::ObjPtr<art::mirror::ClassExt> ext = art_klass->GetExtData();
+-  CHECK(ext->GetObsoleteMethods() != nullptr);
+-  art::ClassLinker* linker = driver_->runtime_->GetClassLinker();
+-  // This holds pointers to the obsolete methods map fields which are updated as needed.
+-  ObsoleteMap map(ext->GetObsoleteMethods(), ext->GetObsoleteDexCaches(), art_klass->GetDexCache());
+-  CallbackCtx ctx(&map, linker->GetAllocatorForClassLoader(art_klass->GetClassLoader()));
+-  // Add all the declared methods to the map
+-  for (auto& m : art_klass->GetDeclaredMethods(art::kRuntimePointerSize)) {
+-    if (m.IsIntrinsic()) {
+-      LOG(WARNING) << "Redefining intrinsic method " << m.PrettyMethod() << ". This may cause the "
+-                   << "unexpected use of the original definition of " << m.PrettyMethod() << "in "
+-                   << "methods that have already been compiled.";
+-    }
+-    // It is possible to simply filter out some methods where they cannot really become obsolete,
+-    // such as native methods and keep their original (possibly optimized) implementations. We don't
+-    // do this, however, since we would need to mark these functions (still in the classes
+-    // declared_methods array) as obsolete so we will find the correct dex file to get meta-data
+-    // from (for example about stack-frame size). Furthermore we would be unable to get some useful
+-    // error checking from the interpreter which ensure we don't try to start executing obsolete
+-    // methods.
+-    ctx.obsolete_methods.insert(&m);
+-  }
+-  {
+-    art::MutexLock mu(driver_->self_, *art::Locks::thread_list_lock_);
+-    art::ThreadList* list = art::Runtime::Current()->GetThreadList();
+-    list->ForEach(DoAllocateObsoleteMethodsCallback, static_cast<void*>(&ctx));
+-    // After we've done walking all threads' stacks and updating method pointers on them,
+-    // update JIT data structures (used by the stack walk above) to point to the new methods.
+-    art::jit::Jit* jit = art::Runtime::Current()->GetJit();
+-    if (jit != nullptr) {
+-      for (const ObsoleteMap::ObsoleteMethodPair& it : *ctx.obsolete_map) {
+-        // Notify the JIT we are making this obsolete method. It will update the jit's internal
+-        // structures to keep track of the new obsolete method.
+-        jit->GetCodeCache()->MoveObsoleteMethod(it.old_method, it.obsolete_method);
+-      }
+-    }
+-  }
+-}
+-
+-namespace {
+-template <typename T> struct SignatureType {};
+-template <> struct SignatureType<art::ArtField> { using type = std::string_view; };
+-template <> struct SignatureType<art::ArtMethod> { using type = art::Signature; };
+-
+-template <typename T> struct NameAndSignature {
+- public:
+-  using SigType = typename SignatureType<T>::type;
+-
+-  NameAndSignature(const art::DexFile* dex_file, uint32_t id);
+-
+-  NameAndSignature(const std::string_view& name, const SigType& sig) : name_(name), sig_(sig) {}
+-
+-  bool operator==(const NameAndSignature<T>& o) {
+-    return name_ == o.name_ && sig_ == o.sig_;
+-  }
+-
+-  std::ostream& dump(std::ostream& os) const {
+-    return os << "'" << name_ << "' (sig: " << sig_ << ")";
+-  }
+-
+-  std::string ToString() const {
+-    std::ostringstream os;
+-    os << *this;
+-    return os.str();
+-  }
+-
+-  std::string_view name_;
+-  SigType sig_;
+-};
+-
+-template <typename T>
+-std::ostream& operator<<(std::ostream& os, const NameAndSignature<T>& nas) {
+-  return nas.dump(os);
+-}
+-
+-using FieldNameAndSignature = NameAndSignature<art::ArtField>;
+-template <>
+-FieldNameAndSignature::NameAndSignature(const art::DexFile* dex_file, uint32_t id)
+-    : FieldNameAndSignature(dex_file->GetFieldName(dex_file->GetFieldId(id)),
+-                            dex_file->GetFieldTypeDescriptor(dex_file->GetFieldId(id))) {}
+-
+-using MethodNameAndSignature = NameAndSignature<art::ArtMethod>;
+-template <>
+-MethodNameAndSignature::NameAndSignature(const art::DexFile* dex_file, uint32_t id)
+-    : MethodNameAndSignature(dex_file->GetMethodName(dex_file->GetMethodId(id)),
+-                             dex_file->GetMethodSignature(dex_file->GetMethodId(id))) {}
+-
+-}  // namespace
+-
+ void Redefiner::ClassRedefinition::RecordNewMethodAdded() {
+   DCHECK(driver_->IsStructuralRedefinition());
+   added_methods_ = true;
+@@ -924,231 +621,15 @@
  }
 
  bool Redefiner::ClassRedefinition::CheckMethods() {
@@ -252,7 +582,7 @@
  }
 
  bool Redefiner::ClassRedefinition::CheckRedefinable() {
-@@ -1389,6 +1183,7 @@
+@@ -1389,6 +870,7 @@
    RedefinitionDataIter end() REQUIRES_SHARED(art::Locks::mutator_lock_);
 
   private:
@@ -260,7 +590,7 @@
    mutable art::Handle<art::mirror::ObjectArray<art::mirror::Object>> arr_;
    std::vector<Redefiner::ClassRedefinition>* redefinitions_;
    // Used to mark a particular redefinition as fully initialized.
-@@ -1601,9 +1396,12 @@
+@@ -1601,9 +1083,12 @@
    }
 
   private:
@@ -273,7 +603,7 @@
 
  RedefinitionDataIter RedefinitionDataHolder::begin() {
    return RedefinitionDataIter(0, *this);
-@@ -1706,99 +1504,7 @@
+@@ -1706,99 +1191,7 @@
    return parents(l.Ptr()) < parents(r.Ptr());
  }
 
@@ -374,7 +704,7 @@
 
  bool Redefiner::ClassRedefinition::FinishRemainingCommonAllocations(
      /*out*/RedefinitionDataIter* cur_data) {
-@@ -1844,147 +1550,22 @@
+@@ -1844,147 +1237,22 @@
    return true;
  }
 
@@ -536,7 +866,7 @@
  }
 
  uint32_t Redefiner::ClassRedefinition::GetNewClassSize(art::ClassAccessor& accessor) {
-@@ -2187,15 +1768,6 @@
+@@ -2187,15 +1455,6 @@
    return true;
  }
 
@@ -552,7 +882,7 @@
 
  bool Redefiner::FinishAllNewClassAllocations(RedefinitionDataHolder& holder) {
    for (RedefinitionDataIter data = holder.begin(); data != holder.end(); ++data) {
-@@ -2429,91 +2001,15 @@
+@@ -2429,151 +1688,15 @@
    DISALLOW_COPY_AND_ASSIGN(ScopedSuspendAllocations);
  };
 
@@ -643,6 +973,66 @@
 -  }
 -  return OK;
 -}
+-
+-void Redefiner::ClassRedefinition::UpdateMethods(art::ObjPtr<art::mirror::Class> mclass,
+-                                                 const art::dex::ClassDef& class_def) {
+-  art::ClassLinker* linker = driver_->runtime_->GetClassLinker();
+-  art::PointerSize image_pointer_size = linker->GetImagePointerSize();
+-  const art::dex::TypeId& declaring_class_id = dex_file_->GetTypeId(class_def.class_idx_);
+-  const art::DexFile& old_dex_file = mclass->GetDexFile();
+-  // Update methods.
+-  for (art::ArtMethod& method : mclass->GetDeclaredMethods(image_pointer_size)) {
+-    const art::dex::StringId* new_name_id = dex_file_->FindStringId(method.GetName());
+-    art::dex::TypeIndex method_return_idx =
+-        dex_file_->GetIndexForTypeId(*dex_file_->FindTypeId(method.GetReturnTypeDescriptor()));
+-    const auto* old_type_list = method.GetParameterTypeList();
+-    std::vector<art::dex::TypeIndex> new_type_list;
+-    for (uint32_t i = 0; old_type_list != nullptr && i < old_type_list->Size(); i++) {
+-      new_type_list.push_back(
+-          dex_file_->GetIndexForTypeId(
+-              *dex_file_->FindTypeId(
+-                  old_dex_file.GetTypeDescriptor(
+-                      old_dex_file.GetTypeId(
+-                          old_type_list->GetTypeItem(i).type_idx_)))));
+-    }
+-    const art::dex::ProtoId* proto_id = dex_file_->FindProtoId(method_return_idx, new_type_list);
+-    CHECK(proto_id != nullptr || old_type_list == nullptr);
+-    const art::dex::MethodId* method_id = dex_file_->FindMethodId(declaring_class_id,
+-                                                                  *new_name_id,
+-                                                                  *proto_id);
+-    CHECK(method_id != nullptr);
+-    uint32_t dex_method_idx = dex_file_->GetIndexForMethodId(*method_id);
+-    method.SetDexMethodIndex(dex_method_idx);
+-    driver_->runtime_->GetInstrumentation()->InitializeMethodsCode(&method, /*aot_code=*/ nullptr);
+-    if (method.HasCodeItem()) {
+-      method.SetCodeItem(
+-          dex_file_->GetCodeItem(dex_file_->FindCodeItemOffset(class_def, dex_method_idx)),
+-          dex_file_->IsCompactDexFile());
+-    }
+-    // Clear all the intrinsics related flags.
+-    method.SetNotIntrinsic();
+-  }
+-}
+-
+-void Redefiner::ClassRedefinition::UpdateFields(art::ObjPtr<art::mirror::Class> mclass) {
+-  // TODO The IFields & SFields pointers should be combined like the methods_ arrays were.
+-  for (auto fields_iter : {mclass->GetIFields(), mclass->GetSFields()}) {
+-    for (art::ArtField& field : fields_iter) {
+-      std::string declaring_class_name;
+-      const art::dex::TypeId* new_declaring_id =
+-          dex_file_->FindTypeId(field.GetDeclaringClass()->GetDescriptor(&declaring_class_name));
+-      const art::dex::StringId* new_name_id = dex_file_->FindStringId(field.GetName());
+-      const art::dex::TypeId* new_type_id = dex_file_->FindTypeId(field.GetTypeDescriptor());
+-      CHECK(new_name_id != nullptr && new_type_id != nullptr && new_declaring_id != nullptr);
+-      const art::dex::FieldId* new_field_id =
+-          dex_file_->FindFieldId(*new_declaring_id, *new_name_id, *new_type_id);
+-      CHECK(new_field_id != nullptr);
+-      uint32_t new_field_index = dex_file_->GetIndexForFieldId(*new_field_id);
+-      // We only need to update the index since the other data in the ArtField cannot be updated.
+-      field.SetDexFieldIndex(new_field_index);
+-    }
+-  }
+-}
 +  artdcevm::android13::source::HierarchyAllocationScope allocation(self_, [&](const char* error) {
 +    RecordFailure(ERR(UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED), error);
 +  });
@@ -650,9 +1040,9 @@
 +}
 +
 
- void Redefiner::ClassRedefinition::UpdateMethods(art::ObjPtr<art::mirror::Class> mclass,
-                                                  const art::dex::ClassDef& class_def) {
-@@ -2582,10 +2078,20 @@
+ void Redefiner::ClassRedefinition::CollectNewFieldAndMethodMappings(
+     const RedefinitionDataIter& data,
+@@ -2582,10 +1705,20 @@
    for (auto [new_cls, old_cls] :
         art::ZipLeft(data.GetNewClasses()->Iterate(), data.GetOldClasses()->Iterate())) {
      for (art::ArtField& f : old_cls->GetSFields()) {
@@ -675,7 +1065,7 @@
      }
      auto new_methods = new_cls->GetMethods(art::kRuntimePointerSize);
      for (art::ArtMethod& m : old_cls->GetMethods(art::kRuntimePointerSize)) {
-@@ -2595,127 +2101,42 @@
+@@ -2595,127 +1728,42 @@
            new_methods.begin(),
            new_methods.end(),
            [&](art::ArtMethod& cand) REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -832,7 +1222,7 @@
  }
 
  void Redefiner::ClassRedefinition::UpdateClassStructurally(const RedefinitionDataIter& holder) {
-@@ -2741,6 +2162,17 @@
+@@ -2741,6 +1789,17 @@
    // ahold of the old classes so copy them now.
    std::vector<art::ObjPtr<art::mirror::Class>> old_classes_vec(old_classes->Iterate().begin(),
                                                                 old_classes->Iterate().end());
@@ -850,10 +1240,15 @@
    // Copy over the static fields of the class and all the instance fields.
    for (auto [new_class, old_class] : art::ZipLeft(new_classes->Iterate(), old_classes->Iterate())) {
      CHECK(!new_class.IsNull());
-@@ -2771,13 +2203,18 @@
-     // implementation here since we don't want to race with any threads doing
-     // RegisterNatives.
-     for (art::ArtMethod& m : old_class->GetMethods(art::kRuntimePointerSize)) {
+@@ -2766,25 +1825,7 @@
+   // Mark old class and methods obsolete. Copy over any native implementation as well.
+   for (auto [old_class, new_class] : art::ZipLeft(old_classes->Iterate(), new_classes->Iterate())) {
+     old_class->SetObsoleteObject();
+-    // Mark methods obsolete and copy native implementation. We need to wait
+-    // until later to actually clear the jit data. We copy the native
+-    // implementation here since we don't want to race with any threads doing
+-    // RegisterNatives.
+-    for (art::ArtMethod& m : old_class->GetMethods(art::kRuntimePointerSize)) {
 -      if (m.IsNative()) {
 -        art::ArtMethod* new_method =
 -            new_class->FindClassMethod(m.GetNameView(), m.GetSignature(), art::kRuntimePointerSize);
@@ -861,22 +1256,18 @@
 -            << "Could not find method " << m.PrettyMethod() << " declared in new class!";
 -        DCHECK(new_method->IsNative());
 -        new_method->SetEntryPointFromJni(m.GetEntryPointFromJni());
-+      // Copied default-interface methods keep the interface as their declaring
-+      // class. Marking them obsolete would later look for an obsolete DexCache
-+      // on that live interface and abort during the next schema generation.
-+      if (m.GetDeclaringClass() != old_class) continue;
-+      if (m.IsNative() && !artdcevm::android13::source::IsRetiredMethod(&m)) {
-+        // Only retained declarations inherit a native binding. A removed method
-+        // keeps its own JNI/quick entrypoints so active native frames remain walkable.
-+        art::ArtMethod* new_method = method_map.at(&m);
-+        DCHECK(new_method != &m);
-+        if (new_method->IsNative()) {
-+          new_method->SetEntryPointFromJni(m.GetEntryPointFromJni());
-+        }
-       }
-       m.SetIsObsolete();
-       cl->SetEntryPointsForObsoleteMethod(&m);
-@@ -2861,6 +2298,14 @@
+-      }
+-      m.SetIsObsolete();
+-      cl->SetEntryPointsForObsoleteMethod(&m);
+-      if (m.IsInvokable()) {
+-        m.SetDontCompile();
+-      }
+-    }
++    ArtDcevmSourceUpdateStructuralMethods(old_class.Ptr(), new_class.Ptr());
+   }
+   // Update live pointers in ART code.
+   auto could_change_resolution_of = [&](auto* field_or_method,
+@@ -2861,6 +1902,14 @@
        [&](art::ArtField* f, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(f != nullptr) << info;
          auto it = field_map.find(f);
@@ -891,7 +1282,7 @@
          if (UNLIKELY(could_change_resolution_of(f, info))) {
            // Dex-cache Resolution might change. Just clear the resolved value.
            VLOG(plugin) << "Clearing resolution " << info << " for (field) " << f->PrettyField();
-@@ -2875,13 +2320,29 @@
+@@ -2875,13 +1924,29 @@
        [&](art::ArtMethod* m, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(m != nullptr) << info;
          auto it = method_map.find(m);
@@ -921,7 +1312,7 @@
            return it->second;
          }
          return m;
-@@ -2923,6 +2384,11 @@
+@@ -2923,6 +1988,11 @@
      // TODO We might want to have some way to tell the JIT not to wait the kJitSamplesBatchSize
      // invokes to start compiling things again.
      jit->GetCodeCache()->InvalidateAllCompiledCode();
@@ -933,3 +1324,70 @@
    }
 
    // Clear thread caches
+@@ -2959,66 +2029,6 @@
+   }
+ }
+
+-// Redefines the class in place
+-void Redefiner::ClassRedefinition::UpdateClassInPlace(const RedefinitionDataIter& holder) {
+-  art::ObjPtr<art::mirror::Class> mclass(holder.GetMirrorClass());
+-  // TODO Rewrite so we don't do a stack walk for each and every class.
+-  FindAndAllocateObsoleteMethods(mclass);
+-  art::ObjPtr<art::mirror::DexCache> new_dex_cache(holder.GetNewDexCache());
+-  art::ObjPtr<art::mirror::Object> original_dex_file(holder.GetOriginalDexFile());
+-  DCHECK_EQ(dex_file_->NumClassDefs(), 1u);
+-  const art::dex::ClassDef& class_def = dex_file_->GetClassDef(0);
+-  UpdateMethods(mclass, class_def);
+-  UpdateFields(mclass);
+-
+-  art::ObjPtr<art::mirror::ClassExt> ext(mclass->GetExtData());
+-  CHECK(!ext.IsNull());
+-  ext->SetOriginalDexFile(original_dex_file);
+-
+-  // If this is the first time the class is being redefined, store
+-  // the native DexFile pointer and initial ClassDef index in ClassExt.
+-  // This preserves the pointer for hiddenapi access checks which need
+-  // to read access flags from the initial DexFile.
+-  if (ext->GetPreRedefineDexFile() == nullptr) {
+-    ext->SetPreRedefineDexFile(&mclass->GetDexFile());
+-    ext->SetPreRedefineClassDefIndex(mclass->GetDexClassDefIndex());
+-  }
+-
+-  // Update the class fields.
+-  // Need to update class last since the ArtMethod gets its DexFile from the class (which is needed
+-  // to call GetReturnTypeDescriptor and GetParameterTypeList above).
+-  mclass->SetDexCache(new_dex_cache.Ptr());
+-  mclass->SetDexClassDefIndex(dex_file_->GetIndexForClassDef(class_def));
+-  mclass->SetDexTypeIndex(dex_file_->GetIndexForTypeId(*dex_file_->FindTypeId(class_sig_.c_str())));
+-
+-  // Notify the jit that all the methods in this class were redefined. Need to do this last since
+-  // the jit relies on the dex_file_ being correct (for native methods at least) to find the method
+-  // meta-data.
+-  art::jit::Jit* jit = driver_->runtime_->GetJit();
+-  if (jit != nullptr) {
+-    art::PointerSize image_pointer_size =
+-        driver_->runtime_->GetClassLinker()->GetImagePointerSize();
+-    auto code_cache = jit->GetCodeCache();
+-    // Non-invokable methods don't have any JIT data associated with them so we don't need to tell
+-    // the jit about them.
+-    for (art::ArtMethod& method : mclass->GetDeclaredMethods(image_pointer_size)) {
+-      if (method.IsInvokable()) {
+-        code_cache->NotifyMethodRedefined(&method);
+-      }
+-    }
+-  }
+-}
+-
+-// Performs final updates to class for redefinition.
+-void Redefiner::ClassRedefinition::UpdateClass(const RedefinitionDataIter& holder) {
+-  CHECK(holder.IsInitialized());
+-  if (holder.IsInitialStructural()) {
+-    UpdateClassStructurally(holder);
+-  } else if (!holder.IsActuallyStructural()) {
+-    UpdateClassInPlace(holder);
+-  }
+-}
+-
+ // Restores the old obsolete methods maps if it turns out they weren't needed (ie there were no new
+ // obsolete methods).
+ void Redefiner::ClassRedefinition::RestoreObsoleteMethodMapsIfUnneeded(

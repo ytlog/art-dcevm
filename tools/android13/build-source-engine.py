@@ -64,7 +64,7 @@ for item in lock['archives']:
 runtime_overlay = OUT / 'modified/runtime'
 shutil.copytree(OUT / 'art/runtime', runtime_overlay, dirs_exist_ok=True)
 for header_patch in ['read_barrier-inl.patch', 'reflective_value_visitor.patch',
-                     'jit_code_cache.patch']:
+                     'jit_code_cache.patch', 'runtime_layout.patch']:
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i',
                     str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine' / header_patch)],
                    cwd=runtime_overlay, check=True, capture_output=True, text=True)
@@ -101,6 +101,8 @@ sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_de
            engine / 'field_copy_entry.cc', engine / 'heap_reference_probe.cc',
            engine / 'field_copy_metadata_probe.cc', engine / 'field_copy_storage_probe.cc',
            engine / 'loaded_class_guards_probe.cc', engine / 'member_decode_probe.cc',
+           engine / 'runtime_access_probe.cc', engine / 'native_access_probe.cc',
+           engine / 'handle_root_scope_probe.cc', engine / 'structural_method_updates_probe.cc',
            engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc', engine / 'retired_methods.cc',
            engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
 commands = []

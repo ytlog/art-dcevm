@@ -1,6 +1,7 @@
 #include "platform/android13/class_validation.h"
 #include "platform/android13/class_validation_abi.h"
 #include "platform/android13/loaded_class_guards.h"
+#include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/redefinition_failure.h"
@@ -12,7 +13,6 @@
 #include <new>
 namespace artdcevm::android13 {
 namespace {
-ClassHierarchyGuard hierarchy_guard = nullptr;
 using RecordNewMethod = void (*)(void*);
 RecordNewMethod record_new_method = nullptr;
 }
@@ -63,13 +63,11 @@ bool CheckEvolutionClass(void* definition) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_NAMES_DONT_MATCH, error.c_str());
       return false;
     }
-    // Resolving parents/interfaces can run GC and must retain ART handles. The
-    // temporary typed guard owns this operation and its transaction state only.
+    // The owned hierarchy validator roots every class across named ART resolution.
     bool changed = false;
-    const char* guard_error = nullptr;
-    result = hierarchy_guard(definition, &changed, &guard_error);
+    result = CheckEvolutionHierarchy(definition, current, replacement, &changed, &error);
     if (result) {
-      RecordRedefinitionFailure(definition, result, guard_error ? guard_error : "Hierarchy validation failed");
+      RecordRedefinitionFailure(definition, result, error.c_str());
       return false;
     }
     const bool requested_change = current.superclass != replacement.superclass ||
@@ -87,15 +85,14 @@ bool CheckEvolutionClass(void* definition) {
   }
 }
 bool ConfigureEvolutionClassValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto hierarchy = reinterpret_cast<ClassHierarchyGuard>(dlsym(implementation, "ArtDcevmSourceClassHierarchyGuard"));
   auto configure = reinterpret_cast<ConfigureClassValidation>(dlsym(implementation, "ArtDcevmSourceConfigureClassValidation"));
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!hierarchy || !configure || !record) {
-    *error = "Missing class hierarchy/validation callback or named structural marker";
+  if (!configure || !record) {
+    *error = "Missing class validation callback or named structural marker";
     return false;
   }
-  hierarchy_guard = hierarchy; record_new_method = record;
+  record_new_method = record;
   configure(CheckEvolutionClass);
   return true;
 }

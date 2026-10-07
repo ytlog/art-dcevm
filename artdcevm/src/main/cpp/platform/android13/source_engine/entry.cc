@@ -47,8 +47,15 @@ extern "C" void ArtDcevmSourceConfigureJniMethodTargets(
   jni_method_target = callback;
 }
 extern "C" void* ArtDcevmSourceMappedJniMethod(void* replacement) {
-  auto* method = static_cast<art::ArtMethod*>(replacement);
-  return jni_method_target(method, method->IsCopied());
+  return jni_method_target(replacement);
+}
+
+namespace { void (*update_structural_methods)(void*, void*) = nullptr; }
+extern "C" void ArtDcevmSourceConfigureStructuralMethodUpdates(void (*callback)(void*, void*)) {
+  update_structural_methods = callback;
+}
+extern "C" void ArtDcevmSourceUpdateStructuralMethods(void* old_class, void* new_class) {
+  update_structural_methods(old_class, new_class);
 }
 
 extern "C" void SourceStructuralCommit(void*, const void*)

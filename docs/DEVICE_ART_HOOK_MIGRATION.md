@@ -30,13 +30,13 @@
 
 错误记录由增强库调用命名设备 `Redefiner::RecordFailure`。Android 13 平台 libc++ ABI v1 的长字符串声明在此调用期借用 NUL 结尾文本；原函数只同步读取两个 const 参数的 `c_str()`，不保留或析构借用对象。初始化校准用本地空事务核对短／长类签名、空／短／长错误消息、结果码及完整错误文本。这个校准仍依赖已匹配的目标设备私有布局，不能代替其他厂商的独立适配；源码错误函数已删除。
 
-命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。旧 DEX 字节区间、class-def index 和 live class flags 现由增强库通过命名 `GetMirrorClass` 和锁定源码的 Class／DexCache／DexFile 固定前缀读取，不再从源码数据桥取得。静态声明校验及每次真实事务的源码 getter 比对仍暂时保留；这是 release ObjPtr 与非 poisoned heap-reference 的已匹配设备适配。已加载子类约束已迁入增强库；需要 Handle 保护的层级解析仍在源码窄桥，必须继续迁移。
+命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。旧 DEX 字节区间、class-def index 和 live class flags 现由增强库通过命名 `GetMirrorClass` 和锁定源码的 Class／DexCache／DexFile 固定前缀读取，不再从源码数据桥取得。静态声明校验及每次真实事务的源码 getter 比对仍暂时保留；这是 release ObjPtr 与非 poisoned heap-reference 的已匹配设备适配。已加载子类约束已迁入增强库；需要 Handle 保护的层级解析和 changed／narrowed 事务状态也已迁入增强库；分配协调与临时验证视图仍待迁移。
 
 结构提交对 JNI 方法 ID 的映射现在遵循 ART 的 canonical 规则：目标为 copied 方法时，增强库按命名符号调用设备 `ArtMethod::GetCanonicalMethod`；其他反射目标保留原映射。这避免 JNI ID 管理器按声明接口的数组偏移写入子类中 copied 方法的存储。回归用例显式注册全部声明方法 ID，再执行声明方法与接口默认方法的往返，防止校验读取方式改变后遗漏这条路径。
 
-Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强库 `nterp_dispatch.cc` 实现。代理按固定 DEX 35c/3rc 格式读取方法索引，通过命名设备符号检查缓存和未解析的调用；源码旧解码实现和状态已删除。过渡源码仅在初始化时提供 `ClassLinker*` 并转发启用状态回调，仍待移除该访问器。
+Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强库 `nterp_dispatch.cc` 实现。代理按固定 DEX 35c/3rc 格式读取方法索引，通过命名设备符号检查缓存和未解析的调用；源码旧解码实现和状态已删除。`ClassLinker*` 现由增强库从命名 Runtime singleton 与固定声明读取；源码只转发启用状态回调，旧访问器已删除。
 
-原地提交后的全局 JIT 缓存失效现已由增强库的 `InPlaceHook` 实现：它调用设备原提交后，按命名符号调用设备 `JitCodeCache::InvalidateAllCompiledCode`。过渡期源码模块仅返回 `JitCodeCache*`；这条路径仍需在最终迁移中用固定声明和布局探针去掉该访问器。
+原地提交后的全局 JIT 缓存失效现已由增强库的 `InPlaceHook` 实现：它调用设备原提交后，按命名符号调用设备 `JitCodeCache::InvalidateAllCompiledCode`。`JitCodeCache*` 由增强库从固定 Runtime 声明读取，保留 GetJit 为空的原判断；源码访问器已删除。
 
 源码事务调用的设备 `Redefiner::StructurallyRedefineClasses` 现由增强库按命名符号解析，并通过增强库回调供源码实现调用；源码模块不再强链接该设备入口。源码侧事务前检查与修改后的提交实现仍待迁出。
 
@@ -88,10 +88,20 @@ Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强�
 
 ## 已加载类约束、实例检查与反射解码迁移（2026-10-07）
 
-增强库通过命名 `ClassLinker::VisitClasses` 遍历已加载类，保留 final 类子类拒绝、方法 final override 与 abstract implementation 约束。固定 Class／ArtMethod／IfTable 声明处理父类、接口、成员访问和 copied virtual methods；native declaring-class GcRoot 使用命名 `artReadBarrierForRootSlow`，不把它当作托管对象字段。方法名与完整 signature 从声明类 DEX 读取，不生成 JNI ID。遍历持有 ClassLinker 锁，增强 visitor 无分配、无 JNI、无挂起；源码旧判断循环删除。ClassLinker receiver 复用现有 Nterp 初始化值，其源码访问器仍待最后迁移。
+增强库通过命名 `ClassLinker::VisitClasses` 遍历已加载类，保留 final 类子类拒绝、方法 final override 与 abstract implementation 约束。固定 Class／ArtMethod／IfTable 声明处理父类、接口、成员访问和 copied virtual methods；native declaring-class GcRoot 使用命名 `artReadBarrierForRootSlow`，不把它当作托管对象字段。方法名与完整 signature 从声明类 DEX 读取，不生成 JNI ID。遍历持有 ClassLinker 锁，增强 visitor 无分配、无 JNI、无挂起；源码旧判断循环删除。ClassLinker receiver 与 Nterp 共用增强库 RuntimeAccess，源码访问器已删除。
 
 实例代理完整委托设备原收集／分配行为，只增加分配成功后的抽象方法检查。固定借用的 Holder、Iterator、Handle 和平台 bit-vector 声明不调用 NDK STL 操作；Handle 每次读取 rooted slot，遵循源码无 heap barrier 的 StackReference 语义，托管数组使用增强 Baker reader。初始结构批次、类和实例数组及抽象类外部 vtable 均与真实源码 getter 比对。删除两处已失去入口的复制 allocator，避免保留不再参与生产事务的 AOSP 默认分配实现。
 
 `mirror::Field::GetArtField` 现由增强库 Hook 自行读取 native 字段数组或解析注册表退休令牌。源码 Field visitor 使用设备命名 getter，运行时进入增强 Hook；旧成员实现和导出删除。Runnable 反射方法守卫调用命名 `ArtMethod::FromReflectedMethod` 后进入增强核心 Guard；JNI Native scope、接收者与 MethodHandle 操作仍在源码。校准仅读取已登记成员的反射对象和真实解码结果。
 
 测试用的读屏障诊断累计源码和增强库各自真实 gray-owner marker 调用；增强计数只编入测试构建。迁移后不能继续仅统计源码慢路径，否则并发 GC 验收会遗漏增强 getter 已执行的屏障。源码构建的过渡 Gradle 输入也包含共享固定声明头，避免修改 C callback ABI 后仍沿用旧 SO。结构发布／回滚、层级视图、引用修复及活动帧处理仍需迁出，源码构建和独立 SO 尚未删除。
+
+## 层级校验、Runtime 服务与 JNI scope（2026-10-07）
+
+增强库完整处理父类解析、访问／final／interface／cycle／初始化约束、旧传递接口保留和 direct-interface 顺序变化，拥有可嵌套恢复的 changed／narrowed TLS。命名 FindClass 可以分配和挂起，因此当前类、loader、父类及新接口放入固定源码 HandleScope 根链，每次解析后重新读取槽。固定 Thread top-handle／exception 声明及根链结构通过静态校准和持共享 mutator lock 的真实 push／pop 校准；错误时保持原 pending exception 清理语义。源 HierarchyTransactionScope 和 Has 状态仅转发 POD 回调，旧完整校验与 source TLS 已删除。分配上下文和 receiver guard 的布尔查询仍为过渡接口。
+
+RuntimeAccess 按名称解析设备 Runtime::instance_，使用锁定 Android 13 的 release prefix 读取 ClassLinker、JniIdManager、JIT 和 code cache。平台 string／vector／list／unique_ptr 只用固定尺寸的借用声明描述布局，不把 NDK STL 对象传给平台。源 friend 仅用于编译静态校准和真实 getter 比对；没有从二进制推算字段。旧 ClassLinker 返回桥和 JIT cache getter 删除。JNI ID 低位 tag 为 index 时调用命名设备 JniIdManager::DecodeMethodId／DecodeFieldId，否则指针原样返回；初始化分别核对实际 ID、pointer ID 和 null。
+
+NativeObjectAccess 使用命名 artJniMethodEnd／Start 委托设备完成 Native↔Runnable 转换、checkpoint、GC flip 和锁记账，Runnable 嵌套不转换。JNI receiver 与 thread state 使用固定源码声明；原 pending exception、local segment 和 cookie 保持。被 Hook 的 Field 18 个 get／set 和 Constructor.newInstance0 在锁定注册表及设备真实 flags 中均为 FAST_NATIVE，合法反射调用在 Runnable；JNI 表入口支持 Native 与 Runnable。增强库拥有反射与方法／字段 ID 的 Native／Runnable 退休守卫，源码旧 wrapper 及 dlsym 删除。Method registry 为空时仍不解码 ID，没有引入重复状态。MethodHandle、VarHandle、receiver 与 Nterp final-field 规则仍待迁出。
+
+结构提交的旧方法处理也由增强库完整拥有：按 name／signature／static 找 replacement，保留仍为 native 的绑定，跳过声明类仍为活接口的 copied defaults，按原 relaxed fetch_or 设置 obsolete／dont-compile，并命名调用设备 SetEntryPointsForObsoleteMethod。JNI canonicalization 的 copied／intrinsic 重叠位判断也迁到增强库。source callback 不传平台 map。复制的 UpdateClass／UpdateClassInPlace／UpdateMethods／UpdateFields／FindAndAllocateObsoleteMethods 已无生产入口，与独占 obsolete visitor、mapping 和名字签名 helper 一起删除；设备原地提交行为继续委托原函数。结构引用修复／发布与回滚、层级分配／验证视图及 selective deopt 仍承担源码行为，尚不能删除源码构建或 SO。

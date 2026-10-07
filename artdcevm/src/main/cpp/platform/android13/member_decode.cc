@@ -1,5 +1,8 @@
 #include "platform/android13/member_decode.h"
 #include "platform/android13/member_decode_abi.h"
+#include "platform/android13/native_object_access.h"
+#include "platform/android13/runtime_access.h"
+#include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/field_copy_metadata_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/retired_field_registry_bridge.h"
@@ -45,6 +48,39 @@ void* DecodeRunnableExecutable(const void* access, jobject executable) {
 }
 bool GuardRunnableExecutable(const void* access, jobject executable) {
   return GuardRetiredMethod(DecodeRunnableExecutable(access, executable), nullptr, nullptr);
+}
+bool GuardNativeExecutable(JNIEnv* env, jobject executable) {
+  NativeObjectAccess access(env);
+  // Registered FAST_NATIVE entrypoint: ART enters it while Runnable.
+  Require(access.Supported());
+  auto* mirror = access.Decode(executable);
+  auto* method = reinterpret_cast<void*>(Read<uint64_t>(mirror,
+      offsetof(member_decode_abi::Executable, art_method)));
+  return GuardRetiredMethod(method, access.Self(), nullptr);
+}
+bool GuardNativeReflectedField(JNIEnv* env, jobject field) {
+  NativeObjectAccess access(env);
+  // Registered FAST_NATIVE entrypoint: ART enters it while Runnable.
+  Require(access.Supported());
+  return GuardRetiredField(DecodeReflectedField(access.Decode(field)), access.Self(), nullptr);
+}
+bool GuardRunnableMethodId(jmethodID method) {
+  if (RetiredMethodCount() == 0) return false;
+  return GuardRetiredMethod(DecodeMethodId(method), nullptr, nullptr);
+}
+bool GuardNativeMethodId(JNIEnv* env, jmethodID method) {
+  NativeObjectAccess access(env);
+  Require(access.Supported());
+  if (RetiredMethodCount() == 0) return false;
+  return GuardRetiredMethod(DecodeMethodId(method), access.Self(), nullptr);
+}
+bool GuardRunnableFieldId(jfieldID field) {
+  return GuardRetiredField(DecodeFieldId(field), nullptr, nullptr);
+}
+bool GuardNativeFieldId(JNIEnv* env, jfieldID field) {
+  NativeObjectAccess access(env);
+  Require(access.Supported());
+  return GuardRetiredField(DecodeFieldId(field), access.Self(), nullptr);
 }
 
 bool ConfigureMemberDecode(HookEngine& hooks, void* implementation, JNIEnv* jni,

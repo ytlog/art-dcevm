@@ -13,8 +13,7 @@ class HierarchyTransactionScope {
   HierarchyTransactionScope();
   ~HierarchyTransactionScope();
  private:
-  bool previous_;
-  bool previous_narrowed_;
+  uint32_t previous_;
 };
 bool HasHierarchyChange();
 bool HasHierarchyNarrowing();
@@ -50,9 +49,4 @@ class HierarchyAllocationScope {
   std::vector<Replacement> replacements_;
   HierarchyAllocationScope* previous_;
 };
-// Removing a superclass or interface requires the precommit receiver guard
-// and deoptimization.
-jvmtiError CheckHierarchyAdditions(art::Handle<art::mirror::Class> current,
-    const art::DexFile& dex, art::MutableHandle<art::mirror::Class>* desired_super,
-    bool* changed, std::string* error) REQUIRES_SHARED(art::Locks::mutator_lock_);
 }

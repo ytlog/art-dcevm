@@ -114,19 +114,6 @@ extern "C" void ArtDcevmSourceVisitField(void* field, void* visitor) {
   static_cast<art::mirror::Field*>(field)->VisitTarget(
       static_cast<art::ReflectiveValueVisitor*>(visitor));
 }
-extern "C" bool ArtDcevmGuardFieldId(jfieldID field) {
-  return artdcevm::android13::source::GuardField(
-      art::jni::DecodeArtField(field), art::Thread::Current());
-}
-extern "C" bool ArtDcevmGuardJniField(JNIEnv* env, jfieldID field) {
-  art::ScopedObjectAccess soa(env);
-  return ArtDcevmGuardFieldId(field);
-}
-extern "C" bool ArtDcevmGuardReflectionField(JNIEnv* env, jobject field) {
-  art::ScopedObjectAccess soa(env);
-  return artdcevm::android13::source::GuardField(
-      soa.Decode<art::mirror::Field>(field)->GetArtField(), soa.Self());
-}
 extern "C" bool ArtDcevmSourceReceiverGuardEnabled();
 extern "C" bool ArtDcevmGuardFieldVarHandle(void* handle, int mode, void* frame,
                                              const void* operands, void* result) {

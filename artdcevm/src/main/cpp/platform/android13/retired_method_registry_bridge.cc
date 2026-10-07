@@ -20,6 +20,7 @@ size_t Count() { return registry.Count(); }
 }  // namespace
 
 bool IsRetiredMethodPointer(void* method) { return registry.Contains(method); }
+size_t RetiredMethodCount() { return registry.Count(); }
 
 size_t PruneRetiredMethods(const void* allocator) noexcept {
   try { return registry.Prune(allocator, contains_unsafe); }

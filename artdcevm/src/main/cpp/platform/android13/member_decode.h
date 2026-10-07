@@ -14,4 +14,12 @@ void* DecodeReflectedField(void* reflected_field);
 // device function owns JNI-handle decoding and the fixed Executable accessor.
 void* DecodeRunnableExecutable(const void* access, jobject executable);
 bool GuardRunnableExecutable(const void* access, jobject executable);
+// Installed on calibrated FAST_NATIVE reflection entrypoints. Native/runnable
+// JNI ID entrypoints below share the same owned object-access scope.
+bool GuardNativeExecutable(JNIEnv* env, jobject executable);
+bool GuardNativeReflectedField(JNIEnv* env, jobject field);
+bool GuardRunnableMethodId(jmethodID method);
+bool GuardNativeMethodId(JNIEnv* env, jmethodID method);
+bool GuardRunnableFieldId(jfieldID field);
+bool GuardNativeFieldId(JNIEnv* env, jfieldID field);
 }

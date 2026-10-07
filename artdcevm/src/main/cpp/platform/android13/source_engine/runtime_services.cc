@@ -344,12 +344,7 @@ extern "C" int ArtDcevmSourceInvalidateAllJit(JNIEnv* env) {
   jit->GetCodeCache()->InvalidateAllCompiledCode();
   return 1;
 }
-// Transitional ABI accessor for the enhancement library. The enhancement
-// library resolves and calls JitCodeCache::InvalidateAllCompiledCode by name.
-extern "C" void* ArtDcevmSourceGetJitCodeCache() {
-  auto* jit = art::Runtime::Current()->GetJit();
-  return jit == nullptr ? nullptr : jit->GetCodeCache();
-}
+
 extern "C" int ArtDcevmSourceForceOptimizedJit(JNIEnv* env, jobject executable) {
   auto* runtime = art::Runtime::Current();
   auto* jit = runtime->GetJit();

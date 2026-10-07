@@ -18,6 +18,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
            str(root / 'tests/host/member_decode_test.cc'),
            str(cpp / 'platform/android13/member_decode.cc'),
+           str(cpp / 'platform/android13/native_object_access.cc'),
            str(cpp / 'platform/android13/retired_field_registry.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,

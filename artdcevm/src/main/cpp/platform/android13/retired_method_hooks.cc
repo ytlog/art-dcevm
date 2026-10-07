@@ -1,6 +1,7 @@
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_member_guard.h"
 #include "platform/android13/member_decode.h"
+#include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
 #include <atomic>
@@ -14,11 +15,8 @@ namespace artdcevm::android13 {
 namespace {
 using GuardHandle = bool (*)(void*, void*, void*);
 GuardHandle guard_handle;
-bool (*guard_id)(jmethodID);
-bool (*guard_jni_id)(JNIEnv*, jmethodID);
 bool (*guard_receiver_method)(const void*, jobject, void*);
 bool (*guard_receiver_id)(const void*, jobject, jmethodID);
-bool (*guard_jni_executable)(JNIEnv*, jobject);
 void* original_nterp;
 void* original_deopt;
 void (*trace_deopt)(void*, void*, void*, bool, int);
@@ -86,13 +84,13 @@ uint64_t VirtualVarArgs(const void* access, jobject receiver, void* method, va_l
   return reinterpret_cast<Fn>(original_varargs)(access, receiver, method, args);
 }
 uint64_t IdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
-  if (guard_id(method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
   if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(original_id_jvalues)(access, receiver, method, args);
 }
 uint64_t IdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
-  if (guard_id(method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
   if (guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(original_id_varargs)(access, receiver, method, args);
@@ -110,13 +108,13 @@ uint64_t DirectVarArgs(const void* access, jobject receiver, void* method, va_li
   return reinterpret_cast<Fn>(original_direct_varargs)(access, receiver, method, args);
 }
 uint64_t DirectIdJValues(const void* access, jobject receiver, jmethodID method, const jvalue* args) {
-  if (guard_id(method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
   if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(original_direct_id_jvalues)(access, receiver, method, args);
 }
 uint64_t DirectIdVarArgs(const void* access, jobject receiver, jmethodID method, va_list args) {
-  if (guard_id(method)) { ++rejected; return 0; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return 0; }
   if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(original_direct_id_varargs)(access, receiver, method, args);
@@ -149,28 +147,28 @@ bool CheckJniMethod(void* check, void* access, jobject receiver, jclass cls,
                     jmethodID method, int primitive, int invoke) {
   // CheckJNI normally aborts on an obsolete declaring class. Convert only known
   // removed members into an ordinary pending exception; preserve all other checks.
-  if (guard_id(method)) { ++rejected; return false; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return false; }
   if (receiver != nullptr && guard_receiver_id(access, receiver, method)) { ++rejected; return false; }
   using Fn = bool (*)(void*, void*, jobject, jclass, jmethodID, int, int);
   return reinterpret_cast<Fn>(original_check_jni)(check, access, receiver, cls, method, primitive, invoke);
 }
 bool CheckConstructor(void* check, jmethodID method) {
-  if (guard_id(method)) { ++rejected; return false; }
+  if (GuardRunnableMethodId(method)) { ++rejected; return false; }
   using Fn = bool (*)(void*, jmethodID);
   return reinterpret_cast<Fn>(original_check_constructor)(check, method);
 }
 jobject Constructor(JNIEnv* env, jobject constructor, jobjectArray args) {
-  if (guard_jni_executable(env, constructor)) { ++rejected; return nullptr; }
+  if (GuardNativeExecutable(env, constructor)) { ++rejected; return nullptr; }
   using Fn = jobject (*)(JNIEnv*, jobject, jobjectArray);
   return reinterpret_cast<Fn>(original_constructor)(env, constructor, args);
 }
 template <int indexed> jobject NewA(JNIEnv* env, jclass cls, jmethodID method, const jvalue* args) {
-  if (guard_jni_id(env, method)) { ++rejected; return nullptr; }
+  if (GuardNativeMethodId(env, method)) { ++rejected; return nullptr; }
   using Fn = jobject (*)(JNIEnv*, jclass, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(original_new_a[indexed])(env, cls, method, args);
 }
 template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, va_list args) {
-  if (guard_jni_id(env, method)) { ++rejected; return nullptr; }
+  if (GuardNativeMethodId(env, method)) { ++rejected; return nullptr; }
   using Fn = jobject (*)(JNIEnv*, jclass, jmethodID, va_list);
   return reinterpret_cast<Fn>(original_new_v[indexed])(env, cls, method, args);
 }
@@ -178,26 +176,23 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
   guard_handle = reinterpret_cast<GuardHandle>(dlsym(library, "ArtDcevmGuardMethodHandle"));
-  guard_id = reinterpret_cast<bool (*)(jmethodID)>(dlsym(library, "ArtDcevmGuardMethodId"));
-  guard_jni_id = reinterpret_cast<decltype(guard_jni_id)>(dlsym(library, "ArtDcevmGuardJniMethodId"));
   guard_receiver_method = reinterpret_cast<decltype(guard_receiver_method)>(dlsym(library, "ArtDcevmGuardRunnableMethodReceiver"));
   guard_receiver_id = reinterpret_cast<decltype(guard_receiver_id)>(dlsym(library, "ArtDcevmGuardRunnableMethodIdReceiver"));
-  guard_jni_executable = reinterpret_cast<decltype(guard_jni_executable)>(dlsym(library, "ArtDcevmGuardJniExecutable"));
-  if (!guard_handle || !guard_id ||
-      !guard_jni_id || !guard_jni_executable || !guard_receiver_method || !guard_receiver_id) {
+  if (!guard_handle || !guard_receiver_method || !guard_receiver_id) {
     *error = "Retired method guard exports are incomplete"; return false;
   }
   trace_deopt = reinterpret_cast<decltype(trace_deopt)>(dlsym(library, "ArtDcevmSourceTraceDeopt"));
-  auto configure_dispatch = reinterpret_cast<void* (*)(void (*)())>(
+  auto configure_dispatch = reinterpret_cast<void (*)(void (*)())>(
       dlsym(library, "ArtDcevmSourceConfigureDispatchChecks"));
   checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
   checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
   if (!trace_deopt || !configure_dispatch || !checked_resolve || !checked_resolve_handles) {
     *error = "Dispatch validation symbols are incomplete"; return false;
   }
-  if (!ConfigureNterpDispatch(configure_dispatch(RequireDispatchChecks),
+  configure_dispatch(RequireDispatchChecks);
+  if (!ConfigureNterpDispatch(RuntimeClassLinker(),
       reinterpret_cast<CheckedDispatchResolver>(checked_resolve))) {
-    *error = "Named checked resolver or source ClassLinker accessor is unavailable";
+    *error = "Named checked resolver or fixed Runtime ClassLinker is unavailable";
     return false;
   }
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };

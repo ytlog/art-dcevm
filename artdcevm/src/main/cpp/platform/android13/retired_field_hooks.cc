@@ -8,11 +8,8 @@
 
 namespace artdcevm::android13 {
 namespace {
-bool (*guard_jni)(JNIEnv*, jfieldID);
 bool (*guard_receiver_jni)(JNIEnv*, jobject, jfieldID);
 bool (*guard_receiver_runnable)(const void*, jobject, jfieldID);
-bool (*guard_id)(jfieldID);
-bool (*guard_reflection)(JNIEnv*, jobject);
 bool (*guard_varhandle)(void*, int, void*, const void*, void*);
 bool (*guard_method_handle_put)(void*);
 bool (*guard_final_put)(void*, void*, uint16_t*);
@@ -42,7 +39,7 @@ bool MethodHandleFieldPut(void* thread, void* frame, void* receiver, void* field
 }
 bool CheckField(void* check, void* access, jobject receiver, jfieldID field,
                 bool is_static, int primitive) {
-  if (guard_id(field)) return false;
+  if (GuardRunnableFieldId(field)) return false;
   if (!is_static && guard_receiver_runnable(access, receiver, field)) return false;
   using Fn = bool (*)(void*, void*, jobject, jfieldID, bool, int);
   return reinterpret_cast<Fn>(original_check)(check, access, receiver, field, is_static, primitive);
@@ -64,7 +61,7 @@ template <int indexed, typename T, bool is_static> struct JniField {
   static inline void* original_get;
   static inline void* original_set;
   static T Get(JNIEnv* env, Receiver object, jfieldID field) {
-    if (guard_jni(env, field)) return T{};
+    if (GuardNativeFieldId(env, field)) return T{};
     if constexpr (!is_static) {
       if (guard_receiver_jni(env, object, field)) return T{};
     }
@@ -72,7 +69,7 @@ template <int indexed, typename T, bool is_static> struct JniField {
     return reinterpret_cast<Fn>(original_get)(env, object, field);
   }
   static void Set(JNIEnv* env, Receiver object, jfieldID field, T value) {
-    if (guard_jni(env, field)) return;
+    if (GuardNativeFieldId(env, field)) return;
     if constexpr (!is_static) {
       if (guard_receiver_jni(env, object, field)) return;
     }
@@ -92,12 +89,12 @@ template <typename T> struct ReflectionField {
   static inline void* original_get;
   static inline void* original_set;
   static T Get(JNIEnv* env, jobject field, jobject object) {
-    if (guard_reflection(env, field)) return T{};
+    if (GuardNativeReflectedField(env, field)) return T{};
     using Fn = T (*)(JNIEnv*, jobject, jobject);
     return reinterpret_cast<Fn>(original_get)(env, field, object);
   }
   static void Set(JNIEnv* env, jobject field, jobject object, T value) {
-    if (guard_reflection(env, field)) return;
+    if (GuardNativeReflectedField(env, field)) return;
     using Fn = void (*)(JNIEnv*, jobject, jobject, T);
     reinterpret_cast<Fn>(original_set)(env, field, object, value);
   }
@@ -112,18 +109,15 @@ template <typename T> struct ReflectionField {
 };
 }
 bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* error) {
-  guard_jni = reinterpret_cast<decltype(guard_jni)>(dlsym(library, "ArtDcevmGuardJniField"));
   guard_receiver_jni = reinterpret_cast<decltype(guard_receiver_jni)>(dlsym(library, "ArtDcevmGuardJniFieldReceiver"));
   guard_receiver_runnable = reinterpret_cast<decltype(guard_receiver_runnable)>(dlsym(library, "ArtDcevmGuardRunnableFieldReceiver"));
-  guard_id = reinterpret_cast<decltype(guard_id)>(dlsym(library, "ArtDcevmGuardFieldId"));
-  guard_reflection = reinterpret_cast<decltype(guard_reflection)>(dlsym(library, "ArtDcevmGuardReflectionField"));
   guard_varhandle = reinterpret_cast<decltype(guard_varhandle)>(dlsym(library, "ArtDcevmGuardFieldVarHandle"));
   guard_method_handle_put = reinterpret_cast<decltype(guard_method_handle_put)>(
       dlsym(library, "ArtDcevmGuardMethodHandleFieldPut"));
   guard_final_put = reinterpret_cast<decltype(guard_final_put)>(dlsym(library, "ArtDcevmGuardNterpFinalFieldPut"));
   visit_field = reinterpret_cast<decltype(visit_field)>(dlsym(library, "ArtDcevmSourceVisitField"));
-  if (!guard_jni || !guard_receiver_jni || !guard_receiver_runnable || !guard_id ||
-      !guard_reflection || !guard_varhandle || !guard_method_handle_put ||
+  if (!guard_receiver_jni || !guard_receiver_runnable ||
+      !guard_varhandle || !guard_method_handle_put ||
       !guard_final_put || !visit_field) {
     *error = "Retired field guard exports are incomplete"; return false;
   }

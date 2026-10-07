@@ -26,6 +26,10 @@
 #include "platform/android13/member_decode.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/nterp_dispatch.h"
+#include "platform/android13/runtime_access.h"
+#include "platform/android13/native_object_access.h"
+#include "platform/android13/hierarchy_validation.h"
+#include "platform/android13/structural_method_updates.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -87,7 +91,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     return "Missing named structural redefine entrypoint or source callback";
   }
   configure_structural(CallDeviceStructuralRedefine);
-  if (!ConfigureJniMethodTargets(symbols, library, &error)) {
+  if (!ConfigureRuntimeAccess(symbols, library, &error) ||
+      !ConfigureJniMethodTargets(symbols, library, &error)) {
     dlclose(library);
     return error;
   }
@@ -96,11 +101,9 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefine"));
   auto standard_redefine = reinterpret_cast<Redefine>(dlsym(library, "ArtDcevmSourceRedefineStandard"));
   auto commit = reinterpret_cast<ValidationHooks::Commit>(dlsym(library, "ArtDcevmSourceCommit"));
-  auto get_jit_code_cache = reinterpret_cast<ValidationHooks::GetJitCodeCache>(
-      dlsym(library, "ArtDcevmSourceGetJitCodeCache"));
   auto invalidate_jit = reinterpret_cast<ValidationHooks::InvalidateJit>(
       symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
-  if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
+  if (!probe || !redefine || !standard_redefine || !commit ||
       !invalidate_jit) {
     dlclose(library); return "Source engine exports are incomplete";
   }
@@ -121,6 +124,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
       !ConfigureEvolutionFieldCopy(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionFieldValidation(symbols, library, &error) ||
       !ConfigureValidationMetadata(symbols, library, &error) ||
+      !ConfigureLoadedClassGuards(symbols, RuntimeClassLinker(), &error) ||
+      !ConfigureHierarchyValidation(symbols, library, &error) ||
+      !ConfigureNativeObjectAccess(symbols, library, jni, calibration, &error) ||
+      !CalibrateJniIdDecode(library, jni, calibration, &error) ||
       !ConfigureMemberDecode(symbols, library, jni, calibration, &error) ||
       !ConfigureEvolutionMethodValidation(symbols, library, &error) ||
       !ConfigureEvolutionClassValidation(symbols, library, &error)) {
@@ -139,7 +146,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   ValidationHooks dispatcher;
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
-  if (!ConfigureLoadedClassGuards(symbols, DispatchClassLinker(), &error)) return error;
+  if (!ConfigureStructuralMethodUpdates(symbols, library, &error)) return error;
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
@@ -148,7 +155,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
   ValidationHooks::ConfigureSource(commit,
-                                   get_jit_code_cache, invalidate_jit);
+                                   RuntimeJitCodeCache, invalidate_jit);
   source_redefine = redefine;
   source_standard_redefine = standard_redefine;
   ready = true;
