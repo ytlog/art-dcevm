@@ -61,8 +61,6 @@ int Android13Backend::Attach(JavaVM* vm) {
   for (int i = 0; i < count; ++i) {
     auto& f = functions[i];
     extensions_.emplace_back(f.id);
-    if (std::strcmp(f.id, "com.android.art.class.is_structurally_modifiable_class") == 0)
-      modifiable_ = reinterpret_cast<ModifiableFn>(f.func);
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.id));
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.short_description));
     for (int j = 0; j < f.param_count; ++j) env_->Deallocate(reinterpret_cast<unsigned char*>(f.params[j].name));
@@ -70,16 +68,20 @@ int Android13Backend::Attach(JavaVM* vm) {
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
   }
   env_->Deallocate(reinterpret_cast<unsigned char*>(functions));
-  // The structural extension advertises support, while the named device
-  // implementation is the actual call target. Do not assume an extension
-  // function pointer is the same entry point as ART's private implementation.
-  if (std::find(extensions_.begin(), extensions_.end(),
-                "com.android.art.class.structurally_redefine_classes") != extensions_.end()) {
+  // Extensions advertise support. Resolve both device implementations by name
+  // so capability checks and the transaction use the same ART ABI profile.
+  const auto advertised = [this](const char* id) {
+    return std::find(extensions_.begin(), extensions_.end(), id) != extensions_.end();
+  };
+  if (advertised("com.android.art.class.structurally_redefine_classes") &&
+      advertised("com.android.art.class.is_structurally_modifiable_class")) {
     ShadowHookEngine symbols;
     std::string error;
     if (symbols.Initialize(&error)) {
       structural_ = reinterpret_cast<StructuralFn>(symbols.FindSymbol(
           "libopenjdkjvmti.so", cas::kStructuralRedefineClasses));
+      modifiable_ = reinterpret_cast<ModifiableFn>(symbols.FindSymbol(
+          "libopenjdkjvmti.so", cas::kIsStructurallyModifiableClass));
     }
   }
   body_ = std::make_unique<JvmtiBodyRedefiner>(env_, caps_.can_redefine_classes != 0);
