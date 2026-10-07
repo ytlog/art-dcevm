@@ -26,7 +26,7 @@ bool Range(const unsigned char* base,size_t size,uintptr_t pointer,size_t width)
   return base && pointer>=start && pointer-start<=size && width<=size-(pointer-start);
 }
 void* MethodCache(void* method) {
-  auto flags=Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags));
+  auto flags=art_method_abi::ReadAccessFlags(method);
   void* cache=nullptr;
   if(flags&0x40000) cache=obsolete_cache(method);
   else {
@@ -91,7 +91,7 @@ struct PcVisitor final:stack_abi::Visitor {
     if(carrier && carrier!=quick_frame) return false;
     void* method=Method();if(!method) return true;
     if(Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
-       (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
+       (art_method_abi::ReadAccessFlags(method)&0x100)) return true;
     carrier=quick_frame;found=true;
     if(!IsEvolutionFrameRecoverable(*this)) {safe=false;return false;}
     return true;
@@ -136,7 +136,7 @@ bool IsEvolutionFrameRecoverable(const stack_abi::Visitor& visitor) {
   uint32_t expected;if(!Registers(method,&expected)) {
     RECOVERY_LOG("register-read method=%p data=%zx flags=%x",method,
                  size_t(Read<uint64_t>(method,offsetof(art_method_abi::ArtMethod,data))),
-                 Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags)));
+                 art_method_abi::ReadAccessFlags(method));
     return reject("codeitem");
   }
   stack_abi::CodeInfo info{};

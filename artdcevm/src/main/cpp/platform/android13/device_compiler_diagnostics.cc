@@ -100,7 +100,7 @@ class ScopedInlineCompile {
  ~ScopedInlineCompile(){diagnostic_inline_compile=original_;}
  private:bool original_;
 };
-uint32_t Flags(void* method){return __atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+offsetof(art_method_abi::ArtMethod,access_flags)),__ATOMIC_RELAXED);}
+uint32_t Flags(void* method){return art_method_abi::ReadAccessFlags(method);}
 // JitCompilerInterface: D1/D0, CompileMethod, TypesLoaded, GenerateDebugInfo,
 // ParseCompilerOptions, IsBaselineCompiler. No device STL return is invoked.
 bool BaselineInterface(void* compiler){auto** table=*static_cast<void***>(compiler);using Fn=bool (*)(const void*);return reinterpret_cast<Fn>(table[6])(compiler);}

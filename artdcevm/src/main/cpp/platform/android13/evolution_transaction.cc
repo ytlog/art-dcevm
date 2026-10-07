@@ -97,7 +97,7 @@ struct Visitor final:stack_abi::Visitor {
     if(!quick_frame) return true;
     bool physical=quick_frame!=previous_quick;previous_quick=quick_frame;
     void* method=Method();if(!method) return true;
-    uint32_t flags=Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags));
+    uint32_t flags=art_method_abi::ReadAccessFlags(method);
     bool runtime=Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX;
     bool native=(flags&0x100)!=0;
     bool barrier=physical && !runtime && selective_abi::FindFrame(Read<void*>(thread,transaction_abi::kThreadInstrumentationStack),return_pc(this));
@@ -138,7 +138,7 @@ struct RecoveryVisitor final:stack_abi::Visitor {
     if(!quick_frame) return true;
     void* method=Method();if(!method) return true;
     if(Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
-       (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
+       (art_method_abi::ReadAccessFlags(method)&0x100)) return true;
     // Every inlinee AND its physical carrier must have recoverable maps when
     // this machine frame contains an application method, including boot carriers.
     app_carrier|=Loader(read_root(method))!=nullptr;

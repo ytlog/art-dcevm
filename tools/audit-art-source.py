@@ -146,6 +146,13 @@ def main():
                                 break
                         matches.append({'line': index + 1, 'text': ' '.join(excerpt)})
                 declarations[name + ':' + method] = matches
+        method_source = content['runtime/art_method.h']
+        prefix_start = method_source.rfind('GcRoot<mirror::Class> declaring_class_;')
+        pointer_start = method_source.find('struct PtrSizedFields', prefix_start)
+        identity_fields = re.findall(
+            r'(?:GcRoot<mirror::Class>|std::atomic<std::uint32_t>|uint(?:32|16)_t)\s+(\w+)_;',
+            method_source[prefix_start:pointer_start])
+        pointer_fields = re.search(r'struct PtrSizedFields\s*\{(.*?)\};', method_source, re.DOTALL)
         checked_referrer = re.search(
             r'inline ArtMethod\* ClassLinker::ResolveMethodWithChecks\(.*?(?=\ninline |\Z)',
             content['runtime/class_linker-inl.h'], re.DOTALL)
@@ -159,6 +166,9 @@ def main():
             checked_referrer_order = [name for position, name in sorted(positions) if position >= 0]
         versions.append({
             'tag': tag, 'commit': commit,
+            'artMethodIdentityPrefixFields': identity_fields,
+            'artMethodPointerFields': re.findall(r'void\*\s+(\w+)_;', pointer_fields.group(1)) if pointer_fields else [],
+            'artMethodAccessFlagsLoadRelaxed': 'return access_flags_.load(std::memory_order_relaxed)' in method_source,
             'artMethodHasDexCodeItemOffset': 'uint32_t dex_code_item_offset_' in content['runtime/art_method.h'],
             'classRedefinitionHasLockAcquired': 'bool lock_acquired_' in redefine,
             'redefinitionUsesBlockingMutex': 'std::lock_guard<std::mutex> lg(redefinition_lock)' in implementation,

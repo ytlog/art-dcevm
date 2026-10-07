@@ -31,7 +31,7 @@ struct Eligibility final : stack_abi::Visitor {
     void* method=Method();
     if(!method) return true;
     if(Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
-       (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
+       (art_method_abi::ReadAccessFlags(method)&0x100)) return true;
     if(quick_frame && header && is_async(RuntimeInstance(),pc) && IsEvolutionPcRecoverable(thread,pc)) {
       allowed=true;selected_method=method;selected_quick=quick_frame;selected_header=header;
     }

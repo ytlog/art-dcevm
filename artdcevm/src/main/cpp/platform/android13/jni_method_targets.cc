@@ -10,8 +10,7 @@ namespace {
 using CanonicalMethod = void* (*)(void*, size_t);
 CanonicalMethod canonical_method = nullptr;
 void* Canonicalize(void* method) {
-  const uint32_t flags=__atomic_load_n(reinterpret_cast<uint32_t*>(
-      static_cast<unsigned char*>(method)+offsetof(art_method_abi::ArtMethod,access_flags)),__ATOMIC_RELAXED);
+  const uint32_t flags=art_method_abi::ReadAccessFlags(method);
   const bool copied=(flags & (0x80000000u | 0x01000000u))==0x01000000u;
   return copied ? canonical_method(method, size_t{8}) : method;
 }

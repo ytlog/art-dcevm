@@ -49,7 +49,7 @@ void* Entry(JNIEnv* env,jvmtiEnv* ti,jmethodID id,bool allow_static=false) {
   if(!method) return nullptr;
   uint32_t actual=0;
   uint64_t entry=0;
-  std::memcpy(&actual,static_cast<char*>(method)+offsetof(art_method_abi::ArtMethod,access_flags),sizeof(actual));
+  actual=art_method_abi::ReadAccessFlags(method);
   if((actual&0xffffu)!=static_cast<uint32_t>(flags))return nullptr;
   // Fixed art_method.h GetEntryPointFromJniPtrSize() uses data_ for native methods.
   std::memcpy(&entry,static_cast<char*>(method)+offsetof(art_method_abi::ArtMethod,data),sizeof(entry));

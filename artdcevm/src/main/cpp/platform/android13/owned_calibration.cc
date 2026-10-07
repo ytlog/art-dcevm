@@ -144,7 +144,7 @@ bool CalibrateOwnedMembers(const DeviceProfile& profile,HookEngine& hooks,JNIEnv
  if(!name.value||!descriptor.value||std::strcmp(name.value,"compute")||std::strcmp(descriptor.value,"()I")||!env->IsSameObject(owner,klass)||!reflected.value||env->ExceptionCheck()||env->FromReflectedMethod(reflected.value)!=id)return Fail(error,"JNI/JVMTI method identity mismatch");
  {NativeObjectAccess access(env);void* decoded=r.method_id(id);
   if(!decoded||decoded!=method(services.jni_id_manager,id)||r.reflected_method(env,reflected.value)!=decoded||r.canonical_method(decoded)!=canonical(decoded,8)||
-     r.method_id(reinterpret_cast<jmethodID>(decoded))!=decoded||(Read<uint32_t>(decoded,offsetof(art_method_abi::ArtMethod,access_flags))&0xffffu)!=static_cast<uint32_t>(modifiers))return Fail(error,"Owned method decode disagrees with JNI/JVMTI/named ART");}
+     r.method_id(reinterpret_cast<jmethodID>(decoded))!=decoded||(art_method_abi::ReadAccessFlags(decoded)&0xffffu)!=static_cast<uint32_t>(modifiers))return Fail(error,"Owned method decode disagrees with JNI/JVMTI/named ART");}
  return r.method_id(nullptr)==nullptr&&r.field_id(nullptr)==nullptr?true:Fail(error,"Owned JNI null ID decode mismatch");
 }
 bool CalibrateOwnedFieldStorage(const DeviceProfile& profile,JNIEnv* env,jvmtiEnv* ti,jobject fixture,const OwnedCalibrationReaders& r,std::string* error){

@@ -50,7 +50,7 @@ MethodAccessResult Check(const Functions& bound,void* linker,void* cache_handle,
       return MethodAccessResult::Exception;
     }
   }
-  const auto flags=Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags));
+  const auto flags=art_method_abi::ReadAccessFlags(method);
   if(CanAccessValidationMember(roots.Get(0),roots.Get(1),flags))return MethodAccessResult::Allowed;
   bound.member_error(roots.Get(0),method);
   return MethodAccessResult::Exception;

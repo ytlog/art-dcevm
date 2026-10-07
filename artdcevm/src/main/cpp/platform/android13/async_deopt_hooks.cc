@@ -27,11 +27,11 @@ struct AotVisitor final:stack_abi::Visitor {
     if (!quick_frame || pc!=target) return true;
     void* method=Method();
     if (!method || Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
-        (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return false;
+        (art_method_abi::ReadAccessFlags(method)&0x100)) return false;
     void* klass=root(method);
     if (!klass || !ReadHeapReference(klass,offsetof(validation_abi::ClassPrefix,class_loader))) return false;
     void* cache;
-    if (Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,access_flags))&0x40000) cache=obsolete_cache(method);
+    if (art_method_abi::ReadAccessFlags(method)&0x40000) cache=obsolete_cache(method);
     else {
       // GetDexFile deliberately reads the immutable cache link without a barrier.
       cache=reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(klass,offsetof(validation_abi::ClassPrefix,dex_cache))));

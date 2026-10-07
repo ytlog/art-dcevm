@@ -30,7 +30,7 @@ struct CacheCallback final:diagnostics_abi::CallbackBase {
   // VisitAllMethods establishes this code's actual carrier. A region lookup
   // alone also accepts stubs or another method's entry and cannot authorize
   // reading CodeInfo. JNI/runtime stubs have no managed CodeInfo.
-  if((Read<uint32_t>(target,offsetof(art_method_abi::ArtMethod,access_flags))&0x100u) ||
+  if((art_method_abi::ReadAccessFlags(target)&0x100u) ||
      Read<uint32_t>(target,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
      !contains_pc(RuntimeJitCodeCache(),code))return;
   stack_abi::CodeInfo info{};

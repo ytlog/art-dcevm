@@ -24,7 +24,7 @@ struct AppVisitor final:stack_abi::Visitor {
   bool VisitFrame() override {
     void* m=Method();
     if (!m || !quick_frame || Read<uint32_t>(m,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
-        (Read<uint32_t>(m,offsetof(art_method_abi::ArtMethod,access_flags))&0x100)) return true;
+        (art_method_abi::ReadAccessFlags(m)&0x100)) return true;
     void* klass=root(m);
     if (!klass || !ReadHeapReference(klass,offsetof(validation_abi::ClassPrefix,class_loader))) return true;
     stack_abi::CodeInfo info{};
