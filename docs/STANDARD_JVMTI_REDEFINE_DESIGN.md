@@ -26,7 +26,7 @@ jvmtiClassDefinition definitions[] = { /* 目标 Class 与新 DEX */ };
 jvmtiError result = jvmti->RedefineClasses(count, definitions);
 ```
 
-Java 初始化函数负责附加增强库自身的 JVMTI Agent 入口，加载内部源码模块，并安装进程级路由与守卫。用户 Agent 可以在此后单独附加；其业务代码负责取得或生成补丁、决定替换时机和处理错误。增强库负责虚拟机层面的校验、迁移、代码失效与一致性。
+Java 初始化函数负责附加增强库自身的 JVMTI Agent 入口，初始化自有演进代理，并安装进程级路由与守卫。用户 Agent 可以在此后单独附加；其业务代码负责取得或生成补丁、决定替换时机和处理错误。增强库负责虚拟机层面的校验、迁移、代码失效与一致性。
 
 `System.loadLibrary()` 只能加载普通 Native 库，不能单独保证 JVMTI 插件和 Agent 已附加。当前 Android 路径应由初始化函数封装 `Debug.attachJvmtiAgent()`。仅把 SO 放入 APK 不会自动修改运行中的 ART；将来可由 App 启动组件自动调用同一初始化函数，但仍存在实际的加载与附加步骤，并需保证它先于用户 Agent 的首次重定义。
 
@@ -73,7 +73,7 @@ Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留
 
 ## 并发、事件和失败语义
 
-- 标准入口 Hook 需要与现有 Java 测试入口共用一把**进程级事务锁**。用户 Agent 可能在不同线程、不同 JVMTI 环境中调用，不能只依赖当前 `NativeBridge.apply()` 的锁。
+- 标准入口 Hook 需要与现有 Java 测试入口共用一把**进程级事务锁**。用户 Agent 可能在不同线程、不同 JVMTI 环境中调用，锁由 Native 层持有，debug `NativeBridge.apply()` 与标准入口共同使用。
 - 防止内部调用再次进入自身 Hook；源码事务调用 ART 原结构入口时，要使用明确的原函数入口和事务作用域。
 - 保留 ART 对调用者 JVMTI 能力、类是否可修改、非法参数及错误码的检查。增强不能让没有 `can_redefine_classes` 能力的 Agent 获得替换权限。
 - 核对 `ClassFileLoadHook` 等转换回调在各路由中的次数、顺序和所见 DEX。当前普通与结构路径的回调行为不同，不能只根据原始输入 DEX 分类后就假定最终结构不变。
@@ -82,7 +82,7 @@ Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留
 
 ## 实现状态
 
-标准入口已安装命名符号 Hook，使用调用者自己的 `jvmtiEnv*`，在进程锁下完成基础校验后进入源码结构事务。转换回调在 ART 事务内运行，最终 DEX 由 ART 和源码增强检查。`analyze()`、`apply()`、`enableEvolution()` 已移入内部包，仅供仓库诊断及少量对照测试；测试 Java、instrumentation、fixture 和独立 Native 探针仅在 debug 构建中。目标设备已验证独立 Agent 的方法体、新增字段、成员删除、复杂层级批次、无效批次原子性、能力拒绝、两种加载顺序、双环境并发修改不同类，以及回调新增字段和移除父类；其他回调组合与同类并发仍待覆盖。
+标准入口已安装命名符号 Hook，使用调用者自己的 `jvmtiEnv*`，在进程锁下完成基础校验后进入源码结构事务。转换回调在 ART 事务内运行，最终 DEX 由 ART 和源码增强检查。`analyze()`、`apply()`、`enableEvolution()` 位于 debug 测试应用，仅供仓库诊断及少量对照测试；测试 Java、instrumentation、fixture 和独立 Native 探针仅在 debug 构建中。目标设备已验证独立 Agent 的方法体、新增字段、成员删除、复杂层级批次、无效批次原子性、能力拒绝、两种加载顺序、双环境并发修改不同类，以及回调新增字段和移除父类；其他回调组合与同类并发仍待覆盖。
 
 ## 验收条件
 
@@ -94,7 +94,7 @@ Hook 只作为路由入口；原函数指针必须保存。进入 Hook 时保留
 
 ## 参考实现位置
 
-- 当前库初始化：`artdcevm/src/main/java/com/github/ytlog/artdcevm/platform/android13/Android13Backend.java`
+- 当前库初始化：`artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java`
 - 当前 Agent 与事务锁：`artdcevm/src/main/cpp/core/agent.cc`
 - 当前后端分流：`artdcevm/src/main/cpp/platform/android13/android13_backend.cc`
 - 当前增强库初始化与事务入口：[evolution_runtime.cc](../artdcevm/src/main/cpp/platform/android13/evolution_runtime.cc)、[evolution_transaction.cc](../artdcevm/src/main/cpp/platform/android13/evolution_transaction.cc)

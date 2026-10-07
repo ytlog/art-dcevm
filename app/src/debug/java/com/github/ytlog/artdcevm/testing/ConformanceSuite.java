@@ -4,10 +4,9 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Process;
 import android.util.Log;
-import com.github.ytlog.artdcevm.internal.PatchRequest;
-import com.github.ytlog.artdcevm.internal.PatchResult;
-import com.github.ytlog.artdcevm.internal.RuntimeBackend;
-import com.github.ytlog.artdcevm.engine.BackendRegistry;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchRequest;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchResult;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend;
 import com.github.ytlog.artdcevm.fixture.Child;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.Peer;
@@ -41,7 +40,7 @@ public final class ConformanceSuite {
             report.put("fingerprint", Build.FINGERPRINT).put("sdk", Build.VERSION.SDK_INT)
                     .put("uid", Process.myUid()).put("checks", checks).put("fullDcevmComplete", false);
             checkpoint();
-            RuntimeBackend backend = BackendRegistry.open(context);
+            TestRuntimeBackend backend = new TestRuntimeBackend(context);
             report.put("capabilities", backend.capabilities());
             check("debug_agent_attached", backend.capabilities().getBoolean("attached"));
             boolean sourcePackaged = new File(context.getApplicationInfo().nativeLibraryDir,
@@ -69,7 +68,7 @@ public final class ConformanceSuite {
         return report;
     }
 
-    private void runBodyAndAddition(RuntimeBackend backend) throws Exception {
+    private void runBodyAndAddition(TestRuntimeBackend backend) throws Exception {
         Evolving instance = new Evolving(41);
         Evolving alias = instance;
         Child child = new Child(10);
@@ -163,10 +162,10 @@ public final class ConformanceSuite {
         check("uninitialized_evolution_is_explicit", evolution.code == 98);
     }
 
-    private PatchResult apply(RuntimeBackend backend, PatchRequest.Operation operation, String asset) throws Exception {
+    private PatchResult apply(TestRuntimeBackend backend, PatchRequest.Operation operation, String asset) throws Exception {
         return backend.apply(new PatchRequest(operation, new Class<?>[]{Evolving.class}, new byte[][]{readAsset(asset + "/com/github/ytlog/artdcevm/fixture/Evolving.dex")}));
     }
-    private void checkPlan(RuntimeBackend backend, String variant, int expectedFeatures, boolean exact) throws Exception {
+    private void checkPlan(TestRuntimeBackend backend, String variant, int expectedFeatures, boolean exact) throws Exception {
         JSONObject analysis = backend.analyze(new PatchRequest(PatchRequest.Operation.EVOLVE_SCHEMA,
                 new Class<?>[]{Evolving.class}, new byte[][]{readAsset(variant + "/com/github/ytlog/artdcevm/fixture/Evolving.dex")}));
         if (analysis.getInt("code") != 0) throw new AssertionError("Schema analysis: " + analysis);
@@ -178,7 +177,7 @@ public final class ConformanceSuite {
         check("plan_" + variant, exact ? features == expectedFeatures : (features & expectedFeatures) == expectedFeatures,
                 "features=" + features);
     }
-    private void runHookRouting(RuntimeBackend backend) throws Exception {
+    private void runHookRouting(TestRuntimeBackend backend) throws Exception {
         requirePatch("install_pinned_native_hooks", backend.enableValidationHooks());
         long fields = backend.capabilities().getLong("hookFieldCalls");
         long methods = backend.capabilities().getLong("hookMethodCalls");

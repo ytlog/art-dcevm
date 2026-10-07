@@ -4,6 +4,10 @@
 
 `source_engine/`、AOSP 构建器与源码锁文件已删除。构建不下载或编译 AOSP，不把 AOSP 对象文件并入主库，不生成或装载 `libartdcevm_source13.so`，也不需要 `-PsourceEngine13`。固定私有声明来自已核对的 Android 13 源码，保存在自有 ABI 头中；这些声明不是待编译的 AOSP 实现。
 
+## Java 初始化边界
+
+SDK 主源码仅包含 `api.DcevmRuntime`、`internal.EvolutionCalibration` 与 `internal.CalibrationFixture`。后两者是平台无关的预定义校准数据，由 Native 初始化构造或查找；字段与方法约定通过 consumer ProGuard 规则保留。Android 版本与设备选择由 Native 工厂处理。请求/结果封装位于应用 `src/debug`，JNI 测试桥由库 `src/debug` 管理，测试 JNI 仅在测试构建导出，Release 保留四个初始化与错误诊断 JNI 入口。
+
 ## 运行时边界
 
 `evolution_runtime` 在完整演进初始化时组织命名设备函数、校准与 Hook。标准 `jvmtiEnv::RedefineClasses` 是用户 Agent 的入口。需要改变行为时，增强库安装命名 Inline Hook 并执行自有代理；普通事务或仍需设备行为的步骤调用设备原函数或 trampoline。设备 ART 继续承担原生分配、类链接、堆收集和暂停等服务，增强库拥有演进校验、层级协调、字段迁移、结构提交、旧引用守卫与活动帧协调。

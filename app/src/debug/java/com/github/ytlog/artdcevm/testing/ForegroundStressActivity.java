@@ -18,10 +18,9 @@ import android.os.Process;
 import android.util.Log;
 import android.view.Choreographer;
 import android.view.View;
-import com.github.ytlog.artdcevm.internal.PatchRequest;
-import com.github.ytlog.artdcevm.internal.PatchResult;
-import com.github.ytlog.artdcevm.internal.RuntimeBackend;
-import com.github.ytlog.artdcevm.engine.BackendRegistry;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchRequest;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchResult;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend;
 import dalvik.system.InMemoryDexClassLoader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -138,7 +137,7 @@ public final class ForegroundStressActivity extends Activity implements Choreogr
                     .put("drawRequired", requireDrawing).put("completed", false).put("passed", false).put("fullDcevmComplete", false).put("checks", checks);
             save(report);
             if (requireDrawing && !startupRace && !firstDraw.await(10, TimeUnit.SECONDS)) throw new AssertionError("No foreground drawing");
-            RuntimeBackend backend = BackendRegistry.open(getApplicationContext());
+            TestRuntimeBackend backend = new TestRuntimeBackend(getApplicationContext());
             if (source && !backend.enableEvolution().installed()) throw new AssertionError("Source unavailable");
             if (source && getIntent().getBooleanExtra("deoptTracing", true)
                     && !enableDeoptTracing()) throw new AssertionError("Deopt tracing unavailable");

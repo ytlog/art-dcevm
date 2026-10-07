@@ -3,10 +3,9 @@ package com.github.ytlog.artdcevm.testing;
 import android.content.Context;
 import android.os.Build;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
-import com.github.ytlog.artdcevm.engine.BackendRegistry;
 import com.github.ytlog.artdcevm.fixture.Evolving;
-import com.github.ytlog.artdcevm.internal.PatchRequest;
-import com.github.ytlog.artdcevm.internal.RuntimeBackend;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchRequest;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import org.json.JSONObject;
@@ -20,7 +19,7 @@ public final class PublicJvmtiSuite {
         JSONObject result = new JSONObject();
         try {
             JSONObject publicCapabilities = DcevmRuntime.attachPublicJvmti(context);
-            RuntimeBackend backend = BackendRegistry.open(context);
+            TestRuntimeBackend backend = new TestRuntimeBackend(context);
             JSONObject capabilities = backend.capabilities();
             result.put("sdk", Build.VERSION.SDK_INT).put("abi", Build.SUPPORTED_ABIS[0])
                     .put("fingerprint", Build.FINGERPRINT).put("capabilities", capabilities);

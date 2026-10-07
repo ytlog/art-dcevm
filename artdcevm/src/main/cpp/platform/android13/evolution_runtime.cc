@@ -74,7 +74,7 @@ bool CalibrateOwnedBootstrap(HookEngine& hooks,JNIEnv* env,jobject calibration,s
   runtime_access_abi::Services services{RuntimeClassLinker(),RuntimeJniIdManager(),RuntimeJit(),RuntimeJitCodeCache()};
   if(!CalibrateOwnedMembers(device_profile,hooks,env,ti,calibration,services,readers,error))return false;
   if(env->PushLocalFrame(16)<0){*error="Owned calibration local frame allocation failed";return false;}
-  auto type=env->FindClass("com/github/ytlog/artdcevm/platform/android13/CalibrationFixture");
+  auto type=env->FindClass("com/github/ytlog/artdcevm/internal/CalibrationFixture");
   auto constructor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
   auto fixture=constructor?env->NewObject(type,constructor):nullptr;
   bool passed=false;

@@ -5,10 +5,10 @@ import android.os.Bundle;
 import android.os.Debug;
 import android.os.Process;
 import android.util.Log;
-import com.github.ytlog.artdcevm.engine.BackendRegistry;
-import com.github.ytlog.artdcevm.internal.RuntimeBackend;
-import com.github.ytlog.artdcevm.internal.PatchRequest;
-import com.github.ytlog.artdcevm.internal.PatchResult;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend;
+import com.github.ytlog.artdcevm.api.DcevmRuntime;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchRequest;
+import com.github.ytlog.artdcevm.testing.TestRuntimeBackend.PatchResult;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.Child;
 import com.github.ytlog.artdcevm.fixture.DeletionControl;
@@ -109,7 +109,7 @@ import org.json.JSONObject;
 /** Separate process run for source ABI and member evolution conformance. */
 @android.annotation.TargetApi(33)
 public final class SourceEngineInstrumentation extends Instrumentation {
-    private RuntimeBackend backend;
+    private TestRuntimeBackend backend;
     private boolean standardClientAttached;
     private String hookOrder;
     private String suite;
@@ -166,7 +166,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
             report.put("uid", Process.myUid()).put("completed", false)
                     .put("fullDcevmComplete", false);
             save(report);
-            backend = BackendRegistry.open(getTargetContext());
+            backend = new TestRuntimeBackend(getTargetContext());
             Evolving fixture = new Evolving(37);
             report.put("executionPath", "independent Agent JVMTI RedefineClasses")
                     .put("hookOrder", hookOrder);
@@ -175,6 +175,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
             if (!beforeInit) throw new AssertionError("Uninitialized backend mutated class");
             if (hookOrder.equals("validation-first") && !backend.enableValidationHooks().installed())
                 throw new AssertionError("Validation initialization failed");
+            DcevmRuntime.initialize(getTargetContext());
             PatchResult initialized = backend.enableEvolution();
             boolean initializedOk = initialized.installed() && backend.capabilities().getBoolean("evolutionAvailable");
             report.put("probeResult", initialized.toString()).put("readOnlyProbePassed", initializedOk)
@@ -182,6 +183,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
             if (!initializedOk) throw new AssertionError("Source initialization: " + backend.capabilities());
             StandardJvmtiClient.attach(getTargetContext());
             standardClientAttached = true;
+            DcevmRuntime.initialize(getTargetContext());
             boolean repeat = backend.enableEvolution().installed() && backend.enableValidationHooks().installed();
             report.put("repeatedInitializationIdempotent", repeat); save(report);
             if (!repeat) throw new AssertionError("Repeated initialization");
@@ -671,7 +673,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
         boolean bodyPolicy = body.installed() && commitCalls() == before && new Evolving(1).compute() == 6;
         report.put("stockBodyWorksAfterEvolution", bodyPolicy); save(report);
         if (!duplicateRejected || !stockPolicy || !hierarchyRejected || !bodyPolicy) return false;
-        RuntimeBackend another = BackendRegistry.open(getTargetContext());
+        TestRuntimeBackend another = new TestRuntimeBackend(getTargetContext());
         if (!another.enableEvolution().installed() || !another.enableValidationHooks().installed())
             throw new AssertionError("Second backend could not reuse initialization");
         PatchRequest peer = new PatchRequest(PatchRequest.Operation.EVOLVE_SCHEMA, new Class<?>[]{Peer.class},

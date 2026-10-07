@@ -10,7 +10,7 @@
 严格匹配目标设备 ART/JVMTI、DEX 与平台 libc++ 的 Build ID，检查必需命名符号，
 完成自有固定声明与公开 JNI/JVMTI 校准后安装命名 Hook；失败时抛出异常。
 Hook 检查调用者能力和类参数，再把完整批次交给增强库的演进事务协调器；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
-对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](../build/evidence/build/20261006T154308Z-variant-boundary.json)
+对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；SDK Java 仅保留初始化入口与两个平台无关的预定义校准类；`TestRuntimeBackend` 及请求/结果封装位于应用的 debug 测试目录。JNI 测试桥位于库 `src/debug`；App 的测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](../build/evidence/build/20261006T154308Z-variant-boundary.json)
 独立用户 Agent 的设备回归入口为 `com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation`。
 迁移前标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 转换新增字段和移除父类的设备结果见 `build/evidence/standard-jvmti/20261006T153842Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
@@ -108,9 +108,8 @@ build/evidence/                      构建、设备与实际运行证据
 
 ```mermaid
 flowchart TD
-    A[PatchRequest / RuntimeBackend] --> B[BackendRegistry]
-    B --> C[platform.android13.Android13Backend]
-    C --> D[NativeBridge / core Agent]
+    A[api.DcevmRuntime 初始化] --> D[core Agent]
+    B[debug TestRuntimeBackend 测试探针] --> D
     D --> E[platform backend_factory]
     E --> F[Android13Backend]
     F --> G[JvmtiBodyRedefiner]
@@ -150,7 +149,7 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 ## 自研结构演进的准备阶段
 
-`RuntimeBackend.analyze()` 对新补丁解析标准单类 DEX，并通过 JVMTI/JNI 读取**当时的存活类**，因此第二次补丁不会仍以 APK 初始结构作为基线。结果包含整批所需能力，以及每个字段/方法的 `retain`、`retire`、`initialize` 动作。成员按名称、完整描述符与 static 属性匹配；DEX 索引和成员顺序不作为身份。
+`TestRuntimeBackend.analyze()` 对新补丁解析标准单类 DEX，并通过 JVMTI/JNI 读取**当时的存活类**，因此第二次补丁不会仍以 APK 初始结构作为基线。结果包含整批所需能力，以及每个字段/方法的 `retain`、`retire`、`initialize` 动作。成员按名称、完整描述符与 static 属性匹配；DEX 索引和成员顺序不作为身份。
 
 字段从 `int` 改为 `long` 或对象引用时，计划将旧字段退役并初始化新字段；不会直接复制不兼容的位模式。方法签名变化同样拆成旧方法退役与新方法安装，不会按同名方法猜测重载的对应关系。重复目标类、错误类名或无法解析的 DEX 会拒绝整批计划，且不发布部分计划。`Class` 对象身份区分同名但不同 ClassLoader 的类。
 
@@ -198,7 +197,7 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 这些结果来自固定手机上的实验用例，尚不代表所有调用种类或完整 DCEVM 语义已覆盖。其他未测的修饰符组合仍待实现或验证。接口移除虽在目标手机实验性启用，缓存引用、并发和三代变更的已测路径通过，但更大批次及其他调用形式仍未穷尽；旧父类移除也尚未穷尽所有编译路径。删除方法的动态类已验证在 GC 后卸载：ART 的 ClassLoader 删除回调先清除退役方法指针，再释放 LinearAlloc；两种 Hook 顺序下旧反射 Method 均被拒绝且弱引用清空。删除字段的动态卸载、八轮重复装载和后台 GC 并发的 32 轮专项已通过；混合删除及缓存反射对象和句柄的保活/释放也已验证。历史 APK 在两种 Hook 顺序下通过后台 GC 的 256 轮混合字段/方法退役与类加载器卸载，原生堆采样末值均低于首值；测试报告保留逐轮记录，因此 Java 堆采样增长不能直接归因为元数据泄漏。其他引用形式及更长时段运行仍需验证，元数据回收总括标志仍为 `false`。
 
-完整演进回归的主要重定义请求由独立测试 Agent 通过标准 JVMTI 入口提交；初始化前拒绝和旧路径对照仍走内部 `RuntimeBackend`。两条路径使用同一个进程事务锁，线程事务标记通过 RAII 恢复。内部 `EvolutionCalibration` 校准类用于初始化检查，不依赖业务样例类的值或结构。
+完整演进回归的主要重定义请求由独立测试 Agent 通过标准 JVMTI 入口提交；初始化前拒绝和旧路径对照仍走debug `TestRuntimeBackend`。两条路径使用同一个进程事务锁，线程事务标记通过 RAII 恢复。内部 `EvolutionCalibration` 校准类用于初始化检查，不依赖业务样例类的值或结构。
 
 static/实例切换会使已验证字节码的旧分派假设失效。方法映射以名称、描述符和 static 属性共同匹配；不兼容的旧方法保持退役。第一次这类提交之后，按符号名安装的 `NterpGetMethod` 和两种未检查的 `ClassLinker::ResolveMethod` 入口使用系统 ART 的完整调用类型/访问检查，阻止将新静态方法误当作虚表条目。自有提交代理继续清理 DexCache、解释器缓存并去优化旧代码。
 
