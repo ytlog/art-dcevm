@@ -26,6 +26,17 @@ bool ReadCache(void* cache,uint32_t index,void** output) {
   const auto count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+offsetof(Cache,num_methods)),__ATOMIC_RELAXED);
   return Lookup(reinterpret_cast<const std::atomic<Pair>*>(address),count,index,output);
 }
+bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
+  const auto address=Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file));
+  if(!address)return Fail(error,"Explicit DexCache has no DEX file");
+  const auto map=Read<validation_abi::DexMappingPrefix>(reinterpret_cast<const void*>(address),0);
+  return evolution::ReadMappedDexMethodReference(
+      {map.begin,map.size,map.data_begin,map.data_size,0},index,output,error);
+}
+struct TiText {
+  jvmtiEnv* ti;char* value=nullptr;
+  ~TiText(){if(value)ti->Deallocate(reinterpret_cast<unsigned char*>(value));}
+};
 struct Frame {
   JNIEnv* env;bool valid;
   explicit Frame(JNIEnv* e):env(e),valid(e->PushLocalFrame(8)==JNI_OK){}
@@ -35,6 +46,12 @@ struct Frame {
 bool ReadCachedMethod(void* cache,uint32_t index,void** output) {
   if(output)*output=nullptr;
   return ready.load(std::memory_order_acquire) && cache && output && ReadCache(cache,index,output);
+}
+bool ReadCachedMethodReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,
+                               std::string* error) {
+  if(!ready.load(std::memory_order_acquire) || !cache || !output || !error)
+    return Fail(error,"DexCache method reference reader unavailable");
+  return ReadReference(cache,index,output,error);
 }
 bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profile,JNIEnv* env,
                                   jobject fixture,std::string* error) {
@@ -54,6 +71,20 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
   if(ti->GetClassMethods(klass,&count,&ids)!=JVMTI_ERROR_NONE || count<=0)
     return Fail(error,"DexCache calibration methods unavailable");
   std::vector<jmethodID> methods(ids,ids+count);ti->Deallocate(reinterpret_cast<unsigned char*>(ids));
+  struct MethodMetadata {std::string name,signature;};
+  std::vector<MethodMetadata> metadata;
+  for(auto id:methods) {
+    TiText name{ti},signature{ti};
+    const auto status=ti->GetMethodName(id,&name.value,&signature.value,nullptr);
+    const bool valid=status==JVMTI_ERROR_NONE && name.value && signature.value;
+    if(valid)metadata.push_back({name.value,signature.value});
+    if(!valid)return Fail(error,"Owned method metadata unavailable");
+  }
+  if(metadata.size()!=methods.size())return Fail(error,"Owned method metadata incomplete");
+  TiText class_signature{ti};
+  const auto class_status=ti->GetClassSignature(klass,&class_signature.value,nullptr);
+  std::string owner=class_signature.value?class_signature.value:"";
+  if(class_status!=JVMTI_ERROR_NONE || owner.empty())return Fail(error,"Owned class signature unavailable");
   jfieldID* field_ids=nullptr;
   if(ti->GetClassFields(cache_class,&count,&field_ids)!=JVMTI_ERROR_NONE)return Fail(error,"DexCache field metadata unavailable");
   struct Field {jfieldID id;size_t offset;};std::vector<Field> fields;
@@ -81,10 +112,16 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
   roots.Set(1,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,dex_cache)));
   roots.Set(2,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,class_loader)));
   if(!roots.Get(1))return Fail(error,"Owned fixture has no DexCache");
-  for(auto id:methods) {
+  for(size_t position=0;position<methods.size();++position) {
+    auto id=methods[position];
     void* method=DecodeMethodId(id);if(!method)return Fail(error,"Owned method decoder unavailable");
     uint32_t index=Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index));
     if(index==UINT32_MAX)return Fail(error,"Owned method has no DEX index");
+    evolution::MappedDexMethodReference reference;
+    if(!ReadReference(roots.Get(1),index,&reference,error))return false;
+    if(reference.declaring_class!=owner || reference.name!=metadata[position].name ||
+       reference.descriptor!=metadata[position].signature)
+      return Fail(error,"Explicit DexCache method reference differs from public metadata");
     // FindResolvedMethod writes the pair to DexCache. The similarly named
     // ResolveMethodWithoutInvokeType returns a method without filling a miss.
     if(resolve(RuntimeClassLinker(),roots.Get(0),roots.Get(1),roots.Get(2),index)!=method)

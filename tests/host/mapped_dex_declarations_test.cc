@@ -90,6 +90,56 @@ int main(int argc, char** argv) {
   for (size_t header : {size_t{56}, size_t{64}, size_t{72}, size_t{80}, size_t{88}, size_t{96}})
     if (U32(compact, header)) Put(compact, header + 4, U32(compact, header + 4) + 24);
   Same(expected, Parse(compact, original));
+  // Method references include external owners and do not require class_defs.
+  auto no_classes = compact;
+  Put(no_classes, 96, 0); Put(no_classes, 100, 0);
+  bool external = false;
+  for(uint32_t index=0;index<U32(original,88);++index) {
+    MappedDexMethodReference standard,shared,without_class;
+    assert(ReadMappedDexMethodReference({original.data(),original.size(),original.data(),original.size(),UINT32_MAX},
+                                       index,&standard,&error));
+    assert(ReadMappedDexMethodReference({compact.data(),compact.size(),original.data(),original.size(),UINT32_MAX},
+                                       index,&shared,&error));
+    assert(ReadMappedDexMethodReference({no_classes.data(),no_classes.size(),original.data(),original.size(),UINT32_MAX},
+                                       index,&without_class,&error));
+    assert(standard.class_index==shared.class_index && standard.proto_index==shared.proto_index &&
+           standard.declaring_class==shared.declaring_class && standard.name==shared.name &&
+           standard.descriptor==shared.descriptor && standard.descriptor==without_class.descriptor);
+    external |= standard.declaring_class!=expected.descriptor;
+    for(const auto& method:expected.methods)if(method.dex_index==index)
+      assert(standard.declaring_class==expected.descriptor && standard.name==method.name &&
+             standard.descriptor==method.descriptor);
+  }
+  assert(external);
+  auto reject_reference = [&](const MappedDexMetadata& view,uint32_t index) {
+    MappedDexMethodReference sentinel;sentinel.name="sentinel";
+    assert(!ReadMappedDexMethodReference(view,index,&sentinel,&error));
+    assert(!error.empty() && sentinel.name=="sentinel");
+  };
+  reject_reference({compact.data(),compact.size(),original.data(),original.size(),0},U32(compact,88));
+  reject_reference({compact.data(),compact.size(),original.data(),1,0},0);
+  auto bad_reference=compact;
+  const auto method_offset=U32(compact,92);
+  bad_reference[method_offset]=0xff;bad_reference[method_offset+1]=0xff;
+  reject_reference({bad_reference.data(),bad_reference.size(),original.data(),original.size(),0},0);
+  bad_reference=compact;
+  bad_reference[method_offset+2]=0xff;bad_reference[method_offset+3]=0xff;
+  reject_reference({bad_reference.data(),bad_reference.size(),original.data(),original.size(),0},0);
+  // Array owners are legal references (e.g. clone); primitive owners are not.
+  auto owner_mapping=compact,owner_data=original;
+  const uint16_t owner_index=uint16_t(compact[method_offset]) | uint16_t{compact[method_offset+1]}<<8;
+  const uint32_t owner_string=U32(compact,U32(compact,68)+size_t{owner_index}*4);
+  const std::string array_owner="[Ljava/lang/Object;";
+  Put(owner_mapping,U32(compact,60)+size_t{owner_string}*4,static_cast<uint32_t>(owner_data.size()));
+  owner_data.push_back(static_cast<unsigned char>(array_owner.size()));
+  owner_data.insert(owner_data.end(),array_owner.begin(),array_owner.end());owner_data.push_back(0);
+  MappedDexMethodReference array_reference;
+  assert(ReadMappedDexMethodReference({owner_mapping.data(),owner_mapping.size(),owner_data.data(),owner_data.size(),0},
+                                     0,&array_reference,&error));
+  assert(array_reference.declaring_class==array_owner);
+  Put(owner_mapping,U32(compact,60)+size_t{owner_string}*4,static_cast<uint32_t>(owner_data.size()));
+  owner_data.push_back(1);owner_data.push_back('I');owner_data.push_back(0);
+  reject_reference({owner_mapping.data(),owner_mapping.size(),owner_data.data(),owner_data.size(),0},0);
   // A second compact mapping can borrow exactly the same shared data region.
   auto compact2 = compact;
   Same(expected, Parse(compact2, original));
@@ -124,9 +174,13 @@ int main(int argc, char** argv) {
       auto& target = random() & 1 ? main : data;
       target[random() % target.size()] ^= 1 + random() % 255;
     }
+    MappedDexMethodReference reference;reference.name="sentinel";
+    if(!ReadMappedDexMethodReference({main.data(),main.size(),data.data(),data.size(),UINT32_MAX},
+                                    random()%U32(compact,88),&reference,&error))
+      assert(reference.name=="sentinel" && !error.empty());
     ClassSchema value; value.descriptor = "Lsentinel;";
     if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), 0}, &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
   }
-  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, selected multiclass, bounds and 10000 mutations passed\n";
+  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, selected multiclass, external/array method references without class_defs, bounds and 10000 mutations passed\n";
 }

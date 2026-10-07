@@ -35,6 +35,19 @@ struct MappedDexMetadata {
   size_t data_size;
   uint32_t class_def_index;
 };
+// A method ID may reference another class, including an array, with no local
+// class definition. Explicit cache resolution must use this owner, not referrer.
+struct MappedDexMethodReference {
+  uint16_t class_index = 0;
+  uint16_t proto_index = 0;
+  std::string declaring_class;
+  std::string name;
+  std::string descriptor;
+};
+// Reads ID tables and shared data only; class_def_index is unused. Output is
+// unchanged on format errors; bad_alloc propagates to the ART/JVMTI boundary.
+bool ReadMappedDexMethodReference(const MappedDexMetadata&, uint32_t index,
+                                  MappedDexMethodReference*, std::string*);
 bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::string*);
 
 // Reads metadata only. ART must still verify method bodies, annotations and encoded values.

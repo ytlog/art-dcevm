@@ -36,34 +36,7 @@ class Reader {
       : begin_(view.begin), size_(view.size), data_(view.data_begin), data_length_(view.data_size),
         declaration_flags_(true), mapped_(true), class_def_index_(view.class_def_index) {}
   ClassSchema Read() {
-    if (!begin_ || !data_) Fail("Missing DEX mapping");
-    Range(0, 0x70);
-    const bool compact = mapped_ && std::memcmp(begin_, "cdex001\0", 8) == 0;
-    if (!compact && (std::memcmp(begin_, "dex\n", 4) != 0 || begin_[7] != 0))
-      Fail("Not a supported DEX file");
-    const size_t header_size = compact ? 0x88 : 0x70;
-    Range(0, header_size);
-    if (!compact) {
-      std::string version(reinterpret_cast<const char*>(begin_ + 4), 3);
-      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040")
-        Fail("Unsupported DEX version: " + version);
-    }
-    if (U32(36) != header_size || U32(40) != 0x12345678 || (!mapped_ && U32(32) != size_))
-      Fail("Invalid DEX size, header size or endianness");
-    data_size_ = U32(104); data_off_ = compact ? 0 : U32(108);
-    if (!mapped_) {
-      uint32_t a = 1, b = 0;
-      for (size_t i = 12; i < size_; ++i) { a = (a + begin_[i]) % 65521; b = (b + a) % 65521; }
-      if (U32(8) != ((b << 16) | a)) Fail("DEX checksum mismatch");
-      Range(data_off_, data_size_);
-      if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
-          static_cast<size_t>(data_off_) + data_size_ != size_) Fail("Invalid DEX data section");
-    } else if (data_off_ > data_length_) {
-      Fail("Invalid mapped DEX data range");
-    }
-    table_start_ = header_size;
-    strings_ = Table(56, 4); types_ = Table(64, 4); protos_ = Table(72, 12);
-    fields_ = Table(80, 8); methods_ = Table(88, 8);
+    Initialize();
     auto classes = Table(96, 32);
     if (!mapped_ && classes.count != 1) Fail("Redefinition requires exactly one class definition");
     size_t def = Item(classes, class_def_index_);
@@ -94,7 +67,51 @@ class Reader {
     Unique(result.fields); Unique(result.methods);
     return result;
   }
+  MappedDexMethodReference ReadMethodReference(uint32_t index) {
+    Initialize();
+    const size_t item = Item(methods_, index);
+    MappedDexMethodReference result;
+    result.class_index = U16(item);
+    result.proto_index = U16(item + 2);
+    result.declaring_class = Type(result.class_index);
+    if (result.declaring_class.front() != 'L' && result.declaring_class.front() != '[')
+      Fail("Invalid method declaring type");
+    result.name = String(U32(item + 4));
+    if (result.name.empty()) Fail("Empty method reference name");
+    result.descriptor = Prototype(result.proto_index);
+    return result;
+  }
  private:
+  void Initialize() {
+    if (!begin_ || !data_) Fail("Missing DEX mapping");
+    Range(0, 0x70);
+    const bool compact = mapped_ && std::memcmp(begin_, "cdex001\0", 8) == 0;
+    if (!compact && (std::memcmp(begin_, "dex\n", 4) != 0 || begin_[7] != 0))
+      Fail("Not a supported DEX file");
+    const size_t header_size = compact ? 0x88 : 0x70;
+    Range(0, header_size);
+    if (!compact) {
+      std::string version(reinterpret_cast<const char*>(begin_ + 4), 3);
+      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040")
+        Fail("Unsupported DEX version: " + version);
+    }
+    if (U32(36) != header_size || U32(40) != 0x12345678 || (!mapped_ && U32(32) != size_))
+      Fail("Invalid DEX size, header size or endianness");
+    data_size_ = U32(104); data_off_ = compact ? 0 : U32(108);
+    if (!mapped_) {
+      uint32_t a = 1, b = 0;
+      for (size_t i = 12; i < size_; ++i) { a = (a + begin_[i]) % 65521; b = (b + a) % 65521; }
+      if (U32(8) != ((b << 16) | a)) Fail("DEX checksum mismatch");
+      Range(data_off_, data_size_);
+      if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
+          static_cast<size_t>(data_off_) + data_size_ != size_) Fail("Invalid DEX data section");
+    } else if (data_off_ > data_length_) {
+      Fail("Invalid mapped DEX data range");
+    }
+    table_start_ = header_size;
+    strings_ = Table(56, 4); types_ = Table(64, 4); protos_ = Table(72, 12);
+    fields_ = Table(80, 8); methods_ = Table(88, 8);
+  }
   struct IdTable { uint32_t offset, count, width; };
   const unsigned char* begin_;
   const size_t size_;
@@ -275,6 +292,21 @@ bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, s
 
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
   return ReadDex(dex, output, error, true);
+}
+
+bool ReadMappedDexMethodReference(const MappedDexMetadata& view, uint32_t index,
+                                  MappedDexMethodReference* output, std::string* error) {
+  try {
+    auto reference = Reader(view).ReadMethodReference(index);
+    *output = std::move(reference);
+    error->clear();
+    return true;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& failure) {
+    *error = failure.what();
+    return false;
+  }
 }
 
 bool ReadMappedDexDeclarations(const MappedDexMetadata& view, ClassSchema* output, std::string* error) {

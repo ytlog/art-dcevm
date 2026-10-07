@@ -8,7 +8,7 @@
 #include <new>
 
 namespace {
-// Only allocations inside ReadDexSchema are armed. Fail exactly once, then
+// Only allocations inside the DEX readers are armed. Fail exactly once, then
 // disable injection so exception propagation and test reporting can allocate.
 bool allocation_armed = false;
 size_t allocations = 0;
@@ -93,5 +93,37 @@ int main(int argc, char** argv) {
     assert(ReadDexSchema(dex,&output,&error));
     assert(SameSchema(output,expected) && error.empty());
   }
+  using artdcevm::evolution::MappedDexMetadata;
+  using artdcevm::evolution::MappedDexMethodReference;
+  using artdcevm::evolution::ReadMappedDexMethodReference;
+  const MappedDexMetadata view{dex.data(),dex.size(),dex.data(),dex.size(),UINT32_MAX};
+  const MappedDexMethodReference reference_sentinel{42,77,"Lsentinel;","sentinel","()V"};
+  auto same_reference=[](const auto& a,const auto& b) {
+    return a.class_index==b.class_index && a.proto_index==b.proto_index &&
+           a.declaring_class==b.declaring_class && a.name==b.name && a.descriptor==b.descriptor;
+  };
+  size_t reference_failures=0;
+  for(const auto& method:expected.methods) {
+    MappedDexMethodReference reference;
+    Arm(std::numeric_limits<size_t>::max());
+    const bool read=ReadMappedDexMethodReference(view,method.dex_index,&reference,&error);
+    allocation_armed=false;
+    const size_t reference_count=allocations;
+    assert(read && reference.name==method.name && reference.descriptor==method.descriptor);
+    for(size_t index=0;index<reference_count;++index) {
+      auto output=reference_sentinel;error="unchanged error sentinel";
+      bool propagated=false;Arm(index);
+      try {ReadMappedDexMethodReference(view,method.dex_index,&output,&error);}
+      catch(const std::bad_alloc&){propagated=true;}
+      allocation_armed=false;
+      assert(failure_triggered && propagated && same_reference(output,reference_sentinel));
+      assert(error=="unchanged error sentinel");
+      assert(ReadMappedDexMethodReference(view,method.dex_index,&output,&error));
+      assert(same_reference(output,reference) && error.empty());
+      ++reference_failures;
+    }
+  }
+  assert(reference_failures>0);
+  std::printf("DEX method references OOM: %zu allocation failures propagated; output/error unchanged; retries passed\n",reference_failures);
   std::printf("DEX parser OOM: %zu allocation failures propagated; output/error unchanged; retries passed\n",count);
 }
