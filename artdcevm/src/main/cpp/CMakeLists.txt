@@ -25,6 +25,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/device_diagnostics.cc
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
+    platform/android13/reflection_bindings.cc
     platform/android13/failure_calibration.cc
     platform/android13/transaction_metadata.cc
     platform/android13/device_dex_input.cc
@@ -77,4 +78,7 @@ target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)
 target_link_libraries(artdcevm PRIVATE log dl)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_TESTING=1)
+  if(ARTDCEVM_FORCE_REFLECTION_BINDINGS_TEST)
+    target_compile_definitions(artdcevm PRIVATE ARTDCEVM_FORCE_REFLECTION_BINDINGS_TEST=1)
+  endif()
 endif()

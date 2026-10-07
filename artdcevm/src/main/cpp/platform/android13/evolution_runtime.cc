@@ -2,6 +2,7 @@
 #include <limits>
 #include <cstring>
 #include "platform/android13/owned_calibration.h"
+#include "platform/android13/reflection_bindings.h"
 #include "platform/android13/transaction_metadata.h"
 #include "platform/android13/member_decode_abi.h"
 #include "platform/android13/field_copy_metadata.h"
@@ -99,10 +100,14 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
   if (load_attempted) return "Evolution initialization previously failed; restart the process";
   load_attempted = true;
   if (!jni || !calibration) return "JNI and ABI calibration are required";
-  static ShadowHookEngine symbols;
+  static ShadowHookEngine elf_symbols;
+#ifdef ARTDCEVM_FORCE_REFLECTION_BINDINGS_TEST
+  static ReflectionBindings symbols(elf_symbols,true);
+#else
+  static ReflectionBindings symbols(elf_symbols);
+#endif
   std::string error;
   if (!symbols.Initialize(&error) || !MatchDeviceProfile(&device_profile, &error) ||
-      !symbols::CheckEvolutionSymbols(symbols, &error) ||
       !ConfigureTransactionMetadataReader(symbols, device_profile, &error)) return error;
   if (!ConfigureRuntimeAccess(symbols, device_profile, &error) ||
       !ConfigureJniMethodTargets(symbols, device_profile, &error) ||
@@ -123,6 +128,8 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
       !ConfigureThreadSuspendScopes(symbols, device_profile, &error) ||
       !ConfigureFrameRecovery(symbols, device_profile, &error) ||
       !CalibrateOwnedBootstrap(symbols, jni, calibration, &error)) return error;
+  if(!symbols.Configure(jni,device_profile,&error) ||
+      !symbols::CheckEvolutionSymbols(symbols,&error)) return error;
   // Every proxy is owned by this DSO. Named device functions are bound above;
   // public JNI/JVMTI calibration completes before any evolution hook attempt.
   ValidationHooks dispatcher;
