@@ -35,6 +35,9 @@ INTERFACES = {
     'libartbase/base/arena_allocator.h': ('Contains', 'GetArenaPool'),
     'libartbase/base/arena_allocator.cc': ('Contains',),
     'runtime/base/mutex.h': ('Mutex',),
+    'runtime/base/atomic_pair.h': ('AtomicPairLoadAcquire',),
+    'runtime/mirror/dex_cache.h': ('GetResolvedMethod',),
+    'runtime/mirror/dex_cache-inl.h': ('GetResolvedMethod',),
     'runtime/mirror/class-inl.h': ('ResolvedMethodAccessTest', 'CanAccessMember'),
     'runtime/common_throws.h': ('ThrowIllegalAccessErrorClassForMethodDispatch',
                                 'ThrowIllegalAccessErrorMethod', 'ThrowIncompatibleClassChangeError'),
@@ -95,7 +98,8 @@ def main():
                  oat + 'oat_quick_method_header.h', oat + 'stack_map.h', 'runtime/Android.bp',
                  *(name for name in INTERFACES
                    if name != ('runtime/linear_alloc.cc' if major >= 14 else 'runtime/linear_alloc-inl.h')
-                   and (major < 17 or name not in compact_sources))]
+                   and (major < 17 or name not in compact_sources)
+                   and (major >= 13 or name != 'runtime/base/atomic_pair.h'))]
         content = {}
         for name in files:
             path = args.source_dir / tag / name
@@ -175,6 +179,17 @@ def main():
             'compactDexDefaultMethodsFeatureDeclaration': re.findall(
                 r'kDefaultMethods\s*=\s*(0x[0-9a-fA-F]+|\d+)',
                 content.get('libdexfile/dex/compact_dex_file.h', '')),
+            'dexCachePairSynchronization': ('sequence-lock'
+                if 'kSeqLock' in content.get('runtime/base/atomic_pair.h', '')
+                else 'whole-pair-atomic'),
+            'dexCachePairHasKeyBeforeValue': ('IntType key;' in
+                content.get('runtime/base/atomic_pair.h', '')),
+            'dexCacheMethodStorageFamily': ('dual-full-or-pair'
+                if 'resolved_methods_array_' in content['runtime/mirror/dex_cache.h'] else 'pair'),
+            'dexCacheNativeMethodLoadRelaxed': ('entries_[index].load(std::memory_order_relaxed)' in
+                content['runtime/mirror/dex_cache.h']),
+            'dexCacheMethodSlotCount': re.findall(
+                r'kDexCacheMethodCacheSize\s*=\s*(\d+)', content['runtime/mirror/dex_cache.h']),
             'dexFileMappingSizeSource': ('header-file-size'
                 if 'size_t unused_size_' in content['libdexfile/dex/dex_file.h']
                 else 'stored-size'),
