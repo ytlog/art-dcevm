@@ -3,6 +3,6 @@
 evidence/
 **/.cxx/
 local.properties
-runtime-libs/
+local/
 *.hprof
 __pycache__/

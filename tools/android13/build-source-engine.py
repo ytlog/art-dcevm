@@ -9,6 +9,12 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[2]
+ART_LIBS = ROOT / 'local/android13/art-libs'
+required_libs = ('libopenjdkjvmti.so', 'libart.so', 'libartbase.so',
+                 'libdexfile.so', 'libbase.so', 'libc++.so')
+missing_libs = [name for name in required_libs if not (ART_LIBS / name).is_file()]
+if missing_libs:
+    raise SystemExit(f'Missing Android 13 device libraries in {ART_LIBS}: {", ".join(missing_libs)}')
 OUT = ROOT / 'build/art13-source'
 OUT.mkdir(parents=True, exist_ok=True)
 CACHE = OUT / 'archives'
@@ -94,7 +100,7 @@ exports.write_text('{ global: ArtDcevmSource*; ArtDcevmGuard*; '
 library = OUT / 'libartdcevm_source13.so'
 command = [str(compiler), '-shared', '-nostdlib++', '-Wl,-z,defs', '-Wl,-Bsymbolic',
            '-Wl,--version-script=' + str(exports), '-Wl,-soname,' + library.name,
-           *objects, '-L' + str(ROOT / 'runtime-libs'), '-lopenjdkjvmti', '-lart',
+           *objects, '-L' + str(ART_LIBS), '-lopenjdkjvmti', '-lart',
            '-lartbase', '-ldexfile', '-lbase', '-lc++', '-llog', '-o', str(library)]
 commands.append(command)
 result = subprocess.run(command, capture_output=True, text=True)
