@@ -85,6 +85,7 @@ flags = ['-std=c++17', '-fPIC', '-O2', '-fno-rtti', '-fno-exceptions',
 flags += ['-D' + define for define in defines] + ['-I' + str(OUT / inc) for inc in includes]
 engine = ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine'
 flags += ['-I' + str(engine)]
+flags += ['-I' + str(ROOT / 'artdcevm/src/main/cpp')]
 generated = OUT / 'modified'
 generated.mkdir(exist_ok=True)
 shutil.copyfile(OUT / 'art/openjdkjvmti/ti_redefine.cc', generated / 'ti_redefine.cc')

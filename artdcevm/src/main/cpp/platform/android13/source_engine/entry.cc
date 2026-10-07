@@ -1,6 +1,7 @@
 // Compiled separately against the pinned AOSP platform headers and libc++.
 // Only JNI and plain C values cross the NDK/platform C++ ABI boundary.
 #include "ti_redefine.h"
+#include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include "hierarchy.h"
 #include "retired_fields.h"
 #include "retired_methods.h"
@@ -32,17 +33,17 @@
 // from a binary. The first symbol is linked from the phone's JVMTI implementation;
 // the second is our source-compiled structural commit in this shared library.
 extern "C" jvmtiError OriginalStructuralRedefine(jvmtiEnv*, jint, const jvmtiClassDefinition*)
-    __asm__("_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition");
+    __asm__(ARTDCEVM_A13_ORIGINAL_STRUCTURAL_REDEFINE);
 extern "C" void SourceStructuralCommit(void*, const void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE");
+    __asm__(ARTDCEVM_A13_SOURCE_STRUCTURAL_COMMIT);
 extern "C" bool SourceCheckMethods(void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition12CheckMethodsEv");
+    __asm__(ARTDCEVM_A13_SOURCE_CHECK_METHODS);
 extern "C" bool SourceCheckFields(void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition11CheckFieldsEv");
+    __asm__(ARTDCEVM_A13_SOURCE_CHECK_FIELDS);
 extern "C" bool SourceCheckClass(void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition10CheckClassEv");
+    __asm__(ARTDCEVM_A13_SOURCE_CHECK_CLASS);
 extern "C" bool SourceCollectNewInstances(void*, void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition28CollectAndCreateNewInstancesEPNS_20RedefinitionDataIterE");
+    __asm__(ARTDCEVM_A13_SOURCE_COLLECT_NEW_INSTANCES);
 namespace {
 void* original_instance_allocation = nullptr;
 bool (*source_transaction_active)() = nullptr;

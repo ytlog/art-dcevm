@@ -1,4 +1,5 @@
 #include "hierarchy.h"
+#include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include "class_linker-inl.h"
 #include "dex/dex_file-inl.h"
 #include "mirror/class-inl.h"
@@ -218,9 +219,9 @@ void HierarchyAllocationScope::RefreshVerificationCache(art::Handle<art::mirror:
 }
 }
 extern "C" bool SourceSubtreeAllocate(void*, void*, void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE");
+    __asm__(ARTDCEVM_A13_SOURCE_ALLOCATE_SUBTREE);
 extern "C" jvmtiError SourceHierarchyRun(void*)
-    __asm__("_ZN12openjdkjvmti15SourceRedefiner3RunEv");
+    __asm__(ARTDCEVM_A13_SOURCE_REDEFINE_RUN);
 extern "C" void** ArtDcevmSourceConfigureHierarchyBatch(int index) {
   return index == 0 ? &original_batch_allocate : &original_run;
 }

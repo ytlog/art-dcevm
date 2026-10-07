@@ -1,0 +1,30 @@
+# 单一增强库的链接边界
+
+目标产物是每个 ABI 一个 `libartdcevm.so`。Android 版本与厂商差异由
+`platform/symbols/` 的精确 Build ID 配置选择，标准 JVMTI
+`RedefineClasses` 继续作为外部调用入口。运行时不打包任何版本专用的
+`libartdcevm_source*.so`。
+
+目前 Android 13 的源码引擎仍是独立 SO。它从固定的 AOSP 头文件和
+`ti_redefine.cc` 编译，并直接引用 ART、OpenJDK JVMTI 和平台 libc++ 的
+私有 C++ 符号。把这些对象文件直接链接进通用主库，会在主库加载阶段触发
+私有符号解析；不匹配的系统可能在 Build ID 检查之前就加载失败。因此仅
+移动源码或删除 `sourceEngine13` Gradle 分支不能实现单 SO。
+
+合并时需要按以下边界改造：
+
+1. 编译源码引擎对象，列出全部未定义 ELF 符号和重定位类型，区分
+   平台私有函数、数据、TLS、libc++ 和 NDK 公开依赖。
+2. 对 ART 私有引用建立带函数类型的命名符号导入层；在精确 Build ID
+   匹配后解析，并在启用增强之前完整校验。不能让主库保留对设备私有
+   符号的强动态导入。需要 Hook 的入口检查 PLT 调用覆盖范围，覆盖不足
+   时使用 Inline Hook。
+3. 消除源码引擎与主库之间的 C++ 运行库及同名符号冲突，然后把源码
+   对象并入主库；内部调用改为直接调用，无需 `dlopen` 第二个 SO。
+4. 构建检查主库仅有允许的 `DT_NEEDED`，没有未处理的 ART 私有强符号；
+   验证 Android 11–17 的主库加载，以及 Android 13 精确配置上的完整
+   RedefineClasses 回归。缺少对应配置的设备只能使用公开 JVMTI 能力。
+
+源码引擎里显式使用的 `__asm__` 名称已放到 Android 13 小米的符号配置；
+自动生成的其他 C++ 引用仍须通过对象文件审计。当前工作区缺少锁定的
+AOSP 13 归档，无法完成上述对象审计或证明单 SO 运行正确。
