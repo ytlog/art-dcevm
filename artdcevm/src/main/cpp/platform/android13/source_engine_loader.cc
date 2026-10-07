@@ -72,9 +72,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   auto methods = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckMethods"));
   auto fields = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckFields"));
   auto classes = reinterpret_cast<ValidationHooks::Check>(dlsym(library, "ArtDcevmSourceCheckClass"));
-  auto allocator = dlsym(library, "ArtDcevmSourceHierarchyAllocator");
-  using ConfigureAllocator = void** (*)(bool (*)());
-  auto configure_allocator = reinterpret_cast<ConfigureAllocator>(dlsym(library, "ArtDcevmSourceConfigureHierarchyAllocator"));
   using ConfigureVerification = void** (*)(int);
   auto configure_verification = reinterpret_cast<ConfigureVerification>(dlsym(library, "ArtDcevmSourceConfigureHierarchyVerification"));
   void* verify = dlsym(library, "ArtDcevmSourceHierarchyVerify");
@@ -83,7 +80,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
       !invalidate_jit || !methods || !fields || !classes
-      || !allocator || !configure_allocator
       || !configure_verification || !verify || !resolve || !find || !lookup) {
     dlclose(library); return "Source engine exports are incomplete";
   }
@@ -107,12 +103,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
   if (!InstallRetiredFieldHooks(symbols, library, &error)) return error;
   if (!InstallInstanceAllocationHook(symbols, library, &error)) return error;
-  void* allocator_target = symbols.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
-  if (!allocator_target) return "Missing named structural class allocator";
-  // ShadowHook publishes the original trampoline into the proxy's own slot as
-  // part of installation; no post-install window leaves its callback null.
-  void** original_allocator = configure_allocator(ValidationHooks::InSourceTransaction);
-  if (!original_allocator || !symbols.Install(allocator_target, allocator, original_allocator, &error)) return error;
+  if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   const char* verification_symbols[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass, cas::kLookupClass};
   void* verification_proxies[]{verify, resolve, find, lookup};
   for (int i = 0; i < 4; ++i) {
@@ -120,7 +111,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     if (!target) return std::string("Missing hierarchy verification symbol: ") + verification_symbols[i];
     if (!symbols.Install(target, verification_proxies[i], configure_verification(i), &error)) return error;
   }
-  if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;

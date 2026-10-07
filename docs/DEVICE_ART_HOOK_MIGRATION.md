@@ -30,6 +30,8 @@
 
 继承批次的 `Redefiner::Run` 与 `FinishNewClassAllocations` 现由增强库安装命名 Inline Hook 并实现分派代理。非演进事务调用设备原函数；演进事务按需调用旧层级实现，旧实现内部仍可通过已传入的原函数 trampoline 委托设备。层级选择与缓存修复仍在源码模块，尚未达到移除条件。
 
+`ClassRedefinition::AllocateNewClassObject` 也由同一增强库代理分派：普通事务直接调用设备原函数，有层级变化的源码演进事务才交给源码侧选择新父类。增强库只转发固定 arm64 ABI 的不透明参数，源码侧在编译时检查相关 `Handle` 与 `ObjPtr` 大小；层级实现仍待迁出。
+
 `CollectAndCreateNewInstances` 也已改由增强库安装命名 Inline Hook 并分派：非演进事务调用设备原函数，演进事务调用现有实例收集实现。源码实现仍通过已传入的 trampoline 委托设备完成原有分配步骤。
 
 `Runtime::IsAsyncDeoptimizeable` 的 Inline Hook 现由增强库实现完整代理：先调用设备原函数；原函数拒绝时，才调用现有的可调试 AOT 栈帧安全判断。源码侧不再持有或调用原函数 trampoline；判断内部仍依赖 AOSP 类型化栈访问，须继续迁移。

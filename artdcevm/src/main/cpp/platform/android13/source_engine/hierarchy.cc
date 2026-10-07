@@ -248,9 +248,10 @@ extern "C" void** ArtDcevmSourceConfigureHierarchyAllocator(bool (*active)()) {
 extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void* redef,
     art::Handle<art::mirror::Class> old_class, art::Handle<art::mirror::Class> super_class,
     art::Handle<art::mirror::DexCache> cache, uint16_t index) {
+  static_assert(sizeof(art::ObjPtr<art::mirror::Class>) == sizeof(void*));
+  static_assert(sizeof(art::Handle<art::mirror::Class>) == sizeof(void*));
+  static_assert(sizeof(art::Handle<art::mirror::DexCache>) == sizeof(void*));
   auto original_allocate = reinterpret_cast<AllocateClassFn>(original_allocate_address);
-  if (!source_transaction() || !artdcevm::android13::source::HasHierarchyChange())
-    return original_allocate(redef, old_class, super_class, cache, index);
   if (allocation_scope) return allocation_scope->Allocate(redef, old_class, cache, index);
   const auto* dex = cache->GetDexFile();
   const auto& def = dex->GetClassDef(index);
