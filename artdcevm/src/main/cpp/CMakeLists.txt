@@ -7,7 +7,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
 if(ANDROID_ABI STREQUAL "arm64-v8a")
   find_package(shadowhook REQUIRED CONFIG)
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
-  target_sources(artdcevm PRIVATE support/elf_modules.cc hooks/shadow_hook_engine.cc
+  target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc
     platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc

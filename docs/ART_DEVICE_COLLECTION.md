@@ -55,4 +55,6 @@ python3 tools/audit-art-device-matrix.py build/evidence/art-devices/*/manifest.j
 
 包含可选能力，总体缺失不直接等于运行失败；`missingRequiredLibraries` 检查生产门禁指定的库名，但同名库的不同 APEX/链接器命名空间仍需实际加载证据。后续逐个核对实际解析库与固定 AOSP 声明，不通过反汇编推导函数地址或字段偏移。在线 AOSP 固定源码审计继续使用 `tools/audit-art-source.py`。任何新增 Profile 都需真实运行行为回归后才能开放。
 
+注意审计中的存在统计使用精确名字。Clang 的局部函数可能保存为 `<原始 mangled name>.__uniq.<数字>`；生产 ShadowHook 解析器现在先尝试原名，再读取已加载 ARM64 ELF 的局部函数名称表，唯一候选经完整名字查找，歧义则拒绝。没有使用符号值推算地址。可通过 `tools/test-elf-symbol-names-host.py <完整 manifests> --shadow-fixture <Pixel 7 或三星 Android 13 libart>` 核验实际参考文件和宿主解析路径，报告留在 `build/evidence/host/elf-symbol-names/`。后缀对应不替代声明、语义和真机 Hook 验证。
+
 原始采集的 SO、CLI、日志、矩阵均保存在已忽略的 `build/evidence/`。完整采集通过核验后，工具自动将 SO 同步到工程根目录的 `assets/runtime_lib/`，按 API/厂商/型号/系统构建与库集合哈希分类，详见其中的 README。两个位置的设备 SO 均不提交；`assets/runtime_lib` 是参考资料，不自动打入 APK。
