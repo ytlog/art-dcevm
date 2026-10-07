@@ -27,6 +27,10 @@ public final class DcevmRuntime {
     /** Attach for standard JVMTI method-body redefine and inspect available ART extensions. */
     public static synchronized JSONObject attachPublicJvmti(Context context) throws Exception {
         if (backend == null) backend = BackendRegistry.open(context.getApplicationContext());
+        PatchResult routing = backend.enableStandardRedefineRouting();
+        if (!routing.installed()) throw new IllegalStateException(
+                "ART standard redefine routing failed: " + routing + "; "
+                        + backend.capabilities().optString("evolutionError"));
         return backend.capabilities();
     }
 }

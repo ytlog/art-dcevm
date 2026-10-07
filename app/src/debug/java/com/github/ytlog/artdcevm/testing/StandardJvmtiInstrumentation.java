@@ -26,6 +26,7 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
     private boolean clientFirst;
     private boolean transformCase;
     private boolean transformHierarchyCase;
+    private boolean publicOnly;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
@@ -35,6 +36,8 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 arguments.getString("transformCase", "false"));
         transformHierarchyCase = arguments != null && Boolean.parseBoolean(
                 arguments.getString("transformHierarchyCase", "false"));
+        publicOnly = arguments != null && Boolean.parseBoolean(
+                arguments.getString("publicOnly", "false"));
         start();
     }
 
@@ -46,8 +49,13 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
             Peer peer = new Peer();
             require(instance.compute() == 38, "baseline");
             if (clientFirst) attachClient();
-            DcevmRuntime.initialize(getTargetContext());
-            DcevmRuntime.initialize(getTargetContext());
+            if (publicOnly) {
+                DcevmRuntime.attachPublicJvmti(getTargetContext());
+                DcevmRuntime.attachPublicJvmti(getTargetContext());
+            } else {
+                DcevmRuntime.initialize(getTargetContext());
+                DcevmRuntime.initialize(getTargetContext());
+            }
             if (!clientFirst) attachClient();
             if (transformHierarchyCase) {
                 NarrowSubject subject = new NarrowSubject();
@@ -73,7 +81,8 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                 require(transformedResult == 0 && callbackCount == 1, "hierarchy transform result");
                 require(NarrowSubject.class.getSuperclass() == Object.class &&
                         subject.compute() == 19 && oldCallRejected, "hierarchy transform behavior");
-                report.put("clientFirst", clientFirst).put("passed", true);
+                report.put("clientFirst", clientFirst).put("publicOnly", publicOnly)
+                        .put("passed", true);
                 Bundle result = new Bundle();
                 result.putString("stream", report.toString());
                 finish(-1, result);
@@ -96,7 +105,8 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                         "transformed redefine result and callback count");
                 require(instance.compute() == 40 && Evolving.class.getField("added") != null,
                         "transformed additive behavior");
-                report.put("clientFirst", clientFirst).put("passed", true);
+                report.put("clientFirst", clientFirst).put("publicOnly", publicOnly)
+                        .put("passed", true);
                 Bundle result = new Bundle();
                 result.putString("stream", report.toString());
                 finish(-1, result);
@@ -147,6 +157,13 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
                     new byte[][]{patch("delete"), new byte[]{1, 2, 3, 4}}) != 0,
                     "invalid batch result");
             require(instance.compute() == 40 && peer.compute() == 12, "batch atomicity");
+            if (publicOnly) {
+                report.put("clientFirst", clientFirst).put("publicOnly", true).put("passed", true);
+                Bundle result = new Bundle();
+                result.putString("stream", report.toString());
+                finish(-1, result);
+                return;
+            }
             require(redefine(new Class<?>[]{Evolving.class}, new byte[][]{patch("delete")}) == 0,
                     "evolution result");
             require(instance.compute() == 41, "evolution behavior");

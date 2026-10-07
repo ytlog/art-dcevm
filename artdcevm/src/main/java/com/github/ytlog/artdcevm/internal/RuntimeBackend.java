@@ -9,6 +9,8 @@ public interface RuntimeBackend {
     PatchResult apply(PatchRequest request);
     JSONObject analyze(PatchRequest request) throws Exception;
     PatchResult enableValidationHooks();
+    /** Route standard JVMTI redefinition through available device extensions. */
+    default PatchResult enableStandardRedefineRouting() { return new PatchResult(0, "OK"); }
     /** Initialize the packaged evolution module and verify the device-specific ABI. */
     PatchResult enableEvolution();
 }

@@ -38,6 +38,10 @@ public final class Android13Backend implements RuntimeBackend {
         int code = NativeBridge.enableValidationHooks();
         return new PatchResult(code, NativeBridge.errorName(code));
     }
+    @Override public synchronized PatchResult enableStandardRedefineRouting() {
+        int code = NativeBridge.enableStandardRedefineRouting();
+        return new PatchResult(code, NativeBridge.errorName(code));
+    }
     @Override public synchronized PatchResult enableEvolution() {
         if (!new File(sourceModulePath).isFile())
             return new PatchResult(98, "Source module is not packaged; build with -PsourceEngine13");

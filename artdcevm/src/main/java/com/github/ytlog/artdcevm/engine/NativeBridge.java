@@ -8,5 +8,6 @@ public final class NativeBridge {
     public static native String analyze(Class<?>[] classes, byte[][] dex);
     public static native String errorName(int error);
     public static native int enableValidationHooks();
+    public static native int enableStandardRedefineRouting();
     public static native int initializeEvolution(String modulePath, Object calibration);
 }

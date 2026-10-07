@@ -15,6 +15,7 @@ class RuntimeBackend {
   virtual std::string Analyze(JNIEnv* jni, const std::vector<Definition>& defs) = 0;
   virtual std::string ErrorName(int error) const = 0;
   virtual int EnableValidationHooks() = 0;
+  virtual int EnableStandardRedefineRouting() = 0;
   virtual int InitializeEvolution(JNIEnv* jni, const char* module_path, jobject calibration) = 0;
 };
 }  // namespace artdcevm

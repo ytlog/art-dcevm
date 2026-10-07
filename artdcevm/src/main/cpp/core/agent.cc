@@ -33,6 +33,10 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBr
   std::lock_guard<std::mutex> lock(TransactionMutex());
   return backend ? backend->EnableValidationHooks() : JVMTI_ERROR_INVALID_ENVIRONMENT;
 }
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_enableStandardRedefineRouting(JNIEnv*, jclass) {
+  std::lock_guard<std::mutex> lock(TransactionMutex());
+  return backend ? backend->EnableStandardRedefineRouting() : JVMTI_ERROR_INVALID_ENVIRONMENT;
+}
 extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_initializeEvolution(
     JNIEnv* env, jclass, jstring path, jobject calibration) {
   if (!path || !calibration) return JVMTI_ERROR_NULL_POINTER;

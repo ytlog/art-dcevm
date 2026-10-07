@@ -173,19 +173,19 @@ int Android13Backend::EnableValidationHooks() {
   if (!env_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
   return validation_hooks_.Install(hook_engine_, &hook_error_) ? JVMTI_ERROR_NONE : JVMTI_ERROR_NOT_AVAILABLE;
 }
-int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject calibration) {
-  if (!env_ || !vm_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+int Android13Backend::EnableStandardRedefineRouting() {
+  if (!env_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
   if (!caps_.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
+  // Keep body-only public JVMTI usable on devices without the structural extension.
+  if (!structural_ || !modifiable_) return JVMTI_ERROR_NONE;
   if (redefine_hook_) return JVMTI_ERROR_NONE;
   if (routing_attempted_) return JVMTI_ERROR_NOT_AVAILABLE;
-  evolution_error_ = InitializeSourceEngine(jni, path, calibration);
-  if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
-  evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
   routing_attempted_ = true;
+  if (!hook_engine_.Initialize(&evolution_error_)) return JVMTI_ERROR_NOT_AVAILABLE;
   void* target = symbols::FindSymbol(hook_engine_,
       {symbols::Library::kJvmti, cas::kRedefineClasses, symbols::HookRoute::kInline});
   if (!target) {
-    evolution_error_ = "Missing named RedefineClasses symbol; restart the process";
+    evolution_error_ = "Missing named RedefineClasses symbol";
     return JVMTI_ERROR_NOT_AVAILABLE;
   }
   routed_backend = this;
@@ -193,10 +193,19 @@ int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject
                                         reinterpret_cast<void**>(&original_redefine_), &evolution_error_);
   if (!redefine_hook_) {
     routed_backend = nullptr;
-    evolution_error_ += "; restart the process";
     return JVMTI_ERROR_NOT_AVAILABLE;
   }
   return JVMTI_ERROR_NONE;
+}
+int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject calibration) {
+  if (!env_ || !vm_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  if (!caps_.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
+  if (evolution_ && evolution_->Available() && redefine_hook_) return JVMTI_ERROR_NONE;
+  if (!structural_ || !modifiable_) return JVMTI_ERROR_NOT_AVAILABLE;
+  evolution_error_ = InitializeSourceEngine(jni, path, calibration);
+  if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
+  evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
+  return EnableStandardRedefineRouting();
 }
 jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
                                                 const jvmtiClassDefinition* definitions) {
@@ -219,7 +228,9 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
   // Schema snapshots can initialize dependent classes while ART is preparing
   // a multi-class hierarchy change. ART validates the final transformed DEX
   // inside one transaction, so do not pre-plan against mutable live classes.
-  return static_cast<jvmtiError>(RedefineStandardWithSource(caller, vm_, count, definitions));
+  if (evolution_ && evolution_->Available())
+    return static_cast<jvmtiError>(RedefineStandardWithSource(caller, vm_, count, definitions));
+  return structural_(caller, count, definitions);
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {
   if (!env_) return "{\"code\":116,\"detail\":\"Agent is not attached\"}";
