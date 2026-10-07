@@ -10,6 +10,10 @@ using CollectInstances = bool (*)(void*, void*);
 CollectInstances original_collect = nullptr;
 CollectInstances evolution_collect = nullptr;
 
+bool CallOriginalCollect(void* definition, void* data) {
+  return original_collect(definition, data);
+}
+
 bool CollectProxy(void* definition, void* data) {
   return ValidationHooks::InSourceTransaction() ? evolution_collect(definition, data)
                                                  : original_collect(definition, data);
@@ -18,7 +22,7 @@ bool CollectProxy(void* definition, void* data) {
 
 bool InstallInstanceAllocationHook(HookEngine& hooks, void* implementation,
                                    std::string* error) {
-  using ConfigureOriginal = void** (*)();
+  using ConfigureOriginal = void (*)(CollectInstances);
   auto configure = reinterpret_cast<ConfigureOriginal>(
       dlsym(implementation, "ArtDcevmSourceConfigureInstanceAllocation"));
   auto collect = reinterpret_cast<CollectInstances>(
@@ -28,18 +32,13 @@ bool InstallInstanceAllocationHook(HookEngine& hooks, void* implementation,
     *error = "Missing named instance-allocation symbol or evolution implementation";
     return false;
   }
-  void** source_original = configure();
-  if (!source_original) {
-    *error = "Missing instance-allocation original slot";
-    return false;
-  }
   evolution_collect = collect;
   void* token = hooks.Install(target, reinterpret_cast<void*>(CollectProxy),
                               reinterpret_cast<void**>(&original_collect), error);
   if (!token) return false;
-  // The source implementation calls the device trampoline while preparing a
-  // structural transaction. Publish it before any source transaction begins.
-  *source_original = reinterpret_cast<void*>(original_collect);
+  // The source implementation calls back here; the device trampoline remains
+  // private to the enhancement library.
+  configure(CallOriginalCollect);
   return true;
 }
 

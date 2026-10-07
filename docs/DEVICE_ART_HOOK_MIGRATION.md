@@ -28,13 +28,13 @@
 
 原地提交后的全局 JIT 缓存失效现已由增强库的 `InPlaceHook` 实现：它调用设备原提交后，按命名符号调用设备 `JitCodeCache::InvalidateAllCompiledCode`。过渡期源码模块仅返回 `JitCodeCache*`；这条路径仍需在最终迁移中用固定声明和布局探针去掉该访问器。
 
-继承批次的 `Redefiner::Run` 与 `FinishNewClassAllocations` 现由增强库安装命名 Inline Hook 并实现分派代理。非演进事务调用设备原函数；演进事务按需调用旧层级实现，旧实现内部仍可通过已传入的原函数 trampoline 委托设备。层级选择与缓存修复仍在源码模块，尚未达到移除条件。
+继承批次的 `Redefiner::Run` 与 `FinishNewClassAllocations` 现由增强库安装命名 Inline Hook 并实现分派代理。非演进事务调用设备原函数；演进事务按需调用旧层级实现。源码实现需要原函数行为时，回调增强库，由增强库持有并调用设备 trampoline。层级选择与缓存修复仍在源码模块，尚未达到移除条件。
 
 `ClassRedefinition::AllocateNewClassObject` 也由同一增强库代理分派：普通事务直接调用设备原函数，有层级变化的源码演进事务才交给源码侧选择新父类。增强库只转发固定 arm64 ABI 的不透明参数，源码侧在编译时检查相关 `Handle` 与 `ObjPtr` 大小；层级实现仍待迁出。
 
 验证期间的 `ClassVerifier::VerifyClass`、`RegTypeCache::ResolveClass`、`ClassLinker::FindClass` 与 `LookupClass` 现由增强库安装命名 Hook 并代理。`VerifyClass` 代理在源码事务中请源码回调建立临时验证视图，调用设备原函数后关闭该视图；解析代理从源码回调查询未发布的替换类，未命中时调用设备原函数。源码仍负责视图中的类型化 ART 访问与缓存刷新，尚待迁出。
 
-`CollectAndCreateNewInstances` 也已改由增强库安装命名 Inline Hook 并分派：非演进事务调用设备原函数，演进事务调用现有实例收集实现。源码实现仍通过已传入的 trampoline 委托设备完成原有分配步骤。
+`CollectAndCreateNewInstances` 也已改由增强库安装命名 Inline Hook 并分派：非演进事务调用设备原函数，演进事务调用现有实例收集实现。源码实现需要设备原分配步骤时，回调增强库；源码侧不再持有设备 trampoline。
 
 `Runtime::IsAsyncDeoptimizeable` 的 Inline Hook 现由增强库实现完整代理：先调用设备原函数；原函数拒绝时，才调用现有的可调试 AOT 栈帧安全判断。源码侧不再持有或调用原函数 trampoline；判断内部仍依赖 AOSP 类型化栈访问，须继续迁移。
 

@@ -45,7 +45,8 @@ extern "C" bool SourceCheckClass(void*)
 extern "C" bool SourceCollectNewInstances(void*, void*)
     __asm__(ARTDCEVM_A13_SOURCE_COLLECT_NEW_INSTANCES);
 namespace {
-void* original_instance_allocation = nullptr;
+using OriginalInstanceAllocation = bool (*)(void*, void*);
+OriginalInstanceAllocation call_original_instance_allocation = nullptr;
 std::atomic<uint64_t> guard_precommit_activations{0};
 std::atomic<uint64_t> guard_failed_rollbacks{0};
 std::atomic<uint64_t> guard_committed_retention{0};
@@ -225,12 +226,12 @@ extern "C" uint64_t ArtDcevmSourceReceiverGuardTransactionDiagnostics(int index)
     default: return 0;
   }
 }
-extern "C" void** ArtDcevmSourceConfigureInstanceAllocation() {
-  return &original_instance_allocation;
+extern "C" void ArtDcevmSourceConfigureInstanceAllocation(
+    OriginalInstanceAllocation callback) {
+  call_original_instance_allocation = callback;
 }
 extern "C" bool ArtDcevmSourceOriginalInstanceAllocation(void* definition, void* data) {
-  using Fn = bool (*)(void*, void*);
-  return reinterpret_cast<Fn>(original_instance_allocation)(definition, data);
+  return call_original_instance_allocation(definition, data);
 }
 extern "C" bool ArtDcevmSourceInstanceAllocation(void* definition, void* data) {
   return SourceCollectNewInstances(definition, data);

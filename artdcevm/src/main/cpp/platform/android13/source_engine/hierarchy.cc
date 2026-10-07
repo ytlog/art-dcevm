@@ -109,10 +109,12 @@ std::atomic<uint64_t> verification_cache_updates{0};
 using AllocateClassFn = art::ObjPtr<art::mirror::Class> (*)(void*,
     art::Handle<art::mirror::Class>, art::Handle<art::mirror::Class>,
     art::Handle<art::mirror::DexCache>, uint16_t);
-void* original_allocate_address = nullptr;
+using AllocateSubtreeFn = bool (*)(void*, void*, void*);
+using RunFn = jvmtiError (*)(void*);
+AllocateClassFn call_original_class_allocate = nullptr;
+AllocateSubtreeFn call_original_batch_allocate = nullptr;
+RunFn call_original_run = nullptr;
 thread_local artdcevm::android13::source::HierarchyAllocationScope* allocation_scope = nullptr;
-void* original_batch_allocate = nullptr;
-void* original_run = nullptr;
 }
 namespace artdcevm::android13::source {
 HierarchyAllocationScope::HierarchyAllocationScope(art::Thread* self,
@@ -173,7 +175,7 @@ art::ObjPtr<art::mirror::Class> HierarchyAllocationScope::Allocate(void* owner,
         structural_root != nullptr, parent_target != nullptr);
   }
   if (!old_class->GetSuperClass()->DescriptorEquals(requested)) ++parent_selections;
-  auto result = reinterpret_cast<AllocateClassFn>(original_allocate_address)(owner, old_class, selected, cache, index);
+  auto result = call_original_class_allocate(owner, old_class, selected, cache, index);
   replacements_[slot].new_class.Assign(result);
   return result;
 }
@@ -225,15 +227,17 @@ extern "C" bool SourceSubtreeAllocate(void*, void*, void*)
     __asm__(ARTDCEVM_A13_SOURCE_ALLOCATE_SUBTREE);
 extern "C" jvmtiError SourceHierarchyRun(void*)
     __asm__(ARTDCEVM_A13_SOURCE_REDEFINE_RUN);
-extern "C" void** ArtDcevmSourceConfigureHierarchyBatch(int index) {
-  return index == 0 ? &original_batch_allocate : &original_run;
+extern "C" void ArtDcevmSourceConfigureHierarchyOriginals(
+    AllocateSubtreeFn subtree, RunFn run, AllocateClassFn allocate_class) {
+  call_original_batch_allocate = subtree;
+  call_original_run = run;
+  call_original_class_allocate = allocate_class;
 }
 extern "C" bool ArtDcevmSourceOriginalHierarchySubtree(void* definition, void* holder, void* data) {
-  using Fn = bool (*)(void*, void*, void*);
-  return reinterpret_cast<Fn>(original_batch_allocate)(definition, holder, data);
+  return call_original_batch_allocate(definition, holder, data);
 }
 extern "C" jvmtiError ArtDcevmSourceOriginalHierarchyRun(void* driver) {
-  return reinterpret_cast<jvmtiError (*)(void*)>(original_run)(driver);
+  return call_original_run(driver);
 }
 extern "C" bool ArtDcevmSourceHasHierarchyChange() {
   return artdcevm::android13::source::HasHierarchyChange();
@@ -244,22 +248,18 @@ extern "C" bool ArtDcevmSourceHierarchyAllocateSubtree(void* definition, void* h
 extern "C" jvmtiError ArtDcevmSourceHierarchyRun(void* driver) {
   return SourceHierarchyRun(driver);
 }
-extern "C" void** ArtDcevmSourceConfigureHierarchyAllocator() {
-  return &original_allocate_address;
-}
 extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void* redef,
     art::Handle<art::mirror::Class> old_class, art::Handle<art::mirror::Class> super_class,
     art::Handle<art::mirror::DexCache> cache, uint16_t index) {
   static_assert(sizeof(art::ObjPtr<art::mirror::Class>) == sizeof(void*));
   static_assert(sizeof(art::Handle<art::mirror::Class>) == sizeof(void*));
   static_assert(sizeof(art::Handle<art::mirror::DexCache>) == sizeof(void*));
-  auto original_allocate = reinterpret_cast<AllocateClassFn>(original_allocate_address);
   if (allocation_scope) return allocation_scope->Allocate(redef, old_class, cache, index);
   const auto* dex = cache->GetDexFile();
   const auto& def = dex->GetClassDef(index);
   const char* requested = dex->StringByTypeIdx(def.superclass_idx_);
   if (super_class->DescriptorEquals(requested))
-    return original_allocate(redef, old_class, super_class, cache, index);
+    return call_original_class_allocate(redef, old_class, super_class, cache, index);
   auto* self = art::Thread::Current();
   art::StackHandleScope<2> hs(self);
   auto loader = hs.NewHandle(old_class->GetClassLoader());
@@ -268,7 +268,7 @@ extern "C" art::ObjPtr<art::mirror::Class> ArtDcevmSourceHierarchyAllocator(void
   CHECK(!parent.IsNull());
   CHECK(parent->IsInitialized());
   ++parent_selections;
-  return original_allocate(redef, old_class, parent, cache, index);
+  return call_original_class_allocate(redef, old_class, parent, cache, index);
 }
 
 namespace {
