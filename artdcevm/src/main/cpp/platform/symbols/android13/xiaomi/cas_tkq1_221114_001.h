@@ -18,6 +18,7 @@ inline constexpr char kVerifierResolve[] = "_ZN3art8verifier12RegTypeCache12Reso
 inline constexpr char kFindClass[] = "_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror11ClassLoaderEEE";
 inline constexpr char kLookupClass[] = "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE";
 inline constexpr char kDeleteClassLoader[] = "_ZN3art11ClassLinker17DeleteClassLoaderEPNS_6ThreadERKNS0_15ClassLoaderDataEb";
+inline constexpr char kLinearAllocContainsUnsafe[] = "_ZNK3art11LinearAlloc14ContainsUnsafeEPv";
 inline constexpr char kIsAsyncDeoptimizeable[] = "_ZNK3art7Runtime21IsAsyncDeoptimizeableEm";
 inline constexpr char kTestSuspendFromCode[] = "artTestSuspendFromCode";
 inline constexpr char kInvalidateAllCompiledCode[] = "_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv";

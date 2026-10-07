@@ -28,6 +28,7 @@ bool CheckSourceSymbols(HookEngine& hooks, std::string* error) {
     if (!Require(hooks, Library::kJvmti, name, error)) return false;
   const char* art[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass,
                     cas::kLookupClass, cas::kDeleteClassLoader,
+                    cas::kLinearAllocContainsUnsafe,
                     cas::kIsAsyncDeoptimizeable, cas::kTestSuspendFromCode,
                     cas::kCheckedResolve, cas::kCheckedResolveHandles,
                     cas::kInvalidateAllCompiledCode};

@@ -12,16 +12,15 @@
 #include "dex/dex_instruction-inl.h"
 #include "dex/invoke_type.h"
 #include "runtime.h"
-#include "linear_alloc.h"
 #include "jni/jni_id_manager.h"
 #include "jni/jni_internal.h"
-#include <unordered_set>
-#include <mutex>
 
 namespace artdcevm::android13::source {
 namespace {
-std::unordered_set<art::ArtMethod*> retired;
-std::mutex retired_mutex;
+void (*retire_method)(void*) = nullptr;
+bool (*contains_method)(void*) = nullptr;
+size_t (*retired_method_count)() = nullptr;
+size_t (*prune_methods)(const void*) = nullptr;
 bool dispatch_checks = false;
 bool Guard(art::ArtMethod* method, art::Thread* self, art::JValue* result = nullptr)
     REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -32,33 +31,30 @@ bool Guard(art::ArtMethod* method, art::Thread* self, art::JValue* result = null
 }
 }
 void RetireMethod(art::ArtMethod* method) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  retired.insert(method);
+  retire_method(method);
 }
 bool IsRetiredMethod(art::ArtMethod* method) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return retired.find(method) != retired.end();
+  return contains_method(method);
 }
 size_t RetiredMethodCount() {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return retired.size();
+  return retired_method_count();
 }
 size_t PruneRetiredMethods(const art::LinearAlloc* allocator) {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  size_t removed = 0;
-  for (auto it = retired.begin(); it != retired.end(); ) {
-    if (!allocator->ContainsUnsafe(*it)) { ++it; continue; }
-    it = retired.erase(it);
-    ++removed;
-  }
-  return removed;
+  return prune_methods(allocator);
 }
 bool HasRetiredMethods() {
-  std::lock_guard<std::mutex> lock(retired_mutex);
-  return !retired.empty();
+  return retired_method_count() != 0;
 }
 void RequireDispatchChecks() { dispatch_checks = true; }
 bool NeedsDispatchChecks() { return dispatch_checks; }
+extern "C" void ArtDcevmSourceConfigureRetiredMethods(
+    void (*retire)(void*), bool (*contains)(void*), size_t (*count)(),
+    size_t (*prune)(const void*)) {
+  retire_method = retire;
+  contains_method = contains;
+  retired_method_count = count;
+  prune_methods = prune;
+}
 }
 
 extern "C" bool ArtDcevmGuardMethod(void* method, void* thread, void* result) {

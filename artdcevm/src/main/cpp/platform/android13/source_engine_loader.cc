@@ -8,6 +8,7 @@
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/hierarchy_batch_hooks.h"
 #include "platform/android13/class_loader_hooks.h"
+#include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
 
 namespace artdcevm::android13 {
@@ -94,6 +95,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   }
   // Retain this DSO after any hook attempt, even if rollback fails.
   source_library = library;
+  if (!ConfigureRetiredMethodRegistry(symbols, library, &error)) return error;
   ValidationHooks dispatcher;
   if (!dispatcher.Install(symbols, &error)) return error;
   if (!InstallRetiredMethodHooks(symbols, library, &error)) return error;
