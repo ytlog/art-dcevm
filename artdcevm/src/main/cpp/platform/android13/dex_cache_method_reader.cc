@@ -13,6 +13,10 @@ namespace artdcevm::android13 {
 
 namespace {
 std::atomic<bool> ready{false};
+using LookupType=void*(*)(void*,uint16_t,void*,void*);
+using ResolveType=void*(*)(void*,uint16_t,void*,void*);
+struct TypeFunctions {LookupType lookup;ResolveType resolve;};
+TypeFunctions type_functions{};
 template<class T>T Read(const void* object,size_t offset) {
   T value;std::memcpy(&value,static_cast<const char*>(object)+offset,sizeof(value));return value;
 }
@@ -32,6 +36,19 @@ bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReferenc
   const auto map=Read<validation_abi::DexMappingPrefix>(reinterpret_cast<const void*>(address),0);
   return evolution::ReadMappedDexMethodReference(
       {map.begin,map.size,map.data_begin,map.data_size,0},index,output,error);
+}
+void* HandleValue(void* slot) {
+  return reinterpret_cast<void*>(static_cast<uintptr_t>(Read<uint32_t>(slot,0)));
+}
+MethodClassResolution ResolveClass(const TypeFunctions& functions,void* linker,void* cache_handle,
+    void* loader_handle,uint16_t class_index,bool cached_method,HandleRootScope& output,size_t slot) {
+  output.Set(slot,nullptr);
+  void* klass=nullptr;
+  if(cached_method)klass=functions.lookup(linker,class_index,HandleValue(cache_handle),HandleValue(loader_handle));
+  if(!klass)klass=functions.resolve(linker,class_index,cache_handle,loader_handle);
+  // Do not call a suspending operation between receiving the ObjPtr and rooting.
+  output.Set(slot,klass);
+  return klass?MethodClassResolution::Resolved:MethodClassResolution::Exception;
 }
 struct TiText {
   jvmtiEnv* ti;char* value=nullptr;
@@ -53,6 +70,23 @@ bool ReadCachedMethodReference(void* cache,uint32_t index,evolution::MappedDexMe
     return Fail(error,"DexCache method reference reader unavailable");
   return ReadReference(cache,index,output,error);
 }
+MethodClassResolution ResolveCachedMethodClass(void* linker,void* cache_handle,void* loader_handle,
+    uint32_t method_index,bool cached_method,HandleRootScope& output,size_t slot,std::string* error) {
+  output.Set(slot,nullptr);
+  if(!ready.load(std::memory_order_acquire) || !linker || !cache_handle || !loader_handle || !error) {
+    Fail(error,"Explicit-cache method class resolver unavailable");
+    return MethodClassResolution::Unavailable;
+  }
+  void* cache=HandleValue(cache_handle);
+  if(!cache) {
+    Fail(error,"Explicit-cache method class resolver requires a cache");
+    return MethodClassResolution::Unavailable;
+  }
+  evolution::MappedDexMethodReference reference;
+  if(!ReadReference(cache,method_index,&reference,error))return MethodClassResolution::Unavailable;
+  return ResolveClass(type_functions,linker,cache_handle,loader_handle,reference.class_index,
+                      cached_method,output,slot);
+}
 bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profile,JNIEnv* env,
                                   jobject fixture,std::string* error) {
   ready.store(false,std::memory_order_release);
@@ -61,6 +95,12 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
   auto resolve=reinterpret_cast<Resolve>(hooks.FindSymbol("libart.so",
       "_ZN3art11ClassLinker18FindResolvedMethodENS_6ObjPtrINS_6mirror5ClassEEENS1_INS2_8DexCacheEEENS1_INS2_11ClassLoaderEEEj"));
   if(!resolve)return Fail(error,"Missing named DexCache calibration resolver");
+  const TypeFunctions types{
+    reinterpret_cast<LookupType>(hooks.FindSymbol("libart.so",
+      "_ZN3art11ClassLinker18LookupResolvedTypeENS_3dex9TypeIndexENS_6ObjPtrINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE")),
+    reinterpret_cast<ResolveType>(hooks.FindSymbol("libart.so",
+      "_ZN3art11ClassLinker11ResolveTypeENS_3dex9TypeIndexENS_6HandleINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"))};
+  if(!types.lookup || !types.resolve)return Fail(error,"Missing named explicit-cache class resolution");
   JavaVM* vm=nullptr;jvmtiEnv* ti=nullptr;
   if(env->GetJavaVM(&vm)!=JNI_OK || vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK)
     return Fail(error,"DexCache calibration requires JVMTI");
@@ -107,7 +147,7 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
     if(!native || Read<uint32_t>(native,offsetof(field_copy_abi::ArtField,offset))!=field.offset)
       return Fail(error,"DexCache source offsets differ from declared fields");
   }
-  HandleRootScope roots(access.Self(),3);
+  HandleRootScope roots(access.Self(),4);
   roots.Set(0,access.Decode(klass));
   roots.Set(1,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,dex_cache)));
   roots.Set(2,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,class_loader)));
@@ -122,6 +162,11 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
     if(reference.declaring_class!=owner || reference.name!=metadata[position].name ||
        reference.descriptor!=metadata[position].signature)
       return Fail(error,"Explicit DexCache method reference differs from public metadata");
+    for(bool cached_method:{false,true}) {
+      if(ResolveClass(types,RuntimeClassLinker(),roots.Slot(1),roots.Slot(2),reference.class_index,
+                      cached_method,roots,3)!=MethodClassResolution::Resolved || roots.Get(3)!=roots.Get(0))
+        return Fail(error,"Explicit-cache class resolution differs from public owned class identity");
+    }
     // FindResolvedMethod writes the pair to DexCache. The similarly named
     // ResolveMethodWithoutInvokeType returns a method without filling a miss.
     if(resolve(RuntimeClassLinker(),roots.Get(0),roots.Get(1),roots.Get(2),index)!=method)
@@ -130,6 +175,7 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
     if(!ReadCache(roots.Get(1),index,&cached) || cached!=method)
       return Fail(error,"Atomic DexCache method entry differs from named resolution");
   }
+  type_functions=types;
   ready.store(true,std::memory_order_release);
   return true;
 }
