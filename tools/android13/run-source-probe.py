@@ -26,9 +26,11 @@ out.mkdir(parents=True)
 meta = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
         'fullDcevmComplete': False, 'hookOrder': args.hook_order, 'suite': args.suite,
         'installSkipped': args.skip_install}
+instrumentation_timeout = 1200 if args.suite in ('all', 'loader-mixed-long') else 360
+meta['instrumentationTimeoutSeconds'] = instrumentation_timeout
 
-def command(*parts):
-    return subprocess.run([adb, '-s', args.serial, *parts], capture_output=True, text=True, timeout=1200 if args.suite == 'loader-mixed-long' else 360)
+def command(*parts, timeout=360):
+    return subprocess.run([adb, '-s', args.serial, *parts], capture_output=True, text=True, timeout=timeout)
 
 try:
     if args.skip_install:
@@ -51,14 +53,26 @@ try:
         install.check_returncode()
     command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
     command('shell', 'run-as', 'dev.artdcevm.lab', 'rm', '-f', 'files/source-engine.json').check_returncode()
-    run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'hookOrder', args.hook_order, '-e', 'suite', args.suite,
-                  'dev.artdcevm.lab/com.github.ytlog.artdcevm.platform.android13.SourceEngineInstrumentation')
-    (out / 'instrumentation.txt').write_text(run.stdout + run.stderr)
+    run = None
+    try:
+        run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'hookOrder', args.hook_order, '-e', 'suite', args.suite,
+                      'dev.artdcevm.lab/com.github.ytlog.artdcevm.platform.android13.SourceEngineInstrumentation',
+                      timeout=instrumentation_timeout)
+        (out / 'instrumentation.txt').write_text(run.stdout + run.stderr)
+    except subprocess.TimeoutExpired as error:
+        meta['instrumentationTimedOut'] = True
+        meta['error'] = str(error)
+        # TimeoutExpired can expose bytes even when subprocess uses text=True.
+        def partial_text(value):
+            return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value or ''
+        (out / 'instrumentation.txt').write_text(partial_text(error.stdout) + partial_text(error.stderr))
+        # Recover the last device checkpoint, but a missing completion from am
+        # remains a failed run even if the report already records test success.
     report = command('exec-out', 'run-as', 'dev.artdcevm.lab', 'cat', 'files/source-engine.json')
     (out / 'probe.json').write_text(report.stdout)
     data = json.loads(report.stdout)
     (out / 'probe.json').write_text(json.dumps(data, indent=2) + '\n')
-    meta['passed'] = (run.returncode == 0 and data.get('completed') is True and
+    meta['passed'] = (run is not None and run.returncode == 0 and data.get('completed') is True and
                       data.get('readOnlyProbePassed') is True and data.get('passed') is True and
                       data.get('uid', 0) >= 10000)
 except (subprocess.SubprocessError, ValueError) as error:

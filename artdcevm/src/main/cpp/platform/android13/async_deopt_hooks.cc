@@ -7,7 +7,6 @@
 #include "platform/symbols/android13.h"
 #include <atomic>
 #include <cstring>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 using IsAsyncDeoptimizeable = bool (*)(const void*, uintptr_t);
@@ -59,18 +58,17 @@ bool Proxy(const void* runtime,uintptr_t pc) { return original_is_async(runtime,
 void SetProbe(bool enabled) { probe_enabled.store(enabled,std::memory_order_release); }
 uint64_t Hits() { return hits.load(std::memory_order_relaxed); }
 }
+void SetAsyncDeoptProbe(bool enabled) { SetProbe(enabled); }
+uint64_t AsyncDeoptProbeHits() { return Hits(); }
 bool InstallAsyncDeoptHook(HookEngine& hooks,void* source,std::string* error) {
   if (!ConfigureStackAccess(hooks,source,error)) return false;
   auto r=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto cache=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod19GetObsoleteDexCacheEv"));
   auto code=reinterpret_cast<const void* (*)(void*,size_t)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE"));
   auto debug=reinterpret_cast<bool (*)(const void*)>(hooks.FindSymbol("libart.so","_ZNK3art7OatFile12IsDebuggableEv"));
-  using Configure=void (*)(void (*)(bool),uint64_t (*)());
-  auto configure=reinterpret_cast<Configure>(dlsym(source,"ArtDcevmSourceConfigureAsyncDeopt"));
   void* target=hooks.FindSymbol("libart.so",cas::kIsAsyncDeoptimizeable);
-  if (!r || !cache || !code || !debug || !configure || !target) { *error="Missing named AOT safety functions or diagnostics configuration"; return false; }
+  if (!r || !cache || !code || !debug || !target) { *error="Missing named AOT safety functions"; return false; }
   root=r; obsolete_cache=cache; oat_code=code; debuggable=debug;
-  configure(SetProbe,Hits);
   return hooks.Install(target,reinterpret_cast<void*>(Proxy),reinterpret_cast<void**>(&original_is_async),error)!=nullptr;
 }
 }

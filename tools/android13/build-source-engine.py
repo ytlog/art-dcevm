@@ -63,17 +63,26 @@ for item in lock['archives']:
 # topology, then patch the isolated copy; keep the pinned archive untouched.
 runtime_overlay = OUT / 'modified/runtime'
 shutil.copytree(OUT / 'art/runtime', runtime_overlay, dirs_exist_ok=True)
-for header_patch in ['read_barrier-inl.patch', 'reflective_value_visitor.patch',
-                     'jit_code_cache.patch', 'runtime_layout.patch', 'stack_layout.patch', 'thread_layout.patch']:
+for header_patch in ['read_barrier-inl.patch',
+                     'jit_code_cache.patch', 'runtime_layout.patch', 'stack_layout.patch', 'thread_layout.patch', 'dex_cache_layout.patch']:
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i',
                     str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine' / header_patch)],
                    cwd=runtime_overlay, check=True, capture_output=True, text=True)
 dex_overlay = OUT / 'modified/libdexfile'
 shutil.copytree(OUT / 'art/libdexfile', dex_overlay, dirs_exist_ok=True)
+for dex_patch in ['dex_layout.patch', 'listener_code_item_layout.patch']:
+    subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i',
+                    str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine' / dex_patch)],
+                   cwd=dex_overlay, check=True, capture_output=True, text=True)
+# This calibration spans compiler and runtime declarations. Both directory
+# trees must be copied before applying its mixed-path patch at their common root.
+compiler_overlay = OUT / 'modified/compiler'
+shutil.copytree(OUT / 'art/compiler', compiler_overlay, dirs_exist_ok=True)
 subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i',
-                str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine/dex_layout.patch')],
-               cwd=dex_overlay, check=True, capture_output=True, text=True)
-includes = ['modified/libdexfile', 'modified/runtime', 'art/compiler', 'art/libartbase', 'art/libdexfile', 'art/openjdkjvmti',
+                str(ROOT / 'artdcevm/src/main/cpp/platform/android13/source_engine' /
+                    'compiler_diagnostics_layout.patch')],
+               cwd=OUT / 'modified', check=True, capture_output=True, text=True)
+includes = ['modified/libdexfile', 'modified/runtime', 'modified/compiler', 'art/libartbase', 'art/libdexfile', 'art/openjdkjvmti',
             'art/openjdkjvmti/include', 'art/libartpalette/include', 'art/cmdline',
             'libbase/include', 'libnativehelper/include', 'libnativehelper/header_only_include',
             'bionic/platform']
@@ -103,11 +112,11 @@ subprocess.run(['patch', '--batch', '--fuzz=0', '-p0', '-i', str(engine / 'ti_re
 sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_declarations.cc',
            engine / 'heap_reference_probe.cc',
            engine / 'field_copy_metadata_probe.cc', engine / 'field_copy_storage_probe.cc',
-           engine / 'loaded_class_guards_probe.cc', engine / 'member_decode_probe.cc',
+           engine / 'loaded_class_guards_probe.cc', engine / 'member_decode_probe.cc', engine / 'reflected_field_visit_probe.cc', engine / 'instrumentation_listener_probe.cc', engine / 'device_diagnostics_probe.cc', engine / 'device_compiler_diagnostics_probe.cc', engine / 'compiled_frame_diagnostics_probe.cc', engine / 'thread_suspend_scope_probe.cc', engine / 'device_dex_input_probe.cc', engine / 'evolution_transaction_probe.cc',
            engine / 'object_replacement_map_probe.cc', engine / 'structural_reflective_probe.cc', engine / 'member_access_probe.cc', engine / 'hierarchy_allocation_probe.cc', engine / 'selective_deopt_probe.cc', engine / 'stack_access_probe.cc', engine / 'runtime_access_probe.cc', engine / 'native_access_probe.cc',
            engine / 'handle_root_scope_probe.cc', engine / 'structural_method_updates_probe.cc',
-           engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc', engine / 'retired_methods.cc',
-           engine / 'retired_fields.cc', engine / 'runtime_services.cc', engine / 'hierarchy.cc']
+           engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc',
+           engine / 'runtime_services.cc']
 commands = []
 objects = []
 for source in sources:

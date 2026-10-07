@@ -1,5 +1,4 @@
 #include "platform/android13/hierarchy_validation.h"
-#include "platform/android13/hierarchy_validation_abi.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/handle_root_scope_abi.h"
 #include "platform/android13/loaded_class_guards.h"
@@ -25,9 +24,6 @@ alignas(8) unsigned char thread_bytes[320]{};
 void* const linker=reinterpret_cast<void*>(0x777);
 bool guard=false,context=true,package=true,gc_enabled=true;
 Id subject=Base;
-android13::BeginHierarchyState source_begin=nullptr;
-android13::EndHierarchyState source_end=nullptr;
-android13::HierarchyStateQuery source_changed=nullptr,source_narrowed=nullptr;
 template<class T> T Read(void* ptr,size_t at=0) { T value;std::memcpy(&value,static_cast<unsigned char*>(ptr)+at,sizeof(value));return value; }
 template<class T> void Put(void* ptr,size_t at,T value) { std::memcpy(static_cast<unsigned char*>(ptr)+at,&value,sizeof(value)); }
 uint32_t Ref(void* value) { auto v=reinterpret_cast<uintptr_t>(value);assert(v<=UINT32_MAX);return static_cast<uint32_t>(v); }
@@ -94,8 +90,6 @@ namespace artdcevm::android13 {
 bool ReceiverGuardEnabled(){return guard;}
 bool HasHierarchyAllocationContext(){return context;}
 }
-extern "C" void ArtDcevmSourceConfigureHierarchyState(android13::BeginHierarchyState begin,android13::EndHierarchyState end,
-    android13::HierarchyStateQuery changed,android13::HierarchyStateQuery narrowed){source_begin=begin;source_end=end;source_changed=changed;source_narrowed=narrowed;}
 extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*calibrate)(void*)){return calibrate(thread_bytes);}
 extern "C" int ArtDcevmSourceProbeHandleRootScope(void* thread,void* scope,uint32_t count){
   assert(thread==thread_bytes);if(!scope)return 0;assert(Top()==scope);auto h=Read<Header>(scope);assert(h.count==static_cast<int32_t>(count));
@@ -115,7 +109,6 @@ int main(){
   assert(android13::ConfigureLoadedClassGuards(hooks,linker,&error));hooks.missing=true;
   assert(!android13::ConfigureHierarchyValidation(hooks,implementation,&error));hooks.missing=false;
   assert(android13::ConfigureHierarchyValidation(hooks,implementation,&error));assert(!Top());
-  assert(source_begin && source_end && source_changed && source_narrowed);
   {
     android13::HandleRootScope outer(thread_bytes,2);outer.Set(0,nodes[Base]);outer.Set(1,nodes[Loader]);
     {android13::HandleRootScope inner(thread_bytes,1);inner.Set(0,nodes[OldIface]);Move();assert(inner.Get(0)==nodes[OldIface]);assert(outer.Get(0)==nodes[Base]);assert(outer.Get(1)==nodes[Loader]);}
@@ -123,11 +116,11 @@ int main(){
   }assert(!Top());
   evolution::ClassSchema current;current.descriptor=names[Base];current.superclass=names[OldParent];current.interfaces={names[OldIface]};
   auto replacement=current;bool changed=false;
-  auto check=[&](int expected,const char* diagnostic=nullptr){error.clear();changed=false;uint32_t previous=source_begin();
+  auto check=[&](int expected,const char* diagnostic=nullptr){error.clear();changed=false;uint32_t previous=android13::BeginHierarchyTransaction();
     int result=android13::CheckEvolutionHierarchy(reinterpret_cast<void*>(1),current,replacement,&changed,&error);
     if(result!=expected || Top())std::cerr<<"expected="<<expected<<" actual="<<result<<" parent="<<replacement.superclass<<" error="<<error<<" top="<<Top()<<"\n";
     assert(result==expected && !Top());if(diagnostic)assert(error==diagnostic);assert(!Read<void*>(thread_bytes,android13::handle_root_abi::kExceptionOffset));
-    assert(source_changed()==changed || result!=0);source_end(previous);};
+    assert(android13::HasHierarchyChange()==changed || result!=0);android13::EndHierarchyTransaction(previous);};
   Klass(OldParent)->status=7u<<28;check(0);assert(!changed); // unchanged parent need not be initialized
   replacement.superclass=names[NewParent];replacement.interfaces={names[NewIface]};check(0);assert(changed && gcs>=4);
   Klass(NewParent)->status=13u<<28;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Initialize the added superclass before applying this evolution");Klass(NewParent)->status=14u<<28;
@@ -137,9 +130,9 @@ int main(){
   Klass(NewParent)->access_flags=0;package=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible superclass");package=true;Klass(NewParent)->access_flags=1;
   replacement.interfaces={names[NewParent]};check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible interface");replacement.interfaces={"Lmissing/Interface;"};check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible interface");
   replacement.interfaces={names[NewIface]};replacement.superclass=names[OtherParent];check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Removing a superclass requires the active receiver guard");
-  guard=true;uint32_t previous=source_begin();assert(android13::CheckEvolutionHierarchy(reinterpret_cast<void*>(1),current,replacement,&changed,&error)==0);assert(source_changed() && source_narrowed());
-  uint32_t nested=source_begin();assert(!source_changed()&&!source_narrowed());source_end(nested);assert(source_changed()&&source_narrowed());
-  std::thread isolated([]{assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());auto prior=android13::BeginHierarchyTransaction();assert(prior==0);android13::EndHierarchyTransaction(prior);});isolated.join();source_end(previous);
+  guard=true;uint32_t previous=android13::BeginHierarchyTransaction();assert(android13::CheckEvolutionHierarchy(reinterpret_cast<void*>(1),current,replacement,&changed,&error)==0);assert(android13::HasHierarchyChange() && android13::HasHierarchyNarrowing());
+  uint32_t nested=android13::BeginHierarchyTransaction();assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());android13::EndHierarchyTransaction(nested);assert(android13::HasHierarchyChange()&&android13::HasHierarchyNarrowing());
+  std::thread isolated([]{assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());auto prior=android13::BeginHierarchyTransaction();assert(prior==0);android13::EndHierarchyTransaction(prior);});isolated.join();android13::EndHierarchyTransaction(previous);
   replacement.superclass=names[NewParent];replacement.interfaces.clear();guard=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Removing an interface requires the active receiver guard");guard=true;check(0);assert(changed);
   context=false;check(JVMTI_ERROR_NOT_AVAILABLE,"The device transaction hook did not establish allocation context");context=true;
   subject=Object;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"The Object root cannot evolve its hierarchy");subject=Base;

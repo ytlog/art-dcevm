@@ -16,9 +16,18 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/object_replacement_map.cc
     platform/android13/structural_commit.cc
     platform/android13/selective_deopt.cc
+    platform/android13/instrumentation_listener.cc
+    platform/android13/thread_suspend_scope.cc
+    platform/android13/device_compiler_diagnostics.cc
+    platform/android13/compiled_frame_diagnostics.cc
+    platform/android13/device_diagnostics.cc
+    platform/android13/device_profile.cc
+    platform/android13/device_dex_input.cc
+    platform/android13/evolution_transaction.cc
     platform/android13/member_access_guards.cc
     platform/android13/hierarchy_allocation.cc
     platform/android13/structural_member_mapping.cc
+    platform/android13/reflected_field_visit.cc
     platform/android13/structural_reflective.cc
     platform/android13/stack_access.cc
     platform/android13/async_deopt_hooks.cc

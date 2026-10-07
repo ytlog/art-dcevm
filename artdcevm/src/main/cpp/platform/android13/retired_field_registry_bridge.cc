@@ -1,6 +1,5 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 
-#include <dlfcn.h>
 #include <cstdlib>
 #include "platform/android13/retired_field_registry.h"
 #include "platform/symbols/android13.h"
@@ -18,6 +17,7 @@ uint32_t TokenFor(void* field) { return registry.TokenFor(field); }
 
 size_t RetiredFieldSlotCount() { return registry.SlotCount(); }
 void RetireFieldPointer(void* member) noexcept { Retire(member); }
+uint32_t RetiredFieldTokenFor(void* field) { return TokenFor(field); }
 bool IsRetiredFieldPointer(void* field) { return registry.TokenFor(field) != 0; }
 void* ResolveRetiredFieldToken(uint32_t token) { return registry.Resolve(token); }
 
@@ -26,20 +26,15 @@ size_t PruneRetiredFields(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
+bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void*,
                                    std::string* error) {
-  using Configure = void (*)(const RetiredFieldCallbacks*);
-  auto configure = reinterpret_cast<Configure>(
-      dlsym(implementation, "ArtDcevmSourceConfigureRetiredFields"));
   auto contains = reinterpret_cast<RetiredFieldRegistry::ContainsUnsafe>(
       hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
-  if (!configure || !contains) {
-    *error = "Missing retired-field registry bridge or named LinearAlloc symbol";
+  if (!contains) {
+    *error = "Missing named retired-field LinearAlloc symbol";
     return false;
   }
   contains_unsafe = contains;
-  const RetiredFieldCallbacks callbacks{Retire, TokenFor};
-  configure(&callbacks);
   return true;
 }
 

@@ -1,6 +1,5 @@
 #include "platform/android13/retired_method_registry_bridge.h"
 
-#include <dlfcn.h>
 #include <cstdlib>
 #include "platform/android13/retired_method_registry.h"
 #include "platform/android13/retired_field_registry_bridge.h"
@@ -15,7 +14,6 @@ RetiredMethodRegistry::ContainsUnsafe contains_unsafe = nullptr;
 void Retire(void* method) noexcept {
   try { registry.Retire(method); } catch (...) { std::abort(); }
 }
-bool Contains(void* method) { return registry.Contains(method); }
 }  // namespace
 
 void RetireMethodPointer(void* member) noexcept { Retire(member); }
@@ -27,15 +25,12 @@ size_t PruneRetiredMethods(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
+bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void*,
                                     std::string* error) {
-  using Configure = void (*)(void (*)(void*), bool (*)(void*));
-  auto configure = reinterpret_cast<Configure>(
-      dlsym(implementation, "ArtDcevmSourceConfigureRetiredMethods"));
   auto contains = reinterpret_cast<RetiredMethodRegistry::ContainsUnsafe>(
       hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
-  if (!configure || !contains) {
-    *error = "Missing retired-method registry bridge or named LinearAlloc symbol";
+  if (!contains) {
+    *error = "Missing named LinearAlloc symbol for retired-method registry";
     return false;
   }
   RetiredMemberGuardFunctions functions{
@@ -48,7 +43,6 @@ bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
     return false;
   }
   contains_unsafe = contains;
-  configure(Retire, Contains);
   return true;
 }
 

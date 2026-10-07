@@ -1,15 +1,14 @@
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/member_decode.h"
+#include "platform/android13/reflected_field_visit.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/symbols/android13.h"
-#include <dlfcn.h>
 #include <jni.h>
 #include <vector>
 #include <type_traits>
 
 namespace artdcevm::android13 {
 namespace {
-void (*visit_field)(void*, void*);
 void* original_field;
 void* original_visit;
 void* original_varhandle;
@@ -20,7 +19,7 @@ void* original_nterp_static;
 struct Entry { std::string symbol; void* proxy; void** original; void* target = nullptr; };
 
 void* GetField(void* field) { return DecodeReflectedField(field); }
-void VisitField(void* field, void* visitor) { visit_field(field, visitor); }
+void VisitField(void* field, void* visitor) { VisitReflectedFieldTarget(field, visitor); }
 bool VarHandle(void* handle, int mode, void* frame, const void* operands, void* result) {
   if (GuardFieldVarHandle(handle, mode, frame, operands, result)) return false;
   using Fn = bool (*)(void*, int, void*, const void*, void*);
@@ -105,10 +104,7 @@ template <typename T> struct ReflectionField {
 };
 }
 bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* error) {
-  visit_field = reinterpret_cast<decltype(visit_field)>(dlsym(library, "ArtDcevmSourceVisitField"));
-  if (!visit_field) {
-    *error = "Retired field guard exports are incomplete"; return false;
-  }
+  if (!ConfigureReflectedFieldVisit(hooks,library,error)) return false;
   std::vector<Entry> entries{
     {cas::kRetiredFieldHooks[0], reinterpret_cast<void*>(GetField), &original_field},
     {cas::kRetiredFieldHooks[1], reinterpret_cast<void*>(VisitField), &original_visit},

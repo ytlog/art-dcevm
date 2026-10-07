@@ -2,6 +2,7 @@
 #include "platform/android13/retired_member_guard.h"
 #include "platform/android13/member_decode.h"
 #include "platform/android13/member_access_guards.h"
+#include "platform/android13/instrumentation_listener.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
@@ -16,7 +17,6 @@ namespace artdcevm::android13 {
 namespace {
 void* original_nterp;
 void* original_deopt;
-void (*trace_deopt)(void*, void*, void*, bool, int);
 void* original_resolve;
 void* original_resolve_handles;
 void* checked_resolve;
@@ -43,7 +43,7 @@ void* original_new_v[2];
 std::atomic<int> rejected{0};
 
 void Deopt(void* thread, void* frame, void* result, bool from_code, int type) {
-  trace_deopt(thread, frame, result, from_code, type);
+  TraceDeopt(thread, frame, result, from_code, type);
   using Fn = void (*)(void*, void*, void*, bool, int);
   reinterpret_cast<Fn>(original_deopt)(thread, frame, result, from_code, type);
 }
@@ -171,16 +171,12 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 }
 
-bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
-  trace_deopt = reinterpret_cast<decltype(trace_deopt)>(dlsym(library, "ArtDcevmSourceTraceDeopt"));
-  auto configure_dispatch = reinterpret_cast<void (*)(void (*)())>(
-      dlsym(library, "ArtDcevmSourceConfigureDispatchChecks"));
+bool InstallRetiredMethodHooks(HookEngine& hooks, void*, std::string* error) {
   checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
   checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
-  if (!trace_deopt || !configure_dispatch || !checked_resolve || !checked_resolve_handles) {
+  if (!checked_resolve || !checked_resolve_handles) {
     *error = "Dispatch validation symbols are incomplete"; return false;
   }
-  configure_dispatch(RequireDispatchChecks);
   if (!ConfigureNterpDispatch(RuntimeClassLinker(),
       reinterpret_cast<CheckedDispatchResolver>(checked_resolve))) {
     *error = "Named checked resolver or fixed Runtime ClassLinker is unavailable";

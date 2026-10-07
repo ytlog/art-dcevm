@@ -25,7 +25,7 @@ std::vector<std::string> events;
 bool locked=false;
 selective_abi::RuntimePrefix runtime{};void* runtime_ptr=&runtime;int mutex_marker=0,list_marker=0;void* lock_ptr=&mutex_marker;
 alignas(8) unsigned char thread1[320]{},thread2[320]{};
-void (*set_probe)(bool)=nullptr;uint64_t (*get_hits)()=nullptr;bool (*proxy)(const void*,uintptr_t)=nullptr;
+bool (*proxy)(const void*,uintptr_t)=nullptr;
 Cache* obsolete_cache=nullptr;
 Frame& Active(const stack_abi::Visitor* visitor){return stacks.at(visitor->thread).at(visitor->depth);}
 void Construct(void* raw,void* thread,void* context,stack_abi::WalkKind kind,bool suspended){
@@ -55,7 +55,6 @@ bool Original(const void*,uintptr_t){++original_calls;return original_result;}
 namespace artdcevm::android13 {void* CurrentHierarchyThread(){return current;}bool ReceiverGuardRequired(){return required;}
 void* ReadHeapReference(void* object,size_t offset,bool){assert(offset==offsetof(Class,class_loader));return loaders.at(object);}}
 extern "C" bool ArtDcevmSourceProbeStackAccess(void (*test)(void*)){void* probe_thread=reinterpret_cast<void*>(0x9999);stacks[probe_thread]={};test(probe_thread);return true;}
-extern "C" void ArtDcevmSourceConfigureAsyncDeopt(void (*set)(bool),uint64_t (*hits)()){set_probe=set;get_hits=hits;}
 struct Context {virtual ~Context(){assert(locked);++contexts_deleted;events.push_back("delete");}};
 void* MakeContext(){assert(locked);events.push_back("context");return new Context;}
 void Lock(void* mutex,void* self){assert(!locked&&mutex==lock_ptr&&self==current);locked=true;events.push_back("lock");}
@@ -98,9 +97,9 @@ int main(){Hooks hooks;std::string error;void* self=dlopen(nullptr,RTLD_NOW);ass
  alignas(8) uint32_t machine_code[8]{};void* code=machine_code+1;const void* header=machine_code;uintptr_t pc=reinterpret_cast<uintptr_t>(code)+4;
  stack_abi::DexPrefix dex{};stack_abi::OatDexPrefix oat{reinterpret_cast<void*>(0x5550)};dex.oat_dex=&oat;cache->dex_file=reinterpret_cast<uint64_t>(&dex);obsolete_cache->dex_file=cache->dex_file;app.dex_cache=uint32_t(reinterpret_cast<uintptr_t>(cache));codes[&method]=code;
  current=thread1;stacks[thread1]={{&method,pc,header}};
- size_t before=walks;original_result=true;assert(proxy(&runtime,pc)&&walks==before&&get_hits()==0);original_result=false;assert(!proxy(&runtime,pc)&&walks==before);
- set_probe(true);current=nullptr;assert(!proxy(&runtime,pc)&&walks==before);current=thread1;
- assert(proxy(&runtime,pc)&&get_hits()==1);before=walks;assert(!proxy(&runtime,pc+8)&&walks==before+1&&get_hits()==1);
+ size_t before=walks;original_result=true;assert(proxy(&runtime,pc)&&walks==before&&AsyncDeoptProbeHits()==0);original_result=false;assert(!proxy(&runtime,pc)&&walks==before);
+ SetAsyncDeoptProbe(true);current=nullptr;assert(!proxy(&runtime,pc)&&walks==before);current=thread1;
+ assert(proxy(&runtime,pc)&&AsyncDeoptProbeHits()==1);before=walks;assert(!proxy(&runtime,pc+8)&&walks==before+1&&AsyncDeoptProbeHits()==1);
  stacks[thread1][0].quick=false;assert(!proxy(&runtime,pc));stacks[thread1][0].quick=true;
  for(void* bad:{static_cast<void*>(&native),static_cast<void*>(&runtime_method),static_cast<void*>(&boot_method),static_cast<void*>(nullptr)}){stacks[thread1][0].method=bad;assert(!proxy(&runtime,pc));}stacks[thread1][0].method=&method;
  stacks[thread1][0].inlined=true;assert(!proxy(&runtime,pc));stacks[thread1][0].inlined=false;
@@ -109,12 +108,12 @@ int main(){Hooks hooks;std::string error;void* self=dlopen(nullptr,RTLD_NOW);ass
  stacks[thread1][0].header=machine_code+2;assert(!proxy(&runtime,pc));stacks[thread1][0].header=header;
  codes[&method]=nullptr;assert(!proxy(&runtime,pc));codes[&method]=code;
  stacks[thread1][0].pc=reinterpret_cast<uintptr_t>(code)-1;assert(!proxy(&runtime,reinterpret_cast<uintptr_t>(code)-1));stacks[thread1][0].pc=pc;
- method.access_flags=0x40000;app.dex_cache=0;assert(proxy(&runtime,pc)&&cache_calls==1&&get_hits()==2); Cache* saved_obsolete=obsolete_cache;obsolete_cache=nullptr;assert(!proxy(&runtime,pc));obsolete_cache=saved_obsolete;
+ method.access_flags=0x40000;app.dex_cache=0;assert(proxy(&runtime,pc)&&cache_calls==1&&AsyncDeoptProbeHits()==2); Cache* saved_obsolete=obsolete_cache;obsolete_cache=nullptr;assert(!proxy(&runtime,pc));obsolete_cache=saved_obsolete;
  method.access_flags=0;app.dex_cache=uint32_t(reinterpret_cast<uintptr_t>(cache));
  dex.oat_dex=nullptr;assert(!proxy(&runtime,pc));dex.oat_dex=&oat;oat.oat=nullptr;assert(!proxy(&runtime,pc));oat.oat=reinterpret_cast<void*>(0x5550);
  // First matching native frame terminates the AOT safety search; an app frame at the same PC cannot override it.
  stacks[thread1]={{&native,pc,header},{&method,pc,header}};assert(!proxy(&runtime,pc));
- set_probe(false);required=true;stacks[thread1]={{&method,pc,header}};assert(proxy(&runtime,pc)&&get_hits()==3);required=false;
+ SetAsyncDeoptProbe(false);required=true;stacks[thread1]={{&method,pc,header}};assert(proxy(&runtime,pc)&&AsyncDeoptProbeHits()==3);required=false;
  // A physical boot frame may contain an inlined app method, which selective deopt must include.
  uint32_t flagged=selective_abi::kShouldDeoptimizeMask,plain=0;
  stacks[thread1]={{&boot_method,1,&flagged},{&method,2,&flagged,true,true,0x41},{&native,3,&flagged},{&runtime_method,4,&flagged},{&method,5,&flagged,false}};

@@ -43,8 +43,6 @@ void Throw(void* thread,const char* type,const char* text,void* result=nullptr) 
   if (result) std::memset(result,0,sizeof(uint64_t));
   throw_exception(thread,type,text);
 }
-void SetReceiverEnabled(bool enabled) { receiver_enabled.store(enabled,std::memory_order_release); }
-void SetReceiverRequired(bool required) { receiver_required.store(required,std::memory_order_release); }
 bool Receiver(void* thread,jobject receiver,void* member,const char* message) {
   if (!ReceiverGuardEnabled() || !receiver || !member || (Flags(member)&kStaticFlag)) return false;
   void* object=DecodeRunnableObject(thread,receiver);
@@ -74,6 +72,8 @@ bool CanChange(void* field,void* method) {
   return false;
 }
 }
+void SetReceiverGuardEnabled(bool enabled) { receiver_enabled.store(enabled,std::memory_order_release); }
+void SetReceiverGuardRequired(bool required) { receiver_required.store(required,std::memory_order_release); }
 bool ReceiverGuardEnabled() { return receiver_enabled.load(std::memory_order_acquire); }
 bool ReceiverGuardRequired() { return receiver_required.load(std::memory_order_acquire); }
 bool GuardNativeFieldReceiver(JNIEnv* env,jobject object,jfieldID id) {
@@ -173,16 +173,14 @@ bool ConfigureMemberAccessGuards(HookEngine& hooks,void* implementation,JNIEnv* 
   resolve_field=reinterpret_cast<Resolve>(hooks.FindSymbol("libart.so","_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"));
   throw_final=reinterpret_cast<decltype(throw_final)>(hooks.FindSymbol("libart.so","_ZN3art33ThrowIllegalAccessErrorFinalFieldEPNS_9ArtMethodEPNS_8ArtFieldE"));
   throw_exception=reinterpret_cast<ThrowGuardException>(hooks.FindSymbol("libart.so",kGuardThrowNewException));
-  using Configure=void (*)(bool (*)(),void (*)(bool),bool (*)(),void (*)(bool));
-  auto configure=reinterpret_cast<Configure>(dlsym(implementation,"ArtDcevmSourceConfigureReceiverState"));
   using Probe=int (*)(JNIEnv*,jobject,Unary,uint32_t (*)(const void*));
   auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeMemberAccess"));
   if (!root || !obsolete_cache || !obsolete_class || !interface_types || !direct_interface ||
-      !access_template || !resolve_field || !throw_final || !throw_exception || !configure || !probe) {
+      !access_template || !resolve_field || !throw_final || !throw_exception || !probe) {
     *error="Missing named ART member access guard or source calibration"; return false;
   }
   int result=probe(env,sample,root,Operand);
   if (result || env->ExceptionCheck()) { *error="Member access profile calibration failed at step "+std::to_string(result); return false; }
-  configure(ReceiverGuardEnabled,SetReceiverEnabled,ReceiverGuardRequired,SetReceiverRequired); return true;
+  return true;
 }
 }

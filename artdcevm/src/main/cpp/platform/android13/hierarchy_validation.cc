@@ -1,7 +1,6 @@
 #include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/hierarchy_allocation.h"
 #include "platform/android13/member_access_guards.h"
-#include "platform/android13/hierarchy_validation_abi.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"
@@ -9,7 +8,6 @@
 #include "platform/android13/validation_metadata.h"
 #include "platform/symbols/android13.h"
 #include <cstring>
-#include <dlfcn.h>
 #include <jvmti.h>
 #include <limits>
 namespace artdcevm::android13 {
@@ -81,13 +79,11 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
 }
 bool ConfigureHierarchyValidation(HookEngine& hooks,void* implementation,std::string* error) {
   auto find=reinterpret_cast<FindClass>(hooks.FindSymbol("libart.so",cas::kFindClass));
-  auto configure=reinterpret_cast<ConfigureHierarchyState>(dlsym(implementation,"ArtDcevmSourceConfigureHierarchyState"));
-  if(!find || !configure || !RuntimeClassLinker()) {
-    *error="Missing named hierarchy resolver or state forwarding";return false;
+  if(!find || !RuntimeClassLinker()) {
+    *error="Missing named hierarchy resolver or class linker";return false;
   }
   if(!ConfigureHandleRootScopes(hooks,implementation,error)) return false;
   find_class=find;
-  configure(BeginHierarchyTransaction,EndHierarchyTransaction,HasHierarchyChange,HasHierarchyNarrowing);
   return true;
 }
 }

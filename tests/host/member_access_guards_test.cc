@@ -31,7 +31,6 @@ std::map<std::pair<void*,size_t>,void*> heap;
 std::map<void*,void*> roots,old_classes;
 std::map<void*,void*> direct_interfaces;
 std::set<std::pair<void*,void*>> assignable;
-void (*set_enabled)(bool); void (*set_required)(bool);
 bool final_enabled=false;
 void *retired_method=nullptr,*retired_field=nullptr,*resolved_field=nullptr,*cache=nullptr,*loader=nullptr;
 size_t throws=0,final_throws=0,resolves=0,root_reads=0,template_calls=0;
@@ -97,9 +96,6 @@ bool FinalFieldGuardEnabled() noexcept{return final_enabled;}
 bool GuardRetiredMethod(void* m,void*,void* result){if(m!=retired_method)return false;if(result)std::memset(result,0,8);return true;}
 bool GuardRetiredField(void* f,void*,void* result){if(f!=retired_field)return false;if(result)std::memset(result,0,8);return true;}
 }
-extern "C" void ArtDcevmSourceConfigureReceiverState(bool(*enabled)(),void(*write)(bool),bool(*required)(),void(*write_required)(bool)){
- assert(!enabled()&&!required());set_enabled=write;set_required=write_required;
-}
 extern "C" int ArtDcevmSourceProbeMemberAccess(JNIEnv*,jobject,void*(*)(void*),uint32_t(*operand)(const void*)){
  Operands ops(7);assert(operand(&ops)==7);return 0;
 }
@@ -124,7 +120,7 @@ int main(){
  assert(g::ConfigureMemberAccessGuards(hooks,implementation,&env.jni,nullptr,&error));
  g::member_access_abi::RunnableAccess access{thread,&env,nullptr};
  assert(!g::GuardRunnableFieldReceiver(&access,reinterpret_cast<jobject>(object),reinterpret_cast<jfieldID>(field)));
- set_enabled(true);set_required(true);assert(g::ReceiverGuardEnabled()&&g::ReceiverGuardRequired());
+ g::SetReceiverGuardEnabled(true);g::SetReceiverGuardRequired(true);assert(g::ReceiverGuardEnabled()&&g::ReceiverGuardRequired());
  assert(g::GuardRunnableFieldReceiver(&access,reinterpret_cast<jobject>(object),reinterpret_cast<jfieldID>(field)));
  assert(exception_type=="Ljava/lang/IncompatibleClassChangeError;");
  assert(g::GuardRunnableMethodReceiver(&access,reinterpret_cast<jobject>(object),method));
@@ -161,7 +157,7 @@ int main(){
  assert(g::GuardFieldVarHandle(vh,-1,&frame,&ops,&result)&&result==88);
  assert(g::GuardFieldVarHandle(vh,31,&frame,&ops,&result)&&result==88&&template_calls==templates_before);
  retired_field=field;result=19;assert(g::GuardFieldVarHandle(vh,1,&frame,&ops,&result)&&result==0&&template_calls==templates_before);retired_field=nullptr;
- set_enabled(false);assert(!g::GuardFieldVarHandle(vh,0,&frame,&ops,nullptr));set_enabled(true);
+ g::SetReceiverGuardEnabled(false);assert(!g::GuardFieldVarHandle(vh,0,&frame,&ops,nullptr));g::SetReceiverGuardEnabled(true);
  field->access_flags=0;result=91;assert(g::GuardFieldVarHandle(vh,1,&frame,&ops,&result)&&result==91);
  assignable.insert({declaring,unrelated});assert(!g::GuardFieldVarHandle(vh,1,&frame,&ops,&result));assignable.clear();
  field->access_flags=16;assert(!g::GuardMethodHandleFieldPut(field));

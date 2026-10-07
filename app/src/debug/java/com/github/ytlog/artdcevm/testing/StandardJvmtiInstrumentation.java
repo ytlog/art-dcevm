@@ -170,7 +170,7 @@ public final class StandardJvmtiInstrumentation extends Instrumentation {
             start.countDown();
             worker.join(10000);
             peerWorker.join(10000);
-            require(!worker.isAlive() && threadedResult.get() == 0, "threaded body result");
+            require(!worker.isAlive() && threadedResult.get() == 0, "threaded body result: alive=" + worker.isAlive() + ", error=" + threadedResult.get() + ", peerAlive=" + peerWorker.isAlive() + ", peerError=" + peerResult.get());
             require(!peerWorker.isAlive() && peerResult.get() == 0, "second client additive result");
             require(instance.compute() == 39, "body behavior");
             require(peer.compute() == 12 && Peer.class.getField("marker") != null,

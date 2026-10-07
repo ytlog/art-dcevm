@@ -1,0 +1,10 @@
+--- dex/standard_dex_file.h
++++ dex/standard_dex_file.h
+@@ -72,6 +72,7 @@
+     friend class CodeItemDataAccessor;
+     friend class CodeItemDebugInfoAccessor;
+     friend class CodeItemInstructionAccessor;
++    friend struct InstrumentationListenerLayoutProbe;
+     friend class DexWriter;
+     friend class StandardDexFile;
+     DISALLOW_COPY_AND_ASSIGN(CodeItem);

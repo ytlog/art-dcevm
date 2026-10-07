@@ -1,5 +1,4 @@
 #include "platform/android13/suspend_deopt_hooks.h"
-#include "platform/android13/pending_suspend_deopt_abi.h"
 #include "platform/android13/suspend_deopt_art_abi.h"
 #include "platform/symbols/android13.h"
 
@@ -9,18 +8,13 @@
 
 using namespace artdcevm::android13;
 namespace {
-MarkPendingSuspendDeopt mark_pending;
-IsPendingSuspendDeopt is_pending;
-CancelPendingSuspendDeopt cancel_pending;
-ResetPendingSuspendDeopt reset_pending;
 int original_calls = 0;
 int finish_calls = 0;
 int context_calls = 0;
-SuspendDeoptHits hits;
 void PushContext(void* thread, const suspend_abi::JValue& result, bool reference,
                  suspend_abi::ThrowablePtr exception, bool from_code,
                  suspend_abi::MethodType method_type) {
-  assert(!is_pending(thread));
+  assert(!EvolutionSuspendDeoptPending(thread));
   assert(result.bits == 0 && !reference && exception.reference == 0 && !from_code);
   assert(method_type == suspend_abi::MethodType::kDefault);
   assert(original_calls > context_calls);
@@ -56,16 +50,6 @@ class FakeHooks final : public artdcevm::HookEngine {
 };
 }
 
-extern "C" void ArtDcevmSourceConfigureSuspendDeopt(MarkPendingSuspendDeopt mark,
-    IsPendingSuspendDeopt pending, CancelPendingSuspendDeopt cancel,
-    ResetPendingSuspendDeopt reset, SuspendDeoptHits count) {
-  mark_pending = mark;
-  is_pending = pending;
-  cancel_pending = cancel;
-  reset_pending = reset;
-  hits = count;
-}
-
 int main() {
   void* implementation = dlopen(nullptr, RTLD_NOW);
   assert(implementation);
@@ -79,23 +63,23 @@ int main() {
   int target = 0, other = 0;
   hooks.proxy(&target);
   assert(original_calls == 1 && finish_calls == 0);
-  assert(mark_pending(&target));
+  assert(MarkEvolutionSuspendDeopt(&target));
   hooks.proxy(&other);
-  assert(original_calls == 2 && finish_calls == 0 && is_pending(&target));
+  assert(original_calls == 2 && finish_calls == 0 && EvolutionSuspendDeoptPending(&target));
   hooks.proxy(&target);
   assert(original_calls == 3 && finish_calls == 1);
   hooks.proxy(&target);
   assert(original_calls == 4 && finish_calls == 1);
-  assert(mark_pending(&target));
-  cancel_pending(&other);
-  assert(is_pending(&target));
-  cancel_pending(&target);
+  assert(MarkEvolutionSuspendDeopt(&target));
+  CancelEvolutionSuspendDeopt(&other);
+  assert(EvolutionSuspendDeoptPending(&target));
+  CancelEvolutionSuspendDeopt(&target);
   hooks.proxy(&target);
   assert(finish_calls == 1);
-  assert(mark_pending(&target));
-  reset_pending();
+  assert(MarkEvolutionSuspendDeopt(&target));
+  ResetEvolutionSuspendDeopt();
   hooks.proxy(&target);
   assert(finish_calls == 1);
-  assert(context_calls == 1 && hits() == 1);
+  assert(context_calls == 1 && EvolutionSuspendDeoptHits() == 1);
   dlclose(implementation);
 }

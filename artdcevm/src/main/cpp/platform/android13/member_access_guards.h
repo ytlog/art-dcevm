@@ -6,6 +6,8 @@ namespace artdcevm::android13 {
 bool ConfigureMemberAccessGuards(HookEngine&,void* implementation,JNIEnv*,jobject,std::string*);
 bool ReceiverGuardEnabled();
 bool ReceiverGuardRequired();
+void SetReceiverGuardEnabled(bool);
+void SetReceiverGuardRequired(bool);
 bool GuardNativeFieldReceiver(JNIEnv*,jobject,jfieldID);
 bool GuardRunnableFieldReceiver(const void*,jobject,jfieldID);
 bool GuardRunnableMethodReceiver(const void*,jobject,void*);

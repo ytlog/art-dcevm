@@ -1,5 +1,6 @@
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/runtime_access_abi.h"
+#include "platform/android13/selective_deopt_abi.h"
 #include <cstring>
 #include <dlfcn.h>
 namespace artdcevm::android13 {
@@ -15,8 +16,13 @@ void* Service(size_t offset) {
   return result;
 }
 }
+void* RuntimeInstance() { return *runtime_instance; }
+void* RuntimeInstrumentation() {
+  return static_cast<unsigned char*>(*runtime_instance) + offsetof(selective_abi::RuntimePrefix, instrumentation);
+}
 void* RuntimeClassLinker() { return Service(offsetof(runtime_access_abi::RuntimePrefix, class_linker)); }
 void* RuntimeJniIdManager() { return Service(offsetof(runtime_access_abi::RuntimePrefix, jni_id_manager)); }
+void* RuntimeJit() { return Service(offsetof(runtime_access_abi::RuntimePrefix, jit)); }
 void* RuntimeJitCodeCache() {
   return Service(offsetof(runtime_access_abi::RuntimePrefix, jit)) == nullptr ? nullptr :
       Service(offsetof(runtime_access_abi::RuntimePrefix, jit_code_cache));

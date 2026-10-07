@@ -1,22 +1,16 @@
 --- ti_redefine.cc
 +++ ti_redefine.cc
-@@ -30,6 +30,15 @@
+@@ -30,6 +30,9 @@
   */
 
  #include "ti_redefine.h"
-+#include "retired_methods.h"
-+#include "retired_fields.h"
-+#include "hierarchy.h"
 +#include "platform/android13/allocation_validation_abi.h"
 +#include "platform/android13/art_method_abi.h"
 +#include "platform/android13/validation_metadata_abi.h"
-+extern "C" bool ArtDcevmSourceCheckFields(void*);
-+extern "C" bool ArtDcevmSourceCheckMethods(void*);
-+extern "C" bool ArtDcevmSourceCheckClass(void*);
 
  #include <algorithm>
  #include <atomic>
-@@ -114,6 +123,8 @@
+@@ -114,6 +117,8 @@
  #include "non_debuggable_classes.h"
  #include "obj_ptr.h"
  #include "object_lock.h"
@@ -25,7 +19,7 @@
  #include "reflective_value_visitor.h"
  #include "runtime.h"
  #include "runtime_globals.h"
-@@ -133,1047 +144,14 @@
+@@ -133,1047 +138,14 @@
  #include "well_known_classes.h"
  #include "write_barrier.h"
 
@@ -1077,7 +1071,7 @@
  class RedefinitionDataIter;
 
  // A wrapper that lets us hold onto the arbitrary sized data needed for redefinitions in a
-@@ -1389,6 +367,7 @@
+@@ -1389,6 +361,7 @@
    RedefinitionDataIter end() REQUIRES_SHARED(art::Locks::mutator_lock_);
 
   private:
@@ -1085,7 +1079,7 @@
    mutable art::Handle<art::mirror::ObjectArray<art::mirror::Object>> arr_;
    std::vector<Redefiner::ClassRedefinition>* redefinitions_;
    // Used to mark a particular redefinition as fully initialized.
-@@ -1601,1500 +580,13 @@
+@@ -1601,1500 +574,13 @@
    }
 
   private:

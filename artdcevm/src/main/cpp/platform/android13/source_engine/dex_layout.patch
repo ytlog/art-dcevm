@@ -1,10 +1,11 @@
 --- dex/dex_file.h
 +++ dex/dex_file.h
-@@ -911,6 +911,7 @@
+@@ -911,6 +911,8 @@
    // has been created and can be changed later by the runtime.
    mutable hiddenapi::Domain hiddenapi_domain_;
 
 +  friend struct StackLayoutProbe;
++  friend struct InstrumentationListenerLayoutProbe;
    friend class DexFileLoader;
    friend class DexFileVerifierTest;
    friend class OatWriter;

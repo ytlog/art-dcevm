@@ -1,9 +1,7 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/pending_suspend_deopt.h"
-#include "platform/android13/pending_suspend_deopt_abi.h"
 #include "platform/android13/suspend_deopt_art_abi.h"
 
-#include <dlfcn.h>
 #include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
@@ -31,20 +29,23 @@ void SuspendProxy(void* thread) {
 }
 }  // namespace
 
-bool InstallSuspendDeoptHook(HookEngine& hooks, void* implementation,
+bool MarkEvolutionSuspendDeopt(void* thread) { return MarkPending(thread); }
+bool EvolutionSuspendDeoptPending(void* thread) { return IsPending(thread); }
+void CancelEvolutionSuspendDeopt(void* thread) { CancelPending(thread); }
+void ResetEvolutionSuspendDeopt() { ResetPending(); }
+uint64_t EvolutionSuspendDeoptHits() { return Hits(); }
+
+bool InstallSuspendDeoptHook(HookEngine& hooks, void* /*implementation*/,
                              std::string* error) {
-  auto configure = reinterpret_cast<ConfigurePendingSuspendDeopt>(
-      dlsym(implementation, "ArtDcevmSourceConfigureSuspendDeopt"));
   auto push = reinterpret_cast<suspend_abi::PushContext>(
       hooks.FindSymbol("libart.so", cas::kPushDeoptimizationContext));
   auto deopt = reinterpret_cast<suspend_abi::Deoptimize>(
       hooks.FindSymbol("libart.so", cas::kDeoptimize));
   void* target = hooks.FindSymbol("libart.so", cas::kTestSuspendFromCode);
-  if (!configure || !push || !deopt || !target) {
-    *error = "Missing named suspend entrypoint or pending-deopt callbacks";
+  if (!push || !deopt || !target) {
+    *error = "Missing named suspend entrypoint or deoptimization capability";
     return false;
   }
-  configure(MarkPending, IsPending, CancelPending, ResetPending, Hits);
   push_context = push;
   deoptimize = deopt;
   return hooks.Install(target, reinterpret_cast<void*>(SuspendProxy),

@@ -13,6 +13,8 @@ struct FieldOffsets {
     using Fixed = artdcevm::android13::member_decode_abi::ReflectedField;
     static_assert(sizeof(mirror::Field) == sizeof(Fixed));
     static_assert(alignof(mirror::Field) == alignof(Fixed));
+    static_assert(offsetof(mirror::Field, type_) == offsetof(Fixed, type));
+    static_assert(offsetof(mirror::Field, offset_) == offsetof(Fixed, offset));
     static_assert(offsetof(mirror::Field, declaring_class_) == offsetof(Fixed, declaring_class));
     static_assert(offsetof(mirror::Field, access_flags_) == offsetof(Fixed, access_flags));
     static_assert(offsetof(mirror::Field, art_field_index_) == offsetof(Fixed, art_field_index));

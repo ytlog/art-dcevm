@@ -12,6 +12,7 @@ bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
 size_t PruneRetiredFields(const void* allocator) noexcept;
 size_t RetiredFieldSlotCount();
 void RetireFieldPointer(void*) noexcept;
+uint32_t RetiredFieldTokenFor(void*);
 bool IsRetiredFieldPointer(void* field);
 void* ResolveRetiredFieldToken(uint32_t token);
 
