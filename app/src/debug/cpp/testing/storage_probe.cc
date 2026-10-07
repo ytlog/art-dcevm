@@ -27,12 +27,12 @@ jlong Varargs(JNIEnv* env, const References& refs, jmethodID method, bool statik
   va_end(args); return result;
 }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_StorageProbe_registerNative(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_registerNative(
     JNIEnv* env, jclass, jclass cls, jboolean flipped) {
   JNINativeMethod method{"nativeFlip", "(I)I", flipped ? reinterpret_cast<void*>(StaticNative) : reinterpret_cast<void*>(InstanceNative)};
   env->RegisterNatives(cls, &method, 1);
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_StorageProbe_retain(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_retain(
     JNIEnv* env, jclass, jint generation, jobject object, jboolean flipped) {
   auto& refs = generations[generation];
   if (refs.object) env->DeleteGlobalRef(refs.object);
@@ -58,7 +58,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_StorageProbe_retain(
   }
   env->DeleteLocalRef(cls);
 }
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_StorageProbe_field(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_field(
     JNIEnv* env, jclass, jint generation, jint index, jboolean write, jobject token) {
   const auto& refs = generations[generation];
   bool statik = (index % 2 == 0) == refs.flipped;
@@ -76,7 +76,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_StorageProbe_field(
   bool same = env->IsSameObject(value, token);
   env->DeleteLocalRef(value); return same;
 }
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_StorageProbe_invoke(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_invoke(
     JNIEnv* env, jclass, jint generation, jint kind, jint mode) {
   const auto& refs = generations[generation];
   bool statik = (kind != 1) == refs.flipped;
@@ -95,7 +95,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_StorageProbe_invoke
     default: return 0;
   }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_StorageProbe_release(JNIEnv* env, jclass) {
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_release(JNIEnv* env, jclass) {
   for (auto& refs : generations) {
     if (refs.object) env->DeleteGlobalRef(refs.object);
     if (refs.cls) env->DeleteGlobalRef(refs.cls);
@@ -114,7 +114,7 @@ jvmtiEnv* gc_env = nullptr;
 std::atomic<int> finished_collections{0};
 void JNICALL GcFinished(jvmtiEnv*) { ++finished_collections; }
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_StorageProbe_gcStress(
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_gcStress(
     JNIEnv* env, jclass, jint operation) {
   if (operation == 0) {
     if (gc_env) return JVMTI_ERROR_DUPLICATE;
@@ -139,7 +139,7 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_StorageProbe_gcStres
   gc_env->DisposeEnvironment(); gc_env = nullptr;
   return count;
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_StorageProbe_breakpoint(
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_breakpoint(
     JNIEnv* env, jclass, jobject method, jboolean enable) {
   auto id = env->FromReflectedMethod(method);
   if (!id) return JVMTI_ERROR_INVALID_METHODID;
@@ -164,6 +164,6 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_StorageProbe_breakpo
   breakpoint_env->DisposeEnvironment(); breakpoint_env = nullptr;
   return error;
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_StorageProbe_breakpointHits(JNIEnv*, jclass) {
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_StorageProbe_breakpointHits(JNIEnv*, jclass) {
   return breakpoint_hits.load();
 }

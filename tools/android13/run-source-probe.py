@@ -52,7 +52,7 @@ try:
     command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
     command('shell', 'run-as', 'dev.artdcevm.lab', 'rm', '-f', 'files/source-engine.json').check_returncode()
     run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'hookOrder', args.hook_order, '-e', 'suite', args.suite,
-                  'dev.artdcevm.lab/dev.artdcevm.platform.android13.SourceEngineInstrumentation')
+                  'dev.artdcevm.lab/com.github.ytlog.artdcevm.platform.android13.SourceEngineInstrumentation')
     (out / 'instrumentation.txt').write_text(run.stdout + run.stderr)
     report = command('exec-out', 'run-as', 'dev.artdcevm.lab', 'cat', 'files/source-engine.json')
     (out / 'probe.json').write_text(report.stdout)

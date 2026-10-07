@@ -21,19 +21,19 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   return JNI_OK;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_capabilities(JNIEnv* env, jclass) {
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_capabilities(JNIEnv* env, jclass) {
   std::lock_guard<std::mutex> lock(TransactionMutex());
   return env->NewStringUTF(backend ? backend->Capabilities().c_str() : "{\"attached\":false}");
 }
-extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_errorName(JNIEnv* env, jclass, jint code) {
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_errorName(JNIEnv* env, jclass, jint code) {
   std::lock_guard<std::mutex> lock(TransactionMutex());
   return env->NewStringUTF(backend ? backend->ErrorName(code).c_str() : "NO_BACKEND");
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_enableValidationHooks(JNIEnv*, jclass) {
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_enableValidationHooks(JNIEnv*, jclass) {
   std::lock_guard<std::mutex> lock(TransactionMutex());
   return backend ? backend->EnableValidationHooks() : JVMTI_ERROR_INVALID_ENVIRONMENT;
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_initializeEvolution(
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_initializeEvolution(
     JNIEnv* env, jclass, jstring path, jobject calibration) {
   if (!path || !calibration) return JVMTI_ERROR_NULL_POINTER;
   const char* bytes = env->GetStringUTFChars(path, nullptr);
@@ -68,7 +68,7 @@ int DecodeDefinitions(JNIEnv* env, jobjectArray classes, jobjectArray dexes, std
   return JVMTI_ERROR_NONE;
 }
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_apply(JNIEnv* env, jclass, jint operation, jobjectArray classes, jobjectArray dexes) {
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_apply(JNIEnv* env, jclass, jint operation, jobjectArray classes, jobjectArray dexes) {
   try {
     std::vector<artdcevm::Definition> defs;
     int error = DecodeDefinitions(env, classes, dexes, &defs);
@@ -78,7 +78,7 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_engine_NativeBridge_apply(JN
     return backend ? backend->Apply(static_cast<artdcevm::Operation>(operation), defs) : JVMTI_ERROR_INVALID_ENVIRONMENT;
   } catch (const std::bad_alloc&) { return JVMTI_ERROR_OUT_OF_MEMORY; }
 }
-extern "C" JNIEXPORT jstring JNICALL Java_dev_artdcevm_engine_NativeBridge_analyze(JNIEnv* env, jclass, jobjectArray classes, jobjectArray dexes) {
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_analyze(JNIEnv* env, jclass, jobjectArray classes, jobjectArray dexes) {
   try {
     std::vector<artdcevm::Definition> defs;
     int error = DecodeDefinitions(env, classes, dexes, &defs);

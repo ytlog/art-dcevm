@@ -72,7 +72,7 @@ void MustReject(const std::vector<unsigned char>& bytes, const char* description
 int main(int argc, char** argv) {
   try {
     if (argc != 2) throw std::runtime_error("Pass generated fixture asset directory");
-    std::string root = argv[1], suffix = "/dev/artdcevm/fixture/Evolving.dex";
+    std::string root = argv[1], suffix = "/com/github/ytlog/artdcevm/fixture/Evolving.dex";
     auto body_bytes = Read(root + "/body" + suffix);
     auto add_bytes = Read(root + "/add" + suffix);
     auto body = Schema(body_bytes), add = Schema(add_bytes);
@@ -80,8 +80,8 @@ int main(int argc, char** argv) {
     auto deleted = Schema(Read(root + "/delete" + suffix));
     auto types = Schema(Read(root + "/types" + suffix));
     auto hierarchy = Schema(Read(root + "/hierarchy" + suffix));
-    auto metadata = Schema(Read(root + "/metadata/dev/artdcevm/fixture/SchemaSubject.dex"));
-    Check(body.descriptor == "Ldev/artdcevm/fixture/Evolving;" && body.fields.size() == 2, "Wrong class/fields");
+    auto metadata = Schema(Read(root + "/metadata/com/github/ytlog/artdcevm/fixture/SchemaSubject.dex"));
+    Check(body.descriptor == "Lcom/github/ytlog/artdcevm/fixture/Evolving;" && body.fields.size() == 2, "Wrong class/fields");
     auto additive = Plan(body, add);
     Check(additive.required_features == (kAddField | kAddMethod), "Wrong additive requirements");
     auto same_schema = Plan(add, add2);

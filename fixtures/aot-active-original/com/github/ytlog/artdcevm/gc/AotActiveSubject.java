@@ -1,0 +1,16 @@
+package com.github.ytlog.artdcevm.gc;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public class AotActiveSubject {
+    public static AtomicBoolean release = new AtomicBoolean(false);
+    public static CountDownLatch entered = new CountDownLatch(1);
+
+    public int value() {
+        AtomicBoolean gate = release;
+        entered.countDown();
+        while (!gate.get()) Thread.yield();
+        return 1;
+    }
+}

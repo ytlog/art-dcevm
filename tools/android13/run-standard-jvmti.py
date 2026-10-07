@@ -31,7 +31,7 @@ for first in (False, True):
         run = command('shell', 'am', 'instrument', '-w', '-r', '-e', 'clientFirst',
                       str(first).lower(), '-e', 'transformCase', str(mode == 'transform').lower(),
                       '-e', 'transformHierarchyCase', str(mode == 'transformHierarchy').lower(),
-                      'dev.artdcevm.lab/dev.artdcevm.testing.StandardJvmtiInstrumentation')
+                      'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation')
         name = ('clientFirst' if first else 'enhancerFirst') + (
             '' if mode == 'baseline' else mode[0].upper() + mode[1:])
         (output / (name + '.txt')).write_text(run.stdout + run.stderr)

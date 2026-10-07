@@ -10,7 +10,7 @@
 校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
 Hook 检查调用者能力和类参数，再把完整批次交给源码结构事务；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
 对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](../build/evidence/build/20261006T154308Z-variant-boundary.json)
-独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
+独立用户 Agent 的设备回归入口为 `com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation`。
 本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 转换新增字段和移除父类的设备结果见 `build/evidence/standard-jvmti/20261006T153842Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 `build/evidence/source-engine/20261006T153859Z/run.json` 和
@@ -51,6 +51,8 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 
 ## Gradle 模块
 
+增强库的 Java 根包与 Library namespace 为 `com.github.ytlog.artdcevm`；演示应用的 Java namespace 为 `com.github.ytlog.artdcevm.demo`。演示应用的安装 ID 仍为 `dev.artdcevm.lab`，供现有设备脚本定位应用。JNI 导出名、补丁 DEX 类名和测试入口与新 Java 包名一致。
+
 - `:artdcevm` 是可复用的 Android Library，包含 `DcevmRuntime`、后端、Agent 和 Native 实现；Release AAR 的 Native 部分只包含 `libartdcevm.so`；ShadowHook 2.0.1 通过 Gradle 传递依赖提供。
 - `:app` 是演示与设备测试应用，通过 `implementation project(':artdcevm')` 使用增强库。补丁 fixture、instrumentation 和测试页面保留在应用模块。
 - `-PsourceEngine13` 的可选源码模块由 `:artdcevm` 构建并随其 AAR 打包；默认构建不包含该源码模块。
@@ -60,7 +62,7 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 ## 目录与接口
 
 ```text
-artdcevm/src/main/java/dev/artdcevm/
+artdcevm/src/main/java/com/github/ytlog/artdcevm/
   api/                         应用侧契约、不可变补丁请求、结果
   engine/                      版本注册与稳定 JNI 协议
   platform/android13/          API 33 的 attach、debuggable 策略

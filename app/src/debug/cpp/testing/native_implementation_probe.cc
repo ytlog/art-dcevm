@@ -20,7 +20,7 @@ jobject ReferenceV(JNIEnv* env, bool statik, jmethodID method, ...) {
   va_end(args); return result;
 }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_register(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeShapeProbe_register(
     JNIEnv* env, jclass, jclass cls) {
   JNINativeMethod methods[] = {
     {"wide", "(JDLjava/lang/Object;)J", reinterpret_cast<void*>(NativeWide)},
@@ -29,7 +29,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_reg
   };
   env->RegisterNatives(cls, methods, 3);
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_retain(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeShapeProbe_retain(
     JNIEnv* env, jclass, jobject object) {
   if (retained) env->DeleteGlobalRef(retained);
   if (retained_class) env->DeleteGlobalRef(retained_class);
@@ -41,7 +41,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_ret
   static_reference = env->GetStaticMethodID(cls, "staticReference", "(Ljava/lang/Object;)Ljava/lang/Object;");
   env->DeleteLocalRef(cls);
 }
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_wide(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_NativeShapeProbe_wide(
     JNIEnv* env, jclass, jint mode, jlong x, jdouble y, jobject token) {
   jvalue args[3]{}; args[0].j = x; args[1].d = y; args[2].l = token;
   switch (mode) {
@@ -50,7 +50,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_wi
     default: return WideV(env, retained_class, wide, x, y, token);
   }
 }
-extern "C" JNIEXPORT jobject JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_reference(
+extern "C" JNIEXPORT jobject JNICALL Java_com_github_ytlog_artdcevm_testing_NativeShapeProbe_reference(
     JNIEnv* env, jclass, jint mode, jboolean statik, jobject token) {
   auto method = statik ? static_reference : reference;
   jvalue args[1]{}; args[0].l = token;
@@ -62,7 +62,7 @@ extern "C" JNIEXPORT jobject JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_
     default: return ReferenceV(env, statik, method, token);
   }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeShapeProbe_release(JNIEnv* env, jclass) {
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeShapeProbe_release(JNIEnv* env, jclass) {
   if (retained) env->DeleteGlobalRef(retained);
   if (retained_class) env->DeleteGlobalRef(retained_class);
   retained = nullptr; retained_class = nullptr;

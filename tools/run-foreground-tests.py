@@ -52,7 +52,7 @@ try:
         raise ValueError('Installed APK differs from local build; install the current APK before testing')
     command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
     command('shell', 'run-as', 'dev.artdcevm.lab', 'rm', '-f', 'files/' + report_name).check_returncode()
-    activity = 'dev.artdcevm.testing.ForegroundStressActivity' if args.stress else 'dev.artdcevm.MainActivity'
+    activity = 'com.github.ytlog.artdcevm.testing.ForegroundStressActivity' if args.stress else 'com.github.ytlog.artdcevm.MainActivity'
     extras = ['--ez', 'source', str(args.stress == 'source').lower(), '--ei', 'rounds', str(args.rounds), '--ez', 'callbacksOnly', str(args.callbacks_only).lower()] if args.stress else []
     if args.virtual_display:
         extras += ['--ez', 'virtualDisplay', 'true']

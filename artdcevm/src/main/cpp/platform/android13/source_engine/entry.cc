@@ -257,7 +257,7 @@ extern "C" __attribute__((visibility("default"))) int ArtDcevmSourceProbe(
   auto instance = soa.Decode<art::mirror::Object>(object);
   auto klass = instance->GetClass();
   std::string storage;
-  if (std::strcmp(klass->GetDescriptor(&storage), "Ldev/artdcevm/platform/android13/SourceAbiProbe;") != 0)
+  if (std::strcmp(klass->GetDescriptor(&storage), "Lcom/github/ytlog/artdcevm/platform/android13/SourceAbiProbe;") != 0)
     return 4;
   if (klass->NumInstanceFields() != 1 || klass->NumStaticFields() != 1) return 5;
   auto* field = klass->FindDeclaredInstanceField("value", "I");

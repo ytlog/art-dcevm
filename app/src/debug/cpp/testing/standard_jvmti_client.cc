@@ -43,13 +43,13 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
 }
 #ifdef ARTDCEVM_RESTRICTED_CLIENT
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_redefineRestricted(
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiInstrumentation_redefineRestricted(
 #elif defined(ARTDCEVM_SECOND_CLIENT)
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_redefinePeer(
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiInstrumentation_redefinePeer(
 #else
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiClient_redefineNative(
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefineNative(
 #endif
     JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {
   if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
@@ -79,7 +79,7 @@ Java_dev_artdcevm_testing_StandardJvmtiClient_redefineNative(
 }
 #if !defined(ARTDCEVM_RESTRICTED_CLIENT) && !defined(ARTDCEVM_SECOND_CLIENT)
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_enableTransform(
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiInstrumentation_enableTransform(
     JNIEnv* jni, jclass, jclass target, jbyteArray dex) {
   if (!client_env || !target || !dex) return JVMTI_ERROR_NULL_POINTER;
   if (transform_target) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
@@ -104,7 +104,7 @@ Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_enableTransform(
   return result;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StandardJvmtiInstrumentation_disableTransform(JNIEnv* jni, jclass) {
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiInstrumentation_disableTransform(JNIEnv* jni, jclass) {
   client_env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
   if (transform_target) jni->DeleteGlobalRef(transform_target);
   transform_target = nullptr;

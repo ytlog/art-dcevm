@@ -194,20 +194,20 @@ int SourceClassRedefiner::Apply(const std::vector<Definition>& definitions) {
 #ifdef ARTDCEVM_TESTING
 // Diagnostics for the in-app regression harness; primary mutation uses an independent Agent.
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
   return artdcevm::android13::ValidationHooks::SourceCommitCalls();
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_inPlaceInvalidationCalls(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_inPlaceInvalidationCalls(
     JNIEnv*, jclass) {
   return artdcevm::android13::ValidationHooks::SourceInPlaceCalls();
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_rejectedCalls(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_rejectedCalls(JNIEnv*, jclass) {
   return artdcevm::android13::RejectedRetiredInvocations();
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_checkJniMode(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_checkJniMode(
     JNIEnv* env, jclass, jint requested) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, int);
@@ -215,14 +215,14 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_checkJniMode(
   return mode ? mode(env, requested) : -1;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_readBarrierCalls(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_readBarrierCalls(JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)();
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceReadBarrierCalls"));
   return fn ? static_cast<jlong>(fn()) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDeleteCalls(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDeleteCalls(JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)();
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
@@ -230,7 +230,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_classLoaderDele
   return fn ? static_cast<jlong>(fn()) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredPrunedCount(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_retiredPrunedCount(
     JNIEnv*, jclass, jint kind) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)(int);
@@ -239,7 +239,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredPrunedCo
   return fn ? static_cast<jlong>(fn(kind)) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlotCount(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlotCount(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = size_t (*)();
@@ -248,7 +248,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlo
   return fn ? static_cast<jlong>(fn()) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitMethodState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitMethodState(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject);
@@ -257,7 +257,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitMethodState(
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotMethodState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_aotMethodState(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject);
@@ -266,7 +266,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotMethodState(
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotExperiment(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_aotExperiment(
     JNIEnv* env, jclass, jobject executable, jboolean enable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject, bool);
@@ -275,7 +275,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotExperiment(
   return fn ? fn(env, executable, enable == JNI_TRUE) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotFrameState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_aotFrameState(
     JNIEnv* env, jclass, jobject thread, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject, jobject);
@@ -284,7 +284,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotFrameState(
   return fn ? fn(env, thread, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptProbe(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptProbe(
     JNIEnv* env, jclass, jobject thread, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject, jobject);
@@ -293,7 +293,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeopt
   return fn ? fn(env, thread, executable) : -1;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptHits(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeoptHits(
     JNIEnv*, jclass, jboolean reset) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = uint64_t (*)(bool);
@@ -302,7 +302,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_aotSuspendDeopt
   return fn ? static_cast<jlong>(fn(reset == JNI_TRUE)) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitActiveFrameState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitActiveFrameState(
     JNIEnv* env, jclass, jobject thread, jobject caller, jobject callee) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject, jobject, jobject);
@@ -311,7 +311,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitActiveFrameS
   return fn ? fn(env, thread, caller, callee) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineState(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject);
@@ -320,7 +320,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineState(
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineExperiment(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineExperiment(
     JNIEnv* env, jclass, jboolean enable) {
   if (!artdcevm::android13::source_library ||
       artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
@@ -331,7 +331,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitInlineExperi
   return fn ? fn(env, enable == JNI_TRUE) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCodeKind(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitCodeKind(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject);
@@ -340,7 +340,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCodeKind(
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCacheDetail(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitCacheDetail(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*, jobject);
@@ -349,7 +349,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCacheDetail(
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invalidateAllJit(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_invalidateAllJit(
     JNIEnv* env, jclass) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = int (*)(JNIEnv*);
@@ -358,7 +358,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invalidateAllJi
   return fn ? fn(env) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_forceOptimizedJit(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_forceOptimizedJit(
     JNIEnv* env, jclass, jobject executable) {
   if (!artdcevm::android13::source_library ||
       artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
@@ -369,7 +369,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_forceOptimizedJ
   return fn ? fn(env, executable) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCompilerOptionsState(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitCompilerOptionsState(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library ||
       artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
@@ -380,7 +380,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_jitCompilerOpti
   return fn ? fn() : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_configureGraphInlineProbe(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_configureGraphInlineProbe(
     JNIEnv* env, jclass, jobject caller, jobject callee, jboolean enable) {
   if (!artdcevm::android13::source_library ||
       artdcevm::FindLoadedModule("libart-compiler.so").build_id !=
@@ -433,7 +433,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_configureGraphI
   return result;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_graphInlineHits(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_graphInlineHits(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return -1;
   using Fn = uint64_t (*)();
@@ -442,7 +442,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_graphInlineHits
   return fn ? static_cast<jlong>(fn()) : -1;
 }
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_allMethodsDeoptimized(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_allMethodsDeoptimized(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return false;
   using Fn = bool (*)();
@@ -451,7 +451,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_allMethodsDeopt
   return fn && fn();
 }
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeMode(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeMode(
     JNIEnv*, jclass, jboolean enable, jboolean force_reject) {
   if (!artdcevm::android13::source_library) return false;
   using Fn = bool (*)(bool, bool);
@@ -460,7 +460,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeM
   return fn && fn(enable, force_reject);
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeHits(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeHits(
     JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)();
@@ -469,7 +469,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_fieldReadProbeH
   return fn ? static_cast<jlong>(fn()) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invokeGuardDiagnostics(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_invokeGuardDiagnostics(
     JNIEnv*, jclass, jint index) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)(int);
@@ -478,7 +478,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_invokeGuardDiag
   return fn ? static_cast<jlong>(fn(index)) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_receiverGuardTransactionDiagnostics(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_receiverGuardTransactionDiagnostics(
     JNIEnv*, jclass, jint index) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)(int);
@@ -487,7 +487,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_receiverGuardTr
   return fn ? static_cast<jlong>(fn(index)) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_compiledPrecommitDiagnostics(
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_compiledPrecommitDiagnostics(
     JNIEnv*, jclass, jint index) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)(int);
@@ -496,7 +496,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_compiledPrecomm
   return fn ? static_cast<jlong>(fn(index)) : 0;
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_hierarchyDiagnostics(JNIEnv*, jclass, jint index) {
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_hierarchyDiagnostics(JNIEnv*, jclass, jint index) {
   if (!artdcevm::android13::source_library) return 0;
   using Fn = uint64_t (*)(int);
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceHierarchyDiagnostics"));
@@ -504,7 +504,7 @@ Java_dev_artdcevm_platform_android13_SourceEngineInstrumentation_hierarchyDiagno
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_artdcevm_testing_ForegroundStressActivity_enableDeoptTracing(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_testing_ForegroundStressActivity_enableDeoptTracing(JNIEnv*, jclass) {
   if (!artdcevm::android13::source_library) return false;
   using Fn = void (*)(bool);
   auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library, "ArtDcevmSourceSetDeoptTracing"));

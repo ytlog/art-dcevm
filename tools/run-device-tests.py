@@ -51,7 +51,7 @@ if stopped.returncode:
     sys.exit(stopped.returncode)
 adb('shell', 'run-as', PACKAGE, 'rm', '-f', 'files/conformance.json')
 try:
-    test = adb('shell', 'am', 'instrument', '-w', '-r', PACKAGE + '/dev.artdcevm.ConformanceInstrumentation')
+    test = adb('shell', 'am', 'instrument', '-w', '-r', PACKAGE + '/com.github.ytlog.artdcevm.ConformanceInstrumentation')
     (out / 'instrumentation.txt').write_text(test.stdout + test.stderr)
     meta['instrumentationExitCode'] = test.returncode
 except subprocess.TimeoutExpired:

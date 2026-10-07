@@ -32,7 +32,7 @@ stem = ('artdcevm-aot-swap' if args.parent_swap else
         'artdcevm-aot-active' if args.active_frame else 'artdcevm-aot')
 if args.non_debuggable:
     stem += '-optimized'
-source = root / f'app/build/generated/patchAssets/{variant}/dev/artdcevm/gc/{klass}.dex'
+source = root / f'app/build/generated/patchAssets/{variant}/com/github/ytlog/artdcevm/gc/{klass}.dex'
 if not source.is_file():
     parser.error('Build patch fixtures before preparing the AOT probe')
 
@@ -84,11 +84,11 @@ try:
     listing = run('shell', '/apex/com.android.art/bin/oatdump',
                   '--oat-file=' + remote + '.odex')
     (out / 'oatdump.txt').write_text(listing)
-    markers = (['int dev.artdcevm.gc.AotSwapCaller.call()'] if args.parent_swap else
-               ['int dev.artdcevm.gc.AotInterfaceCaller.call()',
-                'int dev.artdcevm.gc.AotInterfaceCaller.callDefault()'] if args.interface_removal else
-               ['int dev.artdcevm.gc.AotActiveSubject.value()',
-                'int dev.artdcevm.gc.AotActiveCaller.call(dev.artdcevm.gc.AotActiveSubject)'])
+    markers = (['int com.github.ytlog.artdcevm.gc.AotSwapCaller.call()'] if args.parent_swap else
+               ['int com.github.ytlog.artdcevm.gc.AotInterfaceCaller.call()',
+                'int com.github.ytlog.artdcevm.gc.AotInterfaceCaller.callDefault()'] if args.interface_removal else
+               ['int com.github.ytlog.artdcevm.gc.AotActiveSubject.value()',
+                'int com.github.ytlog.artdcevm.gc.AotActiveCaller.call(com.github.ytlog.artdcevm.gc.AotActiveSubject)'])
     required_methods_compiled = (args.active_frame or args.interface_removal or args.parent_swap) and all(
         marker in listing and 'code_offset:' in listing.split(marker, 1)[1].split('\n\n', 1)[0]
         for marker in markers)

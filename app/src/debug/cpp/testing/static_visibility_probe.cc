@@ -15,7 +15,7 @@ jint InvokeV(JNIEnv* env, jclass type, jmethodID method, ...) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_artdcevm_testing_StaticVisibilityProbe_retain(JNIEnv* env, jclass, jclass type) {
+Java_com_github_ytlog_artdcevm_testing_StaticVisibilityProbe_retain(JNIEnv* env, jclass, jclass type) {
   if (retained_class != nullptr) env->DeleteGlobalRef(retained_class);
   retained_class = static_cast<jclass>(env->NewGlobalRef(type));
   if (retained_class == nullptr) return JNI_FALSE;
@@ -24,7 +24,7 @@ Java_dev_artdcevm_testing_StaticVisibilityProbe_retain(JNIEnv* env, jclass, jcla
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_artdcevm_testing_StaticVisibilityProbe_invoke(JNIEnv* env, jclass,
+Java_com_github_ytlog_artdcevm_testing_StaticVisibilityProbe_invoke(JNIEnv* env, jclass,
                                                         jint mode, jboolean fresh) {
   if (retained_class == nullptr) return -1;
   jmethodID method = fresh ? env->GetStaticMethodID(retained_class, "compute", "()I")
@@ -39,7 +39,7 @@ Java_dev_artdcevm_testing_StaticVisibilityProbe_invoke(JNIEnv* env, jclass,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_artdcevm_testing_StaticVisibilityProbe_release(JNIEnv* env, jclass) {
+Java_com_github_ytlog_artdcevm_testing_StaticVisibilityProbe_release(JNIEnv* env, jclass) {
   if (retained_class != nullptr) env->DeleteGlobalRef(retained_class);
   retained_class = nullptr;
   retained_method = nullptr;

@@ -470,7 +470,7 @@ void GuardFieldReceiver(art::Thread* thread, art::Handle<art::mirror::Object> re
     return;
   }
   if (!field_probe_force_reject || std::strcmp(field->GetName(), "ancestor") != 0 ||
-      !field->GetDeclaringClass()->DescriptorEquals("Ldev/artdcevm/fixture/NarrowParent;")) return;
+      !field->GetDeclaringClass()->DescriptorEquals("Lcom/github/ytlog/artdcevm/fixture/NarrowParent;")) return;
   field_probe_hits.fetch_add(1, std::memory_order_relaxed);
   thread->ThrowNewException("Ljava/lang/IncompatibleClassChangeError;",
                             "Field access probe rejected access before storage mutation");

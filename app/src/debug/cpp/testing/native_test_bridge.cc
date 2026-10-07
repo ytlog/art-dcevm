@@ -12,7 +12,7 @@ jclass fields_class = nullptr;
 jfieldID cached_fields[18]{};
 void Throw(JNIEnv* env, const char* message) { env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), message); }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_retainFixture(JNIEnv* env, jclass, jobject obj) {
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_retainFixture(JNIEnv* env, jclass, jobject obj) {
   if (retained) { env->DeleteGlobalRef(retained); retained = nullptr; }
   auto cls = env->GetObjectClass(obj);
   method_id = env->GetMethodID(cls, "compute", "()I");
@@ -20,7 +20,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_ret
   if (!env->ExceptionCheck()) retained = env->NewGlobalRef(obj);
   env->DeleteLocalRef(cls);
 }
-extern "C" JNIEXPORT jintArray JNICALL Java_dev_artdcevm_testing_NativeTestBridge_inspectRetainedFixture(JNIEnv* env, jclass) {
+extern "C" JNIEXPORT jintArray JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_inspectRetainedFixture(JNIEnv* env, jclass) {
   if (!retained || !method_id || !field_id) { Throw(env, "No cached JNI fixture"); return nullptr; }
   jint values[2] = {env->CallIntMethod(retained, method_id), 0};
   if (env->ExceptionCheck()) return nullptr;
@@ -30,7 +30,7 @@ extern "C" JNIEXPORT jintArray JNICALL Java_dev_artdcevm_testing_NativeTestBridg
   if (out) env->SetIntArrayRegion(out, 0, 2, values);
   return out;
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_releaseFixture(JNIEnv* env, jclass) {
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_releaseFixture(JNIEnv* env, jclass) {
   if (retained) env->DeleteGlobalRef(retained);
   retained = nullptr; method_id = nullptr; field_id = nullptr;
   if (removal_receiver) env->DeleteGlobalRef(removal_receiver);
@@ -42,7 +42,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_rel
   for (auto& id : cached_fields) id = nullptr;
 }
 
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_retainRemovalMethod(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_retainRemovalMethod(
     JNIEnv* env, jclass, jobject instance) {
   if (removal_receiver) env->DeleteGlobalRef(removal_receiver);
   if (removal_class) env->DeleteGlobalRef(removal_class);
@@ -61,7 +61,7 @@ jint InvokeVarargs(JNIEnv* env, jobject receiver, jmethodID method, ...) {
   return result;
 }
 }
-extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_NativeTestBridge_invokeRemovalMethod(
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_invokeRemovalMethod(
     JNIEnv* env, jclass, jint mode) {
   if (!removal_receiver || !removal_method) { Throw(env, "No cached removal method"); return 0; }
   switch (mode) {
@@ -73,7 +73,7 @@ extern "C" JNIEXPORT jint JNICALL Java_dev_artdcevm_testing_NativeTestBridge_inv
   }
 }
 
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeTestBridge_invokeSignatureMethod(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_invokeSignatureMethod(
     JNIEnv* env, jclass, jobject instance, jlong argument) {
   jclass cls = env->GetObjectClass(instance);
   jmethodID method = env->GetMethodID(cls, "addedMethod", "(J)J");
@@ -82,7 +82,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeTestBridge_in
   return env->CallLongMethod(instance, method, argument);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_retainFields(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_retainFields(
     JNIEnv* env, jclass, jobject instance) {
   if (fields_receiver) env->DeleteGlobalRef(fields_receiver);
   if (fields_class) env->DeleteGlobalRef(fields_class);
@@ -98,7 +98,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_ret
   }
   env->DeleteLocalRef(cls);
 }
-extern "C" JNIEXPORT jdouble JNICALL Java_dev_artdcevm_testing_NativeTestBridge_accessField(
+extern "C" JNIEXPORT jdouble JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_accessField(
     JNIEnv* env, jclass, jint index, jboolean write) {
   if (index < 0 || index >= 18 || !fields_receiver || !cached_fields[index]) {
     Throw(env, "Invalid cached field"); return 0;
@@ -132,7 +132,7 @@ extern "C" JNIEXPORT jdouble JNICALL Java_dev_artdcevm_testing_NativeTestBridge_
   }
 #undef FIELD_CASE
 }
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeTestBridge_accessChangedLongField(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_accessChangedLongField(
     JNIEnv* env, jclass, jobject instance, jlong value) {
   jclass cls = env->GetObjectClass(instance);
   jfieldID id = env->GetFieldID(cls, "i", "J");

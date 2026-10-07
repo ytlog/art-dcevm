@@ -1,12 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application android:label="ART DCEVM Lab" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
-    <activity android:name="dev.artdcevm.MainActivity" android:exported="true">
+    <activity android:name="com.github.ytlog.artdcevm.MainActivity" android:exported="true">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
-    <activity android:name="dev.artdcevm.testing.ForegroundStressActivity" android:exported="true"/>
+    <activity android:name="com.github.ytlog.artdcevm.testing.ForegroundStressActivity" android:exported="true"/>
   </application>
-  <instrumentation android:name="dev.artdcevm.ConformanceInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="DCEVM conformance" android:functionalTest="true"/>
-  <instrumentation android:name="dev.artdcevm.platform.android13.SourceEngineInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="ART source ABI probe" android:functionalTest="true"/>
-  <instrumentation android:name="dev.artdcevm.testing.StandardJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Standard JVMTI Agent conformance" android:functionalTest="true"/>
-  <instrumentation android:name="dev.artdcevm.testing.PublicJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Public JVMTI compatibility" android:functionalTest="true"/>
+  <instrumentation android:name="com.github.ytlog.artdcevm.ConformanceInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="DCEVM conformance" android:functionalTest="true"/>
+  <instrumentation android:name="com.github.ytlog.artdcevm.platform.android13.SourceEngineInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="ART source ABI probe" android:functionalTest="true"/>
+  <instrumentation android:name="com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Standard JVMTI Agent conformance" android:functionalTest="true"/>
+  <instrumentation android:name="com.github.ytlog.artdcevm.testing.PublicJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Public JVMTI compatibility" android:functionalTest="true"/>
 </manifest>

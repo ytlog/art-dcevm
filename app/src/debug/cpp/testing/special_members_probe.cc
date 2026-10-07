@@ -33,7 +33,7 @@ jint NativeGone(JNIEnv* env, jobject receiver, jint x) {
 jlong NativeStatic(JNIEnv*, jclass, jlong x) { return x + 2000; }
 jint NativeKept(JNIEnv* env, jobject receiver) {
   if (block_kept.load()) {
-    auto control = env->FindClass("dev/artdcevm/fixture/DeletionControl");
+    auto control = env->FindClass("com/github/ytlog/artdcevm/fixture/DeletionControl");
     if (!control) return 0;
     auto await = env->GetStaticMethodID(control, "awaitRelease", "()V");
     if (await) env->CallStaticVoidMethod(control, await);
@@ -61,7 +61,7 @@ jlong StaticVarargs(JNIEnv* env, jclass cls, jmethodID method, ...) {
   va_end(args); return out;
 }
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_registerSpecialNatives(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_registerSpecialNatives(
     JNIEnv* env, jclass, jclass cls) {
   const JNINativeMethod methods[] = {
     {"nativeGone", "(I)I", reinterpret_cast<void*>(NativeGone)},
@@ -70,7 +70,7 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_reg
   };
   if (env->RegisterNatives(cls, methods, 3) != JNI_OK && !env->ExceptionCheck()) Throw(env, "Native registration failed");
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_retainSpecialMembers(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_retainSpecialMembers(
     JNIEnv* env, jclass, jobject object) {
   if (retained) env->DeleteGlobalRef(retained);
   if (retained_class) env->DeleteGlobalRef(retained_class);
@@ -83,15 +83,15 @@ extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_ret
   kept = env->GetMethodID(cls, "nativeKept", "()I");
   env->DeleteLocalRef(cls);
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_registerKeptNative(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_registerKeptNative(
     JNIEnv* env, jclass, jclass cls) {
   const JNINativeMethod method{"nativeKept", "()I", reinterpret_cast<void*>(NativeKept)};
   if (env->RegisterNatives(cls, &method, 1) != JNI_OK && !env->ExceptionCheck())
     Throw(env, "Kept native registration failed");
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_blockKeptNative(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_blockKeptNative(
     JNIEnv*, jclass, jboolean block) { block_kept.store(block); }
-extern "C" JNIEXPORT jobject JNICALL Java_dev_artdcevm_testing_NativeTestBridge_createSpecial(
+extern "C" JNIEXPORT jobject JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_createSpecial(
     JNIEnv* env, jclass, jint mode, jint x) {
   if (!retained_class || !ctor) { Throw(env, "No cached constructor"); return nullptr; }
   jvalue args[1]{}; args[0].i = x;
@@ -109,7 +109,7 @@ extern "C" JNIEXPORT jobject JNICALL Java_dev_artdcevm_testing_NativeTestBridge_
     default: Throw(env, "Unknown constructor mode"); return nullptr;
   }
 }
-extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeTestBridge_invokeSpecialNative(
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_invokeSpecialNative(
     JNIEnv* env, jclass, jint mode) {
   if (!retained || !gone || !statik || !kept) { Throw(env, "No cached native methods"); return 0; }
   jvalue instance_args[1]{}; instance_args[0].i = 4;
@@ -129,22 +129,22 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_artdcevm_testing_NativeTestBridge_in
     default: Throw(env, "Unknown native mode"); return 0;
   }
 }
-extern "C" JNIEXPORT jboolean JNICALL Java_dev_artdcevm_testing_NativeTestBridge_waitSpecialNative(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_waitSpecialNative(
     JNIEnv*, jclass) {
   std::unique_lock<std::mutex> lock(native_mutex);
   return native_condition.wait_for(lock, std::chrono::seconds(10), [] { return native_entered; });
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_releaseSpecialNative(JNIEnv*, jclass) {
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_releaseSpecialNative(JNIEnv*, jclass) {
   std::lock_guard<std::mutex> lock(native_mutex);
   native_released = true; native_condition.notify_all();
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_artdcevm_testing_NativeTestBridge_releaseSpecialMembers(
+extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_releaseSpecialMembers(
     JNIEnv* env, jclass) {
   if (retained) env->DeleteGlobalRef(retained);
   if (retained_class) env->DeleteGlobalRef(retained_class);
   retained = nullptr; retained_class = nullptr; ctor = gone = statik = kept = nullptr;
 }
-extern "C" JNIEXPORT jobject JNICALL Java_dev_artdcevm_testing_NativeTestBridge_createChangedSpecial(
+extern "C" JNIEXPORT jobject JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_createChangedSpecial(
     JNIEnv* env, jclass, jint mode, jlong x) {
   if (!retained_class) { Throw(env, "No cached class"); return nullptr; }
   auto method = env->GetMethodID(retained_class, "<init>", "(J)V");

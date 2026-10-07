@@ -41,7 +41,7 @@ for variant in sorted((root / 'fixtures').iterdir()):
 # Keep the DEX structure, signature and checksum valid, but make compute()I
 # return an object register. ART's instruction/type verifier must reject this
 # after allocating a replacement with a new superclass, before any commit.
-source = out / 'hier-parent/dev/artdcevm/fixture/HierarchySubject.dex'
+source = out / 'hier-parent/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex'
 if source.exists():
     data = bytearray(source.read_bytes())
     def u32(offset):
@@ -78,7 +78,7 @@ if source.exists():
     assert changed, 'compute() not found in hierarchy fixture'
     data[12:32] = hashlib.sha1(data[32:]).digest()
     struct.pack_into('<I', data, 8, zlib.adler32(data[12:]) & 0xffffffff)
-    dest = out / 'hier-invalid/dev/artdcevm/fixture/HierarchySubject.dex'
+    dest = out / 'hier-invalid/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex'
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
     print(dest.relative_to(out))

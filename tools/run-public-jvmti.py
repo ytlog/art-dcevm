@@ -25,7 +25,7 @@ try:
     adb('install', '-r', str(apk))
     adb('shell', 'am', 'force-stop', 'dev.artdcevm.lab')
     output = adb('shell', 'am', 'instrument', '-w', '-r',
-                 'dev.artdcevm.lab/dev.artdcevm.testing.PublicJvmtiInstrumentation').stdout
+                 'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.PublicJvmtiInstrumentation').stdout
     match = re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$', output, re.MULTILINE)
     report = json.loads(match.group(1)) if match else {'passed': False, 'error': output}
     report['instrumentationCode'] = re.search(r'^INSTRUMENTATION_CODE: (.*)$', output, re.MULTILINE).group(1)
