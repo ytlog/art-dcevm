@@ -2,7 +2,7 @@
 
 记录时间：2026-10-07。已适配目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前是默认 NDK 单增强库与命名设备函数/自有 Hook 代理架构；独立源码引擎、AOSP 构建与 `-PsourceEngine13` 已删除。严格设备 Build ID 与公开 JNI/JVMTI 自有校准是完整演进的启用条件。
 
-无源码首版 APK `b051…` 已通过标准入口六种组合及完整 `source-first` 回归；后续最终测试仍在进行，最终哈希和验收结论以 [VERIFICATION.md](VERIFICATION.md) 为准。此处能力限制不会因构建迁移自动消失。
+最终无源码 APK `1c532b1f…` 已通过 39 个 Host runner、41 项真机一致性检查、标准入口六组、两种 Hook 顺序的完整套件及相关专项；迁移验收完成，完整哈希、命令和逐次证据以 [VERIFICATION.md](VERIFICATION.md) 为准。原有能力限制保持不变。此处能力限制不会因构建迁移自动消失。
 
 迁移前完整源码演进 APK `f3087a3ae14d68c72dcf8d5e4dfc6092a0089090e1573c5a8ac86a33facbab5b` 曾在两种 Hook 顺序下各完成 31 次结构提交和 135 项修饰符检查：[validation-first](../build/evidence/source-engine/20261006T153859Z/run.json)、[source-first](../build/evidence/source-engine/20261006T154308Z/run.json)。下面引用的旧专项是历史语义证据，不能作为最终无源码 APK 的完整长期验收，也不代表任意类变更均已实现。
 

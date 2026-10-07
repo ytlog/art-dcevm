@@ -24,6 +24,6 @@ CodeInfo 的固定成员声明与标志语义分别核对。设备命名构造�
 
 ## 验证状态与历史
 
-2026-10-07 的无源码首版 APK `b051…` 已通过标准入口六种加载/并发/转换组合与完整 `source-first` 套件；后续最终回归仍在进行，最终 APK 哈希与验收结论以 [VERIFICATION.md](VERIFICATION.md) 为准。历史脚本名称、`source-first` 顺序名和 `build/evidence/source-engine/` 报告目录继续保留，它们不表示当前仍加载源码引擎。
+最终无源码 APK `1c532b1f…` 已通过 39 个 Host runner、41 项真机一致性检查、标准入口六组、两种 Hook 顺序的完整套件及相关专项；迁移验收完成，完整哈希、命令和逐次证据以 [VERIFICATION.md](VERIFICATION.md) 为准。原有能力限制保持不变。历史脚本名称、`source-first` 顺序名和 `build/evidence/source-engine/` 报告目录继续保留，它们不表示当前仍加载源码引擎。
 
 早期独立源码 SO 曾直接引用 ART/JVMTI 和平台 libc++，不能仅把其对象并入 NDK 主库。迁移通过重新实现代理、命名绑定和自有校准移除了这个链接边界；旧 AOSP 归档与布局编译证据只保留在本地忽略的构建缓存和历史验证记录中，不是当前构建输入。

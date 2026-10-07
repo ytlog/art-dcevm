@@ -23,7 +23,7 @@
 
 命名符号由 HookEngine 解析动态或普通 ELF 符号表，内联行为由增强库固定声明实现。声明来自锁定源码，迁移时保留了静态 shape 校验与历史源码 getter 对照证据；当前初始化不编译或加载源码校准器。真实公开 JNI/JVMTI oracle 检查类/字段/方法、loader 与 JNI ID；设备 root visitor 校验真实 managed 根槽，真实平台错误记录、DEX 打开/销毁、字段存储、card 和 monitor 操作分别检查行为与所有权。平台 STL 只通过固定借用声明读取，分配对象由匹配的设备函数析构。Build ID 匹配和校准共同限定当前适配，仍不能证明所有 Heap、GC、编译路径或完整 DCEVM 语义。
 
-无源码首版 APK `b051…` 已通过标准入口六种组合及完整 `source-first` 回归；后续最终测试仍在运行。最终验收、完整哈希和逐次证据由 [VERIFICATION.md](VERIFICATION.md) 记录。现有能力限制见 [LIMITATIONS.md](LIMITATIONS.md)。历史 `source-first` 名称及 `build/evidence/source-engine/` 目录仍沿用测试协议，不代表存在第二个演进 SO。
+最终无源码 APK `1c532b1f…` 已通过 39 个 Host runner、41 项真机一致性检查、标准入口六组、两种 Hook 顺序的完整套件及相关专项；迁移验收完成，完整哈希、命令和逐次证据以 [VERIFICATION.md](VERIFICATION.md) 为准。原有能力限制保持不变。现有能力限制见 [LIMITATIONS.md](LIMITATIONS.md)。历史 `source-first` 名称及 `build/evidence/source-engine/` 目录仍沿用测试协议，不代表存在第二个演进 SO。
 
 ---
 
