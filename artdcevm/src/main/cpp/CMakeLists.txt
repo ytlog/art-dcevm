@@ -3,7 +3,7 @@ project(artdcevm LANGUAGES C CXX)
 # Pair NDK r27 flexible page sizes with the alignment required by 16 KB devices.
 add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
-  platform/jvmti/public_backend.cc)
+  platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
 if(ANDROID_ABI STREQUAL "arm64-v8a")
   find_package(shadowhook REQUIRED CONFIG)
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
