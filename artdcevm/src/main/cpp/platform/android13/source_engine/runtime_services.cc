@@ -45,8 +45,6 @@ extern "C" uint64_t ArtDcevmSourceReadBarrierCalls() {
 namespace { std::atomic<bool> trace_deopt{false}; }
 namespace {
 std::atomic<uint64_t> debuggable_aot_async_deopts{0};
-using SuspendFromCode = void (*)(art::Thread*);
-SuspendFromCode original_suspend_from_code = nullptr;
 std::atomic<art::Thread*> pending_suspend_deopt_thread{nullptr};
 std::atomic<bool> probe_suspend_deopt_enabled{false};
 std::atomic<uint64_t> suspend_deopt_hits{0};
@@ -64,11 +62,7 @@ extern "C" void ArtDcevmSourceCancelSuspendDeoptThread(art::Thread* thread) {
   pending_suspend_deopt_thread.compare_exchange_strong(
       thread, nullptr, std::memory_order_acq_rel);
 }
-extern "C" void** ArtDcevmSourceConfigureSuspendFromCode() {
-  return reinterpret_cast<void**>(&original_suspend_from_code);
-}
-extern "C" void ArtDcevmSourceTestSuspendFromCode(art::Thread* self) {
-  original_suspend_from_code(self);
+extern "C" void ArtDcevmSourceFinishPendingSuspendDeopt(art::Thread* self) {
   art::Thread* expected = self;
   if (!pending_suspend_deopt_thread.compare_exchange_strong(
           expected, nullptr, std::memory_order_acq_rel)) return;

@@ -10,6 +10,7 @@
 #include "platform/android13/class_loader_hooks.h"
 #include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/async_deopt_hooks.h"
+#include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
@@ -71,15 +72,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   void* resolve = dlsym(library, "ArtDcevmSourceHierarchyResolve");
   void* find = dlsym(library, "ArtDcevmSourceHierarchyFind");
   void* lookup = dlsym(library, "ArtDcevmSourceHierarchyLookup");
-  using ConfigureOriginal = void** (*)();
-  void* suspend_from_code = dlsym(library, "ArtDcevmSourceTestSuspendFromCode");
-  auto configure_suspend_from_code = reinterpret_cast<ConfigureOriginal>(
-      dlsym(library, "ArtDcevmSourceConfigureSuspendFromCode"));
   if (!probe || !redefine || !standard_redefine || !commit || !get_jit_code_cache ||
       !invalidate_jit || !methods || !fields || !classes
       || !allocator || !configure_allocator
-      || !configure_verification || !verify || !resolve || !find || !lookup
-      || !suspend_from_code || !configure_suspend_from_code) {
+      || !configure_verification || !verify || !resolve || !find || !lookup) {
     dlclose(library); return "Source engine exports are incomplete";
   }
   // The source probe may touch a reflected Field, so initialize its opaque
@@ -118,10 +114,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallHierarchyBatchHooks(symbols, library, &error)) return error;
   if (!InstallClassLoaderHooks(symbols, library, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
-  void* suspend_from_code_target = symbols.FindSymbol("libart.so", cas::kTestSuspendFromCode);
-  if (!suspend_from_code_target || !symbols.Install(suspend_from_code_target,
-      suspend_from_code, configure_suspend_from_code(), &error))
-    return error.empty() ? "Missing named ART suspend entrypoint" : error;
+  if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;
   ValidationHooks::ConfigureSource(fields, methods, classes, commit,
                                    get_jit_code_cache, invalidate_jit);
   source_redefine = redefine;
