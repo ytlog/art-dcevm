@@ -51,6 +51,8 @@ python3 tools/audit-art-device-matrix.py build/evidence/art-devices/*/manifest.j
   --output build/evidence/art-devices/matrix.json
 ```
 
-矩阵审计先核验 ELF 与符号清单哈希，再统计当前 Android 13 后端的 87 个 C++ 符号字面量是否存在。包含可选能力，缺失不直接等于运行失败；跨库存在也不保证调用方指定库能解析该符号。后续逐个核对实际解析库与固定 AOSP 声明，不通过反汇编推导函数地址或字段偏移。在线 AOSP 固定源码审计继续使用 `tools/audit-art-source.py`。任何新增 Profile 都需真实运行行为回归后才能开放。
+矩阵审计先核验 ELF 与符号清单哈希，再合并 Android 13 后端的符号字面量与生产 `CheckEvolutionSymbols` 实际枚举的依赖，包括 C 入口和动态生成的 JNI/反射字段符号。工具使用宿主 C++17 编译器运行只记录请求的 HookEngine，不加载 ART 或安装 Hook；可用 `--cxx` 指定编译器，枚举失败即拒绝审计，不退回不完整的字符串扫描。当前共 232 个命名依赖，其中生产完整演进门禁要求 146 个，报告分别记录总体存在情况及指定库中缺失的必需依赖。
+
+包含可选能力，总体缺失不直接等于运行失败；`missingRequiredLibraries` 检查生产门禁指定的库名，但同名库的不同 APEX/链接器命名空间仍需实际加载证据。后续逐个核对实际解析库与固定 AOSP 声明，不通过反汇编推导函数地址或字段偏移。在线 AOSP 固定源码审计继续使用 `tools/audit-art-source.py`。任何新增 Profile 都需真实运行行为回归后才能开放。
 
 原始采集的 SO、CLI、日志、矩阵均保存在已忽略的 `build/evidence/`。完整采集通过核验后，工具自动将 SO 同步到工程根目录的 `assets/runtime_lib/`，按 API/厂商/型号/系统构建与库集合哈希分类，详见其中的 README。两个位置的设备 SO 均不提交；`assets/runtime_lib` 是参考资料，不自动打入 APK。

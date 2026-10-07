@@ -5,24 +5,54 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def evolution_dependencies(cxx, directory):
+    """Enumerate the production gate, without duplicating its generated names."""
+    cpp = ROOT / 'artdcevm/src/main/cpp'
+    with tempfile.TemporaryDirectory(prefix='symbol-inventory-', dir=directory) as temporary:
+        binary = Path(temporary) / 'inventory'
+        subprocess.run([cxx, '-std=c++17', '-I', str(cpp),
+                        str(ROOT / 'tools/art-symbol-dependencies.cc'),
+                        str(cpp / 'platform/symbols/art_symbol_compat.cc'),
+                        '-o', str(binary)], check=True, capture_output=True, text=True)
+        output = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout
+    required = {}
+    for line in output.splitlines():
+        library, symbol = line.split('\t')
+        required.setdefault(symbol, set()).add(library)
+    if not required:
+        raise ValueError('Production evolution symbol inventory is empty')
+    return required
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('manifests', nargs='+', type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--cxx', default='c++', help='Host C++17 compiler for the production symbol enumerator')
     args = parser.parse_args()
     evidence = (ROOT / 'build/evidence').resolve()
     if not args.output.resolve().is_relative_to(evidence):
         parser.error('Raw symbol audit must remain under build/evidence/')
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        required = evolution_dependencies(args.cxx, args.output.parent)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
+        parser.error('Cannot enumerate production evolution dependencies: ' + detail)
     dependencies = {}
     for path in sorted((ROOT / 'artdcevm/src/main/cpp/platform/android13').rglob('*')):
         if path.suffix not in ('.h', '.cc'):
             continue
         for symbol in set(re.findall(r'"(_Z[^"\s]+)"', path.read_text())):
             dependencies.setdefault(symbol, []).append(str(path.relative_to(ROOT)))
+    for symbol in required:
+        dependencies.setdefault(symbol, []).append('artdcevm/src/main/cpp/platform/symbols/art_symbol_compat.cc')
     devices = []
     errors = []
     identities = {}
@@ -49,18 +79,24 @@ def main():
                 identity = (library['name'], library['buildId'], digest)
                 identities.setdefault(identity, []).append(str(manifest))
                 libraries.append({k: library[k] for k in ('name', 'path', 'sha256', 'buildId')})
-            symbols = [{'symbol': symbol, 'sourceFiles': files,
-                        'presentIn': sorted(set(available.get(symbol, [])))}
+            symbols = [{'symbol': symbol, 'sourceFiles': sorted(set(files)),
+                        'presentIn': sorted(set(available.get(symbol, []))),
+                        'requiredLibraries': sorted(required.get(symbol, set())),
+                        'missingRequiredLibraries': sorted(
+                            library for library in required.get(symbol, set())
+                            if not any(Path(path).name == library for path in available.get(symbol, [])))}
                        for symbol, files in sorted(dependencies.items())]
             devices.append(dict(manifest=str(manifest), origin=data['origin'], device=data['device'],
                                 libraries=libraries, symbols=symbols,
                                 presentCount=sum(bool(x['presentIn']) for x in symbols),
-                                absentCount=sum(not x['presentIn'] for x in symbols)))
+                                absentCount=sum(not x['presentIn'] for x in symbols),
+                                evolutionRequiredCount=len(required),
+                                evolutionMissingCount=sum(bool(x['missingRequiredLibraries']) for x in symbols)))
         except (OSError, ValueError, KeyError, TypeError) as error:
             errors.append(f'{manifest}: {error}')
     firebase = [x for x in devices if x['origin'] == 'firebase']
     covered = sorted(set(x['device']['sdk'] for x in firebase))
-    report = dict(scope='Named-symbol inventory; optional dependencies included; presence does not prove ABI compatibility',
+    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; optional dependencies included; presence does not prove ABI or loader namespace compatibility',
                   devices=devices, firebaseApis=covered,
                   missingFirebaseApis=sorted(set(range(30, 38)) - set(covered)),
                   firebaseManufacturers=sorted(set(x['device']['manufacturer'] for x in firebase)),
@@ -72,7 +108,8 @@ def main():
                                            'firebaseManufacturers', 'errors')}, indent=2))
     for device in devices:
         print(f"{device['device']['manufacturer']} API {device['device']['sdk']}: "
-              f"{device['presentCount']} present / {device['absentCount']} absent baseline symbol literals")
+              f"{device['presentCount']} present / {device['absentCount']} absent named dependencies; "
+              f"{device['evolutionMissingCount']} / {device['evolutionRequiredCount']} evolution dependencies missing from required library")
     return 1 if errors else 0
 
 
