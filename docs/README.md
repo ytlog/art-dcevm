@@ -9,13 +9,13 @@
 `jvmtiEnv::RedefineClasses` 提交完整 `jvmtiClassDefinition[]`。初始化会附加增强 Agent、
 校验目标 ART/JVMTI Build ID 与源码 ABI、加载源码模块并安装命名符号 Hook；失败时抛出异常。
 Hook 检查调用者能力和类参数，再把完整批次交给源码结构事务；ART 在转换回调后校验最终 DEX 并提交。提前读取实时类结构会干扰复杂层级批次，因此标准入口不做 schema 规划。`RetransformClasses` 不在此入口范围内。
-对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](build/evidence/build/20261006T154308Z-variant-boundary.json)
+对外 Java API 包含完整演进入口 `DcevmRuntime.initialize` 和基础代理入口 `DcevmRuntime.attachPublicJvmti`；`RuntimeBackend.apply/analyze/enableEvolution` 位于内部包，供仓库诊断与回归测试使用。测试 Java、instrumentation、fixture 和补丁素材仅进入 debug 构建；Native 探针位于 debug 专用的 `libartdcevm_test_support.so`。[构建边界](../build/evidence/build/20261006T154308Z-variant-boundary.json)
 独立用户 Agent 的设备回归入口为 `dev.artdcevm.testing.StandardJvmtiInstrumentation`。
 本次标准入口双加载顺序、两个 Agent 并发调用及 `ClassFileLoadHook` 转换新增字段和移除父类的设备结果见 `build/evidence/standard-jvmti/20261006T153842Z/result.json`；
 ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 `build/evidence/source-engine/20261006T153859Z/run.json` 和
 `build/evidence/source-engine/20261006T154308Z/run.json`。两组完整套件的主要重定义调用已由独立测试 Agent 通过标准 JVMTI 入口执行；少量前置失败及旧路径对照仍使用内部接口。
-加入跨版本公开后端后，Android 13 / arm64 的完整源码演进套件再次通过：[本次报告](build/evidence/source-engine/20261006T213857Z/run.json)。
+加入跨版本公开后端后，Android 13 / arm64 的完整源码演进套件再次通过：[本次报告](../build/evidence/source-engine/20261006T213857Z/run.json)。
 
 不支持和未充分验证的 class redefine 能力集中记录在 [LIMITATIONS.md](LIMITATIONS.md)；已暂缓的 boot JIT 与非调试 AOT 专项保留在 [TODO.md](TODO.md)。
 
