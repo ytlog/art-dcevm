@@ -1,3 +1,5 @@
+#include "transaction_metadata_profile.h"
+#include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/structural_reflective.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/field_copy_metadata.h"
@@ -34,7 +36,6 @@ bool Same(void* a,void* b){return static_cast<Method*>(a)->dex_method_index==sta
 void* Root(void* p){return roots.at(p);}
 const char* Name(void* f){return static_cast<Field*>(f)->name;}const char* Type(void* f){return static_cast<Field*>(f)->type;}
 void Visit(void*,Visitor* v){scenario(v);}
-extern "C" bool ArtDcevmSourceProbeStructuralMemberMappings(void*){return true;}
 extern "C" bool ArtDcevmSourceProbeStructuralReflection(SourceView (*read)(const SourceInfo&),Visitor* v){
  HeapSourceInfo info{{nullptr,kExecutable},reinterpret_cast<void*>(55)};auto view=read(info.base);assert(view.object==info.object&&view.type==kExecutable);
  SourceInfo source{nullptr,kDexField};assert(v->VisitMethod(nullptr,source)==reinterpret_cast<void*>(0x123));assert(v->VisitField(nullptr,source)==reinterpret_cast<void*>(0x456));return true;}
@@ -70,11 +71,14 @@ void Shadowing(Visitor* v){SourceInfo dexm{nullptr,kDexMethod},dexf{nullptr,kDex
 }
 void Hierarchy(Visitor* v){SourceInfo dexm{nullptr,kDexMethod},dexf{nullptr,kDexField},generic{nullptr,10};
  assert(v->VisitMethod(&unrelated_method,dexm)==nullptr);assert(v->VisitField(&static_shadow,dexf)==nullptr);assert(v->VisitMethod(&unrelated_method,generic)==&unrelated_method);}
-int main(){Hooks hooks;std::string error;assert(ConfigureStructuralMemberMappings(hooks,dlopen(nullptr,RTLD_NOW),&error));assert(ConfigureStructuralReflectiveTargets(hooks,dlopen(nullptr,RTLD_NOW),&error));
+namespace artdcevm::android13 {void* ReadHeapReference(void*,size_t,bool){return nullptr;}}
+int main(){Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;assert(ConfigureStructuralMemberMappings(hooks,dlopen(nullptr,RTLD_NOW),&error));assert(ConfigureStructuralReflectiveTargets(hooks,dlopen(nullptr,RTLD_NOW),&error));
  old_array.size=3;new_array.size=2;old_class.methods=reinterpret_cast<uint64_t>(&old_array);new_class.methods=reinterpret_cast<uint64_t>(&new_array);
  old_array.value[0].dex_method_index=1;old_array.value[0].access_flags=1;new_array.value[0].dex_method_index=1;new_array.value[0].access_flags=2;
  old_array.value[1].dex_method_index=2;old_array.value[1].access_flags=8;new_array.value[1].dex_method_index=2;new_array.value[1].access_flags=0;
  old_array.value[2].dex_method_index=3;fields[&old_class].instance={&retained,&removed};fields[&new_class].instance={&replacement,&wrong_type};
+ for(unsigned i=0;i<old_array.size;++i)roots[&old_array.value[i]]=&old_class;
+ for(unsigned i=0;i<new_array.size;++i)roots[&new_array.value[i]]=&new_class;
  mappings=BuildStructuralMemberMappings({&old_class},{&new_class});assert(dispatch==2&&methods.Count()==2);assert(mappings.fields.at(&removed)==&removed&&mappings.methods.at(&old_array.value[1])==&old_array.value[1]);
  scenario=Basic;VisitStructuralReflectiveTargets(nullptr,&old_class,{&old_class},{&new_class},mappings,false);
  mirror=&old_class;assignable=&parent;inherited.dex_method_index=7;inherited.access_flags=8;constructor=inherited;constructor.access_flags=0x10000|8;virtual_method=inherited;virtual_method.access_flags=1;unrelated_method=inherited;

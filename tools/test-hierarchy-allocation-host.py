@@ -18,7 +18,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(root / 'tests/host/hierarchy_allocation_test.cc'),
            str(cpp / 'platform/android13/hierarchy_allocation.cc'),
            str(cpp / 'platform/android13/handle_root_scope.cc'),
-           str(cpp / 'platform/android13/field_copy_metadata.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/field_copy_metadata.cc'), str(cpp / 'platform/android13/transaction_metadata.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

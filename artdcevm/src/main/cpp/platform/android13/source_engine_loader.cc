@@ -1,6 +1,12 @@
 #include "platform/android13/source_engine_loader.h"
 #include <dlfcn.h>
 #include <limits>
+#include <cstring>
+#include "platform/android13/owned_calibration.h"
+#include "platform/android13/transaction_metadata.h"
+#include "platform/android13/member_decode_abi.h"
+#include "platform/android13/field_copy_metadata.h"
+#include "platform/android13/field_copy_storage.h"
 #include "hooks/shadow_hook_engine.h"
 #include "platform/symbols/android13.h"
 #include "support/elf_modules.h"
@@ -49,6 +55,36 @@ namespace {
 void* source_library = nullptr;
 bool load_attempted = false, ready = false;
 DeviceProfile device_profile;
+void* DecodeCalibrationExecutable(JNIEnv* env,jobject executable) {
+  NativeObjectAccess access(env);
+  if(!access.Supported()) return nullptr;
+  uint64_t method=0;
+  std::memcpy(&method,static_cast<unsigned char*>(access.Decode(executable))+
+      offsetof(member_decode_abi::Executable,art_method),sizeof(method));
+  return reinterpret_cast<void*>(method);
+}
+bool CalibrateOwnedBootstrap(HookEngine& hooks,JNIEnv* env,jobject calibration,std::string* error) {
+  JavaVM* vm=nullptr;jvmtiEnv* ti=nullptr;
+  if(env->GetJavaVM(&vm)!=JNI_OK ||
+      vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK) {
+    *error="Owned calibration requires an attached JVMTI environment";return false;
+  }
+  OwnedCalibrationReaders readers{DecodeMethodId,DecodeFieldId,DecodeReflectedField,
+      DecodeCalibrationExecutable,CanonicalizeJniMethod,
+      {ReadCopyClass,ReadCopyField,ReadCopyValue,WriteCopyValue,TransferCopyMonitor,CopyWriteBarrier}};
+  runtime_access_abi::Services services{RuntimeClassLinker(),RuntimeJniIdManager(),RuntimeJit(),RuntimeJitCodeCache()};
+  if(!CalibrateOwnedMembers(device_profile,hooks,env,ti,calibration,services,readers,error))return false;
+  if(env->PushLocalFrame(16)<0){*error="Owned calibration local frame allocation failed";return false;}
+  auto type=env->FindClass("com/github/ytlog/artdcevm/platform/android13/CalibrationFixture");
+  auto constructor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
+  auto fixture=constructor?env->NewObject(type,constructor):nullptr;
+  bool passed=false;
+  if(!fixture||env->ExceptionCheck()) *error="Owned calibration fixture is unavailable";
+  else passed=CalibrateOwnedFieldStorage(device_profile,env,ti,fixture,readers,error) &&
+      CalibrateOwnedCardTable(device_profile,env,fixture,readers,error) &&
+      CalibrateOwnedMonitorTransfer(device_profile,env,fixture,readers.fields,error);
+  env->PopLocalFrame(nullptr);return passed;
+}
 #ifdef ARTDCEVM_TESTING
 void* graph_inline_hook_token = nullptr;
 bool CompilerSymbolsAvailable() {
@@ -70,6 +106,7 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   // Identity is an additional restriction. Every source declaration and owned
   // behavioral calibration below still runs before enabling private capability.
   if (!MatchDeviceProfile(&device_profile, &error)) return error;
+  if (!ConfigureTransactionMetadataReader(symbols, device_profile, &error)) return error;
   if (!symbols::CheckSourceSymbols(symbols, &error)) return error;
   using Loader = void* (*)(const char*, int, const void*);
   auto loader = reinterpret_cast<Loader>(dlsym(RTLD_DEFAULT, "__loader_dlopen"));
@@ -133,6 +170,10 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     dlclose(library);
     return error;
   }
+  if (!ConfigureThreadSuspendScopes(symbols, library, &error) ||
+      !CalibrateOwnedBootstrap(symbols, jni, calibration, &error)) {
+    dlclose(library);return error;
+  }
   using ProbeLoadedGuards = int (*)();
   auto loaded_probe = reinterpret_cast<ProbeLoadedGuards>(
       dlsym(library, "ArtDcevmSourceProbeLoadedClassGuards"));
@@ -155,7 +196,6 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (!InstallClassLoaderHooks(symbols, &error)) return error;
   if (!InstallAsyncDeoptHook(symbols, library, &error)) return error;
   if (!ConfigureSelectiveDeopt(symbols, library, &error)) return error;
-  if (!ConfigureThreadSuspendScopes(symbols, library, &error)) return error;
   if (!ConfigureInstrumentationListener(symbols, library, jni, calibration, &error)) return error;
   if (!ConfigureStructuralCommit(symbols, library, &error)) return error;
   if (!InstallSuspendDeoptHook(symbols, library, &error)) return error;

@@ -14,7 +14,7 @@
 #include "platform/symbols/android13.h"
 #include <cstring>
 #include <cstdlib>
-#include <dlfcn.h>
+#include "platform/android13/transaction_metadata.h"
 namespace artdcevm::android13 {
 namespace {
 void** singleton;void** list_lock;
@@ -26,9 +26,7 @@ void (*deopt_all)(void*,const char*);
 void (*lock)(void*,void*);void (*unlock)(void*,void*);
 void (*for_each)(void*,void (*)(void*,void*),void*);
 void (*clear_cache)(void*,void*);
-bool (*probe)(const void*,const StructuralCommitRoots*);
-void* source;
-constexpr size_t kInterpreterCacheOffset=2608; // Fixed public source declaration, checked by probe.
+constexpr size_t kInterpreterCacheOffset=2608; // Fixed matched release source declaration.
 template<class T> T Read(const void* p,size_t offset=0) { T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+offset,sizeof(value));return value; }
 void Require(bool value) { if(!value) std::abort(); }
 uint32_t Flags(void* c) {return Read<uint32_t>(c,offsetof(validation_abi::ClassPrefix,access_flags));}
@@ -42,14 +40,10 @@ std::vector<void*> Elements(void* a) {
 void ClearThread(void* thread,void*) {clear_cache(static_cast<unsigned char*>(thread)+kInterpreterCacheOffset,thread);}
 }
 void CommitEvolutionStructurally(void*,const void* raw) {
-  using namespace allocation_abi;
-  auto iter=Read<Iterator>(raw);Require(iter.holder && iter.index>=0);
-  auto holder=Read<Holder>(iter.holder);Require(holder.array_handle!=nullptr);
-  void* array=reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(holder.array_handle)));
-  Require(array && Read<int32_t>(array,8)>=kSlots*(iter.index+1));
-  auto slot=[&](int n) {return At(array,kSlots*iter.index+n);};
-  StructuralCommitRoots roots{slot(4),slot(9),slot(10),slot(11),slot(12)};
-  Require(probe(raw,&roots));
+  TransactionRootView transaction;std::string metadata_error;
+  Require(GetTransactionMetadataReader().ReadRoots(raw,&transaction,&metadata_error));
+  Require(GetTransactionMetadataReader().CheckCommitTypes(transaction,&metadata_error));
+  StructuralCommitRoots roots{transaction.mirror,transaction.old_instances,transaction.new_instances,transaction.old_classes,transaction.new_classes};
   auto olds=Elements(roots.old_classes),news=Elements(roots.new_classes);
   auto old_instances=Elements(roots.old_instances),new_instances=Elements(roots.new_instances);
   Require(olds.size()==news.size() && old_instances.size()==new_instances.size());
@@ -69,7 +63,7 @@ void CommitEvolutionStructurally(void*,const void* raw) {
     Require(found);
   }
   ObjectReplacementMap map(replacements);std::string error;
-  Require(VerifyObjectReplacementMap(source,map,&error));
+  Require(VerifyObjectReplacementMap(map,&error));
   // The matched release profile's ScopedAssertNoThreadSuspension is a no-op.
   // This body preserves its exclusive, no-managed-allocation transaction boundary.
   for(size_t i=0;i<olds.size();++i) {
@@ -99,7 +93,7 @@ void CommitEvolutionStructurally(void*,const void* raw) {
   for_each(Read<void*>(runtime,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ClearThread,nullptr);
   unlock(*list_lock,self);
 }
-bool ConfigureStructuralCommit(HookEngine& hooks,void* impl,std::string* error) {
+bool ConfigureStructuralCommit(HookEngine& hooks,void*,std::string* error) {
 #define ART(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name))
   ART(singleton,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
   ART(set_status,"_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE");
@@ -110,11 +104,9 @@ bool ConfigureStructuralCommit(HookEngine& hooks,void* impl,std::string* error) 
   ART(for_each,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_");ART(clear_cache,"_ZN3art16InterpreterCache5ClearEPNS_6ThreadE");
 #undef ART
   replace=reinterpret_cast<decltype(replace)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti14HeapExtensions17ReplaceReferencesEPN3art6ThreadERKNSt3__113unordered_mapINS1_6ObjPtrINS1_6mirror6ObjectEEES9_NS1_10HashObjPtrENS4_8equal_toIS9_EENS4_9allocatorINS4_4pairIKS9_S9_EEEEEE"));
-  probe=reinterpret_cast<decltype(probe)>(dlsym(impl,"ArtDcevmSourceProbeStructuralCommit"));
-  if(!singleton || !list_lock || !set_status || !replace || !retain || !invalidate || !deopt_all || !lock || !unlock || !for_each || !clear_cache || !probe) {
-    *error="Missing named structural commit functions or fixed root calibration";return false;
+  if(!singleton || !list_lock || !set_status || !replace || !retain || !invalidate || !deopt_all || !lock || !unlock || !for_each || !clear_cache) {
+    *error="Missing named structural commit functions";return false;
   }
-  if(!ConfigureObjectReplacementMaps(impl,error)) return false;
-  source=impl;return true;
+  return true;
 }
 }

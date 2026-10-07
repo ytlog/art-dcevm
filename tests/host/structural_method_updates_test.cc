@@ -1,3 +1,5 @@
+#include "transaction_metadata_profile.h"
+#include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/structural_method_updates.h"
 #include "platform/android13/jni_method_targets.h"
 #include "platform/android13/jni_method_targets_abi.h"
@@ -15,7 +17,6 @@ using Class=artdcevm::android13::validation_abi::ClassPrefix;
 struct Array { uint32_t size=0,pad=0; Method methods[8]{}; };
 std::unordered_map<void*,void*> roots;
 void* retired=nullptr; size_t calls=0,canon_calls=0;
-extern "C" bool ArtDcevmSourceProbeStructuralMethodUpdates(void*) { return true; }
 bool reject_jni_profile=false;
 extern "C" bool ArtDcevmSourceProbeJniMethodTargets(artdcevm::android13::JniMethodTarget fn) { Method method{}; assert(fn(&method)==&method); return !reject_jni_profile; }
 bool Same(void* a,void* b) { return static_cast<Method*>(a)->dex_method_index==static_cast<Method*>(b)->dex_method_index; }
@@ -33,7 +34,8 @@ class Hooks:public artdcevm::HookEngine { public:
  return nullptr; }
  void* Install(void*,void*,void**,std::string*)override{return nullptr;} bool Remove(void*,std::string*)override{return true;}
 };
-int main(){ Hooks hooks; std::string error; void* self=dlopen(nullptr,RTLD_NOW);
+namespace artdcevm::android13 {void* ReadHeapReference(void*,size_t,bool){return nullptr;}}
+int main(){ Hooks hooks; ConfigureTransactionReaderForTest(hooks); std::string error; void* self=dlopen(nullptr,RTLD_NOW);
  assert(artdcevm::android13::ConfigureStructuralMethodUpdates(hooks,self,&error));
  reject_jni_profile=true;
  assert(!artdcevm::android13::ConfigureJniMethodTargets(hooks,self,&error));
@@ -45,9 +47,10 @@ int main(){ Hooks hooks; std::string error; void* self=dlopen(nullptr,RTLD_NOW);
  a.methods[0].access_flags=0x100;a.methods[0].data=0x123456789abcdefULL;
  a.methods[1].access_flags=0x100;a.methods[1].data=77;retired=&a.methods[1];
  a.methods[2].access_flags=0x400;
- a.methods[3].access_flags=0x100;roots[&a.methods[3]]=&iface;
+ iface.access_flags=0x200;a.methods[3].access_flags=0x1000000;roots[&a.methods[3]]=&iface;
  a.methods[4].access_flags=0x100;a.methods[4].data=88;
  a.methods[5].access_flags=0x108;a.methods[5].data=99;
+ for(unsigned i=0;i<b.size;++i)roots[&b.methods[i]]=&replacement;
  b.methods[0].dex_method_index=0;b.methods[0].access_flags=0x100;
  b.methods[1].dex_method_index=4;b.methods[1].access_flags=0; // native becomes Java
  b.methods[2].dex_method_index=5;b.methods[2].access_flags=0x100;b.methods[2].data=41; // wrong staticness
@@ -56,7 +59,7 @@ int main(){ Hooks hooks; std::string error; void* self=dlopen(nullptr,RTLD_NOW);
  assert(b.methods[0].data==a.methods[0].data && b.methods[3].data==99 && b.methods[2].data==41);
  assert(a.methods[1].data==77 && a.methods[1].entry_point==999); // retired native still walks obsolete frames
  assert((a.methods[2].access_flags&0x2040000)==0x40000);
- assert(a.methods[3].access_flags==0x100 && a.methods[3].entry_point==0);
+ assert(a.methods[3].access_flags==0x1000000 && a.methods[3].entry_point==0);
  assert((a.methods[0].access_flags&0x2040000)==0x2040000);
  Method m{};assert(artdcevm::android13::CanonicalizeJniMethod(&m)==&m);m.access_flags=0x1000000;assert(artdcevm::android13::CanonicalizeJniMethod(&m)==reinterpret_cast<unsigned char*>(&m)+32);m.access_flags|=0x80000000;assert(artdcevm::android13::CanonicalizeJniMethod(&m)==&m);assert(canon_calls==1);
  Array empty;old.methods=reinterpret_cast<uint64_t>(&empty); artdcevm::android13::UpdateStructuralMethods(&old,&replacement);old.methods=0;artdcevm::android13::UpdateStructuralMethods(&old,&replacement);assert(calls==5);

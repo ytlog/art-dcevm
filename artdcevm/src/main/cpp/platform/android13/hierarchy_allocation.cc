@@ -12,7 +12,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
+#include "platform/android13/transaction_metadata.h"
 #include <limits>
 namespace artdcevm::android13 {
 namespace {
@@ -23,8 +23,6 @@ using Failure=void(*)(void*,int,const void*,const BorrowedPlatformString*);
 Find find_class=nullptr;
 Failure record_failure=nullptr;
 void*(*read_root)(void*)=nullptr;
-hierarchy_allocation_abi::ProbeTarget probe_target=nullptr;
-hierarchy_allocation_abi::ProbeCache probe_cache=nullptr;
 thread_local HierarchyBatch* batch=nullptr;
 thread_local HierarchyVerificationView* view=nullptr;
 std::atomic<uint64_t> counters[5]{};
@@ -123,31 +121,19 @@ void HierarchyBatch::Fail(const char* message) {
 bool HierarchyBatch::Prepare(void* raw) {
   if(!targets_.empty()) return true;
   if(!raw) { Fail("Missing batch allocation data");return false; }
-  auto holder=Read<allocation_abi::Holder>(raw);
-  if(!holder.array_handle || !holder.redefinitions) { Fail("Invalid batch allocation data");return false; }
-  void* array=HierarchyRootPool::Get(holder.array_handle);
-  if(!array) { Fail("Missing batch allocation roots");return false; }
-  int32_t length=Read<int32_t>(array,allocation_abi::kArrayLengthOffset);
-  auto owners=Read<hierarchy_allocation_abi::Vector>(holder.redefinitions);
-  uintptr_t begin=reinterpret_cast<uintptr_t>(owners.begin),end=reinterpret_cast<uintptr_t>(owners.end);
-  constexpr size_t stride=sizeof(redefinition_abi::ClassRedefinition);
-  if(length<0 || length%allocation_abi::kSlots || end<begin || (end-begin)%stride ||
-      (end-begin)/stride!=static_cast<size_t>(length/allocation_abi::kSlots) ||
-      !holder.actually_structural.begin || holder.actually_structural.size!=static_cast<size_t>(length/allocation_abi::kSlots)) {
-    Fail("Invalid batch allocation transaction layout");return false;
-  }
-  size_t count=static_cast<size_t>(length/allocation_abi::kSlots);
+  TransactionHolderView holder;std::string error;
+  if(!GetTransactionMetadataReader().ReadHolder(raw,&holder,&error)) { Fail("Invalid batch allocation transaction layout");return false; }
+  size_t count=holder.count;
   targets_.reserve(count);
   for(size_t i=0;i<count;++i) {
     // No suspension occurs during metadata reads or native root publication.
-    auto klass=ReadHeapReference(array,12+4*(allocation_abi::kSlots*i+hierarchy_allocation_abi::kClassSlot));
-    auto cache=ReadHeapReference(array,12+4*(allocation_abi::kSlots*i+hierarchy_allocation_abi::kCacheSlot));
-    bool structural=(Read<uint64_t>(holder.actually_structural.begin,8*(i/64))&(uint64_t{1}<<(i%64)))!=0;
-    hierarchy_allocation_abi::Target snapshot{const_cast<unsigned char*>(owners.begin)+i*stride,klass,cache,structural};
-    if(!klass || !cache || !probe_target || !probe_target(raw,i,&snapshot)) {
-      Fail("Batch allocation ART declarations did not match");return false;
+    allocation_abi::Iterator iterator{static_cast<int32_t>(i),static_cast<allocation_abi::Holder*>(raw)};TransactionRootView roots;
+    if(!GetTransactionMetadataReader().ReadRoots(&iterator,&roots,&error)||!roots.mirror||!roots.cache) {
+      Fail("Invalid batch allocation target roots");return false;
     }
-    targets_.push_back({snapshot.owner,roots_.Add(klass),roots_.Add(cache),structural});
+    hierarchy_allocation_abi::Target snapshot{roots.owner,roots.mirror,roots.cache,roots.actually_structural};
+    bool structural=roots.actually_structural;
+    targets_.push_back({snapshot.owner,roots_.Add(snapshot.klass),roots_.Add(snapshot.cache),structural});
   }
   return true;
 }
@@ -198,10 +184,10 @@ void HierarchyBatch::RefreshCache(void* slot) {
   void* cache=HierarchyRootPool::Get(slot);bool owned=false;
   for(const auto& target:targets_) owned|=HierarchyRootPool::Get(target.cache)==cache;
   if(!owned) return; // Only unpublished explicit-target caches may be mutated.
-  Require(probe_cache && probe_cache(cache));
+  Cache snapshot;std::string error;Require(GetTransactionMetadataReader().ReadCache(cache,&snapshot,&error));
   using Pair=hierarchy_allocation_abi::TypePair;
-  auto types=reinterpret_cast<Pair*>(Read<uint64_t>(cache,offsetof(Cache,types)));
-  uint32_t count=Read<uint32_t>(cache,offsetof(Cache,num_types));
+  auto types=reinterpret_cast<Pair*>(snapshot.types);
+  uint32_t count=snapshot.num_types;
   for(uint32_t i=0;types && i<count;++i) {
     Pair pair;__atomic_load(types+i,&pair,__ATOMIC_RELAXED);
     void* klass=read_root(&pair.object);
@@ -212,8 +198,8 @@ void HierarchyBatch::RefreshCache(void* slot) {
       __atomic_store(types+i,&pair,__ATOMIC_RELEASE);++counters[4];
     }
   }
-  ClearNative(Read<uint64_t>(cache,offsetof(Cache,methods)),Read<uint32_t>(cache,offsetof(Cache,num_methods)));
-  ClearNative(Read<uint64_t>(cache,offsetof(Cache,fields)),Read<uint32_t>(cache,offsetof(Cache,num_fields)));
+  ClearNative(snapshot.methods,snapshot.num_methods);
+  ClearNative(snapshot.fields,snapshot.num_fields);
   CopyWriteBarrier(cache);
 }
 void* AllocateHierarchyWithoutBatch(void* owner,void* old_slot,void* parent_slot,void* cache_slot,uint16_t index,HierarchyClassAllocator original) {
@@ -239,15 +225,13 @@ void* HierarchyVerificationView::Resolve(const char* descriptor,void* loader,boo
   return allow_batch && view && batch?batch->Find(descriptor,loader):nullptr;
 }
 uint64_t HierarchyDiagnostics(int index) { return counters[index>=0 && index<4?index:4].load(); }
-bool ConfigureHierarchyAllocation(HookEngine& hooks,void* implementation,std::string* error) {
+bool ConfigureHierarchyAllocation(HookEngine& hooks,void*,std::string* error) {
   auto find=reinterpret_cast<Find>(hooks.FindSymbol("libart.so",cas::kFindClass));
   auto failure=reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kRecordFailure));
   auto root=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
-  auto target=reinterpret_cast<hierarchy_allocation_abi::ProbeTarget>(dlsym(implementation,"ArtDcevmSourceProbeHierarchyTarget"));
-  auto cache=reinterpret_cast<hierarchy_allocation_abi::ProbeCache>(dlsym(implementation,"ArtDcevmSourceProbeHierarchyCache"));
-  if(!find || !failure || !root || !target || !cache || !RuntimeClassLinker()) {
-    *error="Missing hierarchy allocation named boundary or layout calibration";return false;
+  if(!find || !failure || !root || !RuntimeClassLinker()) {
+    *error="Missing named hierarchy allocation functions or ClassLinker";return false;
   }
-  find_class=find;record_failure=failure;read_root=root;probe_target=target;probe_cache=cache;return true;
+  find_class=find;record_failure=failure;read_root=root;return true;
 }
 }

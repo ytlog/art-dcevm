@@ -19,11 +19,13 @@ class ObjectReplacementMap {
   size_t Size()const{return nodes_.size();}
   size_t BucketCount()const{return buckets_.size();}
  private:
+  friend bool VerifyObjectReplacementMap(const ObjectReplacementMap&,std::string*);
   object_map_abi::Map map_{};
   std::vector<object_map_abi::Node> nodes_;
   std::vector<object_map_abi::NodeBase*> buckets_;
 };
-// Read-only SOURCE verification through real platform const find/iteration/hash.
-bool VerifyObjectReplacementMap(void* implementation,const ObjectReplacementMap&,std::string*);
-bool ConfigureObjectReplacementMaps(void* implementation,std::string*);
+// Validate owned storage before lending it to the matched platform ABI. The
+// loader verifies platform identities; host tests use an independent libc++
+// oracle, and device commits exercise the real ART const-map consumer.
+bool VerifyObjectReplacementMap(const ObjectReplacementMap&,std::string*);
 }

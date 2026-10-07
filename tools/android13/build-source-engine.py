@@ -113,7 +113,7 @@ sources = [generated / 'ti_redefine.cc', engine / 'entry.cc', engine / 'field_de
            engine / 'heap_reference_probe.cc',
            engine / 'field_copy_metadata_probe.cc', engine / 'field_copy_storage_probe.cc',
            engine / 'loaded_class_guards_probe.cc', engine / 'member_decode_probe.cc', engine / 'reflected_field_visit_probe.cc', engine / 'instrumentation_listener_probe.cc', engine / 'device_diagnostics_probe.cc', engine / 'device_compiler_diagnostics_probe.cc', engine / 'compiled_frame_diagnostics_probe.cc', engine / 'thread_suspend_scope_probe.cc', engine / 'device_dex_input_probe.cc', engine / 'evolution_transaction_probe.cc',
-           engine / 'object_replacement_map_probe.cc', engine / 'structural_reflective_probe.cc', engine / 'member_access_probe.cc', engine / 'hierarchy_allocation_probe.cc', engine / 'selective_deopt_probe.cc', engine / 'stack_access_probe.cc', engine / 'runtime_access_probe.cc', engine / 'native_access_probe.cc',
+           engine / 'structural_reflective_probe.cc', engine / 'member_access_probe.cc', engine / 'hierarchy_allocation_probe.cc', engine / 'selective_deopt_probe.cc', engine / 'stack_access_probe.cc', engine / 'runtime_access_probe.cc', engine / 'native_access_probe.cc',
            engine / 'handle_root_scope_probe.cc', engine / 'structural_method_updates_probe.cc',
            engine / 'class_validation_guard.cc', engine / 'method_validation_guard.cc',
            engine / 'runtime_services.cc']

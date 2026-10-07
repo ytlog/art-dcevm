@@ -17,7 +17,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/structural_commit_test.cc'),
            str(cpp / 'platform/android13/structural_commit.cc'),
-           str(cpp / 'platform/android13/object_replacement_map.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/object_replacement_map.cc'), str(cpp / 'platform/android13/transaction_metadata.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

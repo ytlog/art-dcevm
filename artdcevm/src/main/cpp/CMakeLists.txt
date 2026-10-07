@@ -22,6 +22,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/compiled_frame_diagnostics.cc
     platform/android13/device_diagnostics.cc
     platform/android13/device_profile.cc
+    platform/android13/owned_calibration.cc
+    platform/android13/transaction_metadata.cc
     platform/android13/device_dex_input.cc
     platform/android13/evolution_transaction.cc
     platform/android13/member_access_guards.cc

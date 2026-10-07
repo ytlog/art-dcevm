@@ -3,7 +3,6 @@
 #include <unordered_set>
 #include <stdexcept>
 #include <limits>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 uint64_t HashReplacementPointer(const void* pointer) {
   // platform utility: hash<T*> -> cityhash64 on exactly eight little-endian bytes.
@@ -28,18 +27,39 @@ ObjectReplacementMap::ObjectReplacementMap(const std::vector<std::pair<void*,voi
   object_map_abi::NodeBase* previous=&map_.sentinel;
   for(auto& node:nodes_){size_t bucket=node.hash&(count-1);if(!buckets_[bucket])buckets_[bucket]=previous;previous->next=&node;previous=&node;}
 }
-bool VerifyObjectReplacementMap(void* implementation,const ObjectReplacementMap& map,std::string* error) {
-  using Probe=bool (*)(const void*,const object_map_abi::Node*,size_t);
-  auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeObjectReplacementMap"));
-  if(!probe||!probe(map.BorrowedMap(),map.Nodes(),map.Size())){*error="Incompatible platform object replacement map ABI";return false;}return true;
-}
-bool ConfigureObjectReplacementMaps(void* implementation,std::string* error) {
-  ObjectReplacementMap empty({});if(!VerifyObjectReplacementMap(implementation,empty,error))return false;
-  std::vector<std::pair<void*,void*>> entries;
-  // Aligned inert pointer values exercise nonzero high bits, shift truncation and collisions.
-  for(uintptr_t i=1;i<=96;++i)entries.emplace_back(reinterpret_cast<void*>(0x100000000ULL+i*0x10000008ULL),reinterpret_cast<void*>(0x20000000ULL+i*8));
-  entries.emplace_back(entries.front().first,reinterpret_cast<void*>(0x30000000));
-  ObjectReplacementMap many(entries,128),collisions(entries,2);
-  return VerifyObjectReplacementMap(implementation,many,error)&&VerifyObjectReplacementMap(implementation,collisions,error);
+bool VerifyObjectReplacementMap(const ObjectReplacementMap& map,std::string* error) {
+  const auto& view=*static_cast<const object_map_abi::Map*>(map.BorrowedMap());
+  auto fail=[&](const char* message){if(error)*error=message;return false;};
+  if(view.size!=map.Size() || view.bucket_count!=map.BucketCount() || view.max_load_factor!=1.0f)
+    return fail("Object replacement map header is inconsistent");
+  if(!map.Size()) {
+    if(view.buckets || view.bucket_count || view.sentinel.next)
+      return fail("Empty object replacement map contains storage");
+    return true;
+  }
+  if(view.buckets!=map.buckets_.data() || !view.buckets || view.bucket_count<2 || (view.bucket_count&(view.bucket_count-1)))
+    return fail("Object replacement map bucket storage is invalid");
+  std::vector<const object_map_abi::NodeBase*> predecessors(view.bucket_count,nullptr);
+  std::unordered_set<void*> keys;
+  const object_map_abi::NodeBase* previous=&view.sentinel;
+  const object_map_abi::NodeBase* next=view.sentinel.next;
+  size_t last_bucket=0;
+  for(size_t i=0;i<map.Size();++i) {
+    // Validate membership before dereferencing a chain pointer. The owned node
+    // vector is in bucket order and must be visited exactly once in full.
+    const auto* node=map.Nodes()+i;
+    if(next!=node) return fail("Object replacement map chain is inconsistent");
+    if(node->hash!=HashReplacementPointer(node->key) || !keys.insert(node->key).second)
+      return fail("Object replacement map contains invalid hashes or duplicate keys");
+    const size_t bucket=node->hash&(view.bucket_count-1);
+    if(i && bucket<last_bucket) return fail("Object replacement map bucket order is inconsistent");
+    if(!predecessors[bucket]) predecessors[bucket]=previous;
+    previous=node;next=node->next;last_bucket=bucket;
+  }
+  if(next) return fail("Object replacement map chain exceeds owned storage");
+  for(size_t bucket=0;bucket<view.bucket_count;++bucket)
+    if(view.buckets[bucket]!=predecessors[bucket])
+      return fail("Object replacement map bucket predecessor is inconsistent");
+  return true;
 }
 }

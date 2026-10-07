@@ -1,3 +1,5 @@
+#include "transaction_metadata_profile.h"
+#include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/hierarchy_allocation.h"
 #include "platform/android13/hierarchy_allocation_abi.h"
 #include "platform/android13/handle_root_scope_abi.h"
@@ -23,6 +25,7 @@ unsigned char* heap;
 size_t generation=0;
 struct Node { void* pointer; int kind; }; // class=1/cache=2/loader=3/array=4
 std::vector<Node> nodes;
+size_t array_type_id;
 size_t object_id,b_id,c_id,d_id,loader_id,b_cache_id,c_cache_id;
 std::unordered_map<std::string,size_t> names;
 std::string failure;
@@ -50,9 +53,10 @@ void GC() {
   for(const auto& node:nodes) {
     if(node.kind==1) {
       auto* klass=static_cast<Class*>(node.pointer);
-      for(uint32_t* slot:{&klass->class_loader,&klass->super_class,&klass->dex_cache}) move(slot);
+      for(uint32_t* slot:{&klass->object.klass,&klass->component_type,&klass->class_loader,&klass->super_class,&klass->dex_cache}) move(slot);
     } else if(node.kind==2) move(&static_cast<Cache*>(node.pointer)->prefix.class_loader);
     else if(node.kind==4) {
+      move(static_cast<uint32_t*>(node.pointer));
       int32_t length=Read<int32_t>(node.pointer,8);
       for(int32_t j=0;j<length;++j) move(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(node.pointer)+12+j*4));
     }
@@ -124,13 +128,13 @@ struct Fixture {
   HandleRootScope root{thread,1};
   Fixture(const std::vector<std::pair<size_t,size_t>>& entries,uint64_t structural):owners(entries.size()),bits(structural) {
     vector={reinterpret_cast<unsigned char*>(owners.data()),reinterpret_cast<unsigned char*>(owners.data()+owners.size()),reinterpret_cast<unsigned char*>(owners.data()+owners.capacity())};
-    size_t id=New(4);Write<int32_t>(Ptr(id),8,static_cast<int32_t>(entries.size()*13));
+    size_t id=New(4);Write<uint32_t>(Ptr(id),0,Ref(Ptr(array_type_id)));Write<int32_t>(Ptr(id),8,static_cast<int32_t>(entries.size()*13));
     for(size_t i=0;i<entries.size();++i) {
       Write<uint32_t>(Ptr(id),12+4*(13*i+3),Ref(Ptr(entries[i].second)));
       Write<uint32_t>(Ptr(id),12+4*(13*i+4),Ref(Ptr(entries[i].first)));
     }
     root.Set(0,Ptr(id));holder.array_handle=static_cast<uint32_t*>(root.Slot(0));holder.redefinitions=&vector;
-    holder.actually_structural={&bits,entries.size(),64};
+    holder.initialized=holder.initial_structural=holder.actually_structural={&bits,entries.size(),1};
   }
 };
 }
@@ -145,19 +149,12 @@ void CopyWriteBarrier(void*) { ++barriers; }
 }
 extern "C" int ArtDcevmSourceProbeHandleRootScope(void*,void*,uint32_t) { return 0; }
 extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*callback)(void*)) { return callback(thread); }
-extern "C" bool ArtDcevmSourceProbeHierarchyCache(void*) { return true; }
-extern "C" bool ArtDcevmSourceProbeHierarchyTarget(void* raw,size_t index,const hierarchy_allocation_abi::Target* value) {
-  auto holder=Read<allocation_abi::Holder>(raw);auto owners=Read<hierarchy_allocation_abi::Vector>(holder.redefinitions);
-  auto array=HierarchyRootPool::Get(holder.array_handle);
-  return value->owner==owners.begin+index*sizeof(redefinition_abi::ClassRedefinition) &&
-      value->klass==ReadHeapReference(array,12+4*(13*index+4),false) && value->cache==ReadHeapReference(array,12+4*(13*index+3),false);
-}
 int main() {
   void* mapped=mmap(reinterpret_cast<void*>(0x20000000),32*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
   assert(mapped!=MAP_FAILED && reinterpret_cast<uintptr_t>(mapped)+32*1024*1024<=UINT32_MAX);heap=static_cast<unsigned char*>(mapped);
-  Hooks hooks;std::string error;
+  Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;
   assert(ConfigureHandleRootScopes(hooks,dlopen(nullptr,RTLD_NOW),&error));assert(ConfigureHierarchyAllocation(hooks,dlopen(nullptr,RTLD_NOW),&error));
-  loader_id=New(3);object_id=ClassNode("Ljava/lang/Object;",SIZE_MAX,SIZE_MAX);
+  loader_id=New(3);object_id=ClassNode("Ljava/lang/Object;",SIZE_MAX,SIZE_MAX);array_type_id=New(1);static_cast<Class*>(Ptr(array_type_id))->component_type=Ref(Ptr(object_id));
   {
     HierarchyRootPool pool(thread);std::vector<void*> roots;
     for(int i=0;i<60;++i) roots.push_back(pool.Add(Ptr(object_id)));
