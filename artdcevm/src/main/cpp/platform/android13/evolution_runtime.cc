@@ -246,6 +246,14 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_rejectedCalls(JNIEnv*, jclass) {
   return artdcevm::android13::RejectedRetiredInvocations();
 }
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_probeCheckedHandleHook(JNIEnv* env, jclass) {
+  return artdcevm::android13::ProbeCheckedHandleHook(env)?JNI_TRUE:JNI_FALSE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_sourceCheckedHandleCalls(JNIEnv*, jclass) {
+  return artdcevm::android13::SourceCheckedHandleDispatches();
+}
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_checkJniMode(
     JNIEnv* env, jclass, jint requested) {

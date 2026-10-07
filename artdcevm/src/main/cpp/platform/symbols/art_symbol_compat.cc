@@ -31,7 +31,7 @@ bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error) {
                     cas::kLookupClass, cas::kDeleteClassLoader,
                     cas::kIsAsyncDeoptimizeable, cas::kTestSuspendFromCode,
                     cas::kReadBarrierMark,
-                    cas::kCheckedResolve, cas::kCheckedResolveHandles,
+                    cas::kCheckedResolve,
                     cas::kInvalidateAllCompiledCode};
   for (const char* name : art)
     if (!Require(hooks, Library::kArt, name, error)) return false;

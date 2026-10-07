@@ -92,6 +92,14 @@ void* SourceResolveCheckedHandles(void* linker,uint32_t index,void* cache,void* 
   if(!ready.load(std::memory_order_acquire))return nullptr; // never published to an invocation hook before ready
   return Resolve({linker,index,cache,loader,referrer,type},throw_error);
 }
+CheckedHandleResolver SelectCheckedHandleResolver(HookEngine& hooks,bool force_source,std::string* error) {
+  if(!ready.load(std::memory_order_acquire)) {
+    Fail(error,"Checked Handle provider has not been calibrated");return nullptr;
+  }
+  if(!force_source)if(auto native=hooks.FindSymbol("libart.so",cas::kCheckedResolveHandles))
+    return reinterpret_cast<CheckedHandleResolver>(native);
+  return SourceResolveCheckedHandles;
+}
 bool ConfigureCheckedMethodProvider(HookEngine& hooks,const DeviceProfile& profile,JNIEnv* env,
                                     jobject fixture,std::string* error) {
   ready.store(false,std::memory_order_release);

@@ -1,4 +1,14 @@
 #include "platform/android13/retired_method_hooks.h"
+#include "platform/android13/checked_method_provider.h"
+#ifdef ARTDCEVM_TESTING
+#include "platform/android13/calibration_exception.h"
+#include "platform/android13/native_object_access.h"
+#include "platform/android13/heap_reference.h"
+#include "platform/android13/validation_metadata_abi.h"
+#include "platform/android13/art_method_abi.h"
+#include "platform/android13/handle_root_scope.h"
+#include <cstring>
+#endif
 #include "platform/android13/retired_member_guard.h"
 #include "platform/android13/member_decode.h"
 #include "platform/android13/member_access_guards.h"
@@ -20,7 +30,13 @@ void* original_deopt;
 void* original_resolve;
 void* original_resolve_handles;
 void* checked_resolve;
-void* checked_resolve_handles;
+CheckedHandleResolver checked_resolve_handles;
+#ifdef ARTDCEVM_TESTING
+std::atomic<int> source_handle_calls{0};
+void* handle_hook_entry=nullptr;
+thread_local bool probe_active=false;
+thread_local int probe_hook_calls=0,probe_source_calls=0;
+#endif
 void* original_invoke;
 void* original_jvalues;
 void* original_varargs;
@@ -60,8 +76,18 @@ void* Resolve(void* linker, void* thread, uint32_t index, void* caller, int type
 }
 void* ResolveHandles(void* linker, uint32_t index, void* dex_cache, void* loader, void* caller, int type) {
   using Fn = void* (*)(void*, uint32_t, void*, void*, void*, int);
-  return reinterpret_cast<Fn>(NeedsDispatchChecks() ? checked_resolve_handles : original_resolve_handles)(
-      linker, index, dex_cache, loader, caller, type);
+#ifdef ARTDCEVM_TESTING
+  if(probe_active)++probe_hook_calls;
+#endif
+  if(NeedsDispatchChecks()) {
+#ifdef ARTDCEVM_TESTING
+    if(checked_resolve_handles==SourceResolveCheckedHandles) {
+      ++source_handle_calls;if(probe_active)++probe_source_calls;
+    }
+#endif
+    return checked_resolve_handles(linker,index,dex_cache,loader,caller,static_cast<uint32_t>(type));
+  }
+  return reinterpret_cast<Fn>(original_resolve_handles)(linker,index,dex_cache,loader,caller,type);
 }
 void Invoke(void* method, void* thread, uint32_t* args, uint32_t size, void* result, const char* shorty) {
   if (GuardRetiredMethod(method, thread, result)) { ++rejected; return; }
@@ -174,7 +200,12 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, std::string* error) {
   checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
-  checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
+#ifdef ARTDCEVM_FORCE_CHECKED_HANDLES_TEST
+  constexpr bool force_source=true;
+#else
+  constexpr bool force_source=false;
+#endif
+  checked_resolve_handles=SelectCheckedHandleResolver(hooks,force_source,error);
   if (!checked_resolve || !checked_resolve_handles) {
     *error = "Dispatch validation symbols are incomplete"; return false;
   }
@@ -227,7 +258,42 @@ bool InstallRetiredMethodHooks(HookEngine& hooks, std::string* error) {
     }
     tokens.push_back(token);
   }
+#ifdef ARTDCEVM_TESTING
+  handle_hook_entry=entries[3].target;
+#endif
   return true;
 }
+#ifdef ARTDCEVM_TESTING
+int SourceCheckedHandleDispatches(){return source_handle_calls.load();}
+bool ProbeCheckedHandleHook(JNIEnv* env) {
+  if(!handle_hook_entry || !checked_resolve_handles || env->PushLocalFrame(12)!=JNI_OK)return false;
+  struct Frame {JNIEnv* env;~Frame(){env->PopLocalFrame(nullptr);}} frame{env};
+  auto klass=env->FindClass("com/github/ytlog/artdcevm/internal/EvolutionCalibration");
+  auto object=env->FindClass("java/lang/Object");
+  auto icce=env->FindClass("java/lang/IncompatibleClassChangeError");
+  auto iae=env->FindClass("java/lang/IllegalAccessError");
+  auto message=icce?env->GetMethodID(icce,"getMessage","()Ljava/lang/String;"):nullptr;
+  auto id=klass?env->GetMethodID(klass,"compute","()I"):nullptr;
+  auto boot_id=object?env->GetMethodID(object,"hashCode","()I"):nullptr;
+  if(!message || !id || !boot_id || !iae || env->ExceptionCheck())return false;
+  NativeObjectAccess access(env);if(!access.Supported())return false;
+  HandleRootScope roots(access.Self(),3);roots.Set(0,access.Decode(klass));
+  roots.Set(1,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,dex_cache)));
+  roots.Set(2,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,class_loader)));
+  auto method=DecodeMethodId(id),boot=DecodeMethodId(boot_id);
+  if(!method || !boot || !roots.Get(1))return false;
+  uint32_t index;std::memcpy(&index,static_cast<char*>(method)+offsetof(art_method_abi::ArtMethod,dex_method_index),sizeof(index));
+  RequireDispatchChecks();
+  struct Probe {Probe(){probe_hook_calls=probe_source_calls=0;probe_active=true;}~Probe(){probe_active=false;}} probe;
+  using Call=void*(*)(void*,uint32_t,void*,void*,void*,uint32_t);
+  auto entry=reinterpret_cast<Call>(handle_hook_entry);
+  if(entry(RuntimeClassLinker(),index,roots.Slot(1),roots.Slot(2),nullptr,2)!=method || env->ExceptionCheck())return false;
+  if(entry(RuntimeClassLinker(),index,roots.Slot(1),roots.Slot(2),nullptr,0)!=nullptr ||
+     !ConsumeCalibrationException(env,icce,message,{"compute","expected to be of type static","found to be of type virtual"}))return false;
+  if(entry(RuntimeClassLinker(),index,roots.Slot(1),roots.Slot(2),boot,0)!=nullptr ||
+     !ConsumeCalibrationException(env,iae,message,{"Illegal class access","compute"}))return false;
+  return probe_hook_calls==3 && probe_source_calls==(checked_resolve_handles==SourceResolveCheckedHandles?3:0);
+}
+#endif
 int RejectedRetiredInvocations() { return rejected.load(); }
 }

@@ -150,6 +150,8 @@ public final class SourceEngineInstrumentation extends Instrumentation {
     private static native long compiledPrecommitDiagnostics(int index);
     private static native long hierarchyDiagnostics(int index);
     private static native int rejectedCalls();
+    private static native int sourceCheckedHandleCalls();
+    private static native boolean probeCheckedHandleHook();
     private static native int checkJniMode(int requested);
     private static volatile int sink;
     @Override public void onCreate(Bundle args) {
@@ -257,7 +259,10 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                     && testPrivateMethodTransition(report) && testPrivateFieldTransition(report)
                     && testPrivateVisibilityVariants(report) && testPrivateStaticVisibility(report)
                     && testSimpleHierarchyNarrowing(report) && testInterfaceDefaultShadow(report, false);
-            report.put("capabilitiesAfterEvolution", backend.capabilities()).put("runtimeReadBarrierCalls", readBarrierCalls());
+            boolean checkedHandleProbe = probeCheckedHandleHook();
+            report.put("checkedHandleHookProbe", checkedHandleProbe);
+            passed = checkedHandleProbe && passed;
+            report.put("capabilitiesAfterEvolution", backend.capabilities()).put("runtimeReadBarrierCalls", readBarrierCalls()).put("sourceCheckedHandleCalls", sourceCheckedHandleCalls());
 
         } catch (Throwable error) {
             passed = false;

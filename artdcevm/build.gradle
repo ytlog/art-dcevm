@@ -12,6 +12,7 @@ android {
         externalNativeBuild { cmake {
             cppFlags '-std=c++17 -Wall -Wextra -Werror'
             arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+            arguments '-DARTDCEVM_FORCE_CHECKED_HANDLES_TEST=' + (providers.gradleProperty('forceCheckedHandles').orElse('false').get().toBoolean() ? 'ON' : 'OFF')
         } }
     }
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
