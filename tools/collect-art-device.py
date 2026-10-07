@@ -20,6 +20,14 @@ DIRECTORIES = ('/apex/com.android.art/lib64', '/apex/com.android.runtime/lib64',
                '/apex/com.android.runtime/lib64/bionic', '/system/lib64')
 
 
+def mounted_apex_versions(mounts):
+    """Record observed mount versions; never infer an ART ABI from Android SDK."""
+    versions = {}
+    for name, version in re.findall(r'^\S+\s+/apex/([A-Za-z0-9_.]+)@(\d+)\s', mounts, re.MULTILINE):
+        versions.setdefault(name, set()).add(int(version))
+    return {name: sorted(values) for name, values in sorted(versions.items())}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial', required=True)
@@ -88,7 +96,8 @@ def main():
         if args.origin == 'firebase' and props.get('ro.kernel.qemu') == '1':
             raise RuntimeError('Firebase collection requires a physical device')
         adb('apex-packages', 'shell', 'dumpsys', 'apexservice', required=False)
-        adb('mounts', 'shell', 'cat', '/proc/mounts', required=False)
+        mounts = adb('mounts', 'shell', 'cat', '/proc/mounts', required=False)
+        device['mountedApexVersions'] = mounted_apex_versions(mounts)
         # Versioned APEX mount aliases are deduplicated using the canonical file path.
         candidates = ' '.join(shlex.quote(d + '/' + n) for d in DIRECTORIES for n in LIBRARIES)
         paths = adb('library-paths', 'shell',

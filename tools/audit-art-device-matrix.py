@@ -11,7 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def evolution_dependencies(cxx, directory):
+def evolution_dependencies(cxx, directory, manifests):
     """Enumerate the production gate, without duplicating its generated names."""
     cpp = ROOT / 'artdcevm/src/main/cpp'
     with tempfile.TemporaryDirectory(prefix='symbol-inventory-', dir=directory) as temporary:
@@ -19,15 +19,37 @@ def evolution_dependencies(cxx, directory):
         subprocess.run([cxx, '-std=c++17', '-I', str(cpp),
                         str(ROOT / 'tools/art-symbol-dependencies.cc'),
                         str(cpp / 'platform/symbols/art_symbol_compat.cc'),
+                        str(cpp / 'support/elf_symbol_names.cc'),
                         '-o', str(binary)], check=True, capture_output=True, text=True)
         output = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout
+        aliases = {}
+        evidence = (ROOT / 'build/evidence').resolve()
+        for manifest in manifests:
+            # Invalid collections are reported by the normal audit below. Only
+            # independently hashed files under evidence enter the name reader.
+            try:
+                data = json.loads(manifest.read_text())
+                if not data['complete']:
+                    continue
+                for library in data['libraries']:
+                    path = (manifest.parent / library['file']).resolve()
+                    if not path.is_relative_to(evidence):
+                        continue
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if digest != library['sha256'] or digest in aliases:
+                        continue
+                    names = subprocess.run([str(binary), str(path)], check=True,
+                                           capture_output=True, text=True).stdout
+                    aliases[digest] = dict(line.split('\t') for line in names.splitlines())
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
     required = {}
     for line in output.splitlines():
         library, symbol = line.split('\t')
         required.setdefault(symbol, set()).add(library)
     if not required:
         raise ValueError('Production evolution symbol inventory is empty')
-    return required
+    return required, aliases
 
 
 def main():
@@ -41,7 +63,7 @@ def main():
         parser.error('Raw symbol audit must remain under build/evidence/')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        required = evolution_dependencies(args.cxx, args.output.parent)
+        required, aliases = evolution_dependencies(args.cxx, args.output.parent, args.manifests)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
         parser.error('Cannot enumerate production evolution dependencies: ' + detail)
@@ -63,6 +85,7 @@ def main():
                 raise ValueError('Incomplete device collection')
             libraries = []
             available = {}
+            unique_names = {}
             for library in data['libraries']:
                 local = (manifest.parent / library['file']).resolve()
                 if not local.is_relative_to(evidence):
@@ -73,18 +96,27 @@ def main():
                 inventory = (local.parent / 'defined-symbols.json').read_bytes()
                 if hashlib.sha256(inventory).hexdigest() != library['symbolInventorySha256']:
                     raise ValueError('Symbol inventory hash mismatch: ' + library['path'])
-                names = json.loads(inventory)
+                names = set(json.loads(inventory))
+                for base, full in aliases.get(digest, {}).items():
+                    if full not in names:
+                        raise ValueError('Unique name missing from verified symbol inventory: ' + full)
+                    unique_names.setdefault(base, []).append(dict(path=library['path'], symbol=full))
                 for name in names:
                     available.setdefault(name.split('@', 1)[0], []).append(library['path'])
                 identity = (library['name'], library['buildId'], digest)
                 identities.setdefault(identity, []).append(str(manifest))
                 libraries.append({k: library[k] for k in ('name', 'path', 'sha256', 'buildId')})
+            def paths(symbol):
+                return set(available.get(symbol, [])) | {name['path'] for name in unique_names.get(symbol, [])}
+
             symbols = [{'symbol': symbol, 'sourceFiles': sorted(set(files)),
-                        'presentIn': sorted(set(available.get(symbol, []))),
+                        'exactPresentIn': sorted(set(available.get(symbol, []))),
+                        'uniqueNameMatches': sorted(unique_names.get(symbol, []), key=lambda name: name['path']),
+                        'presentIn': sorted(paths(symbol)),
                         'requiredLibraries': sorted(required.get(symbol, set())),
                         'missingRequiredLibraries': sorted(
                             library for library in required.get(symbol, set())
-                            if not any(Path(path).name == library for path in available.get(symbol, [])))}
+                            if not any(Path(path).name == library for path in paths(symbol)))}
                        for symbol, files in sorted(dependencies.items())]
             devices.append(dict(manifest=str(manifest), origin=data['origin'], device=data['device'],
                                 libraries=libraries, symbols=symbols,
@@ -96,7 +128,7 @@ def main():
             errors.append(f'{manifest}: {error}')
     firebase = [x for x in devices if x['origin'] == 'firebase']
     covered = sorted(set(x['device']['sdk'] for x in firebase))
-    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; optional dependencies included; presence does not prove ABI or loader namespace compatibility',
+    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; exact and unique local names from production ELF reader; optional dependencies included; presence does not prove ABI or loader namespace compatibility',
                   devices=devices, firebaseApis=covered,
                   missingFirebaseApis=sorted(set(range(30, 38)) - set(covered)),
                   firebaseManufacturers=sorted(set(x['device']['manufacturer'] for x in firebase)),

@@ -23,6 +23,12 @@ INTERFACES = {
     'runtime/mirror/var_handle.h': ('GetAccessModeTemplate',),
     'runtime/art_field.h': ('GetName', 'GetTypeDescriptor'),
     'compiler/optimizing/inliner.h': ('TryInline',),
+    'runtime/class_linker.h': ('ResolveMethod',),
+    'runtime/class_linker-inl.h': ('ResolveMethod',),
+    'runtime/class_linker.cc': ('ResolveMethod', 'DeleteClassLoader'),
+    'runtime/linear_alloc.h': ('ContainsUnsafe',),
+    'runtime/linear_alloc.cc': ('ContainsUnsafe',),
+    'runtime/linear_alloc-inl.h': ('ContainsUnsafe', 'Contains', 'Alloc'),
 }
 
 
@@ -71,7 +77,9 @@ def main():
         oat = 'runtime/oat/' if major >= 15 else 'runtime/'
         files = ['openjdkjvmti/ti_redefine.h', 'openjdkjvmti/ti_redefine.cc',
                  'openjdkjvmti/ti_extension.cc', 'runtime/art_method.h',
-                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h', 'runtime/Android.bp', *INTERFACES]
+                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h', 'runtime/Android.bp',
+                 *(name for name in INTERFACES
+                   if name != ('runtime/linear_alloc.cc' if major >= 14 else 'runtime/linear_alloc-inl.h'))]
         content = {}
         for name in files:
             path = args.source_dir / tag / name
@@ -104,6 +112,8 @@ def main():
         declarations = {}
         # Preserve source excerpts for review; do not infer object offsets or ABI compatibility.
         for name, methods in INTERFACES.items():
+            if name not in content:
+                continue
             lines = content[name].splitlines()
             for method in methods:
                 matches = []
@@ -128,6 +138,8 @@ def main():
                 'com.android.art.class.structurally_redefine_classes',
                 'com.android.art.class.is_structurally_modifiable_class')),
             'interfaceDeclarationExcerpts': declarations,
+            'linearAllocatorImplementationFile': 'runtime/linear_alloc-inl.h' if major >= 14 else 'runtime/linear_alloc.cc',
+            'linearAllocatorHasAllocationKind': 'LinearAllocKind' in content['runtime/linear_alloc.h'],
             'compilerBundledIntoArt': bool(re.search(
                 r'name:\s*"libart",(?:(?!\n\}).)*?whole_static_libs:\s*\[[^]]*"libart-compiler"',
                 content['runtime/Android.bp'], re.DOTALL)),
