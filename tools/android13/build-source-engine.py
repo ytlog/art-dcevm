@@ -4,19 +4,37 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[2]
-ART_LIBS = ROOT / 'local/android13/art-libs'
-required_libs = ('libopenjdkjvmti.so', 'libart.so', 'libartbase.so',
-                 'libdexfile.so', 'libbase.so', 'libc++.so')
-missing_libs = [name for name in required_libs if not (ART_LIBS / name).is_file()]
-if missing_libs:
-    raise SystemExit(f'Missing Android 13 device libraries in {ART_LIBS}: {", ".join(missing_libs)}')
 OUT = ROOT / 'build/art13-source'
 OUT.mkdir(parents=True, exist_ok=True)
+sdk = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME')
+if not sdk:
+    sdk = next(line.split('=', 1)[1] for line in (ROOT / 'local.properties').read_text().splitlines() if line.startswith('sdk.dir='))
+host = {'darwin': 'darwin-x86_64', 'linux': 'linux-x86_64'}[sys.platform]
+toolchain = Path(sdk) / 'ndk/27.2.12479018/toolchains/llvm/prebuilt' / host / 'bin'
+compiler = toolchain / 'aarch64-linux-android33-clang++'
+
+# Empty SONAME stubs provide DT_NEEDED entries at link time. All ART symbols
+# remain undefined in the source engine and resolve from the device at load
+# time. The loader checks exact build IDs before loading, then runs the ABI
+# probe before installing hooks. No device library is a build input.
+stub_dir = OUT / 'link-stubs'
+stub_dir.mkdir(exist_ok=True)
+required_libs = ('libopenjdkjvmti.so', 'libart.so', 'libartbase.so',
+                 'libdexfile.so', 'libbase.so', 'libc++.so')
+for name in required_libs:
+    subprocess.run([str(compiler), '-shared', '-nostdlib', '-x', 'c++', '-',
+                    '-Wl,-soname,' + name, '-o', str(stub_dir / name)],
+                   input='extern "C" void artdcevm_link_stub() {}\n',
+                   text=True, check=True, capture_output=True)
+if '--prepare-link-stubs-only' in sys.argv:
+    print(stub_dir)
+    raise SystemExit(0)
 CACHE = OUT / 'archives'
 CACHE.mkdir(exist_ok=True)
 lock = json.loads((Path(__file__).parent / 'sources.lock.json').read_text())
@@ -40,11 +58,6 @@ for item in lock['archives']:
             files.extractall(dest, members=members)
         stamp.write_text(item['sha256'])
 
-sdk = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME')
-if not sdk:
-    sdk = next(line.split('=', 1)[1] for line in (ROOT / 'local.properties').read_text().splitlines() if line.startswith('sdk.dir='))
-toolchain = Path(sdk) / 'ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin'
-compiler = toolchain / 'aarch64-linux-android33-clang++'
 # Headers include neighbours with quotes, so an include-path-only overlay would
 # still pick some original inline definitions. Copy the runtime headers' directory
 # topology, then patch the isolated copy; keep the pinned archive untouched.
@@ -98,9 +111,9 @@ exports = OUT / 'source-engine.map'
 exports.write_text('{ global: ArtDcevmSource*; ArtDcevmGuard*; '
                    '_ZN3art11ClassLinker17DeleteClassLoader*; local: *; };\n')
 library = OUT / 'libartdcevm_source13.so'
-command = [str(compiler), '-shared', '-nostdlib++', '-Wl,-z,defs', '-Wl,-Bsymbolic',
+command = [str(compiler), '-shared', '-nostdlib++', '-Wl,--no-as-needed', '-Wl,-Bsymbolic',
            '-Wl,--version-script=' + str(exports), '-Wl,-soname,' + library.name,
-           *objects, '-L' + str(ART_LIBS), '-lopenjdkjvmti', '-lart',
+           *objects, '-L' + str(stub_dir), '-lopenjdkjvmti', '-lart',
            '-lartbase', '-ldexfile', '-lbase', '-lc++', '-llog', '-o', str(library)]
 commands.append(command)
 result = subprocess.run(command, capture_output=True, text=True)

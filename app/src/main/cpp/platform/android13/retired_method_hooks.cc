@@ -1,4 +1,5 @@
 #include "platform/android13/retired_method_hooks.h"
+#include "platform/symbols/android13.h"
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
@@ -197,42 +198,42 @@ bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* er
   needs_dispatch_checks = reinterpret_cast<decltype(needs_dispatch_checks)>(dlsym(library, "ArtDcevmSourceNeedsDispatchChecks"));
   guard_nterp = reinterpret_cast<decltype(guard_nterp)>(dlsym(library, "ArtDcevmGuardNterpInvoke"));
   auto configure_resolver = reinterpret_cast<void (*)(void*)>(dlsym(library, "ArtDcevmSourceConfigureDispatchResolver"));
-  checked_resolve = hooks.FindSymbol("libart.so", "_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE");
-  checked_resolve_handles = hooks.FindSymbol("libart.so", "_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEjNS_6HandleINS_6mirror8DexCacheEEENS5_INS6_11ClassLoaderEEES4_NS_10InvokeTypeE");
+  checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
+  checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
   if (!trace_deopt || !needs_dispatch_checks || !guard_nterp || !configure_resolver || !checked_resolve || !checked_resolve_handles) {
     *error = "Dispatch validation symbols are incomplete"; return false;
   }
   configure_resolver(checked_resolve);
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
   Entry entries[] = {
-    {"_ZN3art11interpreter30EnterInterpreterFromDeoptimizeEPNS_6ThreadEPNS_11ShadowFrameEPNS_6JValueEbNS_24DeoptimizationMethodTypeE", reinterpret_cast<void*>(Deopt), &original_deopt},
-    {"NterpGetMethod", reinterpret_cast<void*>(Nterp), &original_nterp},
-    {"_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE0EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE", reinterpret_cast<void*>(Resolve), &original_resolve},
-    {"_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE0EEEPNS_9ArtMethodEjNS_6HandleINS_6mirror8DexCacheEEENS5_INS6_11ClassLoaderEEES4_NS_10InvokeTypeE", reinterpret_cast<void*>(ResolveHandles), &original_resolve_handles},
-    {"_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc", reinterpret_cast<void*>(Invoke), &original_invoke},
-    {"_ZN3art35InvokeVirtualOrInterfaceWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(VirtualJValues), &original_jvalues},
-    {"_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(VirtualVarArgs), &original_varargs},
-    {"_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(IdJValues), &original_id_jvalues},
-    {"_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(IdVarArgs), &original_id_varargs},
-    {"_ZN3art17InvokeWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(DirectJValues), &original_direct_jvalues},
-    {"_ZN3art17InvokeWithVarArgsIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(DirectVarArgs), &original_direct_varargs},
-    {"_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(DirectIdJValues), &original_direct_id_jvalues},
-    {"_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(DirectIdVarArgs), &original_direct_id_varargs},
-    {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflection},
-    {"_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", reinterpret_cast<void*>(Handle), &original_handle},
-    {"_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", reinterpret_cast<void*>(Exact), &original_exact},
-    {"_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE", reinterpret_cast<void*>(WithFrame), &original_frame},
-    {"artInvokeObsoleteMethod", reinterpret_cast<void*>(Obsolete), &original_obsolete},
-    {"_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE", reinterpret_cast<void*>(CheckJniMethod), &original_check_jni},
-    {"_ZN3art12_GLOBAL__N_111ScopedCheck16CheckConstructorEP10_jmethodID", reinterpret_cast<void*>(CheckConstructor), &original_check_constructor},
-    {"_ZN3artL24Constructor_newInstance0EP7_JNIEnvP8_jobjectP13_jobjectArray", reinterpret_cast<void*>(Constructor), &original_constructor},
-    {"_ZN3art3JNIILb0EE10NewObjectAEP7_JNIEnvP7_jclassP10_jmethodIDPK6jvalue", reinterpret_cast<void*>(NewA<0>), &original_new_a[0]},
-    {"_ZN3art3JNIILb1EE10NewObjectAEP7_JNIEnvP7_jclassP10_jmethodIDPK6jvalue", reinterpret_cast<void*>(NewA<1>), &original_new_a[1]},
-    {"_ZN3art3JNIILb0EE10NewObjectVEP7_JNIEnvP7_jclassP10_jmethodIDSt9__va_list", reinterpret_cast<void*>(NewV<0>), &original_new_v[0]},
-    {"_ZN3art3JNIILb1EE10NewObjectVEP7_JNIEnvP7_jclassP10_jmethodIDSt9__va_list", reinterpret_cast<void*>(NewV<1>), &original_new_v[1]},
+    {cas::kRetiredMethodHooks[0], reinterpret_cast<void*>(Deopt), &original_deopt},
+    {cas::kRetiredMethodHooks[1], reinterpret_cast<void*>(Nterp), &original_nterp},
+    {cas::kRetiredMethodHooks[2], reinterpret_cast<void*>(Resolve), &original_resolve},
+    {cas::kRetiredMethodHooks[3], reinterpret_cast<void*>(ResolveHandles), &original_resolve_handles},
+    {cas::kRetiredMethodHooks[4], reinterpret_cast<void*>(Invoke), &original_invoke},
+    {cas::kRetiredMethodHooks[5], reinterpret_cast<void*>(VirtualJValues), &original_jvalues},
+    {cas::kRetiredMethodHooks[6], reinterpret_cast<void*>(VirtualVarArgs), &original_varargs},
+    {cas::kRetiredMethodHooks[7], reinterpret_cast<void*>(IdJValues), &original_id_jvalues},
+    {cas::kRetiredMethodHooks[8], reinterpret_cast<void*>(IdVarArgs), &original_id_varargs},
+    {cas::kRetiredMethodHooks[9], reinterpret_cast<void*>(DirectJValues), &original_direct_jvalues},
+    {cas::kRetiredMethodHooks[10], reinterpret_cast<void*>(DirectVarArgs), &original_direct_varargs},
+    {cas::kRetiredMethodHooks[11], reinterpret_cast<void*>(DirectIdJValues), &original_direct_id_jvalues},
+    {cas::kRetiredMethodHooks[12], reinterpret_cast<void*>(DirectIdVarArgs), &original_direct_id_varargs},
+    {cas::kRetiredMethodHooks[13], reinterpret_cast<void*>(Reflect), &original_reflection},
+    {cas::kRetiredMethodHooks[14], reinterpret_cast<void*>(Handle), &original_handle},
+    {cas::kRetiredMethodHooks[15], reinterpret_cast<void*>(Exact), &original_exact},
+    {cas::kRetiredMethodHooks[16], reinterpret_cast<void*>(WithFrame), &original_frame},
+    {cas::kRetiredMethodHooks[17], reinterpret_cast<void*>(Obsolete), &original_obsolete},
+    {cas::kRetiredMethodHooks[18], reinterpret_cast<void*>(CheckJniMethod), &original_check_jni},
+    {cas::kRetiredMethodHooks[19], reinterpret_cast<void*>(CheckConstructor), &original_check_constructor},
+    {cas::kRetiredMethodHooks[20], reinterpret_cast<void*>(Constructor), &original_constructor},
+    {cas::kRetiredMethodHooks[21], reinterpret_cast<void*>(NewA<0>), &original_new_a[0]},
+    {cas::kRetiredMethodHooks[22], reinterpret_cast<void*>(NewA<1>), &original_new_a[1]},
+    {cas::kRetiredMethodHooks[23], reinterpret_cast<void*>(NewV<0>), &original_new_v[0]},
+    {cas::kRetiredMethodHooks[24], reinterpret_cast<void*>(NewV<1>), &original_new_v[1]},
   };
   for (auto& entry : entries) {
-    entry.target = hooks.FindSymbol("libart.so", entry.symbol);
+    entry.target = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), entry.symbol);
     if (!entry.target) { *error = std::string("Missing invocation symbol: ") + entry.symbol; return false; }
   }
   std::vector<void*> tokens;

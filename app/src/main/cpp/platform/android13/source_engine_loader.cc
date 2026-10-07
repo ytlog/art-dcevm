@@ -2,7 +2,7 @@
 #include <dlfcn.h>
 #include <limits>
 #include "hooks/shadow_hook_engine.h"
-#include "platform/android13/builds/cas_tkq1_221114_001.h"
+#include "platform/symbols/android13.h"
 #include "support/elf_modules.h"
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_field_hooks.h"
@@ -24,8 +24,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (load_attempted) return "Source initialization previously failed; restart the process";
   load_attempted = true;
   if (!path || !calibration) return "Source library path and ABI calibration are required";
-  if (FindLoadedModule("libart.so").build_id != cas::kArtBuildId ||
-      FindLoadedModule("libopenjdkjvmti.so").build_id != cas::kJvmtiBuildId)
+  if (!symbols::FindProfile(33, FindLoadedModule("libart.so").build_id,
+                            FindLoadedModule("libopenjdkjvmti.so").build_id))
     return "Unsupported ART/JVMTI build for the source engine";
   ShadowHookEngine symbols;
   std::string error;

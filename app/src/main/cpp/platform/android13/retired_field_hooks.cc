@@ -1,4 +1,5 @@
 #include "platform/android13/retired_field_hooks.h"
+#include "platform/symbols/android13.h"
 #include <dlfcn.h>
 #include <jni.h>
 #include <vector>
@@ -79,15 +80,11 @@ template <int indexed, typename T, bool is_static> struct JniField {
     reinterpret_cast<Fn>(original_set)(env, object, field, value);
   }
   static void Add(std::vector<Entry>& entries, const char* type, const char* code) {
-    std::string base = "_ZN3art3JNIILb" + std::to_string(indexed) + "EE";
-    std::string receiver = is_static ? "EP7_JNIEnvP7_jclassP9_jfieldID"
-                                    : "EP7_JNIEnvP8_jobjectP9_jfieldID";
-    std::string name = std::string(is_static ? "Static" : "") + type + "Field";
-    std::string getter = "Get" + name, setter = "Set" + name;
-    std::string argument = std::is_same_v<T, jobject> ? (is_static ? "P8_jobject" : "S5_") : code;
-    entries.push_back({base + std::to_string(getter.size()) + getter + receiver,
+    entries.push_back({cas::JniFieldSymbol(indexed, is_static, false, type, code,
+                                          std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Get), &original_get});
-    entries.push_back({base + std::to_string(setter.size()) + setter + receiver + argument,
+    entries.push_back({cas::JniFieldSymbol(indexed, is_static, true, type, code,
+                                          std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Set), &original_set});
   }
 };
@@ -105,12 +102,11 @@ template <typename T> struct ReflectionField {
     reinterpret_cast<Fn>(original_set)(env, field, object, value);
   }
   static void Add(std::vector<Entry>& entries, const char* type, const char* code) {
-    std::string suffix = std::is_same_v<T, jobject> ? "" : type;
-    std::string getter = "Field_get" + suffix, setter = "Field_set" + suffix;
-    std::string argument = std::is_same_v<T, jobject> ? "S3_" : code;
-    entries.push_back({"_ZN3artL" + std::to_string(getter.size()) + getter + "EP7_JNIEnvP8_jobjectS3_",
+    entries.push_back({cas::ReflectionFieldSymbol(false, type, code,
+                                                  std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Get), &original_get});
-    entries.push_back({"_ZN3artL" + std::to_string(setter.size()) + setter + "EP7_JNIEnvP8_jobjectS3_" + argument,
+    entries.push_back({cas::ReflectionFieldSymbol(true, type, code,
+                                                  std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Set), &original_set});
   }
 };
@@ -133,13 +129,13 @@ bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* err
     *error = "Retired field guard exports are incomplete"; return false;
   }
   std::vector<Entry> entries{
-    {"_ZN3art6mirror5Field11GetArtFieldEv", reinterpret_cast<void*>(GetField), &original_field},
-    {"_ZN3art6mirror5Field11VisitTargetEPNS_22ReflectiveValueVisitorE", reinterpret_cast<void*>(VisitField), &original_visit},
-    {"_ZN3art6mirror14FieldVarHandle6AccessENS0_9VarHandle10AccessModeEPNS_11ShadowFrameEPKNS_19InstructionOperandsEPNS_6JValueE", reinterpret_cast<void*>(VarHandle), &original_varhandle},
-    {"_ZN3art12_GLOBAL__N_120MethodHandleFieldPutEPNS_6ThreadERNS_11ShadowFrameERNS_6ObjPtrINS_6mirror6ObjectEEEPNS_8ArtFieldENS_9Primitive4TypeERNS_6JValueE", reinterpret_cast<void*>(MethodHandleFieldPut), &original_method_handle_put},
-    {"_ZN3art12_GLOBAL__N_111ScopedCheck16CheckFieldAccessERNS_18ScopedObjectAccessEP8_jobjectP9_jfieldIDbNS_9Primitive4TypeE", reinterpret_cast<void*>(CheckField), &original_check},
-    {"NterpGetInstanceFieldOffset", reinterpret_cast<void*>(NterpInstanceField), &original_nterp_instance},
-    {"NterpGetStaticField", reinterpret_cast<void*>(NterpStaticField), &original_nterp_static},
+    {cas::kRetiredFieldHooks[0], reinterpret_cast<void*>(GetField), &original_field},
+    {cas::kRetiredFieldHooks[1], reinterpret_cast<void*>(VisitField), &original_visit},
+    {cas::kRetiredFieldHooks[2], reinterpret_cast<void*>(VarHandle), &original_varhandle},
+    {cas::kRetiredFieldHooks[3], reinterpret_cast<void*>(MethodHandleFieldPut), &original_method_handle_put},
+    {cas::kRetiredFieldHooks[4], reinterpret_cast<void*>(CheckField), &original_check},
+    {cas::kRetiredFieldHooks[5], reinterpret_cast<void*>(NterpInstanceField), &original_nterp_instance},
+    {cas::kRetiredFieldHooks[6], reinterpret_cast<void*>(NterpStaticField), &original_nterp_static},
   };
 #define ADD(TYPE, JNI_TYPE, CODE) \
   JniField<0, JNI_TYPE, false>::Add(entries, #TYPE, CODE); \
@@ -152,7 +148,7 @@ bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* err
   ADD(Float, jfloat, "f"); ADD(Double, jdouble, "d"); ADD(Object, jobject, "");
 #undef ADD
   for (auto& entry : entries) {
-    entry.target = hooks.FindSymbol("libart.so", entry.symbol.c_str());
+    entry.target = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), entry.symbol.c_str());
     if (!entry.target) { *error = "Missing field symbol: " + entry.symbol; return false; }
   }
   std::vector<void*> tokens;

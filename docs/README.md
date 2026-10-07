@@ -143,13 +143,13 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 该解析器读取类、字段、方法及继承元数据，检查相关索引、偏移、长度和 checksum；它不是 ART 的完整 DEX 验证器。代码体、注解、encoded values 仍须由提交实现交给 ART 验证。`analyze()` 是只读预览，后续提交实现必须在自己的事务中重新验证基线，不能直接执行已经过时的客户端预览结果。
 
-当前构建配置 `platform/android13/builds/cas_tkq1_221114_001.h` 对应：
+当前构建配置 `platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h` 对应：
 
 - 小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。
 - `libart.so`: `14fc77b24db0b351b919c97009dc86bf`。
 - `libopenjdkjvmti.so`: `2fe21c45581b9c8b0519b71cbde32938`。
 
-以后为 Android 14 等版本补齐源码演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时新增其 `builds/` 配置、源码 ABI 校验与设备回归；公开 JVMTI 后端不推断私有 ART 对象布局。
+以后为 Android 14 等版本补齐源码演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时，在 `platform/symbols/android<版本>/<厂商>/<构建>.h` 添加命名符号和 Build ID，并注册 `ArtSymbolProfile`；对应实现仍需源码 ABI 校验与设备回归。Android 11、12、14、15、16、17 目前没有经过验证的私有配置，不能仅按 API 等级套用 Android 13 的符号。公开 JVMTI 后端不推断私有 ART 对象布局。
 
 ## Hook 的当前作用
 
@@ -195,7 +195,9 @@ static/实例切换会使已验证字节码的旧分派假设失效。方法映�
 
 完整移植重定义事务的早期实验触发了 `Invalid allocator type`，记录在 `build/evidence/source-engine/20261004T143908Z/`。这说明基本类/线程探针无法验证完整 Heap ABI。当前实现通过复用原 ART 的分配与事务准备避免该路径；源码归档版本和 API 等级均不作为完整私有 ABI 兼容保证。
 
-只有显式启用 `-PsourceEngine13`、构建固定设备的 Android 13 源码演进模块时，才需要从目标手机的 `/apex/com.android.art/lib64/` 提取 `libart.so`、`libopenjdkjvmti.so`、`libartbase.so`、`libdexfile.so`、`libbase.so`、`libc++.so`，放在本机专用的 `local/android13/art-libs/` 作为链接输入。`local/` 被 Git 忽略；这些库不会被打包或替换系统库。普通贡献者及 GitHub 构建不需要该目录，可直接运行 `./gradlew :app:assembleDebug`；此 APK 仅包含主库，在非固定 Android 13 / arm64 构建上可选择公开 JVMTI 后端。它不包含私有源码演进模块，不能用来验收完整 DCEVM 功能。
+`-PsourceEngine13` 不再读取本机复制的六个设备 SO。构建脚本在 `build/art13-source/link-stubs/` 生成只有 SONAME 的临时链接占位库，让源码引擎保留对系统库的 `DT_NEEDED` 和未定义 ART 符号；占位库不会打包进 APK。运行时由设备自己的 ART 库解析符号，精确 Build ID 检查和 ABI 探针仍是启用条件。这消除了构建机的设备 SO 输入，但源码引擎仍依赖目标设备的私有 ART ABI。普通贡献者可直接运行 `./gradlew :app:assembleDebug`；若要构建源码演进模块，运行 `./gradlew -PsourceEngine13 :app:assembleDebug`，构建器会按锁文件下载并校验 AOSP 源码。
+
+`platform/symbols/` 是私有 ELF 符号层：`art_symbol_profile.h` 定义库、Hook 路由和精确构建配置；`android13/xiaomi/` 存放已验证的小米构建符号。新增系统或厂商时先加独立配置，再对实际 ELF 的调用点检查 PLT 重定位覆盖范围。标准 JVMTI 的 `RedefineClasses` 和当前同库直接调用入口必须保留 Inline Hook；只在所有目标调用点都经过导入表时使用 PLT Hook。
 
 ```sh
 ./gradlew -PsourceEngine13 :app:assembleDebug

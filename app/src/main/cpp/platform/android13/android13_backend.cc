@@ -4,7 +4,7 @@
 #include "support/json.h"
 #include "platform/android13/evolution_planner.h"
 #include "platform/android13/source_engine_loader.h"
-#include "platform/android13/builds/cas_tkq1_221114_001.h"
+#include "platform/symbols/android13.h"
 #include "core/transaction_lock.h"
 #include <cstring>
 #include <elf.h>
@@ -118,7 +118,7 @@ std::string Android13Backend::Capabilities() const {
     << ",\"artPath\":" << Quote(art.path)
     << ",\"artBuildId\":" << Quote(art.build_id)
     << ",\"jvmtiBuildId\":" << Quote(jvmti.build_id)
-    << ",\"privateHooksSupported\":" << ((art.build_id == cas::kArtBuildId && jvmti.build_id == cas::kJvmtiBuildId) ? "true" : "false")
+    << ",\"privateHooksSupported\":" << (symbols::FindProfile(33, art.build_id, jvmti.build_id) ? "true" : "false")
     << ",\"validationHooksInstalled\":" << (validation_hooks_.installed() ? "true" : "false")
     << ",\"hookFieldCalls\":" << ValidationHooks::FieldCalls()
     << ",\"hookMethodCalls\":" << ValidationHooks::MethodCalls()
@@ -163,7 +163,8 @@ int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject
   if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
   evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
   routing_attempted_ = true;
-  void* target = hook_engine_.FindSymbol("libopenjdkjvmti.so", cas::kRedefineClasses);
+  void* target = symbols::FindSymbol(hook_engine_,
+      {symbols::Library::kJvmti, cas::kRedefineClasses, symbols::HookRoute::kInline});
   if (!target) {
     evolution_error_ = "Missing named RedefineClasses symbol; restart the process";
     return JVMTI_ERROR_NOT_AVAILABLE;

@@ -1,5 +1,5 @@
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/builds/cas_tkq1_221114_001.h"
+#include "platform/symbols/android13.h"
 #include "support/elf_modules.h"
 #include <atomic>
 #include <vector>
@@ -57,8 +57,8 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
   if (hooks_installed) return true;
   if (attempted) { *error = "Hook initialization previously failed; restart the process"; return false; }
   attempted = true;
-  if (FindLoadedModule("libart.so").build_id != cas::kArtBuildId ||
-      FindLoadedModule("libopenjdkjvmti.so").build_id != cas::kJvmtiBuildId) {
+  if (!symbols::FindProfile(33, FindLoadedModule("libart.so").build_id,
+                            FindLoadedModule("libopenjdkjvmti.so").build_id)) {
     *error = "Private hooks require the exact cas ART and JVMTI build IDs";
     return false;
   }
