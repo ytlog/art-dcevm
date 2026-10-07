@@ -5,12 +5,12 @@
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
+#include "platform/android13/validation_metadata.h"
 #include <cstring>
 #include <dlfcn.h>
 #include <new>
 namespace artdcevm::android13 {
 namespace {
-ClassDeclarationFlags declaration_flags = nullptr;
 ClassSubclassGuard subclass_guard = nullptr;
 ClassHierarchyGuard hierarchy_guard = nullptr;
 using RecordNewMethod = void (*)(void*);
@@ -37,7 +37,12 @@ bool CheckEvolutionClass(void* definition) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_INTERNAL, error.c_str());
       return false;
     }
-    const uint32_t old_flags = declaration_flags(definition);
+    ValidationMetadata old_metadata{};
+    if (!ReadValidationMetadata(definition, &old_metadata)) {
+      RecordRedefinitionFailure(definition, JVMTI_ERROR_INTERNAL, "Missing original class metadata");
+      return false;
+    }
+    const uint32_t old_flags = old_metadata.access_flags & kValidationClassFlags;
     const uint32_t new_flags = replacement.access &
         ((replacement.access & 0x200) ? kValidationInterfaceFlags : kValidationClassFlags);
     const auto action = CheckClassModifierEvolution(old_flags, new_flags, true);
@@ -82,17 +87,16 @@ bool CheckEvolutionClass(void* definition) {
   }
 }
 bool ConfigureEvolutionClassValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto flags = reinterpret_cast<ClassDeclarationFlags>(dlsym(implementation, "ArtDcevmSourceClassDeclarationFlags"));
   auto subclass = reinterpret_cast<ClassSubclassGuard>(dlsym(implementation, "ArtDcevmSourceClassSubclassGuard"));
   auto hierarchy = reinterpret_cast<ClassHierarchyGuard>(dlsym(implementation, "ArtDcevmSourceClassHierarchyGuard"));
   auto configure = reinterpret_cast<ConfigureClassValidation>(dlsym(implementation, "ArtDcevmSourceConfigureClassValidation"));
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!flags || !subclass || !hierarchy || !configure || !record) {
+  if (!subclass || !hierarchy || !configure || !record) {
     *error = "Missing class access/subclass/hierarchy adapter or named structural marker";
     return false;
   }
-  declaration_flags = flags; subclass_guard = subclass; hierarchy_guard = hierarchy; record_new_method = record;
+  subclass_guard = subclass; hierarchy_guard = hierarchy; record_new_method = record;
   configure(CheckEvolutionClass);
   return true;
 }

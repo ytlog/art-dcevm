@@ -8,6 +8,7 @@ namespace artdcevm::android13 {
 
 bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
                                     std::string* error);
+bool IsRetiredMethodPointer(void* method);
 size_t PruneRetiredMethods(const void* allocator) noexcept;
 
 }  // namespace artdcevm::android13

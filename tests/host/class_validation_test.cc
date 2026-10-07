@@ -3,6 +3,7 @@
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/validation_hooks.h"
+#include "platform/android13/validation_metadata.h"
 #include "evolution/class_schema.h"
 #include <cassert>
 #include <cstdlib>
@@ -68,8 +69,11 @@ namespace artdcevm::android13 {
 jvmtiEnv* ValidationHooks::TransactionEnvironment() { return current_env; }
 JNIEnv* ValidationHooks::TransactionJni() { return current_jni; }
 void RecordRedefinitionFailure(void*, int code, const char* message) { failure_code = code; failure_message = message; }
+bool ReadValidationMetadata(void*, ValidationMetadata* output) {
+  output->access_flags = raw_flags;
+  return true;
 }
-extern "C" uint32_t ArtDcevmSourceClassDeclarationFlags(void*) { return raw_flags; }
+}
 extern "C" bool ArtDcevmSourceClassSubclassGuard(void*) { return subclass_valid; }
 extern "C" int ArtDcevmSourceClassHierarchyGuard(void*, bool* changed, const char** error) {
   *changed = hierarchy_changed; *error = "Typed hierarchy guard diagnostic"; return hierarchy_code;

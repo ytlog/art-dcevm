@@ -37,6 +37,8 @@
 #include "runtime.h"
 #include "write_barrier.h"
 
+static_assert(sizeof(art::JValue) == sizeof(uint64_t));
+
 namespace artdcevm::android13::source {
 namespace {
 // The managed Field keeps an opaque token across GC. Its native registry lives
@@ -79,14 +81,8 @@ bool IsRetiredField(art::ArtField* field) {
 size_t RetiredFieldCount() {
   return field_registry.count();
 }
-extern "C" size_t ArtDcevmSourceRetiredFieldSlotCount() {
-  return field_registry.slot_count();
-}
 bool GuardField(art::ArtField* field, art::Thread* thread, art::JValue* result) {
-  if (!IsRetiredField(field)) return false;
-  if (result) result->SetJ(0);
-  thread->ThrowNewException("Ljava/lang/NoSuchFieldError;", "Field removed by ART DCEVM");
-  return true;
+  return field_registry.guard(field, thread, result);
 }
 }
 

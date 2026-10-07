@@ -3,6 +3,8 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include "platform/android13/retired_method_registry.h"
+#include "platform/android13/retired_field_registry_bridge.h"
+#include "platform/android13/retired_member_guard.h"
 #include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
@@ -17,6 +19,8 @@ bool Contains(void* method) { return registry.Contains(method); }
 size_t Count() { return registry.Count(); }
 }  // namespace
 
+bool IsRetiredMethodPointer(void* method) { return registry.Contains(method); }
+
 size_t PruneRetiredMethods(const void* allocator) noexcept {
   try { return registry.Prune(allocator, contains_unsafe); }
   catch (...) { std::abort(); }
@@ -24,7 +28,7 @@ size_t PruneRetiredMethods(const void* allocator) noexcept {
 
 bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
                                     std::string* error) {
-  using Configure = void (*)(void (*)(void*), bool (*)(void*), size_t (*)());
+  using Configure = void (*)(void (*)(void*), bool (*)(void*), size_t (*)(), RetiredMemberGuard);
   auto configure = reinterpret_cast<Configure>(
       dlsym(implementation, "ArtDcevmSourceConfigureRetiredMethods"));
   auto contains = reinterpret_cast<RetiredMethodRegistry::ContainsUnsafe>(
@@ -33,8 +37,17 @@ bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void* implementation,
     *error = "Missing retired-method registry bridge or named LinearAlloc symbol";
     return false;
   }
+  RetiredMemberGuardFunctions functions{
+      reinterpret_cast<CurrentGuardThread>(hooks.FindSymbol("libart.so", kGuardCurrentThread)),
+      reinterpret_cast<ThrowGuardException>(hooks.FindSymbol("libart.so", kGuardThrowNewException)),
+      reinterpret_cast<DeliverGuardException>(hooks.FindSymbol("libart.so", kGuardQuickDeliverException)),
+      IsRetiredMethodPointer, IsRetiredFieldPointer};
+  if (!ConfigureRetiredMemberGuard(functions)) {
+    *error = "Missing named ART thread functions for retired-member guards";
+    return false;
+  }
   contains_unsafe = contains;
-  configure(Retire, Contains, Count);
+  configure(Retire, Contains, Count, GuardRetiredMethod);
   return true;
 }
 

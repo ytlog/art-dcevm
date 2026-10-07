@@ -20,6 +20,8 @@
 #include "platform/android13/jni_method_targets.h"
 #include "platform/android13/method_validation.h"
 #include "platform/android13/class_validation.h"
+#include "platform/android13/validation_metadata.h"
+#include "platform/android13/field_copy.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -112,7 +114,9 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
   if (!ConfigureRedefinitionFailures(symbols, &error) ||
+      !ConfigureEvolutionFieldCopy(library, &error) ||
       !ConfigureEvolutionFieldValidation(symbols, library, &error) ||
+      !ConfigureValidationMetadata(symbols, library, &error) ||
       !ConfigureEvolutionMethodValidation(symbols, library, &error) ||
       !ConfigureEvolutionClassValidation(symbols, library, &error)) {
     dlclose(library);
@@ -231,11 +235,8 @@ Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_re
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_retiredFieldSlotCount(
     JNIEnv*, jclass) {
-  if (!artdcevm::android13::source_library) return -1;
-  using Fn = size_t (*)();
-  auto fn = reinterpret_cast<Fn>(dlsym(artdcevm::android13::source_library,
-                                      "ArtDcevmSourceRetiredFieldSlotCount"));
-  return fn ? static_cast<jlong>(fn()) : -1;
+  if (!artdcevm::android13::SourceEngineAvailable()) return -1;
+  return static_cast<jlong>(artdcevm::android13::RetiredFieldSlotCount());
 }
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_jitMethodState(

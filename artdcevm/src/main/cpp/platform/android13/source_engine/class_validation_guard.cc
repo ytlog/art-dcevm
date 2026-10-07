@@ -18,12 +18,6 @@ extern "C" void ArtDcevmSourceConfigureClassValidation(artdcevm::android13::Clas
 extern "C" bool ArtDcevmSourceCheckClass(void* definition) { return validate(definition); }
 namespace openjdkjvmti {
 struct ClassValidationBridge {
-  static uint32_t Flags(void* definition) {
-    auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
-    // ClassGetModifiers also reads InnerClass annotations. Keep the original
-    // CheckClass contract of Class access flags masked by valid class bits.
-    return redef->GetMirrorClass()->GetAccessFlags() & art::kAccValidClassFlags;
-  }
   static bool Subclasses(void* definition) {
     auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
     art::StackHandleScope<1> hs(redef->driver_->self_);
@@ -61,9 +55,6 @@ struct ClassValidationBridge {
     return result;
   }
 };
-}
-extern "C" uint32_t ArtDcevmSourceClassDeclarationFlags(void* definition) {
-  return openjdkjvmti::ClassValidationBridge::Flags(definition);
 }
 extern "C" bool ArtDcevmSourceClassSubclassGuard(void* definition) {
   return openjdkjvmti::ClassValidationBridge::Subclasses(definition);

@@ -5,6 +5,7 @@
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
+#include "platform/android13/validation_metadata.h"
 #include <algorithm>
 #include <cstring>
 #include <dlfcn.h>
@@ -13,7 +14,6 @@
 namespace artdcevm::android13 {
 namespace {
 
-ReadOldDexMetadata read_old_metadata = nullptr;
 MethodDependentGuard dependents = nullptr;
 using RecordNewMethod = void (*)(void*);
 RecordNewMethod record_new_method = nullptr;
@@ -30,10 +30,10 @@ bool CheckEvolutionMethods(void* definition) {
     std::string error;
     int result = ReadRedefinitionInput(definition, &redef, &replacement, &error);
     if (result) { RecordRedefinitionFailure(definition, result, error.c_str()); return false; }
-    evolution::MappedDexMetadata old_mapping{};
+    ValidationMetadata old_metadata{};
     evolution::ClassSchema old_declarations;
-    if (!read_old_metadata(definition, &old_mapping) ||
-        !evolution::ReadMappedDexDeclarations(old_mapping, &old_declarations, &error)) {
+    if (!ReadValidationMetadata(definition, &old_metadata) ||
+        !evolution::ReadMappedDexDeclarations(old_metadata.dex, &old_declarations, &error)) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_INTERNAL,
           error.empty() ? "Missing original DEX mapping" : error.c_str());
       return false;
@@ -81,16 +81,15 @@ bool CheckEvolutionMethods(void* definition) {
   }
 }
 bool ConfigureEvolutionMethodValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto read = reinterpret_cast<ReadOldDexMetadata>(dlsym(implementation, "ArtDcevmSourceReadOldDexMetadata"));
   auto guard = reinterpret_cast<MethodDependentGuard>(dlsym(implementation, "ArtDcevmSourceMethodDependentGuard"));
   auto configure = reinterpret_cast<ConfigureMethodValidation>(dlsym(implementation, "ArtDcevmSourceConfigureMethodValidation"));
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!read || !guard || !configure || !record) {
+  if (!guard || !configure || !record) {
     *error = "Missing method declaration/loaded-subclass adapter or named structural method marker";
     return false;
   }
-  read_old_metadata = read; dependents = guard; record_new_method = record;
+  dependents = guard; record_new_method = record;
   configure(CheckEvolutionMethods);
   return true;
 }

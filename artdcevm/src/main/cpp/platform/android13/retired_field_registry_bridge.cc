@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include "platform/android13/retired_field_registry.h"
 #include "platform/android13/final_field_guard_state.h"
+#include "platform/android13/retired_member_guard.h"
 #include "platform/symbols/android13.h"
 
 namespace artdcevm::android13 {
@@ -19,6 +20,9 @@ void* Resolve(uint32_t token) { return registry.Resolve(token); }
 size_t Count() { return registry.Count(); }
 size_t SlotCount() { return registry.SlotCount(); }
 }  // namespace
+
+size_t RetiredFieldSlotCount() { return registry.SlotCount(); }
+bool IsRetiredFieldPointer(void* field) { return registry.TokenFor(field) != 0; }
 
 size_t PruneRetiredFields(const void* allocator) noexcept {
   try { return registry.Prune(allocator, contains_unsafe); }
@@ -38,7 +42,7 @@ bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
   }
   contains_unsafe = contains;
   const RetiredFieldCallbacks callbacks{
-      Retire, TokenFor, Resolve, Count, SlotCount, FinalFieldGuardEnabled};
+      Retire, TokenFor, Resolve, Count, SlotCount, FinalFieldGuardEnabled, GuardRetiredField};
   configure(&callbacks);
   return true;
 }

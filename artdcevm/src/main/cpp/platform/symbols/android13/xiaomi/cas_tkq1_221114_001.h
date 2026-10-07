@@ -9,6 +9,7 @@ inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_
 inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";
 inline constexpr char kRecordFailure[] = "_ZN12openjdkjvmti9Redefiner13RecordFailureE10jvmtiErrorRKNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEESA_";
 inline constexpr char kGetCanonicalMethod[] = "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE";
+inline constexpr char kGetMirrorClass[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition14GetMirrorClassEv";
 inline constexpr char kRecordNewFieldAdded[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition19RecordNewFieldAddedEv";
 inline constexpr char kCheckMethods[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv";
 inline constexpr char kCheckClass[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition10CheckClassEv";

@@ -1,4 +1,5 @@
 #include "platform/android13/retired_method_hooks.h"
+#include "platform/android13/retired_member_guard.h"
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
 #include <atomic>
@@ -10,10 +11,8 @@
 
 namespace artdcevm::android13 {
 namespace {
-using GuardMethod = bool (*)(void*, void*, void*);
 using GuardReflection = bool (*)(const void*, jobject);
 using GuardHandle = bool (*)(void*, void*, void*);
-GuardMethod guard_method;
 GuardReflection guard_reflection;
 GuardHandle guard_handle;
 bool (*guard_id)(jmethodID);
@@ -21,7 +20,6 @@ bool (*guard_jni_id)(JNIEnv*, jmethodID);
 bool (*guard_receiver_method)(const void*, jobject, void*);
 bool (*guard_receiver_id)(const void*, jobject, jmethodID);
 bool (*guard_jni_executable)(JNIEnv*, jobject);
-void (*deliver_exception)(void*);
 void* original_nterp;
 void* original_deopt;
 void (*trace_deopt)(void*, void*, void*, bool, int);
@@ -71,19 +69,19 @@ void* ResolveHandles(void* linker, uint32_t index, void* dex_cache, void* loader
       linker, index, dex_cache, loader, caller, type);
 }
 void Invoke(void* method, void* thread, uint32_t* args, uint32_t size, void* result, const char* shorty) {
-  if (guard_method(method, thread, result)) { ++rejected; return; }
+  if (GuardRetiredMethod(method, thread, result)) { ++rejected; return; }
   using Fn = void (*)(void*, void*, uint32_t*, uint32_t, void*, const char*);
   reinterpret_cast<Fn>(original_invoke)(method, thread, args, size, result, shorty);
 }
 // ART JValue is an eight-byte union returned in x0 on this pinned arm64 ABI.
 uint64_t VirtualJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
-  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
   if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_jvalues)(access, receiver, method, args);
 }
 uint64_t VirtualVarArgs(const void* access, jobject receiver, void* method, va_list args) {
-  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
   if (guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
   return reinterpret_cast<Fn>(original_varargs)(access, receiver, method, args);
@@ -101,13 +99,13 @@ uint64_t IdVarArgs(const void* access, jobject receiver, jmethodID method, va_li
   return reinterpret_cast<Fn>(original_id_varargs)(access, receiver, method, args);
 }
 uint64_t DirectJValues(const void* access, jobject receiver, void* method, const jvalue* args) {
-  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
   if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_direct_jvalues)(access, receiver, method, args);
 }
 uint64_t DirectVarArgs(const void* access, jobject receiver, void* method, va_list args) {
-  if (guard_method(method, nullptr, nullptr)) { ++rejected; return 0; }
+  if (GuardRetiredMethod(method, nullptr, nullptr)) { ++rejected; return 0; }
   if (receiver != nullptr && guard_receiver_method(access, receiver, method)) { ++rejected; return 0; }
   using Fn = uint64_t (*)(const void*, jobject, void*, va_list);
   return reinterpret_cast<Fn>(original_direct_varargs)(access, receiver, method, args);
@@ -144,7 +142,7 @@ void WithFrame(void* thread, void* handle, void* frame) {
   reinterpret_cast<Fn>(original_frame)(thread, handle, frame);
 }
 uint64_t Obsolete(void* method, void* thread) {
-  if (guard_method(method, thread, nullptr)) { ++rejected; deliver_exception(thread); }
+  if (GuardRetiredMethod(method, thread, nullptr)) { ++rejected; DeliverRetiredMemberException(thread); }
   using Fn = uint64_t (*)(void*, void*);
   return reinterpret_cast<Fn>(original_obsolete)(method, thread);
 }
@@ -180,7 +178,6 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* error) {
-  guard_method = reinterpret_cast<GuardMethod>(dlsym(library, "ArtDcevmGuardMethod"));
   guard_reflection = reinterpret_cast<GuardReflection>(dlsym(library, "ArtDcevmGuardReflection"));
   guard_handle = reinterpret_cast<GuardHandle>(dlsym(library, "ArtDcevmGuardMethodHandle"));
   guard_id = reinterpret_cast<bool (*)(jmethodID)>(dlsym(library, "ArtDcevmGuardMethodId"));
@@ -188,8 +185,7 @@ bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* er
   guard_receiver_method = reinterpret_cast<decltype(guard_receiver_method)>(dlsym(library, "ArtDcevmGuardRunnableMethodReceiver"));
   guard_receiver_id = reinterpret_cast<decltype(guard_receiver_id)>(dlsym(library, "ArtDcevmGuardRunnableMethodIdReceiver"));
   guard_jni_executable = reinterpret_cast<decltype(guard_jni_executable)>(dlsym(library, "ArtDcevmGuardJniExecutable"));
-  deliver_exception = reinterpret_cast<void (*)(void*)>(dlsym(library, "ArtDcevmGuardDeliverException"));
-  if (!guard_method || !guard_reflection || !guard_handle || !guard_id || !deliver_exception ||
+  if (!guard_reflection || !guard_handle || !guard_id ||
       !guard_jni_id || !guard_jni_executable || !guard_receiver_method || !guard_receiver_id) {
     *error = "Retired method guard exports are incomplete"; return false;
   }

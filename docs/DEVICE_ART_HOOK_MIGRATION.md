@@ -30,7 +30,7 @@
 
 错误记录由增强库调用命名设备 `Redefiner::RecordFailure`。Android 13 平台 libc++ ABI v1 的长字符串声明在此调用期借用 NUL 结尾文本；原函数只同步读取两个 const 参数的 `c_str()`，不保留或析构借用对象。初始化校准用本地空事务核对短／长类签名、空／短／长错误消息、结果码及完整错误文本。这个校准仍依赖已匹配的目标设备私有布局，不能代替其他厂商的独立适配；源码错误函数已删除。
 
-命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。源码窄桥仍提供旧 DEX 的字节 region 与 class-def index、原 class flags、已加载子类约束及需要 Handle 保护的层级解析，必须继续迁移。
+命名 `CheckMethods` 与 `CheckClass` Hook 也直接进入增强库代理。方法代理自行读取新旧 DEX 声明、匹配成员、校验完整原始修饰符并报告结构重建；类代理处理锁状态、名称、修饰符与层级声明比较，并报告错误和结构变化。旧整函数实现及修饰符回调已删除。旧 DEX 可以多类、CompactDex 或使用共享 data；增强库仅读取已由 ART 验证的声明，不校验旧 code item，也不为校验创建 JNI method ID。replacement DEX 继续严格单类校验。旧 DEX 字节区间、class-def index 和 live class flags 现由增强库通过命名 `GetMirrorClass` 和锁定源码的 Class／DexCache／DexFile 固定前缀读取，不再从源码数据桥取得。静态声明校验及每次真实事务的源码 getter 比对仍暂时保留；这是 release ObjPtr 与非 poisoned heap-reference 的已匹配设备适配。已加载子类约束及需要 Handle 保护的层级解析仍在源码窄桥，必须继续迁移。
 
 结构提交对 JNI 方法 ID 的映射现在遵循 ART 的 canonical 规则：目标为 copied 方法时，增强库按命名符号调用设备 `ArtMethod::GetCanonicalMethod`；其他反射目标保留原映射。这避免 JNI ID 管理器按声明接口的数组偏移写入子类中 copied 方法的存储。回归用例显式注册全部声明方法 ID，再执行声明方法与接口默认方法的往返，防止校验读取方式改变后遗漏这条路径。
 
@@ -71,3 +71,9 @@ Nterp 的分发状态、invoke 指令解码及 checked resolver 调用由增强�
 设备库副本仅保存在已忽略的 `build/evidence/device-symbols/20261007/`，不作为构建输入或提交内容。
 
 同一设备另有 `UNSAFE.class.structurally_redefine_class_direct` JVMTI 扩展。隔离探针在新增字段后尝试由此删除字段，两种 Agent 装载顺序均返回 `JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`，因此该扩展不能替代自有删除事务代理；详见 `docs/VERIFICATION.md` 的直接扩展探针记录。
+
+## 结构复制与退役核心守卫迁移（2026-10-07）
+
+增强库拥有 `CopyAndClearEvolutionFields` 的完整复制调度：对每个旧声明类，从新层级顶端按类加载器和 descriptor 搜索匹配类，在同一 static／instance 存储中按名字与完整类型匹配字段。删除、类型变化和存储互换的旧字段不复制；新增或新父类字段保持原分配状态。完成全部复制后移交 monitor，对目标执行写屏障，再清零所有旧字段并对源执行写屏障。此路径无分配、无递归、无 STL 跨库对象；源码五个旧复制 helper 的实现已删除。过渡适配器仍提供借用元数据、ART 类型化字段读写、monitor 操作和 GC 写屏障，结构事务整体与这些低层操作仍需迁移。
+
+退役方法／字段的核心守卫现由增强库拥有：查询自有注册表，对退役成员清零完整八字节 JValue，并按命名设备 `Thread::ThrowNewException` 抛出原来的 NoSuchMethodError／NoSuchFieldError。缺省线程通过命名 `Thread::CurrentFromGdb` 查询；异常交付通过命名 `QuickDeliverException`。增强 Hook 直接调用自有方法守卫，源码 JNI／反射／MethodHandle 解码后转发守卫回调；对应两个源码核心导出已删除。字段槽计数也直接读取增强注册表，删除旧计数桥和未使用的源码汇总导出。类型化解码、接收者与 final 检查仍需迁移。

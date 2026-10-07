@@ -1,5 +1,6 @@
 #include "retired_methods.h"
 #include "retired_fields.h"
+#include "platform/android13/retired_member_guard.h"
 #include "art_method-inl.h"
 #include "handle.h"
 #include "mirror/executable-inl.h"
@@ -15,18 +16,18 @@
 #include "jni/jni_id_manager.h"
 #include "jni/jni_internal.h"
 
+static_assert(sizeof(art::JValue) == sizeof(uint64_t));
+
 namespace artdcevm::android13::source {
 namespace {
 void (*retire_method)(void*) = nullptr;
 bool (*contains_method)(void*) = nullptr;
 size_t (*retired_method_count)() = nullptr;
 void (*require_dispatch_checks)() = nullptr;
+artdcevm::android13::RetiredMemberGuard guard_method = nullptr;
 bool Guard(art::ArtMethod* method, art::Thread* self, art::JValue* result = nullptr)
     REQUIRES_SHARED(art::Locks::mutator_lock_) {
-  if (!IsRetiredMethod(method)) return false;
-  if (result != nullptr) result->SetJ(0);
-  self->ThrowNewException("Ljava/lang/NoSuchMethodError;", "Method removed by ART DCEVM");
-  return true;
+  return guard_method(method, self, result);
 }
 }
 void RetireMethod(art::ArtMethod* method) {
@@ -43,17 +44,13 @@ bool HasRetiredMethods() {
 }
 void RequireDispatchChecks() { require_dispatch_checks(); }
 extern "C" void ArtDcevmSourceConfigureRetiredMethods(
-    void (*retire)(void*), bool (*contains)(void*), size_t (*count)()) {
+    void (*retire)(void*), bool (*contains)(void*), size_t (*count)(),
+    artdcevm::android13::RetiredMemberGuard guard) {
   retire_method = retire;
   contains_method = contains;
   retired_method_count = count;
+  guard_method = guard;
 }
-}
-
-extern "C" bool ArtDcevmGuardMethod(void* method, void* thread, void* result) {
-  return artdcevm::android13::source::Guard(static_cast<art::ArtMethod*>(method),
-      thread ? static_cast<art::Thread*>(thread) : art::Thread::Current(),
-      static_cast<art::JValue*>(result));
 }
 
 extern "C" bool ArtDcevmGuardMethodId(jmethodID id) {
@@ -137,10 +134,6 @@ extern "C" bool ArtDcevmGuardMethodHandle(void* thread, void* slot, void* result
           static_cast<art::Thread*>(thread), static_cast<art::JValue*>(result));
     default: return false;
   }
-}
-
-extern "C" [[noreturn]] void ArtDcevmGuardDeliverException(void* thread) {
-  static_cast<art::Thread*>(thread)->QuickDeliverException();
 }
 
 // Keep only a transitional source-declared runtime accessor. The enhancement

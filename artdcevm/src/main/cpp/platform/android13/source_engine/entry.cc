@@ -290,13 +290,6 @@ extern "C" __attribute__((visibility("default"))) int ArtDcevmSourceProbe(
   return 0;
 }
 
-extern "C" __attribute__((visibility("default"))) uint64_t ArtDcevmSourceRetiredMetadataCount(
-    JNIEnv* jni) {
-  art::ScopedObjectAccess soa(jni);
-  return artdcevm::android13::source::RetiredFieldCount() +
-      artdcevm::android13::source::RetiredMethodCount();
-}
-
 jvmtiError RedefineSourceTransaction(jvmtiEnv* env, jint count,
     const jvmtiClassDefinition* definitions, bool allow_transform_hierarchy) {
   artdcevm::android13::source::HierarchyTransactionScope hierarchy_scope;
