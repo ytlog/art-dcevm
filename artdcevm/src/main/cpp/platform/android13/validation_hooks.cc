@@ -15,27 +15,27 @@ void* original_in_place = nullptr;
 std::atomic<uint64_t> field_calls{0}, method_calls{0}, mapping_calls{0}, source_commit_calls{0};
 std::atomic<uint64_t> source_in_place_calls{0};
 bool hooks_installed = false, attempted = false;
-thread_local bool source_transaction = false;
+thread_local jvmtiEnv* source_environment = nullptr;
 ValidationHooks::Check source_methods = nullptr, source_classes = nullptr;
 ValidationHooks::Commit source_commit = nullptr;
 ValidationHooks::GetJitCodeCache source_jit_code_cache = nullptr;
 ValidationHooks::InvalidateJit invalidate_jit = nullptr;
 bool CheckFields(void* redef) {
   ++field_calls;
-  return source_transaction ? CheckEvolutionFields(redef)
+  return ValidationHooks::InSourceTransaction() ? CheckEvolutionFields(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_fields)(redef);
 }
 bool CheckMethods(void* redef) {
   ++method_calls;
-  return source_transaction ? source_methods(redef)
+  return ValidationHooks::InSourceTransaction() ? source_methods(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_methods)(redef);
 }
 bool CheckClass(void* redef) {
-  return source_transaction ? source_classes(redef)
+  return ValidationHooks::InSourceTransaction() ? source_classes(redef)
       : reinterpret_cast<ValidationHooks::Check>(original_classes)(redef);
 }
 void CommitHook(void* redef, const void* iterator) {
-  if (source_transaction) {
+  if (ValidationHooks::InSourceTransaction()) {
     ++source_commit_calls;
     source_commit(redef, iterator);
   } else {
@@ -44,7 +44,7 @@ void CommitHook(void* redef, const void* iterator) {
 }
 void InPlaceHook(void* redef, const void* iterator) {
   reinterpret_cast<ValidationHooks::Commit>(original_in_place)(redef, iterator);
-  if (source_transaction) {
+  if (ValidationHooks::InSourceTransaction()) {
     // ART owns the commit and its JIT suspension. Invalidate callers that may
     // still contain a previously inlined body before the transaction resumes.
     void* code_cache = source_jit_code_cache();
@@ -100,12 +100,15 @@ void ValidationHooks::ConfigureSource(Check methods, Check classes, Commit commi
   source_jit_code_cache = get_jit_code_cache;
   invalidate_jit = invalidate;
 }
-bool ValidationHooks::InSourceTransaction() { return source_transaction; }
+bool ValidationHooks::InSourceTransaction() { return source_environment != nullptr; }
+jvmtiEnv* ValidationHooks::TransactionEnvironment() { return source_environment; }
 uint64_t ValidationHooks::FieldCalls() { return field_calls.load(); }
 uint64_t ValidationHooks::MethodCalls() { return method_calls.load(); }
 uint64_t ValidationHooks::MappingCalls() { return mapping_calls.load(); }
 uint64_t ValidationHooks::SourceCommitCalls() { return source_commit_calls.load(); }
 uint64_t ValidationHooks::SourceInPlaceCalls() { return source_in_place_calls.load(); }
-SourceTransactionScope::SourceTransactionScope() : previous_(source_transaction) { source_transaction = true; }
-SourceTransactionScope::~SourceTransactionScope() { source_transaction = previous_; }
+SourceTransactionScope::SourceTransactionScope(jvmtiEnv* env) : previous_(source_environment) {
+  source_environment = env;
+}
+SourceTransactionScope::~SourceTransactionScope() { source_environment = previous_; }
 }

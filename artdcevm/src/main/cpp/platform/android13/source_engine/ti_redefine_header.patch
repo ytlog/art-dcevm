@@ -8,3 +8,11 @@
    class ClassRedefinition {
     public:
      ClassRedefinition(Redefiner* driver,
+@@ -272,6 +273,7 @@
+       return driver_->IsStructuralRedefinition() && (added_fields_ || added_methods_);
+     }
+
+    private:
++    friend struct FieldDeclarationBridge;
+     void UpdateClassStructurally(const RedefinitionDataIter& cur_data)
+         REQUIRES(art::Locks::mutator_lock_);

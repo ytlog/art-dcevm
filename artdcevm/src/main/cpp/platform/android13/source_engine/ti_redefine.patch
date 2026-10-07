@@ -1,9 +1,11 @@
 --- ti_redefine.cc
 +++ ti_redefine.cc
-@@ -30,6 +30,10 @@
+@@ -30,6 +30,12 @@
   */
 
  #include "ti_redefine.h"
++#include "platform/android13/modifier_policy_abi.h"
++#include "platform/android13/modifier_evolution_policy.h"
 +#include "retired_methods.h"
 +#include "retired_fields.h"
 +#include "hierarchy.h"
@@ -11,48 +13,25 @@
 
  #include <algorithm>
  #include <atomic>
-@@ -974,6 +978,114 @@
-             StringPrintf("Unknown virtual method %s was added!", new_method_id.ToString().c_str()));
+@@ -975,10 +981,77 @@
          return false;
        }
-+    } else if (is_structural &&
-+               (new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) == art::kAccStatic) {
-+      // A receiver change is a removal plus an addition, not an ABI-compatible
-+      // replacement. Force recreation even when the member count is unchanged.
-+      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) & art::kAccPrivate) != 0 &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) &
-+                   ~(art::kAccPublic | art::kAccProtected | art::kAccPrivate)) == 0) {
-+      // A private instance method is direct; a non-private one is virtual.
-+      // Static methods remain direct but also need their access flags rebuilt.
-+      // Recreate the class rather than reusing the old ArtMethod or vtable.
-+      // The structural transaction recreates the loaded subtype subtree and
-+      // relinks its vtables against the replacement method visibility.
-+      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               new_method.GetAccessFlags() != old_iter->GetAccessFlags() &&
-+               ((new_method.GetAccessFlags() | old_iter->GetAccessFlags()) & art::kAccPrivate) == 0 &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) &
-+                   (art::kAccPublic | art::kAccProtected)) != 0 &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) &
-+                   ~(art::kAccPublic | art::kAccProtected | art::kAccSynchronized |
-+                     art::kAccDeclaredSynchronized)) == 0) {
-+      // Relink loaded subclasses and refresh the monitor requirement together.
-+      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               new_method.GetAccessFlags() != old_iter->GetAccessFlags() &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) &
-+                   ~(art::kAccSynchronized | art::kAccDeclaredSynchronized)) == 0) {
-+      // A synchronized declaration keeps its method identity and ABI. Rebuild
-+      // the method metadata so new calls use the new monitor requirement.
-+      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) & art::kAccFinal) != 0 &&
-+               ((new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) &
-+                   ~(art::kAccFinal | art::kAccSynchronized |
-+                     art::kAccDeclaredSynchronized)) == 0) {
-+      if ((new_method.GetAccessFlags() & art::kAccFinal) != 0 && !new_method.IsStaticOrDirect()) {
+     } else if (new_method.GetAccessFlags() != old_iter->GetAccessFlags()) {
+-      RecordFailure(
+-          ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
+-          StringPrintf("method %s had different access flags", new_method_id.ToString().c_str()));
+-      return false;
++      using artdcevm::android13::ModifierEvolutionAction;
++      auto action = static_cast<ModifierEvolutionAction>(ArtDcevmSourceMethodModifierPolicy(
++          old_iter->GetAccessFlags(), new_method.GetAccessFlags(),
++          is_structural, new_method.IsStaticOrDirect()));
++      if (action == ModifierEvolutionAction::kReject) {
++        RecordFailure(
++            ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
++            StringPrintf("method %s had different access flags", new_method_id.ToString().c_str()));
++        return false;
++      }
++      if (action == ModifierEvolutionAction::kCheckFinalOverride) {
 +        bool loaded_override = false;
 +        art::ClassFuncVisitor visitor(
 +            [&](art::ObjPtr<art::mirror::Class> subtype)
@@ -78,13 +57,7 @@
 +          return false;
 +        }
 +      }
-+      // Rebuild the declaration for final, optionally combined with a monitor
-+      // change, and invalidate old compiled assumptions.
-+      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               (new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) == art::kAccAbstract &&
-+               !new_method.IsStaticOrDirect()) {
-+      if ((new_method.GetAccessFlags() & art::kAccAbstract) != 0) {
++      if (action == ModifierEvolutionAction::kCheckAbstractDependents) {
 +        bool dependent_concrete_subclass = false;
 +        art::ClassFuncVisitor visitor(
 +            [&](art::ObjPtr<art::mirror::Class> subtype)
@@ -119,14 +92,10 @@
 +        }
 +      }
 +      RecordNewMethodAdded();
-+    } else if (is_structural &&
-+               (new_method.GetAccessFlags() ^ old_iter->GetAccessFlags()) == art::kAccNative) {
-+      // Preserve member identity but rebuild invocation metadata and entrypoints.
-+      RecordNewMethodAdded();
-     } else if (new_method.GetAccessFlags() != old_iter->GetAccessFlags()) {
-       RecordFailure(
-           ERR(UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED),
-@@ -991,81 +1103,25 @@
+     } else if (kCheckAllMethodsSeenOnce || is_structural) {
+       // We only need this if we are structural.
+       size_t off = std::distance(old_methods.cbegin(), old_iter);
+@@ -991,81 +1064,25 @@
    if ((kCheckAllMethodsSeenOnce || is_structural) &&
        !std::all_of(seen_old_methods.cbegin(), seen_old_methods.cend(), [](auto x) { return x; })) {
      DCHECK(is_structural) << "We should have hit an earlier failure before getting here!";
@@ -219,7 +188,7 @@
    // Easy check that only 1 class def is present.
    if (dex_file_->NumClassDefs() != 1) {
      RecordFailure(ERR(ILLEGAL_ARGUMENT),
-@@ -1089,10 +1145,34 @@
+@@ -1089,10 +1106,37 @@
    }
 
    // Check the access flags didn't change.
@@ -230,12 +199,15 @@
 +  const uint32_t old_flags = current_class->GetAccessFlags() & art::kAccValidClassFlags;
 +  const uint32_t new_flags = def.GetJavaAccessFlags();
 +  if (new_flags != old_flags) {
-+    if (!driver_->IsStructuralRedefinition() || ((new_flags ^ old_flags) != art::kAccFinal && (new_flags ^ old_flags) != art::kAccAbstract)) {
++    using artdcevm::android13::ModifierEvolutionAction;
++    auto action = static_cast<ModifierEvolutionAction>(ArtDcevmSourceClassModifierPolicy(
++        old_flags, new_flags, driver_->IsStructuralRedefinition()));
++    if (action == ModifierEvolutionAction::kReject) {
 +      RecordFailure(ERR(UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED),
 +                    "Cannot change modifiers of class by redefinition");
 +      return false;
 +    }
-+    if ((new_flags & art::kAccFinal) != 0) {
++    if (action == ModifierEvolutionAction::kCheckLoadedSubclass) {
 +      bool loaded_subclass = false;
 +      art::ClassFuncVisitor visitor(
 +          [&](art::ObjPtr<art::mirror::Class> subtype)
@@ -258,7 +230,7 @@
    }
 
    // Check class name.
-@@ -1107,6 +1187,25 @@
+@@ -1107,6 +1151,25 @@
                                 current_class->GetDescriptor(&storage),
                                 descriptor));
      return false;
@@ -284,7 +256,7 @@
    }
    if (current_class->IsObjectClass()) {
      if (def.superclass_idx_ != art::dex::TypeIndex::Invalid()) {
-@@ -1706,97 +1805,35 @@
+@@ -1706,97 +1769,35 @@
    return parents(l.Ptr()) < parents(r.Ptr());
  }
 
@@ -409,7 +381,7 @@
    return true;
  }
 
-@@ -1844,147 +1881,22 @@
+@@ -1844,147 +1845,22 @@
    return true;
  }
 
@@ -571,7 +543,7 @@
  }
 
  uint32_t Redefiner::ClassRedefinition::GetNewClassSize(art::ClassAccessor& accessor) {
-@@ -2429,91 +2341,15 @@
+@@ -2429,91 +2305,15 @@
    DISALLOW_COPY_AND_ASSIGN(ScopedSuspendAllocations);
  };
 
@@ -671,7 +643,7 @@
 
  void Redefiner::ClassRedefinition::UpdateMethods(art::ObjPtr<art::mirror::Class> mclass,
                                                   const art::dex::ClassDef& class_def) {
-@@ -2582,10 +2418,20 @@
+@@ -2582,10 +2382,20 @@
    for (auto [new_cls, old_cls] :
         art::ZipLeft(data.GetNewClasses()->Iterate(), data.GetOldClasses()->Iterate())) {
      for (art::ArtField& f : old_cls->GetSFields()) {
@@ -694,7 +666,7 @@
      }
      auto new_methods = new_cls->GetMethods(art::kRuntimePointerSize);
      for (art::ArtMethod& m : old_cls->GetMethods(art::kRuntimePointerSize)) {
-@@ -2595,11 +2441,29 @@
+@@ -2595,11 +2405,29 @@
            new_methods.begin(),
            new_methods.end(),
            [&](art::ArtMethod& cand) REQUIRES_SHARED(art::Locks::mutator_lock_) {
@@ -728,7 +700,7 @@
      }
    }
  }
-@@ -2642,19 +2506,26 @@
+@@ -2642,19 +2470,26 @@
                         art::ObjPtr<art::mirror::Object> source,
                         art::ObjPtr<art::mirror::Class> source_class)
      REQUIRES(art::Locks::mutator_lock_) {
@@ -768,7 +740,7 @@
    }
  }
 
-@@ -2741,6 +2612,17 @@
+@@ -2741,6 +2576,17 @@
    // ahold of the old classes so copy them now.
    std::vector<art::ObjPtr<art::mirror::Class>> old_classes_vec(old_classes->Iterate().begin(),
                                                                 old_classes->Iterate().end());
@@ -786,7 +758,7 @@
    // Copy over the static fields of the class and all the instance fields.
    for (auto [new_class, old_class] : art::ZipLeft(new_classes->Iterate(), old_classes->Iterate())) {
      CHECK(!new_class.IsNull());
-@@ -2771,13 +2653,18 @@
+@@ -2771,13 +2617,18 @@
      // implementation here since we don't want to race with any threads doing
      // RegisterNatives.
      for (art::ArtMethod& m : old_class->GetMethods(art::kRuntimePointerSize)) {
@@ -812,7 +784,7 @@
        }
        m.SetIsObsolete();
        cl->SetEntryPointsForObsoleteMethod(&m);
-@@ -2861,6 +2748,14 @@
+@@ -2861,6 +2712,14 @@
        [&](art::ArtField* f, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(f != nullptr) << info;
          auto it = field_map.find(f);
@@ -827,7 +799,7 @@
          if (UNLIKELY(could_change_resolution_of(f, info))) {
            // Dex-cache Resolution might change. Just clear the resolved value.
            VLOG(plugin) << "Clearing resolution " << info << " for (field) " << f->PrettyField();
-@@ -2875,11 +2770,21 @@
+@@ -2875,11 +2734,21 @@
        [&](art::ArtMethod* m, const auto& info) REQUIRES(art::Locks::mutator_lock_) {
          DCHECK(m != nullptr) << info;
          auto it = method_map.find(m);
@@ -849,7 +821,7 @@
            VLOG(plugin) << "Updating " << info << " object for (method) "
                        << it->second->PrettyMethod();
            return it->second;
-@@ -2923,6 +2828,11 @@
+@@ -2923,6 +2792,11 @@
      // TODO We might want to have some way to tell the JIT not to wait the kJitSamplesBatchSize
      // invokes to start compiling things again.
      jit->GetCodeCache()->InvalidateAllCompiledCode();

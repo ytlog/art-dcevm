@@ -16,6 +16,7 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/field_validation.h"
+#include "platform/android13/modifier_policy_binding.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -105,7 +106,8 @@ std::string InitializeSourceEngine(JNIEnv* jni, const char* path, jobject calibr
   if (code != 0 || jni->ExceptionCheck()) {
     dlclose(library); return "Source ABI probe failed at step " + std::to_string(code);
   }
-  if (!ConfigureEvolutionFieldValidation(symbols, library, &error)) {
+  if (!ConfigureEvolutionFieldValidation(symbols, library, &error) ||
+      !ConfigureEvolutionModifierPolicy(library, &error)) {
     dlclose(library);
     return error;
   }
@@ -145,7 +147,7 @@ int RedefineSource(Redefine redefine, jvmtiEnv* env, JavaVM* vm, jint count,
     }
     roots.push_back(root);
   }
-  SourceTransactionScope transaction;
+  SourceTransactionScope transaction(env);
   const int result = redefine(env, count, definitions);
   for (jclass root : roots) jni->DeleteGlobalRef(root);
   return result;

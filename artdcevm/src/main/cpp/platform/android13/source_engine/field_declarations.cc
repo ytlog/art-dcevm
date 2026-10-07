@@ -1,61 +1,54 @@
 #include "ti_redefine.h"
-#include "dex/class_accessor-inl.h"
-#include "art_field-inl.h"
-#include "mirror/class-inl.h"
-#include "scoped_thread_state_change-inl.h"
+#include "dex/dex_file.h"
 #include "retired_fields.h"
 #include "platform/android13/field_validation_abi.h"
+#include "platform/android13/redefinition_art_abi.h"
 
 namespace {
 artdcevm::android13::FieldValidation validate = nullptr;
+// Build-time verification against the locked source declarations. This temporary
+// bridge never interprets fields or DEX content on behalf of the enhancement.
+struct DexFileLayoutProbe : art::DexFile {
+  static void Verify() {
+    using Prefix = artdcevm::android13::redefinition_abi::DexFilePrefix;
+    static_assert(offsetof(DexFileLayoutProbe, begin_) == offsetof(Prefix, begin));
+    static_assert(offsetof(DexFileLayoutProbe, size_) == offsetof(Prefix, size));
+  }
+};
 }
 extern "C" void ArtDcevmSourceConfigureFieldValidation(
     artdcevm::android13::FieldValidation callback) { validate = callback; }
 extern "C" bool ArtDcevmSourceCheckFields(void* definition) { return validate(definition); }
 namespace openjdkjvmti {
-// Friendship only exposes the existing typed accessors to this temporary bridge;
-// it adds no fields and changes no ART object layout.
 struct FieldDeclarationBridge {
+  static void Verify() {
+    using Original = Redefiner::ClassRedefinition;
+    using Fixed = artdcevm::android13::redefinition_abi::ClassRedefinition;
+    static_assert(sizeof(Original) == sizeof(Fixed));
+    static_assert(offsetof(Original, driver_) == offsetof(Fixed, driver));
+    static_assert(offsetof(Original, klass_) == offsetof(Fixed, klass));
+    static_assert(offsetof(Original, dex_file_) == offsetof(Fixed, dex_file));
+    static_assert(offsetof(Original, class_sig_) == offsetof(Fixed, class_signature));
+    static_assert(offsetof(Original, original_dex_file_) == offsetof(Fixed, original_dex_file));
+    static_assert(offsetof(Original, added_fields_) == offsetof(Fixed, added_fields));
+    static_assert(offsetof(Original, added_methods_) == offsetof(Fixed, added_methods));
+    static_assert(offsetof(Original, has_virtuals_) == offsetof(Fixed, has_virtuals));
+    static_assert(offsetof(Original, lock_acquired_) == offsetof(Fixed, lock_acquired));
+  }
   static void Failure(void* definition, int error, const char* message) {
     static_cast<Redefiner::ClassRedefinition*>(definition)->RecordFailure(
         static_cast<jvmtiError>(error), message);
   }
-  static bool Read(void* definition,
-      artdcevm::android13::VisitFieldDeclaration visit, void* context) {
-    auto* redef = static_cast<Redefiner::ClassRedefinition*>(definition);
-    art::Thread* self = art::Thread::Current();
-    art::StackHandleScope<1> hs(self);
-    auto klass = hs.NewHandle(redef->GetMirrorClass());
-    const auto& replacement = redef->GetDexFile();
-    if (replacement.NumClassDefs() != 1) {
-      redef->RecordFailure(JVMTI_ERROR_ILLEGAL_ARGUMENT, "Expected one replacement class");
-      return false;
-    }
-    const auto& current = klass->GetDexFile();
-    art::ClassAccessor old_accessor(current, *klass->GetClassDef());
-    art::ClassAccessor new_accessor(replacement, replacement.GetClassDef(0));
-    for (const auto& field : old_accessor.GetFields()) {
-      const auto& id = current.GetFieldId(field.GetIndex());
-      visit(context, false, current.StringDataByIdx(id.name_idx_),
-            current.StringByTypeIdx(id.type_idx_), field.GetAccessFlags());
-    }
-    for (const auto& field : new_accessor.GetFields()) {
-      const auto& id = replacement.GetFieldId(field.GetIndex());
-      if (!field.IsStatic()) redef->RecordHasVirtualMembers();
-      visit(context, true, replacement.StringDataByIdx(id.name_idx_),
-            replacement.StringByTypeIdx(id.type_idx_), field.GetAccessFlags());
-    }
-    return true;
-  }
 };
+}
+extern "C" int ArtDcevmSourceProbeFieldValidationLayout() {
+  openjdkjvmti::FieldDeclarationBridge::Verify();
+  DexFileLayoutProbe::Verify();
+  return 0;
 }
 extern "C" void ArtDcevmSourceFieldValidationFailure(void* definition, int error, const char* message) {
   openjdkjvmti::FieldDeclarationBridge::Failure(definition, error, message);
 }
 extern "C" void ArtDcevmSourceMarkFinalFieldGuard() {
   artdcevm::android13::source::MarkFinalFieldAddition();
-}
-extern "C" bool ArtDcevmSourceReadFieldDeclarations(void* definition,
-    artdcevm::android13::VisitFieldDeclaration visit, void* context) {
-  return openjdkjvmti::FieldDeclarationBridge::Read(definition, visit, context);
 }

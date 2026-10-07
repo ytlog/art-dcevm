@@ -22,7 +22,9 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/retired_field_registry_bridge.cc
     platform/android13/schema_snapshot.cc platform/android13/evolution_planner.cc
     platform/android13/field_evolution_policy.cc platform/android13/field_validation.cc
+    platform/android13/modifier_evolution_policy.cc platform/android13/modifier_policy_binding.cc
     platform/android13/validation_hooks.cc platform/android13/source_engine_loader.cc
+    platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
   target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
 elseif(NOT ANDROID_ABI STREQUAL "x86_64")

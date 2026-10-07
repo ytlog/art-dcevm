@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <set>
 #include <stdexcept>
 
@@ -228,6 +229,9 @@ bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, s
     *output = std::move(schema);
     error->clear();
     return true;
+  } catch (const std::bad_alloc&) {
+    // The ART/JVMTI boundary reports allocation failures as OUT_OF_MEMORY.
+    throw;
   } catch (const std::exception& failure) {
     *error = failure.what();
     return false;

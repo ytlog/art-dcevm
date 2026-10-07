@@ -26,7 +26,8 @@ struct ClassSchema {
 };
 
 // Reads metadata only. ART must still verify method bodies, annotations and encoded values.
-// On error the output is unchanged. No ART layout or OS-specific symbol is used here.
+// On format error the output is unchanged; allocation failures propagate as bad_alloc.
+// No ART layout or OS-specific symbol is used here.
 bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error);
 bool IsTypeDescriptor(const std::string& value, bool allow_void);
 bool IsMethodDescriptor(const std::string& value);

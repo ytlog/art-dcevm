@@ -9,8 +9,8 @@
 #include "scoped_thread_state_change-inl.h"
 #include "thread-current-inl.h"
 #include "jvalue.h"
-#include "dex/dex_instruction-inl.h"
 #include "dex/invoke_type.h"
+#include "platform/android13/nterp_dispatch.h"
 #include "runtime.h"
 #include "jni/jni_id_manager.h"
 #include "jni/jni_internal.h"
@@ -20,7 +20,7 @@ namespace {
 void (*retire_method)(void*) = nullptr;
 bool (*contains_method)(void*) = nullptr;
 size_t (*retired_method_count)() = nullptr;
-bool dispatch_checks = false;
+void (*require_dispatch_checks)() = nullptr;
 bool Guard(art::ArtMethod* method, art::Thread* self, art::JValue* result = nullptr)
     REQUIRES_SHARED(art::Locks::mutator_lock_) {
   if (!IsRetiredMethod(method)) return false;
@@ -41,8 +41,7 @@ size_t RetiredMethodCount() {
 bool HasRetiredMethods() {
   return retired_method_count() != 0;
 }
-void RequireDispatchChecks() { dispatch_checks = true; }
-bool NeedsDispatchChecks() { return dispatch_checks; }
+void RequireDispatchChecks() { require_dispatch_checks(); }
 extern "C" void ArtDcevmSourceConfigureRetiredMethods(
     void (*retire)(void*), bool (*contains)(void*), size_t (*count)()) {
   retire_method = retire;
@@ -144,39 +143,18 @@ extern "C" [[noreturn]] void ArtDcevmGuardDeliverException(void* thread) {
   static_cast<art::Thread*>(thread)->QuickDeliverException();
 }
 
-namespace {
-using CheckedResolver = void* (*)(void*, void*, uint32_t, void*, int);
-CheckedResolver checked_resolver = nullptr;
-}
-extern "C" void ArtDcevmSourceConfigureDispatchResolver(void* resolver) {
-  checked_resolver = reinterpret_cast<CheckedResolver>(resolver);
-}
-extern "C" bool ArtDcevmSourceNeedsDispatchChecks() {
-  return artdcevm::android13::source::NeedsDispatchChecks();
-}
-extern "C" bool ArtDcevmGuardNterpInvoke(void* thread, void* caller, uint16_t* dex_pc) {
-  if (!artdcevm::android13::source::NeedsDispatchChecks()) return false;
-  const auto* inst = art::Instruction::At(dex_pc);
-  art::InvokeType type;
-  bool range = false;
-  switch (inst->Opcode()) {
-    case art::Instruction::INVOKE_STATIC_RANGE: range = true; [[fallthrough]];
-    case art::Instruction::INVOKE_STATIC: type = art::kStatic; break;
-    case art::Instruction::INVOKE_DIRECT_RANGE: range = true; [[fallthrough]];
-    case art::Instruction::INVOKE_DIRECT: type = art::kDirect; break;
-    case art::Instruction::INVOKE_VIRTUAL_RANGE: range = true; [[fallthrough]];
-    case art::Instruction::INVOKE_VIRTUAL: type = art::kVirtual; break;
-    case art::Instruction::INVOKE_SUPER_RANGE: range = true; [[fallthrough]];
-    case art::Instruction::INVOKE_SUPER: type = art::kSuper; break;
-    case art::Instruction::INVOKE_INTERFACE_RANGE: range = true; [[fallthrough]];
-    case art::Instruction::INVOKE_INTERFACE: type = art::kInterface; break;
-    default: return false;
-  }
-  uint32_t index = range ? inst->VRegB_3rc() : inst->VRegB_35c();
-  // ART's checked resolver handles cached as well as unresolved methods. The
-  // nterp helper may inline its unchecked counterpart, so guard this entry too.
-  return checked_resolver(art::Runtime::Current()->GetClassLinker(), thread, index,
-                          caller, static_cast<int>(type)) == nullptr;
+// Keep only a transitional source-declared runtime accessor. The enhancement
+// library owns dispatch state, DEX decoding, and the checked resolver call.
+namespace dispatch_abi = artdcevm::android13;
+static_assert(sizeof(dispatch_abi::DispatchInvokeType) == sizeof(art::InvokeType));
+static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kStatic) == art::kStatic);
+static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kDirect) == art::kDirect);
+static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kVirtual) == art::kVirtual);
+static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kSuper) == art::kSuper);
+static_assert(static_cast<uint32_t>(dispatch_abi::DispatchInvokeType::kInterface) == art::kInterface);
+extern "C" void* ArtDcevmSourceConfigureDispatchChecks(void (*require)()) {
+  artdcevm::android13::source::require_dispatch_checks = require;
+  return art::Runtime::Current()->GetClassLinker();
 }
 
 // The pinned Executable declaration explicitly grants this source helper access.

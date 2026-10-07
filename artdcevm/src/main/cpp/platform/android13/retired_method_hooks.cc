@@ -1,4 +1,5 @@
 #include "platform/android13/retired_method_hooks.h"
+#include "platform/android13/nterp_dispatch.h"
 #include "platform/symbols/android13.h"
 #include <atomic>
 #include <cstdarg>
@@ -21,8 +22,6 @@ bool (*guard_receiver_method)(const void*, jobject, void*);
 bool (*guard_receiver_id)(const void*, jobject, jmethodID);
 bool (*guard_jni_executable)(JNIEnv*, jobject);
 void (*deliver_exception)(void*);
-bool (*needs_dispatch_checks)();
-bool (*guard_nterp)(void*, void*, uint16_t*);
 void* original_nterp;
 void* original_deopt;
 void (*trace_deopt)(void*, void*, void*, bool, int);
@@ -57,18 +56,18 @@ void Deopt(void* thread, void* frame, void* result, bool from_code, int type) {
   reinterpret_cast<Fn>(original_deopt)(thread, frame, result, from_code, type);
 }
 size_t Nterp(void* thread, void* caller, uint16_t* dex_pc) {
-  if (guard_nterp(thread, caller, dex_pc)) { ++rejected; return 0; }
+  if (GuardNterpInvoke(thread, caller, dex_pc)) { ++rejected; return 0; }
   using Fn = size_t (*)(void*, void*, uint16_t*);
   return reinterpret_cast<Fn>(original_nterp)(thread, caller, dex_pc);
 }
 void* Resolve(void* linker, void* thread, uint32_t index, void* caller, int type) {
   using Fn = void* (*)(void*, void*, uint32_t, void*, int);
-  return reinterpret_cast<Fn>(needs_dispatch_checks() ? checked_resolve : original_resolve)(
+  return reinterpret_cast<Fn>(NeedsDispatchChecks() ? checked_resolve : original_resolve)(
       linker, thread, index, caller, type);
 }
 void* ResolveHandles(void* linker, uint32_t index, void* dex_cache, void* loader, void* caller, int type) {
   using Fn = void* (*)(void*, uint32_t, void*, void*, void*, int);
-  return reinterpret_cast<Fn>(needs_dispatch_checks() ? checked_resolve_handles : original_resolve_handles)(
+  return reinterpret_cast<Fn>(NeedsDispatchChecks() ? checked_resolve_handles : original_resolve_handles)(
       linker, index, dex_cache, loader, caller, type);
 }
 void Invoke(void* method, void* thread, uint32_t* args, uint32_t size, void* result, const char* shorty) {
@@ -195,15 +194,18 @@ bool InstallRetiredMethodHooks(HookEngine& hooks, void* library, std::string* er
     *error = "Retired method guard exports are incomplete"; return false;
   }
   trace_deopt = reinterpret_cast<decltype(trace_deopt)>(dlsym(library, "ArtDcevmSourceTraceDeopt"));
-  needs_dispatch_checks = reinterpret_cast<decltype(needs_dispatch_checks)>(dlsym(library, "ArtDcevmSourceNeedsDispatchChecks"));
-  guard_nterp = reinterpret_cast<decltype(guard_nterp)>(dlsym(library, "ArtDcevmGuardNterpInvoke"));
-  auto configure_resolver = reinterpret_cast<void (*)(void*)>(dlsym(library, "ArtDcevmSourceConfigureDispatchResolver"));
+  auto configure_dispatch = reinterpret_cast<void* (*)(void (*)())>(
+      dlsym(library, "ArtDcevmSourceConfigureDispatchChecks"));
   checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
   checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
-  if (!trace_deopt || !needs_dispatch_checks || !guard_nterp || !configure_resolver || !checked_resolve || !checked_resolve_handles) {
+  if (!trace_deopt || !configure_dispatch || !checked_resolve || !checked_resolve_handles) {
     *error = "Dispatch validation symbols are incomplete"; return false;
   }
-  configure_resolver(checked_resolve);
+  if (!ConfigureNterpDispatch(configure_dispatch(RequireDispatchChecks),
+      reinterpret_cast<CheckedDispatchResolver>(checked_resolve))) {
+    *error = "Named checked resolver or source ClassLinker accessor is unavailable";
+    return false;
+  }
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
   Entry entries[] = {
     {cas::kRetiredMethodHooks[0], reinterpret_cast<void*>(Deopt), &original_deopt},

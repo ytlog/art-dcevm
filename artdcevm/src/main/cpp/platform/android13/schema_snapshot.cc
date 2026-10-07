@@ -57,17 +57,8 @@ int ReadLiveSchema(jvmtiEnv* jvmti, JNIEnv* jni, jclass klass,
     if (!interface_result) schema.interfaces.push_back(std::move(name));
   }
   if (interface_result) return fail(interface_result, "Interface signature failed");
-  Allocation<jfieldID> fields(jvmti);
-  result = jvmti->GetClassFields(klass, &count, &fields.value);
-  if (result) return fail(result, "GetClassFields failed");
-  for (jint i = 0; i < count; ++i) {
-    Allocation<char> name(jvmti), descriptor(jvmti);
-    result = jvmti->GetFieldName(klass, fields.value[i], &name.value, &descriptor.value, nullptr);
-    if (result) return fail(result, "GetFieldName failed");
-    result = jvmti->GetFieldModifiers(klass, fields.value[i], &access);
-    if (result) return fail(result, "GetFieldModifiers failed");
-    schema.fields.push_back({name.value, descriptor.value, static_cast<uint32_t>(access), UINT32_MAX});
-  }
+  result = ReadLiveFields(jvmti, klass, &schema.fields, error);
+  if (result) return result;
   Allocation<jmethodID> methods(jvmti);
   result = jvmti->GetClassMethods(klass, &count, &methods.value);
   if (result) return fail(result, "GetClassMethods failed");
@@ -80,6 +71,27 @@ int ReadLiveSchema(jvmtiEnv* jvmti, JNIEnv* jni, jclass klass,
     schema.methods.push_back({name.value, descriptor.value, static_cast<uint32_t>(access), UINT32_MAX});
   }
   *output = std::move(schema);
+  error->clear();
+  return JVMTI_ERROR_NONE;
+}
+int ReadLiveFields(jvmtiEnv* jvmti, jclass klass,
+                   std::vector<evolution::Member>* output, std::string* error) {
+  auto fail = [&](int code, const char* operation) { *error = operation; return code; };
+  Allocation<jfieldID> fields(jvmti);
+  jint count = 0;
+  int result = jvmti->GetClassFields(klass, &count, &fields.value);
+  if (result) return fail(result, "GetClassFields failed");
+  std::vector<evolution::Member> members;
+  for (jint i = 0; i < count; ++i) {
+    Allocation<char> name(jvmti), descriptor(jvmti);
+    result = jvmti->GetFieldName(klass, fields.value[i], &name.value, &descriptor.value, nullptr);
+    if (result) return fail(result, "GetFieldName failed");
+    jint access = 0;
+    result = jvmti->GetFieldModifiers(klass, fields.value[i], &access);
+    if (result) return fail(result, "GetFieldModifiers failed");
+    members.push_back({name.value, descriptor.value, static_cast<uint32_t>(access), UINT32_MAX});
+  }
+  *output = std::move(members);
   error->clear();
   return JVMTI_ERROR_NONE;
 }
