@@ -26,8 +26,7 @@ size_t PruneRetiredFields(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void*,
-                                   std::string* error) {
+bool ConfigureRetiredFieldRegistry(HookEngine& hooks, std::string* error) {
   auto contains = reinterpret_cast<RetiredFieldRegistry::ContainsUnsafe>(
       hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
   if (!contains) {

@@ -93,7 +93,7 @@ void CommitEvolutionStructurally(void*,const void* raw) {
   for_each(Read<void*>(runtime,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ClearThread,nullptr);
   unlock(*list_lock,self);
 }
-bool ConfigureStructuralCommit(HookEngine& hooks,void*,std::string* error) {
+bool ConfigureStructuralCommit(HookEngine& hooks,std::string* error) {
 #define ART(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name))
   ART(singleton,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
   ART(set_status,"_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE");

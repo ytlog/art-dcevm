@@ -9,7 +9,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <limits>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 const void* heap_source_vptr=nullptr;void* (*root)(void*)=nullptr;
@@ -44,14 +43,12 @@ void VisitReflectedFieldTarget(void* field,void* raw_visitor){
  Store(field,offsetof(Field,art_field_index),static_cast<uint32_t>(index));
  CopyWriteBarrier(field);
 }
-bool ConfigureReflectedFieldVisit(HookEngine& hooks,void* implementation,std::string* error){
+bool ConfigureReflectedFieldVisit(HookEngine& hooks,const DeviceProfile& profile,std::string* error){
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
  auto table=static_cast<const unsigned char*>(hooks.FindSymbol("libart.so","_ZTVN3art24HeapReflectiveSourceInfoE"));
  auto reader=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
- using Probe=bool (*)(const void*);
- auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeReflectedFieldVisit"));
- if(!table||!reader||!probe){*error="Missing named reflected-field visitor ABI functions";return false;}
+ if(!table||!reader){*error="Missing named reflected-field visitor ABI functions";return false;}
  root=reader;heap_source_vptr=table+2*sizeof(void*);
- if(!probe(heap_source_vptr)){*error="Reflected-field visitor fixed ABI calibration failed";return false;}
  return true;
 }
 }

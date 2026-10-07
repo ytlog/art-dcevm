@@ -57,9 +57,9 @@ void* LookupProxy(void* linker, void* thread, const char* descriptor, void* load
 }
 }  // namespace
 
-bool InstallHierarchyResolutionHooks(HookEngine& hooks, void* implementation,
+bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& profile,
                                      std::string* error) {
-  (void)implementation;  // All verifier state belongs to the enhancement.
+  if(!profile.Matched()){*error="Hierarchy resolution requires a matched device profile";return false;}
   struct Entry { const char* name; void* proxy; void** original; };
   const Entry entries[]{
       {cas::kVerifyClass, reinterpret_cast<void*>(VerifyProxy),

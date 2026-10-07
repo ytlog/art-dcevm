@@ -18,7 +18,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
            str(root / 'tests/host/instrumentation_listener_test.cc'),
            str(cpp / 'platform/android13/instrumentation_listener.cc'),
-           '-o', str(binary)]
+           str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

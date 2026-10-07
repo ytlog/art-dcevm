@@ -11,9 +11,9 @@ bool CollectProxy(void* definition, void* data) {
                                      definition, data, original_collect);
 }
 }
-bool InstallInstanceAllocationHook(HookEngine& hooks, void* implementation,
+bool InstallInstanceAllocationHook(HookEngine& hooks, const DeviceProfile& profile,
                                    std::string* error) {
-  if (!ConfigureAllocationValidation(implementation, error)) return false;
+  if (!ConfigureAllocationValidation(profile, error)) return false;
   void* target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kCollectNewInstances);
   if (!target) { *error = "Missing named device instance-allocation function"; return false; }
   return hooks.Install(target, reinterpret_cast<void*>(CollectProxy),

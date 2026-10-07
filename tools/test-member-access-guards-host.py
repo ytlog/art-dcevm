@@ -19,7 +19,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(root / 'tests/host/member_access_guards_test.cc'),
            str(cpp / 'platform/android13/member_access_guards.cc'),
            str(cpp / 'platform/android13/native_object_access.cc'),
-           str(cpp / 'platform/android13/handle_root_scope.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/handle_root_scope.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

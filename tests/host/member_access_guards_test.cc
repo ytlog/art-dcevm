@@ -1,3 +1,5 @@
+#include "device_profile_fixture.h"
+#include "handle_scope_fixture.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/member_access_guards_abi.h"
 #include "platform/android13/native_object_access.h"
@@ -38,6 +40,7 @@ std::string exception_type,exception_text;
 uint32_t interface_count=1;
 void* Root(void* m) { ++root_reads;return roots.at(m); }
 void* Current() { return thread; }
+void* peer=nullptr;void* Peer(void*){return peer;}
 void* OldCache(void*) { return cache; }
 void* OldClass(void* k) { auto i=old_classes.find(k);return i==old_classes.end()?nullptr:i->second; }
 void* Types(void*) { return &interface_count; }
@@ -68,6 +71,8 @@ class Hooks:public artdcevm::HookEngine { public:
  if(std::strstr(s,"ResolveFieldJLS"))return reinterpret_cast<void*>(Resolve);
  if(std::strstr(s,"ThrowIllegalAccessErrorFinalField"))return reinterpret_cast<void*>(ThrowFinal);
  if(std::strstr(s,"ThrowNewException"))return reinterpret_cast<void*>(Throw);
+ if(std::strstr(s,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(HostHandleScopeVisitRoots);
+ if(std::strstr(s,"GetPeerFromOtherThread"))return reinterpret_cast<void*>(Peer);
  if(std::strstr(s,"CurrentFromGdb"))return reinterpret_cast<void*>(Current);
  if(!std::strcmp(s,"artJniMethodEnd"))return reinterpret_cast<void*>(Enter);
  if(!std::strcmp(s,"artJniMethodStart"))return reinterpret_cast<void*>(Leave);
@@ -96,15 +101,6 @@ bool FinalFieldGuardEnabled() noexcept{return final_enabled;}
 bool GuardRetiredMethod(void* m,void*,void* result){if(m!=retired_method)return false;if(result)std::memset(result,0,8);return true;}
 bool GuardRetiredField(void* f,void*,void* result){if(f!=retired_field)return false;if(result)std::memset(result,0,8);return true;}
 }
-extern "C" int ArtDcevmSourceProbeMemberAccess(JNIEnv*,jobject,void*(*)(void*),uint32_t(*operand)(const void*)){
- Operands ops(7);assert(operand(&ops)==7);return 0;
-}
-extern "C" int ArtDcevmSourceProbeNativeAccess(JNIEnv*,jobject,void*(*)(JNIEnv*,jobject)){return 0;}
-extern "C" int ArtDcevmSourceProbeHandleRootScope(void* self,void* scope,uint32_t count){
- assert(self==thread);void* top;std::memcpy(&top,thread+g::handle_root_abi::kTopHandleScopeOffset,8);
- assert(top==scope);if(scope)assert(static_cast<g::handle_root_abi::ScopeHeader*>(scope)->count==static_cast<int32_t>(count));return 0;
-}
-extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*calibrate)(void*)){return calibrate(thread);}
 int main(){
  arena=static_cast<unsigned char*>(mmap(reinterpret_cast<void*>(0x20000000),65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0));
  assert(arena!=MAP_FAILED && reinterpret_cast<uintptr_t>(arena)+65536<=UINT32_MAX);
@@ -114,10 +110,11 @@ int main(){
  roots[method]=declaring;roots[field]=declaring;heap[{object,0}]=unrelated;
  JNINativeInterface_ table{};table.ExceptionCheck=NoException;
  struct Env{JNIEnv jni;void* self;void* vm;} env{{&table},thread,nullptr};
- Hooks hooks;std::string error;void* implementation=dlopen(nullptr,RTLD_NOW);
- assert(g::ConfigureNativeObjectAccess(hooks,implementation,&env.jni,nullptr,&error));
- assert(g::ConfigureHandleRootScopes(hooks,implementation,&error));
- assert(g::ConfigureMemberAccessGuards(hooks,implementation,&env.jni,nullptr,&error));
+ Hooks hooks;std::string error;peer=object;
+ assert(g::ConfigureNativeObjectAccess(hooks,MatchedProfileForTest(),&error));
+ assert(g::ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));
+ g::DeviceProfile unmatched;assert(!g::ConfigureMemberAccessGuards(hooks,unmatched,&error));
+ assert(g::ConfigureMemberAccessGuards(hooks,MatchedProfileForTest(),&error));
  g::member_access_abi::RunnableAccess access{thread,&env,nullptr};
  assert(!g::GuardRunnableFieldReceiver(&access,reinterpret_cast<jobject>(object),reinterpret_cast<jfieldID>(field)));
  g::SetReceiverGuardEnabled(true);g::SetReceiverGuardRequired(true);assert(g::ReceiverGuardEnabled()&&g::ReceiverGuardRequired());

@@ -4,7 +4,6 @@
 #include "platform/android13/retired_member_guard.h"
 #include <cassert>
 #include <cstring>
-#include <dlfcn.h>
 #include <iostream>
 namespace g=artdcevm::android13;
 namespace {
@@ -30,13 +29,13 @@ namespace artdcevm::android13 {
 bool ConfigureRetiredMemberGuard(const RetiredMemberGuardFunctions& f){return f.current_thread&&f.throw_exception&&f.deliver_exception&&f.contains_method&&f.contains_field;}
 }
 int main(){
- Hooks hooks;std::string error;auto* source=dlopen(nullptr,RTLD_NOW);assert(source);
+ Hooks hooks;std::string error;
  hooks.available=false;
- assert(!g::ConfigureRetiredMethodRegistry(hooks,source,&error));
- assert(!g::ConfigureRetiredFieldRegistry(hooks,source,&error));
+ assert(!g::ConfigureRetiredMethodRegistry(hooks,&error));
+ assert(!g::ConfigureRetiredFieldRegistry(hooks,&error));
  hooks.available=true;
- assert(g::ConfigureRetiredFieldRegistry(hooks,source,&error));
- assert(g::ConfigureRetiredMethodRegistry(hooks,source,&error));
+ assert(g::ConfigureRetiredFieldRegistry(hooks,&error));
+ assert(g::ConfigureRetiredMethodRegistry(hooks,&error));
  int method,field;assert(g::RetiredMethodCount()==0);
  g::RetireMethodPointer(&method);g::RetireMethodPointer(&method);
  assert(g::IsRetiredMethodPointer(&method)&&g::RetiredMethodCount()==1);

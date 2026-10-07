@@ -18,7 +18,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(root / 'tests/host/hierarchy_validation_test.cc'),
            str(cpp / 'platform/android13/hierarchy_validation.cc'),
            str(cpp / 'platform/android13/handle_root_scope.cc'),
-           str(cpp / 'platform/android13/loaded_class_guards.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/loaded_class_guards.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

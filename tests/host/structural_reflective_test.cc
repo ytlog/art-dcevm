@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
-#include <dlfcn.h>
 #include <unordered_map>
 using namespace artdcevm::android13;
 using namespace structural_reflective_abi;
@@ -36,12 +35,10 @@ bool Same(void* a,void* b){return static_cast<Method*>(a)->dex_method_index==sta
 void* Root(void* p){return roots.at(p);}
 const char* Name(void* f){return static_cast<Field*>(f)->name;}const char* Type(void* f){return static_cast<Field*>(f)->type;}
 void Visit(void*,Visitor* v){scenario(v);}
-extern "C" bool ArtDcevmSourceProbeStructuralReflection(SourceView (*read)(const SourceInfo&),Visitor* v){
- HeapSourceInfo info{{nullptr,kExecutable},reinterpret_cast<void*>(55)};auto view=read(info.base);assert(view.object==info.object&&view.type==kExecutable);
- SourceInfo source{nullptr,kDexField};assert(v->VisitMethod(nullptr,source)==reinterpret_cast<void*>(0x123));assert(v->VisitField(nullptr,source)==reinterpret_cast<void*>(0x456));return true;}
 class Hooks:public artdcevm::HookEngine {public:
+ bool missing_identity=false;
  bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char* name)override{
- if(std::strstr(name,"HasSameName"))return reinterpret_cast<void*>(Same);
+ if(std::strstr(name,"HasSameName"))return missing_identity?nullptr:reinterpret_cast<void*>(Same);
  if(std::strstr(name,"VisitReflectiveTargets"))return reinterpret_cast<void*>(Visit);
  if(std::strcmp(name,"artReadBarrierForRootSlow")==0)return reinterpret_cast<void*>(Root);
  if(std::strstr(name,"7GetName"))return reinterpret_cast<void*>(Name);
@@ -72,7 +69,7 @@ void Shadowing(Visitor* v){SourceInfo dexm{nullptr,kDexMethod},dexf{nullptr,kDex
 void Hierarchy(Visitor* v){SourceInfo dexm{nullptr,kDexMethod},dexf{nullptr,kDexField},generic{nullptr,10};
  assert(v->VisitMethod(&unrelated_method,dexm)==nullptr);assert(v->VisitField(&static_shadow,dexf)==nullptr);assert(v->VisitMethod(&unrelated_method,generic)==&unrelated_method);}
 namespace artdcevm::android13 {void* ReadHeapReference(void*,size_t,bool){return nullptr;}}
-int main(){Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;assert(ConfigureStructuralMemberMappings(hooks,dlopen(nullptr,RTLD_NOW),&error));assert(ConfigureStructuralReflectiveTargets(hooks,dlopen(nullptr,RTLD_NOW),&error));
+int main(){ auto profile=MatchedProfileForTest();Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;hooks.missing_identity=true;assert(!ConfigureStructuralMemberMappings(hooks,&error)&&!error.empty());hooks.missing_identity=false;assert(ConfigureStructuralMemberMappings(hooks,&error));assert(!ConfigureStructuralReflectiveTargets(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureStructuralReflectiveTargets(hooks,profile,&error));
  old_array.size=3;new_array.size=2;old_class.methods=reinterpret_cast<uint64_t>(&old_array);new_class.methods=reinterpret_cast<uint64_t>(&new_array);
  old_array.value[0].dex_method_index=1;old_array.value[0].access_flags=1;new_array.value[0].dex_method_index=1;new_array.value[0].access_flags=2;
  old_array.value[1].dex_method_index=2;old_array.value[1].access_flags=8;new_array.value[1].dex_method_index=2;new_array.value[1].access_flags=0;

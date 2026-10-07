@@ -1,13 +1,12 @@
 #include "platform/android13/field_validation.h"
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/field_validation_abi.h"
+#include "platform/android13/failure_calibration.h"
 #include "platform/android13/field_evolution_policy.h"
 #include "platform/android13/final_field_guard_state.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/symbols/android13.h"
-#include <dlfcn.h>
 #include <new>
 #include <cstring>
 #include <algorithm>
@@ -60,23 +59,15 @@ bool CheckEvolutionFields(void* definition) {
   }
 }
 
-bool ConfigureEvolutionFieldValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto probe = reinterpret_cast<ProbeFieldValidationLayout>(
-      dlsym(implementation, "ArtDcevmSourceProbeFieldValidationLayout"));
-  auto configure = reinterpret_cast<ConfigureFieldValidation>(
-      dlsym(implementation, "ArtDcevmSourceConfigureFieldValidation"));
+bool ConfigureEvolutionFieldValidation(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if (!CalibrateRedefinitionFailures(hooks, profile, error)) return false;
   auto record = reinterpret_cast<RecordNewField>(
       hooks.FindSymbol("libopenjdkjvmti.so", cas::kRecordNewFieldAdded));
-  if (!probe || !configure || !record) {
-    *error = "Missing field layout probe or named structural field marker";
-    return false;
-  }
-  if (probe(RecordRedefinitionFailure) != 0) {
-    *error = "Fixed field-validation ART declarations did not match the source profile";
+  if (!record) {
+    *error = "Missing named structural field marker";
     return false;
   }
   record_new_field = record;
-  configure(CheckEvolutionFields);
   return true;
 }
 }

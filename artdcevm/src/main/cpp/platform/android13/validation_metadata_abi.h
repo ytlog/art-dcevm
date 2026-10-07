@@ -8,7 +8,6 @@ struct ValidationMetadata {
   evolution::MappedDexMetadata dex;
   uint32_t access_flags;
 };
-using ProbeValidationMetadata = bool (*)(void*, const ValidationMetadata*);
 
 namespace validation_abi {
 // android-13.0.0_r1 runtime/mirror/{object,class,dex_cache}.h. MANAGED

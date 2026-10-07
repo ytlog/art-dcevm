@@ -38,15 +38,11 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBr
   return backend ? backend->EnableStandardRedefineRouting() : JVMTI_ERROR_INVALID_ENVIRONMENT;
 }
 extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_engine_NativeBridge_initializeEvolution(
-    JNIEnv* env, jclass, jstring path, jobject calibration) {
-  if (!path || !calibration) return JVMTI_ERROR_NULL_POINTER;
-  const char* bytes = env->GetStringUTFChars(path, nullptr);
-  if (!bytes) return JVMTI_ERROR_OUT_OF_MEMORY;
-  auto release = [env, path](const char* value) { env->ReleaseStringUTFChars(path, value); };
-  std::unique_ptr<const char, decltype(release)> owned(bytes, release);
+    JNIEnv* env, jclass, jobject calibration) {
+  if (!calibration) return JVMTI_ERROR_NULL_POINTER;
   try {
     std::lock_guard<std::mutex> lock(TransactionMutex());
-    return backend ? backend->InitializeEvolution(env, bytes, calibration) : JVMTI_ERROR_INVALID_ENVIRONMENT;
+    return backend ? backend->InitializeEvolution(env, calibration) : JVMTI_ERROR_INVALID_ENVIRONMENT;
   } catch (const std::bad_alloc&) { return JVMTI_ERROR_OUT_OF_MEMORY; }
 }
 namespace {

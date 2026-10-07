@@ -8,7 +8,6 @@
 #include "platform/android13/jni_method_targets.h"
 #include <algorithm>
 #include <cstring>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 using namespace structural_reflective_abi;
@@ -64,15 +63,13 @@ structural_reflective_abi::SourceView ReadStructuralReflectionSource(const struc
  if(type==structural_reflective_abi::kExecutable)std::memcpy(&object,reinterpret_cast<const unsigned char*>(&info)+16,8);
  return {type,object};
 }
-bool ConfigureStructuralReflectiveTargets(HookEngine& hooks,void* implementation,std::string* error) {
+bool ConfigureStructuralReflectiveTargets(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
  auto v=reinterpret_cast<void (*)(void*,Visitor*)>(hooks.FindSymbol("libart.so","_ZN3art7Runtime22VisitReflectiveTargetsEPNS_22ReflectiveValueVisitorE"));
  auto r=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
  auto n=reinterpret_cast<const char* (*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art8ArtField7GetNameEv"));
  auto t=reinterpret_cast<const char* (*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art8ArtField17GetTypeDescriptorEv"));
- class AbiVisitor final:public Visitor { public: void* VisitMethod(void*,const SourceInfo&)override{return reinterpret_cast<void*>(0x123);} void* VisitField(void*,const SourceInfo&)override{return reinterpret_cast<void*>(0x456);} } abi_visitor;
- using Probe=bool (*)(SourceView (*)(const SourceInfo&),Visitor*);
- auto p=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeStructuralReflection"));
- if(!v||!r||!n||!t||!p||!p(ReadStructuralReflectionSource,&abi_visitor)){*error="Missing or incompatible structural reflection ABI";return false;}
+ if(!v||!r||!n||!t){*error="Missing named structural reflection functions";return false;}
  visit=v;root=r;field_name=n;field_type=t;return true;
 }
 void VisitStructuralReflectiveTargets(void* runtime,void* mirror,const std::vector<void*>& old,const std::vector<void*>& next,const StructuralMemberMappings& maps,bool hierarchy) {

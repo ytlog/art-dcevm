@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/class_validation.h"
 #include "platform/android13/class_validation_abi.h"
 #include "platform/android13/redefinition_art_abi.h"
@@ -21,7 +22,7 @@ uint32_t raw_flags;
 int allocated = 0, locals = 0, failure_code = 0, markers = 0, hierarchy_code = 0;
 bool subclass_valid = true, hierarchy_changed = false;
 std::string failure_message;
-android13::ClassValidation callback;
+
 void* Alloc(size_t size) { ++allocated; return std::malloc(size); }
 jvmtiError JNICALL Free(jvmtiEnv*, unsigned char* bytes) { --allocated; std::free(bytes); return JVMTI_ERROR_NONE; }
 jvmtiError JNICALL Signature(jvmtiEnv*, jclass value, char** result, char**) {
@@ -81,8 +82,7 @@ int CheckEvolutionHierarchy(void*, const evolution::ClassSchema&, const evolutio
   *changed = hierarchy_changed; *error = "Owned hierarchy guard diagnostic"; return hierarchy_code;
 }
 }
-extern "C" void ArtDcevmSourceConfigureClassValidation(android13::ClassValidation value) { callback = value; }
-int main(int argc, char** argv) {
+int main(int argc, char** argv) { auto profile=MatchedProfileForTest();
   assert(argc == 2);
   std::ifstream input(argv[1], std::ios::binary);
   assert(input.good());
@@ -97,15 +97,14 @@ int main(int argc, char** argv) {
   jni_table.DeleteLocalRef = Delete; jni_table.ExceptionCheck = Exception;
   JNIEnv jni{&jni_table}; current_jni = &jni;
   Hooks hooks;
-  void* implementation = dlopen(nullptr, RTLD_NOW);
-  assert(implementation);
-  if (!android13::ConfigureEvolutionClassValidation(hooks, implementation, &error)) {
-    std::cerr << error << ": " << dlerror() << "\n"; return 1;
+  assert(!android13::ConfigureEvolutionClassValidation(hooks,android13::DeviceProfile{},&error));
+  if (!android13::ConfigureEvolutionClassValidation(hooks, profile, &error)) {
+    std::cerr << error << "\n"; return 1;
   }
   android13::redefinition_abi::DexFilePrefix dex{nullptr, bytes.data(), bytes.size()};
   android13::redefinition_abi::ClassRedefinition definition{};
   definition.klass = reinterpret_cast<jclass>(1); definition.dex_file = &dex; definition.lock_acquired = true;
-  auto run = [&] { failure_code = 0; markers = 0; const bool result = callback(&definition); assert(allocated == 0 && locals == 0); return result; };
+  auto run = [&] { failure_code = 0; markers = 0; const bool result = android13::CheckEvolutionClass(&definition); assert(allocated == 0 && locals == 0); return result; };
   assert(run() && markers == 0);  // Public InnerClass modifiers must not change ART class validation.
   definition.lock_acquired = false; assert(!run() && failure_code == JVMTI_ERROR_INTERNAL);
   definition.lock_acquired = true;

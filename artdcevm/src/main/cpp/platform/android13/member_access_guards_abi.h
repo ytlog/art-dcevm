@@ -5,7 +5,6 @@
 
 // libdexfile/dex/dex_instruction.h. Use ART's actual virtual GetOperand; the
 // fixed declaration preserves Range/VarArgs/NoReceiver operand semantics.
-#ifndef ARTDCEVM_SOURCE_CALIBRATION
 namespace art {
 class InstructionOperands {
  public:
@@ -17,7 +16,6 @@ class InstructionOperands {
   const size_t num_operands_;
 };
 }
-#endif
 namespace artdcevm::android13::member_access_abi {
 struct RunnableAccess { void* self; void* env; void* vm; };
 #pragma pack(push, 4)
@@ -50,6 +48,15 @@ inline constexpr uint32_t kStaticFlag=0x8, kFinalFlag=0x10, kInterfaceFlag=0x200
 inline constexpr uint32_t kProxyClass=0x40000, kObsoleteMethod=0x40000, kObsoleteClass=0x200000;
 inline constexpr int kLastAccessMode=30;
 inline constexpr size_t kArrayLength=8, kArrayData=12;
+static_assert(sizeof(RunnableAccess)==24 && offsetof(RunnableAccess,env)==8 && offsetof(RunnableAccess,vm)==16);
+static_assert(sizeof(art::InstructionOperands)==16 && alignof(art::InstructionOperands)==8);
+static_assert(offsetof(MethodHandle,method_type)==16 && offsetof(MethodHandle,kind)==20);
+static_assert(offsetof(FieldVarHandle,coordinate0)==8 && offsetof(FieldVarHandle,coordinate1)==12 &&
+              offsetof(FieldVarHandle,variable_type)==16 && offsetof(FieldVarHandle,access_modes)==20);
+static_assert(offsetof(ShadowFrame,link)==0 && offsetof(ShadowFrame,method)==8 && offsetof(ShadowFrame,result)==16 &&
+              offsetof(ShadowFrame,dex_pc)==24 && offsetof(ShadowFrame,instructions)==32 && offsetof(ShadowFrame,monitor_vector)==40);
+static_assert(offsetof(ShadowFrame,pc)==52 && offsetof(ShadowFrame,cached_hotness)==56 &&
+              offsetof(ShadowFrame,hotness)==58 && offsetof(ShadowFrame,flags)==60);
 static_assert(sizeof(MethodHandle)==32 && offsetof(MethodHandle,target)==24);
 static_assert(sizeof(MethodType)==28 && offsetof(MethodType,parameters)==16);
 static_assert(sizeof(FieldVarHandle)==32 && offsetof(FieldVarHandle,field)==24);

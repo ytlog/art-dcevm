@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
 #include "platform/android13/handle_root_scope.h"
 #include <cstdint>
@@ -22,7 +23,7 @@ class HierarchyRootPool {
   uint32_t used_=64;
 };
 using HierarchyClassAllocator=void*(*)(void*,void*,void*,void*,uint16_t);
-bool ConfigureHierarchyAllocation(HookEngine&,void* implementation,std::string* error);
+bool ConfigureHierarchyAllocation(HookEngine&,const DeviceProfile& profile,std::string* error);
 class HierarchyBatch {
  public:
   explicit HierarchyBatch(void* driver);

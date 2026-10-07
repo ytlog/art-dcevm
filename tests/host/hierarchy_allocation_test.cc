@@ -1,4 +1,5 @@
 #include "transaction_metadata_profile.h"
+#include "handle_scope_fixture.h"
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/hierarchy_allocation.h"
 #include "platform/android13/hierarchy_allocation_abi.h"
@@ -71,6 +72,9 @@ void GC() {
   }
 }
 void* Current() { return thread; }
+void* Peer(void*){return Ptr(object_id);}
+void Runnable(void* t){*static_cast<uint32_t*>(t)=0;}
+void Native(void* t){*static_cast<uint32_t*>(t)=92u<<24;}
 struct Dex {
   std::vector<unsigned char> bytes,shared_data;
   validation_abi::DexMappingPrefix mapping;
@@ -114,6 +118,10 @@ struct Hooks:HookEngine {
    if(std::strcmp(symbol,cas::kFindClass)==0) return reinterpret_cast<void*>(Find);
    if(std::strcmp(symbol,cas::kRecordFailure)==0) return reinterpret_cast<void*>(Fail);
    if(std::strcmp(symbol,"artReadBarrierForRootSlow")==0) return reinterpret_cast<void*>(Root);
+   if(std::strstr(symbol,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(HostHandleScopeVisitRoots);
+   if(std::strstr(symbol,"GetPeerFromOtherThread"))return reinterpret_cast<void*>(Peer);
+   if(!std::strcmp(symbol,"artJniMethodStart"))return reinterpret_cast<void*>(Native);
+   if(!std::strcmp(symbol,"artJniMethodEnd"))return reinterpret_cast<void*>(Runnable);
    if(std::strcmp(symbol,handle_root_abi::kCurrentThread)==0) return reinterpret_cast<void*>(Current);
    return nullptr;
  }
@@ -147,14 +155,12 @@ bool IsValidationSubclassOf(void* source,void* target) {
 }
 void CopyWriteBarrier(void*) { ++barriers; }
 }
-extern "C" int ArtDcevmSourceProbeHandleRootScope(void*,void*,uint32_t) { return 0; }
-extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*callback)(void*)) { return callback(thread); }
 int main() {
   void* mapped=mmap(reinterpret_cast<void*>(0x20000000),32*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
   assert(mapped!=MAP_FAILED && reinterpret_cast<uintptr_t>(mapped)+32*1024*1024<=UINT32_MAX);heap=static_cast<unsigned char*>(mapped);
   Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;
-  assert(ConfigureHandleRootScopes(hooks,dlopen(nullptr,RTLD_NOW),&error));assert(ConfigureHierarchyAllocation(hooks,dlopen(nullptr,RTLD_NOW),&error));
   loader_id=New(3);object_id=ClassNode("Ljava/lang/Object;",SIZE_MAX,SIZE_MAX);array_type_id=New(1);static_cast<Class*>(Ptr(array_type_id))->component_type=Ref(Ptr(object_id));
+  assert(ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));assert(ConfigureHierarchyAllocation(hooks,MatchedProfileForTest(),&error));
   {
     HierarchyRootPool pool(thread);std::vector<void*> roots;
     for(int i=0;i<60;++i) roots.push_back(pool.Add(Ptr(object_id)));

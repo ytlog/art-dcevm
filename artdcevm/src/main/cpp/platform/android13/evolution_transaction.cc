@@ -19,7 +19,6 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 #include <unistd.h>
 namespace artdcevm::android13 {
 namespace {
@@ -209,7 +208,8 @@ jvmtiError RedefineEvolutionTransaction(jvmtiEnv* env,jint count,const jvmtiClas
 }
 uint64_t EvolutionGuardTransactionDiagnostics(int index) {return index>=0 && index<3?guard_counts[index].load():0;}
 uint64_t EvolutionCompiledPrecommitDiagnostics(int index) {return index>=0 && index<6?compiled_counts[index].load():0;}
-bool ConfigureEvolutionTransactions(HookEngine& hooks,void* implementation,std::string* error) {
+bool ConfigureEvolutionTransactions(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define ART(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name))
   ART(lookup,cas::kLookupClass);ART(runtime_instance,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
   ART(lock,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");ART(unlock,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");
@@ -220,13 +220,10 @@ bool ConfigureEvolutionTransactions(HookEngine& hooks,void* implementation,std::
   ART(debuggable,"_ZNK3art7OatFile12IsDebuggableEv");
 #undef ART
   redefine=reinterpret_cast<Redefine>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kStructuralRedefineClasses));
-  using Probe=bool(*)(bool(*)(const void*));
-  auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeEvolutionTransaction"));
-  if(!lookup || !runtime_instance || !*runtime_instance || !list_lock || !lock || !unlock || !for_each || !return_pc || !contains_pc || !private_contains_pc || !read_root || !obsolete_cache || !oat_code || !debuggable || !redefine || !probe) {
+  if(!lookup || !runtime_instance || !*runtime_instance || !list_lock || !lock || !unlock || !for_each || !return_pc || !contains_pc || !private_contains_pc || !read_root || !obsolete_cache || !oat_code || !debuggable || !redefine) {
     *error="Missing named transaction preflight, compiled-frame or redefinition capability";return false;
   }
-  if(!ConfigureDeviceDexInputs(hooks,implementation,error)) return false;
-  if(!probe(HeaderInline)) {*error="Compiled precommit frame declaration calibration failed";return false;}
+  if(!ConfigureDeviceDexInputs(hooks,profile,error)) return false;
   return true;
 }
 }

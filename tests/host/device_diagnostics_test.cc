@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/device_diagnostics.h"
 #include "platform/android13/device_diagnostics_abi.h"
 #include "platform/android13/native_object_access.h"
@@ -41,10 +42,6 @@ void Invalidate(void* value){assert(value==cache&&scope_count);++invalidations;}
 void Lock(void* value,void* thread){assert(value==jit_mutex&&thread==reinterpret_cast<void*>(333)&&!locked);locked=true;++lock_count;}
 void Unlock(void* value,void* thread){assert(value==jit_mutex&&thread==reinterpret_cast<void*>(333)&&locked);locked=false;}
 void Visit(void* value,const diagnostics_abi::BorrowedFunction* raw){assert(locked&&value==cache);++visits;const auto& fn=*reinterpret_cast<const Function*>(raw);for(auto entry:entries)fn(entry.first,entry.second);}
-extern "C" bool ArtDcevmSourceProbeDeviceDiagnostics(int (*kind)(const void*),const diagnostics_abi::BorrowedFunction* raw,void* value){
- static_assert(sizeof(Function)==sizeof(*raw));static_assert(alignof(Function)==alignof(diagnostics_abi::BorrowedFunction));assert(value==&instrumentation);const auto& fn=*reinterpret_cast<const Function*>(raw);fn(nullptr,nullptr);
- alignas(8) unsigned char bytes[32]{};auto* code=bytes+16;uint32_t data=8;std::memcpy(code-4,&data,4);assert(kind(code)==1);data=0x40000010;std::memcpy(code-4,&data,4);
- for(unsigned char flags:{0,1,2,3}){bytes[0]=flags;assert(kind(code)==(flags&1?3:2));fn(code,reinterpret_cast<void*>(1));}return true;}
 class Hooks:public artdcevm::HookEngine{public:bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* s)override{
  if(std::strstr(s,"GetJniNativeInterface"))return reinterpret_cast<void*>(Normal);if(std::strstr(s,"GetCheckJniNativeInterface"))return reinterpret_cast<void*>(Checked);if(std::strstr(s,"SetCheckJniEnabled"))return reinterpret_cast<void*>(SetCheck);
@@ -53,7 +50,7 @@ class Hooks:public artdcevm::HookEngine{public:bool Initialize(std::string*)over
  if(std::strstr(s,"InvalidateAllCompiledCode"))return reinterpret_cast<void*>(Invalidate);if(std::strstr(s,"jit_lock"))return &jit_mutex;
  if(std::strstr(s,"ExclusiveLock"))return reinterpret_cast<void*>(Lock);if(std::strstr(s,"ExclusiveUnlock"))return reinterpret_cast<void*>(Unlock);if(std::strstr(s,"VisitAllMethods"))return reinterpret_cast<void*>(Visit);return nullptr;}
  void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}};
-int main(){Hooks hooks;std::string error;assert(ConfigureDeviceDiagnostics(hooks,dlopen(nullptr,RTLD_NOW),&error));JNIEnv env{&normal_table};
+int main(){ auto profile=MatchedProfileForTest();static_assert(sizeof(Function)==sizeof(diagnostics_abi::BorrowedFunction));static_assert(alignof(Function)==alignof(diagnostics_abi::BorrowedFunction));Hooks hooks;std::string error;assert(!ConfigureDeviceDiagnostics(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureDeviceDiagnostics(hooks,profile,&error));JNIEnv env{&normal_table};
  assert(DiagnosticCheckJniMode(&env,-1)==0);assert(DiagnosticCheckJniMode(&env,1)==0&&env.functions==&checked_table);assert(DiagnosticCheckJniMode(&env,0)==1&&env.functions==&normal_table);env.functions=&unknown_table;assert(DiagnosticCheckJniMode(&env,7)==-1&&env.functions==&unknown_table);
  assert(DiagnosticReadBarrierCalls()==17);executable.art_method=reinterpret_cast<uint64_t>(&method);jobject object=reinterpret_cast<jobject>(&executable);
  cache=nullptr;assert(DiagnosticJitMethodState(&env,object)==0&&DiagnosticJitCacheDetail(&env,object)==-1&&DiagnosticInvalidateAllJit(&env)==-1);

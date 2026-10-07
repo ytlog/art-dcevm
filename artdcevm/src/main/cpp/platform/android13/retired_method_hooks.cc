@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
-#include <dlfcn.h>
 #include <jni.h>
 #include <vector>
 
@@ -171,7 +170,7 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 }
 
-bool InstallRetiredMethodHooks(HookEngine& hooks, void*, std::string* error) {
+bool InstallRetiredMethodHooks(HookEngine& hooks, std::string* error) {
   checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
   checked_resolve_handles = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolveHandles);
   if (!checked_resolve || !checked_resolve_handles) {

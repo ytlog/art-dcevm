@@ -1,9 +1,10 @@
 #pragma once
 #include "api/hook_engine.h"
+#include "platform/android13/device_profile.h"
 #include <jni.h>
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureMemberAccessGuards(HookEngine&,void* implementation,JNIEnv*,jobject,std::string*);
+bool ConfigureMemberAccessGuards(HookEngine&,const DeviceProfile&,std::string*);
 bool ReceiverGuardEnabled();
 bool ReceiverGuardRequired();
 void SetReceiverGuardEnabled(bool);

@@ -14,7 +14,7 @@ class PublicBackend final : public RuntimeBackend {
   std::string ErrorName(int error) const override;
   int EnableValidationHooks() override { return JVMTI_ERROR_NOT_AVAILABLE; }
   int EnableStandardRedefineRouting() override { return JVMTI_ERROR_NOT_AVAILABLE; }
-  int InitializeEvolution(JNIEnv*, const char*, jobject) override { return JVMTI_ERROR_NOT_AVAILABLE; }
+  int InitializeEvolution(JNIEnv*, jobject) override { return JVMTI_ERROR_NOT_AVAILABLE; }
  private:
   jvmtiEnv* env_ = nullptr;
   jvmtiCapabilities caps_{};

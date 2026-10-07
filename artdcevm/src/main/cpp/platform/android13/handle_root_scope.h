@@ -1,11 +1,12 @@
 #pragma once
 #include "api/hook_engine.h"
+#include "platform/android13/device_profile.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureHandleRootScopes(HookEngine&, void* implementation, std::string* error);
+bool ConfigureHandleRootScopes(HookEngine&, const DeviceProfile& profile, std::string* error);
 void* CurrentHierarchyThread();
 void ClearHierarchyException(void* thread);
 // ART's HandleScope root walker sees this fixed header and its compressed slots.

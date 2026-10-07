@@ -25,8 +25,7 @@ size_t PruneRetiredMethods(const void* allocator) noexcept {
   catch (...) { std::abort(); }
 }
 
-bool ConfigureRetiredMethodRegistry(HookEngine& hooks, void*,
-                                    std::string* error) {
+bool ConfigureRetiredMethodRegistry(HookEngine& hooks, std::string* error) {
   auto contains = reinterpret_cast<RetiredMethodRegistry::ContainsUnsafe>(
       hooks.FindSymbol("libart.so", cas::kLinearAllocContainsUnsafe));
   if (!contains) {

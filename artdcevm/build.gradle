@@ -1,8 +1,6 @@
 plugins { id 'com.android.library' }
 def targetAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
 if (!(targetAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException("Unsupported targetAbi: $targetAbi")
-if (targetAbi != 'arm64-v8a' && providers.gradleProperty('sourceEngine13').isPresent())
-    throw new GradleException('sourceEngine13 requires targetAbi=arm64-v8a')
 android {
     namespace 'com.github.ytlog.artdcevm'
     compileSdk 37
@@ -18,27 +16,7 @@ android {
     buildFeatures { prefab true }
     // ShadowHook is supplied by its Maven AAR to consumers, not copied into ours.
     packaging { jniLibs { excludes += ['**/libshadowhook.so', '**/libshadowhook_nothing.so'] } }
-    if (providers.gradleProperty('sourceEngine13').isPresent()) {
-        sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/sourceEngine').get().asFile
-    }
 }
 dependencies {
     if (targetAbi == 'arm64-v8a') implementation 'com.bytedance.android:shadowhook:2.0.1'
-}
-if (providers.gradleProperty('sourceEngine13').isPresent()) {
-    def sourceEngine = tasks.register('buildSourceEngine13', Exec) {
-        inputs.file rootProject.file('tools/android13/build-source-engine.py')
-        inputs.file rootProject.file('tools/android13/sources.lock.json')
-        inputs.dir file('src/main/cpp/platform/android13/source_engine')
-        inputs.files fileTree('src/main/cpp') { include '**/*.h' }
-        outputs.file rootProject.file('build/art13-source/libartdcevm_source13.so')
-        outputs.file rootProject.file('build/art13-source/build-report.json')
-        commandLine 'python3', rootProject.file('tools/android13/build-source-engine.py')
-    }
-    def packageEngine = tasks.register('packageSourceEngine13', Copy) {
-        dependsOn sourceEngine
-        from rootProject.file('build/art13-source/libartdcevm_source13.so')
-        into layout.buildDirectory.dir('generated/sourceEngine/arm64-v8a')
-    }
-    tasks.named('preBuild').configure { dependsOn packageEngine }
 }

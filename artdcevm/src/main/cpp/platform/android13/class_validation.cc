@@ -9,7 +9,6 @@
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/validation_metadata.h"
 #include <cstring>
-#include <dlfcn.h>
 #include <new>
 namespace artdcevm::android13 {
 namespace {
@@ -84,16 +83,15 @@ bool CheckEvolutionClass(void* definition) {
     return false;
   }
 }
-bool ConfigureEvolutionClassValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto configure = reinterpret_cast<ConfigureClassValidation>(dlsym(implementation, "ArtDcevmSourceConfigureClassValidation"));
+bool ConfigureEvolutionClassValidation(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!configure || !record) {
-    *error = "Missing class validation callback or named structural marker";
+  if (!record) {
+    *error = "Missing class validation named structural marker";
     return false;
   }
   record_new_method = record;
-  configure(CheckEvolutionClass);
   return true;
 }
 }

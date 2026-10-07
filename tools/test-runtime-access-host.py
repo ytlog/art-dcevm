@@ -17,7 +17,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-fno-omit-frame-pointer', '-Wl,-export_dynamic', '-I', str(cpp),
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
            str(root / 'tests/host/runtime_access_test.cc'),
-           str(cpp / 'platform/android13/runtime_access.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/runtime_access.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1',

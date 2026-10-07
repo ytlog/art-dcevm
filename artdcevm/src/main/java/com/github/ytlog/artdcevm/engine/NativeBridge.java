@@ -9,5 +9,5 @@ public final class NativeBridge {
     public static native String errorName(int error);
     public static native int enableValidationHooks();
     public static native int enableStandardRedefineRouting();
-    public static native int initializeEvolution(String modulePath, Object calibration);
+    public static native int initializeEvolution(Object calibration);
 }

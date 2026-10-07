@@ -23,7 +23,8 @@ bool InternalFailure(void* definition, const char* message) {
   return false;
 }
 }
-bool ConfigureAllocationValidation(void*, std::string* error) {
+bool ConfigureAllocationValidation(const DeviceProfile& profile, std::string* error) {
+  if(!profile.Matched()){*error="Allocation validation requires a matched device profile";return false;}
   if(GetTransactionMetadataReader().Configured())return true;
   if(error)*error="Transaction metadata reader must be configured before allocation validation";
   return false;

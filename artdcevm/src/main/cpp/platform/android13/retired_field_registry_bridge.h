@@ -7,8 +7,7 @@
 
 namespace artdcevm::android13 {
 
-bool ConfigureRetiredFieldRegistry(HookEngine& hooks, void* implementation,
-                                   std::string* error);
+bool ConfigureRetiredFieldRegistry(HookEngine& hooks, std::string* error);
 size_t PruneRetiredFields(const void* allocator) noexcept;
 size_t RetiredFieldSlotCount();
 void RetireFieldPointer(void*) noexcept;

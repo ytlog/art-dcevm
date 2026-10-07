@@ -3,7 +3,7 @@
 #include "support/elf_modules.h"
 #include "support/json.h"
 #include "platform/android13/evolution_planner.h"
-#include "platform/android13/source_engine_loader.h"
+#include "platform/android13/evolution_runtime.h"
 #include "platform/symbols/android13.h"
 #include "hooks/shadow_hook_engine.h"
 #include "core/transaction_lock.h"
@@ -197,16 +197,16 @@ int Android13Backend::EnableStandardRedefineRouting() {
   }
   return JVMTI_ERROR_NONE;
 }
-int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject calibration) {
+int Android13Backend::InitializeEvolution(JNIEnv* jni, jobject calibration) {
   if (!env_ || !vm_) return JVMTI_ERROR_INVALID_ENVIRONMENT;
   if (!caps_.can_redefine_classes) return JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
   if (evolution_ && evolution_->Available() && redefine_hook_) return JVMTI_ERROR_NONE;
   if (!structural_ || !modifiable_) return JVMTI_ERROR_NOT_AVAILABLE;
-  evolution_error_ = InitializeSourceEngine(jni, path, calibration);
+  evolution_error_ = InitializeEvolutionRuntime(jni, calibration);
   if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
   const int route = EnableStandardRedefineRouting();
   if (route != JVMTI_ERROR_NONE) return route;
-  evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
+  evolution_ = std::make_unique<EvolutionClassRedefiner>(vm_, env_);
   return JVMTI_ERROR_NONE;
 }
 jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
@@ -233,7 +233,7 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
   // a multi-class hierarchy change. ART validates the final transformed DEX
   // inside one transaction, so do not pre-plan against mutable live classes.
   if (evolution_ && evolution_->Available())
-    return static_cast<jvmtiError>(RedefineStandardWithSource(caller, vm_, count, definitions));
+    return static_cast<jvmtiError>(RedefineStandardWithEvolution(caller, vm_, count, definitions));
   return structural_(caller, count, definitions);
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {

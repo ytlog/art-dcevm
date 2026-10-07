@@ -1,9 +1,8 @@
 #pragma once
-#include "platform/symbols/android13/xiaomi/source_engine_abi.h"
 #include <string>
 namespace artdcevm::symbols::android13::xiaomi::cas {
 inline constexpr char kRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
-inline constexpr char kStructuralRedefineClasses[] = ARTDCEVM_A13_ORIGINAL_STRUCTURAL_REDEFINE;
+inline constexpr char kStructuralRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kIsStructurallyModifiableClass[] = "_ZN12openjdkjvmti9Redefiner17IsModifiableClassEP9_jvmtiEnvP7_jclassPh";
 inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_7HInvokeE";
 inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";

@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 namespace a=compiler_diagnostics_abi;
@@ -72,7 +71,8 @@ int DiagnosticConfigureGraphInlineProbe(JNIEnv* env,jobject caller_ref,jobject c
 }
 void* DiagnosticHGraphInlineInto(void* callee_graph,void* outer_graph,void* invoke){auto fn=original.load(std::memory_order_acquire);if(!fn)return nullptr;bool target=Read<void*>(callee_graph,offsetof(a::Graph,method))==callee.load(std::memory_order_relaxed)&&Read<void*>(outer_graph,offsetof(a::Graph,method))==caller.load(std::memory_order_relaxed);auto* result=fn(callee_graph,outer_graph,invoke);if(target)hits.fetch_add(1,std::memory_order_relaxed);return result;}
 uint64_t DiagnosticGraphInlineHits(){return hits.load(std::memory_order_relaxed);}
-bool ConfigureDeviceCompilerDiagnostics(HookEngine& hooks,void* source,JNIEnv* env,std::string* error){
+bool ConfigureDeviceCompilerDiagnostics(HookEngine& hooks,const DeviceProfile& profile,std::string* error){
+  if(!MatchCompilerDeviceProfile(profile,error))return false;
 #define SYMBOL(variable,name) variable=reinterpret_cast<decltype(variable)>(hooks.FindSymbol("libart.so",name));if(!variable){*error="Missing named compiler diagnostic symbol: " name;return false;}
  SYMBOL(suspend_ctor,"_ZN3art3jit16ScopedJitSuspendC2Ev") SYMBOL(suspend_dtor,"_ZN3art3jit16ScopedJitSuspendD2Ev")
  SYMBOL(stop,"_ZN3art3jit3Jit4StopEv") SYMBOL(start,"_ZN3art3jit3Jit5StartEv")
@@ -86,7 +86,6 @@ bool ConfigureDeviceCompilerDiagnostics(HookEngine& hooks,void* source,JNIEnv* e
  SYMBOL(compiler_slot,"_ZN3art3jit3Jit13jit_compiler_E")
  SYMBOL(invalidate,"_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv") SYMBOL(root_reader,"artReadBarrierForRootSlow")
 #undef SYMBOL
- using Probe=int (*)(JNIEnv*,int (*)(),bool (*)());auto probe=reinterpret_cast<Probe>(dlsym(source,"ArtDcevmSourceProbeCompilerDiagnostics"));if(!probe){*error="Missing compiler diagnostic profile";return false;}
- int result=probe(env,DiagnosticJitCompilerOptionsState,Debuggable);if(result||env->ExceptionCheck()){*error="Compiler diagnostic profile failed at step "+std::to_string(result);return false;}return true;
+ return true;
 }
 }

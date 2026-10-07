@@ -69,7 +69,7 @@ int main() {
   assert(library);
   Hooks hooks;ConfigureTransactionReaderForTest(hooks);
   std::string error;
-  assert(validation::ConfigureAllocationValidation(library, &error));
+  assert(validation::ConfigureAllocationValidation(MatchedProfileForTest(), &error));
   // The one compressed root must really fit HeapReference32. Other compressed
   // references use an identity map, independent of host address placement.
   void* roots = mmap(reinterpret_cast<void*>(0x20000000), 16384, PROT_READ | PROT_WRITE,

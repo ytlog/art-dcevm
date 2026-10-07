@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/device_compiler_diagnostics.h"
 #include "platform/android13/device_compiler_diagnostics_abi.h"
 #include "platform/android13/native_object_access.h"
@@ -50,10 +51,9 @@ NativeObjectAccess::NativeObjectAccess(JNIEnv*):self_(&thread),supported_(true),
 NativeObjectAccess::~NativeObjectAccess(){assert(self_==&thread&&!transitioned_);}
 void* NativeObjectAccess::Decode(jobject object)const{return object;}
 }
-extern "C" int ArtDcevmSourceProbeCompilerDiagnostics(JNIEnv*,int (*state)(),bool (*debug)()){assert(state()==5&&!debug());return 0;}
-int main(){
+int main(){ auto profile=MatchedProfileForTest();
  compiler.options=&options;options.inline_max=10;options.debuggable=true;void* vtable[7]{};vtable[6]=reinterpret_cast<void*>(Baseline);compiler.vtable=vtable;jit.pool=&thread;
- Hooks hooks;std::string error;JNINativeInterface_ functions{};functions.ExceptionCheck=[](JNIEnv*)->jboolean{return false;};JNIEnv env{&functions};void* self=dlopen(nullptr,RTLD_NOW);assert(g::ConfigureDeviceCompilerDiagnostics(hooks,self,&env,&error));
+ Hooks hooks;std::string error;JNINativeInterface_ functions{};functions.ExceptionCheck=[](JNIEnv*)->jboolean{return false;};JNIEnv env{&functions};assert(!g::ConfigureDeviceCompilerDiagnostics(hooks,g::DeviceProfile{},&error));assert(g::ConfigureDeviceCompilerDiagnostics(hooks,profile,&error));assert(g::DiagnosticJitCompilerOptionsState()==5);
  g::art_method_abi::ArtMethod method{},other{};g::member_decode_abi::Executable executable{},second{};executable.art_method=uintptr_t(&method);second.art_method=uintptr_t(&other);jobject ref=reinterpret_cast<jobject>(&executable),ref2=reinterpret_cast<jobject>(&second);
  assert(g::DiagnosticJitCompilerOptionsState()==5);baseline=true;options.baseline=true;assert(g::DiagnosticJitCompilerOptionsState()==15);baseline=false;options.baseline=false;
  jit_ptr=nullptr;assert(g::DiagnosticForceOptimizedJit(&env,ref)==-1&&g::DiagnosticJitCompilerOptionsState()==-1);jit_ptr=&jit;

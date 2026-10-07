@@ -11,7 +11,6 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 
 namespace artdcevm::android13 {
 namespace {
@@ -83,22 +82,15 @@ bool GuardNativeFieldId(JNIEnv* env, jfieldID field) {
   return GuardRetiredField(DecodeFieldId(field), access.Self(), nullptr);
 }
 
-bool ConfigureMemberDecode(HookEngine& hooks, void* implementation, JNIEnv* jni,
-                           jobject calibration, std::string* error) {
-  using Probe = int (*)(JNIEnv*, jobject, void* (*)(void*), FromReflectedMethod);
-  auto probe = reinterpret_cast<Probe>(dlsym(implementation, "ArtDcevmSourceProbeMemberDecode"));
+bool ConfigureMemberDecode(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if (!profile.Matched()) { *error = "Member decoding requires a matched device profile"; return false; }
   auto decode = reinterpret_cast<FromReflectedMethod>(
       hooks.FindSymbol("libart.so", member_decode_abi::kFromReflectedMethod));
-  if (!probe || !decode) {
-    *error = "Missing member-decode calibration or named ART reflected-method decoder";
+  if (!decode) {
+    *error = "Missing named ART reflected-method decoder";
     return false;
   }
   from_reflected_method = decode;
-  const int result = probe(jni, calibration, DecodeReflectedField, DecodeRunnableExecutable);
-  if (result || jni->ExceptionCheck()) {
-    *error = "Fixed reflected-member declarations failed calibration at step " + std::to_string(result);
-    return false;
-  }
   return true;
 }
 }

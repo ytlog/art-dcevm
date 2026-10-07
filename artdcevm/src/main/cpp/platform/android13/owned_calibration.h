@@ -16,7 +16,10 @@ struct OwnedCalibrationReaders {
 };
 // Bindings must already be prepared, but hooks are not needed. Matching identity
 // is necessary and never substitutes for the public JNI/JVMTI observations.
-// Members accepts the existing SourceAbiProbe (value/wide/counter/compute).
+// Members accepts the SDK EvolutionCalibration (value/wide/counter/compute).
+// Field-copy class/field views are checked against public JNI superclass and
+// JVMTI descriptor/loader/complete declared-field enumeration, independent of
+// the storage checks below.
 bool CalibrateOwnedMembers(const DeviceProfile&,HookEngine&,JNIEnv*,jvmtiEnv*,jobject,
                           const runtime_access_abi::Services&,const OwnedCalibrationReaders&,std::string*);
 // Storage accepts the separate CalibrationFixture, never mutates its instance

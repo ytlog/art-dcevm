@@ -60,8 +60,8 @@ uint64_t Hits() { return hits.load(std::memory_order_relaxed); }
 }
 void SetAsyncDeoptProbe(bool enabled) { SetProbe(enabled); }
 uint64_t AsyncDeoptProbeHits() { return Hits(); }
-bool InstallAsyncDeoptHook(HookEngine& hooks,void* source,std::string* error) {
-  if (!ConfigureStackAccess(hooks,source,error)) return false;
+bool InstallAsyncDeoptHook(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if (!ConfigureStackAccess(hooks,profile,error)) return false;
   auto r=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto cache=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod19GetObsoleteDexCacheEv"));
   auto code=reinterpret_cast<const void* (*)(void*,size_t)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE"));

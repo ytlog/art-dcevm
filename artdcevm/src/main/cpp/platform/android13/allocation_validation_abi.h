@@ -20,7 +20,6 @@ struct State {
   void* old_classes;
   void* new_classes;
 };
-using Probe = bool (*)(void*, const State*);
 inline constexpr int32_t kSlots = 13;
 inline constexpr int32_t kOldInstancesSlot = 9;
 inline constexpr int32_t kOldClassesSlot = 11;

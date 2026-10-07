@@ -20,7 +20,7 @@ bool CheckValidationSymbols(HookEngine& hooks, std::string* error) {
   return true;
 }
 
-bool CheckSourceSymbols(HookEngine& hooks, std::string* error) {
+bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error) {
   if (!CheckValidationSymbols(hooks, error)) return false;
   const char* jvmti[]{cas::kRedefineClasses, cas::kStructuralRedefineClasses,
                       cas::kCollectNewInstances,

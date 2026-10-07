@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/evolution_transaction.h"
 #include "platform/android13/evolution_transaction_abi.h"
 #include "platform/android13/device_dex_input.h"
@@ -67,10 +68,6 @@ bool MarkEvolutionSuspendDeopt(void* t){assert(locked&&suspended&&t==worker);if(
 bool EvolutionSuspendDeoptPending(void* t){assert(!locked&&!suspended);if(pending==t&&!timeout){pending=nullptr;if(!no_progress)frames.clear();}return pending==t;}
 void CancelEvolutionSuspendDeopt(void* t){assert(pending==t);pending=nullptr;++cancels;}
 }
-extern "C" bool ArtDcevmSourceProbeStackAccess(void(*test)(void*)){test(self);return true;}
-extern "C" bool ArtDcevmSourceProbeThreadSuspendScopes(bool(*test)(void*,bool(*)(void*))){return test(self,+[](void* t){return (*static_cast<uint32_t*>(t)>>24)==92;});}
-extern "C" bool ArtDcevmSourceProbeDeviceDexInput(bool(*read)(const unsigned char*,size_t,Map*),void(*destroy)(void*)){unsigned char b[112]{};Map map{};if(!read(b,sizeof(b),&map)||map.begin!=b||map.size!=sizeof(b)||map.data_begin!=b)return false;unsigned char bad[8]{};if(read(bad,8,&map))return false;device_dex_abi::PlatformError e;destroy(&e);return true;}
-extern "C" bool ArtDcevmSourceProbeEvolutionTransaction(bool(*test)(const void*)){alignas(4) uint32_t b[8]{};b[4]=transaction_abi::kCodeInfo|16;b[1]=1;if(!test(b+4))return false;b[1]=2;if(test(b+4))return false;b[4]=16;return !test(b+4);}
 class Hooks:public artdcevm::HookEngine{public:bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char* n)override{
 #define FN(part,f) if(std::strstr(n,part))return reinterpret_cast<void*>(f)
 FN("StackVisitorC2",Construct);FN("WalkStack",Walk);FN("GetMethodEv",GetMethod);FN("GetReturnPcAddr",ReturnPc);FN("artJniMethodStart",Native);FN("artJniMethodEnd",Runnable);FN("ScopedSuspendAllC2",Suspend);FN("ScopedSuspendAllD2",Resume);FN("LookupClass",Lookup);FN("ExclusiveLock",Lock);FN("ExclusiveUnlock",Unlock);FN("ThreadList7ForEach",ForEach);FN("PrivateRegionContainsPc",Private);FN("ContainsPc",Contains);FN("artReadBarrierForRootSlow",Root);FN("GetObsoleteDexCache",Obsolete);FN("GetOatMethodQuickCode",Code);FN("IsDebuggable",Debug);FN("StructurallyRedefineClasses",Engine);FN("DexFileLoader4Open",Open);FN("basic_string",DestroyString);
@@ -79,7 +76,16 @@ if(std::strstr(n,"Runtime9instance"))return &runtime_ptr;if(std::strstr(n,"threa
 void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}};
 void Reset(){assert(!pending&&!locked&&!suspended);frames.clear();enabled=required=false;mode_ok=debug=private_pc=true;busy=timeout=no_progress=engine_narrow=false;engine_result=JVMTI_ERROR_NONE;events.clear();empty_instrumentation_map={};void* map=&empty_instrumentation_map;std::memcpy(worker+transaction_abi::kThreadInstrumentationStack,&map,sizeof(map));}
 void Put(std::vector<unsigned char>& b,size_t off,uint32_t value){std::memcpy(b.data()+off,&value,4);}
-int main(){runtime.thread_list=&list;Hooks hooks;std::string error;void* module=dlopen(nullptr,RTLD_NOW);assert(ConfigureThreadSuspendScopes(hooks,module,&error));assert(starts==1&&ends==1&&constructs==1&&destroys==1);assert(ConfigureStackAccess(hooks,module,&error));if(!ConfigureEvolutionTransactions(hooks,module,&error)){std::fprintf(stderr,"%s\n",error.c_str());assert(false);}assert(dex_destroys==1&&opens==2&&strings==3);
+int main(){ auto profile=MatchedProfileForTest();runtime.thread_list=&list;Hooks hooks;std::string error;assert(!ConfigureThreadSuspendScopes(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureThreadSuspendScopes(hooks,profile,&error));assert(starts==0&&ends==0&&constructs==0&&destroys==0);assert(!ConfigureStackAccess(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureStackAccess(hooks,profile,&error));if(!ConfigureEvolutionTransactions(hooks,profile,&error)){std::fprintf(stderr,"%s\n",error.c_str());assert(false);}assert(dex_destroys==0&&opens==0&&strings==0);
+// Native/Runnable nesting and unsupported states are exercised directly.
+{ NativeSuspendScope outer(self);assert(outer.Supported());
+  { NativeSuspendScope nested(self);assert(nested.Supported()); }
+  { OwnedSuspendAll suspend("owned scope host test");assert(suspended); }
+}
+assert(starts==1&&ends==1&&constructs==1&&destroys==1);
+Native(self);{NativeSuspendScope already_native(self);assert(already_native.Supported());}Runnable(self);
+*reinterpret_cast<uint32_t*>(self)=96u<<24;{NativeSuspendScope unsupported(self);assert(!unsupported.Supported());}
+assert(*reinterpret_cast<uint32_t*>(self)==96u<<24);*reinterpret_cast<uint32_t*>(self)=0;
 Class app{},boot{},old{},parent{},child{},iface{};loaders[&app]=reinterpret_cast<void*>(1);loaders[&old]=reinterpret_cast<void*>(1);parents[&old]=&parent;parents[&child]=&parent;classes["LParent;"]=&parent;classes["LChild;"]=&child;classes["LIface;"]=&iface;
 Method method{},native{},runtime_method{},boot_method{};method.dex_method_index=1;native=method;native.access_flags=0x100;runtime_method.dex_method_index=UINT32_MAX;boot_method=method;declaring[&method]=declaring[&native]=declaring[&runtime_method]=&app;declaring[&boot_method]=&boot;
 alignas(4) uint32_t code[8]{};const void* header=code+4;code[4]=transaction_abi::kCodeInfo|16;code[1]=1;
@@ -110,5 +116,5 @@ Put(bytes,140,224);Put(bytes,224,1);bytes[228]=1;classes["LIface;"]=nullptr;look
 // Once an old interface exists, unresolved replacements force guarding even if superclass retains it.
 auto* table=static_cast<unsigned char*>(low)+128;Put(bytes,136,0);int32_t length=2;std::memcpy(table+8,&length,4);uint32_t ref=uint32_t(reinterpret_cast<uintptr_t>(low)+256);std::memcpy(table+12,&ref,4);old.iftable=uint32_t(reinterpret_cast<uintptr_t>(table));parents[&parent]=reinterpret_cast<void*>(uintptr_t(ref));assert(NeedsEvolutionReceiverGuard(1,&def));classes["LIface;"]=reinterpret_cast<void*>(uintptr_t(ref));assert(!NeedsEvolutionReceiverGuard(1,&def));
 assert(roots.empty()&&starts==ends&&constructs==destroys);
-assert(strings==opens+1&&dex_destroys==opens-1); // standalone string probe and one malformed open
+assert(strings==opens&&dex_destroys==opens); // each transaction open destroys its platform error and accepted DEX
 assert(EvolutionGuardTransactionDiagnostics(-1)==0&&EvolutionCompiledPrecommitDiagnostics(6)==0);munmap(low,4096);std::puts("evolution transaction ownership, drain, barriers, verifier and rollback: passed");}

@@ -8,7 +8,7 @@
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
-#include <dlfcn.h>
+#include "device_profile_fixture.h"
 #include <iostream>
 
 namespace artdcevm::android13 { void* ResolveRetiredFieldToken(uint32_t token); }
@@ -22,7 +22,8 @@ guard::RetiredFieldRegistry registry;
 int retired_field, method, access;
 size_t heap_reads = 0, method_decodes = 0, guard_calls = 0;
 size_t retired_count = 0, id_method_decodes = 0, id_field_decodes = 0;
-bool retired_method = false, probe_rejected = false;
+bool retired_method = false;
+int32_t self_offset = 8;
 void* Method(const void* scope, jobject executable) {
   assert(scope == &access && executable == reinterpret_cast<jobject>(&method));
   ++method_decodes;
@@ -43,14 +44,17 @@ void* Decode(void* self, jobject object) {
   assert(self == &thread_flags && (thread_flags >> 24) == 0);
   ++native_decodes; return object;
 }
-int32_t SelfOffset(size_t pointer_size) { assert(pointer_size == 8); return 8; }
+int32_t SelfOffset(size_t pointer_size) { assert(pointer_size == 8); return self_offset; }
 class Hooks : public artdcevm::HookEngine {
  public:
   bool available = true;
+  const char* missing = nullptr;
+  size_t lookups = 0;
   bool Initialize(std::string*) override { return true; }
   void* FindSymbol(const char* library, const char* symbol) override {
+    ++lookups;
     assert(std::strcmp(library, "libart.so") == 0);
-    if (!available) return nullptr;
+    if (!available || (missing && !std::strcmp(missing, symbol))) return nullptr;
     if (!std::strcmp(symbol, "artJniMethodEnd")) return reinterpret_cast<void*>(Enter);
     if (!std::strcmp(symbol, "artJniMethodStart")) return reinterpret_cast<void*>(Leave);
     if (!std::strcmp(symbol, guard::native_access_abi::kDecodeJObject)) return reinterpret_cast<void*>(Decode);
@@ -90,21 +94,6 @@ bool GuardRetiredMethod(void* member, void* thread, void* result) {
   return retired_method;
 }
 }
-extern "C" int ArtDcevmSourceProbeMemberDecode(JNIEnv*, jobject,
-    void* (*read_field)(void*), void* (*read_method)(const void*, jobject)) {
-  if (probe_rejected) return 7;
-  assert(read_field(&reflected) == &instance_fields.fields[0]);
-  assert(read_method(&access, reinterpret_cast<jobject>(&method)) == &method);
-  return 0;
-}
-extern "C" int ArtDcevmSourceProbeNativeAccess(JNIEnv* env, jobject object,
-    void* (*decode)(JNIEnv*, jobject)) {
-  if (probe_rejected) return 8;
-  const auto before = thread_flags;
-  assert(decode(env, object) == object);
-  assert(thread_flags == before);
-  return 0;
-}
 int main() {
   static_assert(offsetof(FieldArray, fields) == guard::field_copy_abi::kFieldArrayDataOffset);
   klass.ifields = reinterpret_cast<uintptr_t>(&instance_fields);
@@ -124,27 +113,36 @@ int main() {
   assert(heap_reads == before);  // A retired token must not consult the old Class/field array.
   reflected.art_field_index = 0; reflected.access_flags = 0;
   Hooks hooks;
-  JNINativeInterface_ table{}; table.ExceptionCheck = NoException; JNIEnv jni{&table};
-  auto* implementation = dlopen(nullptr, RTLD_NOW);
-  assert(implementation);
+  JNINativeInterface_ table{}; table.ExceptionCheck = NoException;
+  const auto profile = MatchedProfileForTest();
   std::string error;
+  assert(!guard::ConfigureMemberDecode(hooks, guard::DeviceProfile{}, &error));
+  assert(!guard::ConfigureNativeObjectAccess(hooks, guard::DeviceProfile{}, &error));
+  assert(hooks.lookups == 0);
   hooks.available = false;
-  assert(!guard::ConfigureMemberDecode(hooks, implementation, &jni, nullptr, &error));
-  hooks.available = true; probe_rejected = true;
-  assert(!guard::ConfigureMemberDecode(hooks, implementation, &jni, nullptr, &error));
-  assert(error.find("step 7") != std::string::npos);
-  probe_rejected = false;
-  assert(guard::ConfigureMemberDecode(hooks, implementation, &jni, nullptr, &error));
+  assert(!guard::ConfigureMemberDecode(hooks, profile, &error));
+  hooks.available = true;
+  assert(!guard::ConfigureMemberDecode(hooks, guard::DeviceProfile{}, &error));
+  assert(guard::ConfigureMemberDecode(hooks, profile, &error));
   assert(!guard::GuardRunnableExecutable(&access, reinterpret_cast<jobject>(&method)));
   retired_method = true;
   assert(guard::GuardRunnableExecutable(&access, reinterpret_cast<jobject>(&method)));
-  assert(method_decodes == 3 && guard_calls == 2);
+  assert(method_decodes == 2 && guard_calls == 2);
   struct Environment { JNIEnv jni; void* self; void* vm; } environment{{&table}, &thread_flags, nullptr};
   auto executable = guard::member_decode_abi::Executable{};
   executable.art_method = reinterpret_cast<uintptr_t>(&method);
   thread_flags = (guard::native_access_abi::kNative << 24) | 0x45;
-  assert(guard::ConfigureNativeObjectAccess(hooks, implementation, &environment.jni,
-      reinterpret_cast<jobject>(&executable), &error));
+  assert(!guard::ConfigureNativeObjectAccess(hooks, guard::DeviceProfile{}, &error));
+  for (const char* name : {"artJniMethodEnd", "artJniMethodStart",
+       guard::native_access_abi::kDecodeJObject, guard::native_access_abi::kSelfOffset}) {
+    hooks.missing = name;
+    assert(!guard::ConfigureNativeObjectAccess(hooks, profile, &error));
+  }
+  hooks.missing = nullptr;
+  self_offset = 16;
+  assert(!guard::ConfigureNativeObjectAccess(hooks, profile, &error));
+  self_offset = 8;
+  assert(guard::ConfigureNativeObjectAccess(hooks, profile, &error));
   auto previous_in = transitions_in;
   {
     guard::NativeObjectAccess outer(&environment.jni);

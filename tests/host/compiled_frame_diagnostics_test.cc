@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/compiled_frame_diagnostics.h"
 #include "platform/android13/compiled_frame_diagnostics_abi.h"
 #include "platform/android13/member_decode_abi.h"
@@ -36,15 +37,12 @@ void ResetEvolutionSuspendDeopt(){++resets;pending=nullptr;}uint64_t EvolutionSu
 NativeObjectAccess::NativeObjectAccess(JNIEnv*):self_(self),supported_(supported),transitioned_((*reinterpret_cast<uint32_t*>(self)>>24)==92){if(transitioned_)Runnable(self);}
 NativeObjectAccess::~NativeObjectAccess(){if(transitioned_)Native(self);}void* NativeObjectAccess::Decode(jobject object)const{assert(*reinterpret_cast<uint32_t*>(self)==0);return object;}
 }
-extern "C" bool ArtDcevmSourceProbeStackAccess(void(*test)(void*)){test(self);return true;}
-extern "C" bool ArtDcevmSourceProbeThreadSuspendScopes(bool(*test)(void*,bool(*)(void*))){return test(self,+[](void* t){return (*static_cast<uint32_t*>(t)>>24)==92;});}
-extern "C" bool ArtDcevmSourceProbeCompiledFrameDiagnostics(bool(*contains)(const void*,uintptr_t)){alignas(4) uint32_t header[4]{8};auto start=reinterpret_cast<uintptr_t>(header)+4;return !contains(header,start-1)&&contains(header,start)&&contains(header,start+8)&&!contains(header,start+9);}
 class Hooks:public artdcevm::HookEngine{public:bool missing=false;bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char* n)override{if(missing)return nullptr;
 #define FN(part,f) if(std::strstr(n,part))return reinterpret_cast<void*>(f)
 FN("StackVisitorC2",Construct);FN("WalkStack",Walk);FN("GetMethodEv",GetMethod);FN("artJniMethodStart",Native);FN("artJniMethodEnd",Runnable);FN("ScopedSuspendAllC2",SuspendAll);FN("ScopedSuspendAllD2",ResumeAll);FN("SuspendThreadByPeer",SuspendPeer);FN("ThreadList6Resume",Resume);FN("OatQuickMethodHeader8Contains",Contains);FN("JitCodeCache10ContainsPc",Cached);FN("GetOatMethodQuickCode",Code);
 #undef FN
 return nullptr;}void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}};
-int main(){runtime.thread_list=&list;Hooks hooks;std::string error;void* module=dlopen(nullptr,RTLD_NOW);assert(ConfigureThreadSuspendScopes(hooks,module,&error));assert(ConfigureStackAccess(hooks,module,&error));hooks.missing=true;assert(!ConfigureCompiledFrameDiagnostics(hooks,module,&error));hooks.missing=false;assert(ConfigureCompiledFrameDiagnostics(hooks,module,&error));
+int main(){ auto profile=MatchedProfileForTest();runtime.thread_list=&list;Hooks hooks;std::string error;assert(!ConfigureThreadSuspendScopes(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureThreadSuspendScopes(hooks,profile,&error));assert(!ConfigureStackAccess(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureStackAccess(hooks,profile,&error));hooks.missing=true;assert(!ConfigureCompiledFrameDiagnostics(hooks,profile,&error));hooks.missing=false;assert(!ConfigureCompiledFrameDiagnostics(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureCompiledFrameDiagnostics(hooks,profile,&error));
 Method caller{},callee{},other{};Executable a{},b{};a.art_method=reinterpret_cast<uint64_t>(&caller);b.art_method=reinterpret_cast<uint64_t>(&callee);jobject peer=reinterpret_cast<jobject>(target),executable=reinterpret_cast<jobject>(&a),second=reinterpret_cast<jobject>(&b);
 alignas(4) uint32_t machine[32]{20};const void* header=machine;code=machine+1;uintptr_t pc=reinterpret_cast<uintptr_t>(code);caller.entry_point=reinterpret_cast<uint64_t>(code);
 missing_target=true;int before=resumes;assert(DiagnosticAotFrameState(nullptr,peer,executable)==-1&&resumes==before);timed_out=true;assert(DiagnosticJitActiveFrameState(nullptr,peer,executable,second)==-2&&resumes==before);assert(DiagnosticAotSuspendDeoptProbe(nullptr,peer,executable)==-2);missing_target=timed_out=false;

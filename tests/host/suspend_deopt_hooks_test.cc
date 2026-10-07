@@ -4,7 +4,6 @@
 
 #include <cassert>
 #include <cstring>
-#include <dlfcn.h>
 
 using namespace artdcevm::android13;
 namespace {
@@ -51,15 +50,13 @@ class FakeHooks final : public artdcevm::HookEngine {
 }
 
 int main() {
-  void* implementation = dlopen(nullptr, RTLD_NOW);
-  assert(implementation);
   FakeHooks hooks;
   std::string error;
   hooks.missing = true;
-  assert(!InstallSuspendDeoptHook(hooks, implementation, &error));
+  assert(!InstallSuspendDeoptHook(hooks, &error));
   assert(!hooks.proxy);
   hooks.missing = false;
-  assert(InstallSuspendDeoptHook(hooks, implementation, &error));
+  assert(InstallSuspendDeoptHook(hooks, &error));
   int target = 0, other = 0;
   hooks.proxy(&target);
   assert(original_calls == 1 && finish_calls == 0);
@@ -81,5 +78,4 @@ int main() {
   hooks.proxy(&target);
   assert(finish_calls == 1);
   assert(context_calls == 1 && EvolutionSuspendDeoptHits() == 1);
-  dlclose(implementation);
 }

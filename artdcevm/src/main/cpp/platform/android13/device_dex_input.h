@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
 #include "platform/android13/validation_metadata_abi.h"
 #include <cstddef>
@@ -31,5 +32,5 @@ class DeviceDexInput {
  private:
   device_dex_abi::OwnedPointer dex_;
 };
-bool ConfigureDeviceDexInputs(HookEngine&,void* implementation,std::string* error);
+bool ConfigureDeviceDexInputs(HookEngine&,const DeviceProfile& profile,std::string* error);
 }

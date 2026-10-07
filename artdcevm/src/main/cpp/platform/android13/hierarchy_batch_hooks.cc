@@ -45,9 +45,9 @@ jvmtiError RunProxy(void* driver) {
 }
 }  // namespace
 
-bool InstallHierarchyBatchHooks(HookEngine& hooks, void* implementation,
+bool InstallHierarchyBatchHooks(HookEngine& hooks, const DeviceProfile& profile,
                                 std::string* error) {
-  if (!ConfigureHierarchyAllocation(hooks, implementation, error)) return false;
+  if (!ConfigureHierarchyAllocation(hooks, profile, error)) return false;
   void* allocate_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateSubtree);
   void* run_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kRedefineRun);
   void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);

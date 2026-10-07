@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the opt-in source-engine APK and test ABI, method and field evolution."""
+"""Install the enhancement APK and test ABI, method and field evolution."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -19,8 +19,10 @@ sdk = next(line.split('=', 1)[1] for line in (ROOT / 'local.properties').read_te
 adb = str(Path(sdk) / 'platform-tools/adb')
 apk = ROOT / 'app/build/outputs/apk/debug/app-debug.apk'
 with zipfile.ZipFile(apk) as archive:
-    if 'lib/arm64-v8a/libartdcevm_source13.so' not in archive.namelist():
-        p.error('Build the APK with -PsourceEngine13 first')
+    if 'lib/arm64-v8a/libartdcevm.so' not in archive.namelist():
+        p.error('Build the arm64 enhancement APK first')
+    if any('libartdcevm_source' in name for name in archive.namelist()):
+        p.error('Unexpected standalone source-engine library in APK')
 out = ROOT / 'build/evidence/source-engine' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 out.mkdir(parents=True)
 meta = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),

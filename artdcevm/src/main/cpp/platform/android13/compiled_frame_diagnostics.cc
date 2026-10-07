@@ -12,7 +12,6 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 using Reason=compiled_frame_abi::SuspendReason;
@@ -63,12 +62,12 @@ int DiagnosticAotFrameState(JNIEnv* env,jobject peer,jobject executable){return 
 int DiagnosticJitActiveFrameState(JNIEnv* env,jobject peer,jobject caller,jobject callee){return Scan(env,peer,caller,callee,Kind::kJit);}
 int DiagnosticAotSuspendDeoptProbe(JNIEnv* env,jobject peer,jobject executable){return Scan(env,peer,executable,nullptr,Kind::kSuspend);}
 uint64_t DiagnosticAotSuspendDeoptHits(bool reset){if(reset){ResetEvolutionSuspendDeopt();SetAsyncDeoptProbe(false);}return EvolutionSuspendDeoptHits();}
-bool ConfigureCompiledFrameDiagnostics(HookEngine& hooks,void* implementation,std::string* error){
+bool ConfigureCompiledFrameDiagnostics(HookEngine& hooks,const DeviceProfile& profile,std::string* error){
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define GET(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name));if(!dst){*error=std::string("Missing named compiled-frame diagnostic: ")+name;return false;}
  GET(suspend,compiled_frame_abi::kSuspend);GET(resume,compiled_frame_abi::kResume);GET(contains,compiled_frame_abi::kContains);
  GET(cache_contains,"_ZNK3art3jit12JitCodeCache10ContainsPcEPKv");GET(oat_code,"_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE");
 #undef GET
- using Probe=bool(*)(bool(*)(const void*,uintptr_t));auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeCompiledFrameDiagnostics"));
- if(!RuntimeInstance()||!probe||!probe(contains)){*error="Compiled-frame diagnostic declaration calibration failed";return false;}return true;
+ if(!RuntimeInstance()){*error="Missing compiled-frame diagnostic Runtime";return false;}return true;
 }
 }

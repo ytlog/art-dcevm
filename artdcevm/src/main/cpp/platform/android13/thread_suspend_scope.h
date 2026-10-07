@@ -1,9 +1,10 @@
 #pragma once
+#include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
 #include "platform/android13/thread_suspend_scope_abi.h"
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureThreadSuspendScopes(HookEngine&,void* implementation,std::string* error);
+bool ConfigureThreadSuspendScopes(HookEngine&,const DeviceProfile& profile,std::string* error);
 // Runnable -> Native releases shared mutator access before SuspendAll. Native
 // callers stay Native. The original supported state is restored on destruction.
 class NativeSuspendScope {

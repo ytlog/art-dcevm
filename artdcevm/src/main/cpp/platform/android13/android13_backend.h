@@ -16,7 +16,7 @@ class Android13Backend final : public RuntimeBackend {
   std::string ErrorName(int error) const override;
   int EnableValidationHooks() override;
   int EnableStandardRedefineRouting() override;
-  int InitializeEvolution(JNIEnv* jni, const char* module_path, jobject calibration) override;
+  int InitializeEvolution(JNIEnv* jni, jobject calibration) override;
   jvmtiError RouteRedefinition(jvmtiEnv* caller, jint count,
                                 const jvmtiClassDefinition* definitions);
   using RedefineFn = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);

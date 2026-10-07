@@ -103,8 +103,8 @@ template <typename T> struct ReflectionField {
   }
 };
 }
-bool InstallRetiredFieldHooks(HookEngine& hooks, void* library, std::string* error) {
-  if (!ConfigureReflectedFieldVisit(hooks,library,error)) return false;
+bool InstallRetiredFieldHooks(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if (!ConfigureReflectedFieldVisit(hooks,profile,error)) return false;
   std::vector<Entry> entries{
     {cas::kRetiredFieldHooks[0], reinterpret_cast<void*>(GetField), &original_field},
     {cas::kRetiredFieldHooks[1], reinterpret_cast<void*>(VisitField), &original_visit},

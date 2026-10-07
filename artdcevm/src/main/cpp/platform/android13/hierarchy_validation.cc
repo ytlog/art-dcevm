@@ -77,12 +77,13 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
   if(*changed && !HasHierarchyAllocationContext()) { *error="The device transaction hook did not establish allocation context";return JVMTI_ERROR_NOT_AVAILABLE; }
   return JVMTI_ERROR_NONE;
 }
-bool ConfigureHierarchyValidation(HookEngine& hooks,void* implementation,std::string* error) {
+bool ConfigureHierarchyValidation(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()){*error="Hierarchy validation requires a matched device profile";return false;}
   auto find=reinterpret_cast<FindClass>(hooks.FindSymbol("libart.so",cas::kFindClass));
   if(!find || !RuntimeClassLinker()) {
     *error="Missing named hierarchy resolver or class linker";return false;
   }
-  if(!ConfigureHandleRootScopes(hooks,implementation,error)) return false;
+  if(!ConfigureHandleRootScopes(hooks,profile,error)) return false;
   find_class=find;
   return true;
 }

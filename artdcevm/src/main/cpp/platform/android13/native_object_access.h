@@ -1,11 +1,11 @@
 #pragma once
 #include "api/hook_engine.h"
+#include "platform/android13/device_profile.h"
 #include <jni.h>
 #include <string>
 
 namespace artdcevm::android13 {
-bool ConfigureNativeObjectAccess(HookEngine& hooks, void* implementation, JNIEnv* env,
-                                 jobject calibration, std::string* error);
+bool ConfigureNativeObjectAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error);
 // The current thread is already Runnable and holds the mutator lock.
 void* DecodeRunnableObject(void* thread, jobject object);
 // JNI native and already-runnable entrypoints only. Unsupported states are

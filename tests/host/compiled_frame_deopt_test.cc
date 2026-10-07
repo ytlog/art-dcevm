@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/stack_access.h"
 #include "platform/android13/async_deopt_hooks.h"
 #include "platform/android13/selective_deopt.h"
@@ -54,7 +55,6 @@ bool Debuggable(const void*){return oat_debug;}
 bool Original(const void*,uintptr_t){++original_calls;return original_result;}
 namespace artdcevm::android13 {void* CurrentHierarchyThread(){return current;}bool ReceiverGuardRequired(){return required;}
 void* ReadHeapReference(void* object,size_t offset,bool){assert(offset==offsetof(Class,class_loader));return loaders.at(object);}}
-extern "C" bool ArtDcevmSourceProbeStackAccess(void (*test)(void*)){void* probe_thread=reinterpret_cast<void*>(0x9999);stacks[probe_thread]={};test(probe_thread);return true;}
 struct Context {virtual ~Context(){assert(locked);++contexts_deleted;events.push_back("delete");}};
 void* MakeContext(){assert(locked);events.push_back("context");return new Context;}
 void Lock(void* mutex,void* self){assert(!locked&&mutex==lock_ptr&&self==current);locked=true;events.push_back("lock");}
@@ -63,10 +63,10 @@ void ForEach(void* list,void (*fn)(void*,void*),void* data){assert(locked&&list=
 void Instrument(void* receiver,void* thread,bool force){assert(locked&&!force&&receiver==&runtime.instrumentation);events.push_back(thread==thread1?"instrument1":"instrument2");}
 uintptr_t ReturnPc(const void* visitor){return Active(static_cast<const stack_abi::Visitor*>(visitor)).return_pc;}
 uint8_t* FlagAddr(const void* visitor){return &Active(static_cast<const stack_abi::Visitor*>(visitor)).debug;}
-extern "C" bool ArtDcevmSourceProbeSelectiveDeopt(selective_abi::Frame* (*find)(void*,uintptr_t),void* value,void* instrumentation){
- assert(value==&runtime&&instrumentation==&runtime.instrumentation);selective_abi::MapNode root{},left{},right{};
+void CheckSelectiveTree(){
+ auto find=selective_abi::FindFrame;selective_abi::MapNode root{},left{},right{};
  root.key=7;left.key=3;right.key=11;root.base.left=&left.base;root.base.right=&right.base;
- selective_abi::Tree tree{&left,&root.base,3};assert(find(&tree,3)==&left.value&&find(&tree,11)==&right.value&&find(&tree,7)==&root.value&&!find(&tree,6));return true;}
+ selective_abi::Tree tree{&left,&root.base,3};assert(find(&tree,3)==&left.value&&find(&tree,11)==&right.value&&find(&tree,7)==&root.value&&!find(&tree,6));}
 class Hooks:public artdcevm::HookEngine {public:
  bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char* symbol)override{
  if(std::strstr(symbol,"StackVisitorC2"))return reinterpret_cast<void*>(Construct);
@@ -89,7 +89,7 @@ class Hooks:public artdcevm::HookEngine {public:
  return nullptr;}
  void* Install(void* target,void* replacement,void** original,std::string*)override{assert(target==reinterpret_cast<void*>(Original));*original=target;proxy=reinterpret_cast<bool (*)(const void*,uintptr_t)>(replacement);return this;}
  bool Remove(void*,std::string*)override{return true;}};
-int main(){Hooks hooks;std::string error;void* self=dlopen(nullptr,RTLD_NOW);assert(InstallAsyncDeoptHook(hooks,self,&error));assert(ConfigureSelectiveDeopt(hooks,self,&error));
+int main(){ auto profile=MatchedProfileForTest();CheckSelectiveTree();Hooks hooks;std::string error;assert(InstallAsyncDeoptHook(hooks,profile,&error));assert(!ConfigureSelectiveDeopt(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureSelectiveDeopt(hooks,profile,&error));
  void* low=mmap(reinterpret_cast<void*>(0x20000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);assert(low==reinterpret_cast<void*>(0x20000000));
  auto* cache=new(low)Cache{};obsolete_cache=reinterpret_cast<Cache*>(static_cast<unsigned char*>(low)+64);new(obsolete_cache)Cache{};
  Class app{},boot{};Method method{},native{},runtime_method{},boot_method{};method.dex_method_index=1;native=method;native.access_flags=0x100;runtime_method.dex_method_index=UINT32_MAX;boot_method=method;

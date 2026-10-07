@@ -1,10 +1,10 @@
 #pragma once
 #include "api/hook_engine.h"
+#include "platform/android13/device_profile.h"
 #include <jni.h>
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureRuntimeAccess(HookEngine& hooks, void* implementation, std::string* error);
-bool CalibrateJniIdDecode(void* implementation, JNIEnv* env, jobject calibration, std::string* error);
+bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error);
 void* RuntimeClassLinker();
 void* RuntimeInstrumentation();
 void* RuntimeInstance();

@@ -27,8 +27,8 @@ namespace artdcevm::android13 {void* ReadHeapReference(void* p,size_t at,bool){r
 int main(){
  arena=static_cast<unsigned char*>(mmap(reinterpret_cast<void*>(0x24000000),1<<20,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0));assert(arena!=MAP_FAILED&&uintptr_t(arena)+(1<<20)<=UINT32_MAX);
  Hooks hooks;g::DeviceProfile profile;g::TransactionMetadataReader reader;std::string error;assert(!reader.Configure(hooks,profile,&error));assert(g::MatchDeviceProfile(&profile,&error));assert(reader.Configure(hooks,profile,&error));
- hooks.missing_mirror=true;assert(!g::ConfigureValidationMetadata(hooks,nullptr,&error));hooks.missing_mirror=false;
- assert(g::ConfigureValidationMetadata(hooks,nullptr,&error));
+ hooks.missing_mirror=true;assert(!g::ConfigureValidationMetadata(hooks,&error));hooks.missing_mirror=false;
+ assert(g::ConfigureValidationMetadata(hooks,&error));
  auto* metadata_class=New<Class>();auto* metadata_cache=New<g::validation_abi::DexCachePrefix>();
  unsigned char dex_bytes[0x80]{},compact_data[256]{};
  g::validation_abi::DexMappingPrefix dex_mapping{nullptr,dex_bytes,sizeof(dex_bytes),compact_data,sizeof(compact_data)};

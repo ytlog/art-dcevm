@@ -18,8 +18,6 @@ struct Cache {
 struct alignas(8) TypePair { uint32_t object, index; };
 struct alignas(16) NativePair { uintptr_t object, index; };
 struct Target { void* owner; void* klass; void* cache; bool structural; };
-using ProbeTarget=bool(*)(void*,size_t,const Target*);
-using ProbeCache=bool(*)(void*);
 static_assert(sizeof(Vector)==24 && sizeof(Cache)==108);
 static_assert(offsetof(Cache,types)==64 && offsetof(Cache,num_types)==100);
 static_assert(sizeof(TypePair)==8 && sizeof(NativePair)==16);

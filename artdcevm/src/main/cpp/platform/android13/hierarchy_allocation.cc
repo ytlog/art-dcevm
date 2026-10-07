@@ -225,7 +225,8 @@ void* HierarchyVerificationView::Resolve(const char* descriptor,void* loader,boo
   return allow_batch && view && batch?batch->Find(descriptor,loader):nullptr;
 }
 uint64_t HierarchyDiagnostics(int index) { return counters[index>=0 && index<4?index:4].load(); }
-bool ConfigureHierarchyAllocation(HookEngine& hooks,void*,std::string* error) {
+bool ConfigureHierarchyAllocation(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()){*error="Hierarchy allocation requires a matched device profile";return false;}
   auto find=reinterpret_cast<Find>(hooks.FindSymbol("libart.so",cas::kFindClass));
   auto failure=reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kRecordFailure));
   auto root=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));

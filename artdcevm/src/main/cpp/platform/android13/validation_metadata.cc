@@ -50,7 +50,7 @@ bool ReadValidationMetadata(void* definition, ValidationMetadata* output) {
   return true;
 }
 
-bool ConfigureValidationMetadata(HookEngine& hooks, void*, std::string* error) {
+bool ConfigureValidationMetadata(HookEngine& hooks, std::string* error) {
   auto getter = reinterpret_cast<GetMirrorClass>(hooks.FindSymbol("libopenjdkjvmti.so", cas::kGetMirrorClass));
   if (!getter) { *error = "Missing named ART class getter"; return false; }
   get_mirror_class = getter;return true;

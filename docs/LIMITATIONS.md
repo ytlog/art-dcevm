@@ -1,8 +1,10 @@
 # Class redefine 未支持与未充分验证的能力
 
-记录时间：2026-10-07。目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前完整源码演进回归 APK SHA-256：`f3087a3ae14d68c72dcf8d5e4dfc6092a0089090e1573c5a8ac86a33facbab5b`。
+记录时间：2026-10-07。已适配目标设备：`DEVICE_001`，Android 13 / API 33 / arm64。当前是默认 NDK 单增强库与命名设备函数/自有 Hook 代理架构；独立源码引擎、AOSP 构建与 `-PsourceEngine13` 已删除。严格设备 Build ID 与公开 JNI/JVMTI 自有校准是完整演进的启用条件。
 
-本清单只讨论虚拟机的 class redefine / schema evolution。当前 APK 在两种 Hook 顺序下均通过完整回归，主要重定义由独立 Agent 走标准 JVMTI 入口，各完成 31 次结构提交和 135 项修饰符检查：[validation-first](../build/evidence/source-engine/20261006T153859Z/run.json)、[source-first](../build/evidence/source-engine/20261006T154308Z/run.json)。这支持“当前设备上开发阶段初步可用”的判断，不代表任意类变更都已实现或验证。以下项目中的历史专项可能来自旧 APK，不能直接当作当前 APK 的完整长期验收。
+无源码首版 APK `b051…` 已通过标准入口六种组合及完整 `source-first` 回归；后续最终测试仍在进行，最终哈希和验收结论以 [VERIFICATION.md](VERIFICATION.md) 为准。此处能力限制不会因构建迁移自动消失。
+
+迁移前完整源码演进 APK `f3087a3ae14d68c72dcf8d5e4dfc6092a0089090e1573c5a8ac86a33facbab5b` 曾在两种 Hook 顺序下各完成 31 次结构提交和 135 项修饰符检查：[validation-first](../build/evidence/source-engine/20261006T153859Z/run.json)、[source-first](../build/evidence/source-engine/20261006T154308Z/run.json)。下面引用的旧专项是历史语义证据，不能作为最终无源码 APK 的完整长期验收，也不代表任意类变更均已实现。
 
 ## 明确不支持或会拒绝的情况
 
@@ -12,8 +14,8 @@
 | 添加方法 `final`，但已有加载的子类覆写它 | 返回 71，事务不提交。这是已验证的冲突拒绝，不应强行提交。[专项](../build/evidence/source-engine/20261006T093015Z/probe.json) | 若需支持，必须定义并实现现存子类及旧调用点的一致语义。 |
 | 添加类 `final`，但已有加载的子类 | 返回 70，事务不提交。这是类关系冲突。[能力说明](README.md#能力与版本选择) | 同上，不能仅改修饰符位。 |
 | 类或方法变为 abstract 后，存活的直属实例或已加载子类将继承未实现的抽象方法 | 事务返回 71，旧定义不变。[能力说明](README.md#能力与版本选择) | 需要先消除依赖，或设计安全的对象迁移和分派语义。 |
-| 未经私有符号和 ABI 验证的 ART 构建 | 不满足 Android 13 / arm64 私有路径或缺少必需符号的设备进入公开 JVMTI 后端：可用标准方法体替换，ART 暴露结构扩展时可新增成员；完整源码演进不可用。API 34/35/36 x86_64 模拟器已通过基础回归。[设备报告](../build/evidence/compatibility/20261007/) | 对每个新版本建立独立符号和 ABI 适配、布局探测及 arm64 设备回归，才可对齐现有 Android 13 类演进能力。 |
-| 未打包或未启用源码演进模块时的 `EVOLVE_SCHEMA` | 明确返回不可用，不自动退化成较弱的重定义。[公共 API](README.md#能力与版本选择) | 构建时加入 `-PsourceEngine13`，运行时调用 `enableEvolution()`。 |
+| 未匹配设备 Build ID 或未通过命名符号/自有校准的 ART 构建 | 其他版本/ABI 使用公开 JVMTI 后端；Android 13 / arm64 未匹配配置或初始化校准失败时拒绝完整演进，应用可显式附加公开代理：可用标准方法体替换，ART 暴露结构扩展时可新增成员；完整演进不可用。API 34/35/36 x86_64 模拟器已通过基础回归。[设备报告](../build/evidence/compatibility/20261007/) | 对每个新版本建立独立 Build ID Profile、命名符号和固定声明适配、自有行为校准及 arm64 设备回归，才可对齐现有 Android 13 类演进能力。 |
+| 完整演进初始化失败或尚未初始化时的 `EVOLVE_SCHEMA` | 明确返回不可用，不自动退化成较弱的重定义。[公共 API](README.md#能力与版本选择) | 在已适配设备调用 `DcevmRuntime.initialize(context)` 并处理初始化错误；内部诊断使用 `enableEvolution()`。不需要源码构建属性。 |
 
 ## 已有部分实现，但仍缺关键验证
 
@@ -26,7 +28,7 @@
 | 成员修饰符的全部组合与旧权限缓存 | 单项转换和若干组合已测；其他组合、旧解析访问权限收窄的全部调用形式尚未验证。总括标志 `memberModifierChange=false`。[当前状态](../build/evidence/status.json) | 对合法组合及旧字节码、反射、JNI、MethodHandle、VarHandle 和 JIT 调用逐项验证。 |
 | 存活直属实例参与类 `abstract` 切换时的优化执行 | 当前使用持续到进程结束的进程级解释执行回退；语义专项已测，但尚未恢复优化执行。[能力说明](README.md#能力与版本选择) | 在旧实例、子类、GC 和编译调用同时存在时实现并验证安全的有限范围回退或恢复策略。 |
 | 元数据完整回收与长期 ClassLoader 生命周期 | 两种 Hook 顺序各通过 256 轮混合字段/方法退役、后台 GC 和类加载器卸载；其他缓存引用形式及更长时间仍未覆盖。总括标志 `metadataReclamation=false`。[证据一](../build/evidence/source-engine/20261006T044759Z/probe.json)、[证据二](../build/evidence/source-engine/20261006T044857Z/probe.json) | 扩展旧反射、JNI 与句柄保活/释放矩阵，做长期内存与卸载验证。 |
-| 长期运行及前台交互下的稳定性 | 旧 APK 有前台绘制和 1000 次提交证据，也有过 ART 恢复路径崩溃；当前 APK 的完整 class redefine 回归已通过，但尚未完成对应时长的实体屏幕验收。[历史记录](README.md) | 用当前 APK 做长时结构提交、实体屏幕绘制、焦点变化和多轮独立启动验证，记录崩溃与资源趋势。 |
+| 长期运行及前台交互下的稳定性 | 旧 APK 有前台绘制和 1000 次提交证据，也有过 ART 恢复路径崩溃；历史 APK 的完整 class redefine 回归已通过，最终无源码 APK 仍须记录验收，但尚未完成对应时长的实体屏幕验收。[历史记录](README.md) | 用当前 APK 做长时结构提交、实体屏幕绘制、焦点变化和多轮独立启动验证，记录崩溃与资源趋势。 |
 | 失效接收者的绑定 `MethodHandle` 异常语义 | ART 在已测形态会抛 `IllegalStateException`；是否应统一为其他链接异常尚需审查。[现有说明](README.md) | 对照目标语义，覆盖新旧句柄和 JIT 调用后决定是否修改。 |
 
 ## 使用这些记录的原则

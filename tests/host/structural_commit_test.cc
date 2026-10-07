@@ -9,7 +9,6 @@
 #include "platform/symbols/android13.h"
 #include <cassert>
 #include <cstring>
-#include <dlfcn.h>
 #include <iostream>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -66,8 +65,10 @@ void Replace(void* self,const void* raw) {
   assert(At(holder_array,4)==new_class[0]);
 }
 struct Hooks:HookEngine {
+ const char* missing=nullptr;
  bool Initialize(std::string*) override {return true;}
  void* FindSymbol(const char*,const char* name) override {
+  if(missing&&std::strstr(name,missing))return nullptr;
   if(std::strcmp(name,"artReadBarrierForRootSlow")==0)return reinterpret_cast<void*>(+[](void* p)->void*{return reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(p)));});
   if(std::strcmp(name,"_ZN3art7Runtime9instance_E")==0) return &instance;
   if(std::strcmp(name,"_ZN3art5Locks17thread_list_lock_E")==0) return &mutex;
@@ -123,7 +124,9 @@ void DeoptimizeApplicationFrames() {events.push_back("deopt");}
 }
 int main() {
  void* mapped=mmap(reinterpret_cast<void*>(0x20000000),1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);assert(mapped!=MAP_FAILED && reinterpret_cast<uintptr_t>(mapped)+1024*1024<=UINT32_MAX);heap=static_cast<unsigned char*>(mapped);
- Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;assert(ConfigureStructuralCommit(hooks,dlopen(nullptr,RTLD_NOW),&error));
+ Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;
+ for(const char* name:{"Runtime9instance_E","thread_list_lock_E","SetStatusLocked","SetObsoleteClass","InvalidateAllCompiledCode","DeoptimizeEverything","ExclusiveLock","ExclusiveUnlock","ThreadList7ForEach","InterpreterCache5Clear","ReplaceReferences"}){hooks.missing=name;assert(!ConfigureStructuralCommit(hooks,&error)&&!error.empty());}
+ hooks.missing=nullptr;assert(ConfigureStructuralCommit(hooks,&error));
  for(bool abstract:{false,true}) for(bool have_jit:{false,true}) {
   Setup(abstract);jit=have_jit?reinterpret_cast<void*>(17):nullptr;Commit();
   std::vector<std::string> expected{"mappings","status","static0","static1","instance","methods0","methods1","reflective","deopt","replace","retain0","retain1"};

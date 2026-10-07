@@ -6,7 +6,6 @@
 #include "platform/android13/handle_root_scope.h"
 #include <cstring>
 #include <cstdlib>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 void** singleton; void** list_lock;
@@ -55,7 +54,8 @@ void DeoptimizeApplicationFrames() {
   for_each(threads,VisitThread,instrumentation);
   unlock(*list_lock,self);
 }
-bool ConfigureSelectiveDeopt(HookEngine& hooks,void* source,std::string* error) {
+bool ConfigureSelectiveDeopt(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define GET(dst,type,name) dst=reinterpret_cast<type>(hooks.FindSymbol("libart.so",name))
   GET(singleton,void**,"_ZN3art7Runtime9instance_E");
   GET(list_lock,void**,"_ZN3art5Locks17thread_list_lock_E");
@@ -68,14 +68,9 @@ bool ConfigureSelectiveDeopt(HookEngine& hooks,void* source,std::string* error) 
   GET(flag_addr,decltype(flag_addr),"_ZNK3art12StackVisitor27GetShouldDeoptimizeFlagAddrEv");
   GET(root,decltype(root),"artReadBarrierForRootSlow");
 #undef GET
-  using Probe=bool (*)(selective_abi::Frame* (*)(void*,uintptr_t),void*,void*);
-  auto probe=reinterpret_cast<Probe>(dlsym(source,"ArtDcevmSourceProbeSelectiveDeopt"));
-  if (!singleton || !list_lock || !lock || !unlock || !for_each || !instrument || !make_context || !return_pc || !flag_addr || !root || !probe) {
+  if (!singleton || !*singleton || !list_lock || !lock || !unlock || !for_each || !instrument || !make_context || !return_pc || !flag_addr || !root) {
     *error="Missing named application frame deoptimization functions";return false;
   }
-  void* runtime=*singleton;
-  void* instrumentation=static_cast<unsigned char*>(runtime)+offsetof(selective_abi::RuntimePrefix,instrumentation);
-  if (!probe(selective_abi::FindFrame,runtime,instrumentation)) { *error="Selective deopt fixed declaration calibration failed";return false; }
   return true;
 }
 }

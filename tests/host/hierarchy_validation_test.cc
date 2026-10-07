@@ -1,3 +1,5 @@
+#include "device_profile_fixture.h"
+#include "handle_scope_fixture.h"
 #include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/handle_root_scope_abi.h"
@@ -53,6 +55,11 @@ void Move() {
   for(auto* value:old)std::memset(value,0xa5,128);
 }
 void* Current() { return thread_bytes; }
+bool bad_walker=false,bad_peer=false;
+void* Peer(void*){return bad_peer?nullptr:nodes[Base];}
+void WalkHandles(void* t,android13::handle_root_abi::RootVisitor* v,uint32_t id){if(!bad_walker)HostHandleScopeVisitRoots(t,v,id);}
+void Runnable(void* t){*static_cast<uint32_t*>(t)=0;}
+void Native(void* t){*static_cast<uint32_t*>(t)=92u<<24;}
 uintptr_t Find(void* receiver,void* self,const char* descriptor,void* loader_slot) {
   assert(receiver==linker && self==thread_bytes && Top());++finds;
   assert(Read<uint32_t>(loader_slot)==Ref(nodes[Loader]));
@@ -71,6 +78,10 @@ class Hooks:public HookEngine {
   void* FindSymbol(const char* library,const char* symbol) override {
     assert(std::strcmp(library,"libart.so")==0);
     if(std::strstr(symbol,"CurrentFromGdb"))return missing?nullptr:reinterpret_cast<void*>(Current);
+    if(std::strstr(symbol,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(WalkHandles);
+    if(std::strstr(symbol,"GetPeerFromOtherThread"))return reinterpret_cast<void*>(Peer);
+    if(!std::strcmp(symbol,"artJniMethodStart"))return reinterpret_cast<void*>(Native);
+    if(!std::strcmp(symbol,"artJniMethodEnd"))return reinterpret_cast<void*>(Runnable);
     if(std::strstr(symbol,"9FindClass"))return reinterpret_cast<void*>(Find);
     if(std::strstr(symbol,"IsInSamePackage"))return reinterpret_cast<void*>(SamePackage);
     if(std::strstr(symbol,"VisitClasses"))return reinterpret_cast<void*>(Visit);
@@ -90,11 +101,6 @@ namespace artdcevm::android13 {
 bool ReceiverGuardEnabled(){return guard;}
 bool HasHierarchyAllocationContext(){return context;}
 }
-extern "C" int ArtDcevmSourceCalibrateHandleRootScopes(int(*calibrate)(void*)){return calibrate(thread_bytes);}
-extern "C" int ArtDcevmSourceProbeHandleRootScope(void* thread,void* scope,uint32_t count){
-  assert(thread==thread_bytes);if(!scope)return 0;assert(Top()==scope);auto h=Read<Header>(scope);assert(h.count==static_cast<int32_t>(count));
-  for(size_t i=0;i<count;++i)assert(Read<uint32_t>(scope,12+i*4)==0);return 0;
-}
 int main(){
   arena=static_cast<unsigned char*>(mmap(reinterpret_cast<void*>(0x20000000),1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0));
   assert(arena!=MAP_FAILED && reinterpret_cast<uintptr_t>(arena)+1024*1024<=UINT32_MAX);
@@ -107,8 +113,12 @@ int main(){
   Put<int32_t>(nodes[InterfaceTable],8,2);Put<uint32_t>(nodes[InterfaceTable],12,Ref(nodes[OldIface]));
   Hooks hooks;std::string error;void* implementation=dlopen(nullptr,RTLD_NOW);assert(implementation);
   assert(android13::ConfigureLoadedClassGuards(hooks,linker,&error));hooks.missing=true;
-  assert(!android13::ConfigureHierarchyValidation(hooks,implementation,&error));hooks.missing=false;
-  assert(android13::ConfigureHierarchyValidation(hooks,implementation,&error));assert(!Top());
+  assert(!android13::ConfigureHierarchyValidation(hooks,MatchedProfileForTest(),&error));hooks.missing=false;
+  android13::DeviceProfile unmatched;assert(!android13::ConfigureHandleRootScopes(hooks,unmatched,&error));
+  Put<uint32_t>(thread_bytes,0,91u<<24);assert(!android13::ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));
+  Put<uint32_t>(thread_bytes,0,92u<<24);bad_walker=true;assert(!android13::ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));assert(!Top()&&Read<uint32_t>(thread_bytes,0)==92u<<24);bad_walker=false;
+  bad_peer=true;assert(!android13::ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));assert(!Top()&&Read<uint32_t>(thread_bytes,0)==92u<<24);bad_peer=false;
+  assert(android13::ConfigureHierarchyValidation(hooks,MatchedProfileForTest(),&error));assert(!Top()&&Read<uint32_t>(thread_bytes,0)==92u<<24);Put<uint32_t>(thread_bytes,0,0);
   {
     android13::HandleRootScope outer(thread_bytes,2);outer.Set(0,nodes[Base]);outer.Set(1,nodes[Loader]);
     {android13::HandleRootScope inner(thread_bytes,1);inner.Set(0,nodes[OldIface]);Move();assert(inner.Get(0)==nodes[OldIface]);assert(outer.Get(0)==nodes[Base]);assert(outer.Get(1)==nodes[Loader]);}

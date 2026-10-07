@@ -1,10 +1,11 @@
 #pragma once
+#include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
 #include <jni.h>
 #include <cstdint>
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureDeviceCompilerDiagnostics(HookEngine&,void* source,JNIEnv*,std::string*);
+bool ConfigureDeviceCompilerDiagnostics(HookEngine&,const DeviceProfile& profile,std::string*);
 int DiagnosticForceOptimizedJit(JNIEnv*,jobject);
 int DiagnosticJitInlineExperiment(JNIEnv*,bool);
 int DiagnosticAotExperiment(JNIEnv*,jobject,bool);

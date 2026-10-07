@@ -35,8 +35,7 @@ void CancelEvolutionSuspendDeopt(void* thread) { CancelPending(thread); }
 void ResetEvolutionSuspendDeopt() { ResetPending(); }
 uint64_t EvolutionSuspendDeoptHits() { return Hits(); }
 
-bool InstallSuspendDeoptHook(HookEngine& hooks, void* /*implementation*/,
-                             std::string* error) {
+bool InstallSuspendDeoptHook(HookEngine& hooks, std::string* error) {
   auto push = reinterpret_cast<suspend_abi::PushContext>(
       hooks.FindSymbol("libart.so", cas::kPushDeoptimizationContext));
   auto deopt = reinterpret_cast<suspend_abi::Deoptimize>(

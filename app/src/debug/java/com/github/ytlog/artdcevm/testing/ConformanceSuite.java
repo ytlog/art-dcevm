@@ -47,13 +47,14 @@ public final class ConformanceSuite {
             boolean sourcePackaged = new File(context.getApplicationInfo().nativeLibraryDir,
                     "libartdcevm_source13.so").isFile();
             report.put("sourceModulePackaged", sourcePackaged);
-            if (!sourcePackaged)
-                check("missing_evolution_module_is_explicit", backend.enableEvolution().code == 98);
+            check("standalone_source_module_absent", !sourcePackaged);
             requirePatch("install_native_mapping_probe", backend.enableValidationHooks());
             checkPlan(backend, "body", 0, true);
             checkPlan(backend, "add", 5, true);
             runBodyAndAddition(backend);
             runHookRouting(backend);
+            requirePatch("owned_evolution_initializes_without_source_module", backend.enableEvolution());
+            check("owned_evolution_available", backend.capabilities().getBoolean("evolutionAvailable"));
             report.put("remaining", new JSONArray().put("hierarchy narrowing and removal")
                     .put("private/direct and abstract/concrete modifier transitions; exhaustive old-link visibility semantics")
                     .put("obsolete metadata reclamation"));

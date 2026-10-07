@@ -8,7 +8,6 @@
 #include "platform/android13/handle_root_scope.h"
 #include <cstring>
 #include <cstdlib>
-#include <dlfcn.h>
 namespace artdcevm::android13 {
 namespace {
 decltype(JNIEnv::functions) (*normal)();decltype(JNIEnv::functions) (*checked)();void (*set_check)(JNIEnv*,bool);
@@ -46,13 +45,12 @@ int DiagnosticJitCodeKind(JNIEnv* env,jobject executable){NativeObjectAccess acc
 int DiagnosticJitInlineState(JNIEnv* env,jobject executable){NativeObjectAccess access(env);if(!access.Supported())return -1;void* cache=RuntimeJitCodeCache();void* method=Method(access,executable);if(!cache||!contains_method(cache,method))return 0;const void* entry=Entry(method);if(!contains_pc(cache,entry))return 1;return ClassifyDiagnosticCompiledEntry(entry)==3?3:2;}
 int DiagnosticJitCacheDetail(JNIEnv* env,jobject executable){NativeObjectAccess access(env);if(!access.Supported())return -1;void* cache=RuntimeJitCodeCache();if(!cache)return -1;CacheCallback callback(Method(access,executable),Entry(Method(access,executable)));diagnostics_abi::BorrowedFunction function{};function.function=&callback;lock(*jit_lock,access.Self());visit(cache,&function);unlock(*jit_lock,access.Self());return callback.state;}
 int DiagnosticInvalidateAllJit(JNIEnv* env){NativeObjectAccess access(env);if(!access.Supported())return -1;void* cache=RuntimeJitCodeCache();if(!cache)return -1;invalidate(cache);return 1;}
-bool ConfigureDeviceDiagnostics(HookEngine& hooks,void* implementation,std::string* error){
+bool ConfigureDeviceDiagnostics(HookEngine& hooks,const DeviceProfile& profile,std::string* error){
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define GET(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name));if(!dst){*error="Missing named device diagnostic: " name;return false;}
  GET(normal,"_ZN3art21GetJniNativeInterfaceEv");GET(checked,"_ZN3art26GetCheckJniNativeInterfaceEv");GET(set_check,"_ZN3art9JNIEnvExt18SetCheckJniEnabledEb");
  GET(contains_method,"_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE");GET(contains_pc,"_ZNK3art3jit12JitCodeCache10ContainsPcEPKv");GET(oat_code,"_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE");GET(bridge,"_ZNK3art11ClassLinker26IsQuickToInterpreterBridgeEPKv");GET(nterp,"_ZN3art11interpreter18GetNterpEntryPointEv");GET(invoke,"_ZN3art15instrumentation15Instrumentation16GetCodeForInvokeEPNS_9ArtMethodE");GET(invalidate,"_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv");GET(jit_lock,"_ZN3art5Locks9jit_lock_E");GET(lock,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");GET(unlock,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");GET(visit,"_ZN3art3jit12JitCodeCache15VisitAllMethodsERKNSt3__18functionIFvPKvPNS_9ArtMethodEEEE");
 #undef GET
- using Probe=bool (*)(int (*)(const void*),const diagnostics_abi::BorrowedFunction*,void*);
- auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeDeviceDiagnostics"));CacheCallback test(reinterpret_cast<void*>(1),reinterpret_cast<void*>(1));diagnostics_abi::BorrowedFunction function{};function.function=&test;
- if(!probe||(!probe(ClassifyDiagnosticCompiledEntry,&function,RuntimeInstrumentation())||test.state!=15)){*error="Device diagnostic fixed declaration calibration failed";return false;}return true;
+ return true;
 }
 }

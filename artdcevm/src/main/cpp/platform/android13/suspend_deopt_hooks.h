@@ -12,7 +12,6 @@ void CancelEvolutionSuspendDeopt(void* thread);
 void ResetEvolutionSuspendDeopt();
 uint64_t EvolutionSuspendDeoptHits();
 
-bool InstallSuspendDeoptHook(HookEngine& hooks, void* implementation,
-                             std::string* error);
+bool InstallSuspendDeoptHook(HookEngine& hooks, std::string* error);
 
 }  // namespace artdcevm::android13

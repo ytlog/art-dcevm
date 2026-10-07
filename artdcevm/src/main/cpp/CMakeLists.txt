@@ -23,6 +23,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/device_diagnostics.cc
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
+    platform/android13/failure_calibration.cc
     platform/android13/transaction_metadata.cc
     platform/android13/device_dex_input.cc
     platform/android13/evolution_transaction.cc
@@ -61,7 +62,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/heap_reference.cc
     platform/android13/method_validation.cc platform/android13/class_validation.cc
     platform/android13/modifier_evolution_policy.cc
-    platform/android13/validation_hooks.cc platform/android13/source_engine_loader.cc
+    platform/android13/validation_hooks.cc platform/android13/evolution_runtime.cc
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
   target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)

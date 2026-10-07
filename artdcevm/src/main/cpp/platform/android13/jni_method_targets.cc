@@ -1,10 +1,8 @@
 #include "platform/android13/jni_method_targets.h"
-#include "platform/android13/jni_method_targets_abi.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/symbols/android13.h"
 #include <cstddef>
 #include <cstdint>
-#include <dlfcn.h>
 
 namespace artdcevm::android13 {
 namespace {
@@ -21,21 +19,15 @@ void* Canonicalize(void* method) {
 
 void* CanonicalizeJniMethod(void* method) { return Canonicalize(method); }
 
-bool ConfigureJniMethodTargets(HookEngine& hooks, void* implementation, std::string* error) {
-  using Probe = bool (*)(JniMethodTarget);
-  auto probe = reinterpret_cast<Probe>(
-      dlsym(implementation, "ArtDcevmSourceProbeJniMethodTargets"));
+bool ConfigureJniMethodTargets(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if (!profile.Matched()) { *error = "JNI method targets require a matched device profile"; return false; }
   auto canonical = reinterpret_cast<CanonicalMethod>(
       hooks.FindSymbol("libart.so", cas::kGetCanonicalMethod));
-  if (!probe || !canonical) {
-    *error = "Missing JNI method-target calibration or named ART canonical-method function";
+  if (!canonical) {
+    *error = "Missing named ART canonical-method function";
     return false;
   }
   canonical_method = canonical;
-  if (!probe(Canonicalize)) {
-    *error = "JNI method-target fixed declaration calibration failed";
-    return false;
-  }
   return true;
 }
 }

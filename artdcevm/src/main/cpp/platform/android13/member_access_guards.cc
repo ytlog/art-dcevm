@@ -14,7 +14,6 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 
 namespace artdcevm::android13 {
 namespace {
@@ -163,7 +162,8 @@ bool GuardNterpFinalFieldPut(void* self,void* method,uint16_t* pc) {
   if ((Flags(field)&kFinalFlag) && !CanChange(field,method)) { throw_final(method,field); return true; }
   return false;
 }
-bool ConfigureMemberAccessGuards(HookEngine& hooks,void* implementation,JNIEnv* env,jobject sample,std::string* error) {
+bool ConfigureMemberAccessGuards(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()){*error="Member access guards require a matched device profile";return false;}
   root=reinterpret_cast<Unary>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   obsolete_cache=reinterpret_cast<Unary>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod19GetObsoleteDexCacheEv"));
   obsolete_class=reinterpret_cast<Unary>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16GetObsoleteClassEv"));
@@ -173,14 +173,10 @@ bool ConfigureMemberAccessGuards(HookEngine& hooks,void* implementation,JNIEnv* 
   resolve_field=reinterpret_cast<Resolve>(hooks.FindSymbol("libart.so","_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"));
   throw_final=reinterpret_cast<decltype(throw_final)>(hooks.FindSymbol("libart.so","_ZN3art33ThrowIllegalAccessErrorFinalFieldEPNS_9ArtMethodEPNS_8ArtFieldE"));
   throw_exception=reinterpret_cast<ThrowGuardException>(hooks.FindSymbol("libart.so",kGuardThrowNewException));
-  using Probe=int (*)(JNIEnv*,jobject,Unary,uint32_t (*)(const void*));
-  auto probe=reinterpret_cast<Probe>(dlsym(implementation,"ArtDcevmSourceProbeMemberAccess"));
   if (!root || !obsolete_cache || !obsolete_class || !interface_types || !direct_interface ||
-      !access_template || !resolve_field || !throw_final || !throw_exception || !probe) {
-    *error="Missing named ART member access guard or source calibration"; return false;
+      !access_template || !resolve_field || !throw_final || !throw_exception) {
+    *error="Missing named ART member access guard"; return false;
   }
-  int result=probe(env,sample,root,Operand);
-  if (result || env->ExceptionCheck()) { *error="Member access profile calibration failed at step "+std::to_string(result); return false; }
   return true;
 }
 }

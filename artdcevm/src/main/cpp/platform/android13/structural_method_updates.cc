@@ -59,7 +59,7 @@ void UpdateStructuralMethods(void* old_class, void* new_class) {
       __atomic_fetch_or(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+offsetof(Method,access_flags)),kDontCompile,__ATOMIC_RELAXED);
   }
 }
-bool ConfigureStructuralMethodUpdates(HookEngine& hooks, void*, std::string* error) {
+bool ConfigureStructuralMethodUpdates(HookEngine& hooks, std::string* error) {
   auto s=reinterpret_cast<Same>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
   auto r=reinterpret_cast<Root>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto o=reinterpret_cast<Obsolete>(hooks.FindSymbol("libart.so","_ZNK3art11ClassLinker31SetEntryPointsForObsoleteMethodEPNS_9ArtMethodE"));

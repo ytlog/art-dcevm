@@ -9,6 +9,8 @@
 #include "platform/android13/field_copy_storage_abi.h"
 #include "platform/symbols/android13.h"
 #include <cstring>
+#include <string>
+#include <vector>
 namespace artdcevm::android13 {
 namespace {
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
@@ -53,11 +55,64 @@ void OwnedSet(JNIEnv* env,jobject owner,jfieldID id,const Field& field,const Val
  NativeObjectAccess access(env);uint64_t bits=(field.signature[0]=='L'||field.signature[0]=='[')?reinterpret_cast<uintptr_t>(access.Decode(value.reference)):value.bits;
  readers.fields.write(access.Decode(owner),readers.field_id(id),field.signature[0],bits);
 }
+// Capture public metadata before borrowing managed pointers. JNI locals root
+// classes across every public call; the later ART scope reloads those references.
+bool CalibrateCopyMetadata(JNIEnv* env,jvmtiEnv* ti,jclass klass,const char* signature,
+                           const OwnedCalibrationReaders& r,std::string* error){
+ Local parent{env,env->GetSuperclass(klass)};
+ if(env->ExceptionCheck())return Fail(error,"JNI calibration superclass unavailable");
+ jobject loader_object=nullptr;
+ if(ti->GetClassLoader(klass,&loader_object)!=JVMTI_ERROR_NONE)return Fail(error,"JVMTI calibration class loader unavailable");
+ Local loader{env,loader_object};
+ jint count=0;jfieldID* ids=nullptr;
+ struct Fields {jvmtiEnv* ti;jfieldID*& ids;~Fields(){if(ids)ti->Deallocate(reinterpret_cast<unsigned char*>(ids));}} allocated{ti,ids};
+ if(ti->GetClassFields(klass,&count,&ids)!=JVMTI_ERROR_NONE||count<0||(count&&!ids))return Fail(error,"JVMTI calibration field enumeration unavailable");
+ struct PublicField {jfieldID id;std::string name,descriptor;jint modifiers;};
+ std::vector<PublicField> public_fields;public_fields.reserve(static_cast<size_t>(count));
+ for(jint i=0;i<count;++i){
+  Text name{ti},descriptor{ti};jint modifiers=0;jclass owner=nullptr;
+  if(ti->GetFieldName(klass,ids[i],&name.value,&descriptor.value,nullptr)!=JVMTI_ERROR_NONE||
+     ti->GetFieldModifiers(klass,ids[i],&modifiers)!=JVMTI_ERROR_NONE||
+     ti->GetFieldDeclaringClass(klass,ids[i],&owner)!=JVMTI_ERROR_NONE)return Fail(error,"JVMTI copied-field metadata unavailable");
+  Local declaring{env,owner};
+  if(!name.value||!descriptor.value||!owner||!env->IsSameObject(owner,klass))return Fail(error,"JVMTI copied-field owner mismatch");
+  public_fields.push_back({ids[i],name.value,descriptor.value,modifiers});
+ }
+ {NativeObjectAccess access(env);if(!access.Supported())return Fail(error,"Copy metadata native access unsupported");
+ HandleRootScope roots(access.Self(),3);roots.Set(0,access.Decode(klass));roots.Set(1,access.Decode(parent.value));roots.Set(2,access.Decode(loader.value));
+ for(bool is_static:{false,true}){
+  size_t expected_count=0;for(const auto& field:public_fields)if(((field.modifiers&8)!=0)==is_static)++expected_count;
+  const auto view=r.fields.klass(roots.Get(0),is_static);
+  if(view.parent!=roots.Get(1)||view.loader!=roots.Get(2)||!view.descriptor||std::strcmp(view.descriptor,signature)||
+     view.is_object!=(parent.value==nullptr)||view.field_count!=expected_count)return Fail(error,"Owned copy class disagrees with JNI/JVMTI metadata");
+  std::vector<bool> seen(public_fields.size(),false);
+  for(size_t index=0;index<expected_count;++index){
+   const auto observed=r.fields.field(roots.Get(0),is_static,index);
+   if(!observed.field||!observed.name||!observed.descriptor)return Fail(error,"Owned copied-field metadata missing");
+   bool found=false;
+   for(size_t i=0;i<public_fields.size();++i){const auto& expected=public_fields[i];
+    if(((expected.modifiers&8)!=0)!=is_static||std::strcmp(observed.name,expected.name.c_str())||std::strcmp(observed.descriptor,expected.descriptor.c_str()))continue;
+    if(seen[i]||observed.field!=r.field_id(expected.id)||
+       (Read<uint32_t>(observed.field,offsetof(field_copy_abi::ArtField,access_flags))&0xffffu)!=static_cast<uint32_t>(expected.modifiers))return Fail(error,"Owned copied-field identity or modifiers mismatch");
+    seen[i]=true;found=true;break;
+   }
+   if(!found)return Fail(error,"Owned copied-field name or type disagrees with JVMTI");
+  }
+ }
+ }
+ if(parent.value){
+  Text parent_signature{ti};auto parent_type=static_cast<jclass>(parent.value);
+  if(ti->GetClassSignature(parent_type,&parent_signature.value,nullptr)!=JVMTI_ERROR_NONE||!parent_signature.value)return Fail(error,"JVMTI superclass signature unavailable");
+  return CalibrateCopyMetadata(env,ti,parent_type,parent_signature.value,r,error);
+ }
+ return true;
+}
+
 }
 bool CalibrateOwnedMembers(const DeviceProfile& profile,HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti,jobject fixture,
  const runtime_access_abi::Services& services,const OwnedCalibrationReaders& r,std::string* error){
  if(!Begin(profile,env,fixture,error))return false;
- if(!ti||!services.class_linker||!services.jni_id_manager||!r.method_id||!r.field_id||!r.reflected_field||!r.reflected_method||!r.canonical_method)return Fail(error,"Incomplete owned member calibration bindings");
+ if(!ti||!services.class_linker||!services.jni_id_manager||!r.method_id||!r.field_id||!r.reflected_field||!r.reflected_method||!r.canonical_method||!r.fields.klass||!r.fields.field)return Fail(error,"Incomplete owned member calibration bindings");
  using Lookup=void*(*)(void*,void*,const char*,void*);using DecodeMethod=void*(*)(void*,jmethodID);using DecodeField=void*(*)(void*,jfieldID);using Canonical=void*(*)(void*,size_t);
  auto lookup=reinterpret_cast<Lookup>(hooks.FindSymbol("libart.so",cas::kLookupClass));
  auto method=reinterpret_cast<DecodeMethod>(hooks.FindSymbol("libart.so",runtime_access_abi::kDecodeMethodId));
@@ -66,6 +121,7 @@ bool CalibrateOwnedMembers(const DeviceProfile& profile,HookEngine& hooks,JNIEnv
  if(!lookup||!method||!field||!canonical)return Fail(error,"Missing named owned calibration ART functions");
  Local type{env,env->GetObjectClass(fixture)};if(!type.value||env->ExceptionCheck())return Fail(error,"Calibration class unavailable");auto klass=static_cast<jclass>(type.value);
  Text signature{ti};if(ti->GetClassSignature(klass,&signature.value,nullptr)!=JVMTI_ERROR_NONE||!signature.value)return Fail(error,"JVMTI calibration class signature failed");
+ if(!CalibrateCopyMetadata(env,ti,klass,signature.value,r,error))return false;
  {NativeObjectAccess access(env);if(!access.Supported())return Fail(error,"Calibration native access unsupported");HandleRootScope roots(access.Self(),2);roots.Set(0,access.Decode(klass));
   roots.Set(1,ReadHeapReference(roots.Get(0),offsetof(validation_abi::ClassPrefix,class_loader)));
   void* found=lookup(services.class_linker,access.Self(),signature.value,roots.Get(1));

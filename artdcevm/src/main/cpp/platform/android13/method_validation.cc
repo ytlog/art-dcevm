@@ -1,5 +1,4 @@
 #include "platform/android13/method_validation.h"
-#include "platform/android13/method_validation_abi.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/modifier_evolution_policy.h"
@@ -9,7 +8,6 @@
 #include "platform/android13/validation_metadata.h"
 #include <algorithm>
 #include <cstring>
-#include <dlfcn.h>
 #include <new>
 
 namespace artdcevm::android13 {
@@ -80,16 +78,15 @@ bool CheckEvolutionMethods(void* definition) {
     return false;
   }
 }
-bool ConfigureEvolutionMethodValidation(HookEngine& hooks, void* implementation, std::string* error) {
-  auto configure = reinterpret_cast<ConfigureMethodValidation>(dlsym(implementation, "ArtDcevmSourceConfigureMethodValidation"));
+bool ConfigureEvolutionMethodValidation(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
   auto record = reinterpret_cast<RecordNewMethod>(hooks.FindSymbol("libopenjdkjvmti.so",
       "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
-  if (!configure || !record) {
-    *error = "Missing method validation callback or named structural method marker";
+  if (!record) {
+    *error = "Missing method validation named structural method marker";
     return false;
   }
   record_new_method = record;
-  configure(CheckEvolutionMethods);
   return true;
 }
 }

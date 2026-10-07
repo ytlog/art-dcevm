@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 #ifdef __ANDROID__
 #include <android/log.h>
 #endif
@@ -180,7 +179,8 @@ void TraceDeopt(void*,void* frames,void* result,bool from_code,int type) {
 #endif
   }
 }
-bool ConfigureInstrumentationListener(HookEngine& hooks,void* source,JNIEnv* env,jobject sample,std::string* error) {
+bool ConfigureInstrumentationListener(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
+  if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define SYMBOL(variable,name) variable=reinterpret_cast<decltype(variable)>(hooks.FindSymbol("libart.so",name)); if (!variable) { *error="Missing instrumentation symbol: " name;return false; }
   SYMBOL(current,"_ZN3art6Thread14CurrentFromGdbEv")
   SYMBOL(read_root,"artReadBarrierForRootSlow")
@@ -194,11 +194,6 @@ bool ConfigureInstrumentationListener(HookEngine& hooks,void* source,JNIEnv* env
   SYMBOL(deopt_all,"_ZN3art15instrumentation15Instrumentation20DeoptimizeEverythingEPKc")
   SYMBOL(undeopt_all,"_ZN3art15instrumentation15Instrumentation22UndeoptimizeEverythingEPKc")
 #undef SYMBOL
-  using Probe=int (*)(JNIEnv*,jobject,Listener*,InstructionView (*)(void*));
-  auto probe=reinterpret_cast<Probe>(dlsym(source,"ArtDcevmSourceProbeInstrumentationListener"));
-  if (!probe) { *error="Missing instrumentation listener source calibration";return false; }
-  const int result=probe(env,sample,&listener,Instructions);
-  if (result || env->ExceptionCheck()) { *error="Instrumentation listener profile failed at step "+std::to_string(result);return false; }
   return true;
 }
 }

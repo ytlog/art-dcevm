@@ -2,13 +2,11 @@
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/structural_method_updates.h"
 #include "platform/android13/jni_method_targets.h"
-#include "platform/android13/jni_method_targets_abi.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
-#include <dlfcn.h>
 #include <unordered_map>
 #include <thread>
 #include <atomic>
@@ -17,31 +15,35 @@ using Class=artdcevm::android13::validation_abi::ClassPrefix;
 struct Array { uint32_t size=0,pad=0; Method methods[8]{}; };
 std::unordered_map<void*,void*> roots;
 void* retired=nullptr; size_t calls=0,canon_calls=0;
-bool reject_jni_profile=false;
-extern "C" bool ArtDcevmSourceProbeJniMethodTargets(artdcevm::android13::JniMethodTarget fn) { Method method{}; assert(fn(&method)==&method); return !reject_jni_profile; }
 bool Same(void* a,void* b) { return static_cast<Method*>(a)->dex_method_index==static_cast<Method*>(b)->dex_method_index; }
 void* Root(void* m) { return roots.at(m); }
 void Obsolete(void* linker,void* m) { assert(linker==reinterpret_cast<void*>(123)); assert(__atomic_load_n(&static_cast<Method*>(m)->access_flags,__ATOMIC_RELAXED)&0x40000); ++calls; static_cast<Method*>(m)->entry_point=999; }
 void* Canonical(void* method,size_t size) { assert(size==8); ++canon_calls; return static_cast<unsigned char*>(method)+32; }
 namespace artdcevm::android13 { void* DispatchClassLinker(){return reinterpret_cast<void*>(123);} bool IsRetiredMethodPointer(void* m){return m==retired;} }
 class Hooks:public artdcevm::HookEngine { public:
+ bool canonical_available=true;const char* missing=nullptr;
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* symbol)override {
+ if(missing&&std::strstr(symbol,missing))return nullptr;
  if (std::strstr(symbol,"HasSameNameAndSignature"))return reinterpret_cast<void*>(Same);
  if (std::strstr(symbol,"SetEntryPointsForObsoleteMethod"))return reinterpret_cast<void*>(Obsolete);
- if (std::strstr(symbol,"GetCanonicalMethod"))return reinterpret_cast<void*>(Canonical);
+ if (std::strstr(symbol,"GetCanonicalMethod"))return canonical_available?reinterpret_cast<void*>(Canonical):nullptr;
  if (std::strcmp(symbol,"artReadBarrierForRootSlow")==0)return reinterpret_cast<void*>(Root);
  return nullptr; }
  void* Install(void*,void*,void**,std::string*)override{return nullptr;} bool Remove(void*,std::string*)override{return true;}
 };
 namespace artdcevm::android13 {void* ReadHeapReference(void*,size_t,bool){return nullptr;}}
-int main(){ Hooks hooks; ConfigureTransactionReaderForTest(hooks); std::string error; void* self=dlopen(nullptr,RTLD_NOW);
- assert(artdcevm::android13::ConfigureStructuralMethodUpdates(hooks,self,&error));
- reject_jni_profile=true;
- assert(!artdcevm::android13::ConfigureJniMethodTargets(hooks,self,&error));
- assert(error.find("calibration failed")!=std::string::npos);
- reject_jni_profile=false;
- assert(artdcevm::android13::ConfigureJniMethodTargets(hooks,self,&error));
+int main(){ Hooks hooks; ConfigureTransactionReaderForTest(hooks); std::string error;
+ for(const char* name:{"HasSameNameAndSignature","artReadBarrierForRootSlow","SetEntryPointsForObsoleteMethod"}){hooks.missing=name;assert(!artdcevm::android13::ConfigureStructuralMethodUpdates(hooks,&error)&&!error.empty());}
+ hooks.missing=nullptr;
+ assert(artdcevm::android13::ConfigureStructuralMethodUpdates(hooks,&error));
+ artdcevm::android13::DeviceProfile profile;
+ assert(!artdcevm::android13::ConfigureJniMethodTargets(hooks,profile,&error));
+ assert(artdcevm::android13::MatchDeviceProfile(&profile,&error));
+ hooks.canonical_available=false;
+ assert(!artdcevm::android13::ConfigureJniMethodTargets(hooks,profile,&error));
+ hooks.canonical_available=true;
+ assert(artdcevm::android13::ConfigureJniMethodTargets(hooks,profile,&error));
  Class old{},replacement{},iface{}; Array a,b; a.size=6;b.size=4;old.methods=reinterpret_cast<uint64_t>(&a);replacement.methods=reinterpret_cast<uint64_t>(&b);
  for(unsigned i=0;i<a.size;++i){a.methods[i].dex_method_index=i;roots[&a.methods[i]]=&old;}
  a.methods[0].access_flags=0x100;a.methods[0].data=0x123456789abcdefULL;

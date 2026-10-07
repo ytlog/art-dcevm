@@ -14,7 +14,7 @@ bool (*same)(void*,void*)=nullptr;
 uint32_t Flags(void* member) { return __atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(member)+4),__ATOMIC_RELAXED); }
 void* At(void* array,uint32_t i) {return static_cast<unsigned char*>(array)+art_method_abi::kArrayDataOffset+sizeof(art_method_abi::ArtMethod)*i;}
 }
-bool ConfigureStructuralMemberMappings(HookEngine& hooks,void*,std::string* error) {
+bool ConfigureStructuralMemberMappings(HookEngine& hooks,std::string* error) {
   same=reinterpret_cast<bool (*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
   if(!same){*error="Missing named ART method identity function";return false;}return true;
 }

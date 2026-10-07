@@ -16,7 +16,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall',
            '-fsanitize='+os.environ.get('ARTDCEVM_HOST_SANITIZER','address,undefined'), '-fno-omit-frame-pointer', '-fno-rtti', '-pthread', '-I', str(cpp),
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/compiled_frame_deopt_test.cc'),
-           str(cpp / 'platform/android13/stack_access.cc'), str(cpp / 'platform/android13/async_deopt_hooks.cc'), str(cpp / 'platform/android13/selective_deopt.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/stack_access.cc'), str(cpp / 'platform/android13/async_deopt_hooks.cc'), str(cpp / 'platform/android13/selective_deopt.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 else:

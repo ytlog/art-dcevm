@@ -26,10 +26,10 @@ struct NamedSymbol {
   HookRoute route;
 };
 
-// Presence is only the first gate. Source ABI layout is checked by
-// ArtDcevmSourceProbe before any source callbacks are installed.
+// Presence is only the first gate. The matched device profile and public
+// JNI/JVMTI calibration must pass before evolution proxies are installed.
 bool CheckValidationSymbols(HookEngine& hooks, std::string* error);
-bool CheckSourceSymbols(HookEngine& hooks, std::string* error);
+bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error);
 void* FindSymbol(HookEngine& hooks, NamedSymbol symbol);
 
 }  // namespace artdcevm::symbols

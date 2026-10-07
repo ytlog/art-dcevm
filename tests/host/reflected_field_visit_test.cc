@@ -1,3 +1,4 @@
+#include "device_profile_fixture.h"
 #include "platform/android13/reflected_field_visit.h"
 #include "platform/android13/member_decode_abi.h"
 #include "platform/android13/structural_reflective_abi.h"
@@ -33,7 +34,6 @@ void WriteCopyValue(void* raw,void* metadata,char descriptor,uint64_t value){ass
 void CopyWriteBarrier(void* field){assert(field==active);++barriers;}
 }
 void* ReadRoot(void* member){return roots.at(member);}
-extern "C" bool ArtDcevmSourceProbeReflectedFieldVisit(const void* vptr){assert(vptr==info_vptr);return true;}
 class Hooks:public artdcevm::HookEngine {public:bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{if(std::strcmp(name,"_ZTVN3art24HeapReflectiveSourceInfoE")==0)return const_cast<unsigned char*>(static_cast<const unsigned char*>(info_vptr))-2*sizeof(void*);if(std::strcmp(name,"artReadBarrierForRootSlow")==0)return reinterpret_cast<void*>(ReadRoot);return nullptr;}
  void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}};
@@ -41,7 +41,7 @@ class Visitor final:public structural_reflective_abi::Visitor {public:
  void* VisitMethod(void*,const Source&)override{assert(false);return nullptr;}
  void* VisitField(void* original,const Source& source)override{++visits;assert(original==expected_original);auto& info=*reinterpret_cast<const Info*>(&source);assert(info.type==2&&info.object==active);
  std::ostringstream output;info.Describe(output);return result;}};
-int main(){Info source;std::memcpy(&info_vptr,static_cast<const void*>(&source),sizeof(info_vptr));Hooks hooks;std::string error;assert(ConfigureReflectedFieldVisit(hooks,dlopen(nullptr,RTLD_NOW),&error));Visitor visitor;
+int main(){ auto profile=MatchedProfileForTest();Info source;std::memcpy(&info_vptr,static_cast<const void*>(&source),sizeof(info_vptr));Hooks hooks;std::string error;assert(!ConfigureReflectedFieldVisit(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureReflectedFieldVisit(hooks,profile,&error));Visitor visitor;
  void* low=mmap(reinterpret_cast<void*>(0x20000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);assert(low==reinterpret_cast<void*>(0x20000000));
  auto* old_class=new(low)Class{};auto* new_class=new(static_cast<unsigned char*>(low)+256)Class{};
  Array old_array{},new_instance{},new_static{};old_array.size=1;new_instance.size=3;new_static.size=3;
