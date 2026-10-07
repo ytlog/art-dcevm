@@ -204,8 +204,10 @@ int Android13Backend::InitializeEvolution(JNIEnv* jni, const char* path, jobject
   if (!structural_ || !modifiable_) return JVMTI_ERROR_NOT_AVAILABLE;
   evolution_error_ = InitializeSourceEngine(jni, path, calibration);
   if (!evolution_error_.empty()) return JVMTI_ERROR_NOT_AVAILABLE;
+  const int route = EnableStandardRedefineRouting();
+  if (route != JVMTI_ERROR_NONE) return route;
   evolution_ = std::make_unique<SourceClassRedefiner>(vm_, env_);
-  return EnableStandardRedefineRouting();
+  return JVMTI_ERROR_NONE;
 }
 jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
                                                 const jvmtiClassDefinition* definitions) {
