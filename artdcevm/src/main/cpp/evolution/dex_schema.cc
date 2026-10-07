@@ -1,5 +1,6 @@
 #include "evolution/class_schema.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -94,12 +95,13 @@ class Reader {
     const bool compact = mapped_ && std::memcmp(begin_, "cdex001\0", 8) == 0;
     if (!compact && (std::memcmp(begin_, "dex\n", 4) != 0 || begin_[7] != 0))
       Fail("Not a supported DEX file");
-    const bool container = !compact && std::memcmp(begin_ + 4, "041", 3) == 0;
+    container_ = !compact && std::memcmp(begin_ + 4, "041", 3) == 0;
+    const bool container = container_;
     const size_t header_size = compact ? 0x88 : (container ? 0x78 : 0x70);
     Range(0, header_size);
     if (!compact) {
       std::string version(reinterpret_cast<const char*>(begin_ + 4), 3);
-      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040" && !(mapped_ && container))
+      if (version != "035" && version != "037" && version != "038" && version != "039" && version != "040" && !container)
         Fail("Unsupported DEX version: " + version);
     }
     if (HeaderU32(36) != header_size || HeaderU32(40) != 0x12345678 || (!mapped_ && HeaderU32(32) != size_))
@@ -124,15 +126,33 @@ class Reader {
       uint32_t a = 1, b = 0;
       for (size_t i = 12; i < size_; ++i) { a = (a + begin_[i]) % 65521; b = (b + a) % 65521; }
       if (U32(8) != ((b << 16) | a)) Fail("DEX checksum mismatch");
-      Range(data_off_, data_size_);
-      if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
-          static_cast<size_t>(data_off_) + data_size_ != size_) Fail("Invalid DEX data section");
+      if (!container) {
+        Range(data_off_, data_size_);
+        if (data_size_ == 0 || data_off_ < 0x70 || data_off_ % 4 != 0 ||
+            static_cast<size_t>(data_off_) + data_size_ != size_) Fail("Invalid DEX data section");
+      }
     } else if (data_off_ > data_length_) {
       Fail("Invalid mapped DEX data range");
     }
     table_start_ = header_size;
     strings_ = Table(56, 4); types_ = Table(64, 4); protos_ = Table(72, 12);
     fields_ = Table(80, 8); methods_ = Table(88, 8);
+    if(container && !mapped_) {
+      // A replacement is one logical DEX, not an arbitrary multi-header
+      // container. The file_size/vector check and zero header_offset above
+      // preserve that contract. v041 has no legacy data_off/data_size region.
+      container_tables_={strings_,types_,protos_,fields_,methods_,Table(96,32)};
+      for(size_t i=0;i<container_tables_.size();++i) {
+        const auto& left=container_tables_[i];
+        if(!left.count)continue;
+        const size_t end=left.offset+size_t{left.count}*left.width;
+        for(size_t j=i+1;j<container_tables_.size();++j) {
+          const auto& right=container_tables_[j];
+          if(right.count && left.offset<right.offset+size_t{right.count}*right.width && right.offset<end)
+            Fail("Overlapping DEX container ID tables");
+        }
+      }
+    }
   }
   struct IdTable { uint32_t offset, count, width; };
   const unsigned char* begin_;
@@ -142,19 +162,27 @@ class Reader {
   const unsigned char* data_;
   size_t data_length_;
   const bool declaration_flags_;
-  bool mapped_ = false;
+  bool mapped_ = false, container_ = false;
   uint32_t class_def_index_ = 0;
   size_t table_start_ = 0x70;
   uint32_t data_off_ = 0, data_size_ = 0, class_type_ = 0;
   IdTable strings_{}, types_{}, protos_{}, fields_{}, methods_{};
+  std::array<IdTable,6> container_tables_{};
   [[noreturn]] static void Fail(const std::string& text) { throw std::runtime_error(text); }
   void Range(size_t offset, size_t size) const {
     if (offset > size_ || size > size_ - offset) Fail("DEX range outside file");
   }
   void DataRange(size_t offset, size_t size) const {
     if (offset > data_length_ || size > data_length_ - offset || offset < data_off_ ||
-        (!mapped_ && (offset - data_off_ > data_size_ || size > data_size_ - (offset - data_off_))))
+        (!mapped_ && !container_ && (offset - data_off_ > data_size_ || size > data_size_ - (offset - data_off_))))
       Fail("DEX item outside data section");
+    if(container_ && !mapped_) {
+      if(offset<table_start_)Fail("DEX item overlaps container header");
+      for(const auto& table:container_tables_) {
+        if(table.count && offset<table.offset+size_t{table.count}*table.width &&
+            table.offset<offset+size)Fail("DEX item overlaps container ID table");
+      }
+    }
   }
   uint16_t U16(size_t off) const { Range(off, 2); return begin_[off] | (uint16_t{begin_[off + 1]} << 8); }
   uint32_t HeaderU32(size_t off) const {
@@ -187,7 +215,7 @@ class Reader {
     uint32_t count = HeaderU32(header_offset), offset = HeaderU32(header_offset + 4);
     if ((count == 0) != (offset == 0)) Fail("Inconsistent ID table size/offset");
     if (count && (offset < table_start_ || offset % 4 ||
-        (!mapped_ && (offset > data_off_ || count > (data_off_ - offset) / width))))
+        (!mapped_ && !container_ && (offset > data_off_ || count > (data_off_ - offset) / width))))
       Fail("Invalid ID table range");
     Range(offset, size_t{count} * width);
     return {offset, count, width};
