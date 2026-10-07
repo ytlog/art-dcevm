@@ -168,7 +168,13 @@ def main():
             except (OSError, EOFError, RuntimeError, subprocess.SubprocessError) as error:
                 entry['error'] = str(error)
                 report['errors'].append(f'{path}: {error}')
-        for required in ('libart.so', 'libopenjdkjvmti.so', 'libdexfile.so', 'libart-compiler.so', 'libc++.so'):
+        # Collection inventories actual ELF packaging; a separately loaded compiler is not
+        # universal. AOSP 15+ links the compiler into libart. Runtime calibration is separate.
+        report['standaloneCompilerCollected'] = any(
+            x['name'] == 'libart-compiler.so' and x['complete'] for x in report['libraries'])
+        if not report['standaloneCompilerCollected']:
+            report['notes'] = ['No standalone libart-compiler.so found; check compiler packaging in pinned AOSP sources']
+        for required in ('libart.so', 'libopenjdkjvmti.so', 'libdexfile.so', 'libc++.so'):
             if not any(x['name'] == required and x['complete'] for x in report['libraries']):
                 report['errors'].append('Missing required library: ' + required)
         report['complete'] = not report['errors']

@@ -55,6 +55,8 @@ def store(manifest):
         stored.append({k: library[k] for k in ('name', 'path', 'size', 'sha256', 'buildId')})
         stored[-1]['file'] = str(relative)
     record = {k: data[k] for k in ('origin', 'project', 'reservation', 'device', 'startedUtc')}
+    record.update({k: data[k] for k in ('standaloneCompilerCollected', 'notes', 'originalManifest')
+                   if k in data})
     record.update(collectionId=collection_id, libraries=stored,
                   evidenceManifest=str(manifest.resolve().relative_to(ROOT)),
                   scope='Device ELF reference assets; not runtime calibration')

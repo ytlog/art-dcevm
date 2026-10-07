@@ -71,7 +71,7 @@ def main():
         oat = 'runtime/oat/' if major >= 15 else 'runtime/'
         files = ['openjdkjvmti/ti_redefine.h', 'openjdkjvmti/ti_redefine.cc',
                  'openjdkjvmti/ti_extension.cc', 'runtime/art_method.h',
-                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h', *INTERFACES]
+                 oat + 'oat_quick_method_header.h', oat + 'stack_map.h', 'runtime/Android.bp', *INTERFACES]
         content = {}
         for name in files:
             path = args.source_dir / tag / name
@@ -128,6 +128,9 @@ def main():
                 'com.android.art.class.structurally_redefine_classes',
                 'com.android.art.class.is_structurally_modifiable_class')),
             'interfaceDeclarationExcerpts': declarations,
+            'compilerBundledIntoArt': bool(re.search(
+                r'name:\s*"libart",(?:(?!\n\}).)*?whole_static_libs:\s*\[[^]]*"libart-compiler"',
+                content['runtime/Android.bp'], re.DOTALL)),
         })
     # Preserve unrelated previously fetched sources and their provenance.
     merged = dict(cached)

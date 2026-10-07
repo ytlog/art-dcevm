@@ -44,6 +44,8 @@ android --no-metrics device remote remove <RESERVATION_ID> --project=mobby-appfu
 
 工具拉取 ART/runtime APEX 与 system 中的 ARM64 release/debug 候选库，包括 `libart`、`libopenjdkjvmti`、`libdexfile`、`libart-compiler`、`libartbase`、`libc++`。每个文件记录完整远端路径、哈希、Build ID 和命名符号清单。`--compress` 通过设备 gzip 和 `adb exec-out` 减少传输量，本地解压后保存完整 ELF；`--pull-timeout` 默认每库 300 秒，适用于较慢的串流连接。路径存在不证明应用实际加载了该路径，最终测试时还需核对进程实际使用的库。
 
+完整采集要求 ART、JVMTI、DEX、libc++ 四类核心库存在，且所有发现的候选传输/哈希核验成功。独立 compiler 库不是所有版本都存在：Android 15–17 的固定 AOSP 构建将其并入 `libart`。`standaloneCompilerCollected` 明确记录是否取得独立文件；该字段不证明编译器私有能力已经适配。
+
 ```sh
 python3 tools/audit-art-device-matrix.py build/evidence/art-devices/*/manifest.json \
   --output build/evidence/art-devices/matrix.json
