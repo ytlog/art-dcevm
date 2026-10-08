@@ -6,6 +6,7 @@
 #include "platform/method_array_view.h"
 #include "platform/common/native_cache_view.h"
 #include "platform/common/type_cache_update.h"
+#include "platform/common/transaction_root_view.h"
 #include <cstring>
 #include <limits>
 namespace artdcevm::android13 {
@@ -20,14 +21,6 @@ bool Aligned(const void* p,size_t alignment){return p && !(uintptr_t(p)&(alignme
 uint32_t Flags(void* method){return __atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+offsetof(Method,access_flags)),__ATOMIC_RELAXED);}
 int32_t Length(void* a){return Read<int32_t>(a,allocation_abi::kArrayLengthOffset);}
 void* Element(void* array,size_t index){return ReadHeapReference(array,allocation_abi::kReferenceArrayDataOffset+4*index);}
-bool BitsValid(const allocation_abi::BitVector& bits,size_t count){
- // Platform vector<bool>::capacity stores words, while size stores bits.
- const size_t words=count/64+(count%64!=0);
- return bits.size==count&&bits.capacity>=words&&
-     (bits.begin ? Aligned(bits.begin,alignof(uint64_t))&&
-         bits.capacity<=(std::numeric_limits<uintptr_t>::max()-uintptr_t(bits.begin))/8 : !count&&!bits.capacity);
-}
-bool Bit(const allocation_abi::BitVector& bits,size_t index){return (Read<uint64_t>(bits.begin,8*(index/64))&(uint64_t{1}<<(index%64)))!=0;}
 bool ReferenceArray(void* array){
  if(!array||Length(array)<0)return false;
  auto* type=ReadHeapReference(array,0);if(!type)return false;
@@ -47,32 +40,35 @@ bool TransactionMetadataReader::Configure(HookEngine& hooks,const DeviceProfile&
 }
 bool TransactionMetadataReader::ReadHolder(const void* raw,TransactionHolderView* output,std::string* error)const{
  if(!root_||!Aligned(raw,alignof(Holder))||!output)return Fail(error,"Invalid transaction holder context");
- const auto holder=Read<Holder>(raw);
- if(!Aligned(holder.array_handle,alignof(uint32_t))||!Aligned(holder.redefinitions,alignof(hierarchy_allocation_abi::Vector)))return Fail(error,"Missing transaction holder roots or owners");
+ Holder holder;
+ if(!transaction_root::ReadHolderHeader(raw,sizeof(Holder),&holder))
+  return Fail(error,"Missing transaction holder roots or owners");
  auto* array=reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(holder.array_handle)));
  if(!ReferenceArray(array))return Fail(error,"Transaction holder is not a reference array");
  const int32_t slots=Length(array);
  if(slots%allocation_abi::kSlots)return Fail(error,"Transaction root slot count is inconsistent");
  const size_t count=size_t(slots/allocation_abi::kSlots);
- const auto owners=Read<hierarchy_allocation_abi::Vector>(holder.redefinitions);
- const uintptr_t begin=uintptr_t(owners.begin),end=uintptr_t(owners.end),capacity=uintptr_t(owners.capacity);
- constexpr size_t stride=sizeof(redefinition_abi::ClassRedefinition);
- if((!begin&&(end||capacity)) || (begin&&(begin%alignof(redefinition_abi::ClassRedefinition))) ||
-    end<begin||capacity<end||(end-begin)%stride||(capacity-begin)%stride||(end-begin)/stride!=count)
-  return Fail(error,"Transaction owner vector range is inconsistent");
- if(!BitsValid(holder.initialized,count)||!BitsValid(holder.actually_structural,count)||!BitsValid(holder.initial_structural,count))return Fail(error,"Transaction structural bitvector range is inconsistent");
- *output={raw,array,count,owners,holder.initialized,holder.actually_structural,holder.initial_structural};return true;
+ transaction_root::Metadata metadata;
+ if(!transaction_root::ReadMetadata(holder,count,transaction_root::OwnerFamily::kAndroid13,&metadata))
+  return Fail(error,"Transaction native owner or structural bitvector range is inconsistent");
+ const auto& owners=metadata.owners;
+ *output={raw,array,count,{owners.begin,owners.end,owners.capacity},metadata.initialized,
+          metadata.actually_structural,metadata.initial_structural};return true;
 }
 bool TransactionMetadataReader::ReadRoots(const void* raw,TransactionRootView* output,std::string* error)const{
  if(!root_||!Aligned(raw,alignof(allocation_abi::Iterator))||!output)return Fail(error,"Invalid transaction iterator context");
- const auto iterator=Read<allocation_abi::Iterator>(raw);TransactionHolderView holder;
- if(iterator.index<0||!ReadHolder(iterator.holder,&holder,error))return Fail(error,"Invalid transaction iterator holder");
- const size_t index=size_t(iterator.index);if(index>=holder.count)return Fail(error,"Transaction iterator is outside root slots");
- auto slot=[&](size_t n){return Element(holder.array,allocation_abi::kSlots*index+n);};
- *output={holder,index,const_cast<unsigned char*>(holder.owners.begin)+index*sizeof(redefinition_abi::ClassRedefinition),
-     Bit(holder.initialized,index),Bit(holder.actually_structural,index),Bit(holder.initial_structural,index),
-     slot(hierarchy_allocation_abi::kCacheSlot),slot(hierarchy_allocation_abi::kClassSlot),
-     slot(allocation_abi::kOldInstancesSlot),slot(10),slot(allocation_abi::kOldClassesSlot),slot(allocation_abi::kNewClassesSlot)};
+ allocation_abi::Iterator iterator;TransactionHolderView holder;
+ if(!transaction_root::ReadIterator(raw,sizeof(iterator),&iterator) || !ReadHolder(iterator.holder,&holder,error))
+  return Fail(error,"Invalid transaction iterator holder");
+ transaction_root::Metadata metadata{holder.count,sizeof(redefinition_abi::ClassRedefinition),
+     {holder.owners.begin,holder.owners.end,holder.owners.capacity},holder.initialized,
+     holder.actually_structural,holder.initial_structural};
+ transaction_root::Roots roots;
+ if(!transaction_root::ReadRoots(metadata,size_t(iterator.index),
+     [&](size_t slot){return Element(holder.array,slot);},&roots))
+  return Fail(error,"Transaction iterator is outside root slots");
+ *output={holder,roots.index,roots.owner,roots.initialized,roots.actually_structural,roots.initial_structural,
+     roots.values[0],roots.values[1],roots.values[2],roots.values[3],roots.values[4],roots.values[5]};
  // Allocation stages may legitimately not have materialized the later arrays.
  // Commit and allocation validation impose their own phase-specific presence.
  return true;

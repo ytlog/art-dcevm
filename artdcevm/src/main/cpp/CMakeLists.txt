@@ -5,6 +5,7 @@ add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
 if(ANDROID_ABI STREQUAL "arm64-v8a")
+  enable_language(ASM)
   find_package(shadowhook REQUIRED CONFIG)
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
   target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc
@@ -25,6 +26,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/device_diagnostics.cc
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
+    platform/common/owned_context_consumer.cc
+    platform/arch/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc
     platform/android13/checked_method_provider.cc
     platform/android13/method_lookup.cc

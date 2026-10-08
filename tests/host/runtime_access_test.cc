@@ -25,12 +25,13 @@ class Hooks : public artdcevm::HookEngine {
  public:
   const char* missing = nullptr;
   size_t lookups = 0;
+  void** singleton = &instance;
   bool Initialize(std::string*) override { return true; }
   void* FindSymbol(const char* library, const char* name) override {
     ++lookups;
     assert(std::strcmp(library, "libart.so") == 0);
     if (missing && std::strcmp(missing, name) == 0) return nullptr;
-    if (std::strcmp(name, abi::kRuntimeInstance) == 0) return &instance;
+    if (std::strcmp(name, abi::kRuntimeInstance) == 0) return singleton;
     if (std::strcmp(name, abi::kDecodeMethodId) == 0) return reinterpret_cast<void*>(Method);
     if (std::strcmp(name, abi::kDecodeFieldId) == 0) return reinterpret_cast<void*>(Field);
     std::abort();
@@ -77,6 +78,14 @@ int main() {
     assert(api::DecodeFieldId(reinterpret_cast<jfieldID>(value)) == reinterpret_cast<void*>(value * 32));
   }
   assert(method_calls == 3 && field_calls == 3);
+  // A failed candidate rebind must not replace the previous singleton binding.
+  abi::RuntimePrefix bad_runtime{};
+  void* bad_instance=&bad_runtime;
+  hooks.singleton=&bad_instance;
+  assert(!api::ConfigureRuntimeAccess(hooks,profile,&error));
+  assert(api::RuntimeInstance()==&runtime && api::RuntimeClassLinker()==runtime.class_linker);
+  assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(1))==reinterpret_cast<void*>(16));
+  hooks.singleton=&instance;
   runtime.jni_id_manager = reinterpret_cast<void*>(0x5000);
   assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(1)) == reinterpret_cast<void*>(16));
   runtime.jni_id_manager = nullptr;

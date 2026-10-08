@@ -1,19 +1,14 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "platform/abi/arm64/android11/transaction_roots.h"
 
 namespace artdcevm::android13::allocation_abi {
 // android-13.0.0_r1 openjdkjvmti/ti_redefine.cc and platform libc++ vector<bool>.
 // No NDK STL object is used to access platform objects.
-struct BitVector { const uint64_t* begin; uint64_t size; uint64_t capacity; };
-struct Holder {
-  const uint32_t* array_handle;
-  void* redefinitions;
-  BitVector initialized;
-  BitVector actually_structural;
-  BitVector initial_structural;
-};
-struct Iterator { int32_t index; Holder* holder; };
+using BitVector=abi::arm64::android11::TransactionBits;
+using Holder=abi::arm64::android11::TransactionHolder;
+using Iterator=abi::arm64::android11::TransactionIterator;
 struct State {
   bool initial_structural;
   void* old_instances;

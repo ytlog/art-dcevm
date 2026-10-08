@@ -1,10 +1,11 @@
 #pragma once
 #include "platform/android13/native_object_access_abi.h"
+#include "platform/abi/arm64/android11/suspend_all.h"
 namespace artdcevm::android13::thread_suspend_abi {
 // runtime/thread_list.h ScopedSuspendAll is an empty nonvirtual ValueObject;
 // the named ctor/dtor use Runtime::Current rather than their this storage.
-struct SuspendAll { unsigned char empty; };
+using SuspendAll=abi::arm64::android11::SuspendAll;
 static_assert(sizeof(SuspendAll)==1 && alignof(SuspendAll)==1);
-inline constexpr char kConstruct[]="_ZN3art16ScopedSuspendAllC2EPKcb";
-inline constexpr char kDestroy[]="_ZN3art16ScopedSuspendAllD2Ev";
+inline constexpr const char* kConstruct=abi::arm64::android11::kSuspendConstruct;
+inline constexpr const char* kDestroy=abi::arm64::android11::kSuspendDestroy;
 }
