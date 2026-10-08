@@ -11,6 +11,7 @@
 #include <stdexcept>
 namespace {
 using namespace artdcevm;
+thread_local size_t calibrated_card_offset=0;
 struct Roots {
   JNIEnv* env;std::vector<jobject> values;
   ~Roots(){for(auto value:values)env->DeleteGlobalRef(value);}
@@ -97,6 +98,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
   modern_field_storage::Service storage;
   if(!storage.Calibrate(hooks,env,global_owner,global_fixture,request.metadata,
       oracles.data(),oracles.size(),&request.error))return failure("storage: "+request.error);
+  calibrated_card_offset=storage.CardTableOffset();
   auto rejected=oracles;rejected[0].name="__not_a_fixture_field__";
   std::string rejected_error;
   if(storage.Calibrate(hooks,env,global_owner,global_fixture,request.metadata,
@@ -105,6 +107,8 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
   }
   return failure(request.metadata.StorageModel()==modern_field_metadata::Model::kMerged?"merged":"split");
 }
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeCardOffset(JNIEnv*,jclass){return static_cast<jint>(calibrated_card_offset);}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeExclusive(JNIEnv* env,jclass,jclass owner,jint iterations) {
   auto failure=[&](const std::string& error){return env->ExceptionCheck()?nullptr:env->NewStringUTF(error.c_str());};

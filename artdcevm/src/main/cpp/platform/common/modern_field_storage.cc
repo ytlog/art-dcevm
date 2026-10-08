@@ -6,11 +6,18 @@
 namespace artdcevm::modern_field_storage {
 namespace {
 thread_local const Service* selected=nullptr;
-// Fixed android16-r1 Thread: twenty tls32 words, trace pointer + RuntimeStats.
-struct ThreadCardPrefix {uint32_t tls32[20];uint64_t tls64[8];uintptr_t card_table;};
-static_assert(offsetof(ThreadCardPrefix,card_table)==144);
-constexpr size_t kCardOffset=offsetof(ThreadCardPrefix,card_table),kCardShift=10;
-constexpr uint8_t kDirty=0x70;
+// Fixed AOSP Thread declarations: 11 has 23 tls32 words, 12 has 22,
+// 13--17 have 20. Align tls64 (trace + seven RuntimeStats words) to 8.
+// Only the independent public-JNI non-dirty-to-dirty oracle selects a candidate.
+template<size_t Words>struct ThreadCardPrefix {uint32_t tls32[Words];uint64_t tls64[8];uintptr_t card_table;};
+static_assert(offsetof(ThreadCardPrefix<23>,card_table)==160);
+static_assert(offsetof(ThreadCardPrefix<22>,card_table)==152);
+static_assert(offsetof(ThreadCardPrefix<20>,card_table)==144);
+constexpr size_t kCardDeclarations[]={offsetof(ThreadCardPrefix<20>,card_table),
+  offsetof(ThreadCardPrefix<22>,card_table),offsetof(ThreadCardPrefix<23>,card_table)};
+constexpr size_t kCardShift=10;
+constexpr uint8_t kDirty=0x70,kAged=kDirty-1;
+bool NonDirty(uint8_t value){return value==0||value==kAged;}
 bool Mapped(void* p,size_t n){size_t extent=0;return method_identity::ReadableMappingExtent(p,&extent)&&extent>=n;}
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 struct Roots {
@@ -40,7 +47,7 @@ struct Adapter {
  static field_copy::CopyFieldView Field(void* c,bool s,size_t i){return selected->metadata_.Field(c,s,i);}
  static void* Reference(void* o,size_t offset,bool v){return selected->metadata_.Reference(o,offset,v);}
  static uint64_t Read(void* o,void* f,char t){return field_storage::Read(o,*static_cast<abi::arm64::Field*>(f),t,Reference);}
- static void Barrier(void* o){field_storage::MarkCard(o,selected->current_,kCardOffset,kCardShift,kDirty);}
+ static void Barrier(void* o){field_storage::MarkCard(o,selected->current_,selected->card_offset_,kCardShift,kDirty);}
  static void Write(void* o,void* f,char t,uint64_t bits){field_storage::Write(o,*static_cast<abi::arm64::Field*>(f),t,bits,Barrier);}
  static void Monitor(void* t,void* s){field_storage::TransferMonitor(t,s,4,0);}
 };
@@ -70,8 +77,8 @@ struct Calibrator {
    return moved==source&&cleared==0;
   }
   if(a.mode==CardRead||a.mode==CardMark){
-   void* owner=scope.roots[1];if(!Mapped(scope.self,kCardOffset+8))return false;
-   uintptr_t biased=0;std::memcpy(&biased,static_cast<char*>(scope.self)+kCardOffset,8);
+   void* owner=scope.roots[1];if(!Mapped(scope.self,a.service->card_offset_+8))return false;
+   uintptr_t biased=0;std::memcpy(&biased,static_cast<char*>(scope.self)+a.service->card_offset_,8);
    auto* card=reinterpret_cast<uint8_t*>(biased+(reinterpret_cast<uintptr_t>(owner)>>kCardShift));
    if(!Mapped(card,1))return false;
    a.owner_address=reinterpret_cast<uintptr_t>(owner);a.card_address=reinterpret_cast<uintptr_t>(card);
@@ -138,34 +145,59 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject owner,jobject fixt
  if(roots.values.size()>128||!candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error))return Fail(error,"native/JNI storage bits differ");
  if(reference_field==SIZE_MAX||a.values[reference_field].reference==SIZE_MAX)return Fail(error,"missing instance reference card oracle");
  // JNI's own object store supplies an independent card-table oracle. Require a
- // genuinely clean card; never manufacture one by clearing collector state.
- bool card_proven=false;
- for(size_t attempt=0;attempt<128&&!card_proven;++attempt){
+ // source-defined non-dirty card; never manufacture one by clearing collector state.
+ // Keep the oracle object rooted while asking the real collector to process
+ // cards that allocation/JNI bootstrap already dirtied. A GC request itself is
+ // not proof: require a fresh native read to observe an actually non-dirty card.
+ jclass gc_type=env->FindClass("java/lang/System");
+ jmethodID gc_method=gc_type?env->GetStaticMethodID(gc_type,"gc","()V"):nullptr;
+ if(!gc_method||env->ExceptionCheck())return Fail(error,"public collector oracle unavailable");
+ size_t gc_root=roots.Own(gc_type);env->DeleteLocalRef(gc_type);
+ auto fresh_card=[&](){
+  a.mode=Calibrator::CardRead;
+  bool ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);
+  if(ok&&a.card_value==kDirty){
+   env->CallStaticVoidMethod(static_cast<jclass>(roots.values[gc_root]),gc_method);
+   if(env->ExceptionCheck())return false;
+   ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);
+  }
+  return ok;
+ };
+ bool card_proven=false;std::string card_diagnostics;
+ for(size_t declaration:kCardDeclarations){
+  candidate.card_offset_=declaration;size_t readable=0,clean=0,stores=0;uint8_t last=255;
+  for(size_t attempt=0;attempt<32&&!card_proven;++attempt){
   jobject fresh=env->AllocObject(static_cast<jclass>(owner));if(!fresh||env->ExceptionCheck())return Fail(error,"cannot allocate card oracle");
   jobject global=env->NewGlobalRef(fresh);env->DeleteLocalRef(fresh);if(!global)return false;
   jobject saved=roots.values[1];roots.values[1]=global;a.mode=Calibrator::CardRead;
-  bool ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);uintptr_t address=a.owner_address;
-  if(ok&&a.card_value==0){
+  bool ok=fresh_card();uintptr_t address=a.owner_address;
+  if(ok){++readable;last=a.card_value;}
+  if(ok&&NonDirty(a.card_value)){
+   ++clean;
    jobject value=roots.values[a.values[reference_field].reference];env->SetObjectField(global,ids[reference_field],value);
    ok=!env->ExceptionCheck()&&candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);
+   if(ok){++stores;last=a.card_value;}
    card_proven=ok&&a.owner_address==address&&a.card_value==kDirty;
    jobject got=env->GetObjectField(global,ids[reference_field]);card_proven=card_proven&&env->IsSameObject(got,value);if(got)env->DeleteLocalRef(got);
   }
   roots.values[1]=saved;env->DeleteGlobalRef(global);if(env->ExceptionCheck())return false;
  }
- if(!card_proven)return Fail(error,"no independent clean-to-dirty JNI card oracle");
- // A second clean owned object proves the source write barrier itself.
+  card_diagnostics+=" offset="+std::to_string(declaration)+" reads="+std::to_string(readable)+" clean="+std::to_string(clean)+" stores="+std::to_string(stores)+" byte="+std::to_string(last);
+  if(card_proven)break;
+ }
+ if(!card_proven){if(error)*error="no source card declaration matches independent non-dirty-to-dirty JNI oracle:"+card_diagnostics;return false;}
+ // A second non-dirty owned object proves the source write barrier itself.
  bool mark_proven=false;
  for(size_t attempt=0;attempt<128&&!mark_proven;++attempt){
   jobject local=env->AllocObject(static_cast<jclass>(owner));
   if(!local||env->ExceptionCheck())return false;
   jobject global=env->NewGlobalRef(local);env->DeleteLocalRef(local);if(!global)return false;
   jobject saved=roots.values[1];roots.values[1]=global;a.mode=Calibrator::CardRead;
-  bool ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);
-  if(ok&&a.card_value==0){uintptr_t address=a.owner_address;a.mode=Calibrator::CardMark;ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);mark_proven=ok&&a.owner_address==address&&a.card_value==kDirty;}
+  bool ok=fresh_card();
+  if(ok&&NonDirty(a.card_value)){uintptr_t address=a.owner_address;a.mode=Calibrator::CardMark;ok=candidate.exclusive_.With(env,roots.values.data(),roots.values.size(),Calibrator::Run,&a,error);mark_proven=ok&&a.owner_address==address&&a.card_value==kDirty;}
   roots.values[1]=saved;env->DeleteGlobalRef(global);
  }
- if(!mark_proven)return Fail(error,"no clean source barrier oracle");
+ if(!mark_proven)return Fail(error,"no source-defined non-dirty barrier oracle");
  // Restore every field immediately after each candidate write, including failures.
  for(size_t i=0;i<count;++i){a.active=i;a.mode=Calibrator::Write;char type=oracle[i].descriptor[0];bool stat=(oracle[i].modifiers&8)!=0;
   for(int pass=0;pass<2;++pass){a.replacement=pass?0:0x87654321abcdef01ULL;a.replacement_root=SIZE_MAX;

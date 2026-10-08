@@ -18,6 +18,7 @@ public final class RuntimeAccessSuite {
     private static native String probeRuntimeServices();
     private static native int probeCacheThreads();
     private static native String probeNativeCache();
+    private static native int probeCardOffset();
     private static native String probeMethodGuards(Class<?> owner);
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current,int direct,int virtual,int tableCandidate);
@@ -148,7 +149,7 @@ public final class RuntimeAccessSuite {
                 report.put("methodEntryGuardsCalibrated",true);
             }
             report.put("fieldStorageModel",fields(fieldStorage));
-            if(fieldStorage)report.put("nativeFieldStorageCalibrated",true);
+            if(fieldStorage)report.put("nativeFieldStorageCalibrated",true).put("nativeCardTableOffset",probeCardOffset());
             report.put("fieldIdentityCount",28);
             if(exclusiveRoots) {
                 java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);
