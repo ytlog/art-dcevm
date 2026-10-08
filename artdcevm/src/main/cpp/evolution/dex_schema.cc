@@ -93,6 +93,15 @@ class Reader {
     Initialize();
     return TypeView(index).data();
   }
+  const char* ReadSuperclassDescriptor() {
+    Initialize();
+    const size_t def = Item(Table(96, 32), class_def_index_);
+    const uint32_t index = U32(def + 8);
+    if (index == UINT32_MAX) return nullptr;
+    const auto value = TypeView(index);
+    if (value.front() != 'L') Fail("Invalid superclass type");
+    return value.data();
+  }
   bool SupportsDefaultMethods() {
     Initialize();
     if(std::memcmp(header_,"cdex001\0",8)==0)return (HeaderU32(0x70)&1)!=0;
@@ -378,6 +387,16 @@ bool ReadMappedDexTypeDescriptor(const MappedDexMetadata& view, uint32_t index,
   if (!output || !error) return false;
   try {
     const char* value = Reader(view).ReadTypeDescriptor(index);
+    *output = value; error->clear(); return true;
+  } catch (const std::bad_alloc&) { throw; }
+  catch (const std::exception& failure) { *error = failure.what(); return false; }
+}
+
+bool ReadMappedDexSuperclassDescriptor(const MappedDexMetadata& view, const char** output,
+                                       std::string* error) {
+  if (!output || !error) return false;
+  try {
+    const char* value = Reader(view).ReadSuperclassDescriptor();
     *output = value; error->clear(); return true;
   } catch (const std::bad_alloc&) { throw; }
   catch (const std::exception& failure) { *error = failure.what(); return false; }

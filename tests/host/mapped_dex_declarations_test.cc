@@ -65,12 +65,25 @@ void CheckTypes(const MappedDexMetadata& view) {
   assert(!ReadMappedDexTypeDescriptor(view,0,nullptr,&error));
   assert(!ReadMappedDexTypeDescriptor(view,0,&sentinel,nullptr));
 }
+void CheckParent(const MappedDexMetadata& view,const std::string& expected) {
+  std::string error="old";
+  const char* value="old";
+  assert(ReadMappedDexSuperclassDescriptor(view,&value,&error) && error.empty());
+  assert(expected.empty()?value==nullptr:value && expected==value);
+  assert(!ReadMappedDexSuperclassDescriptor(view,nullptr,&error));
+  assert(!ReadMappedDexSuperclassDescriptor(view,&value,nullptr));
+  auto invalid=view;invalid.class_def_index=UINT32_MAX;
+  value="unchanged";const char* saved=value;
+  assert(!ReadMappedDexSuperclassDescriptor(invalid,&value,&error));
+  assert(value==saved && !error.empty());
+}
 ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsigned char>& data, uint32_t index = 0) {
   ClassSchema result; std::string error;
   if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), index}, &result, &error)) {
     std::cerr << error << '\n'; std::abort();
   }
   CheckTypes({main.data(),main.size(),data.data(),data.size(),index});
+  CheckParent({main.data(),main.size(),data.data(),data.size(),index},result.superclass);
   MappedDexMemberCounts counts;
   assert(ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),index},&counts,&error));
   uint32_t statics=0,directs=0;
@@ -95,6 +108,17 @@ int main(int argc, char** argv) {
   ClassSchema expected; std::string error;
   assert(ReadDexDeclarations(original, &expected, &error));
   Same(expected, Parse(original, original));
+  // superclass_idx is a full 32-bit value; the NO_INDEX root is distinct
+  // from an invalid index that happens to truncate to an existing type.
+  auto parent_variant=original;
+  const size_t superclass=U32(original,100)+8;
+  const uint32_t parent_index=U32(original,superclass);
+  Put(parent_variant,superclass,UINT32_MAX);
+  CheckParent({parent_variant.data(),parent_variant.size(),parent_variant.data(),parent_variant.size(),0},"");
+  Put(parent_variant,superclass,parent_index+0x10000);
+  const char* parent_sentinel="unchanged";const auto* saved_parent=parent_sentinel;
+  assert(!ReadMappedDexSuperclassDescriptor({parent_variant.data(),parent_variant.size(),parent_variant.data(),parent_variant.size(),0},&parent_sentinel,&error));
+  assert(parent_sentinel==saved_parent && !error.empty());
   // The source size slot changes semantics at API 35. Its zero/nonzero junk
   // must never determine a modern file extent; legacy APIs keep their extent.
   auto normalize = [&](int api, const dex_mapping_abi::Prefix& prefix) {
@@ -232,6 +256,7 @@ int main(int argc, char** argv) {
   assert(ReadMappedDexDeclarations(container_view(), &container_schema, &error));
   Same(expected, container_schema);
   CheckTypes(container_view());
+  CheckParent(container_view(),expected.superclass);
   MappedDexMemberCounts container_counts, original_counts;
   assert(ReadMappedDexMemberCounts(container_view(),&container_counts,&error));
   assert(ReadMappedDexMemberCounts({original.data(),original.size(),original.data(),original.size(),0},&original_counts,&error));

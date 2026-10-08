@@ -78,14 +78,30 @@ void Native(void* t){*static_cast<uint32_t*>(t)=92u<<24;}
 struct Dex {
   std::vector<unsigned char> bytes,shared_data;
   validation_abi::DexMappingPrefix mapping;
-  Dex(const std::string& child,const std::string& parent,bool compact=false):bytes(512,0),shared_data(512,0),mapping{nullptr,bytes.data(),bytes.size(),compact?shared_data.data():bytes.data(),512} {
+  Dex(const std::string& child,const std::string& parent,bool compact=false,bool later=false):bytes(512,0),shared_data(512,0),mapping{nullptr,bytes.data(),bytes.size(),compact?shared_data.data():bytes.data(),512} {
     std::memcpy(bytes.data(),compact?"cdex001":"dex\n035",7);
     auto u32=[&](size_t at,uint32_t value) { Write(bytes.data(),at,value); };
-    u32(56,2);u32(60,112);u32(64,2);u32(68,120);u32(96,1);u32(100,128);
-    u32(112,200);u32(116,300);u32(120,0);u32(124,1);u32(128+8,1);
+    const uint32_t table=compact?136:112;
+    u32(32,bytes.size());u32(36,table);u32(40,0x12345678);
+    u32(104,compact?512:312);u32(108,compact?0:200);
+    u32(56,2);u32(60,table);u32(64,2);u32(68,table+8);u32(96,1);u32(100,table+16);
+    u32(table,200);u32(table+4,300);u32(table+8,0);u32(table+12,1);u32(table+16+8,1);
     auto* data=const_cast<unsigned char*>(mapping.data_begin);
     data[200]=static_cast<unsigned char>(child.size());std::memcpy(data+201,child.c_str(),child.size()+1);
     data[300]=static_cast<unsigned char>(parent.size());std::memcpy(data+301,parent.c_str(),parent.size()+1);
+    if(later) {
+      assert(!compact);
+      const auto original=bytes;
+      constexpr size_t header=512;
+      bytes.insert(bytes.end(),original.begin(),original.begin()+160);
+      bytes.insert(bytes.begin()+header+112,8,0);
+      std::memcpy(bytes.data()+header+4,"041",3);
+      auto put=[&](size_t off,uint32_t value){Write(bytes.data(),header+off,value);};
+      put(32,bytes.size()-header);put(36,120);put(104,0);put(108,0);
+      put(112,bytes.size());put(116,header);
+      put(60,header+120);put(68,header+128);put(100,header+136);
+      mapping={nullptr,bytes.data()+header,bytes.size()-header,bytes.data(),bytes.size()};
+    }
   }
 };
 size_t ClassNode(const char* name,size_t parent,size_t cache) {
@@ -173,7 +189,7 @@ int main() {
   }
   assert(Read<void*>(thread,280)==nullptr);
   Dex old_b("LB;","Ljava/lang/Object;"),old_c("LC;","Ljava/lang/Object;"),old_d("LD;","LB;");
-  Dex new_b("LB;","Ljava/lang/Object;"),new_c("LC;","LB;",true);
+  Dex new_b("LB;","Ljava/lang/Object;",false,true),new_c("LC;","LB;",true);
   size_t old_bcache=CacheNode(old_b),old_ccache=CacheNode(old_c),old_dcache=CacheNode(old_d);
   b_id=ClassNode("LB;",object_id,old_bcache);c_id=ClassNode("LC;",object_id,old_ccache);d_id=ClassNode("LD;",b_id,old_dcache);
   b_cache_id=CacheNode(new_b);c_cache_id=CacheNode(new_c);

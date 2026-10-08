@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "platform/android13/transaction_metadata.h"
+#include "platform/common/dex_file_metadata.h"
 #include <limits>
 namespace artdcevm::android13 {
 namespace {
@@ -45,36 +46,14 @@ bool Matches(void* klass,const char* descriptor,void* loader) {
   // Arrays, primitives and generated proxies cannot be modifiable batch targets.
   return Normal(klass) && Loader(klass)==loader && std::strcmp(Descriptor(klass),descriptor)==0;
 }
-struct Dex {
-  validation_abi::DexMappingPrefix mapping;
-  void Range(size_t at,size_t width,size_t size) const { Require(at<=size && width<=size-at); }
-  uint32_t U32(const unsigned char* base,size_t size,size_t at) const {
-    Range(at,4,size);return uint32_t{base[at]}|uint32_t{base[at+1]}<<8|uint32_t{base[at+2]}<<16|uint32_t{base[at+3]}<<24;
-  }
-  size_t Id(size_t header,uint32_t index,size_t width) const {
-    uint32_t count=U32(mapping.begin,mapping.size,header),at=U32(mapping.begin,mapping.size,header+4);
-    Require(index<count && at>=0x70 && at%4==0);Range(at,size_t{count}*width,mapping.size);
-    return at+size_t{index}*width;
-  }
-  const char* ParentDescriptor(uint16_t index) const {
-    size_t def=Id(96,index,32);Range(def+8,2,mapping.size);
-    const uint16_t type=uint16_t(mapping.begin[def+8]|uint16_t{mapping.begin[def+9]}<<8);
-    uint32_t string=U32(mapping.begin,mapping.size,Id(64,type,4));
-    size_t at=U32(mapping.begin,mapping.size,Id(56,string,4));bool complete=false;
-    for(unsigned i=0;i<5;++i) {
-      Range(at,1,mapping.data_size);unsigned byte=mapping.data_begin[at++];
-      if(i==4) Require((byte&0xf0)==0);
-      if(!(byte&0x80)) { complete=true;break; }
-    }
-    Require(complete);Range(at,1,mapping.data_size);
-    Require(std::memchr(mapping.data_begin+at,0,mapping.data_size-at));
-    return reinterpret_cast<const char*>(mapping.data_begin+at);
-  }
-};
 const char* Requested(void* cache,uint16_t index) {
-  auto* native=reinterpret_cast<void*>(Read<uint64_t>(cache,offsetof(Cache,prefix)+offsetof(validation_abi::DexCachePrefix,dex_file)));
-  Require(native);auto mapping=Read<validation_abi::DexMappingPrefix>(native);
-  Require(mapping.begin && mapping.data_begin);return Dex{mapping}.ParentDescriptor(index);
+  evolution::MappedDexMetadata mapping;
+  Require(dex_file_metadata::ReadCache(33,cache,sizeof(Cache),sizeof(validation_abi::DexMappingPrefix),
+                                      index,&mapping,nullptr));
+  const char* parent = nullptr;
+  std::string error;
+  Require(evolution::ReadMappedDexSuperclassDescriptor(mapping,&parent,&error) && parent);
+  return parent;
 }
 void ClearNative(uint64_t address,uint32_t count) {
   using Pair=hierarchy_allocation_abi::NativePair;

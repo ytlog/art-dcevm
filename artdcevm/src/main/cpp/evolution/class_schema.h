@@ -50,6 +50,9 @@ bool ReadMappedDexMemberCounts(const MappedDexMetadata&, MappedDexMemberCounts*,
 // Format errors preserve output; allocation failures propagate.
 bool ReadMappedDexTypeDescriptor(const MappedDexMetadata&, uint32_t index,
                                  const char**, std::string*);
+// Selected class_def superclass, or nullptr for the DEX NO_INDEX root.
+// Same borrowed lifetime/error contract as type descriptor lookup.
+bool ReadMappedDexSuperclassDescriptor(const MappedDexMetadata&, const char**, std::string*);
 // A method ID may reference another class, including an array, with no local
 // class definition. Explicit cache resolution must use this owner, not referrer.
 struct MappedDexMethodReference {
