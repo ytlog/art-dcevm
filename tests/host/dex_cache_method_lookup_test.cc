@@ -21,6 +21,15 @@ int main() {
   assert(!g::Lookup(table.get(),g::kSlots,index,nullptr));
   auto* unaligned=reinterpret_cast<const std::atomic<g::Pair>*>(reinterpret_cast<char*>(table.get())+8);
   assert(!g::Lookup(unaligned,g::kSlots,index,&result));
+  // Aligned but overflowing native table ranges must be rejected before load.
+  const auto overflow_address=UINTPTR_MAX & ~uintptr_t{15};
+  const auto* overflow_pair=reinterpret_cast<const std::atomic<g::Pair>*>(overflow_address);
+  result=&first;
+  assert(!g::Lookup(overflow_pair,g::kSlots,0,&result) && !result);
+  for(int api=34;api<=37;++api) {
+    result=&first;
+    assert(!modern::LookupDual(api,nullptr,reinterpret_cast<const void*>(overflow_address),1024,0,&result) && !result);
+  }
   // Full arrays contain direct method pointers, not hashed pointer/index pairs.
   // They take precedence over pairs, including when the full entry is empty.
   constexpr uint32_t method_count = collision + 1;
@@ -37,6 +46,8 @@ int main() {
   assert(!modern::LookupDual(34,full.get(), table.get(), method_count, index, nullptr));
   const auto* bad_full = reinterpret_cast<const std::atomic<uintptr_t>*>(reinterpret_cast<const char*>(full.get()) + 1);
   assert(!modern::LookupDual(34,bad_full, table.get(), method_count, index, &result) && !result);
+  for(int api=34;api<=37;++api)
+    assert(modern::LookupDual(api,full.get(),reinterpret_cast<const void*>(overflow_address),method_count,collision,&result) && result==&second);
   // The unused pair pointer is not consulted when a full array is present.
   assert(modern::LookupDual(34,full.get(), unaligned, method_count, index, &result) && !result);
   assert(!modern::LookupDual(34,nullptr, unaligned, method_count, index, &result) && !result);
@@ -116,6 +127,17 @@ int main() {
     assert(modern::ReadCache(api,&dual,sizeof(dual),method_count,index,&result) && result==&first);
     dual.methods_array=reinterpret_cast<uintptr_t>(full.get());
   }
+  legacy.methods=overflow_address;
+  for(int api=30;api<=33;++api) {
+    result=&first;
+    assert(!modern::ReadCache(api,&legacy,sizeof(legacy),0,0,&result) && !result);
+  }
+  legacy.methods=reinterpret_cast<uintptr_t>(table.get());
+  dual.methods_array=0;dual.methods=overflow_address;
+  for(int api=34;api<=37;++api) {
+    result=&first;
+    assert(!modern::ReadCache(api,&dual,sizeof(dual),method_count,0,&result) && !result);
+  }
   assert(!modern::ReadCache(29,&legacy,sizeof(legacy),0,index,&result));
   assert(!modern::ReadCache(38,&dual,sizeof(dual),method_count,index,&result));
   assert(!modern::ReadCache(33,nullptr,sizeof(legacy),0,index,&result));
@@ -161,5 +183,5 @@ int main() {
     assert(g::Lookup(table.get(),g::kSlots,collision,&result) && (!result || result==&second));
   }
   writer.join();
-  std::cout<<"DexCache method pairs: cache misses, index collisions, bounds, full-array precedence/empty entries and API35-37 sequence locks and concurrent pair/full/sequence identity, API30-37 field reads and table publication passed\n";
+  std::cout<<"DexCache method pairs: cache misses, index collisions, table range overflow, bounds, full-array precedence/empty entries and API35-37 sequence locks and concurrent pair/full/sequence identity, API30-37 field reads and table publication passed\n";
 }

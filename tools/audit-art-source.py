@@ -208,6 +208,10 @@ def main():
                 content.get('runtime/base/atomic_pair.h', '')),
             'dexCacheMethodStorageFamily': ('dual-full-or-pair'
                 if 'resolved_methods_array_' in content['runtime/mirror/dex_cache.h'] else 'pair'),
+            'dexCacheStorageFields': re.findall(r'uint64_t\s+(\w+)_\s*;',
+                content['runtime/mirror/dex_cache.h'].split('HeapReference<ClassLoader> class_loader_;')[-1]),
+            'dexCacheCountFields': re.findall(r'uint32_t\s+(num_\w+)_\s*;',
+                content['runtime/mirror/dex_cache.h'].split('HeapReference<ClassLoader> class_loader_;')[-1]),
             'dexCacheNativeMethodLoadRelaxed': ('entries_[index].load(std::memory_order_relaxed)' in
                 content['runtime/mirror/dex_cache.h']),
             'dexCacheMethodSlotCount': re.findall(

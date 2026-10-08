@@ -1,4 +1,4 @@
-#include "platform/method_cache_lookup.h"
+#include "platform/common/method_cache_lookup.h"
 #include <limits>
 #include <chrono>
 #include <thread>
@@ -7,7 +7,9 @@ bool Lookup(const std::atomic<Pair>* table,uint32_t count,uint32_t index,void** 
   if(!output)return false;
   *output=nullptr;
   if(!table)return count<=kSlots;
-  if(reinterpret_cast<uintptr_t>(table)%alignof(Pair) || count>kSlots || index%kSlots>=count)return false;
+  const uintptr_t address=reinterpret_cast<uintptr_t>(table);
+  if(address%alignof(Pair) || count>kSlots || index%kSlots>=count ||
+      count>(std::numeric_limits<uintptr_t>::max()-address)/sizeof(Pair))return false;
   const Pair pair=table[index%kSlots].load(std::memory_order_acquire);
   if(pair.index==index)*output=reinterpret_cast<void*>(pair.method);
   return true;
@@ -26,7 +28,9 @@ bool LookupDual(int api,const std::atomic<uintptr_t>* full,const void* pairs,
   }
   if(api==34)return Lookup(static_cast<const std::atomic<Pair>*>(pairs),kSlots,index,output);
   if(!pairs)return true;
-  if(reinterpret_cast<uintptr_t>(pairs)%alignof(SequencePair))return false;
+  const uintptr_t address=reinterpret_cast<uintptr_t>(pairs);
+  if(address%alignof(SequencePair) ||
+      kSlots>(std::numeric_limits<uintptr_t>::max()-address)/sizeof(SequencePair))return false;
   const auto& pair=static_cast<const SequencePair*>(pairs)[index%kSlots];
   for(uint32_t spins=0;;++spins) {
     const uint64_t before=pair.key.load(std::memory_order_acquire);

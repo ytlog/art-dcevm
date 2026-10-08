@@ -20,7 +20,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
 if platform.machine().lower() in ('x86_64', 'amd64'):
     command += ['-mcx16']
 command += [str(root / 'tests/host/dex_cache_method_lookup_test.cc'),
-            str(cpp / 'platform/method_cache_lookup.cc'), '-o', str(binary)]
+            str(cpp / 'platform/common/method_cache_lookup.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1',
