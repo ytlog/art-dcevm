@@ -4,6 +4,7 @@
 #include "platform/android13/selective_deopt.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include "platform/android13/art_method_abi.h"
+#include "platform/android13/code_info_flags_abi.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
@@ -70,7 +71,7 @@ void Unlock(void* mutex,void* self){assert(locked&&mutex==lock_ptr&&self==curren
 void ForEach(void* list,void (*fn)(void*,void*),void* data){assert(locked&&list==&list_marker);events.push_back("foreach");fn(thread1,data);fn(thread2,data);}
 void Instrument(void* receiver,void* thread,bool force){assert(locked&&!force&&receiver==&runtime.instrumentation);events.push_back(thread==thread1?"instrument1":"instrument2");}
 uintptr_t ReturnPc(const void* visitor){return Active(static_cast<const stack_abi::Visitor*>(visitor)).return_pc;}
-uint8_t* FlagAddr(const void* visitor){auto& f=Active(static_cast<const stack_abi::Visitor*>(visitor));assert(f.info_ok&&f.frame_safe&&(f.info_flags&stack_abi::kHasShouldDeoptimizeFlag));++flag_calls;return &f.debug;}
+uint8_t* FlagAddr(const void* visitor){auto& f=Active(static_cast<const stack_abi::Visitor*>(visitor));assert(f.info_ok&&f.frame_safe&&code_info_flags_abi::DecodeMatchedCas(f.info_flags).should_deoptimize.value_or(false));++flag_calls;return &f.debug;}
 void CheckSelectiveTree(){
  auto find=selective_abi::FindFrame;selective_abi::MapNode root{},left{},right{};
  root.key=7;left.key=3;right.key=11;root.base.left=&left.base;root.base.right=&right.base;

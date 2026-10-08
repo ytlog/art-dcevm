@@ -1,3 +1,4 @@
+#include "platform/android13/code_info_flags_abi.h"
 #include "platform/android13/device_diagnostics.h"
 #include "platform/android13/device_diagnostics_abi.h"
 #include "platform/android13/frame_recovery.h"
@@ -40,9 +41,10 @@ struct CacheCallback final:diagnostics_abi::CallbackBase {
   // optimized(kind2) flags=3/inline>0. Baseline is bit 2, not bit 1.
   // Bit 1 does not establish a debuggable artifact or recovery qualification.
   state|=2;
-  if(info.flags&stack_abi::kIsBaseline)state|=4;
-  if(info.flags&stack_abi::kHasInlineInfo)state|=8;
-  if(code==entry)entry_kind=(info.flags&stack_abi::kIsBaseline)?1:(info.flags&stack_abi::kHasInlineInfo)?3:2;
+  auto flags=code_info_flags_abi::DecodeMatchedCas(info.flags);
+  if(flags.baseline)state|=4;
+  if(flags.inline_info)state|=8;
+  if(code==entry)entry_kind=flags.baseline?1:flags.inline_info?3:2;
  }
 };
 CacheCallback InspectCache(NativeObjectAccess& access,void* cache,void* method){

@@ -3,6 +3,8 @@
 #include "platform/android13/stack_access.h"
 #include "platform/android13/frame_recovery.h"
 #include "platform/android13/art_method_abi.h"
+#include "platform/android13/code_info_flags_abi.h"
+#include "platform/common/modern_frame_service.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
 #include <cstring>
@@ -12,7 +14,7 @@ namespace {
 void** singleton; void** list_lock;
 void (*lock)(void*,void*); void (*unlock)(void*,void*);
 void (*for_each)(void*,void (*)(void*,void*),void*);
-void (*instrument)(void*,void*,bool);
+modern_frame::Service instrument;
 void* (*make_context)();
 uintptr_t (*return_pc)(const void*); uint8_t* (*flag_addr)(const void*);
 void* (*root)(void*);
@@ -31,7 +33,7 @@ struct AppVisitor final:stack_abi::Visitor {
     // The named device decoder establishes native code ownership. The carrier
     // owns the slot even when the selected application method is an inlinee.
     bool has_flag=ReadEvolutionCodeInfo(Read<void*>(quick_frame,0),header,pc,&info) &&
-        (info.flags&stack_abi::kHasShouldDeoptimizeFlag) && IsEvolutionFrameRecoverable(*this);
+        code_info_flags_abi::DecodeMatchedCas(info.flags).should_deoptimize.value_or(false) && IsEvolutionFrameRecoverable(*this);
     if (has_flag) {
       uint8_t* flag=flag_addr(this); *flag|=selective_abi::kDebugFlag;
     } else {
@@ -45,7 +47,7 @@ struct AppVisitor final:stack_abi::Visitor {
   void* frames;
 };
 void VisitThread(void* thread,void* instrumentation) {
-  instrument(instrumentation,thread,false);
+  if(!instrument.PrepareLegacyStack(instrumentation,thread)) std::abort();
   auto* context=static_cast<Context*>(make_context());
   { AppVisitor visitor(thread,context);visitor.Walk(true); }
   delete context;
@@ -68,15 +70,18 @@ bool ConfigureSelectiveDeopt(HookEngine& hooks,const DeviceProfile& profile,std:
   GET(lock,decltype(lock),"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");
   GET(unlock,decltype(unlock),"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");
   GET(for_each,decltype(for_each),"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_");
-  GET(instrument,decltype(instrument),"_ZN3art15instrumentation15Instrumentation21InstrumentThreadStackEPNS_6ThreadEb");
+  modern_frame::Service candidate;
+  bool bound=modern_frame::Service::Bind(modern_frame::Model::kLegacyExitStack,
+      hooks.FindSymbol("libart.so",modern_frame::Service::SymbolName(modern_frame::Model::kLegacyExitStack)),&candidate);
   GET(make_context,decltype(make_context),"_ZN3art7Context6CreateEv");
   GET(return_pc,decltype(return_pc),"_ZNK3art12StackVisitor15GetReturnPcAddrEv");
   GET(flag_addr,decltype(flag_addr),"_ZNK3art12StackVisitor27GetShouldDeoptimizeFlagAddrEv");
   GET(root,decltype(root),"artReadBarrierForRootSlow");
 #undef GET
-  if (!singleton || !*singleton || !list_lock || !lock || !unlock || !for_each || !instrument || !make_context || !return_pc || !flag_addr || !root) {
+  if (!singleton || !*singleton || !list_lock || !lock || !unlock || !for_each || !bound || !make_context || !return_pc || !flag_addr || !root) {
     *error="Missing named application frame deoptimization functions";return false;
   }
+  instrument=candidate;
   return true;
 }
 }
