@@ -10,6 +10,7 @@ class Service {
  public:
   bool Bind(HookEngine&,void* observed_thread_list,std::string* error);
   bool Prepare(std::string* error);
+  bool Prepared()const{return prepared_;}
   // Caller already owns ART's final exclusive mutator boundary. Acquires the
   // real ThreadList mutex and synchronously executes native clearing on each
   // currently registered Thread; no asynchronous checkpoint or Thread offset.

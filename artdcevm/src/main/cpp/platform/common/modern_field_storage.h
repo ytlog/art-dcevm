@@ -11,6 +11,7 @@ class Service {
   bool Calibrate(HookEngine&,JNIEnv*,jobject strong_class,jobject strong_fixture,
       const modern_field_metadata::FieldMetadata&,const modern_field_metadata::FieldOracle*,size_t,std::string*);
   bool Calibrated()const{return calibrated_;}
+  modern_field_metadata::Model StorageModel()const{return metadata_.StorageModel();}
   size_t CardTableOffset()const{return calibrated_?card_offset_:0;}
   // Borrowed references and mutations require the transaction owner's actual
   // exclusive mutator/disabled-GC scope. No roots escape that lifetime.

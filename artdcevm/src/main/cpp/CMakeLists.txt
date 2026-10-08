@@ -40,6 +40,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/modern_method_services.cc
     platform/common/method_identity_calibration.cc
     platform/common/native_cache_service.cc
+    platform/common/native_source_commit.cc
+    platform/common/modern_source_commit.cc
     platform/common/source_commit.cc
     platform/common/owned_structural_transaction.cc
     platform/common/structural_methods.cc
