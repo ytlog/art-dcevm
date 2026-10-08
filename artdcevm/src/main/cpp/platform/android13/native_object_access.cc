@@ -6,7 +6,7 @@
 namespace artdcevm::android13 {
 namespace {
 using Transition = void (*)(void*);
-using DecodeObject = void* (*)(void*, jobject);
+using DecodeObject = native_access_abi::DecodeObject;
 Transition enter_runnable, leave_runnable;
 DecodeObject decode_object;
 uint32_t State(void* self) {
@@ -33,13 +33,13 @@ NativeObjectAccess::NativeObjectAccess(JNIEnv* env) : self_(nullptr), supported_
 NativeObjectAccess::~NativeObjectAccess() {
   if (transitioned_) leave_runnable(self_);
 }
-void* DecodeRunnableObject(void* thread, jobject object) { return decode_object(thread, object); }
+void* DecodeRunnableObject(void* thread, jobject object) { return reinterpret_cast<void*>(decode_object(thread, object).reference); }
 void* NativeObjectAccess::Decode(jobject object) const {
   if (!supported_) std::abort();
-  return decode_object(self_, object);
+  return reinterpret_cast<void*>(decode_object(self_, object).reference);
 }
 bool ConfigureNativeObjectAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
-  using SelfOffset = int32_t (*)(size_t);
+  using SelfOffset = native_access_abi::SelfOffset;
   if (!profile.Matched()) { *error = "Native object access requires a matched device profile"; return false; }
   auto end = reinterpret_cast<Transition>(hooks.FindSymbol("libart.so", "artJniMethodEnd"));
   auto start = reinterpret_cast<Transition>(hooks.FindSymbol("libart.so", "artJniMethodStart"));
@@ -49,7 +49,7 @@ bool ConfigureNativeObjectAccess(HookEngine& hooks, const DeviceProfile& profile
     *error = "Missing named ART native object access";
     return false;
   }
-  if (self_offset(sizeof(void*)) != offsetof(native_access_abi::EnvironmentPrefix, self)) {
+  if (self_offset(sizeof(void*)).value != offsetof(native_access_abi::EnvironmentPrefix, self)) {
     *error = "ART JNIEnv self offset differs from fixed release profile";
     return false;
   }

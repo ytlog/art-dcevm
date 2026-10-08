@@ -23,7 +23,7 @@ int retired_field, method, access;
 size_t heap_reads = 0, method_decodes = 0, guard_calls = 0;
 size_t retired_count = 0, id_method_decodes = 0, id_field_decodes = 0;
 bool retired_method = false;
-int32_t self_offset = 8;
+size_t self_offset = 8;
 void* Method(const void* scope, jobject executable) {
   assert(scope == &access && executable == reinterpret_cast<jobject>(&method));
   ++method_decodes;
@@ -40,11 +40,11 @@ void Leave(void* self) {
   assert(self == &thread_flags && (thread_flags >> 24) == 0);
   thread_flags |= guard::native_access_abi::kNative << 24; ++transitions_out;
 }
-void* Decode(void* self, jobject object) {
+artdcevm::abi::arm64::android11::ReleaseObjectPointer Decode(const void* self, jobject object) {
   assert(self == &thread_flags && (thread_flags >> 24) == 0);
-  ++native_decodes; return object;
+  ++native_decodes; return {reinterpret_cast<uintptr_t>(object)};
 }
-int32_t SelfOffset(size_t pointer_size) { assert(pointer_size == 8); return self_offset; }
+artdcevm::abi::arm64::android11::NativeOffset SelfOffset(size_t pointer_size) { assert(pointer_size == 8); return {self_offset}; }
 class Hooks : public artdcevm::HookEngine {
  public:
   bool available = true;
@@ -140,6 +140,8 @@ int main() {
   }
   hooks.missing = nullptr;
   self_offset = 16;
+  assert(!guard::ConfigureNativeObjectAccess(hooks, profile, &error));
+  self_offset = size_t{0x100000008ULL};
   assert(!guard::ConfigureNativeObjectAccess(hooks, profile, &error));
   self_offset = 8;
   assert(guard::ConfigureNativeObjectAccess(hooks, profile, &error));

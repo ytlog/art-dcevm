@@ -287,8 +287,8 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 if(checkJniMode(-1)!=mode)throw new AssertionError("JNI mode unavailable");
                 int result=runnableJniProbe(carrier,fixture);
                 report.put("runnableJniMode"+mode,result);save(report);
-                hierarchyCheck(report,"runnable_jni_real_scope_mode_"+mode,result==255);
-                if(result!=255)return false;
+                hierarchyCheck(report,"runnable_jni_real_scope_mode_"+mode,result==1023);
+                if(result!=1023)return false;
                 int[] workers={-1,-1};
                 Throwable[] errors=new Throwable[2];
                 final int workerMode=mode;
@@ -309,7 +309,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 report.put("runnableJniWorkersMode"+mode,new JSONArray(workers));save(report);
                 hierarchyCheck(report,"runnable_jni_thread_isolation_mode_"+mode,
                     !threads[0].isAlive()&&!threads[1].isAlive()&&errors[0]==null&&errors[1]==null&&
-                    workers[0]==255&&workers[1]==255);
+                    workers[0]==1023&&workers[1]==1023);
             }
         } finally {checkJniMode(previous);}
         return true;

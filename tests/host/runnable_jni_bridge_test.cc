@@ -13,7 +13,7 @@ jobject global=reinterpret_cast<jobject>(0x2000),local=reinterpret_cast<jobject>
 jboolean Exception(JNIEnv*){return state.exception;}
 jobjectRefType RefType(JNIEnv*,jobject object){assert(state.runnable);return object==global?JNIGlobalRefType:object==local?JNILocalRefType:object==weak?JNIWeakGlobalRefType:JNIInvalidRefType;}
 void* Original(const Scope&,jobject){assert(state.runnable);++state.originals;if(state.original_exception)state.exception=true;return state.original_null?nullptr:reinterpret_cast<void*>(0x5000);}
-artdcevm::abi::arm64::android15::ReleaseObjectPointer Decode(const void* self,jobject object){assert(state.runnable&&self==&state&&object==global);++state.decodes;return {0x6000};}
+artdcevm::abi::arm64::android14::ReleaseObjectPointer Decode(const void* self,jobject object){assert(state.runnable&&self==&state&&object==global);++state.decodes;return {0x6000};}
 jmethodID FromReflected(JNIEnv* env,jobject object){
  bool old=state.runnable;state.runnable=true;if(!old)++state.transitions;
  struct Restore{bool old;~Restore(){state.runnable=old;}} restore{old};

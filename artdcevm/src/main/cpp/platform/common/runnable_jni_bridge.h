@@ -1,6 +1,6 @@
 #pragma once
 #include "platform/abi/arm64/android11/jni_access.h"
-#include "platform/abi/arm64/android15/jni_global_decode.h"
+#include "platform/abi/arm64/android14/jni_global_decode.h"
 namespace artdcevm::runnable_jni {
 struct Context {void* self;JNIEnv* env;void* vm;};
 using Operation=bool (*)(const Context&,void*);
@@ -32,7 +32,7 @@ class Bridge {
 class GlobalDecoder {
  public:
   enum class Representation {kMatchedReleaseNoPoison};
-  static const char* SymbolName(){return abi::arm64::android15::kDecodeGlobalJObject;}
+  static const char* SymbolName(){return abi::arm64::android14::kDecodeGlobalJObject;}
   static bool Bind(Representation representation,void* symbol,GlobalDecoder* output);
   // Use only inside an independently established live Runnable JNI Context.
   // Accepts strong JNI globals exclusively. Caller creates/deletes them with JNI
@@ -40,6 +40,6 @@ class GlobalDecoder {
   // Result is borrowed only until suspension/GC; root before a safepoint.
   bool Decode(const Context& context,jobject strong_global,void** output) const;
  private:
-  abi::arm64::android15::DecodeGlobalJObject decode_=nullptr;
+  abi::arm64::android14::DecodeGlobalJObject decode_=nullptr;
 };
 }

@@ -77,6 +77,9 @@ for tag in sorted({tag for tag, _ in sources}):
     assert 'uintptr_t reference_' in obj and 'reinterpret_cast<MirrorType*>(reference_)' in obj
     quick = sources[tag, 'runtime/entrypoints/quick/quick_jni_entrypoints.cc']
     version = int(tag.split('-')[1].split('.')[0])
+    offset_return = 'Offset' if version < 13 else 'MemberOffset'
+    offset_argument = 'size_t' if version < 15 else 'PointerSize'
+    assert f'static {offset_return} SelfOffset({offset_argument} pointer_size);' in environment
     if version < 13:
         assert re.search(r'uint32_t JniMethodStart\(Thread\* self\)', quick)
         assert re.search(r'void JniMethodEnd\(uint32_t saved_local_ref_cookie, Thread\* self\)', quick)
@@ -85,13 +88,14 @@ for tag in sorted({tag for tag, _ in sources}):
         assert 'void artJniMethodStart(Thread* self)' in quick
         assert 'void artJniMethodEnd(Thread* self)' in quick
         transition_kind = 'void ART JNI transition pair'
-    if version >= 15:
+    if version >= 14:
         assert 'std::is_trivially_copyable<ObjPtr<void>>' in obj
         glob = body(sources[tag, 'runtime/thread.cc'], r'ObjPtr<mirror::Object> Thread::DecodeGlobalJObject\(jobject obj\) const')
         assert 'DCHECK_NE(kind, kLocal)' in glob and 'vm_->DecodeGlobal(ref)' in glob
     report['source_families'].append({'tag': tag, 'transition': transition_kind,
+        'self_offset_return': offset_return, 'self_offset_argument': offset_argument,
         'scope_then_named_leaf_then_id_encode': True, 'nested_runnable_jni_compatible': True,
-        'global_decode_release_no_poison_required': version >= 15})
+        'global_decode_release_no_poison_required': version >= 14})
 
 leaf_name = '_ZN3art9ArtMethod19FromReflectedMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobject'
 global_name = '_ZNK3art6Thread19DecodeGlobalJObjectEP8_jobject'
