@@ -20,6 +20,7 @@ public final class RuntimeAccessSuite {
     private static native String probeNativeCache();
     private static native int probeCardOffset();
     private static native String probeMethodGuards(Class<?> owner);
+    private static native String probeFieldGuards(Class<?> owner,Object instance,Field instanceField,Field staticField);
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current,int direct,int virtual,int tableCandidate);
     private static native int methodTableCount();
@@ -132,6 +133,9 @@ public final class RuntimeAccessSuite {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128||contexts[i]!=384||models[i]!=model)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);
             }
+            report.put("fieldStorageModel",fields(fieldStorage));
+            if(fieldStorage)report.put("nativeFieldStorageCalibrated",true).put("nativeCardTableOffset",probeCardOffset());
+            report.put("fieldIdentityCount",28);
             if(methodGuards) {
                 String guardError=probeMethodGuards(RetiredEntryFixture.class);
                 report.put("methodEntryGuardError",guardError);
@@ -147,10 +151,22 @@ public final class RuntimeAccessSuite {
                 if(((Integer)RetiredEntryFixture.class.getDeclaredMethod("kept").invoke(null))!=73)
                     throw new AssertionError("Unretired reflection invoke changed");
                 report.put("methodEntryGuardsCalibrated",true);
+                RetiredEntryFixture fieldFixture=new RetiredEntryFixture();
+                Field removedField=RetiredEntryFixture.class.getDeclaredField("removedField");
+                Field removedStatic=RetiredEntryFixture.class.getDeclaredField("removedStatic");
+                String fieldGuardError=probeFieldGuards(RetiredEntryFixture.class,fieldFixture,removedField,removedStatic);
+                report.put("fieldEntryGuardError",fieldGuardError);
+                if(!fieldGuardError.isEmpty())throw new AssertionError(fieldGuardError);
+                boolean getRejected=false,setRejected=false,staticRejected=false;
+                try {removedField.getInt(fieldFixture);}catch(NoSuchFieldError expected){getRejected=true;}
+                try {removedField.setInt(fieldFixture,99);}catch(NoSuchFieldError expected){setRejected=true;}
+                try {removedStatic.getLong(null);}catch(NoSuchFieldError expected){staticRejected=true;}
+                if(!getRejected||!setRejected||!staticRejected)throw new AssertionError("Retired Field reflection access accepted");
+                if(RetiredEntryFixture.class.getDeclaredField("keptField").getInt(fieldFixture)!=73||
+                        RetiredEntryFixture.class.getDeclaredField("keptStatic").getLong(null)!=17)
+                    throw new AssertionError("Unretired Field reflection changed");
+                report.put("fieldEntryGuardsCalibrated",true);
             }
-            report.put("fieldStorageModel",fields(fieldStorage));
-            if(fieldStorage)report.put("nativeFieldStorageCalibrated",true).put("nativeCardTableOffset",probeCardOffset());
-            report.put("fieldIdentityCount",28);
             if(exclusiveRoots) {
                 java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);
                 long gcBefore=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));

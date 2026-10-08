@@ -1,9 +1,9 @@
-#include "platform/android13/object_replacement_map.h"
+#include "platform/common/object_replacement_map.h"
 #include <algorithm>
 #include <unordered_set>
 #include <stdexcept>
 #include <limits>
-namespace artdcevm::android13 {
+namespace artdcevm::object_replacement {
 uint64_t HashReplacementPointer(const void* pointer) {
   // platform utility: hash<T*> -> cityhash64 on exactly eight little-endian bytes.
   const uint64_t bits=reinterpret_cast<uintptr_t>(pointer);

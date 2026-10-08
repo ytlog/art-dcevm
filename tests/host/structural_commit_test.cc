@@ -108,6 +108,7 @@ namespace artdcevm::android13 {
 void* ReadHeapReference(void* p,size_t offset,bool) {return reinterpret_cast<void*>(uintptr_t{Read<uint32_t>(p,offset)});}
 void* CurrentHierarchyThread() {return thread;}
 void* RuntimeJitCodeCache() {return jit;}
+void* RuntimeInstrumentation() {return runtime+offsetof(selective_abi::RuntimePrefix,instrumentation);}
 bool HasHierarchyChange() {return true;}
 StructuralMemberMappings BuildStructuralMemberMappings(const std::vector<void*>& old,const std::vector<void*>& fresh) {
  assert((old==std::vector<void*>{old_class[0],old_class[1]}) && (fresh==std::vector<void*>{new_class[0],new_class[1]}));events.push_back("mappings");return {};

@@ -1,4 +1,5 @@
 #include "platform/common/modern_method_guards.h"
+#include "platform/abi/arm64/android-common/suspend_all.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/android-common/jni_access.h"
 #include <atomic>
@@ -117,6 +118,12 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
     entry.target = hooks.FindSymbol("libart.so", entry.symbol);
     if (!entry.target) { *error = std::string("Missing method guard entry: ") + entry.symbol; return false; }
   }
+  using namespace abi::arm64::android_common;
+  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+  if(!construct||!destroy){*error="Missing native exclusive method hook installation declarations";return false;}
+  SuspendAll stopped{};construct(&stopped,"artdcevm method guard installation",false);
+  struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
   // Hooks become visible before Install returns. Publish their durable owner
   // first; never clear it if rollback fails and an installed hook remains live.
   state = calibration.candidate;

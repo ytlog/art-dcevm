@@ -16,7 +16,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/hierarchy_resolution_hooks.cc
     platform/android13/class_loader_hooks.cc
     platform/android13/instance_allocation_hooks.cc
-    platform/android13/object_replacement_map.cc
+    platform/common/object_replacement_map.cc
     platform/android13/structural_commit.cc
     platform/android13/selective_deopt.cc
     platform/android13/instrumentation_listener.cc
@@ -71,6 +71,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/frame_recovery.cc
     platform/android13/pending_suspend_deopt.cc
     platform/android13/suspend_deopt_hooks.cc
+    platform/common/modern_field_guards.cc
     platform/common/modern_method_guards.cc
     platform/common/retired_method_registry.cc
     platform/android13/retired_method_registry_bridge.cc

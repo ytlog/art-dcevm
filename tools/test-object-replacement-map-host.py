@@ -14,7 +14,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall',
            '-fsanitize='+os.environ.get('ARTDCEVM_HOST_SANITIZER','address,undefined'), '-fno-omit-frame-pointer', '-pthread', '-I', str(cpp),
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/object_replacement_map_test.cc'),
-           str(cpp / 'platform/android13/object_replacement_map.cc'), '-o', str(binary)]
+           str(cpp / 'platform/common/object_replacement_map.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 else:

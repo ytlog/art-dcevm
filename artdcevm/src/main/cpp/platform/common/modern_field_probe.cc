@@ -9,6 +9,10 @@
 #include "hooks/shadow_hook_engine.h"
 #include <vector>
 #include <stdexcept>
+namespace artdcevm::field_mirror {
+namespace {thread_local Calibration last_calibration;}
+Calibration DebugCalibration(){return last_calibration;}
+}
 namespace {
 using namespace artdcevm;
 thread_local size_t calibrated_card_offset=0;
@@ -90,6 +94,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
       hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
   auto result=runnable_executor::With(env,global_owner,Observe,&request);
   if(result!=runnable_jni::Result::kSuccess)return failure("field metadata: "+request.error);
+  field_mirror::last_calibration=request.mirror;
   if(storage_required) {
   jmethodID constructor=env->GetMethodID(owner,"<init>","()V");
   jobject fixture=constructor?env->NewObject(owner,constructor):nullptr;

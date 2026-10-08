@@ -4,6 +4,7 @@
 #include "platform/android15/runtime_services.h"
 #include "platform/common/native_cache_service.h"
 #include "platform/common/modern_method_guards.h"
+#include "platform/common/modern_field_guards.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/common/runnable_executor.h"
@@ -375,6 +376,92 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethodGuards(JNIE
   if(success)success=env->CallStaticIntMethodA(owner,kept,nullptr)==73&&!env->ExceptionCheck();
   env->DeleteGlobalRef(root);
   if(!success&&error.empty())error="Actual method guard identity/exception/passthrough failed";
+  return env->NewStringUTF(error.c_str());
+}
+#endif
+
+
+#if defined(ARTDCEVM_TESTING)
+namespace {
+artdcevm::retirement::RetiredFieldRegistry debug_retired_fields;
+jobject field_guard_anchor=nullptr;
+struct RetireFieldsRequest {
+  void* manager;
+  void* (*decode)(void*,jfieldID);
+  artdcevm::field_mirror::NamedField leaf;
+  void (*visit)(void*,void*);
+  jfieldID ids[2];jobject mirrors[2];
+};
+// android-15.0.0_r1 reflective_value_visitor.h fixed virtual declaration.
+// The native original constructs SourceInfo; this visitor never fabricates one.
+struct FieldSourceInfo {const void* vptr;uint32_t type;};
+class RetireFieldVisitor {
+ public:
+  virtual ~RetireFieldVisitor()=default;
+  virtual void* VisitMethod(void* method,const FieldSourceInfo&){return method;}
+  virtual void* VisitField(void* field,const FieldSourceInfo& source) {
+    void* object=nullptr;std::memcpy(&object,reinterpret_cast<const unsigned char*>(&source)+16,8);
+    if(source.type!=2||object!=expected_mirror||field!=expected_field)return field;
+    debug_retired_fields.Retire(field);observed=true;return field;
+  }
+  void* expected_mirror=nullptr;void* expected_field=nullptr;bool observed=false;
+};
+bool RetireFields(const artdcevm::runnable_jni::Context& context,void* data) {
+  auto& request=*static_cast<RetireFieldsRequest*>(data);
+  for(size_t i=0;i<2;++i) {
+    void* mirror=nullptr;
+    if(!artdcevm::runnable_executor::DecodeStrongGlobal(context,request.mirrors[i],&mirror))return false;
+    void* field=request.decode(request.manager,request.ids[i]);
+    if(!field||request.leaf(mirror)!=field)return false;
+    RetireFieldVisitor visitor;visitor.expected_mirror=mirror;visitor.expected_field=field;
+    request.visit(mirror,&visitor);
+    uint32_t token=0;std::memcpy(&token,static_cast<unsigned char*>(mirror)+
+        artdcevm::field_mirror::kDeclaration.field_index,4);
+    if(!visitor.observed||token!=debug_retired_fields.TokenFor(field)||
+       !(token&artdcevm::retirement::kRetiredFieldTag)||request.leaf(mirror)!=field)return false;
+  }
+  return true;
+}
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFieldGuards(
+    JNIEnv* env,jclass,jclass owner,jobject instance,jobject instance_field,jobject static_field) {
+  artdcevm::ShadowHookEngine hooks;std::string error;
+  if(!artdcevm::jni_access::CalibrateServices(hooks,env,&error))return env->NewStringUTF(error.c_str());
+  const auto& services=artdcevm::jni_access::runtime_services_observed;
+  auto removed=env->GetFieldID(owner,"removedField","I");
+  auto kept=env->GetFieldID(owner,"keptField","I");
+  auto removed_static=env->GetStaticFieldID(owner,"removedStatic","J");
+  auto kept_static=env->GetStaticFieldID(owner,"keptStatic","J");
+  auto exception=env->FindClass("java/lang/NoSuchFieldError");
+  auto instance_root=env->NewGlobalRef(instance_field),static_root=env->NewGlobalRef(static_field);
+  if(!field_guard_anchor) {auto object=env->FindClass("java/lang/Object");
+    if(object)field_guard_anchor=env->NewGlobalRef(object);}
+  bool success=removed&&kept&&removed_static&&kept_static&&exception&&instance_root&&static_root&&
+      field_guard_anchor&&!env->ExceptionCheck();
+  if(success&&debug_retired_fields.Count()==0)success=env->GetIntField(instance,removed)==41&&
+      env->GetStaticLongField(owner,removed_static)==13&&!env->ExceptionCheck();
+  if(success)success=artdcevm::retirement::InstallFieldEntryGuards(hooks,env,field_guard_anchor,
+      services.receivers.jni_id_manager,artdcevm::field_mirror::DebugCalibration(),debug_retired_fields,&error);
+  RetireFieldsRequest request{services.receivers.jni_id_manager,
+    reinterpret_cast<void*(*)(void*,jfieldID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID")),
+    reinterpret_cast<artdcevm::field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
+    reinterpret_cast<void(*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11VisitTargetEPNS_22ReflectiveValueVisitorE")),
+    {removed,removed_static},{instance_root,static_root}};
+  if(success)success=request.decode&&request.leaf&&request.visit&&artdcevm::runnable_executor::With(env,field_guard_anchor,
+      RetireFields,&request)==artdcevm::runnable_jni::Result::kSuccess;
+  auto rejected=[&]() {auto thrown=env->ExceptionOccurred();env->ExceptionClear();
+    bool matches=thrown&&env->IsInstanceOf(thrown,exception);if(thrown)env->DeleteLocalRef(thrown);return matches;};
+  if(success) {env->GetIntField(instance,removed);success=rejected();}
+  if(success) {env->SetIntField(instance,removed,99);success=rejected();}
+  if(success) {env->GetStaticLongField(owner,removed_static);success=rejected();}
+  if(success) {env->SetStaticLongField(owner,removed_static,99);success=rejected();}
+  if(success)success=env->GetIntField(instance,kept)==73&&env->GetStaticLongField(owner,kept_static)==17&&!env->ExceptionCheck();
+  if(success) {env->SetIntField(instance,kept,79);env->SetStaticLongField(owner,kept_static,19);
+    success=env->GetIntField(instance,kept)==79&&env->GetStaticLongField(owner,kept_static)==19&&!env->ExceptionCheck();
+    env->SetIntField(instance,kept,73);env->SetStaticLongField(owner,kept_static,17);}
+  if(instance_root)env->DeleteGlobalRef(instance_root);if(static_root)env->DeleteGlobalRef(static_root);
+  if(!success&&error.empty())error="Actual field guard token/exception/passthrough failed";
   return env->NewStringUTF(error.c_str());
 }
 #endif

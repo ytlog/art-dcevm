@@ -55,4 +55,9 @@ inline bool Calibrate(const runnable_jni::Context& context,
   }
   result.matched=true;*output=result;return true;
 }
+#ifdef ARTDCEVM_TESTING
+// Debug bootstrap records only the completed scalar declaration proof, no raw
+// managed object or native-field identity escapes its owned callback.
+Calibration DebugCalibration();
+#endif
 }  // namespace artdcevm::field_mirror
