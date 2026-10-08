@@ -3,16 +3,20 @@
 #include "platform/android13/device_profile.h"
 #include <jni.h>
 #include "platform/android13/runtime_receiver_probe.h"
+#include "platform/android13/owned_jit_receiver_probe.h"
 #include <string>
 namespace artdcevm::android13 {
 bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error,
-                            const RuntimeReceivers* receivers=nullptr);
+                            const RuntimeReceivers* receivers=nullptr,
+                            const OwnedJitReceivers* jit_receivers=nullptr);
 void* RuntimeClassLinker();
 void* RuntimeInstrumentation();
 void* RuntimeInstance();
 void* RuntimeJniIdManager();
 void* RuntimeJitCodeCache();
 void* RuntimeJit();
+// Readers reject non-null service replacements without fresh owned calibration.
+// A null JIT returns null and preserves the original no-JIT cache guard.
 // Callers hold ART's shared mutator lock. Pointer IDs pass through, indexed
 // IDs delegate synchronization and mapping to the device JniIdManager.
 void* DecodeMethodId(jmethodID id);

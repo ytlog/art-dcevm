@@ -25,6 +25,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/compiled_frame_diagnostics.cc
     platform/android13/device_diagnostics.cc
     platform/android13/runtime_receiver_probe.cc
+    platform/android13/owned_jit_receiver_probe.cc
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
     platform/common/owned_context_consumer.cc

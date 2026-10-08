@@ -7,8 +7,9 @@ struct RuntimeReceivers {
   void* jni_id_manager=nullptr;
   JavaVM* java_vm=nullptr;
   void* thread_list=nullptr;
+  void* instrumentation=nullptr;
 };
-// Observe receivers of real public JNI requests, before reading Runtime storage.
+// Observe receivers of real public JNI/JVMTI requests, before reading Runtime storage.
 // Hooks remain installed as passthroughs for process lifetime. No object prefix,
 // SDK number or ELF identity is used to produce these independent observations.
 bool CalibrateRuntimeReceivers(HookEngine& hooks,JNIEnv* env,RuntimeReceivers* output,
