@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the isolated owned JNI probe without initializing private evolution."""
 import argparse,hashlib,json,re,subprocess,shutil
-from datetime import datetime,timezone
+from evidence_paths import new_evidence_directory
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--serial',required=True)
@@ -10,7 +10,7 @@ p.add_argument('--adb',default=shutil.which('adb'))
 p.add_argument('--skip-install',action='store_true')
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
-out=Path('build/evidence/runtime-access')/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ');out.mkdir(parents=True)
+out=new_evidence_directory(Path('build/evidence/runtime-access'))
 metadata={'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'scope':'isolated-owned-JNI; no full evolution initialization'}
 def adb(label,*args):
     r=subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,text=True,timeout=180)
@@ -30,6 +30,9 @@ try:
     metadata['passed']=report.get('passed') is True and report.get('mainCallbackHits')==128 and report.get('workerCallbackHits')==[128,128] and report.get('privateEvolutionInitialized') is False
     routes={'from-reflected-method','new-global-ref'}
     metadata['passed']=metadata['passed'] and report.get('mainRoute') in routes and len(report.get('workerRoutes',[]))==2 and all(route in routes for route in report['workerRoutes'])
+    metadata['passed']=metadata['passed'] and report.get('mainContextChecks')==384 and report.get('workerContextChecks')==[384,384]
+    model=report.get('mainMethodModel')
+    metadata['passed']=metadata['passed'] and model in (11,12) and report.get('workerMethodModels')==[model,model] and len(report.get('methodDexIndices',[]))==3
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)

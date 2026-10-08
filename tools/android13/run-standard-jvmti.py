@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the standard JVMTI API through an independent Agent in both load orders."""
 import argparse
-from datetime import datetime, timezone
+import sys
 import hashlib
 import json
 from pathlib import Path
 import subprocess
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from evidence_paths import new_evidence_directory
 
 root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
@@ -24,8 +27,7 @@ adb = str(Path(sdk) / 'platform-tools/adb')
 apk = (root / args.apk).resolve()
 if not apk.is_file():
     parser.error(f'APK does not exist: {apk}')
-output = root / 'build/evidence/standard-jvmti' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-output.mkdir(parents=True)
+output = new_evidence_directory(root / 'build/evidence/standard-jvmti')
 
 def command(*parts):
     return subprocess.run([adb, '-s', args.serial, *parts], capture_output=True, text=True, timeout=180)

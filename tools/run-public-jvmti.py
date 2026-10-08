@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import time
+from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'dev.artdcevm.lab'
@@ -37,8 +38,11 @@ def main():
     if args.boot_timeout <= 0:
         parser.error('--boot-timeout must be positive')
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
-    out = args.output or ROOT / 'build/evidence/compatibility' / stamp
-    out.mkdir(parents=True, exist_ok=True)
+    out = args.output
+    if out is None:
+        out = new_evidence_directory(ROOT / 'build/evidence/compatibility', stamp)
+    else:
+        out.mkdir(parents=True, exist_ok=False)
     report = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
               'startedUtc': stamp, 'scope': 'public-jvmti', 'passed': False, 'tests': {}}
 

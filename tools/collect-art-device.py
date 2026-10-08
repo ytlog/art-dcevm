@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARIES = ('libart.so', 'libartd.so', 'libopenjdkjvmti.so', 'libopenjdkjvmtid.so',
@@ -50,11 +51,11 @@ def main():
     if args.pull_timeout <= 0:
         parser.error('--pull-timeout must be positive')
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
-    out = (args.output or ROOT / 'build/evidence/art-devices' / stamp).resolve()
+    out = (args.output or new_evidence_directory(ROOT / 'build/evidence/art-devices', stamp)).resolve()
     evidence = (ROOT / 'build/evidence').resolve()
     if not out.is_relative_to(evidence):
         parser.error('Device libraries and raw reports must remain under build/evidence/')
-    if out.exists() and any(out.iterdir()):
+    if args.output and out.exists():
         parser.error('Use a new output directory; existing evidence is never overwritten')
     out.mkdir(parents=True, exist_ok=True)
     report = dict(origin=args.origin, project=args.project, reservation=args.reservation,

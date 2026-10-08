@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Install the enhancement APK and test ABI, method and field evolution."""
 import argparse
-from datetime import datetime, timezone
+import sys
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser()
@@ -26,8 +29,7 @@ with zipfile.ZipFile(apk) as archive:
         p.error('Build the arm64 enhancement APK first')
     if any('libartdcevm_source' in name for name in archive.namelist()):
         p.error('Unexpected standalone source-engine library in APK')
-out = ROOT / 'build/evidence/source-engine' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-out.mkdir(parents=True)
+out = new_evidence_directory(ROOT / 'build/evidence/source-engine')
 meta = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
         'fullDcevmComplete': False, 'hookOrder': args.hook_order, 'suite': args.suite,
         'installSkipped': args.skip_install}

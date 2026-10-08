@@ -3,6 +3,8 @@
 #include "platform/jni_access/capability_selection.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
+#include "platform/common/owned_context_calibration.h"
+#include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
@@ -10,10 +12,13 @@
 #include "support/elf_modules.h"
 #include <mutex>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 namespace artdcevm::jni_access {
 namespace {
 runnable_jni::Bridge bridge;
 runnable_jni::GlobalRefBridge global_bridge;
+owned_context_calibration::Service context_service;
 RuntimeCandidate profile{};
 void* token=nullptr;
 void* global_token=nullptr;
@@ -48,6 +53,20 @@ bool Observe(const runnable_jni::Context& context,void* data) {
       :bridge.Invoke(context.env,probe.carrier,Observe,data);
   if(nested!=runnable_jni::Result::kReentrant)return false;
   ++probe.hits;return true;
+}
+struct MethodProbe {
+  Probe probe;
+  abi::arm64::android_common::FromReflectedMethod leaf;
+  const method_identity::Oracle* oracles;
+  size_t count;
+  method_identity::Calibration calibration;
+};
+bool ObserveMethods(const runnable_jni::Context& context,void* data) {
+  auto& request=*static_cast<MethodProbe*>(data);
+  if(!Observe(context,&request.probe))return false;
+  std::string error;
+  return method_identity::Calibrate(context,request.leaf,request.oracles,request.count,
+                                    &request.calibration,&error);
 }
 int Run(JNIEnv* env,jobject carrier,jobject thread_global) {
   last_route="uncalibrated";
@@ -93,6 +112,8 @@ int Run(JNIEnv* env,jobject carrier,jobject thread_global) {
     else mutable_peer=reinterpret_cast<decltype(mutable_peer)>(peer);
     if(candidate.decoder==DecoderModel::kLegacyAny)legacy_decode=reinterpret_cast<decltype(legacy_decode)>(decode);
     else if(!runnable_jni::GlobalDecoder::Bind(runnable_jni::GlobalDecoder::Representation::kMatchedReleaseNoPoison,decode,&global_decode))std::abort();
+    owned_context_calibration::Service::Bind(
+        hooks.FindSymbol("libart.so",owned_context_calibration::Service::SymbolName()),&context_service);
     initialized=true;
     // Binding is a diagnostic candidate only. Observed release pointer equality
     // below does not mint any production calibration token or evolution profile.
@@ -137,5 +158,62 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_artBuildId(JNIEnv* env
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeRoute(JNIEnv* env,jclass) {
   return env->NewStringUTF(artdcevm::jni_access::last_route);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeContext(JNIEnv*,jclass) {
+  artdcevm::owned_context_calibration::Service service;
+  {
+    std::lock_guard<std::mutex> lock(artdcevm::jni_access::initialization);
+    service=artdcevm::jni_access::context_service;
+  }
+  artdcevm::owned_context_calibration::Report report;
+  if(!service.Run(128,&report))return -200-static_cast<int>(report.failure);
+  return report.completed==128&&report.checks==384?384:-201;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
+    JNIEnv* env,jclass,jobjectArray methods,jintArray indices,jintArray modifiers,
+    jclass owner,jobject carrier,jobject thread) {
+  using namespace artdcevm;
+  using namespace artdcevm::jni_access;
+  if(!methods||!indices||!modifiers||!owner||!carrier||!thread||env->ExceptionCheck())return -300;
+  const jsize count=env->GetArrayLength(methods);
+  if(count<3||count>32||env->GetArrayLength(indices)!=count||env->GetArrayLength(modifiers)!=count)return -301;
+  std::vector<jint> dex(count),flags(count);
+  env->GetIntArrayRegion(indices,0,count,dex.data());
+  env->GetIntArrayRegion(modifiers,0,count,flags.data());
+  if(env->ExceptionCheck())return -302;
+  struct Roots {
+    JNIEnv* env;std::vector<jobject> values;
+    ~Roots(){for(jobject root:values)env->DeleteGlobalRef(root);}
+    jobject Own(jobject value){auto root=env->NewGlobalRef(value);if(root)values.push_back(root);return root;}
+  } roots{env,{}};
+  if(!roots.Own(owner))return -303;
+  jobject thread_global=roots.Own(thread);
+  if(!thread_global)return -303;
+  std::vector<method_identity::Oracle> oracles;
+  for(jsize i=0;i<count;++i) {
+    jobject method=env->GetObjectArrayElement(methods,i);
+    if(!method||env->ExceptionCheck())return -304;
+    jobject global=roots.Own(method);env->DeleteLocalRef(method);
+    if(!global||env->ExceptionCheck())return -303;
+    oracles.push_back({global,static_cast<uint32_t>(dex[i]),static_cast<uint32_t>(flags[i])});
+  }
+  JavaVM* vm=nullptr;
+  if(env->GetJavaVM(&vm)!=JNI_OK||!vm)return -305;
+  std::unique_lock<std::mutex> guard(initialization);
+  if(!initialized||!std::strcmp(last_route,"uncalibrated"))return -306;
+  ShadowHookEngine hooks;
+  auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
+      hooks.FindSymbol("libart.so",runnable_jni::Bridge::SymbolName()));
+  if(!leaf)return -307;
+  Probe probe{env,vm,current(),carrier,thread_global,0,!std::strcmp(last_route,"new-global-ref")};
+  MethodProbe request{probe,leaf,oracles.data(),oracles.size(),{}};
+  guard.unlock();
+  auto result=probe.use_global?global_bridge.Invoke(env,thread_global,ObserveMethods,&request)
+      :bridge.Invoke(env,carrier,ObserveMethods,&request);
+  if(result!=runnable_jni::Result::kSuccess)return -300-static_cast<int>(result);
+  if(request.probe.hits!=1||request.calibration.identities.size()!=oracles.size())return -308;
+  return request.calibration.model==method_identity::Model::kMethod11?11:12;
 }
 #endif
