@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/android13/allocation_validation_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android11/gc_cache_pair.h"
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::android13::hierarchy_allocation_abi {
@@ -15,7 +16,7 @@ struct Cache {
   uint32_t num_methods, num_types, num_strings;
 };
 #pragma pack(pop)
-struct alignas(8) TypePair { uint32_t object, index; };
+using TypePair=abi::arm64::android11::GcCachePair;
 struct alignas(16) NativePair { uintptr_t object, index; };
 struct Target { void* owner; void* klass; void* cache; bool structural; };
 static_assert(sizeof(Vector)==24 && sizeof(Cache)==108);

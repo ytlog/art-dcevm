@@ -15,6 +15,7 @@
 #include "platform/android13/transaction_metadata.h"
 #include "platform/common/dex_file_metadata.h"
 #include "platform/common/native_cache_reset.h"
+#include "platform/common/type_cache_update.h"
 #include <limits>
 namespace artdcevm::android13 {
 namespace {
@@ -159,19 +160,16 @@ void HierarchyBatch::RefreshCache(void* slot) {
   for(const auto& target:targets_) owned|=HierarchyRootPool::Get(target.cache)==cache;
   if(!owned) return; // Only unpublished explicit-target caches may be mutated.
   Cache snapshot;std::string error;Require(GetTransactionMetadataReader().ReadCache(cache,&snapshot,&error));
-  using Pair=hierarchy_allocation_abi::TypePair;
-  auto types=reinterpret_cast<Pair*>(snapshot.types);
-  uint32_t count=snapshot.num_types;
-  for(uint32_t i=0;types && i<count;++i) {
-    Pair pair;__atomic_load(types+i,&pair,__ATOMIC_RELAXED);
-    void* klass=read_root(&pair.object);
-    if(!klass || !Normal(klass)) continue;
+  type_cache::View types;
+  Require(type_cache::Read(33,cache,sizeof(Cache),0,&types));
+  types.Apply([&](uint32_t* reference) {
+    void* klass=read_root(reference);
+    if(!klass || !Normal(klass))return false;
     void* replacement=Find(Descriptor(klass),Loader(klass));
-    if(replacement && replacement!=klass) {
-      pair.object=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(replacement));
-      __atomic_store(types+i,&pair,__ATOMIC_RELEASE);++counters[4];
-    }
-  }
+    if(!replacement || replacement==klass)return false;
+    *reference=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(replacement));
+    ++counters[4];return true;
+  });
   ClearNative(snapshot.methods,snapshot.num_methods);
   ClearNative(snapshot.fields,snapshot.num_fields);
   CopyWriteBarrier(cache);
