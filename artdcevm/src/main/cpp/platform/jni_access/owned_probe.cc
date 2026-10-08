@@ -85,17 +85,16 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
   method_array::View table;
   if(!owned_method_table::Calibrate(context,request.leaf,request.calibration,klass,
       request.counts,request.oracles,request.count,&table,&error))return false;
-  if(request.calibration.model==method_identity::Model::kMethod12Onward) {
   if(!executable_mirror::Calibrate(context,request.leaf,
       runnable_executor::DecodeStrongGlobal,request.oracles,request.count,&error))return false;
   bool native_checked=false;
   for(size_t i=0;i<request.count;++i)if(request.oracles[i].java_modifiers&0x100u) {
     if(!native_method_binding::Calibrate(context,request.leaf,request.oracles[i],
-        request.registered_binding,&error))return false;
+        request.registered_binding,request.calibration.model,&error))return false;
     native_checked=true;
   }
   if(!native_checked)return false;
-  if(runtime_services_observed.receivers.class_linker) {
+  if(request.calibration.model==method_identity::Model::kMethod12Onward&&runtime_services_observed.receivers.class_linker) {
     ShadowHookEngine hooks;
     size_t native_index=0;
     while(native_index<request.count&&!(request.oracles[native_index].java_modifiers&0x100u))++native_index;
@@ -112,7 +111,6 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
     // Named name/signature comparison must distinguish two independently
     // declared methods, including the constructor.
     if(table.count>1&&service->SameIdentity(service->At(klass,0),service->At(klass,1)))return false;
-  }
   }
   last_table_count=static_cast<int>(table.boundaries.declared_count);
   return true;

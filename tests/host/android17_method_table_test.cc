@@ -72,6 +72,20 @@ int main(){
   native_binding++;std::memcpy(static_cast<unsigned char*>(native[3])+16,&native_binding,8);
   assert(!native_method_binding::Calibrate(context,Leaf,oracles[3],&binding,&error));
   assert(!native_method_binding::Calibrate(context,Leaf,oracles[0],&binding,&error));
+  // Legacy storage has a distinct DEX-index and mutable binding declaration.
+  method_metadata::Method11 legacy{};
+  legacy.access_flags=oracles[3].java_modifiers;
+  legacy.dex_method_index=oracles[3].dex_method_index;
+  legacy.data=uintptr_t(&binding);
+  auto* modern_native=native[3];native[3]=&legacy;
+  assert(native_method_binding::Calibrate(context,Leaf,oracles[3],&binding,method_identity::Model::kMethod11,&error));
+  assert(!native_method_binding::Calibrate(context,Leaf,oracles[3],&binding,&error));
+  legacy.data++;
+  assert(!native_method_binding::Calibrate(context,Leaf,oracles[3],&binding,method_identity::Model::kMethod11,&error));
+  legacy.data--;
+  assert(!native_method_binding::Calibrate(context,Leaf,oracles[0],&binding,method_identity::Model::kMethod11,&error));
+  assert(!native_method_binding::Calibrate(context,Leaf,oracles[3],&binding,static_cast<method_identity::Model>(99),&error));
+  native[3]=modern_native;
   mirrors[0].art_method++;assert(!mirror_run());mirrors[0].art_method--;
   mirrors[1].access_flags^=8;assert(!mirror_run());mirrors[1].access_flags^=8;
   mirrors[2].dex_method_index++;assert(!mirror_run());mirrors[2].dex_method_index--;

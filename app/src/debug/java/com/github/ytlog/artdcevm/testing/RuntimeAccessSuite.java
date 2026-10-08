@@ -83,7 +83,7 @@ public final class RuntimeAccessSuite {
             int model=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
             report.put("mainMethodTableCount",methodTableCount());
             if(methodTableCount()!=methods.length)throw new AssertionError("Complete method table oracle");
-            report.put("mainMethodModel",model);
+            report.put("mainMethodModel",model).put("executableMirrorIdentityCount",methods.length).put("registeredNativeBindingCalibrated",true);
             if(model!=11&&model!=12)throw new AssertionError("Owned method identity main: "+model);
             if(runtimeServices||nativeCache||jitReceivers||methodGuards) {
                 String serviceError=probeRuntimeServices();

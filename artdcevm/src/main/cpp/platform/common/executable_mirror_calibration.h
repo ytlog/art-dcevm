@@ -1,14 +1,20 @@
 #pragma once
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android12/reflection.h"
+#include "platform/abi/arm64/android11/reflection.h"
 #include <set>
 namespace artdcevm::executable_mirror {
-// Fixed source declaration shared by android-12 through android-17.0.0_r1
+// Fixed scalar identity fields shared by android-11 through android-17.0.0_r1
 // b753cf97923c runtime/mirror/executable.h. A source candidate, not SDK dispatch.
 using Declaration = abi::arm64::android12::Executable;
 static_assert(offsetof(Declaration, art_method) == 24);
 static_assert(offsetof(Declaration, access_flags) == 32);
 static_assert(offsetof(Declaration, dex_method_index) == 36);
+static_assert(offsetof(abi::arm64::android11::Executable,art_method)==offsetof(Declaration,art_method));
+static_assert(offsetof(abi::arm64::android11::Executable,access_flags)==offsetof(Declaration,access_flags));
+static_assert(offsetof(abi::arm64::android11::Executable,dex_method_index)==offsetof(Declaration,dex_method_index));
+// AccessibleObject/parameter bytes differ: this capability permits only the
+// named pointer/access flags/DEX-index fields below, never that earlier tail.
 using Decode = bool (*)(const runnable_jni::Context&, jobject, void**);
 // Checks every owned Constructor/Method against the named ART leaf and the
 // independent APK DEX/Java reflection oracles. No JNI calls or safepoints occur
