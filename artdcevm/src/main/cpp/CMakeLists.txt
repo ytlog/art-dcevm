@@ -34,8 +34,10 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/owned_context_calibration.cc
     platform/android17/runtime_receiver_probe.cc
     platform/android17/runtime_services.cc
+    platform/common/owned_jit_receivers.cc
     platform/android17/method_table.cc
     platform/common/method_identity_calibration.cc
+    platform/common/native_cache_service.cc
     platform/common/source_commit.cc
     platform/common/structural_methods.cc
     platform/common/runnable_jni_bridge.cc
@@ -86,6 +88,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/allocation_validation.cc
     platform/android13/member_decode.cc
     platform/android13/validation_metadata.cc
+    platform/common/exclusive_owned_roots.cc
     platform/common/modern_field_metadata.cc
     platform/common/modern_field_probe.cc
     platform/common/field_copy.cc

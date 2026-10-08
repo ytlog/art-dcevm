@@ -18,6 +18,12 @@ struct View {
   void* heap=nullptr;
   void* java_vm=nullptr;
 };
+// Observations are borrowed from ART. Unobserved receivers remain null.
+struct Snapshot {
+  void* runtime=nullptr;
+  void* instrumentation=nullptr;
+  View receivers;
+};
 namespace detail {
 template<class Prefix> bool Read(const void* runtime,size_t extent,View* output) {
   const auto address=reinterpret_cast<uintptr_t>(runtime);

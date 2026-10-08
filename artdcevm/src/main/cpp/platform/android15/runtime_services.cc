@@ -1,6 +1,7 @@
 #include "platform/android15/runtime_services.h"
 #include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
@@ -57,11 +58,12 @@ struct ReadRequest {
   void* runtime;
   runtime_receiver::Receivers observed;
   runtime_services::View view;
+  size_t extent=0;
 };
 bool ReadServices(const runnable_jni::Context&,void* opaque) {
   auto& request=*static_cast<ReadRequest*>(opaque);
   if(!runtime_services::Read(runtime_services::Declaration::kAndroid15To17,request.runtime,
-      sizeof(abi::arm64::android15::RuntimePrefix),&request.view))return false;
+      request.extent,&request.view))return false;
   return request.view.class_linker==request.observed.class_linker&&
       request.view.jni_id_manager==request.observed.jni_id_manager&&
       request.view.thread_list==request.observed.thread_list&&
@@ -102,6 +104,9 @@ bool CalibrateRuntimeServices(HookEngine& hooks,JNIEnv* env,RuntimeServices* out
   if(klass)env->DeleteLocalRef(klass);
   if(!root||env->ExceptionCheck())return Fail(error,"Owned Runtime receiver calibration carrier unavailable");
   ReadRequest request{*singleton,observed,{}};
+  if(!method_identity::ReadableMappingExtent(request.runtime,&request.extent)) {
+    env->DeleteGlobalRef(root);return Fail(error,"Runtime receiver mapping is not readable");
+  }
   auto result=runnable_executor::With(env,root,ReadServices,&request);
   env->DeleteGlobalRef(root);
   if(result!=runnable_jni::Result::kSuccess)return Fail(error,"Runtime source declaration disagrees with observed service receivers");

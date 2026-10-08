@@ -16,9 +16,13 @@ public final class RuntimeAccessSuite {
     private static native String probeRoute();
     private static native int probeContext();
     private static native String probeRuntimeServices();
+    private static native int probeCacheThreads();
+    private static native String probeNativeCache();
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current,int direct,int virtual,int tableCandidate);
     private static native int methodTableCount();
+    private static native String probeExclusive(Class<?> owner,int iterations);
+    private static native String probeJitServices(Object hot,Class<?> owner,int index,int modifiers,Class<?> target,byte[] dex);
     private static native String probeFields(Class<?> owner,String descriptor,Object[] fields,
             String[] names,String[] types,int[] modifiers);
     private static String descriptor(Class<?> type) {
@@ -46,7 +50,8 @@ public final class RuntimeAccessSuite {
         return result;
     }
     public JSONObject run(String apkPath) { return run(apkPath,false); }
-    public JSONObject run(String apkPath,boolean runtimeServices) {
+    public JSONObject run(String apkPath,boolean runtimeServices) { return run(apkPath,runtimeServices,false,false,false); }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers) {
         JSONObject report=new JSONObject();
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
@@ -58,7 +63,8 @@ public final class RuntimeAccessSuite {
             Method carrier=Object.class.getMethod("toString");
             Executable[] methods={MethodIdentityFixture.class.getDeclaredConstructor(),MethodIdentityFixture.class.getDeclaredMethod("instanceMarker",int.class),
                     MethodIdentityFixture.class.getDeclaredMethod("staticMarker",long.class),
-                    MethodIdentityFixture.class.getDeclaredMethod("nativeMarker")};
+                    MethodIdentityFixture.class.getDeclaredMethod("nativeMarker"),
+                    MethodIdentityFixture.class.getDeclaredMethod("hotLoop",int.class)};
             MethodDexOracle.Result oracle=MethodDexOracle.read(apkPath,methods);
             report.put("methodDexEntry",oracle.dexEntry).put("methodDexHeaderOffset",oracle.headerOffset)
                     .put("methodDexIndices",new JSONArray(oracle.indices));
@@ -73,6 +79,23 @@ public final class RuntimeAccessSuite {
             if(Build.VERSION.SDK_INT==37&&methodTableCount()!=methods.length)throw new AssertionError("Android17 method table oracle");
             report.put("mainMethodModel",model);
             if(model!=11&&model!=12)throw new AssertionError("Owned method identity main: "+model);
+            if(runtimeServices||nativeCache||jitReceivers) {
+                String serviceError=probeRuntimeServices();
+                report.put("runtimeServicesError",serviceError).put("runtimeServicesCalibrated",serviceError!=null&&serviceError.isEmpty());
+                if(serviceError==null||!serviceError.isEmpty())throw new AssertionError(serviceError);
+            }
+            if(jitReceivers) {
+                byte[] additive;
+                try(java.util.zip.ZipFile zip=new java.util.zip.ZipFile(apkPath);
+                    java.io.InputStream in=zip.getInputStream(zip.getEntry("assets/add/com/github/ytlog/artdcevm/fixture/Evolving.dex"))) {
+                    java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();byte[] chunk=new byte[8192];int n;
+                    while((n=in.read(chunk))!=-1)bytes.write(chunk,0,n);additive=bytes.toByteArray();
+                }
+                String jit=probeJitServices(methods[4],MethodIdentityFixture.class,oracle.indices[4],oracle.modifiers[4],
+                        com.github.ytlog.artdcevm.fixture.Evolving.class,additive);
+                report.put("jitServices",jit);
+                if(!jit.equals("jit,code-cache,heap"))throw new AssertionError(jit);
+            }
             int[] results={-1,-1},contexts={-1,-1},models={-1,-1},tables={-1,-1};String[] routes=new String[2];Throwable[] errors=new Throwable[2];Thread[] workers=new Thread[2];
             for(int i=0;i<2;i++) {
                 final int slot=i;
@@ -97,14 +120,26 @@ public final class RuntimeAccessSuite {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128||contexts[i]!=384||models[i]!=model)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);
             }
-            if(runtimeServices) {
-                String serviceError=probeRuntimeServices();
-                report.put("runtimeServicesError",serviceError);
-                report.put("runtimeServicesCalibrated",serviceError.isEmpty());
-                if(!serviceError.isEmpty())throw new AssertionError(serviceError);
-            }
             report.put("fieldStorageModel",fields());
             report.put("fieldIdentityCount",28);
+            if(exclusiveRoots) {
+                java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);
+                long gcBefore=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+                java.util.concurrent.atomic.AtomicInteger gcCycles=new java.util.concurrent.atomic.AtomicInteger();
+                Thread gc=new Thread(() -> {byte[][] pressure=new byte[16][];int slot=0;while(gcRunning.get()){pressure[slot++&15]=new byte[65536];System.gc();gcCycles.incrementAndGet();Thread.yield();}},"OwnedExclusiveGC");
+                gc.start();String exclusiveError;
+                try {exclusiveError=probeExclusive(Class.forName("com.github.ytlog.artdcevm.internal.CalibrationFixture"),32);}
+                finally {gcRunning.set(false);gc.join(30000);}
+                long gcAfter=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+                if(gc.isAlive()||gcCycles.get()<1||gcAfter<=gcBefore||exclusiveError==null||!exclusiveError.isEmpty())throw new AssertionError("Exclusive monitor/GC: "+exclusiveError);
+                report.put("exclusiveMonitorIterations",32).put("exclusiveFailureRestoration",true).put("exclusiveGcRequests",gcCycles.get()).put("exclusiveGcCollections",gcAfter-gcBefore);
+            }
+            if(nativeCache) {
+                String cacheError=probeNativeCache();int cacheThreads=probeCacheThreads();
+                report.put("nativeCacheError",cacheError).put("nativeCacheClearedThreads",cacheThreads);
+                if(cacheError==null||!cacheError.isEmpty()||cacheThreads<=0)
+                    throw new AssertionError("Native cache clearing: "+cacheError);
+            }
             report.put("passed",true);
         } catch(Throwable error) {
             try {report.put("passed",false).put("error",android.util.Log.getStackTraceString(error));}

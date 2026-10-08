@@ -2,6 +2,7 @@
 #ifdef ARTDCEVM_TESTING
 #include "platform/jni_access/capability_selection.h"
 #include "platform/android15/runtime_services.h"
+#include "platform/common/native_cache_service.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/common/runnable_executor.h"
@@ -9,6 +10,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/android17/method_table.h"
 #include "platform/android17/runtime_services.h"
+#include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
@@ -27,6 +29,9 @@ RuntimeCandidate profile{};
 bool initialized=false;
 thread_local const char* last_route="uncalibrated";
 thread_local int last_table_count=-1;
+thread_local size_t last_cache_threads=0;
+thread_local method_identity::Calibration last_method_model;
+thread_local runtime_services::Snapshot runtime_services_observed;
 std::mutex initialization;
 abi::arm64::android11::CurrentThread current=nullptr;
 abi::arm64::android11::CurrentPeer const_peer=nullptr;
@@ -66,6 +71,7 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
   std::string error;
   if(!method_identity::Calibrate(context,request.leaf,request.oracles,request.count,
                                     &request.calibration,&error))return false;
+  last_method_model=request.calibration;
   if(!request.table_candidate)return true;
   void* klass=nullptr;
   if(!runnable_executor::DecodeStrongGlobal(context,request.class_global,&klass))return false;
@@ -133,6 +139,26 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probe(JNIEnv* env,jcla
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_methodTableCount(JNIEnv*,jclass) {
   return artdcevm::jni_access::last_table_count;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeJitServices(JNIEnv* env,jclass,jobject hot,jclass owner,jint index,jint flags,jclass target,jbyteArray dex) {
+  using namespace artdcevm;
+  if(!hot||!owner||!target||!dex||env->ExceptionCheck())return nullptr;
+  struct Roots {JNIEnv* env;jobject method,klass;
+    ~Roots(){if(method)env->DeleteGlobalRef(method);if(klass)env->DeleteGlobalRef(klass);}
+  } roots{env,env->NewGlobalRef(hot),nullptr};
+  if(!roots.method||env->ExceptionCheck())return nullptr;
+  roots.klass=env->NewGlobalRef(owner);
+  if(!roots.klass||env->ExceptionCheck()||env->GetArrayLength(dex)<=0)return nullptr;
+  jobject method=roots.method,klass=roots.klass;
+  std::vector<unsigned char> bytes(static_cast<size_t>(env->GetArrayLength(dex)));
+  env->GetByteArrayRegion(dex,0,static_cast<jsize>(bytes.size()),reinterpret_cast<jbyte*>(bytes.data()));
+  ShadowHookEngine hooks;std::string error;runtime_services::View view;
+  method_identity::Oracle oracle{method,static_cast<uint32_t>(index),static_cast<uint32_t>(flags)};
+  bool passed=owned_jit_receivers::CalibrateJitReceivers(hooks,env,klass,oracle,
+      jni_access::last_method_model,jni_access::runtime_services_observed,target,bytes.data(),bytes.size(),&view,&error);
+  if(env->ExceptionCheck())return nullptr;
+  return env->NewStringUTF(passed?"jit,code-cache,heap":error.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_artBuildId(JNIEnv* env,jclass) {
@@ -205,19 +231,56 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
 #endif
 
 #if defined(ARTDCEVM_TESTING)
+namespace artdcevm::jni_access {
+bool CalibrateServices(HookEngine& hooks,JNIEnv* env,std::string* error) {
+  runtime_services_observed={};
+  // Named source declaration chooses only the observer ABI; actual receivers
+  // must be reached and independently match Runtime before publication.
+  if(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjNS1_12ListenerTypeE")) {
+    android17::RuntimeServices services;
+    if(!android17::CalibrateRuntimeServices(hooks,env,&services,error))return false;
+    runtime_services_observed=services;
+  } else {
+    android15::RuntimeServices services;
+    if(!android15::CalibrateRuntimeServices(hooks,env,&services,error))return false;
+    runtime_services_observed={services.runtime,services.instrumentation,services.receivers};
+  }
+  return true;
+}
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeRuntimeServices(JNIEnv* env,jclass) {
-  artdcevm::ShadowHookEngine hooks;std::string error;bool passed=false;
-  // Named declaration selects an ABI candidate; only actual receiver observation
-  // and independent Runtime comparisons can authorize its services.
-  if(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjNS1_12ListenerTypeE")) {
-    artdcevm::android17::RuntimeServices services;
-    passed=artdcevm::android17::CalibrateRuntimeServices(hooks,env,&services,&error);
-  } else {
-    artdcevm::android15::RuntimeServices services;
-    passed=artdcevm::android15::CalibrateRuntimeServices(hooks,env,&services,&error);
-  }
-  if(!passed&&error.empty())error="Runtime service calibration failed without diagnostic";
+  artdcevm::ShadowHookEngine hooks;std::string error;
+  if(!artdcevm::jni_access::CalibrateServices(hooks,env,&error)&&error.empty())
+    error="Runtime service calibration failed without diagnostic";
   return env->NewStringUTF(error.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeNativeCache(JNIEnv* env,jclass) {
+  artdcevm::jni_access::last_cache_threads=0;
+  artdcevm::ShadowHookEngine hooks;std::string error;
+  if(artdcevm::jni_access::CalibrateServices(hooks,env,&error)) {
+    const auto& services=artdcevm::jni_access::runtime_services_observed;
+    artdcevm::native_cache::Service cache;
+    if(cache.Bind(hooks,services.receivers.thread_list,&error)&&cache.Prepare(&error)) {
+      using namespace artdcevm::abi::arm64::android_common;
+      auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+      auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+      if(!construct||!destroy)error="Missing named owned cache calibration stop";
+      else {SuspendAll storage{};construct(&storage,"artdcevm synchronous native cache clearing",false);
+        size_t count=0;cache.ClearStoppedWorld(&count,&error);destroy(&storage);
+        artdcevm::jni_access::last_cache_threads=count;}
+    }
+  }
+  if(error.empty()&&!artdcevm::jni_access::runtime_services_observed.runtime)error="Runtime service calibration failed without diagnostic";
+  return env->NewStringUTF(error.c_str());
+}
+
+#endif
+
+#if defined(ARTDCEVM_TESTING)
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeCacheThreads(JNIEnv*,jclass) {
+  return static_cast<jint>(artdcevm::jni_access::last_cache_threads);
 }
 #endif

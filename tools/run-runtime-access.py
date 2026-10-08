@@ -9,6 +9,9 @@ p.add_argument('--apk',type=Path,default=Path('app/build/outputs/apk/debug/app-d
 p.add_argument('--adb',default=shutil.which('adb'))
 p.add_argument('--skip-install',action='store_true')
 p.add_argument('--runtime-services',action='store_true',help='Require source-family Runtime service calibration')
+p.add_argument('--exclusive-roots',action='store_true',help='Require actual exclusive strong-root and monitor/GC recovery')
+p.add_argument('--native-cache',action='store_true',help='Require synchronous real native interpreter-cache clearing')
+p.add_argument('--jit-receivers',action='store_true',help='Require actual Java/JVMTI JIT/cache/heap observation')
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
 out=new_evidence_directory(Path('build/evidence/runtime-access'))
@@ -24,7 +27,7 @@ try:
         assert metadata['installedApkSha256']==metadata['apkSha256']
     else:adb('install','install','-r',str(a.apk))
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
-    output=adb('instrumentation','shell','am','instrument','-w','-r',*(['-e','runtimeServices','true'] if a.runtime_services else []),'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
+    output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match
     report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
     code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M)
@@ -39,7 +42,10 @@ try:
     if report.get('sdk')==37 and 'mainMethodTableCount' in report:
         expected=len(report['methodDexIndices'])
         metadata['passed']=metadata['passed'] and report['mainMethodTableCount']==expected and report.get('workerMethodTableCounts')==[expected,expected]
-    if a.runtime_services:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
+    if a.runtime_services or a.native_cache or a.jit_receivers:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
+    if a.exclusive_roots:metadata['passed']=metadata['passed'] and report.get('exclusiveMonitorIterations')==32 and report.get('exclusiveFailureRestoration') is True and report.get('exclusiveGcCollections',0)>0
+    if a.native_cache:metadata['passed']=metadata['passed'] and report.get('nativeCacheClearedThreads',0)>0
+    if a.jit_receivers:metadata['passed']=metadata['passed'] and report.get('jitServices')=='jit,code-cache,heap'
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)

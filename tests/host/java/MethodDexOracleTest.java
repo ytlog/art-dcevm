@@ -29,9 +29,9 @@ public final class MethodDexOracleTest {
                     throw new AssertionError("Did not iterate to second logical DEX");
                 if (path.contains("legacy-")) {
                     Executable[] complete = {MethodIdentityFixture.class.getDeclaredConstructor(),
-                            methods[0], methods[1], methods[2]};
+                            methods[0], methods[1], methods[2],MethodIdentityFixture.class.getDeclaredMethod("hotLoop",int.class)};
                     MethodDexOracle.Result all = MethodDexOracle.read(path, complete);
-                    if (all.indices.length != 4 || all.directMethods != 3 || all.virtualMethods != 1 ||
+                    if (all.indices.length != 5 || all.directMethods != 4 || all.virtualMethods != 1 ||
                             all.modifiers[0] != complete[0].getModifiers())
                         throw new AssertionError("Constructor/class_data oracle mismatch");
                 }
