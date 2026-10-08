@@ -26,14 +26,16 @@ template<class T> T Read(const void* object, size_t offset) {
 
 void* DecodeReflectedField(void* reflected_field) {
   using namespace member_decode_abi;
-  const uint32_t index = Read<uint32_t>(reflected_field, offsetof(ReflectedField, art_field_index));
+  reflection_metadata::FieldIdentity identity;
+  Require(reflection_metadata::ReadField(33,reflected_field,sizeof(ReflectedField),&identity));
+  const uint32_t index = identity.array_index;
   if ((index & kRetiredFieldTag) != 0) {
     auto* field = ResolveRetiredFieldToken(index);
     Require(field != nullptr);
     return field;
   }
   auto* klass = ReadHeapReference(reflected_field, offsetof(ReflectedField, declaring_class));
-  const uint32_t access = Read<uint32_t>(reflected_field, offsetof(ReflectedField, access_flags));
+  const uint32_t access = identity.access_flags;
   field_array::View fields;
   Require(field_array::ReadTrustedClass(33, klass, sizeof(validation_abi::ClassPrefix),
       (access & kStatic) != 0, &fields));
@@ -53,8 +55,8 @@ bool GuardNativeExecutable(JNIEnv* env, jobject executable) {
   // Registered FAST_NATIVE entrypoint: ART enters it while Runnable.
   Require(access.Supported());
   auto* mirror = access.Decode(executable);
-  auto* method = reinterpret_cast<void*>(Read<uint64_t>(mirror,
-      offsetof(member_decode_abi::Executable, art_method)));
+  void* method = nullptr;
+  Require(reflection_metadata::ReadExecutableMethod(33,mirror,sizeof(member_decode_abi::Executable),&method));
   return GuardRetiredMethod(method, access.Self(), nullptr);
 }
 bool GuardNativeReflectedField(JNIEnv* env, jobject field) {

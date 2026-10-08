@@ -40,6 +40,10 @@ INTERFACES = {
     'runtime/mirror/dex_cache.h': ('GetResolvedMethod',),
     'runtime/mirror/dex_cache-inl.h': ('GetResolvedMethod',),
     'runtime/mirror/class-inl.h': ('ResolvedMethodAccessTest', 'CanAccessMember'),
+    'runtime/mirror/accessible_object.h': ('IsAccessible',),
+    'runtime/mirror/field.h': ('GetArtField',),
+    'runtime/mirror/field.cc': ('GetArtField', 'VisitTarget'),
+    'runtime/mirror/executable.h': ('GetArtMethod',),
     'runtime/common_throws.h': ('ThrowIllegalAccessErrorClassForMethodDispatch',
                                 'ThrowIllegalAccessErrorMethod', 'ThrowIncompatibleClassChangeError'),
     'libdexfile/dex/standard_dex_file.cc': ('SupportsDefaultMethods',),
@@ -167,6 +171,10 @@ def main():
             checked_referrer_order = [name for position, name in sorted(positions) if position >= 0]
         versions.append({
             'tag': tag, 'commit': commit,
+            'reflectionParameterFlagWidth': re.findall(
+                r'(uint8_t|uint16_t)\s+has_real_parameter_data_;', content['runtime/mirror/executable.h']),
+            'reflectionFieldUsesMergedArray': ('return declaring_class->GetField(GetArtFieldIndex());' in
+                content['runtime/mirror/field.cc']),
             'classUsesMergedFieldArray': bool(re.search(r'uint64_t\s+fields_;',content['runtime/mirror/class.h'])),
             'classStoresMethodSliceOffsets': bool(re.search(r'uint16_t\s+virtual_methods_offset_;',content['runtime/mirror/class.h'])),
             'classClinitTidOrHashAtomic': 'std::atomic<uint32_t> clinit_thread_id_or_hash_' in content['runtime/mirror/class.h'],
