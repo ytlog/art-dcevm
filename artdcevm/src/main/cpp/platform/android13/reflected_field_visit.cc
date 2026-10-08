@@ -34,13 +34,12 @@ void VisitReflectedFieldTarget(void* field,void* raw_visitor){
  NativeField declaring_slot{};declaring_slot.offset=offsetof(Field,declaring_class);
  Require(reinterpret_cast<uintptr_t>(declaring)<=std::numeric_limits<uint32_t>::max());
  WriteCopyValue(field,&declaring_slot,'L',reinterpret_cast<uintptr_t>(declaring));
- auto* array=reinterpret_cast<void*>(Read<uint64_t>(declaring,(flags&member_decode_abi::kStatic)?offsetof(validation_abi::ClassPrefix,sfields):offsetof(validation_abi::ClassPrefix,ifields)));
- Require(array!=nullptr);
- const uintptr_t begin=reinterpret_cast<uintptr_t>(array)+field_copy_abi::kFieldArrayDataOffset;
- const uintptr_t address=reinterpret_cast<uintptr_t>(replacement);
- Require(address>=begin && (address-begin)%sizeof(NativeField)==0);
- const size_t index=(address-begin)/sizeof(NativeField);Require(index<Read<uint32_t>(array,0));
- Store(field,offsetof(Field,art_field_index),static_cast<uint32_t>(index));
+ field_array::View fields;
+ Require(field_array::ReadTrustedClass(33,declaring,sizeof(validation_abi::ClassPrefix),
+     (flags&member_decode_abi::kStatic)!=0,&fields));
+ uint32_t index;
+ Require(fields.IndexOf(replacement,&index));
+ Store(field,offsetof(Field,art_field_index),index);
  CopyWriteBarrier(field);
 }
 bool ConfigureReflectedFieldVisit(HookEngine& hooks,const DeviceProfile& profile,std::string* error){

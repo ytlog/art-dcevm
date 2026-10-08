@@ -34,12 +34,12 @@ void* DecodeReflectedField(void* reflected_field) {
   }
   auto* klass = ReadHeapReference(reflected_field, offsetof(ReflectedField, declaring_class));
   const uint32_t access = Read<uint32_t>(reflected_field, offsetof(ReflectedField, access_flags));
-  auto* fields = reinterpret_cast<void*>(Read<uint64_t>(klass, (access & kStatic) != 0
-      ? offsetof(validation_abi::ClassPrefix, sfields)
-      : offsetof(validation_abi::ClassPrefix, ifields)));
-  Require(fields != nullptr && index < Read<uint32_t>(fields, 0));
-  return static_cast<unsigned char*>(fields) + field_copy_abi::kFieldArrayDataOffset +
-      size_t{index} * sizeof(field_copy_abi::ArtField);
+  field_array::View fields;
+  Require(field_array::ReadTrustedClass(33, klass, sizeof(validation_abi::ClassPrefix),
+      (access & kStatic) != 0, &fields));
+  auto* result = fields.At(index);
+  Require(result != nullptr && fields.Selected(index));
+  return result;
 }
 
 void* DecodeRunnableExecutable(const void* access, jobject executable) {

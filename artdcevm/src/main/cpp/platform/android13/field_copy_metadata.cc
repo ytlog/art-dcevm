@@ -4,7 +4,6 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 namespace artdcevm::android13 {
 namespace {
 using FieldText = const char* (*)(void*);
@@ -51,10 +50,10 @@ const char* ClassDescriptor(void* klass) {
   Require(std::memchr(mapping.data_begin + at, 0, mapping.data_size - at) != nullptr);
   return reinterpret_cast<const char*>(mapping.data_begin + at);
 }
-void* FieldArray(void* klass, bool is_static) {
-  using namespace validation_abi;
-  return reinterpret_cast<void*>(Read<uint64_t>(klass,
-      is_static ? offsetof(ClassPrefix, sfields) : offsetof(ClassPrefix, ifields)));
+field_array::View FieldArray(void* klass, bool is_static) {
+  field_array::View view;
+  Require(field_array::ReadTrustedClass(33, klass, sizeof(validation_abi::ClassPrefix), is_static, &view));
+  return view;
 }
 }
 CopyClassView ReadCopyClass(void* klass, bool is_static) {
@@ -62,19 +61,16 @@ CopyClassView ReadCopyClass(void* klass, bool is_static) {
   Require(klass != nullptr);
   auto* parent = ReadHeapReference(klass, offsetof(ClassPrefix, super_class));
   auto* loader = ReadHeapReference(klass, offsetof(ClassPrefix, class_loader));
-  auto* fields = FieldArray(klass, is_static);
+  const auto fields = FieldArray(klass, is_static);
   return {parent, loader, parent == nullptr ? "Ljava/lang/Object;" : ClassDescriptor(klass),
-          fields ? Read<uint32_t>(fields, 0) : 0,
+          fields.selected_count,
           parent == nullptr};
 }
 CopyFieldView ReadCopyField(void* klass, bool is_static, size_t index) {
-  auto* fields = FieldArray(klass, is_static);
-  Require(fields != nullptr && name != nullptr && descriptor != nullptr);
-  const auto count = Read<uint32_t>(fields, 0);
-  Require(index < count && index <= (std::numeric_limits<size_t>::max() -
-      field_copy_abi::kFieldArrayDataOffset) / sizeof(field_copy_abi::ArtField));
-  auto* field = static_cast<unsigned char*>(fields) + field_copy_abi::kFieldArrayDataOffset +
-      index * sizeof(field_copy_abi::ArtField);
+  const auto fields = FieldArray(klass, is_static);
+  Require(name != nullptr && descriptor != nullptr && index < fields.selected_count);
+  auto* field = fields.AtSelected(static_cast<uint32_t>(index));
+  Require(field != nullptr);
   const char* field_name = name(field);
   const char* field_type = descriptor(field);
   Require(field_name != nullptr && field_type != nullptr);
