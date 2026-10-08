@@ -36,6 +36,15 @@ struct MappedDexMetadata {
   size_t data_size;
   uint32_t class_def_index;
 };
+// Counts from the selected ordinary class's class_data, as used by ART 17
+// ClassAccessor. These are DEX declaration counts, not ArtMethod array slice
+// offsets: ART 17 interleaves direct/virtual declarations by DEX method index.
+struct MappedDexMemberCounts {
+  uint32_t static_fields = 0, instance_fields = 0, direct_methods = 0, virtual_methods = 0;
+};
+// Requires a live, immutable, verified DEX mapping and an ordinary class definition.
+// Reads the four bounded ULEBs only; format failure preserves output.
+bool ReadMappedDexMemberCounts(const MappedDexMetadata&, MappedDexMemberCounts*, std::string*);
 // A method ID may reference another class, including an array, with no local
 // class definition. Explicit cache resolution must use this owner, not referrer.
 struct MappedDexMethodReference {

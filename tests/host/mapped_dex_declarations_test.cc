@@ -46,6 +46,15 @@ ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsi
   if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), index}, &result, &error)) {
     std::cerr << error << '\n'; std::abort();
   }
+  MappedDexMemberCounts counts;
+  assert(ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),index},&counts,&error));
+  uint32_t statics=0,directs=0;
+  for(const auto& field:result.fields)statics+=field.IsStatic();
+  for(const auto& method:result.methods)
+    directs+=((method.access&0x000a)!=0 || method.name=="<init>" || method.name=="<clinit>");
+  assert(counts.static_fields==statics && counts.instance_fields==result.fields.size()-statics &&
+      counts.direct_methods==directs && counts.virtual_methods==result.methods.size()-directs);
+
   return result;
 }
 void Reject(const MappedDexMetadata& view) {
@@ -197,6 +206,13 @@ int main(int argc, char** argv) {
   ClassSchema container_schema;
   assert(ReadMappedDexDeclarations(container_view(), &container_schema, &error));
   Same(expected, container_schema);
+  MappedDexMemberCounts container_counts, original_counts;
+  assert(ReadMappedDexMemberCounts(container_view(),&container_counts,&error));
+  assert(ReadMappedDexMemberCounts({original.data(),original.size(),original.data(),original.size(),0},&original_counts,&error));
+  assert(container_counts.static_fields==original_counts.static_fields &&
+      container_counts.instance_fields==original_counts.instance_fields &&
+      container_counts.direct_methods==original_counts.direct_methods &&
+      container_counts.virtual_methods==original_counts.virtual_methods);
   for (uint32_t index = 0; index < U32(original, 88); ++index) {
     MappedDexMethodReference old_ref, new_ref;
     assert(ReadMappedDexMethodReference({original.data(), original.size(), original.data(), original.size(), 0}, index, &old_ref, &error));
@@ -280,12 +296,33 @@ int main(int argc, char** argv) {
     container = valid_container;
     for (unsigned n = 0; n < 1 + container_random() % 8; ++n)
       container[container_random() % container.size()] ^= 1 + container_random() % 255;
+    MappedDexMemberCounts counts{11,22,33,44};
+    if(!ReadMappedDexMemberCounts(container_view(),&counts,&error))
+      assert(counts.static_fields==11 && counts.instance_fields==22 && counts.direct_methods==33 && counts.virtual_methods==44 && !error.empty());
     ClassSchema value; value.descriptor = "Lsentinel;";
     if (!ReadMappedDexDeclarations(container_view(), &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
     MappedDexMethodReference reference; reference.name = "sentinel";
     if (!ReadMappedDexMethodReference(container_view(), container_random() % U32(original, 88), &reference, &error))
       assert(reference.name == "sentinel" && !error.empty());
+  }
+  MappedDexMemberCounts sentinel{11,22,33,44};
+  auto counts_bad=compact;
+  Put(counts_bad,U32(compact,100)+24,UINT32_MAX);
+  assert(!ReadMappedDexMemberCounts({counts_bad.data(),counts_bad.size(),original.data(),original.size(),0},&sentinel,&error));
+  assert(sentinel.static_fields==11 && sentinel.instance_fields==22 && sentinel.direct_methods==33 && sentinel.virtual_methods==44);
+  assert(!ReadMappedDexMemberCounts({compact.data(),compact.size(),original.data(),original.size(),UINT32_MAX},&sentinel,&error));
+  // The count-only reader must bound all four ULEBs without needing member bodies.
+  for(const std::vector<unsigned char>& encoded : std::vector<std::vector<unsigned char>>{
+      {1}, {0,1}, {0,0,1}, {0x80,0x80,0x80,0x80,0x10},
+      {0xff,0xff,0xff,0xff,0x0f,0,0,0},
+      {0,0,0xff,0xff,0xff,0xff,0x0f,0}}) {
+    auto header=compact, truncated=original;
+    Put(header,U32(header,100)+24,static_cast<uint32_t>(truncated.size()));
+    truncated.insert(truncated.end(),encoded.begin(),encoded.end());
+    assert(!ReadMappedDexMemberCounts({header.data(),header.size(),truncated.data(),truncated.size(),0},&sentinel,&error));
+    assert(sentinel.static_fields==11 && sentinel.instance_fields==22 &&
+        sentinel.direct_methods==33 && sentinel.virtual_methods==44 && !error.empty());
   }
   // Mutations hit separate metadata/data bounds, strings and ULEB decoding.
   std::mt19937 random(0xdce013);
@@ -299,9 +336,12 @@ int main(int argc, char** argv) {
     if(!ReadMappedDexMethodReference({main.data(),main.size(),data.data(),data.size(),UINT32_MAX},
                                     random()%U32(compact,88),&reference,&error))
       assert(reference.name=="sentinel" && !error.empty());
+    MappedDexMemberCounts counts{11,22,33,44};
+    if(!ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),0},&counts,&error))
+      assert(counts.static_fields==11 && counts.instance_fields==22 && counts.direct_methods==33 && counts.virtual_methods==44 && !error.empty());
     ClassSchema value; value.descriptor = "Lsentinel;";
     if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), 0}, &value, &error))
       assert(value.descriptor == "Lsentinel;" && !error.empty());
   }
-  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, API30-37 mapping extents, DEX041 container first/later headers and shared IDs, selected multiclass, external/array method references without class_defs, default-method version/features, bounds and 20000 CompactDex/container mutations passed\n";
+  std::cout << "mapped DEX declarations: standard, changed checksum, CompactDex/shared data, API30-37 mapping extents, DEX041 container first/later headers and shared IDs, selected multiclass member counts, external/array method references without class_defs, default-method version/features, bounds and 20000 CompactDex/container mutations passed\n";
 }

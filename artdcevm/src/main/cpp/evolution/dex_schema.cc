@@ -56,17 +56,22 @@ class Reader {
     if (!class_data) return result;
     size_t cursor = class_data;
     DataRange(cursor, 1);
-    uint32_t static_fields = Leb(&cursor), instance_fields = Leb(&cursor);
-    uint32_t direct_methods = Leb(&cursor), virtual_methods = Leb(&cursor);
-    if (static_fields > fields_.count || instance_fields > fields_.count - static_fields ||
-        direct_methods > methods_.count || virtual_methods > methods_.count - direct_methods)
-      Fail("Class member counts exceed their ID tables");
+    const auto counts = Counts(&cursor);
+    const uint32_t static_fields = counts.static_fields, instance_fields = counts.instance_fields;
+    const uint32_t direct_methods = counts.direct_methods, virtual_methods = counts.virtual_methods;
     ReadFields(&cursor, static_fields, true, &result.fields);
     ReadFields(&cursor, instance_fields, false, &result.fields);
     ReadMethods(&cursor, direct_methods, true, &result.methods);
     ReadMethods(&cursor, virtual_methods, false, &result.methods);
     Unique(result.fields); Unique(result.methods);
     return result;
+  }
+  MappedDexMemberCounts ReadMemberCounts() {
+    Initialize();
+    const size_t def = Item(Table(96, 32), class_def_index_);
+    if (U32(def) >= types_.count) Fail("Invalid class declaration type index");
+    size_t cursor = U32(def + 24);
+    return cursor ? Counts(&cursor) : MappedDexMemberCounts{};
   }
   MappedDexMethodReference ReadMethodReference(uint32_t index) {
     Initialize();
@@ -275,6 +280,15 @@ class Reader {
     if (!IsMethodDescriptor(result)) Fail("Invalid method descriptor");
     return result;
   }
+  MappedDexMemberCounts Counts(size_t* cursor) const {
+    MappedDexMemberCounts result;
+    result.static_fields = Leb(cursor); result.instance_fields = Leb(cursor);
+    result.direct_methods = Leb(cursor); result.virtual_methods = Leb(cursor);
+    if (result.static_fields > fields_.count || result.instance_fields > fields_.count - result.static_fields ||
+        result.direct_methods > methods_.count || result.virtual_methods > methods_.count - result.direct_methods)
+      Fail("Class member counts exceed their ID tables");
+    return result;
+  }
   void ReadFields(size_t* cursor, uint32_t count, bool is_static, std::vector<Member>* fields) const {
     uint32_t index = 0;
     for (uint32_t i = 0; i < count; ++i) {
@@ -351,6 +365,17 @@ bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* out
   return ReadDex(dex, output, error, true);
 }
 
+bool ReadMappedDexMemberCounts(const MappedDexMetadata& view, MappedDexMemberCounts* output,
+                               std::string* error) {
+  if (!output || !error) return false;
+  try {
+    const auto counts = Reader(view).ReadMemberCounts();
+    *output = counts;
+    error->clear();
+    return true;
+  } catch (const std::bad_alloc&) { throw; }
+  catch (const std::exception& failure) { *error = failure.what(); return false; }
+}
 bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata& view,bool* output,std::string* error) {
   try {
     const bool supported=Reader(view).SupportsDefaultMethods();

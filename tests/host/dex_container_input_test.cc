@@ -30,6 +30,9 @@ void Reject(const std::vector<unsigned char>& bytes) {
 int main(int argc,char** argv) {
   assert(argc==3);const auto old=File(argv[1]),original=File(argv[2]);std::string error;
   for(const auto* bytes:{&old,&original}) {
+    MappedDexMemberCounts counts;
+    assert(ReadMappedDexMemberCounts({bytes->data(),bytes->size(),bytes->data(),bytes->size(),0},&counts,&error));
+    assert(counts.static_fields==0 && counts.instance_fields==1 && counts.direct_methods==1 && counts.virtual_methods==0);
     ClassSchema value;assert(ReadDexDeclarations(*bytes,&value,&error));Same(value);
     assert(ReadDexSchema(*bytes,&value,&error));Same(value);
     assert(ReadMappedDexDeclarations({bytes->data(),bytes->size(),bytes->data(),bytes->size(),0},&value,&error));Same(value);
