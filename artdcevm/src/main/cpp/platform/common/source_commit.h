@@ -27,6 +27,11 @@ class Services {
   virtual void UpdateReflectiveReferences(const Plan&)const=0;
   virtual void ForceDeoptimizeFrames()const=0;
   virtual void ReplaceObjectReferences()const=0;
+  // Fixed modern ART replaces native declaring-class GC roots as part of the
+  // heap replacement. Restore old member owners before retaining old classes.
+  // Earlier providers must independently establish whether their native
+  // replacement already preserves those roots; this default is not a proof.
+  virtual void RestoreDeclaringClasses(const Plan&)const {}
   // ReplaceReferences rewrites Holder roots, so resolve the replacement again.
   virtual void* NewClassAfterReplacement(void* rooted_array,size_t index)const=0;
   virtual void RetainOldClass(void* new_class,void* old_class)const=0;

@@ -8,9 +8,10 @@
 using namespace artdcevm;
 namespace {
 bool pending=false;
+int jni_checks=0;
 void* old_class_pointer=nullptr;
 int obsolete_calls=0;
-void* Root(void*){return old_class_pointer;}
+void* Root(void* method){uint32_t value;std::memcpy(&value,method,4);return reinterpret_cast<void*>(uintptr_t(value));}
 bool Same(void* a,void* b){return a==b;}
 void Obsolete(void* linker,void* method){assert(linker&&method);++obsolete_calls;}
 bool Retired(void*){return false;}
@@ -34,7 +35,7 @@ bool Decode(const runnable_jni::Context&, jobject method, void** out) {
   for(size_t i=0;i<handles.size();++i)if(method==reinterpret_cast<jobject>(&handles[i])){*out=&mirrors[i];return true;}
   return false;
 }
-jboolean Exception(JNIEnv*) {return pending;}
+jboolean Exception(JNIEnv*) {++jni_checks;return pending;}
 jobjectRefType RefType(JNIEnv*,jobject){return JNIGlobalRefType;}
 void* Leaf(const abi::arm64::android_common::RunnableJniScope&,jobject method){
   for(size_t i=0;i<handles.size();++i)if(method==reinterpret_cast<jobject>(&handles[i]))return native[i];
@@ -58,7 +59,7 @@ int main(){
     oracles[i]={reinterpret_cast<jobject>(&handles[i]),index,flags[i]};
     mirrors[i].art_method=uintptr_t(native[i]);mirrors[i].access_flags=flags[i];mirrors[i].dex_method_index=index;
   }
-  method_identity::Calibration model{method_identity::Model::kMethod12Onward,{{1,19},{8,20},{0x102,22}},{32,32,32}};
+  method_identity::Calibration model{method_identity::Model::kMethod12Onward,{{1,19},{8,20},{0x10001,21},{0x102,22}},{32,32,32,32}};
   evolution::MappedDexMemberCounts counts{0,0,3,1};
   method_array::View table;
   std::string error;
@@ -106,27 +107,39 @@ int main(){
   length=UINT32_MAX;std::memcpy(array.data(),&length,4);failure();
   // Exercise the actual modern adapter over two fully checked source tables.
   length=5;std::memcpy(array.data(),&length,4);assert(run());
-  old_class_pointer=&klass;
+  old_class_pointer=reinterpret_cast<void*>(0x1000);
+  uint32_t compact=0x1000;for(uint32_t i=0;i<5;++i)std::memcpy(array.data()+8+i*32,&compact,4);
   native_binding=uintptr_t(&binding);std::memcpy(static_cast<unsigned char*>(native[3])+16,&native_binding,8);
   alignas(8) auto replacement=array;
-  auto new_table=table;new_table.array=replacement.data();int new_class,linker;
+  auto new_table=table;new_table.array=replacement.data();void* new_class=reinterpret_cast<void*>(0x2000);int linker;
+  compact=0x2000;for(uint32_t i=0;i<5;++i)std::memcpy(replacement.data()+8+i*32,&compact,4);
   Hooks hooks;
   auto service=modern_methods::Service::Prepare(hooks,context,Leaf,oracles[0],&binding,
-      &linker,&klass,table,&new_class,new_table,Retired,&error);
-  assert(service&&service->Count(&klass)==5&&service->Count(&new_class)==5);
-  assert(service->DeclaringClass(native[3])==&klass&&service->SameIdentity(native[3],native[3]));
+      &linker,old_class_pointer,table,new_class,new_table,Retired,&error);
+  assert(service&&service->Count(old_class_pointer)==5&&service->Count(new_class)==5);
+  auto bound=modern_methods::Service::BindOwned(hooks,context,Leaf,oracles[0],&binding,&linker,&error);
+  assert(bound);
+  int before_jni=jni_checks;pending=true;
+  auto prepared=modern_methods::Service::PrepareTables(*bound,old_class_pointer,table,new_class,new_table,Retired,&error);
+  assert(prepared&&jni_checks==before_jni); // Actual commit preparation cannot query JNI.
+  pending=false;
+
+  assert(service->DeclaringClass(native[3])==old_class_pointer&&service->SameIdentity(native[3],native[3]));
   assert(!service->IsRetired(native[3]));
   uint64_t zero=0;std::memcpy(replacement.data()+8+3*32+16,&zero,8);
-  service->TransferNativeBinding(native[3],service->At(&new_class,3));
+  service->TransferNativeBinding(native[3],service->At(new_class,3));
   uint64_t transferred=0;std::memcpy(&transferred,replacement.data()+8+3*32+16,8);
   assert(transferred==uintptr_t(&binding));
+  compact=0x2000;for(uint32_t i=0;i<5;++i)std::memcpy(array.data()+8+i*32,&compact,4);
+  service->RestoreOldDeclaringClasses();
+  assert(service->DeclaringClass(native[0])==old_class_pointer);
   service->AddFlags(native[0],0x40000);assert(service->Flags(native[0])&0x40000);
   service->SetObsoleteEntry(native[0]);assert(obsolete_calls==1);
   hooks.missing=true;
   assert(!modern_methods::Service::Prepare(hooks,context,Leaf,oracles[0],&binding,
-      &linker,&klass,table,&new_class,new_table,Retired,&error));
+      &linker,old_class_pointer,table,new_class,new_table,Retired,&error));
   hooks.missing=false;new_table.stride=40;
   assert(!modern_methods::Service::Prepare(hooks,context,Leaf,oracles[0],&binding,
-      &linker,&klass,table,&new_class,new_table,Retired,&error));
+      &linker,old_class_pointer,table,new_class,new_table,Retired,&error));
   std::cout<<"Android17 method table: interleaved declarations, constructors, copied methods and independent identity failures passed\n";
 }

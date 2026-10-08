@@ -12,6 +12,12 @@ class Service {
       const modern_field_metadata::FieldMetadata&,const modern_field_metadata::FieldOracle*,size_t,std::string*);
   bool Calibrated()const{return calibrated_;}
   size_t CardTableOffset()const{return calibrated_?card_offset_:0;}
+  // Borrowed references and mutations require the transaction owner's actual
+  // exclusive mutator/disabled-GC scope. No roots escape that lifetime.
+  void* ObjectClass(void*)const;
+  void CopyFields(bool is_static,void* target,void* target_class,
+                  void* source,void* source_class)const;
+  void RestoreOldFieldDeclaringClass(void* old_class)const;
  private:
   modern_field_metadata::FieldMetadata metadata_;
   exclusive_owned_roots::Service exclusive_;

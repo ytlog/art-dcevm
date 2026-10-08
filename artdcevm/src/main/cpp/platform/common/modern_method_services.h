@@ -5,6 +5,19 @@
 #include "platform/common/structural_methods.h"
 #include <memory>
 namespace artdcevm::modern_methods {
+class Service;
+class Binding final {
+ public:
+  ~Binding()=default;
+  Binding(const Binding&)=delete;
+ private:
+  friend class Service;
+  Binding()=default;
+  void* (*root_)(void*)=nullptr;
+  bool (*same_)(void*,void*)=nullptr;
+  void (*obsolete_)(void*,void*)=nullptr;
+  void* class_linker_=nullptr;
+};
 // Actual source commit adapter. Prepare before mutation, within owned Runnable.
 // Both table Views must already have complete source/DEX/reflection calibration;
 // the classes and arrays remain rooted across preparation and the commit.
@@ -12,12 +25,26 @@ namespace artdcevm::modern_methods {
 class Service final : public structural_methods::Services {
  public:
   using Retired = bool (*)(void*);
+  // JNI/native registration oracle belongs to bootstrap, never final commit.
+  static std::unique_ptr<Binding> BindOwned(HookEngine&,
+      const runnable_jni::Context&,
+      abi::arm64::android_common::FromReflectedMethod,
+      const method_identity::Oracle&,const void* registered_binding,
+      void* observed_class_linker,std::string* error);
+  // Native-only preparation: no JNI, managed allocation or suspension. The
+  // original ART transaction already roots both tables and disables GC.
+  static std::unique_ptr<Service> PrepareTables(const Binding&,
+      void* old_class,const method_array::View&,
+      void* new_class,const method_array::View&,Retired,std::string* error);
   static std::unique_ptr<Service> Prepare(HookEngine&,
       const runnable_jni::Context&,
       abi::arm64::android_common::FromReflectedMethod,
       const method_identity::Oracle& registered_native, const void* binding,
       void* observed_class_linker, void* old_class, const method_array::View&,
       void* new_class, const method_array::View&, Retired, std::string* error);
+  // Fixed modern ART heap replacement rewrites native declaring-class roots.
+  // Restore only the old non-copied methods before the class is retained.
+  void RestoreOldDeclaringClasses()const;
   size_t Count(void*) const override;
   void* At(void*,size_t) const override;
   uint32_t Flags(void*) const override;

@@ -17,6 +17,7 @@ struct Test final:Services {
  void UpdateReflectiveReferences(const Plan&)const override{events+='v';}
  void ForceDeoptimizeFrames()const override{events+='f';}
  void ReplaceObjectReferences()const override{assert(events.back()=='f');events+='r';replaced=true;}
+ void RestoreDeclaringClasses(const Plan&)const override{assert(replaced&&events.back()=='r');events+='o';}
  void* NewClassAfterReplacement(void* array,size_t index)const override{assert(replaced&&index==0&&array==this);events+='n';return replacement;}
  void RetainOldClass(void* next,void* previous)const override{assert(next==replacement&&previous==old);events+='h';}
  void InvalidateCompiledCode()const override{events+='j';}
@@ -27,7 +28,7 @@ int main(){
  Object old{},replacement{};Test services;services.old=&old;services.replacement=&replacement;
  services.states[&old]=15;services.states[&replacement]=10;
  Plan plan{&old,&services,{&old},{&replacement},{&old},{&replacement},true};
- assert(Run(plan,services));assert(services.events=="scimvfrnhjax");assert(services.states[&replacement]==15);
+ assert(Run(plan,services));assert(services.events=="scimvfronhjax");assert(services.states[&replacement]==15);
  services.events.clear();services.valid=false;assert(!Run(plan,services)&&services.events.empty());
  services.valid=true;plan.new_classes.clear();assert(!Run(plan,services)&&services.events.empty());
  puts("Source commit: original transaction order, roots reread after replacement, invalid plans rejected before mutation passed");

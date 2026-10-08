@@ -29,23 +29,64 @@ std::unique_ptr<Service> Service::Prepare(HookEngine& hooks,
     void* linker,void* old_class,const method_array::View& old,
     void* new_class,const method_array::View& replacement,Retired retired,
     std::string* error) {
-  const auto fail=[&](const char* message)->std::unique_ptr<Service>{
-    if(error)*error=message;return nullptr;
-  };
-  if(!linker||!old_class||!new_class||!retired||!Readable(old)||!Readable(replacement)||
-      (old_class==new_class&&(old.array!=replacement.array||old.count!=replacement.count)))
-    return fail("Modern commit methods require owned calibrated tables and services");
+  auto binding_capability=BindOwned(hooks,context,leaf,native,binding,linker,error);
+  return binding_capability?PrepareTables(*binding_capability,old_class,old,
+      new_class,replacement,retired,error):nullptr;
+}
+std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
+    const runnable_jni::Context& context,
+    abi::arm64::android_common::FromReflectedMethod leaf,
+    const method_identity::Oracle& native,const void* binding,
+    void* linker,std::string* error) {
+  if(!linker){if(error)*error="Missing observed ClassLinker receiver";return nullptr;}
   if(!native_method_binding::Calibrate(context,leaf,native,binding,error))return nullptr;
   auto root=reinterpret_cast<Root>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto same=reinterpret_cast<Same>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
   auto obsolete=reinterpret_cast<Obsolete>(hooks.FindSymbol("libart.so","_ZNK3art11ClassLinker31SetEntryPointsForObsoleteMethodEPNS_9ArtMethodE"));
-  if(!root||!same||!obsolete)return fail("Missing named modern structural-method service");
+  if(!root||!same||!obsolete){if(error)*error="Missing named modern structural-method service";return nullptr;}
+  auto result=std::unique_ptr<Binding>(new Binding);
+  result->root_=root;result->same_=same;result->obsolete_=obsolete;result->class_linker_=linker;
+  if(error)error->clear();return result;
+}
+std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
+    void* old_class,const method_array::View& old,
+    void* new_class,const method_array::View& replacement,Retired retired,
+    std::string* error) {
+  const auto fail=[&](const char* message)->std::unique_ptr<Service>{
+    if(error)*error=message;return nullptr;
+  };
+  if(!binding.root_||!binding.same_||!binding.obsolete_||!binding.class_linker_||
+      !old_class||!new_class||!retired||!Readable(old)||!Readable(replacement)||
+      (old_class==new_class&&(old.array!=replacement.array||old.count!=replacement.count)))
+    return fail("Modern commit methods require owned calibrated tables and services");
+  for(const auto& entry:{std::pair<void*,const method_array::View*>{old_class,&old},
+                         std::pair<void*,const method_array::View*>{new_class,&replacement}}) {
+    for(uint32_t i=0;i<entry.second->count;++i) {
+      void* method=entry.second->At(i);uint32_t compressed=0;
+      std::memcpy(&compressed,method,4);
+      void* observed=binding.root_(method);
+      if(!observed||uintptr_t(observed)!=compressed)
+        return fail("Method declaring-class root encoding disagrees with named barrier");
+      if(i<entry.second->boundaries.declared_count&&observed!=entry.first)
+        return fail("Declared method is not owned by its rooted class");
+    }
+  }
   auto result=std::unique_ptr<Service>(new Service);
-  result->root_=root;result->same_=same;result->obsolete_=obsolete;
-  result->retired_=retired;result->class_linker_=linker;
+  result->root_=binding.root_;result->same_=binding.same_;result->obsolete_=binding.obsolete_;
+  result->retired_=retired;result->class_linker_=binding.class_linker_;
   result->old_class_=old_class;result->new_class_=new_class;
   result->old_=old;result->new_=replacement;
   if(error)error->clear();return result;
+}
+void Service::RestoreOldDeclaringClasses()const {
+  if(uintptr_t(old_class_)>UINT32_MAX)std::abort();
+  const uint32_t owner=uint32_t(uintptr_t(old_class_));
+  for(uint32_t i=0;i<old_.count;++i) {
+    void* method=old_.At(i);const auto flags=Flags(method);
+    // Fixed ArtMethod::IsCopied excludes conflicting default methods.
+    if((flags&0x1000000u)&&!(flags&0x80000000u))continue;
+    std::memcpy(method,&owner,sizeof(owner));
+  }
 }
 const method_array::View& Service::Table(void* klass)const {
   if(klass==old_class_)return old_;

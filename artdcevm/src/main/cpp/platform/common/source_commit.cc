@@ -20,6 +20,7 @@ bool Run(const Plan& plan,const Services& services){
   services.UpdateReflectiveReferences(plan);
   services.ForceDeoptimizeFrames();
   services.ReplaceObjectReferences();
+  services.RestoreDeclaringClasses(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
     auto* replacement=services.NewClassAfterReplacement(plan.new_classes_root,i);
     if(!replacement)std::abort();
