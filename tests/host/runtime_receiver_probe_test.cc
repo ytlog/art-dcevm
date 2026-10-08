@@ -1,4 +1,5 @@
 #include "platform/android13/runtime_receiver_probe.h"
+#include "platform/common/runtime_receiver_probe.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cassert>
 #include <cstring>
@@ -35,7 +36,7 @@ class Hooks:public HookEngine {
  void* FindSymbol(const char*,const char* name)override{
   if(std::strstr(name,"FindClass"))return !std::strcmp(mode,"missing")?nullptr:reinterpret_cast<void*>(RealFind);
   if(std::strstr(name,"EncodeMethodId"))return reinterpret_cast<void*>(RealEncode);
-  if(std::strstr(name,"AddListener"))return reinterpret_cast<void*>(RealListener);
+  if(std::strstr(name,"AddListener"))return !std::strcmp(mode,"common-only")?nullptr:reinterpret_cast<void*>(RealListener);
   if(std::strstr(name,"ThreadList"))return reinterpret_cast<void*>(RealSuspend);
   if(std::strstr(name,"C2"))return reinterpret_cast<void*>(Suspend);
   if(std::strstr(name,"D2"))return reinterpret_cast<void*>(Resume);
@@ -90,6 +91,17 @@ int main(int argc,char** argv){
  vm_table.GetEnv=GetEnv;
  JNIEnv env{&table};Hooks hooks;std::string error;
  RuntimeReceivers output{reinterpret_cast<void*>(0xaa),reinterpret_cast<void*>(0xbb),nullptr};
+ if(!std::strcmp(mode,"common-only")) {
+  runtime_receiver::Receivers core;
+  assert(runtime_receiver::Calibrate(hooks,&env,&core,&error));
+  assert(core.class_linker==linker && core.jni_id_manager==manager && core.java_vm==&vm && core.thread_list==reinterpret_cast<void*>(0x8000));
+  assert(!CalibrateRuntimeReceivers(hooks,&env,&output,&error));
+  assert(output.class_linker==reinterpret_cast<void*>(0xaa) && !output.instrumentation);
+  assert(runtime_receiver::Calibrate(hooks,&env,&core,&error));
+  assert(disposed==0 && enabled==0 && disabled==0 && !suspended);
+  std::cout<<"Runtime receiver probe common-only: passed\n";
+  return 0;
+ }
  bool ok=CalibrateRuntimeReceivers(hooks,&env,&output,&error);
  if(!std::strcmp(mode,"success")){
   assert(ok && error.empty() && output.class_linker==linker && output.jni_id_manager==manager && output.java_vm==&vm && output.thread_list==reinterpret_cast<void*>(0x8000) && output.instrumentation==reinterpret_cast<void*>(0x9000));

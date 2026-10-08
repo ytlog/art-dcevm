@@ -8,9 +8,9 @@ jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/j
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 out=root/'build/evidence/host/runtime-receiver-probe';out.mkdir(parents=True,exist_ok=True)
 binary=out/'runtime_receiver_probe_test'
-subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/runtime_receiver_probe_test.cc'),str(cpp/'platform/android13/runtime_receiver_probe.cc'),'-o',str(binary)],check=True)
+subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/runtime_receiver_probe_test.cc'),str(cpp/'platform/android13/runtime_receiver_probe.cc'),str(cpp/'platform/common/runtime_receiver_probe.cc'),'-o',str(binary)],check=True)
 logs=[]
-for mode in ('success','missing','bypassed','conflict','event-bypassed','capability','cleanup','dispose'):
+for mode in ('success','missing','bypassed','conflict','event-bypassed','capability','cleanup','dispose','common-only'):
  result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
  logs.append(result.stdout+result.stderr)
  (out/'test.log').write_text(''.join(logs))
