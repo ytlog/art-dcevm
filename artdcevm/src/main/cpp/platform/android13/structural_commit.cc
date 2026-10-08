@@ -1,4 +1,5 @@
 #include "platform/android13/structural_commit.h"
+#include "platform/common/source_commit.h"
 #include "platform/android13/allocation_validation_abi.h"
 #include "platform/android13/field_copy_binding.h"
 #include "platform/android13/heap_reference.h"
@@ -64,34 +65,45 @@ void CommitEvolutionStructurally(void*,const void* raw) {
   }
   ObjectReplacementMap map(replacements);std::string error;
   Require(VerifyObjectReplacementMap(map,&error));
-  // The matched release profile's ScopedAssertNoThreadSuspension is a no-op.
-  // This body preserves its exclusive, no-managed-allocation transaction boundary.
-  for(size_t i=0;i<olds.size();++i) {
-    auto status=[&](void* c) {return __atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(c)+offsetof(validation_abi::ClassPrefix,status)),__ATOMIC_SEQ_CST)>>28;};
-    uint32_t old_status=status(olds[i]);if(old_status>status(news[i])) set_status(news[i],static_cast<uint8_t>(old_status));
-    CopyEvolutionFields(true,news[i],news[i],olds[i],olds[i]);
-  }
-  for(size_t i=0;i<old_instances.size();++i)
-    CopyEvolutionFields(false,new_instances[i],ReadHeapReference(new_instances[i],0),old_instances[i],ReadHeapReference(old_instances[i],0));
-  for(size_t i=0;i<olds.size();++i) {
-    auto* flags=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(olds[i])+offsetof(validation_abi::ClassPrefix,access_flags));
-    *flags|=0x200000;UpdateStructuralMethods(olds[i],news[i]);
-  }
-  void* runtime=*singleton;
-  VisitStructuralReflectiveTargets(runtime,roots.mirror,olds,news,mappings,HasHierarchyChange());
-  DeoptimizeApplicationFrames();
-  replace(CurrentHierarchyThread(),map.BorrowedMap());
-  // ReplaceReferences rewrites holder roots. Keep the old class identities in
-  // native storage until the replacement's ClassExt retains them for old frames.
-  for(size_t i=0;i<olds.size();++i) {
-    void* klass=At(roots.new_classes,i);
-    retain(ReadHeapReference(klass,offsetof(validation_abi::ClassPrefix,ext_data)),olds[i]);
-  }
-  if(void* cache=RuntimeJitCodeCache()) invalidate(cache);
-  if(abstract_instances) deopt_all(static_cast<unsigned char*>(runtime)+offsetof(selective_abi::RuntimePrefix,instrumentation),"artdcevm-class-abstract");
-  void* self=CurrentHierarchyThread();lock(*list_lock,self);
-  for_each(Read<void*>(runtime,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ClearThread,nullptr);
-  unlock(*list_lock,self);
+  class NativeCommit final:public source_commit::Services {
+   public:
+    NativeCommit(const StructuralMemberMappings& mappings,const ObjectReplacementMap& map)
+        :mappings_(mappings),map_(map){}
+    bool Validate(const source_commit::Plan&)const override{return true;}
+    uint32_t Status(void* klass)const override {
+      return __atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(klass)+offsetof(validation_abi::ClassPrefix,status)),__ATOMIC_SEQ_CST)>>28;
+    }
+    void SetStatus(void* klass,uint32_t status)const override{set_status(klass,static_cast<uint8_t>(status));}
+    void CopyFields(bool statik,void* target,void* target_class,void* source,void* source_class)const override {
+      CopyEvolutionFields(statik,target,target_class,source,source_class);
+    }
+    void* ObjectClass(void* object)const override{return ReadHeapReference(object,0);}
+    void MarkClassAndMethodsObsolete(void* old,void* replacement)const override {
+      auto* flags=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(old)+offsetof(validation_abi::ClassPrefix,access_flags));
+      *flags|=0x200000;UpdateStructuralMethods(old,replacement);
+    }
+    void UpdateReflectiveReferences(const source_commit::Plan& plan)const override {
+      VisitStructuralReflectiveTargets(*singleton,plan.mirror,plan.old_classes,plan.new_classes,mappings_,HasHierarchyChange());
+    }
+    void ForceDeoptimizeFrames()const override{DeoptimizeApplicationFrames();}
+    void ReplaceObjectReferences()const override{replace(CurrentHierarchyThread(),map_.BorrowedMap());}
+    void* NewClassAfterReplacement(void* root,size_t index)const override{return At(root,index);}
+    void RetainOldClass(void* replacement,void* old)const override {
+      retain(ReadHeapReference(replacement,offsetof(validation_abi::ClassPrefix,ext_data)),old);
+    }
+    void InvalidateCompiledCode()const override{if(void* cache=RuntimeJitCodeCache())invalidate(cache);}
+    void DeoptimizeEverythingForAbstractTransition()const override {
+      deopt_all(RuntimeInstrumentation(),"artdcevm-class-abstract");
+    }
+    void ClearInterpreterCaches()const override {
+      void* self=CurrentHierarchyThread();lock(*list_lock,self);
+      for_each(Read<void*>(*singleton,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ClearThread,nullptr);unlock(*list_lock,self);
+    }
+   private:
+    const StructuralMemberMappings& mappings_;const ObjectReplacementMap& map_;
+  } services(mappings,map);
+  source_commit::Plan plan{roots.mirror,roots.new_classes,olds,news,old_instances,new_instances,abstract_instances};
+  Require(source_commit::Run(plan,services));
 }
 bool ConfigureStructuralCommit(HookEngine& hooks,std::string* error) {
 #define ART(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name))
