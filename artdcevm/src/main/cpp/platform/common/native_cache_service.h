@@ -1,6 +1,7 @@
 #pragma once
 #include "api/hook_engine.h"
 #include <cstddef>
+#include <cstdint>
 namespace artdcevm::native_cache {
 // Borrow the real native function-static closure, via its named symbol or
 // observation of its owner's named RunCheckpoint call. It is never constructed,
@@ -11,6 +12,7 @@ class Service {
   bool Bind(HookEngine&,void* observed_thread_list,std::string* error);
   bool Prepare(std::string* error);
   bool Prepared()const{return prepared_;}
+  bool PreparedForCurrentThread()const;
   // Caller already owns ART's final exclusive mutator boundary. Acquires the
   // real ThreadList mutex and synchronously executes native clearing on each
   // currently registered Thread; no asynchronous checkpoint or Thread offset.
@@ -22,6 +24,10 @@ class Service {
   void (*prepare_)()=nullptr;
   void* (*current_)()=nullptr;
   void (*lock_)(void*,void*)=nullptr;
+  void (*vendor_lock_)(void*,void*,uint32_t)=nullptr;
+  void* vendor_lock_self_=nullptr;
+  uint32_t vendor_lock_argument_=0;
+  bool vendor_lock_observed_=false;
   void (*unlock_)(void*,void*)=nullptr;
   void (*for_each_)(void*,void (*)(void*,void*),void*)=nullptr;
   bool prepared_=false;

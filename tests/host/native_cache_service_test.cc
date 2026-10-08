@@ -10,19 +10,28 @@ namespace {
 int self,threads,other_threads,mutex,worker[3];
 void* list_lock=&mutex;
 int stopped=0,locked=0,clears=0,checkpoint_calls=0;
-bool conflict=false,throw_prepare=false,wrong_owner=false;
+bool conflict=false,throw_prepare=false,wrong_owner=false,vendor=false,vendor_wrong=false,vendor_conflict=false,foreign=false;
+using VendorLock=void(*)(void*,void*,uint32_t);
+VendorLock vendor_proxy=nullptr;
+constexpr uint32_t observed_argument=0xaf001234u;
+int vendor_calls=0;
 using Checkpoint=size_t(*)(void*,void*,void*,bool,bool);
 Checkpoint active_checkpoint=nullptr;
 struct NativeClosure:art::Closure {
  void Run(art::Thread* thread)override{assert(stopped&&locked&&thread);++clears;}
 } native_closure,other_closure;
-void* Current(){return &self;}
+void* Current(){return foreign?&other_threads:&self;}
+void VendorOriginal(void* lock,void* thread,uint32_t argument){++vendor_calls;if(stopped&&lock==&mutex){assert(thread==&self&&argument==observed_argument&&!locked);++locked;}}
 void Stop(void*,const char*,bool){assert(!stopped&&!locked);++stopped;}
 void Resume(void*){assert(stopped==1&&!locked);--stopped;}
 size_t Checkpoints(void*,void*,void*,bool,bool){++checkpoint_calls;return 3;}
 void Prepare(){
  assert(!stopped&&!locked);
  if(throw_prepare)throw std::runtime_error("owner bootstrap");
+ if(vendor){
+  vendor_proxy(&other_threads,&self,11);vendor_proxy(&mutex,&other_threads,12);
+  if(!vendor_wrong){vendor_proxy(&mutex,&self,observed_argument);if(vendor_conflict)vendor_proxy(&mutex,&self,observed_argument+1);}
+ }
  // Calls outside the owned receiver/argument contract must be passthroughs.
  active_checkpoint(&other_threads,&other_closure,nullptr,true,false);
  active_checkpoint(&threads,&other_closure,nullptr,false,false);
@@ -47,7 +56,8 @@ class Hooks:public HookEngine {
   if(!std::strcmp(name,"_ZN3art6Thread25ClearAllInterpreterCachesEv"))return reinterpret_cast<void*>(Prepare);
   if(!std::strcmp(name,"_ZN3art6Thread14CurrentFromGdbEv"))return reinterpret_cast<void*>(Current);
   if(!std::strcmp(name,"_ZN3art5Locks17thread_list_lock_E"))return &list_lock;
-  if(!std::strcmp(name,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE"))return reinterpret_cast<void*>(Lock);
+  if(!std::strcmp(name,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE"))return vendor?nullptr:reinterpret_cast<void*>(Lock);
+  if(!std::strcmp(name,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadEj"))return vendor?reinterpret_cast<void*>(VendorOriginal):nullptr;
   if(!std::strcmp(name,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE"))return reinterpret_cast<void*>(Unlock);
   if(!std::strcmp(name,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_"))return reinterpret_cast<void*>(ForEach);
   if(!std::strcmp(name,"_ZN3art10ThreadList13RunCheckpointEPNS_7ClosureES2_bb"))return reinterpret_cast<void*>(Checkpoints);
@@ -56,7 +66,9 @@ class Hooks:public HookEngine {
   return nullptr;
  }
  void* Install(void* target,void* proxy,void** original,std::string*)override {
-  assert(stopped&&target==reinterpret_cast<void*>(Checkpoints));++installs;
+  assert(stopped);++installs;
+  if(target==reinterpret_cast<void*>(VendorOriginal)){*original=target;vendor_proxy=reinterpret_cast<VendorLock>(proxy);vendor_proxy(&other_threads,&self,99);return &installs;}
+  assert(target==reinterpret_cast<void*>(Checkpoints));
   *original=target;active_checkpoint=reinterpret_cast<Checkpoint>(proxy);
   // A native caller can reach the hook before Install returns: its original
   // must already be available through durable storage, not a later copy.
@@ -87,5 +99,13 @@ int main(){
  native_cache::Service named;hooks.named=true;
  assert(named.Bind(hooks,&threads,&error)&&named.Prepare(&error));Clear(named);
  assert(clears==9&&hooks.installs==1&&checkpoint_calls>0&&!stopped&&!locked);
- std::cout<<"Native cache: original publication, owned capture, ambiguous/missing rejection, TLS recovery and synchronous enumeration passed\n";
+ vendor=true;native_cache::Service extension;
+ assert(extension.Bind(hooks,&threads,&error)&&hooks.installs==2);
+ vendor_wrong=true;assert(!extension.Prepare(&error));vendor_wrong=false;
+ vendor_conflict=true;assert(!extension.Prepare(&error));vendor_conflict=false;
+ throw_prepare=true;try{extension.Prepare(&error);assert(false);}catch(const std::runtime_error&){}throw_prepare=false;
+ assert(extension.Prepare(&error)&&extension.Prepared()&&extension.PreparedForCurrentThread());Clear(extension);
+ foreign=true;assert(!extension.PreparedForCurrentThread());count=77;Stop(nullptr,nullptr,false);assert(!extension.ClearStoppedWorld(&count,&error)&&count==77);Resume(nullptr);foreign=false;
+ Clear(extension);assert(clears==15&&vendor_calls>6&&!stopped&&!locked);
+ std::cout<<"Native cache: original publication, owned capture, ambiguous/missing rejection, TLS recovery, actual vendor argument/owner capture, conflicts and wrong-thread rejection, synchronous enumeration passed\n";
 }

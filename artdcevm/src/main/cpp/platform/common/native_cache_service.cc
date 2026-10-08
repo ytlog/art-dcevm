@@ -40,6 +40,35 @@ bool InstallCheckpoint(HookEngine& hooks,std::string* error) {
  destroy(&stopped);
  return checkpoint_token&&original_checkpoint_storage;
 }
+// Some vendor ELFs expose an additional unsigned argument absent from the
+// fixed AOSP Mutex declaration. Its meaning/default is deliberately unknown.
+// Capture only the actual native owner's value for the observed ThreadList
+// mutex and current Thread, and pass it through unchanged. Never infer a value.
+using VendorLock=void (*)(void*,void*,uint32_t);
+struct LockCapture {void* mutex;void* self;uint32_t argument=0;bool observed=false,conflict=false;};
+thread_local LockCapture* capturing_lock=nullptr;
+std::mutex vendor_installation;
+void* original_vendor_storage=nullptr;void* vendor_token=nullptr;
+void ObserveVendorLock(void* mutex,void* self,uint32_t argument){
+  if(capturing_lock&&mutex==capturing_lock->mutex&&self==capturing_lock->self){
+    if(capturing_lock->observed&&capturing_lock->argument!=argument)capturing_lock->conflict=true;
+    capturing_lock->argument=argument;capturing_lock->observed=true;
+  }
+  auto original=reinterpret_cast<VendorLock>(original_vendor_storage);
+  if(!original)std::abort();original(mutex,self,argument);
+}
+bool InstallVendorLock(HookEngine& hooks,std::string* error){
+  std::lock_guard<std::mutex> guard(vendor_installation);if(vendor_token)return true;
+  using namespace abi::arm64::android_common;
+  auto target=hooks.FindSymbol("libart.so","_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadEj");
+  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+  if(!target||!construct||!destroy)return Fail(error,"Missing exact vendor mutex observation entry");
+  SuspendAll stop{};construct(&stop,"artdcevm native cache mutex observation",false);
+  vendor_token=hooks.Install(target,reinterpret_cast<void*>(ObserveVendorLock),&original_vendor_storage,error);
+  if(vendor_token&&!original_vendor_storage)std::abort();destroy(&stop);
+  return vendor_token&&original_vendor_storage;
+}
 struct Request {Closure* closure;size_t count=0;};
 void ClearThread(void* thread,void* opaque) {
   auto& request=*static_cast<Request*>(opaque);
@@ -56,12 +85,14 @@ bool Service::Bind(HookEngine& hooks,void* observed_thread_list,std::string* err
   ART(current_,"_ZN3art6Thread14CurrentFromGdbEv");
   ART(list_lock_,"_ZN3art5Locks17thread_list_lock_E");
   ART(lock_,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");
+  if(!candidate.lock_)ART(vendor_lock_,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadEj");
   ART(unlock_,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");
   ART(for_each_,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_");
 #undef ART
   if(!candidate.prepare_||!candidate.current_||!candidate.list_lock_||
-     !candidate.lock_||!candidate.unlock_||!candidate.for_each_)
+     (!candidate.lock_&&!candidate.vendor_lock_)||!candidate.unlock_||!candidate.for_each_)
     return Fail(error,"Missing named native cache closure or synchronous enumeration services");
+  if(candidate.vendor_lock_&&!InstallVendorLock(hooks,error))return false;
   if(!candidate.closure_&&!InstallCheckpoint(hooks,error))return false;
   candidate.threads_=observed_thread_list;
   *this=candidate;
@@ -69,6 +100,8 @@ bool Service::Bind(HookEngine& hooks,void* observed_thread_list,std::string* err
 }
 bool Service::Prepare(std::string* error) {
   if(!prepare_||!threads_||!current_||!current_()||capturing)return Fail(error,"Unbound native cache service");
+  if(vendor_lock_&&(!list_lock_||!*list_lock_||capturing_lock))return Fail(error,"Missing vendor mutex capture context");
+  LockCapture lock_capture{list_lock_?*list_lock_:nullptr,current_()};
   Capture capture{threads_};
   {
     struct Window {
@@ -76,6 +109,11 @@ bool Service::Prepare(std::string* error) {
       explicit Window(Capture* value):previous(capturing){capturing=value;}
       ~Window(){capturing=previous;}
     } window(&capture);
+    struct LockWindow {
+      LockCapture* previous;
+      explicit LockWindow(LockCapture* value):previous(capturing_lock){capturing_lock=value;}
+      ~LockWindow(){capturing_lock=previous;}
+    } lock_window(vendor_lock_?&lock_capture:nullptr);
     prepare_(); // The real owner initializes and passes its static Closure.
   }
   if(!closure_) {
@@ -83,6 +121,10 @@ bool Service::Prepare(std::string* error) {
     closure_=capture.closure;
   } else if(capture.conflict||(capture.closure&&capture.closure!=closure_))
     return Fail(error,"Native cache observed Closure disagrees with named static object");
+  if(vendor_lock_){
+    if(lock_capture.conflict||!lock_capture.observed)return Fail(error,"Native cache owner did not supply a unique vendor mutex argument");
+    vendor_lock_argument_=lock_capture.argument;vendor_lock_self_=lock_capture.self;vendor_lock_observed_=true;
+  }
   size_t extent=0;
   if(!method_identity::ReadableMappingExtent(closure_,&extent)||extent<sizeof(void*))
     return Fail(error,"Native cache closure object is not readable");
@@ -92,12 +134,17 @@ bool Service::Prepare(std::string* error) {
   prepared_=true;
   return true;
 }
+bool Service::PreparedForCurrentThread()const {
+  void* self=current_?current_():nullptr;
+  return prepared_&&self&&(!vendor_lock_||(vendor_lock_observed_&&vendor_lock_self_==self));
+}
 bool Service::ClearStoppedWorld(size_t* cleared_threads,std::string* error)const {
   if(!prepared_||!cleared_threads||!list_lock_||!*list_lock_)
     return Fail(error,"Native cache closure is not prepared");
   void* self=current_();if(!self)return Fail(error,"Native cache current Thread unavailable");
   Request request{static_cast<Closure*>(closure_)};
-  lock_(*list_lock_,self);
+  if(vendor_lock_){if(!vendor_lock_observed_||self!=vendor_lock_self_)return Fail(error,"Vendor mutex argument is not calibrated for this native owner Thread");vendor_lock_(*list_lock_,self,vendor_lock_argument_);}
+  else lock_(*list_lock_,self);
   for_each_(threads_,ClearThread,&request);
   unlock_(*list_lock_,self);
   *cleared_threads=request.count;

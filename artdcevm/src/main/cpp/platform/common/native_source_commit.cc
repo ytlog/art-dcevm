@@ -24,7 +24,7 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
       dependencies.metadata->StorageModel()!=modern_field_metadata::Model::kSplit)||
      !dependencies.fields||!dependencies.fields->Calibrated()||
      dependencies.fields->StorageModel()!=dependencies.metadata->StorageModel()||
-     !dependencies.caches||!dependencies.caches->Prepared()||
+     !dependencies.caches||!dependencies.caches->PreparedForCurrentThread()||
      !dependencies.observed.runtime||!dependencies.observed.instrumentation||
      !dependencies.observed.receivers.thread_list||
      (bool(dependencies.observed.receivers.jit)!=bool(dependencies.observed.receivers.jit_code_cache))||
@@ -59,7 +59,8 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
   if(error)error->clear();return result;
 }
 bool Services::Validate(const source_commit::Plan& p)const {
-  if(!layout_||&p!=plan_||!Mapped(p.mirror,layout_->size)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
+  if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
+     &p!=plan_||!Mapped(p.mirror,layout_->size)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
      p.old_instances.size()!=p.new_instances.size()||methods_.size()!=p.old_classes.size()||
      !Mapped(p.new_classes_root,12+4*p.new_classes.size())||
      !dependencies_.reflective.prepared(p,dependencies_.reflective.state))return false;

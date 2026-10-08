@@ -12,13 +12,18 @@ const char* mode="success";
 using Enqueue=void(*)(void*,void*,void*);
 using Collect=void(*)(void*);
 using HeapGc=void(*)(void*,bool,int);
+using LegacyEnqueue=bool(*)(void*,void*,void*,uint32_t,uint32_t,bool);
+LegacyEnqueue legacy_proxy=nullptr;
 Enqueue enqueue_proxy;Collect cache_proxy;HeapGc heap_proxy;
 int jit_object,cache_object,heap_object,self,handle[3],suspends=0,warmups=0,collections=0,mutations=0,disposed=0;
-alignas(8) std::array<unsigned char,32> native_method{};
+alignas(8) std::array<unsigned char,40> native_method{};
 JNIEnv* current_env;JavaVM* current_vm;
 jvmtiEnv* current_jvmti;
 void EnqueueOriginal(void* receiver,void* method,void* thread){
   assert(receiver==&jit_object&&method==native_method.data()&&thread==&self);++warmups;
+}
+bool LegacyOriginal(void* receiver,void* thread,void* method,uint32_t before,uint32_t after,bool backedges){
+ assert(receiver==&jit_object&&method==native_method.data()&&thread==&self&&before==0xf0000002u&&after==0xf0000010u);++warmups;return backedges;
 }
 void CacheOriginal(void* receiver){assert(receiver==&cache_object);++mutations;}
 void HeapOriginal(void* receiver,bool clear,int cause){assert(receiver==&heap_object&&!clear&&cause==9);++collections;}
@@ -32,7 +37,8 @@ class Hooks:public HookEngine{
  public:
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{
-  if(std::strstr(name,"MaybeEnqueueCompilation"))return !std::strcmp(mode,"missing")?nullptr:reinterpret_cast<void*>(EnqueueOriginal);
+  if(std::strstr(name,"MaybeEnqueueCompilation"))return (!std::strcmp(mode,"missing")||std::strstr(mode,"legacy"))?nullptr:reinterpret_cast<void*>(EnqueueOriginal);
+  if(std::strstr(name,"MaybeCompileMethod"))return std::strstr(mode,"legacy")?reinterpret_cast<void*>(LegacyOriginal):nullptr;
   if(std::strstr(name,"InvalidateAllCompiledCode"))return reinterpret_cast<void*>(CacheOriginal);
   if(std::strstr(name,"CollectGarbage"))return reinterpret_cast<void*>(HeapOriginal);
   if(std::strstr(name,"FromReflectedMethod"))return reinterpret_cast<void*>(Leaf);
@@ -43,6 +49,7 @@ class Hooks:public HookEngine{
  void* Install(void* target,void* replacement,void** original,std::string*)override{
   assert(suspends==1);*original=target;
   if(target==reinterpret_cast<void*>(EnqueueOriginal))enqueue_proxy=reinterpret_cast<Enqueue>(replacement);
+  else if(target==reinterpret_cast<void*>(LegacyOriginal))legacy_proxy=reinterpret_cast<LegacyEnqueue>(replacement);
   else if(target==reinterpret_cast<void*>(CacheOriginal))cache_proxy=reinterpret_cast<Collect>(replacement);
   else {assert(target==reinterpret_cast<void*>(HeapOriginal));heap_proxy=reinterpret_cast<HeapGc>(replacement);}
   return target;
@@ -57,7 +64,8 @@ jmethodID StaticMethod(JNIEnv*,jclass,const char* name,const char* descriptor){
 }
 jint CallStatic(JNIEnv*,jclass,jmethodID method,va_list arguments){
  assert(!suspends&&method==reinterpret_cast<jmethodID>(&handle[1])&&va_arg(arguments,int)==100000);
- enqueue_proxy(&jit_object,native_method.data(),&self);return 42;
+ if(legacy_proxy){const bool backedges=(warmups%2)!=0;assert(legacy_proxy(&jit_object,&self,native_method.data(),0xf0000002u,0xf0000010u,backedges)==backedges);}
+ else enqueue_proxy(&jit_object,native_method.data(),&self);return 42;
 }
 jint GetEnv(JavaVM*,void** out,jint version){assert(version==JVMTI_VERSION_1_2);*out=current_jvmti;return JNI_OK;}
 jvmtiError ForceGc(jvmtiEnv*){heap_proxy(&heap_object,false,9);return JVMTI_ERROR_NONE;}
@@ -97,16 +105,21 @@ int main(int argc,char** argv){
  android17::RuntimeServices core{&runtime,&handle[0],{}};
  core.receivers.class_linker=runtime.class_linker;core.receivers.jni_id_manager=runtime.jni_id_manager;
  core.receivers.thread_list=runtime.thread_list;core.receivers.java_vm=&vm;
- uint32_t index=27,flags=9;std::memcpy(native_method.data()+8,&index,4);std::memcpy(native_method.data()+4,&flags,4);
+ abi::arm64::android11::RuntimePrefix legacy11{};abi::arm64::android12::RuntimePrefix legacy12{};
+ auto init=[&](auto& legacy){legacy.jit=&jit_object;legacy.jit_code_cache=&cache_object;legacy.heap=&heap_object;
+  legacy.class_linker=&handle[0];legacy.jni_id_manager=&handle[1];legacy.thread_list=&handle[2];legacy.java_vm=&vm;core.runtime=&legacy;};
+ if(!std::strcmp(mode,"legacy11"))init(legacy11);else if(!std::strcmp(mode,"legacy12"))init(legacy12);
+ uint32_t index=27,flags=9;std::memcpy(native_method.data()+(!std::strcmp(mode,"legacy11")?12:8),&index,4);std::memcpy(native_method.data()+4,&flags,4);
  method_identity::Oracle oracle{reinterpret_cast<jobject>(&handle[1]),index,flags};
  method_identity::Calibration model{method_identity::Model::kMethod12Onward,{{1,1},{8,2},{0x102,3}},{32,32,32}};
+ if(!std::strcmp(mode,"legacy11"))model.model=method_identity::Model::kMethod11;
  if(!std::strcmp(mode,"wrong-identity"))++oracle.dex_method_index;
  if(!std::strcmp(mode,"wrong-graph"))runtime.jit_code_cache=&handle[0];
  Hooks hooks;runtime_services::View output;output.heap=reinterpret_cast<void*>(77);
  unsigned char dex=7;std::string error;
  const bool result=android17::CalibrateJitReceivers(hooks,&env,reinterpret_cast<jobject>(&handle[0]),oracle,model,core,
     reinterpret_cast<jclass>(&handle[2]),&dex,1,&output,&error);
- if(!std::strcmp(mode,"success")){
+ if(!std::strcmp(mode,"success")||std::strstr(mode,"legacy")){
   assert(result&&error.empty()&&output.jit==&jit_object&&output.jit_code_cache==&cache_object&&output.heap==&heap_object);
   assert(warmups==32&&collections==1&&mutations==1&&disposed==1);
  }else{

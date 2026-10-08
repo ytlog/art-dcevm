@@ -4,7 +4,7 @@
 #include "platform/common/method_identity_calibration.h"
 namespace artdcevm::owned_jit_receivers {
 // Own Class/reflected method roots, and pass the independently calibrated
-// Method12 model. The Java fixture is a static int hotLoop(int) implementation.
+// Method11/12 model. The Java fixture is a static int hotLoop(int) implementation.
 // Original Java execution, public JVMTI GC and a real public native additive
 // transaction on a fresh owned fixture provide native receivers. The additive
 // fixture is changed on success or on a later oracle mismatch; output remains

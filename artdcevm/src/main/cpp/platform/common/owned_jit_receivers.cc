@@ -9,12 +9,14 @@ namespace {
 // Fixed b753cf97923c jit.h, jit_code_cache.h, heap.h. GcCause is a
 // source enum with the default int underlying representation.
 using Enqueue=void (*)(void*,void*,void*);
+using LegacyEnqueue=bool (*)(void*,void*,void*,uint32_t,uint32_t,bool);
 using Collect=void (*)(void*);
 using Wait=void (*)(void*,bool,int);
 constexpr char kEnqueue[]="_ZN3art3jit3Jit23MaybeEnqueueCompilationEPNS_9ArtMethodEPNS_6ThreadE";
+constexpr char kLegacyEnqueue[]="_ZN3art3jit3Jit18MaybeCompileMethodEPNS_6ThreadEPNS_9ArtMethodEjjb";
 constexpr char kCollect[]="_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv";
 constexpr char kWait[]="_ZN3art2gc4Heap14CollectGarbageEbNS0_7GcCauseE";
-Enqueue enqueue=nullptr;Collect collect=nullptr;Wait wait=nullptr;
+Enqueue enqueue=nullptr;LegacyEnqueue legacy_enqueue=nullptr;Collect collect=nullptr;Wait wait=nullptr;
 std::mutex installation,operation;
 bool attempted=false,installed=false;
 // Process lifetime observation state avoids borrowing a stack Request from an
@@ -29,6 +31,12 @@ void EnqueueProxy(void* receiver,void* method,void* self){
   if(method&&method==expected_method.load())Observe(jit,receiver);
   enqueue(receiver,method,self);
 }
+// Fixed Android11/12 jit.h: bool result and both uint32 counters are forwarded
+// exactly. AddSamples is inline; the named callee receives the real Jit owner.
+bool LegacyEnqueueProxy(void* receiver,void* self,void* method,uint32_t before,uint32_t after,bool backedges){
+  if(method&&method==expected_method.load())Observe(jit,receiver);
+  return legacy_enqueue(receiver,self,method,before,after,backedges);
+}
 void CollectProxy(void* receiver){
   if(gc_active.load())Observe(cache,receiver);
   collect(receiver);
@@ -42,7 +50,10 @@ bool Install(HookEngine& hooks,std::string* error){
   std::lock_guard<std::mutex> guard(installation);
   if(installed)return true;
   if(attempted)return Fail(error,"JIT receiver observation failed; restart process");
-  auto e=hooks.FindSymbol("libart.so",kEnqueue),c=hooks.FindSymbol("libart.so",kCollect),w=hooks.FindSymbol("libart.so",kWait);
+  auto e=hooks.FindSymbol("libart.so",kEnqueue);
+  const bool legacy=!e;
+  if(legacy)e=hooks.FindSymbol("libart.so",kLegacyEnqueue);
+  auto c=hooks.FindSymbol("libart.so",kCollect),w=hooks.FindSymbol("libart.so",kWait);
   using namespace abi::arm64::android_common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
@@ -50,19 +61,21 @@ bool Install(HookEngine& hooks,std::string* error){
   attempted=true;
   SuspendAll storage{};construct(&storage,"artdcevm JIT/cache/heap receiver observation",false);
   void *eo=nullptr,*co=nullptr,*wo=nullptr;
-  auto et=hooks.Install(e,reinterpret_cast<void*>(EnqueueProxy),&eo,error);
-  enqueue=reinterpret_cast<Enqueue>(eo);
-  auto ct=et&&enqueue?hooks.Install(c,reinterpret_cast<void*>(CollectProxy),&co,error):nullptr;
+  auto et=hooks.Install(e,legacy?reinterpret_cast<void*>(LegacyEnqueueProxy):reinterpret_cast<void*>(EnqueueProxy),&eo,error);
+  if(legacy)legacy_enqueue=reinterpret_cast<LegacyEnqueue>(eo);else enqueue=reinterpret_cast<Enqueue>(eo);
+  auto ct=et&&eo?hooks.Install(c,reinterpret_cast<void*>(CollectProxy),&co,error):nullptr;
   collect=reinterpret_cast<Collect>(co);
   auto wt=ct&&collect?hooks.Install(w,reinterpret_cast<void*>(WaitProxy),&wo,error):nullptr;
   wait=reinterpret_cast<Wait>(wo);
-  installed=et&&ct&&wt&&enqueue&&collect&&wait;
+  installed=et&&ct&&wt&&eo&&collect&&wait;
   destroy(&storage);
   return installed||Fail(error,"Unable to install JIT receiver observers; restart process");
 }
 struct Read {
   void* runtime;const method_identity::Oracle* oracle;
   abi::arm64::android_common::FromReflectedMethod leaf;
+  runtime_services::Snapshot observed;
+  method_identity::Model model;
   runtime_services::View view;void* method=nullptr;
 };
 bool Prepare(const runnable_jni::Context& context,void* opaque){
@@ -72,15 +85,27 @@ bool Prepare(const runnable_jni::Context& context,void* opaque){
   r.method=r.leaf(scope,r.oracle->strong_global_method);
   size_t extent=0;method_metadata::Identity identity;
   return !context.env->ExceptionCheck()&&method_identity::ReadableMappingExtent(r.method,&extent)&&
-      method_metadata::ReadIdentity(37,r.method,extent,&identity)&&
+      method_metadata::ReadIdentity(r.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward,r.method,extent,&identity)&&
       identity.dex_method_index==r.oracle->dex_method_index&&
       (identity.access_flags&0x11fu)==(r.oracle->java_modifiers&0x11fu);
 }
 bool ReadAfterObservation(const runnable_jni::Context&,void* opaque){
   auto& r=*static_cast<Read*>(opaque);size_t extent=0;
-  return method_identity::ReadableMappingExtent(r.runtime,&extent)&&
-      runtime_services::Read(runtime_services::Declaration::kAndroid15To17,r.runtime,extent,&r.view)&&
-      r.view.jit==jit.load()&&r.view.jit_code_cache==cache.load()&&r.view.heap==heap.load();
+  if(!method_identity::ReadableMappingExtent(r.runtime,&extent))return false;
+  // Each fixed source candidate must match seven independently observed actual
+  // native receivers. Identical source geometries authorize the same View;
+  // neither the API number nor an unobserved Runtime pointer is an oracle.
+  for(auto candidate:{runtime_services::Declaration::kAndroid11,runtime_services::Declaration::kAndroid12,
+      runtime_services::Declaration::kAndroid13,runtime_services::Declaration::kAndroid14,
+      runtime_services::Declaration::kAndroid15To17}){
+    runtime_services::View view;
+    if(runtime_services::Read(candidate,r.runtime,extent,&view)&&
+       view.jit==jit.load()&&view.jit_code_cache==cache.load()&&view.heap==heap.load()&&
+       view.class_linker==r.observed.receivers.class_linker&&
+       view.jni_id_manager==r.observed.receivers.jni_id_manager&&
+       view.thread_list==r.observed.receivers.thread_list&&view.java_vm==r.observed.receivers.java_vm){r.view=view;return true;}
+  }
+  return false;
 }
 }
 bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
@@ -89,13 +114,13 @@ bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
     runtime_services::View* output,std::string* error){
   std::unique_lock<std::mutex> guard(operation,std::try_to_lock);
   if(!guard.owns_lock()||!env||!strong_class||!output||!services.runtime||
-      !services.receivers.java_vm||!additive_target||!additive_dex||!dex_size||dex_size>INT32_MAX||model.model!=method_identity::Model::kMethod12Onward||
+      !services.receivers.java_vm||!additive_target||!additive_dex||!dex_size||dex_size>INT32_MAX||(model.model!=method_identity::Model::kMethod12Onward&&model.model!=method_identity::Model::kMethod11)||
       model.identities.size()<3||env->ExceptionCheck())return Fail(error,"Invalid owned JIT receiver request");
   if(!Install(hooks,error))return false;
   auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
       hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
   if(!leaf)return Fail(error,"Missing named reflected hot-method identity capability");
-  Read request{services.runtime,&hot,leaf,{}};
+  Read request{services.runtime,&hot,leaf,services,model.model,{}};
   if(runnable_executor::With(env,strong_class,Prepare,&request)!=runnable_jni::Result::kSuccess)
     return Fail(error,"Owned hot-method DEX/reflection/native identity mismatch");
   jmethodID method=env->FromReflectedMethod(hot.strong_global_method);
