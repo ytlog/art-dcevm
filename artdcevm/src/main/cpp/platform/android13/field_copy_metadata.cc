@@ -4,25 +4,12 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/common/dex_file_metadata.h"
 #include <cstdlib>
-#include <cstring>
 namespace artdcevm::android13 {
 namespace {
 using FieldText = const char* (*)(void*);
 FieldText name = nullptr, descriptor = nullptr;
 
 void Require(bool condition) { if (!condition) std::abort(); }
-void Range(size_t offset, size_t width, size_t size) { Require(offset <= size && width <= size - offset); }
-uint32_t U32(const unsigned char* region, size_t size, size_t offset) {
-  Range(offset, 4, size);
-  return region[offset] | uint32_t{region[offset + 1]} << 8 |
-      uint32_t{region[offset + 2]} << 16 | uint32_t{region[offset + 3]} << 24;
-}
-size_t Id(const unsigned char* begin, size_t size, size_t header, uint32_t index) {
-  const uint32_t count = U32(begin, size, header), offset = U32(begin, size, header + 4);
-  Require(index < count && offset >= 0x70 && offset % 4 == 0);
-  Range(offset, size_t{count} * 4, size);
-  return offset + size_t{index} * 4;
-}
 const char* ClassDescriptor(void* klass) {
   using namespace validation_abi;
   // Class::GetDexFile deliberately reads the immutable DexCache link without
@@ -33,19 +20,10 @@ const char* ClassDescriptor(void* klass) {
   evolution::MappedDexMetadata mapping;
   Require(dex_file_metadata::ReadCache(33,cache,sizeof(DexCachePrefix),sizeof(DexMappingPrefix),0,&mapping,nullptr));
   const uint32_t type=static_cast<uint32_t>(identity.dex_type_index);
-  const uint32_t string = U32(mapping.begin, mapping.size, Id(mapping.begin, mapping.size, 64, type));
-  size_t at = U32(mapping.begin, mapping.size, Id(mapping.begin, mapping.size, 56, string));
-  // Skip the bounded UTF-16 length ULEB; the mapped DEX is already verified.
-  bool complete = false;
-  for (unsigned i = 0; i < 5; ++i) {
-    Range(at, 1, mapping.data_size); unsigned byte = mapping.data_begin[at++];
-    if (i == 4) Require((byte & 0xf0) == 0);
-    if (!(byte & 0x80)) { complete = true; break; }
-  }
-  Require(complete);
-  Range(at, 1, mapping.data_size);
-  Require(std::memchr(mapping.data_begin + at, 0, mapping.data_size - at) != nullptr);
-  return reinterpret_cast<const char*>(mapping.data_begin + at);
+  const char* result = nullptr;
+  std::string error;
+  Require(evolution::ReadMappedDexTypeDescriptor(mapping,type,&result,&error));
+  return result;
 }
 field_array::View FieldArray(void* klass, bool is_static) {
   field_array::View view;

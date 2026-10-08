@@ -41,11 +41,36 @@ void Same(const ClassSchema& a, const ClassSchema& b) {
   };
   members(a.fields, b.fields); members(a.methods, b.methods);
 }
+void CheckTypes(const MappedDexMetadata& view) {
+  auto u32 = [](const unsigned char* p) { uint32_t v; std::memcpy(&v,p,4); return v; };
+  const auto* ids = std::memcmp(view.begin+4,"041",3)==0 ? view.data_begin : view.begin;
+  const uint32_t count = u32(view.begin+64);
+  std::string error;
+  for(uint32_t i=0;i<count;++i) {
+    const uint32_t string = u32(ids+u32(view.begin+68)+size_t{i}*4);
+    size_t at = u32(ids+u32(view.begin+60)+size_t{string}*4);
+    while(view.data_begin[at++]&0x80) {}
+    const char* value = nullptr;
+    auto no_class = view; no_class.class_def_index = UINT32_MAX;
+    assert(ReadMappedDexTypeDescriptor(no_class,i,&value,&error) && error.empty());
+    assert(value==reinterpret_cast<const char*>(view.data_begin+at));
+    assert(IsTypeDescriptor(value,true));
+  }
+  const char* sentinel = "unchanged";
+  const auto* saved = sentinel;
+  for(uint32_t bad:{count,UINT32_MAX}) {
+    assert(!ReadMappedDexTypeDescriptor(view,bad,&sentinel,&error));
+    assert(sentinel==saved && !error.empty());
+  }
+  assert(!ReadMappedDexTypeDescriptor(view,0,nullptr,&error));
+  assert(!ReadMappedDexTypeDescriptor(view,0,&sentinel,nullptr));
+}
 ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsigned char>& data, uint32_t index = 0) {
   ClassSchema result; std::string error;
   if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), index}, &result, &error)) {
     std::cerr << error << '\n'; std::abort();
   }
+  CheckTypes({main.data(),main.size(),data.data(),data.size(),index});
   MappedDexMemberCounts counts;
   assert(ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),index},&counts,&error));
   uint32_t statics=0,directs=0;
@@ -206,6 +231,7 @@ int main(int argc, char** argv) {
   ClassSchema container_schema;
   assert(ReadMappedDexDeclarations(container_view(), &container_schema, &error));
   Same(expected, container_schema);
+  CheckTypes(container_view());
   MappedDexMemberCounts container_counts, original_counts;
   assert(ReadMappedDexMemberCounts(container_view(),&container_counts,&error));
   assert(ReadMappedDexMemberCounts({original.data(),original.size(),original.data(),original.size(),0},&original_counts,&error));

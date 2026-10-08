@@ -6,10 +6,11 @@
 #include <new>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 
 namespace artdcevm::evolution {
 namespace {
-bool ReadType(const std::string& s, size_t* at, bool allow_void) {
+bool ReadType(std::string_view s, size_t* at, bool allow_void) {
   if (*at >= s.size()) return false;
   size_t arrays = 0;
   while (*at < s.size() && s[*at] == '[') { ++*at; ++arrays; }
@@ -87,6 +88,10 @@ class Reader {
     if (result.name.empty()) Fail("Empty method reference name");
     result.descriptor = Prototype(result.proto_index);
     return result;
+  }
+  const char* ReadTypeDescriptor(uint32_t index) {
+    Initialize();
+    return TypeView(index).data();
   }
   bool SupportsDefaultMethods() {
     Initialize();
@@ -229,7 +234,7 @@ class Reader {
     if (index >= table.count) Fail("Invalid DEX table index");
     return table.offset + size_t{index} * table.width;
   }
-  std::string String(uint32_t index) const {
+  std::string_view StringView(uint32_t index) const {
     size_t cursor = U32(Item(strings_, index));
     uint32_t units = Leb(&cursor), read = 0;
     size_t start = cursor;
@@ -250,13 +255,16 @@ class Reader {
         Fail("Overlong modified UTF-8 string");
     }
     if (read != units) Fail("String UTF-16 length mismatch");
-    return std::string(reinterpret_cast<const char*>(data_ + start), cursor - start - 1);
+    return {reinterpret_cast<const char*>(data_ + start), cursor - start - 1};
   }
-  std::string Type(uint32_t index) const {
-    std::string value = String(U32(Item(types_, index)));
-    if (!IsTypeDescriptor(value, true)) Fail("Invalid type descriptor");
+  std::string String(uint32_t index) const { return std::string(StringView(index)); }
+  std::string_view TypeView(uint32_t index) const {
+    const auto value = StringView(U32(Item(types_, index)));
+    size_t at = 0;
+    if (!ReadType(value, &at, true) || at != value.size()) Fail("Invalid type descriptor");
     return value;
   }
+  std::string Type(uint32_t index) const { return std::string(TypeView(index)); }
   std::vector<std::string> TypeList(uint32_t offset, bool interfaces) const {
     if (!offset) return {};
     if (offset % 4) Fail("Unaligned type list");
@@ -363,6 +371,16 @@ bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, s
 
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
   return ReadDex(dex, output, error, true);
+}
+
+bool ReadMappedDexTypeDescriptor(const MappedDexMetadata& view, uint32_t index,
+                                 const char** output, std::string* error) {
+  if (!output || !error) return false;
+  try {
+    const char* value = Reader(view).ReadTypeDescriptor(index);
+    *output = value; error->clear(); return true;
+  } catch (const std::bad_alloc&) { throw; }
+  catch (const std::exception& failure) { *error = failure.what(); return false; }
 }
 
 bool ReadMappedDexMemberCounts(const MappedDexMetadata& view, MappedDexMemberCounts* output,

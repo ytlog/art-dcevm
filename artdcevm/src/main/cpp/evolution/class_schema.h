@@ -45,6 +45,11 @@ struct MappedDexMemberCounts {
 // Requires a live, immutable, verified DEX mapping and an ordinary class definition.
 // Reads the four bounded ULEBs only; format failure preserves output.
 bool ReadMappedDexMemberCounts(const MappedDexMetadata&, MappedDexMemberCounts*, std::string*);
+// Borrowed null-terminated type descriptor; the caller keeps the immutable
+// mapping live. Uses full uint32 type indices and shared/container ID bases.
+// Format errors preserve output; allocation failures propagate.
+bool ReadMappedDexTypeDescriptor(const MappedDexMetadata&, uint32_t index,
+                                 const char**, std::string*);
 // A method ID may reference another class, including an array, with no local
 // class definition. Explicit cache resolution must use this owner, not referrer.
 struct MappedDexMethodReference {

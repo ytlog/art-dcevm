@@ -86,6 +86,20 @@ int main(int argc, char** argv) {
   assert(view.parent == &root && view.loader == canonical_loader && view.field_count == 2 && !view.is_object);
   assert(std::string(view.descriptor) == "Lcom/github/ytlog/artdcevm/fixture/SchemaSubject;");
   assert(heap_reads == 2);
+  // Copy metadata also visits loaded primitive/array classes; it must retain
+  // their valid descriptors rather than imposing ordinary-class semantics.
+  bool primitive = false;
+  for(uint32_t i=0;i<U32(bytes,64);++i) {
+    const uint32_t str=U32(bytes,U32(bytes,68)+size_t{i}*4);
+    size_t at=U32(bytes,U32(bytes,60)+size_t{str}*4);
+    while(bytes[at++]&0x80) {}
+    auto other=klass;other.dex_type_index=static_cast<int32_t>(i);
+    const auto copied=android13::ReadCopyClass(&other,false);
+    assert(copied.descriptor==reinterpret_cast<const char*>(bytes.data()+at));
+    primitive|=std::strcmp(copied.descriptor,"I")==0;
+  }
+  assert(primitive);
+
   auto alias = klass; alias.class_loader = 3;
   auto second = android13::ReadCopyClass(&alias, true);
   assert(second.loader == view.loader && second.field_count == 1);
@@ -116,6 +130,26 @@ int main(int argc, char** argv) {
   assert(std::strcmp(split.descriptor, view.descriptor) == 0);
   Reject([&] { dex.data_size = 1; android13::ReadCopyClass(&klass, false); });
   Reject([&] { Put(compact, 68, UINT32_MAX); android13::ReadCopyClass(&klass, false); });
+  // A later 041 header uses ID tables relative to the whole container.
+  auto container = bytes;
+  const size_t header_offset = (container.size()+3)&~size_t{3};
+  container.resize(header_offset);
+  container.insert(container.end(),bytes.begin(),bytes.begin()+data_start);
+  container.insert(container.begin()+header_offset+0x70,8,0);
+  auto header_put = [&](size_t off,uint32_t value) { Put(container,header_offset+off,value); };
+  std::memcpy(container.data()+header_offset+4,"041",3);
+  header_put(36,0x78);header_put(32,container.size()-header_offset);
+  header_put(104,0);header_put(108,0);
+  header_put(0x70,container.size());header_put(0x74,header_offset);
+  for(size_t off:{size_t{56},size_t{64},size_t{72},size_t{80},size_t{88},size_t{96}})
+    if(U32(bytes,off))header_put(off+4,header_offset+U32(bytes,off+4)+8);
+  dex.begin=container.data()+header_offset;dex.size=container.size()-header_offset;
+  dex.data_begin=container.data();dex.data_size=container.size();
+  auto later=android13::ReadCopyClass(&klass,false);
+  assert(std::strcmp(later.descriptor,view.descriptor)==0);
+  const uint32_t string_index=U32(bytes,U32(bytes,68)+static_cast<size_t>(klass.dex_type_index)*4);
+  const size_t string_data=U32(bytes,U32(bytes,60)+size_t{string_index}*4);
+  Reject([&] { container[string_data]^=1; android13::ReadCopyClass(&klass,false); });
   assert(munmap(memory, 4096) == 0);
-  std::cout << "field-copy metadata: named accessors, checked field stride/count, normalized loader identities, parent/root, DEX/shared CompactDex descriptors, full signed type indices and invalid ranges passed\n";
+  std::cout << "field-copy metadata: named accessors, checked field stride/count, normalized loader identities, parent/root, DEX/shared CompactDex/later041 descriptors, loaded primitive/array types, full signed type indices and invalid ranges passed\n";
 }

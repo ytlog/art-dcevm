@@ -14,7 +14,8 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall',
            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp),
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/field_copy_metadata_test.cc'),
-           str(cpp / 'platform/android13/field_copy_metadata.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/field_copy_metadata.cc'),
+           str(cpp / 'evolution/dex_schema.cc'), '-o', str(binary)]
 if platform == 'darwin':
     # ART compressed heap references require a low-address cache fixture.
     command.extend(['-Wl,-pagezero_size,0x10000'])
