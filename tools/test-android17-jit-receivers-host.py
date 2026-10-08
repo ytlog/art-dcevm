@@ -14,9 +14,9 @@ subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-W
                 '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp),
                 '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
                 str(root / 'tests/host/android17_jit_receivers_test.cc'),
-                str(cpp / 'platform/common/method_identity_calibration.cc'), str(cpp / 'platform/common/owned_jit_receivers.cc'), '-o', str(binary)], check=True)
+                str(cpp / 'platform/common/method_identity_calibration.cc'), str(cpp / 'platform/common/owned_jit_receivers.cc'), str(cpp / 'platform/common/heap_collect_observer.cc'), '-o', str(binary)], check=True)
 outputs=[]
-for mode in ['success','legacy11','legacy12','missing','wrong-identity','wrong-graph','cache-missing']:
+for mode in ['success','legacy11','legacy12','missing','wrong-identity','wrong-graph','cache-missing','cleanup-error','gc-error','additive-error']:
     result=subprocess.run([str(binary),mode],capture_output=True,text=True,
                          env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
     outputs.append(result.stdout+result.stderr)

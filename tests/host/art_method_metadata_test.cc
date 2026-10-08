@@ -10,22 +10,21 @@ int main() {
   alignas(8) std::array<unsigned char,40> bytes{};
   auto put=[&](size_t offset,uint32_t value){std::memcpy(bytes.data()+offset,&value,4);};
   put(4,0x12345678);put(8,111);put(12,222);
-  for(int api=30;api<=37;++api) {
+  for(const auto& source:{g::kAndroid11,g::kAndroid12Onward}) {
     g::Identity value{};
-    assert(g::ReadIdentity(api,bytes.data(),bytes.size(),&value));
-    assert(value.access_flags==0x12345678 && value.dex_method_index==(api==30?222:111));
-    const auto* layout=g::Declaration(api);
-    assert(layout->size==(api==30?40:32) && layout->data==(api==30?24:16) && layout->entry_point==(api==30?32:24));
+    assert(g::ReadIdentity(source,bytes.data(),bytes.size(),&value));
+    assert(value.access_flags==0x12345678 && value.dex_method_index==(source.size==40?222:111));
+    const auto* layout=&source;
+    assert(layout->size==(source.size==40?40:32) && layout->data==(source.size==40?24:16) && layout->entry_point==(source.size==40?32:24));
     g::Identity sentinel{44,55};
-    assert(!g::ReadIdentity(api,bytes.data(),layout->size-1,&sentinel));
+    assert(!g::ReadIdentity(source,bytes.data(),layout->size-1,&sentinel));
     assert(sentinel.access_flags==44 && sentinel.dex_method_index==55);
   }
   g::Identity sentinel{44,55};
-  for(int api:{29,38})assert(!g::ReadIdentity(api,bytes.data(),bytes.size(),&sentinel));
-  assert(!g::ReadIdentity(33,bytes.data()+1,39,&sentinel));
-  assert(!g::ReadIdentity(33,nullptr,40,&sentinel));
-  assert(!g::ReadIdentity(33,reinterpret_cast<const void*>(UINTPTR_MAX-3),40,&sentinel));
-  assert(!g::ReadIdentity(33,bytes.data(),40,nullptr));
+  assert(!g::ReadIdentity(g::kAndroid12Onward,bytes.data()+1,39,&sentinel));
+  assert(!g::ReadIdentity(g::kAndroid12Onward,nullptr,40,&sentinel));
+  assert(!g::ReadIdentity(g::kAndroid12Onward,reinterpret_cast<const void*>(UINTPTR_MAX-3),40,&sentinel));
+  assert(!g::ReadIdentity(g::kAndroid12Onward,bytes.data(),40,nullptr));
   assert(sentinel.access_flags==44 && sentinel.dex_method_index==55);
   auto malformed=g::kAndroid12Onward;
   malformed.dex_method_index=malformed.size;
@@ -43,9 +42,9 @@ int main() {
   }});
   for(unsigned i=0;i<200000;++i) {
     g::Identity value{};
-    assert(g::ReadIdentity(33,bytes.data(),bytes.size(),&value));
+    assert(g::ReadIdentity(g::kAndroid12Onward,bytes.data(),bytes.size(),&value));
     assert((value.access_flags==0x12345678 || value.access_flags==0x87654321) && value.dex_method_index==111);
   }
   writer.join();
-  std::cout<<"ArtMethod metadata: API30-37 source layouts, bounds/alignment/output preservation and concurrent atomic flags passed\n";
+  std::cout<<"ArtMethod metadata: fixed source source layouts, bounds/alignment/output preservation and concurrent atomic flags passed\n";
 }

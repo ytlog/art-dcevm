@@ -1,4 +1,5 @@
 #include "platform/android13/owned_jit_receiver_probe.h"
+#include "platform/common/heap_collect_observer.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
@@ -16,7 +17,6 @@ void* probe_method=nullptr;
 void* probe_jit=nullptr;
 bool probe_conflict=false;
 std::mutex calibration_lock;
-a::Collect original_collect=nullptr;
 a::Sweep original_sweep=nullptr;
 using JitScope=void (*)(a::SuspendJit*);
 JitScope suspend_jit=nullptr,resume_jit=nullptr;
@@ -40,9 +40,8 @@ bool CompileProxy(void* jit,void* method,void* self,
   }
   return original_compile(jit,method,self,kind,prejit);
 }
-void CollectProxy(void* heap,bool clear,a::GcCause cause) {
+void ObserveCollect(void* heap,bool,heap_collect_observer::Cause) {
   if(active)Observe(active->receivers.heap,heap);
-  original_collect(heap,clear,cause);
 }
 void SweepProxy(void* cache,void* visitor) {
   if(active)Observe(active->receivers.code_cache,cache);
@@ -55,30 +54,26 @@ bool Install(HookEngine& hooks,std::string* error) {
   if(attempted)return Fail(error,"JIT receiver hooks previously failed; restart process");
   attempted=true;
   auto compile=hooks.FindSymbol("libart.so",a::kCompile);
-  auto collect=hooks.FindSymbol("libart.so",a::kCollect);
   auto sweep=hooks.FindSymbol("libart.so",a::kSweep);
   auto jit_ctor=reinterpret_cast<JitScope>(hooks.FindSymbol("libart.so",a::kSuspend));
   auto jit_dtor=reinterpret_cast<JitScope>(hooks.FindSymbol("libart.so",a::kResume));
   using namespace abi::arm64::android_common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!compile || !collect || !sweep || !jit_ctor || !jit_dtor || !construct || !destroy)
+  if(!compile || !sweep || !jit_ctor || !jit_dtor || !construct || !destroy)
     return Fail(error,"Missing named JIT/GC receiver observation functions");
+  if(!heap_collect_observer::Install(hooks,ObserveCollect,error))return false;
   // Install unique observer proxies while original ART controls its mutators.
   // No compiler or GC is called with a guessed object as receiver.
   SuspendAll storage{};construct(&storage,"artdcevm JIT receiver observation",false);
   void* compile_original=nullptr;
-  void* collect_original=nullptr;void* sweep_original=nullptr;
+  void* sweep_original=nullptr;
   auto compile_token=hooks.Install(compile,reinterpret_cast<void*>(CompileProxy),&compile_original,error);
   if(compile_token)original_compile=reinterpret_cast<a::Compile>(compile_original);
-  auto collect_token=compile_token && original_compile?
-      hooks.Install(collect,reinterpret_cast<void*>(CollectProxy),&collect_original,error):nullptr;
-  if(collect_token)original_collect=reinterpret_cast<a::Collect>(collect_original);
-  auto sweep_token=collect_token && original_collect?
+  auto sweep_token=compile_token && original_compile?
       hooks.Install(sweep,reinterpret_cast<void*>(SweepProxy),&sweep_original,error):nullptr;
   if(sweep_token)original_sweep=reinterpret_cast<a::Sweep>(sweep_original);
-  installed=compile_token && collect_token && sweep_token &&
-      original_compile && original_collect && original_sweep;
+  installed=compile_token && sweep_token && original_compile && original_sweep;
   if(installed){suspend_jit=jit_ctor;resume_jit=jit_dtor;}
   destroy(&storage);
   if(!installed)return Fail(error,"JIT/GC observation hooks unavailable; restart process");

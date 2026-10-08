@@ -6,6 +6,19 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
 if(ANDROID_ABI STREQUAL "arm64-v8a")
   enable_language(ASM)
+  target_sources(artdcevm PRIVATE
+    third_party/xz_embedded/xz_dec_stream.c
+    third_party/xz_embedded/xz_dec_lzma2.c
+    third_party/xz_embedded/xz_crc32.c
+    third_party/xz_embedded/xz_crc64.c)
+  set_source_files_properties(
+    third_party/xz_embedded/xz_dec_stream.c
+    third_party/xz_embedded/xz_dec_lzma2.c
+    third_party/xz_embedded/xz_crc32.c
+    third_party/xz_embedded/xz_crc64.c
+    PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
+  target_compile_definitions(artdcevm PRIVATE XZ_USE_CRC64)
+
   find_package(shadowhook REQUIRED CONFIG)
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
   target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc
@@ -35,6 +48,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/owned_context_calibration.cc
     platform/android17/runtime_receiver_probe.cc
     platform/android17/runtime_services.cc
+    platform/common/heap_collect_observer.cc
     platform/common/owned_jit_receivers.cc
     platform/android17/method_table.cc
     platform/common/modern_method_services.cc
@@ -45,6 +59,17 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/modern_source_commit.cc
     platform/common/source_commit.cc
     platform/common/owned_structural_transaction.cc
+    platform/common/native_structural_reflection.cc
+    platform/common/resolution_invalidation_plan.cc
+    platform/common/native_member_provider.cc
+    platform/common/bootstrap_dex_oracle.cc
+    platform/common/production_bootstrap.cc
+    platform/common/capability_backend.cc
+    platform/common/native_owned_removal.cc
+    platform/common/native_owned_removal_probe.cc
+    platform/common/contextual_field_id.cc
+    platform/common/modern_method_handle_guards.cc
+    platform/common/native_removal_policy.cc
     platform/common/structural_methods.cc
     platform/common/runnable_jni_bridge.cc
     platform/common/runnable_global_ref_bridge.cc

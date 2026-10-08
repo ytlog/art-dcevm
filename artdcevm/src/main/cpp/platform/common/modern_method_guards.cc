@@ -20,13 +20,14 @@ struct State {
   Throw throw_exception = nullptr;
   Decode decode = nullptr;
   Reflected reflected = nullptr;
+  void* (*current)() = nullptr;
 };
 State state;
 bool installed_complete = false;
 std::atomic<size_t> rejected{0};
 void *original_invoke, *original_reflect, *original_native_values,
      *original_id_values, *original_id_varargs, *original_virtual_values,
-     *original_virtual_varargs;
+     *original_virtual_varargs, *original_check_signature;
 
 bool Guard(void* method, void* self, void* result = nullptr) {
   if (!state.registry->Contains(method)) return false;
@@ -70,6 +71,15 @@ template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject rece
   return reinterpret_cast<Fn>(virtual_call ? original_virtual_varargs : original_id_varargs)(
       access, receiver, id, args);
 }
+// Fixed runtime/jni/check_jni.cc: the real ScopedObjectAccess inherits the
+// independently calibrated AlreadyRunnable prefix. CheckJNI has already
+// established shared mutator access before this native validation callback.
+bool CheckSignature(void* check,const Scope& access,jobject receiver,jclass klass,
+                    jmethodID id,uint32_t type,uint32_t invoke) {
+  if(access.self==state.current()&&Guard(state.decode(state.manager,id),access.self))return false;
+  using Fn=bool(*)(void*,const Scope&,jobject,jclass,jmethodID,uint32_t,uint32_t);
+  return reinterpret_cast<Fn>(original_check_signature)(check,access,receiver,klass,id,type,invoke);
+}
 struct Calibration { State candidate; void* (*current)(); bool matched = false; };
 bool Calibrate(const runnable_jni::Context& context, void* data) {
   auto& request = *static_cast<Calibration*>(data);
@@ -101,7 +111,7 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
   calibration.candidate = {&registry, manager,
       reinterpret_cast<Throw>(hooks.FindSymbol("libart.so", "_ZN3art6Thread17ThrowNewExceptionEPKcS2_")),
       reinterpret_cast<Decode>(hooks.FindSymbol("libart.so", "_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
-      reinterpret_cast<Reflected>(hooks.FindSymbol("libart.so", abi::arm64::android_common::kFromReflectedMethod))};
+      reinterpret_cast<Reflected>(hooks.FindSymbol("libart.so", abi::arm64::android_common::kFromReflectedMethod)),nullptr};
   calibration.current = reinterpret_cast<void* (*)()>(
       hooks.FindSymbol("libart.so", "_ZN3art6Thread14CurrentFromGdbEv"));
   if (!calibration.candidate.throw_exception || !calibration.candidate.decode ||
@@ -111,7 +121,9 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
     *error = "Named method guard declarations or owned current Thread identity unavailable";
     return false;
   }
+  calibration.candidate.current=calibration.current;
   Entry entries[] = {
+    {"_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE", reinterpret_cast<void*>(CheckSignature), &original_check_signature, nullptr},
     {"_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc", reinterpret_cast<void*>(Invoke), &original_invoke, nullptr},
     {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflect, nullptr,
      // Fixed Android 11/12 reflection.h declares the same parameters without
@@ -157,4 +169,10 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
   return true;
 }
 size_t RejectedMethodEntries() { return rejected.load(); }
+bool MethodEntryGuardsOwn(const RetiredMethodRegistry& registry) {
+  return installed_complete&&state.registry==&registry;
+}
+bool RejectRetiredMethod(void* method,void* self,void* result) {
+  return installed_complete&&state.registry&&Guard(method,self,result);
+}
 }  // namespace artdcevm::retirement

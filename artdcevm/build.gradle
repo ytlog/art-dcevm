@@ -30,3 +30,16 @@ dependencies {
 }
 
 apply from: rootProject.file('gradle/publish-maven.gradle')
+
+// These source fixtures are production prerequisites, independent of app tests.
+def bootstrapTask = tasks.register('compileProductionBootstrap', Exec) {
+    inputs.dir file('src/bootstrap')
+    inputs.file rootProject.file('tools/build-production-bootstrap.py')
+    outputs.dir layout.buildDirectory.dir('generated/bootstrapAssets')
+    commandLine 'python3', rootProject.file('tools/build-production-bootstrap.py'),
+        '--sdk', androidComponents.sdkComponents.sdkDirectory.get().asFile,
+        '--java', System.getProperty('java.home'),
+        '--out', layout.buildDirectory.dir('generated/bootstrapAssets').get().asFile
+}
+android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/bootstrapAssets').get().asFile)
+tasks.configureEach { if (name == 'preBuild') dependsOn bootstrapTask }

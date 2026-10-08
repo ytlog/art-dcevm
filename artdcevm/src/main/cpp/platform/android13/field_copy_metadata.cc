@@ -15,7 +15,7 @@ const char* ClassDescriptor(void* klass) {
   // Class::GetDexFile deliberately reads the immutable DexCache link without
   // a read barrier. Both cache copies point to the same native DEX mapping.
   class_metadata::Identity identity;
-  Require(class_metadata::ReadIdentity(33,klass,sizeof(ClassPrefix),&identity) && identity.dex_type_index>=0);
+  Require(class_metadata::ReadIdentity(class_metadata::kLegacy,klass,sizeof(ClassPrefix),&identity) && identity.dex_type_index>=0);
   auto* cache=reinterpret_cast<const void*>(static_cast<uintptr_t>(identity.dex_cache));
   evolution::MappedDexMetadata mapping;
   Require(dex_file_metadata::ReadCache(33,cache,sizeof(DexCachePrefix),sizeof(DexMappingPrefix),0,&mapping,nullptr));
@@ -27,7 +27,7 @@ const char* ClassDescriptor(void* klass) {
 }
 field_array::View FieldArray(void* klass, bool is_static) {
   field_array::View view;
-  Require(field_array::ReadTrustedClass(33, klass, sizeof(validation_abi::ClassPrefix), is_static, &view));
+  Require(field_array::ReadTrustedClass(field_array::kSplit, klass, sizeof(validation_abi::ClassPrefix), is_static, &view));
   return view;
 }
 }

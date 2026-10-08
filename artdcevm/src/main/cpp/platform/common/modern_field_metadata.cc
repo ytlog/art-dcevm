@@ -79,6 +79,9 @@ bool FieldMetadata::Text(void* field,Model model,const char** name,const char** 
   *name=reference.name;*descriptor=reference.descriptor;
   return true;
 }
+void* FieldMetadata::FieldDeclaringClass(void* field)const {
+  Require(calibrated_&&field&&root_);return root_(field);
+}
 void* FieldMetadata::Reference(void* object,size_t offset,bool is_volatile) const {
   Require(bound_&&object);
   const auto* bytes=static_cast<const unsigned char*>(object);
@@ -217,6 +220,22 @@ bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::
   if(error)error->clear();return true;
 }
 
+bool FieldMetadata::ClassIdentity(void* klass,field_copy::CopyClassView* out,std::string* error)const {
+  if(!calibrated_||!klass||!out)return Fail(error,"Class identity lacks calibrated rooted source");
+  const auto& layout=Source(model_);field_array::View fields;
+  if(!Fields(klass,false,&fields,error))return false;
+  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error))return false;
+  auto* parent=Reference(klass,layout.parent);
+  *out={parent,Reference(klass,layout.loader),descriptor,fields.selected_count,
+      !parent&&!std::strcmp(descriptor,"Ljava/lang/Object;")};
+  return true;
+}
+bool FieldMetadata::FieldIdentity(void* field,field_copy::CopyFieldView* out,std::string* error)const {
+  if(!calibrated_||!field||!out)return Fail(error,"Field identity lacks calibrated rooted source");
+  const char *name=nullptr,*descriptor=nullptr;
+  if(!Text(field,model_,&name,&descriptor,error))return false;
+  *out={field,name,descriptor};return true;
+}
 field_copy::CopyClassView FieldMetadata::Class(void* klass,bool is_static)const{
   Require(calibrated_&&klass);
   const auto& layout=Source(model_);

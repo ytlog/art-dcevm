@@ -3,6 +3,8 @@
 #include "platform/abi/arm64/android12/code_info.h"
 #include "platform/abi/arm64/android13/code_info.h"
 #include "platform/abi/arm64/android17/code_info.h"
+#include "platform/abi/arm64/android14/code_info.h"
+#include "platform/abi/arm64/android16/code_info.h"
 #include "platform/common/bit_table_read.h"
 #include <array>
 #include <cstring>
@@ -72,7 +74,7 @@ template<class T> bool NormalizeObject(const T& info,View* output) {
 template<class T> bool ReadDecoded(const T& info,View* output) {
   return detail::NormalizeObject(info,output);
 }
-enum class SourceFamily {kAndroid11,kAndroid12,kAndroid13,kAndroid17};
+enum class SourceFamily {kAndroid11,kAndroid12,kAndroid13,kAndroid17,kAndroid14,kAndroid16};
 template<class T> bool ReadSourceObject(const void* object,size_t extent,View* output) {
   if(!object || !output || reinterpret_cast<uintptr_t>(object)%alignof(T) || extent<sizeof(T) ||
      sizeof(T)-1>std::numeric_limits<uintptr_t>::max()-reinterpret_cast<uintptr_t>(object))return false;
@@ -83,6 +85,8 @@ inline bool ReadSourceObject(SourceFamily family,const void* object,size_t exten
     case SourceFamily::kAndroid11:return ReadSourceObject<abi::arm64::android11::CodeInfo>(object,extent,output);
     case SourceFamily::kAndroid12:return ReadSourceObject<abi::arm64::android12::CodeInfo>(object,extent,output);
     case SourceFamily::kAndroid13:return ReadSourceObject<abi::arm64::android13::CodeInfo>(object,extent,output);
+    case SourceFamily::kAndroid14:return ReadSourceObject<abi::arm64::android14::CodeInfo>(object,extent,output);
+    case SourceFamily::kAndroid16:return ReadSourceObject<abi::arm64::android16::CodeInfo>(object,extent,output);
     case SourceFamily::kAndroid17:return ReadSourceObject<abi::arm64::android17::CodeInfo>(object,extent,output);
   }
   return false;

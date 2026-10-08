@@ -2,6 +2,10 @@
 #include <cstring>
 #include <cstdint>
 #include <fstream>
+#include <mutex>
+extern "C" {
+#include "third_party/xz_embedded/xz.h"
+}
 #include <unordered_set>
 #include <vector>
 
@@ -39,8 +43,108 @@ bool Range(const std::vector<char>& bytes, uint64_t offset, uint64_t size) {
   return offset <= bytes.size() && size <= bytes.size() - offset;
 }
 }
+namespace {
+using Names = std::unordered_map<std::string, std::string>;
+bool Collect(const std::vector<char>& bytes, bool mini, Names& names,
+             std::unordered_set<std::string>& ambiguous) {
+  Header header{};
+  const uint16_t endian = 1;
+  if (*reinterpret_cast<const unsigned char*>(&endian) != 1) return false;
+  if (!Read(bytes, 0, &header) || std::memcmp(header.ident, "\177ELF", 4) ||
+      header.ident[4] != 2 || header.ident[5] != 1 || header.ident[6] != 1 || header.version != 1 ||
+      header.machine != 183 || header.type != 3 ||
+      header.shentsize != sizeof(Section) || header.shnum == 0 ||
+      !Range(bytes, header.shoff, uint64_t{header.shnum} * sizeof(Section))) return false;
+  for (size_t i = 0; i < header.shnum; ++i) {
+    Section symbols{};
+    if (!Read(bytes, header.shoff + i * sizeof(symbols), &symbols)) return false;
+    if (symbols.type != 2) continue;  // SHT_SYMTAB
+    if (symbols.entsize != sizeof(Symbol) || symbols.link >= header.shnum ||
+        symbols.size % sizeof(Symbol) || !Range(bytes, symbols.offset, symbols.size)) return false;
+    Section strings{};
+    if (!Read(bytes, header.shoff + symbols.link * sizeof(strings), &strings) ||
+        strings.type != 3 || !Range(bytes, strings.offset, strings.size)) return false;  // SHT_STRTAB
+    for (size_t j = 0; j < symbols.size / sizeof(Symbol); ++j) {
+      Symbol symbol{};
+      if (!Read(bytes, symbols.offset + j * sizeof(symbol), &symbol)) return false;
+      if (symbol.shndx == 0 || symbol.shndx >= header.shnum ||
+          (symbol.info & 15) != 2 || ((symbol.info >> 4) != 0 && !mini)) continue;
+      if (symbol.name >= strings.size) return false;
+      const char* start = bytes.data() + strings.offset + symbol.name;
+      const size_t remaining = strings.size - symbol.name;
+      const char* end = static_cast<const char*>(std::memchr(start, 0, remaining));
+      if (!end) return false;
+      std::string full(start, end);
+      const auto suffix = full.find(".__uniq.");
+      if (suffix == std::string::npos || suffix == 0 || suffix + 8 == full.size()) continue;
+      // Clang LTO can append a second numeric identity to the unique
+      // internal-linkage name. Accept only the observed strict grammar:
+      // .__uniq.<digits> optionally followed by .llvm.<digits>.
+      const auto llvm = full.find(".llvm.", suffix + 8);
+      auto decimal = [&](size_t first, size_t last) {
+        if (first == last) return false;
+        for (size_t k = first; k < last; ++k)
+          if (full[k] < '0' || full[k] > '9') return false;
+        return true;
+      };
+      if (!decimal(suffix + 8, llvm == std::string::npos ? full.size() : llvm) ||
+          (llvm != std::string::npos && !decimal(llvm + 6, full.size()))) continue;
+      const auto base = full.substr(0, suffix);
+      auto found = names.find(base);
+      if (found != names.end() && found->second != full) ambiguous.insert(base);
+      else names.emplace(base, std::move(full));
+    }
+  }
+  return true;
+}
+bool Decode(const std::vector<char>& bytes, const Section& section, std::vector<char>* output) {
+  constexpr size_t kLimit = 32 * 1024 * 1024;
+  if (section.size > kLimit || !Range(bytes, section.offset, section.size)) return false;
+  static std::once_flag crc;
+  std::call_once(crc, [] { xz_crc32_init(); xz_crc64_init(); });
+  xz_dec* decoder = xz_dec_init(XZ_SINGLE, 0);
+  if (!decoder) return false;
+  bool decoded = false;
+  for (size_t capacity = 256 * 1024; capacity <= kLimit; capacity *= 2) {
+    output->resize(capacity);
+    xz_buf buffer{};
+    buffer.in = reinterpret_cast<const uint8_t*>(bytes.data() + section.offset);
+    buffer.in_size = section.size;
+    buffer.out = reinterpret_cast<uint8_t*>(output->data());
+    buffer.out_size = capacity;
+    const auto result = xz_dec_run(decoder, &buffer);
+    if (result == XZ_STREAM_END && buffer.in_pos == buffer.in_size) {
+      output->resize(buffer.out_pos); decoded = true; break;
+    }
+    if (result != XZ_BUF_ERROR) break;
+  }
+  xz_dec_end(decoder);
+  if (!decoded) output->clear();
+  return decoded;
+}
+bool MiniSection(const std::vector<char>& bytes, Section* output, bool* present) {
+  Header h{};
+  if (!Read(bytes, 0, &h)) return false;
+  *present = false;
+  if (!h.shstrndx) return true;
+  if (h.shstrndx >= h.shnum) return false;
+  Section strings{};
+  if (!Read(bytes, h.shoff + h.shstrndx * sizeof(Section), &strings) ||
+      strings.type != 3 || !Range(bytes, strings.offset, strings.size)) return false;
+  for (size_t i = 0; i < h.shnum; ++i) {
+    Section section{};
+    if (!Read(bytes, h.shoff + i * sizeof(Section), &section) || section.name >= strings.size) return false;
+    const char* name = bytes.data() + strings.offset + section.name;
+    if (!std::memchr(name, 0, strings.size - section.name)) return false;
+    if (std::strcmp(name, ".gnu_debugdata")) continue;
+    if (*present || section.type != 1) return false;
+    *present = true; *output = section;
+  }
+  return true;
+}
+}
 std::unordered_map<std::string, std::string> ReadUniqueElfSymbolNames(const std::string& path) {
-  std::unordered_map<std::string, std::string> names;
+  Names names;
   std::unordered_set<std::string> ambiguous;
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) return names;
@@ -48,45 +152,12 @@ std::unordered_map<std::string, std::string> ReadUniqueElfSymbolNames(const std:
   if (length < static_cast<std::streamoff>(sizeof(Header)) || length > 256 * 1024 * 1024) return names;
   std::vector<char> bytes(static_cast<size_t>(length));
   input.seekg(0);
-  if (!input.read(bytes.data(), bytes.size())) return names;
-  Header header{};
-  const uint16_t endian = 1;
-  if (*reinterpret_cast<const unsigned char*>(&endian) != 1) return names;
-  if (!Read(bytes, 0, &header) || std::memcmp(header.ident, "\177ELF", 4) ||
-      header.ident[4] != 2 || header.ident[5] != 1 || header.ident[6] != 1 || header.version != 1 ||
-      header.machine != 183 || header.type != 3 ||
-      header.shentsize != sizeof(Section) || header.shnum == 0 ||
-      !Range(bytes, header.shoff, uint64_t{header.shnum} * sizeof(Section))) return names;
-  for (size_t i = 0; i < header.shnum; ++i) {
-    Section symbols{};
-    if (!Read(bytes, header.shoff + i * sizeof(symbols), &symbols)) return {};
-    if (symbols.type != 2) continue;  // SHT_SYMTAB
-    if (symbols.entsize != sizeof(Symbol) || symbols.link >= header.shnum ||
-        symbols.size % sizeof(Symbol) || !Range(bytes, symbols.offset, symbols.size)) return {};
-    Section strings{};
-    if (!Read(bytes, header.shoff + symbols.link * sizeof(strings), &strings) ||
-        strings.type != 3 || !Range(bytes, strings.offset, strings.size)) return {};  // SHT_STRTAB
-    for (size_t j = 0; j < symbols.size / sizeof(Symbol); ++j) {
-      Symbol symbol{};
-      if (!Read(bytes, symbols.offset + j * sizeof(symbol), &symbol)) return {};
-      if (symbol.shndx == 0 || symbol.shndx >= header.shnum ||
-          (symbol.info & 15) != 2 || (symbol.info >> 4) != 0) continue;
-      if (symbol.name >= strings.size) return {};
-      const char* start = bytes.data() + strings.offset + symbol.name;
-      const size_t remaining = strings.size - symbol.name;
-      const char* end = static_cast<const char*>(std::memchr(start, 0, remaining));
-      if (!end) return {};
-      std::string full(start, end);
-      const auto suffix = full.rfind(".__uniq.");
-      if (suffix == std::string::npos || suffix == 0 || suffix + 8 == full.size()) continue;
-      bool numeric = true;
-      for (size_t k = suffix + 8; k < full.size(); ++k) numeric &= full[k] >= '0' && full[k] <= '9';
-      if (!numeric) continue;
-      const auto base = full.substr(0, suffix);
-      auto found = names.find(base);
-      if (found != names.end() && found->second != full) ambiguous.insert(base);
-      else names.emplace(base, std::move(full));
-    }
+  if (!input.read(bytes.data(), bytes.size()) || !Collect(bytes, false, names, ambiguous)) return {};
+  Section section{}; bool present = false;
+  if (!MiniSection(bytes, &section, &present)) return {};
+  if (present) {
+    std::vector<char> mini;
+    if (!Decode(bytes, section, &mini) || !Collect(mini, true, names, ambiguous)) return {};
   }
   for (const auto& name : ambiguous) names.erase(name);
   return names;

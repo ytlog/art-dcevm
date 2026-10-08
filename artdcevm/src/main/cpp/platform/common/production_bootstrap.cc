@@ -1,0 +1,468 @@
+#include "platform/common/production_bootstrap.h"
+#include "platform/common/bootstrap_dex_oracle.h"
+#include "platform/common/production_provenance.h"
+#include "platform/common/contextual_field_id.h"
+#include "platform/common/modern_retirement_cleanup.h"
+#include "platform/common/runtime_service_calibration.h"
+#include "platform/common/owned_jit_receivers.h"
+#include "platform/common/owned_method_table.h"
+#include "platform/common/native_method_table.h"
+#include "platform/common/native_member_provider.h"
+#include "platform/common/modern_method_services.h"
+#include "platform/common/modern_method_guards.h"
+#include "platform/common/modern_method_handle_guards.h"
+#include "platform/common/modern_field_guards.h"
+#include "platform/common/modern_source_commit.h"
+#include "platform/common/native_owned_removal.h"
+#include "platform/common/native_structural_reflection.h"
+#include "platform/common/runnable_executor.h"
+#include "platform/android13/selective_deopt_abi.h"
+#include "hooks/shadow_hook_engine.h"
+#include <cstring>
+#include <map>
+#include <algorithm>
+namespace artdcevm::production_bootstrap {
+namespace {
+bool Fail(std::string* e,const char* text){if(e)*e=text;return false;}
+void JNICALL Marker(JNIEnv*,jobject) {}
+struct Roots {
+ JNIEnv* env;std::vector<jobject> values;
+ ~Roots(){for(auto p:values)if(p)env->DeleteGlobalRef(p);}
+ jobject Own(jobject p){auto r=p?env->NewGlobalRef(p):nullptr;if(r)values.push_back(r);return r;}
+};
+struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
+struct NativeEngine final:Engine {
+ ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
+ ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){provenance.Clear(env);ClearFieldProofs(env);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ runtime_services::Snapshot runtime;
+ method_identity::Calibration model;
+ modern_field_metadata::FieldMetadata metadata;
+ field_mirror::Calibration field_mirror;
+ modern_field_storage::Service storage;
+ std::unique_ptr<modern_methods::Binding> methods;
+ std::unique_ptr<executable_mirror::Layout> mirrors;
+ retirement::RetiredMethodRegistry retired_methods;
+ retirement::RetiredFieldRegistry retired_fields;
+ std::vector<std::shared_ptr<contextual_field_id::Proof>> target_field_proofs,bootstrap_field_proofs;
+ void ClearFieldProofs(JNIEnv* env){for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
+ native_cache::Service cache;
+ native_structural_reflection::Service reflection;
+ native_member_provider::Service provider;
+ Provenance provenance;
+ retirement::Membership allocator_membership;
+ jobject anchor=nullptr,input=nullptr;bool activated=false,handles_proven=false;
+ std::vector<retirement::MethodHandleOracle> method_handles;
+ std::vector<retirement::FieldVarHandleOracle> field_handles;
+ std::vector<retirement::FieldMethodHandleOracle> field_method_handles;
+ jint original_field_values[2]={};
+ void* proof_method=nullptr;
+ bool Source13Candidate()const override {
+  if(!methods||!mirrors||model.model!=method_identity::Model::kMethod12Onward||
+      metadata.StorageModel()!=modern_field_metadata::Model::kSplit)return false;
+  size_t extent=0;runtime_services::View view;
+  if(!method_identity::ReadableMappingExtent(runtime.runtime,&extent)||
+      !runtime_services::Read(runtime_services::Declaration::kAndroid13,runtime.runtime,extent,&view))return false;
+  const auto& r=runtime.receivers;
+  return view.class_linker==r.class_linker&&view.jni_id_manager==r.jni_id_manager&&
+      view.java_vm==r.java_vm&&view.thread_list==r.thread_list&&view.jit==r.jit&&
+      view.jit_code_cache==r.jit_code_cache&&view.heap==r.heap&&
+      runtime.instrumentation==static_cast<unsigned char*>(runtime.runtime)+offsetof(android13::selective_abi::RuntimePrefix,instrumentation);
+ }
+ bool Activate(JNIEnv* env,std::string* error)override {
+  if(activated)return true;
+  struct BootstrapProofs {NativeEngine& engine;JNIEnv* env;~BootstrapProofs(){for(auto& p:engine.bootstrap_field_proofs)contextual_field_id::Release(env,&p);engine.bootstrap_field_proofs.clear();contextual_field_id::Prune(env,engine.retired_fields);}} proof_scope{*this,env};
+  if(!retirement::InstallRetirementCleanup(hooks,allocator_membership,retired_fields,retired_methods,error)||
+     !retirement::InstallMethodEntryGuards(hooks,env,anchor,runtime.receivers.jni_id_manager,retired_methods,error)||
+     !retirement::InstallFieldEntryGuards(hooks,env,anchor,runtime.receivers.jni_id_manager,field_mirror,retired_fields,error)||
+     !reflection.Bind(hooks,runtime.runtime,*mirrors,error)||!cache.Bind(hooks,runtime.receivers.thread_list,error)||
+     !native_owned_removal::Install(hooks,error))return false;
+  if(!retirement::InstallMethodHandleFieldGuards(hooks,error)||
+     !retirement::PrepareMethodHandleGuards(hooks,env,runtime.receivers.jni_id_manager,retired_methods,method_handles,error)||
+     !retirement::PrepareMethodHandleFieldGuards(hooks,env,runtime.receivers.jni_id_manager,retired_fields,field_method_handles,error)||
+     !retirement::InstallFieldVarHandleGuards(hooks,env,field_handles,retired_fields,error))return false;
+  jclass java=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");
+  const char* inputs="(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)";
+  std::string int_sig=std::string(inputs)+"I",bool_sig=std::string(inputs)+"Z";
+  auto method=java?env->GetStaticMethodID(java,"invokeMethod",int_sig.c_str()):nullptr;
+  auto field=java?env->GetStaticMethodID(java,"invokeField","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)I"):nullptr;
+  auto fields=java?env->GetStaticMethodID(java,"exerciseFieldHandles",bool_sig.c_str()):nullptr;
+  auto retired=java?env->GetStaticMethodID(java,"verifyRetiredHandles",bool_sig.c_str()):nullptr;
+  if(!method||!field||!fields||!retired||env->ExceptionCheck())return Fail(error,"Production public handle calls unavailable");
+  if(!retirement::BeginMethodHandleTargetProof(env,method_handles[0].strong_global,method_handles[0].method,error))return false;
+  jint original=env->CallStaticIntMethod(java,method,input);
+  if(!retirement::EndMethodHandleTargetProof(!env->ExceptionCheck()&&original==38,error))return false;
+  for(size_t i=0;i<field_method_handles.size();i++){
+   const auto& oracle=field_method_handles[i];
+   if(!retirement::BeginMethodHandleFieldTargetProof(env,oracle.strong_global,oracle.field,error))return false;
+   jint value=env->CallStaticIntMethod(java,field,input,jint(i));
+   if(!retirement::EndMethodHandleFieldTargetProof(!env->ExceptionCheck()&&value==original_field_values[i],error))return false;
+  }
+  if(env->CallStaticBooleanMethod(java,fields,input)!=JNI_TRUE||env->ExceptionCheck())return Fail(error,"Original field handle behavior differs");
+  if(!HandlesReady(this)) {
+    if(error)*error="Production handle dispatch targets are not independently proven: methodMH="+
+        std::to_string(MethodHandlesReady(this))+",fieldMH="+std::to_string(FieldMethodHandlesReady(this))+
+        ",fieldVH="+std::to_string(FieldVarHandlesReady(this))+"; "+
+        retirement::DescribeFieldVarHandleGuards(retired_fields);
+    return false;
+  }
+  retired_methods.Retire(proof_method);
+  for(const auto& proof:bootstrap_field_proofs){retired_fields.Retire(contextual_field_id::NativeField(proof));contextual_field_id::PublishRetired(proof,retired_fields);}
+  if(env->CallStaticBooleanMethod(java,retired,input)!=JNI_TRUE||env->ExceptionCheck())return Fail(error,"Production retired handle exceptions differ");
+  env->DeleteLocalRef(java);handles_proven=true;activated=true;return true;
+ }
+ static bool Ready(void* p){auto& s=*static_cast<NativeEngine*>(p);return s.activated&&s.handles_proven&&HandlesReady(p)&&s.cache.PreparedForCurrentThread();}
+ static bool MethodHandlesReady(void* p){return retirement::MethodHandleGuardsReady(static_cast<NativeEngine*>(p)->retired_methods);}
+ static bool FieldVarHandlesReady(void* p){return retirement::FieldVarHandleGuardsReady(static_cast<NativeEngine*>(p)->retired_fields);}
+ static bool FieldMethodHandlesReady(void* p){return retirement::MethodHandleFieldGuardsReady(static_cast<NativeEngine*>(p)->retired_fields);}
+ static bool FieldHandlesReady(void* p){return FieldMethodHandlesReady(p)&&FieldVarHandlesReady(p);}
+ static bool HandlesReady(void* p){return MethodHandlesReady(p)&&FieldHandlesReady(p);}
+ bool FieldDeletionReady()const override{return activated&&handles_proven;}
+ static bool FieldRetired(void* p,void* f){return static_cast<NativeEngine*>(p)->retired_fields.TokenFor(f)!=0;}
+ static void RetireField(void* p,void* f){
+  auto& engine=*static_cast<NativeEngine*>(p);
+  // The original final BeginCommit owns this callback. Every alias was staged
+  // in ordinary JNI before extension entry; publication performs no JNI work.
+  auto proof=std::find_if(engine.target_field_proofs.begin(),engine.target_field_proofs.end(),[&](const auto& candidate){return contextual_field_id::NativeField(candidate)==f;});
+  if(proof==engine.target_field_proofs.end())std::abort();
+  engine.retired_fields.Retire(f);contextual_field_id::PublishRetired(*proof,engine.retired_fields);
+ }
+ static bool Retired(void* p){return current&&current->retired_methods.Contains(p);}
+ static bool MethodRetired(void* p,void* m){return static_cast<NativeEngine*>(p)->retired_methods.Contains(m);}
+ static void RetireMethod(void* p,void* m){static_cast<NativeEngine*>(p)->retired_methods.Retire(m);}
+ static std::unique_ptr<source_commit::Services> PrepareCommit(const source_commit::Plan& p,void* raw,std::string* error){
+  auto& s=*static_cast<NativeEngine*>(raw);
+  native_member_provider::Dependencies d;d.hooks=&s.hooks;d.methods=s.methods.get();d.method_model=&s.model;
+  d.metadata=&s.metadata;d.fields=&s.storage;d.cache=&s.cache;d.runtime=s.runtime;d.reflection=&s.reflection;
+  d.retirement={&s,MethodRetired,FieldRetired,RetireMethod,RetireField};d.is_retired=Retired;
+  d.allow_field_removal=s.handles_proven;d.handle_guards={&s,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
+  return s.provider.Prepare(p,d,error);
+ }
+ void RecordDefinitions(JNIEnv* env,const std::vector<Definition>& definitions)override{
+  for(const auto& definition:definitions)if(!provenance.Store(env,definition.klass,definition.dex))break;
+ }
+ bool Preflight(JNIEnv*,jvmtiEnv*,jclass,std::string*);
+ int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
+  if(!activated||current||defs.size()!=1)return JVMTI_ERROR_NOT_AVAILABLE;
+  ClearFieldProofs(env);
+  struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
+  if(!Preflight(env,ti,defs[0].klass,error))return JVMTI_ERROR_NOT_AVAILABLE;
+  if(!cache.Prepare(error))return JVMTI_ERROR_NOT_AVAILABLE;
+  current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
+  int result=native_owned_removal::Run(hooks,env,ti,defs[0].klass,defs[0].dex,{Ready,PrepareCommit,&metadata,this,handles_proven},error);
+  if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
+  return result;
+ }
+ static thread_local NativeEngine* current;
+};
+thread_local NativeEngine* NativeEngine::current=nullptr;
+struct Request {
+ NativeEngine* engine;jobject owner;jobject storage_class;
+ const std::vector<method_identity::Oracle>* method_oracles;
+ const std::vector<modern_field_metadata::FieldOracle>* field_oracles;
+ evolution::MappedDexMemberCounts counts;
+ abi::arm64::android_common::FromReflectedMethod leaf;
+ field_mirror::NamedField field_leaf;
+ std::string error;
+};
+bool Observe(const runnable_jni::Context& scope,void* raw){
+ auto& r=*static_cast<Request*>(raw);auto& e=*r.engine;
+ if(!method_identity::Calibrate(scope,r.leaf,r.method_oracles->data(),r.method_oracles->size(),&e.model,&r.error))return false;
+ void* klass=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.owner,&klass))return false;
+ method_array::View table;
+ if(!owned_method_table::Calibrate(scope,r.leaf,e.model,klass,r.counts,r.method_oracles->data(),r.method_oracles->size(),&table,&r.error))return false;
+ e.mirrors=executable_mirror::Layout::Probe(scope,r.leaf,runnable_executor::DecodeStrongGlobal,r.method_oracles->data(),r.method_oracles->size(),&r.error);
+ for(const auto& oracle:*r.method_oracles)if(oracle.java_modifiers&0x100u)
+  e.methods=modern_methods::Service::BindOwned(e.hooks,scope,r.leaf,oracle,reinterpret_cast<const void*>(Marker),e.runtime.receivers.class_linker,e.model.model,&r.error);
+ if(!e.methods||!e.mirrors)return false;
+ if(!e.metadata.Calibrate(scope,r.storage_class,"Lcom/github/ytlog/artdcevm/internal/CalibrationFixture;",r.field_oracles->data(),r.field_oracles->size(),&r.error))return false;
+ return field_mirror::Calibrate(scope,e.metadata,r.field_leaf,r.storage_class,r.field_oracles->data(),r.field_oracles->size(),&e.field_mirror,&r.error);
+}
+struct HandleRequest {
+ NativeEngine* engine;jobject method;jobject mirrors[2];
+ abi::arm64::android_common::FromReflectedMethod method_leaf;
+ field_mirror::NamedField field_leaf;
+};
+bool ObserveHandles(const runnable_jni::Context& scope,void* raw){
+ auto& r=*static_cast<HandleRequest*>(raw);auto& e=*r.engine;
+ const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ e.proof_method=r.method_leaf(native,r.method);
+ if(!e.proof_method)return false;
+ for(size_t i=0;i<2;i++){
+  void* mirror=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.mirrors[i],&mirror))return false;
+  void* field=r.field_leaf(mirror);
+  if(!field||field!=contextual_field_id::NativeField(e.bootstrap_field_proofs[i]))return false;
+  e.field_handles[i].observed_field=field;
+  e.field_handles[i].reflected_field=r.mirrors[i];
+ }
+ return e.field_handles[0].observed_field!=e.field_handles[1].observed_field;
+}
+bool OriginalDeclarations(JNIEnv* env,jobject input,evolution::ClassSchema* schema,evolution::MappedDexMemberCounts* counts,std::string* error){
+ jclass type=env->GetObjectClass(input);jfieldID field=type?env->GetFieldID(type,"dex","[[B"):nullptr;
+ auto array=field?static_cast<jobjectArray>(env->GetObjectField(input,field)):nullptr;
+ if(type)env->DeleteLocalRef(type);if(!array||env->ExceptionCheck())return Fail(error,"Original installed APK DEX unavailable");
+ std::vector<std::vector<unsigned char>> files;
+ for(jsize n=0;n<env->GetArrayLength(array);++n){
+  auto value=static_cast<jbyteArray>(env->GetObjectArrayElement(array,n));
+  std::vector<unsigned char> bytes(value?static_cast<size_t>(env->GetArrayLength(value)):0);
+  if(value){env->GetByteArrayRegion(value,0,static_cast<jsize>(bytes.size()),reinterpret_cast<jbyte*>(bytes.data()));env->DeleteLocalRef(value);}
+  if(env->ExceptionCheck()){env->DeleteLocalRef(array);return false;}
+  files.push_back(std::move(bytes));
+ }
+ env->DeleteLocalRef(array);return SelectInstalledClass(files,"Lcom/github/ytlog/artdcevm/internal/EvolutionCalibration;",schema,counts,error);
+}
+struct AllocatorRequest {
+ NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;
+ const std::vector<modern_field_metadata::FieldOracle>* fields;
+ jobject boot_method;abi::arm64::android_common::FromReflectedMethod method_leaf;
+ field_mirror::NamedField field_leaf;std::vector<void*> owned,foreign;std::string error;
+};
+bool CollectAllocator(const runnable_jni::Context& scope,void* raw){
+ auto& r=*static_cast<AllocatorRequest*>(raw);
+ const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ for(const auto& oracle:*r.methods){void* method=r.method_leaf(native,oracle.strong_global_method);if(!method)return false;r.owned.push_back(method);}
+ for(const auto& oracle:*r.fields){void* mirror=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,oracle.strong_global_field,&mirror))return false;void* field=r.field_leaf(mirror);if(!field)return false;r.owned.push_back(field);}
+ void* foreign=r.method_leaf(native,r.boot_method);if(!foreign)return false;r.foreign.push_back(foreign);return true;
+}
+bool ProveAllocator(const exclusive_owned_roots::Context& scope,void* raw){
+ auto& r=*static_cast<AllocatorRequest*>(raw);return retirement::CalibrateAllocatorMembership(r.engine->hooks,r.engine->runtime.receivers.class_linker,scope,r.owned,r.foreign,&r.engine->allocator_membership,&r.error);
+}
+struct TargetRequest {
+ NativeEngine* engine;jobject owner;const evolution::ClassSchema* schema;
+ std::vector<method_identity::Oracle> methods;std::vector<jmethodID> ids;
+ std::vector<modern_field_metadata::FieldOracle> fields;
+ abi::arm64::android_common::FromReflectedMethod method_leaf;field_mirror::NamedField field_leaf;
+ void* (*decode_method)(void*,jmethodID);std::string error;
+};
+bool TargetObserve(const runnable_jni::Context& scope,void* raw){
+ auto& r=*static_cast<TargetRequest*>(raw);auto& e=*r.engine;void* klass=nullptr;
+ if(!runnable_executor::DecodeStrongGlobal(scope,r.owner,&klass))return false;
+ // Reuse the independently established declaration; all target identities and
+ // table bounds below are checked against this Class's independent DEX bytes.
+ evolution::MappedDexMemberCounts counts{};
+ for(const auto& m:r.schema->methods){if((m.access&(8u|2u))||m.name=="<init>"||m.name=="<clinit>")++counts.direct_methods;else ++counts.virtual_methods;}
+ method_array::View table;
+ if(!owned_method_table::ReadProvenDeclaration(scope,r.method_leaf,e.model.model,klass,counts,r.methods.data(),r.methods.size(),&table,&r.error))return false;
+ const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ for(size_t i=0;i<r.methods.size();i++)if(r.method_leaf(native,r.methods[i].strong_global_method)!=r.decode_method(e.runtime.receivers.jni_id_manager,r.ids[i]))return false;
+ if(r.fields.empty())return true;
+ auto target_metadata=e.metadata;
+ if(!target_metadata.Calibrate(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)||target_metadata.StorageModel()!=e.metadata.StorageModel())return false;
+ for(size_t i=0;i<r.fields.size();i++){
+  void* reflected=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.fields[i].strong_global_field,&reflected))return false;
+  void* field=r.field_leaf(reflected);
+  if(!field||field!=contextual_field_id::NativeField(e.target_field_proofs[i])||e.metadata.FieldDeclaringClass(field)!=klass)return false;
+ }
+ return true;
+}
+bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string* error){
+ Text signature{ti};if(ti->GetClassSignature(target,&signature.p,nullptr)!=JVMTI_ERROR_NONE||!signature.p)return Fail(error,"Target public signature unavailable");
+ evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
+ std::vector<unsigned char> committed;
+ if(provenance.Find(env,target,&committed)){
+  if(!evolution::ReadDexDeclarations(committed,&schema,error))return false;
+ }else{
+  jclass type=env->GetObjectClass(input);auto id=env->GetFieldID(type,"dex","[[B");
+  auto dex=static_cast<jobjectArray>(env->GetObjectField(input,id));std::vector<std::vector<unsigned char>> files;
+  for(jsize i=0;dex&&i<env->GetArrayLength(dex);i++){
+   auto array=static_cast<jbyteArray>(env->GetObjectArrayElement(dex,i));std::vector<unsigned char> bytes(env->GetArrayLength(array));
+   env->GetByteArrayRegion(array,0,bytes.size(),reinterpret_cast<jbyte*>(bytes.data()));env->DeleteLocalRef(array);files.push_back(std::move(bytes));
+  }
+  env->DeleteLocalRef(type);if(dex)env->DeleteLocalRef(dex);
+  // APK provenance additionally requires the application's defining loader.
+  auto class_type=env->FindClass("java/lang/Class");
+  auto loader_method=class_type?env->GetMethodID(class_type,"getClassLoader","()Ljava/lang/ClassLoader;"):nullptr;
+  if(class_type)env->DeleteLocalRef(class_type);
+  if(!loader_method||env->ExceptionCheck())return Fail(error,"Target loader oracle unavailable");
+  auto owner_loader=env->CallObjectMethod(anchor,loader_method),target_loader=env->CallObjectMethod(target,loader_method);
+  bool same=env->IsSameObject(owner_loader,target_loader);if(owner_loader)env->DeleteLocalRef(owner_loader);if(target_loader)env->DeleteLocalRef(target_loader);
+  if(!same||env->ExceptionCheck()||!SelectInstalledClass(files,signature.p,&schema,&counts,error))return Fail(error,"Target lacks known installed-APK or successful-engine DEX provenance");
+ }
+ if(schema.descriptor!=signature.p)return Fail(error,"Target Class differs from DEX provenance");
+ Roots owned{env,{}};auto owner=owned.Own(target);
+ TargetRequest request{this,owner,&schema,{},{},{},
+  reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod)),
+  reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
+  reinterpret_cast<void*(*)(void*,jmethodID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
+  {}};
+ jint n=0;jmethodID* methods=nullptr;if(ti->GetClassMethods(target,&n,&methods)!=JVMTI_ERROR_NONE||size_t(n)!=schema.methods.size())return Fail(error,"Target methods disagree with provenance");
+ struct Methods{jvmtiEnv* ti;jmethodID* p;~Methods(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_methods{ti,methods};
+ std::map<std::pair<std::string,std::string>,evolution::Member> expected;for(auto m:schema.methods)expected.emplace(std::make_pair(m.name,m.descriptor),m);
+ for(jint i=0;i<n;i++){
+  Text name{ti},descriptor{ti};jint modifiers=0;
+  if(ti->GetMethodName(methods[i],&name.p,&descriptor.p,nullptr)!=JVMTI_ERROR_NONE||ti->GetMethodModifiers(methods[i],&modifiers)!=JVMTI_ERROR_NONE||!name.p||!descriptor.p)return false;
+  auto member=expected.find({name.p,descriptor.p});if(member==expected.end()||(member->second.access&0xffffu)!=(uint32_t(modifiers)&0xffffu))return Fail(error,"Target method public metadata disagrees with provenance");
+  auto mirror=env->ToReflectedMethod(target,methods[i],(modifiers&8)?JNI_TRUE:JNI_FALSE);auto root=owned.Own(mirror);if(mirror)env->DeleteLocalRef(mirror);
+  request.methods.push_back({root,member->second.dex_index,uint32_t(modifiers)});request.ids.push_back(methods[i]);expected.erase(member);
+ }
+ jint f=0;jfieldID* fields=nullptr;if(ti->GetClassFields(target,&f,&fields)!=JVMTI_ERROR_NONE||size_t(f)!=schema.fields.size())return Fail(error,"Target fields disagree with provenance");
+ struct Fields{jvmtiEnv* ti;jfieldID* p;~Fields(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_fields{ti,fields};
+ std::map<std::pair<std::string,std::string>,evolution::Member> expected_fields;for(auto field:schema.fields)expected_fields.emplace(std::make_pair(field.name,field.descriptor),field);
+ std::vector<std::string> names(f),descriptors(f);
+ for(jint i=0;i<f;i++){
+  Text name{ti},descriptor{ti};jint modifiers=0;if(ti->GetFieldName(target,fields[i],&name.p,&descriptor.p,nullptr)!=JVMTI_ERROR_NONE||ti->GetFieldModifiers(target,fields[i],&modifiers)!=JVMTI_ERROR_NONE||!name.p||!descriptor.p)return false;
+  auto member=expected_fields.find({name.p,descriptor.p});if(member==expected_fields.end()||(member->second.access&0x50dfu)!=(uint32_t(modifiers)&0x50dfu))return Fail(error,"Target field public metadata disagrees with provenance");
+  names[i]=name.p;descriptors[i]=descriptor.p;auto mirror=env->ToReflectedField(target,fields[i],(modifiers&8)?JNI_TRUE:JNI_FALSE);auto root=owned.Own(mirror);if(mirror)env->DeleteLocalRef(mirror);
+  auto proof=contextual_field_id::Prepare(env,root,fields[i],error);
+  if(!proof)return false;
+  target_field_proofs.push_back(std::move(proof));
+  request.fields.push_back({root,names[i].c_str(),descriptors[i].c_str(),uint32_t(modifiers)});expected_fields.erase(member);
+ }
+ if(!request.decode_method||!request.method_leaf||!request.field_leaf||env->ExceptionCheck()||
+    runnable_executor::With(env,owner,TargetObserve,&request)!=runnable_jni::Result::kSuccess){if(error)*error=request.error.empty()?"Target rooted native/public identity proof rejected":request.error;return false;}
+ return true;
+}
+}
+std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std::string* error){
+ if(!env||!ti||!calibration||env->ExceptionCheck()){Fail(error,"Invalid production bootstrap caller");return nullptr;}
+ auto engine=std::make_unique<NativeEngine>();auto& e=*engine;env->GetJavaVM(&e.vm);
+ Roots roots{env,{}};
+ jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");
+ jmethodID create=bootstrap?env->GetStaticMethodID(bootstrap,"create","()Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;"):nullptr;
+ jobject input=create?env->CallStaticObjectMethod(bootstrap,create):nullptr;
+ if(bootstrap)env->DeleteLocalRef(bootstrap);
+ if(!input||env->ExceptionCheck()){Fail(error,"Public production bootstrap inputs unavailable");return nullptr;}
+ jobject global_input=roots.Own(input);env->DeleteLocalRef(input);
+ evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
+ if(!OriginalDeclarations(env,global_input,&schema,&counts,error))return nullptr;
+ jclass owner=env->GetObjectClass(calibration);if(!owner)return nullptr;
+ Text owner_signature{ti};
+ if(ti->GetClassSignature(owner,&owner_signature.p,nullptr)!=JVMTI_ERROR_NONE||
+    !owner_signature.p||schema.descriptor!=owner_signature.p){
+  env->DeleteLocalRef(owner);Fail(error,"Public calibration Class differs from installed APK oracle");return nullptr;
+ }
+ JNINativeMethod marker{const_cast<char*>("bootstrapNativeMarker"),const_cast<char*>("()V"),reinterpret_cast<void*>(Marker)};
+ if(env->RegisterNatives(owner,&marker,1)!=JNI_OK||env->ExceptionCheck())return nullptr;
+ jobject owner_root=roots.Own(owner);env->DeleteLocalRef(owner);
+ jint count=0;jmethodID* ids=nullptr;
+ if(ti->GetClassMethods(static_cast<jclass>(owner_root),&count,&ids)!=JVMTI_ERROR_NONE||count<3||size_t(count)!=schema.methods.size()){Fail(error,"Public declared methods disagree with installed APK class_data");return nullptr;}
+ struct FreeMethods{jvmtiEnv* ti;jmethodID* ids;~FreeMethods(){if(ids)ti->Deallocate(reinterpret_cast<unsigned char*>(ids));}} free_methods{ti,ids};
+ std::vector<method_identity::Oracle> method_oracles;method_identity::Oracle hot{};
+ std::map<std::pair<std::string,std::string>,evolution::Member> expected;
+ for(auto& m:schema.methods)expected.emplace(std::make_pair(m.name,m.descriptor),m);
+ for(jint n=0;n<count;++n){Text name{ti},sig{ti};jint mods=0;
+  if(ti->GetMethodName(ids[n],&name.p,&sig.p,nullptr)!=JVMTI_ERROR_NONE||ti->GetMethodModifiers(ids[n],&mods)!=JVMTI_ERROR_NONE||!name.p||!sig.p)return nullptr;
+  auto entry=expected.find({name.p,sig.p});
+  if(entry==expected.end()||(entry->second.access&0x11fu)!=(uint32_t(mods)&0x11fu)){Fail(error,"Public method identity disagrees with original DEX");return nullptr;}
+  jobject reflected=env->ToReflectedMethod(static_cast<jclass>(owner_root),ids[n],(mods&8)?JNI_TRUE:JNI_FALSE);
+  jobject root=roots.Own(reflected);if(reflected)env->DeleteLocalRef(reflected);
+  if(!root||env->ExceptionCheck())return nullptr;
+  method_identity::Oracle oracle{root,entry->second.dex_index,static_cast<uint32_t>(mods)};
+  method_oracles.push_back(oracle);if(std::strcmp(name.p,"hotLoop")==0&&std::strcmp(sig.p,"(I)I")==0)hot=oracle;
+  expected.erase(entry);
+ }
+ if(!expected.empty()||!hot.strong_global_method)return nullptr;
+ jclass input_type=env->GetObjectClass(global_input);
+ jfieldID storage_field=env->GetFieldID(input_type,"storage","Ljava/lang/Object;");
+ jobject storage=storage_field?env->GetObjectField(global_input,storage_field):nullptr;
+ jobject storage_root=roots.Own(storage);if(storage)env->DeleteLocalRef(storage);
+ jclass storage_type=storage_root?env->GetObjectClass(storage_root):nullptr;
+ jobject storage_class=roots.Own(storage_type);if(storage_type)env->DeleteLocalRef(storage_type);
+ if(!storage_class||env->ExceptionCheck())return nullptr;
+ jint field_count=0;jfieldID* fields=nullptr;
+ if(ti->GetClassFields(static_cast<jclass>(storage_class),&field_count,&fields)!=JVMTI_ERROR_NONE||field_count!=28){Fail(error,"Production storage fixture requires all 28 original fields");return nullptr;}
+ struct FreeFields{jvmtiEnv* ti;jfieldID* ids;~FreeFields(){if(ids)ti->Deallocate(reinterpret_cast<unsigned char*>(ids));}} free_fields{ti,fields};
+ std::vector<std::string> names(field_count),types(field_count);std::vector<modern_field_metadata::FieldOracle> field_oracles;
+ for(jint n=0;n<field_count;++n){Text name{ti},sig{ti};jint mods=0;
+  if(ti->GetFieldName(static_cast<jclass>(storage_class),fields[n],&name.p,&sig.p,nullptr)!=JVMTI_ERROR_NONE||ti->GetFieldModifiers(static_cast<jclass>(storage_class),fields[n],&mods)!=JVMTI_ERROR_NONE||!name.p||!sig.p)return nullptr;
+  names[n]=name.p;types[n]=sig.p;jobject reflected=env->ToReflectedField(static_cast<jclass>(storage_class),fields[n],(mods&8)?JNI_TRUE:JNI_FALSE);
+  jobject root=roots.Own(reflected);if(reflected)env->DeleteLocalRef(reflected);if(!root||env->ExceptionCheck())return nullptr;
+  field_oracles.push_back({root,names[n].c_str(),types[n].c_str(),static_cast<uint32_t>(mods)});
+ }
+ if(!e.hooks.Initialize(error)||!runtime_services::CalibrateRuntimeServices(e.hooks,env,&e.runtime,error)||!e.metadata.Bind(e.hooks,error))return nullptr;
+ // The public Field oracle uses the independently calibrated Runnable carrier.
+ // A fresh production process has no carrier before runtime service bootstrap.
+ if(!contextual_field_id::Initialize(e.hooks,error))return nullptr;
+ auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(e.hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ auto field_leaf=reinterpret_cast<field_mirror::NamedField>(e.hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ Request request{&e,owner_root,storage_class,&method_oracles,&field_oracles,counts,leaf,field_leaf,{}};
+ if(!leaf||!field_leaf||runnable_executor::With(env,owner_root,Observe,&request)!=runnable_jni::Result::kSuccess){if(error)*error=request.error;return nullptr;}
+ if(!e.storage.Calibrate(e.hooks,env,storage_class,storage_root,e.metadata,field_oracles.data(),field_oracles.size(),error))return nullptr;
+ // Mandatory native commit services are checked before exposing an owner.
+ const char* commit_symbols[]={"_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE",
+ "_ZN3art6mirror8ClassExt16SetObsoleteClassENS_6ObjPtrINS0_5ClassEEE",
+ "_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv",
+ "_ZN3art15instrumentation15Instrumentation25DeoptimizeAllThreadFramesEv",
+ "_ZN3art15instrumentation15Instrumentation20DeoptimizeEverythingEPKc"};
+ for(auto symbol:commit_symbols)if(!e.hooks.FindSymbol("libart.so",symbol)){Fail(error,"Missing named production commit service");return nullptr;}
+ if(!e.hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti14HeapExtensions17ReplaceReferencesEPN3art6ThreadERKNSt3__113unordered_mapINS1_6ObjPtrINS1_6mirror6ObjectEEES9_NS1_10HashObjPtrENS4_8equal_toIS9_EENS4_9allocatorINS4_4pairIKS9_S9_EEEEEE")){Fail(error,"Missing named production heap replacement");return nullptr;}
+ auto mh_id=env->GetFieldID(input_type,"methodHandles","[Ljava/lang/invoke/MethodHandle;");
+ auto methods_id=env->GetFieldID(input_type,"methods","[Ljava/lang/reflect/Method;");
+ auto handles=static_cast<jobjectArray>(env->GetObjectField(global_input,mh_id));
+ auto reflected=static_cast<jobjectArray>(env->GetObjectField(global_input,methods_id));
+ if(!handles||!reflected||env->ExceptionCheck()||env->GetArrayLength(handles)!=3||env->GetArrayLength(reflected)!=3)return nullptr;
+ jobject method_roots[3];
+ for(size_t i=0;i<3;i++){
+  auto h=env->GetObjectArrayElement(handles,i);auto m=env->GetObjectArrayElement(reflected,i);
+  auto hr=roots.Own(h);method_roots[i]=roots.Own(m);auto id=env->FromReflectedMethod(m);
+  env->DeleteLocalRef(h);env->DeleteLocalRef(m);
+  if(!hr||!method_roots[i]||!id||env->ExceptionCheck())return nullptr;
+  e.method_handles.push_back({hr,id});
+ }
+ auto vh=[&](const char* name){auto id=env->GetFieldID(input_type,name,"Ljava/lang/invoke/VarHandle;");auto h=id?env->GetObjectField(global_input,id):nullptr;auto root=roots.Own(h);if(h)env->DeleteLocalRef(h);return root;};
+ e.field_handles={{vh("instanceHandle"),nullptr},{vh("staticHandle"),nullptr}};
+ jfieldID proof_ids[2]={env->GetFieldID(static_cast<jclass>(storage_class),"intValue","I"),env->GetStaticFieldID(static_cast<jclass>(storage_class),"staticIntValue","I")};
+ e.original_field_values[0]=env->GetIntField(storage_root,proof_ids[0]);e.original_field_values[1]=env->GetStaticIntField(static_cast<jclass>(storage_class),proof_ids[1]);
+ for(size_t i=0;i<2;i++){
+  auto getter_id=env->GetFieldID(input_type,i?"staticGetter":"instanceGetter","Ljava/lang/invoke/MethodHandle;");
+  auto getter=getter_id?env->GetObjectField(global_input,getter_id):nullptr;auto root=roots.Own(getter);if(getter)env->DeleteLocalRef(getter);
+  if(!root||env->ExceptionCheck())return nullptr;e.field_method_handles.push_back({root,proof_ids[i],{}});
+ }
+ jobject proof_fields[2];
+ for(size_t i=0;i<2;i++){auto f=env->ToReflectedField(static_cast<jclass>(storage_class),proof_ids[i],i?JNI_TRUE:JNI_FALSE);proof_fields[i]=roots.Own(f);if(f)env->DeleteLocalRef(f);}
+ for(size_t i=0;i<2;i++){
+  auto proof=contextual_field_id::Prepare(env,proof_fields[i],proof_ids[i],error);if(!proof)return nullptr;
+  e.field_method_handles[i].identity=proof;e.bootstrap_field_proofs.push_back(std::move(proof));
+ }
+ HandleRequest handle_request{&e,method_roots[0],{proof_fields[0],proof_fields[1]},leaf,field_leaf};
+ if(env->ExceptionCheck()||!e.field_handles[0].strong_global||!e.field_handles[1].strong_global||
+    runnable_executor::With(env,owner_root,ObserveHandles,&handle_request)!=runnable_jni::Result::kSuccess){Fail(error,"Production native field/ID handle oracles differ");return nullptr;}
+ jclass class_type=env->FindClass("java/lang/Class");
+ auto get_loader=class_type?env->GetMethodID(class_type,"getClassLoader","()Ljava/lang/ClassLoader;"):nullptr;
+ if(class_type)env->DeleteLocalRef(class_type);
+ auto loader=get_loader?env->CallObjectMethod(owner_root,get_loader):nullptr;auto loader_root=roots.Own(loader);if(loader)env->DeleteLocalRef(loader);
+ jclass object=env->FindClass("java/lang/Object");
+ auto hash=object?env->GetMethodID(object,"hashCode","()I"):nullptr;
+ // Android's public Class.getClassLoader may return a BootClassLoader facade.
+ // JVMTI reports the real defining loader and uses null for the bootstrap set.
+ jobject boot_loader=nullptr;
+ if(!object||ti->GetClassLoader(object,&boot_loader)!=JVMTI_ERROR_NONE||boot_loader){
+  if(boot_loader)env->DeleteLocalRef(boot_loader);Fail(error,"Foreign allocator oracle must be a bootstrap Class");return nullptr;
+ }
+ auto boot_method=object&&hash?env->ToReflectedMethod(object,hash,JNI_FALSE):nullptr;auto boot_root=roots.Own(boot_method);
+ if(boot_method)env->DeleteLocalRef(boot_method);if(object)env->DeleteLocalRef(object);
+ AllocatorRequest allocator{&e,&method_oracles,&field_oracles,boot_root,leaf,field_leaf,{},{},{}};
+ exclusive_owned_roots::Service stopped;jobject stop_roots[]={loader_root,owner_root,storage_class};
+ if(!loader_root||!boot_root||env->ExceptionCheck()||
+    runnable_executor::With(env,owner_root,CollectAllocator,&allocator)!=runnable_jni::Result::kSuccess||
+    !exclusive_owned_roots::Service::Bind(e.hooks,&stopped,error)||
+    !stopped.With(env,stop_roots,3,ProveAllocator,&allocator,error)){if(error&&!allocator.error.empty())*error=allocator.error;return nullptr;}
+ e.input=global_input;
+ auto target_id=env->GetFieldID(input_type,"additiveClass","Ljava/lang/Class;");auto dex_id=env->GetFieldID(input_type,"additiveDex","[B");
+ auto target=target_id?static_cast<jclass>(env->GetObjectField(global_input,target_id)):nullptr;
+ auto dex=dex_id?static_cast<jbyteArray>(env->GetObjectField(global_input,dex_id)):nullptr;
+ if(!target||!dex||env->ExceptionCheck())return nullptr;
+ std::vector<unsigned char> replacement(static_cast<size_t>(env->GetArrayLength(dex)));
+ env->GetByteArrayRegion(dex,0,static_cast<jsize>(replacement.size()),reinterpret_cast<jbyte*>(replacement.data()));
+ runtime_services::View jit;
+ if(env->ExceptionCheck()||!owned_jit_receivers::CalibrateJitReceivers(e.hooks,env,owner_root,hot,e.model,e.runtime,target,replacement.data(),replacement.size(),&jit,error))return nullptr;
+ e.runtime.receivers=jit;e.anchor=owner_root;
+ // Calibration retains the defining Classes, not all original APK byte arrays
+ // and temporary reflection/storage objects. ART native members remain alive
+ // through these process-owned strong Class roots.
+ for(auto& root:roots.values)if(root==owner_root||root==storage_class||root==global_input||root==e.method_handles[0].strong_global||root==e.method_handles[1].strong_global||root==e.method_handles[2].strong_global||root==e.field_handles[0].strong_global||root==e.field_handles[1].strong_global||root==e.field_handles[0].reflected_field||root==e.field_handles[1].reflected_field||root==e.field_method_handles[0].strong_global||root==e.field_method_handles[1].strong_global){e.roots.push_back(root);root=nullptr;}
+ return engine;
+}
+}
+
+// Ordinary JNI proof used before a fresh retained ID is exercised. In particular,
+// the contextual service rejects an opaque-ID collision with a live retired alias.
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_internal_ProductionBootstrap_verifyLiveFieldId(
+    JNIEnv* env,jclass,jobject field){
+ std::string error;
+ jfieldID id=field?env->FromReflectedField(field):nullptr;
+ auto proof=artdcevm::contextual_field_id::Prepare(env,field,id,&error);
+ const bool ready=bool(proof);
+ artdcevm::contextual_field_id::Release(env,&proof);
+ if(env->ExceptionCheck())return nullptr;
+ return ready?nullptr:env->NewStringUTF(error.empty()?"Fresh field ID identity could not be proven":error.c_str());
+}

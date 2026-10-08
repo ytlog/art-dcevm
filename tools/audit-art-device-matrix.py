@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from xz_host_objects import compile_xz
+from elf_mini_inventory import mini_symbol_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,10 +18,11 @@ def evolution_dependencies(cxx, directory, manifests):
     cpp = ROOT / 'artdcevm/src/main/cpp'
     with tempfile.TemporaryDirectory(prefix='symbol-inventory-', dir=directory) as temporary:
         binary = Path(temporary) / 'inventory'
-        subprocess.run([cxx, '-std=c++17', '-I', str(cpp),
+        xz_objects = compile_xz(ROOT, Path(temporary))
+        subprocess.run([cxx, '-std=c++17', '-DXZ_USE_CRC64', '-fsanitize=address,undefined', '-I', str(cpp),
                         str(ROOT / 'tools/art-symbol-dependencies.cc'),
                         str(cpp / 'platform/symbols/art_symbol_compat.cc'),
-                        str(cpp / 'support/elf_symbol_names.cc'),
+                        str(cpp / 'support/elf_symbol_names.cc'), *xz_objects,
                         '-o', str(binary)], check=True, capture_output=True, text=True)
         output = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout
         aliases = {}
@@ -97,6 +100,12 @@ def main():
                 if hashlib.sha256(inventory).hexdigest() != library['symbolInventorySha256']:
                     raise ValueError('Symbol inventory hash mismatch: ' + library['path'])
                 names = set(json.loads(inventory))
+                mini_names, mini = mini_symbol_inventory(local.read_bytes())
+                if 'miniDebugData' in library and library['miniDebugData'] != mini:
+                    raise ValueError('Mini ELF provenance mismatch: ' + library['path'])
+                names.update(mini_names)
+                library['verifiedMiniDebugData'] = mini
+
                 for base, full in aliases.get(digest, {}).items():
                     if full not in names:
                         raise ValueError('Unique name missing from verified symbol inventory: ' + full)
@@ -105,7 +114,9 @@ def main():
                     available.setdefault(name.split('@', 1)[0], []).append(library['path'])
                 identity = (library['name'], library['buildId'], digest)
                 identities.setdefault(identity, []).append(str(manifest))
-                libraries.append({k: library[k] for k in ('name', 'path', 'sha256', 'buildId')})
+                libraries.append({**{k: library[k] for k in ('name', 'path', 'sha256', 'buildId')},
+                                  'miniDebugData': mini,
+                                  'miniSupplementedFromVerifiedElf': 'miniDebugData' not in library})
             def paths(symbol):
                 return set(available.get(symbol, [])) | {name['path'] for name in unique_names.get(symbol, [])}
 
@@ -128,7 +139,7 @@ def main():
             errors.append(f'{manifest}: {error}')
     firebase = [x for x in devices if x['origin'] == 'firebase']
     covered = sorted(set(x['device']['sdk'] for x in firebase))
-    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; exact and unique local names from production ELF reader; optional dependencies included; presence does not prove ABI or loader namespace compatibility',
+    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; exact and unique local names from production ELF reader; optional dependencies included; bounded mini names supplemented from independently hashed ELF; presence does not prove address, ABI, loader namespace or callability compatibility',
                   devices=devices, firebaseApis=covered,
                   missingFirebaseApis=sorted(set(range(30, 38)) - set(covered)),
                   firebaseManufacturers=sorted(set(x['device']['manufacturer'] for x in firebase)),

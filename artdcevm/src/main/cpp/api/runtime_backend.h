@@ -17,5 +17,9 @@ class RuntimeBackend {
   virtual int EnableValidationHooks() = 0;
   virtual int EnableStandardRedefineRouting() = 0;
   virtual int InitializeEvolution(JNIEnv* jni, jobject calibration) = 0;
+  // Explicitly initializes only capabilities independently proven by the backend.
+  virtual int InitializeCapabilities(JNIEnv* jni, jobject calibration) {
+    return InitializeEvolution(jni, calibration);
+  }
 };
 }  // namespace artdcevm

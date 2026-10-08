@@ -33,7 +33,7 @@ bool CalibrateMethodTable(const runnable_jni::Context& context,
   // Derive boundaries from independent class_data, never the obsolete 16 tail.
   const method_array::Boundaries boundaries{dex.direct_methods,
       static_cast<uint32_t>(count), method_array::Order::ByFlags};
-  if (count > UINT32_MAX || !method_array::Read(37, array, array_extent, boundaries, &table))
+  if (count > UINT32_MAX || !method_array::Read(method_metadata::kAndroid12Onward, array, array_extent, boundaries, &table))
     return fail("Android17 method array exceeds its mapped extent");
   const abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
   std::set<uint32_t> physical, indices;
@@ -55,7 +55,7 @@ bool CalibrateMethodTable(const runnable_jni::Context& context,
     const auto index = static_cast<uint32_t>((address-begin)/table.stride);
     method_metadata::Identity identity;
     if (!physical.insert(index).second ||
-        !method_metadata::ReadIdentity(37,method,table.stride,&identity) ||
+        !method_metadata::ReadIdentity(method_metadata::kAndroid12Onward,method,table.stride,&identity) ||
         identity.dex_method_index != oracle.dex_method_index ||
         (identity.access_flags & kModifiers) != (oracle.java_modifiers & kModifiers))
       return fail("Android17 method identity does not match independent DEX/reflection");

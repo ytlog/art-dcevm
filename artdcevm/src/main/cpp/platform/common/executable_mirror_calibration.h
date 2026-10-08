@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android12/reflection.h"
 #include "platform/abi/arm64/android11/reflection.h"
@@ -58,4 +59,18 @@ inline bool Calibrate(const runnable_jni::Context& context,
   if (error) error->clear();
   return true;
 }
+// The native reflective visitor may update Executable flags only after this
+// immutable capability has been established by complete independent oracles.
+class Layout final {
+ public:
+  Layout(const Layout&)=delete;
+  static std::unique_ptr<Layout> Probe(const runnable_jni::Context& context,
+      abi::arm64::android_common::FromReflectedMethod leaf,Decode decode,
+      const method_identity::Oracle* oracles,size_t count,std::string* error) {
+    return Calibrate(context,leaf,decode,oracles,count,error)?
+        std::unique_ptr<Layout>(new Layout):nullptr;
+  }
+ private:
+  Layout()=default;
+};
 }  // namespace artdcevm::executable_mirror

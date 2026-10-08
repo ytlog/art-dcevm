@@ -2,7 +2,7 @@
 
 验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。Android 11–17 的公开路径矩阵、16 KB 构建和 AOSP 私有声明差异见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
 
-目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整演进后端目前只针对 Android 13 / API 33 / arm64 的已验证 ART 构建；Android 11 / API 30 及以上的其他构建提供公开 JVMTI 方法体替换，并在 ART 暴露结构扩展时提供新增成员能力。不需要 root，也不改系统分区。
+目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整演进的既有真机证据来自 Android 13 / arm64；Android 11–17 的共用私有 provider 正在统一接入和回归。公开 JVMTI 后端支持方法体替换，并在 ART 暴露结构扩展时提供新增成员能力；已校准的删除子集与完整演进分别报告，不能互相替代。不需要 root，也不改系统分区。
 
 标准 JVMTI 入口的使用方式：在用户 Agent 第一次重定义前调用一次
 `DcevmRuntime.initialize(context)`，随后用户 Agent 只向自己的
@@ -68,19 +68,17 @@ ShadowHook 官方 2.0.1 AAR 与 SDK 37 构建后的源码回归见
 
 ```text
 artdcevm/src/main/java/com/github/ytlog/artdcevm/
-  api/                         应用侧契约、不可变补丁请求、结果
-  engine/                      版本注册与稳定 JNI 协议
-  platform/android13/          API 33 的 attach、debuggable 策略
-  platform/jvmti/               未校准 ART 构建的公开 JVMTI 后端
+  api/DcevmRuntime.java        公开附加、已证明能力与完整初始化入口
+  internal/                    原始 APK DEX、library-owned 行为校准与 bootstrap
 artdcevm/src/main/cpp/
   api/runtime_backend.h        平台后端契约
   api/class_redefiner.h         整批类变更事务接口
   api/hook_engine.h             查找符号、安装和移除 Hook
   core/                        Agent 生命周期、JNI 输入校验、串行调度
   evolution/                   DEX 结构解析与旧/新成员迁移计划，无 ART 私有布局
-  support/                     ELF 模块与 GNU Build ID 读取
+  support/                     ELF 模块、来源记录与有界命名符号解析
   hooks/                       Hook 机制实现；不理解 ART 对象布局
-  platform/backend_factory.*   唯一 Native 版本选择入口
+  platform/backend_factory.*   Native 能力入口；按独立 bootstrap 证明选择
   platform/android13/
     android13_backend.*        平台能力探测与实现组合
     jvmti_redefiner.*           方法体与增量结构变更实现
@@ -88,7 +86,7 @@ artdcevm/src/main/cpp/
     evolution_planner.*        验证整批目标并生成迁移计划
     validation_hooks.*         共享校验/提交 Hook 路由、线程事务范围与计数
     evolution_runtime.*        命名设备函数、自有校准、Hook 与演进事务初始化
-    device_profile.*           严格设备库 Build ID 与固定声明集匹配
+    device_profile.*           必需运行库发现；固定声明需独立 owned 校准
     owned_calibration.*        公开 JNI/JVMTI 真实元数据及存储行为校准
     evolution_transaction.*    事务预检、guard 回滚、活动帧排空与设备事务调用
     hierarchy_allocation.*     rooted 批次分配与未发布 verifier 替换视图
@@ -96,7 +94,10 @@ artdcevm/src/main/cpp/
     retired_method_hooks.*     退役方法的反射、JNI、MethodHandle 调用守卫
     retired_field_hooks.*      反射、JNI、VarHandle 的字段访问守卫
     instrumentation_listener.* 接收者守卫的事件处理与注册
-  platform/symbols/            按系统、厂商组织的私有符号配置
+  platform/common/             共用元数据、提交、退役守卫与运行时证明
+  platform/abi/arm64/           按源码声明差异组织的 ARM64 ABI
+  platform/arch/arm64/          CPU 寄存器恢复与汇编
+  platform/symbols/            命名符号与固定源码声明配置
 app/src/debug/cpp/testing/      仅演示应用使用的 JNI 与独立 Agent 探针
 app/src/debug/java/            演示应用的测试入口与业务样例
 fixtures/                      方法体、增删、类型、继承、元数据的单类补丁源码
@@ -155,9 +156,9 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 该解析器读取类、字段、方法及继承元数据，检查相关索引、偏移、长度和 checksum；它不是 ART 的完整 DEX 验证器。代码体、注解、encoded values 仍须由提交实现交给 ART 验证。`analyze()` 是只读预览，后续提交实现必须在自己的事务中重新验证基线，不能直接执行已经过时的客户端预览结果。
 
-当前符号表 `platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h` 源自小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。运行时严格比较已加载 `libart.so`、`libopenjdkjvmti.so`、`libdexfile.so` 和平台 `libc++.so` 的 Build ID；匹配后仍须真实校准。其他设备需独立配置和回归，同名符号不能证明 ABI 兼容。
+当前符号表 `platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h` 源自小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。运行时发现实际加载模块，通过命名符号与公开 JNI/JVMTI 独立行为校准确认私有能力；Build ID 仅记录来源，不参与白名单匹配。同名符号、厂商名称或系统版本不能证明 ABI 兼容。
 
-以后为 Android 14 等版本补齐私有演进时，新建版本专用 Java 包和 C++ 目录，选择或编写自己的 `ClassRedefiner`，再向 Java 注册入口、Native 工厂和 CMake 源码清单注册。需要私有 Hook 时，在 `platform/symbols/android<版本>/<厂商>/<构建>.h` 添加命名符号，并为对应源码 ABI 编写布局探针；对应实现仍需源码 ABI 校验与设备回归。Android 11、12、14、15、16、17 目前没有经过验证的私有配置，不能仅按 API 等级套用 Android 13 的符号。公开 JVMTI 后端不推断私有 ART 对象布局。
+版本适配优先复用 `platform/common/` 的算法，在 `platform/abi/arm64/` 保存真正不同的固定源码声明；只有事务或线程语义确有不同才增加版本实现目录。命名符号必须通过实际库解析和对应 owned 行为证明后使用。生产能力选择通过共用 bootstrap 组合已证明的服务；不复制整套后端，不用 API 或 Build ID 授权私有对象布局。公开 JVMTI 后端不推断私有 ART 对象布局。当前整合批次与各版本真实证据范围见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md) 和 [VERIFICATION.md](VERIFICATION.md)。
 
 ## Hook 的当前作用
 
@@ -205,9 +206,9 @@ static/实例切换会使已验证字节码的旧分派假设失效。方法映�
 
 完整移植重定义事务的早期实验触发了 `Invalid allocator type`，记录在 `build/evidence/source-engine/20261004T143908Z/`。这说明基本类/线程探针无法验证完整 Heap ABI。当前实现通过复用原 ART 的分配与事务准备避免该路径；源码归档版本和 API 等级均不作为完整私有 ABI 兼容保证。
 
-当前构建只需 `./gradlew :app:assembleDebug`。AOSP 下载、链接占位库、源码对象和独立 SO 已退出构建；历史归档、锁定源码布局对照与旧报告仅用于追溯，不是运行时启用条件。启用条件是严格设备 Profile、命名符号和自有行为校准。
+当前构建只需 `./gradlew :app:assembleDebug`。AOSP 下载、链接占位库、源码对象和独立 SO 已退出构建；历史归档、锁定源码布局对照与旧报告仅用于追溯，不是运行时启用条件。启用条件是实际命名符号、固定源码声明和自有行为校准。
 
-`platform/symbols/` 是私有 ELF 符号层：`art_symbol_compat.h` 定义库、Hook 路由和符号检查接口；`android13/xiaomi/` 存放已验证的小米构建符号。新增系统或厂商时先加独立配置，再对实际 ELF 的调用点检查 PLT 重定位覆盖范围。标准 JVMTI 的 `RedefineClasses` 和当前同库直接调用入口必须保留 Inline Hook；只在所有目标调用点都经过导入表时使用 PLT Hook。
+`platform/symbols/` 是私有 ELF 符号层：`art_symbol_compat.h` 定义库、Hook 路由和符号检查接口；`android13/xiaomi/` 存放已验证的小米构建符号。新增系统或厂商时先对照固定源码声明与实际 ELF 命名符号，再确认独立行为和 PLT 重定位覆盖范围。标准 JVMTI 的 `RedefineClasses` 和当前同库直接调用入口必须保留 Inline Hook；只在所有目标调用点都经过导入表时使用 PLT Hook。
 
 ```sh
 ./gradlew :app:assembleDebug

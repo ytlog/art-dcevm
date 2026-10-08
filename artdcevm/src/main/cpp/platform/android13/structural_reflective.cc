@@ -49,7 +49,7 @@ class Update final:public Visitor {
        if(!GetTransactionMetadataReader().ReadMethods(candidate,&storage,&error))std::abort();
        method_array::View view;
        const size_t bytes=storage.array?art_method_abi::kArrayDataOffset+size_t(storage.count)*sizeof(art_method_abi::ArtMethod):0;
-       if(!method_array::Read(33,storage.array,bytes,{storage.direct_count,storage.copied_start,method_array::Order::DirectThenVirtual},&view))std::abort();
+       if(!method_array::Read(method_metadata::kAndroid12Onward,storage.array,bytes,{storage.direct_count,storage.copied_start,method_array::Order::DirectThenVirtual},&view))std::abort();
        for(uint32_t i=0;i<view.boundaries.declared_count;++i){
          if(view.IsDirect(i) && SameStructuralMethodIdentity(view.At(i),member))return true;}
      } else {

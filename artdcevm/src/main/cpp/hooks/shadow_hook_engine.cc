@@ -22,7 +22,7 @@ void* ShadowHookEngine::FindSymbol(const char* library, const char* symbol) {
       std::string unique;
       {
         std::lock_guard<std::mutex> lock(symbol_names_mutex_);
-        const auto key = module.path + ':' + module.build_id;
+        const auto key = module.path;
         auto cached = symbol_names_.find(key);
         if (cached == symbol_names_.end())
           cached = symbol_names_.emplace(key, ReadUniqueElfSymbolNames(module.path)).first;

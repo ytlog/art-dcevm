@@ -62,4 +62,39 @@ elif 'instrument' in parts:
         if positive:assert run['installedApkSha256']==run['apkSha256']==sha
         else:assert not any('force-stop' in call for call in calls),(mode,calls)
         print('APK verification:',mode,'passed')
+    # An old/bootstrap-only report from the exact requested artifact must not
+    # satisfy a new request for native transactions merely because passed=true.
+    cwd=directory/'missing_transaction';cwd.mkdir();trace=cwd/'trace.jsonl'
+    bootstrap={**report,'runtimeServicesCalibrated':True,'jitServices':'jit,code-cache,heap'}
+    env=dict(os.environ,APK_TEST_TRACE=str(trace),APK_TEST_MODE='matching',APK_TEST_SHA=sha,APK_TEST_REPORT=json.dumps(bootstrap))
+    result=subprocess.run([sys.executable,str(root/'tools/run-runtime-access.py'),'--serial','mock',
+        '--adb',str(fake),'--apk',str(apk),'--runtime-services','--jit-receivers'],
+        cwd=cwd,env=env,capture_output=True,text=True)
+    assert result.returncode!=0,(result.stdout,result.stderr)
+    run=json.loads(next((cwd/'build/evidence/runtime-access').glob('*/run.json')).read_text())
+    assert run['passed'] is False and 'actual deletion proof' in run['error'],run
+    assert run['installedApkSha256']==sha
+    assert any('instrument' in json.loads(line) for line in trace.read_text().splitlines())
+    print('APK verification: exact artifact bootstrap-only report cannot pass native deletion request')
+    cwd=directory/'missing_field_transaction';cwd.mkdir();trace=cwd/'trace.jsonl'
+    method_only={**bootstrap,
+        'methodEntryGuardsCalibrated':True,'fieldEntryGuardsCalibrated':True,
+        'methodHandleFieldGuardsCalibrated':True,'methodHandleFieldGuardChecks':12,
+        'retirementCleanupCalibrated':True,'nativeFieldStorageCalibrated':True,
+        'ownedMethodDeletion':True,'ownedMethodDeletionError':'',
+        'ownedMethodDeletionJniRejected':True,'ownedMethodDeletionReflectionRejected':True,
+        'ownedMethodDeletionKeptValue':35,'ownedMethodDeletionIdentityPreserved':True,
+        'ownedMethodHandleTargetProof':True,'ownedMethodDeletionMethodHandleRejected':True,
+        'ownedMethodDeletionMethodHandleChecks':2,'ownedMethodDeletionKeptMethodHandleValue':35,
+        'ownedMethodDeletionAfterGcChecks':1,'ownedMethodDeletionGcCollections':1,'ownedMethodDeletionDeclaringRootsRestored':True,'ownedMethodDeletionCacheClearedThreads':17}
+    env=dict(os.environ,APK_TEST_TRACE=str(trace),APK_TEST_MODE='matching',APK_TEST_SHA=sha,APK_TEST_REPORT=json.dumps(method_only))
+    result=subprocess.run([sys.executable,str(root/'tools/run-runtime-access.py'),'--serial','mock',
+        '--adb',str(fake),'--apk',str(apk),'--runtime-services','--jit-receivers','--method-guards','--field-storage'],
+        cwd=cwd,env=env,capture_output=True,text=True)
+    assert result.returncode!=0,(result.stdout,result.stderr)
+    run=json.loads(next((cwd/'build/evidence/runtime-access').glob('*/run.json')).read_text())
+    assert run['passed'] is False and 'ownedFieldDeletion' in run['error'],run
+    assert run['installedApkSha256']==sha
+    print('APK verification: method-only exact artifact cannot pass full method/field transaction request')
+
 print('APK verification: failure/stale guards prevent instrumentation; matching and skip-install execute only the verified artifact')

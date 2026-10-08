@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/dex_cache_metadata.h"
 #include "platform/abi/arm64/android11/gc_cache_pair.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
@@ -36,15 +37,15 @@ struct View {
 // are prerequisites. Checks prove arithmetic bounds, not independent mapping
 // extents. Both allocated representations need updates, regardless of getter
 // precedence. Modern full_count comes from verified DEX NumTypeIds.
-inline bool Read(int api,const void* cache,size_t extent,uint32_t type_count,View* output) {
-  if(api<30 || api>37 || !cache || !output)return false;
+inline bool Read(dex_cache_metadata::Model model,const void* cache,size_t extent,uint32_t type_count,View* output) {
+  if((model!=dex_cache_metadata::Model::Pairs && model!=dex_cache_metadata::Model::DualArrays) || !cache || !output)return false;
   const auto address=reinterpret_cast<uintptr_t>(cache);
-  const size_t size=api<=33?sizeof(Legacy):sizeof(Dual);
+  const size_t size=model==dex_cache_metadata::Model::Pairs?sizeof(Legacy):sizeof(Dual);
   if(address%8 || extent<size || address>UINTPTR_MAX-size)return false;
   const auto* bytes=static_cast<const unsigned char*>(cache);
   auto pointer=[&](size_t offset) {return __atomic_load_n(reinterpret_cast<const uint64_t*>(bytes+offset),__ATOMIC_ACQUIRE);};
   View value;
-  if(api<=33) {
+  if(model==dex_cache_metadata::Model::Pairs) {
     value.pairs=reinterpret_cast<Pair*>(static_cast<uintptr_t>(pointer(offsetof(Legacy,types))));
     const uint32_t count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+offsetof(Legacy,num_types)),__ATOMIC_RELAXED);
     if(count>abi::arm64::android11::kTypeCacheSlots)return false;

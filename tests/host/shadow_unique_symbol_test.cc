@@ -54,11 +54,11 @@ int main(int argc, char** argv) {
   assert(identities == 1 && closes == 2);
   module.build_id.clear();
   requests.clear();
-  assert(!hooks.FindSymbol("libart.so", canonical));
-  assert(requests.size() == 2 && closes == 3);
+  assert(hooks.FindSymbol("libart.so", canonical) == &target);
+  assert(requests.size() == 3 && closes == 3);
   open = false;
   requests.clear();
   assert(!hooks.FindSymbol("libart.so", canonical));
   assert(requests.empty() && closes == 3);
-  std::puts("ShadowHook exact-first, real ELF unique name fallback, missing identity and balanced handle close passed");
+  std::puts("ShadowHook exact-first, real ELF unique name fallback, BuildID-independent name reuse and balanced handle close passed");
 }

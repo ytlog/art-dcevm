@@ -1,4 +1,5 @@
 #include "platform/common/owned_jit_receivers.h"
+#include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include <atomic>
@@ -11,12 +12,10 @@ namespace {
 using Enqueue=void (*)(void*,void*,void*);
 using LegacyEnqueue=bool (*)(void*,void*,void*,uint32_t,uint32_t,bool);
 using Collect=void (*)(void*);
-using Wait=void (*)(void*,bool,int);
 constexpr char kEnqueue[]="_ZN3art3jit3Jit23MaybeEnqueueCompilationEPNS_9ArtMethodEPNS_6ThreadE";
 constexpr char kLegacyEnqueue[]="_ZN3art3jit3Jit18MaybeCompileMethodEPNS_6ThreadEPNS_9ArtMethodEjjb";
 constexpr char kCollect[]="_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv";
-constexpr char kWait[]="_ZN3art2gc4Heap14CollectGarbageEbNS0_7GcCauseE";
-Enqueue enqueue=nullptr;LegacyEnqueue legacy_enqueue=nullptr;Collect collect=nullptr;Wait wait=nullptr;
+Enqueue enqueue=nullptr;LegacyEnqueue legacy_enqueue=nullptr;Collect collect=nullptr;
 std::mutex installation,operation;
 bool attempted=false,installed=false;
 // Process lifetime observation state avoids borrowing a stack Request from an
@@ -41,9 +40,8 @@ void CollectProxy(void* receiver){
   if(gc_active.load())Observe(cache,receiver);
   collect(receiver);
 }
-void WaitProxy(void* receiver,bool clear,int cause){
+void ObserveHeap(void* receiver,bool,heap_collect_observer::Cause){
   if(gc_active.load())Observe(heap,receiver);
-  wait(receiver,clear,cause);
 }
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
 bool Install(HookEngine& hooks,std::string* error){
@@ -53,21 +51,20 @@ bool Install(HookEngine& hooks,std::string* error){
   auto e=hooks.FindSymbol("libart.so",kEnqueue);
   const bool legacy=!e;
   if(legacy)e=hooks.FindSymbol("libart.so",kLegacyEnqueue);
-  auto c=hooks.FindSymbol("libart.so",kCollect),w=hooks.FindSymbol("libart.so",kWait);
+  auto c=hooks.FindSymbol("libart.so",kCollect);
   using namespace abi::arm64::android_common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!e||!c||!w||!construct||!destroy)return Fail(error,"Missing named JIT/cache/heap observation capability");
+  if(!e||!c||!construct||!destroy)return Fail(error,"Missing named JIT/cache/heap observation capability");
   attempted=true;
+  if(!heap_collect_observer::Install(hooks,ObserveHeap,error))return false;
   SuspendAll storage{};construct(&storage,"artdcevm JIT/cache/heap receiver observation",false);
-  void *eo=nullptr,*co=nullptr,*wo=nullptr;
+  void *eo=nullptr,*co=nullptr;
   auto et=hooks.Install(e,legacy?reinterpret_cast<void*>(LegacyEnqueueProxy):reinterpret_cast<void*>(EnqueueProxy),&eo,error);
   if(legacy)legacy_enqueue=reinterpret_cast<LegacyEnqueue>(eo);else enqueue=reinterpret_cast<Enqueue>(eo);
   auto ct=et&&eo?hooks.Install(c,reinterpret_cast<void*>(CollectProxy),&co,error):nullptr;
   collect=reinterpret_cast<Collect>(co);
-  auto wt=ct&&collect?hooks.Install(w,reinterpret_cast<void*>(WaitProxy),&wo,error):nullptr;
-  wait=reinterpret_cast<Wait>(wo);
-  installed=et&&ct&&wt&&eo&&collect&&wait;
+  installed=et&&ct&&eo&&collect;
   destroy(&storage);
   return installed||Fail(error,"Unable to install JIT receiver observers; restart process");
 }
@@ -168,7 +165,8 @@ bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
     jvmtiClassDefinition definition{additive_target,static_cast<jint>(dex_size),additive_dex};
     gc_active=true;structural=redefine(temporary,1,&definition);gc_active=false;
   }else structural=JVMTI_ERROR_NOT_AVAILABLE;
-  temporary->DisposeEnvironment();
+  const auto disposed=temporary->DisposeEnvironment();
+  if(disposed!=JVMTI_ERROR_NONE)return Fail(error,"Owned public JIT/GC calibration cleanup failed");
   if(structural!=JVMTI_ERROR_NONE)return Fail(error,"Owned public additive cache-calibration transaction failed");
   if(gc!=JVMTI_ERROR_NONE||!cache.load()||!heap.load()||conflict.load())
     return Fail(error,(std::string("Public GC receiver observation: cache=")+(cache.load()?"observed":"missing")+", heap="+(heap.load()?"observed":"missing")+", conflict="+(conflict.load()?"true":"false")).c_str());

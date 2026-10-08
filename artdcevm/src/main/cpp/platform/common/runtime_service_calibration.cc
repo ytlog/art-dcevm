@@ -1,4 +1,5 @@
 #include "platform/common/runtime_service_calibration.h"
+#include "platform/abi/arm64/android-common/instrumentation.h"
 #include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
@@ -7,8 +8,8 @@
 #include <mutex>
 namespace artdcevm::runtime_services {
 namespace {
-// android-15.0.0_r1 instrumentation.h: third argument is a bool trace flag,
-// default false. Modern ListenerType overloads are a different named capability.
+// Fixed source overloads are independent named capabilities. Observers only
+// forward the original listener argument; they never synthesize a trace kind.
 constexpr char kListener[]="_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjb";
 using AddListener=void (*)(void*,void*,uint32_t,bool);
 // Fixed android-11/12.0.0_r1 instrumentation.h: no third argument.
@@ -20,37 +21,51 @@ thread_local Observation* active=nullptr;
 std::mutex installation;
 bool attempted=false,installed=false;
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
-void ObserveListener(void* receiver,void* listener,uint32_t events,bool trace) {
+void ObserveReceiver(void* receiver) {
   if(active) {
     if(!receiver||(active->instrumentation&&active->instrumentation!=receiver))active->conflict=true;
     else active->instrumentation=receiver;
   }
+}
+void ObserveTypedListener(void* receiver,void* listener,uint32_t events,
+                          abi::arm64::android_common::ListenerType type) {
+  ObserveReceiver(receiver);
+  reinterpret_cast<abi::arm64::android_common::TypedAddListener>(original_storage)(
+      receiver,listener,events,type);
+}
+void ObserveListener(void* receiver,void* listener,uint32_t events,bool trace) {
+  ObserveReceiver(receiver);
   reinterpret_cast<AddListener>(original_storage)(receiver,listener,events,trace);
 }
 void ObserveLegacyListener(void* receiver,void* listener,uint32_t events) {
-  if(active) {
-    if(!receiver||(active->instrumentation&&active->instrumentation!=receiver))active->conflict=true;
-    else active->instrumentation=receiver;
-  }
+  ObserveReceiver(receiver);
   reinterpret_cast<LegacyAddListener>(original_storage)(receiver,listener,events);
 }
 bool Install(HookEngine& hooks,std::string* error) {
   std::lock_guard<std::mutex> lock(installation);
   if(installed)return true;
   // Missing candidates do not poison a later independent family selection.
-  auto target=hooks.FindSymbol("libart.so",kListener);
-  const bool legacy=target==nullptr;
-  if(legacy)target=hooks.FindSymbol("libart.so",kLegacyListener);
   using namespace abi::arm64::android_common;
+  auto target=hooks.FindSymbol("libart.so",kTypedAddListener);
+  void* observer=reinterpret_cast<void*>(ObserveTypedListener);
+  if(!target) {
+    target=hooks.FindSymbol("libart.so",kListener);
+    observer=reinterpret_cast<void*>(ObserveListener);
+  }
+  if(!target) {
+    target=hooks.FindSymbol("libart.so",kLegacyListener);
+    observer=reinterpret_cast<void*>(ObserveLegacyListener);
+  }
+  if(!target)return Fail(error,"Missing named Instrumentation AddListener capability (ListenerType/bool/legacy)");
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!target||!construct||!destroy)return Fail(error,"Missing named legacy/bool Instrumentation listener capability");
+  if(!construct)return Fail(error,"Missing named ScopedSuspendAll constructor for Instrumentation observation");
+  if(!destroy)return Fail(error,"Missing named ScopedSuspendAll destructor for Instrumentation observation");
   if(attempted)return Fail(error,"Instrumentation observation installation failed; restart process");
   attempted=true;
   SuspendAll storage{};
   construct(&storage,"artdcevm Instrumentation receiver observation",false);
-  auto token=hooks.Install(target,legacy?reinterpret_cast<void*>(ObserveLegacyListener):
-      reinterpret_cast<void*>(ObserveListener),&original_storage,error);
+  auto token=hooks.Install(target,observer,&original_storage,error);
   if(token&&!original_storage)std::abort();
   installed=token&&original_storage;
   destroy(&storage);
@@ -60,11 +75,25 @@ void MethodEntry(jvmtiEnv*,JNIEnv*,jthread,jmethodID) {}
 struct OwnedEnvironment {
   jvmtiEnv* env=nullptr;
   bool enabled=false;
-  ~OwnedEnvironment(){
-    if(!env)return;
-    if(enabled)env->SetEventNotificationMode(JVMTI_DISABLE,JVMTI_EVENT_METHOD_ENTRY,nullptr);
-    env->DisposeEnvironment();
+  // Consume ownership before cleanup: DisposeEnvironment must not be retried,
+  // even when it reports an error. Always attempt disposal after disable failure.
+  bool Close(std::string* error) {
+    if(!env)return true;
+    jvmtiEnv* owned=env;env=nullptr;
+    const bool was_enabled=enabled;enabled=false;
+    const auto disabled=was_enabled?
+        owned->SetEventNotificationMode(JVMTI_DISABLE,JVMTI_EVENT_METHOD_ENTRY,nullptr):
+        JVMTI_ERROR_NONE;
+    const auto disposed=owned->DisposeEnvironment();
+    if(disabled!=JVMTI_ERROR_NONE)
+      return Fail(error,"Independent method-entry observation disable failed");
+    if(disposed!=JVMTI_ERROR_NONE)
+      return Fail(error,"Independent JVMTI environment disposal failed");
+    return true;
   }
+  // Earlier errors retain their cause and any pending JNI exception. This
+  // fallback performs only JVMTI cleanup; publication requires explicit Close.
+  ~OwnedEnvironment(){Close(nullptr);}
 };
 struct ReadRequest {
   void* runtime;
@@ -122,7 +151,10 @@ bool CalibrateRuntimeServices(HookEngine& hooks,JNIEnv* env,Snapshot* output,
   jobject root=thread&&!env->ExceptionCheck()?env->NewGlobalRef(thread):nullptr;
   if(thread)env->DeleteLocalRef(thread);
   if(klass)env->DeleteLocalRef(klass);
-  if(!root||env->ExceptionCheck())return Fail(error,"Owned Runtime receiver calibration carrier unavailable");
+  if(!root||env->ExceptionCheck()) {
+    if(root)env->DeleteGlobalRef(root);
+    return Fail(error,"Owned Runtime receiver calibration carrier unavailable");
+  }
   ReadRequest request{*singleton,observed,{}};
   if(!method_identity::ReadableMappingExtent(request.runtime,&request.extent)) {
     env->DeleteGlobalRef(root);return Fail(error,"Runtime receiver mapping is not readable");
@@ -130,6 +162,8 @@ bool CalibrateRuntimeServices(HookEngine& hooks,JNIEnv* env,Snapshot* output,
   auto result=runnable_executor::With(env,root,ReadServices,&request);
   env->DeleteGlobalRef(root);
   if(result!=runnable_jni::Result::kSuccess)return Fail(error,"Runtime source declaration disagrees with observed service receivers");
+  if(env->ExceptionCheck())return Fail(error,"Pending JNI exception after Runtime service observation");
+  if(!owned.Close(error))return false;
   request.view.heap=nullptr;request.view.jit=nullptr;request.view.jit_code_cache=nullptr;
   *output={request.runtime,observation.instrumentation,request.view};
   return true;

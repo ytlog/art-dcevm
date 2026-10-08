@@ -11,17 +11,20 @@ static_assert(offsetof(class_metadata::Class17,methods)==48);
 // an independent APK class_data oracle. All roots stay alive in this Runnable
 // scope. The common source methods-pointer prefix and native identity select
 // storage; no version-specific class tail, SDK, Build ID or guessed extent.
-inline bool Calibrate(const runnable_jni::Context& context,
+// Read another strongly rooted Class using the declaration already proven by
+// the runtime bootstrap. Each target entry still needs an independent complete
+// DEX/reflection oracle; bootstrap calibration vectors are not target evidence.
+inline bool ReadProvenDeclaration(const runnable_jni::Context& context,
     abi::arm64::android_common::FromReflectedMethod leaf,
-    const method_identity::Calibration& identity_model,const void* klass,
+    method_identity::Model proven_model,const void* klass,
     const evolution::MappedDexMemberCounts& dex,const method_identity::Oracle* methods,
     size_t count,method_array::View* output,std::string* error) {
   auto fail=[&](const char* text){if(error)*error=text;return false;};
   if(!context.self||!context.env||!context.vm||!leaf||!klass||!output||!methods||!count||
-      identity_model.identities.size()!=count||identity_model.readable_extents.size()!=count||
       uint64_t(dex.direct_methods)+dex.virtual_methods!=count||count>UINT32_MAX||context.env->ExceptionCheck())
     return fail("Incomplete owned method-table oracle");
-  const auto& declaration=identity_model.model==method_identity::Model::kMethod11?
+  if(proven_model!=method_identity::Model::kMethod11&&proven_model!=method_identity::Model::kMethod12Onward)return fail("Unproven method declaration");
+  const auto& declaration=proven_model==method_identity::Model::kMethod11?
       method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
   size_t extent=0;
   if(!method_identity::ReadableMappingExtent(klass,&extent)||extent<56||uintptr_t(klass)%4)
@@ -59,5 +62,15 @@ inline bool Calibrate(const runnable_jni::Context& context,
   }
   if(direct!=dex.direct_methods)return fail("Method table direct flags disagree with APK class_data");
   *output=table;if(error)error->clear();return true;
+}
+inline bool Calibrate(const runnable_jni::Context& context,
+    abi::arm64::android_common::FromReflectedMethod leaf,
+    const method_identity::Calibration& identity_model,const void* klass,
+    const evolution::MappedDexMemberCounts& dex,const method_identity::Oracle* methods,
+    size_t count,method_array::View* output,std::string* error) {
+  if(identity_model.identities.size()!=count||identity_model.readable_extents.size()!=count){
+    if(error)*error="Incomplete owned method-table bootstrap calibration";return false;
+  }
+  return ReadProvenDeclaration(context,leaf,identity_model.model,klass,dex,methods,count,output,error);
 }
 }  // namespace artdcevm::owned_method_table

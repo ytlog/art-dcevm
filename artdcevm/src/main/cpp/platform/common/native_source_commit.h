@@ -22,6 +22,12 @@ struct Reflective {
   bool (*prepared)(const source_commit::Plan&,void*)=nullptr;
   void (*update)(const source_commit::Plan&,void*)=nullptr;
   void* state=nullptr;
+  // Optional publication after final Validate, never during Prepare.
+  void (*begin_commit)(const source_commit::Plan&,void*)=nullptr;
+};
+struct Diagnostics {
+  size_t cleared_threads=0;
+  bool declaring_roots_verified=false;
 };
 struct Dependencies {
   runtime_services::Snapshot observed;
@@ -32,6 +38,7 @@ struct Dependencies {
   NativeRootPolicy native_roots=NativeRootPolicy::kPreserve;
   // Snapshot null means unobserved, not proof that Runtime has no JIT.
   bool jit_absence_proven=false;
+  Diagnostics* diagnostics=nullptr;
 };
 // Fixed source heap-replacement policy is supplied by the original transaction
 // provider. The complete field oracle selects only the shared Class scalar
@@ -44,6 +51,7 @@ class Services final : public source_commit::Services {
   static std::unique_ptr<Services> Prepare(HookEngine&,const Dependencies&,
       const source_commit::Plan&,std::vector<MethodPair>,std::string* error);
   bool Validate(const source_commit::Plan&)const override;
+  void BeginCommit(const source_commit::Plan&)const override;
   uint32_t Status(void*)const override;
   void SetStatus(void*,uint32_t)const override;
   void CopyFields(bool,void*,void*,void*,void*)const override;

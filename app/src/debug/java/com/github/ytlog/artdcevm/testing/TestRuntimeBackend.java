@@ -12,6 +12,7 @@ public final class TestRuntimeBackend {
     public TestRuntimeBackend(Context context) throws Exception {
         if ((context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0)
             throw new SecurityException("JVMTI requires a debuggable app from process start");
+        com.github.ytlog.artdcevm.internal.ProductionBootstrap.configure(context);
         System.loadLibrary("artdcevm");
         Debug.attachJvmtiAgent("libartdcevm.so", null, context.getClassLoader());
         id = capabilities().getString("backend");

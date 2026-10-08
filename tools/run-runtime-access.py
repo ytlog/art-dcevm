@@ -3,12 +3,14 @@
 import argparse,hashlib,json,re,subprocess,shutil
 from evidence_paths import new_evidence_directory
 from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
+from owned_removal_report import validate_owned_removal
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--serial',required=True)
 p.add_argument('--apk',type=Path,default=Path('app/build/outputs/apk/debug/app-debug.apk'))
 p.add_argument('--adb',default=shutil.which('adb'))
 p.add_argument('--skip-install',action='store_true')
+p.add_argument('--foreground',action='store_true',help='Require the independent foreground carrier in the instrumentation process')
 p.add_argument('--runtime-services',action='store_true',help='Require source-family Runtime service calibration')
 p.add_argument('--exclusive-roots',action='store_true',help='Require actual exclusive strong-root and monitor/GC recovery')
 p.add_argument('--native-cache',action='store_true',help='Require synchronous real native interpreter-cache clearing')
@@ -18,12 +20,18 @@ p.add_argument('--field-storage',action='store_true',help='Require native raw fi
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
 out=new_evidence_directory(Path('build/evidence/runtime-access'))
-metadata={'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'scope':'isolated-owned-JNI; no full evolution initialization'}
-def adb(label,*args):
-    r=subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,text=True,timeout=180)
+metadata={'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'foregroundRequested':a.foreground,'scope':'isolated-owned-JNI; no full evolution initialization'}
+def adb(label,*args,timeout=180):
+    try:
+        r=subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,text=True,timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        def decoded(value):return value.decode(errors='replace') if isinstance(value,bytes) else value or ''
+        (out/(label+'.txt')).write_text(decoded(error.stdout)+decoded(error.stderr)+'\n'+str(error)+'\n')
+        raise
     (out/(label+'.txt')).write_text(r.stdout+r.stderr)
     if label=='install':require_install_success(r.returncode,r.stdout,r.stderr)
     r.check_returncode();return r.stdout
+instrumentation_started=False
 try:
     if not a.skip_install:
         adb('install','install','-r',str(a.apk))
@@ -31,8 +39,12 @@ try:
     file=base_apk_path(paths)
     metadata['installedApkSha256']=verified_apk_sha256(adb('installed-hash','shell','sha256sum',file),metadata['apkSha256'])
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
-    output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
-    match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match
+    instrumentation_started=True
+    output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage),('foreground',a.foreground)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
+    match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M)
+    if not match:
+        reason=re.search(r'^INSTRUMENTATION_(?:RESULT|FAILED): (.*)$',output,re.M)
+        raise RuntimeError('Instrumentation produced no JSON probe report'+(': '+reason.group(1).strip() if reason else '; inspect instrumentation.txt'))
     report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
     code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M)
     if not code or code.group(1).strip()!='-1':
@@ -52,7 +64,25 @@ try:
     if a.jit_receivers:metadata['passed']=metadata['passed'] and report.get('jitServices')=='jit,code-cache,heap'
     if a.method_guards:metadata['passed']=metadata['passed'] and report.get('methodEntryGuardsCalibrated') is True
     if a.field_storage:metadata['passed']=metadata['passed'] and report.get('nativeFieldStorageCalibrated') is True
-except Exception as error:metadata['error']=str(error)
+    if a.method_guards:
+        metadata['passed']=metadata['passed'] and report.get('fieldEntryGuardsCalibrated') is True and report.get('methodHandleFieldGuardsCalibrated') is True and report.get('methodHandleFieldGuardChecks')==12 and report.get('retirementCleanupCalibrated') is True
+    if a.foreground:
+        pid=report.get('foregroundInstrumentationPid')
+        if not (report.get('foregroundRequested') is True and report.get('foregroundActivity')=='com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity' and type(pid) is int and pid>0 and type(report.get('foregroundActivityPid')) is int and report.get('foregroundActivityPid')==pid and report.get('foregroundResumedBefore') is True and report.get('foregroundResumedAfter') is True and type(report.get('foregroundPauseCount')) is int and report.get('foregroundPauseCount')==0 and report.get('foregroundFinished') is True):
+            raise RuntimeError('Foreground carrier lifecycle/process proof missing or inconsistent')
+    if a.runtime_services and a.jit_receivers:
+        require_fields=a.method_guards and a.field_storage
+        metadata['scope']=('owned native method/field deletion and cached JNI/reflection/MethodHandle/VarHandle rejection' if require_fields else 'owned native method deletion and cached JNI/reflection/MethodHandle rejection')+'; no full evolution initialization'
+        validate_owned_removal(report,require_fields=require_fields)
+except Exception as error:
+    metadata['passed']=False
+    metadata['error']=str(error)
+finally:
+    if a.foreground and instrumentation_started:
+        try:adb('foreground-stop','shell','am','force-stop','dev.artdcevm.lab',timeout=15)
+        except Exception as error:
+            metadata['passed']=False
+            metadata['foregroundCleanupError']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)
 raise SystemExit(0 if metadata['passed'] else 1)

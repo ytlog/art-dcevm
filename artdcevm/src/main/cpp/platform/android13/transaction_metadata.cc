@@ -76,9 +76,9 @@ bool TransactionMetadataReader::ReadRoots(const void* raw,TransactionRootView* o
 bool TransactionMetadataReader::ReadCache(void* raw,hierarchy_allocation_abi::Cache* output,std::string* error)const{
  if(!root_||!output)return Fail(error,"Invalid transaction DexCache context");
  native_cache::View fields,methods;type_cache::View types;
- if(!native_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Fields,0,&fields) ||
-    !native_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Methods,0,&methods) ||
-    !type_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),0,&types))
+ if(!native_cache::Read(dex_cache_metadata::Model::Pairs,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Fields,0,&fields) ||
+    !native_cache::Read(dex_cache_metadata::Model::Pairs,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Methods,0,&methods) ||
+    !type_cache::Read(dex_cache_metadata::Model::Pairs,raw,sizeof(hierarchy_allocation_abi::Cache),0,&types))
   return Fail(error,"Transaction DexCache array range is inconsistent");
  const auto cache=Read<hierarchy_allocation_abi::Cache>(raw);
  if(!cache.prefix.dex_file || (!cache.types && cache.num_types))
@@ -88,7 +88,7 @@ bool TransactionMetadataReader::ReadCache(void* raw,hierarchy_allocation_abi::Ca
 bool TransactionMetadataReader::ReadMethods(void* klass,MethodStorageView* output,std::string* error)const{
  if(!root_||!klass||!output)return Fail(error,"Missing method storage class");
  method_array::View view;
- if(!method_array::ReadTrustedClass(33,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view))
+ if(!method_array::ReadTrustedClass(method_array::kLegacy,method_metadata::kAndroid12Onward,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view))
   return Fail(error,"Method storage class, range or partitions are inconsistent");
  const uint32_t count=view.count;
  const auto& boundaries=view.boundaries;
@@ -127,7 +127,7 @@ bool TransactionMetadataReader::CheckCommitTypes(const TransactionRootView& root
  for(int32_t i=0;i<count;++i){auto* old=Element(roots.old_classes,i);auto* next=Element(roots.new_classes,i);
   if(!old||!next||ReadHeapReference(old,0)!=meta||ReadHeapReference(next,0)!=meta)return Fail(error,"Commit class mapping contains a non-class root");
   class_metadata::State state;
-  if(!class_metadata::ReadState(33,old,sizeof(Class),&state))return Fail(error,"Invalid commit class state");
+  if(!class_metadata::ReadState(class_metadata::kLegacy,old,sizeof(Class),&state))return Fail(error,"Invalid commit class state");
   const uint32_t status=state.status;
   if(status==2||status==3)return Fail(error,"Commit source class is erroneous");
  }

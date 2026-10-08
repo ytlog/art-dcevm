@@ -18,10 +18,6 @@ static_assert(offsetof(Method11,access_flags)==4 && offsetof(Method12,access_fla
 struct Layout {size_t size,dex_method_index,data,entry_point;};
 inline constexpr Layout kAndroid11{sizeof(Method11),offsetof(Method11,dex_method_index),offsetof(Method11,data),offsetof(Method11,entry_point)};
 inline constexpr Layout kAndroid12Onward{sizeof(Method12),offsetof(Method12,dex_method_index),offsetof(Method12,data),offsetof(Method12,entry_point)};
-inline const Layout* Declaration(int api) {
-  if(api==30)return &kAndroid11;
-  return api>=31 && api<=37?&kAndroid12Onward:nullptr;
-}
 // ArtMethod::GetAccessFlags uses a relaxed atomic load even under the shared
 // mutator lock: verifier/JIT flags may be updated concurrently after linking.
 inline uint32_t ReadAccessFlags(const void* method) {
@@ -42,9 +38,5 @@ inline bool ReadIdentity(const Layout& declaration,const void* method,size_t ext
   std::memcpy(&index,static_cast<const unsigned char*>(method)+layout->dex_method_index,sizeof(index));
   *output={ReadAccessFlags(method),index};
   return true;
-}
-inline bool ReadIdentity(int api,const void* method,size_t extent,Identity* output) {
-  const auto* layout=Declaration(api);
-  return layout&&ReadIdentity(*layout,method,extent,output);
 }
 }

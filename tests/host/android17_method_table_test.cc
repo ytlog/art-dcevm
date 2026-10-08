@@ -66,6 +66,8 @@ int main(){
   const auto run=[&](){return android17::CalibrateMethodTable(context,Leaf,model,&klass,counts,oracles.data(),oracles.size(),&table,&error);};
   const auto mirror_run=[&](){return executable_mirror::Calibrate(context,Leaf,Decode,oracles.data(),oracles.size(),&error);};
   assert(mirror_run());
+  assert(executable_mirror::Layout::Probe(context,Leaf,Decode,oracles.data(),oracles.size(),&error));
+  assert(!executable_mirror::Layout::Probe(context,Leaf,Decode,oracles.data(),1,&error));
   int binding;
   uint64_t native_binding=uintptr_t(&binding);
   std::memcpy(static_cast<unsigned char*>(native[3])+16,&native_binding,8);

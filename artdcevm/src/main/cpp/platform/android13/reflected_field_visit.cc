@@ -35,7 +35,7 @@ void VisitReflectedFieldTarget(void* field,void* raw_visitor){
  Require(reinterpret_cast<uintptr_t>(declaring)<=std::numeric_limits<uint32_t>::max());
  WriteCopyValue(field,&declaring_slot,'L',reinterpret_cast<uintptr_t>(declaring));
  field_array::View fields;
- Require(field_array::ReadTrustedClass(33,declaring,sizeof(validation_abi::ClassPrefix),
+ Require(field_array::ReadTrustedClass(field_array::kSplit,declaring,sizeof(validation_abi::ClassPrefix),
      (flags&member_decode_abi::kStatic)!=0,&fields));
  uint32_t index;
  Require(fields.IndexOf(replacement,&index));

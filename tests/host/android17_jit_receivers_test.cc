@@ -1,4 +1,5 @@
 #include "platform/android17/jit_receivers.h"
+#include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
 #include <array>
 #include <jvmti.h>
@@ -11,7 +12,7 @@ namespace {
 const char* mode="success";
 using Enqueue=void(*)(void*,void*,void*);
 using Collect=void(*)(void*);
-using HeapGc=void(*)(void*,bool,int);
+using HeapGc=void(*)(void*,bool,heap_collect_observer::Cause);
 using LegacyEnqueue=bool(*)(void*,void*,void*,uint32_t,uint32_t,bool);
 LegacyEnqueue legacy_proxy=nullptr;
 Enqueue enqueue_proxy;Collect cache_proxy;HeapGc heap_proxy;
@@ -26,7 +27,7 @@ bool LegacyOriginal(void* receiver,void* thread,void* method,uint32_t before,uin
  assert(receiver==&jit_object&&method==native_method.data()&&thread==&self&&before==0xf0000002u&&after==0xf0000010u);++warmups;return backedges;
 }
 void CacheOriginal(void* receiver){assert(receiver==&cache_object);++mutations;}
-void HeapOriginal(void* receiver,bool clear,int cause){assert(receiver==&heap_object&&!clear&&cause==9);++collections;}
+void HeapOriginal(void* receiver,bool clear,heap_collect_observer::Cause cause){assert(receiver==&heap_object&&!clear&&cause==9);++collections;}
 void Construct(void*,const char*,bool long_suspend){assert(!long_suspend&&suspends==0);++suspends;}
 void Destroy(void*){assert(suspends==1);--suspends;}
 void* Leaf(const abi::arm64::android_common::RunnableJniScope& scope,jobject object){
@@ -68,14 +69,14 @@ jint CallStatic(JNIEnv*,jclass,jmethodID method,va_list arguments){
  else enqueue_proxy(&jit_object,native_method.data(),&self);return 42;
 }
 jint GetEnv(JavaVM*,void** out,jint version){assert(version==JVMTI_VERSION_1_2);*out=current_jvmti;return JNI_OK;}
-jvmtiError ForceGc(jvmtiEnv*){heap_proxy(&heap_object,false,9);return JVMTI_ERROR_NONE;}
+jvmtiError ForceGc(jvmtiEnv*){heap_proxy(&heap_object,false,static_cast<heap_collect_observer::Cause>(9));return !std::strcmp(mode,"gc-error")?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 jvmtiError Capabilities(jvmtiEnv*,const jvmtiCapabilities* caps){assert(caps->can_redefine_classes);return JVMTI_ERROR_NONE;}
-jvmtiError Dispose(jvmtiEnv*){++disposed;return JVMTI_ERROR_NONE;}
+jvmtiError Dispose(jvmtiEnv*){++disposed;return !std::strcmp(mode,"cleanup-error")?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 jvmtiError Deallocate(jvmtiEnv*,unsigned char*){return JVMTI_ERROR_NONE;}
 jvmtiError Redefine(jvmtiEnv*,jint count,const jvmtiClassDefinition* definitions){
  assert(count==1&&definitions->class_byte_count==1&&definitions->class_bytes[0]==7);
  if(std::strcmp(mode,"cache-missing"))cache_proxy(&cache_object);
- return JVMTI_ERROR_NONE;
+ return !std::strcmp(mode,"additive-error")?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;
 }
 jvmtiError Extensions(jvmtiEnv*,jint* count,jvmtiExtensionFunctionInfo** output){
  static jvmtiExtensionFunctionInfo extension{};

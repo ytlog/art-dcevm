@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from evidence_paths import new_evidence_directory
+from elf_mini_inventory import mini_symbol_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARIES = ('libart.so', 'libartd.so', 'libopenjdkjvmti.so', 'libopenjdkjvmtid.so',
@@ -170,12 +171,16 @@ def main():
                 names = sorted(set(re.findall(
                     r'^\s*\d+:\s+\S+\s+\d+\s+\S+\s+\S+\s+\S+\s+(?!UND\b)\S+\s+(.+)$',
                     symbols, re.MULTILINE)))
+                mini_names, mini = mini_symbol_inventory(data)
+                names = sorted(set(names) | set(mini_names))
+                entry['miniDebugData'] = mini
+                entry['symbolInventoryScope'] = 'Outer ELF plus bounded mini ELF names; not callability proof'
                 symbol_file = folder / 'defined-symbols.json'
                 symbol_file.write_text(json.dumps(names, indent=2) + '\n')
                 entry.update(definedSymbolCount=len(names),
                              symbolInventorySha256=hashlib.sha256(symbol_file.read_bytes()).hexdigest(),
                              complete=True)
-            except (OSError, EOFError, RuntimeError, subprocess.SubprocessError) as error:
+            except (OSError, EOFError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
                 entry['error'] = str(error)
                 report['errors'].append(f'{path}: {error}')
         # Collection inventories actual ELF packaging; a separately loaded compiler is not

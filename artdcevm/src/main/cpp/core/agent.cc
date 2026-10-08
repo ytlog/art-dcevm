@@ -45,6 +45,17 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_api_DcevmRuntim
   } catch (const std::bad_alloc&) { return JVMTI_ERROR_OUT_OF_MEMORY; }
 }
 
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_api_DcevmRuntime_nativeInitializeCapabilities(JNIEnv* env,jclass) {
+  try {
+    auto type=env->FindClass("com/github/ytlog/artdcevm/internal/EvolutionCalibration");
+    auto ctor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
+    auto fixture=ctor?env->NewObject(type,ctor):nullptr;
+    if(!fixture||env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
+    std::lock_guard<std::mutex> lock(TransactionMutex());
+    return backend?backend->InitializeCapabilities(env,fixture):JVMTI_ERROR_INVALID_ENVIRONMENT;
+  }catch(const std::bad_alloc&){return JVMTI_ERROR_OUT_OF_MEMORY;}
+}
+
 #ifdef ARTDCEVM_TESTING
 // Debug probes share production initialization and the process transaction lock.
 extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_NativeBridge_capabilities(JNIEnv* env, jclass type) {

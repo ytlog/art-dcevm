@@ -27,7 +27,7 @@ template<class T> T Read(const void* object, size_t offset) {
 void* DecodeReflectedField(void* reflected_field) {
   using namespace member_decode_abi;
   reflection_metadata::FieldIdentity identity;
-  Require(reflection_metadata::ReadField(33,reflected_field,sizeof(ReflectedField),&identity));
+  Require(reflection_metadata::ReadField(reflection_metadata::k12,reflected_field,sizeof(ReflectedField),&identity));
   const uint32_t index = identity.array_index;
   if ((index & kRetiredFieldTag) != 0) {
     auto* field = ResolveRetiredFieldToken(index);
@@ -37,7 +37,7 @@ void* DecodeReflectedField(void* reflected_field) {
   auto* klass = ReadHeapReference(reflected_field, offsetof(ReflectedField, declaring_class));
   const uint32_t access = identity.access_flags;
   field_array::View fields;
-  Require(field_array::ReadTrustedClass(33, klass, sizeof(validation_abi::ClassPrefix),
+  Require(field_array::ReadTrustedClass(field_array::kSplit, klass, sizeof(validation_abi::ClassPrefix),
       (access & kStatic) != 0, &fields));
   auto* result = fields.At(index);
   Require(result != nullptr && fields.Selected(index));
@@ -56,7 +56,7 @@ bool GuardNativeExecutable(JNIEnv* env, jobject executable) {
   Require(access.Supported());
   auto* mirror = access.Decode(executable);
   void* method = nullptr;
-  Require(reflection_metadata::ReadExecutableMethod(33,mirror,sizeof(member_decode_abi::Executable),&method));
+  Require(reflection_metadata::ReadExecutableMethod(reflection_metadata::k12,mirror,sizeof(member_decode_abi::Executable),&method));
   return GuardRetiredMethod(method, access.Self(), nullptr);
 }
 bool GuardNativeReflectedField(JNIEnv* env, jobject field) {

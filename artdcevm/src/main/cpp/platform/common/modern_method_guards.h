@@ -13,4 +13,7 @@ bool InstallMethodEntryGuards(HookEngine&, JNIEnv*, jobject owned_strong_global,
                              void* observed_jni_id_manager,
                              RetiredMethodRegistry&, std::string* error);
 size_t RejectedMethodEntries();
+// Shared owner queries for calibrated native MethodHandle dispatch guards.
+bool MethodEntryGuardsOwn(const RetiredMethodRegistry&);
+bool RejectRetiredMethod(void* method,void* self,void* result);
 }  // namespace artdcevm::retirement

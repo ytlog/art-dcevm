@@ -21,7 +21,7 @@ template<class T> T Read(const void* object, size_t offset) {
 }
 class_metadata::State State(void* klass) {
   class_metadata::State state;
-  Require(class_metadata::ReadState(33,klass,sizeof(Class),&state));
+  Require(class_metadata::ReadState(class_metadata::kLegacy,klass,sizeof(Class),&state));
   return state;
 }
 uint32_t Flags(void* klass) { return State(klass).access_flags; }
@@ -67,7 +67,7 @@ bool Matches(void* method, void* declaring, const char* name, const char* signat
 }
 template<class Fn> bool Methods(void* klass, Fn action) {
   method_array::View view;
-  Require(method_array::ReadTrustedClass(33,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view));
+  Require(method_array::ReadTrustedClass(method_array::kLegacy,method_metadata::kAndroid12Onward,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view));
   return view.VisitVirtual(action);
 }
 class Guard final : public loaded_class_abi::ClassVisitor {

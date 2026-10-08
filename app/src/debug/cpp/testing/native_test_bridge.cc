@@ -98,6 +98,28 @@ extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_NativeT
   }
   env->DeleteLocalRef(cls);
 }
+// Acquire new IDs after replacement; cached retired opaque IDs must not shadow
+// the replacement's retained fields. Read/write both storage kinds and restore.
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_proveFreshKeptFieldIds(
+    JNIEnv* env, jclass, jobject instance) {
+  jclass cls = env->GetObjectClass(instance);
+  if (!cls || env->ExceptionCheck()) return 0;
+  jfieldID kept = env->GetFieldID(cls, "keep", "I");
+  jfieldID static_kept = env->ExceptionCheck() ? nullptr : env->GetStaticFieldID(cls, "staticKeep", "I");
+  if (!kept || !static_kept || env->ExceptionCheck()) { env->DeleteLocalRef(cls); return 0; }
+  jint value = env->GetIntField(instance, kept);
+  jint static_value = env->ExceptionCheck() ? 0 : env->GetStaticIntField(cls, static_kept);
+  if (env->ExceptionCheck() || value != 41 || static_value != 42) { env->DeleteLocalRef(cls); return 0; }
+  env->SetIntField(instance, kept, 141);
+  if (!env->ExceptionCheck()) env->SetStaticIntField(cls, static_kept, 142);
+  if (env->ExceptionCheck()) { env->DeleteLocalRef(cls); return 0; }
+  const bool written = env->GetIntField(instance, kept) == 141 && !env->ExceptionCheck() &&
+      env->GetStaticIntField(cls, static_kept) == 142 && !env->ExceptionCheck();
+  if (!env->ExceptionCheck()) env->SetIntField(instance, kept, value);
+  if (!env->ExceptionCheck()) env->SetStaticIntField(cls, static_kept, static_value);
+  env->DeleteLocalRef(cls);
+  return written && !env->ExceptionCheck() ? 4 : 0;
+}
 extern "C" JNIEXPORT jdouble JNICALL Java_com_github_ytlog_artdcevm_testing_NativeTestBridge_accessField(
     JNIEnv* env, jclass, jint index, jboolean write) {
   if (index < 0 || index >= 18 || !fields_receiver || !cached_fields[index]) {

@@ -11,6 +11,7 @@ public final class NativeTestBridge {
     public static native long invokeSignatureMethod(Object instance, long argument);
     public static native void retainFields(Object instance);
     public static native double accessField(int index, boolean write);
+    public static native int proveFreshKeptFieldIds(Object instance);
     public static native long accessChangedLongField(Object instance, long value);
     public static native void registerSpecialNatives(Class<?> cls);
     public static native void registerKeptNative(Class<?> cls);

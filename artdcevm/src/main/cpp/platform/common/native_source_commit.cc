@@ -100,6 +100,10 @@ void Services::MarkClassAndMethodsObsolete(void* old,void* next)const{
   for(const auto& pair:methods_)if(pair.old_class==old&&pair.new_class==next){structural_methods::Update(*pair.service,old,next);return;}
   std::abort();
 }
+void Services::BeginCommit(const source_commit::Plan& plan)const{
+  if(dependencies_.reflective.begin_commit)
+    dependencies_.reflective.begin_commit(plan,dependencies_.reflective.state);
+}
 void Services::UpdateReflectiveReferences(const source_commit::Plan& plan)const{dependencies_.reflective.update(plan,dependencies_.reflective.state);}
 void Services::ForceDeoptimizeFrames()const{deopt_frames_(dependencies_.observed.instrumentation);}
 void Services::ReplaceObjectReferences()const{Require(replacements_!=nullptr);replace_(self_,replacements_->BorrowedMap());}
@@ -110,11 +114,25 @@ void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
     Require(pair.restore_old_roots!=nullptr);
     pair.restore_old_roots(pair.service);
     dependencies_.fields->RestoreOldFieldDeclaringClass(pair.old_class);
+    for(size_t i=0;i<pair.service->Count(pair.old_class);++i){
+      void* method=pair.service->At(pair.old_class,i);
+      const uint32_t flags=pair.service->Flags(method);
+      if((flags&0x1000000u)&&!(flags&0x80000000u))continue;
+      Require(pair.service->DeclaringClass(method)==pair.old_class);
+    }
+    for(bool stat:{false,true}){
+      const auto view=dependencies_.metadata->Class(pair.old_class,stat);
+      for(size_t i=0;i<view.field_count;++i){
+        const auto field=dependencies_.metadata->Field(pair.old_class,stat,i);
+        Require(dependencies_.metadata->FieldDeclaringClass(field.field)==pair.old_class);
+      }
+    }
   }
+  if(dependencies_.diagnostics)dependencies_.diagnostics->declaring_roots_verified=true;
 }
 void* Services::NewClassAfterReplacement(void* array,size_t index)const{return dependencies_.metadata->Reference(array,12+4*index);}
 void Services::RetainOldClass(void* next,void* old)const{retain_(dependencies_.metadata->Reference(next,kExtData),old);}
 void Services::InvalidateCompiledCode()const{if(void* cache=dependencies_.observed.receivers.jit_code_cache)invalidate_(cache);}
 void Services::DeoptimizeEverythingForAbstractTransition()const{deopt_everything_(dependencies_.observed.instrumentation,"artdcevm-class-abstract");}
-void Services::ClearInterpreterCaches()const{size_t cleared=0;std::string error;Require(dependencies_.caches->ClearStoppedWorld(&cleared,&error)&&cleared);}
+void Services::ClearInterpreterCaches()const{size_t cleared=0;std::string error;Require(dependencies_.caches->ClearStoppedWorld(&cleared,&error)&&cleared);if(dependencies_.diagnostics)dependencies_.diagnostics->cleared_threads=cleared;}
 }

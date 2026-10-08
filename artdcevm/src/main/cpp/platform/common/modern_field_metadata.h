@@ -25,7 +25,12 @@ class FieldMetadata {
   Model StorageModel() const { return model_; }
   bool Fields(void* klass, bool is_static, field_array::View*, std::string*) const;
   field_copy::CopyClassView Class(void* klass, bool is_static) const;
+  // Reject unsupported Class/field text instead of invoking commit invariants.
+  // Caller owns real native roots and the calibrated source/mutator scope.
+  bool ClassIdentity(void*,field_copy::CopyClassView*,std::string*)const;
+  bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal) const;
+  void* FieldDeclaringClass(void* field)const;
   void* Reference(void* object, size_t offset, bool is_volatile=false) const;
  private:
   using FieldLeaf = void* (*)(void*);

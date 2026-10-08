@@ -18,6 +18,10 @@ class Services {
  public:
   virtual ~Services()=default;
   virtual bool Validate(const Plan&)const=0;
+  // Called exactly once after every rejectable check succeeds, before the
+  // first status/field mutation. Publish prepared retirement here; no JNI,
+  // suspension or further rejectable validation is allowed.
+  virtual void BeginCommit(const Plan&)const {}
   virtual uint32_t Status(void* klass)const=0;
   virtual void SetStatus(void* klass,uint32_t status)const=0;
   virtual void CopyFields(bool is_static,void* target,void* target_class,

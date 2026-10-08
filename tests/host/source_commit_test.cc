@@ -9,6 +9,7 @@ struct Test final:Services {
  mutable std::string events;mutable std::map<void*,uint32_t> states;
  mutable bool replaced=false;bool valid=true;Object* old=nullptr;Object* replacement=nullptr;
  bool Validate(const Plan&)const override{return valid;}
+ void BeginCommit(const Plan&)const override{assert(valid);events+='b';}
  uint32_t Status(void* p)const override{return states[p];}
  void SetStatus(void* p,uint32_t value)const override{states[p]=value;events+='s';}
  void CopyFields(bool statik,void* target,void*,void* source,void*)const override{assert(target==replacement&&source==old);events+=statik?'c':'i';}
@@ -28,7 +29,7 @@ int main(){
  Object old{},replacement{};Test services;services.old=&old;services.replacement=&replacement;
  services.states[&old]=15;services.states[&replacement]=10;
  Plan plan{&old,&services,{&old},{&replacement},{&old},{&replacement},true};
- assert(Run(plan,services));assert(services.events=="scimvfronhjax");assert(services.states[&replacement]==15);
+ assert(Run(plan,services));assert(services.events=="bscimvfronhjax");assert(services.states[&replacement]==15);
  services.events.clear();services.valid=false;assert(!Run(plan,services)&&services.events.empty());
  services.valid=true;plan.new_classes.clear();assert(!Run(plan,services)&&services.events.empty());
  puts("Source commit: original transaction order, roots reread after replacement, invalid plans rejected before mutation passed");

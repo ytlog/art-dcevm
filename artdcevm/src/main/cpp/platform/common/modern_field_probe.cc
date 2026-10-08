@@ -4,6 +4,7 @@
 #include "platform/common/native_method_table.h"
 #include "platform/common/field_mirror_calibration.h"
 #include "platform/common/modern_field_storage.h"
+#include "platform/jni_access/owned_evolution_proofs.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/exclusive_owned_roots.h"
 #include "platform/common/field_storage.h"
@@ -132,6 +133,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
   if(storage.Calibrate(hooks,env,global_owner,global_fixture,request.metadata,
       rejected.data(),rejected.size(),&rejected_error)||!storage.Calibrated()||env->ExceptionCheck())
     return failure("storage rejection did not preserve calibrated service");
+  jni_access::CaptureFieldProofs(request.metadata,storage);
   }
   return failure(request.metadata.StorageModel()==modern_field_metadata::Model::kMerged?"merged":"split");
 }

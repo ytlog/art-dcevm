@@ -3,7 +3,7 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/common/code_item_metadata.h"
-#include "platform/common/code_info_view.h"
+#include "platform/common/decoded_frame_recovery.h"
 #include <cstring>
 #if defined(ARTDCEVM_TESTING) && defined(__ANDROID__)
 #include <android/log.h>
@@ -38,7 +38,7 @@ bool Registers(void* method,uint32_t* count) {
   auto* dex=reinterpret_cast<void*>(Read<uint64_t>(cache,offsetof(validation_abi::DexCachePrefix,dex_file)));
   if(!dex) return false;
   auto map=Read<validation_abi::DexMappingPrefix>(dex);
-  return code_item_metadata::ReadRegisters(33,method,sizeof(art_method_abi::ArtMethod),
+  return code_item_metadata::ReadRegisters(code_item_metadata::kTagged,method,sizeof(art_method_abi::ArtMethod),
       {map.begin,map.size,map.data_begin,map.data_size,0},count);
 }
 struct PcVisitor final:stack_abi::Visitor {
@@ -105,7 +105,7 @@ bool IsEvolutionFrameRecoverable(const stack_abi::Visitor& visitor) {
   uint32_t index;
   if(!view.StackMaps().Read(map.row,7,&index))return reject("map-bounds",expected);
   uint32_t available;
-  if(!code_info_view::RegisterCount(view,map.row,visitor.inline_frames.begin.row,
+  if(!decoded_frame_recovery::LegacyCount(view,map.row,visitor.inline_frames.begin.row,
                                    visitor.inline_frames.end.row,&available))
     return reject("register-map-bounds",expected);
   // This matches Get[Inline]DexRegisterMapOf().size() exactly. A missing map

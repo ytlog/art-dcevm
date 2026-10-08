@@ -5,6 +5,7 @@ bool Run(const Plan& plan,const Services& services){
   if(!plan.mirror||!plan.new_classes_root||plan.old_classes.empty()||
      plan.old_classes.size()!=plan.new_classes.size()||
      plan.old_instances.size()!=plan.new_instances.size()||!services.Validate(plan))return false;
+  services.BeginCommit(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
     auto* old=plan.old_classes[i];auto* replacement=plan.new_classes[i];
     const uint32_t status=services.Status(old);

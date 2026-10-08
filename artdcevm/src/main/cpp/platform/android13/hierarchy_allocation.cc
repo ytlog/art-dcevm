@@ -44,7 +44,7 @@ void* Parent(void* klass) { return ReadHeapReference(klass,offsetof(Class,super_
 void* Loader(void* klass) { return ReadHeapReference(klass,offsetof(Class,class_loader)); }
 bool Normal(void* klass) {
   class_metadata::State state;
-  Require(class_metadata::ReadState(33,klass,sizeof(Class),&state));
+  Require(class_metadata::ReadState(class_metadata::kLegacy,klass,sizeof(Class),&state));
   return !state.IsPrimitive() &&
       !ReadHeapReference(klass,offsetof(Class,component_type)) &&
       !(state.access_flags&0x40000); // kAccClassIsProxy
@@ -204,7 +204,7 @@ void HierarchyBatch::RefreshCache(void* slot) {
   if(!owned) return; // Only unpublished explicit-target caches may be mutated.
   Cache snapshot;std::string error;Require(GetTransactionMetadataReader().ReadCache(cache,&snapshot,&error));
   type_cache::View types;
-  Require(type_cache::Read(33,cache,sizeof(Cache),0,&types));
+  Require(type_cache::Read(dex_cache_metadata::Model::Pairs,cache,sizeof(Cache),0,&types));
   types.Apply([&](uint32_t* reference) {
     void* klass=read_root(reference);
     if(!klass || !Normal(klass))return false;

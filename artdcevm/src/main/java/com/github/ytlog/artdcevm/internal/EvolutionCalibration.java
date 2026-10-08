@@ -8,6 +8,12 @@ package com.github.ytlog.artdcevm.internal;
  * 字段名称、类型、初值及 compute 方法构成校准约定；修改时必须同步 Native 校准实现。
  */
 final class EvolutionCalibration {
+    private native void bootstrapNativeMarker();
+    public static int hotLoop(int count) {
+        int result = 7;
+        for (int i = 0; i < count; i++) result = result * 31 + (i ^ (result >>> 5));
+        return result;
+    }
     // 覆盖实例 int/long 和静态字段，使用明确的非零值核对读取结果。
     public int value = 37;
     public long wide = 0x123456789ABCDEFL;

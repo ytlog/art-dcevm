@@ -17,11 +17,6 @@ inline constexpr Layout kMerged16{sizeof(class_metadata::Class16),
     offsetof(class_metadata::Class16, fields), offsetof(class_metadata::Class16, fields), true};
 inline constexpr Layout kMerged17{sizeof(class_metadata::Class17),
     offsetof(class_metadata::Class17, fields), offsetof(class_metadata::Class17, fields), true};
-inline const Layout* Declaration(int api) {
-  if (api >= 30 && api <= 35) return &kSplit;
-  if (api == 36) return &kMerged16;
-  return api == 37 ? &kMerged17 : nullptr;
-}
 inline uint32_t Flags(const void* field) {
   uint32_t flags;
   std::memcpy(&flags, static_cast<const unsigned char*>(field) + 4, 4);
@@ -39,10 +34,6 @@ inline bool ReadPointer(const Layout& layout, const void* klass, size_t extent,
   uint64_t pointer;
   std::memcpy(&pointer, static_cast<const unsigned char*>(klass) + offset, 8);
   *output = reinterpret_cast<void*>(static_cast<uintptr_t>(pointer)); return true;
-}
-inline bool ReadPointer(int api, const void* klass, size_t extent, bool is_static, void** output) {
-  const auto* layout = Declaration(api);
-  return layout && ReadPointer(*layout, klass, extent, is_static, output);
 }
 struct View {
   void* array = nullptr;
@@ -94,23 +85,19 @@ inline bool Read(const Layout& layout, void* array, size_t extent, bool is_stati
   }
   *output = result; return true;
 }
-inline bool Read(int api, void* array, size_t extent, bool is_static, View* output) {
-  const auto* layout = Declaration(api);
-  return layout && Read(*layout, array, extent, is_static, output);
-}
 // Existing calibrated providers trust the ART-owned allocation's length header.
 // This path cannot prove an independent mapped extent; use Read directly when
 // one is available. No arbitrary/unmatched class or array may reach this helper.
-inline bool ReadTrustedClass(int api, const void* klass, size_t class_extent, bool is_static, View* output) {
+inline bool ReadTrustedClass(const Layout& layout, const void* klass, size_t class_extent, bool is_static, View* output) {
   static_assert(sizeof(uintptr_t) == 8, "Fixed arm64 provider declaration");
   if (!output) return false;
   void* array = nullptr;
-  if (!ReadPointer(api, klass, class_extent, is_static, &array)) return false;
+  if (!ReadPointer(layout, klass, class_extent, is_static, &array)) return false;
   const auto address = reinterpret_cast<uintptr_t>(array);
   if (array && (address % 4 || address > UINTPTR_MAX - kDataOffset)) return false;
   uint32_t count = 0;
   if (array) std::memcpy(&count, array, 4);
   const size_t extent = array ? kDataOffset + size_t(count) * sizeof(Field) : 0;
-  return Read(api, array, extent, is_static, output);
+  return Read(layout, array, extent, is_static, output);
 }
 }

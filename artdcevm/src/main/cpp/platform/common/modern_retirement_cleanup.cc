@@ -1,3 +1,4 @@
+#include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_retirement_cleanup.h"
 #include "platform/common/class_loader_cleanup.h"
 #include "platform/common/method_identity_calibration.h"
@@ -19,7 +20,7 @@ void Cleanup(void* linker,void* thread,const void* data,bool cleanup_cha) {
  ++calls;
  try {
   if(!class_loader_cleanup::Dispatch(declaration,original,linker,thread,data,cleanup_cha,
-      [](void* allocator){field_count+=fields->Prune(allocator,Contains);method_count+=methods->Prune(allocator,Contains);}))std::abort();
+      [](void* allocator){field_count+=fields->Prune(allocator,Contains);contextual_field_id::NativeNotifyPrune(*fields);method_count+=methods->Prune(allocator,Contains);}))std::abort();
  } catch(...) {std::abort();}
 }
 bool Fail(std::string* error,const char* value){if(error)*error=value;return false;}

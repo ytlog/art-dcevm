@@ -5,10 +5,15 @@ namespace artdcevm::code_item_metadata {
 // Application runtime (not dex2oat), non-proxy Java methods only. Provider
 // maintains calibrated ART declarations, live immutable DEX mappings and
 // stable method data under mutator/transaction access. This is not a verifier.
-inline bool ReadRegisters(int api,const void* method,size_t extent,
+enum class Storage { DexOffset, TaggedPointer, StandardPointer };
+struct Layout {method_metadata::Layout method;Storage storage;};
+inline constexpr Layout kOffset{method_metadata::kAndroid11,Storage::DexOffset};
+inline constexpr Layout kTagged{method_metadata::kAndroid12Onward,Storage::TaggedPointer};
+inline constexpr Layout kStandard{method_metadata::kAndroid12Onward,Storage::StandardPointer};
+inline bool ReadRegisters(const Layout& layout,const void* method,size_t extent,
                           const evolution::MappedDexMetadata& map,uint32_t* output) {
   method_metadata::Identity identity;
-  if(!output || !method_metadata::ReadIdentity(api,method,extent,&identity) ||
+  if(!output || !method_metadata::ReadIdentity(layout.method,method,extent,&identity) ||
      identity.dex_method_index==UINT32_MAX || (identity.access_flags&(0x100u|0x400u)))return false;
   auto range=[](const unsigned char* base,size_t size,uintptr_t pointer,size_t width) {
     const auto start=reinterpret_cast<uintptr_t>(base);
@@ -16,7 +21,8 @@ inline bool ReadRegisters(int api,const void* method,size_t extent,
   };
   auto read16=[](uintptr_t p){uint16_t value;std::memcpy(&value,reinterpret_cast<const void*>(p),2);return value;};
   uintptr_t code;bool compact;
-  if(api==30) {
+  if(layout.storage==Storage::DexOffset) {
+    if(layout.method.size<offsetof(method_metadata::Method11,dex_code_item_offset)+4)return false;
     if(!range(map.begin,map.size,reinterpret_cast<uintptr_t>(map.begin),8))return false;
     compact=std::memcmp(map.begin,"cdex",4)==0;
     if(!compact && std::memcmp(map.begin,"dex\n",4)!=0)return false;
@@ -24,13 +30,15 @@ inline bool ReadRegisters(int api,const void* method,size_t extent,
     const auto data=reinterpret_cast<uintptr_t>(map.data_begin);
     if(!offset || !data || offset>UINTPTR_MAX-data)return false;
     code=data+offset;
-  } else {
-    uint64_t data;std::memcpy(&data,static_cast<const unsigned char*>(method)+method_metadata::Declaration(api)->data,8);
-    compact=api<=35 && (data&1);
+  } else if(layout.storage==Storage::TaggedPointer || layout.storage==Storage::StandardPointer) {
+    if(layout.method.size<8 || layout.method.data>layout.method.size-8)return false;
+    uint64_t data;std::memcpy(&data,static_cast<const unsigned char*>(method)+layout.method.data,8);
+    compact=layout.storage==Storage::TaggedPointer && (data&1);
     code=static_cast<uintptr_t>(data)&~uintptr_t{1};
     // Android16+ stores an untagged StandardDex code pointer.
-    if(api>=36 && (data&1))return false;
+    if(layout.storage==Storage::StandardPointer && (data&1))return false;
   }
+  else return false;
   if(!code || code%(compact?2:4))return false;
   const unsigned char* base=map.data_begin;size_t size=map.data_size;
   if(!range(base,size,code,compact?4:16)){base=map.begin;size=map.size;}

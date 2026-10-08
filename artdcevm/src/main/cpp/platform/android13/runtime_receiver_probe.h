@@ -10,8 +10,9 @@ struct RuntimeReceivers {
   void* instrumentation=nullptr;
 };
 // Observe receivers of real public JNI/JVMTI requests, before reading Runtime storage.
-// Hooks remain installed as passthroughs for process lifetime. No object prefix,
-// SDK number or ELF identity is used to produce these independent observations.
+// The common service calibration owns the sole process-lifetime listener Hook.
+// Only its independently observed receivers are published; the source backend
+// still separately validates its complete fixed Runtime declaration.
 bool CalibrateRuntimeReceivers(HookEngine& hooks,JNIEnv* env,RuntimeReceivers* output,
                               std::string* error);
 // Reuse the process-lifetime FindClass hook for evolution. Setting a handler

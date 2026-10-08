@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/dex_cache_metadata.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
 namespace artdcevm::native_cache {
@@ -13,19 +14,19 @@ struct View {
 // Caller supplies verified DEX ID counts for modern full storage and maintains
 // calibrated ABI, mutator access and stable native allocations/publication.
 // These checks prove arithmetic bounds only, not mapping extent or lifetime.
-inline bool Read(int api,const void* cache,size_t extent,Member member,uint32_t ids,View* output) {
+inline bool Read(dex_cache_metadata::Model model,const void* cache,size_t extent,Member member,uint32_t ids,View* output) {
   using Legacy=abi::arm64::android11::LegacyCache;
   using Dual=abi::arm64::android14::DualCache;
-  if(api<30 || api>37 || !cache || !output ||
+  if((model!=dex_cache_metadata::Model::Pairs && model!=dex_cache_metadata::Model::DualArrays) || !cache || !output ||
      (member!=Member::Fields && member!=Member::Methods))return false;
   const auto address=reinterpret_cast<uintptr_t>(cache);
-  const size_t size=api<=33?sizeof(Legacy):sizeof(Dual);
+  const size_t size=model==dex_cache_metadata::Model::Pairs?sizeof(Legacy):sizeof(Dual);
   if(address%8 || extent<size || address>UINTPTR_MAX-size)return false;
   const auto* bytes=static_cast<const unsigned char*>(cache);
   auto pointer=[&](size_t offset) {return __atomic_load_n(reinterpret_cast<const uint64_t*>(bytes+offset),__ATOMIC_ACQUIRE);};
   const bool fields=member==Member::Fields;
   View value;
-  if(api<=33) {
+  if(model==dex_cache_metadata::Model::Pairs) {
     value.pairs=reinterpret_cast<void*>(static_cast<uintptr_t>(pointer(fields?offsetof(Legacy,fields):offsetof(Legacy,methods))));
     const auto count=__atomic_load_n(reinterpret_cast<const uint32_t*>(bytes+(fields?offsetof(Legacy,num_fields):offsetof(Legacy,num_methods))),__ATOMIC_RELAXED);
     if(count>1024 || (!value.pairs && count))return false;

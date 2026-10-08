@@ -1,3 +1,7 @@
+#include "platform/common/contextual_field_stage.h"
+#if defined(ARTDCEVM_TESTING)
+namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
+#endif
 // Debug-only owned JNI calibration, independent of the full evolution backend.
 #ifdef ARTDCEVM_TESTING
 #include "platform/jni_access/capability_selection.h"
@@ -5,6 +9,7 @@
 #include "platform/common/native_cache_service.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/modern_retirement_cleanup.h"
 #include "platform/common/owned_method_table.h"
 #include "platform/common/runnable_jni_bridge.h"
@@ -17,6 +22,7 @@
 #include "platform/common/native_method_binding_calibration.h"
 #include "platform/common/modern_method_services.h"
 #include "platform/common/owned_method_table.h"
+#include "platform/jni_access/owned_evolution_proofs.h"
 #include "platform/android17/runtime_services.h"
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
@@ -29,6 +35,8 @@
 #include <cstring>
 #include <vector>
 namespace artdcevm::jni_access {
+EvolutionProofs& OwnedEvolutionProofs(){static thread_local EvolutionProofs proofs;return proofs;}
+void CaptureFieldProofs(const modern_field_metadata::FieldMetadata& metadata,const modern_field_storage::Service& fields){auto& p=OwnedEvolutionProofs();p.metadata=metadata;p.fields=fields;}
 namespace {
 
 owned_context_calibration::Service context_service;
@@ -104,8 +112,11 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
     auto binding=modern_methods::Service::BindOwned(hooks,context,request.leaf,
         request.oracles[native_index],request.registered_binding,
         runtime_services_observed.receivers.class_linker,request.calibration.model,&error);
-    auto service=binding?modern_methods::Service::PrepareTables(*binding,klass,table,
-        klass,table,UnretiredOwnedFixture,&error):nullptr;
+    auto mirrors=executable_mirror::Layout::Probe(context,request.leaf,
+        runnable_executor::DecodeStrongGlobal,request.oracles,request.count,&error);
+    if(!binding||!mirrors)return false;
+    auto service=modern_methods::Service::PrepareTables(*binding,klass,table,
+        klass,table,UnretiredOwnedFixture,&error);
     if(!service||service->Count(klass)!=table.count)return false;
     for(size_t i=0;i<table.count;++i) {
       void* method=service->At(klass,i);
@@ -115,6 +126,8 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
     // Named name/signature comparison must distinguish two independently
     // declared methods, including the constructor.
     if(table.count>1&&service->SameIdentity(service->At(klass,0),service->At(klass,1)))return false;
+    auto& proofs=OwnedEvolutionProofs();proofs.methods=std::move(binding);
+    proofs.mirrors=std::move(mirrors);proofs.method_model=request.calibration;
   }
   last_table_count=static_cast<int>(table.boundaries.declared_count);
   return true;
@@ -195,6 +208,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeJitServices(JNIEn
   method_identity::Oracle oracle{method,static_cast<uint32_t>(index),static_cast<uint32_t>(flags)};
   bool passed=owned_jit_receivers::CalibrateJitReceivers(hooks,env,klass,oracle,
       jni_access::last_method_model,jni_access::runtime_services_observed,target,bytes.data(),bytes.size(),&view,&error);
+  if(passed){auto& proofs=jni_access::OwnedEvolutionProofs();proofs.observed=jni_access::runtime_services_observed;proofs.observed.receivers=view;}
   if(env->ExceptionCheck())return nullptr;
   return env->NewStringUTF(passed?"jit,code-cache,heap":error.c_str());
 }
@@ -387,12 +401,12 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethodGuards(JNIE
 namespace {
 artdcevm::retirement::RetiredFieldRegistry debug_retired_fields;
 jobject field_guard_anchor=nullptr;
+thread_local std::unique_ptr<artdcevm::contextual_field_id::Stage> debug_field_stage;
 struct RetireFieldsRequest {
-  void* manager;
-  void* (*decode)(void*,jfieldID);
   artdcevm::field_mirror::NamedField leaf;
   void (*visit)(void*,void*);
-  jfieldID ids[2];jobject mirrors[2];
+  jobject mirrors[2];
+  artdcevm::contextual_field_id::Stage* stage;
 };
 // android-15.0.0_r1 reflective_value_visitor.h fixed virtual declaration.
 // The native original constructs SourceInfo; this visitor never fabricates one.
@@ -404,18 +418,23 @@ class RetireFieldVisitor {
   virtual void* VisitField(void* field,const FieldSourceInfo& source) {
     void* object=nullptr;std::memcpy(&object,reinterpret_cast<const unsigned char*>(&source)+16,8);
     if(source.type!=2||object!=expected_mirror||field!=expected_field)return field;
-    debug_retired_fields.Retire(field);observed=true;return field;
+    stage->Retire(field);observed=true;return field;
   }
+  artdcevm::contextual_field_id::Stage* stage=nullptr;
   void* expected_mirror=nullptr;void* expected_field=nullptr;bool observed=false;
 };
 bool RetireFields(const artdcevm::runnable_jni::Context& context,void* data) {
   auto& request=*static_cast<RetireFieldsRequest*>(data);
+  // Both targets must be independently validated before retiring either one.
+  for(size_t i=0;i<2;++i){void* mirror=nullptr;
+    if(!artdcevm::runnable_executor::DecodeStrongGlobal(context,request.mirrors[i],&mirror)||
+       request.leaf(mirror)!=artdcevm::contextual_field_id::NativeField(request.stage->proofs[i]))return false;}
   for(size_t i=0;i<2;++i) {
     void* mirror=nullptr;
     if(!artdcevm::runnable_executor::DecodeStrongGlobal(context,request.mirrors[i],&mirror))return false;
-    void* field=request.decode(request.manager,request.ids[i]);
+    void* field=artdcevm::contextual_field_id::NativeField(request.stage->proofs[i]);
     if(!field||request.leaf(mirror)!=field)return false;
-    RetireFieldVisitor visitor;visitor.expected_mirror=mirror;visitor.expected_field=field;
+    RetireFieldVisitor visitor;visitor.stage=request.stage;visitor.expected_mirror=mirror;visitor.expected_field=field;
     request.visit(mirror,&visitor);
     uint32_t token=0;std::memcpy(&token,static_cast<unsigned char*>(mirror)+
         artdcevm::field_mirror::kDeclaration.field_index,4);
@@ -426,32 +445,105 @@ bool RetireFields(const artdcevm::runnable_jni::Context& context,void* data) {
 }
 }
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_beginFieldHandleProof(
+    JNIEnv* env,jclass,jobject getter,jobject field) {
+  std::string error;
+  if(!getter||!field||env->ExceptionCheck())return nullptr;
+  jfieldID id=env->FromReflectedField(field);
+  jobject root=id?env->NewGlobalRef(getter):nullptr;
+  const bool success=root&&!env->ExceptionCheck()&&
+      artdcevm::retirement::BeginMethodHandleFieldTargetProof(env,root,id,&error);
+  if(root)env->DeleteGlobalRef(root);
+  if(env->ExceptionCheck())return nullptr;
+  if(!success){debug_field_stage.reset();artdcevm::jni_access::ReleaseOwnedFieldProofStage();}
+  if(!success&&error.empty())error="Missing public field ID/strong MethodHandle proof anchor";
+  return env->NewStringUTF(error.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_endFieldHandleProof(
+    JNIEnv* env,jclass,jboolean invocation_succeeded) {
+  std::string error;
+  const bool success=artdcevm::retirement::EndMethodHandleFieldTargetProof(invocation_succeeded==JNI_TRUE,&error);
+  if(!success){debug_field_stage.reset();artdcevm::jni_access::ReleaseOwnedFieldProofStage();}
+  return env->ExceptionCheck()?nullptr:env->NewStringUTF(error.c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_releaseFieldProofStages(
+    JNIEnv* env,jclass) {
+  // Java may fail during warmup or fixture loading after both getter proofs.
+  // End both cross-call scopes while this JNI environment is still attached.
+  debug_field_stage.reset();
+  artdcevm::jni_access::ReleaseOwnedFieldProofStage();
+  artdcevm::contextual_field_id::Prune(env,debug_retired_fields);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_prepareFieldGuards(
+    JNIEnv* env,jclass,jclass owner,jobject instance,jobject instance_field,jobject static_field,
+    jobject instance_getter,jobject static_getter) {
+  using namespace artdcevm;
+  ShadowHookEngine hooks;std::string error;
+  auto fail=[&](const std::string& value){return env->ExceptionCheck()?nullptr:env->NewStringUTF(value.c_str());};
+  if(!owner||!instance||!instance_field||!static_field||!instance_getter||!static_getter||env->ExceptionCheck())
+    return fail("Missing actual field MethodHandle preparation oracles");
+  if(!jni_access::CalibrateServices(hooks,env,&error))return fail(error);
+  const auto& services=jni_access::runtime_services_observed;
+  auto removed=env->GetFieldID(owner,"removedField","I");
+  auto removed_static=env->GetStaticFieldID(owner,"removedStatic","J");
+  if(!removed||!removed_static||env->ExceptionCheck())return fail("Missing public field ID oracles");
+  if(env->GetIntField(instance,removed)!=41||env->GetStaticLongField(owner,removed_static)!=13||env->ExceptionCheck())
+    return fail("Actual original field values unavailable before retirement");
+  if(!field_guard_anchor) {auto object=env->FindClass("java/lang/Object");
+    if(object){field_guard_anchor=env->NewGlobalRef(object);env->DeleteLocalRef(object);}}
+  if(!field_guard_anchor||env->ExceptionCheck())return fail("Missing durable field guard anchor");
+  if(!retirement::InstallFieldEntryGuards(hooks,env,field_guard_anchor,services.receivers.jni_id_manager,
+      field_mirror::DebugCalibration(),debug_retired_fields,&error)||
+      !retirement::RegisterMethodHandleFieldOwner(debug_retired_fields,&error))return fail(error);
+  jobject instance_root=env->NewGlobalRef(instance_getter),static_root=env->NewGlobalRef(static_getter);
+  struct Roots {JNIEnv* env;jobject instance,statik;~Roots(){if(instance)env->DeleteGlobalRef(instance);if(statik)env->DeleteGlobalRef(statik);}}
+      roots{env,instance_root,static_root};
+  if(!instance_root||!static_root||env->ExceptionCheck())return fail("Missing strong field MethodHandle oracles");
+  debug_field_stage.reset();
+  if(!contextual_field_id::Initialize(hooks,&error))return fail(error);
+  auto stage=std::make_unique<contextual_field_id::Stage>(env,debug_retired_fields);
+  if(!stage->Add(instance_field,removed,&error)||!stage->Add(static_field,removed_static,&error))return fail(error);
+  const std::vector<retirement::FieldMethodHandleOracle> oracles{{instance_root,removed,stage->proofs[0]},{static_root,removed_static,stage->proofs[1]}};
+  if(!retirement::PrepareMethodHandleFieldGuards(hooks,env,services.receivers.jni_id_manager,
+      debug_retired_fields,oracles,&error))return fail(error);
+  debug_field_stage=std::move(stage);
+  // Java must execute both actual original getters before the separate retire
+  // entry accepts same-owner readiness. Installation alone never permits it.
+  return fail("");
+}
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFieldGuards(
     JNIEnv* env,jclass,jclass owner,jobject instance,jobject instance_field,jobject static_field) {
   artdcevm::ShadowHookEngine hooks;std::string error;
-  if(!artdcevm::jni_access::CalibrateServices(hooks,env,&error))return env->NewStringUTF(error.c_str());
-  const auto& services=artdcevm::jni_access::runtime_services_observed;
+  if(env->ExceptionCheck())return nullptr;
+  if(!owner||!instance||!instance_field||!static_field)return env->NewStringUTF("Missing actual field retirement fixture");
+  struct StageRelease{~StageRelease(){debug_field_stage.reset();}} stage_release;
+  if(!debug_field_stage||debug_field_stage->proofs.size()!=2||!artdcevm::retirement::MethodHandleFieldGuardsReady(debug_retired_fields))
+    return env->NewStringUTF("Actual original instance/static MethodHandle calls have not proved field guards");
   auto removed=env->GetFieldID(owner,"removedField","I");
   auto kept=env->GetFieldID(owner,"keptField","I");
   auto removed_static=env->GetStaticFieldID(owner,"removedStatic","J");
   auto kept_static=env->GetStaticFieldID(owner,"keptStatic","J");
+  artdcevm::contextual_field_id::Stage kept_proofs{env,debug_retired_fields};
+  auto kept_mirror=kept?env->ToReflectedField(owner,kept,JNI_FALSE):nullptr;
+  auto kept_static_mirror=kept_static?env->ToReflectedField(owner,kept_static,JNI_TRUE):nullptr;
+  bool kept_proven=kept_mirror&&kept_static_mirror&&
+      kept_proofs.Add(kept_mirror,kept,&error)&&kept_proofs.Add(kept_static_mirror,kept_static,&error);
+  if(kept_mirror)env->DeleteLocalRef(kept_mirror);if(kept_static_mirror)env->DeleteLocalRef(kept_static_mirror);
   auto exception=env->FindClass("java/lang/NoSuchFieldError");
   auto instance_root=env->NewGlobalRef(instance_field),static_root=env->NewGlobalRef(static_field);
   if(!field_guard_anchor) {auto object=env->FindClass("java/lang/Object");
     if(object)field_guard_anchor=env->NewGlobalRef(object);}
-  bool success=removed&&kept&&removed_static&&kept_static&&exception&&instance_root&&static_root&&
+  bool success=kept_proven&&removed&&kept&&removed_static&&kept_static&&exception&&instance_root&&static_root&&
       field_guard_anchor&&!env->ExceptionCheck();
-  if(success&&debug_retired_fields.Count()==0)success=env->GetIntField(instance,removed)==41&&
-      env->GetStaticLongField(owner,removed_static)==13&&!env->ExceptionCheck();
-  if(success)success=artdcevm::retirement::InstallFieldEntryGuards(hooks,env,field_guard_anchor,
-      services.receivers.jni_id_manager,artdcevm::field_mirror::DebugCalibration(),debug_retired_fields,&error);
-  if(success)success=artdcevm::retirement::InstallMethodHandleFieldGuards(hooks,&error);
-  RetireFieldsRequest request{services.receivers.jni_id_manager,
-    reinterpret_cast<void*(*)(void*,jfieldID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID")),
+  RetireFieldsRequest request{
     reinterpret_cast<artdcevm::field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
     reinterpret_cast<void(*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11VisitTargetEPNS_22ReflectiveValueVisitorE")),
-    {removed,removed_static},{instance_root,static_root}};
-  if(success)success=request.decode&&request.leaf&&request.visit&&artdcevm::runnable_executor::With(env,field_guard_anchor,
+    {instance_root,static_root},debug_field_stage.get()};
+  if(success)success=request.leaf&&request.visit&&artdcevm::runnable_executor::With(env,field_guard_anchor,
       RetireFields,&request)==artdcevm::runnable_jni::Result::kSuccess;
   auto rejected=[&]() {auto thrown=env->ExceptionOccurred();env->ExceptionClear();
     bool matches=thrown&&env->IsInstanceOf(thrown,exception);if(thrown)env->DeleteLocalRef(thrown);return matches;};
@@ -459,6 +551,11 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFieldGuards(
   if(success) {env->SetIntField(instance,removed,99);success=rejected();}
   if(success) {env->GetStaticLongField(owner,removed_static);success=rejected();}
   if(success) {env->SetStaticLongField(owner,removed_static,99);success=rejected();}
+  if(success){auto fresh=env->GetFieldID(owner,"keptField","I");auto fresh_static=env->GetStaticFieldID(owner,"keptStatic","J");
+    success=fresh&&fresh_static&&!env->ExceptionCheck()&&
+      !artdcevm::contextual_field_id::Retired(env,instance,false,fresh,debug_retired_fields)&&
+      !artdcevm::contextual_field_id::Retired(env,owner,true,fresh_static,debug_retired_fields)&&
+      env->GetIntField(instance,fresh)==73&&env->GetStaticLongField(owner,fresh_static)==17&&!env->ExceptionCheck();}
   if(success)success=env->GetIntField(instance,kept)==73&&env->GetStaticLongField(owner,kept_static)==17&&!env->ExceptionCheck();
   if(success) {env->SetIntField(instance,kept,79);env->SetStaticLongField(owner,kept_static,19);
     success=env->GetIntField(instance,kept)==79&&env->GetStaticLongField(owner,kept_static)==19&&!env->ExceptionCheck();
@@ -525,5 +622,12 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_cleanupCounts(JNIEnv* 
  jint values[]={static_cast<jint>(artdcevm::retirement::CleanupCalls()),static_cast<jint>(artdcevm::retirement::CleanupFields()),
   static_cast<jint>(artdcevm::retirement::CleanupMethods()),static_cast<jint>(debug_retired_fields.Count()),static_cast<jint>(debug_retired_entries.Count())};
  auto result=env->NewIntArray(5);if(result)env->SetIntArrayRegion(result,0,5,values);return result;
+}
+#endif
+
+#ifdef ARTDCEVM_TESTING
+namespace artdcevm::jni_access {
+retirement::RetiredMethodRegistry& OwnedMethodRegistry(){return debug_retired_entries;}
+retirement::RetiredFieldRegistry& OwnedFieldRegistry(){return debug_retired_fields;}
 }
 #endif

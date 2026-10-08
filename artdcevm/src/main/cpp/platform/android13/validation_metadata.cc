@@ -22,7 +22,7 @@ bool ReadValidationClassMetadata(void* klass, ValidationMetadata* output) {
   // without a read barrier. From-space and to-space caches name the same native
   // DexFile. Heap-reference poisoning is disabled by the verified release profile.
   class_metadata::Identity identity{};
-  if(!class_metadata::ReadIdentity(33,klass,sizeof(ClassPrefix),&identity) || identity.class_def_index<0)return false;
+  if(!class_metadata::ReadIdentity(class_metadata::kLegacy,klass,sizeof(ClassPrefix),&identity) || identity.class_def_index<0)return false;
   uint32_t cache_reference = identity.dex_cache;
   auto* cache = reinterpret_cast<const void*>(static_cast<uintptr_t>(cache_reference));
   if (!cache) return false;

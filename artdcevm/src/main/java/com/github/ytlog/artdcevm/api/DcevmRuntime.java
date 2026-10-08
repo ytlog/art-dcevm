@@ -38,6 +38,16 @@ public final class DcevmRuntime {
         evolutionInitialized = true;
     }
 
+    /** Initializes the independently proven subset and reports its exact scope.
+     * Full initialization remains the separate initialize(Context) operation. */
+    public static synchronized JSONObject initializeCapabilities(Context context) throws Exception {
+        attach(context);
+        int code = nativeInitializeCapabilities();
+        if (code != 0) throw new IllegalStateException("Capability initialization failed: "
+                + code + ": " + nativeCapabilities());
+        return new JSONObject(nativeCapabilities());
+    }
+
     /**
      * 仅附加公开 JVMTI，返回当前后端能力，供不需要完整演进的调用方使用。
      *
@@ -57,6 +67,7 @@ public final class DcevmRuntime {
         Context application = context.getApplicationContext();
         if ((application.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0)
             throw new SecurityException("JVMTI requires a debuggable app from process start");
+        com.github.ytlog.artdcevm.internal.ProductionBootstrap.configure(application);
         System.loadLibrary("artdcevm");
         // 安装路径可能含 '='，由 ClassLoader 解析库名，避免传入不被接受的绝对路径。
         Debug.attachJvmtiAgent("libartdcevm.so", null, application.getClassLoader());
@@ -68,5 +79,6 @@ public final class DcevmRuntime {
     private static native String nativeErrorName(int code);
     private static native int nativeEnableStandardRedefineRouting();
     private static native int nativeInitializeEvolution();
+    private static native int nativeInitializeCapabilities();
 
 }

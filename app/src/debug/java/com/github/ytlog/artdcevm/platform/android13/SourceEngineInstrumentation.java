@@ -4066,14 +4066,16 @@ public final class SourceEngineInstrumentation extends Instrumentation {
     private static final class LoaderMixedCaches {
         final WeakReference<?> loaderRef;
         final WeakReference<?> classRef;
+        final Object instance;
         final Method oldMethod;
         final Field oldField;
         final MethodHandle oldMethodHandle;
         final VarHandle oldVarHandle;
-        LoaderMixedCaches(ClassLoader loader, Class<?> target, Method method, Field field,
+        LoaderMixedCaches(ClassLoader loader, Class<?> target, Object instance, Method method, Field field,
                 MethodHandle methodHandle, VarHandle varHandle) {
             loaderRef = new WeakReference<>(loader);
             classRef = new WeakReference<>(target);
+            this.instance = instance;
             oldMethod = method;
             oldField = field;
             oldMethodHandle = methodHandle;
@@ -4094,6 +4096,12 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 target, "goneField", int.class);
         int beforeMethod = (Integer) oldMethod.invoke(instance);
         int beforeField = oldField.getInt(instance);
+        int beforeHandle;
+        try { beforeHandle = (int) methodHandle.invoke(instance); }
+        catch (Throwable error) { throw new AssertionError("Baseline cached MethodHandle", error); }
+        int beforeVarHandle = (int) varHandle.get(instance);
+        if (beforeHandle != 9 || beforeVarHandle != 7)
+            throw new AssertionError("Baseline native cache targets");
         int code = redefine(target, asset(
                 "loader-mixed-evolved/com/github/ytlog/artdcevm/gc/LoaderSubject.dex"));
         boolean methodRejected = false;
@@ -4106,12 +4114,13 @@ public final class SourceEngineInstrumentation extends Instrumentation {
         try { oldField.getInt(instance); }
         catch (NoSuchFieldError expected) { fieldRejected = true; }
         report.put("cachedBeforeMethod", beforeMethod).put("cachedBeforeField", beforeField)
+                .put("cachedBeforeMethodHandle", beforeHandle).put("cachedBeforeVarHandle", beforeVarHandle)
                 .put("cachedEvolutionCode", code).put("cachedOldMethodRejected", methodRejected)
                 .put("cachedOldFieldRejected", fieldRejected); save(report);
         if (beforeMethod != 9 || beforeField != 7 || code != 0
                 || !methodRejected || !fieldRejected)
             throw new AssertionError("Cached mixed retirement: " + report);
-        return new LoaderMixedCaches(loader, target, oldMethod, oldField,
+        return new LoaderMixedCaches(loader, target, instance, oldMethod, oldField,
                 methodHandle, varHandle);
     }
     private WeakReference<?>[] holdAndReleaseMixedCaches(JSONObject report,
@@ -4125,6 +4134,19 @@ public final class SourceEngineInstrumentation extends Instrumentation {
         boolean heldAlive = cached.loaderRef.get() != null && cached.classRef.get() != null;
         boolean unpruned = retiredPrunedCount(0) == fieldsBefore
                 && retiredPrunedCount(1) == methodsBefore;
+        // Exercise the actual cached targets after GC, while their receiver and
+        // loader must still be alive. Type-only calls cannot prove retirement.
+        boolean methodHandleRejected = false;
+        try { cached.oldMethodHandle.invoke(cached.instance); }
+        catch (NoSuchMethodError expected) { methodHandleRejected = true; }
+        catch (Throwable error) { throw new AssertionError("Cached retired MethodHandle", error); }
+        boolean varHandleRejected = false;
+        try { cached.oldVarHandle.get(cached.instance); }
+        catch (NoSuchFieldError expected) { varHandleRejected = true; }
+        report.put("cachedMethodHandleRejectedAfterGc", methodHandleRejected)
+                .put("cachedVarHandleRejectedAfterGc", varHandleRejected);
+        if (!methodHandleRejected || !varHandleRejected)
+            throw new AssertionError("Cached native targets remained callable after retirement");
         sink = cached.oldMethod.getName().length() + cached.oldField.getName().length()
                 + cached.oldMethodHandle.type().parameterCount()
                 + cached.oldVarHandle.coordinateTypes().size();

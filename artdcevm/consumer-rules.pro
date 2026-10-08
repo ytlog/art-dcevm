@@ -4,3 +4,9 @@
 -keep class com.github.ytlog.artdcevm.internal.CalibrationFixture { *; }
 
 -keep class com.github.ytlog.artdcevm.internal.EvolutionCalibration$InvocationContract { *; }
+
+-keep class com.github.ytlog.artdcevm.internal.ProductionBootstrap { *; }
+-keep class com.github.ytlog.artdcevm.internal.ProductionBootstrap$Inputs { *; }
+
+# Public array behavior and runtime Class oracle invoked by the native VH owner.
+-keep class com.github.ytlog.artdcevm.internal.VarHandleClassOracle { public static java.lang.invoke.VarHandle create(); }

@@ -4,6 +4,9 @@ import android.os.Build;
 import android.system.Os;
 import android.system.OsConstants;
 import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import org.json.JSONArray;
@@ -16,10 +19,20 @@ public final class RuntimeAccessSuite {
     private static native String probeRoute();
     private static native int probeContext();
     private static native String probeRuntimeServices();
+    private static native String probeOwnedMethodDeletion(Class<?> owner,Object instance,byte[] dex,MethodHandle[] handles,int baseline);
+    private static native long probeOwnedCommitDiagnostics();
+    private static int invokeOwnedMethodHandle(MethodHandle handle,Object instance) throws Throwable {
+        return (int)handle.invokeExact((com.github.ytlog.artdcevm.fixture.Evolving)instance);
+    }
+
+    private static native String probeOwnedFieldDeletion(Class<?> owner,Object instance,byte[] dex);
+    private static native String prepareOwnedFieldDeletionGuards(Class<?> owner,Object instanceHandle,Object staticHandle,Field instanceField,Field staticField,MethodHandle instanceGetter,MethodHandle staticGetter);
     private static native int probeCacheThreads();
+    private static native int probeOwnedJitMethodState(Method method);
     private static native String probeNativeCache();
     private static native int probeCardOffset();
     private static native String probeMethodGuards(Class<?> owner);
+    private static native String prepareFieldGuards(Class<?> owner,Object instance,Field instanceField,Field staticField,MethodHandle instanceGetter,MethodHandle staticGetter);
     private static native String probeFieldGuards(Class<?> owner,Object instance,Field instanceField,Field staticField);
     private static native String probeAllocatorCleanup(Class<?> owner,ClassLoader loader,Field[] fields,Executable[] methods,Method bootMethod);
     private static native int[] cleanupCounts();
@@ -50,6 +63,134 @@ public final class RuntimeAccessSuite {
     private static native String probeJitServices(Object hot,Class<?> owner,int index,int modifiers,Class<?> target,byte[] dex);
     private static native String probeFields(Class<?> owner,String descriptor,Object[] fields,
             String[] names,String[] types,int[] modifiers,boolean storage);
+    private interface FieldAccess { void run() throws Throwable; }
+    private static native String beginFieldHandleProof(MethodHandle getter,Field field);
+    private static native String endFieldHandleProof(boolean invocationSucceeded);
+    private static native void releaseFieldProofStages();
+    private static void proveFieldHandle(MethodHandle getter,Field field,FieldAccess access) throws Throwable {
+        String before=beginFieldHandleProof(getter,field);
+        if(before==null||!before.isEmpty())throw new AssertionError("Field handle native proof: "+before);
+        boolean succeeded=false;
+        try {access.run();succeeded=true;}
+        finally {
+            String after=endFieldHandleProof(succeeded);
+            if(succeeded&&(after==null||!after.isEmpty()))throw new AssertionError("Actual original field handle dispatch: "+after);
+        }
+    }
+    private static void expectRemovedField(FieldAccess access) throws Throwable {
+        try {access.run();} catch(NoSuchFieldError expected) {return;}
+        catch(java.lang.reflect.InvocationTargetException wrapped) {if(wrapped.getCause() instanceof NoSuchFieldError)return;throw wrapped;}
+        throw new AssertionError("Cached removed field access succeeded");
+    }
+    private static void collectAndVerifyGc(JSONObject report,String prefix) throws Exception {
+        long before=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+        long after=before;
+        for(int attempt=0;attempt<20&&after<=before;attempt++) {
+            System.gc();System.runFinalization();Thread.sleep(10);
+            after=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+        }
+        if(after<=before)throw new AssertionError("No completed GC observed before cached access: "+prefix);
+        report.put(prefix+"GcCollections",after-before);
+    }
+    private static byte[] fixtureDex(String apkPath,String path) throws Exception {
+        try(java.util.zip.ZipFile apk=new java.util.zip.ZipFile(apkPath)) {
+            java.util.zip.ZipEntry entry=apk.getEntry("assets/"+path);
+            if(entry==null)throw new AssertionError("Missing transaction fixture: "+path);
+            try(java.io.InputStream in=apk.getInputStream(entry);java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream()) {
+                byte[] block=new byte[8192];int count;while((count=in.read(block))!=-1)out.write(block,0,count);return out.toByteArray();
+            }
+        }
+    }
+    private static void ownedFieldDeletion(String apkPath,JSONObject report) throws Throwable {
+        com.github.ytlog.artdcevm.fixture.FieldSubject instance=new com.github.ytlog.artdcevm.fixture.FieldSubject();
+        Class<?> owner=instance.getClass();int identity=System.identityHashCode(instance);
+        Field removed=owner.getDeclaredField("i"),removedStatic=owner.getDeclaredField("si"),kept=owner.getDeclaredField("keep");
+        java.lang.invoke.MethodHandles.Lookup lookup=java.lang.invoke.MethodHandles.lookup();
+        java.lang.invoke.MethodHandle getter=lookup.unreflectGetter(removed),setter=lookup.unreflectSetter(removed),
+                staticGetter=lookup.unreflectGetter(removedStatic),staticSetter=lookup.unreflectSetter(removedStatic),keptGetter=lookup.unreflectGetter(kept);
+        java.lang.invoke.VarHandle variable=lookup.findVarHandle(owner,"i",int.class),staticVariable=lookup.findStaticVarHandle(owner,"si",int.class),
+                keptVariable=lookup.findVarHandle(owner,"keep",int.class);
+        String[] names={"z","b","c","s","i","j","f","d","o","sz","sb","sc","ss","si","sj","sf","sd","so"};
+        Field[] mirrors=new Field[names.length];java.lang.invoke.MethodHandle[] getters=new java.lang.invoke.MethodHandle[names.length],setters=new java.lang.invoke.MethodHandle[names.length];
+        java.lang.invoke.VarHandle[] variables=new java.lang.invoke.VarHandle[names.length];Object[] values=new Object[names.length];
+        for(int i=0;i<names.length;i++) {
+            mirrors[i]=owner.getDeclaredField(names[i]);values[i]=mirrors[i].get(instance);
+            getters[i]=lookup.unreflectGetter(mirrors[i]);setters[i]=lookup.unreflectSetter(mirrors[i]);
+            variables[i]=i<9?lookup.findVarHandle(owner,names[i],mirrors[i].getType()):lookup.findStaticVarHandle(owner,names[i],mirrors[i].getType());
+        }
+        String guardError=prepareOwnedFieldDeletionGuards(owner,variable,staticVariable,removed,removedStatic,getter,staticGetter);
+        report.put("ownedFieldDeletionGuardPreparationError",guardError);
+        if(guardError==null||!guardError.isEmpty())throw new AssertionError("Field deletion guard preparation: "+guardError);
+        proveFieldHandle(getter,removed,() -> {if((int)getter.invokeExact(instance)!=7)throw new AssertionError("Instance field handle initial value");});
+        proveFieldHandle(staticGetter,removedStatic,() -> {if((int)staticGetter.invokeExact()!=7)throw new AssertionError("Static field handle initial value");});
+        if((int)variable.get(instance)!=7||(int)staticVariable.get()!=7)
+            throw new AssertionError("Field deletion fixture initial values");
+        ClassLoader callerLoader=new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(
+                fixtureDex(apkPath,"field-original/com/github/ytlog/artdcevm/fixture/FieldCaller.dex")),owner.getClassLoader());
+        Class<?> caller=callerLoader.loadClass("com.github.ytlog.artdcevm.fixture.FieldCaller");
+        Method hot=caller.getDeclaredMethod("hot",owner),cold=caller.getDeclaredMethod("cold",owner),directSet=caller.getDeclaredMethod("set",owner),
+                staticGet=caller.getDeclaredMethod("staticGet"),staticSet=caller.getDeclaredMethod("staticSet");
+        int compiled=0,warmCalls=0;
+        for(int attempt=0;attempt<10&&compiled!=2;attempt++) {
+            for(int call=0;call<100000;call++)if((Long)hot.invoke(null,instance)!=9_000_000_000L)throw new AssertionError("Hot direct field initial value");
+            warmCalls+=100000;Thread.sleep(100);compiled=probeOwnedJitMethodState(hot);
+        }
+        report.put("ownedFieldDeletionHotCallerJitStateBefore",compiled).put("ownedFieldDeletionHotCallerWarmCalls",warmCalls);
+        if(compiled!=2)throw new AssertionError("Direct field caller did not actually enter the observed ART JIT cache");
+        String error=probeOwnedFieldDeletion(owner,instance,fixtureDex(apkPath,"field-delete/com/github/ytlog/artdcevm/fixture/FieldSubject.dex"));
+        report.put("ownedFieldDeletionError",error);
+        if(error==null||!error.isEmpty())throw new AssertionError("Owned field deletion: "+error);
+        long diagnostics=probeOwnedCommitDiagnostics();
+        if((diagnostics&0xffffffffL)==0||(diagnostics&(1L<<32))==0)throw new AssertionError("Field deletion native final cache/root readback missing");
+        for(String name:names) {
+            try {instance.getClass().getDeclaredField(name);throw new AssertionError("Deleted field remains declared: "+name);}
+            catch(NoSuchFieldException expected) {}
+        }
+        for(int i=0;i<names.length;i++) {
+            final int slot=i;Field mirror=mirrors[i];Object value=values[i];
+            expectRemovedField(() -> mirror.get(instance));expectRemovedField(() -> mirror.set(instance,value));
+            expectRemovedField(() -> {if(slot<9)getters[slot].invokeWithArguments(instance);else getters[slot].invokeWithArguments();});
+            expectRemovedField(() -> {if(slot<9)setters[slot].invokeWithArguments(instance,value);else setters[slot].invokeWithArguments(value);});
+            expectRemovedField(() -> {Object result=slot<9?variables[slot].get(instance):variables[slot].get();});
+            expectRemovedField(() -> {if(slot<9)variables[slot].set(instance,value);else variables[slot].set(value);});
+            expectRemovedField(() -> {if(slot<9)variables[slot].compareAndSet(instance,value,value);else variables[slot].compareAndSet(value,value);});
+        }
+        expectRemovedField(() -> {removed.getInt(instance);});expectRemovedField(() -> removed.setInt(instance,99));
+        expectRemovedField(() -> {removedStatic.getInt(null);});expectRemovedField(() -> removedStatic.setInt(null,99));
+        expectRemovedField(() -> {int value=(int)getter.invokeExact(instance);});expectRemovedField(() -> {setter.invokeExact(instance,99);});
+        expectRemovedField(() -> {int value=(int)staticGetter.invokeExact();});expectRemovedField(() -> {staticSetter.invokeExact(99);});
+        expectRemovedField(() -> {int value=(int)getter.invoke(instance);});expectRemovedField(() -> {setter.invoke(instance,99);});
+        expectRemovedField(() -> {int value=(int)staticGetter.invoke();});expectRemovedField(() -> {staticSetter.invoke(99);});
+        expectRemovedField(() -> getter.invokeWithArguments(instance));expectRemovedField(() -> setter.invokeWithArguments(instance,99));
+        expectRemovedField(() -> staticGetter.invokeWithArguments());expectRemovedField(() -> staticSetter.invokeWithArguments(99));
+        expectRemovedField(() -> {int value=(int)variable.get(instance);});expectRemovedField(() -> variable.set(instance,99));
+        expectRemovedField(() -> {int value=(int)variable.getVolatile(instance);});expectRemovedField(() -> variable.setVolatile(instance,99));
+        expectRemovedField(() -> {boolean value=variable.compareAndSet(instance,7,99);});
+        expectRemovedField(() -> {int value=(int)variable.compareAndExchange(instance,7,99);});
+        expectRemovedField(() -> {int value=(int)variable.getAndAdd(instance,1);});expectRemovedField(() -> {int value=(int)variable.getAndSet(instance,99);});
+        expectRemovedField(() -> {int value=(int)staticVariable.get();});expectRemovedField(() -> staticVariable.set(99));
+        expectRemovedField(() -> {int value=(int)staticVariable.getVolatile();});expectRemovedField(() -> staticVariable.setVolatile(99));
+        expectRemovedField(() -> {boolean value=staticVariable.compareAndSet(7,99);});
+        expectRemovedField(() -> {int value=(int)staticVariable.compareAndExchange(7,99);});
+        expectRemovedField(() -> {int value=(int)staticVariable.getAndAdd(1);});expectRemovedField(() -> {int value=(int)staticVariable.getAndSet(99);});
+        expectRemovedField(() -> hot.invoke(null,instance));expectRemovedField(() -> cold.invoke(null,instance));
+        expectRemovedField(() -> directSet.invoke(null,instance));expectRemovedField(() -> staticGet.invoke(null));expectRemovedField(() -> staticSet.invoke(null));
+        collectAndVerifyGc(report,"ownedFieldDeletion");expectRemovedField(() -> removed.getInt(instance));expectRemovedField(() -> {int value=(int)variable.get(instance);});
+        expectRemovedField(() -> {int value=(int)getter.invokeExact(instance);});
+        if(instance.keep!=41||com.github.ytlog.artdcevm.fixture.FieldSubject.staticKeep!=42||instance.compute()!=42||
+                (int)keptGetter.invokeExact(instance)!=41||(int)keptVariable.get(instance)!=41||System.identityHashCode(instance)!=identity)
+            throw new AssertionError("Field deletion corrupted retained values/identity/handles");
+        keptVariable.set(instance,49);if(instance.compute()!=50)throw new AssertionError("Kept VarHandle write failed");keptVariable.set(instance,41);
+        report.put("ownedFieldDeletion",true).put("ownedFieldDeletionJniRejected",true)
+                .put("ownedFieldDeletionReflectionRejected",true).put("ownedFieldDeletionMethodHandleRejected",true)
+                .put("ownedFieldDeletionVarHandleRejected",true).put("ownedFieldDeletionIdentityPreserved",true)
+                .put("ownedFieldDeletionKeptInstanceValue",instance.keep).put("ownedFieldDeletionKeptStaticValue",com.github.ytlog.artdcevm.fixture.FieldSubject.staticKeep)
+                .put("ownedFieldDeletionJniChecks",4).put("ownedFieldDeletionReflectionChecks",40)
+                .put("ownedFieldDeletionMethodHandleChecks",48).put("ownedFieldDeletionVarHandleChecks",70)
+                .put("ownedFieldDeletionDeclaringRootsRestored",true).put("ownedFieldDeletionCacheClearedThreads",diagnostics&0xffffffffL)
+                .put("ownedFieldDeletionRemovedFields",18).put("ownedFieldDeletionKeptValue",instance.compute())
+                .put("ownedFieldDeletionDirectChecks",5).put("ownedFieldDeletionAfterGcChecks",3);
+    }
     private static String descriptor(Class<?> type) {
         if(type.isPrimitive()) {
             if(type==boolean.class)return "Z";if(type==byte.class)return "B";
@@ -81,12 +222,14 @@ public final class RuntimeAccessSuite {
     }
     public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage) {
         JSONObject report=new JSONObject();
+        boolean nativeLoaded=false;
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
                     .put("abi",Build.SUPPORTED_ABIS[0])
                     .put("pageSize",Os.sysconf(OsConstants._SC_PAGESIZE))
                     .put("fullDcevmComplete",false).put("privateEvolutionInitialized",false);
             System.loadLibrary("artdcevm");
+            nativeLoaded=true;
             report.put("artBuildId",artBuildId());
             Method carrier=Object.class.getMethod("toString");
             Executable[] methods={MethodIdentityFixture.class.getDeclaredConstructor(),MethodIdentityFixture.class.getDeclaredMethod("instanceMarker",int.class),
@@ -180,7 +323,12 @@ public final class RuntimeAccessSuite {
                 java.lang.invoke.MethodHandle getter=lookup.unreflectGetter(removedField),setter=lookup.unreflectSetter(removedField);
                 java.lang.invoke.MethodHandle staticGetter=lookup.unreflectGetter(removedStatic),staticSetter=lookup.unreflectSetter(removedStatic);
                 java.lang.invoke.MethodHandle keptGetter=lookup.unreflectGetter(RetiredEntryFixture.class.getDeclaredField("keptField"));
-                if((int)getter.invokeExact(fieldFixture)!=41||(long)staticGetter.invokeExact()!=13L)throw new AssertionError("Owned field handle precondition");
+                String prepared=prepareFieldGuards(RetiredEntryFixture.class,fieldFixture,removedField,removedStatic,getter,staticGetter);
+                if(prepared==null||!prepared.isEmpty())throw new AssertionError("Field handle preparation: "+prepared);
+                // Both real original exported invocations must traverse the
+                // calibrated same-owner targets before native retirement.
+                proveFieldHandle(getter,removedField,() -> {if((int)getter.invokeExact(fieldFixture)!=41)throw new AssertionError("Owned instance field handle precondition");});
+                proveFieldHandle(staticGetter,removedStatic,() -> {if((long)staticGetter.invokeExact()!=13L)throw new AssertionError("Owned static field handle precondition");});
                 String fieldGuardError=probeFieldGuards(RetiredEntryFixture.class,fieldFixture,removedField,removedStatic);
                 report.put("fieldEntryGuardError",fieldGuardError);
                 if(!fieldGuardError.isEmpty())throw new AssertionError(fieldGuardError);
@@ -237,10 +385,67 @@ public final class RuntimeAccessSuite {
                 if(cacheError==null||!cacheError.isEmpty()||cacheThreads<=0)
                     throw new AssertionError("Native cache clearing: "+cacheError);
             }
+            if(runtimeServices&&jitReceivers) {
+                com.github.ytlog.artdcevm.fixture.Evolving instance=new com.github.ytlog.artdcevm.fixture.Evolving(31);
+                Class<?> owner=instance.getClass();Method cached=owner.getDeclaredMethod("addedMethod");
+                int identity=System.identityHashCode(instance);
+                MethodHandles.Lookup lookup=MethodHandles.lookup();
+                MethodHandle exact=lookup.findVirtual(owner,"addedMethod",MethodType.methodType(int.class));
+                MethodHandle surviving=lookup.findVirtual(owner,"compute",MethodType.methodType(int.class));
+                MethodHandle statik=lookup.findStatic(RetiredEntryFixture.class,"kept",MethodType.methodType(int.class));
+                MethodHandle adapted=exact.asType(MethodType.methodType(Object.class,Object.class));
+                int baseline=(Integer)cached.invoke(instance);
+                for(int warm=0;warm<5000;++warm) {
+                    if((int)surviving.invokeExact(instance)!=34||(int)exact.invokeExact(instance)!=baseline)throw new AssertionError("Cached MethodHandle warmup");
+                }
+                byte[] deletion;
+                try(java.util.zip.ZipFile zip=new java.util.zip.ZipFile(apkPath);
+                    java.io.InputStream in=zip.getInputStream(zip.getEntry("assets/method-delete/com/github/ytlog/artdcevm/fixture/Evolving.dex"))) {
+                    java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();byte[] chunk=new byte[8192];int n;
+                    while((n=in.read(chunk))!=-1)bytes.write(chunk,0,n);deletion=bytes.toByteArray();
+                }
+                String error=probeOwnedMethodDeletion(owner,instance,deletion,new MethodHandle[]{exact,surviving,statik},baseline);
+                report.put("ownedMethodDeletionError",error);
+                if(error==null||!error.isEmpty())throw new AssertionError("Owned method deletion: "+error);
+                long diagnostics=probeOwnedCommitDiagnostics();
+                if((diagnostics&0xffffffffL)==0||(diagnostics&(1L<<32))==0)
+                    throw new AssertionError("Actual native cache/declaring root readback missing");
+                int handleRejected=0;
+                try {int ignored=(int)exact.invokeExact(instance);}catch(NoSuchMethodError expected){handleRejected++;}
+                try {Object ignored=(Object)adapted.invokeExact((Object)instance);}catch(NoSuchMethodError expected){handleRejected++;}
+                if(handleRejected!=2||(int)surviving.invokeExact(instance)!=35)
+                    throw new AssertionError("Cached MethodHandle deletion/retained target");
+                collectAndVerifyGc(report,"ownedMethodDeletion");
+                try {int ignored=(int)exact.invokeExact(instance);throw new AssertionError("Retired MethodHandle accepted after GC");}
+                catch(NoSuchMethodError expected){}
+                boolean absent=false,rejected=false;
+                try {instance.getClass().getDeclaredMethod("addedMethod");}catch(NoSuchMethodException expected){absent=true;}
+                try {cached.invoke(instance);}catch(java.lang.reflect.InvocationTargetException wrapped){
+                    if(wrapped.getCause() instanceof NoSuchMethodError)rejected=true;else throw wrapped;
+                }catch(NoSuchMethodError expected){rejected=true;}
+                if(!absent||!rejected||instance.compute()!=35||instance.value!=31||System.identityHashCode(instance)!=identity)
+                    throw new AssertionError("Owned method deletion changed retained values, identity or retired reflection behavior");
+                report.put("ownedMethodHandleTargetProof",true)
+                    .put("ownedMethodDeletionMethodHandleRejected",true).put("ownedMethodDeletionMethodHandleChecks",2)
+                    .put("ownedMethodDeletionKeptMethodHandleValue",35).put("ownedMethodDeletionIdentityPreserved",true)
+                    .put("ownedMethodDeletionCacheClearedThreads",diagnostics&0xffffffffL)
+                    .put("ownedMethodDeletionDeclaringRootsRestored",true).put("ownedMethodDeletionAfterGcChecks",1)
+                    .put("ownedMethodDeletion",true).put("ownedMethodDeletionJniRejected",true)
+                    .put("ownedMethodDeletionReflectionRejected",true).put("ownedMethodDeletionKeptValue",instance.compute());
+            }
+            if(runtimeServices&&jitReceivers&&methodGuards&&fieldStorage)ownedFieldDeletion(apkPath,report);
             report.put("passed",true);
         } catch(Throwable error) {
             try {report.put("passed",false).put("error",android.util.Log.getStackTraceString(error));}
             catch(Exception ignored) { }
+        } finally {
+            if(nativeLoaded) {
+                try {releaseFieldProofStages();}
+                catch(Throwable error) {
+                    try {report.put("passed",false).put("fieldProofCleanupError",android.util.Log.getStackTraceString(error));}
+                    catch(Exception ignored) { }
+                }
+            }
         }
         return report;
     }

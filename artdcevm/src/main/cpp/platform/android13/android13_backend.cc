@@ -1,3 +1,4 @@
+#include "platform/android13/native_deletion_capabilities.h"
 #include "platform/android13/android13_backend.h"
 #include <android/log.h>
 #include "support/elf_modules.h"
@@ -43,9 +44,6 @@ std::string Quote(const std::string& s) {
 
 int Android13Backend::Attach(JavaVM* vm) {
   if (env_) return JNI_OK;
-  char sdk[PROP_VALUE_MAX]{};
-  __system_property_get("ro.build.version.sdk", sdk);
-  if (std::strcmp(sdk, "33") != 0) return JNI_ERR;
   if (vm->GetEnv(reinterpret_cast<void**>(&env_), JVMTI_VERSION_1_2) != JNI_OK) return JNI_ERR;
   vm_ = vm;
   jvmtiCapabilities potential{};
@@ -60,7 +58,9 @@ int Android13Backend::Attach(JavaVM* vm) {
   if (env_->GetExtensionFunctions(&count, &functions) != JVMTI_ERROR_NONE) return JNI_ERR;
   for (int i = 0; i < count; ++i) {
     auto& f = functions[i];
-    extensions_.emplace_back(f.id);
+    if(f.id)extensions_.emplace_back(f.id);
+    if(f.id&&std::strcmp(f.id,"com.android.art.class.structurally_redefine_classes")==0) structural_=reinterpret_cast<StructuralFn>(f.func);
+    if(f.id&&std::strcmp(f.id,"com.android.art.class.is_structurally_modifiable_class")==0) modifiable_=reinterpret_cast<ModifiableFn>(f.func);
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.id));
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.short_description));
     for (int j = 0; j < f.param_count; ++j) env_->Deallocate(reinterpret_cast<unsigned char*>(f.params[j].name));
@@ -68,22 +68,7 @@ int Android13Backend::Attach(JavaVM* vm) {
     env_->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
   }
   env_->Deallocate(reinterpret_cast<unsigned char*>(functions));
-  // Extensions advertise support. Resolve both device implementations by name
-  // so capability checks and the transaction use the same ART ABI profile.
-  const auto advertised = [this](const char* id) {
-    return std::find(extensions_.begin(), extensions_.end(), id) != extensions_.end();
-  };
-  if (advertised("com.android.art.class.structurally_redefine_classes") &&
-      advertised("com.android.art.class.is_structurally_modifiable_class")) {
-    ShadowHookEngine symbols;
-    std::string error;
-    if (symbols.Initialize(&error)) {
-      structural_ = reinterpret_cast<StructuralFn>(symbols.FindSymbol(
-          "libopenjdkjvmti.so", cas::kStructuralRedefineClasses));
-      modifiable_ = reinterpret_cast<ModifiableFn>(symbols.FindSymbol(
-          "libopenjdkjvmti.so", cas::kIsStructurallyModifiableClass));
-    }
-  }
+  // Public extension pointers carry their declared JVMTI calling convention.
   body_ = std::make_unique<JvmtiBodyRedefiner>(env_, caps_.can_redefine_classes != 0);
   additive_ = std::make_unique<ArtAdditiveRedefiner>(env_, structural_, modifiable_);
   __android_log_print(ANDROID_LOG_INFO, "ArtDcevm", "Android 13 attached: redefine=%d structural=%d", caps_.can_redefine_classes, structural_ != nullptr);
@@ -103,8 +88,9 @@ std::string Android13Backend::Capabilities() const {
     << ",\"methodBody\":" << (caps_.can_redefine_classes ? "true" : "false")
     << ",\"nativeAdditive\":" << (structural_ && modifiable_ ? "true" : "false")
     << ",\"evolutionAvailable\":" << (evolution_ && evolution_->Available() ? "true" : "false")
-    << ",\"standardRedefineRouted\":" << (redefine_hook_ ? "true" : "false")
-    << ",\"nativeDelete\":" << (evolution_ && evolution_->Available() ? "true" : "false")
+    << ",\"standardRedefineRouted\":" << (redefine_hook_ ? "true" : "false");
+  WriteNativeDeletionCapabilities(s,evolution_ && evolution_->Available());
+  s
     << ",\"fieldTypeEvolution\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"methodSignatureEvolution\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"constructorDeletion\":" << (evolution_ && evolution_->Available() ? "true" : "false")

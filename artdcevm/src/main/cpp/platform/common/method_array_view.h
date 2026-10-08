@@ -11,24 +11,34 @@ struct Boundaries {
   uint32_t direct_count, declared_count;
   Order order;
 };
-inline bool ReadBoundaries(int api, const void* klass, size_t extent, uint32_t total,
+// Tail boundaries are a distinct source capability from the scalar Class
+// prefix. Modern classes derive counts from independent DEX rather than tails.
+struct ClassLayout {
+  class_metadata::Layout scalar;
+  Order order;
+  size_t copied_methods, virtual_methods;
+};
+inline constexpr ClassLayout kLegacy{class_metadata::kLegacy,Order::DirectThenVirtual,
+    offsetof(class_metadata::Class11,copied_methods_offset),offsetof(class_metadata::Class11,virtual_methods_offset)};
+inline constexpr ClassLayout k16{class_metadata::k16,Order::DirectThenVirtual,
+    offsetof(class_metadata::Class16,copied_methods_offset),offsetof(class_metadata::Class16,virtual_methods_offset)};
+inline constexpr ClassLayout k17{class_metadata::k17,Order::ByFlags,0,0};
+inline bool ReadBoundaries(const ClassLayout& declaration, const void* klass, size_t extent, uint32_t total,
                            Kind kind, const evolution::MappedDexMemberCounts* dex,
                            Boundaries* output) {
-  const auto* layout = class_metadata::Declaration(api);
-  const auto address = reinterpret_cast<uintptr_t>(klass);
-  if (!layout || !klass || !output || extent < layout->size || address % 4 ||
-      address > UINTPTR_MAX - layout->size) return false;
+  const auto* layout = class_metadata::detail::CheckedDeclaration(declaration.scalar,klass,extent);
+  if (!layout || !output) return false;
   Boundaries result{};
-  if (api < 37) {
+  if (declaration.order == Order::DirectThenVirtual) {
+    if(layout->size<2 || declaration.copied_methods>layout->size-2 ||
+       declaration.virtual_methods>layout->size-2)return false;
     const auto* bytes = static_cast<const unsigned char*>(klass);
-    const size_t copied = api == 36 ? offsetof(class_metadata::Class16, copied_methods_offset)
-                                   : offsetof(class_metadata::Class11, copied_methods_offset);
-    const size_t direct = api == 36 ? offsetof(class_metadata::Class16, virtual_methods_offset)
-                                   : offsetof(class_metadata::Class11, virtual_methods_offset);
+    const size_t copied = declaration.copied_methods;
+    const size_t direct = declaration.virtual_methods;
     uint16_t d, c;
     std::memcpy(&d, bytes + direct, 2); std::memcpy(&c, bytes + copied, 2);
     result = {d, c, Order::DirectThenVirtual};
-  } else {
+  } else if(declaration.order == Order::ByFlags) {
     result.order = Order::ByFlags;
     switch (kind) {
       case Kind::Ordinary:
@@ -45,6 +55,7 @@ inline bool ReadBoundaries(int api, const void* klass, size_t extent, uint32_t t
       default: return false;
     }
   }
+  else return false;
   if (result.direct_count > result.declared_count || result.declared_count > total) return false;
   *output = result; return true;
 }
@@ -86,20 +97,15 @@ inline bool Read(const method_metadata::Layout& declaration, void* array, size_t
   if (boundaries.direct_count > boundaries.declared_count || boundaries.declared_count > count) return false;
   *output = {array, count, layout->size, boundaries}; return true;
 }
-inline bool Read(int api, void* array, size_t extent, const Boundaries& boundaries, View* output) {
-  const auto* layout=method_metadata::Declaration(api);
-  return layout&&boundaries.order==(api==37?Order::ByFlags:Order::DirectThenVirtual)&&
-      Read(*layout,array,extent,boundaries,output);
-}
 // Trusted ART-owned allocation path, after exact ABI/profile calibration.
 // Its length header supplies extent; it cannot prove independent mapped size.
 // Caller maintains roots/mutator access; use Read with a verified extent when
-// available. API37 ordinary classes additionally need DEX declaration counts.
-inline bool ReadTrustedClass(int api,const void* klass,size_t extent,Kind kind,
+// available. Flag-ordered ordinary classes additionally need DEX declaration counts.
+inline bool ReadTrustedClass(const ClassLayout& declaration,const method_metadata::Layout& method,const void* klass,size_t extent,Kind kind,
                              const evolution::MappedDexMemberCounts* dex,View* output) {
-  const auto* layout=class_metadata::detail::CheckedDeclaration(api,klass,extent);
-  const auto* method=method_metadata::Declaration(api);
-  if(!layout || !method || !output)return false;
+  const auto* layout=class_metadata::detail::CheckedDeclaration(declaration.scalar,klass,extent);
+  if(!layout || !method.size || !output ||
+      layout->size<offsetof(class_metadata::Class11,methods)+8)return false;
   uint64_t native;
   std::memcpy(&native,static_cast<const unsigned char*>(klass)+offsetof(class_metadata::Class11,methods),8);
   auto* array=reinterpret_cast<void*>(static_cast<uintptr_t>(native));
@@ -107,8 +113,9 @@ inline bool ReadTrustedClass(int api,const void* klass,size_t extent,Kind kind,
   if(array && (address%8 || address>UINTPTR_MAX-8))return false;
   uint32_t count=0;
   if(array)std::memcpy(&count,array,4);
+  if(array && count>(SIZE_MAX-8)/method.size)return false;
   Boundaries boundaries;
-  if(!ReadBoundaries(api,klass,extent,count,kind,dex,&boundaries))return false;
-  return Read(api,array,array?8+size_t{count}*method->size:0,boundaries,output);
+  if(!ReadBoundaries(declaration,klass,extent,count,kind,dex,&boundaries))return false;
+  return Read(method,array,array?8+size_t{count}*method.size:0,boundaries,output);
 }
 }
