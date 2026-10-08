@@ -14,6 +14,7 @@
 #include <cstring>
 #include "platform/android13/transaction_metadata.h"
 #include "platform/common/dex_file_metadata.h"
+#include "platform/common/native_cache_reset.h"
 #include <limits>
 namespace artdcevm::android13 {
 namespace {
@@ -58,15 +59,7 @@ const char* Requested(void* cache,uint16_t index) {
   return parent;
 }
 void ClearNative(uint64_t address,uint32_t count) {
-  using Pair=hierarchy_allocation_abi::NativePair;
-#if defined(__aarch64__)
-  static_assert(__atomic_always_lock_free(sizeof(Pair),nullptr));
-#endif
-  auto* pairs=reinterpret_cast<Pair*>(address);
-  for(uint32_t i=0;pairs && i<count;++i) {
-    Pair empty{0,i==0?uintptr_t{1}:uintptr_t{0}};
-    __atomic_store(pairs+i,&empty,__ATOMIC_RELEASE);
-  }
+  Require(native_cache::ResetPairs(33,reinterpret_cast<void*>(static_cast<uintptr_t>(address)),count));
 }
 }
 HierarchyRootPool::HierarchyRootPool(void* thread):anchor_(thread,0),original_link_(Read<void*>(anchor_.NativeScope())) {}
