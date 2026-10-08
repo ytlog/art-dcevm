@@ -2,6 +2,7 @@
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/android13/runtime_access.h"
+#include "platform/common/code_item_metadata.h"
 #include <cstring>
 #include <limits>
 #if defined(ARTDCEVM_TESTING) && defined(__ANDROID__)
@@ -21,10 +22,6 @@ bool (*contains_pc)(const void*,const void*);
 const void* (*oat_code)(void*,size_t);
 bool (*oat_debuggable)(const void*);
 template<class T> T Read(const void* p,size_t at=0) {T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value;}
-bool Range(const unsigned char* base,size_t size,uintptr_t pointer,size_t width) {
-  auto start=reinterpret_cast<uintptr_t>(base);
-  return base && pointer>=start && pointer-start<=size && width<=size-(pointer-start);
-}
 void* MethodCache(void* method) {
   auto flags=art_method_abi::ReadAccessFlags(method);
   void* cache=nullptr;
@@ -41,33 +38,8 @@ bool Registers(void* method,uint32_t* count) {
   auto* dex=reinterpret_cast<void*>(Read<uint64_t>(cache,offsetof(validation_abi::DexCachePrefix,dex_file)));
   if(!dex) return false;
   auto map=Read<validation_abi::DexMappingPrefix>(dex);
-  if(!map.begin || map.size<8) return false;
-  bool compact=std::memcmp(map.begin,"cdex",4)==0;
-  if(!compact && std::memcmp(map.begin,"dex\n",4)!=0) return false;
-  // Runtime ArtMethod::GetCodeItem uses the tagged native data pointer (not a
-  // DEX offset). Both standard DEX and CDEX may use a separate shared data region.
-  uintptr_t code=Read<uint64_t>(method,offsetof(art_method_abi::ArtMethod,data))&~uintptr_t{1};
-  const unsigned char* base=map.data_begin;size_t size=map.data_size;
-  if(!Range(base,size,code,compact?4:16)) {base=map.begin;size=map.size;}
-  if(!Range(base,size,code,compact?4:16)) return false;
-  auto* item=reinterpret_cast<const void*>(code);
-  if(!compact){*count=Read<uint16_t>(item);return true;}
-  uint16_t fields=Read<uint16_t>(item),flags_and_count=Read<uint16_t>(item,2);
-  uint32_t regs=(fields>>12)&15,ins=(fields>>8)&15;
-  uintptr_t pre=code;
-  // compact_dex_file.h DecodeFields: instruction count occupies two words first;
-  // then register, in, out and try extensions are stored backwards in this order.
-  if(flags_and_count&16) {
-    if(pre<4 || !Range(base,size,pre-4,4)) return false;
-    pre-=4;
-  }
-  for(unsigned flag=0;flag<2;++flag) if(flags_and_count&(1u<<flag)) {
-    if(pre<2 || !Range(base,size,pre-2,2)) return false;
-    pre-=2;uint16_t extension=Read<uint16_t>(reinterpret_cast<void*>(pre));
-    if(flag==0) regs+=extension;else ins+=extension;
-  }
-  if(regs+ins>UINT16_MAX) return false;
-  *count=regs+ins;return true;
+  return code_item_metadata::ReadRegisters(33,method,sizeof(art_method_abi::ArtMethod),
+      {map.begin,map.size,map.data_begin,map.data_size,0},count);
 }
 template<size_t Columns> bool Get(const stack_abi::BitTable<Columns>& table,uint32_t row,size_t column,uint32_t* result) {
   if(row>=table.rows || column>=Columns || table.columns[column+1]<table.columns[column]) return false;

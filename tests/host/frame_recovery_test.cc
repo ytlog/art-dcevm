@@ -38,7 +38,7 @@ return nullptr;}void* Install(void*,void*,void**,std::string*)override{return nu
 void Reset(){anchor=&outer;jit_owned=true;aot_owned=false;aot_debug=true;is_nterp=false;valid_map=true;header[0]=0x9ca233cc;decoded={};decoded.dex_regs=4;decoded.stack_maps.region={map_bits,0,sizeof(map_bits)*8};decoded.stack_maps.rows=1;for(unsigned i=0;i<=8;++i)decoded.stack_maps.columns[i]=i*32;std::memset(map_bits,0,sizeof(map_bits));map_bits[5]=1;map_bits[7]=1;
  decoded.inline_infos.region={inline_bits,0,sizeof(inline_bits)*8};decoded.inline_infos.rows=2;for(unsigned i=0;i<=6;++i)decoded.inline_infos.columns[i]=i*32;std::memset(inline_bits,0,sizeof(inline_bits));inline_bits[5]=8;inline_bits[11]=10;
  std::memcpy(bytes.data(),"dex\n035",8);dex={nullptr,bytes.data(),bytes.size(),bytes.data()+128,bytes.size()-128};cache->dex_file=reinterpret_cast<uint64_t>(&dex);klass.dex_cache=uint32_t(reinterpret_cast<uintptr_t>(cache));
- outer={};middle={};inner={};outer.dex_method_index=middle.dex_method_index=inner.dex_method_index=1;outer.data=reinterpret_cast<uintptr_t>(bytes.data()+160)|1;middle.data=reinterpret_cast<uintptr_t>(bytes.data()+192);inner.data=reinterpret_cast<uintptr_t>(bytes.data()+224);Put(160,4);Put(192,3);Put(224,2);
+ outer={};middle={};inner={};outer.dex_method_index=middle.dex_method_index=inner.dex_method_index=1;outer.data=reinterpret_cast<uintptr_t>(bytes.data()+160);middle.data=reinterpret_cast<uintptr_t>(bytes.data()+192);inner.data=reinterpret_cast<uintptr_t>(bytes.data()+224);Put(160,4);Put(192,3);Put(224,2);
  frames={{&inner,0,2,&anchor,Pc()},{&middle,0,1,&anchor,Pc()},{&outer,0,0,&anchor,Pc()}};
 }
 }
@@ -59,7 +59,10 @@ int main(){Hooks hooks;std::string error;assert(ConfigureStackAccess(hooks,Match
  valid_map=false;assert(!IsEvolutionPcRecoverable(&thread,Pc()));valid_map=true;
  decoded.stack_maps.region.bit_size=1;assert(!IsEvolutionPcRecoverable(&thread,Pc()));Reset();
  middle.data=reinterpret_cast<uintptr_t>(bytes.data()+bytes.size()-2);assert(!IsEvolutionPcRecoverable(&thread,Pc()));Reset();
+ // A JVMTI standard code item can retain a CompactDex owning file.
+ std::memcpy(bytes.data(),"cdex001",8);assert(IsEvolutionPcRecoverable(&thread,Pc()));Reset();
  // Separate/shared CDEX data and backwards preheader: locals + incoming registers.
+ outer.data|=1;middle.data|=1;inner.data|=1;
  std::memcpy(bytes.data(),"cdex001",8);Put(160,0x4000);Put(162,0);Put(192,0x2100);Put(194,0);Put(224,0x2000);Put(226,0);
  assert(IsEvolutionPcRecoverable(&thread,Pc()));
  frames={{&middle,0,1,&anchor,Pc()},{&outer,0,0,&anchor,Pc()}};Put(192,0x0100);Put(194,19);Put(190,0);Put(188,0);Put(186,18);Put(184,5);inline_bits[5]=29;assert(IsEvolutionPcRecoverable(&thread,Pc()));inline_bits[5]=28;assert(!IsEvolutionPcRecoverable(&thread,Pc()));
