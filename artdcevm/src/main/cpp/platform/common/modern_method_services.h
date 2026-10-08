@@ -17,8 +17,10 @@ class Binding final {
   bool (*same_)(void*,void*)=nullptr;
   void (*obsolete_)(void*,void*)=nullptr;
   void* class_linker_=nullptr;
+  const method_metadata::Layout* layout_=nullptr;
 };
-// Actual source commit adapter. Prepare before mutation, within owned Runnable.
+// Source commit adapter. Bind JNI oracles during bootstrap; prepare tables
+// inside the transaction owner's rooted native-only final boundary.
 // Both table Views must already have complete source/DEX/reflection calibration;
 // the classes and arrays remain rooted across preparation and the commit.
 // Mutating methods require the original ART exclusive-mutator/GC boundary.
@@ -31,6 +33,11 @@ class Service final : public structural_methods::Services {
       abi::arm64::android_common::FromReflectedMethod,
       const method_identity::Oracle&,const void* registered_binding,
       void* observed_class_linker,std::string* error);
+  static std::unique_ptr<Binding> BindOwned(HookEngine&,
+      const runnable_jni::Context&,
+      abi::arm64::android_common::FromReflectedMethod,
+      const method_identity::Oracle&,const void* registered_binding,
+      void* observed_class_linker,method_identity::Model,std::string* error);
   // Native-only preparation: no JNI, managed allocation or suspension. The
   // original ART transaction already roots both tables and disables GC.
   static std::unique_ptr<Service> PrepareTables(const Binding&,
@@ -69,5 +76,6 @@ class Service final : public structural_methods::Services {
   void* old_class_ = nullptr;
   void* new_class_ = nullptr;
   method_array::View old_, new_;
+  const method_metadata::Layout* layout_ = nullptr;
 };
 }  // namespace artdcevm::modern_methods

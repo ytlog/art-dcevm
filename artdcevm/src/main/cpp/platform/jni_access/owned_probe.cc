@@ -94,14 +94,15 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
     native_checked=true;
   }
   if(!native_checked)return false;
-  if(request.calibration.model==method_identity::Model::kMethod12Onward&&runtime_services_observed.receivers.class_linker) {
+  if(runtime_services_observed.receivers.class_linker) {
     ShadowHookEngine hooks;
     size_t native_index=0;
     while(native_index<request.count&&!(request.oracles[native_index].java_modifiers&0x100u))++native_index;
-    auto service=modern_methods::Service::Prepare(hooks,context,request.leaf,
+    auto binding=modern_methods::Service::BindOwned(hooks,context,request.leaf,
         request.oracles[native_index],request.registered_binding,
-        runtime_services_observed.receivers.class_linker,klass,table,klass,table,
-        UnretiredOwnedFixture,&error);
+        runtime_services_observed.receivers.class_linker,request.calibration.model,&error);
+    auto service=binding?modern_methods::Service::PrepareTables(*binding,klass,table,
+        klass,table,UnretiredOwnedFixture,&error):nullptr;
     if(!service||service->Count(klass)!=table.count)return false;
     for(size_t i=0;i<table.count;++i) {
       void* method=service->At(klass,i);

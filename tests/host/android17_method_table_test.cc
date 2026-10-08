@@ -141,5 +141,50 @@ int main(){
   hooks.missing=false;new_table.stride=40;
   assert(!modern_methods::Service::Prepare(hooks,context,Leaf,oracles[0],&binding,
       &linker,old_class_pointer,table,new_class,new_table,Retired,&error));
+  // The same final transaction adapter consumes the independently bound
+  // Method11 declaration; mutable data24 must not overwrite entry32/data16.
+  alignas(8) std::array<unsigned char,8+2*40> legacy_array{};
+  length=2;std::memcpy(legacy_array.data(),&length,4);
+  method_metadata::Method11 legacy_native{};
+  legacy_native.declaring_class=0x1000;
+  legacy_native.access_flags=oracles[0].java_modifiers;
+  legacy_native.dex_method_index=oracles[0].dex_method_index;
+  legacy_native.data=uintptr_t(&binding);
+  legacy_native.entry_point=0x12345678;
+  std::memcpy(legacy_array.data()+8,&legacy_native,sizeof(legacy_native));
+  legacy_native.access_flags=1;legacy_native.dex_method_index=77;
+  std::memcpy(legacy_array.data()+48,&legacy_native,sizeof(legacy_native));
+  method_array::View legacy_table=table;
+  legacy_table.array=legacy_array.data();legacy_table.count=2;legacy_table.stride=40;
+  legacy_table.boundaries.declared_count=2;legacy_table.boundaries.direct_count=1;
+  alignas(8) auto legacy_replacement=legacy_array;
+  auto legacy_new_table=legacy_table;legacy_new_table.array=legacy_replacement.data();
+  compact=0x2000;for(size_t i=0;i<2;++i)std::memcpy(legacy_replacement.data()+8+i*40,&compact,4);
+  native[3]=legacy_array.data()+8;
+  auto legacy_bound=modern_methods::Service::BindOwned(hooks,context,Leaf,oracles[0],
+      &binding,&linker,method_identity::Model::kMethod11,&error);
+  assert(legacy_bound);
+  assert(!modern_methods::Service::BindOwned(hooks,context,Leaf,oracles[0],
+      &binding,&linker,method_identity::Model::kMethod12Onward,&error));
+  assert(!modern_methods::Service::BindOwned(hooks,context,Leaf,oracles[0],
+      &binding,&linker,static_cast<method_identity::Model>(99),&error));
+  pending=true;before_jni=jni_checks;
+  auto legacy_service=modern_methods::Service::PrepareTables(*legacy_bound,
+      old_class_pointer,legacy_table,new_class,legacy_new_table,Retired,&error);
+  assert(legacy_service&&jni_checks==before_jni);pending=false;
+  assert(!modern_methods::Service::PrepareTables(*bound,old_class_pointer,
+      legacy_table,new_class,legacy_new_table,Retired,&error));
+  std::memcpy(legacy_replacement.data()+8+24,&zero,8);
+  legacy_service->TransferNativeBinding(legacy_service->At(old_class_pointer,0),
+      legacy_service->At(new_class,0));
+  std::memcpy(&transferred,legacy_replacement.data()+8+24,8);
+  assert(transferred==uintptr_t(&binding));
+  std::memcpy(&transferred,legacy_replacement.data()+8+32,8);
+  assert(transferred==0x12345678);
+  compact=0x2000;std::memcpy(legacy_array.data()+8,&compact,4);
+  legacy_service->RestoreOldDeclaringClasses();
+  assert(legacy_service->DeclaringClass(legacy_service->At(old_class_pointer,0))==old_class_pointer);
+  legacy_service->SetObsoleteEntry(legacy_service->At(old_class_pointer,0));
+  assert(obsolete_calls==2);
   std::cout<<"Android17 method table: interleaved declarations, constructors, copied methods and independent identity failures passed\n";
 }

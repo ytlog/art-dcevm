@@ -2,8 +2,8 @@
 #include <cstdlib>
 namespace artdcevm::modern_methods {
 namespace {
-bool Readable(const method_array::View& table) {
-  if(table.stride != sizeof(method_metadata::Method12) ||
+bool Readable(const method_array::View& table,const method_metadata::Layout& layout) {
+  if(table.stride != layout.size ||
       table.boundaries.declared_count > table.count ||
       table.boundaries.direct_count > table.boundaries.declared_count) return false;
   if(!table.array) return !table.count;
@@ -38,14 +38,28 @@ std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
     abi::arm64::android_common::FromReflectedMethod leaf,
     const method_identity::Oracle& native,const void* binding,
     void* linker,std::string* error) {
+  return BindOwned(hooks,context,leaf,native,binding,linker,
+      method_identity::Model::kMethod12Onward,error);
+}
+std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
+    const runnable_jni::Context& context,
+    abi::arm64::android_common::FromReflectedMethod leaf,
+    const method_identity::Oracle& native,const void* binding,
+    void* linker,method_identity::Model model,std::string* error) {
+  const method_metadata::Layout* layout=nullptr;
+  switch(model) {
+    case method_identity::Model::kMethod11:layout=&method_metadata::kAndroid11;break;
+    case method_identity::Model::kMethod12Onward:layout=&method_metadata::kAndroid12Onward;break;
+    default:if(error)*error="No independently calibrated commit method model";return nullptr;
+  }
   if(!linker){if(error)*error="Missing observed ClassLinker receiver";return nullptr;}
-  if(!native_method_binding::Calibrate(context,leaf,native,binding,error))return nullptr;
+  if(!native_method_binding::Calibrate(context,leaf,native,binding,model,error))return nullptr;
   auto root=reinterpret_cast<Root>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto same=reinterpret_cast<Same>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
   auto obsolete=reinterpret_cast<Obsolete>(hooks.FindSymbol("libart.so","_ZNK3art11ClassLinker31SetEntryPointsForObsoleteMethodEPNS_9ArtMethodE"));
   if(!root||!same||!obsolete){if(error)*error="Missing named modern structural-method service";return nullptr;}
   auto result=std::unique_ptr<Binding>(new Binding);
-  result->root_=root;result->same_=same;result->obsolete_=obsolete;result->class_linker_=linker;
+  result->root_=root;result->same_=same;result->obsolete_=obsolete;result->class_linker_=linker;result->layout_=layout;
   if(error)error->clear();return result;
 }
 std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
@@ -55,8 +69,8 @@ std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
   const auto fail=[&](const char* message)->std::unique_ptr<Service>{
     if(error)*error=message;return nullptr;
   };
-  if(!binding.root_||!binding.same_||!binding.obsolete_||!binding.class_linker_||
-      !old_class||!new_class||!retired||!Readable(old)||!Readable(replacement)||
+  if(!binding.layout_||!binding.root_||!binding.same_||!binding.obsolete_||!binding.class_linker_||
+      !old_class||!new_class||!retired||!Readable(old,*binding.layout_)||!Readable(replacement,*binding.layout_)||
       (old_class==new_class&&(old.array!=replacement.array||old.count!=replacement.count)))
     return fail("Modern commit methods require owned calibrated tables and services");
   for(const auto& entry:{std::pair<void*,const method_array::View*>{old_class,&old},
@@ -75,7 +89,7 @@ std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
   result->root_=binding.root_;result->same_=binding.same_;result->obsolete_=binding.obsolete_;
   result->retired_=retired;result->class_linker_=binding.class_linker_;
   result->old_class_=old_class;result->new_class_=new_class;
-  result->old_=old;result->new_=replacement;
+  result->old_=old;result->new_=replacement;result->layout_=binding.layout_;
   if(error)error->clear();return result;
 }
 void Service::RestoreOldDeclaringClasses()const {
@@ -109,8 +123,8 @@ void Service::TransferNativeBinding(void* source,void* target)const{
   RequireMember(source);RequireMember(target);
   if(!(Flags(source)&0x100u)||!(Flags(target)&0x100u))std::abort();
   uint64_t binding;
-  std::memcpy(&binding,static_cast<unsigned char*>(source)+offsetof(method_metadata::Method12,data),8);
-  std::memcpy(static_cast<unsigned char*>(target)+offsetof(method_metadata::Method12,data),&binding,8);
+  std::memcpy(&binding,static_cast<unsigned char*>(source)+layout_->data,8);
+  std::memcpy(static_cast<unsigned char*>(target)+layout_->data,&binding,8);
 }
 void Service::AddFlags(void* method,uint32_t flags)const{
   RequireMember(method);
