@@ -61,6 +61,12 @@ int main(){
  auto* empty=Arr(array_type,0);array_handle=Ref(empty);owners={};holder.initialized={};holder.actually_structural={};holder.initial_structural={};assert(reader.ReadHolder(&holder,&holder_view,&error)&&!holder_view.count);iterator.index=0;assert(!reader.ReadRoots(&iterator,&view,&error));
  auto* cache_view=New<g::hierarchy_allocation_abi::Cache>();cache_view->prefix.dex_file=123;g::hierarchy_allocation_abi::Cache cache_copy;
  assert(reader.ReadCache(cache_view,&cache_copy,&error));cache_view->num_types=1;assert(!reader.ReadCache(cache_view,&cache_copy,&error));alignas(8) uint64_t type_pair=0;cache_view->types=uintptr_t(&type_pair);assert(reader.ReadCache(cache_view,&cache_copy,&error));cache_view->num_types=1025;assert(!reader.ReadCache(cache_view,&cache_copy,&error));cache_view->num_types=1;
+ cache_view->fields=UINTPTR_MAX&~uintptr_t{15};cache_view->num_fields=1;
+ assert(!reader.ReadCache(cache_view,&cache_copy,&error));cache_view->fields=0;cache_view->num_fields=0;
+ cache_view->methods=UINTPTR_MAX&~uintptr_t{15};cache_view->num_methods=1;
+ assert(!reader.ReadCache(cache_view,&cache_copy,&error));cache_view->methods=0;cache_view->num_methods=0;
+ cache_view->types=UINTPTR_MAX&~uintptr_t{7};assert(!reader.ReadCache(cache_view,&cache_copy,&error));
+ cache_view->types=uintptr_t(&type_pair);assert(reader.ReadCache(cache_view,&cache_copy,&error));
  auto* klass=New<Class>();klass->object.klass=Ref(meta);klass->primitive_type=2<<16;auto* iface=New<Class>();iface->object.klass=Ref(meta);iface->access_flags=0x200;
  auto* methods=New<Methods>();methods->count=2;methods->values[0].declaring_class=Ref(klass);methods->values[1].declaring_class=Ref(iface);methods->values[1].access_flags=0x1000000;klass->methods=uintptr_t(methods);klass->virtual_methods_offset=1;klass->copied_methods_offset=1;
  g::MethodStorageView storage;assert(reader.ReadMethods(klass,&storage,&error)&&storage.count==2&&storage.direct_count==1);

@@ -4,6 +4,8 @@
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/method_array_view.h"
+#include "platform/common/native_cache_view.h"
+#include "platform/common/type_cache_update.h"
 #include <cstring>
 #include <limits>
 namespace artdcevm::android13 {
@@ -76,11 +78,15 @@ bool TransactionMetadataReader::ReadRoots(const void* raw,TransactionRootView* o
  return true;
 }
 bool TransactionMetadataReader::ReadCache(void* raw,hierarchy_allocation_abi::Cache* output,std::string* error)const{
- if(!root_||!Aligned(raw,4)||!output)return Fail(error,"Invalid transaction DexCache context");
+ if(!root_||!output)return Fail(error,"Invalid transaction DexCache context");
+ native_cache::View fields,methods;type_cache::View types;
+ if(!native_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Fields,0,&fields) ||
+    !native_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),native_cache::Member::Methods,0,&methods) ||
+    !type_cache::Read(33,raw,sizeof(hierarchy_allocation_abi::Cache),0,&types))
+  return Fail(error,"Transaction DexCache array range is inconsistent");
  const auto cache=Read<hierarchy_allocation_abi::Cache>(raw);
- auto pairs=[](uint64_t address,uint32_t count,size_t alignment){return count<=1024&&
-     ((address&&!(address&(alignment-1)))||(!address&&!count));};
- if(!cache.prefix.dex_file || !pairs(cache.types,cache.num_types,8)||!pairs(cache.methods,cache.num_methods,16)||!pairs(cache.fields,cache.num_fields,16))return Fail(error,"Transaction DexCache array range is inconsistent");
+ if(!cache.prefix.dex_file || (!cache.types && cache.num_types))
+  return Fail(error,"Transaction DexCache native link or type storage is missing");
  *output=cache;return true;
 }
 bool TransactionMetadataReader::ReadMethods(void* klass,MethodStorageView* output,std::string* error)const{
