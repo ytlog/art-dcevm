@@ -6,6 +6,7 @@
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/common/dex_file_metadata.h"
 #include <cstring>
 #include <vector>
 #include <jvmti.h>
@@ -25,10 +26,8 @@ bool ReadCache(void* cache,uint32_t index,void** output) {
   return method_cache::ReadCache(33,cache,sizeof(dex_cache_method_abi::Cache),0,index,output);
 }
 bool ReadMapping(void* cache,evolution::MappedDexMetadata* output,std::string* error) {
-  const auto address=Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file));
-  if(!address)return Fail(error,"Explicit DexCache has no DEX file");
-  const auto map=Read<validation_abi::DexMappingPrefix>(reinterpret_cast<const void*>(address),0);
-  return dex_mapping_abi::Normalize(33,map,0,output,error);
+  return dex_file_metadata::ReadCache(33,cache,sizeof(dex_cache_method_abi::Cache),
+      sizeof(validation_abi::DexMappingPrefix),0,output,error);
 }
 bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
   evolution::MappedDexMetadata map{};

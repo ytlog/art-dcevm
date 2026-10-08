@@ -101,6 +101,8 @@ int main(int argc, char** argv) {
   Reject([&] { android13::ReadCopyField(&klass, false, 2); });
   Reject([&] { android13::ReadCopyField(&root, false, 0); });
   Reject([&] { auto bad = klass; bad.dex_type_index = 0xffff; android13::ReadCopyClass(&bad, false); });
+  Reject([&] { auto bad = klass; bad.dex_type_index = 0x10000; android13::ReadCopyClass(&bad, false); });
+  Reject([&] { auto bad = klass; bad.dex_type_index = -1; android13::ReadCopyClass(&bad, false); });
   Reject([&] { auto bad = klass; bad.dex_cache = 0; android13::ReadCopyClass(&bad, false); });
   // CompactDex's variable strings can live outside the table mapping.
   const size_t data_start = U32(bytes, 108);
@@ -115,5 +117,5 @@ int main(int argc, char** argv) {
   Reject([&] { dex.data_size = 1; android13::ReadCopyClass(&klass, false); });
   Reject([&] { Put(compact, 68, UINT32_MAX); android13::ReadCopyClass(&klass, false); });
   assert(munmap(memory, 4096) == 0);
-  std::cout << "field-copy metadata: named accessors, checked field stride/count, normalized loader identities, parent/root, DEX/shared CompactDex descriptors and invalid ranges passed\n";
+  std::cout << "field-copy metadata: named accessors, checked field stride/count, normalized loader identities, parent/root, DEX/shared CompactDex descriptors, full signed type indices and invalid ranges passed\n";
 }

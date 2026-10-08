@@ -1,6 +1,6 @@
 #include "platform/android13/validation_metadata.h"
 #include "platform/symbols/android13.h"
-#include <cstring>
+#include "platform/common/dex_file_metadata.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -9,12 +9,7 @@ namespace {
 using GetMirrorClass = uintptr_t (*)(void*);
 GetMirrorClass get_mirror_class = nullptr;
 
-template<class T>
-T Read(const void* object, size_t offset) {
-  T value;
-  std::memcpy(&value, static_cast<const unsigned char*>(object) + offset, sizeof(value));
-  return value;
-}
+
 }
 
 void* GetValidationClass(void* definition) {
@@ -31,12 +26,9 @@ bool ReadValidationClassMetadata(void* klass, ValidationMetadata* output) {
   uint32_t cache_reference = identity.dex_cache;
   auto* cache = reinterpret_cast<const void*>(static_cast<uintptr_t>(cache_reference));
   if (!cache) return false;
-  auto* dex = reinterpret_cast<const void*>(
-      Read<uint64_t>(cache, offsetof(DexCachePrefix, dex_file)));
-  if (!dex) return false;
-  const auto mapping = Read<DexMappingPrefix>(dex, 0);
   ValidationMetadata metadata{};
-  if(!dex_mapping_abi::Normalize(33,mapping,static_cast<uint32_t>(identity.class_def_index),&metadata.dex,nullptr))return false;
+  if(!dex_file_metadata::ReadCache(33,cache,sizeof(DexCachePrefix),sizeof(DexMappingPrefix),
+      static_cast<uint32_t>(identity.class_def_index),&metadata.dex,nullptr))return false;
   metadata.access_flags=identity.access_flags;
   *output = metadata;
   return true;

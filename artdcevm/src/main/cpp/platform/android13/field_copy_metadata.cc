@@ -2,15 +2,14 @@
 #include "platform/android13/field_copy_metadata_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/common/dex_file_metadata.h"
 #include <cstdlib>
 #include <cstring>
 namespace artdcevm::android13 {
 namespace {
 using FieldText = const char* (*)(void*);
 FieldText name = nullptr, descriptor = nullptr;
-template<class T> T Read(const void* object, size_t offset) {
-  T value; std::memcpy(&value, static_cast<const unsigned char*>(object) + offset, sizeof(value)); return value;
-}
+
 void Require(bool condition) { if (!condition) std::abort(); }
 void Range(size_t offset, size_t width, size_t size) { Require(offset <= size && width <= size - offset); }
 uint32_t U32(const unsigned char* region, size_t size, size_t offset) {
@@ -28,14 +27,12 @@ const char* ClassDescriptor(void* klass) {
   using namespace validation_abi;
   // Class::GetDexFile deliberately reads the immutable DexCache link without
   // a read barrier. Both cache copies point to the same native DEX mapping.
-  auto cache_ref = Read<uint32_t>(klass, offsetof(ClassPrefix, dex_cache));
-  Require(cache_ref != 0);
-  auto* cache = reinterpret_cast<const void*>(static_cast<uintptr_t>(cache_ref));
-  auto* dex = reinterpret_cast<const void*>(Read<uint64_t>(cache, offsetof(DexCachePrefix, dex_file)));
-  Require(dex != nullptr);
-  auto mapping = Read<DexMappingPrefix>(dex, 0);
-  Require(mapping.begin != nullptr && mapping.data_begin != nullptr);
-  const uint32_t type = static_cast<uint16_t>(Read<int32_t>(klass, offsetof(ClassPrefix, dex_type_index)));
+  class_metadata::Identity identity;
+  Require(class_metadata::ReadIdentity(33,klass,sizeof(ClassPrefix),&identity) && identity.dex_type_index>=0);
+  auto* cache=reinterpret_cast<const void*>(static_cast<uintptr_t>(identity.dex_cache));
+  evolution::MappedDexMetadata mapping;
+  Require(dex_file_metadata::ReadCache(33,cache,sizeof(DexCachePrefix),sizeof(DexMappingPrefix),0,&mapping,nullptr));
+  const uint32_t type=static_cast<uint32_t>(identity.dex_type_index);
   const uint32_t string = U32(mapping.begin, mapping.size, Id(mapping.begin, mapping.size, 64, type));
   size_t at = U32(mapping.begin, mapping.size, Id(mapping.begin, mapping.size, 56, string));
   // Skip the bounded UTF-16 length ULEB; the mapped DEX is already verified.
