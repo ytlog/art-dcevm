@@ -6,6 +6,9 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/jni_method_targets.h"
+#include "platform/android13/transaction_metadata.h"
+#include "platform/method_array_view.h"
+#include <cstdlib>
 #include <algorithm>
 #include <cstring>
 namespace artdcevm::android13 {
@@ -42,11 +45,13 @@ class Update final:public Visitor {
    if(!IsValidationAssignableFrom(declaring,mirror_) && std::find(old_.begin(),old_.end(),declaring)==old_.end())return false;
    for(void* candidate:next_) {
      if(method) {
-       uint64_t array;std::memcpy(&array,static_cast<unsigned char*>(candidate)+offsetof(validation_abi::ClassPrefix,methods),8);
-       uint16_t direct_count;std::memcpy(&direct_count,static_cast<unsigned char*>(candidate)+offsetof(validation_abi::ClassPrefix,virtual_methods_offset),2);
-       if(!array)continue;
-       for(uint16_t i=0;i<direct_count;++i){void* next=reinterpret_cast<unsigned char*>(array)+art_method_abi::kArrayDataOffset+sizeof(art_method_abi::ArtMethod)*i;
-         if(SameStructuralMethodIdentity(next,member))return true;}
+       MethodStorageView storage;std::string error;
+       if(!GetTransactionMetadataReader().ReadMethods(candidate,&storage,&error))std::abort();
+       method_array::View view;
+       const size_t bytes=storage.array?art_method_abi::kArrayDataOffset+size_t(storage.count)*sizeof(art_method_abi::ArtMethod):0;
+       if(!method_array::Read(33,storage.array,bytes,{storage.direct_count,storage.copied_start,method_array::Order::DirectThenVirtual},&view))std::abort();
+       for(uint32_t i=0;i<view.boundaries.declared_count;++i){
+         if(view.IsDirect(i) && SameStructuralMethodIdentity(view.At(i),member))return true;}
      } else {
        bool statik=flags&0x8;auto view=ReadCopyClass(candidate,statik);
        for(size_t i=0;i<view.field_count;++i){auto next=ReadCopyField(candidate,statik,i);

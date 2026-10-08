@@ -3,6 +3,7 @@
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/method_array_view.h"
 #include <cstring>
 #include <limits>
 namespace artdcevm::android13 {
@@ -87,19 +88,20 @@ bool TransactionMetadataReader::ReadMethods(void* klass,MethodStorageView* outpu
  auto* array=reinterpret_cast<void*>(Read<uint64_t>(klass,offsetof(Class,methods)));
  if(array&&!Aligned(array,alignof(Method)))return Fail(error,"Method storage base is misaligned");
  uint32_t count=array?Read<uint32_t>(array):0;
- const uint16_t direct=Read<uint16_t>(klass,offsetof(Class,virtual_methods_offset));
- const uint16_t copied=Read<uint16_t>(klass,offsetof(Class,copied_methods_offset));
- if(direct>copied||copied>count)return Fail(error,"Method storage partitions are inconsistent");
+ method_array::Boundaries boundaries;
+ if(!method_array::ReadBoundaries(33,klass,sizeof(Class),count,method_array::Kind::Ordinary,nullptr,&boundaries))
+  return Fail(error,"Method storage partitions are inconsistent");
  static_assert(sizeof(size_t)==8);
- const size_t bytes=art_method_abi::kArrayDataOffset+size_t(count)*sizeof(Method);
- if(array&&uintptr_t(array)>std::numeric_limits<uintptr_t>::max()-bytes)return Fail(error,"Method storage address range overflow");
+ const size_t bytes=array?art_method_abi::kArrayDataOffset+size_t(count)*sizeof(Method):0;
+ method_array::View view;
+ if(!method_array::Read(33,array,bytes,boundaries,&view))return Fail(error,"Method storage address range overflow");
  for(uint32_t i=0;i<count;++i){
-  auto* method=static_cast<unsigned char*>(array)+art_method_abi::kArrayDataOffset+size_t(i)*sizeof(Method);
+  auto* method=view.At(i);
   auto* declaring=root_(method);if(!declaring)return Fail(error,"Method storage member lacks a declaring class");
   const uint32_t flags=Flags(method);const bool is_copied=(flags&(0x1000000|0x80000000))==0x1000000;
   if(declaring!=klass&&(!is_copied||!(Read<uint32_t>(declaring,offsetof(Class,access_flags))&0x200)))return Fail(error,"Method storage member has an invalid declaring class");
  }
- *output={array,count,direct,copied};return true;
+ *output={array,count,static_cast<uint16_t>(boundaries.direct_count),static_cast<uint16_t>(boundaries.declared_count)};return true;
 }
 bool TransactionMetadataReader::ReadAbstractVTable(void* klass,bool* has_abstract,std::string* error)const{
  if(!root_||!klass||!has_abstract)return Fail(error,"Missing abstract class metadata");

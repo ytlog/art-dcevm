@@ -70,7 +70,7 @@ void Hierarchy(Visitor* v){SourceInfo dexm{nullptr,kDexMethod},dexf{nullptr,kDex
  assert(v->VisitMethod(&unrelated_method,dexm)==nullptr);assert(v->VisitField(&static_shadow,dexf)==nullptr);assert(v->VisitMethod(&unrelated_method,generic)==&unrelated_method);}
 namespace artdcevm::android13 {void* ReadHeapReference(void*,size_t,bool){return nullptr;}}
 int main(){ auto profile=MatchedProfileForTest();Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;hooks.missing_identity=true;assert(!ConfigureStructuralMemberMappings(hooks,&error)&&!error.empty());hooks.missing_identity=false;assert(ConfigureStructuralMemberMappings(hooks,&error));assert(!ConfigureStructuralReflectiveTargets(hooks,artdcevm::android13::DeviceProfile{},&error));assert(ConfigureStructuralReflectiveTargets(hooks,profile,&error));
- old_array.size=3;new_array.size=2;old_class.methods=reinterpret_cast<uint64_t>(&old_array);new_class.methods=reinterpret_cast<uint64_t>(&new_array);
+ old_array.size=3;new_array.size=2;old_class.copied_methods_offset=3;new_class.copied_methods_offset=2;old_class.methods=reinterpret_cast<uint64_t>(&old_array);new_class.methods=reinterpret_cast<uint64_t>(&new_array);
  old_array.value[0].dex_method_index=1;old_array.value[0].access_flags=1;new_array.value[0].dex_method_index=1;new_array.value[0].access_flags=2;
  old_array.value[1].dex_method_index=2;old_array.value[1].access_flags=8;new_array.value[1].dex_method_index=2;new_array.value[1].access_flags=0;
  old_array.value[2].dex_method_index=3;fields[&old_class].instance={&retained,&removed};fields[&new_class].instance={&replacement,&wrong_type};
@@ -81,7 +81,7 @@ int main(){ auto profile=MatchedProfileForTest();Hooks hooks;ConfigureTransactio
  mirror=&old_class;assignable=&parent;inherited.dex_method_index=7;inherited.access_flags=8;constructor=inherited;constructor.access_flags=0x10000|8;virtual_method=inherited;virtual_method.access_flags=1;unrelated_method=inherited;
  roots[&inherited]=roots[&constructor]=roots[&virtual_method]=&parent;roots[&unrelated_method]=&unrelated;
  roots[&shadow]=roots[&private_shadow]=roots[&static_shadow]=&parent;fields[&new_class].instance.push_back(&new_shadow);
- new_array.size=3;new_array.value[2].dex_method_index=7;new_array.value[2].access_flags=8;new_class.virtual_methods_offset=3;
+ new_array.size=3;new_array.value[2].dex_method_index=7;new_array.value[2].access_flags=8;new_class.virtual_methods_offset=3;new_class.copied_methods_offset=3;roots[&new_array.value[2]]=&new_class;
  scenario=Shadowing;VisitStructuralReflectiveTargets(nullptr,&old_class,{&old_class},{&new_class},mappings,false);
  // Old participating declarations also shadow even when assignability is false.
  assignable=nullptr;scenario=Shadowing;VisitStructuralReflectiveTargets(nullptr,&old_class,{&old_class,&parent},{&new_class},mappings,false);
