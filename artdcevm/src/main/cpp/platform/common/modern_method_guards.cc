@@ -76,7 +76,13 @@ bool Calibrate(const runnable_jni::Context& context, void* data) {
   request.matched = context.self != nullptr && request.current() == context.self;
   return request.matched;
 }
-struct Entry { const char* symbol; void* proxy; void** original; void* target; };
+struct Entry {
+  const char* symbol;
+  void* proxy;
+  void** original;
+  void* target;
+  const char* equivalent_symbol = nullptr;
+};
 }
 
 bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
@@ -107,7 +113,10 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
   }
   Entry entries[] = {
     {"_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc", reinterpret_cast<void*>(Invoke), &original_invoke, nullptr},
-    {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflect, nullptr},
+    {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflect, nullptr,
+     // Fixed Android 11/12 reflection.h declares the same parameters without
+     // the PointerSize template. Both named entries use the same Guard owner.
+     "_ZN3art12InvokeMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectS4_S4_m"},
     {"_ZN3art17InvokeWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(NativeValues), &original_native_values, nullptr},
     {"_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(IdValues<false>), &original_id_values, nullptr},
     {"_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(IdVarargs<false>), &original_id_varargs, nullptr},
@@ -116,6 +125,9 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
   };
   for (auto& entry : entries) {
     entry.target = hooks.FindSymbol("libart.so", entry.symbol);
+    if (!entry.target && entry.equivalent_symbol) {
+      entry.target = hooks.FindSymbol("libart.so", entry.equivalent_symbol);
+    }
     if (!entry.target) { *error = std::string("Missing method guard entry: ") + entry.symbol; return false; }
   }
   using namespace abi::arm64::android_common;

@@ -1,6 +1,7 @@
 // Debug-only public-reflection oracle for the production metadata service.
 #ifdef ARTDCEVM_TESTING
 #include "platform/common/modern_field_metadata.h"
+#include "platform/common/native_method_table.h"
 #include "platform/common/field_mirror_calibration.h"
 #include "platform/common/modern_field_storage.h"
 #include "platform/common/runnable_executor.h"
@@ -28,13 +29,31 @@ struct Request {
   std::string descriptor,error;
   field_mirror::NamedField named_field=nullptr;
   field_mirror::Calibration mirror;
+  method_identity::Calibration method_model;
 };
 bool Observe(const runnable_jni::Context& scope,void* data) {
   auto& request=*static_cast<Request*>(data);
-  return request.metadata.Calibrate(scope,request.owner,request.descriptor.c_str(),
+  const bool calibrated=request.metadata.Calibrate(scope,request.owner,request.descriptor.c_str(),
       request.fields->data(),request.fields->size(),&request.error)&&
       field_mirror::Calibrate(scope,request.metadata,request.named_field,request.owner,
       request.fields->data(),request.fields->size(),&request.mirror,&request.error);
+  if(!calibrated)return false;
+  void* klass=nullptr;
+  if(!runnable_executor::DecodeStrongGlobal(scope,request.owner,&klass))return false;
+  request.method_model=method_identity::DebugCalibration();
+  const auto& model=request.method_model;native_method_table::View table;
+  if(!native_method_table::Read(request.metadata,model,klass,&table,&request.error))return false;
+  auto wrong=model;wrong.model=model.model==method_identity::Model::kMethod11?
+      method_identity::Model::kMethod12Onward:method_identity::Model::kMethod11;
+  native_method_table::View rejected;rejected.methods.count=0x7777;std::string error;
+  if(native_method_table::Read(request.metadata,wrong,klass,&rejected,&error)||
+      rejected.methods.count!=0x7777){request.error="Native complete DEX table accepted wrong method source layout";return false;}
+  return true;
+}
+bool ReadStoppedMethods(const exclusive_owned_roots::Context& scope,void* data){
+  auto& request=*static_cast<Request*>(data);native_method_table::View table;
+  return scope.count==1&&native_method_table::Read(request.metadata,request.method_model,
+      scope.roots[0],&table,&request.error);
 }
 std::string String(JNIEnv* env,jstring value) {
   if(!value)return {};
@@ -86,7 +105,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
     if(!global||env->ExceptionCheck())return failure("cannot own reflected field");
     oracles.push_back({global,stable_names[i].c_str(),stable_types[i].c_str(),static_cast<uint32_t>(flags[i])});
   }
-  Request request{{},global_owner,&oracles,String(env,descriptor),{},nullptr,{}};
+  Request request{{},global_owner,&oracles,String(env,descriptor),{},nullptr,{},{}};
   ShadowHookEngine hooks;
   if(!hooks.Initialize(&request.error)||!runnable_executor::Initialize(hooks,env,&request.error)||
       !request.metadata.Bind(hooks,&request.error))return failure(request.error);
@@ -94,6 +113,10 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
       hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
   auto result=runnable_executor::With(env,global_owner,Observe,&request);
   if(result!=runnable_jni::Result::kSuccess)return failure("field metadata: "+request.error);
+  exclusive_owned_roots::Service native_stop;
+  if(!exclusive_owned_roots::Service::Bind(hooks,&native_stop,&request.error)||
+      !native_stop.With(env,&global_owner,1,ReadStoppedMethods,&request,&request.error))
+    return failure("native complete method table stop: "+request.error);
   field_mirror::last_calibration=request.mirror;
   if(storage_required) {
   jmethodID constructor=env->GetMethodID(owner,"<init>","()V");

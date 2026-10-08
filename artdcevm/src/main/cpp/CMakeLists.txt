@@ -38,6 +38,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/owned_jit_receivers.cc
     platform/android17/method_table.cc
     platform/common/modern_method_services.cc
+    platform/common/native_method_table.cc
     platform/common/method_identity_calibration.cc
     platform/common/native_cache_service.cc
     platform/common/native_source_commit.cc
@@ -75,6 +76,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/pending_suspend_deopt.cc
     platform/android13/suspend_deopt_hooks.cc
     platform/common/modern_field_guards.cc
+    platform/common/modern_retirement_cleanup.cc
     platform/common/modern_method_guards.cc
     platform/common/retired_method_registry.cc
     platform/android13/retired_method_registry_bridge.cc

@@ -11,5 +11,8 @@ namespace artdcevm::retirement {
 bool InstallFieldEntryGuards(HookEngine&,JNIEnv*,jobject anchor_strong_global,
     void* observed_jni_id_manager,const field_mirror::Calibration&,
     RetiredFieldRegistry&,std::string* error);
+// Independent named invoke-polymorphic capability. Native ART supplies Thread,
+// field and frame arguments; no MethodHandle/ShadowFrame offsets are decoded.
+bool InstallMethodHandleFieldGuards(HookEngine&,std::string* error);
 size_t RejectedFieldEntries();
 }  // namespace artdcevm::retirement

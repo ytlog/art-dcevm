@@ -32,4 +32,8 @@ bool Calibrate(const runnable_jni::Context& context,
                abi::arm64::android_common::FromReflectedMethod named_leaf,
                const Oracle* oracles, size_t count, Calibration* output,
                std::string* error);
+#ifdef ARTDCEVM_TESTING
+// Completed independent debug oracle; contains scalar identities, no roots.
+Calibration DebugCalibration();
+#endif
 }  // namespace artdcevm::method_identity

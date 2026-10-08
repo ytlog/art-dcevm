@@ -73,6 +73,41 @@ bool Guard(JNIEnv* env,jfieldID id,jobject reflected) {
   }
   return true;
 }
+void *original_handle_get=nullptr,*original_handle_put=nullptr,*original_handle_exact=nullptr,*original_handle_invoke=nullptr;
+// handle.h defaulted copy declaration: forwarding an opaque native root slot
+// by value preserves ARM64 C++ argument ABI; we never construct/dereference it.
+struct NativeHandleArgument {void* slot;};
+static_assert(sizeof(NativeHandleArgument)==8);
+struct HandleExit {bool getter_rejected=false;HandleExit* previous;};
+thread_local HandleExit* active_handle_exit=nullptr;
+bool handles_installed=false,handles_incomplete=false;
+bool GuardNativeField(void* self,void* field,void* result=nullptr) {
+  if(!state.registry->TokenFor(field))return false;
+  if(result){const uint64_t zero=0;std::memcpy(result,&zero,8);}
+  ++rejected;state.throw_exception(self,"Ljava/lang/NoSuchFieldError;","Field removed by ART DCEVM");return true;
+}
+// Fixed15 method_handles.cc: Get returns void, Put returns bool. Every frame,
+// receiver reference and JValue is passed through opaquely with its native ABI.
+void HandleGet(void* self,const void* frame,void* receiver,void* field,int primitive,void* result) {
+  auto* exit=active_handle_exit;
+  if(GuardNativeField(self,field,result)){if(exit)exit->getter_rejected=true;return;}
+  reinterpret_cast<void(*)(void*,const void*,void*,void*,int,void*)>(original_handle_get)(self,frame,receiver,field,primitive,result);
+}
+bool HandlePut(void* self,void* frame,void* receiver,void* field,int primitive,void* value) {
+  if(GuardNativeField(self,field))return false;
+  return reinterpret_cast<bool(*)(void*,void*,void*,void*,int,void*)>(original_handle_put)(self,frame,receiver,field,primitive,value);
+}
+template<bool exact> bool HandleInvoke(void* self,void* frame,NativeHandleArgument handle,
+    NativeHandleArgument type,const void* operands,void* result) {
+  HandleExit exit{false,active_handle_exit};active_handle_exit=&exit;
+  struct Restore {HandleExit* prior;~Restore(){active_handle_exit=prior;}} restore{exit.previous};
+  using Fn=bool (*)(void*,void*,NativeHandleArgument,NativeHandleArgument,const void*,void*);
+  const bool success=reinterpret_cast<Fn>(exact?original_handle_exact:original_handle_invoke)(self,frame,handle,type,operands,result);
+  // The native getter helper returns void and its caller unconditionally says
+  // success. A pending exception must reach invoke-polymorphic as false so the
+  // interpreter dispatches it at the correct bytecode/catch handler.
+  return exit.getter_rejected?false:success;
+}
 struct Entry {std::string symbol;void* proxy;void** original;void* target=nullptr;};
 std::string JniSymbol(int indexed,bool is_static,bool setter,const char* type,const char* code,bool object) {
   std::string name=std::string(setter?"Set":"Get")+(is_static?"Static":"")+type+"Field";
@@ -166,6 +201,33 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
     tokens.push_back(token);
   }
   installed=true;return true;
+}
+bool InstallMethodHandleFieldGuards(HookEngine& hooks,std::string* error) {
+  if(handles_installed)return true;
+  if(!installed||handles_incomplete){*error="MethodHandle field guards require a complete durable field owner";return false;}
+  const char* get_name="_ZN3art12_GLOBAL__N_120MethodHandleFieldGetEPNS_6ThreadERKNS_11ShadowFrameERNS_6ObjPtrINS_6mirror6ObjectEEEPNS_8ArtFieldENS_9Primitive4TypeEPNS_6JValueE";
+  const char* put_name="_ZN3art12_GLOBAL__N_120MethodHandleFieldPutEPNS_6ThreadERNS_11ShadowFrameERNS_6ObjPtrINS_6mirror6ObjectEEEPNS_8ArtFieldENS_9Primitive4TypeERNS_6JValueE";
+  Entry entries[]={
+    {get_name,reinterpret_cast<void*>(HandleGet),&original_handle_get},
+    {put_name,reinterpret_cast<void*>(HandlePut),&original_handle_put},
+    {"_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE",reinterpret_cast<void*>(HandleInvoke<true>),&original_handle_exact},
+    {"_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE",reinterpret_cast<void*>(HandleInvoke<false>),&original_handle_invoke}};
+  for(auto& entry:entries){entry.target=hooks.FindSymbol("libart.so",entry.symbol.c_str());
+    if(!entry.target){*error="Missing MethodHandle field dispatch declaration: "+entry.symbol;return false;}}
+  using namespace abi::arm64::android_common;
+  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+  if(!construct||!destroy){*error="Missing native MethodHandle guard installation stop";return false;}
+  SuspendAll stopped{};construct(&stopped,"artdcevm MethodHandle field guards",false);
+  struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
+  std::vector<void*> tokens;
+  for(auto& entry:entries) {
+    void* token=hooks.Install(entry.target,entry.proxy,entry.original,error);
+    if(!token) {for(auto it=tokens.rbegin();it!=tokens.rend();++it){std::string rollback;
+        if(!hooks.Remove(*it,&rollback)){handles_incomplete=true;*error+="; "+rollback;}}return false;}
+    tokens.push_back(token);
+  }
+  handles_installed=true;return true;
 }
 size_t RejectedFieldEntries(){return rejected.load();}
 }  // namespace artdcevm::retirement

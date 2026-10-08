@@ -5,6 +5,8 @@
 #include "platform/common/native_cache_service.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/common/modern_retirement_cleanup.h"
+#include "platform/common/owned_method_table.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/common/runnable_executor.h"
@@ -443,6 +445,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFieldGuards(
       env->GetStaticLongField(owner,removed_static)==13&&!env->ExceptionCheck();
   if(success)success=artdcevm::retirement::InstallFieldEntryGuards(hooks,env,field_guard_anchor,
       services.receivers.jni_id_manager,artdcevm::field_mirror::DebugCalibration(),debug_retired_fields,&error);
+  if(success)success=artdcevm::retirement::InstallMethodHandleFieldGuards(hooks,&error);
   RetireFieldsRequest request{services.receivers.jni_id_manager,
     reinterpret_cast<void*(*)(void*,jfieldID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID")),
     reinterpret_cast<artdcevm::field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
@@ -463,5 +466,64 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFieldGuards(
   if(instance_root)env->DeleteGlobalRef(instance_root);if(static_root)env->DeleteGlobalRef(static_root);
   if(!success&&error.empty())error="Actual field guard token/exception/passthrough failed";
   return env->NewStringUTF(error.c_str());
+}
+namespace artdcevm::method_identity {
+Calibration DebugCalibration(){return jni_access::last_method_model;}
+}
+#endif
+
+#if defined(ARTDCEVM_TESTING)
+namespace {
+struct AllocatorRequest {
+ artdcevm::HookEngine* hooks;void* linker;std::vector<jobject> fields,methods;
+ jobject boot_method;artdcevm::field_mirror::NamedField field;
+ artdcevm::abi::arm64::android_common::FromReflectedMethod method;
+ std::vector<void*> owned,foreign;artdcevm::retirement::Membership proof;std::string error;
+};
+bool CollectAllocatorMembers(const artdcevm::runnable_jni::Context& context,void* data) {
+ auto& r=*static_cast<AllocatorRequest*>(data);
+ for(auto root:r.fields){void* mirror=nullptr;if(!artdcevm::runnable_executor::DecodeStrongGlobal(context,root,&mirror))return false;
+  void* field=r.field(mirror);if(!field)return false;r.owned.push_back(field);}
+ auto scope=artdcevm::abi::arm64::android_common::RunnableJniScope{context.self,context.env,context.vm};
+ for(auto root:r.methods){void* method=r.method(scope,root);if(!method)return false;r.owned.push_back(method);}
+ void* foreign=r.method(scope,r.boot_method);if(!foreign)return false;r.foreign.push_back(foreign);return true;
+}
+bool CalibrateAllocator(const artdcevm::exclusive_owned_roots::Context& context,void* data) {
+ auto& r=*static_cast<AllocatorRequest*>(data);
+ if(!artdcevm::retirement::CalibrateAllocatorMembership(*r.hooks,r.linker,context,r.owned,r.foreign,&r.proof,&r.error))return false;
+ debug_retired_fields.Retire(r.owned.front());
+ debug_retired_entries.Retire(r.owned.back());return true;
+}
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeAllocatorCleanup(JNIEnv* env,jclass,
+ jclass owner,jobject loader,jobjectArray fields,jobjectArray methods,jobject boot_method) {
+ artdcevm::ShadowHookEngine hooks;std::string error;
+ if(!artdcevm::jni_access::CalibrateServices(hooks,env,&error))return env->NewStringUTF(error.c_str());
+ const auto& services=artdcevm::jni_access::runtime_services_observed;
+ std::vector<jobject> globals;auto own=[&](jobject value){auto root=env->NewGlobalRef(value);if(root)globals.push_back(root);return root;};
+ jobject roots[]={own(loader),own(owner)};
+ AllocatorRequest request{&hooks,services.receivers.class_linker,{},{},own(boot_method),
+  reinterpret_cast<artdcevm::field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
+  reinterpret_cast<artdcevm::abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",artdcevm::abi::arm64::android_common::kFromReflectedMethod)),{},{},{},{}};
+ bool success=roots[0]&&roots[1]&&request.boot_method&&request.field&&request.method&&!env->ExceptionCheck();
+ for(jobjectArray array:{fields,methods}) {
+  if(!array){success=false;break;}
+  for(jsize i=0;i<env->GetArrayLength(array);++i){auto value=env->GetObjectArrayElement(array,i);auto root=own(value);
+   if(value)env->DeleteLocalRef(value);if(!root){success=false;break;}(array==fields?request.fields:request.methods).push_back(root);}
+ }
+ if(success)success=!request.fields.empty()&&!request.methods.empty()&&artdcevm::runnable_executor::With(env,roots[1],CollectAllocatorMembers,&request)==artdcevm::runnable_jni::Result::kSuccess;
+ artdcevm::exclusive_owned_roots::Service stop;
+ if(success)success=artdcevm::exclusive_owned_roots::Service::Bind(hooks,&stop,&error)&&stop.With(env,roots,2,CalibrateAllocator,&request,&error);
+ if(success)success=artdcevm::retirement::InstallRetirementCleanup(hooks,request.proof,debug_retired_fields,debug_retired_entries,&error);
+ for(auto root:globals)env->DeleteGlobalRef(root);
+ if(!success&&error.empty())error=request.error.empty()?"Owned allocator membership/cleanup installation failed":request.error;
+ return env->NewStringUTF(error.c_str());
+}
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_cleanupCounts(JNIEnv* env,jclass) {
+ jint values[]={static_cast<jint>(artdcevm::retirement::CleanupCalls()),static_cast<jint>(artdcevm::retirement::CleanupFields()),
+  static_cast<jint>(artdcevm::retirement::CleanupMethods()),static_cast<jint>(debug_retired_fields.Count()),static_cast<jint>(debug_retired_entries.Count())};
+ auto result=env->NewIntArray(5);if(result)env->SetIntArrayRegion(result,0,5,values);return result;
 }
 #endif

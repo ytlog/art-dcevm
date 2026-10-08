@@ -21,6 +21,28 @@ public final class RuntimeAccessSuite {
     private static native int probeCardOffset();
     private static native String probeMethodGuards(Class<?> owner);
     private static native String probeFieldGuards(Class<?> owner,Object instance,Field instanceField,Field staticField);
+    private static native String probeAllocatorCleanup(Class<?> owner,ClassLoader loader,Field[] fields,Executable[] methods,Method bootMethod);
+    private static native int[] cleanupCounts();
+    private static java.lang.ref.WeakReference<ClassLoader> allocatorFixture(String apkPath) throws Exception {
+        byte[] dex;
+        try(java.util.zip.ZipFile apk=new java.util.zip.ZipFile(apkPath)) {
+            java.util.zip.ZipEntry entry=apk.getEntry("assets/field-original/com/github/ytlog/artdcevm/fixture/FieldSubject.dex");
+            if(entry==null)throw new AssertionError("Missing isolated loader fixture DEX");
+            try(java.io.InputStream in=apk.getInputStream(entry);java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream()) {
+                byte[] block=new byte[4096];int count;while((count=in.read(block))!=-1)out.write(block,0,count);dex=out.toByteArray();
+            }
+        }
+        ClassLoader loader=new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(dex),null);
+        Class<?> owner=Class.forName("com.github.ytlog.artdcevm.fixture.FieldSubject",true,loader);
+        if(owner.getClassLoader()!=loader)throw new AssertionError("Fixture delegated to another loader");
+        Field[] fields=owner.getDeclaredFields();Method[] methods=owner.getDeclaredMethods();
+        java.lang.reflect.Constructor<?>[] constructors=owner.getDeclaredConstructors();
+        Executable[] members=new Executable[methods.length+constructors.length];
+        System.arraycopy(methods,0,members,0,methods.length);System.arraycopy(constructors,0,members,methods.length,constructors.length);
+        String error=probeAllocatorCleanup(owner,loader,fields,members,Object.class.getMethod("toString"));
+        if(error==null||!error.isEmpty())throw new AssertionError(error);
+        return new java.lang.ref.WeakReference<ClassLoader>(loader);
+    }
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current,int direct,int virtual,int tableCandidate);
     private static native int methodTableCount();
@@ -154,6 +176,11 @@ public final class RuntimeAccessSuite {
                 RetiredEntryFixture fieldFixture=new RetiredEntryFixture();
                 Field removedField=RetiredEntryFixture.class.getDeclaredField("removedField");
                 Field removedStatic=RetiredEntryFixture.class.getDeclaredField("removedStatic");
+                java.lang.invoke.MethodHandles.Lookup lookup=java.lang.invoke.MethodHandles.lookup();
+                java.lang.invoke.MethodHandle getter=lookup.unreflectGetter(removedField),setter=lookup.unreflectSetter(removedField);
+                java.lang.invoke.MethodHandle staticGetter=lookup.unreflectGetter(removedStatic),staticSetter=lookup.unreflectSetter(removedStatic);
+                java.lang.invoke.MethodHandle keptGetter=lookup.unreflectGetter(RetiredEntryFixture.class.getDeclaredField("keptField"));
+                if((int)getter.invokeExact(fieldFixture)!=41||(long)staticGetter.invokeExact()!=13L)throw new AssertionError("Owned field handle precondition");
                 String fieldGuardError=probeFieldGuards(RetiredEntryFixture.class,fieldFixture,removedField,removedStatic);
                 report.put("fieldEntryGuardError",fieldGuardError);
                 if(!fieldGuardError.isEmpty())throw new AssertionError(fieldGuardError);
@@ -166,6 +193,31 @@ public final class RuntimeAccessSuite {
                         RetiredEntryFixture.class.getDeclaredField("keptStatic").getLong(null)!=17)
                     throw new AssertionError("Unretired Field reflection changed");
                 report.put("fieldEntryGuardsCalibrated",true);
+                int handleRejected=0;
+                try {int value=(int)getter.invokeExact(fieldFixture);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {setter.invokeExact(fieldFixture,99);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {long value=(long)staticGetter.invokeExact();}catch(NoSuchFieldError expected){handleRejected++;}
+                try {staticSetter.invokeExact(99L);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {int value=(int)getter.invoke((Object)fieldFixture);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {setter.invoke((Object)fieldFixture,(Object)Integer.valueOf(99));}catch(NoSuchFieldError expected){handleRejected++;}
+                try {long value=(long)staticGetter.invoke();}catch(NoSuchFieldError expected){handleRejected++;}
+                try {staticSetter.invoke((Object)Long.valueOf(99));}catch(NoSuchFieldError expected){handleRejected++;}
+                try {getter.invokeWithArguments(fieldFixture);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {setter.invokeWithArguments(fieldFixture,99);}catch(NoSuchFieldError expected){handleRejected++;}
+                try {staticGetter.invokeWithArguments();}catch(NoSuchFieldError expected){handleRejected++;}
+                try {staticSetter.invokeWithArguments(99L);}catch(NoSuchFieldError expected){handleRejected++;}
+                if(handleRejected!=12||(int)keptGetter.invokeExact(fieldFixture)!=73)throw new AssertionError("Retired native MethodHandle field access accepted");
+                report.put("methodHandleFieldGuardsCalibrated",true).put("methodHandleFieldGuardChecks",handleRejected);
+                int[] beforeCleanup=cleanupCounts();
+                java.lang.ref.WeakReference<ClassLoader> loader=allocatorFixture(apkPath);
+                int[] cleanup=null;
+                for(int attempt=0;attempt<100;attempt++) {
+                    System.gc();System.runFinalization();Thread.sleep(20);cleanup=cleanupCounts();
+                    if(loader.get()==null&&cleanup[1]>beforeCleanup[1]&&cleanup[2]>beforeCleanup[2])break;
+                }
+                if(loader.get()!=null||cleanup[1]<=beforeCleanup[1]||cleanup[2]<=beforeCleanup[2]||cleanup[3]!=beforeCleanup[3]||cleanup[4]!=beforeCleanup[4])
+                    throw new AssertionError("Native loader pruning did not restore registry counts: "+java.util.Arrays.toString(cleanup));
+                report.put("retirementCleanupCounts",new JSONArray(cleanup)).put("retirementCleanupCalibrated",true);
             }
             if(exclusiveRoots) {
                 java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);
