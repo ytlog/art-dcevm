@@ -7,6 +7,7 @@
 #include "platform/android13/platform_string_abi.h"
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/field_copy_metadata.h"
+#include "platform/android13/thread_suspend_scope.h"
 #include "platform/symbols/android13.h"
 #include <cassert>
 #include <dlfcn.h>
@@ -32,6 +33,8 @@ std::unordered_map<std::string,size_t> names;
 std::string failure;
 std::vector<std::string> allocation_order;
 int barriers=0,gcs=0;
+bool exclusive_mutator=false;
+int retire_calls=0,suspend_calls=0;
 TypePair types[4]{};
 alignas(16) NativePair methods[4]{},fields[3]{};
 template<class T> T Read(const void* pointer,size_t at=0) { T value;std::memcpy(&value,static_cast<const unsigned char*>(pointer)+at,sizeof(value));return value; }
@@ -43,7 +46,7 @@ size_t New(int kind) {
   std::memset(pointer,0,256);nodes.push_back({pointer,kind});return i;
 }
 void GC() {
-  assert(generation<30);++generation;++gcs;
+  assert(generation<62);++generation;++gcs;
   std::unordered_map<uint32_t,uint32_t> moved;
   for(size_t i=0;i<nodes.size();++i) {
     void* old=Ptr(i),*fresh=heap+generation*1024*1024+i*256;
@@ -75,6 +78,20 @@ void* Current() { return thread; }
 void* Peer(void*){return Ptr(object_id);}
 void Runnable(void* t){*static_cast<uint32_t*>(t)=0;}
 void Native(void* t){*static_cast<uint32_t*>(t)=92u<<24;}
+void Suspend(void*,const char* cause,bool) {
+  assert(cause && !exclusive_mutator && Read<uint32_t>(thread)==(92u<<24));
+  exclusive_mutator=true;++suspend_calls;
+}
+void Resume(void*) {assert(exclusive_mutator);exclusive_mutator=false;}
+void Retire(void* object,uint8_t status) {
+  // Fixed Class::CheckSetStatus: retirement permits a backwards transition,
+  // requires a resolved class under exclusive mutator access, and cannot
+  // transition directly from kInitialized (14).
+  auto* klass=static_cast<Class*>(object);
+  unsigned old=klass->status>>28;
+  assert(exclusive_mutator && old>=7 && old!=14 && status==1);
+  klass->status=static_cast<uint32_t>(status)<<28;++retire_calls;
+}
 struct Dex {
   std::vector<unsigned char> bytes,shared_data;
   validation_abi::DexMappingPrefix mapping;
@@ -107,7 +124,7 @@ struct Dex {
 size_t ClassNode(const char* name,size_t parent,size_t cache) {
   size_t id=New(1);auto* klass=static_cast<Class*>(Ptr(id));
   klass->class_loader=Ref(Ptr(loader_id));klass->super_class=parent==SIZE_MAX?0:Ref(Ptr(parent));
-  klass->dex_cache=cache==SIZE_MAX?0:Ref(Ptr(cache));klass->status=14u<<28;
+  klass->dex_cache=cache==SIZE_MAX?0:Ref(Ptr(cache));klass->status=15u<<28;
   names[name]=id;return id;
 }
 size_t CacheNode(Dex& dex) { size_t id=New(2);auto* cache=static_cast<Cache*>(Ptr(id));cache->prefix.dex_file=reinterpret_cast<uintptr_t>(&dex.mapping);return id; }
@@ -128,6 +145,29 @@ void* Allocate(void*,void* old_slot,void* parent_slot,void* cache_slot,uint16_t 
   size_t id=New(1);auto* fresh=static_cast<Class*>(Ptr(id));*fresh=*old;
   fresh->super_class=Ref(HierarchyRootPool::Get(parent_slot));fresh->dex_cache=Ref(HierarchyRootPool::Get(cache_slot));return fresh;
 }
+size_t oom_class;
+std::vector<size_t> rejected_capture_classes;
+unsigned oom_status=7;
+void* AllocateThenOom(void* owner,void* old_slot,void* parent_slot,void* cache_slot,uint16_t index) {
+  void* fresh=Allocate(owner,old_slot,parent_slot,cache_slot,index);
+  oom_class=nodes.size()-1;
+  static_cast<Class*>(fresh)->status=oom_status<<28;
+  HandleRootScope roots(thread,5);roots.Set(0,fresh);
+  CaptureHierarchyAllocatedClass(old_slot); // The published original is never a temporary.
+  CaptureHierarchyAllocatedClass(roots.Slot(0));
+  for(int kind=0;kind<3;++kind) {
+    size_t id=New(1);rejected_capture_classes.push_back(id);
+    auto* wrong=static_cast<Class*>(Ptr(id));*wrong=*static_cast<Class*>(roots.Get(0));
+    if(kind==0) wrong->dex_cache=static_cast<Class*>(HierarchyRootPool::Get(old_slot))->dex_cache;
+    if(kind==1) wrong->class_loader=0;
+    if(kind==2) wrong->dex_type_index=1; // Same cache but descriptor names its superclass.
+    roots.Set(kind+1,wrong);CaptureHierarchyAllocatedClass(roots.Slot(kind+1));
+  }
+  GC();assert(roots.Get(0)==Ptr(oom_class));
+  // The named Ensure*Ids operation would now fail allocation. Capture must
+  // retain the linked class even though AllocateNewClassObject returns null.
+  return nullptr;
+}
 struct Hooks:HookEngine {
  bool Initialize(std::string*) override { return true; }
  void* FindSymbol(const char*,const char* symbol) override {
@@ -139,6 +179,9 @@ struct Hooks:HookEngine {
    if(!std::strcmp(symbol,"artJniMethodStart"))return reinterpret_cast<void*>(Native);
    if(!std::strcmp(symbol,"artJniMethodEnd"))return reinterpret_cast<void*>(Runnable);
    if(std::strcmp(symbol,handle_root_abi::kCurrentThread)==0) return reinterpret_cast<void*>(Current);
+   if(!std::strcmp(symbol,"_ZN3art16ScopedSuspendAllC2EPKcb")) return reinterpret_cast<void*>(Suspend);
+   if(!std::strcmp(symbol,"_ZN3art16ScopedSuspendAllD2Ev")) return reinterpret_cast<void*>(Resume);
+   if(!std::strcmp(symbol,"_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE")) return reinterpret_cast<void*>(Retire);
    return nullptr;
  }
  void* Install(void*,void*,void**,std::string*) override { return nullptr; }
@@ -172,11 +215,12 @@ bool IsValidationSubclassOf(void* source,void* target) {
 void CopyWriteBarrier(void*) { ++barriers; }
 }
 int main() {
-  void* mapped=mmap(reinterpret_cast<void*>(0x20000000),32*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
-  assert(mapped!=MAP_FAILED && reinterpret_cast<uintptr_t>(mapped)+32*1024*1024<=UINT32_MAX);heap=static_cast<unsigned char*>(mapped);
+  void* mapped=mmap(reinterpret_cast<void*>(0x20000000),64*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+  assert(mapped!=MAP_FAILED && reinterpret_cast<uintptr_t>(mapped)+64*1024*1024<=UINT32_MAX);heap=static_cast<unsigned char*>(mapped);
   Hooks hooks;ConfigureTransactionReaderForTest(hooks);std::string error;
   loader_id=New(3);object_id=ClassNode("Ljava/lang/Object;",SIZE_MAX,SIZE_MAX);array_type_id=New(1);static_cast<Class*>(Ptr(array_type_id))->component_type=Ref(Ptr(object_id));
   assert(ConfigureHandleRootScopes(hooks,MatchedProfileForTest(),&error));assert(ConfigureHierarchyAllocation(hooks,MatchedProfileForTest(),&error));
+  assert(ConfigureThreadSuspendScopes(hooks,MatchedProfileForTest(),&error));
   {
     HierarchyRootPool pool(thread);std::vector<void*> roots;
     for(int i=0;i<60;++i) roots.push_back(pool.Add(Ptr(object_id)));
@@ -190,6 +234,7 @@ int main() {
   assert(Read<void*>(thread,280)==nullptr);
   Dex old_b("LB;","Ljava/lang/Object;"),old_c("LC;","Ljava/lang/Object;"),old_d("LD;","LB;");
   Dex new_b("LB;","Ljava/lang/Object;",false,true),new_c("LC;","LB;",true);
+  Dex old_e("LE;","LC;");
   size_t old_bcache=CacheNode(old_b),old_ccache=CacheNode(old_c),old_dcache=CacheNode(old_d);
   b_id=ClassNode("LB;",object_id,old_bcache);c_id=ClassNode("LC;",object_id,old_ccache);d_id=ClassNode("LD;",b_id,old_dcache);
   b_cache_id=CacheNode(new_b);c_cache_id=CacheNode(new_c);
@@ -251,6 +296,81 @@ int main() {
     assert(ReadHeapReference(args.Get(0),32,false)==Ptr(object_id));
   }
   {
+    // A verifier-failed temporary class remains allocated until GC. ART's next
+    // heap subtype scan must skip it before reading the now-destroyed DexFile.
+    // Include an implicit descendant and relocate every rooted class before
+    // completion; retirement must follow handles, not stale native addresses.
+    Dex failed_dex("LC;","LB;");
+    size_t failed_cache=CacheNode(failed_dex),ecache=CacheNode(old_e);
+    size_t e_id=ClassNode("LE;",c_id,ecache);
+    size_t failed_class,failed_descendant;
+    int before=retire_calls;
+    {
+      Fixture fixture({{c_id,failed_cache}},1);
+      HierarchyBatch batch(reinterpret_cast<void*>(10));assert(batch.Prepare(&fixture.holder));
+      HandleRootScope args(thread,4);args.Set(0,Ptr(c_id));args.Set(1,Ptr(failed_cache));
+      failed_class=nodes.size();
+      args.Set(0,batch.Allocate(&fixture.owners[0],args.Slot(0),args.Slot(1),0,Allocate));
+      assert(args.Get(0)==Ptr(failed_class));
+      assert(IsValidationSubclassOf(args.Get(0),Ptr(b_id)));
+      args.Set(2,Ptr(e_id));args.Set(3,Ptr(ecache));failed_descendant=nodes.size();
+      args.Set(2,batch.Allocate(&fixture.owners[0],args.Slot(2),args.Slot(3),0,Allocate));
+      assert(args.Get(2)==Ptr(failed_descendant));
+      // An uninitialized old descendant preserves a resolved status in ART.
+      static_cast<Class*>(args.Get(2))->status=7u<<28;
+      GC();assert(args.Get(0)==Ptr(failed_class) && args.Get(2)==Ptr(failed_descendant));
+      batch.Complete(false);
+      assert(retire_calls==before+2 && !exclusive_mutator && Read<uint32_t>(thread)==0);
+      assert(static_cast<Class*>(Ptr(failed_class))->status==(1u<<28));
+      assert(static_cast<Class*>(Ptr(failed_descendant))->status==(1u<<28));
+      batch.Complete(false);assert(retire_calls==before+2); // Completion is idempotent.
+    }
+    // Model allocator reuse: old temporary cache now names a different DEX.
+    static_cast<Cache*>(Ptr(failed_cache))->prefix.dex_file=reinterpret_cast<uintptr_t>(&new_b.mapping);
+    failed_dex.mapping={};
+    GC();
+    int scanned=0;
+    for(const auto& node:nodes) {
+      if(node.kind!=1) continue;
+      unsigned status=static_cast<Class*>(node.pointer)->status>>28;
+      if(!(status>=7 || status==2) || !IsValidationSubclassOf(node.pointer,Ptr(b_id))) continue;
+      ++scanned;
+      assert(node.pointer!=Ptr(failed_class) && node.pointer!=Ptr(failed_descendant));
+      auto* cache=static_cast<Cache*>(ReadHeapReference(node.pointer,offsetof(Class,dex_cache),false));
+      assert(cache && cache!=Ptr(failed_cache));
+    }
+    assert(scanned>0);
+    // Successful publication owns the native DEX; no class may be retired.
+    Fixture fixture({{c_id,c_cache_id}},1);
+    HierarchyBatch batch(reinterpret_cast<void*>(10));assert(batch.Prepare(&fixture.holder));
+    HandleRootScope args(thread,2);args.Set(0,Ptr(c_id));args.Set(1,Ptr(c_cache_id));
+    args.Set(0,batch.Allocate(&fixture.owners[0],args.Slot(0),args.Slot(1),0,Allocate));
+    batch.Complete(true);batch.Complete(true);batch.Complete(false);
+    assert(retire_calls==before+2 && (static_cast<Class*>(args.Get(0))->status>>28)==15);
+  }
+  {
+    for(unsigned status:{7u,15u}) {
+      Dex failed_dex("LC;","LB;");size_t cache=CacheNode(failed_dex);
+      Fixture fixture({{c_id,cache}},1);
+      HierarchyBatch batch(reinterpret_cast<void*>(10));assert(batch.Prepare(&fixture.holder));
+      HandleRootScope args(thread,3);args.Set(0,Ptr(c_id));args.Set(1,Ptr(cache));
+      oom_status=status;rejected_capture_classes.clear();int before=retire_calls;
+      assert(batch.Allocate(&fixture.owners[0],args.Slot(0),args.Slot(1),0,AllocateThenOom)==nullptr);
+      assert(batch.Find("LC;",Ptr(loader_id))==Ptr(oom_class));
+      // Ensure calls on an ordinary class after the allocator's TLS scope
+      // ends cannot overwrite the captured failed allocation, even if its
+      // descriptor, loader and cache happen to match exactly.
+      size_t ordinary=New(1);*static_cast<Class*>(Ptr(ordinary))=*static_cast<Class*>(Ptr(oom_class));
+      args.Set(2,Ptr(ordinary));CaptureHierarchyAllocatedClass(args.Slot(2));
+      CaptureHierarchyAllocatedClass(nullptr);GC();
+      batch.Complete(false);
+      assert(retire_calls==before+1 && static_cast<Class*>(Ptr(oom_class))->status==(1u<<28));
+      assert((static_cast<Class*>(args.Get(2))->status>>28)==status);
+      for(size_t id:rejected_capture_classes) assert((static_cast<Class*>(Ptr(id))->status>>28)==status);
+      assert((static_cast<Class*>(Ptr(c_id))->status>>28)==15);
+    }
+  }
+  {
     Dex cyclic_b("LB;","LC;"),cyclic_c("LC;","LB;");size_t bc=CacheNode(cyclic_b),cc=CacheNode(cyclic_c);
     Fixture fixture({{b_id,bc},{c_id,cc}},3);HierarchyBatch batch(reinterpret_cast<void*>(10));assert(batch.Prepare(&fixture.holder));
     HandleRootScope args(thread,2);args.Set(0,Ptr(c_id));args.Set(1,Ptr(cc));
@@ -264,6 +384,7 @@ int main() {
     assert(failure=="Cannot resolve a superclass during batch allocation" && Read<void*>(thread,152)==nullptr);
   }
   assert(Read<void*>(thread,280)==nullptr && gcs>=10 && HierarchyDiagnostics(3)>=2 && HierarchyDiagnostics(4)>=1);
-  munmap(heap,32*1024*1024);
-  std::cout<<"hierarchy allocation: moving GC, anchor growth, recursive dependencies/cycles, verifier priority and unpublished cache boundary passed\n";
+  munmap(heap,64*1024*1024);
+  assert(suspend_calls>0 && !exclusive_mutator);
+  std::cout<<"hierarchy allocation: moving GC, anchor growth, recursive dependencies/cycles, verifier priority, failed-batch retirement before DexFile destruction, linked-class OOM capture/rejection and unpublished cache boundary passed\n";
 }

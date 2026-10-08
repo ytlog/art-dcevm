@@ -6045,10 +6045,18 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                 new byte[][]{asset("hier-interface/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex"), new byte[]{1, 2, 3}});
         hierarchyCheck(report, "hierarchy_invalid_batch_atomic", invalid != 0 && commitCalls() == before
                 && identity.getInterfaces().length == 0 && fixture.compute() == 75);
+        long retiredBeforeInvalid = hierarchyDiagnostics(5);
+        long capturedBeforeInvalid = hierarchyDiagnostics(6);
         int badCode = redefine(identity, asset("hier-invalid/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex"));
         hierarchyCheck(report, "new_hierarchy_invalid_bytecode_rejected_before_commit", badCode == 62 && commitCalls() == before
                 && identity.getSuperclass() == HierarchyBase.class && fixture.compute() == 75
                 && Class.forName(identity.getName()) == identity && !HierarchyInserted.class.isInstance(fixture));
+        long retiredAfterInvalid = hierarchyDiagnostics(5);
+        long capturedAfterInvalid = hierarchyDiagnostics(6);
+        report.put("failedHierarchyRetiredDelta", retiredAfterInvalid - retiredBeforeInvalid)
+                .put("failedHierarchyCapturedDelta", capturedAfterInvalid - capturedBeforeInvalid); save(report);
+        hierarchyCheck(report, "failed_hierarchy_linked_classes_retired_before_dex_release",
+                retiredAfterInvalid > retiredBeforeInvalid && capturedAfterInvalid > capturedBeforeInvalid);
         int badBatch = redefineBatch(new Class<?>[]{HierarchyInserted.class, identity}, new byte[][]{
                 asset("hier-parent/com/github/ytlog/artdcevm/fixture/HierarchyInserted.dex"),
                 asset("hier-invalid/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex")});

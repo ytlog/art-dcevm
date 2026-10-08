@@ -33,8 +33,12 @@ class HierarchyBatch {
                  HierarchyClassAllocator original);
   void* Find(const char* descriptor,void* loader);
   void RefreshCache(void* cache_slot);
+  // Called before Run returns and the driver's native DexFile owners die.
+  // Failure retires only this allocation scope's unpublished replacement classes.
+  void Complete(bool committed);
   static HierarchyBatch* Current();
  private:
+  friend void CaptureHierarchyAllocatedClass(const void*);
   struct Target { void* owner; void* klass; void* cache; bool structural; };
   struct Replacement { void* old_class; void* new_class; };
   void Fail(const char* message);
@@ -44,6 +48,9 @@ class HierarchyBatch {
   std::vector<Target> targets_;
   std::vector<Replacement> replacements_;
 };
+// Fixed EnsureInstanceFieldIds(Handle<Class>) boundary within the original
+// allocation scope captures linked classes even when a later ID allocation fails.
+void CaptureHierarchyAllocatedClass(const void* class_slot);
 bool HasHierarchyAllocationContext();
 void* AllocateHierarchyWithoutBatch(void* owner,void* old_slot,void* parent_slot,
                                    void* cache_slot,uint16_t index,HierarchyClassAllocator);

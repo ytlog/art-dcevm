@@ -1,0 +1,80 @@
+.text
+.p2align 2
+.global ContextTestRun
+.type ContextTestRun,%function
+ContextTestRun:
+  // Preserve the caller's complete AAPCS64 callee-save state on its own stack.
+  sub sp,sp,#160
+  stp x19,x20,[sp,#0]
+  stp x21,x22,[sp,#16]
+  stp x23,x24,[sp,#32]
+  stp x25,x26,[sp,#48]
+  stp x27,x28,[sp,#64]
+  stp x29,x30,[sp,#80]
+  stp d8,d9,[sp,#96]
+  stp d10,d11,[sp,#112]
+  stp d12,d13,[sp,#128]
+  stp d14,d15,[sp,#144]
+  mov x1,sp
+  mov x2,x18
+  bl ContextTestJump
+  brk #0  // The consumer must branch to the landing PC on a different stack.
+.size ContextTestRun,.-ContextTestRun
+.global ContextTestLanding
+.type ContextTestLanding,%function
+ContextTestLanding:
+  // Only x16/x17 may be clobbered before capturing the restored registers.
+  adrp x16,captured_gprs
+  add x16,x16,:lo12:captured_gprs
+  stp x0,x1,[x16,#0]
+  stp x2,x3,[x16,#16]
+  stp x4,x5,[x16,#32]
+  stp x6,x7,[x16,#48]
+  stp x8,x9,[x16,#64]
+  stp x10,x11,[x16,#80]
+  stp x12,x13,[x16,#96]
+  stp x14,x15,[x16,#112]
+  stp x18,x19,[x16,#144]
+  stp x20,x21,[x16,#160]
+  stp x22,x23,[x16,#176]
+  stp x24,x25,[x16,#192]
+  stp x26,x27,[x16,#208]
+  stp x28,x29,[x16,#224]
+  str x30,[x16,#240]
+  mov x17,sp
+  str x17,[x16,#248]
+  adrp x16,captured_fprs
+  add x16,x16,:lo12:captured_fprs
+  stp d0,d1,[x16,#0]
+  stp d2,d3,[x16,#16]
+  stp d4,d5,[x16,#32]
+  stp d6,d7,[x16,#48]
+  stp d8,d9,[x16,#64]
+  stp d10,d11,[x16,#80]
+  stp d12,d13,[x16,#96]
+  stp d14,d15,[x16,#112]
+  stp d16,d17,[x16,#128]
+  stp d18,d19,[x16,#144]
+  stp d20,d21,[x16,#160]
+  stp d22,d23,[x16,#176]
+  stp d24,d25,[x16,#192]
+  stp d26,d27,[x16,#208]
+  stp d28,d29,[x16,#224]
+  stp d30,d31,[x16,#240]
+  adrp x16,original_sp
+  ldr x17,[x16,:lo12:original_sp]
+  mov sp,x17
+  ldp x19,x20,[sp,#0]
+  ldp x21,x22,[sp,#16]
+  ldp x23,x24,[sp,#32]
+  ldp x25,x26,[sp,#48]
+  ldp x27,x28,[sp,#64]
+  ldp x29,x30,[sp,#80]
+  ldp d8,d9,[sp,#96]
+  ldp d10,d11,[sp,#112]
+  ldp d12,d13,[sp,#128]
+  ldp d14,d15,[sp,#144]
+  add sp,sp,#160
+  ret
+.size ContextTestLanding,.-ContextTestLanding
+.section .note.GNU-stack,"",%progbits

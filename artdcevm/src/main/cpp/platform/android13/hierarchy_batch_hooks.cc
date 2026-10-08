@@ -18,6 +18,12 @@ using Run = jvmtiError (*)(void*);
 Allocate original_allocate = nullptr;
 AllocateClass original_class_allocate = nullptr;
 Run original_run = nullptr;
+using EnsureIds=bool (*)(const void*);
+EnsureIds original_ensure_ids=nullptr;
+bool EnsureIdsProxy(const void* class_slot) {
+  CaptureHierarchyAllocatedClass(class_slot);
+  return original_ensure_ids(class_slot);
+}
 
 bool AllocateProxy(void* definition, void* holder, void* data) {
   if (ValidationHooks::InSourceTransaction() && HasHierarchyChange()) {
@@ -41,7 +47,9 @@ void* AllocateClassProxy(void* definition, void* old_class, void* super_class,
 jvmtiError RunProxy(void* driver) {
   if (!ValidationHooks::InSourceTransaction()) return original_run(driver);
   HierarchyBatch batch(driver);
-  return original_run(driver);
+  jvmtiError result=original_run(driver);
+  batch.Complete(result==JVMTI_ERROR_NONE);
+  return result;
 }
 }  // namespace
 
@@ -51,7 +59,8 @@ bool InstallHierarchyBatchHooks(HookEngine& hooks, const DeviceProfile& profile,
   void* allocate_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateSubtree);
   void* run_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kRedefineRun);
   void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
-  if (!allocate_target || !run_target || !class_target) {
+  void* ids_target=hooks.FindSymbol("libart.so","_ZN3art6mirror5Class22EnsureInstanceFieldIdsENS_6HandleIS1_EE");
+  if (!allocate_target || !run_target || !class_target || !ids_target) {
     *error = "Missing named hierarchy batch symbol";
     return false;
   }
@@ -72,6 +81,14 @@ bool InstallHierarchyBatchHooks(HookEngine& hooks, const DeviceProfile& profile,
     if (!hooks.Remove(run_token, &rollback)) *error += "; run unhook failed: " + rollback;
     rollback.clear();
     if (!hooks.Remove(allocate_token, &rollback)) *error += "; allocation unhook failed: " + rollback;
+    return false;
+  }
+  if(!hooks.Install(ids_target,reinterpret_cast<void*>(EnsureIdsProxy),
+                    reinterpret_cast<void**>(&original_ensure_ids),error)) {
+    std::string rollback;
+    if(!hooks.Remove(class_token,&rollback))*error+="; class unhook failed: "+rollback;
+    rollback.clear();if(!hooks.Remove(run_token,&rollback))*error+="; run unhook failed: "+rollback;
+    rollback.clear();if(!hooks.Remove(allocate_token,&rollback))*error+="; allocation unhook failed: "+rollback;
     return false;
   }
   return true;

@@ -17,6 +17,7 @@
 #include "platform/common/native_cache_reset.h"
 #include "platform/common/type_cache_update.h"
 #include <limits>
+#include "platform/android13/thread_suspend_scope.h"
 namespace artdcevm::android13 {
 namespace {
 using Class=validation_abi::ClassPrefix;
@@ -25,10 +26,13 @@ using Find=void*(*)(void*,void*,const char*,void*);
 using Failure=void(*)(void*,int,const void*,const BorrowedPlatformString*);
 Find find_class=nullptr;
 Failure record_failure=nullptr;
+void (*set_status_locked)(void*,uint8_t)=nullptr;
+struct AllocationCapture { HierarchyBatch* batch;size_t index;void* old_slot;void* cache_slot; };
+thread_local AllocationCapture* allocation_capture=nullptr;
 void*(*read_root)(void*)=nullptr;
 thread_local HierarchyBatch* batch=nullptr;
 thread_local HierarchyVerificationView* view=nullptr;
-std::atomic<uint64_t> counters[5]{};
+std::atomic<uint64_t> counters[7]{};
 void Require(bool value) { if(!value) std::abort(); }
 template<class T> T Read(const void* object,size_t at=0) {
   T value;std::memcpy(&value,static_cast<const unsigned char*>(object)+at,sizeof(value));return value;
@@ -144,9 +148,48 @@ void* HierarchyBatch::Allocate(void* owner,void* old_slot,void* cache_slot,uint1
     if(!HierarchyRootPool::Get(selected)) return nullptr;
   }
   if(std::strcmp(Descriptor(Parent(HierarchyRootPool::Get(old_slot))),requested)!=0) ++counters[0];
+  AllocationCapture capture{this,slot,old_slot,cache_slot};
+  struct RestoreCapture {AllocationCapture* previous;~RestoreCapture(){allocation_capture=previous;}} restore{allocation_capture};
+  allocation_capture=&capture;
   void* result=original(owner,old_slot,selected,cache_slot,index);
   // Recursive allocation can reallocate the native vector; use the saved index.
-  HierarchyRootPool::Set(replacements_[slot].new_class,result);return result;
+  // Keep the linked class captured before Ensure*Ids when it returns OOM/null.
+  if(result)HierarchyRootPool::Set(replacements_[slot].new_class,result);
+  return result;
+}
+void CaptureHierarchyAllocatedClass(const void* class_slot) {
+  if(!allocation_capture || !class_slot)return;
+  auto& capture=*allocation_capture;
+  void* klass=HierarchyRootPool::Get(class_slot);
+  void* old=HierarchyRootPool::Get(capture.old_slot);
+  if(!klass || klass==old ||
+     ReadHeapReference(klass,offsetof(Class,dex_cache))!=HierarchyRootPool::Get(capture.cache_slot) ||
+     !Matches(klass,Descriptor(old),Loader(old)))return;
+  void* slot=capture.batch->replacements_[capture.index].new_class;
+  if(HierarchyRootPool::Get(slot)!=klass)++counters[6];
+  HierarchyRootPool::Set(slot,klass);
+}
+void HierarchyBatch::Complete(bool committed) {
+  if(!committed && !replacements_.empty()) {
+    void* self=CurrentHierarchyThread();
+    NativeSuspendScope native(self);Require(native.Supported());
+    OwnedSuspendAll suspended("Retire failed hierarchy allocations");
+    for(const auto& replacement:replacements_) {
+      void* klass=HierarchyRootPool::Get(replacement.new_class);
+      if(!klass)continue;
+      Require(klass!=HierarchyRootPool::Get(replacement.old_class));
+      const uint32_t status=Read<uint32_t>(klass,offsetof(Class,status))>>28;
+      // Fixed IsResolved includes ErrorResolved(2). ForceClassInitialized waits
+      // for visibility before the Ensure*Ids capture/normal allocation return.
+      if(status>=7 || status==2) {
+        Require(status!=14);
+        set_status_locked(klass,1); // Fixed ClassStatus::kRetired, not an error.
+        Require((Read<uint32_t>(klass,offsetof(Class,status))>>28)==1);
+        ++counters[5];
+      }
+    }
+  }
+  replacements_.clear(); // Successful publication can never be retired later.
 }
 void* HierarchyBatch::Find(const char* name,void* loader) {
   for(auto it=replacements_.rbegin();it!=replacements_.rend();++it) {
@@ -196,15 +239,16 @@ void* HierarchyVerificationView::Resolve(const char* descriptor,void* loader,boo
       if(Matches(klass,descriptor,loader)) { ++counters[1];return klass; }
   return allow_batch && view && batch?batch->Find(descriptor,loader):nullptr;
 }
-uint64_t HierarchyDiagnostics(int index) { return counters[index>=0 && index<4?index:4].load(); }
+uint64_t HierarchyDiagnostics(int index) { return counters[index>=0 && index<7?index:4].load(); }
 bool ConfigureHierarchyAllocation(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
   if(!profile.Matched()){*error="Hierarchy allocation requires a matched device profile";return false;}
   auto find=reinterpret_cast<Find>(hooks.FindSymbol("libart.so",cas::kFindClass));
   auto failure=reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kRecordFailure));
   auto root=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
-  if(!find || !failure || !root || !RuntimeClassLinker()) {
+  auto retire=reinterpret_cast<decltype(set_status_locked)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE"));
+  if(!find || !failure || !root || !retire || !RuntimeClassLinker()) {
     *error="Missing named hierarchy allocation functions or ClassLinker";return false;
   }
-  find_class=find;record_failure=failure;read_root=root;return true;
+  find_class=find;record_failure=failure;read_root=root;set_status_locked=retire;return true;
 }
 }
