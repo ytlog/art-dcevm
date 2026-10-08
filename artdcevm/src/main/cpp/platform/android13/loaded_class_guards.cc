@@ -4,6 +4,7 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/validation_metadata.h"
+#include "platform/common/method_array_view.h"
 #include <cstdlib>
 #include <cstring>
 namespace artdcevm::android13 {
@@ -65,16 +66,9 @@ bool Matches(void* method, void* declaring, const char* name, const char* signat
   return matched;
 }
 template<class Fn> bool Methods(void* klass, Fn action) {
-  auto* array = reinterpret_cast<void*>(Read<uint64_t>(klass,offsetof(Class,methods)));
-  if (!array) return false;
-  uint32_t count = Read<uint32_t>(array,0);
-  uint16_t start = Read<uint16_t>(klass,offsetof(Class,virtual_methods_offset)); Require(start <= count);
-  // Includes copied default/miranda methods, as GetVirtualMethods does.
-  for (size_t i=start;i<count;++i) {
-    void* method = static_cast<unsigned char*>(array)+art_method_abi::kArrayDataOffset+i*sizeof(Method);
-    if (action(method)) return true;
-  }
-  return false;
+  method_array::View view;
+  Require(method_array::ReadTrustedClass(33,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view));
+  return view.VisitVirtual(action);
 }
 class Guard final : public loaded_class_abi::ClassVisitor {
  public:

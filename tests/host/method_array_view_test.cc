@@ -20,6 +20,17 @@ int main() {
     assert(g::Read(api,array.data(),8+5*stride,b,&v));
     assert(v.count==5 && v.stride==stride && v.At(4)==array.data()+8+4*stride && !v.At(5));
     for(uint32_t i=0;i<5;++i)assert(v.IsDirect(i)==(i<b.direct_count));
+    uint32_t visited=0;
+    assert(!v.VisitVirtual([&](void* method){assert(method==v.At(b.direct_count+visited));++visited;return false;}));
+    assert(visited==5-b.direct_count);
+    visited=0;
+    assert(v.VisitVirtual([&](void* method){assert(method==v.At(b.direct_count));++visited;return true;}));
+    assert(visited==1);
+    uint64_t address=reinterpret_cast<uintptr_t>(array.data());
+    std::memcpy(klass.data()+48,&address,8);
+    g::View trusted;
+    assert(g::ReadTrustedClass(api,klass.data(),klass.size(),g::Kind::Ordinary,nullptr,&trusted));
+    assert(trusted.count==v.count && trusted.stride==v.stride);
     g::View sentinel{nullptr,11,13,{1,2,g::Order::ByFlags}};
     assert(!g::Read(api,array.data(),8+5*stride-1,b,&sentinel));
     assert(sentinel.count==11 && sentinel.stride==13);
@@ -35,6 +46,32 @@ int main() {
   g::View v;
   assert(g::Read(37,array.data(),array.size(),b,&v));
   for(uint32_t i=0;i<6;++i)assert(v.IsDirect(i)==(i==1 || i==3 || i==4));
+  const uint32_t virtuals[]={0,2,5};uint32_t visited=0;
+  assert(!v.VisitVirtual([&](void* method){assert(method==v.At(virtuals[visited++]));return false;}));
+  assert(visited==3);
+  g::View trusted;
+  assert(g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,&dex,&trusted));
+  assert(trusted.boundaries.declared_count==5 && trusted.count==6);
+  g::View held{nullptr,11,13,{1,2,g::Order::ByFlags}};
+  assert(!g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,nullptr,&held));
+  assert(!g::ReadTrustedClass(37,klass.data(),107,g::Kind::Ordinary,&dex,&held));
+  assert(!g::ReadTrustedClass(37,klass.data()+1,108,g::Kind::Ordinary,&dex,&held));
+  assert(!g::ReadTrustedClass(37,nullptr,108,g::Kind::Ordinary,&dex,&held));
+  assert(!g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,&dex,nullptr));
+  assert(held.count==11 && held.stride==13);
+  for(uint64_t bad:{uint64_t{UINTPTR_MAX-7},uint64_t{reinterpret_cast<uintptr_t>(array.data())+1}}) {
+    std::memcpy(klass.data()+48,&bad,8);
+    assert(!g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,&dex,&held));
+    assert(held.count==11 && held.stride==13);
+  }
+  uint64_t empty=0;std::memcpy(klass.data()+48,&empty,8);
+  assert(!g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,&dex,&held));
+  artdcevm::evolution::MappedDexMemberCounts no_methods{};
+  assert(g::ReadTrustedClass(37,klass.data(),108,g::Kind::Ordinary,&no_methods,&held));
+  assert(!held.count && !held.VisitVirtual([](void*){assert(false);return true;}));
+  assert(!g::ReadTrustedClass(29,klass.data(),120,g::Kind::Primitive,nullptr,&held));
+  assert(!g::ReadTrustedClass(37,reinterpret_cast<void*>(UINTPTR_MAX-3),108,g::Kind::Primitive,nullptr,&held));
+  uint64_t restored=reinterpret_cast<uintptr_t>(array.data());std::memcpy(klass.data()+48,&restored,8);
   // The obsolete offset bytes above must not affect Android 17 boundaries.
   assert(g::ReadBoundaries(37,klass.data(),108,6,g::Kind::Proxy,nullptr,&b));
   assert(b.direct_count==1 && b.declared_count==6);
@@ -71,5 +108,5 @@ int main() {
   assert(unchanged.count==11 && unchanged.stride==13);
   assert(g::Read(37,nullptr,0,{0,0,g::Order::ByFlags},&v));
   assert(v.count==0 && !v.At(0) && !v.IsDirect(0));
-  std::cout<<"Method arrays: API30-37 stride/partitions, interleaved direct flags, copied exclusion, proxy/array/primitive counts, bounded failures passed\n";
+  std::cout<<"Method arrays: API30-37 stride/partitions, interleaved direct flags, copied exclusion, proxy/array/primitive counts, virtual traversal/early stop, trusted class bounds and bounded failures passed\n";
 }

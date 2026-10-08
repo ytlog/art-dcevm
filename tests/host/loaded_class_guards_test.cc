@@ -69,6 +69,7 @@ int main(int argc,char** argv) {
   refs[1]=&root; refs[2]=&base; refs[3]=&mid; refs[4]=&child; refs[5]=&unrelated; refs[6]=&iface;
   Loaded(root,0); Loaded(base,1); Loaded(mid,2); Loaded(child,3); Loaded(unrelated,1); Loaded(iface,1); Loaded(implementing,1);
   Methods child_methods,mid_methods;
+  child.copied_methods_offset=1;mid.copied_methods_offset=1;
   child.methods=reinterpret_cast<uintptr_t>(&child_methods); mid.methods=reinterpret_cast<uintptr_t>(&mid_methods);
   child_methods.values[0].declaring_class=4; child_methods.values[0].dex_method_index=selected->dex_index;
   mid_methods.values[0].declaring_class=3; mid_methods.values[0].dex_method_index=selected->dex_index;
@@ -102,7 +103,7 @@ int main(int argc,char** argv) {
   assert(check(1,Action::kCheckAbstractDependents)); // existing semantics continue past abstract child declaration
   mid_methods.values[0].access_flags=0x400; assert(!check(1,Action::kCheckAbstractDependents));
   child.access_flags=0x400; assert(check(1,Action::kCheckAbstractDependents)); child.access_flags=0;
-  child_methods.count=2; child.virtual_methods_offset=1; child_methods.values[1]=child_methods.values[0];
+  child_methods.count=2; child.copied_methods_offset=2; child.virtual_methods_offset=1; child_methods.values[1]=child_methods.values[0];
   child_methods.values[0].access_flags=1; child_methods.values[1].dex_method_index=UINT32_MAX;
   child_methods.values[1].declaring_class=0; // runtime methods need no declaring DEX
   assert(check(1,Action::kCheckFinalOverride)); // direct prefix and runtime signature excluded

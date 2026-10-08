@@ -63,6 +63,12 @@ struct View {
     return boundaries.order == Order::DirectThenVirtual ? index < boundaries.direct_count
         : (method_metadata::ReadAccessFlags(At(index)) & (0x8u | 0x2u | 0x10000u)) != 0;
   }
+  // Copied defaults/mirandas remain virtual; only direct declarations are
+  // excluded. Modern declarations may be interleaved with virtual methods.
+  template<class Fn> bool VisitVirtual(Fn action) const {
+    for(uint32_t i=0;i<count;++i)if(!IsDirect(i) && action(At(i)))return true;
+    return false;
+  }
 };
 inline bool Read(int api, void* array, size_t extent, const Boundaries& boundaries, View* output) {
   const auto* layout = method_metadata::Declaration(api);
@@ -78,5 +84,25 @@ inline bool Read(int api, void* array, size_t extent, const Boundaries& boundari
   } else if (extent) return false;
   if (boundaries.direct_count > boundaries.declared_count || boundaries.declared_count > count) return false;
   *output = {array, count, layout->size, boundaries}; return true;
+}
+// Trusted ART-owned allocation path, after exact ABI/profile calibration.
+// Its length header supplies extent; it cannot prove independent mapped size.
+// Caller maintains roots/mutator access; use Read with a verified extent when
+// available. API37 ordinary classes additionally need DEX declaration counts.
+inline bool ReadTrustedClass(int api,const void* klass,size_t extent,Kind kind,
+                             const evolution::MappedDexMemberCounts* dex,View* output) {
+  const auto* layout=class_metadata::detail::CheckedDeclaration(api,klass,extent);
+  const auto* method=method_metadata::Declaration(api);
+  if(!layout || !method || !output)return false;
+  uint64_t native;
+  std::memcpy(&native,static_cast<const unsigned char*>(klass)+offsetof(class_metadata::Class11,methods),8);
+  auto* array=reinterpret_cast<void*>(static_cast<uintptr_t>(native));
+  const auto address=reinterpret_cast<uintptr_t>(array);
+  if(array && (address%8 || address>UINTPTR_MAX-8))return false;
+  uint32_t count=0;
+  if(array)std::memcpy(&count,array,4);
+  Boundaries boundaries;
+  if(!ReadBoundaries(api,klass,extent,count,kind,dex,&boundaries))return false;
+  return Read(api,array,array?8+size_t{count}*method->size:0,boundaries,output);
 }
 }
