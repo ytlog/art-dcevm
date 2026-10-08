@@ -50,6 +50,7 @@
 #include "platform/android13/nterp_dispatch.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/device_diagnostics.h"
+#include "platform/android13/runnable_jni_diagnostics.h"
 #include "platform/android13/device_compiler_diagnostics.h"
 #include "platform/android13/compiled_frame_diagnostics.h"
 #include "platform/android13/device_profile.h"
@@ -233,6 +234,12 @@ int EvolutionClassRedefiner::Apply(const std::vector<Definition>& definitions) {
 
 #ifdef ARTDCEVM_TESTING
 // Diagnostics for the in-app regression harness; primary mutation uses an independent Agent.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_runnableJniProbe(
+    JNIEnv* env,jclass,jobject carrier,jobject fixture) {
+  return artdcevm::android13::DiagnosticRunnableJni(env,carrier,fixture);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_commitCalls(JNIEnv*, jclass) {
   return artdcevm::android13::ValidationHooks::SourceCommitCalls();

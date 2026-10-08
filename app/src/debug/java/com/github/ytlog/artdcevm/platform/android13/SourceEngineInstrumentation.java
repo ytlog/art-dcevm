@@ -153,6 +153,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
     private static native int sourceCheckedHandleCalls();
     private static native boolean probeCheckedHandleHook();
     private static native int checkJniMode(int requested);
+    private static native int runnableJniProbe(Object carrier,Object fixture);
     private static volatile int sink;
     @Override public void onCreate(Bundle args) {
         super.onCreate(args);
@@ -232,6 +233,7 @@ public final class SourceEngineInstrumentation extends Instrumentation {
                     : suite.equals("aot-parent-swap") ? testAotParentSwap(report, false, false)
                     : suite.equals("aot-parent-swap-two") ? testAotParentSwap(report, true, false)
                     : suite.equals("aot-parent-swap-nondebug") ? testAotParentSwap(report, false, true)
+                    : suite.equals("runnable-jni") ? testRunnableJniBridge(report)
                     : suite.equals("aot-suspend-deopt") ? testAotSuspendDeopt(report)
                     : suite.equals("jit-parent-swap-spin") ? testJitParentSwapSpin(report)
                     : suite.equals("jit-inline") ? testJitInlineEvolution(report)
@@ -273,6 +275,44 @@ public final class SourceEngineInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         result.putString("stream", report.toString());
         finish(passed ? -1 : 0, result);
+    }
+    private boolean testRunnableJniBridge(JSONObject report) throws Exception {
+        report.put("hierarchyChecks",new JSONArray()).put("phase","runnable_jni_bridge"); save(report);
+        Method carrier=Object.class.getMethod("toString");
+        Object fixture=new Object();
+        int previous=checkJniMode(-1);
+        try {
+            for(int mode=0;mode<2;mode++) {
+                checkJniMode(mode);
+                if(checkJniMode(-1)!=mode)throw new AssertionError("JNI mode unavailable");
+                int result=runnableJniProbe(carrier,fixture);
+                report.put("runnableJniMode"+mode,result);save(report);
+                hierarchyCheck(report,"runnable_jni_real_scope_mode_"+mode,result==255);
+                if(result!=255)return false;
+                int[] workers={-1,-1};
+                Throwable[] errors=new Throwable[2];
+                final int workerMode=mode;
+                Thread[] threads=new Thread[2];
+                for(int i=0;i<2;i++) {
+                    final int slot=i;
+                    threads[i]=new Thread(() -> {
+                        int saved=checkJniMode(-1);
+                        try {
+                            checkJniMode(workerMode);
+                            workers[slot]=runnableJniProbe(carrier,fixture);
+                        } catch(Throwable error) {errors[slot]=error;}
+                        finally {checkJniMode(saved);}
+                    },"RunnableJniProbe"+i);
+                    threads[i].start();
+                }
+                for(Thread thread:threads)thread.join(30000);
+                report.put("runnableJniWorkersMode"+mode,new JSONArray(workers));save(report);
+                hierarchyCheck(report,"runnable_jni_thread_isolation_mode_"+mode,
+                    !threads[0].isAlive()&&!threads[1].isAlive()&&errors[0]==null&&errors[1]==null&&
+                    workers[0]==255&&workers[1]==255);
+            }
+        } finally {checkJniMode(previous);}
+        return true;
     }
     private boolean testRedefinition(JSONObject report, Evolving fixture) throws Exception {
         Evolving alias = fixture;
