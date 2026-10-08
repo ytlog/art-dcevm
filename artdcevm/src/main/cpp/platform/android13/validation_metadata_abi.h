@@ -2,6 +2,7 @@
 
 #include "evolution/class_schema.h"
 #include "platform/dex_mapping_abi.h"
+#include "platform/class_metadata_abi.h"
 #include <cstdint>
 
 namespace artdcevm::android13 {
@@ -13,40 +14,9 @@ struct ValidationMetadata {
 namespace validation_abi {
 // android-13.0.0_r1 runtime/mirror/{object,class,dex_cache}.h. MANAGED
 // objects are packed to four-byte alignment; references have 32-bit encoding.
+using ObjectPrefix = class_metadata::ObjectPrefix;
+using ClassPrefix = class_metadata::Class11;
 #pragma pack(push, 4)
-struct ObjectPrefix {
-  uint32_t klass;
-  uint32_t monitor;
-};
-struct ClassPrefix {
-  ObjectPrefix object;
-  uint32_t class_loader;
-  uint32_t component_type;
-  uint32_t dex_cache;
-  uint32_t ext_data;
-  uint32_t iftable;
-  uint32_t name;
-  uint32_t super_class;
-  uint32_t vtable;
-  uint64_t ifields;
-  uint64_t methods;
-  uint64_t sfields;
-  uint32_t access_flags;
-  uint32_t class_flags;
-  uint32_t class_size;
-  int32_t clinit_thread_id;
-  int32_t dex_class_def_index;
-  int32_t dex_type_index;
-  uint32_t num_reference_instance_fields;
-  uint32_t num_reference_static_fields;
-  uint32_t object_size;
-  uint32_t object_size_alloc_fast_path;
-  uint32_t primitive_type;
-  uint32_t reference_instance_offsets;
-  uint32_t status;
-  uint16_t copied_methods_offset;
-  uint16_t virtual_methods_offset;
-};
 struct DexCachePrefix {
   ObjectPrefix object;
   uint32_t class_loader;

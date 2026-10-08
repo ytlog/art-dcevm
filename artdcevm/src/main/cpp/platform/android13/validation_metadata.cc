@@ -1,7 +1,6 @@
 #include "platform/android13/validation_metadata.h"
 #include "platform/symbols/android13.h"
 #include <cstring>
-#include <limits>
 
 namespace artdcevm::android13 {
 namespace {
@@ -27,19 +26,18 @@ bool ReadValidationClassMetadata(void* klass, ValidationMetadata* output) {
   // Match Class::GetDexFile: it explicitly reads this immutable DexCache link
   // without a read barrier. From-space and to-space caches name the same native
   // DexFile. Heap-reference poisoning is disabled by the verified release profile.
-  uint32_t cache_reference = Read<uint32_t>(klass, offsetof(ClassPrefix, dex_cache));
+  class_metadata::Identity identity{};
+  if(!class_metadata::ReadIdentity(33,klass,sizeof(ClassPrefix),&identity) || identity.class_def_index<0)return false;
+  uint32_t cache_reference = identity.dex_cache;
   auto* cache = reinterpret_cast<const void*>(static_cast<uintptr_t>(cache_reference));
   if (!cache) return false;
   auto* dex = reinterpret_cast<const void*>(
       Read<uint64_t>(cache, offsetof(DexCachePrefix, dex_file)));
   if (!dex) return false;
   const auto mapping = Read<DexMappingPrefix>(dex, 0);
-  ValidationMetadata metadata{{mapping.begin, mapping.size, mapping.data_begin, mapping.data_size,
-      static_cast<uint16_t>(Read<int32_t>(klass, offsetof(ClassPrefix, dex_class_def_index)))},
-      Read<uint32_t>(klass, offsetof(ClassPrefix, access_flags))};
-  if (!metadata.dex.begin || metadata.dex.size < 0x70 || !metadata.dex.data_begin ||
-      reinterpret_cast<uintptr_t>(metadata.dex.begin) > std::numeric_limits<uintptr_t>::max()-metadata.dex.size ||
-      reinterpret_cast<uintptr_t>(metadata.dex.data_begin) > std::numeric_limits<uintptr_t>::max()-metadata.dex.data_size) return false;
+  ValidationMetadata metadata{};
+  if(!dex_mapping_abi::Normalize(33,mapping,static_cast<uint32_t>(identity.class_def_index),&metadata.dex,nullptr))return false;
+  metadata.access_flags=identity.access_flags;
   *output = metadata;
   return true;
 }

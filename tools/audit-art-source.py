@@ -166,6 +166,9 @@ def main():
             checked_referrer_order = [name for position, name in sorted(positions) if position >= 0]
         versions.append({
             'tag': tag, 'commit': commit,
+            'classUsesMergedFieldArray': bool(re.search(r'uint64_t\s+fields_;',content['runtime/mirror/class.h'])),
+            'classStoresMethodSliceOffsets': bool(re.search(r'uint16_t\s+virtual_methods_offset_;',content['runtime/mirror/class.h'])),
+            'classClinitTidOrHashAtomic': 'std::atomic<uint32_t> clinit_thread_id_or_hash_' in content['runtime/mirror/class.h'],
             'artMethodIdentityPrefixFields': identity_fields,
             'artMethodPointerFields': re.findall(r'void\*\s+(\w+)_;', pointer_fields.group(1)) if pointer_fields else [],
             'artMethodAccessFlagsLoadRelaxed': 'return access_flags_.load(std::memory_order_relaxed)' in method_source,
