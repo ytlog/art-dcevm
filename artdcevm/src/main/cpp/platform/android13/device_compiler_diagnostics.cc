@@ -6,6 +6,7 @@
 #include "platform/android13/member_decode_abi.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/common/jit_service.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +19,7 @@ void (*stop)(void*),(*start)(void*),(*set_debuggable)(void*,bool);
 void* (*callbacks)(void*);
 bool (*inspected)(void*,void*),(*deoptimized)(void*,void*);
 void (*visible)(void*,void*,bool),(*initialize)(void*,void*,const void*);
-bool (*compile)(void*,void*,void*,uint32_t,bool);
+jit_service::Compiler compile;
 const void* (*oat_code)(void*,size_t);
 void (*invalidate)(void*);
 void** compiler_slot;
@@ -119,7 +120,7 @@ int DiagnosticForceOptimizedJit(JNIEnv* env,jobject executable){
  if(Read<uint32_t>(klass,offsetof(validation_abi::ClassPrefix,access_flags))&0x40000)return -6;
  ScopedInlineCompile policy(inline_experiment.enabled);
  visible(RuntimeClassLinker(),access.Self(),true);
- return compile(jit,method,access.Self(),2,false)?1:0;
+ return compile.Compile(jit,method,access.Self(),jit_service::Kind::kOptimized)?1:0;
 }
 int DiagnosticJitInlineExperiment(JNIEnv* env,bool enable){
  auto* jit=RuntimeJit();if(!jit||!*compiler_slot)return -1;Suspend suspend;NativeObjectAccess access(env);Require(access.Supported());auto* options=Options();
@@ -171,7 +172,9 @@ bool ConfigureDeviceCompilerDiagnostics(HookEngine& hooks,const DeviceProfile& p
  SYMBOL(inspected,"_ZN3art16RuntimeCallbacks22IsMethodBeingInspectedEPNS_9ArtMethodE")
  SYMBOL(deoptimized,"_ZN3art15instrumentation15Instrumentation13IsDeoptimizedEPNS_9ArtMethodE")
  SYMBOL(visible,"_ZN3art11ClassLinker40MakeInitializedClassesVisiblyInitializedEPNS_6ThreadEb")
- SYMBOL(compile,"_ZN3art3jit3Jit13CompileMethodEPNS_9ArtMethodEPNS_6ThreadENS_15CompilationKindEb")
+ if(!jit_service::Compiler::Bind(33,[&](const char* name){return hooks.FindSymbol("libart.so",name);},&compile)){
+  *error="Missing named compiler diagnostic CompileMethod";return false;
+ }
  SYMBOL(initialize,"_ZN3art15instrumentation15Instrumentation21InitializeMethodsCodeEPNS_9ArtMethodEPKv")
  SYMBOL(oat_code,"_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE")
  SYMBOL(compiler_slot,"_ZN3art3jit3Jit13jit_compiler_E")

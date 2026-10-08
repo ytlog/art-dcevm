@@ -3,8 +3,8 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/common/code_item_metadata.h"
+#include "platform/common/bit_table_read.h"
 #include <cstring>
-#include <limits>
 #if defined(ARTDCEVM_TESTING) && defined(__ANDROID__)
 #include <android/log.h>
 #define RECOVERY_LOG(...) __android_log_print(ANDROID_LOG_ERROR,"ArtDcevmRecovery",__VA_ARGS__)
@@ -44,17 +44,9 @@ bool Registers(void* method,uint32_t* count) {
 template<size_t Columns> bool Get(const stack_abi::BitTable<Columns>& table,uint32_t row,size_t column,uint32_t* result) {
   if(row>=table.rows || column>=Columns || table.columns[column+1]<table.columns[column]) return false;
   size_t width=table.columns[column+1]-table.columns[column];
-  size_t offset=size_t{row}*table.columns[Columns]+table.columns[column];
-  if(width>32 || offset>table.region.bit_size || width>table.region.bit_size-offset ||
-     table.region.bit_start>std::numeric_limits<size_t>::max()-offset-width || (width&&!table.region.data)) return false;
-  uint32_t value=0;
-  for(size_t bit=0;bit<width;++bit) {
-    size_t at=table.region.bit_start+offset+bit;
-    auto* bytes=static_cast<const unsigned char*>(table.region.data);
-    value|=uint32_t{(bytes[at/8]>>(at%8))&1u}<<bit;
-  }
-  *result=value-1; // SOURCE BitTable kValueBias == UINT32_MAX.
-  return true;
+  return bit_table_read::ReadCell(
+      {table.region.data,table.region.bit_start,table.region.bit_size},
+      table.rows,row,table.columns[Columns],table.columns[column],width,result);
 }
 struct PcVisitor final:stack_abi::Visitor {
   PcVisitor(void* thread,uintptr_t target):Visitor(thread,nullptr,stack_abi::WalkKind::kIncludeInlined),target(target) {}

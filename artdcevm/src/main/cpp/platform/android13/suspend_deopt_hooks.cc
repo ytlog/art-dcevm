@@ -7,6 +7,7 @@
 #include "platform/android13/frame_recovery.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/runtime_access.h"
+#include "platform/common/async_deopt_service.h"
 #include <cstring>
 
 namespace artdcevm::android13 {
@@ -17,7 +18,7 @@ suspend_abi::PushContext push_context = nullptr;
 suspend_abi::Deoptimize deoptimize = nullptr;
 std::atomic<uint64_t> suspend_deopt_hits{0};
 PendingSuspendDeopt pending_deopt;
-bool (*is_async)(const void*, uintptr_t) = nullptr;
+async_deopt_service::Service is_async;
 // Only the owning thread writes this metadata, after claiming. Publication of
 // Executing and Completed bounds its lifetime; caller TLS is never consulted.
 void* selected_method = nullptr;
@@ -32,7 +33,9 @@ struct Eligibility final : stack_abi::Visitor {
     if(!method) return true;
     if(Read<uint32_t>(method,offsetof(art_method_abi::ArtMethod,dex_method_index))==UINT32_MAX ||
        (art_method_abi::ReadAccessFlags(method)&0x100)) return true;
-    if(quick_frame && header && is_async(RuntimeInstance(),pc) && IsEvolutionPcRecoverable(thread,pc)) {
+    bool async_allowed=false;
+    if(quick_frame && header && is_async.Query(RuntimeInstance(),method,pc,&async_allowed) &&
+       async_allowed && IsEvolutionPcRecoverable(thread,pc)) {
       allowed=true;selected_method=method;selected_quick=quick_frame;selected_header=header;
     }
     return false; // The first Java frame is precisely where ART can otherwise abort.
@@ -104,8 +107,13 @@ bool InstallSuspendDeoptHook(HookEngine& hooks, std::string* error) {
   auto deopt = reinterpret_cast<suspend_abi::Deoptimize>(
       hooks.FindSymbol("libart.so", cas::kDeoptimize));
   void* target = hooks.FindSymbol("libart.so", cas::kTestSuspendFromCode);
-  auto async = reinterpret_cast<decltype(is_async)>(hooks.FindSymbol("libart.so",cas::kIsAsyncDeoptimizeable));
-  if (!push || !deopt || !target || !async) {
+  // This installer remains behind the calibrated Android 13 profile. The
+  // declaration is selected explicitly; no SDK or symbol-fallback ABI guess.
+  constexpr auto declaration=async_deopt_service::Declaration::kPcOnly;
+  async_deopt_service::Service async;
+  bool async_bound=async_deopt_service::Service::Bind(declaration,
+      hooks.FindSymbol("libart.so",async_deopt_service::Service::SymbolName(declaration)),&async);
+  if (!push || !deopt || !target || !async_bound) {
     *error = "Missing named suspend entrypoint or deoptimization capability";
     return false;
   }

@@ -1,5 +1,6 @@
 #include "device_profile_fixture.h"
 #include "platform/android13/device_compiler_diagnostics.h"
+#include "platform/common/jit_service.h"
 #include "platform/android13/device_compiler_diagnostics_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/member_decode_abi.h"
@@ -46,8 +47,8 @@ void Debug(void* p,bool value){assert(p==runtime);policy.java_debuggable=value;r
 void* Callbacks(void* p){assert(p==runtime);return p;}
 bool Inspected(void*,void*){return inspect;}bool Deoptimized(void*,void*){return deopt;}
 void Visible(void* p,void* self,bool wait){assert(p==reinterpret_cast<void*>(45)&&self==&thread&&wait);++visible_calls;}
-bool Compile(void* p,void* method,void* self,uint32_t kind,bool prejit){
- assert(suspended&&p==&jit&&self==&thread&&kind==2&&!prejit);++compilation_calls;
+bool Compile(void* p,void* method,void* self,artdcevm::jit_service::CompilationKind12 kind,bool prejit){
+ assert(suspended&&p==&jit&&self==&thread&&kind==artdcevm::jit_service::CompilationKind12::kOptimized&&!prejit);++compilation_calls;
  if(emit_inline_graph){assert(options.debuggable&&policy.java_debuggable&&run_proxy);a::Graph inner{},outer{};inner.debuggable=outer.debuggable=true;inner.method=inline_callee;outer.method=method;
   Instruction entry{};Invoke call{},intrinsic{},second{};Instruction ordinary{};call.instruction.packed=(38<<2)|(3<<10)|1;intrinsic.instruction.packed=43<<2;intrinsic.intrinsic=1;second.instruction.packed=40<<2;second.arguments=9;ordinary.packed=1<<2;
   call.instruction.next=&intrinsic;intrinsic.instruction.next=&second;second.instruction.next=&ordinary;

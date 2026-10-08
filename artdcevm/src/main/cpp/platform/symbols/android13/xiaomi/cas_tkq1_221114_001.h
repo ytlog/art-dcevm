@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "platform/abi/arm64/android11/async_deopt.h"
 namespace artdcevm::symbols::android13::xiaomi::cas {
 inline constexpr char kRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kStructuralRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
@@ -22,7 +23,7 @@ inline constexpr char kFindClass[] = "_ZN3art11ClassLinker9FindClassEPNS_6Thread
 inline constexpr char kLookupClass[] = "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE";
 inline constexpr char kDeleteClassLoader[] = "_ZN3art11ClassLinker17DeleteClassLoaderEPNS_6ThreadERKNS0_15ClassLoaderDataEb";
 inline constexpr char kLinearAllocContainsUnsafe[] = "_ZNK3art11LinearAlloc14ContainsUnsafeEPv";
-inline constexpr char kIsAsyncDeoptimizeable[] = "_ZNK3art7Runtime21IsAsyncDeoptimizeableEm";
+inline constexpr auto& kIsAsyncDeoptimizeable = ::artdcevm::abi::arm64::android11::kIsAsyncDeoptimizeable;
 inline constexpr char kTestSuspendFromCode[] = "artTestSuspendFromCode";
 inline constexpr char kPushDeoptimizationContext[] = "_ZN3art6Thread25PushDeoptimizationContextERKNS_6JValueEbNS_6ObjPtrINS_6mirror9ThrowableEEEbNS_24DeoptimizationMethodTypeE";
 inline constexpr char kDeoptimize[] = "artDeoptimize";
