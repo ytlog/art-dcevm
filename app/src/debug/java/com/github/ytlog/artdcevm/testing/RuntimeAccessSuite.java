@@ -13,9 +13,11 @@ public final class RuntimeAccessSuite {
     private static native int probe(Object carrier,Thread current);
     private static native String probeRoute();
     private static native int probeContext();
+    private static native String probeRuntimeServices();
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current);
-    public JSONObject run(String apkPath) {
+    public JSONObject run(String apkPath) { return run(apkPath,false); }
+    public JSONObject run(String apkPath,boolean runtimeServices) {
         JSONObject report=new JSONObject();
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
@@ -60,6 +62,12 @@ public final class RuntimeAccessSuite {
             for(int i=0;i<2;i++) {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128||contexts[i]!=384||models[i]!=model)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);
+            }
+            if(runtimeServices) {
+                String serviceError=probeRuntimeServices();
+                report.put("runtimeServicesError",serviceError);
+                report.put("runtimeServicesCalibrated",serviceError.isEmpty());
+                if(!serviceError.isEmpty())throw new AssertionError(serviceError);
             }
             report.put("passed",true);
         } catch(Throwable error) {

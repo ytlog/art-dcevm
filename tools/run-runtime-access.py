@@ -8,6 +8,7 @@ p.add_argument('--serial',required=True)
 p.add_argument('--apk',type=Path,default=Path('app/build/outputs/apk/debug/app-debug.apk'))
 p.add_argument('--adb',default=shutil.which('adb'))
 p.add_argument('--skip-install',action='store_true')
+p.add_argument('--runtime-services',action='store_true',help='Require source-family Runtime service calibration')
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
 out=new_evidence_directory(Path('build/evidence/runtime-access'))
@@ -23,16 +24,19 @@ try:
         assert metadata['installedApkSha256']==metadata['apkSha256']
     else:adb('install','install','-r',str(a.apk))
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
-    output=adb('instrumentation','shell','am','instrument','-w','-r','dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
+    output=adb('instrumentation','shell','am','instrument','-w','-r',*(['-e','runtimeServices','true'] if a.runtime_services else []),'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match
-    code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M);assert code and code.group(1).strip()=='-1'
     report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
+    code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M)
+    if not code or code.group(1).strip()!='-1':
+        raise RuntimeError(report.get('error') or 'Instrumentation did not report success')
     metadata['passed']=report.get('passed') is True and report.get('mainCallbackHits')==128 and report.get('workerCallbackHits')==[128,128] and report.get('privateEvolutionInitialized') is False
     routes={'from-reflected-method','new-global-ref'}
     metadata['passed']=metadata['passed'] and report.get('mainRoute') in routes and len(report.get('workerRoutes',[]))==2 and all(route in routes for route in report['workerRoutes'])
     metadata['passed']=metadata['passed'] and report.get('mainContextChecks')==384 and report.get('workerContextChecks')==[384,384]
     model=report.get('mainMethodModel')
     metadata['passed']=metadata['passed'] and model in (11,12) and report.get('workerMethodModels')==[model,model] and len(report.get('methodDexIndices',[]))==3
+    if a.runtime_services:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)

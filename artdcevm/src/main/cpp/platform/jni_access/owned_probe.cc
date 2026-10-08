@@ -1,6 +1,7 @@
 // Debug-only owned JNI calibration, independent of the full evolution backend.
 #ifdef ARTDCEVM_TESTING
 #include "platform/jni_access/capability_selection.h"
+#include "platform/android15/runtime_services.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/common/runnable_executor.h"
@@ -179,5 +180,15 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
   if(result!=runnable_jni::Result::kSuccess)return -300-static_cast<int>(result);
   if(request.probe.hits!=1||request.calibration.identities.size()!=oracles.size())return -308;
   return request.calibration.model==method_identity::Model::kMethod11?11:12;
+}
+#endif
+
+#if defined(ARTDCEVM_TESTING)
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeRuntimeServices(JNIEnv* env,jclass) {
+  artdcevm::ShadowHookEngine hooks;artdcevm::android15::RuntimeServices services;std::string error;
+  if(!artdcevm::android15::CalibrateRuntimeServices(hooks,env,&services,&error)&&error.empty())
+    error="Runtime service calibration failed without diagnostic";
+  return env->NewStringUTF(error.c_str());
 }
 #endif
