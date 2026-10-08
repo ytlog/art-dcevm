@@ -31,8 +31,8 @@ void Destroy(void* storage) {
 }
 void* Find(const char* name,bool transitions=true,const char* missing=nullptr) {
   if(missing && std::strcmp(name,missing)==0) return nullptr;
-  if(std::strcmp(name,android11::kSuspendConstruct)==0) return reinterpret_cast<void*>(Construct);
-  if(std::strcmp(name,android11::kSuspendDestroy)==0) return reinterpret_cast<void*>(Destroy);
+  if(std::strcmp(name,android_common::kSuspendConstruct)==0) return reinterpret_cast<void*>(Construct);
+  if(std::strcmp(name,android_common::kSuspendDestroy)==0) return reinterpret_cast<void*>(Destroy);
   if(transitions && std::strcmp(name,android13::kToNative)==0) return reinterpret_cast<void*>(Native);
   if(transitions && std::strcmp(name,android13::kToRunnable)==0) return reinterpret_cast<void*>(Runnable);
   return nullptr;
@@ -60,7 +60,7 @@ int main() {
     assert(!service.RestoreRunnable(nullptr));
     assert(!service.RestoreRunnable(reinterpret_cast<unsigned char*>(&word)+1));
     assert(!service.RestoreRunnable(reinterpret_cast<void*>(UINTPTR_MAX-3)));
-    android11::SuspendAll raw_storage{};
+    android_common::SuspendAll raw_storage{};
     assert(!service.ConstructSuspend(nullptr,1,"unused",false));
     assert(!service.ConstructSuspend(&raw_storage,0,"unused",false));
     assert(!service.ConstructSuspend(reinterpret_cast<void*>(UINTPTR_MAX),1,"unused",false));
@@ -92,7 +92,7 @@ int main() {
       word=92u<<shift;
       {NativeScope native(partial,&word,4);assert(native.Supported());}
     }
-    for(const char* missing:{android11::kSuspendConstruct,android11::kSuspendDestroy}) {
+    for(const char* missing:{android_common::kSuspendConstruct,android_common::kSuspendDestroy}) {
       assert(!Service::Bind(declaration,[&](const char* name){return Find(name,true,missing);},&service));
       assert(service.CanTransitionRunnable()==(api>=33));
     }

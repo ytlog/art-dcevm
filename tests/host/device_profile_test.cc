@@ -37,34 +37,36 @@ int main() {
   assert(!profile.Matched() && !profile.DeclarationId());
   Reset();assert(MatchDeviceProfile(&profile,&error));Order(4);
   assert(profile.Matched() && error.empty());
-  assert(std::string(profile.DeclarationId())=="android13-cas-arm64-release-baker-20261007");
+  assert(std::string(profile.DeclarationId())=="android13-source-family-arm64-release");
   for(size_t i=0;i<4;++i)assert(profile.Modules()[i].path==modules[i].path&&profile.Modules()[i].build_id==ids[i]);
   // A compiler mismatch cannot disable the independently matched base profile.
   calls.clear();assert(MatchCompilerDeviceProfile(profile,&error));Order(1,true);
-  for (size_t failure=0;failure<4;++failure) {
-    for(unsigned kind=0;kind<3;++kind) {
-      Reset();assert(MatchDeviceProfile(&profile,&error,Find));assert(profile.Matched());calls.clear();
-      if(kind==0)modules[failure].path.clear();
-      if(kind==1)modules[failure].build_id.clear();
-      if(kind==2)modules[failure].build_id="ffffffffffffffffffffffffffffffff";
+  // Artifact identities never influence candidate discovery.
+  for(size_t i=0;i<5;++i) {
+    Reset();modules[i].build_id.clear();
+    assert(MatchDeviceProfile(&profile,&error,Find));
+    assert(MatchCompilerDeviceProfile(profile,&error,Find));
+    Reset();modules[i].build_id="unknown-or-changed-mainline";
+    assert(MatchDeviceProfile(&profile,&error,Find));
+    assert(MatchCompilerDeviceProfile(profile,&error,Find));
+  }
+  for(size_t failure=0;failure<4;++failure) {
+    for(unsigned kind=0;kind<2;++kind) {
+      Reset();assert(MatchDeviceProfile(&profile,&error,Find));calls.clear();
+      modules[failure].path=kind==0?"":"/other/wrong.so";
       assert(!MatchDeviceProfile(&profile,&error,Find));Order(failure+1);
       assert(!profile.Matched() && !profile.DeclarationId());
-      assert(error.find(names[failure])!=std::string::npos);
-      for(const auto& module:profile.Modules())assert(module.path.empty()&&module.build_id.empty());
+      for(const auto& module:profile.Modules())assert(module.path.empty());
       calls.clear();assert(!MatchCompilerDeviceProfile(profile,&error,Find));assert(calls.empty());
     }
   }
   Reset();assert(MatchDeviceProfile(&profile,&error,Find));
-  for(unsigned kind=0;kind<3;++kind) {
-    Reset();if(kind==0)modules[4].path.clear();if(kind==1)modules[4].build_id.clear();if(kind==2)modules[4].build_id="unknown";
-    assert(!MatchCompilerDeviceProfile(profile,&error,Find));Order(1,true);
-    assert(error.find(names[4])!=std::string::npos&&profile.Matched());
-  }
-  Reset();modules[0].build_id="14FC77B24DB0B351B919C97009DC86BF";
-  assert(!MatchDeviceProfile(&profile,&error,Find));Order(1); // exact byte-string match
+  modules[4].path.clear();calls.clear();
+  assert(!MatchCompilerDeviceProfile(profile,&error,Find));Order(1,true);
+  assert(profile.Matched());
   Reset();assert(!MatchDeviceProfile(nullptr,&error,Find));assert(calls.empty());
   assert(!MatchDeviceProfile(&profile,&error,nullptr)&&!profile.Matched());assert(calls.empty());
   assert(!MatchCompilerDeviceProfile(profile,nullptr,nullptr));
   Reset();assert(MatchDeviceProfile(&profile,nullptr,Find));Order(4);
-  puts("device profile: exact loaded identities, ordered fail-fast, all missing/unknown modules, reset, independent compiler gate and default finder passed");
+  puts("runtime candidates: changed/missing artifact IDs accepted, module basenames fail closed, reset and compiler discovery passed");
 }

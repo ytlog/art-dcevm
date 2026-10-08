@@ -25,8 +25,11 @@ try:
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
     output=adb('instrumentation','shell','am','instrument','-w','-r','dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match
+    code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M);assert code and code.group(1).strip()=='-1'
     report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
     metadata['passed']=report.get('passed') is True and report.get('mainCallbackHits')==128 and report.get('workerCallbackHits')==[128,128] and report.get('privateEvolutionInitialized') is False
+    routes={'from-reflected-method','new-global-ref'}
+    metadata['passed']=metadata['passed'] and report.get('mainRoute') in routes and len(report.get('workerRoutes',[]))==2 and all(route in routes for route in report['workerRoutes'])
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)

@@ -6,8 +6,10 @@
 namespace artdcevm::android13 {
 using ModuleFinder = LoadedModule (*)(const char* basename);
 
-// Identity of the locked declaration set, not permission to skip behavioral
-// calibration. Bootstrap must finish owned calibration before installing hooks.
+// Discovery of loaded source-family candidates, never proof of private layout.
+// Bootstrap must observe public-JNI service receivers and finish all owned
+// behavioral calibration before installing evolution hooks. Build IDs are
+// retained in Modules solely for diagnostics, and never choose capabilities.
 class DeviceProfile {
  public:
   bool Matched() const { return matched_; }
@@ -19,11 +21,11 @@ class DeviceProfile {
   friend bool MatchDeviceProfile(DeviceProfile*, std::string*, ModuleFinder);
 };
 
-// Reads loaded ELF module identities only. Failure resets output; there are no
-// private object reads, device function calls, module loads or hooks here.
+// Checks required loaded module basenames only. Failure resets output; no
+// private object reads, device function calls, module loads or hooks happen here.
 bool MatchDeviceProfile(DeviceProfile* output, std::string* error,
                         ModuleFinder finder = FindLoadedModule);
-// Compiler experiments require an independently matched compiler module.
+// Compiler experiments require a loaded compiler and named function probes.
 // This does not enable or change any experiment or compiler option.
 bool MatchCompilerDeviceProfile(const DeviceProfile& base, std::string* error,
                                 ModuleFinder finder = FindLoadedModule);

@@ -24,7 +24,7 @@ Result Bridge::Invoke(JNIEnv* env,jobject carrier,Operation operation,void* data
   if(!method)return Result::kOriginalRejected;
   return request.result;
 }
-void* Bridge::OnFromReflectedMethod(const abi::arm64::android11::RunnableJniScope& scope,
+void* Bridge::OnFromReflectedMethod(const abi::arm64::android_common::RunnableJniScope& scope,
                                    jobject carrier) const {
   if(!original_)return nullptr;
   Request* request=active_;

@@ -55,7 +55,7 @@ class Hooks:public HookEngine{public:bool missing_destroy=false,missing_record=f
 const char* names[]{"libart.so","libopenjdkjvmti.so","libdexfile.so","libc++.so"};
 const char* ids[]{"14fc77b24db0b351b919c97009dc86bf","2fe21c45581b9c8b0519b71cbde32938","e6aaffcef8ef63baf438267cda44d400","1f426797e505c9b841f55cc49d32b3f4"};
 int mismatch=-1;
-LoadedModule Find(const char* name){for(int i=0;i<4;++i)if(!std::strcmp(name,names[i]))return {std::string("/platform/")+name,i==mismatch?"unsupported":ids[i]};assert(false);return {};}
+LoadedModule Find(const char* name){for(int i=0;i<4;++i)if(!std::strcmp(name,names[i]))return {i==mismatch?std::string{}:std::string("/platform/")+name,ids[i]};assert(false);return {};}
 }
 namespace artdcevm {LoadedModule FindLoadedModule(const char* name){return Find(name);}}
 namespace artdcevm::android13 {

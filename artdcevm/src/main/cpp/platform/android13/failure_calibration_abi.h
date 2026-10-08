@@ -23,7 +23,7 @@ struct Driver {
  PlatformString* error=nullptr;
 };
 inline constexpr char kStringDestroy[]="_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEED2Ev";
-inline constexpr char kDeclarationId[]="android13-cas-arm64-release-baker-20261007";
+inline constexpr char kDeclarationId[]="android13-source-family-arm64-release";
 static_assert(std::is_standard_layout_v<Driver> && std::is_trivially_destructible_v<Driver>);
 static_assert(sizeof(PlatformString)==24 && alignof(PlatformString)==8);
 static_assert(sizeof(Driver)==72 && alignof(Driver)==8);

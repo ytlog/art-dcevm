@@ -24,12 +24,14 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/device_compiler_diagnostics.cc
     platform/android13/compiled_frame_diagnostics.cc
     platform/android13/device_diagnostics.cc
+    platform/android13/runtime_receiver_probe.cc
     platform/android13/device_profile.cc
     platform/android13/owned_calibration.cc
     platform/common/owned_context_consumer.cc
     platform/common/runnable_jni_bridge.cc
+    platform/common/runnable_global_ref_bridge.cc
     platform/android13/runnable_jni_diagnostics.cc
-    platform/jni_access/captured_profile.cc
+    platform/jni_access/capability_selection.cc
     platform/jni_access/owned_probe.cc
     platform/arch/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
-namespace artdcevm::abi::arm64::android11 {
+namespace artdcevm::abi::arm64::android_common {
 // Fixed 11--17 ScopedObjectAccessAlreadyRunnable (empty ValueObject base).
 // This describes the live argument supplied by ART, not a constructed scope.
 struct RunnableJniScope {void* self;JNIEnv* env;void* vm;};

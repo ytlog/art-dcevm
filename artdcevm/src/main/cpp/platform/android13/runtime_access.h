@@ -2,9 +2,11 @@
 #include "api/hook_engine.h"
 #include "platform/android13/device_profile.h"
 #include <jni.h>
+#include "platform/android13/runtime_receiver_probe.h"
 #include <string>
 namespace artdcevm::android13 {
-bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error);
+bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error,
+                            const RuntimeReceivers* receivers=nullptr);
 void* RuntimeClassLinker();
 void* RuntimeInstrumentation();
 void* RuntimeInstance();

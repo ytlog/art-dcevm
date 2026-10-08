@@ -18,7 +18,7 @@ void* ShadowHookEngine::FindSymbol(const char* library, const char* symbol) {
     // name with a numeric suffix. Resolve its complete ELF name through the
     // same ShadowHook handle; never use ELF st_value to manufacture an address.
     const auto module = FindLoadedModule(library);
-    if (!module.path.empty() && !module.build_id.empty()) {
+    if (!module.path.empty()) {
       std::string unique;
       {
         std::lock_guard<std::mutex> lock(symbol_names_mutex_);

@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/abi/arm64/android11/jni_access.h"
+#include "platform/abi/arm64/android-common/jni_access.h"
 #include "platform/abi/arm64/android14/jni_global_decode.h"
 namespace artdcevm::runnable_jni {
 struct Context {void* self;JNIEnv* env;void* vm;};
@@ -13,8 +13,8 @@ enum class Result {kSuccess,kUnavailable,kInvalidRequest,kPendingException,kReen
 // never rebind or remove a hook while they are in flight. No hook is installed here.
 class Bridge {
  public:
-  using Leaf=abi::arm64::android11::FromReflectedMethod;
-  static const char* SymbolName(){return abi::arm64::android11::kFromReflectedMethod;}
+  using Leaf=abi::arm64::android_common::FromReflectedMethod;
+  static const char* SymbolName(){return abi::arm64::android_common::kFromReflectedMethod;}
   static bool Bind(void* original,Bridge* output);
   // carrier must be a live owned Method/Constructor usable by this JNIEnv.
   // ART's real JNI function establishes Runnable+mutator scope. Callback runs
@@ -22,7 +22,7 @@ class Bridge {
   // No managed pointer may escape callback without an ART/JNI root. Callback must
   // preserve carrier and native hook lifetimes. Pending exceptions are not cleared.
   Result Invoke(JNIEnv* env,jobject carrier,Operation operation,void* data) const;
-  void* OnFromReflectedMethod(const abi::arm64::android11::RunnableJniScope& scope,
+  void* OnFromReflectedMethod(const abi::arm64::android_common::RunnableJniScope& scope,
                              jobject carrier) const;
  private:
   struct Request;

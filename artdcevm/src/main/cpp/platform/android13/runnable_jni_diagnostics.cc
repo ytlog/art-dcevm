@@ -22,7 +22,7 @@ uint32_t State(void* self) {
   auto* flags=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(self)+native_access_abi::kThreadFlagsOffset);
   return __atomic_load_n(flags,__ATOMIC_RELAXED)>>native_access_abi::kStateShift;
 }
-void* Proxy(const abi::arm64::android11::RunnableJniScope& scope,jobject carrier) {
+void* Proxy(const abi::arm64::android_common::RunnableJniScope& scope,jobject carrier) {
   return bridge.OnFromReflectedMethod(scope,carrier);
 }
 struct Probe {JNIEnv* env;void* self;void* vm;jobject carrier; jobject local; jobject global;jobject thread_global;int bits=0;int hits=0;};

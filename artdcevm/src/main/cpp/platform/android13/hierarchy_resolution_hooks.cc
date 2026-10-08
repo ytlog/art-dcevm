@@ -1,6 +1,8 @@
 #include "platform/android13/hierarchy_resolution_hooks.h"
 
 #include <cstddef>
+#include "platform/android13/runtime_receiver_probe.h"
+#include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstdint>
 #include "platform/android13/hierarchy_allocation.h"
 #include <vector>
@@ -17,7 +19,8 @@ using Resolve = void* (*)(void*, const char*, void*);
 using LinkerLookup = void* (*)(void*, void*, const char*, void*);
 Verify original_verify = nullptr;
 Resolve original_resolve = nullptr;
-LinkerLookup original_find = nullptr;
+using FindClass=abi::arm64::android11::ReleaseObjectPointer (*)(void*,void*,const char*,void*);
+FindClass original_find = nullptr;
 LinkerLookup original_lookup = nullptr;
 
 uint32_t VerifyProxy(void* thread, void* deps, const void* dex, void* klass,
@@ -40,10 +43,10 @@ void* ResolveProxy(void* cache, const char* descriptor, void* loader) {
   return original_resolve(cache, descriptor, loader);
 }
 
-void* FindProxy(void* linker, void* thread, const char* descriptor, void* loader) {
+abi::arm64::android11::ReleaseObjectPointer FindProxy(void* linker, void* thread, const char* descriptor, void* loader) {
   if (ValidationHooks::InSourceTransaction()) {
     void* replacement = HierarchyVerificationView::Resolve(descriptor, HierarchyRootPool::Get(loader), true);
-    if (replacement) return replacement;
+    if (replacement) return {reinterpret_cast<uintptr_t>(replacement)};
   }
   return original_find(linker, thread, descriptor, loader);
 }
@@ -72,7 +75,13 @@ bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& pro
        reinterpret_cast<void**>(&original_lookup)},
   };
   std::vector<void*> tokens;
+  bool reused_find=false;
   for (const auto& entry : entries) {
+    if(entry.proxy==reinterpret_cast<void*>(FindProxy) &&
+       SetRuntimeFindClassHandler(entry.proxy,entry.original)) {
+      reused_find=true;
+      continue;
+    }
     void* target = hooks.FindSymbol("libart.so", entry.name);
     if (!target) {
       *error = std::string("Missing named hierarchy resolution symbol: ") + entry.name;
@@ -83,6 +92,7 @@ bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& pro
         continue;
       }
     }
+    if(reused_find)SetRuntimeFindClassHandler(nullptr,nullptr);
     for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
       std::string rollback;
       if (!hooks.Remove(*it, &rollback)) *error += "; unhook failed: " + rollback;

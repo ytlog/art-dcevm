@@ -11,6 +11,7 @@ import org.json.JSONObject;
 public final class RuntimeAccessSuite {
     private static native String artBuildId();
     private static native int probe(Object carrier,Thread current);
+    private static native String probeRoute();
     public JSONObject run() {
         JSONObject report=new JSONObject();
         try {
@@ -23,18 +24,20 @@ public final class RuntimeAccessSuite {
             Method carrier=Object.class.getMethod("toString");
             int main=probe(carrier,Thread.currentThread());
             report.put("mainCallbackHits",main);
+            report.put("mainRoute",probeRoute());
             if(main!=128)throw new AssertionError("Owned JNI access main: "+main);
-            int[] results={-1,-1};Throwable[] errors=new Throwable[2];Thread[] workers=new Thread[2];
+            int[] results={-1,-1};String[] routes=new String[2];Throwable[] errors=new Throwable[2];Thread[] workers=new Thread[2];
             for(int i=0;i<2;i++) {
                 final int slot=i;
                 workers[i]=new Thread(() -> {
-                    try {results[slot]=probe(carrier,Thread.currentThread());}
+                    try {results[slot]=probe(carrier,Thread.currentThread());routes[slot]=probeRoute();}
                     catch(Throwable error) {errors[slot]=error;}
                 },"OwnedJniAccess"+i);
                 workers[i].start();
             }
             for(Thread worker:workers)worker.join(30000);
             report.put("workerCallbackHits",new JSONArray(results));
+            report.put("workerRoutes",new JSONArray(routes));
             for(int i=0;i<2;i++) {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);

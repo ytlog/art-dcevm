@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/abi/arm64/android11/thread_state.h"
 #include "platform/abi/arm64/android13/thread_state.h"
-#include "platform/abi/arm64/android11/suspend_all.h"
+#include "platform/abi/arm64/android-common/suspend_all.h"
 
 namespace artdcevm::thread_suspend_service {
 enum class Declaration {kLegacy16,kModern24};
@@ -16,8 +16,8 @@ class Service {
     if(!output || (declaration!=Declaration::kLegacy16 && declaration!=Declaration::kModern24)) return false;
     Service candidate;
     candidate.declaration_=declaration;
-    candidate.construct_=reinterpret_cast<abi::arm64::android11::SuspendConstruct>(finder(abi::arm64::android11::kSuspendConstruct));
-    candidate.destroy_=reinterpret_cast<abi::arm64::android11::SuspendDestroy>(finder(abi::arm64::android11::kSuspendDestroy));
+    candidate.construct_=reinterpret_cast<abi::arm64::android_common::SuspendConstruct>(finder(abi::arm64::android_common::kSuspendConstruct));
+    candidate.destroy_=reinterpret_cast<abi::arm64::android_common::SuspendDestroy>(finder(abi::arm64::android_common::kSuspendDestroy));
     if(!candidate.construct_ || !candidate.destroy_) return false;
     if(declaration==Declaration::kModern24) {
       candidate.native_=reinterpret_cast<abi::arm64::android13::Transition>(finder(abi::arm64::android13::kToNative));
@@ -54,21 +54,21 @@ class Service {
     runnable_(self);return true;
   }
   bool ConstructSuspend(void* storage,size_t extent,const char* cause,bool long_suspend) const {
-    if(!construct_ || !destroy_ || !storage || extent<sizeof(abi::arm64::android11::SuspendAll) ||
-       reinterpret_cast<uintptr_t>(storage)>UINTPTR_MAX-sizeof(abi::arm64::android11::SuspendAll) || !cause) return false;
+    if(!construct_ || !destroy_ || !storage || extent<sizeof(abi::arm64::android_common::SuspendAll) ||
+       reinterpret_cast<uintptr_t>(storage)>UINTPTR_MAX-sizeof(abi::arm64::android_common::SuspendAll) || !cause) return false;
     construct_(storage,cause,long_suspend);return true;
   }
   bool DestroySuspend(void* storage,size_t extent) const {
-    if(!destroy_ || !storage || extent<sizeof(abi::arm64::android11::SuspendAll) ||
-       reinterpret_cast<uintptr_t>(storage)>UINTPTR_MAX-sizeof(abi::arm64::android11::SuspendAll)) return false;
+    if(!destroy_ || !storage || extent<sizeof(abi::arm64::android_common::SuspendAll) ||
+       reinterpret_cast<uintptr_t>(storage)>UINTPTR_MAX-sizeof(abi::arm64::android_common::SuspendAll)) return false;
     destroy_(storage);return true;
   }
  private:
   uint32_t Runnable() const {return declaration_==Declaration::kLegacy16 ? abi::arm64::android11::kRunnable : abi::arm64::android13::kRunnable;}
   Declaration declaration_=Declaration::kLegacy16;
   abi::arm64::android13::Transition native_=nullptr,runnable_=nullptr;
-  abi::arm64::android11::SuspendConstruct construct_=nullptr;
-  abi::arm64::android11::SuspendDestroy destroy_=nullptr;
+  abi::arm64::android_common::SuspendConstruct construct_=nullptr;
+  abi::arm64::android_common::SuspendDestroy destroy_=nullptr;
   friend class NativeScope;
   friend class SuspendScope;
 };
@@ -104,7 +104,7 @@ class SuspendScope {
   SuspendScope& operator=(const SuspendScope&)=delete;
  private:
   Service service_;
-  abi::arm64::android11::SuspendAll storage_{};
+  abi::arm64::android_common::SuspendAll storage_{};
   bool supported_=false;
 };
 }

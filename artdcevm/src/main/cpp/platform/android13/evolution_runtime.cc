@@ -116,7 +116,9 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
   std::string error;
   if (!symbols.Initialize(&error) || !MatchDeviceProfile(&device_profile, &error) ||
       !ConfigureTransactionMetadataReader(symbols, device_profile, &error)) return error;
-  if (!ConfigureRuntimeAccess(symbols, device_profile, &error) ||
+  RuntimeReceivers observed_receivers;
+  if(!CalibrateRuntimeReceivers(symbols,jni,&observed_receivers,&error))return error;
+  if (!ConfigureRuntimeAccess(symbols, device_profile, &error,&observed_receivers) ||
       !ConfigureJniMethodTargets(symbols, device_profile, &error) ||
       !ConfigureRedefinitionFailures(symbols, &error) ||
       !ConfigureEvolutionFieldCopy(symbols, device_profile, &error) ||

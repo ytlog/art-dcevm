@@ -45,6 +45,10 @@ int main() {
   runtime.jni_id_manager = reinterpret_cast<void*>(0x2000);
   runtime.jit = reinterpret_cast<void*>(0x3000);
   runtime.jit_code_cache = reinterpret_cast<void*>(0x4000);
+  runtime.java_vm=reinterpret_cast<void*>(0x6000);
+  runtime.thread_list=reinterpret_cast<void*>(0x8000);
+  api::RuntimeReceivers observed{runtime.class_linker,runtime.jni_id_manager,
+      reinterpret_cast<JavaVM*>(runtime.java_vm),runtime.thread_list};
   const auto profile = MatchedProfileForTest();
   Hooks hooks;
   std::string error;
@@ -52,14 +56,23 @@ int main() {
   assert(hooks.lookups == 0);
   for (const char* missing : {abi::kRuntimeInstance, abi::kDecodeMethodId, abi::kDecodeFieldId}) {
     hooks.missing = missing;
-    assert(!api::ConfigureRuntimeAccess(hooks, profile, &error) && !error.empty());
+    assert(!api::ConfigureRuntimeAccess(hooks, profile, &error,&observed) && !error.empty());
   }
   hooks.missing = nullptr;
   instance = nullptr;
-  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error));
+  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error,&observed));
   instance = &runtime;
   assert(!api::ConfigureRuntimeAccess(hooks, api::DeviceProfile{}, &error));
-  assert(api::ConfigureRuntimeAccess(hooks, profile, &error));
+  assert(!api::ConfigureRuntimeAccess(hooks,profile,&error));
+  for(unsigned slot=0;slot<4;++slot) {
+    auto bad=observed;
+    if(slot==0)bad.class_linker=reinterpret_cast<void*>(0x7000);
+    if(slot==1)bad.jni_id_manager=reinterpret_cast<void*>(0x7000);
+    if(slot==2)bad.java_vm=reinterpret_cast<JavaVM*>(0x7000);
+    if(slot==3)bad.thread_list=reinterpret_cast<void*>(0x7000);
+    assert(!api::ConfigureRuntimeAccess(hooks,profile,&error,&bad));
+  }
+  assert(api::ConfigureRuntimeAccess(hooks, profile, &error,&observed));
   assert(api::RuntimeInstance() == &runtime);
   assert(api::RuntimeJit() == runtime.jit);
   assert(api::RuntimeClassLinker() == runtime.class_linker);
@@ -82,16 +95,16 @@ int main() {
   abi::RuntimePrefix bad_runtime{};
   void* bad_instance=&bad_runtime;
   hooks.singleton=&bad_instance;
-  assert(!api::ConfigureRuntimeAccess(hooks,profile,&error));
+  assert(!api::ConfigureRuntimeAccess(hooks,profile,&error,&observed));
   assert(api::RuntimeInstance()==&runtime && api::RuntimeClassLinker()==runtime.class_linker);
   assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(1))==reinterpret_cast<void*>(16));
   hooks.singleton=&instance;
   runtime.jni_id_manager = reinterpret_cast<void*>(0x5000);
   assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(1)) == reinterpret_cast<void*>(16));
   runtime.jni_id_manager = nullptr;
-  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error));
+  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error,&observed));
   runtime.jni_id_manager = reinterpret_cast<void*>(0x5000);
   runtime.class_linker = nullptr;
-  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error));
+  assert(!api::ConfigureRuntimeAccess(hooks, profile, &error,&observed));
   std::cout << "Runtime services and JNI IDs: named singleton, live receiver reads, null JIT, pointer/index delegation and profile rejection passed\n";
 }

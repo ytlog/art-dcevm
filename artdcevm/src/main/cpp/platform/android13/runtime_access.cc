@@ -35,8 +35,12 @@ void* DecodeFieldId(jfieldID id) {
   return (reinterpret_cast<uintptr_t>(id) & 1) ? decode_field(RuntimeJniIdManager(), id) :
       reinterpret_cast<void*>(id);
 }
-bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
+bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error,
+                            const RuntimeReceivers* receivers) {
   if (!profile.Matched()) { *error = "Runtime access requires a matched device profile"; return false; }
+  if(!receivers || !receivers->class_linker || !receivers->jni_id_manager || !receivers->java_vm || !receivers->thread_list) {
+    *error="Runtime access requires independently observed public JNI service receivers";return false;
+  }
   auto instance = reinterpret_cast<void**>(hooks.FindSymbol("libart.so", runtime_access_abi::kRuntimeInstance));
   auto method = reinterpret_cast<DecodeMethod>(hooks.FindSymbol("libart.so", runtime_access_abi::kDecodeMethodId));
   auto field = reinterpret_cast<DecodeField>(hooks.FindSymbol("libart.so", runtime_access_abi::kDecodeFieldId));
@@ -52,6 +56,11 @@ bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std
   if (!services.class_linker || !services.jni_id_manager) {
     *error = "Missing fixed Runtime ClassLinker or JNI ID manager";
     return false;
+  }
+  if(services.class_linker!=receivers->class_linker ||
+     services.jni_id_manager!=receivers->jni_id_manager || services.java_vm!=receivers->java_vm ||
+     services.thread_list!=receivers->thread_list) {
+    *error="Runtime service storage disagrees with public JNI receiver observations";return false;
   }
   runtime_instance = instance;
   decode_method = method;

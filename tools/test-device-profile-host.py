@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify ELF identity profile matching without JNI, AOSP or device layouts."""
+"""Verify loaded runtime candidate discovery independent of artifact identity."""
 import os
 from pathlib import Path
 import subprocess

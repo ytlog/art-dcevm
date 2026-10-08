@@ -26,7 +26,7 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 | 公开 JVMTI | Android 11 / API 30 及以上，当前构建支持 arm64-v8a、x86_64 | 方法体替换；ART 暴露结构扩展时可经扩展入口新增成员 |
 | 增强结构演进 | 已匹配并校准的 Android 13 / API 33 / arm64 ART 构建 | 通过标准 `RedefineClasses` 使用上述结构演进功能 |
 
-目前完整演进的真机验证目标为 Xiaomi CAS，系统指纹为 `Xiaomi/cas/cas:13/TKQ1.221114.001/V816.0.4.0.TJJCNXM:user/release-keys`。启用条件还包括实际运行库的 Build ID、必需命名符号和运行时行为校准；同型号、同 Android 版本不等于兼容，系统或 ART 更新后也可能无法启用。
+目前完整演进的真机验证目标为 Xiaomi CAS，系统指纹为 `Xiaomi/cas/cas:13/TKQ1.221114.001/V816.0.4.0.TJJCNXM:user/release-keys`。启用条件还包括实际运行库的必需命名符号、独立 JNI receiver 和运行时行为校准（Build ID 仅记录证据）；同型号、同 Android 版本不等于兼容，系统或 ART 更新后也可能无法启用。
 
 Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)。x86_64 构建用于公开 JVMTI 验证，不提供完整结构演进。
 

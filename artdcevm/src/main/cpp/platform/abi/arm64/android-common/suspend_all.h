@@ -1,5 +1,5 @@
 #pragma once
-namespace artdcevm::abi::arm64::android11 {
+namespace artdcevm::abi::arm64::android_common {
 // Fixed thread_list.h/cc 11–17: empty nonvirtual ValueObject. C2/D2 obtain the
 // Runtime thread list themselves; no this-object data or padding is decoded.
 struct SuspendAll {unsigned char empty;};
