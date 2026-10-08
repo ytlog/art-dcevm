@@ -37,9 +37,11 @@ template<class T> void Write(void* object,size_t at,T value) {
 void* Parent(void* klass) { return ReadHeapReference(klass,offsetof(Class,super_class)); }
 void* Loader(void* klass) { return ReadHeapReference(klass,offsetof(Class,class_loader)); }
 bool Normal(void* klass) {
-  return (Read<uint32_t>(klass,offsetof(Class,primitive_type))&0xffff)==0 &&
+  class_metadata::State state;
+  Require(class_metadata::ReadState(33,klass,sizeof(Class),&state));
+  return !state.IsPrimitive() &&
       !ReadHeapReference(klass,offsetof(Class,component_type)) &&
-      !(Read<uint32_t>(klass,offsetof(Class,access_flags))&0x40000); // kAccClassIsProxy
+      !(state.access_flags&0x40000); // kAccClassIsProxy
 }
 const char* Descriptor(void* klass) { Require(Normal(klass));return ReadCopyClass(klass,false).descriptor; }
 bool Matches(void* klass,const char* descriptor,void* loader) {

@@ -129,7 +129,9 @@ bool TransactionMetadataReader::CheckCommitTypes(const TransactionRootView& root
  if(count!=Length(roots.new_classes)||instances!=Length(roots.new_instances))return Fail(error,"Commit root array lengths disagree");
  for(int32_t i=0;i<count;++i){auto* old=Element(roots.old_classes,i);auto* next=Element(roots.new_classes,i);
   if(!old||!next||ReadHeapReference(old,0)!=meta||ReadHeapReference(next,0)!=meta)return Fail(error,"Commit class mapping contains a non-class root");
-  const uint32_t status=__atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(old)+offsetof(Class,status)),__ATOMIC_SEQ_CST)>>28;
+  class_metadata::State state;
+  if(!class_metadata::ReadState(33,old,sizeof(Class),&state))return Fail(error,"Invalid commit class state");
+  const uint32_t status=state.status;
   if(status==2||status==3)return Fail(error,"Commit source class is erroneous");
  }
  for(int32_t i=0;i<instances;++i){auto* old=Element(roots.old_instances,i);auto* next=Element(roots.new_instances,i);

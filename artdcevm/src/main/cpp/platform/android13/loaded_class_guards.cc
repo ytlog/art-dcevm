@@ -18,7 +18,12 @@ void Require(bool value) { if (!value) std::abort(); }
 template<class T> T Read(const void* object, size_t offset) {
   T value; std::memcpy(&value, static_cast<const unsigned char*>(object) + offset, sizeof(value)); return value;
 }
-uint32_t Flags(void* klass) { return Read<uint32_t>(klass, offsetof(Class, access_flags)); }
+class_metadata::State State(void* klass) {
+  class_metadata::State state;
+  Require(class_metadata::ReadState(33,klass,sizeof(Class),&state));
+  return state;
+}
+uint32_t Flags(void* klass) { return State(klass).access_flags; }
 void* Parent(void* klass) { return ReadHeapReference(klass, offsetof(Class, super_class)); }
 bool Interface(void* klass) { return (Flags(klass) & 0x200) != 0; }
 bool Subclass(void* src, void* target) {
@@ -27,8 +32,8 @@ bool Subclass(void* src, void* target) {
 }
 bool Assignable(void* target, void* src) {
   if (target == src) return true;
-  if ((Read<uint32_t>(target, offsetof(Class, primitive_type)) & 0xffff) == 0 && !Parent(target))
-    return (Read<uint32_t>(src, offsetof(Class, primitive_type)) & 0xffff) == 0;
+  if (!State(target).IsPrimitive() && !Parent(target))
+    return !State(src).IsPrimitive();
   if (Interface(target)) {
     auto* table = ReadHeapReference(src, offsetof(Class, iftable));
     if (!table) return false;
@@ -123,9 +128,7 @@ class Guard final : public loaded_class_abi::ClassVisitor {
   bool invalid = false;
   bool operator()(uintptr_t value) override {
     auto* subtype = reinterpret_cast<void*>(value);
-    uint32_t status = __atomic_load_n(reinterpret_cast<const uint32_t*>(
-        static_cast<unsigned char*>(subtype)+offsetof(Class,status)),__ATOMIC_SEQ_CST);
-    if (subtype == target_ || (status >> 28) < 5 || !Assignable(target_,subtype)) return true;
+    if (subtype == target_ || State(subtype).status < 5 || !Assignable(target_,subtype)) return true;
     if (!name_) { invalid = true; return false; }
     if (action_ == static_cast<int>(ModifierEvolutionAction::kCheckFinalOverride)) {
       if (!Accessible(subtype,target_,flags_)) return true;

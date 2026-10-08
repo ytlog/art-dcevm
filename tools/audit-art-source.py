@@ -19,6 +19,7 @@ INTERFACES = {
     'runtime/instrumentation.h': ('GetCodeForInvoke', 'InitializeMethodsCode', 'InstrumentThreadStack'),
     'runtime/jit/jit.h': ('CompileMethod',),
     'runtime/jit/jit_code_cache.h': ('VisitAllMethods',),
+    'runtime/class_status.h': (),
     'runtime/mirror/class.h': ('GetDirectInterface', 'CanAccessMember', 'CheckResolvedMethodAccess'),
     'runtime/mirror/var_handle.h': ('GetAccessModeTemplate',),
     'runtime/art_field.h': ('GetName', 'GetTypeDescriptor'),
@@ -175,6 +176,15 @@ def main():
                 r'(uint8_t|uint16_t)\s+has_real_parameter_data_;', content['runtime/mirror/executable.h']),
             'reflectionFieldUsesMergedArray': ('return declaring_class->GetField(GetArtFieldIndex());' in
                 content['runtime/mirror/field.cc']),
+            'classStatusValues': dict((name, int(value)) for name, value in re.findall(
+                r'\b(k\w+)\s*=\s*(\d+)', content['runtime/class_status.h'])),
+            'classStatusUsesSynchronizedTopNibble': (
+                'GetField32Volatile<kVerifyFlags>(StatusOffset())' in content['runtime/mirror/class.h'] and
+                'static_cast<uint32_t>(field_value) >> (32 - 4)' in content['runtime/mirror/class.h']),
+            'classPrimitiveUsesLow16Bits': (
+                'kPrimitiveTypeSizeShiftShift = 16;' in content['runtime/mirror/class.h'] and
+                'kPrimitiveTypeMask = (1u << kPrimitiveTypeSizeShiftShift) - 1;' in content['runtime/mirror/class.h'] and
+                'v32 & kPrimitiveTypeMask' in content['runtime/mirror/class-inl.h']),
             'classUsesMergedFieldArray': bool(re.search(r'uint64_t\s+fields_;',content['runtime/mirror/class.h'])),
             'classStoresMethodSliceOffsets': bool(re.search(r'uint16_t\s+virtual_methods_offset_;',content['runtime/mirror/class.h'])),
             'classClinitTidOrHashAtomic': 'std::atomic<uint32_t> clinit_thread_id_or_hash_' in content['runtime/mirror/class.h'],
