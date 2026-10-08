@@ -121,6 +121,23 @@ int main(int argc,char** argv) {
     if(U32(compact,header)) Put(compact,header+4,U32(compact,header+4)+24);
   metadata.dex.begin=compact.data(); metadata.dex.size=compact.size(); targets[0]=&child;
   assert(!check(1,Action::kCheckFinalOverride));
+  // Later 041 header: ID tables borrow the full container as their base.
+  auto container=bytes;
+  const size_t header=(container.size()+3)&~size_t{3};container.resize(header);
+  container.insert(container.end(),bytes.begin(),bytes.begin()+data_start);
+  container.insert(container.begin()+header+112,8,0);
+  auto put=[&](size_t off,uint32_t value){Put(container,header+off,value);};
+  std::memcpy(container.data()+header+4,"041",3);
+  put(32,container.size()-header);put(36,120);put(104,0);put(108,0);
+  put(112,container.size());put(116,header);
+  for(size_t off:{size_t{56},size_t{64},size_t{72},size_t{80},size_t{88},size_t{96}})
+    if(U32(bytes,off))put(off+4,header+U32(bytes,off+4)+8);
+  metadata.dex={container.data()+header,container.size()-header,container.data(),container.size(),0};
+  for(const auto& method:schema.methods) {
+    child_methods.values[0].dex_method_index=method.dex_index;
+    assert(!android13::CheckMethodDependentGuard(&base,method.name.c_str(),method.descriptor.c_str(),1,
+        static_cast<int>(Action::kCheckFinalOverride)));
+  }
   assert(visits>20 && root_reads>10);
-  std::cout<<"loaded-class guards: fixed visitor ABI, real DEX/shared CompactDex signatures, loaded/final/abstract, copied/direct/runtime methods, ancestor semantics, access/package, interface/root criteria and allocation-free visits passed\n";
+  std::cout<<"loaded-class guards: fixed visitor ABI, real DEX/shared CompactDex/later041 signatures, loaded/final/abstract, copied/direct/runtime methods, ancestor semantics, access/package, interface/root criteria and allocation-free visits passed\n";
 }

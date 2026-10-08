@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace artdcevm::evolution {
@@ -68,6 +69,12 @@ struct MappedDexMethodReference {
 // unchanged on format errors; bad_alloc propagates to the ART/JVMTI boundary.
 bool ReadMappedDexMethodReference(const MappedDexMetadata&, uint32_t index,
                                   MappedDexMethodReference*, std::string*);
+// Compares borrowed ID/name/type views without allocating on valid mappings.
+// class_def_index is unused; format errors preserve output, mismatch succeeds
+// with false, and allocation failures in error reporting propagate.
+bool ReadMappedDexMethodMatches(const MappedDexMetadata&, uint32_t index,
+                                std::string_view name, std::string_view signature,
+                                bool*, std::string*);
 bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata&,bool*,std::string*);
 bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::string*);
 

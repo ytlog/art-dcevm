@@ -89,6 +89,32 @@ class Reader {
     result.descriptor = Prototype(result.proto_index);
     return result;
   }
+  bool MethodMatches(uint32_t index,std::string_view name,std::string_view signature) {
+    Initialize();
+    const size_t method = Item(methods_,index);
+    if (StringView(U32(method+4)) != name) return false;
+    const size_t proto = Item(protos_,U16(method+2));
+    if (signature.empty() || signature.front() != '(') return false;
+    signature.remove_prefix(1);
+    auto consume = [&](std::string_view type) {
+      if (signature.substr(0,type.size()) != type) return false;
+      signature.remove_prefix(type.size()); return true;
+    };
+    const uint32_t parameters = U32(proto+8);
+    if (parameters) {
+      if (parameters%4) Fail("Unaligned type list");
+      const uint32_t count = DataU32(parameters);
+      DataRange(size_t{parameters}+4,size_t{count}*2);
+      for (uint32_t i=0;i<count;++i) {
+        const auto type = TypeView(DataU16(size_t{parameters}+4+size_t{i}*2));
+        if (type == "V") Fail("Invalid parameter type");
+        if (!consume(type)) return false;
+      }
+    }
+    if (signature.empty() || signature.front() != ')') return false;
+    signature.remove_prefix(1);
+    return consume(TypeView(U32(proto+4))) && signature.empty();
+  }
   const char* ReadTypeDescriptor(uint32_t index) {
     Initialize();
     return TypeView(index).data();
@@ -413,6 +439,17 @@ bool ReadMappedDexMemberCounts(const MappedDexMetadata& view, MappedDexMemberCou
   } catch (const std::bad_alloc&) { throw; }
   catch (const std::exception& failure) { *error = failure.what(); return false; }
 }
+bool ReadMappedDexMethodMatches(const MappedDexMetadata& view, uint32_t index,
+                                std::string_view name, std::string_view signature,
+                                bool* output, std::string* error) {
+  if (!output || !error) return false;
+  try {
+    const bool value = Reader(view).MethodMatches(index,name,signature);
+    *output=value; error->clear(); return true;
+  } catch (const std::bad_alloc&) { throw; }
+  catch (const std::exception& failure) { *error=failure.what(); return false; }
+}
+
 bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata& view,bool* output,std::string* error) {
   try {
     const bool supported=Reader(view).SupportsDefaultMethods();

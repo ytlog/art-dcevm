@@ -55,59 +55,14 @@ bool Accessible(void* subtype, void* target, uint32_t flags) {
   if ((flags & 4) && !Interface(subtype) && Subclass(subtype, target)) return true;
   return same_package(subtype, reinterpret_cast<uintptr_t>(target));
 }
-struct Dex {
-  evolution::MappedDexMetadata mapping;
-  void Range(size_t at, size_t width, size_t size) const { Require(at <= size && width <= size - at); }
-  uint32_t U32(const unsigned char* bytes, size_t size, size_t at) const {
-    Range(at, 4, size); return uint32_t{bytes[at]} | uint32_t{bytes[at+1]} << 8 |
-        uint32_t{bytes[at+2]} << 16 | uint32_t{bytes[at+3]} << 24;
-  }
-  uint16_t U16(const unsigned char* bytes, size_t size, size_t at) const {
-    Range(at, 2, size); return uint16_t(bytes[at] | uint16_t{bytes[at+1]} << 8);
-  }
-  uint32_t Main32(size_t at) const { return U32(mapping.begin, mapping.size, at); }
-  size_t Id(size_t header, uint32_t index, size_t width) const {
-    const uint32_t count = Main32(header), at = Main32(header+4);
-    Require(index < count && at >= 0x70 && at % 4 == 0);
-    Range(at, size_t{count} * width, mapping.size); return at + size_t{index} * width;
-  }
-  const char* String(uint32_t index) const {
-    size_t at = Main32(Id(56, index, 4)); bool complete = false;
-    for (unsigned i = 0; i != 5; ++i) {
-      Range(at, 1, mapping.data_size); unsigned byte = mapping.data_begin[at++];
-      if (i == 4) Require((byte & 0xf0) == 0);
-      if (!(byte & 0x80)) { complete = true; break; }
-    }
-    Require(complete); Range(at, 1, mapping.data_size);
-    Require(std::memchr(mapping.data_begin+at, 0, mapping.data_size-at));
-    return reinterpret_cast<const char*>(mapping.data_begin+at);
-  }
-  const char* Type(uint32_t index) const { return String(Main32(Id(64,index,4))); }
-  bool ConsumeType(uint32_t index, const char** requested) const {
-    const char* actual = Type(index); size_t length = std::strlen(actual);
-    if (std::strncmp(*requested, actual, length) != 0) return false;
-    *requested += length; return true;
-  }
-  bool Matches(uint32_t index, const char* name, const char* signature) const {
-    if (index == UINT32_MAX) return false; // runtime methods have no Java signature
-    size_t method = Id(88,index,8);
-    if (std::strcmp(String(Main32(method+4)),name) != 0 || *signature++ != '(') return false;
-    uint32_t proto_index = U16(mapping.begin,mapping.size,method+2);
-    size_t proto = Id(72,proto_index,12); uint32_t parameters = Main32(proto+8);
-    if (parameters) {
-      uint32_t count = U32(mapping.data_begin,mapping.data_size,parameters);
-      Range(size_t{parameters}+4,size_t{count}*2,mapping.data_size);
-      for (uint32_t i=0;i<count;++i)
-        if (!ConsumeType(U16(mapping.data_begin,mapping.data_size,size_t{parameters}+4+size_t{i}*2),&signature)) return false;
-    }
-    return *signature++ == ')' && ConsumeType(Main32(proto+4),&signature) && *signature == '\0';
-  }
-};
 bool Matches(void* method, void* declaring, const char* name, const char* signature) {
   const uint32_t index = Read<uint32_t>(method,offsetof(Method,dex_method_index));
   if (index == UINT32_MAX) return false;
   ValidationMetadata metadata{}; Require(ReadValidationClassMetadata(declaring,&metadata));
-  return Dex{metadata.dex}.Matches(index,name,signature);
+  bool matched = false;
+  std::string error;
+  Require(evolution::ReadMappedDexMethodMatches(metadata.dex,index,name,signature,&matched,&error));
+  return matched;
 }
 template<class Fn> bool Methods(void* klass, Fn action) {
   auto* array = reinterpret_cast<void*>(Read<uint64_t>(klass,offsetof(Class,methods)));

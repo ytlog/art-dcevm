@@ -41,6 +41,24 @@ void Same(const ClassSchema& a, const ClassSchema& b) {
   };
   members(a.fields, b.fields); members(a.methods, b.methods);
 }
+void CheckMethodMatches(const MappedDexMetadata& view) {
+  uint32_t count;std::memcpy(&count,view.begin+88,4);
+  std::string error;
+  for(uint32_t i=0;i<count;++i) {
+    MappedDexMethodReference reference;
+    assert(ReadMappedDexMethodReference(view,i,&reference,&error));
+    bool matched = false;
+    assert(ReadMappedDexMethodMatches(view,i,reference.name,reference.descriptor,&matched,&error) && matched && error.empty());
+    for(const auto& wrong:{std::string(),reference.descriptor+"I",std::string("I")}) {
+      assert(ReadMappedDexMethodMatches(view,i,reference.name,wrong,&matched,&error) && !matched);
+    }
+    assert(ReadMappedDexMethodMatches(view,i,reference.name+"!",reference.descriptor,&matched,&error) && !matched);
+  }
+  bool sentinel=true;
+  assert(!ReadMappedDexMethodMatches(view,count,"x","()V",&sentinel,&error) && sentinel && !error.empty());
+  assert(!ReadMappedDexMethodMatches(view,0,"x","()V",nullptr,&error));
+  assert(!ReadMappedDexMethodMatches(view,0,"x","()V",&sentinel,nullptr));
+}
 void CheckTypes(const MappedDexMetadata& view) {
   auto u32 = [](const unsigned char* p) { uint32_t v; std::memcpy(&v,p,4); return v; };
   const auto* ids = std::memcmp(view.begin+4,"041",3)==0 ? view.data_begin : view.begin;
@@ -83,6 +101,7 @@ ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsi
     std::cerr << error << '\n'; std::abort();
   }
   CheckTypes({main.data(),main.size(),data.data(),data.size(),index});
+  CheckMethodMatches({main.data(),main.size(),data.data(),data.size(),UINT32_MAX});
   CheckParent({main.data(),main.size(),data.data(),data.size(),index},result.superclass);
   MappedDexMemberCounts counts;
   assert(ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),index},&counts,&error));
@@ -256,6 +275,7 @@ int main(int argc, char** argv) {
   assert(ReadMappedDexDeclarations(container_view(), &container_schema, &error));
   Same(expected, container_schema);
   CheckTypes(container_view());
+  CheckMethodMatches(container_view());
   CheckParent(container_view(),expected.superclass);
   MappedDexMemberCounts container_counts, original_counts;
   assert(ReadMappedDexMemberCounts(container_view(),&container_counts,&error));
@@ -347,6 +367,10 @@ int main(int argc, char** argv) {
     container = valid_container;
     for (unsigned n = 0; n < 1 + container_random() % 8; ++n)
       container[container_random() % container.size()] ^= 1 + container_random() % 255;
+    bool matched=true;
+    const auto& method=expected.methods.front();
+    if(!ReadMappedDexMethodMatches(container_view(),method.dex_index,method.name,method.descriptor,&matched,&error))
+      assert(matched && !error.empty());
     MappedDexMemberCounts counts{11,22,33,44};
     if(!ReadMappedDexMemberCounts(container_view(),&counts,&error))
       assert(counts.static_fields==11 && counts.instance_fields==22 && counts.direct_methods==33 && counts.virtual_methods==44 && !error.empty());
@@ -383,6 +407,11 @@ int main(int argc, char** argv) {
       auto& target = random() & 1 ? main : data;
       target[random() % target.size()] ^= 1 + random() % 255;
     }
+    bool matched=true;
+    const auto& method=expected.methods.front();
+    if(!ReadMappedDexMethodMatches({main.data(),main.size(),data.data(),data.size(),UINT32_MAX},
+                                  method.dex_index,method.name,method.descriptor,&matched,&error))
+      assert(matched && !error.empty());
     MappedDexMethodReference reference;reference.name="sentinel";
     if(!ReadMappedDexMethodReference({main.data(),main.size(),data.data(),data.size(),UINT32_MAX},
                                     random()%U32(compact,88),&reference,&error))
