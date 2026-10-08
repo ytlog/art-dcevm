@@ -2,7 +2,8 @@
 #include "api/hook_engine.h"
 #include <cstddef>
 namespace artdcevm::native_cache {
-// Borrow the real native function-static closure. It is never constructed,
+// Borrow the real native function-static closure, via its named symbol or
+// observation of its owner's named RunCheckpoint call. It is never constructed,
 // deleted or stored in a fabricated ART Thread. Requires independently observed
 // ThreadList identity, followed by Prepare from a regular Native JNI caller.
 class Service {
