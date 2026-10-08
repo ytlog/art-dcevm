@@ -4,7 +4,8 @@ import org.json.JSONObject;
 import org.junit.Test;
 import static org.junit.Assert.assertTrue;
 public final class RuntimeAccessCloudTest {
-    @Test public void ownedJniAccess() {
+    @Test public void ownedJniAccess() throws Exception {
+        com.github.ytlog.artdcevm.api.DcevmRuntime.attachPublicJvmti(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().getTargetContext());
         JSONObject report=new RuntimeAccessSuite().run(androidx.test.platform.app.InstrumentationRegistry
                 .getInstrumentation().getTargetContext().getApplicationInfo().sourceDir);
         Log.i("ArtDcevmRuntimeAccess",report.toString());

@@ -35,7 +35,10 @@ try:
     metadata['passed']=metadata['passed'] and report.get('mainRoute') in routes and len(report.get('workerRoutes',[]))==2 and all(route in routes for route in report['workerRoutes'])
     metadata['passed']=metadata['passed'] and report.get('mainContextChecks')==384 and report.get('workerContextChecks')==[384,384]
     model=report.get('mainMethodModel')
-    metadata['passed']=metadata['passed'] and model in (11,12) and report.get('workerMethodModels')==[model,model] and len(report.get('methodDexIndices',[]))==3
+    metadata['passed']=metadata['passed'] and model in (11,12) and report.get('workerMethodModels')==[model,model] and 3<=len(report.get('methodDexIndices',[]))<=32 and len(set(report['methodDexIndices']))==len(report['methodDexIndices'])
+    if report.get('sdk')==37 and 'mainMethodTableCount' in report:
+        expected=len(report['methodDexIndices'])
+        metadata['passed']=metadata['passed'] and report['mainMethodTableCount']==expected and report.get('workerMethodTableCounts')==[expected,expected]
     if a.runtime_services:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')

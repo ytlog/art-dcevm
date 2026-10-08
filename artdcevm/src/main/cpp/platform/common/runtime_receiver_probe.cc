@@ -9,21 +9,25 @@ namespace {
 // Fixed class_linker.h/handle.h: Handle<ClassLoader> is one StackReference slot
 // pointer passed by value; ObjPtr<Class> is the trivial single-word return.
 using FindClass=abi::arm64::android11::ReleaseObjectPointer (*)(void*,void*,const char*,void*);
+using LengthFindClass=abi::arm64::android11::ReleaseObjectPointer (*)(void*,void*,const char*,size_t,void*);
 using EncodeMethod=jmethodID (*)(void*,void*);
 using SuspendThreads=void (*)(void*,const char*,bool);
 constexpr char kSuspendThreads[]="_ZN3art10ThreadList10SuspendAllEPKcb";
 constexpr char kFindClass[]="_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror11ClassLoaderEEE";
+constexpr char kLengthFindClass[]="_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcmNS_6HandleINS_6mirror11ClassLoaderEEE";
 constexpr char kEncodeMethod[]="_ZN3art3jni12JniIdManager14EncodeMethodIdEPNS_9ArtMethodE";
 constexpr char kClass[]="com/github/ytlog/artdcevm/internal/CalibrationFixture";
 constexpr char kDescriptor[]="Lcom/github/ytlog/artdcevm/internal/CalibrationFixture;";
 struct Request {Receivers receivers;bool conflicting=false;};
 thread_local Request* active=nullptr;
 FindClass original_find=nullptr;
+LengthFindClass original_length_find=nullptr;
 EncodeMethod original_encode=nullptr;
 SuspendThreads original_suspend=nullptr;
 abi::arm64::android_common::SuspendConstruct suspend_construct=nullptr;
 abi::arm64::android_common::SuspendDestroy suspend_destroy=nullptr;
 std::atomic<FindClass> find_handler{nullptr};
+std::atomic<LengthFindClass> length_find_handler{nullptr};
 std::mutex installation;
 bool attempted=false,installed=false;
 void Observe(void*& slot,void* receiver,Request& request) {
@@ -36,6 +40,14 @@ abi::arm64::android11::ReleaseObjectPointer ObserveFind(void* linker,void* self,
     Observe(active->receivers.class_linker,linker,*active);
   auto handler=find_handler.load(std::memory_order_acquire);
   return (handler?handler:original_find)(linker,self,descriptor,loader);
+}
+// Fixed Android16/17 class_linker.h: size_t is descriptor_length.
+abi::arm64::android11::ReleaseObjectPointer ObserveLengthFind(void* linker,void* self,
+    const char* descriptor,size_t length,void* loader) {
+  if(active&&descriptor&&length==sizeof(kDescriptor)-1&&!std::memcmp(descriptor,kDescriptor,length))
+    Observe(active->receivers.class_linker,linker,*active);
+  auto handler=length_find_handler.load(std::memory_order_acquire);
+  return (handler?handler:original_length_find)(linker,self,descriptor,length,loader);
 }
 jmethodID ObserveEncode(void* manager,void* method) {
   if(active)Observe(active->receivers.jni_id_manager,manager,*active);
@@ -51,6 +63,8 @@ bool Install(HookEngine& hooks,std::string* error) {
   if(installed)return true;
   if(attempted)return Fail(error,"Runtime receiver hook installation previously failed; restart process");
   auto find=hooks.FindSymbol("libart.so",kFindClass);
+  const bool with_length=find==nullptr;
+  if(with_length)find=hooks.FindSymbol("libart.so",kLengthFindClass);
   auto encode=hooks.FindSymbol("libart.so",kEncodeMethod);
   auto suspend=hooks.FindSymbol("libart.so",kSuspendThreads);
   using namespace abi::arm64::android_common;
@@ -63,9 +77,13 @@ bool Install(HookEngine& hooks,std::string* error) {
   // ThreadList itself, so no uncalibrated Thread or Runtime receiver is passed.
   SuspendAll storage{};construct(&storage,"artdcevm Runtime receiver calibration",false);
   void* find_original=nullptr;void* encode_original=nullptr;
-  auto find_token=hooks.Install(find,reinterpret_cast<void*>(ObserveFind),&find_original,error);
-  if(find_token)original_find=reinterpret_cast<FindClass>(find_original);
-  auto encode_token=find_token && original_find?
+  auto find_token=hooks.Install(find,with_length?reinterpret_cast<void*>(ObserveLengthFind):
+      reinterpret_cast<void*>(ObserveFind),&find_original,error);
+  if(find_token) {
+    if(with_length)original_length_find=reinterpret_cast<LengthFindClass>(find_original);
+    else original_find=reinterpret_cast<FindClass>(find_original);
+  }
+  auto encode_token=find_token && find_original?
       hooks.Install(encode,reinterpret_cast<void*>(ObserveEncode),&encode_original,error):nullptr;
   if(encode_token)original_encode=reinterpret_cast<EncodeMethod>(encode_original);
   void* suspend_original=nullptr;
@@ -73,7 +91,7 @@ bool Install(HookEngine& hooks,std::string* error) {
       hooks.Install(suspend,reinterpret_cast<void*>(ObserveSuspend),&suspend_original,error):nullptr;
   if(suspend_token)original_suspend=reinterpret_cast<SuspendThreads>(suspend_original);
   installed=find_token && encode_token && suspend_token &&
-      original_find && original_encode && original_suspend;
+      find_original && original_encode && original_suspend;
   if(installed){suspend_construct=construct;suspend_destroy=destroy;}
   destroy(&storage);
   if(!installed)return Fail(error,"Runtime receiver observation hooks unavailable; restart process");
@@ -82,9 +100,16 @@ bool Install(HookEngine& hooks,std::string* error) {
 }
 bool SetFindClassHandler(void* handler,void** original) {
   std::lock_guard<std::mutex> lock(installation);
-  if(!installed || (handler && !original))return false;
+  if(!installed || !original_find || (handler && !original))return false;
   if(original)*original=reinterpret_cast<void*>(original_find);
   find_handler.store(reinterpret_cast<FindClass>(handler),std::memory_order_release);
+  return true;
+}
+bool SetLengthFindClassHandler(void* handler,void** original) {
+  std::lock_guard<std::mutex> lock(installation);
+  if(!installed||!original_length_find||(handler&&!original))return false;
+  if(original)*original=reinterpret_cast<void*>(original_length_find);
+  length_find_handler.store(reinterpret_cast<LengthFindClass>(handler),std::memory_order_release);
   return true;
 }
 bool Calibrate(HookEngine& hooks,JNIEnv* env,Receivers* output,

@@ -7,6 +7,8 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/owned_context_calibration.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/android17/method_table.h"
+#include "platform/android17/runtime_services.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
@@ -24,6 +26,7 @@ RuntimeCandidate profile{};
 
 bool initialized=false;
 thread_local const char* last_route="uncalibrated";
+thread_local int last_table_count=-1;
 std::mutex initialization;
 abi::arm64::android11::CurrentThread current=nullptr;
 abi::arm64::android11::CurrentPeer const_peer=nullptr;
@@ -53,13 +56,24 @@ struct MethodProbe {
   const method_identity::Oracle* oracles;
   size_t count;
   method_identity::Calibration calibration;
+  jobject class_global;
+  evolution::MappedDexMemberCounts counts;
+  bool table_candidate;
 };
 bool ObserveMethods(const runnable_jni::Context& context,void* data) {
   auto& request=*static_cast<MethodProbe*>(data);
   if(!Observe(context,&request.probe))return false;
   std::string error;
-  return method_identity::Calibrate(context,request.leaf,request.oracles,request.count,
-                                    &request.calibration,&error);
+  if(!method_identity::Calibrate(context,request.leaf,request.oracles,request.count,
+                                    &request.calibration,&error))return false;
+  if(!request.table_candidate)return true;
+  void* klass=nullptr;
+  if(!runnable_executor::DecodeStrongGlobal(context,request.class_global,&klass))return false;
+  method_array::View table;
+  if(!android17::CalibrateMethodTable(context,request.leaf,request.calibration,klass,
+      request.counts,request.oracles,request.count,&table,&error))return false;
+  last_table_count=static_cast<int>(table.boundaries.declared_count);
+  return true;
 }
 int Run(JNIEnv* env,jobject carrier,jobject thread_global) {
   last_route="uncalibrated";
@@ -116,6 +130,10 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probe(JNIEnv* env,jcla
 }
 #endif
 #if defined(ARTDCEVM_TESTING)
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_methodTableCount(JNIEnv*,jclass) {
+  return artdcevm::jni_access::last_table_count;
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_artBuildId(JNIEnv* env,jclass) {
   auto module=artdcevm::FindLoadedModule("libart.so");
@@ -139,7 +157,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeContext(JNIEnv*,j
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
     JNIEnv* env,jclass,jobjectArray methods,jintArray indices,jintArray modifiers,
-    jclass owner,jobject carrier,jobject thread) {
+    jclass owner,jobject carrier,jobject thread,jint direct,jint virtual_count,jint table_candidate) {
   using namespace artdcevm;
   using namespace artdcevm::jni_access;
   if(!methods||!indices||!modifiers||!owner||!carrier||!thread||env->ExceptionCheck())return -300;
@@ -154,7 +172,9 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
     ~Roots(){for(jobject root:values)env->DeleteGlobalRef(root);}
     jobject Own(jobject value){auto root=env->NewGlobalRef(value);if(root)values.push_back(root);return root;}
   } roots{env,{}};
-  if(!roots.Own(owner))return -303;
+  jobject class_global=roots.Own(owner);
+  if(!class_global)return -303;
+  last_table_count=-1;
   jobject thread_global=roots.Own(thread);
   if(!thread_global)return -303;
   std::vector<method_identity::Oracle> oracles;
@@ -174,7 +194,8 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
       hooks.FindSymbol("libart.so",runnable_jni::Bridge::SymbolName()));
   if(!leaf)return -307;
   Probe probe{env,vm,current(),carrier,thread_global,0,!std::strcmp(last_route,"new-global-ref")};
-  MethodProbe request{probe,leaf,oracles.data(),oracles.size(),{}};
+  MethodProbe request{probe,leaf,oracles.data(),oracles.size(),{},class_global,
+      {0,0,static_cast<uint32_t>(direct),static_cast<uint32_t>(virtual_count)},table_candidate!=0};
   guard.unlock();
   auto result=runnable_executor::With(env,thread_global,ObserveMethods,&request);
   if(result!=runnable_jni::Result::kSuccess)return -300-static_cast<int>(result);
@@ -186,9 +207,17 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
 #if defined(ARTDCEVM_TESTING)
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeRuntimeServices(JNIEnv* env,jclass) {
-  artdcevm::ShadowHookEngine hooks;artdcevm::android15::RuntimeServices services;std::string error;
-  if(!artdcevm::android15::CalibrateRuntimeServices(hooks,env,&services,&error)&&error.empty())
-    error="Runtime service calibration failed without diagnostic";
+  artdcevm::ShadowHookEngine hooks;std::string error;bool passed=false;
+  // Named declaration selects an ABI candidate; only actual receiver observation
+  // and independent Runtime comparisons can authorize its services.
+  if(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjNS1_12ListenerTypeE")) {
+    artdcevm::android17::RuntimeServices services;
+    passed=artdcevm::android17::CalibrateRuntimeServices(hooks,env,&services,&error);
+  } else {
+    artdcevm::android15::RuntimeServices services;
+    passed=artdcevm::android15::CalibrateRuntimeServices(hooks,env,&services,&error);
+  }
+  if(!passed&&error.empty())error="Runtime service calibration failed without diagnostic";
   return env->NewStringUTF(error.c_str());
 }
 #endif

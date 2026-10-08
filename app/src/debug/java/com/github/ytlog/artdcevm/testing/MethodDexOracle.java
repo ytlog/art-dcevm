@@ -4,6 +4,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Constructor;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.zip.ZipEntry;
@@ -17,17 +19,19 @@ public final class MethodDexOracle {
         public final int[] modifiers;
         public final String dexEntry;
         public final int headerOffset;
-        Result(int[] indices, int[] modifiers, String entry, int offset) {
+        public final int directMethods, virtualMethods;
+        Result(int[] indices, int[] modifiers, String entry, int offset, int direct, int virtual) {
             this.indices = indices; this.modifiers = modifiers;
             this.dexEntry = entry; this.headerOffset = offset;
+            this.directMethods = direct; this.virtualMethods = virtual;
         }
     }
     private MethodDexOracle() { }
-    public static Result read(String apkPath, Method[] methods) throws IOException {
+    public static Result read(String apkPath, Executable[] methods) throws IOException {
         if (methods == null || methods.length < 3 || methods.length > 32)
             throw new IOException("At least three fixture methods are required");
         Class<?> owner = methods[0].getDeclaringClass();
-        for (Method method : methods) {
+        for (Executable method : methods) {
             if (method.getDeclaringClass() != owner) throw new IOException("Mixed fixture declaring classes");
         }
         Result found = null;
@@ -57,7 +61,7 @@ public final class MethodDexOracle {
                         if (found != null) throw new IOException("Duplicate fixture class definition across APK DEX files");
                         int[] modifiers = new int[methods.length];
                         for (int i = 0; i < methods.length; ++i) modifiers[i] = methods[i].getModifiers();
-                        found = new Result(indices, modifiers, entry.getName(), offset);
+                        found = new Result(indices, modifiers, entry.getName(), offset, dex.directCount, dex.virtualCount);
                     }
                     offset += dex.fileSize;
                     if (!dex.container && offset != bytes.length) throw new IOException("Trailing bytes in legacy DEX");
@@ -81,10 +85,10 @@ public final class MethodDexOracle {
         if (type == double.class) return "D";
         throw new IllegalArgumentException("Unknown primitive");
     }
-    private static String descriptor(Method method) {
+    private static String descriptor(Executable method) {
         StringBuilder result = new StringBuilder("(");
         for (Class<?> type : method.getParameterTypes()) result.append(descriptor(type));
-        return result.append(')').append(descriptor(method.getReturnType())).toString();
+        return result.append(')').append(descriptor(method instanceof Method ? ((Method)method).getReturnType() : void.class)).toString();
     }
     private static final class Dex {
         final byte[] bytes;
@@ -92,6 +96,7 @@ public final class MethodDexOracle {
         final boolean container;
         final int strings, stringOff, types, typeOff, protos, protoOff;
         final int methods, methodOff, classes, classOff;
+        int directCount, virtualCount;
         Dex(byte[] bytes, int base) throws IOException {
             this.bytes = bytes; this.base = base;
             range(base, 112);
@@ -211,7 +216,7 @@ public final class MethodDexOracle {
             if (!shorty.toString().equals(string(integer(offset)))) throw bad("Prototype shorty mismatch");
             return result.append(')').append(resultType).toString();
         }
-        int[] find(Method[] reflected) throws IOException {
+        int[] find(Executable[] reflected) throws IOException {
             String owner = descriptor(reflected[0].getDeclaringClass());
             int ownerType = -1, classData = -1;
             for (int i = 0; i < classes; ++i) {
@@ -228,7 +233,7 @@ public final class MethodDexOracle {
                 if (ushort(method) != ownerType) continue;
                 String name = string(integer(method + 4)), proto = prototype(ushort(method + 2));
                 for (int j = 0; j < reflected.length; ++j) {
-                    if (reflected[j].getName().equals(name) && descriptor(reflected[j]).equals(proto)) {
+                    if ((reflected[j] instanceof Constructor ? "<init>" : reflected[j].getName()).equals(name) && descriptor(reflected[j]).equals(proto)) {
                         if (found[j] != -1) throw bad("Duplicate fixture method_id");
                         found[j] = i;
                     }
@@ -239,6 +244,7 @@ public final class MethodDexOracle {
             int[] cursor = {classData};
             int staticFields = uleb(cursor), instanceFields = uleb(cursor);
             int directMethods = uleb(cursor), virtualMethods = uleb(cursor);
+            directCount = directMethods; virtualCount = virtualMethods;
             if ((long) staticFields + instanceFields + directMethods + virtualMethods > bytes.length)
                 throw bad("Invalid class_data counts");
             for (long i = 0; i < (long) staticFields + instanceFields; ++i) { uleb(cursor); uleb(cursor); }

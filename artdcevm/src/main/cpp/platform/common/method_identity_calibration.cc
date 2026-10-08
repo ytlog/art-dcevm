@@ -10,7 +10,14 @@
 namespace artdcevm::method_identity {
 bool ReadableMappingExtent(const void* address, size_t* extent) {
   if (!address || !extent) return false;
-  const uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
+  uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
+#if defined(__ANDROID__) && defined(__aarch64__)
+  // Android arm64 native allocations may carry a TBI/MTE tag in the top
+  // byte, while /proc/self/maps describes untagged virtual address ranges.
+  // Normalize only this integer lookup key: keep the original tagged pointer
+  // for every memory access, identity comparison and allocator operation.
+  pointer &= UINT64_C(0x00ffffffffffffff);
+#endif
 #if defined(__APPLE__)
   mach_vm_address_t start = pointer;
   mach_vm_size_t size = 0;

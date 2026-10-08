@@ -32,6 +32,9 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/owned_calibration.cc
     platform/common/owned_context_consumer.cc
     platform/common/owned_context_calibration.cc
+    platform/android17/runtime_receiver_probe.cc
+    platform/android17/runtime_services.cc
+    platform/android17/method_table.cc
     platform/common/method_identity_calibration.cc
     platform/common/source_commit.cc
     platform/common/structural_methods.cc
@@ -83,6 +86,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/allocation_validation.cc
     platform/android13/member_decode.cc
     platform/android13/validation_metadata.cc
+    platform/common/modern_field_metadata.cc
+    platform/common/modern_field_probe.cc
     platform/common/field_copy.cc
     platform/android13/field_copy_binding.cc
     platform/android13/field_copy_metadata.cc

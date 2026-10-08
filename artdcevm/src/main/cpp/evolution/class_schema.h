@@ -61,6 +61,14 @@ struct MappedDexHierarchy {
   std::vector<std::string> interfaces;
 };
 bool ReadMappedDexHierarchy(const MappedDexMetadata&, MappedDexHierarchy*, std::string*);
+// Borrowed FieldId identity from an immutable, bounded DEX mapping.
+struct MappedDexFieldReference {
+  const char* declaring_class = nullptr;
+  const char* name = nullptr;
+  const char* descriptor = nullptr;
+};
+bool ReadMappedDexFieldReference(const MappedDexMetadata&, uint32_t index,
+                                MappedDexFieldReference*, std::string*);
 // A method ID may reference another class, including an array, with no local
 // class definition. Explicit cache resolution must use this owner, not referrer.
 struct MappedDexMethodReference {

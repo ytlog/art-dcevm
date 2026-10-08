@@ -70,6 +70,16 @@ class Reader {
     size_t cursor = U32(def + 24);
     return cursor ? Counts(&cursor) : MappedDexMemberCounts{};
   }
+  MappedDexFieldReference ReadFieldReference(uint32_t index) {
+    Initialize();
+    const size_t item = Item(fields_, index);
+    auto owner = TypeView(U16(item));
+    auto type = TypeView(U16(item + 2));
+    auto name = StringView(U32(item + 4));
+    if (owner.empty() || owner.front() != 'L' || type == "V" || name.empty())
+      Fail("Invalid field reference identity");
+    return {owner.data(), name.data(), type.data()};
+  }
   MappedDexMethodReference ReadMethodReference(uint32_t index) {
     Initialize();
     const size_t item = Item(methods_, index);
@@ -473,6 +483,22 @@ bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata& view,bool* out
     *output=supported;error->clear();return true;
   } catch(const std::bad_alloc&) {throw;}
   catch(const std::exception& failure) {*error=failure.what();return false;}
+}
+
+bool ReadMappedDexFieldReference(const MappedDexMetadata& view, uint32_t index,
+                                 MappedDexFieldReference* output, std::string* error) {
+  if (!output || !error) return false;
+  try {
+    auto reference = Reader(view).ReadFieldReference(index);
+    *output = reference;
+    error->clear();
+    return true;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& failure) {
+    *error = failure.what();
+    return false;
+  }
 }
 
 bool ReadMappedDexMethodReference(const MappedDexMetadata& view, uint32_t index,

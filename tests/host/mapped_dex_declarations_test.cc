@@ -41,6 +41,23 @@ void Same(const ClassSchema& a, const ClassSchema& b) {
   };
   members(a.fields, b.fields); members(a.methods, b.methods);
 }
+void CheckFieldReferences(const MappedDexMetadata& view) {
+  ClassSchema schema;std::string error;
+  auto declarations=view;declarations.class_def_index=0;
+  assert(ReadMappedDexDeclarations(declarations,&schema,&error));
+  for(const auto& field:schema.fields) {
+    MappedDexFieldReference reference;
+    assert(ReadMappedDexFieldReference(view,field.dex_index,&reference,&error));
+    assert(std::string(reference.name)==field.name&&std::string(reference.descriptor)==field.descriptor);
+    assert(std::string(reference.declaring_class)==schema.descriptor);
+  }
+  uint32_t count;std::memcpy(&count,view.begin+80,4);
+  MappedDexFieldReference sentinel{"owner","name","type"};
+  assert(!ReadMappedDexFieldReference(view,count,&sentinel,&error));
+  assert(std::string(sentinel.name)=="name"&&!error.empty());
+  assert(!ReadMappedDexFieldReference(view,0,nullptr,&error));
+  assert(!ReadMappedDexFieldReference(view,0,&sentinel,nullptr));
+}
 void CheckMethodMatches(const MappedDexMetadata& view) {
   uint32_t count;std::memcpy(&count,view.begin+88,4);
   std::string error;
@@ -114,6 +131,7 @@ ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsi
   }
   CheckTypes({main.data(),main.size(),data.data(),data.size(),index});
   CheckMethodMatches({main.data(),main.size(),data.data(),data.size(),UINT32_MAX});
+  CheckFieldReferences({main.data(),main.size(),data.data(),data.size(),UINT32_MAX});
   CheckParent({main.data(),main.size(),data.data(),data.size(),index},result.superclass);
   CheckHierarchy({main.data(),main.size(),data.data(),data.size(),index},result);
   MappedDexMemberCounts counts;
@@ -293,6 +311,7 @@ int main(int argc, char** argv) {
   Same(expected, container_schema);
   CheckTypes(container_view());
   CheckMethodMatches(container_view());
+  CheckFieldReferences(container_view());
   CheckParent(container_view(),expected.superclass);
   CheckHierarchy(container_view(),expected);
   MappedDexMemberCounts container_counts, original_counts;

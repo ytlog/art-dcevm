@@ -2,6 +2,7 @@ import com.github.ytlog.artdcevm.testing.MethodDexOracle;
 import com.github.ytlog.artdcevm.testing.MethodIdentityFixture;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Executable;
 import java.util.HashSet;
 
 public final class MethodDexOracleTest {
@@ -26,6 +27,14 @@ public final class MethodDexOracleTest {
                     throw new AssertionError("Wrong unique method identities");
                 if (path.contains("container-multi") && result.headerOffset == 0)
                     throw new AssertionError("Did not iterate to second logical DEX");
+                if (path.contains("legacy-")) {
+                    Executable[] complete = {MethodIdentityFixture.class.getDeclaredConstructor(),
+                            methods[0], methods[1], methods[2]};
+                    MethodDexOracle.Result all = MethodDexOracle.read(path, complete);
+                    if (all.indices.length != 4 || all.directMethods != 3 || all.virtualMethods != 1 ||
+                            all.modifiers[0] != complete[0].getModifiers())
+                        throw new AssertionError("Constructor/class_data oracle mismatch");
+                }
             } catch (IOException expected) {
                 if (!failure) throw expected;
             }
