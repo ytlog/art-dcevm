@@ -80,7 +80,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/allocation_validation.cc
     platform/android13/member_decode.cc
     platform/android13/validation_metadata.cc
-    platform/android13/field_copy.cc
+    platform/common/field_copy.cc
     platform/android13/field_copy_binding.cc
     platform/android13/field_copy_metadata.cc
     platform/android13/field_copy_storage.cc

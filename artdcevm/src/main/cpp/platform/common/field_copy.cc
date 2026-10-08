@@ -1,6 +1,6 @@
-#include "platform/android13/field_copy.h"
+#include "platform/common/field_copy.h"
 #include <cstring>
-namespace artdcevm::android13 {
+namespace artdcevm::field_copy {
 namespace {
 void* MatchingClass(const FieldCopyAccess& ops, void* target, const CopyClassView& old,
                     bool is_static) noexcept {

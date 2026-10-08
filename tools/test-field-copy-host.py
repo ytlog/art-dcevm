@@ -10,7 +10,7 @@ out.mkdir(parents=True, exist_ok=True)
 binary = out / 'field_copy_test'
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp),
-           str(root / 'tests/host/field_copy_test.cc'), str(cpp / 'platform/android13/field_copy.cc'), '-o', str(binary)]
+           str(root / 'tests/host/field_copy_test.cc'), str(cpp / 'platform/common/field_copy.cc'), '-o', str(binary)]
 if os.uname().sysname != 'Darwin':
     command.append('-ldl')
 subprocess.run(command, check=True)

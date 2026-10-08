@@ -7,6 +7,21 @@ namespace artdcevm::field_array {
 // storage live under mutator access; structural mutation requires exclusive access.
 using Field = abi::arm64::Field;
 inline constexpr size_t kDataOffset = 4;
+struct Layout {
+  size_t class_size, instance_pointer, static_pointer;
+  bool merged;
+};
+inline constexpr Layout kSplit{sizeof(class_metadata::Class11),
+    offsetof(class_metadata::Class11, ifields), offsetof(class_metadata::Class11, sfields), false};
+inline constexpr Layout kMerged16{sizeof(class_metadata::Class16),
+    offsetof(class_metadata::Class16, fields), offsetof(class_metadata::Class16, fields), true};
+inline constexpr Layout kMerged17{sizeof(class_metadata::Class17),
+    offsetof(class_metadata::Class17, fields), offsetof(class_metadata::Class17, fields), true};
+inline const Layout* Declaration(int api) {
+  if (api >= 30 && api <= 35) return &kSplit;
+  if (api == 36) return &kMerged16;
+  return api == 37 ? &kMerged17 : nullptr;
+}
 inline uint32_t Flags(const void* field) {
   uint32_t flags;
   std::memcpy(&flags, static_cast<const unsigned char*>(field) + 4, 4);
@@ -14,16 +29,20 @@ inline uint32_t Flags(const void* field) {
 }
 // Returns an opaque native pointer only. The source class declaration must be
 // matched/calibrated; no managed reference or read barrier is bypassed here.
-inline bool ReadPointer(int api, const void* klass, size_t extent, bool is_static, void** output) {
-  const auto* layout = class_metadata::Declaration(api);
+inline bool ReadPointer(const Layout& layout, const void* klass, size_t extent,
+                        bool is_static, void** output) {
   const auto address = reinterpret_cast<uintptr_t>(klass);
-  if (!layout || !klass || !output || extent < layout->size || address % 4 ||
-      address > UINTPTR_MAX - layout->size) return false;
-  const size_t offset = api >= 36 ? offsetof(class_metadata::Class16, fields)
-      : is_static ? offsetof(class_metadata::Class11, sfields) : offsetof(class_metadata::Class11, ifields);
+  const size_t offset = is_static ? layout.static_pointer : layout.instance_pointer;
+  if (!klass || !output || extent < layout.class_size || address % 4 ||
+      layout.class_size < 8 || offset > layout.class_size - 8 ||
+      address > UINTPTR_MAX - layout.class_size) return false;
   uint64_t pointer;
   std::memcpy(&pointer, static_cast<const unsigned char*>(klass) + offset, 8);
   *output = reinterpret_cast<void*>(static_cast<uintptr_t>(pointer)); return true;
+}
+inline bool ReadPointer(int api, const void* klass, size_t extent, bool is_static, void** output) {
+  const auto* layout = Declaration(api);
+  return layout && ReadPointer(*layout, klass, extent, is_static, output);
 }
 struct View {
   void* array = nullptr;
@@ -58,8 +77,8 @@ struct View {
 };
 // Extent must describe verified live native storage, independent of its header.
 // Legacy arrays are already separated; merged arrays filter ArtField::IsStatic.
-inline bool Read(int api, void* array, size_t extent, bool is_static, View* output) {
-  if (!class_metadata::Declaration(api) || !output) return false;
+inline bool Read(const Layout& layout, void* array, size_t extent, bool is_static, View* output) {
+  if (!output) return false;
   const auto address = reinterpret_cast<uintptr_t>(array);
   uint32_t count = 0;
   if (array) {
@@ -68,12 +87,16 @@ inline bool Read(int api, void* array, size_t extent, bool is_static, View* outp
     if (count > (extent - kDataOffset) / sizeof(Field) || count > (UINTPTR_MAX - address - kDataOffset) / sizeof(Field))
       return false;
   } else if (extent) return false;
-  View result{array, count, count, api >= 36, is_static};
+  View result{array, count, count, layout.merged, is_static};
   if (result.merged) {
     result.selected_count = 0;
     for (uint32_t i = 0; i < count; ++i) result.selected_count += result.Selected(i);
   }
   *output = result; return true;
+}
+inline bool Read(int api, void* array, size_t extent, bool is_static, View* output) {
+  const auto* layout = Declaration(api);
+  return layout && Read(*layout, array, extent, is_static, output);
 }
 // Existing calibrated providers trust the ART-owned allocation's length header.
 // This path cannot prove an independent mapped extent; use Read directly when
