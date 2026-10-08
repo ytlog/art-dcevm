@@ -2,29 +2,20 @@
 #include <cstddef>
 #include <cstdint>
 #include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/code_info.h"
+#include "platform/abi/arm64/stack_visitor.h"
 namespace artdcevm::android13::stack_abi {
-// Fixed release declarations from stack.h, stack_map.h and base/bit_table.h.
-// These are borrowed POD storage; device WalkStack owns all decoding.
-struct BitRegion { void* data; size_t bit_start; size_t bit_size; };
-template<size_t Columns> struct BitTable {
-  BitRegion region; uint32_t rows; uint16_t columns[Columns+1];
-};
-struct CodeInfo {
-  uint32_t flags, code_size, frame_size, core_mask, fp_mask, dex_regs, table_flags;
-  BitTable<8> stack_maps;
-  BitTable<2> register_masks;
-  BitTable<1> stack_masks;
-  BitTable<6> inline_infos;
-  BitTable<3> method_infos;
-  BitTable<1> dex_masks;
-  BitTable<1> dex_maps;
-  BitTable<2> dex_catalog;
-};
-struct TableIterator { void* table; uint32_t row; };
-struct InlineRange { TableIterator begin, end; };
-struct CodeInfoPair { void* header; CodeInfo info; };
-struct StackMapPair { uintptr_t pc; TableIterator map; };
-enum class WalkKind : uint32_t { kIncludeInlined, kSkipInlined };
+// Explicit matched CAS decoded-object declaration. Physical offsets are also
+// present in fixed Android 13--16 sources; this does not select a device by SDK.
+using BitRegion=abi::arm64::android13::BitRegion;
+template<size_t Columns> using BitTable=abi::arm64::android13::BitTable<Columns>;
+using CodeInfo=abi::arm64::android13::CodeInfo;
+using TableIterator=abi::arm64::android13::TableIterator;
+using InlineRange=abi::arm64::android13::InlineRange;
+using CodeInfoPair=abi::arm64::android13::CodeInfoPair;
+using StackMapPair=abi::arm64::android13::StackMapPair;
+static_assert(sizeof(CodeInfo)==344 && offsetof(CodeInfo,stack_maps)==32 && offsetof(CodeInfo,inline_infos)==152);
+using WalkKind=abi::arm64::stack::WalkKind;
 class Visitor {
  public:
   Visitor(void* thread, void* context, WalkKind kind);

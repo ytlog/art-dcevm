@@ -1,6 +1,7 @@
 #include "platform/android13/evolution_transaction.h"
 #include "platform/android13/evolution_transaction_abi.h"
 #include "platform/android13/device_dex_input.h"
+#include "platform/common/dex_mapping_abi.h"
 #include "platform/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
@@ -48,47 +49,6 @@ void Require(bool value) { if(!value) std::abort(); }
 template<class T> T Read(const void* p,size_t at=0) { T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value; }
 void* Parent(void* klass) {return ReadHeapReference(klass,offsetof(Class,super_class));}
 void* Loader(void* klass) {return ReadHeapReference(klass,offsetof(Class,class_loader));}
-struct InputHierarchy {
-  validation_abi::DexMappingPrefix map;
-  bool Range(size_t at,size_t width,size_t size) const {return at<=size && width<=size-at;}
-  bool U32(const unsigned char* bytes,size_t size,size_t at,uint32_t* value) const {
-    if(!bytes || !Range(at,4,size)) return false;
-    *value=uint32_t{bytes[at]}|uint32_t{bytes[at+1]}<<8|uint32_t{bytes[at+2]}<<16|uint32_t{bytes[at+3]}<<24;return true;
-  }
-  bool Main(size_t at,uint32_t* value) const {return U32(map.begin,map.size,at,value);}
-  bool Id(size_t header,uint32_t index,size_t width,size_t* at) const {
-    uint32_t count,offset;
-    if(!Main(header,&count) || !Main(header+4,&offset) || index>=count || offset<0x70 || offset%4 || !Range(offset,size_t{count}*width,map.size)) return false;
-    *at=offset+size_t{index}*width;return true;
-  }
-  bool Type(uint16_t index,const char** value) const {
-    size_t at;uint32_t string;
-    if(index==UINT16_MAX || !Id(64,index,4,&at) || !Main(at,&string) || !Id(56,string,4,&at)) return false;
-    uint32_t data_at;if(!Main(at,&data_at)) return false;at=data_at;bool complete=false;
-    for(unsigned i=0;i<5;++i) {
-      if(!map.data_begin || !Range(at,1,map.data_size)) return false;uint8_t byte=map.data_begin[at++];
-      if(i==4 && (byte&0xf0)) return false;
-      if(!(byte&0x80)) {complete=true;break;}
-    }
-    if(!complete || !Range(at,1,map.data_size) || !std::memchr(map.data_begin+at,0,map.data_size-at)) return false;
-    *value=reinterpret_cast<const char*>(map.data_begin+at);return true;
-  }
-  bool ReadHierarchy(std::string* parent,std::vector<std::string>* interfaces) const {
-    uint32_t count;size_t def;
-    if(!Main(96,&count) || count!=1 || !Id(96,0,32,&def) || !Range(def+8,2,map.size)) return false;
-    uint16_t type=uint16_t(map.begin[def+8]|uint16_t{map.begin[def+9]}<<8);const char* name;
-    if(!Type(type,&name)) return false;*parent=name;
-    uint32_t list;if(!Main(def+12,&list)) return false;
-    if(!list) return true;
-    if(!U32(map.data_begin,map.data_size,list,&count) || !Range(size_t{list}+4,size_t{count}*2,map.data_size)) return false;
-    interfaces->reserve(count);
-    for(size_t i=0;i<count;++i) {
-      size_t at=size_t{list}+4+2*i;uint16_t next=uint16_t(map.data_begin[at]|uint16_t{map.data_begin[at+1]}<<8);
-      if(!Type(next,&name)) return false;interfaces->emplace_back(name);
-    }
-    return true;
-  }
-};
 enum class Scan {kNone,kMarked,kUnsupported};
 struct ActiveScan { void* self;void* marked=nullptr;Scan result=Scan::kNone;uint64_t token=0; };
 struct Visitor final:stack_abi::Visitor {
@@ -190,13 +150,19 @@ bool NeedsEvolutionReceiverGuard(jint count,const jvmtiClassDefinition* definiti
     if(def.class_byte_count<=0 || !def.class_bytes || !def.klass) continue;
     DeviceDexInput input(def.class_bytes,static_cast<size_t>(def.class_byte_count));
     if(!input.Valid()) continue; // Device verifier owns final rejection semantics.
-    std::string parent;std::vector<std::string> interfaces;
-    if(!InputHierarchy{input.Mapping()}.ReadHierarchy(&parent,&interfaces)) continue;
+    evolution::MappedDexMetadata mapping;
+    evolution::MappedDexHierarchy hierarchy;
+    std::string error;
+    if (!dex_mapping_abi::Normalize(33,input.Mapping(),0,&mapping,&error) ||
+        !evolution::ReadMappedDexHierarchy(mapping,&hierarchy,&error)) continue;
+    const auto& parent=hierarchy.superclass;
+    const auto& interfaces=hierarchy.interfaces;
     NativeObjectAccess access(ValidationHooks::TransactionJni());Require(access.Supported());
     Require(interfaces.size()<=static_cast<size_t>(INT32_MAX)-4);
     HandleRootScope roots(access.Self(),4+static_cast<uint32_t>(interfaces.size()));
     roots.Set(0,access.Decode(def.klass));if(!roots.Get(0) || !Parent(roots.Get(0))) continue;
     roots.Set(1,Loader(roots.Get(0)));
+    if (parent.empty()) return true;
     roots.Set(2,lookup(RuntimeClassLinker(),access.Self(),parent.c_str(),roots.Get(1)));
     if(!roots.Get(2) || !IsValidationSubclassOf(roots.Get(2),Parent(roots.Get(0)))) return true;
     void* table=ReadHeapReference(roots.Get(0),offsetof(Class,iftable));

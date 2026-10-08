@@ -54,6 +54,13 @@ bool ReadMappedDexTypeDescriptor(const MappedDexMetadata&, uint32_t index,
 // Selected class_def superclass, or nullptr for the DEX NO_INDEX root.
 // Same borrowed lifetime/error contract as type descriptor lookup.
 bool ReadMappedDexSuperclassDescriptor(const MappedDexMetadata&, const char**, std::string*);
+// Selected class hierarchy only; does not parse members/code. Output is unchanged
+// on format failure. Uses shared/container ID bases and full superclass indices.
+struct MappedDexHierarchy {
+  std::string superclass;
+  std::vector<std::string> interfaces;
+};
+bool ReadMappedDexHierarchy(const MappedDexMetadata&, MappedDexHierarchy*, std::string*);
 // A method ID may reference another class, including an array, with no local
 // class definition. Explicit cache resolution must use this owner, not referrer.
 struct MappedDexMethodReference {

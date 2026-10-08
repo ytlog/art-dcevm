@@ -3,7 +3,7 @@
 #include "platform/android13/validation_metadata_abi.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/common/code_item_metadata.h"
-#include "platform/common/bit_table_read.h"
+#include "platform/common/code_info_view.h"
 #include <cstring>
 #if defined(ARTDCEVM_TESTING) && defined(__ANDROID__)
 #include <android/log.h>
@@ -13,8 +13,8 @@
 #endif
 namespace artdcevm::android13 {
 namespace {
-void (*construct)(stack_abi::CodeInfo*,const void*);
-stack_abi::TableIterator (*stack_map)(const stack_abi::CodeInfo*,uintptr_t,int);
+abi::arm64::android13::ConstructCodeInfo construct;
+abi::arm64::android13::FindStackMap stack_map;
 bool (*nterp)(const void*);
 void* (*root)(void*);
 void* (*obsolete_cache)(void*);
@@ -40,13 +40,6 @@ bool Registers(void* method,uint32_t* count) {
   auto map=Read<validation_abi::DexMappingPrefix>(dex);
   return code_item_metadata::ReadRegisters(33,method,sizeof(art_method_abi::ArtMethod),
       {map.begin,map.size,map.data_begin,map.data_size,0},count);
-}
-template<size_t Columns> bool Get(const stack_abi::BitTable<Columns>& table,uint32_t row,size_t column,uint32_t* result) {
-  if(row>=table.rows || column>=Columns || table.columns[column+1]<table.columns[column]) return false;
-  size_t width=table.columns[column+1]-table.columns[column];
-  return bit_table_read::ReadCell(
-      {table.region.data,table.region.bit_start,table.region.bit_size},
-      table.rows,row,table.columns[Columns],table.columns[column],width,result);
 }
 struct PcVisitor final:stack_abi::Visitor {
   PcVisitor(void* thread,uintptr_t target):Visitor(thread,nullptr,stack_abi::WalkKind::kIncludeInlined),target(target) {}
@@ -107,20 +100,14 @@ bool IsEvolutionFrameRecoverable(const stack_abi::Visitor& visitor) {
   if(!ReadEvolutionCodeInfo(Read<void*>(visitor.quick_frame),visitor.header,visitor.pc,&info)) return reject("code-owner-or-aot-policy");
   auto map=stack_map(&info,visitor.pc-entry,2); // SOURCE InstructionSet::kArm64.
   if(map.table!=&info.stack_maps || map.row>=info.stack_maps.rows) return reject("no-stackmap",expected);
-  uint32_t index;if(!Get(info.stack_maps,map.row,7,&index)) return reject("map-bounds",expected);
-  uint32_t available=0;
-  if(index!=UINT32_MAX) {
-    available=info.dex_regs;
-    if(visitor.inline_frames.begin.row!=visitor.inline_frames.end.row) {
-      uint32_t start;if(!Get(info.stack_maps,map.row,5,&start)) return reject("inline-start-bounds",expected);
-      auto row=visitor.inline_frames.end.row-1;
-      if(start==UINT32_MAX || row<start || row>=info.inline_infos.rows) return reject("inline-range",expected);
-      uint32_t first=info.dex_regs,last;
-      if(row!=start && !Get(info.inline_infos,row-1,5,&first)) return reject("inline-first-bounds",expected);
-      if(!Get(info.inline_infos,row,5,&last) || last<first) return reject("inline-last-bounds",expected);
-      available=last-first;
-    }
-  }
+  code_info_view::View view;
+  if(!code_info_view::ReadDecoded(info,&view))return reject("decoded-table-bounds",expected);
+  uint32_t index;
+  if(!view.StackMaps().Read(map.row,7,&index))return reject("map-bounds",expected);
+  uint32_t available;
+  if(!code_info_view::RegisterCount(view,map.row,visitor.inline_frames.begin.row,
+                                   visitor.inline_frames.end.row,&available))
+    return reject("register-map-bounds",expected);
   // This matches Get[Inline]DexRegisterMapOf().size() exactly. A missing map
   // cannot be legitimized by Runtime::IsJavaDebuggable or a private JIT address.
   return available==expected || reject(index==UINT32_MAX?"missing-map":"register-count",expected,available);
@@ -131,8 +118,8 @@ bool IsEvolutionPcRecoverable(void* thread,uintptr_t pc) {
 }
 bool ConfigureFrameRecovery(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
   if(!profile.Matched()){if(error)*error="Frame recovery requires a matched device profile";return false;}
-  auto c=reinterpret_cast<decltype(construct)>(hooks.FindSymbol("libart.so","_ZN3art8CodeInfoC2EPKNS_20OatQuickMethodHeaderE"));
-  auto m=reinterpret_cast<decltype(stack_map)>(hooks.FindSymbol("libart.so","_ZNK3art8CodeInfo28GetStackMapForNativePcOffsetEmNS_14InstructionSetE"));
+  auto c=reinterpret_cast<decltype(construct)>(hooks.FindSymbol("libart.so",abi::arm64::android13::kConstructCodeInfo));
+  auto m=reinterpret_cast<decltype(stack_map)>(hooks.FindSymbol("libart.so",abi::arm64::android13::kFindStackMap));
   auto n=reinterpret_cast<decltype(nterp)>(hooks.FindSymbol("libart.so","_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
   auto r=reinterpret_cast<decltype(root)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto o=reinterpret_cast<decltype(obsolete_cache)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod19GetObsoleteDexCacheEv"));

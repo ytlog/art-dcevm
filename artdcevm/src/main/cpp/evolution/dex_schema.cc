@@ -47,11 +47,7 @@ class Reader {
     result.descriptor = Type(class_type_);
     if (result.descriptor.front() != 'L') Fail("A class definition must use a class descriptor");
     result.access = U32(def + 4);
-    uint32_t super = U32(def + 8);
-    if (super != UINT32_MAX) {
-      result.superclass = Type(super);
-      if (result.superclass.front() != 'L') Fail("Invalid superclass type");
-    }
+    if (const char* parent = Superclass(def)) result.superclass = parent;
     result.interfaces = TypeList(U32(def + 12), true);
     uint32_t class_data = U32(def + 24);
     if (!class_data) return result;
@@ -122,11 +118,15 @@ class Reader {
   const char* ReadSuperclassDescriptor() {
     Initialize();
     const size_t def = Item(Table(96, 32), class_def_index_);
-    const uint32_t index = U32(def + 8);
-    if (index == UINT32_MAX) return nullptr;
-    const auto value = TypeView(index);
-    if (value.front() != 'L') Fail("Invalid superclass type");
-    return value.data();
+    return Superclass(def);
+  }
+  MappedDexHierarchy ReadHierarchy() {
+    Initialize();
+    const size_t def = Item(Table(96, 32), class_def_index_);
+    MappedDexHierarchy result;
+    if (const char* parent = Superclass(def)) result.superclass = parent;
+    result.interfaces = TypeList(U32(def + 12), true);
+    return result;
   }
   bool SupportsDefaultMethods() {
     Initialize();
@@ -134,6 +134,13 @@ class Reader {
     return std::memcmp(header_+4,"037",3)>=0;
   }
  private:
+  const char* Superclass(size_t def) const {
+    const uint32_t index = U32(def + 8);
+    if (index == UINT32_MAX) return nullptr;
+    const auto value = TypeView(index);
+    if (value.front() != 'L') Fail("Invalid superclass type");
+    return value.data();
+  }
   void Initialize() {
     if (!begin_ || !data_) Fail("Missing DEX mapping");
     Range(0, 0x70);
@@ -424,6 +431,16 @@ bool ReadMappedDexSuperclassDescriptor(const MappedDexMetadata& view, const char
   try {
     const char* value = Reader(view).ReadSuperclassDescriptor();
     *output = value; error->clear(); return true;
+  } catch (const std::bad_alloc&) { throw; }
+  catch (const std::exception& failure) { *error = failure.what(); return false; }
+}
+
+bool ReadMappedDexHierarchy(const MappedDexMetadata& view, MappedDexHierarchy* output,
+                            std::string* error) {
+  if (!output || !error) return false;
+  try {
+    auto value = Reader(view).ReadHierarchy();
+    *output = std::move(value); error->clear(); return true;
   } catch (const std::bad_alloc&) { throw; }
   catch (const std::exception& failure) { *error = failure.what(); return false; }
 }

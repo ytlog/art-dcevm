@@ -95,6 +95,18 @@ void CheckParent(const MappedDexMetadata& view,const std::string& expected) {
   assert(!ReadMappedDexSuperclassDescriptor(invalid,&value,&error));
   assert(value==saved && !error.empty());
 }
+void CheckHierarchy(const MappedDexMetadata& view,const ClassSchema& expected) {
+  std::string error;
+  MappedDexHierarchy hierarchy;
+  assert(ReadMappedDexHierarchy(view,&hierarchy,&error));
+  assert(hierarchy.superclass==expected.superclass && hierarchy.interfaces==expected.interfaces && error.empty());
+  MappedDexHierarchy sentinel{"Lsentinel;",{"LIface;"}};
+  auto invalid=view;invalid.class_def_index=UINT32_MAX;
+  assert(!ReadMappedDexHierarchy(invalid,&sentinel,&error));
+  assert(sentinel.superclass=="Lsentinel;" && sentinel.interfaces==std::vector<std::string>{"LIface;"});
+  assert(!ReadMappedDexHierarchy(view,nullptr,&error));
+  assert(!ReadMappedDexHierarchy(view,&sentinel,nullptr));
+}
 ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsigned char>& data, uint32_t index = 0) {
   ClassSchema result; std::string error;
   if (!ReadMappedDexDeclarations({main.data(), main.size(), data.data(), data.size(), index}, &result, &error)) {
@@ -103,6 +115,7 @@ ClassSchema Parse(const std::vector<unsigned char>& main, const std::vector<unsi
   CheckTypes({main.data(),main.size(),data.data(),data.size(),index});
   CheckMethodMatches({main.data(),main.size(),data.data(),data.size(),UINT32_MAX});
   CheckParent({main.data(),main.size(),data.data(),data.size(),index},result.superclass);
+  CheckHierarchy({main.data(),main.size(),data.data(),data.size(),index},result);
   MappedDexMemberCounts counts;
   assert(ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),index},&counts,&error));
   uint32_t statics=0,directs=0;
@@ -138,6 +151,10 @@ int main(int argc, char** argv) {
   const char* parent_sentinel="unchanged";const auto* saved_parent=parent_sentinel;
   assert(!ReadMappedDexSuperclassDescriptor({parent_variant.data(),parent_variant.size(),parent_variant.data(),parent_variant.size(),0},&parent_sentinel,&error));
   assert(parent_sentinel==saved_parent && !error.empty());
+  MappedDexHierarchy high_sentinel{"Lsentinel;",{"LIface;"}};
+  assert(!ReadMappedDexHierarchy({parent_variant.data(),parent_variant.size(),parent_variant.data(),parent_variant.size(),0},&high_sentinel,&error));
+  assert(high_sentinel.superclass=="Lsentinel;" && high_sentinel.interfaces==std::vector<std::string>{"LIface;"});
+
   // The source size slot changes semantics at API 35. Its zero/nonzero junk
   // must never determine a modern file extent; legacy APIs keep their extent.
   auto normalize = [&](int api, const dex_mapping_abi::Prefix& prefix) {
@@ -277,6 +294,7 @@ int main(int argc, char** argv) {
   CheckTypes(container_view());
   CheckMethodMatches(container_view());
   CheckParent(container_view(),expected.superclass);
+  CheckHierarchy(container_view(),expected);
   MappedDexMemberCounts container_counts, original_counts;
   assert(ReadMappedDexMemberCounts(container_view(),&container_counts,&error));
   assert(ReadMappedDexMemberCounts({original.data(),original.size(),original.data(),original.size(),0},&original_counts,&error));
@@ -372,6 +390,9 @@ int main(int argc, char** argv) {
     if(!ReadMappedDexMethodMatches(container_view(),method.dex_index,method.name,method.descriptor,&matched,&error))
       assert(matched && !error.empty());
     MappedDexMemberCounts counts{11,22,33,44};
+    MappedDexHierarchy hierarchy_sentinel{"Lsentinel;",{"LIface;"}};
+    if(!ReadMappedDexHierarchy(container_view(),&hierarchy_sentinel,&error))
+      assert(hierarchy_sentinel.superclass=="Lsentinel;" && hierarchy_sentinel.interfaces==std::vector<std::string>{"LIface;"});
     if(!ReadMappedDexMemberCounts(container_view(),&counts,&error))
       assert(counts.static_fields==11 && counts.instance_fields==22 && counts.direct_methods==33 && counts.virtual_methods==44 && !error.empty());
     ClassSchema value; value.descriptor = "Lsentinel;";
@@ -417,6 +438,9 @@ int main(int argc, char** argv) {
                                     random()%U32(compact,88),&reference,&error))
       assert(reference.name=="sentinel" && !error.empty());
     MappedDexMemberCounts counts{11,22,33,44};
+    MappedDexHierarchy hierarchy_sentinel{"Lsentinel;",{"LIface;"}};
+    if(!ReadMappedDexHierarchy({main.data(),main.size(),data.data(),data.size(),0},&hierarchy_sentinel,&error))
+      assert(hierarchy_sentinel.superclass=="Lsentinel;" && hierarchy_sentinel.interfaces==std::vector<std::string>{"LIface;"});
     if(!ReadMappedDexMemberCounts({main.data(),main.size(),data.data(),data.size(),0},&counts,&error))
       assert(counts.static_fields==11 && counts.instance_fields==22 && counts.direct_methods==33 && counts.virtual_methods==44 && !error.empty());
     ClassSchema value; value.descriptor = "Lsentinel;";

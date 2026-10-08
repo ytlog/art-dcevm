@@ -52,7 +52,7 @@ bool Contains(const void*,const void*){return true;}
 bool Private(const void*,const void*){return private_pc;}
 void* Lookup(void*,void* t,const char* name,void* loader){assert(t==self&&loader==reinterpret_cast<void*>(1));++lookups;return classes[name];}
 jvmtiError Engine(jvmtiEnv*,jint,const jvmtiClassDefinition*){assert(!locked&&!suspended);++engine_calls;narrow=engine_narrow;return engine_result;}
-struct Dex {virtual ~Dex(){++dex_destroys;}const unsigned char* begin;size_t size;const unsigned char* data;size_t data_size;Dex(const unsigned char* b,size_t n):begin(b),size(n),data(b),data_size(n){}};
+struct Dex {virtual ~Dex(){++dex_destroys;}const unsigned char* begin;size_t size;const unsigned char* data;size_t data_size;Dex(const unsigned char* b,size_t n):begin(b),size(n),data(b),data_size(n){if(n>=512 && std::memcmp(b,"dex\n041\0",8)==0){begin=b+256;size=n-256;}}};
 device_dex_abi::OwnedPointer Open(const void*,const unsigned char* b,size_t n,const BorrowedPlatformString*,uint32_t checksum,const void* oat,bool verify,bool sum,device_dex_abi::PlatformError* error,device_dex_abi::OwnedPointer container){assert(checksum==0&&!oat&&verify&&sum&&!container.object);++opens;assert(error->bytes[0]==0);if(n<112)return {};return device_dex_abi::OwnedPointer(new Dex(b,n));}
 void DestroyString(void* raw){assert(raw);++strings;}
 namespace artdcevm::android13 {
@@ -121,9 +121,28 @@ Reset();mode_ok=false;before=engine_calls;assert(RedefineEvolutionTransaction(nu
 Reset();frames={{&method,header}};debug=false;before=engine_calls;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine_calls==before&&!enabled&&!required);
 Reset();enabled=required=true;engine_result=JVMTI_ERROR_FAILS_VERIFICATION;assert(RedefineEvolutionTransaction(nullptr,0,nullptr,true)==engine_result&&enabled&&required);
 // Genuine DEX table format, verifier result remains owned by the original opener.
-std::vector<unsigned char> bytes(256);Put(bytes,56,2);Put(bytes,60,112);Put(bytes,64,2);Put(bytes,68,120);Put(bytes,96,1);Put(bytes,100,128);Put(bytes,112,180);Put(bytes,116,200);Put(bytes,120,0);Put(bytes,124,1);Put(bytes,136,0);bytes[180]=8;std::memcpy(bytes.data()+181,"LParent;",9);bytes[200]=7;std::memcpy(bytes.data()+201,"LIface;",8);jvmtiClassDefinition def{reinterpret_cast<jclass>(&old),int(bytes.size()),bytes.data()};Reset();lookups=0;assert(!NeedsEvolutionReceiverGuard(1,&def)&&lookups==1);classes["LParent;"]=nullptr;assert(NeedsEvolutionReceiverGuard(1,&def));classes["LParent;"]=&parent;
+std::vector<unsigned char> bytes(256);std::memcpy(bytes.data(),"dex\n039\0",8);Put(bytes,32,256);Put(bytes,36,112);Put(bytes,40,0x12345678);Put(bytes,56,2);Put(bytes,60,112);Put(bytes,64,2);Put(bytes,68,120);Put(bytes,96,1);Put(bytes,100,128);Put(bytes,112,180);Put(bytes,116,200);Put(bytes,120,0);Put(bytes,124,1);Put(bytes,136,0);bytes[180]=8;std::memcpy(bytes.data()+181,"LParent;",9);bytes[200]=7;std::memcpy(bytes.data()+201,"LIface;",8);jvmtiClassDefinition def{reinterpret_cast<jclass>(&old),int(bytes.size()),bytes.data()};Reset();lookups=0;assert(!NeedsEvolutionReceiverGuard(1,&def)&&lookups==1);classes["LParent;"]=nullptr;assert(NeedsEvolutionReceiverGuard(1,&def));classes["LParent;"]=&parent;
+// Full-width superclass indices: NO_INDEX requests guarding of a removed
+// superclass, and an invalid high index stays for the original verifier.
+Put(bytes,136,UINT32_MAX);lookups=0;assert(NeedsEvolutionReceiverGuard(1,&def)&&lookups==0);
+Put(bytes,136,0x10000);lookups=0;assert(!NeedsEvolutionReceiverGuard(1,&def)&&lookups==0);
+Put(bytes,136,0);
 // With no old interfaces, even an unresolved added interface is not looked up.
 Put(bytes,140,224);Put(bytes,224,1);bytes[228]=1;classes["LIface;"]=nullptr;lookups=0;assert(!NeedsEvolutionReceiverGuard(1,&def)&&lookups==1);
+// v041 later-header ID offsets are based at DataBegin, not the selected header.
+std::vector<unsigned char> container(512);
+std::memcpy(container.data(),"dex\n041\0",8);
+std::memcpy(container.data()+256,bytes.data(),112);
+std::memcpy(container.data()+256,"dex\n041\0",8);
+std::memcpy(container.data()+120,bytes.data()+112,128);
+Put(container,256+36,120);Put(container,256+60,120);Put(container,256+68,128);Put(container,256+100,136);
+Put(container,256+112,512);Put(container,256+116,256);
+Put(container,120,188);Put(container,124,208);Put(container,148,232);
+jvmtiClassDefinition later{reinterpret_cast<jclass>(&old),int(container.size()),container.data()};
+classes["LParent;"]=nullptr;lookups=0;
+assert(NeedsEvolutionReceiverGuard(1,&later)&&lookups==1);
+classes["LParent;"]=&parent;
+assert(!NeedsEvolutionReceiverGuard(1,&later));
 // Once an old interface exists, unresolved replacements force guarding even if superclass retains it.
 auto* table=static_cast<unsigned char*>(low)+128;Put(bytes,136,0);int32_t length=2;std::memcpy(table+8,&length,4);uint32_t ref=uint32_t(reinterpret_cast<uintptr_t>(low)+256);std::memcpy(table+12,&ref,4);old.iftable=uint32_t(reinterpret_cast<uintptr_t>(table));parents[&parent]=reinterpret_cast<void*>(uintptr_t(ref));assert(NeedsEvolutionReceiverGuard(1,&def));classes["LIface;"]=reinterpret_cast<void*>(uintptr_t(ref));assert(!NeedsEvolutionReceiverGuard(1,&def));
 assert(roots.empty()&&starts==ends&&constructs==destroys);
