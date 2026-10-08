@@ -1,0 +1,141 @@
+#include "platform/common/modern_method_guards.h"
+#include "platform/common/runnable_executor.h"
+#include "platform/abi/arm64/android-common/jni_access.h"
+#include <atomic>
+#include <cstdarg>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+namespace artdcevm::retirement {
+namespace {
+using Scope = abi::arm64::android_common::RunnableJniScope;
+using Throw = void (*)(void*, const char*, const char*);
+using Decode = void* (*)(void*, jmethodID);
+using Reflected = abi::arm64::android_common::FromReflectedMethod;
+struct State {
+  RetiredMethodRegistry* registry = nullptr;
+  void* manager = nullptr;
+  Throw throw_exception = nullptr;
+  Decode decode = nullptr;
+  Reflected reflected = nullptr;
+};
+State state;
+bool installed_complete = false;
+std::atomic<size_t> rejected{0};
+void *original_invoke, *original_reflect, *original_native_values,
+     *original_id_values, *original_id_varargs, *original_virtual_values,
+     *original_virtual_varargs;
+
+bool Guard(void* method, void* self, void* result = nullptr) {
+  if (!state.registry->Contains(method)) return false;
+  if (result) {
+    const uint64_t zero = 0;
+    std::memcpy(result, &zero, sizeof(zero));
+  }
+  ++rejected;
+  state.throw_exception(self, "Ljava/lang/NoSuchMethodError;", "Method removed by ART DCEVM");
+  return true;
+}
+void Invoke(void* method, void* self, uint32_t* args, uint32_t size,
+            void* result, const char* shorty) {
+  if (Guard(method, self, result)) return;
+  using Fn = void (*)(void*, void*, uint32_t*, uint32_t, void*, const char*);
+  reinterpret_cast<Fn>(original_invoke)(method, self, args, size, result, shorty);
+}
+jobject Reflect(const Scope& access, jobject method, jobject receiver,
+                jobject args, size_t frames) {
+  if (Guard(state.reflected(access, method), access.self)) return nullptr;
+  using Fn = jobject (*)(const Scope&, jobject, jobject, jobject, size_t);
+  return reinterpret_cast<Fn>(original_reflect)(access, method, receiver, args, frames);
+}
+uint64_t NativeValues(const Scope& access, jobject receiver, void* method,
+                      const jvalue* args) {
+  if (Guard(method, access.self)) return 0;
+  using Fn = uint64_t (*)(const Scope&, jobject, void*, const jvalue*);
+  return reinterpret_cast<Fn>(original_native_values)(access, receiver, method, args);
+}
+template<bool virtual_call> uint64_t IdValues(const Scope& access, jobject receiver,
+                                              jmethodID id, const jvalue* args) {
+  if (Guard(state.decode(state.manager, id), access.self)) return 0;
+  using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, const jvalue*);
+  return reinterpret_cast<Fn>(virtual_call ? original_virtual_values : original_id_values)(
+      access, receiver, id, args);
+}
+template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject receiver,
+                                               jmethodID id, va_list args) {
+  if (Guard(state.decode(state.manager, id), access.self)) return 0;
+  using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, va_list);
+  return reinterpret_cast<Fn>(virtual_call ? original_virtual_varargs : original_id_varargs)(
+      access, receiver, id, args);
+}
+struct Calibration { State candidate; void* (*current)(); bool matched = false; };
+bool Calibrate(const runnable_jni::Context& context, void* data) {
+  auto& request = *static_cast<Calibration*>(data);
+  request.matched = context.self != nullptr && request.current() == context.self;
+  return request.matched;
+}
+struct Entry { const char* symbol; void* proxy; void** original; void* target; };
+}
+
+bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
+                             void* manager, RetiredMethodRegistry& registry,
+                             std::string* error) {
+  if (state.registry) {
+    if (installed_complete && state.registry == &registry && state.manager == manager) return true;
+    *error = "Method entry guards have an active owner or incomplete rollback; cannot reinstall";
+    return false;
+  }
+  if (!env || !root || !manager || !runnable_executor::Available()) {
+    *error = "Method guards require owned Runnable scope and observed JNI manager";
+    return false;
+  }
+  Calibration calibration{};
+  calibration.candidate = {&registry, manager,
+      reinterpret_cast<Throw>(hooks.FindSymbol("libart.so", "_ZN3art6Thread17ThrowNewExceptionEPKcS2_")),
+      reinterpret_cast<Decode>(hooks.FindSymbol("libart.so", "_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
+      reinterpret_cast<Reflected>(hooks.FindSymbol("libart.so", abi::arm64::android_common::kFromReflectedMethod))};
+  calibration.current = reinterpret_cast<void* (*)()>(
+      hooks.FindSymbol("libart.so", "_ZN3art6Thread14CurrentFromGdbEv"));
+  if (!calibration.candidate.throw_exception || !calibration.candidate.decode ||
+      !calibration.candidate.reflected || !calibration.current ||
+      runnable_executor::With(env, root, Calibrate, &calibration) != runnable_jni::Result::kSuccess ||
+      !calibration.matched) {
+    *error = "Named method guard declarations or owned current Thread identity unavailable";
+    return false;
+  }
+  Entry entries[] = {
+    {"_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc", reinterpret_cast<void*>(Invoke), &original_invoke, nullptr},
+    {"_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", reinterpret_cast<void*>(Reflect), &original_reflect, nullptr},
+    {"_ZN3art17InvokeWithJValuesIPNS_9ArtMethodEEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(NativeValues), &original_native_values, nullptr},
+    {"_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(IdValues<false>), &original_id_values, nullptr},
+    {"_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(IdVarargs<false>), &original_id_varargs, nullptr},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", reinterpret_cast<void*>(IdValues<true>), &original_virtual_values, nullptr},
+    {"_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", reinterpret_cast<void*>(IdVarargs<true>), &original_virtual_varargs, nullptr},
+  };
+  for (auto& entry : entries) {
+    entry.target = hooks.FindSymbol("libart.so", entry.symbol);
+    if (!entry.target) { *error = std::string("Missing method guard entry: ") + entry.symbol; return false; }
+  }
+  // Hooks become visible before Install returns. Publish their durable owner
+  // first; never clear it if rollback fails and an installed hook remains live.
+  state = calibration.candidate;
+  std::vector<void*> tokens;
+  for (auto& entry : entries) {
+    void* token = hooks.Install(entry.target, entry.proxy, entry.original, error);
+    if (!token) {
+      bool removed = true;
+      for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
+        std::string rollback;
+        if (!hooks.Remove(*it, &rollback)) { removed = false; *error += "; " + rollback; }
+      }
+      if (removed) state = {};
+      return false;
+    }
+    tokens.push_back(token);
+  }
+  installed_complete = true;
+  return true;
+}
+size_t RejectedMethodEntries() { return rejected.load(); }
+}  // namespace artdcevm::retirement

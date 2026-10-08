@@ -27,6 +27,14 @@ int main() {
   assert(!g::ReadIdentity(33,reinterpret_cast<const void*>(UINTPTR_MAX-3),40,&sentinel));
   assert(!g::ReadIdentity(33,bytes.data(),40,nullptr));
   assert(sentinel.access_flags==44 && sentinel.dex_method_index==55);
+  auto malformed=g::kAndroid12Onward;
+  malformed.dex_method_index=malformed.size;
+  assert(!g::ReadIdentity(malformed,bytes.data(),bytes.size(),&sentinel));
+  malformed.size=0;
+  assert(!g::ReadIdentity(malformed,bytes.data(),bytes.size(),&sentinel));
+  assert(sentinel.access_flags==44 && sentinel.dex_method_index==55);
+  assert(g::ReadIdentity(g::kAndroid12Onward,bytes.data(),bytes.size(),&sentinel));
+  assert(sentinel.dex_method_index==111);
   auto* flags=reinterpret_cast<uint32_t*>(bytes.data()+4);
   __atomic_store_n(flags,0x12345678,__ATOMIC_RELAXED);
   std::thread writer([&]{for(unsigned i=0;i<200000;++i){

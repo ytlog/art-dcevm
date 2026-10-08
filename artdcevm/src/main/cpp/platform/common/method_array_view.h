@@ -70,10 +70,11 @@ struct View {
     return false;
   }
 };
-inline bool Read(int api, void* array, size_t extent, const Boundaries& boundaries, View* output) {
-  const auto* layout = method_metadata::Declaration(api);
-  if (!layout || !output || (boundaries.order != Order::DirectThenVirtual && boundaries.order != Order::ByFlags) ||
-      boundaries.order != (api == 37 ? Order::ByFlags : Order::DirectThenVirtual)) return false;
+inline bool Read(const method_metadata::Layout& declaration, void* array, size_t extent,
+                 const Boundaries& boundaries, View* output) {
+  const auto* layout=&declaration;
+  if (!output || !layout->size || (boundaries.order != Order::DirectThenVirtual &&
+      boundaries.order != Order::ByFlags)) return false;
   const auto address = reinterpret_cast<uintptr_t>(array);
   uint32_t count = 0;
   if (array) {
@@ -84,6 +85,11 @@ inline bool Read(int api, void* array, size_t extent, const Boundaries& boundari
   } else if (extent) return false;
   if (boundaries.direct_count > boundaries.declared_count || boundaries.declared_count > count) return false;
   *output = {array, count, layout->size, boundaries}; return true;
+}
+inline bool Read(int api, void* array, size_t extent, const Boundaries& boundaries, View* output) {
+  const auto* layout=method_metadata::Declaration(api);
+  return layout&&boundaries.order==(api==37?Order::ByFlags:Order::DirectThenVirtual)&&
+      Read(*layout,array,extent,boundaries,output);
 }
 // Trusted ART-owned allocation path, after exact ABI/profile calibration.
 // Its length header supplies extent; it cannot prove independent mapped size.

@@ -1,6 +1,8 @@
 // Debug-only public-reflection oracle for the production metadata service.
 #ifdef ARTDCEVM_TESTING
 #include "platform/common/modern_field_metadata.h"
+#include "platform/common/field_mirror_calibration.h"
+#include "platform/common/modern_field_storage.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/exclusive_owned_roots.h"
 #include "platform/common/field_storage.h"
@@ -19,11 +21,15 @@ struct Request {
   jobject owner;
   const std::vector<modern_field_metadata::FieldOracle>* fields;
   std::string descriptor,error;
+  field_mirror::NamedField named_field=nullptr;
+  field_mirror::Calibration mirror;
 };
 bool Observe(const runnable_jni::Context& scope,void* data) {
   auto& request=*static_cast<Request*>(data);
   return request.metadata.Calibrate(scope,request.owner,request.descriptor.c_str(),
-      request.fields->data(),request.fields->size(),&request.error);
+      request.fields->data(),request.fields->size(),&request.error)&&
+      field_mirror::Calibrate(scope,request.metadata,request.named_field,request.owner,
+      request.fields->data(),request.fields->size(),&request.mirror,&request.error);
 }
 std::string String(JNIEnv* env,jstring value) {
   if(!value)return {};
@@ -53,7 +59,7 @@ bool Throw(const exclusive_owned_roots::Context&,void*){throw std::runtime_error
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
     JNIEnv* env,jclass,jclass owner,jstring descriptor,jobjectArray fields,
-    jobjectArray names,jobjectArray types,jintArray modifiers) {
+    jobjectArray names,jobjectArray types,jintArray modifiers,jboolean storage_required) {
   auto failure=[&](const std::string& error){return env->ExceptionCheck()?nullptr:env->NewStringUTF(error.c_str());};
   if(!owner||!descriptor||!fields||!names||!types||!modifiers||env->ExceptionCheck())return failure("invalid field oracle");
   const jsize count=env->GetArrayLength(fields);
@@ -75,12 +81,28 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeFields(
     if(!global||env->ExceptionCheck())return failure("cannot own reflected field");
     oracles.push_back({global,stable_names[i].c_str(),stable_types[i].c_str(),static_cast<uint32_t>(flags[i])});
   }
-  Request request{{},global_owner,&oracles,String(env,descriptor),{}};
+  Request request{{},global_owner,&oracles,String(env,descriptor),{},nullptr,{}};
   ShadowHookEngine hooks;
   if(!hooks.Initialize(&request.error)||!runnable_executor::Initialize(hooks,env,&request.error)||
       !request.metadata.Bind(hooks,&request.error))return failure(request.error);
+  request.named_field=reinterpret_cast<field_mirror::NamedField>(
+      hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
   auto result=runnable_executor::With(env,global_owner,Observe,&request);
   if(result!=runnable_jni::Result::kSuccess)return failure("field metadata: "+request.error);
+  if(storage_required) {
+  jmethodID constructor=env->GetMethodID(owner,"<init>","()V");
+  jobject fixture=constructor?env->NewObject(owner,constructor):nullptr;
+  if(!fixture||env->ExceptionCheck())return failure("owned storage fixture construction failed");
+  jobject global_fixture=roots.Own(fixture);env->DeleteLocalRef(fixture);
+  modern_field_storage::Service storage;
+  if(!storage.Calibrate(hooks,env,global_owner,global_fixture,request.metadata,
+      oracles.data(),oracles.size(),&request.error))return failure("storage: "+request.error);
+  auto rejected=oracles;rejected[0].name="__not_a_fixture_field__";
+  std::string rejected_error;
+  if(storage.Calibrate(hooks,env,global_owner,global_fixture,request.metadata,
+      rejected.data(),rejected.size(),&rejected_error)||!storage.Calibrated()||env->ExceptionCheck())
+    return failure("storage rejection did not preserve calibrated service");
+  }
   return failure(request.metadata.StorageModel()==modern_field_metadata::Model::kMerged?"merged":"split");
 }
 extern "C" JNIEXPORT jstring JNICALL

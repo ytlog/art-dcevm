@@ -1,8 +1,8 @@
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_field_registry.h"
 
 #include <cstdlib>
 
-namespace artdcevm::android13 {
+namespace artdcevm::retirement {
 
 void RetiredFieldRegistry::Retire(void* field) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -63,4 +63,4 @@ size_t RetiredFieldRegistry::Prune(const void* allocator, ContainsUnsafe contain
   return removed;
 }
 
-}  // namespace artdcevm::android13
+}  // namespace artdcevm::retirement

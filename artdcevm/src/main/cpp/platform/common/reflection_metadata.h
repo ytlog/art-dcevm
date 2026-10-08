@@ -31,15 +31,19 @@ struct FieldIdentity {uint32_t access_flags, array_index, offset;};
 // Rooted live mirrors and calibrated declarations are caller prerequisites.
 // Read scalar metadata only; managed declaring-class/type references require
 // the provider's read barrier. Preserve private retired-token index bits.
-inline bool ReadField(int api, const void* mirror, size_t extent, FieldIdentity* output) {
-  const auto* layout = Declaration(api);
-  if (!layout || !output || !Valid(mirror,extent,layout->field_size)) return false;
+inline bool ReadField(const Layout& declaration, const void* mirror, size_t extent, FieldIdentity* output) {
+  const auto* layout = &declaration;
+  if (!output || !Valid(mirror,extent,layout->field_size)) return false;
   const auto* bytes = static_cast<const unsigned char*>(mirror);
   FieldIdentity result;
   std::memcpy(&result.access_flags,bytes+layout->field_flags,4);
   std::memcpy(&result.array_index,bytes+layout->field_index,4);
   std::memcpy(&result.offset,bytes+layout->field_offset,4);
   *output = result; return true;
+}
+inline bool ReadField(int api, const void* mirror, size_t extent, FieldIdentity* output) {
+  const auto* layout=Declaration(api);
+  return layout&&ReadField(*layout,mirror,extent,output);
 }
 // Null is a valid stored native method, including serialization constructors.
 // No dereference of the extracted native method or unrooted managed reference.

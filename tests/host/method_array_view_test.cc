@@ -106,6 +106,12 @@ int main() {
   assert(!g::Read(37,nullptr,8,{0,0,g::Order::ByFlags},&unchanged));
   assert(!g::Read(37,reinterpret_cast<void*>(UINTPTR_MAX-7),8,{0,0,g::Order::ByFlags},&unchanged));
   assert(unchanged.count==11 && unchanged.stride==13);
+  assert(g::Read(artdcevm::method_metadata::kAndroid12Onward,array.data(),208,
+      {1,2,g::Order::ByFlags},&v));
+  assert(v.count==6 && v.stride==32 && v.boundaries.order==g::Order::ByFlags);
+  auto invalid=artdcevm::method_metadata::kAndroid12Onward;
+  invalid.size=0;
+  assert(!g::Read(invalid,array.data(),208,{1,2,g::Order::ByFlags},&unchanged));
   assert(g::Read(37,nullptr,0,{0,0,g::Order::ByFlags},&v));
   assert(v.count==0 && !v.At(0) && !v.IsDirect(0));
   std::cout<<"Method arrays: API30-37 stride/partitions, interleaved direct flags, copied exclusion, proxy/array/primitive counts, virtual traversal/early stop, trusted class bounds and bounded failures passed\n";

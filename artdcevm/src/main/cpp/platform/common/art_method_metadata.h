@@ -32,14 +32,19 @@ struct Identity {uint32_t access_flags,dex_method_index;};
 // Reads only identity fields. Mutable hotness/entry/data fields are deliberately
 // not included in a non-atomic whole-object snapshot; declaring class needs ART's
 // read barrier. Caller provides a verified live mapping extent.
-inline bool ReadIdentity(int api,const void* method,size_t extent,Identity* output) {
-  const auto* layout=Declaration(api);
-  if(!layout || !method || !output || extent<layout->size ||
+inline bool ReadIdentity(const Layout& declaration,const void* method,size_t extent,Identity* output) {
+  const auto* layout=&declaration;
+  if(layout->size<8 || layout->dex_method_index>layout->size-4 ||
+      !method || !output || extent<layout->size ||
       reinterpret_cast<uintptr_t>(method)%alignof(uint32_t) ||
       reinterpret_cast<uintptr_t>(method)>std::numeric_limits<uintptr_t>::max()-layout->size)return false;
   uint32_t index;
   std::memcpy(&index,static_cast<const unsigned char*>(method)+layout->dex_method_index,sizeof(index));
   *output={ReadAccessFlags(method),index};
   return true;
+}
+inline bool ReadIdentity(int api,const void* method,size_t extent,Identity* output) {
+  const auto* layout=Declaration(api);
+  return layout&&ReadIdentity(*layout,method,extent,output);
 }
 }

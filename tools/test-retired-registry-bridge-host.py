@@ -19,8 +19,8 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(root / 'tests/host/retired_registry_bridge_test.cc'),
            str(cpp / 'platform/android13/retired_method_registry_bridge.cc'),
            str(cpp / 'platform/android13/retired_field_registry_bridge.cc'),
-           str(cpp / 'platform/android13/retired_method_registry.cc'),
-           str(cpp / 'platform/android13/retired_field_registry.cc'), '-o', str(binary)]
+           str(cpp / 'platform/common/retired_method_registry.cc'),
+           str(cpp / 'platform/common/retired_field_registry.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 subprocess.run(command, check=True)

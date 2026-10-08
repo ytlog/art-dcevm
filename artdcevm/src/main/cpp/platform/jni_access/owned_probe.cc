@@ -3,12 +3,17 @@
 #include "platform/jni_access/capability_selection.h"
 #include "platform/android15/runtime_services.h"
 #include "platform/common/native_cache_service.h"
+#include "platform/common/modern_method_guards.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/owned_context_calibration.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/android17/method_table.h"
+#include "platform/common/executable_mirror_calibration.h"
+#include "platform/common/native_method_binding_calibration.h"
+#include "platform/common/modern_method_services.h"
+#include "platform/common/owned_method_table.h"
 #include "platform/android17/runtime_services.h"
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
@@ -64,7 +69,10 @@ struct MethodProbe {
   jobject class_global;
   evolution::MappedDexMemberCounts counts;
   bool table_candidate;
+  const void* registered_binding;
 };
+void JNICALL OwnedNativeMarker(JNIEnv*, jobject) {}
+bool UnretiredOwnedFixture(void*) { return false; }
 bool ObserveMethods(const runnable_jni::Context& context,void* data) {
   auto& request=*static_cast<MethodProbe*>(data);
   if(!Observe(context,&request.probe))return false;
@@ -72,12 +80,40 @@ bool ObserveMethods(const runnable_jni::Context& context,void* data) {
   if(!method_identity::Calibrate(context,request.leaf,request.oracles,request.count,
                                     &request.calibration,&error))return false;
   last_method_model=request.calibration;
-  if(!request.table_candidate)return true;
   void* klass=nullptr;
   if(!runnable_executor::DecodeStrongGlobal(context,request.class_global,&klass))return false;
   method_array::View table;
-  if(!android17::CalibrateMethodTable(context,request.leaf,request.calibration,klass,
+  if(!owned_method_table::Calibrate(context,request.leaf,request.calibration,klass,
       request.counts,request.oracles,request.count,&table,&error))return false;
+  if(request.calibration.model==method_identity::Model::kMethod12Onward) {
+  if(!executable_mirror::Calibrate(context,request.leaf,
+      runnable_executor::DecodeStrongGlobal,request.oracles,request.count,&error))return false;
+  bool native_checked=false;
+  for(size_t i=0;i<request.count;++i)if(request.oracles[i].java_modifiers&0x100u) {
+    if(!native_method_binding::Calibrate(context,request.leaf,request.oracles[i],
+        request.registered_binding,&error))return false;
+    native_checked=true;
+  }
+  if(!native_checked)return false;
+  if(runtime_services_observed.receivers.class_linker) {
+    ShadowHookEngine hooks;
+    size_t native_index=0;
+    while(native_index<request.count&&!(request.oracles[native_index].java_modifiers&0x100u))++native_index;
+    auto service=modern_methods::Service::Prepare(hooks,context,request.leaf,
+        request.oracles[native_index],request.registered_binding,
+        runtime_services_observed.receivers.class_linker,klass,table,klass,table,
+        UnretiredOwnedFixture,&error);
+    if(!service||service->Count(klass)!=table.count)return false;
+    for(size_t i=0;i<table.count;++i) {
+      void* method=service->At(klass,i);
+      if(service->DeclaringClass(method)!=klass||!service->SameIdentity(method,method)||
+          service->IsRetired(method)||service->Flags(method)!=method_metadata::ReadAccessFlags(method))return false;
+    }
+    // Named name/signature comparison must distinguish two independently
+    // declared methods, including the constructor.
+    if(table.count>1&&service->SameIdentity(service->At(klass,0),service->At(klass,1)))return false;
+  }
+  }
   last_table_count=static_cast<int>(table.boundaries.declared_count);
   return true;
 }
@@ -219,9 +255,18 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
   auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
       hooks.FindSymbol("libart.so",runnable_jni::Bridge::SymbolName()));
   if(!leaf)return -307;
+  // This debug-owned class has exactly one private native fixture. Public JNI
+  // registration supplies the independent mutable-data oracle; every worker
+  // registers the same binding, so no competing binding changes are possible.
+  if(table_candidate) {
+    JNINativeMethod registration{const_cast<char*>("nativeMarker"),
+        const_cast<char*>("()V"),reinterpret_cast<void*>(OwnedNativeMarker)};
+    if(env->RegisterNatives(owner,&registration,1)!=JNI_OK||env->ExceptionCheck())return -309;
+  }
   Probe probe{env,vm,current(),carrier,thread_global,0,!std::strcmp(last_route,"new-global-ref")};
   MethodProbe request{probe,leaf,oracles.data(),oracles.size(),{},class_global,
-      {0,0,static_cast<uint32_t>(direct),static_cast<uint32_t>(virtual_count)},table_candidate!=0};
+      {0,0,static_cast<uint32_t>(direct),static_cast<uint32_t>(virtual_count)},table_candidate!=0,
+      reinterpret_cast<void*>(OwnedNativeMarker)};
   guard.unlock();
   auto result=runnable_executor::With(env,thread_global,ObserveMethods,&request);
   if(result!=runnable_jni::Result::kSuccess)return -300-static_cast<int>(result);
@@ -282,5 +327,55 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeNativeCache(JNIEn
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeCacheThreads(JNIEnv*,jclass) {
   return static_cast<jint>(artdcevm::jni_access::last_cache_threads);
+}
+#endif
+
+#if defined(ARTDCEVM_TESTING)
+namespace {
+artdcevm::retirement::RetiredMethodRegistry debug_retired_entries;
+struct RetireEntryRequest {
+  void* manager; jmethodID id;
+  void* (*decode)(void*,jmethodID);
+};
+bool RetireEntry(const artdcevm::runnable_jni::Context&,void* data) {
+  auto& request=*static_cast<RetireEntryRequest*>(data);
+  auto* method=request.decode(request.manager,request.id);
+  if(!method)return false;
+  debug_retired_entries.Retire(method);
+  return debug_retired_entries.Contains(method);
+}
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethodGuards(JNIEnv* env,jclass,jclass owner) {
+  artdcevm::ShadowHookEngine hooks;std::string error;
+  if(!artdcevm::jni_access::CalibrateServices(hooks,env,&error))
+    return env->NewStringUTF(error.c_str());
+  const auto& services=artdcevm::jni_access::runtime_services_observed;
+  auto root=env->NewGlobalRef(owner);
+  if(!root)return env->NewStringUTF("Missing owned guard fixture root");
+  auto removed=env->GetStaticMethodID(owner,"removed","()I");
+  auto kept=env->GetStaticMethodID(owner,"kept","()I");
+  auto exception=env->FindClass("java/lang/NoSuchMethodError");
+  bool success=removed&&kept&&exception&&!env->ExceptionCheck();
+  if(success&&debug_retired_entries.Count()==0&&env->CallStaticIntMethodA(owner,removed,nullptr)!=41)
+    success=false;
+  if(success)success=artdcevm::retirement::InstallMethodEntryGuards(hooks,env,root,
+      services.receivers.jni_id_manager,debug_retired_entries,&error);
+  RetireEntryRequest request{services.receivers.jni_id_manager,removed,
+      reinterpret_cast<void*(*)(void*,jmethodID)>(hooks.FindSymbol("libart.so",
+      "_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"))};
+  if(success)success=request.decode&&artdcevm::runnable_executor::With(env,root,RetireEntry,&request)==
+      artdcevm::runnable_jni::Result::kSuccess;
+  if(success) {
+    env->CallStaticIntMethodA(owner,removed,nullptr);
+    auto thrown=env->ExceptionOccurred();
+    env->ExceptionClear();
+    success=thrown&&env->IsInstanceOf(thrown,exception);
+    if(thrown)env->DeleteLocalRef(thrown);
+  }
+  if(success)success=env->CallStaticIntMethodA(owner,kept,nullptr)==73&&!env->ExceptionCheck();
+  env->DeleteGlobalRef(root);
+  if(!success&&error.empty())error="Actual method guard identity/exception/passthrough failed";
+  return env->NewStringUTF(error.c_str());
 }
 #endif

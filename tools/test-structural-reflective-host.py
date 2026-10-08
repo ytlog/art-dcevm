@@ -14,7 +14,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall',
            '-fsanitize='+os.environ.get('ARTDCEVM_HOST_SANITIZER','address,undefined'), '-fno-omit-frame-pointer', '-pthread', '-I', str(cpp),
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/structural_reflective_test.cc'),
-           str(cpp / 'platform/android13/structural_member_mapping.cc'), str(cpp / 'platform/android13/structural_reflective.cc'), str(cpp / 'platform/android13/retired_method_registry.cc'), str(cpp / 'platform/android13/retired_field_registry.cc'), str(cpp / 'platform/android13/transaction_metadata.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/structural_member_mapping.cc'), str(cpp / 'platform/android13/structural_reflective.cc'), str(cpp / 'platform/common/retired_method_registry.cc'), str(cpp / 'platform/common/retired_field_registry.cc'), str(cpp / 'platform/android13/transaction_metadata.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 else:

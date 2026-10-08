@@ -12,6 +12,8 @@ p.add_argument('--runtime-services',action='store_true',help='Require source-fam
 p.add_argument('--exclusive-roots',action='store_true',help='Require actual exclusive strong-root and monitor/GC recovery')
 p.add_argument('--native-cache',action='store_true',help='Require synchronous real native interpreter-cache clearing')
 p.add_argument('--jit-receivers',action='store_true',help='Require actual Java/JVMTI JIT/cache/heap observation')
+p.add_argument('--method-guards',action='store_true',help='Require real retired JNI and reflection invocation rejection')
+p.add_argument('--field-storage',action='store_true',help='Require native raw field writes, card marking and monitor oracles')
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
 out=new_evidence_directory(Path('build/evidence/runtime-access'))
@@ -27,7 +29,7 @@ try:
         assert metadata['installedApkSha256']==metadata['apkSha256']
     else:adb('install','install','-r',str(a.apk))
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
-    output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
+    output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match
     report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
     code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M)
@@ -38,14 +40,16 @@ try:
     metadata['passed']=metadata['passed'] and report.get('mainRoute') in routes and len(report.get('workerRoutes',[]))==2 and all(route in routes for route in report['workerRoutes'])
     metadata['passed']=metadata['passed'] and report.get('mainContextChecks')==384 and report.get('workerContextChecks')==[384,384]
     model=report.get('mainMethodModel')
-    metadata['passed']=metadata['passed'] and model in (11,12) and report.get('workerMethodModels')==[model,model] and 3<=len(report.get('methodDexIndices',[]))<=32 and len(set(report['methodDexIndices']))==len(report['methodDexIndices'])
-    if report.get('sdk')==37 and 'mainMethodTableCount' in report:
-        expected=len(report['methodDexIndices'])
-        metadata['passed']=metadata['passed'] and report['mainMethodTableCount']==expected and report.get('workerMethodTableCounts')==[expected,expected]
-    if a.runtime_services or a.native_cache or a.jit_receivers:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
+    direct=report.get('methodDexDirectCount');virtual=report.get('methodDexVirtualCount')
+    indices=report.get('methodDexIndices',[])
+    complete=isinstance(direct,int) and isinstance(virtual,int) and direct>=0 and virtual>=0 and len(indices)==direct+virtual and len(indices)>=3 and len(set(indices))==len(indices)
+    metadata['passed']=metadata['passed'] and complete and model in (11,12) and report.get('workerMethodModels')==[model,model] and report.get('mainMethodTableCount')==len(indices) and report.get('workerMethodTableCounts')==[len(indices),len(indices)]
+    if a.runtime_services or a.native_cache or a.jit_receivers or a.method_guards:metadata['passed']=metadata['passed'] and report.get('runtimeServicesCalibrated') is True
     if a.exclusive_roots:metadata['passed']=metadata['passed'] and report.get('exclusiveMonitorIterations')==32 and report.get('exclusiveFailureRestoration') is True and report.get('exclusiveGcCollections',0)>0
     if a.native_cache:metadata['passed']=metadata['passed'] and report.get('nativeCacheClearedThreads',0)>0
     if a.jit_receivers:metadata['passed']=metadata['passed'] and report.get('jitServices')=='jit,code-cache,heap'
+    if a.method_guards:metadata['passed']=metadata['passed'] and report.get('methodEntryGuardsCalibrated') is True
+    if a.field_storage:metadata['passed']=metadata['passed'] and report.get('nativeFieldStorageCalibrated') is True
 except Exception as error:metadata['error']=str(error)
 (out/'run.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(json.dumps(metadata,indent=2));print(out)

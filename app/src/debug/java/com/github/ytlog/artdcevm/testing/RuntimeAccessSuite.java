@@ -18,13 +18,14 @@ public final class RuntimeAccessSuite {
     private static native String probeRuntimeServices();
     private static native int probeCacheThreads();
     private static native String probeNativeCache();
+    private static native String probeMethodGuards(Class<?> owner);
     private static native int probeMethods(Object[] methods,int[] indices,int[] modifiers,
             Class<?> owner,Object carrier,Thread current,int direct,int virtual,int tableCandidate);
     private static native int methodTableCount();
     private static native String probeExclusive(Class<?> owner,int iterations);
     private static native String probeJitServices(Object hot,Class<?> owner,int index,int modifiers,Class<?> target,byte[] dex);
     private static native String probeFields(Class<?> owner,String descriptor,Object[] fields,
-            String[] names,String[] types,int[] modifiers);
+            String[] names,String[] types,int[] modifiers,boolean storage);
     private static String descriptor(Class<?> type) {
         if(type.isPrimitive()) {
             if(type==boolean.class)return "Z";if(type==byte.class)return "B";
@@ -36,22 +37,25 @@ public final class RuntimeAccessSuite {
         String name=type.getName().replace('.', '/');
         return type.isArray()?name:"L"+name+";";
     }
-    private static String fields() throws Exception {
+    private static String fields(boolean storage) throws Exception {
         Class<?> owner=Class.forName("com.github.ytlog.artdcevm.internal.CalibrationFixture");
         Field[] fields=owner.getDeclaredFields();String[] names=new String[fields.length],types=new String[fields.length];
         int[] flags=new int[fields.length];
         for(int i=0;i<fields.length;i++){names[i]=fields[i].getName();types[i]=descriptor(fields[i].getType());flags[i]=fields[i].getModifiers();}
         if(fields.length!=28)throw new AssertionError("Fixture field oracle dimensions: "+fields.length);
-        String result=probeFields(owner,descriptor(owner),fields,names,types,flags);
+        String result=probeFields(owner,descriptor(owner),fields,names,types,flags,storage);
         if(!"split".equals(result)&&!"merged".equals(result))throw new AssertionError(result);
         flags[0]^=8;
-        String rejected=probeFields(owner,descriptor(owner),fields,names,types,flags);
+        String rejected=probeFields(owner,descriptor(owner),fields,names,types,flags,storage);
         if("split".equals(rejected)||"merged".equals(rejected))throw new AssertionError("Incorrect independent modifiers accepted");
         return result;
     }
     public JSONObject run(String apkPath) { return run(apkPath,false); }
-    public JSONObject run(String apkPath,boolean runtimeServices) { return run(apkPath,runtimeServices,false,false,false); }
+    public JSONObject run(String apkPath,boolean runtimeServices) { return run(apkPath,runtimeServices,false,false,false,false,false); }
     public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers) {
+        return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,false,false);
+    }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage) {
         JSONObject report=new JSONObject();
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
@@ -67,22 +71,29 @@ public final class RuntimeAccessSuite {
                     MethodIdentityFixture.class.getDeclaredMethod("hotLoop",int.class)};
             MethodDexOracle.Result oracle=MethodDexOracle.read(apkPath,methods);
             report.put("methodDexEntry",oracle.dexEntry).put("methodDexHeaderOffset",oracle.headerOffset)
-                    .put("methodDexIndices",new JSONArray(oracle.indices));
+                    .put("methodDexIndices",new JSONArray(oracle.indices))
+                    .put("methodDexDirectCount",oracle.directMethods).put("methodDexVirtualCount",oracle.virtualMethods);
             int main=probe(carrier,Thread.currentThread());
             report.put("mainCallbackHits",main);
             report.put("mainRoute",probeRoute());
             if(main!=128)throw new AssertionError("Owned JNI access main: "+main);
             int context=probeContext();report.put("mainContextChecks",context);
             if(context!=384)throw new AssertionError("Owned Context main: "+context);
-            int model=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,Build.VERSION.SDK_INT==37?1:0);
+            int model=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
             report.put("mainMethodTableCount",methodTableCount());
-            if(Build.VERSION.SDK_INT==37&&methodTableCount()!=methods.length)throw new AssertionError("Android17 method table oracle");
+            if(methodTableCount()!=methods.length)throw new AssertionError("Complete method table oracle");
             report.put("mainMethodModel",model);
             if(model!=11&&model!=12)throw new AssertionError("Owned method identity main: "+model);
-            if(runtimeServices||nativeCache||jitReceivers) {
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards) {
                 String serviceError=probeRuntimeServices();
                 report.put("runtimeServicesError",serviceError).put("runtimeServicesCalibrated",serviceError!=null&&serviceError.isEmpty());
                 if(serviceError==null||!serviceError.isEmpty())throw new AssertionError(serviceError);
+            }
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards) {
+                int commitModel=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,
+                        carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
+                report.put("mainCommitMethodModel",commitModel);
+                if(commitModel!=model)throw new AssertionError("Owned modern method commit service: "+commitModel);
             }
             if(jitReceivers) {
                 byte[] additive;
@@ -102,9 +113,9 @@ public final class RuntimeAccessSuite {
                 workers[i]=new Thread(() -> {
                     try {
                         results[slot]=probe(carrier,Thread.currentThread());routes[slot]=probeRoute();contexts[slot]=probeContext();
-                        models[slot]=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,Build.VERSION.SDK_INT==37?1:0);
+                        models[slot]=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
                         tables[slot]=methodTableCount();
-                        if(Build.VERSION.SDK_INT==37&&tables[slot]!=methods.length)throw new AssertionError("Worker method table oracle");
+                        if(tables[slot]!=methods.length)throw new AssertionError("Worker method table oracle");
                     }
                     catch(Throwable error) {errors[slot]=error;}
                 },"OwnedJniAccess"+i);
@@ -120,7 +131,24 @@ public final class RuntimeAccessSuite {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128||contexts[i]!=384||models[i]!=model)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);
             }
-            report.put("fieldStorageModel",fields());
+            if(methodGuards) {
+                String guardError=probeMethodGuards(RetiredEntryFixture.class);
+                report.put("methodEntryGuardError",guardError);
+                if(!guardError.isEmpty())throw new AssertionError(guardError);
+                boolean reflectedRejected=false;
+                try {RetiredEntryFixture.class.getDeclaredMethod("removed").invoke(null);}
+                catch(NoSuchMethodError expected) {reflectedRejected=true;}
+                catch(java.lang.reflect.InvocationTargetException wrapped) {
+                    if(wrapped.getCause() instanceof NoSuchMethodError)reflectedRejected=true;
+                    else throw wrapped;
+                }
+                if(!reflectedRejected)throw new AssertionError("Retired reflection invoke accepted");
+                if(((Integer)RetiredEntryFixture.class.getDeclaredMethod("kept").invoke(null))!=73)
+                    throw new AssertionError("Unretired reflection invoke changed");
+                report.put("methodEntryGuardsCalibrated",true);
+            }
+            report.put("fieldStorageModel",fields(fieldStorage));
+            if(fieldStorage)report.put("nativeFieldStorageCalibrated",true);
             report.put("fieldIdentityCount",28);
             if(exclusiveRoots) {
                 java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);

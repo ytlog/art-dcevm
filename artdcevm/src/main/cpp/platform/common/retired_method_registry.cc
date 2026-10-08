@@ -1,6 +1,6 @@
-#include "platform/android13/retired_method_registry.h"
+#include "platform/common/retired_method_registry.h"
 
-namespace artdcevm::android13 {
+namespace artdcevm::retirement {
 
 void RetiredMethodRegistry::Retire(void* method) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -31,4 +31,4 @@ size_t RetiredMethodRegistry::Prune(const void* allocator, ContainsUnsafe contai
   return removed;
 }
 
-}  // namespace artdcevm::android13
+}  // namespace artdcevm::retirement

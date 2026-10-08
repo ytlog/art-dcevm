@@ -13,8 +13,9 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
            '-fno-omit-frame-pointer', '-I', str(cpp),
            str(root / 'tests/host/retired_member_guard_test.cc')]
-command += [str(cpp / ('platform/android13/' + name + '.cc')) for name in (
-    'retired_member_guard', 'retired_method_registry', 'retired_field_registry')]
+command += [str(cpp / 'platform/android13/retired_member_guard.cc')]
+command += [str(cpp / ('platform/common/' + name + '.cc')) for name in (
+    'retired_method_registry', 'retired_field_registry')]
 subprocess.run(command + ['-o', str(binary)], check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1',

@@ -1,6 +1,5 @@
 #pragma once
-#include <cstdint>
+#include "platform/common/retired_field_token.h"
 namespace artdcevm::android13 {
-// Owned registry tokens occupy the high-bit namespace of Field.art_field_index.
-inline constexpr uint32_t kRetiredFieldTag = uint32_t{1} << 31;
+using retirement::kRetiredFieldTag;
 }
