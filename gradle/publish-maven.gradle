@@ -1,0 +1,78 @@
+// Applied by the Android library module. The publishing plugin uses the release
+// component, retaining its runtime dependencies in the POM and module metadata.
+def publishGroup = providers.gradleProperty('publishGroupId').orElse('com.github.ytlog')
+def publishArtifact = providers.gradleProperty('publishArtifactId').orElse('artdcevm')
+def publishVersion = providers.gradleProperty('publishVersion').orElse('0.1.0-SNAPSHOT')
+def publishAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
+// An x86_64 test build must never overwrite the arm64 artifact under the same GAV.
+def artifactName = publishArtifact.get() + (publishAbi == 'x86_64' ? '-x86_64' : '')
+def centralEnabled = providers.gradleProperty('enableMavenCentral').orElse('false').get().toBoolean()
+def licenseName = providers.gradleProperty('publishLicenseName')
+def licenseUrl = providers.gradleProperty('publishLicenseUrl')
+
+mavenPublishing {
+    coordinates(publishGroup.get(), artifactName, publishVersion.get())
+    pom {
+        name = 'ART DCEVM'
+        description = 'Android ART class redefinition and experimental structural evolution library.'
+        inceptionYear = '2026'
+        url = 'https://github.com/ytlog/art-dcevm'
+        if (licenseName.isPresent() && licenseUrl.isPresent()) {
+            licenses {
+                license {
+                    name = licenseName.get()
+                    url = licenseUrl.get()
+                    distribution = 'repo'
+                }
+            }
+        }
+        developers {
+            developer {
+                id = 'ytlog'
+                name = 'ytlog'
+                url = 'https://github.com/ytlog'
+            }
+        }
+        scm {
+            url = 'https://github.com/ytlog/art-dcevm'
+            connection = 'scm:git:https://github.com/ytlog/art-dcevm.git'
+            developerConnection = 'scm:git:ssh://git@github.com/ytlog/art-dcevm.git'
+        }
+    }
+    if (centralEnabled) {
+        if (!licenseName.isPresent() || !licenseUrl.isPresent()) {
+            throw new GradleException('Maven Central requires publishLicenseName and publishLicenseUrl; choose the project license before publishing.')
+        }
+        publishToMavenCentral()
+        signAllPublications()
+    }
+}
+
+// Nexus, Artifactory, GitHub Packages, or a file:// repository for local verification.
+def repositoryUrl = providers.gradleProperty('publishRepositoryUrl')
+if (repositoryUrl.isPresent()) {
+    publishing {
+        repositories {
+            maven {
+                name = 'target'
+                url = uri(repositoryUrl.get())
+                def repositoryUsername = providers.gradleProperty('publishRepositoryUsername')
+                def repositoryPassword = providers.gradleProperty('publishRepositoryPassword')
+                if (repositoryUsername.isPresent() || repositoryPassword.isPresent()) {
+                    credentials {
+                        username = repositoryUsername.orNull
+                        password = repositoryPassword.orNull
+                    }
+                }
+            }
+        }
+    }
+}
+
+tasks.withType(org.gradle.api.publish.maven.tasks.AbstractPublishToMaven).configureEach {
+    doFirst {
+        if (providers.gradleProperty('forceCheckedHandles').orElse('false').get().toBoolean()) {
+            throw new GradleException('Do not publish test-only forceCheckedHandles builds.')
+        }
+    }
+}

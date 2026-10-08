@@ -36,7 +36,28 @@ Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性
 
 ### 1. 构建与接入
 
-当前通过源码模块或本地 AAR 接入。仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；需准备兼容的 JDK（17 或以上），并在本机 `local.properties` 中配置 `sdk.dir`。
+发布到 Maven Central 后，在应用工程中配置仓库和依赖即可，**无需单独声明 ShadowHook**：
+
+```groovy
+// settings.gradle
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+```
+
+```groovy
+// 应用模块 build.gradle；x.y.z 替换为已发布版本
+dependencies {
+    implementation 'com.github.ytlog:artdcevm:x.y.z'
+}
+```
+
+`com.github.ytlog:artdcevm` 是发布脚本默认坐标，当前尚未发布到 Maven Central。发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。当前默认发布包包含 arm64-v8a；公开 JVMTI 的 x86_64 测试包使用独立坐标 `com.github.ytlog:artdcevm-x86_64`。发布者操作见 [Maven 发布指南](docs/MAVEN_PUBLISHING.md)。
+
+发布前可通过源码模块接入。仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；需准备兼容的 JDK（17 或以上），并在本机 `local.properties` 中配置 `sdk.dir`。
 
 ```sh
 git clone https://github.com/ytlog/art-dcevm.git
@@ -54,16 +75,6 @@ cd art-dcevm
 // 应用模块 build.gradle；settings.gradle 需已包含 :artdcevm
 dependencies {
     implementation project(':artdcevm')
-}
-```
-
-使用本地 arm64 AAR 时，将文件放入应用的 `libs/` 目录，并显式加入 ShadowHook 依赖；本地 AAR 不携带 Maven 依赖元数据：
-
-```groovy
-// 依赖仓库需包含 mavenCentral()
-dependencies {
-    implementation files('libs/artdcevm-release.aar')
-    implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
 ```
 
