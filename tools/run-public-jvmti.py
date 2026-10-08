@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 from evidence_paths import new_evidence_directory
+from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'dev.artdcevm.lab'
@@ -56,6 +57,7 @@ def main():
             (out / f'{label}.txt').write_text(decode(error.stdout) + decode(error.stderr))
             raise RuntimeError(f'{label} timed out after {timeout}s') from error
         (out / f'{label}.txt').write_text(run.stdout + run.stderr)
+        if label=='install':require_install_success(run.returncode,run.stdout,run.stderr)
         if run.returncode:
             raise RuntimeError(f'{label} failed ({run.returncode}): {run.stderr or run.stdout}')
         return run.stdout.strip()
@@ -102,17 +104,9 @@ def main():
         if not args.skip_install:
             adb('install', 'install', '-r', str(apk))
         installed_path = adb('installed-path', 'shell', 'pm', 'path', PACKAGE)
-        base = next((line[8:] for line in installed_path.splitlines()
-                     if line.startswith('package:') and line.endswith('/base.apk')), None)
-        if not base:
-            raise RuntimeError('Installed base APK not found')
+        base = base_apk_path(installed_path)
         hash_output = adb('installed-hash', 'shell', 'sha256sum', base)
-        if not re.match(r'^[0-9a-f]{64}\s', hash_output):
-            raise RuntimeError('No valid SHA-256 for installed APK')
-        installed = hash_output.split()[0]
-        report['installedApkSha256'] = installed
-        if installed != report['apkSha256']:
-            raise RuntimeError('Installed APK hash differs from the supplied APK')
+        report['installedApkSha256'] = verified_apk_sha256(hash_output,report['apkSha256'])
         result = instrumentation('portable', 'PublicJvmtiInstrumentation')
         if any(result.get(key) != device[key] for key in ('sdk', 'abi', 'pageSize')):
             raise RuntimeError('Runtime report does not match the connected device')

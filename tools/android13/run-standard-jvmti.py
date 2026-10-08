@@ -9,6 +9,7 @@ import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from evidence_paths import new_evidence_directory
+from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
 
 root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
@@ -34,8 +35,13 @@ def command(*parts):
 
 install = command('install', '-r', str(apk))
 (output / 'install.txt').write_text(install.stdout + install.stderr)
-install.check_returncode()
+require_install_success(install.returncode,install.stdout,install.stderr)
 result = {'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'serial': args.serial}
+paths=command('shell','pm','path','dev.artdcevm.lab');paths.check_returncode()
+(output/'package-path.txt').write_text(paths.stdout+paths.stderr)
+installed=command('shell','sha256sum',base_apk_path(paths.stdout));installed.check_returncode()
+(output/'installed-hash.txt').write_text(installed.stdout+installed.stderr)
+result['installedApkSha256']=verified_apk_sha256(installed.stdout,result['apkSha256'])
 for first in (False, True):
     for mode in (('baseline',) if args.direct_probe else
                  ('baseline', 'transform') if args.public_only else

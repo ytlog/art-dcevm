@@ -9,6 +9,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
+from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'dev.artdcevm.lab'
@@ -30,22 +32,26 @@ apk = ROOT / 'app/build/outputs/apk/debug/app-debug.apk'
 if not apk.exists():
     p.error('Build :app:assembleDebug first')
 timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-out = ROOT / 'build/evidence/runs' / timestamp
-out.mkdir(parents=True, exist_ok=True)
+out = new_evidence_directory(ROOT / 'build/evidence/runs', timestamp)
 
 def adb(*command, timeout=120):
     return subprocess.run([args.adb, '-s', args.serial, *command], capture_output=True, text=True, timeout=timeout)
 
 meta = {'serial': args.serial, 'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'startedUtc': timestamp}
-if not args.skip_install:
-    installed = adb('install', '-r', str(apk))
-    (out / 'install.txt').write_text(installed.stdout + installed.stderr)
-    if installed.returncode:
-        meta['status'] = 'install_failed'
-        (out / 'run.json').write_text(json.dumps(meta, indent=2))
-        print(installed.stdout + installed.stderr, file=sys.stderr)
-        print(out)
-        sys.exit(2)
+try:
+    if not args.skip_install:
+        installed = adb('install', '-r', str(apk))
+        (out / 'install.txt').write_text(installed.stdout + installed.stderr)
+        require_install_success(installed.returncode,installed.stdout,installed.stderr)
+    paths=adb('shell','pm','path',PACKAGE);paths.check_returncode()
+    (out/'package-path.txt').write_text(paths.stdout+paths.stderr)
+    installed=adb('shell','sha256sum',base_apk_path(paths.stdout));installed.check_returncode()
+    (out/'installed-hash.txt').write_text(installed.stdout+installed.stderr)
+    meta['installedApkSha256']=verified_apk_sha256(installed.stdout,meta['apkSha256'])
+except (RuntimeError,subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
+    meta['status']='install_failed_or_hash_mismatch';meta['error']=str(error)
+    (out/'run.json').write_text(json.dumps(meta,indent=2))
+    print(error,file=sys.stderr);print(out);sys.exit(2)
 stopped = adb('shell', 'am', 'force-stop', PACKAGE)
 if stopped.returncode:
     sys.exit(stopped.returncode)

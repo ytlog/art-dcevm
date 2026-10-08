@@ -2,6 +2,7 @@
 """Run the isolated owned JNI probe without initializing private evolution."""
 import argparse,hashlib,json,re,subprocess,shutil
 from evidence_paths import new_evidence_directory
+from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--serial',required=True)
@@ -20,14 +21,15 @@ out=new_evidence_directory(Path('build/evidence/runtime-access'))
 metadata={'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'scope':'isolated-owned-JNI; no full evolution initialization'}
 def adb(label,*args):
     r=subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,text=True,timeout=180)
-    (out/(label+'.txt')).write_text(r.stdout+r.stderr);r.check_returncode();return r.stdout
+    (out/(label+'.txt')).write_text(r.stdout+r.stderr)
+    if label=='install':require_install_success(r.returncode,r.stdout,r.stderr)
+    r.check_returncode();return r.stdout
 try:
-    if a.skip_install:
-        paths=adb('package-path','shell','pm','path','dev.artdcevm.lab')
-        file=next(s.removeprefix('package:') for s in paths.splitlines() if s.endswith('/base.apk'))
-        metadata['installedApkSha256']=adb('installed-hash','shell','sha256sum',file).split()[0]
-        assert metadata['installedApkSha256']==metadata['apkSha256']
-    else:adb('install','install','-r',str(a.apk))
+    if not a.skip_install:
+        adb('install','install','-r',str(a.apk))
+    paths=adb('package-path','shell','pm','path','dev.artdcevm.lab')
+    file=base_apk_path(paths)
+    metadata['installedApkSha256']=verified_apk_sha256(adb('installed-hash','shell','sha256sum',file),metadata['apkSha256'])
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
     output=adb('instrumentation','shell','am','instrument','-w','-r',*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M);assert match

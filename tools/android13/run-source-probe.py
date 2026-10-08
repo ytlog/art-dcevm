@@ -10,6 +10,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from evidence_paths import new_evidence_directory
+from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser()
@@ -40,24 +41,20 @@ def command(*parts, timeout=360):
     return subprocess.run([adb, '-s', args.serial, *parts], capture_output=True, text=True, timeout=timeout)
 
 try:
-    if args.skip_install:
-        packages = command('shell', 'pm', 'path', 'dev.artdcevm.lab')
-        packages.check_returncode()
-        apk_path = next((line.removeprefix('package:') for line in packages.stdout.splitlines()
-                         if line.endswith('/base.apk')), None)
-        if apk_path is None:
-            raise ValueError('No installed base.apk found for dev.artdcevm.lab')
-        installed = command('shell', 'sha256sum', apk_path)
-        installed.check_returncode()
-        meta['installedApkSha256'] = installed.stdout.split()[0]
-        if meta['installedApkSha256'] != meta['apkSha256']:
-            raise ValueError('Installed APK differs from local build; install the current APK before testing')
-        (out / 'install.txt').write_text('Skipped install; installed APK SHA-256 verified: '
-                                           + meta['installedApkSha256'] + '\n')
-    else:
+    if not args.skip_install:
         install = command('install', '-r', str(apk))
         (out / 'install.txt').write_text(install.stdout + install.stderr)
-        install.check_returncode()
+        require_install_success(install.returncode,install.stdout,install.stderr)
+    packages = command('shell', 'pm', 'path', 'dev.artdcevm.lab')
+    packages.check_returncode()
+    (out / 'package-path.txt').write_text(packages.stdout+packages.stderr)
+    apk_path = base_apk_path(packages.stdout)
+    installed = command('shell', 'sha256sum', apk_path)
+    (out / 'installed-hash.txt').write_text(installed.stdout+installed.stderr)
+    installed.check_returncode()
+    meta['installedApkSha256'] = verified_apk_sha256(installed.stdout,meta['apkSha256'])
+    if args.skip_install:
+        (out / 'install.txt').write_text('Skipped install; installed APK SHA-256 verified: '+meta['installedApkSha256']+'\n')
     command('shell', 'am', 'force-stop', 'dev.artdcevm.lab').check_returncode()
     command('shell', 'run-as', 'dev.artdcevm.lab', 'rm', '-f', 'files/source-engine.json').check_returncode()
     run = None
