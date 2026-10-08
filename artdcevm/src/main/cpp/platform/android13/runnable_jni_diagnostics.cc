@@ -3,8 +3,7 @@
 #include "platform/android13/evolution_runtime.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/native_object_access_abi.h"
-#include "platform/android13/thread_suspend_scope.h"
-#include "platform/common/runnable_jni_bridge.h"
+#include "platform/common/runnable_executor.h"
 #include "hooks/shadow_hook_engine.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include <cstring>
@@ -13,17 +12,13 @@
 namespace artdcevm::android13 {
 namespace {
 using namespace runnable_jni;
-Bridge bridge;
-void* hook_token=nullptr;
+bool bound=false;
 abi::arm64::android11::CurrentThread current_thread=nullptr;
 abi::arm64::android11::CurrentPeer current_peer=nullptr;
 std::mutex diagnostic_mutex;
 uint32_t State(void* self) {
   auto* flags=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(self)+native_access_abi::kThreadFlagsOffset);
   return __atomic_load_n(flags,__ATOMIC_RELAXED)>>native_access_abi::kStateShift;
-}
-void* Proxy(const abi::arm64::android_common::RunnableJniScope& scope,jobject carrier) {
-  return bridge.OnFromReflectedMethod(scope,carrier);
 }
 struct Probe {JNIEnv* env;void* self;void* vm;jobject carrier; jobject local; jobject global;jobject thread_global;int bits=0;int hits=0;};
 bool Observe(const Context& context,void* data) {
@@ -35,7 +30,7 @@ bool Observe(const Context& context,void* data) {
   // Both borrowed mirrors are consumed inside the real Runnable scope; none escape.
   void* mirror=DecodeRunnableObject(context.self,probe.global);
   if(mirror&&mirror==DecodeRunnableObject(context.self,probe.local))probe.bits|=16;
-  if(bridge.Invoke(context.env,probe.carrier,Observe,data)==Result::kReentrant)probe.bits|=32;
+  if(runnable_executor::With(context.env,probe.global,Observe,data)==Result::kReentrant)probe.bits|=32;
   if(current_thread()==context.self)probe.bits|=256;
   void* peer=DecodeRunnableObject(context.self,probe.thread_global);
   if(peer&&peer==current_peer(context.self))probe.bits|=512;
@@ -48,22 +43,13 @@ int DiagnosticRunnableJni(JNIEnv* env,jobject carrier,jobject fixture) {
   void* self=nullptr;
   std::memcpy(&self,reinterpret_cast<unsigned char*>(env)+offsetof(native_access_abi::EnvironmentPrefix,self),sizeof(self));
   if(!self||State(self)!=native_access_abi::kNative)return -2;
-  if(!hook_token) {
+  if(!bound) {
     static ShadowHookEngine hooks;std::string error;
-    if(!hooks.Initialize(&error))return -3;
-    void* target=hooks.FindSymbol("libart.so",Bridge::SymbolName());
+    if(!runnable_executor::Initialize(hooks,env,&error))return -3;
     auto current=reinterpret_cast<decltype(current_thread)>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
     auto peer=reinterpret_cast<decltype(current_peer)>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentPeer));
-    if(!target||!current||!peer)return -4;
-    // Publish bridge/trampoline while other mutators are stopped. Keep the hook
-    // and service for this diagnostic process lifetime, including passthroughs.
-    NativeSuspendScope native(self);if(!native.Supported())return -5;
-    OwnedSuspendAll stopped("Calibrate Runnable JNI diagnostic");
-    void* original=nullptr;
-    hook_token=hooks.Install(target,reinterpret_cast<void*>(Proxy),&original,&error);
-    if(!hook_token)return -6;
-    if(!Bridge::Bind(original,&bridge))std::abort();
-    current_thread=current;current_peer=peer;
+    if(!current||!peer)return -4;
+    current_thread=current;current_peer=peer;bound=true;
   }
   guard.unlock(); // Immutable binding; per-thread requests now run concurrently.
   JavaVM* vm=nullptr;if(env->GetJavaVM(&vm)!=JNI_OK||!vm)return -7;
@@ -90,7 +76,7 @@ int DiagnosticRunnableJni(JNIEnv* env,jobject carrier,jobject fixture) {
     if(State(self)==native_access_abi::kNative)probe.bits|=1;
     // Callback uses its own mask; preserve the outside-state observation below.
     int native_before=probe.bits;probe.bits=0;
-    if(bridge.Invoke(env,carrier,Observe,&probe)!=Result::kSuccess)return -10;
+    if(runnable_executor::With(env,global,Observe,&probe)!=Result::kSuccess)return -10;
     probe.bits|=native_before;
     if(State(self)==native_access_abi::kNative)probe.bits|=64;
     if(env->FromReflectedMethod(carrier)==expected&&!env->ExceptionCheck())probe.bits|=128;

@@ -34,6 +34,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/source_commit.cc
     platform/common/runnable_jni_bridge.cc
     platform/common/runnable_global_ref_bridge.cc
+    platform/common/runnable_executor.cc
     platform/android13/runnable_jni_diagnostics.cc
     platform/jni_access/capability_selection.cc
     platform/jni_access/owned_probe.cc
