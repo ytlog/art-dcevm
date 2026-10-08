@@ -85,23 +85,18 @@ bool TransactionMetadataReader::ReadCache(void* raw,hierarchy_allocation_abi::Ca
 }
 bool TransactionMetadataReader::ReadMethods(void* klass,MethodStorageView* output,std::string* error)const{
  if(!root_||!klass||!output)return Fail(error,"Missing method storage class");
- auto* array=reinterpret_cast<void*>(Read<uint64_t>(klass,offsetof(Class,methods)));
- if(array&&!Aligned(array,alignof(Method)))return Fail(error,"Method storage base is misaligned");
- uint32_t count=array?Read<uint32_t>(array):0;
- method_array::Boundaries boundaries;
- if(!method_array::ReadBoundaries(33,klass,sizeof(Class),count,method_array::Kind::Ordinary,nullptr,&boundaries))
-  return Fail(error,"Method storage partitions are inconsistent");
- static_assert(sizeof(size_t)==8);
- const size_t bytes=array?art_method_abi::kArrayDataOffset+size_t(count)*sizeof(Method):0;
  method_array::View view;
- if(!method_array::Read(33,array,bytes,boundaries,&view))return Fail(error,"Method storage address range overflow");
+ if(!method_array::ReadTrustedClass(33,klass,sizeof(Class),method_array::Kind::Ordinary,nullptr,&view))
+  return Fail(error,"Method storage class, range or partitions are inconsistent");
+ const uint32_t count=view.count;
+ const auto& boundaries=view.boundaries;
  for(uint32_t i=0;i<count;++i){
   auto* method=view.At(i);
   auto* declaring=root_(method);if(!declaring)return Fail(error,"Method storage member lacks a declaring class");
   const uint32_t flags=Flags(method);const bool is_copied=(flags&(0x1000000|0x80000000))==0x1000000;
   if(declaring!=klass&&(!is_copied||!(Read<uint32_t>(declaring,offsetof(Class,access_flags))&0x200)))return Fail(error,"Method storage member has an invalid declaring class");
  }
- *output={array,count,static_cast<uint16_t>(boundaries.direct_count),static_cast<uint16_t>(boundaries.declared_count)};return true;
+ *output={view.array,count,static_cast<uint16_t>(boundaries.direct_count),static_cast<uint16_t>(boundaries.declared_count)};return true;
 }
 bool TransactionMetadataReader::ReadAbstractVTable(void* klass,bool* has_abstract,std::string* error)const{
  if(!root_||!klass||!has_abstract)return Fail(error,"Missing abstract class metadata");

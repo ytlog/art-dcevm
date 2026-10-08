@@ -64,6 +64,16 @@ int main(){
  auto* klass=New<Class>();klass->object.klass=Ref(meta);klass->primitive_type=2<<16;auto* iface=New<Class>();iface->object.klass=Ref(meta);iface->access_flags=0x200;
  auto* methods=New<Methods>();methods->count=2;methods->values[0].declaring_class=Ref(klass);methods->values[1].declaring_class=Ref(iface);methods->values[1].access_flags=0x1000000;klass->methods=uintptr_t(methods);klass->virtual_methods_offset=1;klass->copied_methods_offset=1;
  g::MethodStorageView storage;assert(reader.ReadMethods(klass,&storage,&error)&&storage.count==2&&storage.direct_count==1);
+ g::MethodStorageView sentinel{methods,17,19,23};
+ for(void* bad:{reinterpret_cast<void*>(UINTPTR_MAX-3),static_cast<void*>(reinterpret_cast<unsigned char*>(klass)+1)}) {
+  assert(!reader.ReadMethods(bad,&sentinel,&error));
+  assert(sentinel.array==methods && sentinel.count==17 && sentinel.direct_count==19 && sentinel.copied_start==23);
+ }
+ klass->methods=UINTPTR_MAX&~uintptr_t{7};assert(!reader.ReadMethods(klass,&sentinel,&error));
+ klass->methods=uintptr_t(methods)+4;assert(!reader.ReadMethods(klass,&sentinel,&error));
+ klass->methods=0;klass->virtual_methods_offset=0;klass->copied_methods_offset=0;
+ assert(reader.ReadMethods(klass,&storage,&error) && !storage.array && !storage.count);
+ klass->methods=uintptr_t(methods);klass->virtual_methods_offset=1;klass->copied_methods_offset=1;
  methods->values[1].access_flags|=0x80000000;assert(!reader.ReadMethods(klass,&storage,&error));methods->values[1].access_flags=0x1000000;iface->access_flags=0;assert(!reader.ReadMethods(klass,&storage,&error));iface->access_flags=0x200;
  klass->copied_methods_offset=3;assert(!reader.ReadMethods(klass,&storage,&error));klass->copied_methods_offset=1;klass->virtual_methods_offset=2;assert(!reader.ReadMethods(klass,&storage,&error));klass->virtual_methods_offset=1;
  klass->access_flags=0x400;auto* long_array_type=New<Class>();long_array_type->component_type=Ref(prim);auto* table=New<PointerArray>();table->object.klass=Ref(long_array_type);table->length=2;table->values[0]=uintptr_t(&methods->values[0]);table->values[1]=uintptr_t(&methods->values[1]);klass->vtable=Ref(table);
