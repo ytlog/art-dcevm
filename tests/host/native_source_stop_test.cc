@@ -107,6 +107,18 @@ class LoadingHooks:public Hooks {
   return Hooks::Install(target,proxy,original,error);
  }
 };
+struct LifecycleProof {
+ void* driver=nullptr;void* self=nullptr;JNIEnv* env=nullptr;void* vm=nullptr;
+ unsigned begins=0,ends=0;bool active=false,success=false;
+ static void Begin(void* driver,const runnable_jni::Context& context,void* raw) noexcept {
+  auto& p=*static_cast<LifecycleProof*>(raw);assert(!p.active&&p.driver==driver&&p.self==context.self&&p.env==context.env&&p.vm==context.vm);
+  assert(native_source_class_loading::Run::Current()&&native_source_class_loading::Run::Current()->OwnsDriver(driver));
+  p.active=true;++p.begins;
+ }
+ static void End(void* driver,bool success,void* raw) noexcept {
+  auto& p=*static_cast<LifecycleProof*>(raw);assert(p.active&&p.driver==driver);p.active=false;p.success=success;++p.ends;
+ }
+};
 void CleanupProofs(native_source_stop::Service& service){
  LoadingHooks hooks;std::string error;native_source_class_loading::Service loading;
  runtime_services::Snapshot runtime{};runtime.runtime=&runtime_receiver;
@@ -139,6 +151,22 @@ void CleanupProofs(native_source_stop::Service& service){
   bool valid=o.Finish(&driver,original&&complete,&proof);
   assert(valid==(mode==0||mode==3||mode==6));
   if(mode==4||mode==9){Native(&self);finish_proxy(&heap,&self,0);Runnable(&self);}
+ }
+ for(int mode=0;mode<4;++mode){
+  abi::arm64::android_common::RedefinerPrefix driver{&runtime_receiver,JVMTI_ERROR_INTERNAL,0,&runtime_receiver,&self,0};
+  runnable_jni::Context context{&self,reinterpret_cast<JNIEnv*>(&runtime_receiver),&runtime_receiver};
+  LifecycleProof lifecycle{&driver,context.self,context.env,context.vm};
+  {
+   native_source_calibration::Bridge bridge(service,&self,sizeof(self),loading,context,{&lifecycle,LifecycleProof::Begin,LifecycleProof::End});
+   auto observer=native_owned_removal::fixture_observer;
+   observer.begin(&driver,reinterpret_cast<const void*>(&CleanupProofs),mode==2?&foreign:&self,observer.state);
+   assert(lifecycle.begins==(mode==2?0u:1u));
+   if(mode!=3)observer.end(&driver,mode==1?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE,mode==0,observer.state);
+   assert(!bridge.Authorized()); // No collection/final/native cleanup was supplied.
+  }
+  assert(!lifecycle.active&&lifecycle.ends==lifecycle.begins);
+  assert(lifecycle.success==(mode==0));
+  assert(!native_owned_removal::fixture_observer.begin&&!native_source_class_loading::Run::Current());
  }
  forbid_native_allocation=false;
 }

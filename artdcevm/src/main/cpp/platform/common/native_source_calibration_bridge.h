@@ -8,6 +8,13 @@
 #include <cstring>
 
 namespace artdcevm::native_source_calibration {
+// Additional passive observers share the sole actual Run; they grant no
+// readiness by registration. Callbacks must preserve source arguments/results.
+struct RunLifecycle {
+ void* owner=nullptr;
+ void (*begin)(void* driver,const runnable_jni::Context&,void*) noexcept=nullptr;
+ void (*end)(void* driver,bool original_success,void*) noexcept=nullptr;
+};
 // Stack owner for an ordinary source call. The sole Run hook supplies its saved
 // original body; no symbol address, SDK or standalone callback grants a proof.
 class Bridge final {
@@ -18,9 +25,16 @@ class Bridge final {
     registered_=self&&extent&&native_owned_removal::SetPassiveObserver(&observer);
   }
   Bridge(const native_source_stop::Service& service,void* self,size_t extent,
-         native_source_class_loading::Service& loading,const runnable_jni::Context& context) noexcept:
-      Bridge(service,self,extent){loading_service_=&loading;context_=context;}
+         native_source_class_loading::Service& loading,const runnable_jni::Context& context,
+         const RunLifecycle& lifecycle={}) noexcept:
+      Bridge(service,self,extent){loading_service_=&loading;context_=context;
+        if(lifecycle.owner&&lifecycle.begin&&lifecycle.end)lifecycle_=lifecycle;}
   ~Bridge(){
+    if(lifecycle_started_){
+      lifecycle_.end(lifecycle_driver_,false,lifecycle_.owner);lifecycle_started_=false;
+      if(loading_)loading_->Complete(false);
+      loading_.reset();observation_.reset();
+    }
     if(registered_&&!native_owned_removal::SetPassiveObserver(nullptr))std::abort();
   }
   Bridge(const Bridge&)=delete;Bridge& operator=(const Bridge&)=delete;
@@ -36,7 +50,13 @@ class Bridge final {
     if(!b.observation_->Ready()){b.Refuse(b.observation_->Failure());return;}
     if(b.loading_service_){
       b.loading_.emplace(*b.loading_service_,driver,b.context_);
-      if(!b.observation_->BindCleanup(*b.loading_))b.Refuse(b.observation_->Failure());
+      if(!b.observation_->BindCleanup(*b.loading_)){b.Refuse(b.observation_->Failure());return;}
+      if(b.lifecycle_.begin){
+        // Ready independently proved this exact source entry's current Thread
+        // and real Runnable state; the pause owner matched driver/runtime/self.
+        b.lifecycle_started_=true;b.lifecycle_driver_=driver;
+        b.lifecycle_.begin(driver,b.context_,b.lifecycle_.owner);
+      }
     }
   }
   static void Collected(void* driver,const void* holder,void* raw) noexcept {
@@ -47,6 +67,11 @@ class Bridge final {
   static void End(void* driver,jvmtiError result,bool complete,void* raw) noexcept {
     auto& b=*static_cast<Bridge*>(raw);
     b.passive_available_=native_owned_removal::ReadPassiveTrace(&b.passive_);
+    if(b.lifecycle_started_){
+      if(driver!=b.lifecycle_driver_)std::abort();
+      b.lifecycle_.end(driver,result==JVMTI_ERROR_NONE&&complete,b.lifecycle_.owner);
+      b.lifecycle_started_=false;b.lifecycle_driver_=nullptr;
+    }
     if(!b.observation_){b.Refuse("ordinary-source-bridge-missing-Run");return;}
     bool loading_success=true;
     if(b.loading_)loading_success=b.loading_->Complete(result==JVMTI_ERROR_NONE&&complete);
@@ -64,6 +89,7 @@ class Bridge final {
   std::optional<native_source_stop::Observation> observation_;
   native_source_class_loading::Service* loading_service_=nullptr;runnable_jni::Context context_{};
   std::optional<native_source_class_loading::Run> loading_;
+  RunLifecycle lifecycle_;void* lifecycle_driver_=nullptr;bool lifecycle_started_=false;
   bool registered_=false,started_=false,authorized_=false;
   char failure_[768]="ordinary-source-bridge-not-observed",first_[128]{};
   bool passive_available_=false;
