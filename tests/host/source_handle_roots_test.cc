@@ -4,9 +4,13 @@
 #pragma clang diagnostic pop
 #include "platform/common/source_handle_roots.h"
 #include "platform/common/source_allocation_transaction.h"
+#include <chrono>
 namespace {
 using SourceProbe=bool(*)(const runnable_jni::Context&,modern_field_metadata::FieldMetadata&,source_handle_roots::Service&,modern_field_storage::Service&);
 SourceProbe source_probe=nullptr;
+struct EnvironmentOracle {JNIEnv env;void*self;void*vm;};
+EnvironmentOracle* pair_environment=nullptr;
+jint PairVM(JNIEnv*,JavaVM**out){Jni();*out=reinterpret_cast<JavaVM*>(&runtime);return JNI_OK;}
 // Independent named-source walker: this fixture's actual TLS top is 280. The
 // service derives that location from the independently calibrated card oracle.
 constexpr size_t original_top=280;
@@ -80,6 +84,8 @@ int main(){
  void* self=thread.data();JNIEnv* source_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&source_env,8);
  source_handle_roots::Service no_oracle;modern_field_storage::Service unavailable;assert(!source_handle_roots::Service::Bind(hooks,unavailable,&no_oracle,&error));
  source_handle_roots::Service service;assert(source_handle_roots::Service::Bind(hooks,fields,&service,&error));assert(!service.Calibrated()&&!service.CreateScope(1,&error));
+ EnvironmentOracle independent_env{{&table},self,&runtime};pair_environment=&independent_env;table.GetJavaVM=PairVM;
+ source_handle_roots::Service pair_service;assert(source_handle_roots::Service::Bind(hooks,fields,runnable_jni::Context{self,&independent_env.env,&runtime},&pair_service,&error));
  alignas(8) unsigned char original[32]{};OriginalHeader header{nullptr,3};std::memcpy(original,&header,sizeof(header));if(sized_scope)Put32(original,12,2);Put32(original,OriginalReferences(),uint32_t(uintptr_t(old_class)));public_slot=original+OriginalReferences();
  // Capacity includes an unused nonzero tail; the modern walker must use size.
  if(sized_scope)Put32(original,24,uint32_t(uintptr_t(new_class)));Publish(original);
@@ -99,7 +105,7 @@ int main(){
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.Calibrated());hide_owned=false;
  request.expected=true;
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(service.Calibrated()&&Top()==original&&walks>=5);
- struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;modern_field_storage::Service* fields;} use_data{&service,&metadata,&fields};
+ struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;modern_field_storage::Service* fields;source_handle_roots::Service* pair;} use_data{&service,&metadata,&fields,&pair_service};
  auto use=[](const runnable_jni::Context& context,void* p){auto& data=*static_cast<Use*>(p);auto& s=*data.service;auto& metadata=*data.metadata;std::string error;
   void* borrowed=nullptr;assert(s.BorrowHandle(context,public_slot,&borrowed)&&borrowed==old_class);
   if(sized_scope){borrowed=new_class;
@@ -127,6 +133,27 @@ int main(){
   assert(s.BorrowHandle(context,static_cast<const char*>(public_slot)+4,&borrowed)&&!borrowed);
   const auto calls=jni_calls;
   assert(s.BorrowOwnedStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls==calls);
+  auto pair_context=context;pair_context.env=&pair_environment->env;
+  void* left=nullptr,*right=nullptr;
+  const auto no_jni=jni_calls;const auto baseline=method_identity::MappingOsQueries();
+  for(int repeat=0;repeat<3;++repeat){assert(data.pair->BorrowOwnedStrongGlobal(pair_context,reinterpret_cast<jobject>(old_class),&left));assert(data.pair->BorrowOwnedStrongGlobal(pair_context,reinterpret_cast<jobject>(new_class),&right));}
+  assert(method_identity::MappingOsQueries()-baseline==12&&jni_calls==no_jni);
+  for(size_t count:{size_t(30000),size_t(60000)}){
+   const auto before=method_identity::MappingOsQueries();const auto started=std::chrono::steady_clock::now();
+   for(size_t index=0;index<count;++index)assert(data.pair->BorrowOwnedStrongPair(pair_context,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&left,&right)&&left==old_class&&right==new_class);
+   assert(method_identity::MappingOsQueries()-before==count*2&&jni_calls==no_jni);
+   const auto elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
+   std::cout<<"Actual paired strong-root native mapping benchmark: roots="<<count<<" OSQueries="<<count*2<<" elapsedSeconds="<<elapsed<<"\n";
+  }
+  auto wrong_pair=pair_context;wrong_pair.self=foreign_thread.data();left=new_class;right=old_class;
+  assert(!data.pair->BorrowOwnedStrongPair(wrong_pair,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&left,&right)&&left==new_class&&right==old_class);
+  wrong_pair=pair_context;wrong_pair.vm=&linker;assert(!data.pair->BorrowOwnedStrongPair(wrong_pair,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&left,&right));
+  pair_environment->self=foreign_thread.data();assert(!data.pair->BorrowOwnedStrongPair(pair_context,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&left,&right));pair_environment->self=context.self;
+  assert(!data.pair->BorrowOwnedStrongPair(pair_context,reinterpret_cast<jobject>(old_class),nullptr,&left,&right));
+  assert(!data.pair->BorrowOwnedStrongPair(pair_context,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&left,&left));
+  assert(!data.pair->BorrowOwnedStrongPair(pair_context,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(uintptr_t(UINT32_MAX)+1),&left,&right)&&left==new_class&&right==old_class);
+  assert(jni_calls==no_jni);
+
   assert(s.BorrowStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls>calls);
   auto invalid=context;invalid.self=foreign_thread.data();borrowed=new_class;
   assert(!s.BorrowOwnedStrongGlobal(invalid,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==new_class);
@@ -218,6 +245,7 @@ int main(){
  runnable_jni::Context native{self,source_env,&runtime};
  assert(!service.ReadyForSourceAccess()&&!service.BorrowHandle(native,public_slot,&unchanged)&&unchanged==new_class);
  assert(!service.BorrowOwnedStrongGlobal(native,reinterpret_cast<jobject>(old_class),&unchanged)&&unchanged==new_class);
+ void* second_unchanged=old_class;auto pair_native=native;pair_native.env=&independent_env.env;assert(!pair_service.BorrowOwnedStrongPair(pair_native,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(new_class),&unchanged,&second_unchanged)&&unchanged==new_class&&second_unchanged==old_class);
  auto foreign_native=native;foreign_native.self=reinterpret_cast<void*>(uintptr_t(1));
  assert(!service.BorrowHandle(foreign_native,public_slot,&unchanged)&&unchanged==new_class);
  assert(method_identity::MappingOsQueries()==native_queries);

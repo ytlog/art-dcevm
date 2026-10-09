@@ -93,6 +93,7 @@ bool Oracle(void*,const runnable_jni::Context&,jobject root,void** out){Object* 
 void* Field(void*,void* mirror){return static_cast<Object*>(mirror)->field;}
 void* Owner(void*,void* field){return static_cast<NativeField*>(field)->owner;}
 void* Element(void*,void* array,size_t index){auto* object=static_cast<Object*>(array);return wrong_element||index>=object->elements.size()?nullptr:object->elements[index];}
+bool Pair(void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return Oracle(owner,c,a,left)&&Oracle(owner,c,b,right);}
 bool Scope(void*,JNIEnv* env,jobject root,runnable_jni::Operation operation,void* data){assert(root&&R(root)->global);const bool pass=operation({&thread,env,reinterpret_cast<JavaVM*>(&vm)},data);if(fail_container){assert(pass);no_alloc=true;}return pass;}
 std::vector<Object>* loaded_objects=nullptr;
 jclass JNICALL Parent(JNIEnv*,jclass){return static_cast<jclass>(Local(&loaded_objects->front()));}
@@ -143,7 +144,7 @@ int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check
  // The same production ObjectArray/barrier protocol now holds Class,
  // ClassLoader, superclass and interface references in the schema verifier.
  // Retain 180000 distinct roots, not a truncation or a weak Class lease.
- bounded_managed_roots::Store roots({&vm,Scope,Oracle,Decode,Element});
+ bounded_managed_roots::Store roots({&vm,Scope,Oracle,Decode,Element,Pair});
  constexpr size_t root_count=180000;std::vector<Object> objects(root_count);
  std::vector<bounded_managed_roots::Slot> slots(root_count);
  for(size_t i=0;i<root_count;++i)objects[i].native=&objects[i];

@@ -158,6 +158,15 @@ bool Service::BorrowOwnedStrongGlobal(const runnable_jni::Context& context,jobje
  if(!expected||uintptr_t(expected)>UINT32_MAX)return false;
  *output=expected;return true;
 }
+bool Service::BorrowOwnedStrongPair(const runnable_jni::Context& context,jobject first,jobject second,void** first_output,void** second_output)const noexcept{
+ if(!first_output||!second_output||first_output==second_output||!decode_||!first||!second||!Runnable(context.self)||!Environment(context))return false;
+ // The named decoder reads retained JNI globals and barriers only; there is no
+ // JNI call, source callee, suspension or reusable permission between decodes.
+ void* left=reinterpret_cast<void*>(decode_(context.self,first).reference);
+ void* right=reinterpret_cast<void*>(decode_(context.self,second).reference);
+ if(!left||!right||uintptr_t(left)>UINT32_MAX||uintptr_t(right)>UINT32_MAX)return false;
+ *first_output=left;*second_output=right;return true;
+}
 bool Service::BorrowStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const{
  if(!output||!decode_||!Runnable(context.self)||!Environment(context))return false;
  if(!strong||context.env->ExceptionCheck()||context.env->GetObjectRefType(strong)!=JNIGlobalRefType||!Runnable(context.self))return false;

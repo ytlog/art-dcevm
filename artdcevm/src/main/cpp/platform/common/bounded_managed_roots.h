@@ -13,6 +13,9 @@ struct Bindings {
  bool (*oracle)(void*,const runnable_jni::Context&,jobject,void**)=nullptr;
  bool (*decode)(void*,jobject,void**)=nullptr;
  void* (*element)(void*,void*,size_t)=nullptr;
+ // Optional typed pair borrow verifies both native identities in this single
+ // post-JNI observation; the store still checks its independent slot barrier.
+ bool (*borrow_pair)(void*,const runnable_jni::Context&,jobject,jobject,void**,void**)=nullptr;
 };
 // Object[] retains every Class/loader/ancestor/interface, including repeated
 // identities. JNI table consumption grows by one global per 1024 references.
@@ -70,6 +73,7 @@ class Store {
  struct Chunk {jobjectArray root;jsize used;};
  struct Request {Store* store;jobject object,array;jsize index;};
  static bool Observe(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Request*>(raw);const auto& b=r.store->bindings_;
+  if(b.borrow_pair){void*object=nullptr,*array=nullptr;return b.borrow_pair(b.owner,context,r.object,r.array,&object,&array)&&object&&array&&b.element(b.owner,array,size_t(r.index))==object;}
   for(auto root:{r.object,r.array}){void *expected=nullptr,*actual=nullptr;if(!b.oracle(b.owner,context,root,&expected)||!b.decode(b.owner,root,&actual)||expected!=actual)return false;}
   void *object=nullptr,*array=nullptr;return b.decode(b.owner,r.object,&object)&&b.decode(b.owner,r.array,&array)&&b.element(b.owner,array,size_t(r.index))==object;}
  static bool Fail(std::string* error,const char* text){if(error)try{*error=text;}catch(const std::bad_alloc&){}return false;}

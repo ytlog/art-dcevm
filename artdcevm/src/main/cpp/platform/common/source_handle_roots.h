@@ -29,6 +29,10 @@ class Service final {
   // owner guarantees its kind/lifetime; direct named decode makes no JNI call
   // and grants no HandleScope or hierarchy permission.
   bool BorrowOwnedStrongGlobal(const runnable_jni::Context&,jobject,void**)const noexcept;
+  // Two independently retained strong globals in one immediate no-JNI read
+  // window. Verify Current/Runnable/environment once, decode both before
+  // returning; no proof or raw pointer may survive a safepoint.
+  bool BorrowOwnedStrongPair(const runnable_jni::Context&,jobject,jobject,void**,void**)const noexcept;
   bool BorrowStrongGlobal(const runnable_jni::Context&,jobject,void**)const;
   bool BorrowHandle(const runnable_jni::Context&,const void* slot,void** output)const;
   bool ReadyForSourceAccess()const;

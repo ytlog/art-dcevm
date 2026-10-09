@@ -78,6 +78,7 @@ struct Bindings {
  void* decoder_owner=nullptr;
  bool (*borrow_owned)(void*,const runnable_jni::Context&,jobject,void**)=nullptr;
  const AllocationOwner* allocation=nullptr; const ReceiverOwner* receivers=nullptr; CacheOwner* caches=nullptr;
+ bool (*borrow_pair)(void*,const runnable_jni::Context&,jobject,jobject,void**,void**)=nullptr;
 };
 // Pure graph validation used by the public stage after exact JNI identities are
 // rooted. Rejects cycles across batch/unmodified edges, role/final/access errors,

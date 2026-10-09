@@ -95,6 +95,7 @@ struct Authority::State {
  std::vector<bounded_managed_roots::Slot> loaders;
  static bool RootOracle(void*raw,const runnable_jni::Context&c,jobject g,void**out){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_owned(s.bindings.decoder_owner,c,g,out);}
  static bool RootDecode(void*raw,jobject g,void**out){auto&s=*static_cast<State*>(raw);return RootOracle(raw,s.root_context,g,out);}
+ static bool RootPair(void*raw,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_pair&&s.bindings.borrow_pair(s.bindings.decoder_owner,c,a,b,left,right);}
  static void* RootElement(void*raw,void*array,size_t index){auto&s=*static_cast<State*>(raw);return index<size_t(bounded_managed_roots::Store::kChunkSize)?s.bindings.metadata->Reference(array,12+index*4):nullptr;}
  Graph graph;std::vector<Input> inputs;
  std::vector<std::vector<size_t>> closure_before,closure_after,order_before,order_after;
@@ -132,7 +133,7 @@ const Graph* Authority::Staged()const noexcept{return state_->staged?&state_->gr
 bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const std::vector<Input>& inputs,const Bindings& bindings,std::string* error){
  JNIEnv* env=context.env;if(!env||!context.self||!ti||inputs.empty()||env->ExceptionCheck()||!state_->graph.nodes.empty()||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.borrow_owned||!bindings.allocation||!bindings.receivers||!bindings.caches)return Fail(error,"Hierarchy stage lacks exact public/native owners");
  state_->bindings=bindings;state_->inputs=inputs;auto& s=*state_;s.root_context=context;
- s.public_roots.Bind({&s,nullptr,State::RootOracle,State::RootDecode,State::RootElement});bool success=false;
+ s.public_roots.Bind({&s,nullptr,State::RootOracle,State::RootDecode,State::RootElement,bindings.borrow_pair?State::RootPair:nullptr});bool success=false;
  struct Cleanup{Authority* a;JNIEnv* e;bool& ok;~Cleanup(){if(!ok)a->Clear(e);}} cleanup{this,env,success};
  jclass type=env->FindClass("java/lang/Class");if(!type||env->ExceptionCheck())return Fail(error,"Class API unavailable");
  struct Local{JNIEnv* e;jobject v;~Local(){if(v)e->DeleteLocalRef(v);}} local_type{env,type};
