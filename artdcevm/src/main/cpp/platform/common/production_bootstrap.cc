@@ -32,6 +32,7 @@
 #include <cstdio>
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/native_scope_executor.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include "hooks/shadow_hook_engine.h"
 #include <cstring>
@@ -68,6 +69,8 @@ struct NativeEngine final:Engine {
  void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_source_stop::Service source_stop;
+ native_scope_executor::Executor native_scope;
+ bool NativeScopeCalibrated()const override{return native_scope.Ready();}
  std::string source_stop_diagnostic;
  bool SourceStopCalibrated()const override{return source_stop.Calibrated();}
  std::string SourceStopDiagnostic()const override {
@@ -394,8 +397,20 @@ struct NativeEngine final:Engine {
   if(!batch){
    thread_suspend_service::Service state;native_source_stop::Service candidate;
    source_stop={};source_stop_diagnostic.clear();
-   if(thread_state_calibration::Calibrate(hooks,env,anchor,&state,&source_stop_diagnostic)&&
-      native_source_stop::Install(hooks,&source_stop_diagnostic)&&
+   const bool state_proven=thread_state_calibration::Calibrate(hooks,env,anchor,&state,&source_stop_diagnostic);
+   if(state_proven){
+    std::string native_error;
+    if(native_scope.Prepared()||native_scope.Prepare(hooks,env,state,&native_error)){
+     auto probe=[](const runnable_jni::Context& context,void* raw){
+      return static_cast<native_scope_executor::Executor*>(raw)->Calibrate(context)==native_scope_executor::Result::Success;
+     };
+     // The actual ordinary JNI entry/return proves only a local Native scope.
+     // No stop or GC reservation is retained across this Java/native call.
+     runnable_executor::With(env,anchor,probe,&native_scope);
+    }
+    if(env->ExceptionCheck())return owned_failure_diagnostic::Unavailable(error,"Native-scope calibration raised a Java exception");
+   }
+   if(state_proven&&native_source_stop::Install(hooks,&source_stop_diagnostic)&&
       native_source_stop::Service::Bind(hooks,runtime.receivers.heap,state,&candidate,&source_stop_diagnostic)){
     auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
     void* self=current_thread?current_thread():nullptr;size_t extent=0;

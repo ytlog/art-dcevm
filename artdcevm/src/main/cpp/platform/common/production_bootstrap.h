@@ -12,6 +12,7 @@ class Engine {
   virtual bool AtomicBatchReady()const{return false;}
   virtual bool SourceStopCalibrated()const{return false;}
   virtual std::string SourceStopDiagnostic()const{return "ordinary-source-lifecycle-not-observed";}
+  virtual bool NativeScopeCalibrated()const{return false;}
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;
 };

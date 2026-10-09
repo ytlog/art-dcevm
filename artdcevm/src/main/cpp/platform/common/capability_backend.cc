@@ -60,6 +60,7 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"partialEvolutionAvailable\":"+(ready_?"true":"false")+",\"atomicMemberBatch\":"+(ready_&&common_&&common_->AtomicBatchReady()?"true":"false")+",\"nativeMethodDeletion\":"+(ready_?"true":"false")+
    ",\"nativeDelete\":"+std::string(ready_&&common_&&common_->FieldDeletionReady()?"true":"false")+",\"evolutionAvailable\":false,\"fieldDeletion\":"+(ready_&&common_&&common_->FieldDeletionReady()?"true":"false")+",\"standardRedefineRouted\":false,\"fullDcevmComplete\":false,\"validationHooksInstalled\":false,\"privateHooksSupported\":"+(ready_?"true":"false")+
    ",\"sourceStopCalibrated\":"+(ready_&&common_&&common_->SourceStopCalibrated()?"true":"false")+
+   ",\"nativeScopeCalibrated\":"+(ready_&&common_&&common_->NativeScopeCalibrated()?"true":"false")+
    ",\"sourceStopDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceStopDiagnostic():"ordinary-source-lifecycle-not-observed")+
    ",\"evolutionError\":"+QuoteJsonMutf8(error_)+",\"public\":"+public_report+"}";
  return result;

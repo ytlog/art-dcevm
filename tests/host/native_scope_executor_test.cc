@@ -93,6 +93,9 @@ int main(){
   Reset();current_thread=&other;assert(executor.WithNative(runnable_context,Work,nullptr)==Result::StateMismatch);
   Reset();SetState(92);assert(executor.WithNative(runnable_context,Work,nullptr)==Result::StateMismatch); // Native caller cannot synthesize Runnable entry.
   Reset();pending=true;const auto before=calls;assert(executor.WithNative(runnable_context,Work,nullptr)==Result::PendingException&&calls==before&&pending);
+  Reset();mode=Mode::None;assert(executor.Calibrate(runnable_context)==Result::NoCallback&&!executor.Ready());
+  assert(executor.WithNative(runnable_context,Work,nullptr)==Result::Unavailable);
+  Reset();assert(executor.Calibrate(runnable_context)==Result::Success&&executor.Ready());
   Reset();Executor bad;SetState(92);fail_register=true;const auto roots_before=releases;assert(!bad.Prepare(hooks,&env,state,&error)&&pending&&releases==roots_before+1&&!bad.Ready());fail_register=false;
   Reset();assert(executor.WithNative(runnable_context,Work,nullptr)==Result::Success);
  }

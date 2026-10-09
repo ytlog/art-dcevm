@@ -108,7 +108,7 @@ Result Executor::Invoke(const runnable_jni::Context& context,Operation operation
 }
 Result Executor::Calibrate(const runnable_jni::Context& context){
  const auto result=Invoke(context,Identity,nullptr);
- if(result==Result::Success)calibrated_.store(true,std::memory_order_release);
+ calibrated_.store(result==Result::Success,std::memory_order_release);
  return result;
 }
 Result Executor::WithNative(const runnable_jni::Context& context,Operation operation,void* data){

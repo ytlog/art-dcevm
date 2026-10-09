@@ -42,6 +42,7 @@ class Executor final {
   // Invoke from the existing real Runnable callback; actual named current,
   // Native entry and returned Runnable state attest the supplied declaration.
   Result Calibrate(const runnable_jni::Context&);
+  bool Prepared()const noexcept{return prepared_.load(std::memory_order_acquire);}
   bool Ready()const noexcept{return calibrated_.load(std::memory_order_acquire);}
   // No stop/GC reservation, borrowed Context or managed raw pointer may escape
   // this scope. A retained source reservation needs a separately proved real
