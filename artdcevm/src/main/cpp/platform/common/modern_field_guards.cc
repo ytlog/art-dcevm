@@ -1,5 +1,7 @@
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/common/modern_final_field_guard.h"
+#include "platform/abi/arm64/art_field.h"
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/var_handle_field_target.h"
@@ -117,6 +119,17 @@ struct VarState {
 };
 VarState vars;
 void* original_var_access=nullptr;
+using ModeTemplate=uint32_t(*)(int);
+ModeTemplate mode_template=nullptr;
+bool ReadFinalFlags(void*,void* field,uint32_t* flags){
+  if(!installed||!field||!flags)return false;
+  // InstallFieldEntryGuards requires a complete independent mirror/native field
+  // oracle, which validates this shared fixed ArtField scalar declaration.
+  *flags=__atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(field)+
+      offsetof(abi::arm64::Field,access_flags)),__ATOMIC_RELAXED);return true;
+}
+void RaiseFinal(void*,void* self,const char* type,const char* text){state.throw_exception(self,type,text);}
+
 bool vars_installed=false;
 thread_local void* var_access_self=nullptr;
 void* VarTarget(void*,void* handle){
@@ -161,6 +174,17 @@ bool VarAccess(void* handle,int mode,void* frame,const void* operands,void* resu
   struct Context {void* previous;Context(void* self):previous(var_access_self){var_access_self=self;}
     ~Context(){var_access_self=previous;}} context{self};
   const var_handle_field::Dispatch dispatch{&vars,VarTarget,VarRetired,VarReject,VarUnavailable,VarObserved,VarOriginal};
+  // Retired-member rejection retains precedence. A cached VarHandle's access
+  // mask can predate a mutable-to-final evolution, so the original mask alone
+  // does not enforce current field permissions.
+  void* field=vars.reader->Target(handle);
+  if(field&&!vars.registry->TokenFor(field)&&mode_template){
+    final_field_guard::Access access;access.path=final_field_guard::Path::VarHandle;
+    access.var_mode_valid=mode>=0&&mode<=30;
+    access.var_mode_template=access.var_mode_valid?mode_template(mode):0;
+    const final_field_guard::Boundary boundary{&state,ReadFinalFlags,RaiseFinal};
+    if(final_field_guard::Reject(boundary,field,self,access,result))return false;
+  }
   const bool passed=dispatch.Invoke(handle,mode,frame,operands,result);
   if(vars.current()!=self){++vars.context_failures;return false;}
   return passed;
@@ -286,6 +310,9 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
     }
     tokens.push_back(token);
   }
+  mode_template=reinterpret_cast<ModeTemplate>(hooks.FindSymbol("libart.so",
+      "_ZN3art6mirror9VarHandle21GetAccessModeTemplateENS1_10AccessModeE"));
+  if(mode_template&&(mode_template(0)!=0||mode_template(1)!=1))mode_template=nullptr;
   installed=true;return true;
 }
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry){return installed&&state.registry==&registry;}

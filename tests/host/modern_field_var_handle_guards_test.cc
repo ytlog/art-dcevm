@@ -8,7 +8,8 @@ using namespace artdcevm;
 namespace {
 struct Field {reflection_metadata::Field12 mirror{};int flags=0;void* target=nullptr;jobject owner=nullptr;jfieldID id=nullptr;};
 struct Handle {var_handle_field::Prefix prefix{};void* target=nullptr;int coordinates=0;jobject coordinate=nullptr;};
-int base_class,field_class,list_class,owner_a,owner_b,field_a,field_b,field_c,field_d,current_thread,wrong_thread,int_class,static_handle_class,other_handle_class,oracle_class;
+int base_class,field_class,list_class,owner_a,owner_b,current_thread,wrong_thread,int_class,static_handle_class,other_handle_class,oracle_class;
+abi::arm64::Field field_a{},field_b{},field_c{},field_d{};
 struct Other {uint32_t klass=0x3000,monitor=0;} other;
 uintptr_t instance_native_class=0x1000,static_native_class=0x2000,other_native_class=0x3000;
 int roots_created=0,roots_deleted=0,array_verifications=0;bool shared_class=false,in_hot=false,decode_failure=false,field_class_failure=false;
@@ -48,7 +49,7 @@ jfieldID PublicStaticId(JNIEnv*,jclass owner,const char* name,const char* sig){a
 jobject PublicMirror(JNIEnv*,jclass owner,jfieldID id,jboolean stat){auto* f=PublicField(owner,stat);return f->id==id?Obj(f):nullptr;}
 
 void* Current(){return actual_thread;}
-void ThrowRetired(void* self,const char* type,const char*){assert(self==&current_thread);assert(std::string(type)=="Ljava/lang/NoSuchFieldError;"||std::string(type)=="Ljava/lang/IllegalStateException;");++thrown;}
+void ThrowRetired(void* self,const char* type,const char*){assert(self==&current_thread);assert(std::string(type)=="Ljava/lang/NoSuchFieldError;"||std::string(type)=="Ljava/lang/IllegalStateException;"||std::string(type)=="Ljava/lang/UnsupportedOperationException;");++thrown;}
 abi::arm64::android11::ReleaseObjectPointer DecodeClass(const void* self,jobject object){
  assert(self==Current());
  uintptr_t value=object==Obj(&base_class)?instance_native_class:object==Obj(&static_handle_class)?static_native_class:object==Obj(&other_handle_class)?other_native_class:0;
@@ -64,7 +65,7 @@ jmethodID FactoryMethod(JNIEnv*,jclass type,const char* name,const char* sig){as
 jobject Factory(JNIEnv*,jclass type,jmethodID id,va_list){assert(type==Cls(&oracle_class)&&uintptr_t(id)==9&&!in_hot);++array_verifications;return Obj(&other);}
 void Visit(void* o,art::ReflectiveValueVisitor* visitor){art::ReflectionSourceInfo source;source.kind=source_kind;source.object=o;auto* target=reinterpret_cast<art::ArtField*>(static_cast<Handle*>(o)->target);assert(visitor->VisitField(target,source)==target);}
 void Stop(void*,const char*,bool){assert(!stopped);stopped=true;}void Resume(void*){assert(stopped);stopped=false;}
-bool Access(void*,int mode,void* frame,const void* operands,void* result){assert(mode==7&&frame==reinterpret_cast<void*>(11)&&operands==reinterpret_cast<void*>(13));++original_calls;*static_cast<uint64_t*>(result)=42;if(change_thread)actual_thread=&wrong_thread;return original_result;}
+bool Access(void*,int mode,void* frame,const void* operands,void* result){assert((mode==7||mode==0)&&frame==reinterpret_cast<void*>(11)&&operands==reinterpret_cast<void*>(13));++original_calls;*static_cast<uint64_t*>(result)=42;if(change_thread)actual_thread=&wrong_thread;return original_result;}
 struct Hooks:HookEngine {bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{std::string s=name;if(s=="_ZN3art6mirror5Field11GetArtFieldEv")return reinterpret_cast<void*>(NativeField);if(s=="artReadBarrierMark")return reinterpret_cast<void*>(Mark);
  if(s=="artReadBarrierForRootSlow")return reinterpret_cast<void*>(Mark);
@@ -159,6 +160,20 @@ int main(int argc,char** argv){using namespace retirement;
  assert(access(&third,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
  assert(!FieldVarHandleGuardsReady(registry));
  assert(access(&fourth,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result)&&FieldVarHandleGuardsReady(registry));
+ // Exercise the actual outer guard against a cached handle whose native
+ // target became final after its original successful calibration/invocation.
+ mode_template=[](int mode)->uint32_t{return mode==0?0:1;};
+ field_c.access_flags=0x10;const int before_final=original_calls;result=99;
+ assert(!access(&third,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
+ assert(result==0&&original_calls==before_final&&thrown==1);
+ assert(access(&third,0,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result)&&result==42);
+ // Removing final immediately restores the original cached writer. No sticky
+ // handle mask or process-wide "some final field" bit decides access.
+ field_c.access_flags=0;assert(access(&third,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
+ field_d.access_flags=0x18;result=99;const int before_static_final=original_calls;
+ assert(!access(&fourth,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
+ assert(result==0&&original_calls==before_static_final&&thrown==2);
+ field_d.access_flags=8;thrown=0;
  registry.Retire(&field_a);const auto originals_before=original_calls;result=99;
  assert(!access(&first,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
  assert(thrown==1&&result==0&&original_calls==originals_before&&FieldVarHandleGuardsReady(registry));
