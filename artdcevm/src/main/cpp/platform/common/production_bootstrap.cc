@@ -69,6 +69,10 @@ struct NativeEngine final:Engine {
  native_cache::Service cache;
  native_source_stop::Service source_stop;
  std::string source_stop_diagnostic;
+ bool SourceStopCalibrated()const override{return source_stop.Calibrated();}
+ std::string SourceStopDiagnostic()const override {
+  return source_stop.Calibrated()?"":source_stop_diagnostic.empty()?"ordinary-source-lifecycle-not-observed":source_stop_diagnostic;
+ }
  native_structural_reflection::Service reflection;
  native_member_provider::Service provider;
  native_schema_guard_verifier::Verifier schema_verifier;

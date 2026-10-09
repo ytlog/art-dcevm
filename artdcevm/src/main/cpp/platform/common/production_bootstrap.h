@@ -10,6 +10,8 @@ class Engine {
   virtual void RecordDefinitions(JNIEnv*,const std::vector<Definition>&){}
   virtual bool FieldDeletionReady()const{return false;}
   virtual bool AtomicBatchReady()const{return false;}
+  virtual bool SourceStopCalibrated()const{return false;}
+  virtual std::string SourceStopDiagnostic()const{return "ordinary-source-lifecycle-not-observed";}
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;
 };
