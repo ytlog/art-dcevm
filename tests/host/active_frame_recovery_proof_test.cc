@@ -23,6 +23,9 @@ std::array<uint32_t,6> maps{};std::array<uint32_t,12> catalog{};
 template<size_t N> void Table(abi::arm64::android11::BitTable<N>& t,void* data,size_t bits,uint32_t rows,unsigned width) {
  t.region={data,0,bits};t.rows=rows;for(size_t i=0;i<=N;++i)t.columns[i]=i*width;
 }
+template<size_t N> void Table(abi::arm64::android13::BitTable<N>& t,void* data,size_t bits,uint32_t rows,unsigned width) {
+ t.region={data,0,bits};t.rows=rows;for(size_t i=0;i<=N;++i)t.columns[i]=i*width;
+}
 template<size_t N> void Table(abi::arm64::android17::BitTable<N>& t,void* data,size_t bits,uint32_t rows,unsigned width) {
  t.region={data,0,bits};t.rows=rows;t.row_bits=N*width;for(size_t i=0;i<N;++i)t.columns[i]=i*width;
 }
@@ -76,7 +79,7 @@ struct Finder {
  void* operator()(const char* name)const {
   if(missing && std::strcmp(missing,name)==0)return nullptr;
   if(wrong_geometry && std::strcmp(name,abi::arm64::stack::kConstruct)==0)
-   return family==Family::kAndroid17?Fn(Construct<abi::arm64::stack::Visitor13>):Fn(Construct<abi::arm64::stack::Visitor17>);
+   return family==Family::kAndroid12 || family==Family::kAndroid17?Fn(Construct<abi::arm64::stack::Visitor13>):Fn(Construct<abi::arm64::stack::Visitor12>);
   if(std::strstr(name,"GetDexPc"))return Fn(DexPc);
   if(std::strcmp(name,abi::arm64::context::kCreate)==0)return Fn(Create);
   if(std::strcmp(name,abi::arm64::android11::frame_registers::kSlow)==0)return Fn(Slow);
@@ -119,6 +122,16 @@ void Check(Family f){family=f;Reset();Service service;
  auto result=run();assert(result.failure==Failure::kNone && result.frames==3 && result.references==3 && result.integers==3 && result.location_reads==6 && result.dex_pc_checks==3 && result.inline_flag_checks==2);
  assert(creates==1 && resets==1 && destroys==1);if(f==Family::kAndroid11)assert(reference_fast11==3);
  assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
+ // A legitimately optimized inner chain can still belong to inlinee1's own
+ // physical body. Never count that callback as carrier's two-inline proof.
+ for(unsigned physical_owner:{1u,2u}) {
+  std::memcpy(quick.data(),&oracle.inlinees[physical_owner-1].method,sizeof(void*));
+  auto partial=run();assert(partial.failure==Failure::kFrameIdentity && partial.frames==0 &&
+      partial.inline_matches==1 && partial.physical_owner_mask==(physical_owner==1?2u:4u));
+  assert(std::strcmp(partial.detail,"quick-frame-owner-is-not-independent-carrier")==0);
+ }
+ std::memcpy(quick.data(),&oracle.carrier.method,sizeof(void*));
+
  // Real nondebuggable compiler states: actual inline metadata without a vreg
  // map must never count as a recovered frame, nor as a wrong CodeItem size.
  stack[7]=0;auto omitted=run();
@@ -174,7 +187,7 @@ void Check(Family f){family=f;Reset();Service service;
  Service wrong;assert(Service::Bind(f,Finder{},&wrong));
  auto rejected=wrong.Prove(&thread,&jit,oracle,scratch,2);
  assert(rejected.failure==Failure::kFrameIdentity && rejected.callbacks==0);
- assert(rejected.constructor_context_echo_mask==(f==Family::kAndroid17?4u:8u));wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
+ assert(rejected.constructor_context_echo_mask==(f==Family::kAndroid12 || f==Family::kAndroid17?4u:2u));wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
  witnesses[0][1].expected=quick[3];
  Service fallback;assert(Service::Bind(f,Finder{f==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast},&fallback));
  assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone);

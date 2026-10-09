@@ -4,7 +4,8 @@ namespace artdcevm::abi::arm64::android13 {
 // Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
 inline constexpr uint32_t kHasInlineInfo=1u<<0;
 using BitRegion=android11::BitRegion;
-template<size_t N> using BitTable=android11::BitTable<N>;
+template<size_t N> struct BitTable { BitRegion region; uint32_t rows; uint16_t columns[N+1]; };
+static_assert(sizeof(BitTable<1>)==32 && sizeof(BitTable<8>)==48);
 using TableIterator=android11::TableIterator;
 using InlineRange=android11::InlineRange;
 using StackMapPair=android11::StackMapPair;

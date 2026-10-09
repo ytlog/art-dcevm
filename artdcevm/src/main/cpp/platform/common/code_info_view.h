@@ -46,6 +46,16 @@ inline bool Validate(Table* table) {
   return true;
 }
 template<size_t N> bool Normalize(const abi::arm64::android11::BitTable<N>& source,Table* out) {
+  // Android11/12 logical row indices remain uint32_t. Reject native counts
+  // before narrowing; wrapping must never turn a malformed map into an empty one.
+  if(source.rows>UINT32_MAX)return false;
+  Table value{{source.region.data,source.region.bit_start,source.region.bit_size},
+              static_cast<uint32_t>(source.rows),source.columns[N],N,{}};
+  for(size_t i=0;i<=N;++i)value.columns[i]=source.columns[i];
+  if(!Validate(&value))return false;
+  *out=value;return true;
+}
+template<size_t N> bool Normalize(const abi::arm64::android13::BitTable<N>& source,Table* out) {
   Table value{{source.region.data,source.region.bit_start,source.region.bit_size},source.rows,source.columns[N],N,{}};
   for(size_t i=0;i<=N;++i)value.columns[i]=source.columns[i];
   if(!Validate(&value))return false;

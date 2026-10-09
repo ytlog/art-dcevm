@@ -21,7 +21,7 @@ struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,m
   uint32_t constructor_context_echo_mask=0;
   uint32_t map_row=0,inline_begin=0,inline_end=0,native_carrier_registers=0,
            decoded_register_first=0,decoded_register_count=0,expected_registers=0;
-  bool register_range_observed=false;
+  bool register_range_observed=false;uint32_t physical_owner_mask=0;
   Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
@@ -164,7 +164,7 @@ class Service {
     // Reserve the largest supported fixed native base before callback state.
     // Candidate constructor geometry is checked against its own Context/thread
     // echo before walking, so smaller source candidates cannot corrupt state.
-    unsigned char native_tail[sizeof(abi::arm64::stack::Visitor17)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
+    unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
     const Service& service;void* jit;const Oracle& oracle;decoded_frame_recovery::Location* scratch;size_t capacity;Readable readable;Report& report;
     void** carrier=nullptr;const void* shared_header=nullptr;uintptr_t shared_pc=0;uint32_t seen=0,inline_rows[2]{};
     Visitor(const Service& s,void* j,const Oracle& o,decoded_frame_recovery::Location* storage,size_t n,Readable reader,Report& r):abi::arm64::stack::Visitor<Pair>{},service(s),jit(j),oracle(o),scratch(storage),capacity(n),readable(reader),report(r){}
@@ -195,7 +195,9 @@ class Service {
       if(!carrier){carrier=this->quick_frame;shared_header=this->header;shared_pc=this->pc;}
       if(carrier!=this->quick_frame)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-physical-frame");
       if(shared_header!=this->header || shared_pc!=this->pc)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-header-pc");
-      if(*carrier!=oracle.carrier.method)return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-carrier");
+      report.physical_owner_mask=*carrier==oracle.carrier.method?1u:
+        *carrier==oracle.inlinees[0].method?2u:*carrier==oracle.inlinees[1].method?4u:0u;
+      if(report.physical_owner_mask!=1)return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-carrier");
       if(!service.jit_contains_(jit,reinterpret_cast<void*>(this->pc)) ||
          (service.header_contains_ && !service.header_contains_(this->header,this->pc)) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
       // Fixed native header prefixes put code at byte8 on11 and byte4
@@ -203,7 +205,9 @@ class Service {
       // lookup/value witnesses must agree with that caller-owned declaration.
       const uintptr_t entry=reinterpret_cast<uintptr_t>(this->header)+(service.family_==Family::kAndroid11?8u:4u);
       if(this->pc<entry || (service.family_==Family::kAndroid11 && this->pc-entry>UINT32_MAX))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
-      alignas(Info) unsigned char storage[sizeof(abi::arm64::android17::CodeInfo)]{};
+      // Reserve every supported fixed decoder object while testing a candidate.
+      // Geometry still comes only from Info and independent frame witnesses.
+      alignas(Info) unsigned char storage[sizeof(abi::arm64::android12::CodeInfo)]{};
       auto* info=reinterpret_cast<Info*>(storage);
       reinterpret_cast<void (*)(Info*,const void*)>(service.construct_)(info,this->header);
       abi::arm64::android11::TableIterator map;

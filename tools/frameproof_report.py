@@ -34,4 +34,10 @@ def validate_frameproof(output,run_id):
     for key,value in {'runtimeJavaDebuggableObserved':True,'runtimeJavaDebuggable':False}.items():
         if type(frame.get(key)) is not type(value) or frame[key]!=value:
             raise RuntimeError('Frame proof runtime debug policy changed: '+key)
+    control=frame.get('compilationControl')
+    if control is not None:
+        if type(control) is not dict:raise RuntimeError('Malformed owned compilation control')
+        for key,value in {'passed':True,'optimizedCompilationRequested':True,'compilationQueueDrained':True,'carrierCachedAfterDrain':True,'inlineChainProven':False,'error':''}.items():
+            if type(control.get(key)) is not type(value) or control[key]!=value:
+                raise RuntimeError('Incomplete owned compilation control: '+key)
     return report

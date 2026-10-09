@@ -44,7 +44,7 @@ public final class FrameProofBootstrap {
         if(!bootstrap.getBoolean("passed"))
             return new JSONObject().put("passed",false).put("bootstrap",bootstrap).put("error","Missing real pure-JNI Runtime/JIT/GC prerequisites");
         // Same instrumentation thread owns the TLS native snapshot; no public backend init.
-        JSONObject frame=OwnedActiveFrameCalibration.run(apkPath);
+        JSONObject frame=OwnedActiveFrameCalibration.run(apkPath,true);
         return new JSONObject().put("passed",frame.getBoolean("passed")).put("bootstrap",bootstrap).put("activeFrames",frame);
     }
 }

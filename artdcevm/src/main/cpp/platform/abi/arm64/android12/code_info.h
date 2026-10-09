@@ -4,7 +4,10 @@ namespace artdcevm::abi::arm64::android12 {
 // Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
 inline constexpr uint32_t kHasInlineInfo=1u<<0;
 using BitRegion=android11::BitRegion;
+// Both Android11 and Android12/12L retain size_t num_rows_.
+// https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r27/libartbase/base/bit_table.h
 template<size_t N> using BitTable=android11::BitTable<N>;
+static_assert(offsetof(BitTable<1>,rows)==24 && offsetof(BitTable<1>,columns)==32);
 using TableIterator=android11::TableIterator;
 using InlineRange=android11::InlineRange;
 using StackMapPair=android11::StackMapPair;
@@ -16,8 +19,8 @@ struct CodeInfo {
   BitTable<1> dex_masks, dex_maps; BitTable<2> dex_catalog;
 };
 struct CodeInfoPair { void* header; CodeInfo info; };
-static_assert(sizeof(CodeInfo)==336 && offsetof(CodeInfo,stack_maps)==32 && offsetof(CodeInfo,dex_regs)==20);
-static_assert(sizeof(CodeInfoPair)==344);
+static_assert(sizeof(CodeInfo)==376 && offsetof(CodeInfo,stack_maps)==32 && offsetof(CodeInfo,dex_regs)==20);
+static_assert(sizeof(CodeInfoPair)==384);
 // Fixed named native declarations; resolve only in an independently matched module.
 using ConstructCodeInfo=void (*)(CodeInfo*,const void*);
 using FindStackMap=TableIterator (*)(const CodeInfo*,uintptr_t,int32_t);

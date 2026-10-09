@@ -20,6 +20,10 @@ template<size_t N> void Bind(abi::arm64::android11::BitTable<N>& table,Bits& bit
   table.region={bits.data.data(),0,bits.data.size()*8};table.rows=rows;
   for(size_t c=0;c<=N;++c)table.columns[c]=c*width;
 }
+template<size_t N> void Bind(abi::arm64::android13::BitTable<N>& table,Bits& bits,uint32_t rows,unsigned width) {
+  table.region={bits.data.data(),0,bits.data.size()*8};table.rows=rows;
+  for(size_t c=0;c<=N;++c)table.columns[c]=c*width;
+}
 template<size_t N> void Bind(abi::arm64::android17::BitTable<N>& table,Bits& bits,uint32_t rows,unsigned width) {
   table.region={bits.data.data(),0,bits.data.size()*8};table.rows=rows;table.row_bits=N*width;
   for(size_t c=0;c<N;++c)table.columns[c]=c*width;
@@ -92,6 +96,19 @@ int main() {
   Check<abi::arm64::android15::CodeInfo>(SourceFamily::kAndroid15);
   Check<abi::arm64::android16::CodeInfo>(SourceFamily::kAndroid16);
   Check<abi::arm64::android17::CodeInfo>(SourceFamily::kAndroid17);
+  // Native 64-bit row counts must not truncate into a valid logical table.
+  Fixture<abi::arm64::android12::CodeInfo> legacy;auto unchanged=legacy.View();
+  unchanged.flags=0xface;
+  legacy.object.stack_maps.rows=size_t{UINT32_MAX}+1;
+  assert(!code_info_view::ReadDecoded(legacy.object,&unchanged));
+  assert(unchanged.flags==0xface);
+  legacy.object.stack_maps.rows=UINT32_MAX;
+  assert(!code_info_view::ReadDecoded(legacy.object,&unchanged)); // region too short
+  legacy.object.stack_maps.rows=2;
+  assert(code_info_view::ReadDecoded(legacy.object,&unchanged));
+  Fixture<abi::arm64::android11::CodeInfo> legacy11;
+  legacy11.object.dex_maps.rows=size_t{UINT32_MAX}+1;
+  assert(!code_info_view::ReadDecoded(legacy11.object,&unchanged));
   Fixture<abi::arm64::android13::CodeInfo> f;auto view=f.View();
   // Read raw mask bits above 32 without scalar truncation.
   Bits large_mask{70};large_mask.Raw(67,1,1);

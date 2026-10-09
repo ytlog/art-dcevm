@@ -32,7 +32,7 @@ using Visitor11=Visitor<android11::CodeInfoPair>;
 using Visitor12=Visitor<android12::CodeInfoPair>;
 using Visitor13=Visitor<android13::CodeInfoPair>;
 using Visitor17=Visitor<android17::CodeInfoPair>;
-static_assert(sizeof(Visitor11)==480 && sizeof(Visitor12)==488);
+static_assert(sizeof(Visitor11)==520 && sizeof(Visitor12)==528);
 static_assert(sizeof(Visitor13)==496 && sizeof(Visitor17)==520);
 static_assert(alignof(Visitor11)==8 && alignof(Visitor17)==8);
 // ART uses Clang's Itanium C++ ABI. Its single polymorphic base has the vptr

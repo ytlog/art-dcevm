@@ -13,6 +13,7 @@
 #include <array>
 #include <sstream>
 #include <vector>
+#include "platform/common/owned_jit_compilation.h"
 namespace artdcevm::owned_active_frame {
 namespace {
 Gate gate;
@@ -39,6 +40,20 @@ bool Resolve(const runnable_jni::Context& context,void* data) {
  abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
  for(size_t i=0;i<5;++i){request.methods[i]=request.leaf(scope,request.roots->refs[i]);if(!request.methods[i]){request.error="Missing native reflected fixture method";return false;}}
  return true;
+}
+struct CompilationRequest {
+ Request* identities;const owned_jit_compilation::Service* service;void* jit;
+ void* cache=nullptr;ContainsMethod contains=nullptr;bool cached=false;
+};
+bool QueueCarrier(const runnable_jni::Context& context,void* data) {
+ auto& request=*static_cast<CompilationRequest*>(data);
+ if(!Resolve(context,request.identities))return false;
+ return request.service->Queue(request.jit,request.identities->methods[0],context.self);
+}
+bool CheckCarrierCached(const runnable_jni::Context& context,void* data) {
+ auto& request=*static_cast<CompilationRequest*>(data);
+ if(!Resolve(context,request.identities))return false;
+ request.cached=request.contains(request.cache,request.identities->methods[0]);return request.cached;
 }
 std::string Failure(active_frame_recovery_proof::Failure failure) {
  using F=active_frame_recovery_proof::Failure;
@@ -84,7 +99,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
   request.attempts.push_back({family,nullptr,report,true});
   if(report.failure==Failure::kNone && report.frames==3 && report.integers==3 && report.references==3 && report.location_reads==6 && report.dex_pc_checks==3 && report.inline_flag_checks==2) {
    request.report=report;request.passed=true;
-   request.model=family==Family::kAndroid11?"CodeInfo328/Visitor480/legacy-kind":family==Family::kAndroid12?"CodeInfo336/Visitor488":family==Family::kAndroid17?"CodeInfo368/Visitor520/slow-bool":"CodeInfo344/Visitor496";
+   request.model=family==Family::kAndroid11?"CodeInfo368/Visitor520/legacy-kind":family==Family::kAndroid12?"CodeInfo376/Visitor528":family==Family::kAndroid17?"CodeInfo368/Visitor520/slow-bool":"CodeInfo344/Visitor496";
    request.error.clear();return true;
   }
   // Prefer an actually observed target/frame failure over a pre-walk wrong ABI.
@@ -95,7 +110,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
 }
 const char* DeclarationName(active_frame_recovery_proof::Family family) {
  using F=active_frame_recovery_proof::Family;
- switch(family){case F::kAndroid11:return "fixed11-CodeInfo328-Visitor480";case F::kAndroid12:return "fixed12-CodeInfo336-Visitor488";
+ switch(family){case F::kAndroid11:return "fixed11-CodeInfo368-Visitor520";case F::kAndroid12:return "fixed12-CodeInfo376-Visitor528";
  case F::kAndroid13:return "fixed13-CodeInfo344-Visitor496-slow-legacy";case F::kAndroid14:return "fixed14-CodeInfo344-Visitor496-slow-bool";
  case F::kAndroid15:return "fixed15-CodeInfo344-Visitor496-slow-bool";case F::kAndroid16:return "fixed16-CodeInfo344-Visitor496-slow-bool";
  case F::kAndroid17:return "fixed17-CodeInfo368-Visitor520-slow-bool";}return "unknown-source";
@@ -114,6 +129,7 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<",\"missingSymbol\":\""<<Escape(attempt.missing?attempt.missing:"")<<"\",\"stage\":\""<<Escape(attempt.report.detail)
    <<"\",\"walkCallbacks\":"<<attempt.report.callbacks<<",\"matchedMethodMask\":"<<attempt.report.matched_mask
    <<",\"physicalMethodMatches\":"<<attempt.report.physical_matches<<",\"inlineMethodMatches\":"<<attempt.report.inline_matches
+   <<",\"physicalOwnerMethodMask\":"<<attempt.report.physical_owner_mask
    <<",\"constructorContextEchoMask\":"<<attempt.report.constructor_context_echo_mask
    <<",\"mapRow\":"<<attempt.report.map_row<<",\"inlineBegin\":"<<attempt.report.inline_begin
    <<",\"inlineEnd\":"<<attempt.report.inline_end<<",\"nativeCarrierRegisters\":"<<attempt.report.native_carrier_registers
@@ -127,6 +143,40 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
 extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameFixture_awaitGate(JNIEnv*,jclass) {
  auto native_current=artdcevm::owned_active_frame::current.load();
  artdcevm::owned_active_frame::gate.Await(native_current?native_current():nullptr);
+}
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_prepareCarrier(JNIEnv* env,jclass,jobjectArray methods,jintArray shape) {
+ using namespace artdcevm;using namespace owned_active_frame;
+ Roots roots{env};ShadowHookEngine hooks;Request identities(&hooks,nullptr,&roots);
+ const char* failure=nullptr;bool queued=false,drained=false,cached=false;
+ auto finish=[&](){std::ostringstream out;out<<"{\"passed\":"<<(queued&&drained&&cached&&!failure?"true":"false")
+  <<",\"optimizedCompilationRequested\":"<<(queued?"true":"false")<<",\"compilationQueueDrained\":"<<(drained?"true":"false")
+  <<",\"carrierCachedAfterDrain\":"<<(cached?"true":"false")<<",\"inlineChainProven\":false,\"error\":\""<<Escape(failure?failure:identities.error)<<"\"}";
+  return env->ExceptionCheck()?nullptr:env->NewStringUTF(out.str().c_str());};
+ if(!methods||!shape||env->ExceptionCheck()||env->GetArrayLength(methods)!=5||env->GetArrayLength(shape)!=22){failure="Invalid independent compiler fixture request";return finish();}
+ env->GetIntArrayRegion(shape,0,22,identities.dex.data());
+ for(size_t i=0;i<5;++i){auto local=env->GetObjectArrayElement(methods,static_cast<jsize>(i));roots.refs[i]=local?env->NewGlobalRef(local):nullptr;if(local)env->DeleteLocalRef(local);if(!roots.refs[i]||env->ExceptionCheck())return nullptr;}
+ if(!hooks.Initialize(&identities.error))return finish();
+ identities.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ auto native_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ auto contains=reinterpret_cast<ContainsMethod>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"));
+ const auto& observed=jni_access::OwnedEvolutionProofs().observed.receivers;
+ owned_jit_compilation::Service service;
+ if(!identities.leaf||!native_current||!contains||!observed.jit||!observed.jit_code_cache||
+    !owned_jit_compilation::Service::Bind([&](const char* name){return hooks.FindSymbol("libart.so",name);},&service)){
+  failure="Missing independent JIT receiver or exact optimizing enqueue/wait binding";return finish();
+ }
+ CompilationRequest request{&identities,&service,observed.jit,observed.jit_code_cache,contains,false};
+ if(runnable_executor::With(env,roots.refs[0],QueueCarrier,&request)!=runnable_jni::Result::kSuccess){failure="Owned optimizing enqueue failed";return finish();}
+ queued=true;
+ // The JNI Runnable scope is destroyed here. Never wait for compiler threads
+ // while retaining shared mutator access. CurrentThread is obtained afresh;
+ // all five reflected Methods stay strongly rooted until draining returns.
+ auto self=native_current();if(!self){failure="Missing current native Thread for compiler drain";return finish();}
+ drained=service.Drain(observed.jit,self);
+ // Membership alone does not prove optimizing code or inlining. Only the
+ // independent suspended physical/two-inline/map/value/root proof below does.
+ cached=runnable_executor::With(env,roots.refs[0],CheckCarrierCached,&request)==runnable_jni::Result::kSuccess&&request.cached;
+ return finish();
 }
 extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_armGate(JNIEnv* env,jclass) {
  using namespace artdcevm;ShadowHookEngine hooks;std::string error;

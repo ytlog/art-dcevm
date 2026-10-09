@@ -12,6 +12,14 @@ def reject(text):
  raise AssertionError('Insufficient proof accepted')
 assert validate_frameproof(output(positive),'current')==positive
 checks=0
+controlled=copy.deepcopy(positive)
+controlled['activeFrames']['compilationControl']={'passed':True,'optimizedCompilationRequested':True,'compilationQueueDrained':True,'carrierCachedAfterDrain':True,'inlineChainProven':False,'error':''}
+assert validate_frameproof(output(controlled),'current')==controlled
+for key,value in controlled['activeFrames']['compilationControl'].items():
+ report=copy.deepcopy(controlled);del report['activeFrames']['compilationControl'][key];reject(output(report));checks+=1
+ report=copy.deepcopy(controlled);report['activeFrames']['compilationControl'][key]=not value if type(value) is bool else 'wrong';reject(output(report));checks+=1
+report=copy.deepcopy(controlled);report['activeFrames']['frames']=1;reject(output(report));checks+=1
+
 report=copy.deepcopy(positive);report['bootstrap']['heapMemoryQueryCalls']=1;reject(output(report));checks+=1
 for group in (None,'bootstrap','activeFrames'):
  values=positive if group is None else positive[group]
