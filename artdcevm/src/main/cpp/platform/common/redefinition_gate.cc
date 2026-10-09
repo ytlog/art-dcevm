@@ -23,9 +23,12 @@ std::atomic<bool> ready{false};std::mutex install_mutex,operation;
 thread_local bool owned=false;thread_local bool direct=false;
 std::atomic<const char*> diagnostic{"Startup redefinition gate was not installed before LIVE"};
 jvmtiError Proxy(void* env,void* runtime,void* self,const void* definitions,int32_t type,void* error){
- if(direct)return JVMTI_ERROR_NOT_AVAILABLE;
+ // ART reports overlapping redefinition contention as INTERNAL. This
+ // transparent public entry must not manufacture a capability denial (98).
+ // Never wait here: an original ClassFileLoadHook can reenter this entry.
+ if(direct)return JVMTI_ERROR_INTERNAL;
  const bool borrowed=owned;
- if(!borrowed&&!operation.try_lock())return JVMTI_ERROR_NOT_AVAILABLE;
+ if(!borrowed&&!operation.try_lock())return JVMTI_ERROR_INTERNAL;
  struct Release {bool borrowed;~Release(){direct=false;if(!borrowed)operation.unlock();}} release{borrowed};
  direct=true;auto body=original.load(std::memory_order_acquire);return body?body(env,runtime,self,definitions,type,error):JVMTI_ERROR_NOT_AVAILABLE;
 }

@@ -64,7 +64,10 @@ deadlocks and is deliberately not the synchronization mechanism.
 2. The Direct hook takes a nonblocking common gate before the original acquires
    any Class monitor. It forwards all six arguments and the original result.
    Competing public redefine/retransform/direct entries and recursive entries
-   return NOT_AVAILABLE. A production lease holds the same gate from before
+   return INTERNAL (113) without entering the original body, so ordinary
+   callers can retry after the winner exits. No blocking lock is acquired
+   across a recursive callback. Private lease acquisition failure remains
+   NOT_AVAILABLE (98). A production lease holds the same gate from before
    public candidate staging until final proof/root cleanup. Arbitrary native
    calls bypassing the normal fixed Direct entry are outside this contract.
 3. Production enumerates a candidate loaded-class graph and independently
