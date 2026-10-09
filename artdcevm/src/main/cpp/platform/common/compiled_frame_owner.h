@@ -5,6 +5,7 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/common/compiled_frame_dex_oracle.h"
+#include "platform/common/native_nterp_frame_proof.h"
 #include <jvmti.h>
 namespace artdcevm::compiled_frame_fixture {
 // Destroy in ordinary attached JNI after the source stop has ended. The worker
@@ -21,6 +22,9 @@ class Owner final {
       const source_handle_roots::StoppedReader&,
       active_frame_recovery_proof::Service::Readable,
       frame_family_calibration::Result*)const;
+ bool CalibrateNterpStopped(const native_source_stop::Session&,void* self,
+      const source_handle_roots::StoppedReader&,const modern_field_metadata::ReadContext&,
+      native_nterp_frame_proof::Report*)const;
  bool Close(JNIEnv*,std::string*);
  private:
  Owner()=default;
@@ -37,6 +41,8 @@ class Owner final {
  frame_family_calibration::Service service_;
  mutable frame_family_calibration::Service::Prepared prepared_;
  mutable std::array<decoded_frame_recovery::Location,16> scratch_{};
+ std::array<native_nterp_frame_proof::Service,6> nterp_;
+ std::array<bool,6> nterp_bound_{};
  void* root_owner_=nullptr;void* target_=nullptr;bool started_=false;
 };
 }

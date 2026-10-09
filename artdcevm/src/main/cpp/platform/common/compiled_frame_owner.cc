@@ -31,6 +31,10 @@ std::unique_ptr<Owner> Owner::Prepare(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti
  if(env->GetJavaVM(&o->vm_)!=JNI_OK||!o->vm_){Fail(error,"Missing compiled fixture native VM");return nullptr;}
  o->leaf_=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
  if(!Initialize(hooks)||!o->leaf_||!frame_family_calibration::Service::Bind([&](const char* name){return hooks.FindSymbol("libart.so",name);},&o->service_)||!o->service_.Prepare(&o->prepared_)){Fail(error,"Missing named compiled fixture preparation bindings");return nullptr;}
+ // Optional original named Nterp candidates are bound only while ordinary.
+ // Actual geometry and complete physical proof, never SDK, select a candidate.
+ const stack_visitor_service::Declaration declarations[]={stack_visitor_service::Declaration::kAndroid12,stack_visitor_service::Declaration::kAndroid13To16,stack_visitor_service::Declaration::kAndroid17};
+ for(size_t i=0;i<3;++i)for(size_t c=0;c<2;++c)o->nterp_bound_[i*2+c]=native_nterp_frame_proof::Service::Bind(declarations[i],c?native_nterp_frame_reader::CanonicalDeclaration::WithFullRegisterList:native_nterp_frame_reader::CanonicalDeclaration::WithoutFullRegisterList,[&](const char*name){return hooks.FindSymbol("libart.so",name);},&o->nterp_[i*2+c]);
  auto local=env->FindClass("com/github/ytlog/artdcevm/internal/CompiledFrameFixture");
  auto prepare=local?env->GetStaticMethodID(local,"prepare","()Lcom/github/ytlog/artdcevm/internal/CompiledFrameFixture$Run;"):nullptr;
  auto run=prepare?env->CallStaticObjectMethod(local,prepare):nullptr;
@@ -103,6 +107,27 @@ bool Owner::CalibrateStopped(const native_source_stop::Session& stop,void* self,
   physical.callers[i]={const_cast<void*>(native_[i].method),code_[i].registers,witness[i],2,code_[i].invoke_dex_pc};
  }
  return service_.Calibrate(target_,jit,native_.data(),native_.size(),physical,scratch_.data(),scratch_.size(),readable,prepared_,output)&&stop.IsStopped(self)&&roots.FinalRootWindow();
+}
+bool Owner::CalibrateNterpStopped(const native_source_stop::Session& stop,void* self,
+ const source_handle_roots::StoppedReader&roots,const modern_field_metadata::ReadContext&context,native_nterp_frame_proof::Report*output)const {
+ if(!output)return false;*output={};
+ if(!started_||!target_||target_==self||self!=root_owner_||!stop.IsStopped(self)||!roots.FinalRootWindow()||!context.owner||!context.extent)return false;
+ frame_family_calibration::Result geometry;
+ if(!service_.ObserveGeometry(target_,native_.data(),native_.size(),prepared_,&geometry))return false;
+ using G=frame_family_calibration::Geometry;
+ if(geometry.geometry==G::kLegacy368){output->failure="Nterp-unavailable-source-geometry";return false;}
+ const size_t first=geometry.geometry==G::kLegacy376?0:geometry.geometry==G::kCompact344?2:4;
+ native_nterp_frame_reader::Witness witnesses[3][2];std::array<native_nterp_frame_proof::Frame,3> frames;
+ for(size_t i=0;i<3;++i){void*fresh=nullptr;if(!slots_[i]||!roots.ReadStoppedRoot(slots_[i],&fresh)||!fresh||uintptr_t(fresh)>UINT32_MAX)return false;
+  witnesses[i][0]={code_[i].integer_vreg,native_nterp_frame_reader::Kind::kInt,uint32_t(integers_[i])};
+  witnesses[i][1]={code_[i].reference_vreg,native_nterp_frame_reader::Kind::kReference,uint32_t(uintptr_t(fresh))};
+  frames[i]={{const_cast<void*>(native_[i].method),code_[i].registers,code_[i].outs,code_[i].invoke_dex_pc},witnesses[i],2};
+ }
+ for(size_t candidate=first;candidate<first+2;++candidate)if(nterp_bound_[candidate]){
+  *output=nterp_[candidate].Prove(target_,prepared_.context.get(),frames,context);
+  if(output->accepted){if(stop.IsStopped(self)&&roots.FinalRootWindow())return true;output->accepted=false;output->failure="Nterp-stop-or-root-authority-expired";return false;}
+ }
+ return false;
 }
 bool Owner::Close(JNIEnv* env,std::string* error){
  if(!started_)return true;JavaVM* observed=nullptr;if(!env||env->GetJavaVM(&observed)!=JNI_OK||observed!=vm_)return Fail(error,"Compiled fixture close requires its actual VM");if(env->ExceptionCheck())return Fail(error,"Compiled fixture close requires exception-preserving ordinary caller");
