@@ -17,6 +17,9 @@ class FinalFields {
   virtual bool Verify(const source_commit::Plan&,size_t,void* loader,
       const evolution::ClassSchema&,const evolution::ClassSchema&,
       const native_schema_policy::Requirement&,std::string*)const=0;
+  // Refresh the same prepared permission plan only after the verifier has
+  // independently refreshed and checked its full frozen managed roots.
+  virtual bool RefreshPlan(const source_commit::Plan&,std::string*)const{return false;}
   virtual bool VerifyAliases(const source_commit::Plan&,std::string*)const=0;
   virtual void BeginCommit(const source_commit::Plan&)const=0;
 };

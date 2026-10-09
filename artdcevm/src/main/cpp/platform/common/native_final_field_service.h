@@ -51,7 +51,8 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  bool PreparePermissions(const source_commit::Plan& class_plan,std::string*);
  // Final native-only scope binds complete instances/origins to the same live
  // staged public Classes and immutable native field arenas (GC-safe anchors).
- bool Seal(const source_commit::Plan&,std::string*);
+ bool Seal(const source_commit::Plan&,std::string*)const;
+ bool RefreshPlan(const source_commit::Plan&,std::string*)const override;
  bool VerifyAliases(const source_commit::Plan&,std::string*)const override;
  bool Verify(const source_commit::Plan&,std::string*)const override;
  bool Verify(const source_commit::Plan&,size_t,void*,const evolution::ClassSchema&,
@@ -64,6 +65,9 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  // Dead weak anchors are deactivated before their JNI handles are deleted.
  void Clear(JNIEnv*);
  private:
+#ifdef ARTDCEVM_TESTING
+ friend struct TestPeer;
+#endif
  friend bool final_field_calibration::Run(JNIEnv*,const final_field_calibration::Bindings&,std::string*);
  bool AlreadyCalibrated()const;
  void AbortCalibration();

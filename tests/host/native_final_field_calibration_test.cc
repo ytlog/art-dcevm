@@ -61,6 +61,7 @@ bool Service::EndProof(bool exception,bool unchanged){return guard.EndProof(exce
 bool Service::AlreadyCalibrated()const{return false;}
 void Service::AbortCalibration(){guard.ResetUncommittedProof();ready=false;}
 bool Service::CompleteCalibration(){ready=guard.Proven();return ready;}
+bool Service::RefreshPlan(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::VerifyAliases(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::Verify(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::Verify(const source_commit::Plan&,size_t,void*,const evolution::ClassSchema&,const evolution::ClassSchema&,const native_schema_policy::Requirement&,std::string*)const{return false;}

@@ -182,7 +182,10 @@ bool Service::PreparePermissions(const source_commit::Plan& plan,std::string* er
  s.expected=plan; // all full-Plan vector storage allocated in refundable Collected window
  s.pairs=std::move(pairs);s.pending=std::move(pending);s.prepared=true;return true;
 }
-bool Service::Seal(const source_commit::Plan& plan,std::string* error){auto& s=*state_;
+bool Service::Seal(const source_commit::Plan& plan,std::string* error)const{auto& s=*state_;
+ // A failed new root window must not retain the previous window's seal.
+ if(s.committed)return Fail(error,"Committed permission owner cannot refresh its Plan");
+ s.sealed=false;
  if(!s.prepared||s.committed||!redefinition_gate::Owned(s.bindings.native.vm)||plan.old_classes.size()!=plan.new_classes.size()||
     plan.old_classes.size()!=s.expected.old_classes.size()||plan.old_instances.size()!=s.expected.old_instances.size()||
     plan.new_instances.size()!=s.expected.new_instances.size()||plan.class_root_origins.size()!=s.expected.class_root_origins.size())return Fail(error,"Final-field full seal lacks its prepared source operation");
@@ -209,11 +212,13 @@ bool Service::Seal(const source_commit::Plan& plan,std::string* error){auto& s=*
  std::copy(plan.class_root_origins.begin(),plan.class_root_origins.end(),s.expected.class_root_origins.begin());
  s.sealed=true;return true;
 }
+bool Service::RefreshPlan(const source_commit::Plan& plan,std::string* error)const{
+ return Seal(plan,error);
+}
 bool Service::VerifyAliases(const source_commit::Plan& plan,std::string* error)const{const auto& s=*state_;
  if(!s.prepared||!s.sealed||!redefinition_gate::Owned(s.bindings.native.vm)||!source_commit::SameIdentity(plan,s.expected))
   return Fail(error,"Alias proof lacks exact sealed source plan and operation owner");
- if(s.pairs.empty()&&!s.needs_access)return true;
- if(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))
+ if((!s.pairs.empty()||s.needs_access)&&(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings)))
   return Fail(error,"Alias/access proof lost behavioral process permission owner");
  if(plan.abstract_instances!=s.expected.abstract_instances)return Fail(error,"Prepared permission abstract mode changed");
  for(size_t i=0;i<plan.class_root_origins.size();++i)if(plan.class_root_origins[i].index!=s.expected.class_root_origins[i].index)return Fail(error,"Prepared permission root partition index changed");
