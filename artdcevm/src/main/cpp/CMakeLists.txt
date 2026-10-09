@@ -145,8 +145,12 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
   target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
+elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+  # Source declarations and read-only receiver checks are compiled for the actual
+  # 32-bit ABI. Private evolution remains gated until its full runtime is ported.
+  target_sources(artdcevm PRIVATE platform/arm32/jni_receiver_metadata.cc)
 elseif(NOT ANDROID_ABI STREQUAL "x86_64")
-  message(FATAL_ERROR "Supported ABIs: arm64-v8a and x86_64")
+  message(FATAL_ERROR "Supported ABIs: arm64-v8a, armeabi-v7a and x86_64")
 endif()
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)

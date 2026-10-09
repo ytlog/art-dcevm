@@ -4,8 +4,8 @@ def publishGroup = providers.gradleProperty('publishGroupId').orElse('com.github
 def publishArtifact = providers.gradleProperty('publishArtifactId').orElse('artdcevm')
 def publishVersion = providers.gradleProperty('publishVersion').orElse('0.1.0-SNAPSHOT')
 def publishAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
-// An x86_64 test build must never overwrite the arm64 artifact under the same GAV.
-def artifactName = publishArtifact.get() + (publishAbi == 'x86_64' ? '-x86_64' : '')
+// A secondary-ABI build must never overwrite the arm64 artifact under the same GAV.
+def artifactName = publishArtifact.get() + (publishAbi == 'arm64-v8a' ? '' : '-' + publishAbi)
 def centralEnabled = providers.gradleProperty('enableMavenCentral').orElse('false').get().toBoolean()
 def licenseName = providers.gradleProperty('publishLicenseName')
 def licenseUrl = providers.gradleProperty('publishLicenseUrl')

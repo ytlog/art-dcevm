@@ -1,8 +1,10 @@
 #include "platform/backend_factory.h"
 #include "jvmti.h"
 #include "core/transaction_lock.h"
+#if defined(ARTDCEVM_ARM64)
 #include "platform/common/redefinition_gate.h"
 #include "hooks/shadow_hook_engine.h"
+#endif
 #include <memory>
 #include <mutex>
 #include <limits>
@@ -15,6 +17,7 @@ std::unique_ptr<artdcevm::RuntimeBackend> backend;
 using artdcevm::TransactionMutex;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+#if defined(ARTDCEVM_ARM64)
   // Mapping a plugin does not initialize it or register an environment hook.
   // Keep the image mapped: its non-reset lifetime witness must not be recycled.
   static void* plugin_image=dlopen("libopenjdkjvmti.so",RTLD_NOW|RTLD_LOCAL);
@@ -22,16 +25,21 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     static artdcevm::ShadowHookEngine hooks;std::string error;
     (void)artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
   }
+#else
+  (void)vm;
+#endif
   return JNI_VERSION_1_6;
 }
 extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   std::lock_guard<std::mutex> lock(TransactionMutex());
   if (backend) return JNI_OK;
+#if defined(ARTDCEVM_ARM64)
   // Retry diagnostics before creating our Env; an already initialized plugin
   // cannot replace the pristine proof obtained by JNI_OnLoad before attach.
   static artdcevm::ShadowHookEngine first_live_hooks;
   std::string gate_error;
   (void)artdcevm::redefinition_gate::InstallFirstLive(first_live_hooks,vm,&gate_error);
+#endif
   auto candidate = artdcevm::CreateBackend();
   if (!candidate || candidate->Attach(vm) != JNI_OK) return JNI_ERR;
   backend = std::move(candidate);
@@ -39,6 +47,7 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
 }
 
 extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm,char* options,void* reserved) {
+#if defined(ARTDCEVM_ARM64)
   // Real ONLOAD is the only public lifecycle phase that rules out prior legal
   // RedefineClasses calls. A LIVE Agent_OnAttach never supplies this proof.
   jvmtiEnv* ti=nullptr;
@@ -50,6 +59,7 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm,char* options,void* re
   // Preserve public/body support when startup proof or named gate is missing;
   // the separate atomic capability remains false with a precise diagnostic.
   (void)installed;
+#endif
   return Agent_OnAttach(vm,options,reserved);
 }
 
