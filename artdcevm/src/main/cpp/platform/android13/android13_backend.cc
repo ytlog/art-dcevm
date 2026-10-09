@@ -3,7 +3,7 @@
 #include <android/log.h>
 #include "support/elf_modules.h"
 #include "support/json.h"
-#include "platform/android13/evolution_planner.h"
+#include "platform/common/evolution_planner.h"
 #include "platform/android13/evolution_runtime.h"
 #include "platform/symbols/android13.h"
 #include "hooks/shadow_hook_engine.h"
@@ -224,11 +224,11 @@ jvmtiError Android13Backend::RouteRedefinition(jvmtiEnv* caller, jint count,
 }
 std::string Android13Backend::Analyze(JNIEnv* jni, const std::vector<Definition>& defs) {
   if (!env_) return "{\"code\":116,\"detail\":\"Agent is not attached\"}";
-  BatchPlan plan;
+  evolution_planner::BatchPlan plan;
   std::string error;
-  int code = PlanEvolution(env_, jni, defs, &plan, &error);
+  int code = evolution_planner::PlanEvolution(env_, jni, defs, &plan, &error);
   std::string result = "{\"code\":" + std::to_string(code) + ",\"detail\":" + QuoteJsonMutf8(error);
-  if (!code) result += ",\"plan\":" + DescribeBatchPlan(plan);
+  if (!code) result += ",\"plan\":" + evolution_planner::DescribeBatchPlan(plan);
   return result + '}';
 }
 }

@@ -145,7 +145,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/retired_field_registry.cc
     platform/android13/final_field_guard_state.cc
     platform/android13/retired_field_registry_bridge.cc
-    platform/common/schema_snapshot.cc platform/android13/evolution_planner.cc
+    platform/common/schema_snapshot.cc platform/common/evolution_planner.cc
     platform/android13/field_evolution_policy.cc platform/android13/field_validation.cc
     platform/android13/redefinition_failure.cc platform/android13/redefinition_input.cc
     platform/android13/jni_method_targets.cc

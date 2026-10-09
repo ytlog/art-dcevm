@@ -1,7 +1,7 @@
-#include "platform/android13/evolution_planner.h"
+#include "platform/common/evolution_planner.h"
 #include "platform/common/schema_snapshot.h"
 #include <sstream>
-namespace artdcevm::android13 {
+namespace artdcevm::evolution_planner {
 int PlanEvolution(jvmtiEnv* env, JNIEnv* jni, const std::vector<Definition>& definitions,
                   BatchPlan* output, std::string* error) {
   if (definitions.empty()) { *error = "Empty patch batch"; return JVMTI_ERROR_ILLEGAL_ARGUMENT; }

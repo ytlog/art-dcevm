@@ -2,7 +2,7 @@
 #include "api/runtime_backend.h"
 #include "evolution/migration_plan.h"
 #include "jvmti.h"
-namespace artdcevm::android13 {
+namespace artdcevm::evolution_planner {
 struct BatchPlan {
   std::vector<evolution::MigrationPlan> classes;
   uint32_t required_features = 0;
