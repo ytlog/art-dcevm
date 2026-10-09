@@ -6,6 +6,7 @@ from apk_verification import require_install_success,base_apk_path,verified_apk_
 from owned_removal_report import validate_owned_removal,validate_active_frames
 from pathlib import Path
 from timeout_diagnostics import collect_timeout_diagnostics
+from crash_diagnostics import collect_crash_diagnostics
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--serial',required=True)
 p.add_argument('--apk',type=Path,default=Path('app/build/outputs/apk/debug/app-debug.apk'))
@@ -36,6 +37,7 @@ def adb(label,*args,timeout=180):
     r.check_returncode();return r.stdout
 instrumentation_started=False
 instrumentation_timed_out=False
+instrumentation_report_received=False
 try:
     if not a.skip_install:
         adb('install','install','-r',str(a.apk))
@@ -49,7 +51,7 @@ try:
     if not match:
         reason=re.search(r'^INSTRUMENTATION_(?:RESULT|FAILED): (.*)$',output,re.M)
         raise RuntimeError('Instrumentation produced no JSON probe report'+(': '+reason.group(1).strip() if reason else '; inspect instrumentation.txt'))
-    report=json.loads(match.group(1));(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
+    report=json.loads(match.group(1));instrumentation_report_received=isinstance(report,dict);(out/'probe.json').write_text(json.dumps(report,indent=2)+'\n')
     code=re.search(r'^INSTRUMENTATION_CODE: (.*)$',output,re.M)
     if not code or code.group(1).strip()!='-1':
         raise RuntimeError(report.get('error') or 'Instrumentation did not report success')
@@ -91,6 +93,9 @@ except Exception as error:
         instrumentation_timed_out=True
         try:metadata['timeoutDiagnostics']=collect_timeout_diagnostics(a.adb,a.serial,out,run_id)
         except Exception as diagnostic_error:metadata['timeoutDiagnosticError']=str(diagnostic_error)
+    elif instrumentation_started and not instrumentation_report_received:
+        try:metadata['crashDiagnostics']=collect_crash_diagnostics(a.adb,a.serial,out,run_id)
+        except Exception as diagnostic_error:metadata['crashDiagnosticError']=str(diagnostic_error)
     metadata['passed']=False
     metadata['error']=str(error)
 finally:
