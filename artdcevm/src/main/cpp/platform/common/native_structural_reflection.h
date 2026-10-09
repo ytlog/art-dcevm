@@ -9,6 +9,7 @@
 #include "platform/common/resolution_invalidation_plan.h"
 #include "platform/common/modern_field_storage.h"
 #include "platform/common/native_schema_policy.h"
+namespace artdcevm::native_required_cleanup {class Binding;}
 namespace artdcevm::native_structural_reflection {
 // Callbacks check a process-lifetime guard owner and independently established
 // runtime proof. A missing callback preserves conservative handle rejection.
@@ -61,6 +62,7 @@ class Service {
   void Retire(const Plan&)const;
   void Update(const Plan&,bool allocation_free=false)const;
  private:
+  friend class native_required_cleanup::Binding;
   void* runtime_=nullptr;
   void* visit_=nullptr;
 };

@@ -54,6 +54,10 @@ bool Service::MatchFacts(const source_commit::Plan& p)const noexcept{
  }
  return true;
 }
+bool Service::OwnsPreparedSource(const source_commit::Plan& p,const native_source_commit::Services& source)const noexcept{
+ return plan_==&p&&prepared_source_==&source&&mapping_&&reflection_&&schema_metadata_&&schema_metadata_->Calibrated()&&schema_model_&&!tables_.empty()&&tables_.size()==p.old_classes.size()&&views_.size()==tables_.size();
+}
+void Service::ReleasePreparedSource(const native_source_commit::Services& source)noexcept{if(prepared_source_==&source)prepared_source_=nullptr;}
 bool Service::CollectManagedRoots(source_commit::Services& source,const prepared_roots::Registrar& registrar){
  if(!mapping_||&source!=prepared_source_)return false;
  for(auto& c:class_facts_)if(!roots_.Add(&c.klass,registrar)||!roots_.Add(&c.parent,registrar)||!roots_.Add(&c.loader,registrar))return false;

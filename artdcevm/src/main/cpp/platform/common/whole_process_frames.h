@@ -11,6 +11,7 @@
 #include <vector>
 #include <cstring>
 namespace artdcevm::whole_process_frames {
+namespace detail {bool VisitThread(void*,void*);}
 using Family=code_info_view::SourceFamily;
 static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(abi::arm64::android12::Method12,access_flags));
 struct Report {
@@ -67,13 +68,14 @@ class Service {
               const native_cache::Service& threads,void* jit,Prepared& storage)const {
     Report report;if(!owner.IsStopped(self)||!threads.PreparedForCurrentThread()||!storage.context){report.failure="whole-scan-lacks-actual-source-stop-or-preparation";return report;}
     Request request{*this,owner,self,jit,storage,report};
-    const bool ok=threads.VisitStoppedWorld([](void* thread,void* raw){auto& r=*static_cast<Request*>(raw);return r.service.Thread(r,thread);},&request,&report.registered_threads,nullptr);
+    const bool ok=threads.VisitStoppedWorld(detail::VisitThread,&request,&report.registered_threads,nullptr);
     if(ok&&report.registered_threads>0&&report.registered_threads==report.walked_threads&&request.owner_seen&&owner.IsStopped(self)){report.accepted=true;report.failure="";}
     else if(!std::strcmp(report.failure,"not-scanned"))report.failure="whole-scan-native-enumeration-or-owner-refused";
     return report;
   }
  private:
   struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;bool owner_seen=false;};
+  friend bool detail::VisitThread(void*,void*);
   template<class Info,class Pair> struct Visitor final:abi::arm64::stack::Visitor<Pair> {
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
     Request& request;void* target;size_t before;

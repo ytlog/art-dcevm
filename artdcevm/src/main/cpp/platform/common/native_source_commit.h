@@ -8,6 +8,7 @@
 #include "platform/common/object_replacement_map.h"
 #include <memory>
 #include "platform/common/prepared_field_copy.h"
+namespace artdcevm::native_required_cleanup {class Binding;}
 namespace artdcevm::native_source_commit {
 enum class NativeRootPolicy {kPreserve, kRestore};
 struct MethodPair {
@@ -73,6 +74,7 @@ class Services final : public source_commit::Services {
   void DeoptimizeEverythingForAbstractTransition()const override;
   void ClearInterpreterCaches()const override;
  private:
+  friend class native_required_cleanup::Binding;
   Services()=default;
   prepared_roots::Bindings roots_;
   Dependencies dependencies_;

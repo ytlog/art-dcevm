@@ -16,6 +16,6 @@ for mode in ('',*[f'install-rollback{n}' for n in range(1,7)],'bad-ctor-alias','
  print(mode or 'ownership','PASS')
 
 scanner=out/'whole_process_frames_test'
-subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/whole_process_frames_test.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_cache_service.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),'-o',str(scanner)],check=True)
+subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/whole_process_frames_test.cc'),str(cpp/'platform/common/whole_process_frames.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_cache_service.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),'-o',str(scanner)],check=True)
 r=subprocess.run([str(scanner)],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
 (out/'whole-scanner.log').write_text(r.stdout+r.stderr);r.check_returncode();print(r.stdout.strip())

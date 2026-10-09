@@ -30,8 +30,12 @@ class Service {
  public:
   std::unique_ptr<source_commit::Services> Prepare(const source_commit::Plan&,Dependencies,std::string*);
   bool CollectManagedRoots(source_commit::Services&,const prepared_roots::Registrar&);
+  // Identity of the actual prepared provider, not a capability/stop grant.
+  bool OwnsPreparedSource(const source_commit::Plan&,const native_source_commit::Services&)const noexcept;
+  void ReleasePreparedSource(const native_source_commit::Services&)noexcept;
   bool RefreshManagedRoots(const source_commit::Plan&,source_commit::Services&,const prepared_roots::Resolver&)noexcept;
  private:
+  friend class native_required_cleanup::Binding;
   static bool ReflectReady(const source_commit::Plan&,void*);
   static void ReflectRetire(const source_commit::Plan&,void*);
   static void ReflectUpdate(const source_commit::Plan&,void*);
