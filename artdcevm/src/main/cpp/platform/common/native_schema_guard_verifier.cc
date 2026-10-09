@@ -287,8 +287,6 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
  const auto parent_token=[&](size_t token){if(!token)return size_t{0};const auto value=parent(token-1);return value==absent?size_t{0}:value+1;};
  using Kind=native_schema_policy::GuardKind;
  switch(requirement.kind){
-  case Kind::HierarchyGraph:
-   return Fail(error,"Hierarchy changes require the calibrated rooted graph and source allocator owner");
   case Kind::LoadedSubclasses:
    for(size_t n=0;n<s.nodes.size();++n)if(n!=target&&s.nodes[n].affected&&subtype(n))return Fail(error,"Cannot make a Class final while an actual loaded subclass exists");return true;
   case Kind::FinalMethodOverrides:case Kind::AbstractMethodDependents:{
