@@ -13,3 +13,7 @@
 
 -keep class com.github.ytlog.artdcevm.internal.AbstractVTableOracle { public static java.lang.Object[] create(); }
 -keep class com.github.ytlog.artdcevm.internal.AbstractVTableOracle$* { *; }
+# Actual installed-APK permission probes; native resolves exact public declarations.
+-keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle { *; }
+-keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle$Target { *; }
+-keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle$Handles { *; }

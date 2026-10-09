@@ -1,0 +1,71 @@
+#include "platform/common/native_final_field_calibration.h"
+#include <cassert>
+#include <cstdarg>
+#include <cstring>
+#include <iostream>
+using namespace artdcevm;
+namespace {
+struct Field {uint32_t flags;int value;};Field fields[2]={{1,41},{9,41}};
+int target,writer,instance,handles,illegal,wrong,thread;int mode=0,callbacks=0,restores=0,scopes=0;bool ready=false;
+jthrowable pending=nullptr;final_field_service::Service* service=nullptr;
+template<class T> T Ref(void* p){return reinterpret_cast<T>(p);}
+bool ReadField(void*,void* raw,uint32_t* flags,void** owner){*flags=static_cast<Field*>(raw)->flags;*owner=&target;return true;}
+bool ReadMethod(void*,void*,void** owner){*owner=&writer;return true;}
+bool Same(void*,void* a,void* b){return a==b;}
+void Raise(void*,void*,const char*,const char*){pending=Ref<jthrowable>(&illegal);}
+final_write_guard::Guard guard({&target,ReadField,ReadMethod,Same,Raise});
+jclass JNICALL Find(JNIEnv*,const char* name){return Ref<jclass>(!std::strcmp(name,"java/lang/IllegalAccessError")?&illegal:std::strstr(name,"$Target")?&target:&writer);}
+jobject JNICALL Global(JNIEnv*,jobject r){return r;}void JNICALL Delete(JNIEnv*,jobject){}
+jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){return Ref<jmethodID>(!std::strcmp(name,"create")?&instance:!std::strcmp(name,"prepareHandles")?&handles:!std::strcmp(name,"write")?&writer:&target);}
+jfieldID JNICALL InstanceField(JNIEnv*,jclass,const char*,const char*){return Ref<jfieldID>(&fields[0]);}
+jfieldID JNICALL StaticField(JNIEnv*,jclass,const char*,const char*){return Ref<jfieldID>(&fields[1]);}
+jobject JNICALL Object(JNIEnv*,jclass,jmethodID method,va_list){return method==Ref<jmethodID>(&instance)?Ref<jobject>(&instance):Ref<jobject>(&handles);}
+void JNICALL JavaWrite(JNIEnv*,jclass,jmethodID,va_list args){(void)va_arg(args,jobject);int value=va_arg(args,int);bool statik=va_arg(args,int);auto& f=fields[statik];
+ if(f.flags&0x10u){if(mode!=1){++callbacks;guard.FieldWritten(&thread,&writer,&f);}else pending=Ref<jthrowable>(&illegal);
+  if(mode==2)pending=Ref<jthrowable>(&wrong);
+  if(mode==3)f.value=value;
+ }
+ if(!pending)f.value=value;
+}
+jint JNICALL Paths(JNIEnv*,jclass,jmethodID,va_list args){(void)va_arg(args,jobject);(void)va_arg(args,jobject);bool statik=va_arg(args,int);int value=va_arg(args,int);fields[statik].value=value+1;return mode==5?31:63;}
+jint JNICALL Get(JNIEnv*,jobject,jfieldID field){return reinterpret_cast<Field*>(field)->value;}
+jint JNICALL GetStatic(JNIEnv*,jclass,jfieldID field){return reinterpret_cast<Field*>(field)->value;}
+void JNICALL Set(JNIEnv*,jobject,jfieldID field,jint value){if(mode!=4||!(reinterpret_cast<Field*>(field)->flags&0x10u))reinterpret_cast<Field*>(field)->value=value;}
+void JNICALL SetStatic(JNIEnv*,jclass,jfieldID field,jint value){Set(nullptr,nullptr,field,value);}
+jboolean JNICALL Check(JNIEnv*){return pending!=nullptr;}jthrowable JNICALL Exception(JNIEnv*){return pending;}
+void JNICALL Clear(JNIEnv*){pending=nullptr;}jint JNICALL Throw(JNIEnv*,jthrowable value){pending=value;return JNI_OK;}
+jboolean JNICALL Is(JNIEnv*,jobject object,jclass klass){return object==klass;}
+bool Scope(void*,JNIEnv* env,jobject root,runnable_jni::Operation operation,void* data){assert(root==Ref<jobject>(&instance));++scopes;return operation({&thread,env,&target},data);}
+struct Engine:HookEngine {bool Initialize(std::string*)override{return true;}void* FindSymbol(const char*,const char*)override{return nullptr;}void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return false;}} engine;
+}
+namespace artdcevm::final_field_service {
+struct Service::State {};
+Service::Service(Bindings):state_(new State){}Service::~Service()=default;
+bool Service::PrepareEnvironment(JNIEnv*,std::string*){return true;}
+bool Service::PrepareProofMethod(jmethodID method,std::string*){return method==Ref<jmethodID>(&writer);}
+bool Service::Bind(HookEngine&,void* actual,std::string*){return actual==&target;}
+bool Service::InstallAtExclusiveBoundary(std::string*){return true;}
+bool Service::FixtureField(void* actual,jclass t,jclass w,jmethodID m,jfieldID f,bool statik,final_write_guard::Oracle* out,uint32_t* flags,std::string*)const{
+ assert(actual==&thread&&t==Ref<jclass>(&target)&&w==Ref<jclass>(&writer)&&m==Ref<jmethodID>(&writer)&&f==Ref<jfieldID>(&fields[statik]));*out={actual,&writer,&fields[statik]};*flags=fields[statik].flags;return true;}
+bool Service::SetFixtureFlags(const final_write_guard::Oracle& o,uint32_t expected,uint32_t desired,std::string*){auto& f=*static_cast<Field*>(o.field);assert(f.flags==expected&&(expected^desired)==0x10u);f.flags=desired;if(!(desired&0x10u))++restores;return true;}
+bool Service::BeginProof(const final_write_guard::Oracle& oracle){return guard.BeginProof(oracle);}
+bool Service::EndProof(bool exception,bool unchanged){return guard.EndProof(exception,unchanged);}
+bool Service::CompleteCalibration(){ready=guard.Proven();return ready;}
+bool Service::VerifyAliases(const source_commit::Plan&,std::string*)const{return false;}
+bool Service::Verify(const source_commit::Plan&,std::string*)const{return false;}
+bool Service::Verify(const source_commit::Plan&,size_t,void*,const evolution::ClassSchema&,const evolution::ClassSchema&,const native_schema_policy::Requirement&,std::string*)const{return false;}
+void Service::BeginCommit(const source_commit::Plan&)const{}
+}
+int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
+ JNINativeInterface_ functions{};functions.FindClass=Find;functions.NewGlobalRef=Global;functions.DeleteGlobalRef=Delete;functions.DeleteLocalRef=Delete;
+ functions.GetStaticMethodID=Method;functions.GetFieldID=InstanceField;functions.GetStaticFieldID=StaticField;functions.CallStaticObjectMethodV=Object;functions.CallStaticVoidMethodV=JavaWrite;functions.CallStaticIntMethodV=Paths;
+ functions.GetIntField=Get;functions.GetStaticIntField=GetStatic;functions.SetIntField=Set;functions.SetStaticIntField=SetStatic;
+ functions.ExceptionCheck=Check;functions.ExceptionOccurred=Exception;functions.ExceptionClear=Clear;functions.Throw=Throw;functions.IsInstanceOf=Is;
+ JNIEnv env{&functions};final_field_service::Service owner({});service=&owner;std::string error;
+ final_field_calibration::Bindings bindings{&target,&owner,&engine,&target,Scope,Scope};
+ bool pass=final_field_calibration::Run(&env,bindings,&error);
+ assert(pass==(mode==0)&&ready==pass);assert(fields[0].flags==1&&fields[1].flags==9);assert(restores==(mode==0?2:1));
+ if(mode==0)assert(callbacks==2&&fields[0].value==41&&fields[1].value==41);
+ if(mode==2)assert(pending==Ref<jthrowable>(&wrong));else assert(!pending);
+ assert(scopes>=4);std::cout<<"Actual permission calibration TU: mode "<<mode<<" rejects missing event/exception/store/legal-path proof and restores exact flags passed\n";
+}

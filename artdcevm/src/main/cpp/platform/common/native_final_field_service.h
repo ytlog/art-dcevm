@@ -2,6 +2,7 @@
 #include "platform/common/native_final_write_listener.h"
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/modern_field_guards.h"
+namespace artdcevm::final_field_calibration {struct Bindings;bool Run(JNIEnv*,const Bindings&,std::string*);}
 namespace artdcevm::final_field_service {
 struct Bindings {
  native_schema_guard_verifier::Bindings native;
@@ -25,6 +26,11 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  bool PrepareProofMethod(jmethodID fixture_writer,std::string*);
  bool Bind(HookEngine&,void* observed_instrumentation,std::string*);
  bool InstallAtExclusiveBoundary(std::string*);
+ // Borrowed native oracle only inside a calibrated mutator callback; exact
+ // public IDs, initialized fixture Classes and native declarations must agree.
+ bool FixtureField(void* thread,jclass strong_target,jclass strong_writer,
+   jmethodID,jfieldID,bool is_static,final_write_guard::Oracle*,uint32_t*,std::string*)const;
+ bool SetFixtureFlags(const final_write_guard::Oracle&,uint32_t expected,uint32_t desired,std::string*);
  bool BeginProof(const final_write_guard::Oracle&);
  bool EndProof(bool illegal_access_error,bool unchanged_sentinel);
  // Actual public schema observation; no private ABI guess is a substitute.
@@ -48,6 +54,8 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  // Dead weak anchors are deactivated before their JNI handles are deleted.
  void Clear(JNIEnv*);
  private:
+ friend bool final_field_calibration::Run(JNIEnv*,const final_field_calibration::Bindings&,std::string*);
+ bool CompleteCalibration();
  struct State;std::unique_ptr<State> state_;
 };
 } // namespace artdcevm::final_field_service

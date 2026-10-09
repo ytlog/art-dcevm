@@ -35,6 +35,7 @@ struct Service::State {
  using Node=final_field_aliases::Node;
  struct Pair {size_t index=0;size_t public_index=0;void* old_anchor=nullptr;void* new_anchor=nullptr;evolution::ClassSchema before,after;};
  explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise}),aliases({this,DecodeWeak,OldOwner}){}
+ uint8_t proved_storage=0;bool current_static=false,calibration_complete=false;
  Bindings bindings;jvmtiEnv* permission_env=nullptr;jmethodID proof_method=nullptr;final_write_guard::Guard guard;std::vector<Public> staged;
  source_commit::Plan expected;std::vector<size_t> rooted_pairs;std::vector<Pair> pairs;std::unique_ptr<Node> pending;
  final_field_aliases::Set aliases;bool prepared=false,sealed=false,committed=false,needs_access=false;
@@ -85,11 +86,37 @@ bool Service::Bind(HookEngine& hooks,void* instrumentation,std::string* error){a
  return final_write_guard::BindListener(hooks,instrumentation,s.guard,error);
 }
 bool Service::InstallAtExclusiveBoundary(std::string* error){return final_write_guard::InstallListenerAtExclusiveBoundary(error);}
-bool Service::BeginProof(const final_write_guard::Oracle& oracle){auto& s=*state_;
- return s.proof_method&&s.bindings.native.decode_method&&
-   s.bindings.native.decode_method(s.bindings.native.owner,s.proof_method)==oracle.method&&s.guard.BeginProof(oracle);
+bool Service::FixtureField(void* thread,jclass target,jclass writer,jmethodID method,jfieldID id,bool statik,final_write_guard::Oracle* oracle,uint32_t* flags,std::string* error)const{const auto& s=*state_;
+ if(!thread||!target||!writer||!method||!id||!oracle||!flags||!s.bindings.native.decode_field||!s.bindings.native.decode_method||!s.bindings.native.decode_global)
+  return Fail(error,"Final proof fixture lacks independently calibrated public/native identities");
+ void *klass=nullptr,*foreign=nullptr;
+ if(!s.bindings.native.decode_global(s.bindings.native.owner,target,&klass)||!s.bindings.native.decode_global(s.bindings.native.owner,writer,&foreign)||!klass||!foreign||klass==foreign)return false;
+ const auto target_view=s.bindings.native.metadata->Class(klass,false),writer_view=s.bindings.native.metadata->Class(foreign,false);
+ if(!target_view.descriptor||!writer_view.descriptor||std::string(target_view.descriptor)!="Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;"||std::string(writer_view.descriptor)!="Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle;")return Fail(error,"Final permission Class descriptors differ from installed owned fixtures");
+ void* field=s.bindings.native.decode_field(s.bindings.native.owner,target,id);
+ void* actual=s.bindings.native.decode_method(s.bindings.native.owner,method);
+ field_copy::CopyFieldView view;
+ if(!field||!actual||!s.bindings.native.metadata->FieldIdentity(field,&view,error)||!view.name||!view.descriptor||
+    std::string(view.name)!=(statik?"staticValue":"instanceValue")||std::string(view.descriptor)!="I"||
+    s.bindings.native.metadata->FieldDeclaringClass(field)!=klass||s.bindings.native.method_class(s.bindings.native.owner,actual)!=foreign||
+    !s.bindings.native.writable||!s.bindings.native.writable(s.bindings.native.owner,field,sizeof(field_array::Field)))return Fail(error,"Final proof public IDs disagree with exact writable fixture declarations");
+ field_array::View array;uint32_t index=0;
+ if(!s.bindings.native.metadata->Fields(klass,statik,&array,error)||!array.IndexOf(field,&index)||((field_array::Flags(field)&8u)!=0)!=statik)return false;
+ *oracle={thread,actual,field};*flags=field_array::Flags(field);return true;
 }
-bool Service::EndProof(bool exception,bool unchanged){return state_->guard.EndProof(exception,unchanged);}
+bool Service::SetFixtureFlags(const final_write_guard::Oracle& oracle,uint32_t expected,uint32_t desired,std::string* error){auto& s=*state_;
+ if(!redefinition_gate::Owned(s.bindings.native.vm)||!oracle.field||!s.bindings.native.writable||!s.bindings.native.writable(s.bindings.native.owner,oracle.field,sizeof(field_array::Field))||
+    field_array::Flags(oracle.field)!=expected||(expected^desired)!=0x10u)return Fail(error,"Final fixture mutation lost exact flags/writable native field proof");
+ // Fixed ART ArtField access_flags_ is an ordinary uint32_t at declaration +4.
+ // This API is only consumed by the source-owned exclusive probe boundary.
+ std::memcpy(static_cast<unsigned char*>(oracle.field)+4,&desired,sizeof(desired));return true;
+}
+bool Service::BeginProof(const final_write_guard::Oracle& oracle){auto& s=*state_;
+ if(!s.proof_method||!s.bindings.native.decode_method||s.bindings.native.decode_method(s.bindings.native.owner,s.proof_method)!=oracle.method||!s.guard.BeginProof(oracle))return false;
+ s.current_static=(field_array::Flags(oracle.field)&8u)!=0;return true;
+}
+bool Service::EndProof(bool exception,bool unchanged){auto& s=*state_;bool pass=s.guard.EndProof(exception,unchanged);if(pass)s.proved_storage|=s.current_static?2u:1u;return pass;}
+bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==3u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
 bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots,const std::vector<jclass>& replacements,std::string* error){auto& s=*state_;
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");
  for(size_t i=0;i<roots.size();++i){auto klass=roots[i];if(!klass)return Fail(error,"Final-field stage contains a null public Class");State::Public entry;
@@ -125,7 +152,7 @@ bool Service::PreparePermissions(const source_commit::Plan& plan,std::string* er
   if(!native_schema_policy::Plan::Prepare(before,after,&policy,error))return false;
   for(const auto& requirement:policy.Requirements())if(requirement.kind==native_schema_policy::GuardKind::AccessPermissions)s.needs_access=true;
   if(changed.empty())continue;
-  if(!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))return Fail(error,"Final-field transition lacks actual bytecode/MethodHandle/VarHandle permission proof");
+  if(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))return Fail(error,"Final-field transition lacks actual bytecode/MethodHandle/VarHandle permission proof");
   size_t index=s.staged.size();
   for(size_t n=0;n<s.staged.size();++n){void* old=nullptr;if(!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].root,&old))return false;if(old==plan.old_classes[i]){if(index!=s.staged.size())return Fail(error,"Duplicate staged final-field Class");index=n;}}
   if(index==s.staged.size()||!Schema(before,s.staged[index].schema))return Fail(error,"Final-field native owner differs from the complete staged public schema");
@@ -137,7 +164,7 @@ bool Service::PreparePermissions(const source_commit::Plan& plan,std::string* er
   pending->aliases.push_back({s.staged[index].weak,anchor});
   pairs.push_back({i,index,anchor,next_anchor,std::move(before),std::move(after)});
  }
- if(s.needs_access&&(!s.permission_env||!final_write_guard::ListenerProven(s.guard)))return Fail(error,"Access evolution lacks actual process interpreter owner proof");
+ if(s.needs_access&&(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)))return Fail(error,"Access evolution lacks actual process interpreter owner proof");
  s.rooted_pairs=std::move(rooted);
  s.expected=plan; // all full-Plan vector storage allocated in refundable Collected window
  s.pairs=std::move(pairs);s.pending=std::move(pending);s.prepared=true;return true;
@@ -173,7 +200,7 @@ bool Service::VerifyAliases(const source_commit::Plan& plan,std::string* error)c
  if(!s.prepared||!s.sealed||!redefinition_gate::Owned(s.bindings.native.vm)||!source_commit::SameIdentity(plan,s.expected))
   return Fail(error,"Alias proof lacks exact sealed source plan and operation owner");
  if(s.pairs.empty()&&!s.needs_access)return true;
- if(!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))
+ if(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))
   return Fail(error,"Alias/access proof lost behavioral process permission owner");
  if(plan.abstract_instances!=s.expected.abstract_instances)return Fail(error,"Prepared permission abstract mode changed");
  for(size_t i=0;i<plan.class_root_origins.size();++i)if(plan.class_root_origins[i].index!=s.expected.class_root_origins[i].index)return Fail(error,"Prepared permission root partition index changed");
@@ -192,7 +219,7 @@ bool Service::Verify(const source_commit::Plan& plan,std::string* error)const{
 }
 bool Service::Verify(const source_commit::Plan& plan,size_t index,void* loader,const evolution::ClassSchema& before,const evolution::ClassSchema& after,const native_schema_policy::Requirement& requirement,std::string* error)const{const auto& s=*state_;
  if(requirement.kind!=native_schema_policy::GuardKind::FinalFields||!s.sealed||!redefinition_gate::Owned(s.bindings.native.vm)||
-    !source_commit::SameIdentity(plan,s.expected)||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))return Fail(error,"Final-field requirement lacks its exact source plan and behavioral owner");
+    !source_commit::SameIdentity(plan,s.expected)||!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))return Fail(error,"Final-field requirement lacks its exact source plan and behavioral owner");
  auto pair=std::find_if(s.pairs.begin(),s.pairs.end(),[&](const auto& p){return p.index==index;});
  if(pair==s.pairs.end()||s.bindings.native.metadata->Class(plan.old_classes[index],false).loader!=loader||
     s.bindings.native.metadata->Class(plan.new_classes[index],false).loader!=loader||!Schema(pair->before,before)||!Schema(pair->after,after))return Fail(error,"Final-field pair/ClassLoader/schema differs from sealed permission proof");
