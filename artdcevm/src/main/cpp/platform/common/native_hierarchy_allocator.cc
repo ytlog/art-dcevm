@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_allocator.h"
+#include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
@@ -299,10 +300,11 @@ bool Service::VerifyStaged(const native_hierarchy_graph::Graph& graph,const std:
   if(node.strong_class!=input.strong_original||!node.affected||node.descriptor!=input.before.descriptor)return false;
  }
  for(const auto& node:graph.nodes){field_copy::CopyClassView actual{};class_metadata::State state{};const auto& layout=Layout(*metadata_);
+  void* native_parent=nullptr;if(!native_hierarchy_graph::NativeSuperclass(graph,node,false,&native_parent))return false;
   if(!Mapped(node.klass,layout.size)||!class_metadata::ReadState(layout,node.klass,layout.size,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||
      !Class(*metadata_,node.klass,&actual)||node.descriptor!=actual.descriptor||node.loader!=actual.loader||
      (node.parent!=SIZE_MAX&&node.parent>=graph.nodes.size())||
-     actual.parent!=(node.parent==SIZE_MAX?nullptr:graph.nodes[node.parent].klass))return false;
+     actual.parent!=native_parent)return false;
  }
  return true;
 }

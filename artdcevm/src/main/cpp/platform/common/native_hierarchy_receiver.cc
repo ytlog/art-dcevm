@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_receiver.h"
+#include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
@@ -54,7 +55,7 @@ struct Preservation::State {
  }
  bool Originals(const Graph& g)const noexcept{
   if(!Matches(g))return false;
-  for(size_t i=0;i<facts.size();++i){const auto& n=g.nodes[i];const auto& f=facts[i];if(!Identity(n.klass,n,n.parent==absent?nullptr:g.nodes[n.parent].klass))return false;for(size_t j=0;j<f.before_order.size();++j)f.before_native[j]=g.nodes[f.before_order[j]].klass;if(!native_interface_graph::Matches(*metadata,n.klass,f.before_native,nullptr))return false;}
+  for(size_t i=0;i<facts.size();++i){const auto& n=g.nodes[i];const auto& f=facts[i];void*parent=nullptr;if(!NativeSuperclass(g,n,false,&parent)||!Identity(n.klass,n,parent))return false;for(size_t j=0;j<f.before_order.size();++j)f.before_native[j]=g.nodes[f.before_order[j]].klass;if(!native_interface_graph::Matches(*metadata,n.klass,f.before_native,nullptr))return false;}
   return true;
  }
  bool Replacement(const Graph& g,size_t index,void* klass)const noexcept{
@@ -77,7 +78,7 @@ bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inp
   if(n.affected)for(auto old:f.before_relations)if(std::find(f.after_relations.begin(),f.after_relations.end(),old)==f.after_relations.end())return Fail(error,"Receiver assignability narrowing needs unavailable dispatch checks");
   // Each original native IfTable must independently equal its complete public
   // interface closure; source order is kept for no-allocation final checking.
-  if(!s.Identity(n.klass,n,n.parent==absent?nullptr:graph.nodes[n.parent].klass)||!native_interface_graph::Read(*s.metadata,n.klass,&f.before_native,error)||!Order(graph,f.before_native,Interfaces(graph,f.before_relations,i),false,&f.before_order))return Fail(error,"Original native receiver graph differs from public proof");
+  void*native_parent=nullptr;if(!NativeSuperclass(graph,n,false,&native_parent)||!s.Identity(n.klass,n,native_parent)||!native_interface_graph::Read(*s.metadata,n.klass,&f.before_native,error)||!Order(graph,f.before_native,Interfaces(graph,f.before_relations,i),false,&f.before_order))return Fail(error,"Original native receiver graph differs from public proof");
   f.after_native.reserve(Interfaces(graph,f.after_relations,i).size());f.after_order.reserve(f.after_native.capacity());facts.push_back(std::move(f));
  }
  for(size_t i=0;i<inputs.size();++i){size_t n=graph.inputs[i];if(n>=graph.nodes.size()||!graph.nodes[n].affected||inputs[i].strong_original!=graph.nodes[n].strong_class||inputs[i].before.access!=inputs[i].after.access||inputs[i].before.descriptor!=graph.nodes[n].descriptor||inputs[i].after.descriptor!=graph.nodes[n].descriptor||!Schema(graph,graph.nodes[n],inputs[i].before,false)||!Schema(graph,graph.nodes[n],inputs[i].after,true)||std::find(graph.inputs.begin(),graph.inputs.begin()+i,n)!=graph.inputs.begin()+i)return Fail(error,"Receiver source role/modifier or exact target proof differs");}

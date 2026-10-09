@@ -4,7 +4,7 @@ using native_hierarchy_receiver::Preservation;
 static Node N(Fake& f,size_t p=SIZE_MAX,std::vector<size_t> interfaces={}){Node n;n.strong_class=reinterpret_cast<jclass>(&f);n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.initialized=true;n.parent=n.proposed_parent=p;n.interfaces=n.proposed_interfaces=std::move(interfaces);return n;}
 static evolution::ClassSchema S(const Graph& g,size_t index,bool proposed){const auto& n=g.nodes[index];size_t p=proposed?n.proposed_parent:n.parent;const auto& edges=proposed?n.proposed_interfaces:n.interfaces;evolution::ClassSchema s;s.descriptor=n.descriptor;s.access=n.flags;s.superclass=p==SIZE_MAX?(n.flags&0x200u?"Ljava/lang/Object;":""):g.nodes[p].descriptor;for(auto i:edges)s.interfaces.push_back(g.nodes[i].descriptor);return s;}
 struct Fixture {
- Fake object{"Ljava/lang/Object;"},base{"Lpkg/Base;",&object},a{"Lpkg/A;",&base},b{"Lpkg/B;",&a},parent{"Lpkg/AddedParent;",&base},i0{"Lpkg/I0;",nullptr,0x601},i2{"Lpkg/I2;",nullptr,0x601},i3{"Lpkg/I3;",nullptr,0x601},i4{"Lpkg/I4;",nullptr,0x601},other{"Lpkg/Caller;",&object};Graph graph;std::vector<Input> inputs;
+ Fake object{"Ljava/lang/Object;"},base{"Lpkg/Base;",&object},a{"Lpkg/A;",&base},b{"Lpkg/B;",&a},parent{"Lpkg/AddedParent;",&base},i0{"Lpkg/I0;",&object,0x601},i2{"Lpkg/I2;",&object,0x601},i3{"Lpkg/I3;",&object,0x601},i4{"Lpkg/I4;",&object,0x601},other{"Lpkg/Caller;",&object};Graph graph;std::vector<Input> inputs;
  Fixture(){
   graph.nodes={N(object),N(base,0),N(a,1,{6}),N(b,2),N(parent,1,{7}),N(i0),N(i2,SIZE_MAX,{5}),N(i3,SIZE_MAX,{5}),N(i4,SIZE_MAX,{6,7}),N(other,0,{5})};
   a.native_interfaces={&i2,&i0};b.native_interfaces={&i0,&i2};parent.native_interfaces={&i3,&i0};i2.native_interfaces={&i0};i3.native_interfaces={&i0};i4.native_interfaces={&i2,&i3,&i0};other.native_interfaces={&i0};
@@ -14,12 +14,12 @@ struct Fixture {
 int main(){
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;
  {
-  Fixture f;Preservation owner(metadata);assert(owner.VerifyStaged(f.graph,f.inputs,&error));
+  Fixture f;Preservation owner(metadata);f.i0.parent=nullptr;assert(!owner.VerifyStaged(f.graph,f.inputs,&error));f.i0.parent=&f.object;assert(owner.VerifyStaged(f.graph,f.inputs,&error));
   int source=0,cache=0;Prepared p{&source,&f.a,nullptr,&cache,&f.parent,7,&f.inputs[0].after};assert(owner.VerifyPrepared(f.graph,p,&error));auto wrong=f.inputs[0].after;wrong.superclass=f.object.descriptor;p.declarations=&wrong;assert(!owner.VerifyPrepared(f.graph,p,&error));p.declarations=&f.inputs[0].after;
   // Source moving-GC roots are authority-owned. Receiver witnesses use frozen
   // node indices, so every relocated Class/parent/interface must be read anew.
   Fake moved_object=f.object,moved_base=f.base,moved_a=f.a,moved_b=f.b,moved_parent=f.parent,moved_i0=f.i0,moved_i2=f.i2,moved_i3=f.i3,moved_i4=f.i4,moved_other=f.other;
-  moved_base.parent=&moved_object;moved_a.parent=&moved_base;moved_b.parent=&moved_a;moved_parent.parent=&moved_base;moved_other.parent=&moved_object;
+  moved_base.parent=&moved_object;moved_a.parent=&moved_base;moved_b.parent=&moved_a;moved_parent.parent=&moved_base;moved_other.parent=&moved_object;moved_i0.parent=&moved_object;moved_i2.parent=&moved_object;moved_i3.parent=&moved_object;moved_i4.parent=&moved_object;
   moved_a.native_interfaces={&moved_i2,&moved_i0};moved_b.native_interfaces={&moved_i0,&moved_i2};moved_parent.native_interfaces={&moved_i3,&moved_i0};moved_i2.native_interfaces={&moved_i0};moved_i3.native_interfaces={&moved_i0};moved_i4.native_interfaces={&moved_i2,&moved_i3,&moved_i0};moved_other.native_interfaces={&moved_i0};
   std::vector<Fake*> moved{&moved_object,&moved_base,&moved_a,&moved_b,&moved_parent,&moved_i0,&moved_i2,&moved_i3,&moved_i4,&moved_other};for(size_t i=0;i<moved.size();++i)f.graph.nodes[i].klass=moved[i];
   assert(!owner.VerifyPrepared(f.graph,p,&error));p.old_class=&moved_a;p.parent=&moved_parent;assert(owner.VerifyPrepared(f.graph,p,&error));
@@ -30,7 +30,7 @@ int main(){
   // A second complete relocation after linked preparation changes both the
   // public roots and unpublished replacements; no receiver-owned raw roots exist.
   Fake again_object=moved_object,again_base=moved_base,again_a=moved_a,again_b=moved_b,again_parent=moved_parent,again_i0=moved_i0,again_i2=moved_i2,again_i3=moved_i3,again_i4=moved_i4,again_other=moved_other,again_new_a=new_a,again_new_b=new_b;
-  again_base.parent=&again_object;again_a.parent=&again_base;again_b.parent=&again_a;again_parent.parent=&again_base;again_other.parent=&again_object;again_new_a.parent=&again_parent;again_new_b.parent=&again_new_a;
+  again_base.parent=&again_object;again_a.parent=&again_base;again_b.parent=&again_a;again_parent.parent=&again_base;again_other.parent=&again_object;again_i0.parent=&again_object;again_i2.parent=&again_object;again_i3.parent=&again_object;again_i4.parent=&again_object;again_new_a.parent=&again_parent;again_new_b.parent=&again_new_a;
   again_a.native_interfaces={&again_i2,&again_i0};again_b.native_interfaces={&again_i0,&again_i2};again_parent.native_interfaces={&again_i3,&again_i0};again_i2.native_interfaces={&again_i0};again_i3.native_interfaces={&again_i0};again_i4.native_interfaces={&again_i2,&again_i3,&again_i0};again_other.native_interfaces={&again_i0};again_new_a.native_interfaces={&again_i3,&again_i0,&again_i4,&again_i2};again_new_b.native_interfaces={&again_i4,&again_i2,&again_i0,&again_i3};
   moved={&again_object,&again_base,&again_a,&again_b,&again_parent,&again_i0,&again_i2,&again_i3,&again_i4,&again_other};for(size_t i=0;i<moved.size();++i)f.graph.nodes[i].klass=moved[i];f.graph.nodes[2].replacement=&again_new_a;f.graph.nodes[3].replacement=&again_new_b;plan.old_classes={&again_a,&again_b};plan.new_classes={&again_new_a,&again_new_b};
   forbid_alloc=true;assert(owner.Verify(f.graph,plan));plan.new_classes[0]=&again_new_b;assert(!owner.Verify(f.graph,plan));plan.new_classes[0]=&again_new_a;again_i2.bytes.access_flags|=0x40000;assert(!owner.Verify(f.graph,plan));again_i2.bytes.access_flags&=~0x40000u;assert(owner.Verify(f.graph,plan));forbid_alloc=false;owner.Reset();assert(!owner.Verify(f.graph,plan));

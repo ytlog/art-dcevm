@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_graph.h"
+#include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
@@ -80,7 +81,7 @@ struct Authority::State {
  }
  bool Native(bool replacements)const{
   for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];field_copy::CopyClassView view;
-   if(!Flags(node.klass,node.flags)||!bindings.metadata->ClassIdentity(node.klass,&view,nullptr)||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=(node.parent==absent?nullptr:graph.nodes[node.parent].klass)||!native_interface_graph::Matches(*bindings.metadata,node.klass,native_before[n],nullptr))return false;
+   void* original_parent=nullptr;if(!NativeSuperclass(graph,node,false,&original_parent)||!Flags(node.klass,node.flags)||!bindings.metadata->ClassIdentity(node.klass,&view,nullptr)||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=original_parent||!native_interface_graph::Matches(*bindings.metadata,node.klass,native_before[n],nullptr))return false;
    if(replacements&&node.affected){void* parent=node.proposed_parent==absent?nullptr:(graph.nodes[node.proposed_parent].replacement?graph.nodes[node.proposed_parent].replacement:graph.nodes[node.proposed_parent].klass);
     if(!node.replacement||!Flags(node.replacement,node.flags)||!bindings.metadata->ClassIdentity(node.replacement,&view,nullptr)||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::Matches(*bindings.metadata,node.replacement,native_after[n],nullptr))return false;
    }

@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_graph.h"
+#include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
@@ -47,7 +48,7 @@ static jobject JNICALL Global(JNIEnv*,jobject v){if(v)++globals;return v;}
 static void JNICALL DeleteGlobal(JNIEnv*,jobject v){if(v){assert(globals);--globals;}}
 static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1)delete reinterpret_cast<Array*>(v);else delete reinterpret_cast<std::string*>(v);locals.erase(it);}
 static jboolean JNICALL Exception(JNIEnv*){return JNI_FALSE;}
-static jobject JNICALL Call(JNIEnv*,jobject object,jmethodID method,va_list){auto* f=reinterpret_cast<Fake*>(object);if(reinterpret_cast<uintptr_t>(method)==1)return reinterpret_cast<jobject>(f->parent);if(reinterpret_cast<uintptr_t>(method)==2){auto* a=new Array{f->interfaces};auto value=reinterpret_cast<jobject>(a);locals.emplace(value,1);return value;}return reinterpret_cast<jobject>(f->loader);}
+static jobject JNICALL Call(JNIEnv*,jobject object,jmethodID method,va_list){auto* f=reinterpret_cast<Fake*>(object);if(reinterpret_cast<uintptr_t>(method)==1)return f->bytes.access_flags&0x200u?nullptr:reinterpret_cast<jobject>(f->parent);if(reinterpret_cast<uintptr_t>(method)==2){auto* a=new Array{f->interfaces};auto value=reinterpret_cast<jobject>(a);locals.emplace(value,1);return value;}return reinterpret_cast<jobject>(f->loader);}
 static jobject JNICALL StaticCall(JNIEnv*,jclass,jmethodID,va_list args){auto text=va_arg(args,jstring);(void)va_arg(args,int);auto loader=va_arg(args,jobject);auto name=*reinterpret_cast<std::string*>(text);std::replace(name.begin(),name.end(),'.','/');name="L"+name+";";for(auto* f:loaded)if(f->descriptor==name&&f->loader==loader)return reinterpret_cast<jobject>(f);return nullptr;}
 static jsize JNICALL Length(JNIEnv*,jarray v){return jsize(reinterpret_cast<Array*>(v)->values.size());}
 static jobject JNICALL Element(JNIEnv*,jobjectArray v,jsize n){return reinterpret_cast<jobject>(reinterpret_cast<Array*>(v)->values[size_t(n)]);}
@@ -70,13 +71,13 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
  void BeginCommit(const Graph&,const source_commit::Plan&)const noexcept override{++const_cast<FixtureOwner*>(this)->commits;}
 };
 static void Lifecycle(){
- Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),parent("Lpkg/P;",&object),i("Lpkg/I;",nullptr,0x601);
+ Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),parent("Lpkg/P;",&object),i("Lpkg/I;",&object,0x601);
  loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};
- Authority authority;std::string error;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==loaded.size()&&locals.empty());assert(authority.CheckClass(context,input.strong_original,input.after));auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
- Fake moved_object=object,moved_a=a,moved_b=b,moved_parent=parent,moved_i=i;moved_a.parent=&moved_object;moved_b.parent=&moved_a;moved_parent.parent=&moved_object;
+ Authority authority;std::string error;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==loaded.size()&&locals.empty());assert(authority.CheckClass(context,input.strong_original,input.after));auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
+ Fake moved_object=object,moved_a=a,moved_b=b,moved_parent=parent,moved_i=i;moved_a.parent=&moved_object;moved_b.parent=&moved_a;moved_parent.parent=&moved_object;moved_i.parent=&moved_object;
  moved_globals={{reinterpret_cast<jobject>(&object),&moved_object},{reinterpret_cast<jobject>(&a),&moved_a},{reinterpret_cast<jobject>(&b),&moved_b},{reinterpret_cast<jobject>(&parent),&moved_parent},{reinterpret_cast<jobject>(&i),&moved_i}};
  assert(authority.CheckClass(context,input.strong_original,input.after)); // Exact public globals survive GC; old raw pointers cannot authorize.
  Prepared p{&owner,&a,nullptr,&metadata,&parent,2,&input.after};assert(!authority.AuthorizeAllocation(context,p,&error));p.old_class=&moved_a;p.parent=&moved_parent;assert(authority.AuthorizeAllocation(context,p,&error));p.class_index=1;assert(!authority.AuthorizeAllocation(context,p,&error));p.class_index=2;
@@ -84,7 +85,7 @@ static void Lifecycle(){
  auto implicit=input.before;implicit.descriptor=b.descriptor;implicit.superclass=a.descriptor;implicit.interfaces={};Prepared q{&owner,&moved_b,&new_b,&metadata,&new_a,2,&implicit};assert(authority.VerifyPrepared(context,q,&error));
  source_commit::Plan plan;plan.old_classes={&moved_a,&moved_b};plan.new_classes={&new_a,&new_b};assert(authority.Seal(plan,&error));std::vector<void*> root_values;prepared_roots::Registrar registrar{&root_values,[](void* owner,void* value,size_t* slot){auto* roots=static_cast<std::vector<void*>*>(owner);*slot=roots->size();roots->push_back(value);return true;}};assert(authority.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&root_values,[](void* owner,size_t index)noexcept{return (*static_cast<std::vector<void*>*>(owner))[index];}};
  Fake final_object=moved_object,final_a=moved_a,final_b=moved_b,final_parent=moved_parent,final_i=moved_i,final_new_a=new_a,final_new_b=new_b;
- final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
+ final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_i.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
  std::unordered_map<void*,void*> relocation{{&moved_object,&final_object},{&moved_a,&final_a},{&moved_b,&final_b},{&moved_parent,&final_parent},{&moved_i,&final_i},{&new_a,&final_new_a},{&new_b,&final_new_b}};
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
  forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(authority.Verify(plan,0));final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;assert(owner.commits==3);
@@ -95,9 +96,22 @@ static void Lifecycle(){
 }
 static Node NodeOf(Fake& f){Node n;n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.loader=f.loader;n.initialized=f.initialized;return n;}
 static Graph Basic(Fake& object,Fake& a,Fake& b,Fake& i){Graph g;g.nodes={NodeOf(object),NodeOf(a),NodeOf(b),NodeOf(i)};g.nodes[1].parent=g.nodes[1].proposed_parent=0;g.nodes[2].parent=g.nodes[2].proposed_parent=1;g.inputs={1};return g;}
+static void InterfaceParentIdentity(){
+ int native_object=1,native_interface=2;Graph graph;Node object,interface;
+ object.klass=&native_object;object.strong_class=reinterpret_cast<jclass>(&native_object);object.descriptor="Ljava/lang/Object;";object.flags=1;
+ interface.klass=&native_interface;interface.flags=0x601;interface.descriptor="Lpkg/I;";
+ graph.nodes={object,interface};void*value=nullptr;
+ forbid_alloc=true;assert(NativeSuperclass(graph,graph.nodes[1],false,&value)&&value==&native_object);forbid_alloc=false;
+ graph.nodes[0].strong_class=nullptr;value=&native_interface;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value)&&value==&native_interface);graph.nodes[0]=object;
+ graph.nodes[0].flags=0x601;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes[0]=object;
+ graph.nodes[0].loader=&native_interface;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes[0]=object;
+ graph.nodes.push_back(object);assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes.pop_back();
+ graph.nodes[1].parent=0;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));
+}
 int main(){
+ InterfaceParentIdentity();
  Lifecycle();
- Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),i("Lpkg/I;",nullptr,0x601);std::string error;
+ Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),i("Lpkg/I;",&object,0x601);std::string error;
  auto graph=Basic(object,a,b,i);assert(ValidateGraph(&graph,&error));assert(!graph.nodes[0].affected&&graph.nodes[1].affected&&graph.nodes[2].affected&&!graph.nodes[3].affected);
  graph=Basic(object,a,b,i);graph.nodes[1].proposed_parent=2;assert(!ValidateGraph(&graph,&error)); // A -> B -> A actual batch cycle.
  graph=Basic(object,a,b,i);graph.nodes[1].proposed_interfaces={3};graph.nodes[3].proposed_interfaces={3};assert(!ValidateGraph(&graph,&error));
