@@ -40,7 +40,7 @@ struct Dependencies {
 // reservation. It never uses the local Native JNI executor across a return.
 // Continuous source-stop calibration is mandatory; original-final-only windows
 // cannot make this transaction safely refundable and are not accepted here.
-class RunState final {
+class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  public:
  static std::unique_ptr<RunState> Begin(const Dependencies&,void* driver,
     const runnable_jni::Context&,jvmtiEnv*,const std::vector<native_hierarchy_graph::Input>&,
@@ -65,6 +65,7 @@ class RunState final {
  bool End(void* exact_driver,bool original_success)noexcept;
  // Read-only actual continuous owner proof for mapping/guard consumers.
  bool StoppedWindow()const noexcept;
+ bool VerifyHierarchy(const source_commit::Plan&,size_t,void* loader)const noexcept override;
  const modern_field_metadata::ReadContext* CurrentReadContext()const noexcept;
  const whole_process_frames::Report& Frames()const noexcept;
  private:

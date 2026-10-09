@@ -415,7 +415,13 @@ struct NativeEngine final:Engine {
   schema_policies.clear();for(size_t i=0;i<plan.old_classes.size();++i){evolution::ClassSchema before,after;native_schema_policy::Plan policy;
    if(!native_schema_policy::ReadNativeDeclarations(metadata,model,plan.old_classes[i],&before,error)||!native_schema_policy::ReadNativeDeclarations(metadata,model,plan.new_classes[i],&after,error)||!native_schema_policy::Plan::Prepare(before,after,&policy,error))return false;
    schema_policies.push_back(std::move(policy));
-  }return true;
+  }
+  std::vector<native_schema_policy::GuardRequest> requests;
+  for(size_t i=0;i<schema_policies.size();++i){field_copy::CopyClassView identity;
+   if(!metadata.ClassIdentity(plan.old_classes[i],&identity,error))return false;
+   for(const auto& requirement:schema_policies[i].Requirements())requests.push_back({i,identity.loader,requirement});
+  }
+  return schema_verifier.PrepareGuardProofs(plan,requests,error);
  }
  Provenance provenance;
  retirement::Membership allocator_membership;

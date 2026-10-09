@@ -95,6 +95,7 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(!s.plan_roots.CanRefresh(resolve)||!s.ledger->CanRefresh(resolve)||!s.authority.CanRefresh(resolve))return Fail(e,"Stopped schema root locations cannot refresh");
  s.plan_roots.Refresh(resolve);s.ledger->Refresh(resolve);s.authority.Refresh(resolve);
  if(!s.incoming.Refresh()||(s.d.guards&&!s.d.guards->RefreshManagedRoots(p,resolve))||!s.cleanup->PrepareCollected(p,e)||!s.hierarchy->Collected(p,e))return false;
+ if(s.d.guards&&!s.d.guards->UseHierarchyAuthority(this))return Fail(e,"Frozen schema guard rejected the actual sealed hierarchy authority");
  auto native=s.d.provider->Prepare(p,s.d.members,e);if(!native)return false;
  if(!s.d.provider->CollectManagedRoots(*native,s.d.registry->Existing())){
   if(auto* concrete=dynamic_cast<native_source_commit::Services*>(native.get()))s.d.provider->ReleasePreparedSource(*concrete);
@@ -136,6 +137,15 @@ bool RunState::End(void*d,bool success)noexcept{
 }
 bool RunState::MappingExtent(void*raw,const void*p,size_t*out)noexcept{auto*r=static_cast<RunState*>(raw);return r&&r==current&&r->StoppedWindow()&&r->state_->d.mapping.extent&&r->state_->d.mapping.extent(r->state_->d.mapping.owner,p,out);}
 bool RunState::StoppedWindow()const noexcept{return current==this&&state_->stop&&state_->stop->IsStopped(state_->context.self);}
+bool RunState::VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* loader)const noexcept {
+ const auto& s=*state_;
+ if(current!=this||s.plan!=&p||pair>=p.old_classes.size()||!s.stop||
+    (s.phase!=State::Phase::Running&&s.phase!=State::Phase::Collected&&s.phase!=State::Phase::Finalized)||
+    !s.stop->IsStopped(s.context.self)||!redefinition_gate::Owned(static_cast<JavaVM*>(s.context.vm)))return false;
+ const auto* graph=s.authority.Staged();if(!graph)return false;
+ size_t matches=0;for(const auto& node:graph->nodes)if(node.affected&&node.klass==p.old_classes[pair]&&node.loader==loader)++matches;
+ return matches==1&&s.authority.Verify(p,pair);
+}
 const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return StoppedWindow()&&state_->read_context.extent?&state_->read_context:nullptr;}
 const whole_process_frames::Report& RunState::Frames()const noexcept{Require(state_->cleanup!=nullptr);return state_->cleanup->Frames();}
 }

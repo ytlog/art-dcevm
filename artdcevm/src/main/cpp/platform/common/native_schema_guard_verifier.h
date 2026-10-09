@@ -9,6 +9,14 @@
 #include <jvmti.h>
 #include <memory>
 namespace artdcevm::native_schema_guard_verifier {
+// A synchronous typed authority, owned by the exact original schema Run.
+// Binding this interface grants nothing; each hierarchy request must re-prove
+// its live native window, exact Plan and rooted allocator/receiver/cache owners.
+class HierarchyAuthority {
+ public:
+  virtual ~HierarchyAuthority()=default;
+  virtual bool VerifyHierarchy(const source_commit::Plan&,size_t,void* loader)const noexcept=0;
+};
 // Final-field enforcement belongs to the single installed permission owner.
 // The verifier cannot manufacture readiness from a callback or a schema bit.
 class FinalFields {
@@ -82,6 +90,11 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // source irreversible point. Plan includes real Holder old/new instances.
   // Final provider Verify rechecks all native data against this same proof.
   bool Seal(const source_commit::Plan&,std::string*);
+  // Prepare independent loaded/final/access proofs before managed roots freeze.
+  // Hierarchy requests are deferred to the actual sealed native authority.
+  bool PrepareGuardProofs(const source_commit::Plan&,
+      const std::vector<native_schema_policy::GuardRequest>&,std::string*)const;
+  bool UseHierarchyAuthority(const HierarchyAuthority*)noexcept;
   bool Verify(const source_commit::Plan&,size_t,void*,
               const native_schema_policy::Requirement&,std::string*)const override;
   bool VerifyBatch(const source_commit::Plan&,const std::vector<native_schema_policy::GuardRequest>&,std::string*)const override;

@@ -137,6 +137,7 @@ bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schem
 }
 struct Verifier::State {
  const modern_field_metadata::ReadContext* stopped_context=nullptr;
+ const HierarchyAuthority* hierarchy_authority=nullptr;
  Bindings bindings{};std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
@@ -148,6 +149,20 @@ struct Verifier::State {
  struct InterfaceProof {void* klass=nullptr;void* table=nullptr;std::vector<void*> values;};
  Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<InterfaceProof> replacement_interfaces;
  mutable const Snapshot* batch_snapshot=nullptr;
+ mutable const std::vector<native_schema_policy::GuardRequest>* preparing_requests=nullptr;
+ mutable const source_commit::Plan* requirements_plan=nullptr;
+ mutable std::vector<native_schema_policy::GuardRequest> required_requests;
+ bool HierarchyRequired()const noexcept {
+  const auto& requests=preparing_requests?*preparing_requests:required_requests;
+  return std::any_of(requests.begin(),requests.end(),[](const auto& r){return r.requirement.kind==native_schema_policy::GuardKind::HierarchyGraph;});
+ }
+ bool CompleteRequests(const std::vector<native_schema_policy::GuardRequest>& requests)const noexcept {
+  if(requests.size()!=required_requests.size())return false;
+  for(size_t i=0;i<requests.size();++i){const auto&a=requests[i];const auto&b=required_requests[i];
+   if(a.class_pair!=b.class_pair||a.loader!=b.loader||a.requirement.kind!=b.requirement.kind||
+      a.requirement.member_name!=b.requirement.member_name||a.requirement.descriptor!=b.requirement.descriptor)return false;}
+  return true;
+ }
  mutable std::vector<Grant> grants;prepared_roots::Bindings frozen_roots,expected_roots;bool frozen=false,refreshed=false;
  bool FrozenProof()const noexcept {
   if(!frozen||!redefinition_gate::Owned(bindings.vm)||class_proofs.size()!=nodes.size()||frozen_snapshot.classes.size()!=nodes.size())return false;
@@ -331,7 +346,11 @@ struct Verifier::State {
     }visiting.pop_back();return true;
    };
    if(!collect(collect,n))return false;
-   for(bool after:{false,true}){void* klass=after?mapped(roots.classes[n]):roots.classes[n];void* table=bindings.metadata->Reference(klass,24);uint32_t length=0;
+   for(bool after:{false,true}){
+    // The original public identities remain this verifier's independent proof.
+    // A changed transitive replacement table belongs to the sealed authority.
+    if(after&&HierarchyRequired())continue;
+    void* klass=after?mapped(roots.classes[n]):roots.classes[n];void* table=bindings.metadata->Reference(klass,24);uint32_t length=0;
     if(table){if(!Mapped(table,12))return Fail(error,"Native interface array is unreadable");length=Read<uint32_t>(table,8);}
     if(length%2||size_t(length)/2!=expected.size()||(table&&!Mapped(table,12+size_t(length)*4)))return Fail(error,"Native interface table count differs from public transitive identities");
     std::set<void*> seen;for(size_t i=0;i<expected.size();++i){void* actual=bindings.metadata->Reference(table,12+i*8);
@@ -429,7 +448,7 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
 }
 bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
  auto& s=*state_;if(!s.collected||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
- s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();s.readonly_access_slots.clear();s.grants.clear();
+ s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();s.readonly_access_slots.clear();s.grants.clear();s.required_requests.clear();s.requirements_plan=nullptr;s.hierarchy_authority=nullptr;
  Snapshot roots;if(!s.Roots(&roots,error))return false;
  const auto Mapped=[&](const void* address,size_t bytes){return address&&s.bindings.readable(s.bindings.owner,address,bytes);};
  size_t count=0;for(size_t n=0;n<s.nodes.size();++n)if(s.nodes[n].affected){++count;if(std::count(transaction.old_classes.begin(),transaction.old_classes.end(),roots.classes[n])!=1)return Fail(error,"Native Holder Class is outside public affected graph");}
@@ -451,7 +470,15 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
 }
 bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* loader,const native_schema_policy::Requirement& requirement,std::string* error)const{
  auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||pair>=transaction.old_classes.size()||!SamePlan(transaction,s.expected))return Fail(error,"Schema guard has no exact sealed native Holder proof");
+ if(requirement.kind==native_schema_policy::GuardKind::HierarchyGraph){
+  if(!s.frozen||!s.refreshed||(!s.batch_snapshot&&!s.FrozenProof())||!s.hierarchy_authority)
+   return Fail(error,"Hierarchy guard lacks the actual frozen source authority");
+  return s.hierarchy_authority->VerifyHierarchy(transaction,pair,loader)||
+   Fail(error,"Hierarchy authority rejected the exact Plan/native source window");
+ }
  if(s.frozen){
+  if(s.HierarchyRequired()&&(!s.requirements_plan||s.requirements_plan!=&transaction||!s.hierarchy_authority||
+      !s.hierarchy_authority->VerifyHierarchy(transaction,pair,loader)))return false;
   if(!s.refreshed||(!s.batch_snapshot&&!s.FrozenProof()))return false;
   if(!std::any_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))return false;
   if(requirement.kind==native_schema_policy::GuardKind::ExistingInstances||requirement.kind==native_schema_policy::GuardKind::AbstractMethodDependents)
@@ -463,7 +490,11 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
  if(!s.nodes[target].affected||roots.loaders[target]!=loader)return Fail(error,"Schema guard owner/ClassLoader identity differs");
  field_copy::CopyClassView old_identity,new_identity;if(!s.bindings.metadata->ClassIdentity(transaction.old_classes[pair],&old_identity,error)||!s.bindings.metadata->ClassIdentity(transaction.new_classes[pair],&new_identity,error)||old_identity.loader!=loader||new_identity.loader!=loader)return false;
  const auto mapped=[&](void* value){for(size_t i=0;i<transaction.old_classes.size();++i)if(transaction.old_classes[i]==value)return transaction.new_classes[i];return value;};
- if(mapped(old_identity.parent)!=new_identity.parent)return Fail(error,"Schema changed superclass outside the proven rooted transaction");
+ if(mapped(old_identity.parent)!=new_identity.parent&&(!s.preparing_requests||!s.HierarchyRequired()))
+  return Fail(error,"Schema superclass change lacks the mandatory hierarchy proof request");
+ // Independent member/modifier proofs inspect the original loaded caller graph.
+ // Superclass/interface evolution is attested separately by the mandatory
+ // HierarchyGraph requirement and its actual rooted native authority.
  evolution::ClassSchema before,after;if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,transaction.old_classes[pair],&before,error)||!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,transaction.new_classes[pair],&after,error)||!MembersEqual(before.methods,s.nodes[target].schema.methods)||!MembersEqual(before.fields,s.nodes[target].schema.fields))return Fail(error,"Schema guard native declarations differ from independent public stage");
  const auto parent=[&](size_t node){return node==absent?absent:roots.parents[node];};
  const auto subtype=[&](size_t node){
@@ -537,8 +568,38 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
  if(std::none_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))s.grants.push_back({pair,loader,requirement});
  return true;
 }
+bool Verifier::PrepareGuardProofs(const source_commit::Plan& transaction,const std::vector<native_schema_policy::GuardRequest>& requests,std::string* error)const {
+ auto& s=*state_;if(s.frozen||!s.sealed||s.preparing_requests||s.requirements_plan||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))
+  return Fail(error,"Independent guard preparation lacks the ordinary sealed source Plan");
+ // Derive the complete requirements from the actual paired native declarations,
+ // so a caller cannot omit hierarchy while asking only for a member proof.
+ std::vector<native_schema_policy::GuardRequest> required;
+ for(size_t i=0;i<transaction.old_classes.size();++i){evolution::ClassSchema before,after;native_schema_policy::Plan policy;field_copy::CopyClassView identity;
+  if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,transaction.old_classes[i],&before,error)||
+     !native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,transaction.new_classes[i],&after,error)||
+     !s.bindings.metadata->ClassIdentity(transaction.old_classes[i],&identity,error)||!native_schema_policy::Plan::Prepare(before,after,&policy,error))return false;
+  for(const auto& r:policy.Requirements())required.push_back({i,identity.loader,r});
+ }
+ s.required_requests=std::move(required);
+ if(!s.CompleteRequests(requests)){s.required_requests.clear();return Fail(error,"Ordinary guard request set omitted or changed a required native proof");}
+ std::vector<native_schema_policy::GuardRequest> independent;independent.reserve(requests.size());
+ for(const auto& request:requests)if(request.requirement.kind!=native_schema_policy::GuardKind::HierarchyGraph)independent.push_back(request);
+ s.preparing_requests=&requests;
+ struct Release{State& s;~Release(){s.preparing_requests=nullptr;}} release{s};
+ if(!VerifyBatch(transaction,independent,error)){s.required_requests.clear();s.grants.clear();return false;}
+ s.requirements_plan=&transaction;return true;
+}
+bool Verifier::UseHierarchyAuthority(const HierarchyAuthority* authority)noexcept {
+ auto& s=*state_;if(!authority||!s.requirements_plan||!s.frozen||!s.sealed||!s.refreshed||!redefinition_gate::Owned(s.bindings.vm)||
+    (s.hierarchy_authority&&s.hierarchy_authority!=authority))return false;
+ s.hierarchy_authority=authority;return true;
+}
+
 bool Verifier::VerifyBatch(const source_commit::Plan& transaction,const std::vector<native_schema_policy::GuardRequest>& requests,std::string* error)const {
- auto& s=*state_;if(requests.empty())return true;
+ auto& s=*state_;
+ if(s.requirements_plan&&(!s.preparing_requests&&(&transaction!=s.requirements_plan||!s.CompleteRequests(requests))))
+  return Fail(error,"Schema batch changed or omitted a prepared guard requirement");
+ if(requests.empty())return true;
  if(s.batch_snapshot||!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))return Fail(error,"Schema batch lacks an exact nonnested native proof episode");
  for(const auto& request:requests)if(request.class_pair>=transaction.old_classes.size())return Fail(error,"Schema batch contains an invalid Class pair");
  Snapshot local;const Snapshot* episode=nullptr;
@@ -594,6 +655,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
   for(auto& value:proof.interface_classes)if(!s.frozen_roots.Add(&value,registrar))return false;}
  for(auto& proof:s.replacement_interfaces){if(!s.frozen_roots.Add(&proof.klass,registrar)||!s.frozen_roots.Add(&proof.table,registrar))return false;for(auto& value:proof.values)if(!s.frozen_roots.Add(&value,registrar))return false;}
  for(auto& grant:s.grants)if(!s.frozen_roots.Add(&grant.loader,registrar))return false;
+ for(auto& request:s.required_requests)if(!s.frozen_roots.Add(&request.loader,registrar))return false;
  s.frozen_roots.Seal();s.frozen=true;return s.FrozenProof();
 }
 

@@ -78,6 +78,35 @@ int main(){
  s.frozen_roots.Seal();assert(registry.Freeze());s.frozen=true;s.sealed=true;Stop(nullptr,nullptr,false);assert(s.FrozenProof());
  deny_alloc=true;bool allocation_refused=false;try{(void)::operator new(1);}catch(const std::bad_alloc&){allocation_refused=true;}assert(allocation_refused);assert(registry.Resolve());assert(verifier.RefreshManagedRoots(plan,registry.Final()));assert(s.refreshed&&s.FrozenProof());
  proxy_origin=0;assert(!s.FrozenProof());proxy_origin=reinterpret_cast<uintptr_t>(old_method);assert(s.FrozenProof());
+ deny_alloc=false;
+ // These explicit authority boundaries test actual frozen dispatch and request
+ // completeness, not ART authority readiness. The aggregate fixture owns the
+ // actual RunState/Authority proof independently.
+ struct Authority final:HierarchyAuthority {
+  const source_commit::Plan* exact=nullptr;bool live=false;mutable size_t calls=0;
+  bool VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* loader)const noexcept override {
+   ++calls;return live&&exact==&p&&pair==0&&!loader;
+  }
+ } authority;
+ authority.exact=&plan;
+ const native_schema_policy::GuardRequest hierarchy_request{0,nullptr,{native_schema_policy::GuardKind::HierarchyGraph,{},{}}};
+ auto complete=batch_requests;complete.push_back(hierarchy_request);
+ s.required_requests=complete;s.requirements_plan=&plan;auto copied_plan=plan;deny_alloc=true;
+ assert(verifier.UseHierarchyAuthority(&authority));
+ Authority foreign_authority;assert(!verifier.UseHierarchyAuthority(&foreign_authority));
+ assert(!verifier.Verify(plan,0,nullptr,hierarchy_request.requirement,nullptr));
+ authority.live=true;assert(verifier.Verify(plan,0,nullptr,hierarchy_request.requirement,nullptr));
+ assert(!verifier.Verify(plan,0,reinterpret_cast<void*>(1),hierarchy_request.requirement,nullptr));
+ assert(!verifier.Verify(copied_plan,0,nullptr,hierarchy_request.requirement,nullptr));
+ assert(!verifier.VerifyBatch(plan,batch_requests,nullptr)); // Cannot omit hierarchy.
+ assert(verifier.VerifyBatch(plan,complete,nullptr));
+ authority.live=false;assert(!verifier.VerifyBatch(plan,complete,nullptr));authority.live=true;
+ // Every nonhierarchy proof in this transaction also requires live authority;
+ // a cached loaded-class grant cannot replace a lost source/native window.
+ assert(verifier.Verify(plan,0,nullptr,batch_requests.front().requirement,nullptr));
+ authority.live=false;assert(!verifier.Verify(plan,0,nullptr,batch_requests.front().requirement,nullptr));authority.live=true;
+ s.required_requests.clear();s.requirements_plan=nullptr;s.hierarchy_authority=nullptr;
+ deny_alloc=true;
  const auto reads_before_batch=native_field_reads;
  assert(verifier.VerifyBatch(plan,batch_requests,nullptr)&&!s.batch_snapshot);
  assert(native_field_reads-reads_before_batch==s.nodes[0].field_ids.size());
