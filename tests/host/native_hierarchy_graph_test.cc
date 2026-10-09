@@ -6,6 +6,8 @@
 #include "platform/common/readable_mapping_scope.h"
 #include <cassert>
 #include <algorithm>
+#include <chrono>
+#include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -121,10 +123,10 @@ static void Lifecycle(){
  for(size_t class_count:{size_t(30000),size_t(60000)}){
   std::vector<std::unique_ptr<Fake>> many;many.reserve(class_count+2);
   loaded={&object,&a,&b,&parent,&i};
-  for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object);value->loader=&shared_loader;loaded.push_back(value.get());many.push_back(std::move(value));}
+  for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object,index%2?0x601u:1u);value->loader=&shared_loader;value->interfaces={&i};value->native_interfaces={&i};loaded.push_back(value.get());many.push_back(std::move(value));}
   for(auto loader_identity:{&shared_loader,&other_loader}){auto value=std::make_unique<Fake>("Lstress/Collision;",&object);value->loader=loader_identity;loaded.push_back(value.get());many.push_back(std::move(value));}
-  peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots,before_pairs=pair_reads;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
-  const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==graph->nodes.size()+2);
+  auto stage_start=std::chrono::steady_clock::now();peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots,before_pairs=pair_reads;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
+  std::cout<<"Full interface graph Stage nodes="<<class_count<<" seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-stage_start).count()<<"\n";const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==graph->nodes.size()+2);
   const size_t chunks=(graph->nodes.size()+2+1023)/1024;
   assert(globals==chunks+1&&peak_globals<=chunks+2&&peak_globals<51200);
   auto old_witness=graph->nodes[5].class_root,loader_witness=graph->nodes[5].loader_root;
@@ -149,6 +151,12 @@ static void InterfaceParentIdentity(){
  graph.nodes[0].flags=0x601;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes[0]=object;
  graph.nodes[0].loader=&native_interface;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes[0]=object;
  graph.nodes.push_back(object);assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes.pop_back();
+ // Validated immutable node indices survive GC pointer refresh and keep all
+ // rooted/role/namespace checks. Duplicate namespace or changed shape refuses.
+ graph.inputs={1};assert(ValidateGraph(&graph,nullptr)&&graph.BootstrapObjectIndex()==0);
+ int moved_native_object=3;graph.nodes[0].klass=&moved_native_object;forbid_alloc=true;assert(NativeSuperclass(graph,graph.nodes[1],false,&value)&&value==&moved_native_object);forbid_alloc=false;
+ graph.nodes[0].strong_class=nullptr;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes[0]=object;
+ graph.nodes.push_back(object);assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));assert(!ValidateGraph(&graph,nullptr)&&!graph.BootstrapObjectIndex());graph.nodes.pop_back();
  graph.nodes[1].parent=0;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));
 }
 static void NestedModifiers(){

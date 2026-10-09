@@ -36,7 +36,17 @@ struct Node {
  std::vector<size_t> interfaces,proposed_interfaces;
  bool initialized=false,affected=false;
 };
-struct Graph { std::vector<Node> nodes; std::vector<size_t> inputs; };
+struct Graph {
+ std::vector<Node> nodes; std::vector<size_t> inputs;
+ // ValidateGraph establishes a stable node index, never a cached managed
+ // pointer. Authority owns immutable graph shape after validation; GC updates
+ // the rooted identities in those same slots. Unvalidated graphs use the full
+ // uniqueness scan. A changed shape must be validated again.
+ std::optional<size_t> BootstrapObjectIndex()const noexcept{return indexed_count_==nodes.size()?bootstrap_object_:std::nullopt;}
+ private:
+ friend bool ValidateGraph(Graph*,std::string*);
+ std::optional<size_t> bootstrap_object_;size_t indexed_count_=0;
+};
 struct Prepared {
  void* source_owner=nullptr; void* old_class=nullptr; void* new_class=nullptr;
  void* cache=nullptr; void* parent=nullptr; uint16_t class_index=0;
