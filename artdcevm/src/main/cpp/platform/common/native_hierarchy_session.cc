@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_session.h"
+#include "platform/common/native_source_class_loading.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/android-common/redefiner_prefix.h"
@@ -21,7 +22,18 @@ bool(*ids_original)(const void*)=nullptr;
 native_hierarchy_allocator::Service* installed_service=nullptr;
 std::mutex installation;
 bool FinishProxy(void*o,transaction_root::Holder*h,void*i){
- auto*s=Session::Current();if(!s||!s->OwnsClassOwner(o))return finish_original(o,h,i);
+ auto*s=Session::Current();if(!s||!s->OwnsClassOwner(o)){
+  auto*trace=native_source_class_loading::Run::Current();
+  abi::arm64::android_common::ClassRedefinitionPrefix def{};
+  if(!trace||!Mapped(o,sizeof(def)))return finish_original(o,h,i);
+  std::memcpy(&def,o,sizeof(def));
+  if(!trace->OwnsDriver(def.driver))return finish_original(o,h,i);
+  // Passive ordinary source calibration never changes original success/failure.
+  const bool opened=trace->BeforeFinish(o,h,i);
+  const bool result=finish_original(o,h,i);
+  if(opened)trace->AfterFinish(o,result);
+  return result;
+ }
  return s->Finish(o,h,i,finish_original,nullptr);
 }
 Object AllocateProxy(void*o,void*old,void*parent,void*cache,uint16_t index){
@@ -85,8 +97,15 @@ bool Session::Finish(void*owner,transaction_root::Holder*holder,void*iter,Finish
   if(holder!=holder_||!Match(owner,iter,&actual)||size_t(actual.index)!=finish_next_){
    Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source Finish order or owner changed");Refund();return false;
   }
+  auto*trace=native_source_class_loading::Run::Current();
+  const bool observed=trace&&trace->OwnsDriver(bindings_.driver);
+  if(observed&&!trace->BeforeFinish(owner,holder,iter)){
+   Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Original source class-loading pause was not observed");Refund();return false;
+  }
   finishing_=owner;
-  const bool result=original(owner,holder,iter);finishing_=nullptr;
+  bool result=false;
+  try{result=original(owner,holder,iter);}catch(...){if(observed)trace->AfterFinish(owner,false);throw;}
+  finishing_=nullptr;if(observed)trace->AfterFinish(owner,result);
   if(!result||failed_){Refund();return false;}
   ++finish_next_;return true;
  }catch(const std::bad_alloc&){
