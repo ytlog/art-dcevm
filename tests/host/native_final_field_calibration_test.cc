@@ -41,6 +41,7 @@ struct Engine:HookEngine {bool Initialize(std::string*)override{return true;}voi
 namespace artdcevm::final_field_service {
 struct Service::State {};
 Service::Service(Bindings):state_(new State){}Service::~Service()=default;
+bool Service::StageFixtureField(JNIEnv*,jclass owner,jfieldID id,bool statik,std::string*){return owner==Ref<jclass>(&target)&&id==Ref<jfieldID>(&fields[statik]);}
 bool Service::PrepareEnvironment(JNIEnv*,std::string*){return true;}
 bool Service::PrepareProofMethod(jmethodID method,std::string*){return method==Ref<jmethodID>(&writer);}
 bool Service::RegisterStrong(JNIEnv*,jobject ref,std::string*){return ref!=nullptr;}

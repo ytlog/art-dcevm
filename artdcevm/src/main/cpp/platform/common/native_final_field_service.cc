@@ -81,6 +81,7 @@ bool Service::PrepareProofMethod(jmethodID method,std::string* error){auto& s=*s
   return Fail(error,"Final-field isolated fixture breakpoint could not activate deoptimization lease");
  s.proof_method=method;return true;
 }
+bool Service::StageFixtureField(JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){const auto& b=state_->bindings.native;return b.stage_field&&b.stage_field(b.owner,env,owner,id,statik,error);}
 bool Service::RegisterStrong(JNIEnv* env,jobject ref,std::string* error){auto& s=*state_;return s.bindings.register_strong&&s.bindings.register_strong(s.bindings.native.owner,env,ref,error);}
 void Service::ForgetStrong(jobject ref){auto& s=*state_;if(s.bindings.forget_strong)s.bindings.forget_strong(s.bindings.native.owner,ref);}
 bool Service::Bind(HookEngine& hooks,void* instrumentation,std::string* error){auto& s=*state_;

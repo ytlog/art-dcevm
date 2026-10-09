@@ -19,6 +19,7 @@
 #include "platform/abi/arm64/android-common/jni_global_ref.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_schema_guard_verifier.h"
+#include "platform/common/rooted_field_identities.h"
 #include "platform/common/native_final_field_service.h"
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
@@ -61,7 +62,7 @@ struct NativeEngine final:Engine {
  abi::arm64::android11::CurrentThread graph_current=nullptr;
  field_mirror::NamedField graph_field_leaf=nullptr;
  void ClearStagedClasses(JNIEnv* env){graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
- void ClearFieldProofs(JNIEnv* env){ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
+ void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_structural_reflection::Service reflection;
  native_member_provider::Service provider;
@@ -76,7 +77,7 @@ struct NativeEngine final:Engine {
  using ThrowException=void (*)(void*,const char*,const char*);
  ThrowException permission_raise=nullptr;
  std::vector<native_schema_policy::Plan> schema_policies;
- bool schema_operation=false,schema_collected=false,graph_decoder_proven=false;
+ bool schema_operation=false,schema_collected=false,graph_decoder_proven=false,graph_staging=false;
  std::string graph_reader_error;
  native_owned_removal::RootedGraph schema_roots;
  JNIEnv* schema_root_env=nullptr;
@@ -91,7 +92,14 @@ struct NativeEngine final:Engine {
  using DecodeObject=abi::arm64::android11::ReleaseObjectPointer (*)(const void*,jobject);
  DecodeObject graph_decode=nullptr;
  void* (*graph_decode_method)(void*,jmethodID)=nullptr;
- void* (*graph_decode_field)(void*,jfieldID)=nullptr;
+ jclass bootstrap_field_owner=nullptr;
+ static bool FieldScope(void*,JNIEnv* env,jobject root,runnable_jni::Operation op,void* data){return runnable_executor::With(env,root,op,data)==runnable_jni::Result::kSuccess;}
+ static bool FieldOracle(void*,const runnable_jni::Context& scope,jobject root,void** out){return runnable_executor::DecodeStrongGlobal(scope,root,out);}
+ static bool FieldRoot(void* raw,jobject root,void** out){auto& e=*static_cast<NativeEngine*>(raw);if(!root||!out||!e.graph_decode||!e.graph_current||!redefinition_gate::Owned(e.vm))return false;*out=reinterpret_cast<void*>(e.graph_decode(e.graph_current(),root).reference);return *out!=nullptr;}
+ static void* FieldLeaf(void* raw,void* mirror){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;}
+ static void* FieldOwner(void* raw,void* field){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(field);}
+ rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner}};
+ static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
  bool (*graph_same)(void*,void*)=nullptr;
  struct MapRange {uintptr_t begin,end;bool write;};std::vector<MapRange> graph_maps;
  bool RefreshMaps(std::string* error){
@@ -124,13 +132,13 @@ struct NativeEngine final:Engine {
   if(e.graph_decode_method(e.runtime.receivers.jni_id_manager,e.method_handles[0].method)!=e.proof_method)return fail("bootstrap method ID decoder");
   for(size_t i=0;i<e.field_method_handles.size();++i){const auto& oracle=e.field_method_handles[i];
    if(!oracle.identity)return fail("missing bootstrap field oracle",i);
-   if(e.graph_decode_field(e.runtime.receivers.jni_id_manager,oracle.field)!=contextual_field_id::NativeField(oracle.identity))return fail("bootstrap field ID decoder",i);++fields;
+   if(e.graph_fields.Read(e.bootstrap_field_owner,oracle.field)!=contextual_field_id::NativeField(oracle.identity))return fail("bootstrap field ID decoder",i);++fields;
   }
   for(size_t c=0;c<e.staged_classes.size();++c){const auto& stage=e.staged_classes[c];void* owner=nullptr;
    if(!runnable_executor::DecodeStrongGlobal(scope,stage.owner,&owner))return fail("public staged Class strong oracle",c);
    if(e.graph_decode(scope.self,stage.owner).reference!=uintptr_t(owner))return fail("named staged Class strong decoder",c);
    if(stage.field_base>e.target_field_proofs.size()||stage.ids.size()>e.target_field_proofs.size()-stage.field_base)return fail("staged field proof range",c);
-   for(size_t i=0;i<stage.ids.size();++i){void* native=e.graph_decode_field(e.runtime.receivers.jni_id_manager,stage.ids[i]);
+   for(size_t i=0;i<stage.ids.size();++i){void* native=e.graph_fields.Read(stage.owner,stage.ids[i]);
     if(native!=contextual_field_id::NativeField(e.target_field_proofs[stage.field_base+i]))return fail("staged field ID decoder",stage.field_base+i);++fields;
    }
   }
@@ -141,7 +149,7 @@ struct NativeEngine final:Engine {
   *value=reinterpret_cast<void*>(e.graph_decode(e.graph_current(),global).reference);return *value!=nullptr;
  }
  static void* DecodeGraphMethod(void* raw,jmethodID id){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_decode_method(e.runtime.receivers.jni_id_manager,id);}
- static void* DecodeGraphField(void* raw,jclass,jfieldID id){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_decode_field(e.runtime.receivers.jni_id_manager,id);}
+ static void* DecodeGraphField(void* raw,jclass owner,jfieldID id){return static_cast<NativeEngine*>(raw)->graph_fields.Read(owner,id);}
  static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
@@ -196,7 +204,7 @@ struct NativeEngine final:Engine {
  static void RaisePermission(void* raw,void* self,const char* type,const char* text){auto& e=*static_cast<NativeEngine*>(raw);if(!self||!e.permission_raise)std::abort();e.permission_raise(self,type,text);}
  native_schema_guard_verifier::Bindings SchemaBindings(){
   native_schema_guard_verifier::Bindings b;b.vm=vm;b.metadata=&metadata;b.methods=&model;b.abstract_instances=&abstract_instances;b.owner=this;
-  b.decode_global=DecodeGraph;b.decode_method=DecodeGraphMethod;b.decode_field=DecodeGraphField;b.method_class=GraphMethodClass;b.same_method=GraphSame;b.readable=GraphReadable;b.writable=GraphWritable;
+  b.decode_global=DecodeGraph;b.decode_method=DecodeGraphMethod;b.decode_field=DecodeGraphField;b.stage_field=StageGraphField;b.method_class=GraphMethodClass;b.same_method=GraphSame;b.readable=GraphReadable;b.writable=GraphWritable;
   if(permissions_proven){b.final_fields=permission_service.get();b.access_permissions=permission_service.get();}return b;
  }
  bool PreparePermissionOwner(JNIEnv* env){
@@ -526,6 +534,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
   auto proof=contextual_field_id::Prepare(env,root,fields[i],error);
   if(!proof)return false;
   target_field_proofs.push_back(std::move(proof));
+  if(graph_staging&&!StageGraphField(this,env,target,fields[i],(modifiers&8)!=0,error))return false;
   request.fields.push_back({root,names[i].c_str(),descriptors[i].c_str(),uint32_t(modifiers)});expected_fields.erase(member);
  }
  if(!request.decode_method||!request.method_leaf||!request.field_leaf||env->ExceptionCheck()||
@@ -536,6 +545,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  staged_classes.push_back(std::move(stage));return true;
 }
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
+ graph_staging=true;
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
  graph_add_global=reinterpret_cast<decltype(graph_add_global)>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kAddGlobalRef));
@@ -543,9 +553,9 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject));
  if(!graph_decode)graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject));
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
- graph_decode_field=reinterpret_cast<decltype(graph_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
  graph_same=reinterpret_cast<decltype(graph_same)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
- if(!graph_decode||!graph_decode_method||!graph_decode_field||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
+ if(!graph_decode||!graph_decode_method||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
+ for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
  if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
@@ -768,7 +778,7 @@ std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std
  env->GetByteArrayRegion(dex,0,static_cast<jsize>(replacement.size()),reinterpret_cast<jbyte*>(replacement.data()));
  runtime_services::View jit;
  if(env->ExceptionCheck()||!owned_jit_receivers::CalibrateJitReceivers(e.hooks,env,owner_root,hot,e.model,e.runtime,target,replacement.data(),replacement.size(),&jit,error))return nullptr;
- e.runtime.receivers=jit;e.anchor=owner_root;
+ e.runtime.receivers=jit;e.anchor=owner_root;e.bootstrap_field_owner=static_cast<jclass>(storage_class);
  // Calibration retains the defining Classes, not all original APK byte arrays
  // and temporary reflection/storage objects. ART native members remain alive
  // through these process-owned strong Class roots.

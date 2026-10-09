@@ -42,6 +42,9 @@ struct Bindings {
   // Contextual field-ID alias proof created before the source pause. Never
   // reinterpret jfieldID; callback performs native-only lookup under roots.
   void* (*decode_field)(void*,jclass,jfieldID)=nullptr;
+  // Ordinary Native JNI only; pin and round-trip public Field mirrors before
+  // any native scan. No Manager field decoder declaration is required.
+  bool (*stage_field)(void*,JNIEnv*,jclass,jfieldID,bool,std::string*)=nullptr;
   void* (*method_class)(void*,void*)=nullptr;
   bool (*same_method)(void*,void*,void*)=nullptr;
   // One mapping snapshot per native scan, refreshed under the native owner.

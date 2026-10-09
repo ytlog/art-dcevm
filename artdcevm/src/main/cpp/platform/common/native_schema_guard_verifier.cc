@@ -45,7 +45,7 @@ template<class T>T Read(const void* p,size_t offset=0){T value;std::memcpy(&valu
 static_assert(offsetof(class_metadata::Class11,methods)==48&&offsetof(class_metadata::Class16,methods)==48&&offsetof(class_metadata::Class17,methods)==48);
 static_assert(offsetof(class_metadata::Class11,iftable)==24&&offsetof(class_metadata::Class16,iftable)==24&&offsetof(class_metadata::Class17,iftable)==24);
 struct Strings {jvmtiEnv* ti;char* name=nullptr;char* signature=nullptr;char* generic=nullptr;~Strings(){for(auto p:{name,signature,generic})if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
-bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* error){
+bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* error,const Bindings* bindings=nullptr){
  Strings klass_text{ti};jint modifiers=0;
  if(ti->GetClassSignature(klass,&klass_text.signature,nullptr)!=JVMTI_ERROR_NONE||!klass_text.signature||ti->GetClassModifiers(klass,&modifiers)!=JVMTI_ERROR_NONE)return Fail(error,"Public Class declaration unavailable");
  out->schema.descriptor=klass_text.signature;out->schema.access=native_schema_policy::JavaFlags(uint32_t(modifiers));
@@ -61,6 +61,7 @@ bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* 
  struct Fields {jvmtiEnv* ti;jfieldID* p;~Fields(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_fields{ti,fields};
  for(jint i=0;i<field_count;++i){Strings text{ti};jint flags=0;
   if(!fields[i]||ti->GetFieldName(klass,fields[i],&text.name,&text.signature,nullptr)!=JVMTI_ERROR_NONE||!text.name||!text.signature||ti->GetFieldModifiers(klass,fields[i],&flags)!=JVMTI_ERROR_NONE)return Fail(error,"Public field identity/modifiers unavailable");
+  if(bindings&&(!bindings->stage_field||!bindings->stage_field(bindings->owner,env,klass,fields[i],(flags&8)!=0,error)))return false;
   out->field_ids.push_back(fields[i]);out->schema.fields.push_back({text.name,text.signature,native_schema_policy::JavaFlags(uint32_t(flags)),UINT32_MAX});
  }
  if(env->ExceptionCheck())return Fail(error,"Public schema stage left a pending exception");
@@ -206,7 +207,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  struct Classes {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Classes(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,classes};
  for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
   if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
-  Node node;if(!PublicMembers(env,ti,classes[i],&node,error))return false;node.root=static_cast<jclass>(env->NewGlobalRef(classes[i]));if(!node.root)return false;
+  Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;node.root=static_cast<jclass>(env->NewGlobalRef(classes[i]));if(!node.root)return false;
   state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();
   jobject loader=nullptr;if(ti->GetClassLoader(classes[i],&loader)!=JVMTI_ERROR_NONE)return false;if(loader){stored.loader=env->NewGlobalRef(loader);env->DeleteLocalRef(loader);if(!stored.loader)return false;}
   auto parent=env->GetSuperclass(classes[i]);if(parent){stored.parent=static_cast<jclass>(env->NewGlobalRef(parent));env->DeleteLocalRef(parent);if(!stored.parent)return false;}

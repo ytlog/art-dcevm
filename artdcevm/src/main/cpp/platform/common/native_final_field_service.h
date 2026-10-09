@@ -29,6 +29,7 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  bool PrepareEnvironment(JNIEnv*,std::string*);
  // Ordinary JNI/JVMTI stage, before Bind and exclusive listener installation.
  bool PrepareProofMethod(jmethodID fixture_writer,std::string*);
+ bool StageFixtureField(JNIEnv*,jclass,jfieldID,bool is_static,std::string*);
  bool RegisterStrong(JNIEnv*,jobject,std::string*);
  void ForgetStrong(jobject);
  bool Bind(HookEngine&,void* observed_instrumentation,std::string*);

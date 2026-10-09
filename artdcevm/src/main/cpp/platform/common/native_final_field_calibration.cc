@@ -72,6 +72,7 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  jmethodID check=method("checkHandles","(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Handles;Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;ZI)I");
  jfieldID fields[2]={env->ExceptionCheck()?nullptr:env->GetFieldID(roots.target,"instanceValue","I"),env->ExceptionCheck()?nullptr:env->GetStaticFieldID(roots.target,"staticValue","I")};
  if(!roots.writer||!roots.target||!create||!prepare||!write||!check||!fields[0]||!fields[1]||env->ExceptionCheck())return Fail(error,"Final fixture public declarations incomplete");
+ for(size_t i=0;i<2;++i)if(!service.StageFixtureField(env,roots.target,fields[i],i!=0,error))return false;
  jobject object=env->CallStaticObjectMethod(roots.writer,create);
  if(!object||env->ExceptionCheck())return false;
  roots.instance=env->NewGlobalRef(object);env->DeleteLocalRef(object);
