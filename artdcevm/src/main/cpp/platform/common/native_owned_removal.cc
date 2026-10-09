@@ -83,6 +83,23 @@ VerificationLeaf verification_leaf_original=nullptr;CollectionLeaf collection_le
 abi::arm64::android_common::AddGlobalRef add_global=nullptr;
 abi::arm64::android11::CurrentThread current_thread=nullptr;
 void* (*root_barrier)(void*)=nullptr;
+thread_local PassiveObserver passive_observer{};
+struct PassiveRun {
+ PassiveObserver observer;void* driver;bool valid=true,called=false,returned=false;
+ size_t collections=0;const void* holder=nullptr;jvmtiError result=JVMTI_ERROR_INTERNAL;
+};
+thread_local PassiveRun* passive_run=nullptr;
+void PassiveCollected(void* driver,const void* holder) noexcept {
+ if(!passive_run)return;
+ auto& r=*passive_run;
+ const size_t previous=r.collections++;
+ if(driver!=r.driver||!holder||previous!=0||(r.holder&&r.holder!=holder))r.valid=false;
+ r.holder=holder;r.observer.collected(driver,holder,r.observer.state);
+}
+jvmtiError InvokeOriginalRun(void* driver){
+ if(passive_run){if(driver!=passive_run->driver||passive_run->called)passive_run->valid=false;passive_run->called=true;}
+ return run_original(driver);
+}
 bool Mapped(const void* p,size_t need){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=need;}
 template<class T>T Read(const void* p,size_t at){T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value;}
 Item* Matches(void* owner){
@@ -273,7 +290,8 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
- if(!collect_original(driver,raw)){RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
+ if(!collect_original(driver,raw)){if(passive_run)passive_run->valid=false;RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
+ PassiveCollected(driver,raw);
  if(!active||!active->provider->closed_graph)return true;
  if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
  if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
@@ -287,15 +305,15 @@ void NotifyCommit(const source_commit::Plan& plan,void* owner) noexcept {
   request->publication_started=true;request->provider->commit(plan,request->provider->state);
  }
 }
-jvmtiError SourceRun(void* driver){
- if(!active||!Lifecycle(*active->provider))return run_original(driver);
+jvmtiError RunOwned(void* driver){
+ if(!active||!Lifecycle(*active->provider))return InvokeOriginalRun(driver);
  auto& r=*active;if(r.source_run_active)return JVMTI_ERROR_NOT_AVAILABLE;
  r.source_driver=driver;r.source_run_active=true;std::string error;bool begun=false;
  jvmtiError result=JVMTI_ERROR_NOT_AVAILABLE;
  try{begun=r.provider->begin_run(driver,r.provider->state,&error);}
  catch(const std::bad_alloc&){result=JVMTI_ERROR_OUT_OF_MEMORY;RememberFailure("Source Session creation exhausted native memory");}
  catch(...){result=JVMTI_ERROR_INTERNAL;RememberFailure("Source Session creation threw");}
- if(begun){result=run_original(driver);
+ if(begun){result=InvokeOriginalRun(driver);
   // Every owned rejection and original RecordFailure refunds while source
   // locals still exist. EndRun must never perform a late Holder retirement.
   if(result!=JVMTI_ERROR_NONE&&!r.refunded)std::abort();
@@ -310,6 +328,21 @@ jvmtiError SourceRun(void* driver){
  // Successful source Run must have consumed all owners before dropping them.
  if(result==JVMTI_ERROR_NONE&&!r.remaining_owners.empty())std::abort();
  r.remaining_owners.clear();return result;
+}
+jvmtiError SourceRun(void* driver){
+ if(!passive_observer.begin)return RunOwned(driver);
+ if(passive_run){passive_run->valid=false;return RunOwned(driver);}
+ PassiveRun observed{passive_observer,driver};passive_run=&observed;
+ // One named CurrentThread leaf, no JNI/managed decoding or allocation. The
+ // independent calibration consumer proves the receiver and mapped extent.
+ void* self=current_thread?current_thread():nullptr;
+ observed.valid=driver&&run_original&&self;
+ struct Scope {
+  PassiveRun& run;
+  ~Scope(){run.observer.end(run.driver,run.result,run.valid&&run.called&&run.returned&&run.result==JVMTI_ERROR_NONE&&run.collections==1&&run.holder,run.observer.state);passive_run=nullptr;}
+ } scope{observed};
+ observed.observer.begin(driver,reinterpret_cast<const void*>(run_original),self,observed.observer.state);
+ observed.result=RunOwned(driver);observed.returned=true;return observed.result;
 }
 void Update(void* owner,const void* iterator){
   if(!active||std::none_of(active->items.begin(),active->items.end(),[&](const auto& item){return item.validated_owner==owner;})){
@@ -421,6 +454,12 @@ bool Install(HookEngine& hooks,std::string* error){
   destroy(&stop);installed=okay;window_ready=okay;return okay;
 }
 bool GraphWindowReady(){return window_ready;}
+bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
+ if(passive_run)return false;
+ if(!observer){passive_observer={};return true;}
+ if(!installed||!run_ready||!window_ready||!observer->begin||!observer->collected||!observer->end)return false;
+ passive_observer=*observer;return true;
+}
 void ObserveSourceFailure(void* driver,jvmtiError code) noexcept {
  if(!active||!active->source_run_active||active->source_driver!=driver||code==JVMTI_ERROR_NONE)return;
  RememberFailure("Original RecordFailure refused source Run");

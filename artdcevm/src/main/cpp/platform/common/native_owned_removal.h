@@ -59,6 +59,21 @@ bool Install(HookEngine&,std::string* error);
 // Bound entry points only; no per-operation graph permission is implied.
 // Actual original successes and both owned seals remain mandatory in RunBatch.
 bool GraphWindowReady();
+// Passive calibration observes an ordinary source Run without an owned schema
+// Request. Callbacks do not change source arguments, booleans or JVMTI errors.
+// The caller owns state until unregister. Registration is thread-local and
+// all-or-none; changing it while an original Run is active is refused.
+struct PassiveObserver {
+ void* state=nullptr;
+ void (*begin)(void* driver,const void* exact_original_run,void* self,void* state) noexcept=nullptr;
+ // Holder is borrowed only during this callback; end must not dereference it.
+ void (*collected)(void* driver,const void* actual_holder,void* state) noexcept=nullptr;
+ // complete requires one actual original Run call and one successful named
+ // whole collection with the same driver/Holder, without nested Run entry.
+ // A missing/inlined/wrong/repeated boundary revokes proof; result is original.
+ void (*end)(void* driver,jvmtiError original_result,bool complete,void* state) noexcept=nullptr;
+};
+bool SetPassiveObserver(const PassiveObserver*) noexcept;
 // Forward only from the existing sole named RecordFailure observer. Original
 // failure arguments/result remain untouched. Exact active Run driver required;
 // failure notification preserves a still-active original verification view;

@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <new>
+#include <thread>
 static bool forbid_final_allocation=false;
 void* operator new(std::size_t bytes){if(forbid_final_allocation)throw std::bad_alloc();if(auto p=std::malloc(bytes))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}
@@ -101,6 +102,65 @@ jvmtiError OriginalRun(void* d){assert(d==&driver);if(mode==3){ObserveSourceFail
 jvmtiError Entry(jvmtiEnv* t,jint n,const jvmtiClassDefinition* defs){ti=t;count=n;definitions=defs;return SourceRun(&driver);}
 jvmtiError JNICALL Extensions(jvmtiEnv* t,jint* n,jvmtiExtensionFunctionInfo** info){auto code=batch_boundary::Extensions(t,n,info);(*info)->func=reinterpret_cast<jvmtiExtensionFunction>(Entry);return code;}
 void Reset(int value){opened=closed=refunds=starts=ends=commits=0;view=false;mode=value;}
+}
+namespace passive_test {
+using namespace artdcevm::native_owned_removal;
+int driver=0,foreign=0,holder=0,other_holder=0,state=0;
+int mode=0,depth=0,bodies=0,begins=0,collections=0,ends=0;bool complete=false;
+jvmtiError reported=JVMTI_ERROR_NONE;
+jvmtiError OriginalRun(void*);
+bool Collect(void* d,transaction_root::Holder* h){assert((d==&driver||d==&foreign)&&(h==reinterpret_cast<transaction_root::Holder*>(&holder)||h==reinterpret_cast<transaction_root::Holder*>(&other_holder)));return mode!=3;}
+void Begin(void* d,const void* original,void* self,void* owner) noexcept {
+ assert(d==&driver&&original==reinterpret_cast<const void*>(OriginalRun)&&owner==&state&&self==current);
+ assert(!SetPassiveObserver(nullptr));++begins;
+}
+void Collected(void* d,const void* h,void* owner) noexcept {assert(owner==&state&&(d==&driver||d==&foreign)&&(h==&holder||h==&other_holder));++collections;}
+void End(void* d,jvmtiError result,bool valid,void* owner) noexcept {assert(d==&driver&&owner==&state&&!SetPassiveObserver(nullptr));++ends;reported=result;complete=valid;}
+jvmtiError OriginalRun(void* d){
+ ++bodies;assert(d==&driver||d==&foreign);
+ if(mode==1)return JVMTI_ERROR_INVALID_CLASS;
+ if(mode==2)return JVMTI_ERROR_NONE;
+ if(mode==8)throw std::bad_alloc();
+ if(mode==7&&depth++==0){assert(SourceRun(&foreign)==JVMTI_ERROR_NONE);--depth;}
+ void* receiver=mode==5?static_cast<void*>(&foreign):d;
+ bool okay=CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&holder));
+ if(mode==4)assert(CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&holder)));
+ if(mode==6)assert(CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&other_holder)));
+ if(mode==9)return JVMTI_ERROR_FAILS_VERIFICATION;
+ return okay?JVMTI_ERROR_NONE:JVMTI_ERROR_OUT_OF_MEMORY;
+}
+void Test(){
+ assert(!active);run_original=OriginalRun;collect_original=Collect;run_ready=window_ready=installed=true;
+ PassiveObserver observer{&state,Begin,Collected,End};
+ PassiveObserver partial=observer;partial.end=nullptr;assert(!SetPassiveObserver(&partial));
+ run_ready=false;assert(!SetPassiveObserver(&observer));run_ready=true;
+ assert(SetPassiveObserver(&observer));
+ // Registration copies the complete callbacks rather than borrowing a mutable
+ // registration object; only its explicitly owned state is borrowed.
+ observer.end=nullptr;
+ for(mode=0;mode<=9;++mode){depth=bodies=begins=collections=ends=0;complete=true;reported=JVMTI_ERROR_NONE;
+  forbid_final_allocation=true;jvmtiError result=JVMTI_ERROR_INTERNAL;
+  try{result=SourceRun(&driver);}catch(const std::bad_alloc&){assert(mode==8);}
+  forbid_final_allocation=false;
+  assert(begins==1&&ends==1&&!passive_run&&reported==result&&complete==(mode==0));
+  assert(bodies==(mode==7?2:1));
+  if(mode==0)assert(result==JVMTI_ERROR_NONE&&collections==1);
+  if(mode==1)assert(result==JVMTI_ERROR_INVALID_CLASS&&collections==0);
+  if(mode==2)assert(result==JVMTI_ERROR_NONE&&collections==0);
+  if(mode==3)assert(result==JVMTI_ERROR_OUT_OF_MEMORY&&collections==0);
+  if(mode==4||mode==6||mode==7)assert(result==JVMTI_ERROR_NONE&&collections==2);
+  if(mode==5)assert(result==JVMTI_ERROR_NONE&&collections==1);
+  if(mode==8)assert(result==JVMTI_ERROR_INTERNAL&&collections==0);
+  if(mode==9)assert(result==JVMTI_ERROR_FAILS_VERIFICATION&&collections==1);
+ }
+ mode=0;begins=ends=collections=0;
+ // A whole collection outside the original Run dynamic extent is not evidence.
+ assert(CollectGraph(&driver,reinterpret_cast<transaction_root::Holder*>(&holder))&&collections==0);
+ std::thread other([]{assert(SetPassiveObserver(nullptr));assert(SourceRun(&driver)==JVMTI_ERROR_NONE);});other.join();
+ assert(begins==0&&ends==0);assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==1&&ends==1&&complete);
+ assert(SetPassiveObserver(nullptr));mode=0;begins=ends=0;assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==0&&ends==0);
+ puts("Passive actual Run TU: ordinary original trampoline/self/Holder arguments and errors retained; all-or-none removable TLS observation; missing/failed/repeated/wrong/nested scopes cannot seal; exception rollback; zero allocation/no JNI PASS");
+}
 }
 int main(int argc,char** argv){
  assert(original_batch_boundary(argc,argv)==0);
@@ -231,6 +291,7 @@ int main(int argc,char** argv){
  forbid_final_allocation=true;assert(rooted_schema_plan::Matches(graph,reader,new_plan));new_plan.class_root_origins[1].index=1;assert(!rooted_schema_plan::Matches(graph,reader,new_plan));new_plan.class_root_origins[1].index=0;forbid_final_allocation=false;
  auto unchanged=new_plan.new_classes;Put32(moved_array,8,2);assert(!rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes==unchanged);
  assert(!rooted_schema_plan::Read(graph,false,reader,&new_plan,&error));
+ passive_test::Test();
  before_commit=nullptr;before_commit_result=nullptr;enter_final=leave_final=nullptr;
  puts("Owned source fixed diagnostics: exact disposable provider reason, source phase/counts, original errors, bounded truncation, first-error isolation, noalloc/noJNI capture, diagnostic OOM preserves result and next success clears PASS");
  puts("Actual leaf boundaries: inlined/non-inlined driver coverage, every original bool, exact Holder/index/owner sequence, missing/skipped/duplicate verification refusal before collection, Collected rejection before Update PASS");
