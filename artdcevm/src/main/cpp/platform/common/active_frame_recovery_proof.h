@@ -22,7 +22,8 @@ struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,m
   uint32_t constructor_context_echo_mask=0;
   uint32_t map_row=0,inline_begin=0,inline_end=0,native_carrier_registers=0,
            decoded_register_first=0,decoded_register_count=0,expected_registers=0;
-  bool register_range_observed=false;uint32_t physical_owner_mask=0;
+  bool register_range_observed=false,native_register_count_observed=false,native_inline_depth_observed=false;
+  uint64_t native_register_count=0;uint32_t slow_register_expected_count=0,source_inline_depth=0,native_inline_depth=0;uint32_t physical_owner_mask=0;
   Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
@@ -49,6 +50,8 @@ class Service {
     candidate.construct_=required(abi::arm64::android13::kConstructCodeInfo);
     candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
     candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
+    candidate.inline_depth_=reinterpret_cast<InlineDepth>(finder("_ZNK3art12StackVisitor11InlineDepthEv"));
+    candidate.register_count_=reinterpret_cast<RegisterCount>(finder("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
     candidate.decode_map_=reinterpret_cast<abi::arm64::dex_register_map::Decode>(required(abi::arm64::dex_register_map::kDecode));
     candidate.fast_=finder(family==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast);
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
@@ -87,6 +90,8 @@ class Service {
     return Prove(thread,jit,oracle,scratch,capacity,readable);
   }
  private:
+  using InlineDepth=size_t (*)(const void*);
+  using RegisterCount=size_t (*)(const void*,void*,int);
   using DexPc=uint32_t (*)(const void*,bool);
   static uint32_t InlineMask(Family f) {
     switch(f){
@@ -287,6 +292,25 @@ class Service {
         return Fail(Failure::kDecodedMap,"decoded-vreg-count-does-not-match-actual-CodeItem");
       if(!decoded_frame_recovery::Decode(view,map.row,report.inline_begin,report.inline_end,scratch,capacity,&range))
         return Fail(Failure::kDecodedMap,"decoded-vreg-locations-invalid");
+      // Match the original slow reader's own register-count leaf and depth
+      // contract, rather than inferring its bounds from our map range alone.
+      if(service.register_count_) {
+        const uint32_t depth=this->inline_frames.end.row-this->inline_frames.begin.row;
+        report.source_inline_depth=depth;report.slow_register_expected_count=range.first+range.count;
+        if(service.inline_depth_) {
+          const size_t native_depth=service.inline_depth_(this);
+          report.native_inline_depth_observed=true;
+          report.native_inline_depth=static_cast<uint32_t>(native_depth);
+          if(native_depth!=depth)return Fail(Failure::kFrameIdentity,"original-inline-depth-versus-source-cursor-mismatch");
+        }
+        if(depth>INT32_MAX)return Fail(Failure::kDecodedMap,"native-inline-depth-outside-source-register-count-contract");
+        const size_t native_count=service.register_count_(this,info,static_cast<int>(depth));
+        report.native_register_count_observed=true;report.native_register_count=native_count;
+        const size_t expected_count=range.first+range.count;
+        if(native_count!=expected_count)
+          return Fail(Failure::kDecodedMap,"original-slow-register-count-versus-complete-map-mismatch");
+      }else if(Modern(service.family_))
+        return Fail(Failure::kMissingBinding,"original-slow-register-count-leaf-unavailable");
       // Independently call the exact native decoder with its complete source
       // container, before the slow reader's release-build unchecked map[vreg].
       // Compare ALL locations, including missing registers, not only witnesses.
@@ -342,6 +366,8 @@ class Service {
   }
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;void* slow_=nullptr;void* fast_=nullptr;
+  InlineDepth inline_depth_=nullptr;
+  RegisterCount register_count_=nullptr;
   abi::arm64::dex_register_map::Decode decode_map_=nullptr;
   DexPc dex_pc_=nullptr;ContainsJit jit_contains_=nullptr;ContainsHeader header_contains_=nullptr;Nterp nterp_=nullptr;
 };

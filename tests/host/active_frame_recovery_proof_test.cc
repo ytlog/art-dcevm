@@ -9,7 +9,7 @@ namespace {
 Family family;int method_ids[3],thread,jit;void* active_method;
 bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
 bool actual_physical=false,physical_alias=false,physical_wrong_order=false,nterp_header=false;unsigned active_index=0;
-bool native_map_mismatch=false;
+bool native_map_mismatch=false,native_count_mismatch=false,native_depth_mismatch=false;
 bool cursor_method_drift=false,cursor_pc_drift=false;unsigned method_queries=0,dex_queries=0,slow_calls=0;
 alignas(8) std::array<std::array<uint32_t,16>,3> physical_quick{};
 uint32_t code_size=64;unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
@@ -105,6 +105,18 @@ bool Fast(const void*,NativeLocation location,uint32_t* value) {
  *value=(actual_physical?physical_quick[active_index][location.value/4]:quick[location.value/4])+(bad_fast?1:0);return true;
 }
 bool Fast11(const void* visitor,NativeLocation location,Kind kind,uint32_t* value){assert(kind==((location.value%8)==4?Kind::kReference:Kind::kInt));if(kind==Kind::kReference)++reference_fast11;return Fast(visitor,location,value);}
+size_t InlineDepth(const void*){return (actual_physical?0:active_index)+(native_depth_mismatch?1:0);}
+size_t RegisterCount(const void* raw,void* info,int depth) {
+ switch(family){case Family::kAndroid11:CheckCursor<abi::arm64::stack::Visitor11>(raw,active_method);break;
+ case Family::kAndroid12:CheckCursor<abi::arm64::stack::Visitor12>(raw,active_method);break;
+ case Family::kAndroid17:CheckCursor<abi::arm64::stack::Visitor17>(raw,active_method);break;
+ default:CheckCursor<abi::arm64::stack::Visitor13>(raw,active_method);break;}
+ code_info_view::View view;assert(code_info_view::ReadSourceObject(family,info,400,&view));
+ assert(depth==static_cast<int>(actual_physical?0:active_index));
+ if(native_count_mismatch)return 1;
+ if(!depth)return view.dex_regs;
+ uint32_t count;assert(view.InlineInfos().Read(depth-1,5,&count));return count;
+}
 void DecodeNativeMap(const void* info,uint32_t row,uint32_t first,abi::arm64::dex_register_map::Map* map) {
  code_info_view::View view;assert(code_info_view::ReadSourceObject(family,info,400,&view));
  std::vector<decoded_frame_recovery::Location> locations(map->count);
@@ -122,6 +134,8 @@ struct Finder {
   if(missing && std::strcmp(missing,name)==0)return nullptr;
   if(wrong_geometry && std::strcmp(name,abi::arm64::stack::kConstruct)==0)
    return family==Family::kAndroid12 || family==Family::kAndroid17?Fn(Construct<abi::arm64::stack::Visitor13>):Fn(Construct<abi::arm64::stack::Visitor12>);
+  if(std::strcmp(name,"_ZNK3art12StackVisitor11InlineDepthEv")==0)return Fn(InlineDepth);
+  if(std::strcmp(name,"_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi")==0)return Fn(RegisterCount);
   if(std::strcmp(name,abi::arm64::dex_register_map::kDecode)==0)return Fn(DecodeNativeMap);
   if(std::strstr(name,"GetDexPc"))return Fn(DexPc);
   if(std::strcmp(name,abi::arm64::context::kCreate)==0)return Fn(Create);
@@ -148,7 +162,7 @@ struct Finder {
 };
 void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;creates=resets=destroys=reference_fast11=0;
  quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
- actual_physical=physical_alias=physical_wrong_order=nterp_header=cursor_method_drift=cursor_pc_drift=native_map_mismatch=false;slow_calls=0;
+ actual_physical=physical_alias=physical_wrong_order=nterp_header=cursor_method_drift=cursor_pc_drift=native_map_mismatch=native_count_mismatch=native_depth_mismatch=false;slow_calls=0;
  for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
  stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
  header[0]=16;header[1]=64;code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
@@ -268,6 +282,18 @@ void Check(Family f){family=f;Reset();Service service;
  assert(!std::strcmp(physical_report.detail,"complete-owned-three-physical-proof"));
  // The inline API remains strict: a successful physical proof cannot authorize it.
  assert(run().failure!=Failure::kNone);
+ if(f==Family::kAndroid14||f==Family::kAndroid15||f==Family::kAndroid16||f==Family::kAndroid17) {
+   Service missing_count;assert(Service::Bind(f,Finder{"_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"},&missing_count));
+   slow_calls=0;const auto missing_report=missing_count.ProvePhysical(&thread,&jit,physical,scratch,2);
+   assert(missing_report.failure==Failure::kMissingBinding && !missing_report.native_register_count_observed && slow_calls==0);
+ }
+ assert(physical_report.native_register_count_observed && physical_report.native_register_count==2 &&
+   physical_report.slow_register_expected_count==2 && physical_report.native_inline_depth_observed &&
+   physical_report.native_inline_depth==0 && physical_report.source_inline_depth==0);
+ slow_calls=0;native_depth_mismatch=true;auto depth_failed=physical_run();
+ assert(depth_failed.failure==Failure::kFrameIdentity && depth_failed.native_inline_depth==1 &&
+   depth_failed.source_inline_depth==0 && slow_calls==0);native_depth_mismatch=false;
+ slow_calls=0;native_count_mismatch=true;assert(physical_run().failure==Failure::kDecodedMap && slow_calls==0);native_count_mismatch=false;
  slow_calls=0;native_map_mismatch=true;assert(physical_run().failure==Failure::kDecodedMap && slow_calls==0);native_map_mismatch=false;
  slow_calls=0;cursor_method_drift=true;assert(physical_run().failure==Failure::kFrameIdentity && slow_calls==0);cursor_method_drift=false;
  slow_calls=0;cursor_pc_drift=true;assert(physical_run().failure==Failure::kFrameIdentity && slow_calls==0);cursor_pc_drift=false;

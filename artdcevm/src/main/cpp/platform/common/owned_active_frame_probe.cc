@@ -138,6 +138,12 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<",\"registerRangeObserved\":"<<(attempt.report.register_range_observed?"true":"false")
    <<",\"decodedRegisterFirst\":"<<attempt.report.decoded_register_first<<",\"decodedRegisterCount\":"<<attempt.report.decoded_register_count
    <<",\"expectedRegisters\":"<<attempt.report.expected_registers
+   <<",\"nativeRegisterCountObserved\":"<<(attempt.report.native_register_count_observed?"true":"false")
+   <<",\"nativeRegisterCount\":"<<attempt.report.native_register_count
+   <<",\"slowRegisterExpectedCount\":"<<attempt.report.slow_register_expected_count
+   <<",\"sourceInlineDepth\":"<<attempt.report.source_inline_depth
+   <<",\"nativeInlineDepthObserved\":"<<(attempt.report.native_inline_depth_observed?"true":"false")
+   <<",\"nativeInlineDepth\":"<<attempt.report.native_inline_depth
    <<",\"frames\":"<<attempt.report.frames<<'}';}
  out<<"]}";return out.str();}
 }
