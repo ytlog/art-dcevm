@@ -47,7 +47,7 @@ struct Finder {
 }
 int main(){
  *Frame()=&method;uint32_t integer=73,root=0x11000;
- std::memcpy(reinterpret_cast<void*>(Base()+52),&integer,4);std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);
+ std::memcpy(reinterpret_cast<void*>(Base()+52),&integer,4);std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);std::memcpy(reinterpret_cast<void*>(Base()+56),&root,4);
  modern_field_metadata::ReadContext context{&stopped,Extent};
  for(auto declaration:{n::CanonicalDeclaration::WithoutFullRegisterList,n::CanonicalDeclaration::WithFullRegisterList}){
   n::Service service;assert(n::Service::Bind(declaration,Finder{},&service));
@@ -55,6 +55,7 @@ int main(){
   auto run=[&]{arrays_read=0;return service.Prove(&visitor,Frame(),&header,101,oracle,witness,2,context,&output);};
   assert(run()&&output.references==Base()+40&&output.registers==Base()+52&&output.frame_size==96);
   stopped=false;assert(!run());stopped=true;
+  uint32_t stale_mirror=root+1;std::memcpy(reinterpret_cast<void*>(Base()+56),&stale_mirror,4);assert(!run());std::memcpy(reinterpret_cast<void*>(Base()+56),&root,4);
   debug_override=true;assert(!run());debug_override=false;
   bad_array=true;assert(!run());bad_array=false;
   bad_frame=true;assert(!run());bad_frame=false;
@@ -65,7 +66,7 @@ int main(){
   ++oracle.invoke_dex_pc;assert(!run());--oracle.invoke_dex_pc;
   *Frame()=&wrong_method;assert(!run());*Frame()=&method;
   ++witness[1].expected;assert(!run());--witness[1].expected;
-  root+=0x1000;std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);assert(!run());witness[1].expected=root;assert(run());
+  root+=0x1000;std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);std::memcpy(reinterpret_cast<void*>(Base()+56),&root,4);assert(!run());witness[1].expected=root;assert(run());
   witness[1].vreg=3;assert(!run());witness[1].vreg=1;
   n::Snapshot prior=output;assert(!service.Prove(&visitor,Frame(),&header,101,oracle,witness,2,{nullptr,nullptr},&output));assert(output.references==prior.references);
   for(auto missing:{n::Service::kFrameInfo,n::Service::kReferences,n::Service::kRegisters,n::Service::kReference,n::Service::kValue,native_frame_code_owner::Service::kMethodHeader}){n::Service absent;assert(!n::Service::Bind(declaration,Finder{missing},&absent));}

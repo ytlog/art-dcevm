@@ -55,6 +55,9 @@ class Service {
    uint32_t physical=0;std::memcpy(&physical,reinterpret_cast<void*>(array+size_t(item.vreg)*4),4);
    const uint32_t helper=item.kind==Kind::kReference?reference_(frame,item.vreg):value_(frame,item.vreg);
    if(original!=item.expected||physical!=original||helper!=original)return false;
+   // Thread::VisitNterpFrame relocates every reference in BOTH arrays. Nterp
+   // resumes using scalar slots too; the reference shadow alone is insufficient.
+   if(item.kind==Kind::kReference){uint32_t mirrored=0;std::memcpy(&mirrored,reinterpret_cast<void*>(regs+size_t(item.vreg)*4),4);if(mirrored!=original)return false;}
   }
   // No JNI, allocation, mutation or cookie synthesis. Revoke on cursor, owner,
   // saved DexPc, native array or current stopped-context drift after readers.

@@ -46,10 +46,10 @@ int main(){
   assert(observe.Finish(&w::self_driver,true,&proof));}
  assert(source.Authorize(proof,&w::body)&&source.RequiresOriginalWaiting());
  *Frame()=&method;uint32_t integer=73,root=0x11000;
- std::memcpy(reinterpret_cast<void*>(Base()+52),&integer,4);std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);
+ std::memcpy(reinterpret_cast<void*>(Base()+52),&integer,4);std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);std::memcpy(reinterpret_cast<void*>(Base()+56),&root,4);
  for(unsigned pass=0;pass<3;++pass){
   Inspection inspect;native_source_stop::Session scope(source);
-  if(pass){root=0x12000;std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);}
+  if(pass){root=0x12000;std::memcpy(reinterpret_cast<void*>(Base()+44),&root,4);std::memcpy(reinterpret_cast<void*>(Base()+56),&root,4);}
   if(pass==2)inspect.witnesses[1].expected=root;
   const auto queries=method_identity::MappingOsQueries();noalloc=true;
   const bool result=scope.InspectOriginalWaiting(&w::flags,sizeof(w::flags),&inspect,Inspection::Scan);

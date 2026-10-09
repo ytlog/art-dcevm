@@ -39,14 +39,14 @@ struct Finder{template<class F>static void*Fn(F f){return reinterpret_cast<void*
 }
 int main(){
  std::array<p::Frame,3> frames;n::Witness witnesses[3][2];
- for(unsigned i=0;i<3;++i){*Frame(i)=&methods[i];uint32_t integer=73+i,reference=0x11000+i*0x1000;std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))),&integer,4);std::memcpy(reinterpret_cast<void*>(Refs(Frame(i))+4),&reference,4);witnesses[i][0]={0,n::Kind::kInt,integer};witnesses[i][1]={1,n::Kind::kReference,reference};frames[i]={{&methods[i],3,3,19+i},witnesses[i],2};}
+ for(unsigned i=0;i<3;++i){*Frame(i)=&methods[i];uint32_t integer=73+i,reference=0x11000+i*0x1000;std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))),&integer,4);std::memcpy(reinterpret_cast<void*>(Refs(Frame(i))+4),&reference,4);std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))+4),&reference,4);witnesses[i][0]={0,n::Kind::kInt,integer};witnesses[i][1]={1,n::Kind::kReference,reference};frames[i]={{&methods[i],3,3,19+i},witnesses[i],2};}
  for(auto d:{p::Declaration::kAndroid12,p::Declaration::kAndroid13To16,p::Declaration::kAndroid17})for(auto c:{n::CanonicalDeclaration::WithoutFullRegisterList,n::CanonicalDeclaration::WithFullRegisterList}){declaration=d;p::Service reader;assert(p::Service::Bind(d,c,Finder{},&reader));auto run=[&]{return reader.Prove(&target,&context,frames,{&target,Range});};
   auto report=run();assert(report.accepted&&report.frames==3&&report.mask==7&&report.references==3&&report.integers==3);
   duplicate=true;assert(!run().accepted);duplicate=false;
   inline_frame=true;assert(!run().accepted);inline_frame=false;
   wrong_context=true;assert(!run().accepted);wrong_context=false;
   ++witnesses[1][1].expected;assert(!run().accepted);--witnesses[1][1].expected;
-  uint32_t fresh=witnesses[1][1].expected+0x10000;std::memcpy(reinterpret_cast<void*>(Refs(Frame(1))+4),&fresh,4);assert(!run().accepted);witnesses[1][1].expected=fresh;assert(run().accepted);
+  uint32_t fresh=witnesses[1][1].expected+0x10000;std::memcpy(reinterpret_cast<void*>(Refs(Frame(1))+4),&fresh,4);std::memcpy(reinterpret_cast<void*>(Regs(Frame(1))+4),&fresh,4);assert(!run().accepted);witnesses[1][1].expected=fresh;assert(run().accepted);
  }
  std::cout<<"Actual original StackVisitor constructor/walk + three distinct Nterp physical frames/CodeItems/canonical arrays + duplicate/inline/context/stale-root refusals PASS\n";
  return 0;

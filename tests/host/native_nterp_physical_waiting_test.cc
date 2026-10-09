@@ -13,7 +13,7 @@ struct Inspection {
  Inspection(){declaration=p::Declaration::kAndroid13To16;
   assert(p::Service::Bind(declaration,n::CanonicalDeclaration::WithFullRegisterList,Finder{},&reader));
   for(unsigned i=0;i<3;++i){*Frame(i)=&methods[i];uint32_t integer=73+i,reference=0x11000+i*0x1000;
-   std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))),&integer,4);std::memcpy(reinterpret_cast<void*>(Refs(Frame(i))+4),&reference,4);
+   std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))),&integer,4);std::memcpy(reinterpret_cast<void*>(Refs(Frame(i))+4),&reference,4);std::memcpy(reinterpret_cast<void*>(Regs(Frame(i))+4),&reference,4);
    witnesses[i][0]={0,n::Kind::kInt,integer};witnesses[i][1]={1,n::Kind::kReference,reference};frames[i]={{&methods[i],3,3,19+i},witnesses[i],2};}
  }
  static bool Extent(void*o,const void*value,size_t*out)noexcept {
@@ -42,7 +42,7 @@ int main(){
  assert(source.Authorize(proof,&w::body)&&source.RequiresOriginalWaiting());
  for(unsigned pass=0;pass<3;++pass){
   Inspection inspect;native_source_stop::Session scope(source);
-  if(pass){uint32_t fresh=0x21000;std::memcpy(reinterpret_cast<void*>(Refs(Frame(0))+4),&fresh,4);if(pass==2)inspect.witnesses[0][1].expected=fresh;}
+  if(pass){uint32_t fresh=0x21000;std::memcpy(reinterpret_cast<void*>(Refs(Frame(0))+4),&fresh,4);std::memcpy(reinterpret_cast<void*>(Regs(Frame(0))+4),&fresh,4);if(pass==2)inspect.witnesses[0][1].expected=fresh;}
   const auto queries=method_identity::MappingOsQueries();noalloc=true;
   const bool result=scope.InspectOriginalWaiting(&w::flags,sizeof(w::flags),&inspect,Inspection::Scan);noalloc=false;
   assert(result==(pass!=1)&&inspect.calls==1);
