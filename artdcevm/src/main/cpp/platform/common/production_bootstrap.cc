@@ -2,6 +2,7 @@
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
 #include "platform/common/source_cache_method_witness.h"
+#include "platform/common/source_cache_field_witness.h"
 #include "platform/common/production_provenance.h"
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_retirement_cleanup.h"
@@ -172,6 +173,7 @@ struct NativeEngine final:Engine {
  struct PublicCacheWitness {
   jobject cache=nullptr,klass=nullptr,field=nullptr,method=nullptr;
   InstalledClassIds ids;uint32_t field_index=UINT32_MAX,method_index=UINT32_MAX;
+  uint32_t public_field_modifiers=0;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
@@ -746,10 +748,18 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  if(!source_cache_method_witness::Read(scope,request.method_leaf,witness.method,
        layout,witness.method_index,method_identity::ReadableMappingExtent,&method,request.error))return false;
  auto* field=e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;field_copy::CopyFieldView text;
- if(!field||e.metadata.FieldDeclaringClass(field)!=klass||
-    !e.metadata.FieldIdentity(field,&text,request.error)||std::strcmp(text.name,"number")||
-    std::strcmp(text.descriptor,"I")||field_array::Flags(field)!=(1u|0x40u))
-  return Fail(request.error,"Public cache Field differs from immutable fixture DEX");
+ if(!field)return Fail(request.error,"Public cache Field named GetArtField returned null");
+ if(!method_identity::ReadableMappingExtent(field,&extent)||extent<sizeof(field_array::Field))
+  return Fail(request.error,"Public cache Field native source prefix unreadable");
+ void* declaring=e.metadata.FieldDeclaringClass(field);
+ if(declaring!=klass)return Fail(request.error,"Public cache Field native declaring Class differs from independent public Class");
+ if(!e.metadata.FieldIdentity(field,&text,request.error)){
+  if(request.error)*request.error="Public cache Field native text unavailable: "+*request.error;
+  return false;
+ }
+ uint32_t index=0;std::memcpy(&index,static_cast<unsigned char*>(field)+offsetof(field_array::Field,dex_field_index),sizeof(index));
+ if(!source_cache_field_witness::Check(klass,declaring,text.name,text.descriptor,index,
+     witness.field_index,field_array::Flags(field),witness.public_field_modifiers,request.error))return false;
  // No safepoint between this rooted Class read and the original AddGlobalRef.
  // The real global is published before ART's allocation-tracking callback.
  void* cache=e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
@@ -809,6 +819,21 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!expected||env->ExceptionCheck())return Fail(error,"Original DEX cache warm invocation rejected");
  const bool same=env->IsSameObject(expected,source_cache_witness.klass);
  if(!same||env->ExceptionCheck())return Fail(error,"Original DEX cache warm class identity changed");
+ // Independent ordinary-JNI public Field oracle, completed before Runnable.
+ jclass field_type=env->GetObjectClass(source_cache_witness.field);Local field_type_scope{env,field_type};
+ if(!field_type||env->ExceptionCheck())return Fail(error,"Public cache Field reflection class unavailable");
+ auto declaring_id=env->GetMethodID(field_type,"getDeclaringClass","()Ljava/lang/Class;");
+ if(!declaring_id||env->ExceptionCheck())return Fail(error,"Public cache Field declaring Class oracle unavailable");
+ auto public_declaring=env->CallObjectMethod(source_cache_witness.field,declaring_id);Local declaring_scope{env,public_declaring};
+ if(!public_declaring||env->ExceptionCheck())return Fail(error,"Public cache Field declaring Class oracle invocation rejected");
+ const bool declaring_matches=env->IsSameObject(public_declaring,source_cache_witness.klass);
+ if(!declaring_matches||env->ExceptionCheck())return Fail(error,"Public cache Field declaring Class oracle identity changed");
+ auto modifiers_id=env->GetMethodID(field_type,"getModifiers","()I");
+ if(!modifiers_id||env->ExceptionCheck())return Fail(error,"Public cache Field modifiers oracle unavailable");
+ const jint modifiers=env->CallIntMethod(source_cache_witness.field,modifiers_id);
+ if(env->ExceptionCheck())return Fail(error,"Public cache Field modifiers oracle invocation rejected");
+ if(modifiers!=0x41)return Fail(error,"Public cache Field modifiers differ from immutable DEX");
+ source_cache_witness.public_field_modifiers=static_cast<uint32_t>(modifiers);
  if(source_cache_witness.cache){env->DeleteGlobalRef(source_cache_witness.cache);source_cache_witness.cache=nullptr;}
  auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
    hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
