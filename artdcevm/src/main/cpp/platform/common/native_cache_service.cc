@@ -156,16 +156,32 @@ bool Service::PreparedForCurrentThread()const {
   void* self=current_?current_():nullptr;
   return prepared_&&self&&(!vendor_lock_||(vendor_lock_observed_&&vendor_lock_self_==self));
 }
-bool Service::ClearStoppedWorld(size_t* cleared_threads,std::string* error)const {
-  if(!prepared_||!cleared_threads||!list_lock_||!*list_lock_)
-    return Fail(error,"Native cache closure is not prepared");
+bool Service::VisitStoppedWorld(StoppedVisitor visitor,void* state,size_t* registered_threads,std::string* error)const {
+  if(!prepared_||!visitor||!registered_threads||!list_lock_||!*list_lock_)
+    return Fail(error,"Native stopped enumeration is not prepared");
   void* self=current_();if(!self)return Fail(error,"Native cache current Thread unavailable");
-  Request request{static_cast<Closure*>(closure_)};
   if(vendor_lock_){if(!vendor_lock_observed_||self!=vendor_lock_self_)return Fail(error,"Vendor mutex argument is not calibrated for this native owner Thread");vendor_lock_(*list_lock_,self,vendor_lock_argument_);}
   else lock_(*list_lock_,self);
-  for_each_(threads_,ClearThread,&request);
-  unlock_(*list_lock_,self);
+  struct UnlockScope {
+    void (*unlock)(void*,void*);void* mutex;void* self;
+    ~UnlockScope(){unlock(mutex,self);}
+  } unlock_scope{unlock_,*list_lock_,self};
+  struct Enumeration {StoppedVisitor visitor;void* state;size_t count=0;bool accepted=true;};
+  Enumeration enumeration{visitor,state};
+  for_each_(threads_,[](void* thread,void* raw){
+    auto& e=*static_cast<Enumeration*>(raw);++e.count;
+    if(e.accepted)e.accepted=thread&&e.visitor(thread,e.state);
+  },&enumeration);
+  *registered_threads=enumeration.count;
+  if(!enumeration.accepted)return Fail(error,"Native stopped Thread visitor refused");
+  return enumeration.count!=0||Fail(error,"Native stopped enumeration had no Threads");
+}
+bool Service::ClearStoppedWorld(size_t* cleared_threads,std::string* error)const {
+  if(!cleared_threads)return Fail(error,"Native cache closure is not prepared");
+  Request request{static_cast<Closure*>(closure_)};
+  size_t registered=0;
+  if(!VisitStoppedWorld([](void* thread,void* state){ClearThread(thread,state);return true;},&request,&registered,error))return false;
   *cleared_threads=request.count;
-  return request.count!=0||Fail(error,"Native cache enumeration had no Threads");
+  return true;
 }
 }

@@ -16,6 +16,13 @@ class Service {
   // Caller already owns ART's final exclusive mutator boundary. Acquires the
   // real ThreadList mutex and synchronously executes native clearing on each
   // currently registered Thread; no asynchronous checkpoint or Thread offset.
+  // Readonly source-stop scanner preparation. The caller must independently
+  // own the continuous exclusive mutator stop; Prepared() does not prove that
+  // ownership. Callback must not use JNI, suspend, throw, or mutate ART state.
+  // Registered count includes all threads even when a callback refuses; further
+  // callbacks are skipped after refusal. Native ThreadList mutex remains held.
+  using StoppedVisitor=bool (*)(void* thread,void* state);
+  bool VisitStoppedWorld(StoppedVisitor,void* state,size_t* registered_threads,std::string* error)const;
   bool ClearStoppedWorld(size_t* cleared_threads,std::string* error) const;
  private:
   void* closure_=nullptr;

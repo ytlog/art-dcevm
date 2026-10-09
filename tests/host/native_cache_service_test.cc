@@ -96,6 +96,20 @@ class Hooks:public HookEngine {
  }
  bool Remove(void*,std::string*)override{assert(false);return false;}
 };
+struct Scan {void* expected[3];size_t visited=0;bool refuse=false;};
+bool ReadThread(void* thread,void* raw){
+ assert(stopped&&locked);auto& scan=*static_cast<Scan*>(raw);
+ assert(scan.visited<3&&thread==scan.expected[scan.visited++]);
+ return !scan.refuse;
+}
+void ScanThreads(native_cache::Service& service) {
+ std::string error;size_t count=77;Scan scan{{&worker[0],&worker[1],&worker[2]}};
+ Stop(nullptr,nullptr,false);assert(service.VisitStoppedWorld(ReadThread,&scan,&count,&error));Resume(nullptr);
+ assert(count==3&&scan.visited==3&&!locked);
+ scan.visited=0;scan.refuse=true;
+ Stop(nullptr,nullptr,false);assert(!service.VisitStoppedWorld(ReadThread,&scan,&count,&error));Resume(nullptr);
+ assert(count==3&&scan.visited==1&&!locked);
+}
 void Clear(native_cache::Service& service){
  std::string error;size_t count=77;
  Stop(nullptr,nullptr,false);assert(service.ClearStoppedWorld(&count,&error));Resume(nullptr);
@@ -114,7 +128,7 @@ int main(int argc,char** argv){
  throw_prepare=true;
  try{service.Prepare(&error);assert(false);}catch(const std::runtime_error&){}
  throw_prepare=false;
- assert(service.Prepare(&error));Clear(service);assert(clears==3);
+ assert(service.Prepare(&error));ScanThreads(service);Clear(service);assert(clears==3);
  hooks.missing=true;assert(!service.Bind(hooks,&threads,&error));hooks.missing=false;
  Clear(service);assert(clears==6);
  native_cache::Service named;hooks.named=true;
@@ -125,7 +139,7 @@ int main(int argc,char** argv){
  vendor_wrong=true;assert(!extension.Prepare(&error));vendor_wrong=false;
  vendor_conflict=true;assert(!extension.Prepare(&error));vendor_conflict=false;
  throw_prepare=true;try{extension.Prepare(&error);assert(false);}catch(const std::runtime_error&){}throw_prepare=false;
- assert(extension.Prepare(&error)&&extension.Prepared()&&extension.PreparedForCurrentThread());Clear(extension);
+ assert(extension.Prepare(&error)&&extension.Prepared()&&extension.PreparedForCurrentThread());ScanThreads(extension);Clear(extension);
  foreign=true;assert(!extension.PreparedForCurrentThread());count=77;Stop(nullptr,nullptr,false);assert(!extension.ClearStoppedWorld(&count,&error)&&count==77);Resume(nullptr);foreign=false;
  Clear(extension);assert(clears==15&&vendor_calls>6&&!stopped&&!locked);
  std::cout<<"Native cache: original publication, owned capture, ambiguous/missing rejection, TLS recovery, actual vendor argument/owner capture, conflicts and wrong-thread rejection, synchronous enumeration passed\n";
