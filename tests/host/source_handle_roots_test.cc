@@ -5,6 +5,8 @@
 #include "platform/common/source_handle_roots.h"
 #include "platform/common/source_allocation_transaction.h"
 #include <chrono>
+#include <sys/mman.h>
+#include <unistd.h>
 namespace {
 using SourceProbe=bool(*)(const runnable_jni::Context&,modern_field_metadata::FieldMetadata&,source_handle_roots::Service&,modern_field_storage::Service&);
 SourceProbe source_probe=nullptr;
@@ -210,6 +212,16 @@ int main(){
   }
   assert(s.BorrowHandle(context,outer->Slot(0),&borrowed)&&borrowed==new_class);
   assert(outer->Get(0)==new_class);
+  // A complete source scope may cross two adjacent readable VM regions.
+  // Different protections force a real region boundary, independently of malloc.
+  const size_t page=size_t(sysconf(_SC_PAGESIZE));
+  auto* mapping=static_cast<unsigned char*>(mmap(nullptr,page*2,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0));assert(mapping!=MAP_FAILED);
+  auto* split_scope=mapping+page-80;OriginalHeader split_header{Top(),32};std::memcpy(split_scope,&split_header,sizeof(split_header));if(sized_scope)Put32(split_scope,12,32);Put32(split_scope,OriginalReferences(),uint32_t(uintptr_t(old_class)));
+  assert(mprotect(mapping+page,page,PROT_READ)==0);size_t first_extent=0;assert(method_identity::ReadableMappingExtent(split_scope,&first_extent)&&first_extent==80);
+  Publish(split_scope);assert(s.BorrowHandle(context,split_scope+OriginalReferences(),&borrowed)&&borrowed==old_class);
+  assert(mprotect(mapping+page,page,PROT_NONE)==0);borrowed=new_class;assert(!s.BorrowHandle(context,split_scope+OriginalReferences(),&borrowed)&&borrowed==new_class);
+  assert(munmap(mapping+page,page)==0);assert(!s.BorrowHandle(context,split_scope+OriginalReferences(),&borrowed)&&borrowed==new_class);
+  Publish(split_header.previous);assert(munmap(mapping,page)==0);
   // Source allocation has valid mirrors/caches while every initialized and
   // old/new Classes/instances slot is still empty. The final reader cannot be
   // substituted for this actual preallocation Holder phase.

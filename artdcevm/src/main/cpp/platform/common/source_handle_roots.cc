@@ -12,7 +12,15 @@ namespace {
 using namespace abi::arm64::android_common;
 template<class T>T Read(const void* p,size_t at=0){T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value;}
 template<class T>void Write(void* p,size_t at,T value){std::memcpy(static_cast<unsigned char*>(p)+at,&value,sizeof(value));}
-bool Mapped(const void* p,size_t n){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=n;}
+// A real native allocation can span adjacent readable VM regions (notably
+// ASan allocator arenas). Prove every byte, not just the first region. A hole,
+// unreadable region or overflow refuses; no object/slot authority comes from it.
+bool Mapped(const void* p,size_t n){
+ uintptr_t address=reinterpret_cast<uintptr_t>(p);if(!address||!n||n>UINTPTR_MAX-address)return false;
+ while(n){size_t extent=0;if(!method_identity::ReadableMappingExtent(reinterpret_cast<void*>(address),&extent)||!extent)return false;
+  if(extent>=n)return true;address+=extent;n-=extent;
+ }return true;
+}
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
 void Require(bool value){if(!value)std::abort();}
 struct Check final:HandleRootVisitor {
