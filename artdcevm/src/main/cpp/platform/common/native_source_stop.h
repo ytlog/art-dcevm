@@ -14,16 +14,22 @@ struct NativeHooks;
 // Install one shared observer/transfer for the original empty native
 // ScopedSuspendAll carrier. Never install a second hook at these same leaves.
 bool Install(HookEngine&,std::string* error);
+// Optional real StartGC C++ scope bridge; never installs a second StartGC hook.
+bool InstallOriginalWaitingScope(HookEngine&,std::string* error);
 class Service {
  public:
-  // Binding supports passive legacy observation without a pure pair. Authorize
-  // and Begin still require that complete independently calibrated pair.
+  // Binding supports passive observation without a pure pair. A continuous
+  // source reservation needs either that pair or the independently calibrated
+  // original WaitingGC C++ scope; symbol presence grants neither capability.
   // heap is the independent actual runtime receiver; thread_state is calibrated
   // from original native/public observations, never selected by an API number.
   static bool Bind(HookEngine&,void* heap,const thread_suspend_service::Service& thread_state,
                    Service*,std::string* error);
   bool Authorize(const Calibration&,const void* exact_original_run) noexcept;
   bool Calibrated()const noexcept{return calibrated_;}
+  bool CalibrateOriginalWaiting(void* self,size_t mapped_extent,std::string* error);
+  bool OriginalWaitingCalibrated()const noexcept{return waiting_calibrated_;}
+  bool RequiresOriginalWaiting()const noexcept{return !state_.CanTransitionRunnable();}
   bool DexPublicationCalibrated()const noexcept{return publication_calibrated_;}
   // Borrow only the actual original final carrier; requires no direct transition pair.
   bool AuthorizeOriginalFinal(const Calibration&,const void* exact_original_run) noexcept;
@@ -38,6 +44,7 @@ class Service {
   abi::arm64::android_common::SuspendConstruct stop_=nullptr;
   abi::arm64::android_common::SuspendDestroy resume_=nullptr;
   thread_suspend_service::Service state_;
+  bool waiting_calibrated_=false;void* waiting_mutex_=nullptr;
   bool publication_calibrated_=false;void* publication_linker_=nullptr;
   uint32_t publication_gc_pairs_=0;int32_t publication_collector_=0;
   friend class Session;friend class Observation;friend class Calibration;
@@ -114,6 +121,11 @@ class Session {
   ~Session();
   Session(const Session&)=delete;Session& operator=(const Session&)=delete;
   bool Begin(void* self,size_t mapped_extent) noexcept;
+  // prepare runs synchronously in the ORIGINAL WaitingGC scope, with real SSA
+  // exclusive ownership. It must return true only after ContinueSource. All
+  // refusal/resume/FinishGC completes before original C++ restores Runnable.
+  bool BeginOriginalWaiting(void* self,size_t mapped_extent,void* owner,
+      bool (*prepare)(void*,Session&) noexcept) noexcept;
   bool PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
       native_source_gc_publication::Matcher,std::string* error);
   bool CanPublishDex(void* driver,const void* holder,void* linker)const noexcept;
@@ -151,13 +163,14 @@ class Session {
   enum class Phase {kEmpty,kStopped,kContinuing,kFinal,kFinalResumed,kCompleted,kRolledBack,kOriginalPrepared,kOriginalArmed,kOriginalDisabled,kOriginalClosing};
   bool SameOwner()const noexcept;
   bool Native()const noexcept;
+  bool StoppedState()const noexcept;
   bool MatchPublication(void*,void*,void*,size_t*)const noexcept;
   void Rollback() noexcept;
   Service service_;void* self_=nullptr;size_t extent_=0;
   abi::arm64::android_common::SuspendAll storage_{};
   void* source_carrier_=nullptr;
   Phase phase_=Phase::kEmpty;bool gc_=false,suspended_=false,exclusive_=false,source_disable_=false;
-  bool borrowed_=false,borrowed_failed_=false;
+  bool borrowed_=false,borrowed_failed_=false,waiting_window_=false;
   void* original_driver_=nullptr;const void* original_holder_=nullptr;
   void* publication_driver_=nullptr;const void* publication_holder_=nullptr;void* publication_linker_=nullptr;
   native_source_gc_publication::Matcher publication_matcher_{};
