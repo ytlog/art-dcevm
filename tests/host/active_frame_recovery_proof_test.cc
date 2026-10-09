@@ -119,6 +119,21 @@ void Check(Family f){family=f;Reset();Service service;
  auto result=run();assert(result.failure==Failure::kNone && result.frames==3 && result.references==3 && result.integers==3 && result.location_reads==6 && result.dex_pc_checks==3 && result.inline_flag_checks==2);
  assert(creates==1 && resets==1 && destroys==1);if(f==Family::kAndroid11)assert(reference_fast11==3);
  assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
+ // Real nondebuggable compiler states: actual inline metadata without a vreg
+ // map must never count as a recovered frame, nor as a wrong CodeItem size.
+ stack[7]=0;auto omitted=run();
+ assert(omitted.failure==Failure::kDecodedMap && omitted.frames==0 &&
+        !omitted.register_range_observed && omitted.inline_matches==1);
+ assert(std::strcmp(omitted.detail,"native-stack-map-has-no-dex-register-map")==0);
+ stack[7]=1;
+ auto outer_count=inlines[5],inner_count=inlines[11];inlines[5]=inlines[11]=3;
+ auto empty_inline=run();assert(empty_inline.failure==Failure::kDecodedMap &&
+   empty_inline.register_range_observed && empty_inline.native_carrier_registers==2 &&
+   empty_inline.decoded_register_first==2 && empty_inline.decoded_register_count==0 &&
+   empty_inline.expected_registers==2 && empty_inline.frames==0);
+ assert(std::strcmp(empty_inline.detail,"decoded-vreg-count-does-not-match-actual-CodeItem")==0);
+ inlines[5]=outer_count;inlines[11]=inner_count;
+
  physical_inlinees=true;auto separated=run();assert(separated.failure==Failure::kMissingFrames && separated.physical_matches==3 && separated.inline_matches==0 && separated.matched_mask==7 && separated.frames==1);assert(std::strcmp(separated.detail,"missing-actual-inlinees-physical-fixture-frames-observed")==0);physical_inlinees=false;
  Service inline_header;missing=nullptr;bool fallback_bound=Service::Bind(f,Finder{"_ZNK3art20OatQuickMethodHeader8ContainsEm"},&inline_header,&missing);
  if(f==Family::kAndroid11){

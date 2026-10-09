@@ -19,6 +19,9 @@ enum class Failure {kMissingBinding,kMissingContext,kMissingOracle,kWalk,kMissin
   kFrameIdentity,kCodeOwnership,kDecodedMap,kTableMemory,kDexPc,kInlineFlag,kReferenceMask,kNativeRead,kValueMismatch,kNone};
 struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,matched_mask=0,physical_matches=0,inline_matches=0,header_checks=0;
   uint32_t constructor_context_echo_mask=0;
+  uint32_t map_row=0,inline_begin=0,inline_end=0,native_carrier_registers=0,
+           decoded_register_first=0,decoded_register_count=0,expected_registers=0;
+  bool register_range_observed=false;
   Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
@@ -240,8 +243,22 @@ class Service {
       if(!decoded || decoded_pc!=f->expected_dex_pc ||
          service.dex_pc_(this,false)!=f->expected_dex_pc)return Fail(Failure::kDexPc,"native-decoded-independent-invoke-DexPc-mismatch");
       ++report.dex_pc_checks;
-      if(!decoded_frame_recovery::Decode(view,map.row,this->inline_frames.begin.row,this->inline_frames.end.row,scratch,capacity,&range) ||
-         range.count!=f->registers)return Fail(Failure::kDecodedMap,"decoded-vreg-count-does-not-match-actual-CodeItem");
+      report.map_row=map.row;report.inline_begin=this->inline_frames.begin.row;
+      report.inline_end=this->inline_frames.end.row;report.native_carrier_registers=view.dex_regs;
+      report.expected_registers=f->registers;report.register_range_observed=false;
+      uint32_t register_map;
+      if(!view.StackMaps().Read(map.row,7,&register_map))
+        return Fail(Failure::kDecodedMap,"native-dex-register-map-index-unreadable");
+      if(register_map==UINT32_MAX)
+        return Fail(Failure::kDecodedMap,"native-stack-map-has-no-dex-register-map");
+      if(!decoded_frame_recovery::Range(view,map.row,report.inline_begin,report.inline_end,&range))
+        return Fail(Failure::kDecodedMap,"decoded-inline-register-range-invalid");
+      report.register_range_observed=true;report.decoded_register_first=range.first;
+      report.decoded_register_count=range.count;
+      if(range.count!=f->registers)
+        return Fail(Failure::kDecodedMap,"decoded-vreg-count-does-not-match-actual-CodeItem");
+      if(!decoded_frame_recovery::Decode(view,map.row,report.inline_begin,report.inline_end,scratch,capacity,&range))
+        return Fail(Failure::kDecodedMap,"decoded-vreg-locations-invalid");
       if(info->frame_size>UINT32_MAX/16)return Fail(Failure::kDecodedMap,"decoded-frame-size-overflow");
       const uint32_t bytes=info->frame_size*16;
       for(size_t i=0;i<f->count;++i){const auto& witness=f->witnesses[i];const auto location=scratch[witness.vreg];

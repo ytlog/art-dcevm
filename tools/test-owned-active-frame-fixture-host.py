@@ -22,11 +22,21 @@ assert report['matchedMethodMask']==7 and report['physicalMethodMatches']==3 and
 assert report['stage']=='missing-actual-inlinees-physical-fixture-frames-observed'
 assert report['attempts'][0]['bound'] is False and report['attempts'][0]['missingSymbol']=='_missing_named_leaf'
 assert report['attempts'][1]['sourceDeclaration']=='fixed17-CodeInfo368-Visitor520-slow-bool' and report['attempts'][1]['bound'] is True
+assert report['attempts'][1]['registerRangeObserved'] is False
+assert report['attempts'][1]['expectedRegisters']==0 and report['attempts'][1]['decodedRegisterCount']==0
 print('Actual native diagnostic serializer: exact missing leaf, source declaration, callback progress and separate physical inlinees retained without granting proof')
 with tempfile.TemporaryDirectory() as temp:
  p=pathlib.Path(temp);stub=p/'org/json/JSONObject.java';stub.parent.mkdir(parents=True);stub.write_text('package org.json;public class JSONObject {public JSONObject(String s){}public boolean getBoolean(String k){return false;}public int getInt(String k){return 0;}public JSONObject put(String k,Object v){return this;}}')
  src=root/'app/src/debug/java/com/github/ytlog/artdcevm/testing'
  sources=[src/name for name in ['MethodDexOracle.java','ActiveFrameDexOracle.java','OwnedActiveFrameFixture.java','OwnedActiveFrameCalibration.java']]
  subprocess.run([str(java/'bin/javac'),'-d',str(p),*[str(s) for s in sources],str(stub),str(root/'tests/host/ActiveFrameDexOracleTest.java')],check=True)
+ bytecode=subprocess.run([str(java/'bin/javap'),'-p','-c','-classpath',str(p),'com.github.ytlog.artdcevm.testing.OwnedActiveFrameFixture'],capture_output=True,text=True,check=True).stdout
+ carrier=bytecode.split('public static int carrier(',1)[1].split('public static int inlinee1(',1)[0]
+ inlinees=bytecode.split('public static int inlinee1(',1)[1].split('private com.github',1)[0]
+ assert 'monitorenter' in carrier and carrier.count('monitorexit')>=2
+ assert 'Method inlinee1:' in carrier and 'monitorenter' not in inlinees
+ assert 'Method inlinee2:' in inlinees and 'Method awaitGate:' in inlinees
+ (out/'fixture-bytecode.txt').write_text(bytecode)
+ print('Actual compiled fixture: shared monitor spans child call; both static inlinees and native blocking gate retained')
  dex=subprocess.run([str(java/'bin/java'),'-cp',str(p),'com.github.ytlog.artdcevm.testing.ActiveFrameDexOracleTest'],capture_output=True,text=True);(out/'dex-codeitem.log').write_text(dex.stdout+dex.stderr);dex.check_returncode();print(dex.stdout.strip())
 print('Owned active fixture host validation passed; actual inline/register/root device evidence is still required')

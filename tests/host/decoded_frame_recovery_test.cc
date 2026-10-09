@@ -58,6 +58,13 @@ template<class T> void Check(code_info_view::SourceFamily family) {
   assert(values[0].kind==5 && values[0].value==7 && values[1].kind==-1); // omitted bit => None
   assert(!Decode(view,2,0,0,values,4,&range));
   assert(!Decode(view,1,0,2,values,4,&range));
+  // Source EmitEnvironment(needs_vreg_info=false) may preserve real inline
+  // identity while contributing zero registers. Decode never manufactures
+  // CodeItem-sized locations for this legitimate empty inline range.
+  fixture.inline_info.Cell(0,48,5,2);view=fixture.View();
+  assert(Range(view,1,0,1,&range) && range.first==2 && range.count==0);
+  assert(Decode(view,1,0,1,nullptr,0,&range) && range.count==0);
+  fixture.inline_info.Cell(0,48,5,4);view=fixture.View();
   assert(!Decode(view,1,2,1,values,4,&range));
   assert(!Decode(view,1,0,0,nullptr,4,&range));
   assert(!Decode(view,1,0,0,values,1,&range));

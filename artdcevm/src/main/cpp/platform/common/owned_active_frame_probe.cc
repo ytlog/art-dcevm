@@ -115,6 +115,11 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<"\",\"walkCallbacks\":"<<attempt.report.callbacks<<",\"matchedMethodMask\":"<<attempt.report.matched_mask
    <<",\"physicalMethodMatches\":"<<attempt.report.physical_matches<<",\"inlineMethodMatches\":"<<attempt.report.inline_matches
    <<",\"constructorContextEchoMask\":"<<attempt.report.constructor_context_echo_mask
+   <<",\"mapRow\":"<<attempt.report.map_row<<",\"inlineBegin\":"<<attempt.report.inline_begin
+   <<",\"inlineEnd\":"<<attempt.report.inline_end<<",\"nativeCarrierRegisters\":"<<attempt.report.native_carrier_registers
+   <<",\"registerRangeObserved\":"<<(attempt.report.register_range_observed?"true":"false")
+   <<",\"decodedRegisterFirst\":"<<attempt.report.decoded_register_first<<",\"decodedRegisterCount\":"<<attempt.report.decoded_register_count
+   <<",\"expectedRegisters\":"<<attempt.report.expected_registers
    <<",\"frames\":"<<attempt.report.frames<<'}';}
  out<<"]}";return out.str();}
 }
