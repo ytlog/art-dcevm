@@ -136,6 +136,7 @@ bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* 
 bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schema.descriptor&&a.schema.access==b.schema.access&&MembersEqual(a.schema.fields,b.schema.fields)&&MembersEqual(a.schema.methods,b.schema.methods)&&a.method_ids==b.method_ids&&a.field_ids==b.field_ids;}
 }
 struct Verifier::State {
+ const modern_field_metadata::ReadContext* stopped_context=nullptr;
  Bindings bindings{};std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
@@ -191,7 +192,7 @@ struct Verifier::State {
    if(!success&&error&&!error->empty()){char suffix[64];std::snprintf(suffix,sizeof(suffix)," [mappingOsQueries=%llu]",static_cast<unsigned long long>(method_identity::MappingOsQueries()-before));try{error->append(suffix);}catch(const std::bad_alloc&){}}
   }} diagnostics{error,method_identity::MappingOsQueries()};
   const modern_field_metadata::ReadContext read_context{bindings.owner,bindings.extent};
-  const auto* context=bindings.extent?&read_context:nullptr;
+  const auto* context=stopped_context?stopped_context:bindings.extent?&read_context:nullptr;
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_native_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
   Snapshot result;result.classes.resize(nodes.size());result.loaders.resize(nodes.size());result.parents.resize(nodes.size(),absent);result.declared.resize(nodes.size());result.all_methods.resize(nodes.size());
@@ -549,6 +550,15 @@ bool Verifier::VerifyBatch(const source_commit::Plan& transaction,const std::vec
  struct Release {State& state;~Release(){state.batch_snapshot=nullptr;}} release{s};
  for(const auto& request:requests)if(!Verify(transaction,request.class_pair,request.loader,request.requirement,error))return false;
  return true;
+}
+
+bool Verifier::UseStoppedReadContext(const modern_field_metadata::ReadContext* context) noexcept {
+ auto& s=*state_;size_t extent=0;
+ if(!context||!context->extent||!context->owner||!s.frozen||!s.sealed||
+    !redefinition_gate::Owned(s.bindings.vm)||s.expected.old_classes.empty()||
+    (s.stopped_context&&s.stopped_context!=context)||
+    !context->extent(context->owner,s.expected.old_classes.front(),&extent)||!extent)return false;
+ s.stopped_context=context;return true;
 }
 
 bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,std::string* error){

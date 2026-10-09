@@ -84,6 +84,10 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   bool VerifyBatch(const source_commit::Plan&,const std::vector<native_schema_policy::GuardRequest>&,std::string*)const override;
   void BeginCommit(const source_commit::Plan&)const override;
   bool CollectManagedRoots(const prepared_roots::Registrar&,std::string*);
+  // Borrowed for this synchronous Run only, after ordinary registration froze
+  // native slots. Its extent callback must prove the actual current stop owner;
+  // denial remains authoritative and never falls back to OS discovery.
+  bool UseStoppedReadContext(const modern_field_metadata::ReadContext*) noexcept;
   bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;
   bool RefreshManagedRoots(const source_commit::Plan&,const prepared_roots::Resolver&) noexcept;
   // Ordinary JNI, after the transaction gate is released; no permanent Class
