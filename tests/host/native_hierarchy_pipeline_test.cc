@@ -3,6 +3,7 @@
 #include "platform/common/native_hierarchy_allocator.h"
 #include "platform/common/native_hierarchy_receiver.h"
 #include "platform/common/native_hierarchy_source_checks.h"
+#include "platform/common/native_class_lookup.h"
 #include "platform/common/native_hierarchy_source_cache.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_cache_lookup.h"
@@ -33,6 +34,20 @@ jboolean Holds(JNIEnv*,jclass,jmethodID id,va_list args){Jni();assert(id==reinte
 class SourceHooks:public RootHooks {public:void*FindSymbol(const char*lib,const char*n)override{if(std::strstr(n,"Class13GetDescriptor"))return reinterpret_cast<void*>(SourceDescriptor);if(std::strstr(n,"MonitorEnter"))return reinterpret_cast<void*>(Enter);if(std::strstr(n,"MonitorExit"))return reinterpret_cast<void*>(Exit);return RootHooks::FindSymbol(lib,n);}};
 abi::arm64::android11::ReleaseObjectPointer OriginalFind(void*linker_arg,void*self,const char*d,void*loader){assert(linker_arg==&linker&&self==thread.data()&&!Read32(loader));if(allocated==2&&!relocated_new&&subject_descriptor==d){relocated_new=heap.New(160);std::memcpy(relocated_new,new_class,160);MoveRoots mover;mover.old_value=uint32_t(uintptr_t(new_class));mover.next_value=uint32_t(uintptr_t(relocated_new));OriginalRoots(self,&mover,0);}
  for(const auto&c:public_classes)if(c.descriptor==d)return {uintptr_t(c.native)};return {0};}
+
+const runnable_jni::Context*lookup_context=nullptr;const native_class_lookup::Service*lookup_service=nullptr;
+abi::arm64::android11::ReleaseObjectPointer LookupBridge(void*l,void*self,const char*d,void*loader){assert(l==&linker&&lookup_context&&self==lookup_context->self&&lookup_service);return lookup_service->Find(*lookup_context,d,loader);}
+abi::arm64::android11::ReleaseObjectPointer PlainFind(void*l,void*self,const char*d,const void*loader){return OriginalFind(l,self,d,const_cast<void*>(loader));}
+bool lookup_wrong=false;uint32_t LookupHash(const char*d){assert(d&&*d);return 0xabcdefu;}
+abi::arm64::android11::ReleaseObjectPointer HashedFind(void*l,void*self,const char*d,size_t hash,const void*loader){assert(hash==LookupHash(d));return lookup_wrong?abi::arm64::android11::ReleaseObjectPointer{uintptr_t(parent_class)}:OriginalFind(l,self,d,const_cast<void*>(loader));}
+class LookupHooks final:public SourceHooks {public:bool hashed=false,missing_hash=false;
+ void*FindSymbol(const char*lib,const char*n)override{
+  if(std::strstr(n,"ClassLinker9FindClassEPNS_6ThreadEPKcNS_6Handle"))return hashed?nullptr:reinterpret_cast<void*>(PlainFind);
+  if(std::strstr(n,"ClassLinker9FindClassEPNS_6ThreadEPKcmNS_6Handle"))return hashed?reinterpret_cast<void*>(HashedFind):nullptr;
+  if(std::strstr(n,"ComputeModifiedUtf8HashEPKc"))return missing_hash?nullptr:reinterpret_cast<void*>(LookupHash);
+  return SourceHooks::FindSymbol(lib,n);
+ }
+};
 void OriginalLoad(void*l,void*self,const void*,const void*,const void*){assert(l==&linker&&self==thread.data());}
 bool OriginalIds(const void*){return true;}
 void Failure(void*owner,int code,const char*message)noexcept{assert(owner==&actual_owner);std::cerr<<"source failure "<<code<<": "<<message<<"\n";}
@@ -120,6 +135,10 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
   SourceHooks hooks;native_hierarchy_allocator::Service allocation;runtime_services::Snapshot runtime;runtime.receivers.class_linker=&linker;
   assert(native_hierarchy_allocator::Service::Bind(hooks,*d.metadata,*d.roots,runtime,&allocation,&error));assert(allocation.SetOriginals({OriginalAllocate,OriginalFind,OriginalIds,Failure,Retire,OriginalLoad},&error));allocator_service=&allocation;root_service=d.roots;
   table.GetStaticMethodID=StaticMethod;table.CallStaticBooleanMethodV=Holds;assert(allocation.CalibrateRetirement(context,reinterpret_cast<jobject>(old_class),&error));
+  LookupHooks lookup_hooks;native_class_lookup::Service plain_lookup,hashed_lookup,unbound;assert(native_class_lookup::Service::Bind(lookup_hooks,runtime,&plain_lookup,&error));assert(!plain_lookup.Find(context,subject_descriptor.c_str(),array_root).reference);assert(plain_lookup.Calibrate(context,reinterpret_cast<jclass>(old_class),*d.metadata,*d.roots,&error));
+  auto*loader=pool.Add(nullptr,&error);assert(plain_lookup.Find(context,subject_descriptor.c_str(),loader).reference==uintptr_t(old_class));uint32_t foreign_loader=0;assert(!plain_lookup.Find(context,subject_descriptor.c_str(),&foreign_loader).reference);
+  lookup_hooks.hashed=true;lookup_hooks.missing_hash=true;assert(!native_class_lookup::Service::Bind(lookup_hooks,runtime,&unbound,&error));lookup_hooks.missing_hash=false;assert(native_class_lookup::Service::Bind(lookup_hooks,runtime,&hashed_lookup,&error));lookup_wrong=true;assert(!hashed_lookup.Calibrate(context,reinterpret_cast<jclass>(old_class),*d.metadata,*d.roots,&error));lookup_wrong=false;assert(hashed_lookup.Calibrate(context,reinterpret_cast<jclass>(old_class),*d.metadata,*d.roots,&error));assert(hashed_lookup.Find(context,subject_descriptor.c_str(),loader).reference==uintptr_t(old_class));lookup_context=&context;lookup_service=&hashed_lookup;assert(allocation.SetOriginals({OriginalAllocate,LookupBridge,OriginalIds,Failure,Retire,OriginalLoad},&error));
+
   auto*old_root=pool.Add(old_class,&error),*parent_root=pool.Add(base,&error),*cache_root=pool.Add(cache,&error);selected_parent=base;
   assert(allocation.ObserveOriginal(context,reinterpret_cast<jobject>(old_class),&actual_owner,old_root,parent_root,cache_root,0,&error)==new_class);assert(allocated==1);
   native_hierarchy_source_cache::AllocatorBatchAccess access(pool);SourceOwners source_owners(context,pool);native_hierarchy_source_cache::Mapper mapper(context,pool,*d.metadata,*d.storage,access,&source_owners);
