@@ -1,4 +1,6 @@
 #include "platform/common/source_cache_resolution.h"
+#include "platform/common/native_hierarchy_cache.h"
+#include "platform/common/method_cache_lookup.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
@@ -6,61 +8,115 @@ using namespace artdcevm;
 using namespace source_cache_resolution;
 namespace fixed=abi::arm64::android_common;
 struct Fixture final:Roots {
+ type_cache::Dual cache_object{};
+ type_cache::Pair types[1024]{};
+ method_cache::SequencePair fields[1024]{},methods[1024]{};
+ Fixture(){cache_object.types=uintptr_t(types);cache_object.fields=uintptr_t(fields);cache_object.methods=uintptr_t(methods);
+  fields[1].key.store(1);fields[1].method.store(0x4440);}
+
  uint32_t cache=0x1000,klass=0x2000,loader=0x3000;
  uint32_t actual_cache=0x1000,actual_loader=0x3000;
  uint64_t field_key=1,method_key=3,type_key=2;
  void* field_value=reinterpret_cast<void*>(0x4440);
  void* method_value=reinterpret_cast<void*>(0x5550);
- bool exception=false,foreign_field=false,foreign_method=false,foreign_type=false,move=false;
+ bool exception=false,foreign_field=false,foreign_method=false,foreign_type=false,move=false,class_field=false,move_in_snapshot=false,skip_field_cache=false;
  mutable unsigned checks=0,descriptions=0;unsigned calls=0;
  Witness witness()const{return {&cache,&klass,&loader,1026,1025,2051,reinterpret_cast<void*>(0x8440),reinterpret_cast<void*>(0x9550)};}
- bool Snapshot(const Witness&w,void**out,std::string*error)const override {
+ bool Snapshot(const Witness&w,Objects*out,std::string*error)const override {
   ++checks;
   if(exception||w.cache_slot!=&cache||w.class_slot!=&klass||w.loader_slot!=&loader||cache!=actual_cache||loader!=actual_loader){if(error)*error="namespace/exception refused";return false;}
-  *out=reinterpret_cast<void*>(uintptr_t(klass));return true;
+  if(move_in_snapshot&&checks==2)const_cast<Fixture*>(this)->klass=0x6000;
+  *out={reinterpret_cast<void*>(uintptr_t(klass)),reinterpret_cast<void*>(uintptr_t(cache)),reinterpret_cast<void*>(uintptr_t(loader))};return true;
  }
  std::string DescribeField(const Witness&,void*returned)const override{
-  ++descriptions;assert(!exception&&returned==reinterpret_cast<void*>(0x8888));
+  ++descriptions;if(!returned)return " member=null";assert(!exception&&(returned==reinterpret_cast<void*>(0x8888)||(class_field&&returned==reinterpret_cast<void*>(uintptr_t(klass)))));
   return " member=outside-public-Class-native-arrays";
  }
 }*active;
 void Check(void*l,const void*c,const void*d){assert(l==active&&c==&active->cache&&d==&active->loader);++active->calls;}
-void* Field(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==1025);active->field_key=id;active->field_value=reinterpret_cast<void*>(0x8440);return active->foreign_field?reinterpret_cast<void*>(0x8888):active->field_value;}
-void* Method(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==2051);active->method_key=id;active->method_value=reinterpret_cast<void*>(0x9550);return active->foreign_method?nullptr:active->method_value;}
-abi::arm64::android11::ReleaseObjectPointer Type(void*l,fixed::CacheTypeIndex id,const void*c,const void*d){Check(l,c,d);assert(id.index==1026);active->type_key=id.index;if(active->move)active->klass=0x6000;return {active->foreign_type?uintptr_t(0x9000):uintptr_t(active->klass)};}
+void* Field(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==1025);active->field_key=id;active->field_value=reinterpret_cast<void*>(0x8440);if(!active->skip_field_cache){active->fields[id%1024].key.store((uint64_t{2}<<32)|id);active->fields[id%1024].method.store(uintptr_t(active->field_value));}return active->class_field?reinterpret_cast<void*>(uintptr_t(active->klass)):active->foreign_field?reinterpret_cast<void*>(0x8888):active->field_value;}
+void* Method(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==2051);active->method_key=id;active->method_value=reinterpret_cast<void*>(0x9550);active->methods[id%1024].key.store((uint64_t{2}<<32)|id);active->methods[id%1024].method.store(uintptr_t(active->method_value));return active->foreign_method?nullptr:active->method_value;}
+abi::arm64::android11::ReleaseObjectPointer Type(void*l,fixed::CacheTypeIndex id,const void*c,const void*d){Check(l,c,d);assert(id.index==1026);active->type_key=id.index;if(active->move)active->klass=0x6000;active->types[id.index%1024]={active->klass,id.index};return {active->foreign_type?uintptr_t(0x9000):uintptr_t(active->klass)};}
+void* ClassField(void*l,abi::arm64::android11::ReleaseObjectPointer c,
+ abi::arm64::android11::ReleaseObjectPointer d,abi::arm64::android11::ReleaseObjectPointer loader,uint32_t index,bool is_static){
+ assert(l==active&&c.reference==active->klass&&d.reference==active->cache&&loader.reference==active->loader);
+ if(is_static){++active->calls;return nullptr;}return Field(l,index,&active->cache,&active->loader);
+}
 struct Hooks final:HookEngine {
- bool legacy=false,missing=false,throw_field=false,aliased=false;
+ bool legacy=false,missing=false,throw_field=false,aliased=false,class_specific=true;
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*lib,const char*name)override{
   assert(!strcmp(lib,"libart.so"));
   if(!strcmp(name,"_ZN3art11ClassLinker13DoResolveTypeENS_3dex9TypeIndexENS_6HandleINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"))return reinterpret_cast<void*>(Type);
+  if(!strcmp(name,"_ZN3art11ClassLinker17FindResolvedFieldENS_6ObjPtrINS_6mirror5ClassEEENS1_INS2_8DexCacheEEENS1_INS2_11ClassLoaderEEEjb"))return !class_specific||missing?nullptr:aliased?reinterpret_cast<void*>(Type):reinterpret_cast<void*>(throw_field?ThrowClassField:ClassField);
   if(!strcmp(name,"_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return missing?nullptr:aliased?reinterpret_cast<void*>(Type):reinterpret_cast<void*>(throw_field?ThrowField:Field);
   if(!strcmp(name,"_ZN3art11ClassLinker15ResolveMethodIdEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return legacy?nullptr:reinterpret_cast<void*>(Method);
   if(!strcmp(name,"_ZN3art11ClassLinker30ResolveMethodWithoutInvokeTypeEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return legacy?reinterpret_cast<void*>(Method):nullptr;
   assert(false);return nullptr;
  }
+ static void* ThrowClassField(void*l,abi::arm64::android11::ReleaseObjectPointer c,abi::arm64::android11::ReleaseObjectPointer d,abi::arm64::android11::ReleaseObjectPointer loader,uint32_t index,bool is_static){auto*r=ClassField(l,c,d,loader,index,is_static);active->exception=true;return r;}
  static void* ThrowField(void*l,uint32_t id,const void*c,const void*d){auto*r=Field(l,id,c,d);active->exception=true;return r;}
  void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}
  bool Remove(void*,std::string*)override{assert(false);return false;}
 };
+
+struct Mapper final:native_hierarchy_cache::SourceMapper {
+ Fixture&f;explicit Mapper(Fixture&fixture):f(fixture){}
+ void* Get(void*root)const noexcept override{return root==&f.cache?static_cast<void*>(&f.cache_object):root==&f.klass?reinterpret_cast<void*>(uintptr_t(f.klass)):nullptr;}
+ bool Readable(const void*ptr,size_t size)const noexcept override{
+  auto has=[&](const void*base,size_t n){auto a=uintptr_t(ptr),b=uintptr_t(base);return a>=b&&a-b<=n&&size<=n-(a-b);};
+  return has(&f.cache_object,sizeof(f.cache_object))||has(f.types,sizeof(f.types))||has(f.fields,sizeof(f.fields))||has(f.methods,sizeof(f.methods));
+ }
+ bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override{return false;}
+ bool Describe(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source*,std::string*)const override{return false;}
+ bool FindSource(const native_hierarchy_graph::Prepared&,uint32_t,void**,std::string*)const override{return false;}
+ bool OwnsUnpublished(const native_hierarchy_graph::Prepared&,const native_hierarchy_cache::Source&)const noexcept override{return false;}
+ bool Barrier(void*)const noexcept override{return false;}
+ bool RefreshPrepared(native_hierarchy_graph::Prepared*)const noexcept override{return false;}
+ bool VerifyFrozen(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&,const native_hierarchy_cache::Source&)const noexcept override{return false;}
+ bool VerifyCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{return false;}
+ void BeginCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{assert(false);}
+};
+bool CalibrateCache(Fixture&f){Mapper mapper(f);native_hierarchy_cache::Owner owner;std::string error;
+ native_hierarchy_cache::Witness w{1026,1025,2051,&f.klass,reinterpret_cast<void*>(0x8440),reinterpret_cast<void*>(0x9550)};
+ return owner.Calibrate(mapper,&f.cache,sizeof(f.cache_object),{1033,1026,2056},w,&error);
+}
 int main(){
- for(bool legacy:{false,true}){
-  Fixture f;active=&f;Hooks hooks;hooks.legacy=legacy;Service service;std::string e;
+ for(bool class_specific:{false,true})for(bool legacy:{false,true}){
+  Fixture f;active=&f;Hooks hooks;hooks.legacy=legacy;hooks.class_specific=class_specific;Service service;std::string e;
   assert(Service::Bind(hooks,&f,&service,&e));
   // Cache warming was displaced by another public declaration in slot 1.
-  assert(f.field_key==1&&f.field_value!=f.witness().field);
-  assert(service.Resolve(f.witness(),f,&e)&&f.calls==3&&f.checks==4);
+  assert(f.field_key==1&&f.field_value!=f.witness().field&&!CalibrateCache(f));
+  assert(service.Resolve(f.witness(),f,&e)&&f.calls==3&&f.checks==4&&CalibrateCache(f));
+  f.fields[1].key.store((uint64_t{2}<<32)|1);assert(!CalibrateCache(f));
+  assert(service.Resolve(f.witness(),f,&e)&&CalibrateCache(f));
   assert(f.field_key==1025&&f.method_key==2051&&f.type_key==1026&&f.field_value==f.witness().field&&f.method_value==f.witness().method);
   f.move=true;assert(service.Resolve(f.witness(),f,&e)&&f.klass==0x6000);
-  for(int bad=0;bad<6;++bad){
-   Fixture failed;active=&failed;Hooks h;h.legacy=legacy;h.throw_field=bad==5;Service s;assert(Service::Bind(h,&failed,&s,&e));
+  for(int bad=0;bad<7;++bad){
+   Fixture failed;active=&failed;Hooks h;h.legacy=legacy;h.class_specific=class_specific;h.throw_field=bad==5;Service s;assert(Service::Bind(h,&failed,&s,&e));
    if(bad==0)failed.loader=0x3333;if(bad==1)failed.cache=0x1111;
-   failed.foreign_field=bad==2;failed.foreign_method=bad==3;failed.foreign_type=bad==4;
+   failed.foreign_field=bad==2;failed.foreign_method=bad==3;failed.foreign_type=bad==4;failed.class_field=bad==6;
    assert(!s.Resolve(failed.witness(),failed,&e));
-   if(bad==2)assert(e.find("idx=1025 expected=")!=std::string::npos&&e.find("actual=0x8888")!=std::string::npos&&e.find("outside-public-Class-native-arrays")!=std::string::npos);
-   assert(failed.descriptions==(bad==2?1u:0u));
-   assert(failed.calls==(bad<2?0:bad==2||bad==5?1:bad==3?2:3));
+   if(bad==2)assert(e.find("idx=1025 expected=")!=std::string::npos&&e.find("pre=0x8888 post=0x8888 preExact=0")!=std::string::npos&&e.find("outside-public-Class-native-arrays")!=std::string::npos);
+   if(bad==6)assert(e.find("pre=0x2000 post=0x2000 preExact=0")!=std::string::npos);
+   assert(failed.descriptions==(bad==2||bad==6?1u:0u));
+   assert(failed.calls==(bad<2?0:bad==2||bad==5||bad==6?1:bad==3?2:3));
   }
+ }
+ {Fixture moved;active=&moved;moved.move_in_snapshot=true;Hooks h;Service s;std::string e;
+  assert(Service::Bind(h,&moved,&s,&e)&&s.Resolve(moved.witness(),moved,&e));
+  assert(moved.klass==0x6000&&moved.field_value==moved.witness().field&&moved.calls==3);
+ }
+ {Fixture no_side_effect;active=&no_side_effect;no_side_effect.skip_field_cache=true;Hooks h;Service s;std::string e;
+  assert(Service::Bind(h,&no_side_effect,&s,&e)&&s.Resolve(no_side_effect.witness(),no_side_effect,&e));
+  assert(!CalibrateCache(no_side_effect)); // Exact return alone cannot grant format/table authority.
+ }
+ {Fixture bad_static;active=&bad_static;Hooks h;Service s;std::string e;auto w=bad_static.witness();w.field_static=true;
+  assert(Service::Bind(h,&bad_static,&s,&e)&&!s.Resolve(w,bad_static,&e)&&bad_static.calls==1);
+  assert(!CalibrateCache(bad_static));
+ }
+ {Fixture boot;active=&boot;boot.loader=boot.actual_loader=0;Hooks h;Service s;std::string e;
+  assert(Service::Bind(h,&boot,&s,&e)&&s.Resolve(boot.witness(),boot,&e)&&CalibrateCache(boot));
  }
  Hooks h;Fixture f;active=&f;Service s;std::string e;h.missing=true;assert(!Service::Bind(h,&f,&s,&e));
  h.missing=false;h.aliased=true;assert(!Service::Bind(h,&f,&s,&e)&&f.calls==0);h.aliased=false;assert(!Service::Bind(h,nullptr,&s,&e));assert(Service::Bind(h,&f,&s,&e));

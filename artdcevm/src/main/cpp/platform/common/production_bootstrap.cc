@@ -844,7 +844,7 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
  class Proof final:public source_cache_resolution::Roots {
   public:
    Proof(NativeEngine&engine,const runnable_jni::Context&scope,source_handle_roots::Pool&pool):e(engine),c(scope),p(pool){}
-   bool Snapshot(const source_cache_resolution::Witness&w,void**out,std::string*error)const override{
+   bool Snapshot(const source_cache_resolution::Witness&w,source_cache_resolution::Objects*out,std::string*error)const override{
     if(c.env->ExceptionCheck())return Fail(error,"Original cache resolution raised JNI exception");
     void* cache=nullptr,*klass=nullptr,*loader=nullptr;
     if(c.vm!=e.vm||c.self!=e.graph_current()||!redefinition_gate::Owned(e.vm)||
@@ -854,7 +854,7 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
     if(!e.metadata.ClassIdentity(klass,&identity,error))return false;
     if(identity.loader!=loader||e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)
      return Fail(error,"Cache resolution exact public Class cache/loader namespace changed");
-    *out=klass;return true;
+    *out={klass,cache,loader};return true;
    }
    std::string DescribeField(const source_cache_resolution::Witness&w,void*field)const override{
     void* klass=nullptr;if(!field||!p.Read(w.class_slot,&klass))return " member=null-or-root-unavailable";
@@ -878,7 +878,7 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
   private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;
  } proof(e,scope,pool);
  const auto&w=e.source_cache_witness;
- source_cache_resolution::Witness witness{cache_root,class_root,loader,w.ids.type_index,w.field_index,w.method_index,w.native_field,w.native_method};
+ source_cache_resolution::Witness witness{cache_root,class_root,loader,w.ids.type_index,w.field_index,w.method_index,w.native_field,w.native_method,(w.public_field_modifiers&8u)!=0};
  return e.cache_resolver.Resolve(witness,proof,error);
 }
 struct SourceCacheWitnessRequest {
