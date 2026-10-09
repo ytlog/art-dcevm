@@ -626,6 +626,10 @@ struct NativeEngine final:Engine {
    }
    if(state_proven&&native_source_stop::Install(hooks,&source_stop_diagnostic)&&
       native_source_stop::Service::Bind(hooks,runtime.receivers.heap,state,&candidate,&source_stop_diagnostic)){
+    // Optional canonical bridge is calibrated later at actual ordinary Run
+    // entry; JNI bootstrap remains Native and grants no continuous reservation.
+    if(candidate.RequiresOriginalWaiting())
+     native_source_stop::InstallOriginalWaitingScope(hooks,&source_stop_diagnostic);
     auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
     void* self=current_thread?current_thread():nullptr;size_t extent=0;
     if(self&&method_identity::ReadableMappingExtent(self,&extent)){

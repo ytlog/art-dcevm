@@ -15,8 +15,79 @@ std::mutex installation;bool installed=false;
 a::SuspendConstruct original_stop=nullptr;a::SuspendDestroy original_resume=nullptr;
 s::MutatorOperation original_disable=nullptr,original_enable=nullptr;
 s::StartGC original_start=nullptr;s::FinishGC original_finish=nullptr;
+using WaitGC=int32_t (*)(void*,int32_t,void*);
+WaitGC original_wait=nullptr;
+s::MutatorOperation original_mutex_lock=nullptr,original_mutex_unlock=nullptr;
+bool waiting_installed=false;
+constexpr char kWait[]="_ZN3art2gc4Heap25WaitForGcToCompleteLockedENS0_7GcCauseEPNS_6ThreadE";
+constexpr char kMutexLock[]="_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE";
+constexpr char kMutexUnlock[]="_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE";
+// Fixed thread_state.h: terminated=66, WaitingForGcToComplete=74, in both
+// legacy16 and modern24. Only Runnable encoding changed; no state is written.
+constexpr uint32_t kWaitingGC=74;
+struct WaitingInvocation {
+ const Service* service=nullptr;Session* session=nullptr;void* self=nullptr;
+ size_t extent=0;void* latest_mutex=nullptr;void* frozen_mutex=nullptr;
+ void* expected_mutex=nullptr;void* owner=nullptr;
+ bool (*prepare)(void*,Session&) noexcept=nullptr;
+ unsigned waits=0,unlocks=0;bool inside_wait=false,wait_returned=false;
+ bool valid=true,callback_returned=false,accepted=false,inside_callback=false;
+};
+thread_local WaitingInvocation* waiting_invocation=nullptr;
+
 }
 struct NativeHooks {
+static bool WaitingState(const WaitingInvocation& w,uint32_t desired) noexcept {
+ uint32_t state=UINT32_MAX;
+ return w.service&&w.self&&w.service->current_()==w.self&&
+   w.service->state_.State(w.self,w.extent,&state)&&state==desired;
+}
+static void MutexLock(void* mutex,void* self) {
+ original_mutex_lock(mutex,self);
+ auto* w=waiting_invocation;
+ if(w&&!w->inside_wait&&!w->wait_returned&&self==w->self)w->latest_mutex=mutex;
+}
+static int32_t Wait(void* heap,int32_t cause,void* self) {
+ auto* w=waiting_invocation;
+ if(!w)return original_wait(heap,cause,self);
+ if(w->inside_wait||w->waits||heap!=w->service->heap_||self!=w->self||
+    cause!=s::kInstrumentationCause||!w->latest_mutex||!WaitingState(*w,kWaitingGC)){
+  w->valid=false;return original_wait(heap,cause,self);
+ }
+ w->frozen_mutex=w->latest_mutex;w->inside_wait=true;++w->waits;
+ const int32_t result=original_wait(heap,cause,self);
+ w->inside_wait=false;w->wait_returned=true;
+ if(!WaitingState(*w,kWaitingGC))w->valid=false;
+ return result; // kNone or preceding collection's actual result, unmodified.
+}
+static void MutexUnlock(void* mutex,void* self) {
+ auto* w=waiting_invocation;
+ const bool candidate=w&&w->wait_returned&&!w->inside_wait&&!w->inside_callback&&mutex==w->frozen_mutex&&self==w->self;
+ original_mutex_unlock(mutex,self);
+ if(!candidate)return;
+ // Wait's ConditionVariable may release/reacquire this SAME mutex repeatedly.
+ // Those unlocks happen inside_wait and cannot establish our boundary.
+ if(++w->unlocks!=1||!w->valid||!WaitingState(*w,kWaitingGC)||
+    (w->expected_mutex&&w->expected_mutex!=mutex)){w->valid=false;return;}
+ if(!w->session)return; // Ordinary full-return calibration only.
+ auto& o=*w->session;w->inside_callback=true;
+ o.gc_=true;o.waiting_window_=true;
+ o.service_.stop_(&o.storage_,"artdcevm refundable source frame reservation",true);
+ if(!WaitingState(*w,kWaitingGC))std::abort();
+ o.suspended_=o.exclusive_=true;o.phase_=Session::Phase::kStopped;active=&o;
+ const bool accepted=w->prepare(w->owner,o);w->callback_returned=true;
+ if(accepted){
+  if(o.phase_!=Session::Phase::kContinuing||!o.Reserved()||o.exclusive_||!o.waiting_window_||
+     !WaitingState(*w,kWaitingGC))std::abort();
+  w->accepted=true;
+ }else{
+  if(o.phase_==Session::Phase::kContinuing)std::abort();
+  if(!o.RollbackBeforeSource())std::abort();
+ }
+ o.waiting_window_=false;w->inside_callback=false;
+ // No manual state transition: StartGC's original ScopedThreadStateChange
+ // destructor now restores Runnable using ART checkpoints/flip/barrier logic.
+}
 static void PublicationEnter(native_source_gc_publication::Scope&) noexcept;
 static void PublicationExit(native_source_gc_publication::Scope&) noexcept;
 static bool PublicationStart(void*,void*,int32_t,int32_t) noexcept;
@@ -159,6 +230,45 @@ bool Install(HookEngine& hooks,std::string* error) {
  return installed;
 }
 
+bool InstallOriginalWaitingScope(HookEngine& hooks,std::string* error) {
+ std::lock_guard<std::mutex> guard(installation);if(waiting_installed)return true;
+ if(!installed)return Fail(error,"Original WaitingGC bridge requires shared source observer");
+ struct Binding{void* target;void* proxy;void** original;};
+ Binding b[]{
+  {hooks.FindSymbol("libart.so",kWait),reinterpret_cast<void*>(NativeHooks::Wait),reinterpret_cast<void**>(&original_wait)},
+  {hooks.FindSymbol("libart.so",kMutexLock),reinterpret_cast<void*>(NativeHooks::MutexLock),reinterpret_cast<void**>(&original_mutex_lock)},
+  {hooks.FindSymbol("libart.so",kMutexUnlock),reinterpret_cast<void*>(NativeHooks::MutexUnlock),reinterpret_cast<void**>(&original_mutex_unlock)}};
+ for(size_t i=0;i<3;++i){if(!b[i].target)return Fail(error,"Original WaitingGC bridge lacks canonical named mutex/wait leaves");
+  for(size_t j=0;j<i;++j)if(b[i].target==b[j].target)return Fail(error,"Original WaitingGC bridge aliases distinct leaves");}
+ a::SuspendAll storage{};original_stop(&storage,"artdcevm original WaitingGC bridge installation",false);
+ void* tokens[3]{};size_t n=0;
+ for(auto& x:b){auto token=hooks.Install(x.target,x.proxy,x.original,error);if(!token)break;
+  if(!*x.original)std::abort();tokens[n++]=token;}
+ waiting_installed=n==3;
+ if(!waiting_installed){std::string rollback;while(n)if(!hooks.Remove(tokens[--n],&rollback))std::abort();
+  for(auto& x:b)*x.original=nullptr;}
+ original_resume(&storage);return waiting_installed;
+}
+bool Service::CalibrateOriginalWaiting(void* self,size_t extent,std::string* error) {
+ waiting_calibrated_=false;waiting_mutex_=nullptr;
+ if(!waiting_installed||active||finishing||borrowed||observation||waiting_invocation||!self||!heap_||
+    !mutator_||*mutator_!=mutator_identity_||!current_||current_()!=self)
+  return Fail(error,"Original WaitingGC calibration lacks independent ordinary receiver");
+ WaitingInvocation w;w.service=this;w.self=self;w.extent=extent;
+ if(!NativeHooks::WaitingState(w,state_.RunnableState()))return Fail(error,"Original WaitingGC calibration requires actual Runnable owner");
+ waiting_invocation=&w;
+ original_start(heap_,self,s::kInstrumentationCause,s::kNonMovingReservation);
+ waiting_invocation=nullptr;
+ // Even a denied shape has actually called StartGC. Always release its real
+ // reservation before any return; never create a synthetic failed-ready state.
+ const bool complete=w.valid&&w.waits==1&&w.unlocks==1&&w.wait_returned&&w.frozen_mutex&&
+   NativeHooks::WaitingState(w,state_.RunnableState());
+ original_finish(heap_,self,s::kNoCollection);
+ if(!complete||!NativeHooks::WaitingState(w,state_.RunnableState()))
+  return Fail(error,"Original WaitingGC full return/mutex identity proof failed");
+ waiting_mutex_=w.frozen_mutex;waiting_calibrated_=true;return true;
+}
+
 bool Service::Bind(HookEngine& hooks,void* heap,const thread_suspend_service::Service& state,Service* out,std::string* error) {
  if(!out||!heap||!installed)return Fail(error,"Source observer lacks prepared receiver/installed transfer");
  Service c;c.heap_=heap;c.state_=state;
@@ -174,6 +284,36 @@ bool Session::SameOwner()const noexcept{return self_&&service_.current_&&service
  service_.mutator_&&*service_.mutator_==service_.mutator_identity_;}
 bool Session::Native()const noexcept {
  uint32_t state=UINT32_MAX;return SameOwner()&&service_.state_.State(self_,extent_,&state)&&state==abi::arm64::android11::kNative;
+}
+bool Session::StoppedState()const noexcept {
+ if(!waiting_window_)return Native();
+ uint32_t state=UINT32_MAX;
+ return waiting_invocation&&waiting_invocation->session==this&&SameOwner()&&
+   service_.state_.State(self_,extent_,&state)&&state==kWaitingGC;
+}
+bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
+    bool (*prepare)(void*,Session&) noexcept) noexcept {
+ if(phase_!=Phase::kEmpty||active||finishing||borrowed||observation||waiting_invocation||
+    !service_.calibrated_||!service_.waiting_calibrated_||!owner||!prepare||!self||
+    service_.current_()!=self||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_){
+  failure_="original-WaitingGC-owner-or-lifecycle-mismatch";return false;
+ }
+ self_=self;extent_=extent;
+ WaitingInvocation w;w.service=&service_;w.session=this;w.self=self;w.extent=extent;
+ w.expected_mutex=service_.waiting_mutex_;w.owner=owner;w.prepare=prepare;
+ if(!NativeHooks::WaitingState(w,service_.state_.RunnableState())){
+  failure_="original-WaitingGC-requires-actual-Runnable";return false;
+ }
+ waiting_invocation=&w;
+ original_start(service_.heap_,self_,s::kInstrumentationCause,s::kNonMovingReservation);
+ waiting_invocation=nullptr;
+ if(!NativeHooks::WaitingState(w,service_.state_.RunnableState()))std::abort();
+ if(!w.callback_returned){original_finish(service_.heap_,self_,s::kNoCollection);
+  phase_=Phase::kRolledBack;failure_="original-WaitingGC-calibrated-shape-mismatch";return false;}
+ if(!w.valid||w.waits!=1||w.unlocks!=1||w.frozen_mutex!=service_.waiting_mutex_)std::abort();
+ if(w.accepted){if(phase_!=Phase::kContinuing||!IsPublicationWindow(self_))std::abort();return true;}
+ if(Reserved()||active==this||phase_!=Phase::kRolledBack)std::abort();
+ failure_="original-WaitingGC-stopped-plan-refused";return false;
 }
 bool Session::PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
     native_source_gc_publication::Matcher matcher,std::string* error){
@@ -221,7 +361,7 @@ bool Session::IsStopped(void* self)const noexcept {
  if(borrowed_)return self==self_&&borrowed==this&&!borrowed_failed_&&source_disable_&&
    original_holder_&&source_carrier_&&suspended_&&exclusive_&&phase_==Phase::kFinal&&Native();
  return self==self_&&active==this&&gc_&&suspended_&&exclusive_&&
-   (phase_==Phase::kStopped||phase_==Phase::kFinal)&&Native();
+   (phase_==Phase::kStopped||phase_==Phase::kFinal)&&StoppedState();
 }
 bool Session::IsCollectedStop(void* self)const noexcept {return phase_==Phase::kStopped&&IsStopped(self);}
 bool Session::IsFinalWindow(void* self)const noexcept {return phase_==Phase::kFinal&&IsStopped(self);}
@@ -229,6 +369,7 @@ bool Session::ContinueSource() noexcept {
  if(service_.publication_calibrated_&&publications_.empty()){failure_="source-stop-missing-complete-publication-owner";return false;}
  if(!IsStopped(self_)||phase_!=Phase::kStopped){failure_="source-stop-continuation-owner-mismatch";return false;}
  service_.unlock_(*service_.mutator_,self_);exclusive_=false;
+ if(waiting_window_){phase_=Phase::kContinuing;return true;}
  if(!service_.state_.RestoreRunnable(self_))std::abort();
  uint32_t state=UINT32_MAX;if(!SameOwner()||!service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState())std::abort();
  phase_=Phase::kContinuing;return true;
@@ -263,10 +404,10 @@ void Session::Rollback() noexcept {
  if(phase_==Phase::kEmpty||phase_==Phase::kCompleted||phase_==Phase::kRolledBack)return;
  if(!SameOwner()||phase_==Phase::kFinal||phase_==Phase::kFinalResumed)std::abort();
  if(phase_==Phase::kContinuing){bool moved=false;if(!service_.state_.EnterNative(self_,extent_,&moved)||!moved||!Native())std::abort();service_.lock_(*service_.mutator_,self_);exclusive_=true;}
- if(!Native()||!exclusive_||!Reserved())std::abort();
+ if(!StoppedState()||!exclusive_||!Reserved())std::abort();
  active=nullptr;service_.resume_(&storage_);suspended_=exclusive_=false;
  service_.finish_(service_.heap_,self_,s::kNoCollection);gc_=false;
- if(!service_.state_.RestoreRunnable(self_))std::abort();phase_=Phase::kRolledBack;
+ if(!waiting_window_&&!service_.state_.RestoreRunnable(self_))std::abort();phase_=Phase::kRolledBack;
 }
 void Session::SourceDisableBegin(void* heap,void* self) noexcept {
  if(!active)return;auto& owner=*active;uint32_t state=UINT32_MAX;
@@ -290,7 +431,7 @@ bool Service::SameBinding(const Service& other)const noexcept {
    lock_==other.lock_&&unlock_==other.unlock_&&stop_==other.stop_&&resume_==other.resume_;
 }
 bool Service::Authorize(const Calibration& proof,const void* run) noexcept {
- if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_)||!state_.CanTransitionRunnable())return false;
+ if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_)||(!state_.CanTransitionRunnable()&&!waiting_calibrated_))return false;
  std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;calibrated_=true;
  publication_calibrated_=proof.publication_valid_;publication_linker_=proof.publication_linker_;
  publication_gc_pairs_=proof.publication_pairs_;publication_collector_=proof.publication_collector_;return true;

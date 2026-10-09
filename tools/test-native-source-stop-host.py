@@ -16,6 +16,15 @@ for mode in ('','no-gc-profile','collector13','calibration-double','calibration-
  else:r.check_returncode()
  print(mode or 'ownership','PASS')
 
+waiting=out/'native_source_waiting_scope_test'
+subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_source_waiting_scope_test.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),'-o',str(waiting)],check=True)
+for mode in ('','refuse','reentry','changed-mutex','missing-wait-calibration','bridge-missing-wait','install-fail7','install-fail8','install-fail9','bad-accepted'):
+ r=subprocess.run([str(waiting)]+([mode] if mode else []),capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
+ (out/('waiting-'+(mode or 'accepted'))).with_suffix('.log').write_text(r.stdout+r.stderr)
+ if mode=='bad-accepted':assert r.returncode==-signal.SIGABRT,(r.returncode,r.stdout,r.stderr)
+ else:r.check_returncode()
+ print('waiting',mode or 'accepted','PASS')
+
 scanner=out/'whole_process_frames_test'
 subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/whole_process_frames_test.cc'),str(cpp/'platform/common/whole_process_frames.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),str(cpp/'platform/common/native_cache_service.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),'-o',str(scanner)],check=True)
 r=subprocess.run([str(scanner)],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))

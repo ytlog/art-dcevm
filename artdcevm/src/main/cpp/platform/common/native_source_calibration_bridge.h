@@ -46,6 +46,12 @@ class Bridge final {
     auto& b=*static_cast<Bridge*>(raw);
     if(b.started_||self!=b.self_||!body){b.Refuse("ordinary-source-bridge-owner-mismatch");return;}
     b.started_=true;b.body_=body;
+    // The actual ordinary Run entry is independently Runnable. Calibrate the
+    // optional original C++ state scope before attaching passive observation;
+    // the temporary real GC reservation is fully finished before Run proceeds.
+    if(b.service_.RequiresOriginalWaiting()&&!b.service_.OriginalWaitingCalibrated()&&
+       !b.service_.CalibrateOriginalWaiting(self,b.extent_,nullptr))
+      b.Refuse("ordinary-source-original-WaitingGC-scope-not-calibrated");
     b.observation_.emplace(b.service_,driver,body,self,b.extent_);
     if(!b.observation_->Ready()){b.Refuse(b.observation_->Failure());return;}
     if(b.loading_service_){
