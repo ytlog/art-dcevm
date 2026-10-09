@@ -31,13 +31,19 @@ struct Access {
 struct Oracle {Invocation invocation;void* declaring=nullptr;void* receiver_class=nullptr;bool rejection=false;};
 class Guard final {
  public:
+ class ProofWitness final {public:ProofWitness()=default;private:friend class Guard;const Guard*owner_=nullptr;uint64_t epoch_=0;};
  explicit Guard(Access);
+ // Freeze in ordinary bootstrap; final validation uses atomic owner/epoch only.
+ ProofWitness FreezeProof()const noexcept;
+ bool ValidateProof(const ProofWitness&)const noexcept;
+ void Activate(const ProofWitness&)noexcept;
  // Exact rooted fixture/member/thread/path, plus independent declaring/receiver
  // identities. Both original success and guarded ICCE must be proven for every
  // path. No installation bit or caller-supplied coverage mask grants readiness.
  bool BeginProof(const Oracle&)noexcept;
  bool EndProof(bool original_succeeded,bool incompatible_class_change,bool unchanged_sentinel)noexcept;
  bool Proven()const noexcept;
+ bool UsesFrames(const FrameReader&frames)const noexcept{return access_.frames==&frames;}
  bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
  void Activate()noexcept;
  bool Check(const Invocation&)noexcept;
@@ -54,7 +60,7 @@ class Guard final {
  public:
  private:
  Access access_;mutable std::mutex lock_;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false;
- uint32_t passed_=0,refused_=0;std::atomic<bool> active_{false};
+ uint32_t passed_=0,refused_=0;std::atomic<bool> active_{false},proof_ready_{false};std::atomic<uint64_t> proof_epoch_{0};
 };
 // One optional process-lifetime consumer, published before any aliases or
 // narrowed Class. Entry owners share this dispatch; no second hook stack.

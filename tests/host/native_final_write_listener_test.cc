@@ -62,10 +62,13 @@ int main(int argc,char** argv){assert(argc==2);Engine engine(argv[1][0]-'0');int
  assert(!guard.EndProof(true,true));
  assert(guard.BeginProof({&thread,&method,&field,true}));NotifyWrittenForTesting(true,&thread,&method,&field);
  assert(guard.EndProof(true,true)&&ListenerProven(guard)&&throws==4);
+ auto frozen=guard.FreezeProof();assert(guard.ValidateProof(frozen)&&!foreign.ValidateProof(frozen));
  RetainInterpretationAtCommit();assert(deopts==1);
+ assert(guard.BeginProof({&thread,&method,&field,true}));assert(!guard.ValidateProof(frozen));NotifyWrittenForTesting(true,&thread,&method,&field);assert(guard.EndProof(true,true));auto fresh=guard.FreezeProof();assert(!guard.ValidateProof(frozen)&&guard.ValidateProof(fresh));
  if(engine.legacy){disable_observer(receiver,"owner-lease");assert(!ListenerProven(guard));
   assert(!InstallListenerAtExclusiveBoundary(&error)&&deopts==1);
   assert(!BindListener(engine,receiver,guard,&error));}
+ guard.ResetUncommittedProof();assert(!guard.ValidateProof(fresh)&&!guard.ValidateProof(guard.FreezeProof()));
  int other=0;assert(!BindListener(engine,&other,guard,&error));
  std::cout<<"Named final FieldWritten listener family "<<engine.family<<": exact event mask, both callbacks, behavioral proof and commit interpretation route passed\n";
 }

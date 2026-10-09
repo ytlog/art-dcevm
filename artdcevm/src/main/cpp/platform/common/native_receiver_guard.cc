@@ -7,15 +7,22 @@ namespace {constexpr uint32_t complete=(uint32_t{1}<<static_cast<unsigned>(Path:
 Guard::Guard(Access access):access_(access){}
 bool Guard::BeginProof(const Oracle& oracle)noexcept{
  std::lock_guard<std::mutex> lock(lock_);if(probing_||Active()||!oracle.invocation.thread||!oracle.invocation.member||!oracle.invocation.receiver||!oracle.declaring||!oracle.receiver_class||oracle.invocation.path>=Path::Count)return false;
+ proof_ready_.store(false,std::memory_order_release);proof_epoch_.fetch_add(1,std::memory_order_acq_rel);
+ (oracle.rejection?refused_:passed_)&=~(uint32_t{1}<<static_cast<unsigned>(oracle.invocation.path));
  oracle_=oracle;probing_=true;seen_=rejected_=false;return true;
 }
 bool Guard::EndProof(bool succeeded,bool incompatible,bool unchanged)noexcept{
  std::lock_guard<std::mutex> lock(lock_);if(!probing_)return false;
  const bool okay=seen_&&(oracle_.rejection?(rejected_&&!succeeded&&incompatible&&unchanged):(!rejected_&&succeeded&&!incompatible));
  if(okay)(oracle_.rejection?refused_:passed_)|=uint32_t{1}<<static_cast<unsigned>(oracle_.invocation.path);
- probing_=false;oracle_={};return okay;
+ probing_=false;oracle_={};proof_ready_.store(passed_==complete&&refused_==complete,std::memory_order_release);return okay;
 }
 bool Guard::Proven()const noexcept{std::lock_guard<std::mutex> lock(lock_);return !probing_&&passed_==complete&&refused_==complete;}
+Guard::ProofWitness Guard::FreezeProof()const noexcept{
+ std::lock_guard<std::mutex> lock(lock_);ProofWitness witness;if(!probing_&&passed_==complete&&refused_==complete&&proof_ready_.load(std::memory_order_acquire)){witness.owner_=this;witness.epoch_=proof_epoch_.load(std::memory_order_acquire);}return witness;
+}
+bool Guard::ValidateProof(const ProofWitness&witness)const noexcept{return witness.owner_==this&&witness.epoch_&&proof_ready_.load(std::memory_order_acquire)&&proof_epoch_.load(std::memory_order_acquire)==witness.epoch_;}
+void Guard::Activate(const ProofWitness&witness)noexcept{if(!ValidateProof(witness))std::abort();active_.store(true,std::memory_order_release);}
 void Guard::Activate()noexcept{if(!Proven())std::abort();active_.store(true,std::memory_order_release);}
 bool Guard::CheckBytecode(void*self,void*caller,uint32_t pc)noexcept{
  if(!Interested(Path::BytecodeInvoke,self,nullptr))return false;

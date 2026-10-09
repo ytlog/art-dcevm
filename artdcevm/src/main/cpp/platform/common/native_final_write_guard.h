@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <atomic>
 namespace artdcevm::final_write_guard {
 // All callbacks run with ART's shared mutator access. Identity readers must use
 // calibrated fixed declarations/native root barriers; no public JNI is allowed.
@@ -25,6 +26,10 @@ struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;boo
 // EndProof consumes the independently observed exception/value result.
 class Guard {
  public:
+ class ProofWitness final {public:ProofWitness()=default;private:friend class Guard;const Guard*owner_=nullptr;uint64_t epoch_=0;};
+ ProofWitness FreezeProof()const noexcept;
+ bool ValidateProof(const ProofWitness&)const noexcept;
+ void CommitProof(const ProofWitness&)noexcept;
  explicit Guard(Access access):access_(access){}
  bool BeginProof(const Oracle&) noexcept;
  bool EndProof(bool illegal_access_error,bool unchanged_sentinel) noexcept;
@@ -35,6 +40,6 @@ class Guard {
  // was raised. ART DoFieldPutCommon checks its pending exception after event.
  bool FieldWritten(void* thread,void* method,void* field,bool reference=false) noexcept;
  private:
- Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false;
+ Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false;std::atomic<uint64_t> proof_epoch_{0};std::atomic<bool> proof_ready_{false},proof_committed_{false};
 };
 } // namespace artdcevm::final_write_guard

@@ -1,7 +1,7 @@
 #pragma once
 #include "api/hook_engine.h"
 #include "platform/common/native_final_write_guard.h"
-namespace artdcevm::receiver_guard {class Guard;}
+#include "platform/common/native_receiver_guard.h"
 namespace artdcevm::final_write_guard {
 // Call during the first Native JNI load before plugin initialization. Older
 // named EnableDeoptimization must be witnessed before DeoptimizeEverything,
@@ -18,6 +18,19 @@ bool InstallListenerAtExclusiveBoundary(std::string*);
 bool BindReceiverEvents(void* independently_observed_instrumentation,receiver_guard::Guard&,std::string*);
 bool InstallReceiverEventsAtExclusiveBoundary(std::string*);
 bool ReceiverListenerProven(const receiver_guard::Guard&)noexcept;
+class ReceiverProofWitness final {
+ public:ReceiverProofWitness()=default;
+ private:
+ friend ReceiverProofWitness FreezeReceiverProof(const receiver_guard::Guard&)noexcept;
+ friend bool ValidateReceiverProof(const ReceiverProofWitness&)noexcept;
+ friend void RetainInterpretationForReceiverCommit(const ReceiverProofWitness&)noexcept;
+ const receiver_guard::Guard*receivers_=nullptr;const Guard*finals_=nullptr;void*instrumentation_=nullptr;uint64_t generation_=0;
+ receiver_guard::Guard::ProofWitness receiver_proof_;Guard::ProofWitness final_proof_;
+};
+// Ordinary freeze only; final validation and activation acquire no C++ mutex.
+ReceiverProofWitness FreezeReceiverProof(const receiver_guard::Guard&)noexcept;
+bool ValidateReceiverProof(const ReceiverProofWitness&)noexcept;
+void RetainInterpretationForReceiverCommit(const ReceiverProofWitness&)noexcept;
 // Isolated, independently validated fixture method only; bootstrap must never
 // globally deoptimize production methods merely to obtain a calibration event.
 bool PrepareProofMethodAtExclusiveBoundary(void* fixture_method,std::string*);

@@ -45,6 +45,7 @@ using Deopt=void(*)(void*,const char*);
 enum class AddKind {None,Legacy,Bool,Typed};
 using MethodDeopt=void(*)(void*,void*);
 void* instrumentation=nullptr;void* add=nullptr;Deopt deopt=nullptr;MethodDeopt method_deopt=nullptr;
+std::atomic<receiver_guard::Guard*> published_receivers{nullptr};std::atomic<void*> published_instrumentation{nullptr};std::atomic<uint64_t> receiver_generation{0};
 AddKind kind=AddKind::None;bool installed=false,receiver_installed=false;std::mutex configuration;
 constexpr char kEnable[]="_ZN3art15instrumentation15Instrumentation20EnableDeoptimizationEv";
 constexpr char kDisable[]="_ZN3art15instrumentation15Instrumentation21DisableDeoptimizationEPKc";
@@ -125,11 +126,26 @@ bool InstallReceiverEventsAtExclusiveBoundary(std::string*error){
   case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;
   case AddKind::Legacy:reinterpret_cast<LegacyAdd>(add)(instrumentation,&listener,additional);break;
   default:return Fail(error,"Receiver event source AddListener declaration missing");
- }receiver_installed=true;return true;
+ }receiver_installed=true;published_receivers.store(listener.receivers,std::memory_order_release);published_instrumentation.store(instrumentation,std::memory_order_release);receiver_generation.fetch_add(1,std::memory_order_acq_rel);return true;
 }
 bool ReceiverListenerProven(const receiver_guard::Guard&guard)noexcept{
  std::lock_guard<std::mutex> lock(configuration);
  return installed&&receiver_installed&&listener.receivers==&guard&&guard.Proven()&&listener.invoke_events.load(std::memory_order_relaxed)&&listener.read_events.load(std::memory_order_relaxed)&&listener.write_events.load(std::memory_order_relaxed)&&(!legacy||enabled_receiver.load(std::memory_order_acquire)==instrumentation);
+}
+ReceiverProofWitness FreezeReceiverProof(const receiver_guard::Guard&guard)noexcept{
+ std::lock_guard<std::mutex> lock(configuration);ReceiverProofWitness witness;
+ if(!installed||!receiver_installed||listener.receivers!=&guard||!listener.guard||!listener.invoke_events.load(std::memory_order_relaxed)||!listener.read_events.load(std::memory_order_relaxed)||!listener.write_events.load(std::memory_order_relaxed)||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return witness;
+ auto receiver_proof=guard.FreezeProof();auto final_proof=listener.guard->FreezeProof();if(!guard.ValidateProof(receiver_proof)||!listener.guard->ValidateProof(final_proof))return witness;
+ witness.receivers_=&guard;witness.finals_=listener.guard;witness.instrumentation_=instrumentation;witness.generation_=receiver_generation.load(std::memory_order_acquire);witness.receiver_proof_=receiver_proof;witness.final_proof_=final_proof;return witness;
+}
+bool ValidateReceiverProof(const ReceiverProofWitness&witness)noexcept{
+ return witness.receivers_&&witness.finals_&&witness.instrumentation_&&witness.generation_&&receiver_generation.load(std::memory_order_acquire)==witness.generation_&&published_receivers.load(std::memory_order_acquire)==witness.receivers_&&published_instrumentation.load(std::memory_order_acquire)==witness.instrumentation_&&witness.finals_==listener.guard&&witness.receivers_->ValidateProof(witness.receiver_proof_)&&witness.finals_->ValidateProof(witness.final_proof_)&&(!legacy||enabled_receiver.load(std::memory_order_acquire)==witness.instrumentation_);
+}
+void RetainInterpretationForReceiverCommit(const ReceiverProofWitness&witness)noexcept{
+ if(!ValidateReceiverProof(witness)||!deopt)std::abort();
+ // Same process-lifetime source owner and key, before any narrowed Class or
+ // alias publication. The stopped caller already validated all other guards.
+ const_cast<Guard*>(witness.finals_)->CommitProof(witness.final_proof_);const_cast<receiver_guard::Guard*>(witness.receivers_)->Activate(witness.receiver_proof_);deopt(witness.instrumentation_,kKey);
 }
 bool PrepareProofMethodAtExclusiveBoundary(void* method,std::string* error){
  std::lock_guard<std::mutex> lock(configuration);

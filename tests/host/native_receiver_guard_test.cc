@@ -19,7 +19,7 @@ static bool Special(void*,void*d,void*c,bool*out)noexcept{auto*caller=static_cas
 static void Raise(void*p,void*,const char*type,const char*)noexcept{auto&s=*static_cast<State*>(p);s.exception=type;++s.raised;}
 int main(){
  int thread=0;Class object,interface,ancestor{&object},before{&ancestor,{&interface}},after{&object},unrelated{&object},special_before{&ancestor},special_after{&object};
- Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Guard guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise});assert(!guard.Proven());assert(Bind(guard));
+ Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Guard guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise});assert(!guard.Proven()&&!guard.ValidateProof(guard.FreezeProof()));assert(Bind(guard));
  uint64_t result=123;for(unsigned p=0;p<static_cast<unsigned>(Path::Count);++p){
   const auto path=static_cast<Path>(p);const bool is_field=path==Path::BytecodeRead||path==Path::BytecodeWrite||path==Path::JniRead||path==Path::JniWrite||path==Path::ReflectRead||path==Path::ReflectWrite||path==Path::HandleRead||path==Path::HandleWrite||path==Path::VarHandle;
   auto* member=is_field?&field:&method;Invocation call{path,&thread,member,&receiver,&special_before,&result,is_field};
@@ -34,7 +34,8 @@ int main(){
   assert(guard.BeginProof({call,&ancestor,&after,true}));assert(Check(call));assert(result==0&&!std::strcmp(state.exception,"Ljava/lang/IncompatibleClassChangeError;"));assert(!guard.EndProof(false,true,false));
   assert(guard.BeginProof({call,&ancestor,&after,true}));assert(Check(call));assert(guard.EndProof(false,true,true));receiver.klass=&before;
  }
- assert(guard.Proven());guard.Activate();receiver.klass=&after;
+ assert(guard.Proven());auto witness=guard.FreezeProof();assert(guard.ValidateProof(witness));Guard foreign_guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise});assert(!foreign_guard.ValidateProof(witness));
+ Invocation reprobe{Path::JniMethod,&thread,&method,&receiver,nullptr,&result,false};assert(guard.BeginProof({reprobe,&ancestor,&before,false}));assert(!guard.ValidateProof(witness)&&!guard.Proven());assert(!guard.EndProof(true,false,true));assert(!guard.Proven()&&!guard.ValidateProof(guard.FreezeProof()));assert(guard.BeginProof({reprobe,&ancestor,&before,false}));assert(!guard.Check(reprobe)&&guard.EndProof(true,false,true));auto current_witness=guard.FreezeProof();assert(!guard.ValidateProof(witness)&&guard.ValidateProof(current_witness));guard.Activate(current_witness);assert(!guard.BeginProof({reprobe,&ancestor,&before,false})&&guard.ValidateProof(current_witness));receiver.klass=&after;
  Invocation call{Path::JniMethod,&thread,&method,&receiver,nullptr,&result,false};assert(guard.Check(call));
  // Current weak aliases must allow cached declarations in the replaced Class
  // itself, while continuing to reject genuinely removed ancestor members.
