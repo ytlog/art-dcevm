@@ -3,6 +3,10 @@
 #include "platform/common/native_cache_service.h"
 #include "platform/common/stack_visitor_service.h"
 #include "platform/common/decoded_frame_recovery.h"
+#include "platform/common/native_frame_async_recovery.h"
+#include "platform/common/native_frame_code_owner.h"
+#include "platform/common/source_commit.h"
+#include "platform/common/source_commit_plan_identity.h"
 #include "platform/abi/arm64/dex_register_map.h"
 #include "platform/abi/arm64/context.h"
 #include "platform/abi/arm64/android14/frame_registers.h"
@@ -11,14 +15,31 @@
 #include "platform/abi/arm64/android11/quick_method_header.h"
 #include "platform/abi/arm64/android12/quick_method_header.h"
 #include <vector>
+#include <algorithm>
 #include <cstring>
 namespace artdcevm::whole_process_frames {
 namespace detail {bool VisitThread(void*,void*);}
+class Service;
+// Borrowed capability: Service, Prepared, Plan, Session, thread service and
+// ReadContext must outlive it. The owner clears it before releasing those
+// resources. Validation rewalks the actual window; it cannot extend a lifetime.
+class StoppedRecoveryProof final {
+ public:
+  bool Validate(const source_commit::Plan&)const noexcept;
+  bool ValidateFinal(const source_commit::Plan&plan)const noexcept {return final_&&Validate(plan);}
+ private:
+  friend class Service;
+  const Service* service_=nullptr;const source_commit::Plan* plan_=nullptr;
+  const native_source_stop::Session* stop_=nullptr;const native_cache::Service* threads_=nullptr;
+  const modern_field_metadata::ReadContext* context_=nullptr;
+  void* self_=nullptr;void* jit_=nullptr;void* storage_=nullptr;
+  uint64_t generation_=0;bool final_=false,collected_=false;
+};
 using Family=code_info_view::SourceFamily;
 static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(abi::arm64::android12::Method12,access_flags));
 struct Report {
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
-   shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
+   async_frames=0,aot_frames=0,shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
  const char* failure="not-scanned";
  bool accepted=false;
 };
@@ -46,6 +67,8 @@ class Service {
       family==Family::kAndroid12?stack_visitor_service::Declaration::kAndroid12:
       family==Family::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
     if(!stack_visitor_service::Service::Bind(declaration,finder,&c.stack_))return false;
+    c.async_=native_frame_async_recovery::Service::Bind(finder);
+    c.code_owner_=native_frame_code_owner::Service::Bind(finder);
     c.create_=reinterpret_cast<abi::arm64::context::Create>(finder(abi::arm64::context::kCreate));
     c.construct_=finder(abi::arm64::android13::kConstructCodeInfo);
     c.map_=finder(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
@@ -77,6 +100,9 @@ class Service {
     std::vector<decoded_frame_recovery::Location> locations;
     abi::arm64::dex_register_map::Map native_map;
     abi::arm64::context::Prefix* context=nullptr;
+    source_commit::Plan recovery_identity;
+    const source_commit::Plan* recovery_plan=nullptr;
+    uint64_t recovery_generation=0;
     ~Prepared(){delete context;}
     Prepared(const Prepared&)=delete;Prepared& operator=(const Prepared&)=delete;
   };
@@ -84,10 +110,46 @@ class Service {
     if(!storage||storage->context||!create_)return false;
     storage->context=create_();return storage->context!=nullptr;
   }
+  // Ordinary preparation only. Preallocate the complete exact Plan identity;
+  // stopped Capture refreshes values in-place without growing native storage.
+  bool PrepareRecoveryPlan(const source_commit::Plan&plan,Prepared*storage)const {
+    if(!storage||storage->recovery_plan)return false;
+    storage->recovery_identity=plan;storage->recovery_plan=&plan;return true;
+  }
+  Report ScanRecovery(const native_source_stop::Session&owner,void*self,
+      const native_cache::Service&threads,void*jit,Prepared&storage,
+      const source_commit::Plan&plan,const modern_field_metadata::ReadContext&context,
+      StoppedRecoveryProof*proof=nullptr)const {
+    if(proof)*proof={};Report denied;
+    if(storage.recovery_plan!=&plan||!context.owner||!context.extent||!SameShape(storage.recovery_identity,plan)){
+      denied.failure="recovery-lacks-prepared-exact-Plan-or-owned-read-context";return denied;
+    }
+    auto report=ScanImpl(owner,self,threads,jit,storage,&context);
+    if(!report.accepted||!proof)return report;
+    if(storage.recovery_generation==UINT64_MAX){report.accepted=false;report.failure="recovery-generation-exhausted";return report;}
+    RefreshIdentity(plan,storage.recovery_identity);++storage.recovery_generation;
+    proof->service_=this;proof->plan_=&plan;proof->stop_=&owner;proof->threads_=&threads;proof->context_=&context;
+    proof->self_=self;proof->jit_=jit;proof->storage_=&storage;proof->generation_=storage.recovery_generation;
+    proof->final_=owner.IsFinalWindow(self);proof->collected_=owner.IsCollectedStop(self);return report;
+  }
   Report Scan(const native_source_stop::Session& owner,void* self,
               const native_cache::Service& threads,void* jit,Prepared& storage)const {
+    return ScanImpl(owner,self,threads,jit,storage,nullptr);
+  }
+ private:
+  friend class StoppedRecoveryProof;
+  static bool SameShape(const source_commit::Plan&a,const source_commit::Plan&b)noexcept {
+    return a.old_classes.size()==b.old_classes.size()&&a.new_classes.size()==b.new_classes.size()&&a.old_instances.size()==b.old_instances.size()&&a.new_instances.size()==b.new_instances.size()&&a.class_root_origins.size()==b.class_root_origins.size();
+  }
+  static void RefreshIdentity(const source_commit::Plan&from,source_commit::Plan&to)noexcept {
+    to.mirror=from.mirror;to.new_classes_root=from.new_classes_root;to.abstract_instances=from.abstract_instances;
+    std::copy(from.old_classes.begin(),from.old_classes.end(),to.old_classes.begin());std::copy(from.new_classes.begin(),from.new_classes.end(),to.new_classes.begin());
+    std::copy(from.old_instances.begin(),from.old_instances.end(),to.old_instances.begin());std::copy(from.new_instances.begin(),from.new_instances.end(),to.new_instances.begin());
+    std::copy(from.class_root_origins.begin(),from.class_root_origins.end(),to.class_root_origins.begin());
+  }
+  Report ScanImpl(const native_source_stop::Session&owner,void*self,const native_cache::Service&threads,void*jit,Prepared&storage,const modern_field_metadata::ReadContext*context)const {
     Report report;if(!owner.IsStopped(self)||!threads.PreparedForCurrentThread()||!storage.context){report.failure="whole-scan-lacks-actual-source-stop-or-preparation";return report;}
-    Request request{*this,owner,self,jit,storage,report};
+    Request request{*this,owner,self,jit,storage,report,context};
     const bool ok=threads.VisitStoppedWorld(detail::VisitThread,&request,&report.registered_threads,nullptr);
     if(ok&&report.registered_threads>0&&report.registered_threads==report.walked_threads&&request.owner_seen&&owner.IsStopped(self)){report.accepted=true;report.failure="";}
     else if(!std::strcmp(report.failure,"not-scanned"))report.failure="whole-scan-native-enumeration-or-owner-refused";
@@ -109,7 +171,7 @@ class Service {
     }
     return false;
   }
-  struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;bool owner_seen=false;};
+  struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;const modern_field_metadata::ReadContext* recovery;bool owner_seen=false;};
   friend bool detail::VisitThread(void*,void*);
   template<class Info,class Pair> struct Visitor final:abi::arm64::stack::Visitor<Pair> {
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
@@ -132,10 +194,18 @@ class Service {
       uint32_t flags;std::memcpy(&flags,static_cast<const unsigned char*>(method)+offsetof(abi::arm64::android12::Method12,access_flags),4);
       if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return true;}
       if(!s.compiled_ready_)return Reject("whole-frame-compiled-geometry-not-calibrated");
-      if(!this->header||!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      if(!this->header)return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      if(r.recovery){
+        const auto kind=s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit);
+        if(kind==native_frame_code_owner::Kind::Aot)++r.report.aot_frames;
+        if(kind==native_frame_code_owner::Kind::Unknown)return Reject("whole-frame-recovery-code-owner-unproved");
+        if(!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject(kind==native_frame_code_owner::Kind::Aot?"whole-AOT-requires-actual-frame-exit-or-dependency-closure":"whole-frame-original-async-recovery-refused");
+        ++r.report.async_frames;
+      }
       if(s.family_==Family::kAndroid11?(!s.legacy_fast_&&(!s.legacy_canonical_||!s.debugger_)):
          s.family_==Family::kAndroid12?(!s.fast_&&(!s.legacy_canonical_||!s.debugger_)):(!s.fast_&&(!s.canonical_||!s.debugger_)))return Reject("whole-frame-original-location-reader-unavailable");
-      if(!r.jit||!s.jit_||!s.jit_(r.jit,reinterpret_cast<void*>(this->pc)))return Reject("whole-frame-AOT-or-unowned-compiled-code");
+      if(!r.recovery&&(!r.jit||!s.jit_||!s.jit_(r.jit,reinterpret_cast<void*>(this->pc))))return Reject("whole-frame-AOT-or-unowned-compiled-code");
       if(!s.nterp_||s.nterp_(this->header))return Reject("whole-frame-Nterp-or-unproved-header-kind");
       const uintptr_t entry=reinterpret_cast<uintptr_t>(this->header)+(s.family_==Family::kAndroid11?8u:4u);
       if(this->pc<entry)return Reject("whole-frame-PC-before-source-code");
@@ -205,9 +275,10 @@ class Service {
       }
       void* current=nullptr;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context||
-         this->header!=original_header||!s.MarkedHeader(original_header)||this->quick_frame!=original_quick||this->pc!=original_pc||
+         this->header!=original_header||(!r.recovery&&!s.MarkedHeader(original_header))||this->quick_frame!=original_quick||this->pc!=original_pc||
          this->shadow_frame||this->inline_frames.begin.row!=original_begin||this->inline_frames.end.row!=original_end||
          !s.stack_.Method(this,sizeof(*this),&current)||current!=method||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-source-owner-or-native-cursor-lost-after-map");
+      if(r.recovery&&!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject("whole-frame-original-async-recovery-changed-after-map");
       ++r.report.compiled_frames;if(!physical)++r.report.inlined_frames;r.report.map_locations+=range.count;return true;
     }
   };
@@ -227,6 +298,7 @@ class Service {
     if(family_==Family::kAndroid17)return Walk<abi::arm64::android17::CodeInfo,abi::arm64::android17::CodeInfoPair>(r,target);
     return Walk<abi::arm64::android13::CodeInfo,abi::arm64::android13::CodeInfoPair>(r,target);
   }
+  native_frame_async_recovery::Service async_;native_frame_code_owner::Service code_owner_;
   bool compiled_ready_=false;
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;
@@ -242,4 +314,13 @@ class Service {
   abi::arm64::android14::frame_registers::AccessibleRegister accessible_=nullptr;
   bool(*jit_)(const void*,const void*)=nullptr;bool(*nterp_)(const void*)=nullptr;bool(*flag_)(const void*)=nullptr;
 };
+}
+
+inline bool artdcevm::whole_process_frames::StoppedRecoveryProof::Validate(const source_commit::Plan&plan)const noexcept {
+ if(!service_||plan_!=&plan||!stop_||!threads_||!context_||!storage_||!stop_->IsStopped(self_)||stop_->IsFinalWindow(self_)!=final_||stop_->IsCollectedStop(self_)!=collected_)return false;
+ auto& storage=*static_cast<Service::Prepared*>(storage_);
+ if(storage.recovery_generation!=generation_||storage.recovery_plan!=&plan||!source_commit::SameIdentity(storage.recovery_identity,plan))return false;
+ // Do not trust a prior scan, listener installation or cached PC: the complete
+ // actual thread list and every compiled reader/async leaf are checked again.
+ return service_->ScanRecovery(*stop_,self_,*threads_,jit_,storage,plan,*context_).accepted;
 }
