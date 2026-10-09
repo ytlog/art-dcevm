@@ -17,3 +17,6 @@
 -keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle { *; }
 -keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle$Target { *; }
 -keep class com.github.ytlog.artdcevm.internal.FinalPermissionOracle$Handles { *; }
+
+# Ordinary JNI Native scope carrier is prebound by exact class/method names.
+-keep class com.github.ytlog.artdcevm.internal.NativeScopeBridge { *; }

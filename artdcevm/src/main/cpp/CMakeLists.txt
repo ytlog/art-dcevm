@@ -96,6 +96,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/structural_methods.cc
     platform/common/native_method_evolution_policy.cc
     platform/common/native_abstract_instances.cc
+    platform/common/native_scope_executor.cc
     platform/common/runnable_jni_bridge.cc
     platform/common/runnable_global_ref_bridge.cc
     platform/common/runnable_executor.cc
