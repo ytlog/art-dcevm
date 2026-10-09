@@ -20,3 +20,7 @@
 
 # Ordinary JNI Native scope carrier is prebound by exact class/method names.
 -keep class com.github.ytlog.artdcevm.internal.NativeScopeBridge { *; }
+
+# Native factory parses original installed DEX and resolves fixed caller/gate names.
+-keep class com.github.ytlog.artdcevm.internal.CompiledFrameFixture { *; }
+-keep class com.github.ytlog.artdcevm.internal.CompiledFrameFixture$Run { *; }
