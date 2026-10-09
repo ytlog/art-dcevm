@@ -2,6 +2,7 @@
 #include "platform/common/native_removal_policy.h"
 #include "platform/common/native_schema_policy.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/android-common/redefinition_boundaries.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include "platform/android13/schema_snapshot.h"
 #include "platform/common/method_identity_calibration.h"
@@ -27,6 +28,7 @@ struct Request {
  bool committed=false;transaction_root::Holder* holder=nullptr;
  std::vector<std::pair<void*,int32_t>> remaining_owners;
  jvmtiEnv* jvmti=nullptr;JavaVM* vm=nullptr;bool graph_verified=false;bool graph_sealed=false;
+ transaction_root::Holder* boundary_holder=nullptr;size_t verified_count=0,collected_count=0;
 };
 thread_local Request* active=nullptr;
 std::mutex installation;
@@ -35,9 +37,13 @@ void (*record_fields)(void*)=nullptr;void (*record_methods)(void*)=nullptr;
 
 bool installed=false;
 bool window_ready=false;
-using Verified=bool(*)(void*,transaction_root::Holder*);
+namespace boundaries=abi::arm64::android_common::redefinition_boundaries;
+using Verified=boundaries::Whole;
 using Failure=void(*)(void*,jvmtiError,const void*,const void*);
 Verified verified_original=nullptr,collect_original=nullptr;Failure failure=nullptr;
+using VerificationLeaf=boundaries::VerifyClass;
+using CollectionLeaf=boundaries::CollectClass;
+VerificationLeaf verification_leaf_original=nullptr;CollectionLeaf collection_leaf_original=nullptr;
 abi::arm64::android_common::AddGlobalRef add_global=nullptr;
 abi::arm64::android11::CurrentThread current_thread=nullptr;
 void* (*root_barrier)(void*)=nullptr;
@@ -73,7 +79,7 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
   android13::BorrowedPlatformString signature("OWNED BATCH"),message(reason);
   failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;
  };
- if(!Mapped(raw,sizeof(*raw)))return reject("Repeated or unmapped precommit Holder");
+ if(!Mapped(raw,sizeof(*raw))||(request.boundary_holder&&request.boundary_holder!=raw))return reject("Repeated, changed or unmapped precommit Holder");
  transaction_root::Holder holder{};size_t extent=0;method_identity::ReadableMappingExtent(raw,&extent);
  if(!transaction_root::ReadHolderHeader(raw,extent,&holder)||!Mapped(holder.array_handle,4)||
     !Mapped(holder.redefinitions,sizeof(transaction_root::Owners)))return reject("Invalid precommit Holder native header");
@@ -140,7 +146,8 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
    request.remaining_owners.emplace_back(owner,static_cast<int32_t>(partition.holder_index));
   }
  }
- request.graph_verified=true;return true;
+ request.boundary_holder=raw;request.graph_verified=true;
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned graph window %s: verifiedLeaves=%zu collectedLeaves=%zu owners=%zu",window==GraphWindow::Verified?"verified":"collected",request.verified_count,request.collected_count,request.items.size());return true;
 }
 bool GuardGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
  try{return CaptureGraph(driver,raw,window);}
@@ -149,16 +156,72 @@ bool GuardGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
   failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&signature,&message);return false;
  }
 }
+bool RejectBoundary(void* driver,const char* message){
+ __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Owned graph boundary refused: %s",message);
+ android13::BorrowedPlatformString signature("OWNED BATCH"),text(message);
+ failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&text);return false;
+}
+// Both named leaf arguments are pointers: verification is const Iterator&,
+// collection is Iterator*. No value-aggregate ABI or wrapper execution assumed.
+bool LeafBoundary(void* owner,const transaction_root::Iterator* iterator,bool collection,
+                  void** driver,transaction_root::Holder** raw){
+ auto& request=*active;
+ for(const auto& item:request.items)if(item.validated_owner&&Mapped(item.validated_owner,sizeof(NativeDefinition))){*driver=Read<NativeDefinition>(item.validated_owner,0).driver;break;}
+ if(!*driver)return false;
+ if(!Mapped(owner,sizeof(NativeDefinition))||Read<NativeDefinition>(owner,0).driver!=*driver||!Mapped(iterator,sizeof(*iterator)))return RejectBoundary(*driver,"Unmapped source boundary owner/iterator");
+ const auto current=Read<transaction_root::Iterator>(iterator,0);
+ if(!Mapped(current.holder,sizeof(*current.holder)))return RejectBoundary(*driver,"Unmapped source boundary Holder");
+ transaction_root::Holder holder{};size_t extent=0;
+ method_identity::ReadableMappingExtent(current.holder,&extent);
+ transaction_root::Metadata metadata{};
+ if(!transaction_root::ReadHolderHeader(current.holder,extent,&holder)||
+    !Mapped(holder.redefinitions,sizeof(transaction_root::Owners))||
+    !transaction_root::ReadMetadata(holder,request.items.size(),transaction_root::OwnerFamily::kAndroid15,&metadata))
+  return RejectBoundary(*driver,"Invalid source boundary Holder metadata");
+ const size_t next=collection?request.collected_count:request.verified_count;
+ if(current.index<0||size_t(current.index)!=next||next>=metadata.count||
+    metadata.owners.begin+next*metadata.stride!=owner||
+    std::count_if(request.items.begin(),request.items.end(),[&](const auto& item){return item.validated_owner==owner;})!=1||
+    (request.boundary_holder&&request.boundary_holder!=current.holder))
+  return RejectBoundary(*driver,"Source boundary differs from complete owned Holder order");
+ for(const auto& item:request.items)if(!item.validated_owner||Read<NativeDefinition>(item.validated_owner,0).driver!=*driver)
+  return RejectBoundary(*driver,"Source boundary has an unvalidated batch owner");
+ request.boundary_holder=current.holder;*raw=current.holder;return true;
+}
+bool VerificationGraph(void* owner,const transaction_root::Iterator* iterator){
+ if(!active||!active->provider->closed_graph)return verification_leaf_original(owner,iterator);
+ void* driver=nullptr;transaction_root::Holder* holder=nullptr;
+ if(!LeafBoundary(owner,iterator,false,&driver,&holder))return false;
+ if(active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Repeated source verification leaf");
+ if(!verification_leaf_original(owner,iterator))return false;
+ if(++active->verified_count!=active->items.size())return true;
+ return GuardGraph(driver,holder,GraphWindow::Verified);
+}
+bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
+ if(!active||!active->provider->closed_graph)return collection_leaf_original(owner,iterator);
+ void* driver=nullptr;transaction_root::Holder* holder=nullptr;
+ if(!LeafBoundary(owner,iterator,true,&driver,&holder))return false;
+ // Missing/wrong earlier hooks refuse here BEFORE collection and its original
+ // last bool. Update remains an invariant boundary, never the first refusal.
+ if(!active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Collection lacks completed source verification witness");
+ if(!collection_leaf_original(owner,iterator))return false;
+ if(++active->collected_count!=active->items.size())return true;
+ if(!GuardGraph(driver,holder,GraphWindow::Collected))return false;
+ active->graph_sealed=true;return true;
+}
 bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
+ if(active&&active->provider->closed_graph&&active->graph_verified)return RejectBoundary(driver,"Repeated verification boundary");
  if(!verified_original(driver,raw))return false;
- if(active&&active->provider->closed_graph&&active->graph_verified){
-  android13::BorrowedPlatformString signature("OWNED BATCH"),message("Repeated verification boundary");failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;}
+ // A non-inlined wrapper may contain our leaf callbacks. Only one complete
+ // proof is published; an inlined wrapper requires the last actual leaf.
+ if(active&&active->provider->closed_graph&&active->graph_verified)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf verification Holder mismatch");
  return GuardGraph(driver,raw,GraphWindow::Verified);
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
+ if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
  if(!collect_original(driver,raw))return false;
  if(!active||!active->provider->closed_graph)return true;
- if(!active->graph_verified||active->graph_sealed){android13::BorrowedPlatformString signature("OWNED BATCH"),message("Invalid final rejectable boundary");failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;}
+ if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
  if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
  active->graph_sealed=true;return true;
 }
@@ -242,8 +305,10 @@ bool Install(HookEngine& hooks,std::string* error){
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv",reinterpret_cast<void*>(Fields),&fields_original},
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv",reinterpret_cast<void*>(Methods),&methods_original},
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE",reinterpret_cast<void*>(Update),&commit_original},
-    {"_ZN12openjdkjvmti9Redefiner26CheckAllClassesAreVerifiedERNS_22RedefinitionDataHolderE",reinterpret_cast<void*>(VerifiedGraph),reinterpret_cast<void**>(&verified_original)},
-    {"_ZN12openjdkjvmti9Redefiner28CollectAndCreateNewInstancesERNS_22RedefinitionDataHolderE",reinterpret_cast<void*>(CollectGraph),reinterpret_cast<void**>(&collect_original)}};
+    {boundaries::kVerifyWhole,reinterpret_cast<void*>(VerifiedGraph),reinterpret_cast<void**>(&verified_original)},
+    {boundaries::kCollectWhole,reinterpret_cast<void*>(CollectGraph),reinterpret_cast<void**>(&collect_original)},
+    {boundaries::kVerifyClass,reinterpret_cast<void*>(VerificationGraph),reinterpret_cast<void**>(&verification_leaf_original)},
+    {boundaries::kCollectClass,reinterpret_cast<void*>(CollectionGraph),reinterpret_cast<void**>(&collection_leaf_original)}};
   for(auto& entry:entries)entry.target=hooks.FindSymbol("libopenjdkjvmti.so",entry.symbol);
   record_fields=reinterpret_cast<decltype(record_fields)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition19RecordNewFieldAddedEv"));
   record_methods=reinterpret_cast<decltype(record_methods)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));

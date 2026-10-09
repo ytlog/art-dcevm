@@ -16,7 +16,7 @@ namespace graph_window {
 using namespace artdcevm::native_owned_removal;
 std::map<jobject,std::vector<jobject>> managed;
 std::vector<jclass> staged;
-int driver=0,failures=0,graph_checks=0;bool original_ok=true,field_ok=true,late_child=false,schema_mode=false,collected_provider_ok=true;
+int driver=0,failures=0,graph_checks=0;bool original_ok=true,collection_ok=true,field_ok=true,late_child=false,schema_mode=false,collected_provider_ok=true;
 jvmtiError recorded=JVMTI_ERROR_NONE;
 source_commit::Plan finalized_plan;std::unique_ptr<source_commit::Services> finalized_service;
 bool Original(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
@@ -48,10 +48,28 @@ std::unique_ptr<source_commit::Services> Finalize(const void* holder,const sourc
  assert(stopped&&holder==&batch_boundary::holder&&finalized_service);*plan=&finalized_plan;return std::move(finalized_service);
 }
 bool Collect(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(late_child)field_ok=false;return true;}
+int leaf_mode=0,verification_calls=0,collection_calls=0;
+bool OriginalVerification(void* owner,const transaction_root::Iterator* it){assert(!stopped&&it&&it->holder==&batch_boundary::holder&&owner==&batch_boundary::owners[size_t(it->index)]);++verification_calls;if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
+bool OriginalCollection(void* owner,transaction_root::Iterator* it){assert(!stopped&&it&&it->holder==&batch_boundary::holder&&owner==&batch_boundary::owners[size_t(it->index)]);++collection_calls;if(late_child)field_ok=false;if(!collection_ok)recorded=JVMTI_ERROR_OUT_OF_MEMORY;return collection_ok;}
+bool Leaves(){
+ for(size_t n=0;n<batch_boundary::owners.size();++n){
+  if((leaf_mode==1&&n==0)||leaf_mode==2)continue;
+  transaction_root::Iterator it{static_cast<int32_t>(leaf_mode==3?0:n),&batch_boundary::holder};
+  if(!VerificationGraph(&batch_boundary::owners[n],&it))return false;
+ }
+ transaction_root::Holder other=batch_boundary::holder;
+ for(size_t n=0;n<batch_boundary::owners.size();++n){transaction_root::Iterator it{static_cast<int32_t>(n),&batch_boundary::holder};
+  if(leaf_mode==4)it.index=1;
+  if(leaf_mode==5)it.holder=&other;
+  if(!CollectionGraph(&batch_boundary::owners[n],&it))return false;
+ }return true;
+}
+bool WrappedVerification(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder);for(size_t n=0;n<batch_boundary::owners.size();++n){transaction_root::Iterator it{static_cast<int32_t>(n),h};if(!VerificationGraph(&batch_boundary::owners[n],&it))return false;}return true;}
+bool WrappedCollection(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder);for(size_t n=0;n<batch_boundary::owners.size();++n){transaction_root::Iterator it{static_cast<int32_t>(n),h};if(!CollectionGraph(&batch_boundary::owners[n],&it))return false;}return true;}
 bool Before(){return VerifiedGraph(&driver,&batch_boundary::holder)&&CollectGraph(&driver,&batch_boundary::holder);}
 jvmtiError Result(){return recorded;}
 void Build(const std::vector<Definition>& definitions){
- batch_boundary::Build(definitions);managed.clear();staged.clear();failures=graph_checks=0;recorded=JVMTI_ERROR_NONE;field_ok=original_ok=true;late_child=false;
+ batch_boundary::Build(definitions);managed.clear();staged.clear();failures=graph_checks=0;recorded=JVMTI_ERROR_NONE;field_ok=original_ok=collection_ok=true;late_child=false;verification_calls=collection_calls=0;
  auto& holder=batch_boundary::holder;auto* handle=static_cast<uint32_t*>(heap.New(4));auto* array=heap.New(16);*handle=uint32_t(uintptr_t(array));holder.array_handle=handle;
  static transaction_root::Owners vector{};vector={reinterpret_cast<const unsigned char*>(batch_boundary::owners.data()),reinterpret_cast<const unsigned char*>(batch_boundary::owners.data()+definitions.size()),reinterpret_cast<const unsigned char*>(batch_boundary::owners.data()+definitions.size())};holder.redefinitions=&vector;
  holder.initialized=holder.actually_structural=holder.initial_structural;
@@ -77,7 +95,7 @@ int main(int argc,char** argv){
  std::vector<Definition> definitions;for(size_t n=0;n<2;n++){auto klass=reinterpret_cast<jclass>(heap.New(16));definitions.push_back({klass,dex});live[klass]=schema;live[klass].methods.push_back({"removed","()I",1,0});loaders[klass]=reinterpret_cast<jobject>(heap.New(16));}
  jvmtiInterface_1 functions{};functions.GetClassLoader=Loader;functions.GetExtensionFunctions=Extensions;functions.Deallocate=Free;jvmtiEnv ti{&functions};
  table.GetArrayLength=Length;table.GetObjectArrayElement=Element;table.GetJavaVM=Vm;table.FindClass=ForbiddenFind;
- verified_original=Original;collect_original=Collect;failure=graph_window::Failure;root_barrier=RootBarrier;add_global=Add;current_thread=Current;window_ready=true;before_commit=Before;before_commit_result=Result;
+ verification_leaf_original=OriginalVerification;collection_leaf_original=OriginalCollection;verified_original=Original;collect_original=Collect;failure=graph_window::Failure;root_barrier=RootBarrier;add_global=Add;current_thread=Current;window_ready=true;before_commit=Before;before_commit_result=Result;
  Provider provider{Ready,Prepare,&metadata,nullptr,true,Preflight,graph_window::Check};
  Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&begins==1&&failures==0);
  for(int mode=0;mode<5;++mode){Reset();graph_window::Build(definitions);
@@ -104,6 +122,23 @@ int main(int argc,char** argv){
   if(mode==2)managed[root][4]=nullptr;
   assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&begins==0&&prepared==0&&failures==1);
  }
+ // The device can inline both thin driver loops: only real named Class
+ // verification/collection leaves run, with every original still authoritative.
+ before_commit=Leaves;leaf_mode=0;
+ Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&verification_calls==2&&collection_calls==2&&begins==1);
+ for(int mode=1;mode<=5;++mode){leaf_mode=mode;Reset();graph_window::Build(definitions);
+  assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&failures==1&&begins==0&&replacements==0&&original_commits==0&&collection_calls==0);
+ }
+ leaf_mode=0;Reset();graph_window::Build(definitions);original_ok=false;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&verification_calls==1&&collection_calls==0&&begins==0&&failures==0);
+ Reset();graph_window::Build(definitions);collection_ok=false;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_OUT_OF_MEMORY&&verification_calls==2&&collection_calls==1&&begins==0&&failures==0&&graph_checks==1);
+ Reset();graph_window::Build(definitions);collected_provider_ok=false;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&collection_calls==2&&begins==0&&replacements==0);collected_provider_ok=true;
+ // Non-inlined wrappers containing both leaf proxies must seal exactly once.
+ before_commit=Before;verified_original=WrappedVerification;collect_original=WrappedCollection;
+ Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&verification_calls==2&&collection_calls==2&&begins==1);
+ verified_original=Original;collect_original=Collect;
  // Production's actual rooted-plan reader re-decodes the same strong global
  // arrays after simulated moving GC and preserves the actual origin partition.
  Reset();graph_window::Build(definitions);auto holder_root=reinterpret_cast<jobject>(uintptr_t(*holder.array_handle));RootedGraph graph;
@@ -121,5 +156,6 @@ int main(int argc,char** argv){
  auto unchanged=new_plan.new_classes;Put32(moved_array,8,2);assert(!rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes==unchanged);
  assert(!rooted_schema_plan::Read(graph,false,reader,&new_plan,&error));
  before_commit=nullptr;before_commit_result=nullptr;enter_final=leave_final=nullptr;
+ puts("Actual leaf boundaries: inlined/non-inlined driver coverage, every original bool, exact Holder/index/owner sequence, missing/skipped/duplicate verification refusal before collection, Collected rejection before Update PASS");
  puts("Actual graph window TU: schema paired Class/instance roots, moving-pointer reseal, exact origins, readonly Collected provider refusal before Update, preallocated final Update with allocator forbidden, raced/duplicate/missing child refusal and original failure result PASS");
 }

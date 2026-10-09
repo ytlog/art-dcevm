@@ -25,8 +25,9 @@ struct Provider {
   // Required for multiple targets. The production owner independently checks
   // all original DEX provenance and stages every field alias before heap entry.
   bool (*preflight)(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,void*,std::string*)=nullptr;
-  // Called at both original refundable source booleans: post verification
-  // and completed instance collection. Borrowed actual Holder JNI locals.
+  // Called after every original Class verification / instance collection
+  // boolean succeeds in the exact Holder order. Both named leaf and wholebatch
+  // observers cover inlined/non-inlined driver loops. Actual Holder JNI locals.
   bool (*closed_graph)(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,const RootedGraph&,GraphWindow,void*,std::string*)=nullptr;
   // Requests complete source-owned policy validation. Original CheckClass and
   // CheckRedefinable remain authoritative until their separate guard adapter.
@@ -43,6 +44,8 @@ struct Provider {
 // A batch may include unchanged-declaration body replacements, provided at least
 // one target removes a member; ART still verifies every incoming method body.
 bool Install(HookEngine&,std::string* error);
+// Bound entry points only; no per-operation graph permission is implied.
+// Actual original successes and both owned seals remain mandatory in RunBatch.
 bool GraphWindowReady();
 // One ART extension call for the entire input. Every target is validated before
 // the first mutation; structural islands share one final commit and one retire
