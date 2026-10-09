@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run strict formal and owned-runtime suites sequentially per device, in parallel across devices."""
+"""Run formal, runtime and optional required schema suites per device, in parallel across devices."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 from evidence_paths import new_evidence_directory
+from production_schema_report import CASE_METHODS, validate as validate_schema
 
 SDKS = {'11': {'30'}, '12': {'31', '32'}, '13': {'33'}, '14': {'34'},
         '15': {'35'}, '16': {'36'}, '17': {'37', '37.1'}}
@@ -49,7 +50,7 @@ def invoke(command, directory, label, timeout):
     (directory / (label + '.command.json')).write_text(json.dumps(result, indent=2) + '\n')
     return result, stdout
 
-def suite(command, directory, label, timeout, root):
+def suite(command, directory, label, timeout, root, schema_case=None, schema_scope="full"):
     result, stdout = invoke(command, directory, label, timeout)
     result['passed'] = False
     try:
@@ -59,12 +60,20 @@ def suite(command, directory, label, timeout, root):
         if not evidence.is_absolute(): evidence = root / evidence
         evidence = evidence.resolve()
         evidence.relative_to((root / 'build/evidence').resolve())
-        report_path = evidence / ('report.json' if label == 'production' else 'run.json')
+        report_path = evidence / ('result.json' if schema_case else 'report.json' if label == 'production' else 'run.json')
         report = json.loads(report_path.read_text())
         result['evidencePath'] = str(evidence)
         result['reportPath'] = str(report_path)
         result['report'] = report
         result['passed'] = result['exitCode'] == 0 and report.get('passed') is True and not result.get('timedOut')
+        if schema_case:
+            actual = json.loads((evidence / 'report.json').read_text())
+            errors = validate_schema(actual, report.get('runId'), schema_case, schema_scope)
+            if not report.get('runId') or report.get('case') != schema_case or report.get('scope') != schema_scope:
+                errors.append('Schema runner identity differs from requested case/scope')
+            result['schemaReport'] = actual
+            result['schemaErrors'] = errors
+            result['passed'] = result['passed'] and not errors
     except (OSError, ValueError, IndexError) as error:
         result['evidenceError'] = str(error)
     return result
@@ -78,6 +87,9 @@ def main():
     parser.add_argument('--foreground-version', choices=SDKS, action='append',
                         help='Foreground carrier versions; defaults to 12 when omitted')
     parser.add_argument('--active-frames',action='store_true',help='Require independent owned active-frame proof in each runtime suite')
+    parser.add_argument('--schema-case', choices=CASE_METHODS, action='append', default=[],
+                        help='Required schema cases after each device runtime suite; devices remain parallel')
+    parser.add_argument('--schema-scope', choices=('full', 'common-owned'), default='full')
     parser.add_argument('--max-workers', type=int, default=7)
     parser.add_argument('--suite-timeout', type=float, default=900,
                         help='Outer host runner deadline per suite (seconds); original runner limits remain unchanged')
@@ -86,6 +98,7 @@ def main():
     if not math.isfinite(args.suite_timeout) or args.suite_timeout <= 0: parser.error('--suite-timeout must be positive')
     if len({serial for _, serial in args.device}) != len(args.device):
         parser.error('Each serial may appear only once; a device cannot run concurrently with itself')
+    if len(set(args.schema_case)) != len(args.schema_case): parser.error('Each schema case may appear only once')
     root = Path(__file__).resolve().parents[1]
     args.apk = args.apk.resolve(); args.test_apk = args.test_apk.resolve()
     if Path(args.adb).exists(): args.adb = str(Path(args.adb).resolve())
@@ -96,8 +109,11 @@ def main():
     foreground = set(args.foreground_version or ['12'])
     out = new_evidence_directory(root / 'build/evidence/device-compatibility-matrix')
     summary = {'passed': False, 'artifacts': artifacts, 'foregroundVersions': sorted(foreground),
+               'schemaCases': args.schema_case, 'schemaScope': args.schema_scope,
                'activeFramesRequested': args.active_frames, 'devices': [], 'scope': 'strict formal and owned method/field removal; full evolution is not established'}
 
+    if args.schema_case:
+        summary['scope'] += '; required actual schema cases: ' + ', '.join(args.schema_case) + ' (' + args.schema_scope + ')'
     if args.active_frames:
         summary['scope'] += '; requires independent owned compiled carrier/two-inlinee proof'
 
@@ -127,7 +143,18 @@ def main():
                     cleanup, _ = invoke([args.adb, '-s', serial, 'shell', 'am', 'force-stop', 'dev.artdcevm.lab'],
                                         directory, label + '-timeout-cleanup', 15)
                     result[label]['timeoutCleanup'] = cleanup
-            result['passed'] = result['production']['passed'] and result['runtime']['passed']
+            result['schema'] = {}
+            for case in args.schema_case:
+                label = 'schema-' + case
+                command = [sys.executable, str(root / 'tools/run-production-schema.py'), *common,
+                           '--test-apk', str(args.test_apk), '--case', case, '--scope', args.schema_scope]
+                result['schema'][case] = suite(command, directory, label, args.suite_timeout, root, case, args.schema_scope)
+                if result['schema'][case].get('timedOut'):
+                    cleanup, _ = invoke([args.adb, '-s', serial, 'shell', 'am', 'force-stop', 'dev.artdcevm.lab'],
+                                        directory, label + '-timeout-cleanup', 15)
+                    result['schema'][case]['timeoutCleanup'] = cleanup
+            result['passed'] = result['production']['passed'] and result['runtime']['passed'] and all(
+                value['passed'] for value in result['schema'].values())
         (directory / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return index, result
 
