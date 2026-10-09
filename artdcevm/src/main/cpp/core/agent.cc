@@ -3,6 +3,7 @@
 #include "core/transaction_lock.h"
 #if defined(ARTDCEVM_ARM64)
 #include "platform/common/redefinition_gate.h"
+#include "platform/common/native_final_write_listener.h"
 #include "hooks/shadow_hook_engine.h"
 #endif
 #include <memory>
@@ -23,6 +24,10 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   static void* plugin_image=dlopen("libopenjdkjvmti.so",RTLD_NOW|RTLD_LOCAL);
   if(plugin_image){
     static artdcevm::ShadowHookEngine hooks;std::string error;
+    // Observe the original legacy enable transition before any plugin startup.
+    // A missing or already-enabled unwitnessed owner cannot supply readiness.
+    (void)artdcevm::final_write_guard::ObserveLegacyDeoptimizationStartup(hooks,&error);
+    error.clear();
     (void)artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
   }
 #else
