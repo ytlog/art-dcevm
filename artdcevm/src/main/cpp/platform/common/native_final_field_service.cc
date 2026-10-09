@@ -1,4 +1,5 @@
 #include "platform/common/native_final_field_service.h"
+#include "platform/common/jvmti_field_flags.h"
 #include "platform/common/source_commit_plan_identity.h"
 #include "platform/common/native_final_field_aliases.h"
 #include "platform/common/redefinition_gate.h"
@@ -12,9 +13,9 @@ namespace artdcevm::final_field_service {
 namespace {
 void Breakpoint(jvmtiEnv*,JNIEnv*,jthread,jmethodID,jlocation){}
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
-bool SameMember(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access);}
-bool Members(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return SameMember(m,n);})==1;});}
-bool Schema(const evolution::ClassSchema& a,const evolution::ClassSchema& b){return a.descriptor==b.descriptor&&a.superclass==b.superclass&&a.interfaces==b.interfaces&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access)&&Members(a.fields,b.fields)&&Members(a.methods,b.methods);}
+bool SameMember(const evolution::Member& a,const evolution::Member& b,bool field){return a.name==b.name&&a.descriptor==b.descriptor&&(field?jvmti_field_flags::Public(a.access)==jvmti_field_flags::Public(b.access):native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access));}
+bool Members(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b,bool field){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return SameMember(m,n,field);})==1;});}
+bool Schema(const evolution::ClassSchema& a,const evolution::ClassSchema& b){return a.descriptor==b.descriptor&&a.superclass==b.superclass&&a.interfaces==b.interfaces&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access)&&Members(a.fields,b.fields,true)&&Members(a.methods,b.methods,false);}
 const evolution::Member* Member(const evolution::ClassSchema& schema,const evolution::Member& field){
  auto it=std::find_if(schema.fields.begin(),schema.fields.end(),[&](const auto& f){return f.name==field.name&&f.descriptor==field.descriptor&&f.IsStatic()==field.IsStatic();});return it==schema.fields.end()?nullptr:&*it;
 }
@@ -241,7 +242,7 @@ bool Service::Verify(const source_commit::Plan& plan,size_t index,void* loader,c
  for(const auto& entry:std::array<std::pair<void*,const evolution::Member*>,2>{{{plan.old_classes[index],prior},{plan.new_classes[index],&*next}}}){
   void* field=Field(*s.bindings.native.metadata,entry.first,*entry.second,error);
   if(!field||s.bindings.native.metadata->FieldDeclaringClass(field)!=entry.first||
-     native_schema_policy::JavaFlags(field_array::Flags(field))!=native_schema_policy::JavaFlags(entry.second->access))return Fail(error,"Final-field current native owner/flags changed after sealing");
+     jvmti_field_flags::Public(field_array::Flags(field))!=jvmti_field_flags::Public(entry.second->access))return Fail(error,"Final-field current native owner/flags changed after sealing");
  }
  return true;
 }
