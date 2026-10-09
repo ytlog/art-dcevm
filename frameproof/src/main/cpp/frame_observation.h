@@ -11,6 +11,8 @@ inline constexpr char kDone11[]="_ZN3art3jit12JitCodeCache13DoneCompilingEPNS_9A
 inline constexpr char kDone12[]="_ZN3art3jit12JitCodeCache13DoneCompilingEPNS_9ArtMethodEPNS_6ThreadENS_15CompilationKindE";
 inline constexpr char kDone14[]="_ZN3art3jit12JitCodeCache13DoneCompilingEPNS_9ArtMethodEPNS_6ThreadE";
 inline constexpr char kHeapCollect[]="_ZN3art2gc4Heap14CollectGarbageEbNS0_7GcCauseE";
+inline constexpr char kHeapTotalMemory[]="_ZNK3art2gc4Heap14GetTotalMemoryEv";
+using HeapTotalMemory=size_t (*)(const void*);
 using Enqueue=void (*)(void*,void*,void*);
 using LegacyEnqueue=bool (*)(void*,void*,void*,uint32_t,uint32_t,bool);
 using Done11=void (*)(void*,void*,void*,bool);
@@ -20,7 +22,7 @@ using HeapCollect=void (*)(void*,bool,int);
 struct Observation {
  std::atomic<void*> expected{nullptr},jit{nullptr},cache{nullptr},heap{nullptr};
  std::atomic<bool> gc_active{false},conflict{false};
- std::atomic<unsigned> enqueues{0},completions{0},collections{0};
+ std::atomic<unsigned> enqueues{0},completions{0},collections{0},memory_queries{0};
  void Observe(std::atomic<void*>& slot,void* receiver) {
   void* empty=nullptr;
   if(!receiver||(!slot.compare_exchange_strong(empty,receiver)&&empty!=receiver))conflict=true;
@@ -32,7 +34,9 @@ struct Observation {
   if(method&&method==expected.load()){Observe(cache,receiver);++completions;}
  }
  void Collected(void* receiver) {if(gc_active.load()){Observe(heap,receiver);++collections;}}
- bool Complete()const {return expected.load()&&jit.load()&&cache.load()&&heap.load()&&!conflict.load()&&enqueues.load()>0&&completions.load()>0&&collections.load()>0;}
+ void MemoryQueried(void* receiver){Observe(heap,receiver);++memory_queries;}
+ bool Ready()const {return expected.load()&&jit.load()&&cache.load()&&heap.load()&&!conflict.load()&&enqueues.load()>0&&completions.load()>0&&memory_queries.load()>0;}
+ bool Complete()const{return Ready()&&memory_queries.load()>=2;}
 };
 // Matching every independent native receiver is mandatory. No field is used as
 // a receiver to obtain its own observation, and no API/build fingerprint is read.

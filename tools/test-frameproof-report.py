@@ -3,7 +3,7 @@ import copy,json,os,pathlib,subprocess,tempfile
 from frameproof_report import validate_frameproof
 root=pathlib.Path(__file__).resolve().parents[1]
 positive={'passed':True,'protocol':1,'runId':'current','targetNondebuggable':True,'instrumentationNondebuggable':True,'sameSignature':True,
- 'bootstrap':{'passed':True,'runtimeJavaDebuggableObserved':True,'runtimeJavaDebuggable':False,'runtimeReceiversMatched':True,'methodIdentitiesChecked':5,'carrierJitCompiled':True,'publicJvmtiInitialized':False,'warmCalls':100000,'enqueueCalls':1,'compileCompletionCalls':1,'heapCollectionCalls':1,'gcCompletionDelta':1,'error':''},
+ 'bootstrap':{'passed':True,'runtimeJavaDebuggableObserved':True,'runtimeJavaDebuggable':False,'runtimeReceiversMatched':True,'methodIdentitiesChecked':5,'carrierJitCompiled':True,'publicJvmtiInitialized':False,'warmCalls':100000,'enqueueCalls':1,'compileCompletionCalls':1,'heapMemoryQueryCalls':2,'heapCollectionCalls':0,'gcCompletionDelta':1,'error':''},
  'activeFrames':{'passed':True,'carrierJitCompiled':True,'inlineFlagNativeObserved':True,'blockedLiveWitnesses':True,'retainedLiveWitnesses':True,'frames':3,'integers':3,'references':3,'locationReads':6,'dexPcChecks':3,'warmCalls':100000,'error':'','runtimeJavaDebuggableObserved':True,'runtimeJavaDebuggable':False}}
 def output(report,code=-1):return 'INSTRUMENTATION_RESULT: stream=FRAME_PROOF_REPORT='+json.dumps(report)+'\nINSTRUMENTATION_CODE: '+str(code)+'\n'
 def reject(text):
@@ -12,6 +12,7 @@ def reject(text):
  raise AssertionError('Insufficient proof accepted')
 assert validate_frameproof(output(positive),'current')==positive
 checks=0
+report=copy.deepcopy(positive);report['bootstrap']['heapMemoryQueryCalls']=1;reject(output(report));checks+=1
 for group in (None,'bootstrap','activeFrames'):
  values=positive if group is None else positive[group]
  for key,value in values.items():

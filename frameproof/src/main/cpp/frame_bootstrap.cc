@@ -13,7 +13,10 @@ namespace artdcevm::frameproof {
 namespace {
 Observation observation;
 Enqueue enqueue=nullptr;LegacyEnqueue legacy_enqueue=nullptr;
-Done11 done11=nullptr;Done12 done12=nullptr;Done14 done14=nullptr;HeapCollect heap_collect=nullptr;
+Done11 done11=nullptr;Done12 done12=nullptr;Done14 done14=nullptr;HeapCollect heap_collect=nullptr;HeapTotalMemory heap_total_memory=nullptr;
+void* owned_thread=nullptr;
+struct MemoryQuery {void* self=nullptr;unsigned calls=0;size_t returned=0;};
+thread_local MemoryQuery* active_memory_query=nullptr;
 std::mutex installation,operation;
 bool attempted=false,installed=false,owned=false,debug_observed=false,java_debuggable=false;
 std::array<jobject,6> roots{};std::array<jint,10> dex{};
@@ -27,6 +30,14 @@ void Done11Proxy(void* receiver,void* method,void* self,bool osr){done11(receive
 void Done12Proxy(void* receiver,void* method,void* self,int kind){done12(receiver,method,self,kind);observation.Completed(receiver,method);}
 void Done14Proxy(void* receiver,void* method,void* self){done14(receiver,method,self);observation.Completed(receiver,method);}
 void HeapProxy(void* receiver,bool clear,int cause){heap_collect(receiver,clear,cause);observation.Collected(receiver);}
+size_t HeapTotalProxy(const void* receiver){
+ const size_t result=heap_total_memory(receiver);
+ if(active_memory_query && active_memory_query->self==owned_thread){
+  observation.MemoryQueried(const_cast<void*>(receiver));
+  ++active_memory_query->calls;active_memory_query->returned=result;
+ }
+ return result;
+}
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
 bool Install(HookEngine& hooks,std::string* error){
  std::lock_guard<std::mutex> lock(installation);
@@ -37,11 +48,12 @@ bool Install(HookEngine& hooks,std::string* error){
  auto d=hooks.FindSymbol("libart.so",kDone14);unsigned variant=14;
  if(!d){d=hooks.FindSymbol("libart.so",kDone12);variant=12;}
  if(!d){d=hooks.FindSymbol("libart.so",kDone11);variant=11;}
- auto h=hooks.FindSymbol("libart.so",kHeapCollect);
+ auto h=hooks.FindSymbol("libart.so",kHeapTotalMemory);
+ auto collect=hooks.FindSymbol("libart.so",kHeapCollect);
  using namespace abi::arm64::android_common;
  auto suspend=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto resume=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
- if(!e||!d||!h||!suspend||!resume)return Fail(error,"Missing named enqueue/DoneCompiling/CollectGarbage observation binding");
+ if(!e||!d||!h||!suspend||!resume)return Fail(error,"Missing named enqueue/DoneCompiling/public totalMemory observation binding");
  attempted=true;SuspendAll stop{};suspend(&stop,"owned nondebug frame observation",false);
  void *eo=nullptr,*dc=nullptr,*ho=nullptr;
  auto et=hooks.Install(e,legacy?reinterpret_cast<void*>(LegacyEnqueueProxy):reinterpret_cast<void*>(EnqueueProxy),&eo,error);
@@ -49,23 +61,52 @@ bool Install(HookEngine& hooks,std::string* error){
  void* proxy=variant==11?reinterpret_cast<void*>(Done11Proxy):variant==12?reinterpret_cast<void*>(Done12Proxy):reinterpret_cast<void*>(Done14Proxy);
  auto dt=et&&eo?hooks.Install(d,proxy,&dc,error):nullptr;
  if(variant==11)done11=reinterpret_cast<Done11>(dc);else if(variant==12)done12=reinterpret_cast<Done12>(dc);else done14=reinterpret_cast<Done14>(dc);
- auto ht=dt&&dc?hooks.Install(h,reinterpret_cast<void*>(HeapProxy),&ho,error):nullptr;
- heap_collect=reinterpret_cast<HeapCollect>(ho);installed=et&&dt&&ht&&eo&&dc&&ho;
+ auto ht=dt&&dc?hooks.Install(h,reinterpret_cast<void*>(HeapTotalProxy),&ho,error):nullptr;
+ heap_total_memory=reinterpret_cast<HeapTotalMemory>(ho);installed=et&&dt&&ht&&eo&&dc&&ho;
+ // Collection entry can be optimized out of a public GC route. It remains an
+ // optional passthrough observation, never a substitute for completion stats.
+ if(installed&&collect){void* original=nullptr;
+  auto token=hooks.Install(collect,reinterpret_cast<void*>(HeapProxy),&original,error);
+  if(token&&original)heap_collect=reinterpret_cast<HeapCollect>(original);
+  else installed=false;
+ }
  resume(&stop);return installed||Fail(error,"Unable to install passthrough frame observation hooks; restart process");
 }
 void Release(JNIEnv* env){
  observation.expected=nullptr;observation.gc_active=false;
  for(auto& root:roots){if(root)env->DeleteGlobalRef(root);root=nullptr;}
- owned=false;
+ owned_thread=nullptr;owned=false;
 }
-struct ReadRequest {void* runtime=nullptr;void* method=nullptr;bool compiled=false;runtime_services::View view;std::string error;};
+struct ReadRequest {void* runtime=nullptr;void* method=nullptr;void* self=nullptr;bool compiled=false;runtime_services::View view;std::string error;};
 bool Resolve(const runnable_jni::Context& context,void* opaque){
  auto& request=*static_cast<ReadRequest*>(opaque);method_identity::Oracle oracles[5];
  for(size_t i=0;i<5;++i)oracles[i]={roots[i],static_cast<uint32_t>(dex[i]),static_cast<uint32_t>(dex[5+i])};
  method_identity::Calibration calibration;
  if(!method_identity::Calibrate(context,leaf,oracles,5,&calibration,&request.error))return false;
  abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
- request.method=leaf(scope,roots[0]);return request.method&&!context.env->ExceptionCheck();
+ request.self=context.self;request.method=leaf(scope,roots[0]);return request.method&&!context.env->ExceptionCheck();
+}
+bool QueryPublicHeap(const runnable_jni::Context& context,void* opaque){
+ auto& request=*static_cast<ReadRequest*>(opaque);
+ if(!owned_thread||context.self!=owned_thread)return Fail(&request.error,"Public memory oracle owner changed");
+ auto klass=context.env->FindClass("java/lang/Runtime");
+ auto getter=klass?context.env->GetStaticMethodID(klass,"getRuntime","()Ljava/lang/Runtime;"):nullptr;
+ auto total=klass?context.env->GetMethodID(klass,"totalMemory","()J"):nullptr;
+ auto runtime=getter&&total?context.env->CallStaticObjectMethod(klass,getter):nullptr;
+ MemoryQuery query{context.self,0,0};
+ jlong bytes=0;
+ if(runtime&&!context.env->ExceptionCheck()){
+  active_memory_query=&query;bytes=context.env->CallLongMethod(runtime,total);active_memory_query=nullptr;
+ }
+ if(runtime)context.env->DeleteLocalRef(runtime);
+ if(klass)context.env->DeleteLocalRef(klass);
+ if(context.env->ExceptionCheck()||!runtime||bytes<=0||!query.calls||
+    query.returned!=static_cast<uint64_t>(bytes)||observation.conflict.load()){
+  std::ostringstream out;out<<"Public totalMemory oracle failed: callbacks="<<query.calls
+   <<" positiveResult="<<(bytes>0)<<" resultAgrees="<<(bytes>0&&query.returned==static_cast<uint64_t>(bytes))
+   <<" receiverConflict="<<observation.conflict.load();request.error=out.str();return false;
+ }
+ return true;
 }
 bool Match(const runnable_jni::Context&,void* opaque){
  auto& request=*static_cast<ReadRequest*>(opaque);size_t extent=0;
@@ -86,7 +127,7 @@ std::string Escape(const std::string& text){std::string out;for(char c:text){if(
 std::string Json(bool passed,bool compiled,jlong gc,const std::string& error){
  std::ostringstream out;out<<"{\"passed\":"<<(passed?"true":"false")<<",\"runtimeJavaDebuggableObserved\":"<<(debug_observed?"true":"false")<<",\"runtimeJavaDebuggable\":"<<(java_debuggable?"true":"false")<<",\"runtimeReceiversMatched\":"<<(passed?"true":"false")
  <<",\"methodIdentitiesChecked\":"<<(passed?5:0)<<",\"carrierJitCompiled\":"<<(compiled?"true":"false")<<",\"enqueueCalls\":"<<observation.enqueues.load()<<",\"compileCompletionCalls\":"<<observation.completions.load()
- <<",\"heapCollectionCalls\":"<<observation.collections.load()<<",\"gcCompletionDelta\":"<<gc<<",\"publicJvmtiInitialized\":false,\"error\":\""<<Escape(error)<<"\"}";return out.str();
+ <<",\"heapMemoryQueryCalls\":"<<observation.memory_queries.load()<<",\"heapCollectionCalls\":"<<observation.collections.load()<<",\"gcCompletionDelta\":"<<gc<<",\"publicJvmtiInitialized\":false,\"error\":\""<<Escape(error)<<"\"}";return out.str();
 }
 }
 }
@@ -115,15 +156,19 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_Fram
  auto reflected=env->FromReflectedMethod(roots[0]);auto named=env->GetStaticMethodID(carrier,"carrier","(ILjava/lang/Object;ILjava/lang/Object;ILjava/lang/Object;)I");
  if(!reflected||reflected!=named||env->ExceptionCheck()){Release(env);return env->ExceptionCheck()?nullptr:env->NewStringUTF("Public carrier JNI/reflection identity mismatch");}
  observation.jit=nullptr;observation.cache=nullptr;observation.heap=nullptr;observation.conflict=false;
- observation.enqueues=0;observation.completions=0;observation.collections=0;
+ observation.enqueues=0;observation.completions=0;observation.collections=0;observation.memory_queries=0;
+ owned_thread=request.self;
  observation.expected=request.method;observation.gc_active=true;
+ if(runnable_executor::With(env,roots[0],QueryPublicHeap,&request)!=runnable_jni::Result::kSuccess){Release(env);return env->ExceptionCheck()?nullptr:env->NewStringUTF(request.error.c_str());}
  jni_access::OwnedEvolutionProofs().observed={};
  return env->NewStringUTF("");
 }
 extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_FrameProofBootstrap_finish(JNIEnv* env,jclass,jlong gc_delta){
  using namespace artdcevm;using namespace frameproof;
  std::lock_guard<std::mutex> lock(operation);std::string error;bool passed=false;ReadRequest request;
- if(!owned||!observation.Complete()||gc_delta<=0)error="Missing real carrier enqueue/completion/heap or completed public GC proof";
+ if(!owned)error="Missing owned frame calibration";
+ else if(runnable_executor::With(env,roots[0],QueryPublicHeap,&request)!=runnable_jni::Result::kSuccess)error=request.error;
+ else if(!observation.Complete()||gc_delta<=0)error="Missing real carrier enqueue/completion/public Heap queries or completed public GC proof";
  else {
   ShadowHookEngine hooks;auto singleton=static_cast<void**>(hooks.FindSymbol("libart.so","_ZN3art7Runtime9instance_E"));size_t extent=0;
   if(!singleton||!method_identity::ReadableMappingExtent(singleton,&extent)||extent<sizeof(void*)||!(request.runtime=*singleton))error="Missing readable named Runtime singleton";
@@ -139,5 +184,5 @@ extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_FramePr
  using namespace artdcevm::frameproof;std::lock_guard<std::mutex> lock(operation);Release(env);
 }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_github_ytlog_artdcevm_testing_FrameProofBootstrap_ready(JNIEnv*,jclass){
- return artdcevm::frameproof::observation.Complete()?JNI_TRUE:JNI_FALSE;
+ return artdcevm::frameproof::observation.Ready()?JNI_TRUE:JNI_FALSE;
 }

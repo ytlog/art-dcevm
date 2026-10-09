@@ -24,9 +24,11 @@ def validate_frameproof(output,run_id):
     for key,value in expected.items():
         if type(bootstrap.get(key)) is not type(value) or bootstrap[key]!=value:
             raise RuntimeError('Missing independent native bootstrap proof: '+key)
-    for key in ('enqueueCalls','compileCompletionCalls','heapCollectionCalls','gcCompletionDelta'):
+    for key in ('enqueueCalls','compileCompletionCalls','heapMemoryQueryCalls','gcCompletionDelta'):
         if type(bootstrap.get(key)) is not int or bootstrap[key]<=0:
             raise RuntimeError('Missing actual observation/completion count: '+key)
+    if type(bootstrap.get('heapCollectionCalls')) is not int or bootstrap['heapCollectionCalls']<0:raise RuntimeError('Invalid optional collection observation count')
+    if bootstrap['heapMemoryQueryCalls']<2:raise RuntimeError('Missing before/after public Heap queries')
     frame=report.get('activeFrames')
     validate_active_frames({'activeFramesRequested':True,'ownedActiveFrameProof':frame})
     for key,value in {'runtimeJavaDebuggableObserved':True,'runtimeJavaDebuggable':False}.items():
