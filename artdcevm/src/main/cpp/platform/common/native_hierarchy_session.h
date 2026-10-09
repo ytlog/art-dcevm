@@ -85,6 +85,11 @@ class CalibrationScope final {
  source_handle_roots::Service&roots_;native_hierarchy_allocator::Service&allocation_;
  CalibrationScope*previous_=nullptr;bool active_=false;
 };
+// Shares the same first-Finish proxy with Install, without requiring allocator
+// services. Ordinary calibration may install this first; later hierarchy
+// installation reuses its original trampoline and never hooks the leaf twice.
+// Call under the production owner's actual ScopedSuspendAll.
+bool InstallPauseObservation(HookEngine&,std::string*);
 // Installs only named fixed allocator/first-Finish/capture leaves. It never
 // installs Run, CheckVerification or Collect observers (their owner is unique).
 // Call under the production owner's actual ScopedSuspendAll.

@@ -17,7 +17,7 @@ void Error(std::string*e,const char*s){if(e)*e=s;}
 using FinishFunction=bool(*)(void*,transaction_root::Holder*,void*);
 using AllocateFunction=abi::arm64::android_common::HierarchyAllocator;
 using Object=abi::arm64::android11::ReleaseObjectPointer;
-FinishFunction finish_original=nullptr;AllocateFunction allocate_original=nullptr;
+FinishFunction finish_original=nullptr;void*finish_token=nullptr;void*finish_target=nullptr;AllocateFunction allocate_original=nullptr;
 abi::arm64::android_common::HierarchyLoadClass load_original=nullptr;
 bool(*ids_original)(const void*)=nullptr;
 native_hierarchy_allocator::Service* installed_service=nullptr;
@@ -31,7 +31,9 @@ bool FinishProxy(void*o,transaction_root::Holder*h,void*i){
   if(!trace->OwnsDriver(def.driver))return finish_original(o,h,i);
   // Passive ordinary source calibration never changes original success/failure.
   const bool opened=trace->BeforeFinish(o,h,i);
-  const bool result=finish_original(o,h,i);
+  bool result;
+  try{result=finish_original(o,h,i);}
+  catch(...){if(opened)trace->AfterFinish(o,false);throw;}
   if(opened)trace->AfterFinish(o,result);
   return result;
  }
@@ -197,6 +199,15 @@ void* CalibrationScope::Allocate(void*owner,const void*old,const void*parent,con
  if(d.driver!=driver_||!roots_.ObserveAllocatorHandle(context_,fixture_,old,nullptr))return reinterpret_cast<void*>(original(owner,const_cast<void*>(old),const_cast<void*>(parent),const_cast<void*>(cache),index).reference);
  return allocation_.ObserveOriginal(context_,fixture_,owner,old,parent,cache,index,nullptr);
 }
+bool InstallPauseObservation(HookEngine&hooks,std::string*error){
+ std::lock_guard<std::mutex>lock(installation);
+ auto*target=hooks.FindSymbol("libopenjdkjvmti.so",abi::arm64::android_common::kFinishSubtreeAllocations);
+ if(!target){Error(error,"Missing named first-Finish pause boundary");return false;}
+ if(finish_token){if(target==finish_target)return true;Error(error,"First-Finish pause boundary differs from installed owner");return false;}
+ auto*token=hooks.Install(target,reinterpret_cast<void*>(FinishProxy),reinterpret_cast<void**>(&finish_original),error);
+ if(!token){finish_original=nullptr;return false;}
+ if(!finish_original)std::abort();finish_target=target;finish_token=token;return true;
+}
 bool Install(HookEngine&hooks,native_hierarchy_allocator::Service&service,const native_hierarchy_allocator::Functions&supplied,std::string*error){
  std::lock_guard<std::mutex>lock(installation);
  if(installed_service){if(installed_service==&service)return true;Error(error,"Hierarchy capture hooks have a different service owner");return false;}
@@ -208,11 +219,14 @@ bool Install(HookEngine&hooks,native_hierarchy_allocator::Service&service,const 
  void**originals[]={reinterpret_cast<void**>(&finish_original),reinterpret_cast<void**>(&allocate_original),reinterpret_cast<void**>(&load_original),reinterpret_cast<void**>(&ids_original)};
  void*targets[4]{};void*tokens[4]{};
  for(size_t i=0;i<4;++i)if(!(targets[i]=hooks.FindSymbol(libs[i],names[i]))){Error(error,"Missing named source hierarchy allocation boundary");return false;}
+ const bool existing_finish=finish_token!=nullptr;
+ if(existing_finish&&targets[0]!=finish_target){Error(error,"Hierarchy first-Finish differs from installed pause owner");return false;}
  size_t count=0;
- for(;count<4;++count){tokens[count]=hooks.Install(targets[count],proxies[count],originals[count],error);if(!tokens[count])break;if(!*originals[count])std::abort();}
+ for(;count<4;++count){if(count==0&&existing_finish)continue;tokens[count]=hooks.Install(targets[count],proxies[count],originals[count],error);if(!tokens[count])break;if(!*originals[count])std::abort();}
  bool bound=false;
  if(count==4){auto functions=supplied;functions.allocate=allocate_original;functions.load_class=load_original;functions.ensure_ids=ids_original;bound=service.SetOriginals(functions,error);}
- if(!bound){while(count){--count;if(!hooks.Remove(tokens[count],nullptr))std::abort();}finish_original=nullptr;allocate_original=nullptr;load_original=nullptr;ids_original=nullptr;return false;}
+ if(!bound){while(count){--count;if(tokens[count]&&!hooks.Remove(tokens[count],nullptr))std::abort();}if(!existing_finish)finish_original=nullptr;allocate_original=nullptr;load_original=nullptr;ids_original=nullptr;return false;}
+ if(!existing_finish){finish_token=tokens[0];finish_target=targets[0];}
  installed_service=&service;return true;
 }
 }
