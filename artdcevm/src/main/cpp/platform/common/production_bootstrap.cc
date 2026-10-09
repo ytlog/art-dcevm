@@ -17,6 +17,9 @@
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/native_source_calibration_bridge.h"
 #include "platform/common/native_source_observation_owner.h"
+#include "platform/common/native_schema_run_state.h"
+#include "platform/common/native_production_schema_capabilities.h"
+#include "platform/common/frame_family_calibration.h"
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
@@ -31,6 +34,8 @@
 #include "platform/common/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstdio>
+#include <fcntl.h>
+#include <unistd.h>
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/native_scope_executor.h"
@@ -64,19 +69,63 @@ struct NativeEngine final:Engine {
  std::vector<std::shared_ptr<contextual_field_id::Proof>> target_field_proofs,bootstrap_field_proofs;
  struct StagedClass {jclass owner;size_t field_base;std::vector<jfieldID> ids;std::vector<jobject> mirrors;};
  std::vector<StagedClass> staged_classes;std::vector<jclass> graph_bases;
+ std::vector<native_hierarchy_graph::Input> schema_inputs;
  abi::arm64::android11::CurrentThread graph_current=nullptr;
  field_mirror::NamedField graph_field_leaf=nullptr;
- void ClearStagedClasses(JNIEnv* env){graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
+ void ClearStagedClasses(JNIEnv* env){schema_inputs.clear();graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
  void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_source_stop::Service source_stop;
  native_source_observation::Owner source_observers;
+ native_production_schema_capabilities::Owner source_capabilities;
+ std::string source_factory_diagnostic;bool source_calibration_started=false;
+ bool SourceCapabilitiesCalibrated()const override{return source_capabilities.Ready();}
+ bool FrameGeometryCalibrated()const override{return frame_geometry_proven;}
+ std::string SourceFactoryDiagnostic()const override{
+  return source_capabilities.Ready()?"":source_factory_diagnostic.empty()?source_capabilities.Diagnostic():source_factory_diagnostic;
+ }
+ jobject source_fixture=nullptr;JNIEnv* source_env=nullptr;jvmtiEnv* source_ti=nullptr;
+ frame_family_calibration::Service frame_calibrator;
+ frame_family_calibration::Service::Prepared frame_calibration_storage;
+ std::vector<frame_family_calibration::MethodOracle> frame_methods;
+ whole_process_frames::Service whole_frames;bool frame_geometry_proven=false;std::string frame_geometry_diagnostic;
+ native_required_cleanup::Binding cleanup_binding;
+ native_schema_run_state::Dependencies schema_dependencies;
+ static void CalibrationBegin(void* driver,const runnable_jni::Context& context,void* raw) noexcept {
+  auto& e=*static_cast<NativeEngine*>(raw);e.source_calibration_started=false;
+  try{e.source_calibration_started=e.source_capabilities.Begin(driver,context,e.source_fixture,&e.source_factory_diagnostic);}
+  catch(...){e.source_calibration_started=false;}
+ }
+ static void CalibrationEnd(void* driver,bool success,void* raw) noexcept {
+  auto& e=*static_cast<NativeEngine*>(raw);if(!e.source_calibration_started)return;
+  try{if(e.source_capabilities.End(driver,success,&e.source_factory_diagnostic))
+    e.source_factory_diagnostic=e.source_capabilities.Ready()?"":e.source_capabilities.Diagnostic();}catch(...){}
+  e.source_calibration_started=false;
+ }
+ bool PrepareFrameGeometry(const thread_suspend_service::Service& state,void* self,std::string* error){
+  if(frame_geometry_proven)return true;
+  auto finder=[&](const char* name){return hooks.FindSymbol("libart.so",name);};
+  if(!frame_calibration_storage.context&&(!frame_family_calibration::Service::Bind(finder,&frame_calibrator)||
+     !frame_calibrator.Prepare(&frame_calibration_storage)))return Fail(error,"Frame geometry preparation unavailable");
+  frame_family_calibration::Result result;
+  {thread_suspend_service::SuspendScope stopped(state,"art-dcevm independent frame geometry");
+   if(!stopped.Supported()||!frame_calibrator.ObserveGeometry(self,frame_methods.data(),frame_methods.size(),frame_calibration_storage,&result))return Fail(error,"Actual constructor/public method geometry oracle rejected");}
+  frame_geometry_proven=whole_process_frames::Service::BindGeometryOnly(result.scanner_family,finder,&whole_frames);
+  return frame_geometry_proven||Fail(error,"Calibrated geometry scanner binding unavailable");
+ }
  struct PublicCacheWitness {
   jobject cache=nullptr,klass=nullptr,field=nullptr,method=nullptr;
   InstalledClassIds ids;uint32_t field_index=UINT32_MAX,method_index=UINT32_MAX;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
+ native_schema_run_state::CacheCalibration CacheCalibration()const {
+  const auto& w=source_cache_witness;native_schema_run_state::CacheCalibration c;
+  c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=112;
+  c.counts={w.ids.type_count,w.ids.field_count,w.ids.method_count};
+  c.type_index=w.ids.type_index;c.field_index=w.field_index;c.method_index=w.method_index;
+  c.native_field=w.native_field;c.native_method=w.native_method;return c;
+ }
  native_scope_executor::Executor native_scope;
  bool NativeScopeCalibrated()const override{return native_scope.Ready();}
  std::string source_stop_diagnostic;
@@ -87,6 +136,7 @@ struct NativeEngine final:Engine {
  native_structural_reflection::Service reflection;
  native_member_provider::Service provider;
  native_schema_guard_verifier::Verifier schema_verifier;
+ std::unique_ptr<native_schema_run_state::RunState> schema_run;
  native_abstract_instances::Service abstract_instances;
  // Owned by the process backend, never a temporary bootstrap candidate. A
  // partially installed listener keeps its Service and decoder owner alive.
@@ -140,8 +190,55 @@ struct NativeEngine final:Engine {
   const auto it=std::upper_bound(e.graph_maps.begin(),e.graph_maps.end(),p,[](uintptr_t value,const auto& range){return value<range.begin;});
   if(it==e.graph_maps.begin())return false;const auto& range=*std::prev(it);return p>=range.begin&&p+length<=range.end&&(!write||range.write);
  }
+ // Reserve ordinary storage before entering the actual source stop. The
+ // stopped refresh below never grows a container or invokes buffered stdio.
+ bool PrepareStoppedMaps(std::string* error){
+  if(!RefreshMaps(error))return false;
+  if(graph_maps.size()>16384)return Fail(error,"Too many runtime mappings for source stop");
+  graph_maps.reserve(std::min(size_t(16384),graph_maps.size()+4096));return true;
+ }
+ static bool RefreshStoppedMaps(void* raw,std::string* error){
+  auto& e=*static_cast<NativeEngine*>(raw);
+  auto* run=native_schema_run_state::RunState::Current();
+  if(!run||run!=e.schema_run.get()||!run->StoppedWindow())return Fail(error,"Mapping refresh lacks actual schema stop owner");
+  const int fd=::open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0)return Fail(error,"Stopped mapping open failed");
+  struct Close{int fd;~Close(){::close(fd);}} close{fd};
+  e.graph_maps.clear();char buffer[4096],line[1024];size_t used=0;bool valid=true;
+  auto consume=[&](){
+   size_t cursor=0;uintptr_t begin=0,end=0;
+   auto hex=[&](uintptr_t* out){size_t digits=0;uintptr_t value=0;
+    while(cursor<used){const unsigned char ch=line[cursor];const unsigned digit=ch>='0'&&ch<='9'?ch-'0':ch>='a'&&ch<='f'?ch-'a'+10:16;
+     if(digit==16)break;if(value>(UINTPTR_MAX-digit)/16)return false;value=value*16+digit;++cursor;++digits;}
+    *out=value;return digits!=0;};
+   if(!hex(&begin)||cursor>=used||line[cursor++]!='-'||!hex(&end)||cursor>=used||line[cursor++]!=' '||end<=begin||cursor+4>used)return false;
+   if(line[cursor]!='r')return true;
+   if(e.graph_maps.size()==e.graph_maps.capacity()||(!e.graph_maps.empty()&&begin<e.graph_maps.back().end))return false;
+   e.graph_maps.push_back({begin,end,line[cursor+1]=='w'});return true;
+  };
+  while(valid){const ssize_t count=::read(fd,buffer,sizeof(buffer));if(count<0){valid=false;break;}if(count==0)break;
+   for(ssize_t n=0;n<count;++n){if(buffer[n]=='\n'){if(!consume()){valid=false;break;}used=0;}else if(used==sizeof(line)){valid=false;break;}else line[used++]=buffer[n];}}
+  if(valid&&used)valid=consume();
+  if(!valid||e.graph_maps.empty()||!run->StoppedWindow()){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
+  return true;
+ }
+ static bool GraphExtent(void* raw,const void* address,size_t* extent){
+  auto& e=*static_cast<NativeEngine*>(raw);auto* run=native_schema_run_state::RunState::Current();
+  if(!extent||!run||run!=e.schema_run.get()||!run->StoppedWindow())return false;
+  uintptr_t p=uintptr_t(address);
+#if defined(__ANDROID__) && defined(__aarch64__)
+  p&=UINT64_C(0x00ffffffffffffff);
+#endif
+  if(!p)return false;
+  const auto it=std::upper_bound(e.graph_maps.begin(),e.graph_maps.end(),p,[](uintptr_t value,const auto& range){return value<range.begin;});
+  if(it==e.graph_maps.begin())return false;const auto& range=*std::prev(it);
+  if(p<range.begin||p>=range.end)return false;*extent=range.end-p;return true;
+ }
  static bool GraphReadable(void* raw,const void* address,size_t bytes){
-  const auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_finalizing)return GraphMapped(raw,address,bytes,false);
+  const auto& e=*static_cast<NativeEngine*>(raw);
+  if(e.schema_run&&native_schema_run_state::RunState::Current()==e.schema_run.get()&&e.schema_run->StoppedWindow()){
+   size_t extent=0;return GraphExtent(raw,address,&extent)&&extent>=bytes;
+  }
+  if(!e.schema_finalizing)return GraphMapped(raw,address,bytes,false);
   size_t extent=0;return method_identity::ReadableMappingExtent(address,&extent)&&extent>=bytes;
  }
  static bool GraphWritable(void* raw,const void* address,size_t bytes){return GraphMapped(raw,address,bytes,true);}
@@ -339,19 +436,22 @@ struct NativeEngine final:Engine {
  static bool Retired(void* p){return current&&current->retired_methods.Contains(p);}
  static bool MethodRetired(void* p,void* m){return static_cast<NativeEngine*>(p)->retired_methods.Contains(m);}
  static void RetireMethod(void* p,void* m){static_cast<NativeEngine*>(p)->retired_methods.Retire(m);}
+ native_member_provider::Dependencies MemberDependencies() {
+  native_member_provider::Dependencies d;d.hooks=&hooks;d.methods=methods.get();d.method_model=&model;
+  d.metadata=&metadata;d.fields=&storage;d.cache=&cache;d.runtime=runtime;d.reflection=&reflection;
+  d.retirement={this,MethodRetired,FieldRetired,RetireMethod,RetireField};d.is_retired=Retired;
+  d.allow_field_removal=handles_proven;d.handle_guards={this,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
+  if(schema_operation){d.expected_removal=native_member_provider::Removal::kSchemaEvolution;d.schemas=&schema_policies;d.schema_guards=&schema_verifier;}
+  return d;
+ }
  static std::unique_ptr<source_commit::Services> PrepareCommit(const source_commit::Plan& p,void* raw,std::string* error){
-  auto& s=*static_cast<NativeEngine*>(raw);
-  native_member_provider::Dependencies d;d.hooks=&s.hooks;d.methods=s.methods.get();d.method_model=&s.model;
-  d.metadata=&s.metadata;d.fields=&s.storage;d.cache=&s.cache;d.runtime=s.runtime;d.reflection=&s.reflection;
-  d.retirement={&s,MethodRetired,FieldRetired,RetireMethod,RetireField};d.is_retired=Retired;
-  d.allow_field_removal=s.handles_proven;d.handle_guards={&s,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
+  auto& s=*static_cast<NativeEngine*>(raw);auto d=s.MemberDependencies();
   if(s.schema_operation){
    if(&p!=&s.prepared_schema_plan||!s.schema_collected||!s.schema_verifier.Seal(p,error)||!s.PrepareSchemaPolicy(p,error))return nullptr;
    if(!s.permissions_proven)for(const auto& policy:s.schema_policies)for(const auto& requirement:policy.Requirements())
     if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
      if(error)*error="Actual final/access permission calibration unavailable: "+s.permission_diagnostic;return nullptr;
     }
-   d.expected_removal=native_member_provider::Removal::kSchemaEvolution;d.schemas=&s.schema_policies;d.schema_guards=&s.schema_verifier;
   }
   return s.provider.Prepare(p,d,error);
  }
@@ -403,7 +503,14 @@ struct NativeEngine final:Engine {
   // preparation cannot stand in for the original source GC/final-stop proof.
   // Capability gaps leave ordinary behavior intact and cannot authorize Session.
   std::optional<native_source_calibration::Bridge> source_observation;
+  source_env=env;source_ti=ti;source_fixture=env->NewGlobalRef(defs.front().klass);
+  struct SourceContext {NativeEngine& e;JNIEnv* env;~SourceContext(){
+   if(e.schema_run){e.schema_verifier.Clear(env);e.schema_run.reset();}
+   if(e.source_fixture)env->DeleteGlobalRef(e.source_fixture);e.source_fixture=nullptr;e.source_env=nullptr;e.source_ti=nullptr;
+  }} source_context{*this,env};
+  if(!source_fixture||env->ExceptionCheck())return owned_failure_diagnostic::Unavailable(error,"Source original fixture rooting");
   if(!batch){
+   source_factory_diagnostic.clear();
    thread_suspend_service::Service state;native_source_stop::Service candidate;
    source_stop={};source_stop_diagnostic.clear();
    const bool state_proven=thread_state_calibration::Calibrate(hooks,env,anchor,&state,&source_stop_diagnostic);
@@ -424,8 +531,14 @@ struct NativeEngine final:Engine {
     auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
     void* self=current_thread?current_thread():nullptr;size_t extent=0;
     if(self&&method_identity::ReadableMappingExtent(self,&extent)){
-     if(source_observers.Install(hooks,env,runtime,state,self,extent,&source_stop_diagnostic))
-      source_observation.emplace(candidate,self,extent,source_observers.Loading(),runnable_jni::Context{self,env,vm});
+     if(source_observers.Install(hooks,env,runtime,state,self,extent,&source_stop_diagnostic)){
+      const runnable_jni::Context context{self,env,vm};
+      const bool capture=source_capabilities.Prepare(hooks,storage,metadata,runtime,context,&source_factory_diagnostic)&&
+       source_capabilities.InstallHooks(native_owned_removal::ObserveSourceFailure,&source_factory_diagnostic);
+      if(!frame_geometry_proven)PrepareFrameGeometry(state,self,&frame_geometry_diagnostic);
+      const native_source_calibration::RunLifecycle lifecycle=capture?native_source_calibration::RunLifecycle{this,CalibrationBegin,CalibrationEnd}:native_source_calibration::RunLifecycle{};
+      source_observation.emplace(candidate,self,extent,source_observers.Loading(),context,lifecycle);
+     }
     }
     else source_stop_diagnostic="Ordinary source calibration current Thread mapping unavailable";
    }
@@ -455,6 +568,12 @@ struct Request {
 bool Observe(const runnable_jni::Context& scope,void* raw){
  auto& r=*static_cast<Request*>(raw);auto& e=*r.engine;
  if(!method_identity::Calibrate(scope,r.leaf,r.method_oracles->data(),r.method_oracles->size(),&e.model,&r.error))return false;
+ e.frame_methods.clear();e.frame_methods.reserve(r.method_oracles->size());
+ for(size_t n=0;n<r.method_oracles->size();++n){const auto& oracle=(*r.method_oracles)[n];
+  const abi::arm64::android_common::RunnableJniScope actual{scope.self,scope.env,scope.vm};
+  void* method=r.leaf(actual,oracle.strong_global_method);
+  if(!method)return false;e.frame_methods.push_back({method,e.model.readable_extents[n],oracle.dex_method_index,oracle.java_modifiers});
+ }
  void* klass=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.owner,&klass))return false;
  method_array::View table;
  if(!owned_method_table::Calibrate(scope,r.leaf,e.model,klass,r.counts,r.method_oracles->data(),r.method_oracles->size(),&table,&r.error))return false;
@@ -700,6 +819,17 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  if(graph_bases.size()!=definitions.size())return false;
  if(runnable_executor::With(env,anchor,ObserveGraphReaders,this)!=runnable_jni::Result::kSuccess)return Fail(error,graph_reader_error.empty()?"Native graph Runnable scope failed before reader proof":graph_reader_error.c_str());
  if(schema_operation){
+  // These public original Class globals belong to this one staged operation.
+  // Proposed declarations come from the actual incoming DEX, not replacement
+  // metadata captured later by the source allocator.
+  schema_inputs.reserve(definitions.size());
+  for(const auto& definition:definitions){native_hierarchy_graph::Input input;
+   for(const auto& stage:staged_classes)if(env->IsSameObject(stage.owner,definition.klass)){if(input.strong_original)return Fail(error,"Duplicate hierarchy input Class");input.strong_original=stage.owner;}
+   if(!input.strong_original||env->ExceptionCheck()||
+      live_schema::ReadLiveSchema(ti,env,input.strong_original,&input.before,error)!=JVMTI_ERROR_NONE||
+      !evolution::ReadDexDeclarations(definition.dex,&input.after,error))return false;
+   schema_inputs.push_back(std::move(input));
+  }
   PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
   if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
   std::vector<jclass> affected;affected.reserve(staged_classes.size());
