@@ -11,4 +11,5 @@
   <instrumentation android:name="com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Standard JVMTI Agent conformance" android:functionalTest="true"/>
   <instrumentation android:name="com.github.ytlog.artdcevm.testing.PublicJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Public JVMTI compatibility" android:functionalTest="true"/>
   <instrumentation android:name="com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Owned JNI access calibration" android:functionalTest="true"/>
+  <instrumentation android:name="com.github.ytlog.artdcevm.testing.ProductionSchemaInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Required production schema scenarios" android:functionalTest="true"/>
 </manifest>

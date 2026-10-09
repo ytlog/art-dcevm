@@ -34,7 +34,10 @@ elif 'instrument' in args:
     if mode=='mismatch':file_report['nativeDiagnostic']='different payload'
     saved.write_text(json.dumps(file_report))
     print('INSTRUMENTATION_RESULT: productionSchemaReport='+json.dumps(report))
-    print('FAILURES!!!' if mode=='failed' else 'OK (1 test)')
+    if args[-1].endswith('ProductionSchemaInstrumentation'):
+        print('INSTRUMENTATION_RESULT: schemaRunnerCompleted='+('false' if mode in ('failed','incomplete') else 'true'))
+        print('INSTRUMENTATION_CODE: '+('0' if mode=='wrong_code' else '-1'))
+    else:print('FAILURES!!!' if mode=='failed' else 'OK (1 test)')
 elif args[:3]==['exec-out','run-as','dev.artdcevm.lab']:
     if mode=='missing':sys.exit(1)
     print(saved.read_text())
@@ -52,30 +55,35 @@ def run(args,**kwargs):
 subprocess.run=run
 sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_path(sys.argv[0],run_name='__main__')
 ''')
-    for mode in ('normal','failed','timeout','stale','wrong_scope','missing','mismatch'):
-        trace=tmp/(mode+'.jsonl');saved=tmp/(mode+'.json')
-        env=dict(os.environ,MODE=mode,TRACE=str(trace),SAVED=str(saved))
-        result=subprocess.run([sys.executable,str(wrapper),str(scripts/'run-production-schema.py'),
-                               '--serial','fixture','--adb',str(fake),'--apk',str(app),
-                               '--test-apk',str(test),'--case','field-types','--scope','common-owned'],
-                              env=env,capture_output=True,text=True,timeout=10)
-        metadata=json.loads(result.stdout.splitlines()[-2])
-        assert metadata['passed']==(mode=='normal'),(mode,result.stdout,result.stderr)
-        assert (result.returncode==0)==(mode=='normal')
-        assert metadata['reportFileCaptured']==(mode in ('normal','failed','timeout','mismatch'))
-        out=Path(result.stdout.splitlines()[-1])
-        if mode in ('timeout','stale','wrong_scope','missing'):
-            assert metadata['instrumentationTimedOut'] is True
-            assert metadata['timeoutDiagnostics']['livePids']==[1234]
-            assert metadata['errors'],metadata
-        if mode=='timeout':
-            # A complete, successful saved payload still cannot turn timeout green.
-            assert metadata['recoveredReportErrors']==[]
-            assert json.loads((out/'report.json').read_text())['passed'] is True
-        if mode in ('stale','wrong_scope','missing'):
-            assert not (out/'report.json').exists()
-        if mode=='mismatch':assert 'Persisted report differs' in str(metadata['errors'])
-        calls=[json.loads(line) for line in trace.read_text().splitlines()]
-        instrument=next(i for i,c in enumerate(calls) if 'instrument' in c)
-        assert not any('force-stop' in c or 'install' in c or 'instrument' in c for c in calls[instrument+1:])
-        print('Production schema recovery:',mode,'PASS')
+    for self_route in (False,True):
+        for mode in ('normal','failed','timeout','stale','wrong_scope','missing','mismatch')+ (('incomplete','wrong_code') if self_route else ()):
+            trace=tmp/(('self-' if self_route else 'junit-')+mode+'.jsonl');saved=tmp/(mode+'.json')
+            env=dict(os.environ,MODE=mode,TRACE=str(trace),SAVED=str(saved))
+            result=subprocess.run([sys.executable,str(wrapper),str(scripts/'run-production-schema.py'),
+                                   '--serial','fixture','--adb',str(fake),'--apk',str(app),
+                                   *(['--self-instrumentation'] if self_route else ['--test-apk',str(test)]),'--case','field-types','--scope','common-owned'],
+                                  env=env,capture_output=True,text=True,timeout=10)
+            metadata=json.loads(result.stdout.splitlines()[-2])
+            assert metadata['passed']==(mode=='normal'),(mode,result.stdout,result.stderr)
+            assert (result.returncode==0)==(mode=='normal')
+            assert metadata['reportFileCaptured']==(mode in ('normal','failed','timeout','mismatch','incomplete','wrong_code'))
+            out=Path(result.stdout.splitlines()[-1])
+            if mode in ('timeout','stale','wrong_scope','missing'):
+                assert metadata['instrumentationTimedOut'] is True
+                assert metadata['timeoutDiagnostics']['livePids']==[1234]
+                assert metadata['errors'],metadata
+            if mode=='timeout':
+                # A complete, successful saved payload still cannot turn timeout green.
+                assert metadata['recoveredReportErrors']==[]
+                assert json.loads((out/'report.json').read_text())['passed'] is True
+            if mode in ('stale','wrong_scope','missing'):
+                assert not (out/'report.json').exists()
+            if mode=='mismatch':assert 'Persisted report differs' in str(metadata['errors'])
+            calls=[json.loads(line) for line in trace.read_text().splitlines()]
+            instrument=next(i for i,c in enumerate(calls) if 'instrument' in c)
+            assert not any('force-stop' in c or 'install' in c or 'instrument' in c for c in calls[instrument+1:])
+            if self_route:
+                assert metadata['runner']=='self' and 'testSha256' not in metadata
+                assert not any('dev.artdcevm.lab.test' in c and 'path' in c for c in calls)
+                assert calls[instrument][-1].endswith('ProductionSchemaInstrumentation')
+            print('Production schema recovery:', 'self' if self_route else 'junit',mode,'PASS')
