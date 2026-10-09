@@ -23,6 +23,7 @@ struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,m
   uint32_t map_row=0,inline_begin=0,inline_end=0,native_carrier_registers=0,
            decoded_register_first=0,decoded_register_count=0,expected_registers=0;
   bool register_range_observed=false,native_register_count_observed=false,native_inline_depth_observed=false;
+  const char* register_count_source="unobserved";
   uint64_t native_register_count=0;uint32_t slow_register_expected_count=0,source_inline_depth=0,native_inline_depth=0;uint32_t physical_owner_mask=0;
   Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
@@ -51,7 +52,7 @@ class Service {
     candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
     candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
     candidate.inline_depth_=reinterpret_cast<InlineDepth>(finder("_ZNK3art12StackVisitor11InlineDepthEv"));
-    candidate.register_count_=reinterpret_cast<RegisterCount>(Modern(family)?
+    candidate.register_count_=reinterpret_cast<RegisterCount>(NeedsCountLeaf(family)?
       required("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"):
       finder("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
     candidate.decode_map_=reinterpret_cast<abi::arm64::dex_register_map::Decode>(required(abi::arm64::dex_register_map::kDecode));
@@ -59,7 +60,7 @@ class Service {
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
     candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
-    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ || (Modern(family) && !candidate.register_count_) ||
+    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ || (NeedsCountLeaf(family) && !candidate.register_count_) ||
        !stack_bound || !candidate.jit_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
@@ -109,6 +110,7 @@ class Service {
   using ContainsJit=bool (*)(const void*,const void*);
   using ContainsHeader=bool (*)(const void*,uintptr_t);
   using Nterp=bool (*)(const void*);
+  static bool NeedsCountLeaf(Family f){return f==Family::kAndroid14 || f==Family::kAndroid15 || f==Family::kAndroid16;}
   static bool Modern(Family f){return f==Family::kAndroid14 || f==Family::kAndroid15 || f==Family::kAndroid16 || f==Family::kAndroid17;}
   static std::optional<stack_visitor_service::Declaration> Declaration(Family f) {
     using D=stack_visitor_service::Declaration;
@@ -296,7 +298,7 @@ class Service {
         return Fail(Failure::kDecodedMap,"decoded-vreg-locations-invalid");
       // Match the original slow reader's own register-count leaf and depth
       // contract, rather than inferring its bounds from our map range alone.
-      if(service.register_count_) {
+      if(service.register_count_ || service.family_==Family::kAndroid17) {
         const uint32_t depth=this->inline_frames.end.row-this->inline_frames.begin.row;
         report.source_inline_depth=depth;report.slow_register_expected_count=range.first+range.count;
         if(service.inline_depth_) {
@@ -306,8 +308,21 @@ class Service {
           if(native_depth!=depth)return Fail(Failure::kFrameIdentity,"original-inline-depth-versus-source-cursor-mismatch");
         }
         if(depth>INT32_MAX)return Fail(Failure::kDecodedMap,"native-inline-depth-outside-source-register-count-contract");
-        const size_t native_count=service.register_count_(this,info,static_cast<int>(depth));
-        report.native_register_count_observed=true;report.native_register_count=native_count;
+        size_t native_count;
+        if(service.register_count_) {
+          native_count=service.register_count_(this,info,static_cast<int>(depth));
+          report.native_register_count_observed=true;report.register_count_source="named-original-GetNumberOfRegisters";
+        }else {
+          // Exact b753cf stack.cc helper: physical depth0 is the complete
+          // native-constructed CodeInfo count; inline depth selects the current
+          // native range's last cumulative register count. The helper body may
+          // be compiler-inlined and absent from the actual named ELF inventory.
+          uint32_t source_count=view.dex_regs;
+          if(depth && !view.InlineInfos().Read(this->inline_frames.end.row-1,5,&source_count))
+            return Fail(Failure::kDecodedMap,"fixed17-slow-cumulative-register-count-unreadable");
+          native_count=source_count;report.register_count_source="fixed17-original-helper-equivalent";
+        }
+        report.native_register_count=native_count;
         const size_t expected_count=range.first+range.count;
         if(native_count!=expected_count)
           return Fail(Failure::kDecodedMap,"original-slow-register-count-versus-complete-map-mismatch");

@@ -138,6 +138,7 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<",\"registerRangeObserved\":"<<(attempt.report.register_range_observed?"true":"false")
    <<",\"decodedRegisterFirst\":"<<attempt.report.decoded_register_first<<",\"decodedRegisterCount\":"<<attempt.report.decoded_register_count
    <<",\"expectedRegisters\":"<<attempt.report.expected_registers
+   <<",\"registerCountSource\":\""<<attempt.report.register_count_source<<"\""
    <<",\"nativeRegisterCountObserved\":"<<(attempt.report.native_register_count_observed?"true":"false")
    <<",\"nativeRegisterCount\":"<<attempt.report.native_register_count
    <<",\"slowRegisterExpectedCount\":"<<attempt.report.slow_register_expected_count
