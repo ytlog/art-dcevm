@@ -482,7 +482,7 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
   if(!s.refreshed||(!s.batch_snapshot&&!s.FrozenProof()))return false;
   if(!std::any_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))return false;
   if(requirement.kind==native_schema_policy::GuardKind::ExistingInstances||requirement.kind==native_schema_policy::GuardKind::AbstractMethodDependents)
-   return s.bindings.abstract_instances&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,nullptr);
+   return s.bindings.abstract_instances&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,nullptr,s.stopped_context);
   return true;
  }
  const auto prove=[&]()->bool {

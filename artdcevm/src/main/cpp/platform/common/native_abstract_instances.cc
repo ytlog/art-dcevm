@@ -11,25 +11,25 @@ static_assert(kComponent==offsetof(class_metadata::Class16,component_type)&&kCom
 struct LongArrayPrefix {abi::arm64::ObjectPrefix object;int32_t length,padding;};
 static_assert(sizeof(LongArrayPrefix)==16&&offsetof(LongArrayPrefix,length)==8);
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
-bool Mapped(void* address,size_t needed){size_t extent=0;return address&&method_identity::ReadableMappingExtent(address,&extent)&&extent>=needed;}
+bool Mapped(void* address,size_t needed,const modern_field_metadata::ReadContext* context=nullptr){size_t extent=0;return address&&modern_field_metadata::ReadMappingExtent(context,address,&extent)&&extent>=needed;}
 const class_metadata::Layout& Layout(const modern_field_metadata::FieldMetadata& metadata){return metadata.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;}
-bool State(const modern_field_metadata::FieldMetadata& metadata,void* klass,class_metadata::State* state){
- return Mapped(klass,Layout(metadata).size)&&class_metadata::ReadState(Layout(metadata),klass,Layout(metadata).size,state);
+bool State(const modern_field_metadata::FieldMetadata& metadata,void* klass,class_metadata::State* state,const modern_field_metadata::ReadContext* context=nullptr){
+ return Mapped(klass,Layout(metadata).size,context)&&class_metadata::ReadState(Layout(metadata),klass,Layout(metadata).size,state);
 }
 bool Read(const modern_field_metadata::FieldMetadata& metadata,method_identity::Model model,
-          void* klass,bool* abstract,size_t concrete_prefix,void* expected=nullptr,bool* found=nullptr,std::string* error=nullptr){
- class_metadata::State state;if(!abstract||!metadata.Calibrated()||!State(metadata,klass,&state))return Fail(error,"Abstract vtable lacks a calibrated live Class declaration");
+          void* klass,bool* abstract,size_t concrete_prefix,void* expected=nullptr,bool* found=nullptr,std::string* error=nullptr,const modern_field_metadata::ReadContext* context=nullptr){
+ class_metadata::State state;if(!abstract||!metadata.Calibrated()||!State(metadata,klass,&state,context))return Fail(error,"Abstract vtable lacks a calibrated live Class declaration");
  *abstract=false;if(found)*found=false;
  if(state.IsPrimitive()||(state.access_flags&0x200u)||metadata.Reference(klass,kComponent))return Fail(error,"Abstract replacement is not an ordinary Class with external vtable");
- void* meta=metadata.Reference(klass,0);if(!Mapped(meta,Layout(metadata).size))return Fail(error,"Abstract holder lacks actual Class metatype");
+ void* meta=metadata.Reference(klass,0);if(!Mapped(meta,Layout(metadata).size,context))return Fail(error,"Abstract holder lacks actual Class metatype");
  void* table=nullptr;size_t payload=0;int32_t length=0;
  if(state.access_flags&0x400u){
   table=metadata.Reference(klass,kVtable);if(!table)return true;
-  if(!Mapped(table,sizeof(LongArrayPrefix)))return Fail(error,"Abstract vtable prefix is unreadable");
+  if(!Mapped(table,sizeof(LongArrayPrefix),context))return Fail(error,"Abstract vtable prefix is unreadable");
   void* array_class=metadata.Reference(table,0);class_metadata::State array_state;
-  if(!State(metadata,array_class,&array_state)||metadata.Reference(array_class,0)!=meta)return Fail(error,"Abstract vtable array Class identity differs");
+  if(!State(metadata,array_class,&array_state,context)||metadata.Reference(array_class,0)!=meta)return Fail(error,"Abstract vtable array Class identity differs");
   void* component=metadata.Reference(array_class,kComponent);class_metadata::State component_state;
-  if(!State(metadata,component,&component_state)||metadata.Reference(component,0)!=meta||(component_state.primitive_type&0xffffu)!=6u)return Fail(error,"Abstract external vtable is not the fixed primitive long[] declaration");
+  if(!State(metadata,component,&component_state,context)||metadata.Reference(component,0)!=meta||(component_state.primitive_type&0xffffu)!=6u)return Fail(error,"Abstract external vtable is not the fixed primitive long[] declaration");
   std::memcpy(&length,static_cast<char*>(table)+offsetof(LongArrayPrefix,length),4);payload=sizeof(LongArrayPrefix);
  }else{
   // Fixed mirror/class.h: length at sizeof(Class), then aligned IMT pointer,
@@ -38,15 +38,15 @@ bool Read(const modern_field_metadata::FieldMetadata& metadata,method_identity::
   uint32_t class_size=0;const size_t size_offset=metadata.StorageModel()==modern_field_metadata::Model::kSplit?offsetof(class_metadata::Class11,class_size):offsetof(class_metadata::Class17,class_size);
   std::memcpy(&class_size,static_cast<char*>(klass)+size_offset,4);
   const size_t prefix=concrete_prefix;payload=((prefix+4+7)&~size_t(7))+8;table=klass;
-  if(class_size<payload||!Mapped(klass,payload))return Fail(error,"Concrete embedded vtable lacks source Class extent");
+  if(class_size<payload||!Mapped(klass,payload,context))return Fail(error,"Concrete embedded vtable lacks source Class extent");
   std::memcpy(&length,static_cast<char*>(klass)+prefix,4);
   if(length<0||size_t(length)>(class_size-payload)/8)return Fail(error,"Concrete embedded vtable exceeds source Class size");
  }
- if(length<0||length>1000000||!Mapped(table,payload+size_t(length)*8))return Fail(error,"Abstract vtable length exceeds mapped storage");
+ if(length<0||length>1000000||!Mapped(table,payload+size_t(length)*8,context))return Fail(error,"Abstract vtable length exceeds mapped storage");
  const auto& method=model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
  for(int32_t i=0;i<length;++i){uint64_t address=0;std::memcpy(&address,static_cast<char*>(table)+payload+size_t(i)*8,8);
   void* entry=reinterpret_cast<void*>(address);method_metadata::Identity identity;
-  if(!entry||address%4||!Mapped(entry,method.size)||!method_metadata::ReadIdentity(method,entry,method.size,&identity))return Fail(error,"Abstract vtable method entry lacks calibrated readable identity");
+  if(!entry||address%4||!Mapped(entry,method.size,context)||!method_metadata::ReadIdentity(method,entry,method.size,&identity))return Fail(error,"Abstract vtable method entry lacks calibrated readable identity");
   if(expected==entry&&found)*found=true;
   *abstract|=(identity.access_flags&0x400u)!=0;
  }
@@ -98,19 +98,19 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,const modern_field_metadat
  if(matched!=1)return Fail(error,"No unique fixed external/embedded vtable declaration matches public Class/Method identities");
  metadata_=&metadata;method_model_=model.model;embedded_prefix_=selected;if(error)error->clear();return true;
 }
-bool Service::Validate(const source_commit::Plan& plan,size_t pair,const modern_field_metadata::FieldMetadata& metadata,std::string* error)const{
+bool Service::Validate(const source_commit::Plan& plan,size_t pair,const modern_field_metadata::FieldMetadata& metadata,std::string* error,const modern_field_metadata::ReadContext* context)const{
  if(metadata_!=&metadata||!metadata.Calibrated()||pair>=plan.old_classes.size()||plan.old_classes.size()!=plan.new_classes.size()||plan.old_instances.size()!=plan.new_instances.size())
   return Fail(error,"Existing-instance abstract validation lacks the same calibrated native owner and complete Holder roots");
 
  for(size_t i=0;i<plan.old_instances.size();++i){void* instance=plan.old_instances[i];void* replacement=plan.new_instances[i];
-  if(!Mapped(instance,sizeof(abi::arm64::ObjectPrefix))||!Mapped(replacement,sizeof(abi::arm64::ObjectPrefix)))return Fail(error,"Existing-instance root is missing or unreadable");
+  if(!Mapped(instance,sizeof(abi::arm64::ObjectPrefix),context)||!Mapped(replacement,sizeof(abi::arm64::ObjectPrefix),context))return Fail(error,"Existing-instance root is missing or unreadable");
   void* klass=metadata.Reference(instance,0);auto old=std::find(plan.old_classes.begin(),plan.old_classes.end(),klass);
   if(old==plan.old_classes.end())return Fail(error,"Existing-instance actual Class is outside paired Holder proof");
   size_t k=size_t(old-plan.old_classes.begin());if(metadata.Reference(replacement,0)!=plan.new_classes[k])return Fail(error,"Replacement-instance Class differs from exact paired Holder");
  }
  for(size_t k=0;k<plan.old_classes.size();++k){
   if(std::none_of(plan.old_instances.begin(),plan.old_instances.end(),[&](void* instance){return metadata.Reference(instance,0)==plan.old_classes[k];}))continue;
-  bool unresolved=false;if(!Read(metadata,method_model_,plan.new_classes[k],&unresolved,embedded_prefix_,nullptr,nullptr,error))return false;
+  bool unresolved=false;if(!Read(metadata,method_model_,plan.new_classes[k],&unresolved,embedded_prefix_,nullptr,nullptr,error,context))return false;
   if(unresolved)return Fail(error,"An actual migrated instance would inherit an abstract method");
  }
  if(error)error->clear();return true;

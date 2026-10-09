@@ -11,7 +11,8 @@ class Service {
   bool Calibrate(HookEngine&,JNIEnv*,const modern_field_metadata::FieldMetadata&,
                  const method_identity::Calibration&,std::string*);
   bool Validate(const source_commit::Plan&,size_t class_pair,
-                const modern_field_metadata::FieldMetadata&,std::string*)const;
+                const modern_field_metadata::FieldMetadata&,std::string*,
+                const modern_field_metadata::ReadContext* =nullptr)const;
   bool Ready()const{return metadata_!=nullptr;}
  private:
   const modern_field_metadata::FieldMetadata* metadata_=nullptr;

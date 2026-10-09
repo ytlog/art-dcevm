@@ -11,17 +11,19 @@ namespace artdcevm::redefinition_gate {bool Owned(JavaVM*){return true;}}
 // This regression reaches real public Stage/Clear, never native Seal/Verify.
 // Unused virtual-table collaborators abort if accidentally invoked; they do
 // not attest an ART layout or grant a native capability in this host test.
+namespace artdcevm::method_identity {uint64_t MappingOsQueries()noexcept{return 0;}} // Diagnostic-only boundary; no native mapping occurs in Stage/Clear.
 namespace artdcevm::modern_field_metadata {
-bool FieldMetadata::ClassIdentity(void*,field_copy::CopyClassView*,std::string*)const{std::abort();}
-bool FieldMetadata::FieldIdentity(void*,field_copy::CopyFieldView*,std::string*)const{std::abort();}
+bool FieldMetadata::ClassIdentity(void*,field_copy::CopyClassView*,std::string*,const ReadContext*)const{std::abort();}
+bool FieldMetadata::ClassIdentityVerified(void*,const char*,void*,const char*,const char*,field_copy::CopyClassView*,std::string*,const ReadContext*)const{std::abort();}
+bool FieldMetadata::FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext*)const{std::abort();}
 void* FieldMetadata::FieldDeclaringClass(void*)const{std::abort();}
 void* FieldMetadata::Reference(void*,size_t,bool)const{std::abort();}
 }
 namespace artdcevm::native_abstract_instances {
-bool Service::Validate(const source_commit::Plan&,size_t,const modern_field_metadata::FieldMetadata&,std::string*)const{std::abort();}
+bool Service::Validate(const source_commit::Plan&,size_t,const modern_field_metadata::FieldMetadata&,std::string*,const modern_field_metadata::ReadContext*)const{std::abort();}
 }
 namespace artdcevm::native_schema_policy {
-bool ReadNativeDeclarations(const modern_field_metadata::FieldMetadata&,const method_identity::Calibration&,void*,evolution::ClassSchema*,std::string*,native_method_table::View*){std::abort();}
+bool ReadNativeDeclarations(const modern_field_metadata::FieldMetadata&,const method_identity::Calibration&,void*,evolution::ClassSchema*,std::string*,native_method_table::View*,const modern_field_metadata::ReadContext*){std::abort();}
 }
 
 void* operator new(size_t n){if(no_alloc)throw std::bad_alloc();if(void* p=std::malloc(n))return p;throw std::bad_alloc();}

@@ -44,6 +44,19 @@ void Fixtures(){
  table.ExceptionCheck=AbstractException;table.FindClass=AbstractFind;table.GetMethodID=AbstractMethod;table.GetStaticMethodID=AbstractFactoryId;
  table.CallStaticObjectMethodV=AbstractFactory;table.GetArrayLength=AbstractLength;table.GetObjectArrayElement=AbstractElement;table.CallIntMethodV=AbstractModifiers;
 }
+struct StoppedMappings {
+ struct Region{const void* address;size_t size;};
+ std::array<Region,14> regions{};void* self=nullptr;const void* denied=nullptr;bool live=true;
+ static bool Extent(void* raw,const void* address,size_t* extent){
+  auto& m=*static_cast<StoppedMappings*>(raw);
+  if(!m.live||!stopped||current!=m.self||!address||!extent||address==m.denied)return false;
+  const uintptr_t p=uintptr_t(address);
+  for(const auto& region:m.regions){const uintptr_t begin=uintptr_t(region.address);
+   if(p>=begin&&p-begin<region.size){*extent=region.size-size_t(p-begin);return true;}}
+  return false;
+ }
+};
+
 }
 int main(){
  InitJni();InitializeHeap();AbstractHooks hooks;std::string error;
@@ -59,27 +72,49 @@ int main(){
  broken_factory=true;assert(!service.Calibrate(hooks,&env,metadata,model,&error)&&abstract_pending&&!service.Ready());broken_factory=false;abstract_pending=false;
  assert(service.Calibrate(hooks,&env,metadata,model,&error)&&service.Ready());
  source_commit::Plan plan{old_class,class_array,{old_class},{incomplete},{old_instance},{new_instance},true};Put32(new_instance,0,uint32_t(uintptr_t(incomplete)));
+ // Independent bounded regions retain the live source stop and current self.
+ // No mapping discovery occurs in this callback, including rejected reads.
+ StoppedMappings maps;maps.self=current;
+ const auto external_incomplete=reinterpret_cast<void*>(uintptr_t(static_cast<class_metadata::Class17*>(incomplete)->vtable));
+ const auto external_complete=reinterpret_cast<void*>(uintptr_t(static_cast<class_metadata::Class17*>(complete)->vtable));
+ maps.regions={{{old_instance,8},{new_instance,8},{old_class,sizeof(class_metadata::Class17)},
+  {meta_class,sizeof(class_metadata::Class17)},{incomplete,160},{complete,160},{embedded_complete,160},
+  {long_array_class,160},{primitive_long,160},{external_incomplete,24},{external_complete,24},
+  {abstract_method,40},{concrete_method,40},{embedded_method,40}}};
+ modern_field_metadata::ReadContext stopped_context{&maps,StoppedMappings::Extent};
  const int before_jni=jni_calls;Stop(nullptr,nullptr,false);
- assert(!service.Validate(plan,0,metadata,&error)&&error=="An actual migrated instance would inherit an abstract method");
- plan.old_instances.clear();plan.new_instances.clear();assert(service.Validate(plan,0,metadata,&error));
- plan.old_instances={old_instance};plan.new_instances={new_instance};plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,&error));
- forbid_vtable_allocation=true;assert(service.Validate(plan,0,metadata,nullptr));
- plan.new_classes[0]=incomplete;Put32(new_instance,0,uint32_t(uintptr_t(incomplete)));assert(!service.Validate(plan,0,metadata,nullptr));
- plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,nullptr));forbid_vtable_allocation=false;
+ const auto stopped_os_queries=method_identity::MappingOsQueries();
+ assert(!service.Validate(plan,0,metadata,&error,&stopped_context)&&error=="An actual migrated instance would inherit an abstract method");
+ plan.old_instances.clear();plan.new_instances.clear();assert(service.Validate(plan,0,metadata,&error,&stopped_context));
+ plan.old_instances={old_instance};plan.new_instances={new_instance};plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,&error,&stopped_context));
+ forbid_vtable_allocation=true;assert(service.Validate(plan,0,metadata,nullptr,&stopped_context));
+ plan.new_classes[0]=incomplete;Put32(new_instance,0,uint32_t(uintptr_t(incomplete)));assert(!service.Validate(plan,0,metadata,nullptr,&stopped_context));
+ plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,nullptr,&stopped_context));forbid_vtable_allocation=false;
  // Concrete Class flags do not grant success: its real embedded dispatch
  // entries must also be complete for every actual corresponding instance.
- plan.new_classes[0]=embedded_complete;Put32(new_instance,0,uint32_t(uintptr_t(embedded_complete)));assert(service.Validate(plan,0,metadata,&error));
+ plan.new_classes[0]=embedded_complete;Put32(new_instance,0,uint32_t(uintptr_t(embedded_complete)));assert(service.Validate(plan,0,metadata,&error,&stopped_context));
  const uint64_t missing=uintptr_t(abstract_method),valid=uintptr_t(embedded_method);std::memcpy(static_cast<char*>(embedded_complete)+120,&missing,8);
- assert(!service.Validate(plan,0,metadata,&error)&&error=="An actual migrated instance would inherit an abstract method");
- std::memcpy(static_cast<char*>(embedded_complete)+120,&valid,8);assert(service.Validate(plan,0,metadata,&error));
+ assert(!service.Validate(plan,0,metadata,&error,&stopped_context)&&error=="An actual migrated instance would inherit an abstract method");
+ std::memcpy(static_cast<char*>(embedded_complete)+120,&valid,8);assert(service.Validate(plan,0,metadata,&error,&stopped_context));
  // Missing counterpart ownership cannot masquerade as a harmless subclass.
- Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(!service.Validate(plan,0,metadata,&error));
+ Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(!service.Validate(plan,0,metadata,&error,&stopped_context));
  plan.new_classes[0]=incomplete;Put32(new_instance,0,uint32_t(uintptr_t(incomplete)));
- auto* klass=static_cast<class_metadata::Class17*>(incomplete);const auto saved=klass->vtable;klass->vtable=0;assert(service.Validate(plan,0,metadata,&error));klass->vtable=saved;
- auto* vtable=reinterpret_cast<void*>(uintptr_t(saved));Put32(vtable,8,uint32_t(-1));assert(!service.Validate(plan,0,metadata,&error));Put32(vtable,8,1);
- const auto component=static_cast<class_metadata::Class17*>(primitive_long)->primitive_type;static_cast<class_metadata::Class17*>(primitive_long)->primitive_type=5;assert(!service.Validate(plan,0,metadata,&error));static_cast<class_metadata::Class17*>(primitive_long)->primitive_type=component;
- const uint64_t bad_entry=1;std::memcpy(static_cast<char*>(vtable)+16,&bad_entry,8);assert(!service.Validate(plan,0,metadata,&error));const uint64_t restored=uintptr_t(abstract_method);std::memcpy(static_cast<char*>(vtable)+16,&restored,8);
- plan.old_instances[0]=nullptr;assert(!service.Validate(plan,0,metadata,&error));
+ auto* klass=static_cast<class_metadata::Class17*>(incomplete);const auto saved=klass->vtable;klass->vtable=0;assert(service.Validate(plan,0,metadata,&error,&stopped_context));klass->vtable=saved;
+ auto* vtable=reinterpret_cast<void*>(uintptr_t(saved));Put32(vtable,8,uint32_t(-1));assert(!service.Validate(plan,0,metadata,&error,&stopped_context));Put32(vtable,8,1);
+ const auto component=static_cast<class_metadata::Class17*>(primitive_long)->primitive_type;static_cast<class_metadata::Class17*>(primitive_long)->primitive_type=5;assert(!service.Validate(plan,0,metadata,&error,&stopped_context));static_cast<class_metadata::Class17*>(primitive_long)->primitive_type=component;
+ const uint64_t bad_entry=1;std::memcpy(static_cast<char*>(vtable)+16,&bad_entry,8);assert(!service.Validate(plan,0,metadata,&error,&stopped_context));const uint64_t restored=uintptr_t(abstract_method);std::memcpy(static_cast<char*>(vtable)+16,&restored,8);
+ // Explicit deny, short extent, revoked stop and foreign self cannot recover
+ // through the ordinary OS path, even for otherwise complete real vtables.
+ plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));
+ forbid_vtable_allocation=true;
+ modern_field_metadata::ReadContext missing_extent{&maps,nullptr};assert(!service.Validate(plan,0,metadata,nullptr,&missing_extent));
+ maps.denied=concrete_method;assert(!service.Validate(plan,0,metadata,nullptr,&stopped_context));maps.denied=nullptr;
+ maps.regions[10].size=16;assert(!service.Validate(plan,0,metadata,nullptr,&stopped_context));maps.regions[10].size=24;
+ maps.live=false;assert(!service.Validate(plan,0,metadata,nullptr,&stopped_context));maps.live=true;
+ auto original_self=maps.self;maps.self=foreign_thread.data();assert(!service.Validate(plan,0,metadata,nullptr,&stopped_context));maps.self=original_self;
+ assert(service.Validate(plan,0,metadata,nullptr,&stopped_context));forbid_vtable_allocation=false;
+ plan.old_instances[0]=nullptr;assert(!service.Validate(plan,0,metadata,&error,&stopped_context));
+ assert(method_identity::MappingOsQueries()==stopped_os_queries);
  assert(jni_calls==before_jni);Resume(nullptr);
  std::cout<<"Actual native abstract vtable: public incomplete/complete identities, named leaf refusal, original JNI throw preservation, actual Holder direct/subclass instances and bounded long array/method negatives passed\n";
 }
