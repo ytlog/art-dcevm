@@ -29,12 +29,12 @@ void* Field(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id
 void* Method(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==2051);active->method_key=id;active->method_value=reinterpret_cast<void*>(0x9550);return active->foreign_method?nullptr:active->method_value;}
 abi::arm64::android11::ReleaseObjectPointer Type(void*l,fixed::CacheTypeIndex id,const void*c,const void*d){Check(l,c,d);assert(id.index==1026);active->type_key=id.index;if(active->move)active->klass=0x6000;return {active->foreign_type?uintptr_t(0x9000):uintptr_t(active->klass)};}
 struct Hooks final:HookEngine {
- bool legacy=false,missing=false,throw_field=false;
+ bool legacy=false,missing=false,throw_field=false,aliased=false;
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*lib,const char*name)override{
   assert(!strcmp(lib,"libart.so"));
   if(!strcmp(name,"_ZN3art11ClassLinker13DoResolveTypeENS_3dex9TypeIndexENS_6HandleINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"))return reinterpret_cast<void*>(Type);
-  if(!strcmp(name,"_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return missing?nullptr:reinterpret_cast<void*>(throw_field?ThrowField:Field);
+  if(!strcmp(name,"_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return missing?nullptr:aliased?reinterpret_cast<void*>(Type):reinterpret_cast<void*>(throw_field?ThrowField:Field);
   if(!strcmp(name,"_ZN3art11ClassLinker15ResolveMethodIdEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return legacy?nullptr:reinterpret_cast<void*>(Method);
   if(!strcmp(name,"_ZN3art11ClassLinker30ResolveMethodWithoutInvokeTypeEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return legacy?reinterpret_cast<void*>(Method):nullptr;
   assert(false);return nullptr;
@@ -63,7 +63,7 @@ int main(){
   }
  }
  Hooks h;Fixture f;active=&f;Service s;std::string e;h.missing=true;assert(!Service::Bind(h,&f,&s,&e));
- h.missing=false;assert(!Service::Bind(h,nullptr,&s,&e));assert(Service::Bind(h,&f,&s,&e));
+ h.missing=false;h.aliased=true;assert(!Service::Bind(h,&f,&s,&e)&&f.calls==0);h.aliased=false;assert(!Service::Bind(h,nullptr,&s,&e));assert(Service::Bind(h,&f,&s,&e));
  auto w=f.witness();w.type_index=65535;assert(!s.Resolve(w,f,&e)&&f.calls==0);
  puts("PASS named original cache resolution, displaced slots, moving roots, exact namespace/identity and exception refusal");
 }

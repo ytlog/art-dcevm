@@ -868,7 +868,12 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
      return " member=owned-"+std::string(is_static?"static":"instance")+" nativeIdx="+std::to_string(index)+
       " name="+std::string(text.name?text.name:"?")+" desc="+std::string(text.descriptor?text.descriptor:"?");
     }
-    return " member=outside-public-Class-native-arrays";
+    void* cache=nullptr,*loader=nullptr;
+    const bool roots=p.Read(w.cache_slot,&cache)&&p.Read(w.loader_slot,&loader);
+    char identities[160];std::snprintf(identities,sizeof(identities),
+     " member=outside-public-Class-native-arrays roots=%d C=%p D=%p L=%p alias=%s",
+     roots,klass,cache,loader,field==klass?"Class":roots&&field==cache?"DexCache":roots&&field==loader?"ClassLoader":"none");
+    return identities;
    }
   private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;
  } proof(e,scope,pool);
