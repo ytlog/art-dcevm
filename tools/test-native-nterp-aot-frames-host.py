@@ -16,7 +16,7 @@ source=(root/'tests/host/native_source_waiting_scope_test.cc').read_text().split
 (out/'waiting_scope_fixture.inc').write_text(source)
 for name in ('native_nterp_waiting_inspection','native_nterp_physical_waiting'):
  exe=out/name
- units=[root/'tests/host'/(name+'_test.cc')]+[cpp/'platform/common'/(n+'.cc') for n in ('native_source_stop','native_source_class_loading','method_identity_calibration')]
+ units=[root/'tests/host'/(name+'_test.cc')]+[cpp/'platform/common'/(n+'.cc') for n in ('native_source_stop','native_source_class_loading','native_cache_service','method_identity_calibration')]
  subprocess.run(common+['-I',str(out),'-I',str(root/'tests/host')]+list(map(str,units))+['-o',str(exe)],check=True)
  r=subprocess.run([str(exe)],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
  (out/(name+'.log')).write_text(r.stdout+r.stderr);r.check_returncode();print(r.stdout.strip())
