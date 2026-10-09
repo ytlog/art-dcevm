@@ -78,6 +78,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/prepared_field_copy.cc
     platform/common/native_schema_guard_verifier.cc
     platform/common/rooted_hierarchy_allocator.cc
+    platform/common/source_handle_roots.cc
     platform/common/structural_methods.cc
     platform/common/native_method_evolution_policy.cc
     platform/common/native_abstract_instances.cc
