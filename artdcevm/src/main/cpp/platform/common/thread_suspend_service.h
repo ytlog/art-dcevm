@@ -30,6 +30,7 @@ class Service {
     return true;
   }
   bool CanTransitionRunnable() const {return native_ && runnable_;}
+  uint32_t RunnableState()const noexcept{return Runnable();}
   bool SameBinding(const Service& other)const noexcept {
     return declaration_==other.declaration_&&native_==other.native_&&runnable_==other.runnable_&&
       construct_==other.construct_&&destroy_==other.destroy_;

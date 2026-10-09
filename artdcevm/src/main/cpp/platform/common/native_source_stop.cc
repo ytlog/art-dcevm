@@ -59,7 +59,11 @@ bool Install(HookEngine& hooks,std::string* error) {
   {hooks.FindSymbol("libart.so",s::kEnableMoving),reinterpret_cast<void*>(NativeHooks::Enable),reinterpret_cast<void**>(&original_enable)},
   {hooks.FindSymbol("libart.so",s::kStartGC),reinterpret_cast<void*>(NativeHooks::Start),reinterpret_cast<void**>(&original_start)},
   {hooks.FindSymbol("libart.so",s::kFinishGC),reinterpret_cast<void*>(NativeHooks::Finish),reinterpret_cast<void**>(&original_finish)}};
- for(const auto& binding:bindings)if(!binding.target)return Fail(error,"Source observer lacks original heap disable/GC leaves");
+ for(size_t i=0;i<6;++i){
+  if(!bindings[i].target)return Fail(error,"Source observer lacks original heap disable/GC leaves");
+  for(size_t j=0;j<i;++j)if(bindings[j].target==bindings[i].target)
+    return Fail(error,"Source observer distinct native operations share a target");
+ }
  a::SuspendAll scope{};reinterpret_cast<a::SuspendConstruct>(ctor)(&scope,"artdcevm source stop installation",false);
  void* tokens[6]{};size_t count=0;
  for(auto& binding:bindings){
@@ -92,7 +96,7 @@ bool Session::Native()const noexcept {
 bool Session::Begin(void* self,size_t extent) noexcept {
  if(phase_!=Phase::kEmpty||active||finishing||observation||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
  self_=self;extent_=extent;uint32_t state=UINT32_MAX;
- if(!service_.state_.State(self_,extent_,&state)||state!=abi::arm64::android13::kRunnable){failure_="source-stop-requires-calibrated-Runnable-owner";return false;}
+ if(!service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState()){failure_="source-stop-requires-calibrated-Runnable-owner";return false;}
  // StartGC really waits for the preceding owner, then excludes every GC until
  // matching FinishGC. MS here is only an audited nonmoving exclusion sentinel;
  // no collector runs and FinishGC(kNone) increments no collection statistics.
@@ -117,7 +121,7 @@ bool Session::ContinueSource() noexcept {
  if(!IsStopped(self_)||phase_!=Phase::kStopped){failure_="source-stop-continuation-owner-mismatch";return false;}
  service_.unlock_(*service_.mutator_,self_);exclusive_=false;
  if(!service_.state_.RestoreRunnable(self_))std::abort();
- uint32_t state=UINT32_MAX;if(!SameOwner()||!service_.state_.State(self_,extent_,&state)||state!=abi::arm64::android13::kRunnable)std::abort();
+ uint32_t state=UINT32_MAX;if(!SameOwner()||!service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState())std::abort();
  phase_=Phase::kContinuing;return true;
 }
 bool Session::TransferConstruct(void* carrier,const char* cause,bool long_suspend) noexcept {
@@ -149,13 +153,13 @@ void Session::Rollback() noexcept {
 void Session::SourceDisableBegin(void* heap,void* self) noexcept {
  if(!active)return;auto& owner=*active;uint32_t state=UINT32_MAX;
  if(owner.phase_!=Phase::kContinuing||owner.source_disable_||heap!=owner.service_.heap_||self!=owner.self_||
-    !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=abi::arm64::android13::kRunnable)std::abort();
+    !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=owner.service_.state_.RunnableState())std::abort();
  owner.source_disable_=true;
 }
 void Session::SourceDisableEnd(void* heap,void* self,bool completed) noexcept {
  if(!finishing){if(active)std::abort();return;}auto& owner=*finishing;uint32_t state=UINT32_MAX;
  if(owner.phase_!=Phase::kFinalResumed||!owner.source_disable_||heap!=owner.service_.heap_||self!=owner.self_||
-    !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=abi::arm64::android13::kRunnable)std::abort();
+    !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=owner.service_.state_.RunnableState())std::abort();
  if(completed){owner.source_disable_=false;owner.phase_=Phase::kCompleted;finishing=nullptr;}
 }
 void Session::UnexpectedGC() noexcept {if(active)std::abort();}
@@ -173,19 +177,19 @@ bool Observation::State(uint32_t expected)const noexcept {
 }
 Observation::Observation(const Service& service,void* driver,const void* run,void* self,size_t extent) noexcept:
  service_(service),driver_(driver),run_body_(run),self_(self),extent_(extent){
- if(observation||active||finishing||!driver||!run||!service_.heap_||!State(abi::arm64::android13::kRunnable)){Refuse("ordinary-source-observation-owner-mismatch");return;}
+ if(observation||active||finishing||!driver||!run||!service_.heap_||!State(service_.state_.RunnableState())){Refuse("ordinary-source-observation-owner-mismatch");return;}
  observation=this;attached_=true;failure_="";
 }
 Observation::~Observation(){if(attached_){if(observation!=this)std::abort();observation=nullptr;}}
 bool Observation::Ready()const noexcept{return attached_&&!failed_&&!finished_&&observation==this;}
 bool Observation::Collected(void* driver,const void* holder) noexcept {
- if(!Ready()||phase_!=Phase::kRun||driver!=driver_||!holder||!State(abi::arm64::android13::kRunnable)){
+ if(!Ready()||phase_!=Phase::kRun||driver!=driver_||!holder||!State(service_.state_.RunnableState())){
   Refuse("ordinary-source-Collected-owner-order-mismatch");return false;}
  holder_=holder;phase_=Phase::kArmed;return true;
 }
 void Observation::DisableBegin(void* heap,void* self) noexcept {
  if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
- if(!o.Ready()||o.phase_!=Phase::kArmed||heap!=o.service_.heap_||self!=o.self_||!o.State(abi::arm64::android13::kRunnable)){
+ if(!o.Ready()||o.phase_!=Phase::kArmed||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
   o.Refuse("ordinary-source-original-GC-disable-owner-order-mismatch");return;}
  o.phase_=Phase::kDisabled;
 }
@@ -205,7 +209,7 @@ void Observation::Destroyed(void* carrier) noexcept {
 }
 void Observation::DisableEnd(void* heap,void* self) noexcept {
  if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
- if(!o.Ready()||o.phase_!=Phase::kResumed||heap!=o.service_.heap_||self!=o.self_||!o.State(abi::arm64::android13::kRunnable)){
+ if(!o.Ready()||o.phase_!=Phase::kResumed||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
   o.Refuse("ordinary-source-original-GC-enable-owner-order-mismatch");return;}
  o.phase_=Phase::kComplete;
 }
@@ -213,7 +217,7 @@ void Observation::GCOperation() noexcept {
  if(observation&&observation->phase_!=Phase::kRun)observation->Refuse("ordinary-source-final-path-nested-GC-operation");
 }
 bool Observation::Finish(void* driver,bool success,Calibration* out) noexcept {
- const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&phase_==Phase::kComplete&&State(abi::arm64::android13::kRunnable);
+ const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&phase_==Phase::kComplete&&State(service_.state_.RunnableState());
  if(ok){Calibration result;result.binding_=service_;result.run_body_=run_body_;std::memcpy(result.cause_,cause_,sizeof(cause_));result.long_=long_;result.valid_=true;*out=result;}
  else if(!failed_)Refuse("ordinary-source-Run-did-not-complete-matching-final-owner");
  finished_=true;if(attached_){if(observation!=this)std::abort();observation=nullptr;attached_=false;}return ok;
