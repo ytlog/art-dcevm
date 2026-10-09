@@ -5,7 +5,7 @@ add_link_options("LINKER:-z,common-page-size=16384")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_library(artdcevm_test_support SHARED testing/native_test_bridge.cc
     testing/special_members_probe.cc testing/storage_probe.cc testing/native_implementation_probe.cc
-    testing/hierarchy_probe.cc testing/static_visibility_probe.cc)
+    testing/hierarchy_probe.cc testing/static_visibility_probe.cc testing/production_permission_probe.cc)
   target_compile_features(artdcevm_test_support PRIVATE cxx_std_17)
   target_include_directories(artdcevm_test_support PRIVATE ../../../../third_party/jvmti)
   # Independent agents exercise only the public JVMTI function table.
