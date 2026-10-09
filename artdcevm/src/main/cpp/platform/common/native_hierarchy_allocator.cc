@@ -160,11 +160,12 @@ struct Batch::State final:rooted_hierarchy::Access {
  Service& service;runnable_jni::Context context;native_hierarchy_graph::Authority& authority;
  std::unique_ptr<source_handle_roots::Pool> owned_pool;source_handle_roots::Pool& pool;rooted_hierarchy::Allocator allocator;
  enum class Phase {Unallocated,Authorized,Captured,Linked};
+ const source_handle_roots::StoppedReader*stopped_reader=nullptr;
  struct Record {RecordView view{};evolution::ClassSchema declarations;size_t node=SIZE_MAX;void* loader_root=nullptr;void* allocated_root=nullptr;bool captured_allocated=false,captured=false;Phase phase=Phase::Unallocated;};
  std::deque<Record> records;Record* pending=nullptr;void* invoking_owner=nullptr;bool prepared=false,failed=false,finished=false,committing=false;
  State(Service& s,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a):service(s),context(c),authority(a),owned_pool(new source_handle_roots::Pool(*s.roots_)),pool(*owned_pool){}
  State(Service& s,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a,source_handle_roots::Pool& p):service(s),context(c),authority(a),pool(p){}
- void* Get(rooted_hierarchy::Root slot)const override{void* p=nullptr;return pool.Read(slot,&p)?p:nullptr;}
+ void* Get(rooted_hierarchy::Root slot)const override{void* p=nullptr;if(stopped_reader&&stopped_reader->FinalRootWindow())return stopped_reader->ReadStoppedRoot(slot,&p)?p:nullptr;return pool.Read(slot,&p)?p:nullptr;}
  rooted_hierarchy::Root Copy(rooted_hierarchy::Root slot)override{return pool.Add(Get(slot),nullptr);}
  rooted_hierarchy::Root Empty()override{return pool.Add(nullptr,nullptr);}
  void Set(rooted_hierarchy::Root slot,void* object)override{if(!pool.Write(slot,object))Fail("Invalid source root write");}
@@ -285,6 +286,7 @@ bool Batch::Complete(bool committed,std::string* error){
  s.finished=true;return true;
 }
 size_t Batch::Count()const noexcept{return state_->records.size();}
+void Batch::SetStoppedReader(const source_handle_roots::StoppedReader*r)noexcept{if(state_->stopped_reader||state_->finished)std::abort();state_->stopped_reader=r;}
 source_handle_roots::Pool& Batch::Roots()const noexcept{return state_->pool;}
 bool Batch::At(size_t index,RecordView* out)const noexcept{if(!out||index>=Count())return false;*out=state_->records[index].view;return true;}
 void* Batch::Get(void* root)const noexcept{return state_->Get(root);}

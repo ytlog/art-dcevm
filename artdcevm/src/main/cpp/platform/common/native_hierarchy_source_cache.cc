@@ -30,10 +30,10 @@ size_t AllocatorBatchAccess::Count()const noexcept{return batch_?batch_->Count()
 bool AllocatorBatchAccess::At(size_t n,RecordView*out)const noexcept{if(!batch_||!out)return false;native_hierarchy_allocator::Batch::RecordView r;if(!batch_->At(n,&r))return false;*out={r.source_owner,r.class_index,r.old_root,r.new_root,r.cache_root,r.parent_root,r.declarations,r.dex};return true;}
 void* AllocatorBatchAccess::Find(const char*name,void*loader)const noexcept{return batch_?batch_->Find(name,loader):nullptr;}
 void* AllocatorBatchAccess::OriginalFind(const char*name,void*loader)const{return batch_?batch_->OriginalFind(name,loader):nullptr;}
-void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;return pool_.Read(root,&value)?value:nullptr;}
+void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;if(services_&&services_->FinalRootWindow())return services_->ReadStoppedRoot(root,&value)?value:nullptr;return pool_.Read(root,&value)?value:nullptr;}
 bool Mapper::Readable(const void*p,size_t n)const noexcept{return Mapped(p,n);}
 bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)const noexcept{
- if(!out||!pool_.ReadyForSourceAccess()||!fields_.Calibrated()||!p.source_owner)return false;
+ if(!out||(!(services_&&services_->FinalRootWindow())&&!pool_.ReadyForSourceAccess())||!fields_.Calibrated()||!p.source_owner)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
  if(r.source_owner==p.source_owner&&r.class_index==p.class_index&&r.declarations==p.declarations&&r.dex.class_def_index==r.class_index&&Get(r.old_root)==p.old_class&&Get(r.new_root)==p.new_class&&Get(r.cache_root)==p.cache&&Get(r.parent_root)==p.parent){*out=r;return true;}}
  return false;
@@ -64,7 +64,7 @@ bool Mapper::Mapping(const RecordView&r,const void**identity)const noexcept{
  if(begin<data||begin-data>r.dex.data_size||r.dex.size>r.dex.data_size-(begin-data))return false;
  *identity=file;return true;
 }
-const Mapper::Entry* Mapper::EntryFor(void*owner)const noexcept{for(const auto&e:entries_)if(e->record.source_owner==owner)return e.get();return nullptr;}
+const Mapper::Entry* Mapper::EntryFor(const native_hierarchy_graph::Prepared&p)const noexcept{for(const auto&e:entries_)if(e->record.source_owner==p.source_owner&&e->record.old_root==p.source_old_root&&e->record.class_index==p.class_index&&e->record.declarations==p.declarations)return e.get();return nullptr;}
 bool Mapper::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&inputs,std::string*e)const{
  // This is the independent expected graph phase, before any allocation record.
  // The real source namespace/cache proof belongs to VerifyAllocation below.
@@ -86,7 +86,7 @@ bool Mapper::VerifyAllocation(const native_hierarchy_graph::Graph&g,const native
 }
 bool Mapper::DescribeAllocation(const native_hierarchy_graph::Prepared&p,native_hierarchy_cache::Source*out,std::string*e)const{
  RecordView r;if(!out||!services_||!staged_graph_||p.new_class||!Record(p,&r)||p.source_old_root!=r.old_root||Get(r.new_root)||!Namespace(r,false))return Fail(e,"unallocated source cache has no exact actual allocator record");
- if(EntryFor(p.source_owner))return Fail(e,"private preallocation source was already consumed");
+ if(EntryFor(p))return Fail(e,"private preallocation source was already consumed");
  try{
  auto entry=std::make_unique<Entry>();entry->record=r;const void*identity=nullptr;size_t extent=0;
  if(!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&entry->source.counts,e)||!method_identity::ReadableMappingExtent(p.cache,&extent))return false;
@@ -95,25 +95,26 @@ bool Mapper::DescribeAllocation(const native_hierarchy_graph::Prepared&p,native_
  void*original=batch_.OriginalFind(r.declarations->descriptor.c_str(),entry->loader_root);
  if(!original||original!=Get(r.old_root)||!Namespace(r,false)||Get(r.new_root))return Fail(e,"preallocation original ClassTable namespace changed");
  entry->source.cache_root=r.cache_root;entry->source.dex_identity=identity;entry->source.private_token=entry.get();entry->source.cache_extent=extent;
+ if(!services_->PreparePrivate(r,entry->source,e))return false;
  entries_.push_back(std::move(entry));*out=entries_.back()->source;return true;
  }catch(const std::bad_alloc&){return Fail(e,"preallocation cache source witness storage exhausted");}
 }
 bool Mapper::Describe(const native_hierarchy_graph::Prepared&p,native_hierarchy_cache::Source*out,std::string*e)const{
  RecordView r;if(!out||!services_||!p.new_class||!Record(p,&r)||!Namespace(r,true))return Fail(e,"linked source cache has no exact actual allocator record");
- const auto*entry=EntryFor(p.source_owner);
+ const auto*entry=EntryFor(p);
  if(!entry||!SameRecord(r,entry->record))return Fail(e,"linked cache lacks its immutable preallocation source witness");
  *out=entry->source;return true;
 }
 bool Mapper::RefreshAllocation(native_hierarchy_graph::Prepared*p)const noexcept{
  if(!p||p->new_class||!p->source_old_root||!services_||!pool_.ReadyForSourceAccess())return false;
- const auto*entry=EntryFor(p->source_owner);if(!entry||entry->record.old_root!=p->source_old_root)return false;
+ const auto*entry=EntryFor(*p);if(!entry||entry->record.old_root!=p->source_old_root)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
   if(SameRecord(r,entry->record)&&!Get(r.new_root)){p->old_class=Get(r.old_root);p->cache=Get(r.cache_root);p->parent=Get(r.parent_root);return p->old_class&&p->cache;}}
  return false;
 }
 bool Mapper::FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,native_hierarchy_cache::Root*out,std::string*e)const{
  std::string local_error;if(!e)e=&local_error;
- const auto*entry=EntryFor(p.source_owner);RecordView r;
+ const auto*entry=EntryFor(p);RecordView r;
  if(!out||!entry||!Record(p,&r)||index>=entry->source.counts.types)return Fail(e,"source verifier type index is outside immutable incoming DEX");
  const char*descriptor=nullptr;if(!evolution::ReadMappedDexTypeDescriptor(r.dex,index,&descriptor,e))return false;
  void*source=batch_.OriginalFind(descriptor,entry->loader_root);if(!source)return Fail(e,"original source Class resolution failed");
@@ -132,7 +133,7 @@ bool Mapper::FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,
  *out=original_root;return true;
 }
 bool Mapper::OwnsUnpublished(const native_hierarchy_graph::Prepared&p,const native_hierarchy_cache::Source&s)const noexcept{
- const auto*entry=EntryFor(p.source_owner);RecordView r;const void*identity=nullptr;
+ const auto*entry=EntryFor(p);RecordView r;const void*identity=nullptr;
  if(!entry||entry!=s.private_token||!Record(p,&r)||!SameRecord(r,entry->record)||r.cache_root!=s.cache_root||entry->source.dex_identity!=s.dex_identity||!Namespace(r,p.new_class!=nullptr)||!Mapping(r,&identity)||identity!=s.dex_identity)return false;
  // No fallible resolver in the borrowed writer window. Describe proved exact
  // original lookup; RequireServices must prove its source/ClassTable lock and
@@ -141,13 +142,13 @@ bool Mapper::OwnsUnpublished(const native_hierarchy_graph::Prepared&p,const nati
 }
 bool Mapper::Barrier(native_hierarchy_cache::Root root)const noexcept{return services_&&storage_.SourceBarrier(context_,pool_,root);}
 bool Mapper::RefreshPrepared(native_hierarchy_graph::Prepared*p)const noexcept{
- if(!p)return false;const auto*entry=EntryFor(p->source_owner);
+ if(!p)return false;const auto*entry=EntryFor(*p);
  if(!entry||entry->record.class_index!=p->class_index||entry->record.declarations!=p->declarations)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;if(SameRecord(r,entry->record)){p->old_class=Get(r.old_root);p->new_class=Get(r.new_root);p->cache=Get(r.cache_root);p->parent=Get(r.parent_root);return p->old_class&&p->new_class&&p->cache;}}
  return false;
 }
-bool Mapper::VerifyFrozen(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,const native_hierarchy_cache::Source&s)const noexcept{return services_&&OwnsUnpublished(p,s)&&services_->VerifyFrozen(g,p,s);}
-bool Mapper::VerifyCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{return services_&&pool_.ReadyForSourceAccess()&&services_->VerifyCommit(g,p);}
+bool Mapper::VerifyFrozen(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,const native_hierarchy_cache::Source&s)const noexcept{const auto*entry=EntryFor(p);RecordView r;const void*identity=nullptr;return services_&&entry&&entry==s.private_token&&Record(p,&r)&&SameRecord(r,entry->record)&&Namespace(r,true)&&Get(entry->loader_root)==fields_.Reference(Get(r.old_root),offsetof(class_metadata::Class11,class_loader))&&Mapping(r,&identity)&&identity==s.dex_identity&&services_->VerifyFrozen(g,p,s);}
+bool Mapper::VerifyCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{return services_&&(services_->FinalRootWindow()||pool_.ReadyForSourceAccess())&&services_->VerifyCommit(g,p);}
 void Mapper::BeginCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{if(VerifyCommit(g,p))services_->BeginCommit(g,p);}
 bool Mapper::IsReadonly(const native_hierarchy_graph::Prepared&p)const noexcept{
  RecordView r;return Record(p,&r)&&Get(r.cache_root)&&fields_.Reference(Get(r.old_root),offsetof(class_metadata::Class11,dex_cache))==Get(r.cache_root);
@@ -159,7 +160,7 @@ bool Mapper::VerifyReadonlyPrepared(const native_hierarchy_graph::Graph&g,const 
  return found&&services_->VerifyReadonlyPrepared(g,r,p);
 }
 bool Mapper::VerifyReadonlyCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{
- if(!services_||!pool_.ReadyForSourceAccess()||p.old_classes.size()!=p.new_classes.size())return false;
+ if(!services_||(!services_->FinalRootWindow()&&!pool_.ReadyForSourceAccess())||p.old_classes.size()!=p.new_classes.size())return false;
  size_t readonly_seen=0;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
  void*old=Get(r.old_root),*replacement=Get(r.new_root),*cache=Get(r.cache_root);

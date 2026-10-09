@@ -37,13 +37,16 @@ class AllocatorBatchAccess final:public BatchAccess {
  private:
  source_handle_roots::Pool&pool_;native_hierarchy_allocator::Batch*batch_=nullptr;bool attached_once_=false;
 };
-class RequiredServices {
+class RequiredServices:public source_handle_roots::StoppedReader {
  public:
  virtual ~RequiredServices()=default;
+ bool FinalRootWindow()const noexcept override{return false;}
+ bool ReadStoppedRoot(const void*,void**)const noexcept override{return false;}
  virtual bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&)const noexcept=0;
  // Actual allocation/publication hook ownership and no-suspend writer window,
  // independently proving the cache is private to this source transaction.
  // ClassTable lookup of the new Class cannot prove cache exclusivity.
+ virtual bool PreparePrivate(const RecordView&,const native_hierarchy_cache::Source&,std::string*)const{return false;}
  virtual bool VerifyPrivate(const RecordView&,const native_hierarchy_cache::Source&,
                             const runnable_jni::Context&,const source_handle_roots::Pool&)const noexcept=0;
  // Separate proof stages for published implicit-subclass caches. These
@@ -92,7 +95,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  bool Record(const native_hierarchy_graph::Prepared&,RecordView*)const noexcept;
  bool Namespace(const RecordView&,bool linked,bool readonly=false)const noexcept;
  bool Mapping(const RecordView&,const void** dex_identity)const noexcept;
- const Entry* EntryFor(void* source_owner)const noexcept;
+ const Entry* EntryFor(const native_hierarchy_graph::Prepared&)const noexcept;
 };
 // Full graph cache participant: private explicit incoming caches are transformed
 // by the existing typed Owner. Published implicit caches are checked read-only,

@@ -60,6 +60,14 @@ class Scope final {
 };
 // Shared allocator roots use stable opaque slots; destruction unlinks scopes
 // explicitly in reverse publication order rather than relying on vector order.
+// Independent final owner. Window must prove the real source native/exclusive
+// GC reservation; Read consumes pre-registered immutable root slots only.
+class StoppedReader {
+ public:
+ virtual ~StoppedReader()=default;
+ virtual bool FinalRootWindow()const noexcept=0;
+ virtual bool ReadStoppedRoot(const void*,void**)const noexcept=0;
+};
 class Pool final {
  public:
   explicit Pool(const Service& service):service_(service){}
@@ -85,6 +93,14 @@ class Pool final {
     if(scopes_.empty()||used_==kChunk){auto scope=service_.CreateScope(kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;}
     auto& scope=*scopes_.back();void* slot=scope.Slot(used_);scope.Set(used_++,object);return slot;
   }
+ // Enumerates opaque used slots only in the ordinary Runnable phase. Visitor
+ // may register roots/safepoint, so it must read each slot afresh itself.
+ template<class Visitor> bool VisitUsedSlots(Visitor visitor)const{
+  if(!ReadyForSourceAccess())return false;
+  for(size_t i=0;i<scopes_.size();++i){const size_t count=i+1==scopes_.size()?used_:kChunk;
+   for(size_t n=0;n<count;++n)if(!visitor(scopes_[i]->Slot(n)))return false;}
+  return true;
+ }
  private:
   static constexpr uint32_t kChunk=32;
   const Service& service_;std::vector<std::unique_ptr<Scope>> scopes_;uint32_t used_=kChunk;

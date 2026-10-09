@@ -82,6 +82,7 @@ class Batch final {
  void* Get(void* root)const noexcept;
  void* Find(const char* descriptor,void* loader)const;
  void* OriginalFind(const char* descriptor,void* loader_root)const;
+ void SetStoppedReader(const source_handle_roots::StoppedReader*)noexcept;
  source_handle_roots::Pool& Roots()const noexcept;
 
  private:

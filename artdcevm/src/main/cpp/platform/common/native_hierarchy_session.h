@@ -3,6 +3,7 @@
 #include "platform/common/native_hierarchy_source_cache.h"
 #include "platform/common/native_hierarchy_source_checks.h"
 
+namespace artdcevm::native_hierarchy_private_ledger {class Ledger;}
 namespace artdcevm::native_hierarchy_session {
 // The sole original Redefiner::Run owner creates this object before calling Run.
 // Dependencies and their calibrated owner services outlive Run. No source Holder,
@@ -20,6 +21,7 @@ struct Bindings {
  native_hierarchy_source_cache::AllocatorBatchAccess* access=nullptr;
  native_hierarchy_source_checks::Scope::Refuse refuse=nullptr;
  native_hierarchy_source_checks::FailureObserver failure_observer=nullptr;
+ native_hierarchy_private_ledger::Ledger* ledger=nullptr;
 };
 class Session final {
  public:
@@ -36,6 +38,8 @@ class Session final {
  // actual Holder/owner/order. The iterator is borrowed for this original call.
  bool BeforeVerification(void* owner,const void* iterator,std::string*);
  void AfterVerification(void* owner,const void* iterator,bool original_result)noexcept;
+ // Ordinary Collected phase, before any stop or native strong registration.
+ bool PrepareCollected(const source_commit::Plan&,std::string*);
  bool Collected(const source_commit::Plan&,std::string*);
  void Refund()noexcept;
  void BeginCommit(const source_commit::Plan&)noexcept;

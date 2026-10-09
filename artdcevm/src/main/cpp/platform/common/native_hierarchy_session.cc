@@ -1,5 +1,6 @@
 #include "platform/common/native_hierarchy_session.h"
 #include "platform/common/native_source_class_loading.h"
+#include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/android-common/redefiner_prefix.h"
@@ -89,6 +90,7 @@ bool Session::Finish(void*owner,transaction_root::Holder*holder,void*iter,Finish
    }
    holder_=holder;metadata_=snapshot.metadata;
    batch_=std::make_unique<native_hierarchy_allocator::Batch>(*bindings_.allocation,bindings_.context,*bindings_.authority,*bindings_.pool);
+   if(bindings_.ledger)batch_->SetStoppedReader(bindings_.ledger);
    if(!batch_->Prepare(holder,error)||!(attached_=bindings_.access->Attach(*batch_))){
     Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source allocation Batch preparation failed");Refund();return false;
    }
@@ -101,6 +103,10 @@ bool Session::Finish(void*owner,transaction_root::Holder*holder,void*iter,Finish
   const bool observed=trace&&trace->OwnsDriver(bindings_.driver);
   if(observed&&!trace->BeforeFinish(owner,holder,iter)){
    Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Original source class-loading pause was not observed");Refund();return false;
+  }
+  if(bindings_.ledger&&finish_next_==0&&!bindings_.ledger->AttachHolder(holder_,metadata_)){
+   if(observed)trace->AfterFinish(owner,false);
+   Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source private ledger lacks exact paused Holder");Refund();return false;
   }
   finishing_=owner;
   bool result=false;
@@ -131,8 +137,13 @@ void Session::AfterVerification(void*owner,const void*iter,bool result)noexcept{
  verification_owner_=nullptr;verification_iterator_=nullptr;
  if(result&&!failed_)++verify_next_;else Refund();
 }
-bool Session::Collected(const source_commit::Plan&p,std::string*error){
+bool Session::PrepareCollected(const source_commit::Plan&p,std::string*error){
  if(!Ready()||verification_owner_||finish_next_!=metadata_.count||verify_next_!=metadata_.count){Error(error,"Collected graph lacks complete original source verification");return false;}
+ if(bindings_.ledger&&!bindings_.ledger->Collected(p))return false;
+ return true;
+}
+bool Session::Collected(const source_commit::Plan&p,std::string*error){
+ if(!PrepareCollected(p,error))return false;
  if(!bindings_.authority->Seal(p,error))return false;
  sealed_=true;return true;
 }
@@ -143,6 +154,7 @@ void Session::Refund()noexcept{
  // views. Mark failure now; retire only after that original scope unwinds.
  if(finishing_||verification_owner_||refunded_)return;
  if(batch_&&!batch_->Complete(false,nullptr))std::abort();
+ if(bindings_.ledger)bindings_.ledger->Refunded();
  refunded_=true;
 }
 void Session::BeginCommit(const source_commit::Plan&p)noexcept{
@@ -161,6 +173,7 @@ bool Session::ReleaseAfterRun(bool success)noexcept{
  if(!valid)std::abort();
  if(committed_&&(!batch_||!batch_->Complete(true,nullptr)))std::abort();
  if(attached_&&!bindings_.access->Detach(*batch_))std::abort();
+ if(bindings_.ledger&&!bindings_.ledger->ReleaseAfterRun(success))std::abort();
  batch_.reset();holder_=nullptr;metadata_={};checks_.reset();current=previous_;released_=true;
  return valid;
 }
