@@ -1,4 +1,5 @@
 #include "platform/common/production_bootstrap.h"
+#include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
 #include "platform/common/production_provenance.h"
 #include "platform/common/contextual_field_id.h"
@@ -361,7 +362,7 @@ struct NativeEngine final:Engine {
  }
  bool AtomicBatchReady()const override{return activated&&redefinition_gate::Ready(vm)&&native_owned_removal::GraphWindowReady();}
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
-  if(!activated||current||defs.empty())return JVMTI_ERROR_NOT_AVAILABLE;
+  if(!activated||current||defs.empty())return owned_failure_diagnostic::Unavailable(error,"engine activation/reentrant input");
   schema_operation=false;for(const auto& definition:defs){evolution::ClassSchema before,after;std::string narrow_error;
    if(android13::ReadLiveSchema(ti,env,definition.klass,&before,error)!=JVMTI_ERROR_NONE||!evolution::ReadDexDeclarations(definition.dex,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
    if(!native_owned_removal::ValidateRemoval(before,after,handles_proven,&narrow_error,false)||(before.methods.size()==after.methods.size()&&before.fields.size()==after.fields.size()))schema_operation=true;
@@ -374,10 +375,10 @@ struct NativeEngine final:Engine {
    if(!lease->Acquired())return Fail(error,"Another normal JVMTI transaction is active"),JVMTI_ERROR_NOT_AVAILABLE;
   }
   ClearFieldProofs(env);
-  if(schema_operation&&!abstract_instances.Ready()&&!abstract_instances.Calibrate(hooks,env,metadata,model,error))return JVMTI_ERROR_NOT_AVAILABLE;
+  if(schema_operation&&!abstract_instances.Ready()&&!abstract_instances.Calibrate(hooks,env,metadata,model,error))return owned_failure_diagnostic::Unavailable(error,"abstract-instance calibration");
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
-  if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return JVMTI_ERROR_NOT_AVAILABLE;
-  if(!cache.Prepare(error))return JVMTI_ERROR_NOT_AVAILABLE;
+  if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
+  if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
   current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
   int result=native_owned_removal::RunBatch(hooks,env,ti,defs,
     {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation,schema_operation?FinalizeSchema:nullptr},error);

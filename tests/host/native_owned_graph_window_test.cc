@@ -17,7 +17,7 @@ using namespace artdcevm::native_owned_removal;
 std::map<jobject,std::vector<jobject>> managed;
 std::vector<jclass> staged;
 int driver=0,failures=0,graph_checks=0;bool original_ok=true,collection_ok=true,field_ok=true,late_child=false,schema_mode=false,collected_provider_ok=true;
-jvmtiError recorded=JVMTI_ERROR_NONE;
+jvmtiError recorded=JVMTI_ERROR_NONE;std::string injected_rejection;
 source_commit::Plan finalized_plan;std::unique_ptr<source_commit::Services> finalized_service;
 bool Original(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
 void Failure(void* d,jvmtiError code,const void* klass,const void* message){assert(d==&driver&&klass&&message&&!stopped);auto& text=*static_cast<const android13::BorrowedPlatformString*>(message);assert(text.length&&text.data);++failures;recorded=code;}
@@ -34,7 +34,7 @@ struct ReadonlyServices final:batch_boundary::CommitServices {
 std::unique_ptr<source_commit::Services> PrepareReadonly(const source_commit::Plan& p,void*,std::string*){assert(!stopped);++batch_boundary::prepared;return std::make_unique<ReadonlyServices>(p);}
 bool Check(JNIEnv* env,jvmtiEnv*,const std::vector<jclass>& actual,const RootedGraph& graph,GraphWindow window,void*,std::string* error){
  if(!schema_mode)assert(graph.partitions.empty());else {assert(graph.mirror&&graph.partitions.size()==2);for(size_t n=0;n<graph.partitions.size();++n){const auto& p=graph.partitions[n];assert(p.holder_index==n&&p.class_count==1&&p.old_classes&&p.new_classes);assert(p.new_classes==batch_boundary::partitions[n].plan.new_classes_root);assert(p.instance_count==(window==GraphWindow::Collected?1u:0u));}}assert(window==(graph_checks==0?GraphWindow::Verified:GraphWindow::Collected));
- ++graph_checks;if(actual.size()!=staged.size()||!field_ok){*error="Unstaged child or changed field proof";return false;}
+ ++graph_checks;if(!injected_rejection.empty()){*error=injected_rejection;return false;}if(actual.size()!=staged.size()||!field_ok){*error="Unstaged child or changed field proof";return false;}
  for(auto klass:actual){size_t matches=0;for(auto candidate:staged)matches+=env->IsSameObject(klass,candidate);if(matches!=1){*error="Class namespace mismatch";return false;}}
  if(schema_mode&&window==GraphWindow::Collected){source_commit::Plan plan;plan.mirror=graph.mirror;plan.new_classes_root=graph.partitions[0].new_classes;
   for(size_t n=0;n<graph.partitions.size();++n){const auto& part=batch_boundary::partitions[n].plan;plan.old_classes.push_back(part.old_classes[0]);plan.new_classes.push_back(part.new_classes[0]);plan.class_root_origins.push_back({graph.partitions[n].new_classes,0});}
@@ -66,6 +66,7 @@ bool Leaves(){
 }
 bool WrappedVerification(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder);for(size_t n=0;n<batch_boundary::owners.size();++n){transaction_root::Iterator it{static_cast<int32_t>(n),h};if(!VerificationGraph(&batch_boundary::owners[n],&it))return false;}return true;}
 bool WrappedCollection(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder);for(size_t n=0;n<batch_boundary::owners.size();++n){transaction_root::Iterator it{static_cast<int32_t>(n),h};if(!CollectionGraph(&batch_boundary::owners[n],&it))return false;}return true;}
+bool RefuseThenForbid(){const bool result=Leaves();assert(!result);forbid_final_allocation=true;return result;}
 bool Before(){return VerifiedGraph(&driver,&batch_boundary::holder)&&CollectGraph(&driver,&batch_boundary::holder);}
 jvmtiError Result(){return recorded;}
 void Build(const std::vector<Definition>& definitions){
@@ -127,14 +128,39 @@ int main(int argc,char** argv){
  before_commit=Leaves;leaf_mode=0;
  Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&verification_calls==2&&collection_calls==2&&begins==1);
  for(int mode=1;mode<=5;++mode){leaf_mode=mode;Reset();graph_window::Build(definitions);
-  assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&failures==1&&begins==0&&replacements==0&&original_commits==0&&collection_calls==0);
+  assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&failures==1&&begins==0&&replacements==0&&original_commits==0&&collection_calls==0);assert(error.find("Owned source error 98")!=std::string::npos&&error.find("graphSealed=0")!=std::string::npos);
  }
  leaf_mode=0;Reset();graph_window::Build(definitions);original_ok=false;
- assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&verification_calls==1&&collection_calls==0&&begins==0&&failures==0);
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&verification_calls==1&&collection_calls==0&&begins==0&&failures==0);assert(error.find("Original CheckVerification returned false")!=std::string::npos);
  Reset();graph_window::Build(definitions);collection_ok=false;
- assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_OUT_OF_MEMORY&&verification_calls==2&&collection_calls==1&&begins==0&&failures==0&&graph_checks==1);
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_OUT_OF_MEMORY&&verification_calls==2&&collection_calls==1&&begins==0&&failures==0&&graph_checks==1);assert(error.find("Original CollectAndCreateNewInstances returned false")!=std::string::npos);
  Reset();graph_window::Build(definitions);collected_provider_ok=false;
- assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&collection_calls==2&&begins==0&&replacements==0);collected_provider_ok=true;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&collection_calls==2&&begins==0&&replacements==0);assert(error.find("Complete native schema preparation was rejected before publication")!=std::string::npos&&error.find("Collected graph preparation")!=std::string::npos&&error.find("graphSealed=0")!=std::string::npos);collected_provider_ok=true;
+ std::string early;assert(owned_failure_diagnostic::Unavailable(&early,"candidate graph/member staging")==JVMTI_ERROR_NOT_AVAILABLE&&early.find("before original source entry")!=std::string::npos);
+ early="Precise original preparation error";assert(owned_failure_diagnostic::Unavailable(&early,"abstract-instance calibration")==JVMTI_ERROR_NOT_AVAILABLE&&early=="Precise original preparation error");
+ std::string early_oom;forbid_final_allocation=true;assert(owned_failure_diagnostic::Unavailable(&early_oom,"interpreter-cache preparation")==JVMTI_ERROR_NOT_AVAILABLE);forbid_final_allocation=false;assert(early_oom.empty());
+ // The owned reason is copied while the temporary provider text still exists.
+ injected_rejection="Precise disposable provider rejection "+std::string(5000,'Z');
+ Reset();graph_window::Build(definitions);
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&error.find("Precise disposable provider rejection")!=std::string::npos&&error.size()<1024&&begins==0);
+ injected_rejection.clear();
+ // No allocation/ JNI is needed to remember the first bounded reason. Copying
+ // into a pre-reserved caller buffer also remains allocation-free.
+ Request diagnostic{&hooks,&env,&provider,{},false,nullptr,{}};std::string reason(5000,'X'),copied;copied.reserve(1024);
+ active=&diagnostic;const int calls=jni_calls;forbid_final_allocation=true;
+ Phase("fixed bounded capture");RememberFailure(reason.c_str());RememberFailure("must not replace first reason");CopyFailure(diagnostic,JVMTI_ERROR_NOT_AVAILABLE,&copied);
+ forbid_final_allocation=false;active=nullptr;
+ assert(std::strlen(diagnostic.rejection)==767&&copied.find(std::string(767,'X'))!=std::string::npos&&jni_calls==calls);
+ Request unicode_diagnostic{&hooks,&env,&provider,{},false,nullptr,{}};std::string unicode;for(size_t n=0;n<600;++n)unicode+="\xc3\xa9";
+ active=&unicode_diagnostic;forbid_final_allocation=true;RememberFailure(unicode.c_str());forbid_final_allocation=false;active=nullptr;
+ assert(std::strlen(unicode_diagnostic.rejection)==766&&unicode_diagnostic.rejection[766]==0);
+
+ // Failure reporting OOM cannot escape or alter the original source code.
+ before_commit=RefuseThenForbid;leaf_mode=2;std::string tiny;
+ Reset();graph_window::Build(definitions);const auto unchanged_code=RunBatch(hooks,&env,&ti,definitions,provider,&tiny);
+ forbid_final_allocation=false;assert(unchanged_code==JVMTI_ERROR_NOT_AVAILABLE&&tiny.empty()&&failures==1&&begins==0);
+ before_commit=Leaves;leaf_mode=0;
+ Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&error.empty());
  // Non-inlined wrappers containing both leaf proxies must seal exactly once.
  before_commit=Before;verified_original=WrappedVerification;collect_original=WrappedCollection;
  Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&verification_calls==2&&collection_calls==2&&begins==1);
@@ -156,6 +182,7 @@ int main(int argc,char** argv){
  auto unchanged=new_plan.new_classes;Put32(moved_array,8,2);assert(!rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes==unchanged);
  assert(!rooted_schema_plan::Read(graph,false,reader,&new_plan,&error));
  before_commit=nullptr;before_commit_result=nullptr;enter_final=leave_final=nullptr;
+ puts("Owned source fixed diagnostics: exact disposable provider reason, source phase/counts, original errors, bounded truncation, first-error isolation, noalloc/noJNI capture, diagnostic OOM preserves result and next success clears PASS");
  puts("Actual leaf boundaries: inlined/non-inlined driver coverage, every original bool, exact Holder/index/owner sequence, missing/skipped/duplicate verification refusal before collection, Collected rejection before Update PASS");
  puts("Actual graph window TU: schema paired Class/instance roots, moving-pointer reseal, exact origins, readonly Collected provider refusal before Update, preallocated final Update with allocator forbidden, raced/duplicate/missing child refusal and original failure result PASS");
 }
