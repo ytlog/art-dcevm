@@ -17,7 +17,7 @@ fixture=(root/'tests/host/native_source_commit_test.cc').read_text().split('int 
 setup=(root/'tests/host/source_handle_roots_test.cc').read_text()
 (out/'source_cache_walker_fixture.inc').write_text(setup.split('int main(){')[0].replace('class RootHooks final:', 'class RootHooks:'))
 (out/'source_cache_calibration_main.inc').write_text('int main(){'+setup.split('int main(){')[1].split(' struct Use{')[0].replace('RootHooks hooks;','SourceHooks hooks;'))
-sources = ['native_hierarchy_graph', 'native_hierarchy_allocator', 'native_hierarchy_receiver', 'rooted_hierarchy_allocator', 'native_hierarchy_cache', 'native_hierarchy_source_cache', 'source_handle_roots', 'source_allocation_transaction', 'native_source_commit', 'modern_source_commit', 'source_commit',
+sources = ['native_hierarchy_source_checks', 'native_hierarchy_graph', 'native_hierarchy_allocator', 'native_hierarchy_receiver', 'rooted_hierarchy_allocator', 'native_hierarchy_cache', 'native_hierarchy_source_cache', 'source_handle_roots', 'source_allocation_transaction', 'native_source_commit', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']

@@ -2,6 +2,7 @@
 #include "platform/common/native_hierarchy_graph.h"
 #include "platform/common/native_hierarchy_allocator.h"
 #include "platform/common/native_hierarchy_receiver.h"
+#include "platform/common/native_hierarchy_source_checks.h"
 #include "platform/common/native_hierarchy_source_cache.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_cache_lookup.h"
@@ -29,7 +30,7 @@ abi::arm64::android11::ReleaseObjectPointer Enter(void*self,abi::arm64::android1
 bool Exit(void*self,abi::arm64::android11::ReleaseObjectPointer p){assert(self==thread.data()&&held&&held_object==reinterpret_cast<void*>(p.reference));held=false;held_object=nullptr;return true;}
 jmethodID StaticMethod(JNIEnv*,jclass,const char*n,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(n,"holdsLock")?uintptr_t(&monitor_id):4);}
 jboolean Holds(JNIEnv*,jclass,jmethodID id,va_list args){Jni();assert(id==reinterpret_cast<jmethodID>(&monitor_id));return held&&held_object==va_arg(args,jobject);}
-class SourceHooks final:public RootHooks {public:void*FindSymbol(const char*lib,const char*n)override{if(std::strstr(n,"Class13GetDescriptor"))return reinterpret_cast<void*>(SourceDescriptor);if(std::strstr(n,"MonitorEnter"))return reinterpret_cast<void*>(Enter);if(std::strstr(n,"MonitorExit"))return reinterpret_cast<void*>(Exit);return RootHooks::FindSymbol(lib,n);}};
+class SourceHooks:public RootHooks {public:void*FindSymbol(const char*lib,const char*n)override{if(std::strstr(n,"Class13GetDescriptor"))return reinterpret_cast<void*>(SourceDescriptor);if(std::strstr(n,"MonitorEnter"))return reinterpret_cast<void*>(Enter);if(std::strstr(n,"MonitorExit"))return reinterpret_cast<void*>(Exit);return RootHooks::FindSymbol(lib,n);}};
 abi::arm64::android11::ReleaseObjectPointer OriginalFind(void*linker_arg,void*self,const char*d,void*loader){assert(linker_arg==&linker&&self==thread.data()&&!Read32(loader));if(allocated==2&&!relocated_new&&subject_descriptor==d){relocated_new=heap.New(160);std::memcpy(relocated_new,new_class,160);MoveRoots mover;mover.old_value=uint32_t(uintptr_t(new_class));mover.next_value=uint32_t(uintptr_t(relocated_new));OriginalRoots(self,&mover,0);}
  for(const auto&c:public_classes)if(c.descriptor==d)return {uintptr_t(c.native)};return {0};}
 void OriginalLoad(void*l,void*self,const void*,const void*,const void*){assert(l==&linker&&self==thread.data());}
@@ -42,6 +43,25 @@ abi::arm64::android11::ReleaseObjectPointer OriginalAllocate(void*owner,void*old
  auto scope=root_service->CreateScope(1,nullptr);assert(scope);scope->Set(0,new_class);
  allocator_service->LoadClass(&linker,thread.data(),incoming_file,nullptr,scope->Slot(0));assert(allocator_service->EnsureInstanceIds(scope->Slot(0)));return {uintptr_t(scope->Get(0))};
 }
+
+using SourceFailure=void(*)(void*,jvmtiError,const void*,const void*);
+SourceFailure source_failure_proxy=nullptr;bool(*source_check_proxy)(void*)=nullptr;
+void RecordSourceFailure(void*driver,jvmtiError error,const void*,const void*){assert(driver==&actual_driver);actual_driver.result=error;}
+bool OriginalCheck(void*owner){source_failure_proxy(&actual_driver,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,static_cast<char*>(owner)+offsetof(abi::arm64::android_common::ClassRedefinitionPrefix,class_signature),nullptr);return false;}
+void StructuralMarker(void*owner){static_cast<abi::arm64::android_common::ClassRedefinitionPrefix*>(owner)->added_methods=true;}
+void SourceRefuse(void*owner,int error,const char*)noexcept{assert(owner==&actual_owner);actual_driver.result=error;}
+class CheckHooks final:public SourceHooks {
+ public:void*FindSymbol(const char*library,const char*name)override{
+  if(std::strstr(name,"ClassRedefinition10CheckClassEv"))return reinterpret_cast<void*>(OriginalCheck);
+  if(std::strstr(name,"Redefiner13RecordFailure"))return reinterpret_cast<void*>(RecordSourceFailure);
+  if(std::strstr(name,"RecordNewMethodAdded"))return reinterpret_cast<void*>(StructuralMarker);
+  return SourceHooks::FindSymbol(library,name);
+ }
+ void*Install(void*target,void*proxy,void**original,std::string*error)override{
+  if(target==reinterpret_cast<void*>(OriginalCheck)||target==reinterpret_cast<void*>(RecordSourceFailure)){assert(stopped==1);*original=target;if(target==reinterpret_cast<void*>(OriginalCheck))source_check_proxy=reinterpret_cast<decltype(source_check_proxy)>(proxy);else source_failure_proxy=reinterpret_cast<SourceFailure>(proxy);return this;}
+  return SourceHooks::Install(target,proxy,original,error);
+ }
+};
 PublicClass&Public(void*p){for(auto&c:public_classes)if(c.native==p)return c;std::abort();}
 jmethodID Method(JNIEnv*,jclass,const char*n,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(n,"getSuperclass")?1:!std::strcmp(n,"getInterfaces")?2:3);}
 struct Array{std::vector<void*>values;};
@@ -111,6 +131,7 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
   Input proposal;proposal.strong_original=reinterpret_cast<jclass>(old_class);proposal.after=*d.schema;proposal.before=proposal.after;proposal.before.superclass=pkg+"HierarchyBase;";
   native_hierarchy_source_cache::Mapper absent_mapper(context,pool,*d.metadata,*d.storage,access,nullptr);native_hierarchy_cache::Owner absent_cache;assert(absent_cache.Calibrate(absent_mapper,calibration,112,counts,{subject_index,0,0,old_root,old_fields[0],old_method},&error));native_hierarchy_source_cache::Composite absent_caches(absent_mapper,absent_cache);native_hierarchy_receiver::Preservation missing_receivers(*d.metadata);Authority rejected;Bindings missing{d.metadata,d.roots,Borrow,&allocation,&missing_receivers,&absent_caches};assert(!rejected.Stage(context,&ti,{proposal},missing,&error));
   Authority authority;Bindings bindings{d.metadata,d.roots,Borrow,&allocation,&receivers,&caches};assert(!access.Count());if(!authority.Stage(context,&ti,{proposal},bindings,&error)){std::cerr<<error<<"\n";std::abort();}assert(authority.CheckClass(context,proposal.strong_original,proposal.after));
+  CheckHooks checks;assert(native_hierarchy_source_checks::Install(checks,&error));{native_hierarchy_source_checks::Scope scope(&actual_driver,context,*d.roots,authority,SourceRefuse);assert(source_check_proxy(&actual_owner));assert(actual_driver.result==113&&actual_owner.added_methods);auto*source_file=actual_owner.dex_file;actual_owner.dex_file=nullptr;assert(!source_check_proxy(&actual_owner)&&actual_driver.result==66);actual_owner.dex_file=source_file;actual_driver.result=113;}
   {native_hierarchy_allocator::Batch batch(allocation,context,authority,pool);assert(access.Attach(batch)&&!access.Attach(batch));assert(batch.Prepare(&holder,&error));selected_parent=inserted;
    auto*result=batch.Allocate(&actual_owner,old_root,cache_root,0,&error);if(!result)std::cerr<<error<<'\n';assert(result==relocated_new&&relocated_new&&allocated==2);native_hierarchy_allocator::Batch::RecordView record;assert(batch.At(0,&record));assert(!mapper.VerifyStaged(*authority.Staged(),{proposal},&error));assert(pool.Read(record.new_root,&result)&&result==relocated_new);
    auto*types=static_cast<type_cache::Dual*>(cache);assert(reinterpret_cast<type_cache::Pair*>(types->types)[subject_index%1024].object==uint32_t(uintptr_t(result)));assert(reinterpret_cast<uint32_t*>(types->types_array)[subject_index]==uint32_t(uintptr_t(result)));assert(!reinterpret_cast<method_cache::Pair*>(types->fields)[0].method&&!reinterpret_cast<method_cache::Pair*>(types->methods)[0].method);

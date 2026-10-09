@@ -51,8 +51,8 @@ bool Scope::Proof(void* owner) {
  if(!Mapped(prefix.begin,0x70)||std::memcmp(prefix.begin,"dex\n",4)||prefix.begin[7]||Read<uint32_t>(prefix.begin,96)!=1)return false;
  const uint32_t size=Read<uint32_t>(prefix.begin,32);
  if(size<0x70||!Mapped(prefix.begin,size)||!prefix.data_begin||!prefix.data_size||!Mapped(prefix.data_begin,prefix.data_size))return false;
- evolution::ClassSchema schema;
- if(!evolution::ReadMappedDexDeclarations({prefix.begin,size,prefix.data_begin,prefix.data_size,0},&schema,nullptr))return false;
+ evolution::ClassSchema schema;std::string parse_error;
+ if(!evolution::ReadMappedDexDeclarations({prefix.begin,size,prefix.data_begin,prefix.data_size,0},&schema,&parse_error))return false;
  void* actual=reinterpret_cast<void*>(mirror(owner).reference);
  if(!actual)return false;
  for(size_t input:graph->inputs){
