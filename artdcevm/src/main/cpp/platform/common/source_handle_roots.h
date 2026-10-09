@@ -17,6 +17,13 @@ class Service final {
   bool ObserveAllocatorHandle(const runnable_jni::Context&,jobject strong_original,const void* source_handle,std::string*);
   // Borrow a live source slot only after actual walker calibration; output may
   // not survive a safepoint unless immediately copied into an owned Scope.
+  // Borrow only a caller-owned public strong global on the independently
+  // matched current Runnable JNI thread. This grants no private Scope access.
+  // Only for a privately retained, previously checked strong global. The
+  // owner guarantees its kind/lifetime; direct named decode makes no JNI call
+  // and grants no HandleScope or hierarchy permission.
+  bool BorrowOwnedStrongGlobal(const runnable_jni::Context&,jobject,void**)const noexcept;
+  bool BorrowStrongGlobal(const runnable_jni::Context&,jobject,void**)const;
   bool BorrowHandle(const runnable_jni::Context&,const void* slot,void** output)const;
   bool ReadyForSourceAccess()const;
   bool Calibrated()const{return calibrated_.load(std::memory_order_acquire);}
@@ -58,6 +65,20 @@ class Pool final {
   ~Pool(){while(!scopes_.empty())scopes_.pop_back();}
   bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess();}
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;
+  bool Read(const void* slot,void** output)const{
+    if(!output||!ReadyForSourceAccess())return false;
+    for(size_t i=0;i<scopes_.size();++i){const uintptr_t start=uintptr_t(scopes_[i]->Slot(0)),address=uintptr_t(slot);
+      const size_t count=i+1==scopes_.size()?used_:kChunk;
+      if(address>=start&&(address-start)%4==0&&(address-start)/4<count){*output=scopes_[i]->Get((address-start)/4);return true;}}
+    return false;
+  }
+  bool Write(void* slot,void* object){
+    if(!ReadyForSourceAccess()||uintptr_t(object)>UINT32_MAX)return false;
+    for(size_t i=0;i<scopes_.size();++i){const uintptr_t start=uintptr_t(scopes_[i]->Slot(0)),address=uintptr_t(slot);
+      const size_t count=i+1==scopes_.size()?used_:kChunk;
+      if(address>=start&&(address-start)%4==0&&(address-start)/4<count){scopes_[i]->Set((address-start)/4,object);return true;}}
+    return false;
+  }
   void* Add(void* object,std::string* error){
     if(scopes_.empty()||used_==kChunk){auto scope=service_.CreateScope(kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;}
     auto& scope=*scopes_.back();void* slot=scope.Slot(used_);scope.Set(used_++,object);return slot;

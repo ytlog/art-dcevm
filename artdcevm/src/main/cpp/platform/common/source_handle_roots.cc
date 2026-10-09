@@ -65,11 +65,23 @@ bool Service::Contains(void* self,const void* slot,uint32_t value)const{
  }
  return found;
 }
-bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobject strong,const void* slot,std::string* error){
- if(!Runnable(context.self)||!context.env||Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env)return Fail(error,"Source allocator witness lacks the actual owned Runnable JNI thread");
- if(!strong||context.env->ExceptionCheck()||context.env->GetObjectRefType(strong)!=JNIGlobalRefType||!Runnable(context.self))return Fail(error,"Source allocator original Class is not an owned strong JNI global");
+bool Service::BorrowOwnedStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const noexcept{
+ if(!output||!decode_||!strong||!Runnable(context.self)||!context.env||Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env)return false;
  void* expected=reinterpret_cast<void*>(decode_(context.self,strong).reference);
- if(!expected||uintptr_t(expected)>UINT32_MAX||!Mapped(slot,4)||!Contains(context.self,slot,uint32_t(uintptr_t(expected))))return Fail(error,"Source Class Handle is not in the independently matched live scope chain");
+ if(!expected||uintptr_t(expected)>UINT32_MAX)return false;
+ *output=expected;return true;
+}
+bool Service::BorrowStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const{
+ if(!output||!decode_||!Runnable(context.self)||!context.env||Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env)return false;
+ if(!strong||context.env->ExceptionCheck()||context.env->GetObjectRefType(strong)!=JNIGlobalRefType||!Runnable(context.self))return false;
+ void* expected=reinterpret_cast<void*>(decode_(context.self,strong).reference);
+ if(!expected||uintptr_t(expected)>UINT32_MAX)return false;
+ *output=expected;return true;
+}
+bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobject strong,const void* slot,std::string* error){
+ void* expected=nullptr;
+ if(!BorrowStrongGlobal(context,strong,&expected))return Fail(error,"Source allocator original Class is not an actual Runnable owned strong JNI global");
+ if(!Mapped(slot,4)||!Contains(context.self,slot,uint32_t(uintptr_t(expected))))return Fail(error,"Source Class Handle is not in the independently matched live scope chain");
  Check check;check.slots[0]=slot;check.count=1;check.value=uint32_t(uintptr_t(expected));visit_(context.self,&check,0);
  if(!check.valid||check.seen!=1)return Fail(error,"Named root visitor does not see the exact public original Class Handle");
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");

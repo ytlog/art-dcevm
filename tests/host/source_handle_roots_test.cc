@@ -68,9 +68,14 @@ int main(){
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.Calibrated());hide_owned=false;
  request.expected=true;
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(service.Calibrated()&&Top()==original&&walks>=5);
- struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;} use_data{&service,&metadata};
+ struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;modern_field_storage::Service* fields;} use_data{&service,&metadata,&fields};
  auto use=[](const runnable_jni::Context& context,void* p){auto& data=*static_cast<Use*>(p);auto& s=*data.service;auto& metadata=*data.metadata;std::string error;
   void* borrowed=nullptr;assert(s.BorrowHandle(context,public_slot,&borrowed)&&borrowed==old_class);
+  const auto calls=jni_calls;
+  assert(s.BorrowOwnedStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls==calls);
+  assert(s.BorrowStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls>calls);
+  auto invalid=context;invalid.self=foreign_thread.data();borrowed=new_class;
+  assert(!s.BorrowOwnedStrongGlobal(invalid,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==new_class);
   uint32_t foreign_slot=uint32_t(uintptr_t(old_class));borrowed=new_class;
   assert(!s.BorrowHandle(context,&foreign_slot,&borrowed)&&borrowed==new_class);
   auto foreign_context=context;foreign_context.self=foreign_thread.data();
@@ -84,7 +89,17 @@ int main(){
   {source_handle_roots::Pool pool(s);std::array<void*,70> slots{};
    for(auto& slot:slots){slot=pool.Add(old_class,&error);assert(slot);}
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
-   for(auto slot:slots)assert(Read32(slot)==uint32_t(uintptr_t(new_class)));
+   for(auto slot:slots){void* value=nullptr;assert(pool.Read(slot,&value)&&value==new_class);}
+   void* untouched=old_class;assert(!pool.Read(public_slot,&untouched)&&untouched==old_class);
+   assert(!pool.Write(const_cast<void*>(public_slot),new_class));
+   assert(!pool.Write(static_cast<char*>(slots.back())+4,new_class));
+   assert(pool.Write(slots.back(),old_class));void* value=nullptr;
+   assert(pool.Read(slots.back(),&value)&&value==old_class);
+   auto* card=cards+((uintptr_t(old_class)-uintptr_t(heap.base))>>10);*card=0;
+   const auto jni_before=jni_calls;
+   assert(data.fields->SourceBarrier(context,pool,slots.back())&&*card==0x70&&jni_calls==jni_before);
+   *card=0;assert(!data.fields->SourceBarrier(invalid,pool,slots.back())&&*card==0);
+   assert(!data.fields->SourceBarrier(context,pool,public_slot)&&*card==0);
   }
   assert(s.BorrowHandle(context,outer->Slot(0),&borrowed)&&borrowed==new_class);
   assert(outer->Get(0)==new_class);

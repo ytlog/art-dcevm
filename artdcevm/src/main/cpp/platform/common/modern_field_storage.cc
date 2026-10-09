@@ -1,5 +1,6 @@
 #include "platform/common/modern_field_storage.h"
 #include "platform/common/field_storage.h"
+#include "platform/common/source_handle_roots.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
 #include <vector>
@@ -42,6 +43,18 @@ void Set(JNIEnv* e,jclass c,jobject o,jfieldID id,char t,bool s,uint64_t bits,jo
 #undef SET
 }
 size_t Width(char t){switch(t){case 'Z':case 'B':return 1;case 'C':case 'S':return 2;case 'J':case 'D':return 8;default:return 4;}}
+}
+bool Service::SourceBarrier(const runnable_jni::Context& context,const source_handle_roots::Pool& pool,const void* root)const noexcept {
+ if(!calibrated_||!current_||!context.self||current_()!=context.self||!context.env||
+    !Mapped(context.self,card_offset_+sizeof(uintptr_t)))return false;
+ void* object=nullptr;
+ if(!pool.Read(root,&object)||!object||!Mapped(object,8))return false;
+ uintptr_t biased=0;std::memcpy(&biased,static_cast<const char*>(context.self)+card_offset_,sizeof(biased));
+ const uintptr_t index=uintptr_t(object)>>kCardShift;
+ if(!biased||index>UINTPTR_MAX-biased)return false;
+ auto* card=reinterpret_cast<uint8_t*>(biased+index);
+ if(!Mapped(card,1))return false;
+ __atomic_store_n(card,kDirty,__ATOMIC_RELAXED);return true;
 }
 struct Adapter {
  static field_copy::CopyClassView Class(void* c,bool s){return selected->metadata_.Class(c,s);}
