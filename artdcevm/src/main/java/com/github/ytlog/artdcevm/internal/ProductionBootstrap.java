@@ -61,6 +61,7 @@ public final class ProductionBootstrap {
             Object ordinary = ordinarySourceClass.getDeclaredConstructor().newInstance();
             ordinarySourceObject = ordinary;
             ordinarySourceClass.getDeclaredField("value").setInt(ordinary, 6);
+            ordinarySourceClass.getDeclaredField("staticValue").setInt(null, 17);
             if ((int) ordinarySourceClass.getDeclaredMethod("compute").invoke(ordinary) != 7)
                 throw new IllegalStateException("Private ordinary source fixture value changed");
             this.cacheDex = cacheDex;
@@ -94,6 +95,7 @@ public final class ProductionBootstrap {
         Class<?> type = input.ordinarySourceClass;
         if (type.getDeclaredMethods().length != 3 - step ||
             type.getDeclaredField("value").getInt(input.ordinarySourceObject) != 6 ||
+            type.getDeclaredField("staticValue").getInt(null) != 17 ||
             (int) type.getDeclaredMethod("compute").invoke(input.ordinarySourceObject) != 7)
             return false;
         Object fresh = type.getDeclaredConstructor().newInstance();

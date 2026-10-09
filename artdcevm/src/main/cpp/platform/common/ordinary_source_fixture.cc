@@ -14,9 +14,15 @@ bool Validate(const evolution::ClassSchema& live,const std::array<std::vector<un
  for(size_t i=0;i<schemas.size();++i)if(!evolution::ReadDexDeclarations(dex[i],&schemas[i],error))return false;
  if(!Same(live,schemas[0]))return Fail(error,"Private ordinary source Class differs from its original immutable DEX");
  for(size_t step=0;step<schemas.size();++step){const auto& s=schemas[step];
-  if(s.descriptor!=kDescriptor||s.superclass!="Ljava/lang/Object;"||!s.interfaces.empty()||s.access!=1||s.fields.size()!=1||
-     s.fields[0].name!="value"||s.fields[0].descriptor!="I"||s.fields[0].access!=1||s.methods.size()!=4-step)
+  if(s.descriptor!=kDescriptor||s.superclass!="Ljava/lang/Object;"||!s.interfaces.empty()||s.access!=1||s.fields.size()!=2||s.methods.size()!=4-step)
    return Fail(error,"Private ordinary source fixture shape differs from the independent declaration");
+  size_t instance=0,statik=0;
+  for(const auto& f:s.fields){
+   if(f.name=="value"&&f.descriptor=="I"&&f.access==1)++instance;
+   else if(f.name=="staticValue"&&f.descriptor=="I"&&f.access==9)++statik;
+   else return Fail(error,"Private ordinary source fixture has an unexpected field");
+  }
+  if(instance!=1||statik!=1)return Fail(error,"Private ordinary source fixture lacks its independent static/instance field witnesses");
   size_t ctor=0,compute=0,first=0,second=0;
   for(const auto& m:s.methods){
    if(m.name=="<init>"&&m.descriptor=="()V"&&m.access==0x10001u)++ctor;

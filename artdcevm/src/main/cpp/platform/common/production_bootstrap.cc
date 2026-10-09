@@ -607,7 +607,10 @@ struct NativeEngine final:Engine {
   while(ordinary_source_step<files.size()&&!(source_capabilities.Ready()&&source_stop.Calibrated())){
    const std::vector<Definition> definition{{klass,files[ordinary_source_step]}};
    const int result=ExecuteOperation(env,ti,definition,false,error);
-   if(result!=JVMTI_ERROR_NONE||env->ExceptionCheck())return false;
+   if(result!=JVMTI_ERROR_NONE||env->ExceptionCheck()){
+    if(error)*error="private-ordinary-source round="+std::to_string(ordinary_source_step)+" result="+std::to_string(result)+": "+*error;
+    return false;
+   }
    const jint completed=static_cast<jint>(ordinary_source_step);++ordinary_source_step;
    jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_root{env,bootstrap};
    auto verify=bootstrap?env->GetStaticMethodID(bootstrap,"verifyOrdinarySource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z"):nullptr;
@@ -646,7 +649,10 @@ struct NativeEngine final:Engine {
   ClearFieldProofs(env);
   if(schema_operation&&!abstract_instances.Ready()&&!abstract_instances.Calibrate(hooks,env,metadata,model,error))return owned_failure_diagnostic::Unavailable(error,"abstract-instance calibration");
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
-  if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
+  if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error)){
+   if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
+   return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
+  }
   if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
   if(batch&&!PrepareSourceCacheWitness(env,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
   // Observe a bounded ordinary unchanged-hierarchy removal first. Schema graph
@@ -938,7 +944,10 @@ bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  for(size_t i=0;i<r.methods.size();i++)if(r.method_leaf(native,r.methods[i].strong_global_method)!=r.decode_method(e.runtime.receivers.jni_id_manager,r.ids[i]))return false;
  if(r.fields.empty())return true;
  auto target_metadata=e.metadata;
- if(!target_metadata.Calibrate(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)||target_metadata.StorageModel()!=e.metadata.StorageModel())return false;
+ if(!target_metadata.Calibrate(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)){
+  r.error="Target field calibration count="+std::to_string(r.fields.size())+": "+r.error;return false;
+ }
+ if(target_metadata.StorageModel()!=e.metadata.StorageModel()){r.error="Target field source model differs from the independent bootstrap model";return false;}
  for(size_t i=0;i<r.fields.size();i++){
   void* reflected=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.fields[i].strong_global_field,&reflected))return false;
   void* field=r.field_leaf(reflected);
