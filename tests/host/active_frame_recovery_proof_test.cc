@@ -8,6 +8,8 @@ using namespace active_frame_recovery_proof;
 namespace {
 Family family;int method_ids[3],thread,jit;void* active_method;
 bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
+bool actual_physical=false,physical_alias=false,physical_wrong_order=false,nterp_header=false;unsigned active_index=0;
+alignas(8) std::array<std::array<uint32_t,16>,3> physical_quick{};
 uint32_t code_size=64;unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
 struct Context final:abi::arm64::context::Prefix {void Reset()override{++resets;}~Context()override{++destroys;}
  void FillCalleeSaves(uint8_t*,const abi::arm64::context::FrameInfo&)override{}
@@ -31,6 +33,7 @@ template<size_t N> void Table(abi::arm64::android17::BitTable<N>& t,void* data,s
 }
 template<class T> void Decode(T* info,const void* h) {
  assert(h==header);*info={};if constexpr(!std::is_same_v<T,abi::arm64::android11::CodeInfo>)info->code_size=code_size;info->flags=bad_flag?0:1;info->dex_regs=2;info->frame_size=4;
+ if(actual_physical) {stack[2]=11+active_index;mask=3;roots=8;}
  Table(info->stack_maps,stack.data(),256,1,32);Table(info->inline_infos,inlines.data(),384,2,32);
  Table(info->dex_masks,&mask,6,1,6);Table(info->dex_maps,maps.data(),192,6,32);
  Table(info->dex_catalog,catalog.data(),384,6,32);Table(info->stack_masks,&roots,16,1,16);
@@ -42,7 +45,7 @@ abi::arm64::android11::TableIterator Map11(const abi::arm64::android11::CodeInfo
 bool Unmapped(const void*,size_t*){return false;}
 bool JitContains(const void* j,const void* pc){assert(j==&jit);return !bad_owner && pc!=nullptr;}
 bool HeaderContains(const void* h,uintptr_t pc){assert(h==header);return pc>reinterpret_cast<uintptr_t>(h);}
-bool Nterp(const void* h){assert(h==header);return false;}
+bool Nterp(const void* h){assert(h==header);return nterp_header;}
 template<class V> void Construct(void* raw,void* t,void* c,abi::arm64::stack::WalkKind kind,bool check) {
  assert(t==&thread && c && check);auto* visitor=static_cast<V*>(raw);
  std::memset(static_cast<unsigned char*>(raw)+8,0,sizeof(V)-8);visitor->thread=t;visitor->context=c;visitor->kind=kind;
@@ -54,7 +57,12 @@ template<class V> void Walk(void* raw,bool transitions) {
   v->pc=reinterpret_cast<uintptr_t>(header)+(family==Family::kAndroid11?8:4)+32;
   v->inline_frames.begin.row=0;v->inline_frames.end.row=(bad_inline && i==1)?2:2-i;
   if(physical_inlinees&&i<2)v->inline_frames.end.row=0;
-  active_method=&method_ids[2-i];if(!v->VisitFrame())break;
+  active_index=physical_wrong_order?i:2-i;active_method=&method_ids[active_index];
+  if(actual_physical) {
+   v->inline_frames.end.row=0;
+   v->quick_frame=reinterpret_cast<void**>(physical_quick[physical_alias?0:active_index].data());
+  }
+  if(!v->VisitFrame())break;
  }
 }
 uint32_t DexPc(const void*,bool abort){assert(!abort);for(unsigned i=0;i<3;++i)if(active_method==&method_ids[i])return 10+i+(bad_pc?1:0);return UINT32_MAX;}
@@ -70,7 +78,7 @@ bool SlowModern(const void* visitor,void* method,uint16_t reg,Kind kind,uint32_t
 }
 bool Fast(const void*,NativeLocation location,uint32_t* value) {
  assert(location.kind==0 && location.value>=8 && location.value<=28);
- *value=quick[location.value/4]+(bad_fast?1:0);return true;
+ *value=(actual_physical?physical_quick[active_index][location.value/4]:quick[location.value/4])+(bad_fast?1:0);return true;
 }
 bool Fast11(const void* visitor,NativeLocation location,Kind kind,uint32_t* value){assert(kind==((location.value%8)==4?Kind::kReference:Kind::kInt));if(kind==Kind::kReference)++reference_fast11;return Fast(visitor,location,value);}
 struct Finder {
@@ -105,6 +113,7 @@ struct Finder {
 };
 void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;creates=resets=destroys=reference_fast11=0;
  quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
+ actual_physical=physical_alias=physical_wrong_order=nterp_header=false;
  for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
  stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
  header[0]=16;header[1]=64;code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
@@ -118,7 +127,9 @@ void Check(Family f){family=f;Reset();Service service;
  assert(Service::Bind(f,Finder{},&service));
  Witness witnesses[3][2];for(unsigned i=0;i<3;++i)witnesses[i][0]={0,Kind::kInt,quick[2+2*i]},witnesses[i][1]={1,Kind::kReference,quick[3+2*i]};
  Oracle oracle{{&method_ids[0],2,witnesses[0],2,10},{{&method_ids[1],2,witnesses[1],2,11},{&method_ids[2],2,witnesses[2],2,12}}};
- decoded_frame_recovery::Location scratch[2];auto run=[&](){return service.Prove(&thread,&jit,oracle,scratch,2);};
+ Oracle wrong_shape=oracle;wrong_shape.shape=static_cast<Shape>(99);
+ decoded_frame_recovery::Location scratch[2];
+ assert(service.Prove(&thread,&jit,wrong_shape,scratch,2).failure==Failure::kMissingOracle);auto run=[&](){return service.Prove(&thread,&jit,oracle,scratch,2);};
  auto result=run();assert(result.failure==Failure::kNone && result.frames==3 && result.references==3 && result.integers==3 && result.location_reads==6 && result.dex_pc_checks==3 && result.inline_flag_checks==2);
  assert(creates==1 && resets==1 && destroys==1);if(f==Family::kAndroid11)assert(reference_fast11==3);
  assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
@@ -201,8 +212,39 @@ void Check(Family f){family=f;Reset();Service service;
  catalog[0]=1;catalog[1]=17;
  assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kDecodedMap); // out-of-frame64
  catalog[1]=3;
+ // Separate physical callers must each own a distinct native quick frame,
+ // native StackMap DexPc, independent int/root witnesses and both slow/fast reads.
+ actual_physical=true;
+ for(unsigned i=0;i<3;++i) {
+  physical_quick[i]={};void* owner=&method_ids[i];
+  std::memcpy(physical_quick[i].data(),&owner,sizeof(owner));
+  physical_quick[i][2]=quick[2+2*i];physical_quick[i][3]=quick[3+2*i];
+ }
+ catalog[0]=1;catalog[1]=3;catalog[2]=1;catalog[3]=4;maps[0]=1;maps[1]=2;
+ PhysicalOracle physical{{oracle.carrier,oracle.inlinees[0],oracle.inlinees[1]}};
+ auto physical_run=[&](){return service.ProvePhysical(&thread,&jit,physical,scratch,2);};
+ auto physical_report=physical_run();
+ assert(physical_report.failure==Failure::kNone && physical_report.frames==3 &&
+   physical_report.physical_owner_mask==7 && physical_report.physical_matches==3 && physical_report.inline_matches==0 &&
+   physical_report.inline_flag_checks==0 && physical_report.header_checks==3 &&
+   physical_report.dex_pc_checks==3 && physical_report.integers==3 &&
+   physical_report.references==3 && physical_report.location_reads==6);
+ assert(!std::strcmp(physical_report.detail,"complete-owned-three-physical-proof"));
+ // The inline API remains strict: a successful physical proof cannot authorize it.
+ assert(run().failure!=Failure::kNone);
+ physical_wrong_order=true;assert(physical_run().failure==Failure::kFrameIdentity);physical_wrong_order=false;
+ if(f!=Family::kAndroid11){nterp_header=true;assert(physical_run().failure==Failure::kCodeOwnership);nterp_header=false;}
+ physical_alias=true;assert(physical_run().failure==Failure::kFrameIdentity);physical_alias=false;
+ bad_native=true;assert(physical_run().failure==Failure::kNativeRead);bad_native=false;
+ bad_fast=true;assert(physical_run().failure==Failure::kValueMismatch);bad_fast=false;
+ bad_pc=true;assert(physical_run().failure==Failure::kDexPc);bad_pc=false;
+ bad_owner=true;assert(physical_run().failure==Failure::kCodeOwnership);bad_owner=false;
+ ++witnesses[1][0].expected;assert(physical_run().failure==Failure::kValueMismatch);--witnesses[1][0].expected;
+ skip_inner=true;assert(physical_run().failure==Failure::kFrameIdentity);skip_inner=false;
+ actual_physical=false;
+
  assert(destroys+1==creates); // only null Context allocation has no destructor.
 }
 }
 int main(){for(auto family:{Family::kAndroid11,Family::kAndroid12,Family::kAndroid13,Family::kAndroid14,Family::kAndroid15,Family::kAndroid16,Family::kAndroid17})Check(family);
- puts("Active frame native proof service: source signatures, original Context lifetime, physical/2-inline value and root witnesses, fail-closed negative paths passed; host fixtures only");}
+ puts("Active frame native proof service: source signatures, original Context lifetime, three-physical and carrier/2-inline independent DexPc/value/root witnesses, fail-closed negative paths passed; host fixtures only");}

@@ -232,13 +232,16 @@ public final class RuntimeAccessSuite {
         return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,false,phases);
     }
     public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage,boolean activeFrames,TestPhaseLog phases) {
+        return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,activeFrames,false,phases);
+    }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage,boolean activeFrames,boolean physicalActiveFrames,TestPhaseLog phases) {
         JSONObject report=new JSONObject();
         boolean nativeLoaded=false;
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
                     .put("abi",Build.SUPPORTED_ABIS[0])
                     .put("pageSize",Os.sysconf(OsConstants._SC_PAGESIZE))
-                    .put("activeFramesRequested",activeFrames).put("fullDcevmComplete",false).put("privateEvolutionInitialized",false);
+                    .put("physicalActiveFramesRequested",physicalActiveFrames).put("activeFramesRequested",activeFrames).put("fullDcevmComplete",false).put("privateEvolutionInitialized",false);
             phases.mark("native-load.before");
             System.loadLibrary("artdcevm");
             phases.mark("native-load.after");
@@ -270,14 +273,14 @@ public final class RuntimeAccessSuite {
             if(methodTableCount()!=methods.length)throw new AssertionError("Complete method table oracle");
             report.put("mainMethodModel",model).put("executableMirrorIdentityCount",methods.length).put("registeredNativeBindingCalibrated",true);
             if(model!=11&&model!=12)throw new AssertionError("Owned method identity main: "+model);
-            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames) {
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames||physicalActiveFrames) {
                 phases.mark("runtime-services.before");
                 String serviceError=probeRuntimeServices();
                 phases.mark("runtime-services.after");
                 report.put("runtimeServicesError",serviceError).put("runtimeServicesCalibrated",serviceError!=null&&serviceError.isEmpty());
                 if(serviceError==null||!serviceError.isEmpty())throw new AssertionError(serviceError);
             }
-            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames) {
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames||physicalActiveFrames) {
                 phases.mark("commit-method-metadata.before");
                 int commitModel=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,
                         carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
@@ -285,7 +288,7 @@ public final class RuntimeAccessSuite {
                 report.put("mainCommitMethodModel",commitModel);
                 if(commitModel!=model)throw new AssertionError("Owned modern method commit service: "+commitModel);
             }
-            if(jitReceivers||activeFrames) {
+            if(jitReceivers||activeFrames||physicalActiveFrames) {
                 phases.mark("jit-services.before");
                 byte[] additive;
                 try(java.util.zip.ZipFile zip=new java.util.zip.ZipFile(apkPath);
@@ -310,6 +313,16 @@ public final class RuntimeAccessSuite {
                         .put("scope","owned compiled carrier/two-inlinee proof missing; no frame capability"));
                 }
                 phases.mark("active-frames.after");
+            }
+            if(physicalActiveFrames) {
+                phases.mark("physical-active-frames.before");
+                try { report.put("ownedPhysicalActiveFrameProof",OwnedActiveFrameCalibration.runPhysical(apkPath)); }
+                catch(Throwable error) {
+                    report.put("ownedPhysicalActiveFrameProof",new JSONObject().put("passed",false)
+                        .put("error",android.util.Log.getStackTraceString(error))
+                        .put("wholeProcessFrameEligibility",false));
+                }
+                phases.mark("physical-active-frames.after");
             }
             phases.mark("worker-jni.before");
             int[] results={-1,-1},contexts={-1,-1},models={-1,-1},tables={-1,-1};String[] routes=new String[2];Throwable[] errors=new Throwable[2];Thread[] workers=new Thread[2];

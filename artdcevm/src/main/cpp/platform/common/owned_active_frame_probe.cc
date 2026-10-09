@@ -29,7 +29,7 @@ struct Request {
  void* cache=nullptr;ContainsMethod contains=nullptr;
  active_frame_recovery_proof::Report report;
  std::vector<Attempt> attempts;bool debug_observed=false,java_debuggable=false;
- bool jit_compiled=false,passed=false;std::string error,model;
+ bool physical_callers=false,jit_compiled=false,passed=false;std::string error,model;
  Request(ShadowHookEngine* engine,Leaf native_leaf,const Roots* strong_roots):hooks(engine),leaf(native_leaf),roots(strong_roots){}
 
 };
@@ -84,7 +84,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
   witnesses[i][1]={static_cast<uint16_t>(request.dex[16+i]),Kind::kReference,static_cast<uint32_t>(raw)};
   frames[i]={request.methods[i],static_cast<uint32_t>(request.dex[10+i]),witnesses[i],2,static_cast<uint32_t>(request.dex[19+i])};
  }
- Oracle oracle{frames[0],{frames[1],frames[2]}};
+ Oracle oracle{frames[0],{frames[1],frames[2]},request.physical_callers?Shape::kThreePhysical:Shape::kCarrierTwoInlinees};
  size_t capacity=0;for(size_t i=0;i<3;++i)capacity=std::max(capacity,static_cast<size_t>(request.dex[10+i]));
  // Scratch native memory only; no JNI or managed roots escape this stop.
  std::vector<decoded_frame_recovery::Location> scratch(capacity);
@@ -97,7 +97,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
   if(!Service::Bind(family,finder,&service,&missing)){request.attempts.push_back({family,missing,{},false});continue;}
   auto report=service.Prove(target,request.cache,oracle,scratch.data(),scratch.size(),method_identity::ReadableMappingExtent);
   request.attempts.push_back({family,nullptr,report,true});
-  if(report.failure==Failure::kNone && report.frames==3 && report.integers==3 && report.references==3 && report.location_reads==6 && report.dex_pc_checks==3 && report.inline_flag_checks==2) {
+  if(report.failure==Failure::kNone && report.frames==3 && report.integers==3 && report.references==3 && report.location_reads==6 && report.dex_pc_checks==3 && (request.physical_callers?(report.physical_matches==3 && report.inline_matches==0 && report.inline_flag_checks==0):report.inline_flag_checks==2)) {
    request.report=report;request.passed=true;
    request.model=family==Family::kAndroid11?"CodeInfo368/Visitor520/legacy-kind":family==Family::kAndroid12?"CodeInfo376/Visitor528":family==Family::kAndroid17?"CodeInfo368/Visitor520/slow-bool":"CodeInfo344/Visitor496";
    request.error.clear();return true;
@@ -117,6 +117,8 @@ const char* DeclarationName(active_frame_recovery_proof::Family family) {
 }
 std::string Escape(const std::string& text){std::string result;for(char c:text){if(c=='"'||c=='\\')result+='\\';if(c=='\n'){result+="\\n";continue;}if(static_cast<unsigned char>(c)<32)continue;result+=c;}return result;}
 std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\":"<<(request.passed?"true":"false")<<",\"carrierJitCompiled\":"<<(request.jit_compiled?"true":"false")
+ <<",\"frameShape\":\""<<(request.physical_callers?"three-physical":"carrier-two-inlinees")<<"\""
+ <<",\"wholeProcessFrameEligibility\":false"
  <<",\"frames\":"<<request.report.frames<<",\"integers\":"<<request.report.integers<<",\"references\":"<<request.report.references<<",\"locationReads\":"<<request.report.location_reads
  <<",\"dexPcChecks\":"<<request.report.dex_pc_checks<<",\"inlineFlagNativeObserved\":"<<(request.report.inline_flag_checks==2?"true":"false")
  <<",\"walkCallbacks\":"<<request.report.callbacks<<",\"matchedMethodMask\":"<<request.report.matched_mask
@@ -190,10 +192,10 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_github_ytlog_artdcevm_testing_Own
  return timeout>0&&timeout<=30000&&artdcevm::owned_active_frame::gate.Entered(static_cast<unsigned>(timeout));
 }
 extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_releaseGate(JNIEnv*,jclass) {artdcevm::owned_active_frame::gate.Release();}
-extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_prove(JNIEnv* env,jclass,jobjectArray methods,jintArray shape,jobjectArray references,jintArray integers) {
+static jstring ProveOwnedCallers(JNIEnv* env,jobjectArray methods,jintArray shape,jobjectArray references,jintArray integers,bool physical) {
  using namespace artdcevm;using namespace owned_active_frame;
  if(!methods||!shape||!references||!integers||env->ExceptionCheck()||env->GetArrayLength(methods)!=5||env->GetArrayLength(shape)!=22||env->GetArrayLength(references)!=3||env->GetArrayLength(integers)!=3)return nullptr;
- ShadowHookEngine hooks;Roots roots{env};Request request{&hooks,nullptr,&roots};
+ ShadowHookEngine hooks;Roots roots{env};Request request{&hooks,nullptr,&roots};request.physical_callers=physical;
  env->GetIntArrayRegion(shape,0,22,request.dex.data());env->GetIntArrayRegion(integers,0,3,request.integers.data());if(env->ExceptionCheck())return nullptr;
  for(size_t i=0;i<22;++i)if(request.dex[i]<0||(i>=10&&i<19&&request.dex[i]>UINT16_MAX)){request.error="Invalid independently parsed fixture DEX shape";return env->NewStringUTF(Json(request).c_str());}
  for(size_t i=0;i<8;++i){jobject local=env->GetObjectArrayElement(i<5?methods:references,static_cast<jsize>(i<5?i:i-5));roots.refs[i]=local?env->NewGlobalRef(local):nullptr;if(local)env->DeleteLocalRef(local);if(!roots.refs[i]||env->ExceptionCheck())return nullptr;}
@@ -218,5 +220,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_Owne
  }
  if(env->ExceptionCheck())return nullptr;
  return env->NewStringUTF(Json(request).c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_prove(JNIEnv* env,jclass,jobjectArray methods,jintArray shape,jobjectArray references,jintArray integers) {
+ return ProveOwnedCallers(env,methods,shape,references,integers,false);
+}
+extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameCalibration_provePhysical(JNIEnv* env,jclass,jobjectArray methods,jintArray shape,jobjectArray references,jintArray integers) {
+ return ProveOwnedCallers(env,methods,shape,references,integers,true);
 }
 #endif

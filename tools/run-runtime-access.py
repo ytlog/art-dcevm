@@ -3,7 +3,7 @@
 import argparse,hashlib,json,re,subprocess,shutil,uuid
 from evidence_paths import new_evidence_directory
 from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
-from owned_removal_report import validate_owned_removal,validate_active_frames
+from owned_removal_report import validate_owned_removal,validate_active_frames,validate_physical_active_frames
 from pathlib import Path
 from timeout_diagnostics import collect_timeout_diagnostics
 from crash_diagnostics import collect_crash_diagnostics
@@ -19,12 +19,13 @@ p.add_argument('--native-cache',action='store_true',help='Require synchronous re
 p.add_argument('--jit-receivers',action='store_true',help='Require actual Java/JVMTI JIT/cache/heap observation')
 p.add_argument('--method-guards',action='store_true',help='Require real retired JNI and reflection invocation rejection')
 p.add_argument('--field-storage',action='store_true',help='Require native raw field writes, card marking and monitor oracles')
+p.add_argument('--physical-active-frames',action='store_true',help='Require three distinct actual physical compiled callers with independent DexPc/vreg/root witnesses; no whole-process readiness')
 p.add_argument('--active-frames',action='store_true',help='Require independent actual compiled carrier/two-inlinee map, DEX PC and live-root proof')
 a=p.parse_args()
 if not a.adb:p.error("adb not found; pass --adb")
 out=new_evidence_directory(Path('build/evidence/runtime-access'))
 run_id=uuid.uuid4().hex
-metadata={'runId':run_id,'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'foregroundRequested':a.foreground,'activeFramesRequested':a.active_frames,'scope':'isolated-owned-JNI; no full evolution initialization'}
+metadata={'runId':run_id,'serial':a.serial,'apkSha256':hashlib.sha256(a.apk.read_bytes()).hexdigest(),'passed':False,'foregroundRequested':a.foreground,'activeFramesRequested':a.active_frames,'physicalActiveFramesRequested':a.physical_active_frames,'scope':'isolated-owned-JNI; no full evolution initialization'}
 def adb(label,*args,timeout=180):
     try:
         r=subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,text=True,timeout=timeout)
@@ -46,7 +47,7 @@ try:
     metadata['installedApkSha256']=verified_apk_sha256(adb('installed-hash','shell','sha256sum',file),metadata['apkSha256'])
     adb('stop','shell','am','force-stop','dev.artdcevm.lab')
     instrumentation_started=True
-    output=adb('instrumentation','shell','am','instrument','-w','-r','-e','runtimeRunId',run_id,*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage),('activeFrames',a.active_frames),('foreground',a.foreground)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
+    output=adb('instrumentation','shell','am','instrument','-w','-r','-e','runtimeRunId',run_id,*[item for key,enabled in [('runtimeServices',a.runtime_services),('exclusiveRoots',a.exclusive_roots),('nativeCache',a.native_cache),('jitReceivers',a.jit_receivers),('methodGuards',a.method_guards),('fieldStorage',a.field_storage),('activeFrames',a.active_frames),('physicalActiveFrames',a.physical_active_frames),('foreground',a.foreground)] if enabled for item in ['-e',key,'true']],'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation')
     match=re.search(r'^INSTRUMENTATION_RESULT: stream=(.*)$',output,re.M)
     if not match:
         reason=re.search(r'^INSTRUMENTATION_(?:RESULT|FAILED): (.*)$',output,re.M)
@@ -88,6 +89,13 @@ try:
         validate_active_frames(report)
         metadata['activeFrameProofPassed']=True
         metadata['scope']=metadata['scope'].replace('; no full evolution initialization','; owned compiled carrier/two-inlinee map, DEX PC and live-root proof; no full evolution initialization')
+    if a.physical_active_frames:
+        metadata['physicalActiveFrameProofPassed']=False
+        if report.get('runtimeServicesCalibrated') is not True or report.get('jitServices')!='jit,code-cache,heap':
+            raise RuntimeError('Missing independent runtime/JIT receiver prerequisites for requested physical-frame proof')
+        validate_physical_active_frames(report)
+        metadata['physicalActiveFrameProofPassed']=True
+        metadata['wholeProcessFrameEligibility']=False
 except Exception as error:
     if isinstance(error,subprocess.TimeoutExpired) and instrumentation_started:
         instrumentation_timed_out=True

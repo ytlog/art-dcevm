@@ -2,7 +2,7 @@
 """Require independent actual frame evidence through the real runner/fake ADB boundary."""
 import copy,hashlib,json,os,runpy,subprocess,sys,tempfile
 from pathlib import Path
-from owned_removal_report import validate_active_frames
+from owned_removal_report import validate_active_frames,validate_physical_active_frames
 root=Path(__file__).resolve().parents[1]
 proof={'passed':True,'carrierJitCompiled':True,'inlineFlagNativeObserved':True,
        'blockedLiveWitnesses':True,'retainedLiveWitnesses':True,'frames':3,'integers':3,
@@ -21,6 +21,17 @@ for key,value in proof.items():
     wrongs=([False,1,'true',None] if type(value) is bool else
             [value-1,value+1,True,str(value),float(value),None] if type(value) is int else [None,False,'failure'])
     for wrong in wrongs:reject({**report,'ownedActiveFrameProof':{**proof,key:wrong}})
+physical_proof={**proof,'inlineFlagNativeObserved':False,'frameShape':'three-physical',
+                'wholeProcessFrameEligibility':False,'matchedMethodMask':7,'physicalMethodMatches':3,
+                'inlineMethodMatches':0,'headerOwnershipChecks':3}
+physical_report={'physicalActiveFramesRequested':True,'ownedPhysicalActiveFrameProof':physical_proof}
+validate_physical_active_frames(physical_report)
+for key,value in physical_proof.items():
+    wrong=not value if type(value) is bool else value+1 if type(value) is int else 'wrong-shape'
+    candidate=copy.deepcopy(physical_report);candidate['ownedPhysicalActiveFrameProof'][key]=wrong
+    try:validate_physical_active_frames(candidate)
+    except RuntimeError:pass
+    else:raise AssertionError('Physical proof accepted missing/wrong source frame evidence: '+key)
 ordinary=runpy.run_path(str(root/'tools/test-owned-removal-report.py'))['full']
 base={**ordinary,**report,'mainCallbackHits':128,'workerCallbackHits':[128,128],
       'privateEvolutionInitialized':False,'mainRoute':'new-global-ref','workerRoutes':['new-global-ref']*2,
@@ -46,7 +57,10 @@ elif 'instrument' in args:
 ''');fake.chmod(0o755)
     missing=copy.deepcopy(base);missing.pop('ownedActiveFrameProof')
     failed={**base,'ownedActiveFrameProof':{'passed':False,'error':'Missing actual inlinees'}}
-    cases=[('matching',base,True,True,True),('frames_only',base,True,False,True),
+    cases=[('physical_matching',{**base,**physical_report},False,False,True),
+           ('physical_inline_alias',{**base,**physical_report,'ownedPhysicalActiveFrameProof':proof},False,False,False),
+           ('physical_missing',{**base,'physicalActiveFramesRequested':True},False,False,False),
+           ('matching',base,True,True,True),('frames_only',base,True,False,True),
            ('missing',missing,True,True,False),('failed',failed,True,True,False),
            ('legacy_unrequested_failure',failed,False,True,True),
            ('legacy_unrequested_missing',missing,False,True,True),
@@ -62,6 +76,7 @@ elif 'instrument' in args:
         command=[sys.executable,str(root/'tools/run-runtime-access.py'),'--serial','fixture','--adb',str(fake),'--apk',str(apk)]
         if removal:command+=flags
         if active:command+=['--active-frames']
+        if name.startswith('physical_'):command+=['--physical-active-frames']
         result=subprocess.run(command,cwd=cwd,env=env,capture_output=True,text=True,timeout=15)
         assert (result.returncode==0)==expected,(name,result.stdout,result.stderr)
         paths=list((cwd/'build/evidence/runtime-access').glob('*/run.json'));assert len(paths)==1
@@ -73,6 +88,10 @@ elif 'instrument' in args:
             assert len(instruments)==1 and ('activeFrames' in instruments[0])==active
             if active:
                 at=instruments[0].index('activeFrames');assert instruments[0][at-1]=='-e' and instruments[0][at+1]=='true'
+        if name.startswith('physical_'):
+            assert run['physicalActiveFrameProofPassed']==expected
+            assert 'physicalActiveFrames' in instruments[0]
+            if expected:assert run['wholeProcessFrameEligibility'] is False
         if expected:assert run['installedApkSha256']==run['apkSha256']==sha
         if name in ('missing','failed','bool_count','wrong_pc','not_current'):
             assert run['ownedRemovalPassed'] is True and run['activeFrameProofPassed'] is False

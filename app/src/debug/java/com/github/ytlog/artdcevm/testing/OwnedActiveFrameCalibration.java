@@ -9,9 +9,16 @@ public final class OwnedActiveFrameCalibration {
     private static native boolean waitEntered(int timeoutMillis);
     private static native void releaseGate();
     private static native String prove(Method[] methods,int[] dexShape,Object[] roots,int[] ints);
+    private static native String provePhysical(Method[] methods,int[] dexShape,Object[] roots,int[] ints);
     private OwnedActiveFrameCalibration(){ }
     public static JSONObject run(String apkPath)throws Exception {return run(apkPath,false);}
     public static JSONObject run(String apkPath,boolean requestOptimizingCompilation)throws Exception {
+        return runCallers(apkPath,requestOptimizingCompilation,false);
+    }
+    public static JSONObject runPhysical(String apkPath)throws Exception {
+        return runCallers(apkPath,false,true);
+    }
+    private static JSONObject runCallers(String apkPath,boolean requestOptimizingCompilation,boolean physical)throws Exception {
         Class<?>[] args={int.class,Object.class,int.class,Object.class,int.class,Object.class};
         Method carrier=OwnedActiveFrameFixture.class.getDeclaredMethod("carrier",args);
         Method[] methods={carrier,OwnedActiveFrameFixture.class.getDeclaredMethod("inlinee1",args),
@@ -40,12 +47,12 @@ public final class OwnedActiveFrameCalibration {
             if(!waitEntered(30000))throw new AssertionError("Actual native worker gate was not entered");
             if(OwnedActiveFrameFixture.retained0!=null||OwnedActiveFrameFixture.retained1!=null||OwnedActiveFrameFixture.retained2!=null||OwnedActiveFrameFixture.retainedInt0!=0||OwnedActiveFrameFixture.retainedInt1!=0||OwnedActiveFrameFixture.retainedInt2!=0)
                 throw new AssertionError("Fixture wrote live witnesses before native gate release");
-            String result=prove(methods,dex,roots,integers);
+            String result=physical?provePhysical(methods,dex,roots,integers):prove(methods,dex,roots,integers);
             if(result==null)throw new AssertionError("Missing active frame report");
             report=new JSONObject(result);
-            if(report.getBoolean("passed")&&(report.getInt("frames")!=3||report.getInt("integers")!=3||report.getInt("references")!=3||report.getInt("locationReads")!=6||!report.getBoolean("carrierJitCompiled")||report.getInt("dexPcChecks")!=3||!report.getBoolean("inlineFlagNativeObserved")))
+            if(report.getBoolean("passed")&&(report.getInt("frames")!=3||report.getInt("integers")!=3||report.getInt("references")!=3||report.getInt("locationReads")!=6||!report.getBoolean("carrierJitCompiled")||report.getInt("dexPcChecks")!=3||(physical?(report.getInt("physicalMethodMatches")!=3||report.getInt("inlineMethodMatches")!=0):!report.getBoolean("inlineFlagNativeObserved"))))
                 throw new AssertionError("Incomplete actual active frame proof: "+result);
-            report.put("warmCalls",100000).put("scope","owned compiled carrier and two inlinee map/value/root oracle; no full evolution");
+            report.put("warmCalls",100000).put("scope",physical?"three owned physical compiled callers with independent DexPc/value/root witnesses; no whole-process frame eligibility":"owned compiled carrier and two inlinee map/value/root oracle; no full evolution");
             report.put("blockedLiveWitnesses",true);
             if(compilation!=null)report.put("compilationControl",compilation);
         } finally {

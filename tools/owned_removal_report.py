@@ -77,3 +77,25 @@ def validate_active_frames(report):
         observed = proof.get(key)
         if type(observed) is not type(value) or observed != value:
             raise RuntimeError(f'Missing or incomplete actual active-frame proof: {key}={observed!r}; expected {value!r}')
+
+
+def validate_physical_active_frames(report):
+    """Three real physical callers; explicitly not whole-process readiness."""
+    if report.get('physicalActiveFramesRequested') is not True:
+        raise RuntimeError('Missing current requested physical-frame execution marker')
+    proof = report.get('ownedPhysicalActiveFrameProof')
+    if type(proof) is not dict:
+        raise RuntimeError('Missing structured physical active-frame proof')
+    expected = {
+        'passed': True, 'carrierJitCompiled': True, 'frameShape': 'three-physical',
+        'wholeProcessFrameEligibility': False, 'inlineFlagNativeObserved': False,
+        'blockedLiveWitnesses': True, 'retainedLiveWitnesses': True,
+        'frames': 3, 'matchedMethodMask': 7, 'physicalMethodMatches': 3, 'inlineMethodMatches': 0,
+        'integers': 3, 'references': 3, 'locationReads': 6,
+        'dexPcChecks': 3, 'headerOwnershipChecks': 3,
+        'warmCalls': 100000, 'error': '',
+    }
+    for key, value in expected.items():
+        observed = proof.get(key)
+        if type(observed) is not type(value) or observed != value:
+            raise RuntimeError(f'Missing or incomplete actual physical-frame proof: {key}={observed!r}; expected {value!r}')

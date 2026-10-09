@@ -28,7 +28,11 @@ struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;siz
 // Exactly one physical carrier and two independently identified inlinees. Raw
 // reference expectations must be acquired from strong roots inside the caller's
 // exclusive/suspended scope; they are borrowed only during Prove, never stored.
-struct Oracle {FrameOracle carrier,inlinees[2];};
+enum class Shape {kCarrierTwoInlinees,kThreePhysical};
+struct Oracle {FrameOracle carrier,inlinees[2];Shape shape=Shape::kCarrierTwoInlinees;};
+// This proof covers these three independently witnessed physical Java callers.
+// It does not grant whole-process frame eligibility or authorize deoptimization.
+struct PhysicalOracle {FrameOracle callers[3];};
 class Service {
  public:
   using Readable=bool (*)(const void*,size_t*);
@@ -75,6 +79,11 @@ class Service {
     }
     return report; // Context deleting destructor runs before leaving this scope.
   }
+  Report ProvePhysical(void* thread,void* jit,const PhysicalOracle& physical,
+      decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable=nullptr) const {
+    const Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},Shape::kThreePhysical};
+    return Prove(thread,jit,oracle,scratch,capacity,readable);
+  }
  private:
   using DexPc=uint32_t (*)(const void*,bool);
   static uint32_t InlineMask(Family f) {
@@ -100,6 +109,7 @@ class Service {
     return std::nullopt;
   }
   static bool Valid(const Oracle& o) {
+    if(o.shape!=Shape::kCarrierTwoInlinees && o.shape!=Shape::kThreePhysical)return false;
     const FrameOracle* frames[]={&o.carrier,&o.inlinees[0],&o.inlinees[1]};
     for(size_t i=0;i<3;++i){const auto& f=*frames[i];
       if(f.expected_dex_pc==UINT32_MAX || !f.method || !f.registers || !f.witnesses || f.count<2)return false;
@@ -166,7 +176,7 @@ class Service {
     // echo before walking, so smaller source candidates cannot corrupt state.
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
     const Service& service;void* jit;const Oracle& oracle;decoded_frame_recovery::Location* scratch;size_t capacity;Readable readable;Report& report;
-    void** carrier=nullptr;const void* shared_header=nullptr;uintptr_t shared_pc=0;uint32_t seen=0,inline_rows[2]{};
+    void** physical_frames[3]{};void** carrier=nullptr;const void* shared_header=nullptr;uintptr_t shared_pc=0;uint32_t seen=0,inline_rows[2]{};
     Visitor(const Service& s,void* j,const Oracle& o,decoded_frame_recovery::Location* storage,size_t n,Readable reader,Report& r):abi::arm64::stack::Visitor<Pair>{},service(s),jit(j),oracle(o),scratch(storage),capacity(n),readable(reader),report(r){}
     bool Fail(Failure failure,const char* detail){report.failure=failure;report.detail=detail;return false;}
     bool VisitFrame()override {
@@ -179,25 +189,37 @@ class Service {
       report.matched_mask|=bit;
       const bool physical=this->inline_frames.begin.row==this->inline_frames.end.row;
       if(physical)++report.physical_matches;else ++report.inline_matches;
+      if(oracle.shape==Shape::kThreePhysical && bit!=(seen==0?4u:seen==4?2u:1u))
+        return Fail(Failure::kFrameIdentity,"physical-caller-chain-order-mismatch");
       if(seen&bit)return Fail(Failure::kFrameIdentity,"duplicate-owned-method-callback");
       // Debuggable graphs cannot inline in fixed HInliner::Run. Observe these
       // real physical inlinee frames, but never count them as inline proof.
-      if(bit!=1 && physical){report.detail="owned-inlinee-observed-as-separate-physical-frame";return true;}
-      if(bit==1 && !physical)return Fail(Failure::kFrameIdentity,"owned-carrier-observed-as-inline-frame");
+      if(oracle.shape==Shape::kCarrierTwoInlinees && bit!=1 && physical){report.detail="owned-inlinee-observed-as-separate-physical-frame";return true;}
+      if((bit==1 || oracle.shape==Shape::kThreePhysical) && !physical)return Fail(Failure::kFrameIdentity,"owned-carrier-observed-as-inline-frame");
       if(!this->quick_frame)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-frame");
       if(!this->header)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-header");
       if(!this->context)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-native-context");
-      if(bit!=1) {
+      if(!physical) {
         const size_t index=bit==2?0:1,other=1-index;
         if((seen&(2u<<other)) && inline_rows[other]==this->inline_frames.end.row)return Fail(Failure::kFrameIdentity,"duplicate-inline-row");
         inline_rows[index]=this->inline_frames.end.row;
       }
-      if(!carrier){carrier=this->quick_frame;shared_header=this->header;shared_pc=this->pc;}
-      if(carrier!=this->quick_frame)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-physical-frame");
-      if(shared_header!=this->header || shared_pc!=this->pc)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-header-pc");
-      report.physical_owner_mask=*carrier==oracle.carrier.method?1u:
-        *carrier==oracle.inlinees[0].method?2u:*carrier==oracle.inlinees[1].method?4u:0u;
-      if(report.physical_owner_mask!=1)return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-carrier");
+      if(oracle.shape==Shape::kCarrierTwoInlinees) {
+        if(!carrier){carrier=this->quick_frame;shared_header=this->header;shared_pc=this->pc;}
+        if(carrier!=this->quick_frame)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-physical-frame");
+        if(shared_header!=this->header || shared_pc!=this->pc)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-header-pc");
+        report.physical_owner_mask=*carrier==oracle.carrier.method?1u:
+          *carrier==oracle.inlinees[0].method?2u:*carrier==oracle.inlinees[1].method?4u:0u;
+        if(report.physical_owner_mask!=1)return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-carrier");
+      } else {
+        const size_t index=bit==1?0:bit==2?1:2;
+        for(auto* frame:physical_frames)if(frame==this->quick_frame)
+          return Fail(Failure::kFrameIdentity,"physical-callers-share-quick-frame");
+        physical_frames[index]=this->quick_frame;
+        if(*this->quick_frame!=f->method)
+          return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-physical-caller");
+        report.physical_owner_mask|=bit;
+      }
       if(!service.jit_contains_(jit,reinterpret_cast<void*>(this->pc)) ||
          (service.header_contains_ && !service.header_contains_(this->header,this->pc)) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
       // Fixed native header prefixes put code at byte8 on11 and byte4
@@ -237,12 +259,12 @@ class Service {
       }
       // Original WalkStack emits inline callbacks only with native CodeInfo and
       // StackMap HasInlineInfo. Compare precisely this flag, never other flags.
-      if(bit!=1) {
+      if(!physical) {
         if(!(view.flags&InlineMask(service.family_)))return Fail(Failure::kInlineFlag,"native-inline-callback-versus-decoded-inline-flag-mismatch");
         ++report.inline_flag_checks;
       }
       uint32_t decoded_pc;
-      const bool decoded=bit==1?view.StackMaps().Read(map.row,2,&decoded_pc):
+      const bool decoded=physical?view.StackMaps().Read(map.row,2,&decoded_pc):
         view.InlineInfos().Read(this->inline_frames.end.row-1,1,&decoded_pc);
       if(!decoded || decoded_pc!=f->expected_dex_pc ||
          service.dex_pc_(this,false)!=f->expected_dex_pc)return Fail(Failure::kDexPc,"native-decoded-independent-invoke-DexPc-mismatch");
@@ -291,8 +313,8 @@ class Service {
     }
     report->detail="constructor-echo-matched-walk-started";
     if(!stack_.Walk(&visitor,sizeof(visitor))) {report->failure=Failure::kWalk;report->detail="native-visitor-construct-or-walk-call-unavailable";return;}
-    if(visitor.seen==7){report->failure=Failure::kNone;report->detail="complete-owned-physical-two-inline-proof";}
-    else if(report->failure==Failure::kMissingBinding){report->failure=Failure::kMissingFrames;report->detail=report->physical_matches>1?"missing-actual-inlinees-physical-fixture-frames-observed":"missing-owned-carrier-or-two-inline-callbacks";}
+    if(visitor.seen==7){report->failure=Failure::kNone;report->detail=oracle.shape==Shape::kThreePhysical?"complete-owned-three-physical-proof":"complete-owned-physical-two-inline-proof";}
+    else if(report->failure==Failure::kMissingBinding){report->failure=Failure::kMissingFrames;report->detail=oracle.shape==Shape::kThreePhysical?"missing-owned-three-physical-callers":report->physical_matches>1?"missing-actual-inlinees-physical-fixture-frames-observed":"missing-owned-carrier-or-two-inline-callbacks";}
   }
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;void* slow_=nullptr;void* fast_=nullptr;
