@@ -37,9 +37,12 @@ command += ['-DSOURCE_DEX_FIXTURE='+chr(34)+str(fixture_path)+chr(34),'-o',str(b
 subprocess.run(command, check=True)
 if args.compile_only:
     print('Source handle roots link PASS; execution pending');raise SystemExit(0)
-result = subprocess.run([str(binary)], capture_output=True, text=True,
-                        env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
-(out / 'result.log').write_text(result.stdout + result.stderr)
-result.check_returncode()
-print(result.stdout.strip())
+for layout in ('legacy','sized'):
+    fixture_env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1')
+    if layout=='sized':fixture_env['SOURCE_SCOPE_SIZED']='1'
+    else:fixture_env.pop('SOURCE_SCOPE_SIZED',None)
+    result=subprocess.run([str(binary)],capture_output=True,text=True,env=fixture_env,timeout=30)
+    (out/('result-'+layout+'.log')).write_text(result.stdout+result.stderr)
+    if layout=='legacy':(out/'result.log').write_text(result.stdout+result.stderr)
+    result.check_returncode();print(layout+': '+result.stdout.strip())
 print('Source cache native adapter: ASan/UBSan passed')
