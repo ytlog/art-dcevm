@@ -25,6 +25,8 @@ class SourceMapper {
  virtual bool VerifyStaged(const native_hierarchy_graph::Graph&,
                           const std::vector<native_hierarchy_graph::Input>&,std::string*)const=0;
  virtual bool Describe(const native_hierarchy_graph::Prepared&,Source*,std::string*)const=0;
+ virtual bool DescribeAllocation(const native_hierarchy_graph::Prepared&,Source*,std::string*)const{return false;}
+ virtual bool RefreshAllocation(native_hierarchy_graph::Prepared*)const noexcept{return false;}
  // Resolve in actual staticOriginalFindSource owner context, parent-first,
  // returning a GC-updated root of the source verifier's actual mapped Class.
  virtual bool FindSource(const native_hierarchy_graph::Prepared&,uint32_t,Root*,std::string*)const=0;
@@ -54,6 +56,8 @@ class Owner final:public native_hierarchy_graph::CacheOwner {
  bool Refresh() noexcept;
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;
  bool VerifyPrepared(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&,std::string*)const override;
+ bool VerifyAllocation(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&,std::string*)const override;
+ bool PrepareLinked(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,std::string*e)override{return Prepare(p,e);}
  bool Verify(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override;
  void BeginCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override;
  private:

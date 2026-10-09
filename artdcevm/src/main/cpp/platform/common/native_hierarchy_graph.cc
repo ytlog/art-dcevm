@@ -137,7 +137,19 @@ bool Authority::AuthorizeAllocation(const runnable_jni::Context& context,const P
  auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);if(target!=s.graph.inputs.end()&&!Same(*p.declarations,s.inputs[size_t(target-s.graph.inputs.begin())].after))return Fail(error,"Preallocation incoming declarations differ");
  if(it->proposed_parent!=absent&&s.graph.nodes[it->proposed_parent].affected&&!s.graph.nodes[it->proposed_parent].replacement)return Fail(error,"Affected parent has not been actually linked first");
  void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);if(parent!=p.parent||!s.Native(false))return Fail(error,"Preallocation source parent or staged native graph differs");
- return s.bindings.allocation->VerifyPrepared(s.graph,p,error)&&s.bindings.receivers->VerifyPrepared(s.graph,p,error)&&s.bindings.caches->VerifyPrepared(s.graph,p,error);
+ return s.bindings.allocation->VerifyAllocation(s.graph,p,error)&&s.bindings.receivers->VerifyAllocation(s.graph,p,error)&&s.bindings.caches->VerifyAllocation(s.graph,p,error);
+}
+bool Authority::PrepareLinked(const runnable_jni::Context& context,Prepared* p,std::string* error){auto& s=*state_;
+ if(!p||!s.staged||s.sealed||!p->new_class||!p->source_owner||!p->source_old_root||!p->declarations||!s.Borrow(context)||!s.bindings.allocation->RefreshPending(p))return Fail(error,"Actual linked source roots absent before cache preparation");
+ auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p->old_class;});
+ if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Cache preparation is outside exact unallocated graph");
+ size_t index=size_t(it-s.graph.nodes.begin());auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);
+ if(target!=s.graph.inputs.end()&&!Same(*p->declarations,s.inputs[size_t(target-s.graph.inputs.begin())].after))return Fail(error,"Linked cache source declarations differ from immutable input");
+ void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);
+ field_copy::CopyClassView identity;
+ if(p->parent!=parent||!s.Native(false)||!s.bindings.metadata->ClassIdentity(p->new_class,&identity,error)||identity.parent!=parent||identity.loader!=it->loader||!identity.descriptor||it->descriptor!=identity.descriptor||!s.Flags(p->new_class,it->flags)||!s.bindings.allocation->VerifyPrepared(s.graph,*p,error))return Fail(error,"Actual captured Class differs before private cache mutation");
+ // Cache resolution can safepoint; rebind the actual source roots afterward.
+ return s.bindings.caches->PrepareLinked(s.graph,*p,error)&&s.Borrow(context)&&s.bindings.allocation->RefreshPending(p);
 }
 bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepared& p,std::string* error){auto& s=*state_;if(!s.staged||s.sealed||!p.source_owner||!p.old_class||!p.new_class||!p.cache||!p.declarations||!s.Borrow(context))return Fail(error,"Actual linked allocation proof missing");
  auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p.old_class;});if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Allocation does not belong to exact unallocated affected Class");size_t index=size_t(it-s.graph.nodes.begin());

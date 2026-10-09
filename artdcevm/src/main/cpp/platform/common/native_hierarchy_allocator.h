@@ -39,6 +39,9 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
    const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;
  bool VerifyPrepared(const native_hierarchy_graph::Graph&,
    const native_hierarchy_graph::Prepared&,std::string*)const override;
+ bool VerifyAllocation(const native_hierarchy_graph::Graph&,
+   const native_hierarchy_graph::Prepared&,std::string*)const override;
+ bool RefreshPending(native_hierarchy_graph::Prepared*)const noexcept override;
  bool Verify(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override;
  void BeginCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override;
  // Uses only actual source Pool slots. Graph classes have been refreshed from
@@ -63,6 +66,7 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
 class Batch final {
  public:
  Batch(Service&,const runnable_jni::Context&,native_hierarchy_graph::Authority&);
+ Batch(Service&,const runnable_jni::Context&,native_hierarchy_graph::Authority&,source_handle_roots::Pool&);
  ~Batch();Batch(const Batch&)=delete;Batch& operator=(const Batch&)=delete;
  bool Prepare(const transaction_root::Holder*,std::string*);
  void* Allocate(void* actual_owner,const void* old_handle,const void* cache_handle,
@@ -78,6 +82,7 @@ class Batch final {
  void* Get(void* root)const noexcept;
  void* Find(const char* descriptor,void* loader)const;
  void* OriginalFind(const char* descriptor,void* loader_root)const;
+ source_handle_roots::Pool& Roots()const noexcept;
 
  private:
  friend class Service;

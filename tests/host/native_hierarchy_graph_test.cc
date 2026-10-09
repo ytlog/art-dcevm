@@ -67,6 +67,7 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
  bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept override{return granted;}
  bool VerifyStaged(const Graph&,const std::vector<Input>&,std::string*)const override{return granted;}
  bool VerifyPrepared(const Graph&,const Prepared& p,std::string*)const override{return granted&&p.cache==cache&&p.class_index==2;}
+ bool VerifyAllocation(const Graph&g,const Prepared&p,std::string*e)const override{return !p.new_class&&VerifyPrepared(g,p,e);}
  bool Verify(const Graph&,const source_commit::Plan&)const noexcept override{return granted;}
  void BeginCommit(const Graph&,const source_commit::Plan&)const noexcept override{++const_cast<FixtureOwner*>(this)->commits;}
 };

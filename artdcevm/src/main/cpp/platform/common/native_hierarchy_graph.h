@@ -37,6 +37,8 @@ class Owner {
  public:
  virtual ~Owner()=default;
  virtual bool VerifyStaged(const Graph&,const std::vector<Input>&,std::string*)const=0;
+ // Independent read-only proof of the actual unallocated source record.
+ virtual bool VerifyAllocation(const Graph&,const Prepared&,std::string*)const{return false;}
  virtual bool VerifyPrepared(const Graph&,const Prepared&,std::string*)const=0;
  virtual bool Verify(const Graph&,const source_commit::Plan&)const noexcept=0;
  virtual void BeginCommit(const Graph&,const source_commit::Plan&)const noexcept=0;
@@ -44,14 +46,20 @@ class Owner {
 class AllocationOwner:public Owner {
  public:
  virtual bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept=0;
+ virtual bool RefreshPending(Prepared*)const noexcept{return false;}
 };
 class ReceiverOwner:public Owner {};
-class CacheOwner:public Owner {};
+class CacheOwner:public Owner {
+ public:
+ // Explicit fallible incoming-cache mutation after capture/linking, separate
+ // from the read-only proof callbacks. Published caches must stay read-only.
+ virtual bool PrepareLinked(const Graph&,const Prepared&,std::string*){return false;}
+};
 struct Bindings {
  const modern_field_metadata::FieldMetadata* metadata=nullptr;
  void* decoder_owner=nullptr;
  bool (*borrow_owned)(void*,const runnable_jni::Context&,jobject,void**)=nullptr;
- const AllocationOwner* allocation=nullptr; const ReceiverOwner* receivers=nullptr; const CacheOwner* caches=nullptr;
+ const AllocationOwner* allocation=nullptr; const ReceiverOwner* receivers=nullptr; CacheOwner* caches=nullptr;
 };
 // Pure graph validation used by the public stage after exact JNI identities are
 // rooted. Rejects cycles across batch/unmodified edges, role/final/access errors,
@@ -68,6 +76,7 @@ class Authority final {
  // two hierarchy comparisons; source modifiers/CheckRedefinable remain original.
  bool CheckClass(const runnable_jni::Context&,jclass strong_original,const evolution::ClassSchema&)noexcept;
  bool AuthorizeAllocation(const runnable_jni::Context&,const Prepared&,std::string*);
+ bool PrepareLinked(const runnable_jni::Context&,Prepared*,std::string*);
  bool VerifyPrepared(const runnable_jni::Context&,const Prepared&,std::string*);
  // Collected source owner window, after all actual early allocations/linking.
  bool Seal(const source_commit::Plan&,std::string*);

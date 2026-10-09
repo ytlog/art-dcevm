@@ -18,6 +18,8 @@ class Preservation final:public native_hierarchy_graph::ReceiverOwner {
                    const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;
  bool VerifyPrepared(const native_hierarchy_graph::Graph&,
                      const native_hierarchy_graph::Prepared&,std::string*)const override;
+ bool VerifyAllocation(const native_hierarchy_graph::Graph&g,
+                       const native_hierarchy_graph::Prepared&p,std::string*e)const override{return !p.new_class&&VerifyPrepared(g,p,e);}
  bool Verify(const native_hierarchy_graph::Graph&,
              const source_commit::Plan&)const noexcept override;
  void BeginCommit(const native_hierarchy_graph::Graph&,

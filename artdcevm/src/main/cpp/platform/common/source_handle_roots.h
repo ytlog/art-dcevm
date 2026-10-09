@@ -63,6 +63,7 @@ class Scope final {
 class Pool final {
  public:
   explicit Pool(const Service& service):service_(service){}
+  bool UsesService(const Service& service)const noexcept{return &service_==&service;}
   ~Pool(){while(!scopes_.empty())scopes_.pop_back();}
   bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess()&&(scopes_.empty()||scopes_.front()->ReadyForSourceAccess());}
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;

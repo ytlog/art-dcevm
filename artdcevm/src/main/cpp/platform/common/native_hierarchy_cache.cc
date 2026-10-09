@@ -99,7 +99,7 @@ bool Owner::Prepare(const native_hierarchy_graph::Prepared& p,std::string* error
  !Views(r.source,&r.types,&r.fields,&r.methods)||!Unlocked(r.fields,format_)||!Unlocked(r.methods,format_))return Fail(error,"unpublished incoming source cache ownership not proved");
  // Resolve all roots and allocate the complete journal before the first write.
  auto add=[&](uint32_t pos,uint32_t index,bool full){Root root=nullptr;
- if(index>=r.source.counts.types||!mapper_->FindSource(p,index,&root,error)||!root)return false;
+ if(index>=r.source.counts.types||!mapper_->RefreshPrepared(&r.prepared)||!mapper_->FindSource(r.prepared,index,&root,error)||!root)return false;
  auto value=reinterpret_cast<uintptr_t>(mapper_->Get(root));if(!value||value>UINT32_MAX)return false;
  r.slots.push_back({pos,index,root,full});return true;};
  for(uint32_t i=0;i<r.types.pair_count;++i){type_cache::Pair pair;__atomic_load(r.types.pairs+i,&pair,__ATOMIC_ACQUIRE);
@@ -109,7 +109,7 @@ bool Owner::Prepare(const native_hierarchy_graph::Prepared& p,std::string* error
  // Mapping can have suspended during preparation. Recheck all current pointers
  // and owned writer context before borrowing mutable arrays.
  type_cache::View t;native_cache::View f,m;
- if(!mapper_->OwnsUnpublished(p,record.source)||!Views(record.source,&t,&f,&m)||!Same(t,record.types)||!Same(f,record.fields)||!Same(m,record.methods)||!Unlocked(f,format_)||!Unlocked(m,format_)){records_.pop_back();return Fail(error,"source cache changed before writer window");}
+ if(!mapper_->RefreshPrepared(&record.prepared)||!mapper_->OwnsUnpublished(record.prepared,record.source)||!Views(record.source,&t,&f,&m)||!Same(t,record.types)||!Same(f,record.fields)||!Same(m,record.methods)||!Unlocked(f,format_)||!Unlocked(m,format_)){records_.pop_back();return Fail(error,"source cache changed before writer window");}
  // Root lookup may safepoint before OwnsUnpublished establishes the writer
  // window. Prove that every occupied entry still has its journaled DEX role;
  // no newly populated slot may escape transformation.
@@ -140,6 +140,12 @@ bool Owner::Check(const Record&r)const noexcept{
  return seen==r.slots.size();
 }
 bool Owner::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&i,std::string* e)const{return Witnesses()&&mapper_->VerifyStaged(g,i,e);}
+bool Owner::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,std::string*e)const{
+ if(!Witnesses()||p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
+ Source source;type_cache::View types;native_cache::View fields,methods;
+ auto actual=p;
+ return mapper_->DescribeAllocation(p,&source,e)&&mapper_->RefreshAllocation(&actual)&&source.dex_identity&&source.private_token&&mapper_->Get(source.cache_root)==actual.cache&&mapper_->OwnsUnpublished(actual,source)&&Views(source,&types,&fields,&methods)&&Unlocked(fields,format_)&&Unlocked(methods,format_);
+}
 bool Owner::VerifyPrepared(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,std::string* e)const{
  for(const auto&r:records_)if(Exact(r.prepared,p))return mapper_->VerifyFrozen(g,p,r.source)&&Check(r);
  return Fail(e,"exact transformed incoming source cache absent");

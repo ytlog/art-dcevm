@@ -15,10 +15,10 @@ const char* fixture_descriptor="LFixture;";
 const char* SourceDescriptor(void* klass,void*){return klass==parent_class?"Ljava/lang/Object;":fixture_descriptor;}
 class SourceHooks final:public RootHooks {public:void*FindSymbol(const char*lib,const char*name)override{if(std::strstr(name,"Class13GetDescriptor"))return reinterpret_cast<void*>(SourceDescriptor);return RootHooks::FindSymbol(lib,name);}};
 class Batch final:public BatchAccess {
- public:RecordView record;source_handle_roots::Pool&pool;mutable int finds=0;bool wrong_original=false;
+ public:RecordView record;source_handle_roots::Pool&pool;mutable int finds=0;bool wrong_original=false;size_t count=0;
  explicit Batch(source_handle_roots::Pool&p):pool(p){}
- size_t Count()const noexcept override{return 1;}
- bool At(size_t i,RecordView*out)const noexcept override{if(i)return false;*out=record;return true;}
+ size_t Count()const noexcept override{return count;}
+ bool At(size_t i,RecordView*out)const noexcept override{if(i>=count)return false;*out=record;return true;}
  void*Find(const char*d,void*loader)const noexcept override{return !loader&&!std::strcmp(d,record.declarations->descriptor.c_str())?record.new_root:nullptr;}
  void*OriginalFind(const char*d,void*loader_root)const override{
  void*loader=nullptr;assert(pool.Read(loader_root,&loader)&&!loader);++finds;
@@ -53,12 +53,12 @@ class Proof final:public RequiredServices {public:bool live=true,private_cache=t
  auto run=[](const runnable_jni::Context&context,void*raw){auto&d=*static_cast<Use*>(raw);std::string error;source_handle_roots::Pool pool(*d.service);
   auto*cache=static_cast<unsigned char*>(heap.New(112));auto*published=heap.New(112);old_class->dex_cache=uint32_t(uintptr_t(published));new_class->dex_cache=uint32_t(uintptr_t(cache));
   auto*file=static_cast<dex_mapping_abi::Prefix*>(heap.New(48));*file={nullptr,d.mapping.begin,0xdeadbeef,d.mapping.data_begin,d.mapping.data_size};uint64_t file_pointer=uintptr_t(file);std::memcpy(cache+16,&file_pointer,8);new_class->dex_class_def_index=0;
-  Batch batch(pool);batch.record={&batch,0,pool.Add(old_class,&error),pool.Add(new_class,&error),pool.Add(cache,&error),pool.Add(parent_class,&error),d.schema,d.mapping};
-  native_hierarchy_graph::Prepared p{&batch,old_class,new_class,cache,parent_class,0,d.schema};native_hierarchy_graph::Graph graph;native_hierarchy_graph::Node node;node.klass=old_class;node.descriptor=d.schema->descriptor;node.affected=true;graph.nodes.push_back(node);
+  Batch batch(pool);batch.record={&batch,0,pool.Add(old_class,&error),pool.Add(nullptr,&error),pool.Add(cache,&error),pool.Add(parent_class,&error),d.schema,d.mapping};
+  native_hierarchy_graph::Prepared p{&batch,old_class,new_class,cache,parent_class,0,d.schema,batch.record.old_root};native_hierarchy_graph::Graph graph;native_hierarchy_graph::Node node;node.klass=old_class;node.descriptor=d.schema->descriptor;node.affected=true;graph.nodes.push_back(node);
   Proof proof;Mapper mapper(context,pool,*d.metadata,*d.fields,batch,&proof);Mapper absent(context,pool,*d.metadata,*d.fields,batch,nullptr);
   assert(!absent.VerifyStaged(graph,{},&error));assert(mapper.VerifyStaged(graph,{},&error));
-  native_hierarchy_cache::Source source;batch.wrong_original=true;assert(!mapper.Describe(p,&source,&error));batch.wrong_original=false;
-  assert(mapper.Describe(p,&source,&error));assert(source.dex_identity==file&&source.cache_root==batch.record.cache_root);assert(mapper.OwnsUnpublished(p,source));proof.private_cache=false;assert(!mapper.OwnsUnpublished(p,source));proof.private_cache=true;
+  native_hierarchy_cache::Source source;batch.count=1;p.new_class=nullptr;assert(mapper.VerifyAllocation(graph,p,&error));batch.wrong_original=true;assert(!mapper.DescribeAllocation(p,&source,&error));batch.wrong_original=false;
+  assert(mapper.DescribeAllocation(p,&source,&error));assert(!mapper.DescribeAllocation(p,&source,&error));assert(pool.Write(batch.record.new_root,new_class));p.new_class=new_class;assert(mapper.Describe(p,&source,&error));assert(source.dex_identity==file&&source.cache_root==batch.record.cache_root);assert(mapper.OwnsUnpublished(p,source));proof.private_cache=false;assert(!mapper.OwnsUnpublished(p,source));proof.private_cache=true;
   uint32_t type_index=UINT32_MAX;for(uint32_t i=0;i<source.counts.types;++i){const char*descriptor=nullptr;assert(evolution::ReadMappedDexTypeDescriptor(d.mapping,i,&descriptor,&error));if(!std::strcmp(descriptor,d.schema->descriptor.c_str()))type_index=i;}
   assert(type_index!=UINT32_MAX);void*root=nullptr;assert(mapper.FindSource(p,type_index,&root,&error));assert(root==batch.record.new_root&&mapper.Get(root)==new_class&&batch.finds>=3);
   assert(!mapper.FindSource(p,source.counts.types,&root,&error));
@@ -82,13 +82,13 @@ class Proof final:public RequiredServices {public:bool live=true,private_cache=t
   populate(published);populate(cache);void*calibration_root=pool.Add(published,&error);
   native_hierarchy_cache::Owner incoming;native_hierarchy_cache::Witness witness{type_index,0,0,batch.record.old_root,old_fields[0],old_method};
   assert(incoming.Calibrate(mapper,calibration_root,112,source.counts,witness,&error));Composite composite(mapper,incoming);
-  assert(composite.VerifyStaged(graph,{},&error));assert(composite.Prepare(graph,p,&error));assert(composite.VerifyPrepared(graph,p,&error));assert(composite.Verify(graph,plan));
+  assert(!composite.VerifyStaged(graph,{},&error));assert(composite.Prepare(graph,p,&error));assert(composite.VerifyPrepared(graph,p,&error));assert(composite.Verify(graph,plan));
   assert(reinterpret_cast<type_cache::Pair*>(static_cast<type_cache::Dual*>(static_cast<void*>(cache))->types)[type_index].object==uint32_t(uintptr_t(moved)));
   auto*published_types=reinterpret_cast<type_cache::Pair*>(static_cast<type_cache::Dual*>(published)->types);assert(published_types[type_index].object==uint32_t(uintptr_t(old_class)));
   forbid_allocation=true;assert(composite.Verify(graph,plan));forbid_allocation=false;
 
   old_class->dex_cache=uint32_t(uintptr_t(cache));assert(mapper.IsReadonly(p));assert(!mapper.VerifyStaged(graph,{},&error));
-  Mapper readonly_mapper(context,pool,*d.metadata,*d.fields,batch,&proof);assert(!readonly_mapper.VerifyReadonlyPrepared(graph,p));assert(readonly_mapper.VerifyStaged(graph,{},&error));assert(readonly_mapper.VerifyReadonlyPrepared(graph,p));assert(readonly_mapper.VerifyReadonlyCommit(graph,plan));assert(!mapper.OwnsUnpublished(p,source));old_class->dex_cache=uint32_t(uintptr_t(published));assert(!readonly_mapper.VerifyReadonlyCommit(graph,plan));
+  Mapper readonly_mapper(context,pool,*d.metadata,*d.fields,batch,&proof);assert(!readonly_mapper.VerifyReadonlyPrepared(graph,p));batch.count=0;assert(readonly_mapper.VerifyStaged(graph,{},&error));batch.count=1;assert(pool.Write(batch.record.new_root,nullptr));auto pending=p;pending.new_class=nullptr;assert(readonly_mapper.VerifyAllocation(graph,pending,&error));assert(pool.Write(batch.record.new_root,moved));assert(readonly_mapper.VerifyReadonlyPrepared(graph,p));assert(readonly_mapper.VerifyReadonlyCommit(graph,plan));assert(!mapper.OwnsUnpublished(p,source));old_class->dex_cache=uint32_t(uintptr_t(published));assert(!readonly_mapper.VerifyReadonlyCommit(graph,plan));
   forbid_allocation=true;assert(mapper.VerifyCommit(graph,plan));proof.live=false;assert(!mapper.VerifyCommit(graph,plan)&&!mapper.VerifyFrozen(graph,p,source));forbid_allocation=false;
   return true;
  };

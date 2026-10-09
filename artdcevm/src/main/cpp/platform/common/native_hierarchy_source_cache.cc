@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_source_cache.h"
+#include "platform/common/native_hierarchy_allocator.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
@@ -14,6 +15,7 @@ bool SameRecord(const RecordView&a,const RecordView&b){return a.source_owner==b.
 }
 bool Inspect(const evolution::MappedDexMetadata&d,const evolution::ClassSchema&expected,native_hierarchy_cache::Counts*out,std::string*e){
  try {
+ std::string local_error;if(!e)e=&local_error;
  if(!out||!Mapped(d.begin,d.size)||!Mapped(d.data_begin,d.data_size)||d.size<112||std::memcmp(d.begin,"dex\n",4)||d.begin[7]||U32(d.begin,32)!=d.size)return Fail(e,"incoming StandardDEX mapping is not complete");
  evolution::ClassSchema actual;
  if(!evolution::ReadMappedDexDeclarations(d,&actual,e))return false;
@@ -22,6 +24,11 @@ bool Inspect(const evolution::MappedDexMetadata&d,const evolution::ClassSchema&e
  }catch(const std::bad_alloc&){return Fail(e,"incoming source declarations native storage exhausted");}
 }
 Mapper::Mapper(const runnable_jni::Context&ctx,source_handle_roots::Pool&p,const modern_field_metadata::FieldMetadata&f,const modern_field_storage::Service&s,const BatchAccess&b,const RequiredServices*r):context_(ctx),pool_(p),fields_(f),storage_(s),batch_(b),services_(r){}
+bool AllocatorBatchAccess::Attach(native_hierarchy_allocator::Batch&batch)noexcept{if(batch_||&batch.Roots()!=&pool_||!pool_.ReadyForSourceAccess())return false;batch_=&batch;return true;}
+size_t AllocatorBatchAccess::Count()const noexcept{return batch_?batch_->Count():0;}
+bool AllocatorBatchAccess::At(size_t n,RecordView*out)const noexcept{if(!batch_||!out)return false;native_hierarchy_allocator::Batch::RecordView r;if(!batch_->At(n,&r))return false;*out={r.source_owner,r.class_index,r.old_root,r.new_root,r.cache_root,r.parent_root,r.declarations,r.dex};return true;}
+void* AllocatorBatchAccess::Find(const char*name,void*loader)const noexcept{return batch_?batch_->Find(name,loader):nullptr;}
+void* AllocatorBatchAccess::OriginalFind(const char*name,void*loader)const{return batch_?batch_->OriginalFind(name,loader):nullptr;}
 void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;return pool_.Read(root,&value)?value:nullptr;}
 bool Mapper::Readable(const void*p,size_t n)const noexcept{return Mapped(p,n);}
 bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)const noexcept{
@@ -58,37 +65,53 @@ bool Mapper::Mapping(const RecordView&r,const void**identity)const noexcept{
 }
 const Mapper::Entry* Mapper::EntryFor(void*owner)const noexcept{for(const auto&e:entries_)if(e->record.source_owner==owner)return e.get();return nullptr;}
 bool Mapper::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&inputs,std::string*e)const{
- if(!services_||!pool_.ReadyForSourceAccess()||!fields_.Calibrated()||!batch_.Count()||!services_->VerifyStaged(g,inputs))return Fail(e,"actual source cleanup and final runtime services are absent");
- try{std::vector<RecordView> readonly_records,staged_records;
- for(size_t i=0;i<batch_.Count();++i){RecordView r;const void*identity=nullptr;native_hierarchy_cache::Counts counts;
- if(!batch_.At(i,&r)||!r.declarations||r.dex.class_def_index!=r.class_index)return false;
- const bool readonly=fields_.Reference(Get(r.old_root),offsetof(class_metadata::Class11,dex_cache))==Get(r.cache_root);
- if(!Namespace(r,false,readonly)||!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&counts,e)||(readonly&&!services_->VerifyReadonlyStaged(g,r)))return false;
- if(readonly)readonly_records.push_back(r);staged_records.push_back(r);
- bool found=false;for(const auto&node:g.nodes)if(node.klass==Get(r.old_root)&&node.affected&&node.descriptor==r.declarations->descriptor){found=true;break;}if(!found)return Fail(e,"source target is outside the actual staged affected graph");
- }
- if(!staged_.empty()){if(staged_.size()!=staged_records.size()||readonly_.size()!=readonly_records.size())return Fail(e,"staged source cache role changed");
- for(size_t i=0;i<staged_.size();++i)if(!SameRecord(staged_[i],staged_records[i]))return Fail(e,"staged source cache provenance changed");
- for(size_t i=0;i<readonly_.size();++i)if(!SameRecord(readonly_[i],readonly_records[i]))return Fail(e,"staged readonly source cache identity changed");return true;}
- staged_=std::move(staged_records);readonly_=std::move(readonly_records);return true;
- }catch(const std::bad_alloc&){return Fail(e,"readonly source cache witness storage exhausted");}
+ // This is the independent expected graph phase, before any allocation record.
+ // The real source namespace/cache proof belongs to VerifyAllocation below.
+ if(!services_||!pool_.ReadyForSourceAccess()||!fields_.Calibrated()||batch_.Count()||!entries_.empty()||!readonly_.empty()||!services_->VerifyStaged(g,inputs))return Fail(e,"expected source cache graph must precede actual allocation records");
+ if(staged_graph_&&staged_graph_!=&g)return Fail(e,"expected cache graph owner changed");
+ staged_graph_=&g;return true;
 }
-bool Mapper::Describe(const native_hierarchy_graph::Prepared&p,native_hierarchy_cache::Source*out,std::string*e)const{
- RecordView r;if(!out||!services_||!Record(p,&r)||!Namespace(r,true))return Fail(e,"linked source cache has no exact actual allocator record");
- if(const auto*entry=EntryFor(p.source_owner)){if(!SameRecord(r,entry->record))return Fail(e,"immutable source record changed");*out=entry->source;return true;}
- try {
+bool Mapper::VerifyAllocation(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,std::string*e)const{
+ RecordView r;const void*identity=nullptr;native_hierarchy_cache::Counts counts;
+ if(!services_||staged_graph_!=&g||p.new_class||!p.source_old_root||!Record(p,&r)||r.old_root!=p.source_old_root||Get(r.new_root)||!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&counts,e))return Fail(e,"actual unallocated cache source does not belong to expected graph");
+ size_t matches=0;for(const auto&node:g.nodes)if(node.affected&&node.klass==Get(r.old_root)&&node.descriptor==r.declarations->descriptor)++matches;
+ if(matches!=1)return Fail(e,"unallocated source cache is outside exact affected graph");
+ const bool readonly=fields_.Reference(Get(r.old_root),offsetof(class_metadata::Class11,dex_cache))==Get(r.cache_root);
+ if(!Namespace(r,false,readonly))return Fail(e,"actual unallocated source cache namespace differs");
+ if(!readonly)return true; // The typed private engine additionally proves ownership/views.
+ for(const auto&saved:readonly_)if(SameRecord(saved,r))return Fail(e,"readonly preallocation source was already consumed");
+ if(!services_->VerifyReadonlyStaged(g,r))return Fail(e,"published source cache has no independent preallocation proof");
+ try{readonly_.push_back(r);return true;}catch(const std::bad_alloc&){return Fail(e,"readonly preallocation witness storage exhausted");}
+}
+bool Mapper::DescribeAllocation(const native_hierarchy_graph::Prepared&p,native_hierarchy_cache::Source*out,std::string*e)const{
+ RecordView r;if(!out||!services_||!staged_graph_||p.new_class||!Record(p,&r)||p.source_old_root!=r.old_root||Get(r.new_root)||!Namespace(r,false))return Fail(e,"unallocated source cache has no exact actual allocator record");
+ if(EntryFor(p.source_owner))return Fail(e,"private preallocation source was already consumed");
+ try{
  auto entry=std::make_unique<Entry>();entry->record=r;const void*identity=nullptr;size_t extent=0;
  if(!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&entry->source.counts,e)||!method_identity::ReadableMappingExtent(p.cache,&extent))return false;
  field_copy::CopyClassView old;if(!fields_.ClassIdentity(Get(r.old_root),&old,e))return false;
  entry->loader_root=pool_.Add(old.loader,e);if(!entry->loader_root)return false;
- // Named original lookup may safepoint; compare through live roots afterwards.
  void*original=batch_.OriginalFind(r.declarations->descriptor.c_str(),entry->loader_root);
- if(!original||original!=Get(r.old_root)||!Namespace(r,true))return Fail(e,"ClassTable original lookup does not prove unpublished replacement");
+ if(!original||original!=Get(r.old_root)||!Namespace(r,false)||Get(r.new_root))return Fail(e,"preallocation original ClassTable namespace changed");
  entry->source.cache_root=r.cache_root;entry->source.dex_identity=identity;entry->source.private_token=entry.get();entry->source.cache_extent=extent;
  entries_.push_back(std::move(entry));*out=entries_.back()->source;return true;
- }catch(const std::bad_alloc&){return Fail(e,"incoming source cache root journal exhausted");}
+ }catch(const std::bad_alloc&){return Fail(e,"preallocation cache source witness storage exhausted");}
+}
+bool Mapper::Describe(const native_hierarchy_graph::Prepared&p,native_hierarchy_cache::Source*out,std::string*e)const{
+ RecordView r;if(!out||!services_||!p.new_class||!Record(p,&r)||!Namespace(r,true))return Fail(e,"linked source cache has no exact actual allocator record");
+ const auto*entry=EntryFor(p.source_owner);
+ if(!entry||!SameRecord(r,entry->record))return Fail(e,"linked cache lacks its immutable preallocation source witness");
+ *out=entry->source;return true;
+}
+bool Mapper::RefreshAllocation(native_hierarchy_graph::Prepared*p)const noexcept{
+ if(!p||p->new_class||!p->source_old_root||!services_||!pool_.ReadyForSourceAccess())return false;
+ const auto*entry=EntryFor(p->source_owner);if(!entry||entry->record.old_root!=p->source_old_root)return false;
+ for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
+  if(SameRecord(r,entry->record)&&!Get(r.new_root)){p->old_class=Get(r.old_root);p->cache=Get(r.cache_root);p->parent=Get(r.parent_root);return p->old_class&&p->cache;}}
+ return false;
 }
 bool Mapper::FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,native_hierarchy_cache::Root*out,std::string*e)const{
+ std::string local_error;if(!e)e=&local_error;
  const auto*entry=EntryFor(p.source_owner);RecordView r;
  if(!out||!entry||!Record(p,&r)||index>=entry->source.counts.types)return Fail(e,"source verifier type index is outside immutable incoming DEX");
  const char*descriptor=nullptr;if(!evolution::ReadMappedDexTypeDescriptor(r.dex,index,&descriptor,e))return false;
@@ -109,7 +132,7 @@ bool Mapper::FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,
 }
 bool Mapper::OwnsUnpublished(const native_hierarchy_graph::Prepared&p,const native_hierarchy_cache::Source&s)const noexcept{
  const auto*entry=EntryFor(p.source_owner);RecordView r;const void*identity=nullptr;
- if(!entry||entry!=s.private_token||!Record(p,&r)||!SameRecord(r,entry->record)||r.cache_root!=s.cache_root||entry->source.dex_identity!=s.dex_identity||!Namespace(r,true)||!Mapping(r,&identity)||identity!=s.dex_identity)return false;
+ if(!entry||entry!=s.private_token||!Record(p,&r)||!SameRecord(r,entry->record)||r.cache_root!=s.cache_root||entry->source.dex_identity!=s.dex_identity||!Namespace(r,p.new_class!=nullptr)||!Mapping(r,&identity)||identity!=s.dex_identity)return false;
  // No fallible resolver in the borrowed writer window. Describe proved exact
  // original lookup; RequireServices must prove its source/ClassTable lock and
  // retained publication/cleanup lifetime in the final owner as well.
@@ -154,6 +177,10 @@ bool Composite::Prepare(const native_hierarchy_graph::Graph&g,const native_hiera
  return incoming_.Prepare(p,e);
 }
 bool Composite::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&i,std::string*e)const{return incoming_.VerifyStaged(g,i,e);}
+bool Composite::VerifyAllocation(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,std::string*e)const{
+ if(!mapper_.VerifyAllocation(g,p,e))return false;
+ return mapper_.IsReadonly(p)||incoming_.VerifyAllocation(g,p,e);
+}
 bool Composite::VerifyPrepared(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,std::string*e)const{
  if(mapper_.IsReadonly(p))return mapper_.VerifyReadonlyPrepared(g,p)||Fail(e,"published implicit source cache lacks readonly preparation proof");
  return incoming_.VerifyPrepared(g,p,e);

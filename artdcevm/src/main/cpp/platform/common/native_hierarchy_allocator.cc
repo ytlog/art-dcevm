@@ -7,6 +7,7 @@
 #include <deque>
 #include <cstring>
 #include <new>
+#include <algorithm>
 namespace artdcevm::native_hierarchy_allocator {
 namespace {
 using Obj=abi::arm64::android11::ReleaseObjectPointer;
@@ -157,10 +158,12 @@ bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& p
 }
 struct Batch::State final:rooted_hierarchy::Access {
  Service& service;runnable_jni::Context context;native_hierarchy_graph::Authority& authority;
- source_handle_roots::Pool pool;rooted_hierarchy::Allocator allocator;
- struct Record {RecordView view{};evolution::ClassSchema declarations;size_t node=SIZE_MAX;void* loader_root=nullptr;void* allocated_root=nullptr;bool captured_allocated=false,captured=false,linked=false;};
+ std::unique_ptr<source_handle_roots::Pool> owned_pool;source_handle_roots::Pool& pool;rooted_hierarchy::Allocator allocator;
+ enum class Phase {Unallocated,Authorized,Captured,Linked};
+ struct Record {RecordView view{};evolution::ClassSchema declarations;size_t node=SIZE_MAX;void* loader_root=nullptr;void* allocated_root=nullptr;bool captured_allocated=false,captured=false;Phase phase=Phase::Unallocated;};
  std::deque<Record> records;Record* pending=nullptr;void* invoking_owner=nullptr;bool prepared=false,failed=false,finished=false,committing=false;
- State(Service& s,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a):service(s),context(c),authority(a),pool(*s.roots_){}
+ State(Service& s,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a):service(s),context(c),authority(a),owned_pool(new source_handle_roots::Pool(*s.roots_)),pool(*owned_pool){}
+ State(Service& s,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a,source_handle_roots::Pool& p):service(s),context(c),authority(a),pool(p){}
  void* Get(rooted_hierarchy::Root slot)const override{void* p=nullptr;return pool.Read(slot,&p)?p:nullptr;}
  rooted_hierarchy::Root Copy(rooted_hierarchy::Root slot)override{return pool.Add(Get(slot),nullptr);}
  rooted_hierarchy::Root Empty()override{return pool.Add(nullptr,nullptr);}
@@ -173,8 +176,8 @@ struct Batch::State final:rooted_hierarchy::Access {
   return uint16_t(identity.class_def_index);
  }
  std::string RequestedParent(rooted_hierarchy::Root root,uint16_t index)override{
-  evolution::MappedDexMetadata dex{};const char* parent=nullptr;
-  if(!Dex(Get(root),index,&dex)||!evolution::ReadMappedDexSuperclassDescriptor(dex,&parent,nullptr)){Fail("Incoming source superclass DEX identity unavailable");return {};}
+  evolution::MappedDexMetadata dex{};const char* parent=nullptr;std::string error;
+  if(!Dex(Get(root),index,&dex)||!evolution::ReadMappedDexSuperclassDescriptor(dex,&parent,&error)){Fail("Incoming source superclass DEX identity unavailable");return {};}
   return parent?parent:"";
  }
  rooted_hierarchy::Root Resolve(const std::string& name,rooted_hierarchy::Root loader)override{
@@ -191,7 +194,8 @@ struct Batch::State final:rooted_hierarchy::Access {
  void* Allocate(void* owner,rooted_hierarchy::Root old,rooted_hierarchy::Root parent,rooted_hierarchy::Root cache,uint16_t index,rooted_hierarchy::Root result)override{
   if(failed)return nullptr;
   records.emplace_back();auto& record=records.back();record.view={owner,index,old,result,cache,parent,&record.declarations,{}};
-  if(!Dex(Get(cache),index,&record.view.dex)||!evolution::ReadMappedDexDeclarations(record.view.dex,&record.declarations,nullptr)){Fail("Actual incoming source declarations unavailable");return nullptr;}
+  std::string declarations_error;
+  if(!Dex(Get(cache),index,&record.view.dex)||!evolution::ReadMappedDexDeclarations(record.view.dex,&record.declarations,&declarations_error)){Fail("Actual incoming source declarations unavailable");return nullptr;}
   auto* graph=authority.Staged();field_copy::CopyClassView before{};
   if(!graph||!Class(*service.metadata_,Get(old),&before)||record.declarations.descriptor!=before.descriptor){Fail("Source old Class/incoming descriptor differs");return nullptr;}
   for(size_t n=0;n<graph->nodes.size();++n)if(graph->nodes[n].klass==Get(old)){record.node=n;break;}
@@ -201,15 +205,18 @@ struct Batch::State final:rooted_hierarchy::Access {
   if(public_original.reference!=uintptr_t(Get(old))){Fail("Original ClassLinker lookup differs from rooted source Class");return nullptr;}
   native_hierarchy_graph::Prepared value{owner,Get(old),nullptr,Get(cache),Get(parent),index,&record.declarations,old};
   if(!authority.AuthorizeAllocation(context,value,nullptr)){Fail("Staged graph rejected actual source allocation");return nullptr;}
+  record.phase=Phase::Authorized;
   auto* previous=pending;pending=&record;void* returned=nullptr;
   {ScopedCapture guard(&service,&pool,result,record.allocated_root,context);returned=reinterpret_cast<void*>(service.functions_.allocate(owner,old,parent,cache,index).reference);}
   pending=previous;
   // Never overwrite the early captured root with a different allocator return.
   if(!returned)return nullptr;
   if(!record.captured||Get(result)!=returned){Fail("Original allocator result lacks exact IDs-boundary capture");return nullptr;}
+  record.phase=Phase::Captured;
   value={owner,Get(old),Get(result),Get(cache),Get(parent),index,&record.declarations,old};
+  if(!authority.PrepareLinked(context,&value,nullptr)){Fail("Captured source private-cache preparation failed");return nullptr;}
   if(!authority.VerifyPrepared(context,value,nullptr)){Fail("Linked native Class differs from staged graph");return nullptr;}
-  record.linked=true;return Get(result);
+  record.phase=Phase::Linked;return Get(result);
  }
  bool ValidateReplacement(rooted_hierarchy::Root old,rooted_hierarchy::Root replacement,rooted_hierarchy::Root parent,rooted_hierarchy::Root cache)const override{
   field_copy::CopyClassView before{},after{};
@@ -222,6 +229,10 @@ bool Service::CurrentSelf(void* self)const noexcept{return Current()&&Current()-
 Batch* Service::Current()const noexcept{return active_batch && &active_batch->state_->service==this ? active_batch : nullptr;}
 Batch::Batch(Service& service,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a):state_(new State(service,c,a)){
  if(active_batch)throw std::bad_alloc();
+ active_batch=this;
+}
+Batch::Batch(Service& service,const runnable_jni::Context& c,native_hierarchy_graph::Authority& a,source_handle_roots::Pool& p):state_(new State(service,c,a,p)){
+ if(active_batch||!p.UsesService(*service.roots_)||!p.ReadyForSourceAccess())throw std::bad_alloc();
  active_batch=this;
 }
 Batch::~Batch(){if(state_){if(!state_->finished&&!Complete(false,nullptr))std::abort();if(active_batch!=this)std::abort();active_batch=nullptr;}}
@@ -274,6 +285,7 @@ bool Batch::Complete(bool committed,std::string* error){
  s.finished=true;return true;
 }
 size_t Batch::Count()const noexcept{return state_->records.size();}
+source_handle_roots::Pool& Batch::Roots()const noexcept{return state_->pool;}
 bool Batch::At(size_t index,RecordView* out)const noexcept{if(!out||index>=Count())return false;*out=state_->records[index].view;return true;}
 void* Batch::Get(void* root)const noexcept{return state_->Get(root);}
 void* Batch::Find(const char* name,void* loader)const{
@@ -312,13 +324,25 @@ bool Service::VerifyPrepared(const native_hierarchy_graph::Graph&,const native_h
  auto* current=Current();if(!current||!observed_||!monitor_)return false;auto& s=*current->state_;
  for(const auto& r:s.records)if(r.view.source_owner==p.source_owner&&r.view.class_index==p.class_index&&
   r.view.declarations==p.declarations&&r.view.old_root==p.source_old_root&&s.Get(r.view.old_root)==p.old_class&&s.Get(r.view.cache_root)==p.cache&&s.Get(r.view.parent_root)==p.parent&&
-  (!p.new_class||(r.captured&&s.Get(r.view.new_root)==p.new_class)))return true;
+  p.new_class&&r.phase==Batch::State::Phase::Captured&&r.captured&&s.Get(r.view.new_root)==p.new_class)return true;
+ return false;
+}
+bool Service::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,std::string*)const{
+ auto* current=Current();if(!current||!observed_||!monitor_||p.new_class)return false;auto& s=*current->state_;
+ for(const auto&r:s.records)if(r.phase==Batch::State::Phase::Unallocated&&r.view.source_owner==p.source_owner&&r.view.class_index==p.class_index&&r.view.declarations==p.declarations&&r.view.old_root==p.source_old_root&&s.Get(r.view.old_root)==p.old_class&&s.Get(r.view.cache_root)==p.cache&&s.Get(r.view.parent_root)==p.parent&&!s.Get(r.view.new_root))return true;
+ return false;
+}
+bool Service::RefreshPending(native_hierarchy_graph::Prepared*p)const noexcept{
+ auto*current=Current();if(!current||!p)return false;auto&s=*current->state_;if(s.failed||s.finished)return false;
+ for(const auto&r:s.records)if(r.phase==Batch::State::Phase::Captured&&r.captured&&r.view.source_owner==p->source_owner&&r.view.class_index==p->class_index&&r.view.old_root==p->source_old_root&&r.view.declarations==p->declarations){p->old_class=s.Get(r.view.old_root);p->new_class=s.Get(r.view.new_root);p->cache=s.Get(r.view.cache_root);p->parent=s.Get(r.view.parent_root);return p->old_class&&p->new_class&&p->cache;}
  return false;
 }
 bool Service::RefreshAllocations(native_hierarchy_graph::Graph* graph,std::vector<native_hierarchy_graph::Prepared>* values)const noexcept{
- auto* current=Current();if(!current||!graph||!values)return false;auto& s=*current->state_;if(s.failed||s.finished)return false;
+ if(!graph||!values)return false;auto* current=Current();
+ if(!current)return values->empty()&&originals_&&observed_&&monitor_&&roots_->ReadyForSourceAccess()&&std::all_of(graph->nodes.begin(),graph->nodes.end(),[](const auto&n){return !n.replacement;});
+ auto& s=*current->state_;if(s.failed||s.finished)return false;
  for(auto& value:*values){bool found=false;for(const auto& r:s.records)if(r.view.source_owner==value.source_owner&&r.view.class_index==value.class_index&&r.view.old_root==value.source_old_root&&value.declarations&&SameSchema(*r.view.declarations,*value.declarations)){
-  if(r.node>=graph->nodes.size()||graph->nodes[r.node].klass!=s.Get(r.view.old_root)||!r.captured)return false;
+  if(r.node>=graph->nodes.size()||graph->nodes[r.node].klass!=s.Get(r.view.old_root)||!r.captured||r.phase!=Batch::State::Phase::Linked)return false;
   value.old_class=s.Get(r.view.old_root);value.new_class=s.Get(r.view.new_root);value.cache=s.Get(r.view.cache_root);value.parent=s.Get(r.view.parent_root);
   graph->nodes[r.node].replacement=value.new_class;found=true;break;
  }
@@ -328,7 +352,7 @@ bool Service::RefreshAllocations(native_hierarchy_graph::Graph* graph,std::vecto
 }
 bool Service::Verify(const native_hierarchy_graph::Graph& graph,const source_commit::Plan& plan)const noexcept{
  auto* current=Current();if(!current||!observed_||!monitor_)return false;auto& s=*current->state_;if(s.failed||s.finished||plan.old_classes.size()!=s.records.size()||plan.old_classes.size()!=plan.new_classes.size())return false;
- for(const auto& r:s.records){if(!r.linked||!r.captured_allocated||r.node>=graph.nodes.size()||graph.nodes[r.node].klass!=s.Get(r.view.old_root)||graph.nodes[r.node].replacement!=s.Get(r.view.new_root))return false;
+ for(const auto& r:s.records){if(r.phase!=Batch::State::Phase::Linked||!r.captured_allocated||r.node>=graph.nodes.size()||graph.nodes[r.node].klass!=s.Get(r.view.old_root)||graph.nodes[r.node].replacement!=s.Get(r.view.new_root))return false;
   if(s.Get(r.allocated_root)!=s.Get(r.view.new_root)){class_metadata::State retired{};const auto& layout=Layout(*metadata_);if(!class_metadata::ReadState(layout,s.Get(r.allocated_root),layout.size,&retired)||retired.status!=1)return false;}
   bool found=false;for(size_t n=0;n<plan.old_classes.size();++n)if(plan.old_classes[n]==s.Get(r.view.old_root)&&plan.new_classes[n]==s.Get(r.view.new_root)){found=true;break;}if(!found)return false;
  }return true;
