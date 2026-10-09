@@ -111,7 +111,27 @@ static void InterfaceParentIdentity(){
  graph.nodes.push_back(object);assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));graph.nodes.pop_back();
  graph.nodes[1].parent=0;assert(!NativeSuperclass(graph,graph.nodes[1],false,&value));
 }
+static void NestedModifiers(){
+ modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));
+ Fake object("Ljava/lang/Object;"),parent("Lone/Outer$ProtectedNested;",&object),child("Ltwo/Child;",&parent),interface("Lone/Outer$PrivateInterface;",&object,0x601),new_parent("Lother/PackageParent;",&object,0);
+ std::string error;Graph graph;graph.nodes={NodeOf(object),NodeOf(parent),NodeOf(child),NodeOf(interface),NodeOf(new_parent)};
+ graph.nodes[1].flags=4; // JVMTI InnerClass protected annotation; real ART Class is public.
+ graph.nodes[3].flags=0x602; // JVMTI private interface annotation; native role flags remain 0x601.
+ graph.nodes[1].parent=graph.nodes[1].proposed_parent=0;graph.nodes[2].parent=graph.nodes[2].proposed_parent=1;graph.nodes[4].parent=graph.nodes[4].proposed_parent=0;
+ graph.nodes[2].interfaces=graph.nodes[2].proposed_interfaces={3};graph.inputs={2};
+ assert(CanonicalizeFlags(metadata,&graph,&error));assert(graph.nodes[1].public_flags==4&&graph.nodes[1].flags==5);assert(graph.nodes[3].public_flags==0x602&&graph.nodes[3].flags==0x603);assert(ValidateGraph(&graph,&error));
+ // A newly requested genuinely nonpublic runtime Class still needs exact
+ // loader+package access. Public InnerClass modifiers never confer permission.
+ graph.nodes[2].proposed_parent=4;assert(!ValidateGraph(&graph,&error));assert(error.find(child.descriptor)!=std::string::npos&&error.find(new_parent.descriptor)!=std::string::npos&&error.find("retained=false")!=std::string::npos);
+ graph.nodes[2].proposed_parent=1;graph.nodes[1].proposed_flags=graph.nodes[1].flags|0x10;assert(!ValidateGraph(&graph,&error)); // Retained edge cannot bypass newly final parent.
+ graph.nodes[1].proposed_flags.reset();parent.bytes.access_flags|=0x400;assert(!CanonicalizeFlags(metadata,&graph,&error)); // Nonvisibility disagreement is authoritative.
+ parent.bytes.access_flags&=~0x400u;assert(CanonicalizeFlags(metadata,&graph,&error));assert(ValidateGraph(&graph,&error));
+ // An existing resolved edge carries its original access permission. A new
+ // identity with identical descriptor text cannot borrow that permission.
+ graph.nodes[1].flags&=~1u;graph.nodes[1].public_flags.reset();assert(ValidateGraph(&graph,&error));graph.nodes[2].proposed_parent=4;assert(!ValidateGraph(&graph,&error));
+}
 int main(){
+ NestedModifiers();
  InterfaceParentIdentity();
  Lifecycle();
  Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),i("Lpkg/I;",&object,0x601);std::string error;

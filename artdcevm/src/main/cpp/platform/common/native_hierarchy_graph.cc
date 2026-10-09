@@ -29,6 +29,22 @@ bool SetMatches(const std::vector<void*>& actual,const std::vector<size_t>& expe
  if(actual.size()!=expected.size())return false;for(auto n:expected){void* k=replacement&&g.nodes[n].replacement?g.nodes[n].replacement:g.nodes[n].klass;if(std::count(actual.begin(),actual.end(),k)!=1)return false;}return true;
 }
 }
+bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata& metadata,Graph* graph,std::string* error){
+ if(!graph||!metadata.Calibrated())return Fail(error,"Class flags lack calibrated metadata/rooted graph");
+ const auto& layout=metadata.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
+ constexpr uint32_t source_flags=0x7631u,non_visibility=source_flags&~1u;
+ for(auto& node:graph->nodes){size_t extent=0;class_metadata::State state;
+  if(node.proposed_flags&&((node.flags^*node.proposed_flags)&~0x410u))return Fail(error,("Public Class proposal changes role/access: "+node.descriptor).c_str());
+  if(!node.klass||!method_identity::ReadableMappingExtent(node.klass,&extent)||!class_metadata::ReadState(layout,node.klass,extent,&state)||state.IsPrimitive())return Fail(error,("Rooted Class effective flags unavailable from calibrated metadata: "+node.descriptor).c_str());
+  const uint32_t public_flags=node.public_flags.value_or(node.flags);
+  if((public_flags&non_visibility)!=(state.access_flags&non_visibility))return Fail(error,("Public/native Class non-visibility flags disagree: "+node.descriptor+" publicFlags="+std::to_string(public_flags)+" nativeFlags="+std::to_string(state.access_flags)).c_str());
+  // JVM visibility uses Class access_flags, while JVMTI's public modifier query
+  // applies InnerClass annotation flags. Raw flags were independently checked
+  // above, not inferred from descriptor/nesting or a selected device family.
+  node.public_flags=public_flags;node.flags=(public_flags&~source_flags)|(state.access_flags&source_flags);
+  if(node.proposed_flags)node.proposed_flags=(node.flags&~0x410u)|(*node.proposed_flags&0x410u);
+ }return true;
+}
 bool ValidateGraph(Graph* graph,std::string* error){
  if(!graph||graph->nodes.empty()||graph->inputs.empty())return Fail(error,"Empty staged graph");auto& g=*graph;const size_t count=g.nodes.size();
  std::unordered_set<void*> identities;std::map<std::pair<uintptr_t,std::string>,size_t> namespaces;
@@ -37,10 +53,10 @@ bool ValidateGraph(Graph* graph,std::string* error){
   if(!node.klass||node.descriptor.empty())return Fail(error,"Missing exact public Class identity");
   if(!identities.insert(node.klass).second||!namespaces.emplace(std::make_pair(reinterpret_cast<uintptr_t>(node.loader),node.descriptor),n).second)return Fail(error,"Duplicate Class identity in loader namespace");
   if(((node.flags^node.ProposedFlags())&~0x410u)||((node.ProposedFlags()&0x410u)==0x410u))return Fail(error,"Proposed Class changes role/access or combines final and abstract");
-  const auto edge=[&](size_t p,bool interface){if(p>=count||p==n)return false;const auto& target=g.nodes[p];if(bool(target.ProposedFlags()&0x200u)!=interface)return false;if(!interface&&(target.ProposedFlags()&0x10u))return false;return (target.ProposedFlags()&1u)||(target.loader==node.loader&&Package(target.descriptor)==Package(node.descriptor));};
-  if(node.proposed_parent!=absent&&!edge(node.proposed_parent,false))return Fail(error,"Proposed parent has wrong role, finality, identity or access");
+  const auto edge=[&](size_t p,bool interface,bool original){if(p>=count||p==n)return false;const auto& target=g.nodes[p];if(bool(target.ProposedFlags()&0x200u)!=interface)return false;if(!interface&&(target.ProposedFlags()&0x10u))return false;return original||(target.ProposedFlags()&1u)||(target.loader==node.loader&&Package(target.descriptor)==Package(node.descriptor));};
+  if(node.proposed_parent!=absent&&!edge(node.proposed_parent,false,node.proposed_parent==node.parent))return Fail(error,("Proposed parent has wrong role, finality, identity or access: child="+node.descriptor+" parent="+(node.proposed_parent<count?g.nodes[node.proposed_parent].descriptor:std::string("<out-of-bounds>"))+" retained="+(node.proposed_parent==node.parent?"true":"false")+" childFlags="+std::to_string(node.ProposedFlags())+" parentFlags="+(node.proposed_parent<count?std::to_string(g.nodes[node.proposed_parent].ProposedFlags()):std::string("<none>"))).c_str());
   if(node.parent!=node.proposed_parent&&node.proposed_parent!=absent&&!g.nodes[node.proposed_parent].initialized)return Fail(error,"Added superclass has not independently initialized");
-  for(size_t i=0;i<node.proposed_interfaces.size();++i){if(!edge(node.proposed_interfaces[i],true)||std::find(node.proposed_interfaces.begin(),node.proposed_interfaces.begin()+i,node.proposed_interfaces[i])!=node.proposed_interfaces.begin()+i)return Fail(error,"Proposed interface role, identity, access or duplicates invalid");}
+  for(size_t i=0;i<node.proposed_interfaces.size();++i){if(!edge(node.proposed_interfaces[i],true,std::find(node.interfaces.begin(),node.interfaces.end(),node.proposed_interfaces[i])!=node.interfaces.end())||std::find(node.proposed_interfaces.begin(),node.proposed_interfaces.begin()+i,node.proposed_interfaces[i])!=node.proposed_interfaces.begin()+i)return Fail(error,"Proposed interface role, identity, access or duplicates invalid");}
   // java.lang.Object is the sole ordinary class with no superclass. Interfaces
   // have null public superclass even though their DEX superclass is Object.
   if(!(node.flags&0x200u)&&node.proposed_parent==absent&&(node.descriptor!="Ljava/lang/Object;"||node.loader))return Fail(error,"Ordinary class lost bootstrap Object ancestry");
@@ -133,7 +149,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  }
  // No JNI call may follow these borrowed native reads in this Stage callback.
  for(auto& n:s.graph.nodes){if(!bindings.borrow_owned(bindings.decoder_owner,context,n.strong_class,&n.klass)||!n.klass)return false;if(n.strong_loader&&!bindings.borrow_owned(bindings.decoder_owner,context,n.strong_loader,&n.loader))return false;}
- if(!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
+ if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error)||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
  for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::Read(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error)||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==k;});s.order_before[i].push_back(size_t(it-s.graph.nodes.begin()));}}
  if(!s.Native(false)||!s.OwnersStaged(error))return Fail(error,"Actual allocation/receiver/type-cache proof absent or rejected");s.staged=true;success=true;return true;
 }

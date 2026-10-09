@@ -17,6 +17,9 @@ struct Node {
  std::string descriptor; uint32_t flags=0;
  // Absent for implicit descendants: their declarations retain original flags.
  std::optional<uint32_t> proposed_flags;
+ // JVMTI applies InnerClass annotation visibility. Preserve that independent
+ // public oracle separately from ART effective Class access flags.
+ std::optional<uint32_t> public_flags;
  uint32_t ProposedFlags()const noexcept{return proposed_flags.value_or(flags);}
  size_t parent=SIZE_MAX,proposed_parent=SIZE_MAX;
  std::vector<size_t> interfaces,proposed_interfaces;
@@ -69,6 +72,9 @@ struct Bindings {
 // rooted. Rejects cycles across batch/unmodified edges, role/final/access errors,
 // duplicate edges and uninitialized new parents. It grants no source permission.
 bool ValidateGraph(Graph*,std::string*);
+// Runnable-only after exact Class roots are borrowed. Verify non-visibility
+// public modifiers against calibrated fixed metadata before adopting raw flags.
+bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata&,Graph*,std::string*);
 class Authority final {
  public:
  Authority(); ~Authority();
