@@ -142,7 +142,14 @@ int main(){
    assert(outer->Get(0)==new_class&&inner->Get(1)==new_class&&!inner->Get(0));}
   assert(outer->Get(0)==new_class);
   {source_handle_roots::Pool pool(s);std::array<void*,70> slots{};
-   for(auto& slot:slots){slot=pool.Add(old_class,&error);assert(slot);}
+   for(size_t i=0;i<32;++i){slots[i]=pool.Add(old_class,&error);assert(slots[i]);}
+   void* anchor_top=Top();
+   {auto source_temporary=s.CreateScope(1,&error);assert(source_temporary);source_temporary->Set(0,new_class);void* original_top=Top();
+    for(size_t i=32;i<slots.size();++i){slots[i]=pool.Add(old_class,&error);assert(slots[i]&&Top()==original_top);}
+    MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
+    for(auto slot:slots){void* live=nullptr;assert(pool.Read(slot,&live)&&live==new_class);}
+    assert(source_temporary->Get(0)==new_class&&Top()==original_top);
+   }assert(Top()==anchor_top);
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
    for(auto slot:slots){void* value=nullptr;assert(pool.Read(slot,&value)&&value==new_class);}
    void* untouched=old_class;assert(!pool.Read(public_slot,&untouched)&&untouched==old_class);
@@ -161,6 +168,18 @@ int main(){
    assert(data.fields->SourceBarrier(context,pool,slots.back())&&*card==0x70&&jni_calls==jni_before);
    *card=0;assert(!data.fields->SourceBarrier(invalid,pool,slots.back())&&*card==0);
    assert(!data.fields->SourceBarrier(context,pool,public_slot)&&*card==0);
+  }
+  // The actual named collector walker sees all owned compressed roots even
+  // when original temporary source scopes sit above the persistent anchor.
+  for(size_t count:{size_t(30000),size_t(60000)}){
+   source_handle_roots::Pool large(s);std::vector<void*> slots;slots.reserve(count);
+   slots.push_back(large.Add(old_class,&error));assert(slots.back());void* anchor=Top();
+   {auto temporary=s.CreateScope(1,&error);assert(temporary);temporary->Set(0,old_class);void* source_top=Top();
+    for(size_t i=1;i<count;++i){slots.push_back(large.Add(i%2?old_class:new_class,&error));assert(slots.back()&&Top()==source_top);}
+    MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
+    for(auto slot:slots){void* actual=nullptr;assert(large.Read(slot,&actual)&&actual==new_class);}
+    assert(temporary->Get(0)==new_class&&Top()==source_top);
+   }assert(Top()==anchor);
   }
   assert(s.BorrowHandle(context,outer->Slot(0),&borrowed)&&borrowed==new_class);
   assert(outer->Get(0)==new_class);

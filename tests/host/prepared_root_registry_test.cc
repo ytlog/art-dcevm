@@ -12,7 +12,31 @@ struct State {void* live[16]{};size_t size=0,released=0,decoded=0;};
 jobject Root(void* raw,void* managed){auto& state=*static_cast<State*>(raw);assert(state.size<16);state.live[state.size]=managed;return reinterpret_cast<jobject>(&state.live[state.size++]);}
 bool Decode(void* raw,jobject root,void** out){++static_cast<State*>(raw)->decoded;*out=*reinterpret_cast<void**>(root);return *out!=nullptr;}
 void Release(void* raw,jobject){++static_cast<State*>(raw)->released;}
-int main(){using namespace artdcevm::prepared_roots;int a=1,b=2,new_a=3,new_b=4;State state;
+struct NativeState {
+ std::vector<void*> live;uint64_t epoch=7;size_t writes=0,reads=0,clears=0;
+ static bool Insert(void* raw,void* value,size_t* slot){auto&s=*static_cast<NativeState*>(raw);*slot=s.live.size();s.live.push_back(value);++s.writes;return true;}
+ static bool Read(void* raw,size_t slot,void** value){auto&s=*static_cast<NativeState*>(raw);++s.reads;if(slot>=s.live.size())return false;*value=s.live[slot];return *value!=nullptr;}
+ static void Clear(void* raw){auto&s=*static_cast<NativeState*>(raw);s.live.clear();++s.clears;}
+ static uint64_t Epoch(void* raw){return static_cast<NativeState*>(raw)->epoch;}
+};
+void LargeNative(){using namespace artdcevm::prepared_roots;
+ for(size_t count:{size_t(30000),size_t(60000)}){
+  NativeState state;state.live.reserve(count);Registry roots({});
+  assert(roots.BindNative(&state,NativeState::Insert,NativeState::Read,NativeState::Clear,NativeState::Epoch));assert(roots.Reserve(count/3));
+  for(size_t i=0;i<count;++i){size_t slot=SIZE_MAX;void* identity=reinterpret_cast<void*>((i+1)*4096);assert(roots.Add(identity,&slot)&&slot==i);}
+  assert(state.writes==count&&state.reads==count);
+  for(size_t i=0;i<count;++i){size_t slot=SIZE_MAX;assert(roots.Add(reinterpret_cast<void*>((i+1)*4096),&slot)&&slot==i);}
+  assert(state.writes==count&&state.reads==count);
+  ++state.epoch;size_t slot=123;assert(!roots.Add(reinterpret_cast<void*>(8192),&slot)&&slot==123);--state.epoch;
+  assert(roots.Freeze());for(auto& value:state.live)value=reinterpret_cast<void*>(uintptr_t(value)+4);
+  forbid=true;assert(roots.Resolve());auto resolver=roots.Final();auto existing=roots.Existing();
+  for(size_t i=0;i<count;++i){void* moved=reinterpret_cast<void*>((i+1)*4096+4);assert(resolver.get(resolver.owner,i)==moved);slot=SIZE_MAX;assert(existing.add(existing.owner,moved,&slot)&&slot==i);}
+  assert(state.reads==count*2);state.live[1]=state.live[0];assert(roots.Resolve());assert(resolver.get(resolver.owner,0)==resolver.get(resolver.owner,1));state.live[1]=nullptr;assert(!roots.Resolve());assert(!resolver.get(resolver.owner,0));
+  forbid=false;roots.Clear();assert(state.clears==1&&state.live.empty());
+ }
+ std::cout<<"Bounded native registry 30k/60k roots, linear decoding, epoch refusal, GC-updated slots, replacement aliases and null refusal and allocation-free final lookup PASS\n";
+}
+int main(){LargeNative();using namespace artdcevm::prepared_roots;int a=1,b=2,new_a=3,new_b=4;State state;
  Registry registry({&state,Root,Decode,Release});Bindings bindings;void *left=&a,*right=&b,*null_parent=nullptr;
  assert(bindings.Add(&left,registry.Collect())&&bindings.Add(&right,registry.Collect())&&bindings.Add(&null_parent,registry.Collect()));
  size_t duplicate=99;assert(registry.Add(&a,&duplicate)&&duplicate==0&&registry.Size()==2);

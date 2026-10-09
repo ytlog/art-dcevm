@@ -3,6 +3,8 @@
 #include "platform/abi/arm64/android-common/handle_roots.h"
 #include <memory>
 #include <vector>
+#include <map>
+#include <cstring>
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 namespace artdcevm::source_handle_roots {
 class Scope;
@@ -34,6 +36,7 @@ class Service final {
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;
  private:
   friend class Scope;
+  friend class Pool;
   bool Runnable(void*)const;
   bool Environment(const runnable_jni::Context&)const noexcept;
   void Visit(void*,abi::arm64::android_common::HandleRootVisitor*)const;
@@ -43,6 +46,7 @@ class Service final {
   bool CalibrateLayout(void*,const void*,uint32_t);
   bool CheckNested(void*,uint32_t);
   std::unique_ptr<Scope> CreateUnchecked(void*,uint32_t)const;
+  std::unique_ptr<Scope> CreateAnchored(Scope&,uint32_t,std::string*)const;
   abi::arm64::android11::DecodeJObject decode_=nullptr;
   abi::arm64::android11::CurrentThread current_=nullptr;
   abi::arm64::android_common::HandleVisitRoots visit_=nullptr;
@@ -69,12 +73,15 @@ class Scope final {
   void Set(size_t,void*);
  private:
   friend class Service;
-  Scope(const Service&,void*,uint32_t);
-  const Service& service_;void* self_;uint32_t count_;
+  friend class Pool;
+  Scope(const Service&,void*,uint32_t,Scope* anchor=nullptr);
+  const Service& service_;void* self_;uint32_t count_;Scope* anchor_;
   std::unique_ptr<unsigned char[]> storage_;
 };
-// Shared allocator roots use stable opaque slots; destruction unlinks scopes
-// explicitly in reverse publication order rather than relying on vector order.
+// Shared roots retain a persistent owned anchor published before original Run.
+// Later chunks link below that anchor, keeping original temporary source scopes
+// and their saved previous pointer intact. Reverse teardown removes children
+// before the anchor after all original temporary scopes have returned.
 // Independent final owner. Window must prove the real source native/exclusive
 // GC reservation; Read consumes pre-registered immutable root slots only.
 class StoppedReader {
@@ -92,10 +99,13 @@ class Pool final {
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;
   bool Read(const void* slot,void** output)const{
     if(!output||!ReadyForSourceAccess())return false;
-    for(size_t i=0;i<scopes_.size();++i){const uintptr_t start=uintptr_t(scopes_[i]->Slot(0)),address=uintptr_t(slot);
-      const size_t count=i+1==scopes_.size()?used_:kChunk;
-      if(address>=start&&(address-start)%4==0&&(address-start)/4<count){*output=scopes_[i]->Get((address-start)/4);return true;}}
-    return false;
+    const auto entry=FindOwned(slot);if(entry==ranges_.end())return false;
+    *output=entry->second.scope->Get((uintptr_t(slot)-entry->first)/4);return true;
+  }
+  bool ReadStopped(const StoppedReader& owner,const void* slot,void** output)const noexcept{
+    if(!output||!owner.FinalRootWindow())return false;
+    const auto entry=FindOwned(slot);if(entry==ranges_.end())return false;
+    uint32_t value=0;std::memcpy(&value,slot,4);*output=reinterpret_cast<void*>(uintptr_t(value));return true;
   }
   bool Write(void* slot,void* object){
     if(!ReadyForSourceAccess()||uintptr_t(object)>UINT32_MAX)return false;
@@ -105,8 +115,10 @@ class Pool final {
     return false;
   }
   void* Add(void* object,std::string* error){
-    if(scopes_.empty()||used_==kChunk){auto scope=service_.CreateScope(kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;}
-    auto& scope=*scopes_.back();void* slot=scope.Slot(used_);scope.Set(used_++,object);return slot;
+    if(scopes_.empty()||used_==kChunk){auto scope=scopes_.empty()?service_.CreateScope(kChunk,error):service_.CreateAnchored(*scopes_.front(),kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;
+      try{ranges_.emplace(uintptr_t(scopes_.back()->Slot(0)),Range{scopes_.back().get(),0});}
+      catch(...){scopes_.pop_back();used_=kChunk;throw;}}
+    auto& scope=*scopes_.back();void* slot=scope.Slot(used_);scope.Set(used_++,object);ranges_.find(uintptr_t(scope.Slot(0)))->second.used=used_;return slot;
   }
  // Enumerates opaque used slots only in the ordinary Runnable phase. Visitor
  // may register roots/safepoint, so it must read each slot afresh itself.
@@ -117,6 +129,14 @@ class Pool final {
   return true;
  }
  private:
+  struct Range {Scope* scope;size_t used;};
+  using Ranges=std::map<uintptr_t,Range>;
+  Ranges::const_iterator FindOwned(const void* slot)const noexcept{
+    const auto address=uintptr_t(slot);auto at=ranges_.upper_bound(address);
+    if(at==ranges_.begin())return ranges_.end();--at;
+    if((address-at->first)%4||(address-at->first)/4>=at->second.used)return ranges_.end();return at;
+  }
+  Ranges ranges_;
   static constexpr uint32_t kChunk=32;
   const Service& service_;std::vector<std::unique_ptr<Scope>> scopes_;uint32_t used_=kChunk;
 };

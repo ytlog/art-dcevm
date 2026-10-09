@@ -27,6 +27,28 @@ struct RunState::State {
  size_t extent=0;RunState* previous=nullptr;
  enum class Phase {Constructed,Running,Collected,Finalized,Committed,Refunded,Ended};
  Phase phase=Phase::Constructed;
+ struct RootReader final:source_handle_roots::StoppedReader {
+  const State& state;explicit RootReader(const State&s):state(s){}
+  bool FinalRootWindow()const noexcept override{return state.cleanup&&state.holder&&state.cleanup->IsStopped(state.driver,static_cast<const transaction_root::Holder*>(state.holder));}
+  bool ReadStoppedRoot(const void* token,void** value)const noexcept override{return state.pool.ReadStopped(*this,token,value);}
+ };
+ static uint64_t RootEpoch(void* raw)noexcept{
+  const auto& s=*static_cast<State*>(raw);
+  // The actual collected source callback has frozen loading and Holder identity;
+  // no JNI or safepoint occurs during native registration in this one window.
+  return s.phase==Phase::Running&&s.plan&&s.holder&&s.loading&&s.loading->Paused()&&s.pool.ReadyForSourceAccess()?1:0;
+ }
+ static bool RootInsert(void* raw,void* managed,size_t* slot){
+  auto& s=*static_cast<State*>(raw);if(!slot||!RootEpoch(raw))return false;
+  auto* token=s.pool.Add(managed,nullptr);if(!token)return false;*slot=uintptr_t(token);return true;
+ }
+ static bool RootRead(void* raw,size_t slot,void** value){
+  auto& s=*static_cast<State*>(raw);if(!slot||slot==SIZE_MAX)return false;
+  RootReader stopped(s);
+  return stopped.FinalRootWindow()?stopped.ReadStoppedRoot(reinterpret_cast<const void*>(slot),value):
+      RootEpoch(raw)&&s.pool.Read(reinterpret_cast<const void*>(slot),value);
+ }
+ static void RootClear(void*){}
  State(const Dependencies& deps,void* dr,const runnable_jni::Context&ctx)
   :d(deps),driver(dr),context(ctx),pool(*deps.roots),access(pool),receivers(*deps.members.metadata){}
 };
@@ -59,6 +81,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  native_hierarchy_cache::Witness witness{w.type_index,w.field_index,w.method_index,expected_root,w.native_field,w.native_method};
  if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error))return false;
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get()};
+ if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
  if(!s.authority.Stage(s.context,ti,inputs,graph,error))return false;
  native_hierarchy_session::Bindings b{s.driver,s.context,s.d.hooks,s.d.members.metadata,s.d.roots,&s.pool,&s.authority,s.d.allocator,&s.access,native_hierarchy_source_checks::RefuseActualClass,native_owned_removal::ObserveSourceFailure,s.ledger.get()};
  s.hierarchy=std::make_unique<native_hierarchy_session::Session>(b);
@@ -67,7 +90,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
 }
 RunState::~RunState(){
  auto&s=*state_;Require(s.phase==State::Phase::Constructed||s.phase==State::Phase::Ended);
- s.facade.reset();s.hierarchy.reset();
+ s.d.registry->Clear();s.facade.reset();s.hierarchy.reset();
  if(s.phase==State::Phase::Constructed){if(s.ledger)s.ledger->ReleaseAfterRun(false);if(s.loading)s.loading->Complete(false);}
  s.caches.reset();s.mapper.reset();s.ledger.reset();s.loading.reset();s.cleanup.reset();s.stop.reset();
  s.authority.Clear(s.context.env);

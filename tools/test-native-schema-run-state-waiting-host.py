@@ -34,7 +34,7 @@ cleanup=cleanup.replace('type==0&&gc&&!stopped);gc=false;', 'type==0&&gc&&!stopp
 cleanup=cleanup.replace('Read32(thread.data())==92u<<24&&!stopped', '(Read32(thread.data())==92u<<24||Read32(thread.data())==74u<<24)&&!stopped')
 cleanup=cleanup.replace('Read32(thread.data())==92u<<24&&stopped==1', '(Read32(thread.data())==92u<<24||Read32(thread.data())==74u<<24)&&stopped==1')
 (out/'cleanup_fixture.inc').write_text(cleanup)
-common=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(root/'tests/host'),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DPIPELINE_DEX_FIXTURE="'+str(ns['after'])+'"','-DRUN_STATE_BEFORE_DEX_FIXTURE="'+str(ns['before'])+'"']
+common=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(root/'tests/host'),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DPIPELINE_DEX_FIXTURE="'+str(ns['after'])+'"','-DRUN_STATE_BEFORE_DEX_FIXTURE="'+str(ns['before'])+'"','-DRUN_STATE_GRAPH_DEX_FIXTURE="'+str(ns['graph_dex'])+'"']
 units=[root/'tests/host/native_schema_run_state_waiting_test.cc']+[cpp/'platform/common'/(s+'.cc') for s in sources]+[cpp/'evolution/dex_schema.cc',cpp/'evolution/migration_plan.cc',cpp/'platform/common/schema_snapshot.cc']
 baseline=ns['baseline']
 cache=baseline.read_text().split("headers=b''.join",1)[1].split("exe=out/'",1)[0]

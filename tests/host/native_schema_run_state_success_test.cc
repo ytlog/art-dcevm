@@ -20,6 +20,8 @@ int main(){
   evolution::MappedDexMetadata before_mapping{before_bytes.data(),before_bytes.size(),before_bytes.data(),before_bytes.size(),0};
   assert(evolution::ReadMappedDexDeclarations(before_mapping,&proposal.before,&error));
   assert(proposal.before.descriptor==proposal.after.descriptor&&proposal.before.superclass!=proposal.after.superclass);
+  std::vector<unsigned char> graph_bytes=File(RUN_STATE_GRAPH_DEX_FIXTURE);
+  ConfigureDefiningGraph(graph_bytes,*d.metadata);
   native_schema_policy::Plan policy;assert(native_schema_policy::Plan::Prepare(proposal.before,proposal.after,&policy,&error));
   std::vector<native_schema_policy::Plan> policies{policy};
   deps.members.retirement.owner=&retired_records;deps.members.schemas=&policies;deps.members.expected_removal=native_member_provider::Removal::kSchemaEvolution;

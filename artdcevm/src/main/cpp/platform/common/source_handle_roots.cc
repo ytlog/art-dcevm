@@ -186,6 +186,12 @@ std::unique_ptr<Scope> Service::CreateScope(uint32_t count,std::string* error)co
  if(!Calibrated()||!Runnable(current_?current_():nullptr)||count>INT32_MAX){Fail(error,"Unproven or non-Runnable owned handle scope");return nullptr;}
  try{return CreateUnchecked(current_(),count);}catch(const std::bad_alloc&){Fail(error,"Cannot allocate owned native handle storage before publication");return nullptr;}
 }
+std::unique_ptr<Scope> Service::CreateAnchored(Scope& anchor,uint32_t count,std::string* error)const{
+ if(&anchor.service_!=this||anchor.anchor_||!Calibrated()||!Runnable(anchor.self_)||
+    current_()!=anchor.self_||!count||count>INT32_MAX){Fail(error,"Owned anchor differs from actual calibrated Runnable service");return nullptr;}
+ try{return std::unique_ptr<Scope>(new Scope(*this,anchor.self_,count,&anchor));}
+ catch(const std::bad_alloc&){Fail(error,"Cannot extend owned native handle anchor");return nullptr;}
+}
 bool Service::CheckNested(void* self,uint32_t value){
  void* previous=Read<void*>(self,top_);bool valid=true;
  try{
@@ -197,16 +203,33 @@ bool Service::CheckNested(void* self,uint32_t value){
    inner->Set(0,reinterpret_cast<void*>(uintptr_t(value)));check.seen=0;check.clear_first=false;Visit(self,&check);valid&=check.valid&&check.seen==3;
   }
   Check check;check.slots[0]=outer->Slot(0);check.slots[1]=outer->Slot(2);check.count=2;check.value=value;Visit(self,&check);valid&=check.valid&&check.seen==2;
+  // A separately created temporary scope stands above the owned anchor. Its
+  // saved previous pointer must stay intact while children extend below it.
+  {auto temporary=CreateUnchecked(self,1);void* top=Read<void*>(self,top_);
+   auto child=std::unique_ptr<Scope>(new Scope(*this,self,1,outer.get()));child->Set(0,reinterpret_cast<void*>(uintptr_t(value)));
+   valid&=Read<void*>(self,top_)==top;
+   Check anchored;anchored.slots[0]=outer->Slot(0);anchored.slots[1]=outer->Slot(2);anchored.slots[2]=child->Slot(0);anchored.count=3;anchored.value=value;Visit(self,&anchored);
+   valid&=anchored.valid&&anchored.seen==3;
+   Check moved;moved.slots[0]=child->Slot(0);moved.count=1;moved.value=value;moved.clear_first=true;Visit(self,&moved);
+   valid&=moved.valid&&moved.seen==1&&!child->Get(0)&&outer->Get(0)==reinterpret_cast<void*>(uintptr_t(value));
+   child->Set(0,reinterpret_cast<void*>(uintptr_t(value)));
+   child.reset();valid&=Read<void*>(self,top_)==top;
+  }
+
  }catch(const std::bad_alloc&){valid=false;}
  return valid&&Read<void*>(self,top_)==previous;
 }
-Scope::Scope(const Service& service,void* self,uint32_t count):service_(service),self_(self),count_(count),storage_(nullptr){
+Scope::Scope(const Service& service,void* self,uint32_t count,Scope* anchor):service_(service),self_(self),count_(count),anchor_(anchor),storage_(nullptr){
  Require(service.Runnable(self)&&count<=INT32_MAX);storage_=std::make_unique<unsigned char[]>(service.references_+size_t(count)*4);
- const HandleScopeHeader header{Read<void*>(self,service.top_),int32_t(count)};std::memcpy(storage_.get(),&header,sizeof(header));
+ const HandleScopeHeader header{anchor?Read<HandleScopeHeader>(anchor->storage_.get()).link:Read<void*>(self,service.top_),int32_t(count)};std::memcpy(storage_.get(),&header,sizeof(header));
  if(service.references_==sizeof(SizedHandleScopeHeader))Write<uint32_t>(storage_.get(),12,count);
- Write(self,service.top_,static_cast<void*>(storage_.get()));
+ if(anchor)Write(anchor->storage_.get(),0,static_cast<void*>(storage_.get()));else Write(self,service.top_,static_cast<void*>(storage_.get()));
 }
-Scope::~Scope(){Require(service_.Runnable(self_)&&Read<void*>(self_,service_.top_)==storage_.get());Write(self_,service_.top_,Read<HandleScopeHeader>(storage_.get()).link);}
+Scope::~Scope(){
+ Require(service_.Runnable(self_));
+ if(anchor_){Require(&anchor_->service_==&service_&&anchor_->self_==self_&&Read<HandleScopeHeader>(anchor_->storage_.get()).link==storage_.get());Write(anchor_->storage_.get(),0,Read<HandleScopeHeader>(storage_.get()).link);}
+ else{Require(Read<void*>(self_,service_.top_)==storage_.get());Write(self_,service_.top_,Read<HandleScopeHeader>(storage_.get()).link);}
+}
 void* Scope::Slot(size_t index){Require(index<count_);return storage_.get()+service_.references_+index*4;}
 void* Scope::Get(size_t index){Require(service_.Runnable(self_));return reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(Slot(index))));}
 void Scope::Set(size_t index,void* object){Require(service_.Runnable(self_)&&uintptr_t(object)<=UINT32_MAX);Write<uint32_t>(Slot(index),0,uint32_t(uintptr_t(object)));}

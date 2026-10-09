@@ -37,6 +37,27 @@ void* GuardMethodClass(void*,void* method){return Root(method);}
 bool GuardSameMethod(void*,void* a,void* b){return SameIndex(a,b);}
 bool GuardReadable(void*,const void* p,size_t bytes){size_t extent=0;return method_identity::ReadableMappingExtent(p,&extent)&&extent>=bytes;}
 bool GuardExtent(void*,const void* p,size_t* extent){return method_identity::ReadableMappingExtent(p,extent);}
+void ConfigureDefiningGraph(std::vector<unsigned char>& bytes,const modern_field_metadata::FieldMetadata& metadata){
+ auto* file=static_cast<dex_mapping_abi::Prefix*>(heap.New(sizeof(dex_mapping_abi::Prefix)));
+ *file={nullptr,bytes.data(),bytes.size(),bytes.data(),bytes.size()};
+ auto* cache=heap.New(112);const uint64_t pointer=uintptr_t(file);std::memcpy(static_cast<char*>(cache)+16,&pointer,8);
+ for(const auto& c:public_classes){if(c.native==old_class)continue;
+  bool matched=false;const uint32_t count=Read32(bytes.data(),96);
+  for(uint32_t i=0;i<count;++i){evolution::MappedDexMetadata mapping{bytes.data(),bytes.size(),bytes.data(),bytes.size(),i};evolution::ClassSchema schema;std::string error;
+   assert(evolution::ReadMappedDexDeclarations(mapping,&schema,&error));if(schema.descriptor!=c.descriptor)continue;
+   auto* native=static_cast<class_metadata::Class17*>(c.native);native->dex_cache=uint32_t(uintptr_t(cache));native->dex_class_def_index=int32_t(i);
+   native->dex_type_index=int32_t(Read32(bytes.data(),Read32(bytes.data(),100)+size_t(i)*32));
+   uint32_t flags=0;assert(metadata.DefiningClassFlags(native,&flags,&error)&&flags==schema.access);
+   const auto saved=native->dex_class_def_index;native->dex_class_def_index=int32_t(count);assert(!metadata.DefiningClassFlags(native,&flags,&error));native->dex_class_def_index=saved;
+   const auto saved_cache=native->dex_cache;native->dex_cache=old_class->dex_cache;native->dex_class_def_index=0;
+   assert(!metadata.DefiningClassFlags(native,&flags,&error));native->dex_cache=saved_cache;native->dex_class_def_index=saved;
+   // Raw ART implementation flags cannot replace the immutable source flags.
+   const auto raw_flags=native->access_flags;native->access_flags^=0x10;
+   assert(metadata.DefiningClassFlags(native,&flags,&error)&&flags==schema.access);native->access_flags=raw_flags;
+   matched=true;break;
+  }assert(matched);
+ }
+}
 void ConfigurePublicGuard(JNINativeInterface_& jni,jvmtiInterface_1& ti){jni.NewObjectArray=GuardNewArray;jni.GetArrayLength=GuardLength;jni.SetObjectArrayElement=GuardSet;jni.GetObjectArrayElement=GuardGet;jni.GetSuperclass=GuardParent;jni.IsAssignableFrom=GuardAssignable;jni.CallStaticBooleanMethodA=GuardProxy;jni.CallObjectMethodA=GuardPublicObject;ti.GetClassModifiers=GuardClassFlags;ti.GetClassMethods=GuardMethods;ti.GetMethodName=GuardMethodName;ti.GetMethodModifiers=GuardMethodFlags;ti.GetClassFields=GuardFields;ti.GetFieldName=GuardFieldName;ti.GetFieldModifiers=GuardFieldFlags;ti.GetClassLoader=GuardLoader;ti.GetImplementedInterfaces=GuardInterfaces;}
 }
 namespace {
