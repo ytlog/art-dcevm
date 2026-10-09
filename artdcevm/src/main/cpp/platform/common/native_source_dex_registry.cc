@@ -26,10 +26,10 @@ bool Service::Bind(HookEngine&hooks,const runtime_services::Snapshot&s,Service*o
 bool Service::Calibrate(const runnable_jni::Context&ctx,jobject fixture,const modern_field_metadata::FieldMetadata&metadata,source_handle_roots::Service&roots,std::string*error){
  if(!registered_||!find_||!ctx.env||!ctx.self||!metadata.Calibrated()||!roots.Calibrated())return Error(error,"DEX registry calibration requires actual metadata and source roots");
  try{
-  void*klass=nullptr;if(!roots.BorrowOwnedStrongGlobal(ctx,fixture,&klass))return false;
+  void*klass=nullptr;if(!roots.BorrowOwnedStrongGlobal(ctx,fixture,&klass))return Error(error,"DEX registry fixture is not in the actual Runnable owned global context");
   source_handle_roots::Pool pool(roots);auto*class_root=pool.Add(klass,error);if(!class_root)return false;
   auto*cache_root=pool.Add(metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache)),error);if(!cache_root)return false;
-  void*cache=nullptr;if(!pool.Read(cache_root,&cache))return false;const void*file=Dex(cache);if(!file)return false;
+  void*cache=nullptr;if(!pool.Read(cache_root,&cache))return Error(error,"DEX registry public cache root could not be read in the actual source context");const void*file=Dex(cache);if(!file)return Error(error,"DEX registry public DexCache has no readable fixed native DexFile");
   if(!registered_(linker_,ctx.self,file)||!pool.Read(cache_root,&cache)||Dex(cache)!=file)return Error(error,"Public fixture DEX is not in actual source registry");
   const auto found=find_(linker_,ctx.self,file);
   if(!pool.Read(class_root,&klass)||!pool.Read(cache_root,&cache)||Dex(cache)!=file||found.reference!=uintptr_t(cache)||metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)return Error(error,"Native registry does not return the exact public fixture DexCache");

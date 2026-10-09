@@ -113,6 +113,17 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  env.source_self=foreign_thread.data();
  assert(!owner.Roots().BorrowOwnedStrongGlobal(c,fixture,&unchanged)&&unchanged==parent_class);
  env.source_self=saved_env_self;
+ // A silent native-Dex/monitor failure must identify its actual calibration
+ // stage rather than reusing an earlier generic readiness diagnostic.
+ assert(owner.Begin(&driver,c,fixture,&error));
+ uint64_t missing_file=0;std::memcpy(static_cast<char*>(registered_cache)+16,&missing_file,8);
+ error="stale readiness error";assert(!owner.End(&driver,true,&error)&&!owner.Ready());
+ assert(error=="DEX registry public DexCache has no readable fixed native DexFile");
+ std::memcpy(static_cast<char*>(registered_cache)+16,&file,8);
+ assert(owner.Begin(&driver,c,fixture,&error));monitor_held=true;monitor_object=old_class;
+ error="stale readiness error";assert(!owner.End(&driver,true,&error)&&!owner.Ready());
+ assert(error=="Monitor proof pre-entry fixture root or public unlocked oracle failed");
+ monitor_held=false;monitor_object=nullptr;
  // Wrong registry or lookup cannot promote even a successful source episode.
  assert(owner.Begin(&driver,c,fixture,&error));wrong_registry=true;
  assert(!owner.End(&driver,true,&error)&&!owner.Ready());wrong_registry=false;

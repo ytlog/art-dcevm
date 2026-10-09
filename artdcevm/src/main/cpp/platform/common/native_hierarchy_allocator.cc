@@ -52,14 +52,14 @@ bool Service::SetOriginals(const Functions& f,std::string* e){
 bool Service::CalibrateRetirement(const runnable_jni::Context& c,jobject fixture,std::string* error){
  if(!roots_||!roots_->Calibrated()||!originals_||!c.env||!fixture){Error(error,"Monitor proof requires live source roots and owned public fixture");return false;}
  try{
-  void* raw=nullptr;if(!roots_->BorrowStrongGlobal(c,fixture,&raw))return false;
+  void* raw=nullptr;if(!roots_->BorrowStrongGlobal(c,fixture,&raw)){Error(error,"Monitor proof fixture is not an actual Runnable strong JNI global");return false;}
   source_handle_roots::Pool pool(*roots_);void* slot=pool.Add(raw,error);if(!slot)return false;
-  auto thread=c.env->FindClass("java/lang/Thread");if(!thread)return false;
+  auto thread=c.env->FindClass("java/lang/Thread");if(!thread){Error(error,"Monitor proof could not resolve the public Thread class");return false;}
   auto holds=c.env->GetStaticMethodID(thread,"holdsLock","(Ljava/lang/Object;)Z");
-  if(!holds||c.env->ExceptionCheck()){c.env->DeleteLocalRef(thread);return false;}
+  if(!holds||c.env->ExceptionCheck()){c.env->DeleteLocalRef(thread);Error(error,"Monitor proof could not resolve public Thread.holdsLock");return false;}
   bool before=c.env->CallStaticBooleanMethod(thread,holds,fixture);bool ok=!c.env->ExceptionCheck()&&!before;
   void* value=nullptr;ok=ok&&pool.Read(slot,&value);
-  if(!ok){c.env->DeleteLocalRef(thread);return false;}
+  if(!ok){c.env->DeleteLocalRef(thread);Error(error,"Monitor proof pre-entry fixture root or public unlocked oracle failed");return false;}
   auto entered=enter_(c.self,{uintptr_t(value)},false);void* current=nullptr;
   const bool entered_ok=pool.Read(slot,&current)&&entered.reference==uintptr_t(current);
   const bool held=c.env->CallStaticBooleanMethod(thread,holds,fixture);
@@ -67,7 +67,7 @@ bool Service::CalibrateRetirement(const runnable_jni::Context& c,jobject fixture
   if(!pool.Read(slot,&current)||!exit_(c.self,{uintptr_t(current)}))std::abort();
   const bool after=c.env->CallStaticBooleanMethod(thread,holds,fixture);
   ok=ok&&!after&&!c.env->ExceptionCheck();c.env->DeleteLocalRef(thread);
-  monitor_=ok;return ok;
+  monitor_=ok;if(!ok)Error(error,"Monitor proof named enter/exit did not match public held/unlocked oracle");return ok;
  }catch(const std::bad_alloc&){Error(error,"Monitor calibration allocation failed");return false;}
 }
 void Service::CaptureAllocated(const void* handle){
