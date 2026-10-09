@@ -1,5 +1,6 @@
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/loaded_member_guards.h"
+#include "platform/common/jvmti_method_flags.h"
 #include "platform/common/method_array_view.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/rooted_schema_plan.h"
@@ -52,14 +53,29 @@ bool SamePlan(const source_commit::Plan& a,const source_commit::Plan& b){
 bool Ordinary(jint status){return !(status&(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE));}
 // This is a rejectable, ordinary-JNI window. Report public identity only;
 // descriptors do not grant membership in the staged caller graph.
+size_t DiagnosticPrefix(const char* identity,size_t limit){
+ size_t length=0;while(length<limit&&identity[length])++length;
+ while(length&&identity[length]&&(static_cast<unsigned char>(identity[length])&0xc0u)==0x80u)--length;
+ return length;
+}
 bool ClassWindowFailure(std::string* error,const char* reason,const char* descriptor,jint status){
  if(error){
-  const char* identity=descriptor?descriptor:"<unavailable>";size_t length=0;
-  while(length<384&&identity[length])++length;
-  // JVMTI descriptors use modified UTF-8. Preserve a complete code unit at
-  // the diagnostic limit, just as the owned-source error transport does.
-  while(length&&identity[length]&&(static_cast<unsigned char>(identity[length])&0xc0u)==0x80u)--length;
+  const char* identity=descriptor?descriptor:"<unavailable>";
+  const size_t length=DiagnosticPrefix(identity,384);
   char text[768];std::snprintf(text,sizeof(text),"%s [descriptor=%.*s status=0x%08x]",reason,int(length),identity,static_cast<unsigned>(status));*error=text;
+ }
+ return false;
+}
+bool MethodWindowProof(bool mapped,bool same_owner,uint32_t raw,uint32_t public_flags)noexcept {
+ return mapped&&same_owner&&jvmti_method_flags::Public(raw)==public_flags;
+}
+bool MethodWindowFailure(std::string* error,const evolution::ClassSchema& klass,const evolution::Member& method,bool mapped,const char* native_owner,uint32_t raw){
+ if(error){
+  const auto& name=method.name;const auto& signature=method.descriptor;const auto& descriptor=klass.descriptor;
+  const char* owner=native_owner?native_owner:"<outside-rooted-graph>";char text[768];
+  std::snprintf(text,sizeof(text),"Public/native method owner or flags changed after staging [class=%.*s method=%.*s%.*s mapped=%d owner=%.*s raw=0x%08x projected=0x%08x public=0x%08x]",
+   int(DiagnosticPrefix(descriptor.c_str(),160)),descriptor.c_str(),int(DiagnosticPrefix(name.c_str(),96)),name.c_str(),int(DiagnosticPrefix(signature.c_str(),160)),signature.c_str(),int(mapped),int(DiagnosticPrefix(owner,96)),owner,raw,jvmti_method_flags::Public(raw),method.access);
+  *error=text;
  }
  return false;
 }
@@ -140,7 +156,7 @@ struct Verifier::State {
    if(proof.field){const auto* field=static_cast<const abi::arm64::Field*>(proof.member);
     if(bindings.decode_native_field(bindings.owner,owner,proof.field_id)!=proof.member||bindings.metadata->FieldDeclaringClass(proof.member)!=owner||native_schema_policy::JavaFlags(field_array::Flags(proof.member))!=proof.flags||field->dex_field_index!=proof.index||field->offset!=proof.offset)return false;
    }else{method_metadata::Identity value;
-    if(bindings.method_class(bindings.owner,proof.member)!=owner||!method_metadata::ReadIdentity(layout,proof.member,layout.size,&value)||native_schema_policy::JavaFlags(value.access_flags)!=proof.flags||value.dex_method_index!=proof.index)return false;}
+    if(bindings.method_class(bindings.owner,proof.member)!=owner||!method_metadata::ReadIdentity(layout,proof.member,layout.size,&value)||jvmti_method_flags::Public(value.access_flags)!=proof.flags||value.dex_method_index!=proof.index)return false;}
   }
   return true;
  }
@@ -166,7 +182,13 @@ struct Verifier::State {
     if(!Mapped(field,sizeof(field_array::Field))||bindings.metadata->FieldDeclaringClass(field)!=klass||!bindings.metadata->FieldIdentity(field,&identity,error)||!identity.name||!identity.descriptor||node.schema.fields[i].name!=identity.name||node.schema.fields[i].descriptor!=identity.descriptor||native_schema_policy::JavaFlags(field_array::Flags(field))!=node.schema.fields[i].access)return Fail(error,"Contextual public/native field identity or flags changed after staging");
    }
    for(size_t i=0;i<node.method_ids.size();++i){void* method=bindings.decode_method(bindings.owner,node.method_ids[i]);
-    if(!Mapped(method,layout.size)||bindings.method_class(bindings.owner,method)!=klass||native_schema_policy::JavaFlags(method_metadata::ReadAccessFlags(method))!=native_schema_policy::JavaFlags(node.schema.methods[i].access))return Fail(error,"Public/native method owner or flags changed after staging");
+    const bool mapped=Mapped(method,layout.size);void* owner=mapped?bindings.method_class(bindings.owner,method):nullptr;
+    const uint32_t raw=mapped?method_metadata::ReadAccessFlags(method):0;
+    if(!MethodWindowProof(mapped,owner==klass,raw,node.schema.methods[i].access)){
+     const char* owner_name=mapped?nullptr:"<unmapped>";const auto index=std::find(result.classes.begin(),result.classes.end(),owner);
+     if(index!=result.classes.end())owner_name=nodes[size_t(index-result.classes.begin())].schema.descriptor.c_str();
+     return MethodWindowFailure(error,node.schema,node.schema.methods[i],mapped,owner_name,raw);
+    }
     result.declared[n].push_back(method);
    }
   }
@@ -418,7 +440,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
    const auto* native=static_cast<const abi::arm64::Field*>(field);s.member_proofs.push_back({field,n,native_schema_policy::JavaFlags(native->access_flags),native->dex_field_index,native->offset,true,s.nodes[n].field_ids[i]});}
   for(void* method:s.frozen_snapshot.all_methods[n]){void* owner=s.bindings.method_class(s.bindings.owner,method);auto it=std::find(s.frozen_snapshot.classes.begin(),s.frozen_snapshot.classes.end(),owner);method_metadata::Identity identity;
    if(it==s.frozen_snapshot.classes.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
-   s.member_proofs.push_back({method,size_t(it-s.frozen_snapshot.classes.begin()),native_schema_policy::JavaFlags(identity.access_flags),identity.dex_method_index,0,false});}
+   s.member_proofs.push_back({method,size_t(it-s.frozen_snapshot.classes.begin()),jvmti_method_flags::Public(identity.access_flags),identity.dex_method_index,0,false});}
  }
  for(void* klass:s.expected.new_classes){State::InterfaceProof proof;proof.klass=klass;proof.table=s.bindings.metadata->Reference(klass,24);
   if(proof.table){if(!s.bindings.readable(s.bindings.owner,proof.table,12))return false;const uint32_t length=Read<uint32_t>(proof.table,8);

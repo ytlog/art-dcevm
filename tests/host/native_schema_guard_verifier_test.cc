@@ -39,6 +39,31 @@ int main(){
  assert(!ClassWindowFailure(&diagnostic,"late",unicode_descriptor.c_str(),3));
  assert(diagnostic=="late [descriptor="+std::string(383,'x')+" status=0x00000003]");
  assert(!ClassWindowFailure(nullptr,"late","Lforeign/Other;",3));
+ // The real verifier comparison projects raw ArtMethod flags exactly as
+ // fixed-source JVMTI, without applying its transformations to public flags.
+ const uint32_t raw_abstract_dispatch=0x401u|0x100u|0x80000u;
+ method_metadata::Method11 native11{};native11.access_flags=raw_abstract_dispatch;
+ method_metadata::Method12 native12{};native12.access_flags=0x20101u;
+ assert(MethodWindowProof(true,true,method_metadata::ReadAccessFlags(&native11),0x401u));
+ assert(MethodWindowProof(true,true,method_metadata::ReadAccessFlags(&native12),0x121u));
+ assert(MethodWindowProof(true,true,raw_abstract_dispatch,0x401u));
+ assert(MethodWindowProof(true,true,0x121u,0x101u));
+ assert(MethodWindowProof(true,true,0x20101u,0x121u));
+ assert(!MethodWindowProof(true,true,0x20101u,0x101u));
+ assert(!MethodWindowProof(true,true,raw_abstract_dispatch,0x501u));
+ assert(!MethodWindowProof(false,true,raw_abstract_dispatch,0x401u));
+ assert(!MethodWindowProof(true,false,raw_abstract_dispatch,0x401u));
+ assert(!MethodWindowProof(true,true,raw_abstract_dispatch^1u,0x401u));
+ evolution::ClassSchema owner_schema;owner_schema.descriptor="LExpected;";
+ evolution::Member method_schema{"invoke","(I)V",0x401u,UINT32_MAX};
+ assert(!MethodWindowFailure(&diagnostic,owner_schema,method_schema,true,"LForeign;",raw_abstract_dispatch));
+ assert(diagnostic.find("class=LExpected; method=invoke(I)V mapped=1 owner=LForeign;")!=std::string::npos);
+ assert(diagnostic.find("raw=0x00080501 projected=0x00000401 public=0x00000401")!=std::string::npos);
+ assert(!MethodWindowFailure(&diagnostic,owner_schema,method_schema,false,"<unmapped>",0));
+ assert(diagnostic.find("mapped=0 owner=<unmapped>")!=std::string::npos);
+ owner_schema.descriptor=unicode_descriptor;method_schema.name=std::string(95,'x')+"\xe4\xb8\xad";
+ assert(!MethodWindowFailure(&diagnostic,owner_schema,method_schema,true,nullptr,1));
+ assert(diagnostic.size()<768&&diagnostic.find("\xe4") == std::string::npos);
  assert(Ordinary(JVMTI_CLASS_STATUS_PREPARED));
  assert(!Ordinary(JVMTI_CLASS_STATUS_ARRAY));
  assert(!Ordinary(JVMTI_CLASS_STATUS_PRIMITIVE));
