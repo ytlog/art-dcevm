@@ -57,6 +57,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_method_table.cc
     platform/common/method_identity_calibration.cc
     platform/common/native_cache_service.cc
+    platform/common/native_source_stop.cc
     platform/common/native_source_commit.cc
     platform/common/modern_source_commit.cc
     platform/common/source_commit.cc
