@@ -32,6 +32,11 @@ cleanup=cleanup.replace('if(missing&&std::strstr(name,missing))','if(Hooks::miss
 body=pipeline.split('#include "source_cache_calibration_main.inc"',1)[1]
 body=body.split('  native_hierarchy_source_cache::Mapper absent_mapper',1)[0]
 body=body.replace('runtime.runtime=&linker;','runtime.runtime=&::runtime;').replace('native_hierarchy_source_cache::Composite caches(mapper,cache_owner)','native_hierarchy_source_cache::Composite hierarchy_caches(mapper,cache_owner)')
+# Public interface fixtures replace JNI constructor lookups; compose the actual
+# private monitor's Object constructor independently for its calibration only.
+monitor='assert(allocation.CalibrateRetirement(context,reinterpret_cast<jobject>(old_class),&error));'
+assert body.count(monitor)==1
+body=body.replace(monitor,'{auto prior_find=table.FindClass;auto prior_method=table.GetMethodID;table.FindClass=Find;table.GetMethodID=PrivateMethod;'+monitor+'table.FindClass=prior_find;table.GetMethodID=prior_method;}')
 (out/'pipeline_setup.inc').write_text(body)
 (out/'android').mkdir(exist_ok=True);(out/'android/log.h').write_text('#pragma once\n#define ANDROID_LOG_ERROR 6\n#define ANDROID_LOG_INFO 4\ninline int __android_log_print(int,const char*,const char*,...){return 0;}\n')
 sources=['native_schema_run_state','native_hierarchy_private_ledger','native_source_dex_registry','native_source_class_loading','native_hierarchy_session','native_class_lookup','native_hierarchy_source_checks','native_hierarchy_graph','native_hierarchy_allocator','native_hierarchy_receiver','rooted_hierarchy_allocator','native_hierarchy_cache','native_hierarchy_source_cache','whole_process_frames','native_required_cleanup','native_source_stop','native_member_provider','native_method_table','native_structural_reflection','resolution_invalidation_plan','native_source_commit','modern_source_commit','source_commit','modern_field_metadata','native_interface_graph','modern_field_storage','field_copy','prepared_field_copy','native_schema_policy','native_schema_binding','native_method_evolution_policy','source_handle_roots','exclusive_owned_roots','native_cache_service','modern_method_services','structural_methods','method_identity_calibration','object_replacement_map','native_owned_removal','native_removal_policy','native_schema_guard_verifier','owned_structural_transaction','source_allocation_transaction','native_abstract_instances']
@@ -40,6 +45,7 @@ if not fixture.exists():raise SystemExit('SOURCE_DEX_FIXTURE must name the verif
 common=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DPIPELINE_DEX_FIXTURE='+chr(34)+str(fixture)+chr(34)]
 units=[root/'tests/host/native_schema_run_state_test.cc']+[cpp/'platform/common'/(s+'.cc') for s in sources]+[cpp/'evolution/dex_schema.cc',cpp/'evolution/migration_plan.cc',cpp/'platform/common/schema_snapshot.cc']
 headers=b''.join(p.read_bytes() for p in sorted(cpp.rglob('*.h')))+b''.join(p.read_bytes() for p in sorted(out.glob('*.inc')))
+headers+=(root/'tests/host/native_schema_run_state_mapping_fixture.h').read_bytes()
 objects=out/'objects';objects.mkdir(exist_ok=True)
 def compile_unit(source):
     obj=objects/(source.stem+'.o'); stamp=obj.with_suffix('.sha256')

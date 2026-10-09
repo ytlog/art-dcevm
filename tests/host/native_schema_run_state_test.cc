@@ -5,6 +5,7 @@
 #include "cleanup_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_schema_run_state.h"
+#include "native_schema_run_state_mapping_fixture.h"
 #include <sys/wait.h>
 #include <unistd.h>
 template<class F> void ExpectAbort(F fn){const auto child=fork();assert(child>=0);if(!child){fn();_exit(1);}int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);}
@@ -42,7 +43,8 @@ int main(){
    owner_disable_proxy(&owner_heap,thread.data());OwnerNative(thread.data());unsigned char carrier;owner_stop_proxy(&carrier,s::kFinalCause,true);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());native_source_stop::Calibration proof;assert(observation.Finish(&actual_driver,true,&proof)&&source.Authorize(proof,&original_run));}
   whole_process_frames::Service scanner;assert(whole_process_frames::Service::BindGeometryOnly(code_info_view::SourceFamily::kAndroid13,[&](const char*n){return owner_hooks.FindSymbol("libart.so",n);},&scanner));
   prepared_roots::Registry roots({nullptr,Register,Resolve,Release});native_member_provider::Service provider;
-  native_schema_run_state::Dependencies deps;deps.hooks=&owner_hooks;deps.loading=&class_loading;deps.stop=&source;deps.roots=d.roots;deps.allocator=&allocation;deps.dex_registry=&registry;deps.lookup=&hashed_lookup;deps.frames=&scanner;deps.cleanup=&closure;deps.provider=&provider;deps.members=members;deps.registry=&roots;
+  native_schema_run_state::Dependencies deps;deps.hooks=&owner_hooks;deps.loading=&class_loading;deps.stop=&source;deps.roots=d.roots;deps.allocator=&allocation;deps.dex_registry=&registry;deps.lookup=lookup_service;deps.frames=&scanner;deps.cleanup=&closure;deps.provider=&provider;deps.members=members;deps.registry=&roots;
+  RunStateMappings mappings;deps.mapping={&mappings,RunStateMappings::Refresh,RunStateMappings::Read};
   native_schema_run_state::CacheCalibration witness{reinterpret_cast<jobject>(published_cache),reinterpret_cast<jobject>(old_class),112,counts,subject_index,0,0,old_fields[0],old_method};
   CheckHooks checks;assert(native_hierarchy_source_checks::Install(checks,&error));native_hierarchy_source_checks::SetFailureObserver(native_owned_removal::ObserveSourceFailure);
   auto aggregate_context=context;aggregate_context.vm=reinterpret_cast<JavaVM*>(&::runtime);
@@ -51,6 +53,7 @@ int main(){
   auto* published=static_cast<type_cache::Dual*>(published_cache);reinterpret_cast<method_cache::Pair*>(published->methods)[0].method=uintptr_t(old_method);reinterpret_cast<std::atomic<uintptr_t>*>(published->methods_array)[0]=uintptr_t(old_method);
 
   auto begin=[&](const native_schema_run_state::CacheCalibration& w){return native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},w,&error);};
+  for(int missing_map=0;missing_map<3;++missing_map){auto complete=deps.mapping;if(missing_map==0)deps.mapping.owner=nullptr;else if(missing_map==1)deps.mapping.refresh_stopped=nullptr;else deps.mapping.extent=nullptr;assert(!begin(witness));assert(!native_schema_run_state::RunState::Current());deps.mapping=complete;}
   auto missing=witness;missing.strong_cache=nullptr;assert(!begin(missing));assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
   for(int repeat=0;repeat<2;++repeat){auto run=begin(witness);if(!run){std::cerr<<"aggregate Begin: "<<error<<"\n";std::abort();}assert(native_schema_run_state::RunState::Current()==run.get());assert(!begin(witness));ExpectAbort([&]{run->End(&actual_driver,false);});ExpectAbort([&]{source_commit::Plan wrong;run->Commit(wrong);});assert(!run->StoppedWindow());source_commit::Plan not_sealed;assert(!run->VerifyHierarchy(not_sealed,0,nullptr));transaction_root::Iterator unallocated{0,&holder};assert(!run->BeforeVerification(&actual_owner,&unallocated,&error));run->AfterVerification(&actual_owner,&unallocated,false);source_commit::Plan uncollected;assert(!run->Collected({},uncollected,&error));const source_commit::Plan* ignored=nullptr;const auto os_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(!run->Finalize(&holder,&ignored));assert(method_identity::MappingOsQueries()==os_queries);forbid_allocation=false;run->Refund();run->Refund();assert(run->End(&actual_driver,false));run.reset();assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());}
   {
