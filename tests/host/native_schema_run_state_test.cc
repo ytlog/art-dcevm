@@ -5,6 +5,9 @@
 #include "cleanup_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_schema_run_state.h"
+#include <sys/wait.h>
+#include <unistd.h>
+template<class F> void ExpectAbort(F fn){const auto child=fork();assert(child>=0);if(!child){fn();_exit(1);}int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);}
 int main(){
 #include "root_setup.inc"
 #include "pipeline_setup.inc"
@@ -40,11 +43,30 @@ int main(){
   // We changed the standalone method-array pointer only after the old type cache
   // was populated; refresh that independent witness explicitly before Begin.
   auto* published=static_cast<type_cache::Dual*>(published_cache);reinterpret_cast<method_cache::Pair*>(published->methods)[0].method=uintptr_t(old_method);reinterpret_cast<std::atomic<uintptr_t>*>(published->methods_array)[0]=uintptr_t(old_method);
+  void* app_loader=heap.New(32);for(const auto& klass:public_classes)if(klass.native!=parent_class)Put32(klass.native,offsetof(class_metadata::Class11,class_loader),uint32_t(uintptr_t(app_loader)));Put32(new_class,offsetof(class_metadata::Class11,class_loader),uint32_t(uintptr_t(app_loader)));
   auto begin=[&](const native_schema_run_state::CacheCalibration& w){return native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},w,&error);};
   auto missing=witness;missing.strong_cache=nullptr;assert(!begin(missing));assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
-  for(int repeat=0;repeat<2;++repeat){auto run=begin(witness);if(!run){std::cerr<<"aggregate Begin: "<<error<<"\n";std::abort();}assert(native_schema_run_state::RunState::Current()==run.get());assert(!begin(witness));assert(!run->StoppedWindow());transaction_root::Iterator unallocated{0,&holder};assert(!run->BeforeVerification(&actual_owner,&unallocated,&error));run->AfterVerification(&actual_owner,&unallocated,false);source_commit::Plan uncollected;assert(!run->Collected({},uncollected,&error));const source_commit::Plan* ignored=nullptr;const auto os_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(!run->Finalize(&holder,&ignored));assert(method_identity::MappingOsQueries()==os_queries);forbid_allocation=false;run->Refund();run->Refund();assert(run->End(&actual_driver,false));run.reset();assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());}
+  for(int repeat=0;repeat<2;++repeat){auto run=begin(witness);if(!run){std::cerr<<"aggregate Begin: "<<error<<"\n";std::abort();}assert(native_schema_run_state::RunState::Current()==run.get());assert(!begin(witness));ExpectAbort([&]{run->End(&actual_driver,false);});ExpectAbort([&]{source_commit::Plan wrong;run->Commit(wrong);});assert(!run->StoppedWindow());transaction_root::Iterator unallocated{0,&holder};assert(!run->BeforeVerification(&actual_owner,&unallocated,&error));run->AfterVerification(&actual_owner,&unallocated,false);source_commit::Plan uncollected;assert(!run->Collected({},uncollected,&error));const source_commit::Plan* ignored=nullptr;const auto os_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(!run->Finalize(&holder,&ignored));assert(method_identity::MappingOsQueries()==os_queries);forbid_allocation=false;run->Refund();run->Refund();assert(run->End(&actual_driver,false));run.reset();assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());}
+  {
+   auto run=begin(witness);assert(run);
+   PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);
+   selected_parent=inserted;session_old_handle=old_root;session_parent_handle=parent_root;session_cache_handle=cache_root;
+   transaction_root::Iterator iter{0,&holder};
+   if(!session_finish_proxy(&actual_owner,&holder,&iter)){std::cerr<<"actual aggregate Finish: "<<error<<" result="<<actual_driver.result<<" failure="<<actual_failure_message<<"\n";std::abort();}
+   assert(session_allocated&&allocated==2&&relocated_new&&session_allocated==relocated_new);
+   assert(run->BeforeVerification(&actual_owner,&iter,&error));run->AfterVerification(&actual_owner,&iter,true);
+   // The actual native provider rejects this intentionally different installed
+   // DEX/member declaration set after the aggregate acquires the real stop.
+   source_commit::Plan incomplete;incomplete.mirror=old_class;incomplete.old_classes={old_class};incomplete.new_classes={session_allocated};
+   auto* collected=heap.New(16);Put32(collected,0,uint32_t(uintptr_t(array_type)));Put32(collected,8,1);Put32(collected,12,uint32_t(uintptr_t(session_allocated)));incomplete.new_classes_root=collected;incomplete.class_root_origins={{collected,0}};Put32(array,12+11*4,uint32_t(uintptr_t(collected)));
+   native_owned_removal::RootedGraph graph;graph.holder=&holder;assert(transaction_root::ReadMetadata(holder,1,transaction_root::OwnerFamily::kAndroid15,&graph.metadata));
+   assert(!run->Collected(graph,incomplete,&error));std::cerr<<"actual aggregate Collected refusal: "<<error<<" stopped="<<run->StoppedWindow()<<"\n";
+   assert(run->StoppedWindow()&&gc&&!disabled&&stopped==1&&roots.Size()>0);run->Refund();assert(!gc&&!disabled&&!stopped&&Read32(thread.data())==0);assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==1);
+   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();roots.Clear();assert(roots.Size()==0);
+   assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
+  }
   return true;
  };
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),run,&use)==runnable_jni::Result::kSuccess);
- std::cout<<"Actual RunState aggregate: failed Begin root cleanup, retry, two unique Running/refund/End lifecycles and invalid Finalize/nested Begin rejected; ART/JNI leaf fixtures only\n";
+ std::cout<<"Actual RunState aggregate: failed Begin retry, repeated refund/End, early Commit/End abort guards, wrong-phase Finalize noalloc/noOS, actual Finish+GCmove+verification+Collected stopped refusal+rollback+retirement+End; ART/JNI leaf fixtures only\n";
 }
