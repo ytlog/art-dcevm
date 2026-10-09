@@ -56,7 +56,7 @@ void* DecodeFieldId(jfieldID id) {
 namespace {
 struct OwnedGlobal {JNIEnv* env;jobject value;~OwnedGlobal(){if(value)env->DeleteGlobalRef(value);}};
 struct PublicText {jvmtiEnv* ti;char* value=nullptr;~PublicText(){if(value)ti->Deallocate(reinterpret_cast<unsigned char*>(value));}};
-bool ProveFields(JNIEnv* env,jvmtiEnv* ti,jclass klass,void* (*leaf)(void*),size_t* seen,std::string* error){
+bool ProveFields(JNIEnv* env,jvmtiEnv* ti,jclass klass,void* (*leaf)(void*),size_t* seen,std::string* error,bool fixture_lookup){
  if(!klass||env->ExceptionCheck())return false;
  OwnedGlobal owner{env,env->NewGlobalRef(klass)};
  if(!owner.value||env->ExceptionCheck())return false;
@@ -71,9 +71,15 @@ bool ProveFields(JNIEnv* env,jvmtiEnv* ti,jclass klass,void* (*leaf)(void*),size
   struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} declared{env,declaring};
   if(owner_result!=JVMTI_ERROR_NONE||!name.value||!descriptor.value||!declaring||!env->IsSameObject(declaring,klass)||env->ExceptionCheck())return false;
   bool stat=(flags&8)!=0;
-  jfieldID looked=stat?env->GetStaticFieldID(klass,name.value,descriptor.value):env->GetFieldID(klass,name.value,descriptor.value);
-  if(!looked||looked!=ids[i]||env->ExceptionCheck())return false;
-  Local reflected{env,env->ToReflectedField(klass,looked,stat)};
+  // Only the owned fixture declarations promise public name lookup. Ancestors
+  // can include ART shadow fields exposed by JVMTI but hidden by FindFieldID.
+  // Original ToReflectedField accepts those IDs directly and constructs their
+  // actual Field mirror; retain the full mirror/ID/native proof below.
+  if(fixture_lookup){
+   jfieldID looked=stat?env->GetStaticFieldID(klass,name.value,descriptor.value):env->GetFieldID(klass,name.value,descriptor.value);
+   if(!looked||looked!=ids[i]||env->ExceptionCheck())return false;
+  }
+  Local reflected{env,env->ToReflectedField(klass,ids[i],stat)};
   if(!reflected.value||env->ExceptionCheck()||env->FromReflectedField(reflected.value)!=ids[i]||env->ExceptionCheck())return false;
   OwnedGlobal mirror{env,env->NewGlobalRef(reflected.value)};
   if(!mirror.value||env->ExceptionCheck())return false;
@@ -88,7 +94,7 @@ bool ProveFields(JNIEnv* env,jvmtiEnv* ti,jclass klass,void* (*leaf)(void*),size
  // Each recursion uses public JNI roots; no Class pointer crosses a JNI call.
  jclass parent=env->GetSuperclass(klass);
  if(env->ExceptionCheck())return false;
- bool result=!parent||ProveFields(env,ti,parent,leaf,seen,error);
+ bool result=!parent||ProveFields(env,ti,parent,leaf,seen,error,false);
  if(parent)env->DeleteLocalRef(parent);return result;
 }
 }
@@ -103,7 +109,7 @@ bool CalibrateRuntimeFieldIds(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti,jobject
  struct Classes {JNIEnv* env;jclass a,b;~Classes(){if(a)env->DeleteLocalRef(a);if(b)env->DeleteLocalRef(b);}} roots{env,a,b};
  if(!a||!b||env->ExceptionCheck()||env->IsSameObject(a,b))return false;
  size_t first=0,second=0;
- if(!ProveFields(env,ti,a,leaf,&first,error)||!ProveFields(env,ti,b,leaf,&second,error)||!first||!second||env->ExceptionCheck())return false;
+ if(!ProveFields(env,ti,a,leaf,&first,error,true)||!ProveFields(env,ti,b,leaf,&second,error,true)||!first||!second||env->ExceptionCheck())return false;
  fields_proven=true;return true;
 }
 bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error,
