@@ -44,6 +44,7 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   named_interface_relation_=hooks.FindSymbol("libart.so","_ZN3art6mirror5Class10ImplementsENS_6ObjPtrIS1_EE")||
       hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE");
   field_leaf_=leaf;name_=name;descriptor_=descriptor;class_descriptor_=class_descriptor;
+  string_equals_=reinterpret_cast<StringEquals>(hooks.FindSymbol("libart.so","_ZN3art6mirror6String6EqualsEPKc"));
   mark_=mark;root_=root;bound_=true;
   if(error)error->clear();return true;
 }
@@ -224,6 +225,37 @@ bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::
   const char* descriptor=class_descriptor_(klass,nullptr);
   if(!descriptor||!*descriptor)return Fail(error,"Named Class descriptor is absent");
   *output=descriptor;
+  if(error)error->clear();return true;
+}
+
+bool FieldMetadata::ClassIdentityVerified(void* klass,const char* expected,void* public_name,
+    const char* name,const char* negative,field_copy::CopyClassView* out,std::string* error)const {
+  if(!calibrated_||!klass||!expected||!*expected||!out)return Fail(error,"Verified Class identity lacks independently staged descriptor");
+  const auto& layout=Source(model_);void* terminal=klass;size_t dim=0;
+  while(expected[dim]=='['){
+    size_t extent=0;if(!method_identity::ReadableMappingExtent(terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Array component source prefix is unreadable");
+    terminal=Reference(terminal,offsetof(MergedClass,component_type));
+    if(!terminal)return Fail(error,"Native array dimensions differ from public descriptor");++dim;
+  }
+  size_t extent=0;if(!method_identity::ReadableMappingExtent(terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Terminal Class source prefix is unreadable");
+  if(Reference(terminal,offsetof(MergedClass,component_type)))return Fail(error,"Native array has additional unstaged dimensions");
+  uint32_t flags=0;std::memcpy(&flags,static_cast<const char*>(terminal)+layout.access_flags,4);
+  if(flags&0x40000u){
+    if(!public_name||!name||!negative||!string_equals_||Reference(terminal,offsetof(MergedClass,name))!=public_name)return Fail(error,"Proxy name lacks independent public String root");
+    // The native String is independently paired with the actual public
+    // Class.getName return. Exact positive/negative MUTF-8 oracles attest the
+    // named leaf; its declaring-Class loader is checked separately by caller.
+    if(!string_equals_(public_name,name)||string_equals_(public_name,negative))return Fail(error,"Named proxy String equality differs from public positive/negative names");
+    const char* descriptor=expected+dim;const size_t length=std::strlen(descriptor);
+    if(length<2||descriptor[0]!='L'||descriptor[length-1]!=';'||std::strlen(name)!=length-2)return Fail(error,"Proxy public name/descriptor length differs");
+    for(size_t i=0;i<length-2;++i)if((name[i]=='.'?'/':name[i])!=descriptor[i+1])return Fail(error,"Proxy public name/descriptor spelling differs");
+  }else{
+    const char* actual=nullptr;if(!Descriptor(terminal,model_,&actual,error))return false;
+    if(std::strcmp(actual,expected+dim))return Fail(error,"Native terminal descriptor differs from public Class signature");
+  }
+  field_array::View fields;if(!Fields(klass,false,&fields,error))return false;
+  auto* parent=Reference(klass,layout.parent);
+  *out={parent,Reference(klass,layout.loader),expected,fields.selected_count,!parent&&!std::strcmp(expected,"Ljava/lang/Object;")};
   if(error)error->clear();return true;
 }
 

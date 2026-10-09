@@ -64,10 +64,17 @@ int main(){
  owner_schema.descriptor=unicode_descriptor;method_schema.name=std::string(95,'x')+"\xe4\xb8\xad";
  assert(!MethodWindowFailure(&diagnostic,owner_schema,method_schema,true,nullptr,1));
  assert(diagnostic.size()<768&&diagnostic.find("\xe4") == std::string::npos);
- assert(Ordinary(JVMTI_CLASS_STATUS_PREPARED));
- assert(!Ordinary(JVMTI_CLASS_STATUS_ARRAY));
- assert(!Ordinary(JVMTI_CLASS_STATUS_PRIMITIVE));
- assert(!Ordinary(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED));
+ assert(!ClassIdentityFailure(&diagnostic,"Ljava/lang/reflect/Proxy$0;","proxy",true,false,false,false,"Array/proxy descriptor needs unavailable platform string storage"));
+ assert(diagnostic.find("class=Ljava/lang/reflect/Proxy$0; kind=proxy mapped=1 identity=0 descriptorMatch=0 loaderMatch=0")!=std::string::npos);
+ assert(diagnostic.find("nativeError=Array/proxy descriptor needs unavailable platform string storage")!=std::string::npos);
+ assert(!ClassIdentityFailure(&diagnostic,"LExpected;","ordinary",true,true,true,false,""));
+ assert(diagnostic.find("identity=1 descriptorMatch=1 loaderMatch=0")!=std::string::npos);
+ assert(!ClassIdentityFailure(&diagnostic,"LExpected;","unmapped",false,false,false,false,long_descriptor.c_str()));
+ assert(diagnostic.size()<768);
+ assert(CallerClass(JVMTI_CLASS_STATUS_PREPARED));
+ assert(CallerClass(JVMTI_CLASS_STATUS_ARRAY));
+ assert(CallerClass(JVMTI_CLASS_STATUS_PRIMITIVE));
+ assert(!CallerClass(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED));
  // Interface reflection's null parent and ART's bootstrap Object field are
  // separate fixed semantics. The public hierarchy edge remains absent.
  std::vector<Node> nodes(3);nodes[0].schema.descriptor="Ljava/lang/Object;";

@@ -29,6 +29,11 @@ class FieldMetadata {
   // Reject unsupported Class/field text instead of invoking commit invariants.
   // Caller owns real native roots and the calibrated source/mutator scope.
   bool ClassIdentity(void*,field_copy::CopyClassView*,std::string*)const;
+  // Exact independently staged public descriptor and, for a proxy terminal,
+  // its public Class.getName String root/bytes. No platform string is mutated.
+  bool ClassIdentityVerified(void*,const char* descriptor,void* public_proxy_name,
+      const char* proxy_name,const char* negative_proxy_name,
+      field_copy::CopyClassView*,std::string*)const;
   bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal) const;
   void* FieldDeclaringClass(void* field)const;
@@ -38,12 +43,14 @@ class FieldMetadata {
   using FieldText = const char* (*)(void*);
   using ClassText = const char* (*)(void*, void*);
   using Mark = void* (*)(void*);
+  using StringEquals=bool (*)(void*,const char*);
   bool Descriptor(void* klass, Model, const char** output, std::string*) const;
   bool Candidate(const runnable_jni::Context&, void* klass, Model, const char*, const FieldOracle*, size_t, std::string*) const;
   bool FieldsCandidate(void*,Model,bool,field_array::View*,std::string*) const;
   FieldLeaf field_leaf_ = nullptr;
   FieldText name_ = nullptr, descriptor_ = nullptr;
   ClassText class_descriptor_ = nullptr;
+  StringEquals string_equals_=nullptr;
   Mark mark_ = nullptr;
   Mark root_ = nullptr;
   bool Text(void* field, Model, const char** name, const char** descriptor, std::string*) const;

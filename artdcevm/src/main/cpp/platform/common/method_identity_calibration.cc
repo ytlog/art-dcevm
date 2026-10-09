@@ -17,6 +17,7 @@
 namespace artdcevm::method_identity {
 namespace {
 thread_local ScopedReadableMappings* active_mappings=nullptr;
+thread_local uint64_t mapping_os_queries=0;
 uintptr_t LookupAddress(const void* address){
   uintptr_t pointer=reinterpret_cast<uintptr_t>(address);
 #if defined(__ANDROID__) && defined(__aarch64__)
@@ -25,6 +26,7 @@ uintptr_t LookupAddress(const void* address){
   return pointer;
 }
 bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
+ ++mapping_os_queries;
 #if defined(__APPLE__)
   mach_vm_address_t start=pointer;mach_vm_size_t size=0;
   vm_region_basic_info_data_64_t info{};mach_msg_type_number_t length=VM_REGION_BASIC_INFO_COUNT_64;
@@ -56,9 +58,10 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
 #endif
 }
 }
+uint64_t MappingOsQueries()noexcept{return mapping_os_queries;}
 ScopedReadableMappings::ScopedReadableMappings():previous_(active_mappings){
 #if !defined(__APPLE__)
-  ++os_queries_;FILE* maps=std::fopen("/proc/self/maps","r");
+  ++mapping_os_queries;++os_queries_;FILE* maps=std::fopen("/proc/self/maps","r");
   if(maps){char line[1024];
     while(std::fgets(line,sizeof(line),maps)){
       unsigned long long start=0,end=0;char protection[5]{};

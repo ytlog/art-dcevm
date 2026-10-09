@@ -20,6 +20,8 @@ struct Calibration {
 // alone does not prove object lifetime; owned reflected Method and declaring
 // Class roots must remain live through calibration and every subsequent use.
 bool ReadableMappingExtent(const void* address, size_t* extent);
+// Current-thread diagnostic count only; no caching or safety authority.
+uint64_t MappingOsQueries()noexcept;
 // Only call from an already calibrated live Runnable JNI callback. The named
 // leaf is resolved from the loaded libart; never reinterpret a jmethodID as ART.
 // Oracles come independently from the APK's DEX method_ids/class_data and Java

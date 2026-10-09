@@ -22,7 +22,8 @@ struct Node {
  std::vector<jmethodID> method_ids;
  std::vector<jfieldID> field_ids;
  std::vector<bounded_managed_roots::Slot> interfaces;
- bounded_managed_roots::Slot parent{};
+ bounded_managed_roots::Slot parent{},component{},class_name{};
+ std::string class_name_text,negative_class_name;
  bool affected=false;
 };
 struct Snapshot {
@@ -50,7 +51,8 @@ bool SamePlan(const source_commit::Plan& a,const source_commit::Plan& b){
  for(size_t i=0;i<a.class_root_origins.size();++i)if(a.class_root_origins[i].array!=b.class_root_origins[i].array||a.class_root_origins[i].index!=b.class_root_origins[i].index)return false;
  return true;
 }
-bool Ordinary(jint status){return !(status&(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE));}
+bool CallerClass(jint status){return !(status&JVMTI_CLASS_STATUS_ERROR);}
+bool PreparedCaller(jint status){return (status&(JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE))||(status&JVMTI_CLASS_STATUS_PREPARED);}
 // This is a rejectable, ordinary-JNI window. Report public identity only;
 // descriptors do not grant membership in the staged caller graph.
 size_t DiagnosticPrefix(const char* identity,size_t limit){
@@ -77,6 +79,12 @@ bool MethodWindowFailure(std::string* error,const evolution::ClassSchema& klass,
    int(DiagnosticPrefix(descriptor.c_str(),160)),descriptor.c_str(),int(DiagnosticPrefix(name.c_str(),96)),name.c_str(),int(DiagnosticPrefix(signature.c_str(),160)),signature.c_str(),int(mapped),int(DiagnosticPrefix(owner,96)),owner,raw,jvmti_method_flags::Public(raw),method.access);
   *error=text;
  }
+ return false;
+}
+bool ClassIdentityFailure(std::string* error,const char* descriptor,const char* kind,bool mapped,bool identity,bool same_descriptor,bool same_loader,const char* detail,const char* native_descriptor=nullptr){
+ if(error){char text[768];const char* reason=detail&&*detail?detail:"<no native identity error>";
+  std::snprintf(text,sizeof(text),"Public/native Class descriptor or loader changed [class=%.*s kind=%s mapped=%d identity=%d descriptorMatch=%d loaderMatch=%d nativeDescriptor=%.*s nativeError=%.*s]",
+   int(DiagnosticPrefix(descriptor,192)),descriptor,kind,int(mapped),int(identity),int(same_descriptor),int(same_loader),int(DiagnosticPrefix(native_descriptor?native_descriptor:"<unavailable>",96)),native_descriptor?native_descriptor:"<unavailable>",int(DiagnosticPrefix(reason,256)),reason);*error=text;}
  return false;
 }
 bool MemberEqual(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access);}
@@ -122,7 +130,7 @@ struct Verifier::State {
  mutable std::vector<uint32_t*> access_slots,readonly_access_slots;
  mutable bool access_proven=false,final_fields_proven=false,aliases_proven=false;
  struct Grant {size_t pair;void* loader;native_schema_policy::Requirement requirement;};
- struct ClassProof {void* methods=nullptr;void* instances=nullptr;void* statics=nullptr;void* dex_cache=nullptr;void* interfaces=nullptr;uint32_t flags=0,instance_count=0,static_count=0;std::vector<void*> interface_classes;};
+ struct ClassProof {void* methods=nullptr;void* instances=nullptr;void* statics=nullptr;void* dex_cache=nullptr;void* interfaces=nullptr;uint32_t flags=0,kind=0,primitive=0,instance_count=0,static_count=0;std::vector<void*> interface_classes;};
  struct MemberProof {void* member;size_t owner;uint32_t flags,index,offset;bool field;jfieldID field_id=nullptr;};
  struct InterfaceProof {void* klass=nullptr;void* table=nullptr;std::vector<void*> values;};
  Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<InterfaceProof> replacement_interfaces;
@@ -135,8 +143,12 @@ struct Verifier::State {
    if(!roots.Read(nodes[n].root,&klass)||klass!=frozen_snapshot.classes[n])return false;
    void* loader=nullptr;if(nodes[n].loader&&!roots.Read(nodes[n].loader,&loader))return false;
    if(loader!=frozen_snapshot.loaders[n]||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,class_loader))!=loader)return false;
+   void* component=nullptr;if(nodes[n].component&&!roots.Read(nodes[n].component,&component))return false;
+   if(bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,component_type))!=component)return false;
+   if(nodes[n].class_name){void* name=nullptr;if(!roots.Read(nodes[n].class_name,&name)||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,name))!=name)return false;}
    void* parent=nullptr;if(!NativeSuperclass(nodes,frozen_snapshot,n,&parent)||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,super_class))!=parent)return false;
    const size_t flags=split?offsetof(class_metadata::Class11,access_flags):offsetof(class_metadata::Class17,access_flags);
+   if((Read<uint32_t>(klass,flags)&0x40000u)!=proof.kind||Read<uint32_t>(klass,split?offsetof(class_metadata::Class11,primitive_type):offsetof(class_metadata::Class17,primitive_type))!=proof.primitive)return false;
    if(native_schema_policy::JavaFlags(__atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<char*>(klass)+flags),__ATOMIC_RELAXED))!=proof.flags||
       Read<uint64_t>(klass,offsetof(class_metadata::Class11,methods))!=uintptr_t(proof.methods)||
       (proof.methods?Read<uint32_t>(proof.methods):0)!=frozen_snapshot.all_methods[n].size()||
@@ -161,6 +173,9 @@ struct Verifier::State {
   return true;
  }
  bool Roots(Snapshot* out,std::string* error)const{
+  struct Diagnostics {std::string* error;uint64_t before;bool success=false;~Diagnostics(){
+   if(!success&&error&&!error->empty()){char suffix[64];std::snprintf(suffix,sizeof(suffix)," [mappingOsQueries=%llu]",static_cast<unsigned long long>(method_identity::MappingOsQueries()-before));try{error->append(suffix);}catch(const std::bad_alloc&){}}
+  }} diagnostics{error,method_identity::MappingOsQueries()};
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_native_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
   Snapshot result;result.classes.resize(nodes.size());result.loaders.resize(nodes.size());result.parents.resize(nodes.size(),absent);result.declared.resize(nodes.size());result.all_methods.resize(nodes.size());
@@ -174,9 +189,31 @@ struct Verifier::State {
   for(size_t n=0;n<nodes.size();++n){const auto& node=nodes[n];void* klass=result.classes[n];
    if(node.parent){void* parent=nullptr;if(!roots.Read(node.parent,&parent))return false;auto it=std::find(result.classes.begin(),result.classes.end(),parent);if(it==result.classes.end())return Fail(error,"Staged ancestor is outside complete loaded roots");result.parents[n]=size_t(it-result.classes.begin());}
    field_copy::CopyClassView identity;
-   if(!bindings.metadata->ClassIdentity(klass,&identity,error)||identity.loader!=result.loaders[n]||!identity.descriptor||node.schema.descriptor!=identity.descriptor)return Fail(error,"Public/native Class descriptor or loader changed");
+   std::string identity_error;void* terminal=klass;size_t dimension=0;
+   while(dimension<node.schema.descriptor.size()&&node.schema.descriptor[dimension]=='['){
+    if(!Mapped(terminal,offsetof(class_metadata::Class11,component_type)+4))return Fail(error,"Array component chain has unreadable Class prefix");
+    terminal=bindings.metadata->Reference(terminal,offsetof(class_metadata::Class11,component_type));++dimension;
+   }
+   void* proxy_name=nullptr;const char* name=nullptr;const char* negative=nullptr;
+   const auto terminal_node=std::find(result.classes.begin(),result.classes.end(),terminal);
+   if(terminal_node!=result.classes.end()){const auto& source=nodes[size_t(terminal_node-result.classes.begin())];
+    if(source.class_name){if(!roots.Read(source.class_name,&proxy_name))return Fail(error,"Public proxy name root could not be decoded");name=source.class_name_text.c_str();negative=source.negative_class_name.c_str();}}
+   const bool identified=bindings.metadata->ClassIdentityVerified(klass,node.schema.descriptor.c_str(),proxy_name,name,negative,&identity,&identity_error);
+   const bool same_descriptor=identified&&identity.descriptor&&node.schema.descriptor==identity.descriptor;
+   const bool same_loader=identified&&identity.loader==result.loaders[n];
+   if(!identified||!same_descriptor||!same_loader){
+    const bool split=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;
+    const bool mapped=Mapped(klass,split?sizeof(class_metadata::Class11):sizeof(class_metadata::Class17));
+    const uint32_t flags=mapped?Read<uint32_t>(klass,split?offsetof(class_metadata::Class11,access_flags):offsetof(class_metadata::Class17,access_flags)):0;
+    const bool array=mapped&&bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,component_type));
+    const char* kind=!mapped?"unmapped":array?"array":(flags&0x40000u)?"proxy":(flags&0x200u)?"interface":"ordinary";
+    return ClassIdentityFailure(error,node.schema.descriptor.c_str(),kind,mapped,identified,same_descriptor,same_loader,identity_error.c_str(),identified?identity.descriptor:nullptr);
+   }
    void* expected_parent=nullptr;if(!NativeSuperclass(nodes,result,n,&expected_parent))return Fail(error,"Native superclass lacks exact public parent/bootstrap Object proof");
    if(identity.parent!=expected_parent)return Fail(error,"Native superclass differs from public rooted identity");
+   void* public_component=nullptr;if(node.component&&!roots.Read(node.component,&public_component))return false;
+   if(bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,component_type))!=public_component)return Fail(error,"Native array component differs from independent public Class identity");
+   if(node.class_name&&bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,name))!=proxy_name)return Fail(error,"Native proxy cached name differs from public String identity");
    for(size_t i=0;i<node.field_ids.size();++i){
     void* field=bindings.decode_native_field(bindings.owner,klass,node.field_ids[i]);field_copy::CopyFieldView identity;
     if(!Mapped(field,sizeof(field_array::Field))||bindings.metadata->FieldDeclaringClass(field)!=klass||!bindings.metadata->FieldIdentity(field,&identity,error)||!identity.name||!identity.descriptor||node.schema.fields[i].name!=identity.name||node.schema.fields[i].descriptor!=identity.descriptor||native_schema_policy::JavaFlags(field_array::Flags(field))!=node.schema.fields[i].access)return Fail(error,"Contextual public/native field identity or flags changed after staging");
@@ -218,7 +255,7 @@ struct Verifier::State {
    }
    if(found.size()!=result.declared[n].size())return Fail(error,"Public method ID is outside its source-declared native arena");
   }
-  *out=std::move(result);return true;
+  *out=std::move(result);diagnostics.success=true;return true;
  }
  bool Interfaces(const Snapshot& roots,const source_commit::Plan& transaction,std::string* error)const{
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
@@ -254,13 +291,20 @@ void Verifier::Clear(JNIEnv* env){if(!env&&(!state_->nodes.empty()||!state_->inp
 bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,const Bindings& bindings,std::string* error){
  if(!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");state_->bindings=bindings;state_->roots.Bind(bindings.roots);
  for(auto klass:inputs){bounded_managed_roots::Slot slot;if(!state_->roots.Stage(env,klass,&slot,error))return false;state_->inputs.push_back(slot);}
+ struct NameMethods {JNIEnv* env;jclass proxy=nullptr,klass=nullptr;~NameMethods(){if(proxy)env->DeleteLocalRef(proxy);if(klass)env->DeleteLocalRef(klass);}} public_names{env};
+ public_names.proxy=env->FindClass("java/lang/reflect/Proxy");public_names.klass=env->FindClass("java/lang/Class");
+ if(!public_names.proxy||!public_names.klass||env->ExceptionCheck())return Fail(error,"Public Class kind/name service unavailable");
+ const auto is_proxy=env->GetStaticMethodID(public_names.proxy,"isProxyClass","(Ljava/lang/Class;)Z");
+ const auto get_name=env->GetMethodID(public_names.klass,"getName","()Ljava/lang/String;");
+ const auto get_component=env->GetMethodID(public_names.klass,"getComponentType","()Ljava/lang/Class;");
+ if(!is_proxy||!get_name||!get_component||env->ExceptionCheck())return Fail(error,"Public Class kind/name declarations unavailable");
  std::map<std::string,std::vector<size_t>> staged_names;
  for(;;){
  const size_t before=state_->nodes.size();size_t known=0;
  jint count=0;jclass* classes=nullptr;if(ti->GetLoadedClasses(&count,&classes)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Complete loaded caller graph unavailable");
  struct Classes {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Classes(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,classes};
- for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
-  if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
+ for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
+  if(!PreparedCaller(status))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
   Strings identity{ti};if(ti->GetClassSignature(classes[i],&identity.signature,nullptr)!=JVMTI_ERROR_NONE||!identity.signature)return Fail(error,"Loaded Class signature unavailable while closing staging");
   bool existing=false;const auto candidates=staged_names.find(identity.signature);
   if(candidates!=staged_names.end())for(size_t index:candidates->second)existing|=state_->roots.Same(env,state_->nodes[index].root,classes[i]);
@@ -269,6 +313,18 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
   Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;if(!state_->roots.Stage(env,classes[i],&node.root,error))return false;
   state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();staged_names[stored.schema.descriptor].push_back(state_->nodes.size()-1);
   jobject loader=nullptr;if(ti->GetClassLoader(classes[i],&loader)!=JVMTI_ERROR_NONE)return false;if(loader){const bool pass=state_->roots.Stage(env,loader,&stored.loader,error);env->DeleteLocalRef(loader);if(!pass)return false;}
+  if(status&JVMTI_CLASS_STATUS_ARRAY){auto component=env->CallObjectMethodA(classes[i],get_component,nullptr);
+   const bool pass=component&&!env->ExceptionCheck()&&state_->roots.Stage(env,component,&stored.component,error);if(component)env->DeleteLocalRef(component);if(!pass)return Fail(error,"Public array component identity unavailable");}
+  jvalue class_arg{};class_arg.l=classes[i];const bool proxy=env->CallStaticBooleanMethodA(public_names.proxy,is_proxy,&class_arg);
+  if(env->ExceptionCheck())return Fail(error,"Public proxy Class classification failed");
+  if(proxy){
+   struct Name {JNIEnv* env;jstring value;const char* chars=nullptr;~Name(){if(chars)env->ReleaseStringUTFChars(value,chars);if(value)env->DeleteLocalRef(value);}} name{env,static_cast<jstring>(env->CallObjectMethodA(classes[i],get_name,nullptr))};
+   if(!name.value||env->ExceptionCheck())return Fail(error,"Public proxy Class name unavailable");
+   name.chars=env->GetStringUTFChars(name.value,nullptr);
+   if(!name.chars||env->ExceptionCheck())return false;
+   stored.class_name_text=name.chars;stored.negative_class_name=stored.class_name_text+"!";
+   if(!state_->roots.Stage(env,name.value,&stored.class_name,error))return false;
+  }
   auto parent=env->GetSuperclass(classes[i]);if(parent){const bool pass=state_->roots.Stage(env,parent,&stored.parent,error);env->DeleteLocalRef(parent);if(!pass)return false;}
   jint interfaces_count=0;jclass* interfaces=nullptr;if(ti->GetImplementedInterfaces(classes[i],&interfaces_count,&interfaces)!=JVMTI_ERROR_NONE||interfaces_count<0)return false;
   for(jint j=0;j<interfaces_count;++j){bounded_managed_roots::Slot slot;const bool pass=state_->roots.Stage(env,interfaces[j],&slot,error);env->DeleteLocalRef(interfaces[j]);if(!pass){if(interfaces)ti->Deallocate(reinterpret_cast<unsigned char*>(interfaces));return false;}stored.interfaces.push_back(slot);}
@@ -296,8 +352,8 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  if(!MatchesAffected(env,actual,error))return false;
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
- size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
-  if(!(status&JVMTI_CLASS_STATUS_PREPARED)){
+ size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
+  if(!PreparedCaller(status)){
    Strings text{ti};ti->GetClassSignature(loaded[i],&text.signature,nullptr);
    return ClassWindowFailure(error,"Unprepared Class appeared before native schema sealing",text.signature,status);
   }
@@ -433,6 +489,8 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
   if((proof.instances&&!s.bindings.readable(s.bindings.owner,proof.instances,4))||(proof.statics&&!s.bindings.readable(s.bindings.owner,proof.statics,4)))return false;
   proof.instance_count=proof.instances?Read<uint32_t>(proof.instances):0;proof.static_count=proof.statics?Read<uint32_t>(proof.statics):0;
   proof.flags=native_schema_policy::JavaFlags(Read<uint32_t>(klass,split?64:56));
+  proof.kind=Read<uint32_t>(klass,split?64:56)&0x40000u;
+  proof.primitive=Read<uint32_t>(klass,split?offsetof(class_metadata::Class11,primitive_type):offsetof(class_metadata::Class17,primitive_type));
   proof.dex_cache=s.bindings.metadata->Reference(klass,16);proof.interfaces=s.bindings.metadata->Reference(klass,24);
   if(proof.interfaces){if(!s.bindings.readable(s.bindings.owner,proof.interfaces,12))return false;const uint32_t length=Read<uint32_t>(proof.interfaces,8);if(length%2||!s.bindings.readable(s.bindings.owner,proof.interfaces,12+size_t(length)*4))return false;
    for(uint32_t i=0;i<length/2;++i)proof.interface_classes.push_back(s.bindings.metadata->Reference(proof.interfaces,12+size_t(i)*8));}

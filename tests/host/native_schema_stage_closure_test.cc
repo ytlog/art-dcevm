@@ -6,7 +6,7 @@
 #include <memory>
 namespace artdcevm::redefinition_gate {bool Owned(JavaVM*){return true;}}
 namespace {
-struct Object {std::string descriptor;bool descendant=false;bool array=false;std::vector<jobject> values;};
+struct Object {std::string descriptor;bool descendant=false;bool array=false;std::vector<jobject> values;jobject component=nullptr,name=nullptr;bool proxy=false;jint status=JVMTI_CLASS_STATUS_PREPARED|JVMTI_CLASS_STATUS_VERIFIED;};
 std::vector<std::unique_ptr<Object>> objects;std::vector<jclass> loaded;
 size_t globals=0,peak=0,enumerations=0,staged_fields=0;bool add_descendant=false,reject_lazy=false;
 Object object_type{"Ljava/lang/Object;",false,false,{}};
@@ -24,14 +24,19 @@ jsize JNICALL Length(JNIEnv*,jarray a){return Cast(a)->values.size();}
 void JNICALL Set(JNIEnv*,jobjectArray a,jsize i,jobject v){Cast(a)->values.at(i)=v;}
 jobject JNICALL Get(JNIEnv*,jobjectArray a,jsize i){return Cast(a)->values.at(i);}
 jclass JNICALL Parent(JNIEnv*,jclass){return nullptr;}
+jmethodID JNICALL PublicMethod(JNIEnv*,jclass,const char* name,const char*){return reinterpret_cast<jmethodID>(std::strcmp(name,"getName")==0?2:std::strcmp(name,"getComponentType")==0?3:1);}
+jboolean JNICALL Proxy(JNIEnv*,jclass,jmethodID,const jvalue* args){return Cast(args[0].l)->proxy;}
+jobject JNICALL ObjectMethod(JNIEnv*,jobject c,jmethodID id,const jvalue*){return id==reinterpret_cast<jmethodID>(2)?Cast(c)->name:Cast(c)->component;}
+const char* JNICALL UTF(JNIEnv*,jstring s,jboolean*){return Cast(s)->descriptor.c_str();}
+void JNICALL ReleaseUTF(JNIEnv*,jstring,const char*){}
 jboolean JNICALL Assignable(JNIEnv*,jclass klass,jclass input){return klass==input||Cast(klass)->descendant;}
 jvmtiError JNICALL Enumerate(jvmtiEnv*,jint* count,jclass** classes){++enumerations;*count=loaded.size();*classes=static_cast<jclass*>(std::malloc(loaded.size()*sizeof(jclass)));std::copy(loaded.begin(),loaded.end(),*classes);return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Free(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
-jvmtiError JNICALL Status(jvmtiEnv*,jclass,jint* out){*out=JVMTI_CLASS_STATUS_PREPARED|JVMTI_CLASS_STATUS_VERIFIED;return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){*out=Cast(c)->status;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char** s,char**){*s=strdup(Cast(c)->descriptor.c_str());return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL ClassFlags(jvmtiEnv*,jclass,jint* flags){*flags=1;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Methods(jvmtiEnv*,jclass,jint* count,jmethodID** ids){*count=0;*ids=nullptr;return JVMTI_ERROR_NONE;}
-jvmtiError JNICALL Fields(jvmtiEnv*,jclass c,jint* count,jfieldID** ids){*count=1;*ids=static_cast<jfieldID*>(std::malloc(sizeof(jfieldID)));**ids=reinterpret_cast<jfieldID>(c);return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL Fields(jvmtiEnv*,jclass c,jint* count,jfieldID** ids){if(Cast(c)->status&(JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE)){*count=0;*ids=nullptr;return JVMTI_ERROR_NONE;}*count=1;*ids=static_cast<jfieldID*>(std::malloc(sizeof(jfieldID)));**ids=reinterpret_cast<jfieldID>(c);return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL FieldName(jvmtiEnv*,jclass,jfieldID,char** name,char** signature,char**){*name=strdup("value");*signature=strdup("Ljava/lang/Object;");return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL FieldFlags(jvmtiEnv*,jclass,jfieldID,jint* flags){*flags=1;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Loader(jvmtiEnv*,jclass,jobject* out){*out=nullptr;return JVMTI_ERROR_NONE;}
@@ -49,7 +54,7 @@ bool StageField(void*,JNIEnv*,jclass c,jfieldID,bool,std::string*){
 }
 }
 int main(){
- JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DropGlobal;jni.DeleteLocalRef=DropLocal;jni.ExceptionCheck=Pending;jni.IsSameObject=Same;jni.FindClass=Find;jni.NewObjectArray=Array;jni.GetArrayLength=Length;jni.SetObjectArrayElement=Set;jni.GetObjectArrayElement=Get;jni.GetSuperclass=Parent;jni.IsAssignableFrom=Assignable;
+ JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DropGlobal;jni.DeleteLocalRef=DropLocal;jni.ExceptionCheck=Pending;jni.IsSameObject=Same;jni.FindClass=Find;jni.NewObjectArray=Array;jni.GetArrayLength=Length;jni.SetObjectArrayElement=Set;jni.GetObjectArrayElement=Get;jni.GetSuperclass=Parent;jni.GetMethodID=PublicMethod;jni.GetStaticMethodID=PublicMethod;jni.CallStaticBooleanMethodA=Proxy;jni.CallObjectMethodA=ObjectMethod;jni.GetStringUTFChars=UTF;jni.ReleaseStringUTFChars=ReleaseUTF;jni.IsAssignableFrom=Assignable;
  JNIEnv env{&jni};jvmtiInterface_1_ ti{};ti.GetLoadedClasses=Enumerate;ti.Deallocate=Free;ti.GetClassStatus=Status;ti.GetClassSignature=Signature;ti.GetClassModifiers=ClassFlags;ti.GetClassMethods=Methods;ti.GetClassFields=Fields;ti.GetFieldName=FieldName;ti.GetFieldModifiers=FieldFlags;ti.GetClassLoader=Loader;ti.GetImplementedInterfaces=Interfaces;jvmtiEnv jvmti{&ti};
  using namespace artdcevm::native_schema_guard_verifier;
  Bindings bindings{};bindings.roots={nullptr,Scope,Oracle,Decode,Element};bindings.stage_field=StageField;
@@ -87,5 +92,15 @@ int main(){
  assert(!rejected.Stage(&env,&jvmti,{seed},bindings,&error));
  assert(staged_fields==3&&enumerations==3&&globals==1);
  rejected.Clear(&env);assert(globals==0&&handles.empty());
+ loaded.clear();objects.clear();reject_lazy=false;
+ auto primitive=Add("I");Cast(primitive)->status=JVMTI_CLASS_STATUS_PRIMITIVE;
+ auto array=Add("[I");Cast(array)->status=JVMTI_CLASS_STATUS_ARRAY;Cast(array)->component=primitive;
+ auto proxy=Add("Lcustom/Generated;");Cast(proxy)->proxy=true;
+ auto public_name=std::make_unique<Object>();public_name->descriptor="custom.Generated";Cast(proxy)->name=reinterpret_cast<jobject>(public_name.get());objects.push_back(std::move(public_name));
+ Verifier kinds;assert(kinds.Stage(&env,&jvmti,{proxy},bindings,&error));
+ assert(kinds.MatchesAffected(&env,{proxy},&error));
+ assert(kinds.CheckWindow(&env,&jvmti,{proxy},Window::Verified,&error));
+ assert(kinds.CheckWindow(&env,&jvmti,{proxy},Window::Collected,&error));
+ kinds.Clear(&env);assert(globals==0);
  std::cout<<"actual Stage closure: three lazy cascades, bounded 2204 Class roots, once-only fields, descendant preflight mismatch, external window rejection and repeated refund passed\n";
 }
