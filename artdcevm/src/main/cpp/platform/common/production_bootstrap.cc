@@ -153,6 +153,7 @@ struct NativeEngine final:Engine {
  }
  static void* DecodeGraphMethod(void* raw,jmethodID id){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_decode_method(e.runtime.receivers.jni_id_manager,id);}
  static void* DecodeGraphField(void* raw,jclass owner,jfieldID id){return static_cast<NativeEngine*>(raw)->graph_fields.Read(owner,id);}
+ static void* DecodeNativeGraphField(void* raw,void* owner,jfieldID id){return static_cast<NativeEngine*>(raw)->graph_fields.ReadNative(owner,id);}
  static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
@@ -207,7 +208,7 @@ struct NativeEngine final:Engine {
  static void RaisePermission(void* raw,void* self,const char* type,const char* text){auto& e=*static_cast<NativeEngine*>(raw);if(!self||!e.permission_raise)std::abort();e.permission_raise(self,type,text);}
  native_schema_guard_verifier::Bindings SchemaBindings(){
   native_schema_guard_verifier::Bindings b;b.vm=vm;b.metadata=&metadata;b.methods=&model;b.abstract_instances=&abstract_instances;b.owner=this;
-  b.decode_global=DecodeGraph;b.decode_method=DecodeGraphMethod;b.decode_field=DecodeGraphField;b.stage_field=StageGraphField;b.method_class=GraphMethodClass;b.same_method=GraphSame;b.readable=GraphReadable;b.writable=GraphWritable;
+  b.roots={this,FieldScope,FieldOracle,FieldRoot,FieldElement};b.decode_native_field=DecodeNativeGraphField;b.decode_global=DecodeGraph;b.decode_method=DecodeGraphMethod;b.decode_field=DecodeGraphField;b.stage_field=StageGraphField;b.method_class=GraphMethodClass;b.same_method=GraphSame;b.readable=GraphReadable;b.writable=GraphWritable;
   if(permissions_proven){b.final_fields=permission_service.get();b.access_permissions=permission_service.get();}return b;
  }
  bool PreparePermissionOwner(JNIEnv* env){

@@ -4,6 +4,7 @@
 #include "platform/common/native_abstract_instances.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/prepared_root_bindings.h"
+#include "platform/common/bounded_managed_roots.h"
 #include <jni.h>
 #include <jvmti.h>
 #include <memory>
@@ -29,6 +30,8 @@ class AccessPermissions {
 };
 struct Bindings {
   JavaVM* vm=nullptr;
+  bounded_managed_roots::Bindings roots{};
+  void* (*decode_native_field)(void*,void* owner,jfieldID)=nullptr;
   const modern_field_metadata::FieldMetadata* metadata=nullptr;
   const method_identity::Calibration* methods=nullptr;
   const native_abstract_instances::Service* abstract_instances=nullptr;

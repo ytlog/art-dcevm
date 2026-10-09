@@ -77,6 +77,10 @@ bool Store::Stage(JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* 
 void* Store::Read(jclass owner,jfieldID id)const noexcept{
  if(!owner||!id)return nullptr;const auto& b=bindings_;if(!b.decode||!b.field||!b.declaring||!b.element)return nullptr;void* exact=nullptr;
  if(!b.decode(b.owner,owner,&exact)||!exact)return nullptr;
+ return ReadNative(exact,id);
+}
+void* Store::ReadNative(void* exact,jfieldID id)const noexcept{
+ if(!exact||!id)return nullptr;const auto& b=bindings_;if(!b.decode||!b.element||!b.field||!b.declaring)return nullptr;
  void* result=nullptr;const auto found=entries_.find(id);if(found==entries_.end())return nullptr;
  for(const auto& entry:found->second){if(entry.chunk>=chunks_.size())return nullptr;const auto& chunk=chunks_[entry.chunk];
   if(entry.slot<0||entry.slot>=chunk.used)return nullptr;void* array=nullptr;

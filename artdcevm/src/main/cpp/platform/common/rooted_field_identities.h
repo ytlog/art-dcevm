@@ -24,6 +24,7 @@ class Store {
   explicit Store(Bindings bindings):bindings_(bindings){}
   bool Stage(JNIEnv*,jclass,jfieldID,bool is_static,std::string*);
   void* Read(jclass,jfieldID)const noexcept;
+  void* ReadNative(void* owner,jfieldID)const noexcept;
   void Clear(JNIEnv*);
  private:
   struct Entry {jfieldID id=nullptr;void* native=nullptr;bool is_static=false;size_t chunk=0;jsize slot=0;};
