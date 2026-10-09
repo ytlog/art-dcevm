@@ -52,8 +52,8 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
     modern_field_storage::ScopedAccess scope(*dependencies.fields);const auto ops=scope.Access();
     std::vector<field_copy::ClassPair> pairs;for(size_t i=0;i<plan.old_classes.size();++i)pairs.push_back({plan.old_classes[i],plan.new_classes[i]});
     for(size_t i=0;i<plan.old_classes.size();++i){CopyPair copy{plan.old_classes[i],plan.new_classes[i],{}, {}};
-      if(!field_copy::PreparedPlan::Prepare(ops,true,copy.new_class,copy.old_class,&copy.statics,error,pairs)||
-         !field_copy::PreparedPlan::Prepare(ops,false,copy.new_class,copy.old_class,&copy.instances,error,pairs))return nullptr;
+      if(!field_copy::PreparedPlan::Prepare(ops,true,copy.new_class,copy.old_class,&copy.statics,error,pairs,dependencies.allow_removed_ancestors)||
+         !field_copy::PreparedPlan::Prepare(ops,false,copy.new_class,copy.old_class,&copy.instances,error,pairs,dependencies.allow_removed_ancestors))return nullptr;
       result->copies_.push_back(std::move(copy));}
   }
   if(!result->self_||!result->Validate(plan)){

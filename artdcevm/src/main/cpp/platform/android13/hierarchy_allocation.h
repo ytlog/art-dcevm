@@ -2,6 +2,7 @@
 #include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
 #include "platform/android13/handle_root_scope.h"
+#include "platform/common/rooted_hierarchy_allocator.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -40,13 +41,12 @@ class HierarchyBatch {
  private:
   friend void CaptureHierarchyAllocatedClass(const void*);
   struct Target { void* owner; void* klass; void* cache; bool structural; };
-  struct Replacement { void* old_class; void* new_class; };
   void Fail(const char* message);
   void* driver_;
   HierarchyRootPool roots_;
   HierarchyBatch* previous_;
   std::vector<Target> targets_;
-  std::vector<Replacement> replacements_;
+  rooted_hierarchy::Allocator allocator_;
 };
 // Fixed EnsureInstanceFieldIds(Handle<Class>) boundary within the original
 // allocation scope captures linked classes even when a later ID allocation fails.

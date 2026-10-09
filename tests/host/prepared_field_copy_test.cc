@@ -181,6 +181,15 @@ int main() {
   auto* old_parent=after.parent;after.parent=&after;
   assert(!PreparedPlan::Prepare(ops,false,&after,&before,&prepared,&error,pairs));after.parent=old_parent;
   after.parent=&root;
-  assert(!PreparedPlan::Prepare(ops,false,&after,&before,&prepared,&error,pairs));after.parent=old_parent;
+  assert(!PreparedPlan::Prepare(ops,false,&after,&before,&prepared,&error,pairs));
+  // Only a separately attested hierarchy owner may remove an ancestor. Its
+  // old fields still clear, while new ancestor fields remain allocation defaults.
+  assert(PreparedPlan::Prepare(ops,false,&after,&before,&prepared,&error,pairs,true));
+  Object narrowed_source,narrowed_target;Put(&narrowed_source,&before,false,10,111);
+  Put(&narrowed_source,&before_parent,false,0,222);Put(&narrowed_source,&before_parent,false,1,333);
+  forbid_allocation=true;prepared.CopyAndClear(ops,&narrowed_target,&narrowed_source);forbid_allocation=false;
+  assert(Get(&narrowed_target,&after,false,0)==111);
+  assert(Get(&narrowed_source,&before_parent,false,0)==0&&Get(&narrowed_source,&before_parent,false,1)==0);
+  after.parent=old_parent;
   std::cout << "prepared field copy: all typed bits, type/storage initialization, exact paired ancestry, stale/refused metadata, monitor/barrier ordering and allocation-free commit passed\n";
 }

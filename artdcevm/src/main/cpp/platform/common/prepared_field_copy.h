@@ -8,7 +8,7 @@ namespace artdcevm::field_copy {
 struct ClassPair {void* before;void* after;};
 class PreparedPlan {
  public:
-  static bool Prepare(const FieldCopyAccess&,bool is_static,void* target_class,void* source_class,PreparedPlan*,std::string*,const std::vector<ClassPair>& pairs={});
+  static bool Prepare(const FieldCopyAccess&,bool is_static,void* target_class,void* source_class,PreparedPlan*,std::string*,const std::vector<ClassPair>& pairs={},bool allow_removed_ancestors=false);
   bool Validate(const FieldCopyAccess&)const;
   void CopyAndClear(const FieldCopyAccess&,void* target,void* source)const noexcept;
   size_t RetainedCount()const{return copies_.size();}

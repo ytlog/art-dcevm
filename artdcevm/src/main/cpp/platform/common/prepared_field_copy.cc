@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cstring>
 namespace artdcevm::field_copy {
-bool PreparedPlan::Prepare(const FieldCopyAccess& ops,bool statik,void* target,void* source,PreparedPlan* output,std::string* error,const std::vector<ClassPair>& pairs){
+bool PreparedPlan::Prepare(const FieldCopyAccess& ops,bool statik,void* target,void* source,PreparedPlan* output,std::string* error,const std::vector<ClassPair>& pairs,bool allow_removed_ancestors){
  auto fail=[&](const char* text){if(error)*error=text;return false;};
  if(!output||!source||!target||source==target||!ops.klass||!ops.field||!ops.read||!ops.write||!ops.transfer_monitor||!ops.barrier)return fail("Incomplete prepared field-copy source");
  PreparedPlan plan;plan.is_static_=statik;
@@ -26,7 +26,7 @@ bool PreparedPlan::Prepare(const FieldCopyAccess& ops,bool statik,void* target,v
   const Class* destination=nullptr;
   for(const auto& next:plan.target_)if((old.identity==next.identity||(old.identity==source&&next.identity==target)||
       std::any_of(pairs.begin(),pairs.end(),[&](const auto& pair){return pair.before==old.identity&&pair.after==next.identity;}))&&old.loader==next.loader&&old.descriptor==next.descriptor){if(destination)return fail("Ambiguous native declaring Class identity");destination=&next;}
-  if(!destination)return fail("Prepared field-copy ancestor lacks exact original/replacement Class correspondence");
+  if(!destination&&!allow_removed_ancestors)return fail("Prepared field-copy ancestor lacks exact original/replacement Class correspondence");
   for(const auto& field:old.fields){plan.clear_.push_back({field.identity,nullptr,field.descriptor[0]});
    if(destination)for(const auto& next:destination->fields)if(field.name==next.name&&field.descriptor==next.descriptor)
     plan.copies_.push_back({field.identity,next.identity,field.descriptor[0]});}

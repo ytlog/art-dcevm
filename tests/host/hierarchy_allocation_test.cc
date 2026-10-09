@@ -168,6 +168,14 @@ void* AllocateThenOom(void* owner,void* old_slot,void* parent_slot,void* cache_s
   // retain the linked class even though AllocateNewClassObject returns null.
   return nullptr;
 }
+size_t captured_before_wrong_return=0;
+void* AllocateThenWrongPublished(void* owner,void* old_slot,void* parent_slot,void* cache_slot,uint16_t index){
+ void* fresh=Allocate(owner,old_slot,parent_slot,cache_slot,index);
+ captured_before_wrong_return=nodes.size()-1;
+ static_cast<Class*>(fresh)->status=7u<<28;
+ HandleRootScope root(thread,1);root.Set(0,fresh);CaptureHierarchyAllocatedClass(root.Slot(0));
+ GC();return HierarchyRootPool::Get(old_slot);
+}
 struct Hooks:HookEngine {
  bool Initialize(std::string*) override { return true; }
  void* FindSymbol(const char*,const char* symbol) override {
@@ -369,6 +377,17 @@ int main() {
       for(size_t id:rejected_capture_classes) assert((static_cast<Class*>(Ptr(id))->status>>28)==status);
       assert((static_cast<Class*>(Ptr(c_id))->status>>28)==15);
     }
+  }
+  {
+    Dex incoming("LC;","LB;");size_t cache=CacheNode(incoming);
+    Fixture fixture({{c_id,cache}},1);HierarchyBatch batch(reinterpret_cast<void*>(10));assert(batch.Prepare(&fixture.holder));
+    HandleRootScope args(thread,2);args.Set(0,Ptr(c_id));args.Set(1,Ptr(cache));const int before=retire_calls;
+    assert(!batch.Allocate(&fixture.owners[0],args.Slot(0),args.Slot(1),0,AllocateThenWrongPublished));
+    assert(failure.find("Linked replacement")!=std::string::npos);
+    assert(batch.Find("LC;",Ptr(loader_id))==Ptr(captured_before_wrong_return));
+    batch.Complete(false);
+    assert(retire_calls==before+1&&static_cast<Class*>(Ptr(captured_before_wrong_return))->status==(1u<<28));
+    assert((static_cast<Class*>(Ptr(c_id))->status>>28)==15);
   }
   {
     Dex cyclic_b("LB;","LC;"),cyclic_c("LC;","LB;");size_t bc=CacheNode(cyclic_b),cc=CacheNode(cyclic_c);

@@ -2,7 +2,7 @@
 #include "evolution/migration_plan.h"
 #include "platform/common/source_commit.h"
 namespace artdcevm::native_schema_policy {
-enum class GuardKind {LoadedSubclasses,FinalMethodOverrides,AbstractMethodDependents,FinalFields,ExistingInstances,AccessPermissions,InterfaceIdentities};
+enum class GuardKind {LoadedSubclasses,FinalMethodOverrides,AbstractMethodDependents,FinalFields,ExistingInstances,AccessPermissions,InterfaceIdentities,HierarchyGraph};
 struct Requirement {GuardKind kind;std::string member_name,descriptor;};
 // No constructor or class initializer is rerun on migrated objects. Incoming
 // slots come from ART class/object allocation; initialized classes are not reinitialized.
@@ -13,6 +13,7 @@ class Plan {
   const evolution::MigrationPlan& Migration()const{return migration_;}
   const std::vector<Requirement>& Requirements()const{return requirements_;}
   bool Matches(const evolution::ClassSchema&,const evolution::ClassSchema&)const;
+  bool Requires(GuardKind)const;
   bool MethodIdentity(const evolution::Member&,const evolution::Member&)const;
  private:
   evolution::MigrationPlan migration_;

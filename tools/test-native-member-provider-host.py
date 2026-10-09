@@ -18,13 +18,13 @@ binary = out / 'native_member_provider_test'
 fixture = (root / 'tests/host/native_source_commit_test.cc').read_text()
 assert fixture.count('int main(){') == 1
 (out / 'native_commit_fixture.inc').write_text(fixture.split('int main(){')[0])
-def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False):
+def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False, hierarchy=False):
     # Independent StandardDex oracle: complete IDs, explicit class_data flags,
     # separate code items and checksums. No values come from native candidates.
-    strings = sorted((['J'] if evolved else [])+['LFixture;', 'Ljava/lang/Object;', 'I', 'gone', 'keep', 'staticKeep',
+    strings = sorted((['LAddedParent;'] if hierarchy else [])+(['J'] if evolved else [])+['LFixture;', 'Ljava/lang/Object;', 'I', 'gone', 'keep', 'staticKeep',
                       'number', 'value', 'left', 'right'])
     ids = {value: i for i, value in enumerate(strings)}
-    types = (['I','J','LFixture;','Ljava/lang/Object;'] if evolved else ['I', 'LFixture;', 'Ljava/lang/Object;'])
+    types = sorted((['LAddedParent;'] if hierarchy else [])+(['I','J','LFixture;','Ljava/lang/Object;'] if evolved else ['I', 'LFixture;', 'Ljava/lang/Object;']))
     tids = {value: i for i, value in enumerate(types)}
     data = bytearray(0x70)
     def put(at, value): struct.pack_into('<I', data, at, value)
@@ -57,7 +57,7 @@ def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False)
     data.extend(bytes([1,1])+leb(code))
     encoded=len(data) if evolved else 0
     if evolved:data.extend(bytes([2,0x26,0x3a,1,4,77]))
-    struct.pack_into('<IIIIIIII',data,tables[96],tids['LFixture;'],1,tids['Ljava/lang/Object;'],0,0xffffffff,0,class_data,encoded)
+    struct.pack_into('<IIIIIIII',data,tables[96],tids['LFixture;'],1,tids['LAddedParent;' if hierarchy else 'Ljava/lang/Object;'],0,0xffffffff,0,class_data,encoded)
     data.extend(bytes((-len(data))%4));map_offset=len(data)
     entries=[(0,1,0),(1,len(strings),tables[56]),(2,len(types),tables[64]),(3,1,tables[72]),
              (4,4,tables[80]),(5,3,tables[88]),(6,1,tables[96]),(0x2002,len(strings),start),
@@ -67,7 +67,7 @@ def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False)
     for kind,count,offset in entries:data.extend(struct.pack('<HHII',kind,0,count,offset))
     data[:8]=b'dex\n040\0';put(32,len(data));put(36,0x70);put(40,0x12345678);put(52,map_offset)
     put(104,len(data)-start);put(108,start);data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
-    path=out/('shape-%d-%d-%d-%d.dex'%(method_deleted,field_deleted,evolved,final_guard));path.write_bytes(data);return str(path)
+    path=out/('shape-%d-%d-%d-%d-%d.dex'%(method_deleted,field_deleted,evolved,final_guard,hierarchy));path.write_bytes(data);return str(path)
 sources = ['native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'native_schema_policy','native_schema_binding','native_method_evolution_policy',
@@ -88,7 +88,7 @@ command += ['-fsyntax-only'] if args.syntax_only else ['-o', str(binary)]
 subprocess.run(command, check=True)
 if args.syntax_only or args.compile_only:
     print('Native member production TU '+('syntax PASS' if args.syntax_only else 'link PASS; execution pending'));raise SystemExit(0)
-result = subprocess.run([str(binary)] + [dex_fixture(m, f) for f in (False, True) for m in (False, True)]+[dex_fixture(False,False,True),dex_fixture(False,False,True,True)], capture_output=True, text=True,
+result = subprocess.run([str(binary)] + [dex_fixture(m, f) for f in (False, True) for m in (False, True)]+[dex_fixture(False,False,True),dex_fixture(False,False,True,True),dex_fixture(False,False,True,False,True)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
 (out / 'result.log').write_text(result.stdout + result.stderr)
 result.check_returncode()

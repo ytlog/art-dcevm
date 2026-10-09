@@ -1,6 +1,7 @@
 #include "platform/android13/hierarchy_batch_hooks.h"
 
 #include "platform/android13/hierarchy_allocation.h"
+#include "platform/abi/arm64/android-common/hierarchy_allocation.h"
 #include "platform/android13/hierarchy_validation.h"
 #include <cstdint>
 #include "jvmti.h"
@@ -56,10 +57,10 @@ jvmtiError RunProxy(void* driver) {
 bool InstallHierarchyBatchHooks(HookEngine& hooks, const DeviceProfile& profile,
                                 std::string* error) {
   if (!ConfigureHierarchyAllocation(hooks, profile, error)) return false;
-  void* allocate_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateSubtree);
+  void* allocate_target = hooks.FindSymbol("libopenjdkjvmti.so", abi::arm64::android_common::kFinishSubtreeAllocations);
   void* run_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kRedefineRun);
-  void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kAllocateClass);
-  void* ids_target=hooks.FindSymbol("libart.so","_ZN3art6mirror5Class22EnsureInstanceFieldIdsENS_6HandleIS1_EE");
+  void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", abi::arm64::android_common::kHierarchyAllocator);
+  void* ids_target=hooks.FindSymbol("libart.so",abi::arm64::android_common::kCaptureLinkedClass);
   if (!allocate_target || !run_target || !class_target || !ids_target) {
     *error = "Missing named hierarchy batch symbol";
     return false;

@@ -28,11 +28,16 @@ bool Plan::Prepare(const evolution::ClassSchema& before,const evolution::ClassSc
  if(!ValidFields(before)||!ValidFields(after))return fail("Invalid DEX field visibility, modifier or interface declaration");
  auto old=Normalize(before),next=Normalize(after);Plan result;
  std::string local;if(!evolution::PlanMigration(old,next,&result.migration_,&local)){if(error)*error=local;return false;}
- if(old.superclass!=next.superclass||old.interfaces!=next.interfaces)return fail("Native schema hierarchy changes require an independent rooted graph migration");
+ if(old.superclass!=next.superclass||old.interfaces!=next.interfaces)
+  result.requirements_.push_back({GuardKind::HierarchyGraph,{},{}});
  if(!old.interfaces.empty())result.requirements_.push_back({GuardKind::InterfaceIdentities,{},{}});
+ if((old.access^next.access)&0x6200u)return fail("Cannot change Class, interface, annotation or enum role");
  const uint32_t class_mask=(next.access&0x200u)?0x3601u:0x5431u;
  const uint32_t class_difference=(old.access^next.access)&class_mask;
- if(class_difference&&class_difference!=0x10u&&class_difference!=0x400u)return fail("Unsupported native class modifier evolution");
+ // Final and abstract are independent source modifiers. A combined legal
+ // transition recreates the Class once and collects every required proof.
+ if((old.access&0x410u)==0x410u||(next.access&0x410u)==0x410u)return fail("A Class cannot be both final and abstract");
+ if(class_difference&~0x410u)return fail("Unsupported native class modifier evolution");
  if(class_difference&&(next.access&0x10u))result.requirements_.push_back({GuardKind::LoadedSubclasses,{},{}});
  if(!(next.access&0x200u)&&!(old.access&0x400u)&&(next.access&0x400u))result.requirements_.push_back({GuardKind::ExistingInstances,{},{}});
  // Final permissions for an existing typed identity require an independent
@@ -49,5 +54,6 @@ bool Plan::Prepare(const evolution::ClassSchema& before,const evolution::ClassSc
  *out=std::move(result);if(error)error->clear();return true;
 }
 bool Plan::Matches(const evolution::ClassSchema& old,const evolution::ClassSchema& next)const{return Equal(Normalize(old),migration_.before)&&Equal(Normalize(next),migration_.after);}
+bool Plan::Requires(GuardKind kind)const{return std::any_of(requirements_.begin(),requirements_.end(),[&](const auto& requirement){return requirement.kind==kind;});}
 bool Plan::MethodIdentity(const evolution::Member& old,const evolution::Member& next)const{return Same(old,next)&&old.IsStatic()==next.IsStatic();}
 }

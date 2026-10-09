@@ -119,7 +119,7 @@ void Methods(class_metadata::Class17* klass,bool deletion){
 }
 }
 int main(int argc,char** argv){
- assert(argc==7);InitJni();InitializeHeap();InterfaceFixtures();
+ assert(argc==8);InitJni();InitializeHeap();InterfaceFixtures();
  const uint32_t field_indexes[]{1,3,0,2};for(size_t i=0;i<4;++i){old_fields[i]->dex_field_index=field_indexes[i];new_fields[i]->dex_field_index=field_indexes[i];}
  ProviderHooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
@@ -297,6 +297,16 @@ int main(int argc,char** argv){
  native_schema_policy::Plan final_schema;assert(native_schema_policy::Plan::Prepare(before_table.declarations,final_table.declarations,&final_schema,&error));
  schemas[0]=final_schema;rejected(schema_dependencies,plan,"independent loaded-Class/final-field proof");
  LinkDex(new_class,evolved_dex);new_fields[3]->access_flags=1;schemas[0]=schema;
+ // Hierarchy policies must not authorize unpaired native parent changes without
+ // the actual same-owner rooted allocator/receiver/cache proof. This exercises
+ // the production binding with real complete DEX tables, not a policy-only mock.
+ auto hierarchy_dex=File(argv[7]);LinkDex(new_class,hierarchy_dex);
+ const auto original_parent=new_class->super_class;new_class->super_class=uint32_t(uintptr_t(meta_class));
+ native_method_table::View hierarchy_table;assert(native_method_table::Read(metadata,model,new_class,&hierarchy_table,&error));
+ native_schema_policy::Plan hierarchy_schema;assert(native_schema_policy::Plan::Prepare(before_table.declarations,hierarchy_table.declarations,&hierarchy_schema,&error));
+ assert(hierarchy_schema.Requires(native_schema_policy::GuardKind::HierarchyGraph));schemas[0]=hierarchy_schema;
+ rejected(schema_dependencies,plan,"independent loaded-Class/final-field proof");
+ new_class->super_class=original_parent;LinkDex(new_class,evolved_dex);schemas[0]=schema;
  native_member_provider::Service schema_provider;auto schema_service=schema_provider.Prepare(plan,schema_dependencies,&error);
  if(!schema_service){std::cerr<<"Native schema preparation: "<<error<<'\n';return 1;}
  assert(schema_service->Validate(plan));const auto roots_before_retire=retired_fields;

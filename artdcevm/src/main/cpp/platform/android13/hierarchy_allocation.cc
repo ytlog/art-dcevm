@@ -27,7 +27,7 @@ using Failure=void(*)(void*,int,const void*,const BorrowedPlatformString*);
 Find find_class=nullptr;
 Failure record_failure=nullptr;
 void (*set_status_locked)(void*,uint8_t)=nullptr;
-struct AllocationCapture { HierarchyBatch* batch;size_t index;void* old_slot;void* cache_slot; };
+struct AllocationCapture { void* result_slot;void* old_slot;void* cache_slot; };
 thread_local AllocationCapture* allocation_capture=nullptr;
 void*(*read_root)(void*)=nullptr;
 thread_local HierarchyBatch* batch=nullptr;
@@ -114,48 +114,45 @@ bool HierarchyBatch::Prepare(void* raw) {
     bool structural=roots.actually_structural;
     targets_.push_back({snapshot.owner,roots_.Add(snapshot.klass),roots_.Add(snapshot.cache),structural});
   }
+  std::vector<rooted_hierarchy::Target> prepared;
+  for(const auto& target:targets_)prepared.push_back({target.owner,target.klass,target.cache,target.structural});
+  if(!allocator_.Prepare(std::move(prepared))){Fail("Invalid or repeated rooted hierarchy allocation graph");return false;}
   return true;
 }
 void* HierarchyBatch::Allocate(void* owner,void* old_slot,void* cache_slot,uint16_t index,HierarchyClassAllocator original) {
-  if(targets_.empty()) { Fail("The subtree allocation hook did not prepare the batch");return nullptr; }
-  for(const auto& entry:replacements_) if(HierarchyRootPool::Get(entry.old_class)==HierarchyRootPool::Get(old_slot)) {
-    auto replacement=HierarchyRootPool::Get(entry.new_class);
-    if(!replacement) Fail("Cycle in the requested batch superclass graph");return replacement;
-  }
-  size_t slot=replacements_.size();
-  replacements_.push_back({roots_.Add(HierarchyRootPool::Get(old_slot)),roots_.Add(nullptr)});
-  // Requested points into immutable native DEX, so it survives GC below.
-  const char* requested=Requested(HierarchyRootPool::Get(cache_slot),index);
-  void* loader=roots_.Add(Loader(HierarchyRootPool::Get(old_slot)));
-  void* parent=roots_.Add(find_class(RuntimeClassLinker(),CurrentHierarchyThread(),requested,loader));
-  if(!HierarchyRootPool::Get(parent)) {
-    ClearHierarchyException(CurrentHierarchyThread());Fail("Cannot resolve a superclass during batch allocation");return nullptr;
-  }
-  size_t parent_target=targets_.size(),structural_root=targets_.size();
-  for(size_t i=0;i<targets_.size();++i) {
-    if(HierarchyRootPool::Get(targets_[i].klass)==HierarchyRootPool::Get(parent)) parent_target=i;
-    if(targets_[i].structural && IsValidationSubclassOf(HierarchyRootPool::Get(parent),HierarchyRootPool::Get(targets_[i].klass))) structural_root=i;
-  }
-  void* selected=roots_.Add(HierarchyRootPool::Get(parent));
-  if(structural_root<targets_.size()) {
-    ++counters[3];
-    const bool explicit_parent=parent_target<targets_.size();
-    void* parent_cache=explicit_parent?targets_[parent_target].cache:
-        roots_.Add(ReadHeapReference(HierarchyRootPool::Get(parent),offsetof(Class,dex_cache)));
-    auto parent_index=explicit_parent?uint16_t{0}:static_cast<uint16_t>(Read<int32_t>(HierarchyRootPool::Get(parent),offsetof(Class,dex_class_def_index)));
-    void* parent_owner=targets_[explicit_parent?parent_target:structural_root].owner;
-    HierarchyRootPool::Set(selected,Allocate(parent_owner,parent,parent_cache,parent_index,original));
-    if(!HierarchyRootPool::Get(selected)) return nullptr;
-  }
-  if(std::strcmp(Descriptor(Parent(HierarchyRootPool::Get(old_slot))),requested)!=0) ++counters[0];
-  AllocationCapture capture{this,slot,old_slot,cache_slot};
-  struct RestoreCapture {AllocationCapture* previous;~RestoreCapture(){allocation_capture=previous;}} restore{allocation_capture};
-  allocation_capture=&capture;
-  void* result=original(owner,old_slot,selected,cache_slot,index);
-  // Recursive allocation can reallocate the native vector; use the saved index.
-  // Keep the linked class captured before Ensure*Ids when it returns OOM/null.
-  if(result)HierarchyRootPool::Set(replacements_[slot].new_class,result);
-  return result;
+  struct Adapter final:rooted_hierarchy::Access {
+    HierarchyBatch& batch;HierarchyClassAllocator original;
+    Adapter(HierarchyBatch& b,HierarchyClassAllocator f):batch(b),original(f){}
+    void* Copy(void* slot)override{return batch.roots_.Add(HierarchyRootPool::Get(slot));}
+    void* Empty()override{return batch.roots_.Add(nullptr);}
+    void* Get(void* slot)const override{return HierarchyRootPool::Get(slot);}
+    void Set(void* slot,void* object)override{HierarchyRootPool::Set(slot,object);}
+    void* Loader(void* slot)override{return batch.roots_.Add(android13::Loader(Get(slot)));}
+    void* Cache(void* slot)override{return batch.roots_.Add(ReadHeapReference(Get(slot),offsetof(Class,dex_cache)));}
+    uint16_t ClassIndex(void* slot)const override{return static_cast<uint16_t>(Read<int32_t>(Get(slot),offsetof(Class,dex_class_def_index)));}
+    std::string RequestedParent(void* cache,uint16_t index)override{return Requested(Get(cache),index);}
+    void* Resolve(const std::string& name,void* loader)override{
+      void* found=find_class(RuntimeClassLinker(),CurrentHierarchyThread(),name.c_str(),loader);
+      if(!found)ClearHierarchyException(CurrentHierarchyThread());
+      return batch.roots_.Add(found);
+    }
+    bool Subclass(void* child,void* parent)const override{
+      const bool value=IsValidationSubclassOf(Get(child),Get(parent));if(value)++counters[3];return value;
+    }
+    void* Allocate(void* owner,void* old,void* parent,void* cache,uint16_t index,void* result)override{
+      if(std::strcmp(Descriptor(Parent(Get(old))),Requested(Get(cache),index))!=0)++counters[0];
+      AllocationCapture capture{result,old,cache};
+      struct Restore {AllocationCapture* previous;~Restore(){allocation_capture=previous;}} restore{allocation_capture};
+      allocation_capture=&capture;return original(owner,old,parent,cache,index);
+    }
+    bool ValidateReplacement(void* old,void* result,void* parent,void* cache)const override{
+      void* klass=Get(result);return klass&&klass!=Get(old)&&
+        Matches(klass,Descriptor(Get(old)),android13::Loader(Get(old)))&&
+        Parent(klass)==Get(parent)&&ReadHeapReference(klass,offsetof(Class,dex_cache))==Get(cache);
+    }
+    void Fail(const char* message)override{batch.Fail(message);}
+  } adapter(*this,original);
+  return allocator_.Allocate(adapter,owner,old_slot,cache_slot,index);
 }
 void CaptureHierarchyAllocatedClass(const void* class_slot) {
   if(!allocation_capture || !class_slot)return;
@@ -165,16 +162,16 @@ void CaptureHierarchyAllocatedClass(const void* class_slot) {
   if(!klass || klass==old ||
      ReadHeapReference(klass,offsetof(Class,dex_cache))!=HierarchyRootPool::Get(capture.cache_slot) ||
      !Matches(klass,Descriptor(old),Loader(old)))return;
-  void* slot=capture.batch->replacements_[capture.index].new_class;
+  void* slot=capture.result_slot;
   if(HierarchyRootPool::Get(slot)!=klass)++counters[6];
   HierarchyRootPool::Set(slot,klass);
 }
 void HierarchyBatch::Complete(bool committed) {
-  if(!committed && !replacements_.empty()) {
+  if(!committed && !allocator_.Replacements().empty()) {
     void* self=CurrentHierarchyThread();
     NativeSuspendScope native(self);Require(native.Supported());
     OwnedSuspendAll suspended("Retire failed hierarchy allocations");
-    for(const auto& replacement:replacements_) {
+    for(const auto& replacement:allocator_.Replacements()) {
       void* klass=HierarchyRootPool::Get(replacement.new_class);
       if(!klass)continue;
       Require(klass!=HierarchyRootPool::Get(replacement.old_class));
@@ -189,10 +186,10 @@ void HierarchyBatch::Complete(bool committed) {
       }
     }
   }
-  replacements_.clear(); // Successful publication can never be retired later.
+  allocator_.Clear(); // Successful publication can never be retired later.
 }
 void* HierarchyBatch::Find(const char* name,void* loader) {
-  for(auto it=replacements_.rbegin();it!=replacements_.rend();++it) {
+  for(auto it=allocator_.Replacements().rbegin();it!=allocator_.Replacements().rend();++it) {
     void* klass=HierarchyRootPool::Get(it->new_class);
     if(klass && Matches(klass,name,loader)) { ++counters[1];return klass; }
   }

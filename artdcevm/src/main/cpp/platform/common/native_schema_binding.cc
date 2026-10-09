@@ -45,7 +45,8 @@ bool ValidateNative(const source_commit::Plan& transaction,const modern_field_me
   field_copy::CopyClassView before,after;
   if(!metadata.ClassIdentity(old,&before,error)||!metadata.ClassIdentity(next,&after,error)||before.loader!=after.loader)return fail("Native schema Class loader identity changed");
   if(before.parent!=after.parent){bool paired=false;for(size_t p=0;p<policies.size();++p)paired|=transaction.old_classes[p]==before.parent&&transaction.new_classes[p]==after.parent;
-   if(!paired)return fail("Native schema superclass identity differs outside the rooted transaction");}
+   const bool hierarchy=policies[i].Requires(GuardKind::HierarchyGraph);
+   if(!paired&&!hierarchy)return fail("Native schema superclass identity differs outside the rooted transaction");}
   evolution::ClassSchema old_schema,next_schema;native_method_table::View old_table,next_table;
   if(!ReadNativeDeclarations(metadata,model,old,&old_schema,error,&old_table)||!ReadNativeDeclarations(metadata,model,next,&next_schema,error,&next_table))return false;
   for(const auto& pair:{std::make_pair(old,&old_table),std::make_pair(next,&next_table)}){
