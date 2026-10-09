@@ -80,14 +80,15 @@ bool CalibrateOwnedBootstrap(HookEngine& hooks,JNIEnv* env,jobject calibration,s
       DecodeCalibrationExecutable,CanonicalizeJniMethod,
       {ReadCopyClass,ReadCopyField,ReadCopyValue,WriteCopyValue,TransferCopyMonitor,CopyWriteBarrier}};
   runtime_access_abi::Services services{RuntimeClassLinker(),RuntimeJniIdManager(),RuntimeJit(),RuntimeJitCodeCache()};
-  if(!CalibrateOwnedMembers(device_profile,hooks,env,ti,calibration,services,readers,error))return false;
   if(env->PushLocalFrame(16)<0){*error="Owned calibration local frame allocation failed";return false;}
   auto type=env->FindClass("com/github/ytlog/artdcevm/internal/CalibrationFixture");
   auto constructor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
   auto fixture=constructor?env->NewObject(type,constructor):nullptr;
   bool passed=false;
   if(!fixture||env->ExceptionCheck()) *error="Owned calibration fixture is unavailable";
-  else passed=CalibrateOwnedFieldStorage(device_profile,env,ti,fixture,readers,error) &&
+  else passed=CalibrateRuntimeFieldIds(hooks,env,ti,calibration,fixture,error) &&
+      CalibrateOwnedMembers(device_profile,hooks,env,ti,calibration,services,readers,error) &&
+      CalibrateOwnedFieldStorage(device_profile,env,ti,fixture,readers,error) &&
       CalibrateOwnedCardTable(device_profile,env,fixture,readers,error) &&
       CalibrateOwnedMonitorTransfer(device_profile,env,fixture,readers.fields,error);
   env->PopLocalFrame(nullptr);return passed;

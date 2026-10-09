@@ -1,4 +1,5 @@
 #include "platform/android13/runtime_access.h"
+#include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access_abi.h"
 #include "platform/android13/selective_deopt_abi.h"
 #include <cassert>
@@ -43,6 +44,11 @@ class Hooks : public artdcevm::HookEngine {
   void* Install(void*, void*, void**, std::string*) override { std::abort(); }
   bool Remove(void*, std::string*) override { std::abort(); }
 };
+}
+namespace artdcevm::android13 {
+NativeObjectAccess::NativeObjectAccess(JNIEnv*):self_(nullptr),supported_(false),transitioned_(false){}
+NativeObjectAccess::~NativeObjectAccess(){assert(!transitioned_);}
+void* NativeObjectAccess::Decode(jobject)const{return nullptr;}
 }
 int main() {
   runtime.class_linker = reinterpret_cast<void*>(0x1000);
@@ -100,14 +106,14 @@ int main() {
   runtime.jit = reinterpret_cast<void*>(0x3000);
   for (uintptr_t value : {uintptr_t{0}, uintptr_t{0x8000}, uintptr_t{0x10000}}) {
     assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(value)) == reinterpret_cast<void*>(value));
-    assert(api::DecodeFieldId(reinterpret_cast<jfieldID>(value)) == reinterpret_cast<void*>(value));
+    assert(api::DecodeFieldId(reinterpret_cast<jfieldID>(value)) == nullptr);
   }
   assert(method_calls == 0 && field_calls == 0);
   for (uintptr_t value : {uintptr_t{1}, uintptr_t{3}, uintptr_t{127}}) {
     assert(api::DecodeMethodId(reinterpret_cast<jmethodID>(value)) == reinterpret_cast<void*>(value * 16));
-    assert(api::DecodeFieldId(reinterpret_cast<jfieldID>(value)) == reinterpret_cast<void*>(value * 32));
+    assert(api::DecodeFieldId(reinterpret_cast<jfieldID>(value)) == nullptr);
   }
-  assert(method_calls == 3 && field_calls == 3);
+  assert(method_calls == 3 && field_calls == 0);
   // A failed candidate rebind must not replace the previous singleton binding.
   abi::RuntimePrefix bad_runtime{};
   void* bad_instance=&bad_runtime;

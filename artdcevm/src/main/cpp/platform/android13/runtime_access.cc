@@ -3,6 +3,7 @@
 #include "platform/android13/selective_deopt_abi.h"
 #include "platform/common/runtime_services.h"
 #include <cstdlib>
+#include "platform/android13/native_object_access.h"
 namespace artdcevm::android13 {
 namespace {
 void** runtime_instance = nullptr;
@@ -14,6 +15,7 @@ using DecodeMethod = void* (*)(void*, jmethodID);
 using DecodeField = void* (*)(void*, jfieldID);
 DecodeMethod decode_method = nullptr;
 DecodeField decode_field = nullptr;
+bool fields_proven=false;
 runtime_services::View Services(void* runtime) {
   runtime_services::View result;
   if(!runtime_services::Read(runtime_services::Declaration::kAndroid13,runtime,
@@ -49,8 +51,60 @@ void* DecodeMethodId(jmethodID id) {
       reinterpret_cast<void*>(id);
 }
 void* DecodeFieldId(jfieldID id) {
-  return (reinterpret_cast<uintptr_t>(id) & 1) ? decode_field(RuntimeJniIdManager(), id) :
-      reinterpret_cast<void*>(id);
+  return id&&fields_proven?decode_field(RuntimeJniIdManager(),id):nullptr;
+}
+namespace {
+struct OwnedGlobal {JNIEnv* env;jobject value;~OwnedGlobal(){if(value)env->DeleteGlobalRef(value);}};
+struct PublicText {jvmtiEnv* ti;char* value=nullptr;~PublicText(){if(value)ti->Deallocate(reinterpret_cast<unsigned char*>(value));}};
+bool ProveFields(JNIEnv* env,jvmtiEnv* ti,jclass klass,void* (*leaf)(void*),size_t* seen,std::string* error){
+ if(!klass||env->ExceptionCheck())return false;
+ OwnedGlobal owner{env,env->NewGlobalRef(klass)};
+ if(!owner.value||env->ExceptionCheck())return false;
+ jint count=0;jfieldID* ids=nullptr;
+ struct FieldIds {jvmtiEnv* ti;jfieldID*& ids;~FieldIds(){if(ids)ti->Deallocate(reinterpret_cast<unsigned char*>(ids));}} allocation{ti,ids};
+ if(ti->GetClassFields(klass,&count,&ids)!=JVMTI_ERROR_NONE||count<0||(count&&!ids))return false;
+ for(jint i=0;i<count;++i){
+  PublicText name{ti},descriptor{ti};jint flags=0;jclass declaring=nullptr;
+  if(!ids[i]||ti->GetFieldName(klass,ids[i],&name.value,&descriptor.value,nullptr)!=JVMTI_ERROR_NONE||
+     ti->GetFieldModifiers(klass,ids[i],&flags)!=JVMTI_ERROR_NONE)return false;
+  auto owner_result=ti->GetFieldDeclaringClass(klass,ids[i],&declaring);
+  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} declared{env,declaring};
+  if(owner_result!=JVMTI_ERROR_NONE||!name.value||!descriptor.value||!declaring||!env->IsSameObject(declaring,klass)||env->ExceptionCheck())return false;
+  bool stat=(flags&8)!=0;
+  jfieldID looked=stat?env->GetStaticFieldID(klass,name.value,descriptor.value):env->GetFieldID(klass,name.value,descriptor.value);
+  if(!looked||looked!=ids[i]||env->ExceptionCheck())return false;
+  Local reflected{env,env->ToReflectedField(klass,looked,stat)};
+  if(!reflected.value||env->ExceptionCheck()||env->FromReflectedField(reflected.value)!=ids[i]||env->ExceptionCheck())return false;
+  OwnedGlobal mirror{env,env->NewGlobalRef(reflected.value)};
+  if(!mirror.value||env->ExceptionCheck())return false;
+  NativeObjectAccess access(env);if(!access.Supported())return false;
+  // The manager may synchronize/suspend. Both public Class and Field roots are
+  // owned before entering it; obtain the mirror pointer only AFTER it returns.
+  void* native=decode_field(RuntimeJniIdManager(),ids[i]);
+  void* actual=leaf(access.Decode(mirror.value));
+  if(!native||native!=actual){if(error)*error="Legacy public field ID differs from independently rooted named Field identity";return false;}
+  ++*seen;
+ }
+ // Each recursion uses public JNI roots; no Class pointer crosses a JNI call.
+ jclass parent=env->GetSuperclass(klass);
+ if(env->ExceptionCheck())return false;
+ bool result=!parent||ProveFields(env,ti,parent,leaf,seen,error);
+ if(parent)env->DeleteLocalRef(parent);return result;
+}
+}
+bool CalibrateRuntimeFieldIds(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti,jobject primary,jobject storage,std::string* error){
+ if(fields_proven)return true;
+ if(!env||!ti||!primary||!storage||!decode_field||env->ExceptionCheck())return false;
+ JavaVM* vm=nullptr;
+ if(env->GetJavaVM(&vm)!=JNI_OK||vm!=calibrated_receivers.java_vm||env->ExceptionCheck())return false;
+ auto leaf=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ if(!leaf){if(error)*error="Legacy field IDs require original named reflected Field identity";return false;}
+ jclass a=env->GetObjectClass(primary),b=env->GetObjectClass(storage);
+ struct Classes {JNIEnv* env;jclass a,b;~Classes(){if(a)env->DeleteLocalRef(a);if(b)env->DeleteLocalRef(b);}} roots{env,a,b};
+ if(!a||!b||env->ExceptionCheck()||env->IsSameObject(a,b))return false;
+ size_t first=0,second=0;
+ if(!ProveFields(env,ti,a,leaf,&first,error)||!ProveFields(env,ti,b,leaf,&second,error)||!first||!second||env->ExceptionCheck())return false;
+ fields_proven=true;return true;
 }
 bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std::string* error,
                             const RuntimeReceivers* receivers,const OwnedJitReceivers* jit_receivers) {
@@ -98,6 +152,7 @@ bool ConfigureRuntimeAccess(HookEngine& hooks, const DeviceProfile& profile, std
   runtime_instance = instance;
   decode_method = method;
   decode_field = field;
+  fields_proven=false;
   return true;
 }
 }
