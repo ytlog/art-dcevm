@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/readonly_method_table.h"
+#include "platform/arm32/borrowed_metadata.h"
 #include "platform/common/readonly_field_table.h"
 #include "platform/common/borrowed_jni_callback.h"
 #include "platform/common/arm32_method_metadata.h"
@@ -20,6 +21,10 @@ struct Request {
   Decode decode;Extent extent;jclass owner;FieldLeaf field_leaf=nullptr;
   std::vector<jobject> fields;std::vector<uint32_t> field_indices,field_flags;
   uint32_t static_fields=0;bool fields_proven=false;
+  std::vector<jmethodID> method_ids;std::vector<jfieldID> field_ids;
+  canonical_jni_members::Scope::Declarations id_declarations;
+  size_t decoded_methods=0,decoded_fields=0,named_field_checks=0,distinct_method_ids=0,distinct_field_ids=0;
+  arm32_borrowed_metadata::Consumer consumer=nullptr;void* consumer_data=nullptr;
   std::vector<jobject> methods;std::vector<uint32_t> indices,flags;
   uint32_t direct,declared,class_def,type_index,class_flags;
   readonly_method_table::Proof proof{};size_t class_index_offset=0;bool class_proven=false;
@@ -30,7 +35,8 @@ inline bool Observe(const borrowed_jni_callback::Context& context,void* opaque) 
   auto fail=[&](const char* text){request.error=text;return false;};
   if(sizeof(void*)!=4||!request.decode||!request.extent||!request.owner||
       !context.original_leaf||!context.original_method||request.methods.size()<3||
-      request.indices.size()!=request.methods.size()||request.flags.size()!=request.methods.size())
+      request.indices.size()!=request.methods.size()||request.flags.size()!=request.methods.size()||request.method_ids.size()!=request.methods.size()||
+      request.field_ids.size()!=request.fields.size())
     return fail("ARM32 metadata lacks independent complete JNI/DEX oracle");
   // Every object is decoded and consumed before this borrowed Runnable callback
   // returns; no raw managed/native address escapes in the resulting Proof.
@@ -57,6 +63,8 @@ inline bool Observe(const borrowed_jni_callback::Context& context,void* opaque) 
   void* table=reinterpret_cast<void*>(uintptr_t(table_bits));size_t table_extent=0;
   if(!request.extent(table,&table_extent))return fail("Class method allocation is not readable");
   abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
+  canonical_jni_members::Scope ids(request.id_declarations);
+  if(!ids.Ready())return fail("Original JNI ID query/decoder source capability unavailable");
   std::vector<readonly_method_table::Oracle> oracles;
   for(size_t i=0;i<request.methods.size();++i) {
     void* method=context.original_leaf(scope,request.methods[i]);size_t extent=0;
@@ -64,6 +72,7 @@ inline bool Observe(const borrowed_jni_callback::Context& context,void* opaque) 
       return fail("Original JNI reflected leaf failed to provide mapped Method");
     uint32_t owner;std::memcpy(&owner,method,4);
     if(owner!=uintptr_t(klass))return fail("Original Method declaring Class disagrees with independently decoded owner");
+    if(!ids.Verify(request.method_ids[i],{method},&request.error))return false;
     oracles.push_back({method,extent,request.indices[i],request.flags[i]});
   }
   size_t accepted=0;readonly_method_table::Proof proof;
@@ -73,7 +82,7 @@ inline bool Observe(const borrowed_jni_callback::Context& context,void* opaque) 
   }
   if(accepted!=1)return fail("ARM32 complete table does not uniquely match a fixed Method source declaration");
   request.proof=proof;request.class_index_offset=chosen;request.class_proven=true;
-  if(!request.field_leaf||request.fields.size()!=request.field_indices.size()||
+  if(request.fields.size()!=request.field_indices.size()||
       request.fields.size()!=request.field_flags.size())return fail("Named Field leaf or complete independent field oracle unavailable");
   std::vector<readonly_field_table::View> field_tables;
   constexpr size_t instance_at=offsetof(abi::arm32::android11::Class11,ifields);
@@ -89,14 +98,28 @@ inline bool Observe(const borrowed_jni_callback::Context& context,void* opaque) 
   }
   std::vector<readonly_field_table::Oracle> field_oracles;
   for(size_t i=0;i<request.fields.size();++i) {
-    void* reflected=reinterpret_cast<void*>(request.decode(context.self,request.fields[i]).reference);
-    if(context.env->ExceptionCheck()||!reflected)return fail("Independent reflected Field decode failed");
-    void* field=request.field_leaf(reflected);size_t extent=0;
+    canonical_jni_members::Field decoded;
+    if(!ids.Read(request.field_ids[i],&decoded,&request.error))return false;
+    void* field=decoded.address;size_t extent=0;
+    // The public original FromReflectedField wrapper executed in Native state
+    // before this callback; its opaque result goes through the real manager.
+    // An optional named mirror leaf is a second independent oracle, not a
+    // required fallback. Never reinterpret that public ID as ArtField*.
+    if(request.field_leaf) {
+      void* reflected=reinterpret_cast<void*>(request.decode(context.self,request.fields[i]).reference);
+      if(context.env->ExceptionCheck()||!reflected||request.field_leaf(reflected)!=field)return fail("Named Field leaf disagrees with original JNI decoder");
+      ++request.named_field_checks;
+    }
     if(context.env->ExceptionCheck()||!field||!request.extent(field,&extent))return fail("Named reflected Field leaf failed");
     field_oracles.push_back({field,extent,request.field_indices[i],request.field_flags[i]});
   }
   if(!readonly_field_table::Prove(field_tables,field_oracles,uint32_t(request.fields.size()),request.static_fields,uint32_t(uintptr_t(klass)),&request.error))return false;
-  request.fields_proven=true;
+  request.fields_proven=true;request.decoded_methods=ids.Methods();request.decoded_fields=ids.Fields();
+  request.distinct_method_ids=ids.DistinctMethods();request.distinct_field_ids=ids.DistinctFields();
+  arm32_borrowed_metadata::Services services;
+  services.methods={table,proof.stride,proof.declared,proof.total};
+  for(const auto& oracle:field_oracles)services.fields.declarations.push_back({const_cast<void*>(oracle.field)});
+  if(request.consumer&&!request.consumer(services,request.consumer_data))return fail("Borrowed typed metadata consumer refused source storage");
   request.error.clear();return true;
 }
 }

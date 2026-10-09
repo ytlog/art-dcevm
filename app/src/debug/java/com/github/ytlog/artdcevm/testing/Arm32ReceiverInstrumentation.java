@@ -66,6 +66,12 @@ public final class Arm32ReceiverInstrumentation extends Instrumentation {
         return record;
     }
 
+    private static JSONObject withOracle(JSONObject proof, int declared, MethodDexOracle.Result oracle) throws Exception {
+        return proof.put("expectedDeclaredMethods", declared).put("expectedDirectMethods", oracle.directMethods)
+                .put("expectedFields", oracle.fields.length).put("expectedStaticFields", oracle.staticFields)
+                .put("dexEntry", oracle.dexEntry).put("dexClassDefIndex", oracle.classDefIndex).put("dexTypeIndex", oracle.typeIndex);
+    }
+
     @Override public void onStart() {
         JSONObject report = new JSONObject();
         JSONArray rows = new JSONArray();
@@ -119,11 +125,11 @@ public final class Arm32ReceiverInstrumentation extends Instrumentation {
             java.lang.reflect.Executable[] complete = declarations.toArray(new java.lang.reflect.Executable[0]);
             MethodDexOracle.Result oracle = MethodDexOracle.read(getTargetContext().getApplicationInfo().sourceDir, complete);
             if (oracle.directMethods + oracle.virtualMethods != complete.length) throw new AssertionError("Incomplete reflection method oracle");
-            JSONObject metadata = new JSONObject(Arm32ReceiverProbe.metadata(Carrier.class, complete, oracle));
-            metadata.put("expectedDeclaredMethods", complete.length).put("expectedDirectMethods", oracle.directMethods)
-                    .put("expectedFields", oracle.fields.length).put("expectedStaticFields", oracle.staticFields)
-                    .put("dexEntry", oracle.dexEntry).put("dexClassDefIndex", oracle.classDefIndex).put("dexTypeIndex", oracle.typeIndex);
+            JSONObject metadata = withOracle(new JSONObject(Arm32ReceiverProbe.metadata(Carrier.class, complete, oracle)), complete.length, oracle);
             report.put("metadata", metadata);
+            JSONObject fallback = withOracle(new JSONObject(Arm32ReceiverProbe.metadata(Carrier.class, complete, oracle, true)), complete.length, oracle);
+            report.put("fieldFallback", fallback);
+            passed &= fallback.optBoolean("passed") && fallback.optBoolean("originalJniFieldPath") && fallback.optInt("namedFieldCrosschecks", -1) == 0;
             passed &= metadata.optBoolean("passed") && metadata.optBoolean("classProven")
                     && metadata.optInt("declaredMethods") == complete.length && metadata.optInt("directMethods") == oracle.directMethods;
         } catch (Throwable error) {

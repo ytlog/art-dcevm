@@ -19,6 +19,10 @@ report['metadata'] = dict(passed=True, classProven=True, fieldsProven=True, decl
     classIndexOffset=80, declaredMethods=6, directMethods=4, totalMethods=6,
     expectedDeclaredMethods=6, expectedDirectMethods=4, dexClassDefIndex=12, dexTypeIndex=33,
     dexEntry='classes.dex', diagnostic='')
+report['metadata'].update(decodedMethodIds=6,decodedFieldIds=3,methodIdRoundtrips=6,fieldIdRoundtrips=3,
+    typedConsumerMethods=6,typedConsumerFields=3,distinctMethodIds=6,distinctFieldIds=3,
+    namedFieldCrosschecks=3,originalJniFieldPath=True)
+report['fieldFallback']=copy.deepcopy(report['metadata']);report['fieldFallback']['namedFieldCrosschecks']=0
 validate(report, run_id, sha)
 output = 'INSTRUMENTATION_RESULT: stream='+json.dumps(report)+'\nINSTRUMENTATION_CODE: -1\n'
 parse_instrumentation(output, run_id, sha)
@@ -50,6 +54,12 @@ for key, value in [('passed', False), ('classProven', False), ('fieldsProven', F
                    ('dexEntry', 'old.dex'), ('diagnostic', 'leaf unavailable')]:
     bad = copy.deepcopy(report);bad['metadata'][key]=value;reject(bad)
 bad = copy.deepcopy(report);del bad['metadata'];reject(bad)
+for key, value in [('decodedMethodIds', 5), ('decodedFieldIds', True), ('methodIdRoundtrips', 0),
+                   ('fieldIdRoundtrips', 2), ('typedConsumerMethods', 5), ('typedConsumerFields', 0),
+                   ('distinctMethodIds', -1), ('distinctFieldIds', 4), ('namedFieldCrosschecks', 1),
+                   ('originalJniFieldPath', False)]:
+    bad=copy.deepcopy(report);bad['fieldFallback'][key]=value;reject(bad)
+bad=copy.deepcopy(report);del bad['fieldFallback'];reject(bad)
 for text in [output.replace('CODE: -1','CODE: 0'), output+output,
              output.replace('"schemaVersion": 1','"schemaVersion": 1, "schemaVersion": 1')]:
     try: parse_instrumentation(text, run_id, sha)

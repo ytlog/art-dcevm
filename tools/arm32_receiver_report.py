@@ -16,6 +16,21 @@ def strict_json(text):
         return result
     return json.loads(text, object_pairs_hook=pairs, parse_constant=lambda value: (_ for _ in ()).throw(ValueError('Nonfinite JSON')))
 
+def validate_metadata(proof):
+    if not isinstance(proof, dict) or proof.get('passed') is not True or proof.get('classProven') is not True or proof.get('fieldsProven') is not True or proof.get('diagnostic') != '':
+        raise ValueError('Complete ARM32 Method/Class/Field metadata proof missing')
+    for field in ('pointerBytes', 'methodStride', 'classIndexOffset', 'declaredMethods', 'directMethods', 'totalMethods', 'expectedDeclaredMethods', 'expectedDirectMethods', 'dexClassDefIndex', 'dexTypeIndex', 'declaredFields', 'staticFields', 'expectedFields', 'expectedStaticFields'):
+        if type(proof.get(field)) is not int:
+            raise ValueError('Invalid metadata observation: ' + field)
+    if proof['pointerBytes'] != 4 or proof['methodStride'] not in (24, 28) or proof['classIndexOffset'] not in (72, 80):
+        raise ValueError('Wrong fixed ARM32 metadata declaration')
+    if proof['declaredMethods'] != 6 or proof['expectedDeclaredMethods'] != 6 or proof['directMethods'] != 4 or proof['expectedDirectMethods'] != 4 or proof['totalMethods'] < 6:
+        raise ValueError('Complete static/private/virtual/native/constructor table not proved')
+    if proof['declaredFields'] != 3 or proof['expectedFields'] != 3 or proof['staticFields'] != 1 or proof['expectedStaticFields'] != 1:
+        raise ValueError('Complete static/private/instance Field table not proved')
+    if proof['dexClassDefIndex'] < 0 or proof['dexTypeIndex'] < 0 or not re.fullmatch(r'classes(?:[2-9]|[1-9][0-9]+)?\.dex', proof.get('dexEntry', '')):
+        raise ValueError('Independent installed APK class identity missing')
+
 def validate(report, run_id, apk_sha256):
     if not re.fullmatch('[0-9a-f]{32}', run_id) or not re.fullmatch('[0-9a-f]{64}', apk_sha256):
         raise ValueError('Expected strict run UUID/APK SHA-256')
@@ -61,19 +76,18 @@ def validate(report, run_id, apk_sha256):
         if type(report.get(field)) is not int or report[field] != value:
             raise ValueError('Invalid observed callback totals')
     metadata = report.get('metadata')
-    if not isinstance(metadata, dict) or metadata.get('passed') is not True or metadata.get('classProven') is not True or metadata.get('fieldsProven') is not True or metadata.get('diagnostic') != '':
-        raise ValueError('Complete ARM32 Method/Class metadata proof missing')
-    for field in ('pointerBytes', 'methodStride', 'classIndexOffset', 'declaredMethods', 'directMethods', 'totalMethods', 'expectedDeclaredMethods', 'expectedDirectMethods', 'dexClassDefIndex', 'dexTypeIndex', 'declaredFields', 'staticFields', 'expectedFields', 'expectedStaticFields'):
-        if type(metadata.get(field)) is not int:
-            raise ValueError('Invalid metadata observation: ' + field)
-    if metadata['pointerBytes'] != 4 or metadata['methodStride'] not in (24, 28) or metadata['classIndexOffset'] not in (72, 80):
-        raise ValueError('Wrong fixed ARM32 metadata declaration')
-    if metadata['declaredMethods'] != 6 or metadata['expectedDeclaredMethods'] != 6 or metadata['directMethods'] != 4 or metadata['expectedDirectMethods'] != 4 or metadata['totalMethods'] < 6:
-        raise ValueError('Complete static/private/virtual/native/constructor table not proved')
-    if metadata['declaredFields'] != 3 or metadata['expectedFields'] != 3 or metadata['staticFields'] != 1 or metadata['expectedStaticFields'] != 1:
-        raise ValueError('Complete static/private/instance Field table not proved')
-    if metadata['dexClassDefIndex'] < 0 or metadata['dexTypeIndex'] < 0 or not re.fullmatch(r'classes(?:[2-9]|[1-9][0-9]+)?\.dex', metadata.get('dexEntry', '')):
-        raise ValueError('Independent installed APK class identity missing')
+    for proof in (metadata, report.get('fieldFallback')):
+        validate_metadata(proof)
+        if not isinstance(proof, dict) or proof.get('passed') is not True or proof.get('originalJniFieldPath') is not True or proof.get('diagnostic') != '':
+            raise ValueError('Real original JNI Field/typed source path missing')
+        for key, expected in [('decodedMethodIds', 6), ('decodedFieldIds', 3), ('methodIdRoundtrips', 6), ('fieldIdRoundtrips', 3), ('typedConsumerMethods', 6), ('typedConsumerFields', 3)]:
+            if type(proof.get(key)) is not int or proof[key] != expected:
+                raise ValueError('Opaque-ID roundtrip/typed observation missing: ' + key)
+        for key, maximum in [('distinctMethodIds', 6), ('distinctFieldIds', 3), ('namedFieldCrosschecks', 3)]:
+            if type(proof.get(key)) is not int or not 0 <= proof[key] <= maximum:
+                raise ValueError('Invalid ID/source observation: ' + key)
+    if report['fieldFallback']['namedFieldCrosschecks'] != 0:
+        raise ValueError('Original JNI fallback used the optional named Field leaf')
     return report
 
 def parse_instrumentation(output, run_id, apk_sha256):
