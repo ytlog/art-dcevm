@@ -26,6 +26,7 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
  // permission; ObserveOriginal proves source roots/FindClass/capture behaviour
  // on an original, unchanged-hierarchy structural operation first.
  bool SetOriginals(const Functions&,std::string*);
+ bool Calibrated()const noexcept{return originals_&&observed_&&monitor_;}
  // Public independent monitor oracle on an exclusively owned ordinary fixture.
  bool CalibrateRetirement(const runnable_jni::Context&,jobject strong_fixture,std::string*);
  void* ObserveOriginal(const runnable_jni::Context&,jobject strong_original,
