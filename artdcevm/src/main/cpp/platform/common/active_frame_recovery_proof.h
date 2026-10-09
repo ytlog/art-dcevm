@@ -87,15 +87,27 @@ class Service {
     std::unique_ptr<abi::arm64::context::Prefix> context(create_());
     if(!context){report.failure=Failure::kMissingContext;report.detail="native-context-create-returned-null";return report;}
     report.detail="context-created";
+    return ProvePrepared(thread,jit,oracle,scratch,capacity,context.get(),readable);
+  }
+  // Production calibration prepares Context and scratch before the owned stop.
+  // This borrowed path performs no allocation/deletion or Context creation.
+  Report ProvePrepared(void* thread,void* jit,const Oracle& oracle,
+      decoded_frame_recovery::Location* scratch,size_t capacity,
+      abi::arm64::context::Prefix* context,Readable readable)const {
+    Report report;
+    if(!context){report.failure=Failure::kMissingContext;return report;}
+    if(!thread||!jit||!scratch||!Valid(oracle)){
+      report.failure=Failure::kMissingOracle;return report;
+    }
     context->Reset(); // WalkStack then fills native callee-saves while unwinding.
     switch(family_) {
-      case Family::kAndroid11:Walk<abi::arm64::android11::CodeInfo,abi::arm64::android11::CodeInfoPair>(thread,jit,context.get(),oracle,scratch,capacity,readable,&report);break;
-      case Family::kAndroid12:Walk<abi::arm64::android12::CodeInfo,abi::arm64::android12::CodeInfoPair>(thread,jit,context.get(),oracle,scratch,capacity,readable,&report);break;
+      case Family::kAndroid11:Walk<abi::arm64::android11::CodeInfo,abi::arm64::android11::CodeInfoPair>(thread,jit,context,oracle,scratch,capacity,readable,&report);break;
+      case Family::kAndroid12:Walk<abi::arm64::android12::CodeInfo,abi::arm64::android12::CodeInfoPair>(thread,jit,context,oracle,scratch,capacity,readable,&report);break;
       case Family::kAndroid13:case Family::kAndroid14:case Family::kAndroid15:case Family::kAndroid16:
-        Walk<abi::arm64::android13::CodeInfo,abi::arm64::android13::CodeInfoPair>(thread,jit,context.get(),oracle,scratch,capacity,readable,&report);break;
-      case Family::kAndroid17:Walk<abi::arm64::android17::CodeInfo,abi::arm64::android17::CodeInfoPair>(thread,jit,context.get(),oracle,scratch,capacity,readable,&report);break;
+        Walk<abi::arm64::android13::CodeInfo,abi::arm64::android13::CodeInfoPair>(thread,jit,context,oracle,scratch,capacity,readable,&report);break;
+      case Family::kAndroid17:Walk<abi::arm64::android17::CodeInfo,abi::arm64::android17::CodeInfoPair>(thread,jit,context,oracle,scratch,capacity,readable,&report);break;
     }
-    return report; // Context deleting destructor runs before leaving this scope.
+    return report;
   }
   Report ProvePhysical(void* thread,void* jit,const PhysicalOracle& physical,
       decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable=nullptr) const {
