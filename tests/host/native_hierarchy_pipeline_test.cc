@@ -230,7 +230,22 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
    source_commit::Plan plan;plan.old_classes={old_class};plan.new_classes={result};
    auto*collected=heap.New(16);Put32(collected,0,uint32_t(uintptr_t(array_type)));Put32(collected,8,1);Put32(collected,12,uint32_t(uintptr_t(result)));plan.mirror=old_class;plan.new_classes_root=collected;plan.class_root_origins={{collected,0}};
    Put32(array,12+11*4,uint32_t(uintptr_t(collected)));
-   Stop(nullptr,"actual source final witness",false);plan.class_root_origins[0].index=1;assert(!session.Collected(plan,&error));plan.class_root_origins[0].index=0;assert(session.Collected(plan,&error));forbid_allocation=true;assert(authority.Verify(plan,0));session.BeginCommit(plan);forbid_allocation=false;Resume(nullptr);class_remove_proxy(&linker,&pauser);assert(loading.Complete(true));forbid_allocation=true;assert(session.ReleaseAfterRun(true));assert(!native_hierarchy_session::Session::Current()&&!access.Count());forbid_allocation=false;
+   Stop(nullptr,"actual source final witness",false);plan.class_root_origins[0].index=1;assert(!session.Collected(plan,&error));plan.class_root_origins[0].index=0;assert(session.Collected(plan,&error));
+   size_t heap_extent=0;assert(method_identity::ReadableMappingExtent(heap.base,&heap_extent));
+   struct CachedBounds{const evolution::MappedDexMetadata* dex;size_t heap_extent;bool allowed=true;size_t reads=0;} bounds{&d.mapping,heap_extent};
+   modern_field_metadata::ReadContext mapped{&bounds,[](void*raw,const void*p,size_t*out){auto&b=*static_cast<CachedBounds*>(raw);++b.reads;if(!b.allowed||!p||!out)return false;const uintptr_t at=uintptr_t(p),begin=uintptr_t(heap.base),end=begin+b.heap_extent;if(at>=begin&&at<end){*out=end-at;return true;}const uintptr_t db=uintptr_t(b.dex->data_begin),de=db+b.dex->data_size;if(at>=db&&at<de){*out=de-at;return true;}return false;}};
+   mapper.UseReadContext(mapped);receivers.UseReadContext(mapped);authority.UseReadContext(mapped);
+   forbid_allocation=true;
+   // SourceOwners is the ordinary JNI boundary double above, so its Pool::Read
+   // still checks the live Runnable thread with OS extents. Measure only the
+   // explicit-context readers here; the real final Ledger uses stopped roots.
+   assert(cache_owner.Verify(*authority.Staged(),plan));
+   const auto mapping_queries=method_identity::MappingOsQueries();
+   assert(mapper.Readable(cache,112));assert(receivers.Verify(*authority.Staged(),plan));
+   bounds.allowed=false;assert(!mapper.Readable(cache,1)&&!receivers.Verify(*authority.Staged(),plan));bounds.allowed=true;
+   assert(method_identity::MappingOsQueries()==mapping_queries&&bounds.reads>0);
+   bounds.allowed=false;assert(!cache_owner.Verify(*authority.Staged(),plan));bounds.allowed=true;
+   assert(authority.Verify(plan,0));session.BeginCommit(plan);forbid_allocation=false;Resume(nullptr);class_remove_proxy(&linker,&pauser);assert(loading.Complete(true));forbid_allocation=true;assert(session.ReleaseAfterRun(true));assert(!native_hierarchy_session::Session::Current()&&!access.Count());forbid_allocation=false;
   }
   authority.Clear(context.env);
   for(int failure_case=0;failure_case<5;++failure_case){

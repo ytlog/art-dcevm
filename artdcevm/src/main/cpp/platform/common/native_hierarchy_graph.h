@@ -5,7 +5,7 @@
 #include "platform/common/source_commit.h"
 #include <jvmti.h>
 #include <memory>
-namespace artdcevm::modern_field_metadata { class FieldMetadata; }
+namespace artdcevm::modern_field_metadata { class FieldMetadata; struct ReadContext; }
 namespace artdcevm::native_hierarchy_graph {
 struct Input { jclass strong_original=nullptr; evolution::ClassSchema before,after; };
 // Rooted public graph. Indices are stable throughout one operation. Proposed
@@ -81,6 +81,7 @@ class Authority final {
  // Ordinary Collected root-layout capture. This freezes native pointer slots
  // for preregistration but grants no graph or commit permission.
  bool PrepareRoots(const source_commit::Plan&,std::string*);
+ void UseReadContext(const modern_field_metadata::ReadContext&) noexcept;
  // Collected source owner window, after all actual early allocations/linking.
  // After PrepareRoots/registration this validates without copying containers.
  bool Seal(const source_commit::Plan&,std::string*);

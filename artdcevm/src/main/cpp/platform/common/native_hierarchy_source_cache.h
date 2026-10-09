@@ -70,6 +70,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  Mapper(const runnable_jni::Context&,source_handle_roots::Pool&,
         const modern_field_metadata::FieldMetadata&,const modern_field_storage::Service&,
         const BatchAccess&,const RequiredServices*);
+ void UseReadContext(const modern_field_metadata::ReadContext&)noexcept;
  void* Get(native_hierarchy_cache::Root)const noexcept override;
  bool Readable(const void*,size_t)const noexcept override;
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;
@@ -89,6 +90,9 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  bool VerifyReadonlyCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept;
  private:
  struct Entry {RecordView record;native_hierarchy_cache::Source source;void* loader_root=nullptr;};
+ modern_field_metadata::ReadContext read_context_{};bool contextual_=false;
+ const modern_field_metadata::ReadContext* Context()const noexcept{return contextual_?&read_context_:nullptr;}
+ bool Extent(const void*,size_t*)const noexcept;
  const runnable_jni::Context context_;source_handle_roots::Pool& pool_;
  const modern_field_metadata::FieldMetadata& fields_;const modern_field_storage::Service& storage_;
  const BatchAccess& batch_;const RequiredServices* services_;mutable std::vector<std::unique_ptr<Entry>> entries_;mutable std::vector<RecordView> readonly_;mutable const native_hierarchy_graph::Graph* staged_graph_=nullptr;

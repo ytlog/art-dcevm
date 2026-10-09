@@ -40,7 +40,10 @@ bool Order(const Graph& graph,const std::vector<void*>& actual,const std::vector
 }
 struct Preservation::State {
  explicit State(const modern_field_metadata::FieldMetadata& m):metadata(&m){}
- const modern_field_metadata::FieldMetadata* metadata;const Graph* graph=nullptr;
+ const modern_field_metadata::FieldMetadata* metadata;modern_field_metadata::ReadContext read_context{};bool contextual=false;
+ const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:nullptr;}
+ bool Extent(const void*p,size_t*out)const noexcept{return contextual?read_context.extent&&read_context.extent(read_context.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+ const Graph* graph=nullptr;
  std::vector<Fact> facts;std::vector<size_t> inputs;mutable std::vector<size_t> pair_nodes;mutable const source_commit::Plan* plan=nullptr;bool staged=false;
  bool Matches(const Graph& g)const noexcept{
   if(!staged||graph!=&g||g.nodes.size()!=facts.size()||g.inputs!=inputs)return false;
@@ -50,22 +53,23 @@ struct Preservation::State {
  bool Identity(void* klass,const Node& node,void* parent)const noexcept{
   if(!klass||node.descriptor.empty()||node.descriptor.front()!='L')return false;size_t extent=0;class_metadata::State state;
   const auto& layout=metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
-  if(!method_identity::ReadableMappingExtent(klass,&extent)||!class_metadata::ReadState(layout,klass,extent,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||(state.access_flags&0x7631u)!=(node.flags&0x7631u))return false;
-  field_copy::CopyClassView view;return metadata->ClassIdentity(klass,&view,nullptr)&&view.loader==node.loader&&view.parent==parent&&view.descriptor&&node.descriptor==view.descriptor;
+  if(!Extent(klass,&extent)||!class_metadata::ReadState(layout,klass,extent,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||(state.access_flags&0x7631u)!=(node.flags&0x7631u))return false;
+  field_copy::CopyClassView view;return metadata->ClassIdentity(klass,&view,nullptr,Context())&&view.loader==node.loader&&view.parent==parent&&view.descriptor&&node.descriptor==view.descriptor;
  }
  bool Originals(const Graph& g)const noexcept{
   if(!Matches(g))return false;
-  for(size_t i=0;i<facts.size();++i){const auto& n=g.nodes[i];const auto& f=facts[i];void*parent=nullptr;if(!NativeSuperclass(g,n,false,&parent)||!Identity(n.klass,n,parent))return false;for(size_t j=0;j<f.before_order.size();++j)f.before_native[j]=g.nodes[f.before_order[j]].klass;if(!native_interface_graph::Matches(*metadata,n.klass,f.before_native,nullptr))return false;}
+  for(size_t i=0;i<facts.size();++i){const auto& n=g.nodes[i];const auto& f=facts[i];void*parent=nullptr;if(!NativeSuperclass(g,n,false,&parent)||!Identity(n.klass,n,parent))return false;for(size_t j=0;j<f.before_order.size();++j)f.before_native[j]=g.nodes[f.before_order[j]].klass;if(!native_interface_graph::MatchesInContext(*metadata,n.klass,f.before_native,nullptr,Context()))return false;}
   return true;
  }
  bool Replacement(const Graph& g,size_t index,void* klass)const noexcept{
   const auto& n=g.nodes[index];const auto& f=facts[index];void* parent=n.proposed_parent==absent?nullptr:Selected(g.nodes[n.proposed_parent]);if(n.proposed_parent!=absent&&!parent)return false;
-  if(!f.linked||!Identity(klass,n,parent))return false;for(size_t j=0;j<f.after_order.size();++j){void* value=Selected(g.nodes[f.after_order[j]]);if(!value)return false;f.after_native[j]=value;}return native_interface_graph::Matches(*metadata,klass,f.after_native,nullptr);
+  if(!f.linked||!Identity(klass,n,parent))return false;for(size_t j=0;j<f.after_order.size();++j){void* value=Selected(g.nodes[f.after_order[j]]);if(!value)return false;f.after_native[j]=value;}return native_interface_graph::MatchesInContext(*metadata,klass,f.after_native,nullptr,Context());
  }
 };
 Preservation::Preservation(const modern_field_metadata::FieldMetadata& m):state_(new State(m)){}
+void Preservation::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{state_->read_context=c;state_->contextual=true;}
 Preservation::~Preservation()=default;
-void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();state_->pair_nodes.clear();state_->plan=nullptr;state_->graph=nullptr;state_->staged=false;}
+void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();state_->pair_nodes.clear();state_->plan=nullptr;state_->graph=nullptr;state_->staged=false;state_->contextual=false;}
 bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inputs,std::string* error)const{
  auto& s=*state_;if(s.staged||!s.metadata->Calibrated()||graph.nodes.empty()||graph.inputs.empty()||inputs.size()!=graph.inputs.size())return Fail(error,"Additive receiver owner requires a fresh actual public graph");
  std::vector<Fact> facts;facts.reserve(graph.nodes.size());

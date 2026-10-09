@@ -60,7 +60,10 @@ bool ValidateGraph(Graph* graph,std::string* error){
  return true;
 }
 struct Authority::State {
- Bindings bindings{};Graph graph;std::vector<Input> inputs;
+ Bindings bindings{};modern_field_metadata::ReadContext read_context{};bool contextual=false;
+ const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:nullptr;}
+ bool Extent(const void*p,size_t*out)const noexcept{return contextual?read_context.extent&&read_context.extent(read_context.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+ Graph graph;std::vector<Input> inputs;
  std::vector<std::vector<size_t>> closure_before,closure_after,order_before,order_after;
  std::vector<std::vector<void*>> native_before,native_after;
  std::vector<Prepared> allocations;std::vector<evolution::ClassSchema> allocation_declarations;
@@ -77,18 +80,19 @@ struct Authority::State {
   for(size_t i=0;i<graph.nodes.size();++i){for(size_t j=0;j<native_before[i].size();++j)native_before[i][j]=graph.nodes[order_before[i][j]].klass;for(size_t j=0;j<native_after[i].size();++j){auto& n=graph.nodes[order_after[i][j]];native_after[i][j]=n.replacement?n.replacement:n.klass;}}return true;
  }
  bool Flags(void* klass,uint32_t flags)const {
-  size_t extent=0;class_metadata::State state;const auto& layout=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;return method_identity::ReadableMappingExtent(klass,&extent)&&class_metadata::ReadState(layout,klass,extent,&state)&&!state.IsPrimitive()&&(state.access_flags&0x7631u)==(flags&0x7631u);
+  size_t extent=0;class_metadata::State state;const auto& layout=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;return Extent(klass,&extent)&&class_metadata::ReadState(layout,klass,extent,&state)&&!state.IsPrimitive()&&(state.access_flags&0x7631u)==(flags&0x7631u);
  }
  bool Native(bool replacements)const{
   for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];field_copy::CopyClassView view;
-   void* original_parent=nullptr;if(!NativeSuperclass(graph,node,false,&original_parent)||!Flags(node.klass,node.flags)||!bindings.metadata->ClassIdentity(node.klass,&view,nullptr)||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=original_parent||!native_interface_graph::Matches(*bindings.metadata,node.klass,native_before[n],nullptr))return false;
+   void* original_parent=nullptr;if(!NativeSuperclass(graph,node,false,&original_parent)||!Flags(node.klass,node.flags)||!bindings.metadata->ClassIdentity(node.klass,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=original_parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.klass,native_before[n],nullptr,Context()))return false;
    if(replacements&&node.affected){void* parent=node.proposed_parent==absent?nullptr:(graph.nodes[node.proposed_parent].replacement?graph.nodes[node.proposed_parent].replacement:graph.nodes[node.proposed_parent].klass);
-    if(!node.replacement||!Flags(node.replacement,node.flags)||!bindings.metadata->ClassIdentity(node.replacement,&view,nullptr)||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::Matches(*bindings.metadata,node.replacement,native_after[n],nullptr))return false;
+    if(!node.replacement||!Flags(node.replacement,node.flags)||!bindings.metadata->ClassIdentity(node.replacement,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.replacement,native_after[n],nullptr,Context()))return false;
    }
   }return true;
  }
 };
 Authority::Authority():state_(new State){}
+void Authority::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{state_->read_context=c;state_->contextual=true;}
 Authority::~Authority(){assert(state_->graph.nodes.empty()&&"Clear rooted graph after complete source cleanup");}
 void Authority::Clear(JNIEnv* env){if(!env)return;for(auto& n:state_->graph.nodes){if(n.strong_class)env->DeleteGlobalRef(n.strong_class);if(n.strong_loader)env->DeleteGlobalRef(n.strong_loader);}*state_=State{};}
 const Graph* Authority::Staged()const noexcept{return state_->staged?&state_->graph:nullptr;}

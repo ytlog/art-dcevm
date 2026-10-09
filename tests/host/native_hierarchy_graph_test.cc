@@ -24,18 +24,19 @@ struct Fake {
  Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;}
 };
 static std::vector<Fake*> loaded;
-static bool forbid_alloc=false;
+static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0;
 void* operator new(size_t n){if(forbid_alloc)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete(void* p,size_t)noexcept{std::free(p);}
-namespace artdcevm::method_identity {bool ReadableMappingExtent(const void*,size_t* out){*out=4096;return true;}}
+namespace artdcevm::method_identity {bool ReadableMappingExtent(const void*,size_t* out){assert(!forbid_os);*out=4096;return true;}}
 namespace artdcevm::modern_field_metadata {
 bool FieldMetadata::Calibrate(const runnable_jni::Context&,jobject,const char*,const FieldOracle*,size_t,std::string*){calibrated_=true;return true;}
-bool FieldMetadata::ClassIdentity(void* k,field_copy::CopyClassView* out,std::string*,const ReadContext*)const{auto* f=static_cast<Fake*>(k);*out={f->parent,f->loader,f->descriptor.c_str(),0,f->descriptor=="Ljava/lang/Object;"};return true;}
+bool FieldMetadata::ClassIdentity(void* k,field_copy::CopyClassView* out,std::string*,const ReadContext* context)const{size_t extent=0;if(context&&(!context->extent||!context->extent(context->owner,k,&extent)||extent<sizeof(class_metadata::Class11)))return false;auto* f=static_cast<Fake*>(k);*out={f->parent,f->loader,f->descriptor.c_str(),0,f->descriptor=="Ljava/lang/Object;"};return true;}
 }
 namespace artdcevm::native_interface_graph {
 bool Read(const modern_field_metadata::FieldMetadata&,void* k,std::vector<void*>* out,std::string*){*out=static_cast<Fake*>(k)->native_interfaces;return true;}
 bool Matches(const modern_field_metadata::FieldMetadata&,void* k,const std::vector<void*>& expected,std::string*){return static_cast<Fake*>(k)->native_interfaces==expected;}
+bool MatchesInContext(const modern_field_metadata::FieldMetadata&m,void*k,const std::vector<void*>&e,std::string*error,const modern_field_metadata::ReadContext*c){size_t extent=0;return (!c||(c->extent&&c->extent(c->owner,k,&extent)&&extent>=sizeof(class_metadata::Class11)))&&Matches(m,k,e,error);}
 }
 // Fake JNI implements the public graph APIs, not private ART allocations.
 static size_t globals=0;
@@ -89,7 +90,8 @@ static void Lifecycle(){
  final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_i.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
  std::unordered_map<void*,void*> relocation{{&moved_object,&final_object},{&moved_a,&final_a},{&moved_b,&final_b},{&moved_parent,&final_parent},{&moved_i,&final_i},{&new_a,&final_new_a},{&new_b,&final_new_b}};
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
- forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(authority.Verify(plan,0));final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;assert(owner.commits==3);
+ bool mapping_allowed=true;modern_field_metadata::ReadContext read_context{&mapping_allowed,[](void*owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};authority.UseReadContext(read_context);forbid_os=true;
+ forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(authority.Verify(plan,0));final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
  authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
  // Public Stage cyclic proposal rejects and releases every independently owned
  // global even though all individual lookups resolve valid Classes.

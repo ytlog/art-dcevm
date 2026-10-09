@@ -31,7 +31,9 @@ bool AllocatorBatchAccess::At(size_t n,RecordView*out)const noexcept{if(!batch_|
 void* AllocatorBatchAccess::Find(const char*name,void*loader)const noexcept{return batch_?batch_->Find(name,loader):nullptr;}
 void* AllocatorBatchAccess::OriginalFind(const char*name,void*loader)const{return batch_?batch_->OriginalFind(name,loader):nullptr;}
 void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;if(services_&&services_->FinalRootWindow())return services_->ReadStoppedRoot(root,&value)?value:nullptr;return pool_.Read(root,&value)?value:nullptr;}
-bool Mapper::Readable(const void*p,size_t n)const noexcept{return Mapped(p,n);}
+void Mapper::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{read_context_=c;contextual_=true;}
+bool Mapper::Extent(const void*p,size_t*out)const noexcept{return contextual_?read_context_.extent&&read_context_.extent(read_context_.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+bool Mapper::Readable(const void*p,size_t n)const noexcept{size_t extent=0;return p&&Extent(p,&extent)&&extent>=n;}
 bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)const noexcept{
  if(!out||(!(services_&&services_->FinalRootWindow())&&!pool_.ReadyForSourceAccess())||!fields_.Calibrated()||!p.source_owner)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
@@ -41,24 +43,24 @@ bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)cons
 bool Mapper::Namespace(const RecordView&r,bool linked,bool readonly)const noexcept{
  if(!r.declarations||!r.source_owner||!r.old_root||!r.cache_root)return false;
  void*old=Get(r.old_root),*cache=Get(r.cache_root);field_copy::CopyClassView before;
- if(!old||!cache||!fields_.ClassIdentity(old,&before,nullptr)||std::strcmp(before.descriptor,r.declarations->descriptor.c_str()))return false;
+ if(!old||!cache||!fields_.ClassIdentity(old,&before,nullptr,Context())||std::strcmp(before.descriptor,r.declarations->descriptor.c_str()))return false;
  // Incoming cache must belong to a distinct source DEX, rather than the
  // already published original cache. The batch provenance owns this allocation.
  if((fields_.Reference(old,offsetof(class_metadata::Class11,dex_cache))==cache)!=readonly)return false;
  if(!linked)return true;
  void*replacement=Get(r.new_root);field_copy::CopyClassView after;
  const auto&layout=fields_.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
- if(!replacement||replacement==old||!Mapped(replacement,layout.size)||!fields_.ClassIdentity(replacement,&after,nullptr)||std::strcmp(before.descriptor,after.descriptor)||before.loader!=after.loader||after.parent!=Get(r.parent_root)||fields_.Reference(replacement,offsetof(class_metadata::Class11,dex_cache))!=cache||U32(replacement,layout.dex_class_def_index)!=r.class_index)return false;
- if(after.parent){field_copy::CopyClassView parent;if(!fields_.ClassIdentity(after.parent,&parent,nullptr)||r.declarations->superclass!=parent.descriptor)return false;}
+ if(!replacement||replacement==old||!Readable(replacement,layout.size)||!fields_.ClassIdentity(replacement,&after,nullptr,Context())||std::strcmp(before.descriptor,after.descriptor)||before.loader!=after.loader||after.parent!=Get(r.parent_root)||fields_.Reference(replacement,offsetof(class_metadata::Class11,dex_cache))!=cache||U32(replacement,layout.dex_class_def_index)!=r.class_index)return false;
+ if(after.parent){field_copy::CopyClassView parent;if(!fields_.ClassIdentity(after.parent,&parent,nullptr,Context())||r.declarations->superclass!=parent.descriptor)return false;}
  else if(!r.declarations->superclass.empty())return false;
  return true;
 }
 bool Mapper::Mapping(const RecordView&r,const void**identity)const noexcept{
- void*cache=Get(r.cache_root);if(!identity||!Mapped(cache,24))return false;
+ void*cache=Get(r.cache_root);if(!identity||!Readable(cache,24))return false;
  uint64_t native;std::memcpy(&native,static_cast<const unsigned char*>(cache)+16,8);auto*file=reinterpret_cast<const void*>(static_cast<uintptr_t>(native));
- if(!Mapped(file,sizeof(dex_mapping_abi::Prefix)))return false;
+ if(!Readable(file,sizeof(dex_mapping_abi::Prefix)))return false;
  dex_mapping_abi::Prefix prefix;std::memcpy(&prefix,file,sizeof(prefix));
- if(prefix.begin!=r.dex.begin||prefix.data_begin!=r.dex.data_begin||prefix.data_size!=r.dex.data_size||!Mapped(r.dex.begin,r.dex.size)||!Mapped(r.dex.data_begin,r.dex.data_size)||r.dex.size<112)return false;
+ if(prefix.begin!=r.dex.begin||prefix.data_begin!=r.dex.data_begin||prefix.data_size!=r.dex.data_size||!Readable(r.dex.begin,r.dex.size)||!Readable(r.dex.data_begin,r.dex.data_size)||r.dex.size<112)return false;
  // The size/unused_size source slot is deliberately never used as an extent.
  const uintptr_t begin=uintptr_t(r.dex.begin),data=uintptr_t(r.dex.data_begin);
  if(begin<data||begin-data>r.dex.data_size||r.dex.size>r.dex.data_size-(begin-data))return false;
@@ -89,8 +91,8 @@ bool Mapper::DescribeAllocation(const native_hierarchy_graph::Prepared&p,native_
  if(EntryFor(p))return Fail(e,"private preallocation source was already consumed");
  try{
  auto entry=std::make_unique<Entry>();entry->record=r;const void*identity=nullptr;size_t extent=0;
- if(!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&entry->source.counts,e)||!method_identity::ReadableMappingExtent(p.cache,&extent))return false;
- field_copy::CopyClassView old;if(!fields_.ClassIdentity(Get(r.old_root),&old,e))return false;
+ if(!Mapping(r,&identity)||!Inspect(r.dex,*r.declarations,&entry->source.counts,e)||!Extent(p.cache,&extent))return false;
+ field_copy::CopyClassView old;if(!fields_.ClassIdentity(Get(r.old_root),&old,e,Context()))return false;
  entry->loader_root=pool_.Add(old.loader,e);if(!entry->loader_root)return false;
  void*original=batch_.OriginalFind(r.declarations->descriptor.c_str(),entry->loader_root);
  if(!original||original!=Get(r.old_root)||!Namespace(r,false)||Get(r.new_root))return Fail(e,"preallocation original ClassTable namespace changed");
@@ -122,10 +124,10 @@ bool Mapper::FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,
  // root its actual Class before further native work can allocate or suspend.
  void*original_root=nullptr;try{original_root=pool_.Add(source,e);}catch(const std::bad_alloc&){return Fail(e,"source mapped Class root storage exhausted");}if(!original_root)return false;
  void* resolved_loader=fields_.Reference(Get(original_root),offsetof(class_metadata::Class11,class_loader));
- if(descriptor[0]=='L'){field_copy::CopyClassView original_identity;if(!fields_.ClassIdentity(Get(original_root),&original_identity,e)||std::strcmp(descriptor,original_identity.descriptor))return Fail(e,"original source lookup returned a different native Class identity");}
+ if(descriptor[0]=='L'){field_copy::CopyClassView original_identity;if(!fields_.ClassIdentity(Get(original_root),&original_identity,e,Context())||std::strcmp(descriptor,original_identity.descriptor))return Fail(e,"original source lookup returned a different native Class identity");}
  void*mapped=batch_.Find(descriptor,resolved_loader);
  if(mapped){if(!Get(mapped))return Fail(e,"source replacement mapping lacks a retained Class root");
- if(descriptor[0]=='L'){field_copy::CopyClassView mapped_identity;if(!fields_.ClassIdentity(Get(mapped),&mapped_identity,e)||std::strcmp(descriptor,mapped_identity.descriptor)||mapped_identity.loader!=resolved_loader)return Fail(e,"mapped source Class namespace differs from original resolution");}
+ if(descriptor[0]=='L'){field_copy::CopyClassView mapped_identity;if(!fields_.ClassIdentity(Get(mapped),&mapped_identity,e,Context())||std::strcmp(descriptor,mapped_identity.descriptor)||mapped_identity.loader!=resolved_loader)return Fail(e,"mapped source Class namespace differs from original resolution");}
  *out=mapped;return true;}
  // An array whose component is replaced needs an actual source-created array
  // mapping. Returning an old array Class would silently retain old ancestry.

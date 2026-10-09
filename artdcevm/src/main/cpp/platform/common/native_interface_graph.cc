@@ -13,28 +13,29 @@ constexpr size_t kData=abi::arm64::android_common::kIfTableData;
 constexpr int32_t kPairWidth=abi::arm64::android_common::kIfTablePairWidth;
 static_assert(kIfTable==offsetof(class_metadata::Class16,iftable)&&kIfTable==offsetof(class_metadata::Class17,iftable));
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
-bool Mapped(void* p,size_t bytes){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=bytes;}
+bool Extent(const modern_field_metadata::ReadContext* c,const void*p,size_t*out){return c?c->extent&&c->extent(c->owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+bool Mapped(void* p,size_t bytes,const modern_field_metadata::ReadContext*c){size_t extent=0;return p&&Extent(c,p,&extent)&&extent>=bytes;}
 const class_metadata::Layout& Layout(const modern_field_metadata::FieldMetadata& m){return m.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;}
 }
 namespace {
-bool ReadTable(const modern_field_metadata::FieldMetadata& metadata,void* klass,std::vector<void*>* output,const std::vector<void*>* expected,std::string* error){
- if((!output&&!expected)||!metadata.Calibrated()||!Mapped(klass,Layout(metadata).size))return Fail(error,"IfTable Class has no calibrated live source prefix");
- void* meta_class=metadata.Reference(klass,0);if(!Mapped(meta_class,Layout(metadata).size))return Fail(error,"IfTable holder is not a live Class object");
+bool ReadTable(const modern_field_metadata::FieldMetadata& metadata,void* klass,std::vector<void*>* output,const std::vector<void*>* expected,std::string* error,const modern_field_metadata::ReadContext* context){
+ if((!output&&!expected)||!metadata.Calibrated()||!Mapped(klass,Layout(metadata).size,context))return Fail(error,"IfTable Class has no calibrated live source prefix");
+ void* meta_class=metadata.Reference(klass,0);if(!Mapped(meta_class,Layout(metadata).size,context))return Fail(error,"IfTable holder is not a live Class object");
  void* table=metadata.Reference(klass,kIfTable);
- if(!Mapped(table,kData))return Fail(error,"IfTable is null or has no readable ObjectArray prefix");
+ if(!Mapped(table,kData,context))return Fail(error,"IfTable is null or has no readable ObjectArray prefix");
  void* array_class=metadata.Reference(table,0);
- if(!Mapped(array_class,Layout(metadata).size)||metadata.Reference(array_class,0)!=meta_class)return Fail(error,"IfTable ObjectArray Class identity is unreadable");
+ if(!Mapped(array_class,Layout(metadata).size,context)||metadata.Reference(array_class,0)!=meta_class)return Fail(error,"IfTable ObjectArray Class identity is unreadable");
  void* component=metadata.Reference(array_class,offsetof(class_metadata::Class11,component_type));
  field_copy::CopyClassView component_identity;
- if(!Mapped(component,Layout(metadata).size)||metadata.Reference(component,0)!=meta_class||!metadata.ClassIdentity(component,&component_identity,error)||!component_identity.is_object||component_identity.loader)
+ if(!Mapped(component,Layout(metadata).size,context)||metadata.Reference(component,0)!=meta_class||!metadata.ClassIdentity(component,&component_identity,error,context)||!component_identity.is_object||component_identity.loader)
   return Fail(error,"IfTable is not the proven bootstrap Object[] declaration");
  int32_t length=0;std::memcpy(&length,static_cast<char*>(table)+kLength,4);
- if(length<0||(length%kPairWidth)||length>1000000||!Mapped(table,kData+size_t(length)*4))return Fail(error,"IfTable length/pair storage exceeds live mapped bounds");
+ if(length<0||(length%kPairWidth)||length>1000000||!Mapped(table,kData+size_t(length)*4,context))return Fail(error,"IfTable length/pair storage exceeds live mapped bounds");
  if(expected&&expected->size()!=size_t(length)/kPairWidth)return Fail(error,"Live IfTable count differs from prepared rooted interface graph");
  if(output){output->clear();output->reserve(size_t(length)/kPairWidth);}
  for(int32_t i=0;i<length;i+=kPairWidth){void* interface=metadata.Reference(table,kData+size_t(i)*4);
   class_metadata::State state;size_t extent=0;
-  if(!interface||!method_identity::ReadableMappingExtent(interface,&extent)||!class_metadata::ReadState(Layout(metadata),interface,extent,&state)||state.IsPrimitive()||!(state.access_flags&0x200u)||metadata.Reference(interface,0)!=meta_class)
+  if(!interface||!Extent(context,interface,&extent)||!class_metadata::ReadState(Layout(metadata),interface,extent,&state)||state.IsPrimitive()||!(state.access_flags&0x200u)||metadata.Reference(interface,0)!=meta_class)
    return Fail(error,"IfTable element lacks actual native interface Class identity");
   for(int32_t j=0;j<i;j+=kPairWidth)if(metadata.Reference(table,kData+size_t(j)*4)==interface)return Fail(error,"IfTable repeats a native interface identity");
   if(expected&&(*expected)[size_t(i)/kPairWidth]!=interface)return Fail(error,"Live IfTable identity differs from prepared rooted interface graph");
@@ -44,9 +45,12 @@ bool ReadTable(const modern_field_metadata::FieldMetadata& metadata,void* klass,
 }
 }
 bool Read(const modern_field_metadata::FieldMetadata& metadata,void* klass,std::vector<void*>* output,std::string* error){
- std::vector<void*> result;if(!output||!ReadTable(metadata,klass,&result,nullptr,error))return false;*output=std::move(result);return true;
+ std::vector<void*> result;if(!output||!ReadTable(metadata,klass,&result,nullptr,error,nullptr))return false;*output=std::move(result);return true;
 }
-bool Matches(const modern_field_metadata::FieldMetadata& metadata,void* klass,const std::vector<void*>& expected,std::string* error){return ReadTable(metadata,klass,nullptr,&expected,error);}
+bool Matches(const modern_field_metadata::FieldMetadata& metadata,void* klass,const std::vector<void*>& expected,std::string* error){return ReadTable(metadata,klass,nullptr,&expected,error,nullptr);}
+
+bool ReadInContext(const modern_field_metadata::FieldMetadata& metadata,void* klass,std::vector<void*>* output,std::string* error,const modern_field_metadata::ReadContext* context){std::vector<void*> result;if(!output||!ReadTable(metadata,klass,&result,nullptr,error,context))return false;*output=std::move(result);return true;}
+bool MatchesInContext(const modern_field_metadata::FieldMetadata& metadata,void* klass,const std::vector<void*>& expected,std::string* error,const modern_field_metadata::ReadContext* context){return ReadTable(metadata,klass,nullptr,&expected,error,context);}
 
 bool Calibrate(const runnable_jni::Context& context,jobject fixture,const modern_field_metadata::FieldMetadata& metadata,std::string* error){
  JNIEnv* env=context.env;if(!env||!fixture||env->ExceptionCheck())return Fail(error,"Missing public interface graph calibration scope");

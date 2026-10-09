@@ -15,6 +15,11 @@ struct CacheCalibration {
  uint32_t type_index=0,field_index=0,method_index=0;
  void* native_field=nullptr;void* native_method=nullptr;
 };
+struct Mapping {
+ void* owner=nullptr;
+ bool (*refresh_stopped)(void*,std::string*)=nullptr;
+ bool (*extent)(void*,const void*,size_t*)=nullptr;
+};
 struct Dependencies {
  HookEngine* hooks=nullptr;
  native_source_class_loading::Service* loading=nullptr;
@@ -29,6 +34,7 @@ struct Dependencies {
  native_member_provider::Dependencies members{};
  prepared_roots::Registry* registry=nullptr;
  native_schema_guard_verifier::Verifier* guards=nullptr;
+ Mapping mapping{};
 };
 // Unique original Run aggregate. Stage, JNI roots and scanner storage precede
 // reservation. It never uses the local Native JNI executor across a return.
@@ -59,10 +65,12 @@ class RunState final {
  bool End(void* exact_driver,bool original_success)noexcept;
  // Read-only actual continuous owner proof for mapping/guard consumers.
  bool StoppedWindow()const noexcept;
+ const modern_field_metadata::ReadContext* CurrentReadContext()const noexcept;
  const whole_process_frames::Report& Frames()const noexcept;
  private:
  struct State;
  RunState(const Dependencies&,void*,const runnable_jni::Context&);
+ static bool MappingExtent(void*,const void*,size_t*) noexcept;
  bool Start(jvmtiEnv*,const std::vector<native_hierarchy_graph::Input>&,const CacheCalibration&,std::string*);
  std::unique_ptr<State> state_;
 };

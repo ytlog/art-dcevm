@@ -8,7 +8,7 @@
 namespace artdcevm::native_schema_run_state {
 namespace {thread_local RunState* current=nullptr;bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}void Require(bool v){if(!v)std::abort();}}
 struct RunState::State {
- Dependencies d;void* driver;const runnable_jni::Context context;
+ Dependencies d;modern_field_metadata::ReadContext read_context{};void* driver;const runnable_jni::Context context;
  source_handle_roots::Pool pool;native_hierarchy_source_cache::AllocatorBatchAccess access;
  native_hierarchy_graph::Authority authority;native_hierarchy_receiver::Preservation receivers;
  whole_process_frames::Service::Prepared frame_storage;
@@ -32,7 +32,7 @@ struct RunState::State {
 RunState::RunState(const Dependencies&d,void*driver,const runnable_jni::Context&c):state_(new State(d,driver,c)){}
 std::unique_ptr<RunState> RunState::Begin(const Dependencies&d,void*driver,const runnable_jni::Context&c,jvmtiEnv*ti,
  const std::vector<native_hierarchy_graph::Input>&inputs,const CacheCalibration&w,std::string*error){
- if(current||native_source_class_loading::Run::Current()||native_hierarchy_session::Session::Current()||!driver||!c.env||!c.self||!ti||!d.hooks||!d.loading||!d.stop||!d.stop->Calibrated()||!d.roots||!d.allocator||!d.dex_registry||!d.dex_registry->Calibrated()||!d.lookup||!d.lookup->Calibrated()||!d.frames||!d.cleanup||!d.provider||!d.registry||!d.members.metadata||!d.members.fields||!d.members.cache||!d.members.runtime.runtime||!native_hierarchy_source_checks::Ready(native_owned_removal::ObserveSourceFailure)){
+ if(current||native_source_class_loading::Run::Current()||native_hierarchy_session::Session::Current()||!driver||!c.env||!c.self||!ti||!d.hooks||!d.loading||!d.stop||!d.stop->Calibrated()||!d.roots||!d.allocator||!d.dex_registry||!d.dex_registry->Calibrated()||!d.lookup||!d.lookup->Calibrated()||!d.frames||!d.cleanup||!d.provider||!d.registry||!d.members.metadata||!d.members.fields||!d.members.cache||!d.members.runtime.runtime||!native_hierarchy_source_checks::Ready(native_owned_removal::ObserveSourceFailure)||bool(d.mapping.refresh_stopped)!=bool(d.mapping.extent)){
   Fail(error,"Full schema Run requires independent calibrated actual owners and continuous source stop");return nullptr;
  }
  size_t extent=0;if(!method_identity::ReadableMappingExtent(driver,&extent)||extent<sizeof(abi::arm64::android_common::RedefinerPrefix)){Fail(error,"Original schema driver is not mapped");return nullptr;}
@@ -85,6 +85,10 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  s.plan=&p;s.holder=g.holder;const auto collect=s.d.registry->Collect();
  if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
  if(!s.stop->Begin(s.context.self,s.extent))return Fail(e,s.stop->Failure());
+ if(s.d.mapping.extent){
+  if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,e))return false;
+  s.read_context={this,MappingExtent};s.d.members.read_context=&s.read_context;s.mapper->UseReadContext(s.read_context);s.receivers.UseReadContext(s.read_context);s.authority.UseReadContext(s.read_context);
+ }
  // From here no JNI root can be created. Existing binds only known identities.
  if(!s.d.registry->Resolve())return Fail(e,"Stopped schema root resolution failed");const auto resolve=s.d.registry->Final();
  if(!s.plan_roots.CanRefresh(resolve)||!s.ledger->CanRefresh(resolve)||!s.authority.CanRefresh(resolve))return Fail(e,"Stopped schema root locations cannot refresh");
@@ -124,6 +128,8 @@ bool RunState::End(void*d,bool success)noexcept{
  const bool loading_proof=s.loading->Complete(success);Require(!success||loading_proof);
  s.phase=State::Phase::Ended;return ok;
 }
+bool RunState::MappingExtent(void*raw,const void*p,size_t*out)noexcept{auto*r=static_cast<RunState*>(raw);return r&&r==current&&r->StoppedWindow()&&r->state_->d.mapping.extent&&r->state_->d.mapping.extent(r->state_->d.mapping.owner,p,out);}
 bool RunState::StoppedWindow()const noexcept{return current==this&&state_->stop&&state_->stop->IsStopped(state_->context.self);}
+const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return StoppedWindow()&&state_->read_context.extent?&state_->read_context:nullptr;}
 const whole_process_frames::Report& RunState::Frames()const noexcept{Require(state_->cleanup!=nullptr);return state_->cleanup->Frames();}
 }

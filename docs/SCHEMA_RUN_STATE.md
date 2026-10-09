@@ -18,4 +18,6 @@
 
 这个模块尚需生产接线和实际设备整体回归。当前 Authority/Preservation 接口支持保留原角色/修饰的增量 hierarchy，仍拒接口/Object schema、修饰变化和 receiver 窄化；其拒绝不是完整 schema 已完成。Android 11/12 的独立 pure Thread transition pair 尚未证明，模块保留真实停线程拒绝。Original-final-only 组件证明窗口存在，并没有解决 publication 之后的安全拒绝/退款，所以这里不启用该路径。
 
-原有 native metadata / interface / cache 的部分 final 读仍经 OS mapping query；本批测试证明确已分配 slot/container 不会在 Seal 复制，但不宣称整个 final 链路已完成 allocation-free 映射透传。后续应在实际 continuous Collected stop 捕获映射，并由 `StoppedWindow()` 校验后的显式 ReadContext 供应所有 final consumers。
+`Dependencies.mapping` 提供预分配的映射存储和实际停线程刷新回调。RunState 仅在真实 continuous Session.Begin 成功后刷新，持有一个显式 ReadContext；每次 extent 请求再次核对同一个 Current RunState 与实际 StoppedWindow。Authority、receiver Preservation、incoming cache Mapper 和 interface 闭包使用该上下文，拒绝时不回退 OS；member provider 收到同一个 borrowed 指针。普通 JNI Stage 与独立校准仍使用原有即时映射检查。
+
+这批完成上述读者的显式上下文传播，不能单凭这些测试宣称全部 final consumers 已经零 OS 查询：allocator/source roots、guard 和 provider 的其余调用链需要对应所有者接线与整体回归。组合测试的 SourceOwners 边界替身仍使用普通 Pool.Read 的 Runnable 证明，因而仅针对实际 Mapper.Readable 与 receiver 读取测量零 OS 查询；真实 cache Owner 的正向/拒绝检查仍运行且禁止 native allocation。
