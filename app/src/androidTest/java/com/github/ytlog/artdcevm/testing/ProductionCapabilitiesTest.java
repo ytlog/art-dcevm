@@ -29,6 +29,16 @@ public final class ProductionCapabilitiesTest {
     private void fieldRejected(Checked action) throws Throwable {
         try { action.run();fail("Retired field handle accepted"); }catch(NoSuchFieldError expected) {}
     }
+    private void applyRequired(JSONObject report,String stage,int operation,Class<?> type,byte[] dex) throws Exception {
+        report.put("lastApplyStage",stage);
+        int code=NativeBridge.apply(operation,new Class<?>[]{type},new byte[][]{dex});
+        report.put("lastApplyCode",code);
+        if(code!=0){
+            JSONObject diagnostics=new JSONObject(NativeBridge.capabilities());
+            report.put("capabilitiesAfterFailure",diagnostics);
+            assertEquals(stage+": "+diagnostics,0,code);
+        }
+    }
     @Test public void productionBootstrapAndFormalEvolution() throws Throwable {
         String runId=InstrumentationRegistry.getArguments().getString("productionRunId");
         if(runId==null)runId=java.util.UUID.randomUUID().toString().replace("-","");
@@ -59,12 +69,12 @@ public final class ProductionCapabilitiesTest {
         phases.mark("support-load.before");System.loadLibrary("artdcevm_test_support");phases.mark("support-load.after");
         assertTrue(capabilities.toString(),capabilities.optBoolean("nativeMethodDeletion"));
         phases.mark("additive.before");
-        assertEquals(0,NativeBridge.apply(1,new Class<?>[]{Evolving.class},new byte[][]{asset(context,"add")}));
+        applyRequired(report,"additive",1,Evolving.class,asset(context,"add"));
         phases.mark("additive.after");
         Evolving instance=new Evolving(31);Method cached=instance.getClass().getDeclaredMethod("addedMethod");
         int identity=System.identityHashCode(instance);NativeTestBridge.retainRemovalMethod(instance);
         phases.mark("method-deletion.before");
-        assertEquals(0,NativeBridge.apply(2,new Class<?>[]{Evolving.class},new byte[][]{asset(context,"method-delete")}));
+        applyRequired(report,"method-deletion",2,Evolving.class,asset(context,"method-delete"));
         phases.mark("method-deletion.after");
         assertEquals(35,instance.compute());assertEquals(31,instance.value);assertEquals(identity,System.identityHashCode(instance));
         try {cached.invoke(instance);fail("Retired reflected method accepted");}
@@ -91,7 +101,7 @@ public final class ProductionCapabilitiesTest {
         assertEquals(7,(int)getter.invoke(fields));assertEquals(7,(int)staticGetter.invoke());
         assertEquals(7,(int)vh.get(fields));assertEquals(7,(int)svh.get());
         phases.mark("field-deletion.before");
-        assertEquals(0,NativeBridge.apply(2,new Class<?>[]{FieldSubject.class},new byte[][]{asset(context,"field-delete","FieldSubject")}));
+        applyRequired(report,"field-deletion",2,FieldSubject.class,asset(context,"field-delete","FieldSubject"));
         phases.mark("field-deletion.after");
         assertEquals(41,fields.keep);assertEquals(42,FieldSubject.staticKeep);assertEquals(42,fields.compute());
         assertEquals(fieldIdentity,System.identityHashCode(fields));
