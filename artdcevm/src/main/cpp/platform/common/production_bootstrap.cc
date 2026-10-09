@@ -24,6 +24,7 @@
 #include "platform/common/native_production_schema_capabilities.h"
 #include "platform/common/frame_family_calibration.h"
 #include "platform/common/compiled_frame_owner.h"
+#include "platform/common/compiled_frame_ordinary_context.h"
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
@@ -96,7 +97,7 @@ struct NativeEngine final:Engine {
  std::vector<frame_family_calibration::MethodOracle> frame_methods;
  whole_process_frames::Service whole_frames;bool frame_geometry_proven=false,compiled_frames_proven=false;std::string frame_geometry_diagnostic;
  const native_source_stop::Session* calibration_stop=nullptr;void* calibration_self=nullptr;
- struct CompiledRequest {NativeEngine* engine;compiled_frame_fixture::Owner* fixture;frame_family_calibration::Result result;std::string error;};
+ struct CompiledRequest {NativeEngine* engine;compiled_frame_fixture::Owner* fixture;frame_family_calibration::Result result;std::string error;abi::arm64::android11::CurrentThread current_thread=nullptr;};
  struct CalibrationRoots final:source_handle_roots::StoppedReader {
   const native_source_stop::Session& stop;void* self;std::array<const void*,32> slots{};size_t count=0;
   CalibrationRoots(const native_source_stop::Session& s,void* thread):stop(s),self(thread){}
@@ -110,38 +111,68 @@ struct NativeEngine final:Engine {
  static bool CompiledReadable(const void* address,size_t* extent){
   auto* e=current;return e&&e->calibration_stop&&e->calibration_stop->IsStopped(e->calibration_self)&&CachedExtent(e,address,extent);
  }
+ struct CompiledScan {CompiledRequest& request;CalibrationRoots& roots;void* self;bool attempted=false;bool threw=false;bool mappings=false;};
+ static bool CalibrateCompiledStopped(void* raw,native_source_stop::Session& stopped) noexcept {
+  auto& scan=*static_cast<CompiledScan*>(raw);auto& r=scan.request;auto& e=*r.engine;
+  if(!stopped.IsStopped(scan.self)||!scan.roots.FinalRootWindow())return false;
+  scan.attempted=true;e.calibration_stop=&stopped;e.calibration_self=scan.self;
+  struct ClearStop{NativeEngine& e;~ClearStop(){e.calibration_stop=nullptr;e.calibration_self=nullptr;}} clear{e};
+  try{
+   scan.mappings=e.RefreshStoppedMappings(nullptr);
+   return scan.mappings&&r.fixture->CalibrateStopped(stopped,scan.self,e.runtime.receivers.jit_code_cache,scan.roots,CompiledReadable,&r.result);
+  }catch(...){scan.threw=true;return false;}
+ }
  static bool CalibrateCompiled(const runnable_jni::Context& context,void* raw){
   auto& r=*static_cast<CompiledRequest*>(raw);auto& e=*r.engine;
-  if(context.vm!=e.vm||context.env!=e.source_env||!e.graph_current||e.graph_current()!=context.self||!e.source_stop.Calibrated())return false;
+  if(!compiled_frame_fixture::SameOrdinaryOwner(context,e.source_env,static_cast<JavaVM*>(e.vm),r.current_thread)||!e.source_stop.Calibrated())return Fail(&r.error,"Compiled frame calibration callback differs from actual VM/environment/Thread/source owner");
   source_handle_roots::Pool pool(e.source_capabilities.Roots());
   if(!r.fixture->RegisterRoots(context,pool,&r.error))return false;
-  size_t extent=0;if(!method_identity::ReadableMappingExtent(context.self,&extent)||!r.fixture->Start(context.env,&r.error))return false;
-  bool proven=false;
+  size_t extent=0;if(!method_identity::ReadableMappingExtent(context.self,&extent))return Fail(&r.error,"Compiled frame current Thread mapping unavailable");
+  if(!r.fixture->Start(context.env,&r.error))return false;
+  bool proven=false;bool threw=false;bool mapping_failed=false;
   {native_source_stop::Session stopped(e.source_stop);
    CalibrationRoots roots(stopped,context.self);
    if(!pool.VisitUsedSlots([&](const void* slot){if(roots.count==roots.slots.size())return false;roots.slots[roots.count++]=slot;return true;})){
     r.fixture->Close(context.env,&r.error);return false;
    }
-   if(stopped.Begin(context.self,extent)){
-    e.calibration_stop=&stopped;e.calibration_self=context.self;
-    struct ClearStop{NativeEngine& e;~ClearStop(){e.calibration_stop=nullptr;e.calibration_self=nullptr;}} clear{e};
-    if(e.RefreshStoppedMappings(nullptr))proven=r.fixture->CalibrateStopped(stopped,context.self,e.runtime.receivers.jit_code_cache,roots,CompiledReadable,&r.result);
-   }else r.error=stopped.Failure();
+   CompiledScan scan{r,roots,context.self};
+   if(e.source_stop.RequiresOriginalWaiting()){
+    proven=stopped.InspectOriginalWaiting(context.self,extent,&scan,CalibrateCompiledStopped);
+   }else if(stopped.Begin(context.self,extent)){
+    proven=CalibrateCompiledStopped(&scan,stopped);
+   }
+   threw=scan.threw;mapping_failed=scan.attempted&&!scan.mappings;
+   if(!proven&&!scan.attempted)r.error=stopped.Failure();
   } // Actual resume/FinishGC/RestoreRunnable happen before any Java close.
   const bool closed=r.fixture->Close(context.env,&r.error);
+  if(mapping_failed)r.error="Compiled frame stopped mapping snapshot rejected";
+  if(threw)r.error="Compiled frame stopped inspection threw";
   if(!proven&&r.error.empty())r.error=r.result.failure?r.result.failure:"Compiled frame original map/value oracle rejected";
   return proven&&closed&&r.result.compiled_ready;
  }
  bool PrepareCompiledFrames(JNIEnv* env,jvmtiEnv* ti){
-  if(compiled_frames_proven||!source_capabilities.Roots().Calibrated()||!source_stop.Calibrated())return compiled_frames_proven;
+  if(compiled_frames_proven)return true;
+  if(!source_capabilities.Roots().Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-roots");
+  if(!source_stop.Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-stop");
+  if(!env||!ti||env->ExceptionCheck()||schema_run||graph_staging||(current&&current!=this))return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-requires-ordinary-unstaged-owner");
+  // Priming may already have acquired the independent source proof in an
+  // earlier operation. Borrow a fresh ordinary context for this retry; never
+  // rely on the finished operation's JNIEnv or transient current engine.
+  struct Context {NativeEngine& e;NativeEngine* previous;JNIEnv* env;jvmtiEnv* ti;
+   explicit Context(NativeEngine& owner,JNIEnv* now,jvmtiEnv* jvmti):e(owner),previous(current),env(owner.source_env),ti(owner.source_ti){current=&owner;e.source_env=now;e.source_ti=jvmti;}
+   ~Context(){e.source_env=env;e.source_ti=ti;current=previous;}
+  } context{*this,env,ti};
+  frame_geometry_diagnostic="compiled-frame-calibration-preparing-public-fixture";
   if(!PrepareStoppedMaps(&frame_geometry_diagnostic))return false;
   jclass type=env->GetObjectClass(input);jfieldID id=type?env->GetFieldID(type,"dex","[[B"):nullptr;
   auto dex=id?static_cast<jobjectArray>(env->GetObjectField(input,id)):nullptr;if(type)env->DeleteLocalRef(type);
-  if(!dex||env->ExceptionCheck())return false;
+  if(!dex||env->ExceptionCheck())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-installed-dex-input-unavailable");
   auto fixture=compiled_frame_fixture::Owner::Prepare(hooks,env,ti,dex,&frame_geometry_diagnostic);env->DeleteLocalRef(dex);
   if(!fixture)return false;
-  CompiledRequest request{this,fixture.get(),{}, {}};
-  if(runnable_executor::With(env,anchor,CalibrateCompiled,&request)!=runnable_jni::Result::kSuccess){if(!request.error.empty())frame_geometry_diagnostic=request.error;return false;}
+  auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+  if(!current_thread)return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-current-thread-leaf-unavailable");
+  CompiledRequest request{this,fixture.get(),{}, {},current_thread};
+  if(runnable_executor::With(env,anchor,CalibrateCompiled,&request)!=runnable_jni::Result::kSuccess){frame_geometry_diagnostic=request.error.empty()?"compiled-frame-calibration-runnable-callback-not-completed":request.error;return false;}
   auto finder=[&](const char* symbol){return hooks.FindSymbol("libart.so",symbol);};
   compiled_frames_proven=whole_process_frames::Service::Bind(request.result.scanner_family,finder,&whole_frames);
   if(!compiled_frames_proven)frame_geometry_diagnostic="Full proved compiled scanner binding rejected";return compiled_frames_proven;
@@ -620,7 +651,12 @@ struct NativeEngine final:Engine {
      return Fail(error,ordinary_source_diagnostic.c_str());}
   }
   if(!source_capabilities.Ready())return Fail(error,SourceFactoryDiagnostic().c_str());
-  return source_stop.Calibrated()||Fail(error,SourceStopDiagnostic().c_str());
+  if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
+  PrepareCompiledFrames(env,ti);
+  // The private worker must finish before clearing only its new exception.
+  // Its refusal is reported separately; it never changes the ordinary Run.
+  if(env->ExceptionCheck()){env->ExceptionClear();frame_geometry_diagnostic="Private compiled fixture calibration raised a Java exception";}
+  return true;
  }
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
   if(!activated||current||applying||defs.empty())return owned_failure_diagnostic::Unavailable(error,"engine activation/reentrant input");
