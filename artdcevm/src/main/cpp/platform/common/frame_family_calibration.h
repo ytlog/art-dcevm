@@ -12,6 +12,7 @@ struct Result {
  // kAndroid13 expresses the common 13--16 scanner storage/reader declaration;
  // it does not authorize their different InstrumentThreadStack semantics.
  Family scanner_family=Family::kAndroid13;
+ bool compiled_ready=false;
  active_frame_recovery_proof::Report proof{};
  const char* failure="not-calibrated";
 };
@@ -37,6 +38,28 @@ class Service {
  bool Prepare(Prepared* p)const {
   if(!p||p->context||!create_)return false;p->context.reset(create_());return p->context!=nullptr;
  }
+ bool ObserveGeometry(void* target,const MethodOracle* methods,size_t count,
+     Prepared& prepared,Result* output)const {
+  if(!output||!target||!prepared.context||!methods||count<3)return false;
+  bool model11=Methods(method_metadata::kAndroid11,methods,count);
+  bool model12=Methods(method_metadata::kAndroid12Onward,methods,count);
+  if(model11==model12)return false;
+  // Shared source constructor has the same signature in all declarations.
+  // Supply the largest COMPLETE C++ callback object, never invoke WalkStack
+  // until its independent thread/context/kind echo matches a fixed geometry.
+  Echo echo{};void* own_vptr=nullptr;std::memcpy(&own_vptr,static_cast<void*>(&echo),sizeof(own_vptr));
+  construct_(&echo,target,prepared.context.get(),abi::arm64::stack::WalkKind::kIncludeInlined,true);
+  std::memcpy(static_cast<void*>(&echo),&own_vptr,sizeof(own_vptr));
+  if(echo.thread!=target||echo.kind!=abi::arm64::stack::WalkKind::kIncludeInlined)return false;
+  const auto mask=abi::arm64::stack::ConstructorContextEchoMask(&echo,sizeof(echo),prepared.context.get());
+  Result result;
+  if(mask==9&&model11&&walk_old_&&!walk17_){result.geometry=Geometry::kLegacy368;result.scanner_family=Family::kAndroid11;}
+  else if(mask==2&&model12&&walk_old_&&!walk17_){result.geometry=Geometry::kLegacy376;result.scanner_family=Family::kAndroid12;}
+  else if(mask==4&&model12&&walk_old_&&!walk17_){result.geometry=Geometry::kCompact344;result.scanner_family=Family::kAndroid13;}
+  else if(mask==9&&model12&&walk17_&&!walk_old_){result.geometry=Geometry::kModern368;result.scanner_family=Family::kAndroid17;}
+  else return false;
+  result.failure="compiled-map-not-calibrated";*output=result;return true;
+ }
  // Caller owns a real suspended target/exclusive mutator scope, strong method
  // and witness roots, and a frozen mapping reader. No JNI/OS mapping discovery,
  // native allocation, hooks, suspension, or code mutation occurs here.
@@ -50,29 +73,15 @@ class Service {
   // Native decoder container has sixteen inline slots; this independent
   // calibration fixture is deliberately bounded to avoid any stopped allocation.
   for(const auto& caller:physical.callers)if(caller.registers>16)return false;
-  bool model11=Methods(method_metadata::kAndroid11,methods,count);
-  bool model12=Methods(method_metadata::kAndroid12Onward,methods,count);
-  if(model11==model12)return false;
-  // Shared source constructor has the same signature in all declarations.
-  // Supply the largest COMPLETE C++ callback object, never invoke WalkStack
-  // until its independent thread/context/kind echo matches a fixed geometry.
-  Echo echo{};void* own_vptr=nullptr;std::memcpy(&own_vptr,static_cast<void*>(&echo),sizeof(own_vptr));
-  construct_(&echo,target,prepared.context.get(),abi::arm64::stack::WalkKind::kIncludeInlined,true);
-  std::memcpy(static_cast<void*>(&echo),&own_vptr,sizeof(own_vptr));
-  if(echo.thread!=target||echo.kind!=abi::arm64::stack::WalkKind::kIncludeInlined)return false;
-  const auto mask=abi::arm64::stack::ConstructorContextEchoMask(&echo,sizeof(echo),prepared.context.get());
-  Result result;size_t index;
-  if(mask==9&&model11&&walk_old_&&!walk17_){result.geometry=Geometry::kLegacy368;result.scanner_family=Family::kAndroid11;index=0;}
-  else if(mask==2&&model12&&walk_old_&&!walk17_){result.geometry=Geometry::kLegacy376;result.scanner_family=Family::kAndroid12;index=1;}
-  else if(mask==4&&model12&&walk_old_&&!walk17_){result.geometry=Geometry::kCompact344;result.scanner_family=Family::kAndroid13;index=bound_[3]?3:2;}
-  else if(mask==9&&model12&&walk17_&&!walk_old_){result.geometry=Geometry::kModern368;result.scanner_family=Family::kAndroid17;index=4;}
-  else return false;
+  Result result;if(!ObserveGeometry(target,methods,count,prepared,&result))return false;
+  const size_t index=result.geometry==Geometry::kLegacy368?0:
+    result.geometry==Geometry::kLegacy376?1:result.geometry==Geometry::kModern368?4:bound_[3]?3:2;
   if(!bound_[index])return false;
   const active_frame_recovery_proof::Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},active_frame_recovery_proof::Shape::kThreePhysical};
   result.proof=services_[index].ProvePrepared(target,jit,oracle,scratch,capacity,prepared.context.get(),readable);
   const auto& p=result.proof;
   if(p.failure!=active_frame_recovery_proof::Failure::kNone||p.frames!=3||p.physical_matches!=3||p.physical_owner_mask!=7||p.inline_matches||p.header_checks!=3||p.dex_pc_checks!=3||p.integers!=3||p.references!=3||p.location_reads!=6)return false;
-  result.failure="";*output=result;return true;
+  result.compiled_ready=true;result.failure="";*output=result;return true;
  }
  private:
  struct Echo final:abi::arm64::stack::Visitor<abi::arm64::android12::CodeInfoPair> {

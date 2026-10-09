@@ -31,7 +31,17 @@ struct Report {
 class Service {
  public:
   template<class Finder> static bool Bind(Family family,Finder finder,Service* out) {
-    if(!out||(family!=Family::kAndroid11&&family!=Family::kAndroid12&&family!=Family::kAndroid13&&family!=Family::kAndroid14&&family!=Family::kAndroid15&&family!=Family::kAndroid16&&family!=Family::kAndroid17))return false;Service c;c.family_=family;
+    return BindDeclaration(family,finder,out,true);
+  }
+  // Requires independently calibrated constructor geometry and public method
+  // prefix only. All shadow/native frames can be scanned; the first compiled
+  // callback fails closed before any header/map/reader interpretation.
+  template<class Finder> static bool BindGeometryOnly(Family family,Finder finder,Service* out) {
+    return BindDeclaration(family,finder,out,false);
+  }
+ private:
+  template<class Finder> static bool BindDeclaration(Family family,Finder finder,Service* out,bool compiled_ready) {
+    if(!out||(family!=Family::kAndroid11&&family!=Family::kAndroid12&&family!=Family::kAndroid13&&family!=Family::kAndroid14&&family!=Family::kAndroid15&&family!=Family::kAndroid16&&family!=Family::kAndroid17))return false;Service c;c.family_=family;c.compiled_ready_=compiled_ready;
     const auto declaration=family==Family::kAndroid11?stack_visitor_service::Declaration::kAndroid11:
       family==Family::kAndroid12?stack_visitor_service::Declaration::kAndroid12:
       family==Family::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
@@ -56,9 +66,10 @@ class Service {
     c.canonical_=reinterpret_cast<abi::arm64::android14::frame_registers::Canonical>(finder(abi::arm64::android14::frame_registers::kCanonical));
     c.debugger_=reinterpret_cast<abi::arm64::android14::frame_registers::DebuggerValue>(finder(abi::arm64::android14::frame_registers::kDebuggerValue));
     c.accessible_=reinterpret_cast<abi::arm64::android14::frame_registers::AccessibleRegister>(finder(abi::arm64::android14::frame_registers::kAccessibleRegister));
-    if(!c.create_||!c.construct_||!c.map_||!c.decode_||!c.dex_pc_)return false;
+    if(!c.create_||(compiled_ready&&(!c.construct_||!c.map_||!c.decode_||!c.dex_pc_)))return false;
     *out=c;return true;
   }
+ public:
   // Allocate all Context/container/scratch storage BEFORE Session::Begin.
   // Native CodeItem register counts are uint16; no walk-time native allocations.
   struct Prepared {
@@ -120,6 +131,7 @@ class Service {
       if(physical&&*this->quick_frame!=method)return Reject("whole-frame-original-method-versus-current-quick-frame-mismatch");
       uint32_t flags;std::memcpy(&flags,static_cast<const unsigned char*>(method)+offsetof(abi::arm64::android12::Method12,access_flags),4);
       if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return true;}
+      if(!s.compiled_ready_)return Reject("whole-frame-compiled-geometry-not-calibrated");
       if(!this->header||!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
       if(s.family_==Family::kAndroid11?(!s.legacy_fast_&&(!s.legacy_canonical_||!s.debugger_)):
          s.family_==Family::kAndroid12?(!s.fast_&&(!s.legacy_canonical_||!s.debugger_)):(!s.fast_&&(!s.canonical_||!s.debugger_)))return Reject("whole-frame-original-location-reader-unavailable");
@@ -215,6 +227,7 @@ class Service {
     if(family_==Family::kAndroid17)return Walk<abi::arm64::android17::CodeInfo,abi::arm64::android17::CodeInfoPair>(r,target);
     return Walk<abi::arm64::android13::CodeInfo,abi::arm64::android13::CodeInfoPair>(r,target);
   }
+  bool compiled_ready_=false;
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;
   abi::arm64::dex_register_map::Decode decode_=nullptr;

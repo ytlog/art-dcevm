@@ -44,7 +44,10 @@ void CheckFamily(Family f){
  frame_family_calibration::Service::Prepared prepared;assert(service.Prepare(&prepared));assert(!service.Prepare(&prepared));
  const unsigned allocations=creates;decoded_frame_recovery::Location scratch[2];
  frame_family_calibration::Result result;auto run=[&]{return service.Calibrate(&thread,&jit,methods,3,physical,scratch,2,Readable,prepared,&result);};
- assert(run());assert(creates==allocations&&destroys==0);
+ bad_owner=true;
+ assert(service.ObserveGeometry(&thread,methods,3,prepared,&result)&&!result.compiled_ready);
+ assert(!run());bad_owner=false;
+ assert(run()&&result.compiled_ready);assert(creates==allocations&&destroys==0);
  assert(result.proof.frames==3&&result.proof.references==3&&result.proof.integers==3);
  assert(result.scanner_family==(f==Family::kAndroid11?f:f==Family::kAndroid12?f:f==Family::kAndroid17?f:Family::kAndroid13));
  bad_owner=true;assert(!run());bad_owner=false;

@@ -6,6 +6,7 @@
 #include <array>
 namespace {
 int thread_list,list_mutex,worker,empty_thread,jit_cache;void* list_mutex_pointer=&list_mutex;
+bool interpreter_only=false;
 bool list_locked=false,include_self=true,unknown=false,unmarked=false,aot=false,nterp=false,wrong_native_map=false,wrong_dexpc=false,inline_frame=false,wrong_native_value=false,cursor_drift=false;
 struct MethodPrefix {uint32_t klass=0,flags=0;} shadow_method,native_method{0,0x100},compiled_method;
 void* current_method=nullptr;
@@ -37,6 +38,7 @@ void WalkVisitor(void* p,bool transitions){
  if(v->thread==&self){current_method=&native_method;quick.method=current_method;v->quick_frame=reinterpret_cast<void**>(&quick);v->header=nullptr;v->VisitFrame();return;}
  assert(v->thread==&worker);
  current_method=&shadow_method;v->shadow_frame=&worker;if(!v->VisitFrame())return;
+ if(interpreter_only)return;
  current_method=&compiled_method;quick.method=current_method;v->shadow_frame=nullptr;v->quick_frame=reinterpret_cast<void**>(&quick);v->header=header;v->pc=reinterpret_cast<uintptr_t>(header)+36;
  if(unknown)v->header=nullptr;
  if(inline_frame)v->inline_frames.end.row=1;
@@ -84,6 +86,14 @@ int RunModernFrameFixture(){
  {native_source_stop::Session owner(stop);auto r=scanner.Scan(owner,&self,cache,&jit_cache,storage);assert(!r.accepted);}
  auto scan=[&](){native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));return scanner.Scan(owner,&self,cache,&jit_cache,storage);};
  auto report=scan();assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.empty_threads==1&&report.native_frames==1&&report.shadow_frames==1&&report.compiled_frames==1&&report.map_locations==1&&report.native_value_reads==1&&!list_locked&&!gc);
+ whole_process_frames::Service geometry;
+ assert(whole_process_frames::Service::BindGeometryOnly(code_info_view::SourceFamily::kAndroid13,[&](const char* name){
+   if(!std::strcmp(name,abi::arm64::android13::kConstructCodeInfo)||!std::strcmp(name,abi::arm64::dex_register_map::kDecode))return static_cast<void*>(nullptr);
+   return hooks.FindSymbol("libart.so",name);
+ },&geometry));
+ auto geometry_scan=[&]{native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));return geometry.Scan(owner,&self,cache,nullptr,storage);};
+ auto geometry_report=geometry_scan();assert(!geometry_report.accepted&&geometry_report.compiled_frames==0&&!std::strcmp(geometry_report.failure,"whole-frame-compiled-geometry-not-calibrated"));
+ interpreter_only=true;geometry_report=geometry_scan();assert(geometry_report.accepted&&geometry_report.compiled_frames==0&&geometry_report.shadow_frames==1&&geometry_report.native_frames==1);interpreter_only=false;
  inline_frame=true;report=scan();assert(report.accepted&&report.inlined_frames==1&&report.compiled_frames==1);inline_frame=false;
  for(auto* flag:{&unknown,&unmarked,&aot,&nterp,&wrong_native_map,&wrong_dexpc,&wrong_native_value}){*flag=true;report=scan();assert(!report.accepted&&report.registered_threads==3&&report.walked_threads==1&&!list_locked&&!gc&&self.flags==0);*flag=false;}
  cursor_drift=true;report=scan();assert(!report.accepted&&!std::strcmp(report.failure,"whole-frame-source-owner-or-native-cursor-lost-after-map"));cursor_drift=false;
