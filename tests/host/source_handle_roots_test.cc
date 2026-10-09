@@ -17,10 +17,19 @@ bool sized_scope=std::getenv("SOURCE_SCOPE_SIZED")!=nullptr;
 size_t OriginalReferences(){return sized_scope?16u:12u;}
 void* Top(){void* out=nullptr;std::memcpy(&out,thread.data()+original_top,8);return out;}
 void Publish(void* value){std::memcpy(thread.data()+original_top,&value,8);}
-bool corrupt_info=false,hide_owned=false;const void* public_slot=nullptr;size_t walks=0;
+bool corrupt_info=false,hide_owned=false,hide_variable=false,duplicate_variable=false;
+void* variable_local=nullptr;const void* public_slot=nullptr;size_t walks=0;
 void OriginalRoots(void* self,abi::arm64::android_common::HandleRootVisitor* visitor,uint32_t flags){
  assert(self==thread.data()&&flags==0&&Read32(self)==0);++walks;
  for(void* scope=Top();scope;){OriginalHeader header{};std::memcpy(&header,scope,sizeof(header));
+  if(header.count==-1){
+   if(!hide_variable){
+    auto* slot=static_cast<uint32_t*>(variable_local);
+    abi::arm64::android_common::NativeRootInfo info{nullptr,corrupt_info?5u:4u,0};
+    if(*slot){visitor->VisitRoots(&slot,1,info);if(duplicate_variable)visitor->VisitRoots(&slot,1,info);}
+   }
+   scope=header.previous;continue;
+  }
   assert(header.count>=0&&header.count<=32);
   const uint32_t used=sized_scope?Read32(static_cast<unsigned char*>(scope)+12):uint32_t(header.count);
   assert(used<=uint32_t(header.count));std::array<uint32_t*,32> roots{};
@@ -97,6 +106,25 @@ int main(){
    assert(!s.BorrowHandle(context,static_cast<const unsigned char*>(public_slot)-4,&borrowed)&&borrowed==new_class);
    assert(!s.BorrowHandle(context,static_cast<const unsigned char*>(public_slot)+8,&borrowed)&&borrowed==new_class);
   }
+  // Independent named source walker visits variable locals which are absent
+  // from the public Thread scope chain. Slot values/RootInfo must still match.
+  uint32_t local=uint32_t(uintptr_t(old_class));OriginalHeader variable{Top(),-1};
+  variable_local=&local;Publish(&variable);
+  assert(s.BorrowHandle(context,&local,&borrowed)&&borrowed==old_class);
+  assert(s.ObserveAllocatorHandle(context,reinterpret_cast<jobject>(old_class),&local,&error));
+  uint32_t outside=local;borrowed=new_class;
+  assert(!s.BorrowHandle(context,&outside,&borrowed)&&borrowed==new_class);
+  hide_variable=true;assert(!s.BorrowHandle(context,&local,&borrowed));hide_variable=false;
+  duplicate_variable=true;assert(!s.BorrowHandle(context,&local,&borrowed));duplicate_variable=false;
+  corrupt_info=true;assert(!s.BorrowHandle(context,&local,&borrowed));corrupt_info=false;
+  MoveRoots variable_move;variable_move.old_value=local;variable_move.next_value=uint32_t(uintptr_t(new_class));
+  OriginalRoots(thread.data(),&variable_move,0);
+  assert(s.BorrowHandle(context,&local,&borrowed)&&borrowed==new_class);
+  local=0;borrowed=new_class;assert(!s.BorrowHandle(context,&local,&borrowed)&&borrowed==new_class);
+  Put32(const_cast<void*>(public_slot),0,uint32_t(uintptr_t(old_class)));
+  Publish(variable.previous);variable_local=nullptr;
+  // Null entries in a fixed, bounded live scope remain legitimate Handles.
+  assert(s.BorrowHandle(context,static_cast<const char*>(public_slot)+4,&borrowed)&&!borrowed);
   const auto calls=jni_calls;
   assert(s.BorrowOwnedStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls==calls);
   assert(s.BorrowStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls>calls);

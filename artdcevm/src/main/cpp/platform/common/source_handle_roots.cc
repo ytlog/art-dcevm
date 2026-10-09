@@ -87,12 +87,12 @@ void Service::Visit(void* self,HandleRootVisitor* visitor)const{
 bool Service::Contains(void* self,const void* slot,uint32_t value,size_t references,void** owner)const{
  if(!references)references=references_;
  if(references!=sizeof(HandleScopeHeader)&&references!=sizeof(SizedHandleScopeHeader))return false;
- std::array<const void*,1024> visited{};size_t used=0;bool found=false;
+ std::array<const void*,1024> visited{};size_t used=0;bool found=false,variable=false;
  for(void* scope=Read<void*>(self,top_);scope;scope=Read<HandleScopeHeader>(scope).link){
   if(used==visited.size()||!Mapped(scope,sizeof(HandleScopeHeader)))return false;
   for(size_t i=0;i<used;++i)if(visited[i]==scope)return false;visited[used++]=scope;
   const auto header=Read<HandleScopeHeader>(scope);
-  if(header.count==-1)continue; // VariableSized marker; owning fixed scopes remain in the chain.
+  if(header.count==-1){variable=true;continue;} // Local scopes are traversed by ART, not the Thread chain.
   if(header.count<0||size_t(header.count)>(SIZE_MAX-references)/4||!Mapped(scope,references+size_t(header.count)*4))return false;
   uint32_t size=uint32_t(header.count);
   if(references==sizeof(SizedHandleScopeHeader))size=Read<uint32_t>(scope,offsetof(SizedHandleScopeHeader,size));
@@ -100,7 +100,26 @@ bool Service::Contains(void* self,const void* slot,uint32_t value,size_t referen
   const uintptr_t start=uintptr_t(scope)+references,address=uintptr_t(slot);
   if(address>=start&&(address-start)%4==0&&(address-start)/4<size){if(Read<uint32_t>(slot)!=value)return false;found=true;if(owner)*owner=scope;}
  }
- return found;
+ if(found)return true;
+ // A VariableSizedHandleScope owns local scopes outside the Thread's link
+ // chain. Only ART's named walker can attest their slot membership here;
+ // never infer the variable container's private field geometry. Fixed layout
+ // calibration must already have succeeded independently on a source scope.
+ if(!variable||!Calibrated()||references!=references_||!value)return false;
+ struct Membership final:HandleRootVisitor {
+  const void* slot;uint32_t expected;size_t seen=0;bool valid=true;
+  Membership(const void* p,uint32_t v):slot(p),expected(v){}
+  void VisitRoots(void***,size_t,const NativeRootInfo&)override{}
+  void VisitRoots(uint32_t** roots,size_t n,const NativeRootInfo& info)override{
+   for(size_t i=0;i<n;++i)if(roots[i]==slot){
+    ++seen;if(info.type!=4||info.thread_id!=0||*roots[i]!=expected)valid=false;
+   }
+  }
+ } proof(slot,value);
+ Visit(self,&proof);
+ // Non-null exact slots must be enumerated once. ART skips null roots, so
+ // an unenumerated null variable slot cannot provide membership evidence.
+ return proof.valid&&proof.seen==1&&Read<uint32_t>(slot)==value;
 }
 bool Service::CalibrateLayout(void* self,const void* slot,uint32_t value){
  // Read-only source-layout proof before publishing any owned scope. Every
