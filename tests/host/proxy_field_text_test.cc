@@ -7,6 +7,7 @@
 #include "platform/common/modern_field_metadata.h"
 #undef private
 #include "platform/common/dex_mapping_abi.h"
+#include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android11/class.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android17/class.h"
@@ -54,6 +55,17 @@ std::vector<unsigned char> Dex(){
  put(32,uint32_t(v.size()));return v;
 }
 }
+struct Snapshot {
+ std::vector<std::pair<const void*,size_t>> ranges;
+ const void* deny=nullptr;const void* truncate=nullptr;size_t calls=0;
+ static bool Extent(void* owner,const void* address,size_t* size){
+  auto& snapshot=*static_cast<Snapshot*>(owner);++snapshot.calls;
+  if(address==snapshot.deny)return false;
+  for(const auto& range:snapshot.ranges){const auto a=uintptr_t(address),b=uintptr_t(range.first);
+   if(a>=b&&a-b<range.second){*size=address==snapshot.truncate?1:range.second-(a-b);return true;}}
+  return false;
+ }
+};
 int main(){
  using namespace modern_field_metadata;
  auto* heap=static_cast<char*>(mmap(reinterpret_cast<void*>(0x20000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0));
@@ -85,6 +97,32 @@ int main(){
  field->dex_field_index=0;assert(metadata.Text(field,Model::kSplit,&name,&type,&error));assert(!std::strcmp(name,"ordinary")&&!std::strcmp(type,"I"));
  field->dex_field_index=1;assert(!metadata.Text(field,Model::kSplit,&name,&type,&error));
  assert(!metadata.Text(field,Model::kMerged,&name,&type,&error));
+ // The same fixed reader uses an explicit snapshot without any /proc/maps.
+ Snapshot snapshot{{{heap,4096},{bytes.data(),bytes.size()}}};
+ ReadContext context{&snapshot,Snapshot::Extent};metadata.calibrated_=true;
+ field->dex_field_index=0;field_copy::CopyFieldView identity;
+ const auto queries=method_identity::MappingOsQueries();
+ for(size_t i=0;i<100;++i){assert(metadata.FieldIdentity(field,&identity,&error,&context));assert(!std::strcmp(identity.name,"ordinary")&&!std::strcmp(identity.descriptor,"I"));}
+ assert(snapshot.calls>=600&&method_identity::MappingOsQueries()==queries);
+ // Every source range retains its checks; a denied snapshot cannot fall back.
+ for(const void* target:{static_cast<void*>(field),static_cast<void*>(klass),static_cast<void*>(cache),static_cast<void*>(prefix),static_cast<void*>(bytes.data())}){
+  snapshot.deny=target;assert(!metadata.FieldIdentity(field,&identity,&error,&context));snapshot.deny=nullptr;
+  snapshot.truncate=target;assert(!metadata.FieldIdentity(field,&identity,&error,&context));snapshot.truncate=nullptr;
+ }
+ ReadContext absent{&snapshot,nullptr};assert(!metadata.FieldIdentity(field,&identity,&error,&absent));
+ Snapshot different{{{heap,4096}}};ReadContext other{&different,Snapshot::Extent};assert(!metadata.FieldIdentity(field,&identity,&error,&other));
+ // Reader failure and DEX identity/type mismatch cannot publish a field view.
+ field->dex_field_index=1;assert(!metadata.FieldIdentity(field,&identity,&error,&context));field->dex_field_index=0;
+ // Split field-array prefix/length bounds use the same explicit view.
+ auto* allocation=heap+1024;uint32_t count=1;std::memcpy(allocation,&count,4);
+ auto* entry=new(allocation+field_array::kDataOffset)field_array::Field{uint32_t(uintptr_t(klass)),1,0,8};
+ const uint64_t raw_array=uintptr_t(allocation);std::memcpy(klass+offsetof(abi::arm64::android11::Class11,ifields),&raw_array,8);
+ field_array::View fields;assert(metadata.Fields(klass,false,&fields,&error,&context)&&fields.selected_count==1);
+ snapshot.deny=allocation;assert(!metadata.Fields(klass,false,&fields,&error,&context));snapshot.deny=nullptr;
+ snapshot.truncate=allocation;assert(!metadata.Fields(klass,false,&fields,&error,&context));snapshot.truncate=nullptr;
+ (void)entry;
+ assert(method_identity::MappingOsQueries()==queries);
+ assert(metadata.FieldIdentity(field,&identity,&error));assert(method_identity::MappingOsQueries()>queries);
  munmap(heap,4096);
  std::cout<<"Actual FieldMetadata Text: named/partial/missing leaves; split/merged proxy static0/1, invalid index/flags/root, ordinary DEX identity PASS\n";
 }

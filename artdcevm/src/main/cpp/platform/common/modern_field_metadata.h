@@ -16,6 +16,14 @@ struct FieldOracle {
 // The caller enters a calibrated Runnable callback, owns stable name/descriptor
 // bytes, and supplies every declared field of an initialized fixture class.
 enum class Model { kSplit, kMerged };
+// Ephemeral permissions view of the caller's current mapping snapshot. It does
+// not establish object lifetime, GC exclusion or mutator access. Caller must
+// retain the same actual no-safepoint, GC-stable rooted scope for the whole read;
+// never cache this context across windows. Rejection never falls back to OS maps.
+struct ReadContext {
+  void* owner=nullptr;
+  bool (*extent)(void*,const void*,size_t*)=nullptr;
+};
 class FieldMetadata {
  public:
   bool Bind(HookEngine&, std::string*);
@@ -24,17 +32,17 @@ class FieldMetadata {
   bool Calibrated() const { return calibrated_; }
   bool InterfaceDeclarationCalibrated()const{return interface_declaration_calibrated_;}
   Model StorageModel() const { return model_; }
-  bool Fields(void* klass, bool is_static, field_array::View*, std::string*) const;
+  bool Fields(void* klass, bool is_static, field_array::View*, std::string*, const ReadContext* =nullptr) const;
   field_copy::CopyClassView Class(void* klass, bool is_static) const;
   // Reject unsupported Class/field text instead of invoking commit invariants.
   // Caller owns real native roots and the calibrated source/mutator scope.
-  bool ClassIdentity(void*,field_copy::CopyClassView*,std::string*)const;
+  bool ClassIdentity(void*,field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
   // Exact independently staged public descriptor and, for a proxy terminal,
   // its public Class.getName String root/bytes. No platform string is mutated.
   bool ClassIdentityVerified(void*,const char* descriptor,void* public_proxy_name,
       const char* proxy_name,const char* negative_proxy_name,
-      field_copy::CopyClassView*,std::string*)const;
-  bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*)const;
+      field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
+  bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext* =nullptr)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal) const;
   void* FieldDeclaringClass(void* field)const;
   void* Reference(void* object, size_t offset, bool is_volatile=false) const;
@@ -44,16 +52,16 @@ class FieldMetadata {
   using ClassText = const char* (*)(void*, void*);
   using Mark = void* (*)(void*);
   using StringEquals=bool (*)(void*,const char*);
-  bool Descriptor(void* klass, Model, const char** output, std::string*) const;
+  bool Descriptor(void* klass, Model, const char** output, std::string*, const ReadContext* =nullptr) const;
   bool Candidate(const runnable_jni::Context&, void* klass, Model, const char*, const FieldOracle*, size_t, std::string*) const;
-  bool FieldsCandidate(void*,Model,bool,field_array::View*,std::string*) const;
+  bool FieldsCandidate(void*,Model,bool,field_array::View*,std::string*,const ReadContext* =nullptr) const;
   FieldLeaf field_leaf_ = nullptr;
   FieldText name_ = nullptr, descriptor_ = nullptr;
   ClassText class_descriptor_ = nullptr;
   StringEquals string_equals_=nullptr;
   Mark mark_ = nullptr;
   Mark root_ = nullptr;
-  bool Text(void* field, Model, const char** name, const char** descriptor, std::string*) const;
+  bool Text(void* field, Model, const char** name, const char** descriptor, std::string*, const ReadContext* =nullptr) const;
   bool bound_ = false, calibrated_ = false;
   bool named_interface_relation_=false,interface_declaration_calibrated_=false;
   Model model_ = Model::kSplit;

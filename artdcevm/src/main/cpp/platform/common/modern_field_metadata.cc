@@ -28,6 +28,11 @@ constexpr Layout kMerged{{sizeof(MergedClass),offsetof(MergedClass,fields),offse
     offsetof(MergedClass,access_flags)};
 const Layout& Source(Model model){return model==Model::kSplit?kSplit:kMerged;}
 bool Fail(std::string* error, const char* message) { if(error)*error=message;return false; }
+bool Extent(const ReadContext* context,const void* address,size_t* bytes) {
+  if(!context)return method_identity::ReadableMappingExtent(address,bytes);
+  if(bytes)*bytes=0;
+  return address&&bytes&&context->extent&&context->extent(context->owner,address,bytes);
+}
 void Require(bool value) {if(!value)std::abort();}
 }
 bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
@@ -48,13 +53,16 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   mark_=mark;root_=root;bound_=true;
   if(error)error->clear();return true;
 }
-bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error)const {
+bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error,const ReadContext* context)const {
   // Fixed legacy Class/DexCache/DexFile declarations, used only after the
   // reflected field's native identity and declaring Class have been established.
   // The ordinary split candidate must match every independent fixture field.
+  size_t field_extent=0;
+  if(context&&(!Extent(context,field,&field_extent)||field_extent<sizeof(field_array::Field)))
+    return Fail(error,"Field source prefix is not readable in this mapping context");
   void* klass=root_(field);size_t extent=0;
   const auto& source=Source(model);
-  if(!klass||!method_identity::ReadableMappingExtent(klass,&extent)||extent<source.fields.class_size)
+  if(!klass||!Extent(context,klass,&extent)||extent<source.fields.class_size)
     return Fail(error,"Field declaring Class source prefix is not readable");
   uint32_t flags=0;std::memcpy(&flags,static_cast<const unsigned char*>(klass)+source.access_flags,4);
   // Fixed ArtField::IsProxyField/GetName/GetTypeDescriptor: only the rooted
@@ -81,23 +89,23 @@ bool FieldMetadata::Text(void* field,Model model,const char** name,const char** 
   if(model!=Model::kSplit)return Fail(error,"Merged fields require named text services");
   void* cache=Reference(klass,offsetof(SplitClass,dex_cache));
   constexpr size_t offset=offsetof(abi::arm64::android11::LegacyCache,dex_file);
-  if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<offset+8)
+  if(!cache||!Extent(context,cache,&extent)||extent<offset+8)
     return Fail(error,"Legacy DexCache prefix is not readable");
   uint64_t raw_file=0;std::memcpy(&raw_file,static_cast<const unsigned char*>(cache)+offset,8);
   auto* file=reinterpret_cast<void*>(uintptr_t(raw_file));
-  if(!file||!method_identity::ReadableMappingExtent(file,&extent)||extent<sizeof(dex_mapping_abi::Prefix))
+  if(!file||!Extent(context,file,&extent)||extent<sizeof(dex_mapping_abi::Prefix))
     return Fail(error,"Legacy DexFile prefix is not readable");
   evolution::MappedDexMetadata mapping;
   if(!dex_file_metadata::ReadFile(30,file,extent,0,&mapping,error))return false;
   size_t header_extent=0,data_extent=0;
-  if(!method_identity::ReadableMappingExtent(mapping.begin,&header_extent)||mapping.size>header_extent||
-     !method_identity::ReadableMappingExtent(mapping.data_begin,&data_extent)||mapping.data_size>data_extent)
+  if(!Extent(context,mapping.begin,&header_extent)||mapping.size>header_extent||
+     !Extent(context,mapping.data_begin,&data_extent)||mapping.data_size>data_extent)
     return Fail(error,"Legacy DEX ranges exceed live readable mappings");
   uint32_t index=0;std::memcpy(&index,static_cast<const unsigned char*>(field)+offsetof(field_array::Field,dex_field_index),4);
   evolution::MappedDexFieldReference reference;
   if(!evolution::ReadMappedDexFieldReference(mapping,index,&reference,error))return false;
   const char* owner=nullptr;
-  if(!Descriptor(klass,model,&owner,error)||std::strcmp(owner,reference.declaring_class))
+  if(!Descriptor(klass,model,&owner,error,context)||std::strcmp(owner,reference.declaring_class))
     return Fail(error,"Legacy FieldId owner differs from named Class identity");
   *name=reference.name;*descriptor=reference.descriptor;
   return true;
@@ -113,24 +121,24 @@ void* FieldMetadata::Reference(void* object,size_t offset,bool is_volatile) cons
   void* raw=reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
   return ((monitor>>28)&1u)?mark_(raw):raw;
 }
-bool FieldMetadata::FieldsCandidate(void* klass,Model model,bool is_static,field_array::View* output,std::string* error)const{
+bool FieldMetadata::FieldsCandidate(void* klass,Model model,bool is_static,field_array::View* output,std::string* error,const ReadContext* context)const{
   const auto& layout=Source(model).fields;
   if(!bound_||!klass||!output)return Fail(error,"Invalid merged field metadata context");
   size_t class_extent=0;
-  if(!method_identity::ReadableMappingExtent(klass,&class_extent))return Fail(error,"Class prefix has no readable mapping");
+  if(!Extent(context,klass,&class_extent))return Fail(error,"Class prefix has no readable mapping");
   void* array=nullptr;
   if(!field_array::ReadPointer(layout,klass,class_extent,is_static,&array))
     return Fail(error,"Class merged-field source candidate has an invalid prefix");
   size_t array_extent=0;
-  if(array&&!method_identity::ReadableMappingExtent(array,&array_extent))
+  if(array&&!Extent(context,array,&array_extent))
     return Fail(error,"Merged field allocation has no readable mapping");
   if(!field_array::Read(layout,array,array_extent,is_static,output))
     return Fail(error,"Merged field allocation exceeds its readable mapping");
   if(error)error->clear();return true;
 }
-bool FieldMetadata::Fields(void* klass,bool is_static,field_array::View* output,std::string* error)const{
+bool FieldMetadata::Fields(void* klass,bool is_static,field_array::View* output,std::string* error,const ReadContext* context)const{
   if(!calibrated_)return Fail(error,"Field source declarations are not behaviorally calibrated");
-  return FieldsCandidate(klass,model_,is_static,output,error);
+  return FieldsCandidate(klass,model_,is_static,output,error,context);
 }
 bool FieldMetadata::Candidate(const runnable_jni::Context& context,void* klass,Model model,
     const char* expected_class_descriptor,const FieldOracle* oracles,size_t count,std::string* error)const{
@@ -227,11 +235,11 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject globa
   }
   if(error)error->clear();return true;
 }
-bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::string* error)const {
+bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::string* error,const ReadContext* context)const {
   if(!bound_||!klass||!output)return Fail(error,"Missing live Class for named descriptor identity");
   const auto& layout=Source(model);
   size_t extent=0;
-  if(!method_identity::ReadableMappingExtent(klass,&extent)||extent<layout.fields.class_size)
+  if(!Extent(context,klass,&extent)||extent<layout.fields.class_size)
     return Fail(error,"Class source prefix has no readable mapping");
   const auto* bytes=static_cast<const unsigned char*>(klass);
   uint32_t component=0,flags=0;
@@ -248,15 +256,15 @@ bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::
 }
 
 bool FieldMetadata::ClassIdentityVerified(void* klass,const char* expected,void* public_name,
-    const char* name,const char* negative,field_copy::CopyClassView* out,std::string* error)const {
+    const char* name,const char* negative,field_copy::CopyClassView* out,std::string* error,const ReadContext* context)const {
   if(!calibrated_||!klass||!expected||!*expected||!out)return Fail(error,"Verified Class identity lacks independently staged descriptor");
   const auto& layout=Source(model_);void* terminal=klass;size_t dim=0;
   while(expected[dim]=='['){
-    size_t extent=0;if(!method_identity::ReadableMappingExtent(terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Array component source prefix is unreadable");
+    size_t extent=0;if(!Extent(context,terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Array component source prefix is unreadable");
     terminal=Reference(terminal,offsetof(MergedClass,component_type));
     if(!terminal)return Fail(error,"Native array dimensions differ from public descriptor");++dim;
   }
-  size_t extent=0;if(!method_identity::ReadableMappingExtent(terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Terminal Class source prefix is unreadable");
+  size_t extent=0;if(!Extent(context,terminal,&extent)||extent<layout.fields.class_size)return Fail(error,"Terminal Class source prefix is unreadable");
   if(Reference(terminal,offsetof(MergedClass,component_type)))return Fail(error,"Native array has additional unstaged dimensions");
   uint32_t flags=0;std::memcpy(&flags,static_cast<const char*>(terminal)+layout.access_flags,4);
   if(flags&0x40000u){
@@ -269,29 +277,29 @@ bool FieldMetadata::ClassIdentityVerified(void* klass,const char* expected,void*
     if(length<2||descriptor[0]!='L'||descriptor[length-1]!=';'||std::strlen(name)!=length-2)return Fail(error,"Proxy public name/descriptor length differs");
     for(size_t i=0;i<length-2;++i)if((name[i]=='.'?'/':name[i])!=descriptor[i+1])return Fail(error,"Proxy public name/descriptor spelling differs");
   }else{
-    const char* actual=nullptr;if(!Descriptor(terminal,model_,&actual,error))return false;
+    const char* actual=nullptr;if(!Descriptor(terminal,model_,&actual,error,context))return false;
     if(std::strcmp(actual,expected+dim))return Fail(error,"Native terminal descriptor differs from public Class signature");
   }
-  field_array::View fields;if(!Fields(klass,false,&fields,error))return false;
+  field_array::View fields;if(!Fields(klass,false,&fields,error,context))return false;
   auto* parent=Reference(klass,layout.parent);
   *out={parent,Reference(klass,layout.loader),expected,fields.selected_count,!parent&&!std::strcmp(expected,"Ljava/lang/Object;")};
   if(error)error->clear();return true;
 }
 
-bool FieldMetadata::ClassIdentity(void* klass,field_copy::CopyClassView* out,std::string* error)const {
+bool FieldMetadata::ClassIdentity(void* klass,field_copy::CopyClassView* out,std::string* error,const ReadContext* context)const {
   if(!calibrated_||!klass||!out)return Fail(error,"Class identity lacks calibrated rooted source");
   const auto& layout=Source(model_);field_array::View fields;
-  if(!Fields(klass,false,&fields,error))return false;
-  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error))return false;
+  if(!Fields(klass,false,&fields,error,context))return false;
+  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error,context))return false;
   auto* parent=Reference(klass,layout.parent);
   *out={parent,Reference(klass,layout.loader),descriptor,fields.selected_count,
       !parent&&!std::strcmp(descriptor,"Ljava/lang/Object;")};
   return true;
 }
-bool FieldMetadata::FieldIdentity(void* field,field_copy::CopyFieldView* out,std::string* error)const {
+bool FieldMetadata::FieldIdentity(void* field,field_copy::CopyFieldView* out,std::string* error,const ReadContext* context)const {
   if(!calibrated_||!field||!out)return Fail(error,"Field identity lacks calibrated rooted source");
   const char *name=nullptr,*descriptor=nullptr;
-  if(!Text(field,model_,&name,&descriptor,error))return false;
+  if(!Text(field,model_,&name,&descriptor,error,context))return false;
   *out={field,name,descriptor};return true;
 }
 field_copy::CopyClassView FieldMetadata::Class(void* klass,bool is_static)const{

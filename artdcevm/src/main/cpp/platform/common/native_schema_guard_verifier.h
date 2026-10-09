@@ -54,6 +54,9 @@ struct Bindings {
   // Lifetime is proved by Class/member roots; maps only attest permissions.
   bool (*readable)(void*,const void*,size_t)=nullptr;
   bool (*writable)(void*,const void*,size_t)=nullptr;
+  // Extent from that same current snapshot, valid only in the caller's actual
+  // GC-stable native window. Supplied denial must never invoke OS fallback.
+  bool (*extent)(void*,const void*,size_t*)=nullptr;
 };
 enum class Window {Verified,Collected};
 class Verifier final:public native_schema_policy::GuardVerifier {

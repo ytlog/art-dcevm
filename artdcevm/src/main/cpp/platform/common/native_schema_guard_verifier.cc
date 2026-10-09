@@ -190,6 +190,8 @@ struct Verifier::State {
   struct Diagnostics {std::string* error;uint64_t before;bool success=false;~Diagnostics(){
    if(!success&&error&&!error->empty()){char suffix[64];std::snprintf(suffix,sizeof(suffix)," [mappingOsQueries=%llu]",static_cast<unsigned long long>(method_identity::MappingOsQueries()-before));try{error->append(suffix);}catch(const std::bad_alloc&){}}
   }} diagnostics{error,method_identity::MappingOsQueries()};
+  const modern_field_metadata::ReadContext read_context{bindings.owner,bindings.extent};
+  const auto* context=bindings.extent?&read_context:nullptr;
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_native_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
   Snapshot result;result.classes.resize(nodes.size());result.loaders.resize(nodes.size());result.parents.resize(nodes.size(),absent);result.declared.resize(nodes.size());result.all_methods.resize(nodes.size());
@@ -212,7 +214,7 @@ struct Verifier::State {
    const auto terminal_node=std::find(result.classes.begin(),result.classes.end(),terminal);
    if(terminal_node!=result.classes.end()){const auto& source=nodes[size_t(terminal_node-result.classes.begin())];
     if(source.class_name){if(!roots.Read(source.class_name,&proxy_name))return Fail(error,"Public proxy name root could not be decoded");name=source.class_name_text.c_str();negative=source.negative_class_name.c_str();}}
-   const bool identified=bindings.metadata->ClassIdentityVerified(klass,node.schema.descriptor.c_str(),proxy_name,name,negative,&identity,&identity_error);
+   const bool identified=bindings.metadata->ClassIdentityVerified(klass,node.schema.descriptor.c_str(),proxy_name,name,negative,&identity,&identity_error,context);
    const bool same_descriptor=identified&&identity.descriptor&&node.schema.descriptor==identity.descriptor;
    const bool same_loader=identified&&identity.loader==result.loaders[n];
    if(!identified||!same_descriptor||!same_loader){
@@ -232,7 +234,7 @@ struct Verifier::State {
     void* field=bindings.decode_native_field(bindings.owner,klass,node.field_ids[i]);field_copy::CopyFieldView identity;
     const bool mapped=Mapped(field,sizeof(field_array::Field));
     const bool owner=mapped&&bindings.metadata->FieldDeclaringClass(field)==klass;
-    std::string native_error;const bool text=owner&&bindings.metadata->FieldIdentity(field,&identity,&native_error);
+    std::string native_error;const bool text=owner&&bindings.metadata->FieldIdentity(field,&identity,&native_error,context);
     const bool name=text&&identity.name&&node.schema.fields[i].name==identity.name;
     const bool descriptor=text&&identity.descriptor&&node.schema.fields[i].descriptor==identity.descriptor;
     const uint32_t raw=mapped?field_array::Flags(field):0;
