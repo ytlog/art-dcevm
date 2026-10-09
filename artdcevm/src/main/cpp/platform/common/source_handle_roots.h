@@ -15,6 +15,9 @@ class Service final {
   // Handle argument and the owner's independently rooted public original Class.
   // Callback must run in its already established live Runnable Context.
   bool ObserveAllocatorHandle(const runnable_jni::Context&,jobject strong_original,const void* source_handle,std::string*);
+  // Borrow a live source slot only after actual walker calibration; output may
+  // not survive a safepoint unless immediately copied into an owned Scope.
+  bool BorrowHandle(const runnable_jni::Context&,const void* slot,void** output)const;
   bool Calibrated()const{return calibrated_.load(std::memory_order_acquire);}
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;
  private:

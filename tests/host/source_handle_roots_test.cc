@@ -65,7 +65,13 @@ int main(){
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.Calibrated());hide_owned=false;
  request.expected=true;
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(service.Calibrated()&&Top()==original&&walks>=5);
- auto use=[](const runnable_jni::Context&,void* p){auto& s=*static_cast<source_handle_roots::Service*>(p);std::string error;
+ auto use=[](const runnable_jni::Context& context,void* p){auto& s=*static_cast<source_handle_roots::Service*>(p);std::string error;
+  void* borrowed=nullptr;assert(s.BorrowHandle(context,public_slot,&borrowed)&&borrowed==old_class);
+  uint32_t foreign_slot=uint32_t(uintptr_t(old_class));borrowed=new_class;
+  assert(!s.BorrowHandle(context,&foreign_slot,&borrowed)&&borrowed==new_class);
+  auto foreign_context=context;foreign_context.self=foreign_thread.data();
+  assert(!s.BorrowHandle(foreign_context,public_slot,&borrowed)&&borrowed==new_class);
+
   auto outer=s.CreateScope(3,&error);assert(outer&&!outer->Get(0)&&!outer->Get(2));outer->Set(0,old_class);
   {auto inner=s.CreateScope(2,&error);assert(inner&&!inner->Get(0));inner->Set(1,old_class);
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
@@ -76,6 +82,7 @@ int main(){
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
    for(auto slot:slots)assert(Read32(slot)==uint32_t(uintptr_t(new_class)));
   }
+  assert(s.BorrowHandle(context,outer->Slot(0),&borrowed)&&borrowed==new_class);
   assert(outer->Get(0)==new_class);return true;
  };
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),use,&service)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.CreateScope(1,&error));

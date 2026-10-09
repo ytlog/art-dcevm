@@ -75,6 +75,13 @@ bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobjec
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");
  calibrated_.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
+bool Service::BorrowHandle(const runnable_jni::Context& context,const void* slot,void** output)const {
+ if(!output||!Calibrated()||!Runnable(context.self)||!context.env||
+    Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env||!Mapped(slot,4))return false;
+ const uint32_t value=Read<uint32_t>(slot);
+ if(!Contains(context.self,slot,value))return false;
+ *output=reinterpret_cast<void*>(uintptr_t(value));return true;
+}
 std::unique_ptr<Scope> Service::CreateUnchecked(void* self,uint32_t count)const{return std::unique_ptr<Scope>(new Scope(*this,self,count));}
 std::unique_ptr<Scope> Service::CreateScope(uint32_t count,std::string* error)const{
  if(!Calibrated()||!Runnable(current_?current_():nullptr)||count>INT32_MAX){Fail(error,"Unproven or non-Runnable owned handle scope");return nullptr;}
