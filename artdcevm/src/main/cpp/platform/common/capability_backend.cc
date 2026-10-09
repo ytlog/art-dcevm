@@ -55,7 +55,9 @@ std::string CapabilityBackend::Capabilities()const {
  const std::string source_diagnostics=std::string(",\"sourceCapabilitiesCalibrated\":")+
    (ready_&&common_&&common_->SourceCapabilitiesCalibrated()?"true":"false")+
    ",\"frameGeometryCalibrated\":"+(ready_&&common_&&common_->FrameGeometryCalibrated()?"true":"false")+
-   ",\"sourceFactoryDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceFactoryDiagnostic():"production-source-owner-not-observed");
+   ",\"sourceFactoryDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceFactoryDiagnostic():"production-source-owner-not-observed")+
+   ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+
+   ",\"frameCalibrationDiagnostic\":"+QuoteJsonMutf8(common_?common_->FrameCalibrationDiagnostic():"compiled-frame-calibration-not-attempted");
  if(source_){
   auto report=source_->Capabilities();
   if(!report.empty()&&report.back()=='}'){report.pop_back();report+=source_diagnostics+"}";}
