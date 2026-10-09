@@ -31,7 +31,7 @@ struct WaitingInvocation {
  void* expected_mutex=nullptr;void* owner=nullptr;
  bool (*prepare)(void*,Session&) noexcept=nullptr;
  unsigned waits=0,unlocks=0;bool inside_wait=false,wait_returned=false;
- bool valid=true,callback_returned=false,accepted=false,inside_callback=false;
+ bool valid=true,callback_returned=false,accepted=false,inside_callback=false,inspection=false;
 };
 thread_local WaitingInvocation* waiting_invocation=nullptr;
 
@@ -76,7 +76,11 @@ static void MutexUnlock(void* mutex,void* self) {
  if(!WaitingState(*w,kWaitingGC))std::abort();
  o.suspended_=o.exclusive_=true;o.phase_=Session::Phase::kStopped;active=&o;
  const bool accepted=w->prepare(w->owner,o);w->callback_returned=true;
- if(accepted){
+ if(w->inspection){
+  if(o.phase_!=Session::Phase::kStopped||!o.IsCollectedStop(w->self))std::abort();
+  w->accepted=accepted;
+  if(!o.RollbackBeforeSource())std::abort();
+ }else if(accepted){
   if(o.phase_!=Session::Phase::kContinuing||!o.Reserved()||o.exclusive_||!o.waiting_window_||
      !WaitingState(*w,kWaitingGC))std::abort();
   w->accepted=true;
@@ -293,6 +297,14 @@ bool Session::StoppedState()const noexcept {
 }
 bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
     bool (*prepare)(void*,Session&) noexcept) noexcept {
+ return RunOriginalWaiting(self,extent,owner,prepare,false);
+}
+bool Session::InspectOriginalWaiting(void* self,size_t extent,void* owner,
+    bool (*inspect)(void*,Session&) noexcept) noexcept {
+ return RunOriginalWaiting(self,extent,owner,inspect,true);
+}
+bool Session::RunOriginalWaiting(void* self,size_t extent,void* owner,
+    bool (*prepare)(void*,Session&) noexcept,bool inspection) noexcept {
  if(phase_!=Phase::kEmpty||active||finishing||borrowed||observation||waiting_invocation||
     !service_.calibrated_||!service_.waiting_calibrated_||!owner||!prepare||!self||
     service_.current_()!=self||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_){
@@ -300,7 +312,7 @@ bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
  }
  self_=self;extent_=extent;
  WaitingInvocation w;w.service=&service_;w.session=this;w.self=self;w.extent=extent;
- w.expected_mutex=service_.waiting_mutex_;w.owner=owner;w.prepare=prepare;
+ w.expected_mutex=service_.waiting_mutex_;w.owner=owner;w.prepare=prepare;w.inspection=inspection;
  if(!NativeHooks::WaitingState(w,service_.state_.RunnableState())){
   failure_="original-WaitingGC-requires-actual-Runnable";return false;
  }
@@ -311,6 +323,10 @@ bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
  if(!w.callback_returned){original_finish(service_.heap_,self_,s::kNoCollection);
   phase_=Phase::kRolledBack;failure_="original-WaitingGC-calibrated-shape-mismatch";return false;}
  if(!w.valid||w.waits!=1||w.unlocks!=1||w.frozen_mutex!=service_.waiting_mutex_)std::abort();
+ if(inspection){
+  if(Reserved()||active==this||phase_!=Phase::kRolledBack)std::abort();
+  failure_=w.accepted?"":"original-WaitingGC-inspection-refused";return w.accepted;
+ }
  if(w.accepted){if(phase_!=Phase::kContinuing||!IsPublicationWindow(self_))std::abort();return true;}
  if(Reserved()||active==this||phase_!=Phase::kRolledBack)std::abort();
  failure_="original-WaitingGC-stopped-plan-refused";return false;

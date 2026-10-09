@@ -126,6 +126,11 @@ class Session {
   // refusal/resume/FinishGC completes before original C++ restores Runnable.
   bool BeginOriginalWaiting(void* self,size_t mapped_extent,void* owner,
       bool (*prepare)(void*,Session&) noexcept) noexcept;
+  // Pure inspection: true means the callback completed while genuinely stopped.
+  // Always resumes SSA/finishes GC inside the original scope before returning.
+  // No source continuation/publication permission survives this call.
+  bool InspectOriginalWaiting(void* self,size_t mapped_extent,void* owner,
+      bool (*inspect)(void*,Session&) noexcept) noexcept;
   bool PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
       native_source_gc_publication::Matcher,std::string* error);
   bool CanPublishDex(void* driver,const void* holder,void* linker)const noexcept;
@@ -164,6 +169,7 @@ class Session {
   bool SameOwner()const noexcept;
   bool Native()const noexcept;
   bool StoppedState()const noexcept;
+  bool RunOriginalWaiting(void*,size_t,void*,bool (*)(void*,Session&) noexcept,bool inspection) noexcept;
   bool MatchPublication(void*,void*,void*,size_t*)const noexcept;
   void Rollback() noexcept;
   Service service_;void* self_=nullptr;size_t extent_=0;

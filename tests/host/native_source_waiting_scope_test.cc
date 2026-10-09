@@ -101,7 +101,8 @@ bool Prepare(void*owner,native_source_stop::Session&stop)noexcept{
  assert(owner==&self_driver&&flags==74u<<16&&gc&&!gc_lock&&exclusive);
  ++callbacks;assert(stop.IsCollectedStop(&flags)&&!stop.IsFinalWindow(&flags)&&!stop.IsStopped(&body));
  if(!std::strcmp(mode,"reentry"))assert(!stop.BeginOriginalWaiting(&flags,sizeof(flags),owner,Prepare));
- if(!std::strcmp(mode,"refuse"))return false;
+ if(!std::strcmp(mode,"refuse")||!std::strcmp(mode,"inspect-refuse"))return false;
+ if(!std::strcmp(mode,"inspect"))return true;
  if(!std::strcmp(mode,"bad-accepted"))return true;
  return stop.ContinueSource();
 }
@@ -158,9 +159,11 @@ int main(int argc,char**argv){
  for(int i=0;i<3;++i){
   native_source_stop::Session stop(service);assert(!stop.Begin(&flags,sizeof(flags)));
   callbacks=0;noalloc=true;
-  const bool accepted=stop.BeginOriginalWaiting(&flags,sizeof(flags),&self_driver,Prepare);
+  const bool inspection=!std::strncmp(mode,"inspect",7);
+  const bool accepted=inspection?stop.InspectOriginalWaiting(&flags,sizeof(flags),&self_driver,Prepare):stop.BeginOriginalWaiting(&flags,sizeof(flags),&self_driver,Prepare);
   noalloc=false;
   assert(flags==67u<<16&&!exclusive&&!gc_lock);
+  if(inspection){assert(accepted==!std::strcmp(mode,"inspect")&&callbacks==1&&!stop.Reserved()&&!stop.IsStopped(&flags)&&!gc&&starts==finishes&&stops==resumes);continue;}
   if(!std::strcmp(mode,"refuse")||!std::strcmp(mode,"changed-mutex")){
    assert(!accepted&&!stop.Reserved()&&!gc&&starts==finishes&&stops==resumes);
    assert(callbacks==(!std::strcmp(mode,"refuse")?1:0));continue;
