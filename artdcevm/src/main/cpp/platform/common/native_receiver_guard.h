@@ -5,7 +5,7 @@
 namespace artdcevm::receiver_guard {
 // Paths are independently witnessed. The bytecode interpreter paths also cover
 // former compiled/AOT callers only after the permanent process deopt owner seals.
-enum class Path:uint8_t {BytecodeInvoke,BytecodeRead,BytecodeWrite,JniMethod,JniRead,JniWrite,ReflectMethod,ReflectRead,ReflectWrite,HandleMethod,HandleRead,HandleWrite,HandleSpecial,VarHandle,Count};
+enum class Path:uint8_t {BytecodeInvoke,BytecodeRead,BytecodeWrite,JniMethod,JniRead,JniWrite,ReflectMethod,ReflectRead,ReflectWrite,HandleMethod,HandleRead,HandleWrite,HandleSpecial,VarHandle,NativeInvoke,Count};
 struct Invocation {Path path;void* thread=nullptr;void* member=nullptr;void* receiver=nullptr;void* special_caller=nullptr;void* result=nullptr;bool field=false;};
 struct Access {
  void* owner=nullptr;
@@ -17,6 +17,8 @@ struct Access {
  bool (*normalize)(void*,void*,void*,void*,void**)noexcept=nullptr;
  bool (*assignable)(void*,void*,void*,bool*)noexcept=nullptr;
  bool (*special)(void*,void*,void*,bool*)noexcept=nullptr;
+ bool (*reference)(void*,void*,void*,void**)noexcept=nullptr;
+ bool (*compressed)(void*,void*,uint32_t,void**)noexcept=nullptr;
  void (*raise)(void*,void*,const char*,const char*)noexcept=nullptr;
 };
 struct Oracle {Invocation invocation;void* declaring=nullptr;void* receiver_class=nullptr;bool rejection=false;};
@@ -32,6 +34,12 @@ class Guard final {
  bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
  void Activate()noexcept;
  bool Check(const Invocation&)noexcept;
+ bool CheckReference(Path,void* thread,void* member,void* handle,void* result=nullptr,bool field=false)noexcept;
+ bool CheckCompressed(Path,void* thread,void* member,uint32_t reference,void* result=nullptr,bool field=false)noexcept;
+ private:
+ bool Interested(Path,void*,void*)const noexcept;
+ bool Entry(Path,void*,void*,void*,uint32_t,bool,void*,bool)noexcept;
+ public:
  private:
  Access access_;mutable std::mutex lock_;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false;
  uint32_t passed_=0,refused_=0;std::atomic<bool> active_{false};
@@ -41,4 +49,6 @@ class Guard final {
 inline std::atomic<Guard*> consumer{nullptr};
 inline bool Bind(Guard& owner)noexcept {Guard* expected=nullptr;return consumer.compare_exchange_strong(expected,&owner,std::memory_order_acq_rel)||expected==&owner;}
 inline bool Check(const Invocation& invocation)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->Check(invocation);}
+inline bool CheckReference(Path path,void* thread,void* member,void* handle,void* result=nullptr,bool field=false)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->CheckReference(path,thread,member,handle,result,field);}
+inline bool CheckCompressed(Path path,void* thread,void* member,uint32_t reference,void* result=nullptr,bool field=false)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->CheckCompressed(path,thread,member,reference,result,field);}
 }

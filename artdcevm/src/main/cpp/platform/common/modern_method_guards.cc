@@ -1,4 +1,5 @@
 #include "platform/common/modern_method_guards.h"
+#include "platform/common/native_receiver_guard.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/android-common/jni_access.h"
@@ -42,31 +43,35 @@ bool Guard(void* method, void* self, void* result = nullptr) {
 void Invoke(void* method, void* self, uint32_t* args, uint32_t size,
             void* result, const char* shorty) {
   if (Guard(method, self, result)) return;
+  if(receiver_guard::CheckCompressed(receiver_guard::Path::NativeInvoke,self,method,args&&size>=4?args[0]:0,result))return;
   using Fn = void (*)(void*, void*, uint32_t*, uint32_t, void*, const char*);
   reinterpret_cast<Fn>(original_invoke)(method, self, args, size, result, shorty);
 }
 jobject Reflect(const Scope& access, jobject method, jobject receiver,
                 jobject args, size_t frames) {
-  if (Guard(state.reflected(access, method), access.self)) return nullptr;
+  void* native=state.reflected(access,method);
+  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::ReflectMethod,access.self,native,receiver)) return nullptr;
   using Fn = jobject (*)(const Scope&, jobject, jobject, jobject, size_t);
   return reinterpret_cast<Fn>(original_reflect)(access, method, receiver, args, frames);
 }
 uint64_t NativeValues(const Scope& access, jobject receiver, void* method,
                       const jvalue* args) {
-  if (Guard(method, access.self)) return 0;
+  if (Guard(method,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,method,receiver)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_native_values)(access, receiver, method, args);
 }
 template<bool virtual_call> uint64_t IdValues(const Scope& access, jobject receiver,
                                               jmethodID id, const jvalue* args) {
-  if (Guard(state.decode(state.manager, id), access.self)) return 0;
+  void* native=state.decode(state.manager,id);
+  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(virtual_call ? original_virtual_values : original_id_values)(
       access, receiver, id, args);
 }
 template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject receiver,
                                                jmethodID id, va_list args) {
-  if (Guard(state.decode(state.manager, id), access.self)) return 0;
+  void* native=state.decode(state.manager,id);
+  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(virtual_call ? original_virtual_varargs : original_id_varargs)(
       access, receiver, id, args);
@@ -76,7 +81,7 @@ template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject rece
 // established shared mutator access before this native validation callback.
 bool CheckSignature(void* check,const Scope& access,jobject receiver,jclass klass,
                     jmethodID id,uint32_t type,uint32_t invoke) {
-  if(access.self==state.current()&&Guard(state.decode(state.manager,id),access.self))return false;
+  if(access.self==state.current()){void* native=state.decode(state.manager,id);if(Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver))return false;}
   using Fn=bool(*)(void*,const Scope&,jobject,jclass,jmethodID,uint32_t,uint32_t);
   return reinterpret_cast<Fn>(original_check_signature)(check,access,receiver,klass,id,type,invoke);
 }

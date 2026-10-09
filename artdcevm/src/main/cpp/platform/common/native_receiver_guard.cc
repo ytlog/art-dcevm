@@ -16,6 +16,20 @@ bool Guard::EndProof(bool succeeded,bool incompatible,bool unchanged)noexcept{
 }
 bool Guard::Proven()const noexcept{std::lock_guard<std::mutex> lock(lock_);return !probing_&&passed_==complete&&refused_==complete;}
 void Guard::Activate()noexcept{if(!Proven())std::abort();active_.store(true,std::memory_order_release);}
+bool Guard::Interested(Path path,void* self,void* member)const noexcept{
+ if(Active())return true;std::lock_guard<std::mutex> lock(lock_);return probing_&&oracle_.invocation.path==path&&oracle_.invocation.thread==self&&oracle_.invocation.member==member;
+}
+bool Guard::Entry(Path path,void*self,void*member,void*handle,uint32_t compressed,bool encoded,void*result,bool field)noexcept{
+ if(!Interested(path,self,member))return false;
+ const auto fail=[&](){if(result){const uint64_t zero=0;std::memcpy(result,&zero,8);}if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver entry lost calibrated root or member access");return true;};
+ uint32_t flags=0;void*declaring=nullptr;
+ if(!access_.current||!access_.current(access_.owner,self)||!access_.member||!member||!access_.member(access_.owner,member,field,&flags,&declaring)||!declaring)return fail();
+ if(flags&8u||(encoded?!compressed:!handle))return false;
+ void*object=nullptr;const bool decoded=encoded?(access_.compressed&&access_.compressed(access_.owner,self,compressed,&object)):(access_.reference&&access_.reference(access_.owner,self,handle,&object));
+ if(!decoded||!object)return fail();return Check({path,self,member,object,nullptr,result,field});
+}
+bool Guard::CheckReference(Path path,void*self,void*member,void*handle,void*result,bool field)noexcept{return Entry(path,self,member,handle,0,false,result,field);}
+bool Guard::CheckCompressed(Path path,void*self,void*member,uint32_t reference,void*result,bool field)noexcept{return Entry(path,self,member,nullptr,reference,true,result,field);}
 bool Guard::Check(const Invocation& call)noexcept{
  Oracle expected{};bool probe=false;
  {std::lock_guard<std::mutex> lock(lock_);probe=probing_&&Same(call,oracle_.invocation);if(probe)expected=oracle_;}

@@ -19,7 +19,7 @@ static bool Special(void*,void*d,void*c,bool*out)noexcept{auto*caller=static_cas
 static void Raise(void*p,void*,const char*type,const char*)noexcept{auto&s=*static_cast<State*>(p);s.exception=type;++s.raised;}
 int main(){
  int thread=0;Class object,interface,ancestor{&object},before{&ancestor,{&interface}},after{&object},unrelated{&object},special_before{&ancestor},special_after{&object};
- Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Guard guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,Raise});assert(!guard.Proven());assert(Bind(guard));
+ Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Guard guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise});assert(!guard.Proven());assert(Bind(guard));
  uint64_t result=123;for(unsigned p=0;p<static_cast<unsigned>(Path::Count);++p){
   const auto path=static_cast<Path>(p);const bool is_field=path==Path::BytecodeRead||path==Path::BytecodeWrite||path==Path::JniRead||path==Path::JniWrite||path==Path::ReflectRead||path==Path::ReflectWrite||path==Path::HandleRead||path==Path::HandleWrite||path==Path::VarHandle;
   auto* member=is_field?&field:&method;Invocation call{path,&thread,member,&receiver,&special_before,&result,is_field};
@@ -45,5 +45,5 @@ int main(){
  // A relocating identity is reread from the current object/member and alias
  // leaves each time; no old Class pointer is remembered by Guard.
  Class moved_after=after;receiver.klass=&moved_after;state.current_class=&moved_after;method.declaring=&before;call.path=Path::JniMethod;assert(!guard.Check(call));
- (void)unrelated;std::puts("Permanent receiver policy: all 14 paths require observed pass/reject, migrated old object loses superclass/interface, current aliases preserve own cached members, special caller/null/static/context/relocation PASS; native leaves explicit, live source entry proof pending");
+ (void)unrelated;std::puts("Permanent receiver policy: all 15 paths require observed pass/reject, migrated old object loses superclass/interface, current aliases preserve own cached members, special caller/null/static/context/relocation PASS; native leaves explicit, live source entry proof pending");
 }
