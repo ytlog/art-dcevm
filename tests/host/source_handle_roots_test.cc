@@ -30,6 +30,20 @@ void OriginalRoots(void* self,abi::arm64::android_common::HandleRootVisitor* vis
   scope=header.previous;
  }
 }
+// Independent public Object-constructor/JNI root leaves for monitor proofs.
+void* private_monitor=nullptr;void* private_top=nullptr;size_t private_created=0,private_globals=0,private_deleted=0;
+int private_constructor;[[maybe_unused]] bool original_class_locked=true,private_monitor_locked=false;
+jmethodID PrivateMethod(JNIEnv* e,jclass type,const char* name,const char* signature){
+ if(!std::strcmp(name,"<init>")){Jni();assert(!std::strcmp(signature,"()V"));return reinterpret_cast<jmethodID>(&private_constructor);}
+ return MethodId(e,type,name,signature);
+}
+jobject PrivateNew(JNIEnv*,jclass type,jmethodID method,va_list){
+ Jni();assert(type==reinterpret_cast<jclass>(parent_class)&&method==reinterpret_cast<jmethodID>(&private_constructor));
+ private_monitor=heap.New(32);Put32(private_monitor,0,uint32_t(uintptr_t(parent_class)));++private_created;private_top=Top();return reinterpret_cast<jobject>(private_monitor);
+}
+jobject PrivateGlobal(JNIEnv* e,jobject value){if(private_monitor&&value==private_monitor)++private_globals;return Global(e,value);}
+void PrivateDeleteGlobal(JNIEnv* e,jobject value){if(private_monitor&&value==private_monitor){assert(Top()==private_top);++private_deleted;}Delete(e,value);}
+void PrivateMonitorJni(){table.GetMethodID=PrivateMethod;table.NewObjectV=PrivateNew;table.NewGlobalRef=PrivateGlobal;table.DeleteGlobalRef=PrivateDeleteGlobal;}
 abi::arm64::android11::ReleaseObjectPointer AllocationMirror(void* raw){return {uintptr_t(static_cast<abi::arm64::android15::ClassRedefinition*>(raw)->klass)};}
 class RootHooks final:public Hooks{public:
  void* FindSymbol(const char* lib,const char* name)override{
@@ -46,7 +60,7 @@ struct MoveRoots final:abi::arm64::android_common::HandleRootVisitor{
 };
 }
 int main(){
- InitJni();InitializeHeap();RootHooks hooks;std::string error;
+ InitJni();PrivateMonitorJni();InitializeHeap();RootHooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));
  struct Calibration{modern_field_metadata::FieldMetadata* metadata;modern_field_metadata::FieldOracle* oracle;std::string* error;} calibration{&metadata,oracle.data(),&error};
@@ -160,7 +174,7 @@ int main(){
  auto foreign_native=native;foreign_native.self=reinterpret_cast<void*>(uintptr_t(1));
  assert(!service.BorrowHandle(foreign_native,public_slot,&unchanged)&&unchanged==new_class);
  assert(method_identity::MappingOsQueries()==native_queries);
- Publish(nullptr);
+ Publish(nullptr);assert(private_created==private_globals&&private_globals==private_deleted);
  std::cout<<"Source handle roots: real field/card oracle prerequisite, named current/TLS self, actual source handle/strong Class/visitor identity, foreign/cyclic/bad root info/hidden owned scopes refuse, nested zeroed roots update and restore exact chain; Native publication refuses\n";
  return 0;
 }

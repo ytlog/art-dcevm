@@ -51,22 +51,46 @@ bool Service::SetOriginals(const Functions& f,std::string* e){
 }
 bool Service::CalibrateRetirement(const runnable_jni::Context& c,jobject fixture,std::string* error){
  if(!roots_||!roots_->Calibrated()||!originals_||!c.env||!fixture){Error(error,"Monitor proof requires live source roots and owned public fixture");return false;}
+ monitor_=false;
+ struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}};
+ struct Global{JNIEnv* env;jobject value;~Global(){if(value)env->DeleteGlobalRef(value);}};
  try{
-  void* raw=nullptr;if(!roots_->BorrowStrongGlobal(c,fixture,&raw)){Error(error,"Monitor proof fixture is not an actual Runnable strong JNI global");return false;}
+  void* owner=nullptr;if(!roots_->BorrowStrongGlobal(c,fixture,&owner)){Error(error,"Monitor proof fixture is not an actual Runnable strong JNI global");return false;}
+  const auto alive=[&](){void* current=nullptr;return roots_->BorrowOwnedStrongGlobal(c,fixture,&current);};
+  // Redefiner::ClassRedefinition owns its original Class monitor from ctor
+  // through dtor. The SourceRun observer ends before that dtor, so an unlocked
+  // original Class is not a valid oracle. Use a fresh, private public Object.
+  Local object_type{c.env,c.env->FindClass("java/lang/Object")};
+  if(!object_type.value||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof private Object type or source context failed");return false;}
+  auto constructor=c.env->GetMethodID(static_cast<jclass>(object_type.value),"<init>","()V");
+  if(!constructor||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof private Object constructor or source context failed");return false;}
+  Local local{c.env,c.env->NewObject(static_cast<jclass>(object_type.value),constructor)};
+  if(!local.value||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof private Object creation or source context failed");return false;}
+  Global strong{c.env,c.env->NewGlobalRef(local.value)};
+  if(!strong.value||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof private Object strong root or source context failed");return false;}
+  void* raw=nullptr;if(!roots_->BorrowStrongGlobal(c,strong.value,&raw)||!roots_->BorrowOwnedStrongGlobal(c,fixture,&owner)||raw==owner){Error(error,"Monitor proof private Object lacks independent strong provenance");return false;}
+  // Global outlives the Pool on every success, refusal and native exception.
   source_handle_roots::Pool pool(*roots_);void* slot=pool.Add(raw,error);if(!slot)return false;
-  auto thread=c.env->FindClass("java/lang/Thread");if(!thread){Error(error,"Monitor proof could not resolve the public Thread class");return false;}
-  auto holds=c.env->GetStaticMethodID(thread,"holdsLock","(Ljava/lang/Object;)Z");
-  if(!holds||c.env->ExceptionCheck()){c.env->DeleteLocalRef(thread);Error(error,"Monitor proof could not resolve public Thread.holdsLock");return false;}
-  bool before=c.env->CallStaticBooleanMethod(thread,holds,fixture);bool ok=!c.env->ExceptionCheck()&&!before;
-  void* value=nullptr;ok=ok&&pool.Read(slot,&value);
-  if(!ok){c.env->DeleteLocalRef(thread);Error(error,"Monitor proof pre-entry fixture root or public unlocked oracle failed");return false;}
-  auto entered=enter_(c.self,{uintptr_t(value)},false);void* current=nullptr;
-  const bool entered_ok=pool.Read(slot,&current)&&entered.reference==uintptr_t(current);
-  const bool held=c.env->CallStaticBooleanMethod(thread,holds,fixture);
-  ok=entered_ok&&held&&!c.env->ExceptionCheck();
+  Local thread{c.env,c.env->FindClass("java/lang/Thread")};
+  if(!thread.value||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof could not resolve public Thread in the same source context");return false;}
+  auto holds=c.env->GetStaticMethodID(static_cast<jclass>(thread.value),"holdsLock","(Ljava/lang/Object;)Z");
+  if(!holds||c.env->ExceptionCheck()||!alive()){Error(error,"Monitor proof could not resolve public Thread.holdsLock in the same source context");return false;}
+  const bool before=c.env->CallStaticBooleanMethod(static_cast<jclass>(thread.value),holds,strong.value);
+  if(c.env->ExceptionCheck()){Error(error,"Monitor proof public pre-entry oracle raised an exception");return false;}
+  if(!alive()){Error(error,"Monitor proof public pre-entry oracle changed source context");return false;}
+  if(before){Error(error,"Monitor proof fresh private Object was already locked");return false;}
+  void* value=nullptr;if(!pool.Read(slot,&value)){Error(error,"Monitor proof pre-entry source root is unavailable");return false;}
+  auto entered=enter_(c.self,{uintptr_t(value)},false);
+  if(!entered.reference){Error(error,"Monitor proof named enter refused private Object");return false;}
+  void* current=nullptr;const bool entered_ok=pool.Read(slot,&current)&&entered.reference==uintptr_t(current);
+  const bool held=c.env->CallStaticBooleanMethod(static_cast<jclass>(thread.value),holds,strong.value);
+  const bool exception=c.env->ExceptionCheck();bool ok=entered_ok&&held&&!exception&&alive();
   if(!pool.Read(slot,&current)||!exit_(c.self,{uintptr_t(current)}))std::abort();
-  const bool after=c.env->CallStaticBooleanMethod(thread,holds,fixture);
-  ok=ok&&!after&&!c.env->ExceptionCheck();c.env->DeleteLocalRef(thread);
+  // Never make a Java invocation with a pending exception; the monitor was
+  // released above and allowed JNI reference cleanup still runs normally.
+  if(exception){Error(error,"Monitor proof public held oracle raised an exception");return false;}
+  const bool after=c.env->CallStaticBooleanMethod(static_cast<jclass>(thread.value),holds,strong.value);
+  ok=ok&&!after&&!c.env->ExceptionCheck()&&alive();
   monitor_=ok;if(!ok)Error(error,"Monitor proof named enter/exit did not match public held/unlocked oracle");return ok;
  }catch(const std::bad_alloc&){Error(error,"Monitor calibration allocation failed");return false;}
 }

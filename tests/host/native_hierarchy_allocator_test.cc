@@ -19,7 +19,7 @@ void* monitor_object=nullptr;int holds_id;
 abi::arm64::android11::ReleaseObjectPointer Enter(void* self,abi::arm64::android11::ReleaseObjectPointer p,bool attempt){assert(self==thread.data()&&!attempt&&!monitor_held);monitor_held=true;monitor_object=reinterpret_cast<void*>(p.reference);return p;}
 bool Exit(void* self,abi::arm64::android11::ReleaseObjectPointer p){assert(self==thread.data()&&monitor_held&&p.reference==uintptr_t(monitor_object));monitor_held=false;monitor_object=nullptr;return true;}
 jmethodID MonitorMethod(JNIEnv* e,jclass c,const char* n,const char* s){return !std::strcmp(n,"holdsLock")?reinterpret_cast<jmethodID>(&holds_id):StaticMethodId(e,c,n,s);}
-jboolean Holds(JNIEnv*,jclass,jmethodID id,va_list args){Jni();assert(id==reinterpret_cast<jmethodID>(&holds_id));auto owner=va_arg(args,jobject);return monitor_held&&uintptr_t(owner)==uintptr_t(monitor_object);}
+jboolean Holds(JNIEnv*,jclass,jmethodID id,va_list args){Jni();assert(id==reinterpret_cast<jmethodID>(&holds_id));auto owner=va_arg(args,jobject);return (private_monitor_locked&&owner==private_monitor)||(original_class_locked&&owner==reinterpret_cast<jobject>(old_class))||(monitor_held&&uintptr_t(owner)==uintptr_t(monitor_object));}
 class AllocationHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* n)override{if(std::strstr(n,"MonitorEnter"))return reinterpret_cast<void*>(Enter);if(std::strstr(n,"MonitorExit"))return reinterpret_cast<void*>(Exit);return Hooks::FindSymbol(lib,n);}};
 abi::arm64::android11::ReleaseObjectPointer FindOriginal(void* linker_arg,void* self,const char* n,void* loader){assert(linker_arg==&linker&&self==thread.data()&&!Read32(loader)&&!std::strcmp(n,"LFixture;"));return {uintptr_t(old_class)};}
 void LoadOriginal(void* receiver,void* self,const void*,const void*,const void*){assert(receiver==&linker&&self==thread.data());}
@@ -56,6 +56,12 @@ bool Probe(const runnable_jni::Context& c,modern_field_metadata::FieldMetadata& 
  graph.nodes={object_node,fixture_node};graph.inputs={1};
  native_hierarchy_graph::Input input;input.strong_original=reinterpret_cast<jclass>(old_class);input.before.descriptor="LFixture;";input.before.superclass="Ljava/lang/Object;";input.after=input.before;inputs.push_back(input);
  assert(!owner.VerifyStaged(graph,inputs,&error));
+ // A source-held original Class is expected; an already-held private oracle
+ // still refuses, cleans its strong root after Pool unlink, and grants nothing.
+ private_monitor_locked=true;
+ assert(!owner.CalibrateRetirement(c,reinterpret_cast<jobject>(old_class),&error)&&!monitor_held);
+ assert(error=="Monitor proof fresh private Object was already locked"&&private_globals==private_deleted);
+ private_monitor_locked=false;
  assert(owner.CalibrateRetirement(c,reinterpret_cast<jobject>(old_class),&error)&&!monitor_held);
  assert(!owner.VerifyStaged(graph,inputs,&error));
  const auto before=allocation_calls;
