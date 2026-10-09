@@ -1,0 +1,44 @@
+#pragma once
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+namespace artdcevm::receiver_guard {
+// Paths are independently witnessed. The bytecode interpreter paths also cover
+// former compiled/AOT callers only after the permanent process deopt owner seals.
+enum class Path:uint8_t {BytecodeInvoke,BytecodeRead,BytecodeWrite,JniMethod,JniRead,JniWrite,ReflectMethod,ReflectRead,ReflectWrite,HandleMethod,HandleRead,HandleWrite,HandleSpecial,VarHandle,Count};
+struct Invocation {Path path;void* thread=nullptr;void* member=nullptr;void* receiver=nullptr;void* special_caller=nullptr;void* result=nullptr;bool field=false;};
+struct Access {
+ void* owner=nullptr;
+ bool (*current)(void*,void*)noexcept=nullptr;
+ bool (*member)(void*,void*,bool,uint32_t*,void**)noexcept=nullptr;
+ bool (*object_class)(void*,void*,void**)noexcept=nullptr;
+ // Native barrier/weak-root access only. These callbacks may not suspend, invoke
+ // JNI, allocate or retain borrowed managed values across this invocation.
+ bool (*normalize)(void*,void*,void*,void*,void**)noexcept=nullptr;
+ bool (*assignable)(void*,void*,void*,bool*)noexcept=nullptr;
+ bool (*special)(void*,void*,void*,bool*)noexcept=nullptr;
+ void (*raise)(void*,void*,const char*,const char*)noexcept=nullptr;
+};
+struct Oracle {Invocation invocation;void* declaring=nullptr;void* receiver_class=nullptr;bool rejection=false;};
+class Guard final {
+ public:
+ explicit Guard(Access);
+ // Exact rooted fixture/member/thread/path, plus independent declaring/receiver
+ // identities. Both original success and guarded ICCE must be proven for every
+ // path. No installation bit or caller-supplied coverage mask grants readiness.
+ bool BeginProof(const Oracle&)noexcept;
+ bool EndProof(bool original_succeeded,bool incompatible_class_change,bool unchanged_sentinel)noexcept;
+ bool Proven()const noexcept;
+ bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
+ void Activate()noexcept;
+ bool Check(const Invocation&)noexcept;
+ private:
+ Access access_;mutable std::mutex lock_;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false;
+ uint32_t passed_=0,refused_=0;std::atomic<bool> active_{false};
+};
+// One optional process-lifetime consumer, published before any aliases or
+// narrowed Class. Entry owners share this dispatch; no second hook stack.
+inline std::atomic<Guard*> consumer{nullptr};
+inline bool Bind(Guard& owner)noexcept {Guard* expected=nullptr;return consumer.compare_exchange_strong(expected,&owner,std::memory_order_acq_rel)||expected==&owner;}
+inline bool Check(const Invocation& invocation)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->Check(invocation);}
+}
