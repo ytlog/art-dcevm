@@ -82,7 +82,7 @@ struct NativeEngine final:Engine {
  bool SourceCapabilitiesCalibrated()const override{return source_capabilities.Ready();}
  bool FrameGeometryCalibrated()const override{return frame_geometry_proven;}
  std::string SourceFactoryDiagnostic()const override{
-  return source_capabilities.Ready()?"":source_factory_diagnostic.empty()?source_capabilities.Diagnostic():source_factory_diagnostic;
+  return !source_factory_diagnostic.empty()?source_factory_diagnostic:source_capabilities.Ready()?"":source_capabilities.Diagnostic();
  }
  jobject source_fixture=nullptr;JNIEnv* source_env=nullptr;jvmtiEnv* source_ti=nullptr;
  frame_family_calibration::Service frame_calibrator;
@@ -156,8 +156,6 @@ struct NativeEngine final:Engine {
  static void ReleaseManaged(void* raw,jobject root){auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_root_env)std::abort();e.schema_root_env->DeleteGlobalRef(root);}
  prepared_roots::Registry schema_registry{{this,RootManaged,DecodeGraph,ReleaseManaged}};
  source_commit::Plan prepared_schema_plan;
- prepared_roots::Bindings schema_plan_roots;
- std::unique_ptr<source_commit::Services> prepared_schema_service;
  bool schema_finalizing=false;
  using DecodeObject=abi::arm64::android11::ReleaseObjectPointer (*)(const void*,jobject);
  DecodeObject graph_decode=nullptr;
@@ -274,7 +272,7 @@ struct NativeEngine final:Engine {
  static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
-  schema_root_env=env;if(permission_service)permission_service->Clear(env);prepared_schema_service.reset();schema_plan_roots={};prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;
+  schema_root_env=env;if(permission_service)permission_service->Clear(env);prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;
   for(const auto& part:schema_roots.partitions)for(auto array:{part.old_classes,part.new_classes,part.old_instances,part.new_instances})if(array)env->DeleteGlobalRef(array);
   if(schema_roots.mirror)env->DeleteGlobalRef(schema_roots.mirror);schema_roots={};schema_collected=false;schema_policies.clear();schema_verifier.Clear(env);graph_maps.clear();
  }
@@ -446,26 +444,52 @@ struct NativeEngine final:Engine {
  }
  static std::unique_ptr<source_commit::Services> PrepareCommit(const source_commit::Plan& p,void* raw,std::string* error){
   auto& s=*static_cast<NativeEngine*>(raw);auto d=s.MemberDependencies();
-  if(s.schema_operation){
-   if(&p!=&s.prepared_schema_plan||!s.schema_collected||!s.schema_verifier.Seal(p,error)||!s.PrepareSchemaPolicy(p,error))return nullptr;
-   if(!s.permissions_proven)for(const auto& policy:s.schema_policies)for(const auto& requirement:policy.Requirements())
-    if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
-     if(error)*error="Actual final/access permission calibration unavailable: "+s.permission_diagnostic;return nullptr;
-    }
-  }
+  if(s.schema_operation){Fail(error,"Schema members require the unique native cleanup facade");return nullptr;}
   return s.provider.Prepare(p,d,error);
  }
  static std::unique_ptr<source_commit::Services> FinalizeSchema(const void* holder,const source_commit::Plan** plan,void* raw)noexcept{
-  auto& e=*static_cast<NativeEngine*>(raw);if(!plan||holder!=e.schema_roots.holder||!e.prepared_schema_service||!redefinition_gate::Owned(e.vm))return nullptr;
+  auto& e=*static_cast<NativeEngine*>(raw);
+  if(!e.schema_run||!plan||holder!=e.schema_roots.holder||!redefinition_gate::Owned(e.vm))return nullptr;
   e.schema_finalizing=true;
-  if(!e.schema_registry.Resolve())return nullptr;const auto resolver=e.schema_registry.Final();
-  if(!e.schema_plan_roots.CanRefresh(resolver)||!e.schema_verifier.CanRefreshManagedRoots(resolver))return nullptr;
-  e.schema_plan_roots.Refresh(resolver);
-  if(e.permissions_proven&&!e.permission_service->Seal(e.prepared_schema_plan,nullptr))return nullptr;
-  if(!rooted_schema_plan::Matches(e.schema_roots,{&e,DecodeGraph,GraphReadable,GraphReference},e.prepared_schema_plan)||
-     !e.schema_verifier.RefreshManagedRoots(e.prepared_schema_plan,resolver)||
-     !e.provider.RefreshManagedRoots(e.prepared_schema_plan,*e.prepared_schema_service,resolver))return nullptr;
-  *plan=&e.prepared_schema_plan;return std::move(e.prepared_schema_service);
+  if(!RefreshStoppedMaps(&e,nullptr))return nullptr;
+  return e.schema_run->Finalize(holder,plan);
+ }
+ static bool BeginSchemaRun(void* driver,void* raw,std::string* error){
+  auto& e=*static_cast<NativeEngine*>(raw);JavaVM* actual=nullptr;
+  if(e.schema_run||!e.source_env||!e.source_ti||!e.graph_current||
+     e.source_env->GetJavaVM(&actual)!=JNI_OK||actual!=e.vm||e.source_env->ExceptionCheck())
+   return Fail(error,"Schema Run lacks its original JNI/VM owner");
+  const runnable_jni::Context context{e.graph_current(),e.source_env,e.vm};
+  e.schema_run=native_schema_run_state::RunState::Begin(e.schema_dependencies,driver,context,e.source_ti,e.schema_inputs,e.CacheCalibration(),error);
+  if(!e.schema_run&&error)e.source_factory_diagnostic=*error;return e.schema_run!=nullptr;
+ }
+ static void EndSchemaRun(void* driver,bool success,void* raw) noexcept {
+  auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)return;
+  if(!e.schema_run->End(driver,success))std::abort();
+  // The verifier borrows this Run's actual mapping context; clear it before
+  // destroying the context owner. All remaining JNI cleanup occurs Runnable.
+  e.schema_verifier.Clear(e.source_env);e.schema_run.reset();
+ }
+ static bool BeforeSchemaVerification(void* owner,const transaction_root::Iterator* it,void* raw,std::string* error){
+  auto& e=*static_cast<NativeEngine*>(raw);return e.schema_run&&e.schema_run->BeforeVerification(owner,it,error);
+ }
+ static void AfterSchemaVerification(void* owner,const transaction_root::Iterator* it,bool success,void* raw) noexcept {
+  auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)std::abort();e.schema_run->AfterVerification(owner,it,success);
+ }
+ static void RefundSchema(void* raw) noexcept {auto& e=*static_cast<NativeEngine*>(raw);if(e.schema_run)e.schema_run->Refund();}
+ static void CommitSchema(const source_commit::Plan& plan,void* raw) noexcept {
+  auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)std::abort();e.schema_run->Commit(plan);
+ }
+ bool PrepareSchemaDependencies(JNIEnv* env,std::string* error){
+  if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
+  if(!frame_geometry_proven)return Fail(error,frame_geometry_diagnostic.empty()?"Independent frame geometry not calibrated":frame_geometry_diagnostic.c_str());
+  native_schema_run_state::Dependencies d;
+  if(!source_capabilities.BindDependencies(&d,error)||!PrepareStoppedMaps(error))return false;
+  d.hooks=&hooks;d.loading=&source_observers.Loading();d.stop=&source_stop;d.frames=&whole_frames;
+  d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.members=MemberDependencies();
+  d.mapping={this,RefreshStoppedMaps,GraphExtent};
+  if(!native_required_cleanup::Binding::Bind(hooks,env,d.members,&cleanup_binding,error))return false;
+  d.cleanup=&cleanup_binding;schema_dependencies=d;return true;
  }
  void RecordDefinitions(JNIEnv* env,const std::vector<Definition>& definitions)override{
   for(const auto& definition:definitions)if(!provenance.Store(env,definition.klass,definition.dex))break;
@@ -543,13 +567,20 @@ struct NativeEngine final:Engine {
     else source_stop_diagnostic="Ordinary source calibration current Thread mapping unavailable";
    }
   }
+  if(schema_operation){source_factory_diagnostic.clear();if(!PrepareSchemaDependencies(env,error)){
+   if(error)source_factory_diagnostic=*error;return owned_failure_diagnostic::Unavailable(error,"Full schema owner dependency preparation");
+  }}
   current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
-  int result=native_owned_removal::RunBatch(hooks,env,ti,defs,
-    {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation,schema_operation?FinalizeSchema:nullptr},error);
+  native_owned_removal::Provider source_provider{Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation,schema_operation?FinalizeSchema:nullptr};
+  if(schema_operation){source_provider.begin_run=BeginSchemaRun;source_provider.end_run=EndSchemaRun;
+   source_provider.before_verification=BeforeSchemaVerification;source_provider.after_verification=AfterSchemaVerification;
+   source_provider.refund=RefundSchema;source_provider.commit=CommitSchema;}
+  int result=native_owned_removal::RunBatch(hooks,env,ti,defs,source_provider,error);
   if(source_observation){
    if(source_observation->Authorized())source_stop=source_observation->Binding();
    else source_stop_diagnostic=source_observation->Failure();
   }
+  if(schema_operation&&result!=JVMTI_ERROR_NONE&&error)source_factory_diagnostic=*error;
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
   return result;
  }
@@ -893,13 +924,18 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
   }
   if(window==native_owned_removal::GraphWindow::Collected){
    if(!e.RefreshMaps(error)||!e.RootedSchemaPlan(&e.prepared_schema_plan,error))return false;
-   if(e.permissions_proven&&(!e.permission_service->PreparePermissions(e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error)))return false;
-   e.prepared_schema_service=PrepareCommit(e.prepared_schema_plan,&e,error);
-   if(!e.prepared_schema_service||!e.prepared_schema_service->Validate(e.prepared_schema_plan))return false;
-   const auto registrar=e.schema_registry.Collect();
-   if(!rooted_schema_plan::CollectBindings(&e.prepared_schema_plan,registrar,&e.schema_plan_roots)||
-      !e.provider.CollectManagedRoots(*e.prepared_schema_service,registrar)||
-      !e.schema_verifier.CollectManagedRoots(registrar,error)||!e.schema_registry.Freeze())return Fail(error,"Collected schema root preparation failed");
+   if(e.permissions_proven){
+    if(!e.permission_service->PreparePermissions(e.prepared_schema_plan,error))return false;
+    // Public root publication may safepoint; refresh the actual Holder globals
+    // before sealing against the permission owner's paired strong globals.
+    if(!e.RootedSchemaPlan(&e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error))return false;
+   }
+   if(!e.schema_run||!e.schema_verifier.Seal(e.prepared_schema_plan,error)||!e.PrepareSchemaPolicy(e.prepared_schema_plan,error))return false;
+   if(!e.permissions_proven)for(const auto& policy:e.schema_policies)for(const auto& requirement:policy.Requirements())
+    if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
+     if(error)*error="Actual final/access permission calibration unavailable: "+e.permission_diagnostic;return false;
+    }
+   return e.schema_run->Collected(rooted,e.prepared_schema_plan,error);
   }
  }
  return true;
