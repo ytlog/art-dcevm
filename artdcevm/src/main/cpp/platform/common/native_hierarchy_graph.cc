@@ -125,7 +125,10 @@ struct Authority::State {
  std::vector<void*> old_classes,new_classes,old_instances,new_instances;
  std::vector<source_commit::ClassRootOrigin> origins;bool abstract_instances=false;
  bool staged=false,roots_prepared=false,sealed=false,collected=false,registration_started=false;
- bool OwnersStaged(std::string* e)const{return bindings.allocation->VerifyStaged(graph,inputs,e)&&bindings.receivers->VerifyStaged(graph,inputs,e)&&bindings.caches->VerifyStaged(graph,inputs,e);}
+ bool OwnersStaged(std::string* e)const{
+  const auto verify=[&](const auto* owner,const char* label){std::string detail;if(owner->VerifyStaged(graph,inputs,&detail))return true;if(e)*e=std::string(label)+(detail.empty()?"":": "+detail);return false;};
+  return verify(bindings.allocation,"Allocation owner refused staged graph")&&verify(bindings.receivers,"Receiver owner refused staged graph")&&verify(bindings.caches,"Type-cache owner refused staged graph");
+ }
  bool Owners(const source_commit::Plan& p)const noexcept{return bindings.allocation->Verify(graph,p)&&bindings.receivers->Verify(graph,p)&&bindings.caches->Verify(graph,p);}
  bool Borrow(const runnable_jni::Context& c) {
   root_context=c;for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader))return false;}
