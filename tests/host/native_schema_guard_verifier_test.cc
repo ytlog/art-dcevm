@@ -54,6 +54,15 @@ int main(){
  // Exercise the actual rejection formatter used by CheckWindow. The new
  // identity must reach callers without granting any staged-graph permission.
  std::string diagnostic;
+ evolution::ClassSchema public_class;public_class.descriptor="LPublicProxy;";
+ evolution::Member public_field{"interfaces","[Ljava/lang/Class;",0x19u,0};
+ assert(!FieldWindowFailure(&diagnostic,public_class,public_field,true,true,false,false,false,0x19u,"Legacy FieldId owner differs"));
+ assert(diagnostic.find("class=LPublicProxy; field=interfaces:[Ljava/lang/Class;")!=std::string::npos);
+ assert(diagnostic.find("mapped=1 ownerMatch=1 text=0 nameMatch=0 descriptorMatch=0")!=std::string::npos);
+ assert(diagnostic.find("nativeError=Legacy FieldId owner differs")!=std::string::npos);
+ assert(!FieldWindowFailure(&diagnostic,public_class,public_field,false,false,false,false,false,0,std::string(5000,'x').c_str()));
+ assert(diagnostic.size()<1024);
+
  assert(!ClassWindowFailure(&diagnostic,"Class was defined after caller staging; retry complete schema operation","Lforeign/SameName;",JVMTI_CLASS_STATUS_VERIFIED|JVMTI_CLASS_STATUS_PREPARED));
  assert(diagnostic=="Class was defined after caller staging; retry complete schema operation [descriptor=Lforeign/SameName; status=0x00000003]");
  assert(!ClassWindowFailure(&diagnostic,"Unprepared Class appeared before native schema sealing",nullptr,0));

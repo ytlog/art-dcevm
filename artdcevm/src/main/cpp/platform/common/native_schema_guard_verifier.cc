@@ -89,6 +89,15 @@ bool ClassIdentityFailure(std::string* error,const char* descriptor,const char* 
    int(DiagnosticPrefix(descriptor,192)),descriptor,kind,int(mapped),int(identity),int(same_descriptor),int(same_loader),int(DiagnosticPrefix(native_descriptor?native_descriptor:"<unavailable>",96)),native_descriptor?native_descriptor:"<unavailable>",int(DiagnosticPrefix(reason,256)),reason);*error=text;}
  return false;
 }
+bool FieldWindowFailure(std::string* error,const evolution::ClassSchema& klass,const evolution::Member& field,
+ bool mapped,bool owner,bool text,bool name,bool descriptor,uint32_t raw,const char* detail){
+ if(error){char message[1024];const char* why=detail&&*detail?detail:"<none>";
+  std::snprintf(message,sizeof(message),"Contextual public/native field identity or flags changed after staging [class=%.*s field=%.*s:%.*s mapped=%d ownerMatch=%d text=%d nameMatch=%d descriptorMatch=%d raw=0x%08x public=0x%08x nativeError=%.*s]",
+   int(DiagnosticPrefix(klass.descriptor.c_str(),192)),klass.descriptor.c_str(),int(DiagnosticPrefix(field.name.c_str(),96)),field.name.c_str(),
+   int(DiagnosticPrefix(field.descriptor.c_str(),160)),field.descriptor.c_str(),int(mapped),int(owner),int(text),int(name),int(descriptor),raw,field.access,
+   int(DiagnosticPrefix(why,256)),why);*error=message;
+ }return false;
+}
 bool MemberEqual(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access);}
 bool MembersEqual(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return MemberEqual(m,n);})==1;});}
 std::string Package(const std::string& descriptor){const auto slash=descriptor.rfind('/');return slash==std::string::npos?std::string{}:descriptor.substr(0,slash);}
@@ -219,7 +228,14 @@ struct Verifier::State {
    if(node.class_name&&bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,name))!=proxy_name)return Fail(error,"Native proxy cached name differs from public String identity");
    for(size_t i=0;i<node.field_ids.size();++i){
     void* field=bindings.decode_native_field(bindings.owner,klass,node.field_ids[i]);field_copy::CopyFieldView identity;
-    if(!Mapped(field,sizeof(field_array::Field))||bindings.metadata->FieldDeclaringClass(field)!=klass||!bindings.metadata->FieldIdentity(field,&identity,error)||!identity.name||!identity.descriptor||node.schema.fields[i].name!=identity.name||node.schema.fields[i].descriptor!=identity.descriptor||native_schema_policy::JavaFlags(field_array::Flags(field))!=node.schema.fields[i].access)return Fail(error,"Contextual public/native field identity or flags changed after staging");
+    const bool mapped=Mapped(field,sizeof(field_array::Field));
+    const bool owner=mapped&&bindings.metadata->FieldDeclaringClass(field)==klass;
+    std::string native_error;const bool text=owner&&bindings.metadata->FieldIdentity(field,&identity,&native_error);
+    const bool name=text&&identity.name&&node.schema.fields[i].name==identity.name;
+    const bool descriptor=text&&identity.descriptor&&node.schema.fields[i].descriptor==identity.descriptor;
+    const uint32_t raw=mapped?field_array::Flags(field):0;
+    if(!name||!descriptor||native_schema_policy::JavaFlags(raw)!=node.schema.fields[i].access)
+     return FieldWindowFailure(error,node.schema,node.schema.fields[i],mapped,owner,text,name,descriptor,raw,native_error.c_str());
    }
    for(size_t i=0;i<node.method_ids.size();++i){void* method=bindings.decode_method(bindings.owner,node.method_ids[i]);
     const bool mapped=Mapped(method,layout.size);void* owner=mapped?bindings.method_class(bindings.owner,method):nullptr;
