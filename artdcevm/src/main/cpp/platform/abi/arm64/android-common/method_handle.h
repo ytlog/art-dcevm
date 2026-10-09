@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstring>
 namespace artdcevm::abi::arm64::android_common {
-// Fixed mirror/method_handle_impl.h field prefix in the audited ART 11--17
+// Fixed mirror/method_handle_impl.h field prefix in the audited ART releases with as_type_cache_
 // releases. Runtime use additionally requires independent field-handle kind
 // oracles: native target visitor equality alone does not prove this scalar.
 #pragma pack(push,4)

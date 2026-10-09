@@ -68,6 +68,18 @@ bool RejectFinalFieldSetter(void*,void*,void* result){
 bool RejectRetiredField(void* target,void*,void* result){if(!field_registry.TokenFor(target))return false;exception_kind=2;if(result)std::memset(result,0,8);return true;}
 }
 int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=reinterpret_cast<JNIEnv*>(1);void* manager=reinterpret_cast<void*>(3);
+ // Production TU selector reads fixed source prefixes, not SDK or model data.
+ // Both getters and setters participate; a changed/bogus/ambiguous source
+ // remains rejected rather than silently choosing the newest declaration.
+ for(uint32_t kind=8;kind<=11;++kind){
+  abi::arm64::android11::MethodHandlePrefix old{};old.kind=kind+1;
+  abi::arm64::android_common::MethodHandlePrefix recent{};recent.kind=kind;recent.method_type=0x1234;
+  assert(KindCandidates(&old,kind,3)==1);
+  assert(KindCandidates(&recent,kind,3)==2);
+  assert(KindCandidates(&old,kind==11?8:kind+1,1)==0);
+  assert(KindCandidates(&old,kind,2)==0); // Previously bound source cannot switch.
+  old.kind=0;assert(KindCandidates(&old,kind,3)==0); // Unknown source kind is unproven.
+ }
  std::vector<MethodHandleOracle> methods;for(size_t i=1;i<=3;++i)methods.push_back({reinterpret_cast<jobject>(Object(i)),reinterpret_cast<jmethodID>(Identity(Object(i)))});
  std::vector<FieldMethodHandleOracle> fields;for(size_t i=4;i<=5;++i)fields.push_back({reinterpret_cast<jobject>(Object(i)),reinterpret_cast<jfieldID>(uintptr_t(Identity(Object(i)))-0x100000u),std::make_shared<contextual_field_id::Proof>(contextual_field_id::Proof{Identity(Object(i)),reinterpret_cast<jfieldID>(uintptr_t(Identity(Object(i)))-0x100000u)})});
  assert(!PrepareMethodHandleGuards(hooks,env,manager,wrong_method_registry,methods,&error));
