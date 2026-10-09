@@ -77,6 +77,7 @@ struct NativeEngine final:Engine {
  ThrowException permission_raise=nullptr;
  std::vector<native_schema_policy::Plan> schema_policies;
  bool schema_operation=false,schema_collected=false,graph_decoder_proven=false;
+ std::string graph_reader_error;
  native_owned_removal::RootedGraph schema_roots;
  JNIEnv* schema_root_env=nullptr;
  abi::arm64::android_common::AddGlobalRef graph_add_global=nullptr;
@@ -114,15 +115,26 @@ struct NativeEngine final:Engine {
  }
  static bool GraphWritable(void* raw,const void* address,size_t bytes){return GraphMapped(raw,address,bytes,true);}
  static bool ObserveGraphReaders(const runnable_jni::Context& scope,void* raw){
-  auto& e=*static_cast<NativeEngine*>(raw);void* expected=nullptr;
-  if(!runnable_executor::DecodeStrongGlobal(scope,e.anchor,&expected)||e.graph_decode(scope.self,e.anchor).reference!=uintptr_t(expected))return false;
+  auto& e=*static_cast<NativeEngine*>(raw);e.graph_decoder_proven=false;e.graph_reader_error.clear();void* expected=nullptr;
+  const auto fail=[&](const char* boundary,size_t index=0){e.graph_reader_error=std::string("Native graph reader proof failed: ")+boundary+" index="+std::to_string(index);return false;};
+  if(!runnable_executor::DecodeStrongGlobal(scope,e.anchor,&expected))return fail("public anchor strong oracle");
+  if(e.graph_decode(scope.self,e.anchor).reference!=uintptr_t(expected))return fail("named anchor strong decoder");
   size_t fields=0;
-  if(e.method_handles.empty()||e.graph_decode_method(e.runtime.receivers.jni_id_manager,e.method_handles[0].method)!=e.proof_method)return false;
-  for(const auto& oracle:e.field_method_handles){if(!oracle.identity||e.graph_decode_field(e.runtime.receivers.jni_id_manager,oracle.field)!=contextual_field_id::NativeField(oracle.identity))return false;++fields;}
-  for(const auto& stage:e.staged_classes){void* owner=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,stage.owner,&owner)||e.graph_decode(scope.self,stage.owner).reference!=uintptr_t(owner))return false;
-   for(size_t i=0;i<stage.ids.size();++i){void* native=e.graph_decode_field(e.runtime.receivers.jni_id_manager,stage.ids[i]);if(native!=contextual_field_id::NativeField(e.target_field_proofs[stage.field_base+i]))return false;++fields;}
+  if(e.method_handles.empty()||!e.proof_method)return fail("missing bootstrap method oracle");
+  if(e.graph_decode_method(e.runtime.receivers.jni_id_manager,e.method_handles[0].method)!=e.proof_method)return fail("bootstrap method ID decoder");
+  for(size_t i=0;i<e.field_method_handles.size();++i){const auto& oracle=e.field_method_handles[i];
+   if(!oracle.identity)return fail("missing bootstrap field oracle",i);
+   if(e.graph_decode_field(e.runtime.receivers.jni_id_manager,oracle.field)!=contextual_field_id::NativeField(oracle.identity))return fail("bootstrap field ID decoder",i);++fields;
   }
-  e.graph_decoder_proven=fields>0;return e.graph_decoder_proven;
+  for(size_t c=0;c<e.staged_classes.size();++c){const auto& stage=e.staged_classes[c];void* owner=nullptr;
+   if(!runnable_executor::DecodeStrongGlobal(scope,stage.owner,&owner))return fail("public staged Class strong oracle",c);
+   if(e.graph_decode(scope.self,stage.owner).reference!=uintptr_t(owner))return fail("named staged Class strong decoder",c);
+   if(stage.field_base>e.target_field_proofs.size()||stage.ids.size()>e.target_field_proofs.size()-stage.field_base)return fail("staged field proof range",c);
+   for(size_t i=0;i<stage.ids.size();++i){void* native=e.graph_decode_field(e.runtime.receivers.jni_id_manager,stage.ids[i]);
+    if(native!=contextual_field_id::NativeField(e.target_field_proofs[stage.field_base+i]))return fail("staged field ID decoder",stage.field_base+i);++fields;
+   }
+  }
+  e.graph_decoder_proven=fields>0;return e.graph_decoder_proven||fail("empty field oracle set");
  }
  static bool DecodeGraph(void* raw,jobject global,void** value){
   auto& e=*static_cast<NativeEngine*>(raw);if(!global||!value||!e.graph_decoder_proven||!e.graph_decode||!e.graph_current||!redefinition_gate::Owned(e.vm))return false;
@@ -549,7 +561,7 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  if(!StagedInputs(env,ti,definitions,this,error))return false;
  for(const auto& definition:definitions)for(const auto& stage:staged_classes)if(env->IsSameObject(definition.klass,stage.owner))graph_bases.push_back(stage.owner);
  if(graph_bases.size()!=definitions.size())return false;
- if(runnable_executor::With(env,anchor,ObserveGraphReaders,this)!=runnable_jni::Result::kSuccess)return Fail(error,"Native graph decoder differs from original rooted public field/Class oracles");
+ if(runnable_executor::With(env,anchor,ObserveGraphReaders,this)!=runnable_jni::Result::kSuccess)return Fail(error,graph_reader_error.empty()?"Native graph Runnable scope failed before reader proof":graph_reader_error.c_str());
  if(schema_operation){
   PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
   if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
