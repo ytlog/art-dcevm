@@ -37,9 +37,39 @@ void Marker(void*){}
 void PublishCache(void*,abi::arm64::android11::ReleaseObjectPointer,abi::arm64::android11::ReleaseObjectPointer){}
 void ObserveFailure(void*,jvmtiError)noexcept{}
 void SignedRoots(void*self,abi::arm64::android_common::HandleRootVisitor*visitor,int32_t id){assert(id==0);OriginalRoots(self,visitor,uint32_t{0});}
+// Observe the public/private monitor episode independently of production
+// readiness: exact fresh Object root, unlocked -> held -> unlocked, one pair.
+size_t monitor_episode_calls=0,monitor_completed=0,monitor_enters=0,monitor_exits=0;
+jobject OwnerPrivateNew(JNIEnv* e,jclass type,jmethodID id,va_list arguments){
+ assert(!monitor_held);monitor_episode_calls=0;
+ auto object=PrivateNew(e,type,id,arguments);
+ assert(object==private_monitor&&object!=reinterpret_cast<jobject>(old_class));
+ return object;
+}
+jboolean OwnerHolds(JNIEnv* e,jclass type,jmethodID id,va_list arguments){
+ va_list copied;va_copy(copied,arguments);auto object=va_arg(copied,jobject);va_end(copied);
+ assert(object==private_monitor&&object!=reinterpret_cast<jobject>(old_class));
+ const auto result=Holds(e,type,id,arguments);
+ if(private_monitor_locked){assert(monitor_episode_calls==0&&result);++monitor_episode_calls;return result;}
+ assert(monitor_episode_calls<3);
+ assert(bool(result)==(monitor_episode_calls==1));
+ ++monitor_episode_calls;if(monitor_episode_calls==3)++monitor_completed;
+ return result;
+}
+abi::arm64::android11::ReleaseObjectPointer OwnerEnter(void* self,abi::arm64::android11::ReleaseObjectPointer object,bool attempt){
+ assert(object.reference==uintptr_t(private_monitor)&&object.reference!=uintptr_t(old_class));
+ assert(monitor_episode_calls==1&&!private_monitor_locked);++monitor_enters;
+ return Enter(self,object,attempt);
+}
+bool OwnerExit(void* self,abi::arm64::android11::ReleaseObjectPointer object){
+ assert(object.reference==uintptr_t(private_monitor)&&monitor_episode_calls==2);++monitor_exits;
+ return Exit(self,object);
+}
 class OwnerHooks final:public AllocationHooks {
  public:
  void* FindSymbol(const char* lib,const char* n)override{
+  if(std::strstr(n,"MonitorEnter"))return reinterpret_cast<void*>(OwnerEnter);
+  if(std::strstr(n,"MonitorExit"))return reinterpret_cast<void*>(OwnerExit);
   if(!std::strcmp(n,abi::arm64::android_common::kHandleVisitRoots))return nullptr;
   if(!std::strcmp(n,abi::arm64::android_common::kHandleVisitRootsSigned))return reinterpret_cast<void*>(SignedRoots);
   if(std::strstr(n,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);
@@ -68,7 +98,7 @@ class OwnerHooks final:public AllocationHooks {
 };
 bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetadata& metadata,source_handle_roots::Service&,modern_field_storage::Service& storage){
  OwnerHooks hooks;Owner owner;std::string error;
- table.GetJavaVM=Vm;table.GetStaticMethodID=MonitorMethod;table.CallStaticBooleanMethodV=Holds;
+ table.GetJavaVM=Vm;table.GetStaticMethodID=MonitorMethod;table.CallStaticBooleanMethodV=OwnerHolds;table.NewObjectV=OwnerPrivateNew;
  runtime_services::Snapshot observed;observed.runtime=&runtime;observed.receivers.class_linker=&linker;observed.receivers.java_vm=&runtime;
  auto foreign=c;foreign.vm=&linker;
  assert(!owner.Prepare(hooks,storage,metadata,observed,foreign,&error)&&!owner.Prepared());
@@ -127,10 +157,12 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  error="stale readiness error";assert(!owner.End(&driver,true,&error)&&!owner.Ready());
  assert(error=="DEX registry public DexCache has no readable fixed native DexFile");
  std::memcpy(static_cast<char*>(registered_cache)+16,&file,8);
- assert(owner.Begin(&driver,c,fixture,&error));monitor_held=true;monitor_object=old_class;
+ assert(owner.Begin(&driver,c,fixture,&error));private_monitor_locked=true;
+ const auto refused_enters=monitor_enters;
  error="stale readiness error";assert(!owner.End(&driver,true,&error)&&!owner.Ready());
- assert(error=="Monitor proof pre-entry fixture root or public unlocked oracle failed");
- monitor_held=false;monitor_object=nullptr;
+ assert(error=="Monitor proof fresh private Object was already locked");
+ assert(monitor_enters==refused_enters&&!monitor_held&&private_globals==private_deleted);
+ private_monitor_locked=false;
  // Wrong registry or lookup cannot promote even a successful source episode.
  assert(owner.Begin(&driver,c,fixture,&error));wrong_registry=true;
  assert(!owner.End(&driver,true,&error)&&!owner.Ready());wrong_registry=false;
@@ -151,6 +183,8 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  assert(!owner.End(&driver,true,&error)&&!owner.Ready());wrong_registry=false;
  assert(owner.Begin(&driver,c,fixture,&error));assert(owner.End(&driver,true,&error)&&owner.Ready());
  assert(!owner.End(&driver,true,&error));
+ assert(original_class_locked&&monitor_completed>0&&monitor_enters==monitor_completed&&monitor_exits==monitor_completed);
+ assert(private_created==private_globals&&private_globals==private_deleted);
  std::memcpy(thread.data()+216,&saved_tls_self,8);std::memcpy(thread.data()+200,&saved_tls_env,8);
  return true;
 }

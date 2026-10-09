@@ -41,7 +41,7 @@ for layout in ('legacy', 'sized', 'legacy-length', 'sized-length'):
     else: fixture_env.pop('SOURCE_SCOPE_SIZED',None)
     if layout.endswith('length'): fixture_env['SOURCE_LOOKUP_LENGTH']='1'
     else: fixture_env.pop('SOURCE_LOOKUP_LENGTH',None)
-    result=subprocess.run([str(binary)],capture_output=True,text=True,env=fixture_env)
+    result=subprocess.run([str(binary)],capture_output=True,text=True,env=fixture_env,timeout=30)
     (out / ('result-'+layout+'.log')).write_text(result.stdout+result.stderr)
     result.check_returncode()
     print(layout+': '+result.stdout.strip())
