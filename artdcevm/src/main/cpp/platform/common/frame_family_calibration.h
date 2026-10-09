@@ -79,7 +79,7 @@ class Service {
   const size_t index=result.geometry==Geometry::kLegacy368?0:
     result.geometry==Geometry::kLegacy376?1:result.geometry==Geometry::kModern368?4:bound_[3]?3:2;
   if(!bound_[index])return false;
-  const active_frame_recovery_proof::Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},active_frame_recovery_proof::Shape::kThreePhysical};
+  const active_frame_recovery_proof::Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},active_frame_recovery_proof::Shape::kThreePhysical,physical.code};
   result.proof=services_[index].ProvePrepared(target,jit,oracle,scratch,capacity,prepared.context.get(),readable);
   const auto& p=result.proof;result.failure=p.detail;*output=result;
   if(p.failure!=active_frame_recovery_proof::Failure::kNone||p.frames!=3||p.physical_matches!=3||p.physical_owner_mask!=7||p.inline_matches||p.header_checks!=3||p.dex_pc_checks!=3||p.integers!=3||p.references!=3||p.location_reads!=6)return false;

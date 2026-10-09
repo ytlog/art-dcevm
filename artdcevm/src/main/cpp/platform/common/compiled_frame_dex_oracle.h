@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstring>
 namespace artdcevm::compiled_frame_dex_oracle {
-struct Frame {uint16_t registers=0,integer_vreg=0,reference_vreg=0;uint32_t invoke_dex_pc=0;};
+struct Frame {uint16_t registers=0,integer_vreg=0,reference_vreg=0;uint32_t invoke_dex_pc=0;uint16_t outs=0;};
 namespace detail {
 struct Dex {
  const unsigned char* bytes;size_t size;
@@ -52,8 +52,8 @@ inline bool Read(const unsigned char* bytes,size_t size,const std::array<uint32_
   for(uint32_t i=0;i<counts[section];++i){uint32_t delta,flags,code;if(!d.Uleb(&cursor,&delta)||delta>UINT32_MAX-index||!d.Uleb(&cursor,&flags)||!d.Uleb(&cursor,&code))return false;index+=delta;if(index>=method_count)return false;
    for(size_t frame=0;frame<3;++frame)if(index==methods[frame]){
     if((seen&(1u<<frame))||section!=2||(flags&8)==0||(flags&0x500)!=0||!code||(code&3))return false;
-    uint16_t regs,incoming;uint32_t units;if(!d.U16(code,&regs)||!d.U16(code+2,&incoming)||!d.U32(code+12,&units)||!d.Range(code+16,size_t(units)*2)||incoming!=6||regs<incoming||regs>16)return false;
-    result[frame].registers=regs;result[frame].integer_vreg=regs-incoming+frame*2;result[frame].reference_vreg=result[frame].integer_vreg+1;
+    uint16_t regs,incoming,outs;uint32_t units;if(!d.U16(code,&regs)||!d.U16(code+2,&incoming)||!d.U16(code+4,&outs)||!d.U32(code+12,&units)||!d.Range(code+16,size_t(units)*2)||incoming!=6||regs<incoming||regs>16)return false;
+    result[frame].registers=regs;result[frame].outs=outs;result[frame].integer_vreg=regs-incoming+frame*2;result[frame].reference_vreg=result[frame].integer_vreg+1;
     if(!detail::ChildPc(d,code+16,units,methods[frame+1],&result[frame].invoke_dex_pc))return false;seen|=1u<<frame;
    }
   }

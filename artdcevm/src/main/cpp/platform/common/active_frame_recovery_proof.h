@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/decoded_frame_recovery.h"
+#include "platform/common/native_frame_code_owner.h"
 #include "platform/common/stack_visitor_service.h"
 #include "platform/abi/arm64/context.h"
 #include "platform/abi/arm64/android11/frame_registers.h"
@@ -29,24 +30,25 @@ struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,m
   bool register_range_observed=false,native_register_count_observed=false,native_inline_depth_observed=false;
   const char* register_count_source="unobserved";
   uint64_t native_register_count=0;uint32_t slow_register_expected_count=0,source_inline_depth=0,native_inline_depth=0;uint32_t physical_owner_mask=0;
-  Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
+  uint32_t aot_frames=0;Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
 // Exactly one physical carrier and two independently identified inlinees. Raw
 // reference expectations must be acquired from strong roots inside the caller's
 // exclusive/suspended scope; they are borrowed only during Prove, never stored.
+using CodeKind=native_frame_code_owner::Kind;
 enum class Shape {kCarrierTwoInlinees,kThreePhysical};
-struct Oracle {FrameOracle carrier,inlinees[2];Shape shape=Shape::kCarrierTwoInlinees;};
+struct Oracle {FrameOracle carrier,inlinees[2];Shape shape=Shape::kCarrierTwoInlinees;CodeKind code=CodeKind::Jit;};
 // This proof covers these three independently witnessed physical Java callers.
 // It does not grant whole-process frame eligibility or authorize deoptimization.
-struct PhysicalOracle {FrameOracle callers[3];};
+struct PhysicalOracle {FrameOracle callers[3];CodeKind code=CodeKind::Jit;};
 class Service {
  public:
   using Readable=bool (*)(const void*,size_t*);
   template<class Finder> static bool Bind(Family family,Finder finder,Service* output,const char** missing=nullptr) {
     if(missing)*missing=nullptr;
     if(!output)return false;
-    Service candidate;candidate.family_=family;
+    Service candidate;candidate.family_=family;candidate.code_owner_=native_frame_code_owner::Service::Bind(finder);
     auto declaration=Declaration(family);if(!declaration)return false;
     auto required=[&](const char* name){void* symbol=finder(name);if(!symbol&&missing&&!*missing)*missing=name;return symbol;};
     const bool stack_bound=stack_visitor_service::Service::Bind(*declaration,required,&candidate.stack_);
@@ -83,7 +85,7 @@ class Service {
                decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable=nullptr) const {
     Report report;
     if(!create_)return report;
-    if(!thread || !jit || !scratch || !Valid(oracle)) {report.failure=Failure::kMissingOracle;report.detail="missing-independent-inputs";return report;}
+    if(!thread || (oracle.code==CodeKind::Jit&&!jit) || !scratch || !Valid(oracle)) {report.failure=Failure::kMissingOracle;report.detail="missing-independent-inputs";return report;}
     std::unique_ptr<abi::arm64::context::Prefix> context(create_());
     if(!context){report.failure=Failure::kMissingContext;report.detail="native-context-create-returned-null";return report;}
     report.detail="context-created";
@@ -96,7 +98,7 @@ class Service {
       abi::arm64::context::Prefix* context,Readable readable)const {
     Report report;
     if(!context){report.failure=Failure::kMissingContext;return report;}
-    if(!thread||!jit||!scratch||!Valid(oracle)){
+    if(!thread||(oracle.code==CodeKind::Jit&&!jit)||!scratch||!Valid(oracle)){
       report.failure=Failure::kMissingOracle;return report;
     }
     context->Reset(); // WalkStack then fills native callee-saves while unwinding.
@@ -111,7 +113,7 @@ class Service {
   }
   Report ProvePhysical(void* thread,void* jit,const PhysicalOracle& physical,
       decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable=nullptr) const {
-    const Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},Shape::kThreePhysical};
+    const Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},Shape::kThreePhysical,physical.code};
     return Prove(thread,jit,oracle,scratch,capacity,readable);
   }
  private:
@@ -284,8 +286,10 @@ class Service {
           return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-physical-caller");
         report.physical_owner_mask|=bit;
       }
-      if(!service.jit_contains_(jit,reinterpret_cast<void*>(this->pc)) ||
-         (service.header_contains_ && !service.header_contains_(this->header,this->pc)) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
+      const auto code=service.code_owner_.Observe(*this->quick_frame,this->pc,this->header,jit);
+      if((oracle.code!=CodeKind::Jit&&oracle.code!=CodeKind::Aot)||code!=oracle.code ||
+         (service.header_contains_ && !service.header_contains_(this->header,this->pc)) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership,"native-code-owner-header-PC-kind-mismatch");
+      if(code==CodeKind::Aot)++report.aot_frames;
       // Fixed native header prefixes put code at byte8 on11 and byte4
       // thereafter. Native PC ownership above and the actual native stack-map
       // lookup/value witnesses must agree with that caller-owned declaration.
@@ -438,6 +442,7 @@ class Service {
         if(witness.kind==Kind::kInt)++report.integers;
         else ++report.references;
       }
+      if(service.code_owner_.Observe(*this->quick_frame,this->pc,this->header,jit)!=code)return Fail(Failure::kCodeOwnership,"native-code-owner-changed-after-value-read");
       seen|=bit;++report.frames;return seen!=7;
     }
   };
@@ -463,6 +468,7 @@ class Service {
   InlineDepth inline_depth_=nullptr;
   RegisterCount register_count_=nullptr;
   abi::arm64::dex_register_map::Decode decode_map_=nullptr;
+  native_frame_code_owner::Service code_owner_;
   DexPc dex_pc_=nullptr;ContainsJit jit_contains_=nullptr;ContainsHeader header_contains_=nullptr;Nterp nterp_=nullptr;
 };
 }
