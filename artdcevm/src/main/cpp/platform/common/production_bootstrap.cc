@@ -51,7 +51,7 @@ struct Roots {
 struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
 struct NativeEngine final:Engine {
  ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
- ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){provenance.Clear(env);ClearFieldProofs(env);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -71,6 +71,12 @@ struct NativeEngine final:Engine {
  native_cache::Service cache;
  native_source_stop::Service source_stop;
  native_source_observation::Owner source_observers;
+ struct PublicCacheWitness {
+  jobject cache=nullptr,klass=nullptr,field=nullptr,method=nullptr;
+  InstalledClassIds ids;uint32_t field_index=UINT32_MAX,method_index=UINT32_MAX;
+  void* native_field=nullptr;void* native_method=nullptr;
+ } source_cache_witness;
+ bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
  native_scope_executor::Executor native_scope;
  bool NativeScopeCalibrated()const override{return native_scope.Ready();}
  std::string source_stop_diagnostic;
@@ -392,6 +398,7 @@ struct NativeEngine final:Engine {
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
   if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
+  if(batch&&!PrepareSourceCacheWitness(env,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
   // Observe a bounded ordinary unchanged-hierarchy removal first. Schema graph
   // preparation cannot stand in for the original source GC/final-stop proof.
   // Capability gaps leave ordinary behavior intact and cannot authorize Session.
@@ -490,6 +497,73 @@ bool OriginalDeclarations(JNIEnv* env,jobject input,evolution::ClassSchema* sche
   files.push_back(std::move(bytes));
  }
  env->DeleteLocalRef(array);return SelectInstalledClass(files,"Lcom/github/ytlog/artdcevm/internal/EvolutionCalibration;",schema,counts,error);
+}
+struct SourceCacheWitnessRequest {
+ NativeEngine* engine;std::string* error;
+};
+bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
+ auto& request=*static_cast<SourceCacheWitnessRequest*>(raw);auto& e=*request.engine;
+ auto& witness=e.source_cache_witness;void* klass=nullptr;void* mirror=nullptr;
+ if(scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm)||
+    !scope.original_method||!runnable_executor::DecodeStrongGlobal(scope,witness.klass,&klass)||
+    !runnable_executor::DecodeStrongGlobal(scope,witness.field,&mirror))return false;
+ const auto layout=e.model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ size_t extent=0;method_metadata::Identity identity;
+ if(!method_identity::ReadableMappingExtent(scope.original_method,&extent)||
+    !method_metadata::ReadIdentity(layout,scope.original_method,extent,&identity)||
+    identity.dex_method_index!=witness.method_index||(identity.access_flags&0xffffu)!=1u)
+  return Fail(request.error,"Public cache Method differs from immutable fixture DEX");
+ auto* field=e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;field_copy::CopyFieldView text;
+ if(!field||e.metadata.FieldDeclaringClass(field)!=klass||
+    !e.metadata.FieldIdentity(field,&text,request.error)||std::strcmp(text.name,"number")||
+    std::strcmp(text.descriptor,"I")||field_array::Flags(field)!=(1u|0x40u))
+  return Fail(request.error,"Public cache Field differs from immutable fixture DEX");
+ // No safepoint between this rooted Class read and the original AddGlobalRef.
+ // The real global is published before ART's allocation-tracking callback.
+ void* cache=e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
+ if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<112)
+  return Fail(request.error,"Public fixture DexCache extent unavailable");
+ auto root=NativeEngine::RootManaged(&e,cache);if(!root)return false;
+ witness.cache=root;witness.native_field=field;witness.native_method=scope.original_method;
+ return true;
+}
+bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
+ if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
+ jclass type=env->GetObjectClass(input);if(!type)return false;
+ struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
+ const char* descriptor="Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;";
+ if(!source_cache_witness.klass){
+  PublicCacheWitness candidate;Roots owned{env,{}};
+  auto own=[&](const char* name,const char* signature){
+   auto id=env->GetFieldID(type,name,signature);auto value=id?env->GetObjectField(input,id):nullptr;
+   auto global=owned.Own(value);if(value)env->DeleteLocalRef(value);
+   return global;
+  };
+  candidate.klass=own("cacheClass","Ljava/lang/Class;");
+  candidate.field=own("cacheField","Ljava/lang/reflect/Field;");
+  candidate.method=own("cacheRead","Ljava/lang/reflect/Method;");
+  auto id=env->GetFieldID(type,"cacheDex","[B");auto bytes=id?static_cast<jbyteArray>(env->GetObjectField(input,id)):nullptr;
+  Local bytes_scope{env,bytes};if(!bytes||env->ExceptionCheck())return false;
+  std::vector<unsigned char> original(static_cast<size_t>(env->GetArrayLength(bytes)));
+  env->GetByteArrayRegion(bytes,0,static_cast<jsize>(original.size()),reinterpret_cast<jbyte*>(original.data()));
+  evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
+  if(env->ExceptionCheck()||!SelectInstalledClass({original},descriptor,&schema,&counts,error,&candidate.ids))return false;
+  for(const auto& field:schema.fields)if(field.name=="number"&&field.descriptor=="I"&&field.access==(1u|0x40u))candidate.field_index=field.dex_index;
+  for(const auto& method:schema.methods)if(method.name=="read"&&method.descriptor=="()I"&&method.access==1u)candidate.method_index=method.dex_index;
+  if(candidate.field_index==UINT32_MAX||candidate.method_index==UINT32_MAX||
+     !candidate.klass||!candidate.field||!candidate.method||env->ExceptionCheck())
+   return Fail(error,"Immutable cache fixture member declarations unavailable");
+  roots.insert(roots.end(),owned.values.begin(),owned.values.end());owned.values.clear();source_cache_witness=candidate;
+ }
+ if(!source_cache_witness.klass||!source_cache_witness.field||!source_cache_witness.method||env->ExceptionCheck())return false;
+ jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_scope{env,bootstrap};
+ auto warm=bootstrap?env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;"):nullptr;
+ auto expected=warm?env->CallStaticObjectMethod(bootstrap,warm,input):nullptr;Local expected_scope{env,expected};
+ if(!expected||!env->IsSameObject(expected,source_cache_witness.klass)||env->ExceptionCheck())return Fail(error,"Original DEX cache warm behavior changed");
+ if(source_cache_witness.cache){env->DeleteGlobalRef(source_cache_witness.cache);source_cache_witness.cache=nullptr;}
+ SourceCacheWitnessRequest request{this,error};
+ if(runnable_executor::With(env,source_cache_witness.method,CaptureSourceCacheWitness,&request)!=runnable_jni::Result::kSuccess)return false;
+ return source_cache_witness.cache!=nullptr;
 }
 struct AllocatorRequest {
  NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;

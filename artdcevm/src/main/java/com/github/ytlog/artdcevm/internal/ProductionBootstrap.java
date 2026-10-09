@@ -40,13 +40,27 @@ public final class ProductionBootstrap {
         final Class<?> additiveClass;
         final byte[] additiveDex;
         final Object storage;
+        final byte[] cacheDex;
+        final Class<?> cacheClass;
+        final Object cacheFixture;
+        final Method cacheRead, cacheWarm;
+        final java.lang.reflect.Field cacheField;
         final Object methodReceiver = new EvolutionCalibration();
         final MethodHandle[] methodHandles;
         final Method[] methods;
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
-        Inputs(byte[][] dex, Class<?> target, byte[] replacement) throws Exception {
+        Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex) throws Exception {
             this.dex = dex; additiveClass = target; additiveDex = replacement;
+            this.cacheDex = cacheDex;
+            ClassLoader cacheLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(cacheDex), null);
+            cacheClass = Class.forName("com.github.ytlog.artdcevm.internal.SourceCacheFixture", true, cacheLoader);
+            cacheFixture = cacheClass.getDeclaredConstructor().newInstance();
+            cacheRead = cacheClass.getDeclaredMethod("read");
+            cacheWarm = cacheClass.getDeclaredMethod("warm", cacheClass);
+            cacheField = cacheClass.getDeclaredField("number");
+            if (cacheWarm.invoke(null, cacheFixture) != cacheClass)
+                throw new IllegalStateException("Isolated source cache witness changed");
             storage = new CalibrationFixture();
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             methods = new Method[] {EvolutionCalibration.class.getDeclaredMethod("compute"),
@@ -64,6 +78,9 @@ public final class ProductionBootstrap {
             staticGetter = lookup.findStaticGetter(CalibrationFixture.class, "staticIntValue", int.class);
             staticSetter = lookup.findStaticSetter(CalibrationFixture.class, "staticIntValue", int.class);
         }
+    }
+    static Class<?> warmSourceCache(Inputs input) throws Exception {
+        return (Class<?>) input.cacheWarm.invoke(null, input.cacheFixture);
     }
     static int invokeMethod(Inputs input) throws Throwable {
         return (int) input.methodHandles[0].invoke(input.methodReceiver);
@@ -125,6 +142,7 @@ public final class ProductionBootstrap {
         byte[] additive = read(application.getAssets().open("artdcevm/bootstrap/additive.dex"));
         ClassLoader loader = new InMemoryDexClassLoader(ByteBuffer.wrap(original), null);
         Class<?> target = Class.forName("com.github.ytlog.artdcevm.internal.BootstrapAdditive", true, loader);
-        return new Inputs(dex.toArray(new byte[0][]), target, additive);
+        byte[] cacheDex = read(application.getAssets().open("artdcevm/bootstrap/cache.dex"));
+        return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex);
     }
 }
