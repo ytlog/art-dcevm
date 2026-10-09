@@ -61,6 +61,14 @@ struct MappedDexHierarchy {
   std::vector<std::string> interfaces;
 };
 bool ReadMappedDexHierarchy(const MappedDexMetadata&, MappedDexHierarchy*, std::string*);
+// Exact defining ClassDef identity only. Borrowed descriptor remains valid
+// while its immutable mapping is live; no member enumeration or allocation on
+// a valid mapping. This does not verify bodies, annotations or member data.
+struct MappedDexClassIdentity {
+  const char* descriptor = nullptr;
+  uint32_t access = 0;
+};
+bool ReadMappedDexClassIdentity(const MappedDexMetadata&, MappedDexClassIdentity*, std::string*);
 // Borrowed FieldId identity from an immutable, bounded DEX mapping.
 struct MappedDexFieldReference {
   const char* declaring_class = nullptr;

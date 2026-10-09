@@ -77,10 +77,10 @@ bool FieldMetadata::DefiningClassFlags(void* klass,uint32_t* flags,std::string* 
   uint32_t size=0;std::memcpy(&size,prefix.begin+32,4);
   if(size<0x70||size>header_extent)return Fail(error,"Defining Class DEX header exceeds mapped range");
   evolution::MappedDexMetadata mapping{prefix.begin,size,prefix.data_begin,prefix.data_size,uint32_t(identity.class_def_index)};
-  std::string diagnostic;evolution::ClassSchema schema;if(!evolution::ReadMappedDexDeclarations(mapping,&schema,error?error:&diagnostic))return false;
-  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error,context)||!descriptor||schema.descriptor!=descriptor)
+  std::string diagnostic;evolution::MappedDexClassIdentity definition;if(!evolution::ReadMappedDexClassIdentity(mapping,&definition,error?error:&diagnostic))return false;
+  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error,context)||!descriptor||std::strcmp(definition.descriptor,descriptor))
     return Fail(error,"Defining ClassDef differs from exact native Class descriptor");
-  *flags=schema.access;return true;
+  *flags=definition.access;return true;
 }
 bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error,const ReadContext* context)const {
   // Fixed legacy Class/DexCache/DexFile declarations, used only after the

@@ -70,6 +70,14 @@ class Reader {
     size_t cursor = U32(def + 24);
     return cursor ? Counts(&cursor) : MappedDexMemberCounts{};
   }
+  MappedDexClassIdentity ReadClassIdentity() {
+    Initialize();
+    const size_t def = Item(Table(96, 32), class_def_index_);
+    const auto descriptor = TypeView(U32(def));
+    if (descriptor.empty() || descriptor.front() != 'L')
+      Fail("A class definition must use a class descriptor");
+    return {descriptor.data(), U32(def + 4)};
+  }
   MappedDexFieldReference ReadFieldReference(uint32_t index) {
     Initialize();
     const size_t item = Item(fields_, index);
@@ -520,6 +528,22 @@ bool ReadMappedDexDeclarations(const MappedDexMetadata& view, ClassSchema* outpu
   try {
     auto schema = Reader(view).Read();
     *output = std::move(schema);
+    error->clear();
+    return true;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadMappedDexClassIdentity(const MappedDexMetadata& view,
+                               MappedDexClassIdentity* output, std::string* error) {
+  if (!output || !error) return false;
+  try {
+    const auto identity = Reader(view).ReadClassIdentity();
+    *output = identity;
     error->clear();
     return true;
   } catch (const std::bad_alloc&) {
