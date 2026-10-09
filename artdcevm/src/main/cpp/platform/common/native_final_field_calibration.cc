@@ -4,8 +4,8 @@ namespace artdcevm::final_field_calibration {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 struct Roots {
- JNIEnv* env; jclass target=nullptr,writer=nullptr;jobject instance=nullptr,handles=nullptr;jclass exception=nullptr;
- ~Roots(){if(exception)env->DeleteLocalRef(exception);if(handles)env->DeleteGlobalRef(handles);if(instance)env->DeleteGlobalRef(instance);if(writer)env->DeleteGlobalRef(writer);if(target)env->DeleteGlobalRef(target);}
+ JNIEnv* env;final_field_service::Service* service;jclass target=nullptr,writer=nullptr;jobject instance=nullptr,handles=nullptr;jclass exception=nullptr;bool registered_target=false,registered_writer=false,registered_instance=false;
+ ~Roots(){if(exception)env->DeleteLocalRef(exception);if(handles)env->DeleteGlobalRef(handles);if(instance){if(registered_instance)service->ForgetStrong(instance);env->DeleteGlobalRef(instance);}if(writer){if(registered_writer)service->ForgetStrong(writer);env->DeleteGlobalRef(writer);}if(target){if(registered_target)service->ForgetStrong(target);env->DeleteGlobalRef(target);}}
 };
 struct Probe {
  const Bindings* bindings;Roots* roots;jmethodID writer; jfieldID field;bool statik;
@@ -52,7 +52,7 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  if(service.AlreadyCalibrated())return true;
  auto abort=[&service](final_field_service::Service*){service.AbortCalibration();};
  std::unique_ptr<final_field_service::Service,decltype(abort)> attempt(&service,abort);
- Roots roots{env};
+ Roots roots{env,&service};
  jclass writer=env->FindClass("com/github/ytlog/artdcevm/internal/FinalPermissionOracle");
  if(!writer||env->ExceptionCheck())return Fail(error,"Installed final permission writer unavailable");
  jclass target=env->FindClass("com/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target");
@@ -63,6 +63,8 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  roots.writer=static_cast<jclass>(env->NewGlobalRef(writer));roots.target=static_cast<jclass>(env->NewGlobalRef(target));
  env->DeleteLocalRef(writer);env->DeleteLocalRef(target);
  if(!roots.writer||!roots.target||env->ExceptionCheck())return false;
+ roots.registered_target=service.RegisterStrong(env,roots.target,error);if(!roots.registered_target)return false;
+ roots.registered_writer=service.RegisterStrong(env,roots.writer,error);if(!roots.registered_writer)return false;
  auto method=[&](const char* name,const char* signature){return env->ExceptionCheck()?nullptr:env->GetStaticMethodID(roots.writer,name,signature);};
  jmethodID create=method("create","()Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;");
  jmethodID prepare=method("prepareHandles","()Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Handles;");
@@ -74,6 +76,7 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  if(!object||env->ExceptionCheck())return false;
  roots.instance=env->NewGlobalRef(object);env->DeleteLocalRef(object);
  if(!roots.instance||env->ExceptionCheck())return false;
+ roots.registered_instance=service.RegisterStrong(env,roots.instance,error);if(!roots.registered_instance)return false;
  jobject handles=env->CallStaticObjectMethod(roots.writer,prepare);
  if(!handles||env->ExceptionCheck())return false;
  roots.handles=env->NewGlobalRef(handles);env->DeleteLocalRef(handles);

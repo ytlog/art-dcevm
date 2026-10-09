@@ -117,6 +117,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/modern_final_field_guard.cc
     platform/common/native_final_write_guard.cc
     platform/common/native_final_write_listener.cc
+    platform/common/native_reference_decoder.cc
     platform/common/native_final_field_calibration.cc
     platform/common/native_final_field_service.cc
     platform/common/native_final_field_aliases.cc

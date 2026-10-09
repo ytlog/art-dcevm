@@ -81,8 +81,10 @@ bool Service::PrepareProofMethod(jmethodID method,std::string* error){auto& s=*s
   return Fail(error,"Final-field isolated fixture breakpoint could not activate deoptimization lease");
  s.proof_method=method;return true;
 }
+bool Service::RegisterStrong(JNIEnv* env,jobject ref,std::string* error){auto& s=*state_;return s.bindings.register_strong&&s.bindings.register_strong(s.bindings.native.owner,env,ref,error);}
+void Service::ForgetStrong(jobject ref){auto& s=*state_;if(s.bindings.forget_strong)s.bindings.forget_strong(s.bindings.native.owner,ref);}
 bool Service::Bind(HookEngine& hooks,void* instrumentation,std::string* error){auto& s=*state_;
- if(!s.permission_env||!s.proof_method||!s.bindings.decode_weak||!s.bindings.raise||!s.bindings.native.metadata||!s.bindings.native.metadata->Calibrated()||
+ if(!s.permission_env||!s.proof_method||!s.bindings.register_strong||!s.bindings.forget_strong||!s.bindings.decode_weak||!s.bindings.register_weak||!s.bindings.forget_weak||!s.bindings.raise||!s.bindings.native.metadata||!s.bindings.native.metadata->Calibrated()||
     !s.bindings.native.methods||!s.bindings.native.decode_global||!s.bindings.native.method_class)
   return Fail(error,"Final-field service lacks the calibrated process identity/root owner");
  return final_write_guard::BindListener(hooks,instrumentation,s.guard,error);
@@ -122,13 +124,17 @@ bool Service::AlreadyCalibrated()const{return state_->calibration_complete&&fina
 void Service::AbortCalibration(){auto& s=*state_;if(s.calibration_complete)return;s.guard.ResetUncommittedProof();s.proved_storage=0;}
 bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==3u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
 bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots,const std::vector<jclass>& replacements,std::string* error){auto& s=*state_;
+ if(!s.bindings.register_weak||!s.bindings.forget_weak)return Fail(error,"Final-field roots lack owned weak registration lifecycle");
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");
+ s.staged.reserve(roots.size()); // allocate before creating any owned JNI handle
  for(size_t i=0;i<roots.size();++i){auto klass=roots[i];if(!klass)return Fail(error,"Final-field stage contains a null public Class");State::Public entry;
   if(android13::ReadLiveSchema(jvmti,env,klass,&entry.schema,error)!=JVMTI_ERROR_NONE)return false;
   entry.root=static_cast<jclass>(env->NewGlobalRef(klass));if(!entry.root||env->ExceptionCheck())return false;
-  entry.weak=env->NewWeakGlobalRef(klass);if(!entry.weak||env->ExceptionCheck()){env->DeleteGlobalRef(entry.root);return false;}
+  if(!RegisterStrong(env,entry.root,error)){env->DeleteGlobalRef(entry.root);return false;}
+  entry.weak=env->NewWeakGlobalRef(klass);if(!entry.weak||env->ExceptionCheck()){ForgetStrong(entry.root);env->DeleteGlobalRef(entry.root);return false;}
+  if(!s.bindings.register_weak(s.bindings.native.owner,env,entry.weak,error)){ForgetStrong(entry.root);env->DeleteGlobalRef(entry.root);env->DeleteWeakGlobalRef(entry.weak);return false;}
   entry.replacement=static_cast<jclass>(env->NewGlobalRef(replacements[i]));
-  if(!entry.replacement||env->ExceptionCheck()){env->DeleteGlobalRef(entry.root);env->DeleteWeakGlobalRef(entry.weak);return false;}
+  if(!entry.replacement||env->ExceptionCheck()||!RegisterStrong(env,entry.replacement,error)){if(entry.replacement)env->DeleteGlobalRef(entry.replacement);ForgetStrong(entry.root);env->DeleteGlobalRef(entry.root);s.bindings.forget_weak(s.bindings.native.owner,entry.weak);env->DeleteWeakGlobalRef(entry.weak);return false;}
   s.staged.push_back(std::move(entry));
  }
  return true;
@@ -249,7 +255,7 @@ void Service::BeginCommit(const source_commit::Plan& plan)const{auto& s=*state_;
  s.committed=true;
 }
 void Service::Clear(JNIEnv* env){if(!env)return;auto& s=*state_;
- for(auto& entry:s.staged){if(entry.root)env->DeleteGlobalRef(entry.root);if(entry.replacement)env->DeleteGlobalRef(entry.replacement);if(entry.weak)env->DeleteWeakGlobalRef(entry.weak);}
+ for(auto& entry:s.staged){if(entry.root){ForgetStrong(entry.root);env->DeleteGlobalRef(entry.root);}if(entry.replacement){ForgetStrong(entry.replacement);env->DeleteGlobalRef(entry.replacement);}if(entry.weak){s.bindings.forget_weak(s.bindings.native.owner,entry.weak);env->DeleteWeakGlobalRef(entry.weak);}}
  s.staged.clear();s.expected={};s.rooted_pairs.clear();s.pairs.clear();s.pending.reset();s.prepared=false;s.sealed=false;s.committed=false;s.needs_access=false;
  // Test weak liveness with ordinary JNI outside the native alias mutex. After
  // deactivation, no future callback may decode the deleted handle; readers
@@ -258,7 +264,7 @@ void Service::Clear(JNIEnv* env){if(!env)return;auto& s=*state_;
   jweak weak=static_cast<jweak>(handle);jobject local=env->NewLocalRef(weak);
   if(local){env->DeleteLocalRef(local);continue;}
   if(env->ExceptionCheck())continue;
-  if(s.aliases.Deactivate(handle))env->DeleteWeakGlobalRef(weak);
+  if(s.aliases.Deactivate(handle)){s.bindings.forget_weak(s.bindings.native.owner,weak);env->DeleteWeakGlobalRef(weak);}
  }
 }
 } // namespace artdcevm::final_field_service

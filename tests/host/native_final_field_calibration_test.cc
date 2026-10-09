@@ -43,6 +43,8 @@ struct Service::State {};
 Service::Service(Bindings):state_(new State){}Service::~Service()=default;
 bool Service::PrepareEnvironment(JNIEnv*,std::string*){return true;}
 bool Service::PrepareProofMethod(jmethodID method,std::string*){return method==Ref<jmethodID>(&writer);}
+bool Service::RegisterStrong(JNIEnv*,jobject ref,std::string*){return ref!=nullptr;}
+void Service::ForgetStrong(jobject){}
 bool Service::Bind(HookEngine&,void* actual,std::string*){return actual==&target;}
 bool Service::InstallAtExclusiveBoundary(std::string*){return true;}
 bool Service::FixtureField(void* actual,jclass t,jclass w,jmethodID m,jfieldID f,bool statik,final_write_guard::Oracle* out,uint32_t* flags,std::string*)const{

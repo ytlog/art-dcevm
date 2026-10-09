@@ -10,6 +10,11 @@ struct Bindings {
  // Independently calibrated native weak-reference decoder. A cleared weak
  // yields success+null. Borrowed values stay under the current mutator scope.
  bool (*decode_weak)(void*,void* actual_thread,jweak,void**)=nullptr;
+ bool (*register_strong)(void*,JNIEnv*,jobject,std::string*)=nullptr;
+ void (*forget_strong)(void*,jobject)=nullptr;
+ // Public-JNI registration ties each owned jweak to its calibrated decoder.
+ bool (*register_weak)(void*,JNIEnv*,jweak,std::string*)=nullptr;
+ void (*forget_weak)(void*,jweak)=nullptr;
  void (*raise)(void*,void*,const char*,const char*)=nullptr;
 };
 // This process owner outlives its registered listener. JNI staging/cleanup and
@@ -24,6 +29,8 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  bool PrepareEnvironment(JNIEnv*,std::string*);
  // Ordinary JNI/JVMTI stage, before Bind and exclusive listener installation.
  bool PrepareProofMethod(jmethodID fixture_writer,std::string*);
+ bool RegisterStrong(JNIEnv*,jobject,std::string*);
+ void ForgetStrong(jobject);
  bool Bind(HookEngine&,void* observed_instrumentation,std::string*);
  bool InstallAtExclusiveBoundary(std::string*);
  // Borrowed native oracle only inside a calibrated mutator callback; exact
