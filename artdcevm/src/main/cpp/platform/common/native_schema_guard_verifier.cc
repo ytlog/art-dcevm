@@ -1,6 +1,7 @@
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/loaded_member_guards.h"
 #include "platform/common/jvmti_method_flags.h"
+#include "platform/common/proxy_method_signature.h"
 #include "platform/common/method_array_view.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/rooted_schema_plan.h"
@@ -30,6 +31,7 @@ struct Snapshot {
  std::vector<void*> classes,loaders;
  std::vector<size_t> parents;
  std::vector<std::vector<void*>> declared,all_methods;
+ std::vector<proxy_method_signature::Witness> proxy_signatures;
 };
 // Public interface getSuperclass is null; ART ClassLinker retains bootstrap
 // Object in the native super_class field. Preserve both identities instead of
@@ -160,6 +162,7 @@ struct Verifier::State {
     for(size_t i=0;i<proof.interface_classes.size();++i)if(bindings.metadata->Reference(proof.interfaces,12+8*i)!=proof.interface_classes[i])return false;}
    for(size_t i=0;i<nodes[n].method_ids.size();++i)if(bindings.decode_method(bindings.owner,nodes[n].method_ids[i])!=frozen_snapshot.declared[n][i])return false;
   }
+  for(const auto& witness:frozen_snapshot.proxy_signatures)if(!witness.Unchanged())return false;
   for(const auto& proof:replacement_interfaces){if(bindings.metadata->Reference(proof.klass,24)!=proof.table)return false;
    if(proof.table){if(Read<uint32_t>(proof.table,8)!=2*proof.values.size())return false;
     for(size_t n=0;n<proof.values.size();++n)if(bindings.metadata->Reference(proof.table,12+8*n)!=proof.values[n])return false;}}
@@ -229,16 +232,13 @@ struct Verifier::State {
     result.declared[n].push_back(method);
    }
   }
-  bool distinct_signature=false,shared_signature=false;
-  std::map<std::pair<std::string,std::string>,void*> signatures;
-  for(size_t n=0;n<nodes.size();++n)for(size_t i=0;i<result.declared[n].size();++i){void* method=result.declared[n][i];const auto& member=nodes[n].schema.methods[i];
-   if(!bindings.same_method(bindings.owner,method,method))return Fail(error,"Named signature comparator rejected a public self identity");
-   auto key=std::make_pair(member.name,member.descriptor);auto previous=signatures.find(key);
-   if(previous!=signatures.end()&&previous->second!=method){if(!bindings.same_method(bindings.owner,method,previous->second))return Fail(error,"Named signature comparator differs from independent matching public declarations");shared_signature=true;}
-   if(!signatures.empty()&&signatures.begin()->first!=key){if(bindings.same_method(bindings.owner,method,signatures.begin()->second))return Fail(error,"Named signature comparator accepted independently different public declarations");distinct_signature=true;}
-   signatures.emplace(std::move(key),method);
-  }
-  if(!distinct_signature||!shared_signature)return Fail(error,"Whole loaded graph lacks positive and negative signature comparator oracles");
+  std::map<void*,proxy_method_signature::Declaration> arena;
+  const auto Admit=[&](void* method,size_t n,size_t i){
+   const auto& member=nodes[n].schema.methods[i];
+   return arena.emplace(method,proxy_method_signature::Declaration{member.name,member.descriptor,bool(nodes[n].class_name)}).second;
+  };
+  for(size_t n=0;n<nodes.size();++n)for(size_t i=0;i<result.declared[n].size();++i)
+   if(!Admit(result.declared[n][i],n,i))return Fail(error,"Duplicate native method has conflicting public declarations");
   size_t declared_total=0;for(const auto& list:result.declared)declared_total+=list.size();
   for(size_t n=0;n<nodes.size();++n){void* klass=result.classes[n];
    if(!Mapped(klass,56))return Fail(error,"Native Class methods prefix is unreadable");
@@ -250,11 +250,49 @@ struct Verifier::State {
     if(std::find(result.declared[n].begin(),result.declared[n].end(),method)!=result.declared[n].end()){found.insert(method);continue;}
     void* owner=bindings.method_class(bindings.owner,method);auto cls=std::find(result.classes.begin(),result.classes.end(),owner);
     if(cls==result.classes.end()||owner==klass)return Fail(error,"Nondeclared native method lacks foreign copied-member ownership");
-    bool match=false;for(void* declared:result.declared[size_t(cls-result.classes.begin())])if(bindings.same_method(bindings.owner,method,declared)){match=true;break;}
-    if(!match)return Fail(error,"Copied native method has no independent public declaration");
+    const size_t source=size_t(cls-result.classes.begin());
+    // A proxy source must first be normalized using its own independently
+    // proved data witness. Do not call the DEX comparator on a raw proxy.
+    if(nodes[source].class_name)return Fail(error,"Copied native method has an unproved proxy source");
+    bool match=false;size_t public_index=0;
+    for(size_t j=0;j<result.declared[source].size();++j)if(bindings.same_method(bindings.owner,method,result.declared[source][j])){
+     if(match)return Fail(error,"Copied native method matches ambiguous public declarations");match=true;public_index=j;}
+    if(!match||!Admit(method,source,public_index))return Fail(error,"Copied native method has no unique independent public declaration");
    }
    if(found.size()!=result.declared[n].size())return Fail(error,"Public method ID is outside its source-declared native arena");
   }
+  bool distinct_signature=false,shared_signature=false;
+  struct Signature {void* method;size_t node,index;};
+  std::map<std::pair<std::string,std::string>,Signature> signatures;
+  const auto Failure=[&](const char* reason,size_t n,size_t i,const Signature* other){
+   if(error){const auto& member=nodes[n].schema.methods[i];char text[768];
+    const char* previous=other?nodes[other->node].schema.descriptor.c_str():"<none>";
+    std::snprintf(text,sizeof(text),"%s [class=%.*s method=%.*s%.*s proxy=%d previousClass=%.*s]",reason,
+     int(DiagnosticPrefix(nodes[n].schema.descriptor.c_str(),160)),nodes[n].schema.descriptor.c_str(),
+     int(DiagnosticPrefix(member.name.c_str(),96)),member.name.c_str(),int(DiagnosticPrefix(member.descriptor.c_str(),160)),member.descriptor.c_str(),
+     int(bool(nodes[n].class_name)),int(DiagnosticPrefix(previous,160)),previous);*error=text;
+   }return false;
+  };
+  for(size_t n=0;n<nodes.size();++n)for(size_t i=0;i<result.declared[n].size();++i){
+   void* method=result.declared[n][i];const auto& member=nodes[n].schema.methods[i];
+   if(nodes[n].class_name){proxy_method_signature::Witness witness;
+    if(!proxy_method_signature::Resolve(layout,method,member.name,member.descriptor,arena,&witness))
+     return Failure("Proxy signature source lacks independent public/native arena provenance",n,i,nullptr);
+    result.proxy_signatures.push_back(witness);method=witness.source;
+   }
+   if(!bindings.same_method(bindings.owner,method,method))return Failure("Named signature comparator rejected a public self identity",n,i,nullptr);
+   auto key=std::make_pair(member.name,member.descriptor);auto previous=signatures.find(key);
+   if(previous!=signatures.end()&&previous->second.method!=method){
+    if(!bindings.same_method(bindings.owner,method,previous->second.method))return Failure("Named signature comparator differs from independent matching public declarations",n,i,&previous->second);
+    shared_signature=true;
+   }
+   if(!signatures.empty()&&signatures.begin()->first!=key){
+    if(bindings.same_method(bindings.owner,method,signatures.begin()->second.method))return Failure("Named signature comparator accepted independently different public declarations",n,i,&signatures.begin()->second);
+    distinct_signature=true;
+   }
+   signatures.emplace(std::move(key),Signature{method,n,i});
+  }
+  if(!distinct_signature||!shared_signature)return Fail(error,"Whole loaded graph lacks positive and negative signature comparator oracles");
   *out=std::move(result);diagnostics.success=true;return true;
  }
  bool Interfaces(const Snapshot& roots,const source_commit::Plan& transaction,std::string* error)const{

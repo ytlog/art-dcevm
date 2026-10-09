@@ -28,7 +28,18 @@ jobject OwnHandle(void*,void* value){assert(used<handles.size());handles[used].l
 void ReleaseHandle(void*,jobject){}
 void* Method(void*,jmethodID id){return id;}
 void* Field(void*,jclass,jfieldID id){return id;}
+void* NativeField(void*,void*,jfieldID id){return id;}
 void* Owner(void*,void* method){return Root(method);}
+std::array<void*,bounded_managed_roots::Store::kChunkSize> managed{};
+jobjectArray JNICALL NewRoots(JNIEnv*,jsize length,jclass,jobject){Jni();assert(length==managed.size());return reinterpret_cast<jobjectArray>(&managed);}
+jsize JNICALL RootsLength(JNIEnv*,jarray){Jni();return managed.size();}
+void JNICALL SetRoot(JNIEnv*,jobjectArray,jsize index,jobject value){Jni();managed.at(index)=value;}
+jobject JNICALL GetRoot(JNIEnv*,jobjectArray,jsize index){Jni();return reinterpret_cast<jobject>(managed.at(index));}
+bool RootDecode(void*,jobject root,void** out){*out=root;return root;}
+bool RootOracle(void*,const runnable_jni::Context&,jobject root,void** out){return RootDecode(nullptr,root,out);}
+void* RootElement(void*,void* array,size_t index){assert(array==&managed);return managed.at(index);}
+bool RootScope(void*,JNIEnv* jni,jobject,runnable_jni::Operation operation,void* payload){return operation({nullptr,jni,nullptr},payload);}
+
 }
 int main(){
  InitJni();InitializeHeap();Hooks hooks;std::string error;
@@ -41,8 +52,11 @@ int main(){
  using namespace native_schema_guard_verifier;
  // Private State is named through the production class definition below.
  Verifier verifier;auto& s=*verifier.state_;s.bindings.metadata=&metadata;s.bindings.methods=&model;
- s.bindings.decode_global=DecodeHandle;s.bindings.decode_field=Field;s.bindings.decode_method=Method;s.bindings.method_class=Owner;
- s.nodes.resize(2);s.nodes[0].root=reinterpret_cast<jclass>(OwnHandle(nullptr,old_class));s.nodes[1].root=reinterpret_cast<jclass>(OwnHandle(nullptr,parent_class));
+ s.bindings.decode_native_field=NativeField;s.bindings.decode_global=DecodeHandle;s.bindings.decode_field=Field;s.bindings.decode_method=Method;s.bindings.method_class=Owner;
+ table.NewObjectArray=NewRoots;table.GetArrayLength=RootsLength;table.SetObjectArrayElement=SetRoot;table.GetObjectArrayElement=GetRoot;
+ s.roots.Bind({nullptr,RootScope,RootOracle,RootDecode,RootElement});
+ s.nodes.resize(2);assert(s.roots.Stage(&env,reinterpret_cast<jobject>(old_class),&s.nodes[0].root,&error));
+ assert(s.roots.Stage(&env,reinterpret_cast<jobject>(parent_class),&s.nodes[1].root,&error));
  s.nodes[0].method_ids={reinterpret_cast<jmethodID>(old_method)};for(auto* f:old_fields)s.nodes[0].field_ids.push_back(reinterpret_cast<jfieldID>(f));
  s.frozen_snapshot.classes={old_class,parent_class};s.frozen_snapshot.loaders={nullptr,nullptr};s.frozen_snapshot.parents={1,SIZE_MAX};
  s.frozen_snapshot.declared={{old_method},{}};s.frozen_snapshot.all_methods={{old_method},{}};s.class_proofs.resize(2);
@@ -54,8 +68,12 @@ int main(){
  source_commit::Plan plan=s.expected;prepared_roots::Bindings plan_roots;assert(rooted_schema_plan::CollectBindings(&plan,registrar,&plan_roots));
  assert(rooted_schema_plan::CollectBindings(&s.expected,registrar,&s.expected_roots));
  for(auto* values:{&s.frozen_snapshot.classes,&s.frozen_snapshot.loaders})for(auto& value:*values)assert(s.frozen_roots.Add(&value,registrar));
+ // Native proxy provenance slots remain stable while managed roots move.
+ uintptr_t proxy_origin=reinterpret_cast<uintptr_t>(old_method);
+ s.frozen_snapshot.proxy_signatures.push_back({&proxy_origin,old_method});
  s.frozen_roots.Seal();assert(registry.Freeze());s.frozen=true;s.sealed=true;Stop(nullptr,nullptr,false);assert(s.FrozenProof());
  deny_alloc=true;bool allocation_refused=false;try{(void)::operator new(1);}catch(const std::bad_alloc&){allocation_refused=true;}assert(allocation_refused);assert(registry.Resolve());assert(verifier.RefreshManagedRoots(plan,registry.Final()));assert(s.refreshed&&s.FrozenProof());
+ proxy_origin=0;assert(!s.FrozenProof());proxy_origin=reinterpret_cast<uintptr_t>(old_method);assert(s.FrozenProof());
  // Runtime-only method flags may change; Java declaration/index/owner cannot.
  old_method->access_flags|=0x80000;assert(s.FrozenProof());old_method->access_flags^=1;assert(!s.FrozenProof());old_method->access_flags^=1;
  ++old_fields[1]->dex_field_index;assert(!s.FrozenProof());--old_fields[1]->dex_field_index;
@@ -68,6 +86,7 @@ int main(){
  // existing storage while allocation remains deliberately unavailable.
  auto* moved=static_cast<class_metadata::Class17*>(moved_class);std::memcpy(moved,old_class,sizeof(*old_class));
  for(auto& handle:handles)if(handle.live==old_class)handle.live=moved;
+ for(auto& value:managed)if(value==old_class)value=moved;
  for(auto* field:old_fields)field->declaring_class=uint32_t(uintptr_t(moved));old_method->declaring_class=uint32_t(uintptr_t(moved));
  assert(registry.Resolve());assert(plan_roots.CanRefresh(registry.Final()));plan_roots.Refresh(registry.Final());
  assert(verifier.RefreshManagedRoots(plan,registry.Final())&&s.FrozenProof());

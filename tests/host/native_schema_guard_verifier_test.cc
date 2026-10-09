@@ -5,6 +5,33 @@
 #include <iostream>
 using namespace artdcevm;
 int main(){
+ // Test the same normalization helper used by the actual verifier TU.
+ // The comparator source must be an attested native arena entry; arbitrary
+ // mapped addresses and recursive proxy origins cannot grant provenance.
+ for(const auto layout:{method_metadata::kAndroid11,method_metadata::kAndroid12Onward}){
+  alignas(8) unsigned char raw[40]{},prototype[40]{},copied[40]{},foreign[40]{};
+  for(const auto name:{"<init>","toString","interfaceCall"}){
+   std::map<void*,proxy_method_signature::Declaration> arena{
+    {raw,{name,"()V",true}},{prototype,{name,"()V",false}},{copied,{name,"()V",false}}};
+   const auto set=[&](void* origin){__atomic_store_n(reinterpret_cast<uintptr_t*>(raw+layout.data),reinterpret_cast<uintptr_t>(origin),__ATOMIC_RELAXED);};
+   proxy_method_signature::Witness witness;
+   set(prototype);assert(proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   assert(witness.source==prototype&&witness.Unchanged());
+   set(copied);assert(!witness.Unchanged());assert(proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   assert(witness.source==copied&&witness.Unchanged());
+   set(nullptr);assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   set(foreign);assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   set(raw);assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   set(prototype+1);assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   set(prototype);arena[prototype].descriptor="(I)V";assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   arena[prototype].descriptor="()V";arena[prototype].name="wrong";assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   arena[prototype].name=name;arena[prototype].proxy=true;assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   arena[prototype].proxy=false;arena[raw].proxy=false;assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,&witness));
+   arena[raw].proxy=true;assert(!proxy_method_signature::Resolve(layout,raw+1,name,"()V",arena,&witness));
+   assert(!proxy_method_signature::Resolve(layout,raw,name,"()V",arena,nullptr));
+   auto invalid=layout;invalid.data=invalid.size;assert(!proxy_method_signature::Resolve(invalid,raw,name,"()V",arena,&witness));
+  }
+ }
  using namespace native_schema_guard_verifier;
  auto p=[](uintptr_t x){return reinterpret_cast<void*>(x);};
  source_commit::Plan a;a.mirror=p(1);a.new_classes_root=p(2);
