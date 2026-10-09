@@ -48,6 +48,7 @@ class Scope final {
  public:
   ~Scope();
   Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+  bool ReadyForSourceAccess()const{return service_.Runnable(self_);}
   void* Slot(size_t);
   void* Get(size_t);
   void Set(size_t,void*);
@@ -63,7 +64,7 @@ class Pool final {
  public:
   explicit Pool(const Service& service):service_(service){}
   ~Pool(){while(!scopes_.empty())scopes_.pop_back();}
-  bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess();}
+  bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess()&&(scopes_.empty()||scopes_.front()->ReadyForSourceAccess());}
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;
   bool Read(const void* slot,void** output)const{
     if(!output||!ReadyForSourceAccess())return false;

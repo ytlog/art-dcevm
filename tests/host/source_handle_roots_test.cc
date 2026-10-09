@@ -5,6 +5,8 @@
 #include "platform/common/source_handle_roots.h"
 #include "platform/common/source_allocation_transaction.h"
 namespace {
+using SourceProbe=bool(*)(const runnable_jni::Context&,modern_field_metadata::FieldMetadata&,source_handle_roots::Service&,modern_field_storage::Service&);
+SourceProbe source_probe=nullptr;
 // Independent named-source walker: this fixture's actual TLS top is 280. The
 // service derives that location from the independently calibrated card oracle.
 constexpr size_t original_top=280;
@@ -81,6 +83,7 @@ int main(){
   auto foreign_context=context;foreign_context.self=foreign_thread.data();
   assert(!s.BorrowHandle(foreign_context,public_slot,&borrowed)&&borrowed==new_class);
 
+  if(source_probe)assert(source_probe(context,metadata,s,*data.fields));
   auto outer=s.CreateScope(3,&error);assert(outer&&!outer->Get(0)&&!outer->Get(2));outer->Set(0,old_class);
   {auto inner=s.CreateScope(2,&error);assert(inner&&!inner->Get(0));inner->Set(1,old_class);
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
@@ -95,6 +98,12 @@ int main(){
    assert(!pool.Write(static_cast<char*>(slots.back())+4,new_class));
    assert(pool.Write(slots.back(),old_class));void* value=nullptr;
    assert(pool.Read(slots.back(),&value)&&value==old_class);
+   auto saved_current=current;void* foreign_self=foreign_thread.data();
+   std::memcpy(foreign_thread.data()+216,&foreign_self,8);
+   std::memcpy(foreign_thread.data()+200,&context.env,8);Put32(foreign_self,0,0);
+   current=foreign_self;value=new_class;
+   assert(!pool.Read(slots.back(),&value)&&value==new_class);
+   assert(!pool.Write(slots.back(),new_class));current=saved_current;
    auto* card=cards+((uintptr_t(old_class)-uintptr_t(heap.base))>>10);*card=0;
    const auto jni_before=jni_calls;
    assert(data.fields->SourceBarrier(context,pool,slots.back())&&*card==0x70&&jni_calls==jni_before);
@@ -136,4 +145,5 @@ int main(){
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),use,&use_data)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.CreateScope(1,&error)&&!service.ReadyForSourceAccess());
  Publish(nullptr);
  std::cout<<"Source handle roots: real field/card oracle prerequisite, named current/TLS self, actual source handle/strong Class/visitor identity, foreign/cyclic/bad root info/hidden owned scopes refuse, nested zeroed roots update and restore exact chain; Native publication refuses\n";
+ return 0;
 }

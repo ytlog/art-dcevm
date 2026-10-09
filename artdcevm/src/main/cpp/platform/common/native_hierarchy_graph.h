@@ -23,6 +23,10 @@ struct Prepared {
  void* source_owner=nullptr; void* old_class=nullptr; void* new_class=nullptr;
  void* cache=nullptr; void* parent=nullptr; uint16_t class_index=0;
  const evolution::ClassSchema* declarations=nullptr;
+ // Stable native slot identity from the real allocator Pool. Managed pointer
+ // snapshots and copied declarations cannot distinguish same-descriptor classes
+ // in different loaders after GC; the owner must validate this exact used slot.
+ const void* source_old_root=nullptr;
 };
 // An installed source allocator/receiver/type-cache owner must independently
 // prove each stage. A symbol, supported-version bit or snapshot is not a grant.
