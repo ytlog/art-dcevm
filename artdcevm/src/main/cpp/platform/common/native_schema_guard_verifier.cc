@@ -1,6 +1,7 @@
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/loaded_member_guards.h"
 #include "platform/common/jvmti_method_flags.h"
+#include "platform/common/jvmti_field_flags.h"
 #include "platform/common/proxy_method_signature.h"
 #include "platform/common/method_array_view.h"
 #include "platform/common/redefinition_gate.h"
@@ -178,7 +179,7 @@ struct Verifier::State {
   for(auto slot:readonly_access_slots)if(__atomic_load_n(slot,__ATOMIC_RELAXED)&skip_access_checks)return false;
   for(const auto& proof:member_proofs){void* owner=frozen_snapshot.classes[proof.owner];
    if(proof.field){const auto* field=static_cast<const abi::arm64::Field*>(proof.member);
-    if(bindings.decode_native_field(bindings.owner,owner,proof.field_id)!=proof.member||bindings.metadata->FieldDeclaringClass(proof.member)!=owner||native_schema_policy::JavaFlags(field_array::Flags(proof.member))!=proof.flags||field->dex_field_index!=proof.index||field->offset!=proof.offset)return false;
+    if(bindings.decode_native_field(bindings.owner,owner,proof.field_id)!=proof.member||bindings.metadata->FieldDeclaringClass(proof.member)!=owner||jvmti_field_flags::Public(field_array::Flags(proof.member))!=proof.flags||field->dex_field_index!=proof.index||field->offset!=proof.offset)return false;
    }else{method_metadata::Identity value;
     if(bindings.method_class(bindings.owner,proof.member)!=owner||!method_metadata::ReadIdentity(layout,proof.member,layout.size,&value)||jvmti_method_flags::Public(value.access_flags)!=proof.flags||value.dex_method_index!=proof.index)return false;}
   }
@@ -234,7 +235,7 @@ struct Verifier::State {
     const bool name=text&&identity.name&&node.schema.fields[i].name==identity.name;
     const bool descriptor=text&&identity.descriptor&&node.schema.fields[i].descriptor==identity.descriptor;
     const uint32_t raw=mapped?field_array::Flags(field):0;
-    if(!name||!descriptor||native_schema_policy::JavaFlags(raw)!=node.schema.fields[i].access)
+    if(!name||!descriptor||jvmti_field_flags::Public(raw)!=node.schema.fields[i].access)
      return FieldWindowFailure(error,node.schema,node.schema.fields[i],mapped,owner,text,name,descriptor,raw,native_error.c_str());
    }
    for(size_t i=0;i<node.method_ids.size();++i){void* method=bindings.decode_method(bindings.owner,node.method_ids[i]);
@@ -549,7 +550,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
   if(proof.interfaces){if(!s.bindings.readable(s.bindings.owner,proof.interfaces,12))return false;const uint32_t length=Read<uint32_t>(proof.interfaces,8);if(length%2||!s.bindings.readable(s.bindings.owner,proof.interfaces,12+size_t(length)*4))return false;
    for(uint32_t i=0;i<length/2;++i)proof.interface_classes.push_back(s.bindings.metadata->Reference(proof.interfaces,12+size_t(i)*8));}
   for(size_t i=0;i<s.nodes[n].field_ids.size();++i){void* field=s.bindings.decode_native_field(s.bindings.owner,klass,s.nodes[n].field_ids[i]);
-   const auto* native=static_cast<const abi::arm64::Field*>(field);s.member_proofs.push_back({field,n,native_schema_policy::JavaFlags(native->access_flags),native->dex_field_index,native->offset,true,s.nodes[n].field_ids[i]});}
+   const auto* native=static_cast<const abi::arm64::Field*>(field);s.member_proofs.push_back({field,n,jvmti_field_flags::Public(native->access_flags),native->dex_field_index,native->offset,true,s.nodes[n].field_ids[i]});}
   for(void* method:s.frozen_snapshot.all_methods[n]){void* owner=s.bindings.method_class(s.bindings.owner,method);auto it=std::find(s.frozen_snapshot.classes.begin(),s.frozen_snapshot.classes.end(),owner);method_metadata::Identity identity;
    if(it==s.frozen_snapshot.classes.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
    s.member_proofs.push_back({method,size_t(it-s.frozen_snapshot.classes.begin()),jvmti_method_flags::Public(identity.access_flags),identity.dex_method_index,0,false});}

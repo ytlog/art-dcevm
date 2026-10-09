@@ -76,6 +76,7 @@ int main(){
  proxy_origin=0;assert(!s.FrozenProof());proxy_origin=reinterpret_cast<uintptr_t>(old_method);assert(s.FrozenProof());
  // Runtime-only method flags may change; Java declaration/index/owner cannot.
  old_method->access_flags|=0x80000;assert(s.FrozenProof());old_method->access_flags^=1;assert(!s.FrozenProof());old_method->access_flags^=1;
+ old_fields[1]->access_flags|=0x20000u;assert(s.FrozenProof());old_fields[1]->access_flags&=~0x20000u;
  ++old_fields[1]->dex_field_index;assert(!s.FrozenProof());--old_fields[1]->dex_field_index;
  old_fields[1]->declaring_class=uint32_t(uintptr_t(new_class));assert(!s.FrozenProof());old_fields[1]->declaring_class=uint32_t(uintptr_t(old_class));
  old_class->super_class=0;assert(!s.FrozenProof());old_class->super_class=uint32_t(uintptr_t(parent_class));
