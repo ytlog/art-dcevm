@@ -15,6 +15,8 @@
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_source_commit.h"
 #include "platform/common/native_owned_removal.h"
+#include "platform/common/native_source_calibration_bridge.h"
+#include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
 #include "platform/abi/arm64/android-common/jni_global_ref.h"
@@ -65,6 +67,8 @@ struct NativeEngine final:Engine {
  void ClearStagedClasses(JNIEnv* env){graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
  void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
+ native_source_stop::Service source_stop;
+ std::string source_stop_diagnostic;
  native_structural_reflection::Service reflection;
  native_member_provider::Service provider;
  native_schema_guard_verifier::Verifier schema_verifier;
@@ -379,9 +383,29 @@ struct NativeEngine final:Engine {
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
   if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
+  // Observe a bounded ordinary unchanged-hierarchy removal first. Schema graph
+  // preparation cannot stand in for the original source GC/final-stop proof.
+  // Capability gaps leave ordinary behavior intact and cannot authorize Session.
+  std::optional<native_source_calibration::Bridge> source_observation;
+  if(!batch){
+   thread_suspend_service::Service state;native_source_stop::Service candidate;
+   source_stop={};source_stop_diagnostic.clear();
+   if(thread_state_calibration::Calibrate(hooks,env,anchor,&state,&source_stop_diagnostic)&&
+      native_source_stop::Install(hooks,&source_stop_diagnostic)&&
+      native_source_stop::Service::Bind(hooks,runtime.receivers.heap,state,&candidate,&source_stop_diagnostic)){
+    auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+    void* self=current_thread?current_thread():nullptr;size_t extent=0;
+    if(self&&method_identity::ReadableMappingExtent(self,&extent))source_observation.emplace(candidate,self,extent);
+    else source_stop_diagnostic="Ordinary source calibration current Thread mapping unavailable";
+   }
+  }
   current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
   int result=native_owned_removal::RunBatch(hooks,env,ti,defs,
     {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation,schema_operation?FinalizeSchema:nullptr},error);
+  if(source_observation){
+   if(source_observation->Authorized())source_stop=source_observation->Binding();
+   else source_stop_diagnostic=source_observation->Failure();
+  }
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
   return result;
  }

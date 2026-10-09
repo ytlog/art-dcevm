@@ -457,7 +457,7 @@ bool GraphWindowReady(){return window_ready;}
 bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
  if(passive_run)return false;
  if(!observer){passive_observer={};return true;}
- if(!installed||!run_ready||!window_ready||!observer->begin||!observer->collected||!observer->end)return false;
+ if(passive_observer.begin||!installed||!run_ready||!window_ready||!observer->begin||!observer->collected||!observer->end)return false;
  passive_observer=*observer;return true;
 }
 void ObserveSourceFailure(void* driver,jvmtiError code) noexcept {

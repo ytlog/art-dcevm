@@ -1,8 +1,17 @@
-#include "platform/common/native_source_stop.h"
+#include "platform/common/native_source_calibration_bridge.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
 using namespace artdcevm;
+namespace artdcevm::native_owned_removal {
+thread_local PassiveObserver fixture_observer;
+bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
+ if(!observer){fixture_observer={};return true;}
+ if(fixture_observer.begin)return false;
+ fixture_observer=*observer;return true;
+}
+}
+
 namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;
 struct Thread {uint32_t flags=92u<<24;} self,foreign;
@@ -75,6 +84,35 @@ native_source_stop::Calibration Calibrate(native_source_stop::Service& service){
  assert(observation.Finish(&driver,true,&proof)&&proof.Valid()&&service.Authorize(proof,&run));return proof;
 }
 
+void BridgeProofs(const native_source_stop::Service& service){
+ int driver,run,holder;
+ for(int mode=0;mode<7;++mode){
+  self.flags=0;
+  {
+   native_source_calibration::Bridge bridge(service,&self,sizeof(self));
+   auto observer=native_owned_removal::fixture_observer;assert(observer.begin);
+   {native_source_calibration::Bridge nested(service,&self,sizeof(self));assert(!nested.Authorized());}
+   assert(native_owned_removal::fixture_observer.state==observer.state);
+   observer.begin(&driver,&run,mode==3?&foreign:&self,observer.state);
+   if(mode!=4)observer.collected(&driver,&holder,observer.state);
+   disable_proxy(&heap,&self);Native(&self);unsigned char carrier;
+   stop_proxy(&carrier,"actual ordinary source bridge",false);resume_proxy(&carrier);Runnable(&self);
+   if(mode!=5)enable_proxy(&heap,&self);
+   observer.end(&driver,mode==1?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE,mode!=2,observer.state);
+   assert(bridge.Authorized()==(mode==0||mode==6));
+   if(bridge.Authorized())assert(bridge.Binding().Calibrated());
+   if(mode==5)enable_proxy(&heap,&self);
+  }
+  assert(!native_owned_removal::fixture_observer.begin);
+ }
+ // Exception/early-exit destroys an attached native observation and TLS subscriber.
+ try{native_source_calibration::Bridge bridge(service,&self,sizeof(self));
+  auto observer=native_owned_removal::fixture_observer;
+  observer.begin(&driver,&run,&self,observer.state);throw 1;
+ }catch(int){}
+ assert(!native_owned_removal::fixture_observer.begin);
+}
+
 void ObservationNegatives(native_source_stop::Service& service,Hooks& hooks){
  int driver,run,holder,wrong_driver,wrong_run,other_heap;
  native_source_stop::Calibration empty;
@@ -120,6 +158,7 @@ int main(int argc,char** argv){
  assert(!state.SameBinding(State(hooks,thread_suspend_service::Declaration::kLegacy16))&&state.SameBinding(State(hooks)));
  hooks.missing=s::kStartGC;assert(!native_source_stop::Service::Bind(hooks,&heap,state,&service,&error));hooks.missing=nullptr;
  assert(native_source_stop::Service::Bind(hooks,&heap,state,&service,&error));
+ BridgeProofs(service);
  ObservationNegatives(service,hooks);
  assert(!service.Calibrated());
  self.flags=0;{native_source_stop::Session uncalibrated(service);assert(!uncalibrated.Begin(&self,sizeof(self))&&!gc&&!exclusive);}

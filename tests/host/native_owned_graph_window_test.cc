@@ -134,7 +134,7 @@ void Test(){
  PassiveObserver observer{&state,Begin,Collected,End};
  PassiveObserver partial=observer;partial.end=nullptr;assert(!SetPassiveObserver(&partial));
  run_ready=false;assert(!SetPassiveObserver(&observer));run_ready=true;
- assert(SetPassiveObserver(&observer));
+ assert(SetPassiveObserver(&observer));assert(!SetPassiveObserver(&observer));
  // Registration copies the complete callbacks rather than borrowing a mutable
  // registration object; only its explicitly owned state is borrowed.
  observer.end=nullptr;
