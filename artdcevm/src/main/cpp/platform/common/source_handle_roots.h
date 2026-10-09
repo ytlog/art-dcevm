@@ -18,6 +18,7 @@ class Service final {
   // Borrow a live source slot only after actual walker calibration; output may
   // not survive a safepoint unless immediately copied into an owned Scope.
   bool BorrowHandle(const runnable_jni::Context&,const void* slot,void** output)const;
+  bool ReadyForSourceAccess()const;
   bool Calibrated()const{return calibrated_.load(std::memory_order_acquire);}
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;
  private:
@@ -55,6 +56,7 @@ class Pool final {
  public:
   explicit Pool(const Service& service):service_(service){}
   ~Pool(){while(!scopes_.empty())scopes_.pop_back();}
+  bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess();}
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;
   void* Add(void* object,std::string* error){
     if(scopes_.empty()||used_==kChunk){auto scope=service_.CreateScope(kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;}

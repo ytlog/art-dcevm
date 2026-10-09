@@ -3,6 +3,7 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/source_allocation_transaction.h"
 namespace {
 // Independent named-source walker: this fixture's actual TLS top is 280. The
 // service derives that location from the independently calibrated card oracle.
@@ -23,8 +24,10 @@ void OriginalRoots(void* self,abi::arm64::android_common::HandleRootVisitor* vis
   scope=header.previous;
  }
 }
+abi::arm64::android11::ReleaseObjectPointer AllocationMirror(void* raw){return {uintptr_t(static_cast<abi::arm64::android15::ClassRedefinition*>(raw)->klass)};}
 class RootHooks final:public Hooks{public:
  void* FindSymbol(const char* lib,const char* name)override{
+  if(std::strstr(name,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);
   if(std::strstr(name,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(OriginalRoots);
   if(std::strstr(name,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots); // Presence only; actual allocator is not invoked by this test.
   return Hooks::FindSymbol(lib,name);
@@ -65,7 +68,8 @@ int main(){
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.Calibrated());hide_owned=false;
  request.expected=true;
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),observe,&request)==runnable_jni::Result::kSuccess);assert(service.Calibrated()&&Top()==original&&walks>=5);
- auto use=[](const runnable_jni::Context& context,void* p){auto& s=*static_cast<source_handle_roots::Service*>(p);std::string error;
+ struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;} use_data{&service,&metadata};
+ auto use=[](const runnable_jni::Context& context,void* p){auto& data=*static_cast<Use*>(p);auto& s=*data.service;auto& metadata=*data.metadata;std::string error;
   void* borrowed=nullptr;assert(s.BorrowHandle(context,public_slot,&borrowed)&&borrowed==old_class);
   uint32_t foreign_slot=uint32_t(uintptr_t(old_class));borrowed=new_class;
   assert(!s.BorrowHandle(context,&foreign_slot,&borrowed)&&borrowed==new_class);
@@ -83,9 +87,38 @@ int main(){
    for(auto slot:slots)assert(Read32(slot)==uint32_t(uintptr_t(new_class)));
   }
   assert(s.BorrowHandle(context,outer->Slot(0),&borrowed)&&borrowed==new_class);
-  assert(outer->Get(0)==new_class);return true;
+  assert(outer->Get(0)==new_class);
+  // Source allocation has valid mirrors/caches while every initialized and
+  // old/new Classes/instances slot is still empty. The final reader cannot be
+  // substituted for this actual preallocation Holder phase.
+  RootHooks hooks;source_handle_roots::Pool targets(s);
+  auto* array_type=static_cast<class_metadata::Class17*>(heap.New(160));InitializeClass(array_type);
+  array_type->component_type=uint32_t(uintptr_t(parent_class));
+  void* array=heap.New(12+26*4);Put32(array,0,uint32_t(uintptr_t(array_type)));Put32(array,8,26);
+  void* cache=heap.New(16);Put32(cache,0,uint32_t(uintptr_t(parent_class)));
+  Put32(array,12+3*4,uint32_t(uintptr_t(cache)));Put32(array,12+4*4,uint32_t(uintptr_t(old_class)));
+  Put32(array,12+16*4,uint32_t(uintptr_t(cache)));Put32(array,12+17*4,uint32_t(uintptr_t(new_class)));
+  uint32_t array_slot=uint32_t(uintptr_t(array));
+  std::array<abi::arm64::android15::ClassRedefinition,2> owners{};
+  owners[0].klass=reinterpret_cast<jclass>(old_class);owners[1].klass=reinterpret_cast<jclass>(new_class);
+  transaction_root::Owners owner_span{reinterpret_cast<const unsigned char*>(owners.data()),reinterpret_cast<const unsigned char*>(owners.data()+2),reinterpret_cast<const unsigned char*>(owners.data()+2)};
+  uint64_t initialized=0,structural=3,initial=3;
+  transaction_root::Holder holder{&array_slot,&owner_span,{&initialized,2,1},{&structural,2,1},{&initial,2,1}};
+  source_allocation_transaction::Snapshot snapshot;
+  assert(source_allocation_transaction::Read(hooks,metadata,&holder,targets,&snapshot,&error));
+  assert(snapshot.targets.size()==2&&snapshot.metadata.count==2);
+  assert(snapshot.targets[0].owner==&owners[0]&&snapshot.targets[1].owner==&owners[1]);
+  assert(s.BorrowHandle(context,snapshot.targets[0].klass,&borrowed)&&borrowed==old_class);
+  assert(s.BorrowHandle(context,snapshot.targets[1].klass,&borrowed)&&borrowed==new_class);
+  auto untouched=snapshot.targets[0].klass;
+  owners[1].klass=reinterpret_cast<jclass>(old_class);
+  assert(!source_allocation_transaction::Read(hooks,metadata,&holder,targets,&snapshot,&error)&&snapshot.targets[0].klass==untouched);
+  owners[1].klass=reinterpret_cast<jclass>(new_class);Put32(array,8,25);
+  assert(!source_allocation_transaction::Read(hooks,metadata,&holder,targets,&snapshot,&error));Put32(array,8,26);
+  holder.actually_structural.size=1;assert(!source_allocation_transaction::Read(hooks,metadata,&holder,targets,&snapshot,&error));
+  return true;
  };
- assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),use,&service)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.CreateScope(1,&error));
+ assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),use,&use_data)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.CreateScope(1,&error)&&!service.ReadyForSourceAccess());
  Publish(nullptr);
  std::cout<<"Source handle roots: real field/card oracle prerequisite, named current/TLS self, actual source handle/strong Class/visitor identity, foreign/cyclic/bad root info/hidden owned scopes refuse, nested zeroed roots update and restore exact chain; Native publication refuses\n";
 }

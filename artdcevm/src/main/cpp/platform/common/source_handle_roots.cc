@@ -75,6 +75,7 @@ bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobjec
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");
  calibrated_.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
+bool Service::ReadyForSourceAccess()const{return Calibrated()&&current_&&Runnable(current_());}
 bool Service::BorrowHandle(const runnable_jni::Context& context,const void* slot,void** output)const {
  if(!output||!Calibrated()||!Runnable(context.self)||!context.env||
     Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env||!Mapped(slot,4))return false;
