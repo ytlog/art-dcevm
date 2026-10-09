@@ -78,6 +78,7 @@ int main(){
  FrameHooks hooks;std::string error;assert(native_source_stop::Install(hooks,&error));
  native_cache::Service cache;assert(cache.Bind(hooks,&thread_list,&error)&&cache.Prepare(&error));
  native_source_stop::Service stop;auto states=State(hooks);assert(native_source_stop::Service::Bind(hooks,&heap,states,&stop,&error));
+ Calibrate(stop);self.flags=92u<<24;
  whole_process_frames::Service scanner;assert(whole_process_frames::Service::Bind(code_info_view::SourceFamily::kAndroid14,[&](const char* name){return hooks.FindSymbol("libart.so",name);},&scanner));
  whole_process_frames::Service::Prepared storage;assert(scanner.Prepare(&storage));self.flags=0;
  {native_source_stop::Session owner(stop);auto r=scanner.Scan(owner,&self,cache,&jit_cache,storage);assert(!r.accepted);}
@@ -89,6 +90,6 @@ int main(){
  inline_frame=true;unmarked=true;report=scan();assert(!report.accepted);inline_frame=unmarked=false;
  include_self=false;report=scan();assert(!report.accepted&&report.registered_threads==2&&report.walked_threads==2);include_self=true;
  // A fresh final scan observes every registered thread under the SAME continuous reservation.
- {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);assert(owner.ContinueSource()&&gc&&!exclusive&&stops==resumes+1);Native(&self);unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);resume_proxy(&carrier);assert(owner.Completed());Runnable(&self);}
+ {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);assert(owner.ContinueSource()&&gc&&!exclusive&&stops==resumes+1);disable_proxy(&heap,&self);Native(&self);unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);resume_proxy(&carrier);assert(!owner.Completed());Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed());}
  assert(!gc&&!exclusive&&!list_locked&&stops==resumes);std::cout<<"actual full enumeration/walker, foreign/empty/marked-inline maps, refusal/rollback/continuous final scan PASS\n";
 }

@@ -30,6 +30,10 @@ class Service {
     return true;
   }
   bool CanTransitionRunnable() const {return native_ && runnable_;}
+  bool SameBinding(const Service& other)const noexcept {
+    return declaration_==other.declaration_&&native_==other.native_&&runnable_==other.runnable_&&
+      construct_==other.construct_&&destroy_==other.destroy_;
+  }
   // self is the current thread's calibrated live native storage; arithmetic
   // bounds do not independently establish that a mapping is readable.
   bool State(const void* self,size_t extent,uint32_t* output) const {
