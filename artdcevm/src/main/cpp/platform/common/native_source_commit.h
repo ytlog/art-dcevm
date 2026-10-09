@@ -43,6 +43,8 @@ struct Dependencies {
   Diagnostics* diagnostics=nullptr;
   bool prepare_field_copy=false;
   bool allow_removed_ancestors=false;
+  // Borrowed for the entire synchronous Run; owner refreshes its stopped-window view.
+  const modern_field_metadata::ReadContext* read_context=nullptr;
 };
 // Fixed source heap-replacement policy is supplied by the original transaction
 // provider. The complete field oracle selects only the shared Class scalar
