@@ -29,6 +29,7 @@ struct Request {
  void* cache=nullptr;ContainsMethod contains=nullptr;
  active_frame_recovery_proof::Report report;
  std::vector<Attempt> attempts;bool debug_observed=false,java_debuggable=false;
+ uint32_t fresh_root_witnesses=0;
  bool physical_callers=false,jit_compiled=false,passed=false;std::string error,model;
  Request(ShadowHookEngine* engine,Leaf native_leaf,const Roots* strong_roots):hooks(engine),leaf(native_leaf),roots(strong_roots){}
 
@@ -80,6 +81,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
  for(size_t i=0;i<3;++i) {
   const uintptr_t raw=reinterpret_cast<uintptr_t>(scope.roots[5+i]);
   if(!raw||raw>UINT32_MAX){request.error="Strong reference does not fit actual release vreg representation";return false;}
+  ++request.fresh_root_witnesses;
   witnesses[i][0]={static_cast<uint16_t>(request.dex[13+i]),Kind::kInt,static_cast<uint32_t>(request.integers[i])};
   witnesses[i][1]={static_cast<uint16_t>(request.dex[16+i]),Kind::kReference,static_cast<uint32_t>(raw)};
   frames[i]={request.methods[i],static_cast<uint32_t>(request.dex[10+i]),witnesses[i],2,static_cast<uint32_t>(request.dex[19+i])};
@@ -99,7 +101,7 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
   request.attempts.push_back({family,nullptr,report,true});
   if(report.failure==Failure::kNone && report.frames==3 && report.integers==3 && report.references==3 && report.location_reads==6 && report.dex_pc_checks==3 && (request.physical_callers?(report.physical_matches==3 && report.inline_matches==0 && report.inline_flag_checks==0):report.inline_flag_checks==2)) {
    request.report=report;request.passed=true;
-   request.model=family==Family::kAndroid11?"CodeInfo368/Visitor520/legacy-kind":family==Family::kAndroid12?"CodeInfo376/Visitor528":family==Family::kAndroid17?"CodeInfo368/Visitor520/slow-bool":"CodeInfo344/Visitor496";
+   request.model=family==Family::kAndroid11?"CodeInfo368/Visitor520/legacy-kind":family==Family::kAndroid12?"CodeInfo376/Visitor528":family==Family::kAndroid17?"CodeInfo368/Visitor520/native-location-reader":"CodeInfo344/Visitor496";
    request.error.clear();return true;
   }
   // Prefer an actually observed target/frame failure over a pre-walk wrong ABI.
@@ -111,15 +113,25 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
 const char* DeclarationName(active_frame_recovery_proof::Family family) {
  using F=active_frame_recovery_proof::Family;
  switch(family){case F::kAndroid11:return "fixed11-CodeInfo368-Visitor520";case F::kAndroid12:return "fixed12-CodeInfo376-Visitor528";
- case F::kAndroid13:return "fixed13-CodeInfo344-Visitor496-slow-legacy";case F::kAndroid14:return "fixed14-CodeInfo344-Visitor496-slow-bool";
- case F::kAndroid15:return "fixed15-CodeInfo344-Visitor496-slow-bool";case F::kAndroid16:return "fixed16-CodeInfo344-Visitor496-slow-bool";
- case F::kAndroid17:return "fixed17-CodeInfo368-Visitor520-slow-bool";}return "unknown-source";
+ case F::kAndroid13:return "fixed13-CodeInfo344-Visitor496-legacy-reader";case F::kAndroid14:return "fixed14-CodeInfo344-Visitor496-native-location-reader";
+ case F::kAndroid15:return "fixed15-CodeInfo344-Visitor496-native-location-reader";case F::kAndroid16:return "fixed16-CodeInfo344-Visitor496-native-location-reader";
+ case F::kAndroid17:return "fixed17-CodeInfo368-Visitor520-native-location-reader";}return "unknown-source";
 }
 std::string Escape(const std::string& text){std::string result;for(char c:text){if(c=='"'||c=='\\')result+='\\';if(c=='\n'){result+="\\n";continue;}if(static_cast<unsigned char>(c)<32)continue;result+=c;}return result;}
 std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\":"<<(request.passed?"true":"false")<<",\"carrierJitCompiled\":"<<(request.jit_compiled?"true":"false")
  <<",\"frameShape\":\""<<(request.physical_callers?"three-physical":"carrier-two-inlinees")<<"\""
  <<",\"wholeProcessFrameEligibility\":false"
  <<",\"frames\":"<<request.report.frames<<",\"integers\":"<<request.report.integers<<",\"references\":"<<request.report.references<<",\"locationReads\":"<<request.report.location_reads
+ <<",\"nativeReaderRoute\":\""<<request.report.reader_route<<"\""
+ <<",\"nativeLocationReads\":"<<request.report.native_location_reads
+ <<",\"physicalComparisonReads\":"<<request.report.physical_comparison_reads
+ <<",\"rawReferenceReads\":"<<request.report.raw_reference_reads
+ <<",\"nativeReferenceMaskChecks\":"<<request.report.reference_mask_checks
+ <<",\"freshNativeStrongRootWitnesses\":"<<request.fresh_root_witnesses
+ <<",\"nativeContextIdentityMask\":"<<request.report.context_identity_mask
+ <<",\"nativeContextGetterObserved\":"<<(request.report.native_context_getter_observed?"true":"false")
+ <<",\"nativeContextChecks\":"<<request.report.native_context_checks
+ <<",\"nativeReferenceReadBarrierExecuted\":false"
  <<",\"dexPcChecks\":"<<request.report.dex_pc_checks<<",\"inlineFlagNativeObserved\":"<<(request.report.inline_flag_checks==2?"true":"false")
  <<",\"walkCallbacks\":"<<request.report.callbacks<<",\"matchedMethodMask\":"<<request.report.matched_mask
  <<",\"physicalMethodMatches\":"<<request.report.physical_matches<<",\"inlineMethodMatches\":"<<request.report.inline_matches
@@ -139,6 +151,13 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<",\"decodedRegisterFirst\":"<<attempt.report.decoded_register_first<<",\"decodedRegisterCount\":"<<attempt.report.decoded_register_count
    <<",\"expectedRegisters\":"<<attempt.report.expected_registers
    <<",\"registerCountSource\":\""<<attempt.report.register_count_source<<"\""
+   <<",\"nativeReaderRoute\":\""<<attempt.report.reader_route<<"\""
+   <<",\"nativeLocationReads\":"<<attempt.report.native_location_reads
+   <<",\"physicalComparisonReads\":"<<attempt.report.physical_comparison_reads
+   <<",\"nativeContextChecks\":"<<attempt.report.native_context_checks
+   <<",\"nativePcOffsetObserved\":"<<(attempt.report.native_pc_offset_observed?"true":"false")
+   <<",\"nativePcOffset\":"<<attempt.report.native_pc_offset
+   <<",\"sourcePcOffset\":"<<attempt.report.source_pc_offset
    <<",\"nativeRegisterCountObserved\":"<<(attempt.report.native_register_count_observed?"true":"false")
    <<",\"nativeRegisterCount\":"<<attempt.report.native_register_count
    <<",\"slowRegisterExpectedCount\":"<<attempt.report.slow_register_expected_count

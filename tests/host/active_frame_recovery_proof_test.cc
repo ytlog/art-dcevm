@@ -10,15 +10,16 @@ Family family;int method_ids[3],thread,jit;void* active_method;
 bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
 bool actual_physical=false,physical_alias=false,physical_wrong_order=false,nterp_header=false;unsigned active_index=0;
 bool native_map_mismatch=false,native_count_mismatch=false,native_depth_mismatch=false;
+bool debugger_override=false,bad_native_offset=false,bad_context_value=false,context_swap=false;unsigned canonical_calls=0,native_fast_calls=0;
 bool cursor_method_drift=false,cursor_pc_drift=false;unsigned method_queries=0,dex_queries=0,slow_calls=0;
 alignas(8) std::array<std::array<uint32_t,16>,3> physical_quick{};
 uint32_t code_size=64;unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
 struct Context final:abi::arm64::context::Prefix {void Reset()override{++resets;}~Context()override{++destroys;}
  void FillCalleeSaves(uint8_t*,const abi::arm64::context::FrameInfo&)override{}
  void SetSP(uintptr_t)override{}void SetPC(uintptr_t)override{}void SetArg0(uintptr_t)override{}
- bool IsAccessibleGPR(uint32_t)override{return !inaccessible;}uintptr_t* GetGPRAddress(uint32_t)override{return nullptr;}
+ bool IsAccessibleGPR(uint32_t reg)override{return !inaccessible&&reg==7;}uintptr_t* GetGPRAddress(uint32_t)override{return nullptr;}
  uintptr_t GetGPR(uint32_t reg)override{assert(reg==7);return (uintptr_t{123}<<32)|123;}void SetGPR(uint32_t,uintptr_t)override{}
- bool IsAccessibleFPR(uint32_t)override{return !inaccessible;}uintptr_t GetFPR(uint32_t reg)override{assert(reg==7);return (uintptr_t{123}<<32)|123;}};
+ bool IsAccessibleFPR(uint32_t reg)override{return !inaccessible&&reg==7;}uintptr_t GetFPR(uint32_t reg)override{assert(reg==7);return (uintptr_t{123}<<32)|123;}};
 abi::arm64::context::Prefix* Create(){++creates;return missing_context?nullptr:new Context;}
 alignas(8) uint32_t header[2]{};
 alignas(8) std::array<uint32_t,16> quick{};
@@ -64,7 +65,8 @@ template<class V> void Walk(void* raw,bool transitions) {
    v->inline_frames.end.row=0;
    v->quick_frame=reinterpret_cast<void**>(physical_quick[physical_alias?0:active_index].data());
   }
-  if(!v->VisitFrame())break;
+  void* original_context=v->context;if(context_swap)v->context=nullptr;
+  const bool keep=v->VisitFrame();v->context=original_context;if(!keep)break;
  }
 }
 template<class V> void ChangePc(const void* raw){auto* v=const_cast<V*>(static_cast<const V*>(raw));++v->pc;}
@@ -100,9 +102,39 @@ bool Slow(const void* raw,void* method,uint16_t reg,Kind kind,uint32_t* value) {
 bool SlowModern(const void* visitor,void* method,uint16_t reg,Kind kind,uint32_t* value,bool full) {
  assert(!full);return Slow(visitor,method,reg,kind,value);
 }
-bool Fast(const void*,NativeLocation location,uint32_t* value) {
- assert(location.kind==0 && location.value>=8 && location.value<=28);
- *value=(actual_physical?physical_quick[active_index][location.value/4]:quick[location.value/4])+(bad_fast?1:0);return true;
+void CheckActiveCursor(const void* raw) {
+ switch(family){case Family::kAndroid11:CheckCursor<abi::arm64::stack::Visitor11>(raw,active_method);break;
+ case Family::kAndroid12:CheckCursor<abi::arm64::stack::Visitor12>(raw,active_method);break;
+ case Family::kAndroid17:CheckCursor<abi::arm64::stack::Visitor17>(raw,active_method);break;
+ default:CheckCursor<abi::arm64::stack::Visitor13>(raw,active_method);break;}
+}
+template<class V> abi::arm64::context::Prefix* NativeContext(const void* raw){return static_cast<abi::arm64::context::Prefix*>(static_cast<const V*>(raw)->context);}
+abi::arm64::context::Prefix* CurrentContext(const void* raw) {
+ switch(family){case Family::kAndroid11:return NativeContext<abi::arm64::stack::Visitor11>(raw);
+ case Family::kAndroid12:return NativeContext<abi::arm64::stack::Visitor12>(raw);
+ case Family::kAndroid17:return NativeContext<abi::arm64::stack::Visitor17>(raw);
+ default:return NativeContext<abi::arm64::stack::Visitor13>(raw);}
+}
+size_t NativeOffset(const void* raw){CheckActiveCursor(raw);return 32+(bad_native_offset?4:0);}
+bool Accessible(const void* raw,uint32_t reg,int32_t kind,uint32_t* value) {
+ auto* c=CurrentContext(raw);assert(c && (kind==2||kind==4));
+ if(kind==2?!c->IsAccessibleGPR(reg):!c->IsAccessibleFPR(reg))return false;
+ *value=static_cast<uint32_t>(kind==2?c->GetGPR(reg):c->GetFPR(reg))+(bad_context_value?1:0);return true;
+}
+bool DebuggerValue(const void* raw,uint16_t,Kind kind,uint32_t*) {CheckActiveCursor(raw);assert(kind==Kind::kInt);return debugger_override;}
+bool Fast(const void* raw,NativeLocation location,uint32_t* value) {
+ ++native_fast_calls;CheckActiveCursor(raw);if(bad_native)return false;
+ if(location.kind==0){assert(location.value>=8&&location.value<=28);
+   *value=(actual_physical?physical_quick[active_index][location.value/4]:quick[location.value/4]);}
+ else if(location.kind==1)*value=location.value;
+ else {
+   assert(location.kind>=2&&location.kind<=5&&location.value==7);auto* c=CurrentContext(raw);
+   const bool core=location.kind==2||location.kind==3;
+   if(core?!c->IsAccessibleGPR(7):!c->IsAccessibleFPR(7))return false;
+   uintptr_t bits=core?c->GetGPR(7):c->GetFPR(7);
+   if(location.kind==3||location.kind==5)bits>>=32;*value=static_cast<uint32_t>(bits);
+ }
+ *value+=bad_fast?1:0;return true;
 }
 bool Fast11(const void* visitor,NativeLocation location,Kind kind,uint32_t* value){assert(kind==((location.value%8)==4?Kind::kReference:Kind::kInt));if(kind==Kind::kReference)++reference_fast11;return Fast(visitor,location,value);}
 size_t InlineDepth(const void*){return (actual_physical?0:active_index)+(native_depth_mismatch?1:0);}
@@ -127,11 +159,21 @@ void DecodeNativeMap(const void* info,uint32_t row,uint32_t first,abi::arm64::de
  for(size_t i=0;i<map->count;++i)map->data()[i]={locations[i].kind,static_cast<int32_t>(locations[i].value)};
  if(native_map_mismatch)map->data()[map->count-1].kind=-1;
 }
+bool Canonical(const void* raw,void* method,uint16_t reg,Kind kind,uint32_t* value,
+    abi::arm64::android14::frame_registers::OptionalLocation location,bool full) {
+ ++canonical_calls;CheckActiveCursor(raw);assert(method==active_method && reg<2 && kind==Kind::kInt && location.has_value() && !full);
+ return Fast(raw,*location,value);
+}
 struct Finder {
- const char* missing=nullptr;
+ const char* missing=nullptr;bool no_native_reader=false;const char* missing_secondary=nullptr;
  template<class T> static void* Fn(T function){return reinterpret_cast<void*>(function);}
  void* operator()(const char* name)const {
-  if(missing && std::strcmp(missing,name)==0)return nullptr;
+  if((missing && std::strcmp(missing,name)==0)||(missing_secondary && std::strcmp(missing_secondary,name)==0))return nullptr;
+  if(no_native_reader && (std::strcmp(name,abi::arm64::android12::frame_registers::kFast)==0||std::strcmp(name,abi::arm64::android14::frame_registers::kCanonical)==0))return nullptr;
+  if(std::strcmp(name,abi::arm64::android14::frame_registers::kCanonical)==0)return Fn(Canonical);
+  if(std::strcmp(name,abi::arm64::android14::frame_registers::kDebuggerValue)==0)return Fn(DebuggerValue);
+  if(std::strcmp(name,abi::arm64::android14::frame_registers::kNativePcOffset)==0)return Fn(NativeOffset);
+  if(std::strcmp(name,abi::arm64::android14::frame_registers::kAccessibleRegister)==0)return Fn(Accessible);
   if(wrong_geometry && std::strcmp(name,abi::arm64::stack::kConstruct)==0)
    return family==Family::kAndroid12 || family==Family::kAndroid17?Fn(Construct<abi::arm64::stack::Visitor13>):Fn(Construct<abi::arm64::stack::Visitor12>);
   if(std::strcmp(name,"_ZNK3art12StackVisitor11InlineDepthEv")==0)return Fn(InlineDepth);
@@ -162,7 +204,7 @@ struct Finder {
 };
 void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;creates=resets=destroys=reference_fast11=0;
  quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
- actual_physical=physical_alias=physical_wrong_order=nterp_header=cursor_method_drift=cursor_pc_drift=native_map_mismatch=native_count_mismatch=native_depth_mismatch=false;slow_calls=0;
+ actual_physical=physical_alias=physical_wrong_order=nterp_header=cursor_method_drift=cursor_pc_drift=native_map_mismatch=native_count_mismatch=native_depth_mismatch=debugger_override=bad_native_offset=bad_context_value=context_swap=false;slow_calls=canonical_calls=native_fast_calls=0;
  for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
  stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
  header[0]=16;header[1]=64;code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
@@ -171,7 +213,9 @@ void Check(Family f){family=f;Reset();Service service;
  assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service));
  assert(!Service::Bind(f,Finder{abi::arm64::dex_register_map::kDecode},&service));
 
- assert(!Service::Bind(f,Finder{f==Family::kAndroid14 || f==Family::kAndroid15 || f==Family::kAndroid16 || f==Family::kAndroid17 ? abi::arm64::android14::frame_registers::kSlow : abi::arm64::android11::frame_registers::kSlow},&service));
+ const bool modern=f==Family::kAndroid14||f==Family::kAndroid15||f==Family::kAndroid16||f==Family::kAndroid17;
+ if(modern){assert(Service::Bind(f,Finder{abi::arm64::android14::frame_registers::kSlow},&service));assert(!Service::Bind(f,Finder{nullptr,true},&service));}
+ else assert(!Service::Bind(f,Finder{abi::arm64::android11::frame_registers::kSlow},&service));
  const char* missing=nullptr;
  assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service,&missing));assert(std::strcmp(missing,abi::arm64::context::kCreate)==0);
  assert(Service::Bind(f,Finder{},&service));
@@ -280,6 +324,30 @@ void Check(Family f){family=f;Reset();Service service;
    physical_report.dex_pc_checks==3 && physical_report.integers==3 &&
    physical_report.references==3 && physical_report.location_reads==6);
  assert(!std::strcmp(physical_report.detail,"complete-owned-three-physical-proof"));
+ assert(physical_report.native_location_reads==6 && physical_report.physical_comparison_reads==6 &&
+   physical_report.raw_reference_reads==3 && physical_report.native_context_checks==6 &&
+   physical_report.native_pc_offset_observed && physical_report.native_pc_offset==32);
+ if(modern) {
+   Service canonical_reader;
+   assert(Service::Bind(f,Finder{abi::arm64::android12::frame_registers::kFast},&canonical_reader));
+   slow_calls=canonical_calls=native_fast_calls=0;
+   const auto canonical_report=canonical_reader.ProvePhysical(&thread,&jit,physical,scratch,2);
+   assert(canonical_report.failure==Failure::kNone && canonical_calls==6 && slow_calls==0 &&
+      canonical_report.native_location_reads==6 && canonical_report.physical_comparison_reads==6 &&
+      !std::strcmp(canonical_report.reader_route,"original-canonical-optional-location-fast"));
+   debugger_override=true;canonical_calls=0;
+   assert(canonical_reader.ProvePhysical(&thread,&jit,physical,scratch,2).failure==Failure::kNativeRead && canonical_calls==0);
+   debugger_override=false;
+   Service no_debugger_guard;
+   assert(!Service::Bind(f,Finder{abi::arm64::android12::frame_registers::kFast,false,abi::arm64::android14::frame_registers::kDebuggerValue},&no_debugger_guard));
+ }
+ bad_native_offset=true;native_fast_calls=slow_calls=0;
+ assert(physical_run().failure==Failure::kCodeOwnership && native_fast_calls==0 && slow_calls==0);bad_native_offset=false;
+ bad_context_value=true;assert(physical_run().failure==Failure::kFrameIdentity);bad_context_value=false;
+ context_swap=true;assert(physical_run().failure==Failure::kFrameIdentity);context_swap=false;
+ Service folded_pc;assert(Service::Bind(f,Finder{abi::arm64::android14::frame_registers::kNativePcOffset},&folded_pc));
+ const auto folded_pc_report=folded_pc.ProvePhysical(&thread,&jit,physical,scratch,2);
+ assert(folded_pc_report.failure==Failure::kNone && !folded_pc_report.native_pc_offset_observed && folded_pc_report.native_location_reads==6);
  // The inline API remains strict: a successful physical proof cannot authorize it.
  assert(run().failure!=Failure::kNone);
  if(f==Family::kAndroid14||f==Family::kAndroid15||f==Family::kAndroid16) {

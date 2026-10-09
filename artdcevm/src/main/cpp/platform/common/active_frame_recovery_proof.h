@@ -20,6 +20,10 @@ enum class Failure {kMissingBinding,kMissingContext,kMissingOracle,kWalk,kMissin
   kFrameIdentity,kCodeOwnership,kDecodedMap,kTableMemory,kDexPc,kInlineFlag,kReferenceMask,kNativeRead,kValueMismatch,kNone};
 struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,matched_mask=0,physical_matches=0,inline_matches=0,header_checks=0;
   uint32_t constructor_context_echo_mask=0;
+  const char* reader_route="unobserved";
+  uint32_t native_location_reads=0,physical_comparison_reads=0,native_context_checks=0,raw_reference_reads=0,native_auxiliary_reads=0,context_identity_mask=0,reference_mask_checks=0;
+  bool native_context_getter_observed=false;
+  bool native_pc_offset_observed=false;uint64_t native_pc_offset=0,source_pc_offset=0;
   uint32_t map_row=0,inline_begin=0,inline_end=0,native_carrier_registers=0,
            decoded_register_first=0,decoded_register_count=0,expected_registers=0;
   bool register_range_observed=false,native_register_count_observed=false,native_inline_depth_observed=false;
@@ -50,17 +54,23 @@ class Service {
     candidate.create_=reinterpret_cast<abi::arm64::context::Create>(required(abi::arm64::context::kCreate));
     candidate.construct_=required(abi::arm64::android13::kConstructCodeInfo);
     candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
-    candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
+    candidate.slow_=Modern(family)?finder(abi::arm64::android14::frame_registers::kSlow):required(abi::arm64::android11::frame_registers::kSlow);
     candidate.inline_depth_=reinterpret_cast<InlineDepth>(finder("_ZNK3art12StackVisitor11InlineDepthEv"));
     candidate.register_count_=reinterpret_cast<RegisterCount>(NeedsCountLeaf(family)?
       required("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"):
       finder("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
     candidate.decode_map_=reinterpret_cast<abi::arm64::dex_register_map::Decode>(required(abi::arm64::dex_register_map::kDecode));
     candidate.fast_=finder(family==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast);
+    candidate.native_offset_=reinterpret_cast<abi::arm64::android14::frame_registers::NativePcOffset>(finder(abi::arm64::android14::frame_registers::kNativePcOffset));
+    candidate.accessible_=reinterpret_cast<abi::arm64::android14::frame_registers::AccessibleRegister>(finder(abi::arm64::android14::frame_registers::kAccessibleRegister));
+    if(Modern(family)&&!candidate.fast_) {
+      candidate.canonical_=reinterpret_cast<abi::arm64::android14::frame_registers::Canonical>(required(abi::arm64::android14::frame_registers::kCanonical));
+      candidate.debugger_=reinterpret_cast<abi::arm64::android14::frame_registers::DebuggerValue>(required(abi::arm64::android14::frame_registers::kDebuggerValue));
+    }
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
     candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
-    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ || (NeedsCountLeaf(family) && !candidate.register_count_) ||
+    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || (!Modern(family) && !candidate.slow_) || (Modern(family) && !candidate.fast_ && (!candidate.canonical_ || !candidate.debugger_)) || !candidate.decode_map_ || (NeedsCountLeaf(family) && !candidate.register_count_) ||
        !stack_bound || !candidate.jit_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
@@ -147,11 +157,27 @@ class Service {
     if(Modern(family_))return reinterpret_cast<abi::arm64::android14::frame_registers::Slow>(slow_)(visitor,method,witness.vreg,witness.kind,value,false);
     return reinterpret_cast<abi::arm64::android11::frame_registers::Slow>(slow_)(visitor,method,witness.vreg,witness.kind,value);
   }
-  bool NativeFast(const void* visitor,void** frame,abi::arm64::context::Prefix* context,decoded_frame_recovery::Location location,Kind kind,uint32_t* value)const {
-    if(!fast_)return Physical(frame,context,location,value);
+  bool NativeFast(const void* visitor,decoded_frame_recovery::Location location,Kind kind,uint32_t* value)const {
+    if(!fast_)return false;
     NativeLocation native{location.kind,static_cast<int32_t>(location.value)};
     if(family_==Family::kAndroid11)return reinterpret_cast<abi::arm64::android11::frame_registers::Fast>(fast_)(visitor,native,kind,value);
     return reinterpret_cast<abi::arm64::android12::frame_registers::Fast>(fast_)(visitor,native,value);
+  }
+  bool OriginalValue(const void* visitor,void* method,const Witness& witness,
+                     decoded_frame_recovery::Location location,uint32_t* value)const {
+    if(!Modern(family_))return NativeSlow(visitor,method,witness,value);
+    if(fast_)return NativeFast(visitor,location,witness.kind,value);
+    if(!canonical_||!debugger_)return false;
+    // The source canonical fast branch accepts a known location for primitive
+    // reads. Reference slots are read as raw compressed32 here, not dereferenced
+    // and not represented as a read-barrier call. Their separate GC/root proof
+    // is mandatory. Reject debugger overrides so this is the native location
+    // branch, rather than a shadow-frame oracle keyed only by the vreg.
+    uint32_t shadow=0;
+    if(debugger_(visitor,witness.vreg,Kind::kInt,&shadow))return false;
+    const NativeLocation native{location.kind,static_cast<int32_t>(location.value)};
+    return canonical_(visitor,method,witness.vreg,Kind::kInt,value,
+                      abi::arm64::android14::frame_registers::OptionalLocation{native},false);
   }
   // Fixed StackVisitor location-reader algorithm. Stack displacement is from
   // the actual native-decoded map and is bounded by its decoded frame size at
@@ -186,9 +212,9 @@ class Service {
     // Candidate constructor geometry is checked against its own Context/thread
     // echo before walking, so smaller source candidates cannot corrupt state.
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
-    const Service& service;void* jit;const Oracle& oracle;decoded_frame_recovery::Location* scratch;size_t capacity;Readable readable;Report& report;
+    const Service& service;void* jit;void* original_context;const Oracle& oracle;decoded_frame_recovery::Location* scratch;size_t capacity;Readable readable;Report& report;
     void** physical_frames[3]{};void** carrier=nullptr;const void* shared_header=nullptr;uintptr_t shared_pc=0;uint32_t seen=0,inline_rows[2]{};
-    Visitor(const Service& s,void* j,const Oracle& o,decoded_frame_recovery::Location* storage,size_t n,Readable reader,Report& r):abi::arm64::stack::Visitor<Pair>{},service(s),jit(j),oracle(o),scratch(storage),capacity(n),readable(reader),report(r){}
+    Visitor(const Service& s,void* j,void* original,const Oracle& o,decoded_frame_recovery::Location* storage,size_t n,Readable reader,Report& r):abi::arm64::stack::Visitor<Pair>{},service(s),jit(j),original_context(original),oracle(o),scratch(storage),capacity(n),readable(reader),report(r){}
     bool Fail(Failure failure,const char* detail){report.failure=failure;report.detail=detail;return false;}
     bool VisitFrame()override {
       ++report.callbacks;
@@ -209,7 +235,22 @@ class Service {
       if((bit==1 || oracle.shape==Shape::kThreePhysical) && !physical)return Fail(Failure::kFrameIdentity,"owned-carrier-observed-as-inline-frame");
       if(!this->quick_frame)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-frame");
       if(!this->header)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-header");
-      if(!this->context)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-native-context");
+      if(!this->context||this->context!=original_context)return Fail(Failure::kFrameIdentity,"owned-frame-does-not-retain-original-native-context");
+      report.context_identity_mask|=bit;report.native_context_getter_observed=service.accessible_!=nullptr;
+      if(service.accessible_) {
+        auto* context=static_cast<abi::arm64::context::Prefix*>(this->context);
+        for(uint32_t reg=0;reg<32;++reg)for(int32_t kind:{2,4}) {
+          const bool available=kind==2?context->IsAccessibleGPR(reg):context->IsAccessibleFPR(reg);
+          uint32_t native=0;
+          if(service.accessible_(this,reg,kind,&native)!=available)
+            return Fail(Failure::kFrameIdentity,"original-visitor-versus-native-context-accessibility-mismatch");
+          if(available) {
+            const uint32_t expected=static_cast<uint32_t>(kind==2?context->GetGPR(reg):context->GetFPR(reg));
+            if(native!=expected)return Fail(Failure::kFrameIdentity,"original-visitor-versus-native-context-value-mismatch");
+            ++report.native_context_checks;
+          }
+        }
+      }
       if(!physical) {
         const size_t index=bit==2?0:1,other=1-index;
         if((seen&(2u<<other)) && inline_rows[other]==this->inline_frames.end.row)return Fail(Failure::kFrameIdentity,"duplicate-inline-row");
@@ -238,14 +279,19 @@ class Service {
       // lookup/value witnesses must agree with that caller-owned declaration.
       const uintptr_t entry=reinterpret_cast<uintptr_t>(this->header)+(service.family_==Family::kAndroid11?8u:4u);
       if(this->pc<entry || (service.family_==Family::kAndroid11 && this->pc-entry>UINT32_MAX))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
+      const uintptr_t source_offset=this->pc-entry;
+      const uintptr_t native_offset=service.native_offset_?service.native_offset_(this):source_offset;
+      report.native_pc_offset_observed=service.native_offset_!=nullptr;
+      report.native_pc_offset=native_offset;report.source_pc_offset=source_offset;
+      if(native_offset!=source_offset)return Fail(Failure::kCodeOwnership,"original-native-PC-offset-versus-fixed-header-mismatch");
       // Reserve every supported fixed decoder object while testing a candidate.
       // Geometry still comes only from Info and independent frame witnesses.
       alignas(Info) unsigned char storage[sizeof(abi::arm64::android12::CodeInfo)]{};
       auto* info=reinterpret_cast<Info*>(storage);
       reinterpret_cast<void (*)(Info*,const void*)>(service.construct_)(info,this->header);
       abi::arm64::android11::TableIterator map;
-      if(service.family_==Family::kAndroid11)map=reinterpret_cast<abi::arm64::android11::FindStackMap>(service.map_)(reinterpret_cast<abi::arm64::android11::CodeInfo*>(info),static_cast<uint32_t>(this->pc-entry),2);
-      else map=reinterpret_cast<abi::arm64::android11::TableIterator (*)(const Info*,uintptr_t,int32_t)>(service.map_)(info,this->pc-entry,2);
+      if(service.family_==Family::kAndroid11)map=reinterpret_cast<abi::arm64::android11::FindStackMap>(service.map_)(reinterpret_cast<abi::arm64::android11::CodeInfo*>(info),static_cast<uint32_t>(native_offset),2);
+      else map=reinterpret_cast<abi::arm64::android11::TableIterator (*)(const Info*,uintptr_t,int32_t)>(service.map_)(info,native_offset,2);
       if(map.table!=&info->stack_maps)return Fail(Failure::kDecodedMap,"native-stack-map-table-does-not-match-fixed-declaration");
       code_info_view::View view;decoded_frame_recovery::RegisterRange range;
       if(!code_info_view::ReadSourceObject(service.family_,info,sizeof(storage),&view))return Fail(Failure::kDecodedMap,"native-decoded-CodeInfo-table-geometry-invalid");
@@ -343,23 +389,39 @@ class Service {
       const uint32_t bytes=info->frame_size*16;
       for(size_t i=0;i<f->count;++i){const auto& witness=f->witnesses[i];const auto location=scratch[witness.vreg];
         if(location.kind<0 || (location.kind==0 && (bytes<4 || location.value>bytes-4)))return Fail(Failure::kDecodedMap,"decoded-location-missing-or-outside-native-frame");
-        if(witness.kind==Kind::kReference && !RootMask(view,map.row,location))return Fail(Failure::kReferenceMask,"independent-reference-missing-native-stack-register-root-mask");
+        if(witness.kind==Kind::kReference) {
+          if(!RootMask(view,map.row,location))return Fail(Failure::kReferenceMask,"independent-reference-missing-native-stack-register-root-mask");
+          ++report.reference_mask_checks;
+        }
         void* current_method=nullptr;
         const void* current_header=this->header;void** current_frame=this->quick_frame;
+        void* current_context=this->context;
         const uintptr_t current_pc=this->pc;const auto current_range=this->inline_frames;
         if(!service.stack_.Method(this,sizeof(*this),&current_method) || current_method!=method ||
            service.dex_pc_(this,false)!=f->expected_dex_pc || this->header!=current_header ||
-           this->quick_frame!=current_frame || this->pc!=current_pc ||
+           this->quick_frame!=current_frame || this->pc!=current_pc || this->context!=current_context ||
            this->inline_frames.begin.row!=current_range.begin.row ||
            this->inline_frames.end.row!=current_range.end.row ||
            (physical && *this->quick_frame!=method))
           return Fail(Failure::kFrameIdentity,"native-current-cursor-changed-before-vreg-read");
         uint32_t value=0;
-        if(!service.NativeSlow(this,method,witness,&value))return Fail(Failure::kNativeRead,"original-slow-vreg-read-rejected");
-        if(value!=witness.expected)return Fail(Failure::kValueMismatch,"original-slow-vreg-versus-independent-witness-mismatch");
+        if(!service.OriginalValue(this,method,witness,location,&value))return Fail(Failure::kNativeRead,"original-native-location-read-rejected");
+        ++report.native_location_reads;
+        report.reader_route=Modern(service.family_)?(service.fast_?"original-native-location-fast":"original-canonical-optional-location-fast"):"original-native-slow";
+        if(value!=witness.expected)return Fail(Failure::kValueMismatch,"original-native-value-versus-independent-witness-mismatch");
+        if(!Modern(service.family_)&&service.fast_) {
+          uint32_t auxiliary=0;
+          if(!service.NativeFast(this,location,witness.kind,&auxiliary))return Fail(Failure::kNativeRead,"original-legacy-fast-read-rejected");
+          ++report.native_auxiliary_reads;
+          if(auxiliary!=value)return Fail(Failure::kValueMismatch,"original-legacy-fast-versus-slow-reader-mismatch");
+        }
+        if(this->context!=current_context||this->quick_frame!=current_frame||this->header!=current_header||this->pc!=current_pc)
+          return Fail(Failure::kFrameIdentity,"native-reader-changed-current-cursor-or-context");
         uint32_t physical=0;
-        if(!service.NativeFast(this,this->quick_frame,static_cast<abi::arm64::context::Prefix*>(this->context),location,witness.kind,&physical))return Fail(Failure::kNativeRead,"physical-location-reader-unavailable");
-        if(physical!=value)return Fail(Failure::kValueMismatch,"physical-location-versus-original-slow-reader-mismatch");
+        if(!Physical(this->quick_frame,static_cast<abi::arm64::context::Prefix*>(this->context),location,&physical))return Fail(Failure::kNativeRead,"independent-physical-location-reader-unavailable");
+        ++report.physical_comparison_reads;
+        if(physical!=value)return Fail(Failure::kValueMismatch,"physical-location-versus-original-native-reader-mismatch");
+        if(witness.kind==Kind::kReference)++report.raw_reference_reads;
         ++report.location_reads;
         if(witness.kind==Kind::kInt)++report.integers;
         else ++report.references;
@@ -369,7 +431,7 @@ class Service {
   };
   template<class Info,class Pair> void Walk(void* thread,void* jit,void* context,const Oracle& oracle,
       decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable,Report* report)const {
-    Visitor<Info,Pair> visitor(*this,jit,oracle,scratch,capacity,readable,*report);
+    Visitor<Info,Pair> visitor(*this,jit,context,oracle,scratch,capacity,readable,*report);
     if(!stack_.Construct(&visitor,sizeof(visitor),thread,context,abi::arm64::stack::WalkKind::kIncludeInlined)) {report->failure=Failure::kWalk;report->detail="native-visitor-construct-or-walk-call-unavailable";return;}
     report->constructor_context_echo_mask=abi::arm64::stack::ConstructorContextEchoMask(&visitor,sizeof(visitor),context);
     if(visitor.thread!=thread || visitor.context!=context || visitor.kind!=abi::arm64::stack::WalkKind::kIncludeInlined) {
@@ -382,6 +444,10 @@ class Service {
   }
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;void* slow_=nullptr;void* fast_=nullptr;
+  abi::arm64::android14::frame_registers::Canonical canonical_=nullptr;
+  abi::arm64::android14::frame_registers::DebuggerValue debugger_=nullptr;
+  abi::arm64::android14::frame_registers::NativePcOffset native_offset_=nullptr;
+  abi::arm64::android14::frame_registers::AccessibleRegister accessible_=nullptr;
   InlineDepth inline_depth_=nullptr;
   RegisterCount register_count_=nullptr;
   abi::arm64::dex_register_map::Decode decode_map_=nullptr;

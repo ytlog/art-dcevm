@@ -23,11 +23,17 @@ for key,value in proof.items():
     for wrong in wrongs:reject({**report,'ownedActiveFrameProof':{**proof,key:wrong}})
 physical_proof={**proof,'inlineFlagNativeObserved':False,'frameShape':'three-physical',
                 'wholeProcessFrameEligibility':False,'matchedMethodMask':7,'physicalMethodMatches':3,
-                'inlineMethodMatches':0,'headerOwnershipChecks':3}
+                'inlineMethodMatches':0,'headerOwnershipChecks':3,
+                'nativeReaderRoute':'original-canonical-optional-location-fast',
+                'nativeLocationReads':6,'physicalComparisonReads':6,'rawReferenceReads':3,
+                'nativeReferenceMaskChecks':3,'freshNativeStrongRootWitnesses':3,
+                'nativeContextIdentityMask':7,'nativeContextGetterObserved':True,'nativeContextChecks':6,
+                'nativeReferenceReadBarrierExecuted':False,'gcRetainedLiveWitnesses':True,
+                'blockedGcCollections':1,'retainedGcCollections':1}
 physical_report={'physicalActiveFramesRequested':True,'ownedPhysicalActiveFrameProof':physical_proof}
 validate_physical_active_frames(physical_report)
 for key,value in physical_proof.items():
-    wrong=not value if type(value) is bool else value+1 if type(value) is int else 'wrong-shape'
+    wrong=0 if key in ('blockedGcCollections','retainedGcCollections','nativeContextChecks') else not value if type(value) is bool else value+1 if type(value) is int else 'wrong-shape'
     candidate=copy.deepcopy(physical_report);candidate['ownedPhysicalActiveFrameProof'][key]=wrong
     try:validate_physical_active_frames(candidate)
     except RuntimeError:pass

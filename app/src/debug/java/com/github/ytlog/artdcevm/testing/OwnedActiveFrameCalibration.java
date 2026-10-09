@@ -18,6 +18,15 @@ public final class OwnedActiveFrameCalibration {
     public static JSONObject runPhysical(String apkPath)throws Exception {
         return runCallers(apkPath,false,true);
     }
+    private static long forceCollection()throws Exception {
+        long before=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+        byte[][] pressure=new byte[16][];
+        for(int i=0;i<pressure.length;++i)pressure[i]=new byte[65536];
+        System.gc();System.runFinalization();
+        long after=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
+        if(after<=before)throw new AssertionError("Active frame public GC did not complete a collection");
+        return after-before;
+    }
     private static JSONObject runCallers(String apkPath,boolean requestOptimizingCompilation,boolean physical)throws Exception {
         Class<?>[] args={int.class,Object.class,int.class,Object.class,int.class,Object.class};
         Method carrier=OwnedActiveFrameFixture.class.getDeclaredMethod("carrier",args);
@@ -40,13 +49,14 @@ public final class OwnedActiveFrameCalibration {
         OwnedActiveFrameFixture.retainedInt0=OwnedActiveFrameFixture.retainedInt1=OwnedActiveFrameFixture.retainedInt2=0;
         final Throwable[] failure={null};final int[] value={0};
         String arm=armGate();if(arm==null||!arm.isEmpty())throw new AssertionError("Active gate initialization: "+arm);
-        Thread worker=null;boolean started=false;JSONObject report=null;
+        Thread worker=null;boolean started=false;JSONObject report=null;long blockedGcCollections=0,retainedGcCollections=0;
         try {
             worker=new Thread(()->{try{value[0]=OwnedActiveFrameFixture.carrier(integers[0],roots[0],integers[1],roots[1],integers[2],roots[2]);}catch(Throwable error){failure[0]=error;}},"OwnedCompiledFrameOracle");
             worker.start();started=true;
             if(!waitEntered(30000))throw new AssertionError("Actual native worker gate was not entered");
             if(OwnedActiveFrameFixture.retained0!=null||OwnedActiveFrameFixture.retained1!=null||OwnedActiveFrameFixture.retained2!=null||OwnedActiveFrameFixture.retainedInt0!=0||OwnedActiveFrameFixture.retainedInt1!=0||OwnedActiveFrameFixture.retainedInt2!=0)
                 throw new AssertionError("Fixture wrote live witnesses before native gate release");
+            if(physical)blockedGcCollections=forceCollection();
             String result=physical?provePhysical(methods,dex,roots,integers):prove(methods,dex,roots,integers);
             if(result==null)throw new AssertionError("Missing active frame report");
             report=new JSONObject(result);
@@ -54,10 +64,17 @@ public final class OwnedActiveFrameCalibration {
                 throw new AssertionError("Incomplete actual active frame proof: "+result);
             report.put("warmCalls",100000).put("scope",physical?"three owned physical compiled callers with independent DexPc/value/root witnesses; no whole-process frame eligibility":"owned compiled carrier and two inlinee map/value/root oracle; no full evolution");
             report.put("blockedLiveWitnesses",true);
+            if(physical)report.put("blockedGcCollections",blockedGcCollections);
             if(compilation!=null)report.put("compilationControl",compilation);
         } finally {
             releaseGate();if(started)worker.join(30000);
             if(started&&(worker.isAlive()||failure[0]!=null||value[0]!=expected||OwnedActiveFrameFixture.retained0!=roots[0]||OwnedActiveFrameFixture.retained1!=roots[1]||OwnedActiveFrameFixture.retained2!=roots[2]||OwnedActiveFrameFixture.retainedInt0!=integers[0]||OwnedActiveFrameFixture.retainedInt1!=integers[1]||OwnedActiveFrameFixture.retainedInt2!=integers[2]))throw new AssertionError("Active frame gate cleanup/retained result",failure[0]);
+        }
+        if(physical) {
+            retainedGcCollections=forceCollection();
+            if(OwnedActiveFrameFixture.retained0!=roots[0]||OwnedActiveFrameFixture.retained1!=roots[1]||OwnedActiveFrameFixture.retained2!=roots[2])
+                throw new AssertionError("Public GC changed retained caller reference identities");
+            report.put("retainedGcCollections",retainedGcCollections).put("gcRetainedLiveWitnesses",true);
         }
         return report.put("retainedLiveWitnesses",true);
     }

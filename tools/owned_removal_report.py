@@ -94,8 +94,22 @@ def validate_physical_active_frames(report):
         'integers': 3, 'references': 3, 'locationReads': 6,
         'dexPcChecks': 3, 'headerOwnershipChecks': 3,
         'warmCalls': 100000, 'error': '',
+        'nativeLocationReads': 6, 'physicalComparisonReads': 6,
+        'rawReferenceReads': 3, 'nativeReferenceMaskChecks': 3,
+        'freshNativeStrongRootWitnesses': 3, 'nativeContextIdentityMask': 7,
+        'nativeReferenceReadBarrierExecuted': False, 'gcRetainedLiveWitnesses': True,
     }
     for key, value in expected.items():
         observed = proof.get(key)
         if type(observed) is not type(value) or observed != value:
             raise RuntimeError(f'Missing or incomplete actual physical-frame proof: {key}={observed!r}; expected {value!r}')
+
+    if proof.get('nativeReaderRoute') not in ('original-native-slow', 'original-native-location-fast', 'original-canonical-optional-location-fast'):
+        raise RuntimeError('Missing actual named native value reader route')
+    for key in ('blockedGcCollections','retainedGcCollections'):
+        value=proof.get(key)
+        if type(value) is not int or value<1:
+            raise RuntimeError(f'Missing completed public GC witness: {key}={value!r}')
+    observed=proof.get('nativeContextGetterObserved');checks=proof.get('nativeContextChecks')
+    if type(observed) is not bool or type(checks) is not int or checks<0 or (observed and checks<1) or (not observed and checks!=0):
+        raise RuntimeError('Incomplete original native Context calibration')
