@@ -31,6 +31,7 @@ public final class ProductionSchemaEvolutionTest {
         stage("apply-"+variant+".before");
         int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{asset(variant,cls)});
         report.put("lastApplyCode",result);
+        report.put("capabilitiesAfterApply",new JSONObject(NativeBridge.capabilities()));
         assertEquals(variant+": "+NativeBridge.errorName(result),0,result);
         stage("apply-"+variant+".after");
     }
@@ -44,14 +45,23 @@ public final class ProductionSchemaEvolutionTest {
         String runId=InstrumentationRegistry.getArguments().getString("productionRunId");
         if(runId==null)runId=java.util.UUID.randomUUID().toString().replace("-","");
         assertTrue("Malformed run ID",runId.matches("[0-9a-f]{32}"));
-        report=new JSONObject().put("runId",runId).put("case",name).put("passed",false)
+        String scope=InstrumentationRegistry.getArguments().getString("productionSchemaScope", "full");
+        assertTrue("Unknown schema initialization scope", scope.equals("full") || scope.equals("common-owned"));
+        report=new JSONObject().put("initializationScope",scope).put("runId",runId).put("case",name).put("passed",false)
             .put("route","DcevmRuntime/NativeBridge.apply").put("sourceEngineUsed",false);
         phases=new TestPhaseLog(runId,context.getFilesDir());
         try {
             stage("capabilities.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
-            stage("required-full-initialize.before");DcevmRuntime.initialize(context);
+            if (scope.equals("full")) {
+                stage("required-full-initialize.before");DcevmRuntime.initialize(context);
+            } else stage("required-common-owned.before");
             JSONObject capabilities=new JSONObject(NativeBridge.capabilities());report.put("capabilities",capabilities);
-            assertTrue("Required production schema capability unavailable: "+capabilities,capabilities.optBoolean("evolutionAvailable"));
+            if (scope.equals("full")) {
+                assertTrue("Required production schema capability unavailable: "+capabilities,capabilities.optBoolean("evolutionAvailable"));
+            } else {
+                assertEquals("Required shared owner route", "runtime-capabilities", capabilities.optString("backend"));
+                assertTrue("Shared owner was not initialized: "+capabilities,capabilities.optBoolean("partialEvolutionAvailable"));
+            }
             stage("support-load.before");System.loadLibrary("artdcevm_test_support");
             stage("scenario.before");action.run();stage("finished");report.put("passed",true);
         } catch(Throwable error) {

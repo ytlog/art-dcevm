@@ -5,12 +5,13 @@ from production_schema_report import CASE_METHODS, validate
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('adb','serial','apk','test-apk'):p.add_argument('--'+name,required=True)
 p.add_argument('--case',choices=CASE_METHODS,required=True)
+p.add_argument('--scope',choices=('full','common-owned'),default='full')
 p.add_argument('--timeout',type=int,default=300)
 a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[1];run_id=uuid.uuid4().hex
 out=root/'build/evidence/production-schema'/run_id;out.mkdir(parents=True)
 def adb(*args,timeout=30):
     return subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,timeout=timeout,check=True)
-metadata={'runId':run_id,'case':a.case,'serial':a.serial,'startedUtc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+metadata={'runId':run_id,'case':a.case,'scope':a.scope,'serial':a.serial,'startedUtc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
 try:
     for package,path,key in [('dev.artdcevm.lab',a.apk,'appSha256'),('dev.artdcevm.lab.test',a.test_apk,'testSha256')]:
         expected=hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -20,7 +21,7 @@ try:
         if expected!=actual:raise RuntimeError('Installed APK SHA mismatch: '+package)
         metadata[key]=actual
     for package in ('dev.artdcevm.lab.test','dev.artdcevm.lab'):adb('shell','am','force-stop',package)
-    command=['shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionSchemaEvolutionTest#'+CASE_METHODS[a.case],'-e','productionRunId',run_id,'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner']
+    command=['shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionSchemaEvolutionTest#'+CASE_METHODS[a.case],'-e','productionSchemaScope',a.scope,'-e','productionRunId',run_id,'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner']
     try:result=adb(*command,timeout=a.timeout)
     except subprocess.TimeoutExpired as error:
         (out/'instrumentation.log').write_bytes((error.stdout or b'')+(error.stderr or b''));raise
@@ -29,7 +30,7 @@ try:
     lines=[line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
     if len(lines)!=1:raise RuntimeError('Missing unique required schema report')
     report=json.loads(lines[0]);(out/'report.json').write_text(json.dumps(report,indent=2))
-    errors=validate(report,run_id,a.case)
+    errors=validate(report,run_id,a.case,a.scope)
     if 'OK (1 test)' not in raw:errors.append('JUnit did not pass exactly one required test')
     metadata.update(passed=not errors,errors=errors)
 except Exception as error:

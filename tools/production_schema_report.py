@@ -12,15 +12,23 @@ CASE_PROOFS = {
     'native-java': ('nativeJavaNative', 'cachedReflectionMethodHandleJni', 'mixedWideFpReferenceArguments', 'oldObjectGcState'),
 }
 
-def validate(report, run_id, case):
+def validate(report, run_id, case, scope="full"):
     errors = []
     for key, expected in [('runId', run_id), ('case', case), ('route', 'DcevmRuntime/NativeBridge.apply'), ('stage', 'finished')]:
         if report.get(key) != expected:
             errors.append(f'{key}: expected {expected!r}')
     if report.get('passed') is not True or report.get('sourceEngineUsed') is not False:
         errors.append('Required production proof failed or used SourceEngine')
-    if report.get('capabilities', {}).get('evolutionAvailable') is not True:
-        errors.append('Required production evolution capability unavailable')
+    if scope not in ('full', 'common-owned') or report.get('initializationScope', 'full') != scope:
+        errors.append('Required initialization scope mismatch')
+    capabilities = report.get('capabilities', {})
+    if scope == 'full':
+        if capabilities.get('evolutionAvailable') is not True:
+            errors.append('Required production evolution capability unavailable')
+    elif capabilities.get('backend') != 'runtime-capabilities' or capabilities.get('partialEvolutionAvailable') is not True:
+        errors.append('Required shared runtime owner unavailable')
+    if type(report.get('lastApplyCode')) is not int or report['lastApplyCode'] != 0:
+        errors.append('Missing successful actual schema apply')
     for key in CASE_PROOFS[case]:
         if report.get(key) is not True:
             errors.append(f'Missing actual proof: {key}')
