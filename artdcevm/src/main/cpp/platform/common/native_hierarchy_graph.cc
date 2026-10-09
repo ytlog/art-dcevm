@@ -139,6 +139,11 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  struct Local{JNIEnv* e;jobject v;~Local(){if(v)e->DeleteLocalRef(v);}} local_type{env,type};
  auto parent=env->GetMethodID(type,"getSuperclass","()Ljava/lang/Class;");auto interfaces=env->GetMethodID(type,"getInterfaces","()[Ljava/lang/Class;");auto loader=env->GetMethodID(type,"getClassLoader","()Ljava/lang/ClassLoader;");auto lookup=env->GetStaticMethodID(type,"forName","(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
  if(!parent||!interfaces||!loader||!lookup||env->ExceptionCheck())return Fail(error,"Complete public hierarchy API unavailable");
+ // Android exposes a BootClassLoader facade for a native null loader. Obtain
+ // its public identity from Object; later complete native validation still
+ // requires the exact Object descriptor and native null loader for this graph.
+ Local bootstrap{env,env->FindClass("java/lang/Object")};if(!bootstrap.v||env->ExceptionCheck())return Fail(error,"Bootstrap Object public identity unavailable");
+ Local boot_loader{env,env->CallObjectMethod(bootstrap.v,loader)};if(env->ExceptionCheck())return Fail(error,"Bootstrap public loader unavailable");
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0||(count&&!loaded))return Fail(error,"Complete loaded Class graph unavailable");
  struct Loaded{JNIEnv* e;jvmtiEnv* ti;jclass* p;jint n;~Loaded(){if(p){for(jint i=0;i<n;++i)if(p[i])e->DeleteLocalRef(p[i]);ti->Deallocate(reinterpret_cast<unsigned char*>(p));}}} loaded_cleanup{env,ti,loaded,count};
  for(jint i=0;i<count;++i){jint status=0,flags=0;char* signature=nullptr;
@@ -149,6 +154,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;
   n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();if(!s.public_roots.Stage(context,loaded[i],&n.class_root.slot,error))return false;
   auto l=env->CallObjectMethod(loaded[i],loader);Local local_loader{env,l};if(env->ExceptionCheck())return false;
+  if(l&&boot_loader.v&&env->IsSameObject(l,boot_loader.v))l=nullptr;if(env->ExceptionCheck())return false;
   if(l){n.loader_root.owner=&s.public_roots;n.loader_root.generation=s.public_roots.Generation();for(const auto slot:s.loaders)if(s.public_roots.Same(env,slot,l)){n.loader_root.slot=slot;break;}
    if(env->ExceptionCheck())return false;if(!n.loader_root.slot){if(!s.public_roots.Stage(context,l,&n.loader_root.slot,error))return false;s.loaders.push_back(n.loader_root.slot);}}
   s.graph.nodes.push_back(std::move(n));
