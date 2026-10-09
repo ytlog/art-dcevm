@@ -114,6 +114,7 @@ std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\
    <<",\"missingSymbol\":\""<<Escape(attempt.missing?attempt.missing:"")<<"\",\"stage\":\""<<Escape(attempt.report.detail)
    <<"\",\"walkCallbacks\":"<<attempt.report.callbacks<<",\"matchedMethodMask\":"<<attempt.report.matched_mask
    <<",\"physicalMethodMatches\":"<<attempt.report.physical_matches<<",\"inlineMethodMatches\":"<<attempt.report.inline_matches
+   <<",\"constructorContextEchoMask\":"<<attempt.report.constructor_context_echo_mask
    <<",\"frames\":"<<attempt.report.frames<<'}';}
  out<<"]}";return out.str();}
 }

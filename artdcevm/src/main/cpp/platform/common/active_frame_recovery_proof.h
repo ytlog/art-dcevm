@@ -10,6 +10,7 @@
 #include "platform/abi/arm64/android15/frame_registers.h"
 #include "platform/abi/arm64/android17/frame_registers.h"
 #include <memory>
+#include "platform/abi/arm64/android11/oat_quick_method_header.h"
 namespace artdcevm::active_frame_recovery_proof {
 using Family=code_info_view::SourceFamily;
 using Kind=abi::arm64::android11::frame_registers::Kind;
@@ -17,6 +18,7 @@ using NativeLocation=abi::arm64::android11::frame_registers::Location;
 enum class Failure {kMissingBinding,kMissingContext,kMissingOracle,kWalk,kMissingFrames,
   kFrameIdentity,kCodeOwnership,kDecodedMap,kTableMemory,kDexPc,kInlineFlag,kReferenceMask,kNativeRead,kValueMismatch,kNone};
 struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,matched_mask=0,physical_matches=0,inline_matches=0,header_checks=0;
+  uint32_t constructor_context_echo_mask=0;
   Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
@@ -43,9 +45,8 @@ class Service {
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
     candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
-    if(family==Family::kAndroid11 && !candidate.header_contains_ && missing && !*missing)*missing="_ZNK3art20OatQuickMethodHeader8ContainsEm";
     if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ ||
-       !stack_bound || !candidate.jit_contains_ || (family==Family::kAndroid11 && !candidate.header_contains_) || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
+       !stack_bound || !candidate.jit_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
   // Call ONLY on a genuinely suspended target under ART's required mutator lock,
@@ -211,8 +212,15 @@ class Service {
       // Fixed12+ Contains uses GetCode()+native decoded CodeInfo code_size.
       // On12 the inline function has no named ELF body. This source equivalent
       // stays independent of map/value checks and of actual Jit ContainsPc.
-      if(!service.header_contains_ && (!view.code_size || !*view.code_size ||
-          this->pc-entry>*view.code_size))return Fail(Failure::kCodeOwnership,"decoded-code-size-does-not-contain-native-pc");
+      if(!service.header_contains_) {
+        if(service.family_==Family::kAndroid11) {
+          size_t extent=sizeof(abi::arm64::android11::OatQuickMethodHeaderPrefix);
+          if((readable && !readable(this->header,&extent)) ||
+             !abi::arm64::android11::OptimizedHeaderContains(this->header,extent,this->pc))
+            return Fail(Failure::kCodeOwnership,"fixed11-optimized-header-does-not-contain-native-pc");
+        } else if(!view.code_size || !*view.code_size || this->pc-entry>*view.code_size)
+          return Fail(Failure::kCodeOwnership,"decoded-code-size-does-not-contain-native-pc");
+      }
       ++report.header_checks;
       if(readable)for(const auto& table:view.tables) {
         const size_t bits=size_t{table.rows}*table.row_bits;
@@ -256,6 +264,7 @@ class Service {
       decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable,Report* report)const {
     Visitor<Info,Pair> visitor(*this,jit,oracle,scratch,capacity,readable,*report);
     if(!stack_.Construct(&visitor,sizeof(visitor),thread,context,abi::arm64::stack::WalkKind::kIncludeInlined)) {report->failure=Failure::kWalk;report->detail="native-visitor-construct-or-walk-call-unavailable";return;}
+    report->constructor_context_echo_mask=abi::arm64::stack::ConstructorContextEchoMask(&visitor,sizeof(visitor),context);
     if(visitor.thread!=thread || visitor.context!=context || visitor.kind!=abi::arm64::stack::WalkKind::kIncludeInlined) {
       report->failure=Failure::kFrameIdentity;report->detail=visitor.thread!=thread?"constructor-thread-echo-mismatch":visitor.context!=context?"constructor-context-echo-mismatch":"constructor-walk-kind-echo-mismatch";return;
     }

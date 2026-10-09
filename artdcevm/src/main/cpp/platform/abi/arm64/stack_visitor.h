@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 #include "platform/abi/arm64/android11/code_info.h"
 #include "platform/abi/arm64/android12/code_info.h"
 #include "platform/abi/arm64/android13/code_info.h"
@@ -54,6 +55,23 @@ ARTDCEVM_CHECK_VISITOR(Visitor12,android12::CodeInfoPair)
 ARTDCEVM_CHECK_VISITOR(Visitor13,android13::CodeInfoPair)
 ARTDCEVM_CHECK_VISITOR(Visitor17,android17::CodeInfoPair)
 #undef ARTDCEVM_CHECK_VISITOR
+// Diagnostic only: compare the constructor's independently supplied Context at
+// each complete fixed source declaration. This never selects a new geometry or
+// permits walking a failed candidate; it identifies which declaration needs
+// source investigation without scanning or inferring an offset.
+inline uint32_t ConstructorContextEchoMask(const void* storage,size_t extent,const void* expected) {
+  if(!storage || !expected)return 0;
+  const size_t offsets[]={offsetof(Visitor11,context),offsetof(Visitor12,context),
+                          offsetof(Visitor13,context),offsetof(Visitor17,context)};
+  uint32_t mask=0;
+  for(size_t i=0;i<4;++i) {
+    if(offsets[i]>extent || extent-offsets[i]<sizeof(void*))continue;
+    const void* value=nullptr;
+    std::memcpy(&value,static_cast<const unsigned char*>(storage)+offsets[i],sizeof(value));
+    if(value==expected)mask|=1u<<i;
+  }
+  return mask;
+}
 #pragma clang diagnostic pop
 
 // The opaque pointer arguments are the source-declared this/Thread/Context

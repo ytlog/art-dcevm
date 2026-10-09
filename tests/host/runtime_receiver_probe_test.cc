@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include "platform/abi/arm64/android-common/jni_id_query_scope.h"
 using namespace artdcevm;
 using Carrier=abi::arm64::android11::ReleaseObjectPointer;
 using Find=Carrier (*)(void*,void*,const char*,void*);
@@ -19,8 +20,17 @@ Carrier LengthDelegate(void* l,void* t,const char* d,size_t n,void* h){++delegat
 Carrier Delegate(void* l,void* t,const char* d,void* h){++delegated;return real_delegate(l,t,d,h);}
 Encode encode_hook;int suspended=0,finds=0,encodes=0;
 const char* mode="success";
+bool in_public_find=false;int query_live=0,query_balanced=0;
 void* linker=reinterpret_cast<void*>(0x1000);
 void* manager=reinterpret_cast<void*>(0x2000);
+void QueryConstruct(abi::arm64::android_common::JniIdQueryScope* scope){
+ assert(in_public_find && !suspended && !query_live);++query_live;
+ scope->manager=!std::strcmp(mode,"scope-null")?nullptr:manager;
+ if(!std::strcmp(mode,"scope-conflict")||(!std::strcmp(mode,"scope-switch")&&query_balanced))scope->manager=reinterpret_cast<void*>(0x7770);
+}
+void QueryDestroy(abi::arm64::android_common::JniIdQueryScope*){
+ assert(in_public_find && !suspended && query_live==1);--query_live;++query_balanced;
+}
 Carrier RealFind(void* l,void*,const char*,void*){assert(l==linker);++finds;return {0x3000};}
 Carrier RealLengthFind(void* l,void* t,const char* d,size_t n,void* h){forwarded_length=n;return RealFind(l,t,d,h);}
 jmethodID RealEncode(void* m,void*){assert(m==manager||m==reinterpret_cast<void*>(0x7770));++encodes;return reinterpret_cast<jmethodID>(0x4000);}
@@ -34,11 +44,18 @@ class Hooks:public HookEngine {
  void* FindSymbol(const char*,const char* name)override{
   if(std::strstr(name,"FindClass")) {
     if(!std::strcmp(mode,"missing"))return nullptr;
-    if(!std::strcmp(mode,"length")||!std::strcmp(mode,"length-bypassed"))
+    if(!std::strcmp(mode,"length")||!std::strcmp(mode,"length-bypassed")||!std::strcmp(mode,"scope-length-pointer"))
       return std::strstr(name,"EPKcm")?reinterpret_cast<void*>(RealLengthFind):nullptr;
     return reinterpret_cast<void*>(RealFind);
   }
-  if(std::strstr(name,"EncodeMethodId"))return reinterpret_cast<void*>(RealEncode);
+  if(std::strstr(name,"ScopedEnableSuspendAllJniIdQueries")){
+    if(!std::strncmp(mode,"scope-",6)) {
+      if(std::strstr(name,"D2")&&(!std::strcmp(mode,"scope-unpaired")||!std::strcmp(mode,"scope-no-route")))return nullptr;
+      return std::strstr(name,"C2")?reinterpret_cast<void*>(QueryConstruct):reinterpret_cast<void*>(QueryDestroy);
+    }
+    return nullptr;
+  }
+  if(std::strstr(name,"EncodeMethodId"))return (!std::strcmp(mode,"scope-only")||!std::strcmp(mode,"scope-no-route"))?nullptr:reinterpret_cast<void*>(RealEncode);
   if(std::strstr(name,"ThreadList"))return reinterpret_cast<void*>(RealSuspend);
   if(std::strstr(name,"C2"))return reinterpret_cast<void*>(Suspend);
   if(std::strstr(name,"D2"))return reinterpret_cast<void*>(Resume);
@@ -58,10 +75,12 @@ class Hooks:public HookEngine {
 jclass JNICALL PublicFind(JNIEnv*,const char* name){
  assert(!suspended && std::strstr(name,"CalibrationFixture"));
  const char* descriptor=!std::strcmp(mode,"bypassed")?"Ljava/lang/Object;":"Lcom/github/ytlog/artdcevm/internal/CalibrationFixture;";
- auto result=length_hook?length_hook(linker,nullptr,descriptor,std::strlen(descriptor)+(!std::strcmp(mode,"length-bypassed")?1:0),nullptr):find_hook(linker,nullptr,descriptor,nullptr);assert(result.reference==0x3000);
+ in_public_find=true;
+ auto result=length_hook?length_hook(linker,nullptr,descriptor,std::strlen(descriptor)+(!std::strcmp(mode,"length-bypassed")?1:0),nullptr):find_hook(linker,nullptr,descriptor,nullptr);assert(result.reference==0x3000);in_public_find=false;
  return reinterpret_cast<jclass>(0x5000);
 }
 jmethodID JNICALL PublicMethod(JNIEnv*,jclass,const char*,const char*){
+ if(!std::strcmp(mode,"scope-switch")||!std::strcmp(mode,"scope-length-pointer")||!std::strcmp(mode,"scope-pointer")||!std::strcmp(mode,"scope-only")||!std::strcmp(mode,"scope-null")||!std::strcmp(mode,"scope-unpaired"))return reinterpret_cast<jmethodID>(0x4000);
  auto result=encode_hook(manager,nullptr);
  if(!std::strcmp(mode,"conflict"))encode_hook(reinterpret_cast<void*>(0x7770),nullptr);
  return result;
@@ -98,7 +117,13 @@ int main(int argc,char** argv){
   assert(!suspended);std::cout<<"Runtime receiver probe "<<mode<<": passed\n";return 0;
  }
  bool ok=runtime_receiver::Calibrate(hooks,&env,&output,&error);
- if(!std::strcmp(mode,"success")){
+ if(!std::strcmp(mode,"scope-length-pointer")||!std::strcmp(mode,"scope-pointer")||!std::strcmp(mode,"scope-only")||!std::strcmp(mode,"scope-crosscheck")){
+  assert(ok&&error.empty()&&output.jni_id_manager==manager&&output.class_linker==linker);
+  assert(query_balanced==2&&!query_live);
+  assert(encodes==(!std::strcmp(mode,"scope-crosscheck")?1:0));
+  assert(runtime_receiver::Calibrate(hooks,&env,&output,&error));
+  assert(query_balanced==4&&!query_live);
+ }else if(!std::strcmp(mode,"success")){
   assert(ok && error.empty() && output.class_linker==linker && output.jni_id_manager==manager && output.java_vm==&vm && output.thread_list==reinterpret_cast<void*>(0x8000));
   assert(runtime_receiver::Calibrate(hooks,&env,&output,&error));
   // The observation request is over: all unrelated callers remain passthrough.
@@ -115,6 +140,11 @@ int main(int argc,char** argv){
   assert(!ok && !error.empty() && output.class_linker==reinterpret_cast<void*>(0xaa)&&output.jni_id_manager==reinterpret_cast<void*>(0xbb));
 
  }
+ if(!std::strcmp(mode,"scope-switch")||!std::strcmp(mode,"scope-null")||!std::strcmp(mode,"scope-conflict")){
+  assert(query_balanced==2&&!query_live&&error.find("queryScope=2")!=std::string::npos);
+ }
+ if(!std::strcmp(mode,"scope-unpaired"))assert(query_balanced==0&&error.find("queryScope=0")!=std::string::npos);
+ if(!std::strcmp(mode,"scope-no-route"))assert(query_balanced==0&&error.find("Missing named")!=std::string::npos);
  assert(!suspended);
  std::cout<<"Runtime receiver probe "<<mode<<": passed\n";
 }

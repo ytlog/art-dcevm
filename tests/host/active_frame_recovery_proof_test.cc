@@ -104,7 +104,7 @@ void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=ba
  quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
  for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
  stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
- code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
+ header[0]=16;header[1]=64;code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
 }
 void Check(Family f){family=f;Reset();Service service;
  assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service));
@@ -121,7 +121,22 @@ void Check(Family f){family=f;Reset();Service service;
  assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
  physical_inlinees=true;auto separated=run();assert(separated.failure==Failure::kMissingFrames && separated.physical_matches==3 && separated.inline_matches==0 && separated.matched_mask==7 && separated.frames==1);assert(std::strcmp(separated.detail,"missing-actual-inlinees-physical-fixture-frames-observed")==0);physical_inlinees=false;
  Service inline_header;missing=nullptr;bool fallback_bound=Service::Bind(f,Finder{"_ZNK3art20OatQuickMethodHeader8ContainsEm"},&inline_header,&missing);
- if(f==Family::kAndroid11){assert(!fallback_bound && missing);}
+ if(f==Family::kAndroid11){
+  assert(fallback_bound && !missing);
+  auto prove=[&]{return inline_header.Prove(&thread,&jit,oracle,scratch,2);};
+  assert(prove().failure==Failure::kNone);
+  header[1]=0x80000040u;assert(prove().failure==Failure::kNone);
+  header[1]=31;assert(prove().failure==Failure::kCodeOwnership);
+  header[1]=UINT32_MAX;assert(prove().failure==Failure::kCodeOwnership);
+  header[1]=64;header[0]=0;assert(prove().failure==Failure::kCodeOwnership);header[0]=16;
+  using abi::arm64::android11::OptimizedHeaderContains;
+  auto code=reinterpret_cast<uintptr_t>(header)+8;
+  assert(OptimizedHeaderContains(header,8,code+64));
+  assert(!OptimizedHeaderContains(header,7,code));
+  assert(!OptimizedHeaderContains(header,8,code-1));
+  assert(!OptimizedHeaderContains(header,8,code+65));
+  assert(!OptimizedHeaderContains(reinterpret_cast<void*>(UINTPTR_MAX-3),8,UINTPTR_MAX));
+ }
  else {assert(fallback_bound);auto recovered=inline_header.Prove(&thread,&jit,oracle,scratch,2);assert(recovered.failure==Failure::kNone && recovered.header_checks==3);code_size=31;auto outside=inline_header.Prove(&thread,&jit,oracle,scratch,2);assert(outside.failure==Failure::kCodeOwnership && std::strcmp(outside.detail,"decoded-code-size-does-not-contain-native-pc")==0);code_size=0;assert(inline_header.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kCodeOwnership);code_size=64;}
  missing_context=true;assert(run().failure==Failure::kMissingContext);missing_context=false;
  bad_owner=true;assert(run().failure==Failure::kCodeOwnership);bad_owner=false;
@@ -142,7 +157,9 @@ void Check(Family f){family=f;Reset();Service service;
  witnesses[0][1].expected=0;assert(run().failure==Failure::kMissingOracle);
  witnesses[0][1].expected=quick[3];wrong_geometry=true;
  Service wrong;assert(Service::Bind(f,Finder{},&wrong));
- assert(wrong.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kFrameIdentity);wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
+ auto rejected=wrong.Prove(&thread,&jit,oracle,scratch,2);
+ assert(rejected.failure==Failure::kFrameIdentity && rejected.callbacks==0);
+ assert(rejected.constructor_context_echo_mask==(f==Family::kAndroid17?4u:8u));wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
  witnesses[0][1].expected=quick[3];
  Service fallback;assert(Service::Bind(f,Finder{f==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast},&fallback));
  assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone);
