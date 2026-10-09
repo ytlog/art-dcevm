@@ -14,17 +14,14 @@ def _range(data, at, size):
 
 
 def _sections(data):
-    identity = _range(data, 0, 7)
-    if identity[:4] != b'\x7fELF' or identity[5:7] != b'\x01\x01' or identity[4] not in (1, 2):
-        raise ValueError('Expected little-endian ARM ELF32/64')
-    wide = identity[4] == 2
-    header_size, section_size, machine = (64, 64, 183) if wide else (52, 40, 40)
-    values = struct.unpack('<16sHHIQQQIHHHHHH' if wide else '<16sHHIIIIIHHHHHH', _range(data, 0, header_size))
-    if values[1:4] != (3, machine, 1) or values[11] != section_size or not values[12]:
-        raise ValueError('Expected ARM ET_DYN section metadata matching ELF width')
-    table = _range(data, values[6], values[12] * section_size)
-    sections = [struct.unpack_from('<IIQQQQIIQQ' if wide else '<IIIIIIIIII', table, at)
-                for at in range(0, len(table), section_size)]
+    header = _range(data, 0, 64)
+    if header[:7] != b'\x7fELF\x02\x01\x01':
+        raise ValueError('Expected little-endian ELF64')
+    values = struct.unpack('<16sHHIQQQIHHHHHH', header)
+    if values[1:4] != (3, 183, 1) or values[11] != 64 or not values[12]:
+        raise ValueError('Expected AArch64 ET_DYN section metadata')
+    table = _range(data, values[6], values[12] * 64)
+    sections = [struct.unpack_from('<IIQQQQIIQQ', table, at) for at in range(0, len(table), 64)]
     return sections, values[13]
 
 
@@ -39,13 +36,12 @@ def _string(table, offset):
 
 def _defined_names(data):
     sections, _ = _sections(data)
-    expected_stride = 24 if data[4] == 2 else 16
     names = set()
     for section in sections:
         _, kind, _, _, at, size, link, _, _, stride = section
         if kind not in (2, 11):
             continue
-        if stride != expected_stride or size % stride or link >= len(sections):
+        if stride != 24 or size % stride or link >= len(sections):
             raise ValueError('Invalid mini symbol table')
         strings = sections[link]
         if strings[1] != 3:
@@ -54,8 +50,7 @@ def _defined_names(data):
         symbols = _range(data, at, size)
         for offset in range(0, size, stride):
             # Read name/binding/section only. st_value and st_size are not used.
-            name = struct.unpack_from('<I', symbols, offset)[0]
-            index = struct.unpack_from('<H', symbols, offset + (6 if data[4] == 2 else 14))[0]
+            name, _, _, index = struct.unpack_from('<IBBH', symbols, offset)
             if index == 0:
                 continue
             names.add(_string(table, name))
@@ -87,11 +82,9 @@ def mini_symbol_inventory(data):
         raise ValueError('Truncated, trailing or oversized mini ELF stream')
     if decoder.check not in (lzma.CHECK_NONE, lzma.CHECK_CRC32, lzma.CHECK_CRC64):
         raise ValueError('Unsupported mini ELF integrity check')
-    if len(decoded) < 5 or decoded[4] != data[4]:
-        raise ValueError('Mini ELF width differs from outer ELF')
     names = _defined_names(decoded)
     inventory = (json.dumps(names, indent=2) + '\n').encode()
-    return names, {'present': True, 'format': 'XZ ELF' + ('64' if data[4] == 2 else '32') + ' named symbols',
+    return names, {'present': True, 'format': 'XZ ELF64 named symbols',
                    'compressedSha256': hashlib.sha256(compressed).hexdigest(),
                    'decodedSha256': hashlib.sha256(decoded).hexdigest(),
                    'nameInventorySha256': hashlib.sha256(inventory).hexdigest(),

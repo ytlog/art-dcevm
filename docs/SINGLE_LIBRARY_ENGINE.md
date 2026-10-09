@@ -1,6 +1,6 @@
 # 单一增强库的链接边界
 
-当前默认 NDK 构建在每个支持的 ABI 上生成一个增强库 `libartdcevm.so`。Android 13 / arm64 的完整演进代理与公开 JVMTI 后端都在这个库中；x86_64 使用公开后端。ShadowHook 由独立的 Maven/Prefab 依赖提供；debug 应用的测试支持库不属于生产演进引擎。这里的“单库”指增强引擎，不包括 Android 系统库、Hook 依赖和 debug 测试库。
+当前默认 NDK 构建仅为 arm64-v8a 生成一个增强库 `libartdcevm.so`。Android 13 / arm64 的完整演进代理与公开 JVMTI 后端都在这个库中。ShadowHook 由独立的 Maven/Prefab 依赖提供；debug 应用的测试支持库不属于生产演进引擎。这里的“单库”指增强引擎，不包括 Android 系统库、Hook 依赖和 debug 测试库。
 
 `source_engine/`、AOSP 构建器与源码锁文件已删除。构建不下载或编译 AOSP，不把 AOSP 对象文件并入主库，不生成或装载 `libartdcevm_source13.so`，也不需要 `-PsourceEngine13`。固定私有声明来自已核对的 Android 13 源码，保存在自有 ABI 头中；这些声明不是待编译的 AOSP 实现。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify width-specific fixed ART declarations without device capability claims."""
+"""Verify fixed 64-bit ART declarations without device capability claims."""
 import os
 from pathlib import Path
 import subprocess
@@ -25,7 +25,7 @@ ndk = os.environ.get('ANDROID_NDK_HOME')
 if ndk:
     toolchain = Path(ndk) / 'toolchains/llvm/prebuilt'
     prebuilt = next(toolchain.iterdir())
-    for target in ('armv7a-linux-androideabi30', 'aarch64-linux-android30', 'x86_64-linux-android30'):
+    for target in ('aarch64-linux-android30',):
         compiler = prebuilt / 'bin' / (target + '-clang++')
         obj = out / (target + '.o')
         subprocess.run([str(compiler), *common, '-c', str(source), '-o', str(obj)], check=True)

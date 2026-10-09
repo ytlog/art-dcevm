@@ -23,12 +23,12 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 
 | 路径 | 环境 | 能力 |
 | --- | --- | --- |
-| 公开 JVMTI | Android 11 / API 30 及以上，当前构建支持 arm64-v8a、x86_64 | 方法体替换；ART 暴露结构扩展时可经扩展入口新增成员 |
+| 公开 JVMTI | Android 11 / API 30 及以上，当前构建仅支持 arm64-v8a | 方法体替换；ART 暴露结构扩展时可经扩展入口新增成员 |
 | 增强结构演进 | 已匹配并校准的 Android 13 / API 33 / arm64 ART 构建 | 通过标准 `RedefineClasses` 使用上述结构演进功能 |
 
 目前完整演进的真机验证目标为 Xiaomi CAS，系统指纹为 `Xiaomi/cas/cas:13/TKQ1.221114.001/V816.0.4.0.TJJCNXM:user/release-keys`。启用条件还包括实际运行库的必需命名符号、独立 JNI receiver 和运行时行为校准（Build ID 仅记录证据）；同型号、同 Android 版本不等于兼容，系统或 ART 更新后也可能无法启用。
 
-Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)。x86_64 构建用于公开 JVMTI 验证，不提供完整结构演进。
+Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)。
 
 ## 快速开始
 
@@ -55,7 +55,7 @@ dependencies {
 }
 ```
 
-`com.github.ytlog:artdcevm` 是发布脚本默认坐标，当前尚未发布到 Maven Central。发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。当前默认发布包包含 arm64-v8a；公开 JVMTI 的 x86_64 测试包使用独立坐标 `com.github.ytlog:artdcevm-x86_64`。发布者操作见 [Maven 发布指南](docs/MAVEN_PUBLISHING.md)。
+`com.github.ytlog:artdcevm` 是发布脚本默认坐标，当前尚未发布到 Maven Central。发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。发布包仅包含 arm64-v8a。发布者操作见 [Maven 发布指南](docs/MAVEN_PUBLISHING.md)。
 
 发布前可通过源码模块接入。仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；需准备兼容的 JDK（17 或以上），并在本机 `local.properties` 中配置 `sdk.dir`。
 
@@ -67,7 +67,7 @@ cd art-dcevm
 ./gradlew :app:assembleDebug :artdcevm:assembleRelease
 ```
 
-产物分别为 `app/build/outputs/apk/debug/app-debug.apk` 和 `artdcevm/build/outputs/aar/artdcevm-release.aar`。构建 x86_64 版本时使用 `-PtargetAbi=x86_64`。
+产物分别为 `app/build/outputs/apk/debug/app-debug.apk` 和 `artdcevm/build/outputs/aar/artdcevm-release.aar`。
 
 在同一 Gradle 工程中接入源码模块：
 

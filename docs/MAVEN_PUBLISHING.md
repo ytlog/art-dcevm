@@ -4,7 +4,7 @@
 
 ## 坐标与构建
 
-默认坐标为 `com.github.ytlog:artdcevm:0.1.0-SNAPSHOT`。通过 `-PpublishGroupId`、`-PpublishArtifactId`、`-PpublishVersion` 覆盖；正式发布需使用已验证归属的 groupId 和明确版本。默认 ABI 为 arm64-v8a；`-PtargetAbi=x86_64` 会自动给 artifactId 添加 `-x86_64`，避免覆盖包含完整演进后端的 arm64 包。仅发布 release，禁止发布 `forceCheckedHandles` 测试构建。
+默认坐标为 `com.github.ytlog:artdcevm:0.1.0-SNAPSHOT`。通过 `-PpublishGroupId`、`-PpublishArtifactId`、`-PpublishVersion` 覆盖；正式发布需使用已验证归属的 groupId 和明确版本。仅支持 arm64-v8a。仅发布 release，禁止发布 `forceCheckedHandles` 测试构建。
 
 ## 本地验证
 

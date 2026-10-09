@@ -128,49 +128,6 @@ fixture.write_bytes(compressed_elf(lzma.compress(multi_header + multi_sections +
 assert run(fixture) == {'_Zglobal': '_Zglobal.__uniq.4', '_Zlto': '_Zlto.__uniq.77.llvm.88'}
 compressed_cases += 1
 
-# ARM32 fixed ELF records: symbol order/width differs from ELF64. st_value
-# includes a meaningless Thumb low bit; this parser returns names only.
-strings32 = b'\0'
-records32 = b'\0' * 16
-for name, binding in [('_Zarm.__uniq.123', 0), ('_Zthumb.__uniq.4.llvm.7', 0),
-                      ('_Zamb.__uniq.1', 0), ('_Zamb.__uniq.2', 0),
-                      ('_Zglobal32.__uniq.8', 1)]:
-    records32 += struct.pack('<IIIBBH', len(strings32), 0xffffffff, 0, binding * 16 + 2, 0, 1)
-    strings32 += name.encode() + b'\0'
-header32 = struct.pack('<16sHHIIIIIHHHHHH', b'\x7fELF\x01\x01\x01' + b'\0' * 9,
-                       3, 40, 1, 0, 0, 52, 0, 52, 0, 0, 40, 3, 0)
-sections32 = b'\0' * 40
-sections32 += struct.pack('<IIIIIIIIII', 0, 2, 0, 0, 172, len(records32), 2, 0, 4, 16)
-sections32 += struct.pack('<IIIIIIIIII', 0, 3, 0, 0, 172 + len(records32), len(strings32), 0, 0, 1, 0)
-data32 = header32 + sections32 + records32 + strings32
-arm32_fixture = out / "arm32-names.elf"
-arm32_fixture.write_bytes(data32)
-fixture.write_bytes(data32)
-expected32 = {'_Zarm': '_Zarm.__uniq.123', '_Zthumb': '_Zthumb.__uniq.4.llvm.7'}
-assert run(fixture) == expected32
-for offset, replacement in [(18, b'\xb7\0'), (5, b'\x02'), (32, b'\xff'*4),
-                            (40, b'\x01\0'), (52+40+24, b'\xff'*4),
-                            (52+40+36, b'\x01\0\0\0')]:
-    bad = bytearray(data32); bad[offset:offset+len(replacement)] = replacement
-    fixture.write_bytes(bad); assert run(fixture, 'reject') == {}
-    negative_count += 1
-
-def compressed_elf32(payload):
-    names = b'\0.shstrtab\0.gnu_debugdata\0'
-    h = struct.pack('<16sHHIIIIIHHHHHH', b'\x7fELF\x01\x01\x01'+b'\0'*9,
-                    3,40,1,0,0,52,0,52,0,0,40,3,1)
-    sec = b'\0'*40
-    sec += struct.pack('<IIIIIIIIII',1,3,0,0,172,len(names),0,0,1,0)
-    sec += struct.pack('<IIIIIIIIII',11,1,0,0,172+len(names),len(payload),0,0,1,0)
-    return h+sec+names+payload
-for check in (lzma.CHECK_CRC32, lzma.CHECK_CRC64):
-    fixture.write_bytes(compressed_elf32(lzma.compress(data32, check=check)))
-    assert run(fixture) == dict(expected32, _Zglobal32='_Zglobal32.__uniq.8')
-    compressed_cases += 1
-fixture.write_bytes(compressed_elf32(lzma.compress(data)))
-assert run(fixture, 'reject') == {}  # ELF32 outer must not accept ELF64 mini payload.
-compressed_cases += 1
-
 # Actual Android 14 LTO CheckJNI names: text-only inventory, no runtime bytes.
 observed = re.findall(r'"([^"\n]+)"', (root / 'tests/host/fixtures/android14_checkjni_names.h').read_text())
 assert len(observed) == 36
@@ -209,7 +166,9 @@ for manifest in args.manifests:
     devices.append(dict(manifest=str(manifest), uniqueNames=len(names), fieldGetInt=names.get(canonical)))
 report = dict(syntheticNegativeCases=negative_count, compressedCases=compressed_cases, devices=devices,
               result='Passed address/undefined sanitizers; unique names only, ambiguous names omitted')
-# Always exercise actual HookEngine name fallback on fixed ELF32.
+# Exercise actual HookEngine name fallback on fixed ELF64.
+arm64_fixture = out / "arm64-names.elf"
+arm64_fixture.write_bytes(data)
 integration = out / 'shadow-test'
 subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-O1', '-g',
                 '-DXZ_USE_CRC64', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
@@ -217,11 +176,11 @@ subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-O1', '-g',
                 str(root / 'tests/host/shadow_unique_symbol_test.cc'),
                 str(cpp / 'hooks/shadow_hook_engine.cc'),
                 str(cpp / 'support/elf_symbol_names.cc'), *xz_objects, '-o', str(integration)], check=True)
-synthetic = subprocess.run([str(integration), str(arm32_fixture), '_Zarm', '_Zarm.__uniq.123'],
+synthetic = subprocess.run([str(integration), str(arm64_fixture), '_Zlocal', '_Zlocal.__uniq.123'],
                            capture_output=True, text=True,
                            env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
 synthetic.check_returncode()
-report['shadowArm32Integration'] = synthetic.stdout.strip()
+report['shadowArm64Integration'] = synthetic.stdout.strip()
 if args.shadow_fixture:
     result = subprocess.run([str(integration), str(args.shadow_fixture)], capture_output=True, text=True,
                             env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))

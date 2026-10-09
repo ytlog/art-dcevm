@@ -232,11 +232,10 @@ python3 tools/android13/run-source-probe.py --serial DEVICE_001 --suite interfac
 
 ## 构建和测试
 
-需要 JDK 17、Android SDK 37、NDK 27.2.12479018、CMake 4.3.4。`local.properties` 中设置本机 `sdk.dir`。Gradle Wrapper 8.11.1，AGP 8.9.1。默认打包 arm64；`-PtargetAbi=x86_64` 构建模拟器 APK。两个 ABI 分开构建，因为 ShadowHook 的 Prefab 库只提供 arm 架构。
+需要 JDK 17、Android SDK 37、NDK 27.2.12479018、CMake 4.3.4。`local.properties` 中设置本机 `sdk.dir`。Gradle Wrapper 8.11.1，AGP 8.9.1。仅构建 arm64-v8a，Android 11–17 适配和验证均以 ARM64 设备为目标。
 
 ```sh
 ./gradlew :app:assembleDebug
-./gradlew :app:assembleDebug -PtargetAbi=x86_64
 python3 tools/run-public-jvmti.py --serial emulator-5554
 python3 tools/test-evolution-host.py
 python3 tools/run-device-tests.py --serial DEVICE_001
@@ -248,7 +247,7 @@ python3 tools/run-foreground-tests.py --serial DEVICE_001 --stress stock --round
 
 脚本仅安装并操作 `dev.artdcevm.lab`，每次测试先结束该应用进程，保证补丁从初始类开始。手机需允许 USB 安装。测试运行于普通应用 UID，未声明额外权限。报告会保存到 `build/evidence/runs/`；失败或进程崩溃时保留已经完成的检查。
 
-跨版本验证可先用 Android Studio 模拟器安装 x86_64 系统镜像，分别启动 API 30/34/35/36 AVD，再对各设备运行 `tools/run-public-jvmti.py`。这条路径只验证公开 JVMTI，不验证 ARM 私有 Hook。ARM 优先使用实体设备或 [Firebase Test Lab ARM 虚拟设备](https://firebase.google.com/docs/test-lab/android/avds)；先从[设备目录](https://firebase.google.com/docs/test-lab/android/available-testing-devices)选择支持 arm64 和目标 API 的型号，再运行独立的测试 APK：
+跨版本验证使用 ARM64 设备，ARM 优先使用实体设备或 [Firebase Test Lab ARM 虚拟设备](https://firebase.google.com/docs/test-lab/android/avds)；先从[设备目录](https://firebase.google.com/docs/test-lab/android/available-testing-devices)选择支持 arm64 和目标 API 的型号，再运行独立的测试 APK：
 
 ```sh
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest

@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--apk', default='app/build/outputs/apk/debug/app-debug.apk')
     parser.add_argument('--adb', default=shutil.which('adb'))
     parser.add_argument('--expected-sdk', type=int)
-    parser.add_argument('--expected-abi', choices=('arm64-v8a', 'x86_64'))
+    parser.add_argument('--expected-abi', choices=('arm64-v8a',), default='arm64-v8a')
     parser.add_argument('--expected-page-size', type=int, choices=(4096, 16384))
     parser.add_argument('--skip-install', action='store_true')
     parser.add_argument('--standard', action='store_true',

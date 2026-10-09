@@ -1,9 +1,9 @@
 #pragma once
 #include "platform/common/code_info_flag_schema.h"
-#include "platform/abi/android11/code_info_flags.h"
-#include "platform/abi/android14/code_info_flags.h"
-#include "platform/abi/android15/code_info_flags.h"
-#include "platform/abi/android17/code_info_flags.h"
+#include "platform/abi/arm64/android11/code_info_flags.h"
+#include "platform/abi/arm64/android14/code_info_flags.h"
+#include "platform/abi/arm64/android15/code_info_flags.h"
+#include "platform/abi/arm64/android17/code_info_flags.h"
 #include <optional>
 namespace artdcevm::code_info_flags {
 struct State {
