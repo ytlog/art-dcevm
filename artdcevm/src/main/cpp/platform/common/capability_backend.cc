@@ -52,7 +52,15 @@ int CapabilityBackend::InitializeCapabilities(JNIEnv* env,jobject calibration){
 std::string CapabilityBackend::Capabilities()const {
  OperationScope operation(operation_);
  if(!operation)return "{\"backend\":\"runtime-capabilities\",\"operationBusy\":true,\"evolutionError\":\"Runtime backend operation already in progress\"}";
- if(source_)return source_->Capabilities();
+ const std::string source_diagnostics=std::string(",\"sourceCapabilitiesCalibrated\":")+
+   (ready_&&common_&&common_->SourceCapabilitiesCalibrated()?"true":"false")+
+   ",\"frameGeometryCalibrated\":"+(ready_&&common_&&common_->FrameGeometryCalibrated()?"true":"false")+
+   ",\"sourceFactoryDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceFactoryDiagnostic():"production-source-owner-not-observed");
+ if(source_){
+  auto report=source_->Capabilities();
+  if(!report.empty()&&report.back()=='}'){report.pop_back();report+=source_diagnostics+"}";}
+  return report;
+ }
  const std::string public_report=public_->Capabilities();
  auto supported=[&](const char* key){return public_report.find(std::string("\"")+key+"\":true")!=std::string::npos;};
  std::string result="{\"backend\":\"runtime-capabilities\",\"attached\":"+std::string(vm_?"true":"false")+
@@ -62,7 +70,7 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"sourceStopCalibrated\":"+(ready_&&common_&&common_->SourceStopCalibrated()?"true":"false")+
    ",\"nativeScopeCalibrated\":"+(ready_&&common_&&common_->NativeScopeCalibrated()?"true":"false")+
    ",\"sourceStopDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceStopDiagnostic():"ordinary-source-lifecycle-not-observed")+
-   ",\"evolutionError\":"+QuoteJsonMutf8(error_)+",\"public\":"+public_report+"}";
+   source_diagnostics+",\"evolutionError\":"+QuoteJsonMutf8(error_)+",\"public\":"+public_report+"}";
  return result;
 }
 int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definitions){
