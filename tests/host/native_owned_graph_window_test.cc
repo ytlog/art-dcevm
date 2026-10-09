@@ -1,3 +1,4 @@
+#include "platform/common/rooted_schema_plan.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wreturn-type"
 #define ARTDCEVM_BATCH_BOUNDARY_NAME original_batch_boundary
@@ -8,7 +9,7 @@ namespace graph_window {
 using namespace artdcevm::native_owned_removal;
 std::map<jobject,std::vector<jobject>> managed;
 std::vector<jclass> staged;
-int driver=0,failures=0,graph_checks=0;bool original_ok=true,field_ok=true,late_child=false;
+int driver=0,failures=0,graph_checks=0;bool original_ok=true,field_ok=true,late_child=false,schema_mode=false,collected_provider_ok=true;
 jvmtiError recorded=JVMTI_ERROR_NONE;
 bool Original(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
 void Failure(void* d,jvmtiError code,const void* klass,const void* message){assert(d==&driver&&klass&&message&&!stopped);auto& text=*static_cast<const android13::BorrowedPlatformString*>(message);assert(text.length&&text.data);++failures;recorded=code;}
@@ -18,9 +19,19 @@ jsize Length(JNIEnv*,jarray array){Jni();return managed.at(array).size();}
 jobject Element(JNIEnv*,jobjectArray array,jsize index){Jni();return managed.at(array).at(index);}
 jint Vm(JNIEnv*,JavaVM** out){Jni();*out=reinterpret_cast<JavaVM*>(&runtime);return JNI_OK;}
 jclass ForbiddenFind(JNIEnv*,const char*){assert(false&&"Paused graph window cannot load classes");return nullptr;}
-bool Check(JNIEnv* env,jvmtiEnv*,const std::vector<jclass>& actual,void*,std::string* error){
+struct ReadonlyServices final:batch_boundary::CommitServices {
+ explicit ReadonlyServices(const source_commit::Plan& p):CommitServices(p){}
+ bool Validate(const source_commit::Plan& p)const override {assert(!stopped&&&p==plan&&p.old_classes.size()==2&&p.class_root_origins.size()==2);return collected_provider_ok;}
+};
+std::unique_ptr<source_commit::Services> PrepareReadonly(const source_commit::Plan& p,void*,std::string*){assert(!stopped);++batch_boundary::prepared;return std::make_unique<ReadonlyServices>(p);}
+bool Check(JNIEnv* env,jvmtiEnv*,const std::vector<jclass>& actual,const RootedGraph& graph,GraphWindow window,void*,std::string* error){
+ if(!schema_mode)assert(graph.partitions.empty());else {assert(graph.mirror&&graph.partitions.size()==2);for(size_t n=0;n<graph.partitions.size();++n){const auto& p=graph.partitions[n];assert(p.holder_index==n&&p.class_count==1&&p.old_classes&&p.new_classes);assert(p.new_classes==batch_boundary::partitions[n].plan.new_classes_root);assert(p.instance_count==(window==GraphWindow::Collected?1u:0u));}}assert(window==(graph_checks==0?GraphWindow::Verified:GraphWindow::Collected));
  ++graph_checks;if(actual.size()!=staged.size()||!field_ok){*error="Unstaged child or changed field proof";return false;}
  for(auto klass:actual){size_t matches=0;for(auto candidate:staged)matches+=env->IsSameObject(klass,candidate);if(matches!=1){*error="Class namespace mismatch";return false;}}
+ if(schema_mode&&window==GraphWindow::Collected){source_commit::Plan plan;plan.mirror=graph.mirror;plan.new_classes_root=graph.partitions[0].new_classes;
+  for(size_t n=0;n<graph.partitions.size();++n){const auto& part=batch_boundary::partitions[n].plan;plan.old_classes.push_back(part.old_classes[0]);plan.new_classes.push_back(part.new_classes[0]);plan.class_root_origins.push_back({graph.partitions[n].new_classes,0});}
+  if(!rooted_schema_plan::ValidateCollected(plan,PrepareReadonly,nullptr,error))return false;
+ }
  return true;
 }
 bool Collect(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(late_child)field_ok=false;return true;}
@@ -34,7 +45,13 @@ void Build(const std::vector<Definition>& definitions){
  auto& slots=managed[reinterpret_cast<jobject>(array)];slots.resize(definitions.size()*abi::arm64::android11::kRootSlots);
  for(size_t n=0;n<definitions.size();++n){batch_boundary::owners[n].driver=&driver;
   auto old=static_cast<jclass>(batch_boundary::partitions[n].plan.old_classes[0]);staged.push_back(old);
-  auto objects=reinterpret_cast<jobject>(heap.New(16));managed[objects]={old};slots[n*13+11]=objects;}
+  auto objects=reinterpret_cast<jobject>(heap.New(16));managed[objects]={old};slots[n*13+11]=objects;
+  if(schema_mode){const auto& plan=batch_boundary::partitions[n].plan;
+   slots[n*13+4]=reinterpret_cast<jobject>(batch_boundary::partitions[0].plan.mirror);
+   auto next=reinterpret_cast<jobject>(plan.new_classes_root);managed[next]={reinterpret_cast<jobject>(plan.new_classes[0])};slots[n*13+12]=next;
+   for(size_t slot=9;slot<=10;++slot){auto instances=reinterpret_cast<jobject>(heap.New(16));managed[instances]={reinterpret_cast<jobject>((slot==9?plan.old_instances:plan.new_instances)[0])};slots[n*13+slot]=instances;}
+  }}
+ for(const auto& pair:managed){if(pair.first==reinterpret_cast<jobject>(array))continue;Put32(pair.first,8,uint32_t(pair.second.size()));if(pair.second.size()==1)Put32(pair.first,12,uint32_t(uintptr_t(pair.second[0])));}
 }
 }
 int main(int argc,char** argv){
@@ -62,6 +79,32 @@ int main(int argc,char** argv){
  Reset();graph_window::Build(definitions);proof_ok=false;assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&entries==0&&graph_checks==0);
  Reset();graph_window::Build(definitions);late_child=true;assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&recorded==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&begins==0&&prepared==0);
  Reset();graph_window::Build(definitions);original_ok=false;assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&recorded==JVMTI_ERROR_FAILS_VERIFICATION&&failures==0&&begins==0&&graph_checks==0);
+ // Identical declarations still enter complete schema mode (body replacement),
+ // capturing actual paired Holder arrays at both refundable source windows.
+ schema_mode=true;provider.schema_evolution=true;for(auto& definition:definitions)live[definition.klass]=schema;
+ Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&begins==1&&prepared==2);
+ collected_provider_ok=false;Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&prepared==1&&begins==0&&replacements==0&&original_commits==0);collected_provider_ok=true;
+ for(int mode=0;mode<3;++mode){Reset();graph_window::Build(definitions);auto root=reinterpret_cast<jobject>(uintptr_t(*holder.array_handle));
+  if(mode==0)managed[managed[root][12]].clear();
+  if(mode==1)managed[managed[root][10]].clear();
+  if(mode==2)managed[root][4]=nullptr;
+  assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&begins==0&&prepared==0&&failures==1);
+ }
+ // Production's actual rooted-plan reader re-decodes the same strong global
+ // arrays after simulated moving GC and preserves the actual origin partition.
+ Reset();graph_window::Build(definitions);auto holder_root=reinterpret_cast<jobject>(uintptr_t(*holder.array_handle));RootedGraph graph;
+ graph.mirror=static_cast<jclass>(managed[holder_root][4]);
+ for(size_t n=0;n<2;++n)graph.partitions.push_back({static_cast<jobjectArray>(managed[holder_root][n*13+11]),static_cast<jobjectArray>(managed[holder_root][n*13+12]),static_cast<jobjectArray>(managed[holder_root][n*13+9]),static_cast<jobjectArray>(managed[holder_root][n*13+10]),n,1,1});
+ std::map<jobject,void*> decoded;for(const auto& pair:managed)decoded[pair.first]=pair.first;decoded[graph.mirror]=graph.mirror;
+ rooted_schema_plan::Reader reader{&decoded,
+  [](void* state,jobject root,void** out){auto& map=*static_cast<std::map<jobject,void*>*>(state);auto it=map.find(root);if(it==map.end())return false;*out=it->second;return true;},
+  [](void*,const void* value,size_t bytes){size_t extent=0;return method_identity::ReadableMappingExtent(value,&extent)&&bytes<=extent;},
+  [](void*,void* array,size_t offset)->void*{return reinterpret_cast<void*>(uintptr_t(Read32(array,offset)));}};
+ source_commit::Plan old_plan,new_plan;assert(rooted_schema_plan::Read(graph,true,reader,&old_plan,&error));
+ auto moved_array=heap.New(16),moved_class=heap.New(16);Put32(moved_array,8,1);Put32(moved_array,12,uint32_t(uintptr_t(moved_class)));decoded[graph.partitions[1].new_classes]=moved_array;
+ assert(rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes[1]==moved_class&&new_plan.class_root_origins[1].array==moved_array&&new_plan.class_root_origins[1].index==0&&old_plan.new_classes[1]!=new_plan.new_classes[1]);
+ auto unchanged=new_plan.new_classes;Put32(moved_array,8,2);assert(!rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes==unchanged);
+ assert(!rooted_schema_plan::Read(graph,false,reader,&new_plan,&error));
  before_commit=nullptr;before_commit_result=nullptr;
- puts("Actual graph window TU: paused rooted graph bijection, raced/duplicate/missing child and stale field rejection before publication, original RecordFailure result and no class-loading JNI PASS");
+ puts("Actual graph window TU: schema paired Class/instance roots, moving-pointer reseal, exact origins, readonly Collected provider refusal before Update, raced/duplicate/missing child refusal and original failure result PASS");
 }

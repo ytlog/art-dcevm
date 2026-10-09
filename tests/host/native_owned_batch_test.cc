@@ -29,7 +29,7 @@ void OriginalCommit(void*,const void*){++original_commits;}
 void Record(void*){}
 bool Ready(void*){return true;}
 bool Preflight(JNIEnv*,jvmtiEnv*,const std::vector<Definition>& values,void*,std::string*){assert(!stopped&&values.size()==partitions.size());++preflights;return proof_ok;}
-struct CommitServices final:source_commit::Services {
+struct CommitServices:source_commit::Services {
  const source_commit::Plan* plan;
  explicit CommitServices(const source_commit::Plan& p):plan(&p){}
  bool Validate(const source_commit::Plan& p)const override{assert(&p==plan&&stopped);operations.push_back("validate");if(descendant_mode){assert(p.old_classes.size()==2&&p.new_classes.size()==2);assert(Read32(p.old_classes[1],offsetof(class_metadata::Class17,super_class))==uintptr_t(p.old_classes[0]));assert(Read32(p.new_classes[1],offsetof(class_metadata::Class17,super_class))==uintptr_t(p.new_classes[0]));}

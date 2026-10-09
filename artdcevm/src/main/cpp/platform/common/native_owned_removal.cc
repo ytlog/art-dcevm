@@ -1,5 +1,6 @@
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/native_removal_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include "platform/android13/schema_snapshot.h"
@@ -65,7 +66,7 @@ Item* Matches(void* owner){
 }
 bool Fields(void* owner){if(!active||!active->provider->allow_field_removal||!Matches(owner))return reinterpret_cast<Check>(fields_original)(owner);record_fields(owner);return true;}
 bool Methods(void* owner){if(!Matches(owner))return reinterpret_cast<Check>(methods_original)(owner);record_methods(owner);return true;}
-bool CaptureGraph(void* driver,transaction_root::Holder* raw){
+bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
  if(!active||!active->provider->closed_graph)return true;
  auto& request=*active;std::string error;
  const auto reject=[&](const char* reason){
@@ -94,14 +95,31 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw){
     size_t(slots)/abi::arm64::android11::kRootSlots!=request.items.size()||
     !transaction_root::ReadMetadata(holder,request.items.size(),transaction_root::OwnerFamily::kAndroid15,&metadata)||
     !Mapped(metadata.initial_structural.begin,8*((metadata.count+63)/64)))return reject("Precommit root partition disagrees with whole batch");
+ RootedGraph graph;std::vector<jobject> arrays;
+ struct ArrayLocals {JNIEnv* env;std::vector<jobject>& values;~ArrayLocals(){for(auto value:values)env->DeleteLocalRef(value);}} array_locals{request.env,arrays};
  std::vector<jclass> classes;
  struct Locals {JNIEnv* env;std::vector<jclass>& values;~Locals(){for(auto value:values)env->DeleteLocalRef(value);}} locals{request.env,classes};
  for(size_t index=0;index<metadata.count;++index){
   if(!transaction_root::Bit(metadata.initial_structural,index))continue;
   jobject objects=request.env->GetObjectArrayElement(static_cast<jobjectArray>(global),index*abi::arm64::android11::kRootSlots+abi::arm64::android11::kOldClassesSlot);
   if(request.env->ExceptionCheck()||!objects)return reject("Initial island is missing actual oldClasses roots");
-  struct Local {JNIEnv* env;jobject value;~Local(){env->DeleteLocalRef(value);}} local{request.env,objects};
+  arrays.push_back(objects);
   const jsize count=request.env->GetArrayLength(static_cast<jarray>(objects));
+  if(request.provider->schema_evolution){
+  auto replacements=static_cast<jobjectArray>(request.env->GetObjectArrayElement(static_cast<jobjectArray>(global),index*abi::arm64::android11::kRootSlots+abi::arm64::android11::kNewClassesSlot));
+  if(request.env->ExceptionCheck()||!replacements)return reject("Missing replacement Class Holder partition");arrays.push_back(replacements);
+  if(request.env->GetArrayLength(replacements)!=count)return reject("Mismatched original/replacement Class partition");
+  RootedPartition partition{static_cast<jobjectArray>(objects),replacements,nullptr,nullptr,index,size_t(count),0};
+  if(!graph.mirror){graph.mirror=static_cast<jclass>(request.env->GetObjectArrayElement(static_cast<jobjectArray>(global),index*abi::arm64::android11::kRootSlots+abi::arm64::android11::kMirrorSlot));if(!graph.mirror||request.env->ExceptionCheck())return reject("Missing source mirror Class");arrays.push_back(graph.mirror);}
+  if(window==GraphWindow::Collected){
+    partition.old_instances=static_cast<jobjectArray>(request.env->GetObjectArrayElement(static_cast<jobjectArray>(global),index*abi::arm64::android11::kRootSlots+abi::arm64::android11::kOldInstancesSlot));
+    partition.new_instances=static_cast<jobjectArray>(request.env->GetObjectArrayElement(static_cast<jobjectArray>(global),index*abi::arm64::android11::kRootSlots+abi::arm64::android11::kNewInstancesSlot));
+    if(partition.old_instances)arrays.push_back(partition.old_instances);if(partition.new_instances)arrays.push_back(partition.new_instances);
+    if(request.env->ExceptionCheck()||bool(partition.old_instances)!=bool(partition.new_instances))return reject("Mismatched instance Holder partitions");
+    if(partition.old_instances){const jsize instances=request.env->GetArrayLength(partition.old_instances);if(instances<0||request.env->GetArrayLength(partition.new_instances)!=instances||request.env->ExceptionCheck())return reject("Mismatched instance Holder lengths");partition.instance_count=size_t(instances);}
+  }
+  graph.partitions.push_back(partition);
+  }
   if(request.env->ExceptionCheck()||count<=0)return reject("Empty affected Class island");
   for(jsize n=0;n<count;++n){
    auto klass=static_cast<jclass>(request.env->GetObjectArrayElement(static_cast<jobjectArray>(objects),n));
@@ -111,12 +129,12 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw){
    classes.push_back(klass);
   }
  }
- if(classes.empty()||!request.provider->closed_graph(request.env,request.jvmti,classes,request.provider->state,&error))
+ if(classes.empty()||!request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error))
   return reject(error.empty()?"Affected Class graph was not independently staged":error.c_str());
  request.graph_verified=true;return true;
 }
-bool GuardGraph(void* driver,transaction_root::Holder* raw){
- try{return CaptureGraph(driver,raw);}
+bool GuardGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
+ try{return CaptureGraph(driver,raw,window);}
  catch(const std::bad_alloc&){
   android13::BorrowedPlatformString signature("OWNED BATCH"),message("Precommit graph staging exhausted native memory");
   failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&signature,&message);return false;
@@ -126,13 +144,13 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
  if(!verified_original(driver,raw))return false;
  if(active&&active->provider->closed_graph&&active->graph_verified){
   android13::BorrowedPlatformString signature("OWNED BATCH"),message("Repeated verification boundary");failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;}
- return GuardGraph(driver,raw);
+ return GuardGraph(driver,raw,GraphWindow::Verified);
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  if(!collect_original(driver,raw))return false;
  if(!active||!active->provider->closed_graph)return true;
  if(!active->graph_verified||active->graph_sealed){android13::BorrowedPlatformString signature("OWNED BATCH"),message("Invalid final rejectable boundary");failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;}
- if(!GuardGraph(driver,raw))return false;
+ if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
  active->graph_sealed=true;return true;
 }
 void Update(void* owner,const void* iterator){
@@ -246,7 +264,16 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
     if(definition.dex.empty()||definition.dex.size()>INT32_MAX||!evolution::ReadDexDeclarations(definition.dex,&next,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
     const int read=android13::ReadLiveSchema(jvmti,env,definition.klass,&old,error);
     if(read!=JVMTI_ERROR_NONE)return static_cast<jvmtiError>(read);
-    if(!ValidateRemoval(old,next,provider.allow_field_removal,error,false))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
+    if(provider.schema_evolution){
+      native_schema_policy::Plan schema;
+      if(!provider.closed_graph||!native_schema_policy::Plan::Prepare(old,next,&schema,error))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
+      // Preserve the complete original CheckClass including its family's lock
+      // semantics. Class flag evolution requires a separate guarded adapter.
+      if(native_schema_policy::JavaFlags(old.access)!=native_schema_policy::JavaFlags(next.access)){
+        if(error)*error="Class modifier changes require the independently proven CheckClass owner";
+        return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
+      }
+    }else if(!ValidateRemoval(old,next,provider.allow_field_removal,error,false))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
     jobject loader=nullptr;const auto loader_error=jvmti->GetClassLoader(definition.klass,&loader);
     if(loader_error!=JVMTI_ERROR_NONE)return loader_error;
     bool duplicate=false;for(const auto& name:names)if(name.descriptor==old.descriptor&&env->IsSameObject(name.loader,loader))duplicate=true;
@@ -257,7 +284,7 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
       std::any_of(next.methods.begin(),next.methods.end(),[](const auto& member){return !(member.access&(0x8u|0x2u))&&member.name!="<init>"&&member.name!="<clinit>";});
     request.items.push_back(item);
   }
-  if(!removed){if(error)*error="Owned batch requires at least one actual member removal";return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;}
+  if(!removed&&!provider.schema_evolution){if(error)*error="Owned batch requires at least one actual member removal";return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;}
   if(provider.preflight&&!provider.preflight(env,jvmti,definitions,provider.state,error))return JVMTI_ERROR_NOT_AVAILABLE;
   jint count=0;jvmtiExtensionFunctionInfo* functions=nullptr;Structural structural=nullptr;
   const auto extension_error=jvmti->GetExtensionFunctions(&count,&functions);

@@ -12,7 +12,7 @@ namespace artdcevm::native_schema_guard_verifier {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 constexpr size_t absent=SIZE_MAX;
-constexpr uint32_t skip_access_checks=0x00080000u,native_flag=0x100u,intrinsic_flag=0x80000000u;
+constexpr uint32_t skip_access_checks=0x00080000u,native_flag=0x100u;
 struct Node {
  jclass root=nullptr;jobject loader=nullptr;
  evolution::ClassSchema schema;
@@ -73,7 +73,7 @@ struct Verifier::State {
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
  mutable std::vector<uint32_t*> access_slots;
- mutable bool access_proven=false;
+ mutable bool access_proven=false,final_fields_proven=false,aliases_proven=false;
  bool Roots(Snapshot* out,std::string* error)const{
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
@@ -197,7 +197,8 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  if(window==Window::Verified)s.verified=true;else s.collected=true;return true;
 }
 bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
- auto& s=*state_;if(!s.collected||s.sealed||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
+ auto& s=*state_;if(!s.collected||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
+ s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();
  Snapshot roots;if(!s.Roots(&roots,error))return false;
  const auto Mapped=[&](const void* address,size_t bytes){return address&&s.bindings.readable(s.bindings.owner,address,bytes);};
  size_t count=0;for(size_t n=0;n<s.nodes.size();++n)if(s.nodes[n].affected){++count;if(std::count(transaction.old_classes.begin(),transaction.old_classes.end(),roots.classes[n])!=1)return Fail(error,"Native Holder Class is outside public affected graph");}
@@ -213,7 +214,9 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
   std::set<void*> observed;for(size_t i=0;i<expected.size();++i){void* value=s.bindings.metadata->Reference(table,12+i*8);if(!expected.count(value)||!observed.insert(value).second)return Fail(error,"Source IfTable contains a different interface identity");}
   positive|=expected.size()>=2;negative|=expected.empty();
  }
- if(!positive||!negative)return Fail(error,"Whole graph lacks independent positive and empty interface oracles");s.interfaces_proven=true;s.expected=transaction;s.sealed=true;return true;
+ if(!positive||!negative)return Fail(error,"Whole graph lacks independent positive and empty interface oracles");
+ if(s.bindings.final_fields){if(!s.bindings.final_fields->VerifyAliases(transaction,error))return false;s.aliases_proven=true;}
+ s.interfaces_proven=true;s.expected=transaction;s.sealed=true;return true;
 }
 bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* loader,const native_schema_policy::Requirement& requirement,std::string* error)const{
  auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||pair>=transaction.old_classes.size()||!SamePlan(transaction,s.expected))return Fail(error,"Schema guard has no exact sealed native Holder proof");
@@ -253,14 +256,17 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
    if(requirement.kind==Kind::AbstractMethodDependents)return s.bindings.abstract_instances&&s.bindings.abstract_instances->Ready()&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,error);return true;
   }
   case Kind::ExistingInstances:return s.bindings.abstract_instances&&s.bindings.abstract_instances->Ready()&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,error);
-  case Kind::FinalFields:return s.bindings.final_fields&&s.bindings.final_fields->Verify(transaction,pair,loader,before,after,requirement,error);
+  case Kind::FinalFields:
+   if(!s.bindings.final_fields||!s.bindings.final_fields->Verify(transaction,pair,loader,before,after,requirement,error))return false;
+   s.final_fields_proven=true;return true;
   case Kind::InterfaceIdentities:return s.Interfaces(roots,transaction,error);
   case Kind::AccessPermissions:{
-   std::vector<uint32_t*> slots;for(const auto& methods:roots.all_methods)for(void* method:methods){uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&(native_flag|intrinsic_flag)))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}
+   if(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(transaction,error))return Fail(error,"Access permission changes require the proven process interpreter/deopt owner");
+   std::vector<uint32_t*> slots;for(const auto& methods:roots.all_methods)for(void* method:methods){uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&native_flag)&&(flags&skip_access_checks))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}
    // Include newly allocated tables: their verifier may have enabled shortcuts
    // using the old public flags. Complete native schema validation supplies the
    // exact source arena even when added members have no old public JNI ID.
-   for(void* klass:transaction.new_classes){evolution::ClassSchema schema;native_method_table::View table;if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,klass,&schema,error,&table))return false;for(uint32_t i=0;i<table.methods.count;++i){void* method=table.methods.At(i);const uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&(native_flag|intrinsic_flag)))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}}
+   for(void* klass:transaction.new_classes){evolution::ClassSchema schema;native_method_table::View table;if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,klass,&schema,error,&table))return false;for(uint32_t i=0;i<table.methods.count;++i){void* method=table.methods.At(i);const uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&native_flag)&&(flags&skip_access_checks))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}}
    std::sort(slots.begin(),slots.end());slots.erase(std::unique(slots.begin(),slots.end()),slots.end());
    for(auto slot:slots)if(reinterpret_cast<uintptr_t>(slot)%alignof(uint32_t)||!s.bindings.writable(s.bindings.owner,slot,sizeof(uint32_t)))return Fail(error,"A loaded caller access flag cannot be atomically updated in its rooted arena");
    s.access_slots=std::move(slots);s.access_proven=true;return true;
@@ -270,6 +276,7 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
 }
 void Verifier::BeginCommit(const source_commit::Plan& transaction)const{
  const auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))std::abort();
- if(s.access_proven)for(auto slot:s.access_slots)__atomic_fetch_and(slot,~skip_access_checks,__ATOMIC_RELAXED);
+ if(s.access_proven){s.bindings.access_permissions->BeginCommit(transaction);for(auto slot:s.access_slots)__atomic_fetch_and(slot,~skip_access_checks,__ATOMIC_RELAXED);}
+ if(s.final_fields_proven||s.aliases_proven)s.bindings.final_fields->BeginCommit(transaction);
 }
 }

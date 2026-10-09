@@ -7,7 +7,9 @@ public final class AbstractVTableOracle {
     public abstract static class Complete extends Incomplete {
         @Override public int value() { return 41; }
     }
-    public static final class Concrete extends Complete {}
+    public static final class Concrete extends Complete {
+        @Override public int value() { return 41; }
+    }
     public static class VirtualBase { public int dispatch() { return 31; } }
     public static final class VirtualChild extends VirtualBase {
         @Override public int dispatch() { return 43; }
@@ -35,7 +37,8 @@ public final class AbstractVTableOracle {
     public static Object[] create() throws ReflectiveOperationException {
         checkOriginalLookups();
         if (new Concrete().value() != 41) throw new IllegalStateException("Original complete call differs");
-        return new Object[] {Incomplete.class, Complete.class,
-            Incomplete.class.getDeclaredMethod("value"), Complete.class.getDeclaredMethod("value")};
+        return new Object[] {Incomplete.class, Complete.class, Concrete.class,
+            Incomplete.class.getDeclaredMethod("value"), Complete.class.getDeclaredMethod("value"),
+            Concrete.class.getDeclaredMethod("value")};
     }
 }

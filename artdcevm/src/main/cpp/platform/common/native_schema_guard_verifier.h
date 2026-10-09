@@ -15,6 +15,16 @@ class FinalFields {
   virtual bool Verify(const source_commit::Plan&,size_t,void* loader,
       const evolution::ClassSchema&,const evolution::ClassSchema&,
       const native_schema_policy::Requirement&,std::string*)const=0;
+  virtual bool VerifyAliases(const source_commit::Plan&,std::string*)const=0;
+  virtual void BeginCommit(const source_commit::Plan&)const=0;
+};
+class AccessPermissions {
+ public:
+  virtual ~AccessPermissions()=default;
+  // Proven process interpreter/deopt owner must cover future compiled/AOT
+  // dispatch as well as currently active frames; flags alone are insufficient.
+  virtual bool Verify(const source_commit::Plan&,std::string*)const=0;
+  virtual void BeginCommit(const source_commit::Plan&)const=0;
 };
 struct Bindings {
   JavaVM* vm=nullptr;
@@ -22,6 +32,7 @@ struct Bindings {
   const method_identity::Calibration* methods=nullptr;
   const native_abstract_instances::Service* abstract_instances=nullptr;
   const FinalFields* final_fields=nullptr;
+  const AccessPermissions* access_permissions=nullptr;
   void* owner=nullptr;
   // Existing independently calibrated process owner; only the original
   // Runnable/native-rooted scope may call these. No JNI or suspension inside.

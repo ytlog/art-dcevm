@@ -15,6 +15,7 @@ class Service {
   bool Ready()const{return metadata_!=nullptr;}
  private:
   const modern_field_metadata::FieldMetadata* metadata_=nullptr;
+  size_t embedded_prefix_=0;
   method_identity::Model method_model_=method_identity::Model::kMethod12Onward;
 };
 }

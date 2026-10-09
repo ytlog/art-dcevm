@@ -6,6 +6,15 @@
 namespace artdcevm::native_owned_removal {
 // Provider bootstrap owns all dependencies/retirement registries for the entire
 // synchronous call. Preparation receives actual ART-rooted old/new objects.
+enum class GraphWindow {Verified,Collected};
+struct RootedPartition {
+  // Borrowed JNI locals rooted by CaptureGraph's actual Holder arrays. No
+  // synthetic arrays and no native pointers survive this callback.
+  jobjectArray old_classes=nullptr,new_classes=nullptr;
+  jobjectArray old_instances=nullptr,new_instances=nullptr;
+  size_t holder_index=0,class_count=0,instance_count=0;
+};
+struct RootedGraph {jclass mirror=nullptr;std::vector<RootedPartition> partitions;};
 struct Provider {
   bool (*ready)(void*)=nullptr;
   std::unique_ptr<source_commit::Services> (*prepare)(
@@ -16,13 +25,17 @@ struct Provider {
   // Required for multiple targets. The production owner independently checks
   // all original DEX provenance and stages every field alias before heap entry.
   bool (*preflight)(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,void*,std::string*)=nullptr;
-  // Called only at the original post-verification class-loading pause, before
-  // allocations pause / irreversible publication. Borrowed JNI Class locals.
-  bool (*closed_graph)(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,void*,std::string*)=nullptr;
+  // Called at both original refundable source booleans: post verification
+  // and completed instance collection. Borrowed actual Holder JNI locals.
+  bool (*closed_graph)(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,const RootedGraph&,GraphWindow,void*,std::string*)=nullptr;
+  // Requests complete source-owned policy validation. Original CheckClass and
+  // CheckRedefinable remain authoritative until their separate guard adapter.
+  bool schema_evolution=false;
 };
-// Narrow source entry: removes existing members with unchanged hierarchy
-// and modifiers. Original CheckClass/CheckRedefinable still run. Does not grant
-// general additions/modifier/hierarchy evolution or select an ABI from the SDK.
+// Default entry removes members with unchanged hierarchy and modifiers.
+// Schema mode requires the complete rooted provider in both source windows.
+// Original CheckClass/CheckRedefinable still retain their Class/hierarchy checks;
+// no API number grants private ABI or unproved permission capabilities.
 // A batch may include unchanged-declaration body replacements, provided at least
 // one target removes a member; ART still verifies every incoming method body.
 bool Install(HookEngine&,std::string* error);
