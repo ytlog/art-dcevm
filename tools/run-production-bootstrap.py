@@ -4,7 +4,7 @@ import argparse,hashlib,json,pathlib,subprocess,sys,uuid,re
 from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
 from timeout_diagnostics import collect_timeout_diagnostics
 from evidence_paths import new_evidence_directory
-from production_bootstrap_report import validate_production_bootstrap
+from production_bootstrap_report import validate_production_bootstrap_payload
 p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk',required=True);p.add_argument('--foreground',action='store_true',help='Require same-process foreground carrier evidence');p.add_argument('--require-fields',action='store_true',help='Require formal field removal, cached JNI/reflection/MethodHandle/VarHandle coverage and retained state');a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1];out=new_evidence_directory(root/'build/evidence/production-bootstrap','run')
 run_id=uuid.uuid4().hex
@@ -52,8 +52,14 @@ try:
  stopped=adb('stop','shell','am','force-stop','dev.artdcevm.lab');stopped.check_returncode()
  instrumentation_started=True
  result=adb('instrumentation','shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionCapabilitiesTest','-e','productionRunId',run_id,*(['-e','foreground','true'] if a.foreground else []),'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner');result.check_returncode()
- logs=adb('device','logcat','-d','-s','ArtDcevmProduction:I','artdcevm:E','AndroidRuntime:E');logs.check_returncode()
- transaction=validate_production_bootstrap(result.stdout,logs.stdout,run_id,require_fields=a.require_fields,require_foreground=a.foreground)
+ persisted=adb('transaction-file','exec-out','run-as','dev.artdcevm.lab','cat','files/production-bootstrap/'+run_id+'.json',timeout=15);persisted.check_returncode()
+ transaction=validate_production_bootstrap_payload(result.stdout,persisted.stdout,run_id,require_fields=a.require_fields,require_foreground=a.foreground)
+ report['reportFileCaptured']=True
+ # Logcat is diagnostic only: large valid transaction JSON may be truncated by Android.
+ try:
+  logs=adb('device','logcat','-d','-s','ArtDcevmProduction:I','artdcevm:E','AndroidRuntime:E',timeout=15)
+  report['deviceLogExitCode']=logs.returncode
+ except (OSError,subprocess.SubprocessError) as log_error:report['deviceLogError']=str(log_error)
  report['transaction']=transaction
  (out/'transaction.json').write_text(json.dumps(transaction,indent=2)+'\n')
  report['passed']=True

@@ -4,6 +4,11 @@ import android.content.Intent;
 import android.app.Instrumentation;
 import android.os.Process;
 import android.util.Log;
+import android.util.AtomicFile;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.Evolving;
@@ -139,6 +144,13 @@ report.put("runId",runId).put("cachedReflectionRejected",true).put("retainedIden
                 validForeground=resumed&&pauses==0&&finished;
             }
             phases.mark("production.finish");
+            File directory=new File(context.getFilesDir(),"production-bootstrap");
+            if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Cannot create production report directory");
+            AtomicFile file=new AtomicFile(new File(directory,runId+".json"));
+            FileOutputStream stream=null;
+            try {
+                stream=file.startWrite();stream.write(report.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(stream);
+            } catch(IOException error) {file.failWrite(stream);throw error;}
             Log.i("ArtDcevmProduction",report.toString());
             if(completed)assertTrue("Foreground carrier lost foreground or failed to finish",validForeground);
         }
