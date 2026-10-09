@@ -49,17 +49,36 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   if(error)error->clear();return true;
 }
 bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error)const {
+  // Fixed legacy Class/DexCache/DexFile declarations, used only after the
+  // reflected field's native identity and declaring Class have been established.
+  // The ordinary split candidate must match every independent fixture field.
+  void* klass=root_(field);size_t extent=0;
+  const auto& source=Source(model);
+  if(!klass||!method_identity::ReadableMappingExtent(klass,&extent)||extent<source.fields.class_size)
+    return Fail(error,"Field declaring Class source prefix is not readable");
+  uint32_t flags=0;std::memcpy(&flags,static_cast<const unsigned char*>(klass)+source.access_flags,4);
+  // Fixed ArtField::IsProxyField/GetName/GetTypeDescriptor: only the rooted
+  // declaring Class proxy flag selects these two synthetic static fields.
+  // Their index is not an ordinary DEX FieldId. Public declared-field identity
+  // remains independently compared by Candidate and the member graph verifier.
+  if(flags&0x40000u){
+    uint32_t index=0;std::memcpy(&index,static_cast<const unsigned char*>(field)+offsetof(field_array::Field,dex_field_index),4);
+    if(!(field_array::Flags(field)&8u)||index>=2)
+      return Fail(error,"Proxy field differs from fixed static index declaration");
+    const char* source_name=index==0?"interfaces":"throws";
+    const char* source_descriptor=index==0?"[Ljava/lang/Class;":"[[Ljava/lang/Class;";
+    if(name_&&descriptor_){
+      *name=name_(field);*descriptor=descriptor_(field);
+      if(!*name||!*descriptor||std::strcmp(*name,source_name)||std::strcmp(*descriptor,source_descriptor))
+        return Fail(error,"Named proxy field text differs from fixed source declaration");
+    }else{*name=source_name;*descriptor=source_descriptor;}
+    return true;
+  }
   if(name_&&descriptor_) {
     *name=name_(field);*descriptor=descriptor_(field);
     return (*name&&*descriptor)||Fail(error,"Named field text is absent");
   }
-  // Fixed legacy Class/DexCache/DexFile declarations, used only after the
-  // reflected field's native identity and declaring Class have been established.
-  // The ordinary split candidate must match every independent fixture field.
   if(model!=Model::kSplit)return Fail(error,"Merged fields require named text services");
-  void* klass=root_(field);size_t extent=0;
-  if(!klass||!method_identity::ReadableMappingExtent(klass,&extent)||extent<sizeof(SplitClass))
-    return Fail(error,"Legacy declaring Class is not readable");
   void* cache=Reference(klass,offsetof(SplitClass,dex_cache));
   constexpr size_t offset=offsetof(abi::arm64::android11::LegacyCache,dex_file);
   if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<offset+8)
