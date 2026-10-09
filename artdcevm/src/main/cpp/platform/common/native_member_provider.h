@@ -50,6 +50,7 @@ class Service {
   std::vector<std::unique_ptr<modern_methods::Service>> tables_;
   std::vector<const modern_methods::Service*> views_;
   std::vector<native_schema_policy::Plan> schemas_;
+  std::vector<native_schema_policy::GuardRequest> guard_requests_;
   const native_schema_policy::GuardVerifier* schema_guards_=nullptr;
   const modern_field_metadata::FieldMetadata* schema_metadata_=nullptr;
   const method_identity::Calibration* schema_model_=nullptr;

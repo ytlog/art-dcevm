@@ -146,6 +146,7 @@ struct Verifier::State {
  struct MemberProof {void* member;size_t owner;uint32_t flags,index,offset;bool field;jfieldID field_id=nullptr;};
  struct InterfaceProof {void* klass=nullptr;void* table=nullptr;std::vector<void*> values;};
  Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<InterfaceProof> replacement_interfaces;
+ mutable const Snapshot* batch_snapshot=nullptr;
  mutable std::vector<Grant> grants;prepared_roots::Bindings frozen_roots,expected_roots;bool frozen=false,refreshed=false;
  bool FrozenProof()const noexcept {
   if(!frozen||!redefinition_gate::Owned(bindings.vm)||class_proofs.size()!=nodes.size()||frozen_snapshot.classes.size()!=nodes.size())return false;
@@ -448,14 +449,14 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
 bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* loader,const native_schema_policy::Requirement& requirement,std::string* error)const{
  auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||pair>=transaction.old_classes.size()||!SamePlan(transaction,s.expected))return Fail(error,"Schema guard has no exact sealed native Holder proof");
  if(s.frozen){
-  if(!s.refreshed||!s.FrozenProof())return false;
+  if(!s.refreshed||(!s.batch_snapshot&&!s.FrozenProof()))return false;
   if(!std::any_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))return false;
   if(requirement.kind==native_schema_policy::GuardKind::ExistingInstances||requirement.kind==native_schema_policy::GuardKind::AbstractMethodDependents)
    return s.bindings.abstract_instances&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,nullptr);
   return true;
  }
  const auto prove=[&]()->bool {
- Snapshot roots;if(!s.Roots(&roots,error))return false;auto it=std::find(roots.classes.begin(),roots.classes.end(),transaction.old_classes[pair]);if(it==roots.classes.end())return false;const size_t target=size_t(it-roots.classes.begin());
+ Snapshot local;const Snapshot* episode=s.batch_snapshot;if(!episode){if(!s.Roots(&local,error))return false;episode=&local;}const auto& roots=*episode;auto it=std::find(roots.classes.begin(),roots.classes.end(),transaction.old_classes[pair]);if(it==roots.classes.end())return false;const size_t target=size_t(it-roots.classes.begin());
  if(!s.nodes[target].affected||roots.loaders[target]!=loader)return Fail(error,"Schema guard owner/ClassLoader identity differs");
  field_copy::CopyClassView old_identity,new_identity;if(!s.bindings.metadata->ClassIdentity(transaction.old_classes[pair],&old_identity,error)||!s.bindings.metadata->ClassIdentity(transaction.new_classes[pair],&new_identity,error)||old_identity.loader!=loader||new_identity.loader!=loader)return false;
  const auto mapped=[&](void* value){for(size_t i=0;i<transaction.old_classes.size();++i)if(transaction.old_classes[i]==value)return transaction.new_classes[i];return value;};
@@ -533,6 +534,21 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
  if(std::none_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))s.grants.push_back({pair,loader,requirement});
  return true;
 }
+bool Verifier::VerifyBatch(const source_commit::Plan& transaction,const std::vector<native_schema_policy::GuardRequest>& requests,std::string* error)const {
+ auto& s=*state_;if(requests.empty())return true;
+ if(s.batch_snapshot||!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))return Fail(error,"Schema batch lacks an exact nonnested native proof episode");
+ for(const auto& request:requests)if(request.class_pair>=transaction.old_classes.size())return Fail(error,"Schema batch contains an invalid Class pair");
+ Snapshot local;const Snapshot* episode=nullptr;
+ if(s.frozen){if(!s.refreshed||!s.FrozenProof())return Fail(error,"Schema batch frozen proof changed");episode=&s.frozen_snapshot;}
+ else{if(!s.Roots(&local,error))return false;episode=&local;}
+ // This borrowed snapshot survives only these synchronous native consumers.
+ // Repeated calls, JNI/root registration and final refresh cannot reuse it.
+ s.batch_snapshot=episode;
+ struct Release {State& state;~Release(){state.batch_snapshot=nullptr;}} release{s};
+ for(const auto& request:requests)if(!Verify(transaction,request.class_pair,request.loader,request.requirement,error))return false;
+ return true;
+}
+
 bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,std::string* error){
  auto& s=*state_;if(!s.sealed||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||!s.Roots(&s.frozen_snapshot,error))return false;
  const bool split=s.bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;

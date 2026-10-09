@@ -78,6 +78,7 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   bool Seal(const source_commit::Plan&,std::string*);
   bool Verify(const source_commit::Plan&,size_t,void*,
               const native_schema_policy::Requirement&,std::string*)const override;
+  bool VerifyBatch(const source_commit::Plan&,const std::vector<native_schema_policy::GuardRequest>&,std::string*)const override;
   void BeginCommit(const source_commit::Plan&)const override;
   bool CollectManagedRoots(const prepared_roots::Registrar&,std::string*);
   bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;

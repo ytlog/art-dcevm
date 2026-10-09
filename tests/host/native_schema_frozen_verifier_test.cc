@@ -28,7 +28,8 @@ jobject OwnHandle(void*,void* value){assert(used<handles.size());handles[used].l
 void ReleaseHandle(void*,jobject){}
 void* Method(void*,jmethodID id){return id;}
 void* Field(void*,jclass,jfieldID id){return id;}
-void* NativeField(void*,void*,jfieldID id){return id;}
+size_t native_field_reads=0;
+void* NativeField(void*,void*,jfieldID id){++native_field_reads;return id;}
 void* Owner(void*,void* method){return Root(method);}
 std::array<void*,bounded_managed_roots::Store::kChunkSize> managed{};
 jobjectArray JNICALL NewRoots(JNIEnv*,jsize length,jclass,jobject){Jni();assert(length==managed.size());return reinterpret_cast<jobjectArray>(&managed);}
@@ -71,9 +72,19 @@ int main(){
  // Native proxy provenance slots remain stable while managed roots move.
  uintptr_t proxy_origin=reinterpret_cast<uintptr_t>(old_method);
  s.frozen_snapshot.proxy_signatures.push_back({&proxy_origin,old_method});
+ std::vector<native_schema_policy::GuardRequest> batch_requests;
+ for(size_t i=0;i<3;++i){native_schema_policy::Requirement required{native_schema_policy::GuardKind::LoadedSubclasses,std::to_string(i),"()V"};
+  s.grants.push_back({0,nullptr,required});batch_requests.push_back({0,nullptr,required});}
  s.frozen_roots.Seal();assert(registry.Freeze());s.frozen=true;s.sealed=true;Stop(nullptr,nullptr,false);assert(s.FrozenProof());
  deny_alloc=true;bool allocation_refused=false;try{(void)::operator new(1);}catch(const std::bad_alloc&){allocation_refused=true;}assert(allocation_refused);assert(registry.Resolve());assert(verifier.RefreshManagedRoots(plan,registry.Final()));assert(s.refreshed&&s.FrozenProof());
  proxy_origin=0;assert(!s.FrozenProof());proxy_origin=reinterpret_cast<uintptr_t>(old_method);assert(s.FrozenProof());
+ const auto reads_before_batch=native_field_reads;
+ assert(verifier.VerifyBatch(plan,batch_requests,nullptr)&&!s.batch_snapshot);
+ assert(native_field_reads-reads_before_batch==s.nodes[0].field_ids.size());
+ batch_requests[1].requirement.descriptor="(I)V";assert(!verifier.VerifyBatch(plan,batch_requests,nullptr)&&!s.batch_snapshot);batch_requests[1].requirement.descriptor="()V";
+ batch_requests[1].class_pair=1;assert(!verifier.VerifyBatch(plan,batch_requests,nullptr)&&!s.batch_snapshot);batch_requests[1].class_pair=0;
+ old_fields[1]->dex_field_index++;assert(!verifier.VerifyBatch(plan,batch_requests,nullptr)&&!s.batch_snapshot);old_fields[1]->dex_field_index--;
+ assert(verifier.VerifyBatch(plan,batch_requests,nullptr));
  // Runtime-only method flags may change; Java declaration/index/owner cannot.
  old_method->access_flags|=0x80000;assert(s.FrozenProof());old_method->access_flags^=1;assert(!s.FrozenProof());old_method->access_flags^=1;
  old_fields[1]->access_flags|=0x20000u;assert(s.FrozenProof());old_fields[1]->access_flags&=~0x20000u;

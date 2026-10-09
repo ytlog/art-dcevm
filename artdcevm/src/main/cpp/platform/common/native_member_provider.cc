@@ -7,9 +7,9 @@ static_assert(offsetof(class_metadata::Class11,class_loader)==offsetof(class_met
 bool Service::ReflectReady(const source_commit::Plan& p,void* raw){auto& s=*static_cast<Service*>(raw);return s.plan_==&p&&s.mapping_&&s.reflection_->Validate(*s.mapping_,nullptr,s.refreshed_)&&([&]{
  if(s.refreshed_){
   if(!s.MatchFacts(p))return false;
-  for(size_t i=0;i<s.schemas_.size();++i)for(const auto& required:s.schemas_[i].Requirements())
-   if(!s.schema_guards_||!s.schema_guards_->Verify(p,i,s.class_facts_[2*i].loader,required,nullptr))return false;
-  return true;
+  // Final validation cannot allocate. The immutable requests were prepared
+  // alongside the schema policy, before any source publication.
+  return s.guard_requests_.empty()||(s.schema_guards_&&s.schema_guards_->VerifyBatch(p,s.guard_requests_,nullptr));
  }
  if(s.schemas_.empty())return true;
  return s.schema_metadata_&&s.schema_model_&&native_schema_policy::ValidateNative(p,*s.schema_metadata_,*s.schema_model_,s.views_,s.schemas_,s.schema_guards_,nullptr);
@@ -31,6 +31,7 @@ bool Service::CaptureFacts(const source_commit::Plan& p){
   for(size_t n=0;n<c.methods;++n){void* method=tables_[i]->At(klass,n);
    member_facts_.push_back({method,tables_[i]->DeclaringClass(method),native_schema_policy::JavaFlags(tables_[i]->Flags(method)),([&]{method_metadata::Identity value;const auto& method_layout=schema_model_->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;return method_metadata::ReadIdentity(method_layout,method,method_layout.size,&value)?value.dex_method_index:UINT32_MAX;}()),true});}
   class_facts_.push_back(c);
+  if(klass==p.old_classes[i]&&i<schemas_.size())for(const auto& required:schemas_[i].Requirements())guard_requests_.push_back({i,c.loader,required});
  }
  return true;
 }
@@ -56,6 +57,7 @@ bool Service::MatchFacts(const source_commit::Plan& p)const noexcept{
 bool Service::CollectManagedRoots(source_commit::Services& source,const prepared_roots::Registrar& registrar){
  if(!mapping_||&source!=prepared_source_)return false;
  for(auto& c:class_facts_)if(!roots_.Add(&c.klass,registrar)||!roots_.Add(&c.parent,registrar)||!roots_.Add(&c.loader,registrar))return false;
+ for(auto& request:guard_requests_)if(!roots_.Add(&request.loader,registrar))return false;
  for(auto& m:member_facts_)if(!roots_.Add(&m.declaring,registrar))return false;
  roots_.Seal();
  for(auto& table:tables_)if(!table->CollectManagedRoots(registrar))return false;
@@ -82,7 +84,7 @@ std::unique_ptr<source_commit::Services> Service::Prepare(const source_commit::P
      p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size())return fail("Incomplete independently calibrated native member provider");
  if((d.expected_removal==Removal::kSchemaEvolution)!=bool(d.schemas))return fail("Native schema evolution requires explicit complete policies and matching transaction mode");
  plan_=&p;prepared_source_=nullptr;roots_=prepared_roots::Bindings{};refreshed_=false;reflection_=d.reflection;tables_.clear();views_.clear();class_facts_.clear();member_facts_.clear();mapping_.reset();schemas_.clear();
- schema_guards_=d.schema_guards;schema_metadata_=d.metadata;schema_model_=d.method_model;
+ guard_requests_.clear();schema_guards_=d.schema_guards;schema_metadata_=d.metadata;schema_model_=d.method_model;
  if(d.schemas){if(d.schemas->empty())return fail("Native schema evolution lacks policies");schemas_=*d.schemas;}
  auto& views=views_;
  for(size_t n=0;n<p.old_classes.size();++n){native_method_table::View before,after;

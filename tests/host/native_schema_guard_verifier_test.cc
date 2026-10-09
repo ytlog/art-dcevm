@@ -33,6 +33,20 @@ int main(){
   }
  }
  using namespace native_schema_guard_verifier;
+ struct BatchProbe final:native_schema_policy::GuardVerifier {
+  mutable size_t calls=0;size_t refuse=SIZE_MAX;
+  bool Verify(const source_commit::Plan&,size_t pair,void* loader,const native_schema_policy::Requirement& r,std::string* error)const override {
+   ++calls;assert(loader==reinterpret_cast<void*>(pair+1));assert(r.member_name==std::to_string(pair));
+   if(pair==refuse){if(error)*error="actual rejected request";return false;}return true;
+  }
+  void BeginCommit(const source_commit::Plan&)const override{}
+ } batch;
+ source_commit::Plan batch_plan;std::vector<native_schema_policy::GuardRequest> batch_requests;
+ for(size_t i=0;i<3;++i)batch_requests.push_back({i,reinterpret_cast<void*>(i+1),{native_schema_policy::GuardKind::LoadedSubclasses,std::to_string(i),"()V"}});
+ assert(batch.VerifyBatch(batch_plan,batch_requests,nullptr)&&batch.calls==3);
+ batch.calls=0;batch.refuse=1;std::string batch_error;
+ assert(!batch.VerifyBatch(batch_plan,batch_requests,&batch_error)&&batch.calls==2&&batch_error=="actual rejected request");
+
  auto p=[](uintptr_t x){return reinterpret_cast<void*>(x);};
  source_commit::Plan a;a.mirror=p(1);a.new_classes_root=p(2);
  a.old_classes={p(3),p(4)};a.new_classes={p(5),p(6)};
