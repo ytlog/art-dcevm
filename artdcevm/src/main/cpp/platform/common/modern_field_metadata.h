@@ -10,6 +10,7 @@ struct FieldOracle {
   const char* name;
   const char* descriptor;
   uint32_t modifiers;
+  uint32_t dex_index=UINT32_MAX;
 };
 // Fixed split/merged-field source candidates; only an actual owned reflection oracle
 // may publish it. The source class and reflected Fields stay strongly rooted.
@@ -31,6 +32,11 @@ class FieldMetadata {
   bool Bind(HookEngine&, std::string*);
   bool Calibrate(const runnable_jni::Context&, jobject strong_global_class,
                  const char* expected_class_descriptor, const FieldOracle*, size_t count, std::string*);
+  // Consumes the independently calibrated family without recalibrating from a
+  // caller class. Public complete reflected fields + immutable DEX indices
+  // must enumerate every native array member exactly, including empty arrays.
+  bool VerifyProvenDeclaration(const runnable_jni::Context&,jobject strong_global_class,
+      const char* expected_class_descriptor,const FieldOracle*,size_t count,std::string*)const;
   bool Calibrated() const { return calibrated_; }
   bool InterfaceDeclarationCalibrated()const{return interface_declaration_calibrated_;}
   Model StorageModel() const { return model_; }

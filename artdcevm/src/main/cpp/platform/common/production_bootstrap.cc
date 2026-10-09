@@ -942,12 +942,9 @@ bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  if(!owned_method_table::ReadProvenDeclaration(scope,r.method_leaf,e.model.model,klass,counts,r.methods.data(),r.methods.size(),&table,&r.error))return false;
  const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
  for(size_t i=0;i<r.methods.size();i++)if(r.method_leaf(native,r.methods[i].strong_global_method)!=r.decode_method(e.runtime.receivers.jni_id_manager,r.ids[i]))return false;
- if(r.fields.empty())return true;
- auto target_metadata=e.metadata;
- if(!target_metadata.Calibrate(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)){
-  r.error="Target field calibration count="+std::to_string(r.fields.size())+": "+r.error;return false;
+ if(!e.metadata.VerifyProvenDeclaration(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)){
+  r.error="Target proven field declaration count="+std::to_string(r.fields.size())+": "+r.error;return false;
  }
- if(target_metadata.StorageModel()!=e.metadata.StorageModel()){r.error="Target field source model differs from the independent bootstrap model";return false;}
  for(size_t i=0;i<r.fields.size();i++){
   void* reflected=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.fields[i].strong_global_field,&reflected))return false;
   void* field=r.field_leaf(reflected);
@@ -1008,7 +1005,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
   if(!proof)return false;
   target_field_proofs.push_back(std::move(proof));
   if(graph_staging&&!StageGraphField(this,env,target,fields[i],(modifiers&8)!=0,error))return false;
-  request.fields.push_back({root,names[i].c_str(),descriptors[i].c_str(),uint32_t(modifiers)});expected_fields.erase(member);
+  request.fields.push_back({root,names[i].c_str(),descriptors[i].c_str(),uint32_t(modifiers),member->second.dex_index});expected_fields.erase(member);
  }
  if(!request.decode_method||!request.method_leaf||!request.field_leaf||env->ExceptionCheck()||
     runnable_executor::With(env,owner,TargetObserve,&request)!=runnable_jni::Result::kSuccess){if(error)*error=request.error.empty()?"Target rooted native/public identity proof rejected":request.error;return false;}

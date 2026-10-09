@@ -236,6 +236,47 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject globa
   }
   if(error)error->clear();return true;
 }
+bool FieldMetadata::VerifyProvenDeclaration(const runnable_jni::Context& context,jobject strong,
+    const char* expected,const FieldOracle* oracles,size_t count,std::string* error)const {
+ if(!calibrated_||!context.self||!context.env||!context.vm||!strong||!expected||
+    (count&&!oracles)||count>UINT32_MAX||context.env->ExceptionCheck())
+  return Fail(error,"Target field declaration requires the independent calibrated source family and rooted Runnable context");
+ void* klass=nullptr;if(!runnable_executor::DecodeStrongGlobal(context,strong,&klass)||!klass)
+  return Fail(error,"Target field declaration cannot decode its exact strong Class");
+ const char* descriptor=nullptr;
+ if(!Descriptor(klass,model_,&descriptor,error)||!descriptor||std::strcmp(descriptor,expected))
+  return Fail(error,"Target field declaration Class descriptor differs from immutable DEX");
+ field_array::View instances,statics;
+ if(!FieldsCandidate(klass,model_,false,&instances,error)||!FieldsCandidate(klass,model_,true,&statics,error))return false;
+ if(size_t(instances.selected_count)+statics.selected_count!=count||
+    (Source(model_).fields.merged&&(instances.array!=statics.array||instances.count!=count)))
+  return Fail(error,"Target complete native field arrays differ from the public declaration count");
+ std::set<void*> native_fields;std::set<uint32_t> dex_indices;
+ for(size_t i=0;i<count;++i){const auto& oracle=oracles[i];
+  if(!oracle.strong_global_field||!oracle.name||!oracle.descriptor||oracle.dex_index==UINT32_MAX)
+   return Fail(error,"Target field declaration lacks its independent reflection/DEX identity");
+  void* mirror=nullptr;
+  if(!runnable_executor::DecodeStrongGlobal(context,oracle.strong_global_field,&mirror)||!mirror)
+   return Fail(error,"Target reflected field root cannot be decoded");
+  void* field=field_leaf_(mirror);size_t extent=0;
+  if(context.env->ExceptionCheck()||!field||!method_identity::ReadableMappingExtent(field,&extent)||extent<sizeof(field_array::Field)||
+     !native_fields.insert(field).second||!dex_indices.insert(oracle.dex_index).second)
+   return Fail(error,"Target reflected native field storage is absent, duplicated or unreadable");
+  const auto* entry=static_cast<const field_array::Field*>(field);uint32_t physical=0;
+  const auto& view=oracle.modifiers&8u?statics:instances;
+  if(root_(field)!=klass||entry->dex_field_index!=oracle.dex_index||
+     (field_array::Flags(field)&0x50dfu)!=(oracle.modifiers&0x50dfu)||!view.IndexOf(field,&physical))
+   return Fail(error,"Target native field owner/index/modifiers/array membership differ from its public immutable identity");
+  const char* name=nullptr;const char* type=nullptr;
+  if(!Text(field,model_,&name,&type,error)||!name||!type||std::strcmp(name,oracle.name)||std::strcmp(type,oracle.descriptor))
+   return Fail(error,"Target native field name/type differ from its public immutable identity");
+ }
+ for(const auto* view:{&instances,&statics})for(uint32_t n=0;n<view->selected_count;++n){void* field=view->AtSelected(n);
+  if(!field||!native_fields.count(field)||root_(field)!=klass)
+   return Fail(error,"Target native arrays contain a field omitted by complete public reflection");
+ }
+ if(error)error->clear();return true;
+}
 bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::string* error,const ReadContext* context)const {
   if(!bound_||!klass||!output)return Fail(error,"Missing live Class for named descriptor identity");
   const auto& layout=Source(model);
