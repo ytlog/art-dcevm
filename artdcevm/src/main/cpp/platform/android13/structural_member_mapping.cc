@@ -5,6 +5,7 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/nterp_dispatch.h"
+#include "platform/android13/retired_field_hooks.h"
 #include <cstring>
 #include <cstdlib>
 #include "platform/android13/transaction_metadata.h"
@@ -32,6 +33,7 @@ StructuralMemberMappings BuildStructuralMemberMappings(const std::vector<void*>&
         auto old=ReadCopyField(old_classes[pair],statik,i);void* replacement=nullptr;
         for(size_t j=0;j<new_view.field_count;++j){auto next=ReadCopyField(new_classes[pair],statik,j);
           if(!std::strcmp(old.name,next.name)&&!std::strcmp(old.descriptor,next.descriptor)){replacement=next.field;break;}}
+        if(replacement&&((Flags(old.field)^Flags(replacement))&0x7u))RequireFieldAccessChecks();
         if(!replacement){RetireFieldPointer(old.field);replacement=old.field;}result.fields[old.field]=replacement;
       }
     }

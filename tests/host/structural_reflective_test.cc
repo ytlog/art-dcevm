@@ -20,12 +20,13 @@ struct Fields {std::vector<Field*> statik,instance;};
 std::unordered_map<void*,Fields> fields;
 std::unordered_map<void*,void*> roots;
 RetiredMethodRegistry methods;RetiredFieldRegistry retired_fields;
-size_t dispatch=0;void* mirror=nullptr;void* assignable=nullptr;
+size_t field_dispatch=0;size_t dispatch=0;void* mirror=nullptr;void* assignable=nullptr;
 Visitor* active=nullptr;void (*scenario)(Visitor*)=nullptr;
 namespace artdcevm::android13 {
 void RetireMethodPointer(void* p)noexcept{methods.Retire(p);}void RetireFieldPointer(void* p)noexcept{retired_fields.Retire(p);}
 bool IsRetiredMethodPointer(void* p){return methods.Contains(p);}bool IsRetiredFieldPointer(void* p){return retired_fields.TokenFor(p)!=0;}
 void RequireDispatchChecks(){++dispatch;}
+void RequireFieldAccessChecks(){++field_dispatch;}
 CopyClassView ReadCopyClass(void* p,bool statik){return {nullptr,nullptr,nullptr,statik?fields[p].statik.size():fields[p].instance.size(),false};}
 CopyFieldView ReadCopyField(void* p,bool statik,size_t i){auto* f=(statik?fields[p].statik:fields[p].instance).at(i);return {f,f->name,f->type};}
 bool IsValidationAssignableFrom(void* a,void* b){assert(b==mirror);return a==assignable;}
@@ -76,7 +77,8 @@ int main(){ auto profile=MatchedProfileForTest();Hooks hooks;ConfigureTransactio
  old_array.value[2].dex_method_index=3;fields[&old_class].instance={&retained,&removed};fields[&new_class].instance={&replacement,&wrong_type};
  for(unsigned i=0;i<old_array.size;++i)roots[&old_array.value[i]]=&old_class;
  for(unsigned i=0;i<new_array.size;++i)roots[&new_array.value[i]]=&new_class;
- mappings=BuildStructuralMemberMappings({&old_class},{&new_class});assert(dispatch==2&&methods.Count()==2);assert(mappings.fields.at(&removed)==&removed&&mappings.methods.at(&old_array.value[1])==&old_array.value[1]);
+ retained.flags=1;replacement.flags=2;
+ mappings=BuildStructuralMemberMappings({&old_class},{&new_class});assert(field_dispatch==1);assert(dispatch==2&&methods.Count()==2);assert(mappings.fields.at(&removed)==&removed&&mappings.methods.at(&old_array.value[1])==&old_array.value[1]);
  scenario=Basic;VisitStructuralReflectiveTargets(nullptr,&old_class,{&old_class},{&new_class},mappings,false);
  mirror=&old_class;assignable=&parent;inherited.dex_method_index=7;inherited.access_flags=8;constructor=inherited;constructor.access_flags=0x10000|8;virtual_method=inherited;virtual_method.access_flags=1;unrelated_method=inherited;
  roots[&inherited]=roots[&constructor]=roots[&virtual_method]=&parent;roots[&unrelated_method]=&unrelated;
