@@ -10,6 +10,7 @@
 #include "platform/abi/arm64/android15/frame_registers.h"
 #include "platform/abi/arm64/android17/frame_registers.h"
 #include <memory>
+#include "platform/abi/arm64/dex_register_map.h"
 #include "platform/abi/arm64/android11/oat_quick_method_header.h"
 namespace artdcevm::active_frame_recovery_proof {
 using Family=code_info_view::SourceFamily;
@@ -48,11 +49,12 @@ class Service {
     candidate.construct_=required(abi::arm64::android13::kConstructCodeInfo);
     candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
     candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
+    candidate.decode_map_=reinterpret_cast<abi::arm64::dex_register_map::Decode>(required(abi::arm64::dex_register_map::kDecode));
     candidate.fast_=finder(family==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast);
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
     candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
-    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ ||
+    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ ||
        !stack_bound || !candidate.jit_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
@@ -285,11 +287,33 @@ class Service {
         return Fail(Failure::kDecodedMap,"decoded-vreg-count-does-not-match-actual-CodeItem");
       if(!decoded_frame_recovery::Decode(view,map.row,report.inline_begin,report.inline_end,scratch,capacity,&range))
         return Fail(Failure::kDecodedMap,"decoded-vreg-locations-invalid");
+      // Independently call the exact native decoder with its complete source
+      // container, before the slow reader's release-build unchecked map[vreg].
+      // Compare ALL locations, including missing registers, not only witnesses.
+      abi::arm64::dex_register_map::Map native_map(range.count);
+      service.decode_map_(info,map.row,range.first,&native_map);
+      if(native_map.count!=range.count)
+        return Fail(Failure::kDecodedMap,"native-dex-register-map-count-changed");
+      for(uint32_t reg=0;reg<range.count;++reg) {
+        const auto native=native_map.data()[reg];const auto own=scratch[reg];
+        if(native.kind!=own.kind || (native.kind>=0 && static_cast<uint32_t>(native.value)!=own.value))
+          return Fail(Failure::kDecodedMap,"native-versus-source-complete-register-map-mismatch");
+      }
       if(info->frame_size>UINT32_MAX/16)return Fail(Failure::kDecodedMap,"decoded-frame-size-overflow");
       const uint32_t bytes=info->frame_size*16;
       for(size_t i=0;i<f->count;++i){const auto& witness=f->witnesses[i];const auto location=scratch[witness.vreg];
         if(location.kind<0 || (location.kind==0 && (bytes<4 || location.value>bytes-4)))return Fail(Failure::kDecodedMap,"decoded-location-missing-or-outside-native-frame");
         if(witness.kind==Kind::kReference && !RootMask(view,map.row,location))return Fail(Failure::kReferenceMask,"independent-reference-missing-native-stack-register-root-mask");
+        void* current_method=nullptr;
+        const void* current_header=this->header;void** current_frame=this->quick_frame;
+        const uintptr_t current_pc=this->pc;const auto current_range=this->inline_frames;
+        if(!service.stack_.Method(this,sizeof(*this),&current_method) || current_method!=method ||
+           service.dex_pc_(this,false)!=f->expected_dex_pc || this->header!=current_header ||
+           this->quick_frame!=current_frame || this->pc!=current_pc ||
+           this->inline_frames.begin.row!=current_range.begin.row ||
+           this->inline_frames.end.row!=current_range.end.row ||
+           (physical && *this->quick_frame!=method))
+          return Fail(Failure::kFrameIdentity,"native-current-cursor-changed-before-vreg-read");
         uint32_t value=0;
         if(!service.NativeSlow(this,method,witness,&value))return Fail(Failure::kNativeRead,"original-slow-vreg-read-rejected");
         if(value!=witness.expected)return Fail(Failure::kValueMismatch,"original-slow-vreg-versus-independent-witness-mismatch");
@@ -318,6 +342,7 @@ class Service {
   }
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;void* slow_=nullptr;void* fast_=nullptr;
+  abi::arm64::dex_register_map::Decode decode_map_=nullptr;
   DexPc dex_pc_=nullptr;ContainsJit jit_contains_=nullptr;ContainsHeader header_contains_=nullptr;Nterp nterp_=nullptr;
 };
 }

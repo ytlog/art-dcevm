@@ -55,3 +55,17 @@ with corresponding online sources at
 [Android 13 instrumentation](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/instrumentation.cc),
 [Android 14 instrumentation](https://android.googlesource.com/platform/art/+/refs/tags/android-14.0.0_r1/runtime/instrumentation.cc), and
 [Android 17 instrumentation](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/instrumentation.cc).
+
+The slow-reader boundary now requires original `CodeInfo::DecodeDexRegisterMap`
+with the complete fixed `DexRegisterMap` declaration (count, sixteen inline
+locations, and a vector subclass without additional fields). Its entire output
+must match the bounded source decoder before any original slow value read.
+Current named GetMethod/GetDexPc and the callback's header/PC/quick frame/inline
+range are rechecked immediately before each witness read. Host slow-reader
+fixtures consume that actual visitor cursor and reject drift, rather than using
+only the passed method as a value lookup key.
+
+This is diagnostic hardening following API35/36 crashes inside the original
+slow reader. No new physical-device result yet demonstrates that crash resolved.
+The complete native decoder remains a fixed-source ABI candidate and must be
+calibrated on each actual runtime; named availability alone grants no readiness.
