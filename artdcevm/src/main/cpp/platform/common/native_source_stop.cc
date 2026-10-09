@@ -10,12 +10,22 @@ thread_local Session* active=nullptr;
 thread_local Session* finishing=nullptr;
 thread_local Session* borrowed=nullptr;
 thread_local Observation* observation=nullptr;
+thread_local native_source_gc_publication::Scope* publication=nullptr;
 std::mutex installation;bool installed=false;
 a::SuspendConstruct original_stop=nullptr;a::SuspendDestroy original_resume=nullptr;
 s::MutatorOperation original_disable=nullptr,original_enable=nullptr;
 s::StartGC original_start=nullptr;s::FinishGC original_finish=nullptr;
 }
 struct NativeHooks {
+static void PublicationEnter(native_source_gc_publication::Scope&) noexcept;
+static void PublicationExit(native_source_gc_publication::Scope&) noexcept;
+static bool PublicationStart(void*,void*,int32_t,int32_t) noexcept;
+static bool PublicationFinish(void*,void*,int32_t) noexcept;
+static void BindPublication() noexcept {
+ using Scope=native_source_gc_publication::Scope;
+ Scope::enter_=PublicationEnter;Scope::exit_=PublicationExit;
+ Scope::start_=PublicationStart;Scope::finish_=PublicationFinish;
+}
 static void Construct(void* carrier,const char* cause,bool long_suspend) {
  if(Session::TransferConstruct(carrier,cause,long_suspend))return;
  if(!original_stop)std::abort();original_stop(carrier,cause,long_suspend);
@@ -40,12 +50,76 @@ static void Enable(void* heap,void* self){
  Session::OriginalEnabled(heap,self);
 }
 static void Start(void* heap,void* self,int32_t cause,int32_t collector){
+ if(native_source_gc_publication::Scope::Start(heap,self,cause,collector))return;
  Session::UnexpectedGC();Observation::GCOperation(heap,self,true);original_start(heap,self,cause,collector);
 }
 static void Finish(void* heap,void* self,int32_t type){
+ if(native_source_gc_publication::Scope::Finish(heap,self,type))return;
  Session::UnexpectedGC();original_finish(heap,self,type);Observation::GCOperation(heap,self,false);
 }
 };
+void NativeHooks::PublicationEnter(native_source_gc_publication::Scope& scope) noexcept {
+ if(publication){if(active)std::abort();if(observation)observation->Refuse("source-publication-nested-callee");return;}
+ if(active){auto& o=*active;size_t index=0;
+  if(!o.service_.publication_calibrated_||!o.MatchPublication(scope.linker_,scope.cache_,scope.loader_,&index)||
+     index>=o.publications_.size()||o.publications_[index])std::abort();
+  scope.session_=&o;scope.index_=index;
+ }else if(observation&&observation->phase_==Observation::Phase::kArmed){auto& o=*observation;
+  if(!o.Ready()||!scope.linker_||!scope.cache_||!o.holder_||!o.State(o.service_.state_.RunnableState())||
+     (o.publication_linker_&&o.publication_linker_!=scope.linker_)){
+   o.Refuse("ordinary-source-publication-owner-mismatch");return;
+  }
+  scope.observation_=&o;
+ }else return;
+ scope.previous_=publication;publication=&scope;scope.attached_=true;
+}
+void NativeHooks::PublicationExit(native_source_gc_publication::Scope& scope) noexcept {
+ if(!scope.attached_)return;if(publication!=&scope)std::abort();
+ const bool pair=(scope.starts_==0&&scope.finishes_==0)||(scope.starts_==1&&scope.finishes_==1);
+ if(scope.session_){auto& o=*scope.session_;size_t index=0;
+  if(!scope.returned_||!pair||scope.starts_!=o.service_.publication_gc_pairs_||
+     (scope.starts_&&scope.collector_!=o.service_.publication_collector_)||
+     !o.MatchPublication(scope.linker_,scope.cache_,scope.loader_,&index)||index!=scope.index_||
+     index>=o.publications_.size()||o.publications_[index])std::abort();
+  o.publications_[index]=1;++o.publication_completed_;
+ }else if(scope.observation_){auto& o=*scope.observation_;
+  if(!scope.returned_||!pair||observation!=&o||!o.Ready()||o.phase_!=Observation::Phase::kArmed||
+     !o.State(o.service_.state_.RunnableState())||o.prefinal_gc_||
+     (o.publication_profile_&&(o.publication_pairs_!=scope.starts_||o.publication_collector_!=scope.collector_)))
+   o.Refuse("ordinary-source-publication-GC-profile-mismatch");
+  else{o.publication_linker_=scope.linker_;o.publication_pairs_=scope.starts_;o.publication_collector_=scope.collector_;o.publication_profile_=true;++o.publications_;}
+ }
+ publication=scope.previous_;scope.attached_=false;
+}
+bool NativeHooks::PublicationStart(void* heap,void* self,int32_t cause,int32_t collector) noexcept {
+ if(!publication)return false;auto& p=*publication;
+ const bool shape=p.starts_==0&&p.finishes_==0&&cause==12&&(collector==11||collector==13);
+ if(p.session_){auto& o=*p.session_;
+  if(!shape||active!=&o||heap!=o.service_.heap_||self!=o.self_||!o.IsPublicationWindow(self)||
+     o.service_.publication_gc_pairs_!=1||collector!=o.service_.publication_collector_)std::abort();
+  p.starts_=1;p.collector_=collector;return true;
+ }
+ if(p.observation_){auto& o=*p.observation_;
+  if(!shape||observation!=&o||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState()))
+   o.Refuse("ordinary-source-publication-GC-start-mismatch");
+  else{p.starts_=1;p.collector_=collector;}
+ }
+ return false;
+}
+bool NativeHooks::PublicationFinish(void* heap,void* self,int32_t type) noexcept {
+ if(!publication)return false;auto& p=*publication;
+ const bool shape=p.starts_==1&&p.finishes_==0&&type==s::kNoCollection;
+ if(p.session_){auto& o=*p.session_;
+  if(!shape||active!=&o||heap!=o.service_.heap_||self!=o.self_||!o.IsPublicationWindow(self))std::abort();
+  p.finishes_=1;return true;
+ }
+ if(p.observation_){auto& o=*p.observation_;
+  if(!shape||observation!=&o||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState()))
+   o.Refuse("ordinary-source-publication-GC-finish-mismatch");
+  else p.finishes_=1;
+ }
+ return false;
+}
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 }
@@ -81,6 +155,7 @@ bool Install(HookEngine& hooks,std::string* error) {
  if(!installed){std::string rollback;while(count)if(!hooks.Remove(tokens[--count],&rollback))std::abort();
   for(auto& binding:bindings)*binding.original=nullptr;}
  reinterpret_cast<a::SuspendDestroy>(dtor)(&scope);
+ if(installed)NativeHooks::BindPublication();
  return installed;
 }
 
@@ -99,6 +174,28 @@ bool Session::SameOwner()const noexcept{return self_&&service_.current_&&service
  service_.mutator_&&*service_.mutator_==service_.mutator_identity_;}
 bool Session::Native()const noexcept {
  uint32_t state=UINT32_MAX;return SameOwner()&&service_.state_.State(self_,extent_,&state)&&state==abi::arm64::android11::kNative;
+}
+bool Session::PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
+    native_source_gc_publication::Matcher matcher,std::string* error){
+ if(phase_!=Phase::kEmpty||!publications_.empty()||!service_.publication_calibrated_||
+    !driver||!holder||!linker||linker!=service_.publication_linker_||!count||count>1000000||
+    !matcher.owner||!matcher.match)return Fail(error,"Source publication requires complete ordinary staged owner and actual named profile");
+ try{publications_.assign(count,0);}catch(const std::bad_alloc&){return Fail(error,"Source publication bitmap allocation failed");}
+ publication_driver_=driver;publication_holder_=holder;publication_linker_=linker;publication_matcher_=matcher;
+ return true;
+}
+bool Session::IsPublicationWindow(void* self)const noexcept {
+ uint32_t state=UINT32_MAX;
+ return self==self_&&active==this&&phase_==Phase::kContinuing&&gc_&&suspended_&&!exclusive_&&!source_disable_&&
+  SameOwner()&&service_.state_.State(self_,extent_,&state)&&state==service_.state_.RunnableState();
+}
+bool Session::CanPublishDex(void* driver,const void* holder,void* linker)const noexcept {
+ return IsPublicationWindow(self_)&&publication_driver_==driver&&publication_holder_==holder&&
+  publication_linker_==linker&&!publications_.empty()&&publication_matcher_.owner&&publication_matcher_.match;
+}
+bool Session::MatchPublication(void* linker,void* cache,void* loader,size_t* index)const noexcept {
+ return cache&&index&&CanPublishDex(publication_driver_,publication_holder_,linker)&&
+  publication_matcher_.match(publication_matcher_.owner,publication_driver_,publication_holder_,linker,cache,loader,index);
 }
 bool Session::Begin(void* self,size_t extent) noexcept {
  if(phase_!=Phase::kEmpty||active||finishing||borrowed||observation||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
@@ -129,6 +226,7 @@ bool Session::IsStopped(void* self)const noexcept {
 bool Session::IsCollectedStop(void* self)const noexcept {return phase_==Phase::kStopped&&IsStopped(self);}
 bool Session::IsFinalWindow(void* self)const noexcept {return phase_==Phase::kFinal&&IsStopped(self);}
 bool Session::ContinueSource() noexcept {
+ if(service_.publication_calibrated_&&publications_.empty()){failure_="source-stop-missing-complete-publication-owner";return false;}
  if(!IsStopped(self_)||phase_!=Phase::kStopped){failure_="source-stop-continuation-owner-mismatch";return false;}
  service_.unlock_(*service_.mutator_,self_);exclusive_=false;
  if(!service_.state_.RestoreRunnable(self_))std::abort();
@@ -172,7 +270,7 @@ void Session::Rollback() noexcept {
 }
 void Session::SourceDisableBegin(void* heap,void* self) noexcept {
  if(!active)return;auto& owner=*active;uint32_t state=UINT32_MAX;
- if(owner.phase_!=Phase::kContinuing||owner.source_disable_||heap!=owner.service_.heap_||self!=owner.self_||
+ if(publication||(!owner.publications_.empty()&&owner.publication_completed_!=owner.publications_.size())||owner.phase_!=Phase::kContinuing||owner.source_disable_||heap!=owner.service_.heap_||self!=owner.self_||
     !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=owner.service_.state_.RunnableState())std::abort();
  owner.source_disable_=true;
 }
@@ -193,7 +291,9 @@ bool Service::SameBinding(const Service& other)const noexcept {
 }
 bool Service::Authorize(const Calibration& proof,const void* run) noexcept {
  if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_)||!state_.CanTransitionRunnable())return false;
- std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;calibrated_=true;return true;
+ std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;calibrated_=true;
+ publication_calibrated_=proof.publication_valid_;publication_linker_=proof.publication_linker_;
+ publication_gc_pairs_=proof.publication_pairs_;publication_collector_=proof.publication_collector_;return true;
 }
 bool Service::AuthorizeOriginalFinal(const Calibration& proof,const void* run) noexcept {
  original_calibrated_=false;original_run_=nullptr;
@@ -358,7 +458,9 @@ void Observation::GCOperation(void* heap,void* self,bool starting) noexcept {
 bool Observation::Finish(void* driver,bool success,Calibration* out) noexcept {
  Event(8);
  const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&!postfinal_gc_&&((!cleanup_&&phase_==Phase::kComplete)||(cleanup_&&phase_==Phase::kCleanupResumed&&cleanup_->CleanupCompleted()))&&State(service_.state_.RunnableState());
- if(ok){Calibration result;result.binding_=service_;result.run_body_=run_body_;std::memcpy(result.cause_,cause_,sizeof(cause_));result.long_=long_;result.valid_=true;*out=result;}
+ if(ok){Calibration result;result.binding_=service_;result.run_body_=run_body_;std::memcpy(result.cause_,cause_,sizeof(cause_));result.long_=long_;result.valid_=true;
+  result.publication_valid_=publication_profile_&&publications_>0;result.publication_linker_=publication_linker_;
+  result.publication_pairs_=publication_pairs_;result.publication_collector_=publication_collector_;*out=result;}
  else if(!failed_)Refuse("ordinary-source-Run-did-not-complete-matching-final-owner");
  finished_=true;if(attached_){if(observation!=this)std::abort();observation=nullptr;attached_=false;}return ok;
 }

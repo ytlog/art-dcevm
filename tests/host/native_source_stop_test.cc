@@ -22,6 +22,13 @@ bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
 }
 }
 
+namespace artdcevm::native_hierarchy_private_ledger::detail {
+// Same synchronous original-call bracket as the unique production Ledger proxy.
+struct Hooks {template<class F>static void Invoke(F original,void* linker,void* cache,void* loader){
+ native_source_gc_publication::Scope scope(linker,cache,loader);
+ original(linker,cache,loader);scope.Returned();
+}};
+}
 namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;
 struct Thread {uint32_t flags=92u<<24;} self,foreign;
@@ -37,7 +44,9 @@ void EnableMoving(void* p,void* thread){assert(p==&heap&&thread==&self&&self.fla
 void* Current(){return foreign_current?&foreign:&self;}
 void Native(void* p){assert(p==&self&&self.flags==(runnable_state<<shift)&&!exclusive);if(!bad_transition)self.flags=92u<<shift;}
 void Runnable(void* p){assert(p==&self&&self.flags==92u<<shift&&!exclusive);self.flags=runnable_state<<shift;}
-void Start(void* p,void* thread,int32_t cause,int32_t collector){assert(p==&heap&&thread==&self&&cause==8&&collector==1&&self.flags==92u<<shift&&!gc&&!exclusive);gc=true;++gc_starts;}
+void Start(void* p,void* thread,int32_t cause,int32_t collector){assert(p==&heap&&thread==&self&&!gc&&!exclusive);
+ assert((cause==8&&collector==1&&self.flags==92u<<shift)||(cause==12&&(collector==11||collector==13)&&self.flags==(runnable_state<<shift)));
+ gc=true;++gc_starts;}
 void Finish(void* p,void* thread,int32_t type){assert(p==&heap&&thread==&self&&type==0&&gc&&!exclusive);gc=false;++gc_finishes;}
 void Stop(void*,const char*,bool){assert(self.flags==92u<<shift&&!exclusive&&stops==resumes);exclusive=true;++stops;}
 native_source_stop::Session* inspected_original=nullptr;
@@ -179,6 +188,85 @@ native_source_stop::Calibration Calibrate(native_source_stop::Service& service){
  assert(observation.Collected(&driver,&holder));disable_proxy(&heap,&self);Native(&self);
  unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);resume_proxy(&carrier);Runnable(&self);enable_proxy(&heap,&self);
  assert(observation.Finish(&driver,true,&proof)&&proof.Valid()&&service.Authorize(proof,&run));return proof;
+}
+
+int publication_linker,publication_driver,publication_holder,publication_caches[2],publication_loaders[2];
+const char* publication_mode="";bool publication_has_gc=true;int publication_collector=11,no_suspend_depth=0,publication_original_calls=0;
+void PublishOriginal(void* linker,void* cache,void* loader){
+ assert(linker==&publication_linker&&cache&&loader&&self.flags==(runnable_state<<shift)&&!exclusive);
+ ++publication_original_calls;
+ if(publication_has_gc){
+  if(!std::strcmp(publication_mode,"bad-cause"))start_proxy(&heap,&self,8,publication_collector);
+  else if(!std::strcmp(publication_mode,"bad-collector"))start_proxy(&heap,&self,12,publication_collector==11?13:11);
+  else if(!std::strcmp(publication_mode,"bad-heap"))start_proxy(&mutex,&self,12,publication_collector);
+  else if(!std::strcmp(publication_mode,"bad-gc-thread"))start_proxy(&heap,&foreign,12,publication_collector);
+  else start_proxy(&heap,&self,12,publication_collector);
+  // These original ART no-thread-suspension operations remain around the
+  // borrowed exclusion; they must never be replaced by the GC hook.
+  ++no_suspend_depth;assert(no_suspend_depth==1);--no_suspend_depth;
+  if(!std::strcmp(publication_mode,"missing-finish"))return;
+  finish_proxy(&heap,&self,!std::strcmp(publication_mode,"bad-finish")?1:0);
+  if(!std::strcmp(publication_mode,"calibration-double")){start_proxy(&heap,&self,12,publication_collector);finish_proxy(&heap,&self,0);}
+ }
+}
+struct PublicationOwner {
+ native_source_stop::Session* session;bool deny=false;size_t checks=0;
+ static bool Match(void* raw,void* driver,const void* holder,void* linker,void* cache,void* loader,size_t* index) noexcept {
+  auto& p=*static_cast<PublicationOwner*>(raw);++p.checks;
+  if(p.deny||!index||driver!=&publication_driver||holder!=&publication_holder||linker!=&publication_linker||
+     !p.session->CanPublishDex(driver,holder,linker))return false;
+  for(size_t i=0;i<2;++i)if(cache==&publication_caches[i]&&loader==&publication_loaders[i]){*index=i;return true;}
+  return false;
+ }
+};
+void PublicationProofs(const native_source_stop::Service& base,const char* mode){
+ using Proxy=native_hierarchy_private_ledger::detail::Hooks;
+ publication_mode="";publication_has_gc=std::strcmp(mode,"no-gc-profile")!=0&&std::strcmp(mode,"unexpected-gc-profile")!=0;
+ publication_collector=!std::strcmp(mode,"collector13")?13:11;
+ auto service=base;int run;native_source_stop::Calibration proof;
+ {native_source_stop::Session missing(base);PublicationOwner tuple{&missing};std::string error;
+  assert(!missing.PrepareDexPublication(&publication_driver,&publication_holder,&publication_linker,2,{&tuple,PublicationOwner::Match},&error));}
+ if(!std::strcmp(mode,"calibration-double"))publication_mode=mode;
+ {native_source_stop::Observation observed(service,&publication_driver,&run,&self,sizeof(self));
+  assert(observed.Collected(&publication_driver,&publication_holder));
+  for(size_t i=0;i<2;++i){Proxy::Invoke(PublishOriginal,&publication_linker,&publication_caches[i],&publication_loaders[i]);
+   if(!std::strcmp(mode,"calibration-mixed"))publication_has_gc=false;}
+  disable_proxy(&heap,&self);Native(&self);unsigned char final;
+  stop_proxy(&final,s::kFinalCause,true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+  if(!std::strcmp(mode,"calibration-double")||!std::strcmp(mode,"calibration-mixed")){
+   assert(!observed.Finish(&publication_driver,true,&proof)&&!proof.Valid()&&!service.DexPublicationCalibrated());
+   std::cout<<"unpaired/mixed observed publication cannot create calibration PASS\n";return;}
+  assert(observed.Finish(&publication_driver,true,&proof)&&service.Authorize(proof,&run)&&service.DexPublicationCalibrated());
+ }
+ {native_source_stop::Session local(service);assert(local.Begin(&self,sizeof(self))&&local.IsCollectedStop(&self));
+  assert(!local.ContinueSource()&&local.RollbackBeforeSource()&&!local.Reserved());}
+ native_source_stop::Session owner(service);PublicationOwner tuple{&owner};std::string error;
+ assert(!owner.PrepareDexPublication(nullptr,&publication_holder,&publication_linker,2,{&tuple,PublicationOwner::Match},&error));
+ assert(!owner.PrepareDexPublication(&publication_driver,&publication_holder,&mutex,2,{&tuple,PublicationOwner::Match},&error));
+ assert(owner.PrepareDexPublication(&publication_driver,&publication_holder,&publication_linker,2,{&tuple,PublicationOwner::Match},&error));
+ assert(!owner.CanPublishDex(&publication_driver,&publication_holder,&publication_linker));
+ assert(owner.Begin(&self,sizeof(self)));
+ if(!std::strcmp(mode,"bad-phase"))Proxy::Invoke(PublishOriginal,&publication_linker,&publication_caches[0],&publication_loaders[0]);
+ assert(owner.ContinueSource()&&owner.IsPublicationWindow(&self)&&!owner.IsPublicationWindow(&foreign));
+ assert(!owner.CanPublishDex(&run,&publication_holder,&publication_linker)&&!owner.CanPublishDex(&publication_driver,&run,&publication_linker));
+ publication_mode=mode;if(!std::strcmp(mode,"unexpected-gc-profile"))publication_has_gc=true;const auto real_starts=gc_starts,real_finishes=gc_finishes;
+ forbid_native_allocation=true;
+ if(!std::strcmp(mode,"outside-callee"))start_proxy(&heap,&self,12,publication_collector);
+ if(!std::strcmp(mode,"foreign-current"))foreign_current=true;
+ if(!std::strcmp(mode,"bad-owner"))tuple.deny=true;
+ for(size_t i=0;i<2;++i){
+  Proxy::Invoke(PublishOriginal,!std::strcmp(mode,"bad-linker")?&mutex:&publication_linker,
+      !std::strcmp(mode,"bad-cache")?&mutex:&publication_caches[i],
+      !std::strcmp(mode,"bad-loader")?&mutex:&publication_loaders[i]);
+  if(!std::strcmp(mode,"duplicate"))Proxy::Invoke(PublishOriginal,&publication_linker,&publication_caches[i],&publication_loaders[i]);
+  if(!std::strcmp(mode,"missing-publication"))break;
+ }
+ assert(gc_starts==real_starts&&gc_finishes==real_finishes&&gc&&owner.Reserved()&&tuple.checks>=(!std::strcmp(mode,"missing-publication")?2u:4u)&&no_suspend_depth==0);
+ disable_proxy(&heap,&self);Native(&self);unsigned char final;
+ stop_proxy(&final,s::kFinalCause,true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+ forbid_native_allocation=false;
+ assert(owner.Completed()&&!owner.Reserved()&&!owner.IsPublicationWindow(&self)&&!gc&&!exclusive&&gc_starts==gc_finishes);
+ publication_mode="";std::cout<<"named source publication exact tuple/observed GC profile, paired stronger reservation borrowing, preserved no-suspend and final cleanup PASS\n";
 }
 
 void BridgeProofs(const native_source_stop::Service& service){
@@ -403,5 +491,6 @@ int main(int argc,char** argv){
  // Abnormal source return still releases the owned reservation from Runnable.
  {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.ContinueSource());assert(!owner.RollbackBeforeSource());}
  assert(!gc&&!exclusive&&self.flags==(runnable_state<<shift)&&stops==resumes&&gc_starts==gc_finishes&&locks==unlocks);
+ PublicationProofs(service,argc==2?argv[1]:"");
  std::cout<<"continuous original stop/GC ownership, transfer and rollback PASS\n";return 0;
 }
