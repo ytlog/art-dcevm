@@ -32,10 +32,12 @@ void Record(void*,jvmtiError,const void*,const void*){}
 void Marker(void*){}
 void PublishCache(void*,abi::arm64::android11::ReleaseObjectPointer,abi::arm64::android11::ReleaseObjectPointer){}
 void ObserveFailure(void*,jvmtiError)noexcept{}
+void SignedRoots(void*self,abi::arm64::android_common::HandleRootVisitor*visitor,int32_t id){assert(id==0);OriginalRoots(self,visitor,uint32_t{0});}
 class OwnerHooks final:public AllocationHooks {
  public:
  void* FindSymbol(const char* lib,const char* n)override{
-  if(std::strstr(n,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(OriginalRoots);
+  if(!std::strcmp(n,abi::arm64::android_common::kHandleVisitRoots))return nullptr;
+  if(!std::strcmp(n,abi::arm64::android_common::kHandleVisitRootsSigned))return reinterpret_cast<void*>(SignedRoots);
   if(std::strstr(n,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);
   if(std::strstr(n,"AllocateNewClassObject"))return reinterpret_cast<void*>(AllocateOriginal);
   if(std::strstr(n,"FinishNewClassAllocations"))return reinterpret_cast<void*>(Finish);
@@ -67,6 +69,13 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  auto foreign_self=c;foreign_self.self=foreign_thread.data();
  assert(!owner.Prepare(hooks,storage,metadata,observed,foreign_self,&error)&&!owner.Prepared());
  Put32(thread.data(),0,92u<<24);
+ auto saved_env_self=env.source_self;env.source_self=foreign_thread.data();
+ assert(!owner.Prepare(hooks,storage,metadata,observed,c,&error)&&!owner.Prepared());env.source_self=saved_env_self;
+ // Exact independently observed JNIEnvExt identity replaces obsolete TLS
+ // self/env assumptions. Root scope chain and named visitor remain mandatory.
+ void* saved_tls_self=nullptr;void* saved_tls_env=nullptr;
+ std::memcpy(&saved_tls_self,thread.data()+216,8);std::memcpy(&saved_tls_env,thread.data()+200,8);
+ void* absent=nullptr;std::memcpy(thread.data()+216,&absent,8);std::memcpy(thread.data()+200,&absent,8);
  assert(owner.Prepare(hooks,storage,metadata,observed,c,&error)&&owner.Prepared()&&!owner.Ready());
  native_schema_run_state::Dependencies dependencies;
  assert(!owner.BindDependencies(&dependencies,&error)&&!dependencies.roots&&!dependencies.allocator);
@@ -99,6 +108,11 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  assert(owner.End(&driver,true,&error)&&!owner.Ready());
  assert(!std::strcmp(owner.Diagnostic(),"requires-second-ordinary-allocation-proof"));
  assert(!native_hierarchy_session::CalibrationScope::Current());
+ void* unchanged=parent_class;
+ assert(!owner.Roots().BorrowOwnedStrongGlobal(foreign,fixture,&unchanged)&&unchanged==parent_class);
+ env.source_self=foreign_thread.data();
+ assert(!owner.Roots().BorrowOwnedStrongGlobal(c,fixture,&unchanged)&&unchanged==parent_class);
+ env.source_self=saved_env_self;
  // Wrong registry or lookup cannot promote even a successful source episode.
  assert(owner.Begin(&driver,c,fixture,&error));wrong_registry=true;
  assert(!owner.End(&driver,true,&error)&&!owner.Ready());wrong_registry=false;
@@ -119,6 +133,7 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  assert(!owner.End(&driver,true,&error)&&!owner.Ready());wrong_registry=false;
  assert(owner.Begin(&driver,c,fixture,&error));assert(owner.End(&driver,true,&error)&&owner.Ready());
  assert(!owner.End(&driver,true,&error));
+ std::memcpy(thread.data()+216,&saved_tls_self,8);std::memcpy(thread.data()+200,&saved_tls_env,8);
  return true;
 }
 }

@@ -13,6 +13,7 @@ out = root / 'build/evidence/host/native-production-schema-capabilities'
 out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_production_schema_capabilities_test'
 fixture=(root/'tests/host/native_source_commit_test.cc').read_text().split('int main(){')[0].replace('std::array<unsigned char,200>', 'std::array<unsigned char,512>')
+fixture=fixture.replace('JNIEnv env{&table};', 'struct HostEnvironment:JNIEnv {void* source_self=nullptr;void* source_vm=nullptr;};HostEnvironment env{{&table},nullptr,nullptr};').replace('void InitJni(){', 'void InitJni(){env.source_self=thread.data();env.source_vm=&runtime;')
 (out/'native_commit_fixture.inc').write_text(fixture)
 (out/'allocation_owner_fixture.inc').write_text((root/'tests/host/native_hierarchy_allocator_test.cc').read_text().split('int main(){')[0])
 sources = ['native_production_schema_capabilities', 'native_hierarchy_private_ledger', 'native_source_dex_registry', 'native_source_class_loading', 'native_hierarchy_session', 'native_class_lookup', 'native_hierarchy_source_checks', 'native_hierarchy_graph', 'native_hierarchy_allocator', 'native_hierarchy_receiver', 'rooted_hierarchy_allocator', 'native_hierarchy_cache', 'native_hierarchy_source_cache', 'source_handle_roots', 'source_allocation_transaction', 'native_source_commit', 'modern_source_commit', 'source_commit',

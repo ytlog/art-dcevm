@@ -3,8 +3,10 @@
 namespace artdcevm::abi::arm64::android_common {
 // Pinned 11--17 thread.h pointer-sized TLS prefix through top_handle_scope.
 // The absolute prefix start is never selected by API: field-storage's actual
-// independent card oracle establishes its location, then source handles and
-// the named root visitor establish these additional declarations.
+// independent card oracle establishes the card slot. Production self/env
+// identity comes from the independently proved JNIEnvExt declaration; the
+// fixed top slot is accepted only when the actual source Handle chain and named
+// root visitor roundtrip it. Card calibration alone is never a scope grant.
 struct alignas(8) HandleThreadPrefix {
  uint8_t* card_table;void* exception;uint8_t* stack_end;
  android16::ManagedStack managed_stack;
@@ -22,7 +24,10 @@ struct HandleRootVisitor {
  virtual void VisitRoots(uint32_t**,size_t,const NativeRootInfo&)=0;
 };
 using HandleVisitRoots=void (*)(void*,HandleRootVisitor*,uint32_t);
+// Android 11 thread.h takes pid_t (signed int); 12+ takes uint32_t.
+using HandleVisitRootsSigned=void (*)(void*,HandleRootVisitor*,int32_t);
 inline constexpr char kHandleVisitRoots[]="_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEj";
+inline constexpr char kHandleVisitRootsSigned[]="_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEi";
 inline constexpr size_t kHandleReferences=sizeof(HandleScopeHeader);
 static_assert(sizeof(HandleScopeHeader)==12&&alignof(HandleScopeHeader)==4);
 static_assert(offsetof(HandleThreadPrefix,top_handle_scope)==136&&offsetof(HandleThreadPrefix,self)==72&&offsetof(HandleThreadPrefix,jni_env)==56);

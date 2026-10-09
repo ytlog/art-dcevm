@@ -27,25 +27,40 @@ struct Check final:HandleRootVisitor {
 };
 }
 bool Service::Bind(HookEngine& hooks,const modern_field_storage::Service& storage,Service* output,std::string* error){
+ return BindImpl(hooks,storage,nullptr,output,error);
+}
+bool Service::Bind(HookEngine& hooks,const modern_field_storage::Service& storage,const runnable_jni::Context& c,Service* output,std::string* error){
+ return BindImpl(hooks,storage,&c,output,error);
+}
+bool Service::BindImpl(HookEngine& hooks,const modern_field_storage::Service& storage,const runnable_jni::Context* context,Service* output,std::string* error){
  if(!output||output->current_||!storage.Calibrated()||!storage.CardTableOffset())return Fail(error,"Handle roots require the complete independent card-storage oracle");
  Service candidate;candidate.current_=reinterpret_cast<decltype(candidate.current_)>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  candidate.visit_=reinterpret_cast<HandleVisitRoots>(hooks.FindSymbol("libart.so",kHandleVisitRoots));
+ if(!candidate.visit_)candidate.visit_signed_=reinterpret_cast<HandleVisitRootsSigned>(hooks.FindSymbol("libart.so",kHandleVisitRootsSigned));
  // Use the same fixed named decoder and actual strong-JNI class provenance as
  // the independently calibrated field-storage exclusive-root owner.
  void* decoder=hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject);
  if(!decoder)decoder=hooks.FindSymbol("libart.so",runnable_jni::GlobalDecoder::SymbolName());
  candidate.decode_=reinterpret_cast<decltype(candidate.decode_)>(decoder);
- if(!candidate.current_||!candidate.visit_||!candidate.decode_||!hooks.FindSymbol("libopenjdkjvmti.so",kHierarchyAllocator))return Fail(error,"Missing named source allocator/current-thread/handle-root visitor");
+ if(!candidate.current_||(!candidate.visit_&&!candidate.visit_signed_)||!candidate.decode_||!hooks.FindSymbol("libopenjdkjvmti.so",kHierarchyAllocator))return Fail(error,"Missing named source allocator/current-thread/handle-root visitor");
  candidate.prefix_=storage.CardTableOffset();
  if(candidate.prefix_>SIZE_MAX-sizeof(HandleThreadPrefix))return Fail(error,"Handle source prefix overflows");
  candidate.top_=candidate.prefix_+offsetof(HandleThreadPrefix,top_handle_scope);
  void* self=candidate.current_();
- if(!Mapped(self,candidate.prefix_+sizeof(HandleThreadPrefix))||Read<void*>(self,candidate.prefix_+offsetof(HandleThreadPrefix,self))!=self)return Fail(error,"Fixed source TLS self does not match the independent named current thread");
+ if(!Mapped(self,candidate.prefix_+sizeof(HandleThreadPrefix)))return Fail(error,"Source Thread prefix is not mapped");
+ if(context){
+  if(!context->env||context->self!=self||!context->vm||!Mapped(context->env,sizeof(abi::common::JniEnvironmentPrefix)))return Fail(error,"Source roots actual JNI environment/current Thread mismatch");
+  const auto jni=Read<abi::common::JniEnvironmentPrefix>(context->env);
+  JavaVM* vm=nullptr;
+  if(jni.functions!=context->env->functions||jni.self!=self||jni.vm!=context->vm||
+     context->env->GetJavaVM(&vm)!=JNI_OK||vm!=context->vm||context->env->ExceptionCheck())return Fail(error,"Source roots independent JNIEnvExt self/VM oracle mismatch");
+  candidate.contextual_=true;candidate.vm_=context->vm;
+ }else if(Read<void*>(self,candidate.prefix_+offsetof(HandleThreadPrefix,self))!=self)return Fail(error,"Fixed source TLS self does not match the independent named current thread");
  const uint32_t state=__atomic_load_n(static_cast<const uint32_t*>(self),__ATOMIC_RELAXED);
  if((state>>abi::arm64::android13::kStateShift)==abi::arm64::android13::kNative){candidate.shift_=abi::arm64::android13::kStateShift;candidate.runnable_=abi::arm64::android13::kRunnable;}
  else if((state>>abi::arm64::android11::kStateShift)==abi::arm64::android11::kNative){candidate.shift_=abi::arm64::android11::kStateShift;candidate.runnable_=abi::arm64::android11::kRunnable;}
  else return Fail(error,"Handle-root binding requires independently owned ordinary Native JNI");
- output->decode_=candidate.decode_;output->current_=candidate.current_;output->visit_=candidate.visit_;output->prefix_=candidate.prefix_;output->top_=candidate.top_;output->shift_=candidate.shift_;output->runnable_=candidate.runnable_;
+ output->decode_=candidate.decode_;output->current_=candidate.current_;output->visit_=candidate.visit_;output->visit_signed_=candidate.visit_signed_;output->vm_=candidate.vm_;output->contextual_=candidate.contextual_;output->prefix_=candidate.prefix_;output->top_=candidate.top_;output->shift_=candidate.shift_;output->runnable_=candidate.runnable_;
  output->bound_self_=self;output->bound_prefix_=candidate.prefix_+sizeof(HandleThreadPrefix);if(error)error->clear();return true;
 }
 bool Service::Runnable(void* self)const{
@@ -56,8 +71,18 @@ bool Service::Runnable(void* self)const{
  if(self==bound_self_&&bound_prefix_>=sizeof(uint32_t)&&
     (__atomic_load_n(static_cast<const uint32_t*>(self),__ATOMIC_RELAXED)>>shift_)!=runnable_)return false;
  return Mapped(self,prefix_+sizeof(HandleThreadPrefix))&&
-  Read<void*>(self,prefix_+offsetof(HandleThreadPrefix,self))==self&&
+  (contextual_||Read<void*>(self,prefix_+offsetof(HandleThreadPrefix,self))==self)&&
   (__atomic_load_n(static_cast<const uint32_t*>(self),__ATOMIC_RELAXED)>>shift_)==runnable_;
+}
+bool Service::Environment(const runnable_jni::Context& c)const noexcept{
+ if(!c.env)return false;
+ if(!contextual_)return Read<void*>(c.self,prefix_+offsetof(HandleThreadPrefix,jni_env))==c.env;
+ if(c.vm!=vm_||!Mapped(c.env,sizeof(abi::common::JniEnvironmentPrefix)))return false;
+ const auto p=Read<abi::common::JniEnvironmentPrefix>(c.env);
+ return p.functions==c.env->functions&&p.self==c.self&&p.vm==vm_;
+}
+void Service::Visit(void* self,HandleRootVisitor* visitor)const{
+ if(visit_)visit_(self,visitor,uint32_t{0});else visit_signed_(self,visitor,int32_t{0});
 }
 bool Service::Contains(void* self,const void* slot,uint32_t value)const{
  std::array<const void*,1024> visited{};size_t used=0;bool found=false;
@@ -73,13 +98,13 @@ bool Service::Contains(void* self,const void* slot,uint32_t value)const{
  return found;
 }
 bool Service::BorrowOwnedStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const noexcept{
- if(!output||!decode_||!strong||!Runnable(context.self)||!context.env||Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env)return false;
+ if(!output||!decode_||!strong||!Runnable(context.self)||!Environment(context))return false;
  void* expected=reinterpret_cast<void*>(decode_(context.self,strong).reference);
  if(!expected||uintptr_t(expected)>UINT32_MAX)return false;
  *output=expected;return true;
 }
 bool Service::BorrowStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const{
- if(!output||!decode_||!Runnable(context.self)||!context.env||Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env)return false;
+ if(!output||!decode_||!Runnable(context.self)||!Environment(context))return false;
  if(!strong||context.env->ExceptionCheck()||context.env->GetObjectRefType(strong)!=JNIGlobalRefType||!Runnable(context.self))return false;
  void* expected=reinterpret_cast<void*>(decode_(context.self,strong).reference);
  if(!expected||uintptr_t(expected)>UINT32_MAX)return false;
@@ -89,15 +114,14 @@ bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobjec
  void* expected=nullptr;
  if(!BorrowStrongGlobal(context,strong,&expected))return Fail(error,"Source allocator original Class is not an actual Runnable owned strong JNI global");
  if(!Mapped(slot,4)||!Contains(context.self,slot,uint32_t(uintptr_t(expected))))return Fail(error,"Source Class Handle is not in the independently matched live scope chain");
- Check check;check.slots[0]=slot;check.count=1;check.value=uint32_t(uintptr_t(expected));visit_(context.self,&check,0);
+ Check check;check.slots[0]=slot;check.count=1;check.value=uint32_t(uintptr_t(expected));Visit(context.self,&check);
  if(!check.valid||check.seen!=1)return Fail(error,"Named root visitor does not see the exact public original Class Handle");
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");
  calibrated_.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
 bool Service::ReadyForSourceAccess()const{return Calibrated()&&current_&&Runnable(current_());}
 bool Service::BorrowHandle(const runnable_jni::Context& context,const void* slot,void** output)const {
- if(!output||!Calibrated()||!Runnable(context.self)||!context.env||
-    Read<void*>(context.self,prefix_+offsetof(HandleThreadPrefix,jni_env))!=context.env||!Mapped(slot,4))return false;
+ if(!output||!Calibrated()||!Runnable(context.self)||!Environment(context)||!Mapped(slot,4))return false;
  const uint32_t value=Read<uint32_t>(slot);
  if(!Contains(context.self,slot,value))return false;
  *output=reinterpret_cast<void*>(uintptr_t(value));return true;
@@ -113,11 +137,11 @@ bool Service::CheckNested(void* self,uint32_t value){
   auto outer=CreateUnchecked(self,3);valid=!outer->Get(0)&&!outer->Get(1)&&!outer->Get(2);
   outer->Set(0,reinterpret_cast<void*>(uintptr_t(value)));outer->Set(2,reinterpret_cast<void*>(uintptr_t(value)));
   {auto inner=CreateUnchecked(self,2);valid&=!inner->Get(0)&&!inner->Get(1);inner->Set(0,reinterpret_cast<void*>(uintptr_t(value)));
-   Check check;check.slots[0]=inner->Slot(0);check.slots[1]=outer->Slot(0);check.slots[2]=outer->Slot(2);check.count=3;check.value=value;check.clear_first=true;visit_(self,&check,0);
+   Check check;check.slots[0]=inner->Slot(0);check.slots[1]=outer->Slot(0);check.slots[2]=outer->Slot(2);check.count=3;check.value=value;check.clear_first=true;Visit(self,&check);
    valid&=check.valid&&check.seen==3&&!inner->Get(0)&&!inner->Get(1)&&outer->Get(0)==reinterpret_cast<void*>(uintptr_t(value));
-   inner->Set(0,reinterpret_cast<void*>(uintptr_t(value)));check.seen=0;check.clear_first=false;visit_(self,&check,0);valid&=check.valid&&check.seen==3;
+   inner->Set(0,reinterpret_cast<void*>(uintptr_t(value)));check.seen=0;check.clear_first=false;Visit(self,&check);valid&=check.valid&&check.seen==3;
   }
-  Check check;check.slots[0]=outer->Slot(0);check.slots[1]=outer->Slot(2);check.count=2;check.value=value;visit_(self,&check,0);valid&=check.valid&&check.seen==2;
+  Check check;check.slots[0]=outer->Slot(0);check.slots[1]=outer->Slot(2);check.count=2;check.value=value;Visit(self,&check);valid&=check.valid&&check.seen==2;
  }catch(const std::bad_alloc&){valid=false;}
  return valid&&Read<void*>(self,top_)==previous;
 }

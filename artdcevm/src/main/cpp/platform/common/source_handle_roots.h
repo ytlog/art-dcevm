@@ -11,6 +11,10 @@ class Service final {
   // Bind in ordinary Native JNI after the complete real field/card oracle.
   // Binding does not authorize root publication or hierarchy mutation.
   static bool Bind(HookEngine&,const modern_field_storage::Service&,Service*,std::string*);
+  // Production uses the independently observed JNI environment declaration
+  // instead of assuming Thread TLS self/env positions from its card slot.
+  static bool Bind(HookEngine&,const modern_field_storage::Service&,
+                   const runnable_jni::Context& actual_native,Service*,std::string*);
   // Called at the actual named AllocateNewClassObject hook with its old-Class
   // Handle argument and the owner's independently rooted public original Class.
   // Callback must run in its already established live Runnable Context.
@@ -31,12 +35,18 @@ class Service final {
  private:
   friend class Scope;
   bool Runnable(void*)const;
+  bool Environment(const runnable_jni::Context&)const noexcept;
+  void Visit(void*,abi::arm64::android_common::HandleRootVisitor*)const;
+  static bool BindImpl(HookEngine&,const modern_field_storage::Service&,
+                       const runnable_jni::Context*,Service*,std::string*);
   bool Contains(void*,const void*,uint32_t)const;
   bool CheckNested(void*,uint32_t);
   std::unique_ptr<Scope> CreateUnchecked(void*,uint32_t)const;
   abi::arm64::android11::DecodeJObject decode_=nullptr;
   abi::arm64::android11::CurrentThread current_=nullptr;
   abi::arm64::android_common::HandleVisitRoots visit_=nullptr;
+  abi::arm64::android_common::HandleVisitRootsSigned visit_signed_=nullptr;
+  void* vm_=nullptr;bool contextual_=false;
   size_t prefix_=0,top_=0;
   unsigned shift_=0;uint32_t runnable_=0;
   // Exact current Thread and readable prefix independently checked at Native

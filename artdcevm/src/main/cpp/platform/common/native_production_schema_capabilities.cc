@@ -30,7 +30,7 @@ bool Owner::Prepare(HookEngine& hooks,const modern_field_storage::Service& stora
  if(!native_hierarchy_allocator::Service::Bind(hooks,metadata,roots_,runtime,&allocator_,error)||
     !native_source_dex_registry::Service::Bind(hooks,runtime,&registry_,error)||
     !native_class_lookup::Service::Bind(hooks,runtime,&lookup_,error)||
-    !source_handle_roots::Service::Bind(hooks,storage,&roots_,error))return false;
+    !source_handle_roots::Service::Bind(hooks,storage,context,&roots_,error))return false;
  const auto state=__atomic_load_n(static_cast<const uint32_t*>(context.self),__ATOMIC_RELAXED);
  if((state>>abi::arm64::android13::kStateShift)==abi::arm64::android13::kNative){state_shift_=abi::arm64::android13::kStateShift;native_state_=abi::arm64::android13::kNative;}
  else if((state>>abi::arm64::android11::kStateShift)==abi::arm64::android11::kNative){state_shift_=abi::arm64::android11::kStateShift;native_state_=abi::arm64::android11::kNative;}
