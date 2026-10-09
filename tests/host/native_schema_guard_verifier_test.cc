@@ -24,6 +24,21 @@ int main(){
  rejects([](auto& b){b.class_root_origins[1].index=1;});
  rejects([](auto& b){b.class_root_origins.pop_back();});
  rejects([](auto& b){std::swap(b.old_classes[0],b.old_classes[1]);});
+ // Exercise the actual rejection formatter used by CheckWindow. The new
+ // identity must reach callers without granting any staged-graph permission.
+ std::string diagnostic;
+ assert(!ClassWindowFailure(&diagnostic,"Class was defined after caller staging; retry complete schema operation","Lforeign/SameName;",JVMTI_CLASS_STATUS_VERIFIED|JVMTI_CLASS_STATUS_PREPARED));
+ assert(diagnostic=="Class was defined after caller staging; retry complete schema operation [descriptor=Lforeign/SameName; status=0x00000003]");
+ assert(!ClassWindowFailure(&diagnostic,"Unprepared Class appeared before native schema sealing",nullptr,0));
+ assert(diagnostic=="Unprepared Class appeared before native schema sealing [descriptor=<unavailable> status=0x00000000]");
+ std::string long_descriptor(5000,'x');
+ assert(!ClassWindowFailure(&diagnostic,"late",long_descriptor.c_str(),JVMTI_CLASS_STATUS_INITIALIZED));
+ assert(diagnostic.size()<768&&diagnostic.find("status=0x00000004")!=std::string::npos);
+ // A three-byte modified-UTF-8 code unit crosses the 384-byte cap.
+ const std::string unicode_descriptor=std::string(383,'x')+"\xe4\xb8\xad"+";";
+ assert(!ClassWindowFailure(&diagnostic,"late",unicode_descriptor.c_str(),3));
+ assert(diagnostic=="late [descriptor="+std::string(383,'x')+" status=0x00000003]");
+ assert(!ClassWindowFailure(nullptr,"late","Lforeign/Other;",3));
  assert(Ordinary(JVMTI_CLASS_STATUS_PREPARED));
  assert(!Ordinary(JVMTI_CLASS_STATUS_ARRAY));
  assert(!Ordinary(JVMTI_CLASS_STATUS_PRIMITIVE));

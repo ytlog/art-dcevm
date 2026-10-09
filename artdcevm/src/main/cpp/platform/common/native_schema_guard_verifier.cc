@@ -9,6 +9,7 @@
 #include <set>
 #include <limits>
 #include <cstdlib>
+#include <cstdio>
 namespace artdcevm::native_schema_guard_verifier {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
@@ -49,6 +50,19 @@ bool SamePlan(const source_commit::Plan& a,const source_commit::Plan& b){
  return true;
 }
 bool Ordinary(jint status){return !(status&(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE));}
+// This is a rejectable, ordinary-JNI window. Report public identity only;
+// descriptors do not grant membership in the staged caller graph.
+bool ClassWindowFailure(std::string* error,const char* reason,const char* descriptor,jint status){
+ if(error){
+  const char* identity=descriptor?descriptor:"<unavailable>";size_t length=0;
+  while(length<384&&identity[length])++length;
+  // JVMTI descriptors use modified UTF-8. Preserve a complete code unit at
+  // the diagnostic limit, just as the owned-source error transport does.
+  while(length&&identity[length]&&(static_cast<unsigned char>(identity[length])&0xc0u)==0x80u)--length;
+  char text[768];std::snprintf(text,sizeof(text),"%s [descriptor=%.*s status=0x%08x]",reason,int(length),identity,static_cast<unsigned>(status));*error=text;
+ }
+ return false;
+}
 bool MemberEqual(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access);}
 bool MembersEqual(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return MemberEqual(m,n);})==1;});}
 std::string Package(const std::string& descriptor){const auto slash=descriptor.rfind('/');return slash==std::string::npos?std::string{}:descriptor.substr(0,slash);}
@@ -241,10 +255,13 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
  size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
-  if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Unprepared Class appeared before native schema sealing");
+  if(!(status&JVMTI_CLASS_STATUS_PREPARED)){
+   Strings text{ti};ti->GetClassSignature(loaded[i],&text.signature,nullptr);
+   return ClassWindowFailure(error,"Unprepared Class appeared before native schema sealing",text.signature,status);
+  }
   Node current;if(!PublicMembers(env,ti,loaded[i],&current,error))return false;
   auto node=std::find_if(s.nodes.begin(),s.nodes.end(),[&](const auto& n){return n.schema.descriptor==current.schema.descriptor&&s.roots.Same(env,n.root,loaded[i]);});
-  if(node==s.nodes.end())return Fail(error,"Class was defined after caller staging; retry complete schema operation");
+  if(node==s.nodes.end())return ClassWindowFailure(error,"Class was defined after caller staging; retry complete schema operation",current.schema.descriptor.c_str(),status);
   if(!SamePublic(*node,current))return Fail(error,"Public member flags/identities changed inside the source window");
   jobject loader=nullptr;if(ti->GetClassLoader(loaded[i],&loader)!=JVMTI_ERROR_NONE)return Fail(error,"Paused ClassLoader identity unavailable");const bool same_loader=s.roots.Same(env,node->loader,loader);if(loader)env->DeleteLocalRef(loader);if(!same_loader)return Fail(error,"Public ClassLoader identity changed inside source window");
   auto parent=env->GetSuperclass(loaded[i]);const bool same_parent=s.roots.Same(env,node->parent,parent);if(parent)env->DeleteLocalRef(parent);if(!same_parent)return Fail(error,"Public superclass identity changed inside the source window");
