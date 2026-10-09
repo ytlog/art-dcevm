@@ -71,7 +71,12 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/contextual_field_id.cc
     platform/common/modern_method_handle_guards.cc
     platform/common/native_removal_policy.cc
+    platform/common/native_schema_policy.cc platform/common/native_schema_binding.cc
+    platform/common/prepared_field_copy.cc
+    platform/common/native_schema_guard_verifier.cc
     platform/common/structural_methods.cc
+    platform/common/native_method_evolution_policy.cc
+    platform/common/native_abstract_instances.cc
     platform/common/runnable_jni_bridge.cc
     platform/common/runnable_global_ref_bridge.cc
     platform/common/runnable_executor.cc

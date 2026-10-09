@@ -35,10 +35,12 @@ int main(){
  int native[5];for(int n=0;n<5;++n)expected[n]=&native[n];expected_type=1;
  auto invoke=[&]{return Proxy(expected[0],expected[1],expected[2],expected[3],expected_type,expected[4]);};
  nested=true;assert(invoke()==JVMTI_ERROR_FAILS_VERIFICATION&&calls==1);nested=false;
- {Lease wrong(&other);assert(!wrong.Acquired());}
- {Lease lease(&vm);assert(lease.Acquired());Lease recursive(&vm);assert(!recursive.Acquired());
-  std::thread denied([&]{assert(invoke()==JVMTI_ERROR_NOT_AVAILABLE);Lease other_thread(&vm);assert(!other_thread.Acquired());});denied.join();
+ assert(!Owned(&vm));
+ {Lease wrong(&other);assert(!wrong.Acquired()&&!Owned(&other));}
+ {Lease lease(&vm);assert(lease.Acquired()&&Owned(&vm)&&!Owned(&other));Lease recursive(&vm);assert(!recursive.Acquired());
+  std::thread denied([&]{assert(!Owned(&vm));assert(invoke()==JVMTI_ERROR_NOT_AVAILABLE);Lease other_thread(&vm);assert(!other_thread.Acquired());});denied.join();
   assert(calls==1);assert(invoke()==JVMTI_ERROR_FAILS_VERIFICATION&&calls==2);}
+ assert(!Owned(&vm));
  block=true;std::thread active([&]{assert(invoke()==JVMTI_ERROR_FAILS_VERIFICATION);});while(!entered.load())std::this_thread::yield();
  {Lease denied(&vm);assert(!denied.Acquired());assert(invoke()==JVMTI_ERROR_NOT_AVAILABLE);}
  release_body=true;active.join();block=false;

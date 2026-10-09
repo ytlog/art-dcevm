@@ -9,6 +9,8 @@ bool InstallStartup(HookEngine&,JavaVM*,jvmtiEnv*,std::string*);
 // null AFTER publishing Direct. Ordinary existing LIVE plugin cannot prove this.
 bool InstallFirstLive(HookEngine&,JavaVM*,std::string*);
 bool Ready(JavaVM*);
+// Capability belongs to this actual operation thread, including its Direct body.
+bool Owned(JavaVM*);
 const char* Diagnostic();
 class Lease {
  public:

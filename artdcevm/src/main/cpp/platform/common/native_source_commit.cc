@@ -47,6 +47,15 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
     Fail(error,"Missing named native structural commit service");return nullptr;
   }
   result->self_=current();
+  if(dependencies.prepare_field_copy){
+    if(plan.old_classes.empty()||plan.old_classes.size()!=plan.new_classes.size()){Fail(error,"Prepared field migration requires complete rooted Class pairs");return nullptr;}
+    modern_field_storage::ScopedAccess scope(*dependencies.fields);const auto ops=scope.Access();
+    std::vector<field_copy::ClassPair> pairs;for(size_t i=0;i<plan.old_classes.size();++i)pairs.push_back({plan.old_classes[i],plan.new_classes[i]});
+    for(size_t i=0;i<plan.old_classes.size();++i){CopyPair copy{plan.old_classes[i],plan.new_classes[i],{}, {}};
+      if(!field_copy::PreparedPlan::Prepare(ops,true,copy.new_class,copy.old_class,&copy.statics,error,pairs)||
+         !field_copy::PreparedPlan::Prepare(ops,false,copy.new_class,copy.old_class,&copy.instances,error,pairs))return nullptr;
+      result->copies_.push_back(std::move(copy));}
+  }
   if(!result->self_||!result->Validate(plan)){
     Fail(error,"Native structural commit plan or prepared member services disagree");return nullptr;
   }
@@ -64,6 +73,12 @@ bool Services::Validate(const source_commit::Plan& p)const {
      p.old_instances.size()!=p.new_instances.size()||methods_.size()!=p.old_classes.size()||
      (!p.class_root_origins.empty()&&p.class_root_origins.size()!=p.new_classes.size())||
      !dependencies_.reflective.prepared(p,dependencies_.reflective.state))return false;
+  if(dependencies_.prepare_field_copy){
+    if(copies_.size()!=p.old_classes.size())return false;
+    modern_field_storage::ScopedAccess scope(*dependencies_.fields);const auto ops=scope.Access();
+    for(size_t i=0;i<copies_.size();++i){const auto& copy=copies_[i];
+      if(copy.old_class!=p.old_classes[i]||copy.new_class!=p.new_classes[i]||!copy.statics.Validate(ops)||!copy.instances.Validate(ops))return false;}
+  }
   const auto& metadata=*dependencies_.metadata;
   void* meta=metadata.Reference(p.mirror,0);
   if(!meta)return false;
@@ -97,6 +112,11 @@ bool Services::Validate(const source_commit::Plan& p)const {
 uint32_t Services::Status(void* klass)const{return __atomic_load_n(Scalar(klass,layout_->status),__ATOMIC_SEQ_CST)>>28;}
 void Services::SetStatus(void* klass,uint32_t status)const{Require(status<=15);set_status_(klass,static_cast<uint8_t>(status));}
 void Services::CopyFields(bool statik,void* target,void* target_class,void* source,void* source_class)const{
+  if(dependencies_.prepare_field_copy){
+    for(const auto& pair:copies_)if(pair.old_class==source_class&&pair.new_class==target_class){
+      modern_field_storage::ScopedAccess scope(*dependencies_.fields);(statik?pair.statics:pair.instances).CopyAndClear(scope.Access(),target,source);return;}
+    Require(false);
+  }
   dependencies_.fields->CopyFields(statik,target,target_class,source,source_class);
 }
 void* Services::ObjectClass(void* object)const{return dependencies_.fields->ObjectClass(object);}

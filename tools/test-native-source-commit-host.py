@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Exercise calibrated native commit adapter and dependencies as one transaction."""
+import argparse
 import os
 from pathlib import Path
 import subprocess
+parser=argparse.ArgumentParser();parser.add_argument('--compile-only',action='store_true');args=parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 cpp = root / 'artdcevm/src/main/cpp'
 jdk = Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'], text=True).strip())
@@ -11,7 +13,7 @@ out = root / 'build/evidence/host/native-source-commit'
 out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_source_commit_test'
 sources = ['native_source_commit', 'modern_source_commit', 'source_commit',
-           'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy',
+           'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
@@ -26,6 +28,8 @@ if platform == 'darwin':
     command += ['-Wl,-pagezero_size,0x10000']
 command += ['-o', str(binary)]
 subprocess.run(command, check=True)
+if args.compile_only:
+    print('Native source commit link PASS; execution pending');raise SystemExit(0)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
 (out / 'result.log').write_text(result.stdout + result.stderr)

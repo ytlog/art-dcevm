@@ -10,3 +10,6 @@
 
 # Public array behavior and runtime Class oracle invoked by the native VH owner.
 -keep class com.github.ytlog.artdcevm.internal.VarHandleClassOracle { public static java.lang.invoke.VarHandle create(); }
+
+-keep class com.github.ytlog.artdcevm.internal.AbstractVTableOracle { public static java.lang.Object[] create(); }
+-keep class com.github.ytlog.artdcevm.internal.AbstractVTableOracle$* { *; }

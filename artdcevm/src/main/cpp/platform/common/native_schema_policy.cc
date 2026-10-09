@@ -1,0 +1,53 @@
+#include "platform/common/native_schema_policy.h"
+#include "platform/common/native_method_evolution_policy.h"
+#include <algorithm>
+namespace artdcevm::native_schema_policy {
+namespace {
+bool Same(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor;}
+// Fixed DEX access_flags declaration, not a list of permitted flag deltas.
+// Storage/type changes retire the previous identity; unchanged typed storage
+// retains bits and adopts the verified replacement declaration's access mode.
+bool ValidFields(const evolution::ClassSchema& schema) {
+ constexpr uint32_t kFieldFlags=0x50dfu,kVisibility=7u,kFinal=0x10u,kVolatile=0x40u;
+ for(const auto& field:schema.fields){
+  const auto flags=field.access,visibility=flags&kVisibility;
+  if((flags&~kFieldFlags)||(visibility&&(visibility&(visibility-1)))||
+     ((flags&(kFinal|kVolatile))==(kFinal|kVolatile)))return false;
+  if((schema.access&0x200u)&&((flags&0x1fu)!=0x19u||(flags&0xc0u)))return false;
+ }
+ return true;
+}
+evolution::ClassSchema Normalize(evolution::ClassSchema schema){schema.access&=0xffffu;std::sort(schema.interfaces.begin(),schema.interfaces.end());for(auto& m:schema.methods)m.access=JavaFlags(m.access)|(m.name=="<init>"||m.name=="<clinit>"?0x10000u:0u);for(auto& f:schema.fields)f.access&=0xffffu;return schema;}
+bool EqualMembers(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return Same(m,n)&&m.access==n.access;})==1;});}
+bool Equal(const evolution::ClassSchema& a,const evolution::ClassSchema& b){return a.descriptor==b.descriptor&&a.superclass==b.superclass&&a.interfaces==b.interfaces&&a.access==b.access&&EqualMembers(a.fields,b.fields)&&EqualMembers(a.methods,b.methods);}
+}
+uint32_t JavaFlags(uint32_t flags){return(flags&0xffffu)|((flags&0x20000u)?0x20u:0u);}
+bool Plan::Prepare(const evolution::ClassSchema& before,const evolution::ClassSchema& after,Plan* out,std::string* error){
+ auto fail=[&](const char* text){if(error)*error=text;return false;};
+ if(!out)return fail("Missing native schema policy output");
+ if(!ValidFields(before)||!ValidFields(after))return fail("Invalid DEX field visibility, modifier or interface declaration");
+ auto old=Normalize(before),next=Normalize(after);Plan result;
+ std::string local;if(!evolution::PlanMigration(old,next,&result.migration_,&local)){if(error)*error=local;return false;}
+ if(old.superclass!=next.superclass||old.interfaces!=next.interfaces)return fail("Native schema hierarchy changes require an independent rooted graph migration");
+ if(!old.interfaces.empty())result.requirements_.push_back({GuardKind::InterfaceIdentities,{},{}});
+ const uint32_t class_mask=(next.access&0x200u)?0x3601u:0x5431u;
+ const uint32_t class_difference=(old.access^next.access)&class_mask;
+ if(class_difference&&class_difference!=0x10u&&class_difference!=0x400u)return fail("Unsupported native class modifier evolution");
+ if(class_difference&&(next.access&0x10u))result.requirements_.push_back({GuardKind::LoadedSubclasses,{},{}});
+ if(!(next.access&0x200u)&&!(old.access&0x400u)&&(next.access&0x400u))result.requirements_.push_back({GuardKind::ExistingInstances,{},{}});
+ // Final permissions for an existing typed identity require an independent
+ // write-guard owner even when visibility or volatility changes simultaneously.
+ for(const auto& next_field:next.fields){
+  const auto prior=std::find_if(old.fields.begin(),old.fields.end(),[&](const auto& f){return Same(f,next_field)&&f.IsStatic()==next_field.IsStatic();});
+  if(prior!=old.fields.end()&&(next_field.access&0x10u)&&((prior->access^next_field.access)&0x17u))
+   result.requirements_.push_back({GuardKind::FinalFields,next_field.name,next_field.descriptor});
+ }
+ for(const auto& next_field:next.fields){const auto prior=std::find_if(old.fields.begin(),old.fields.end(),[&](const auto& f){return Same(f,next_field);});
+  if(prior!=old.fields.end()&&((prior->access^next_field.access)&0x17u))result.requirements_.push_back({GuardKind::AccessPermissions,next_field.name,next_field.descriptor});
+ }
+ if(!PrepareMethodEvolution(old,next,&result.requirements_,error))return false;
+ *out=std::move(result);if(error)error->clear();return true;
+}
+bool Plan::Matches(const evolution::ClassSchema& old,const evolution::ClassSchema& next)const{return Equal(Normalize(old),migration_.before)&&Equal(Normalize(next),migration_.after);}
+bool Plan::MethodIdentity(const evolution::Member& old,const evolution::Member& next)const{return Same(old,next)&&old.IsStatic()==next.IsStatic();}
+}

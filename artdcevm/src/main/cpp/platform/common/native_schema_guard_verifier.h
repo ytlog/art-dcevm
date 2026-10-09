@@ -1,0 +1,67 @@
+#pragma once
+#include "platform/common/native_schema_policy.h"
+#include "platform/common/native_schema_binding.h"
+#include "platform/common/native_abstract_instances.h"
+#include "platform/common/runnable_jni_bridge.h"
+#include <jni.h>
+#include <jvmti.h>
+#include <memory>
+namespace artdcevm::native_schema_guard_verifier {
+// Final-field enforcement belongs to the single installed permission owner.
+// The verifier cannot manufacture readiness from a callback or a schema bit.
+class FinalFields {
+ public:
+  virtual ~FinalFields()=default;
+  virtual bool Verify(const source_commit::Plan&,size_t,void* loader,
+      const evolution::ClassSchema&,const evolution::ClassSchema&,
+      const native_schema_policy::Requirement&,std::string*)const=0;
+};
+struct Bindings {
+  JavaVM* vm=nullptr;
+  const modern_field_metadata::FieldMetadata* metadata=nullptr;
+  const method_identity::Calibration* methods=nullptr;
+  const native_abstract_instances::Service* abstract_instances=nullptr;
+  const FinalFields* final_fields=nullptr;
+  void* owner=nullptr;
+  // Existing independently calibrated process owner; only the original
+  // Runnable/native-rooted scope may call these. No JNI or suspension inside.
+  bool (*decode_global)(void*,jobject,void**)=nullptr;
+  void* (*decode_method)(void*,jmethodID)=nullptr;
+  // Contextual field-ID alias proof created before the source pause. Never
+  // reinterpret jfieldID; callback performs native-only lookup under roots.
+  void* (*decode_field)(void*,jclass,jfieldID)=nullptr;
+  void* (*method_class)(void*,void*)=nullptr;
+  bool (*same_method)(void*,void*,void*)=nullptr;
+  // One mapping snapshot per native scan, refreshed under the native owner.
+  // Lifetime is proved by Class/member roots; maps only attest permissions.
+  bool (*readable)(void*,const void*,size_t)=nullptr;
+  bool (*writable)(void*,const void*,size_t)=nullptr;
+};
+enum class Window {Verified,Collected};
+class Verifier final:public native_schema_policy::GuardVerifier {
+ public:
+  Verifier();~Verifier();
+  Verifier(const Verifier&)=delete;Verifier& operator=(const Verifier&)=delete;
+  // Public JNI stage before ART pauses definitions. All loaded caller Classes,
+  // methods and direct interface identities are independently observed. Input
+  // roots name the complete affected graph; caller supplies its existing lease.
+  bool Stage(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& input_roots,
+             const Bindings&,std::string*);
+  // Called by the two actual source booleans, never GetImplementedInterfaces:
+  // fixed ART's latter calls ResolveDirectInterface and may load a class.
+  bool CheckWindow(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& old_classes,
+                   Window,std::string*);
+  // Original rooted native-only window, after public checks and before the
+  // source irreversible point. Plan includes real Holder old/new instances.
+  // Final provider Verify rechecks all native data against this same proof.
+  bool Seal(const source_commit::Plan&,std::string*);
+  bool Verify(const source_commit::Plan&,size_t,void*,
+              const native_schema_policy::Requirement&,std::string*)const override;
+  void BeginCommit(const source_commit::Plan&)const override;
+  // Ordinary JNI, after the transaction gate is released; no permanent Class
+  // roots, public method-ID caches or loader retention survive an operation.
+  void Clear(JNIEnv*);
+ private:
+  struct State;std::unique_ptr<State> state_;
+};
+}

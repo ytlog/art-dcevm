@@ -44,7 +44,7 @@ int main(){ Hooks hooks; ConfigureTransactionReaderForTest(hooks); std::string e
  assert(!artdcevm::android13::ConfigureJniMethodTargets(hooks,profile,&error));
  hooks.canonical_available=true;
  assert(artdcevm::android13::ConfigureJniMethodTargets(hooks,profile,&error));
- Class old{},replacement{},iface{}; Array a,b; a.size=6;b.size=4;old.methods=reinterpret_cast<uint64_t>(&a);replacement.methods=reinterpret_cast<uint64_t>(&b);
+ Class old{},replacement{},iface{}; Array a,b; a.size=8;b.size=6;old.methods=reinterpret_cast<uint64_t>(&a);replacement.methods=reinterpret_cast<uint64_t>(&b);
  for(unsigned i=0;i<a.size;++i){a.methods[i].dex_method_index=i;roots[&a.methods[i]]=&old;}
  a.methods[0].access_flags=0x100;a.methods[0].data=0x123456789abcdefULL;
  a.methods[1].access_flags=0x100;a.methods[1].data=77;retired=&a.methods[1];
@@ -52,19 +52,25 @@ int main(){ Hooks hooks; ConfigureTransactionReaderForTest(hooks); std::string e
  iface.access_flags=0x200;a.methods[3].access_flags=0x1000000;roots[&a.methods[3]]=&iface;
  a.methods[4].access_flags=0x100;a.methods[4].data=88;
  a.methods[5].access_flags=0x108;a.methods[5].data=99;
+ a.methods[6].access_flags=1;a.methods[6].data=0xface; // Java -> native retains new JNI lookup binding
+ a.methods[7].access_flags=0x101;a.methods[7].data=0xabcd; // native -> abstract retains new abstract metadata
  for(unsigned i=0;i<b.size;++i)roots[&b.methods[i]]=&replacement;
  b.methods[0].dex_method_index=0;b.methods[0].access_flags=0x100;
  b.methods[1].dex_method_index=4;b.methods[1].access_flags=0; // native becomes Java
  b.methods[2].dex_method_index=5;b.methods[2].access_flags=0x100;b.methods[2].data=41; // wrong staticness
  b.methods[3].dex_method_index=5;b.methods[3].access_flags=0x108;
- artdcevm::android13::UpdateStructuralMethods(&old,&replacement);assert(calls==5);
+ b.methods[4].dex_method_index=6;b.methods[4].access_flags=0x101;b.methods[4].data=0xbeef;
+ b.methods[5].dex_method_index=7;b.methods[5].access_flags=0x401;b.methods[5].data=0;
+ artdcevm::android13::UpdateStructuralMethods(&old,&replacement);assert(calls==7);
  assert(b.methods[0].data==a.methods[0].data && b.methods[3].data==99 && b.methods[2].data==41);
+ assert(b.methods[4].data==0xbeef&&b.methods[5].data==0);
+ assert(a.methods[6].data==0xface&&a.methods[7].data==0xabcd);
  assert(a.methods[1].data==77 && a.methods[1].entry_point==999); // retired native still walks obsolete frames
  assert((a.methods[2].access_flags&0x2040000)==0x40000);
  assert(a.methods[3].access_flags==0x1000000 && a.methods[3].entry_point==0);
  assert((a.methods[0].access_flags&0x2040000)==0x2040000);
  Method m{};assert(artdcevm::android13::CanonicalizeJniMethod(&m)==&m);m.access_flags=0x1000000;assert(artdcevm::android13::CanonicalizeJniMethod(&m)==reinterpret_cast<unsigned char*>(&m)+32);m.access_flags|=0x80000000;assert(artdcevm::android13::CanonicalizeJniMethod(&m)==&m);assert(canon_calls==1);
- Array empty;old.methods=reinterpret_cast<uint64_t>(&empty); artdcevm::android13::UpdateStructuralMethods(&old,&replacement);old.methods=0;artdcevm::android13::UpdateStructuralMethods(&old,&replacement);assert(calls==5);
+ Array empty;old.methods=reinterpret_cast<uint64_t>(&empty); artdcevm::android13::UpdateStructuralMethods(&old,&replacement);old.methods=0;artdcevm::android13::UpdateStructuralMethods(&old,&replacement);assert(calls==7);
  // ART flag readers may race with relaxed atomic updates even while Java is suspended.
  old.methods=reinterpret_cast<uint64_t>(&empty); empty.size=1; roots[&empty.methods[0]]=&old;
  std::atomic<bool> done{false};

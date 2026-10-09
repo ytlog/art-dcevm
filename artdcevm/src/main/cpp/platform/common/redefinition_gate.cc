@@ -100,6 +100,7 @@ bool InstallFirstLive(HookEngine& hooks,JavaVM* vm,std::string* error){
  ready.store(true,std::memory_order_release);return true;
 }
 bool Ready(JavaVM* vm){return ready.load(std::memory_order_acquire)&&vm==startup_vm;}
+bool Owned(JavaVM* vm){return Ready(vm)&&owned;}
 const char* Diagnostic(){return diagnostic.load();}
 Lease::Lease(JavaVM* vm){if(Ready(vm)&&!owned&&!direct&&operation.try_lock()){owned=true;acquired_=true;}}
 Lease::~Lease(){if(acquired_){if(direct)std::abort();owned=false;operation.unlock();}}

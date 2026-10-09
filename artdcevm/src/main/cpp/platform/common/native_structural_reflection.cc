@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include "platform/common/native_structural_reflection_visitor.h"
 #include "platform/common/native_method_table.h"
+#include "platform/common/native_schema_binding.h"
 #include <algorithm>
 #include <cstdio>
 #include "platform/common/native_interface_graph.h"
@@ -136,11 +137,12 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
 }
 std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
     const modern_field_metadata::FieldMetadata& metadata,
-    const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,HandleGuards guards,ResolutionBinding resolution) {
+    const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,HandleGuards guards,ResolutionBinding resolution,const std::vector<native_schema_policy::Plan>* schemas,const native_schema_policy::GuardVerifier* schema_guards) {
   const auto fail=[&](const char* text)->std::unique_ptr<Plan>{if(error)*error=text;return nullptr;};
   if(!metadata.Calibrated()||source.old_classes.empty()||source.old_classes.size()!=source.new_classes.size()||
       methods.size()!=source.old_classes.size()||!retirement.owner||!retirement.method_retired||!retirement.retire_method)
     return fail("Missing rooted structural mapping and persistent method guards");
+  if(schemas&&(!resolution.method_model||!native_schema_policy::ValidateNative(source,metadata,*resolution.method_model,methods,*schemas,schema_guards,error)))return nullptr;
   auto result=std::unique_ptr<Plan>(new Plan);result->retirement_=retirement;result->handle_guards_=guards;bool additions=false;
   for(size_t p=0;p<source.old_classes.size();++p){
     auto* service=methods[p];if(!service)return fail("Missing prepared native method pair");
@@ -167,14 +169,15 @@ std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
     }
     for(size_t j=0;j<service->Count(replacement);++j){void* candidate=service->At(replacement,j);bool existed=false;
       if(service->DeclaringClass(candidate)!=replacement)continue;
-      for(size_t i=0;i<service->Count(old);++i)existed|=service->SameIdentity(service->At(old,i),candidate);
+      for(size_t i=0;i<service->Count(old);++i)existed|=service->SameIdentity(service->At(old,i),candidate)&&((service->Flags(service->At(old,i))^service->Flags(candidate))&8u)==0;
       additions|=!existed;
     }
     for(size_t i=0;i<service->Count(old);++i){
       void* method=service->At(old,i);void* next=nullptr;
       for(size_t j=0;j<service->Count(replacement);++j){void* candidate=service->At(replacement,j);
         if(!service->SameIdentity(method,candidate))continue;
-        if((service->Flags(method)^service->Flags(candidate))&0x11fu)
+        if((service->Flags(method)^service->Flags(candidate))&8u){if(!schemas)return fail("Method storage changes require complete native schema policy");continue;}
+        if(!schemas&&((service->Flags(method)^service->Flags(candidate))&0x11fu))
           return fail("Method modifiers changed outside the owned deletion transaction");
         next=candidate;break;
       }

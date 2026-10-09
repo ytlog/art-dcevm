@@ -16,7 +16,8 @@ bool NotRetired(void*,void*){return false;}bool Mh(void*){return mh_guard;}bool 
 bool SameIndex(void* a,void* b){return static_cast<abi::arm64::android12::Method12*>(a)->dex_method_index==static_cast<abi::arm64::android12::Method12*>(b)->dex_method_index;}
 abi::arm64::Field* ancestor_cached_field=nullptr;art::ArtField* resolved_field_slot=nullptr;art::ArtMethod* resolved_method_slot=nullptr;bool visit_resolution=false;
 const char* ResolutionName(void* field){return field==ancestor_cached_field?names[0]:FieldName(field);}
-const char* ResolutionType(void* field){return field==ancestor_cached_field?types[0]:FieldType(field);}
+bool evolved_fields=false;
+const char* ResolutionType(void* field){if(evolved_fields&&field==new_fields[0])return "J";return field==ancestor_cached_field?types[0]:FieldType(field);}
 // Independent public transitive closure: ArrayList -> DirectA -> SuperB,
 // plus inherited Parent -> InheritedC. Native IfTable pairs are separate arrays.
 void* public_array_class=nullptr;void* public_list=nullptr;void* public_parent=nullptr;
@@ -76,7 +77,7 @@ void CheckGraphExceptionStops(const modern_field_metadata::FieldMetadata& metada
 }
 void* forbidden_descriptor_class=nullptr;int forbidden_descriptor_calls=0;
 const char* ResolutionDescriptor(void* klass,void* storage){if(klass==forbidden_descriptor_class){++forbidden_descriptor_calls;assert(false&&"Unrelated cache Class descriptor is not an eligibility prerequisite");}return Descriptor(klass,storage);}
-std::array<executable_mirror::Declaration,3> executable{};
+std::array<executable_mirror::Declaration*,3> executable{};
 void* Leaf(const abi::arm64::android_common::RunnableJniScope&,jobject object){return reinterpret_cast<void*>(uintptr_t(reinterpret_cast<executable_mirror::Declaration*>(object)->art_method));}
 bool DecodeMirror(const runnable_jni::Context&,jobject object,void** out){*out=object;return true;}
 void Visit(void* receiver,art::ReflectiveValueVisitor* visitor){
@@ -87,7 +88,14 @@ void Visit(void* receiver,art::ReflectiveValueVisitor* visitor){
  if(visit_field_mh){Put32(info,8,3);assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[3]),*reinterpret_cast<const art::ReflectionSourceInfo*>(info))==reinterpret_cast<art::ArtField*>(old_fields[3]));}
  if(visit_vh){Put32(info,8,4);assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[3]),*reinterpret_cast<const art::ReflectionSourceInfo*>(info))==reinterpret_cast<art::ArtField*>(old_fields[3]));}
 }
+void SchemaObsolete(void* receiver,void* method){
+ assert(stopped&&receiver==&linker);bool actual=false;
+ auto* methods=reinterpret_cast<unsigned char*>(uintptr_t(old_class->methods));
+ for(uint32_t n=0;n<Read32(methods);++n)actual|=method==methods+8+size_t(n)*32;
+ assert(actual);events.push_back("obsolete");
+}
 class ProviderHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{
+ if(std::strstr(name,"SetEntryPointsForObsoleteMethod"))return reinterpret_cast<void*>(SchemaObsolete);
  if(std::strstr(name,"Class10Implements")||std::strstr(name,"Class16IsAssignableFrom"))return nullptr;
  if(std::strstr(name,"Class13GetDescriptor"))return reinterpret_cast<void*>(ResolutionDescriptor);
  if(std::strstr(name,"ArtField7GetNameEv"))return reinterpret_cast<void*>(ResolutionName);
@@ -111,7 +119,7 @@ void Methods(class_metadata::Class17* klass,bool deletion){
 }
 }
 int main(int argc,char** argv){
- assert(argc==5);InitJni();InitializeHeap();InterfaceFixtures();
+ assert(argc==7);InitJni();InitializeHeap();InterfaceFixtures();
  const uint32_t field_indexes[]{1,3,0,2};for(size_t i=0;i<4;++i){old_fields[i]->dex_field_index=field_indexes[i];new_fields[i]->dex_field_index=field_indexes[i];}
  ProviderHooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
@@ -119,7 +127,7 @@ int main(int argc,char** argv){
  struct Cal{modern_field_metadata::FieldMetadata* metadata;const modern_field_metadata::FieldOracle* oracle;std::string* error;} cal{&metadata,oracle.data(),&error};
  auto calibrate=[](const runnable_jni::Context& ctx,void* raw){auto& c=*static_cast<Cal*>(raw);return c.metadata->Calibrate(ctx,reinterpret_cast<jobject>(old_class),"LFixture;",c.oracle,4,c.error);};
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&cal)==runnable_jni::Result::kSuccess);
- size_t thread_extent=0,card_extent=0;assert(method_identity::ReadableMappingExtent(thread.data(),&thread_extent));assert(method_identity::ReadableMappingExtent(cards,&card_extent));
+ size_t thread_extent=0,card_extent=0;assert(method_identity::ReadableMappingExtent(thread.data(),&thread_extent)&&thread_extent>=thread.size());assert(method_identity::ReadableMappingExtent(cards,&card_extent));
  assert(metadata.InterfaceDeclarationCalibrated());
  CheckGraphExceptionStops(metadata);
  std::vector<void*> observed_interfaces;assert(native_interface_graph::Read(metadata,public_list,&observed_interfaces,&error)&&observed_interfaces.size()==3);
@@ -138,10 +146,10 @@ int main(int argc,char** argv){
  native_cache::Service caches;assert(caches.Bind(hooks,&thread_list,&error)&&caches.Prepare(&error));
  Methods(old_class,false);Methods(new_class,false);
  std::array<method_identity::Oracle,3> method_oracles{};
- for(size_t i=0;i<3;++i){auto* m=reinterpret_cast<abi::arm64::android12::Method12*>(reinterpret_cast<char*>(old_method)+i*32);executable[i].art_method=uintptr_t(m);executable[i].dex_method_index=uint32_t(i);executable[i].access_flags=i==0?0x101:i==1?1:9;method_oracles[i]={reinterpret_cast<jobject>(&executable[i]),uint32_t(i),executable[i].access_flags};}
+ for(size_t i=0;i<3;++i){auto* m=reinterpret_cast<abi::arm64::android12::Method12*>(reinterpret_cast<char*>(old_method)+i*32);executable[i]=new(heap.New(sizeof(executable_mirror::Declaration)))executable_mirror::Declaration{};executable[i]->art_method=uintptr_t(m);executable[i]->dex_method_index=uint32_t(i);executable[i]->access_flags=i==0?0x101:i==1?1:9;method_oracles[i]={reinterpret_cast<jobject>(executable[i]),uint32_t(i),executable[i]->access_flags};}
  method_identity::Calibration model{};std::unique_ptr<executable_mirror::Layout> layout;std::unique_ptr<modern_methods::Binding> binding;
  struct Proof{ProviderHooks* hooks;method_identity::Calibration* model;std::unique_ptr<executable_mirror::Layout>* layout;std::unique_ptr<modern_methods::Binding>* binding;const method_identity::Oracle* oracle;std::string* error;} proof{&hooks,&model,&layout,&binding,method_oracles.data(),&error};
- auto prove=[](const runnable_jni::Context& ctx,void* raw){auto& r=*static_cast<Proof*>(raw);if(!method_identity::Calibrate(ctx,Leaf,r.oracle,3,r.model,r.error))return false;*r.layout=executable_mirror::Layout::Probe(ctx,Leaf,DecodeMirror,r.oracle,3,r.error);*r.binding=modern_methods::Service::BindOwned(*r.hooks,ctx,Leaf,r.oracle[0],&binding_value,&linker,r.model->model,r.error);return bool(*r.layout)&&bool(*r.binding);};
+ auto prove=[](const runnable_jni::Context& ctx,void* raw){auto& r=*static_cast<Proof*>(raw);if(!method_identity::Calibrate(ctx,Leaf,r.oracle,3,r.model,r.error))return false;*r.layout=executable_mirror::Layout::Probe(ctx,Leaf,DecodeMirror,r.oracle,3,r.error);if(!*r.layout)return false;*r.binding=modern_methods::Service::BindOwned(*r.hooks,ctx,Leaf,r.oracle[0],&binding_value,&linker,r.model->model,r.error);return bool(*r.layout)&&bool(*r.binding);};
  if(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),prove,&proof)!=runnable_jni::Result::kSuccess){std::cerr<<"Fixture native method calibration: "<<error<<std::endl;return 1;}
  native_structural_reflection::Service reflection;assert(reflection.Bind(hooks,&runtime,*layout,&error));
  std::array<std::vector<unsigned char>,4> dex{File(argv[1]),File(argv[2]),File(argv[3]),File(argv[4])};
@@ -266,6 +274,46 @@ int main(int argc,char** argv){
  assert(error.find("Added declarations require")!=std::string::npos);
  auto additive=native_structural_reflection::Plan::Prepare(plan,metadata,{table.get()},dependencies.retirement,&error,dependencies.handle_guards,{&hooks,&model,&fields});
  assert(additive&&reflection.Validate(*additive,&error));
+ // Full schema mode consumes exact independent native/DEX declarations.
+ // Static type changes and instance->static storage do not reinterpret values;
+ // new static/instance slots retain allocation defaults, while old exact references copy.
+ shape(false,false);auto evolved_dex=File(argv[5]);LinkDex(new_class,evolved_dex);evolved_fields=true;
+ old_class->access_flags=new_class->access_flags=1;
+ new_fields[0]->access_flags=8;new_fields[1]->access_flags=9;new_fields[1]->offset=144;
+ new_fields[2]->access_flags=65;new_fields[3]->access_flags=1;
+ assert(native_method_table::Read(metadata,model,old_class,&before_table,&error));
+ assert(native_method_table::Read(metadata,model,new_class,&after_table,&error));
+ native_schema_policy::Plan schema;assert(native_schema_policy::Plan::Prepare(before_table.declarations,after_table.declarations,&schema,&error));
+ std::vector<native_schema_policy::Plan> schemas{schema};auto schema_dependencies=dependencies;
+ schema_dependencies.expected_removal=native_member_provider::Removal::kSchemaEvolution;schema_dependencies.schemas=&schemas;schema_dependencies.allow_field_removal=true;
+ uint64_t initialized=0;std::memcpy(reinterpret_cast<char*>(new_class)+128,&initialized,8);Put32(new_class,144,0);
+ // Reject forged immutable native flags before touching the actual transaction.
+ new_fields[2]->access_flags=1;rejected(schema_dependencies,plan,"field flags/index");new_fields[2]->access_flags=65;
+ auto no_schema=schema_dependencies;no_schema.schemas=nullptr;rejected(no_schema,plan,"explicit complete policies");
+ // Adding final permissions must not be authorized by the field-copy plan.
+ // The real guard verifier is independently required before any mutation.
+ auto final_dex=File(argv[6]);LinkDex(new_class,final_dex);new_fields[3]->access_flags=17;
+ native_method_table::View final_table;assert(native_method_table::Read(metadata,model,new_class,&final_table,&error));
+ native_schema_policy::Plan final_schema;assert(native_schema_policy::Plan::Prepare(before_table.declarations,final_table.declarations,&final_schema,&error));
+ schemas[0]=final_schema;rejected(schema_dependencies,plan,"independent loaded-Class/final-field proof");
+ LinkDex(new_class,evolved_dex);new_fields[3]->access_flags=1;schemas[0]=schema;
+ native_member_provider::Service schema_provider;auto schema_service=schema_provider.Prepare(plan,schema_dependencies,&error);
+ if(!schema_service){std::cerr<<"Native schema preparation: "<<error<<'\n';return 1;}
+ assert(schema_service->Validate(plan));const auto roots_before_retire=retired_fields;
+ const auto method_array_before=new_class->methods;
+ auto* moved_methods=heap.New(8+3*32);std::memcpy(moved_methods,reinterpret_cast<void*>(uintptr_t(method_array_before)),8+3*32);
+ new_class->methods=uintptr_t(moved_methods);assert(!source_commit::Run(plan,*schema_service));new_class->methods=method_array_before;
+ const auto declaring_before=new_fields[0]->declaring_class;new_fields[0]->declaring_class=uint32_t(uintptr_t(old_class));
+ assert(!source_commit::Run(plan,*schema_service));new_fields[0]->declaring_class=declaring_before;
+ new_fields[2]->access_flags=1;assert(!source_commit::Run(plan,*schema_service));new_fields[2]->access_flags=65;
+ assert(retired_fields==roots_before_retire&&!mutations&&!replaced);
+ // Actual shared source commit uses the prepared field-copy path.
+ assert(source_commit::Run(plan,*schema_service));
+ uint64_t initialized_after=0;std::memcpy(&initialized_after,reinterpret_cast<char*>(new_class)+128,8);
+ assert(initialized_after==0&&Read32(new_class,144)==0); // No encoded values or clinit rerun.
+ assert(Read32(new_instance,12)==uintptr_t(ref_a)&&Read32(new_instance,16)==uintptr_t(ref_b));
+ assert(Read32(old_instance,8)==0&&Read32(old_instance,12)==0&&Read32(old_instance,16)==0);
+ assert(retired_fields==roots_before_retire+2);
  Resume(nullptr);
  std::cout<<"Native member provider: public field/method/Executable calibration, complete DEX tables, MethodsOnly/FieldsOnly/mixed rejection, independent live method/field MH and VH guards, missing field policy and wrong thread all refuse before heap mutation/retirement/diagnostics; guarded method/field/mixed preparation stays readonly and final guard/thread refusal never retires\n";
 }

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include "platform/common/resolution_invalidation_plan.h"
 #include "platform/common/modern_field_storage.h"
+#include "platform/common/native_schema_policy.h"
 namespace artdcevm::native_structural_reflection {
 // Callbacks check a process-lifetime guard owner and independently established
 // runtime proof. A missing callback preserves conservative handle rejection.
@@ -38,7 +39,7 @@ class Plan {
  public:
   static std::unique_ptr<Plan> Prepare(const source_commit::Plan&,
       const modern_field_metadata::FieldMetadata&,
-      const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards guards={},ResolutionBinding resolution={});
+      const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards guards={},ResolutionBinding resolution={},const std::vector<native_schema_policy::Plan>* schemas=nullptr,const native_schema_policy::GuardVerifier* schema_guards=nullptr);
   bool HasDeletedMethods()const;
   bool HasDeletedFields()const;
  private:

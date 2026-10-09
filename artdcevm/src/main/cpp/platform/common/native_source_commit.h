@@ -7,6 +7,7 @@
 #include "platform/common/structural_methods.h"
 #include "platform/common/object_replacement_map.h"
 #include <memory>
+#include "platform/common/prepared_field_copy.h"
 namespace artdcevm::native_source_commit {
 enum class NativeRootPolicy {kPreserve, kRestore};
 struct MethodPair {
@@ -39,6 +40,7 @@ struct Dependencies {
   // Snapshot null means unobserved, not proof that Runtime has no JIT.
   bool jit_absence_proven=false;
   Diagnostics* diagnostics=nullptr;
+  bool prepare_field_copy=false;
 };
 // Fixed source heap-replacement policy is supplied by the original transaction
 // provider. The complete field oracle selects only the shared Class scalar
@@ -71,6 +73,8 @@ class Services final : public source_commit::Services {
   Dependencies dependencies_;
   const source_commit::Plan* plan_=nullptr;
   std::vector<MethodPair> methods_;
+  struct CopyPair{void* old_class;void* new_class;field_copy::PreparedPlan statics,instances;};
+  std::vector<CopyPair> copies_;
   std::unique_ptr<object_replacement::ObjectReplacementMap> replacements_;
   void* self_=nullptr;
   const class_metadata::Layout* layout_=nullptr;

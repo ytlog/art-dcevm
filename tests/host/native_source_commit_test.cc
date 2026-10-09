@@ -29,7 +29,11 @@ uint32_t Read32(const void* p,size_t at=0){uint32_t n;std::memcpy(&n,static_cast
 void Put32(void* p,size_t at,uint32_t n){std::memcpy(static_cast<char*>(p)+at,&n,4);}
 void* Root(void*);
 void* Mark(void*);
-alignas(8) std::array<unsigned char,200> thread{},foreign_thread{};
+// Keep each complete native thread declaration in one readable Mach VM page.
+// Link-layout changes otherwise can put the 144-byte card slot beyond a
+// region boundary while the first 128 bytes remain readable.
+alignas(4096) std::array<unsigned char,200> thread{};
+alignas(4096) std::array<unsigned char,200> foreign_thread{};
 void* current=thread.data();int thread_list,mutex,linker,runtime,instrumentation,jit,jit_cache;
 void* list_lock=&mutex;
 int stopped=0,locked=0,cleared=0,mutations=0,jni_calls=0;
@@ -169,6 +173,7 @@ runnable_jni::Result With(JNIEnv* e,jobject,runnable_jni::Operation fn,void* dat
 }
 int main(){
  InitJni();InitializeHeap();Hooks hooks;std::string error;
+ size_t thread_extent=0;assert(method_identity::ReadableMappingExtent(thread.data(),&thread_extent)&&thread_extent>=thread.size());
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));
  struct MetadataRequest{modern_field_metadata::FieldMetadata* service;const modern_field_metadata::FieldOracle* oracle;std::string* error;} calibration{&metadata,oracle.data(),&error};

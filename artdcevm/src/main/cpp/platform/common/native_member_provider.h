@@ -3,7 +3,7 @@
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/modern_source_commit.h"
 namespace artdcevm::native_member_provider {
-enum class Removal { kAny, kMethodsOnly, kFieldsOnly };
+enum class Removal { kAny, kMethodsOnly, kFieldsOnly, kSchemaEvolution };
 // Immutable bootstrap capabilities are borrowed for the entire synchronous ART
 // transaction. The owner supplies persistent guarded retirement registries.
 struct Dependencies {
@@ -21,6 +21,8 @@ struct Dependencies {
  Removal expected_removal=Removal::kAny;
  native_structural_reflection::HandleGuards handle_guards;
  native_source_commit::Diagnostics* diagnostics=nullptr;
+ const std::vector<native_schema_policy::Plan>* schemas=nullptr;
+ const native_schema_policy::GuardVerifier* schema_guards=nullptr;
 };
 // One common algorithm prepares complete Method11/12 tables, reflective maps
 // and final native commit services. It is used by production and debug owners.
@@ -35,5 +37,9 @@ class Service {
   native_structural_reflection::Service* reflection_=nullptr;
   std::unique_ptr<native_structural_reflection::Plan> mapping_;
   std::vector<std::unique_ptr<modern_methods::Service>> tables_;
+  std::vector<native_schema_policy::Plan> schemas_;
+  const native_schema_policy::GuardVerifier* schema_guards_=nullptr;
+  const modern_field_metadata::FieldMetadata* schema_metadata_=nullptr;
+  const method_identity::Calibration* schema_model_=nullptr;
 };
 }
