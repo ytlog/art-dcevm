@@ -56,7 +56,7 @@ void ObserveNative(char*text,size_t capacity,size_t*used,const char*name,
   again=value->key.load(std::memory_order_relaxed);pair=true;
  }
  if(v.full&&index<v.full_count){full=v.full[index].load(std::memory_order_relaxed);has_full=true;}
- Append(text,capacity,used," %s{idx=%u slot=%u pair=%d words=0x%llx/0x%llx stable=%d expected=0x%llx full=%d:0x%llx ordinary=%d sequence=%d}",
+ Append(text,capacity,used," %s{i=%u s=%u p=%d w=%llx/%llx stable=%d e=%llx full=%d:%llx o/q=%d/%d}",
   name,index,index%1024,pair,static_cast<unsigned long long>(first),static_cast<unsigned long long>(second),pair&&first==again,
   static_cast<unsigned long long>(uintptr_t(expected)),has_full,static_cast<unsigned long long>(full),
   NativeWitness(v,PairFormat::Ordinary,index,expected),NativeWitness(v,PairFormat::Sequence,index,expected));
@@ -65,7 +65,7 @@ void ObserveType(char*text,size_t capacity,size_t*used,const type_cache::View&v,
  type_cache::Pair pair{};uint32_t full=0;bool found=false,has_full=false;
  if(v.pairs&&index%1024<v.pair_count){__atomic_load(v.pairs+index%1024,&pair,__ATOMIC_ACQUIRE);found=true;}
  if(v.full&&index<v.full_count){full=__atomic_load_n(v.full+index,__ATOMIC_RELAXED);has_full=true;}
- Append(text,capacity,used," type{idx=%u slot=%u pair=%d key=%u object=0x%x expected=0x%x full=%d:0x%x}",
+ Append(text,capacity,used," T{i=%u s=%u p=%d key=%u obj=%x e=%x full=%d:%x}",
   index,index%1024,found,pair.index,pair.object,expected,has_full,full);
 }
 bool Same(const type_cache::View&a,const type_cache::View&b){return a.pairs==b.pairs&&a.pair_count==b.pair_count&&a.full==b.full&&a.full_count==b.full_count;}
@@ -104,23 +104,40 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  const auto expected=reinterpret_cast<uintptr_t>(m.Get(w.expected_class));
  if(!cache||!expected||expected>UINT32_MAX||w.type_index>=counts.types||w.field_index>=counts.fields||w.method_index>=counts.methods)return Fail(error,"independent public cache witnesses missing");
  Source s{cache,nullptr,nullptr,extent,counts};unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
- char diagnosis[2304]{};size_t used=0;
+ struct Observation {
+  dex_cache_metadata::Model model;type_cache::View types{};
+  native_cache::View fields{},methods{};bool read=false,type=false;unsigned formats=0;
+ } observations[2];
+ size_t n=0;
  for(auto model:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays}){
- type_cache::View t;native_cache::View f,methods;
- const bool read=Read(m,model,s,&t,&f,&methods);
- const bool type=read&&TypeWitness(t,w.type_index,static_cast<uint32_t>(expected));
- unsigned formats=0;
- if(type)for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})if(NativeWitness(f,fmt,w.field_index,w.native_field)&&NativeWitness(methods,fmt,w.method_index,w.native_method)){++matches;++formats;selected=model;format=fmt;}
- int written=std::snprintf(diagnosis+used,sizeof(diagnosis)-used,
-   " %s{read=%d typePairs=%d typeFull=%d fieldPairs=%d fieldFull=%d methodPairs=%d methodFull=%d typeWitness=%d formats=%u}",
-   model==dex_cache_metadata::Model::Pairs?"pairs":"dual",read,
-   read&&t.pairs!=nullptr,read&&t.full!=nullptr,read&&f.pairs!=nullptr,read&&f.full!=nullptr,
-   read&&methods.pairs!=nullptr,read&&methods.full!=nullptr,type,formats);
- if(written>0)used+=std::min(static_cast<size_t>(written),sizeof(diagnosis)-used-1);
- if(read){ObserveType(diagnosis,sizeof(diagnosis),&used,t,w.type_index,static_cast<uint32_t>(expected));
-  ObserveNative(diagnosis,sizeof(diagnosis),&used,"field",f,w.field_index,w.native_field);
-  ObserveNative(diagnosis,sizeof(diagnosis),&used,"method",methods,w.method_index,w.native_method);}
-
+ auto& o=observations[n++];o.model=model;
+ o.read=Read(m,model,s,&o.types,&o.fields,&o.methods);
+ o.type=o.read&&TypeWitness(o.types,w.type_index,static_cast<uint32_t>(expected));
+ if(o.type)for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})
+  if(NativeWitness(o.fields,fmt,w.field_index,w.native_field)&&NativeWitness(o.methods,fmt,w.method_index,w.native_method)){
+   ++matches;++o.formats;selected=model;format=fmt;
+  }
+ }
+ // Only diagnostic ordering: never prefer a model when granting calibration.
+ // Matching type provenance first; otherwise dual first to expose its array
+ // declarations. Keep both native slots ahead of verbose alternate-model data
+ // so the caller's bounded error retains the evidence needed to distinguish
+ // a genuine hashed-slot collision from a declaration mismatch.
+ const size_t first=observations[0].type&&!observations[1].type?0:1;
+ char diagnosis[768]{};size_t used=0;
+ for(size_t pos=0;pos<2;++pos){
+ const auto& o=observations[pos==0?first:1-first];
+ Append(diagnosis,sizeof(diagnosis),&used," %s{r=%d T=%d F=%u}",
+  o.model==dex_cache_metadata::Model::Pairs?"pairs":"dual",o.read,o.type,o.formats);
+ if(pos==0&&o.read){
+  ObserveNative(diagnosis,sizeof(diagnosis),&used,"field",o.fields,w.field_index,w.native_field);
+  ObserveNative(diagnosis,sizeof(diagnosis),&used,"method",o.methods,w.method_index,w.native_method);
+  ObserveType(diagnosis,sizeof(diagnosis),&used,o.types,w.type_index,static_cast<uint32_t>(expected));
+ }
+ Append(diagnosis,sizeof(diagnosis),&used," arrays=%d%d/%d%d/%d%d",
+  o.read&&o.types.pairs!=nullptr,o.read&&o.types.full!=nullptr,
+  o.read&&o.fields.pairs!=nullptr,o.read&&o.fields.full!=nullptr,
+  o.read&&o.methods.pairs!=nullptr,o.read&&o.methods.full!=nullptr);
  }
  if(matches!=1){
   if(error)*error="cache declarations not uniquely calibrated by actual resolved witnesses: matches="+std::to_string(matches)+

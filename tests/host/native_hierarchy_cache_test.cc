@@ -67,8 +67,13 @@ void Test(dex_cache_metadata::Model model,PairFormat fmt){
  Mapper m(model,fmt);Owner owner;std::string error;native_hierarchy_graph::Graph graph;source_commit::Plan plan;
  assert(!owner.VerifyStaged(graph,{},&error));
  auto witness=m.witness();auto wrong=witness;wrong.native_method=reinterpret_cast<void*>(0x123);assert(!owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},wrong,&error));
- assert(error.find("method{idx=3 slot=3 pair=1")!=std::string::npos&&error.find("expected=0x123")!=std::string::npos);
- assert(error.find("type{idx=1 slot=1 pair=1 key=1 object=0x1000 expected=0x1000")!=std::string::npos);
+ assert(error.find("method{i=3 s=3 p=1")!=std::string::npos&&error.find("e=123")!=std::string::npos);
+ assert(error.find("T{i=1 s=1 p=1 key=1 obj=1000 e=1000")!=std::string::npos);
+ // The two critical native entries must survive the actual caller's
+ // 512-byte truncation, including the expected native Method and full value.
+ const auto bounded=error.substr(0,512);
+ assert(bounded.find("field{i=2")!=std::string::npos&&bounded.find("method{i=3")!=std::string::npos&&bounded.find("e=123")!=std::string::npos);
+ assert(error.find(model==dex_cache_metadata::Model::Pairs?" pairs{r=1 T=1":" dual{r=1 T=1")<error.find("field{"));
  assert(owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},witness,&error));assert(owner.VerifyStaged(graph,{},&error));
  m.private_writer=false;assert(!owner.Prepare(m.expected,&error));assert(m.incoming.tables.types[1].object==0x1000);m.private_writer=true;
  assert(owner.Prepare(m.expected,&error));assert(m.barriers==1);assert(m.calibration.tables.types[1].object==0x1000);
@@ -101,7 +106,7 @@ void FullOnlyIncoming(){
  auto* calibration=reinterpret_cast<type_cache::Dual*>(no_pairs.calibration.bytes);
  calibration->types=calibration->fields=calibration->methods=0;
  assert(!refused.Calibrate(no_pairs,&no_pairs.calibration.root,no_pairs.source.cache_extent,{4,4,4},no_pairs.witness(),&error));
- assert(error.find("matches=0")!=std::string::npos&&error.find("typePairs=0 typeFull=1")!=std::string::npos);
- assert(error.find("field{idx=2 slot=2 pair=0 words=0x0/0x0")!=std::string::npos&&error.find("full=1:0xabe")!=std::string::npos);
+ assert(error.find("matches=0")!=std::string::npos&&error.find("arrays=01/01/01")!=std::string::npos);
+ assert(error.find("field{i=2 s=2 p=0 w=0/0")!=std::string::npos&&error.find("full=1:abe")!=std::string::npos);
 }
 int main(){FullOnlyIncoming();for(auto m:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays})for(auto f:{PairFormat::Ordinary,PairFormat::Sequence})Test(m,f);std::puts("PASS cache model/format calibration, owned source rewrite, moving roots, allocation-free final refusal");}
