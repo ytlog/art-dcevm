@@ -71,6 +71,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_structural_reflection.cc
     platform/common/resolution_invalidation_plan.cc
     platform/common/native_member_provider.cc
+    platform/common/ordinary_source_fixture.cc
     platform/common/bootstrap_dex_oracle.cc
     platform/common/production_bootstrap.cc
     platform/common/rooted_field_identities.cc

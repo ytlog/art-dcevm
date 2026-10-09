@@ -37,6 +37,9 @@ public final class ProductionBootstrap {
     }
     static final class Inputs {
         final byte[][] dex;
+        final Class<?> ordinarySourceClass;
+        final byte[][] ordinarySourceDex;
+        final Object ordinarySourceObject;
         final Class<?> additiveClass;
         final byte[] additiveDex;
         final Object storage;
@@ -50,8 +53,16 @@ public final class ProductionBootstrap {
         final Method[] methods;
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
-        Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex) throws Exception {
+        Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex) throws Exception {
             this.dex = dex; additiveClass = target; additiveDex = replacement;
+            ordinarySourceDex = ordinaryDex;
+            ClassLoader ordinaryLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(ordinaryDex[0]), null);
+            ordinarySourceClass = Class.forName("com.github.ytlog.artdcevm.internal.OrdinarySourceFixture", true, ordinaryLoader);
+            Object ordinary = ordinarySourceClass.getDeclaredConstructor().newInstance();
+            ordinarySourceObject = ordinary;
+            ordinarySourceClass.getDeclaredField("value").setInt(ordinary, 6);
+            if ((int) ordinarySourceClass.getDeclaredMethod("compute").invoke(ordinary) != 7)
+                throw new IllegalStateException("Private ordinary source fixture value changed");
             this.cacheDex = cacheDex;
             ClassLoader cacheLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(cacheDex), null);
             cacheClass = Class.forName("com.github.ytlog.artdcevm.internal.SourceCacheFixture", true, cacheLoader);
@@ -78,6 +89,16 @@ public final class ProductionBootstrap {
             staticGetter = lookup.findStaticGetter(CalibrationFixture.class, "staticIntValue", int.class);
             staticSetter = lookup.findStaticSetter(CalibrationFixture.class, "staticIntValue", int.class);
         }
+    }
+    static boolean verifyOrdinarySource(Inputs input, int step) throws Exception {
+        Class<?> type = input.ordinarySourceClass;
+        if (type.getDeclaredMethods().length != 3 - step ||
+            type.getDeclaredField("value").getInt(input.ordinarySourceObject) != 6 ||
+            (int) type.getDeclaredMethod("compute").invoke(input.ordinarySourceObject) != 7)
+            return false;
+        Object fresh = type.getDeclaredConstructor().newInstance();
+        type.getDeclaredField("value").setInt(fresh, 6);
+        return (int) type.getDeclaredMethod("compute").invoke(fresh) == 7;
     }
     static Class<?> warmSourceCache(Inputs input) throws Exception {
         return (Class<?>) input.cacheWarm.invoke(null, input.cacheFixture);
@@ -143,6 +164,10 @@ public final class ProductionBootstrap {
         ClassLoader loader = new InMemoryDexClassLoader(ByteBuffer.wrap(original), null);
         Class<?> target = Class.forName("com.github.ytlog.artdcevm.internal.BootstrapAdditive", true, loader);
         byte[] cacheDex = read(application.getAssets().open("artdcevm/bootstrap/cache.dex"));
-        return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex);
+        byte[][] ordinaryDex = new byte[][] {
+            read(application.getAssets().open("artdcevm/bootstrap/source-original.dex")),
+            read(application.getAssets().open("artdcevm/bootstrap/source-first.dex")),
+            read(application.getAssets().open("artdcevm/bootstrap/source-second.dex"))};
+        return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex, ordinaryDex);
     }
 }

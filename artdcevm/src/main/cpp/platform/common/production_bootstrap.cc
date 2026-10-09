@@ -1,6 +1,7 @@
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
+#include "platform/common/ordinary_source_fixture.h"
 #include "platform/common/source_cache_method_witness.h"
 #include "platform/common/source_cache_field_witness.h"
 #include "platform/common/production_provenance.h"
@@ -578,12 +579,63 @@ struct NativeEngine final:Engine {
   return true;
  }
  bool AtomicBatchReady()const override{return activated&&redefinition_gate::Ready(vm)&&native_owned_removal::GraphWindowReady();}
- int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
-  if(!activated||current||defs.empty())return owned_failure_diagnostic::Unavailable(error,"engine activation/reentrant input");
-  schema_operation=false;for(const auto& definition:defs){evolution::ClassSchema before,after;std::string narrow_error;
-   if(live_schema::ReadLiveSchema(ti,env,definition.klass,&before,error)!=JVMTI_ERROR_NONE||!evolution::ReadDexDeclarations(definition.dex,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
-   if(!native_owned_removal::ValidateRemoval(before,after,handles_proven,&narrow_error,false)||(before.methods.size()==after.methods.size()&&before.fields.size()==after.fields.size()))schema_operation=true;
+ bool applying=false;size_t ordinary_source_step=0;std::string ordinary_source_diagnostic;
+ bool PrimeOrdinarySource(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+  if(!ordinary_source_diagnostic.empty())return Fail(error,ordinary_source_diagnostic.c_str());
+  if(source_capabilities.Ready()&&source_stop.Calibrated())return true;
+  if(current||schema_run||graph_staging)return Fail(error,"Private ordinary source priming requires an unstaged outer operation");
+  jclass type=env->GetObjectClass(input);struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_root{env,type};
+  auto class_id=type?env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;"):nullptr;
+  auto dex_id=type?env->GetFieldID(type,"ordinarySourceDex","[[B"):nullptr;
+  auto klass=class_id?static_cast<jclass>(env->GetObjectField(input,class_id)):nullptr;Local class_root{env,klass};
+  auto arrays=dex_id?static_cast<jobjectArray>(env->GetObjectField(input,dex_id)):nullptr;Local arrays_root{env,arrays};
+  if(!klass||!arrays||env->ExceptionCheck()||env->GetArrayLength(arrays)!=3)return Fail(error,"Private ordinary source input unavailable");
+  std::array<std::vector<unsigned char>,3> files;
+  for(size_t i=0;i<files.size();++i){auto array=static_cast<jbyteArray>(env->GetObjectArrayElement(arrays,static_cast<jsize>(i)));Local bytes_root{env,array};
+   if(!array||env->ExceptionCheck())return Fail(error,"Private ordinary source immutable DEX unavailable");
+   const jsize size=env->GetArrayLength(array);if(size<=0)return Fail(error,"Private ordinary source immutable DEX is empty");
+   files[i].resize(static_cast<size_t>(size));env->GetByteArrayRegion(array,0,size,reinterpret_cast<jbyte*>(files[i].data()));
+   if(env->ExceptionCheck())return Fail(error,"Private ordinary source immutable DEX copy failed");
   }
+  if(!ordinary_source_step){
+   evolution::ClassSchema live;if(live_schema::ReadLiveSchema(ti,env,klass,&live,error)!=JVMTI_ERROR_NONE||!ordinary_source_fixture::Validate(live,files,error))return false;
+   // Provenance belongs exclusively to the public isolated class/immutable
+   // installed fixture just checked above, never a user candidate definition.
+   if(!provenance.Store(env,klass,files[0]))return Fail(error,"Private ordinary source provenance could not be retained");
+   ordinary_source_step=1;
+  }
+  while(ordinary_source_step<files.size()&&!(source_capabilities.Ready()&&source_stop.Calibrated())){
+   const std::vector<Definition> definition{{klass,files[ordinary_source_step]}};
+   const int result=ExecuteOperation(env,ti,definition,false,error);
+   if(result!=JVMTI_ERROR_NONE||env->ExceptionCheck())return false;
+   const jint completed=static_cast<jint>(ordinary_source_step);++ordinary_source_step;
+   jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_root{env,bootstrap};
+   auto verify=bootstrap?env->GetStaticMethodID(bootstrap,"verifyOrdinarySource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z"):nullptr;
+   if(!verify||env->ExceptionCheck()||!env->CallStaticBooleanMethod(bootstrap,verify,input,completed)||env->ExceptionCheck())
+    {ordinary_source_diagnostic="Private ordinary source original/fresh instance and retained compute oracle rejected";
+     if(env->ExceptionCheck())env->ExceptionClear();
+     return Fail(error,ordinary_source_diagnostic.c_str());}
+  }
+  if(!source_capabilities.Ready())return Fail(error,SourceFactoryDiagnostic().c_str());
+  return source_stop.Calibrated()||Fail(error,SourceStopDiagnostic().c_str());
+ }
+ int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
+  if(!activated||current||applying||defs.empty())return owned_failure_diagnostic::Unavailable(error,"engine activation/reentrant input");
+  applying=true;struct Outer{bool& active;~Outer(){active=false;}} outer{applying};
+  bool requested_schema=false;
+  for(const auto& definition:defs){evolution::ClassSchema before,after;std::string narrow_error;
+   if(live_schema::ReadLiveSchema(ti,env,definition.klass,&before,error)!=JVMTI_ERROR_NONE||!evolution::ReadDexDeclarations(definition.dex,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+   if(!native_owned_removal::ValidateRemoval(before,after,handles_proven,&narrow_error,false)||(before.methods.size()==after.methods.size()&&before.fields.size()==after.fields.size()))requested_schema=true;
+  }
+  if(requested_schema&&!PrimeOrdinarySource(env,ti,error)){
+   if(error)source_factory_diagnostic=*error;
+   schema_operation=false;
+   return owned_failure_diagnostic::Unavailable(error,"Automatic private ordinary source lifecycle calibration");
+  }
+  return ExecuteOperation(env,ti,defs,requested_schema,error);
+ }
+ int ExecuteOperation(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,bool schema,std::string* error){
+  schema_operation=schema;
   const bool batch=defs.size()>1||schema_operation;
   std::unique_ptr<redefinition_gate::Lease> lease;
   if(batch){
