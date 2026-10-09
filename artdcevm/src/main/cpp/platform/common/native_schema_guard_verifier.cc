@@ -604,7 +604,8 @@ bool Verifier::RefreshManagedRoots(const source_commit::Plan& plan,const prepare
  auto& s=*state_;s.refreshed=false;if(!CanRefreshManagedRoots(resolver))return false;
  s.expected_roots.Refresh(resolver);s.frozen_roots.Refresh(resolver);
  if(!SamePlan(plan,s.expected)||!s.FrozenProof())return false;
- if((s.final_fields_proven||s.aliases_proven)&&(!s.bindings.final_fields||!s.bindings.final_fields->VerifyAliases(plan,nullptr)))return false;
+ if((s.final_fields_proven||s.aliases_proven)&&(!s.bindings.final_fields||
+    !s.bindings.final_fields->RefreshPlan(plan,nullptr)||!s.bindings.final_fields->VerifyAliases(plan,nullptr)))return false;
  if(s.access_proven&&(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(plan,nullptr)))return false;
  s.refreshed=true;return true;
 }

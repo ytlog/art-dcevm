@@ -20,6 +20,7 @@
 #include "platform/common/native_schema_run_state.h"
 #include "platform/common/native_production_schema_capabilities.h"
 #include "platform/common/frame_family_calibration.h"
+#include "platform/common/compiled_frame_owner.h"
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
@@ -81,6 +82,8 @@ struct NativeEngine final:Engine {
  std::string source_factory_diagnostic;bool source_calibration_started=false;
  bool SourceCapabilitiesCalibrated()const override{return source_capabilities.Ready();}
  bool FrameGeometryCalibrated()const override{return frame_geometry_proven;}
+ bool CompiledFramesCalibrated()const override{return compiled_frames_proven;}
+ std::string FrameCalibrationDiagnostic()const override{return compiled_frames_proven?"":frame_geometry_diagnostic.empty()?"compiled-frame-calibration-not-attempted":frame_geometry_diagnostic;}
  std::string SourceFactoryDiagnostic()const override{
   return !source_factory_diagnostic.empty()?source_factory_diagnostic:source_capabilities.Ready()?"":source_capabilities.Diagnostic();
  }
@@ -88,7 +91,58 @@ struct NativeEngine final:Engine {
  frame_family_calibration::Service frame_calibrator;
  frame_family_calibration::Service::Prepared frame_calibration_storage;
  std::vector<frame_family_calibration::MethodOracle> frame_methods;
- whole_process_frames::Service whole_frames;bool frame_geometry_proven=false;std::string frame_geometry_diagnostic;
+ whole_process_frames::Service whole_frames;bool frame_geometry_proven=false,compiled_frames_proven=false;std::string frame_geometry_diagnostic;
+ const native_source_stop::Session* calibration_stop=nullptr;void* calibration_self=nullptr;
+ struct CompiledRequest {NativeEngine* engine;compiled_frame_fixture::Owner* fixture;frame_family_calibration::Result result;std::string error;};
+ struct CalibrationRoots final:source_handle_roots::StoppedReader {
+  const native_source_stop::Session& stop;void* self;std::array<const void*,32> slots{};size_t count=0;
+  CalibrationRoots(const native_source_stop::Session& s,void* thread):stop(s),self(thread){}
+  bool FinalRootWindow()const noexcept override{return stop.IsStopped(self);}
+  bool ReadStoppedRoot(const void* slot,void** output)const noexcept override{
+   if(!output||!FinalRootWindow())return false;
+   for(size_t n=0;n<count;++n)if(slots[n]==slot){uint32_t value=0;std::memcpy(&value,slot,sizeof(value));*output=reinterpret_cast<void*>(uintptr_t(value));return true;}
+   return false;
+  }
+ };
+ static bool CompiledReadable(const void* address,size_t* extent){
+  auto* e=current;return e&&e->calibration_stop&&e->calibration_stop->IsStopped(e->calibration_self)&&CachedExtent(e,address,extent);
+ }
+ static bool CalibrateCompiled(const runnable_jni::Context& context,void* raw){
+  auto& r=*static_cast<CompiledRequest*>(raw);auto& e=*r.engine;
+  if(context.vm!=e.vm||context.env!=e.source_env||!e.graph_current||e.graph_current()!=context.self||!e.source_stop.Calibrated())return false;
+  source_handle_roots::Pool pool(e.source_capabilities.Roots());
+  if(!r.fixture->RegisterRoots(context,pool,&r.error))return false;
+  size_t extent=0;if(!method_identity::ReadableMappingExtent(context.self,&extent)||!r.fixture->Start(context.env,&r.error))return false;
+  bool proven=false;
+  {native_source_stop::Session stopped(e.source_stop);
+   CalibrationRoots roots(stopped,context.self);
+   if(!pool.VisitUsedSlots([&](const void* slot){if(roots.count==roots.slots.size())return false;roots.slots[roots.count++]=slot;return true;})){
+    r.fixture->Close(context.env,&r.error);return false;
+   }
+   if(stopped.Begin(context.self,extent)){
+    e.calibration_stop=&stopped;e.calibration_self=context.self;
+    struct ClearStop{NativeEngine& e;~ClearStop(){e.calibration_stop=nullptr;e.calibration_self=nullptr;}} clear{e};
+    if(e.RefreshStoppedMappings(nullptr))proven=r.fixture->CalibrateStopped(stopped,context.self,e.runtime.receivers.jit_code_cache,roots,CompiledReadable,&r.result);
+   }else r.error=stopped.Failure();
+  } // Actual resume/FinishGC/RestoreRunnable happen before any Java close.
+  const bool closed=r.fixture->Close(context.env,&r.error);
+  if(!proven&&r.error.empty())r.error=r.result.failure?r.result.failure:"Compiled frame original map/value oracle rejected";
+  return proven&&closed&&r.result.compiled_ready;
+ }
+ bool PrepareCompiledFrames(JNIEnv* env,jvmtiEnv* ti){
+  if(compiled_frames_proven||!source_capabilities.Roots().Calibrated()||!source_stop.Calibrated())return compiled_frames_proven;
+  if(!PrepareStoppedMaps(&frame_geometry_diagnostic))return false;
+  jclass type=env->GetObjectClass(input);jfieldID id=type?env->GetFieldID(type,"dex","[[B"):nullptr;
+  auto dex=id?static_cast<jobjectArray>(env->GetObjectField(input,id)):nullptr;if(type)env->DeleteLocalRef(type);
+  if(!dex||env->ExceptionCheck())return false;
+  auto fixture=compiled_frame_fixture::Owner::Prepare(hooks,env,ti,dex,&frame_geometry_diagnostic);env->DeleteLocalRef(dex);
+  if(!fixture)return false;
+  CompiledRequest request{this,fixture.get(),{}, {}};
+  if(runnable_executor::With(env,anchor,CalibrateCompiled,&request)!=runnable_jni::Result::kSuccess){if(!request.error.empty())frame_geometry_diagnostic=request.error;return false;}
+  auto finder=[&](const char* symbol){return hooks.FindSymbol("libart.so",symbol);};
+  compiled_frames_proven=whole_process_frames::Service::Bind(request.result.scanner_family,finder,&whole_frames);
+  if(!compiled_frames_proven)frame_geometry_diagnostic="Full proved compiled scanner binding rejected";return compiled_frames_proven;
+ }
  native_required_cleanup::Binding cleanup_binding;
  native_schema_run_state::Dependencies schema_dependencies;
  static void CalibrationBegin(void* driver,const runnable_jni::Context& context,void* raw) noexcept {
@@ -199,6 +253,12 @@ struct NativeEngine final:Engine {
   auto& e=*static_cast<NativeEngine*>(raw);
   auto* run=native_schema_run_state::RunState::Current();
   if(!run||run!=e.schema_run.get()||!run->StoppedWindow())return Fail(error,"Mapping refresh lacks actual schema stop owner");
+  return e.RefreshStoppedMappings(error);
+ }
+ bool RefreshStoppedMappings(std::string* error){
+  auto& e=*this;const bool owned_schema=schema_run&&native_schema_run_state::RunState::Current()==schema_run.get()&&schema_run->StoppedWindow();
+  const bool owned_fixture=calibration_stop&&calibration_stop->IsStopped(calibration_self);
+  if(!owned_schema&&!owned_fixture)return Fail(error,"Mapping refresh requires an actual independent native stop");
   const int fd=::open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0)return Fail(error,"Stopped mapping open failed");
   struct Close{int fd;~Close(){::close(fd);}} close{fd};
   e.graph_maps.clear();char buffer[4096],line[1024];size_t used=0;bool valid=true;
@@ -216,12 +276,16 @@ struct NativeEngine final:Engine {
   while(valid){const ssize_t count=::read(fd,buffer,sizeof(buffer));if(count<0){valid=false;break;}if(count==0)break;
    for(ssize_t n=0;n<count;++n){if(buffer[n]=='\n'){if(!consume()){valid=false;break;}used=0;}else if(used==sizeof(line)){valid=false;break;}else line[used++]=buffer[n];}}
   if(valid&&used)valid=consume();
-  if(!valid||e.graph_maps.empty()||!run->StoppedWindow()){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
+  if(!valid||e.graph_maps.empty()||!(owned_schema?schema_run->StoppedWindow():calibration_stop->IsStopped(calibration_self))){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
   return true;
  }
  static bool GraphExtent(void* raw,const void* address,size_t* extent){
   auto& e=*static_cast<NativeEngine*>(raw);auto* run=native_schema_run_state::RunState::Current();
   if(!extent||!run||run!=e.schema_run.get()||!run->StoppedWindow())return false;
+  return CachedExtent(raw,address,extent);
+ }
+ static bool CachedExtent(void* raw,const void* address,size_t* extent){
+  const auto& e=*static_cast<NativeEngine*>(raw);if(!extent)return false;
   uintptr_t p=uintptr_t(address);
 #if defined(__ANDROID__) && defined(__aarch64__)
   p&=UINT64_C(0x00ffffffffffffff);
@@ -579,6 +643,14 @@ struct NativeEngine final:Engine {
   if(source_observation){
    if(source_observation->Authorized())source_stop=source_observation->Binding();
    else source_stop_diagnostic=source_observation->Failure();
+   source_observation.reset();
+   if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck()){
+    PrepareCompiledFrames(env,ti);
+    // A private post-Run calibration cannot change a committed original result.
+    // Preserve its refusal as capability diagnostics, release its worker first,
+    // then clear only the newly raised private-fixture exception.
+    if(env->ExceptionCheck()){env->ExceptionClear();frame_geometry_diagnostic="Private compiled fixture calibration raised a Java exception";}
+   }
   }
   if(schema_operation&&result!=JVMTI_ERROR_NONE&&error)source_factory_diagnostic=*error;
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);

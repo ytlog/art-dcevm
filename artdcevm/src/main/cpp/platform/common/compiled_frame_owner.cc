@@ -87,8 +87,11 @@ bool Owner::RegisterRoots(const runnable_jni::Context& context,source_handle_roo
 bool Owner::Start(JNIEnv* env,std::string* error){
  JavaVM* observed=nullptr;
  if(!env||env->GetJavaVM(&observed)!=JNI_OK||observed!=vm_||started_||!slots_[0]||!slots_[1]||!slots_[2]||env->ExceptionCheck())return Fail(error,"Compiled fixture start requires all pre-registered roots");
- env->CallVoidMethod(run_,start_);if(env->ExceptionCheck())return Fail(error,"Compiled fixture actual worker did not enter its native gate");
- started_=true;target_=OrdinaryBlockedTarget();if(!target_){Close(env,nullptr);return Fail(error,"Compiled fixture native target missing after public gate entry");}return true;
+ // Start may arm the Java/native gate before throwing any Throwable. Retain
+ // cleanup responsibility before invoking it, so destruction clears/restores
+ // the pending exception while releasing and joining the owned worker.
+ started_=true;env->CallVoidMethod(run_,start_);if(env->ExceptionCheck())return Fail(error,"Compiled fixture actual worker did not enter its native gate");
+ target_=OrdinaryBlockedTarget();if(!target_){Close(env,nullptr);return Fail(error,"Compiled fixture native target missing after public gate entry");}return true;
 }
 bool Owner::CalibrateStopped(const native_source_stop::Session& stop,void* self,void* jit,
  const source_handle_roots::StoppedReader& roots,active_frame_recovery_proof::Service::Readable readable,frame_family_calibration::Result* output)const {

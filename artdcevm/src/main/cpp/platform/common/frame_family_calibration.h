@@ -40,7 +40,8 @@ class Service {
  }
  bool ObserveGeometry(void* target,const MethodOracle* methods,size_t count,
      Prepared& prepared,Result* output)const {
-  if(!output||!target||!prepared.context||!methods||count<3)return false;
+  if(!output)return false;*output=Result{};
+  if(!target||!prepared.context||!methods||count<3){output->failure="missing-independent-geometry-inputs";return false;}
   bool model11=Methods(method_metadata::kAndroid11,methods,count);
   bool model12=Methods(method_metadata::kAndroid12Onward,methods,count);
   if(model11==model12)return false;
@@ -69,17 +70,18 @@ class Service {
     decoded_frame_recovery::Location* scratch,size_t capacity,
     active_frame_recovery_proof::Service::Readable readable,Prepared& prepared,
     Result* output)const {
-  if(!output||!target||!jit||!readable||!prepared.context||!scratch||!methods||count<3)return false;
+  if(!output)return false;*output=Result{};
+  if(!target||!jit||!readable||!prepared.context||!scratch||!methods||count<3){output->failure="missing-independent-compiled-inputs";return false;}
   // Native decoder container has sixteen inline slots; this independent
   // calibration fixture is deliberately bounded to avoid any stopped allocation.
-  for(const auto& caller:physical.callers)if(caller.registers>16)return false;
-  Result result;if(!ObserveGeometry(target,methods,count,prepared,&result))return false;
+  for(const auto& caller:physical.callers)if(caller.registers>16){output->failure="compiled-oracle-exceeds-preallocated-map";return false;}
+  Result result;if(!ObserveGeometry(target,methods,count,prepared,&result)){*output=result;return false;}
   const size_t index=result.geometry==Geometry::kLegacy368?0:
     result.geometry==Geometry::kLegacy376?1:result.geometry==Geometry::kModern368?4:bound_[3]?3:2;
   if(!bound_[index])return false;
   const active_frame_recovery_proof::Oracle oracle{physical.callers[0],{physical.callers[1],physical.callers[2]},active_frame_recovery_proof::Shape::kThreePhysical};
   result.proof=services_[index].ProvePrepared(target,jit,oracle,scratch,capacity,prepared.context.get(),readable);
-  const auto& p=result.proof;
+  const auto& p=result.proof;result.failure=p.detail;*output=result;
   if(p.failure!=active_frame_recovery_proof::Failure::kNone||p.frames!=3||p.physical_matches!=3||p.physical_owner_mask!=7||p.inline_matches||p.header_checks!=3||p.dex_pc_checks!=3||p.integers!=3||p.references!=3||p.location_reads!=6)return false;
   result.compiled_ready=true;result.failure="";*output=result;return true;
  }

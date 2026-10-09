@@ -15,6 +15,8 @@ class Engine {
   virtual bool NativeScopeCalibrated()const{return false;}
   virtual bool SourceCapabilitiesCalibrated()const{return false;}
   virtual bool FrameGeometryCalibrated()const{return false;}
+  virtual bool CompiledFramesCalibrated()const{return false;}
+  virtual std::string FrameCalibrationDiagnostic()const{return "compiled-frame-calibration-not-attempted";}
   virtual std::string SourceFactoryDiagnostic()const{return "production-schema-services-unprepared";}
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;

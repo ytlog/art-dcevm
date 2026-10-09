@@ -50,11 +50,14 @@ void CheckFamily(Family f){
  assert(run()&&result.compiled_ready);assert(creates==allocations&&destroys==0);
  assert(result.proof.frames==3&&result.proof.references==3&&result.proof.integers==3);
  assert(result.scanner_family==(f==Family::kAndroid11?f:f==Family::kAndroid12?f:f==Family::kAndroid17?f:Family::kAndroid13));
- bad_owner=true;assert(!run());bad_owner=false;
+ bad_owner=true;assert(!run());assert(!result.compiled_ready&&result.proof.failure!=active_frame_recovery_proof::Failure::kNone);
+ assert(result.failure==result.proof.detail);bad_owner=false;
  bad_pc=true;assert(!run());bad_pc=false;
  ++witness[2][1].expected;assert(!run());--witness[2][1].expected;
  native_map_mismatch=true;assert(!run());native_map_mismatch=false;
- const auto saved=methods[0].java_modifiers;methods[0].java_modifiers=1;assert(!run());methods[0].java_modifiers=saved;
+ const auto saved=methods[0].java_modifiers;methods[0].java_modifiers=1;assert(!run()&&!result.compiled_ready);methods[0].java_modifiers=saved;
+ result.compiled_ready=true;assert(!service.ObserveGeometry(nullptr,methods,3,prepared,&result)&&!result.compiled_ready);
+ assert(std::strcmp(result.failure,"missing-independent-geometry-inputs")==0);
  ++methods[1].dex_index;assert(!run());--methods[1].dex_index;
  assert(!service.Calibrate(&thread,&jit,methods,3,physical,scratch,2,Unmapped,prepared,&result));
  frame_family_calibration::Service ambiguous;assert(frame_family_calibration::Service::Bind(ExactFinder{true},&ambiguous));
