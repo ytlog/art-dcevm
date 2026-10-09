@@ -177,6 +177,7 @@ python3 tools/run-public-jvmti.py --serial DEVICE
 
 ## 文档
 
+- [项目介绍：让运行中的 Android 类持续演进（含交互动画）](docs/articles/art-dcevm.html)
 - [开发说明与语义细节](docs/README.md)
 - [Android 兼容性与适配进展](docs/ANDROID_COMPATIBILITY.md)
 - [未支持及未充分验证的能力](docs/LIMITATIONS.md)
