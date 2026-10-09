@@ -34,13 +34,14 @@ bool Relations::Assignable(void*declaring,void*receiver,bool*out)const noexcept{
 bool Relations::Special(void*declaring,void*caller,bool*out)const noexcept{
  if(!out||!declaring||!caller||!access_.read||!access_.interface_at)return false;
  ClassView target,source;if(!access_.read(access_.owner,declaring,&target)||!access_.read(access_.owner,caller,&source))return false;
+ if(declaring==caller){*out=true;return true;}
  if(!(target.flags&0x200u)){if(!source.parent){*out=false;return true;}return Assignable(declaring,source.parent,out);}
  // JVMS special interface invocation requires a direct superinterface.
  // Complete IfTable membership would incorrectly authorize inherited edges.
  if(!access_.direct_at)return false;
  *out=false;for(size_t i=0;i<source.direct_count;++i){void*iface=nullptr;ClassView identity;
   if(!access_.direct_at(access_.owner,caller,i,&iface)||!iface||!access_.read(access_.owner,iface,&identity)||!(identity.flags&0x200u))return false;
-  if(iface==declaring)*out=true;
+  bool related=false;if(!Assignable(declaring,iface,&related))return false;if(related)*out=true;
  }return true;
 }
 }

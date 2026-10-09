@@ -17,6 +17,7 @@ int main(){Relations r({nullptr,Read,Iface,Direct,Old});int loader;Class object,
  assert(r.Assignable(&iface,&old,&match)&&match);assert(r.Assignable(&iface,&current,&match)&&!match);
  // An inherited IfTable edge is insufficient for invokeSpecial.
  caller.parent=&object;caller.interfaces[0]=&iface;assert(r.Special(&iface,&caller,&match)&&!match);caller.direct[0]=&iface;assert(r.Special(&iface,&caller,&match)&&match);
+ assert(r.Special(&iface,&iface,&match)&&match);Class subinterface=iface;subinterface.descriptor="Lpkg/Sub;";subinterface.interfaces[0]=&iface;caller.direct[0]=&subinterface;assert(r.Special(&iface,&caller,&match)&&match);
  // Actual retained Class history must be complete, acyclic, same-loader and
  // same-descriptor even when the desired pointer appears before corruption.
  old.obsolete=&current;assert(!r.Normalize(&old,&current,&selected));old.obsolete=nullptr;

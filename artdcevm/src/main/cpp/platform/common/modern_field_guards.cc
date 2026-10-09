@@ -201,6 +201,7 @@ bool VarAccess(void* handle,int mode,void* frame,const void* operands,void* resu
     access.var_mode_template=access.var_mode_valid&&mode_template?mode_template(mode):var_handle_access_mode::kInvalid;
     const final_field_guard::Boundary boundary{&state,ReadFinalFlags,RaiseFinal};
     if(final_field_guard::Reject(boundary,field,self,access,result))return false;
+    if(receiver_guard::CheckFrame(receiver_guard::Path::VarHandle,self,field,frame,static_cast<const receiver_guard::InstructionOperands*>(operands),result,true))return false;
   }
   const bool passed=dispatch.Invoke(handle,mode,frame,operands,result);
   if(vars.current()!=self){++vars.context_failures;return false;}

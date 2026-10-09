@@ -1,4 +1,5 @@
 #include "platform/common/native_receiver_guard.h"
+#include "platform/common/native_receiver_frame.h"
 #include <cstring>
 #include <cstdlib>
 namespace artdcevm::receiver_guard {
@@ -16,6 +17,36 @@ bool Guard::EndProof(bool succeeded,bool incompatible,bool unchanged)noexcept{
 }
 bool Guard::Proven()const noexcept{std::lock_guard<std::mutex> lock(lock_);return !probing_&&passed_==complete&&refused_==complete;}
 void Guard::Activate()noexcept{if(!Proven())std::abort();active_.store(true,std::memory_order_release);}
+bool Guard::CheckBytecode(void*self,void*caller,uint32_t pc)noexcept{
+ if(!Interested(Path::BytecodeInvoke,self,nullptr))return false;
+ const auto fail=[&](){if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver bytecode invocation lost exact source caller/PC");return true;};
+ void*member=nullptr;uint32_t receiver=0;
+ if(!caller||!access_.current||!access_.current(access_.owner,self)||!access_.bytecode||!access_.bytecode(access_.owner,self,caller,pc,&member,&receiver))return fail();
+ if(!member)return false;return CheckCompressed(Path::BytecodeInvoke,self,member,receiver);
+}
+bool Guard::CheckFrame(Path path,void*self,void*member,const void*frame,const InstructionOperands*operands,void*result,bool field,void*special)noexcept{
+ if(!Interested(path,self,member))return false;
+ const auto fail=[&](){if(result){const uint64_t zero=0;std::memcpy(result,&zero,8);}if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver frame lost calibrated source metadata");return true;};
+ uint32_t flags=0;void*declaring=nullptr;if(!access_.current||!access_.current(access_.owner,self)||!access_.member||!member||!access_.member(access_.owner,member,field,&flags,&declaring)||!declaring)return fail();
+ if(flags&8u)return false;void*receiver=nullptr;if(!access_.frames||!access_.frames->Read(self,frame,operands,&receiver))return fail();return Check({path,self,member,receiver,special,result,field});
+}
+bool Guard::CheckHandle(void*self,void*object,void*member,bool field,const void*frame,const InstructionOperands*operands,void*result)noexcept{
+ if(!Active()&&!Interested(Path::HandleMethod,self,member)&&!Interested(Path::HandleRead,self,member)&&!Interested(Path::HandleWrite,self,member)&&!Interested(Path::HandleSpecial,self,member))return false;
+ const auto fail=[&](){if(result){const uint64_t zero=0;std::memcpy(result,&zero,8);}if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver MethodHandle kind/caller has no calibrated source identity");return true;};
+ uint32_t kind=0;void*caller=nullptr;
+ if(!access_.current||!access_.current(access_.owner,self)||!access_.handle||!object||!access_.handle(access_.owner,self,object,&kind,&caller))return fail();
+ // Transform/VarHandle bridge kinds are checked at the eventual member entry
+ // or actual FieldVarHandle Access; their operand0 belongs to the bridge.
+ if(kind>=5&&kind<=7)return field?fail():false;
+ uint32_t flags=0;void*declaring=nullptr;
+ if(!access_.member||!access_.member(access_.owner,member,field,&flags,&declaring)||!declaring)return fail();
+ const bool static_kind=kind==3||kind==10||kind==11;
+ if((kind>=8)!=field||static_kind!=bool(flags&8u))return fail();
+ if(static_kind)return false;
+ const Path path=field?(kind==8?Path::HandleRead:Path::HandleWrite):(kind==1?Path::HandleSpecial:Path::HandleMethod);
+ if(field?(kind!=8&&kind!=9):(kind!=0&&kind!=1&&kind!=2&&kind!=4))return fail();
+ return CheckFrame(path,self,member,frame,operands,result,field,kind==1?caller:nullptr);
+}
 bool Guard::InUse()const noexcept{if(Active())return true;std::lock_guard<std::mutex> lock(lock_);return probing_;}
 bool Guard::CheckFieldId(Path path,void*self,void*id,void*handle)noexcept{
  if(!Interested(path,self,nullptr))return false;

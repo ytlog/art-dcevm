@@ -1,4 +1,6 @@
 #include "platform/common/native_final_write_listener.h"
+#include "platform/common/native_receiver_guard.h"
+#include <cstring>
 #include "platform/abi/arm64/android-common/instrumentation.h"
 #include <cstdlib>
 #include <atomic>
@@ -8,8 +10,9 @@ namespace artdcevm::final_write_guard {
 namespace {
 // The fixed 11/12, 13/14 and 15+ headers preserve both FieldWritten virtual
 // positions and signatures. Other listener slots differ between declarations;
-// this restricted listener registers ONLY kFieldWritten (0x20), so none of those
-// slots may be invoked. This is not a general InstrumentationListener adapter.
+// ordinary final-only configuration registers FieldWritten (0x20). A proven
+// receiver consumer adds DexPcMoved/FieldRead (0x18), whose positions/signatures
+// are also fixed. Unregistered slots retain explicit invariant refusal.
 struct ShadowFrame;
 struct Handle {uint32_t* slot;};
 struct OptionalFrame {const void* frame;bool engaged;};
@@ -20,15 +23,17 @@ class FieldOnlyListener {
  virtual void MethodExited(void*,void*,OptionalFrame,Handle&){std::abort();}
  virtual void MethodExited(void*,void*,OptionalFrame,uint64_t&){std::abort();}
  virtual void MethodUnwind(void*,Handle,void*,uint32_t){std::abort();}
- virtual void DexPcMoved(void*,Handle,void*,uint32_t){std::abort();}
- virtual void FieldRead(void*,Handle,void*,uint32_t,void*){std::abort();}
- virtual void FieldWritten(void* t,Handle,void* m,uint32_t,void* f,Handle){guard->FieldWritten(t,m,f,true);}
- virtual void FieldWritten(void* t,Handle,void* m,uint32_t,void* f,const uint64_t&){guard->FieldWritten(t,m,f);}
+ virtual void DexPcMoved(void*t,Handle,void*m,uint32_t pc){if(!receivers)std::abort();receivers->CheckBytecode(t,m,pc);invoke_events.fetch_add(1,std::memory_order_relaxed);}
+ virtual void FieldRead(void*t,Handle object,void*,uint32_t,void*f){if(!receivers)std::abort();ReceiverField(t,object,f,false);read_events.fetch_add(1,std::memory_order_relaxed);}
+ virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,Handle){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f,true);}
+ virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,const uint64_t&){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f);}
  virtual void ExceptionThrown(void*,Handle){std::abort();}
  virtual void ExceptionHandled(void*,Handle){std::abort();}
  virtual void Branch(void*,void*,uint32_t,int32_t){std::abort();}
  virtual void WatchedFramePop(void*,const ShadowFrame&){std::abort();}
- Guard* guard=nullptr;
+ bool ReceiverField(void*t,Handle object,void*f,bool write){if(!receivers)return false;uint32_t reference=0;if(object.slot)std::memcpy(&reference,object.slot,4);if(write)write_events.fetch_add(1,std::memory_order_relaxed);return receivers->CheckCompressed(write?receiver_guard::Path::BytecodeWrite:receiver_guard::Path::BytecodeRead,t,f,reference,nullptr,true);}
+ Guard* guard=nullptr;receiver_guard::Guard* receivers=nullptr;
+ std::atomic<uint64_t> invoke_events{0},read_events{0},write_events{0};
 };
 // Last vtable callback has no role in kFieldWritten; define its exact reference
 // ABI through an opaque source type rather than an object field declaration.
@@ -40,7 +45,7 @@ using Deopt=void(*)(void*,const char*);
 enum class AddKind {None,Legacy,Bool,Typed};
 using MethodDeopt=void(*)(void*,void*);
 void* instrumentation=nullptr;void* add=nullptr;Deopt deopt=nullptr;MethodDeopt method_deopt=nullptr;
-AddKind kind=AddKind::None;bool installed=false;std::mutex configuration;
+AddKind kind=AddKind::None;bool installed=false,receiver_installed=false;std::mutex configuration;
 constexpr char kEnable[]="_ZN3art15instrumentation15Instrumentation20EnableDeoptimizationEv";
 constexpr char kDisable[]="_ZN3art15instrumentation15Instrumentation21DisableDeoptimizationEPKc";
 void* disable_original=nullptr;void* enable_original=nullptr;std::atomic<void*> enabled_receiver{nullptr};bool observer_installed=false,observer_attempted=false;bool legacy=false;
@@ -104,6 +109,27 @@ bool InstallListenerAtExclusiveBoundary(std::string* error){
   default:return Fail(error,"Final guard listener declaration missing");
  }
  installed=true;return true;
+}
+bool BindReceiverEvents(void*receiver,receiver_guard::Guard&guard,std::string*error){
+ std::lock_guard<std::mutex> lock(configuration);
+ if(!installed||!receiver||receiver!=instrumentation||!listener.guard||!add||!deopt||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=receiver))return Fail(error,"Receiver listener lacks the exact installed process Instrumentation owner");
+ if(listener.receivers)return listener.receivers==&guard||Fail(error,"Receiver events already belong to another permanent guard");
+ listener.receivers=&guard;return true;
+}
+bool InstallReceiverEventsAtExclusiveBoundary(std::string*error){
+ std::lock_guard<std::mutex> lock(configuration);
+ if(!installed||!listener.receivers||!add||!instrumentation||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return Fail(error,"Receiver events have no live exact Instrumentation binding");
+ if(receiver_installed)return true;constexpr uint32_t additional=0x18;
+ switch(kind){
+  case AddKind::Typed:reinterpret_cast<TypedAdd>(add)(instrumentation,&listener,additional,abi::arm64::android_common::ListenerType::kRegularListener);break;
+  case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;
+  case AddKind::Legacy:reinterpret_cast<LegacyAdd>(add)(instrumentation,&listener,additional);break;
+  default:return Fail(error,"Receiver event source AddListener declaration missing");
+ }receiver_installed=true;return true;
+}
+bool ReceiverListenerProven(const receiver_guard::Guard&guard)noexcept{
+ std::lock_guard<std::mutex> lock(configuration);
+ return installed&&receiver_installed&&listener.receivers==&guard&&guard.Proven()&&listener.invoke_events.load(std::memory_order_relaxed)&&listener.read_events.load(std::memory_order_relaxed)&&listener.write_events.load(std::memory_order_relaxed)&&(!legacy||enabled_receiver.load(std::memory_order_acquire)==instrumentation);
 }
 bool PrepareProofMethodAtExclusiveBoundary(void* method,std::string* error){
  std::lock_guard<std::mutex> lock(configuration);

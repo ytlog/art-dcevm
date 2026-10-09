@@ -93,6 +93,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/source_allocation_transaction.cc
     platform/common/native_hierarchy_receiver.cc
     platform/common/native_receiver_guard.cc
+    platform/common/native_receiver_frame.cc
     platform/common/native_receiver_relations.cc
     platform/common/native_hierarchy_graph.cc
     platform/common/native_hierarchy_allocator.cc

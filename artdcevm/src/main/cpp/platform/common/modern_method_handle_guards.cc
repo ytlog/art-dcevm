@@ -1,5 +1,6 @@
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_method_handle_guards.h"
+#include "platform/common/native_receiver_guard.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
 #include "platform/abi/arm64/android-common/method_handle.h"
@@ -76,6 +77,7 @@ template<bool exact> bool Dispatch(void* self,void* frame,Handle handle,Handle t
   if(!MethodEntryGuardsOwn(*state.methods))std::abort();
   if(RejectRetiredMethod(target.value,self,result))return false;
  }
+ if(receiver_guard::CheckHandle(self,object,target.value,target.field,frame,static_cast<const receiver_guard::InstructionOperands*>(operands),result))return false;
  // Forward every exported ABI argument unchanged, including both root slots.
  const bool success=state.originals[exact?1:0](self,frame,handle,type,operands,result);
  if(success&&self==state.binding.current()){
