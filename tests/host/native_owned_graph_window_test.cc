@@ -1,3 +1,10 @@
+#include <cstdlib>
+#include <new>
+static bool forbid_final_allocation=false;
+void* operator new(std::size_t bytes){if(forbid_final_allocation)throw std::bad_alloc();if(auto p=std::malloc(bytes))return p;throw std::bad_alloc();}
+void operator delete(void* p)noexcept{std::free(p);}
+void* operator new[](std::size_t bytes){return ::operator new(bytes);}
+void operator delete[](void* p)noexcept{::operator delete(p);}
 #include "platform/common/rooted_schema_plan.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wreturn-type"
@@ -11,6 +18,7 @@ std::map<jobject,std::vector<jobject>> managed;
 std::vector<jclass> staged;
 int driver=0,failures=0,graph_checks=0;bool original_ok=true,field_ok=true,late_child=false,schema_mode=false,collected_provider_ok=true;
 jvmtiError recorded=JVMTI_ERROR_NONE;
+source_commit::Plan finalized_plan;std::unique_ptr<source_commit::Services> finalized_service;
 bool Original(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
 void Failure(void* d,jvmtiError code,const void* klass,const void* message){assert(d==&driver&&klass&&message&&!stopped);auto& text=*static_cast<const android13::BorrowedPlatformString*>(message);assert(text.length&&text.data);++failures;recorded=code;}
 void* RootBarrier(void* handle){assert(!stopped);return reinterpret_cast<void*>(uintptr_t(Read32(handle)));}
@@ -31,8 +39,13 @@ bool Check(JNIEnv* env,jvmtiEnv*,const std::vector<jclass>& actual,const RootedG
  if(schema_mode&&window==GraphWindow::Collected){source_commit::Plan plan;plan.mirror=graph.mirror;plan.new_classes_root=graph.partitions[0].new_classes;
   for(size_t n=0;n<graph.partitions.size();++n){const auto& part=batch_boundary::partitions[n].plan;plan.old_classes.push_back(part.old_classes[0]);plan.new_classes.push_back(part.new_classes[0]);plan.class_root_origins.push_back({graph.partitions[n].new_classes,0});}
   if(!rooted_schema_plan::ValidateCollected(plan,PrepareReadonly,nullptr,error))return false;
+  for(size_t n=0;n<graph.partitions.size();++n){const auto& part=batch_boundary::partitions[n].plan;plan.old_instances.push_back(part.old_instances[0]);plan.new_instances.push_back(part.new_instances[0]);}
+  finalized_plan=std::move(plan);finalized_service=std::make_unique<batch_boundary::CommitServices>(finalized_plan);
  }
  return true;
+}
+std::unique_ptr<source_commit::Services> Finalize(const void* holder,const source_commit::Plan** plan,void*) noexcept{
+ assert(stopped&&holder==&batch_boundary::holder&&finalized_service);*plan=&finalized_plan;return std::move(finalized_service);
 }
 bool Collect(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(late_child)field_ok=false;return true;}
 bool Before(){return VerifiedGraph(&driver,&batch_boundary::holder)&&CollectGraph(&driver,&batch_boundary::holder);}
@@ -81,8 +94,9 @@ int main(int argc,char** argv){
  Reset();graph_window::Build(definitions);original_ok=false;assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&recorded==JVMTI_ERROR_FAILS_VERIFICATION&&failures==0&&begins==0&&graph_checks==0);
  // Identical declarations still enter complete schema mode (body replacement),
  // capturing actual paired Holder arrays at both refundable source windows.
- schema_mode=true;provider.schema_evolution=true;for(auto& definition:definitions)live[definition.klass]=schema;
- Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&begins==1&&prepared==2);
+ schema_mode=true;provider.schema_evolution=true;provider.finalize=Finalize;
+ operations.reserve(100);enter_final=[]{forbid_final_allocation=true;};leave_final=[]{forbid_final_allocation=false;};for(auto& definition:definitions)live[definition.klass]=schema;
+ Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&begins==1&&prepared==1);
  collected_provider_ok=false;Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&graph_checks==2&&prepared==1&&begins==0&&replacements==0&&original_commits==0);collected_provider_ok=true;
  for(int mode=0;mode<3;++mode){Reset();graph_window::Build(definitions);auto root=reinterpret_cast<jobject>(uintptr_t(*holder.array_handle));
   if(mode==0)managed[managed[root][12]].clear();
@@ -103,8 +117,9 @@ int main(int argc,char** argv){
  source_commit::Plan old_plan,new_plan;assert(rooted_schema_plan::Read(graph,true,reader,&old_plan,&error));
  auto moved_array=heap.New(16),moved_class=heap.New(16);Put32(moved_array,8,1);Put32(moved_array,12,uint32_t(uintptr_t(moved_class)));decoded[graph.partitions[1].new_classes]=moved_array;
  assert(rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes[1]==moved_class&&new_plan.class_root_origins[1].array==moved_array&&new_plan.class_root_origins[1].index==0&&old_plan.new_classes[1]!=new_plan.new_classes[1]);
+ forbid_final_allocation=true;assert(rooted_schema_plan::Matches(graph,reader,new_plan));new_plan.class_root_origins[1].index=1;assert(!rooted_schema_plan::Matches(graph,reader,new_plan));new_plan.class_root_origins[1].index=0;forbid_final_allocation=false;
  auto unchanged=new_plan.new_classes;Put32(moved_array,8,2);assert(!rooted_schema_plan::Read(graph,true,reader,&new_plan,&error)&&new_plan.new_classes==unchanged);
  assert(!rooted_schema_plan::Read(graph,false,reader,&new_plan,&error));
- before_commit=nullptr;before_commit_result=nullptr;
- puts("Actual graph window TU: schema paired Class/instance roots, moving-pointer reseal, exact origins, readonly Collected provider refusal before Update, raced/duplicate/missing child refusal and original failure result PASS");
+ before_commit=nullptr;before_commit_result=nullptr;enter_final=leave_final=nullptr;
+ puts("Actual graph window TU: schema paired Class/instance roots, moving-pointer reseal, exact origins, readonly Collected provider refusal before Update, preallocated final Update with allocator forbidden, raced/duplicate/missing child refusal and original failure result PASS");
 }

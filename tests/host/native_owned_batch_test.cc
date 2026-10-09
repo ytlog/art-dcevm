@@ -20,6 +20,7 @@ struct Prefix {void* vptr=nullptr;const unsigned char* begin=nullptr;};std::arra
 uint64_t initial_bits=3;bool proof_ok=true,prepare_ok=true,skip_second=false,repeat_second=false;
 bool (*before_commit)()=nullptr;
 jvmtiError (*before_commit_result)()=nullptr;
+void (*enter_final)()=nullptr;void (*leave_final)()=nullptr;
 int entries=0,preflights=0,prepared=0,begins=0,replacements=0,original_checks=0,original_commits=0,phase_jni=0;
 size_t expected_classes=2;bool descendant_mode=false;int publication_pipe=-1;std::vector<std::string> operations;
 std::map<void*,std::vector<void*>> arrays;std::map<void*,void*> moved;
@@ -57,12 +58,12 @@ jvmtiError Entry(jvmtiEnv*,jint count,const jvmtiClassDefinition* definitions){
  assert(!stopped&&size_t(count)==partitions.size());++entries;
  for(int n=0;n<count;n++){bool found=false;for(int i=0;i<count;i++)if(definitions[i].klass==owners[n].klass){auto* parsed=const_cast<Prefix*>(static_cast<const Prefix*>(owners[n].dex_file));found=std::memcmp(definitions[i].class_bytes,parsed->begin,size_t(definitions[i].class_byte_count))==0;parsed->begin=definitions[i].class_bytes;}assert(found);assert(Fields(&owners[n])&&Methods(&owners[n]));}
  if(before_commit&&!before_commit())return before_commit_result?before_commit_result():JVMTI_ERROR_NOT_AVAILABLE;
- phase_jni=jni_calls;stopped=1;
+ phase_jni=jni_calls;if(enter_final)enter_final();stopped=1;
  transaction_root::Iterator first{0,&holder},second{1,&holder};
  Update(&owners[0],&first);
  if(count>1&&transaction_root::Bit(holder.initial_structural,1)&&!skip_second)Update(&owners[1],&second);
  if(count>1&&repeat_second)Update(&owners[1],&second);
- assert(jni_calls==phase_jni);stopped=0;return JVMTI_ERROR_NONE;
+ assert(jni_calls==phase_jni);stopped=0;if(leave_final)leave_final();return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Extensions(jvmtiEnv*,jint* count,jvmtiExtensionFunctionInfo** info){assert(!stopped);*count=1;*info=static_cast<jvmtiExtensionFunctionInfo*>(std::calloc(1,sizeof(**info)));(*info)->id=strdup("com.android.art.class.structurally_redefine_classes");(*info)->func=reinterpret_cast<jvmtiExtensionFunction>(Entry);return JVMTI_ERROR_NONE;}
 void Build(const std::vector<Definition>& definitions){

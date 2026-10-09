@@ -2,6 +2,7 @@
 #include "platform/common/loaded_member_guards.h"
 #include "platform/common/method_array_view.h"
 #include "platform/common/redefinition_gate.h"
+#include "platform/common/rooted_schema_plan.h"
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -72,8 +73,47 @@ struct Verifier::State {
  Bindings bindings{};std::vector<Node> nodes;std::vector<jclass> inputs;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
- mutable std::vector<uint32_t*> access_slots;
+ mutable std::vector<uint32_t*> access_slots,readonly_access_slots;
  mutable bool access_proven=false,final_fields_proven=false,aliases_proven=false;
+ struct Grant {size_t pair;void* loader;native_schema_policy::Requirement requirement;};
+ struct ClassProof {void* methods=nullptr;void* instances=nullptr;void* statics=nullptr;void* dex_cache=nullptr;void* interfaces=nullptr;uint32_t flags=0,instance_count=0,static_count=0;std::vector<void*> interface_classes;};
+ struct MemberProof {void* member;size_t owner;uint32_t flags,index,offset;bool field;jfieldID field_id=nullptr;};
+ struct InterfaceProof {void* klass=nullptr;void* table=nullptr;std::vector<void*> values;};
+ Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<InterfaceProof> replacement_interfaces;
+ mutable std::vector<Grant> grants;prepared_roots::Bindings frozen_roots,expected_roots;bool frozen=false,refreshed=false;
+ bool FrozenProof()const noexcept {
+  if(!frozen||!redefinition_gate::Owned(bindings.vm)||class_proofs.size()!=nodes.size()||frozen_snapshot.classes.size()!=nodes.size())return false;
+  const bool split=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;
+  const auto& layout=bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+  for(size_t n=0;n<nodes.size();++n){void* klass=nullptr;const auto& proof=class_proofs[n];
+   if(!bindings.decode_global(bindings.owner,nodes[n].root,&klass)||klass!=frozen_snapshot.classes[n])return false;
+   void* loader=nullptr;if(nodes[n].loader&&!bindings.decode_global(bindings.owner,nodes[n].loader,&loader))return false;
+   if(loader!=frozen_snapshot.loaders[n]||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,class_loader))!=loader)return false;
+   const size_t parent=frozen_snapshot.parents[n];if(bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,super_class))!=(parent==absent?nullptr:frozen_snapshot.classes[parent]))return false;
+   const size_t flags=split?offsetof(class_metadata::Class11,access_flags):offsetof(class_metadata::Class17,access_flags);
+   if(native_schema_policy::JavaFlags(__atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<char*>(klass)+flags),__ATOMIC_RELAXED))!=proof.flags||
+      Read<uint64_t>(klass,offsetof(class_metadata::Class11,methods))!=uintptr_t(proof.methods)||
+      (proof.methods?Read<uint32_t>(proof.methods):0)!=frozen_snapshot.all_methods[n].size()||
+      Read<uint64_t>(klass,40)!=uintptr_t(proof.instances)||(split&&Read<uint64_t>(klass,56)!=uintptr_t(proof.statics))||
+      (proof.instances?Read<uint32_t>(proof.instances):0)!=proof.instance_count||(proof.statics?Read<uint32_t>(proof.statics):0)!=proof.static_count||
+      bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=proof.dex_cache||
+      bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,iftable))!=proof.interfaces)return false;
+   if(proof.interfaces){if(Read<uint32_t>(proof.interfaces,8)!=2*proof.interface_classes.size())return false;
+    for(size_t i=0;i<proof.interface_classes.size();++i)if(bindings.metadata->Reference(proof.interfaces,12+8*i)!=proof.interface_classes[i])return false;}
+   for(size_t i=0;i<nodes[n].method_ids.size();++i)if(bindings.decode_method(bindings.owner,nodes[n].method_ids[i])!=frozen_snapshot.declared[n][i])return false;
+  }
+  for(const auto& proof:replacement_interfaces){if(bindings.metadata->Reference(proof.klass,24)!=proof.table)return false;
+   if(proof.table){if(Read<uint32_t>(proof.table,8)!=2*proof.values.size())return false;
+    for(size_t n=0;n<proof.values.size();++n)if(bindings.metadata->Reference(proof.table,12+8*n)!=proof.values[n])return false;}}
+  for(auto slot:readonly_access_slots)if(__atomic_load_n(slot,__ATOMIC_RELAXED)&skip_access_checks)return false;
+  for(const auto& proof:member_proofs){void* owner=frozen_snapshot.classes[proof.owner];
+   if(proof.field){const auto* field=static_cast<const abi::arm64::Field*>(proof.member);
+    if(bindings.decode_field(bindings.owner,nodes[proof.owner].root,proof.field_id)!=proof.member||bindings.metadata->FieldDeclaringClass(proof.member)!=owner||native_schema_policy::JavaFlags(field_array::Flags(proof.member))!=proof.flags||field->dex_field_index!=proof.index||field->offset!=proof.offset)return false;
+   }else{method_metadata::Identity value;
+    if(bindings.method_class(bindings.owner,proof.member)!=owner||!method_metadata::ReadIdentity(layout,proof.member,layout.size,&value)||native_schema_policy::JavaFlags(value.access_flags)!=proof.flags||value.dex_method_index!=proof.index)return false;}
+  }
+  return true;
+ }
  bool Roots(Snapshot* out,std::string* error)const{
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
@@ -197,8 +237,8 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  if(window==Window::Verified)s.verified=true;else s.collected=true;return true;
 }
 bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
- auto& s=*state_;if(!s.collected||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
- s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();
+ auto& s=*state_;if(!s.collected||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
+ s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();s.readonly_access_slots.clear();s.grants.clear();
  Snapshot roots;if(!s.Roots(&roots,error))return false;
  const auto Mapped=[&](const void* address,size_t bytes){return address&&s.bindings.readable(s.bindings.owner,address,bytes);};
  size_t count=0;for(size_t n=0;n<s.nodes.size();++n)if(s.nodes[n].affected){++count;if(std::count(transaction.old_classes.begin(),transaction.old_classes.end(),roots.classes[n])!=1)return Fail(error,"Native Holder Class is outside public affected graph");}
@@ -220,6 +260,14 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
 }
 bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* loader,const native_schema_policy::Requirement& requirement,std::string* error)const{
  auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||pair>=transaction.old_classes.size()||!SamePlan(transaction,s.expected))return Fail(error,"Schema guard has no exact sealed native Holder proof");
+ if(s.frozen){
+  if(!s.refreshed||!s.FrozenProof())return false;
+  if(!std::any_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))return false;
+  if(requirement.kind==native_schema_policy::GuardKind::ExistingInstances||requirement.kind==native_schema_policy::GuardKind::AbstractMethodDependents)
+   return s.bindings.abstract_instances&&s.bindings.abstract_instances->Validate(transaction,pair,*s.bindings.metadata,nullptr);
+  return true;
+ }
+ const auto prove=[&]()->bool {
  Snapshot roots;if(!s.Roots(&roots,error))return false;auto it=std::find(roots.classes.begin(),roots.classes.end(),transaction.old_classes[pair]);if(it==roots.classes.end())return false;const size_t target=size_t(it-roots.classes.begin());
  if(!s.nodes[target].affected||roots.loaders[target]!=loader)return Fail(error,"Schema guard owner/ClassLoader identity differs");
  field_copy::CopyClassView old_identity,new_identity;if(!s.bindings.metadata->ClassIdentity(transaction.old_classes[pair],&old_identity,error)||!s.bindings.metadata->ClassIdentity(transaction.new_classes[pair],&new_identity,error)||old_identity.loader!=loader||new_identity.loader!=loader)return false;
@@ -260,22 +308,94 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
    if(!s.bindings.final_fields||!s.bindings.final_fields->Verify(transaction,pair,loader,before,after,requirement,error))return false;
    s.final_fields_proven=true;return true;
   case Kind::InterfaceIdentities:return s.Interfaces(roots,transaction,error);
+  case Kind::HierarchyGraph:return Fail(error,"Hierarchy changes require the owned rooted allocator/receiver/type-cache proof service");
   case Kind::AccessPermissions:{
    if(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(transaction,error))return Fail(error,"Access permission changes require the proven process interpreter/deopt owner");
-   std::vector<uint32_t*> slots;for(const auto& methods:roots.all_methods)for(void* method:methods){uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&native_flag)&&(flags&skip_access_checks))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}
-   // Include newly allocated tables: their verifier may have enabled shortcuts
-   // using the old public flags. Complete native schema validation supplies the
-   // exact source arena even when added members have no old public JNI ID.
-   for(void* klass:transaction.new_classes){evolution::ClassSchema schema;native_method_table::View table;if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,klass,&schema,error,&table))return false;for(uint32_t i=0;i<table.methods.count;++i){void* method=table.methods.At(i);const uint32_t flags=method_metadata::ReadAccessFlags(method);if(!(flags&native_flag)&&(flags&skip_access_checks))slots.push_back(reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4));}}
+   // A bootstrap ClassLinker lookup cannot resolve a Class defined only in
+   // an application/custom defining-loader namespace. Its dynamic reflection,
+   // JNI and handle consumers remain governed by their independent entry guards.
+   bool child_targets=true;for(void* klass:transaction.old_classes){auto node=std::find(roots.classes.begin(),roots.classes.end(),klass);if(node==roots.classes.end()||!roots.loaders[size_t(node-roots.classes.begin())])child_targets=false;}
+   std::vector<uint32_t*> slots,readonly;
+   const auto add=[&](void* method)->bool {
+    void* declaring=s.bindings.method_class(s.bindings.owner,method);auto native_owner=std::find(roots.classes.begin(),roots.classes.end(),declaring);
+    if(native_owner!=roots.classes.end()){if(child_targets&&!roots.loaders[size_t(native_owner-roots.classes.begin())])return true;}
+    else if(std::find(transaction.new_classes.begin(),transaction.new_classes.end(),declaring)==transaction.new_classes.end())return false;
+    const uint32_t flags=method_metadata::ReadAccessFlags(method);if(flags&native_flag)return true;
+    auto* slot=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4);
+    if(reinterpret_cast<uintptr_t>(slot)%alignof(uint32_t))return false;
+    if(s.bindings.writable(s.bindings.owner,slot,sizeof(uint32_t))){slots.push_back(slot);return true;}
+    // Source SetSkipAccessChecks is an unconditional atomic flag write; a
+    // genuinely readonly clear flag cannot be enabled by that normal path.
+    // Retain a final witness instead of requiring a needless readonly write.
+    if(flags&skip_access_checks)return false;readonly.push_back(slot);return true;
+   };
+   for(size_t n=0;n<roots.all_methods.size();++n){
+    for(void* method:roots.all_methods[n])if(!add(method))return Fail(error,"A potential caller has a readonly enabled access shortcut");}
+   // Reserve every mutable new slot, including shortcuts currently clear:
+   // verification may enable them between Collected and final suspension.
+   for(void* klass:transaction.new_classes){evolution::ClassSchema schema;native_method_table::View table;
+    if(!native_schema_policy::ReadNativeDeclarations(*s.bindings.metadata,*s.bindings.methods,klass,&schema,error,&table))return false;
+    for(uint32_t i=0;i<table.methods.count;++i)if(!add(table.methods.At(i)))return Fail(error,"Replacement method has a readonly enabled access shortcut");}
    std::sort(slots.begin(),slots.end());slots.erase(std::unique(slots.begin(),slots.end()),slots.end());
-   for(auto slot:slots)if(reinterpret_cast<uintptr_t>(slot)%alignof(uint32_t)||!s.bindings.writable(s.bindings.owner,slot,sizeof(uint32_t)))return Fail(error,"A loaded caller access flag cannot be atomically updated in its rooted arena");
+   std::sort(readonly.begin(),readonly.end());readonly.erase(std::unique(readonly.begin(),readonly.end()),readonly.end());
+   s.readonly_access_slots=std::move(readonly);
    s.access_slots=std::move(slots);s.access_proven=true;return true;
   }
  }
  return Fail(error,"Unknown native schema guard requirement");
+ };
+ if(!prove())return false;
+ if(std::none_of(s.grants.begin(),s.grants.end(),[&](const auto& grant){return grant.pair==pair&&grant.loader==loader&&grant.requirement.kind==requirement.kind&&grant.requirement.member_name==requirement.member_name&&grant.requirement.descriptor==requirement.descriptor;}))s.grants.push_back({pair,loader,requirement});
+ return true;
 }
+bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,std::string* error){
+ auto& s=*state_;if(!s.sealed||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||!s.Roots(&s.frozen_snapshot,error))return false;
+ const bool split=s.bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;
+ const auto& layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ s.class_proofs.resize(s.nodes.size());
+ for(size_t n=0;n<s.nodes.size();++n){void* klass=s.frozen_snapshot.classes[n];auto& proof=s.class_proofs[n];
+  proof.methods=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,48)));proof.instances=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,40)));
+  proof.statics=split?reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,56))):proof.instances;
+  if((proof.instances&&!s.bindings.readable(s.bindings.owner,proof.instances,4))||(proof.statics&&!s.bindings.readable(s.bindings.owner,proof.statics,4)))return false;
+  proof.instance_count=proof.instances?Read<uint32_t>(proof.instances):0;proof.static_count=proof.statics?Read<uint32_t>(proof.statics):0;
+  proof.flags=native_schema_policy::JavaFlags(Read<uint32_t>(klass,split?64:56));
+  proof.dex_cache=s.bindings.metadata->Reference(klass,16);proof.interfaces=s.bindings.metadata->Reference(klass,24);
+  if(proof.interfaces){if(!s.bindings.readable(s.bindings.owner,proof.interfaces,12))return false;const uint32_t length=Read<uint32_t>(proof.interfaces,8);if(length%2||!s.bindings.readable(s.bindings.owner,proof.interfaces,12+size_t(length)*4))return false;
+   for(uint32_t i=0;i<length/2;++i)proof.interface_classes.push_back(s.bindings.metadata->Reference(proof.interfaces,12+size_t(i)*8));}
+  for(size_t i=0;i<s.nodes[n].field_ids.size();++i){void* field=s.bindings.decode_field(s.bindings.owner,s.nodes[n].root,s.nodes[n].field_ids[i]);
+   const auto* native=static_cast<const abi::arm64::Field*>(field);s.member_proofs.push_back({field,n,native_schema_policy::JavaFlags(native->access_flags),native->dex_field_index,native->offset,true,s.nodes[n].field_ids[i]});}
+  for(void* method:s.frozen_snapshot.all_methods[n]){void* owner=s.bindings.method_class(s.bindings.owner,method);auto it=std::find(s.frozen_snapshot.classes.begin(),s.frozen_snapshot.classes.end(),owner);method_metadata::Identity identity;
+   if(it==s.frozen_snapshot.classes.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
+   s.member_proofs.push_back({method,size_t(it-s.frozen_snapshot.classes.begin()),native_schema_policy::JavaFlags(identity.access_flags),identity.dex_method_index,0,false});}
+ }
+ for(void* klass:s.expected.new_classes){State::InterfaceProof proof;proof.klass=klass;proof.table=s.bindings.metadata->Reference(klass,24);
+  if(proof.table){if(!s.bindings.readable(s.bindings.owner,proof.table,12))return false;const uint32_t length=Read<uint32_t>(proof.table,8);
+   if(length%2||!s.bindings.readable(s.bindings.owner,proof.table,12+size_t(length)*4))return false;
+   for(uint32_t n=0;n<length/2;++n)proof.values.push_back(s.bindings.metadata->Reference(proof.table,12+size_t(n)*8));}
+  s.replacement_interfaces.push_back(std::move(proof));}
+ if(!rooted_schema_plan::CollectBindings(&s.expected,registrar,&s.expected_roots))return false;
+ for(auto* values:{&s.frozen_snapshot.classes,&s.frozen_snapshot.loaders})for(auto& value:*values)if(!s.frozen_roots.Add(&value,registrar))return false;
+ for(auto& proof:s.class_proofs){if(!s.frozen_roots.Add(&proof.dex_cache,registrar)||!s.frozen_roots.Add(&proof.interfaces,registrar))return false;
+  for(auto& value:proof.interface_classes)if(!s.frozen_roots.Add(&value,registrar))return false;}
+ for(auto& proof:s.replacement_interfaces){if(!s.frozen_roots.Add(&proof.klass,registrar)||!s.frozen_roots.Add(&proof.table,registrar))return false;for(auto& value:proof.values)if(!s.frozen_roots.Add(&value,registrar))return false;}
+ for(auto& grant:s.grants)if(!s.frozen_roots.Add(&grant.loader,registrar))return false;
+ s.frozen_roots.Seal();s.frozen=true;return s.FrozenProof();
+}
+
+bool Verifier::CanRefreshManagedRoots(const prepared_roots::Resolver& resolver)const noexcept{
+ const auto& s=*state_;return s.frozen&&s.sealed&&redefinition_gate::Owned(s.bindings.vm)&&s.expected_roots.CanRefresh(resolver)&&s.frozen_roots.CanRefresh(resolver);
+}
+bool Verifier::RefreshManagedRoots(const source_commit::Plan& plan,const prepared_roots::Resolver& resolver) noexcept{
+ auto& s=*state_;s.refreshed=false;if(!CanRefreshManagedRoots(resolver))return false;
+ s.expected_roots.Refresh(resolver);s.frozen_roots.Refresh(resolver);
+ if(!SamePlan(plan,s.expected)||!s.FrozenProof())return false;
+ if((s.final_fields_proven||s.aliases_proven)&&(!s.bindings.final_fields||!s.bindings.final_fields->VerifyAliases(plan,nullptr)))return false;
+ if(s.access_proven&&(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(plan,nullptr)))return false;
+ s.refreshed=true;return true;
+}
+
 void Verifier::BeginCommit(const source_commit::Plan& transaction)const{
- const auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))std::abort();
+ const auto& s=*state_;if(!s.sealed||(s.frozen&&!s.refreshed)||!redefinition_gate::Owned(s.bindings.vm)||!SamePlan(transaction,s.expected))std::abort();
  if(s.access_proven){s.bindings.access_permissions->BeginCommit(transaction);for(auto slot:s.access_slots)__atomic_fetch_and(slot,~skip_access_checks,__ATOMIC_RELAXED);}
  if(s.final_fields_proven||s.aliases_proven)s.bindings.final_fields->BeginCommit(transaction);
 }

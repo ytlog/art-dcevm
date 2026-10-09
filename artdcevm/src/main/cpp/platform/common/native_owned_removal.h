@@ -14,7 +14,7 @@ struct RootedPartition {
   jobjectArray old_instances=nullptr,new_instances=nullptr;
   size_t holder_index=0,class_count=0,instance_count=0;
 };
-struct RootedGraph {jclass mirror=nullptr;std::vector<RootedPartition> partitions;};
+struct RootedGraph {jclass mirror=nullptr;std::vector<RootedPartition> partitions;const void* holder=nullptr;};
 struct Provider {
   bool (*ready)(void*)=nullptr;
   std::unique_ptr<source_commit::Services> (*prepare)(
@@ -31,6 +31,10 @@ struct Provider {
   // Requests complete source-owned policy validation. Original CheckClass and
   // CheckRedefinable remain authoritative until their separate guard adapter.
   bool schema_evolution=false;
+  // Consumes the already prepared wholebatch service. Original final source
+  // boundary supplies the same Holder; refresh/consume must allocate nothing.
+  std::unique_ptr<source_commit::Services> (*finalize)(const void* holder,
+      const source_commit::Plan** plan,void* owner) noexcept=nullptr;
 };
 // Default entry removes members with unchanged hierarchy and modifiers.
 // Schema mode requires the complete rooted provider in both source windows.

@@ -95,7 +95,7 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
     size_t(slots)/abi::arm64::android11::kRootSlots!=request.items.size()||
     !transaction_root::ReadMetadata(holder,request.items.size(),transaction_root::OwnerFamily::kAndroid15,&metadata)||
     !Mapped(metadata.initial_structural.begin,8*((metadata.count+63)/64)))return reject("Precommit root partition disagrees with whole batch");
- RootedGraph graph;std::vector<jobject> arrays;
+ RootedGraph graph;graph.holder=raw;std::vector<jobject> arrays;
  struct ArrayLocals {JNIEnv* env;std::vector<jobject>& values;~ArrayLocals(){for(auto value:values)env->DeleteLocalRef(value);}} array_locals{request.env,arrays};
  std::vector<jclass> classes;
  struct Locals {JNIEnv* env;std::vector<jclass>& values;~Locals(){for(auto value:values)env->DeleteLocalRef(value);}} locals{request.env,classes};
@@ -131,6 +131,15 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
  }
  if(classes.empty()||!request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error))
   return reject(error.empty()?"Affected Class graph was not independently staged":error.c_str());
+ if(request.provider->schema_evolution&&window==GraphWindow::Collected){
+  request.holder=raw;request.remaining_owners.clear();
+  for(const auto& partition:graph.partitions){
+   void* owner=const_cast<unsigned char*>(metadata.owners.begin)+partition.holder_index*metadata.stride;
+   if(std::count_if(request.items.begin(),request.items.end(),[&](const auto& item){return item.validated_owner==owner;})!=1)return reject("Collected Holder has an unowned structural partition");
+   if(request.remaining_owners.size()==request.remaining_owners.capacity())return reject("Collected owner storage was not reserved");
+   request.remaining_owners.emplace_back(owner,static_cast<int32_t>(partition.holder_index));
+  }
+ }
  request.graph_verified=true;return true;
 }
 bool GuardGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
@@ -159,14 +168,31 @@ void Update(void* owner,const void* iterator){
   }
   transaction_root::Iterator current{};
   if(active->provider->closed_graph&&!active->graph_sealed)std::abort();
-  size_t extent=0;
-  if(!method_identity::ReadableMappingExtent(iterator,&extent)||!transaction_root::ReadIterator(iterator,extent,&current))std::abort();
+  if(active->provider->schema_evolution){
+    // Named source entry accepts a reference to its fixed Iterator value. This
+    // original argument is trusted as the source declaration requires; verify
+    // its Holder/index against the independent Collected ownership proof.
+    // Do not allocate an OS mapping scan in the irreversible final boundary.
+    if(!iterator)std::abort();std::memcpy(&current,iterator,sizeof(current));
+  }else{size_t extent=0;
+    if(!method_identity::ReadableMappingExtent(iterator,&extent)||!transaction_root::ReadIterator(iterator,extent,&current))std::abort();
+  }
   if(active->committed){
     // JNI and mutable managed roots are deliberately not revisited after heap
     // replacement. Only the fixed Holder/native owner previously proven remains.
     auto found=std::find(active->remaining_owners.begin(),active->remaining_owners.end(),std::make_pair(owner,current.index));
     if(current.holder!=active->holder||found==active->remaining_owners.end())std::abort();
     active->remaining_owners.erase(found);return;
+  }
+  if(active->provider->schema_evolution){
+    // The refundable window prepared the complete plan and service, including
+    // native ownership/order. Consume only preallocated state after moving GC.
+    auto found=std::find(active->remaining_owners.begin(),active->remaining_owners.end(),std::make_pair(owner,current.index));
+    if(!active->provider->finalize||current.holder!=active->holder||found==active->remaining_owners.end())std::abort();
+    const source_commit::Plan* plan=nullptr;
+    auto services=active->provider->finalize(current.holder,&plan,active->provider->state);
+    if(!plan||!services||!source_commit::Run(*plan,*services))std::abort();
+    active->remaining_owners.erase(found);active->committed=true;return;
   }
   std::string error;owned_structural_transaction::StructuralTransaction first;
   if(!owned_structural_transaction::ReadStructuralTransaction(*active->hooks,*active->provider->metadata,iterator,&first,&error)||first.roots.owner!=owner||first.metadata.count!=active->items.size()){
@@ -300,6 +326,7 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
   }jvmti->Deallocate(reinterpret_cast<unsigned char*>(functions));}
   if(!structural){if(error)*error="Missing public owned structural extension";return JVMTI_ERROR_NOT_AVAILABLE;}
   struct Window {explicit Window(Request& r){active=&r;}~Window(){active=nullptr;}} window(request);
+  request.remaining_owners.reserve(definitions.size());
   std::vector<jvmtiClassDefinition> incoming;incoming.reserve(definitions.size());
   for(const auto& definition:definitions)incoming.push_back({definition.klass,static_cast<jint>(definition.dex.size()),definition.dex.data()});
   const auto result=structural(jvmti,static_cast<jint>(incoming.size()),incoming.data());

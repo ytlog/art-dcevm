@@ -3,6 +3,7 @@
 #include "platform/common/native_schema_binding.h"
 #include "platform/common/native_abstract_instances.h"
 #include "platform/common/runnable_jni_bridge.h"
+#include "platform/common/prepared_root_bindings.h"
 #include <jni.h>
 #include <jvmti.h>
 #include <memory>
@@ -69,6 +70,9 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   bool Verify(const source_commit::Plan&,size_t,void*,
               const native_schema_policy::Requirement&,std::string*)const override;
   void BeginCommit(const source_commit::Plan&)const override;
+  bool CollectManagedRoots(const prepared_roots::Registrar&,std::string*);
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;
+  bool RefreshManagedRoots(const source_commit::Plan&,const prepared_roots::Resolver&) noexcept;
   // Ordinary JNI, after the transaction gate is released; no permanent Class
   // roots, public method-ID caches or loader retention survive an operation.
   void Clear(JNIEnv*);

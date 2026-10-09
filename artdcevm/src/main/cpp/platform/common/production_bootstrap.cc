@@ -15,6 +15,8 @@
 #include "platform/common/modern_source_commit.h"
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/rooted_schema_plan.h"
+#include "platform/common/prepared_root_registry.h"
+#include "platform/abi/arm64/android-common/jni_global_ref.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/native_removal_policy.h"
@@ -31,10 +33,6 @@
 namespace artdcevm::production_bootstrap {
 namespace {
 bool Fail(std::string* e,const char* text){if(e)*e=text;return false;}
-bool SameSchemaPlan(const source_commit::Plan& a,const source_commit::Plan& b){
- if(a.mirror!=b.mirror||a.new_classes_root!=b.new_classes_root||a.old_classes!=b.old_classes||a.new_classes!=b.new_classes||a.old_instances!=b.old_instances||a.new_instances!=b.new_instances||a.abstract_instances!=b.abstract_instances||a.class_root_origins.size()!=b.class_root_origins.size())return false;
- for(size_t i=0;i<a.class_root_origins.size();++i)if(a.class_root_origins[i].array!=b.class_root_origins[i].array||a.class_root_origins[i].index!=b.class_root_origins[i].index)return false;return true;
-}
 void JNICALL Marker(JNIEnv*,jobject) {}
 struct Roots {
  JNIEnv* env;std::vector<jobject> values;
@@ -69,6 +67,15 @@ struct NativeEngine final:Engine {
  std::vector<native_schema_policy::Plan> schema_policies;
  bool schema_operation=false,schema_collected=false,graph_decoder_proven=false;
  native_owned_removal::RootedGraph schema_roots;
+ JNIEnv* schema_root_env=nullptr;
+ abi::arm64::android_common::AddGlobalRef graph_add_global=nullptr;
+ static jobject RootManaged(void* raw,void* object){auto& e=*static_cast<NativeEngine*>(raw);if(!object||!e.graph_add_global||!redefinition_gate::Owned(e.vm))return nullptr;return e.graph_add_global(e.runtime.receivers.java_vm,e.graph_current(),{uintptr_t(object)});}
+ static void ReleaseManaged(void* raw,jobject root){auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_root_env)std::abort();e.schema_root_env->DeleteGlobalRef(root);}
+ prepared_roots::Registry schema_registry{{this,RootManaged,DecodeGraph,ReleaseManaged}};
+ source_commit::Plan prepared_schema_plan;
+ prepared_roots::Bindings schema_plan_roots;
+ std::unique_ptr<source_commit::Services> prepared_schema_service;
+ bool schema_finalizing=false;
  using DecodeObject=abi::arm64::android11::ReleaseObjectPointer (*)(const void*,jobject);
  DecodeObject graph_decode=nullptr;
  void* (*graph_decode_method)(void*,jmethodID)=nullptr;
@@ -90,7 +97,10 @@ struct NativeEngine final:Engine {
   const auto it=std::upper_bound(e.graph_maps.begin(),e.graph_maps.end(),p,[](uintptr_t value,const auto& range){return value<range.begin;});
   if(it==e.graph_maps.begin())return false;const auto& range=*std::prev(it);return p>=range.begin&&p+length<=range.end&&(!write||range.write);
  }
- static bool GraphReadable(void* raw,const void* address,size_t bytes){return GraphMapped(raw,address,bytes,false);}
+ static bool GraphReadable(void* raw,const void* address,size_t bytes){
+  const auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_finalizing)return GraphMapped(raw,address,bytes,false);
+  size_t extent=0;return method_identity::ReadableMappingExtent(address,&extent)&&extent>=bytes;
+ }
  static bool GraphWritable(void* raw,const void* address,size_t bytes){return GraphMapped(raw,address,bytes,true);}
  static bool ObserveGraphReaders(const runnable_jni::Context& scope,void* raw){
   auto& e=*static_cast<NativeEngine*>(raw);void* expected=nullptr;
@@ -112,22 +122,23 @@ struct NativeEngine final:Engine {
  static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
+  schema_root_env=env;prepared_schema_service.reset();schema_plan_roots={};prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;
   for(const auto& part:schema_roots.partitions)for(auto array:{part.old_classes,part.new_classes,part.old_instances,part.new_instances})if(array)env->DeleteGlobalRef(array);
   if(schema_roots.mirror)env->DeleteGlobalRef(schema_roots.mirror);schema_roots={};schema_collected=false;schema_policies.clear();schema_verifier.Clear(env);graph_maps.clear();
  }
  bool CaptureSchemaRoots(JNIEnv* env,const native_owned_removal::RootedGraph& graph,native_owned_removal::GraphWindow window,std::string* error){
-  if(!graph.mirror||graph.partitions.empty())return Fail(error,"Schema window lacks actual rooted Holder partitions");
+  if(!graph.mirror||graph.partitions.empty()||!graph.holder)return Fail(error,"Schema window lacks actual rooted Holder partitions");
   if(window==native_owned_removal::GraphWindow::Verified){
-   if(schema_roots.mirror)return Fail(error,"Repeated schema Holder roots");schema_roots.mirror=static_cast<jclass>(env->NewGlobalRef(graph.mirror));
+   if(schema_roots.mirror)return Fail(error,"Repeated schema Holder roots");schema_roots.holder=graph.holder;schema_roots.mirror=static_cast<jclass>(env->NewGlobalRef(graph.mirror));
    for(const auto& part:graph.partitions){auto copy=part;copy.old_classes=static_cast<jobjectArray>(env->NewGlobalRef(part.old_classes));copy.new_classes=static_cast<jobjectArray>(env->NewGlobalRef(part.new_classes));copy.old_instances=copy.new_instances=nullptr;copy.instance_count=0;schema_roots.partitions.push_back(copy);if(!copy.old_classes||!copy.new_classes)return Fail(error,"Schema Holder global rooting failed");}
   }else{
-   if(!env->IsSameObject(schema_roots.mirror,graph.mirror)||schema_roots.partitions.size()!=graph.partitions.size())return Fail(error,"Schema Holder identity changed between source windows");
+   if(schema_roots.holder!=graph.holder||!env->IsSameObject(schema_roots.mirror,graph.mirror)||schema_roots.partitions.size()!=graph.partitions.size())return Fail(error,"Schema Holder identity changed between source windows");
    for(size_t i=0;i<graph.partitions.size();++i){auto& before=schema_roots.partitions[i];const auto& now=graph.partitions[i];
     if(before.holder_index!=now.holder_index||before.class_count!=now.class_count||!env->IsSameObject(before.old_classes,now.old_classes)||!env->IsSameObject(before.new_classes,now.new_classes))return Fail(error,"Schema Holder partition/origin changed");
     before.old_instances=static_cast<jobjectArray>(env->NewGlobalRef(now.old_instances));before.new_instances=static_cast<jobjectArray>(env->NewGlobalRef(now.new_instances));before.instance_count=now.instance_count;
     if(now.old_instances&&(!before.old_instances||!before.new_instances))return Fail(error,"Schema instance rooting failed");
    }schema_collected=true;
-  }return schema_roots.mirror&&!env->ExceptionCheck();
+  }schema_root_env=env;return schema_roots.mirror&&!env->ExceptionCheck();
  }
  static void* GraphReference(void* raw,void* array,size_t offset){return static_cast<NativeEngine*>(raw)->metadata.Reference(array,offset);}
  bool RootedSchemaPlan(source_commit::Plan* plan,std::string* error){
@@ -227,11 +238,21 @@ struct NativeEngine final:Engine {
   d.retirement={&s,MethodRetired,FieldRetired,RetireMethod,RetireField};d.is_retired=Retired;
   d.allow_field_removal=s.handles_proven;d.handle_guards={&s,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
   if(s.schema_operation){
-   if(!s.RefreshMaps(error))return nullptr;source_commit::Plan rooted;
-   if(!s.RootedSchemaPlan(&rooted,error)||!SameSchemaPlan(p,rooted)||!s.schema_verifier.Seal(p,error)||!s.PrepareSchemaPolicy(p,error))return nullptr;
+   if(&p!=&s.prepared_schema_plan||!s.schema_collected||!s.schema_verifier.Seal(p,error)||!s.PrepareSchemaPolicy(p,error))return nullptr;
    d.expected_removal=native_member_provider::Removal::kSchemaEvolution;d.schemas=&s.schema_policies;d.schema_guards=&s.schema_verifier;
   }
   return s.provider.Prepare(p,d,error);
+ }
+ static std::unique_ptr<source_commit::Services> FinalizeSchema(const void* holder,const source_commit::Plan** plan,void* raw)noexcept{
+  auto& e=*static_cast<NativeEngine*>(raw);if(!plan||holder!=e.schema_roots.holder||!e.prepared_schema_service||!redefinition_gate::Owned(e.vm))return nullptr;
+  e.schema_finalizing=true;
+  if(!e.schema_registry.Resolve())return nullptr;const auto resolver=e.schema_registry.Final();
+  if(!e.schema_plan_roots.CanRefresh(resolver)||!e.schema_verifier.CanRefreshManagedRoots(resolver))return nullptr;
+  e.schema_plan_roots.Refresh(resolver);
+  if(!rooted_schema_plan::Matches(e.schema_roots,{&e,DecodeGraph,GraphReadable,GraphReference},e.prepared_schema_plan)||
+     !e.schema_verifier.RefreshManagedRoots(e.prepared_schema_plan,resolver)||
+     !e.provider.RefreshManagedRoots(e.prepared_schema_plan,*e.prepared_schema_service,resolver))return nullptr;
+  *plan=&e.prepared_schema_plan;return std::move(e.prepared_schema_service);
  }
  void RecordDefinitions(JNIEnv* env,const std::vector<Definition>& definitions)override{
   for(const auto& definition:definitions)if(!provenance.Store(env,definition.klass,definition.dex))break;
@@ -266,7 +287,7 @@ struct NativeEngine final:Engine {
   if(!cache.Prepare(error))return JVMTI_ERROR_NOT_AVAILABLE;
   current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
   int result=native_owned_removal::RunBatch(hooks,env,ti,defs,
-    {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation},error);
+    {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr,schema_operation,schema_operation?FinalizeSchema:nullptr},error);
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
   return result;
  }
@@ -436,7 +457,8 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
- if(!graph_current||!graph_field_leaf)return Fail(error,"Paused graph native readers unavailable");
+ graph_add_global=reinterpret_cast<decltype(graph_add_global)>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kAddGlobalRef));
+ if(!graph_current||!graph_field_leaf||!graph_add_global)return Fail(error,"Paused graph native readers unavailable");
  graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject));
  if(!graph_decode)graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject));
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
@@ -511,11 +533,13 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
   const auto checkpoint=window==native_owned_removal::GraphWindow::Verified?native_schema_guard_verifier::Window::Verified:native_schema_guard_verifier::Window::Collected;
   if(!e.CaptureSchemaRoots(env,rooted,window,error)||!e.schema_verifier.CheckWindow(env,ti,actual,checkpoint,error))return false;
   if(window==native_owned_removal::GraphWindow::Collected){
-   if(!e.RefreshMaps(error))return false;source_commit::Plan plan;if(!e.RootedSchemaPlan(&plan,error))return false;
-   if(!rooted_schema_plan::ValidateCollected(plan,PrepareCommit,&e,error))return false;
-   // Keep this path refundable until schedules can be rebound without any
-   // allocation after source Run declares further failure irreversible.
-   return Fail(error,"Allocation-free rooted schema finalization is not yet installed");
+   if(!e.RefreshMaps(error)||!e.RootedSchemaPlan(&e.prepared_schema_plan,error))return false;
+   e.prepared_schema_service=PrepareCommit(e.prepared_schema_plan,&e,error);
+   if(!e.prepared_schema_service||!e.prepared_schema_service->Validate(e.prepared_schema_plan))return false;
+   const auto registrar=e.schema_registry.Collect();
+   if(!rooted_schema_plan::CollectBindings(&e.prepared_schema_plan,registrar,&e.schema_plan_roots)||
+      !e.provider.CollectManagedRoots(*e.prepared_schema_service,registrar)||
+      !e.schema_verifier.CollectManagedRoots(registrar,error)||!e.schema_registry.Freeze())return Fail(error,"Collected schema root preparation failed");
   }
  }
  return true;

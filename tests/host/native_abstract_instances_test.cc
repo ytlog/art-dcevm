@@ -3,6 +3,12 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_abstract_instances.h"
+#include <new>
+static bool forbid_vtable_allocation=false;
+void* operator new(std::size_t n){if(forbid_vtable_allocation)throw std::bad_alloc();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void* operator new[](std::size_t n){return ::operator new(n);}
+void operator delete(void* p)noexcept{std::free(p);}
+void operator delete[](void* p)noexcept{std::free(p);}
 namespace {
 void* incomplete=nullptr;void* complete=nullptr;void* long_array_class=nullptr;void* primitive_long=nullptr;
 void* embedded_complete=nullptr;void* embedded_method=nullptr;
@@ -57,6 +63,9 @@ int main(){
  assert(!service.Validate(plan,0,metadata,&error)&&error=="An actual migrated instance would inherit an abstract method");
  plan.old_instances.clear();plan.new_instances.clear();assert(service.Validate(plan,0,metadata,&error));
  plan.old_instances={old_instance};plan.new_instances={new_instance};plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,&error));
+ forbid_vtable_allocation=true;assert(service.Validate(plan,0,metadata,nullptr));
+ plan.new_classes[0]=incomplete;Put32(new_instance,0,uint32_t(uintptr_t(incomplete)));assert(!service.Validate(plan,0,metadata,nullptr));
+ plan.new_classes[0]=complete;Put32(new_instance,0,uint32_t(uintptr_t(complete)));assert(service.Validate(plan,0,metadata,nullptr));forbid_vtable_allocation=false;
  // Concrete Class flags do not grant success: its real embedded dispatch
  // entries must also be complete for every actual corresponding instance.
  plan.new_classes[0]=embedded_complete;Put32(new_instance,0,uint32_t(uintptr_t(embedded_complete)));assert(service.Validate(plan,0,metadata,&error));

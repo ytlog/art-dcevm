@@ -101,14 +101,17 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,const modern_field_metadat
 bool Service::Validate(const source_commit::Plan& plan,size_t pair,const modern_field_metadata::FieldMetadata& metadata,std::string* error)const{
  if(metadata_!=&metadata||!metadata.Calibrated()||pair>=plan.old_classes.size()||plan.old_classes.size()!=plan.new_classes.size()||plan.old_instances.size()!=plan.new_instances.size())
   return Fail(error,"Existing-instance abstract validation lacks the same calibrated native owner and complete Holder roots");
- std::vector<bool> checked(plan.new_classes.size(),false);
+
  for(size_t i=0;i<plan.old_instances.size();++i){void* instance=plan.old_instances[i];void* replacement=plan.new_instances[i];
   if(!Mapped(instance,sizeof(abi::arm64::ObjectPrefix))||!Mapped(replacement,sizeof(abi::arm64::ObjectPrefix)))return Fail(error,"Existing-instance root is missing or unreadable");
   void* klass=metadata.Reference(instance,0);auto old=std::find(plan.old_classes.begin(),plan.old_classes.end(),klass);
   if(old==plan.old_classes.end())return Fail(error,"Existing-instance actual Class is outside paired Holder proof");
   size_t k=size_t(old-plan.old_classes.begin());if(metadata.Reference(replacement,0)!=plan.new_classes[k])return Fail(error,"Replacement-instance Class differs from exact paired Holder");
-  if(!checked[k]){bool unresolved=false;if(!Read(metadata,method_model_,plan.new_classes[k],&unresolved,embedded_prefix_,nullptr,nullptr,error))return false;
-   if(unresolved)return Fail(error,"An actual migrated instance would inherit an abstract method");checked[k]=true;}
+ }
+ for(size_t k=0;k<plan.old_classes.size();++k){
+  if(std::none_of(plan.old_instances.begin(),plan.old_instances.end(),[&](void* instance){return metadata.Reference(instance,0)==plan.old_classes[k];}))continue;
+  bool unresolved=false;if(!Read(metadata,method_model_,plan.new_classes[k],&unresolved,embedded_prefix_,nullptr,nullptr,error))return false;
+  if(unresolved)return Fail(error,"An actual migrated instance would inherit an abstract method");
  }
  if(error)error->clear();return true;
 }
