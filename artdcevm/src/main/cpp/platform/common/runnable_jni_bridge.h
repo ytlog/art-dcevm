@@ -1,34 +1,12 @@
 #pragma once
+#include "platform/common/borrowed_jni_callback.h"
 #include "platform/abi/arm64/android-common/jni_access.h"
 #include "platform/abi/arm64/android14/jni_global_decode.h"
 namespace artdcevm::runnable_jni {
-struct Context {void* self;JNIEnv* env;void* vm;};
-using Operation=bool (*)(const Context&,void*);
-enum class Result {kSuccess,kUnavailable,kInvalidRequest,kPendingException,kReentrant,
-                   kLeafNotReached,kContextMismatch,kOriginalRejected,kOperationRejected,
-                   kOperationThrew,kJniException};
-// Caller owns matching/calibration and hook installation. Bind with the original
-// trampoline, then dispatch the named leaf through OnFromReflectedMethod. Keep
-// service, hook and trampoline alive until all invocations and passthroughs end;
-// never rebind or remove a hook while they are in flight. No hook is installed here.
-class Bridge {
- public:
-  using Leaf=abi::arm64::android_common::FromReflectedMethod;
-  static const char* SymbolName(){return abi::arm64::android_common::kFromReflectedMethod;}
-  static bool Bind(void* original,Bridge* output);
-  // carrier must be a live owned Method/Constructor usable by this JNIEnv.
-  // ART's real JNI function establishes Runnable+mutator scope. Callback runs
-  // within its named leaf; if LTO bypasses the hook this returns kLeafNotReached.
-  // No managed pointer may escape callback without an ART/JNI root. Callback must
-  // preserve carrier and native hook lifetimes. Pending exceptions are not cleared.
-  Result Invoke(JNIEnv* env,jobject carrier,Operation operation,void* data) const;
-  void* OnFromReflectedMethod(const abi::arm64::android_common::RunnableJniScope& scope,
-                             jobject carrier) const;
- private:
-  struct Request;
-  static thread_local Request* active_;
-  Leaf original_=nullptr;
-};
+using borrowed_jni_callback::Context;
+using borrowed_jni_callback::Operation;
+using borrowed_jni_callback::Result;
+using borrowed_jni_callback::Bridge;
 class GlobalDecoder {
  public:
   enum class Representation {kMatchedReleaseNoPoison};
