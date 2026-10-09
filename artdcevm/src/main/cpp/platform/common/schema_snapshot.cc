@@ -1,5 +1,5 @@
-#include "platform/android13/schema_snapshot.h"
-namespace artdcevm::android13 {
+#include "platform/common/schema_snapshot.h"
+namespace artdcevm::live_schema {
 namespace {
 template <typename T> class Allocation {
  public:

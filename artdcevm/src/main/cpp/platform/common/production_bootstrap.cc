@@ -27,7 +27,7 @@
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
 #include "platform/common/native_removal_policy.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstdio>
 #include "platform/common/native_structural_reflection.h"
@@ -372,7 +372,7 @@ struct NativeEngine final:Engine {
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
   if(!activated||current||defs.empty())return owned_failure_diagnostic::Unavailable(error,"engine activation/reentrant input");
   schema_operation=false;for(const auto& definition:defs){evolution::ClassSchema before,after;std::string narrow_error;
-   if(android13::ReadLiveSchema(ti,env,definition.klass,&before,error)!=JVMTI_ERROR_NONE||!evolution::ReadDexDeclarations(definition.dex,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+   if(live_schema::ReadLiveSchema(ti,env,definition.klass,&before,error)!=JVMTI_ERROR_NONE||!evolution::ReadDexDeclarations(definition.dex,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
    if(!native_owned_removal::ValidateRemoval(before,after,handles_proven,&narrow_error,false)||(before.methods.size()==after.methods.size()&&before.fields.size()==after.fields.size()))schema_operation=true;
   }
   const bool batch=defs.size()>1||schema_operation;

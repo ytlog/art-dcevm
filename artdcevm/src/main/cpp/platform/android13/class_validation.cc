@@ -5,7 +5,7 @@
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/validation_metadata.h"
 #include <cstring>
@@ -29,7 +29,7 @@ bool CheckEvolutionClass(void* definition) {
     int result = ReadRedefinitionInput(definition, &redef, &replacement, &error);
     if (result) { RecordRedefinitionFailure(definition, result, error.c_str()); return false; }
     evolution::ClassSchema current;
-    result = ReadLiveClassMetadata(env, jni, redef.klass, &current, &error);
+    result = live_schema::ReadLiveClassMetadata(env, jni, redef.klass, &current, &error);
     if (result) { RecordRedefinitionFailure(definition, result, error.c_str()); return false; }
     if (!redef.lock_acquired) {
       error = "Failed to lock class object '" + current.descriptor + "'";

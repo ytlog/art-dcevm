@@ -5,7 +5,7 @@
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/android-common/redefinition_boundaries.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/jni_global_ref.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
@@ -493,7 +493,7 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
     if(env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
     evolution::ClassSchema next,old;
     if(definition.dex.empty()||definition.dex.size()>INT32_MAX||!evolution::ReadDexDeclarations(definition.dex,&next,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
-    const int read=android13::ReadLiveSchema(jvmti,env,definition.klass,&old,error);
+    const int read=live_schema::ReadLiveSchema(jvmti,env,definition.klass,&old,error);
     if(read!=JVMTI_ERROR_NONE)return static_cast<jvmtiError>(read);
     if(provider.schema_evolution){
       native_schema_policy::Plan schema;

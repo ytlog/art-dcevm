@@ -80,7 +80,7 @@ void Build(const std::vector<Definition>& definitions){
  }
 }
 }
-namespace artdcevm::android13 {
+namespace artdcevm::live_schema {
 int ReadLiveSchema(jvmtiEnv*,JNIEnv*,jclass klass,evolution::ClassSchema* out,std::string*){assert(!stopped);*out=batch_boundary::live.at(klass);return JVMTI_ERROR_NONE;}
 }
 namespace artdcevm::owned_structural_transaction {

@@ -2,7 +2,7 @@
 #include "platform/android13/field_validation.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/redefinition_input.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/android13/failure_calibration_abi.h"
 #include "platform/android13/redefinition_art_abi.h"
 #include "platform/android13/platform_string_abi.h"
@@ -61,7 +61,6 @@ namespace artdcevm {LoadedModule FindLoadedModule(const char* name){return Find(
 namespace artdcevm::android13 {
 jvmtiEnv* ValidationHooks::TransactionEnvironment(){return active?reinterpret_cast<jvmtiEnv*>(1):nullptr;}
 int ReadRedefinitionInput(void*,redefinition_abi::ClassRedefinition* metadata,evolution::ClassSchema* schema,std::string* error){schema->fields=new_fields;metadata->klass=reinterpret_cast<jclass>(1);if(input_error)*error="Malformed input";return input_error;}
-int ReadLiveFields(jvmtiEnv*,jclass,std::vector<evolution::Member>* fields,std::string* error){*fields=old_fields;if(snapshot_error)*error="Snapshot failed";return snapshot_error;}
 void MarkFinalFieldGuard()noexcept{++final_guards;}
 }
 struct DefinitionFixture {
@@ -91,3 +90,7 @@ int main(){Hooks hooks;DeviceProfile profile;std::string error;assert(!Calibrate
  input_error=JVMTI_ERROR_ILLEGAL_ARGUMENT;{DefinitionFixture f;assert(!CheckEvolutionFields(&f.definition)&&f.driver.result==JVMTI_ERROR_ILLEGAL_ARGUMENT);}input_error=0;
  snapshot_error=JVMTI_ERROR_INTERNAL;{DefinitionFixture f;assert(!CheckEvolutionFields(&f.definition)&&f.driver.result==JVMTI_ERROR_INTERNAL);}snapshot_error=0;assert(strings.empty());
  std::puts("failure calibration: strict profile, real libc++ short/borrowed-long input, repeated owned assignment/result/destruction, rejection cleanup passed");}
+
+namespace artdcevm::live_schema {
+int ReadLiveFields(jvmtiEnv*,jclass,std::vector<evolution::Member>* fields,std::string* error){*fields=old_fields;if(snapshot_error)*error="Snapshot failed";return snapshot_error;}
+}

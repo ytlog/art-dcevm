@@ -4,7 +4,7 @@
 #include "platform/common/native_final_field_aliases.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/modern_method_handle_guards.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -130,7 +130,7 @@ bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");
  s.staged.reserve(roots.size()); // allocate before creating any owned JNI handle
  for(size_t i=0;i<roots.size();++i){auto klass=roots[i];if(!klass)return Fail(error,"Final-field stage contains a null public Class");State::Public entry;
-  if(android13::ReadLiveSchema(jvmti,env,klass,&entry.schema,error)!=JVMTI_ERROR_NONE)return false;
+  if(live_schema::ReadLiveSchema(jvmti,env,klass,&entry.schema,error)!=JVMTI_ERROR_NONE)return false;
   entry.root=static_cast<jclass>(env->NewGlobalRef(klass));if(!entry.root||env->ExceptionCheck())return false;
   if(!RegisterStrong(env,entry.root,error)){env->DeleteGlobalRef(entry.root);return false;}
   entry.weak=env->NewWeakGlobalRef(klass);if(!entry.weak||env->ExceptionCheck()){ForgetStrong(entry.root);env->DeleteGlobalRef(entry.root);return false;}

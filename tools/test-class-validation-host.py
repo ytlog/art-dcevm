@@ -21,7 +21,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(root / 'tests/host/class_validation_test.cc'),
            str(cpp / 'platform/android13/class_validation.cc'),
            str(cpp / 'platform/android13/redefinition_input.cc'),
-           str(cpp / 'platform/android13/schema_snapshot.cc'),
+           str(cpp / 'platform/common/schema_snapshot.cc'),
            str(cpp / 'platform/android13/modifier_evolution_policy.cc'),
            str(cpp / 'evolution/dex_schema.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)

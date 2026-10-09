@@ -1,5 +1,5 @@
 #include "platform/android13/evolution_planner.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include <sstream>
 namespace artdcevm::android13 {
 int PlanEvolution(jvmtiEnv* env, JNIEnv* jni, const std::vector<Definition>& definitions,
@@ -16,7 +16,7 @@ int PlanEvolution(jvmtiEnv* env, JNIEnv* jni, const std::vector<Definition>& def
     }
     evolution::ClassSchema before, after;
     if (!evolution::ReadDexSchema(definition.dex, &after, error)) return JVMTI_ERROR_INVALID_CLASS_FORMAT;
-    int result = ReadLiveSchema(env, jni, definition.klass, &before, error);
+    int result = live_schema::ReadLiveSchema(env, jni, definition.klass, &before, error);
     if (result) return result;
     if (before.descriptor != after.descriptor) { *error = "Target and patch class names differ"; return JVMTI_ERROR_NAMES_DONT_MATCH; }
     evolution::MigrationPlan migration;

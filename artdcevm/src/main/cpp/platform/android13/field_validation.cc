@@ -4,7 +4,7 @@
 #include "platform/android13/field_evolution_policy.h"
 #include "platform/android13/final_field_guard_state.h"
 #include "platform/android13/redefinition_input.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/symbols/android13.h"
 #include <new>
@@ -32,7 +32,7 @@ bool CheckEvolutionFields(void* definition) {
     int result = ReadRedefinitionInput(definition, &redef, &replacement, &error);
     if (result) { RecordRedefinitionFailure(definition, result, error.c_str()); return false; }
     std::vector<evolution::Member> old_fields;
-    result = ReadLiveFields(env, redef.klass, &old_fields, &error);
+    result = live_schema::ReadLiveFields(env, redef.klass, &old_fields, &error);
     if (result != JVMTI_ERROR_NONE) {
       RecordRedefinitionFailure(definition, result, error.c_str());
       return false;

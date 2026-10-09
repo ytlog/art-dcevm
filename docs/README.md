@@ -82,7 +82,6 @@ artdcevm/src/main/cpp/
   platform/android13/
     android13_backend.*        平台能力探测与实现组合
     jvmti_redefiner.*           方法体与增量结构变更实现
-    schema_snapshot.*          从当前存活类读取字段、方法与继承结构
     evolution_planner.*        验证整批目标并生成迁移计划
     validation_hooks.*         共享校验/提交 Hook 路由、线程事务范围与计数
     evolution_runtime.*        命名设备函数、自有校准、Hook 与演进事务初始化
@@ -95,6 +94,7 @@ artdcevm/src/main/cpp/
     retired_field_hooks.*      反射、JNI、VarHandle 的字段访问守卫
     instrumentation_listener.* 接收者守卫的事件处理与注册
   platform/common/             共用元数据、提交、退役守卫与运行时证明
+    schema_snapshot.*          公共 JVMTI/JNI 读取当前类字段、方法与继承结构
   platform/abi/arm64/           按源码声明差异组织的 ARM64 ABI
   platform/arch/arm64/          CPU 寄存器恢复与汇编
   platform/symbols/            命名符号与固定源码声明配置

@@ -3,7 +3,7 @@
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include "platform/android13/redefinition_input.h"
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/validation_metadata.h"
 #include <algorithm>

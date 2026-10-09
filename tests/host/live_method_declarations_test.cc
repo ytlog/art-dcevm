@@ -1,4 +1,4 @@
-#include "platform/android13/schema_snapshot.h"
+#include "platform/common/schema_snapshot.h"
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -42,12 +42,12 @@ int main() {
   jvmtiEnv env{&table};
   std::vector<evolution::Member> output;
   std::string error;
-  assert(android13::ReadLiveMethods(&env, nullptr, &output, &error) == JVMTI_ERROR_NONE);
+  assert(live_schema::ReadLiveMethods(&env, nullptr, &output, &error) == JVMTI_ERROR_NONE);
   assert(output.size() == 2 && output[0].name == "<init>" && output[1].descriptor == "()I");
   assert(output[0].access == 1 && output[1].access == 0x21 && modifier_reads == 2);
   assert(allocations == 0);
   fail_second = true;
-  assert(android13::ReadLiveMethods(&env, nullptr, &output, &error) == JVMTI_ERROR_INVALID_METHODID);
+  assert(live_schema::ReadLiveMethods(&env, nullptr, &output, &error) == JVMTI_ERROR_INVALID_METHODID);
   assert(output.size() == 2 && output[1].access == 0x21 && !error.empty());
   assert(allocations == 0);
   std::cout << "live method declarations: public planning flags, atomic failure and allocation cleanup passed\n";

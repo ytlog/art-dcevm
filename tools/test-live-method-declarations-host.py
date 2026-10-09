@@ -17,7 +17,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(java_home / 'include'),
            '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/live_method_declarations_test.cc'),
-           str(cpp / 'platform/android13/schema_snapshot.cc'), '-o', str(binary)]
+           str(cpp / 'platform/common/schema_snapshot.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1',
