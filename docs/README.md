@@ -130,12 +130,16 @@ Java 公共 API 不暴露 `ArtMethod`、`ArtField`、对象布局或私有地址
 |---|---|---|
 | `REDEFINE_BODY` | `JvmtiBodyRedefiner` → `RedefineClasses` | 方法体、旧栈帧、已缓存反射/JNI ID |
 | `REDEFINE_STRUCTURE` | `ArtAdditiveRedefiner` → ART 扩展 | 增加字段/方法、已有实例与子类迁移、静态状态、锁、GC |
-| `enableEvolution()` | 严格 Build ID、命名符号与自有校准、幂等初始化 | 不依赖业务类结构；两种 Hook 初始化顺序 |
+| `enableEvolution()` | 命名符号、独立运行时行为校准、幂等初始化 | 不依赖业务类结构；两种 Hook 初始化顺序 |
 | `EVOLVE_SCHEMA` | `EvolutionClassRedefiner`：成员删除/重新添加、类型/签名及存储形式变化、native/Java 互换、继承扩展、旧父类移除、非 private 可见性转换 | 旧引用失效语义、旧对象、批次、并发调用、同批祖先依赖；旧父类移除和实验性接口移除在目标手机上启用，接口缓存引用路径仍待验证 |
 | 私有 Hook | `ValidationHooks` + `HookEngine` | 命名符号预检、回调计数、保持原有语义 |
 | `analyze(request)` | 当前类快照 + DEX 解析 + `MigrationPlan` | 成员身份映射、完整批次校验、结构变化识别；不提交变更 |
 
-API 33/arm64 保留专用后端，其私有 Hook 预检 `libart.so` 与 `libopenjdkjvmti.so` 的必需命名符号，增强库在私有访问前严格匹配四个设备库 Build ID，并在安装演进 Hook 前完成真实校准。其他 API 30+ 构建进入公开 JVMTI 后端，运行时探测标准重定义能力和 ART 结构扩展；`EVOLVE_SCHEMA`、私有演进事务、私有 Hook 及 schema 预览明确返回不可用。应用可调用 `DcevmRuntime.attachPublicJvmti(context)` 附加代理并读取能力，随后自己的 JVMTI Agent 可走标准 `RedefineClasses` 替换方法体；ART 的结构扩展需要独立调用对应扩展函数。`DcevmRuntime.initialize` 要求完整演进初始化，因此在公开后端会失败。API 30、34、35、36 的 x86_64 模拟器通过实际方法体和增量结构替换；API 30 的独立测试 APK 还验证了成员删除被拒绝时的事务状态，结果见本地 `build/evidence/compatibility/20261007/`。其他设备仍需逐台回归。自有校准检查 Thread/Runtime、类描述符、字段数量、实例/静态字段、字段偏移、方法身份及 JNI ID 与 ART 对象的对应关系；它不能穷尽 Heap、GC、编译器和事务内部布局。未知 Build ID 在私有对象读取和设备函数调用前被拒绝。已匹配配置仍需持续行为回归，不能仅凭匹配和校准通过宣称完整 DCEVM 兼容。**扩展名称相同不代表私有 ABI 可复用。**
+兼容目标是 Android 11–17 各版本尽可能覆盖所有厂商机型。同一 Android 版本也可能因 CPU 架构、ART Mainline 更新或厂商对 ART 的修改而具有不同私有 ABI，因此版本号本身不能作为兼容证明。厂商、机型与 Build ID 只用于测试记录和诊断，不参与能力选择，也不设置机型白名单。
+
+当前 ARM64 工厂组合公开 JVMTI 后端、共享运行时能力后端与固定源码声明的私有实现候选。`android13` 目录标识其中一套源码实现，并非仅允许 Android 13 或某台手机使用；能否使用私有能力由必需命名符号、独立服务接收者观察和真实行为校准共同决定。不同版本和 CPU 的 ABI 差异分别放入固定声明与架构实现，共通事务和校验逻辑复用公共路径。未知或缺失 Build ID 不会阻止候选发现；缺失必要符号或行为校准失败时，该私有能力不可用并报告原因。
+
+目前已取得多版本 ARM64 的正式成员删除证据，以及 Android 13 现有源码实现的结构演进回归证据；完整跨版本结构演进和其他 CPU 架构仍在接入。某台设备通过测试只证明该设备、该 ART 构建与所测能力，不能据此宣称同版本全部机型或完整 DCEVM 已兼容。最新命令、设备、APK 哈希和验证范围见 `docs/VERIFICATION.md`。
 
 公开 JVMTI 入口的调用方式如下。附加后，用户 Agent 用自己的 `jvmtiEnv::RedefineClasses` 提交完整定义；增量结构扩展需要从自身的 JVMTI 环境获取 ART 扩展函数。
 
