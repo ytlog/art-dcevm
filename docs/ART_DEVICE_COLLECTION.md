@@ -4,7 +4,7 @@
 
 ## 覆盖选择
 
-先在每个 API 30–37（包括 Android 12L/API 32）采集一台 Pixel，建立跨版本基线。然后补充三星各可用 API、不同芯片和旗舰/中端机型，以及小米、OPPO、一加、realme、Motorola、Sony、Nothing 和传音设备。对同一 API 的不同厂商分别核对；ART Mainline 更新也可能改变相同机型的库，按库 SHA-256 与 GNU Build ID 聚合，保留设备指纹与安全补丁日期。
+当前采集目标为 API 30、31、33、34、35、36、37；Android 12L/API 32 按用户要求暂时排除。先为这些目标 API 采集一台 Pixel，建立跨版本基线。然后补充三星各可用 API、不同芯片和旗舰/中端机型，以及小米、OPPO、一加、realme、Motorola、Sony、Nothing 和传音设备。对同一 API 的不同厂商分别核对；ART Mainline 更新也可能改变相同机型的库，按库 SHA-256 与 GNU Build ID 聚合，保留设备指纹与安全补丁日期。
 
 2026-10-08 登录后读取的官方串流目录提供以下候选；这是目录结果，尚不是已提取或已校准清单：
 
