@@ -8,6 +8,7 @@ namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;
 thread_local Session* active=nullptr;
 thread_local Session* finishing=nullptr;
+thread_local Session* borrowed=nullptr;
 thread_local Observation* observation=nullptr;
 std::mutex installation;bool installed=false;
 a::SuspendConstruct original_stop=nullptr;a::SuspendDestroy original_resume=nullptr;
@@ -18,20 +19,25 @@ struct NativeHooks {
 static void Construct(void* carrier,const char* cause,bool long_suspend) {
  if(Session::TransferConstruct(carrier,cause,long_suspend))return;
  if(!original_stop)std::abort();original_stop(carrier,cause,long_suspend);
+ Session::OriginalConstructed(carrier,cause,long_suspend);
  Observation::Constructed(carrier,cause,long_suspend);
 }
 static void Destroy(void* carrier) {
  if(Session::TransferDestroy(carrier))return;
+ Session::OriginalDestroying(carrier);
  if(!original_resume)std::abort();original_resume(carrier);
+ Session::OriginalDestroyed(carrier);
  Observation::Destroyed(carrier);
 }
 static void Disable(void* heap,void* self){
  Session::SourceDisableBegin(heap,self);original_disable(heap,self);
+ Session::OriginalDisabled(heap,self);
  Observation::DisableBegin(heap,self);
 }
 static void Enable(void* heap,void* self){
  Session::SourceDisableEnd(heap,self,false);original_enable(heap,self);Observation::DisableEnd(heap,self);
  Session::SourceDisableEnd(heap,self,true);
+ Session::OriginalEnabled(heap,self);
 }
 static void Start(void* heap,void* self,int32_t cause,int32_t collector){
  Session::UnexpectedGC();Observation::GCOperation(heap,self,true);original_start(heap,self,cause,collector);
@@ -95,7 +101,7 @@ bool Session::Native()const noexcept {
  uint32_t state=UINT32_MAX;return SameOwner()&&service_.state_.State(self_,extent_,&state)&&state==abi::arm64::android11::kNative;
 }
 bool Session::Begin(void* self,size_t extent) noexcept {
- if(phase_!=Phase::kEmpty||active||finishing||observation||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
+ if(phase_!=Phase::kEmpty||active||finishing||borrowed||observation||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
  self_=self;extent_=extent;uint32_t state=UINT32_MAX;
  if(!service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState()){failure_="source-stop-requires-calibrated-Runnable-owner";return false;}
  // StartGC really waits for the preceding owner, then excludes every GC until
@@ -115,6 +121,8 @@ bool Session::Begin(void* self,size_t extent) noexcept {
  suspended_=exclusive_=true;phase_=Phase::kStopped;active=this;failure_="";return true;
 }
 bool Session::IsStopped(void* self)const noexcept {
+ if(borrowed_)return self==self_&&borrowed==this&&!borrowed_failed_&&source_disable_&&
+   original_holder_&&source_carrier_&&suspended_&&exclusive_&&phase_==Phase::kFinal&&Native();
  return self==self_&&active==this&&gc_&&suspended_&&exclusive_&&
    (phase_==Phase::kStopped||phase_==Phase::kFinal)&&Native();
 }
@@ -145,6 +153,11 @@ bool Session::TransferDestroy(void* carrier) noexcept {
  owner.phase_=Phase::kFinalResumed;finishing=&owner;return true;
 }
 void Session::Rollback() noexcept {
+ if(borrowed_){
+  if(phase_==Phase::kFinal||phase_==Phase::kOriginalClosing)std::abort();
+  if(borrowed==this)borrowed=nullptr;
+  return; // Never destroy a carrier or restore a transition owned by original ART.
+ }
  if(phase_==Phase::kEmpty||phase_==Phase::kCompleted||phase_==Phase::kRolledBack)return;
  if(!SameOwner()||phase_==Phase::kFinal||phase_==Phase::kFinalResumed)std::abort();
  if(phase_==Phase::kContinuing){bool moved=false;if(!service_.state_.EnterNative(self_,extent_,&moved)||!moved||!Native())std::abort();service_.lock_(*service_.mutator_,self_);exclusive_=true;}
@@ -165,7 +178,11 @@ void Session::SourceDisableEnd(void* heap,void* self,bool completed) noexcept {
     !owner.SameOwner()||!owner.service_.state_.State(self,owner.extent_,&state)||state!=owner.service_.state_.RunnableState())std::abort();
  if(completed){owner.source_disable_=false;owner.phase_=Phase::kCompleted;finishing=nullptr;}
 }
-void Session::UnexpectedGC() noexcept {if(active)std::abort();}
+void Session::UnexpectedGC() noexcept {
+ if(active)std::abort();
+ if(borrowed&&(borrowed->phase_==Phase::kFinal||borrowed->phase_==Phase::kOriginalDisabled))
+  borrowed->RefuseOriginal("original-final-unexpected-GC");
+}
 bool Service::SameBinding(const Service& other)const noexcept {
  return state_.SameBinding(other.state_)&&heap_==other.heap_&&mutator_identity_==other.mutator_identity_&&mutator_&&*mutator_==mutator_identity_&&mutator_==other.mutator_&&current_==other.current_&&start_==other.start_&&finish_==other.finish_&&
    lock_==other.lock_&&unlock_==other.unlock_&&stop_==other.stop_&&resume_==other.resume_;
@@ -173,6 +190,76 @@ bool Service::SameBinding(const Service& other)const noexcept {
 bool Service::Authorize(const Calibration& proof,const void* run) noexcept {
  if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_)||!state_.CanTransitionRunnable())return false;
  std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;calibrated_=true;return true;
+}
+bool Service::AuthorizeOriginalFinal(const Calibration& proof,const void* run) noexcept {
+ original_calibrated_=false;original_run_=nullptr;
+ if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_))return false;
+ std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;
+ original_run_=run;original_calibrated_=true;return true;
+}
+void Session::RefuseOriginal(const char* failure) noexcept {
+ if(!borrowed_failed_)failure_=failure;
+ borrowed_failed_=true;
+}
+bool Session::PrepareOriginalFinal(void* self,size_t extent,const void* run,void* driver) noexcept {
+ if(phase_!=Phase::kEmpty||active||finishing||borrowed||!service_.original_calibrated_||
+    !run||run!=service_.original_run_||!driver||!self||service_.current_()!=self)return false;
+ self_=self;extent_=extent;uint32_t state=UINT32_MAX;
+ if(!SameOwner()||!service_.state_.State(self,extent,&state)||state!=service_.state_.RunnableState())return false;
+ borrowed_=true;original_driver_=driver;phase_=Phase::kOriginalPrepared;borrowed=this;
+ failure_="original-final-not-open";return true;
+}
+bool Session::OriginalCollected(void* driver,const void* holder) noexcept {
+ uint32_t state=UINT32_MAX;
+ if(!borrowed_||borrowed!=this||borrowed_failed_||phase_!=Phase::kOriginalPrepared||
+    driver!=original_driver_||!holder||!SameOwner()||
+    !service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState()){
+  if(borrowed_)RefuseOriginal("original-final-collected-owner-mismatch");return false;
+ }
+ original_holder_=holder;phase_=Phase::kOriginalArmed;return true;
+}
+void Session::OriginalDisabled(void* heap,void* self) noexcept {
+ if(!borrowed)return;auto& o=*borrowed;uint32_t state=UINT32_MAX;
+ if(o.phase_==Phase::kOriginalPrepared)return; // Earlier original allocation work.
+ if(o.borrowed_failed_||o.phase_!=Phase::kOriginalArmed||heap!=o.service_.heap_||self!=o.self_||
+    !o.SameOwner()||!o.service_.state_.State(self,o.extent_,&state)||state!=o.service_.state_.RunnableState()){
+  o.RefuseOriginal("original-final-disable-owner-mismatch");return;
+ }
+ o.source_disable_=true;o.phase_=Phase::kOriginalDisabled;
+}
+void Session::OriginalConstructed(void* carrier,const char* cause,bool long_suspend) noexcept {
+ if(!borrowed)return;auto& o=*borrowed;
+ if(o.phase_==Phase::kOriginalPrepared)return; // Original class-loading initialization.
+ if(o.borrowed_failed_||o.phase_!=Phase::kOriginalDisabled||!carrier||!cause||
+    std::strcmp(cause,o.service_.final_cause_)||long_suspend!=o.service_.final_long_||
+    !o.source_disable_||!o.original_holder_||!o.Native()){
+  o.RefuseOriginal("original-final-carrier-owner-mismatch");return;
+ }
+ // Only reached after the genuine named constructor returned normally. Its
+ // fixed ART implementation owns exclusive mutator access and global suspension.
+ o.source_carrier_=carrier;o.suspended_=o.exclusive_=true;o.phase_=Phase::kFinal;o.failure_="";
+}
+void Session::OriginalDestroying(void* carrier) noexcept {
+ if(!borrowed)return;auto& o=*borrowed;
+ if(o.phase_!=Phase::kFinal)return;
+ if(carrier!=o.source_carrier_||!o.Native())o.RefuseOriginal("original-final-resume-owner-mismatch");
+ o.exclusive_=false;o.phase_=Phase::kOriginalClosing; // Revoke before original resumes threads.
+}
+void Session::OriginalDestroyed(void* carrier) noexcept {
+ if(!borrowed)return;auto& o=*borrowed;
+ if(o.phase_!=Phase::kOriginalClosing)return;
+ if(carrier!=o.source_carrier_||!o.Native())o.RefuseOriginal("original-final-return-owner-mismatch");
+ o.suspended_=false;o.source_carrier_=nullptr;o.phase_=Phase::kFinalResumed;
+}
+void Session::OriginalEnabled(void* heap,void* self) noexcept {
+ if(!borrowed)return;auto& o=*borrowed;uint32_t state=UINT32_MAX;
+ if(o.phase_==Phase::kOriginalPrepared)return;
+ if(o.phase_!=Phase::kFinalResumed||heap!=o.service_.heap_||self!=o.self_||!o.SameOwner()||
+    !o.service_.state_.State(self,o.extent_,&state)||state!=o.service_.state_.RunnableState()){
+  o.RefuseOriginal("original-final-enable-owner-mismatch");return;
+ }
+ o.source_disable_=false;o.phase_=o.borrowed_failed_?Phase::kRolledBack:Phase::kCompleted;
+ borrowed=nullptr;
 }
 void Observation::Refuse(const char* failure) noexcept {
  if(!failed_){failure_=failure;trace_.first_failure_phase=static_cast<uint8_t>(phase_);}

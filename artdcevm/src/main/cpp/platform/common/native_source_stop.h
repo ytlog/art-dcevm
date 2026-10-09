@@ -22,9 +22,12 @@ class Service {
                    Service*,std::string* error);
   bool Authorize(const Calibration&,const void* exact_original_run) noexcept;
   bool Calibrated()const noexcept{return calibrated_;}
+  // Borrow only the actual original final carrier; requires no direct transition pair.
+  bool AuthorizeOriginalFinal(const Calibration&,const void* exact_original_run) noexcept;
+  bool OriginalFinalCalibrated()const noexcept{return original_calibrated_;}
  private:
   bool SameBinding(const Service&)const noexcept;
-  bool calibrated_=false;char final_cause_[128]{};bool final_long_=false;
+  bool calibrated_=false,original_calibrated_=false;const void* original_run_=nullptr;char final_cause_[128]{};bool final_long_=false;
   void* heap_=nullptr;void* mutator_identity_=nullptr;void** mutator_=nullptr;void* (*current_)()=nullptr;
   abi::arm64::android_common::source_stop::StartGC start_=nullptr;
   abi::arm64::android_common::source_stop::FinishGC finish_=nullptr;
@@ -102,6 +105,12 @@ class Session {
   Session(const Session&)=delete;Session& operator=(const Session&)=delete;
   bool Begin(void* self,size_t mapped_extent) noexcept;
   bool ContinueSource() noexcept;
+  // No reservation or mutation permission is created here. The sole actual Run
+  // owner attaches before calling the exact calibrated original body.
+  bool PrepareOriginalFinal(void* self,size_t mapped_extent,const void* exact_original_run,
+                            void* exact_driver) noexcept;
+  bool OriginalCollected(void* exact_driver,const void* actual_holder) noexcept;
+  bool BorrowsOriginalFinal()const noexcept{return borrowed_;}
   bool IsStopped(void* self)const noexcept;
   bool IsCollectedStop(void* self)const noexcept;
   bool IsFinalWindow(void* self)const noexcept;
@@ -117,7 +126,12 @@ class Session {
   static void SourceDisableBegin(void*,void*) noexcept;
   static void SourceDisableEnd(void*,void*,bool completed) noexcept;
   static void UnexpectedGC() noexcept;
-  enum class Phase {kEmpty,kStopped,kContinuing,kFinal,kFinalResumed,kCompleted,kRolledBack};
+  static void OriginalDisabled(void*,void*) noexcept;
+  static void OriginalConstructed(void*,const char*,bool) noexcept;
+  static void OriginalDestroying(void*) noexcept;
+  static void OriginalDestroyed(void*) noexcept;
+  static void OriginalEnabled(void*,void*) noexcept;
+  enum class Phase {kEmpty,kStopped,kContinuing,kFinal,kFinalResumed,kCompleted,kRolledBack,kOriginalPrepared,kOriginalArmed,kOriginalDisabled,kOriginalClosing};
   bool SameOwner()const noexcept;
   bool Native()const noexcept;
   void Rollback() noexcept;
@@ -125,6 +139,9 @@ class Session {
   abi::arm64::android_common::SuspendAll storage_{};
   void* source_carrier_=nullptr;
   Phase phase_=Phase::kEmpty;bool gc_=false,suspended_=false,exclusive_=false,source_disable_=false;
+  bool borrowed_=false,borrowed_failed_=false;
+  void* original_driver_=nullptr;const void* original_holder_=nullptr;
+  void RefuseOriginal(const char*) noexcept;
   const char* failure_="not-started";
 };
 inline bool IsStopped(const void* state,void* self) noexcept {

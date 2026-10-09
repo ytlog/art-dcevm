@@ -40,7 +40,8 @@ void Runnable(void* p){assert(p==&self&&self.flags==92u<<shift&&!exclusive);self
 void Start(void* p,void* thread,int32_t cause,int32_t collector){assert(p==&heap&&thread==&self&&cause==8&&collector==1&&self.flags==92u<<shift&&!gc&&!exclusive);gc=true;++gc_starts;}
 void Finish(void* p,void* thread,int32_t type){assert(p==&heap&&thread==&self&&type==0&&gc&&!exclusive);gc=false;++gc_finishes;}
 void Stop(void*,const char*,bool){assert(self.flags==92u<<shift&&!exclusive&&stops==resumes);exclusive=true;++stops;}
-void Resume(void*){assert(self.flags==92u<<shift&&exclusive&&stops==resumes+1);exclusive=false;++resumes;}
+native_source_stop::Session* inspected_original=nullptr;
+void Resume(void*){if(inspected_original)assert(!inspected_original->IsFinalWindow(&self));assert(self.flags==92u<<shift&&exclusive&&stops==resumes+1);exclusive=false;++resumes;}
 void Lock(void* p,void* thread){assert(p==&mutex&&thread==&self&&self.flags==92u<<shift&&gc&&!exclusive&&stops==resumes+1);exclusive=true;++locks;}
 void Unlock(void* p,void* thread){assert(p==&mutex&&thread==&self&&self.flags==92u<<shift&&gc&&exclusive);exclusive=false;++unlocks;}
 class Hooks:public HookEngine {
@@ -274,6 +275,38 @@ void LegacyObservation(Hooks& hooks){
  unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);resume_proxy(&carrier);Runnable(&self);enable_proxy(&heap,&self);
  assert(observation.Finish(&driver,true,&proof)&&proof.Valid());
  assert(!service.Authorize(proof,&run)&&!service.Calibrated());
+ assert(service.AuthorizeOriginalFinal(proof,&run)&&service.OriginalFinalCalibrated());
+ const int original_starts=gc_starts,original_locks=locks,original_unlocks=unlocks;
+ forbid_native_allocation=true;
+ for(int mode=0;mode<6;++mode){
+  native_source_stop::Session borrowed(service);
+  if(mode==1){int wrong;assert(!borrowed.PrepareOriginalFinal(&self,sizeof(self),&wrong,&driver));continue;}
+  assert(borrowed.PrepareOriginalFinal(&self,sizeof(self),&run,&driver));
+  assert(borrowed.BorrowsOriginalFinal()&&!borrowed.IsFinalWindow(&self)&&!borrowed.Reserved());
+  assert(!borrowed.Begin(&self,sizeof(self))&&!borrowed.ContinueSource());
+  if(mode==2){int wrong;assert(!borrowed.OriginalCollected(&wrong,&holder));}
+  else assert(borrowed.OriginalCollected(&driver,&holder));
+  if(mode==5)assert(!borrowed.OriginalCollected(&driver,&holder));
+  disable_proxy(&heap,&self);Native(&self);unsigned char actual_carrier;
+  stop_proxy(&actual_carrier,mode==3?"unrelated stop":s::kFinalCause,true);
+  const bool accepted=mode==0||mode==4;
+  assert(borrowed.IsFinalWindow(&self)==accepted&&borrowed.IsStopped(&self)==accepted);
+  assert(!borrowed.IsCollectedStop(&self)&&!borrowed.Reserved());
+  if(mode==4){
+   foreign_current=true;assert(!borrowed.IsFinalWindow(&self));foreign_current=false;
+   int wrong_mutator;mutator=&wrong_mutator;assert(!borrowed.IsFinalWindow(&self));mutator=&mutex;
+   self.flags=67u<<16;assert(!borrowed.IsFinalWindow(&self));self.flags=92u<<16;
+   assert(borrowed.IsFinalWindow(&self));
+  }
+  inspected_original=&borrowed;resume_proxy(&actual_carrier);inspected_original=nullptr;
+  assert(!borrowed.IsFinalWindow(&self)&&!borrowed.Completed());
+  Runnable(&self);enable_proxy(&heap,&self);
+  assert(borrowed.Completed()==accepted);
+ }
+ forbid_native_allocation=false;
+ assert(gc_starts==original_starts&&locks==original_locks&&unlocks==original_unlocks);
+ assert(!service.AuthorizeOriginalFinal(proof,nullptr)&&!service.OriginalFinalCalibrated());
+
  const int starts=gc_starts,stop_count=stops;
  {native_source_stop::Session owner(service);assert(!owner.Begin(&self,sizeof(self))&&self.flags==(67u<<16));}
  assert(gc_starts==starts&&stops==stop_count&&!gc&&!exclusive&&disable_count==0);
