@@ -22,10 +22,13 @@ bool Guard::FieldWritten(void* thread,void* method,void* field) noexcept {
  if(!thread||!method||!field)return false;
  uint64_t epoch=0;
  {std::lock_guard<std::mutex> lock(lock_);
-  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field){epoch=epoch_;seen_=true;}}
+  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field){epoch=epoch_;seen_=true;}
+  if(!proven_&&!epoch)return false;}
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;
- const bool valid=access_.owner&&access_.field&&access_.method_owner&&access_.equivalent_owner&&
-    access_.raise&&access_.field(access_.owner,field,&flags,&field_owner)&&field_owner&&
+ const bool field_valid=access_.owner&&access_.field&&access_.raise&&
+    access_.field(access_.owner,field,&flags,&field_owner)&&field_owner;
+ if(field_valid&&!(flags&0x10u))return false;
+ const bool valid=field_valid&&access_.method_owner&&access_.equivalent_owner&&
     access_.method_owner(access_.owner,method,&method_owner)&&method_owner;
  if(!valid){
   if(access_.raise){access_.raise(access_.owner,thread,"Ljava/lang/IllegalStateException;",

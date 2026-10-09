@@ -14,7 +14,7 @@ int main(){
  Guard guard({&s,Field,Method,Equivalent,Raise});const Oracle oracle{&thread,&method,&field};
  assert(!guard.Proven());assert(!guard.EndProof(true,true));
  assert(guard.BeginProof(oracle));assert(!guard.BeginProof(oracle));
- assert(guard.FieldWritten(&other_thread,&method,&field));assert(!guard.EndProof(true,true));assert(!guard.Proven());
+ assert(!guard.FieldWritten(&other_thread,&method,&field));assert(!guard.EndProof(true,true));assert(!guard.Proven());
  assert(guard.BeginProof(oracle));assert(guard.FieldWritten(&thread,&method,&field));assert(!guard.EndProof(false,true));
  assert(guard.BeginProof(oracle));assert(guard.FieldWritten(&thread,&method,&field));assert(!guard.EndProof(true,false));
  assert(guard.BeginProof(oracle));assert(guard.FieldWritten(&thread,&method,&field));assert(guard.EndProof(true,true));assert(guard.Proven());

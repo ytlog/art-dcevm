@@ -1,6 +1,8 @@
 #include "platform/common/native_final_write_listener.h"
 #include "platform/abi/arm64/android-common/instrumentation.h"
 #include <cstdlib>
+#include <atomic>
+#include "platform/abi/arm64/android-common/suspend_all.h"
 #include <mutex>
 namespace artdcevm::final_write_guard {
 namespace {
@@ -36,15 +38,46 @@ using BoolAdd=void(*)(void*,void*,uint32_t,bool);
 using TypedAdd=abi::arm64::android_common::TypedAddListener;
 using Deopt=void(*)(void*,const char*);
 enum class AddKind {None,Legacy,Bool,Typed};
-void* instrumentation=nullptr;void* add=nullptr;Deopt deopt=nullptr;
+using MethodDeopt=void(*)(void*,void*);
+void* instrumentation=nullptr;void* add=nullptr;Deopt deopt=nullptr;MethodDeopt method_deopt=nullptr;
 AddKind kind=AddKind::None;bool installed=false;std::mutex configuration;
+constexpr char kEnable[]="_ZN3art15instrumentation15Instrumentation20EnableDeoptimizationEv";
+constexpr char kDisable[]="_ZN3art15instrumentation15Instrumentation21DisableDeoptimizationEPKc";
+void* disable_original=nullptr;void* enable_original=nullptr;std::atomic<void*> enabled_receiver{nullptr};bool observer_installed=false,observer_attempted=false;bool legacy=false;
+void Enabled(void* receiver){reinterpret_cast<void(*)(void*)>(enable_original)(receiver);enabled_receiver.store(receiver,std::memory_order_release);}
+void Disabled(void* receiver,const char* key){
+ reinterpret_cast<void(*)(void*,const char*)>(disable_original)(receiver,key);
+ void* expected=receiver;enabled_receiver.compare_exchange_strong(expected,nullptr,std::memory_order_acq_rel);
+}
 constexpr char kKey[]="artdcevm-final-bytecode-guard";
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
+}
+bool ObserveLegacyDeoptimizationStartup(HookEngine& hooks,std::string* error){
+ std::lock_guard<std::mutex> lock(configuration);
+ void* target=hooks.FindSymbol("libart.so",kEnable);if(!target)return true;
+ void* disable=hooks.FindSymbol("libart.so",kDisable);
+ if(!disable)return Fail(error,"Legacy final guard lacks named DisableDeoptimization lifetime observation");
+ if(observer_installed)return true;
+ if(observer_attempted)return Fail(error,"Legacy deoptimization observer installation failed; restart process");
+ using namespace abi::arm64::android_common;
+ auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+ auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+ if(!construct||!destroy)return Fail(error,"Legacy final guard lacks named startup suspend capability");
+ observer_attempted=true;
+ SuspendAll storage{};construct(&storage,"artdcevm final guard enable observation",false);
+ auto token=hooks.Install(target,reinterpret_cast<void*>(Enabled),&enable_original,error);
+ if(token&&!enable_original)std::abort();
+ void* disable_token=token?hooks.Install(disable,reinterpret_cast<void*>(Disabled),&disable_original,error):nullptr;
+ if(disable_token&&!disable_original)std::abort();
+ observer_installed=token&&enable_original&&disable_token&&disable_original;
+ if(token&&!disable_token)hooks.Remove(token,error);
+ destroy(&storage);return observer_installed||Fail(error,"Legacy deoptimization observer could not install before plugin initialization");
 }
 bool BindListener(HookEngine& hooks,void* receiver,Guard& guard,std::string* error){
  std::lock_guard<std::mutex> lock(configuration);
  if(!receiver)return Fail(error,"Final guard lacks independently observed Instrumentation receiver");
- if(listener.guard){return (listener.guard==&guard&&instrumentation==receiver)||
+ if(listener.guard){return (listener.guard==&guard&&instrumentation==receiver&&
+     (!legacy||enabled_receiver.load(std::memory_order_acquire)==receiver))||
    Fail(error,"Final guard listener already belongs to another process owner");}
  auto target=hooks.FindSymbol("libart.so",abi::arm64::android_common::kTypedAddListener);
  AddKind selected=AddKind::Typed;
@@ -52,11 +85,15 @@ bool BindListener(HookEngine& hooks,void* receiver,Guard& guard,std::string* err
  if(!target){target=hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEj");selected=AddKind::Legacy;}
  auto route=reinterpret_cast<Deopt>(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation20DeoptimizeEverythingEPKc"));
  if(!target||!route)return Fail(error,"Final guard lacks named AddListener or interpreter deoptimization route");
- listener.guard=&guard;instrumentation=receiver;add=target;kind=selected;deopt=route;return true;
+ if(hooks.FindSymbol("libart.so",kEnable)&&(!observer_installed||enabled_receiver.load(std::memory_order_acquire)!=receiver))
+  return Fail(error,"Legacy final guard has not observed actual EnableDeoptimization for this Instrumentation receiver");
+ method_deopt=reinterpret_cast<MethodDeopt>(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE"));
+ listener.guard=&guard;instrumentation=receiver;add=target;kind=selected;deopt=route;legacy=hooks.FindSymbol("libart.so",kEnable)!=nullptr;return true;
 }
 bool InstallListenerAtExclusiveBoundary(std::string* error){
  std::lock_guard<std::mutex> lock(configuration);
  if(!listener.guard||!add||!deopt||!instrumentation)return Fail(error,"Final guard listener was not bound");
+ if(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation)return Fail(error,"Legacy deoptimization enabled witness expired before listener installation");
  if(installed)return true;
  constexpr uint32_t kFieldWritten=0x20;
  switch(kind){
@@ -66,16 +103,28 @@ bool InstallListenerAtExclusiveBoundary(std::string* error){
   case AddKind::Legacy:reinterpret_cast<LegacyAdd>(add)(instrumentation,&listener,kFieldWritten);break;
   default:return Fail(error,"Final guard listener declaration missing");
  }
- deopt(instrumentation,kKey);installed=true;return true;
+ installed=true;return true;
+}
+bool PrepareProofMethodAtExclusiveBoundary(void* method,std::string* error){
+ std::lock_guard<std::mutex> lock(configuration);
+ if(!installed||!method||!method_deopt||
+    (legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))
+  return Fail(error,"Final write fixture lacks named method-only deoptimization capability");
+ method_deopt(instrumentation,method);return true;
 }
 bool ListenerProven() noexcept {
  std::lock_guard<std::mutex> lock(configuration);
- return installed&&listener.guard&&listener.guard->Proven();
+ return installed&&listener.guard&&listener.guard->Proven()&&(!legacy||enabled_receiver.load(std::memory_order_acquire)==instrumentation);
+}
+bool ListenerProven(const Guard& guard) noexcept {
+ std::lock_guard<std::mutex> lock(configuration);
+ return installed&&listener.guard==&guard&&guard.Proven()&&(!legacy||enabled_receiver.load(std::memory_order_acquire)==instrumentation);
 }
 void RetainInterpretationAtCommit(){
  // Exclusive mutator ownership prevents callback execution while this key is
  // reasserted. Do not hold the configuration mutex across ART commit services.
- if(!installed||!listener.guard||!listener.guard->Proven()||!deopt||!instrumentation)std::abort();
+ if(!installed||!listener.guard||!listener.guard->Proven()||!deopt||!instrumentation||
+    (legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))std::abort();
  deopt(instrumentation,kKey);
 }
 #ifdef ARTDCEVM_TESTING

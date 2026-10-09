@@ -2,12 +2,20 @@
 #include "api/hook_engine.h"
 #include "platform/common/native_final_write_guard.h"
 namespace artdcevm::final_write_guard {
+// Call during the first Native JNI load before plugin initialization. Older
+// named EnableDeoptimization must be witnessed before DeoptimizeEverything,
+// whose fixed 11/12 body CHECKs this state. No Instrumentation bool is guessed.
+bool ObserveLegacyDeoptimizationStartup(HookEngine&,std::string*);
 // Dispatcher and its identity/root owner must live for the process lifetime:
 // successful evolution permanently requires the interpreter guard. Installation
 // and commit forwarding require ART's exclusive mutator / suspend-all boundary.
 bool BindListener(HookEngine&,void* independently_observed_instrumentation,Guard&,std::string*);
 bool InstallListenerAtExclusiveBoundary(std::string*);
+// Isolated, independently validated fixture method only; bootstrap must never
+// globally deoptimize production methods merely to obtain a calibration event.
+bool PrepareProofMethodAtExclusiveBoundary(void* fixture_method,std::string*);
 bool ListenerProven() noexcept;
+bool ListenerProven(const Guard& exact_owner) noexcept;
 // Must be called before publishing each validated final-bit transition. No JNI,
 // allocation, symbol lookup, or refundable failure at this commit boundary.
 void RetainInterpretationAtCommit();
