@@ -57,8 +57,8 @@ void* Resolve(void* linker,uint32_t index,void* cache_slot,void* loader_slot) {
 }
 void Enter(void* self) { assert(self==thread);*reinterpret_cast<uint32_t*>(thread)&=0xffffff; }
 void Leave(void* self) { assert(self==thread);*reinterpret_cast<uint32_t*>(thread)|=g::native_access_abi::kNative<<24; }
-void* Decode(void* self,jobject object) { assert(self==thread);return object; }
-int32_t SelfOffset(size_t size) { assert(size==8);return 8; }
+artdcevm::abi::arm64::android11::ReleaseObjectPointer Decode(const void* self,jobject object) { assert(self==thread);return {reinterpret_cast<uintptr_t>(object)}; }
+artdcevm::abi::arm64::android11::NativeOffset SelfOffset(size_t size) { assert(size==8);return {8}; }
 class Hooks:public artdcevm::HookEngine { public:
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* s)override {

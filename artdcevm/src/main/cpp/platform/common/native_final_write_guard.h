@@ -16,7 +16,9 @@ struct Access {
  // when equivalence may suspend, then reread declaring roots after decoding.
  bool (*equivalent_writer)(void*,void* thread,void* field,void* method)=nullptr;
 };
-struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;};
+// reference comes from the independently decoded Field descriptor. A proof
+// must observe the matching real listener overload, not another event slot.
+struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;bool reference=false;};
 // A listener's existence does not prove enforcement. The exact bytecode writer
 // must reach the listener, receive IllegalAccessError, and leave its independent
 // sentinel unchanged. The native event only proves callback/target identity;
@@ -31,7 +33,7 @@ class Guard {
  void ResetUncommittedProof() noexcept;
  // Returns true iff the original field write must stop because an exception
  // was raised. ART DoFieldPutCommon checks its pending exception after event.
- bool FieldWritten(void* thread,void* method,void* field) noexcept;
+ bool FieldWritten(void* thread,void* method,void* field,bool reference=false) noexcept;
  private:
  Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false;
 };

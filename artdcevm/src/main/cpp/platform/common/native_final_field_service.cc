@@ -36,7 +36,7 @@ struct Service::State {
  using Node=final_field_aliases::Node;
  struct Pair {size_t index=0;size_t public_index=0;void* old_anchor=nullptr;void* new_anchor=nullptr;evolution::ClassSchema before,after;};
  explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise,EquivalentWriter}),aliases({this,nullptr,OldOwner,DecodeWeak,OldOwner,ReadMethodOwner}){}
- uint8_t proved_storage=0;bool current_static=false,calibration_complete=false;
+ uint8_t proved_storage=0;bool current_static=false,current_reference=false,calibration_complete=false;
  Bindings bindings;jvmtiEnv* permission_env=nullptr;jmethodID proof_method=nullptr;final_write_guard::Guard guard;std::vector<Public> staged;
  source_commit::Plan expected;std::vector<size_t> rooted_pairs;std::vector<Pair> pairs;std::unique_ptr<Node> pending;
  final_field_aliases::Set aliases;bool prepared=false,sealed=false,committed=false,needs_access=false;
@@ -103,12 +103,13 @@ bool Service::FixtureField(void* thread,jclass target,jclass writer,jmethodID me
  void* actual=s.bindings.native.decode_method(s.bindings.native.owner,method);
  field_copy::CopyFieldView view;
  if(!field||!actual||!s.bindings.native.metadata->FieldIdentity(field,&view,error)||!view.name||!view.descriptor||
-    std::string(view.name)!=(statik?"staticValue":"instanceValue")||std::string(view.descriptor)!="I"||
+    !((std::string(view.descriptor)=="I"&&std::string(view.name)==(statik?"staticValue":"instanceValue"))||
+      (std::string(view.descriptor)=="Ljava/lang/Object;"&&std::string(view.name)==(statik?"staticReference":"instanceReference")))||
     s.bindings.native.metadata->FieldDeclaringClass(field)!=klass||s.bindings.native.method_class(s.bindings.native.owner,actual)!=foreign||
     !s.bindings.native.writable||!s.bindings.native.writable(s.bindings.native.owner,field,sizeof(field_array::Field)))return Fail(error,"Final proof public IDs disagree with exact writable fixture declarations");
  field_array::View array;uint32_t index=0;
  if(!s.bindings.native.metadata->Fields(klass,statik,&array,error)||!array.IndexOf(field,&index)||((field_array::Flags(field)&8u)!=0)!=statik)return false;
- *oracle={thread,actual,field};*flags=field_array::Flags(field);return true;
+ *oracle={thread,actual,field,std::string(view.descriptor)=="Ljava/lang/Object;"};*flags=field_array::Flags(field);return true;
 }
 bool Service::SetFixtureFlags(const final_write_guard::Oracle& oracle,uint32_t expected,uint32_t desired,std::string* error){auto& s=*state_;
  if(!redefinition_gate::Owned(s.bindings.native.vm)||!oracle.field||!s.bindings.native.writable||!s.bindings.native.writable(s.bindings.native.owner,oracle.field,sizeof(field_array::Field))||
@@ -119,12 +120,12 @@ bool Service::SetFixtureFlags(const final_write_guard::Oracle& oracle,uint32_t e
 }
 bool Service::BeginProof(const final_write_guard::Oracle& oracle){auto& s=*state_;
  if(!s.proof_method||!s.bindings.native.decode_method||s.bindings.native.decode_method(s.bindings.native.owner,s.proof_method)!=oracle.method||!s.guard.BeginProof(oracle))return false;
- s.current_static=(field_array::Flags(oracle.field)&8u)!=0;return true;
+ s.current_static=(field_array::Flags(oracle.field)&8u)!=0;s.current_reference=oracle.reference;return true;
 }
-bool Service::EndProof(bool exception,bool unchanged){auto& s=*state_;bool pass=s.guard.EndProof(exception,unchanged);if(pass)s.proved_storage|=s.current_static?2u:1u;return pass;}
+bool Service::EndProof(bool exception,bool unchanged){auto& s=*state_;bool pass=s.guard.EndProof(exception,unchanged);if(pass)s.proved_storage|=uint8_t(1u<<((s.current_static?1u:0u)+(s.current_reference?2u:0u)));return pass;}
 bool Service::AlreadyCalibrated()const{return state_->calibration_complete&&final_write_guard::ListenerProven(state_->guard);}
 void Service::AbortCalibration(){auto& s=*state_;if(s.calibration_complete)return;s.guard.ResetUncommittedProof();s.proved_storage=0;}
-bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==3u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
+bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==15u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
 bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots,const std::vector<jclass>& replacements,std::string* error){auto& s=*state_;
  if(!s.bindings.register_weak||!s.bindings.forget_weak)return Fail(error,"Final-field roots lack owned weak registration lifecycle");
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");

@@ -8,18 +8,18 @@ struct Roots {
  ~Roots(){if(exception)env->DeleteLocalRef(exception);if(handles)env->DeleteGlobalRef(handles);if(instance){if(registered_instance)service->ForgetStrong(instance);env->DeleteGlobalRef(instance);}if(writer){if(registered_writer)service->ForgetStrong(writer);env->DeleteGlobalRef(writer);}if(target){if(registered_target)service->ForgetStrong(target);env->DeleteGlobalRef(target);}}
 };
 struct Probe {
- const Bindings* bindings;Roots* roots;jmethodID writer; jfieldID field;bool statik;
+ const Bindings* bindings;Roots* roots;jmethodID writer; jfieldID field;bool statik;bool reference;
  final_write_guard::Oracle oracle;uint32_t original=0;bool modified=false,probing=false;
  std::string* error;
 };
 bool Install(const runnable_jni::Context&,void* raw){auto& p=*static_cast<Probe*>(raw);return p.bindings->service->InstallAtExclusiveBoundary(p.error);}
 bool Observe(const runnable_jni::Context& context,void* raw){auto& p=*static_cast<Probe*>(raw);
- return p.bindings->service->FixtureField(context.self,p.roots->target,p.roots->writer,p.writer,p.field,p.statik,&p.oracle,&p.original,p.error)&&!(p.original&0x10u);
+ return p.bindings->service->FixtureField(context.self,p.roots->target,p.roots->writer,p.writer,p.field,p.statik,&p.oracle,&p.original,p.error)&&!(p.original&0x10u)&&p.oracle.reference==p.reference;
 }
 bool Arm(const runnable_jni::Context& context,void* raw){auto& p=*static_cast<Probe*>(raw);auto& service=*p.bindings->service;
  const auto expected=p.oracle;const auto flags=p.original;
  if(!service.FixtureField(context.self,p.roots->target,p.roots->writer,p.writer,p.field,p.statik,&p.oracle,&p.original,p.error)||
-    p.oracle.field!=expected.field||p.oracle.method!=expected.method||p.original!=flags||(p.original&0x10u))return false;
+    p.oracle.field!=expected.field||p.oracle.method!=expected.method||p.oracle.reference!=expected.reference||p.original!=flags||(p.original&0x10u))return false;
  if(!service.SetFixtureFlags(p.oracle,p.original,p.original|0x10u,p.error))return false;
  p.modified=true;
  if(!service.BeginProof(p.oracle))return false;
@@ -37,6 +37,9 @@ bool ConsumeIllegalAccess(JNIEnv* env,jclass expected){jthrowable thrown=env->Ex
 }
 jint Read(JNIEnv* env,const Probe& p){return p.statik?env->GetStaticIntField(p.roots->target,p.field):env->GetIntField(p.roots->instance,p.field);}
 void Write(JNIEnv* env,const Probe& p,jint value){if(p.statik)env->SetStaticIntField(p.roots->target,p.field,value);else env->SetIntField(p.roots->instance,p.field,value);}
+jobject ReadReference(JNIEnv* env,const Probe& p){return p.statik?env->GetStaticObjectField(p.roots->target,p.field):env->GetObjectField(p.roots->instance,p.field);}
+void WriteReference(JNIEnv* env,const Probe& p,jobject value){if(p.statik)env->SetStaticObjectField(p.roots->target,p.field,value);else env->SetObjectField(p.roots->instance,p.field,value);}
+bool ReferenceEquals(JNIEnv* env,const Probe& p,jobject expected){jobject actual=ReadReference(env,p);bool same=!env->ExceptionCheck()&&env->IsSameObject(actual,expected);if(actual)env->DeleteLocalRef(actual);return same&&!env->ExceptionCheck();}
 // Restore is mandatory even with a pending original Java exception. Any failure
 // to restore a modified fixture is a fatal source-lock/identity invariant.
 void RestoreAlways(JNIEnv* env,Probe& p){jthrowable thrown=env->ExceptionOccurred();if(thrown)env->ExceptionClear();
@@ -68,11 +71,12 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  auto method=[&](const char* name,const char* signature){return env->ExceptionCheck()?nullptr:env->GetStaticMethodID(roots.writer,name,signature);};
  jmethodID create=method("create","()Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;");
  jmethodID prepare=method("prepareHandles","()Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Handles;");
- jmethodID write=method("write","(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;IZ)V");
+ jmethodID write=method("write","(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;ILjava/lang/Object;ZZ)V");
  jmethodID check=method("checkHandles","(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Handles;Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;ZI)I");
- jfieldID fields[2]={env->ExceptionCheck()?nullptr:env->GetFieldID(roots.target,"instanceValue","I"),env->ExceptionCheck()?nullptr:env->GetStaticFieldID(roots.target,"staticValue","I")};
- if(!roots.writer||!roots.target||!create||!prepare||!write||!check||!fields[0]||!fields[1]||env->ExceptionCheck())return Fail(error,"Final fixture public declarations incomplete");
- for(size_t i=0;i<2;++i)if(!service.StageFixtureField(env,roots.target,fields[i],i!=0,error))return false;
+ jmethodID check_reference=method("checkReferenceHandles","(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Handles;Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;ZLjava/lang/Object;)I");
+ jfieldID fields[4]={env->ExceptionCheck()?nullptr:env->GetFieldID(roots.target,"instanceValue","I"),env->ExceptionCheck()?nullptr:env->GetStaticFieldID(roots.target,"staticValue","I"),env->ExceptionCheck()?nullptr:env->GetFieldID(roots.target,"instanceReference","Ljava/lang/Object;"),env->ExceptionCheck()?nullptr:env->GetStaticFieldID(roots.target,"staticReference","Ljava/lang/Object;")};
+ if(!roots.writer||!roots.target||!create||!prepare||!write||!check||!check_reference||!fields[0]||!fields[1]||!fields[2]||!fields[3]||env->ExceptionCheck())return Fail(error,"Final fixture public declarations incomplete");
+ for(size_t i=0;i<4;++i)if(!service.StageFixtureField(env,roots.target,fields[i],(i&1u)!=0,error))return false;
  jobject object=env->CallStaticObjectMethod(roots.writer,create);
  if(!object||env->ExceptionCheck())return false;
  roots.instance=env->NewGlobalRef(object);env->DeleteLocalRef(object);
@@ -84,34 +88,36 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  if(!roots.instance||!roots.handles||env->ExceptionCheck())return false;
  // Resolve both actual writer field paths while mutable, before fixture-specific
  // breakpoint deoptimization. This probes current permissions of cached paths.
- for(jboolean statik:{JNI_FALSE,JNI_TRUE}){env->CallStaticVoidMethod(roots.writer,write,roots.instance,jint(41),statik);if(env->ExceptionCheck())return false;}
+ for(jboolean reference:{JNI_FALSE,JNI_TRUE})for(jboolean statik:{JNI_FALSE,JNI_TRUE}){env->CallStaticVoidMethod(roots.writer,write,roots.instance,jint(41),roots.instance,statik,reference);if(env->ExceptionCheck())return false;}
  if(!service.PrepareEnvironment(env,error)||!service.PrepareProofMethod(write,error)||
     !service.Bind(*bindings.hooks,bindings.observed_instrumentation,error))return false;
- Probe p{&bindings,&roots,write,fields[0],false,{},0,false,false,error};
+ Probe p{&bindings,&roots,write,fields[0],false,false,{},0,false,false,error};
  if(!bindings.exclusive_scope(bindings.owner,env,roots.instance,Install,&p))return false;
  // Populate the fixture interpreter cache after breakpoint/listener setup too;
  // JVMTI may invalidate the earlier compiled/interpreter cache during setup.
- for(jboolean statik:{JNI_FALSE,JNI_TRUE}){env->CallStaticVoidMethod(roots.writer,write,roots.instance,jint(41),statik);if(env->ExceptionCheck())return false;}
+ for(jboolean reference:{JNI_FALSE,JNI_TRUE})for(jboolean statik:{JNI_FALSE,JNI_TRUE}){env->CallStaticVoidMethod(roots.writer,write,roots.instance,jint(41),roots.instance,statik,reference);if(env->ExceptionCheck())return false;}
  bool complete=true;
- for(size_t i=0;i<2&&complete;++i){p.field=fields[i];p.statik=i!=0;
-  const jint baseline=Read(env,p);
+ for(size_t i=0;i<4&&complete;++i){p.field=fields[i];p.statik=(i&1u)!=0;p.reference=i>=2;
+  const jint baseline=p.reference?0:Read(env,p);
   if(env->ExceptionCheck()||!bindings.native_scope(bindings.owner,env,roots.instance,Observe,&p)||!bindings.exclusive_scope(bindings.owner,env,roots.instance,Arm,&p)){RestoreAlways(env,p);complete=false;break;}
-  env->CallStaticVoidMethod(roots.writer,write,roots.instance,baseline+7,jboolean(p.statik));
+  env->CallStaticVoidMethod(roots.writer,write,roots.instance,baseline+7,roots.handles,jboolean(p.statik),jboolean(p.reference));
   const bool rejected=ConsumeIllegalAccess(env,illegal);
-  const bool unchanged=!env->ExceptionCheck()&&Read(env,p)==baseline&&!env->ExceptionCheck();
+  const bool unchanged=!env->ExceptionCheck()&&(p.reference?ReferenceEquals(env,p,roots.instance):Read(env,p)==baseline)&&!env->ExceptionCheck();
   const bool bytecode=service.EndProof(rejected,unchanged);p.probing=false;
   bool legal=false;
   if(bytecode&&!env->ExceptionCheck()){
-   Write(env,p,baseline+11);
-   const bool jni=!env->ExceptionCheck()&&Read(env,p)==baseline+11&&!env->ExceptionCheck();
-   if(jni){const jint paths=env->CallStaticIntMethod(roots.writer,check,roots.handles,roots.instance,jboolean(p.statik),baseline+11);
-    legal=!env->ExceptionCheck()&&paths==63&&Read(env,p)==baseline+12&&!env->ExceptionCheck();}
+   if(p.reference)WriteReference(env,p,roots.writer);else Write(env,p,baseline+11);
+   const bool jni=!env->ExceptionCheck()&&(p.reference?ReferenceEquals(env,p,roots.writer):Read(env,p)==baseline+11)&&!env->ExceptionCheck();
+   if(jni){const jint paths=p.reference?env->CallStaticIntMethod(roots.writer,check_reference,roots.handles,roots.instance,jboolean(p.statik),roots.writer):env->CallStaticIntMethod(roots.writer,check,roots.handles,roots.instance,jboolean(p.statik),baseline+11);
+    legal=!env->ExceptionCheck()&&paths==63&&(p.reference?ReferenceEquals(env,p,roots.handles):Read(env,p)==baseline+12)&&!env->ExceptionCheck();}
   }
   RestoreAlways(env,p);
-  if(!env->ExceptionCheck())Write(env,p,baseline);
+  if(!env->ExceptionCheck()){if(p.reference)WriteReference(env,p,roots.instance);else Write(env,p,baseline);}
   complete=bytecode&&legal&&!env->ExceptionCheck();
  }
  if(complete&&service.CompleteCalibration()){attempt.release();return true;}
- return Fail(error,"Final calibration requires actual cached bytecode event/rejection/unchanged store and legal JNI/reflection plus MH/VH getter/setter outcomes for both fields");
+ if(error)*error=std::string("Final calibration failed for ")+(p.statik?"static ":"instance ")+(p.reference?"reference":"primitive")+
+   ": requires matching actual FieldWritten overload, rejected unchanged bytecode store and legal JNI/reflection plus MH/VH getter/setter outcomes";
+ return false;
 }
 }

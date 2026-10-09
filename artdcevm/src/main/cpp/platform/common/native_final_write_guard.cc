@@ -19,11 +19,11 @@ bool Guard::EndProof(bool exception,bool unchanged) noexcept {
 }
 void Guard::ResetUncommittedProof() noexcept {std::lock_guard<std::mutex> lock(lock_);++epoch_;oracle_={};probing_=false;seen_=false;rejected_=false;proven_=false;}
 bool Guard::Proven() const noexcept {std::lock_guard<std::mutex> lock(lock_);return proven_;}
-bool Guard::FieldWritten(void* thread,void* method,void* field) noexcept {
+bool Guard::FieldWritten(void* thread,void* method,void* field,bool reference) noexcept {
  if(!thread||!method||!field)return false;
  uint64_t epoch=0;
  {std::lock_guard<std::mutex> lock(lock_);
-  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field){epoch=epoch_;seen_=true;}
+  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference){epoch=epoch_;seen_=true;}
   if(!proven_&&!epoch)return false;}
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;
  const bool field_valid=access_.owner&&access_.field&&access_.raise&&

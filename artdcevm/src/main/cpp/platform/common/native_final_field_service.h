@@ -36,6 +36,8 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  bool InstallAtExclusiveBoundary(std::string*);
  // Borrowed native oracle only inside a calibrated mutator callback; exact
  // public IDs, initialized fixture Classes and native declarations must agree.
+ // Installed primitive/reference fixture descriptors select the required real
+ // FieldWritten overload; no arbitrary public field may authorize a proof.
  bool FixtureField(void* thread,jclass strong_target,jclass strong_writer,
    jmethodID,jfieldID,bool is_static,final_write_guard::Oracle*,uint32_t*,std::string*)const;
  bool SetFixtureFlags(const final_write_guard::Oracle&,uint32_t expected,uint32_t desired,std::string*);

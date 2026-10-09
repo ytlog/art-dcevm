@@ -22,7 +22,7 @@ class FieldOnlyListener {
  virtual void MethodUnwind(void*,Handle,void*,uint32_t){std::abort();}
  virtual void DexPcMoved(void*,Handle,void*,uint32_t){std::abort();}
  virtual void FieldRead(void*,Handle,void*,uint32_t,void*){std::abort();}
- virtual void FieldWritten(void* t,Handle,void* m,uint32_t,void* f,Handle){guard->FieldWritten(t,m,f);}
+ virtual void FieldWritten(void* t,Handle,void* m,uint32_t,void* f,Handle){guard->FieldWritten(t,m,f,true);}
  virtual void FieldWritten(void* t,Handle,void* m,uint32_t,void* f,const uint64_t&){guard->FieldWritten(t,m,f);}
  virtual void ExceptionThrown(void*,Handle){std::abort();}
  virtual void ExceptionHandled(void*,Handle){std::abort();}

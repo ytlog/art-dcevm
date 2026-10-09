@@ -56,6 +56,12 @@ int main(int argc,char** argv){assert(argc==2);Engine engine(argv[1][0]-'0');int
  assert(guard.EndProof(true,true)&&ListenerProven()&&ListenerProven(guard));
  Guard foreign({receiver,Field,Method,Equivalent,Raise});assert(!ListenerProven(foreign));
  NotifyWrittenForTesting(true,&thread,&method,&field);assert(throws==2);
+ // A primitive callback must not prove the reference-handle vtable slot,
+ // even after a previous scalar proof has enabled normal enforcement.
+ assert(guard.BeginProof({&thread,&method,&field,true}));NotifyWrittenForTesting(false,&thread,&method,&field);
+ assert(!guard.EndProof(true,true));
+ assert(guard.BeginProof({&thread,&method,&field,true}));NotifyWrittenForTesting(true,&thread,&method,&field);
+ assert(guard.EndProof(true,true)&&ListenerProven(guard)&&throws==4);
  RetainInterpretationAtCommit();assert(deopts==1);
  if(engine.legacy){disable_observer(receiver,"owner-lease");assert(!ListenerProven(guard));
   assert(!InstallListenerAtExclusiveBoundary(&error)&&deopts==1);
