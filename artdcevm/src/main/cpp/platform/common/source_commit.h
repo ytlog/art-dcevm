@@ -49,5 +49,12 @@ class Services {
 };
 // Failure is returned only before mutation. Native service failures after commit
 // begins remain fatal invariants owned by the provider, exactly as in ART Run.
-bool Run(const Plan&,const Services&);
+struct CommitObserver {
+ void* owner=nullptr;
+ void (*begin)(const Plan&,void*) noexcept=nullptr;
+};
+// Observer consumes the already validated exact plan immediately before the
+// provider publishes retirement/permission state. It must not revalidate,
+// allocate, suspend or reject. Default preserves the existing source path.
+bool Run(const Plan&,const Services&,CommitObserver={});
 }

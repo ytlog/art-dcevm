@@ -1,9 +1,12 @@
 #pragma once
 #include "platform/abi/arm64/android11/transaction_roots.h"
+#include <jvmti.h>
 namespace artdcevm::abi::arm64::android_common::redefinition_boundaries {
 // Fixed Android11–17 ti_redefine.h/cc declarations. The driver loops may be
 // inlined; their Class leaves still carry the real native Holder and index.
 // CheckVerification(const Iter&) is a pointer ABI, never a by-value aggregate.
+using Run = jvmtiError(*)(void* driver);
+inline constexpr char kRun[]="_ZN12openjdkjvmti9Redefiner3RunEv";
 using Whole = bool(*)(void* driver,android11::TransactionHolder*);
 using VerifyClass = bool(*)(void* owner,const android11::TransactionIterator*);
 using CollectClass = bool(*)(void* owner,android11::TransactionIterator*);

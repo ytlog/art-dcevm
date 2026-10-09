@@ -32,6 +32,9 @@ struct Request {
  jvmtiEnv* jvmti=nullptr;JavaVM* vm=nullptr;bool graph_verified=false;bool graph_sealed=false;
  transaction_root::Holder* boundary_holder=nullptr;size_t verified_count=0,collected_count=0;
  const char* phase="before original source checks";char rejection[768]{};
+ void* source_driver=nullptr;bool source_run_active=false,refunded=false,publication_started=false;
+ size_t completed_validated=0;
+ void* verification_owner=nullptr;const transaction_root::Iterator* verification_iterator=nullptr;
 };
 thread_local Request* active=nullptr;
 void Phase(const char* text) noexcept {if(active)active->phase=text;}
@@ -44,12 +47,24 @@ void RememberFailure(const char* text) noexcept {
 }
 void CopyFailure(const Request& request,jvmtiError code,std::string* error) noexcept {
  if(!error)return;
- char text[1024];const size_t validated=std::count_if(request.items.begin(),request.items.end(),[](const auto& item){return item.validated_owner!=nullptr;});
+ char text[1024];const size_t validated=request.completed_validated+std::count_if(request.items.begin(),request.items.end(),[](const auto& item){return item.validated_owner!=nullptr;});
  std::snprintf(text,sizeof(text),"Owned source error %d; last observed boundary=%s: %s [validated=%zu/%zu verifiedLeaves=%zu collectedLeaves=%zu graphVerified=%d graphSealed=%d]",int(code),request.phase,
    request.rejection[0]?request.rejection:"original source returned failure without an observed owned refusal",validated,request.items.size(),request.verified_count,request.collected_count,int(request.graph_verified),int(request.graph_sealed));
  // The original source already returned. Diagnostics never replace its code,
  // and even a caller-string allocation failure must not escape that boundary.
  owned_failure_diagnostic::Publish(text,error);
+}
+bool Lifecycle(const Provider& p) noexcept {return p.begin_run||p.end_run||p.before_verification||p.after_verification||p.refund||p.commit;}
+bool CompleteLifecycle(const Provider& p) noexcept {return p.begin_run&&p.end_run&&p.before_verification&&p.after_verification&&p.refund&&p.commit;}
+void CloseVerification(bool result) noexcept {
+ if(!active||!active->verification_owner)return;
+ auto& r=*active;void* owner=r.verification_owner;auto* iter=r.verification_iterator;
+ r.verification_owner=nullptr;r.verification_iterator=nullptr;
+ r.provider->after_verification(owner,iter,result,r.provider->state);
+}
+void Refund() noexcept {
+ if(!active||!Lifecycle(*active->provider)||!active->source_run_active||active->refunded||active->publication_started)return;
+ CloseVerification(false);active->refunded=true;active->provider->refund(active->provider->state);
 }
 std::mutex installation;
 void* fields_original=nullptr;void* methods_original=nullptr;void* commit_original=nullptr;
@@ -61,6 +76,7 @@ namespace boundaries=abi::arm64::android_common::redefinition_boundaries;
 using Verified=boundaries::Whole;
 using Failure=void(*)(void*,jvmtiError,const void*,const void*);
 Verified verified_original=nullptr,collect_original=nullptr;Failure failure=nullptr;
+boundaries::Run run_original=nullptr;bool run_ready=false;
 using VerificationLeaf=boundaries::VerifyClass;
 using CollectionLeaf=boundaries::CollectClass;
 VerificationLeaf verification_leaf_original=nullptr;CollectionLeaf collection_leaf_original=nullptr;
@@ -91,16 +107,16 @@ Item* Matches(void* owner){
   return matched;
 }
 bool Fields(void* owner){Phase("Class CheckFields entry");if(!active||!active->provider->allow_field_removal||!Matches(owner)){
- const bool result=reinterpret_cast<Check>(fields_original)(owner);if(!result)RememberFailure("Original CheckFields rejected the source definition");return result;}record_fields(owner);return true;}
+ const bool result=reinterpret_cast<Check>(fields_original)(owner);if(!result){RememberFailure("Original CheckFields rejected the source definition");Refund();}return result;}record_fields(owner);return true;}
 bool Methods(void* owner){Phase("Class CheckMethods entry");if(!Matches(owner)){
- const bool result=reinterpret_cast<Check>(methods_original)(owner);if(!result)RememberFailure("Original CheckMethods rejected the source definition");return result;}record_methods(owner);return true;}
+ const bool result=reinterpret_cast<Check>(methods_original)(owner);if(!result){RememberFailure("Original CheckMethods rejected the source definition");Refund();}return result;}record_methods(owner);return true;}
 bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
  if(!active||!active->provider->closed_graph)return true;
  auto& request=*active;Phase(window==GraphWindow::Verified?"Verified graph capture":"Collected graph preparation");std::string error;
  const auto reject=[&](const char* reason){
   RememberFailure(reason);
   android13::BorrowedPlatformString signature("OWNED BATCH"),message(reason);
-  failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);return false;
+  failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);Refund();return false;
  };
  if(!Mapped(raw,sizeof(*raw))||(request.boundary_holder&&request.boundary_holder!=raw))return reject("Repeated, changed or unmapped precommit Holder");
  transaction_root::Holder holder{};size_t extent=0;method_identity::ReadableMappingExtent(raw,&extent);
@@ -177,14 +193,15 @@ bool GuardGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
  catch(const std::bad_alloc&){
   RememberFailure("Precommit graph staging exhausted native memory");
   android13::BorrowedPlatformString signature("OWNED BATCH"),message("Precommit graph staging exhausted native memory");
-  failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&signature,&message);return false;
+  failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&signature,&message);Refund();return false;
  }
+ catch(...){RememberFailure("Precommit graph provider threw");android13::BorrowedPlatformString signature("OWNED BATCH"),message("Precommit graph provider threw");failure(driver,JVMTI_ERROR_INTERNAL,&signature,&message);Refund();return false;}
 }
 bool RejectBoundary(void* driver,const char* message){
  RememberFailure(message);
  __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Owned graph boundary refused: %s",message);
  android13::BorrowedPlatformString signature("OWNED BATCH"),text(message);
- failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&text);return false;
+ failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&text);Refund();return false;
 }
 // Both named leaf arguments are pointers: verification is const Iterator&,
 // collection is Iterator*. No value-aggregate ABI or wrapper execution assumed.
@@ -218,7 +235,18 @@ bool VerificationGraph(void* owner,const transaction_root::Iterator* iterator){
  Phase("Class verification leaf");void* driver=nullptr;transaction_root::Holder* holder=nullptr;
  if(!LeafBoundary(owner,iterator,false,&driver,&holder))return false;
  if(active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Repeated source verification leaf");
- if(!verification_leaf_original(owner,iterator)){RememberFailure("Original CheckVerification returned false");return false;}
+ if(Lifecycle(*active->provider)){
+  if(!active->source_run_active||active->source_driver!=driver||active->verification_owner)
+   return RejectBoundary(driver,"Verification lacks exact original Run lifetime");
+  active->verification_owner=owner;active->verification_iterator=iterator;
+  std::string error;bool allowed=false;
+  try{allowed=active->provider->before_verification(owner,iterator,active->provider->state,&error);}
+  catch(const std::bad_alloc&){CloseVerification(false);RememberFailure("Verification preparation exhausted native memory");Refund();android13::BorrowedPlatformString sig("OWNED BATCH"),msg("Verification preparation exhausted native memory");failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&sig,&msg);return false;}
+  catch(...){CloseVerification(false);return RejectBoundary(driver,"Verification preparation threw before original leaf");}
+  if(!allowed){CloseVerification(false);return RejectBoundary(driver,error.empty()?"Verification view refused":error.c_str());}
+ }
+ const bool original_result=verification_leaf_original(owner,iterator);CloseVerification(original_result);
+ if(!original_result){RememberFailure("Original CheckVerification returned false");Refund();return false;}
  if(++active->verified_count!=active->items.size())return true;
  return GuardGraph(driver,holder,GraphWindow::Verified);
 }
@@ -229,26 +257,59 @@ bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
  // Missing/wrong earlier hooks refuse here BEFORE collection and its original
  // last bool. Update remains an invariant boundary, never the first refusal.
  if(!active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Collection lacks completed source verification witness");
- if(!collection_leaf_original(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");return false;}
+ if(!collection_leaf_original(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;}
  if(++active->collected_count!=active->items.size())return true;
  if(!GuardGraph(driver,holder,GraphWindow::Collected))return false;
  active->graph_sealed=true;return true;
 }
 bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole verification wrapper");if(active&&active->provider->closed_graph&&active->graph_verified)return RejectBoundary(driver,"Repeated verification boundary");
- if(!verified_original(driver,raw)){RememberFailure("Original CheckAllClassesAreVerified returned false");return false;}
+ if(!verified_original(driver,raw)){RememberFailure("Original CheckAllClassesAreVerified returned false");Refund();return false;}
  // A non-inlined wrapper may contain our leaf callbacks. Only one complete
  // proof is published; an inlined wrapper requires the last actual leaf.
  if(active&&active->provider->closed_graph&&active->graph_verified)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf verification Holder mismatch");
+ if(active&&Lifecycle(*active->provider)&&active->verified_count!=active->items.size())return RejectBoundary(driver,"Missing exact verification leaf lifecycle");
  return GuardGraph(driver,raw,GraphWindow::Verified);
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
- if(!collect_original(driver,raw)){RememberFailure("Original batch CollectAndCreateNewInstances returned false");return false;}
+ if(!collect_original(driver,raw)){RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
  if(!active||!active->provider->closed_graph)return true;
  if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
  if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
  active->graph_sealed=true;return true;
+}
+void NotifyCommit(const source_commit::Plan& plan,void* owner) noexcept {
+ auto* request=static_cast<Request*>(owner);
+ if(request!=active||!request->graph_sealed||request->refunded||request->verification_owner)std::abort();
+ if(Lifecycle(*request->provider)){
+  if(!request->source_run_active||request->publication_started)std::abort();
+  request->publication_started=true;request->provider->commit(plan,request->provider->state);
+ }
+}
+jvmtiError SourceRun(void* driver){
+ if(!active||!Lifecycle(*active->provider))return run_original(driver);
+ auto& r=*active;if(r.source_run_active)return JVMTI_ERROR_NOT_AVAILABLE;
+ r.source_driver=driver;r.source_run_active=true;std::string error;bool begun=false;
+ jvmtiError result=JVMTI_ERROR_NOT_AVAILABLE;
+ try{begun=r.provider->begin_run(driver,r.provider->state,&error);}
+ catch(const std::bad_alloc&){result=JVMTI_ERROR_OUT_OF_MEMORY;RememberFailure("Source Session creation exhausted native memory");}
+ catch(...){result=JVMTI_ERROR_INTERNAL;RememberFailure("Source Session creation threw");}
+ if(begun){result=run_original(driver);
+  // Every owned rejection and original RecordFailure refunds while source
+  // locals still exist. EndRun must never perform a late Holder retirement.
+  if(result!=JVMTI_ERROR_NONE&&!r.refunded)std::abort();
+ }else{RememberFailure(error.empty()?"Source Session creation refused":error.c_str());Refund();}
+ if(r.verification_owner)std::abort(); // No late closure after original Holder cleanup.
+ r.provider->end_run(driver,result==JVMTI_ERROR_NONE,r.provider->state);
+ r.source_run_active=false;r.source_driver=nullptr;
+ // The original Run destroyed its private Holder. Keep diagnostics scalars,
+ // never retain these borrowed addresses into the caller's next operation.
+ r.holder=nullptr;r.boundary_holder=nullptr;
+ for(auto& item:r.items){if(item.validated_owner)++r.completed_validated;item.validated_owner=nullptr;}
+ // Successful source Run must have consumed all owners before dropping them.
+ if(result==JVMTI_ERROR_NONE&&!r.remaining_owners.empty())std::abort();
+ r.remaining_owners.clear();return result;
 }
 void Update(void* owner,const void* iterator){
   if(!active||std::none_of(active->items.begin(),active->items.end(),[&](const auto& item){return item.validated_owner==owner;})){
@@ -279,7 +340,7 @@ void Update(void* owner,const void* iterator){
     if(!active->provider->finalize||current.holder!=active->holder||found==active->remaining_owners.end())std::abort();
     const source_commit::Plan* plan=nullptr;
     auto services=active->provider->finalize(current.holder,&plan,active->provider->state);
-    if(!plan||!services||!source_commit::Run(*plan,*services))std::abort();
+    if(!plan||!services||!source_commit::Run(*plan,*services,{active,NotifyCommit}))std::abort();
     active->remaining_owners.erase(found);active->committed=true;return;
   }
   std::string error;owned_structural_transaction::StructuralTransaction first;
@@ -334,6 +395,7 @@ bool Install(HookEngine& hooks,std::string* error){
     {boundaries::kCollectWhole,reinterpret_cast<void*>(CollectGraph),reinterpret_cast<void**>(&collect_original)},
     {boundaries::kVerifyClass,reinterpret_cast<void*>(VerificationGraph),reinterpret_cast<void**>(&verification_leaf_original)},
     {boundaries::kCollectClass,reinterpret_cast<void*>(CollectionGraph),reinterpret_cast<void**>(&collection_leaf_original)}};
+  void* run_target=hooks.FindSymbol("libopenjdkjvmti.so",boundaries::kRun);
   for(auto& entry:entries)entry.target=hooks.FindSymbol("libopenjdkjvmti.so",entry.symbol);
   record_fields=reinterpret_cast<decltype(record_fields)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition19RecordNewFieldAddedEv"));
   record_methods=reinterpret_cast<decltype(record_methods)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
@@ -352,16 +414,30 @@ bool Install(HookEngine& hooks,std::string* error){
   std::vector<void*> tokens;bool okay=true;
   for(auto& entry:entries){void* token=hooks.Install(entry.target,entry.proxy,entry.original,error);
     if(!token){okay=false;break;}tokens.push_back(token);if(!*entry.original)std::abort();}
+  if(okay&&run_target){void* token=hooks.Install(run_target,reinterpret_cast<void*>(SourceRun),reinterpret_cast<void**>(&run_original),error);
+   if(!token)okay=false;else{tokens.push_back(token);if(!run_original)std::abort();run_ready=true;}}
+  if(!okay)run_ready=false;
   if(!okay)for(auto at=tokens.rbegin();at!=tokens.rend();++at){std::string rollback;if(!hooks.Remove(*at,&rollback))std::abort();}
   destroy(&stop);installed=okay;window_ready=okay;return okay;
 }
 bool GraphWindowReady(){return window_ready;}
+void ObserveSourceFailure(void* driver,jvmtiError code) noexcept {
+ if(!active||!active->source_run_active||active->source_driver!=driver||code==JVMTI_ERROR_NONE)return;
+ RememberFailure("Original RecordFailure refused source Run");
+ // RecordFailure may run INSIDE original CheckVerification/Finish while its
+ // native monitor/view is still required. Notify pending refund, preserving
+ // that dynamic extent; the normal leaf After closes it after original return.
+ if(!active->refunded&&!active->publication_started){active->refunded=true;active->provider->refund(active->provider->state);}
+}
 jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
     const std::vector<Definition>& definitions,const Provider& provider,std::string* error){
   if(!env||!jvmti||definitions.empty()||definitions.size()>INT32_MAX||active||!installed||!provider.ready||!provider.prepare||
      !provider.metadata||!provider.metadata->Calibrated()||!provider.ready(provider.state)||
      (definitions.size()>1&&!provider.preflight)){
     if(error)*error="Owned batch provider is not fully prepared";return JVMTI_ERROR_NOT_AVAILABLE;
+  }
+  if(Lifecycle(provider)&&(!CompleteLifecycle(provider)||!provider.schema_evolution||!provider.closed_graph||!run_ready)){
+    if(error)*error="Source Session requires complete lifecycle and installed original Run";return JVMTI_ERROR_NOT_AVAILABLE;
   }
   Request request{&hooks,env,&provider,{},false,nullptr,{}};bool removed=false;
   request.jvmti=jvmti;

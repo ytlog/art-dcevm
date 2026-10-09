@@ -31,8 +31,9 @@ int main(){
  Object old{},replacement{};Test services;services.old=&old;services.replacement=&replacement;
  services.states[&old]=15;services.states[&replacement]=10;
  Plan plan{&old,&services,{&old},{&replacement},{&old},{&replacement},true};
- assert(Run(plan,services));assert(services.events=="bscimvfronhjax");assert(services.states[&replacement]==15);
- services.events.clear();services.valid=false;assert(!Run(plan,services)&&services.events.empty());
+ int observed=0;CommitObserver observer{&observed,[](const Plan&,void* state) noexcept {++*static_cast<int*>(state);}};
+ assert(Run(plan,services,observer)&&observed==1);assert(services.events=="bscimvfronhjax");assert(services.states[&replacement]==15);
+ services.events.clear();services.valid=false;assert(!Run(plan,services,observer)&&services.events.empty()&&observed==1);
  services.valid=true;plan.new_classes.clear();assert(!Run(plan,services)&&services.events.empty());
  Object old2{},next2{},moved1{},moved2{},decoy{};int array1,array2;
  Test batch;batch.pairs={{&old,&replacement},{&old2,&next2}};batch.retained_pairs={{&old,&moved1},{&old2,&moved2}};

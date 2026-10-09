@@ -1,12 +1,13 @@
 #include "platform/common/source_commit.h"
 #include <cstdlib>
 namespace artdcevm::source_commit {
-bool Run(const Plan& plan,const Services& services){
+bool Run(const Plan& plan,const Services& services,CommitObserver observer){
   if(!plan.mirror||!plan.new_classes_root||plan.old_classes.empty()||
      plan.old_classes.size()!=plan.new_classes.size()||
      plan.old_instances.size()!=plan.new_instances.size()||(!plan.class_root_origins.empty()&&plan.class_root_origins.size()!=plan.old_classes.size()))return false;
   for(const auto& origin:plan.class_root_origins)if(!origin.array)return false;
   if(!services.Validate(plan))return false;
+  if(observer.begin)observer.begin(plan,observer.owner);
   services.BeginCommit(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
     auto* old=plan.old_classes[i];auto* replacement=plan.new_classes[i];

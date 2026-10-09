@@ -86,6 +86,22 @@ void Build(const std::vector<Definition>& definitions){
  for(const auto& pair:managed){if(pair.first==reinterpret_cast<jobject>(array))continue;Put32(pair.first,8,uint32_t(pair.second.size()));if(pair.second.size()==1)Put32(pair.first,12,uint32_t(uintptr_t(pair.second[0])));}
 }
 }
+namespace lifecycle_test {
+using namespace graph_window;using namespace artdcevm::native_owned_removal;
+jvmtiEnv* ti=nullptr;jint count=0;const jvmtiClassDefinition* definitions=nullptr;
+int opened=0,closed=0,refunds=0,starts=0,ends=0,commits=0,mode=0;bool view=false;
+bool Begin(void* d,void*,std::string*){assert(d==&driver&&!stopped);++starts;if(mode==6)throw std::bad_alloc();return mode!=7;}
+void End(void* d,bool okay,void*) noexcept {assert(d==&driver&&!view);++ends;assert(okay?commits==1:refunds==1);}
+bool Before(void* owner,const transaction_root::Iterator* it,void*,std::string* error){assert(!view&&owner==&batch_boundary::owners[it->index]);view=true;++opened;if(mode==1){*error="Exact verification view refused";return false;}if(mode==2)throw std::bad_alloc();if(mode==4)throw 42;return true;}
+void After(void*,const transaction_root::Iterator*,bool result,void*) noexcept {assert(view);view=false;++closed;if(mode==1||mode==2||mode==4)assert(!result);}
+void RefundOwner(void*) noexcept {assert((!view||mode==5)&&!stopped);++refunds;assert(refunds==1);}
+void CommitOwner(const source_commit::Plan& p,void*) noexcept {assert(!view&&stopped&&&p==&finalized_plan&&batch_boundary::begins==0);++commits;}
+bool Verify(void* owner,const transaction_root::Iterator* it){assert(view);if(mode==5){ObserveSourceFailure(&driver,JVMTI_ERROR_FAILS_VERIFICATION);assert(view&&refunds==1);recorded=JVMTI_ERROR_FAILS_VERIFICATION;return false;}return OriginalVerification(owner,it);}
+jvmtiError OriginalRun(void* d){assert(d==&driver);if(mode==3){ObserveSourceFailure(reinterpret_cast<void*>(1),JVMTI_ERROR_INTERNAL);assert(refunds==0);ObserveSourceFailure(d,JVMTI_ERROR_INVALID_CLASS);return JVMTI_ERROR_INVALID_CLASS;}return batch_boundary::Entry(ti,count,definitions);}
+jvmtiError Entry(jvmtiEnv* t,jint n,const jvmtiClassDefinition* defs){ti=t;count=n;definitions=defs;return SourceRun(&driver);}
+jvmtiError JNICALL Extensions(jvmtiEnv* t,jint* n,jvmtiExtensionFunctionInfo** info){auto code=batch_boundary::Extensions(t,n,info);(*info)->func=reinterpret_cast<jvmtiExtensionFunction>(Entry);return code;}
+void Reset(int value){opened=closed=refunds=starts=ends=commits=0;view=false;mode=value;}
+}
 int main(int argc,char** argv){
  assert(original_batch_boundary(argc,argv)==0);
  using namespace batch_boundary;using namespace graph_window;
@@ -165,6 +181,40 @@ int main(int argc,char** argv){
  before_commit=Before;verified_original=WrappedVerification;collect_original=WrappedCollection;
  Reset();graph_window::Build(definitions);assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NONE&&graph_checks==2&&verification_calls==2&&collection_calls==2&&begins==1);
  verified_original=Original;collect_original=Collect;
+ // A real named Run invocation encloses all leaves. No symbol-presence
+ // shortcut: lifecycle refuses when the actual Run observer was not entered.
+ functions.GetExtensionFunctions=lifecycle_test::Extensions;run_original=lifecycle_test::OriginalRun;run_ready=true;
+ provider.begin_run=lifecycle_test::Begin;provider.end_run=lifecycle_test::End;
+ provider.before_verification=lifecycle_test::Before;provider.after_verification=lifecycle_test::After;
+ provider.refund=lifecycle_test::RefundOwner;provider.commit=lifecycle_test::CommitOwner;
+ verification_leaf_original=lifecycle_test::Verify;before_commit=Leaves;
+ for(int mode=0;mode<8;++mode){lifecycle_test::Reset(mode);batch_boundary::Reset();graph_window::Build(definitions);
+  const auto code=RunBatch(hooks,&env,&ti,definitions,provider,&error);
+  assert(lifecycle_test::starts==1&&lifecycle_test::ends==1&&!lifecycle_test::view);
+  if(mode==0)assert(code==JVMTI_ERROR_NONE&&lifecycle_test::opened==2&&lifecycle_test::closed==2&&lifecycle_test::commits==1&&lifecycle_test::refunds==0);
+  if(mode==1)assert(code==JVMTI_ERROR_NOT_AVAILABLE&&lifecycle_test::opened==1&&lifecycle_test::closed==1&&lifecycle_test::refunds==1&&begins==0);
+  if(mode==2)assert(code==JVMTI_ERROR_OUT_OF_MEMORY&&lifecycle_test::opened==1&&lifecycle_test::closed==1&&lifecycle_test::refunds==1&&begins==0);
+  if(mode==6)assert(code==JVMTI_ERROR_OUT_OF_MEMORY&&lifecycle_test::opened==0&&lifecycle_test::refunds==1&&entries==0);
+  if(mode==7)assert(code==JVMTI_ERROR_NOT_AVAILABLE&&lifecycle_test::opened==0&&lifecycle_test::refunds==1&&entries==0);
+  if(mode==5)assert(code==JVMTI_ERROR_FAILS_VERIFICATION&&lifecycle_test::closed==1&&lifecycle_test::refunds==1&&begins==0);
+  if(mode==4)assert(code==JVMTI_ERROR_NOT_AVAILABLE&&lifecycle_test::closed==1&&lifecycle_test::refunds==1&&begins==0);
+  if(mode==3)assert(code==JVMTI_ERROR_INVALID_CLASS&&lifecycle_test::opened==0&&lifecycle_test::refunds==1&&begins==0);
+ }
+ lifecycle_test::Reset(0);batch_boundary::Reset();graph_window::Build(definitions);original_ok=false;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_FAILS_VERIFICATION&&lifecycle_test::closed==1&&lifecycle_test::refunds==1&&begins==0);
+ lifecycle_test::Reset(0);batch_boundary::Reset();graph_window::Build(definitions);collection_ok=false;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_OUT_OF_MEMORY&&lifecycle_test::closed==2&&lifecycle_test::refunds==1&&begins==0);
+ // Partial factory contracts fail before source entry; callback-free providers
+ // retain their established source behavior.
+ lifecycle_test::Reset(0);batch_boundary::Reset();graph_window::Build(definitions);provider.end_run=nullptr;
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&lifecycle_test::starts==0&&entries==0);
+ provider.end_run=lifecycle_test::End;functions.GetExtensionFunctions=batch_boundary::Extensions;
+ lifecycle_test::Reset(0);batch_boundary::Reset();graph_window::Build(definitions);
+ assert(RunBatch(hooks,&env,&ti,definitions,provider,&error)==JVMTI_ERROR_NOT_AVAILABLE&&lifecycle_test::starts==0&&lifecycle_test::opened==0&&begins==0&&collection_calls==0);
+ provider.end_run=nullptr;
+ provider.begin_run=nullptr;provider.before_verification=nullptr;provider.after_verification=nullptr;provider.refund=nullptr;provider.commit=nullptr;
+ functions.GetExtensionFunctions=batch_boundary::Extensions;verification_leaf_original=OriginalVerification;
+ puts("Actual Run lifecycle: paired view closes before single live refund; original leaf and RecordFailure codes retained; foreign driver ignored; bad_alloc refundable; validated commit precedes service BeginCommit under allocator failure guard PASS");
  // Production's actual rooted-plan reader re-decodes the same strong global
  // arrays after simulated moving GC and preserves the actual origin partition.
  Reset();graph_window::Build(definitions);auto holder_root=reinterpret_cast<jobject>(uintptr_t(*holder.array_handle));RootedGraph graph;
