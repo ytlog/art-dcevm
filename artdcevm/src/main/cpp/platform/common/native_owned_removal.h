@@ -69,18 +69,19 @@ struct PassiveObserver {
  void (*begin)(void* driver,const void* exact_original_run,void* self,void* state) noexcept=nullptr;
  // Holder is borrowed only during this callback; end must not dereference it.
  void (*collected)(void* driver,const void* actual_holder,void* state) noexcept=nullptr;
- // complete requires one actual original Run call and one successful named
- // whole collection with the same driver/Holder, without nested Run entry.
- // A missing/inlined/wrong/repeated boundary revokes proof; result is original.
+ // complete requires one original Run and the entire successful original
+ // collection-leaf sequence with exact Holder/owner/Iterator provenance. A
+ // non-inlined whole wrapper is checked and deduplicated; its unused receiver
+ // is never identity. Missing/wrong/repeated leaves revoke proof; result is original.
  void (*end)(void* driver,jvmtiError original_result,bool complete,void* state) noexcept=nullptr;
 };
 struct PassiveTrace {
- // Event nibbles: begin=1, original call=2, successful whole collection=3,
+ // Event nibbles: begin=1, original call=2, complete collection-leaf sequence=3,
  // end=4, nested Run=5, original whole collection false=6.
  BoundedNativeEventTrace events;
  uint32_t original_calls=0,whole_collections=0;
  // First failure: owner=1,nested=2,wrongdriver=3,missingholder=4,repeat=5,
- // originalcollectionfalse=6,sourceerror=7,missingcollection=8,missingbody=9,unwind=10.
+ // originalcollectionfalse=6,sourceerror=7,missingcollection=8,missingbody=9,unwind=10,leafprovenance=11.
  uint8_t first_failure=0;bool begin_self_present=false,collected_same_thread=false,end_same_thread=false;
  bool returned=false,complete=false;jvmtiError result=JVMTI_ERROR_INTERNAL;
 };

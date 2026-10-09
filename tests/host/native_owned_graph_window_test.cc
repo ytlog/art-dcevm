@@ -105,74 +105,91 @@ void Reset(int value){opened=closed=refunds=starts=ends=commits=0;view=false;mod
 }
 namespace passive_test {
 using namespace artdcevm::native_owned_removal;
-int driver=0,foreign=0,holder=0,other_holder=0,state=0;
-int mode=0,depth=0,bodies=0,begins=0,collections=0,ends=0;bool complete=false;
+int driver=0,foreign=0,state=0;uint32_t handle=1;uint64_t bits=3;
+std::array<NativeDefinition,2> owners{};NativeDefinition foreign_owner{};
+transaction_root::Owners range{};transaction_root::Holder holder{},other_holder{};
+int mode=0,depth=0,bodies=0,begins=0,collections=0,ends=0,leaf_calls=0;bool complete=false;
 jvmtiError reported=JVMTI_ERROR_NONE;
 jvmtiError OriginalRun(void*);
-bool Collect(void* d,transaction_root::Holder* h){assert((d==&driver||d==&foreign)&&(h==reinterpret_cast<transaction_root::Holder*>(&holder)||h==reinterpret_cast<transaction_root::Holder*>(&other_holder)));return mode!=3;}
+bool Leaf(void*,transaction_root::Iterator*){++leaf_calls;if(mode==18)holder.array_handle=nullptr;return mode!=3;}
+bool Leaves(transaction_root::Holder* h){
+ for(size_t n=0;n<owners.size();++n){
+  if(mode==13&&n==1)continue;
+  transaction_root::Iterator it{int32_t(mode==11?1:n),h};
+  void* owner=&owners[n];if(mode==12)owner=&owners[1-n];if(mode==17)owner=&foreign_owner;
+  if(mode==16){if(!CollectionGraph(owner,nullptr))return false;continue;}
+  if(!CollectionGraph(owner,&it))return false;
+  if(mode==4)assert(CollectionGraph(owner,&it));
+ }
+ return true;
+}
+bool Collect(void*,transaction_root::Holder* h){if(mode==15)return true;return Leaves(h);}
 void Begin(void* d,const void* original,void* self,void* owner) noexcept {
  assert(d==&driver&&original==reinterpret_cast<const void*>(OriginalRun)&&owner==&state&&self==current);
  assert(!SetPassiveObserver(nullptr));++begins;
 }
-void Collected(void* d,const void* h,void* owner) noexcept {assert(owner==&state&&(d==&driver||d==&foreign)&&(h==&holder||h==&other_holder));++collections;}
+void Collected(void* d,const void* h,void* owner) noexcept {assert(owner==&state&&d==&driver&&h==&holder);++collections;}
 void End(void* d,jvmtiError result,bool valid,void* owner) noexcept {assert(d==&driver&&owner==&state&&!SetPassiveObserver(nullptr));PassiveTrace t;assert(ReadPassiveTrace(&t));
  assert(t.result==result&&t.complete==valid&&t.events.mask&(1u<<4)&&t.end_same_thread&&t.begin_self_present);
  if(mode==0)assert(t.events.order==0x4321&&t.first_failure==0&&t.original_calls==1&&t.whole_collections==1&&t.collected_same_thread);
- if(mode==2)assert(t.first_failure==8&&t.whole_collections==0);
+ if(mode==10)assert(t.events.order==0x4321&&t.first_failure==0&&t.whole_collections==0);
+ if(mode==2)assert(t.first_failure==8);
  if(mode==3)assert(t.first_failure==6);
- if(mode==4||mode==6)assert(t.first_failure==5&&t.whole_collections==2);
- if(mode==5)assert(t.first_failure==3&&t.whole_collections==1);
+ if(mode==4||mode==5||mode==6||(mode>=11&&mode!=14))assert(t.first_failure==11);
+ if(mode==14)assert(t.first_failure==11||t.first_failure==5);
  if(mode==7)assert(t.first_failure==2&&t.original_calls==2);
  if(mode==8)assert(t.first_failure==10&&!t.returned);
  if(mode==9)assert(t.first_failure==7);
- ++ends;reported=result;complete=valid;}
+ ++ends;reported=result;complete=valid;
+}
 jvmtiError OriginalRun(void* d){
  ++bodies;assert(d==&driver||d==&foreign);
  if(mode==1)return JVMTI_ERROR_INVALID_CLASS;
  if(mode==2)return JVMTI_ERROR_NONE;
  if(mode==8)throw std::bad_alloc();
  if(mode==7&&depth++==0){assert(SourceRun(&foreign)==JVMTI_ERROR_NONE);--depth;}
- void* receiver=mode==5?static_cast<void*>(&foreign):d;
- bool okay=CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&holder));
- if(mode==4)assert(CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&holder)));
- if(mode==6)assert(CollectGraph(receiver,reinterpret_cast<transaction_root::Holder*>(&other_holder)));
+ if(mode==5)owners[1].driver=&foreign;
+ bool okay;
+ if(mode==6){transaction_root::Iterator first{0,&holder},second{1,&other_holder};okay=CollectionGraph(&owners[0],&first)&&CollectionGraph(&owners[1],&second);}
+ else okay=mode==10?Leaves(&holder):CollectGraph(nullptr,&holder);
+ if(mode==14)assert(CollectGraph(reinterpret_cast<void*>(1),&holder));
  if(mode==9)return JVMTI_ERROR_FAILS_VERIFICATION;
  return okay?JVMTI_ERROR_NONE:JVMTI_ERROR_OUT_OF_MEMORY;
 }
+void Reset(){
+ for(auto& owner:owners)owner.driver=&driver;foreign_owner.driver=&driver;
+ range={reinterpret_cast<const unsigned char*>(owners.data()),reinterpret_cast<const unsigned char*>(owners.data()+owners.size()),reinterpret_cast<const unsigned char*>(owners.data()+owners.size())};
+ transaction_root::Bits b{&bits,2,1};holder={&handle,&range,b,b,b};other_holder=holder;
+ depth=bodies=begins=collections=ends=leaf_calls=0;complete=true;reported=JVMTI_ERROR_NONE;
+}
 void Test(){
- assert(!active);run_original=OriginalRun;collect_original=Collect;run_ready=window_ready=installed=true;
+ assert(!active);run_original=OriginalRun;collect_original=Collect;collection_leaf_original=Leaf;run_ready=window_ready=installed=true;
  PassiveObserver observer{&state,Begin,Collected,End};
  PassiveObserver partial=observer;partial.end=nullptr;assert(!SetPassiveObserver(&partial));
  run_ready=false;assert(!SetPassiveObserver(&observer));run_ready=true;
- assert(SetPassiveObserver(&observer));assert(!SetPassiveObserver(&observer));
- // Registration copies the complete callbacks rather than borrowing a mutable
- // registration object; only its explicitly owned state is borrowed.
- observer.end=nullptr;
- for(mode=0;mode<=9;++mode){depth=bodies=begins=collections=ends=0;complete=true;reported=JVMTI_ERROR_NONE;
-  forbid_final_allocation=true;jvmtiError result=JVMTI_ERROR_INTERNAL;
+ assert(SetPassiveObserver(&observer));assert(!SetPassiveObserver(&observer));observer.end=nullptr;
+ for(mode=0;mode<=18;++mode){Reset();forbid_final_allocation=true;jvmtiError result=JVMTI_ERROR_INTERNAL;
   try{result=SourceRun(&driver);}catch(const std::bad_alloc&){assert(mode==8);}
   forbid_final_allocation=false;
-  assert(begins==1&&ends==1&&!passive_run&&reported==result&&complete==(mode==0));
+  assert(begins==1&&ends==1&&!passive_run&&reported==result&&complete==(mode==0||mode==10));
   assert(bodies==(mode==7?2:1));
-  if(mode==0)assert(result==JVMTI_ERROR_NONE&&collections==1);
+  if(mode==0||mode==10)assert(result==JVMTI_ERROR_NONE&&collections==1&&leaf_calls==2);
   if(mode==1)assert(result==JVMTI_ERROR_INVALID_CLASS&&collections==0);
   if(mode==2)assert(result==JVMTI_ERROR_NONE&&collections==0);
-  if(mode==3)assert(result==JVMTI_ERROR_OUT_OF_MEMORY&&collections==0);
-  if(mode==4||mode==6||mode==7)assert(result==JVMTI_ERROR_NONE&&collections==2);
-  if(mode==5)assert(result==JVMTI_ERROR_NONE&&collections==1);
+  if(mode==3)assert(result==JVMTI_ERROR_OUT_OF_MEMORY&&collections==0&&leaf_calls==1);
+  if(mode==4||mode==5||mode==6||mode==7||mode==11||mode==12||mode==13||mode==15||mode==16||mode==17||mode==18)assert(result==JVMTI_ERROR_NONE&&collections==0);
   if(mode==8)assert(result==JVMTI_ERROR_INTERNAL&&collections==0);
   if(mode==9)assert(result==JVMTI_ERROR_FAILS_VERIFICATION&&collections==1);
  }
- mode=0;begins=ends=collections=0;
- // A whole collection outside the original Run dynamic extent is not evidence.
- assert(CollectGraph(&driver,reinterpret_cast<transaction_root::Holder*>(&holder))&&collections==0);
+ mode=0;Reset();assert(CollectGraph(nullptr,&holder)&&collections==0);
  std::thread other([]{assert(SetPassiveObserver(nullptr));assert(SourceRun(&driver)==JVMTI_ERROR_NONE);});other.join();
  assert(begins==0&&ends==0);assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==1&&ends==1&&complete);
  PassiveTrace outside;assert(!ReadPassiveTrace(&outside));
  assert(SetPassiveObserver(nullptr));mode=0;begins=ends=0;assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==0&&ends==0);
- puts("Passive actual Run TU: ordinary original trampoline/self/Holder arguments and errors retained; all-or-none removable TLS observation; missing/failed/repeated/wrong/nested scopes cannot seal; exception rollback; zero allocation/no JNI PASS");
+ puts("Passive actual Run/leaf TU: mapped Holder exact complete Owners/driver/index order; inlined wrapper and unused whole receiver supported; missing/foreign/repeat/false boundaries cannot seal; original errors unchanged; zero allocation/no JNI PASS");
 }
 }
+
 int main(int argc,char** argv){
  assert(original_batch_boundary(argc,argv)==0);
  using namespace batch_boundary;using namespace graph_window;

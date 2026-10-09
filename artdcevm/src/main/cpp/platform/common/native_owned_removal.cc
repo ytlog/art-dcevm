@@ -88,19 +88,19 @@ struct PassiveRun {
  PassiveObserver observer;void* driver;bool valid=true,called=false,returned=false;
  size_t collections=0;const void* holder=nullptr;jvmtiError result=JVMTI_ERROR_INTERNAL;
  void* self=nullptr;PassiveTrace trace{};
+ transaction_root::Holder* leaf_holder=nullptr;transaction_root::Holder leaf_header{};transaction_root::Metadata leaf_metadata{};
+ size_t leaves=0;bool leaf_active=false;
  void Refuse(uint8_t reason) noexcept {valid=false;if(!trace.first_failure)trace.first_failure=reason;}
 };
 thread_local PassiveRun* passive_run=nullptr;
-void PassiveCollected(void* driver,const void* holder) noexcept {
- if(!passive_run)return;
+// A whole-loop `this` is unused in fixed source and may not survive optimisation.
+// Provenance is the real Holder/Iterator owner range, never that receiver.
+void PassiveCollected(const void* holder) noexcept {
  auto& r=*passive_run;
- const size_t previous=r.collections++;r.trace.events.Record(3);
- if(r.trace.whole_collections!=UINT32_MAX)++r.trace.whole_collections;
+ if(!r.valid||r.collections||!holder){r.Refuse(5);return;}
+ ++r.collections;r.holder=holder;r.trace.events.Record(3);
  r.trace.collected_same_thread=current_thread&&current_thread()==r.self;
- if(driver!=r.driver)r.Refuse(3);
- else if(!holder)r.Refuse(4);
- else if(previous!=0||(r.holder&&r.holder!=holder))r.Refuse(5);
- r.holder=holder;r.observer.collected(driver,holder,r.observer.state);
+ r.observer.collected(r.driver,holder,r.observer.state);
 }
 jvmtiError InvokeOriginalRun(void* driver){
  if(passive_run){auto& r=*passive_run;r.trace.events.Record(2);if(r.trace.original_calls!=UINT32_MAX)++r.trace.original_calls;
@@ -109,6 +109,61 @@ jvmtiError InvokeOriginalRun(void* driver){
 }
 bool Mapped(const void* p,size_t need){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=need;}
 template<class T>T Read(const void* p,size_t at){T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value;}
+// Reuse fixed Holder/Owners arithmetic without claiming managed-array root
+// validation: ordinary provenance is exclusively the original native owner range.
+bool PassiveHolder(transaction_root::Holder* raw,transaction_root::Metadata* metadata,transaction_root::Holder* header=nullptr) {
+ auto& r=*passive_run;transaction_root::Holder h{};size_t extent=0;
+ if(!method_identity::ReadableMappingExtent(raw,&extent)||!transaction_root::ReadHolderHeader(raw,extent,&h)||
+    !Mapped(h.array_handle,sizeof(uint32_t))||!Mapped(h.redefinitions,sizeof(transaction_root::Owners)))return false;
+ const auto owners=Read<transaction_root::Owners>(h.redefinitions,0);
+ const uintptr_t begin=uintptr_t(owners.begin),end=uintptr_t(owners.end);
+ if(!begin||end<=begin||(end-begin)%sizeof(NativeDefinition))return false;
+ const size_t count=(end-begin)/sizeof(NativeDefinition);
+ if(count>size_t(INT32_MAX)||!Mapped(owners.begin,end-begin)||
+    !transaction_root::ReadMetadata(h,count,transaction_root::OwnerFamily::kAndroid15,metadata))return false;
+ for(auto bits:{metadata->initialized,metadata->actually_structural,metadata->initial_structural})
+  if(!Mapped(bits.begin,(count/64+(count%64!=0))*sizeof(uint64_t)))return false;
+ for(size_t n=0;n<count;++n)
+  if(Read<NativeDefinition>(owners.begin,n*sizeof(NativeDefinition)).driver!=r.driver)return false;
+ if(header)*header=h;return true;
+}
+bool PassiveBoundary(void* owner,const transaction_root::Iterator* iterator,bool returning=false) {
+ auto& r=*passive_run;transaction_root::Iterator it{};size_t extent=0;transaction_root::Metadata metadata{};transaction_root::Holder header{};
+ if(!r.valid||(r.leaf_active&&!returning)||!current_thread||current_thread()!=r.self||!method_identity::ReadableMappingExtent(iterator,&extent)||
+    !transaction_root::ReadIterator(iterator,extent,&it)||!PassiveHolder(it.holder,&metadata,&header))return false;
+ if(size_t(it.index)!=r.leaves||r.leaves>=metadata.count||
+    metadata.owners.begin+r.leaves*metadata.stride!=owner)return false;
+ if(r.leaf_holder&&(r.leaf_holder!=it.holder||r.leaf_metadata.count!=metadata.count||
+    r.leaf_metadata.owners.begin!=metadata.owners.begin||r.leaf_metadata.owners.end!=metadata.owners.end||
+    r.leaf_metadata.owners.capacity!=metadata.owners.capacity||
+    r.leaf_header.array_handle!=header.array_handle||r.leaf_header.redefinitions!=header.redefinitions||
+    std::memcmp(&r.leaf_header.initialized,&header.initialized,3*sizeof(transaction_root::Bits))!=0))return false;
+ r.leaf_holder=it.holder;r.leaf_header=header;r.leaf_metadata=metadata;return true;
+}
+bool CollectionOriginal(void* owner,transaction_root::Iterator* iterator) {
+ if(!passive_run)return collection_leaf_original(owner,iterator);
+ auto& r=*passive_run;const bool bound=PassiveBoundary(owner,iterator);
+ if(!bound)r.Refuse(11);
+ const bool enclosing=r.leaf_active;r.leaf_active=true;
+ struct Close {PassiveRun& run;bool previous;~Close(){run.leaf_active=previous;}} close{r,enclosing};
+ const bool result=collection_leaf_original(owner,iterator);
+ if(!result){r.Refuse(6);return false;}
+ if(bound&&r.valid&&!PassiveBoundary(owner,iterator,true))r.Refuse(11);
+ if(bound&&r.valid){++r.leaves;if(r.leaves==r.leaf_metadata.count)PassiveCollected(r.leaf_holder);}
+ return result;
+}
+void PassiveWhole(transaction_root::Holder* holder,bool result) {
+ if(!passive_run)return;auto& r=*passive_run;
+ if(r.trace.whole_collections!=UINT32_MAX)++r.trace.whole_collections;
+ if(!result){r.trace.events.Record(6);r.Refuse(6);return;}
+ transaction_root::Metadata metadata{};transaction_root::Holder header{};
+ if(r.trace.whole_collections!=1){r.Refuse(5);return;}
+ if(!PassiveHolder(holder,&metadata,&header)||r.leaf_holder!=holder||r.leaves!=metadata.count||r.collections!=1||
+    r.leaf_metadata.owners.begin!=metadata.owners.begin||r.leaf_metadata.owners.end!=metadata.owners.end||
+    r.leaf_metadata.owners.capacity!=metadata.owners.capacity||r.leaf_header.array_handle!=header.array_handle||
+    r.leaf_header.redefinitions!=header.redefinitions||
+    std::memcmp(&r.leaf_header.initialized,&header.initialized,3*sizeof(transaction_root::Bits))!=0)r.Refuse(11);
+}
 Item* Matches(void* owner){
   if(!active||!Mapped(owner,sizeof(NativeDefinition)))return nullptr;
   const auto definition=Read<NativeDefinition>(owner,0);
@@ -275,13 +330,13 @@ bool VerificationGraph(void* owner,const transaction_root::Iterator* iterator){
  return GuardGraph(driver,holder,GraphWindow::Verified);
 }
 bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
- if(!active||!active->provider->closed_graph)return collection_leaf_original(owner,iterator);
+ if(!active||!active->provider->closed_graph)return CollectionOriginal(owner,iterator);
  Phase("Class collection leaf");void* driver=nullptr;transaction_root::Holder* holder=nullptr;
  if(!LeafBoundary(owner,iterator,true,&driver,&holder))return false;
  // Missing/wrong earlier hooks refuse here BEFORE collection and its original
  // last bool. Update remains an invariant boundary, never the first refusal.
  if(!active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Collection lacks completed source verification witness");
- if(!collection_leaf_original(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;}
+ if(!CollectionOriginal(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;}
  if(++active->collected_count!=active->items.size())return true;
  if(!GuardGraph(driver,holder,GraphWindow::Collected))return false;
  active->graph_sealed=true;return true;
@@ -297,8 +352,8 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
- if(!collect_original(driver,raw)){if(passive_run){passive_run->trace.events.Record(6);passive_run->Refuse(6);}RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
- PassiveCollected(driver,raw);
+ const bool original_result=collect_original(driver,raw);PassiveWhole(raw,original_result);
+ if(!original_result){RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
  if(!active||!active->provider->closed_graph)return true;
  if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
  if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
