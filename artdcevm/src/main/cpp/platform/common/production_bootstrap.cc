@@ -19,6 +19,9 @@
 #include "platform/abi/arm64/android-common/jni_global_ref.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_schema_guard_verifier.h"
+#include "platform/common/native_final_field_service.h"
+#include "platform/common/native_final_field_calibration.h"
+#include "platform/common/native_reference_decoder.h"
 #include "platform/common/native_removal_policy.h"
 #include "platform/android13/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
@@ -64,6 +67,14 @@ struct NativeEngine final:Engine {
  native_member_provider::Service provider;
  native_schema_guard_verifier::Verifier schema_verifier;
  native_abstract_instances::Service abstract_instances;
+ // Owned by the process backend, never a temporary bootstrap candidate. A
+ // partially installed listener keeps its Service and decoder owner alive.
+ native_reference_decoder::Decoder permission_decoder;
+ exclusive_owned_roots::Service permission_exclusive;
+ std::unique_ptr<final_field_service::Service> permission_service;
+ bool permission_decoder_bound=false,permissions_proven=false;std::string permission_diagnostic;
+ using ThrowException=void (*)(void*,const char*,const char*);
+ ThrowException permission_raise=nullptr;
  std::vector<native_schema_policy::Plan> schema_policies;
  bool schema_operation=false,schema_collected=false,graph_decoder_proven=false;
  native_owned_removal::RootedGraph schema_roots;
@@ -122,7 +133,7 @@ struct NativeEngine final:Engine {
  static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
-  schema_root_env=env;prepared_schema_service.reset();schema_plan_roots={};prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;
+  schema_root_env=env;if(permission_service)permission_service->Clear(env);prepared_schema_service.reset();schema_plan_roots={};prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;
   for(const auto& part:schema_roots.partitions)for(auto array:{part.old_classes,part.new_classes,part.old_instances,part.new_instances})if(array)env->DeleteGlobalRef(array);
   if(schema_roots.mirror)env->DeleteGlobalRef(schema_roots.mirror);schema_roots={};schema_collected=false;schema_policies.clear();schema_verifier.Clear(env);graph_maps.clear();
  }
@@ -139,6 +150,59 @@ struct NativeEngine final:Engine {
     if(now.old_instances&&(!before.old_instances||!before.new_instances))return Fail(error,"Schema instance rooting failed");
    }schema_collected=true;
   }schema_root_env=env;return schema_roots.mirror&&!env->ExceptionCheck();
+ }
+ struct PermissionRunnable {NativeEngine* engine;JNIEnv* env;runnable_jni::Operation operation;void* payload;};
+ static bool PermissionRunnableEnter(const runnable_jni::Context& scope,void* raw){auto& r=*static_cast<PermissionRunnable*>(raw);
+  return redefinition_gate::Owned(r.engine->vm)&&scope.env==r.env&&scope.vm==r.engine->vm&&scope.self==r.engine->graph_current()&&r.operation(scope,r.payload);
+ }
+ static bool PermissionNativeScope(void* raw,JNIEnv* env,jobject root,runnable_jni::Operation operation,void* payload){
+  auto& e=*static_cast<NativeEngine*>(raw);if(!operation||!redefinition_gate::Owned(e.vm)||!e.RefreshMaps(&e.permission_diagnostic))return false;
+  PermissionRunnable request{&e,env,operation,payload};return runnable_executor::With(env,root,PermissionRunnableEnter,&request)==runnable_jni::Result::kSuccess;
+ }
+ struct PermissionStop {NativeEngine* engine;JNIEnv* env;runnable_jni::Operation operation;void* payload;};
+ static bool PermissionStopped(const exclusive_owned_roots::Context& stopped,void* raw){
+  auto& r=*static_cast<PermissionStop*>(raw);if(!redefinition_gate::Owned(r.engine->vm)||stopped.count!=1||!stopped.roots[0])return false;
+  // self comes from the original SuspendAll scope, rechecked against the
+  // native getter; JNI/VM are the independently observed public receivers.
+  if(r.engine->graph_current()!=stopped.self)return false;
+  return r.operation({stopped.self,r.env,r.engine->vm},r.payload);
+ }
+ static bool PermissionExclusiveScope(void* raw,JNIEnv* env,jobject root,runnable_jni::Operation operation,void* payload){
+  auto& e=*static_cast<NativeEngine*>(raw);JavaVM* actual=nullptr;
+  if(!operation||!env||env->GetJavaVM(&actual)!=JNI_OK||actual!=e.vm||!redefinition_gate::Owned(e.vm)||!e.RefreshMaps(&e.permission_diagnostic))return false;
+  PermissionStop request{&e,env,operation,payload};return e.permission_exclusive.With(env,&root,1,PermissionStopped,&request,&e.permission_diagnostic);
+ }
+ static void* PermissionThread(void* raw){return static_cast<NativeEngine*>(raw)->graph_current();}
+ static bool PermissionOracle(void*,const runnable_jni::Context& scope,jobject root,void** out){return runnable_executor::DecodeStrongGlobal(scope,root,out);}
+ static bool PermissionGlobal(void* raw,jobject root,void** out){auto& e=*static_cast<NativeEngine*>(raw);
+  return e.permission_decoder.Strong({e.graph_current(),e.schema_root_env,e.vm},native_reference_decoder::Scope::NoSuspend,root,out);}
+ static bool PermissionWeak(void* raw,void* thread,jweak root,void** out){return static_cast<NativeEngine*>(raw)->permission_decoder.Weak(thread,native_reference_decoder::Scope::Runnable,root,out);}
+ static bool RegisterPermissionStrong(void* raw,JNIEnv* env,jobject root,std::string* error){return static_cast<NativeEngine*>(raw)->permission_decoder.RegisterStrong(env,root,error);}
+ static bool RegisterPermissionWeak(void* raw,JNIEnv* env,jweak root,std::string* error){return static_cast<NativeEngine*>(raw)->permission_decoder.RegisterWeak(env,root,error);}
+ static void ForgetPermissionRoot(void* raw,jobject root){static_cast<NativeEngine*>(raw)->permission_decoder.Forget(root);}
+ static void ForgetPermissionWeak(void* raw,jweak root){ForgetPermissionRoot(raw,root);}
+ static void RaisePermission(void* raw,void* self,const char* type,const char* text){auto& e=*static_cast<NativeEngine*>(raw);if(!self||!e.permission_raise)std::abort();e.permission_raise(self,type,text);}
+ native_schema_guard_verifier::Bindings SchemaBindings(){
+  native_schema_guard_verifier::Bindings b;b.vm=vm;b.metadata=&metadata;b.methods=&model;b.abstract_instances=&abstract_instances;b.owner=this;
+  b.decode_global=DecodeGraph;b.decode_method=DecodeGraphMethod;b.decode_field=DecodeGraphField;b.method_class=GraphMethodClass;b.same_method=GraphSame;b.readable=GraphReadable;b.writable=GraphWritable;
+  if(permissions_proven){b.final_fields=permission_service.get();b.access_permissions=permission_service.get();}return b;
+ }
+ bool PreparePermissionOwner(JNIEnv* env){
+  schema_root_env=env;if(permissions_proven)return true;
+  if(!permission_decoder_bound){
+   if(!permission_decoder.Bind(hooks,{this,vm,PermissionThread,PermissionOracle,PermissionNativeScope},&permission_diagnostic))return false;
+   permission_decoder_bound=true;
+  }
+  if(!permission_decoder.Ready()&&!permission_decoder.Calibrate(env,anchor,field_handles[0].strong_global,&permission_diagnostic))return false;
+  if(!permission_service){
+   permission_raise=reinterpret_cast<ThrowException>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"));
+   if(!permission_raise||!exclusive_owned_roots::Service::Bind(hooks,&permission_exclusive,&permission_diagnostic))return false;
+   final_field_service::Bindings b;b.native=SchemaBindings();b.native.decode_global=PermissionGlobal;b.registry=&retired_fields;b.decode_weak=PermissionWeak;b.raise=RaisePermission;
+   b.register_strong=RegisterPermissionStrong;b.forget_strong=ForgetPermissionRoot;b.register_weak=RegisterPermissionWeak;b.forget_weak=ForgetPermissionWeak;
+   permission_service=std::make_unique<final_field_service::Service>(b);
+  }
+  permissions_proven=final_field_calibration::Run(env,{this,permission_service.get(),&hooks,runtime.instrumentation,PermissionNativeScope,PermissionExclusiveScope},&permission_diagnostic);
+  return permissions_proven;
  }
  static void* GraphReference(void* raw,void* array,size_t offset){return static_cast<NativeEngine*>(raw)->metadata.Reference(array,offset);}
  bool RootedSchemaPlan(source_commit::Plan* plan,std::string* error){
@@ -239,6 +303,10 @@ struct NativeEngine final:Engine {
   d.allow_field_removal=s.handles_proven;d.handle_guards={&s,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
   if(s.schema_operation){
    if(&p!=&s.prepared_schema_plan||!s.schema_collected||!s.schema_verifier.Seal(p,error)||!s.PrepareSchemaPolicy(p,error))return nullptr;
+   if(!s.permissions_proven)for(const auto& policy:s.schema_policies)for(const auto& requirement:policy.Requirements())
+    if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
+     if(error)*error="Actual final/access permission calibration unavailable: "+s.permission_diagnostic;return nullptr;
+    }
    d.expected_removal=native_member_provider::Removal::kSchemaEvolution;d.schemas=&s.schema_policies;d.schema_guards=&s.schema_verifier;
   }
   return s.provider.Prepare(p,d,error);
@@ -249,6 +317,7 @@ struct NativeEngine final:Engine {
   if(!e.schema_registry.Resolve())return nullptr;const auto resolver=e.schema_registry.Final();
   if(!e.schema_plan_roots.CanRefresh(resolver)||!e.schema_verifier.CanRefreshManagedRoots(resolver))return nullptr;
   e.schema_plan_roots.Refresh(resolver);
+  if(e.permissions_proven&&!e.permission_service->Seal(e.prepared_schema_plan,nullptr))return nullptr;
   if(!rooted_schema_plan::Matches(e.schema_roots,{&e,DecodeGraph,GraphReadable,GraphReference},e.prepared_schema_plan)||
      !e.schema_verifier.RefreshManagedRoots(e.prepared_schema_plan,resolver)||
      !e.provider.RefreshManagedRoots(e.prepared_schema_plan,*e.prepared_schema_service,resolver))return nullptr;
@@ -482,9 +551,8 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  if(graph_bases.size()!=definitions.size())return false;
  if(runnable_executor::With(env,anchor,ObserveGraphReaders,this)!=runnable_jni::Result::kSuccess)return Fail(error,"Native graph decoder differs from original rooted public field/Class oracles");
  if(schema_operation){
-  native_schema_guard_verifier::Bindings bindings;bindings.vm=vm;bindings.metadata=&metadata;bindings.methods=&model;bindings.abstract_instances=&abstract_instances;bindings.owner=this;
-  bindings.decode_global=DecodeGraph;bindings.decode_method=DecodeGraphMethod;bindings.decode_field=DecodeGraphField;bindings.method_class=GraphMethodClass;bindings.same_method=GraphSame;bindings.readable=GraphReadable;bindings.writable=GraphWritable;
-  if(!schema_verifier.Stage(env,ti,graph_bases,bindings,error))return false;
+  PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
+  if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
  }return true;
 }
 bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,const native_owned_removal::RootedGraph& rooted,native_owned_removal::GraphWindow window,void* raw,std::string* error){
@@ -532,8 +600,18 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
  if(e.schema_operation){
   const auto checkpoint=window==native_owned_removal::GraphWindow::Verified?native_schema_guard_verifier::Window::Verified:native_schema_guard_verifier::Window::Collected;
   if(!e.CaptureSchemaRoots(env,rooted,window,error)||!e.schema_verifier.CheckWindow(env,ti,actual,checkpoint,error))return false;
+  if(window==native_owned_removal::GraphWindow::Verified&&e.permissions_proven){
+   std::vector<jclass> old_classes,replacements;
+   struct Locals{JNIEnv* env;std::vector<jclass>& a;std::vector<jclass>& b;~Locals(){for(auto root:a)env->DeleteLocalRef(root);for(auto root:b)env->DeleteLocalRef(root);}} release{env,old_classes,replacements};
+   for(const auto& part:rooted.partitions)for(size_t n=0;n<part.class_count;++n){
+    old_classes.push_back(static_cast<jclass>(env->GetObjectArrayElement(part.old_classes,static_cast<jsize>(n))));
+    replacements.push_back(static_cast<jclass>(env->GetObjectArrayElement(part.new_classes,static_cast<jsize>(n))));
+   }
+   if(env->ExceptionCheck()||!e.permission_service->Stage(env,ti,old_classes,replacements,error))return false;
+  }
   if(window==native_owned_removal::GraphWindow::Collected){
    if(!e.RefreshMaps(error)||!e.RootedSchemaPlan(&e.prepared_schema_plan,error))return false;
+   if(e.permissions_proven&&(!e.permission_service->PreparePermissions(e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error)))return false;
    e.prepared_schema_service=PrepareCommit(e.prepared_schema_plan,&e,error);
    if(!e.prepared_schema_service||!e.prepared_schema_service->Validate(e.prepared_schema_plan))return false;
    const auto registrar=e.schema_registry.Collect();
