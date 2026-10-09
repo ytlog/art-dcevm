@@ -135,9 +135,16 @@ struct Authority::State {
  bool Flags(void* klass,uint32_t flags)const {
   size_t extent=0;class_metadata::State state;const auto& layout=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;return Extent(klass,&extent)&&class_metadata::ReadState(layout,klass,extent,&state)&&!state.IsPrimitive()&&(state.access_flags&0x7631u)==(flags&0x7631u);
  }
- bool Native(bool replacements)const{
+ bool Native(bool replacements,std::string* error=nullptr)const{
   for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];field_copy::CopyClassView view;
-   void* original_parent=nullptr;if(!NativeSuperclass(graph,node,false,&original_parent)||!Flags(node.klass,node.flags)||!bindings.metadata->ClassIdentity(node.klass,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=original_parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.klass,native_before[n],nullptr,Context()))return false;
+   const auto reject=[&](const char* reason){if(error)*error=std::string(reason)+": "+node.descriptor;return false;};
+   void* original_parent=nullptr;
+   if(!NativeSuperclass(graph,node,false,&original_parent))return reject("Native superclass identity unavailable");
+   if(!Flags(node.klass,node.flags))return reject("Native/public Class flags differ");
+   if(!bindings.metadata->ClassIdentity(node.klass,&view,error,Context()))return false;
+   if(view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor)return reject("Native/public Class namespace differs");
+   if(view.parent!=original_parent)return reject("Native/public superclass differs");
+   if(!native_interface_graph::MatchesInContext(*bindings.metadata,node.klass,native_before[n],error,Context()))return reject("Native/public interface identities differ");
    if(replacements&&node.affected){void* parent=node.proposed_parent==absent?nullptr:(graph.nodes[node.proposed_parent].replacement?graph.nodes[node.proposed_parent].replacement:graph.nodes[node.proposed_parent].klass);
     if(!node.replacement||!Flags(node.replacement,node.ProposedFlags())||!bindings.metadata->ClassIdentity(node.replacement,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.replacement,native_after[n],nullptr,Context()))return false;
    }
@@ -213,7 +220,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::ReadInContext(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error,s.Context())||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=native_index.find(k);if(it==native_index.end())return Fail(error,"Native interface outside exact public graph");s.order_before[i].push_back(it->second);}}
  }
  trace.Mark("native-interfaces",s.graph.nodes.size());
- if(!s.Native(false)||!s.OwnersStaged(error))return Fail(error,"Actual allocation/receiver/type-cache proof absent or rejected");trace.Mark("owners",s.graph.nodes.size());s.staged=true;success=true;return true;
+ if(!s.Native(false,error))return false;if(!s.OwnersStaged(error))return false;trace.Mark("owners",s.graph.nodes.size());s.staged=true;success=true;return true;
 }
 bool Authority::CheckClass(const runnable_jni::Context& context,jclass original,const evolution::ClassSchema& schema,jvmtiError* expected_failure)noexcept{
  auto& s=*state_;State::OrdinaryRead ordinary{s};if(!ordinary.Ready()||!s.staged||s.sealed||!s.Borrow(context))return false;
