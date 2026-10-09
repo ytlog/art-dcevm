@@ -15,7 +15,7 @@ struct RootedPartition {
   jobjectArray old_instances=nullptr,new_instances=nullptr;
   size_t holder_index=0,class_count=0,instance_count=0;
 };
-struct RootedGraph {jclass mirror=nullptr;std::vector<RootedPartition> partitions;const void* holder=nullptr;};
+struct RootedGraph {jclass mirror=nullptr;std::vector<RootedPartition> partitions;const void* holder=nullptr;transaction_root::Metadata metadata{};};
 struct Provider {
   bool (*ready)(void*)=nullptr;
   std::unique_ptr<source_commit::Services> (*prepare)(

@@ -1,5 +1,6 @@
 #include "platform/common/native_hierarchy_source_checks.h"
 #include "platform/common/source_check_episode.h"
+#include "platform/android13/platform_string_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
@@ -40,9 +41,28 @@ void Failure(void* driver,jvmtiError code,const void* signature,const void* mess
 }
 void SetFailureObserver(FailureObserver observer)noexcept{failure_observer.store(observer,std::memory_order_release);}
 bool Ready(FailureObserver expected)noexcept{return expected&&installed.load(std::memory_order_acquire)&&failure_observer.load(std::memory_order_acquire)==expected;}
+void RefuseActualClass(void* owner,int code,const char* reason) noexcept {
+ // An invalid source-owner invocation is an integration invariant, not an
+ // invitation to synthesize a JVMTI success or directly modify driver.result.
+ if(!installed.load(std::memory_order_acquire)||!failure_original||!reason||!scope||!scope->OwnsClassOwner(owner))std::abort();
+ const auto d=Read<Definition>(owner);
+ if(!d.driver||!Mapped(d.driver,sizeof(DriverPrefix)))std::abort();
+ const void* signature=static_cast<const unsigned char*>(owner)+offsetof(Definition,class_signature);
+ android13::BorrowedPlatformString message(reason);
+ // Call the sole forwarded original directly: a new owner refusal must never
+ // be suppressed as the original single hierarchy-comparison episode.
+ ForwardFailure(d.driver,static_cast<jvmtiError>(code),signature,&message);
+}
 Scope::Scope(void* driver,const runnable_jni::Context& context,source_handle_roots::Service& roots,
  native_hierarchy_graph::Authority& authority,Refuse refuse):driver_(driver),context_(context),roots_(roots),authority_(authority),refuse_(refuse),previous_(scope){scope=this;}
 Scope::~Scope(){if(scope!=this)std::abort();scope=previous_;}
+bool Scope::OwnsClassOwner(const void* owner)const noexcept{
+ if(scope!=this||!context_.env||!context_.self||!Mapped(owner,sizeof(Definition))||!Mapped(driver_,sizeof(DriverPrefix)))return false;
+ const auto d=Read<Definition>(owner);const auto p=Read<DriverPrefix>(driver_);
+ if(d.driver!=driver_||p.self!=context_.self||!p.environment||p.type!=0)return false;
+ const auto*g=authority_.Staged();if(!g||g->inputs.empty()||g->inputs.front()>=g->nodes.size())return false;
+ void*live=nullptr;return roots_.BorrowOwnedStrongGlobal(context_,g->nodes[g->inputs.front()].strong_class,&live)&&live;
+}
 bool Scope::Proof(void* owner) {
  if(!installed||!refuse_||!context_.env||!context_.self||!roots_.Calibrated()||
     !Mapped(owner,sizeof(Definition))||!Mapped(driver_,sizeof(DriverPrefix)))return false;

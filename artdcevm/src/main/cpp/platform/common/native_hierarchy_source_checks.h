@@ -13,6 +13,7 @@ class Scope final {
        source_handle_roots::Service&,native_hierarchy_graph::Authority&,Refuse);
  ~Scope();Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
  bool Check(void* actual_class_owner,bool(*original)(void*));
+ bool OwnsClassOwner(const void*)const noexcept;
  private:
  bool Proof(void*);
  bool Mark(void*);
@@ -27,5 +28,8 @@ using FailureObserver=void(*)(void* actual_driver,jvmtiError)noexcept;
 // occurs only for forwarded original failures; suppressed hierarchy66 is absent.
 void SetFailureObserver(FailureObserver)noexcept;
 bool Ready(FailureObserver exact_observer)noexcept;
+// Typed failure bridge for allocator/session refusals. Uses the actual Class
+// owner signature and sole original RecordFailure; never writes result fields.
+void RefuseActualClass(void* actual_class_owner,int,const char*) noexcept;
 bool Install(HookEngine&,std::string*);
 }

@@ -78,7 +78,11 @@ class Authority final {
  bool AuthorizeAllocation(const runnable_jni::Context&,const Prepared&,std::string*);
  bool PrepareLinked(const runnable_jni::Context&,Prepared*,std::string*);
  bool VerifyPrepared(const runnable_jni::Context&,const Prepared&,std::string*);
+ // Ordinary Collected root-layout capture. This freezes native pointer slots
+ // for preregistration but grants no graph or commit permission.
+ bool PrepareRoots(const source_commit::Plan&,std::string*);
  // Collected source owner window, after all actual early allocations/linking.
+ // After PrepareRoots/registration this validates without copying containers.
  bool Seal(const source_commit::Plan&,std::string*);
  bool Verify(const source_commit::Plan&,size_t pair)const noexcept;
  bool CollectManagedRoots(const prepared_roots::Registrar&);

@@ -219,7 +219,7 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
     size_t(slots)/abi::arm64::android11::kRootSlots!=request.items.size()||
     !transaction_root::ReadMetadata(holder,request.items.size(),transaction_root::OwnerFamily::kAndroid15,&metadata)||
     !Mapped(metadata.initial_structural.begin,8*((metadata.count+63)/64)))return reject("Precommit root partition disagrees with whole batch");
- RootedGraph graph;graph.holder=raw;std::vector<jobject> arrays;
+ RootedGraph graph;graph.holder=raw;graph.metadata=metadata;std::vector<jobject> arrays;
  struct ArrayLocals {JNIEnv* env;std::vector<jobject>& values;~ArrayLocals(){for(auto value:values)env->DeleteLocalRef(value);}} array_locals{request.env,arrays};
  std::vector<jclass> classes;
  struct Locals {JNIEnv* env;std::vector<jclass>& values;~Locals(){for(auto value:values)env->DeleteLocalRef(value);}} locals{request.env,classes};

@@ -68,7 +68,7 @@ struct Authority::State {
  const source_commit::Plan* plan=nullptr;void* mirror=nullptr;void* new_root=nullptr;
  std::vector<void*> old_classes,new_classes,old_instances,new_instances;
  std::vector<source_commit::ClassRootOrigin> origins;bool abstract_instances=false;
- bool staged=false,sealed=false,collected=false,registration_started=false;
+ bool staged=false,roots_prepared=false,sealed=false,collected=false,registration_started=false;
  bool OwnersStaged(std::string* e)const{return bindings.allocation->VerifyStaged(graph,inputs,e)&&bindings.receivers->VerifyStaged(graph,inputs,e)&&bindings.caches->VerifyStaged(graph,inputs,e);}
  bool Owners(const source_commit::Plan& p)const noexcept{return bindings.allocation->Verify(graph,p)&&bindings.receivers->Verify(graph,p)&&bindings.caches->Verify(graph,p);}
  bool Borrow(const runnable_jni::Context& c) {
@@ -165,14 +165,36 @@ bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepar
  evolution::ClassSchema declarations=*p.declarations; // All fallible work precedes publication.
  s.allocation_declarations[index]=std::move(declarations);Prepared owned=p;owned.declarations=&s.allocation_declarations[index];s.allocations.push_back(owned);s.order_after[index]=std::move(order);s.native_after[index]=std::move(interfaces);it->replacement=p.new_class;return true;
 }
-bool Authority::Seal(const source_commit::Plan& p,std::string* error){auto& s=*state_;if(!s.staged||s.sealed||p.old_classes.size()!=p.new_classes.size())return false;size_t affected=0;
+bool Authority::PrepareRoots(const source_commit::Plan& p,std::string* error){
+ auto& s=*state_;
+ if(!s.staged||s.roots_prepared||s.sealed||s.registration_started||p.old_classes.size()!=p.new_classes.size())return Fail(error,"Root preparation requires fresh complete source allocation graph");
+ size_t affected=0;
  for(const auto& n:s.graph.nodes)if(n.affected){++affected;size_t found=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++found;if(found!=1)return Fail(error,"Source Plan omitted or duplicated actual affected allocation");}
- if(affected!=p.old_classes.size()||!s.Native(true)||!s.Owners(p))return Fail(error,"Complete prepared graph or native source owner proof rejected");s.plan=&p;s.mirror=p.mirror;s.new_root=p.new_classes_root;s.old_classes=p.old_classes;s.new_classes=p.new_classes;s.old_instances=p.old_instances;s.new_instances=p.new_instances;s.origins=p.class_root_origins;s.abstract_instances=p.abstract_instances;s.sealed=true;return true;
+ if(affected!=p.old_classes.size()||!s.Native(true))return Fail(error,"Root preparation lacks actual complete native replacement graph");
+ // Native storage allocation happens only here, before managed registration.
+ // Final Seal never writes or resizes a registered location.
+ s.plan=&p;s.mirror=p.mirror;s.new_root=p.new_classes_root;s.old_classes=p.old_classes;s.new_classes=p.new_classes;
+ s.old_instances=p.old_instances;s.new_instances=p.new_instances;s.origins=p.class_root_origins;s.abstract_instances=p.abstract_instances;
+ s.roots_prepared=true;return true;
+}
+bool Authority::Seal(const source_commit::Plan& p,std::string* error){
+ auto& s=*state_;
+ if(!s.roots_prepared){
+  // Legacy direct Seal must remain retryable after a rejected owner proof;
+  // do not freeze a bad candidate into the new preregistration layout.
+  if(!s.staged||s.sealed||!s.Native(true)||!s.Owners(p)||!PrepareRoots(p,error))return false;
+ }
+ if(s.sealed||s.plan!=&p||p.old_classes!=s.old_classes||p.new_classes!=s.new_classes||p.mirror!=s.mirror||p.new_classes_root!=s.new_root||p.old_instances!=s.old_instances||p.new_instances!=s.new_instances||p.abstract_instances!=s.abstract_instances||p.class_root_origins.size()!=s.origins.size())return Fail(error,"Source Plan changed after root-layout preparation");
+ for(size_t i=0;i<s.origins.size();++i)if(p.class_root_origins[i].array!=s.origins[i].array||p.class_root_origins[i].index!=s.origins[i].index)return Fail(error,"Source origin changed after root-layout preparation");
+ size_t affected=0;
+ for(const auto& n:s.graph.nodes)if(n.affected){++affected;size_t found=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++found;if(found!=1)return Fail(error,"Refreshed Plan differs from actual affected allocation");}
+ if(affected!=p.old_classes.size()||!s.Native(true)||!s.Owners(p))return Fail(error,"Complete prepared graph or native source owner proof rejected");
+ s.sealed=true;return true;
 }
 bool Authority::Verify(const source_commit::Plan& p,size_t pair)const noexcept{const auto& s=*state_;if(!s.sealed||s.plan!=&p||pair>=p.old_classes.size()||p.old_classes.size()!=p.new_classes.size()||p.old_classes!=s.old_classes||p.new_classes!=s.new_classes||p.mirror!=s.mirror||p.new_classes_root!=s.new_root||p.old_instances!=s.old_instances||p.new_instances!=s.new_instances||p.abstract_instances!=s.abstract_instances||p.class_root_origins.size()!=s.origins.size())return false;for(size_t i=0;i<s.origins.size();++i)if(p.class_root_origins[i].array!=s.origins[i].array||p.class_root_origins[i].index!=s.origins[i].index)return false;
  size_t count=0;for(const auto& n:s.graph.nodes)if(n.affected){++count;size_t matches=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++matches;if(matches!=1)return false;}return count==p.old_classes.size()&&s.Native(true)&&s.Owners(p);
 }
-bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.sealed||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
+bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
 bool Authority::CanRefresh(const prepared_roots::Resolver& r)const noexcept{return state_->collected&&state_->roots.CanRefresh(r);}
 void Authority::Refresh(const prepared_roots::Resolver& r)noexcept{assert(CanRefresh(r));state_->roots.Refresh(r);}
 void Authority::BeginCommit(const source_commit::Plan& p)const noexcept{const auto& s=*state_;assert(s.sealed&&s.plan==&p);s.bindings.allocation->BeginCommit(s.graph,p);s.bindings.receivers->BeginCommit(s.graph,p);s.bindings.caches->BeginCommit(s.graph,p);}
