@@ -22,6 +22,8 @@ bool Owner::Prepare(HookEngine& hooks,const modern_field_storage::Service& stora
  }
  if(!runtime.runtime||!runtime.receivers.java_vm||!context.env||!context.self||context.vm!=runtime.receivers.java_vm)
   return Error(error,"Production schema preparation requires the actual Runtime/VM/context");
+ current_=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ if(!current_||current_()!=context.self)return Error(error,"Production schema Native preparation current Thread differs");
  JavaVM* actual=nullptr;
  if(context.env->GetJavaVM(&actual)!=JNI_OK||actual!=runtime.receivers.java_vm||context.env->ExceptionCheck())
   return Error(error,"Production schema preparation JNI VM does not match");
@@ -29,8 +31,6 @@ bool Owner::Prepare(HookEngine& hooks,const modern_field_storage::Service& stora
     !native_source_dex_registry::Service::Bind(hooks,runtime,&registry_,error)||
     !native_class_lookup::Service::Bind(hooks,runtime,&lookup_,error)||
     !source_handle_roots::Service::Bind(hooks,storage,&roots_,error))return false;
- current_=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
- if(!current_||current_()!=context.self)return Error(error,"Production schema Native preparation current Thread differs");
  const auto state=__atomic_load_n(static_cast<const uint32_t*>(context.self),__ATOMIC_RELAXED);
  if((state>>abi::arm64::android13::kStateShift)==abi::arm64::android13::kNative){state_shift_=abi::arm64::android13::kStateShift;native_state_=abi::arm64::android13::kNative;}
  else if((state>>abi::arm64::android11::kStateShift)==abi::arm64::android11::kNative){state_shift_=abi::arm64::android11::kStateShift;native_state_=abi::arm64::android11::kNative;}

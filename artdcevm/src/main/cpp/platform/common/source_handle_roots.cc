@@ -45,10 +45,17 @@ bool Service::Bind(HookEngine& hooks,const modern_field_storage::Service& storag
  if((state>>abi::arm64::android13::kStateShift)==abi::arm64::android13::kNative){candidate.shift_=abi::arm64::android13::kStateShift;candidate.runnable_=abi::arm64::android13::kRunnable;}
  else if((state>>abi::arm64::android11::kStateShift)==abi::arm64::android11::kNative){candidate.shift_=abi::arm64::android11::kStateShift;candidate.runnable_=abi::arm64::android11::kRunnable;}
  else return Fail(error,"Handle-root binding requires independently owned ordinary Native JNI");
- output->decode_=candidate.decode_;output->current_=candidate.current_;output->visit_=candidate.visit_;output->prefix_=candidate.prefix_;output->top_=candidate.top_;output->shift_=candidate.shift_;output->runnable_=candidate.runnable_;if(error)error->clear();return true;
+ output->decode_=candidate.decode_;output->current_=candidate.current_;output->visit_=candidate.visit_;output->prefix_=candidate.prefix_;output->top_=candidate.top_;output->shift_=candidate.shift_;output->runnable_=candidate.runnable_;
+ output->bound_self_=self;output->bound_prefix_=candidate.prefix_+sizeof(HandleThreadPrefix);if(error)error->clear();return true;
 }
 bool Service::Runnable(void* self)const{
- return self&&current_&&current_()==self&&Mapped(self,prefix_+sizeof(HandleThreadPrefix))&&
+ if(!self||!current_||current_()!=self)return false;
+ // The named current Thread is still the exact binding-time live Thread. Its
+ // calibrated readable prefix contains this fixed atomic state word. Reject
+ // Native before an OS query; this does not authorize Native TLS/root access.
+ if(self==bound_self_&&bound_prefix_>=sizeof(uint32_t)&&
+    (__atomic_load_n(static_cast<const uint32_t*>(self),__ATOMIC_RELAXED)>>shift_)!=runnable_)return false;
+ return Mapped(self,prefix_+sizeof(HandleThreadPrefix))&&
   Read<void*>(self,prefix_+offsetof(HandleThreadPrefix,self))==self&&
   (__atomic_load_n(static_cast<const uint32_t*>(self),__ATOMIC_RELAXED)>>shift_)==runnable_;
 }

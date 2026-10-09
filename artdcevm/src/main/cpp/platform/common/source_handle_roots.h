@@ -39,6 +39,10 @@ class Service final {
   abi::arm64::android_common::HandleVisitRoots visit_=nullptr;
   size_t prefix_=0,top_=0;
   unsigned shift_=0;uint32_t runnable_=0;
+  // Exact current Thread and readable prefix independently checked at Native
+  // binding. A matching named Current establishes that Thread's live lifetime;
+  // cached bounds permit an early state-only refusal, never a read permission.
+  void* bound_self_=nullptr;size_t bound_prefix_=0;
   std::atomic<bool> calibrated_{false};
 };
 // A GC-updated compressed root slot stays stable; Get returns only a borrowed

@@ -64,6 +64,8 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  runtime_services::Snapshot observed;observed.runtime=&runtime;observed.receivers.class_linker=&linker;observed.receivers.java_vm=&runtime;
  auto foreign=c;foreign.vm=&linker;
  assert(!owner.Prepare(hooks,storage,metadata,observed,foreign,&error)&&!owner.Prepared());
+ auto foreign_self=c;foreign_self.self=foreign_thread.data();
+ assert(!owner.Prepare(hooks,storage,metadata,observed,foreign_self,&error)&&!owner.Prepared());
  Put32(thread.data(),0,92u<<24);
  assert(owner.Prepare(hooks,storage,metadata,observed,c,&error)&&owner.Prepared()&&!owner.Ready());
  native_schema_run_state::Dependencies dependencies;

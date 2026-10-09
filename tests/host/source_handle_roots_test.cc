@@ -143,6 +143,13 @@ int main(){
   return true;
  };
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),use,&use_data)==runnable_jni::Result::kSuccess);assert(Top()==original&&!service.CreateScope(1,&error)&&!service.ReadyForSourceAccess());
+ const auto native_queries=method_identity::MappingOsQueries();void* unchanged=new_class;
+ runnable_jni::Context native{self,source_env,&runtime};
+ assert(!service.ReadyForSourceAccess()&&!service.BorrowHandle(native,public_slot,&unchanged)&&unchanged==new_class);
+ assert(!service.BorrowOwnedStrongGlobal(native,reinterpret_cast<jobject>(old_class),&unchanged)&&unchanged==new_class);
+ auto foreign_native=native;foreign_native.self=reinterpret_cast<void*>(uintptr_t(1));
+ assert(!service.BorrowHandle(foreign_native,public_slot,&unchanged)&&unchanged==new_class);
+ assert(method_identity::MappingOsQueries()==native_queries);
  Publish(nullptr);
  std::cout<<"Source handle roots: real field/card oracle prerequisite, named current/TLS self, actual source handle/strong Class/visitor identity, foreign/cyclic/bad root info/hidden owned scopes refuse, nested zeroed roots update and restore exact chain; Native publication refuses\n";
  return 0;

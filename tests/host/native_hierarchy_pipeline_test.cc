@@ -224,7 +224,7 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
   {native_hierarchy_source_checks::Scope scope(&actual_driver,context,*d.roots,authority,SourceRefuse);const auto notifications=source_failure_notifications;native_hierarchy_source_checks::RefuseActualClass(&actual_owner,JVMTI_ERROR_OUT_OF_MEMORY,"actual typed refusal");assert(actual_driver.result==JVMTI_ERROR_OUT_OF_MEMORY&&source_failure_notifications==notifications+1&&actual_failure_message=="actual typed refusal");actual_driver.result=113;}
   native_hierarchy_source_checks::SetFailureObserver(nullptr);{native_hierarchy_session::Session refused({&actual_driver,context,&hooks,d.metadata,d.roots,&pool,&authority,&allocation,&access,SourceRefuse,NotifyFailure});assert(!refused.Ready()&&!native_hierarchy_session::Session::Current());}native_hierarchy_source_checks::SetFailureObserver(NotifyFailure);
   {native_source_class_loading::Run loading(class_loading,&actual_driver,context);PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);assert(!loading.Paused());native_hierarchy_session::Session session({&actual_driver,context,&hooks,d.metadata,d.roots,&pool,&authority,&allocation,&access,SourceRefuse,NotifyFailure});assert(session.Ready()&&native_hierarchy_session::Session::Current()==&session);transaction_root::Iterator iter{0,&holder};assert(!session.BeforeVerification(&actual_owner,&iter,&error));selected_parent=inserted;session_old_handle=old_root;session_cache_handle=cache_root;
-   auto foreign_owner=actual_owner;Driver foreign_driver=actual_driver;foreign_owner.driver=&foreign_driver;assert(session_finish_proxy(&foreign_owner,&holder,&iter)&&untouched_finish_calls==2);assert(session_finish_proxy(&actual_owner,&holder,&iter));auto*result=session_allocated;assert(result==relocated_new&&relocated_new&&allocated==2);native_hierarchy_source_cache::RecordView record;assert(access.At(0,&record));assert(session.BeforeVerification(&actual_owner,&iter,&error));session.AfterVerification(&actual_owner,&iter,true);assert(!mapper.VerifyStaged(*authority.Staged(),{proposal},&error));assert(pool.Read(record.new_root,&result)&&result==relocated_new);
+   auto foreign_owner=actual_owner;Driver foreign_driver=actual_driver;foreign_owner.driver=&foreign_driver;assert(session_finish_proxy(&foreign_owner,&holder,&iter)&&untouched_finish_calls==2);assert(session_finish_proxy(&actual_owner,&holder,&iter));auto*result=session_allocated;assert(result==relocated_new&&relocated_new&&allocated==2);native_hierarchy_source_cache::RecordView record;const auto view_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(access.At(0,&record));assert(!access.At(1,&record));assert(method_identity::MappingOsQueries()==view_queries);forbid_allocation=false;assert(session.BeforeVerification(&actual_owner,&iter,&error));session.AfterVerification(&actual_owner,&iter,true);assert(!mapper.VerifyStaged(*authority.Staged(),{proposal},&error));assert(pool.Read(record.new_root,&result)&&result==relocated_new);
    auto*types=static_cast<type_cache::Dual*>(cache);assert(reinterpret_cast<type_cache::Pair*>(types->types)[subject_index%1024].object==uint32_t(uintptr_t(result)));assert(reinterpret_cast<uint32_t*>(types->types_array)[subject_index]==uint32_t(uintptr_t(result)));assert(!reinterpret_cast<method_cache::Pair*>(types->fields)[0].method&&!reinterpret_cast<method_cache::Pair*>(types->methods)[0].method);
    Prepared forbidden{record.source_owner,old_class,nullptr,cache,inserted,0,record.declarations,record.old_root};assert(!authority.AuthorizeAllocation(context,forbidden,&error));
    source_commit::Plan plan;plan.old_classes={old_class};plan.new_classes={result};
@@ -306,7 +306,30 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
    publication_proxy(&linker,{uintptr_t(cache)},{uintptr_t(actual_loader)});assert(publication_calls==2);assert(!published_ledger.VerifyPrivate(records.record,source,context,pool));
    std::vector<void*>roots;prepared_roots::Registrar registrar{&roots,[](void*o,void*v,size_t*n){auto&r=*static_cast<std::vector<void*>*>(o);*n=r.size();r.push_back(v);return true;}};assert(published_ledger.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&roots,[](void*o,size_t n)noexcept{const auto&r=*static_cast<std::vector<void*>*>(o);return n<r.size()?r[n]:nullptr;}};
    auto*moved=heap.New(160);std::memcpy(moved,relocated_new,160);for(auto&v:roots)if(v==relocated_new)v=moved;
-   Stop(nullptr,"actual ledger final witness",false);final_fixture.final=true;Put32(context.self,0,92u<<24);assert(!pool.ReadyForSourceAccess());forbid_allocation=true;published_ledger.Refresh(resolver);void*read=nullptr;assert(published_ledger.ReadStoppedRoot(empty,&read)&&read==moved);assert(!published_ledger.VerifyCommit(expected,exact));exact.new_classes[0]=moved;assert(published_ledger.VerifyCommit(expected,exact));published_ledger.BeginCommit(expected,exact);assert(final_fixture.commits==1);forbid_allocation=false;Put32(context.self,0,0);final_fixture.final=false;Resume(nullptr);
+   {
+    // Actual Batch root access uses the actual Ledger, whose registered roots
+    // have been refreshed. The independent final-runtime leaf remains the
+    // explicit CleanupOwner fixture above; it does not grant production stop.
+    native_hierarchy_allocator::Batch root_batch(allocation,context,authority,pool);
+    root_batch.SetStoppedReader(&published_ledger);
+    Stop(nullptr,"actual ledger final witness",false);final_fixture.final=true;Put32(context.self,0,92u<<24);
+    const auto stopped_queries=method_identity::MappingOsQueries();forbid_allocation=true;
+    assert(!pool.ReadyForSourceAccess());published_ledger.Refresh(resolver);
+    void*read=nullptr;assert(published_ledger.ReadStoppedRoot(empty,&read)&&read==moved);
+    assert(root_batch.Get(empty)==moved&&!root_batch.Get(&actual_driver));
+    native_hierarchy_allocator::Batch::RecordView absent;assert(!root_batch.At(0,&absent));
+    assert(!published_ledger.VerifyCommit(expected,exact));exact.new_classes[0]=moved;
+    assert(published_ledger.VerifyCommit(expected,exact));
+    // Withholding the independent stopped owner cannot fall back to Runnable
+    // root permission or trigger OS mapping queries on this Native Thread.
+    final_fixture.final=false;assert(!root_batch.Get(empty));
+    read=old_class;assert(!published_ledger.ReadStoppedRoot(empty,&read)&&read==old_class);
+    final_fixture.final=true;assert(root_batch.Get(empty)==moved);
+    published_ledger.BeginCommit(expected,exact);assert(final_fixture.commits==1);
+    assert(method_identity::MappingOsQueries()==stopped_queries);
+    forbid_allocation=false;Put32(context.self,0,0);final_fixture.final=false;Resume(nullptr);
+    assert(root_batch.Complete(false,&error));
+   }
    Put32(old_class,offsetof(class_metadata::Class11,class_loader),saved_loader);class_remove_proxy(&linker,&p);assert(loading.Complete(true));std::memset(&holder,0,sizeof(holder));assert(published_ledger.ReleaseAfterRun(true)); // no dead Holder reads.
    records.enabled=false;native_hierarchy_private_ledger::Ledger missing_cleanup(&actual_driver,context,pool,records,*d.metadata,registry,nullptr);assert(!missing_cleanup.VerifyStaged(expected,{proposal}));assert(!missing_cleanup.FinalRootWindow());assert(missing_cleanup.ReleaseAfterRun(false));
   }
