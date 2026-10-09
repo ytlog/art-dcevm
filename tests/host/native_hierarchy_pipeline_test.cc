@@ -110,7 +110,14 @@ void(*class_add_proxy)(void*,void*)=nullptr;void(*class_remove_proxy)(void*,void
 using Publication=void(*)(void*,abi::arm64::android11::ReleaseObjectPointer,abi::arm64::android11::ReleaseObjectPointer);
 Publication publication_proxy=nullptr;unsigned publication_calls=0;
 void OriginalPublication(void*,abi::arm64::android11::ReleaseObjectPointer,abi::arm64::android11::ReleaseObjectPointer){++publication_calls;}
-void OriginalClassAdd(void*,void*){++add_calls;}void OriginalClassRemove(void*,void*){++remove_calls;}
+bool inspect_remove=false,throw_remove=false,reenter_remove=false;
+void OriginalClassAdd(void*,void*){++add_calls;}
+void OriginalClassRemove(void*callbacks,void*pauser){
+ ++remove_calls;
+ if(inspect_remove){auto*loading=native_source_class_loading::Run::Current();assert(loading&&!loading->Paused());assert(!loading->Complete(true));}
+ if(reenter_remove){reenter_remove=false;class_remove_proxy(callbacks,pauser);}
+ if(throw_remove)throw 7;
+}
 struct PauserFixture{const void*table;void*self;uint8_t running;};
 void*session_parent_handle=nullptr;
 void* session_old_handle=nullptr;void*session_cache_handle=nullptr;void*session_allocated=nullptr;
@@ -237,6 +244,17 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
    else if(paused_case==2){it.index=1;assert(!loading.BeforeFinish(&actual_owner,&holder,&it));}
    // AddCallback without the first real Finish never proves the barrier wait.
    class_remove_proxy(&linker,&p);assert(!loading.Paused());assert(!loading.Complete(true));
+  }
+  // The original callback must return before a pause lifecycle can complete.
+  for(int mode=0;mode<3;++mode){
+   const bool unwind=mode==1;
+   native_source_class_loading::Run loading(class_loading,&actual_driver,context);
+   PauserFixture p{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&p);
+   transaction_root::Iterator it{0,&holder};assert(session_finish_proxy(&actual_owner,&holder,&it)&&loading.Paused());
+   inspect_remove=true;throw_remove=unwind;reenter_remove=mode==2;unsigned calls=remove_calls;
+   try{class_remove_proxy(&linker,&p);assert(!unwind);}catch(int value){assert(unwind&&value==7);}
+   inspect_remove=false;throw_remove=false;assert(remove_calls==calls+(mode==2?2:1)&&!loading.Paused());
+   std::memset(&p,0,sizeof(p));assert(loading.Complete(true)==(mode==0));
   }
   // Exercise the real named publication proxy and frozen ledger independently
   // from the boot-class fixture above. Native source/API leaves are doubles;

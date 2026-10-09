@@ -26,8 +26,11 @@ static void Add(void*callbacks,void*pauser){
  add_original(callbacks,pauser);
 }
 static void Remove(void*callbacks,void*pauser){
- if(auto*run=Run::Current())run->Removing(callbacks,pauser);
- remove_original(callbacks,pauser);
+ auto*run=Run::Current();
+ const bool opened=run&&run->Removing(callbacks,pauser);
+ try{remove_original(callbacks,pauser);}
+ catch(...){if(opened)run->Removed(callbacks,pauser,false);throw;}
+ if(opened)run->Removed(callbacks,pauser,true);
 }
 };}
 bool Service::Bind(HookEngine&hooks,const runtime_services::Snapshot&s,Service*out,std::string*error){
@@ -51,13 +54,13 @@ void Run::Added(void*callbacks,void*pauser)noexcept{
  PauserPrefix p;std::memcpy(&p,pauser,sizeof(p));
  // Unrelated callback implementations preserve their original behavior.
  if(p.vtable!=service_.vtable_||p.self!=context_.self)return;
- if(!callbacks||p.running!=1||added_||removed_){failed_=true;return;}
+ if(!callbacks||p.running!=1||added_||removal_!=Removal::kNone){failed_=true;return;}
  callbacks_=callbacks;pauser_=pauser;added_=true;
 }
 bool Run::BeforeFinish(void*owner,const transaction_root::Holder*h,const void*raw)noexcept{
  using abi::arm64::android_common::ClassRedefinitionPrefix;
  transaction_root::Iterator iter{};
- if(!active_||failed_||!added_||removed_||finish_owner_||!Mapped(raw,sizeof(iter))||!transaction_root::ReadIterator(raw,sizeof(iter),&iter)||iter.holder!=h||iter.index!=next_||!Mapped(owner,sizeof(ClassRedefinitionPrefix))){failed_=true;return false;}
+ if(!active_||failed_||!added_||removal_!=Removal::kNone||finish_owner_||!Mapped(raw,sizeof(iter))||!transaction_root::ReadIterator(raw,sizeof(iter),&iter)||iter.holder!=h||iter.index!=next_||!Mapped(owner,sizeof(ClassRedefinitionPrefix))){failed_=true;return false;}
  transaction_root::Holder header{};transaction_root::Owners owners{};
  if(!Mapped(h,sizeof(header))||!transaction_root::ReadHolderHeader(h,sizeof(header),&header)||!Mapped(header.redefinitions,sizeof(owners))){failed_=true;return false;}
  std::memcpy(&owners,header.redefinitions,sizeof(owners));
@@ -74,19 +77,29 @@ void Run::AfterFinish(void*owner,bool success)noexcept{
  finish_owner_=nullptr;if(success)++next_;else failed_=true;
 }
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
-bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&!removed_&&current==this;}
-void Run::Removing(void*callbacks,void*pauser)noexcept{
- if(!active_||!added_||pauser!=pauser_)return;
- if(callbacks!=callbacks_||removed_||finish_owner_){failed_=true;return;}
- removed_=true;pauser_=nullptr;callbacks_=nullptr;
+bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}
+bool Run::Removing(void*callbacks,void*pauser)noexcept{
+ if(!active_||!added_||pauser!=pauser_)return false;
+ if(callbacks!=callbacks_||removal_!=Removal::kNone||finish_owner_){failed_=true;return false;}
+ // Release has already started. No new pause permission while the real Remove
+ // is executing; its entry alone is not proof of successful callback removal.
+ removal_=Removal::kPending;return true;
+}
+void Run::Removed(void*callbacks,void*pauser,bool returned)noexcept{
+ if(current!=this||removal_!=Removal::kPending||callbacks!=callbacks_||pauser!=pauser_)std::abort();
+ removal_=returned?Removal::kReturned:Removal::kUnwound;
+ if(!returned)failed_=true;
+ // Do not read borrowed source storage after the original call or unwind.
+ pauser_=nullptr;callbacks_=nullptr;
 }
 bool Run::Complete(bool success)noexcept{
  if(!active_)return false;
+ if(removal_==Removal::kPending)return false;
  if(complete_||finish_owner_)std::abort();
  // No borrowed pauser/Holder storage survives source Run destruction.
- const bool proof=success&&!failed_&&wait_complete_&&next_>0&&removed_;
+ const bool proof=success&&!failed_&&wait_complete_&&next_>0&&removal_==Removal::kReturned;
  if(proof)service_.observed_.store(true,std::memory_order_release);
- if(added_&&!removed_)std::abort();
+ if(added_&&removal_==Removal::kNone)std::abort();
  complete_=true;holder_=nullptr;return proof;
 }
 bool Install(HookEngine&hooks,Service&s,std::string*error){

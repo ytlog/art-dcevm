@@ -29,17 +29,21 @@ class Run final {
  void AfterFinish(void* actual_owner,bool original_result)noexcept;
  bool Paused()const noexcept;
  bool OwnsDriver(const void*)const noexcept;
- // Call only after the actual source Run returned; Remove must have happened
- // before Run's private Holder/DEX destruction. No source pointer is read here.
+ // Call only after the actual source Run returned; the original Remove must have returned
+ // before Run's private Holder/DEX destruction. Unwind never proves success;
+ // no source pointer is read here.
  bool Complete(bool original_success)noexcept;
  private:
  friend struct detail::Hooks;
  void Added(void* actual_callbacks,void* actual_pauser)noexcept;
- void Removing(void* actual_callbacks,void* actual_pauser)noexcept;
+ bool Removing(void* actual_callbacks,void* actual_pauser)noexcept;
+ void Removed(void* actual_callbacks,void* actual_pauser,bool returned)noexcept;
  Service&service_;void*driver_;runnable_jni::Context context_;Run*previous_=nullptr;
  void*callbacks_=nullptr;void*pauser_=nullptr;void*finish_owner_=nullptr;
  const transaction_root::Holder*holder_=nullptr;int32_t next_=0;
- bool active_=false,added_=false,wait_complete_=false,removed_=false,failed_=false,complete_=false;
+ enum class Removal {kNone,kPending,kReturned,kUnwound};
+ Removal removal_=Removal::kNone;
+ bool active_=false,added_=false,wait_complete_=false,failed_=false,complete_=false;
 };
 // Named Add/Remove callback leaf hooks, installed under actual SuspendAll by
 // their sole owner. They preserve the originals and observe only Run's TLS.
