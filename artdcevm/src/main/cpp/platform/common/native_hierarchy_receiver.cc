@@ -10,8 +10,15 @@ namespace {
 using native_hierarchy_graph::Graph;using native_hierarchy_graph::Input;using native_hierarchy_graph::Node;using native_hierarchy_graph::Prepared;
 constexpr size_t absent=SIZE_MAX;
 bool Fail(std::string* e,const char* text){if(e)*e=text;return false;}
+bool RootIdentity(const Node& node)noexcept{
+ if(!node.RootedClass()||(node.loader&&!node.RootedLoader())||(!node.loader&&(node.strong_loader||node.loader_root.owner)))return false;
+ void* value=nullptr;
+ if(node.class_root.owner&&(!node.class_root.owner->Read(node.class_root.slot,&value)||value!=node.klass))return false;
+ if(node.loader_root.owner&&(!node.loader_root.owner->Read(node.loader_root.slot,&value)||value!=node.loader))return false;
+ return true;
+}
 struct Fact {
- jclass root; jobject loader_root; std::string descriptor;uint32_t flags;std::optional<uint32_t> proposed_flags;
+ jclass root; jobject loader_root; native_hierarchy_graph::RootWitness class_witness,loader_witness;std::string descriptor;uint32_t flags;std::optional<uint32_t> proposed_flags;
  size_t parent,proposed_parent;std::vector<size_t> interfaces,proposed_interfaces;
  bool initialized,affected;
  std::vector<size_t> before_relations,after_relations,before_order,after_order;
@@ -47,7 +54,7 @@ struct Preservation::State {
  std::vector<Fact> facts;std::vector<size_t> inputs;mutable std::vector<size_t> pair_nodes;mutable const source_commit::Plan* plan=nullptr;bool staged=false;
  bool Matches(const Graph& g)const noexcept{
   if(!staged||graph!=&g||g.nodes.size()!=facts.size()||g.inputs!=inputs)return false;
-  for(size_t i=0;i<facts.size();++i){const auto& f=facts[i];const auto& n=g.nodes[i];if(n.strong_class!=f.root||n.strong_loader!=f.loader_root||n.descriptor!=f.descriptor||n.flags!=f.flags||n.proposed_flags!=f.proposed_flags||n.parent!=f.parent||n.proposed_parent!=f.proposed_parent||n.interfaces!=f.interfaces||n.proposed_interfaces!=f.proposed_interfaces||n.initialized!=f.initialized||n.affected!=f.affected||!n.klass||(bool(n.strong_loader)!=bool(n.loader)))return false;}
+  for(size_t i=0;i<facts.size();++i){const auto& f=facts[i];const auto& n=g.nodes[i];if(n.strong_class!=f.root||n.strong_loader!=f.loader_root||n.class_root!=f.class_witness||n.loader_root!=f.loader_witness||!n.RootedClass()||(n.loader&&!n.RootedLoader())||n.descriptor!=f.descriptor||n.flags!=f.flags||n.proposed_flags!=f.proposed_flags||n.parent!=f.parent||n.proposed_parent!=f.proposed_parent||n.interfaces!=f.interfaces||n.proposed_interfaces!=f.proposed_interfaces||n.initialized!=f.initialized||n.affected!=f.affected||!n.klass||(!n.loader&&(n.strong_loader||n.loader_root.owner)))return false;}
   return true;
  }
  bool Identity(void* klass,const Node& node,void* parent,bool proposed=false)const noexcept{
@@ -73,9 +80,9 @@ void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();
 bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inputs,std::string* error)const{
  auto& s=*state_;if(s.staged||!s.metadata->Calibrated()||graph.nodes.empty()||graph.inputs.empty()||inputs.size()!=graph.inputs.size())return Fail(error,"Additive receiver owner requires a fresh actual public graph");
  std::vector<Fact> facts;facts.reserve(graph.nodes.size());
- for(size_t i=0;i<graph.nodes.size();++i){const auto& n=graph.nodes[i];if(!n.strong_class||!n.klass||n.descriptor.size()<3||n.descriptor.front()!='L'||n.descriptor.back()!=';'||(n.loader&&!n.strong_loader)||(n.parent!=absent&&n.parent>=graph.nodes.size())||(n.proposed_parent!=absent&&n.proposed_parent>=graph.nodes.size()))return Fail(error,"Receiver relation has no rooted ordinary Class proof");
+ for(size_t i=0;i<graph.nodes.size();++i){const auto& n=graph.nodes[i];if(!RootIdentity(n)||!n.klass||n.descriptor.size()<3||n.descriptor.front()!='L'||n.descriptor.back()!=';'||(n.loader&&!n.RootedLoader())||(n.parent!=absent&&n.parent>=graph.nodes.size())||(n.proposed_parent!=absent&&n.proposed_parent>=graph.nodes.size()))return Fail(error,"Receiver relation has no rooted ordinary Class proof");
   if((n.flags&0x200u)?(n.parent!=absent||n.proposed_parent!=absent):((n.parent==absent||n.proposed_parent==absent)&&(n.descriptor!="Ljava/lang/Object;"||n.loader)))return Fail(error,"Receiver role has unproved Object/interface superclass semantics");
-  Fact f{n.strong_class,n.strong_loader,n.descriptor,n.flags,n.proposed_flags,n.parent,n.proposed_parent,n.interfaces,n.proposed_interfaces,n.initialized,n.affected,{},{},{},{},{},{},false};
+  Fact f{n.strong_class,n.strong_loader,n.class_root,n.loader_root,n.descriptor,n.flags,n.proposed_flags,n.parent,n.proposed_parent,n.interfaces,n.proposed_interfaces,n.initialized,n.affected,{},{},{},{},{},{},false};
   if(((n.flags^n.ProposedFlags())&~0x410u)||(n.ProposedFlags()&0x410u)==0x410u)return Fail(error,"Receiver proposal changes role/access or combines final and abstract");
   if(n.parent!=absent&&(graph.nodes[n.parent].flags&0x210u))return Fail(error,"Original receiver superclass role or finality is invalid");
   if(n.proposed_parent!=absent&&(graph.nodes[n.proposed_parent].ProposedFlags()&0x210u))return Fail(error,"Proposed receiver superclass role or finality is invalid");

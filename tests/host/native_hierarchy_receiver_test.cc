@@ -1,5 +1,6 @@
 #include "native_hierarchy_receiver_fixture.h"
 #include "platform/common/native_hierarchy_receiver.h"
+#include <memory>
 using native_hierarchy_receiver::Preservation;
 static Node N(Fake& f,size_t p=SIZE_MAX,std::vector<size_t> interfaces={}){Node n;n.strong_class=reinterpret_cast<jclass>(&f);n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.initialized=true;n.parent=n.proposed_parent=p;n.interfaces=n.proposed_interfaces=std::move(interfaces);return n;}
 static evolution::ClassSchema S(const Graph& g,size_t index,bool proposed){const auto& n=g.nodes[index];size_t p=proposed?n.proposed_parent:n.parent;const auto& edges=proposed?n.proposed_interfaces:n.interfaces;evolution::ClassSchema s;s.descriptor=n.descriptor;s.access=proposed?n.ProposedFlags():n.flags;s.superclass=p==SIZE_MAX?(n.flags&0x200u?"Ljava/lang/Object;":""):g.nodes[p].descriptor;for(auto i:edges)s.interfaces.push_back(g.nodes[i].descriptor);return s;}
@@ -27,8 +28,30 @@ static void ClassFlags(const modern_field_metadata::FieldMetadata& metadata){
   mapped=false;assert(!owner.Verify(f.graph,plan));mapped=true;assert(owner.Verify(f.graph,plan));owner.BeginCommit(f.graph,plan);forbid_alloc=false;forbid_os=false;
  }
 }
+namespace RootFixture {
+struct Array {std::vector<jobject> elements;explicit Array(jsize n):elements(size_t(n)){};};
+std::vector<std::unique_ptr<Array>> arrays;int type;
+jboolean Exception(JNIEnv*){return false;}jclass Find(JNIEnv*,const char*){return reinterpret_cast<jclass>(&type);}
+jobject Global(JNIEnv*,jobject o){return o;}void Delete(JNIEnv*,jobject){}
+jobjectArray NewArray(JNIEnv*,jsize n,jclass,jobject){arrays.emplace_back(new Array(n));return reinterpret_cast<jobjectArray>(arrays.back().get());}
+jsize Length(JNIEnv*,jarray a){return jsize(reinterpret_cast<Array*>(a)->elements.size());}
+void Set(JNIEnv*,jobjectArray a,jsize i,jobject v){reinterpret_cast<Array*>(a)->elements.at(size_t(i))=v;}
+jobject Get(JNIEnv*,jobjectArray a,jsize i){return reinterpret_cast<Array*>(a)->elements.at(size_t(i));}
+jboolean Same(JNIEnv*,jobject a,jobject b){return a==b;}
+bool Decode(void*,jobject root,void**v){*v=root;return root;}
+bool Oracle(void*,const runnable_jni::Context&,jobject root,void**v){*v=root;return root;}
+void* Element(void*,void* array,size_t i){return static_cast<Array*>(array)->elements.at(i);}
+void Test(const modern_field_metadata::FieldMetadata&metadata){JNINativeInterface_ table{};JNIEnv env{&table};table.ExceptionCheck=Exception;table.FindClass=Find;table.NewGlobalRef=Global;table.DeleteGlobalRef=Delete;table.DeleteLocalRef=Delete;table.NewObjectArray=NewArray;table.GetArrayLength=Length;table.SetObjectArrayElement=Set;table.GetObjectArrayElement=Get;table.IsSameObject=Same;
+ bounded_managed_roots::Store store({nullptr,nullptr,Oracle,Decode,Element});runnable_jni::Context context{&type,&env,nullptr};Fixture f;std::string error;
+ for(size_t i=0;i<f.graph.nodes.size();++i){auto&node=f.graph.nodes[i];node.class_root.owner=&store;node.class_root.generation=store.Generation();assert(store.Stage(context,node.strong_class,&node.class_root.slot,&error));if(i!=2)node.strong_class=nullptr;}
+ auto&node=f.graph.nodes[0];const auto slot=node.class_root;node.class_root.slot=f.graph.nodes[1].class_root.slot;Preservation foreign(metadata);assert(!foreign.VerifyStaged(f.graph,f.inputs,&error));node.class_root=slot;
+ Preservation owner(metadata);assert(owner.VerifyStaged(f.graph,f.inputs,&error));int source,cache;Prepared p{&source,&f.a,nullptr,&cache,&f.parent,7,&f.inputs[0].after};assert(owner.VerifyPrepared(f.graph,p,&error));
+ node.class_root.slot=f.graph.nodes[1].class_root.slot;assert(!owner.VerifyPrepared(f.graph,p,&error));node.class_root=slot;assert(owner.VerifyPrepared(f.graph,p,&error));
+ store.Clear(&env);assert(!owner.VerifyPrepared(f.graph,p,&error));Preservation expired(metadata);assert(!expired.VerifyStaged(f.graph,f.inputs,&error));arrays.clear();
+}
+}
 int main(){
- modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;ClassFlags(metadata);
+ modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;ClassFlags(metadata);RootFixture::Test(metadata);
  {
   Fixture f;Preservation owner(metadata);f.i0.parent=nullptr;assert(!owner.VerifyStaged(f.graph,f.inputs,&error));f.i0.parent=&f.object;assert(owner.VerifyStaged(f.graph,f.inputs,&error));
   int source=0,cache=0;Prepared p{&source,&f.a,nullptr,&cache,&f.parent,7,&f.inputs[0].after};assert(owner.VerifyPrepared(f.graph,p,&error));auto wrong=f.inputs[0].after;wrong.superclass=f.object.descriptor;p.declarations=&wrong;assert(!owner.VerifyPrepared(f.graph,p,&error));p.declarations=&f.inputs[0].after;
