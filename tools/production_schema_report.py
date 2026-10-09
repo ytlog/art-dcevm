@@ -1,4 +1,17 @@
 """Strict required production schema report gate; missing capabilities are failures."""
+import json
+
+def parse_current_report(text, run_id, case, scope):
+    report = json.loads(text)
+    if not isinstance(report, dict):
+        raise ValueError('Schema report is not an object')
+    for key, expected in [('runId', run_id), ('case', case),
+                          ('initializationScope', scope),
+                          ('route', 'DcevmRuntime/NativeBridge.apply')]:
+        if report.get(key) != expected:
+            raise ValueError('Current schema report identity mismatch: ' + key)
+    return report
+
 CASE_METHODS = {
     'field-types': 'fieldTypeEvolutionRequired',
     'field-staticness': 'fieldStorageEvolutionRequired',

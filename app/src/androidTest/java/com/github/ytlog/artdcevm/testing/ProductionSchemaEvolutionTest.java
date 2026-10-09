@@ -3,11 +3,16 @@ package com.github.ytlog.artdcevm.testing;
 import android.content.Context;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.AtomicFile;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.*;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.lang.invoke.*;
 import java.lang.reflect.*;
 import org.json.JSONObject;
@@ -20,6 +25,16 @@ public final class ProductionSchemaEvolutionTest {
     private Context context;
     private JSONObject report;
     private TestPhaseLog phases;
+    private void persistReport(String runId) throws IOException {
+        File directory=new File(context.getFilesDir(),"production-schema");
+        if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Cannot create schema report directory");
+        AtomicFile file=new AtomicFile(new File(directory,runId+".json"));
+        FileOutputStream stream=null;
+        try {
+            stream=file.startWrite();stream.write(report.toString().getBytes(StandardCharsets.UTF_8));
+            file.finishWrite(stream);
+        } catch(IOException error) {file.failWrite(stream);throw error;}
+    }
     private void stage(String name) throws Exception { report.put("stage",name);phases.mark("schema."+name); }
     private byte[] asset(String variant,Class<?> cls) throws Exception {
         String path=variant+"/"+cls.getName().replace('.','/')+".dex";
@@ -67,6 +82,10 @@ public final class ProductionSchemaEvolutionTest {
         } catch(Throwable error) {
             report.put("failureType",error.getClass().getName()).put("failure",String.valueOf(error.getMessage()));throw error;
         } finally {
+            try {persistReport(runId);} catch(IOException error) {
+                report.put("reportPersistenceError",String.valueOf(error));
+                Log.e("ArtDcevmProductionSchema","Cannot persist current-run report",error);
+            }
             Bundle output=new Bundle();output.putString("productionSchemaReport",report.toString());
             InstrumentationRegistry.getInstrumentation().addResults(output);
             Log.i("ArtDcevmProductionSchema",report.toString());

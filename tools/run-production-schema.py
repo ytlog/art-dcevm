@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run one required schema case on already installed, SHA-verified APKs; no install/upload."""
 import argparse, datetime, hashlib, json, pathlib, subprocess, sys, uuid
-from production_schema_report import CASE_METHODS, validate
+from production_schema_report import CASE_METHODS, validate, parse_current_report
+from timeout_diagnostics import collect_timeout_diagnostics
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('adb','serial','apk','test-apk'):p.add_argument('--'+name,required=True)
 p.add_argument('--case',choices=CASE_METHODS,required=True)
@@ -12,6 +13,23 @@ out=root/'build/evidence/production-schema'/run_id;out.mkdir(parents=True)
 def adb(*args,timeout=30):
     return subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,timeout=timeout,check=True)
 metadata={'runId':run_id,'case':a.case,'scope':a.scope,'serial':a.serial,'startedUtc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+report=None
+def capture_report_file():
+    result=subprocess.run([a.adb,'-s',a.serial,'exec-out','run-as','dev.artdcevm.lab','cat',
+                           'files/production-schema/'+run_id+'.json'],capture_output=True,timeout=10)
+    (out/'report-file.log').write_bytes(result.stdout+result.stderr)
+    if result.returncode:
+        raise RuntimeError('Current schema report file unavailable (exit '+str(result.returncode)+')')
+    recovered=parse_current_report(result.stdout,run_id,a.case,a.scope)
+    (out/'report-file.json').write_text(json.dumps(recovered,indent=2))
+    metadata['reportFileCaptured']=True
+    if report is not None and report!=recovered:
+        metadata.update(passed=False,errors=metadata.get('errors',[])+['Persisted report differs from instrumentation result'])
+    if report is None:
+        (out/'report.json').write_text(json.dumps(recovered,indent=2))
+        metadata['recoveredReportErrors']=validate(recovered,run_id,a.case,a.scope)
+        # A saved report cannot prove that the JUnit runner finished correctly.
+        # It supplies diagnosis after a timeout, never a successful test result.
 try:
     for package,path,key in [('dev.artdcevm.lab',a.apk,'appSha256'),('dev.artdcevm.lab.test',a.test_apk,'testSha256')]:
         expected=hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -24,17 +42,23 @@ try:
     command=['shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionSchemaEvolutionTest#'+CASE_METHODS[a.case],'-e','productionSchemaScope',a.scope,'-e','productionRunId',run_id,'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner']
     try:result=adb(*command,timeout=a.timeout)
     except subprocess.TimeoutExpired as error:
-        (out/'instrumentation.log').write_bytes((error.stdout or b'')+(error.stderr or b''));raise
+        (out/'instrumentation.log').write_bytes((error.stdout or b'')+(error.stderr or b''))
+        metadata['instrumentationTimedOut']=True
+        metadata['timeoutDiagnostics']=collect_timeout_diagnostics(a.adb,a.serial,out,run_id)
+        raise
     raw=result.stdout.decode(errors='replace')+result.stderr.decode(errors='replace');(out/'instrumentation.log').write_text(raw)
     prefix='INSTRUMENTATION_RESULT: productionSchemaReport='
     lines=[line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
     if len(lines)!=1:raise RuntimeError('Missing unique required schema report')
-    report=json.loads(lines[0]);(out/'report.json').write_text(json.dumps(report,indent=2))
+    report=parse_current_report(lines[0],run_id,a.case,a.scope);(out/'report.json').write_text(json.dumps(report,indent=2))
     errors=validate(report,run_id,a.case,a.scope)
     if 'OK (1 test)' not in raw:errors.append('JUnit did not pass exactly one required test')
     metadata.update(passed=not errors,errors=errors)
 except Exception as error:
     metadata.update(passed=False,errors=[str(error)])
 finally:
+    try:capture_report_file()
+    except Exception as error:
+        metadata['reportFileCaptured']=False;metadata['reportFileError']=str(error)
     (out/'result.json').write_text(json.dumps(metadata,indent=2));print(json.dumps(metadata));print(out)
 sys.exit(0 if metadata.get('passed') else 1)
