@@ -1,3 +1,4 @@
+#include "platform/common/source_cache_resolution.h"
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
@@ -208,13 +209,16 @@ struct NativeEngine final:Engine {
   uint32_t public_field_modifiers=0;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
+ source_cache_resolution::Service cache_resolver;
+ static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
  native_schema_run_state::CacheCalibration CacheCalibration()const {
   const auto& w=source_cache_witness;native_schema_run_state::CacheCalibration c;
   c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=112;
   c.counts={w.ids.type_count,w.ids.field_count,w.ids.method_count};
   c.type_index=w.ids.type_index;c.field_index=w.field_index;c.method_index=w.method_index;
-  c.native_field=w.native_field;c.native_method=w.native_method;return c;
+  c.native_field=w.native_field;c.native_method=w.native_method;
+  c.resolution_owner=const_cast<NativeEngine*>(this);c.resolve=ResolveCacheWitness;return c;
  }
  native_scope_executor::Executor native_scope;
  bool NativeScopeCalibrated()const override{return native_scope.Ready();}
@@ -828,6 +832,36 @@ bool OriginalDeclarations(JNIEnv* env,jobject input,evolution::ClassSchema* sche
  }
  env->DeleteLocalRef(array);return SelectInstalledClass(files,"Lcom/github/ytlog/artdcevm/internal/EvolutionCalibration;",schema,counts,error);
 }
+bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& scope,
+ source_handle_roots::Pool& pool,void* cache_root,void* class_root,std::string*error){
+ auto& e=*static_cast<NativeEngine*>(raw);void* klass=nullptr;
+ if(scope.env->ExceptionCheck()||scope.vm!=e.vm||scope.self!=e.graph_current()||
+    !redefinition_gate::Owned(e.vm)||!pool.Read(class_root,&klass))
+  return Fail(error,"Cache resolution actual source/public root owner unavailable");
+ field_copy::CopyClassView identity;
+ if(!e.metadata.ClassIdentity(klass,&identity,error))return false;
+ auto* loader=pool.Add(identity.loader,error);if(!loader)return false;
+ class Proof final:public source_cache_resolution::Roots {
+  public:
+   Proof(NativeEngine&engine,const runnable_jni::Context&scope,source_handle_roots::Pool&pool):e(engine),c(scope),p(pool){}
+   bool Snapshot(const source_cache_resolution::Witness&w,void**out,std::string*error)const override{
+    if(c.env->ExceptionCheck())return Fail(error,"Original cache resolution raised JNI exception");
+    void* cache=nullptr,*klass=nullptr,*loader=nullptr;
+    if(c.vm!=e.vm||c.self!=e.graph_current()||!redefinition_gate::Owned(e.vm)||
+       !p.Read(w.cache_slot,&cache)||!p.Read(w.class_slot,&klass)||!p.Read(w.loader_slot,&loader)||!cache||!klass)
+     return Fail(error,"Cache resolution live Class/cache/loader root provenance rejected");
+    field_copy::CopyClassView identity;
+    if(!e.metadata.ClassIdentity(klass,&identity,error))return false;
+    if(identity.loader!=loader||e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)
+     return Fail(error,"Cache resolution exact public Class cache/loader namespace changed");
+    *out=klass;return true;
+   }
+  private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;
+ } proof(e,scope,pool);
+ const auto&w=e.source_cache_witness;
+ source_cache_resolution::Witness witness{cache_root,class_root,loader,w.ids.type_index,w.field_index,w.method_index,w.native_field,w.native_method};
+ return e.cache_resolver.Resolve(witness,proof,error);
+}
 struct SourceCacheWitnessRequest {
  NativeEngine* engine;std::string* error;
  abi::arm64::android_common::FromReflectedMethod method_leaf;
@@ -870,6 +904,7 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
  if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
+ if(!source_cache_resolution::Service::Bind(hooks,runtime.receivers.class_linker,&cache_resolver,error))return false;
  jclass type=env->GetObjectClass(input);
  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
  if(!type||env->ExceptionCheck())return Fail(error,"Public cache witness Inputs class unavailable");

@@ -102,6 +102,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_source_class_loading.cc
     platform/common/native_hierarchy_private_ledger.cc
     platform/common/native_source_dex_registry.cc
+    platform/common/source_cache_resolution.cc
     platform/common/native_class_lookup.cc
     platform/common/structural_methods.cc
     platform/common/native_method_evolution_policy.cc

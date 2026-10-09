@@ -14,6 +14,11 @@ struct CacheCalibration {
  native_hierarchy_cache::Counts counts{};
  uint32_t type_index=0,field_index=0,method_index=0;
  void* native_field=nullptr;void* native_method=nullptr;
+ // Optional real original resolve in this exact ordinary source root Pool,
+ // immediately before strict layout/format calibration; no cache writes.
+ void* resolution_owner=nullptr;
+ bool (*resolve)(void*,const runnable_jni::Context&,source_handle_roots::Pool&,
+                 void* cache_root,void* class_root,std::string*)=nullptr;
 };
 struct Mapping {
  void* owner=nullptr;
