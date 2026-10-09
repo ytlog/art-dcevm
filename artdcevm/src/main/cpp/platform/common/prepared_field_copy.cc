@@ -9,10 +9,10 @@ bool PreparedPlan::Prepare(const FieldCopyAccess& ops,bool statik,void* target,v
  auto capture=[&](void* root,std::vector<Class>* classes){
   for(void* cursor=root;cursor;){
    if(classes->size()>4096||std::any_of(classes->begin(),classes->end(),[&](const auto& c){return c.identity==cursor;}))return false;
-   const auto facts=ops.klass(cursor,statik);
+   const auto facts=ops.Class(cursor,statik);
    if(!facts.descriptor||!*facts.descriptor||facts.field_count>1000000)return false;
    Class captured{cursor,facts.parent,facts.loader,facts.descriptor,facts.is_object,{}};
-   for(size_t i=0;i<facts.field_count;++i){const auto f=ops.field(cursor,statik,i);
+   for(size_t i=0;i<facts.field_count;++i){const auto f=ops.Field(cursor,statik,i);
     if(!f.field||!f.name||!*f.name||!f.descriptor||!*f.descriptor||!std::strchr("ZBCSIJFDL[",f.descriptor[0])||
        std::any_of(captured.fields.begin(),captured.fields.end(),[&](const auto& old){return old.identity==f.field||(old.name==f.name&&old.descriptor==f.descriptor);}))return false;
     captured.fields.push_back({f.field,f.name,f.descriptor});}
@@ -41,9 +41,9 @@ bool PreparedPlan::CollectManagedRoots(const prepared_roots::Registrar& registra
 }
 bool PreparedPlan::Validate(const FieldCopyAccess& ops)const{
  if(!ops.klass||!ops.field||source_.empty()||target_.empty())return false;
- for(const auto* group:{&source_,&target_})for(const auto& c:*group){const auto facts=ops.klass(c.identity,is_static_);
+ for(const auto* group:{&source_,&target_})for(const auto& c:*group){const auto facts=ops.Class(c.identity,is_static_);
   if(facts.parent!=c.parent||facts.loader!=c.loader||!facts.descriptor||c.descriptor!=facts.descriptor||facts.is_object!=c.object||facts.field_count!=c.fields.size())return false;
-  for(size_t i=0;i<c.fields.size();++i){const auto f=ops.field(c.identity,is_static_,i);const auto& expected=c.fields[i];
+  for(size_t i=0;i<c.fields.size();++i){const auto f=ops.Field(c.identity,is_static_,i);const auto& expected=c.fields[i];
    if(f.field!=expected.identity||!f.name||!f.descriptor||expected.name!=f.name||expected.descriptor!=f.descriptor)return false;}
  }
  return true;

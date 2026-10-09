@@ -5,6 +5,7 @@
 #include "platform/common/structural_methods.h"
 #include <memory>
 #include "platform/common/prepared_root_bindings.h"
+namespace artdcevm::modern_field_metadata {struct ReadContext;}
 namespace artdcevm::modern_methods {
 class Service;
 class Binding final {
@@ -43,7 +44,7 @@ class Service final : public structural_methods::Services {
   // original ART transaction already roots both tables and disables GC.
   static std::unique_ptr<Service> PrepareTables(const Binding&,
       void* old_class,const method_array::View&,
-      void* new_class,const method_array::View&,Retired,std::string* error);
+      void* new_class,const method_array::View&,Retired,std::string* error,const modern_field_metadata::ReadContext* =nullptr);
   static std::unique_ptr<Service> Prepare(HookEngine&,
       const runnable_jni::Context&,
       abi::arm64::android_common::FromReflectedMethod,
@@ -69,6 +70,7 @@ class Service final : public structural_methods::Services {
  private:
   Service() = default;
   prepared_roots::Bindings roots_;
+  const modern_field_metadata::ReadContext* read_context_=nullptr;
   const method_array::View& Table(void*) const;
   void RequireMember(void*) const;
   using Root = void* (*)(void*);

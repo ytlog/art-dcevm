@@ -7,6 +7,7 @@
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/common/native_reflective_value_abi.h"
 #include <fstream>
+#include <unistd.h>
 #include <iterator>
 #include "platform/common/native_interface_graph.h"
 // Finalization must still run when every native C++ allocation fails.
@@ -17,6 +18,19 @@ void* operator new[](size_t n){return ::operator new(n);}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete[](void* p)noexcept{std::free(p);}
 namespace {
+struct ExplicitMappings {
+ struct Range {uintptr_t begin,end;};std::vector<Range> ranges;
+ const void* denied=nullptr;bool reject_all=false;size_t calls=0;
+ void Cover(const void* address){size_t extent=0;assert(method_identity::ReadableMappingExtent(address,&extent));
+  const auto p=uintptr_t(address);const auto page=uintptr_t(sysconf(_SC_PAGESIZE));
+  assert(page&&extent<=UINTPTR_MAX-p);ranges.push_back({p-(p%page),p+extent});
+ }
+ static bool Extent(void* state,const void* address,size_t* out){auto& s=*static_cast<ExplicitMappings*>(state);++s.calls;
+  if(!out||!stopped||current!=thread.data()||s.reject_all||address==s.denied)return false;
+  const auto p=uintptr_t(address);for(const auto& r:s.ranges)if(p>=r.begin&&p<r.end){*out=r.end-p;return true;}
+  return false;
+ }
+};
 int retired_methods=0,retired_fields=0;bool mh_guard=false,vh_guard=false,visit_mh=false,visit_vh=false,field_mh_guard=false,visit_field_mh=false;
 void RetireMethod(void*,void*){++retired_methods;}void RetireField(void*,void*){++retired_fields;}
 bool NotRetired(void*,void*){return false;}bool Mh(void*){return mh_guard;}bool Vh(void*){return vh_guard;}bool FieldMh(void*){return field_mh_guard;}
@@ -200,6 +214,33 @@ int main(int argc,char** argv){
  source_commit::Plan missing_pair=plan;missing_pair.new_classes.clear();rejected(dependencies,missing_pair,"Incomplete independently");
  missing=dependencies;missing.allow_field_removal=false;rejected(missing,plan);missing=dependencies;missing.retirement.retire_field=nullptr;rejected(missing,plan);
  current=foreign_thread.data();rejected(dependencies,plan,"Incomplete independently");current=thread.data();
+ // Full actual provider preparation/facts/reflection/source validation with an
+ // explicit immutable mapping view. Denials must never query the OS instead.
+ ExplicitMappings mappings;mappings.Cover(heap.base);mappings.Cover(names[0]);
+ for(auto text:names)mappings.Cover(text);for(auto text:types)mappings.Cover(text);
+ mappings.Cover(Descriptor(old_class,nullptr));mappings.Cover(Descriptor(parent_class,nullptr));
+ for(const auto& bytes:dex)mappings.Cover(bytes.data());
+ modern_field_metadata::ReadContext read_context{&mappings,ExplicitMappings::Extent};
+ auto contextual=dependencies;contextual.read_context=&read_context;
+ shape(true,false);contextual.expected_removal=native_member_provider::Removal::kMethodsOnly;
+ const auto context_queries=method_identity::MappingOsQueries();
+ native_member_provider::Service contextual_provider;auto contextual_service=contextual_provider.Prepare(plan,contextual,&error);
+ if(!contextual_service){std::cerr<<"Explicit provider mapping: "<<error<<'\n';return 1;}
+ RegisteredRoots contextual_roots;assert(contextual_provider.CollectManagedRoots(*contextual_service,{&contextual_roots,RegisteredRoots::Add}));
+ assert(contextual_provider.RefreshManagedRoots(plan,*contextual_service,{&contextual_roots,RegisteredRoots::Get}));
+ assert(contextual_service->Validate(plan)&&mappings.calls&&method_identity::MappingOsQueries()==context_queries);
+ for(const void* denied:{static_cast<const void*>(new_class),static_cast<const void*>(old_fields[0]),static_cast<const void*>(class_array)}){
+  mappings.denied=denied;assert(!contextual_service->Validate(plan));assert(method_identity::MappingOsQueries()==context_queries);
+ }
+ mappings.denied=dex[0].data();native_member_provider::Service denied_text_provider;
+ assert(!denied_text_provider.Prepare(plan,contextual,&error)&&method_identity::MappingOsQueries()==context_queries);
+ mappings.denied=nullptr;assert(contextual_service->Validate(plan));
+ mappings.reject_all=true;native_member_provider::Service denied_provider;assert(!denied_provider.Prepare(plan,contextual,&error));
+ assert(method_identity::MappingOsQueries()==context_queries);mappings.reject_all=false;
+ modern_field_metadata::ReadContext missing_extent{};contextual.read_context=&missing_extent;
+ native_member_provider::Service missing_context_provider;assert(!missing_context_provider.Prepare(plan,contextual,&error));
+ assert(method_identity::MappingOsQueries()==context_queries);
+
  missing=dependencies;missing.diagnostics=nullptr; // Diagnostics are optional to the adapter; missing guards are not.
  missing.handle_guards={};visit_vh=true;rejected(missing,plan);visit_vh=false;
  shape(true,false);auto invalid_policy=dependencies;invalid_policy.expected_removal=static_cast<native_member_provider::Removal>(99);rejected(invalid_policy,plan,"Unknown native");
@@ -320,9 +361,12 @@ int main(int argc,char** argv){
  assert(hierarchy_schema.Requires(native_schema_policy::GuardKind::HierarchyGraph));schemas[0]=hierarchy_schema;
  rejected(schema_dependencies,plan,"independent loaded-Class/final-field proof");
  new_class->super_class=original_parent;LinkDex(new_class,evolved_dex);schemas[0]=schema;
+ mappings.Cover(evolved_dex.data());
+ schema_dependencies.read_context=&read_context;
+ const auto schema_os_queries=method_identity::MappingOsQueries();
  native_member_provider::Service schema_provider;auto schema_service=schema_provider.Prepare(plan,schema_dependencies,&error);
  if(!schema_service){std::cerr<<"Native schema preparation: "<<error<<'\n';return 1;}
- assert(schema_service->Validate(plan));const auto roots_before_retire=retired_fields;
+ assert(schema_service->Validate(plan));assert(method_identity::MappingOsQueries()==schema_os_queries);const auto roots_before_retire=retired_fields;
  const auto method_array_before=new_class->methods;
  auto* moved_methods=heap.New(8+3*32);std::memcpy(moved_methods,reinterpret_cast<void*>(uintptr_t(method_array_before)),8+3*32);
  new_class->methods=uintptr_t(moved_methods);assert(!source_commit::Run(plan,*schema_service));new_class->methods=method_array_before;
@@ -355,11 +399,12 @@ int main(int argc,char** argv){
  // hash rebuilding all execute with the allocation failure guard active.
  assert(source_commit::Run(plan,*schema_service));
  forbid_provider_allocation=false;assert(roots.values.size()==registered_count);
+ assert(method_identity::MappingOsQueries()==schema_os_queries);
  uint64_t initialized_after=0;std::memcpy(&initialized_after,reinterpret_cast<char*>(new_class)+128,8);
  assert(initialized_after==0&&Read32(new_class,144)==0); // No encoded values or clinit rerun.
  assert(Read32(new_instance,12)==uintptr_t(ref_a)&&Read32(new_instance,16)==uintptr_t(ref_b));
  assert(Read32(old_instance,8)==0&&Read32(old_instance,12)==0&&Read32(old_instance,16)==0);
  assert(retired_fields==roots_before_retire+2);
  Resume(nullptr);
- std::cout<<"Native member provider: public field/method/Executable calibration, complete DEX tables, MethodsOnly/FieldsOnly/mixed rejection, independent live method/field MH and VH guards, missing field policy and wrong thread all refuse before heap mutation/retirement/diagnostics; guarded method/field/mixed preparation stays readonly and final guard/thread refusal never retires\n";
+ std::cout<<"Native member provider: explicit stopped mapping context denies without OS fallback; complete schema/GC refresh/copy/resolution run has zero OS mapping queries and no allocation; public field/method/Executable calibration, complete DEX tables, MethodsOnly/FieldsOnly/mixed rejection, independent live method/field MH and VH guards, missing field policy and wrong thread all refuse before heap mutation/retirement/diagnostics; guarded method/field/mixed preparation stays readonly and final guard/thread refusal never retires\n";
 }

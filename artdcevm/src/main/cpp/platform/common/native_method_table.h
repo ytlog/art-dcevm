@@ -14,5 +14,5 @@ struct View {
 // Standard app DEX only; unsupported CompactDex fails without touching output.
 bool Read(const modern_field_metadata::FieldMetadata&,
           const method_identity::Calibration&,void* rooted_class,
-          View*,std::string* error);
+          View*,std::string* error,const modern_field_metadata::ReadContext* =nullptr);
 }

@@ -8,7 +8,7 @@ constexpr size_t kExtData=offsetof(class_metadata::Class11,ext_data);
 static_assert(kExtData==offsetof(class_metadata::Class17,ext_data));
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 void Require(bool value){if(!value)std::abort();}
-bool Mapped(const void* p,size_t need){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=need;}
+bool Mapped(const void* p,size_t need,const modern_field_metadata::ReadContext* context){size_t extent=0;return p&&modern_field_metadata::ReadMappingExtent(context,p,&extent)&&extent>=need;}
 uint32_t* Scalar(void* p,size_t at){return reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(p)+at);}
 }
 std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies& dependencies,
@@ -49,7 +49,7 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
   result->self_=current();
   if(dependencies.prepare_field_copy){
     if(plan.old_classes.empty()||plan.old_classes.size()!=plan.new_classes.size()){Fail(error,"Prepared field migration requires complete rooted Class pairs");return nullptr;}
-    modern_field_storage::ScopedAccess scope(*dependencies.fields);const auto ops=scope.Access();
+    modern_field_storage::ScopedAccess scope(*dependencies.fields);const auto ops=scope.Access(dependencies.read_context);
     std::vector<field_copy::ClassPair> pairs;for(size_t i=0;i<plan.old_classes.size();++i)pairs.push_back({plan.old_classes[i],plan.new_classes[i]});
     for(size_t i=0;i<plan.old_classes.size();++i){CopyPair copy{plan.old_classes[i],plan.new_classes[i],{}, {}};
       if(!field_copy::PreparedPlan::Prepare(ops,true,copy.new_class,copy.old_class,&copy.statics,error,pairs,dependencies.allow_removed_ancestors)||
@@ -87,14 +87,15 @@ void Services::RefreshManagedRoots(const prepared_roots::Resolver& resolver)noex
   replacements_->RefreshManagedRoots(resolver);
 }
 bool Services::Validate(const source_commit::Plan& p)const {
+  const auto* context=dependencies_.read_context;
   if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
-     &p!=plan_||!Mapped(p.mirror,layout_->size)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
+     &p!=plan_||!Mapped(p.mirror,layout_->size,context)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
      p.old_instances.size()!=p.new_instances.size()||methods_.size()!=p.old_classes.size()||
      (!p.class_root_origins.empty()&&p.class_root_origins.size()!=p.new_classes.size())||
      !dependencies_.reflective.prepared(p,dependencies_.reflective.state))return false;
   if(dependencies_.prepare_field_copy){
     if(copies_.size()!=p.old_classes.size())return false;
-    modern_field_storage::ScopedAccess scope(*dependencies_.fields);const auto ops=scope.Access();
+    modern_field_storage::ScopedAccess scope(*dependencies_.fields);const auto ops=scope.Access(dependencies_.read_context);
     for(size_t i=0;i<copies_.size();++i){const auto& copy=copies_[i];
       if(copy.old_class!=p.old_classes[i]||copy.new_class!=p.new_classes[i]||!copy.statics.Validate(ops)||!copy.instances.Validate(ops))return false;}
   }
@@ -103,12 +104,12 @@ bool Services::Validate(const source_commit::Plan& p)const {
   if(!meta)return false;
   for(size_t i=0;i<p.old_classes.size();++i){
     const auto origin=p.class_root_origins.empty()?source_commit::ClassRootOrigin{p.new_classes_root,i}:p.class_root_origins[i];
-    if(!Mapped(origin.array,12)||origin.index>(SIZE_MAX-12)/4)return false;
+    if(!Mapped(origin.array,12,context)||origin.index>(SIZE_MAX-12)/4)return false;
     int32_t length=0;std::memcpy(&length,static_cast<const unsigned char*>(origin.array)+8,4);
-    if(length<0||origin.index>=size_t(length)||!Mapped(origin.array,12+4*size_t(length))||
+    if(length<0||origin.index>=size_t(length)||!Mapped(origin.array,12+4*size_t(length),context)||
        dependencies_.metadata->Reference(origin.array,12+4*origin.index)!=p.new_classes[i])return false;
     void* old=p.old_classes[i];void* next=p.new_classes[i];const auto& pair=methods_[i];
-    if(!Mapped(old,layout_->size)||!Mapped(next,layout_->size)||
+    if(!Mapped(old,layout_->size,context)||!Mapped(next,layout_->size,context)||
        metadata.Reference(old,0)!=meta||metadata.Reference(next,0)!=meta||
        !metadata.Reference(next,kExtData)||
        pair.old_class!=old||pair.new_class!=next||!pair.service||
@@ -119,7 +120,7 @@ bool Services::Validate(const source_commit::Plan& p)const {
     }
   }
   for(size_t i=0;i<p.old_instances.size();++i){
-    if(!Mapped(p.old_instances[i],8)||!Mapped(p.new_instances[i],8))return false;
+    if(!Mapped(p.old_instances[i],8,context)||!Mapped(p.new_instances[i],8,context))return false;
     void* old_type=ObjectClass(p.old_instances[i]);bool matched=false;
     for(size_t c=0;c<p.old_classes.size();++c)if(old_type==p.old_classes[c]){
       if(ObjectClass(p.new_instances[i])!=p.new_classes[c])return false;matched=true;break;
@@ -133,10 +134,10 @@ void Services::SetStatus(void* klass,uint32_t status)const{Require(status<=15);s
 void Services::CopyFields(bool statik,void* target,void* target_class,void* source,void* source_class)const{
   if(dependencies_.prepare_field_copy){
     for(const auto& pair:copies_)if(pair.old_class==source_class&&pair.new_class==target_class){
-      modern_field_storage::ScopedAccess scope(*dependencies_.fields);(statik?pair.statics:pair.instances).CopyAndClear(scope.Access(),target,source);return;}
+      modern_field_storage::ScopedAccess scope(*dependencies_.fields);(statik?pair.statics:pair.instances).CopyAndClear(scope.Access(dependencies_.read_context),target,source);return;}
     Require(false);
   }
-  dependencies_.fields->CopyFields(statik,target,target_class,source,source_class);
+  dependencies_.fields->CopyFields(statik,target,target_class,source,source_class,dependencies_.read_context);
 }
 void* Services::ObjectClass(void* object)const{return dependencies_.fields->ObjectClass(object);}
 void Services::MarkClassAndMethodsObsolete(void* old,void* next)const{
@@ -157,7 +158,7 @@ void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
   for(const auto& pair:methods_) {
     Require(pair.restore_old_roots!=nullptr);
     pair.restore_old_roots(pair.service);
-    dependencies_.fields->RestoreOldFieldDeclaringClass(pair.old_class);
+    dependencies_.fields->RestoreOldFieldDeclaringClass(pair.old_class,dependencies_.read_context);
     for(size_t i=0;i<pair.service->Count(pair.old_class);++i){
       void* method=pair.service->At(pair.old_class,i);
       const uint32_t flags=pair.service->Flags(method);
@@ -165,9 +166,9 @@ void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
       Require(pair.service->DeclaringClass(method)==pair.old_class);
     }
     for(bool stat:{false,true}){
-      const auto view=dependencies_.metadata->Class(pair.old_class,stat);
+      const auto view=dependencies_.metadata->Class(pair.old_class,stat,dependencies_.read_context);
       for(size_t i=0;i<view.field_count;++i){
-        const auto field=dependencies_.metadata->Field(pair.old_class,stat,i);
+        const auto field=dependencies_.metadata->Field(pair.old_class,stat,i,dependencies_.read_context);
         Require(dependencies_.metadata->FieldDeclaringClass(field.field)==pair.old_class);
       }
     }

@@ -24,6 +24,8 @@ struct ReadContext {
   void* owner=nullptr;
   bool (*extent)(void*,const void*,size_t*)=nullptr;
 };
+// Explicit view or the legacy OS lookup; a supplied view never falls back.
+bool ReadMappingExtent(const ReadContext*,const void*,size_t*);
 class FieldMetadata {
  public:
   bool Bind(HookEngine&, std::string*);
@@ -33,7 +35,7 @@ class FieldMetadata {
   bool InterfaceDeclarationCalibrated()const{return interface_declaration_calibrated_;}
   Model StorageModel() const { return model_; }
   bool Fields(void* klass, bool is_static, field_array::View*, std::string*, const ReadContext* =nullptr) const;
-  field_copy::CopyClassView Class(void* klass, bool is_static) const;
+  field_copy::CopyClassView Class(void* klass, bool is_static,const ReadContext* =nullptr) const;
   // Reject unsupported Class/field text instead of invoking commit invariants.
   // Caller owns real native roots and the calibrated source/mutator scope.
   bool ClassIdentity(void*,field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
@@ -43,7 +45,7 @@ class FieldMetadata {
       const char* proxy_name,const char* negative_proxy_name,
       field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
   bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext* =nullptr)const;
-  field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal) const;
+  field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal,const ReadContext* =nullptr) const;
   void* FieldDeclaringClass(void* field)const;
   void* Reference(void* object, size_t offset, bool is_volatile=false) const;
  private:

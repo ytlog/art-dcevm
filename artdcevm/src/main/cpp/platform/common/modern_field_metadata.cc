@@ -35,6 +35,7 @@ bool Extent(const ReadContext* context,const void* address,size_t* bytes) {
 }
 void Require(bool value) {if(!value)std::abort();}
 }
+bool ReadMappingExtent(const ReadContext* context,const void* address,size_t* bytes){return Extent(context,address,bytes);}
 bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   if (bound_) return true;
   auto leaf=reinterpret_cast<FieldLeaf>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
@@ -302,7 +303,11 @@ bool FieldMetadata::FieldIdentity(void* field,field_copy::CopyFieldView* out,std
   if(!Text(field,model_,&name,&descriptor,error,context))return false;
   *out={field,name,descriptor};return true;
 }
-field_copy::CopyClassView FieldMetadata::Class(void* klass,bool is_static)const{
+field_copy::CopyClassView FieldMetadata::Class(void* klass,bool is_static,const ReadContext* context)const{
+  if(context){field_copy::CopyClassView view{};field_array::View fields;
+    if(!ClassIdentity(klass,&view,nullptr,context)||!Fields(klass,is_static,&fields,nullptr,context))return {};
+    view.field_count=fields.selected_count;return view;
+  }
   Require(calibrated_&&klass);
   const auto& layout=Source(model_);
   auto* parent=Reference(klass,layout.parent);
@@ -312,7 +317,11 @@ field_copy::CopyClassView FieldMetadata::Class(void* klass,bool is_static)const{
   if(parent)Require(Descriptor(klass,model_,&descriptor,&error));
   return {parent,loader,descriptor,fields.selected_count,parent==nullptr};
 }
-field_copy::CopyFieldView FieldMetadata::Field(void* klass,bool is_static,size_t ordinal)const{
+field_copy::CopyFieldView FieldMetadata::Field(void* klass,bool is_static,size_t ordinal,const ReadContext* context)const{
+  if(context){field_array::View fields;
+    if(!Fields(klass,is_static,&fields,nullptr,context)||ordinal>=fields.selected_count)return {};
+    field_copy::CopyFieldView view{};return FieldIdentity(fields.AtSelected(static_cast<uint32_t>(ordinal)),&view,nullptr,context)?view:field_copy::CopyFieldView{};
+  }
   Require(calibrated_&&klass);
   field_array::View fields;std::string error;Require(Fields(klass,is_static,&fields,&error));
   Require(ordinal<fields.selected_count);

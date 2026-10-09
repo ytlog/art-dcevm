@@ -40,7 +40,7 @@ class Plan {
  public:
   static std::unique_ptr<Plan> Prepare(const source_commit::Plan&,
       const modern_field_metadata::FieldMetadata&,
-      const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards guards={},ResolutionBinding resolution={},const std::vector<native_schema_policy::Plan>* schemas=nullptr,const native_schema_policy::GuardVerifier* schema_guards=nullptr);
+      const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards guards={},ResolutionBinding resolution={},const std::vector<native_schema_policy::Plan>* schemas=nullptr,const native_schema_policy::GuardVerifier* schema_guards=nullptr,const modern_field_metadata::ReadContext* read_context=nullptr);
   bool HasDeletedMethods()const;
   bool HasDeletedFields()const;
   bool CollectManagedRoots(const prepared_roots::Registrar& r){return !resolution_||resolution_->CollectManagedRoots(r);}
@@ -49,6 +49,7 @@ class Plan {
  private:
   friend class Service;
   std::unique_ptr<resolution_invalidation::ResolutionInvalidationPlan> resolution_;
+  const modern_field_metadata::ReadContext* read_context_=nullptr;
   Retirement retirement_;
   HandleGuards handle_guards_;
   std::unordered_map<void*,void*> methods_,fields_;

@@ -22,8 +22,8 @@ class Service {
   bool SourceBarrier(const runnable_jni::Context&,const source_handle_roots::Pool&,const void* root)const noexcept;
   void* ObjectClass(void*)const;
   void CopyFields(bool is_static,void* target,void* target_class,
-                  void* source,void* source_class)const;
-  void RestoreOldFieldDeclaringClass(void* old_class)const;
+                  void* source,void* source_class,const modern_field_metadata::ReadContext* =nullptr)const;
+  void RestoreOldFieldDeclaringClass(void* old_class,const modern_field_metadata::ReadContext* =nullptr)const;
  private:
   modern_field_metadata::FieldMetadata metadata_;
   exclusive_owned_roots::Service exclusive_;
@@ -40,7 +40,7 @@ class ScopedAccess {
  public:
   explicit ScopedAccess(const Service&);
   ~ScopedAccess();
-  field_copy::FieldCopyAccess Access()const;
+  field_copy::FieldCopyAccess Access(const modern_field_metadata::ReadContext* =nullptr)const;
   ScopedAccess(const ScopedAccess&)=delete;
   ScopedAccess& operator=(const ScopedAccess&)=delete;
  private:

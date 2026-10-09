@@ -16,7 +16,7 @@ using namespace resolution_invalidation;
 class NativeResolutionObserver final:public Observer {
  public:
   NativeResolutionObserver(const modern_field_metadata::FieldMetadata& metadata,
-      const method_identity::Calibration& model,HookEngine& hooks):metadata_(metadata),model_(model){
+      const method_identity::Calibration& model,HookEngine& hooks,const modern_field_metadata::ReadContext* context):context_(context),metadata_(metadata),model_(model){
     root_=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
     same_=reinterpret_cast<bool(*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
     // Fixed Class::Implements(ObjPtr<Class>) supplies complete transitive
@@ -28,31 +28,31 @@ class NativeResolutionObserver final:public Observer {
   bool PrepareHolder(void* holder,std::string* error){
     if(assignable_||implements_)return true;
     if(!metadata_.InterfaceDeclarationCalibrated()){if(error)*error="Interface table declaration lacks independent public calibration";return false;}
-    holder_=holder;return native_interface_graph::Read(metadata_,holder,&interfaces_,error);
+    holder_=holder;return native_interface_graph::ReadInContext(metadata_,holder,&interfaces_,error,context_);
   }
   bool ValidateScope(void* holder)const override {
     if(assignable_||implements_)return true;
     std::string error;
     if(holder!=holder_||!metadata_.InterfaceDeclarationCalibrated()||
-       !native_interface_graph::Matches(metadata_,holder,interfaces_,&error))return Fail("live-holder-interface-table-invalid");
+       !native_interface_graph::MatchesInContext(metadata_,holder,interfaces_,&error,context_))return Fail("live-holder-interface-table-invalid");
     return true;
   }
   const char* FailureReason()const override{return failure_;}
   bool ReadFlags(void* member,Kind kind,uint32_t* out)const override {
     size_t extent=0;
-    if(!member||!out||!method_identity::ReadableMappingExtent(member,&extent)||extent<8)return Fail("member-flags-unreadable");
+    if(!member||!out||!modern_field_metadata::ReadMappingExtent(context_,member,&extent)||extent<8)return Fail("member-flags-unreadable");
     *out=kind==Kind::Method?method_metadata::ReadAccessFlags(member):field_array::Flags(member);return true;
   }
   bool ReadClass(void* klass,ClassIdentity* out)const override {
     const auto& source=metadata_.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
     size_t extent=0;field_copy::CopyClassView view;std::string error;
-    if(!klass||!out||!method_identity::ReadableMappingExtent(klass,&extent)||extent<source.size||
-       !metadata_.ClassIdentity(klass,&view,&error)||!view.descriptor)return Fail("transaction-class-identity");
+    if(!klass||!out||!modern_field_metadata::ReadMappingExtent(context_,klass,&extent)||extent<source.size||
+       !metadata_.ClassIdentity(klass,&view,&error,context_)||!view.descriptor)return Fail("transaction-class-identity");
     *out={klass,view.loader,view.parent,view.descriptor};return true;
   }
   bool MatchesClass(const ClassIdentity& expected)const override {
     field_copy::CopyClassView actual;
-    return metadata_.ClassIdentity(expected.klass,&actual,nullptr)&&actual.parent==expected.parent&&actual.loader==expected.loader&&actual.descriptor&&expected.descriptor==actual.descriptor;
+    return metadata_.ClassIdentity(expected.klass,&actual,nullptr,context_)&&actual.parent==expected.parent&&actual.loader==expected.loader&&actual.descriptor&&expected.descriptor==actual.descriptor;
   }
   bool CollectManagedRoots(const prepared_roots::Registrar& r)const override {
     if(!roots_.Add(&holder_,r))return false;
@@ -64,7 +64,7 @@ class NativeResolutionObserver final:public Observer {
   bool ReadMember(void* member,Kind kind,MemberIdentity* out)const override {
     const auto& method=model_.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
     const size_t need=kind==Kind::Method?method.size:sizeof(field_array::Field);size_t extent=0;
-    if(!root_||!member||!out||!method_identity::ReadableMappingExtent(member,&extent)||extent<need)return Fail("member-storage-unreadable");
+    if(!root_||!member||!out||!modern_field_metadata::ReadMappingExtent(context_,member,&extent)||extent<need)return Fail("member-storage-unreadable");
     void* declaring=root_(member);
     *out={member,declaring,kind==Kind::Method?method_metadata::ReadAccessFlags(member):field_array::Flags(member)};return true;
   }
@@ -76,7 +76,7 @@ class NativeResolutionObserver final:public Observer {
     // classes need no descriptor or platform std::string ABI at all.
     const auto& source=metadata_.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
     size_t extent=0;class_metadata::State state;
-    if(!target||!holder||!method_identity::ReadableMappingExtent(target,&extent)||
+    if(!target||!holder||!modern_field_metadata::ReadMappingExtent(context_,target,&extent)||
        !class_metadata::ReadState(source,target,extent,&state))return Fail("declaring-class-state-unreadable");
     if(state.IsPrimitive()){*out=false;return true;}
     if(state.access_flags&0x200u){
@@ -84,7 +84,7 @@ class NativeResolutionObserver final:public Observer {
       if(implements_){*out=implements_(holder,uintptr_t(target));return true;}
       if(!metadata_.InterfaceDeclarationCalibrated())return Fail("interface-table-declaration-not-independently-calibrated");
       std::string error;
-      if(holder!=holder_||!native_interface_graph::Matches(metadata_,holder,interfaces_,&error))return Fail("live-holder-interface-table-invalid");
+      if(holder!=holder_||!native_interface_graph::MatchesInContext(metadata_,holder,interfaces_,&error,context_))return Fail("live-holder-interface-table-invalid");
       *out=std::find(interfaces_.begin(),interfaces_.end(),target)!=interfaces_.end();return true;
     }
     // The pure plan already captured the entire real superclass chain.
@@ -96,7 +96,7 @@ class NativeResolutionObserver final:public Observer {
     if(!out)return Fail("signature-output-missing");
     if(candidate.kind==Kind::Method){if(!same_)return Fail("named-method-signature-unavailable");*out=same_(actual.member,candidate.member);return true;}
     field_copy::CopyFieldView text;std::string error;
-    if(!metadata_.FieldIdentity(actual.member,&text,&error)||!text.name||!text.descriptor)return Fail("field-name-descriptor-unavailable");
+    if(!metadata_.FieldIdentity(actual.member,&text,&error,context_)||!text.name||!text.descriptor)return Fail("field-name-descriptor-unavailable");
     *out=candidate.name==text.name&&candidate.descriptor==text.descriptor;return true;
   }
  private:
@@ -104,17 +104,18 @@ class NativeResolutionObserver final:public Observer {
   mutable const char* failure_=nullptr;
   mutable prepared_roots::Bindings roots_;
   mutable void* holder_=nullptr;mutable std::vector<void*> interfaces_;
+  const modern_field_metadata::ReadContext* context_=nullptr;
   const modern_field_metadata::FieldMetadata& metadata_;method_identity::Calibration model_;
   void* (*root_)(void*)=nullptr;bool (*same_)(void*,void*)=nullptr;bool (*implements_)(void*,uintptr_t)=nullptr;bool (*assignable_)(void*,uintptr_t)=nullptr;
 };
 std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commit::Plan& source,
-    const modern_field_metadata::FieldMetadata& metadata,const ResolutionBinding& binding,std::string* error){
+    const modern_field_metadata::FieldMetadata& metadata,const ResolutionBinding& binding,std::string* error,const modern_field_metadata::ReadContext* context){
   auto fail=[&](const char* text)->std::unique_ptr<ResolutionInvalidationPlan>{if(error)*error=text;return nullptr;};
   if(!binding.hooks||!binding.method_model||!binding.storage||!binding.storage->Calibrated()||
       binding.storage->StorageModel()!=metadata.StorageModel()||binding.method_model->identities.size()<3||
       (binding.method_model->model!=method_identity::Model::kMethod11&&binding.method_model->model!=method_identity::Model::kMethod12Onward))
     return fail("Resolution invalidation lacks independent native Class/loader/member provenance");
-  auto observer=std::make_shared<NativeResolutionObserver>(metadata,*binding.method_model,*binding.hooks);
+  auto observer=std::make_shared<NativeResolutionObserver>(metadata,*binding.method_model,*binding.hooks,context);
   if(!observer->Available())return fail("Resolution invalidation lacks named native identity services");
   if(!observer->PrepareHolder(source.mirror,error))return nullptr;
   std::vector<Replacement> pairs;
@@ -122,7 +123,7 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
     if(!observer->ReadClass(source.old_classes[p],&pair.before)||!observer->ReadClass(source.new_classes[p],&pair.after))
       return fail("Resolution invalidation cannot prove transaction Class roots");
     native_method_table::View methods;
-    if(!native_method_table::Read(metadata,*binding.method_model,pair.after.klass,&methods,error))return nullptr;
+    if(!native_method_table::Read(metadata,*binding.method_model,pair.after.klass,&methods,error,context))return nullptr;
     for(uint32_t i=0;i<methods.methods.boundaries.declared_count;++i){void* method=methods.methods.At(i);
       method_metadata::Identity identity;const auto& layout=binding.method_model->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
       if(!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return fail("Resolution invalidation unreadable replacement method");
@@ -135,9 +136,9 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
       Declaration declaration;static_cast<MemberIdentity&>(declaration)=observed;declaration.kind=Kind::Method;
       declaration.name=member->name;declaration.descriptor=member->descriptor;pair.declarations.push_back(std::move(declaration));
     }
-    for(bool stat:{false,true}){field_array::View fields;if(!metadata.Fields(pair.after.klass,stat,&fields,error))return nullptr;
+    for(bool stat:{false,true}){field_array::View fields;if(!metadata.Fields(pair.after.klass,stat,&fields,error,context))return nullptr;
       for(uint32_t i=0;i<fields.selected_count;++i){void* field=fields.AtSelected(i);field_copy::CopyFieldView text;MemberIdentity observed;
-        if(!metadata.FieldIdentity(field,&text,error)||!observer->ReadMember(field,Kind::Field,&observed)||observed.declaring!=pair.after.klass)
+        if(!metadata.FieldIdentity(field,&text,error,context)||!observer->ReadMember(field,Kind::Field,&observed)||observed.declaring!=pair.after.klass)
           return fail("Resolution invalidation field lacks complete native identity");
         Declaration declaration;static_cast<MemberIdentity&>(declaration)=observed;declaration.kind=Kind::Field;
         declaration.name=text.name;declaration.descriptor=text.descriptor;pair.declarations.push_back(std::move(declaration));
@@ -150,29 +151,30 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
 }
 std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
     const modern_field_metadata::FieldMetadata& metadata,
-    const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,HandleGuards guards,ResolutionBinding resolution,const std::vector<native_schema_policy::Plan>* schemas,const native_schema_policy::GuardVerifier* schema_guards) {
+    const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,HandleGuards guards,ResolutionBinding resolution,const std::vector<native_schema_policy::Plan>* schemas,const native_schema_policy::GuardVerifier* schema_guards,const modern_field_metadata::ReadContext* context) {
   const auto fail=[&](const char* text)->std::unique_ptr<Plan>{if(error)*error=text;return nullptr;};
   if(!metadata.Calibrated()||source.old_classes.empty()||source.old_classes.size()!=source.new_classes.size()||
       methods.size()!=source.old_classes.size()||!retirement.owner||!retirement.method_retired||!retirement.retire_method)
     return fail("Missing rooted structural mapping and persistent method guards");
-  if(schemas&&(!resolution.method_model||!native_schema_policy::ValidateNative(source,metadata,*resolution.method_model,methods,*schemas,schema_guards,error)))return nullptr;
-  auto result=std::unique_ptr<Plan>(new Plan);result->retirement_=retirement;result->handle_guards_=guards;bool additions=false;
+  if(schemas&&(!resolution.method_model||!native_schema_policy::ValidateNative(source,metadata,*resolution.method_model,methods,*schemas,schema_guards,error,context)))return nullptr;
+  auto result=std::unique_ptr<Plan>(new Plan);result->read_context_=context;result->retirement_=retirement;result->handle_guards_=guards;bool additions=false;
   for(size_t p=0;p<source.old_classes.size();++p){
     auto* service=methods[p];if(!service)return fail("Missing prepared native method pair");
     void* old=source.old_classes[p];void* replacement=source.new_classes[p];
     for(bool stat:{false,true}){
       field_array::View old_fields,new_fields;
-      if(!metadata.Fields(old,stat,&old_fields,error)||!metadata.Fields(replacement,stat,&new_fields,error))return nullptr;
-      auto before=metadata.Class(old,stat),after=metadata.Class(replacement,stat);
-      for(size_t j=0;j<after.field_count;++j){auto candidate=metadata.Field(replacement,stat,j);bool existed=false;
-        for(size_t i=0;i<before.field_count;++i){auto field=metadata.Field(old,stat,i);
+      if(!metadata.Fields(old,stat,&old_fields,error,context)||!metadata.Fields(replacement,stat,&new_fields,error,context))return nullptr;
+      auto before=metadata.Class(old,stat,context),after=metadata.Class(replacement,stat,context);
+      if(!before.descriptor||!after.descriptor)return fail("Unreadable structural Class identity");
+      for(size_t j=0;j<after.field_count;++j){auto candidate=metadata.Field(replacement,stat,j,context);if(!candidate.field||!candidate.name||!candidate.descriptor)return fail("Unreadable replacement field identity");bool existed=false;
+        for(size_t i=0;i<before.field_count;++i){auto field=metadata.Field(old,stat,i,context);if(!field.field||!field.name||!field.descriptor)return fail("Unreadable source field identity");
           existed|=!std::strcmp(field.name,candidate.name)&&!std::strcmp(field.descriptor,candidate.descriptor);}
         additions|=!existed;
       }
       for(size_t i=0;i<before.field_count;++i){
-        auto field=metadata.Field(old,stat,i);void* next=nullptr;
+        auto field=metadata.Field(old,stat,i,context);void* next=nullptr;
         if(!field.field||!field.name||!field.descriptor)return fail("Unreadable source field identity");
-        for(size_t j=0;j<after.field_count;++j){auto candidate=metadata.Field(replacement,stat,j);
+        for(size_t j=0;j<after.field_count;++j){auto candidate=metadata.Field(replacement,stat,j,context);
           if(!candidate.field||!candidate.name||!candidate.descriptor)return fail("Unreadable replacement field identity");
           if(!std::strcmp(field.name,candidate.name)&&!std::strcmp(field.descriptor,candidate.descriptor)){next=candidate.field;break;}}
         if(!next&&(!retirement.field_retired||!retirement.retire_field))
@@ -203,7 +205,7 @@ std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
     }
   }
   if(resolution.hooks||resolution.method_model||resolution.storage){
-    result->resolution_=PrepareResolution(source,metadata,resolution,error);if(!result->resolution_)return nullptr;
+    result->resolution_=PrepareResolution(source,metadata,resolution,error,context);if(!result->resolution_)return nullptr;
   }else if(additions)return fail("Added declarations require complete native resolution invalidation provenance");
   if(error)error->clear();return result;
 }
@@ -217,7 +219,7 @@ bool Service::Bind(HookEngine& hooks,void* runtime,const executable_mirror::Layo
 }
 bool Service::Validate(const Plan& plan,std::string* error,bool allocation_free)const{
   if(!runtime_||!visit_){if(error)*error="Unbound structural reflective visitor";return false;}
-  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free)mapped_scope.emplace();
+  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free&&!plan.read_context_)mapped_scope.emplace();
   const auto& guards=plan.handle_guards_;
   Visitor visitor(plan.methods_,plan.fields_,true,
       guards.method_handles&&guards.method_handles(guards.owner),
@@ -241,7 +243,7 @@ void Service::Retire(const Plan& plan)const{
 }
 void Service::Update(const Plan& plan,bool allocation_free)const{
   if(!runtime_||!visit_)std::abort();
-  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free)mapped_scope.emplace();
+  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free&&!plan.read_context_)mapped_scope.emplace();
   Visitor visitor(plan.methods_,plan.fields_,false,false,false,false,plan.resolution_.get(),allocation_free);reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
 }
 }

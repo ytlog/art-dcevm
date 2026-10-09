@@ -59,6 +59,8 @@ bool Service::SourceBarrier(const runnable_jni::Context& context,const source_ha
 struct Adapter {
  static field_copy::CopyClassView Class(void* c,bool s){return selected->metadata_.Class(c,s);}
  static field_copy::CopyFieldView Field(void* c,bool s,size_t i){return selected->metadata_.Field(c,s,i);}
+ static field_copy::CopyClassView ClassContext(const void* context,void* c,bool s){return selected->metadata_.Class(c,s,static_cast<const modern_field_metadata::ReadContext*>(context));}
+ static field_copy::CopyFieldView FieldContext(const void* context,void* c,bool s,size_t i){return selected->metadata_.Field(c,s,i,static_cast<const modern_field_metadata::ReadContext*>(context));}
  static void* Reference(void* o,size_t offset,bool v){return selected->metadata_.Reference(o,offset,v);}
  static uint64_t Read(void* o,void* f,char t){return field_storage::Read(o,*static_cast<abi::arm64::Field*>(f),t,Reference);}
  static void Barrier(void* o){field_storage::MarkCard(o,selected->current_,selected->card_offset_,kCardShift,kDirty);}
@@ -173,27 +175,27 @@ struct Calibrator {
 };
 ScopedAccess::ScopedAccess(const Service& s):previous_(selected){selected=s.Calibrated()?&s:nullptr;}
 ScopedAccess::~ScopedAccess(){selected=previous_;}
-field_copy::FieldCopyAccess ScopedAccess::Access()const {
+field_copy::FieldCopyAccess ScopedAccess::Access(const modern_field_metadata::ReadContext* context)const {
  if(!selected)return {};
- return {Adapter::Class,Adapter::Field,Adapter::Read,Adapter::Write,Adapter::Monitor,Adapter::Barrier};
+ return {Adapter::Class,Adapter::Field,Adapter::Read,Adapter::Write,Adapter::Monitor,Adapter::Barrier,context,Adapter::ClassContext,Adapter::FieldContext};
 }
 void* Service::ObjectClass(void* object)const {
  if(!calibrated_||!object)std::abort();
  return metadata_.Reference(object,0,false);
 }
-void Service::CopyFields(bool stat,void* target,void* target_class,void* source,void* source_class)const {
+void Service::CopyFields(bool stat,void* target,void* target_class,void* source,void* source_class,const modern_field_metadata::ReadContext* context)const {
  if(!calibrated_||!target||!target_class||!source||!source_class||target==source)std::abort();
  ScopedAccess scope(*this);
- field_copy::CopyAndClearEvolutionFields(scope.Access(),stat,target,target_class,source,source_class);
+ field_copy::CopyAndClearEvolutionFields(scope.Access(context),stat,target,target_class,source,source_class);
 }
-void Service::RestoreOldFieldDeclaringClass(void* old_class)const {
+void Service::RestoreOldFieldDeclaringClass(void* old_class,const modern_field_metadata::ReadContext* context)const {
  // Fixed ArtField::SetDeclaringClass uses GcRoot::Assign, a plain compressed
  // root32 store. Heap ReplaceReferences has just rewritten native field roots;
  // the source commit restores their old class before retaining that class.
  if(!calibrated_||!old_class||reinterpret_cast<uintptr_t>(old_class)>UINT32_MAX)std::abort();
  for(bool stat:{false,true}) {
   field_array::View fields;std::string error;
-  if(!metadata_.Fields(old_class,stat,&fields,&error))std::abort();
+  if(!metadata_.Fields(old_class,stat,&fields,&error,context))std::abort();
   for(uint32_t i=0;i<fields.selected_count;++i){
    auto* field=static_cast<abi::arm64::Field*>(fields.AtSelected(i));
    field->declaring_class=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(old_class));

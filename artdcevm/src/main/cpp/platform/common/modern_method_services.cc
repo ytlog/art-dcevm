@@ -1,16 +1,17 @@
 #include "platform/common/modern_method_services.h"
 #include "platform/common/class_metadata_abi.h"
 #include <cstdlib>
+#include "platform/common/modern_field_metadata.h"
 namespace artdcevm::modern_methods {
 namespace {
-bool Readable(const method_array::View& table,const method_metadata::Layout& layout) {
+bool Readable(const method_array::View& table,const method_metadata::Layout& layout,const modern_field_metadata::ReadContext* context) {
   if(table.stride != layout.size ||
       table.boundaries.declared_count > table.count ||
       table.boundaries.direct_count > table.boundaries.declared_count) return false;
   if(!table.array) return !table.count;
   size_t extent = 0;
   if(!table.array || uintptr_t(table.array)%8 ||
-      !method_identity::ReadableMappingExtent(table.array,&extent) || extent<8 ||
+      !modern_field_metadata::ReadMappingExtent(context,table.array,&extent) || extent<8 ||
       table.count > (extent-8)/table.stride) return false;
   uint32_t count;
   std::memcpy(&count,table.array,4);
@@ -66,12 +67,12 @@ std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
 std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
     void* old_class,const method_array::View& old,
     void* new_class,const method_array::View& replacement,Retired retired,
-    std::string* error) {
+    std::string* error,const modern_field_metadata::ReadContext* context) {
   const auto fail=[&](const char* message)->std::unique_ptr<Service>{
     if(error)*error=message;return nullptr;
   };
   if(!binding.layout_||!binding.root_||!binding.same_||!binding.obsolete_||!binding.class_linker_||
-      !old_class||!new_class||!retired||!Readable(old,*binding.layout_)||!Readable(replacement,*binding.layout_)||
+      !old_class||!new_class||!retired||!Readable(old,*binding.layout_,context)||!Readable(replacement,*binding.layout_,context)||
       (old_class==new_class&&(old.array!=replacement.array||old.count!=replacement.count)))
     return fail("Modern commit methods require owned calibrated tables and services");
   for(const auto& entry:{std::pair<void*,const method_array::View*>{old_class,&old},
@@ -90,7 +91,7 @@ std::unique_ptr<Service> Service::PrepareTables(const Binding& binding,
   result->root_=binding.root_;result->same_=binding.same_;result->obsolete_=binding.obsolete_;
   result->retired_=retired;result->class_linker_=binding.class_linker_;
   result->old_class_=old_class;result->new_class_=new_class;
-  result->old_=old;result->new_=replacement;result->layout_=binding.layout_;
+  result->old_=old;result->new_=replacement;result->layout_=binding.layout_;result->read_context_=context;
   if(error)error->clear();return result;
 }
 void Service::RestoreOldDeclaringClasses()const {
@@ -106,10 +107,14 @@ void Service::RestoreOldDeclaringClasses()const {
 bool Service::MatchesClassTable(void* klass)const noexcept{
  static_assert(offsetof(class_metadata::Class11,methods)==offsetof(class_metadata::Class17,methods));
  if(klass!=old_class_&&klass!=new_class_)return false;
+ if(read_context_){size_t class_extent=0;
+  if(!modern_field_metadata::ReadMappingExtent(read_context_,klass,&class_extent)||
+     class_extent<offsetof(class_metadata::Class11,methods)+sizeof(uint64_t))return false;
+ }
  const auto& expected=Table(klass);
  uint64_t pointer=0;std::memcpy(&pointer,static_cast<const unsigned char*>(klass)+offsetof(class_metadata::Class11,methods),8);
  void* array=reinterpret_cast<void*>(uintptr_t(pointer));size_t extent=0;
- if(array&&!method_identity::ReadableMappingExtent(array,&extent))return false;
+ if(array&&!modern_field_metadata::ReadMappingExtent(read_context_,array,&extent))return false;
  method_array::View actual;
  if(!method_array::Read(*layout_,array,extent,expected.boundaries,&actual)||actual.array!=expected.array||actual.count!=expected.count)return false;
  for(uint32_t i=0;i<actual.count;++i)if(actual.At(i)!=expected.At(i))return false;

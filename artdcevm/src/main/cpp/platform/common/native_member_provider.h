@@ -50,6 +50,7 @@ class Service {
   std::vector<ClassFact> class_facts_;
   source_commit::Services* prepared_source_=nullptr;
   bool refreshed_=false;
+  const modern_field_metadata::ReadContext* read_context_=nullptr;
   const source_commit::Plan* plan_=nullptr;
   native_structural_reflection::Service* reflection_=nullptr;
   std::unique_ptr<native_structural_reflection::Plan> mapping_;
