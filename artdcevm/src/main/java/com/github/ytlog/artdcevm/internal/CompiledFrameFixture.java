@@ -184,7 +184,7 @@ public final class CompiledFrameFixture {
         private int returned;
         private boolean armed;
         private final int expected;
-        private Run() throws Exception {
+        private Run(boolean warm) throws Exception {
             Class<?>[] args = {int.class, Object.class, int.class, Object.class, int.class, Object.class};
             methods = new Method[] {CompiledFrameFixture.class.getDeclaredMethod("carrier", args),
                 CompiledFrameFixture.class.getDeclaredMethod("middle", args),
@@ -194,7 +194,7 @@ public final class CompiledFrameFixture {
             expected = integers[0] + integers[1] + integers[2] +
                 System.identityHashCode(roots[0]) + System.identityHashCode(roots[1]) + System.identityHashCode(roots[2]);
             // Unarmed awaitGate returns normally, preserving all real calls.
-            for (int i = 0; i < 100000; ++i)
+            for (int i = 0; warm && i < 100000; ++i)
                 if (invoke() != expected) throw new IllegalStateException("Compiled fixture warmup values changed");
         }
         private int invoke() { return carrier(integers[0], roots[0], integers[1], roots[1], integers[2], roots[2]); }
@@ -226,5 +226,9 @@ public final class CompiledFrameFixture {
         }
     }
     /** Call after native bridge initialization, outside any source stop. */
-    public static Run prepare() throws Exception {return new Run();}
+    public static Run prepare() throws Exception {return new Run(true);}
+    /** Experimental cold invocation; only native actual-frame proof identifies its code kind.
+     * A debuggable ART runtime may execute it in the switch interpreter, not Nterp.
+     * Calling this after a warm run does not undo compilation or reset hotness. */
+    public static Run prepareCold() throws Exception {return new Run(false);}
 }

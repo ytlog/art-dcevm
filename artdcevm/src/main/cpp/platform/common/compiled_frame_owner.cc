@@ -25,7 +25,9 @@ bool Owner::Resolve(const runnable_jni::Context& context,void* raw){
  for(size_t i=0;i<o.native_.size();++i){auto method=o.leaf_(scope,o.reflected_[i]);if(!method)return false;o.native_[i]={method,calibration.readable_extents[i],o.public_[i].dex_method_index,o.public_[i].java_modifiers};}
  return true;
 }
-std::unique_ptr<Owner> Owner::Prepare(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti,jobjectArray dex,std::string* error){
+std::unique_ptr<Owner> Owner::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEnv*ti,jobjectArray dex,std::string*error){return PrepareMode(hooks,env,ti,dex,true,error);}
+std::unique_ptr<Owner> Owner::PrepareCold(HookEngine&hooks,JNIEnv*env,jvmtiEnv*ti,jobjectArray dex,std::string*error){return PrepareMode(hooks,env,ti,dex,false,error);}
+std::unique_ptr<Owner> Owner::PrepareMode(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti,jobjectArray dex,bool warm,std::string* error){
  if(!env||!ti||!dex||env->ExceptionCheck()){Fail(error,"Missing ordinary compiled fixture input");return nullptr;}
  auto o=std::unique_ptr<Owner>(new Owner);
  if(env->GetJavaVM(&o->vm_)!=JNI_OK||!o->vm_){Fail(error,"Missing compiled fixture native VM");return nullptr;}
@@ -36,7 +38,7 @@ std::unique_ptr<Owner> Owner::Prepare(HookEngine& hooks,JNIEnv* env,jvmtiEnv* ti
  const stack_visitor_service::Declaration declarations[]={stack_visitor_service::Declaration::kAndroid12,stack_visitor_service::Declaration::kAndroid13To16,stack_visitor_service::Declaration::kAndroid17};
  for(size_t i=0;i<3;++i)for(size_t c=0;c<2;++c)o->nterp_bound_[i*2+c]=native_nterp_frame_proof::Service::Bind(declarations[i],c?native_nterp_frame_reader::CanonicalDeclaration::WithFullRegisterList:native_nterp_frame_reader::CanonicalDeclaration::WithoutFullRegisterList,[&](const char*name){return hooks.FindSymbol("libart.so",name);},&o->nterp_[i*2+c]);
  auto local=env->FindClass("com/github/ytlog/artdcevm/internal/CompiledFrameFixture");
- auto prepare=local?env->GetStaticMethodID(local,"prepare","()Lcom/github/ytlog/artdcevm/internal/CompiledFrameFixture$Run;"):nullptr;
+ auto prepare=local?env->GetStaticMethodID(local,warm?"prepare":"prepareCold","()Lcom/github/ytlog/artdcevm/internal/CompiledFrameFixture$Run;"):nullptr;
  auto run=prepare?env->CallStaticObjectMethod(local,prepare):nullptr;
  o->fixture_=local?static_cast<jclass>(env->NewGlobalRef(local)):nullptr;if(local)env->DeleteLocalRef(local);
  o->run_=run?env->NewGlobalRef(run):nullptr;if(run)env->DeleteLocalRef(run);

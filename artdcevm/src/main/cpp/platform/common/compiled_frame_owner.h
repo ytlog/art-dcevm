@@ -14,6 +14,8 @@ namespace artdcevm::compiled_frame_fixture {
 class Owner final {
  public:
  static std::unique_ptr<Owner> Prepare(HookEngine&,JNIEnv*,jvmtiEnv*,jobjectArray original_installed_dex,std::string*);
+ // Experimental cold invocation; no Nterp/compiled readiness is inferred.
+ static std::unique_ptr<Owner> PrepareCold(HookEngine&,JNIEnv*,jvmtiEnv*,jobjectArray original_installed_dex,std::string*);
  ~Owner();
  Owner(const Owner&)=delete;Owner& operator=(const Owner&)=delete;
  bool RegisterRoots(const runnable_jni::Context&,source_handle_roots::Pool&,std::string*);
@@ -28,6 +30,7 @@ class Owner final {
  bool Close(JNIEnv*,std::string*);
  private:
  Owner()=default;
+ static std::unique_ptr<Owner> PrepareMode(HookEngine&,JNIEnv*,jvmtiEnv*,jobjectArray,bool warm,std::string*);
  static bool Resolve(const runnable_jni::Context&,void*);
  JavaVM* vm_=nullptr;jobject run_=nullptr;jclass fixture_=nullptr;
  jmethodID start_=nullptr,close_=nullptr;
