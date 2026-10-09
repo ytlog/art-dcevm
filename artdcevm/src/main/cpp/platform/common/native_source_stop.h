@@ -3,6 +3,8 @@
 #include "api/hook_engine.h"
 #include "platform/common/thread_suspend_service.h"
 #include "platform/abi/arm64/android-common/source_stop.h"
+#include "platform/common/native_source_gc_publication.h"
+#include <vector>
 namespace artdcevm::native_source_class_loading {class Run;}
 namespace artdcevm::native_source_stop {
 class Session;
@@ -22,6 +24,7 @@ class Service {
                    Service*,std::string* error);
   bool Authorize(const Calibration&,const void* exact_original_run) noexcept;
   bool Calibrated()const noexcept{return calibrated_;}
+  bool DexPublicationCalibrated()const noexcept{return publication_calibrated_;}
   // Borrow only the actual original final carrier; requires no direct transition pair.
   bool AuthorizeOriginalFinal(const Calibration&,const void* exact_original_run) noexcept;
   bool OriginalFinalCalibrated()const noexcept{return original_calibrated_;}
@@ -35,7 +38,10 @@ class Service {
   abi::arm64::android_common::SuspendConstruct stop_=nullptr;
   abi::arm64::android_common::SuspendDestroy resume_=nullptr;
   thread_suspend_service::Service state_;
+  bool publication_calibrated_=false;void* publication_linker_=nullptr;
+  uint32_t publication_gc_pairs_=0;int32_t publication_collector_=0;
   friend class Session;friend class Observation;friend class Calibration;
+  friend struct NativeHooks;
 };
 // Private sealed native witness. Fixed declarations/symbol presence cannot create
 // this permission; only the actual paired ordinary source lifecycle below can.
@@ -45,6 +51,8 @@ class Calibration final {
  private:
   Service binding_;const void* run_body_=nullptr;
   char cause_[128]{};bool long_=false,valid_=false;
+  bool publication_valid_=false;void* publication_linker_=nullptr;
+  uint32_t publication_pairs_=0;int32_t publication_collector_=0;
   friend class Observation;friend class Service;
 };
 // The sole original Run owner constructs this before entering actual Run and
@@ -86,6 +94,8 @@ class Observation final {
   char cause_[128]{};bool long_=false,attached_=false,failed_=false,finished_=false;
   Phase phase_=Phase::kRun;const char* failure_="ordinary-source-observation-not-started";
   bool prefinal_gc_=false;
+  void* publication_linker_=nullptr;uint32_t publications_=0,publication_pairs_=0;
+  int32_t publication_collector_=0;bool publication_profile_=false;
   native_source_class_loading::Run* cleanup_=nullptr;bool postfinal_gc_=false;
   ObservationTrace trace_{};
   void Event(uint8_t) noexcept;
@@ -104,6 +114,10 @@ class Session {
   ~Session();
   Session(const Session&)=delete;Session& operator=(const Session&)=delete;
   bool Begin(void* self,size_t mapped_extent) noexcept;
+  bool PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
+      native_source_gc_publication::Matcher,std::string* error);
+  bool CanPublishDex(void* driver,const void* holder,void* linker)const noexcept;
+  bool IsPublicationWindow(void* self)const noexcept;
   bool ContinueSource() noexcept;
   // Refund only before handing the reservation to original source. Restore
   // actual Runnable while keeping this witness alive for dependent readers.
@@ -137,6 +151,7 @@ class Session {
   enum class Phase {kEmpty,kStopped,kContinuing,kFinal,kFinalResumed,kCompleted,kRolledBack,kOriginalPrepared,kOriginalArmed,kOriginalDisabled,kOriginalClosing};
   bool SameOwner()const noexcept;
   bool Native()const noexcept;
+  bool MatchPublication(void*,void*,void*,size_t*)const noexcept;
   void Rollback() noexcept;
   Service service_;void* self_=nullptr;size_t extent_=0;
   abi::arm64::android_common::SuspendAll storage_{};
@@ -144,6 +159,9 @@ class Session {
   Phase phase_=Phase::kEmpty;bool gc_=false,suspended_=false,exclusive_=false,source_disable_=false;
   bool borrowed_=false,borrowed_failed_=false;
   void* original_driver_=nullptr;const void* original_holder_=nullptr;
+  void* publication_driver_=nullptr;const void* publication_holder_=nullptr;void* publication_linker_=nullptr;
+  native_source_gc_publication::Matcher publication_matcher_{};
+  std::vector<uint8_t> publications_;size_t publication_completed_=0;
   void RefuseOriginal(const char*) noexcept;
   const char* failure_="not-started";
 };
