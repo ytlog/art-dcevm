@@ -48,13 +48,24 @@ Java_com_github_ytlog_artdcevm_testing_Arm32ReceiverProbe_nativeCalibrate(
   static auto* hooks=new artdcevm::ShadowHookEngine;
   static auto* installer=new Installer;
   size_t extent=0;std::string error;
+  artdcevm::jni_receiver_calibration::Report observation{
+      artdcevm::jni_receiver_calibration::Result::kUnavailable,
+      artdcevm::jni_receiver_calibration::CallbackResult::kUnavailable};
   const bool passed=Extent(env,&extent) &&
-      installer->InitializeFromNative(*hooks,env,carrier,extent,Pin,nullptr,&error);
+      installer->InitializeFromNative(*hooks,env,carrier,extent,Pin,nullptr,&error,&observation);
   if(error.empty() && !passed)error="Current JNIEnv mapping unavailable";
   if(env->ExceptionCheck())return nullptr;
   std::string report="{\"passed\":"+std::string(passed?"true":"false")+
       ",\"hookInstalled\":"+(installer->Bound()?"true":"false")+
       ",\"receiverReady\":"+(installer->Ready()?"true":"false")+
+      ",\"nativeOriginalJNIReceiverReady\":"+(passed && observation.original_callback_hits==1 && observation.matched_owner_prefixes==2?"true":"false")+
+      ",\"jniPrefixReadable\":"+(passed && extent>=sizeof(artdcevm::abi::common::JniEnvironmentPrefix)?"true":"false")+
+      ",\"pointerBytes\":"+std::to_string(sizeof(void*))+
+      ",\"runnableScopeBytes\":"+std::to_string(sizeof(artdcevm::abi::common::RunnableJniScope))+
+      ",\"jniMappedBytes\":"+std::to_string(extent)+
+      ",\"originalCallbackHits\":"+std::to_string(observation.original_callback_hits)+
+      ",\"matchedOwnerPrefixes\":"+std::to_string(observation.matched_owner_prefixes)+
+      ",\"privateEvolutionInitialized\":false,\"publicJvmtiInitialized\":false"+
       ",\"diagnostic\":"+Quote(error)+"}";
   return env->NewStringUTF(report.c_str());
 }

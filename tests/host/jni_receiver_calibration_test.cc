@@ -79,7 +79,7 @@ int main() {
   hooks.missing_leaf=false;assert(Service::Bind(hooks,reinterpret_cast<void*>(Original),&service,&error));
   auto run=[&]{return service.Calibrate(&env.env,carrier,sizeof(env));};
   auto reset=[&]{state={};env.self=&state;env.vm=&vm;};
-  assert(run().result==Result::kSuccess);
+  auto first=run();assert(first.result==Result::kSuccess && first.original_callback_hits==1 && first.matched_owner_prefixes==2);
   assert(state.original_calls==1 && state.vm_calls==2 && state.current_calls==3 && !state.runnable);
   reset();state.runnable=true;assert(run().result==Result::kSuccess);assert(state.runnable);
   reset();env.self=&different_self;assert(run().result==Result::kReceiverMismatch);assert(!state.jni_calls);

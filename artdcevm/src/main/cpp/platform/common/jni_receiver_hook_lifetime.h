@@ -16,7 +16,10 @@ template<size_t Width> class Installer {
   // the original trampoline and dispatcher are published; no Thread field is
   // read/written. Lifetime/extent proof precedes any hook installation.
   bool InitializeFromNative(HookEngine& hooks,JNIEnv* env,jobject carrier,size_t extent,
-                            Pin pin,void* pin_data,std::string* error) {
+                            Pin pin,void* pin_data,std::string* error,
+                            jni_receiver_calibration::Report* observation=nullptr) {
+    if(observation)*observation={jni_receiver_calibration::Result::kUnavailable,
+        jni_receiver_calibration::CallbackResult::kUnavailable};
     // Reject a known borrowed callback before acquiring the install mutex: it
     // is Runnable, and recursively installing while a calibration owns the
     // mutex would otherwise deadlock instead of preserving JNI behavior.
@@ -59,6 +62,7 @@ template<size_t Width> class Installer {
       // Scope destructor resumes only after original and dispatcher publication.
     }
     auto report=service_.Calibrate(env,carrier,extent);
+    if(observation)*observation=report;
     if(report.result!=jni_receiver_calibration::Result::kSuccess)
       return Fail(error,"Original Runnable callback/receiver calibration refused");
     ready_.store(true,std::memory_order_release);
