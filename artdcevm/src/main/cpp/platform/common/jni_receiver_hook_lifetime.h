@@ -17,7 +17,7 @@ template<size_t Width> class Installer {
   // read/written. Lifetime/extent proof precedes any hook installation.
   bool InitializeFromNative(HookEngine& hooks,JNIEnv* env,jobject carrier,size_t extent,
                             Pin pin,void* pin_data,std::string* error,
-                            jni_receiver_calibration::Report* observation=nullptr) {
+                            jni_receiver_calibration::Report* observation=nullptr,borrowed_jni_callback::Operation operation=nullptr,void* data=nullptr) {
     if(observation)*observation={jni_receiver_calibration::Result::kUnavailable,
         jni_receiver_calibration::CallbackResult::kUnavailable};
     // Reject a known borrowed callback before acquiring the install mutex: it
@@ -61,7 +61,7 @@ template<size_t Width> class Installer {
       bound_.store(true,std::memory_order_release);
       // Scope destructor resumes only after original and dispatcher publication.
     }
-    auto report=service_.Calibrate(env,carrier,extent);
+    auto report=service_.Calibrate(env,carrier,extent,operation,data);
     if(observation)*observation=report;
     if(report.result!=jni_receiver_calibration::Result::kSuccess)
       return Fail(error,"Original Runnable callback/receiver calibration refused");

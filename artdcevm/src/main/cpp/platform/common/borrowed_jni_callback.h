@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/abi/common/jni_access.h"
 namespace artdcevm::borrowed_jni_callback {
-struct Context {void* self;JNIEnv* env;void* vm;};
+struct Context {void* self;JNIEnv* env;void* vm;void* original_method=nullptr;abi::common::FromReflectedMethod original_leaf=nullptr;};
 using Operation=bool (*)(const Context&,void*);
 enum class Result {kSuccess,kUnavailable,kInvalidRequest,kPendingException,kReentrant,
                    kLeafNotReached,kContextMismatch,kOriginalRejected,kOperationRejected,
@@ -53,7 +53,7 @@ class Bridge {
     if(scope.env->ExceptionCheck()) {request->result=Result::kJniException;return method;}
     if(!method) {request->result=Result::kOriginalRejected;return method;}
     try {
-      request->result=request->operation({scope.self,scope.env,scope.vm},request->data)
+      request->result=request->operation({scope.self,scope.env,scope.vm,method,original_},request->data)
           ? Result::kSuccess : Result::kOperationRejected;
     } catch(...) {request->result=Result::kOperationThrew;}
     return method;

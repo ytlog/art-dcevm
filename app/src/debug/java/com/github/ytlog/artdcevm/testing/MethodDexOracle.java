@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Constructor;
 import java.util.Arrays;
@@ -20,10 +21,15 @@ public final class MethodDexOracle {
         public final String dexEntry;
         public final int headerOffset;
         public final int directMethods, virtualMethods;
-        Result(int[] indices, int[] modifiers, String entry, int offset, int direct, int virtual) {
+        public final int classDefIndex, typeIndex;
+        public Field[] fields;
+        public int[] fieldIndices, fieldModifiers;
+        public int staticFields, instanceFields;
+        Result(int[] indices, int[] modifiers, String entry, int offset, int direct, int virtual, int classDef, int type) {
             this.indices = indices; this.modifiers = modifiers;
             this.dexEntry = entry; this.headerOffset = offset;
             this.directMethods = direct; this.virtualMethods = virtual;
+            this.classDefIndex = classDef; this.typeIndex = type;
         }
     }
     private MethodDexOracle() { }
@@ -61,7 +67,12 @@ public final class MethodDexOracle {
                         if (found != null) throw new IOException("Duplicate fixture class definition across APK DEX files");
                         int[] modifiers = new int[methods.length];
                         for (int i = 0; i < methods.length; ++i) modifiers[i] = methods[i].getModifiers();
-                        found = new Result(indices, modifiers, entry.getName(), offset, dex.directCount, dex.virtualCount);
+                        found = new Result(indices, modifiers, entry.getName(), offset, dex.directCount, dex.virtualCount, dex.classDefIndex, dex.typeIndex);
+                        found.fields = owner.getDeclaredFields();
+                        found.fieldIndices = dex.findFields(found.fields);
+                        found.fieldModifiers = new int[found.fields.length];
+                        for (int i=0;i<found.fields.length;++i) found.fieldModifiers[i]=found.fields[i].getModifiers();
+                        found.staticFields=dex.staticCount;found.instanceFields=dex.instanceCount;
                     }
                     offset += dex.fileSize;
                     if (!dex.container && offset != bytes.length) throw new IOException("Trailing bytes in legacy DEX");
@@ -216,6 +227,9 @@ public final class MethodDexOracle {
             if (!shorty.toString().equals(string(integer(offset)))) throw bad("Prototype shorty mismatch");
             return result.append(')').append(resultType).toString();
         }
+        int classDefIndex = -1, typeIndex = -1;
+        int staticCount, instanceCount;
+        int[] encodedFieldIndices, encodedFieldFlags;
         int[] find(Executable[] reflected) throws IOException {
             String owner = descriptor(reflected[0].getDeclaringClass());
             int ownerType = -1, classData = -1;
@@ -224,6 +238,7 @@ public final class MethodDexOracle {
                 if (owner.equals(type(index))) {
                     if (ownerType != -1) throw bad("Duplicate fixture class definition");
                     ownerType = index; classData = integer(definition + 24);
+                    classDefIndex = i; typeIndex = index;
                 }
             }
             if (ownerType == -1) return null;
@@ -247,7 +262,17 @@ public final class MethodDexOracle {
             directCount = directMethods; virtualCount = virtualMethods;
             if ((long) staticFields + instanceFields + directMethods + virtualMethods > bytes.length)
                 throw bad("Invalid class_data counts");
-            for (long i = 0; i < (long) staticFields + instanceFields; ++i) { uleb(cursor); uleb(cursor); }
+            staticCount=staticFields;instanceCount=instanceFields;
+            encodedFieldIndices = new int[staticFields+instanceFields];encodedFieldFlags=new int[encodedFieldIndices.length];
+            int position=0;
+            for (int group : new int[]{staticFields, instanceFields}) {
+                int index=0;
+                for (int i=0;i<group;++i) {
+                    int delta=uleb(cursor);
+                    if(delta>Integer.MAX_VALUE-index||(i!=0&&delta==0))throw bad("Invalid field delta");
+                    index+=delta;encodedFieldIndices[position]=index;encodedFieldFlags[position]=uleb(cursor);++position;
+                }
+            }
             boolean[] defined = new boolean[found.length];
             for (int group : new int[]{directMethods, virtualMethods}) {
                 int index = 0;
@@ -274,5 +299,27 @@ public final class MethodDexOracle {
             for (boolean value : defined) if (!value) throw bad("Referenced fixture method is not defined by its class");
             return found;
         }
+        int[] findFields(Field[] reflected) throws IOException {
+            if(reflected.length!=encodedFieldIndices.length)throw bad("Incomplete reflection field declarations");
+            int[] result=new int[reflected.length];Arrays.fill(result,-1);
+            int fieldCount=integer(base+80),fieldOff=integer(base+84);table(fieldCount,fieldOff,8);
+            for(int n=0;n<encodedFieldIndices.length;++n) {
+                int id=encodedFieldIndices[n];
+                if(id<0||id>=fieldCount)throw bad("Invalid declared field index");
+                int at=fieldOff+id*8;
+                if(ushort(at)!=typeIndex)throw bad("Declared field owner mismatch");
+                String name=string(integer(at+4)), type=type(ushort(at+2));
+                boolean matched=false;
+                for(int i=0;i<reflected.length;++i)if(name.equals(reflected[i].getName())&&type.equals(descriptor(reflected[i].getType()))) {
+                    if(result[i]!=-1||(encodedFieldFlags[n]&0xdf)!=(reflected[i].getModifiers()&0xdf)||
+                        ((encodedFieldFlags[n]&8)!=0)!=(n<staticCount))throw bad("Declared field flags/order mismatch");
+                    result[i]=id;matched=true;
+                }
+                if(!matched)throw bad("Declared field missing in reflection");
+            }
+            for(int id:result)if(id<0)throw bad("Reflection field missing in DEX");
+            return result;
+        }
+
     }
 }

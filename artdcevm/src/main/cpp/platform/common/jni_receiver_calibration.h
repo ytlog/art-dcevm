@@ -28,7 +28,7 @@ template<size_t PointerWidth> class Service {
     }
     candidate.current_=current;*output=candidate;return true;
   }
-  Report Calibrate(JNIEnv* env,jobject carrier,size_t mapped_extent) const {
+  Report Calibrate(JNIEnv* env,jobject carrier,size_t mapped_extent,borrowed_jni_callback::Operation operation=nullptr,void* data=nullptr) const {
     if(!current_)return {Result::kUnavailable,CallbackResult::kUnavailable};
     if(!env || !carrier)return {Result::kInvalidRequest,CallbackResult::kInvalidRequest};
     if(env->ExceptionCheck())return {Result::kPendingException,CallbackResult::kPendingException};
@@ -42,7 +42,7 @@ template<size_t PointerWidth> class Service {
     if(!jni_receiver_metadata::ReadMatchedPrefix(PointerWidth,env,mapped_extent,
           reinterpret_cast<uintptr_t>(self),reinterpret_cast<uintptr_t>(vm),&prefix))
       return {Result::kReceiverMismatch,CallbackResult::kContextMismatch};
-    Request request{this,env,vm,self,mapped_extent};
+    Request request{this,env,vm,self,mapped_extent,operation,data};
     const auto result=bridge_.Invoke(env,carrier,Observe,&request);
     if(env->ExceptionCheck())return {Result::kJniException,result,request.callback_hits,request.owner_prefixes};
     // Check the independent named owner again after ART restored native scope.
@@ -55,7 +55,7 @@ template<size_t PointerWidth> class Service {
     return bridge_.OnFromReflectedMethod(scope,carrier);
   }
  private:
-  struct Request {const Service* service;JNIEnv* env;JavaVM* vm;void* self;size_t extent;size_t callback_hits=0,owner_prefixes=1;};
+  struct Request {const Service* service;JNIEnv* env;JavaVM* vm;void* self;size_t extent;borrowed_jni_callback::Operation operation;void* data;size_t callback_hits=0,owner_prefixes=1;};
   static bool Observe(const borrowed_jni_callback::Context& context,void* data) {
     auto& request=*static_cast<Request*>(data);
     ++request.callback_hits;
@@ -68,7 +68,7 @@ template<size_t PointerWidth> class Service {
     const bool matched=jni_receiver_metadata::ReadMatchedPrefix(PointerWidth,context.env,request.extent,
         reinterpret_cast<uintptr_t>(context.self),reinterpret_cast<uintptr_t>(context.vm),&prefix);
     if(matched)++request.owner_prefixes;
-    return matched;
+    return matched && (!request.operation || request.operation(context,request.data));
   }
   abi::common::CurrentThread current_=nullptr;
   borrowed_jni_callback::Bridge bridge_;

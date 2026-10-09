@@ -1,7 +1,7 @@
 """Strict proof gate for self-instrumented original ARM32 JNI receivers."""
 import json
 import re
-SCOPE = 'arm32-original-jni-receiver-only'
+SCOPE = 'arm32-original-jni-readonly-metadata'
 COMPONENT = 'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.Arm32ReceiverInstrumentation'
 
 def strict_json(text):
@@ -60,6 +60,20 @@ def validate(report, run_id, apk_sha256):
     for field, value in [('totalOriginalCallbackHits', hits), ('totalMatchedOwnerPrefixes', prefixes)]:
         if type(report.get(field)) is not int or report[field] != value:
             raise ValueError('Invalid observed callback totals')
+    metadata = report.get('metadata')
+    if not isinstance(metadata, dict) or metadata.get('passed') is not True or metadata.get('classProven') is not True or metadata.get('fieldsProven') is not True or metadata.get('diagnostic') != '':
+        raise ValueError('Complete ARM32 Method/Class metadata proof missing')
+    for field in ('pointerBytes', 'methodStride', 'classIndexOffset', 'declaredMethods', 'directMethods', 'totalMethods', 'expectedDeclaredMethods', 'expectedDirectMethods', 'dexClassDefIndex', 'dexTypeIndex', 'declaredFields', 'staticFields', 'expectedFields', 'expectedStaticFields'):
+        if type(metadata.get(field)) is not int:
+            raise ValueError('Invalid metadata observation: ' + field)
+    if metadata['pointerBytes'] != 4 or metadata['methodStride'] not in (24, 28) or metadata['classIndexOffset'] not in (72, 80):
+        raise ValueError('Wrong fixed ARM32 metadata declaration')
+    if metadata['declaredMethods'] != 6 or metadata['expectedDeclaredMethods'] != 6 or metadata['directMethods'] != 4 or metadata['expectedDirectMethods'] != 4 or metadata['totalMethods'] < 6:
+        raise ValueError('Complete static/private/virtual/native/constructor table not proved')
+    if metadata['declaredFields'] != 3 or metadata['expectedFields'] != 3 or metadata['staticFields'] != 1 or metadata['expectedStaticFields'] != 1:
+        raise ValueError('Complete static/private/instance Field table not proved')
+    if metadata['dexClassDefIndex'] < 0 or metadata['dexTypeIndex'] < 0 or not re.fullmatch(r'classes(?:[2-9]|[1-9][0-9]+)?\.dex', metadata.get('dexEntry', '')):
+        raise ValueError('Independent installed APK class identity missing')
     return report
 
 def parse_instrumentation(output, run_id, apk_sha256):

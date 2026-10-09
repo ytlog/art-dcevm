@@ -13,11 +13,19 @@ import java.security.MessageDigest;
 
 /** Self instrumentation for the real ARM32 receiver; no JVMTI/evolution attach. */
 public final class Arm32ReceiverInstrumentation extends Instrumentation {
-    private static final String SCOPE = "arm32-original-jni-receiver-only";
+    private static final String SCOPE = "arm32-original-jni-readonly-metadata";
     private Bundle arguments;
 
     public static final class Carrier {
+        public int instanceField;
+        private long privateField;
+        public static final int staticField=37;
+        public Carrier() {}
+        public Carrier(int ignored) {}
         public int value(int input) { return input + 41; }
+        public static int staticValue(int input) { return input + 17; }
+        private int privateValue(int input) { return input + 13; }
+        public native int nativeValue(int input);
     }
 
     @Override public void onCreate(Bundle args) {
@@ -105,6 +113,19 @@ public final class Arm32ReceiverInstrumentation extends Instrumentation {
                 }
             }
             report.put("totalOriginalCallbackHits", hits).put("totalMatchedOwnerPrefixes", prefixes);
+            java.util.ArrayList<java.lang.reflect.Executable> declarations = new java.util.ArrayList<>();
+            java.util.Collections.addAll(declarations, Carrier.class.getDeclaredConstructors());
+            java.util.Collections.addAll(declarations, Carrier.class.getDeclaredMethods());
+            java.lang.reflect.Executable[] complete = declarations.toArray(new java.lang.reflect.Executable[0]);
+            MethodDexOracle.Result oracle = MethodDexOracle.read(getTargetContext().getApplicationInfo().sourceDir, complete);
+            if (oracle.directMethods + oracle.virtualMethods != complete.length) throw new AssertionError("Incomplete reflection method oracle");
+            JSONObject metadata = new JSONObject(Arm32ReceiverProbe.metadata(Carrier.class, complete, oracle));
+            metadata.put("expectedDeclaredMethods", complete.length).put("expectedDirectMethods", oracle.directMethods)
+                    .put("expectedFields", oracle.fields.length).put("expectedStaticFields", oracle.staticFields)
+                    .put("dexEntry", oracle.dexEntry).put("dexClassDefIndex", oracle.classDefIndex).put("dexTypeIndex", oracle.typeIndex);
+            report.put("metadata", metadata);
+            passed &= metadata.optBoolean("passed") && metadata.optBoolean("classProven")
+                    && metadata.optInt("declaredMethods") == complete.length && metadata.optInt("directMethods") == oracle.directMethods;
         } catch (Throwable error) {
             passed = false;
             try { report.put("error", error.toString()); } catch (Exception ignored) { }

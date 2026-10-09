@@ -15,6 +15,10 @@ for thread, role in enumerate(('main', 'worker1', 'worker2')):
             pointerBytes=4, runnableScopeBytes=12, jniMappedBytes=4096, originalCallbackHits=1,
             matchedOwnerPrefixes=2, privateEvolutionInitialized=False, publicJvmtiInitialized=False,
             diagnostic='')))
+report['metadata'] = dict(passed=True, classProven=True, fieldsProven=True, declaredFields=3, staticFields=1, expectedFields=3, expectedStaticFields=1, pointerBytes=4, methodStride=24,
+    classIndexOffset=80, declaredMethods=6, directMethods=4, totalMethods=6,
+    expectedDeclaredMethods=6, expectedDirectMethods=4, dexClassDefIndex=12, dexTypeIndex=33,
+    dexEntry='classes.dex', diagnostic='')
 validate(report, run_id, sha)
 output = 'INSTRUMENTATION_RESULT: stream='+json.dumps(report)+'\nINSTRUMENTATION_CODE: -1\n'
 parse_instrumentation(output, run_id, sha)
@@ -40,6 +44,12 @@ for key, value in [('pointerBytes',8),('runnableScopeBytes',24),('originalCallba
                    ('nativeOriginalJNIReceiverReady',False),('jniPrefixReadable',False),
                    ('publicJvmtiInitialized',True),('receiverReady',False)]:
     bad = copy.deepcopy(report);bad['checks'][0]['proof'][key]=value;reject(bad)
+for key, value in [('passed', False), ('classProven', False), ('fieldsProven', False), ('declaredFields', 2), ('staticFields', False), ('pointerBytes', 8), ('methodStride', 32),
+                   ('classIndexOffset', 76), ('declaredMethods', 5), ('directMethods', 3), ('totalMethods', 5),
+                   ('expectedDeclaredMethods', True), ('dexClassDefIndex', -1), ('dexTypeIndex', True),
+                   ('dexEntry', 'old.dex'), ('diagnostic', 'leaf unavailable')]:
+    bad = copy.deepcopy(report);bad['metadata'][key]=value;reject(bad)
+bad = copy.deepcopy(report);del bad['metadata'];reject(bad)
 for text in [output.replace('CODE: -1','CODE: 0'), output+output,
              output.replace('"schemaVersion": 1','"schemaVersion": 1, "schemaVersion": 1')]:
     try: parse_instrumentation(text, run_id, sha)

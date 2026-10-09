@@ -81,6 +81,16 @@ int main() {
   auto reset=[&]{state={};env.self=&state;env.vm=&vm;};
   auto first=run();assert(first.result==Result::kSuccess && first.original_callback_hits==1 && first.matched_owner_prefixes==2);
   assert(state.original_calls==1 && state.vm_calls==2 && state.current_calls==3 && !state.runnable);
+  reset();int observed=0;
+  auto observer=[](const artdcevm::borrowed_jni_callback::Context& context,void* opaque){
+    assert(state.runnable&&context.original_method==native_method&&context.original_leaf==Original);
+    ++*static_cast<int*>(opaque);return true;
+  };
+  assert(service.Calibrate(&env.env,carrier,sizeof(env),observer,&observed).result==Result::kSuccess&&observed==1&&!state.runnable);
+  reset();auto refusal=[](const artdcevm::borrowed_jni_callback::Context&,void*){return false;};
+  assert(service.Calibrate(&env.env,carrier,sizeof(env),refusal,nullptr).result==Result::kCallbackRejected&&!state.runnable);
+  reset();auto throws=[](const artdcevm::borrowed_jni_callback::Context&,void*)->bool{throw std::runtime_error("metadata refusal");};
+  assert(service.Calibrate(&env.env,carrier,sizeof(env),throws,nullptr).callback==Callback::kOperationThrew&&!state.runnable);
   reset();state.runnable=true;assert(run().result==Result::kSuccess);assert(state.runnable);
   reset();env.self=&different_self;assert(run().result==Result::kReceiverMismatch);assert(!state.jni_calls);
   reset();env.vm=&different_vm;assert(run().result==Result::kReceiverMismatch);assert(!state.jni_calls);
