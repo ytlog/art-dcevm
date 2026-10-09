@@ -16,6 +16,7 @@
 #include "platform/common/modern_source_commit.h"
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/native_source_calibration_bridge.h"
+#include "platform/common/native_source_observation_owner.h"
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
@@ -69,6 +70,7 @@ struct NativeEngine final:Engine {
  void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_source_stop::Service source_stop;
+ native_source_observation::Owner source_observers;
  native_scope_executor::Executor native_scope;
  bool NativeScopeCalibrated()const override{return native_scope.Ready();}
  std::string source_stop_diagnostic;
@@ -414,7 +416,10 @@ struct NativeEngine final:Engine {
       native_source_stop::Service::Bind(hooks,runtime.receivers.heap,state,&candidate,&source_stop_diagnostic)){
     auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
     void* self=current_thread?current_thread():nullptr;size_t extent=0;
-    if(self&&method_identity::ReadableMappingExtent(self,&extent))source_observation.emplace(candidate,self,extent);
+    if(self&&method_identity::ReadableMappingExtent(self,&extent)){
+     if(source_observers.Install(hooks,env,runtime,state,self,extent,&source_stop_diagnostic))
+      source_observation.emplace(candidate,self,extent,source_observers.Loading(),runnable_jni::Context{self,env,vm});
+    }
     else source_stop_diagnostic="Ordinary source calibration current Thread mapping unavailable";
    }
   }
