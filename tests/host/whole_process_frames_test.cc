@@ -19,7 +19,7 @@ void ClearCaches(){assert(!exclusive&&!list_locked);}
 void ListLock(void* m,void* t){assert(m==&list_mutex&&t==&self&&gc&&exclusive&&!list_locked);list_locked=true;}
 void ListUnlock(void* m,void* t){assert(m==&list_mutex&&t==&self&&gc&&exclusive&&list_locked);list_locked=false;}
 void ForEach(void* list,void(*visit)(void*,void*),void* state){assert(list==&thread_list&&list_locked&&exclusive&&gc);if(include_self)visit(&self,state);visit(&worker,state);visit(&empty_thread,state);}
-struct Context final:abi::arm64::context::Prefix {
+struct Context:abi::arm64::context::Prefix {
  void Reset()override{}~Context()override=default;void FillCalleeSaves(uint8_t*,const abi::arm64::context::FrameInfo&)override{}
  void SetSP(uintptr_t)override{}void SetPC(uintptr_t)override{}void SetArg0(uintptr_t)override{}
  bool IsAccessibleGPR(uint32_t)override{return false;}uintptr_t* GetGPRAddress(uint32_t)override{return nullptr;}
@@ -74,7 +74,7 @@ class FrameHooks:public Hooks {
  }
 };
 }
-int main(){
+int RunModernFrameFixture(){
  FrameHooks hooks;std::string error;assert(native_source_stop::Install(hooks,&error));
  native_cache::Service cache;assert(cache.Bind(hooks,&thread_list,&error)&&cache.Prepare(&error));
  native_source_stop::Service stop;auto states=State(hooks);assert(native_source_stop::Service::Bind(hooks,&heap,states,&stop,&error));
@@ -91,5 +91,9 @@ int main(){
  include_self=false;report=scan();assert(!report.accepted&&report.registered_threads==2&&report.walked_threads==2);include_self=true;
  // A fresh final scan observes every registered thread under the SAME continuous reservation.
  {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);assert(owner.ContinueSource()&&gc&&!exclusive&&stops==resumes+1);disable_proxy(&heap,&self);Native(&self);unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);assert(scanner.Scan(owner,&self,cache,&jit_cache,storage).accepted);resume_proxy(&carrier);assert(!owner.Completed());Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed());}
- assert(!gc&&!exclusive&&!list_locked&&stops==resumes);std::cout<<"actual full enumeration/walker, foreign/empty/marked-inline maps, refusal/rollback/continuous final scan PASS\n";
+ assert(!gc&&!exclusive&&!list_locked&&stops==resumes);std::cout<<"actual full enumeration/walker, foreign/empty/marked-inline maps, refusal/rollback/continuous final scan PASS\n";return 0;
 }
+
+#ifndef WHOLE_FRAME_FIXTURE_ONLY
+int main(){return RunModernFrameFixture();}
+#endif

@@ -8,6 +8,8 @@
 #include "platform/abi/arm64/android14/frame_registers.h"
 #include "platform/abi/arm64/android11/art_method.h"
 #include "platform/abi/arm64/android12/art_method.h"
+#include "platform/abi/arm64/android11/quick_method_header.h"
+#include "platform/abi/arm64/android12/quick_method_header.h"
 #include <vector>
 #include <cstring>
 namespace artdcevm::whole_process_frames {
@@ -43,7 +45,14 @@ class Service {
     c.jit_=reinterpret_cast<bool(*)(const void*,const void*)>(finder("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     c.nterp_=reinterpret_cast<bool(*)(const void*)>(finder("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
     c.flag_=reinterpret_cast<bool(*)(const void*)>(finder("_ZNK3art20OatQuickMethodHeader23HasShouldDeoptimizeFlagEv"));
-    c.fast_=finder(abi::arm64::android12::frame_registers::kFast);
+    if(family==Family::kAndroid11){
+      c.legacy_fast_=reinterpret_cast<abi::arm64::android11::frame_registers::Fast>(finder(abi::arm64::android11::frame_registers::kFast));
+      c.legacy_canonical_=reinterpret_cast<abi::arm64::android11::frame_registers::Canonical>(finder(abi::arm64::android11::frame_registers::kCanonical));
+      c.legacy_accessible_=reinterpret_cast<abi::arm64::android11::frame_registers::AccessibleRegister>(finder(abi::arm64::android11::frame_registers::kAccessibleRegister));
+    }else {
+      c.fast_=finder(abi::arm64::android12::frame_registers::kFast);
+      if(family==Family::kAndroid12)c.legacy_canonical_=reinterpret_cast<abi::arm64::android12::frame_registers::Canonical>(finder(abi::arm64::android12::frame_registers::kCanonical));
+    }
     c.canonical_=reinterpret_cast<abi::arm64::android14::frame_registers::Canonical>(finder(abi::arm64::android14::frame_registers::kCanonical));
     c.debugger_=reinterpret_cast<abi::arm64::android14::frame_registers::DebuggerValue>(finder(abi::arm64::android14::frame_registers::kDebuggerValue));
     c.accessible_=reinterpret_cast<abi::arm64::android14::frame_registers::AccessibleRegister>(finder(abi::arm64::android14::frame_registers::kAccessibleRegister));
@@ -74,6 +83,21 @@ class Service {
     return report;
   }
  private:
+  bool MarkedHeader(const void* header)const noexcept {
+    if(flag_)return flag_(header);
+    // Fixed legacy inline method; a missing symbol alone grants nothing.
+    // The actual native visitor supplies its live header, in the owned stop.
+    uint32_t data=0;
+    if(family_==Family::kAndroid11){
+      std::memcpy(&data,static_cast<const unsigned char*>(header)+offsetof(abi::arm64::android11::QuickMethodHeader,code_size),sizeof(data));
+      return (data&abi::arm64::android11::kShouldDeoptimizeMask)!=0;
+    }
+    if(family_==Family::kAndroid12){
+      std::memcpy(&data,header,sizeof(data));
+      return (data&abi::arm64::android12::kShouldDeoptimizeMask)!=0;
+    }
+    return false;
+  }
   struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;bool owner_seen=false;};
   friend bool detail::VisitThread(void*,void*);
   template<class Info,class Pair> struct Visitor final:abi::arm64::stack::Visitor<Pair> {
@@ -96,8 +120,9 @@ class Service {
       if(physical&&*this->quick_frame!=method)return Reject("whole-frame-original-method-versus-current-quick-frame-mismatch");
       uint32_t flags;std::memcpy(&flags,static_cast<const unsigned char*>(method)+offsetof(abi::arm64::android12::Method12,access_flags),4);
       if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return true;}
-      if(!this->header||!s.flag_||!s.flag_(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
-      if(s.family_==Family::kAndroid11||(!s.fast_&&(!s.canonical_||!s.debugger_)))return Reject("whole-frame-original-location-reader-unavailable");
+      if(!this->header||!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      if(s.family_==Family::kAndroid11?(!s.legacy_fast_&&(!s.legacy_canonical_||!s.debugger_)):
+         s.family_==Family::kAndroid12?(!s.fast_&&(!s.legacy_canonical_||!s.debugger_)):(!s.fast_&&(!s.canonical_||!s.debugger_)))return Reject("whole-frame-original-location-reader-unavailable");
       if(!r.jit||!s.jit_||!s.jit_(r.jit,reinterpret_cast<void*>(this->pc)))return Reject("whole-frame-AOT-or-unowned-compiled-code");
       if(!s.nterp_||s.nterp_(this->header))return Reject("whole-frame-Nterp-or-unproved-header-kind");
       const uintptr_t entry=reinterpret_cast<uintptr_t>(this->header)+(s.family_==Family::kAndroid11?8u:4u);
@@ -128,13 +153,35 @@ class Service {
         if(actual.kind>=2&&actual.kind<=5){if(own.value>=32)return Reject("whole-frame-register-location-outside-native-context");
           const bool core=actual.kind==2||actual.kind==3;
           uint32_t original_register;
-          if(!s.accessible_||!s.accessible_(this,own.value,actual.kind,&original_register))return Reject("whole-frame-original-register-context-unavailable");
+          if(s.family_==Family::kAndroid11){
+            if(!s.legacy_accessible_||!s.legacy_accessible_(this,own.value,
+                 abi::arm64::android11::frame_registers::KindForLocation(actual.kind),&original_register))
+              return Reject("whole-frame-original-register-context-unavailable");
+          }else if(!s.accessible_||!s.accessible_(this,own.value,actual.kind,&original_register))
+            return Reject("whole-frame-original-register-context-unavailable");
           if(core?!r.storage.context->IsAccessibleGPR(own.value):!r.storage.context->IsAccessibleFPR(own.value))return Reject("whole-frame-native-register-context-unavailable");}
         if(actual.kind>=0){
           uint32_t original=0,independent=0;
           const abi::arm64::android12::frame_registers::Location location{actual.kind,actual.value};
-          if(s.fast_){if(!reinterpret_cast<abi::arm64::android12::frame_registers::Fast>(s.fast_)(this,location,&original))return Reject("whole-frame-original-fast-location-read-refused");}
-          else {uint32_t overridden;
+          if(s.family_==Family::kAndroid11){
+            const auto kind=abi::arm64::android11::frame_registers::KindForLocation(actual.kind);
+            // Actual debugger roots must not override the physical snapshot.
+            uint32_t overridden=0;
+            if(s.debugger_&&s.debugger_(this,static_cast<uint16_t>(index),kind,&overridden))
+              return Reject("whole-frame-debugger-shadow-override");
+            if(s.legacy_fast_){
+              if(!s.legacy_fast_(this,location,kind,&original))return Reject("whole-frame-original-fast-location-read-refused");
+            }else if(!s.legacy_canonical_(this,method,static_cast<uint16_t>(index),kind,&original,
+                       abi::arm64::android11::frame_registers::OptionalLocation{location}))
+              return Reject("whole-frame-original-canonical-location-read-refused");
+          }else if(s.fast_){if(!reinterpret_cast<abi::arm64::android12::frame_registers::Fast>(s.fast_)(this,location,&original))return Reject("whole-frame-original-fast-location-read-refused");}
+          else if(s.family_==Family::kAndroid12){
+            const auto kind=abi::arm64::android11::frame_registers::KindForLocation(actual.kind);
+            uint32_t overridden=0;
+            if(s.debugger_(this,static_cast<uint16_t>(index),kind,&overridden))return Reject("whole-frame-debugger-shadow-override");
+            if(!s.legacy_canonical_(this,method,static_cast<uint16_t>(index),kind,&original,
+                 abi::arm64::android11::frame_registers::OptionalLocation{location}))return Reject("whole-frame-original-canonical-location-read-refused");
+          }else {uint32_t overridden;
             if(s.debugger_(this,static_cast<uint16_t>(index),abi::arm64::android14::frame_registers::Kind::kInt,&overridden))return Reject("whole-frame-debugger-shadow-override");
             if(!s.canonical_(this,method,static_cast<uint16_t>(index),abi::arm64::android14::frame_registers::Kind::kInt,&original,abi::arm64::android14::frame_registers::OptionalLocation{location},false))return Reject("whole-frame-original-canonical-location-read-refused");}
           if(actual.kind==0)std::memcpy(&independent,reinterpret_cast<const unsigned char*>(this->quick_frame)+own.value,4);
@@ -146,7 +193,7 @@ class Service {
       }
       void* current=nullptr;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context||
-         this->header!=original_header||this->quick_frame!=original_quick||this->pc!=original_pc||
+         this->header!=original_header||!s.MarkedHeader(original_header)||this->quick_frame!=original_quick||this->pc!=original_pc||
          this->shadow_frame||this->inline_frames.begin.row!=original_begin||this->inline_frames.end.row!=original_end||
          !s.stack_.Method(this,sizeof(*this),&current)||current!=method||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-source-owner-or-native-cursor-lost-after-map");
       ++r.report.compiled_frames;if(!physical)++r.report.inlined_frames;r.report.map_locations+=range.count;return true;
@@ -174,6 +221,9 @@ class Service {
   uint32_t(*dex_pc_)(const void*,bool)=nullptr;
   abi::arm64::android14::frame_registers::NativePcOffset offset_=nullptr;
   void* fast_=nullptr;
+  abi::arm64::android11::frame_registers::Fast legacy_fast_=nullptr;
+  abi::arm64::android11::frame_registers::Canonical legacy_canonical_=nullptr;
+  abi::arm64::android11::frame_registers::AccessibleRegister legacy_accessible_=nullptr;
   abi::arm64::android14::frame_registers::Canonical canonical_=nullptr;
   abi::arm64::android14::frame_registers::DebuggerValue debugger_=nullptr;
   abi::arm64::android14::frame_registers::AccessibleRegister accessible_=nullptr;
