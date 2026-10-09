@@ -24,7 +24,7 @@ sources = ['native_hierarchy_private_ledger', 'native_source_dex_registry', 'nat
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O0', '-Wall', '-Wextra', '-Werror',
            '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(out),
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
-           str(root / 'tests/host/native_hierarchy_pipeline_test.cc')]
+           str(root / 'tests/host/native_hierarchy_pipeline_test.cc'), str(root / 'tests/host/native_hierarchy_pipeline_stop_boundary.cc')]
 command += [str(cpp / 'platform/common' / (s + '.cc')) for s in sources]
 command += [str(cpp / 'evolution/dex_schema.cc')]
 # Compressed-root fixtures need a real heap below 4 GiB. Mach-O otherwise

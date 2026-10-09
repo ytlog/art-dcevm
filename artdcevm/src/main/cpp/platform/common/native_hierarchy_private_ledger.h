@@ -2,6 +2,7 @@
 #include "platform/common/native_hierarchy_source_cache.h"
 #include "platform/common/native_source_dex_registry.h"
 #include "platform/common/native_source_class_loading.h"
+namespace artdcevm::native_source_stop {class Session;}
 namespace artdcevm::native_hierarchy_private_ledger {
 // Final authority is supplied by the actual continuous source stop and cleanup
 // owner. It must prove exact Holder/Plan, GC reservation, reflective/native roots,
@@ -29,6 +30,11 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  bool FinalRootWindow()const noexcept override;
  bool ReadStoppedRoot(const void*,void**)const noexcept override;
  bool Collected(const source_commit::Plan&)noexcept;
+ // Ordinary preparation proves the complete actual source owner cohort. The
+ // borrowed stop outlives all publication and refund readers in this Ledger.
+ bool PreparePublication(const native_source_stop::Session&,size_t*,std::string*);
+ bool MatchPublication(void* driver,const void* holder,void* linker,void* cache,
+                       void* loader,size_t* index)const noexcept;
  void Refunded()noexcept; // AFTER source temp Classes were actually retired.
  bool ReleaseAfterRun(bool success)noexcept; // No source storage reads here.
  bool PreparePrivate(const native_hierarchy_source_cache::RecordView&,
@@ -46,6 +52,8 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  friend struct detail::Hooks;
  struct Entry {native_hierarchy_source_cache::RecordView record;native_hierarchy_cache::Source source;void* loader_root;bool publishing=false,published=false;};
  bool Read(const void*,void**)const noexcept;
+ bool ReadRegisteredRoot(const void*,void**)const noexcept;
+ bool PublicationRootWindow()const noexcept;
  bool Live()const noexcept;bool Paused()const noexcept;
  bool Record(const native_hierarchy_source_cache::RecordView&)const noexcept;
  bool ExactPlan(const source_commit::Plan&)const noexcept;
@@ -55,6 +63,7 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  void*driver_;runnable_jni::Context context_;source_handle_roots::Pool&pool_;
  const native_hierarchy_source_cache::BatchAccess&batch_;const modern_field_metadata::FieldMetadata&fields_;
  const native_source_dex_registry::Service&registry_;const CleanupOwner*cleanup_;
+ const native_source_stop::Session*publication_stop_=nullptr;
  const transaction_root::Holder*holder_=nullptr;transaction_root::Metadata metadata_{};
  mutable const native_hierarchy_graph::Graph*graph_=nullptr;mutable std::vector<Entry> entries_;
  struct RootEntry{const void* token;void* value;};

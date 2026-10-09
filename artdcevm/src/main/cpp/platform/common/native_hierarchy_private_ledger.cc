@@ -1,4 +1,6 @@
 #include "platform/common/native_hierarchy_private_ledger.h"
+#include "platform/common/native_source_stop.h"
+#include "platform/common/native_source_gc_publication.h"
 #include "platform/abi/arm64/android-common/redefiner_prefix.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include "platform/common/class_metadata_abi.h"
@@ -20,7 +22,13 @@ bool Same(const native_hierarchy_source_cache::RecordView&a,const native_hierarc
 namespace detail {struct Hooks {
  static void Proxy(void*l,Object c,Object loader){
   auto*owner=current;auto*entry=owner?owner->Publication(l,reinterpret_cast<void*>(c.reference),reinterpret_cast<void*>(loader.reference)):nullptr;
-  original(l,c,loader); // Preserve source registration even when observer refuses.
+  {
+   // The sole named registration wrapper owns the entire original callee.
+   // A calibrated nested GC lease cannot escape or be forged by another caller.
+   native_source_gc_publication::Scope scope(l,reinterpret_cast<void*>(c.reference),reinterpret_cast<void*>(loader.reference));
+   original(l,c,loader); // Preserve ordinary registration when no Run is active.
+   scope.Returned();
+  }
   if(entry)owner->Published(entry);
  }
 };}
@@ -32,13 +40,17 @@ Ledger::Ledger(void*d,const runnable_jni::Context&c,source_handle_roots::Pool&p,
  current=this;active_=true;
 }
 Ledger::~Ledger(){if(active_&&!released_)std::abort();}
-bool Ledger::Live()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&(FinalRootWindow()||pool_.ReadyForSourceAccess());}
+bool Ledger::Live()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&(FinalRootWindow()||PublicationRootWindow()||pool_.ReadyForSourceAccess());}
 bool Ledger::FinalRootWindow()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&roots_refreshed_&&cleanup_&&cleanup_->IsStopped(driver_,holder_);}
 bool Ledger::ReadStoppedRoot(const void*token,void**out)const noexcept{
  if(!out||!FinalRootWindow())return false;
+ return ReadRegisteredRoot(token,out);
+}
+bool Ledger::ReadRegisteredRoot(const void*token,void**out)const noexcept{
+ if(!out||!roots_registered_||!roots_refreshed_)return false;
  for(const auto&e:root_entries_)if(e.token==token){*out=e.value;return true;}return false;
 }
-bool Ledger::Read(const void*token,void**out)const noexcept{return FinalRootWindow()?ReadStoppedRoot(token,out):pool_.Read(token,out);}
+bool Ledger::Read(const void*token,void**out)const noexcept{return FinalRootWindow()?ReadStoppedRoot(token,out):PublicationRootWindow()?ReadRegisteredRoot(token,out):pool_.Read(token,out);}
 bool Ledger::CollectManagedRoots(const prepared_roots::Registrar&r){
  if(!Live()||!collected_||registration_started_||!r.add||FinalRootWindow()||!pool_.ReadyForSourceAccess())return false;
  registration_started_=true;
@@ -101,6 +113,30 @@ bool Ledger::ExactPlan(const source_commit::Plan&p)const noexcept{
  return p.old_classes.size()==entries_.size();
 }
 bool Ledger::Collected(const source_commit::Plan&p)noexcept{if(collected_)return ExactPlan(p);if(!Paused()||!ExactPlan(p))return false;collected_=true;return true;}
+bool Ledger::PreparePublication(const native_source_stop::Session&stop,size_t*out,std::string*error){
+ if(!out||publication_stop_||!Paused()||!collected_||registration_started_||!metadata_.count||entries_.size()!=metadata_.count)return Error(error,"DEX publication requires the complete ordinary source owner cohort");
+ for(size_t i=0;i<metadata_.count;++i){
+  const void*owner=metadata_.owners.begin+i*metadata_.stride;const Entry*found=nullptr;
+  for(const auto&e:entries_)if(e.record.source_owner==owner){if(found)return Error(error,"DEX publication source owner is repeated");found=&e;}
+  void*cache=nullptr,*loader=nullptr;
+  if(!found||found->publishing||found->published||!Read(found->record.cache_root,&cache)||!Read(found->loader_root,&loader)||!cache||!loader)return Error(error,"DEX publication source owner/cache/loader is incomplete");
+  for(const auto&e:entries_)if(&e!=found){void*other=nullptr;if(!Read(e.record.cache_root,&other)||other==cache)return Error(error,"DEX publication caches are ambiguous");}
+ }
+ publication_stop_=&stop;*out=metadata_.count;return true;
+}
+bool Ledger::PublicationRootWindow()const noexcept{
+ return active_&&!released_&&!failed_&&!refunded_&&current==this&&collected_&&roots_registered_&&roots_refreshed_&&publication_stop_&&publication_stop_->CanPublishDex(driver_,holder_,installed_linker);
+}
+bool Ledger::MatchPublication(void*driver,const void*holder,void*linker,void*cache,void*loader,size_t*out)const noexcept{
+ if(!out||!cache||!loader||driver!=driver_||holder!=holder_||linker!=installed_linker||!PublicationRootWindow())return false;
+ const Entry*found=nullptr;
+ for(const auto&e:entries_){void*expected_cache=nullptr,*expected_loader=nullptr;if(!ReadRegisteredRoot(e.record.cache_root,&expected_cache)||!ReadRegisteredRoot(e.loader_root,&expected_loader))return false;
+  if(expected_cache==cache&&expected_loader==loader){if(found)return false;found=&e;}
+ }
+ if(!found)return false;
+ for(size_t i=0;i<metadata_.count;++i)if(found->record.source_owner==metadata_.owners.begin+i*metadata_.stride){*out=i;return true;}
+ return false;
+}
 Ledger::Entry*Ledger::Publication(void*l,void*cache,void*loader)noexcept{
  if(!Live()||l!=installed_linker)return nullptr;
  for(auto&e:entries_){void*c=nullptr;if(!Read(e.record.cache_root,&c)){failed_=true;return nullptr;}if(c!=cache)continue;
@@ -123,7 +159,7 @@ bool Ledger::VerifyFrozen(const native_hierarchy_graph::Graph&g,const native_hie
 }
 void Ledger::BeginCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{if(!VerifyCommit(g,p)||!cleanup_->IsFinalWindow(driver_,holder_))std::abort();cleanup_->BeginCommit(p);committed_=true;}
 void Ledger::Refunded()noexcept{if(!active_||released_||committed_)std::abort();for(const auto&e:entries_)if(e.published||e.publishing)std::abort();refunded_=true;}
-bool Ledger::ReleaseAfterRun(bool success)noexcept{if(!active_||released_||current!=this)return false;const bool valid=success?committed_:(refunded_||entries_.empty());if(!valid)std::abort();holder_=nullptr;metadata_={};entries_.clear();root_entries_.clear();graph_=nullptr;released_=true;current=previous_;return true;}
+bool Ledger::ReleaseAfterRun(bool success)noexcept{if(!active_||released_||current!=this)return false;const bool valid=success?committed_:(refunded_||entries_.empty());if(!valid)std::abort();publication_stop_=nullptr;holder_=nullptr;metadata_={};entries_.clear();root_entries_.clear();graph_=nullptr;released_=true;current=previous_;return true;}
 bool Install(HookEngine&hooks,void*l,std::string*error){std::lock_guard<std::mutex>lock(installation);if(installed_linker)return installed_linker==l;if(!l)return false;
  auto*target=hooks.FindSymbol("libart.so","_ZN3art11ClassLinker24RegisterExistingDexCacheENS_6ObjPtrINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE");
  if(!target)return Error(error,"Missing named source DexCache publication leaf");

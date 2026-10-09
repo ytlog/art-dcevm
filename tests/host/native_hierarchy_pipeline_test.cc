@@ -1,6 +1,7 @@
 #include "platform/common/native_source_dex_registry.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/native_source_class_loading.h"
+#include "platform/common/native_source_stop.h"
 #include "platform/common/native_hierarchy_session.h"
 #include "source_cache_walker_fixture.inc"
 #include "platform/common/native_hierarchy_graph.h"

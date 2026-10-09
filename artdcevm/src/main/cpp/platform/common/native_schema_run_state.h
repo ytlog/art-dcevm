@@ -72,6 +72,7 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  struct State;
  RunState(const Dependencies&,void*,const runnable_jni::Context&);
  static bool MappingExtent(void*,const void*,size_t*) noexcept;
+ static bool MatchDexPublication(void*,void*,const void*,void*,void*,void*,size_t*) noexcept;
  bool Start(jvmtiEnv*,const std::vector<native_hierarchy_graph::Input>&,const CacheCalibration&,std::string*);
  std::unique_ptr<State> state_;
 };

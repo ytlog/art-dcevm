@@ -82,7 +82,9 @@ bool RunState::BeforeVerification(void*o,const transaction_root::Iterator*i,std:
 void RunState::AfterVerification(void*o,const transaction_root::Iterator*i,bool result)noexcept{auto&s=*state_;Require(s.hierarchy!=nullptr);s.hierarchy->AfterVerification(o,i,result);}
 bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit::Plan&p,std::string*e){
  auto&s=*state_;if(s.phase!=State::Phase::Running||!g.holder||!s.loading->Paused()||!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata)||!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return Fail(e,"Actual collected schema owner/root preparation refused");
- s.plan=&p;s.holder=g.holder;const auto collect=s.d.registry->Collect();
+ s.plan=&p;s.holder=g.holder;size_t publication_count=0;
+ if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
+ const auto collect=s.d.registry->Collect();
  if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
  if(!s.stop->Begin(s.context.self,s.extent))return Fail(e,s.stop->Failure());
  if(s.d.mapping.extent){
@@ -134,6 +136,10 @@ bool RunState::End(void*d,bool success)noexcept{
  Require(ok);if(s.hierarchy)Require(s.hierarchy->ReleaseAfterRun(success));
  const bool loading_proof=s.loading->Complete(success);Require(!success||loading_proof);
  s.phase=State::Phase::Ended;return ok;
+}
+bool RunState::MatchDexPublication(void*raw,void*driver,const void*holder,void*linker,void*cache,void*loader,size_t*index)noexcept{
+ auto*r=static_cast<RunState*>(raw);if(!r||current!=r)return false;const auto&s=*r->state_;
+ return s.phase==State::Phase::Collected&&s.stop&&s.stop->CanPublishDex(driver,holder,linker)&&s.ledger&&s.ledger->MatchPublication(driver,holder,linker,cache,loader,index);
 }
 bool RunState::MappingExtent(void*raw,const void*p,size_t*out)noexcept{auto*r=static_cast<RunState*>(raw);return r&&r==current&&r->StoppedWindow()&&r->state_->d.mapping.extent&&r->state_->d.mapping.extent(r->state_->d.mapping.owner,p,out);}
 bool RunState::StoppedWindow()const noexcept{return current==this&&state_->stop&&state_->stop->IsStopped(state_->context.self);}

@@ -21,3 +21,11 @@
 `Dependencies.mapping` 提供预分配的映射存储和实际停线程刷新回调。RunState 仅在真实 continuous Session.Begin 成功后刷新，持有一个显式 ReadContext；每次 extent 请求再次核对同一个 Current RunState 与实际 StoppedWindow。Authority、receiver Preservation、incoming cache Mapper 和 interface 闭包使用该上下文，拒绝时不回退 OS；member provider 收到同一个 borrowed 指针。普通 JNI Stage 与独立校准仍使用原有即时映射检查。
 
 这批完成上述读者的显式上下文传播，不能单凭这些测试宣称全部 final consumers 已经零 OS 查询：allocator/source roots、guard 和 provider 的其余调用链需要对应所有者接线与整体回归。组合测试的 SourceOwners 边界替身仍使用普通 Pool.Read 的 Runnable 证明，因而仅针对实际 Mapper.Readable 与 receiver 读取测量零 OS 查询；真实 cache Owner 的正向/拒绝检查仍运行且禁止 native allocation。
+
+## 原始 DEX 发布的同步 GC 协议
+
+在普通 Collected、根冻结和本地 stop.Begin 之前，Ledger 核对实际 Holder metadata 的完整 owner 数量、每个 owner 唯一实际 private record、非空 loader 和互不混淆的 cache。RunState 用这个完整数量预分配 Session 发布 bitmap。混合/descendant cohort 若不满足这个已证明的一对一关系，在仍可退款的边界拒绝；不能用部分 graph 数量冒充完整发布数量。
+
+唯一 named RegisterExistingDexCache proxy 在同一次 original 调用周围构造私有 Scope。SourceStop 仅按普通实际 original 调用校准的完整零/一 GC pair profile，在同 self/heap/linker 的连续 reservation 内借用更强的 GC 排除。RunState Matcher 需要 exact Current/Collected、driver/Holder/linker 与 Session.CanPublishDex 的实际 Runnable/GC/SSA reservation；Ledger 只读已注册且刷新过的 root slots 返回唯一原始 owner index，不调用 Pool/JNI 或 OS mapping。Scope 正常返回并复核相同 tuple 后才完成 bitmap，随后 Ledger 标记 Published；原 final GC-disable 之前必须完整消费全部发布。
+
+这不是最终 Native 元数据权限：CurrentReadContext 和 HierarchyAuthority 仍要求 actual IsStopped。没有普通实际 publication profile、boot loader 或不完整 owner cohort 都不能获得该协议授权。
