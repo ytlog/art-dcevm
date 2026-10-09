@@ -77,7 +77,7 @@ try:
         pid=report.get('foregroundInstrumentationPid')
         if not (report.get('foregroundRequested') is True and report.get('foregroundActivity')=='com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity' and type(pid) is int and pid>0 and type(report.get('foregroundActivityPid')) is int and report.get('foregroundActivityPid')==pid and report.get('foregroundResumedBefore') is True and report.get('foregroundResumedAfter') is True and type(report.get('foregroundPauseCount')) is int and report.get('foregroundPauseCount')==0 and report.get('foregroundFinished') is True):
             raise RuntimeError('Foreground carrier lifecycle/process proof missing or inconsistent')
-    if a.runtime_services and a.jit_receivers:
+    if a.runtime_services and a.jit_receivers and (not a.physical_active_frames or a.method_guards or a.field_storage):
         require_fields=a.method_guards and a.field_storage
         metadata['scope']=('owned native method/field deletion and cached JNI/reflection/MethodHandle/VarHandle rejection' if require_fields else 'owned native method deletion and cached JNI/reflection/MethodHandle rejection')+'; no full evolution initialization'
         validate_owned_removal(report,require_fields=require_fields)

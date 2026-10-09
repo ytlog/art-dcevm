@@ -445,7 +445,9 @@ public final class RuntimeAccessSuite {
                 if(cacheError==null||!cacheError.isEmpty()||cacheThreads<=0)
                     throw new AssertionError("Native cache clearing: "+cacheError);
             }
-            if(runtimeServices&&jitReceivers) {
+            // Runtime/JIT receivers are prerequisites for a physical frame query.
+            // Mutation remains independently requested by its guard/storage scope.
+            if(runtimeServices&&jitReceivers&&(!physicalActiveFrames||methodGuards||fieldStorage)) {
                 com.github.ytlog.artdcevm.fixture.Evolving instance=new com.github.ytlog.artdcevm.fixture.Evolving(31);
                 Class<?> owner=instance.getClass();Method cached=owner.getDeclaredMethod("addedMethod");
                 int identity=System.identityHashCode(instance);

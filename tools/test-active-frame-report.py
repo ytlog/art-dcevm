@@ -57,7 +57,9 @@ elif 'instrument' in args:
 ''');fake.chmod(0o755)
     missing=copy.deepcopy(base);missing.pop('ownedActiveFrameProof')
     failed={**base,'ownedActiveFrameProof':{'passed':False,'error':'Missing actual inlinees'}}
-    cases=[('physical_matching',{**base,**physical_report},False,False,True),
+    physical_only={k:v for k,v in {**base,**physical_report}.items() if not k.startswith('owned') or k=='ownedPhysicalActiveFrameProof'}
+    cases=[('physical_prerequisites_only',physical_only,False,False,True),
+           ('physical_matching',{**base,**physical_report},False,False,True),
            ('physical_inline_alias',{**base,**physical_report,'ownedPhysicalActiveFrameProof':proof},False,False,False),
            ('physical_missing',{**base,'physicalActiveFramesRequested':True},False,False,False),
            ('matching',base,True,True,True),('frames_only',base,True,False,True),
@@ -77,6 +79,7 @@ elif 'instrument' in args:
         if removal:command+=flags
         if active:command+=['--active-frames']
         if name.startswith('physical_'):command+=['--physical-active-frames']
+        if name=='physical_prerequisites_only':command+=['--runtime-services','--jit-receivers']
         result=subprocess.run(command,cwd=cwd,env=env,capture_output=True,text=True,timeout=15)
         assert (result.returncode==0)==expected,(name,result.stdout,result.stderr)
         paths=list((cwd/'build/evidence/runtime-access').glob('*/run.json'));assert len(paths)==1
@@ -92,6 +95,7 @@ elif 'instrument' in args:
             assert run['physicalActiveFrameProofPassed']==expected
             assert 'physicalActiveFrames' in instruments[0]
             if expected:assert run['wholeProcessFrameEligibility'] is False
+            if name=='physical_prerequisites_only':assert 'ownedRemovalPassed' not in run
         if expected:assert run['installedApkSha256']==run['apkSha256']==sha
         if name in ('missing','failed','bool_count','wrong_pc','not_current'):
             assert run['ownedRemovalPassed'] is True and run['activeFrameProofPassed'] is False
