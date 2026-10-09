@@ -59,3 +59,67 @@ managed cache storage. Public JNI/native-leaf Class mapping, barriers and source
 runtime owner are explicit fixture doubles; these tests do not establish an
 actual modern ART hierarchy allocation or source transaction. The production
 source adapter must complete those independent proofs before enabling Stage.
+
+## Actual incoming source mapper
+
+`native_hierarchy_source_cache::Mapper` connects the cache participant to the
+actual calibrated source `Pool`, `FieldMetadata` and `FieldStorage` services.
+`BatchAccess` is the allocator's typed reader of retained old/new/cache/parent
+root slots and immutable source DEX records. The adapter does not accept a
+caller supplied cache ownership flag.
+
+Stage reads each complete incoming StandardDEX (including shared 041 container
+metadata), compares its complete Class declarations with the immutable staged
+schema, verifies the cache's actual native DexFile prefix against that mapping,
+and confirms the old Class belongs to the staged affected graph. The unused
+DexFile size slot is never used as a mapping extent. Exact immutable DEX and
+root slot provenance are checked again after preparation.
+
+Describe requires an actual linked new Class with the same descriptor/loader as
+the retained old Class, the precise incoming DexCache, source class index and
+requested parent. The parent's native descriptor must match the incoming DEX
+superclass. The cache must differ from the published original cache. The
+independently calibrated original ClassLinker lookup in the allocator's actual
+context must return the retained old Class, proving that the replacement has
+not been published in that namespace. That ClassTable/source writer window and
+allocation lifetime remain obligations of the source owner; checking one
+lookup does not establish a lock or a later cleanup lifetime. The mandatory
+`RequiredServices::VerifyPrivate` additionally requires independently observed
+source allocation/publication hook ownership and the actual private-cache
+no-suspend writer window; missing proof refuses the mutation.
+
+Every populated type index is decoded with the shared immutable DEX reader.
+The adapter calls the original native Class resolver first and immediately
+roots its actual return, preserving source resolution failures and effects.
+Ordinary Class descriptors are compared against the native returned identity.
+Only then does it select an exact batch/ancestor replacement root in the
+resolved Class's actual loader namespace, including loader delegation. An
+array whose component is replaced requires an actual rooted replacement array
+mapping; otherwise resolution refuses rather than retaining old ancestry.
+Native FindClass must use the actual observed ClassLinker, current source
+Thread and a real rooted loader Handle. Presence of the named symbol alone
+cannot establish this callback's calibration.
+
+Barrier delegates directly to the calibrated FieldStorage source card barrier
+on the exact Pool cache root. Final refresh and ownership checks reuse the
+actual live Batch roots, immutable DexFile identity and native Class/cache
+namespace without JNI, allocations or DEX parsing. `RequiredServices` must be
+implemented by the real retained source cleanup and native source commit
+owners, proving final source/ClassTable lifetime, reflective/resolution
+invalidation, heap replacement, deoptimization and interpreter-cache clearing.
+Absent services refuse both Stage and final verification. The adapter cannot
+provide these proofs from an opaque readiness boolean.
+
+`Composite` is the cache participant for the complete explicit/implicit graph.
+The explicit private incoming cache goes through the calibrated rewrite owner.
+An implicit subclass whose source cache is exactly its published old Class cache
+is handled read-only. Stage retains the exact stable Batch root slots and DEX
+provenance for those records. Prepared validation requires actual linked Class
+namespace/cache/parent/index and `VerifyReadonlyPrepared`, which proves source
+linkage and unchanged native member mapping before any final Plan exists.
+Final validation matches each readonly record to its unique actual old/new Plan
+pair and requires `VerifyReadonly` from the formal heap GC-root, native member
+cache and public reflection/resolution cleanup owners. Missing Stage/prepared
+or final proof refuses. A ClassTable lookup cannot authorize mutation of these
+published caches, and Composite never calls the incoming rewrite operation on
+them. The core private cache engine remains unchanged.
