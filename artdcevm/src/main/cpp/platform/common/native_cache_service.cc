@@ -3,6 +3,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include <cstring>
 #include <mutex>
+#include <atomic>
 #include "platform/abi/arm64/android-common/checkpoint.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 namespace artdcevm::native_cache {
@@ -67,6 +68,7 @@ struct LockCapture {void* mutex;void* self;uint32_t argument=0;bool observed=fal
 thread_local LockCapture* capturing_lock=nullptr;
 std::mutex vendor_installation;
 void* original_vendor_storage=nullptr;void* vendor_token=nullptr;
+std::atomic<VendorMutexReturned> vendor_returned{nullptr};
 void ObserveVendorLock(void* mutex,void* self,uint32_t argument){
   if(capturing_lock&&mutex==capturing_lock->mutex&&self==capturing_lock->self){
     if(capturing_lock->observed&&capturing_lock->argument!=argument)capturing_lock->conflict=true;
@@ -74,6 +76,7 @@ void ObserveVendorLock(void* mutex,void* self,uint32_t argument){
   }
   auto original=reinterpret_cast<VendorLock>(original_vendor_storage);
   if(!original)std::abort();original(mutex,self,argument);
+  if(auto returned=vendor_returned.load(std::memory_order_acquire))returned(mutex,self,argument);
 }
 bool InstallVendorLock(HookEngine& hooks,std::string* error){
   std::lock_guard<std::mutex> guard(vendor_installation);if(vendor_token)return true;
@@ -93,6 +96,14 @@ void ClearThread(void* thread,void* opaque) {
   request.closure->Run(static_cast<art::Thread*>(thread));
   ++request.count;
 }
+}
+bool ObserveVendorMutexReturns(HookEngine& hooks,VendorMutexReturned returned,std::string* error){
+ if(!returned)return Fail(error,"OEM mutex return observer requires a typed consumer");
+ if(!InstallVendorLock(hooks,error))return false;
+ auto expected=static_cast<VendorMutexReturned>(nullptr);
+ if(!vendor_returned.compare_exchange_strong(expected,returned,std::memory_order_acq_rel,std::memory_order_acquire)&&expected!=returned)
+  return Fail(error,"OEM mutex normal-return consumer already has a different owner");
+ return true;
 }
 bool Service::Bind(HookEngine& hooks,void* observed_thread_list,std::string* error) {
   if(!observed_thread_list)return Fail(error,"Native cache service requires observed ThreadList");

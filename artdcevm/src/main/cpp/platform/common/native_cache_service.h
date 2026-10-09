@@ -3,6 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::native_cache {
+// Additional normal-return consumer of the ONE installed OEM mutex hook.
+// uint32_t is deliberately opaque: original calls pass it unchanged. The
+// consumer must independently validate its private actual-current owner;
+// subscription itself grants neither mutex ownership nor a stopped window.
+using VendorMutexReturned=void (*)(void* mutex,void* self,uint32_t actual_argument) noexcept;
+bool ObserveVendorMutexReturns(HookEngine&,VendorMutexReturned,std::string* error);
 // Borrow the real native function-static closure, via its named symbol or
 // observation of its owner's named RunCheckpoint call. It is never constructed,
 // deleted or stored in a fabricated ART Thread. Requires independently observed

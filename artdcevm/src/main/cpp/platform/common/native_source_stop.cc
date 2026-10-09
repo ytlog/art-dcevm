@@ -1,5 +1,6 @@
 #include "platform/common/native_source_stop.h"
 #include "platform/common/native_source_class_loading.h"
+#include "platform/common/native_cache_service.h"
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -18,7 +19,7 @@ s::StartGC original_start=nullptr;s::FinishGC original_finish=nullptr;
 using WaitGC=int32_t (*)(void*,int32_t,void*);
 WaitGC original_wait=nullptr;
 s::MutatorOperation original_mutex_lock=nullptr,original_mutex_unlock=nullptr;
-bool waiting_installed=false;
+bool waiting_installed=false,waiting_vendor_lock=false;
 constexpr char kWait[]="_ZN3art2gc4Heap25WaitForGcToCompleteLockedENS0_7GcCauseEPNS_6ThreadE";
 constexpr char kMutexLock[]="_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE";
 constexpr char kMutexUnlock[]="_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE";
@@ -29,6 +30,8 @@ struct WaitingInvocation {
  const Service* service=nullptr;Session* session=nullptr;void* self=nullptr;
  size_t extent=0;void* latest_mutex=nullptr;void* frozen_mutex=nullptr;
  void* expected_mutex=nullptr;void* owner=nullptr;
+ uint32_t latest_argument=0,frozen_argument=0,expected_argument=0;
+ bool vendor_lock=false;
  bool (*prepare)(void*,Session&) noexcept=nullptr;
  unsigned waits=0,unlocks=0;bool inside_wait=false,wait_returned=false;
  bool valid=true,callback_returned=false,accepted=false,inside_callback=false,inspection=false;
@@ -42,10 +45,16 @@ static bool WaitingState(const WaitingInvocation& w,uint32_t desired) noexcept {
  return w.service&&w.self&&w.service->current_()==w.self&&
    w.service->state_.State(w.self,w.extent,&state)&&state==desired;
 }
+static void VendorMutexReturned(void* mutex,void* self,uint32_t argument) noexcept {
+ auto* w=waiting_invocation;
+ if(w&&w->vendor_lock&&!w->inside_wait&&!w->wait_returned&&self==w->self){
+  w->latest_mutex=mutex;w->latest_argument=argument;
+ }
+}
 static void MutexLock(void* mutex,void* self) {
  original_mutex_lock(mutex,self);
  auto* w=waiting_invocation;
- if(w&&!w->inside_wait&&!w->wait_returned&&self==w->self)w->latest_mutex=mutex;
+ if(w&&!w->vendor_lock&&!w->inside_wait&&!w->wait_returned&&self==w->self)w->latest_mutex=mutex;
 }
 static int32_t Wait(void* heap,int32_t cause,void* self) {
  auto* w=waiting_invocation;
@@ -54,7 +63,7 @@ static int32_t Wait(void* heap,int32_t cause,void* self) {
     cause!=s::kInstrumentationCause||!w->latest_mutex||!WaitingState(*w,kWaitingGC)){
   w->valid=false;return original_wait(heap,cause,self);
  }
- w->frozen_mutex=w->latest_mutex;w->inside_wait=true;++w->waits;
+ w->frozen_mutex=w->latest_mutex;w->frozen_argument=w->latest_argument;w->inside_wait=true;++w->waits;
  const int32_t result=original_wait(heap,cause,self);
  w->inside_wait=false;w->wait_returned=true;
  if(!WaitingState(*w,kWaitingGC))w->valid=false;
@@ -68,7 +77,7 @@ static void MutexUnlock(void* mutex,void* self) {
  // Wait's ConditionVariable may release/reacquire this SAME mutex repeatedly.
  // Those unlocks happen inside_wait and cannot establish our boundary.
  if(++w->unlocks!=1||!w->valid||!WaitingState(*w,kWaitingGC)||
-    (w->expected_mutex&&w->expected_mutex!=mutex)){w->valid=false;return;}
+    (w->expected_mutex&&(w->expected_mutex!=mutex||(w->vendor_lock&&w->expected_argument!=w->frozen_argument)))){w->valid=false;return;}
  if(!w->session)return; // Ordinary full-return calibration only.
  auto& o=*w->session;w->inside_callback=true;
  o.gc_=true;o.waiting_window_=true;
@@ -242,13 +251,24 @@ bool InstallOriginalWaitingScope(HookEngine& hooks,std::string* error) {
   {hooks.FindSymbol("libart.so",kWait),reinterpret_cast<void*>(NativeHooks::Wait),reinterpret_cast<void**>(&original_wait)},
   {hooks.FindSymbol("libart.so",kMutexLock),reinterpret_cast<void*>(NativeHooks::MutexLock),reinterpret_cast<void**>(&original_mutex_lock)},
   {hooks.FindSymbol("libart.so",kMutexUnlock),reinterpret_cast<void*>(NativeHooks::MutexUnlock),reinterpret_cast<void**>(&original_mutex_unlock)}};
- for(size_t i=0;i<3;++i){if(!b[i].target)return Fail(error,"Original WaitingGC bridge lacks canonical named mutex/wait leaves");
-  for(size_t j=0;j<i;++j)if(b[i].target==b[j].target)return Fail(error,"Original WaitingGC bridge aliases distinct leaves");}
+ const bool vendor=!b[1].target;
+ if(!b[0].target||!b[2].target||b[0].target==b[2].target)
+  return Fail(error,"Original WaitingGC bridge lacks distinct named wait/unlock leaves");
+ if(vendor){
+  auto vendor_target=hooks.FindSymbol("libart.so","_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadEj");
+  if(!vendor_target||vendor_target==b[0].target||vendor_target==b[2].target)
+   return Fail(error,"Original WaitingGC bridge lacks a supported named mutex lock");
+  // The cache service owns this overload already. It keeps its unique hook and
+  // original argument capture; we subscribe solely to normal original returns.
+  if(!native_cache::ObserveVendorMutexReturns(hooks,NativeHooks::VendorMutexReturned,error))return false;
+ }
+ for(size_t i=0;i<3;++i){if(vendor&&i==1)continue;if(!b[i].target)return Fail(error,"Original WaitingGC bridge lacks canonical named mutex/wait leaves");
+  for(size_t j=0;j<i;++j)if(b[j].target&&b[i].target==b[j].target)return Fail(error,"Original WaitingGC bridge aliases distinct leaves");}
  a::SuspendAll storage{};original_stop(&storage,"artdcevm original WaitingGC bridge installation",false);
  void* tokens[3]{};size_t n=0;
- for(auto& x:b){auto token=hooks.Install(x.target,x.proxy,x.original,error);if(!token)break;
+ for(auto& x:b){if(!x.target)continue;auto token=hooks.Install(x.target,x.proxy,x.original,error);if(!token)break;
   if(!*x.original)std::abort();tokens[n++]=token;}
- waiting_installed=n==3;
+ waiting_installed=n==(vendor?2u:3u);waiting_vendor_lock=waiting_installed&&vendor;
  if(!waiting_installed){std::string rollback;while(n)if(!hooks.Remove(tokens[--n],&rollback))std::abort();
   for(auto& x:b)*x.original=nullptr;}
  original_resume(&storage);return waiting_installed;
@@ -258,7 +278,7 @@ bool Service::CalibrateOriginalWaiting(void* self,size_t extent,std::string* err
  if(!waiting_installed||active||finishing||borrowed||observation||waiting_invocation||!self||!heap_||
     !mutator_||*mutator_!=mutator_identity_||!current_||current_()!=self)
   return Fail(error,"Original WaitingGC calibration lacks independent ordinary receiver");
- WaitingInvocation w;w.service=this;w.self=self;w.extent=extent;
+ WaitingInvocation w;w.service=this;w.self=self;w.extent=extent;w.vendor_lock=waiting_vendor_lock;
  if(!NativeHooks::WaitingState(w,state_.RunnableState()))return Fail(error,"Original WaitingGC calibration requires actual Runnable owner");
  waiting_invocation=&w;
  original_start(heap_,self,s::kInstrumentationCause,s::kNonMovingReservation);
@@ -270,7 +290,7 @@ bool Service::CalibrateOriginalWaiting(void* self,size_t extent,std::string* err
  original_finish(heap_,self,s::kNoCollection);
  if(!complete||!NativeHooks::WaitingState(w,state_.RunnableState()))
   return Fail(error,"Original WaitingGC full return/mutex identity proof failed");
- waiting_mutex_=w.frozen_mutex;waiting_calibrated_=true;return true;
+ waiting_mutex_=w.frozen_mutex;waiting_argument_=w.frozen_argument;waiting_calibrated_=true;return true;
 }
 
 bool Service::Bind(HookEngine& hooks,void* heap,const thread_suspend_service::Service& state,Service* out,std::string* error) {
@@ -312,6 +332,7 @@ bool Session::RunOriginalWaiting(void* self,size_t extent,void* owner,
  }
  self_=self;extent_=extent;
  WaitingInvocation w;w.service=&service_;w.session=this;w.self=self;w.extent=extent;
+ w.vendor_lock=waiting_vendor_lock;w.expected_argument=service_.waiting_argument_;
  w.expected_mutex=service_.waiting_mutex_;w.owner=owner;w.prepare=prepare;w.inspection=inspection;
  if(!NativeHooks::WaitingState(w,service_.state_.RunnableState())){
   failure_="original-WaitingGC-requires-actual-Runnable";return false;
@@ -322,7 +343,7 @@ bool Session::RunOriginalWaiting(void* self,size_t extent,void* owner,
  if(!NativeHooks::WaitingState(w,service_.state_.RunnableState()))std::abort();
  if(!w.callback_returned){original_finish(service_.heap_,self_,s::kNoCollection);
   phase_=Phase::kRolledBack;failure_="original-WaitingGC-calibrated-shape-mismatch";return false;}
- if(!w.valid||w.waits!=1||w.unlocks!=1||w.frozen_mutex!=service_.waiting_mutex_)std::abort();
+ if(!w.valid||w.waits!=1||w.unlocks!=1||w.frozen_mutex!=service_.waiting_mutex_||(w.vendor_lock&&w.frozen_argument!=service_.waiting_argument_))std::abort();
  if(inspection){
   if(Reserved()||active==this||phase_!=Phase::kRolledBack)std::abort();
   failure_=w.accepted?"":"original-WaitingGC-inspection-refused";return w.accepted;

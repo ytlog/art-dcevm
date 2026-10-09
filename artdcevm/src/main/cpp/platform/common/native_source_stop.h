@@ -44,7 +44,7 @@ class Service {
   abi::arm64::android_common::SuspendConstruct stop_=nullptr;
   abi::arm64::android_common::SuspendDestroy resume_=nullptr;
   thread_suspend_service::Service state_;
-  bool waiting_calibrated_=false;void* waiting_mutex_=nullptr;
+  bool waiting_calibrated_=false;void* waiting_mutex_=nullptr;uint32_t waiting_argument_=0;
   bool publication_calibrated_=false;void* publication_linker_=nullptr;
   uint32_t publication_gc_pairs_=0;int32_t publication_collector_=0;
   friend class Session;friend class Observation;friend class Calibration;

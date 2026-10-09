@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parents[1];cpp=root/'artdcevm/src/main/cpp'
 jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip())
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 out=root/'build/evidence/host/native-source-stop';out.mkdir(parents=True,exist_ok=True);binary=out/'native_source_stop_test'
-subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_source_stop_test.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),'-o',str(binary)],check=True)
+subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_source_stop_test.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),str(cpp/'platform/common/native_cache_service.cc'),'-o',str(binary)],check=True)
 publication_failures=('bad-cause','bad-collector','bad-heap','bad-gc-thread','missing-finish','bad-finish','bad-phase','outside-callee','foreign-current','bad-owner','bad-linker','bad-cache','bad-loader','duplicate','missing-publication','unexpected-gc-profile')
 for mode in ('','no-gc-profile','collector13','calibration-double','calibration-mixed',*[f'install-rollback{n}' for n in range(1,7)],'bad-ctor-alias','bad-dtor-alias','duplicate-target','missing-heap-gc','wrong-final',*publication_failures):
  r=subprocess.run([str(binary)]+([mode] if mode else []),capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
@@ -17,11 +17,11 @@ for mode in ('','no-gc-profile','collector13','calibration-double','calibration-
  print(mode or 'ownership','PASS')
 
 waiting=out/'native_source_waiting_scope_test'
-subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_source_waiting_scope_test.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),'-o',str(waiting)],check=True)
-for mode in ('','inspect','inspect-refuse','refuse','reentry','changed-mutex','missing-wait-calibration','bridge-missing-wait','install-fail7','install-fail8','install-fail9','bad-accepted'):
+subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_source_waiting_scope_test.cc'),str(cpp/'platform/common/method_identity_calibration.cc'),str(cpp/'platform/common/native_source_stop.cc'),str(cpp/'platform/common/native_source_class_loading.cc'),str(cpp/'platform/common/native_cache_service.cc'),'-o',str(waiting)],check=True)
+for mode in ('','inspect','inspect-refuse','refuse','reentry','changed-mutex','missing-wait-calibration','bridge-missing-wait','install-fail7','install-fail8','install-fail9','bad-accepted','invalid-continuing-exit','bad-wait-heap','bad-wait-self','bad-wait-cause','lock-foreign-self','oem:','oem:inspect','oem:inspect-refuse','oem:refuse','oem:reentry','oem:changed-mutex','oem:changed-argument','oem:missing-wait-calibration','oem:bridge-missing-wait','oem:bad-wait-heap','oem:bad-wait-self','oem:bad-wait-cause','oem:lock-foreign-self','oem:invalid-continuing-exit','oem:install-fail7','oem:install-fail8','oem:install-fail9'):
  r=subprocess.run([str(waiting)]+([mode] if mode else []),capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
  (out/('waiting-'+(mode or 'accepted'))).with_suffix('.log').write_text(r.stdout+r.stderr)
- if mode=='bad-accepted':assert r.returncode==-signal.SIGABRT,(r.returncode,r.stdout,r.stderr)
+ if mode in ('bad-accepted','invalid-continuing-exit','oem:invalid-continuing-exit'):assert r.returncode==-signal.SIGABRT,(r.returncode,r.stdout,r.stderr)
  else:r.check_returncode()
  print('waiting',mode or 'accepted','PASS')
 
