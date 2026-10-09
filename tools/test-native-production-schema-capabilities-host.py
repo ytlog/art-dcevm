@@ -34,10 +34,12 @@ command += ['-o', str(binary)]
 subprocess.run(command, check=True)
 if args.compile_only:
     print('Source handle roots link PASS; execution pending');raise SystemExit(0)
-for layout in ('legacy', 'sized'):
+for layout in ('legacy', 'sized', 'legacy-length', 'sized-length'):
     fixture_env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1')
-    if layout == 'sized': fixture_env['SOURCE_SCOPE_SIZED']='1'
+    if layout.startswith('sized'): fixture_env['SOURCE_SCOPE_SIZED']='1'
     else: fixture_env.pop('SOURCE_SCOPE_SIZED',None)
+    if layout.endswith('length'): fixture_env['SOURCE_LOOKUP_LENGTH']='1'
+    else: fixture_env.pop('SOURCE_LOOKUP_LENGTH',None)
     result=subprocess.run([str(binary)],capture_output=True,text=True,env=fixture_env)
     (out / ('result-'+layout+'.log')).write_text(result.stdout+result.stderr)
     result.check_returncode()

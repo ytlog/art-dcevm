@@ -19,10 +19,14 @@ abi::arm64::android_common::HierarchyAllocator allocator_proxy=nullptr;
 void* registered_cache=nullptr;
 dex_mapping_abi::Prefix public_dex{};
 bool wrong_registry=false,wrong_lookup=false;
+bool lookup_length=std::getenv("SOURCE_LOOKUP_LENGTH")!=nullptr;
 jint Vm(JNIEnv*,JavaVM** output){Jni();*output=reinterpret_cast<JavaVM*>(&runtime);return JNI_OK;}
 abi::arm64::android11::ReleaseObjectPointer Lookup(void*l,void*self,const char*d,const void*loader){
  assert(l==&linker&&self==thread.data()&&!std::strcmp(d,"LFixture;")&&!Read32(loader));
  return {uintptr_t(wrong_lookup?parent_class:old_class)};
+}
+abi::arm64::android11::ReleaseObjectPointer LengthLookup(void*l,void*self,const char*d,size_t length,const void*loader){
+ assert(length==std::strlen(d));return Lookup(l,self,d,loader);
 }
 bool Registered(void*l,void*self,const void*d){assert(l==&linker&&self==thread.data()&&d==&public_dex);return !wrong_registry;}
 abi::arm64::android11::ReleaseObjectPointer Cache(void*l,void*self,const void*d){assert(l==&linker&&self==thread.data()&&d==&public_dex);return {uintptr_t(registered_cache)};}
@@ -44,7 +48,9 @@ class OwnerHooks final:public AllocationHooks {
   if(std::strstr(n,"ClassLinker9LoadClass"))return reinterpret_cast<void*>(LoadOriginal);
   if(std::strstr(n,"EnsureInstanceFieldIds"))return reinterpret_cast<void*>(EnsureOriginal);
   if(std::strstr(n,"Class15SetStatusLocked"))return reinterpret_cast<void*>(RetireOriginal);
-  if(std::strstr(n,"ClassLinker9FindClass"))return reinterpret_cast<void*>(Lookup);
+  if(std::strstr(n,"ClassLinker9FindClassEPNS_6ThreadEPKcNS_6Handle"))return lookup_length?nullptr:reinterpret_cast<void*>(Lookup);
+  if(std::strstr(n,"ClassLinker9FindClassEPNS_6ThreadEPKcmNS_6Handle"))return lookup_length?reinterpret_cast<void*>(LengthLookup):nullptr;
+  if(std::strstr(n,"ComputeModifiedUtf8Hash"))std::abort();
   if(std::strstr(n,"IsDexFileRegistered"))return reinterpret_cast<void*>(Registered);
   if(std::strstr(n,"FindDexCache"))return reinterpret_cast<void*>(Cache);
   if(std::strstr(n,"RegisterExistingDexCache"))return reinterpret_cast<void*>(PublishCache);
