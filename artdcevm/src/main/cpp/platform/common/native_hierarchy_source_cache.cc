@@ -24,7 +24,8 @@ bool Inspect(const evolution::MappedDexMetadata&d,const evolution::ClassSchema&e
  }catch(const std::bad_alloc&){return Fail(e,"incoming source declarations native storage exhausted");}
 }
 Mapper::Mapper(const runnable_jni::Context&ctx,source_handle_roots::Pool&p,const modern_field_metadata::FieldMetadata&f,const modern_field_storage::Service&s,const BatchAccess&b,const RequiredServices*r):context_(ctx),pool_(p),fields_(f),storage_(s),batch_(b),services_(r){}
-bool AllocatorBatchAccess::Attach(native_hierarchy_allocator::Batch&batch)noexcept{if(batch_||&batch.Roots()!=&pool_||!pool_.ReadyForSourceAccess())return false;batch_=&batch;return true;}
+bool AllocatorBatchAccess::Attach(native_hierarchy_allocator::Batch&batch)noexcept{if(attached_once_||batch_||&batch.Roots()!=&pool_||!pool_.ReadyForSourceAccess())return false;batch_=&batch;attached_once_=true;return true;}
+bool AllocatorBatchAccess::Detach(native_hierarchy_allocator::Batch&batch)noexcept{if(batch_!=&batch)return false;batch_=nullptr;return true;}
 size_t AllocatorBatchAccess::Count()const noexcept{return batch_?batch_->Count():0;}
 bool AllocatorBatchAccess::At(size_t n,RecordView*out)const noexcept{if(!batch_||!out)return false;native_hierarchy_allocator::Batch::RecordView r;if(!batch_->At(n,&r))return false;*out={r.source_owner,r.class_index,r.old_root,r.new_root,r.cache_root,r.parent_root,r.declarations,r.dex};return true;}
 void* AllocatorBatchAccess::Find(const char*name,void*loader)const noexcept{return batch_?batch_->Find(name,loader):nullptr;}

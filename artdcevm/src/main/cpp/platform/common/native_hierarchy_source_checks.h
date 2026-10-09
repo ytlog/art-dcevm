@@ -22,5 +22,10 @@ class Scope final {
 };
 // Install only named fixed source declarations under actual ScopedSuspendAll.
 // A successful installation is a hook capability, never graph/allocator readiness.
+using FailureObserver=void(*)(void* actual_driver,jvmtiError)noexcept;
+// Sole Run owner binds its actual-source failure observer here. Notification
+// occurs only for forwarded original failures; suppressed hierarchy66 is absent.
+void SetFailureObserver(FailureObserver)noexcept;
+bool Ready(FailureObserver exact_observer)noexcept;
 bool Install(HookEngine&,std::string*);
 }

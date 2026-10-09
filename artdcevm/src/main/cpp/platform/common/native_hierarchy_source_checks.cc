@@ -3,9 +3,11 @@
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/android-common/redefiner_prefix.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 #include <cstring>
 #include <mutex>
+#include <atomic>
 #include <new>
 #include <cstdlib>
 namespace artdcevm::native_hierarchy_source_checks {
@@ -13,13 +15,13 @@ namespace {
 using Definition=abi::arm64::android_common::ClassRedefinitionPrefix;
 // Fixed first five Redefiner members in all seven ti_redefine.h declarations.
 // No platform vector/string is constructed, copied or inspected here.
-struct DriverPrefix {void* environment;int32_t result;uint32_t padding;void* runtime;void* self;int32_t type;};
-static_assert(offsetof(DriverPrefix,self)==24&&offsetof(DriverPrefix,type)==32);
+using DriverPrefix=abi::arm64::android_common::RedefinerPrefix;
 using Mirror=abi::arm64::android11::ReleaseObjectPointer(*)(void*);
 Mirror mirror=nullptr;void(*marker)(void*)=nullptr;
 bool(*check_original)(void*)=nullptr;detail::Failure failure_original=nullptr;
 thread_local Scope* scope=nullptr;
-std::mutex installation;bool installed=false;
+std::atomic<FailureObserver> failure_observer{nullptr};
+std::mutex installation;std::atomic<bool> installed{false};
 bool Mapped(const void* p,size_t n) {size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=n;}
 template<class T>T Read(const void* p,size_t n=0){T v;std::memcpy(&v,static_cast<const char*>(p)+n,sizeof(v));return v;}
 bool Check(void* owner) {
@@ -28,10 +30,16 @@ bool Check(void* owner) {
  // inside its episode. Mask that episode even on the unselected proxy path.
  return detail::Invoke(owner,nullptr,nullptr,check_original,[]{return false;},[]{return false;},[](void*){});
 }
+void ForwardFailure(void*driver,jvmtiError code,const void*signature,const void*message){
+ if(auto observe=failure_observer.load(std::memory_order_acquire))observe(driver,code);
+ failure_original(driver,code,signature,message);
+}
 void Failure(void* driver,jvmtiError code,const void* signature,const void* message) {
- detail::Record(failure_original,driver,code,signature,message);
+ detail::Record(ForwardFailure,driver,code,signature,message);
 }
 }
+void SetFailureObserver(FailureObserver observer)noexcept{failure_observer.store(observer,std::memory_order_release);}
+bool Ready(FailureObserver expected)noexcept{return expected&&installed.load(std::memory_order_acquire)&&failure_observer.load(std::memory_order_acquire)==expected;}
 Scope::Scope(void* driver,const runnable_jni::Context& context,source_handle_roots::Service& roots,
  native_hierarchy_graph::Authority& authority,Refuse refuse):driver_(driver),context_(context),roots_(roots),authority_(authority),refuse_(refuse),previous_(scope){scope=this;}
 Scope::~Scope(){if(scope!=this)std::abort();scope=previous_;}

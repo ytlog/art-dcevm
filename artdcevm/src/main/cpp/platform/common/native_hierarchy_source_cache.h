@@ -29,12 +29,13 @@ class AllocatorBatchAccess final:public BatchAccess {
  public:
  explicit AllocatorBatchAccess(source_handle_roots::Pool&p):pool_(p){}
  bool Attach(native_hierarchy_allocator::Batch&)noexcept;
+ bool Detach(native_hierarchy_allocator::Batch&)noexcept;
  size_t Count()const noexcept override;
  bool At(size_t,RecordView*)const noexcept override;
  void* Find(const char*,void*)const noexcept override;
  void* OriginalFind(const char*,void*)const override;
  private:
- source_handle_roots::Pool&pool_;native_hierarchy_allocator::Batch*batch_=nullptr;
+ source_handle_roots::Pool&pool_;native_hierarchy_allocator::Batch*batch_=nullptr;bool attached_once_=false;
 };
 class RequiredServices {
  public:
