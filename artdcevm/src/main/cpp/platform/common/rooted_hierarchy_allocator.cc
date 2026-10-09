@@ -37,8 +37,16 @@ void* Allocator::Allocate(Access& ops,void* owner,Root old_class,Root cache,uint
      explicit_parent=i;
     }
     if(targets_[i].structural&&ops.Subclass(parent,targets_[i].klass)){
-     if(structural_root!=targets_.size())return fail("Ambiguous structural allocation island");
-     structural_root=i;
+     if(structural_root==targets_.size())structural_root=i;
+     else {
+      // Nested structural targets share one allocation island. The closest
+      // ancestor owns implicit descendants; explicit parents keep their own
+      // transaction owner below. Selection must not depend on batch order.
+      const Root selected_root=targets_[structural_root].klass;
+      if(ops.Get(selected_root)==ops.Get(targets_[i].klass))return fail("Duplicate structural allocation target");
+      if(ops.Subclass(targets_[i].klass,selected_root))structural_root=i;
+      else if(!ops.Subclass(selected_root,targets_[i].klass))return fail("Ambiguous structural allocation island");
+     }
     }
    }
    Root selected=ops.Copy(parent);
