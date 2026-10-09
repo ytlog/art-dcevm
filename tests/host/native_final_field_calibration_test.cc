@@ -50,6 +50,8 @@ bool Service::FixtureField(void* actual,jclass t,jclass w,jmethodID m,jfieldID f
 bool Service::SetFixtureFlags(const final_write_guard::Oracle& o,uint32_t expected,uint32_t desired,std::string*){auto& f=*static_cast<Field*>(o.field);assert(f.flags==expected&&(expected^desired)==0x10u);f.flags=desired;if(!(desired&0x10u))++restores;return true;}
 bool Service::BeginProof(const final_write_guard::Oracle& oracle){return guard.BeginProof(oracle);}
 bool Service::EndProof(bool exception,bool unchanged){return guard.EndProof(exception,unchanged);}
+bool Service::AlreadyCalibrated()const{return false;}
+void Service::AbortCalibration(){guard.ResetUncommittedProof();ready=false;}
 bool Service::CompleteCalibration(){ready=guard.Proven();return ready;}
 bool Service::VerifyAliases(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::Verify(const source_commit::Plan&,std::string*)const{return false;}
@@ -64,7 +66,7 @@ int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
  JNIEnv env{&functions};final_field_service::Service owner({});service=&owner;std::string error;
  final_field_calibration::Bindings bindings{&target,&owner,&engine,&target,Scope,Scope};
  bool pass=final_field_calibration::Run(&env,bindings,&error);
- assert(pass==(mode==0)&&ready==pass);assert(fields[0].flags==1&&fields[1].flags==9);assert(restores==(mode==0?2:1));
+ assert(pass==(mode==0)&&ready==pass&&guard.Proven()==pass);assert(fields[0].flags==1&&fields[1].flags==9);assert(restores==(mode==0?2:1));
  if(mode==0)assert(callbacks==2&&fields[0].value==41&&fields[1].value==41);
  if(mode==2)assert(pending==Ref<jthrowable>(&wrong));else assert(!pending);
  assert(scopes>=4);std::cout<<"Actual permission calibration TU: mode "<<mode<<" rejects missing event/exception/store/legal-path proof and restores exact flags passed\n";

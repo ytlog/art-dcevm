@@ -12,6 +12,9 @@ struct Access {
  bool (*method_owner)(void*,void*,void**)=nullptr;
  bool (*equivalent_owner)(void*,void*,void*)=nullptr;
  void (*raise)(void*,void*,const char*,const char*)=nullptr;
+ // Native anchors survive suspension in weak-root readers. Prefer this path
+ // when equivalence may suspend, then reread declaring roots after decoding.
+ bool (*equivalent_writer)(void*,void* thread,void* field,void* method)=nullptr;
 };
 struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;};
 // A listener's existence does not prove enforcement. The exact bytecode writer
@@ -24,6 +27,8 @@ class Guard {
  bool BeginProof(const Oracle&) noexcept;
  bool EndProof(bool illegal_access_error,bool unchanged_sentinel) noexcept;
  bool Proven() const noexcept;
+ // Bootstrap owner only, before any permission consumer can be committed.
+ void ResetUncommittedProof() noexcept;
  // Returns true iff the original field write must stop because an exception
  // was raised. ART DoFieldPutCommon checks its pending exception after event.
  bool FieldWritten(void* thread,void* method,void* field) noexcept;

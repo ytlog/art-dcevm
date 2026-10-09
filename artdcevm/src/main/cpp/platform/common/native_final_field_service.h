@@ -9,7 +9,7 @@ struct Bindings {
  retirement::RetiredFieldRegistry* registry=nullptr;
  // Independently calibrated native weak-reference decoder. A cleared weak
  // yields success+null. Borrowed values stay under the current mutator scope.
- bool (*decode_weak)(void*,jweak,void**)=nullptr;
+ bool (*decode_weak)(void*,void* actual_thread,jweak,void**)=nullptr;
  void (*raise)(void*,void*,const char*,const char*)=nullptr;
 };
 // This process owner outlives its registered listener. JNI staging/cleanup and
@@ -55,6 +55,8 @@ class Service final:public native_schema_guard_verifier::FinalFields,public nati
  void Clear(JNIEnv*);
  private:
  friend bool final_field_calibration::Run(JNIEnv*,const final_field_calibration::Bindings&,std::string*);
+ bool AlreadyCalibrated()const;
+ void AbortCalibration();
  bool CompleteCalibration();
  struct State;std::unique_ptr<State> state_;
 };

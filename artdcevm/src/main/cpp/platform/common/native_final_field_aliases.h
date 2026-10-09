@@ -1,17 +1,22 @@
 #pragma once
 #include <memory>
+#include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 namespace artdcevm::final_field_aliases {
 // Weak Class handles are owned by the JNI adapter; native metadata is retained
 // by source ClassExt only while that replacement Class is live. Decode the weak
 // first, before dereferencing the old ArtField's declaring-class root.
-struct Alias {void* weak=nullptr;void* old_field=nullptr;};
-struct Node {std::vector<Alias> aliases;Node* next=nullptr;};
+struct Alias {void* weak=nullptr;void* old_field=nullptr;void* retiring=nullptr;size_t readers=0;};
+struct Node {std::vector<Alias> aliases;Node* next=nullptr;uint64_t sequence=0;};
 struct Reader {
  void* owner=nullptr;
  bool (*weak)(void*,void*,void**)=nullptr;
  void* (*old_owner)(void*,void*)=nullptr;
+ bool (*weak_thread)(void*,void* thread,void* weak,void**)=nullptr;
+ void* (*field_owner)(void*,void*)=nullptr;
+ void* (*method_owner)(void*,void*)=nullptr;
 };
 class Set {
  public:
@@ -20,13 +25,20 @@ class Set {
  // Consumes preallocated storage at the exclusive commit boundary; no JNI or
  // allocation. Native callback readers cannot outlive the process owner.
  void Publish(std::unique_ptr<Node>) noexcept;
+ // Class-pointer variant requires a nonsuspending reader; production uses
+ // native anchors below when weak decoding can suspend.
  bool Equivalent(void* current_owner,void* historical_owner)const noexcept;
+ bool EquivalentWriter(void* thread,void* native_field,void* native_method)const noexcept;
  // Ordinary JNI cleanup obtains handles before entering any JNI operation.
  std::vector<void*> WeakHandles()const;
  // Waits for current readers, prevents future decoding, then caller may safely
  // DeleteWeakGlobalRef outside this mutex. Frees fully inactive native nodes.
  bool Deactivate(void* weak)noexcept;
  private:
- Reader reader_;mutable std::mutex mutex_;Node* first_=nullptr;
+ struct Lease{Alias* alias=nullptr;void* weak=nullptr;void* old_field=nullptr;};
+ bool Next(uint64_t*,size_t*,Lease*)const noexcept;
+ void Release(const Lease&)const noexcept;
+ Reader reader_;mutable std::mutex mutex_;mutable std::condition_variable readers_;
+ Node* first_=nullptr;uint64_t sequence_=0;
 };
 } // namespace artdcevm::final_field_aliases

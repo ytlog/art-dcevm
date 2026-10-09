@@ -3,11 +3,22 @@
 #include "platform/common/source_commit.h"
 #include <cassert>
 #include <iostream>
+#include <future>
+#include <atomic>
+#include <chrono>
 using namespace artdcevm::final_field_aliases;
 struct Weak {void* current=nullptr;bool readable=true;};struct Old {void* owner=nullptr;};
-struct ReaderState {int metadata_reads=0;};
+struct ReaderState {int metadata_reads=0;Set* aliases=nullptr;void* current=nullptr;void* historical=nullptr;void* moved_current=nullptr;void* moved_historical=nullptr;void* thread=nullptr;bool suspend=false;std::promise<void>* started=nullptr;std::shared_future<void> proceed;};
 bool Decode(void*,void* weak,void** value){auto& w=*static_cast<Weak*>(weak);*value=w.current;return w.readable;}
 void* Owner(void* raw,void* old){++static_cast<ReaderState*>(raw)->metadata_reads;return static_cast<Old*>(old)->owner;}
+bool DecodeThread(void* raw,void* thread,void* weak,void** value){auto& s=*static_cast<ReaderState*>(raw);assert(thread==s.thread);
+ assert(s.aliases->WeakHandles().size()>0); // no alias mutex may span decoder
+ if(s.started){s.started->set_value();s.proceed.wait();}
+ if(s.suspend){s.current=s.moved_current;s.historical=s.moved_historical;static_cast<Weak*>(weak)->current=s.current;}
+ return Decode(raw,weak,value);
+}
+void* Current(void* p,void*){return static_cast<ReaderState*>(p)->current;}
+void* Historical(void* p,void*){return static_cast<ReaderState*>(p)->historical;}
 struct Origin{void* array=nullptr;size_t index=0;};
 struct Plan:artdcevm::source_commit::Plan{std::vector<Origin> class_root_origins;};
 int main(){int current=0,old1=0,old2=0,foreign=0,moved=0;ReaderState state;Set aliases({&state,Decode,Owner});
@@ -23,6 +34,17 @@ int main(){int current=0,old1=0,old2=0,foreign=0,moved=0;ReaderState state;Set a
  weak2.current=&moved;assert(aliases.Equivalent(&moved,&old2)&&!aliases.Equivalent(&current,&old2));
  weak2.readable=false;reads=state.metadata_reads;assert(!aliases.Equivalent(&moved,&old2)&&state.metadata_reads==reads);
  assert(aliases.WeakHandles().size()==1);assert(aliases.Deactivate(&weak2)&&aliases.WeakHandles().empty());
+ ReaderState moving;int actual_thread=0,field=0,method=0;moving.current=&current;moving.historical=&old1;moving.moved_current=&moved;moving.moved_historical=&old2;moving.thread=&actual_thread;moving.suspend=true;
+ Set refreshed({&moving,nullptr,Owner,DecodeThread,Current,Historical});moving.aliases=&refreshed;Weak moving_weak{&current};Old anchor{&old2};
+ auto moved_node=std::make_unique<Node>();moved_node->aliases={{&moving_weak,&anchor}};refreshed.Publish(std::move(moved_node));
+ assert(refreshed.EquivalentWriter(&actual_thread,&field,&method)); // roots reread AFTER simulated suspension
+ std::promise<void> started,proceed;moving.started=&started;moving.proceed=proceed.get_future().share();moving.suspend=false;
+ auto waiting=std::async(std::launch::async,[&]{return refreshed.EquivalentWriter(&actual_thread,&field,&method);});
+ started.get_future().wait();
+ auto additional=std::make_unique<Node>();refreshed.Publish(std::move(additional)); // exclusive publish must not wait for suspended weak read
+ auto retiring=std::async(std::launch::async,[&]{return refreshed.Deactivate(&moving_weak);});
+ assert(retiring.wait_for(std::chrono::milliseconds(10))==std::future_status::timeout);
+ proceed.set_value();assert(waiting.get()&&retiring.get());assert(refreshed.WeakHandles().empty());
  Plan expected;expected.mirror=&old1;expected.new_classes_root=&current;expected.old_classes={&old1};expected.new_classes={&current};expected.old_instances={&old2};expected.new_instances={&moved};expected.class_root_origins={{&current,2}};
  assert(artdcevm::source_commit::SameIdentity(expected,expected));
  auto reject=[&](auto change){Plan actual=expected;change(actual);assert(!artdcevm::source_commit::SameIdentity(expected,actual));};

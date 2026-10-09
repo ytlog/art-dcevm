@@ -3,10 +3,11 @@
 #include <cstring>
 #include <iostream>
 using namespace artdcevm::final_write_guard;
-struct State {uint32_t flags=0x10;void* field_owner=nullptr;void* method_owner=nullptr;void* obsolete_owner=nullptr;bool available=true;int throws=0;const char* type=nullptr;};
+struct State {uint32_t flags=0x10;void* field_owner=nullptr;void* method_owner=nullptr;void* obsolete_owner=nullptr;bool available=true;int action=0;int throws=0;const char* type=nullptr;};
 bool Field(void* p,void*,uint32_t* flags,void** owner){auto& s=*static_cast<State*>(p);*flags=s.flags;*owner=s.field_owner;return s.available;}
 bool Method(void* p,void*,void** owner){auto& s=*static_cast<State*>(p);*owner=s.method_owner;return s.available;}
 bool Equivalent(void* p,void* f,void* m){auto& s=*static_cast<State*>(p);return f==m||(f==s.field_owner&&m==s.obsolete_owner);}
+bool WriterEquivalent(void* p,void*,void*,void*){auto& s=*static_cast<State*>(p);if(s.action==1)s.flags=0;if(s.action==2)s.available=false;return false;}
 void Raise(void* p,void*,const char* type,const char*){auto& s=*static_cast<State*>(p);++s.throws;s.type=type;}
 int main(){
  int thread=0,method=0,field=0,foreign=0,owner=0,obsolete=0,other_thread=0;
@@ -29,5 +30,11 @@ int main(){
  s.obsolete_owner=nullptr;write(45);assert(value==44);
  s.available=false;write(46);assert(value==44&&!std::strcmp(s.type,"Ljava/lang/IllegalStateException;"));
  assert(!guard.BeginProof(oracle));assert(!guard.FieldWritten(nullptr,&method,&field));
+ State refreshed;refreshed.field_owner=&owner;refreshed.method_owner=&foreign;
+ Guard native({&refreshed,Field,Method,Equivalent,Raise,WriterEquivalent});
+ assert(native.BeginProof(oracle)&&native.FieldWritten(&thread,&method,&field)&&native.EndProof(true,true));
+ refreshed.action=1;assert(!native.FieldWritten(&thread,&method,&field)&&refreshed.flags==0); // flag reread after suspension
+ refreshed.flags=0x10;refreshed.action=2;assert(native.FieldWritten(&thread,&method,&field)&&!std::strcmp(refreshed.type,"Ljava/lang/IllegalStateException;"));
+ native.ResetUncommittedProof();assert(!native.Proven()&&!native.FieldWritten(&thread,&method,&field));
  std::cout<<"Final bytecode write guard: exact callback proof, exception/store outcome, current flags and obsolete owner semantics passed\n";
 }

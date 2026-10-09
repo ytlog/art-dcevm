@@ -34,7 +34,7 @@ struct Service::State {
  struct Public {jclass root=nullptr,replacement=nullptr;jweak weak=nullptr;evolution::ClassSchema schema;};
  using Node=final_field_aliases::Node;
  struct Pair {size_t index=0;size_t public_index=0;void* old_anchor=nullptr;void* new_anchor=nullptr;evolution::ClassSchema before,after;};
- explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise}),aliases({this,DecodeWeak,OldOwner}){}
+ explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise,EquivalentWriter}),aliases({this,nullptr,OldOwner,DecodeWeak,OldOwner,ReadMethodOwner}){}
  uint8_t proved_storage=0;bool current_static=false,calibration_complete=false;
  Bindings bindings;jvmtiEnv* permission_env=nullptr;jmethodID proof_method=nullptr;final_write_guard::Guard guard;std::vector<Public> staged;
  source_commit::Plan expected;std::vector<size_t> rooted_pairs;std::vector<Pair> pairs;std::unique_ptr<Node> pending;
@@ -44,8 +44,10 @@ struct Service::State {
   *flags=field_array::Flags(field);*owner=s.bindings.native.metadata->FieldDeclaringClass(field);return *owner!=nullptr;}
  static bool MethodOwner(void* p,void* method,void** owner){auto& s=*static_cast<State*>(p);if(!s.bindings.native.method_class)return false;*owner=s.bindings.native.method_class(s.bindings.native.owner,method);return *owner!=nullptr;}
  static void Raise(void* p,void* thread,const char* type,const char* text){auto& s=*static_cast<State*>(p);s.bindings.raise(s.bindings.native.owner,thread,type,text);}
- static bool DecodeWeak(void* p,void* weak,void** current){auto& s=*static_cast<State*>(p);return s.bindings.decode_weak(s.bindings.native.owner,static_cast<jweak>(weak),current);}
+ static bool DecodeWeak(void* p,void* thread,void* weak,void** current){auto& s=*static_cast<State*>(p);return s.bindings.decode_weak(s.bindings.native.owner,thread,static_cast<jweak>(weak),current);}
  static void* OldOwner(void* p,void* field){auto& s=*static_cast<State*>(p);return s.bindings.native.metadata->FieldDeclaringClass(field);}
+ static void* ReadMethodOwner(void* p,void* method){auto& s=*static_cast<State*>(p);return s.bindings.native.method_class(s.bindings.native.owner,method);}
+ static bool EquivalentWriter(void* p,void* thread,void* field,void* method){return static_cast<State*>(p)->aliases.EquivalentWriter(thread,field,method);}
  static bool Equivalent(void* p,void* field_owner,void* method_owner){return static_cast<State*>(p)->aliases.Equivalent(field_owner,method_owner);}
 
 };
@@ -116,6 +118,8 @@ bool Service::BeginProof(const final_write_guard::Oracle& oracle){auto& s=*state
  s.current_static=(field_array::Flags(oracle.field)&8u)!=0;return true;
 }
 bool Service::EndProof(bool exception,bool unchanged){auto& s=*state_;bool pass=s.guard.EndProof(exception,unchanged);if(pass)s.proved_storage|=s.current_static?2u:1u;return pass;}
+bool Service::AlreadyCalibrated()const{return state_->calibration_complete&&final_write_guard::ListenerProven(state_->guard);}
+void Service::AbortCalibration(){auto& s=*state_;if(s.calibration_complete)return;s.guard.ResetUncommittedProof();s.proved_storage=0;}
 bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==3u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
 bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots,const std::vector<jclass>& replacements,std::string* error){auto& s=*state_;
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");

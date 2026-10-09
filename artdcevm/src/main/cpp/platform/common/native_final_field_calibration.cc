@@ -48,6 +48,10 @@ void RestoreAlways(JNIEnv* env,Probe& p){jthrowable thrown=env->ExceptionOccurre
 bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  if(!env||env->ExceptionCheck()||!bindings.service||!bindings.hooks||!bindings.observed_instrumentation||
     !bindings.native_scope||!bindings.exclusive_scope)return Fail(error,"Final permission calibration lacks real source scope/receiver/service owner");
+ auto& service=*bindings.service;
+ if(service.AlreadyCalibrated())return true;
+ auto abort=[&service](final_field_service::Service*){service.AbortCalibration();};
+ std::unique_ptr<final_field_service::Service,decltype(abort)> attempt(&service,abort);
  Roots roots{env};
  jclass writer=env->FindClass("com/github/ytlog/artdcevm/internal/FinalPermissionOracle");
  if(!writer||env->ExceptionCheck())return Fail(error,"Installed final permission writer unavailable");
@@ -77,7 +81,6 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
  // Resolve both actual writer field paths while mutable, before fixture-specific
  // breakpoint deoptimization. This probes current permissions of cached paths.
  for(jboolean statik:{JNI_FALSE,JNI_TRUE}){env->CallStaticVoidMethod(roots.writer,write,roots.instance,jint(41),statik);if(env->ExceptionCheck())return false;}
- auto& service=*bindings.service;
  if(!service.PrepareEnvironment(env,error)||!service.PrepareProofMethod(write,error)||
     !service.Bind(*bindings.hooks,bindings.observed_instrumentation,error))return false;
  Probe p{&bindings,&roots,write,fields[0],false,{},0,false,false,error};
@@ -104,6 +107,7 @@ bool Run(JNIEnv* env,const Bindings& bindings,std::string* error){
   if(!env->ExceptionCheck())Write(env,p,baseline);
   complete=bytecode&&legal&&!env->ExceptionCheck();
  }
- return (complete&&service.CompleteCalibration())||Fail(error,"Final calibration requires actual cached bytecode event/rejection/unchanged store and legal JNI/reflection plus MH/VH getter/setter outcomes for both fields");
+ if(complete&&service.CompleteCalibration()){attempt.release();return true;}
+ return Fail(error,"Final calibration requires actual cached bytecode event/rejection/unchanged store and legal JNI/reflection plus MH/VH getter/setter outcomes for both fields");
 }
 }
