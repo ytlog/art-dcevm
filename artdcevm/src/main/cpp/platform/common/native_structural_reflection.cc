@@ -6,6 +6,7 @@
 #include "platform/common/native_schema_binding.h"
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/readable_mapping_scope.h"
 namespace artdcevm::native_structural_reflection {
@@ -49,6 +50,17 @@ class NativeResolutionObserver final:public Observer {
        !metadata_.ClassIdentity(klass,&view,&error)||!view.descriptor)return Fail("transaction-class-identity");
     *out={klass,view.loader,view.parent,view.descriptor};return true;
   }
+  bool MatchesClass(const ClassIdentity& expected)const override {
+    field_copy::CopyClassView actual;
+    return metadata_.ClassIdentity(expected.klass,&actual,nullptr)&&actual.parent==expected.parent&&actual.loader==expected.loader&&actual.descriptor&&expected.descriptor==actual.descriptor;
+  }
+  bool CollectManagedRoots(const prepared_roots::Registrar& r)const override {
+    if(!roots_.Add(&holder_,r))return false;
+    for(auto& value:interfaces_)if(!roots_.Add(&value,r))return false;
+    roots_.Seal();return true;
+  }
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept override{return roots_.CanRefresh(r);}
+  void RefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept override{roots_.Refresh(r);}
   bool ReadMember(void* member,Kind kind,MemberIdentity* out)const override {
     const auto& method=model_.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
     const size_t need=kind==Kind::Method?method.size:sizeof(field_array::Field);size_t extent=0;
@@ -90,7 +102,8 @@ class NativeResolutionObserver final:public Observer {
  private:
   bool Fail(const char* reason)const{failure_=reason;return false;}
   mutable const char* failure_=nullptr;
-  void* holder_=nullptr;std::vector<void*> interfaces_;
+  mutable prepared_roots::Bindings roots_;
+  mutable void* holder_=nullptr;mutable std::vector<void*> interfaces_;
   const modern_field_metadata::FieldMetadata& metadata_;method_identity::Calibration model_;
   void* (*root_)(void*)=nullptr;bool (*same_)(void*,void*)=nullptr;bool (*implements_)(void*,uintptr_t)=nullptr;bool (*assignable_)(void*,uintptr_t)=nullptr;
 };
@@ -202,14 +215,14 @@ bool Service::Bind(HookEngine& hooks,void* runtime,const executable_mirror::Layo
   if(!visit){if(error)*error="Missing named structural reflective visitor";return false;}
   runtime_=runtime;visit_=visit;return true;
 }
-bool Service::Validate(const Plan& plan,std::string* error)const{
+bool Service::Validate(const Plan& plan,std::string* error,bool allocation_free)const{
   if(!runtime_||!visit_){if(error)*error="Unbound structural reflective visitor";return false;}
-  method_identity::ScopedReadableMappings mapped_scope;
+  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free)mapped_scope.emplace();
   const auto& guards=plan.handle_guards_;
   Visitor visitor(plan.methods_,plan.fields_,true,
       guards.method_handles&&guards.method_handles(guards.owner),
       guards.field_var_handles&&guards.field_var_handles(guards.owner),
-      guards.field_method_handles&&guards.field_method_handles(guards.owner),plan.resolution_.get());reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
+      guards.field_method_handles&&guards.field_method_handles(guards.owner),plan.resolution_.get(),allocation_free);reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
   if(visitor.Unsupported()){
     if(error){
       if(visitor.ResolutionUnavailable()){const auto& failure=visitor.ResolutionFailure();char details[512];
@@ -226,9 +239,9 @@ void Service::Retire(const Plan& plan)const{
   for(const auto& entry:plan.methods_)if(!entry.second)plan.retirement_.retire_method(plan.retirement_.owner,entry.first);
   for(const auto& entry:plan.fields_)if(!entry.second)plan.retirement_.retire_field(plan.retirement_.owner,entry.first);
 }
-void Service::Update(const Plan& plan)const{
+void Service::Update(const Plan& plan,bool allocation_free)const{
   if(!runtime_||!visit_)std::abort();
-  method_identity::ScopedReadableMappings mapped_scope;
-  Visitor visitor(plan.methods_,plan.fields_,false,false,false,false,plan.resolution_.get());reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
+  std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free)mapped_scope.emplace();
+  Visitor visitor(plan.methods_,plan.fields_,false,false,false,false,plan.resolution_.get(),allocation_free);reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
 }
 }

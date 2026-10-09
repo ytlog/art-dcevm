@@ -34,6 +34,11 @@ bool PreparedPlan::Prepare(const FieldCopyAccess& ops,bool statik,void* target,v
  if(!plan.Validate(ops))return fail("Prepared field-copy identities changed during preflight");
  *output=std::move(plan);if(error)error->clear();return true;
 }
+bool PreparedPlan::CollectManagedRoots(const prepared_roots::Registrar& registrar){
+ for(auto* group:{&source_,&target_})for(auto& c:*group)
+  if(!roots_.Add(&c.identity,registrar)||!roots_.Add(&c.parent,registrar)||!roots_.Add(&c.loader,registrar))return false;
+ roots_.Seal();return true;
+}
 bool PreparedPlan::Validate(const FieldCopyAccess& ops)const{
  if(!ops.klass||!ops.field||source_.empty()||target_.empty())return false;
  for(const auto* group:{&source_,&target_})for(const auto& c:*group){const auto facts=ops.klass(c.identity,is_static_);

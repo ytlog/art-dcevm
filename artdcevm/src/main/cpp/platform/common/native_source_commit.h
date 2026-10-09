@@ -54,6 +54,9 @@ class Services final : public source_commit::Services {
   static std::unique_ptr<Services> Prepare(HookEngine&,const Dependencies&,
       const source_commit::Plan&,std::vector<MethodPair>,std::string* error);
   bool Validate(const source_commit::Plan&)const override;
+  bool CollectManagedRoots(const prepared_roots::Registrar&);
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;
+  void RefreshManagedRoots(const prepared_roots::Resolver&)noexcept;
   void BeginCommit(const source_commit::Plan&)const override;
   uint32_t Status(void*)const override;
   void SetStatus(void*,uint32_t)const override;
@@ -71,6 +74,7 @@ class Services final : public source_commit::Services {
   void ClearInterpreterCaches()const override;
  private:
   Services()=default;
+  prepared_roots::Bindings roots_;
   Dependencies dependencies_;
   const source_commit::Plan* plan_=nullptr;
   std::vector<MethodPair> methods_;

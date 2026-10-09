@@ -1,4 +1,5 @@
 #include "platform/common/modern_method_services.h"
+#include "platform/common/class_metadata_abi.h"
 #include <cstdlib>
 namespace artdcevm::modern_methods {
 namespace {
@@ -101,6 +102,18 @@ void Service::RestoreOldDeclaringClasses()const {
     if((flags&0x1000000u)&&!(flags&0x80000000u))continue;
     std::memcpy(method,&owner,sizeof(owner));
   }
+}
+bool Service::MatchesClassTable(void* klass)const noexcept{
+ static_assert(offsetof(class_metadata::Class11,methods)==offsetof(class_metadata::Class17,methods));
+ if(klass!=old_class_&&klass!=new_class_)return false;
+ const auto& expected=Table(klass);
+ uint64_t pointer=0;std::memcpy(&pointer,static_cast<const unsigned char*>(klass)+offsetof(class_metadata::Class11,methods),8);
+ void* array=reinterpret_cast<void*>(uintptr_t(pointer));size_t extent=0;
+ if(array&&!method_identity::ReadableMappingExtent(array,&extent))return false;
+ method_array::View actual;
+ if(!method_array::Read(*layout_,array,extent,expected.boundaries,&actual)||actual.array!=expected.array||actual.count!=expected.count)return false;
+ for(uint32_t i=0;i<actual.count;++i)if(actual.At(i)!=expected.At(i))return false;
+ return true;
 }
 const method_array::View& Service::Table(void* klass)const {
   if(klass==old_class_)return old_;

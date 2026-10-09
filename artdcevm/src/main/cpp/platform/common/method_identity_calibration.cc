@@ -4,6 +4,10 @@
 #include <set>
 #include <algorithm>
 #include <cstdlib>
+#if !defined(__APPLE__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include "platform/common/readable_mapping_scope.h"
 #if defined(__APPLE__)
 #include <mach/mach.h>
@@ -31,15 +35,24 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
   if(status!=KERN_SUCCESS||!(info.protection&VM_PROT_READ)||pointer<start||pointer-start>=size||size>UINTPTR_MAX-start)return false;
   *region={uintptr_t(start),uintptr_t(start+size)};return true;
 #else
-  FILE* maps=std::fopen("/proc/self/maps","r");if(!maps)return false;
-  char line[1024];bool found=false;
-  while(std::fgets(line,sizeof(line),maps)){
-    unsigned long long start=0,end=0;char protection[5]{};
-    if(std::sscanf(line,"%llx-%llx %4s",&start,&end,protection)!=3||protection[0]!='r'||
-       end<=start||pointer<start||pointer>=end||end>UINTPTR_MAX)continue;
-    *region={uintptr_t(start),uintptr_t(end)};found=true;break;
+  const int fd=open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0)return false;
+  // Direct syscalls and fixed stack storage also serve final no-allocation
+  // validation. stdio allocates its FILE and read buffer even without C++ new.
+  auto match=[&](const char* line,size_t length){
+    size_t at=0;uintptr_t start=0,end=0;
+    auto hex=[&](uintptr_t* value){size_t digits=0;while(at<length){unsigned char c=line[at];unsigned digit;
+      if(c>='0'&&c<='9')digit=c-'0';else if(c>='a'&&c<='f')digit=c-'a'+10;else if(c>='A'&&c<='F')digit=c-'A'+10;else break;
+      if(*value>(UINTPTR_MAX-digit)/16)return false;*value=*value*16+digit;++at;++digits;}return digits!=0;};
+    return hex(&start)&&at<length&&line[at++]=='-'&&hex(&end)&&at+2<length&&line[at++]==' '&&line[at]=='r'&&end>start&&pointer>=start&&pointer<end&&(*region=std::pair<uintptr_t,uintptr_t>{start,end},true);
+  };
+  char chunk[4096],line[1024];size_t length=0;bool found=false;
+  for(ssize_t n;(n=read(fd,chunk,sizeof(chunk)))>0&&!found;){
+    for(ssize_t i=0;i<n;++i){if(chunk[i]=='\n'){
+        if(match(line,length)){found=true;break;}length=0;
+      }else if(length<sizeof(line))line[length++]=chunk[i];
+    }
   }
-  std::fclose(maps);return found;
+  close(fd);return found;
 #endif
 }
 }

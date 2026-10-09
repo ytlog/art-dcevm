@@ -4,6 +4,14 @@
 #include <cassert>
 #include <cstdio>
 #include <thread>
+#include <cstdlib>
+#include <new>
+bool no_map_allocations=false;
+void* operator new(size_t n){if(no_map_allocations)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void* operator new[](size_t n){return ::operator new(n);}
+void operator delete(void* p)noexcept{std::free(p);}
+void operator delete[](void* p)noexcept{std::free(p);}
+struct Roots{std::vector<void*> values;static bool Add(void* raw,void* value,size_t* slot){auto& self=*static_cast<Roots*>(raw);*slot=self.values.size();self.values.push_back(value);return true;}static void* Get(void* raw,size_t slot)noexcept{return static_cast<Roots*>(raw)->values[slot];}};
 using namespace artdcevm::android13;
 // The real host libc++ oracle must accept the fixed Android libc++ map view.
 // A changed host ABI/hash fails these checks rather than substituting a mirrored oracle.
@@ -33,6 +41,17 @@ int main(){std::string error;
  ObjectReplacementMap empty({});assert(VerifyObjectReplacementMap(empty,&error));assert(CheckPlatformMap(empty.BorrowedMap(),empty.Nodes(),empty.Size()));
  ObjectReplacementMap one({{reinterpret_cast<void*>(8),reinterpret_cast<void*>(16)}});assert(one.Size()==1&&VerifyObjectReplacementMap(one,&error));
  for(uintptr_t value:{uintptr_t{0},uintptr_t{1},uintptr_t{0xffffffff},uintptr_t{0x100000000},uintptr_t{0xffffffffffffffffULL}})assert(HashReplacementPointer(reinterpret_cast<void*>(value))==std::hash<void*>{}(reinterpret_cast<void*>(value)));
+ // Roots move twice and change bucket order. The original entry/slot order
+ // remains fixed while libc++ node and bucket storage is rebuilt in place.
+ ObjectReplacementMap moving(entries,128);Roots roots;
+ assert(moving.CollectManagedRoots({&roots,Roots::Add}));const auto* nodes_before=moving.Nodes();const auto buckets_before=moving.BucketCount();
+ for(uintptr_t round=1;round<=2;++round){
+  for(size_t i=0;i<roots.values.size();++i)roots.values[i]=reinterpret_cast<void*>(uintptr_t(roots.values[i])+round*0x200000008ULL);
+  no_map_allocations=true;assert(moving.CanRefreshManagedRoots({&roots,Roots::Get}));moving.RefreshManagedRoots({&roots,Roots::Get});no_map_allocations=false;
+  assert(moving.Nodes()==nodes_before&&moving.BucketCount()==buckets_before&&moving.Size()==1000);
+  assert(VerifyObjectReplacementMap(moving,&error));assert(CheckPlatformMap(moving.BorrowedMap(),moving.Nodes(),moving.Size()));
+  const auto& map=*static_cast<const PlatformMap*>(moving.BorrowedMap());for(size_t i=0;i<roots.values.size();i+=2)assert(map.at(roots.values[i])==roots.values[i+1]);
+ }
  // Malformed borrowed views must fail before calling the real ART consumer.
  ObjectReplacementMap damaged(entries,128);
  auto& header=*const_cast<object_map_abi::Map*>(static_cast<const object_map_abi::Map*>(damaged.BorrowedMap()));

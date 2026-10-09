@@ -45,18 +45,27 @@ std::unique_ptr<ResolutionInvalidationPlan> ResolutionInvalidationPlan::Prepare(
  }
  if(error)error->clear();return result;
 }
+bool ResolutionInvalidationPlan::CollectManagedRoots(const prepared_roots::Registrar& r){
+ if(!roots_.Add(&holder_,r))return false;
+ for(auto& value:eligible_classes_)if(!roots_.Add(&value,r))return false;
+ for(auto& c:classes_)if(!roots_.Add(&c.klass,r)||!roots_.Add(&c.parent,r)||!roots_.Add(&c.loader,r))return false;
+ for(auto& declaration:declarations_)if(!roots_.Add(&declaration.declaring,r))return false;
+ if(!observer_->CollectManagedRoots(r))return false;
+ roots_.Seal();return true;
+}
+bool ResolutionInvalidationPlan::CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r)&&observer_->CanRefreshManagedRoots(r);}
+void ResolutionInvalidationPlan::RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{roots_.Refresh(r);observer_->RefreshManagedRoots(r);}
 bool ResolutionInvalidationPlan::ValidateScope()const{
  if(!observer_||!observer_->ValidateScope(holder_))return false;
- for(const auto& facts:classes_){ClassIdentity current;
-  if(!observer_->ReadClass(facts.klass,&current)||!SameClass(current,facts))return false;
- }
+ for(const auto& facts:classes_)if(!observer_->MatchesClass(facts))return false;
  return true;
 }
-ResolutionInvalidationPlan::Scan::Scan(const ResolutionInvalidationPlan& p):plan_(p),valid_(p.ValidateScope()){}
+ResolutionInvalidationPlan::Scan::Scan(const ResolutionInvalidationPlan& p,bool allocation_free):plan_(p),valid_(p.ValidateScope()),allocation_free_(allocation_free){}
 Decision ResolutionInvalidationPlan::Scan::Inspect(void* member,Kind kind,uint32_t source,FailureInfo* failure){
  if(failure)*failure={};
  if((kind==Kind::Method&&source!=8)||(kind==Kind::Field&&source!=9))return Decision::Keep;
  if(!valid_)return plan_.InspectImpl(member,kind,source,failure,true);
+ if(allocation_free_)return plan_.InspectImpl(member,kind,source,failure,false);
  auto& cache=kind==Kind::Method?methods_:fields_;auto found=cache.find(member);
  if(found==cache.end()){
   FailureInfo details;auto decision=plan_.InspectImpl(member,kind,source,&details,false,&assignability_);

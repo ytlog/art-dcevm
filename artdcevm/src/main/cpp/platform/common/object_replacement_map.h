@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/object_replacement_map_abi.h"
+#include "platform/common/prepared_root_bindings.h"
 #include <utility>
 #include <vector>
 #include <string>
@@ -18,8 +19,14 @@ class ObjectReplacementMap {
   const object_map_abi::Node* Nodes()const{return nodes_.data();}
   size_t Size()const{return nodes_.size();}
   size_t BucketCount()const{return buckets_.size();}
+  bool CollectManagedRoots(const prepared_roots::Registrar&);
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
+  void RefreshManagedRoots(const prepared_roots::Resolver&)noexcept;
  private:
   friend bool VerifyObjectReplacementMap(const ObjectReplacementMap&,std::string*);
+  void Rebuild()noexcept;
+  prepared_roots::Bindings roots_;
+  std::vector<std::pair<void*,void*>> entries_;
   object_map_abi::Map map_{};
   std::vector<object_map_abi::Node> nodes_;
   std::vector<object_map_abi::NodeBase*> buckets_;

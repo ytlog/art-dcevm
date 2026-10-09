@@ -67,6 +67,25 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
   if(!object_replacement::VerifyObjectReplacementMap(*result->replacements_,error))return nullptr;
   if(error)error->clear();return result;
 }
+bool Services::CollectManagedRoots(const prepared_roots::Registrar& registrar){
+  for(auto& pair:methods_)if(!roots_.Add(&pair.old_class,registrar)||!roots_.Add(&pair.new_class,registrar))return false;
+  for(auto& pair:copies_){
+    if(!roots_.Add(&pair.old_class,registrar)||!roots_.Add(&pair.new_class,registrar)||
+       !pair.statics.CollectManagedRoots(registrar)||!pair.instances.CollectManagedRoots(registrar))return false;
+  }
+  if(!replacements_||!replacements_->CollectManagedRoots(registrar))return false;
+  roots_.Seal();return true;
+}
+bool Services::CanRefreshManagedRoots(const prepared_roots::Resolver& resolver)const noexcept{
+  if(!roots_.CanRefresh(resolver)||!replacements_||!replacements_->CanRefreshManagedRoots(resolver))return false;
+  for(const auto& pair:copies_)if(!pair.statics.CanRefreshManagedRoots(resolver)||!pair.instances.CanRefreshManagedRoots(resolver))return false;
+  return true;
+}
+void Services::RefreshManagedRoots(const prepared_roots::Resolver& resolver)noexcept{
+  roots_.Refresh(resolver);
+  for(auto& pair:copies_){pair.statics.RefreshManagedRoots(resolver);pair.instances.RefreshManagedRoots(resolver);}
+  replacements_->RefreshManagedRoots(resolver);
+}
 bool Services::Validate(const source_commit::Plan& p)const {
   if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
      &p!=plan_||!Mapped(p.mirror,layout_->size)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||

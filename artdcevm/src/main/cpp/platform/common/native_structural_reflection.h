@@ -42,6 +42,9 @@ class Plan {
       const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards guards={},ResolutionBinding resolution={},const std::vector<native_schema_policy::Plan>* schemas=nullptr,const native_schema_policy::GuardVerifier* schema_guards=nullptr);
   bool HasDeletedMethods()const;
   bool HasDeletedFields()const;
+  bool CollectManagedRoots(const prepared_roots::Registrar& r){return !resolution_||resolution_->CollectManagedRoots(r);}
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return !resolution_||resolution_->CanRefreshManagedRoots(r);}
+  void RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{if(resolution_)resolution_->RefreshManagedRoots(r);}
  private:
   friend class Service;
   std::unique_ptr<resolution_invalidation::ResolutionInvalidationPlan> resolution_;
@@ -54,9 +57,9 @@ class Service {
   bool Bind(HookEngine&,void* observed_runtime,const executable_mirror::Layout&,std::string*);
   // Before mutation, reject a deleted method referenced through an unguarded
   // MethodHandle; guard completeness is never inferred from source kind or SDK.
-  bool Validate(const Plan&,std::string*)const;
+  bool Validate(const Plan&,std::string*,bool allocation_free=false)const;
   void Retire(const Plan&)const;
-  void Update(const Plan&)const;
+  void Update(const Plan&,bool allocation_free=false)const;
  private:
   void* runtime_=nullptr;
   void* visit_=nullptr;

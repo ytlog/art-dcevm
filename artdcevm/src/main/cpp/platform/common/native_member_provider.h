@@ -29,14 +29,26 @@ struct Dependencies {
 class Service {
  public:
   std::unique_ptr<source_commit::Services> Prepare(const source_commit::Plan&,Dependencies,std::string*);
+  bool CollectManagedRoots(source_commit::Services&,const prepared_roots::Registrar&);
+  bool RefreshManagedRoots(const source_commit::Plan&,source_commit::Services&,const prepared_roots::Resolver&)noexcept;
  private:
   static bool ReflectReady(const source_commit::Plan&,void*);
   static void ReflectRetire(const source_commit::Plan&,void*);
   static void ReflectUpdate(const source_commit::Plan&,void*);
+  struct MemberFact{void* member;void* declaring;uint32_t flags,index;bool method;};
+  struct ClassFact{void* klass;void* parent;void* loader;uint32_t flags;size_t instance_fields,static_fields,methods;void* instance_array=nullptr;void* static_array=nullptr;};
+  bool CaptureFacts(const source_commit::Plan&);
+  bool MatchFacts(const source_commit::Plan&)const noexcept;
+  prepared_roots::Bindings roots_;
+  std::vector<MemberFact> member_facts_;
+  std::vector<ClassFact> class_facts_;
+  source_commit::Services* prepared_source_=nullptr;
+  bool refreshed_=false;
   const source_commit::Plan* plan_=nullptr;
   native_structural_reflection::Service* reflection_=nullptr;
   std::unique_ptr<native_structural_reflection::Plan> mapping_;
   std::vector<std::unique_ptr<modern_methods::Service>> tables_;
+  std::vector<const modern_methods::Service*> views_;
   std::vector<native_schema_policy::Plan> schemas_;
   const native_schema_policy::GuardVerifier* schema_guards_=nullptr;
   const modern_field_metadata::FieldMetadata* schema_metadata_=nullptr;

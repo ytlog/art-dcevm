@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <unordered_map>
-#include <memory>
+#include <optional>
 #include "platform/common/native_reflective_value_abi.h"
 #include "platform/common/resolution_invalidation_plan.h"
 namespace artdcevm::native_structural_reflection {
@@ -15,10 +15,10 @@ class Visitor final:public art::ReflectiveValueVisitor {
  public:
   Visitor(const std::unordered_map<void*,void*>& methods,const std::unordered_map<void*,void*>& fields,bool validate,
           bool method_handles=false,bool field_var_handles=false,bool field_method_handles=false,
-          const resolution_invalidation::ResolutionInvalidationPlan* resolution=nullptr)
+          const resolution_invalidation::ResolutionInvalidationPlan* resolution=nullptr,bool allocation_free=false)
       :methods_(methods),fields_(fields),validate_(validate),
        method_handles_(method_handles),field_var_handles_(field_var_handles),field_method_handles_(field_method_handles),resolution_(resolution){
-    if(resolution_)scan_=std::make_unique<resolution_invalidation::ResolutionInvalidationPlan::Scan>(*resolution_);
+    if(resolution_)scan_.emplace(*resolution_,allocation_free);
   }
   art::ArtMethod* VisitMethod(art::ArtMethod* method,const art::ReflectionSourceInfo& info)override {
     if(!method)return nullptr;
@@ -64,7 +64,7 @@ class Visitor final:public art::ReflectiveValueVisitor {
   bool validate_,method_handles_,field_var_handles_,field_method_handles_,unsupported_=false,resolution_unavailable_=false;
   resolution_invalidation::FailureInfo resolution_failure_;
   const resolution_invalidation::ResolutionInvalidationPlan* resolution_;
-  std::unique_ptr<resolution_invalidation::ResolutionInvalidationPlan::Scan> scan_;
+  std::optional<resolution_invalidation::ResolutionInvalidationPlan::Scan> scan_;
 };
 }
 }

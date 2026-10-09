@@ -4,6 +4,7 @@
 #include "platform/common/native_method_binding_calibration.h"
 #include "platform/common/structural_methods.h"
 #include <memory>
+#include "platform/common/prepared_root_bindings.h"
 namespace artdcevm::modern_methods {
 class Service;
 class Binding final {
@@ -52,6 +53,10 @@ class Service final : public structural_methods::Services {
   // Fixed modern ART heap replacement rewrites native declaring-class roots.
   // Restore only the old non-copied methods before the class is retained.
   void RestoreOldDeclaringClasses()const;
+  bool MatchesClassTable(void*)const noexcept;
+  bool CollectManagedRoots(const prepared_roots::Registrar& r){if(!roots_.Add(&old_class_,r)||!roots_.Add(&new_class_,r))return false;roots_.Seal();return true;}
+  bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
+  void RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{roots_.Refresh(r);}
   size_t Count(void*) const override;
   void* At(void*,size_t) const override;
   uint32_t Flags(void*) const override;
@@ -63,6 +68,7 @@ class Service final : public structural_methods::Services {
   void SetObsoleteEntry(void*) const override;
  private:
   Service() = default;
+  prepared_roots::Bindings roots_;
   const method_array::View& Table(void*) const;
   void RequireMember(void*) const;
   using Root = void* (*)(void*);

@@ -9,6 +9,13 @@
 #include <fstream>
 #include <iterator>
 #include "platform/common/native_interface_graph.h"
+// Finalization must still run when every native C++ allocation fails.
+#include <new>
+bool forbid_provider_allocation=false;
+void* operator new(size_t n){if(forbid_provider_allocation)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void* operator new[](size_t n){return ::operator new(n);}
+void operator delete(void* p)noexcept{std::free(p);}
+void operator delete[](void* p)noexcept{std::free(p);}
 namespace {
 int retired_methods=0,retired_fields=0;bool mh_guard=false,vh_guard=false,visit_mh=false,visit_vh=false,field_mh_guard=false,visit_field_mh=false;
 void RetireMethod(void*,void*){++retired_methods;}void RetireField(void*,void*){++retired_fields;}
@@ -88,6 +95,12 @@ void Visit(void* receiver,art::ReflectiveValueVisitor* visitor){
  if(visit_field_mh){Put32(info,8,3);assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[3]),*reinterpret_cast<const art::ReflectionSourceInfo*>(info))==reinterpret_cast<art::ArtField*>(old_fields[3]));}
  if(visit_vh){Put32(info,8,4);assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[3]),*reinterpret_cast<const art::ReflectionSourceInfo*>(info))==reinterpret_cast<art::ArtField*>(old_fields[3]));}
 }
+struct RegisteredRoots{
+ std::vector<void*> values;
+ static bool Add(void* raw,void* value,size_t* slot){auto& self=*static_cast<RegisteredRoots*>(raw);auto found=std::find(self.values.begin(),self.values.end(),value);if(found==self.values.end()){*slot=self.values.size();self.values.push_back(value);}else *slot=size_t(found-self.values.begin());return true;}
+ static void* Get(void* raw,size_t slot)noexcept{return static_cast<RegisteredRoots*>(raw)->values[slot];}
+ void Move(void* before,void* after){for(auto& value:values)if(value==before)value=after;}
+};
 void SchemaObsolete(void* receiver,void* method){
  assert(stopped&&receiver==&linker);bool actual=false;
  auto* methods=reinterpret_cast<unsigned char*>(uintptr_t(old_class->methods));
@@ -317,8 +330,31 @@ int main(int argc,char** argv){
  assert(!source_commit::Run(plan,*schema_service));new_fields[0]->declaring_class=declaring_before;
  new_fields[2]->access_flags=1;assert(!source_commit::Run(plan,*schema_service));new_fields[2]->access_flags=65;
  assert(retired_fields==roots_before_retire&&!mutations&&!replaced);
- // Actual shared source commit uses the prepared field-copy path.
+ // Collected prepares every table/schedule/map before a moving GC. Every
+ // managed ancestor is registered, including untouched bootstrap Object.
+ RegisteredRoots roots;assert(schema_provider.CollectManagedRoots(*schema_service,{&roots,RegisteredRoots::Add}));
+ auto* previous_old=old_class;auto* previous_new=new_class;void* previous_parent=parent_class;
+ old_class=static_cast<class_metadata::Class17*>(heap.New(160));new_class=static_cast<class_metadata::Class17*>(heap.New(160));parent_class=heap.New(160);
+ std::memcpy(old_class,previous_old,160);std::memcpy(new_class,previous_new,160);std::memcpy(parent_class,previous_parent,160);
+ old_class->super_class=uint32_t(uintptr_t(parent_class));new_class->super_class=uint32_t(uintptr_t(parent_class));
+ static_cast<class_metadata::Class17*>(public_array_class)->component_type=uint32_t(uintptr_t(parent_class));
+ for(auto* field:old_fields)field->declaring_class=uint32_t(uintptr_t(old_class));for(auto* field:new_fields)field->declaring_class=uint32_t(uintptr_t(new_class));
+ for(auto* klass:{old_class,new_class}){auto* methods=reinterpret_cast<unsigned char*>(uintptr_t(klass->methods));for(uint32_t i=0;i<Read32(methods);++i)Put32(methods,8+size_t(i)*32,uint32_t(uintptr_t(klass)));}
+ Put32(old_instance,0,uint32_t(uintptr_t(old_class)));Put32(new_instance,0,uint32_t(uintptr_t(new_class)));Put32(class_array,12,uint32_t(uintptr_t(new_class)));
+ plan.mirror=old_class;plan.old_classes[0]=old_class;plan.new_classes[0]=new_class;
+ roots.Move(previous_old,old_class);roots.Move(previous_new,new_class);roots.Move(previous_parent,parent_class);
+ const auto registered_count=roots.values.size();events.reserve(events.size()+32);
+ forbid_provider_allocation=true;
+ assert(schema_provider.RefreshManagedRoots(plan,*schema_service,{&roots,RegisteredRoots::Get}));
+ assert(schema_service->Validate(plan));
+ new_fields[2]->access_flags=1;assert(!source_commit::Run(plan,*schema_service));new_fields[2]->access_flags=65;
+ const auto refreshed_methods=new_class->methods;new_class->methods=uintptr_t(moved_methods);
+ assert(!source_commit::Run(plan,*schema_service));new_class->methods=refreshed_methods;
+ assert(retired_fields==roots_before_retire&&!mutations&&!replaced);
+ // Actual shared source commit, reflection/resolution scan and replacement
+ // hash rebuilding all execute with the allocation failure guard active.
  assert(source_commit::Run(plan,*schema_service));
+ forbid_provider_allocation=false;assert(roots.values.size()==registered_count);
  uint64_t initialized_after=0;std::memcpy(&initialized_after,reinterpret_cast<char*>(new_class)+128,8);
  assert(initialized_after==0&&Read32(new_class,144)==0); // No encoded values or clinit rerun.
  assert(Read32(new_instance,12)==uintptr_t(ref_a)&&Read32(new_instance,16)==uintptr_t(ref_b));

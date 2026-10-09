@@ -14,9 +14,10 @@ uint64_t HashReplacementPointer(const void* pointer) {
 ObjectReplacementMap::ObjectReplacementMap(const std::vector<std::pair<void*,void*>>& entries,size_t count) {
   static_assert(sizeof(void*)==8);
   std::unordered_set<void*> seen;
-  nodes_.reserve(entries.size());
-  for(const auto& entry:entries)if(seen.insert(entry.first).second)
-    nodes_.push_back({{nullptr},HashReplacementPointer(entry.first),entry.first,entry.second});
+  nodes_.reserve(entries.size());entries_.reserve(entries.size());
+  for(const auto& entry:entries)if(seen.insert(entry.first).second){
+    entries_.push_back(entry);nodes_.push_back({{nullptr},HashReplacementPointer(entry.first),entry.first,entry.second});
+  }
   if(nodes_.empty()){map_.max_load_factor=1.0f;return;}
   if(!count){count=2;while(count<nodes_.size()){if(count>std::numeric_limits<size_t>::max()/2)throw std::length_error("Object replacement map capacity");count*=2;}}
   // Power-of-two counts let our builder use the exact __constrain_hash reduction.
@@ -26,6 +27,34 @@ ObjectReplacementMap::ObjectReplacementMap(const std::vector<std::pair<void*,voi
   map_.buckets=buckets_.data();map_.bucket_count=count;map_.size=nodes_.size();map_.max_load_factor=1.0f;
   object_map_abi::NodeBase* previous=&map_.sentinel;
   for(auto& node:nodes_){size_t bucket=node.hash&(count-1);if(!buckets_[bucket])buckets_[bucket]=previous;previous->next=&node;previous=&node;}
+}
+bool ObjectReplacementMap::CollectManagedRoots(const prepared_roots::Registrar& registrar){
+  for(auto& entry:entries_)if(!roots_.Add(&entry.first,registrar)||!roots_.Add(&entry.second,registrar))return false;
+  roots_.Seal();return true;
+}
+void ObjectReplacementMap::RefreshManagedRoots(const prepared_roots::Resolver& resolver)noexcept{
+  roots_.Refresh(resolver);Rebuild();
+}
+void ObjectReplacementMap::Rebuild()noexcept{
+  map_.sentinel.next=nullptr;
+  std::fill(buckets_.begin(),buckets_.end(),nullptr);
+  for(size_t i=0;i<entries_.size();++i){const auto& entry=entries_[i];
+    nodes_[i]={{nullptr},HashReplacementPointer(entry.first),entry.first,entry.second};}
+  if(nodes_.empty())return;
+  // In-place heapsort bounds finalization to O(N log N), with no scratch
+  // allocation. Root bindings use unsorted entries_, never reordered nodes.
+  const size_t mask=buckets_.size()-1;
+  auto sift=[&](size_t root,size_t limit){
+    while(root<limit/2){size_t child=root*2+1;
+      if(child+1<limit&&(nodes_[child].hash&mask)<(nodes_[child+1].hash&mask))++child;
+      if((nodes_[root].hash&mask)>=(nodes_[child].hash&mask))break;
+      std::swap(nodes_[root],nodes_[child]);root=child;
+    }
+  };
+  for(size_t start=nodes_.size()/2;start;--start)sift(start-1,nodes_.size());
+  for(size_t end=nodes_.size();end>1;--end){std::swap(nodes_[0],nodes_[end-1]);sift(0,end-1);}
+  object_map_abi::NodeBase* previous=&map_.sentinel;
+  for(auto& node:nodes_){size_t bucket=node.hash&mask;if(!buckets_[bucket])buckets_[bucket]=previous;previous->next=&node;previous=&node;}
 }
 bool VerifyObjectReplacementMap(const ObjectReplacementMap& map,std::string* error) {
   const auto& view=*static_cast<const object_map_abi::Map*>(map.BorrowedMap());
