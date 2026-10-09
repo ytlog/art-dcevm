@@ -1,8 +1,11 @@
 #pragma once
 #include <cstddef>
 namespace artdcevm::owned_jit_compilation {
-// Fixed Jit declarations in Android 14--17 jit.h. Availability is selected by
-// exact names, not SDK. Queue requires shared mutator access; Wait requires the
+// Shared fixed Jit declarations in Android 11--17 jit.h. The 11--13 source
+// implementations already expose this same queue/drain ABI; their internal
+// task kinds/baseline booleans do not enter this caller's argument list.
+// Availability is selected by exact names, not SDK. Queue requires shared
+// mutator access; Wait requires the
 // same current Thread outside that access (ThreadPool::Wait may block).
 inline constexpr char kEnqueue[]="_ZN3art3jit3Jit27EnqueueOptimizedCompilationEPNS_9ArtMethodEPNS_6ThreadE";
 inline constexpr char kWait[]="_ZN3art3jit3Jit26WaitForCompilationToFinishEPNS_6ThreadE";
@@ -15,6 +18,9 @@ class Service {
     if(!value.enqueue_||!value.wait_)return false;*output=value;return true;
   }
   // Receiver/method/thread ownership and locks are independent prerequisites.
+  // Request may be a source-defined no-op (no pool, single-tier/already compiled
+  // policy). Queue/drain/cache membership never prove optimized inline shape;
+  // the independent live native header/maps/two-inline/root proof is mandatory.
   bool Queue(void* jit,void* rooted_method,void* current_thread) const {
     if(!enqueue_||!jit||!rooted_method||!current_thread)return false;
     enqueue_(jit,rooted_method,current_thread);return true;
