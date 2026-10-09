@@ -3,7 +3,7 @@ plugins {
     id 'com.vanniktech.maven.publish' version '0.37.0'
 }
 def targetAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
-if (!(targetAbi in ['arm64-v8a', 'x86_64'])) throw new GradleException("Unsupported targetAbi: $targetAbi")
+if (targetAbi != 'arm64-v8a') throw new GradleException("Unsupported targetAbi: $targetAbi")
 android {
     namespace 'com.github.ytlog.artdcevm'
     compileSdk 37
@@ -26,7 +26,7 @@ android {
     packaging { jniLibs { excludes += ['**/libshadowhook.so', '**/libshadowhook_nothing.so'] } }
 }
 dependencies {
-    if (targetAbi == 'arm64-v8a') implementation 'com.bytedance.android:shadowhook:2.0.1'
+    implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
 
 apply from: rootProject.file('gradle/publish-maven.gradle')

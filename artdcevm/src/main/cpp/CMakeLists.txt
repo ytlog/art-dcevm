@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(artdcevm LANGUAGES C CXX)
+if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
+  message(FATAL_ERROR "Supported ABI: arm64-v8a")
+endif()
 # Pair NDK r27 flexible page sizes with the alignment required by 16 KB devices.
 add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
-if(ANDROID_ABI STREQUAL "arm64-v8a")
   target_sources(artdcevm PRIVATE
     third_party/xz_embedded/xz_dec_stream.c
     third_party/xz_embedded/xz_dec_lzma2.c
@@ -21,10 +23,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
   find_package(shadowhook REQUIRED CONFIG)
   target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc)
   target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
-endif()
-if(ANDROID_ABI STREQUAL "arm64-v8a")
   enable_language(ASM)
-  target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
   target_sources(artdcevm PRIVATE platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc
@@ -158,9 +157,6 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/validation_hooks.cc platform/android13/evolution_runtime.cc
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
-elseif(NOT ANDROID_ABI STREQUAL "x86_64")
-  message(FATAL_ERROR "Supported ABIs: arm64-v8a and x86_64")
-endif()
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)
 target_link_libraries(artdcevm PRIVATE log dl)
