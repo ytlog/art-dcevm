@@ -20,6 +20,7 @@ struct Access {
  bool (*reference)(void*,void*,void*,void**)noexcept=nullptr;
  bool (*compressed)(void*,void*,uint32_t,void**)noexcept=nullptr;
  void (*raise)(void*,void*,const char*,const char*)noexcept=nullptr;
+ bool (*field_id)(void*,void*,void*,void**)noexcept=nullptr;
 };
 struct Oracle {Invocation invocation;void* declaring=nullptr;void* receiver_class=nullptr;bool rejection=false;};
 class Guard final {
@@ -34,6 +35,8 @@ class Guard final {
  bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
  void Activate()noexcept;
  bool Check(const Invocation&)noexcept;
+ bool InUse()const noexcept;
+ bool CheckFieldId(Path,void* thread,void* id,void* handle)noexcept;
  bool CheckReference(Path,void* thread,void* member,void* handle,void* result=nullptr,bool field=false)noexcept;
  bool CheckCompressed(Path,void* thread,void* member,uint32_t reference,void* result=nullptr,bool field=false)noexcept;
  private:
@@ -49,6 +52,8 @@ class Guard final {
 inline std::atomic<Guard*> consumer{nullptr};
 inline bool Bind(Guard& owner)noexcept {Guard* expected=nullptr;return consumer.compare_exchange_strong(expected,&owner,std::memory_order_acq_rel)||expected==&owner;}
 inline bool Check(const Invocation& invocation)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->Check(invocation);}
+inline bool InUse()noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->InUse();}
+inline bool CheckFieldId(Path path,void* thread,void* id,void* handle)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->CheckFieldId(path,thread,id,handle);}
 inline bool CheckReference(Path path,void* thread,void* member,void* handle,void* result=nullptr,bool field=false)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->CheckReference(path,thread,member,handle,result,field);}
 inline bool CheckCompressed(Path path,void* thread,void* member,uint32_t reference,void* result=nullptr,bool field=false)noexcept {auto* owner=consumer.load(std::memory_order_acquire);return owner&&owner->CheckCompressed(path,thread,member,reference,result,field);}
 }

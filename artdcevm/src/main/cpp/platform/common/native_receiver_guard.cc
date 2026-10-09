@@ -16,8 +16,15 @@ bool Guard::EndProof(bool succeeded,bool incompatible,bool unchanged)noexcept{
 }
 bool Guard::Proven()const noexcept{std::lock_guard<std::mutex> lock(lock_);return !probing_&&passed_==complete&&refused_==complete;}
 void Guard::Activate()noexcept{if(!Proven())std::abort();active_.store(true,std::memory_order_release);}
+bool Guard::InUse()const noexcept{if(Active())return true;std::lock_guard<std::mutex> lock(lock_);return probing_;}
+bool Guard::CheckFieldId(Path path,void*self,void*id,void*handle)noexcept{
+ if(!Interested(path,self,nullptr))return false;
+ if(!access_.current||!access_.current(access_.owner,self)||!access_.field_id||!id){if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver JNI field decoder lost owned native access");return true;}
+ void*member=nullptr;if(!access_.field_id(access_.owner,self,id,&member)||!member){access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver JNI FieldId has no proven native identity");return true;}
+ return CheckReference(path,self,member,handle,nullptr,true);
+}
 bool Guard::Interested(Path path,void* self,void* member)const noexcept{
- if(Active())return true;std::lock_guard<std::mutex> lock(lock_);return probing_&&oracle_.invocation.path==path&&oracle_.invocation.thread==self&&oracle_.invocation.member==member;
+ if(Active())return true;std::lock_guard<std::mutex> lock(lock_);return probing_&&oracle_.invocation.path==path&&oracle_.invocation.thread==self&&(!member||oracle_.invocation.member==member);
 }
 bool Guard::Entry(Path path,void*self,void*member,void*handle,uint32_t compressed,bool encoded,void*result,bool field)noexcept{
  if(!Interested(path,self,member))return false;

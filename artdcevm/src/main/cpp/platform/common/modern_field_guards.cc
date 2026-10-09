@@ -1,5 +1,6 @@
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/common/native_receiver_guard.h"
 #include "platform/common/modern_final_field_guard.h"
 #include "platform/abi/arm64/art_field.h"
 #include "platform/common/modern_method_handle_guards.h"
@@ -45,7 +46,7 @@ void VisitField(void* mirror,void* visitor) {
   const uint32_t token=state.registry->TokenFor(before);
   if(token)std::memcpy(static_cast<unsigned char*>(mirror)+field_mirror::kDeclaration.field_index,&token,4);
 }
-struct Request {jfieldID id=nullptr;jobject mirror=nullptr;bool guarded=false;};
+struct Request {jfieldID id=nullptr;jobject mirror=nullptr;bool guarded=false;jobject receiver=nullptr;bool write=false;};
 bool Observe(const runnable_jni::Context& context,void* data) {
   auto& request=*static_cast<Request*>(data);
   void* field=nullptr;
@@ -60,17 +61,20 @@ bool Observe(const runnable_jni::Context& context,void* data) {
     ++rejected;
     state.throw_exception(context.self,"Ljava/lang/NoSuchFieldError;","Field removed by ART DCEVM");
   }
+  if(!request.guarded)request.guarded=receiver_guard::CheckReference(request.write?receiver_guard::Path::ReflectWrite:receiver_guard::Path::ReflectRead,context.self,field,request.receiver,nullptr,true);
   return true;
 }
-bool Guard(JNIEnv* env,jfieldID id,jobject reflected) {
-  if(probing||state.registry->Count()==0)return false;
+bool Guard(JNIEnv* env,jfieldID id,jobject reflected,jobject receiver=nullptr,bool write=false) {
+  if(probing||(state.registry->Count()==0&&!receiver_guard::InUse()))return false;
   if(env->ExceptionCheck())return true; // Keep the caller's existing exception.
   struct Probe {Probe(){probing=true;}~Probe(){probing=false;}} probe;
   jobject global=reflected?env->NewGlobalRef(reflected):nullptr;
-  Request request{id,global,false};
-  auto result=reflected&&!global?runnable_jni::Result::kInvalidRequest:
+  jobject receiver_root=receiver?env->NewGlobalRef(receiver):nullptr;
+  Request request{id,global,false,receiver_root,write};
+  auto result=(reflected&&!global)||(receiver&&!receiver_root)?runnable_jni::Result::kInvalidRequest:
       runnable_executor::With(env,global?global:state.anchor,Observe,&request);
   if(global)env->DeleteGlobalRef(global);
+  if(receiver_root)env->DeleteGlobalRef(receiver_root);
   if(request.guarded)return true;
   if(result==runnable_jni::Result::kSuccess)return false;
   // Never delegate a potentially stale ID when owned access fails. Preserve a
@@ -81,8 +85,20 @@ bool Guard(JNIEnv* env,jfieldID id,jobject reflected) {
   }
   return true;
 }
-bool GuardJni(JNIEnv* env,jobject receiver,bool is_static,jfieldID id){
- if(probing||state.registry->Count()==0)return false;
+bool GuardReceiverJni(JNIEnv* env,jobject receiver,jfieldID id,bool write){
+ if(!receiver_guard::InUse())return false;
+ if(env->ExceptionCheck())return true;
+ jobject root=receiver?env->NewGlobalRef(receiver):nullptr;
+ struct Probe{jobject receiver;jfieldID id;bool write;bool rejected=false;}request{root,id,write};
+ const auto operation=[](const runnable_jni::Context&context,void*p){auto&r=*static_cast<Probe*>(p);r.rejected=receiver_guard::CheckFieldId(r.write?receiver_guard::Path::JniWrite:receiver_guard::Path::JniRead,context.self,r.id,r.receiver);return true;};
+ const auto result=receiver&&!root?runnable_jni::Result::kInvalidRequest:runnable_executor::With(env,state.anchor,operation,&request);
+ if(root)env->DeleteGlobalRef(root);
+ if(result!=runnable_jni::Result::kSuccess&&!env->ExceptionCheck()){auto type=env->FindClass("java/lang/IllegalStateException");if(type){env->ThrowNew(type,"Receiver JNI field guard lost owned Runnable access");env->DeleteLocalRef(type);}}
+ return request.rejected||result!=runnable_jni::Result::kSuccess;
+}
+bool GuardJni(JNIEnv* env,jobject receiver,bool is_static,jfieldID id,bool write=false){
+ if(probing)return false;
+ if(state.registry->Count()==0)return !is_static&&GuardReceiverJni(env,receiver,id,write);
  if(env->ExceptionCheck())return true;
  struct Probe {Probe(){probing=true;}~Probe(){probing=false;}} probe;
  contextual_field_id::Prune(env,*state.registry);
@@ -96,7 +112,7 @@ bool GuardJni(JNIEnv* env,jobject receiver,bool is_static,jfieldID id){
  if(!field){if(!env->ExceptionCheck()){auto type=env->FindClass("java/lang/IllegalStateException");if(type){env->ThrowNew(type,error.c_str());env->DeleteLocalRef(type);}}return true;}
  // Ordinary live IDs retain all original ART/CheckJNI checks. Only a public
  // reflected identity matching the same retirement registry is rejected.
- if(!state.registry->TokenFor(field))return false;
+ if(!state.registry->TokenFor(field))return !is_static&&GuardReceiverJni(env,receiver,id,write);
  ++rejected;auto type=env->FindClass("java/lang/NoSuchFieldError");if(type){env->ThrowNew(type,"Field removed by ART DCEVM");env->DeleteLocalRef(type);}return true;
 }
 bool GuardNativeField(void* self,void* field,void* result=nullptr) {
@@ -234,11 +250,11 @@ template<int indexed,class T,bool is_static> struct JniField {
   using Receiver=std::conditional_t<is_static,jclass,jobject>;
   static inline void *get=nullptr,*set=nullptr;
   static T Get(JNIEnv* env,Receiver receiver,jfieldID id) {
-    return jni_field::GetContextual<T,Receiver>(env,receiver,id,GuardJni,
+    return jni_field::GetContextual<T,Receiver>(env,receiver,id,[](JNIEnv* e,jobject r,bool s,jfieldID f){return GuardJni(e,r,s,f,false);},
         reinterpret_cast<T(*)(JNIEnv*,Receiver,jfieldID)>(get));
   }
   static void Set(JNIEnv* env,Receiver receiver,jfieldID id,T value) {
-    jni_field::SetContextual<T,Receiver>(env,receiver,id,value,GuardJni,
+    jni_field::SetContextual<T,Receiver>(env,receiver,id,value,[](JNIEnv* e,jobject r,bool s,jfieldID f){return GuardJni(e,r,s,f,true);},
         reinterpret_cast<void(*)(JNIEnv*,Receiver,jfieldID,T)>(set));
   }
   static void Add(std::vector<Entry>& entries,const char* type,const char* code) {
@@ -250,11 +266,11 @@ template<int indexed,class T,bool is_static> struct JniField {
 template<class T> struct ReflectionField {
   static inline void *get=nullptr,*set=nullptr;
   static T Get(JNIEnv* env,jobject field,jobject receiver) {
-    if(Guard(env,nullptr,field))return T{};
+    if(Guard(env,nullptr,field,receiver,false))return T{};
     return reinterpret_cast<T(*)(JNIEnv*,jobject,jobject)>(get)(env,field,receiver);
   }
   static void Set(JNIEnv* env,jobject field,jobject receiver,T value) {
-    if(Guard(env,nullptr,field))return;
+    if(Guard(env,nullptr,field,receiver,true))return;
     reinterpret_cast<void(*)(JNIEnv*,jobject,jobject,T)>(set)(env,field,receiver,value);
   }
   static void Add(std::vector<Entry>& entries,const char* type,const char* code) {
