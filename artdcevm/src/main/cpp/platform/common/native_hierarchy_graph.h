@@ -1,0 +1,80 @@
+#pragma once
+#include "evolution/class_schema.h"
+#include "platform/common/prepared_root_bindings.h"
+#include "platform/common/runnable_jni_bridge.h"
+#include "platform/common/source_commit.h"
+#include <jvmti.h>
+#include <memory>
+namespace artdcevm::modern_field_metadata { class FieldMetadata; }
+namespace artdcevm::native_hierarchy_graph {
+struct Input { jclass strong_original=nullptr; evolution::ClassSchema before,after; };
+// Rooted public graph. Indices are stable throughout one operation. Proposed
+// edges refer to the original identities that ART must actually replace.
+struct Node {
+ jclass strong_class=nullptr; jobject strong_loader=nullptr;
+ void* klass=nullptr; void* loader=nullptr; void* replacement=nullptr;
+ std::string descriptor; uint32_t flags=0;
+ size_t parent=SIZE_MAX,proposed_parent=SIZE_MAX;
+ std::vector<size_t> interfaces,proposed_interfaces;
+ bool initialized=false,affected=false;
+};
+struct Graph { std::vector<Node> nodes; std::vector<size_t> inputs; };
+struct Prepared {
+ void* source_owner=nullptr; void* old_class=nullptr; void* new_class=nullptr;
+ void* cache=nullptr; void* parent=nullptr; uint16_t class_index=0;
+ const evolution::ClassSchema* declarations=nullptr;
+};
+// An installed source allocator/receiver/type-cache owner must independently
+// prove each stage. A symbol, supported-version bit or snapshot is not a grant.
+// None of these proof callbacks may mutate ART. Final callbacks may not allocate,
+// invoke JNI, parse DEX, or suspend. The actual source owner consumes the staged
+// graph and retains all early linked Classes before a fallible IDs allocation.
+class Owner {
+ public:
+ virtual ~Owner()=default;
+ virtual bool VerifyStaged(const Graph&,const std::vector<Input>&,std::string*)const=0;
+ virtual bool VerifyPrepared(const Graph&,const Prepared&,std::string*)const=0;
+ virtual bool Verify(const Graph&,const source_commit::Plan&)const noexcept=0;
+ virtual void BeginCommit(const Graph&,const source_commit::Plan&)const noexcept=0;
+};
+class AllocationOwner:public Owner {
+ public:
+ virtual bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept=0;
+};
+class ReceiverOwner:public Owner {};
+class CacheOwner:public Owner {};
+struct Bindings {
+ const modern_field_metadata::FieldMetadata* metadata=nullptr;
+ void* decoder_owner=nullptr;
+ bool (*borrow_owned)(void*,const runnable_jni::Context&,jobject,void**)=nullptr;
+ const AllocationOwner* allocation=nullptr; const ReceiverOwner* receivers=nullptr; const CacheOwner* caches=nullptr;
+};
+// Pure graph validation used by the public stage after exact JNI identities are
+// rooted. Rejects cycles across batch/unmodified edges, role/final/access errors,
+// duplicate edges and uninitialized new parents. It grants no source permission.
+bool ValidateGraph(Graph*,std::string*);
+class Authority final {
+ public:
+ Authority(); ~Authority();
+ Authority(const Authority&)=delete;Authority& operator=(const Authority&)=delete;
+ // Caller is an actual ordinary Runnable JNI owner. Globals remain live until
+ // Clear after the entire original source transaction and its cleanup finish.
+ bool Stage(const runnable_jni::Context&,jvmtiEnv*,const std::vector<Input>&,const Bindings&,std::string*);
+ // Exact original Class and immutable incoming declarations only. Allows the
+ // two hierarchy comparisons; source modifiers/CheckRedefinable remain original.
+ bool CheckClass(const runnable_jni::Context&,jclass strong_original,const evolution::ClassSchema&)noexcept;
+ bool AuthorizeAllocation(const runnable_jni::Context&,const Prepared&,std::string*);
+ bool VerifyPrepared(const runnable_jni::Context&,const Prepared&,std::string*);
+ // Collected source owner window, after all actual early allocations/linking.
+ bool Seal(const source_commit::Plan&,std::string*);
+ bool Verify(const source_commit::Plan&,size_t pair)const noexcept;
+ bool CollectManagedRoots(const prepared_roots::Registrar&);
+ bool CanRefresh(const prepared_roots::Resolver&)const noexcept;
+ void Refresh(const prepared_roots::Resolver&)noexcept;
+ void BeginCommit(const source_commit::Plan&)const noexcept;
+ void Clear(JNIEnv*);
+ const Graph* Staged()const noexcept;
+ private:
+ struct State;std::unique_ptr<State> state_;
+};
+}
