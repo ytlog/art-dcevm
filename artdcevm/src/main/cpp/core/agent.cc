@@ -5,6 +5,7 @@
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_final_write_listener.h"
 #include "hooks/shadow_hook_engine.h"
+#include <android/log.h>
 #endif
 #include <memory>
 #include <mutex>
@@ -19,16 +20,17 @@ using artdcevm::TransactionMutex;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 #if defined(ARTDCEVM_ARM64)
-  // Mapping a plugin does not initialize it or register an environment hook.
-  // Keep the image mapped: its non-reset lifetime witness must not be recycled.
-  static void* plugin_image=dlopen("libopenjdkjvmti.so",RTLD_NOW|RTLD_LOCAL);
+  // This executes before VMDebug.attachAgent/GetEnv can initialize the plugin.
+  // A native loader image is pinned even when the lifetime proof rejects it.
+  static artdcevm::ShadowHookEngine hooks;
+  static std::string mapping;static void* plugin_image=artdcevm::redefinition_gate::MapPluginForStartup(hooks,vm,&mapping);
+  __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pluginMapping=%s mapped=%d",mapping.c_str(),plugin_image!=nullptr);
   if(plugin_image){
-    static artdcevm::ShadowHookEngine hooks;std::string error;
-    // Observe the original legacy enable transition before any plugin startup.
-    // A missing or already-enabled unwitnessed owner cannot supply readiness.
-    (void)artdcevm::final_write_guard::ObserveLegacyDeoptimizationStartup(hooks,&error);
-    error.clear();
-    (void)artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
+    std::string error;
+    const bool observed=artdcevm::final_write_guard::ObserveLegacyDeoptimizationStartup(hooks,&error);
+    __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad legacyStartup=%d diagnostic=%s",observed,error.c_str());
+    error.clear();const bool gated=artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
+    __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pristineGate=%d diagnostic=%s",gated,gated?artdcevm::redefinition_gate::Diagnostic():error.c_str());
   }
 #else
   (void)vm;

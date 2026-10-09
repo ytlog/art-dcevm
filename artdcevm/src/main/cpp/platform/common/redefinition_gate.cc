@@ -3,6 +3,7 @@
 #include <mutex>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #if defined(__ANDROID__)
 #include <sys/uio.h>
 #include <unistd.h>
@@ -28,6 +29,36 @@ jvmtiError Proxy(void* env,void* runtime,void* self,const void* definitions,int3
  struct Release {bool borrowed;~Release(){direct=false;if(!borrowed)operation.unlock();}} release{borrowed};
  direct=true;auto body=original.load(std::memory_order_acquire);return body?body(env,runtime,self,definitions,type,error):JVMTI_ERROR_NOT_AVAILABLE;
 }
+}
+void* MapPluginForStartup(HookEngine& hooks,JavaVM* vm,std::string* report){
+ constexpr const char* plugin="libopenjdkjvmti.so";
+ // ART Plugin::Load calls dlopen in libart's linker namespace, then separately
+ // dlsym/executes ArtPlugin_Initialize. Merely mapping does neither operation.
+ void* image=dlopen(plugin,RTLD_LAZY|RTLD_LOCAL);
+ if(image){if(report)*report="plain dlopen mapped plugin; initializer not called";return image;}
+ const char* failure=dlerror();std::string plain=failure?failure:"plain dlopen returned null without dlerror";
+ if(!vm||!hooks.Initialize(report)){if(report)*report="plain dlopen failed: "+plain+"; native loader unavailable";return nullptr;}
+ // Bionic's fixed public linker leaf receives an explicit caller address and
+ // selects the owning library's namespace. This is a named libart code symbol,
+ // never a manufactured return address, namespace pointer or field offset.
+ using Created=jint (*)(JavaVM**,jsize,jsize*);
+ void* carrier=hooks.FindSymbol("libart.so","JNI_GetCreatedJavaVMs");
+ if(!carrier)carrier=hooks.FindSymbol("libartd.so","JNI_GetCreatedJavaVMs");
+ Dl_info owner{};JavaVM* observed=nullptr;jsize count=0;
+ const auto basename=[](const char* name){if(!name)return "";const auto* slash=std::strrchr(name,'/');return slash?slash+1:name;};
+ if(!carrier||!dladdr(carrier,&owner)||(std::strcmp(basename(owner.dli_fname),"libart.so")&&std::strcmp(basename(owner.dli_fname),"libartd.so"))||
+    reinterpret_cast<Created>(carrier)(&observed,1,&count)!=JNI_OK||count!=1||observed!=vm){
+  if(report)*report="plain dlopen failed: "+plain+"; named ART namespace carrier failed actual public VM proof";return nullptr;
+ }
+ using Open=void* (*)(const char*,int,const void*);
+ void* named=dlsym(RTLD_DEFAULT,"__loader_dlopen");
+ if(!named)named=hooks.FindSymbol("linker64","__loader_dlopen");
+ if(!named)named=hooks.FindSymbol("linker","__loader_dlopen");
+ if(!named){if(report)*report="plain dlopen failed: "+plain+"; fixed named bionic namespace loader unavailable";return nullptr;}
+ image=reinterpret_cast<Open>(named)(plugin,RTLD_LAZY|RTLD_LOCAL,carrier);
+ if(image){if(report)*report="plain dlopen failed: "+plain+"; named loader mapped plugin in independently observed ART VM namespace; initializer not called";return image;}
+ const char* native_failure=dlerror();
+ if(report)*report="plain dlopen failed: "+plain+"; named ART namespace mapping failed: "+(native_failure?native_failure:"no dlerror");return nullptr;
 }
 bool InstallStartup(HookEngine& hooks,JavaVM* vm,jvmtiEnv* ti,std::string* error){
  std::lock_guard<std::mutex> guard(install_mutex);
