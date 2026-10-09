@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 from evidence_paths import new_evidence_directory
@@ -20,6 +21,19 @@ LIBRARIES = ('libart.so', 'libartd.so', 'libopenjdkjvmti.so', 'libopenjdkjvmtid.
              'libartd-compiler.so', 'libartbase.so', 'libc++.so')
 DIRECTORIES = ('/apex/com.android.art/lib64', '/apex/com.android.runtime/lib64',
                '/apex/com.android.runtime/lib64/bionic', '/system/lib64')
+
+
+def library_abi(path, data):
+    """Validate source directory, ELF width and machine before recording an ABI."""
+    if len(data) < 20 or data[:4] != b'\x7fELF' or data[5] != 1:
+        raise ValueError('Expected a little-endian ELF header')
+    parts = Path(path).parts
+    machine = struct.unpack_from('<H', data, 18)[0]
+    if 'lib64' in parts and data[4] == 2 and machine == 183:
+        return 'arm64-v8a'
+    if 'lib' in parts and data[4] == 1 and machine == 40:
+        return 'armeabi-v7a'
+    raise ValueError('ELF width/machine disagrees with ARM library directory')
 
 
 def mounted_apex_versions(mounts):
@@ -43,6 +57,8 @@ def main():
                         help='Per-library deadline for slower remote ADB links')
     parser.add_argument('--compress', action='store_true',
                         help='Use device gzip over adb exec-out to reduce remote transfer time')
+    parser.add_argument('--include-32-bit', action='store_true',
+                        help='Also collect ARM32 libraries from a dual-ABI ARM64 device')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if not args.adb or not args.readelf:
@@ -95,13 +111,21 @@ def main():
             raise RuntimeError('Device API does not match requested Android 11+ collection')
         if device['abi'] != 'arm64-v8a':
             raise RuntimeError('Private ART collection currently requires arm64-v8a')
+        requested_abis = ['arm64-v8a']
+        directories = DIRECTORIES
+        if args.include_32_bit:
+            if 'armeabi-v7a' not in device['abilist'].split(','):
+                raise RuntimeError('Requested ARM32 collection but device does not advertise armeabi-v7a')
+            requested_abis.append('armeabi-v7a')
+            directories += tuple(path.replace('/lib64', '/lib') for path in DIRECTORIES)
+        report['requestedAbis'] = requested_abis
         if args.origin == 'firebase' and props.get('ro.kernel.qemu') == '1':
             raise RuntimeError('Firebase collection requires a physical device')
         adb('apex-packages', 'shell', 'dumpsys', 'apexservice', required=False)
         mounts = adb('mounts', 'shell', 'cat', '/proc/mounts', required=False)
         device['mountedApexVersions'] = mounted_apex_versions(mounts)
         # Versioned APEX mount aliases are deduplicated using the canonical file path.
-        candidates = ' '.join(shlex.quote(d + '/' + n) for d in DIRECTORIES for n in LIBRARIES)
+        candidates = ' '.join(shlex.quote(d + '/' + n) for d in directories for n in LIBRARIES)
         paths = adb('library-paths', 'shell',
                     f'for f in {candidates}; do if [ -f "$f" ]; then readlink -f "$f"; fi; done')
         paths = sorted(set(paths.splitlines()))
@@ -155,16 +179,13 @@ def main():
                 else:
                     adb(f'pull-{index}', 'pull', path, str(local), timeout=args.pull_timeout)
                 data = local.read_bytes()
-                if data[:4] != b'\x7fELF':
-                    raise RuntimeError('Pulled library is not ELF')
+                entry['abi'] = library_abi(path, data)
                 if hashlib.sha256(data).hexdigest() != expected_hash:
                     raise RuntimeError('ELF content differs from device-reported SHA-256')
                 entry.update(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
                 notes = run(f'notes-{index}', [args.readelf, '--notes', '--file-header', str(local)]).stdout
                 match = re.search(r'Build ID:\s*([0-9a-fA-F]+)', notes)
                 entry['buildId'] = match.group(1).lower() if match else None
-                if 'AArch64' not in notes:
-                    raise RuntimeError('ELF machine is not AArch64')
                 symbols = run(f'symbols-{index}', [args.readelf, '--symbols', '--wide', str(local)]).stdout
                 run(f'symbols-demangled-{index}',
                     [args.readelf, '--symbols', '--wide', '--demangle', str(local)])
@@ -189,9 +210,10 @@ def main():
             x['name'] == 'libart-compiler.so' and x['complete'] for x in report['libraries'])
         if not report['standaloneCompilerCollected']:
             report['notes'] = ['No standalone libart-compiler.so found; check compiler packaging in pinned AOSP sources']
-        for required in ('libart.so', 'libopenjdkjvmti.so', 'libdexfile.so', 'libc++.so'):
-            if not any(x['name'] == required and x['complete'] for x in report['libraries']):
-                report['errors'].append('Missing required library: ' + required)
+        for abi in requested_abis:
+            for required in ('libart.so', 'libopenjdkjvmti.so', 'libdexfile.so', 'libc++.so'):
+                if not any(x['name'] == required and x['complete'] and x.get('abi') == abi for x in report['libraries']):
+                    report['errors'].append('Missing required library for ' + abi + ': ' + required)
         report['complete'] = not report['errors']
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report['errors'].append(str(error))

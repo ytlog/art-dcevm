@@ -53,9 +53,11 @@ def store(manifest):
         if hashlib.sha256(destination.read_bytes()).hexdigest() != library['sha256']:
             raise ValueError('Copied asset hash mismatch: ' + str(destination))
         stored.append({k: library[k] for k in ('name', 'path', 'size', 'sha256', 'buildId')})
+        if 'abi' in library:
+            stored[-1]['abi'] = library['abi']
         stored[-1]['file'] = str(relative)
     record = {k: data[k] for k in ('origin', 'project', 'reservation', 'device', 'startedUtc')}
-    record.update({k: data[k] for k in ('standaloneCompilerCollected', 'notes', 'originalManifest')
+    record.update({k: data[k] for k in ('standaloneCompilerCollected', 'notes', 'originalManifest', 'requestedAbis')
                    if k in data})
     record.update(collectionId=collection_id, libraries=stored,
                   evidenceManifest=str(manifest.resolve().relative_to(ROOT)),
