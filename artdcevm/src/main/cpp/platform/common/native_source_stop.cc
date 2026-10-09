@@ -117,6 +117,8 @@ bool Session::IsStopped(void* self)const noexcept {
  return self==self_&&active==this&&gc_&&suspended_&&exclusive_&&
    (phase_==Phase::kStopped||phase_==Phase::kFinal)&&Native();
 }
+bool Session::IsCollectedStop(void* self)const noexcept {return phase_==Phase::kStopped&&IsStopped(self);}
+bool Session::IsFinalWindow(void* self)const noexcept {return phase_==Phase::kFinal&&IsStopped(self);}
 bool Session::ContinueSource() noexcept {
  if(!IsStopped(self_)||phase_!=Phase::kStopped){failure_="source-stop-continuation-owner-mismatch";return false;}
  service_.unlock_(*service_.mutator_,self_);exclusive_=false;
@@ -171,30 +173,44 @@ bool Service::Authorize(const Calibration& proof,const void* run) noexcept {
  if(!proof.valid_||!run||run!=proof.run_body_||!SameBinding(proof.binding_)||!state_.CanTransitionRunnable())return false;
  std::memcpy(final_cause_,proof.cause_,sizeof(final_cause_));final_long_=proof.long_;calibrated_=true;return true;
 }
-void Observation::Refuse(const char* failure) noexcept {failed_=true;failure_=failure;}
+void Observation::Refuse(const char* failure) noexcept {
+ if(!failed_){failure_=failure;trace_.first_failure_phase=static_cast<uint8_t>(phase_);}
+ failed_=true;trace_.failed=true;
+}
+void Observation::Event(uint8_t event) noexcept {
+ trace_.events.Record(event);const size_t index=event-1;
+ if(trace_.counts[index]!=UINT32_MAX)++trace_.counts[index];
+ trace_.phase=static_cast<uint8_t>(phase_);trace_.phase_masks[index]|=uint32_t{1}<<trace_.phase;
+ uint32_t state=UINT32_MAX;
+ if(!service_.current_||service_.current_()!=self_){trace_.current_mismatch|=uint32_t{1}<<index;trace_.state_unreadable|=uint32_t{1}<<index;}
+ else if(!service_.state_.State(self_,extent_,&state))trace_.state_unreadable|=uint32_t{1}<<index;
+ trace_.states[index]=state;
+}
 bool Observation::State(uint32_t expected)const noexcept {
  uint32_t value=UINT32_MAX;return service_.current_&&service_.current_()==self_&&service_.state_.State(self_,extent_,&value)&&value==expected;
 }
 Observation::Observation(const Service& service,void* driver,const void* run,void* self,size_t extent) noexcept:
  service_(service),driver_(driver),run_body_(run),self_(self),extent_(extent){
+ trace_.expected_runnable=service_.state_.RunnableState();Event(1);
  if(observation||active||finishing||!driver||!run||!service_.heap_||!State(service_.state_.RunnableState())){Refuse("ordinary-source-observation-owner-mismatch");return;}
  observation=this;attached_=true;failure_="";
 }
 Observation::~Observation(){if(attached_){if(observation!=this)std::abort();observation=nullptr;}}
 bool Observation::Ready()const noexcept{return attached_&&!failed_&&!finished_&&observation==this;}
 bool Observation::Collected(void* driver,const void* holder) noexcept {
+ Event(2);trace_.collected_ready=Ready();trace_.collected_driver_match=driver==driver_;trace_.collected_holder_present=holder!=nullptr;
  if(!Ready()||phase_!=Phase::kRun||driver!=driver_||!holder||!State(service_.state_.RunnableState())){
   Refuse("ordinary-source-Collected-owner-order-mismatch");return false;}
  holder_=holder;phase_=Phase::kArmed;return true;
 }
 void Observation::DisableBegin(void* heap,void* self) noexcept {
- if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
+ if(!observation)return;auto& o=*observation;o.Event(3);if(o.phase_==Phase::kRun)return;
  if(!o.Ready()||o.phase_!=Phase::kArmed||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
   o.Refuse("ordinary-source-original-GC-disable-owner-order-mismatch");return;}
  o.phase_=Phase::kDisabled;
 }
 void Observation::Constructed(void* carrier,const char* cause,bool long_suspend) noexcept {
- if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
+ if(!observation)return;auto& o=*observation;o.Event(4);if(o.phase_==Phase::kRun)return;
  if(!o.Ready()||o.phase_!=Phase::kDisabled||!carrier||!cause||!o.State(abi::arm64::android11::kNative)){
   o.Refuse("ordinary-source-original-final-stop-owner-order-mismatch");return;}
  size_t length=0;while(length<sizeof(o.cause_)&&cause[length])++length;
@@ -202,21 +218,23 @@ void Observation::Constructed(void* carrier,const char* cause,bool long_suspend)
  std::memcpy(o.cause_,cause,length+1);o.long_=long_suspend;o.carrier_=carrier;o.phase_=Phase::kStopped;
 }
 void Observation::Destroyed(void* carrier) noexcept {
- if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
+ if(!observation)return;auto& o=*observation;o.Event(5);if(o.phase_==Phase::kRun)return;
  if(!o.Ready()||o.phase_!=Phase::kStopped||carrier!=o.carrier_||!o.State(abi::arm64::android11::kNative)){
   o.Refuse("ordinary-source-original-final-resume-owner-order-mismatch");return;}
  o.phase_=Phase::kResumed;
 }
 void Observation::DisableEnd(void* heap,void* self) noexcept {
- if(!observation||observation->phase_==Phase::kRun)return;auto& o=*observation;
+ if(!observation)return;auto& o=*observation;o.Event(6);if(o.phase_==Phase::kRun)return;
  if(!o.Ready()||o.phase_!=Phase::kResumed||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
   o.Refuse("ordinary-source-original-GC-enable-owner-order-mismatch");return;}
  o.phase_=Phase::kComplete;
 }
 void Observation::GCOperation() noexcept {
+ if(observation)observation->Event(7);
  if(observation&&observation->phase_!=Phase::kRun)observation->Refuse("ordinary-source-final-path-nested-GC-operation");
 }
 bool Observation::Finish(void* driver,bool success,Calibration* out) noexcept {
+ Event(8);
  const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&phase_==Phase::kComplete&&State(service_.state_.RunnableState());
  if(ok){Calibration result;result.binding_=service_;result.run_body_=run_body_;std::memcpy(result.cause_,cause_,sizeof(cause_));result.long_=long_;result.valid_=true;*out=result;}
  else if(!failed_)Refuse("ordinary-source-Run-did-not-complete-matching-final-owner");

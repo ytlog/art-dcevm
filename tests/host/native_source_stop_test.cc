@@ -1,3 +1,10 @@
+#include <cstdlib>
+#include <new>
+static bool forbid_native_allocation=false;
+void* operator new(std::size_t bytes){if(forbid_native_allocation)throw std::bad_alloc();if(auto p=std::malloc(bytes))return p;throw std::bad_alloc();}
+void operator delete(void* p) noexcept {std::free(p);}
+void* operator new[](std::size_t bytes){return ::operator new(bytes);}
+void operator delete[](void* p) noexcept {::operator delete(p);}
 #include "platform/common/native_source_calibration_bridge.h"
 #include <cassert>
 #include <cstring>
@@ -5,6 +12,7 @@
 using namespace artdcevm;
 namespace artdcevm::native_owned_removal {
 thread_local PassiveObserver fixture_observer;
+bool ReadPassiveTrace(PassiveTrace* out) noexcept {if(!out)return false;*out={};out->events.Record(1);out->events.Record(2);out->events.Record(3);out->events.Record(4);out->original_calls=1;out->whole_collections=1;return true;}
 bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
  if(!observer){fixture_observer={};return true;}
  if(fixture_observer.begin)return false;
@@ -147,6 +155,39 @@ void ObservationNegatives(native_source_stop::Service& service,Hooks& hooks){
  assert(!gc&&!exclusive&&disable_count==0);
 }
 
+void TraceRegressions(native_source_stop::Service& service){
+ int driver,run,holder,wrong_driver;
+ self.flags=92u<<shift;
+ forbid_native_allocation=true;
+ {native_source_stop::Observation failed(service,&driver,&run,&self,sizeof(self));assert(!failed.Ready());
+  assert(!failed.Collected(&wrong_driver,&holder));native_source_stop::Calibration empty;
+  assert(!failed.Finish(&driver,true,&empty));
+  assert(!std::strcmp(failed.Failure(),"ordinary-source-observation-owner-mismatch"));
+  const auto& t=failed.Trace();assert(t.states[0]==92&&t.states[1]==92&&t.states[7]==92&&t.failed&&t.counts[0]==1&&t.counts[1]==1&&t.counts[7]==1&&t.events.order==0x821&&t.first_failure_phase==0);
+ }
+ self.flags=runnable_state<<shift;
+ {native_source_calibration::Bridge bridge(service,&self,sizeof(self));auto o=native_owned_removal::fixture_observer;
+  o.begin(&driver,&run,&self,o.state);self.flags=92u<<shift;o.collected(&driver,&holder,o.state);self.flags=runnable_state<<shift;
+  o.end(&driver,JVMTI_ERROR_NONE,true,o.state);
+  // Observation was destroyed by End, but both its first reason and scalar
+  // evidence remain owned by Bridge, without heap allocation or native roots.
+  assert(!bridge.Authorized()&&std::strstr(bridge.Failure(),"ordinary-source-Collected-owner-order-mismatch")&&std::strstr(bridge.Failure(),"states=0/92/0")&&std::strstr(bridge.Failure(),"passive:available=1")&&std::strlen(bridge.Failure())<768);
+ }
+ {native_source_stop::Observation o(service,&driver,&run,&self,sizeof(self));assert(o.Collected(&driver,&holder));
+  disable_proxy(&heap,&self);Native(&self);unsigned char final,cleanup;
+  stop_proxy(&final,"actual final",true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+  // Class-loading cleanup is a real extra Native suspend after GC enabled.
+  // Record its phase and retain strict refusal, rather than silently ignore it.
+  Native(&self);stop_proxy(&cleanup,"class loading cleanup",false);resume_proxy(&cleanup);Runnable(&self);
+  native_source_stop::Calibration proof;assert(!o.Finish(&driver,true,&proof));
+  assert(!std::strcmp(o.Failure(),"ordinary-source-original-final-stop-owner-order-mismatch"));
+  const auto& t=o.Trace();assert(t.counts[3]==2&&t.counts[4]==2&&t.phase_masks[3]==((1u<<2)|(1u<<5))&&t.first_failure_phase==5&&!proof.Valid());
+ }
+ BoundedNativeEventTrace bounded;for(unsigned n=0;n<30;++n)bounded.Record(1);
+ assert(bounded.events==30&&bounded.truncated&&bounded.order==0x1111111111111111ULL);
+ forbid_native_allocation=false;
+}
+
 void LegacyObservation(Hooks& hooks){
  shift=16;runnable_state=67;self.flags=runnable_state<<shift;
  auto state=State(hooks,thread_suspend_service::Declaration::kLegacy16);
@@ -185,6 +226,7 @@ int main(int argc,char** argv){
  hooks.missing=s::kStartGC;assert(!native_source_stop::Service::Bind(hooks,&heap,state,&service,&error));hooks.missing=nullptr;
  assert(native_source_stop::Service::Bind(hooks,&heap,state,&service,&error));
  BridgeProofs(service);
+ TraceRegressions(service);
  LegacyObservation(hooks);
  ObservationNegatives(service,hooks);
  assert(!service.Calibrated());
@@ -193,7 +235,7 @@ int main(int argc,char** argv){
  {int other_mutator;mutator=&other_mutator;native_source_stop::Session changed(service);assert(!changed.Begin(&self,sizeof(self))&&self.flags==(runnable_state<<shift)&&!gc&&!exclusive);mutator=&mutex;}
  self.flags=92u<<shift;
  // No callback/phase boolean alone can grant any stop permission.
- native_source_stop::Session unopened(service);assert(!unopened.IsStopped(&self)&&!unopened.Reserved());
+ native_source_stop::Session unopened(service);assert(!unopened.IsStopped(&self)&&!unopened.Reserved()&&!unopened.IsCollectedStop(&self)&&!unopened.IsFinalWindow(&self));
  assert(!unopened.Begin(&self,sizeof(self))); // ordinary Native JNI is not source Runnable
  assert(!unopened.Begin(&foreign,sizeof(foreign)));
  self.flags=runnable_state<<shift;
@@ -202,21 +244,23 @@ int main(int argc,char** argv){
  {native_source_stop::Session owner(service);assert(!owner.Begin(&self,sizeof(self))&&!gc&&!exclusive&&self.flags==(runnable_state<<shift));}
  bad_transition=false;
  // A real refundable scan refusal unwinds the actual reservation, not just flags.
- {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.IsStopped(&self)&&gc&&exclusive);
-  assert(!owner.IsStopped(&foreign));foreign_current=true;assert(!owner.IsStopped(&self));foreign_current=false;
+ {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.IsStopped(&self)&&owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&gc&&exclusive);
+  assert(!owner.IsStopped(&foreign)&&!owner.IsCollectedStop(&foreign)&&!owner.IsFinalWindow(&foreign));foreign_current=true;assert(!owner.IsStopped(&self));foreign_current=false;
   native_source_stop::Session nested(service);const int count=gc_starts;assert(!nested.Begin(&self,sizeof(self))&&gc_starts==count);
  }
  assert(!gc&&!exclusive&&self.flags==(runnable_state<<shift)&&stops==resumes);
  // Original source continuation preserves actual global suspension and GC.
  {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self)));
+  assert(owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self));
   const int captured=stops;assert(owner.ContinueSource()&&gc&&!exclusive&&owner.Reserved()&&!owner.IsStopped(&self)&&self.flags==(runnable_state<<shift)&&stops==captured&&stops==resumes+1);
+  assert(!owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self));
   if(argc==2&&!std::strcmp(argv[1],"wrong-final")){disable_proxy(&heap,&self);Native(&self);unsigned char wrong;stop_proxy(&wrong,"unrelated stop",true);assert(false);}
   disable_proxy(&heap,&self);Native(&self);unsigned char original_source_carrier;
   stop_proxy(&original_source_carrier,s::kFinalCause,true);
-  assert(owner.IsStopped(&self)&&stops==captured&&gc&&exclusive);
+  assert(owner.IsStopped(&self)&&!owner.IsCollectedStop(&self)&&owner.IsFinalWindow(&self)&&stops==captured&&gc&&exclusive);
   resume_proxy(&original_source_carrier);
-  assert(!owner.Completed()&&!gc&&!exclusive&&stops==resumes&&self.flags==92u<<shift);
-  Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed()&&disable_count==0);
+  assert(!owner.Completed()&&!owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&!gc&&!exclusive&&stops==resumes&&self.flags==92u<<shift);
+  Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed()&&!owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&disable_count==0);
  }
  // Abnormal source return still releases the owned reservation from Runnable.
  {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.ContinueSource());}

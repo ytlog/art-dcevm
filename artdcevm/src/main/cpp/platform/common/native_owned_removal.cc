@@ -87,17 +87,24 @@ thread_local PassiveObserver passive_observer{};
 struct PassiveRun {
  PassiveObserver observer;void* driver;bool valid=true,called=false,returned=false;
  size_t collections=0;const void* holder=nullptr;jvmtiError result=JVMTI_ERROR_INTERNAL;
+ void* self=nullptr;PassiveTrace trace{};
+ void Refuse(uint8_t reason) noexcept {valid=false;if(!trace.first_failure)trace.first_failure=reason;}
 };
 thread_local PassiveRun* passive_run=nullptr;
 void PassiveCollected(void* driver,const void* holder) noexcept {
  if(!passive_run)return;
  auto& r=*passive_run;
- const size_t previous=r.collections++;
- if(driver!=r.driver||!holder||previous!=0||(r.holder&&r.holder!=holder))r.valid=false;
+ const size_t previous=r.collections++;r.trace.events.Record(3);
+ if(r.trace.whole_collections!=UINT32_MAX)++r.trace.whole_collections;
+ r.trace.collected_same_thread=current_thread&&current_thread()==r.self;
+ if(driver!=r.driver)r.Refuse(3);
+ else if(!holder)r.Refuse(4);
+ else if(previous!=0||(r.holder&&r.holder!=holder))r.Refuse(5);
  r.holder=holder;r.observer.collected(driver,holder,r.observer.state);
 }
 jvmtiError InvokeOriginalRun(void* driver){
- if(passive_run){if(driver!=passive_run->driver||passive_run->called)passive_run->valid=false;passive_run->called=true;}
+ if(passive_run){auto& r=*passive_run;r.trace.events.Record(2);if(r.trace.original_calls!=UINT32_MAX)++r.trace.original_calls;
+  if(driver!=r.driver)r.Refuse(3);else if(r.called)r.Refuse(2);r.called=true;}
  return run_original(driver);
 }
 bool Mapped(const void* p,size_t need){size_t extent=0;return p&&method_identity::ReadableMappingExtent(p,&extent)&&extent>=need;}
@@ -290,7 +297,7 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
- if(!collect_original(driver,raw)){if(passive_run)passive_run->valid=false;RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
+ if(!collect_original(driver,raw)){if(passive_run){passive_run->trace.events.Record(6);passive_run->Refuse(6);}RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
  PassiveCollected(driver,raw);
  if(!active||!active->provider->closed_graph)return true;
  if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
@@ -331,15 +338,23 @@ jvmtiError RunOwned(void* driver){
 }
 jvmtiError SourceRun(void* driver){
  if(!passive_observer.begin)return RunOwned(driver);
- if(passive_run){passive_run->valid=false;return RunOwned(driver);}
+ if(passive_run){passive_run->trace.events.Record(5);passive_run->Refuse(2);return RunOwned(driver);}
  PassiveRun observed{passive_observer,driver};passive_run=&observed;
  // One named CurrentThread leaf, no JNI/managed decoding or allocation. The
  // independent calibration consumer proves the receiver and mapped extent.
  void* self=current_thread?current_thread():nullptr;
- observed.valid=driver&&run_original&&self;
+ observed.self=self;observed.trace.begin_self_present=self!=nullptr;observed.trace.events.Record(1);
+ if(!driver||!run_original||!self)observed.Refuse(1);
  struct Scope {
   PassiveRun& run;
-  ~Scope(){run.observer.end(run.driver,run.result,run.valid&&run.called&&run.returned&&run.result==JVMTI_ERROR_NONE&&run.collections==1&&run.holder,run.observer.state);passive_run=nullptr;}
+  ~Scope(){
+   run.trace.events.Record(4);run.trace.end_same_thread=current_thread&&current_thread()==run.self;
+   run.trace.returned=run.returned;run.trace.result=run.result;
+   if(!run.returned)run.Refuse(10);else if(run.result!=JVMTI_ERROR_NONE)run.Refuse(7);
+   else if(!run.called)run.Refuse(9);else if(run.collections!=1||!run.holder)run.Refuse(8);
+   run.trace.complete=run.valid&&run.called&&run.returned&&run.result==JVMTI_ERROR_NONE&&run.collections==1&&run.holder;
+   run.observer.end(run.driver,run.result,run.trace.complete,run.observer.state);passive_run=nullptr;
+  }
  } scope{observed};
  observed.observer.begin(driver,reinterpret_cast<const void*>(run_original),self,observed.observer.state);
  observed.result=RunOwned(driver);observed.returned=true;return observed.result;
@@ -454,6 +469,9 @@ bool Install(HookEngine& hooks,std::string* error){
   destroy(&stop);installed=okay;window_ready=okay;return okay;
 }
 bool GraphWindowReady(){return window_ready;}
+bool ReadPassiveTrace(PassiveTrace* out) noexcept {
+ if(!out||!passive_run)return false;*out=passive_run->trace;return true;
+}
 bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
  if(passive_run)return false;
  if(!observer){passive_observer={};return true;}

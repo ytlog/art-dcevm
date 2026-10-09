@@ -115,7 +115,17 @@ void Begin(void* d,const void* original,void* self,void* owner) noexcept {
  assert(!SetPassiveObserver(nullptr));++begins;
 }
 void Collected(void* d,const void* h,void* owner) noexcept {assert(owner==&state&&(d==&driver||d==&foreign)&&(h==&holder||h==&other_holder));++collections;}
-void End(void* d,jvmtiError result,bool valid,void* owner) noexcept {assert(d==&driver&&owner==&state&&!SetPassiveObserver(nullptr));++ends;reported=result;complete=valid;}
+void End(void* d,jvmtiError result,bool valid,void* owner) noexcept {assert(d==&driver&&owner==&state&&!SetPassiveObserver(nullptr));PassiveTrace t;assert(ReadPassiveTrace(&t));
+ assert(t.result==result&&t.complete==valid&&t.events.mask&(1u<<4)&&t.end_same_thread&&t.begin_self_present);
+ if(mode==0)assert(t.events.order==0x4321&&t.first_failure==0&&t.original_calls==1&&t.whole_collections==1&&t.collected_same_thread);
+ if(mode==2)assert(t.first_failure==8&&t.whole_collections==0);
+ if(mode==3)assert(t.first_failure==6);
+ if(mode==4||mode==6)assert(t.first_failure==5&&t.whole_collections==2);
+ if(mode==5)assert(t.first_failure==3&&t.whole_collections==1);
+ if(mode==7)assert(t.first_failure==2&&t.original_calls==2);
+ if(mode==8)assert(t.first_failure==10&&!t.returned);
+ if(mode==9)assert(t.first_failure==7);
+ ++ends;reported=result;complete=valid;}
 jvmtiError OriginalRun(void* d){
  ++bodies;assert(d==&driver||d==&foreign);
  if(mode==1)return JVMTI_ERROR_INVALID_CLASS;
@@ -158,6 +168,7 @@ void Test(){
  assert(CollectGraph(&driver,reinterpret_cast<transaction_root::Holder*>(&holder))&&collections==0);
  std::thread other([]{assert(SetPassiveObserver(nullptr));assert(SourceRun(&driver)==JVMTI_ERROR_NONE);});other.join();
  assert(begins==0&&ends==0);assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==1&&ends==1&&complete);
+ PassiveTrace outside;assert(!ReadPassiveTrace(&outside));
  assert(SetPassiveObserver(nullptr));mode=0;begins=ends=0;assert(SourceRun(&driver)==JVMTI_ERROR_NONE&&begins==0&&ends==0);
  puts("Passive actual Run TU: ordinary original trampoline/self/Holder arguments and errors retained; all-or-none removable TLS observation; missing/failed/repeated/wrong/nested scopes cannot seal; exception rollback; zero allocation/no JNI PASS");
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/bounded_native_event_trace.h"
 #include "api/hook_engine.h"
 #include "platform/common/thread_suspend_service.h"
 #include "platform/abi/arm64/android-common/source_stop.h"
@@ -46,6 +47,15 @@ class Calibration final {
 // arms it only after exact original whole-HOLDER Collected success. This has no
 // allocation/JNI behavior and never modifies an ordinary source call. Every
 // original heap/suspend operation still runs; failures merely prevent sealing.
+struct ObservationTrace {
+ // begin=1,collected=2,disable=3,stop=4,resume=5,enable=6,GC=7,finish=8.
+ BoundedNativeEventTrace events;
+ uint32_t counts[8]{};uint32_t phase_masks[8]{};
+ uint32_t states[8]{UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX};
+ uint32_t state_unreadable=0,current_mismatch=0,expected_runnable=UINT32_MAX;
+ uint8_t phase=0,first_failure_phase=0;
+ bool failed=false,collected_ready=false,collected_driver_match=false,collected_holder_present=false;
+};
 class Observation final {
  public:
   Observation(const Service&,void* actual_driver,const void* exact_original_run,
@@ -56,6 +66,7 @@ class Observation final {
   bool Collected(void* exact_driver,const void* actual_holder) noexcept;
   bool Finish(void* exact_driver,bool original_success,Calibration*) noexcept;
   const char* Failure()const noexcept{return failure_;}
+  const ObservationTrace& Trace()const noexcept{return trace_;}
  private:
   friend struct NativeHooks;
   static void DisableBegin(void*,void*) noexcept;
@@ -69,6 +80,8 @@ class Observation final {
   void* self_=nullptr;size_t extent_=0;const void* holder_=nullptr;void* carrier_=nullptr;
   char cause_[128]{};bool long_=false,attached_=false,failed_=false,finished_=false;
   Phase phase_=Phase::kRun;const char* failure_="ordinary-source-observation-not-started";
+  ObservationTrace trace_{};
+  void Event(uint8_t) noexcept;
   void Refuse(const char*) noexcept;
 };
 // Construct/stage this owner BEFORE the refundable Collection callback. Begin
@@ -86,6 +99,8 @@ class Session {
   bool Begin(void* self,size_t mapped_extent) noexcept;
   bool ContinueSource() noexcept;
   bool IsStopped(void* self)const noexcept;
+  bool IsCollectedStop(void* self)const noexcept;
+  bool IsFinalWindow(void* self)const noexcept;
   bool Completed()const noexcept{return phase_==Phase::kCompleted;}
   bool Reserved()const noexcept{return gc_&&suspended_;}
   const char* Failure()const noexcept{return failure_;}

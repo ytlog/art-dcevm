@@ -2,6 +2,7 @@
 #include "platform/common/source_commit.h"
 #include "platform/common/owned_structural_transaction.h"
 #include <jvmti.h>
+#include "platform/common/bounded_native_event_trace.h"
 #include "api/runtime_backend.h"
 namespace artdcevm::native_owned_removal {
 // Provider bootstrap owns all dependencies/retirement registries for the entire
@@ -73,6 +74,19 @@ struct PassiveObserver {
  // A missing/inlined/wrong/repeated boundary revokes proof; result is original.
  void (*end)(void* driver,jvmtiError original_result,bool complete,void* state) noexcept=nullptr;
 };
+struct PassiveTrace {
+ // Event nibbles: begin=1, original call=2, successful whole collection=3,
+ // end=4, nested Run=5, original whole collection false=6.
+ BoundedNativeEventTrace events;
+ uint32_t original_calls=0,whole_collections=0;
+ // First failure: owner=1,nested=2,wrongdriver=3,missingholder=4,repeat=5,
+ // originalcollectionfalse=6,sourceerror=7,missingcollection=8,missingbody=9,unwind=10.
+ uint8_t first_failure=0;bool begin_self_present=false,collected_same_thread=false,end_same_thread=false;
+ bool returned=false,complete=false;jvmtiError result=JVMTI_ERROR_INTERNAL;
+};
+// Reads only the current native scope's bounded scalars; usable in end callback.
+// No address is exported, no JNI/mapping query/allocation is performed.
+bool ReadPassiveTrace(PassiveTrace*) noexcept;
 bool SetPassiveObserver(const PassiveObserver*) noexcept;
 // Forward only from the existing sole named RecordFailure observer. Original
 // failure arguments/result remain untouched. Exact active Run driver required;
