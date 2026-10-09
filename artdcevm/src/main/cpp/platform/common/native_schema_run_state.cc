@@ -88,6 +88,7 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.d.mapping.extent){
   if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,e))return false;
   s.read_context={this,MappingExtent};s.d.members.read_context=&s.read_context;s.mapper->UseReadContext(s.read_context);s.receivers.UseReadContext(s.read_context);s.authority.UseReadContext(s.read_context);
+  if(s.d.guards&&!s.d.guards->UseStoppedReadContext(&s.read_context))return Fail(e,"Frozen schema verifier refused actual stopped read context");
  }
  // From here no JNI root can be created. Existing binds only known identities.
  if(!s.d.registry->Resolve())return Fail(e,"Stopped schema root resolution failed");const auto resolve=s.d.registry->Final();
