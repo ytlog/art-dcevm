@@ -4,7 +4,9 @@ namespace artdcevm::source_commit {
 bool Run(const Plan& plan,const Services& services){
   if(!plan.mirror||!plan.new_classes_root||plan.old_classes.empty()||
      plan.old_classes.size()!=plan.new_classes.size()||
-     plan.old_instances.size()!=plan.new_instances.size()||!services.Validate(plan))return false;
+     plan.old_instances.size()!=plan.new_instances.size()||(!plan.class_root_origins.empty()&&plan.class_root_origins.size()!=plan.old_classes.size()))return false;
+  for(const auto& origin:plan.class_root_origins)if(!origin.array)return false;
+  if(!services.Validate(plan))return false;
   services.BeginCommit(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
     auto* old=plan.old_classes[i];auto* replacement=plan.new_classes[i];
@@ -23,7 +25,7 @@ bool Run(const Plan& plan,const Services& services){
   services.ReplaceObjectReferences();
   services.RestoreDeclaringClasses(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
-    auto* replacement=services.NewClassAfterReplacement(plan.new_classes_root,i);
+    auto* replacement=services.NewClassAfterReplacement(plan.class_root_origins.empty()?plan.new_classes_root:plan.class_root_origins[i].array,plan.class_root_origins.empty()?i:plan.class_root_origins[i].index);
     if(!replacement)std::abort();
     services.RetainOldClass(replacement,plan.old_classes[i]);
   }

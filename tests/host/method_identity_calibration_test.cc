@@ -1,5 +1,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include <array>
+#include <thread>
+#include "platform/common/readable_mapping_scope.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -59,6 +61,26 @@ int main() {
                                                 MAP_PRIVATE | MAP_ANON, -1, 0));
   assert(bytes != MAP_FAILED);
   assert(mprotect(bytes + page, page, PROT_NONE) == 0);
+  // Actual OS mapping queries are reused only within a traversal. Renewed
+  // scopes observe protection changes; independent threads never share them.
+  size_t extent=0;
+  {
+    method_identity::ScopedReadableMappings scope;
+    for(int i=0;i<10000;++i)assert(method_identity::ReadableMappingExtent(bytes+page-16,&extent)&&extent==16);
+    assert(scope.OsQueries()==1);
+    assert(!method_identity::ReadableMappingExtent(bytes+page,&extent));
+    assert(!method_identity::ReadableMappingExtent(nullptr,&extent));
+    assert(!method_identity::ReadableMappingExtent(bytes,nullptr));
+    const auto queries=scope.OsQueries();
+    std::thread independent([&]{method_identity::ScopedReadableMappings child;
+      assert(method_identity::ReadableMappingExtent(bytes,&extent));assert(child.OsQueries()==1);});independent.join();
+    {method_identity::ScopedReadableMappings nested;assert(method_identity::ReadableMappingExtent(bytes,&extent));assert(nested.OsQueries()==1);}
+    assert(method_identity::ReadableMappingExtent(bytes,&extent)&&scope.OsQueries()==queries);
+  }
+  assert(mprotect(bytes,page,PROT_NONE)==0);
+  {method_identity::ScopedReadableMappings renewed;assert(!method_identity::ReadableMappingExtent(bytes,&extent));}
+  assert(mprotect(bytes,page,PROT_READ|PROT_WRITE)==0);
+  {method_identity::ScopedReadableMappings renewed;assert(method_identity::ReadableMappingExtent(bytes,&extent));}
   auto oracles = Oracles();
   for (bool old : {false, true}) {
     for (size_t i = 0; i < 3; ++i) {

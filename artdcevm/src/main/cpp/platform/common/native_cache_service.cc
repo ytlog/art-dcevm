@@ -3,39 +3,57 @@
 #include "platform/common/method_identity_calibration.h"
 #include <cstring>
 #include <mutex>
+#include "platform/abi/arm64/android-common/checkpoint.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
 namespace artdcevm::native_cache {
 namespace {
 using Closure=art::Closure;
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
-// Fixed Android17 thread_list.h: the real native owner passes its function-
-// static Closure to this named entry. Observe only our synchronous ClearAll
-// window, with the independently observed ThreadList receiver.
-using Checkpoint=size_t (*)(void*,void*,void*,bool,bool);
+// Observe the native owner's function-static Closure only during its synchronous
+// ClearAll window, with the independently observed ThreadList receiver. All
+// original arguments/results pass through the exact fixed-source signature.
+using namespace abi::arm64::android_common;
 struct Capture {void* threads;void* closure=nullptr;bool conflict=false;};
 thread_local Capture* capturing=nullptr;
 void* original_checkpoint_storage=nullptr;
 std::mutex checkpoint_installation;
 void* checkpoint_token=nullptr;
-size_t ObserveCheckpoint(void* threads,void* closure,void* callback,bool checking,bool acquire) {
- if(capturing&&threads==capturing->threads&&closure&&!callback&&checking&&!acquire) {
+void ObserveOwnedClosure(void* threads,Closure* closure,Closure* callback,bool checking,bool acquire){
+ if(capturing&&threads==capturing->threads&&closure&&!callback&&checking&&!acquire){
   if(capturing->closure&&capturing->closure!=closure)capturing->conflict=true;
   else capturing->closure=closure;
  }
- auto original=reinterpret_cast<Checkpoint>(original_checkpoint_storage);
- if(!original)std::abort();
- return original(threads,closure,callback,checking,acquire);
 }
-bool InstallCheckpoint(HookEngine& hooks,std::string* error) {
+size_t ObserveCheckpointMutator(void* threads,Closure* closure,Closure* callback,bool checking,bool acquire){
+ ObserveOwnedClosure(threads,closure,callback,checking,acquire);
+ auto original=reinterpret_cast<CheckpointMutator>(original_checkpoint_storage);
+ if(!original)std::abort();return original(threads,closure,callback,checking,acquire);
+}
+size_t ObserveCheckpointChecking(void* threads,Closure* closure,Closure* callback,bool checking){
+ ObserveOwnedClosure(threads,closure,callback,checking,false);
+ auto original=reinterpret_cast<CheckpointChecking>(original_checkpoint_storage);
+ if(!original)std::abort();return original(threads,closure,callback,checking);
+}
+size_t ObserveCheckpointCallback(void* threads,Closure* closure,Closure* callback){
+ ObserveOwnedClosure(threads,closure,callback,true,false);
+ auto original=reinterpret_cast<CheckpointCallback>(original_checkpoint_storage);
+ if(!original)std::abort();return original(threads,closure,callback);
+}
+bool InstallCheckpoint(HookEngine& hooks,std::string* error){
  std::lock_guard<std::mutex> guard(checkpoint_installation);
  if(checkpoint_token)return true;
- auto target=hooks.FindSymbol("libart.so","_ZN3art10ThreadList13RunCheckpointEPNS_7ClosureES2_bb");
- using namespace abi::arm64::android_common;
+ void* target=nullptr;void* proxy=nullptr;
+ struct Entry{const char* name;void* proxy;};
+ const Entry entries[]{
+  {kCheckpointMutator,reinterpret_cast<void*>(ObserveCheckpointMutator)},
+  {kCheckpointChecking,reinterpret_cast<void*>(ObserveCheckpointChecking)},
+  {kCheckpointCallback,reinterpret_cast<void*>(ObserveCheckpointCallback)}};
+ for(const auto& entry:entries){target=hooks.FindSymbol("libart.so",entry.name);if(target){proxy=entry.proxy;break;}}
  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
  if(!target||!construct||!destroy)return Fail(error,"Missing named native cache checkpoint capture entry");
  SuspendAll stopped{};construct(&stopped,"artdcevm native cache closure capture",false);
- checkpoint_token=hooks.Install(target,reinterpret_cast<void*>(ObserveCheckpoint),&original_checkpoint_storage,error);
+ checkpoint_token=hooks.Install(target,proxy,&original_checkpoint_storage,error);
  if(checkpoint_token&&!original_checkpoint_storage)std::abort();
  destroy(&stopped);
  return checkpoint_token&&original_checkpoint_storage;

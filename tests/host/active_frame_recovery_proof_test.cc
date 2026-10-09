@@ -7,8 +7,8 @@ using namespace artdcevm;
 using namespace active_frame_recovery_proof;
 namespace {
 Family family;int method_ids[3],thread,jit;void* active_method;
-bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;
-unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
+bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
+uint32_t code_size=64;unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
 struct Context final:abi::arm64::context::Prefix {void Reset()override{++resets;}~Context()override{++destroys;}
  void FillCalleeSaves(uint8_t*,const abi::arm64::context::FrameInfo&)override{}
  void SetSP(uintptr_t)override{}void SetPC(uintptr_t)override{}void SetArg0(uintptr_t)override{}
@@ -27,7 +27,7 @@ template<size_t N> void Table(abi::arm64::android17::BitTable<N>& t,void* data,s
  t.region={data,0,bits};t.rows=rows;t.row_bits=N*width;for(size_t i=0;i<N;++i)t.columns[i]=i*width;
 }
 template<class T> void Decode(T* info,const void* h) {
- assert(h==header);*info={};info->flags=bad_flag?0:1;info->dex_regs=2;info->frame_size=4;
+ assert(h==header);*info={};if constexpr(!std::is_same_v<T,abi::arm64::android11::CodeInfo>)info->code_size=code_size;info->flags=bad_flag?0:1;info->dex_regs=2;info->frame_size=4;
  Table(info->stack_maps,stack.data(),256,1,32);Table(info->inline_infos,inlines.data(),384,2,32);
  Table(info->dex_masks,&mask,6,1,6);Table(info->dex_maps,maps.data(),192,6,32);
  Table(info->dex_catalog,catalog.data(),384,6,32);Table(info->stack_masks,&roots,16,1,16);
@@ -50,6 +50,7 @@ template<class V> void Walk(void* raw,bool transitions) {
   v->depth=i;v->quick_frame=reinterpret_cast<void**>(quick.data());v->header=header;
   v->pc=reinterpret_cast<uintptr_t>(header)+(family==Family::kAndroid11?8:4)+32;
   v->inline_frames.begin.row=0;v->inline_frames.end.row=(bad_inline && i==1)?2:2-i;
+  if(physical_inlinees&&i<2)v->inline_frames.end.row=0;
   active_method=&method_ids[2-i];if(!v->VisitFrame())break;
  }
 }
@@ -99,16 +100,18 @@ struct Finder {
   return nullptr;
  }
 };
-void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;creates=resets=destroys=reference_fast11=0;
+void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;creates=resets=destroys=reference_fast11=0;
  quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
  for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
  stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
- mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
+ code_size=64;mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
 }
 void Check(Family f){family=f;Reset();Service service;
  assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service));
 
  assert(!Service::Bind(f,Finder{f==Family::kAndroid14 || f==Family::kAndroid15 || f==Family::kAndroid16 || f==Family::kAndroid17 ? abi::arm64::android14::frame_registers::kSlow : abi::arm64::android11::frame_registers::kSlow},&service));
+ const char* missing=nullptr;
+ assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service,&missing));assert(std::strcmp(missing,abi::arm64::context::kCreate)==0);
  assert(Service::Bind(f,Finder{},&service));
  Witness witnesses[3][2];for(unsigned i=0;i<3;++i)witnesses[i][0]={0,Kind::kInt,quick[2+2*i]},witnesses[i][1]={1,Kind::kReference,quick[3+2*i]};
  Oracle oracle{{&method_ids[0],2,witnesses[0],2,10},{{&method_ids[1],2,witnesses[1],2,11},{&method_ids[2],2,witnesses[2],2,12}}};
@@ -116,12 +119,16 @@ void Check(Family f){family=f;Reset();Service service;
  auto result=run();assert(result.failure==Failure::kNone && result.frames==3 && result.references==3 && result.integers==3 && result.location_reads==6 && result.dex_pc_checks==3 && result.inline_flag_checks==2);
  assert(creates==1 && resets==1 && destroys==1);if(f==Family::kAndroid11)assert(reference_fast11==3);
  assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
+ physical_inlinees=true;auto separated=run();assert(separated.failure==Failure::kMissingFrames && separated.physical_matches==3 && separated.inline_matches==0 && separated.matched_mask==7 && separated.frames==1);assert(std::strcmp(separated.detail,"missing-actual-inlinees-physical-fixture-frames-observed")==0);physical_inlinees=false;
+ Service inline_header;missing=nullptr;bool fallback_bound=Service::Bind(f,Finder{"_ZNK3art20OatQuickMethodHeader8ContainsEm"},&inline_header,&missing);
+ if(f==Family::kAndroid11){assert(!fallback_bound && missing);}
+ else {assert(fallback_bound);auto recovered=inline_header.Prove(&thread,&jit,oracle,scratch,2);assert(recovered.failure==Failure::kNone && recovered.header_checks==3);code_size=31;auto outside=inline_header.Prove(&thread,&jit,oracle,scratch,2);assert(outside.failure==Failure::kCodeOwnership && std::strcmp(outside.detail,"decoded-code-size-does-not-contain-native-pc")==0);code_size=0;assert(inline_header.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kCodeOwnership);code_size=64;}
  missing_context=true;assert(run().failure==Failure::kMissingContext);missing_context=false;
  bad_owner=true;assert(run().failure==Failure::kCodeOwnership);bad_owner=false;
  bad_pc=true;assert(run().failure==Failure::kDexPc);bad_pc=false;
  ++inlines[7];assert(run().failure==Failure::kDexPc);--inlines[7];
  ++stack[2];assert(run().failure==Failure::kDexPc);--stack[2];
- bad_flag=true;assert(run().failure==Failure::kInlineFlag);bad_flag=false;
+ bad_flag=true;assert(run().failure==Failure::kInlineFlag);bad_flag=false,physical_inlinees=false;
  auto pc=oracle.inlinees[0].expected_dex_pc;++oracle.inlinees[0].expected_dex_pc;assert(run().failure==Failure::kDexPc);oracle.inlinees[0].expected_dex_pc=pc;
  bad_map=true;assert(run().failure==Failure::kDecodedMap);bad_map=false;
  roots=0;assert(run().failure==Failure::kReferenceMask);roots=0xa8;
@@ -129,13 +136,13 @@ void Check(Family f){family=f;Reset();Service service;
  bad_fast=true;assert(run().failure==Failure::kValueMismatch);bad_fast=false;
  ++witnesses[2][1].expected;assert(run().failure==Failure::kValueMismatch);--witnesses[2][1].expected;
  skip_inner=true;assert(run().failure==Failure::kMissingFrames);skip_inner=false;
- bad_inline=true;assert(run().failure==Failure::kFrameIdentity);bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;
+ bad_inline=true;assert(run().failure==Failure::kFrameIdentity);bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
  auto saved=witnesses[0][0].expected;witnesses[0][0].expected=witnesses[1][0].expected;
  assert(run().failure==Failure::kMissingOracle);witnesses[0][0].expected=saved;
  witnesses[0][1].expected=0;assert(run().failure==Failure::kMissingOracle);
  witnesses[0][1].expected=quick[3];wrong_geometry=true;
  Service wrong;assert(Service::Bind(f,Finder{},&wrong));
- assert(wrong.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kFrameIdentity);wrong_geometry=false,bad_pc=false,bad_flag=false;
+ assert(wrong.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kFrameIdentity);wrong_geometry=false,bad_pc=false,bad_flag=false,physical_inlinees=false;
  witnesses[0][1].expected=quick[3];
  Service fallback;assert(Service::Bind(f,Finder{f==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast},&fallback));
  assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone);

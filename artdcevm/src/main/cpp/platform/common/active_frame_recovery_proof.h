@@ -16,7 +16,8 @@ using Kind=abi::arm64::android11::frame_registers::Kind;
 using NativeLocation=abi::arm64::android11::frame_registers::Location;
 enum class Failure {kMissingBinding,kMissingContext,kMissingOracle,kWalk,kMissingFrames,
   kFrameIdentity,kCodeOwnership,kDecodedMap,kTableMemory,kDexPc,kInlineFlag,kReferenceMask,kNativeRead,kValueMismatch,kNone};
-struct Report {Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
+struct Report {const char* detail="binding-not-attempted";uint32_t callbacks=0,matched_mask=0,physical_matches=0,inline_matches=0,header_checks=0;
+  Failure failure=Failure::kMissingBinding;uint32_t frames=0,integers=0,references=0,location_reads=0,dex_pc_checks=0,inline_flag_checks=0;};
 struct Witness {uint16_t vreg;Kind kind;uint32_t expected;};
 struct FrameOracle {void* method;uint32_t registers;const Witness* witnesses;size_t count;uint32_t expected_dex_pc;};
 // Exactly one physical carrier and two independently identified inlinees. Raw
@@ -26,22 +27,25 @@ struct Oracle {FrameOracle carrier,inlinees[2];};
 class Service {
  public:
   using Readable=bool (*)(const void*,size_t*);
-  template<class Finder> static bool Bind(Family family,Finder finder,Service* output) {
+  template<class Finder> static bool Bind(Family family,Finder finder,Service* output,const char** missing=nullptr) {
+    if(missing)*missing=nullptr;
     if(!output)return false;
     Service candidate;candidate.family_=family;
     auto declaration=Declaration(family);if(!declaration)return false;
-    if(!stack_visitor_service::Service::Bind(*declaration,finder,&candidate.stack_))return false;
-    candidate.dex_pc_=reinterpret_cast<DexPc>(finder("_ZNK3art12StackVisitor8GetDexPcEb"));
-    candidate.create_=reinterpret_cast<abi::arm64::context::Create>(finder(abi::arm64::context::kCreate));
-    candidate.construct_=finder(abi::arm64::android13::kConstructCodeInfo);
-    candidate.map_=finder(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
-    candidate.slow_=finder(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
+    auto required=[&](const char* name){void* symbol=finder(name);if(!symbol&&missing&&!*missing)*missing=name;return symbol;};
+    const bool stack_bound=stack_visitor_service::Service::Bind(*declaration,required,&candidate.stack_);
+    candidate.dex_pc_=reinterpret_cast<DexPc>(required("_ZNK3art12StackVisitor8GetDexPcEb"));
+    candidate.create_=reinterpret_cast<abi::arm64::context::Create>(required(abi::arm64::context::kCreate));
+    candidate.construct_=required(abi::arm64::android13::kConstructCodeInfo);
+    candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
+    candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
     candidate.fast_=finder(family==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast);
-    candidate.jit_contains_=reinterpret_cast<ContainsJit>(finder("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
+    candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
-    candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(finder("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
+    candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
+    if(family==Family::kAndroid11 && !candidate.header_contains_ && missing && !*missing)*missing="_ZNK3art20OatQuickMethodHeader8ContainsEm";
     if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ ||
-       !candidate.jit_contains_ || !candidate.header_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
+       !stack_bound || !candidate.jit_contains_ || (family==Family::kAndroid11 && !candidate.header_contains_) || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
   // Call ONLY on a genuinely suspended target under ART's required mutator lock,
@@ -53,9 +57,10 @@ class Service {
                decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable=nullptr) const {
     Report report;
     if(!create_)return report;
-    if(!thread || !jit || !scratch || !Valid(oracle)) {report.failure=Failure::kMissingOracle;return report;}
+    if(!thread || !jit || !scratch || !Valid(oracle)) {report.failure=Failure::kMissingOracle;report.detail="missing-independent-inputs";return report;}
     std::unique_ptr<abi::arm64::context::Prefix> context(create_());
-    if(!context){report.failure=Failure::kMissingContext;return report;}
+    if(!context){report.failure=Failure::kMissingContext;report.detail="native-context-create-returned-null";return report;}
+    report.detail="context-created";
     context->Reset(); // WalkStack then fills native callee-saves while unwinding.
     switch(family_) {
       case Family::kAndroid11:Walk<abi::arm64::android11::CodeInfo,abi::arm64::android11::CodeInfoPair>(thread,jit,context.get(),oracle,scratch,capacity,readable,&report);break;
@@ -159,70 +164,87 @@ class Service {
     const Service& service;void* jit;const Oracle& oracle;decoded_frame_recovery::Location* scratch;size_t capacity;Readable readable;Report& report;
     void** carrier=nullptr;const void* shared_header=nullptr;uintptr_t shared_pc=0;uint32_t seen=0,inline_rows[2]{};
     Visitor(const Service& s,void* j,const Oracle& o,decoded_frame_recovery::Location* storage,size_t n,Readable reader,Report& r):abi::arm64::stack::Visitor<Pair>{},service(s),jit(j),oracle(o),scratch(storage),capacity(n),readable(reader),report(r){}
-    bool Fail(Failure failure){report.failure=failure;return false;}
+    bool Fail(Failure failure,const char* detail){report.failure=failure;report.detail=detail;return false;}
     bool VisitFrame()override {
-      void* method=nullptr;if(!service.stack_.Method(this,sizeof(*this),&method))return Fail(Failure::kWalk);
+      ++report.callbacks;
+      void* method=nullptr;if(!service.stack_.Method(this,sizeof(*this),&method))return Fail(Failure::kWalk,"named-GetMethod-call-unavailable");
       const FrameOracle* f=nullptr;uint32_t bit=0;
       if(method==oracle.carrier.method){f=&oracle.carrier;bit=1;}
       for(size_t i=0;i<2;++i)if(method==oracle.inlinees[i].method){f=&oracle.inlinees[i];bit=2u<<i;}
       if(!f)return true;
-      if(seen&bit || !this->quick_frame || !this->header || !this->context)return Fail(Failure::kFrameIdentity);
-      if((bit==1)!=(this->inline_frames.begin.row==this->inline_frames.end.row))return Fail(Failure::kFrameIdentity);
+      report.matched_mask|=bit;
+      const bool physical=this->inline_frames.begin.row==this->inline_frames.end.row;
+      if(physical)++report.physical_matches;else ++report.inline_matches;
+      if(seen&bit)return Fail(Failure::kFrameIdentity,"duplicate-owned-method-callback");
+      // Debuggable graphs cannot inline in fixed HInliner::Run. Observe these
+      // real physical inlinee frames, but never count them as inline proof.
+      if(bit!=1 && physical){report.detail="owned-inlinee-observed-as-separate-physical-frame";return true;}
+      if(bit==1 && !physical)return Fail(Failure::kFrameIdentity,"owned-carrier-observed-as-inline-frame");
+      if(!this->quick_frame)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-frame");
+      if(!this->header)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-quick-header");
+      if(!this->context)return Fail(Failure::kFrameIdentity,"owned-frame-has-no-native-context");
       if(bit!=1) {
         const size_t index=bit==2?0:1,other=1-index;
-        if((seen&(2u<<other)) && inline_rows[other]==this->inline_frames.end.row)return Fail(Failure::kFrameIdentity);
+        if((seen&(2u<<other)) && inline_rows[other]==this->inline_frames.end.row)return Fail(Failure::kFrameIdentity,"duplicate-inline-row");
         inline_rows[index]=this->inline_frames.end.row;
       }
       if(!carrier){carrier=this->quick_frame;shared_header=this->header;shared_pc=this->pc;}
-      if(carrier!=this->quick_frame || shared_header!=this->header || shared_pc!=this->pc ||
-         *carrier!=oracle.carrier.method)return Fail(Failure::kFrameIdentity);
+      if(carrier!=this->quick_frame)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-physical-frame");
+      if(shared_header!=this->header || shared_pc!=this->pc)return Fail(Failure::kFrameIdentity,"inlinees-do-not-share-header-pc");
+      if(*carrier!=oracle.carrier.method)return Fail(Failure::kFrameIdentity,"quick-frame-owner-is-not-independent-carrier");
       if(!service.jit_contains_(jit,reinterpret_cast<void*>(this->pc)) ||
-         !service.header_contains_(this->header,this->pc) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership);
+         (service.header_contains_ && !service.header_contains_(this->header,this->pc)) || (service.nterp_ && service.nterp_(this->header)))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
       // Fixed native header prefixes put code at byte8 on11 and byte4
       // thereafter. Native PC ownership above and the actual native stack-map
       // lookup/value witnesses must agree with that caller-owned declaration.
       const uintptr_t entry=reinterpret_cast<uintptr_t>(this->header)+(service.family_==Family::kAndroid11?8u:4u);
-      if(this->pc<entry || (service.family_==Family::kAndroid11 && this->pc-entry>UINT32_MAX))return Fail(Failure::kCodeOwnership);
+      if(this->pc<entry || (service.family_==Family::kAndroid11 && this->pc-entry>UINT32_MAX))return Fail(Failure::kCodeOwnership,"native-jit-header-pc-or-nterp-ownership-mismatch");
       alignas(Info) unsigned char storage[sizeof(abi::arm64::android17::CodeInfo)]{};
       auto* info=reinterpret_cast<Info*>(storage);
       reinterpret_cast<void (*)(Info*,const void*)>(service.construct_)(info,this->header);
       abi::arm64::android11::TableIterator map;
       if(service.family_==Family::kAndroid11)map=reinterpret_cast<abi::arm64::android11::FindStackMap>(service.map_)(reinterpret_cast<abi::arm64::android11::CodeInfo*>(info),static_cast<uint32_t>(this->pc-entry),2);
       else map=reinterpret_cast<abi::arm64::android11::TableIterator (*)(const Info*,uintptr_t,int32_t)>(service.map_)(info,this->pc-entry,2);
-      if(map.table!=&info->stack_maps)return Fail(Failure::kDecodedMap);
+      if(map.table!=&info->stack_maps)return Fail(Failure::kDecodedMap,"native-stack-map-table-does-not-match-fixed-declaration");
       code_info_view::View view;decoded_frame_recovery::RegisterRange range;
-      if(!code_info_view::ReadSourceObject(service.family_,info,sizeof(storage),&view))return Fail(Failure::kDecodedMap);
+      if(!code_info_view::ReadSourceObject(service.family_,info,sizeof(storage),&view))return Fail(Failure::kDecodedMap,"native-decoded-CodeInfo-table-geometry-invalid");
+      // Fixed12+ Contains uses GetCode()+native decoded CodeInfo code_size.
+      // On12 the inline function has no named ELF body. This source equivalent
+      // stays independent of map/value checks and of actual Jit ContainsPc.
+      if(!service.header_contains_ && (!view.code_size || !*view.code_size ||
+          this->pc-entry>*view.code_size))return Fail(Failure::kCodeOwnership,"decoded-code-size-does-not-contain-native-pc");
+      ++report.header_checks;
       if(readable)for(const auto& table:view.tables) {
         const size_t bits=size_t{table.rows}*table.row_bits;
         if(!bits)continue;
         const size_t bytes=(table.region.bit_start+bits-1)/8+1;size_t extent=0;
-        if(!readable(table.region.data,&extent)||extent<bytes)return Fail(Failure::kTableMemory);
+        if(!readable(table.region.data,&extent)||extent<bytes)return Fail(Failure::kTableMemory,"native-table-storage-not-fully-readable");
       }
       // Original WalkStack emits inline callbacks only with native CodeInfo and
       // StackMap HasInlineInfo. Compare precisely this flag, never other flags.
       if(bit!=1) {
-        if(!(view.flags&InlineMask(service.family_)))return Fail(Failure::kInlineFlag);
+        if(!(view.flags&InlineMask(service.family_)))return Fail(Failure::kInlineFlag,"native-inline-callback-versus-decoded-inline-flag-mismatch");
         ++report.inline_flag_checks;
       }
       uint32_t decoded_pc;
       const bool decoded=bit==1?view.StackMaps().Read(map.row,2,&decoded_pc):
         view.InlineInfos().Read(this->inline_frames.end.row-1,1,&decoded_pc);
       if(!decoded || decoded_pc!=f->expected_dex_pc ||
-         service.dex_pc_(this,false)!=f->expected_dex_pc)return Fail(Failure::kDexPc);
+         service.dex_pc_(this,false)!=f->expected_dex_pc)return Fail(Failure::kDexPc,"native-decoded-independent-invoke-DexPc-mismatch");
       ++report.dex_pc_checks;
       if(!decoded_frame_recovery::Decode(view,map.row,this->inline_frames.begin.row,this->inline_frames.end.row,scratch,capacity,&range) ||
-         range.count!=f->registers)return Fail(Failure::kDecodedMap);
-      if(info->frame_size>UINT32_MAX/16)return Fail(Failure::kDecodedMap);
+         range.count!=f->registers)return Fail(Failure::kDecodedMap,"decoded-vreg-count-does-not-match-actual-CodeItem");
+      if(info->frame_size>UINT32_MAX/16)return Fail(Failure::kDecodedMap,"decoded-frame-size-overflow");
       const uint32_t bytes=info->frame_size*16;
       for(size_t i=0;i<f->count;++i){const auto& witness=f->witnesses[i];const auto location=scratch[witness.vreg];
-        if(location.kind<0 || (location.kind==0 && (bytes<4 || location.value>bytes-4)))return Fail(Failure::kDecodedMap);
-        if(witness.kind==Kind::kReference && !RootMask(view,map.row,location))return Fail(Failure::kReferenceMask);
+        if(location.kind<0 || (location.kind==0 && (bytes<4 || location.value>bytes-4)))return Fail(Failure::kDecodedMap,"decoded-location-missing-or-outside-native-frame");
+        if(witness.kind==Kind::kReference && !RootMask(view,map.row,location))return Fail(Failure::kReferenceMask,"independent-reference-missing-native-stack-register-root-mask");
         uint32_t value=0;
-        if(!service.NativeSlow(this,method,witness,&value))return Fail(Failure::kNativeRead);
-        if(value!=witness.expected)return Fail(Failure::kValueMismatch);
+        if(!service.NativeSlow(this,method,witness,&value))return Fail(Failure::kNativeRead,"original-slow-vreg-read-rejected");
+        if(value!=witness.expected)return Fail(Failure::kValueMismatch,"original-slow-vreg-versus-independent-witness-mismatch");
         uint32_t physical=0;
-        if(!service.NativeFast(this,this->quick_frame,static_cast<abi::arm64::context::Prefix*>(this->context),location,witness.kind,&physical))return Fail(Failure::kNativeRead);
-        if(physical!=value)return Fail(Failure::kValueMismatch);
+        if(!service.NativeFast(this,this->quick_frame,static_cast<abi::arm64::context::Prefix*>(this->context),location,witness.kind,&physical))return Fail(Failure::kNativeRead,"physical-location-reader-unavailable");
+        if(physical!=value)return Fail(Failure::kValueMismatch,"physical-location-versus-original-slow-reader-mismatch");
         ++report.location_reads;
         if(witness.kind==Kind::kInt)++report.integers;
         else ++report.references;
@@ -233,13 +255,14 @@ class Service {
   template<class Info,class Pair> void Walk(void* thread,void* jit,void* context,const Oracle& oracle,
       decoded_frame_recovery::Location* scratch,size_t capacity,Readable readable,Report* report)const {
     Visitor<Info,Pair> visitor(*this,jit,oracle,scratch,capacity,readable,*report);
-    if(!stack_.Construct(&visitor,sizeof(visitor),thread,context,abi::arm64::stack::WalkKind::kIncludeInlined)) {report->failure=Failure::kWalk;return;}
+    if(!stack_.Construct(&visitor,sizeof(visitor),thread,context,abi::arm64::stack::WalkKind::kIncludeInlined)) {report->failure=Failure::kWalk;report->detail="native-visitor-construct-or-walk-call-unavailable";return;}
     if(visitor.thread!=thread || visitor.context!=context || visitor.kind!=abi::arm64::stack::WalkKind::kIncludeInlined) {
-      report->failure=Failure::kFrameIdentity;return;
+      report->failure=Failure::kFrameIdentity;report->detail=visitor.thread!=thread?"constructor-thread-echo-mismatch":visitor.context!=context?"constructor-context-echo-mismatch":"constructor-walk-kind-echo-mismatch";return;
     }
-    if(!stack_.Walk(&visitor,sizeof(visitor))) {report->failure=Failure::kWalk;return;}
-    if(visitor.seen==7)report->failure=Failure::kNone;
-    else if(report->failure==Failure::kMissingBinding)report->failure=Failure::kMissingFrames;
+    report->detail="constructor-echo-matched-walk-started";
+    if(!stack_.Walk(&visitor,sizeof(visitor))) {report->failure=Failure::kWalk;report->detail="native-visitor-construct-or-walk-call-unavailable";return;}
+    if(visitor.seen==7){report->failure=Failure::kNone;report->detail="complete-owned-physical-two-inline-proof";}
+    else if(report->failure==Failure::kMissingBinding){report->failure=Failure::kMissingFrames;report->detail=report->physical_matches>1?"missing-actual-inlinees-physical-fixture-frames-observed":"missing-owned-carrier-or-two-inline-callbacks";}
   }
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;void* slow_=nullptr;void* fast_=nullptr;

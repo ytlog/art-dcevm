@@ -14,6 +14,7 @@
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_source_commit.h"
 #include "platform/common/native_owned_removal.h"
+#include "platform/common/redefinition_gate.h"
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/android13/selective_deopt_abi.h"
@@ -44,7 +45,12 @@ struct NativeEngine final:Engine {
  retirement::RetiredMethodRegistry retired_methods;
  retirement::RetiredFieldRegistry retired_fields;
  std::vector<std::shared_ptr<contextual_field_id::Proof>> target_field_proofs,bootstrap_field_proofs;
- void ClearFieldProofs(JNIEnv* env){for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
+ struct StagedClass {jclass owner;size_t field_base;std::vector<jfieldID> ids;std::vector<jobject> mirrors;};
+ std::vector<StagedClass> staged_classes;std::vector<jclass> graph_bases;
+ abi::arm64::android11::CurrentThread graph_current=nullptr;
+ field_mirror::NamedField graph_field_leaf=nullptr;
+ void ClearStagedClasses(JNIEnv* env){graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
+ void ClearFieldProofs(JNIEnv* env){ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_structural_reflection::Service reflection;
  native_member_provider::Service provider;
@@ -141,14 +147,31 @@ struct NativeEngine final:Engine {
   for(const auto& definition:definitions)if(!provenance.Store(env,definition.klass,definition.dex))break;
  }
  bool Preflight(JNIEnv*,jvmtiEnv*,jclass,std::string*);
+ bool StageGraph(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*);
+ static bool CheckGraph(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,void*,std::string*);
+ static bool StagedInputs(JNIEnv* env,jvmtiEnv*,const std::vector<Definition>& definitions,void* raw,std::string* error){
+  auto& s=*static_cast<NativeEngine*>(raw);
+  for(const auto& definition:definitions){size_t found=0;for(const auto& stage:s.staged_classes)if(env->IsSameObject(stage.owner,definition.klass))++found;
+   if(found!=1||env->ExceptionCheck())return Fail(error,"Input Class missing from staged graph");}
+  return true;
+ }
+ bool AtomicBatchReady()const override{return activated&&redefinition_gate::Ready(vm)&&native_owned_removal::GraphWindowReady();}
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
-  if(!activated||current||defs.size()!=1)return JVMTI_ERROR_NOT_AVAILABLE;
+  if(!activated||current||defs.empty())return JVMTI_ERROR_NOT_AVAILABLE;
+  const bool batch=defs.size()>1;
+  std::unique_ptr<redefinition_gate::Lease> lease;
+  if(batch){
+   if(!AtomicBatchReady()){if(error)*error=redefinition_gate::Ready(vm)?"Named rejectable post-verification graph window unavailable":redefinition_gate::Diagnostic();return JVMTI_ERROR_NOT_AVAILABLE;}
+   lease=std::make_unique<redefinition_gate::Lease>(vm);
+   if(!lease->Acquired())return Fail(error,"Another normal JVMTI transaction is active"),JVMTI_ERROR_NOT_AVAILABLE;
+  }
   ClearFieldProofs(env);
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
-  if(!Preflight(env,ti,defs[0].klass,error))return JVMTI_ERROR_NOT_AVAILABLE;
+  if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error))return JVMTI_ERROR_NOT_AVAILABLE;
   if(!cache.Prepare(error))return JVMTI_ERROR_NOT_AVAILABLE;
   current=this;struct Clear {~Clear(){NativeEngine::current=nullptr;}} clear;
-  int result=native_owned_removal::Run(hooks,env,ti,defs[0].klass,defs[0].dex,{Ready,PrepareCommit,&metadata,this,handles_proven},error);
+  int result=native_owned_removal::RunBatch(hooks,env,ti,defs,
+    {Ready,PrepareCommit,&metadata,this,handles_proven,batch?StagedInputs:nullptr,batch?CheckGraph:nullptr},error);
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
   return result;
  }
@@ -231,7 +254,7 @@ struct TargetRequest {
  std::vector<method_identity::Oracle> methods;std::vector<jmethodID> ids;
  std::vector<modern_field_metadata::FieldOracle> fields;
  abi::arm64::android_common::FromReflectedMethod method_leaf;field_mirror::NamedField field_leaf;
- void* (*decode_method)(void*,jmethodID);std::string error;
+ void* (*decode_method)(void*,jmethodID);std::string error;size_t field_proof_base=0;
 };
 bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  auto& r=*static_cast<TargetRequest*>(raw);auto& e=*r.engine;void* klass=nullptr;
@@ -250,7 +273,7 @@ bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  for(size_t i=0;i<r.fields.size();i++){
   void* reflected=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,r.fields[i].strong_global_field,&reflected))return false;
   void* field=r.field_leaf(reflected);
-  if(!field||field!=contextual_field_id::NativeField(e.target_field_proofs[i])||e.metadata.FieldDeclaringClass(field)!=klass)return false;
+  if(!field||field!=contextual_field_id::NativeField(e.target_field_proofs[r.field_proof_base+i])||e.metadata.FieldDeclaringClass(field)!=klass)return false;
  }
  return true;
 }
@@ -284,6 +307,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
   reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
   reinterpret_cast<void*(*)(void*,jmethodID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
   {}};
+ request.field_proof_base=target_field_proofs.size();
  jint n=0;jmethodID* methods=nullptr;if(ti->GetClassMethods(target,&n,&methods)!=JVMTI_ERROR_NONE||size_t(n)!=schema.methods.size())return Fail(error,"Target methods disagree with provenance");
  struct Methods{jvmtiEnv* ti;jmethodID* p;~Methods(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_methods{ti,methods};
  std::map<std::pair<std::string,std::string>,evolution::Member> expected;for(auto m:schema.methods)expected.emplace(std::make_pair(m.name,m.descriptor),m);
@@ -309,6 +333,75 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  }
  if(!request.decode_method||!request.method_leaf||!request.field_leaf||env->ExceptionCheck()||
     runnable_executor::With(env,owner,TargetObserve,&request)!=runnable_jni::Result::kSuccess){if(error)*error=request.error.empty()?"Target rooted native/public identity proof rejected":request.error;return false;}
+ StagedClass stage{static_cast<jclass>(env->NewGlobalRef(target)),request.field_proof_base,{}, {}};
+ if(!stage.owner||env->ExceptionCheck())return false;
+ for(jint i=0;i<f;i++){stage.ids.push_back(fields[i]);auto mirror=env->NewGlobalRef(request.fields[i].strong_global_field);if(!mirror||env->ExceptionCheck()){for(auto m:stage.mirrors)env->DeleteGlobalRef(m);env->DeleteGlobalRef(stage.owner);return false;}stage.mirrors.push_back(mirror);}
+ staged_classes.push_back(std::move(stage));return true;
+}
+bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
+ graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ if(!graph_current||!graph_field_leaf)return Fail(error,"Paused graph native readers unavailable");
+ jint count=0;jclass* loaded=nullptr;
+ if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");
+ struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
+ for(jint i=0;i<count;++i){
+  bool affected=false;for(const auto& definition:definitions)if(env->IsAssignableFrom(loaded[i],definition.klass))affected=true;
+  if(env->ExceptionCheck())return Fail(error,"Public graph classification failed");
+  if(!affected)continue;
+  jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;
+  if(status&JVMTI_CLASS_STATUS_ERROR)continue;
+  if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Candidate descendant is not prepared");
+  if(!Preflight(env,ti,loaded[i],error))return false;
+ }
+ if(!StagedInputs(env,ti,definitions,this,error))return false;
+ for(const auto& definition:definitions)for(const auto& stage:staged_classes)if(env->IsSameObject(definition.klass,stage.owner))graph_bases.push_back(stage.owner);
+ return graph_bases.size()==definitions.size();
+}
+bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,void* raw,std::string* error){
+ auto& e=*static_cast<NativeEngine*>(raw);
+ if(actual.size()!=e.staged_classes.size())return Fail(error,"Class loaded after candidate staging; retry whole batch");
+ // The original pause exempts its defining thread. Re-enumerate registered
+ // live Classes to catch children loaded by verification/allocation callbacks
+ // after ART built oldClasses. This is metadata-only JNI/JVMTI, no Java calls.
+ jint live_count=0;jclass* live=nullptr;
+ if(ti->GetLoadedClasses(&live_count,&live)!=JVMTI_ERROR_NONE)return Fail(error,"Paused live Class closure unavailable");
+ struct Live {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Live(){for(jint n=0;n<count;++n)env->DeleteLocalRef(values[n]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} live_scope{env,ti,live_count,live};
+ size_t affected_count=0;
+ for(jint n=0;n<live_count;++n){
+  jint status=0;if(ti->GetClassStatus(live[n],&status)!=JVMTI_ERROR_NONE)return false;
+  if(status&JVMTI_CLASS_STATUS_ERROR)continue;
+  bool affected=false;for(auto base:e.graph_bases)if(env->IsAssignableFrom(live[n],base))affected=true;
+  if(env->ExceptionCheck())return false;if(!affected)continue;
+  if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Paused descendant is unresolved");
+  size_t matches=0;for(auto klass:actual)matches+=env->IsSameObject(klass,live[n]);
+  if(matches!=1)return Fail(error,"Defining thread created an unstaged descendant; retry whole batch");
+  ++affected_count;
+ }
+ if(affected_count!=actual.size())return Fail(error,"Paused live graph disagrees with native rooted graph");
+ // No FindClass, reflection calls, class initialization, or new class loading
+ // here. The startup Direct lease prevents changes to these member tables.
+ for(auto klass:actual){
+  StagedClass* stage=nullptr;for(auto& candidate:e.staged_classes)if(env->IsSameObject(klass,candidate.owner)){if(stage)return Fail(error,"Duplicate staged Class identity");stage=&candidate;}
+  if(!stage||env->ExceptionCheck())return Fail(error,"Actual paused graph contains an unstaged Class");
+  jint count=0;jfieldID* fields=nullptr;
+  if(ti->GetClassFields(klass,&count,&fields)!=JVMTI_ERROR_NONE)return false;
+  struct Fields {jvmtiEnv* ti;jfieldID* p;~Fields(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release{ti,fields};
+  if(size_t(count)!=stage->ids.size())return Fail(error,"Paused Class field count changed after staging");
+  for(jint n=0;n<count;++n)if(std::count(stage->ids.begin(),stage->ids.end(),fields[n])!=1)return Fail(error,"Paused Class field ID changed after staging");
+  void* self=e.graph_current();
+  const runnable_jni::Context scope{self,env,e.vm};
+  for(size_t n=0;n<stage->mirrors.size();++n){
+   void* mirror=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,stage->mirrors[n],&mirror))return false;
+   auto leaf=e.graph_field_leaf;
+   if(!leaf||leaf(mirror)!=contextual_field_id::NativeField(e.target_field_proofs[stage->field_base+n]))return Fail(error,"Paused field native identity differs from public proof");
+  }
+  void* native=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,stage->owner,&native))return false;
+  field_array::View instance,statics;
+  if(!e.metadata.Fields(native,false,&instance,error)||!e.metadata.Fields(native,true,&statics,error)||instance.selected_count+statics.selected_count!=stage->ids.size())return Fail(error,"Paused native field table count differs from complete public proof");
+  for(size_t n=0;n<stage->ids.size();++n){uint32_t index=0;void* field=contextual_field_id::NativeField(e.target_field_proofs[stage->field_base+n]);
+   if(!field||!(instance.IndexOf(field,&index)||statics.IndexOf(field,&index))||e.metadata.FieldDeclaringClass(field)!=native)return Fail(error,"Paused field proof is outside its native declaring table");}
+ }
  return true;
 }
 }

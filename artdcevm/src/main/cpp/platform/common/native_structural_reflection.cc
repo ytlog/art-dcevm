@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include "platform/common/native_interface_graph.h"
+#include "platform/common/readable_mapping_scope.h"
 namespace artdcevm::native_structural_reflection {
 using detail::Visitor;using detail::Visit;
 namespace {
@@ -26,6 +27,13 @@ class NativeResolutionObserver final:public Observer {
     if(assignable_||implements_)return true;
     if(!metadata_.InterfaceDeclarationCalibrated()){if(error)*error="Interface table declaration lacks independent public calibration";return false;}
     holder_=holder;return native_interface_graph::Read(metadata_,holder,&interfaces_,error);
+  }
+  bool ValidateScope(void* holder)const override {
+    if(assignable_||implements_)return true;
+    std::string error;
+    if(holder!=holder_||!metadata_.InterfaceDeclarationCalibrated()||
+       !native_interface_graph::Matches(metadata_,holder,interfaces_,&error))return Fail("live-holder-interface-table-invalid");
+    return true;
   }
   const char* FailureReason()const override{return failure_;}
   bool ReadFlags(void* member,Kind kind,uint32_t* out)const override {
@@ -193,6 +201,7 @@ bool Service::Bind(HookEngine& hooks,void* runtime,const executable_mirror::Layo
 }
 bool Service::Validate(const Plan& plan,std::string* error)const{
   if(!runtime_||!visit_){if(error)*error="Unbound structural reflective visitor";return false;}
+  method_identity::ScopedReadableMappings mapped_scope;
   const auto& guards=plan.handle_guards_;
   Visitor visitor(plan.methods_,plan.fields_,true,
       guards.method_handles&&guards.method_handles(guards.owner),
@@ -216,6 +225,7 @@ void Service::Retire(const Plan& plan)const{
 }
 void Service::Update(const Plan& plan)const{
   if(!runtime_||!visit_)std::abort();
+  method_identity::ScopedReadableMappings mapped_scope;
   Visitor visitor(plan.methods_,plan.fields_,false,false,false,false,plan.resolution_.get());reinterpret_cast<Visit>(visit_)(runtime_,&visitor);
 }
 }

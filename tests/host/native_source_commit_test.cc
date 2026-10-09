@@ -39,12 +39,12 @@ uintptr_t bias=uintptr_t(cards)-(uintptr_t(heap.base)>>10);
 class_metadata::Class17* old_class=nullptr;class_metadata::Class17* new_class=nullptr;
 void* parent_class=nullptr;void* meta_class=nullptr;void* old_instance=nullptr;void* new_instance=nullptr;
 void* ref_a=nullptr;void* ref_b=nullptr;void* class_ext=nullptr;void* class_array=nullptr;
-void* moved_class=nullptr;void* moved_ext=nullptr;bool replaced=false,wrong_readback=false;int retain_pipe=-1;
+void* moved_class=nullptr;void* moved_ext=nullptr;bool replaced=false,wrong_readback=false;int retain_pipe=-1, fault_pipe=-1;
 std::array<abi::arm64::Field*,4> old_fields{},new_fields{};
 std::array<const char*,4> names{"number","value","left","right"};
 std::array<const char*,4> types{"I","I","Ljava/lang/Object;","Ljava/lang/Object;"};
 struct Mirror {void* field;};std::array<Mirror,4> mirrors{};
-void* Root(void* p){if(wrong_readback&&replaced&&p==old_fields[0])return new_class;return reinterpret_cast<void*>(uintptr_t(Read32(p)));}
+void* Root(void* p){if(wrong_readback&&replaced&&p==old_fields[0]){if(fault_pipe>=0){const char marker=1;assert(write(fault_pipe,&marker,1)==1);}return new_class;}return reinterpret_cast<void*>(uintptr_t(Read32(p)));}
 void* Mark(void* p){return replaced&&p==new_class?moved_class:p;}
 const char* FieldName(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field)return names[i];return nullptr;}
 const char* FieldType(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field)return types[i];return nullptr;}
@@ -222,9 +222,18 @@ int main(){
  const std::vector<std::string> expected{"retire","status","obsolete","reflective","deopt","replace","retain","invalidate","abstract","cache","cache"};assert(events==expected);
  // A named GC-root readback disagreeing after restoration must stop before
  // RetainOldClass. Test the real invariant rather than replacing the adapter.
- int pipes[2];assert(pipe(pipes)==0);pid_t child=fork();assert(child>=0);
- if(child==0){close(pipes[0]);retain_pipe=pipes[1];wrong_readback=true;std::freopen("/dev/null","w",stderr);Stop(nullptr,nullptr,false);(void)source_commit::Run(plan,*service);_exit(99);}
- close(pipes[1]);int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);
- char marker=0;assert(read(pipes[0],&marker,1)==0);close(pipes[0]);
+ int pipes[2],faults[2];assert(pipe(pipes)==0&&pipe(faults)==0);pid_t child=fork();assert(child>=0);
+ if(child==0){
+  close(pipes[0]);close(faults[0]);retain_pipe=pipes[1];fault_pipe=faults[1];
+  // Start a new simulated forwarding epoch. The previous successful commit
+  // forwarded its Class-array root; reusing that epoch rejects this stale plan
+  // before reaching the post-restoration invariant we intend to exercise.
+  replaced=false;wrong_readback=true;std::freopen("/dev/null","w",stderr);Stop(nullptr,nullptr,false);
+  if(!service->Validate(plan))_exit(98);
+  (void)source_commit::Run(plan,*service);_exit(99);
+ }
+ close(pipes[1]);close(faults[1]);int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);
+ char marker=0;assert(read(faults[0],&marker,1)==1&&marker==1);close(faults[0]);
+ assert(read(pipes[0],&marker,1)==0);close(pipes[0]);
  std::cout<<"Native source adapter: public calibration, named callees, wrong-thread pre-mutation refusal, heap roots restored before retain, field/monitor transfer and final native cache enumeration passed\n";
 }

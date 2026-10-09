@@ -57,7 +57,7 @@ std::string CapabilityBackend::Capabilities()const {
  auto supported=[&](const char* key){return public_report.find(std::string("\"")+key+"\":true")!=std::string::npos;};
  std::string result="{\"backend\":\"runtime-capabilities\",\"attached\":"+std::string(vm_?"true":"false")+
    ",\"methodBody\":"+(supported("methodBody")?"true":"false")+",\"nativeAdditive\":"+(supported("nativeAdditive")?"true":"false")+
-   ",\"partialEvolutionAvailable\":"+(ready_?"true":"false")+",\"nativeMethodDeletion\":"+(ready_?"true":"false")+
+   ",\"partialEvolutionAvailable\":"+(ready_?"true":"false")+",\"atomicMemberBatch\":"+(ready_&&common_&&common_->AtomicBatchReady()?"true":"false")+",\"nativeMethodDeletion\":"+(ready_?"true":"false")+
    ",\"nativeDelete\":"+std::string(ready_&&common_&&common_->FieldDeletionReady()?"true":"false")+",\"evolutionAvailable\":false,\"fieldDeletion\":"+(ready_&&common_&&common_->FieldDeletionReady()?"true":"false")+",\"standardRedefineRouted\":false,\"fullDcevmComplete\":false,\"validationHooksInstalled\":false,\"privateHooksSupported\":"+(ready_?"true":"false")+
    ",\"evolutionError\":"+QuoteJsonMutf8(error_)+",\"public\":"+public_report+"}";
  return result;

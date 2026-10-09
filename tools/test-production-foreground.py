@@ -14,7 +14,7 @@ base={'productionBootstrap':True,'formalApplyMethodDeletion':True,'cachedJniReje
       'foregroundResumedAfter':True,'foregroundPauseCount':0,'foregroundFinished':True}
 with tempfile.TemporaryDirectory() as directory:
     tmp=Path(directory);tools=tmp/'tools';tools.mkdir()
-    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py']:shutil.copy(root/'tools'/name,tools/name)
+    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py','test_phase_file.py']:shutil.copy(root/'tools'/name,tools/name)
     app=tmp/'app.apk';app.write_bytes(b'frozenapp');test=tmp/'test.apk';test.write_bytes(b'frozentest')
     sha=hashlib.sha256(app.read_bytes()).hexdigest();test_sha=hashlib.sha256(test.read_bytes()).hexdigest()
     fake=tmp/'adb';fake.write_text(r'''#!/usr/bin/env python3

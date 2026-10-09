@@ -239,12 +239,13 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject owner,jobject fixt
  };
  bool card_proven=false;std::string card_diagnostics;
  for(size_t declaration:kCardDeclarations){
-  candidate.card_offset_=declaration;size_t readable=0,clean=0,stores=0;uint8_t last=255;
+  candidate.card_offset_=declaration;size_t readable=0,clean=0,stores=0;uint8_t last=255;std::string first_failure;
   for(size_t attempt=0;attempt<32&&!card_proven;++attempt){
   jobject fresh=env->AllocObject(static_cast<jclass>(owner));if(!fresh||env->ExceptionCheck())return Fail(error,"cannot allocate card oracle");
   jobject global=env->NewGlobalRef(fresh);env->DeleteLocalRef(fresh);if(!global)return false;
   jobject saved=roots.values[1];roots.values[1]=global;a.mode=Calibrator::CardRead;
   bool ok=fresh_card();uintptr_t address=a.owner_address;
+  if(!ok&&first_failure.empty())first_failure=error&&!error->empty()?*error:"Native card read rejected without diagnostic";
   if(ok){++readable;last=a.card_value;}
   if(ok&&NonDirty(a.card_value)){
    ++clean;
@@ -258,6 +259,7 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject owner,jobject fixt
   roots.values[1]=saved;env->DeleteGlobalRef(global);if(env->ExceptionCheck())return false;
  }
   card_diagnostics+=" offset="+std::to_string(declaration)+" reads="+std::to_string(readable)+" clean="+std::to_string(clean)+" stores="+std::to_string(stores)+" byte="+std::to_string(last);
+  if(!first_failure.empty())card_diagnostics+=" firstFailure=["+first_failure+"]";
   if(card_proven)break;
  }
  if(!card_proven){if(error)*error="no source card declaration matches independent non-dirty-to-dirty JNI oracle:"+card_diagnostics;return false;}

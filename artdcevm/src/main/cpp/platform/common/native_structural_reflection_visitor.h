@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <unordered_map>
+#include <memory>
 #include "platform/common/native_reflective_value_abi.h"
 #include "platform/common/resolution_invalidation_plan.h"
 namespace artdcevm::native_structural_reflection {
@@ -16,7 +17,9 @@ class Visitor final:public art::ReflectiveValueVisitor {
           bool method_handles=false,bool field_var_handles=false,bool field_method_handles=false,
           const resolution_invalidation::ResolutionInvalidationPlan* resolution=nullptr)
       :methods_(methods),fields_(fields),validate_(validate),
-       method_handles_(method_handles),field_var_handles_(field_var_handles),field_method_handles_(field_method_handles),resolution_(resolution){}
+       method_handles_(method_handles),field_var_handles_(field_var_handles),field_method_handles_(field_method_handles),resolution_(resolution){
+    if(resolution_)scan_=std::make_unique<resolution_invalidation::ResolutionInvalidationPlan::Scan>(*resolution_);
+  }
   art::ArtMethod* VisitMethod(art::ArtMethod* method,const art::ReflectionSourceInfo& info)override {
     if(!method)return nullptr;
     const auto kind=Type(info);
@@ -51,7 +54,7 @@ class Visitor final:public art::ReflectiveValueVisitor {
   bool Invalidate(void* member,resolution_invalidation::Kind kind,uint32_t source) {
     if(!resolution_)return false;
     resolution_invalidation::FailureInfo failure;
-    const auto decision=resolution_->Inspect(member,kind,source,&failure);
+    const auto decision=scan_->Inspect(member,kind,source,&failure);
     if(decision==resolution_invalidation::Decision::Unavailable){
       if(!validate_)std::abort();unsupported_=true;if(!resolution_unavailable_)resolution_failure_=failure;resolution_unavailable_=true;return false;
     }
@@ -61,6 +64,7 @@ class Visitor final:public art::ReflectiveValueVisitor {
   bool validate_,method_handles_,field_var_handles_,field_method_handles_,unsupported_=false,resolution_unavailable_=false;
   resolution_invalidation::FailureInfo resolution_failure_;
   const resolution_invalidation::ResolutionInvalidationPlan* resolution_;
+  std::unique_ptr<resolution_invalidation::ResolutionInvalidationPlan::Scan> scan_;
 };
 }
 }

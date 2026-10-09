@@ -66,6 +66,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/production_bootstrap.cc
     platform/common/capability_backend.cc
     platform/common/native_owned_removal.cc
+    platform/common/redefinition_gate.cc
     platform/common/native_owned_removal_probe.cc
     platform/common/contextual_field_id.cc
     platform/common/modern_method_handle_guards.cc

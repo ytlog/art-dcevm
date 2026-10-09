@@ -23,7 +23,7 @@ public final class RuntimeAccessInstrumentation extends Instrumentation {
     }
     @Override public void onStart() {
         JSONObject report=new JSONObject();
-        TestPhaseLog phases=new TestPhaseLog(runId);phases.mark("runtime.begin");
+        TestPhaseLog phases=new TestPhaseLog(runId,getTargetContext().getFilesDir());phases.mark("runtime.begin");
         RuntimeAccessForegroundActivity carrier=null;
         boolean before=false;int pauses=0;
         try {

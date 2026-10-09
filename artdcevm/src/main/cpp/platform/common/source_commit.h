@@ -5,11 +5,15 @@
 namespace artdcevm::source_commit {
 // Managed objects stay rooted by ART's transaction Holder throughout the call.
 // These native vectors are identity snapshots, not independently owned GC roots.
+struct ClassRootOrigin {void* array=nullptr;size_t index=0;};
 struct Plan {
   void* mirror=nullptr;
   void* new_classes_root=nullptr;
   std::vector<void*> old_classes,new_classes,old_instances,new_instances;
   bool abstract_instances=false;
+  // Each replacement remains rooted in its actual ART Holder partition. Empty
+  // retains the original single new_classes_root array and class index.
+  std::vector<ClassRootOrigin> class_root_origins{};
 };
 // Version providers supply source-declared, behaviorally calibrated services.
 // Run executes only under ART's final exclusive mutator/disabled-GC transaction

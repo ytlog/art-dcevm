@@ -16,11 +16,11 @@ bool Subset(const std::vector<evolution::Member>& old,const std::vector<evolutio
   });
 }
 }
-bool ValidateRemoval(const evolution::ClassSchema& old,const evolution::ClassSchema& next,bool allow_fields,std::string* error){
+bool ValidateRemoval(const evolution::ClassSchema& old,const evolution::ClassSchema& next,bool allow_fields,std::string* error,bool require_removal){
   if(old.descriptor!=next.descriptor||old.superclass!=next.superclass||old.interfaces!=next.interfaces||
      JavaFlags(old.access)!=JavaFlags(next.access)||!Subset(old.fields,next.fields)||!Subset(old.methods,next.methods)||
      (!allow_fields&&old.fields.size()!=next.fields.size())||
-     (old.fields.size()==next.fields.size()&&old.methods.size()==next.methods.size())){
+     (require_removal&&old.fields.size()==next.fields.size()&&old.methods.size()==next.methods.size())){
     if(error)*error="Owned removal requires an unchanged class hierarchy and modifiers with a strict member subset";return false;
   }
   for(const auto& member:old.methods)if((member.name=="<init>"||member.name=="<clinit>")&&

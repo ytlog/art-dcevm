@@ -13,11 +13,13 @@ struct Member {Class* owner;uint32_t flags;const char* name;const char* descript
 class Proof:public Observer {
  public:
   bool fail_member=false,fail_class=false,fail_identity=false,fail_flags=false;
-  mutable int member_reads=0;
+  mutable int member_reads=0,class_reads=0,assignability_reads=0,scope_reads=0;
+  bool scope_ready=true;
+  bool ValidateScope(void*)const override{++scope_reads;return scope_ready;}
   bool ReadFlags(void* pointer,Kind,uint32_t* out)const override{if(fail_flags||!pointer||!out)return false;*out=static_cast<Member*>(pointer)->flags;return true;}
   Class* interface_class=nullptr;Class* implementing_class=nullptr;
   bool ReadClass(void* pointer,ClassIdentity* out)const override {
-    if(fail_class||!pointer||!out)return false;auto& c=*static_cast<Class*>(pointer);
+    ++class_reads;if(fail_class||!pointer||!out)return false;auto& c=*static_cast<Class*>(pointer);
     *out={pointer,c.loader,c.parent,c.descriptor};return true;
   }
   bool ReadMember(void* pointer,Kind,MemberIdentity* out)const override {
@@ -25,7 +27,7 @@ class Proof:public Observer {
     *out={pointer,m.owner,m.flags};return true;
   }
   bool IsAssignableFrom(void* target,void* holder,bool* out)const override {
-    if(fail_class||!out)return false;*out=target==interface_class&&holder==implementing_class;return true;
+    ++assignability_reads;if(fail_class||!out)return false;*out=target==interface_class&&holder==implementing_class;return true;
   }
   bool SameIdentity(const MemberIdentity& actual,const Declaration& candidate,bool* out)const override {
     if(fail_identity||!out)return false;auto& m=*static_cast<Member*>(actual.member);
@@ -71,6 +73,29 @@ int main(){
  proof->interface_class=&iface;proof->implementing_class=&old;
  assert(plan->Inspect(&interface_field,Kind::Field,9)==Decision::Clear);
  proof->implementing_class=nullptr;assert(plan->Inspect(&interface_field,Kind::Field,9)==Decision::Keep);
+ // One protected traversal checks the complete graph once and handles a
+ // heavily prewarmed repeated member without re-decoding or OS identity work.
+ proof->member_reads=proof->class_reads=proof->assignability_reads=proof->scope_reads=0;
+ {
+  ResolutionInvalidationPlan::Scan scan(*plan);assert(scan.Valid());const int roots=proof->class_reads;
+  for(int i=0;i<10000;++i)assert(scan.Inspect(&ancestor_method,Kind::Method,8)==Decision::Clear);
+  assert(proof->member_reads==1&&proof->scope_reads==1&&proof->class_reads==roots);
+  assert(scan.Inspect(&overload,Kind::Method,8)==Decision::Keep);
+  assert(proof->assignability_reads<=1); // Both members use the same declaring class.
+ }
+ auto epoch_loader=old.loader;old.loader=&other_loader;
+ {ResolutionInvalidationPlan::Scan scan(*plan);assert(!scan.Valid());assert(scan.Inspect(&ancestor_method,Kind::Method,8)==Decision::Unavailable);}
+ old.loader=epoch_loader;proof->scope_ready=false;
+ {ResolutionInvalidationPlan::Scan scan(*plan);assert(!scan.Valid());
+  assert(scan.Inspect(&virtual_method,Kind::Method,8)==Decision::Keep);
+  assert(scan.Inspect(&private_field,Kind::Field,9)==Decision::Keep);
+  assert(scan.Inspect(&ancestor_method,Kind::Method,8)==Decision::Unavailable);}
+ proof->scope_ready=true;
+ {ResolutionInvalidationPlan::Scan scan(*plan);assert(scan.Valid()&&scan.Inspect(&ancestor_method,Kind::Method,8)==Decision::Clear);}
+ auto epoch_parent=old.parent;old.parent=nullptr;
+ {ResolutionInvalidationPlan::Scan scan(*plan);assert(!scan.Valid());}old.parent=epoch_parent;
+ auto epoch_descriptor=next.descriptor;next.descriptor="Lp/Changed;";
+ {ResolutionInvalidationPlan::Scan scan(*plan);assert(!scan.Valid());}next.descriptor=epoch_descriptor;
  std::unordered_map<void*,void*> methods{{&ancestor_method,&added_method}},fields{{&old_kept,&added_field}};
  using artdcevm::native_structural_reflection::detail::Visitor;
  Visitor preflight(methods,fields,true,false,false,false,plan.get()),update(methods,fields,false,false,false,false,plan.get());

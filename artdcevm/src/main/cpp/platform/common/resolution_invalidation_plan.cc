@@ -45,7 +45,30 @@ std::unique_ptr<ResolutionInvalidationPlan> ResolutionInvalidationPlan::Prepare(
  }
  if(error)error->clear();return result;
 }
+bool ResolutionInvalidationPlan::ValidateScope()const{
+ if(!observer_||!observer_->ValidateScope(holder_))return false;
+ for(const auto& facts:classes_){ClassIdentity current;
+  if(!observer_->ReadClass(facts.klass,&current)||!SameClass(current,facts))return false;
+ }
+ return true;
+}
+ResolutionInvalidationPlan::Scan::Scan(const ResolutionInvalidationPlan& p):plan_(p),valid_(p.ValidateScope()){}
+Decision ResolutionInvalidationPlan::Scan::Inspect(void* member,Kind kind,uint32_t source,FailureInfo* failure){
+ if(failure)*failure={};
+ if((kind==Kind::Method&&source!=8)||(kind==Kind::Field&&source!=9))return Decision::Keep;
+ if(!valid_)return plan_.InspectImpl(member,kind,source,failure,true);
+ auto& cache=kind==Kind::Method?methods_:fields_;auto found=cache.find(member);
+ if(found==cache.end()){
+  FailureInfo details;auto decision=plan_.InspectImpl(member,kind,source,&details,false,&assignability_);
+  found=cache.emplace(member,Result{decision,details}).first;
+ }
+ if(failure)*failure=found->second.failure;return found->second.decision;
+}
 Decision ResolutionInvalidationPlan::Inspect(void* member,Kind kind,uint32_t source_kind,FailureInfo* failure)const{
+ return InspectImpl(member,kind,source_kind,failure,true);
+}
+Decision ResolutionInvalidationPlan::InspectImpl(void* member,Kind kind,uint32_t source_kind,FailureInfo* failure,
+    bool revalidate,std::unordered_map<void*,bool>* assignability)const{
  if(failure)*failure={};
  if((kind==Kind::Method&&source_kind!=8)||(kind==Kind::Field&&source_kind!=9))return Decision::Keep;
  MemberIdentity actual;uint32_t flags=0;
@@ -58,12 +81,15 @@ Decision ResolutionInvalidationPlan::Inspect(void* member,Kind kind,uint32_t sou
  else if(flags&0x2u)return Decision::Keep;
  if(!observer_->ReadMember(member,kind,&actual)||actual.member!=member||actual.flags!=flags)return unavailable("member-identity");
  if(!actual.declaring)return unavailable("declaring-class");
- for(const auto& facts:classes_){ClassIdentity current;
-  if(!observer_->ReadClass(facts.klass,&current)||!SameClass(current,facts))return unavailable("transaction-class");
- }
+ if(revalidate&&!ValidateScope())return unavailable("transaction-class");
  if(std::find(eligible_classes_.begin(),eligible_classes_.end(),actual.declaring)==eligible_classes_.end()){
   bool assignable=false;
-  if(!observer_->IsAssignableFrom(actual.declaring,holder_,&assignable))return unavailable("assignability");
+  auto cached=assignability?assignability->find(actual.declaring):std::unordered_map<void*,bool>::iterator{};
+  if(assignability&&cached!=assignability->end())assignable=cached->second;
+  else{
+   if(!observer_->IsAssignableFrom(actual.declaring,holder_,&assignable))return unavailable("assignability");
+   if(assignability)assignability->emplace(actual.declaring,assignable);
+  }
   if(!assignable)return Decision::Keep;
  }
  for(const auto& candidate:declarations_){

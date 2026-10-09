@@ -62,12 +62,17 @@ bool Services::Validate(const source_commit::Plan& p)const {
   if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
      &p!=plan_||!Mapped(p.mirror,layout_->size)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
      p.old_instances.size()!=p.new_instances.size()||methods_.size()!=p.old_classes.size()||
-     !Mapped(p.new_classes_root,12+4*p.new_classes.size())||
+     (!p.class_root_origins.empty()&&p.class_root_origins.size()!=p.new_classes.size())||
      !dependencies_.reflective.prepared(p,dependencies_.reflective.state))return false;
   const auto& metadata=*dependencies_.metadata;
   void* meta=metadata.Reference(p.mirror,0);
   if(!meta)return false;
   for(size_t i=0;i<p.old_classes.size();++i){
+    const auto origin=p.class_root_origins.empty()?source_commit::ClassRootOrigin{p.new_classes_root,i}:p.class_root_origins[i];
+    if(!Mapped(origin.array,12)||origin.index>(SIZE_MAX-12)/4)return false;
+    int32_t length=0;std::memcpy(&length,static_cast<const unsigned char*>(origin.array)+8,4);
+    if(length<0||origin.index>=size_t(length)||!Mapped(origin.array,12+4*size_t(length))||
+       dependencies_.metadata->Reference(origin.array,12+4*origin.index)!=p.new_classes[i])return false;
     void* old=p.old_classes[i];void* next=p.new_classes[i];const auto& pair=methods_[i];
     if(!Mapped(old,layout_->size)||!Mapped(next,layout_->size)||
        metadata.Reference(old,0)!=meta||metadata.Reference(next,0)!=meta||

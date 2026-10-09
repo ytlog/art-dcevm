@@ -33,9 +33,9 @@ public final class ProductionCapabilitiesTest {
         String runId=InstrumentationRegistry.getArguments().getString("productionRunId");
         if(runId==null)runId=java.util.UUID.randomUUID().toString().replace("-","");
         assertTrue("Malformed production run correlation",runId.matches("[0-9a-f]{32}"));
-        TestPhaseLog phases=new TestPhaseLog(runId);phases.mark("production.begin");
         Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();
         Context context=instrumentation.getTargetContext();
+        TestPhaseLog phases=new TestPhaseLog(runId,context.getFilesDir());phases.mark("production.begin");
         boolean foreground="true".equals(InstrumentationRegistry.getArguments().getString("foreground"));
         RuntimeAccessForegroundActivity carrier=null;int initialPauses=0;
         JSONObject report=new JSONObject();boolean completed=false;

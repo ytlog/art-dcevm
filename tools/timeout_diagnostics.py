@@ -1,5 +1,6 @@
 """Bounded read-only snapshots before owned test timeout cleanup."""
 import json,re,subprocess,time
+from test_phase_file import parse_phase_file
 
 def collect_timeout_diagnostics(adb,serial,directory,run_id,budget=15):
     deadline=time.monotonic()+budget
@@ -21,16 +22,26 @@ def collect_timeout_diagnostics(adb,serial,directory,run_id,budget=15):
             summary['commands'][label]={'error':str(error),'log':str(path)};return ''
     pids=capture('pid',['shell','pidof','dev.artdcevm.lab'],2).split()
     summary['livePids']=[int(p) for p in pids if p.isdigit() and int(p)>0][:2]
+    if re.fullmatch('[0-9a-f]{32}',run_id):
+        text=capture('phase-file',['shell','run-as','dev.artdcevm.lab','cat','files/runtime-phases/'+run_id+'.json'],2)
+        summary['phases']=parse_phase_file(text,run_id,summary['livePids'])
     for pid in summary['livePids']:
-        rows=capture('threads-'+str(pid),['shell','ps','-T','-p',str(pid),'-o','PID,TID,NAME,STAT,WCHAN'],3)
-        tids=[pid]
+        rows=capture('threads-'+str(pid),['shell','ps','-T','-p',str(pid),'-o','PID,TID,COMM,STAT,WCHAN'],3)
+        candidates=[]
         for row in rows.splitlines():
             parts=row.split()
-            if len(parts)>=3 and parts[0]==str(pid) and parts[1].isdigit() and ('instrument' in parts[2].lower() or 'junit' in parts[2].lower()):
-                tids.append(int(parts[1]))
+            if len(parts)>=4 and parts[0]==str(pid) and parts[1].isdigit():
+                # COMM is the kernel thread name. NAME was argv and silently
+                # selected only the main thread. Prioritize actual running and
+                # recorded Java marker TIDs, then bounded remaining threads.
+                tid=int(parts[1]);name=parts[2].lower();state=parts[3]
+                candidates.append((0 if state.startswith('R') or 'instrument' in name or 'junit' in name else 1,tid))
+        phase_tids=[p['threadId'] for p in reversed(summary['phases']) if p.get('pid')==pid and type(p.get('threadId')) is int]
+        tids=list(dict.fromkeys(phase_tids+[tid for _,tid in sorted(candidates)]+[pid]))[:24]
         files=['/proc/%d/status'%pid]
-        for tid in dict.fromkeys(tids):files.extend(['/proc/%d/task/%d/status'%(pid,tid),'/proc/%d/task/%d/wchan'%(pid,tid)])
+        for tid in tids:files.extend(['/proc/%d/task/%d/comm'%(pid,tid),'/proc/%d/task/%d/status'%(pid,tid),'/proc/%d/task/%d/wchan'%(pid,tid)])
         capture('state-'+str(pid),['shell','run-as','dev.artdcevm.lab','cat',*files],3)
+    if summary['phases']:summary['commands']['phase-file']['parsed']=True
     logs=capture('phases',['logcat','-d','-s','ArtDcevmPhase:I'],4)
     for line in logs.splitlines():
         if 'ArtDcevmPhase' not in line:continue
@@ -42,7 +53,8 @@ def collect_timeout_diagnostics(adb,serial,directory,run_id,budget=15):
         pid=phase.get('pid');name=phase.get('phase')
         if type(pid) is not int or pid<=0 or not isinstance(name,str) or not re.fullmatch('[a-z0-9.-]+',name):continue
         if summary['livePids'] and pid not in summary['livePids']:continue
-        summary['phases'].append(phase)
+        if not summary['commands'].get('phase-file',{}).get('parsed'):
+            summary['phases'].append(phase)
     if summary['phases']:summary['lastPhase']=summary['phases'][-1]
     (directory/'timeout-diagnostics.json').write_text(json.dumps(summary,indent=2)+'\n')
     return summary

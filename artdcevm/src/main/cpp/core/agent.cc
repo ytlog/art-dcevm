@@ -1,24 +1,56 @@
 #include "platform/backend_factory.h"
 #include "jvmti.h"
 #include "core/transaction_lock.h"
+#include "platform/common/redefinition_gate.h"
+#include "hooks/shadow_hook_engine.h"
 #include <memory>
 #include <mutex>
 #include <limits>
 #include <new>
+#include <dlfcn.h>
 
 namespace {
 std::unique_ptr<artdcevm::RuntimeBackend> backend;
 }
 using artdcevm::TransactionMutex;
 
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*, void*) { return JNI_VERSION_1_6; }
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+  // Mapping a plugin does not initialize it or register an environment hook.
+  // Keep the image mapped: its non-reset lifetime witness must not be recycled.
+  static void* plugin_image=dlopen("libopenjdkjvmti.so",RTLD_NOW|RTLD_LOCAL);
+  if(plugin_image){
+    static artdcevm::ShadowHookEngine hooks;std::string error;
+    (void)artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
+  }
+  return JNI_VERSION_1_6;
+}
 extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   std::lock_guard<std::mutex> lock(TransactionMutex());
   if (backend) return JNI_OK;
+  // Retry diagnostics before creating our Env; an already initialized plugin
+  // cannot replace the pristine proof obtained by JNI_OnLoad before attach.
+  static artdcevm::ShadowHookEngine first_live_hooks;
+  std::string gate_error;
+  (void)artdcevm::redefinition_gate::InstallFirstLive(first_live_hooks,vm,&gate_error);
   auto candidate = artdcevm::CreateBackend();
   if (!candidate || candidate->Attach(vm) != JNI_OK) return JNI_ERR;
   backend = std::move(candidate);
   return JNI_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm,char* options,void* reserved) {
+  // Real ONLOAD is the only public lifecycle phase that rules out prior legal
+  // RedefineClasses calls. A LIVE Agent_OnAttach never supplies this proof.
+  jvmtiEnv* ti=nullptr;
+  if(!vm||vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK||!ti)return JNI_ERR;
+  static artdcevm::ShadowHookEngine startup_hooks;
+  std::string error;
+  const bool installed=artdcevm::redefinition_gate::InstallStartup(startup_hooks,vm,ti,&error);
+  ti->DisposeEnvironment();
+  // Preserve public/body support when startup proof or named gate is missing;
+  // the separate atomic capability remains false with a precise diagnostic.
+  (void)installed;
+  return Agent_OnAttach(vm,options,reserved);
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_api_DcevmRuntime_nativeCapabilities(JNIEnv* env, jclass) {

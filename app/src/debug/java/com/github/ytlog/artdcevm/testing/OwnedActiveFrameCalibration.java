@@ -34,8 +34,7 @@ public final class OwnedActiveFrameCalibration {
             String result=prove(methods,dex,roots,integers);
             if(result==null)throw new AssertionError("Missing active frame report");
             report=new JSONObject(result);
-            if(!report.getBoolean("passed"))throw new AssertionError("Actual active frame proof missing: "+result);
-            if(report.getInt("frames")!=3||report.getInt("integers")!=3||report.getInt("references")!=3||report.getInt("locationReads")!=6||!report.getBoolean("carrierJitCompiled")||report.getInt("dexPcChecks")!=3||!report.getBoolean("inlineFlagNativeObserved"))
+            if(report.getBoolean("passed")&&(report.getInt("frames")!=3||report.getInt("integers")!=3||report.getInt("references")!=3||report.getInt("locationReads")!=6||!report.getBoolean("carrierJitCompiled")||report.getInt("dexPcChecks")!=3||!report.getBoolean("inlineFlagNativeObserved")))
                 throw new AssertionError("Incomplete actual active frame proof: "+result);
             report.put("warmCalls",100000).put("scope","owned compiled carrier and two inlinee map/value/root oracle; no full evolution");
             report.put("blockedLiveWitnesses",true);

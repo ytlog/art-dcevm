@@ -107,3 +107,26 @@ executes the actual optional catch/continuation block with injected frame succes
 and failure, exercises strict report mutations and the real runtime CLI through
 fake ADB installation/hash/instrumentation, and checks actual matrix CLI optional
 forwarding/defaults. No Android device observation is replaced by these tests.
+
+
+The diagnostic batch additionally returns native frame failures as structured
+reports through the Java fixture after gate release/join. Each fixed declaration
+attempt records exact missing required ELF name, constructor echo stage, native
+walk callback count, matched fixture-method bitmask, and physical/inline matches.
+A separately physical inlinee is observed and skipped without being counted as
+inline proof; the walk continues to distinguish missing actual inlinees from a
+constructor/header/carrier mismatch. The runner still rejects any false frame
+proof, while normal deletion evidence remains independent. Optional native
+VMRuntime_isJavaDebuggable is a read-only policy diagnostic, not a capability.
+
+On fixed12+ a missing inline OatQuickMethodHeader::Contains ELF body is handled
+using its sourced GetCode/decoded CodeInfo code_size range equivalent, together
+with actual named Jit ContainsPc, IsNterp exclusion and native map/value oracles.
+Zero/insufficient decoded size rejects. Fixed11 still requires the named header
+Contains because its CodeInfo has no code_size field. Matching any required
+symbol or constructor echo alone never authorizes a frame result.
+
+The current debuggable JIT graph cannot provide two inlinees under fixed AOSP
+inliner policy. See `OWNED_ACTIVE_FRAME_NONDEBUGGABLE_PLAN.md` for the concrete
+isolated non-debuggable caller/native-bootstrap prerequisites. The diagnostic
+batch does not implement that separate executable environment or grant its proof.

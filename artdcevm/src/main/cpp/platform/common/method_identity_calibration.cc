@@ -2,53 +2,78 @@
 #include <cstdio>
 #include <limits>
 #include <set>
+#include <algorithm>
+#include <cstdlib>
+#include "platform/common/readable_mapping_scope.h"
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #endif
 
 namespace artdcevm::method_identity {
-bool ReadableMappingExtent(const void* address, size_t* extent) {
-  if (!address || !extent) return false;
-  uintptr_t pointer = reinterpret_cast<uintptr_t>(address);
+namespace {
+thread_local ScopedReadableMappings* active_mappings=nullptr;
+uintptr_t LookupAddress(const void* address){
+  uintptr_t pointer=reinterpret_cast<uintptr_t>(address);
 #if defined(__ANDROID__) && defined(__aarch64__)
-  // Android arm64 native allocations may carry a TBI/MTE tag in the top
-  // byte, while /proc/self/maps describes untagged virtual address ranges.
-  // Normalize only this integer lookup key: keep the original tagged pointer
-  // for every memory access, identity comparison and allocator operation.
   pointer &= UINT64_C(0x00ffffffffffffff);
 #endif
+  return pointer;
+}
+bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
 #if defined(__APPLE__)
-  mach_vm_address_t start = pointer;
-  mach_vm_size_t size = 0;
-  vm_region_basic_info_data_64_t info{};
-  mach_msg_type_number_t length = VM_REGION_BASIC_INFO_COUNT_64;
-  mach_port_t object = MACH_PORT_NULL;
-  const auto status = mach_vm_region(mach_task_self(), &start, &size,
-      VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&info), &length, &object);
-  if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
-  if (status != KERN_SUCCESS || !(info.protection & VM_PROT_READ) ||
-      pointer < start || pointer - start >= size) return false;
-  *extent = static_cast<size_t>(size - (pointer - start));
-  return true;
+  mach_vm_address_t start=pointer;mach_vm_size_t size=0;
+  vm_region_basic_info_data_64_t info{};mach_msg_type_number_t length=VM_REGION_BASIC_INFO_COUNT_64;
+  mach_port_t object=MACH_PORT_NULL;
+  const auto status=mach_vm_region(mach_task_self(),&start,&size,VM_REGION_BASIC_INFO_64,
+      reinterpret_cast<vm_region_info_t>(&info),&length,&object);
+  if(object!=MACH_PORT_NULL)mach_port_deallocate(mach_task_self(),object);
+  if(status!=KERN_SUCCESS||!(info.protection&VM_PROT_READ)||pointer<start||pointer-start>=size||size>UINTPTR_MAX-start)return false;
+  *region={uintptr_t(start),uintptr_t(start+size)};return true;
 #else
-  FILE* maps = std::fopen("/proc/self/maps", "r");
-  if (!maps) return false;
-  char line[1024];
-  bool found = false;
-  while (std::fgets(line, sizeof(line), maps)) {
-    unsigned long long start = 0, end = 0;
-    char protection[5]{};
-    if (std::sscanf(line, "%llx-%llx %4s", &start, &end, protection) != 3 ||
-        protection[0] != 'r' || end <= start || pointer < start || pointer >= end) continue;
-    if (end - pointer > std::numeric_limits<size_t>::max()) break;
-    *extent = static_cast<size_t>(end - pointer);
-    found = true;
-    break;
+  FILE* maps=std::fopen("/proc/self/maps","r");if(!maps)return false;
+  char line[1024];bool found=false;
+  while(std::fgets(line,sizeof(line),maps)){
+    unsigned long long start=0,end=0;char protection[5]{};
+    if(std::sscanf(line,"%llx-%llx %4s",&start,&end,protection)!=3||protection[0]!='r'||
+       end<=start||pointer<start||pointer>=end||end>UINTPTR_MAX)continue;
+    *region={uintptr_t(start),uintptr_t(end)};found=true;break;
   }
-  std::fclose(maps);
-  return found;
+  std::fclose(maps);return found;
 #endif
+}
+}
+ScopedReadableMappings::ScopedReadableMappings():previous_(active_mappings){
+#if !defined(__APPLE__)
+  ++os_queries_;FILE* maps=std::fopen("/proc/self/maps","r");
+  if(maps){char line[1024];
+    while(std::fgets(line,sizeof(line),maps)){
+      unsigned long long start=0,end=0;char protection[5]{};
+      if(std::sscanf(line,"%llx-%llx %4s",&start,&end,protection)==3&&protection[0]=='r'&&end>start&&end<=UINTPTR_MAX)
+        regions_.emplace_back(uintptr_t(start),uintptr_t(end));
+    }
+    complete_=std::ferror(maps)==0;std::fclose(maps);
+  }
+#endif
+  active_mappings=this;
+}
+ScopedReadableMappings::~ScopedReadableMappings(){if(active_mappings!=this)std::abort();active_mappings=previous_;}
+bool ScopedReadableMappings::Find(uintptr_t pointer,size_t* extent){
+  auto at=std::upper_bound(regions_.begin(),regions_.end(),pointer,
+      [](uintptr_t p,const auto& region){return p<region.first;});
+  if(at!=regions_.begin()){--at;if(pointer>=at->first&&pointer<at->second){*extent=size_t(at->second-pointer);return true;}}
+  if(complete_)return false;
+  std::pair<uintptr_t,uintptr_t> region;++os_queries_;
+  if(!ReadRegion(pointer,&region))return false;
+  regions_.insert(std::lower_bound(regions_.begin(),regions_.end(),region),region);
+  *extent=size_t(region.second-pointer);return true;
+}
+bool ReadableMappingExtent(const void* address,size_t* extent){
+  if(!address||!extent)return false;
+  const uintptr_t pointer=LookupAddress(address);
+  if(active_mappings)return active_mappings->Find(pointer,extent);
+  std::pair<uintptr_t,uintptr_t> region;if(!ReadRegion(pointer,&region))return false;
+  *extent=size_t(region.second-pointer);return true;
 }
 
 bool Calibrate(const runnable_jni::Context& context,

@@ -7,6 +7,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
+#include "platform/abi/arm64/android-common/runtime_debuggable.h"
 #include "hooks/shadow_hook_engine.h"
 #include <atomic>
 #include <array>
@@ -20,11 +21,13 @@ using Leaf=abi::arm64::android_common::FromReflectedMethod;
 using ContainsMethod=bool (*)(void*,void*);
 struct Roots {JNIEnv* env;std::array<jobject,8> refs{};
  ~Roots(){for(auto ref:refs)if(ref)env->DeleteGlobalRef(ref);}};
+struct Attempt {active_frame_recovery_proof::Family family;const char* missing;active_frame_recovery_proof::Report report;bool bound;};
 struct Request {
  ShadowHookEngine* hooks;Leaf leaf;const Roots* roots;std::array<jint,22> dex{};std::array<jint,3> integers{};
  std::array<void*,5> methods{};method_identity::Calibration calibration;
  void* cache=nullptr;ContainsMethod contains=nullptr;
  active_frame_recovery_proof::Report report;
+ std::vector<Attempt> attempts;bool debug_observed=false,java_debuggable=false;
  bool jit_compiled=false,passed=false;std::string error,model;
  Request(ShadowHookEngine* engine,Leaf native_leaf,const Roots* strong_roots):hooks(engine),leaf(native_leaf),roots(strong_roots){}
 
@@ -75,24 +78,44 @@ bool ProveStopped(const exclusive_owned_roots::Context& scope,void* data) {
  // full maps plus independent active values authorize this particular fixture.
  // Equal13/14/15/16 decoded storage does not authorize their different flags.
  for(Family family:{Family::kAndroid11,Family::kAndroid12,Family::kAndroid13,Family::kAndroid14,Family::kAndroid15,Family::kAndroid16,Family::kAndroid17}) {
-  Service service;if(!Service::Bind(family,finder,&service))continue;
+  Service service;const char* missing=nullptr;
+  if(!Service::Bind(family,finder,&service,&missing)){request.attempts.push_back({family,missing,{},false});continue;}
   auto report=service.Prove(target,request.cache,oracle,scratch.data(),scratch.size(),method_identity::ReadableMappingExtent);
+  request.attempts.push_back({family,nullptr,report,true});
   if(report.failure==Failure::kNone && report.frames==3 && report.integers==3 && report.references==3 && report.location_reads==6 && report.dex_pc_checks==3 && report.inline_flag_checks==2) {
    request.report=report;request.passed=true;
    request.model=family==Family::kAndroid11?"CodeInfo328/Visitor480/legacy-kind":family==Family::kAndroid12?"CodeInfo336/Visitor488":family==Family::kAndroid17?"CodeInfo368/Visitor520/slow-bool":"CodeInfo344/Visitor496";
    request.error.clear();return true;
   }
   // Prefer an actually observed target/frame failure over a pre-walk wrong ABI.
-  if(request.report.failure==Failure::kMissingBinding || report.frames>request.report.frames ||
+  if(request.report.failure==Failure::kMissingBinding || report.callbacks>request.report.callbacks || report.frames>request.report.frames ||
      (request.report.failure==Failure::kFrameIdentity && report.failure!=Failure::kFrameIdentity))request.report=report;
  }
  request.error=Failure(request.report.failure);return false;
+}
+const char* DeclarationName(active_frame_recovery_proof::Family family) {
+ using F=active_frame_recovery_proof::Family;
+ switch(family){case F::kAndroid11:return "fixed11-CodeInfo328-Visitor480";case F::kAndroid12:return "fixed12-CodeInfo336-Visitor488";
+ case F::kAndroid13:return "fixed13-CodeInfo344-Visitor496-slow-legacy";case F::kAndroid14:return "fixed14-CodeInfo344-Visitor496-slow-bool";
+ case F::kAndroid15:return "fixed15-CodeInfo344-Visitor496-slow-bool";case F::kAndroid16:return "fixed16-CodeInfo344-Visitor496-slow-bool";
+ case F::kAndroid17:return "fixed17-CodeInfo368-Visitor520-slow-bool";}return "unknown-source";
 }
 std::string Escape(const std::string& text){std::string result;for(char c:text){if(c=='"'||c=='\\')result+='\\';if(c=='\n'){result+="\\n";continue;}if(static_cast<unsigned char>(c)<32)continue;result+=c;}return result;}
 std::string Json(const Request& request){std::ostringstream out;out<<"{\"passed\":"<<(request.passed?"true":"false")<<",\"carrierJitCompiled\":"<<(request.jit_compiled?"true":"false")
  <<",\"frames\":"<<request.report.frames<<",\"integers\":"<<request.report.integers<<",\"references\":"<<request.report.references<<",\"locationReads\":"<<request.report.location_reads
  <<",\"dexPcChecks\":"<<request.report.dex_pc_checks<<",\"inlineFlagNativeObserved\":"<<(request.report.inline_flag_checks==2?"true":"false")
- <<",\"model\":\""<<Escape(request.model)<<"\",\"error\":\""<<Escape(request.error)<<"\"}";return out.str();}
+ <<",\"walkCallbacks\":"<<request.report.callbacks<<",\"matchedMethodMask\":"<<request.report.matched_mask
+ <<",\"physicalMethodMatches\":"<<request.report.physical_matches<<",\"inlineMethodMatches\":"<<request.report.inline_matches
+ <<",\"headerOwnershipChecks\":"<<request.report.header_checks<<",\"stage\":\""<<Escape(request.report.detail)<<"\""
+ <<",\"runtimeJavaDebuggableObserved\":"<<(request.debug_observed?"true":"false")<<",\"runtimeJavaDebuggable\":"<<(request.java_debuggable?"true":"false")
+ <<",\"model\":\""<<Escape(request.model)<<"\",\"error\":\""<<Escape(request.error)<<"\",\"attempts\":[";
+ bool first=true;for(const auto& attempt:request.attempts){if(!first)out<<',';first=false;
+  out<<"{\"sourceDeclaration\":\""<<DeclarationName(attempt.family)<<"\",\"bound\":"<<(attempt.bound?"true":"false")
+   <<",\"missingSymbol\":\""<<Escape(attempt.missing?attempt.missing:"")<<"\",\"stage\":\""<<Escape(attempt.report.detail)
+   <<"\",\"walkCallbacks\":"<<attempt.report.callbacks<<",\"matchedMethodMask\":"<<attempt.report.matched_mask
+   <<",\"physicalMethodMatches\":"<<attempt.report.physical_matches<<",\"inlineMethodMatches\":"<<attempt.report.inline_matches
+   <<",\"frames\":"<<attempt.report.frames<<'}';}
+ out<<"]}";return out.str();}
 }
 }
 extern "C" JNIEXPORT void JNICALL Java_com_github_ytlog_artdcevm_testing_OwnedActiveFrameFixture_awaitGate(JNIEnv*,jclass) {
@@ -121,6 +144,10 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_Owne
  request.cache=jni_access::OwnedEvolutionProofs().observed.receivers.jit_code_cache;
  if(!request.cache){request.error="Missing independently observed owned JIT cache receiver";return env->NewStringUTF(Json(request).c_str());}
  if(!hooks.Initialize(&request.error))return env->ExceptionCheck()?nullptr:env->NewStringUTF(Json(request).c_str());
+ // Fixed native VMRuntime declaration is a read-only runtime policy oracle.
+ // It returns a boolean and does not access the unused JNI receiver.
+ auto debug_query=reinterpret_cast<abi::arm64::android_common::JavaDebuggableQuery>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kJavaDebuggableQuery));
+ if(debug_query){request.debug_observed=true;request.java_debuggable=debug_query(env,nullptr)==JNI_TRUE;}
  request.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
  request.contains=reinterpret_cast<ContainsMethod>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"));
  exclusive_owned_roots::Service exclusive;

@@ -9,6 +9,7 @@ class Engine {
   virtual bool Source13Candidate()const=0;
   virtual void RecordDefinitions(JNIEnv*,const std::vector<Definition>&){}
   virtual bool FieldDeletionReady()const{return false;}
+  virtual bool AtomicBatchReady()const{return false;}
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;
 };
