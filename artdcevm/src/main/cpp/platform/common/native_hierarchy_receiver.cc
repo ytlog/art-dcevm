@@ -98,5 +98,5 @@ bool Preservation::Verify(const Graph& graph,const source_commit::Plan& plan)con
  for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];if(!node.affected)continue;++affected;size_t pair=absent;for(size_t i=0;i<plan.old_classes.size();++i)if(plan.old_classes[i]==node.klass){if(pair!=absent)return false;pair=i;}if(pair==absent||plan.new_classes[pair]!=node.replacement||!s.Replacement(graph,n,node.replacement))return false;}
  if(affected!=plan.old_classes.size())return false;if(!s.plan){for(size_t i=0;i<plan.old_classes.size();++i){auto it=std::find_if(graph.nodes.begin(),graph.nodes.end(),[&](const auto& n){return n.klass==plan.old_classes[i];});s.pair_nodes[i]=size_t(it-graph.nodes.begin());}s.plan=&plan;}return true;
 }
-void Preservation::BeginCommit(const Graph& graph,const source_commit::Plan& plan)const noexcept{assert(state_->graph==&graph&&state_->staged&&state_->plan==&plan&&plan.old_classes.size()==plan.new_classes.size());}
+void Preservation::BeginCommit(const Graph& graph,const source_commit::Plan& plan)const noexcept{(void)graph;(void)plan;assert(state_->graph==&graph&&state_->staged&&state_->plan==&plan&&plan.old_classes.size()==plan.new_classes.size());}
 }
