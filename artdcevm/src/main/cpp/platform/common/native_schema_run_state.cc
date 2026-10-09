@@ -122,6 +122,7 @@ bool RunState::PrepareOriginalWaiting(void*raw,native_source_stop::Session&stop)
 }
 bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit::Plan&p,std::string*e){
  auto&s=*state_;if(s.phase!=State::Phase::Running||!g.holder||!s.loading->Paused()||!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata)||!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return Fail(e,"Actual collected schema owner/root preparation refused");
+ if(!s.d.frames->PrepareRecoveryPlan(p,&s.frame_storage))return Fail(e,"Ordinary source frame exact Plan preparation refused");
  s.plan=&p;s.holder=g.holder;size_t publication_count=0;
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
  const auto collect=s.d.registry->Collect();
@@ -147,6 +148,7 @@ bool RunState::PrepareStopped(std::string*e){
  if(s.d.mapping.extent){
   if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,e))return false;
   s.read_context={this,MappingExtent};s.d.members.read_context=&s.read_context;s.mapper->UseReadContext(s.read_context);s.receivers.UseReadContext(s.read_context);s.authority.UseReadContext(s.read_context);
+  if(!s.cleanup->UseRecoveryContext(s.read_context))return Fail(e,"Cleanup refused actual stopped frame recovery context");
   if(s.d.guards&&!s.d.guards->UseStoppedReadContext(&s.read_context))return Fail(e,"Frozen schema verifier refused actual stopped read context");
  }
  // From here no JNI root can be created. Existing binds only known identities.

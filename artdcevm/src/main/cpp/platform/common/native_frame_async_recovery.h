@@ -12,6 +12,7 @@ class Service {
   s.method_=reinterpret_cast<bool(*)(const void*,void*,uintptr_t)>(finder(kMethod));
   s.pc_=reinterpret_cast<bool(*)(const void*,uintptr_t)>(finder(kPc));return s;
  }
+ bool Bound()const noexcept {return runtime_&&(method_||pc_);}
  bool Query(void*method,uintptr_t pc,const modern_field_metadata::ReadContext&context)const noexcept {
   if(!runtime_||!method||!pc||(!method_&&!pc_)||!context.owner||!context.extent)return false;
   size_t extent=0;if(!context.extent(context.owner,runtime_,&extent)||extent<sizeof(void*))return false;

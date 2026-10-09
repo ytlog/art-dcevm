@@ -37,7 +37,9 @@ class Service final:public native_hierarchy_private_ledger::CleanupOwner {
                                  source_commit::Plan&,std::string*);
   // Before native provider construction, establish actual collected frame/root
   // proof from this pre-bound closure. No delegate is inferred at this stage.
+  bool UseRecoveryContext(const modern_field_metadata::ReadContext&) noexcept;
   bool PrepareCollected(source_commit::Plan&,std::string*);
+  const whole_process_frames::StoppedRecoveryProof& RecoveryProof()const noexcept{return recovery_proof_;}
   bool RefreshFinal(const prepared_roots::Resolver&) noexcept;
   // The sole Source Run observer invokes this after successful facade.Validate
   // and before Hierarchy Session/Ledger BeginCommit. No validation is repeated.
@@ -61,6 +63,8 @@ class Service final:public native_hierarchy_private_ledger::CleanupOwner {
   transaction_root::Holder holder_header_{};transaction_root::Metadata holder_metadata_;
   source_commit::Plan*plan_=nullptr;source_commit::Plan expected_;prepared_roots::Bindings roots_;
   native_source_commit::Services*delegate_=nullptr;
+  const modern_field_metadata::ReadContext* recovery_context_=nullptr;
+  mutable whole_process_frames::StoppedRecoveryProof recovery_proof_;
   mutable whole_process_frames::Report frames_report_;
   enum class Phase{kEmpty,kCollected,kFinalRefreshed,kValidated,kObserver,kLedger,kDelegating,kCompleted};
   mutable Phase phase_=Phase::kEmpty;

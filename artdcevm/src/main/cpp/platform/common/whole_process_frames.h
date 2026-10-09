@@ -197,6 +197,7 @@ class Service {
       if(!this->header)return Reject("whole-frame-unmarked-or-unknown-compiled-code");
       if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
       if(r.recovery){
+        if(!s.async_.Bound())return Reject("whole-frame-original-async-recovery-reader-unavailable");
         const auto kind=s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit);
         if(kind==native_frame_code_owner::Kind::Aot)++r.report.aot_frames;
         if(kind==native_frame_code_owner::Kind::Unknown)return Reject("whole-frame-recovery-code-owner-unproved");

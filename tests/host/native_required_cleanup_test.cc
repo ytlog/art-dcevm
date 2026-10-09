@@ -99,6 +99,7 @@ int main(int argc,char** argv){
  transaction_root::Owners range{owners.data(),owners.data()+owners.size(),owners.data()+owners.size()};uint64_t bits=1;
  holder.array_handle=&root_slot;holder.redefinitions=&range;holder.initialized={&bits,1,1};holder.actually_structural={&bits,1,1};holder.initial_structural={&bits,1,1};
  transaction_root::Metadata actual;assert(transaction_root::ReadMetadata(holder,1,transaction_root::OwnerFamily::kAndroid15,&actual));
+ assert(scanner.PrepareRecoveryPlan(plan,&storage));
  native_required_cleanup::Service cleanup(closure,thread.data(),&driver,session,scanner,storage,caches,&jit_cache,provider,registry);
  auto wrong_metadata=actual;wrong_metadata.initialized.capacity=2;assert(!cleanup.AttachHolder(&holder,wrong_metadata));
  assert(!cleanup.AttachHolder(reinterpret_cast<transaction_root::Holder*>(0x1000),actual));
@@ -108,6 +109,9 @@ int main(int argc,char** argv){
  driver.type=1;assert(!cleanup.AttachHolder(&holder,actual));driver.type=0;
  assert(cleanup.AttachHolder(&holder,actual)&&!cleanup.AttachHolder(&holder,actual));
  assert(!cleanup.PrepareCollected(plan,&error));assert(session.Begin(thread.data(),thread.size()));
+ modern_field_metadata::ReadContext recovery_context{&session,[](void*raw,const void*p,size_t*out)noexcept {if(!static_cast<native_source_stop::Session*>(raw)->IsStopped(thread.data()))return false;return method_identity::ReadableMappingExtent(p,out);}};
+ assert(!cleanup.PrepareCollected(plan,&error)&&error=="Cleanup frame recovery lacks ordinary exact Plan preparation and stopped read context"&&!cleanup.RecoveryProof().ValidateFinal(plan));
+ assert(cleanup.UseRecoveryContext(recovery_context));
  assert(!cleanup.IsStopped(&driver_marker,&holder));assert(!cleanup.Verify(&driver,&holder,plan));
  native_frame.flags=0;assert(!cleanup.PrepareCollected(plan,&error));native_frame.flags=0x100;
  assert(cleanup.PrepareCollected(plan,&error)&&cleanup.Verify(&driver,&holder,plan));
@@ -129,7 +133,8 @@ int main(int argc,char** argv){
  owner_disable_proxy(&owner_heap,thread.data());OwnerNative(thread.data());unsigned char carrier;owner_stop_proxy(&carrier,s::kFinalCause,true);
  forbid_provider_allocation=true;
  assert(registry.Resolve()&&provider.RefreshManagedRoots(plan,facade->Delegate(),registry.Final())&&cleanup.RefreshFinal(registry.Final()));
- assert(!cleanup.CommitObserver(plan)&&!facade->Validate(foreign_plan)&&facade->Validate(plan));
+ assert(!cleanup.RecoveryProof().ValidateFinal(plan));
+ assert(!cleanup.CommitObserver(plan)&&!facade->Validate(foreign_plan)&&facade->Validate(plan)&&cleanup.RecoveryProof().ValidateFinal(plan));
  assert(!cleanup.CommitObserver(foreign_plan));
  auto observer=[](const source_commit::Plan& p,void* raw) noexcept{auto& service=*static_cast<native_required_cleanup::Service*>(raw);assert(service.CommitObserver(p)&&!service.CommitObserver(p)&&!service.Completed());service.BeginCommit(p);};
  assert(source_commit::Run(plan,*facade,{&cleanup,observer})&&cleanup.Completed());

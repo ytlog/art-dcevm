@@ -6,7 +6,7 @@
 #pragma clang diagnostic pop
 namespace {
 int runtime_object;void*runtime_slot=&runtime_object;
-bool old_declaration=false,refuse_async=false,deny_slot=false;unsigned async_calls=0;
+bool missing_async=false,old_declaration=false,refuse_async=false,deny_slot=false;unsigned async_calls=0;
 bool RuntimeMethod(const void* runtime,void*method,uintptr_t pc){
  assert(gc&&exclusive&&list_locked&&runtime==&runtime_object&&method==&compiled_method&&pc==reinterpret_cast<uintptr_t>(header)+36);
  ++async_calls;return !aot&&!refuse_async; // actual fixed ART: AOT cannot async-deopt
@@ -16,8 +16,8 @@ const void*MethodHeader(void*m,uintptr_t pc){return m==&compiled_method&&pc==rei
 struct RecoveryHooks:FrameHooks {
  void*FindSymbol(const char*lib,const char*name)override {
   if(!std::strcmp(name,native_frame_async_recovery::Service::kRuntime))return &runtime_slot;
-  if(!std::strcmp(name,native_frame_async_recovery::Service::kMethod))return old_declaration?nullptr:Fn(RuntimeMethod);
-  if(!std::strcmp(name,native_frame_async_recovery::Service::kPc))return old_declaration?Fn(RuntimePc):nullptr;
+  if(!std::strcmp(name,native_frame_async_recovery::Service::kMethod))return missing_async||old_declaration?nullptr:Fn(RuntimeMethod);
+  if(!std::strcmp(name,native_frame_async_recovery::Service::kPc))return !missing_async&&old_declaration?Fn(RuntimePc):nullptr;
   if(!std::strcmp(name,native_frame_code_owner::Service::kMethodHeader))return Fn(MethodHeader);
   return FrameHooks::FindSymbol(lib,name);
  }
@@ -32,6 +32,9 @@ int main(){
  native_cache::Service cache;assert(cache.Bind(hooks,&thread_list,&error)&&cache.Prepare(&error));
  native_source_stop::Service stop;auto states=State(hooks);assert(native_source_stop::Service::Bind(hooks,&heap,states,&stop,&error));Calibrate(stop);self.flags=0;
  source_commit::Plan plan;plan.mirror=&runtime_object;plan.old_classes={&compiled_method};plan.new_classes={&shadow_method};
+ missing_async=true;
+ {whole_process_frames::Service absent;assert(whole_process_frames::Service::Bind(code_info_view::SourceFamily::kAndroid14,[&](const char*n){return hooks.FindSymbol("libart.so",n);},&absent));whole_process_frames::Service::Prepared storage;assert(absent.Prepare(&storage)&&absent.PrepareRecoveryPlan(plan,&storage));native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));modern_field_metadata::ReadContext context{&owner,Extent};auto report=absent.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context);assert(!report.accepted&&!std::strcmp(report.failure,"whole-frame-original-async-recovery-reader-unavailable"));}
+ missing_async=false;
  for(bool old:{false,true}){
   old_declaration=old;whole_process_frames::Service scanner;
   assert(whole_process_frames::Service::Bind(code_info_view::SourceFamily::kAndroid14,[&](const char*n){return hooks.FindSymbol("libart.so",n);},&scanner));

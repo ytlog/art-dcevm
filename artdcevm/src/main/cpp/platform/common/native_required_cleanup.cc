@@ -60,10 +60,15 @@ bool Service::IsStopped(void* d,const transaction_root::Holder* h)const noexcept
 }
 bool Service::IsFinalWindow(void* d,const transaction_root::Holder* h)const noexcept{return IsStopped(d,h)&&stop_.IsFinalWindow(self_);}
 bool Service::Exact(const source_commit::Plan& p)const noexcept{return plan_==&p&&source_commit::SameIdentity(p,expected_);}
+bool Service::UseRecoveryContext(const modern_field_metadata::ReadContext&context) noexcept{
+ if(phase_!=Phase::kEmpty||!stop_.IsCollectedStop(self_)||!context.owner||!context.extent||!frame_storage_.recovery_plan||(recovery_context_&&recovery_context_!=&context))return false;
+ recovery_context_=&context;return true;
+}
 bool Service::PrepareCollected(source_commit::Plan& p,std::string* error){
  if(phase_!=Phase::kEmpty||!IsStopped(driver_,holder_)||!stop_.IsCollectedStop(self_)||!cache_.PreparedForCurrentThread())return Fail(error,"Cleanup requires actual Collected stop and bound native closure");
+ if(!recovery_context_||frame_storage_.recovery_plan!=&p)return Fail(error,"Cleanup frame recovery lacks ordinary exact Plan preparation and stopped read context");
  expected_=p;roots_=prepared_roots::Bindings{};if(!rooted_schema_plan::CollectBindings(&expected_,registry_.Existing(),&roots_))return Fail(error,"Cleanup Plan has an unregistered managed root");
- frames_report_=frames_.Scan(stop_,self_,cache_,jit_,frame_storage_);
+ frames_report_=frames_.ScanRecovery(stop_,self_,cache_,jit_,frame_storage_,p,*recovery_context_,&recovery_proof_);
  if(!frames_report_.accepted)return Fail(error,frames_report_.failure);
  plan_=&p;phase_=Phase::kCollected;return true;
 }
@@ -94,8 +99,8 @@ bool Service::ValidateFinal(const source_commit::Plan& p)const{
  if((phase_!=Phase::kFinalRefreshed&&phase_!=Phase::kValidated)||!Verify(driver_,holder_,p)||!IsFinalWindow(driver_,holder_))return false;
  // The full original frame walker runs again in the actual final transfer,
  // including every registered thread and inline/compiled location proof.
- frames_report_=frames_.Scan(stop_,self_,cache_,jit_,frame_storage_);
- if(!frames_report_.accepted||!delegate_->Validate(p))return false;
+ frames_report_=frames_.ScanRecovery(stop_,self_,cache_,jit_,frame_storage_,p,*recovery_context_,&recovery_proof_);
+ if(!frames_report_.accepted||!recovery_proof_.ValidateFinal(p)||!delegate_->Validate(p))return false;
  phase_=Phase::kValidated;return true;
 }
 bool Service::CommitObserver(const source_commit::Plan& p) noexcept{
