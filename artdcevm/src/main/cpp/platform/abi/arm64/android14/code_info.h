@@ -1,6 +1,8 @@
 #pragma once
 #include "platform/abi/arm64/android13/code_info.h"
 namespace artdcevm::abi::arm64::android14 {
+// Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
+inline constexpr uint32_t kHasInlineInfo=1u<<0;
 // Fixed android-14.0.0_r1 runtime/stack_map.h and base/bit_table.h.
 // Verified identical decoded fields/BitTable storage to 13; flags have their
 // own source declaration. This alias does not select or authorize a device ABI.

@@ -22,6 +22,7 @@ class FieldMetadata {
   bool Calibrate(const runnable_jni::Context&, jobject strong_global_class,
                  const char* expected_class_descriptor, const FieldOracle*, size_t count, std::string*);
   bool Calibrated() const { return calibrated_; }
+  bool InterfaceDeclarationCalibrated()const{return interface_declaration_calibrated_;}
   Model StorageModel() const { return model_; }
   bool Fields(void* klass, bool is_static, field_array::View*, std::string*) const;
   field_copy::CopyClassView Class(void* klass, bool is_static) const;
@@ -47,6 +48,7 @@ class FieldMetadata {
   Mark root_ = nullptr;
   bool Text(void* field, Model, const char** name, const char** descriptor, std::string*) const;
   bool bound_ = false, calibrated_ = false;
+  bool named_interface_relation_=false,interface_declaration_calibrated_=false;
   Model model_ = Model::kSplit;
 };
 }

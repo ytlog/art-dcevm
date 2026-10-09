@@ -1,6 +1,8 @@
 #pragma once
 #include "platform/abi/arm64/android11/code_info.h"
 namespace artdcevm::abi::arm64::android17 {
+// Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
+inline constexpr uint32_t kHasInlineInfo=1u<<0;
 using BitRegion=android11::BitRegion;
 // Android 17 BitTableBase stores the final row end separately as uint32_t.
 template<size_t N> struct BitTable { BitRegion region; uint32_t rows, row_bits; uint16_t columns[N]; };

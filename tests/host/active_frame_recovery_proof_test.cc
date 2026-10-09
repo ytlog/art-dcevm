@@ -1,0 +1,156 @@
+#include "platform/common/active_frame_recovery_proof.h"
+#include <array>
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+using namespace artdcevm;
+using namespace active_frame_recovery_proof;
+namespace {
+Family family;int method_ids[3],thread,jit;void* active_method;
+bool missing_context=false,bad_owner=false,bad_native=false,bad_fast=false,skip_inner=false,bad_map=false,bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;
+unsigned creates=0,resets=0,destroys=0,reference_fast11=0;
+struct Context final:abi::arm64::context::Prefix {void Reset()override{++resets;}~Context()override{++destroys;}
+ void FillCalleeSaves(uint8_t*,const abi::arm64::context::FrameInfo&)override{}
+ void SetSP(uintptr_t)override{}void SetPC(uintptr_t)override{}void SetArg0(uintptr_t)override{}
+ bool IsAccessibleGPR(uint32_t)override{return !inaccessible;}uintptr_t* GetGPRAddress(uint32_t)override{return nullptr;}
+ uintptr_t GetGPR(uint32_t reg)override{assert(reg==7);return (uintptr_t{123}<<32)|123;}void SetGPR(uint32_t,uintptr_t)override{}
+ bool IsAccessibleFPR(uint32_t)override{return !inaccessible;}uintptr_t GetFPR(uint32_t reg)override{assert(reg==7);return (uintptr_t{123}<<32)|123;}};
+abi::arm64::context::Prefix* Create(){++creates;return missing_context?nullptr:new Context;}
+alignas(8) uint32_t header[2]{};
+alignas(8) std::array<uint32_t,16> quick{};
+std::array<uint32_t,8> stack{};std::array<uint32_t,12> inlines{};uint32_t mask=63,roots=0xa8;
+std::array<uint32_t,6> maps{};std::array<uint32_t,12> catalog{};
+template<size_t N> void Table(abi::arm64::android11::BitTable<N>& t,void* data,size_t bits,uint32_t rows,unsigned width) {
+ t.region={data,0,bits};t.rows=rows;for(size_t i=0;i<=N;++i)t.columns[i]=i*width;
+}
+template<size_t N> void Table(abi::arm64::android17::BitTable<N>& t,void* data,size_t bits,uint32_t rows,unsigned width) {
+ t.region={data,0,bits};t.rows=rows;t.row_bits=N*width;for(size_t i=0;i<N;++i)t.columns[i]=i*width;
+}
+template<class T> void Decode(T* info,const void* h) {
+ assert(h==header);*info={};info->flags=bad_flag?0:1;info->dex_regs=2;info->frame_size=4;
+ Table(info->stack_maps,stack.data(),256,1,32);Table(info->inline_infos,inlines.data(),384,2,32);
+ Table(info->dex_masks,&mask,6,1,6);Table(info->dex_maps,maps.data(),192,6,32);
+ Table(info->dex_catalog,catalog.data(),384,6,32);Table(info->stack_masks,&roots,16,1,16);
+}
+template<class T> abi::arm64::android11::TableIterator Map(const T* info,uintptr_t pc,int32_t isa) {
+ assert(pc==32 && isa==2);return {const_cast<void*>(static_cast<const void*>(&info->stack_maps)),bad_map?99u:0u};
+}
+abi::arm64::android11::TableIterator Map11(const abi::arm64::android11::CodeInfo* info,uint32_t pc,int32_t isa){return Map(info,pc,isa);}
+bool Unmapped(const void*,size_t*){return false;}
+bool JitContains(const void* j,const void* pc){assert(j==&jit);return !bad_owner && pc!=nullptr;}
+bool HeaderContains(const void* h,uintptr_t pc){assert(h==header);return pc>reinterpret_cast<uintptr_t>(h);}
+bool Nterp(const void* h){assert(h==header);return false;}
+template<class V> void Construct(void* raw,void* t,void* c,abi::arm64::stack::WalkKind kind,bool check) {
+ assert(t==&thread && c && check);auto* visitor=static_cast<V*>(raw);
+ std::memset(static_cast<unsigned char*>(raw)+8,0,sizeof(V)-8);visitor->thread=t;visitor->context=c;visitor->kind=kind;
+}
+template<class V> void Walk(void* raw,bool transitions) {
+ assert(!transitions);auto* v=static_cast<V*>(raw);assert(v->context && v->kind==abi::arm64::stack::WalkKind::kIncludeInlined);
+ for(unsigned i=0;i<3;++i){if(skip_inner && i==0)continue;
+  v->depth=i;v->quick_frame=reinterpret_cast<void**>(quick.data());v->header=header;
+  v->pc=reinterpret_cast<uintptr_t>(header)+(family==Family::kAndroid11?8:4)+32;
+  v->inline_frames.begin.row=0;v->inline_frames.end.row=(bad_inline && i==1)?2:2-i;
+  active_method=&method_ids[2-i];if(!v->VisitFrame())break;
+ }
+}
+uint32_t DexPc(const void*,bool abort){assert(!abort);for(unsigned i=0;i<3;++i)if(active_method==&method_ids[i])return 10+i+(bad_pc?1:0);return UINT32_MAX;}
+void* Method(const void*){return active_method;}
+bool Slow(const void*,void* method,uint16_t reg,Kind kind,uint32_t* value) {
+ assert((reg==0 && kind==Kind::kInt)||(reg==1 && kind==Kind::kReference));
+ if(bad_native)return false;
+ for(unsigned i=0;i<3;++i)if(method==&method_ids[i]){*value=quick[2+2*i+reg];return true;}
+ return false;
+}
+bool SlowModern(const void* visitor,void* method,uint16_t reg,Kind kind,uint32_t* value,bool full) {
+ assert(!full);return Slow(visitor,method,reg,kind,value);
+}
+bool Fast(const void*,NativeLocation location,uint32_t* value) {
+ assert(location.kind==0 && location.value>=8 && location.value<=28);
+ *value=quick[location.value/4]+(bad_fast?1:0);return true;
+}
+bool Fast11(const void* visitor,NativeLocation location,Kind kind,uint32_t* value){assert(kind==((location.value%8)==4?Kind::kReference:Kind::kInt));if(kind==Kind::kReference)++reference_fast11;return Fast(visitor,location,value);}
+struct Finder {
+ const char* missing=nullptr;
+ template<class T> static void* Fn(T function){return reinterpret_cast<void*>(function);}
+ void* operator()(const char* name)const {
+  if(missing && std::strcmp(missing,name)==0)return nullptr;
+  if(wrong_geometry && std::strcmp(name,abi::arm64::stack::kConstruct)==0)
+   return family==Family::kAndroid17?Fn(Construct<abi::arm64::stack::Visitor13>):Fn(Construct<abi::arm64::stack::Visitor17>);
+  if(std::strstr(name,"GetDexPc"))return Fn(DexPc);
+  if(std::strcmp(name,abi::arm64::context::kCreate)==0)return Fn(Create);
+  if(std::strcmp(name,abi::arm64::android11::frame_registers::kSlow)==0)return Fn(Slow);
+  if(std::strcmp(name,abi::arm64::android14::frame_registers::kSlow)==0)return Fn(SlowModern);
+  if(std::strcmp(name,abi::arm64::android11::frame_registers::kFast)==0)return Fn(Fast11);
+  if(std::strcmp(name,abi::arm64::android12::frame_registers::kFast)==0)return Fn(Fast);
+  if(std::strstr(name,"ContainsPc"))return Fn(JitContains);
+  if(std::strstr(name,"Header8Contains"))return Fn(HeaderContains);
+  if(std::strstr(name,"IsNterpMethodHeader"))return Fn(Nterp);
+  if(std::strcmp(name,abi::arm64::stack::kMethod)==0)return Fn(Method);
+#define FAMILY_CASE(f,T,V) case Family::f: \
+ if(std::strcmp(name,abi::arm64::stack::kConstruct)==0)return Fn(Construct<abi::arm64::stack::V>); \
+ if(std::strstr(name,"WalkStack"))return Fn(Walk<abi::arm64::stack::V>); \
+ if(std::strstr(name,"CodeInfoC2"))return Fn(Decode<abi::arm64::T::CodeInfo>); \
+ if(std::strstr(name,"GetStackMapForNativePcOffset"))return Fn(Map<abi::arm64::T::CodeInfo>);break
+  if(family==Family::kAndroid11 && std::strstr(name,"GetStackMapForNativePcOffset"))return Fn(Map11);
+  switch(family){FAMILY_CASE(kAndroid11,android11,Visitor11);FAMILY_CASE(kAndroid12,android12,Visitor12);
+   FAMILY_CASE(kAndroid13,android13,Visitor13);FAMILY_CASE(kAndroid14,android14,Visitor13);
+   FAMILY_CASE(kAndroid15,android15,Visitor13);FAMILY_CASE(kAndroid16,android16,Visitor13);FAMILY_CASE(kAndroid17,android17,Visitor17);}
+#undef FAMILY_CASE
+  return nullptr;
+ }
+};
+void Reset(){missing_context=bad_owner=bad_native=bad_fast=skip_inner=bad_map=bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;creates=resets=destroys=reference_fast11=0;
+ quick={};void* carrier=&method_ids[0];std::memcpy(quick.data(),&carrier,sizeof(carrier));
+ for(unsigned i=0;i<3;++i){quick[2+2*i]=123+111*i;quick[3+2*i]=0x11000+0x1000*i;}
+ stack={};stack[2]=11;stack[4]=stack[5]=stack[6]=stack[7]=1;inlines={};inlines[0]=1;inlines[1]=12;inlines[7]=13;inlines[5]=5;inlines[11]=7;
+ mask=63;roots=0xa8;for(unsigned i=0;i<6;++i){maps[i]=i+1;catalog[2*i]=1;catalog[2*i+1]=i+3;}
+}
+void Check(Family f){family=f;Reset();Service service;
+ assert(!Service::Bind(f,Finder{abi::arm64::context::kCreate},&service));
+
+ assert(!Service::Bind(f,Finder{f==Family::kAndroid14 || f==Family::kAndroid15 || f==Family::kAndroid16 || f==Family::kAndroid17 ? abi::arm64::android14::frame_registers::kSlow : abi::arm64::android11::frame_registers::kSlow},&service));
+ assert(Service::Bind(f,Finder{},&service));
+ Witness witnesses[3][2];for(unsigned i=0;i<3;++i)witnesses[i][0]={0,Kind::kInt,quick[2+2*i]},witnesses[i][1]={1,Kind::kReference,quick[3+2*i]};
+ Oracle oracle{{&method_ids[0],2,witnesses[0],2,10},{{&method_ids[1],2,witnesses[1],2,11},{&method_ids[2],2,witnesses[2],2,12}}};
+ decoded_frame_recovery::Location scratch[2];auto run=[&](){return service.Prove(&thread,&jit,oracle,scratch,2);};
+ auto result=run();assert(result.failure==Failure::kNone && result.frames==3 && result.references==3 && result.integers==3 && result.location_reads==6 && result.dex_pc_checks==3 && result.inline_flag_checks==2);
+ assert(creates==1 && resets==1 && destroys==1);if(f==Family::kAndroid11)assert(reference_fast11==3);
+ assert(service.Prove(&thread,&jit,oracle,scratch,2,Unmapped).failure==Failure::kTableMemory);
+ missing_context=true;assert(run().failure==Failure::kMissingContext);missing_context=false;
+ bad_owner=true;assert(run().failure==Failure::kCodeOwnership);bad_owner=false;
+ bad_pc=true;assert(run().failure==Failure::kDexPc);bad_pc=false;
+ ++inlines[7];assert(run().failure==Failure::kDexPc);--inlines[7];
+ ++stack[2];assert(run().failure==Failure::kDexPc);--stack[2];
+ bad_flag=true;assert(run().failure==Failure::kInlineFlag);bad_flag=false;
+ auto pc=oracle.inlinees[0].expected_dex_pc;++oracle.inlinees[0].expected_dex_pc;assert(run().failure==Failure::kDexPc);oracle.inlinees[0].expected_dex_pc=pc;
+ bad_map=true;assert(run().failure==Failure::kDecodedMap);bad_map=false;
+ roots=0;assert(run().failure==Failure::kReferenceMask);roots=0xa8;
+ bad_native=true;assert(run().failure==Failure::kNativeRead);bad_native=false;
+ bad_fast=true;assert(run().failure==Failure::kValueMismatch);bad_fast=false;
+ ++witnesses[2][1].expected;assert(run().failure==Failure::kValueMismatch);--witnesses[2][1].expected;
+ skip_inner=true;assert(run().failure==Failure::kMissingFrames);skip_inner=false;
+ bad_inline=true;assert(run().failure==Failure::kFrameIdentity);bad_inline=false,inaccessible=false,wrong_geometry=false,bad_pc=false,bad_flag=false;
+ auto saved=witnesses[0][0].expected;witnesses[0][0].expected=witnesses[1][0].expected;
+ assert(run().failure==Failure::kMissingOracle);witnesses[0][0].expected=saved;
+ witnesses[0][1].expected=0;assert(run().failure==Failure::kMissingOracle);
+ witnesses[0][1].expected=quick[3];wrong_geometry=true;
+ Service wrong;assert(Service::Bind(f,Finder{},&wrong));
+ assert(wrong.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kFrameIdentity);wrong_geometry=false,bad_pc=false,bad_flag=false;
+ witnesses[0][1].expected=quick[3];
+ Service fallback;assert(Service::Bind(f,Finder{f==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast},&fallback));
+ assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone);
+ for(uint32_t kind=2;kind<=5;++kind) {
+  catalog[0]=kind+1;catalog[1]=8;
+  assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone);
+  inaccessible=true;assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNativeRead);inaccessible=false;
+ }
+ catalog[0]=2;catalog[1]=124;
+ assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kNone); // constant123
+ catalog[0]=1;catalog[1]=17;
+ assert(fallback.Prove(&thread,&jit,oracle,scratch,2).failure==Failure::kDecodedMap); // out-of-frame64
+ catalog[1]=3;
+ assert(destroys+1==creates); // only null Context allocation has no destructor.
+}
+}
+int main(){for(auto family:{Family::kAndroid11,Family::kAndroid12,Family::kAndroid13,Family::kAndroid14,Family::kAndroid15,Family::kAndroid16,Family::kAndroid17})Check(family);
+ puts("Active frame native proof service: source signatures, original Context lifetime, physical/2-inline value and root witnesses, fail-closed negative paths passed; host fixtures only");}

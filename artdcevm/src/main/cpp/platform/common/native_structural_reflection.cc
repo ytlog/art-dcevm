@@ -5,6 +5,7 @@
 #include "platform/common/native_method_table.h"
 #include <algorithm>
 #include <cstdio>
+#include "platform/common/native_interface_graph.h"
 namespace artdcevm::native_structural_reflection {
 using detail::Visitor;using detail::Visit;
 namespace {
@@ -17,9 +18,15 @@ class NativeResolutionObserver final:public Observer {
     same_=reinterpret_cast<bool(*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
     // Fixed Class::Implements(ObjPtr<Class>) supplies complete transitive
     // interface ancestry without reading an IfTable or guessing its layout.
+    assignable_=reinterpret_cast<bool(*)(void*,uintptr_t)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE"));
     implements_=reinterpret_cast<bool(*)(void*,uintptr_t)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class10ImplementsENS_6ObjPtrIS1_EE"));
   }
   bool Available()const{return root_&&same_;}
+  bool PrepareHolder(void* holder,std::string* error){
+    if(assignable_||implements_)return true;
+    if(!metadata_.InterfaceDeclarationCalibrated()){if(error)*error="Interface table declaration lacks independent public calibration";return false;}
+    holder_=holder;return native_interface_graph::Read(metadata_,holder,&interfaces_,error);
+  }
   const char* FailureReason()const override{return failure_;}
   bool ReadFlags(void* member,Kind kind,uint32_t* out)const override {
     size_t extent=0;
@@ -51,7 +58,14 @@ class NativeResolutionObserver final:public Observer {
     if(!target||!holder||!method_identity::ReadableMappingExtent(target,&extent)||
        !class_metadata::ReadState(source,target,extent,&state))return Fail("declaring-class-state-unreadable");
     if(state.IsPrimitive()){*out=false;return true;}
-    if(state.access_flags&0x200u){if(!implements_)return Fail("named-interface-implements-unavailable");*out=implements_(holder,uintptr_t(target));return true;}
+    if(state.access_flags&0x200u){
+      if(assignable_){*out=assignable_(target,uintptr_t(holder));return true;}
+      if(implements_){*out=implements_(holder,uintptr_t(target));return true;}
+      if(!metadata_.InterfaceDeclarationCalibrated())return Fail("interface-table-declaration-not-independently-calibrated");
+      std::string error;
+      if(holder!=holder_||!native_interface_graph::Matches(metadata_,holder,interfaces_,&error))return Fail("live-holder-interface-table-invalid");
+      *out=std::find(interfaces_.begin(),interfaces_.end(),target)!=interfaces_.end();return true;
+    }
     // The pure plan already captured the entire real superclass chain.
     // Non-interface targets outside it cannot be ancestors; descriptors and
     // loader delegation never substitute for an actual Class identity.
@@ -67,8 +81,9 @@ class NativeResolutionObserver final:public Observer {
  private:
   bool Fail(const char* reason)const{failure_=reason;return false;}
   mutable const char* failure_=nullptr;
+  void* holder_=nullptr;std::vector<void*> interfaces_;
   const modern_field_metadata::FieldMetadata& metadata_;method_identity::Calibration model_;
-  void* (*root_)(void*)=nullptr;bool (*same_)(void*,void*)=nullptr;bool (*implements_)(void*,uintptr_t)=nullptr;
+  void* (*root_)(void*)=nullptr;bool (*same_)(void*,void*)=nullptr;bool (*implements_)(void*,uintptr_t)=nullptr;bool (*assignable_)(void*,uintptr_t)=nullptr;
 };
 std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commit::Plan& source,
     const modern_field_metadata::FieldMetadata& metadata,const ResolutionBinding& binding,std::string* error){
@@ -79,6 +94,7 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
     return fail("Resolution invalidation lacks independent native Class/loader/member provenance");
   auto observer=std::make_shared<NativeResolutionObserver>(metadata,*binding.method_model,*binding.hooks);
   if(!observer->Available())return fail("Resolution invalidation lacks named native identity services");
+  if(!observer->PrepareHolder(source.mirror,error))return nullptr;
   std::vector<Replacement> pairs;
   for(size_t p=0;p<source.old_classes.size();++p){Replacement pair;
     if(!observer->ReadClass(source.old_classes[p],&pair.before)||!observer->ReadClass(source.new_classes[p],&pair.after))

@@ -9,6 +9,7 @@
 #include <set>
 #include <vector>
 #include <algorithm>
+#include "platform/common/native_interface_graph.h"
 namespace artdcevm::modern_field_metadata {
 namespace {
 using SplitClass=abi::arm64::android11::Class11;
@@ -40,6 +41,8 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   auto root=reinterpret_cast<Mark>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   if(!leaf||!class_descriptor||!mark||!root)
     return Fail(error,"Missing named reflected Field, Class descriptor or read barrier capability");
+  named_interface_relation_=hooks.FindSymbol("libart.so","_ZN3art6mirror5Class10ImplementsENS_6ObjPtrIS1_EE")||
+      hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE");
   field_leaf_=leaf;name_=name;descriptor_=descriptor;class_descriptor_=class_descriptor;
   mark_=mark;root_=root;bound_=true;
   if(error)error->clear();return true;
@@ -198,6 +201,10 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject globa
     return false;
   }
   model_=split?Model::kSplit:Model::kMerged;calibrated_=true;
+  if(!named_interface_relation_&&!interface_declaration_calibrated_){
+    if(!native_interface_graph::Calibrate(context,global_class,*this,error)){calibrated_=false;return false;}
+    interface_declaration_calibrated_=true;
+  }
   if(error)error->clear();return true;
 }
 bool FieldMetadata::Descriptor(void* klass,Model model,const char** output,std::string* error)const {

@@ -82,6 +82,7 @@ int main() {
   Check<abi::arm64::android12::CodeInfo>(SourceFamily::kAndroid12);
   Check<abi::arm64::android13::CodeInfo>(SourceFamily::kAndroid13);
   Check<abi::arm64::android14::CodeInfo>(SourceFamily::kAndroid14);
+  Check<abi::arm64::android15::CodeInfo>(SourceFamily::kAndroid15);
   Check<abi::arm64::android16::CodeInfo>(SourceFamily::kAndroid16);
   Check<abi::arm64::android17::CodeInfo>(SourceFamily::kAndroid17);
   Fixture<abi::arm64::android13::CodeInfo> f;auto view=f.View();
@@ -100,5 +101,5 @@ int main() {
   f.object.stack_maps=table;view=f.View();Location locations[2];RegisterRange range;
   assert(!Decode(view,33,0,0,locations,2,&range));
   assert(Decode(view,32,0,0,locations,2,&range));assert(locations[0].kind==-1);
-  puts("Decoded frame recovery: six fixed source declarations, delta maps, raw masks, inline counts and malformed maps passed");
+  puts("Decoded frame recovery: seven fixed source declarations, delta maps, raw masks, inline counts and malformed maps passed");
 }

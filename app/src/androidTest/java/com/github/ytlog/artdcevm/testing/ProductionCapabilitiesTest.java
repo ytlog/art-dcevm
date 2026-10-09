@@ -33,6 +33,7 @@ public final class ProductionCapabilitiesTest {
         String runId=InstrumentationRegistry.getArguments().getString("productionRunId");
         if(runId==null)runId=java.util.UUID.randomUUID().toString().replace("-","");
         assertTrue("Malformed production run correlation",runId.matches("[0-9a-f]{32}"));
+        TestPhaseLog phases=new TestPhaseLog(runId);phases.mark("production.begin");
         Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();
         Context context=instrumentation.getTargetContext();
         boolean foreground="true".equals(InstrumentationRegistry.getArguments().getString("foreground"));
@@ -42,21 +43,29 @@ public final class ProductionCapabilitiesTest {
         try {
         if(foreground){
             Intent intent=new Intent(context,RuntimeAccessForegroundActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            phases.mark("foreground.start-activity.before");
             carrier=(RuntimeAccessForegroundActivity)instrumentation.startActivitySync(intent);
-            instrumentation.waitForIdleSync();initialPauses=carrier.carrierPauses();
+            phases.mark("foreground.start-activity.after");
+            phases.mark("foreground.wait-idle.before");instrumentation.waitForIdleSync();phases.mark("foreground.wait-idle.after");initialPauses=carrier.carrierPauses();
             report.put("foregroundActivity",carrier.getClass().getName())
                 .put("foregroundInstrumentationPid",Process.myPid()).put("foregroundActivityPid",carrier.carrierPid())
                 .put("foregroundResumedBefore",carrier.carrierResumed());
             assertEquals("Foreground carrier must share instrumentation PID",Process.myPid(),carrier.carrierPid());
             assertTrue("Foreground carrier was not resumed",carrier.carrierResumed());
         }
+        phases.mark("capabilities.before");
         JSONObject capabilities=DcevmRuntime.initializeCapabilities(context);
-        System.loadLibrary("artdcevm_test_support");
+        phases.mark("capabilities.after");
+        phases.mark("support-load.before");System.loadLibrary("artdcevm_test_support");phases.mark("support-load.after");
         assertTrue(capabilities.toString(),capabilities.optBoolean("nativeMethodDeletion"));
+        phases.mark("additive.before");
         assertEquals(0,NativeBridge.apply(1,new Class<?>[]{Evolving.class},new byte[][]{asset(context,"add")}));
+        phases.mark("additive.after");
         Evolving instance=new Evolving(31);Method cached=instance.getClass().getDeclaredMethod("addedMethod");
         int identity=System.identityHashCode(instance);NativeTestBridge.retainRemovalMethod(instance);
+        phases.mark("method-deletion.before");
         assertEquals(0,NativeBridge.apply(2,new Class<?>[]{Evolving.class},new byte[][]{asset(context,"method-delete")}));
+        phases.mark("method-deletion.after");
         assertEquals(35,instance.compute());assertEquals(31,instance.value);assertEquals(identity,System.identityHashCode(instance));
         try {cached.invoke(instance);fail("Retired reflected method accepted");}
         catch (InvocationTargetException wrapped) {assertTrue(wrapped.getCause() instanceof NoSuchMethodError);}
@@ -81,7 +90,9 @@ public final class ProductionCapabilitiesTest {
         VarHandle svh=lookup.findStaticVarHandle(FieldSubject.class,"si",int.class);
         assertEquals(7,(int)getter.invoke(fields));assertEquals(7,(int)staticGetter.invoke());
         assertEquals(7,(int)vh.get(fields));assertEquals(7,(int)svh.get());
+        phases.mark("field-deletion.before");
         assertEquals(0,NativeBridge.apply(2,new Class<?>[]{FieldSubject.class},new byte[][]{asset(context,"field-delete","FieldSubject")}));
+        phases.mark("field-deletion.after");
         assertEquals(41,fields.keep);assertEquals(42,FieldSubject.staticKeep);assertEquals(42,fields.compute());
         assertEquals(fieldIdentity,System.identityHashCode(fields));
         assertNull(com.github.ytlog.artdcevm.internal.ProductionBootstrap.verifyLiveFieldId(FieldSubject.class.getDeclaredField("keep")));
@@ -111,12 +122,13 @@ report.put("runId",runId).put("cachedReflectionRejected",true).put("retainedIden
                 report.put("foregroundResumedAfter",resumed).put("foregroundPauseCount",pauses);
                 if(carrier!=null){
                     final RuntimeAccessForegroundActivity closing=carrier;
-                    instrumentation.runOnMainSync(closing::finish);
-                    finished=closing.awaitDestroyed();
+                    phases.mark("foreground.finish.before");instrumentation.runOnMainSync(closing::finish);
+                    finished=closing.awaitDestroyed();phases.mark("foreground.finish.after");
                 }
                 report.put("foregroundFinished",finished);
                 validForeground=resumed&&pauses==0&&finished;
             }
+            phases.mark("production.finish");
             Log.i("ArtDcevmProduction",report.toString());
             if(completed)assertTrue("Foreground carrier lost foreground or failed to finish",validForeground);
         }

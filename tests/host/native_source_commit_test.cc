@@ -103,6 +103,7 @@ void DeoptAll(void* receiver,const char* why){assert(stopped&&receiver==&instrum
 int binding_value;
 void* MethodLeaf(const abi::arm64::android_common::RunnableJniScope&,jobject p){assert(!stopped&&Read32(current)==0);return p==reinterpret_cast<jobject>(old_method)?old_method:nullptr;}
 bool SameMethod(void*,void*){return true;}
+bool Implements(void*,uintptr_t){return false;}
 void Obsolete(void* receiver,void* method){assert(stopped&&receiver==&linker&&method==old_method);events.push_back("obsolete");}
 bool Retired(void*){return false;}
 void Replace(void* self,const void* raw){
@@ -119,6 +120,7 @@ class Hooks:public HookEngine {
  void* FindSymbol(const char*,const char* name)override{
   if(missing&&std::strstr(name,missing))return nullptr;
 #define CALLEE(part,fn) if(std::strstr(name,part))return reinterpret_cast<void*>(fn)
+  CALLEE("Class10Implements",Implements);
   CALLEE("GetArtFieldEv",FieldLeaf);CALLEE("ArtField7GetNameEv",FieldName);CALLEE("ArtField17GetTypeDescriptorEv",FieldType);CALLEE("Class13GetDescriptor",Descriptor);
   CALLEE("artReadBarrierMark",Mark);CALLEE("artReadBarrierForRootSlow",Root);
   CALLEE("CurrentFromGdbEv",Current);CALLEE("Thread14CurrentFromGdbEv",Current);CALLEE("Thread13DecodeJObject",Decode);

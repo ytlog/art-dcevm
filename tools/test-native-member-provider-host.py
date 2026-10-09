@@ -63,7 +63,7 @@ def dex_fixture(method_deleted, field_deleted):
     put(104,len(data)-start);put(108,start);data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     path=out/('shape-%d-%d.dex'%(method_deleted,field_deleted));path.write_bytes(data);return str(path)
 sources = ['native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'modern_source_commit', 'source_commit',
-           'modern_field_metadata', 'modern_field_storage', 'field_copy',
+           'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',

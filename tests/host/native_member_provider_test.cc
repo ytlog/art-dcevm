@@ -8,6 +8,7 @@
 #include "platform/common/native_reflective_value_abi.h"
 #include <fstream>
 #include <iterator>
+#include "platform/common/native_interface_graph.h"
 namespace {
 int retired_methods=0,retired_fields=0;bool mh_guard=false,vh_guard=false,visit_mh=false,visit_vh=false,field_mh_guard=false,visit_field_mh=false;
 void RetireMethod(void*,void*){++retired_methods;}void RetireField(void*,void*){++retired_fields;}
@@ -16,6 +17,63 @@ bool SameIndex(void* a,void* b){return static_cast<abi::arm64::android12::Method
 abi::arm64::Field* ancestor_cached_field=nullptr;art::ArtField* resolved_field_slot=nullptr;art::ArtMethod* resolved_method_slot=nullptr;bool visit_resolution=false;
 const char* ResolutionName(void* field){return field==ancestor_cached_field?names[0]:FieldName(field);}
 const char* ResolutionType(void* field){return field==ancestor_cached_field?types[0]:FieldType(field);}
+// Independent public transitive closure: ArrayList -> DirectA -> SuperB,
+// plus inherited Parent -> InheritedC. Native IfTable pairs are separate arrays.
+void* public_array_class=nullptr;void* public_list=nullptr;void* public_parent=nullptr;
+void* interface_a=nullptr;void* interface_b=nullptr;void* interface_c=nullptr;
+int interfaces_id;
+std::unordered_map<void*,void*> direct_arrays,public_parents;
+void* Array(const std::vector<void*>& values){void* array=heap.New(12+values.size()*4);Put32(array,0,uint32_t(uintptr_t(public_array_class)));Put32(array,8,uint32_t(values.size()));for(size_t i=0;i<values.size();++i)Put32(array,12+4*i,uint32_t(uintptr_t(values[i])));return array;}
+void* IfTable(const std::vector<void*>& values){std::vector<void*> pairs;for(auto v:values){pairs.push_back(v);pairs.push_back(nullptr);}return Array(pairs);}
+jclass InterfaceFind(JNIEnv* e,const char* name){if(!std::strcmp(name,"java/util/ArrayList")){Jni();return reinterpret_cast<jclass>(public_list);}return Find(e,name);}
+jmethodID InterfaceMethod(JNIEnv* e,jclass owner,const char* name,const char* signature){if(!std::strcmp(name,"getInterfaces")){Jni();return reinterpret_cast<jmethodID>(&interfaces_id);}return MethodId(e,owner,name,signature);}
+jobject InterfaceObject(JNIEnv* e,jobject o,jmethodID id,va_list args){
+ if(id==reinterpret_cast<jmethodID>(&interfaces_id)){Jni();return reinterpret_cast<jobject>(direct_arrays.at(o));}
+ if(id==reinterpret_cast<jmethodID>(&superclass_id)){Jni();auto i=public_parents.find(o);return i==public_parents.end()?nullptr:reinterpret_cast<jobject>(i->second);}
+ return ObjectMethod(e,o,id,args);
+}
+jsize InterfaceLength(JNIEnv*,jarray array){Jni();return jsize(Read32(array,8));}
+jobject InterfaceElement(JNIEnv*,jobjectArray array,jsize index){Jni();assert(index>=0&&index<jsize(Read32(array,8)));return reinterpret_cast<jobject>(uintptr_t(Read32(array,12+size_t(index)*4)));}
+void InterfaceFixtures(){
+ public_array_class=heap.New(sizeof(class_metadata::Class17));auto* array_class=static_cast<class_metadata::Class17*>(public_array_class);array_class->component_type=uint32_t(uintptr_t(parent_class));
+ public_list=heap.New(sizeof(class_metadata::Class17));public_parent=heap.New(sizeof(class_metadata::Class17));
+ interface_a=heap.New(sizeof(class_metadata::Class17));interface_b=heap.New(sizeof(class_metadata::Class17));interface_c=heap.New(sizeof(class_metadata::Class17));
+ for(auto v:{public_array_class,public_list,public_parent,interface_a,interface_b,interface_c})static_cast<class_metadata::Class17*>(v)->object.klass=uint32_t(uintptr_t(meta_class));
+ for(auto v:{interface_a,interface_b,interface_c})static_cast<class_metadata::Class17*>(v)->access_flags=0x200;
+ void* empty=Array({});
+ direct_arrays[public_list]=Array({interface_a});direct_arrays[public_parent]=Array({interface_c});direct_arrays[interface_a]=Array({interface_b});
+ for(auto v:{interface_b,interface_c,parent_class,static_cast<void*>(old_class),static_cast<void*>(new_class)})direct_arrays[v]=empty;
+ public_parents[public_list]=public_parent;public_parents[public_parent]=parent_class;public_parents[old_class]=parent_class;public_parents[new_class]=parent_class;
+ for(auto v:{public_list,public_parent,interface_a,interface_b,interface_c,parent_class,static_cast<void*>(old_class),static_cast<void*>(new_class)})static_cast<class_metadata::Class17*>(v)->iftable=uint32_t(uintptr_t(IfTable({})));
+ static_cast<class_metadata::Class17*>(public_list)->iftable=uint32_t(uintptr_t(IfTable({interface_a,interface_b,interface_c})));
+ static_cast<class_metadata::Class17*>(public_parent)->iftable=uint32_t(uintptr_t(IfTable({interface_c})));
+ table.FindClass=InterfaceFind;table.GetMethodID=InterfaceMethod;table.CallObjectMethodV=InterfaceObject;table.GetArrayLength=InterfaceLength;table.GetObjectArrayElement=InterfaceElement;
+}
+// ExceptionCheck and reference deletion remain legal with a pending exception.
+// Every other JNI boundary asserts that calibration stopped at the first throw.
+bool graph_pending=false;const char* graph_throw=nullptr;unsigned graph_injections=0;
+void GraphJni(){assert(!graph_pending&&"JNI continued after graph calibration exception");}
+void GraphThrow(const char* operation){if(graph_throw&&!std::strcmp(graph_throw,operation)){graph_pending=true;++graph_injections;}}
+jboolean GraphException(JNIEnv*){return graph_pending;}
+jclass GraphFind(JNIEnv* e,const char* name){GraphJni();auto result=InterfaceFind(e,name);GraphThrow(name);return result;}
+jmethodID GraphMethod(JNIEnv* e,jclass owner,const char* name,const char* signature){GraphJni();auto result=InterfaceMethod(e,owner,name,signature);GraphThrow(name);return result;}
+jobject GraphObject(JNIEnv* e,jobject object,jmethodID id,va_list args){GraphJni();auto result=InterfaceObject(e,object,id,args);GraphThrow(id==reinterpret_cast<jmethodID>(&interfaces_id)?"interfaces":"superclass");return result;}
+jsize GraphLength(JNIEnv* e,jarray array){GraphJni();auto result=InterfaceLength(e,array);GraphThrow("length");return result;}
+jobject GraphElement(JNIEnv* e,jobjectArray array,jsize index){GraphJni();auto result=InterfaceElement(e,array,index);GraphThrow("element");return result;}
+jobject GraphGlobal(JNIEnv* e,jobject object){GraphJni();auto result=Global(e,object);GraphThrow(object==public_list?"positive-global":object==public_parent?"parent-global":"interface-global");return result;}
+jboolean GraphSame(JNIEnv* e,jobject a,jobject b){GraphJni();return SameObject(e,a,b);}
+void CheckGraphExceptionStops(const modern_field_metadata::FieldMetadata& metadata){
+ const auto saved=table;
+ table.ExceptionCheck=GraphException;table.FindClass=GraphFind;table.GetMethodID=GraphMethod;table.CallObjectMethodV=GraphObject;
+ table.GetArrayLength=GraphLength;table.GetObjectArrayElement=GraphElement;table.NewGlobalRef=GraphGlobal;table.IsSameObject=GraphSame;
+ runnable_jni::Context context{current,&env,nullptr};std::string error;
+ for(auto operation:{"java/lang/Class","getInterfaces","getSuperclass","java/util/ArrayList","positive-global","interfaces","length","element","interface-global","superclass","parent-global"}){
+  graph_throw=operation;graph_injections=0;graph_pending=false;
+  assert(!native_interface_graph::Calibrate(context,reinterpret_cast<jobject>(old_class),metadata,&error));
+  assert(graph_pending&&graph_injections==1&&!error.empty());
+ }
+ graph_pending=false;graph_throw=nullptr;table=saved;
+}
 void* forbidden_descriptor_class=nullptr;int forbidden_descriptor_calls=0;
 const char* ResolutionDescriptor(void* klass,void* storage){if(klass==forbidden_descriptor_class){++forbidden_descriptor_calls;assert(false&&"Unrelated cache Class descriptor is not an eligibility prerequisite");}return Descriptor(klass,storage);}
 std::array<executable_mirror::Declaration,3> executable{};
@@ -30,6 +88,7 @@ void Visit(void* receiver,art::ReflectiveValueVisitor* visitor){
  if(visit_vh){Put32(info,8,4);assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[3]),*reinterpret_cast<const art::ReflectionSourceInfo*>(info))==reinterpret_cast<art::ArtField*>(old_fields[3]));}
 }
 class ProviderHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{
+ if(std::strstr(name,"Class10Implements")||std::strstr(name,"Class16IsAssignableFrom"))return nullptr;
  if(std::strstr(name,"Class13GetDescriptor"))return reinterpret_cast<void*>(ResolutionDescriptor);
  if(std::strstr(name,"ArtField7GetNameEv"))return reinterpret_cast<void*>(ResolutionName);
  if(std::strstr(name,"ArtField17GetTypeDescriptorEv"))return reinterpret_cast<void*>(ResolutionType);
@@ -52,7 +111,7 @@ void Methods(class_metadata::Class17* klass,bool deletion){
 }
 }
 int main(int argc,char** argv){
- assert(argc==5);InitJni();InitializeHeap();
+ assert(argc==5);InitJni();InitializeHeap();InterfaceFixtures();
  const uint32_t field_indexes[]{1,3,0,2};for(size_t i=0;i<4;++i){old_fields[i]->dex_field_index=field_indexes[i];new_fields[i]->dex_field_index=field_indexes[i];}
  ProviderHooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
@@ -61,6 +120,20 @@ int main(int argc,char** argv){
  auto calibrate=[](const runnable_jni::Context& ctx,void* raw){auto& c=*static_cast<Cal*>(raw);return c.metadata->Calibrate(ctx,reinterpret_cast<jobject>(old_class),"LFixture;",c.oracle,4,c.error);};
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&cal)==runnable_jni::Result::kSuccess);
  size_t thread_extent=0,card_extent=0;assert(method_identity::ReadableMappingExtent(thread.data(),&thread_extent));assert(method_identity::ReadableMappingExtent(cards,&card_extent));
+ assert(metadata.InterfaceDeclarationCalibrated());
+ CheckGraphExceptionStops(metadata);
+ std::vector<void*> observed_interfaces;assert(native_interface_graph::Read(metadata,public_list,&observed_interfaces,&error)&&observed_interfaces.size()==3);
+ const uint32_t positive_table=static_cast<class_metadata::Class17*>(public_list)->iftable;
+ static_cast<class_metadata::Class17*>(public_list)->iftable=uint32_t(uintptr_t(IfTable({interface_a,interface_b}))); // inherited C omitted
+ modern_field_metadata::FieldMetadata missing_closure;assert(missing_closure.Bind(hooks,&error));
+ cal.metadata=&missing_closure;assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&cal)!=runnable_jni::Result::kSuccess&&!missing_closure.Calibrated());cal.metadata=&metadata;
+ static_cast<class_metadata::Class17*>(public_list)->iftable=positive_table;
+ const uint32_t fixture_table=old_class->iftable;
+ for(unsigned invalid=0;invalid<5;++invalid){void* bad=IfTable(invalid==3?std::vector<void*>{interface_a,interface_a}:invalid==4?std::vector<void*>{old_class}:std::vector<void*>{});
+  if(invalid==0)old_class->iftable=0;else{old_class->iftable=uint32_t(uintptr_t(bad));if(invalid==1)Put32(bad,8,1);if(invalid==2)Put32(bad,8,1000000);}
+  const auto saved=observed_interfaces;assert(!native_interface_graph::Read(metadata,old_class,&observed_interfaces,&error)&&observed_interfaces==saved);
+ }
+ old_class->iftable=fixture_table;
  modern_field_storage::Service fields;if(!fields.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(old_instance),metadata,oracle.data(),4,&error)){std::cerr<<"Fixture field storage calibration: threadExtent="<<thread_extent<<" cardExtent="<<card_extent<<" bias="<<bias<<" current="<<current<<" "<<error<<std::endl;return 1;}
  native_cache::Service caches;assert(caches.Bind(hooks,&thread_list,&error)&&caches.Prepare(&error));
  Methods(old_class,false);Methods(new_class,false);
@@ -144,7 +217,7 @@ int main(int argc,char** argv){
  // A proxy or array needs a platform string for GetDescriptor, but resolution
  // eligibility must not request its descriptor or inspect its field storage.
  auto* unrelated=new(heap.New(sizeof(class_metadata::Class17)))class_metadata::Class17{};
- unrelated->fields=UINT64_MAX;
+ unrelated->fields=UINT64_MAX;unrelated->object.klass=uint32_t(uintptr_t(meta_class));
  auto* unrelated_method=new(heap.New(sizeof(abi::arm64::android12::Method12)))abi::arm64::android12::Method12{};
  unrelated_method->declaring_class=uint32_t(uintptr_t(unrelated));unrelated_method->access_flags=9;unrelated_method->dex_method_index=2;
  auto* unrelated_field=new(heap.New(sizeof(abi::arm64::Field)))abi::arm64::Field{};
@@ -169,7 +242,17 @@ int main(int argc,char** argv){
  assert(resolved_method_slot==reinterpret_cast<art::ArtMethod*>(unrelated_method));
  unrelated_method->declaring_class=uint32_t(uintptr_t(unrelated));unrelated->access_flags=0x200;unrelated->primitive_type=0;unrelated->component_type=0;
  resolved_method_slot=reinterpret_cast<art::ArtMethod*>(unrelated_method);
- assert(!reflection.Validate(*mapping,&error)&&error.find("named-interface-implements-unavailable")!=std::string::npos);
+ assert(reflection.Validate(*mapping,&error)); // Proven empty holder IfTable.
+ const uint32_t original_table=old_class->iftable;
+ old_class->iftable=uint32_t(uintptr_t(IfTable({unrelated})));
+ assert(!reflection.Validate(*mapping,&error)); // Prepared graph is immutable.
+ mapping=native_structural_reflection::Plan::Prepare(plan,metadata,{table.get()},dependencies.retirement,&error,dependencies.handle_guards,{&hooks,&model,&fields});assert(mapping);
+ assert(reflection.Validate(*mapping,&error));reflection.Update(*mapping);assert(!resolved_method_slot); // Exact interface identity shadows.
+ old_class->iftable=uint32_t(uintptr_t(IfTable({interface_a,interface_b,interface_c})));
+ mapping=native_structural_reflection::Plan::Prepare(plan,metadata,{table.get()},dependencies.retirement,&error,dependencies.handle_guards,{&hooks,&model,&fields});assert(mapping);
+ resolved_method_slot=reinterpret_cast<art::ArtMethod*>(unrelated_method);assert(reflection.Validate(*mapping,&error));reflection.Update(*mapping);assert(resolved_method_slot); // Other interfaces do not match by descriptor.
+ old_class->iftable=0;assert(!reflection.Validate(*mapping,&error)&&error.find("live-holder-interface-table-invalid")!=std::string::npos);
+ old_class->iftable=original_table;
  visit_resolution=false;static_cast<class_metadata::Class17*>(parent_class)->fields=saved_parent_fields;
  auto unchanged_without_provenance=native_structural_reflection::Plan::Prepare(plan,metadata,{table.get()},dependencies.retirement,&error,dependencies.handle_guards);
  assert(unchanged_without_provenance);

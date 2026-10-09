@@ -77,6 +77,7 @@ def main():
     parser.add_argument('--adb', required=True)
     parser.add_argument('--foreground-version', choices=SDKS, action='append',
                         help='Foreground carrier versions; defaults to 12 when omitted')
+    parser.add_argument('--active-frames',action='store_true',help='Require independent owned active-frame proof in each runtime suite')
     parser.add_argument('--max-workers', type=int, default=7)
     parser.add_argument('--suite-timeout', type=float, default=900,
                         help='Outer host runner deadline per suite (seconds); original runner limits remain unchanged')
@@ -95,7 +96,10 @@ def main():
     foreground = set(args.foreground_version or ['12'])
     out = new_evidence_directory(root / 'build/evidence/device-compatibility-matrix')
     summary = {'passed': False, 'artifacts': artifacts, 'foregroundVersions': sorted(foreground),
-               'devices': [], 'scope': 'strict formal and owned method/field removal; full evolution is not established'}
+               'activeFramesRequested': args.active_frames, 'devices': [], 'scope': 'strict formal and owned method/field removal; full evolution is not established'}
+
+    if args.active_frames:
+        summary['scope'] += '; requires independent owned compiled carrier/two-inlinee proof'
 
     def run(index, version, serial):
         directory = out / ('%02d-android-%s' % (index, version)); directory.mkdir()
@@ -113,6 +117,7 @@ def main():
                           '--test-apk', str(args.test_apk), '--require-fields']
             runtime = [sys.executable, str(root / 'tools/run-runtime-access.py'), *common,
                        '--skip-install', *FLAGS]
+            if args.active_frames:runtime.append('--active-frames')
             if version in foreground:
                 production.append('--foreground');runtime.append('--foreground')
             # A formal refusal is still followed by an independently recorded runtime suite.

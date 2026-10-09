@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::abi::arm64::android11 {
+// Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
+inline constexpr uint32_t kHasInlineInfo=1u<<0;
 // Fixed libartbase BitMemoryRegion/BitTable and runtime stack_map.h declarations.
 // ARM64 native decoded objects, never the serialized CodeInfo header.
 struct BitRegion { void* data; size_t bit_start, bit_size; };

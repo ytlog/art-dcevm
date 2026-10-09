@@ -77,6 +77,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/runnable_jni_diagnostics.cc
     platform/jni_access/capability_selection.cc
     platform/jni_access/owned_probe.cc
+    platform/common/owned_active_frame_probe.cc
     platform/arch/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc
     platform/android13/checked_method_provider.cc
@@ -125,6 +126,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/exclusive_owned_roots.cc
     platform/common/modern_field_storage.cc
     platform/common/modern_field_metadata.cc
+    platform/common/native_interface_graph.cc
     platform/common/modern_field_probe.cc
     platform/common/field_copy.cc
     platform/android13/field_copy_binding.cc

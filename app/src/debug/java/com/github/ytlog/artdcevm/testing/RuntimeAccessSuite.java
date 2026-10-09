@@ -101,7 +101,7 @@ public final class RuntimeAccessSuite {
             }
         }
     }
-    private static void ownedFieldDeletion(String apkPath,JSONObject report) throws Throwable {
+    private static void ownedFieldDeletion(String apkPath,JSONObject report,TestPhaseLog phases) throws Throwable {
         com.github.ytlog.artdcevm.fixture.FieldSubject instance=new com.github.ytlog.artdcevm.fixture.FieldSubject();
         Class<?> owner=instance.getClass();int identity=System.identityHashCode(instance);
         Field removed=owner.getDeclaredField("i"),removedStatic=owner.getDeclaredField("si"),kept=owner.getDeclaredField("keep");
@@ -137,7 +137,9 @@ public final class RuntimeAccessSuite {
         }
         report.put("ownedFieldDeletionHotCallerJitStateBefore",compiled).put("ownedFieldDeletionHotCallerWarmCalls",warmCalls);
         if(compiled!=2)throw new AssertionError("Direct field caller did not actually enter the observed ART JIT cache");
+        phases.mark("field-deletion-native.before");
         String error=probeOwnedFieldDeletion(owner,instance,fixtureDex(apkPath,"field-delete/com/github/ytlog/artdcevm/fixture/FieldSubject.dex"));
+        phases.mark("field-deletion-native.after");
         report.put("ownedFieldDeletionError",error);
         if(error==null||!error.isEmpty())throw new AssertionError("Owned field deletion: "+error);
         long diagnostics=probeOwnedCommitDiagnostics();
@@ -221,14 +223,25 @@ public final class RuntimeAccessSuite {
         return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,false,false);
     }
     public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage) {
+        return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,false);
+    }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage,boolean activeFrames) {
+        return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,activeFrames,new TestPhaseLog(java.util.UUID.randomUUID().toString().replace("-","")));
+    }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage,TestPhaseLog phases) {
+        return run(apkPath,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,false,phases);
+    }
+    public JSONObject run(String apkPath,boolean runtimeServices,boolean exclusiveRoots,boolean nativeCache,boolean jitReceivers,boolean methodGuards,boolean fieldStorage,boolean activeFrames,TestPhaseLog phases) {
         JSONObject report=new JSONObject();
         boolean nativeLoaded=false;
         try {
             report.put("sdk",Build.VERSION.SDK_INT).put("fingerprint",Build.FINGERPRINT)
                     .put("abi",Build.SUPPORTED_ABIS[0])
                     .put("pageSize",Os.sysconf(OsConstants._SC_PAGESIZE))
-                    .put("fullDcevmComplete",false).put("privateEvolutionInitialized",false);
+                    .put("activeFramesRequested",activeFrames).put("fullDcevmComplete",false).put("privateEvolutionInitialized",false);
+            phases.mark("native-load.before");
             System.loadLibrary("artdcevm");
+            phases.mark("native-load.after");
             nativeLoaded=true;
             report.put("artBuildId",artBuildId());
             Method carrier=Object.class.getMethod("toString");
@@ -240,29 +253,40 @@ public final class RuntimeAccessSuite {
             report.put("methodDexEntry",oracle.dexEntry).put("methodDexHeaderOffset",oracle.headerOffset)
                     .put("methodDexIndices",new JSONArray(oracle.indices))
                     .put("methodDexDirectCount",oracle.directMethods).put("methodDexVirtualCount",oracle.virtualMethods);
+            phases.mark("main-jni.before");
             int main=probe(carrier,Thread.currentThread());
+            phases.mark("main-jni.after");
             report.put("mainCallbackHits",main);
             report.put("mainRoute",probeRoute());
             if(main!=128)throw new AssertionError("Owned JNI access main: "+main);
+            phases.mark("main-context.before");
             int context=probeContext();report.put("mainContextChecks",context);
+            phases.mark("main-context.after");
             if(context!=384)throw new AssertionError("Owned Context main: "+context);
+            phases.mark("main-method-metadata.before");
             int model=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
+            phases.mark("main-method-metadata.after");
             report.put("mainMethodTableCount",methodTableCount());
             if(methodTableCount()!=methods.length)throw new AssertionError("Complete method table oracle");
             report.put("mainMethodModel",model).put("executableMirrorIdentityCount",methods.length).put("registeredNativeBindingCalibrated",true);
             if(model!=11&&model!=12)throw new AssertionError("Owned method identity main: "+model);
-            if(runtimeServices||nativeCache||jitReceivers||methodGuards) {
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames) {
+                phases.mark("runtime-services.before");
                 String serviceError=probeRuntimeServices();
+                phases.mark("runtime-services.after");
                 report.put("runtimeServicesError",serviceError).put("runtimeServicesCalibrated",serviceError!=null&&serviceError.isEmpty());
                 if(serviceError==null||!serviceError.isEmpty())throw new AssertionError(serviceError);
             }
-            if(runtimeServices||nativeCache||jitReceivers||methodGuards) {
+            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames) {
+                phases.mark("commit-method-metadata.before");
                 int commitModel=probeMethods(methods,oracle.indices,oracle.modifiers,MethodIdentityFixture.class,
                         carrier,Thread.currentThread(),oracle.directMethods,oracle.virtualMethods,1);
+                phases.mark("commit-method-metadata.after");
                 report.put("mainCommitMethodModel",commitModel);
                 if(commitModel!=model)throw new AssertionError("Owned modern method commit service: "+commitModel);
             }
-            if(jitReceivers) {
+            if(jitReceivers||activeFrames) {
+                phases.mark("jit-services.before");
                 byte[] additive;
                 try(java.util.zip.ZipFile zip=new java.util.zip.ZipFile(apkPath);
                     java.io.InputStream in=zip.getInputStream(zip.getEntry("assets/add/com/github/ytlog/artdcevm/fixture/Evolving.dex"))) {
@@ -273,7 +297,21 @@ public final class RuntimeAccessSuite {
                         com.github.ytlog.artdcevm.fixture.Evolving.class,additive);
                 report.put("jitServices",jit);
                 if(!jit.equals("jit,code-cache,heap"))throw new AssertionError(jit);
+                phases.mark("jit-services.after");
             }
+            if(activeFrames) {
+                phases.mark("active-frames.before");
+                // A missing frame proof must stay visible without discarding the
+                // independent method/field results later in this same process.
+                try { report.put("ownedActiveFrameProof",OwnedActiveFrameCalibration.run(apkPath)); }
+                catch(Throwable error) {
+                    report.put("ownedActiveFrameProof",new JSONObject().put("passed",false)
+                        .put("error",android.util.Log.getStackTraceString(error))
+                        .put("scope","owned compiled carrier/two-inlinee proof missing; no frame capability"));
+                }
+                phases.mark("active-frames.after");
+            }
+            phases.mark("worker-jni.before");
             int[] results={-1,-1},contexts={-1,-1},models={-1,-1},tables={-1,-1};String[] routes=new String[2];Throwable[] errors=new Throwable[2];Thread[] workers=new Thread[2];
             for(int i=0;i<2;i++) {
                 final int slot=i;
@@ -289,6 +327,7 @@ public final class RuntimeAccessSuite {
                 workers[i].start();
             }
             for(Thread worker:workers)worker.join(30000);
+            phases.mark("worker-jni.after");
             report.put("workerCallbackHits",new JSONArray(results));
             report.put("workerRoutes",new JSONArray(routes));
             report.put("workerContextChecks",new JSONArray(contexts));
@@ -298,10 +337,13 @@ public final class RuntimeAccessSuite {
                 if(workers[i].isAlive()||errors[i]!=null||results[i]!=128||contexts[i]!=384||models[i]!=model)
                     throw new AssertionError("Owned JNI access worker "+i+": "+results[i],errors[i]);
             }
+            phases.mark("field-storage.before");
             report.put("fieldStorageModel",fields(fieldStorage));
+            phases.mark("field-storage.after");
             if(fieldStorage)report.put("nativeFieldStorageCalibrated",true).put("nativeCardTableOffset",probeCardOffset());
             report.put("fieldIdentityCount",28);
             if(methodGuards) {
+                phases.mark("member-guards.before");
                 String guardError=probeMethodGuards(RetiredEntryFixture.class);
                 report.put("methodEntryGuardError",guardError);
                 if(!guardError.isEmpty())throw new AssertionError(guardError);
@@ -366,8 +408,10 @@ public final class RuntimeAccessSuite {
                 if(loader.get()!=null||cleanup[1]<=beforeCleanup[1]||cleanup[2]<=beforeCleanup[2]||cleanup[3]!=beforeCleanup[3]||cleanup[4]!=beforeCleanup[4])
                     throw new AssertionError("Native loader pruning did not restore registry counts: "+java.util.Arrays.toString(cleanup));
                 report.put("retirementCleanupCounts",new JSONArray(cleanup)).put("retirementCleanupCalibrated",true);
+                phases.mark("member-guards.after");
             }
             if(exclusiveRoots) {
+                phases.mark("exclusive-roots.before");
                 java.util.concurrent.atomic.AtomicBoolean gcRunning=new java.util.concurrent.atomic.AtomicBoolean(true);
                 long gcBefore=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
                 java.util.concurrent.atomic.AtomicInteger gcCycles=new java.util.concurrent.atomic.AtomicInteger();
@@ -378,9 +422,12 @@ public final class RuntimeAccessSuite {
                 long gcAfter=Long.parseLong(android.os.Debug.getRuntimeStat("art.gc.gc-count"));
                 if(gc.isAlive()||gcCycles.get()<1||gcAfter<=gcBefore||exclusiveError==null||!exclusiveError.isEmpty())throw new AssertionError("Exclusive monitor/GC: "+exclusiveError);
                 report.put("exclusiveMonitorIterations",32).put("exclusiveFailureRestoration",true).put("exclusiveGcRequests",gcCycles.get()).put("exclusiveGcCollections",gcAfter-gcBefore);
+                phases.mark("exclusive-roots.after");
             }
             if(nativeCache) {
+                phases.mark("native-cache.before");
                 String cacheError=probeNativeCache();int cacheThreads=probeCacheThreads();
+                phases.mark("native-cache.after");
                 report.put("nativeCacheError",cacheError).put("nativeCacheClearedThreads",cacheThreads);
                 if(cacheError==null||!cacheError.isEmpty()||cacheThreads<=0)
                     throw new AssertionError("Native cache clearing: "+cacheError);
@@ -404,7 +451,9 @@ public final class RuntimeAccessSuite {
                     java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();byte[] chunk=new byte[8192];int n;
                     while((n=in.read(chunk))!=-1)bytes.write(chunk,0,n);deletion=bytes.toByteArray();
                 }
+                phases.mark("method-deletion.before");
                 String error=probeOwnedMethodDeletion(owner,instance,deletion,new MethodHandle[]{exact,surviving,statik},baseline);
+                phases.mark("method-deletion.after");
                 report.put("ownedMethodDeletionError",error);
                 if(error==null||!error.isEmpty())throw new AssertionError("Owned method deletion: "+error);
                 long diagnostics=probeOwnedCommitDiagnostics();
@@ -433,14 +482,16 @@ public final class RuntimeAccessSuite {
                     .put("ownedMethodDeletion",true).put("ownedMethodDeletionJniRejected",true)
                     .put("ownedMethodDeletionReflectionRejected",true).put("ownedMethodDeletionKeptValue",instance.compute());
             }
-            if(runtimeServices&&jitReceivers&&methodGuards&&fieldStorage)ownedFieldDeletion(apkPath,report);
+            if(runtimeServices&&jitReceivers&&methodGuards&&fieldStorage){
+                phases.mark("field-deletion.before");ownedFieldDeletion(apkPath,report,phases);phases.mark("field-deletion.after");
+            }
             report.put("passed",true);
         } catch(Throwable error) {
             try {report.put("passed",false).put("error",android.util.Log.getStackTraceString(error));}
             catch(Exception ignored) { }
         } finally {
             if(nativeLoaded) {
-                try {releaseFieldProofStages();}
+                try {phases.mark("field-stage-release.before");releaseFieldProofStages();phases.mark("field-stage-release.after");}
                 catch(Throwable error) {
                     try {report.put("passed",false).put("fieldProofCleanupError",android.util.Log.getStackTraceString(error));}
                     catch(Exception ignored) { }

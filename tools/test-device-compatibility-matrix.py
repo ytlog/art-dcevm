@@ -5,7 +5,7 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 CHILD='''import argparse,hashlib,json,os,subprocess,sys,time
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk');p.add_argument('--require-fields',action='store_true');p.add_argument('--skip-install',action='store_true');p.add_argument('--foreground',action='store_true')
+p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk');p.add_argument('--require-fields',action='store_true');p.add_argument('--skip-install',action='store_true');p.add_argument('--foreground',action='store_true');p.add_argument('--active-frames',action='store_true')
 for flag in ['runtime-services','exclusive-roots','native-cache','jit-receivers','method-guards','field-storage']:p.add_argument('--'+flag,action='store_true')
 a=p.parse_args();role='production' if 'production' in Path(__file__).name else 'runtime';mode=os.environ['MODE']
 def event(phase):
@@ -13,10 +13,11 @@ def event(phase):
  fd=os.open(os.environ['TRACE'],os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600);os.write(fd,(json.dumps(record)+'\\n').encode());os.close(fd)
 assert hashlib.sha256(Path(a.apk).read_bytes()).hexdigest()==os.environ['APP_SHA']
 if role=='production':
- assert a.require_fields and not a.skip_install
+ assert a.require_fields and not a.skip_install and not a.active_frames
  assert a.foreground==(a.serial in json.loads(os.environ['FORE']))
  assert hashlib.sha256(Path(a.test_apk).read_bytes()).hexdigest()==os.environ['TEST_SHA']
 else:
+ assert a.active_frames==(os.environ['ACTIVE']=='true')
  assert a.skip_install and not a.test_apk and not a.require_fields
  assert all(getattr(a,key.replace('-','_')) for key in ['runtime-services','exclusive-roots','native-cache','jit-receivers','method-guards','field-storage'])
  assert a.foreground==(a.serial in json.loads(os.environ['FORE']))
@@ -46,7 +47,7 @@ else:raise AssertionError('Unexpected real ADB action: '+str(parts))
 '''
 with tempfile.TemporaryDirectory() as tmp:
     tmp=Path(tmp)
-    def run_case(name,devices,sdks,*,mode='matching',foreground=None,workers=7,timeout=10,expected=True):
+    def run_case(name,devices,sdks,*,mode='matching',foreground=None,workers=7,timeout=10,expected=True,active=False):
         case=tmp/name;(case/'tools').mkdir(parents=True);(case/'markers').mkdir()
         for file in ['run-device-compatibility-matrix.py','evidence_paths.py']:shutil.copyfile(root/'tools'/file,case/'tools'/file)
         for file in ['run-production-bootstrap.py','run-runtime-access.py']:(case/'tools'/file).write_text(CHILD)
@@ -55,14 +56,15 @@ with tempfile.TemporaryDirectory() as tmp:
         adb=case/'fake-adb';adb.write_text(ADB);adb.chmod(0o755)
         trace=case/'trace.jsonl';adb_trace=case/'adb.jsonl'
         selected=set(foreground or ['12']);fore=[serial for version,serial in devices if version in selected]
-        env=dict(os.environ,MODE=mode,SDK=json.dumps(sdks),FORE=json.dumps(fore),COUNT=str(len(devices)),MARKERS=str(case/'markers'),TRACE=str(trace),ADB_TRACE=str(adb_trace),APP_SHA=hashlib.sha256(apk.read_bytes()).hexdigest(),TEST_SHA=hashlib.sha256(test.read_bytes()).hexdigest())
+        env=dict(os.environ,ACTIVE=str(active).lower(),MODE=mode,SDK=json.dumps(sdks),FORE=json.dumps(fore),COUNT=str(len(devices)),MARKERS=str(case/'markers'),TRACE=str(trace),ADB_TRACE=str(adb_trace),APP_SHA=hashlib.sha256(apk.read_bytes()).hexdigest(),TEST_SHA=hashlib.sha256(test.read_bytes()).hexdigest())
         command=[sys.executable,str(case/'tools/run-device-compatibility-matrix.py'),'--apk',str(apk),'--test-apk',str(test),'--adb',str(adb),'--max-workers',str(workers),'--suite-timeout',str(timeout)]
+        if active:command.append('--active-frames')
         for version,serial in devices:command.extend(['--device',version+'='+serial])
         for version in foreground or []:command.extend(['--foreground-version',version])
         start=time.monotonic();result=subprocess.run(command,cwd=case,env=env,capture_output=True,text=True,timeout=12)
         assert (result.returncode==0)==expected,(name,result.stdout,result.stderr)
         paths=list((case/'build/evidence/device-compatibility-matrix').glob('*/matrix.json'));assert len(paths)==1,(name,result.stdout,result.stderr)
-        matrix=json.loads(paths[0].read_text());assert matrix['passed']==expected
+        matrix=json.loads(paths[0].read_text());assert matrix['passed']==expected and matrix['activeFramesRequested']==active
         assert matrix['artifacts']['application']['sha256']==env['APP_SHA'] and matrix['artifacts']['instrumentation']['sha256']==env['TEST_SHA']
         events=[json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
         adb_events=[json.loads(line) for line in adb_trace.read_text().splitlines()]
@@ -76,6 +78,8 @@ with tempfile.TemporaryDirectory() as tmp:
             assert report['runtime']['command'].count('--skip-install')==1
             assert ('--foreground' in report['runtime']['command'])==(serial in fore)
             assert '--require-fields' in report['production']['command']
+            assert '--active-frames' not in report['production']['command']
+            assert ('--active-frames' in report['runtime']['command'])==active
             assert ('--foreground' in report['production']['command'])==(serial in fore)
             for label in ['production','runtime']:
                 suite=report[label];assert Path(suite['stdout']).exists() and Path(suite['stderr']).exists() and 'exitCode' in suite
@@ -97,6 +101,7 @@ with tempfile.TemporaryDirectory() as tmp:
         return case,command,env
     seven=[(str(n),'fixture-'+str(n)) for n in range(11,18)]
     run_case('seven_parallel',seven,{serial:str(int(version)+(19 if int(version)<=12 else 20)) for version,serial in seven},mode='parallel')
+    run_case('active_frames_opt_in',[('11','fixture-11'),('17','fixture-17')],{'fixture-11':'30','fixture-17':'37'},active=True)
     run_case('minor_labels',[('12','fixture-12L'),('17','fixture-17minor')],{'fixture-12L':'32','fixture-17minor':'37.1'})
     run_case('same_version_devices',[('12','fixture-12a'),('12','fixture-12b')],{'fixture-12a':'31','fixture-12b':'32'})
     run_case('foreground_override',[('12','fixture-12'),('14','fixture-14')],{'fixture-12':'31','fixture-14':'34'},foreground=['14'])

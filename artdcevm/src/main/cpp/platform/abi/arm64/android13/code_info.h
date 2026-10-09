@@ -1,6 +1,8 @@
 #pragma once
 #include "platform/abi/arm64/android11/code_info.h"
 namespace artdcevm::abi::arm64::android13 {
+// Fixed stack_map.h CodeInfo::kHasInlineInfo (positive native WalkStack oracle only).
+inline constexpr uint32_t kHasInlineInfo=1u<<0;
 using BitRegion=android11::BitRegion;
 template<size_t N> using BitTable=android11::BitTable<N>;
 using TableIterator=android11::TableIterator;

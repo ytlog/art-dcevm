@@ -2,12 +2,14 @@
 """Verify exact installed artifacts and formal production method transactions."""
 import argparse,hashlib,json,pathlib,subprocess,sys,uuid,re
 from apk_verification import require_install_success,base_apk_path,verified_apk_sha256
+from timeout_diagnostics import collect_timeout_diagnostics
 from evidence_paths import new_evidence_directory
 from production_bootstrap_report import validate_production_bootstrap
 p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk',required=True);p.add_argument('--foreground',action='store_true',help='Require same-process foreground carrier evidence');p.add_argument('--require-fields',action='store_true',help='Require formal field removal, cached JNI/reflection/MethodHandle/VarHandle coverage and retained state');a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1];out=new_evidence_directory(root/'build/evidence/production-bootstrap','run')
 run_id=uuid.uuid4().hex
 instrumentation_started=False
+instrumentation_timed_out=False
 report={'serial':a.serial,'runId':run_id,'foregroundRequested':a.foreground,'passed':False,'scope':'production bootstrap and formal method deletion with four cached JNI invocation modes and reflection; field deletion and full evolution are not established by this suite'}
 if a.require_fields:
  report['scope']='production bootstrap and formal method/field deletion with cached JNI/reflection/MethodHandle/VarHandle rejection and retained state; full evolution is not established by this suite'
@@ -56,9 +58,13 @@ try:
  (out/'transaction.json').write_text(json.dumps(transaction,indent=2)+'\n')
  report['passed']=True
 except (RuntimeError,OSError,ValueError,subprocess.SubprocessError) as error:
+ if isinstance(error,subprocess.TimeoutExpired) and instrumentation_started:
+  instrumentation_timed_out=True
+  try:report['timeoutDiagnostics']=collect_timeout_diagnostics(a.adb,a.serial,out,run_id)
+  except Exception as diagnostic_error:report['timeoutDiagnosticError']=str(diagnostic_error)
  report['passed']=False;report['error']=str(error)
 finally:
- if a.foreground and instrumentation_started:
+ if instrumentation_started and (a.foreground or instrumentation_timed_out):
   try:
    cleanup=adb('foreground-stop','shell','am','force-stop','dev.artdcevm.lab',timeout=15);cleanup.check_returncode()
   except (OSError,subprocess.SubprocessError) as error:
