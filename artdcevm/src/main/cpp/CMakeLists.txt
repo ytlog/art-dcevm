@@ -113,6 +113,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/pending_suspend_deopt.cc
     platform/android13/suspend_deopt_hooks.cc
     platform/common/modern_final_field_guard.cc
+    platform/common/native_final_write_guard.cc
+    platform/common/native_final_write_listener.cc
     platform/common/modern_field_guards.cc
     platform/common/modern_retirement_cleanup.cc
     platform/common/modern_method_guards.cc
