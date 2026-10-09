@@ -49,10 +49,10 @@ bool Decoder::WeakRaw(void* thread,jweak ref,void** out)const{
  // Both fixed Thread entry points handle weak globals and normalize the
  // Runtime cleared sentinel themselves. No VM layout or sentinel is inferred.
  auto decoded=thread_weak_(thread,ref);
- // The weak leaf can wait/suspend; recheck the independent cleared witness.
- // No pre-call borrowed object pointer is compared or dereferenced afterward.
- if(IsCleared(thread,ref)){*out=nullptr;return true;}
- if(!decoded.reference)return false;
+ // IsJWeakCleared also waits for weak access in fixed ART source. Never carry
+ // this borrowed pointer across another witness/private call: the selected
+ // Thread leaf already normalizes clearing after its own potentially waiting
+ // decode, and that null behavior is independently calibrated against JNI GC.
  *out=reinterpret_cast<void*>(decoded.reference);return true;
 }
 bool Decoder::Weak(void* thread,Scope scope,jweak ref,void** out)const{

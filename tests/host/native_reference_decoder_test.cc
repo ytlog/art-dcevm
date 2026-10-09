@@ -9,7 +9,7 @@ using namespace artdcevm;using namespace native_reference_decoder;
 namespace {
 struct Object{bool live=true;};struct Ref{jobjectRefType kind;Object* object;bool valid=true;};
 std::vector<std::unique_ptr<Ref>> refs;std::vector<std::unique_ptr<Object>> objects;
-JavaVM vm{};int thread,wrong,sentinel;int mode=0,strong_calls=0,weak_calls=0,clear_calls=0,current_calls=0,gcs=0;bool clear_during=false;
+JavaVM vm{};int thread,wrong,sentinel;int mode=0,strong_calls=0,weak_calls=0,clear_calls=0,current_calls=0,gcs=0;bool clear_during=false,move_during_clear=false;
 Ref& Reference(jobject ref){auto& r=*reinterpret_cast<Ref*>(ref);assert(r.valid);return r;}
 jobject Reference(Object* object,jobjectRefType kind){refs.push_back(std::make_unique<Ref>(Ref{kind,object}));return reinterpret_cast<jobject>(refs.back().get());}
 Object* NewObject(){objects.push_back(std::make_unique<Object>());return objects.back().get();}
@@ -31,7 +31,9 @@ using Carrier=abi::arm64::android11::ReleaseObjectPointer;
 Carrier Weak(void* receiver,void* self,void* raw){assert(receiver==&vm&&self==&thread);++weak_calls;auto& r=Reference(reinterpret_cast<jobject>(raw));assert(r.kind==JNIWeakGlobalRefType);
  if(clear_during)r.object->live=false;
  return {reinterpret_cast<uintptr_t>(mode==3?static_cast<void*>(&wrong):r.object->live?static_cast<void*>(r.object):static_cast<void*>(&sentinel))};}
-bool Cleared(void* receiver,void* self,void* raw){assert(receiver==&vm&&self==&thread);++clear_calls;return mode==4?false:!Reference(reinterpret_cast<jobject>(raw)).object->live;}
+bool Cleared(void* receiver,void* self,void* raw){assert(receiver==&vm&&self==&thread);++clear_calls;
+ if(move_during_clear){move_during_clear=false;auto* old=Reference(reinterpret_cast<jobject>(raw)).object;auto* moved=NewObject();moved->live=old->live;for(auto& r:refs)if(r->valid&&r->object==old)r->object=moved;old->live=false;}
+ return mode==4?false:!Reference(reinterpret_cast<jobject>(raw)).object->live;}
 Carrier Strong(const void* self,jobject ref){assert(self==&thread);auto& r=Reference(ref);
  if(r.kind==JNIWeakGlobalRefType){auto result=Weak(&vm,const_cast<void*>(self),ref);return !r.object->live?Carrier{0}:result;}
  assert(r.kind==JNIGlobalRefType);++strong_calls;return {reinterpret_cast<uintptr_t>(mode==2?static_cast<void*>(&wrong):static_cast<void*>(r.object))};}
@@ -64,8 +66,13 @@ int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
  int before_weak=weak_calls,before_clear=clear_calls,before_current=current_calls;
  assert(!decoder.Weak(&thread,Scope::NoSuspend,wa,&out)&&weak_calls==before_weak&&clear_calls==before_clear&&current_calls==before_current);
  assert(!decoder.Weak(&wrong,Scope::Runnable,wa,&out)&&weak_calls==before_weak);assert(decoder.Weak(&thread,Scope::Runnable,wa,&out)&&out==Reference(a).object);
+ // The independent witness may block/checkpoint before decode. Relocate all
+ // rooted handles there; only the subsequent source leaf's fresh value may
+ // escape. Exactly one witness proves no raw pointer crosses a second call.
+ before_clear=clear_calls;before_weak=weak_calls;move_during_clear=true;
+ assert(decoder.Weak(&thread,Scope::Runnable,wa,&out)&&out==Reference(a).object&&clear_calls==before_clear+1&&weak_calls==before_weak+1);
  jobject temporary=Reference(NewObject(),JNILocalRefType);jweak dead=WeakRef(&env,temporary);Delete(&env,temporary);assert(decoder.RegisterWeak(&env,dead,&error));clear_during=true;
  assert(decoder.Weak(&thread,Scope::Runnable,dead,&out)&&out==nullptr&&Local(&env,dead)==nullptr); // clear AFTER blocking decoder's first witness
  decoder.Forget(dead);Delete(&env,dead);decoder.Forget(wa);before_weak=weak_calls;assert(!decoder.Weak(&thread,Scope::Runnable,wa,&out)&&weak_calls==before_weak);Delete(&env,wa);
- std::cout<<"Actual JNI decoder TU: source named receivers, registered types, live/GC cleared oracles, post-decode clear, NoSuspend refusal and registration retirement passed\n";
+ std::cout<<"Actual JNI decoder TU: source named receivers, registered types, live/GC cleared oracles, source-normalized clear, predecode witness relocation, no postdecode witness, NoSuspend refusal and registration retirement passed\n";
 }

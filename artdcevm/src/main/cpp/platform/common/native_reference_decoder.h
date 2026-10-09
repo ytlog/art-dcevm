@@ -33,7 +33,8 @@ class Decoder {
  // FieldWritten supplies its actual Thread. Runnable/shared mutator ownership
  // is mandatory; decoder can suspend. NoSuspend refuses BEFORE any leaf call.
  // Source Thread decoder normalizes cleared weak references; named
- // IsJWeakCleared independently witnesses the GC-cleared state.
+ // IsJWeakCleared independently witnesses the GC-cleared state before decode;
+ // no potentially waiting witness is invoked after acquiring a raw pointer.
  bool Weak(void* actual_thread,Scope,jweak,void**)const;
  private:
  using Object=abi::arm64::android11::ReleaseObjectPointer;
