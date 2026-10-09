@@ -98,7 +98,10 @@ struct NativeEngine final:Engine {
  static bool FieldRoot(void* raw,jobject root,void** out){auto& e=*static_cast<NativeEngine*>(raw);if(!root||!out||!e.graph_decode||!e.graph_current||!redefinition_gate::Owned(e.vm))return false;*out=reinterpret_cast<void*>(e.graph_decode(e.graph_current(),root).reference);return *out!=nullptr;}
  static void* FieldLeaf(void* raw,void* mirror){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;}
  static void* FieldOwner(void* raw,void* field){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(field);}
- rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner}};
+ // Fixed ObjectArray<HeapReference<Object>>: 8-byte Object, int32 length,
+ // 4-byte elements. Every staged slot is independently checked against JNI.
+ static void* FieldElement(void* raw,void* array,size_t index){if(index>=size_t(rooted_field_identities::Store::kChunkSize))return nullptr;return static_cast<NativeEngine*>(raw)->metadata.Reference(array,12+index*4);}
+ rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner,FieldElement}};
  static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
  bool (*graph_same)(void*,void*)=nullptr;
  struct MapRange {uintptr_t begin,end;bool write;};std::vector<MapRange> graph_maps;
