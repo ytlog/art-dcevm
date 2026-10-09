@@ -65,7 +65,7 @@ jmethodID FactoryMethod(JNIEnv*,jclass type,const char* name,const char* sig){as
 jobject Factory(JNIEnv*,jclass type,jmethodID id,va_list){assert(type==Cls(&oracle_class)&&uintptr_t(id)==9&&!in_hot);++array_verifications;return Obj(&other);}
 void Visit(void* o,art::ReflectiveValueVisitor* visitor){art::ReflectionSourceInfo source;source.kind=source_kind;source.object=o;auto* target=reinterpret_cast<art::ArtField*>(static_cast<Handle*>(o)->target);assert(visitor->VisitField(target,source)==target);}
 void Stop(void*,const char*,bool){assert(!stopped);stopped=true;}void Resume(void*){assert(stopped);stopped=false;}
-bool Access(void*,int mode,void* frame,const void* operands,void* result){assert((mode==7||mode==0)&&frame==reinterpret_cast<void*>(11)&&operands==reinterpret_cast<void*>(13));++original_calls;*static_cast<uint64_t*>(result)=42;if(change_thread)actual_thread=&wrong_thread;return original_result;}
+bool Access(void*,int mode,void* frame,const void* operands,void* result){assert(mode>=0&&mode<=30&&frame==reinterpret_cast<void*>(11)&&operands==reinterpret_cast<void*>(13));++original_calls;*static_cast<uint64_t*>(result)=42;if(change_thread)actual_thread=&wrong_thread;return original_result;}
 struct Hooks:HookEngine {bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{std::string s=name;if(s=="_ZN3art6mirror5Field11GetArtFieldEv")return reinterpret_cast<void*>(NativeField);if(s=="artReadBarrierMark")return reinterpret_cast<void*>(Mark);
  if(s=="artReadBarrierForRootSlow")return reinterpret_cast<void*>(Mark);
@@ -90,6 +90,21 @@ bool DecodeStrongGlobal(const runnable_jni::Context&,jobject object,void** out){
 runnable_jni::Result With(JNIEnv* e,jobject,runnable_jni::Operation op,void* data){return op({wrong_context?&wrong_thread:Current(),e,nullptr},data)?runnable_jni::Result::kSuccess:runnable_jni::Result::kOperationRejected;}
 }
 int main(int argc,char** argv){using namespace retirement;
+ // Binding validates all named modes, not merely get/set. Preserve output
+ // when an update-mode declaration disagrees; never silently disable guarding.
+ var_handle_access_mode::NativeTemplate mode_callback=var_handle_access_mode::Template;
+ assert(var_handle_access_mode::Bind(nullptr,&mode_callback));
+ const auto previous_callback=mode_callback;
+ auto bad_update=+[](int mode)->uint32_t{return mode==16?0:var_handle_access_mode::Template(mode);};
+ assert(!var_handle_access_mode::Bind(bad_update,&mode_callback)&&mode_callback==previous_callback);
+ auto native=+[](int mode)->uint32_t{
+   // Independent source-fixture return values, including each signature family.
+   constexpr uint32_t expected[]={0,1,0,1,0,1,0,1,2,3,3,3,2,2,2,2,
+                                 4,4,4,4,4,4,4,4,4,4,4,4,4,4,4};
+   assert(mode>=0&&mode<=30);return expected[mode];
+ };
+ assert(var_handle_access_mode::Bind(native,&mode_callback)&&mode_callback==native);
+ assert(!var_handle_access_mode::Bind(native,nullptr));
  const std::string mode=argc>1?argv[1]:"named";
  named=mode.find("prefix")==std::string::npos;shared_class=mode.find("same-class")!=std::string::npos;
  table.ExceptionCheck=Exception;table.FindClass=Find;table.DeleteLocalRef=Delete;table.IsInstanceOf=IsInstance;table.IsSameObject=Same;table.GetMethodID=Method;table.CallIntMethodV=Int;table.CallObjectMethodV=Object;table.FromReflectedField=From;table.GetObjectClass=ObjectClass;table.CallBooleanMethodV=Bool;table.GetStringUTFChars=Utf;table.ReleaseStringUTFChars=ReleaseUtf;table.NewGlobalRef=NewRef;table.DeleteGlobalRef=DeleteRoot;table.NewWeakGlobalRef=NewWeak;table.DeleteWeakGlobalRef=Delete;table.GetFieldID=PublicId;table.GetStaticFieldID=PublicStaticId;table.ToReflectedField=PublicMirror;table.GetStaticMethodID=FactoryMethod;table.CallStaticObjectMethodV=Factory;env.functions=&table;
@@ -162,11 +177,26 @@ int main(int argc,char** argv){using namespace retirement;
  assert(access(&fourth,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result)&&FieldVarHandleGuardsReady(registry));
  // Exercise the actual outer guard against a cached handle whose native
  // target became final after its original successful calibration/invocation.
- mode_template=[](int mode)->uint32_t{return mode==0?0:1;};
+ // Missing Android11 named helper must retain the fixed source classifier.
+ assert(var_handle_access_mode::Bind(nullptr,&mode_template));
  field_c.access_flags=0x10;const int before_final=original_calls;result=99;
  assert(!access(&third,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
  assert(result==0&&original_calls==before_final&&thrown==1);
  assert(access(&third,0,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result)&&result==42);
+ // All cached modes preserve read-only operations and reject every write,
+ // including compare/exchange, updates and acquire/release/opaque variants.
+ for(int mode=0;mode<=30;++mode){
+   const bool getter=mode==0||mode==2||mode==4||mode==6;
+   result=99;const int before=original_calls,exceptions=thrown;
+   assert(access(&third,mode,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result)==getter);
+   assert(original_calls==before+(getter?1:0)&&thrown==exceptions+(getter?0:1));
+   assert(result==(getter?42u:0u));
+ }
+ for(int mode:{-1,31}){const int before=original_calls;result=99;
+   assert(!access(&third,mode,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));
+   assert(original_calls==before&&result==0);
+ }
+ thrown=1;
  // Removing final immediately restores the original cached writer. No sticky
  // handle mask or process-wide "some final field" bit decides access.
  field_c.access_flags=0;assert(access(&third,7,reinterpret_cast<void*>(11),reinterpret_cast<void*>(13),&result));

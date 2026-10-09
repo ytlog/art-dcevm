@@ -5,6 +5,7 @@
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/var_handle_field_target.h"
+#include "platform/common/var_handle_access_mode.h"
 #include "platform/common/modern_field_metadata.h"
 #include <memory>
 #include "platform/common/jni_field_dispatch.h"
@@ -119,8 +120,8 @@ struct VarState {
 };
 VarState vars;
 void* original_var_access=nullptr;
-using ModeTemplate=uint32_t(*)(int);
-ModeTemplate mode_template=nullptr;
+using ModeTemplate=var_handle_access_mode::NativeTemplate;
+ModeTemplate mode_template=var_handle_access_mode::Template;
 bool ReadFinalFlags(void*,void* field,uint32_t* flags){
   if(!installed||!field||!flags)return false;
   // InstallFieldEntryGuards requires a complete independent mirror/native field
@@ -178,10 +179,10 @@ bool VarAccess(void* handle,int mode,void* frame,const void* operands,void* resu
   // mask can predate a mutable-to-final evolution, so the original mask alone
   // does not enforce current field permissions.
   void* field=vars.reader->Target(handle);
-  if(field&&!vars.registry->TokenFor(field)&&mode_template){
+  if(field&&!vars.registry->TokenFor(field)){
     final_field_guard::Access access;access.path=final_field_guard::Path::VarHandle;
-    access.var_mode_valid=mode>=0&&mode<=30;
-    access.var_mode_template=access.var_mode_valid?mode_template(mode):0;
+    access.var_mode_valid=var_handle_access_mode::Template(mode)!=var_handle_access_mode::kInvalid;
+    access.var_mode_template=access.var_mode_valid&&mode_template?mode_template(mode):var_handle_access_mode::kInvalid;
     const final_field_guard::Boundary boundary{&state,ReadFinalFlags,RaiseFinal};
     if(final_field_guard::Reject(boundary,field,self,access,result))return false;
   }
@@ -280,6 +281,12 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
   if(!contextual_field_id::Initialize(hooks,error)||!candidate.throw_exception||!construct||!destroy) {
     *error="Missing named field decoder/exception/exclusive hook installation declarations";return false;
   }
+  ModeTemplate candidate_mode=nullptr;
+  const auto native_mode=reinterpret_cast<ModeTemplate>(hooks.FindSymbol(
+      "libart.so",var_handle_access_mode::kNamedTemplate));
+  if(!var_handle_access_mode::Bind(native_mode,&candidate_mode)) {
+    *error="Native VarHandle access modes disagree with fixed source declaration";return false;
+  }
   std::vector<Entry> entries{
     {"_ZN3art6mirror5Field11GetArtFieldEv",reinterpret_cast<void*>(GetField),&original_field},
     {"_ZN3art6mirror5Field11VisitTargetEPNS_22ReflectiveValueVisitorE",reinterpret_cast<void*>(VisitField),&original_visit}};
@@ -310,9 +317,7 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
     }
     tokens.push_back(token);
   }
-  mode_template=reinterpret_cast<ModeTemplate>(hooks.FindSymbol("libart.so",
-      "_ZN3art6mirror9VarHandle21GetAccessModeTemplateENS1_10AccessModeE"));
-  if(mode_template&&(mode_template(0)!=0||mode_template(1)!=1))mode_template=nullptr;
+  mode_template=candidate_mode;
   installed=true;return true;
 }
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry){return installed&&state.registry==&registry;}
