@@ -73,13 +73,14 @@ class Observation final {
   static void DisableEnd(void*,void*) noexcept;
   static void Constructed(void*,const char*,bool) noexcept;
   static void Destroyed(void*) noexcept;
-  static void GCOperation() noexcept;
+  static void GCOperation(void* heap,void* self,bool starting) noexcept;
   bool State(uint32_t)const noexcept;
   enum class Phase{kRun,kArmed,kDisabled,kStopped,kResumed,kComplete};
   Service service_;void* driver_=nullptr;const void* run_body_=nullptr;
   void* self_=nullptr;size_t extent_=0;const void* holder_=nullptr;void* carrier_=nullptr;
   char cause_[128]{};bool long_=false,attached_=false,failed_=false,finished_=false;
   Phase phase_=Phase::kRun;const char* failure_="ordinary-source-observation-not-started";
+  bool prefinal_gc_=false;
   ObservationTrace trace_{};
   void Event(uint8_t) noexcept;
   void Refuse(const char*) noexcept;

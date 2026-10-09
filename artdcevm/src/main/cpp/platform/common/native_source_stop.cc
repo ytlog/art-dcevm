@@ -33,10 +33,10 @@ static void Enable(void* heap,void* self){
  Session::SourceDisableEnd(heap,self,true);
 }
 static void Start(void* heap,void* self,int32_t cause,int32_t collector){
- Session::UnexpectedGC();Observation::GCOperation();original_start(heap,self,cause,collector);
+ Session::UnexpectedGC();Observation::GCOperation(heap,self,true);original_start(heap,self,cause,collector);
 }
 static void Finish(void* heap,void* self,int32_t type){
- Session::UnexpectedGC();Observation::GCOperation();original_finish(heap,self,type);
+ Session::UnexpectedGC();original_finish(heap,self,type);Observation::GCOperation(heap,self,false);
 }
 };
 namespace {
@@ -205,7 +205,7 @@ bool Observation::Collected(void* driver,const void* holder) noexcept {
 }
 void Observation::DisableBegin(void* heap,void* self) noexcept {
  if(!observation)return;auto& o=*observation;o.Event(3);if(o.phase_==Phase::kRun)return;
- if(!o.Ready()||o.phase_!=Phase::kArmed||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
+ if(!o.Ready()||o.phase_!=Phase::kArmed||o.prefinal_gc_||heap!=o.service_.heap_||self!=o.self_||!o.State(o.service_.state_.RunnableState())){
   o.Refuse("ordinary-source-original-GC-disable-owner-order-mismatch");return;}
  o.phase_=Phase::kDisabled;
 }
@@ -229,9 +229,18 @@ void Observation::DisableEnd(void* heap,void* self) noexcept {
   o.Refuse("ordinary-source-original-GC-enable-owner-order-mismatch");return;}
  o.phase_=Phase::kComplete;
 }
-void Observation::GCOperation() noexcept {
- if(observation)observation->Event(7);
- if(observation&&observation->phase_!=Phase::kRun)observation->Refuse("ordinary-source-final-path-nested-GC-operation");
+void Observation::GCOperation(void* heap,void* self,bool starting) noexcept {
+ if(!observation)return;auto& o=*observation;o.Event(7);
+ if(o.phase_==Phase::kRun)return;
+ // Collection precedes cache registration and breakpoint removal. GC is still
+ // permitted there: this observer retains only the native Holder identity, no
+ // borrowed managed pointer. A same-thread heap pair must finish BEFORE the
+ // actual original moving-GC disable returns and arms the final interval.
+ if(!o.Ready()||o.phase_!=Phase::kArmed){o.Refuse("ordinary-source-final-path-nested-GC-operation");return;}
+ if(heap!=o.service_.heap_||self!=o.self_||!o.service_.current_||o.service_.current_()!=o.self_||starting==o.prefinal_gc_){
+  o.Refuse("ordinary-source-prefinal-GC-owner-pair-mismatch");return;
+ }
+ o.prefinal_gc_=starting;
 }
 bool Observation::Finish(void* driver,bool success,Calibration* out) noexcept {
  Event(8);

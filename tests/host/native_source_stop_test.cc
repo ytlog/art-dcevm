@@ -135,8 +135,9 @@ void ObservationNegatives(native_source_stop::Service& service,Hooks& hooks){
   native_source_stop::Observation observation(bound,&driver,&run,&self,sizeof(self));assert(observation.Ready());
   if(mode==0)assert(!observation.Collected(&wrong_driver,&holder));
   else if(mode!=1)assert(observation.Collected(&driver,&holder));
+  disable_proxy(&heap,&self);
   if(mode==4){Native(&self);start_proxy(&heap,&self,8,1);finish_proxy(&heap,&self,0);Runnable(&self);}
-  disable_proxy(&heap,&self);Native(&self);unsigned char carrier,wrong_carrier;
+  Native(&self);unsigned char carrier,wrong_carrier;
   stop_proxy(&carrier,s::kFinalCause,true);resume_proxy(mode==5?&wrong_carrier:&carrier);Runnable(&self);
   native_source_stop::Calibration proof;
   if(mode==6){assert(!observation.Finish(&driver,true,&proof));enable_proxy(&heap,&self);}
@@ -166,6 +167,22 @@ void TraceRegressions(native_source_stop::Service& service){
   const auto& t=failed.Trace();assert(t.states[0]==92&&t.states[1]==92&&t.states[7]==92&&t.failed&&t.counts[0]==1&&t.counts[1]==1&&t.counts[7]==1&&t.events.order==0x821&&t.first_failure_phase==0);
  }
  self.flags=runnable_state<<shift;
+ {native_source_stop::Observation o(service,&driver,&run,&self,sizeof(self));assert(o.Collected(&driver,&holder));
+  Native(&self);start_proxy(&heap,&self,8,1);finish_proxy(&heap,&self,0);Runnable(&self);
+  disable_proxy(&heap,&self);Native(&self);unsigned char final;
+  stop_proxy(&final,"actual final after prefinal GC",true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+  native_source_stop::Calibration proof;assert(o.Finish(&driver,true,&proof)&&proof.Valid());
+  assert(o.Trace().counts[6]==2&&!o.Trace().failed);
+ }
+ {native_source_stop::Observation o(service,&driver,&run,&self,sizeof(self));assert(o.Collected(&driver,&holder));
+  Native(&self);start_proxy(&heap,&self,8,1);Runnable(&self);
+  // A start with no matching finish cannot arm final exclusion. Clean the
+  // fixture reservation only after recording that rejection.
+  disable_proxy(&heap,&self);Native(&self);finish_proxy(&heap,&self,0);unsigned char final;
+  stop_proxy(&final,"unfinished prefinal GC",true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+  native_source_stop::Calibration proof;assert(!o.Finish(&driver,true,&proof)&&!proof.Valid());
+  assert(!std::strcmp(o.Failure(),"ordinary-source-original-GC-disable-owner-order-mismatch"));
+ }
  {native_source_calibration::Bridge bridge(service,&self,sizeof(self));auto o=native_owned_removal::fixture_observer;
   o.begin(&driver,&run,&self,o.state);self.flags=92u<<shift;o.collected(&driver,&holder,o.state);self.flags=runnable_state<<shift;
   o.end(&driver,JVMTI_ERROR_NONE,true,o.state);
