@@ -1,5 +1,4 @@
 #include "platform/common/canonical_jni_members.h"
-#include "platform/arm32/borrowed_metadata.h"
 #include <cassert>
 #include <iostream>
 using namespace artdcevm::canonical_jni_members;
@@ -34,18 +33,5 @@ int main(){Declarations source{Construct,Destroy,DecodeMethod,DecodeField};std::
   assert(!scope.Read(reinterpret_cast<jfieldID>(0x201),&retained,&error));wrong_method=false;}
  assert(starts==6&&ends==6);
  {auto missing=source;missing.destroy=nullptr;Scope scope(missing);assert(!scope.Ready());}assert(starts==6&&ends==6);
- // The actual borrowed typed service reads source identity/storage; its
- // Method and Field wrappers cannot be substituted by a public JNI ID.
- alignas(4) unsigned char array[28]{};uint32_t len=1,flags=9,index=31;
- std::memcpy(array,&len,4);std::memcpy(array+8,&flags,4);std::memcpy(array+12,&index,4);
- artdcevm::arm32_borrowed_metadata::Methods methods{array,24,1,1};
- artdcevm::method_identity_reader::Identity identity{};
- assert(methods.Identity(0,&identity)&&identity.dex_method_index==31&&identity.access_flags==9);
- assert(!methods.Identity(1,&identity)&&!methods.At(1).address);
- artdcevm::readonly_field_table::Field storage{0x1000,0x19,37,112};
- artdcevm::arm32_borrowed_metadata::Fields fields{{{&storage}}};uint32_t offset=0;
- assert(fields.Storage(0,&flags,&offset)&&flags==0x19&&offset==112);
- assert(!fields.Storage(1,&flags,&offset));fields.declarations[0].address=nullptr;
- assert(!fields.Storage(0,&flags,&offset));
  std::cout<<"Canonical JNI IDs: pointer/distinct indexed opaque modes, independent manager/leaf proof, null/mismatch refusals and balanced original lifetime passed\n";
 }

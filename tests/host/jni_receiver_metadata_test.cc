@@ -5,11 +5,11 @@
 #include <iostream>
 using namespace artdcevm::jni_receiver_metadata;
 int main() {
-  for(size_t width:{4,8}) {
+  for(size_t width:{8}) {
     alignas(8) std::array<unsigned char,24> bytes{};
     // Independent serialized JNIEnvExt: table, self, vm; not a constructed JNI scope.
-    const uint64_t self=width==4?0x87654321ULL:0x0123456787654321ULL;
-    const uint64_t vm=width==4?0xfedcba98ULL:0x12345678fedcba98ULL;
+    const uint64_t self=0x0123456787654321ULL;
+    const uint64_t vm=0x12345678fedcba98ULL;
     std::memcpy(bytes.data()+width,&self,width);
     std::memcpy(bytes.data()+2*width,&vm,width);
     Receiver result{11,22};
@@ -29,8 +29,7 @@ int main() {
     assert(!ReadMatchedPrefix(width,reinterpret_cast<const void*>(UINTPTR_MAX-width+1),24,self,vm,&result));
     assert(!ReadMatchedPrefix(width,bytes.data(),24,self,vm,nullptr));
     assert(!ReadMatchedPrefix(2,bytes.data(),24,self,vm,&result));
-    if(width==4)assert(!ReadMatchedPrefix(width,bytes.data(),24,0x100000000ULL,vm,&result));
     assert(result.self==sentinel.self && result.vm==sentinel.vm);
   }
-  std::cout<<"JNI receiver metadata: fixed 32/64 prefixes, independent owners and failure preservation passed\n";
+  std::cout<<"JNI receiver metadata: fixed 64-bit prefix, independent owners and failure preservation passed\n";
 }

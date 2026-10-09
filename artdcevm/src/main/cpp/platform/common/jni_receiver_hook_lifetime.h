@@ -9,6 +9,7 @@ namespace artdcevm::jni_receiver_hook_lifetime {
 // process exit. Objects and installed hooks are deliberately never destructed.
 using Pin=bool (*)(void*,std::string*);
 template<size_t Width> class Installer {
+  static_assert(Width==8, "Only 64-bit JNI ABIs are supported");
  public:
   // Call ONLY from an ordinary non-critical JNI native entry, outside any
   // borrowed Runnable callback. ART supplies Native state at that entry. The

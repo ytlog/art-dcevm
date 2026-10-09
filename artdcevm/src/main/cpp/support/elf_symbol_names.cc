@@ -33,13 +33,6 @@ struct Symbol {
   uint16_t shndx;
   uint64_t value, size;
 };
-struct Header32 {
-  unsigned char ident[16]; uint16_t type,machine; uint32_t version,entry,phoff,shoff,flags;
-  uint16_t ehsize,phentsize,phnum,shentsize,shnum,shstrndx;
-};
-struct Section32 {uint32_t name,type,flags,addr,offset,size,link,info,addralign,entsize;};
-struct Symbol32 {uint32_t name,value,size;unsigned char info,other;uint16_t shndx;};
-static_assert(sizeof(Header32)==52 && sizeof(Section32)==40 && sizeof(Symbol32)==16);
 struct SectionRange {uint64_t offset,size;};
 static_assert(sizeof(Header) == 64 && sizeof(Section) == 64 && sizeof(Symbol) == 24);
 template <class T> bool Read(const std::vector<char>& bytes, size_t offset, T* result) {
@@ -170,14 +163,11 @@ std::unordered_map<std::string, std::string> ReadUniqueElfSymbolNames(const std:
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) return names;
   const auto length = input.tellg();
-  if (length < static_cast<std::streamoff>(sizeof(Header32)) || length > 256 * 1024 * 1024) return names;
+  if (length < static_cast<std::streamoff>(sizeof(Header)) || length > 256 * 1024 * 1024) return names;
   std::vector<char> bytes(static_cast<size_t>(length));
   input.seekg(0);
   if(!input.read(bytes.data(),bytes.size()))return {};
-  const unsigned elf_class=static_cast<unsigned char>(bytes[4]);
-  const bool collected=elf_class==1
-      ? CollectFile<Header32,Section32,Symbol32>(bytes,1,40,names,ambiguous)
-      : elf_class==2 && CollectFile<Header,Section,Symbol>(bytes,2,183,names,ambiguous);
+  const bool collected=CollectFile<Header,Section,Symbol>(bytes,2,183,names,ambiguous);
   if(!collected)return {};
   for (const auto& name : ambiguous) names.erase(name);
   return names;

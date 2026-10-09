@@ -14,10 +14,5 @@ static_assert(sizeof(RunnableJniScope)==3*sizeof(void*));
 static_assert(offsetof(RunnableJniScope,env)==sizeof(void*));
 static_assert(sizeof(JniEnvironmentPrefix)==3*sizeof(void*));
 static_assert(offsetof(JniEnvironmentPrefix,self)==sizeof(void*));
-// Fixed-width evidence carriers permit cross-host fixtures without pretending
-// that a 32-bit remote address is a dereferenceable host pointer.
-struct RunnableJniScope32 {uint32_t self,env,vm;};
-struct RunnableJniScope64 {uint64_t self,env,vm;};
-static_assert(sizeof(RunnableJniScope32)==12 && offsetof(RunnableJniScope32,env)==4);
-static_assert(sizeof(RunnableJniScope64)==24 && offsetof(RunnableJniScope64,env)==8);
+static_assert(sizeof(void*)==8, "Only 64-bit JNI ABIs are supported");
 }

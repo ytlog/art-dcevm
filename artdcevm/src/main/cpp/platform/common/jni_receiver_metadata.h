@@ -12,23 +12,16 @@ struct Receiver {uint64_t self,vm;};
 inline bool ReadMatchedPrefix(size_t pointer_width,const void* environment,
                               size_t extent,uint64_t expected_self,
                               uint64_t expected_vm,Receiver* output) {
-  if((pointer_width!=4 && pointer_width!=8) || !environment || !output ||
+  if(pointer_width!=8 || !environment || !output ||
       !expected_self || !expected_vm || extent<3*pointer_width ||
       reinterpret_cast<uintptr_t>(environment)%pointer_width ||
       reinterpret_cast<uintptr_t>(environment)>
-          std::numeric_limits<uintptr_t>::max()-3*pointer_width ||
-      (pointer_width==4 && (expected_self>UINT32_MAX || expected_vm>UINT32_MAX)))
+          std::numeric_limits<uintptr_t>::max()-3*pointer_width)
     return false;
   const auto* bytes=static_cast<const unsigned char*>(environment);
   Receiver candidate{};
-  if(pointer_width==4) {
-    uint32_t self,vm;
-    std::memcpy(&self,bytes+4,4);std::memcpy(&vm,bytes+8,4);
-    candidate={self,vm};
-  } else {
-    std::memcpy(&candidate.self,bytes+8,8);
-    std::memcpy(&candidate.vm,bytes+16,8);
-  }
+  std::memcpy(&candidate.self,bytes+8,8);
+  std::memcpy(&candidate.vm,bytes+16,8);
   if(candidate.self!=expected_self || candidate.vm!=expected_vm)return false;
   *output=candidate;return true;
 }

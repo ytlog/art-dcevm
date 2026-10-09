@@ -14,6 +14,7 @@ struct Report {Result result;CallbackResult callback;size_t original_callback_hi
 // extent and a rooted reflected Method/Constructor. Named symbol/provider image,
 // original hook and trampoline must stay alive for all calls and passthroughs.
 template<size_t PointerWidth> class Service {
+  static_assert(PointerWidth==8, "Only 64-bit JNI ABIs are supported");
   static_assert(PointerWidth==sizeof(void*), "calibrate only the executing CPU ABI");
  public:
   static bool Bind(HookEngine& hooks,void* original,Service* output,std::string* error) {

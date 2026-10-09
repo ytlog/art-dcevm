@@ -4,7 +4,7 @@ project(artdcevm LANGUAGES C CXX)
 add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
-if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "armeabi-v7a")
+if(ANDROID_ABI STREQUAL "arm64-v8a")
   target_sources(artdcevm PRIVATE
     third_party/xz_embedded/xz_dec_stream.c
     third_party/xz_embedded/xz_dec_lzma2.c
@@ -78,7 +78,6 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/common/native_schema_guard_verifier.cc
     platform/common/native_schema_binding.cc
     platform/common/prepared_field_copy.cc
-    platform/common/native_schema_guard_verifier.cc
     platform/common/rooted_hierarchy_allocator.cc
     platform/common/source_handle_roots.cc
     platform/common/source_allocation_transaction.cc
@@ -159,13 +158,8 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/validation_hooks.cc platform/android13/evolution_runtime.cc
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
-elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
-  # Source declarations and read-only receiver checks are compiled for the actual
-  # 32-bit ABI. Private evolution remains gated until its full runtime is ported.
-  target_sources(artdcevm PRIVATE platform/arm32/jni_receiver_metadata.cc
-    platform/arm32/jni_receiver_calibration.cc platform/arm32/jni_receiver_bootstrap.cc)
 elseif(NOT ANDROID_ABI STREQUAL "x86_64")
-  message(FATAL_ERROR "Supported ABIs: arm64-v8a, armeabi-v7a and x86_64")
+  message(FATAL_ERROR "Supported ABIs: arm64-v8a and x86_64")
 endif()
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)
