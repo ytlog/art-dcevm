@@ -51,13 +51,15 @@ class Service {
     candidate.map_=required(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
     candidate.slow_=required(Modern(family)?abi::arm64::android14::frame_registers::kSlow:abi::arm64::android11::frame_registers::kSlow);
     candidate.inline_depth_=reinterpret_cast<InlineDepth>(finder("_ZNK3art12StackVisitor11InlineDepthEv"));
-    candidate.register_count_=reinterpret_cast<RegisterCount>(finder("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
+    candidate.register_count_=reinterpret_cast<RegisterCount>(Modern(family)?
+      required("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"):
+      finder("_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
     candidate.decode_map_=reinterpret_cast<abi::arm64::dex_register_map::Decode>(required(abi::arm64::dex_register_map::kDecode));
     candidate.fast_=finder(family==Family::kAndroid11?abi::arm64::android11::frame_registers::kFast:abi::arm64::android12::frame_registers::kFast);
     candidate.jit_contains_=reinterpret_cast<ContainsJit>(required("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv"));
     candidate.header_contains_=reinterpret_cast<ContainsHeader>(finder("_ZNK3art20OatQuickMethodHeader8ContainsEm"));
     candidate.nterp_=family==Family::kAndroid11?nullptr:reinterpret_cast<Nterp>(required("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv"));
-    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ ||
+    if(!candidate.dex_pc_ || !candidate.create_ || !candidate.construct_ || !candidate.map_ || !candidate.slow_ || !candidate.decode_map_ || (Modern(family) && !candidate.register_count_) ||
        !stack_bound || !candidate.jit_contains_ || (family!=Family::kAndroid11 && !candidate.nterp_))return false;
     *output=candidate;return true;
   }
@@ -309,8 +311,7 @@ class Service {
         const size_t expected_count=range.first+range.count;
         if(native_count!=expected_count)
           return Fail(Failure::kDecodedMap,"original-slow-register-count-versus-complete-map-mismatch");
-      }else if(Modern(service.family_))
-        return Fail(Failure::kMissingBinding,"original-slow-register-count-leaf-unavailable");
+      }
       // Independently call the exact native decoder with its complete source
       // container, before the slow reader's release-build unchecked map[vreg].
       // Compare ALL locations, including missing registers, not only witnesses.

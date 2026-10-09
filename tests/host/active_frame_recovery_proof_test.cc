@@ -283,9 +283,11 @@ void Check(Family f){family=f;Reset();Service service;
  // The inline API remains strict: a successful physical proof cannot authorize it.
  assert(run().failure!=Failure::kNone);
  if(f==Family::kAndroid14||f==Family::kAndroid15||f==Family::kAndroid16||f==Family::kAndroid17) {
-   Service missing_count;assert(Service::Bind(f,Finder{"_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"},&missing_count));
-   slow_calls=0;const auto missing_report=missing_count.ProvePhysical(&thread,&jit,physical,scratch,2);
-   assert(missing_report.failure==Failure::kMissingBinding && !missing_report.native_register_count_observed && slow_calls==0);
+   Service missing_count;const char* missing_count_name=nullptr;
+   const unsigned created_before=creates;slow_calls=0;
+   assert(!Service::Bind(f,Finder{"_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"},&missing_count,&missing_count_name));
+   assert(missing_count_name && !std::strcmp(missing_count_name,"_ZNK3art12StackVisitor20GetNumberOfRegistersEPNS_8CodeInfoEi"));
+   assert(creates==created_before && slow_calls==0);
  }
  assert(physical_report.native_register_count_observed && physical_report.native_register_count==2 &&
    physical_report.slow_register_expected_count==2 && physical_report.native_inline_depth_observed &&
