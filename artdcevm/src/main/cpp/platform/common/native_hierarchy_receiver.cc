@@ -11,7 +11,7 @@ using native_hierarchy_graph::Graph;using native_hierarchy_graph::Input;using na
 constexpr size_t absent=SIZE_MAX;
 bool Fail(std::string* e,const char* text){if(e)*e=text;return false;}
 struct Fact {
- jclass root; jobject loader_root; std::string descriptor;uint32_t flags;
+ jclass root; jobject loader_root; std::string descriptor;uint32_t flags;std::optional<uint32_t> proposed_flags;
  size_t parent,proposed_parent;std::vector<size_t> interfaces,proposed_interfaces;
  bool initialized,affected;
  std::vector<size_t> before_relations,after_relations,before_order,after_order;
@@ -29,7 +29,7 @@ bool Relations(const Graph& graph,size_t root,bool proposed,std::vector<size_t>*
 }
 std::vector<size_t> Interfaces(const Graph& graph,const std::vector<size_t>& relations,size_t holder){std::vector<size_t> result;for(auto i:relations)if(i!=holder&&(graph.nodes[i].flags&0x200u))result.push_back(i);return result;}
 bool Schema(const Graph& graph,const Node& node,const evolution::ClassSchema& schema,bool proposed){
- if(schema.descriptor!=node.descriptor||(schema.access&0x7631u)!=(node.flags&0x7631u))return false;size_t p=proposed?node.proposed_parent:node.parent;const auto& interfaces=proposed?node.proposed_interfaces:node.interfaces;
+ if(schema.descriptor!=node.descriptor||(schema.access&0x7631u)!=((proposed?node.ProposedFlags():node.flags)&0x7631u))return false;size_t p=proposed?node.proposed_parent:node.parent;const auto& interfaces=proposed?node.proposed_interfaces:node.interfaces;
  if(p==absent){if(schema.superclass!=(node.flags&0x200u?"Ljava/lang/Object;":""))return false;}else if(schema.superclass!=graph.nodes[p].descriptor)return false;if(schema.interfaces.size()!=interfaces.size())return false;for(size_t i=0;i<interfaces.size();++i)if(schema.interfaces[i]!=graph.nodes[interfaces[i]].descriptor)return false;return true;
 }
 void* Selected(const Node& node){return node.affected?node.replacement:node.klass;}
@@ -47,13 +47,13 @@ struct Preservation::State {
  std::vector<Fact> facts;std::vector<size_t> inputs;mutable std::vector<size_t> pair_nodes;mutable const source_commit::Plan* plan=nullptr;bool staged=false;
  bool Matches(const Graph& g)const noexcept{
   if(!staged||graph!=&g||g.nodes.size()!=facts.size()||g.inputs!=inputs)return false;
-  for(size_t i=0;i<facts.size();++i){const auto& f=facts[i];const auto& n=g.nodes[i];if(n.strong_class!=f.root||n.strong_loader!=f.loader_root||n.descriptor!=f.descriptor||n.flags!=f.flags||n.parent!=f.parent||n.proposed_parent!=f.proposed_parent||n.interfaces!=f.interfaces||n.proposed_interfaces!=f.proposed_interfaces||n.initialized!=f.initialized||n.affected!=f.affected||!n.klass||(bool(n.strong_loader)!=bool(n.loader)))return false;}
+  for(size_t i=0;i<facts.size();++i){const auto& f=facts[i];const auto& n=g.nodes[i];if(n.strong_class!=f.root||n.strong_loader!=f.loader_root||n.descriptor!=f.descriptor||n.flags!=f.flags||n.proposed_flags!=f.proposed_flags||n.parent!=f.parent||n.proposed_parent!=f.proposed_parent||n.interfaces!=f.interfaces||n.proposed_interfaces!=f.proposed_interfaces||n.initialized!=f.initialized||n.affected!=f.affected||!n.klass||(bool(n.strong_loader)!=bool(n.loader)))return false;}
   return true;
  }
- bool Identity(void* klass,const Node& node,void* parent)const noexcept{
+ bool Identity(void* klass,const Node& node,void* parent,bool proposed=false)const noexcept{
   if(!klass||node.descriptor.empty()||node.descriptor.front()!='L')return false;size_t extent=0;class_metadata::State state;
   const auto& layout=metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
-  if(!Extent(klass,&extent)||!class_metadata::ReadState(layout,klass,extent,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||(state.access_flags&0x7631u)!=(node.flags&0x7631u))return false;
+  if(!Extent(klass,&extent)||!class_metadata::ReadState(layout,klass,extent,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||(state.access_flags&0x7631u)!=((proposed?node.ProposedFlags():node.flags)&0x7631u))return false;
   field_copy::CopyClassView view;return metadata->ClassIdentity(klass,&view,nullptr,Context())&&view.loader==node.loader&&view.parent==parent&&view.descriptor&&node.descriptor==view.descriptor;
  }
  bool Originals(const Graph& g)const noexcept{
@@ -63,7 +63,7 @@ struct Preservation::State {
  }
  bool Replacement(const Graph& g,size_t index,void* klass)const noexcept{
   const auto& n=g.nodes[index];const auto& f=facts[index];void* parent=n.proposed_parent==absent?nullptr:Selected(g.nodes[n.proposed_parent]);if(n.proposed_parent!=absent&&!parent)return false;
-  if(!f.linked||!Identity(klass,n,parent))return false;for(size_t j=0;j<f.after_order.size();++j){void* value=Selected(g.nodes[f.after_order[j]]);if(!value)return false;f.after_native[j]=value;}return native_interface_graph::MatchesInContext(*metadata,klass,f.after_native,nullptr,Context());
+  if(!f.linked||!Identity(klass,n,parent,true))return false;for(size_t j=0;j<f.after_order.size();++j){void* value=Selected(g.nodes[f.after_order[j]]);if(!value)return false;f.after_native[j]=value;}return native_interface_graph::MatchesInContext(*metadata,klass,f.after_native,nullptr,Context());
  }
 };
 Preservation::Preservation(const modern_field_metadata::FieldMetadata& m):state_(new State(m)){}
@@ -75,8 +75,10 @@ bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inp
  std::vector<Fact> facts;facts.reserve(graph.nodes.size());
  for(size_t i=0;i<graph.nodes.size();++i){const auto& n=graph.nodes[i];if(!n.strong_class||!n.klass||n.descriptor.size()<3||n.descriptor.front()!='L'||n.descriptor.back()!=';'||(n.loader&&!n.strong_loader)||(n.parent!=absent&&n.parent>=graph.nodes.size())||(n.proposed_parent!=absent&&n.proposed_parent>=graph.nodes.size()))return Fail(error,"Receiver relation has no rooted ordinary Class proof");
   if((n.flags&0x200u)?(n.parent!=absent||n.proposed_parent!=absent):((n.parent==absent||n.proposed_parent==absent)&&(n.descriptor!="Ljava/lang/Object;"||n.loader)))return Fail(error,"Receiver role has unproved Object/interface superclass semantics");
-  Fact f{n.strong_class,n.strong_loader,n.descriptor,n.flags,n.parent,n.proposed_parent,n.interfaces,n.proposed_interfaces,n.initialized,n.affected,{},{},{},{},{},{},false};
-  for(auto p:{n.parent,n.proposed_parent})if(p!=absent&&((graph.nodes[p].flags&0x200u)||(graph.nodes[p].flags&0x10u)))return Fail(error,"Receiver superclass role or finality is invalid");
+  Fact f{n.strong_class,n.strong_loader,n.descriptor,n.flags,n.proposed_flags,n.parent,n.proposed_parent,n.interfaces,n.proposed_interfaces,n.initialized,n.affected,{},{},{},{},{},{},false};
+  if(((n.flags^n.ProposedFlags())&~0x410u)||(n.ProposedFlags()&0x410u)==0x410u)return Fail(error,"Receiver proposal changes role/access or combines final and abstract");
+  if(n.parent!=absent&&(graph.nodes[n.parent].flags&0x210u))return Fail(error,"Original receiver superclass role or finality is invalid");
+  if(n.proposed_parent!=absent&&(graph.nodes[n.proposed_parent].ProposedFlags()&0x210u))return Fail(error,"Proposed receiver superclass role or finality is invalid");
   if(!Relations(graph,i,false,&f.before_relations)||!Relations(graph,i,true,&f.after_relations))return Fail(error,"Receiver graph contains cycle or unknown identity");
   for(const auto* edges:{&n.interfaces,&n.proposed_interfaces})for(auto edge:*edges)if(!(graph.nodes[edge].flags&0x200u))return Fail(error,"Receiver interface edge names a class");
   if(n.affected)for(auto old:f.before_relations)if(std::find(f.after_relations.begin(),f.after_relations.end(),old)==f.after_relations.end())return Fail(error,"Receiver assignability narrowing needs unavailable dispatch checks");
@@ -85,7 +87,7 @@ bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inp
   void*native_parent=nullptr;if(!NativeSuperclass(graph,n,false,&native_parent)||!s.Identity(n.klass,n,native_parent)||!native_interface_graph::Read(*s.metadata,n.klass,&f.before_native,error)||!Order(graph,f.before_native,Interfaces(graph,f.before_relations,i),false,&f.before_order))return Fail(error,"Original native receiver graph differs from public proof");
   f.after_native.reserve(Interfaces(graph,f.after_relations,i).size());f.after_order.reserve(f.after_native.capacity());facts.push_back(std::move(f));
  }
- for(size_t i=0;i<inputs.size();++i){size_t n=graph.inputs[i];if(n>=graph.nodes.size()||!graph.nodes[n].affected||inputs[i].strong_original!=graph.nodes[n].strong_class||inputs[i].before.access!=inputs[i].after.access||inputs[i].before.descriptor!=graph.nodes[n].descriptor||inputs[i].after.descriptor!=graph.nodes[n].descriptor||!Schema(graph,graph.nodes[n],inputs[i].before,false)||!Schema(graph,graph.nodes[n],inputs[i].after,true)||std::find(graph.inputs.begin(),graph.inputs.begin()+i,n)!=graph.inputs.begin()+i)return Fail(error,"Receiver source role/modifier or exact target proof differs");}
+ for(size_t i=0;i<inputs.size();++i){size_t n=graph.inputs[i];if(n>=graph.nodes.size()||!graph.nodes[n].affected||inputs[i].strong_original!=graph.nodes[n].strong_class||((inputs[i].before.access^inputs[i].after.access)&~0x410u)||inputs[i].before.descriptor!=graph.nodes[n].descriptor||inputs[i].after.descriptor!=graph.nodes[n].descriptor||!Schema(graph,graph.nodes[n],inputs[i].before,false)||!Schema(graph,graph.nodes[n],inputs[i].after,true)||std::find(graph.inputs.begin(),graph.inputs.begin()+i,n)!=graph.inputs.begin()+i)return Fail(error,"Receiver source role/modifier or exact target proof differs");}
  for(size_t n=0;n<facts.size();++n){bool expected=false;for(auto root:graph.inputs)expected|=std::find(facts[n].before_relations.begin(),facts[n].before_relations.end(),root)!=facts[n].before_relations.end()||std::find(facts[n].after_relations.begin(),facts[n].after_relations.end(),root)!=facts[n].after_relations.end();if(expected!=graph.nodes[n].affected)return Fail(error,"Receiver snapshot omitted implicit affected relation cohort");}
  s.pair_nodes.assign(size_t(std::count_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.affected;})),absent);s.facts=std::move(facts);s.inputs=graph.inputs;s.graph=&graph;s.staged=true;return true;
 }
@@ -93,7 +95,7 @@ bool Preservation::VerifyPrepared(const Graph& graph,const Prepared& prepared,st
  auto& s=*state_;if(!s.Originals(graph))return Fail(error,"Staged receiver public/native graph changed");auto it=std::find_if(graph.nodes.begin(),graph.nodes.end(),[&](const auto& n){return n.klass==prepared.old_class;});if(it==graph.nodes.end()||!it->affected||!prepared.source_owner||!prepared.cache||!prepared.declarations)return Fail(error,"Receiver allocation lacks actual affected source owner");if(!Schema(graph,*it,*prepared.declarations,true))return Fail(error,"Receiver allocation declaration differs from staged proposal");size_t index=size_t(it-graph.nodes.begin());auto& fact=s.facts[index];
  void* parent=it->proposed_parent==absent?nullptr:Selected(graph.nodes[it->proposed_parent]);if((it->proposed_parent!=absent&&!parent)||prepared.parent!=parent)return Fail(error,"Receiver allocation selected an unproved parent");
  if(!prepared.new_class)return true;
- if(fact.linked||!s.Identity(prepared.new_class,*it,parent))return Fail(error,"Linked receiver Class has different namespace/role/parent");
+ if(fact.linked||!s.Identity(prepared.new_class,*it,parent,true))return Fail(error,"Linked receiver Class has different namespace/role/parent");
  std::vector<void*> native;std::vector<size_t> order;if(!native_interface_graph::Read(*s.metadata,prepared.new_class,&native,error)||!Order(graph,native,Interfaces(graph,fact.after_relations,index),true,&order))return Fail(error,"Linked Class loses exact proposed interface relations");
  fact.after_native=std::move(native);fact.after_order=std::move(order);fact.linked=true;return true;
 }

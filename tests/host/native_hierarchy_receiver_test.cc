@@ -2,7 +2,7 @@
 #include "platform/common/native_hierarchy_receiver.h"
 using native_hierarchy_receiver::Preservation;
 static Node N(Fake& f,size_t p=SIZE_MAX,std::vector<size_t> interfaces={}){Node n;n.strong_class=reinterpret_cast<jclass>(&f);n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.initialized=true;n.parent=n.proposed_parent=p;n.interfaces=n.proposed_interfaces=std::move(interfaces);return n;}
-static evolution::ClassSchema S(const Graph& g,size_t index,bool proposed){const auto& n=g.nodes[index];size_t p=proposed?n.proposed_parent:n.parent;const auto& edges=proposed?n.proposed_interfaces:n.interfaces;evolution::ClassSchema s;s.descriptor=n.descriptor;s.access=n.flags;s.superclass=p==SIZE_MAX?(n.flags&0x200u?"Ljava/lang/Object;":""):g.nodes[p].descriptor;for(auto i:edges)s.interfaces.push_back(g.nodes[i].descriptor);return s;}
+static evolution::ClassSchema S(const Graph& g,size_t index,bool proposed){const auto& n=g.nodes[index];size_t p=proposed?n.proposed_parent:n.parent;const auto& edges=proposed?n.proposed_interfaces:n.interfaces;evolution::ClassSchema s;s.descriptor=n.descriptor;s.access=proposed?n.ProposedFlags():n.flags;s.superclass=p==SIZE_MAX?(n.flags&0x200u?"Ljava/lang/Object;":""):g.nodes[p].descriptor;for(auto i:edges)s.interfaces.push_back(g.nodes[i].descriptor);return s;}
 struct Fixture {
  Fake object{"Ljava/lang/Object;"},base{"Lpkg/Base;",&object},a{"Lpkg/A;",&base},b{"Lpkg/B;",&a},parent{"Lpkg/AddedParent;",&base},i0{"Lpkg/I0;",&object,0x601},i2{"Lpkg/I2;",&object,0x601},i3{"Lpkg/I3;",&object,0x601},i4{"Lpkg/I4;",&object,0x601},other{"Lpkg/Caller;",&object};Graph graph;std::vector<Input> inputs;
  Fixture(){
@@ -11,8 +11,24 @@ struct Fixture {
   graph.inputs={2};graph.nodes[2].proposed_parent=4;graph.nodes[2].proposed_interfaces={8};graph.nodes[2].affected=graph.nodes[3].affected=true;inputs={{graph.nodes[2].strong_class,S(graph,2,false),S(graph,2,true)}};
  }
 };
+static void ClassFlags(const modern_field_metadata::FieldMetadata& metadata){
+ // Exercise the actual Preservation owner through Stage, allocation and final
+ // pair verification. Schema guards for final/abstract remain separate owners.
+ for(auto flags:std::vector<std::pair<uint32_t,uint32_t>>{{1,0x401},{0x401,1},{1,0x11},{0x11,1},{0x11,0x401},{0x401,0x11}}){
+  Fixture f;for(auto&n:f.graph.nodes){n.affected=false;n.proposed_parent=n.parent;n.proposed_interfaces=n.interfaces;}
+  auto& node=f.graph.nodes[3];node.affected=true;node.flags=f.b.bytes.access_flags=flags.first;node.proposed_flags=flags.second;f.graph.inputs={3};
+  f.inputs={{node.strong_class,S(f.graph,3,false),S(f.graph,3,true)}};std::string error;Preservation owner(metadata);assert(owner.VerifyStaged(f.graph,f.inputs,&error));
+  int source=1,cache=2;Fake replacement(f.b.descriptor.c_str(),&f.a,flags.first);replacement.native_interfaces=f.b.native_interfaces;
+  Prepared p{&source,&f.b,&replacement,&cache,&f.a,0,&f.inputs[0].after};assert(!owner.VerifyPrepared(f.graph,p,&error));replacement.bytes.access_flags=flags.second;assert(owner.VerifyPrepared(f.graph,p,&error));node.replacement=&replacement;
+  source_commit::Plan plan;plan.old_classes={&f.b};plan.new_classes={&replacement};bool mapped=true;modern_field_metadata::ReadContext context{&mapped,[](void* owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};owner.UseReadContext(context);forbid_os=true;forbid_alloc=true;
+  assert(owner.Verify(f.graph,plan));replacement.bytes.access_flags=flags.first;assert(!owner.Verify(f.graph,plan));replacement.bytes.access_flags=flags.second;
+  f.b.bytes.access_flags=flags.second;assert(!owner.Verify(f.graph,plan));f.b.bytes.access_flags=flags.first;
+  node.proposed_flags=flags.first;assert(!owner.Verify(f.graph,plan));node.proposed_flags=flags.second;
+  mapped=false;assert(!owner.Verify(f.graph,plan));mapped=true;assert(owner.Verify(f.graph,plan));owner.BeginCommit(f.graph,plan);forbid_alloc=false;forbid_os=false;
+ }
+}
 int main(){
- modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;
+ modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;ClassFlags(metadata);
  {
   Fixture f;Preservation owner(metadata);f.i0.parent=nullptr;assert(!owner.VerifyStaged(f.graph,f.inputs,&error));f.i0.parent=&f.object;assert(owner.VerifyStaged(f.graph,f.inputs,&error));
   int source=0,cache=0;Prepared p{&source,&f.a,nullptr,&cache,&f.parent,7,&f.inputs[0].after};assert(owner.VerifyPrepared(f.graph,p,&error));auto wrong=f.inputs[0].after;wrong.superclass=f.object.descriptor;p.declarations=&wrong;assert(!owner.VerifyPrepared(f.graph,p,&error));p.declarations=&f.inputs[0].after;
