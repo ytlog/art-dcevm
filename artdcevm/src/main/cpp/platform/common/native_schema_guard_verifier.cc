@@ -28,6 +28,21 @@ struct Snapshot {
  std::vector<size_t> parents;
  std::vector<std::vector<void*>> declared,all_methods;
 };
+// Public interface getSuperclass is null; ART ClassLinker retains bootstrap
+// Object in the native super_class field. Preserve both identities instead of
+// changing the public parent graph or exempting interfaces from native proof.
+bool NativeSuperclass(const std::vector<Node>& nodes,const Snapshot& roots,size_t index,void** out)noexcept{
+ if(!out||index>=nodes.size()||roots.classes.size()!=nodes.size()||roots.loaders.size()!=nodes.size()||roots.parents.size()!=nodes.size())return false;
+ const auto parent=roots.parents[index];
+ if(nodes[index].schema.access&0x200u){
+  if(parent!=absent)return false;void* object=nullptr;
+  for(size_t i=0;i<nodes.size();++i)if(nodes[i].schema.descriptor=="Ljava/lang/Object;"&&!roots.loaders[i]){
+   if(object||!roots.classes[i]||(nodes[i].schema.access&0x200u))return false;object=roots.classes[i];}
+  if(!object)return false;*out=object;return true;
+ }
+ if(parent==absent){*out=nullptr;return true;}
+ if(parent>=nodes.size()||!roots.classes[parent])return false;*out=roots.classes[parent];return true;
+}
 bool SamePlan(const source_commit::Plan& a,const source_commit::Plan& b){
  if(a.mirror!=b.mirror||a.new_classes_root!=b.new_classes_root||a.abstract_instances!=b.abstract_instances||a.old_classes!=b.old_classes||a.new_classes!=b.new_classes||a.old_instances!=b.old_instances||a.new_instances!=b.new_instances||a.class_root_origins.size()!=b.class_root_origins.size())return false;
  for(size_t i=0;i<a.class_root_origins.size();++i)if(a.class_root_origins[i].array!=b.class_root_origins[i].array||a.class_root_origins[i].index!=b.class_root_origins[i].index)return false;
@@ -90,7 +105,7 @@ struct Verifier::State {
    if(!roots.Read(nodes[n].root,&klass)||klass!=frozen_snapshot.classes[n])return false;
    void* loader=nullptr;if(nodes[n].loader&&!roots.Read(nodes[n].loader,&loader))return false;
    if(loader!=frozen_snapshot.loaders[n]||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,class_loader))!=loader)return false;
-   const size_t parent=frozen_snapshot.parents[n];if(bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,super_class))!=(parent==absent?nullptr:frozen_snapshot.classes[parent]))return false;
+   void* parent=nullptr;if(!NativeSuperclass(nodes,frozen_snapshot,n,&parent)||bindings.metadata->Reference(klass,offsetof(class_metadata::Class11,super_class))!=parent)return false;
    const size_t flags=split?offsetof(class_metadata::Class11,access_flags):offsetof(class_metadata::Class17,access_flags);
    if(native_schema_policy::JavaFlags(__atomic_load_n(reinterpret_cast<uint32_t*>(static_cast<char*>(klass)+flags),__ATOMIC_RELAXED))!=proof.flags||
       Read<uint64_t>(klass,offsetof(class_metadata::Class11,methods))!=uintptr_t(proof.methods)||
@@ -130,7 +145,7 @@ struct Verifier::State {
    if(node.parent){void* parent=nullptr;if(!roots.Read(node.parent,&parent))return false;auto it=std::find(result.classes.begin(),result.classes.end(),parent);if(it==result.classes.end())return Fail(error,"Staged ancestor is outside complete loaded roots");result.parents[n]=size_t(it-result.classes.begin());}
    field_copy::CopyClassView identity;
    if(!bindings.metadata->ClassIdentity(klass,&identity,error)||identity.loader!=result.loaders[n]||!identity.descriptor||node.schema.descriptor!=identity.descriptor)return Fail(error,"Public/native Class descriptor or loader changed");
-   void* expected_parent=result.parents[n]==absent?nullptr:result.classes[result.parents[n]];
+   void* expected_parent=nullptr;if(!NativeSuperclass(nodes,result,n,&expected_parent))return Fail(error,"Native superclass lacks exact public parent/bootstrap Object proof");
    if(identity.parent!=expected_parent)return Fail(error,"Native superclass differs from public rooted identity");
    for(size_t i=0;i<node.field_ids.size();++i){
     void* field=bindings.decode_native_field(bindings.owner,klass,node.field_ids[i]);field_copy::CopyFieldView identity;

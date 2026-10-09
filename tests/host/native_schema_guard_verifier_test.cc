@@ -28,6 +28,20 @@ int main(){
  assert(!Ordinary(JVMTI_CLASS_STATUS_ARRAY));
  assert(!Ordinary(JVMTI_CLASS_STATUS_PRIMITIVE));
  assert(!Ordinary(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED));
+ // Interface reflection's null parent and ART's bootstrap Object field are
+ // separate fixed semantics. The public hierarchy edge remains absent.
+ std::vector<Node> nodes(3);nodes[0].schema.descriptor="Ljava/lang/Object;";
+ nodes[1].schema.descriptor="LInterface;";nodes[1].schema.access=0x201;
+ nodes[2].schema.descriptor="LConcrete;";nodes[2].schema.access=1;
+ Snapshot roots;roots.classes={p(20),p(21),p(22)};roots.loaders={nullptr,p(30),p(30)};roots.parents={absent,absent,0};
+ void* superclass=p(99);assert(NativeSuperclass(nodes,roots,1,&superclass)&&superclass==p(20));assert(roots.parents[1]==absent);
+ assert(NativeSuperclass(nodes,roots,0,&superclass)&&!superclass);
+ assert(NativeSuperclass(nodes,roots,2,&superclass)&&superclass==p(20));
+ roots.parents[1]=0;assert(!NativeSuperclass(nodes,roots,1,&superclass));roots.parents[1]=absent;
+ roots.loaders[0]=p(30);assert(!NativeSuperclass(nodes,roots,1,&superclass));roots.loaders[0]=nullptr;
+ nodes[0].schema.descriptor="LOther;";assert(!NativeSuperclass(nodes,roots,1,&superclass));nodes[0].schema.descriptor="Ljava/lang/Object;";
+ nodes[2].schema.descriptor="Ljava/lang/Object;";roots.loaders[2]=nullptr;assert(!NativeSuperclass(nodes,roots,1,&superclass));nodes[2].schema.descriptor="LConcrete;";roots.loaders[2]=p(30);
+ roots.parents[2]=20;assert(!NativeSuperclass(nodes,roots,2,&superclass));roots.parents[2]=0;
  evolution::Member m{"call","()V",1u,1};assert(Virtual(m));
  m.access=2;assert(!Virtual(m));m.access=8;assert(!Virtual(m));
  m.access=1;m.name="<init>";assert(!Virtual(m));
@@ -42,5 +56,5 @@ int main(){
  assert(!Accessible(size_t(2),size_t(1),0,parent,same_package));
  assert(ConcreteBelow(size_t(4),size_t(1),parent,[](size_t n){return n==2;}));
  assert(!ConcreteBelow(size_t(4),size_t(1),parent,[](size_t n){return n==1;}));
- std::cout<<"actual schema verifier: exact Holder attestation, Class kinds, and loaded access/abstract policy passed\n";
+ std::cout<<"actual schema verifier: exact Holder attestation, Class kinds, exact public/native interface superclass, and loaded access/abstract policy passed\n";
 }
