@@ -2,6 +2,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/dex_file_metadata.h"
+#include "platform/common/class_metadata_abi.h"
 #include "platform/abi/arm64/android16/class.h"
 #include "platform/abi/arm64/android17/class.h"
 #include <cstdlib>
@@ -53,6 +54,33 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   string_equals_=reinterpret_cast<StringEquals>(hooks.FindSymbol("libart.so","_ZN3art6mirror6String6EqualsEPKc"));
   mark_=mark;root_=root;bound_=true;
   if(error)error->clear();return true;
+}
+bool FieldMetadata::DefiningClassFlags(void* klass,uint32_t* flags,std::string* error,const ReadContext* context)const {
+  if(!Calibrated()||!flags)return Fail(error,"Defining Class flags require calibrated metadata");
+  const auto& layout=model_==Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
+  size_t extent=0;class_metadata::Identity identity;
+  if(!Extent(context,klass,&extent)||!class_metadata::ReadIdentity(layout,klass,extent,&identity)||identity.class_def_index<0)
+    return Fail(error,"Class has no immutable defining ClassDef index");
+  void* cache=Reference(klass,offsetof(SplitClass,dex_cache));
+  // All fixed supported DexCache declarations share this immutable prefix.
+  static_assert(offsetof(abi::arm64::android11::LegacyCache,dex_file)==offsetof(abi::arm64::android14::DualCache,dex_file));
+  constexpr size_t offset=offsetof(abi::arm64::android11::LegacyCache,dex_file);
+  if(!cache||!Extent(context,cache,&extent)||extent<offset+8)return Fail(error,"Defining Class DexCache prefix unavailable");
+  uint64_t raw=0;std::memcpy(&raw,static_cast<const unsigned char*>(cache)+offset,8);
+  auto* file=reinterpret_cast<void*>(uintptr_t(raw));dex_mapping_abi::Prefix prefix;
+  if(!file||!Extent(context,file,&extent)||extent<sizeof(prefix))return Fail(error,"Defining Class DexFile prefix unavailable");
+  std::memcpy(&prefix,file,sizeof(prefix));size_t header_extent=0,data_extent=0;
+  if(!prefix.begin||!prefix.data_begin||!Extent(context,prefix.begin,&header_extent)||header_extent<0x70||!Extent(context,prefix.data_begin,&data_extent)||prefix.data_size>data_extent)
+    return Fail(error,"Defining Class DEX mappings unavailable");
+  // file_size is the immutable source header extent. Do not use the modern
+  // DexFile unused_size_ slot or select declarations by Android version.
+  uint32_t size=0;std::memcpy(&size,prefix.begin+32,4);
+  if(size<0x70||size>header_extent)return Fail(error,"Defining Class DEX header exceeds mapped range");
+  evolution::MappedDexMetadata mapping{prefix.begin,size,prefix.data_begin,prefix.data_size,uint32_t(identity.class_def_index)};
+  std::string diagnostic;evolution::ClassSchema schema;if(!evolution::ReadMappedDexDeclarations(mapping,&schema,error?error:&diagnostic))return false;
+  const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error,context)||!descriptor||schema.descriptor!=descriptor)
+    return Fail(error,"Defining ClassDef differs from exact native Class descriptor");
+  *flags=schema.access;return true;
 }
 bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error,const ReadContext* context)const {
   // Fixed legacy Class/DexCache/DexFile declarations, used only after the

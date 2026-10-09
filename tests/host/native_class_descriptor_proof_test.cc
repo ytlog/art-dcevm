@@ -3,6 +3,7 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include <map>
+#include "platform/common/dex_mapping_abi.h"
 std::map<void*,const char*> terminal_names;
 size_t comparisons=0;bool bogus_equals=false;
 bool StringEquals(void* string,const char* name){++comparisons;return bogus_equals||std::strcmp(static_cast<const char*>(string),name)==0;}
@@ -28,6 +29,21 @@ int main(){
  auto* name=static_cast<char*>(heap.New(128));std::strcpy(name,"custom.\xe4\xb8\xadProxy");proxy->name=uint32_t(uintptr_t(name));
  auto* proxy_array=make();proxy_array->component_type=uint32_t(uintptr_t(proxy));
  Snapshot snapshot;modern_field_metadata::ReadContext context{&snapshot,Snapshot::Extent};
+ // Independently immutable ClassDef supplies effective flags even when the
+ // public InnerClass annotation reports static/nonfinal or private/protected.
+ auto* dex=static_cast<unsigned char*>(heap.New(512));std::memcpy(dex,"dex\n035",7);
+ const auto put=[&](size_t at,uint32_t value){std::memcpy(dex+at,&value,4);};
+ put(32,512);put(36,112);put(40,0x12345678);put(104,312);put(108,200);
+ put(56,2);put(60,112);put(64,2);put(68,120);put(96,1);put(100,128);
+ put(112,200);put(116,300);put(120,0);put(124,1);put(128+4,0x10);put(128+8,1);
+ dex[200]=9;std::memcpy(dex+201,"LFixture;",10);dex[300]=18;std::memcpy(dex+301,"Ljava/lang/Object;",19);
+ auto* prefix=new(heap.New(40)) dex_mapping_abi::Prefix{nullptr,dex,SIZE_MAX,dex,512};
+ auto* cache=static_cast<unsigned char*>(heap.New(24));const uint64_t file=uintptr_t(prefix);std::memcpy(cache+16,&file,8);
+ old_class->dex_cache=uint32_t(uintptr_t(cache));old_class->dex_class_def_index=0;
+ uint32_t defining=0;if(!metadata.DefiningClassFlags(old_class,&defining,&error,&context)){std::cerr<<error<<"\n";std::abort();}assert(defining==0x10);
+ terminal_names[old_class]="LWrong;";assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));terminal_names.erase(old_class);
+ snapshot.deny=prefix;assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));snapshot.deny=nullptr;
+ old_class->dex_class_def_index=1;assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));old_class->dex_class_def_index=0;
  field_copy::CopyClassView view;const int before=jni_calls;const uint64_t queries=method_identity::MappingOsQueries();
  assert(metadata.ClassIdentityVerified(old_class,"LFixture;",nullptr,nullptr,nullptr,&view,&error,&context));
  assert(metadata.ClassIdentityVerified(primitive,"I",nullptr,nullptr,nullptr,&view,&error,&context));

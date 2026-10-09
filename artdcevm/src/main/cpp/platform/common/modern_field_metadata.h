@@ -50,6 +50,7 @@ class FieldMetadata {
   bool ClassIdentityVerified(void*,const char* descriptor,void* public_proxy_name,
       const char* proxy_name,const char* negative_proxy_name,
       field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
+  bool DefiningClassFlags(void*,uint32_t*,std::string*,const ReadContext* =nullptr)const;
   bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext* =nullptr)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal,const ReadContext* =nullptr) const;
   void* FieldDeclaringClass(void* field)const;

@@ -32,16 +32,19 @@ bool SetMatches(const std::vector<void*>& actual,const std::vector<size_t>& expe
 bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata& metadata,Graph* graph,std::string* error){
  if(!graph||!metadata.Calibrated())return Fail(error,"Class flags lack calibrated metadata/rooted graph");
  const auto& layout=metadata.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
- constexpr uint32_t source_flags=0x7631u,non_visibility=source_flags&~1u;
+ constexpr uint32_t source_flags=0x7631u;
  for(auto& node:graph->nodes){size_t extent=0;class_metadata::State state;
   if(node.proposed_flags&&((node.flags^*node.proposed_flags)&~0x410u))return Fail(error,("Public Class proposal changes role/access: "+node.descriptor).c_str());
   if(!node.klass||!method_identity::ReadableMappingExtent(node.klass,&extent)||!class_metadata::ReadState(layout,node.klass,extent,&state)||state.IsPrimitive())return Fail(error,("Rooted Class effective flags unavailable from calibrated metadata: "+node.descriptor).c_str());
   const uint32_t public_flags=node.public_flags.value_or(node.flags);
-  if((public_flags&non_visibility)!=(state.access_flags&non_visibility))return Fail(error,("Public/native Class non-visibility flags disagree: "+node.descriptor+" publicFlags="+std::to_string(public_flags)+" nativeFlags="+std::to_string(state.access_flags)).c_str());
-  // JVM visibility uses Class access_flags, while JVMTI's public modifier query
-  // applies InnerClass annotation flags. Raw flags were independently checked
-  // above, not inferred from descriptor/nesting or a selected device family.
-  node.public_flags=public_flags;node.flags=(public_flags&~source_flags)|(state.access_flags&source_flags);
+  uint32_t defining_flags=0;
+  // Source proxy Classes have no ClassDef or InnerClass annotation. For normal
+  // Classes the public query replaces every Java flag from that annotation;
+  // compare immutable ClassDef access against calibrated native state instead.
+  if(state.access_flags&0x40000u)defining_flags=public_flags;
+  else if(!metadata.DefiningClassFlags(node.klass,&defining_flags,error))return false;
+  if((defining_flags&source_flags)!=(state.access_flags&source_flags))return Fail(error,("Defining DEX/native Class flags disagree: "+node.descriptor+" definingFlags="+std::to_string(defining_flags)+" nativeFlags="+std::to_string(state.access_flags)).c_str());
+  node.public_flags=public_flags;node.flags=state.access_flags&source_flags;
   if(node.proposed_flags)node.proposed_flags=(node.flags&~0x410u)|(*node.proposed_flags&0x410u);
  }return true;
 }

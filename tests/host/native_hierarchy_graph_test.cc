@@ -20,8 +20,8 @@ struct Fake {
  class_metadata::Class11 bytes{};
  std::string descriptor;Fake* parent=nullptr;void* loader=nullptr;
  std::vector<Fake*> interfaces;std::vector<void*> native_interfaces;
- bool initialized=true;
- Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;}
+ bool initialized=true;uint32_t defining_flags=1;
+ Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;defining_flags=flags;}
 };
 static std::vector<Fake*> loaded;
 static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0;
@@ -31,6 +31,7 @@ void operator delete(void* p,size_t)noexcept{std::free(p);}
 namespace artdcevm::method_identity {bool ReadableMappingExtent(const void*,size_t* out){assert(!forbid_os);*out=4096;return true;}}
 namespace artdcevm::modern_field_metadata {
 bool FieldMetadata::Calibrate(const runnable_jni::Context&,jobject,const char*,const FieldOracle*,size_t,std::string*){calibrated_=true;return true;}
+bool FieldMetadata::DefiningClassFlags(void*k,uint32_t*out,std::string*,const ReadContext*)const{*out=static_cast<Fake*>(k)->defining_flags;return true;}
 bool FieldMetadata::ClassIdentity(void* k,field_copy::CopyClassView* out,std::string*,const ReadContext* context)const{size_t extent=0;if(context&&(!context->extent||!context->extent(context->owner,k,&extent)||extent<sizeof(class_metadata::Class11)))return false;auto* f=static_cast<Fake*>(k);*out={f->parent,f->loader,f->descriptor.c_str(),0,f->descriptor=="Ljava/lang/Object;"};return true;}
 }
 namespace artdcevm::native_interface_graph {
@@ -119,15 +120,19 @@ static void NestedModifiers(){
  graph.nodes[3].flags=0x602; // JVMTI private interface annotation; native role flags remain 0x601.
  graph.nodes[1].parent=graph.nodes[1].proposed_parent=0;graph.nodes[2].parent=graph.nodes[2].proposed_parent=1;graph.nodes[4].parent=graph.nodes[4].proposed_parent=0;
  graph.nodes[2].interfaces=graph.nodes[2].proposed_interfaces={3};graph.inputs={2};
- assert(CanonicalizeFlags(metadata,&graph,&error));assert(graph.nodes[1].public_flags==4&&graph.nodes[1].flags==5);assert(graph.nodes[3].public_flags==0x602&&graph.nodes[3].flags==0x603);assert(ValidateGraph(&graph,&error));
+ assert(CanonicalizeFlags(metadata,&graph,&error));assert(graph.nodes[1].public_flags==4&&graph.nodes[1].flags==1);assert(graph.nodes[3].public_flags==0x602&&graph.nodes[3].flags==0x601);assert(ValidateGraph(&graph,&error));
  // A newly requested genuinely nonpublic runtime Class still needs exact
  // loader+package access. Public InnerClass modifiers never confer permission.
  graph.nodes[2].proposed_parent=4;assert(!ValidateGraph(&graph,&error));assert(error.find(child.descriptor)!=std::string::npos&&error.find(new_parent.descriptor)!=std::string::npos&&error.find("retained=false")!=std::string::npos);
  graph.nodes[2].proposed_parent=1;graph.nodes[1].proposed_flags=graph.nodes[1].flags|0x10;assert(!ValidateGraph(&graph,&error)); // Retained edge cannot bypass newly final parent.
- graph.nodes[1].proposed_flags.reset();parent.bytes.access_flags|=0x400;assert(!CanonicalizeFlags(metadata,&graph,&error)); // Nonvisibility disagreement is authoritative.
+ graph.nodes[1].proposed_flags.reset();parent.bytes.access_flags|=0x400;assert(!CanonicalizeFlags(metadata,&graph,&error)); // Defining ClassDef/native disagreement remains authoritative.
  parent.bytes.access_flags&=~0x400u;assert(CanonicalizeFlags(metadata,&graph,&error));assert(ValidateGraph(&graph,&error));
  // An existing resolved edge carries its original access permission. A new
  // identity with identical descriptor text cannot borrow that permission.
+ // Anonymous/static annotation can omit a native final flag. Immutable DEX
+ // evidence preserves it, and using that Class as a new parent still fails.
+ new_parent.bytes.access_flags=0x10;new_parent.defining_flags=0x10;graph.nodes[4].flags=8;graph.nodes[4].public_flags=8;
+ assert(CanonicalizeFlags(metadata,&graph,&error));assert(graph.nodes[4].flags==0x10);graph.nodes[2].proposed_parent=4;assert(!ValidateGraph(&graph,&error));graph.nodes[2].proposed_parent=1;
  graph.nodes[1].flags&=~1u;graph.nodes[1].public_flags.reset();assert(ValidateGraph(&graph,&error));graph.nodes[2].proposed_parent=4;assert(!ValidateGraph(&graph,&error));
 }
 int main(){
