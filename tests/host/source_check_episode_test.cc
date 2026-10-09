@@ -58,5 +58,24 @@ int main() {
  // Exception restoration is required before outer source failure bridge runs.
  try{Invoke(&owner,&driver,&sig,[](void*)->bool{throw std::bad_alloc();},granted,marker,refuse);assert(false);}catch(const std::bad_alloc&){assert(!active_episode);}
  prior=forwarded;Record(OriginalFailure,&driver,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,&sig,&message);assert(forwarded==prior+1);
- std::puts("source CheckClass exact-episode isolation PASS");
+ // Class flags choose exactly 71 for the exact staged final/abstract delta.
+ // Fixed CheckClass returns there before name/hierarchy comparisons, so the
+ // adapter must independently prove those declarations/edges before and after.
+ auto modifier=[&](void*){Record(OriginalFailure,&driver,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,&sig,&message);return false;};
+ auto invoke_modifier=[&](auto original,auto verified,auto marked){return Invoke(&owner,&driver,&sig,original,verified,marked,refuse,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);};
+ unsigned prior_mark=mark;prior=forwarded;
+ assert(invoke_modifier(modifier,granted,marker));assert(mark==prior_mark+1&&forwarded==prior);
+ assert(!invoke_modifier(hierarchy,granted,marker));assert(forwarded==prior+1); // 66 cannot inherit a 71 grant.
+ prior=forwarded;
+ auto repeated_modifier=[&](void*value){modifier(value);modifier(value);return false;};
+ assert(!invoke_modifier(repeated_modifier,granted,marker));assert(forwarded==prior+1);
+ attempt=0;unsigned prior_replay=replay;
+ assert(!invoke_modifier(modifier,[&]{return ++attempt==1;},marker));assert(replay==prior_replay+1);
+ assert(!invoke_modifier(modifier,granted,[]{return false;}));assert(replay==prior_replay+2);
+ prior=forwarded;
+ auto lock_failure=[&](void*){Record(OriginalFailure,&driver,JVMTI_ERROR_INTERNAL,&sig,&message);return false;};
+ assert(!invoke_modifier(lock_failure,granted,marker));assert(forwarded==prior+1); // Original 13/14 lock error remains original.
+ prior=forwarded;
+ assert(!Invoke(&owner,&driver,&sig,modifier,granted,marker,refuse));assert(forwarded==prior+1); // Unchanged flags still preserve 71.
+ std::puts("source CheckClass exact-episode hierarchy66/classflags71 isolation PASS");
 }

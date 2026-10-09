@@ -4,8 +4,9 @@
 #include "platform/common/source_handle_roots.h"
 namespace artdcevm::native_hierarchy_source_checks {
 // The root's sole original Run owner opens this scope. It grants only the two
-// original hierarchy comparisons, using actual incoming owner DEX and the
-// independently staged public graph. It does not grant modifiers or Run access.
+// original hierarchy comparisons or final/abstract flag mismatch, using actual
+// incoming owner DEX and independently staged public graph. Final schema guards
+// must still prove the allocated Plan; this scope grants no Run/publication access.
 class Scope final {
  public:
  using Refuse=void(*)(void* actual_class_owner,int,const char*) noexcept;
@@ -15,7 +16,7 @@ class Scope final {
  bool Check(void* actual_class_owner,bool(*original)(void*));
  bool OwnsClassOwner(const void*)const noexcept;
  private:
- bool Proof(void*);
+ bool Proof(void*,jvmtiError* expected_failure=nullptr);
  bool Mark(void*);
  void* driver_;runnable_jni::Context context_;
  source_handle_roots::Service& roots_;native_hierarchy_graph::Authority& authority_;
@@ -25,7 +26,7 @@ class Scope final {
 // A successful installation is a hook capability, never graph/allocator readiness.
 using FailureObserver=void(*)(void* actual_driver,jvmtiError)noexcept;
 // Sole Run owner binds its actual-source failure observer here. Notification
-// occurs only for forwarded original failures; suppressed hierarchy66 is absent.
+// occurs only for forwarded original failures; the exact deferred hierarchy66/classflags71 is absent.
 void SetFailureObserver(FailureObserver)noexcept;
 bool Ready(FailureObserver exact_observer)noexcept;
 // Typed failure bridge for allocator/session refusals. Uses the actual Class

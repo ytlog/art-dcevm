@@ -36,16 +36,16 @@ wrong parent/interface roles, final parents, loss of bootstrap Object ancestry,
 and inaccessible types (public, or exact loader plus package). Added parents
 must have independently initialized before Stage. The affected cohort includes
 implicit subclasses and implementors through current and proposed reverse
-edges. Ordinary target class modifiers must remain identical. Interface-target
+edges. Ordinary target class role/access must remain identical; final/abstract changes have independently stored proposed flags and mandatory later native Plan guards. Interface-target
 and bootstrap-Object evolution still refuse: no independent owner for these
-source semantics is supplied here. Existing source modifier checks and
+source semantics is supplied here. Existing source role/access checks and
 `CheckRedefinable` remain required.
 
 ## Source owner protocol
 
 1. Stage the public graph and prove all three installed runtime owners.
-2. The original `CheckClass` hook may use `CheckClass` only for its two hierarchy
-   comparison branches and only with its exact rooted original Class and exact
+2. The original `CheckClass` hook may use `CheckClass` for its hierarchy comparisons or exact
+   final/abstract mismatch and only with its exact rooted original Class and exact
    immutable incoming declarations.
 3. Reserve source GC-updated old/new/cache/parent slots before allocation.
    `AuthorizeAllocation` receives `Prepared.new_class == nullptr`; the incoming

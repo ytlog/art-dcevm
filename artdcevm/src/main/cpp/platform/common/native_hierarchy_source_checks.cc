@@ -63,7 +63,7 @@ bool Scope::OwnsClassOwner(const void* owner)const noexcept{
  const auto*g=authority_.Staged();if(!g||g->inputs.empty()||g->inputs.front()>=g->nodes.size())return false;
  void*live=nullptr;return roots_.BorrowOwnedStrongGlobal(context_,g->nodes[g->inputs.front()].strong_class,&live)&&live;
 }
-bool Scope::Proof(void* owner) {
+bool Scope::Proof(void* owner,jvmtiError* expected_failure) {
  if(!installed||!refuse_||!context_.env||!context_.self||!roots_.Calibrated()||
     !Mapped(owner,sizeof(Definition))||!Mapped(driver_,sizeof(DriverPrefix)))return false;
  auto d=Read<Definition>(owner);auto driver=Read<DriverPrefix>(driver_);
@@ -87,7 +87,7 @@ bool Scope::Proof(void* owner) {
   if(input>=graph->nodes.size())return false;
   auto original=graph->nodes[input].strong_class;void* rooted=nullptr;
   if(!roots_.BorrowOwnedStrongGlobal(context_,original,&rooted))return false;
-  if(rooted==actual)return authority_.CheckClass(context_,original,schema);
+  if(rooted==actual)return authority_.CheckClass(context_,original,schema,expected_failure);
  }
  return false;
 }
@@ -101,8 +101,11 @@ bool Scope::Check(void* owner,bool(*original)(void*)) {
  if(!original)return false;
  const void* signature=reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(owner)+offsetof(Definition,class_signature));
  try {
-  return detail::Invoke(owner,driver_,signature,original,[&]{return Proof(owner);},[&]{return Mark(owner);},
-    [&](void* failed){refuse_(failed,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Staged hierarchy source proof changed during original CheckClass");});
+  jvmtiError expected=JVMTI_ERROR_NONE;
+  if(!Proof(owner,&expected))return detail::Invoke(owner,nullptr,nullptr,original,[]{return false;},[]{return false;},[](void*){});
+  const auto prove=[&]{jvmtiError actual=JVMTI_ERROR_NONE;return Proof(owner,&actual)&&actual==expected;};
+  return detail::Invoke(owner,driver_,signature,original,prove,[&]{return Mark(owner);},
+    [&](void* failed){refuse_(failed,expected,"Staged Class declarations/graph proof changed during original CheckClass");},expected);
  }catch(const std::bad_alloc&){
   // No exception crosses the original ART source frames. Ordinary permission
   // parsing is before allocation; source keeps its Holder/DEX cleanup ownership.

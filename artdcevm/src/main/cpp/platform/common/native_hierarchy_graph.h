@@ -5,6 +5,7 @@
 #include "platform/common/source_commit.h"
 #include <jvmti.h>
 #include <memory>
+#include <optional>
 namespace artdcevm::modern_field_metadata { class FieldMetadata; struct ReadContext; }
 namespace artdcevm::native_hierarchy_graph {
 struct Input { jclass strong_original=nullptr; evolution::ClassSchema before,after; };
@@ -14,6 +15,9 @@ struct Node {
  jclass strong_class=nullptr; jobject strong_loader=nullptr;
  void* klass=nullptr; void* loader=nullptr; void* replacement=nullptr;
  std::string descriptor; uint32_t flags=0;
+ // Absent for implicit descendants: their declarations retain original flags.
+ std::optional<uint32_t> proposed_flags;
+ uint32_t ProposedFlags()const noexcept{return proposed_flags.value_or(flags);}
  size_t parent=SIZE_MAX,proposed_parent=SIZE_MAX;
  std::vector<size_t> interfaces,proposed_interfaces;
  bool initialized=false,affected=false;
@@ -73,8 +77,9 @@ class Authority final {
  // Clear after the entire original source transaction and its cleanup finish.
  bool Stage(const runnable_jni::Context&,jvmtiEnv*,const std::vector<Input>&,const Bindings&,std::string*);
  // Exact original Class and immutable incoming declarations only. Allows the
- // two hierarchy comparisons; source modifiers/CheckRedefinable remain original.
- bool CheckClass(const runnable_jni::Context&,jclass strong_original,const evolution::ClassSchema&)noexcept;
+ // hierarchy comparisons or final/abstract mismatch; CheckRedefinable remains
+ // original. The expected diagnostic grants no final Plan guard permission.
+ bool CheckClass(const runnable_jni::Context&,jclass strong_original,const evolution::ClassSchema&,jvmtiError* expected_failure=nullptr)noexcept;
  bool AuthorizeAllocation(const runnable_jni::Context&,const Prepared&,std::string*);
  bool PrepareLinked(const runnable_jni::Context&,Prepared*,std::string*);
  bool VerifyPrepared(const runnable_jni::Context&,const Prepared&,std::string*);

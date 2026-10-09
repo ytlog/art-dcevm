@@ -18,12 +18,12 @@ Construct Batch within the entire original named Redefiner::Run Runnable lifetim
 
 A production adapter must provide exact original trampolines for AllocateNewClassObject, ClassLinker::LoadClass, EnsureInstanceFieldIds and FindClass, source RecordFailure bridge and source SetStatusLocked. It must also connect:
 
-1. Ordinary JNI expected graph Stage before original CheckClass; authorize only the exact two hierarchy comparisons, while retaining original class modifiers, access and CheckRedefinable semantics.
+1. Ordinary JNI expected graph Stage before original CheckClass; authorize the exact hierarchy comparisons or final/abstract mismatch, while retaining original role/access and CheckRedefinable semantics. This preliminary source marker cannot publish before the mandatory native Plan guards.
 2. Whole Run lifetime plus first original FinishNewClassAllocations actual Holder preparation; original final boolean/error and DEX cleanup paths remain authoritative.
 3. Source verification resolution against rooted selected parents/replacements and actual private incoming cache preparation before CheckVerification. Published caches of implicit descendants stay read-only until the actual final heap replacement owner applies their reference updates.
 4. Actual Collected Plan sealing, root registration/refresh and final BeginCommit after all independent receiver/cache/source services succeed. End the Batch only after successful source commit or completed failure retirement, before source DEX owners unwind.
 
-The module retains original class-modifier policy and refuses interface graph changes until a real expanded source cohort covers implementors and arrays. Cache publication/private ownership and readonly final native-cache effects are separate mandatory services. The module is not enabled simply by compiling it, and the host tests do not prove modern-device graph readiness.
+The module permits guarded final/abstract Class deltas and refuses interface graph changes until a real expanded source cohort covers implementors and arrays. Cache publication/private ownership and readonly final native-cache effects are separate mandatory services. The module is not enabled simply by compiling it, and the host tests do not prove modern-device graph readiness.
 
 ## Source audit
 

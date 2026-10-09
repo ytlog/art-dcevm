@@ -22,23 +22,38 @@ The independently calibrated global decoder establishes the current Runnable
 thread/JNIEnv before invoking source leaves. No version/vendor selector grants
 permission.
 
-Only during the exact original CheckClass call can the first error 66 from the
-same driver and the same signature address be deferred. All other errors go
-straight to the original RecordFailure. A second 66 also goes straight through.
-Another class error in the same driver invalidates the deferred success without
-overwriting that error. Recursive CheckClass calls mask interception and
-invalidate the outer enhancement. The episode is thread-local and ends before
-any graph revalidation, marker or fallback. Original false plus exactly one
-deferred 66, no other failure and a second exact graph proof is required to call
-the original `RecordNewMethodAdded`; its actual source structural byte must be
-one. An unobserved/inlined RecordFailure never counts as authorization.
+During the exact original CheckClass call, only the first independently expected
+diagnostic from the same driver and signature address can be deferred. Unchanged
+flags select hierarchy error 66; an exact staged final/abstract delta selects
+class-modifier error 71. All other diagnostics and repeats go straight to the
+original RecordFailure. Another class error invalidates the episode. Recursive
+checks mask interception and invalidate the outer enhancement. The thread-local
+episode ends before revalidation, marker or refusal. Original false, exactly one
+expected diagnostic, no other failure, a second complete declaration/native
+graph proof and the actual `RecordNewMethodAdded` structural byte are required.
+Unobserved/inlined failures never count as permission.
 
-The source's single-def, Java class flags, name, constructor lock and original
-CheckRedefinable checks are preserved. Class modifier transitions remain
-unsupported. When a deferred proof/marker fails, the root-provided calibrated
-source failure bridge records error 66 with a synchronous literal; no temporary
-platform std::string is retained or mutated. Native bad_alloc is caught inside
-the proxy and refunded to the real source OOM path, before source DEX cleanup.
+In all seven pinned sources, the single-ClassDef check precedes the modifier
+comparison, which precedes name and hierarchy comparisons. Android 13/14 also
+check `lock_acquired_` before modifiers. Those original checks and the separate
+original CheckRedefinable path remain intact. A combined flag/hierarchy change
+returns at 71, so the independent exact DEX descriptor and complete proposed
+parent/interface graph prove the subsequent name/edge semantics. The replacement
+allocator obtains flags from ART SetupClass/LoadClass using the incoming DEX;
+actual linked flags are checked before private cache mutation and again through
+the frozen metadata ReadContext before publication. Implicit descendants retain
+their original flags. Proposed edges use proposed parent flags, rejecting final
+parents and invalid final+abstract or role/access changes.
+
+This early marker is preliminary permission to allocate, never permission to
+publish. The native schema Plan must subsequently prove all required guards
+against actual old/new Classes: adding final requires the independent loaded
+subclass guard; adding abstract requires the stopped existing-instance census.
+Their failure must refund the unpublished source transaction. Reflection,
+cached-constructor instantiation and loaded-subclass legality still require live
+whole-command evidence. A failed deferred proof/marker records its selected 66
+or 71 through the original failure bridge. Native bad_alloc follows the source
+OOM path before DEX cleanup; temporary platform strings are never retained.
 
 This is an installed early-check owner, not a complete production hierarchy
 transaction. Root Run scope integration, pre-allocation graph Stage, actual

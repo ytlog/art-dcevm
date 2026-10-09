@@ -349,7 +349,7 @@ bool Service::VerifyStaged(const native_hierarchy_graph::Graph& graph,const std:
  for(size_t n=0;n<inputs.size();++n){const auto& input=inputs[n];
   // Original source Finish visits superclass descendants. A complete expanded
   // interface/array cohort needs a distinct real source owner; do not grant it.
-  if(input.before.access!=input.after.access||input.before.interfaces!=input.after.interfaces){Error(error,"Source allocator cohort/class policy does not prove interface or modifier changes");return false;}
+  if(((input.before.access^input.after.access)&~0x410u)||input.before.interfaces!=input.after.interfaces){Error(error,"Source allocator cohort does not prove interface or role/access changes");return false;}
   if(graph.inputs[n]>=graph.nodes.size())return false;
   const auto& node=graph.nodes[graph.inputs[n]];
   if(node.strong_class!=input.strong_original||!node.affected||node.descriptor!=input.before.descriptor)return false;

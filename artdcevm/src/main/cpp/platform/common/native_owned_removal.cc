@@ -571,12 +571,8 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
     if(provider.schema_evolution){
       native_schema_policy::Plan schema;
       if(!provider.closed_graph||!native_schema_policy::Plan::Prepare(old,next,&schema,error))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
-      // Preserve the complete original CheckClass including its family's lock
-      // semantics. Class flag evolution requires a separate guarded adapter.
-      if(native_schema_policy::JavaFlags(old.access)!=native_schema_policy::JavaFlags(next.access)){
-        if(error)*error="Class modifier changes require the independently proven CheckClass owner";
-        return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
-      }
+      // Class final/abstract changes follow the same exact staged source owner
+      // as hierarchy changes; mandatory Plan guards run before publication.
     }else if(!ValidateRemoval(old,next,provider.allow_field_removal,error,false))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
     jobject loader=nullptr;const auto loader_error=jvmti->GetClassLoader(definition.klass,&loader);
     if(loader_error!=JVMTI_ERROR_NONE)return loader_error;
