@@ -13,4 +13,6 @@ public final class ProductionSchemaEvolutionTest {
     @Test public void fieldStorageEvolutionRequired() throws Throwable {run("field-staticness");}
     @Test public void methodSignatureEvolutionRequired() throws Throwable {run("method-signature");}
     @Test public void nativeJavaTransitionsRequired() throws Throwable {run("native-java");}
+    @Test public void hierarchyAdditionRequired() throws Throwable {run("hierarchy-addition");}
+    @Test public void hierarchyNarrowingRequired() throws Throwable {run("hierarchy-narrowing");}
 }

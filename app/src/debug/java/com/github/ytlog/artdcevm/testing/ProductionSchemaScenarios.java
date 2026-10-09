@@ -41,6 +41,8 @@ public final class ProductionSchemaScenarios {
             case "field-staticness":fieldStorageEvolutionRequired();break;
             case "method-signature":methodSignatureEvolutionRequired();break;
             case "native-java":nativeJavaTransitionsRequired();break;
+            case "hierarchy-addition":hierarchyAdditionRequired();break;
+            case "hierarchy-narrowing":hierarchyNarrowingRequired();break;
             default:throw new IllegalArgumentException("Unknown schema case: "+name);
         }
     }
@@ -71,6 +73,7 @@ public final class ProductionSchemaScenarios {
         report.put("lastApplyCode",result);
         report.put("capabilitiesAfterApply",new JSONObject(NativeBridge.capabilities()));
         assertEquals(variant+": "+NativeBridge.errorName(result),0,result);
+        report.put("successfulApplyCount",report.optInt("successfulApplyCount")+1);
         stage("apply-"+variant+".after");
     }
     private void rejected(Class<? extends Throwable> type,Action action) throws Throwable {
@@ -212,5 +215,150 @@ public final class ProductionSchemaScenarios {
             }
             report.put("nativeJavaNative",true).put("cachedReflectionMethodHandleJni",true).put("mixedWideFpReferenceArguments",true).put("oldObjectGcState",true);
         } finally {NativeShapeProbe.release();}
+    }); }
+    private void hierarchyAdditionRequired() throws Throwable { required("hierarchy-addition",()->{
+        HierarchySubject object=new HierarchySubject(),alias=object;
+        HierarchyChild child=new HierarchyChild();
+        HierarchySubject[] array={object,child};
+        Class<?> cls=object.getClass(),childClass=child.getClass();
+        int identity=System.identityHashCode(object),childIdentity=System.identityHashCode(child);
+        Object own=new byte[31],baseRef=new byte[37];
+        object.root=9_000_000_089L;object.base=17;object.value=57;
+        object.ownRef=own;object.baseRef=baseRef;HierarchySubject.counter=777;
+        child.root=8_000_000_089L;child.base=27;child.value=67;
+        Method compute=cls.getMethod("compute"),inherited=HierarchyBase.class.getMethod("inherited");
+        MethodHandle computeHandle=MethodHandles.lookup().unreflect(compute);
+        MethodHandle inheritedHandle=MethodHandles.lookup().unreflect(inherited);
+        Field ownField=cls.getField("value"),baseField=cls.getField("base"),rootField=cls.getField("root");
+        HierarchyProbe.retain(object);
+        HierarchyProbe.retainInterfaceMethod(HierarchyTag.class);
+        Method tag=HierarchyTag.class.getMethod("tag");
+        MethodHandle tagHandle=MethodHandles.lookup().unreflect(tag);
+        int interfaceJniChecks=0;
+        try {
+            assertFalse(HierarchyTag.class.isInstance(object));
+            assertEquals(75,object.compute());assertEquals(37,HierarchyProbe.invoke(false));
+            String[] variants={"hier-interface","production-hierarchy-parent"};
+            for(int generation=0;generation<variants.length;generation++) {
+                int constructors=HierarchyInserted.constructions;
+                apply(variants[generation],cls);
+                assertSame(generation==0?HierarchyBase.class:HierarchyInserted.class,cls.getSuperclass());
+                assertTrue(HierarchyTag.class.isAssignableFrom(cls));
+                assertTrue(HierarchyTag.class.isInstance(child));
+                assertEquals(59+generation,((HierarchyTag)(Object)object).tag());
+                assertEquals(11,((HierarchyTag)(Object)object).defaultValue());
+                assertEquals(59+generation,((Integer)tag.invoke(object)).intValue());
+                assertEquals(59+generation,(int)tagHandle.invokeWithArguments(object));
+                for(int form=0;form<3;form++){
+                    assertEquals(59+generation,HierarchyProbe.interfaceJniInvokeForm(object,form,false));
+                    interfaceJniChecks++;
+                }
+                if(generation==1)assertEquals(22,((HierarchyMore)(Object)object).more());
+                int expected=76+generation,dispatch=generation==0?37:57;
+                assertEquals(expected,object.compute());assertEquals(expected,((Integer)compute.invoke(object)).intValue());
+                assertEquals(expected,(int)computeHandle.invokeWithArguments(object));
+                assertEquals(dispatch,((Integer)inherited.invoke(object)).intValue());
+                assertEquals(dispatch,(int)inheritedHandle.invokeWithArguments(object));
+                assertEquals(dispatch,object.throughSuper());
+                assertEquals(dispatch,HierarchyProbe.invoke(false));assertEquals(37,HierarchyProbe.invoke(true));
+                long[] fields=HierarchyProbe.fields();assertEquals(9_000_000_089L,fields[0]);
+                assertEquals(17,fields[1]);assertEquals(57,fields[2]);
+                assertEquals(57,ownField.getInt(object));assertEquals(17,baseField.getInt(object));
+                assertEquals(9_000_000_089L,rootField.getLong(object));
+                assertEquals(constructors,HierarchyInserted.constructions);
+                assertEquals(generation==1,HierarchyInserted[].class.isAssignableFrom(array.getClass()));
+                if(generation==1) {
+                    assertEquals(0.0,HierarchyInserted.class.getField("added").getDouble(object));
+                    assertNull(HierarchyInserted.class.getField("addedRef").get(object));
+                    assertEquals(0,HierarchyInserted.class.getField("value").getInt(object));
+                    assertEquals(0.0,HierarchyInserted.class.getField("added").getDouble(child));
+                    HierarchyInserted.class.getField("added").setDouble(object,4.25);
+                    HierarchyInserted.class.getField("addedRef").set(object,own);
+                }
+                System.gc();assertSame(alias,object);assertSame(object,array[0]);assertSame(child,array[1]);
+                assertSame(cls,object.getClass());assertSame(childClass,child.getClass());
+                assertSame(cls,childClass.getSuperclass());assertEquals(identity,System.identityHashCode(object));
+                assertEquals(childIdentity,System.identityHashCode(child));assertSame(own,object.ownRef);
+                assertSame(baseRef,object.baseRef);assertEquals(777,HierarchySubject.counter);
+                assertEquals(8_000_000_089L,child.root);assertEquals(27,child.base);
+                assertEquals(67,child.value);assertEquals(8_888_888_888L,child.child);
+                if(generation==1){
+                    assertEquals(4.25,HierarchyInserted.class.getField("added").getDouble(object));
+                    assertSame(own,HierarchyInserted.class.getField("addedRef").get(object));
+                }
+            }
+            report.put("actualInterfaceAndParentAddition",true).put("inheritedFieldsPreservedAndAddedZeroed",true)
+                .put("cachedVirtualReflectionMethodHandleJni",true).put("interfaceDispatch",true)
+                .put("oldObjectAndSubclassGcIdentity",true).put("constructorsNotReplayed",true)
+                .put("interfaceJniChecks",interfaceJniChecks);
+        } finally {HierarchyProbe.releaseInterfaceMethod();HierarchyProbe.release();}
+    }); }
+    private void receiverRejected(Action action) throws Throwable {
+        Throwable caught=null;
+        try {action.run();}catch(InvocationTargetException error){caught=error.getCause();}catch(Throwable error){caught=error;}
+        assertTrue("Invalid ancestor receiver must reject before access, got "+caught,
+            caught instanceof IncompatibleClassChangeError || caught instanceof ClassCastException
+            || caught instanceof IllegalArgumentException
+            || caught instanceof IllegalStateException);
+    }
+    private void hierarchyNarrowingRequired() throws Throwable { required("hierarchy-narrowing",()->{
+        NarrowSubject object=new NarrowSubject();object.own=41;
+        Class<?> cls=object.getClass();int identity=System.identityHashCode(object);
+        NarrowStorage storage=new NarrowStorage();storage.legal=object;storage.legalArray=new Object[]{object};
+        NarrowParent validParent=new NarrowParent();validParent.ancestor=71;
+        Field ancestor=NarrowParent.class.getField("ancestor");
+        Method inherited=NarrowParent.class.getMethod("inherited");
+        MethodHandle getter=MethodHandles.lookup().unreflectGetter(ancestor);
+        MethodHandle method=MethodHandles.lookup().unreflect(inherited);
+        assertEquals(13,HierarchyProbe.narrowJniRead(object));assertEquals(14,HierarchyProbe.narrowJniInvoke(object));
+        apply("hier-narrow-simple",cls);
+        assertSame(Object.class,cls.getSuperclass());assertFalse(NarrowParent.class.isInstance(object));
+        assertEquals(43,object.compute());assertEquals(41,object.own);
+        receiverRejected(()->ancestor.getInt(object));receiverRejected(()->inherited.invoke(object));
+        receiverRejected(()->getter.invokeWithArguments(object));receiverRejected(()->method.invokeWithArguments(object));
+        receiverRejected(()->HierarchyProbe.narrowJniRead(object));
+        receiverRejected(()->HierarchyProbe.narrowJniInvoke(object));
+        receiverRejected(()->HierarchyProbe.narrowJniInvokeNonvirtual(object));
+        for(int form=0;form<4;form++){final int selected=form;receiverRejected(()->HierarchyProbe.narrowJniInvokeForm(object,selected));}
+        // A blanket ancestor-access ban would pass the negative checks but is wrong.
+        assertEquals(71,ancestor.getInt(validParent));assertEquals(72,((Integer)inherited.invoke(validParent)).intValue());
+        assertEquals(71,(int)getter.invokeWithArguments(validParent));
+        assertEquals(72,(int)method.invokeWithArguments(validParent));
+        assertEquals(71,HierarchyProbe.narrowJniRead(validParent));assertEquals(72,HierarchyProbe.narrowJniInvoke(validParent));
+        System.gc();assertSame(object,storage.legal);assertSame(object,storage.legalArray[0]);
+        assertSame(cls,object.getClass());assertEquals(identity,System.identityHashCode(object));
+        report.put("legalTypedStorageNarrowing",true).put("retiredAncestorReceiverChecks",true)
+            .put("unrelatedAncestorReceiverStillWorks",true);
+        apply("hier-narrow-restore",cls);object.ancestor=61;
+        int rejects=0;
+        try {
+            for(int cell=0;cell<3;cell++) {
+                if(cell==0)storage.ancestor=object;
+                if(cell==1)NarrowStorage.staticAncestor=object;
+                if(cell==2)storage.ancestorArray=new NarrowParent[]{object};
+                stage("illegal-typed-storage-"+cell+".before");
+                int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{asset("hier-narrow-simple",cls)});
+                report.put("illegalStorageCode"+cell,result);
+                assertTrue("Illegal retained ancestor cell must reject",result!=0);
+                assertSame(NarrowParent.class,cls.getSuperclass());assertTrue(NarrowParent.class.isInstance(object));
+                assertEquals(61,object.ancestor);assertEquals(41,object.own);assertEquals(42,object.compute());
+                assertEquals(62,HierarchyProbe.narrowJniInvoke(object));assertEquals(61,ancestor.getInt(object));
+                if(cell==0)assertSame(object,storage.ancestor);
+                if(cell==1)assertSame(object,NarrowStorage.staticAncestor);
+                if(cell==2)assertSame(object,storage.ancestorArray[0]);
+                System.gc();assertSame(object,storage.legal);assertSame(object,storage.legalArray[0]);
+                assertSame(cls,object.getClass());assertEquals(identity,System.identityHashCode(object));
+                storage.ancestor=null;NarrowStorage.staticAncestor=null;storage.ancestorArray=null;rejects++;
+            }
+            // All forbidden cells are gone: refusing every narrowing is not support.
+            apply("hier-narrow-simple",cls);System.gc();
+            assertSame(Object.class,cls.getSuperclass());assertEquals(43,object.compute());assertEquals(41,object.own);
+            receiverRejected(()->HierarchyProbe.narrowJniRead(object));
+            receiverRejected(()->HierarchyProbe.narrowJniInvoke(object));
+            assertSame(object,storage.legal);assertSame(object,storage.legalArray[0]);
+            assertEquals(identity,System.identityHashCode(object));
+            report.put("illegalTypedStorageAtomicRejection",true).put("illegalTypedStorageChecks",rejects)
+                .put("legalNarrowingAfterRejectedAttempts",true).put("oldObjectGcState",true);
+        } finally {storage.ancestor=null;NarrowStorage.staticAncestor=null;storage.ancestorArray=null;}
     }); }
 }

@@ -17,8 +17,12 @@ CASE_METHODS = {
     'field-staticness': 'fieldStorageEvolutionRequired',
     'method-signature': 'methodSignatureEvolutionRequired',
     'native-java': 'nativeJavaTransitionsRequired',
+    'hierarchy-addition': 'hierarchyAdditionRequired',
+    'hierarchy-narrowing': 'hierarchyNarrowingRequired',
 }
 CASE_PROOFS = {
+    'hierarchy-addition': ('actualInterfaceAndParentAddition', 'inheritedFieldsPreservedAndAddedZeroed', 'cachedVirtualReflectionMethodHandleJni', 'interfaceDispatch', 'oldObjectAndSubclassGcIdentity', 'constructorsNotReplayed'),
+    'hierarchy-narrowing': ('legalTypedStorageNarrowing', 'retiredAncestorReceiverChecks', 'unrelatedAncestorReceiverStillWorks', 'illegalTypedStorageAtomicRejection', 'legalNarrowingAfterRejectedAttempts', 'oldObjectGcState'),
     'field-types': ('oldReflectionAndJniRetired', 'freshLongJniAndVarHandle', 'oldObjectGcState'),
     'field-staticness': ('bothStorageDirections', 'oldObjectGcState'),
     'method-signature': ('oldReflectionMethodHandleJniRetired', 'freshSignatureReflectionAndJni', 'oldObjectGcState'),
@@ -49,4 +53,18 @@ def validate(report, run_id, case, scope="full"):
         for key, expected in [('retiredJniReadWriteChecks', 12), ('freshJniFields', 4)]:
             if type(report.get(key)) is not int or report[key] != expected:
                 errors.append(f'{key}: expected {expected}')
+    if case in ('hierarchy-addition', 'hierarchy-narrowing'):
+        expected = 2 if case == 'hierarchy-addition' else 3
+        if type(report.get('successfulApplyCount')) is not int or report['successfulApplyCount'] != expected:
+            errors.append('Missing actual complete hierarchy apply sequence')
+    if case == 'hierarchy-addition':
+        if type(report.get('interfaceJniChecks')) is not int or report['interfaceJniChecks'] != 6:
+            errors.append('Missing six actual cached JNI interface checks')
+    if case == 'hierarchy-narrowing':
+        if type(report.get('illegalTypedStorageChecks')) is not int or report['illegalTypedStorageChecks'] != 3:
+            errors.append('Missing three actual illegal retained storage checks')
+        for index in range(3):
+            value = report.get('illegalStorageCode' + str(index))
+            if type(value) is not int or value == 0:
+                errors.append('Missing refused illegal storage apply: ' + str(index))
     return errors
