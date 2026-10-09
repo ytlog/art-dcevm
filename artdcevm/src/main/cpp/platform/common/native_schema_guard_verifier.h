@@ -65,6 +65,9 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // roots name the complete affected graph; caller supplies its existing lease.
   bool Stage(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& input_roots,
              const Bindings&,std::string*);
+  // Closing public mirrors may load a descendant. The outer preflight graph
+  // must contain every such affected identity before source Run starts.
+  bool MatchesAffected(JNIEnv*,const std::vector<jclass>&,std::string*)const;
   // Called by the two actual source booleans, never GetImplementedInterfaces:
   // fixed ART's latter calls ResolveDirectInterface and may load a class.
   bool CheckWindow(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& old_classes,

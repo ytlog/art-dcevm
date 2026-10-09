@@ -580,6 +580,9 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  if(schema_operation){
   PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
   if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
+  std::vector<jclass> affected;affected.reserve(staged_classes.size());
+  for(const auto& stage:staged_classes)affected.push_back(stage.owner);
+  if(!schema_verifier.MatchesAffected(env,affected,error))return Fail(error,"Caller staging loaded an unstaged affected descendant; complete candidate preflight is required before source entry");
  }return true;
 }
 bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,const native_owned_removal::RootedGraph& rooted,native_owned_removal::GraphWindow window,void* raw,std::string* error){

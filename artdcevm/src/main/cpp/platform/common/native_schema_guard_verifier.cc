@@ -232,12 +232,20 @@ void Verifier::Clear(JNIEnv* env){if(!env&&(!state_->nodes.empty()||!state_->inp
 bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,const Bindings& bindings,std::string* error){
  if(!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");state_->bindings=bindings;state_->roots.Bind(bindings.roots);
  for(auto klass:inputs){bounded_managed_roots::Slot slot;if(!state_->roots.Stage(env,klass,&slot,error))return false;state_->inputs.push_back(slot);}
+ std::map<std::string,std::vector<size_t>> staged_names;
+ for(;;){
+ const size_t before=state_->nodes.size();size_t known=0;
  jint count=0;jclass* classes=nullptr;if(ti->GetLoadedClasses(&count,&classes)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Complete loaded caller graph unavailable");
  struct Classes {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Classes(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,classes};
  for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
   if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
+  Strings identity{ti};if(ti->GetClassSignature(classes[i],&identity.signature,nullptr)!=JVMTI_ERROR_NONE||!identity.signature)return Fail(error,"Loaded Class signature unavailable while closing staging");
+  bool existing=false;const auto candidates=staged_names.find(identity.signature);
+  if(candidates!=staged_names.end())for(size_t index:candidates->second)existing|=state_->roots.Same(env,state_->nodes[index].root,classes[i]);
+  if(env->ExceptionCheck())return false;
+  if(existing){++known;continue;}
   Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;if(!state_->roots.Stage(env,classes[i],&node.root,error))return false;
-  state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();
+  state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();staged_names[stored.schema.descriptor].push_back(state_->nodes.size()-1);
   jobject loader=nullptr;if(ti->GetClassLoader(classes[i],&loader)!=JVMTI_ERROR_NONE)return false;if(loader){const bool pass=state_->roots.Stage(env,loader,&stored.loader,error);env->DeleteLocalRef(loader);if(!pass)return false;}
   auto parent=env->GetSuperclass(classes[i]);if(parent){const bool pass=state_->roots.Stage(env,parent,&stored.parent,error);env->DeleteLocalRef(parent);if(!pass)return false;}
   jint interfaces_count=0;jclass* interfaces=nullptr;if(ti->GetImplementedInterfaces(classes[i],&interfaces_count,&interfaces)!=JVMTI_ERROR_NONE||interfaces_count<0)return false;
@@ -246,12 +254,24 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
   for(auto input:inputs)if(env->IsAssignableFrom(classes[i],input))stored.affected=true;
   if(env->ExceptionCheck())return false;
  }
+ // ToReflectedField resolves declared field types, and interface/root
+ // staging may also load Classes. Only newly observed identities are staged;
+ // finish after a complete fresh enumeration adds none. There is no SDK,
+ // descriptor exemption, repeated mirror replay or arbitrary pass limit.
+ if(known!=before)return Fail(error,"Loaded caller graph lost a rooted Class while closing staging");
+ if(state_->nodes.size()==before)break;
+ }
  if(state_->nodes.empty())return Fail(error,"Empty public Class graph");state_->staged=true;return true;
+}
+bool Verifier::MatchesAffected(JNIEnv* env,const std::vector<jclass>& actual,std::string* error)const {
+ const auto& s=*state_;if(!env||!s.staged||env->ExceptionCheck())return Fail(error,"Closed caller graph is unavailable");
+ size_t affected=0;for(const auto& node:s.nodes)if(node.affected){++affected;size_t matches=0;for(auto klass:actual)matches+=s.roots.Same(env,node.root,klass);if(matches!=1)return Fail(error,"Actual Holder graph differs from public staged identities");}
+ if(affected!=actual.size())return Fail(error,"Duplicate or unstaged Holder Class");
+ return !env->ExceptionCheck();
 }
 bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,Window window,std::string* error){
  auto& s=*state_;if(!s.staged||s.collected||(window==Window::Verified&&s.verified)||!redefinition_gate::Owned(s.bindings.vm)||!env||!ti||env->ExceptionCheck()||(window==Window::Collected&&!s.verified))return Fail(error,"Schema window order or context is invalid");
- size_t affected=0;for(const auto& node:s.nodes)if(node.affected){++affected;size_t matches=0;for(auto klass:actual)matches+=s.roots.Same(env,node.root,klass);if(matches!=1)return Fail(error,"Actual Holder graph differs from public staged identities");}
- if(affected!=actual.size())return Fail(error,"Duplicate or unstaged Holder Class");
+ if(!MatchesAffected(env,actual,error))return false;
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
  size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!Ordinary(status))continue;
