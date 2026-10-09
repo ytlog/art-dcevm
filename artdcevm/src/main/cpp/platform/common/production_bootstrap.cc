@@ -1,6 +1,7 @@
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
+#include "platform/common/source_cache_method_witness.h"
 #include "platform/common/production_provenance.h"
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_retirement_cleanup.h"
@@ -729,19 +730,21 @@ bool OriginalDeclarations(JNIEnv* env,jobject input,evolution::ClassSchema* sche
 }
 struct SourceCacheWitnessRequest {
  NativeEngine* engine;std::string* error;
+ abi::arm64::android_common::FromReflectedMethod method_leaf;
 };
 bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  auto& request=*static_cast<SourceCacheWitnessRequest*>(raw);auto& e=*request.engine;
  auto& witness=e.source_cache_witness;void* klass=nullptr;void* mirror=nullptr;
  if(scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm)||
-    !scope.original_method||!runnable_executor::DecodeStrongGlobal(scope,witness.klass,&klass)||
-    !runnable_executor::DecodeStrongGlobal(scope,witness.field,&mirror))return false;
+    !runnable_executor::DecodeStrongGlobal(scope,witness.klass,&klass)||
+    !runnable_executor::DecodeStrongGlobal(scope,witness.field,&mirror))
+  return Fail(request.error,"Public cache witness Runnable owner/class/field root identity rejected");
  const auto layout=e.model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
- size_t extent=0;method_metadata::Identity identity;
- if(!method_identity::ReadableMappingExtent(scope.original_method,&extent)||
-    !method_metadata::ReadIdentity(layout,scope.original_method,extent,&identity)||
-    identity.dex_method_index!=witness.method_index||(identity.access_flags&0xffffu)!=1u)
-  return Fail(request.error,"Public cache Method differs from immutable fixture DEX");
+ size_t extent=0;void* method=nullptr;
+ // The executor's carrier is a GlobalRef (or immutable boot Method), not read().
+ // Read the rooted fixture Method through ART's named leaf in this real scope.
+ if(!source_cache_method_witness::Read(scope,request.method_leaf,witness.method,
+       layout,witness.method_index,method_identity::ReadableMappingExtent,&method,request.error))return false;
  auto* field=e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;field_copy::CopyFieldView text;
  if(!field||e.metadata.FieldDeclaringClass(field)!=klass||
     !e.metadata.FieldIdentity(field,&text,request.error)||std::strcmp(text.name,"number")||
@@ -752,47 +755,71 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  void* cache=e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
  if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<112)
   return Fail(request.error,"Public fixture DexCache extent unavailable");
- auto root=NativeEngine::RootManaged(&e,cache);if(!root)return false;
- witness.cache=root;witness.native_field=field;witness.native_method=scope.original_method;
+ auto root=NativeEngine::RootManaged(&e,cache);if(!root)return Fail(request.error,"Public fixture DexCache strong root creation rejected");
+ witness.cache=root;witness.native_field=field;witness.native_method=method;
  return true;
 }
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
- jclass type=env->GetObjectClass(input);if(!type)return false;
+ if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
+ jclass type=env->GetObjectClass(input);
  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
+ if(!type||env->ExceptionCheck())return Fail(error,"Public cache witness Inputs class unavailable");
  const char* descriptor="Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;";
  if(!source_cache_witness.klass){
   PublicCacheWitness candidate;Roots owned{env,{}};
   auto own=[&](const char* name,const char* signature){
-   auto id=env->GetFieldID(type,name,signature);auto value=id?env->GetObjectField(input,id):nullptr;
-   auto global=owned.Own(value);if(value)env->DeleteLocalRef(value);
+   if(env->ExceptionCheck())return static_cast<jobject>(nullptr);
+   auto id=env->GetFieldID(type,name,signature);
+   if(!id||env->ExceptionCheck()){if(error)*error=std::string("Public cache witness Inputs field unavailable: ")+name;return static_cast<jobject>(nullptr);}
+   auto value=env->GetObjectField(input,id);Local value_scope{env,value};
+   if(!value||env->ExceptionCheck()){if(error)*error=std::string("Public cache witness Inputs value unavailable: ")+name;return static_cast<jobject>(nullptr);}
+   auto global=owned.Own(value);
+   if(!global||env->ExceptionCheck()){if(error)*error=std::string("Public cache witness strong root unavailable: ")+name;return static_cast<jobject>(nullptr);}
    return global;
   };
-  candidate.klass=own("cacheClass","Ljava/lang/Class;");
-  candidate.field=own("cacheField","Ljava/lang/reflect/Field;");
-  candidate.method=own("cacheRead","Ljava/lang/reflect/Method;");
-  auto id=env->GetFieldID(type,"cacheDex","[B");auto bytes=id?static_cast<jbyteArray>(env->GetObjectField(input,id)):nullptr;
-  Local bytes_scope{env,bytes};if(!bytes||env->ExceptionCheck())return false;
-  std::vector<unsigned char> original(static_cast<size_t>(env->GetArrayLength(bytes)));
-  env->GetByteArrayRegion(bytes,0,static_cast<jsize>(original.size()),reinterpret_cast<jbyte*>(original.data()));
+  candidate.klass=own("cacheClass","Ljava/lang/Class;");if(!candidate.klass)return false;
+  candidate.field=own("cacheField","Ljava/lang/reflect/Field;");if(!candidate.field)return false;
+  candidate.method=own("cacheRead","Ljava/lang/reflect/Method;");if(!candidate.method)return false;
+  auto id=env->GetFieldID(type,"cacheDex","[B");
+  if(!id||env->ExceptionCheck())return Fail(error,"Public cache witness Inputs.cacheDex field unavailable");
+  auto bytes=static_cast<jbyteArray>(env->GetObjectField(input,id));Local bytes_scope{env,bytes};
+  if(!bytes||env->ExceptionCheck())return Fail(error,"Public cache witness immutable DEX bytes unavailable");
+  jsize length=env->GetArrayLength(bytes);
+  if(length<=0||env->ExceptionCheck())return Fail(error,"Public cache witness immutable DEX length unavailable");
+  std::vector<unsigned char> original(static_cast<size_t>(length));
+  env->GetByteArrayRegion(bytes,0,length,reinterpret_cast<jbyte*>(original.data()));
+  if(env->ExceptionCheck())return Fail(error,"Public cache witness immutable DEX copy rejected");
   evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
-  if(env->ExceptionCheck()||!SelectInstalledClass({original},descriptor,&schema,&counts,error,&candidate.ids))return false;
-  for(const auto& field:schema.fields)if(field.name=="number"&&field.descriptor=="I"&&field.access==(1u|0x40u))candidate.field_index=field.dex_index;
-  for(const auto& method:schema.methods)if(method.name=="read"&&method.descriptor=="()I"&&method.access==1u)candidate.method_index=method.dex_index;
-  if(candidate.field_index==UINT32_MAX||candidate.method_index==UINT32_MAX||
-     !candidate.klass||!candidate.field||!candidate.method||env->ExceptionCheck())
+  if(!SelectInstalledClass({original},descriptor,&schema,&counts,error,&candidate.ids))return false;
+  for(const auto& f:schema.fields)if(f.name=="number"&&f.descriptor=="I"&&f.access==(1u|0x40u))candidate.field_index=f.dex_index;
+  for(const auto& m:schema.methods)if(m.name=="read"&&m.descriptor=="()I"&&m.access==1u)candidate.method_index=m.dex_index;
+  if(candidate.field_index==UINT32_MAX||candidate.method_index==UINT32_MAX)
    return Fail(error,"Immutable cache fixture member declarations unavailable");
-  roots.insert(roots.end(),owned.values.begin(),owned.values.end());owned.values.clear();source_cache_witness=candidate;
+  roots.insert(roots.end(),owned.values.begin(),owned.values.end());owned.values.clear();
+  source_cache_witness=candidate;
  }
- if(!source_cache_witness.klass||!source_cache_witness.field||!source_cache_witness.method||env->ExceptionCheck())return false;
+ if(!source_cache_witness.klass||!source_cache_witness.field||!source_cache_witness.method)
+  return Fail(error,"Public cache witness retained roots incomplete");
  jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_scope{env,bootstrap};
- auto warm=bootstrap?env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;"):nullptr;
- auto expected=warm?env->CallStaticObjectMethod(bootstrap,warm,input):nullptr;Local expected_scope{env,expected};
- if(!expected||!env->IsSameObject(expected,source_cache_witness.klass)||env->ExceptionCheck())return Fail(error,"Original DEX cache warm behavior changed");
+ if(!bootstrap||env->ExceptionCheck())return Fail(error,"Public cache witness bootstrap class unavailable");
+ auto warm=env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;");
+ if(!warm||env->ExceptionCheck())return Fail(error,"Public cache witness original warm method unavailable");
+ auto expected=env->CallStaticObjectMethod(bootstrap,warm,input);Local expected_scope{env,expected};
+ if(!expected||env->ExceptionCheck())return Fail(error,"Original DEX cache warm invocation rejected");
+ const bool same=env->IsSameObject(expected,source_cache_witness.klass);
+ if(!same||env->ExceptionCheck())return Fail(error,"Original DEX cache warm class identity changed");
  if(source_cache_witness.cache){env->DeleteGlobalRef(source_cache_witness.cache);source_cache_witness.cache=nullptr;}
- SourceCacheWitnessRequest request{this,error};
- if(runnable_executor::With(env,source_cache_witness.method,CaptureSourceCacheWitness,&request)!=runnable_jni::Result::kSuccess)return false;
- return source_cache_witness.cache!=nullptr;
+ auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
+   hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ if(!leaf)return Fail(error,"Public cache witness named FromReflectedMethod unavailable");
+ SourceCacheWitnessRequest request{this,error,leaf};
+ auto result=runnable_executor::With(env,source_cache_witness.method,CaptureSourceCacheWitness,&request);
+ if(result!=runnable_jni::Result::kSuccess){
+  if(error&&error->empty())*error="Public cache witness Runnable dispatch rejected: result="+std::to_string(static_cast<int>(result))+", route="+runnable_executor::Route();
+  return false;
+ }
+ return source_cache_witness.cache!=nullptr||Fail(error,"Public cache witness completed without DexCache root");
 }
 struct AllocatorRequest {
  NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;
