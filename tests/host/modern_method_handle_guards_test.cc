@@ -1,4 +1,5 @@
 #include "platform/common/modern_method_handle_guards.cc"
+#include "platform/common/modern_final_field_guard.h"
 #include <cassert>
 #include <iostream>
 namespace artdcevm::contextual_field_id {
@@ -14,8 +15,11 @@ retirement::RetiredFieldRegistry field_registry,wrong_field_registry;
 void* current=reinterpret_cast<void*>(0x700010);bool stopped=false,normal_result=true,wrong_owner=false;
 size_t invoked=0,installed_count=0,private_lookups=0;uint32_t source_kind=3;int exception_kind=0;
 std::string missing;void* expected_self=current;bool duplicate_visit=false;
+uint32_t override_kind=UINT32_MAX;bool final_targets=false;
 void* Object(size_t n){return reinterpret_cast<void*>(0x10000+n*16);}
 void* Identity(void* object){return reinterpret_cast<void*>(uintptr_t(object)+uintptr_t{0x7000000000});}
+uint32_t Kind(const void* object){if(override_kind!=UINT32_MAX)return override_kind;
+ return ((uintptr_t(object)-0x10000)/16)%2==0?8:10;}
 bool IsField(void* object){return uintptr_t(object)>=uintptr_t(Object(4));}
 void Visit(void* object,art::ReflectiveValueVisitor* visitor){art::ReflectionSourceInfo source;source.type=source_kind;source.object=wrong_owner?nullptr:object;
  if(IsField(object)){auto* field=reinterpret_cast<art::ArtField*>(Identity(object));assert(visitor->VisitField(field,source)==field);if(duplicate_visit)visitor->VisitField(field,source);}
@@ -55,6 +59,12 @@ namespace artdcevm::retirement {
 bool MethodEntryGuardsOwn(const RetiredMethodRegistry& owner){return &owner==&method_registry;}
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& owner){return &owner==&field_registry;}
 bool RejectRetiredMethod(void* target,void*,void* result){if(!method_registry.Contains(target))return false;exception_kind=1;if(result)std::memset(result,0,8);return true;}
+bool RejectFinalFieldSetter(void*,void*,void* result){
+ final_field_guard::Access access;access.path=final_field_guard::Path::MethodHandleSetter;
+ access.field_flags=final_targets?0x10:0;
+ if(final_field_guard::Check(access)==final_field_guard::Decision::Delegate)return false;
+ exception_kind=3;if(result)std::memset(result,0,8);return true;
+}
 bool RejectRetiredField(void* target,void*,void* result){if(!field_registry.TokenFor(target))return false;exception_kind=2;if(result)std::memset(result,0,8);return true;}
 }
 int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=reinterpret_cast<JNIEnv*>(1);void* manager=reinterpret_cast<void*>(3);
@@ -71,6 +81,18 @@ int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=
  assert(PrepareMethodHandleGuards(hooks,env,manager,method_registry,methods,&error));assert(installed_count==2&&!stopped&&!MethodHandleGuardsReady(method_registry));
  assert(RegisterMethodHandleFieldOwner(field_registry,&error));assert(!RegisterMethodHandleFieldOwner(wrong_field_registry,&error));
  assert(PrepareMethodHandleFieldGuards(hooks,env,manager,field_registry,fields,&error));assert(installed_count==2&&!MethodHandleFieldGuardsReady(field_registry));
+ // Actual readonly production calibration checks independent construction kind
+ // alongside the existing native visitor/JNI target identity, without changing
+ // previously valid retirement state when a kind oracle fails.
+ Binding kind_binding=state.binding;kind_binding.kind=Kind;
+ auto kind_oracles=fields;kind_oracles[0].expected_kind=8;kind_oracles[1].expected_kind=10;
+ Calibration kind_request{&kind_binding,manager,nullptr,&kind_oracles,{},false,{}};
+ assert(Calibrate({current,env,nullptr},&kind_request)&&kind_request.field_kinds_calibrated);
+ kind_oracles[1].expected_kind=9;Calibration wrong_kind{&kind_binding,manager,nullptr,&kind_oracles,{},false,{}};
+ assert(!Calibrate({current,env,nullptr},&wrong_kind));kind_oracles[1].expected_kind=10;
+ auto unknown_kinds=kind_oracles;unknown_kinds[0].expected_kind=UINT32_MAX;
+ Calibration unknown_kind{&kind_binding,manager,nullptr,&unknown_kinds,{},false,{}};
+ assert(Calibrate({current,env,nullptr},&unknown_kind)&&!unknown_kind.field_kinds_calibrated);
  uint64_t result=99;uint32_t root=uint32_t(uintptr_t(Object(1)));auto call=[&](bool exact){return exact?Dispatch<true>(expected_self,reinterpret_cast<void*>(7),{&root},{reinterpret_cast<void*>(11)},reinterpret_cast<void*>(9),&result):Dispatch<false>(expected_self,reinterpret_cast<void*>(7),{&root},{reinterpret_cast<void*>(11)},reinterpret_cast<void*>(9),&result);};
  assert(BeginMethodHandleTargetProof(env,methods[0].strong_global,methods[0].method,&error));assert(call(true)&&result==0x1234);assert(EndMethodHandleTargetProof(true,&error)&&MethodHandleGuardsReady(method_registry));
  normal_result=false;exception_kind=0;assert(!call(false)&&exception_kind==7&&result==0x1234);normal_result=true;
@@ -103,6 +125,21 @@ int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=
  // Independent Java value failure revokes that target's previous proof.
  assert(BeginMethodHandleFieldTargetProof(env,next_fields[1].strong_global,next_fields[1].field,&error));assert(!MethodHandleFieldGuardsReady(field_registry));assert(call(false));assert(!EndMethodHandleFieldTargetProof(false,&error)&&!MethodHandleFieldGuardsReady(field_registry));
  assert(BeginMethodHandleFieldTargetProof(env,next_fields[1].strong_global,next_fields[1].field,&error));assert(call(false));assert(EndMethodHandleFieldTargetProof(true,&error)&&MethodHandleFieldGuardsReady(field_registry));
+ // Exercise both actual exported outer dispatches after source-kind proof.
+ // Current final flags reject cached setters before the original native call;
+ // getter delegation and removal of final remain valid.
+ state.field_kinds_calibrated=true;
+ assert(PrepareMethodHandleFieldGuards(hooks,env,manager,field_registry,next_fields,&error));
+ assert(state.field_kinds_calibrated); // Later unknown target oracles cannot revoke installed enforcement.
+ state.binding.kind=Kind;
+ root=uint32_t(uintptr_t(Object(6)));final_targets=true;override_kind=9;result=99;
+ const auto before_final=invoked;
+ assert(!call(false)&&exception_kind==3&&result==0&&invoked==before_final);
+ root=uint32_t(uintptr_t(Object(7)));override_kind=11;result=99;
+ assert(!call(true)&&exception_kind==3&&result==0&&invoked==before_final);
+ override_kind=10;assert(call(true)&&result==0x1234&&invoked==before_final+1);
+ final_targets=false;override_kind=11;assert(call(false)&&result==0x1234&&invoked==before_final+2);
+ override_kind=UINT32_MAX;
  root=uint32_t(uintptr_t(Object(1)));method_registry.Retire(reinterpret_cast<void*>(methods[0].method));const auto before=invoked;result=99;assert(!call(true)&&exception_kind==1&&result==0&&invoked==before);
  root=uint32_t(uintptr_t(Object(4)));field_registry.Retire(Identity(Object(4)));result=99;assert(!call(false)&&exception_kind==2&&result==0&&invoked==before);
  assert(private_lookups==0&&installed_count==2&&!MethodHandleGuardsReady(wrong_method_registry)&&!MethodHandleFieldGuardsReady(wrong_field_registry));

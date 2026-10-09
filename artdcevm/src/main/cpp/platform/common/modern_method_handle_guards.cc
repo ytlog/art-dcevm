@@ -2,6 +2,7 @@
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/abi/arm64/android-common/method_handle.h"
 #include "platform/common/native_structural_reflection_visitor.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/android-common/suspend_all.h"
@@ -23,12 +24,12 @@ using Invoke=bool(*)(void*,void*,Handle,Handle,const void*,void*);
 constexpr const char* kInvoke="_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE";
 constexpr const char* kExact="_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE";
 struct Binding {Visit visit=nullptr;Root root=nullptr;void*(*current)()=nullptr;
- DecodeMethod method=nullptr;void* targets[2]{};
+ DecodeMethod method=nullptr;uint32_t(*kind)(const void*)=abi::arm64::android_common::MethodHandleKind;void* targets[2]{};
  abi::arm64::android_common::SuspendConstruct construct=nullptr;
  abi::arm64::android_common::SuspendDestroy destroy=nullptr;};
 struct State {Binding binding;void* manager=nullptr;RetiredMethodRegistry* methods=nullptr;
  RetiredFieldRegistry* fields=nullptr;bool methods_calibrated=false,fields_calibrated=false;
- bool installed=false,incomplete=false,method_observed=false;Invoke originals[2]{};
+ bool installed=false,incomplete=false,method_observed=false,field_kinds_calibrated=false;Invoke originals[2]{};
  uint64_t field_batch=0;
  std::vector<FieldMethodHandleOracle> field_oracles;
  std::vector<void*> field_targets;std::atomic<uint64_t> field_observed{0};};
@@ -64,6 +65,11 @@ template<bool exact> bool Dispatch(void* self,void* frame,Handle handle,Handle t
   if(state.fields_calibrated){
    if(!FieldEntryGuardsOwn(*state.fields))std::abort();
    if(RejectRetiredField(target.value,self,result))return false;
+   if(state.field_kinds_calibrated){
+    using namespace abi::arm64::android_common;
+    const auto kind=state.binding.kind(object);
+    if((kind==kInstancePut||kind==kStaticPut)&&RejectFinalFieldSetter(target.value,self,result))return false;
+   }
   }
  }else if(state.methods_calibrated){
   if(!MethodEntryGuardsOwn(*state.methods))std::abort();
@@ -107,7 +113,7 @@ bool Install(HookEngine& hooks,const Binding& b,std::string* error){
  state.installed=true;b.destroy(&stopped);return true;
 }
 struct Calibration {const Binding* binding;void* manager;const std::vector<MethodHandleOracle>* methods=nullptr;
- const std::vector<FieldMethodHandleOracle>* fields=nullptr;std::vector<void*> targets;bool valid=false;std::string error;};
+ const std::vector<FieldMethodHandleOracle>* fields=nullptr;std::vector<void*> targets;bool valid=false;std::string error;bool field_kinds_calibrated=false;};
 bool Calibrate(const runnable_jni::Context& context,void* raw){
  auto& request=*static_cast<Calibration*>(raw);const auto& b=*request.binding;
  if(b.current()!=context.self){request.error="actual Thread differs from Runnable context";return false;}std::unordered_set<void*> seen;
@@ -124,7 +130,19 @@ bool Calibrate(const runnable_jni::Context& context,void* raw){
   request.targets.push_back(expected);return true;
  };
  if(request.methods)for(const auto& o:*request.methods){if(!o.method||!observe(o.strong_global,b.method(request.manager,o.method),false))return false;}
- if(request.fields)for(const auto& o:*request.fields){if(!o.identity||contextual_field_id::Id(o.identity)!=o.field||!o.field||!observe(o.strong_global,contextual_field_id::NativeField(o.identity),true,o.field))return false;}
+ if(request.fields){
+  bool kinds=true;
+  for(const auto& o:*request.fields){
+   if(!o.identity||contextual_field_id::Id(o.identity)!=o.field||!o.field||!observe(o.strong_global,contextual_field_id::NativeField(o.identity),true,o.field))return false;
+   if(o.expected_kind==UINT32_MAX){kinds=false;continue;}
+   void* object=nullptr;
+   if(o.expected_kind<8||o.expected_kind>11||!b.kind||
+      !runnable_executor::DecodeStrongGlobal(context,o.strong_global,&object)||b.kind(object)!=o.expected_kind){
+     request.error="MethodHandle kind differs from independent field construction oracle";return false;
+   }
+  }
+  request.field_kinds_calibrated=kinds;
+ }
  request.valid=true;return true;
 }
 struct Begin {jmethodID method=nullptr;jfieldID field=nullptr;bool valid=false;jobject root=nullptr;};
@@ -164,7 +182,7 @@ bool PrepareMethodHandleFieldGuards(HookEngine& hooks,JNIEnv* env,void* manager,
  Calibration request{&b,manager,nullptr,&oracles,{},false,{}};
  if(runnable_executor::With(env,oracles.front().strong_global,Calibrate,&request)!=runnable_jni::Result::kSuccess||!request.valid)return fail(request.error.empty()?"Independent field MethodHandle target/root oracle mismatch":request.error.c_str());
  if(!Install(hooks,b,error))return false;
- state.manager=manager;state.fields=&registry;state.field_targets=std::move(request.targets);state.field_oracles=oracles;state.field_observed.store(0);++state.field_batch;state.fields_calibrated=true;return true;
+ state.manager=manager;state.fields=&registry;state.field_targets=std::move(request.targets);state.field_oracles=oracles;state.field_observed.store(0);++state.field_batch;state.fields_calibrated=true;state.field_kinds_calibrated=state.field_kinds_calibrated||request.field_kinds_calibrated;return true;
 }
 bool BeginMethodHandleTargetProof(JNIEnv* env,jobject root,jmethodID method,std::string* error){
  if(!state.methods_calibrated||proof.self||!env||!root||!method){if(error)*error="Unprepared/active MethodHandle target proof";return false;}

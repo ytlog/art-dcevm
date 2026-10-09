@@ -237,7 +237,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_prepareOwnedFieldDelet
  if(runnable_executor::With(env,target,ObserveFieldGuardOracles,&request)!=runnable_jni::Result::kSuccess)return fail("Field mirror and independent JNI ID disagree");
  std::vector<retirement::FieldVarHandleOracle> oracles{{handles[0],request.fields[0],request.mirrors[0]},{handles[1],request.fields[1],request.mirrors[1]}};
  if(!retirement::InstallFieldVarHandleGuards(hooks,env,oracles,jni_access::OwnedFieldRegistry(),&error))return fail(error);
- const std::vector<retirement::FieldMethodHandleOracle> getter_oracles{{getters[0],request.ids[0],request.identities[0]},{getters[1],request.ids[1],request.identities[1]}};
+ const std::vector<retirement::FieldMethodHandleOracle> getter_oracles{{getters[0],request.ids[0],request.identities[0],8},{getters[1],request.ids[1],request.identities[1],10}};
  if(!retirement::PrepareMethodHandleFieldGuards(hooks,env,request.manager,jni_access::OwnedFieldRegistry(),getter_oracles,&error))return fail(error);
  owned_getter_stage=std::move(stage);
  return fail("");

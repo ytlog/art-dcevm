@@ -317,6 +317,11 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
 }
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry){return installed&&state.registry==&registry;}
 bool RejectRetiredField(void* field,void* self,void* result){return GuardNativeField(self,field,result);}
+bool RejectFinalFieldSetter(void* field,void* self,void* result){
+  const final_field_guard::Boundary boundary{&state,ReadFinalFlags,RaiseFinal};
+  final_field_guard::Access access;access.path=final_field_guard::Path::MethodHandleSetter;
+  return final_field_guard::Reject(boundary,field,self,access,result);
+}
 bool InstallMethodHandleFieldGuards(HookEngine&,std::string* error){
  if(!installed){if(error)*error="MethodHandle field guards require the durable field entry owner";return false;}
  return RegisterMethodHandleFieldOwner(*state.registry,error);

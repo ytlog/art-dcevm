@@ -506,7 +506,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_prepareFieldGuards(
   if(!contextual_field_id::Initialize(hooks,&error))return fail(error);
   auto stage=std::make_unique<contextual_field_id::Stage>(env,debug_retired_fields);
   if(!stage->Add(instance_field,removed,&error)||!stage->Add(static_field,removed_static,&error))return fail(error);
-  const std::vector<retirement::FieldMethodHandleOracle> oracles{{instance_root,removed,stage->proofs[0]},{static_root,removed_static,stage->proofs[1]}};
+  const std::vector<retirement::FieldMethodHandleOracle> oracles{{instance_root,removed,stage->proofs[0],8},{static_root,removed_static,stage->proofs[1],10}};
   if(!retirement::PrepareMethodHandleFieldGuards(hooks,env,services.receivers.jni_id_manager,
       debug_retired_fields,oracles,&error))return fail(error);
   debug_field_stage=std::move(stage);

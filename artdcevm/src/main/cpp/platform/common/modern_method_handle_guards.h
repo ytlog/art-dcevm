@@ -8,7 +8,11 @@
 namespace artdcevm::retirement {
 struct MethodHandleOracle {jobject strong_global; jmethodID method;};
 struct FieldMethodHandleOracle {jobject strong_global; jfieldID field;
- std::shared_ptr<contextual_field_id::Proof> identity;};
+ std::shared_ptr<contextual_field_id::Proof> identity;
+ // Independent source/public construction oracle, not inferred from a private
+ // target or SDK. Unknown preserves retirement support but proves no final
+ // setter capability. Fixed ART Kind: instance get/put=8/9, static get/put=10/11.
+ uint32_t expected_kind=UINT32_MAX;};
 // Registration is not readiness; prepare with actual targets and exercise each
 // original exported invoke before allowing cached field handles in a commit.
 bool RegisterMethodHandleFieldOwner(RetiredFieldRegistry&,std::string*);

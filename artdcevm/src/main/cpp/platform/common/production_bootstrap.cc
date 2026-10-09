@@ -498,7 +498,7 @@ std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std
  for(size_t i=0;i<2;i++){
   auto getter_id=env->GetFieldID(input_type,i?"staticGetter":"instanceGetter","Ljava/lang/invoke/MethodHandle;");
   auto getter=getter_id?env->GetObjectField(global_input,getter_id):nullptr;auto root=roots.Own(getter);if(getter)env->DeleteLocalRef(getter);
-  if(!root||env->ExceptionCheck())return nullptr;e.field_method_handles.push_back({root,proof_ids[i],{}});
+  if(!root||env->ExceptionCheck())return nullptr;e.field_method_handles.push_back({root,proof_ids[i],{},i?10u:8u});
  }
  jobject proof_fields[2];
  for(size_t i=0;i<2;i++){auto f=env->ToReflectedField(static_cast<jclass>(storage_class),proof_ids[i],i?JNI_TRUE:JNI_FALSE);proof_fields[i]=roots.Own(f);if(f)env->DeleteLocalRef(f);}
