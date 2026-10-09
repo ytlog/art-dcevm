@@ -5,6 +5,7 @@
 #include "platform/abi/arm64/android-common/redefiner_prefix.h"
 #include <cstring>
 #include <cstdlib>
+#include <new>
 namespace artdcevm::native_schema_run_state {
 namespace {thread_local RunState* current=nullptr;bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}void Require(bool v){if(!v)std::abort();}}
 struct RunState::State {
@@ -80,13 +81,45 @@ abi::arm64::android11::ReleaseObjectPointer RunState::FindOriginal(void*linker,v
 }
 bool RunState::BeforeVerification(void*o,const transaction_root::Iterator*i,std::string*e){auto&s=*state_;return s.phase==State::Phase::Running&&s.hierarchy&&s.hierarchy->BeforeVerification(o,i,e);}
 void RunState::AfterVerification(void*o,const transaction_root::Iterator*i,bool result)noexcept{auto&s=*state_;Require(s.hierarchy!=nullptr);s.hierarchy->AfterVerification(o,i,result);}
+struct RunState::StoppedAttempt {
+ RunState* run;std::string* error;
+ enum class Failure {None,Allocation,Unexpected};
+ Failure failure=Failure::None;
+};
+bool RunState::PrepareOriginalWaiting(void*raw,native_source_stop::Session&stop)noexcept{
+ auto*a=static_cast<StoppedAttempt*>(raw);
+ if(!a||!a->run||current!=a->run||a->run->state_->stop.get()!=&stop)return false;
+ // No C++ exception may unwind through the original ART Mutex::Unlock body.
+ // Report allocation errors only once StartGC has restored actual Runnable.
+ try{return a->run->PrepareStopped(a->error);}
+ catch(const std::bad_alloc&){a->failure=StoppedAttempt::Failure::Allocation;}
+ catch(...){a->failure=StoppedAttempt::Failure::Unexpected;}
+ return false;
+}
 bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit::Plan&p,std::string*e){
  auto&s=*state_;if(s.phase!=State::Phase::Running||!g.holder||!s.loading->Paused()||!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata)||!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return Fail(e,"Actual collected schema owner/root preparation refused");
  s.plan=&p;s.holder=g.holder;size_t publication_count=0;
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
  const auto collect=s.d.registry->Collect();
  if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
- if(!s.stop->Begin(s.context.self,s.extent))return Fail(e,s.stop->Failure());
+ if(s.d.stop->RequiresOriginalWaiting()){
+  StoppedAttempt attempt{this,e};
+  const bool accepted=s.stop->BeginOriginalWaiting(s.context.self,s.extent,&attempt,PrepareOriginalWaiting);
+  if(attempt.failure==StoppedAttempt::Failure::Allocation)return Fail(e,"Stopped schema preparation exhausted native memory");
+  if(attempt.failure==StoppedAttempt::Failure::Unexpected)return Fail(e,"Stopped schema preparation threw");
+  if(!accepted)return e&&!e->empty()?false:Fail(e,s.stop->Failure());
+ }else{
+  if(!s.stop->Begin(s.context.self,s.extent))return Fail(e,s.stop->Failure());
+  if(!PrepareStopped(e))return false;
+ }
+ // The waiting path restores Runnable in the original StartGC scope before
+ // this callback returns. Both paths now retain the same owned reservation.
+ s.phase=State::Phase::Collected;return true;
+}
+bool RunState::PrepareStopped(std::string*e){
+ auto&s=*state_;
+ if(current!=this||s.phase!=State::Phase::Running||!s.plan||!s.holder||!s.stop||!s.stop->IsCollectedStop(s.context.self))return Fail(e,"Schema preparation lacks the exact collected stop owner");
+ auto&p=*s.plan;
  if(s.d.mapping.extent){
   if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,e))return false;
   s.read_context={this,MappingExtent};s.d.members.read_context=&s.read_context;s.mapper->UseReadContext(s.read_context);s.receivers.UseReadContext(s.read_context);s.authority.UseReadContext(s.read_context);
@@ -105,7 +138,7 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  }
  s.facade=s.cleanup->Prepare(std::move(native),p,e);if(!s.facade)return false;
  if(!s.stop->ContinueSource())return Fail(e,s.stop->Failure());
- s.phase=State::Phase::Collected;return true;
+ return true;
 }
 std::unique_ptr<source_commit::Services> RunState::Finalize(const void*h,const source_commit::Plan**p)noexcept{
  auto&s=*state_;if(!p||s.phase!=State::Phase::Collected||h!=s.holder||!s.facade||!s.stop->IsFinalWindow(s.context.self)||!s.d.registry->Resolve())return nullptr;

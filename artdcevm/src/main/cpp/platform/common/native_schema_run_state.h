@@ -70,6 +70,9 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  const whole_process_frames::Report& Frames()const noexcept;
  private:
  struct State;
+ struct StoppedAttempt;
+ static bool PrepareOriginalWaiting(void*,native_source_stop::Session&) noexcept;
+ bool PrepareStopped(std::string*);
  RunState(const Dependencies&,void*,const runnable_jni::Context&);
  static bool MappingExtent(void*,const void*,size_t*) noexcept;
  static bool MatchDexPublication(void*,void*,const void*,void*,void*,void*,size_t*) noexcept;
