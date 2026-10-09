@@ -3,6 +3,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/readable_mapping_scope.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -29,20 +30,20 @@ bool SetMatches(const std::vector<void*>& actual,const std::vector<size_t>& expe
  if(actual.size()!=expected.size())return false;for(auto n:expected){void* k=replacement&&g.nodes[n].replacement?g.nodes[n].replacement:g.nodes[n].klass;if(std::count(actual.begin(),actual.end(),k)!=1)return false;}return true;
 }
 }
-bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata& metadata,Graph* graph,std::string* error){
+bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata& metadata,Graph* graph,std::string* error,const modern_field_metadata::ReadContext* context){
  if(!graph||!metadata.Calibrated())return Fail(error,"Class flags lack calibrated metadata/rooted graph");
  const auto& layout=metadata.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
  constexpr uint32_t source_flags=0x7631u;
  for(auto& node:graph->nodes){size_t extent=0;class_metadata::State state;
   if(node.proposed_flags&&((node.flags^*node.proposed_flags)&~0x410u))return Fail(error,("Public Class proposal changes role/access: "+node.descriptor).c_str());
-  if(!node.klass||!method_identity::ReadableMappingExtent(node.klass,&extent)||!class_metadata::ReadState(layout,node.klass,extent,&state)||state.IsPrimitive())return Fail(error,("Rooted Class effective flags unavailable from calibrated metadata: "+node.descriptor).c_str());
+  if(!node.klass||!modern_field_metadata::ReadMappingExtent(context,node.klass,&extent)||!class_metadata::ReadState(layout,node.klass,extent,&state)||state.IsPrimitive())return Fail(error,("Rooted Class effective flags unavailable from calibrated metadata: "+node.descriptor).c_str());
   const uint32_t public_flags=node.public_flags.value_or(node.flags);
   uint32_t defining_flags=0;
   // Source proxy Classes have no ClassDef or InnerClass annotation. For normal
   // Classes the public query replaces every Java flag from that annotation;
   // compare immutable ClassDef access against calibrated native state instead.
   if(state.access_flags&0x40000u)defining_flags=public_flags;
-  else if(!metadata.DefiningClassFlags(node.klass,&defining_flags,error))return false;
+  else if(!metadata.DefiningClassFlags(node.klass,&defining_flags,error,context))return false;
   if((defining_flags&source_flags)!=(state.access_flags&source_flags))return Fail(error,("Defining DEX/native Class flags disagree: "+node.descriptor+" definingFlags="+std::to_string(defining_flags)+" nativeFlags="+std::to_string(state.access_flags)).c_str());
   node.public_flags=public_flags;node.flags=state.access_flags&source_flags;
   if(node.proposed_flags)node.proposed_flags=(node.flags&~0x410u)|(*node.proposed_flags&0x410u);
@@ -81,8 +82,15 @@ bool ValidateGraph(Graph* graph,std::string* error){
 }
 struct Authority::State {
  Bindings bindings{};modern_field_metadata::ReadContext read_context{};bool contextual=false;
- const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:nullptr;}
- bool Extent(const void*p,size_t*out)const noexcept{return contextual?read_context.extent&&read_context.extent(read_context.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+ const modern_field_metadata::ReadContext* ordinary_context=nullptr;
+ const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:ordinary_context;}
+ struct OrdinaryRead {
+  State& owner;const modern_field_metadata::ReadContext* previous;std::optional<method_identity::ScopedReadableMappings> mappings;modern_field_metadata::ReadContext view{};
+  explicit OrdinaryRead(State&s):owner(s),previous(s.ordinary_context){if(!s.contextual&&!previous){mappings.emplace();view={&*mappings,[](void*o,const void*p,size_t*out){return static_cast<method_identity::ScopedReadableMappings*>(o)->Extent(p,out);}};s.ordinary_context=&view;}}
+  bool Ready()const noexcept{return !mappings||mappings->Ready();}
+  ~OrdinaryRead(){owner.ordinary_context=previous;}
+ };
+ bool Extent(const void*p,size_t*out)const noexcept{return modern_field_metadata::ReadMappingExtent(Context(),p,out);}
  runnable_jni::Context root_context{};bounded_managed_roots::Store public_roots;
  std::vector<bounded_managed_roots::Slot> loaders;
  static bool RootOracle(void*raw,const runnable_jni::Context&c,jobject g,void**out){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_owned(s.bindings.decoder_owner,c,g,out);}
@@ -161,14 +169,17 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   if(!resolve(input.after.superclass,actual_loader.v,&node.proposed_parent))return Fail(error,"Proposed parent cannot resolve without initialization in actual loader");node.proposed_interfaces.clear();
   for(const auto& d:input.after.interfaces){size_t index=absent;if(!resolve(d,actual_loader.v,&index))return Fail(error,"Proposed interface unavailable in exact loader");node.proposed_interfaces.push_back(index);}s.graph.inputs.push_back(n);if(node.strong_class)return Fail(error,"Duplicate source input Class");node.strong_class=static_cast<jclass>(env->NewGlobalRef(input.strong_original));if(!node.strong_class||env->ExceptionCheck())return false;s.inputs[input_index].strong_original=node.strong_class;
  }
+ // Capture only after the last public JNI operation. This view lives exactly
+ // through the immediate no-JNI native borrow/graph traversal.
+ State::OrdinaryRead ordinary{s};if(!ordinary.Ready())return Fail(error,"Fresh ordinary graph mappings unavailable");
  // No JNI call may follow these borrowed native reads in this Stage callback.
  for(auto& n:s.graph.nodes){if(!s.public_roots.Read(n.class_root.slot,&n.klass)||!n.klass||!s.public_roots.Read(n.loader_root.slot,&n.loader))return false;}
- if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error)||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
- for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::Read(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error)||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==k;});s.order_before[i].push_back(size_t(it-s.graph.nodes.begin()));}}
+ if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error,s.Context())||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
+ for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::ReadInContext(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error,s.Context())||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==k;});s.order_before[i].push_back(size_t(it-s.graph.nodes.begin()));}}
  if(!s.Native(false)||!s.OwnersStaged(error))return Fail(error,"Actual allocation/receiver/type-cache proof absent or rejected");s.staged=true;success=true;return true;
 }
 bool Authority::CheckClass(const runnable_jni::Context& context,jclass original,const evolution::ClassSchema& schema,jvmtiError* expected_failure)noexcept{
- auto& s=*state_;if(!s.staged||s.sealed||!s.Borrow(context))return false;
+ auto& s=*state_;State::OrdinaryRead ordinary{s};if(!ordinary.Ready()||!s.staged||s.sealed||!s.Borrow(context))return false;
  void* klass=nullptr;if(!s.bindings.borrow_owned(s.bindings.decoder_owner,context,original,&klass))return false;
  for(size_t i=0;i<s.inputs.size();++i){const auto& node=s.graph.nodes[s.graph.inputs[i]];if(node.klass!=klass)continue;
   if(!Same(s.inputs[i].after,schema)||!s.Native(false))return false;
@@ -179,7 +190,7 @@ bool Authority::CheckClass(const runnable_jni::Context& context,jclass original,
   return true;
  }return false;
 }
-bool Authority::AuthorizeAllocation(const runnable_jni::Context& context,const Prepared& p,std::string* error){auto& s=*state_;if(!s.staged||s.sealed||p.new_class||!p.source_owner||!p.old_class||!p.cache||!p.declarations||!s.Borrow(context))return Fail(error,"Missing preallocation source owner/root proof");
+bool Authority::AuthorizeAllocation(const runnable_jni::Context& context,const Prepared& p,std::string* error){auto& s=*state_;State::OrdinaryRead ordinary{s};if(!ordinary.Ready()||!s.staged||s.sealed||p.new_class||!p.source_owner||!p.old_class||!p.cache||!p.declarations||!s.Borrow(context))return Fail(error,"Missing preallocation source owner/root proof");
  auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p.old_class;});if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Preallocation is outside exact affected graph");size_t index=size_t(it-s.graph.nodes.begin());
  auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);if(target!=s.graph.inputs.end()&&!Same(*p.declarations,s.inputs[size_t(target-s.graph.inputs.begin())].after))return Fail(error,"Preallocation incoming declarations differ");
  if(it->proposed_parent!=absent&&s.graph.nodes[it->proposed_parent].affected&&!s.graph.nodes[it->proposed_parent].replacement)return Fail(error,"Affected parent has not been actually linked first");
@@ -187,34 +198,38 @@ bool Authority::AuthorizeAllocation(const runnable_jni::Context& context,const P
  return s.bindings.allocation->VerifyAllocation(s.graph,p,error)&&s.bindings.receivers->VerifyAllocation(s.graph,p,error)&&s.bindings.caches->VerifyAllocation(s.graph,p,error);
 }
 bool Authority::PrepareLinked(const runnable_jni::Context& context,Prepared* p,std::string* error){auto& s=*state_;
- if(!p||!s.staged||s.sealed||!p->new_class||!p->source_owner||!p->source_old_root||!p->declarations||!s.Borrow(context)||!s.bindings.allocation->RefreshPending(p))return Fail(error,"Actual linked source roots absent before cache preparation");
+ {State::OrdinaryRead ordinary{s};
+ if(!ordinary.Ready()||!p||!s.staged||s.sealed||!p->new_class||!p->source_owner||!p->source_old_root||!p->declarations||!s.Borrow(context)||!s.bindings.allocation->RefreshPending(p))return Fail(error,"Actual linked source roots absent before cache preparation");
  auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p->old_class;});
  if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Cache preparation is outside exact unallocated graph");
  size_t index=size_t(it-s.graph.nodes.begin());auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);
  if(target!=s.graph.inputs.end()&&!Same(*p->declarations,s.inputs[size_t(target-s.graph.inputs.begin())].after))return Fail(error,"Linked cache source declarations differ from immutable input");
  void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);
  field_copy::CopyClassView identity;
- if(p->parent!=parent||!s.Native(false)||!s.bindings.metadata->ClassIdentity(p->new_class,&identity,error)||identity.parent!=parent||identity.loader!=it->loader||!identity.descriptor||it->descriptor!=identity.descriptor||!s.Flags(p->new_class,it->ProposedFlags())||!s.bindings.allocation->VerifyPrepared(s.graph,*p,error))return Fail(error,"Actual captured Class differs before private cache mutation");
- // Cache resolution can safepoint; rebind the actual source roots afterward.
- return s.bindings.caches->PrepareLinked(s.graph,*p,error)&&s.Borrow(context)&&s.bindings.allocation->RefreshPending(p);
+ if(p->parent!=parent||!s.Native(false)||!s.bindings.metadata->ClassIdentity(p->new_class,&identity,error,s.Context())||identity.parent!=parent||identity.loader!=it->loader||!identity.descriptor||it->descriptor!=identity.descriptor||!s.Flags(p->new_class,it->ProposedFlags())||!s.bindings.allocation->VerifyPrepared(s.graph,*p,error))return Fail(error,"Actual captured Class differs before private cache mutation");
+ }
+ // Cache resolution can safepoint. Drop the view first, then capture again and
+ // reborrow the actual source roots after the original cache callee returns.
+ if(!s.bindings.caches->PrepareLinked(s.graph,*p,error))return false;
+ State::OrdinaryRead ordinary{s};return ordinary.Ready()&&s.Borrow(context)&&s.bindings.allocation->RefreshPending(p);
 }
-bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepared& p,std::string* error){auto& s=*state_;if(!s.staged||s.sealed||!p.source_owner||!p.old_class||!p.new_class||!p.cache||!p.declarations||!s.Borrow(context))return Fail(error,"Actual linked allocation proof missing");
+bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepared& p,std::string* error){auto& s=*state_;State::OrdinaryRead ordinary{s};if(!ordinary.Ready()||!s.staged||s.sealed||!p.source_owner||!p.old_class||!p.new_class||!p.cache||!p.declarations||!s.Borrow(context))return Fail(error,"Actual linked allocation proof missing");
  auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p.old_class;});if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Allocation does not belong to exact unallocated affected Class");size_t index=size_t(it-s.graph.nodes.begin());
  auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);if(target!=s.graph.inputs.end()){size_t i=size_t(target-s.graph.inputs.begin());if(!Same(*p.declarations,s.inputs[i].after))return Fail(error,"Allocator declarations differ from immutable staged input");}
  else if(p.declarations->descriptor!=it->descriptor||p.declarations->superclass!=(it->proposed_parent==absent?std::string{}:s.graph.nodes[it->proposed_parent].descriptor))return Fail(error,"Implicit allocation declarations differ from staged hierarchy");
  void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);if(p.parent!=parent)return Fail(error,"Source allocator selected different rooted superclass");
- field_copy::CopyClassView identity;if(!s.Flags(p.new_class,it->ProposedFlags())||!s.bindings.metadata->ClassIdentity(p.new_class,&identity,error)||identity.parent!=parent||identity.loader!=it->loader||!identity.descriptor||it->descriptor!=identity.descriptor)return Fail(error,"Linked Class does not match staged namespace and parent");
+ field_copy::CopyClassView identity;if(!s.Flags(p.new_class,it->ProposedFlags())||!s.bindings.metadata->ClassIdentity(p.new_class,&identity,error,s.Context())||identity.parent!=parent||identity.loader!=it->loader||!identity.descriptor||it->descriptor!=identity.descriptor)return Fail(error,"Linked Class does not match staged namespace and parent");
  // Owner verifies incoming cache's immutable DEX declarations/index and the
  // actual allocator owner; this module never substitutes a supplied schema bit.
  if(!s.bindings.allocation->VerifyPrepared(s.graph,p,error)||!s.bindings.receivers->VerifyPrepared(s.graph,p,error)||!s.bindings.caches->VerifyPrepared(s.graph,p,error))return false;
- std::vector<void*> interfaces;if(!native_interface_graph::Read(*s.bindings.metadata,p.new_class,&interfaces,error)||!SetMatches(interfaces,s.closure_after[index],s.graph,true))return Fail(error,"Linked Class interfaces differ from exact staged graph");
+ std::vector<void*> interfaces;if(!native_interface_graph::ReadInContext(*s.bindings.metadata,p.new_class,&interfaces,error,s.Context())||!SetMatches(interfaces,s.closure_after[index],s.graph,true))return Fail(error,"Linked Class interfaces differ from exact staged graph");
  std::vector<size_t> order;order.reserve(interfaces.size());for(auto k:interfaces){auto found=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return (n.replacement?n.replacement:n.klass)==k;});if(found==s.graph.nodes.end())return false;order.push_back(size_t(found-s.graph.nodes.begin()));}
  evolution::ClassSchema declarations=*p.declarations; // All fallible work precedes publication.
  s.allocation_declarations[index]=std::move(declarations);Prepared owned=p;owned.declarations=&s.allocation_declarations[index];s.allocations.push_back(owned);s.order_after[index]=std::move(order);s.native_after[index]=std::move(interfaces);it->replacement=p.new_class;return true;
 }
 bool Authority::PrepareRoots(const source_commit::Plan& p,std::string* error){
- auto& s=*state_;
- if(!s.staged||s.roots_prepared||s.sealed||s.registration_started||p.old_classes.size()!=p.new_classes.size())return Fail(error,"Root preparation requires fresh complete source allocation graph");
+ auto& s=*state_;State::OrdinaryRead ordinary{s};
+ if(!ordinary.Ready()||!s.staged||s.roots_prepared||s.sealed||s.registration_started||p.old_classes.size()!=p.new_classes.size())return Fail(error,"Root preparation requires fresh complete source allocation graph");
  size_t affected=0;
  for(const auto& n:s.graph.nodes)if(n.affected){++affected;size_t found=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++found;if(found!=1)return Fail(error,"Source Plan omitted or duplicated actual affected allocation");}
  if(affected!=p.old_classes.size()||!s.Native(true))return Fail(error,"Root preparation lacks actual complete native replacement graph");

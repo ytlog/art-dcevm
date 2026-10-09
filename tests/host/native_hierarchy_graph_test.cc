@@ -3,6 +3,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/readable_mapping_scope.h"
 #include <cassert>
 #include <algorithm>
 #include <cstdio>
@@ -24,19 +25,26 @@ struct Fake {
  Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;defining_flags=flags;}
 };
 static std::vector<Fake*> loaded;
-static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0;
+static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0,os_queries=0,snapshots=0;static bool deny_snapshot=false,deny_view=false;
 void* operator new(size_t n){if(forbid_alloc)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete(void* p,size_t)noexcept{std::free(p);}
-namespace artdcevm::method_identity {bool ReadableMappingExtent(const void*,size_t* out){assert(!forbid_os);*out=4096;return true;}}
+namespace artdcevm::method_identity {
+bool ReadableMappingExtent(const void*,size_t* out){assert(!forbid_os);++os_queries;*out=4096;return true;}
+ScopedReadableMappings::ScopedReadableMappings()noexcept{assert(!forbid_os);++os_queries;++snapshots;complete_=!deny_snapshot;}
+ScopedReadableMappings::~ScopedReadableMappings()=default;
+bool ScopedReadableMappings::Extent(const void*p,size_t*out)const noexcept{++context_reads;if(!complete_||deny_view||!p||!out)return false;*out=4096;return true;}
+}
 namespace artdcevm::modern_field_metadata {
 bool FieldMetadata::Calibrate(const runnable_jni::Context&,jobject,const char*,const FieldOracle*,size_t,std::string*){calibrated_=true;return true;}
-bool FieldMetadata::DefiningClassFlags(void*k,uint32_t*out,std::string*,const ReadContext*)const{*out=static_cast<Fake*>(k)->defining_flags;return true;}
+bool FieldMetadata::DefiningClassFlags(void*k,uint32_t*out,std::string*,const ReadContext*c)const{size_t extent=0;for(int i=0;i<7;++i)if(!ReadMappingExtent(c,k,&extent))return false;*out=static_cast<Fake*>(k)->defining_flags;return true;}
+bool ReadMappingExtent(const ReadContext*c,const void*p,size_t*out){return c?c->extent&&c->extent(c->owner,p,out):method_identity::ReadableMappingExtent(p,out);}
 bool FieldMetadata::ClassIdentity(void* k,field_copy::CopyClassView* out,std::string*,const ReadContext* context)const{size_t extent=0;if(context&&(!context->extent||!context->extent(context->owner,k,&extent)||extent<sizeof(class_metadata::Class11)))return false;auto* f=static_cast<Fake*>(k);*out={f->parent,f->loader,f->descriptor.c_str(),0,f->descriptor=="Ljava/lang/Object;"};return true;}
 }
 namespace artdcevm::native_interface_graph {
 bool Read(const modern_field_metadata::FieldMetadata&,void* k,std::vector<void*>* out,std::string*){*out=static_cast<Fake*>(k)->native_interfaces;return true;}
 bool Matches(const modern_field_metadata::FieldMetadata&,void* k,const std::vector<void*>& expected,std::string*){return static_cast<Fake*>(k)->native_interfaces==expected;}
+bool ReadInContext(const modern_field_metadata::FieldMetadata&m,void*k,std::vector<void*>*out,std::string*e,const modern_field_metadata::ReadContext*c){size_t extent=0;for(int i=0;i<7;++i)if(!modern_field_metadata::ReadMappingExtent(c,k,&extent))return false;return Read(m,k,out,e);}
 bool MatchesInContext(const modern_field_metadata::FieldMetadata&m,void*k,const std::vector<void*>&e,std::string*error,const modern_field_metadata::ReadContext*c){size_t extent=0;return (!c||(c->extent&&c->extent(c->owner,k,&extent)&&extent>=sizeof(class_metadata::Class11)))&&Matches(m,k,e,error);}
 }
 // Fake JNI implements the public graph APIs, not private ART allocations.
@@ -83,7 +91,7 @@ static void Lifecycle(){
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};input.after.access|=0x400u;
- Authority authority;std::string error;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==2&&locals.empty());jvmtiError expected=JVMTI_ERROR_NONE;assert(authority.CheckClass(context,input.strong_original,input.after,&expected));assert(expected==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);a.bytes.access_flags|=0x10u;assert(!authority.CheckClass(context,input.strong_original,input.after));a.bytes.access_flags&=~0x10u;auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
+ Authority authority;std::string error;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;deny_snapshot=true;assert(!authority.Stage(context,&ti,{input},bindings,&error));deny_snapshot=false;assert(!globals&&locals.empty());deny_view=true;auto denied_queries=os_queries;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries==denied_queries+1);deny_view=false;assert(!globals&&locals.empty());assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==2&&locals.empty());jvmtiError expected=JVMTI_ERROR_NONE;assert(authority.CheckClass(context,input.strong_original,input.after,&expected));assert(expected==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);a.bytes.access_flags|=0x10u;assert(!authority.CheckClass(context,input.strong_original,input.after));a.bytes.access_flags&=~0x10u;auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
  Fake moved_object=object,moved_a=a,moved_b=b,moved_parent=parent,moved_i=i;moved_a.parent=&moved_object;moved_b.parent=&moved_a;moved_parent.parent=&moved_object;moved_i.parent=&moved_object;
  moved_globals={{reinterpret_cast<jobject>(&object),&moved_object},{reinterpret_cast<jobject>(&a),&moved_a},{reinterpret_cast<jobject>(&b),&moved_b},{reinterpret_cast<jobject>(&parent),&moved_parent},{reinterpret_cast<jobject>(&i),&moved_i}};
  assert(authority.CheckClass(context,input.strong_original,input.after)); // Exact public globals survive GC; old raw pointers cannot authorize.
@@ -111,7 +119,7 @@ static void Lifecycle(){
   loaded={&object,&a,&b,&parent,&i};
   for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object);value->loader=&shared_loader;loaded.push_back(value.get());many.push_back(std::move(value));}
   for(auto loader_identity:{&shared_loader,&other_loader}){auto value=std::make_unique<Fake>("Lstress/Collision;",&object);value->loader=loader_identity;loaded.push_back(value.get());many.push_back(std::move(value));}
-  peak_globals=0;assert(authority.Stage(context,&ti,{input},bindings,&error));
+  peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
   const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7);
   const size_t chunks=(graph->nodes.size()+2+1023)/1024;
   assert(globals==chunks+1&&peak_globals<=chunks+2&&peak_globals<51200);
@@ -201,5 +209,5 @@ int main(){
  Graph deep;deep.nodes.reserve(4096);for(size_t n=0;n<4096;++n){Node node;node.klass=reinterpret_cast<void*>(n+1);node.flags=1;node.initialized=true;node.descriptor=n?"Lpkg/N"+std::to_string(n)+";":"Ljava/lang/Object;";node.parent=node.proposed_parent=n?n-1:SIZE_MAX;deep.nodes.push_back(std::move(node));}deep.inputs={1};assert(ValidateGraph(&deep,&error));assert(deep.nodes.back().affected);deep.nodes[1].proposed_parent=4095;assert(!ValidateGraph(&deep,&error));
  Authority authority;runnable_jni::Context context{};Bindings bindings;std::vector<Input> inputs{{nullptr,{},{}}};assert(!authority.Stage(context,nullptr,inputs,bindings,&error));assert(!authority.CheckClass(context,nullptr,{}));Prepared prepared;assert(!authority.AuthorizeAllocation(context,prepared,&error));assert(!authority.VerifyPrepared(context,prepared,&error));source_commit::Plan plan;assert(!authority.Seal(plan,&error));
  forbid_alloc=true;assert(!authority.Verify(plan,0));assert(!authority.CanRefresh({}));forbid_alloc=false;
- std::puts("Native hierarchy graph: exact cycles, loader/access/role/init, descendants, 4096-depth and absent owner refusal PASS; public JNI fixture/complete authority lifecycle and full 30000/60000 Class bounded roots, shared/different loaders, collision identities, refunds/recycled witness PASS; live ART owner integration unproven");
+ std::puts("Native hierarchy graph: exact cycles, loader/access/role/init, descendants, 4096-depth and absent owner refusal PASS; public JNI fixture/complete authority lifecycle and full 30000/60000 Class bounded roots, single fresh ordinary mapping capture, denied view no fallback, shared/different loaders, collision identities, refunds/recycled witness PASS; live ART owner integration unproven");
 }

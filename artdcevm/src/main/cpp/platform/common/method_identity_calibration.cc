@@ -59,21 +59,45 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
 }
 }
 uint64_t MappingOsQueries()noexcept{return mapping_os_queries;}
-ScopedReadableMappings::ScopedReadableMappings():previous_(active_mappings){
-#if !defined(__APPLE__)
+ScopedReadableMappings::ScopedReadableMappings() noexcept:previous_(active_mappings){
+#if defined(__APPLE__)
+  try {
+   mach_vm_address_t start=0;
+   for(;;){mach_vm_size_t size=0;vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count=VM_REGION_BASIC_INFO_COUNT_64;mach_port_t object=MACH_PORT_NULL;
+    ++mapping_os_queries;++os_queries_;
+    const auto status=mach_vm_region(mach_task_self(),&start,&size,VM_REGION_BASIC_INFO_64,reinterpret_cast<vm_region_info_t>(&info),&count,&object);
+    if(object!=MACH_PORT_NULL)mach_port_deallocate(mach_task_self(),object);
+    if(status==KERN_INVALID_ADDRESS){complete_=true;break;}
+    if(status!=KERN_SUCCESS||!size||size>UINTPTR_MAX-start)break;
+    if(info.protection&VM_PROT_READ)regions_.emplace_back(uintptr_t(start),uintptr_t(start+size));
+    start+=size;
+   }
+  }catch(...){complete_=false;regions_.clear();}
+#else
   ++mapping_os_queries;++os_queries_;FILE* maps=std::fopen("/proc/self/maps","r");
-  if(maps){char line[1024];
+  if(maps){try{char line[1024];
     while(std::fgets(line,sizeof(line),maps)){
       unsigned long long start=0,end=0;char protection[5]{};
       if(std::sscanf(line,"%llx-%llx %4s",&start,&end,protection)==3&&protection[0]=='r'&&end>start&&end<=UINTPTR_MAX)
         regions_.emplace_back(uintptr_t(start),uintptr_t(end));
     }
-    complete_=std::ferror(maps)==0;std::fclose(maps);
+    complete_=std::ferror(maps)==0;
+   }catch(...){complete_=false;regions_.clear();}
+   std::fclose(maps);
   }
 #endif
   active_mappings=this;
 }
 ScopedReadableMappings::~ScopedReadableMappings(){if(active_mappings!=this)std::abort();active_mappings=previous_;}
+bool ScopedReadableMappings::Extent(const void* address,size_t* extent)const noexcept {
+ if(extent)*extent=0;
+ if(active_mappings!=this||!complete_||!address||!extent)return false;
+ const uintptr_t pointer=LookupAddress(address);
+ auto at=std::upper_bound(regions_.begin(),regions_.end(),pointer,[](uintptr_t p,const auto&r){return p<r.first;});
+ if(at==regions_.begin())return false;--at;
+ if(pointer<at->first||pointer>=at->second)return false;*extent=size_t(at->second-pointer);return true;
+}
 bool ScopedReadableMappings::Find(uintptr_t pointer,size_t* extent){
   auto at=std::upper_bound(regions_.begin(),regions_.end(),pointer,
       [](uintptr_t p,const auto& region){return p<region.first;});

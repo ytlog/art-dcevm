@@ -85,7 +85,7 @@ struct Bindings {
 bool ValidateGraph(Graph*,std::string*);
 // Runnable-only after exact Class roots are borrowed. Verify non-visibility
 // public modifiers against calibrated fixed metadata before adopting raw flags.
-bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata&,Graph*,std::string*);
+bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata&,Graph*,std::string*,const modern_field_metadata::ReadContext* =nullptr);
 class Authority final {
  public:
  Authority(); ~Authority();
