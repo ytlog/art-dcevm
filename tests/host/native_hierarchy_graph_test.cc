@@ -40,20 +40,25 @@ bool Matches(const modern_field_metadata::FieldMetadata&,void* k,const std::vect
 bool MatchesInContext(const modern_field_metadata::FieldMetadata&m,void*k,const std::vector<void*>&e,std::string*error,const modern_field_metadata::ReadContext*c){size_t extent=0;return (!c||(c->extent&&c->extent(c->owner,k,&extent)&&extent>=sizeof(class_metadata::Class11)))&&Matches(m,k,e,error);}
 }
 // Fake JNI implements the public graph APIs, not private ART allocations.
-static size_t globals=0;
+static size_t globals=0,peak_globals=0;
 static std::unordered_map<jobject,int> locals;
 struct Array {std::vector<Fake*> values;};
+static std::unordered_map<Array*,size_t> array_globals;
+static std::unordered_map<jobject,void*> moved_globals;
+namespace artdcevm::modern_field_metadata {void* FieldMetadata::Reference(void* array,size_t offset,bool)const{auto*a=static_cast<Array*>(array);assert(array_globals.count(a)&&offset>=12&&(offset-12)%4==0);auto value=reinterpret_cast<jobject>(a->values.at((offset-12)/4));auto moved=moved_globals.find(value);return moved==moved_globals.end()?static_cast<void*>(value):moved->second;}}
 static jclass JNICALL Find(JNIEnv*,const char*){return reinterpret_cast<jclass>(loaded.front());}
 static jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"getSuperclass")?1:!std::strcmp(name,"getInterfaces")?2:3);}
 static jmethodID JNICALL StaticMethod(JNIEnv*,jclass,const char*,const char*){return reinterpret_cast<jmethodID>(4);}
-static jobject JNICALL Global(JNIEnv*,jobject v){if(v)++globals;return v;}
-static void JNICALL DeleteGlobal(JNIEnv*,jobject v){if(v){assert(globals);--globals;}}
-static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1)delete reinterpret_cast<Array*>(v);else delete reinterpret_cast<std::string*>(v);locals.erase(it);}
+static jobject JNICALL Global(JNIEnv*,jobject v){if(v){++globals;peak_globals=std::max(peak_globals,globals);assert(globals<51200);auto it=locals.find(v);if(it!=locals.end()&&it->second==1)++array_globals[reinterpret_cast<Array*>(v)];}return v;}
+static void JNICALL DeleteGlobal(JNIEnv*,jobject v){if(v){assert(globals);--globals;auto it=array_globals.find(reinterpret_cast<Array*>(v));if(it!=array_globals.end()&&!--it->second){auto*a=it->first;array_globals.erase(it);if(!locals.count(v))delete a;}}}
+static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1){if(!array_globals.count(reinterpret_cast<Array*>(v)))delete reinterpret_cast<Array*>(v);}else delete reinterpret_cast<std::string*>(v);locals.erase(it);}
 static jboolean JNICALL Exception(JNIEnv*){return JNI_FALSE;}
 static jobject JNICALL Call(JNIEnv*,jobject object,jmethodID method,va_list){auto* f=reinterpret_cast<Fake*>(object);if(reinterpret_cast<uintptr_t>(method)==1)return f->bytes.access_flags&0x200u?nullptr:reinterpret_cast<jobject>(f->parent);if(reinterpret_cast<uintptr_t>(method)==2){auto* a=new Array{f->interfaces};auto value=reinterpret_cast<jobject>(a);locals.emplace(value,1);return value;}return reinterpret_cast<jobject>(f->loader);}
 static jobject JNICALL StaticCall(JNIEnv*,jclass,jmethodID,va_list args){auto text=va_arg(args,jstring);(void)va_arg(args,int);auto loader=va_arg(args,jobject);auto name=*reinterpret_cast<std::string*>(text);std::replace(name.begin(),name.end(),'.','/');name="L"+name+";";for(auto* f:loaded)if(f->descriptor==name&&f->loader==loader)return reinterpret_cast<jobject>(f);return nullptr;}
 static jsize JNICALL Length(JNIEnv*,jarray v){return jsize(reinterpret_cast<Array*>(v)->values.size());}
 static jobject JNICALL Element(JNIEnv*,jobjectArray v,jsize n){return reinterpret_cast<jobject>(reinterpret_cast<Array*>(v)->values[size_t(n)]);}
+static jobjectArray JNICALL NewArray(JNIEnv*,jsize n,jclass,jobject initial){auto*a=new Array{std::vector<Fake*>(size_t(n),reinterpret_cast<Fake*>(initial))};locals.emplace(reinterpret_cast<jobject>(a),1);return reinterpret_cast<jobjectArray>(a);}
+static void JNICALL SetElement(JNIEnv*,jobjectArray array,jsize index,jobject value){reinterpret_cast<Array*>(array)->values.at(size_t(index))=reinterpret_cast<Fake*>(value);}
 static jboolean JNICALL SameObject(JNIEnv*,jobject a,jobject b){return a==b;}
 static jstring JNICALL String(JNIEnv*,const char* text){auto* s=new std::string(text);auto value=reinterpret_cast<jobject>(s);locals.emplace(value,2);return reinterpret_cast<jstring>(s);}
 static jobjectRefType JNICALL RefType(JNIEnv*,jobject v){return v?JNIGlobalRefType:JNIInvalidRefType;}
@@ -62,7 +67,6 @@ static jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char** out,char**){*out=s
 static jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){*out=JVMTI_CLASS_STATUS_PREPARED|(reinterpret_cast<Fake*>(c)->initialized?JVMTI_CLASS_STATUS_INITIALIZED:0);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Modifiers(jvmtiEnv*,jclass c,jint* out){*out=jint(reinterpret_cast<Fake*>(c)->bytes.access_flags);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
-static std::unordered_map<jobject,void*> moved_globals;
 static bool Borrow(void*,const runnable_jni::Context&,jobject value,void** out){auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
 struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
  bool granted=true;size_t commits=0;void* cache=nullptr;
@@ -75,11 +79,11 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
 };
 static void Lifecycle(){
  Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),parent("Lpkg/P;",&object),i("Lpkg/I;",&object,0x601);
- loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
+ loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};input.after.access|=0x400u;
- Authority authority;std::string error;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==loaded.size()&&locals.empty());jvmtiError expected=JVMTI_ERROR_NONE;assert(authority.CheckClass(context,input.strong_original,input.after,&expected));assert(expected==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);a.bytes.access_flags|=0x10u;assert(!authority.CheckClass(context,input.strong_original,input.after));a.bytes.access_flags&=~0x10u;auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
+ Authority authority;std::string error;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==2&&locals.empty());jvmtiError expected=JVMTI_ERROR_NONE;assert(authority.CheckClass(context,input.strong_original,input.after,&expected));assert(expected==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);a.bytes.access_flags|=0x10u;assert(!authority.CheckClass(context,input.strong_original,input.after));a.bytes.access_flags&=~0x10u;auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
  Fake moved_object=object,moved_a=a,moved_b=b,moved_parent=parent,moved_i=i;moved_a.parent=&moved_object;moved_b.parent=&moved_a;moved_parent.parent=&moved_object;moved_i.parent=&moved_object;
  moved_globals={{reinterpret_cast<jobject>(&object),&moved_object},{reinterpret_cast<jobject>(&a),&moved_a},{reinterpret_cast<jobject>(&b),&moved_b},{reinterpret_cast<jobject>(&parent),&moved_parent},{reinterpret_cast<jobject>(&i),&moved_i}};
  assert(authority.CheckClass(context,input.strong_original,input.after)); // Exact public globals survive GC; old raw pointers cannot authorize.
@@ -97,6 +101,29 @@ static void Lifecycle(){
  // Public Stage cyclic proposal rejects and releases every independently owned
  // global even though all individual lookups resolve valid Classes.
  input.after.superclass=b.descriptor;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());
+ // Exercise complete Authority Stage, not just its storage helper: every Class
+ // remains strongly rooted while a single real loader is shared by 30k/60k
+ // nodes. Same descriptors in different loaders retain separate identities.
+ input.after.superclass=parent.descriptor;
+ Fake shared_loader("LSharedLoader;"),other_loader("LOtherLoader;");
+ for(size_t class_count:{size_t(30000),size_t(60000)}){
+  std::vector<std::unique_ptr<Fake>> many;many.reserve(class_count+2);
+  loaded={&object,&a,&b,&parent,&i};
+  for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object);value->loader=&shared_loader;loaded.push_back(value.get());many.push_back(std::move(value));}
+  for(auto loader_identity:{&shared_loader,&other_loader}){auto value=std::make_unique<Fake>("Lstress/Collision;",&object);value->loader=loader_identity;loaded.push_back(value.get());many.push_back(std::move(value));}
+  peak_globals=0;assert(authority.Stage(context,&ti,{input},bindings,&error));
+  const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7);
+  const size_t chunks=(graph->nodes.size()+2+1023)/1024;
+  assert(globals==chunks+1&&peak_globals<=chunks+2&&peak_globals<51200);
+  auto old_witness=graph->nodes[5].class_root,loader_witness=graph->nodes[5].loader_root;
+  assert(old_witness.Valid()&&loader_witness.Valid());
+  for(size_t index=5;index<class_count+5;++index){const auto&node=graph->nodes[index];assert(node.RootedClass()&&!node.strong_class&&!node.strong_loader&&node.loader_root==loader_witness&&node.klass==loaded[index]);}
+  assert(graph->nodes[class_count+5].descriptor==graph->nodes[class_count+6].descriptor&&graph->nodes[class_count+5].klass!=graph->nodes[class_count+6].klass&&graph->nodes[class_count+5].loader_root!=graph->nodes[class_count+6].loader_root);
+  assert(graph->nodes[graph->inputs.front()].strong_class==input.strong_original);
+  authority.Clear(&env);assert(!globals&&locals.empty()&&array_globals.empty()&&!old_witness.Valid()&&!loader_witness.Valid());
+  // A recycled owner address and slot cannot revive a released witness.
+  loaded={&object,&a,&b,&parent,&i};assert(authority.Stage(context,&ti,{input},bindings,&error));assert(!old_witness.Valid());authority.Clear(&env);assert(!globals&&locals.empty());
+ }
 }
 static Node NodeOf(Fake& f){Node n;n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.loader=f.loader;n.initialized=f.initialized;return n;}
 static Graph Basic(Fake& object,Fake& a,Fake& b,Fake& i){Graph g;g.nodes={NodeOf(object),NodeOf(a),NodeOf(b),NodeOf(i)};g.nodes[1].parent=g.nodes[1].proposed_parent=0;g.nodes[2].parent=g.nodes[2].proposed_parent=1;g.inputs={1};return g;}
@@ -174,5 +201,5 @@ int main(){
  Graph deep;deep.nodes.reserve(4096);for(size_t n=0;n<4096;++n){Node node;node.klass=reinterpret_cast<void*>(n+1);node.flags=1;node.initialized=true;node.descriptor=n?"Lpkg/N"+std::to_string(n)+";":"Ljava/lang/Object;";node.parent=node.proposed_parent=n?n-1:SIZE_MAX;deep.nodes.push_back(std::move(node));}deep.inputs={1};assert(ValidateGraph(&deep,&error));assert(deep.nodes.back().affected);deep.nodes[1].proposed_parent=4095;assert(!ValidateGraph(&deep,&error));
  Authority authority;runnable_jni::Context context{};Bindings bindings;std::vector<Input> inputs{{nullptr,{},{}}};assert(!authority.Stage(context,nullptr,inputs,bindings,&error));assert(!authority.CheckClass(context,nullptr,{}));Prepared prepared;assert(!authority.AuthorizeAllocation(context,prepared,&error));assert(!authority.VerifyPrepared(context,prepared,&error));source_commit::Plan plan;assert(!authority.Seal(plan,&error));
  forbid_alloc=true;assert(!authority.Verify(plan,0));assert(!authority.CanRefresh({}));forbid_alloc=false;
- std::puts("Native hierarchy graph: exact cycles, loader/access/role/init, descendants, 4096-depth and absent owner refusal PASS; public JNI fixture/complete authority lifecycle PASS; live ART owner integration unproven");
+ std::puts("Native hierarchy graph: exact cycles, loader/access/role/init, descendants, 4096-depth and absent owner refusal PASS; public JNI fixture/complete authority lifecycle and full 30000/60000 Class bounded roots, shared/different loaders, collision identities, refunds/recycled witness PASS; live ART owner integration unproven");
 }

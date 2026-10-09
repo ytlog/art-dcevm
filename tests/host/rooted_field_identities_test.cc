@@ -148,7 +148,7 @@ int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check
  std::vector<bounded_managed_roots::Slot> slots(root_count);
  for(size_t i=0;i<root_count;++i)objects[i].native=&objects[i];
  for(int cycle=0;cycle<3;++cycle){globals=existing_class_roots;peak=globals;
-  for(size_t i=0;i<root_count;++i){auto ref=Local(&objects[i]);assert(roots.Stage(&env,ref,&slots[i],&error));Delete(&env,ref);}
+  for(size_t i=0;i<root_count;++i){auto ref=Local(&objects[i]);assert(cycle==1?roots.Stage(runnable_jni::Context{&thread,&env,reinterpret_cast<JavaVM*>(&vm)},ref,&slots[i],&error):roots.Stage(&env,ref,&slots[i],&error));Delete(&env,ref);}
   const size_t chunks=(root_count+1023)/1024;assert(globals==existing_class_roots+chunks&&peak<=globals+2&&peak<51200);
   const size_t calls=jni_calls;no_alloc=true;for(size_t i=0;i<root_count;++i){void* native=nullptr;assert(roots.Read(slots[i],&native)&&native==objects[i].native);}no_alloc=false;assert(jni_calls==calls);
   move_array=true;auto ref=Local(&objects[0]);bounded_managed_roots::Slot gc_slot;assert(roots.Stage(&env,ref,&gc_slot,&error)&&!move_array);Delete(&env,ref);void* native=nullptr;assert(roots.Read(gc_slot,&native)&&native==objects[0].native);

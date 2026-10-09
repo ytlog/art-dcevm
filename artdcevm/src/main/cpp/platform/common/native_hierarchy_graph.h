@@ -1,5 +1,6 @@
 #pragma once
 #include "evolution/class_schema.h"
+#include "platform/common/bounded_managed_roots.h"
 #include "platform/common/prepared_root_bindings.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/source_commit.h"
@@ -11,8 +12,18 @@ namespace artdcevm::native_hierarchy_graph {
 struct Input { jclass strong_original=nullptr; evolution::ClassSchema before,after; };
 // Rooted public graph. Indices are stable throughout one operation. Proposed
 // edges refer to the original identities that ART must actually replace.
+struct RootWitness {
+ const bounded_managed_roots::Store* owner=nullptr;bounded_managed_roots::Slot slot{};uint64_t generation=0;
+ bool Valid()const noexcept{return owner&&generation==owner->Generation()&&owner->Valid(slot);}
+ bool operator==(const RootWitness&r)const noexcept{return owner==r.owner&&generation==r.generation&&slot.chunk==r.slot.chunk&&slot.index==r.slot.index;}
+ bool operator!=(const RootWitness&r)const noexcept{return !(*this==r);}
+};
 struct Node {
+ // Only independently owned source inputs require a separate global Class.
  jclass strong_class=nullptr; jobject strong_loader=nullptr;
+ RootWitness class_root{},loader_root{};
+ bool RootedClass()const noexcept{return class_root.owner?class_root.Valid():strong_class!=nullptr;}
+ bool RootedLoader()const noexcept{return loader_root.owner?loader_root.Valid():strong_loader!=nullptr;}
  void* klass=nullptr; void* loader=nullptr; void* replacement=nullptr;
  std::string descriptor; uint32_t flags=0;
  // Absent for implicit descendants: their declarations retain original flags.

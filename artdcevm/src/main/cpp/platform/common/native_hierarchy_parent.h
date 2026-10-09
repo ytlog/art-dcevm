@@ -10,7 +10,7 @@ inline bool NativeSuperclass(const Graph&g,const Node&n,bool proposed,void**out)
   if(n.parent!=SIZE_MAX||n.proposed_parent!=SIZE_MAX)return false;
   void*found=nullptr;
   for(const auto&object:g.nodes)if(!object.loader&&object.descriptor=="Ljava/lang/Object;"){
-   if(found||!object.strong_class||(object.flags&0x200u))return false;
+   if(found||!object.RootedClass()||(object.flags&0x200u))return false;
    found=proposed&&object.replacement?object.replacement:object.klass;
    if(!found)return false;
   }

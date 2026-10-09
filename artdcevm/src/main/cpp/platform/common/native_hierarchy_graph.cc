@@ -83,6 +83,11 @@ struct Authority::State {
  Bindings bindings{};modern_field_metadata::ReadContext read_context{};bool contextual=false;
  const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:nullptr;}
  bool Extent(const void*p,size_t*out)const noexcept{return contextual?read_context.extent&&read_context.extent(read_context.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
+ runnable_jni::Context root_context{};bounded_managed_roots::Store public_roots;
+ std::vector<bounded_managed_roots::Slot> loaders;
+ static bool RootOracle(void*raw,const runnable_jni::Context&c,jobject g,void**out){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_owned(s.bindings.decoder_owner,c,g,out);}
+ static bool RootDecode(void*raw,jobject g,void**out){auto&s=*static_cast<State*>(raw);return RootOracle(raw,s.root_context,g,out);}
+ static void* RootElement(void*raw,void*array,size_t index){auto&s=*static_cast<State*>(raw);return index<size_t(bounded_managed_roots::Store::kChunkSize)?s.bindings.metadata->Reference(array,12+index*4):nullptr;}
  Graph graph;std::vector<Input> inputs;
  std::vector<std::vector<size_t>> closure_before,closure_after,order_before,order_after;
  std::vector<std::vector<void*>> native_before,native_after;
@@ -95,7 +100,7 @@ struct Authority::State {
  bool OwnersStaged(std::string* e)const{return bindings.allocation->VerifyStaged(graph,inputs,e)&&bindings.receivers->VerifyStaged(graph,inputs,e)&&bindings.caches->VerifyStaged(graph,inputs,e);}
  bool Owners(const source_commit::Plan& p)const noexcept{return bindings.allocation->Verify(graph,p)&&bindings.receivers->Verify(graph,p)&&bindings.caches->Verify(graph,p);}
  bool Borrow(const runnable_jni::Context& c) {
-  for(auto& n:graph.nodes){if(!bindings.borrow_owned(bindings.decoder_owner,c,n.strong_class,&n.klass)||!n.klass)return false;if(n.strong_loader&&!bindings.borrow_owned(bindings.decoder_owner,c,n.strong_loader,&n.loader))return false;}
+  root_context=c;for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader))return false;}
   if(!bindings.allocation->RefreshAllocations(&graph,&allocations))return false;
   for(size_t i=0;i<graph.nodes.size();++i){for(size_t j=0;j<native_before[i].size();++j)native_before[i][j]=graph.nodes[order_before[i][j]].klass;for(size_t j=0;j<native_after[i].size();++j){auto& n=graph.nodes[order_after[i][j]];native_after[i][j]=n.replacement?n.replacement:n.klass;}}return true;
  }
@@ -114,11 +119,12 @@ struct Authority::State {
 Authority::Authority():state_(new State){}
 void Authority::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{state_->read_context=c;state_->contextual=true;}
 Authority::~Authority(){assert(state_->graph.nodes.empty()&&"Clear rooted graph after complete source cleanup");}
-void Authority::Clear(JNIEnv* env){if(!env)return;for(auto& n:state_->graph.nodes){if(n.strong_class)env->DeleteGlobalRef(n.strong_class);if(n.strong_loader)env->DeleteGlobalRef(n.strong_loader);}*state_=State{};}
+void Authority::Clear(JNIEnv* env){if(!env)return;for(auto& n:state_->graph.nodes){if(n.strong_class)env->DeleteGlobalRef(n.strong_class);if(n.strong_loader)env->DeleteGlobalRef(n.strong_loader);}state_->public_roots.Clear(env);*state_=State{};}
 const Graph* Authority::Staged()const noexcept{return state_->staged?&state_->graph:nullptr;}
 bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const std::vector<Input>& inputs,const Bindings& bindings,std::string* error){
  JNIEnv* env=context.env;if(!env||!context.self||!ti||inputs.empty()||env->ExceptionCheck()||!state_->graph.nodes.empty()||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.borrow_owned||!bindings.allocation||!bindings.receivers||!bindings.caches)return Fail(error,"Hierarchy stage lacks exact public/native owners");
- state_->bindings=bindings;state_->inputs=inputs;auto& s=*state_;bool success=false;
+ state_->bindings=bindings;state_->inputs=inputs;auto& s=*state_;s.root_context=context;
+ s.public_roots.Bind({&s,nullptr,State::RootOracle,State::RootDecode,State::RootElement});bool success=false;
  struct Cleanup{Authority* a;JNIEnv* e;bool& ok;~Cleanup(){if(!ok)a->Clear(e);}} cleanup{this,env,success};
  jclass type=env->FindClass("java/lang/Class");if(!type||env->ExceptionCheck())return Fail(error,"Class API unavailable");
  struct Local{JNIEnv* e;jobject v;~Local(){if(v)e->DeleteLocalRef(v);}} local_type{env,type};
@@ -131,13 +137,17 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   if(status&JVMTI_CLASS_STATUS_ERROR)return Fail(error,"Erroneous loaded Class graph cannot authorize changes");
   if(ti->GetClassSignature(loaded[i],&signature,nullptr)!=JVMTI_ERROR_NONE||!signature)return Fail(error,"Loaded Class descriptor unavailable");
   std::string descriptor(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));if(ti->GetClassModifiers(loaded[i],&flags)!=JVMTI_ERROR_NONE)return false;
-  Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;n.strong_class=static_cast<jclass>(env->NewGlobalRef(loaded[i]));if(!n.strong_class||env->ExceptionCheck())return false;
-  s.graph.nodes.push_back(std::move(n));auto l=env->CallObjectMethod(loaded[i],loader);Local local_loader{env,l};if(env->ExceptionCheck())return false;if(l){s.graph.nodes.back().strong_loader=env->NewGlobalRef(l);if(!s.graph.nodes.back().strong_loader||env->ExceptionCheck())return false;}
+  Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;
+  n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();if(!s.public_roots.Stage(context,loaded[i],&n.class_root.slot,error))return false;
+  auto l=env->CallObjectMethod(loaded[i],loader);Local local_loader{env,l};if(env->ExceptionCheck())return false;
+  if(l){n.loader_root.owner=&s.public_roots;n.loader_root.generation=s.public_roots.Generation();for(const auto slot:s.loaders)if(s.public_roots.Same(env,slot,l)){n.loader_root.slot=slot;break;}
+   if(env->ExceptionCheck())return false;if(!n.loader_root.slot){if(!s.public_roots.Stage(context,l,&n.loader_root.slot,error))return false;s.loaders.push_back(n.loader_root.slot);}}
+  s.graph.nodes.push_back(std::move(n));
  }
  std::unordered_map<std::string,std::vector<size_t>> descriptor_index;for(size_t i=0;i<s.graph.nodes.size();++i)descriptor_index[s.graph.nodes[i].descriptor].push_back(i);
- const auto find=[&](jobject k){char* text=nullptr;if(!k||ti->GetClassSignature(static_cast<jclass>(k),&text,nullptr)!=JVMTI_ERROR_NONE||!text)return absent;auto it=descriptor_index.find(text);ti->Deallocate(reinterpret_cast<unsigned char*>(text));if(it!=descriptor_index.end())for(auto i:it->second)if(env->IsSameObject(k,s.graph.nodes[i].strong_class))return i;return absent;};
- for(size_t i=0;i<s.graph.nodes.size();++i){auto& n=s.graph.nodes[i];auto p=env->CallObjectMethod(n.strong_class,parent);Local lp{env,p};if(env->ExceptionCheck())return false;if(p&&(n.parent=find(p))==absent)return Fail(error,"Public ancestor outside loaded snapshot");
-  auto array=static_cast<jobjectArray>(env->CallObjectMethod(n.strong_class,interfaces));Local la{env,array};if(!array||env->ExceptionCheck())return false;jsize length=env->GetArrayLength(array);if(length<0||env->ExceptionCheck())return false;
+ const auto find=[&](jobject k){char* text=nullptr;if(!k||ti->GetClassSignature(static_cast<jclass>(k),&text,nullptr)!=JVMTI_ERROR_NONE||!text)return absent;auto it=descriptor_index.find(text);ti->Deallocate(reinterpret_cast<unsigned char*>(text));if(it!=descriptor_index.end())for(auto i:it->second)if(s.public_roots.Same(env,s.graph.nodes[i].class_root.slot,k))return i;return absent;};
+ for(size_t i=0;i<s.graph.nodes.size();++i){auto& n=s.graph.nodes[i];Local klass{env,s.public_roots.LocalRef(env,n.class_root.slot)};if(!klass.v||env->ExceptionCheck())return false;auto p=env->CallObjectMethod(klass.v,parent);Local lp{env,p};if(env->ExceptionCheck())return false;if(p&&(n.parent=find(p))==absent)return Fail(error,"Public ancestor outside loaded snapshot");
+  auto array=static_cast<jobjectArray>(env->CallObjectMethod(klass.v,interfaces));Local la{env,array};if(!array||env->ExceptionCheck())return false;jsize length=env->GetArrayLength(array);if(length<0||env->ExceptionCheck())return false;
   for(jsize j=0;j<length;++j){auto value=env->GetObjectArrayElement(array,j);Local lv{env,value};if(!value||env->ExceptionCheck())return false;size_t index=find(value);if(index==absent)return Fail(error,"Public interface outside loaded snapshot");n.interfaces.push_back(index);}n.proposed_parent=n.parent;n.proposed_interfaces=n.interfaces;
  }
  const auto resolve=[&](const std::string& descriptor,jobject l,size_t* out){if(descriptor.size()<3||descriptor.front()!='L'||descriptor.back()!=';')return false;std::string name=descriptor.substr(1,descriptor.size()-2);std::replace(name.begin(),name.end(),'/','.');jstring text=env->NewStringUTF(name.c_str());Local lt{env,text};if(!text||env->ExceptionCheck())return false;auto klass=env->CallStaticObjectMethod(type,lookup,text,JNI_FALSE,l);Local lk{env,klass};if(!klass||env->ExceptionCheck())return false;*out=find(klass);return *out!=absent;};
@@ -147,11 +157,12 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   if((node.flags&0x200u)||node.descriptor=="Ljava/lang/Object;")return Fail(error,"Interface/Object schema owner is not independently supported");
   if(node.parent==absent||input.before.superclass!=s.graph.nodes[node.parent].descriptor||input.before.interfaces.size()!=node.interfaces.size())return Fail(error,"Incoming target before hierarchy differs from public identity");
   for(size_t j=0;j<node.interfaces.size();++j)if(input.before.interfaces[j]!=s.graph.nodes[node.interfaces[j]].descriptor)return false;
-  if(!resolve(input.after.superclass,node.strong_loader,&node.proposed_parent))return Fail(error,"Proposed parent cannot resolve without initialization in actual loader");node.proposed_interfaces.clear();
-  for(const auto& d:input.after.interfaces){size_t index=absent;if(!resolve(d,node.strong_loader,&index))return Fail(error,"Proposed interface unavailable in exact loader");node.proposed_interfaces.push_back(index);}s.graph.inputs.push_back(n);s.inputs[input_index].strong_original=node.strong_class;
+  Local actual_loader{env,node.loader_root.slot?s.public_roots.LocalRef(env,node.loader_root.slot):nullptr};if(env->ExceptionCheck())return false;
+  if(!resolve(input.after.superclass,actual_loader.v,&node.proposed_parent))return Fail(error,"Proposed parent cannot resolve without initialization in actual loader");node.proposed_interfaces.clear();
+  for(const auto& d:input.after.interfaces){size_t index=absent;if(!resolve(d,actual_loader.v,&index))return Fail(error,"Proposed interface unavailable in exact loader");node.proposed_interfaces.push_back(index);}s.graph.inputs.push_back(n);if(node.strong_class)return Fail(error,"Duplicate source input Class");node.strong_class=static_cast<jclass>(env->NewGlobalRef(input.strong_original));if(!node.strong_class||env->ExceptionCheck())return false;s.inputs[input_index].strong_original=node.strong_class;
  }
  // No JNI call may follow these borrowed native reads in this Stage callback.
- for(auto& n:s.graph.nodes){if(!bindings.borrow_owned(bindings.decoder_owner,context,n.strong_class,&n.klass)||!n.klass)return false;if(n.strong_loader&&!bindings.borrow_owned(bindings.decoder_owner,context,n.strong_loader,&n.loader))return false;}
+ for(auto& n:s.graph.nodes){if(!s.public_roots.Read(n.class_root.slot,&n.klass)||!n.klass||!s.public_roots.Read(n.loader_root.slot,&n.loader))return false;}
  if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error)||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
  for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::Read(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error)||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==k;});s.order_before[i].push_back(size_t(it-s.graph.nodes.begin()));}}
  if(!s.Native(false)||!s.OwnersStaged(error))return Fail(error,"Actual allocation/receiver/type-cache proof absent or rejected");s.staged=true;success=true;return true;
