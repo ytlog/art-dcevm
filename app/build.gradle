@@ -21,7 +21,11 @@ android {
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
     externalNativeBuild { cmake { path file('src/debug/cpp/CMakeLists.txt'); version '4.3.4' } }
-    packaging { jniLibs { useLegacyPackaging true } }
+    packaging { jniLibs {
+        useLegacyPackaging true
+        // Dependencies may ship other ABIs even though native builds are ARM64 only.
+        excludes += ['**/armeabi/**', '**/armeabi-v7a/**', '**/x86/**', '**/x86_64/**']
+    } }
     sourceSets.debug.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
 }
 dependencies {
