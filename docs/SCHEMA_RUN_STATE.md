@@ -12,7 +12,7 @@
 4. calibrated continuous Session `Begin` 执行真实 pure Thread pair 与 GC/stop reservation。重新 Resolve 已注册强根，刷新 native Plan、Ledger、Authority、缓存。required cleanup 枚举完整 registered threads/physical frames，才允许 hierarchy Seal 和实际 native provider；其新增 bindings 使用 Registry.Existing，禁止追加 JNI 全局根。真实 Facade 只包装该 provider。`ContinueSource` 交给同一原始最终停线程窗口，不跨本地 JNI executor 返回。
 5. 原始最终 Update `Finalize` 只刷新已分配位置，不能创建根/容器。SourceCommit 原本验证 Facade，Commit observer 先消费 cleanup witness，再 Hierarchy/DEX Ledger BeginCommit；真实反射、deopt、ReplaceReferences、旧 Class retention、JIT 和 interpreter 清理仍逐项由 Facade 消费。原始 Run 返回后 `End` 只关闭已完成/已退款的生命周期，不做过晚 Holder/DEX 退休。
 
-失败发生在原始可失败边界，`Refund` 必须先释放尚未 Continue 的本地 stop、恢复真实 Runnable，再退休私有临时 Class。Continue 之后的缺失/异常不是可恢复的 JVMTI 拒绝；不得把 original-final-only Window 包装为这种可退款路径。
+失败发生在原始可失败边界，`Refund` 必须先通过仍存活的 stop.RollbackBeforeSource 释放尚未 Continue 的本地停止并恢复真实 Runnable，再退休私有临时 Class。Ledger/allocator 退休读取借用 cleanup，cleanup 又借用 stop；两者必须保活到 hierarchy 退款返回后才能销毁。Continue 之后的缺失/异常不是可恢复的 JVMTI 拒绝；不得把 original-final-only Window 包装为这种可退款路径。
 
 ## 已知边界
 

@@ -118,8 +118,13 @@ void RunState::Refund()noexcept{
  // A retained continuation cannot fail after original publication. Before
  // ContinueSource, rollback restores actual Runnable before retirement/JNI.
  Require(s.phase!=State::Phase::Collected&&s.phase!=State::Phase::Finalized);
- s.facade.reset();s.cleanup.reset();s.stop.reset();
+ // Ledger and allocator stopped-root readers borrow cleanup, which in turn
+ // borrows stop. Revoke the live stop before retirement/JNI, retain both
+ // witnesses until all hierarchy refund readers have returned.
+ if(s.stop)Require(s.stop->RollbackBeforeSource());
+ s.facade.reset();
  if(s.hierarchy&&s.hierarchy->Ready())s.hierarchy->Refund();
+ s.cleanup.reset();s.stop.reset();
  s.phase=State::Phase::Refunded;
 }
 bool RunState::End(void*d,bool success)noexcept{

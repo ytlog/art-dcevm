@@ -105,6 +105,9 @@ class Session {
   Session(const Session&)=delete;Session& operator=(const Session&)=delete;
   bool Begin(void* self,size_t mapped_extent) noexcept;
   bool ContinueSource() noexcept;
+  // Refund only before handing the reservation to original source. Restore
+  // actual Runnable while keeping this witness alive for dependent readers.
+  bool RollbackBeforeSource() noexcept;
   // No reservation or mutation permission is created here. The sole actual Run
   // owner attaches before calling the exact calibrated original body.
   bool PrepareOriginalFinal(void* self,size_t mapped_extent,const void* exact_original_run,

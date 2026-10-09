@@ -127,7 +127,7 @@ bool SessionFinish(void*owner,transaction_root::Holder*,void*){session_allocated
 unsigned source_failure_notifications=0;
 void NotifyFailure(void*driver,jvmtiError)noexcept{++source_failure_notifications;auto*s=native_hierarchy_session::Session::Current();if(s&&s->OwnsDriver(driver))s->Refund();}
 unsigned untouched_finish_calls=0;bool throw_first_finish=false;
-bool OriginalSessionFinish(void*owner,transaction_root::Holder*h,void*i){if(throw_first_finish)throw 9;auto*s=native_hierarchy_session::Session::Current();if(!s||!s->OwnsClassOwner(owner)){if(native_hierarchy_session::CalibrationScope::Current())return SessionFinish(owner,h,i);++untouched_finish_calls;return true;}return SessionFinish(owner,h,i);}
+bool OriginalSessionFinish(void*owner,transaction_root::Holder*h,void*i){if(auto*loading=native_source_class_loading::Run::Current();loading&&owner==&actual_owner)assert(loading->Paused());if(throw_first_finish)throw 9;auto*s=native_hierarchy_session::Session::Current();if(!s||!s->OwnsClassOwner(owner)){if(native_hierarchy_session::CalibrationScope::Current())return SessionFinish(owner,h,i);++untouched_finish_calls;return true;}return SessionFinish(owner,h,i);}
 class SessionHooks final:public SourceHooks {
  public:int fail=-1;size_t installs=0,removes=0;bool missing=false;
  void*FindSymbol(const char*lib,const char*n)override{
@@ -261,13 +261,17 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
    else {assert(failure.Finish(&actual_owner,&holder,&it,SessionFinish,&error));assert(failure.BeforeVerification(&actual_owner,&it,&error));source_failure_proxy(&actual_driver,JVMTI_ERROR_FAILS_VERIFICATION,nullptr,nullptr);assert(Read32(new_class,offsetof(class_metadata::Class17,status))>>28==15);failure.AfterVerification(&actual_owner,&it,false);assert(actual_driver.result==JVMTI_ERROR_FAILS_VERIFICATION);assert(Read32(new_class,offsetof(class_metadata::Class17,status))>>28==1);}
    failure.Refund();assert(!failure.Ready());assert(failure.ReleaseAfterRun(false));assert(!failure_access.Count()&&!native_hierarchy_session::Session::Current());failure_authority.Clear(context.env);actual_driver.result=113;
   }
-  for(int paused_case=0;paused_case<4;++paused_case){
+  for(int paused_case=0;paused_case<7;++paused_case){
    native_source_class_loading::Run loading(class_loading,&actual_driver,context);PauserFixture p{pauser_vtable.data()+2,context.self,1};
    if(paused_case==0)p.table=pauser_vtable.data()+1;
    if(paused_case==1)p.self=thread.data()+1;
    class_add_proxy(&linker,&p);assert(!loading.Paused());
    transaction_root::Iterator it{0,&holder};
-   if(paused_case<2){assert(!loading.BeforeFinish(&actual_owner,&holder,&it));}
+   if(paused_case==4)p.running=0;
+   if(paused_case==5)p.table=pauser_vtable.data()+1;
+   if(paused_case==6)p.self=thread.data()+1;
+   if(paused_case>=4){assert(!loading.BeforeFinish(&actual_owner,&holder,&it)&&!loading.Paused());}
+   else if(paused_case<2){assert(!loading.BeforeFinish(&actual_owner,&holder,&it));}
    else if(paused_case==2){it.index=1;assert(!loading.BeforeFinish(&actual_owner,&holder,&it));}
    // AddCallback without the first real Finish never proves the barrier wait.
    class_remove_proxy(&linker,&p);assert(!loading.Paused());assert(!loading.Complete(true));

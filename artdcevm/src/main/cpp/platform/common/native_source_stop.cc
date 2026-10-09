@@ -152,6 +152,10 @@ bool Session::TransferDestroy(void* carrier) noexcept {
  owner.service_.finish_(owner.service_.heap_,owner.self_,s::kNoCollection);owner.gc_=false;
  owner.phase_=Phase::kFinalResumed;finishing=&owner;return true;
 }
+bool Session::RollbackBeforeSource() noexcept {
+ if(borrowed_||(phase_!=Phase::kEmpty&&phase_!=Phase::kStopped&&phase_!=Phase::kRolledBack))return false;
+ Rollback();return !Reserved()&&(phase_==Phase::kEmpty||phase_==Phase::kRolledBack);
+}
 void Session::Rollback() noexcept {
  if(borrowed_){
   if(phase_==Phase::kFinal||phase_==Phase::kOriginalClosing)std::abort();

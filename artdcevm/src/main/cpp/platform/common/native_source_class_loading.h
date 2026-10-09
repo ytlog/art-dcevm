@@ -10,7 +10,7 @@ class Run;
 namespace detail {struct Hooks;}
 // Actual source class-loading callback lifecycle; this is NOT a mutator/GC stop.
 // The original constructor waits for in-progress definitions after AddCallback.
-// Only the actual same-Run first Finish boundary witnesses completion of that
+// Only entry to the actual same-Run first Finish leaf witnesses completion of that
 // wait. The typed vtable and primitive prefix alone never establish completion.
 class Service final {
  public:
@@ -25,6 +25,8 @@ class Run final {
  Run(Service&,void* actual_driver,const runnable_jni::Context&);
  ~Run();Run(const Run&)=delete;Run&operator=(const Run&)=delete;
  static Run* Current()noexcept;
+ // Called only at the sole original Finish hook entry, after exact Run/Holder
+ // provenance checks. Private allocation inside Finish needs the completed wait.
  bool BeforeFinish(void* actual_owner,const transaction_root::Holder*,const void* actual_iterator)noexcept;
  void AfterFinish(void* actual_owner,bool original_result)noexcept;
  bool Paused()const noexcept;

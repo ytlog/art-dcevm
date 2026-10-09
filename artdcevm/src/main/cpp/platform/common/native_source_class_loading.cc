@@ -21,7 +21,7 @@ void Error(std::string*e,const char*s){if(e)*e=s;}
 namespace detail {struct Hooks {
 static void Add(void*callbacks,void*pauser){
  // Record the typed source argument while still inside the native constructor.
- // Completion is deliberately deferred to the real first Finish boundary.
+ // Completion is deliberately deferred to entry of the real first Finish boundary.
  if(auto*run=Run::Current())run->Added(callbacks,pauser);
  add_original(callbacks,pauser);
 }
@@ -70,11 +70,19 @@ bool Run::BeforeFinish(void*owner,const transaction_root::Holder*h,const void*ra
  if(def.driver!=driver_||(holder_&&holder_!=h)){failed_=true;return false;}
  // Holder/owner vector partitions are validated separately by the sole source
  // reader. This observer only proves exact Run ordering of the source pause.
- holder_=h;finish_owner_=owner;return true;
+ // The original Run constructs ScopedSuspendClassLoading before entering its
+ // allocation loop. Reaching this exact first Finish leaf therefore proves the
+ // constructor's WaitFor has returned, before Finish performs private allocation.
+ // AddCallback alone, or successful completion of the allocation, is not that
+ // boundary. Recheck the still-live exact pauser rather than trusting Add state.
+ if(!Mapped(pauser_,sizeof(PauserPrefix))){failed_=true;return false;}
+ PauserPrefix pauser;std::memcpy(&pauser,pauser_,sizeof(pauser));
+ if(pauser.vtable!=service_.vtable_||pauser.self!=context_.self||pauser.running!=1){failed_=true;return false;}
+ holder_=h;finish_owner_=owner;wait_complete_=true;return true;
 }
 void Run::AfterFinish(void*owner,bool success)noexcept{
  if(!finish_owner_||finish_owner_!=owner)std::abort();
- finish_owner_=nullptr;if(success){wait_complete_=true;++next_;}else failed_=true;
+ finish_owner_=nullptr;if(success)++next_;else failed_=true;
 }
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
 bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}

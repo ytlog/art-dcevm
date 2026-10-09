@@ -135,7 +135,7 @@ void CleanupProofs(native_source_stop::Service& service){
   native_source_stop::Observation o(service,&driver,reinterpret_cast<const void*>(&CleanupProofs),&self,sizeof(self));assert(o.BindCleanup(run));
   struct Pauser {void*table;void*self;uint8_t running;}pauser{pauser_table+2,&self,1};
   Native(&self);unsigned char initial;stop_proxy(&initial,"constructor",false);add_callback(&callbacks_receiver,&pauser);resume_proxy(&initial);Runnable(&self);
-  transaction_root::Iterator iterator{0,&holder};assert(run.BeforeFinish(&owner,&holder,&iterator));assert(!run.Paused());run.AfterFinish(&owner,true);assert(run.Paused());
+  transaction_root::Iterator iterator{0,&holder};assert(!run.Paused());assert(run.BeforeFinish(&owner,&holder,&iterator));assert(run.Paused());run.AfterFinish(&owner,true);assert(run.Paused());
   assert(o.Collected(&driver,&holder));disable_proxy(&heap,&self);Native(&self);unsigned char final,cleanup,foreign_carrier;
   stop_proxy(&final,"actual final",true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
   if(mode==6){Native(&self);start_proxy(&heap,&self,8,1);finish_proxy(&heap,&self,0);Runnable(&self);}
@@ -372,7 +372,7 @@ int main(int argc,char** argv){
  {int other_mutator;mutator=&other_mutator;native_source_stop::Session changed(service);assert(!changed.Begin(&self,sizeof(self))&&self.flags==(runnable_state<<shift)&&!gc&&!exclusive);mutator=&mutex;}
  self.flags=92u<<shift;
  // No callback/phase boolean alone can grant any stop permission.
- native_source_stop::Session unopened(service);assert(!unopened.IsStopped(&self)&&!unopened.Reserved()&&!unopened.IsCollectedStop(&self)&&!unopened.IsFinalWindow(&self));
+ native_source_stop::Session unopened(service);assert(unopened.RollbackBeforeSource());assert(!unopened.IsStopped(&self)&&!unopened.Reserved()&&!unopened.IsCollectedStop(&self)&&!unopened.IsFinalWindow(&self));
  assert(!unopened.Begin(&self,sizeof(self))); // ordinary Native JNI is not source Runnable
  assert(!unopened.Begin(&foreign,sizeof(foreign)));
  self.flags=runnable_state<<shift;
@@ -384,6 +384,7 @@ int main(int argc,char** argv){
  {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.IsStopped(&self)&&owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&gc&&exclusive);
   assert(!owner.IsStopped(&foreign)&&!owner.IsCollectedStop(&foreign)&&!owner.IsFinalWindow(&foreign));foreign_current=true;assert(!owner.IsStopped(&self));foreign_current=false;
   native_source_stop::Session nested(service);const int count=gc_starts;assert(!nested.Begin(&self,sizeof(self))&&gc_starts==count);
+  assert(owner.RollbackBeforeSource()&&!owner.IsStopped(&self)&&!owner.Reserved()&&!gc&&!exclusive&&self.flags==(runnable_state<<shift));assert(owner.RollbackBeforeSource());
  }
  assert(!gc&&!exclusive&&self.flags==(runnable_state<<shift)&&stops==resumes);
  // Original source continuation preserves actual global suspension and GC.
@@ -400,7 +401,7 @@ int main(int argc,char** argv){
   Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed()&&!owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&disable_count==0);
  }
  // Abnormal source return still releases the owned reservation from Runnable.
- {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.ContinueSource());}
+ {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.ContinueSource());assert(!owner.RollbackBeforeSource());}
  assert(!gc&&!exclusive&&self.flags==(runnable_state<<shift)&&stops==resumes&&gc_starts==gc_finishes&&locks==unlocks);
  std::cout<<"continuous original stop/GC ownership, transfer and rollback PASS\n";return 0;
 }
