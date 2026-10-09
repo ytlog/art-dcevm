@@ -101,11 +101,12 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(matrix.digest(manifest['artifacts']['app']['path']), manifest['artifacts']['app']['sha256'])
         self.assertTrue((frozen / 'manifest.json').is_file())
 
-    def test_actual_device_sdk_and_arm64_only(self):
+    def test_actual_device_sdk_and_primary_arm64(self):
         def fake(abi='arm64-v8a', sdk='31'):
             return lambda command, **kw: subprocess.CompletedProcess(command, 0, sdk if command[-1].endswith('sdk') else abi, '')
         self.assertEqual(matrix.validate_device('adb', 'remote', 31, fake())['ro.build.version.sdk'], '31')
-        for execute in [fake(sdk='32'), fake(abi='arm64-v8a,armeabi-v7a'), fake(abi='x86_64')]:
+        self.assertEqual(matrix.validate_device('adb', 'remote', 31, fake(abi='arm64-v8a,armeabi-v7a,armeabi'))['ro.product.cpu.abilist'], 'arm64-v8a,armeabi-v7a,armeabi')
+        for execute in [fake(sdk='32'), fake(abi='x86_64,arm64-v8a'), fake(abi='x86_64')]:
             with self.assertRaises(ValueError):
                 matrix.validate_device('adb', 'remote', 31, execute)
         with self.assertRaises(argparse.ArgumentTypeError):

@@ -76,8 +76,11 @@ def validate_device(adb, serial, api, execute=subprocess.run):
         properties[name] = result.stdout.strip()
     if properties['ro.build.version.sdk'] != str(api):
         raise ValueError('Connected SDK does not match requested API')
-    if properties['ro.product.cpu.abilist'] != 'arm64-v8a':
-        raise ValueError('Connected device must advertise arm64-v8a only')
+    # ARM64 execution does not require the phone to remove its optional 32-bit
+    # ABI. The frozen application contains ARM64 code; accept a native ARM64
+    # primary ABI even when the same phone can also run unrelated 32-bit apps.
+    if properties['ro.product.cpu.abilist'].split(',')[0] != 'arm64-v8a':
+        raise ValueError('Connected device must advertise primary arm64-v8a')
     return properties
 
 
