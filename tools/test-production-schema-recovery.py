@@ -22,24 +22,25 @@ elif args[:2]==['exec-out','cat']:
     sys.stdout.buffer.write(b'TEST' if '/test/' in args[-1] else b'APP')
 elif 'instrument' in args:
     run=args[args.index('productionRunId')+1]
-    report=dict(runId=run,case='field-types',initializationScope='common-owned',
+    scope=args[args.index('productionSchemaScope')+1]
+    report=dict(runId=run,case='field-types',initializationScope=scope,
                 route='DcevmRuntime/NativeBridge.apply',stage='finished',passed=True,
                 sourceEngineUsed=False,lastApplyCode=0,
-                capabilities=dict(backend='runtime-capabilities',partialEvolutionAvailable=True),
+                capabilities=dict(backend='runtime-capabilities',partialEvolutionAvailable=True,evolutionAvailable=True),
                 oldReflectionAndJniRetired=True,freshLongJniAndVarHandle=True,oldObjectGcState=True)
     if mode=='failed':report.update(stage='apply-field-types.before',passed=False,lastApplyCode=98)
     file_report=dict(report)
-    if mode=='stale':file_report['runId']='0'*32
-    if mode=='wrong_scope':file_report['initializationScope']='full'
+    if mode in ('stale','stale_live'):file_report['runId']='0'*32
+    if mode in ('wrong_scope','wrong_scope_live'):file_report['initializationScope']='full' if scope=='common-owned' else 'common-owned'
     if mode=='mismatch':file_report['nativeDiagnostic']='different payload'
-    saved.write_text(json.dumps(file_report))
+    saved.write_text('{' if mode=='corrupt_live' else '[]' if mode=='nonobject_live' else json.dumps(file_report))
     print('INSTRUMENTATION_RESULT: productionSchemaReport='+json.dumps(report))
     if args[-1].endswith('ProductionSchemaInstrumentation'):
         print('INSTRUMENTATION_RESULT: schemaRunnerCompleted='+('false' if mode in ('failed','incomplete') else 'true'))
         print('INSTRUMENTATION_CODE: '+('0' if mode=='wrong_code' else '-1'))
     else:print('FAILURES!!!' if mode=='failed' else 'OK (1 test)')
 elif args[:3]==['exec-out','run-as','dev.artdcevm.lab']:
-    if mode=='missing':sys.exit(1)
+    if mode in ('missing','missing_live'):sys.exit(1)
     print(saved.read_text())
 elif 'pidof' in args:print('1234')
 ''')
@@ -56,12 +57,13 @@ subprocess.run=run
 sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_path(sys.argv[0],run_name='__main__')
 ''')
     for self_route in (False,True):
-        for mode in ('normal','failed','timeout','stale','wrong_scope','missing','mismatch')+ (('incomplete','wrong_code') if self_route else ()):
-            trace=tmp/(('self-' if self_route else 'junit-')+mode+'.jsonl');saved=tmp/(mode+'.json')
+      for scope in ('full','common-owned'):
+        for mode in ('normal','failed','timeout','stale','wrong_scope','missing','mismatch','missing_live','corrupt_live','nonobject_live','stale_live','wrong_scope_live')+ (('incomplete','wrong_code') if self_route else ()):
+            trace=tmp/(('self-' if self_route else 'junit-')+scope+'-'+mode+'.jsonl');saved=tmp/(mode+'.json')
             env=dict(os.environ,MODE=mode,TRACE=str(trace),SAVED=str(saved))
             result=subprocess.run([sys.executable,str(wrapper),str(scripts/'run-production-schema.py'),
                                    '--serial','fixture','--adb',str(fake),'--apk',str(app),
-                                   *(['--self-instrumentation'] if self_route else ['--test-apk',str(test)]),'--case','field-types','--scope','common-owned'],
+                                   *(['--self-instrumentation'] if self_route else ['--test-apk',str(test)]),'--case','field-types','--scope',scope],
                                   env=env,capture_output=True,text=True,timeout=10)
             metadata=json.loads(result.stdout.splitlines()[-2])
             assert metadata['passed']==(mode=='normal'),(mode,result.stdout,result.stderr)
@@ -79,6 +81,12 @@ sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_
             if mode in ('stale','wrong_scope','missing'):
                 assert not (out/'report.json').exists()
             if mode=='mismatch':assert 'Persisted report differs' in str(metadata['errors'])
+            if mode.endswith('_live'):
+                # Successful instrumentation alone must never hide a lost/corrupt/stale saved report.
+                assert 'instrumentationTimedOut' not in metadata
+                assert metadata['reportFileCaptured'] is False
+                assert 'Missing current persisted schema report:' in str(metadata['errors'])
+                assert json.loads((out/'report.json').read_text())['passed'] is True
             calls=[json.loads(line) for line in trace.read_text().splitlines()]
             instrument=next(i for i,c in enumerate(calls) if 'instrument' in c)
             assert not any('force-stop' in c or 'install' in c or 'instrument' in c for c in calls[instrument+1:])
@@ -86,4 +94,4 @@ sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_
                 assert metadata['runner']=='self' and 'testSha256' not in metadata
                 assert not any('dev.artdcevm.lab.test' in c and 'path' in c for c in calls)
                 assert calls[instrument][-1].endswith('ProductionSchemaInstrumentation')
-            print('Production schema recovery:', 'self' if self_route else 'junit',mode,'PASS')
+            print('Production schema recovery:', 'self' if self_route else 'junit',scope,mode,'PASS')

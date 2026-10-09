@@ -71,5 +71,7 @@ finally:
     try:capture_report_file()
     except Exception as error:
         metadata['reportFileCaptured']=False;metadata['reportFileError']=str(error)
+        metadata['passed']=False
+        metadata['errors']=metadata.get('errors',[])+['Missing current persisted schema report: '+str(error)]
     (out/'result.json').write_text(json.dumps(metadata,indent=2));print(json.dumps(metadata));print(out)
 sys.exit(0 if metadata.get('passed') else 1)
