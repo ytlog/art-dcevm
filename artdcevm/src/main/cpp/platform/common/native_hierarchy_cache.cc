@@ -2,6 +2,7 @@
 #include "platform/common/method_cache_lookup.h"
 #include <limits>
 #include <cstdio>
+#include <cstdarg>
 #include <algorithm>
 namespace artdcevm::native_hierarchy_cache {
 namespace {
@@ -39,6 +40,34 @@ bool TypeWitness(const type_cache::View& v,uint32_t index,uint32_t expected){
  type_cache::Pair p;__atomic_load(v.pairs+index%1024,&p,__ATOMIC_ACQUIRE);
  return p.index==index && p.object==expected && (!v.full || (index<v.full_count && __atomic_load_n(v.full+index,__ATOMIC_RELAXED)==expected));
 }
+// Read-only failure evidence from the same fixed, mapping-validated views.
+// No retries/spins, JNI, address search, cache writes or candidate selection.
+void Append(char* text,size_t capacity,size_t*used,const char*format,...) {
+ if(*used>=capacity-1)return;
+ va_list args;va_start(args,format);const int n=std::vsnprintf(text+*used,capacity-*used,format,args);va_end(args);
+ if(n>0)*used+=std::min(static_cast<size_t>(n),capacity-*used-1);
+}
+void ObserveNative(char*text,size_t capacity,size_t*used,const char*name,
+ const native_cache::View&v,uint32_t index,void*expected){
+ uint64_t first=0,second=0,again=0,full=0;bool pair=false,has_full=false;
+ if(v.pairs&&index%1024<v.pair_count){
+  const auto* value=static_cast<const method_cache::SequencePair*>(v.pairs)+index%1024;
+  first=value->key.load(std::memory_order_acquire);second=value->method.load(std::memory_order_acquire);
+  again=value->key.load(std::memory_order_relaxed);pair=true;
+ }
+ if(v.full&&index<v.full_count){full=v.full[index].load(std::memory_order_relaxed);has_full=true;}
+ Append(text,capacity,used," %s{idx=%u slot=%u pair=%d words=0x%llx/0x%llx stable=%d expected=0x%llx full=%d:0x%llx ordinary=%d sequence=%d}",
+  name,index,index%1024,pair,static_cast<unsigned long long>(first),static_cast<unsigned long long>(second),pair&&first==again,
+  static_cast<unsigned long long>(uintptr_t(expected)),has_full,static_cast<unsigned long long>(full),
+  NativeWitness(v,PairFormat::Ordinary,index,expected),NativeWitness(v,PairFormat::Sequence,index,expected));
+}
+void ObserveType(char*text,size_t capacity,size_t*used,const type_cache::View&v,uint32_t index,uint32_t expected){
+ type_cache::Pair pair{};uint32_t full=0;bool found=false,has_full=false;
+ if(v.pairs&&index%1024<v.pair_count){__atomic_load(v.pairs+index%1024,&pair,__ATOMIC_ACQUIRE);found=true;}
+ if(v.full&&index<v.full_count){full=__atomic_load_n(v.full+index,__ATOMIC_RELAXED);has_full=true;}
+ Append(text,capacity,used," type{idx=%u slot=%u pair=%d key=%u object=0x%x expected=0x%x full=%d:0x%x}",
+  index,index%1024,found,pair.index,pair.object,expected,has_full,full);
+}
 bool Same(const type_cache::View&a,const type_cache::View&b){return a.pairs==b.pairs&&a.pair_count==b.pair_count&&a.full==b.full&&a.full_count==b.full_count;}
 bool Same(const native_cache::View&a,const native_cache::View&b){return a.pairs==b.pairs&&a.pair_count==b.pair_count&&a.full==b.full&&a.full_count==b.full_count;}
 // Unpublished tables have no concurrent writers. Refuse a held sequence lock;
@@ -75,7 +104,7 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  const auto expected=reinterpret_cast<uintptr_t>(m.Get(w.expected_class));
  if(!cache||!expected||expected>UINT32_MAX||w.type_index>=counts.types||w.field_index>=counts.fields||w.method_index>=counts.methods)return Fail(error,"independent public cache witnesses missing");
  Source s{cache,nullptr,nullptr,extent,counts};unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
- char diagnosis[768]{};size_t used=0;
+ char diagnosis[2304]{};size_t used=0;
  for(auto model:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays}){
  type_cache::View t;native_cache::View f,methods;
  const bool read=Read(m,model,s,&t,&f,&methods);
@@ -88,6 +117,10 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
    read&&t.pairs!=nullptr,read&&t.full!=nullptr,read&&f.pairs!=nullptr,read&&f.full!=nullptr,
    read&&methods.pairs!=nullptr,read&&methods.full!=nullptr,type,formats);
  if(written>0)used+=std::min(static_cast<size_t>(written),sizeof(diagnosis)-used-1);
+ if(read){ObserveType(diagnosis,sizeof(diagnosis),&used,t,w.type_index,static_cast<uint32_t>(expected));
+  ObserveNative(diagnosis,sizeof(diagnosis),&used,"field",f,w.field_index,w.native_field);
+  ObserveNative(diagnosis,sizeof(diagnosis),&used,"method",methods,w.method_index,w.native_method);}
+
  }
  if(matches!=1){
   if(error)*error="cache declarations not uniquely calibrated by actual resolved witnesses: matches="+std::to_string(matches)+
