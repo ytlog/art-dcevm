@@ -1,4 +1,5 @@
 #include "platform/common/source_cache_resolution.h"
+#include <cstdio>
 namespace artdcevm::source_cache_resolution {
 namespace {bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}}
 bool Service::Bind(HookEngine& h,void* linker,Service*out,std::string*e){
@@ -21,7 +22,10 @@ bool Service::Resolve(const Witness&w,const Roots&r,std::string*e)const{
  // cache writes: an existing hashed-slot collision must be resolved normally.
  auto* field=field_(linker_,w.field_index,w.cache_slot,w.loader_slot);
  if(!r.Snapshot(w,&current,e))return false;
- if(field!=w.field)return Fail(e,"Named field resolution differs from public immutable DEX witness");
+ if(field!=w.field){
+  char detail[160];std::snprintf(detail,sizeof(detail),"Named field resolution differs from public immutable DEX witness: idx=%u expected=%p actual=%p",w.field_index,w.field,field);
+  if(e)*e=std::string(detail)+r.DescribeField(w,field);return false;
+ }
  auto* method=method_(linker_,w.method_index,w.cache_slot,w.loader_slot);
  if(!r.Snapshot(w,&current,e))return false;
  if(method!=w.method)return Fail(e,"Named method resolution differs from public immutable DEX witness");

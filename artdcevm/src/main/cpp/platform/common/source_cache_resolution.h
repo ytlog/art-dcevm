@@ -13,6 +13,9 @@ struct Witness {
 class Roots {
  public:virtual ~Roots()=default;
  virtual bool Snapshot(const Witness&,void** current_class,std::string*)const=0;
+ // Evidence only after Snapshot succeeds; implementations must prove native
+ // array membership before reading a foreign original return as ArtField.
+ virtual std::string DescribeField(const Witness&,void*)const{return {}; }
 };
 class Service final {
  public:

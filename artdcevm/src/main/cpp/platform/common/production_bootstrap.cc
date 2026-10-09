@@ -856,6 +856,20 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
      return Fail(error,"Cache resolution exact public Class cache/loader namespace changed");
     *out=klass;return true;
    }
+   std::string DescribeField(const source_cache_resolution::Witness&w,void*field)const override{
+    void* klass=nullptr;if(!field||!p.Read(w.class_slot,&klass))return " member=null-or-root-unavailable";
+    for(bool is_static:{false,true}){
+     field_array::View fields;std::string ignored;uint32_t position=0;
+     if(!e.metadata.Fields(klass,is_static,&fields,&ignored)||!fields.IndexOf(field,&position))continue;
+     // Only the independently bounded native array member is read as ArtField.
+     field_copy::CopyFieldView text;
+     if(!e.metadata.FieldIdentity(field,&text,&ignored))return " member=owned-array-text-unavailable";
+     uint32_t index=0;std::memcpy(&index,static_cast<const unsigned char*>(field)+offsetof(field_array::Field,dex_field_index),4);
+     return " member=owned-"+std::string(is_static?"static":"instance")+" nativeIdx="+std::to_string(index)+
+      " name="+std::string(text.name?text.name:"?")+" desc="+std::string(text.descriptor?text.descriptor:"?");
+    }
+    return " member=outside-public-Class-native-arrays";
+   }
   private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;
  } proof(e,scope,pool);
  const auto&w=e.source_cache_witness;

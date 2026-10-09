@@ -12,16 +12,20 @@ struct Fixture final:Roots {
  void* field_value=reinterpret_cast<void*>(0x4440);
  void* method_value=reinterpret_cast<void*>(0x5550);
  bool exception=false,foreign_field=false,foreign_method=false,foreign_type=false,move=false;
- mutable unsigned checks=0;unsigned calls=0;
+ mutable unsigned checks=0,descriptions=0;unsigned calls=0;
  Witness witness()const{return {&cache,&klass,&loader,1026,1025,2051,reinterpret_cast<void*>(0x8440),reinterpret_cast<void*>(0x9550)};}
  bool Snapshot(const Witness&w,void**out,std::string*error)const override {
   ++checks;
   if(exception||w.cache_slot!=&cache||w.class_slot!=&klass||w.loader_slot!=&loader||cache!=actual_cache||loader!=actual_loader){if(error)*error="namespace/exception refused";return false;}
   *out=reinterpret_cast<void*>(uintptr_t(klass));return true;
  }
+ std::string DescribeField(const Witness&,void*returned)const override{
+  ++descriptions;assert(!exception&&returned==reinterpret_cast<void*>(0x8888));
+  return " member=outside-public-Class-native-arrays";
+ }
 }*active;
 void Check(void*l,const void*c,const void*d){assert(l==active&&c==&active->cache&&d==&active->loader);++active->calls;}
-void* Field(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==1025);active->field_key=id;active->field_value=reinterpret_cast<void*>(0x8440);return active->foreign_field?nullptr:active->field_value;}
+void* Field(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==1025);active->field_key=id;active->field_value=reinterpret_cast<void*>(0x8440);return active->foreign_field?reinterpret_cast<void*>(0x8888):active->field_value;}
 void* Method(void*l,uint32_t id,const void*c,const void*d){Check(l,c,d);assert(id==2051);active->method_key=id;active->method_value=reinterpret_cast<void*>(0x9550);return active->foreign_method?nullptr:active->method_value;}
 abi::arm64::android11::ReleaseObjectPointer Type(void*l,fixed::CacheTypeIndex id,const void*c,const void*d){Check(l,c,d);assert(id.index==1026);active->type_key=id.index;if(active->move)active->klass=0x6000;return {active->foreign_type?uintptr_t(0x9000):uintptr_t(active->klass)};}
 struct Hooks final:HookEngine {
@@ -53,6 +57,8 @@ int main(){
    if(bad==0)failed.loader=0x3333;if(bad==1)failed.cache=0x1111;
    failed.foreign_field=bad==2;failed.foreign_method=bad==3;failed.foreign_type=bad==4;
    assert(!s.Resolve(failed.witness(),failed,&e));
+   if(bad==2)assert(e.find("idx=1025 expected=")!=std::string::npos&&e.find("actual=0x8888")!=std::string::npos&&e.find("outside-public-Class-native-arrays")!=std::string::npos);
+   assert(failed.descriptions==(bad==2?1u:0u));
    assert(failed.calls==(bad<2?0:bad==2||bad==5?1:bad==3?2:3));
   }
  }
