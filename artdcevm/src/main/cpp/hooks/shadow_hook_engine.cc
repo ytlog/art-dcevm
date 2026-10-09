@@ -17,15 +17,15 @@ void* ShadowHookEngine::FindSymbol(const char* library, const char* symbol) {
     // Clang unique internal linkage retains the fixed declaration's mangled
     // name with a numeric suffix. Resolve its complete ELF name through the
     // same ShadowHook handle; never use ELF st_value to manufacture an address.
-    const auto module = FindLoadedModule(library);
-    if (!module.path.empty()) {
+    const auto module_path = FindLoadedModulePath(library);
+    if (!module_path.empty()) {
       std::string unique;
       {
         std::lock_guard<std::mutex> lock(symbol_names_mutex_);
-        const auto key = module.path;
+        const auto key = module_path;
         auto cached = symbol_names_.find(key);
         if (cached == symbol_names_.end())
-          cached = symbol_names_.emplace(key, ReadUniqueElfSymbolNames(module.path)).first;
+          cached = symbol_names_.emplace(key, ReadUniqueElfSymbolNames(module_path)).first;
         auto found = cached->second.find(symbol);
         if (found != cached->second.end()) unique = found->second;
       }

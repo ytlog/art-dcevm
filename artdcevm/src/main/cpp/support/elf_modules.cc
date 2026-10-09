@@ -6,13 +6,14 @@
 #include <sstream>
 namespace artdcevm {
 namespace {
-struct Search { const char* basename; LoadedModule result; };
+struct Search { const char* basename; LoadedModule result; bool collect_notes=true; };
 int Collect(dl_phdr_info* info, size_t, void* output) {
   auto* search = static_cast<Search*>(output);
   if (!info->dlpi_name) return 0;
   const char* slash = std::strrchr(info->dlpi_name, '/');
   if (std::strcmp(slash ? slash + 1 : info->dlpi_name, search->basename) != 0) return 0;
   search->result.path = info->dlpi_name;
+  if(!search->collect_notes)return 1;
   for (int i = 0; i < info->dlpi_phnum; ++i) {
     const auto& phdr = info->dlpi_phdr[i];
     if (phdr.p_type != PT_NOTE) continue;
@@ -41,5 +42,10 @@ LoadedModule FindLoadedModule(const char* basename) {
   Search search{basename, {}};
   dl_iterate_phdr(Collect, &search);
   return search.result;
+}
+std::string FindLoadedModulePath(const char* basename) {
+  Search search{basename,{},false};
+  dl_iterate_phdr(Collect,&search);
+  return search.result.path;
 }
 }

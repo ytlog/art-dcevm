@@ -4,8 +4,7 @@ project(artdcevm LANGUAGES C CXX)
 add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
-if(ANDROID_ABI STREQUAL "arm64-v8a")
-  enable_language(ASM)
+if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "armeabi-v7a")
   target_sources(artdcevm PRIVATE
     third_party/xz_embedded/xz_dec_stream.c
     third_party/xz_embedded/xz_dec_lzma2.c
@@ -20,9 +19,13 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
   target_compile_definitions(artdcevm PRIVATE XZ_USE_CRC64)
 
   find_package(shadowhook REQUIRED CONFIG)
+  target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc)
+  target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
+endif()
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+  enable_language(ASM)
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_ARM64=1)
-  target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc
-    platform/symbols/art_symbol_compat.cc
+  target_sources(artdcevm PRIVATE platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/android13/android13_backend.cc platform/android13/jvmti_redefiner.cc
     platform/android13/hierarchy_batch_hooks.cc
@@ -144,12 +147,11 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     platform/android13/validation_hooks.cc platform/android13/evolution_runtime.cc
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
-  target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
 elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
   # Source declarations and read-only receiver checks are compiled for the actual
   # 32-bit ABI. Private evolution remains gated until its full runtime is ported.
   target_sources(artdcevm PRIVATE platform/arm32/jni_receiver_metadata.cc
-    platform/arm32/jni_receiver_calibration.cc)
+    platform/arm32/jni_receiver_calibration.cc platform/arm32/jni_receiver_bootstrap.cc)
 elseif(NOT ANDROID_ABI STREQUAL "x86_64")
   message(FATAL_ERROR "Supported ABIs: arm64-v8a, armeabi-v7a and x86_64")
 endif()

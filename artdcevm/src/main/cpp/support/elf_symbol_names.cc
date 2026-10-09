@@ -33,6 +33,14 @@ struct Symbol {
   uint16_t shndx;
   uint64_t value, size;
 };
+struct Header32 {
+  unsigned char ident[16]; uint16_t type,machine; uint32_t version,entry,phoff,shoff,flags;
+  uint16_t ehsize,phentsize,phnum,shentsize,shnum,shstrndx;
+};
+struct Section32 {uint32_t name,type,flags,addr,offset,size,link,info,addralign,entsize;};
+struct Symbol32 {uint32_t name,value,size;unsigned char info,other;uint16_t shndx;};
+static_assert(sizeof(Header32)==52 && sizeof(Section32)==40 && sizeof(Symbol32)==16);
+struct SectionRange {uint64_t offset,size;};
 static_assert(sizeof(Header) == 64 && sizeof(Section) == 64 && sizeof(Symbol) == 24);
 template <class T> bool Read(const std::vector<char>& bytes, size_t offset, T* result) {
   if (offset > bytes.size() || sizeof(T) > bytes.size() - offset) return false;
@@ -45,15 +53,16 @@ bool Range(const std::vector<char>& bytes, uint64_t offset, uint64_t size) {
 }
 namespace {
 using Names = std::unordered_map<std::string, std::string>;
-bool Collect(const std::vector<char>& bytes, bool mini, Names& names,
+template<class Header,class Section,class Symbol>
+bool Collect(const std::vector<char>& bytes, unsigned elf_class,unsigned machine,bool mini, Names& names,
              std::unordered_set<std::string>& ambiguous) {
   Header header{};
   const uint16_t endian = 1;
   if (*reinterpret_cast<const unsigned char*>(&endian) != 1) return false;
   if (!Read(bytes, 0, &header) || std::memcmp(header.ident, "\177ELF", 4) ||
-      header.ident[4] != 2 || header.ident[5] != 1 || header.ident[6] != 1 || header.version != 1 ||
-      header.machine != 183 || header.type != 3 ||
-      header.shentsize != sizeof(Section) || header.shnum == 0 ||
+      header.ident[4] != elf_class || header.ident[5] != 1 || header.ident[6] != 1 || header.version != 1 ||
+      header.machine != machine || header.type != 3 ||
+      header.ehsize != sizeof(Header) || header.shentsize != sizeof(Section) || header.shnum == 0 ||
       !Range(bytes, header.shoff, uint64_t{header.shnum} * sizeof(Section))) return false;
   for (size_t i = 0; i < header.shnum; ++i) {
     Section symbols{};
@@ -97,7 +106,7 @@ bool Collect(const std::vector<char>& bytes, bool mini, Names& names,
   }
   return true;
 }
-bool Decode(const std::vector<char>& bytes, const Section& section, std::vector<char>* output) {
+bool Decode(const std::vector<char>& bytes, const SectionRange& section, std::vector<char>* output) {
   constexpr size_t kLimit = 32 * 1024 * 1024;
   if (section.size > kLimit || !Range(bytes, section.offset, section.size)) return false;
   static std::once_flag crc;
@@ -122,7 +131,8 @@ bool Decode(const std::vector<char>& bytes, const Section& section, std::vector<
   if (!decoded) output->clear();
   return decoded;
 }
-bool MiniSection(const std::vector<char>& bytes, Section* output, bool* present) {
+template<class Header,class Section>
+bool MiniSection(const std::vector<char>& bytes, SectionRange* output, bool* present) {
   Header h{};
   if (!Read(bytes, 0, &h)) return false;
   *present = false;
@@ -138,7 +148,18 @@ bool MiniSection(const std::vector<char>& bytes, Section* output, bool* present)
     if (!std::memchr(name, 0, strings.size - section.name)) return false;
     if (std::strcmp(name, ".gnu_debugdata")) continue;
     if (*present || section.type != 1) return false;
-    *present = true; *output = section;
+    *present = true; *output = {section.offset,section.size};
+  }
+  return true;
+}
+template<class H,class S,class Y> bool CollectFile(const std::vector<char>& bytes,
+    unsigned elf_class,unsigned machine,Names& names,std::unordered_set<std::string>& ambiguous) {
+  if(!Collect<H,S,Y>(bytes,elf_class,machine,false,names,ambiguous))return false;
+  SectionRange section{};bool present=false;
+  if(!MiniSection<H,S>(bytes,&section,&present))return false;
+  if(present) {
+    std::vector<char> mini;
+    if(!Decode(bytes,section,&mini) || !Collect<H,S,Y>(mini,elf_class,machine,true,names,ambiguous))return false;
   }
   return true;
 }
@@ -149,16 +170,15 @@ std::unordered_map<std::string, std::string> ReadUniqueElfSymbolNames(const std:
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) return names;
   const auto length = input.tellg();
-  if (length < static_cast<std::streamoff>(sizeof(Header)) || length > 256 * 1024 * 1024) return names;
+  if (length < static_cast<std::streamoff>(sizeof(Header32)) || length > 256 * 1024 * 1024) return names;
   std::vector<char> bytes(static_cast<size_t>(length));
   input.seekg(0);
-  if (!input.read(bytes.data(), bytes.size()) || !Collect(bytes, false, names, ambiguous)) return {};
-  Section section{}; bool present = false;
-  if (!MiniSection(bytes, &section, &present)) return {};
-  if (present) {
-    std::vector<char> mini;
-    if (!Decode(bytes, section, &mini) || !Collect(mini, true, names, ambiguous)) return {};
-  }
+  if(!input.read(bytes.data(),bytes.size()))return {};
+  const unsigned elf_class=static_cast<unsigned char>(bytes[4]);
+  const bool collected=elf_class==1
+      ? CollectFile<Header32,Section32,Symbol32>(bytes,1,40,names,ambiguous)
+      : elf_class==2 && CollectFile<Header,Section,Symbol>(bytes,2,183,names,ambiguous);
+  if(!collected)return {};
   for (const auto& name : ambiguous) names.erase(name);
   return names;
 }

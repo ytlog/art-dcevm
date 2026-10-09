@@ -17,10 +17,10 @@ unsigned closes = 0, identities = 0;
 std::vector<std::string> requests;
 }
 namespace artdcevm {
-LoadedModule FindLoadedModule(const char* library) {
+std::string FindLoadedModulePath(const char* library) {
   assert(std::string(library) == "libart.so");
   ++identities;
-  return module;
+  return module.path;
 }
 }
 int shadowhook_init(int, bool) { return 0; }
@@ -40,7 +40,8 @@ int shadowhook_get_errno() { return 0; }
 int shadowhook_unhook(void*) { return 0; }
 
 int main(int argc, char** argv) {
-  assert(argc == 2);
+  assert(argc == 2 || argc == 4);
+  if(argc==4){canonical=argv[2];unique=argv[3];}
   module = {argv[1], "fixture-build-id"};
   artdcevm::ShadowHookEngine hooks;
   exact = true;

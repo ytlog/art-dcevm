@@ -13,6 +13,7 @@ enum class Result {kSuccess,kUnavailable,kInvalidRequest,kPendingException,kReen
 class Bridge {
  public:
   using Leaf=abi::common::FromReflectedMethod;
+  static bool HasActiveInvocation(){return active_!=nullptr;}
   static const char* SymbolName(){return abi::common::kFromReflectedMethod;}
   static bool Bind(void* original,Bridge* output) {
     if(!original || !output)return false;
