@@ -15,7 +15,11 @@ struct alignas(8) HandleThreadPrefix {
  void* deps_or_stack_trace;void* wait_next;void* monitor_enter_object;void* top_handle_scope;
 };
 #pragma pack(push,4)
+// Android 11--14 BaseHandleScope and fixed scope share this header.
 struct HandleScopeHeader {void* link;int32_t count;};
+// Android 15+ keeps capacity in BaseHandleScope and adds used size in
+// HandleScope. Select these fixed declarations through the actual root walker.
+struct SizedHandleScopeHeader {void* link;int32_t capacity;uint32_t size;};
 #pragma pack(pop)
 struct NativeRootInfo {const void* vptr;uint32_t type,thread_id;};
 struct HandleRootVisitor {
@@ -28,8 +32,8 @@ using HandleVisitRoots=void (*)(void*,HandleRootVisitor*,uint32_t);
 using HandleVisitRootsSigned=void (*)(void*,HandleRootVisitor*,int32_t);
 inline constexpr char kHandleVisitRoots[]="_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEj";
 inline constexpr char kHandleVisitRootsSigned[]="_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEi";
-inline constexpr size_t kHandleReferences=sizeof(HandleScopeHeader);
 static_assert(sizeof(HandleScopeHeader)==12&&alignof(HandleScopeHeader)==4);
+static_assert(sizeof(SizedHandleScopeHeader)==16&&offsetof(SizedHandleScopeHeader,size)==12);
 static_assert(offsetof(HandleThreadPrefix,top_handle_scope)==136&&offsetof(HandleThreadPrefix,self)==72&&offsetof(HandleThreadPrefix,jni_env)==56);
 static_assert(sizeof(NativeRootInfo)==16&&offsetof(NativeRootInfo,type)==8&&sizeof(HandleRootVisitor)==8);
 }

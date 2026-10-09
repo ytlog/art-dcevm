@@ -39,7 +39,8 @@ class Service final {
   void Visit(void*,abi::arm64::android_common::HandleRootVisitor*)const;
   static bool BindImpl(HookEngine&,const modern_field_storage::Service&,
                        const runnable_jni::Context*,Service*,std::string*);
-  bool Contains(void*,const void*,uint32_t)const;
+  bool Contains(void*,const void*,uint32_t,size_t references=0,void** owner=nullptr)const;
+  bool CalibrateLayout(void*,const void*,uint32_t);
   bool CheckNested(void*,uint32_t);
   std::unique_ptr<Scope> CreateUnchecked(void*,uint32_t)const;
   abi::arm64::android11::DecodeJObject decode_=nullptr;
@@ -47,7 +48,7 @@ class Service final {
   abi::arm64::android_common::HandleVisitRoots visit_=nullptr;
   abi::arm64::android_common::HandleVisitRootsSigned visit_signed_=nullptr;
   void* vm_=nullptr;bool contextual_=false;
-  size_t prefix_=0,top_=0;
+  size_t prefix_=0,top_=0,references_=0;
   unsigned shift_=0;uint32_t runnable_=0;
   // Exact current Thread and readable prefix independently checked at Native
   // binding. A matching named Current establishes that Thread's live lifetime;

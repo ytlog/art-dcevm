@@ -84,18 +84,54 @@ bool Service::Environment(const runnable_jni::Context& c)const noexcept{
 void Service::Visit(void* self,HandleRootVisitor* visitor)const{
  if(visit_)visit_(self,visitor,uint32_t{0});else visit_signed_(self,visitor,int32_t{0});
 }
-bool Service::Contains(void* self,const void* slot,uint32_t value)const{
+bool Service::Contains(void* self,const void* slot,uint32_t value,size_t references,void** owner)const{
+ if(!references)references=references_;
+ if(references!=sizeof(HandleScopeHeader)&&references!=sizeof(SizedHandleScopeHeader))return false;
  std::array<const void*,1024> visited{};size_t used=0;bool found=false;
  for(void* scope=Read<void*>(self,top_);scope;scope=Read<HandleScopeHeader>(scope).link){
   if(used==visited.size()||!Mapped(scope,sizeof(HandleScopeHeader)))return false;
   for(size_t i=0;i<used;++i)if(visited[i]==scope)return false;visited[used++]=scope;
   const auto header=Read<HandleScopeHeader>(scope);
-  if(header.count==-1)continue; // Fixed VariableSizedHandleScope marker; link remains common.
-  if(header.count<0||size_t(header.count)>(SIZE_MAX-kHandleReferences)/4||!Mapped(scope,kHandleReferences+size_t(header.count)*4))return false;
-  const uintptr_t start=uintptr_t(scope)+kHandleReferences,address=uintptr_t(slot);
-  if(address>=start&&(address-start)%4==0&&(address-start)/4<size_t(header.count)){if(Read<uint32_t>(slot)!=value)return false;found=true;}
+  if(header.count==-1)continue; // VariableSized marker; owning fixed scopes remain in the chain.
+  if(header.count<0||size_t(header.count)>(SIZE_MAX-references)/4||!Mapped(scope,references+size_t(header.count)*4))return false;
+  uint32_t size=uint32_t(header.count);
+  if(references==sizeof(SizedHandleScopeHeader))size=Read<uint32_t>(scope,offsetof(SizedHandleScopeHeader,size));
+  if(size>uint32_t(header.count))return false;
+  const uintptr_t start=uintptr_t(scope)+references,address=uintptr_t(slot);
+  if(address>=start&&(address-start)%4==0&&(address-start)/4<size){if(Read<uint32_t>(slot)!=value)return false;found=true;if(owner)*owner=scope;}
  }
  return found;
+}
+bool Service::CalibrateLayout(void* self,const void* slot,uint32_t value){
+ // Read-only source-layout proof before publishing any owned scope. Every
+ // non-null candidate slot must be enumerated by ART, and no other non-null
+ // slot in this scope may be enumerated. In particular, the modern size word
+ // at +12 is never an ART root; the old first reference at +12 is one.
+ struct LayoutCheck final:HandleRootVisitor{
+  uintptr_t begin=0,end=0,span_begin=0,span_end=0,next=0;size_t expected=0,seen=0;bool valid=true;
+  void Advance(){while(next<end&&!Read<uint32_t>(reinterpret_cast<void*>(next)))next+=4;}
+  void VisitRoots(void***,size_t,const NativeRootInfo&)override{}
+  void VisitRoots(uint32_t** roots,size_t n,const NativeRootInfo& info)override{
+   for(size_t i=0;i<n;++i){const uintptr_t p=uintptr_t(roots[i]);
+    if(p<span_begin||p>=span_end||!*roots[i])continue;
+    if(info.type!=4||info.thread_id!=0||p<begin||p>=end||(p-begin)%4||p!=next)valid=false;
+    ++seen;if(p==next){next+=4;Advance();}
+   }
+  }
+ };
+ size_t selected=0;
+ for(size_t references:{sizeof(HandleScopeHeader),sizeof(SizedHandleScopeHeader)}){
+  void* scope=nullptr;if(!Contains(self,slot,value,references,&scope))continue;
+  const auto base=Read<HandleScopeHeader>(scope);const uint32_t size=references==sizeof(HandleScopeHeader)?uint32_t(base.count):Read<uint32_t>(scope,12);
+  LayoutCheck check;check.begin=uintptr_t(scope)+references;check.end=check.begin+size_t(size)*4;
+  check.span_begin=uintptr_t(scope)+sizeof(HandleScopeHeader);
+  check.span_end=check.end; // Includes the old first root or modern size word.
+  for(uint32_t i=0;i<size;++i)if(Read<uint32_t>(reinterpret_cast<void*>(check.begin+size_t(i)*4)))++check.expected;
+  check.next=check.begin;check.Advance();Visit(self,&check);
+  if(!check.valid||check.seen!=check.expected||check.next!=check.end)continue;
+  if(selected)return false;selected=references;
+ }
+ references_=selected;return selected!=0;
 }
 bool Service::BorrowOwnedStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output)const noexcept{
  if(!output||!decode_||!strong||!Runnable(context.self)||!Environment(context))return false;
@@ -113,7 +149,7 @@ bool Service::BorrowStrongGlobal(const runnable_jni::Context& context,jobject st
 bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobject strong,const void* slot,std::string* error){
  void* expected=nullptr;
  if(!BorrowStrongGlobal(context,strong,&expected))return Fail(error,"Source allocator original Class is not an actual Runnable owned strong JNI global");
- if(!Mapped(slot,4)||!Contains(context.self,slot,uint32_t(uintptr_t(expected))))return Fail(error,"Source Class Handle is not in the independently matched live scope chain");
+ if(!Mapped(slot,4)||(!references_&&!CalibrateLayout(context.self,slot,uint32_t(uintptr_t(expected))))||!Contains(context.self,slot,uint32_t(uintptr_t(expected))))return Fail(error,"Source Class Handle is not in the independently matched live scope chain");
  Check check;check.slots[0]=slot;check.count=1;check.value=uint32_t(uintptr_t(expected));Visit(context.self,&check);
  if(!check.valid||check.seen!=1)return Fail(error,"Named root visitor does not see the exact public original Class Handle");
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");
@@ -146,11 +182,13 @@ bool Service::CheckNested(void* self,uint32_t value){
  return valid&&Read<void*>(self,top_)==previous;
 }
 Scope::Scope(const Service& service,void* self,uint32_t count):service_(service),self_(self),count_(count),storage_(nullptr){
- Require(service.Runnable(self)&&count<=INT32_MAX);storage_=std::make_unique<unsigned char[]>(kHandleReferences+size_t(count)*4);
- const HandleScopeHeader header{Read<void*>(self,service.top_),int32_t(count)};std::memcpy(storage_.get(),&header,sizeof(header));Write(self,service.top_,static_cast<void*>(storage_.get()));
+ Require(service.Runnable(self)&&count<=INT32_MAX);storage_=std::make_unique<unsigned char[]>(service.references_+size_t(count)*4);
+ const HandleScopeHeader header{Read<void*>(self,service.top_),int32_t(count)};std::memcpy(storage_.get(),&header,sizeof(header));
+ if(service.references_==sizeof(SizedHandleScopeHeader))Write<uint32_t>(storage_.get(),12,count);
+ Write(self,service.top_,static_cast<void*>(storage_.get()));
 }
 Scope::~Scope(){Require(service_.Runnable(self_)&&Read<void*>(self_,service_.top_)==storage_.get());Write(self_,service_.top_,Read<HandleScopeHeader>(storage_.get()).link);}
-void* Scope::Slot(size_t index){Require(index<count_);return storage_.get()+kHandleReferences+index*4;}
+void* Scope::Slot(size_t index){Require(index<count_);return storage_.get()+service_.references_+index*4;}
 void* Scope::Get(size_t index){Require(service_.Runnable(self_));return reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(Slot(index))));}
 void Scope::Set(size_t index,void* object){Require(service_.Runnable(self_)&&uintptr_t(object)<=UINT32_MAX);Write<uint32_t>(Slot(index),0,uint32_t(uintptr_t(object)));}
 }

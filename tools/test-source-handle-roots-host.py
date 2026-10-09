@@ -32,9 +32,12 @@ command += ['-o', str(binary)]
 subprocess.run(command, check=True)
 if args.compile_only:
     print('Source handle roots link PASS; execution pending');raise SystemExit(0)
-result = subprocess.run([str(binary)], capture_output=True, text=True,
-                        env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
-(out / 'result.log').write_text(result.stdout + result.stderr)
-result.check_returncode()
-print(result.stdout.strip())
+for layout in ('legacy', 'sized'):
+    fixture_env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1')
+    if layout == 'sized': fixture_env['SOURCE_SCOPE_SIZED']='1'
+    else: fixture_env.pop('SOURCE_SCOPE_SIZED',None)
+    result=subprocess.run([str(binary)],capture_output=True,text=True,env=fixture_env)
+    (out / ('result-'+layout+'.log')).write_text(result.stdout+result.stderr)
+    result.check_returncode()
+    print(layout+': '+result.stdout.strip())
 print('Fixed-source handle roots: ASan/UBSan passed')

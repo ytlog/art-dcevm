@@ -13,16 +13,20 @@ constexpr size_t original_top=280;
 #pragma pack(push,4)
 struct OriginalHeader{void* previous;int32_t count;};
 #pragma pack(pop)
+bool sized_scope=std::getenv("SOURCE_SCOPE_SIZED")!=nullptr;
+size_t OriginalReferences(){return sized_scope?16u:12u;}
 void* Top(){void* out=nullptr;std::memcpy(&out,thread.data()+original_top,8);return out;}
 void Publish(void* value){std::memcpy(thread.data()+original_top,&value,8);}
 bool corrupt_info=false,hide_owned=false;const void* public_slot=nullptr;size_t walks=0;
 void OriginalRoots(void* self,abi::arm64::android_common::HandleRootVisitor* visitor,uint32_t flags){
  assert(self==thread.data()&&flags==0&&Read32(self)==0);++walks;
  for(void* scope=Top();scope;){OriginalHeader header{};std::memcpy(&header,scope,sizeof(header));
-  assert(header.count>=0&&header.count<=32);std::array<uint32_t*,32> roots{};
-  for(int32_t i=0;i<header.count;++i)roots[size_t(i)]=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(scope)+12+size_t(i)*4);
+  assert(header.count>=0&&header.count<=32);
+  const uint32_t used=sized_scope?Read32(static_cast<unsigned char*>(scope)+12):uint32_t(header.count);
+  assert(used<=uint32_t(header.count));std::array<uint32_t*,32> roots{};
+  for(uint32_t i=0;i<used;++i)roots[i]=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(scope)+OriginalReferences()+size_t(i)*4);
   abi::arm64::android_common::NativeRootInfo info{nullptr,corrupt_info?5u:4u,0};
-  if(!hide_owned||roots[0]==public_slot)visitor->VisitRoots(roots.data(),size_t(header.count),info);
+  if(!hide_owned||roots[0]==public_slot)visitor->VisitRoots(roots.data(),size_t(used),info);
   scope=header.previous;
  }
 }
@@ -53,7 +57,9 @@ int main(){
  void* self=thread.data();JNIEnv* source_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&source_env,8);
  source_handle_roots::Service no_oracle;modern_field_storage::Service unavailable;assert(!source_handle_roots::Service::Bind(hooks,unavailable,&no_oracle,&error));
  source_handle_roots::Service service;assert(source_handle_roots::Service::Bind(hooks,fields,&service,&error));assert(!service.Calibrated()&&!service.CreateScope(1,&error));
- alignas(8) unsigned char original[24]{};OriginalHeader header{nullptr,3};std::memcpy(original,&header,sizeof(header));Put32(original,12,uint32_t(uintptr_t(old_class)));public_slot=original+12;Publish(original);
+ alignas(8) unsigned char original[32]{};OriginalHeader header{nullptr,3};std::memcpy(original,&header,sizeof(header));if(sized_scope)Put32(original,12,2);Put32(original,OriginalReferences(),uint32_t(uintptr_t(old_class)));public_slot=original+OriginalReferences();
+ // Capacity includes an unused nonzero tail; the modern walker must use size.
+ if(sized_scope)Put32(original,24,uint32_t(uintptr_t(new_class)));Publish(original);
  struct Request{source_handle_roots::Service* service;std::string* error;const void* handle;bool expected;} request{&service,&error,public_slot,true};
  auto observe=[](const runnable_jni::Context& c,void* p){auto& r=*static_cast<Request*>(p);const bool result=r.service->ObserveAllocatorHandle(c,reinterpret_cast<jobject>(old_class),r.handle,r.error);assert(result==r.expected);return true;};
  // Candidate corruption/foreign slots/root provenance refuse before publication.
@@ -73,6 +79,10 @@ int main(){
  struct Use{source_handle_roots::Service* service;modern_field_metadata::FieldMetadata* metadata;modern_field_storage::Service* fields;} use_data{&service,&metadata,&fields};
  auto use=[](const runnable_jni::Context& context,void* p){auto& data=*static_cast<Use*>(p);auto& s=*data.service;auto& metadata=*data.metadata;std::string error;
   void* borrowed=nullptr;assert(s.BorrowHandle(context,public_slot,&borrowed)&&borrowed==old_class);
+  if(sized_scope){borrowed=new_class;
+   assert(!s.BorrowHandle(context,static_cast<const unsigned char*>(public_slot)-4,&borrowed)&&borrowed==new_class);
+   assert(!s.BorrowHandle(context,static_cast<const unsigned char*>(public_slot)+8,&borrowed)&&borrowed==new_class);
+  }
   const auto calls=jni_calls;
   assert(s.BorrowOwnedStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls==calls);
   assert(s.BorrowStrongGlobal(context,reinterpret_cast<jobject>(old_class),&borrowed)&&borrowed==old_class&&jni_calls>calls);

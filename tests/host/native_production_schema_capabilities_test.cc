@@ -99,10 +99,11 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  assert(!owner.Ready()&&!owner.Roots().Calibrated());
  // The original source owns these handles; first operation independently
  // observes and calibrates the service's visitor, then forwards once.
- alignas(8) unsigned char original[24]{};OriginalHeader header{Top(),3};std::memcpy(original,&header,sizeof(header));
- Put32(original,12,uint32_t(uintptr_t(old_class)));Put32(original,16,uint32_t(uintptr_t(parent_class)));Put32(original,20,uint32_t(uintptr_t(registered_cache)));Publish(original);
+ alignas(8) unsigned char original[32]{};OriginalHeader header{Top(),3};std::memcpy(original,&header,sizeof(header));
+ if(sized_scope)Put32(original,12,3);
+ Put32(original,OriginalReferences(),uint32_t(uintptr_t(old_class)));Put32(original,OriginalReferences()+4,uint32_t(uintptr_t(parent_class)));Put32(original,OriginalReferences()+8,uint32_t(uintptr_t(registered_cache)));Publish(original);
  const auto calls=allocation_calls;
- assert(allocator_proxy(&class_owner,original+12,original+16,original+20,0).reference==uintptr_t(new_class));
+ assert(allocator_proxy(&class_owner,original+OriginalReferences(),original+OriginalReferences()+4,original+OriginalReferences()+8,0).reference==uintptr_t(new_class));
  assert(allocation_calls==calls+1&&owner.Roots().Calibrated()&&!owner.Allocator().Calibrated());
  Publish(header.previous);
  assert(owner.End(&driver,true,&error)&&!owner.Ready());
@@ -133,7 +134,7 @@ bool OwnerProbe(const runnable_jni::Context& c,modern_field_metadata::FieldMetad
  // proves pre-Link capture, linked return, selected cache and exact lookup.
  assert(owner.Begin(&driver,c,fixture,&error));assert(owner.End(&driver,true,&error));
  assert(owner.Begin(&driver,c,fixture,&error));Publish(original);
- assert(allocator_proxy(&class_owner,original+12,original+16,original+20,0).reference==uintptr_t(new_class));
+ assert(allocator_proxy(&class_owner,original+OriginalReferences(),original+OriginalReferences()+4,original+OriginalReferences()+8,0).reference==uintptr_t(new_class));
  Publish(header.previous);
  assert(owner.End(&driver,true,&error)&&owner.Ready());
  assert(owner.BindDependencies(&dependencies,&error)&&dependencies.roots==&owner.Roots()&&dependencies.allocator==&owner.Allocator()&&dependencies.lookup==&owner.Lookup()&&dependencies.dex_registry==&owner.DexRegistry());
