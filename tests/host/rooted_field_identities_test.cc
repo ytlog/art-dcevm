@@ -29,10 +29,11 @@ bool ReadNativeDeclarations(const modern_field_metadata::FieldMetadata&,const me
 void* operator new(size_t n){if(no_alloc)throw std::bad_alloc();if(void* p=std::malloc(n))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}void operator delete(void* p,size_t)noexcept{std::free(p);}
 namespace {
-struct NativeField {void* owner;};int native_a,native_b,moved_a,field_type,thread,vm,declaring,modifiers,native_c;
+struct NativeField {void* owner;};int native_a,native_b,moved_a,field_type,thread,vm,declaring,modifiers,native_c,name_method,component_method,proxy_method;
 struct Object {void* native=nullptr;Object* owner=nullptr;NativeField* field=nullptr;jfieldID id=nullptr;bool statik=false;
- bool array=false;std::vector<Object*> elements{};size_t roots=0;};
+ bool array=false;std::vector<Object*> elements{};size_t roots=0;std::string class_name{};bool proxy=false;};
 struct Root {Object* object;bool global;};
+Object class_api{},proxy_api{};std::vector<Object> public_names;bool fail_proxy=false;
 Object a{&native_a},b{&native_b},type{&field_type},c{&native_c};
 NativeField fa{&native_a},fb{&native_b},fs{&native_a},fc{&native_c},fn{&native_a};
 Object ma{nullptr,&a,&fa,reinterpret_cast<jfieldID>(4)},mb{nullptr,&b,&fb,reinterpret_cast<jfieldID>(4)},ms{nullptr,&a,&fs,reinterpret_cast<jfieldID>(8),true};
@@ -46,9 +47,33 @@ void JNICALL Delete(JNIEnv*,jobject ref){++jni_calls;if(ref){auto* o=R(ref)->obj
 jobject JNICALL To(JNIEnv*,jclass owner,jfieldID id,jboolean statik){++jni_calls;for(auto* f:fields)if(f->owner==R(owner)->object&&f->id==id&&f->statik==bool(statik))return Local(f);
  uintptr_t value=reinterpret_cast<uintptr_t>(id);if(value>=4096&&value%4==0){size_t index=value/4-1024;if(index<stress.size()&&stress[index].owner==R(owner)->object&&!statik)return Local(&stress[index]);}return nullptr;}
 jfieldID JNICALL From(JNIEnv*,jobject mirror){++jni_calls;return wrong_id?reinterpret_cast<jfieldID>(64):R(mirror)->object->id;}
-jclass JNICALL Find(JNIEnv*,const char*){++jni_calls;return static_cast<jclass>(Local(&type));}
+jclass JNICALL Find(JNIEnv*,const char* name){++jni_calls;Object* result=&type;
+ if(std::strcmp(name,"java/lang/Class")==0)result=&class_api;
+ if(std::strcmp(name,"java/lang/reflect/Proxy")==0)result=&proxy_api;
+ return static_cast<jclass>(Local(result));}
 jclass JNICALL Type(JNIEnv*,jobject){++jni_calls;return static_cast<jclass>(Local(&type));}
-jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){++jni_calls;return reinterpret_cast<jmethodID>(std::string(name)=="getDeclaringClass"?&declaring:&modifiers);}
+jmethodID JNICALL Method(JNIEnv*,jclass klass,const char* name,const char* signature){++jni_calls;
+ if(R(klass)->object==&class_api){
+  if(std::strcmp(name,"getName")==0&&std::strcmp(signature,"()Ljava/lang/String;")==0)return reinterpret_cast<jmethodID>(&name_method);
+  if(std::strcmp(name,"getComponentType")==0&&std::strcmp(signature,"()Ljava/lang/Class;")==0)return reinterpret_cast<jmethodID>(&component_method);
+  std::abort();
+ }
+ return reinterpret_cast<jmethodID>(std::string(name)=="getDeclaringClass"?&declaring:&modifiers);}
+jmethodID JNICALL StaticMethod(JNIEnv*,jclass klass,const char* name,const char* signature){++jni_calls;
+ assert(R(klass)->object==&proxy_api&&std::strcmp(name,"isProxyClass")==0&&std::strcmp(signature,"(Ljava/lang/Class;)Z")==0);
+ return reinterpret_cast<jmethodID>(&proxy_method);}
+jboolean JNICALL ProxyClass(JNIEnv*,jclass klass,jmethodID method,const jvalue* arguments){++jni_calls;
+ assert(R(klass)->object==&proxy_api&&method==reinterpret_cast<jmethodID>(&proxy_method)&&arguments&&arguments[0].l);
+ if(fail_proxy){pending_exception=true;return JNI_FALSE;}
+ return R(arguments[0].l)->object->proxy?JNI_TRUE:JNI_FALSE;}
+jobject JNICALL ClassObject(JNIEnv*,jobject klass,jmethodID method,const jvalue*){++jni_calls;
+ Object* actual=R(klass)->object;assert(!actual->class_name.empty());
+ if(method==reinterpret_cast<jmethodID>(&component_method))return nullptr; // These are ordinary non-array Classes.
+ assert(method==reinterpret_cast<jmethodID>(&name_method));
+ for(auto& name:public_names)if(name.owner==actual)return Local(&name);
+ std::abort();}
+const char* JNICALL StringChars(JNIEnv*,jstring string,jboolean*){++jni_calls;auto* actual=R(string)->object;assert(actual->owner);return actual->class_name.c_str();}
+void JNICALL ReleaseChars(JNIEnv*,jstring string,const char* chars){++jni_calls;assert(chars==R(string)->object->class_name.c_str());}
 jobject JNICALL CallObject(JNIEnv*,jobject mirror,jmethodID id,va_list){++jni_calls;assert(id==reinterpret_cast<jmethodID>(&declaring));return Local(R(mirror)->object->owner);}
 jint JNICALL CallInt(JNIEnv*,jobject mirror,jmethodID id,va_list){++jni_calls;assert(id==reinterpret_cast<jmethodID>(&modifiers));return R(mirror)->object->statik?9:1;}
 jboolean JNICALL Same(JNIEnv*,jobject x,jobject y){++jni_calls;return R(x)->object==R(y)->object;}
@@ -74,7 +99,7 @@ jclass JNICALL Parent(JNIEnv*,jclass){return static_cast<jclass>(Local(&loaded_o
 jboolean JNICALL Assignable(JNIEnv*,jclass x,jclass y){return R(x)->object==R(y)->object;}
 jvmtiError JNICALL Loaded(jvmtiEnv*,jint* count,jclass** classes){*count=jint(loaded_objects->size());*classes=static_cast<jclass*>(std::malloc(sizeof(jclass)*size_t(*count)));for(jint i=0;i<*count;++i)(*classes)[i]=static_cast<jclass>(Local(&(*loaded_objects)[size_t(i)]));return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
-jvmtiError JNICALL Signature(jvmtiEnv*,jclass,char** signature,char**){*signature=static_cast<char*>(std::malloc(8));std::memcpy(*signature,"LTest;",7);return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL Signature(jvmtiEnv*,jclass klass,char** signature,char**){const auto text="L"+R(klass)->object->class_name+";";*signature=static_cast<char*>(std::malloc(text.size()+1));std::memcpy(*signature,text.c_str(),text.size()+1);return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Status(jvmtiEnv*,jclass,jint* status){*status=JVMTI_CLASS_STATUS_PREPARED;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL ClassFlags(jvmtiEnv*,jclass,jint* flags){*flags=1;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Methods(jvmtiEnv*,jclass,jint* count,jmethodID** values){*count=0;*values=nullptr;return JVMTI_ERROR_NONE;}
@@ -137,12 +162,24 @@ int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check
  // Exercise Verifier::Stage/Clear itself, including every formerly separate
  // root, loader, superclass and interface global publication path.
  api.GetSuperclass=Parent;api.IsAssignableFrom=Assignable;loaded_objects=&objects;
+ api.GetStaticMethodID=StaticMethod;api.CallStaticBooleanMethodA=ProxyClass;api.CallObjectMethodA=ClassObject;api.GetStringUTFChars=StringChars;api.ReleaseStringUTFChars=ReleaseChars;
+ public_names.resize(root_count);
+ for(size_t i=0;i<root_count;++i){objects[i].class_name="Test"+std::to_string(i);public_names[i].class_name=objects[i].class_name;public_names[i].owner=&objects[i];public_names[i].native=&public_names[i];}
+ // Include a real proxy classification/name path, with a distinct String root.
+ objects.front().proxy=true;
  jvmtiInterface_1 jvmti_api{};jvmti_api.GetLoadedClasses=Loaded;jvmti_api.Deallocate=Deallocate;jvmti_api.GetClassSignature=Signature;jvmti_api.GetClassStatus=Status;jvmti_api.GetClassModifiers=ClassFlags;jvmti_api.GetClassMethods=Methods;jvmti_api.GetClassFields=Fields;jvmti_api.GetClassLoader=Loader;jvmti_api.GetImplementedInterfaces=Interfaces;jvmtiEnv ti{&jvmti_api};
  native_schema_guard_verifier::Verifier verifier;native_schema_guard_verifier::Bindings bindings;bindings.vm=reinterpret_cast<JavaVM*>(&vm);bindings.roots={&vm,Scope,Oracle,Decode,Element};
  auto input=static_cast<jclass>(Local(&objects.front()));
  globals=existing_class_roots;peak=globals;
- assert(verifier.Stage(&env,&ti,{input},bindings,&error));assert(globals==existing_class_roots+(4*root_count+1+1023)/1024&&peak<51200);
- verifier.Clear(&env);assert(globals==existing_class_roots&&arrays==0);globals=0;Delete(&env,input);
+ assert(verifier.Stage(&env,&ti,{input},bindings,&error));assert(globals==existing_class_roots+(4*root_count+2+1023)/1024&&peak<51200);
+ assert(verifier.MatchesAffected(&env,{input},&error));
+ auto unequal=static_cast<jclass>(Local(&objects[1]));
+ assert(!verifier.MatchesAffected(&env,{unequal},&error));
+ assert(!verifier.MatchesAffected(&env,{input,input},&error));Delete(&env,unequal);
+ verifier.Clear(&env);assert(globals==existing_class_roots&&arrays==0);globals=0;
+ fail_proxy=true;assert(!verifier.Stage(&env,&ti,{input},bindings,&error)&&pending_exception);
+ assert(error=="Public proxy Class classification failed");ClearException(&env);fail_proxy=false;
+ verifier.Clear(&env);assert(globals==0&&arrays==0);Delete(&env,input);
  Delete(&env,ar);Delete(&env,br);Delete(&env,cr);
- std::cout<<"Actual rooted Field store: 60000 complete identities +15140 existing Class globals under51200 cap, shared slot/GC proof, noJNI/noalloc final reads, duplicate/refund and three clean cycles; shared schema roots 180000 distinct slots, GC and exception refunds PASS\n";
+ std::cout<<"Actual rooted Field store: 60000 complete identities +15140 existing Class globals under51200 cap, shared slot/GC proof, noJNI/noalloc final reads, duplicate/refund and three clean cycles; shared schema roots 180000 distinct slots, GC and exception refunds; public Proxy/name roots, unequal/duplicate Holder rejection and classification exception refund PASS\n";
 }

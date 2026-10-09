@@ -17,6 +17,12 @@
 #undef private
 namespace artdcevm::redefinition_gate {bool Owned(JavaVM*){return stopped==1;}}
 namespace {
+// Unlike the shared no-exception source fixture, this JNI leaf observes a
+// real pending state and can refuse calibration. Its exact JNI return type
+// is checked against the JNI function-table slot at compile time.
+volatile bool pending_jni_exception=false;
+jboolean JNICALL MappingExceptionCheck(JNIEnv*){Jni();return pending_jni_exception?JNI_TRUE:JNI_FALSE;}
+static_assert(std::is_same_v<decltype(&MappingExceptionCheck),decltype(JNINativeInterface_::ExceptionCheck)>);
 struct Handle{void* live;};
 bool DecodeHandle(void*,jobject root,void** out){if(!root||!out)return false;*out=reinterpret_cast<Handle*>(root)->live;return *out;}
 void* Method(void*,jmethodID id){return id;}
@@ -36,11 +42,14 @@ bool RootScope(void*,JNIEnv* jni,jobject,runnable_jni::Operation operation,void*
 
 }
 int main(){
- InitJni();InitializeHeap();Hooks hooks;std::string error;
+ InitJni();table.ExceptionCheck=MappingExceptionCheck;InitializeHeap();Hooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracles{};for(size_t i=0;i<4;++i)oracles[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));
  struct Request{modern_field_metadata::FieldMetadata* m;decltype(oracles)* o;std::string* e;} request{&metadata,&oracles,&error};
  const auto calibrate=[](const runnable_jni::Context& scope,void* raw){auto& r=*static_cast<Request*>(raw);return r.m->Calibrate(scope,reinterpret_cast<jobject>(old_class),"LFixture;",r.o->data(),4,r.e);};
+ pending_jni_exception=true;
+ assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&request)==runnable_jni::Result::kOperationRejected);
+ assert(!metadata.Calibrated());pending_jni_exception=false;error.clear();
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&request)==runnable_jni::Result::kSuccess);
 
  using namespace native_schema_guard_verifier;
