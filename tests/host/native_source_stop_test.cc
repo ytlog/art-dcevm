@@ -6,6 +6,8 @@ void operator delete(void* p) noexcept {std::free(p);}
 void* operator new[](std::size_t bytes){return ::operator new(bytes);}
 void operator delete[](void* p) noexcept {::operator delete(p);}
 #include "platform/common/native_source_calibration_bridge.h"
+#include "platform/abi/arm64/android-common/redefiner_prefix.h"
+#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -84,6 +86,61 @@ class Hooks:public HookEngine {
   }return true;
  }
 };
+using Callback=void(*)(void*,void*);
+Callback add_callback=nullptr,remove_callback=nullptr;
+void* pauser_table[4]{};int runtime_receiver,callbacks_receiver;
+void AddCallback(void* c,void*){assert(c==&callbacks_receiver&&exclusive);}
+void RemoveCallback(void* c,void*){assert(c==&callbacks_receiver&&exclusive);}
+class LoadingHooks:public Hooks {
+ public:
+ void* FindSymbol(const char* lib,const char* name)override{
+  if(!std::strcmp(name,"_ZTVN12openjdkjvmti21ClassDefinitionPauserE"))return pauser_table;
+  if(!std::strcmp(name,"_ZN3art16RuntimeCallbacks20AddClassLoadCallbackEPNS_17ClassLoadCallbackE"))return Fn(AddCallback);
+  if(!std::strcmp(name,"_ZN3art16RuntimeCallbacks23RemoveClassLoadCallbackEPNS_17ClassLoadCallbackE"))return Fn(RemoveCallback);
+  return Hooks::FindSymbol(lib,name);
+ }
+ void* Install(void* target,void* proxy,void** original,std::string* error)override{
+  if(target==Fn(AddCallback)||target==Fn(RemoveCallback)){
+   assert(exclusive);*original=target;if(target==Fn(AddCallback))add_callback=reinterpret_cast<Callback>(proxy);else remove_callback=reinterpret_cast<Callback>(proxy);return target;
+  }
+  return Hooks::Install(target,proxy,original,error);
+ }
+};
+void CleanupProofs(native_source_stop::Service& service){
+ LoadingHooks hooks;std::string error;native_source_class_loading::Service loading;
+ runtime_services::Snapshot runtime{};runtime.runtime=&runtime_receiver;
+ assert(native_source_class_loading::Service::Bind(hooks,runtime,&loading,&error));
+ Native(&self);Stop(nullptr,nullptr,false);assert(native_source_class_loading::Install(hooks,loading,&error));Resume(nullptr);Runnable(&self);
+ forbid_native_allocation=true;
+ for(int mode=0;mode<10;++mode){
+  abi::arm64::android_common::RedefinerPrefix driver{&runtime_receiver,JVMTI_ERROR_INTERNAL,0,&runtime_receiver,&self,0};
+  abi::arm64::android_common::ClassRedefinitionPrefix owner{};owner.driver=&driver;
+  transaction_root::Owners owners{reinterpret_cast<unsigned char*>(&owner),reinterpret_cast<unsigned char*>(&owner)+sizeof(owner),reinterpret_cast<unsigned char*>(&owner)+sizeof(owner)};
+  uint32_t handle=0;transaction_root::Holder holder{};holder.array_handle=&handle;holder.redefinitions=&owners;
+  runnable_jni::Context context{&self,reinterpret_cast<JNIEnv*>(&runtime_receiver),&runtime_receiver};
+  native_source_class_loading::Run run(loading,&driver,context);
+  native_source_stop::Observation o(service,&driver,reinterpret_cast<const void*>(&CleanupProofs),&self,sizeof(self));assert(o.BindCleanup(run));
+  struct Pauser {void*table;void*self;uint8_t running;}pauser{pauser_table+2,&self,1};
+  Native(&self);unsigned char initial;stop_proxy(&initial,"constructor",false);add_callback(&callbacks_receiver,&pauser);resume_proxy(&initial);Runnable(&self);
+  transaction_root::Iterator iterator{0,&holder};assert(run.BeforeFinish(&owner,&holder,&iterator));assert(!run.Paused());run.AfterFinish(&owner,true);assert(run.Paused());
+  assert(o.Collected(&driver,&holder));disable_proxy(&heap,&self);Native(&self);unsigned char final,cleanup,foreign_carrier;
+  stop_proxy(&final,"actual final",true);resume_proxy(&final);Runnable(&self);enable_proxy(&heap,&self);
+  if(mode==6){Native(&self);start_proxy(&heap,&self,8,1);finish_proxy(&heap,&self,0);Runnable(&self);}
+  if(mode==1)pauser.self=&foreign;
+  if(mode==7)pauser.table=nullptr;
+  if(mode==9){Native(&self);start_proxy(&heap,&self,8,1);Runnable(&self);}
+  Native(&self);stop_proxy(&cleanup,"arbitrary cause does not grant permission",false);
+  remove_callback(&callbacks_receiver,&pauser);
+  resume_proxy(mode==2?&foreign_carrier:&cleanup);Runnable(&self);
+  if(mode==3||mode==4){Native(&self);start_proxy(&heap,&self,8,1);if(mode==3)finish_proxy(&heap,&self,0);Runnable(&self);}
+  if(mode==8){Native(&self);stop_proxy(&foreign_carrier,"second cleanup",false);resume_proxy(&foreign_carrier);Runnable(&self);}
+  bool original=mode!=5;bool complete=run.Complete(original);native_source_stop::Calibration proof;
+  bool valid=o.Finish(&driver,original&&complete,&proof);
+  assert(valid==(mode==0||mode==3||mode==6));
+  if(mode==4||mode==9){Native(&self);finish_proxy(&heap,&self,0);Runnable(&self);}
+ }
+ forbid_native_allocation=false;
+}
 thread_suspend_service::Service State(Hooks& h,thread_suspend_service::Declaration declaration=thread_suspend_service::Declaration::kModern24){
  thread_suspend_service::Service state;assert(thread_suspend_service::Service::Bind(declaration,[&](const char* n){return h.FindSymbol("libart.so",n);},&state));return state;
 }
@@ -97,6 +154,7 @@ native_source_stop::Calibration Calibrate(native_source_stop::Service& service){
 
 void BridgeProofs(const native_source_stop::Service& service){
  int driver,run,holder;
+ forbid_native_allocation=true;
  for(int mode=0;mode<7;++mode){
   self.flags=runnable_state<<shift;
   {
@@ -246,6 +304,7 @@ int main(int argc,char** argv){
  TraceRegressions(service);
  LegacyObservation(hooks);
  ObservationNegatives(service,hooks);
+ CleanupProofs(service);
  assert(!service.Calibrated());
  self.flags=runnable_state<<shift;{native_source_stop::Session uncalibrated(service);assert(!uncalibrated.Begin(&self,sizeof(self))&&!gc&&!exclusive);}
  Calibrate(service);

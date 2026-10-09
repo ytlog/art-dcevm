@@ -3,6 +3,7 @@
 #include "api/hook_engine.h"
 #include "platform/common/thread_suspend_service.h"
 #include "platform/abi/arm64/android-common/source_stop.h"
+namespace artdcevm::native_source_class_loading {class Run;}
 namespace artdcevm::native_source_stop {
 class Session;
 class Observation;
@@ -59,10 +60,11 @@ struct ObservationTrace {
 class Observation final {
  public:
   Observation(const Service&,void* actual_driver,const void* exact_original_run,
-              void* self,size_t mapped_extent) noexcept;
+              void* self,size_t mapped_extent,native_source_class_loading::Run* cleanup=nullptr) noexcept;
   ~Observation();
   Observation(const Observation&)=delete;Observation&operator=(const Observation&)=delete;
   bool Ready()const noexcept;
+  bool BindCleanup(native_source_class_loading::Run&)noexcept;
   bool Collected(void* exact_driver,const void* actual_holder) noexcept;
   bool Finish(void* exact_driver,bool original_success,Calibration*) noexcept;
   const char* Failure()const noexcept{return failure_;}
@@ -75,12 +77,13 @@ class Observation final {
   static void Destroyed(void*) noexcept;
   static void GCOperation(void* heap,void* self,bool starting) noexcept;
   bool State(uint32_t)const noexcept;
-  enum class Phase{kRun,kArmed,kDisabled,kStopped,kResumed,kComplete};
+  enum class Phase{kRun,kArmed,kDisabled,kStopped,kResumed,kComplete,kCleanupStopped,kCleanupResumed};
   Service service_;void* driver_=nullptr;const void* run_body_=nullptr;
   void* self_=nullptr;size_t extent_=0;const void* holder_=nullptr;void* carrier_=nullptr;
   char cause_[128]{};bool long_=false,attached_=false,failed_=false,finished_=false;
   Phase phase_=Phase::kRun;const char* failure_="ordinary-source-observation-not-started";
   bool prefinal_gc_=false;
+  native_source_class_loading::Run* cleanup_=nullptr;bool postfinal_gc_=false;
   ObservationTrace trace_{};
   void Event(uint8_t) noexcept;
   void Refuse(const char*) noexcept;

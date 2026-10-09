@@ -1,4 +1,5 @@
 #include "platform/common/native_source_stop.h"
+#include "platform/common/native_source_class_loading.h"
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -189,14 +190,18 @@ void Observation::Event(uint8_t event) noexcept {
 bool Observation::State(uint32_t expected)const noexcept {
  uint32_t value=UINT32_MAX;return service_.current_&&service_.current_()==self_&&service_.state_.State(self_,extent_,&value)&&value==expected;
 }
-Observation::Observation(const Service& service,void* driver,const void* run,void* self,size_t extent) noexcept:
- service_(service),driver_(driver),run_body_(run),self_(self),extent_(extent){
+Observation::Observation(const Service& service,void* driver,const void* run,void* self,size_t extent,native_source_class_loading::Run* cleanup) noexcept:
+ service_(service),driver_(driver),run_body_(run),self_(self),extent_(extent),cleanup_(cleanup){
  trace_.expected_runnable=service_.state_.RunnableState();Event(1);
  if(observation||active||finishing||!driver||!run||!service_.heap_||!State(service_.state_.RunnableState())){Refuse("ordinary-source-observation-owner-mismatch");return;}
  observation=this;attached_=true;failure_="";
 }
 Observation::~Observation(){if(attached_){if(observation!=this)std::abort();observation=nullptr;}}
 bool Observation::Ready()const noexcept{return attached_&&!failed_&&!finished_&&observation==this;}
+bool Observation::BindCleanup(native_source_class_loading::Run& cleanup)noexcept{
+ if(!Ready()||phase_!=Phase::kRun||cleanup_||!cleanup.OwnsDriver(driver_)){Refuse("ordinary-source-cleanup-Run-binding-mismatch");return false;}
+ cleanup_=&cleanup;return true;
+}
 bool Observation::Collected(void* driver,const void* holder) noexcept {
  Event(2);trace_.collected_ready=Ready();trace_.collected_driver_match=driver==driver_;trace_.collected_holder_present=holder!=nullptr;
  if(!Ready()||phase_!=Phase::kRun||driver!=driver_||!holder||!State(service_.state_.RunnableState())){
@@ -211,6 +216,10 @@ void Observation::DisableBegin(void* heap,void* self) noexcept {
 }
 void Observation::Constructed(void* carrier,const char* cause,bool long_suspend) noexcept {
  if(!observation)return;auto& o=*observation;o.Event(4);if(o.phase_==Phase::kRun)return;
+ if(o.Ready()&&o.phase_==Phase::kComplete&&o.cleanup_&&o.cleanup_->OwnsDriver(o.driver_)&&
+    !o.postfinal_gc_&&o.State(abi::arm64::android11::kNative)&&o.cleanup_->BeginCleanup(carrier)){
+  o.carrier_=carrier;o.phase_=Phase::kCleanupStopped;return;
+ }
  if(!o.Ready()||o.phase_!=Phase::kDisabled||!carrier||!cause||!o.State(abi::arm64::android11::kNative)){
   o.Refuse("ordinary-source-original-final-stop-owner-order-mismatch");return;}
  size_t length=0;while(length<sizeof(o.cause_)&&cause[length])++length;
@@ -219,6 +228,10 @@ void Observation::Constructed(void* carrier,const char* cause,bool long_suspend)
 }
 void Observation::Destroyed(void* carrier) noexcept {
  if(!observation)return;auto& o=*observation;o.Event(5);if(o.phase_==Phase::kRun)return;
+ if(o.Ready()&&o.phase_==Phase::kCleanupStopped&&o.cleanup_&&carrier==o.carrier_&&
+    o.State(abi::arm64::android11::kNative)&&o.cleanup_->EndCleanup(carrier)){
+  o.phase_=Phase::kCleanupResumed;return;
+ }
  if(!o.Ready()||o.phase_!=Phase::kStopped||carrier!=o.carrier_||!o.State(abi::arm64::android11::kNative)){
   o.Refuse("ordinary-source-original-final-resume-owner-order-mismatch");return;}
  o.phase_=Phase::kResumed;
@@ -236,6 +249,15 @@ void Observation::GCOperation(void* heap,void* self,bool starting) noexcept {
  // permitted there: this observer retains only the native Holder identity, no
  // borrowed managed pointer. A same-thread heap pair must finish BEFORE the
  // actual original moving-GC disable returns and arms the final interval.
+ // AOSP legacy Reverify runs after final GC exclusion is released but before
+ // the top-level class-loading owner's destructor. Its same-heap/thread GC is
+ // refundable observation only; it cannot grant stop or borrowed-root access.
+ // Require the actual pause still owned, or the exact cleanup fully returned.
+ if(o.Ready()&&o.cleanup_&&((o.phase_==Phase::kComplete&&o.cleanup_->Paused())||
+     (o.phase_==Phase::kCleanupResumed&&o.cleanup_->CleanupCompleted()))){
+  if(heap!=o.service_.heap_||self!=o.self_||!o.service_.current_||o.service_.current_()!=o.self_||starting==o.postfinal_gc_){o.Refuse("ordinary-source-postfinal-GC-owner-pair-mismatch");return;}
+  o.postfinal_gc_=starting;return;
+ }
  if(!o.Ready()||o.phase_!=Phase::kArmed){o.Refuse("ordinary-source-final-path-nested-GC-operation");return;}
  if(heap!=o.service_.heap_||self!=o.self_||!o.service_.current_||o.service_.current_()!=o.self_||starting==o.prefinal_gc_){
   o.Refuse("ordinary-source-prefinal-GC-owner-pair-mismatch");return;
@@ -244,7 +266,7 @@ void Observation::GCOperation(void* heap,void* self,bool starting) noexcept {
 }
 bool Observation::Finish(void* driver,bool success,Calibration* out) noexcept {
  Event(8);
- const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&phase_==Phase::kComplete&&State(service_.state_.RunnableState());
+ const bool ok=Ready()&&out&&driver==driver_&&success&&holder_&&!postfinal_gc_&&((!cleanup_&&phase_==Phase::kComplete)||(cleanup_&&phase_==Phase::kCleanupResumed&&cleanup_->CleanupCompleted()))&&State(service_.state_.RunnableState());
  if(ok){Calibration result;result.binding_=service_;result.run_body_=run_body_;std::memcpy(result.cause_,cause_,sizeof(cause_));result.long_=long_;result.valid_=true;*out=result;}
  else if(!failed_)Refuse("ordinary-source-Run-did-not-complete-matching-final-owner");
  finished_=true;if(attached_){if(observation!=this)std::abort();observation=nullptr;attached_=false;}return ok;

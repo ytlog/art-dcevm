@@ -70,17 +70,28 @@ bool Run::BeforeFinish(void*owner,const transaction_root::Holder*h,const void*ra
  if(def.driver!=driver_||(holder_&&holder_!=h)){failed_=true;return false;}
  // Holder/owner vector partitions are validated separately by the sole source
  // reader. This observer only proves exact Run ordering of the source pause.
- holder_=h;wait_complete_=true;finish_owner_=owner;return true;
+ holder_=h;finish_owner_=owner;return true;
 }
 void Run::AfterFinish(void*owner,bool success)noexcept{
  if(!finish_owner_||finish_owner_!=owner)std::abort();
- finish_owner_=nullptr;if(success)++next_;else failed_=true;
+ finish_owner_=nullptr;if(success){wait_complete_=true;++next_;}else failed_=true;
 }
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
 bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}
+bool Run::BeginCleanup(void* carrier)noexcept{
+ if(!Paused()||finish_owner_||!carrier||cleanup_started_||!Mapped(pauser_,sizeof(PauserPrefix))){failed_=true;return false;}
+ PauserPrefix p;std::memcpy(&p,pauser_,sizeof(p));
+ if(p.vtable!=service_.vtable_||p.self!=context_.self||p.running!=1){failed_=true;return false;}
+ cleanup_carrier_=carrier;cleanup_started_=true;return true;
+}
+bool Run::EndCleanup(void* carrier)noexcept{
+ if(!active_||failed_||current!=this||!cleanup_started_||cleanup_ended_||carrier!=cleanup_carrier_||removal_!=Removal::kReturned){failed_=true;return false;}
+ cleanup_carrier_=nullptr;cleanup_ended_=true;return true;
+}
+bool Run::CleanupCompleted()const noexcept{return active_&&!failed_&&current==this&&cleanup_started_&&cleanup_ended_&&removal_==Removal::kReturned;}
 bool Run::Removing(void*callbacks,void*pauser)noexcept{
  if(!active_||!added_||pauser!=pauser_)return false;
- if(callbacks!=callbacks_||removal_!=Removal::kNone||finish_owner_){failed_=true;return false;}
+ if(callbacks!=callbacks_||removal_!=Removal::kNone||finish_owner_||(cleanup_started_&&(!cleanup_carrier_||cleanup_ended_))){failed_=true;return false;}
  // Release has already started. No new pause permission while the real Remove
  // is executing; its entry alone is not proof of successful callback removal.
  removal_=Removal::kPending;return true;
@@ -97,7 +108,7 @@ bool Run::Complete(bool success)noexcept{
  if(removal_==Removal::kPending)return false;
  if(complete_||finish_owner_)std::abort();
  // No borrowed pauser/Holder storage survives source Run destruction.
- const bool proof=success&&!failed_&&wait_complete_&&next_>0&&removal_==Removal::kReturned;
+ const bool proof=success&&!failed_&&wait_complete_&&next_>0&&removal_==Removal::kReturned&&(!cleanup_started_||cleanup_ended_);
  if(proof)service_.observed_.store(true,std::memory_order_release);
  if(added_&&removal_==Removal::kNone)std::abort();
  complete_=true;holder_=nullptr;return proof;

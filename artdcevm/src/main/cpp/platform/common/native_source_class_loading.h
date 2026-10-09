@@ -28,6 +28,9 @@ class Run final {
  bool BeforeFinish(void* actual_owner,const transaction_root::Holder*,const void* actual_iterator)noexcept;
  void AfterFinish(void* actual_owner,bool original_result)noexcept;
  bool Paused()const noexcept;
+ bool BeginCleanup(void* actual_carrier)noexcept;
+ bool EndCleanup(void* actual_carrier)noexcept;
+ bool CleanupCompleted()const noexcept;
  bool OwnsDriver(const void*)const noexcept;
  // Call only after the actual source Run returned; the original Remove must have returned
  // before Run's private Holder/DEX destruction. Unwind never proves success;
@@ -39,6 +42,7 @@ class Run final {
  bool Removing(void* actual_callbacks,void* actual_pauser)noexcept;
  void Removed(void* actual_callbacks,void* actual_pauser,bool returned)noexcept;
  Service&service_;void*driver_;runnable_jni::Context context_;Run*previous_=nullptr;
+ void*cleanup_carrier_=nullptr;bool cleanup_started_=false,cleanup_ended_=false;
  void*callbacks_=nullptr;void*pauser_=nullptr;void*finish_owner_=nullptr;
  const transaction_root::Holder*holder_=nullptr;int32_t next_=0;
  enum class Removal {kNone,kPending,kReturned,kUnwound};

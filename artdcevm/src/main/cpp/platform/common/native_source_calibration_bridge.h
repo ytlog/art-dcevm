@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/native_source_stop.h"
+#include "platform/common/native_source_class_loading.h"
 #include <optional>
 #include <cstdlib>
 #include <cstdio>
@@ -16,6 +17,9 @@ class Bridge final {
     native_owned_removal::PassiveObserver observer{this,Begin,Collected,End};
     registered_=self&&extent&&native_owned_removal::SetPassiveObserver(&observer);
   }
+  Bridge(const native_source_stop::Service& service,void* self,size_t extent,
+         native_source_class_loading::Service& loading,const runnable_jni::Context& context) noexcept:
+      Bridge(service,self,extent){loading_service_=&loading;context_=context;}
   ~Bridge(){
     if(registered_&&!native_owned_removal::SetPassiveObserver(nullptr))std::abort();
   }
@@ -29,7 +33,11 @@ class Bridge final {
     if(b.started_||self!=b.self_||!body){b.Refuse("ordinary-source-bridge-owner-mismatch");return;}
     b.started_=true;b.body_=body;
     b.observation_.emplace(b.service_,driver,body,self,b.extent_);
-    if(!b.observation_->Ready())b.Refuse(b.observation_->Failure());
+    if(!b.observation_->Ready()){b.Refuse(b.observation_->Failure());return;}
+    if(b.loading_service_){
+      b.loading_.emplace(*b.loading_service_,driver,b.context_);
+      if(!b.observation_->BindCleanup(*b.loading_))b.Refuse(b.observation_->Failure());
+    }
   }
   static void Collected(void* driver,const void* holder,void* raw) noexcept {
     auto& b=*static_cast<Bridge*>(raw);
@@ -40,18 +48,22 @@ class Bridge final {
     auto& b=*static_cast<Bridge*>(raw);
     b.passive_available_=native_owned_removal::ReadPassiveTrace(&b.passive_);
     if(!b.observation_){b.Refuse("ordinary-source-bridge-missing-Run");return;}
+    bool loading_success=true;
+    if(b.loading_)loading_success=b.loading_->Complete(result==JVMTI_ERROR_NONE&&complete);
     native_source_stop::Calibration proof;
-    b.authorized_=b.observation_->Finish(driver,result==JVMTI_ERROR_NONE&&complete,&proof)&&
+    b.authorized_=b.observation_->Finish(driver,result==JVMTI_ERROR_NONE&&complete&&loading_success,&proof)&&
         b.service_.Authorize(proof,b.body_);
     b.stop_=b.observation_->Trace();
     if(b.authorized_)b.failure_[0]=0;
     else b.Refuse(b.observation_->Failure()[0]?b.observation_->Failure():"ordinary-source-bridge-incomplete-transition-binding");
     // Releases the TLS owner even when source failed; Holder is never retained.
-    b.observation_.reset();
+    b.observation_.reset();b.loading_.reset();
   }
   native_source_stop::Service service_;void* self_;size_t extent_;
   const void* body_=nullptr;
   std::optional<native_source_stop::Observation> observation_;
+  native_source_class_loading::Service* loading_service_=nullptr;runnable_jni::Context context_{};
+  std::optional<native_source_class_loading::Run> loading_;
   bool registered_=false,started_=false,authorized_=false;
   char failure_[768]="ordinary-source-bridge-not-observed",first_[128]{};
   bool passive_available_=false;
