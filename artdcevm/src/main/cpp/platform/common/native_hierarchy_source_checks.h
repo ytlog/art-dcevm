@@ -1,0 +1,26 @@
+#pragma once
+#include "api/hook_engine.h"
+#include "platform/common/native_hierarchy_graph.h"
+#include "platform/common/source_handle_roots.h"
+namespace artdcevm::native_hierarchy_source_checks {
+// The root's sole original Run owner opens this scope. It grants only the two
+// original hierarchy comparisons, using actual incoming owner DEX and the
+// independently staged public graph. It does not grant modifiers or Run access.
+class Scope final {
+ public:
+ using Refuse=void(*)(void* actual_class_owner,int,const char*) noexcept;
+ Scope(void* actual_driver,const runnable_jni::Context&,
+       source_handle_roots::Service&,native_hierarchy_graph::Authority&,Refuse);
+ ~Scope();Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+ bool Check(void* actual_class_owner,bool(*original)(void*));
+ private:
+ bool Proof(void*);
+ bool Mark(void*);
+ void* driver_;runnable_jni::Context context_;
+ source_handle_roots::Service& roots_;native_hierarchy_graph::Authority& authority_;
+ Refuse refuse_;Scope* previous_;
+};
+// Install only named fixed source declarations under actual ScopedSuspendAll.
+// A successful installation is a hook capability, never graph/allocator readiness.
+bool Install(HookEngine&,std::string*);
+}
