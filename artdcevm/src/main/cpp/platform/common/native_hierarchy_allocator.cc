@@ -109,41 +109,58 @@ void Service::CaptureLinked(const void* handle){
  }
 }
 void* Service::ObserveOriginal(const runnable_jni::Context& c,jobject strong,void* owner,const void* old,const void* parent,const void* cache,uint16_t index,std::string* error){
- if(!originals_||!owner||!roots_->ObserveAllocatorHandle(c,strong,old,error))return nullptr;
- if(!monitor_)return reinterpret_cast<void*>(functions_.allocate(owner,const_cast<void*>(old),const_cast<void*>(parent),const_cast<void*>(cache),index).reference);
- source_handle_roots::Pool pool(*roots_);void* forwarded=nullptr;
+ if(!originals_||!functions_.allocate||!owner)return nullptr;
+ observed_=false;observation_failure_="";
+ source_handle_roots::Pool pool(*roots_);void* forwarded=nullptr;void* result_root=nullptr;bool invoked=false;
+ const auto original=[&](){invoked=true;return forwarded=reinterpret_cast<void*>(functions_.allocate(owner,const_cast<void*>(old),const_cast<void*>(parent),const_cast<void*>(cache),index).reference);};
+ const auto refuse=[&](const char* detail){observation_failure_=detail;return original();};
+ const auto actual_result=[&](){
+  // This exact slot is an owned calibrated compressed StackReference, retained
+  // through this Runnable callback. Root visitors update it across private JNI.
+  if(result_root&&forwarded){uint32_t fresh=0;std::memcpy(&fresh,result_root,sizeof(fresh));return reinterpret_cast<void*>(uintptr_t(fresh));}
+  return forwarded;
+ };
  try{
+  if(!roots_->ObserveAllocatorHandle(c,strong,old,error))return refuse("Ordinary allocation observer lacks the actual public source Handle proof");
+  if(!monitor_)return refuse("Ordinary allocation observer requires the independent monitor proof");
   void* old_value=nullptr;void* parent_value=nullptr;void* cache_value=nullptr;
-  if(!roots_->BorrowHandle(c,old,&old_value)||!roots_->BorrowHandle(c,parent,&parent_value)||!roots_->BorrowHandle(c,cache,&cache_value))return nullptr;
+  if(!roots_->BorrowHandle(c,old,&old_value)||!roots_->BorrowHandle(c,parent,&parent_value)||!roots_->BorrowHandle(c,cache,&cache_value))
+   return refuse("Ordinary allocation observer could not borrow the original argument Handles");
   auto old_root=pool.Add(old_value,error),parent_root=pool.Add(parent_value,error),cache_root=pool.Add(cache_value,error),new_root=pool.Add(nullptr,error),allocated_root=pool.Add(nullptr,error);
-  if(!old_root||!parent_root||!cache_root||!new_root||!allocated_root){functions_.failure(owner,JVMTI_ERROR_OUT_OF_MEMORY,"Hierarchy observer roots allocation failed");return nullptr;}
+  result_root=pool.Add(nullptr,error);
+  if(!old_root||!parent_root||!cache_root||!new_root||!allocated_root||!result_root)
+   return refuse("Ordinary allocation observer could not prepare its private roots");
   field_copy::CopyClassView original_identity{};
-  if(!Class(*metadata_,old_value,&original_identity))return nullptr;
-  auto loader=pool.Add(original_identity.loader,error);if(!loader){functions_.failure(owner,JVMTI_ERROR_OUT_OF_MEMORY,"Hierarchy observer loader root allocation failed");return nullptr;}
-  void* result=nullptr;
-  {ScopedCapture guard(this,&pool,new_root,allocated_root,c);forwarded=result=reinterpret_cast<void*>(functions_.allocate(owner,old_root,parent_root,cache_root,index).reference);}
+  if(!Class(*metadata_,old_value,&original_identity))return refuse("Ordinary allocation observer could not read the original Class identity");
+  auto loader=pool.Add(original_identity.loader,error);
+  if(!loader)return refuse("Ordinary allocation observer could not prepare its private loader root");
+  // Observe the same original arguments exactly once. Private root copies are
+  // evidence owners; they must not replace the source's own Handle identities.
+  {ScopedCapture guard(this,&pool,new_root,allocated_root,c);invoked=true;forwarded=original();}
+  if(!forwarded){observation_failure_="Original ordinary allocation returned failure";return nullptr;}
+  if(!pool.Write(result_root,forwarded)){observation_failure_="Ordinary allocation result could not enter its private root";return forwarded;}
+  // Original failure/exception semantics belong to ART. Only a later private
+  // lookup exception may be cleared; every result is rooted before JNI probes.
+  if(c.env->ExceptionCheck()){observation_failure_="Original ordinary allocation retained a pending exception";return actual_result();}
   void* captured=nullptr;pool.Read(new_root,&captured);
   void* allocated=nullptr;pool.Read(allocated_root,&allocated);
-  if(!result){
-   if(captured&&!Retire(c,pool,old_root,new_root,cache_root,loader))std::abort();
-   if(allocated&&allocated!=captured&&!Retire(c,pool,old_root,allocated_root,cache_root,loader))std::abort();
-   return nullptr;
-  }
   field_copy::CopyClassView before{},after{};void* current_old=nullptr;void* current_cache=nullptr;
   pool.Read(old_root,&current_old);pool.Read(cache_root,&current_cache);
-  bool ok=captured==result&&Class(*metadata_,current_old,&before)&&Class(*metadata_,captured,&after)&&
+  bool ok=captured==actual_result()&&Class(*metadata_,current_old,&before)&&Class(*metadata_,captured,&after)&&
    before.loader==after.loader&&!std::strcmp(before.descriptor,after.descriptor)&&
    metadata_->Reference(captured,offsetof(class_metadata::Class11,dex_cache))==current_cache;
-  if(ok){auto found=functions_.find(class_linker_,c.self,before.descriptor,loader);pool.Read(old_root,&current_old);ok=found.reference==uintptr_t(current_old);}
+  if(ok){auto found=functions_.find(class_linker_,c.self,before.descriptor,loader);pool.Read(old_root,&current_old);ok=found.reference==uintptr_t(current_old);
+   if(c.env->ExceptionCheck()){c.env->ExceptionClear();ok=false;observation_failure_="Private ordinary allocation lookup raised an exception";}}
+  pool.Read(new_root,&captured);pool.Read(allocated_root,&allocated);
   if(allocated&&allocated!=captured){class_metadata::State retired{};const auto& layout=Layout(*metadata_);
    ok=ok&&class_metadata::ReadState(layout,allocated,layout.size,&retired)&&retired.status==1;
   }
   if(ok&&allocated&&monitor_)observed_=true;
-  // This was the original source operation, not an extra calibration clone.
-  // Its result and original error semantics are forwarded unchanged.
-  return result;
- }catch(const std::bad_alloc&){if(forwarded)return forwarded;functions_.failure(owner,JVMTI_ERROR_OUT_OF_MEMORY,"Hierarchy observer allocation failed");return nullptr;}
+  else if(!observation_failure_[0])observation_failure_="Ordinary allocation capture/linked-Class/cache/lookup proof rejected";
+  return actual_result();
+ }catch(const std::bad_alloc&){observation_failure_="Ordinary allocation observer exhausted private native storage";return invoked?actual_result():original();}
 }
+
 void Service::LoadClass(void* linker,void* self,const void* dex,const void* def,const void* handle)noexcept {
  if(!originals_)std::abort();
  // Unrelated Class loads preserve the original source behaviour. A real

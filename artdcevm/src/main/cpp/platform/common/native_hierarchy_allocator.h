@@ -27,6 +27,7 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
  // on an original, unchanged-hierarchy structural operation first.
  bool SetOriginals(const Functions&,std::string*);
  bool Calibrated()const noexcept{return originals_&&observed_&&monitor_;}
+ const char* ObservationDiagnostic()const noexcept{return observation_failure_;}
  // Public independent monitor oracle on an exclusively owned ordinary fixture.
  bool CalibrateRetirement(const runnable_jni::Context&,jobject strong_fixture,std::string*);
  void* ObserveOriginal(const runnable_jni::Context&,jobject strong_original,
@@ -59,6 +60,7 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
  Enter enter_=nullptr;Exit exit_=nullptr;
  bool Retire(const runnable_jni::Context&,source_handle_roots::Pool&,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept;
  Functions functions_{};bool originals_=false,observed_=false,monitor_=false;
+ const char* observation_failure_="";
  Batch* Current()const noexcept;
  bool CurrentSelf(void*)const noexcept;
 };

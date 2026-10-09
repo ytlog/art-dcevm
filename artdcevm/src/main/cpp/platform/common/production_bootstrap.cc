@@ -153,7 +153,8 @@ struct NativeEngine final:Engine {
  static void CalibrationEnd(void* driver,bool success,void* raw) noexcept {
   auto& e=*static_cast<NativeEngine*>(raw);if(!e.source_calibration_started)return;
   try{if(e.source_capabilities.End(driver,success,&e.source_factory_diagnostic))
-    e.source_factory_diagnostic=e.source_capabilities.Ready()?"":e.source_capabilities.Diagnostic();}catch(...){}
+    e.source_factory_diagnostic=e.source_capabilities.Ready()?"":
+      e.source_capabilities.Allocator().ObservationDiagnostic()[0]?e.source_capabilities.Allocator().ObservationDiagnostic():e.source_capabilities.Diagnostic();}catch(...){}
   e.source_calibration_started=false;
  }
  bool PrepareFrameGeometry(const thread_suspend_service::Service& state,void* self,std::string* error){
