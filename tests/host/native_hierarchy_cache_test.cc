@@ -54,7 +54,9 @@ struct Mapper final:SourceMapper {
  bool Describe(const native_hierarchy_graph::Prepared&p,Source*out,std::string*)const override{if(p.source_owner!=this)return false;*out=source;return true;}
  bool FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,Root*out,std::string*)const override{if(p.source_owner!=this||index!=1)return false;*out=const_cast<RootSlot*>(&new_class);return true;}
  bool OwnsUnpublished(const native_hierarchy_graph::Prepared&p,const Source&s)const noexcept override{return private_writer&&p.source_owner==this&&s.private_token==&incoming&&s.dex_identity==this&&s.cache_root==&incoming.root;}
- bool Barrier(Root root)const noexcept override{auto*self=const_cast<Mapper*>(this);++self->barriers;assert(root==&incoming.root);assert(incoming.tables.types[1].object==reinterpret_cast<uintptr_t>(new_class.value));return barrier;}
+ bool Barrier(Root root)const noexcept override{auto*self=const_cast<Mapper*>(this);++self->barriers;assert(root==&incoming.root);auto* c=reinterpret_cast<const type_cache::Dual*>(incoming.bytes);
+ if(model==dex_cache_metadata::Model::DualArrays&&!c->types)assert(incoming.tables.type_full[1]==reinterpret_cast<uintptr_t>(new_class.value));
+ else assert(incoming.tables.types[1].object==reinterpret_cast<uintptr_t>(new_class.value));return barrier;}
  bool RefreshPrepared(native_hierarchy_graph::Prepared*p)const noexcept override{if(p->source_owner!=this)return false;p->old_class=old_class.value;p->new_class=new_class.value;p->cache=Get(source.cache_root);return true;}
  bool VerifyFrozen(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,const Source&s)const noexcept override{return frozen&&p.source_owner==this&&p.new_class==new_class.value&&p.cache==Get(s.cache_root)&&s.dex_identity==this&&s.private_token==&incoming;}
  bool VerifyCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{return commit;}
@@ -82,4 +84,21 @@ void Test(dex_cache_metadata::Model model,PairFormat fmt){
  Mapper missing(model,fmt);Owner absent;missing.ranges.pop_back();assert(absent.Calibrate(missing,&missing.calibration.root,missing.source.cache_extent,{4,4,4},missing.witness(),&error));assert(!absent.Prepare(missing.expected,&error));
  Mapper failed(model,fmt);Owner aborted;assert(aborted.Calibrate(failed,&failed.calibration.root,failed.source.cache_extent,{4,4,4},failed.witness(),&error));failed.barrier=false;assert(!aborted.Prepare(failed.expected,&error));assert(!aborted.Verify(graph,plan));
 }
-int main(){for(auto m:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays})for(auto f:{PairFormat::Ordinary,PairFormat::Sequence})Test(m,f);std::puts("PASS cache model/format calibration, owned source rewrite, moving roots, allocation-free final refusal");}
+void FullOnlyIncoming(){
+ Mapper m(dex_cache_metadata::Model::DualArrays,PairFormat::Sequence);Owner owner;std::string error;
+ assert(owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},m.witness(),&error));
+ auto* cache=reinterpret_cast<type_cache::Dual*>(m.incoming.bytes);
+ cache->types=cache->fields=cache->methods=0;
+ assert(owner.Prepare(m.expected,&error)&&m.incoming.tables.type_full[1]==0x2000&&m.incoming.tables.field_full[2]==0&&m.incoming.tables.method_full[3]==0);
+ // Unallocated pair backing memory is untouched, and every active full entry
+ // participates in the actual final proof; small user DEX needs no pairs.
+ assert(m.incoming.tables.types[1].object==0x1000);
+ assert(owner.VerifyPrepared({},m.expected,&error)&&owner.Verify({},{}));
+ m.incoming.tables.method_full[3]=0x999;assert(!owner.Verify({},{}));
+ Mapper no_pairs(dex_cache_metadata::Model::DualArrays,PairFormat::Sequence);Owner refused;
+ auto* calibration=reinterpret_cast<type_cache::Dual*>(no_pairs.calibration.bytes);
+ calibration->types=calibration->fields=calibration->methods=0;
+ assert(!refused.Calibrate(no_pairs,&no_pairs.calibration.root,no_pairs.source.cache_extent,{4,4,4},no_pairs.witness(),&error));
+ assert(error.find("matches=0")!=std::string::npos&&error.find("typePairs=0 typeFull=1")!=std::string::npos);
+}
+int main(){FullOnlyIncoming();for(auto m:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays})for(auto f:{PairFormat::Ordinary,PairFormat::Sequence})Test(m,f);std::puts("PASS cache model/format calibration, owned source rewrite, moving roots, allocation-free final refusal");}

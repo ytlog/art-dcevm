@@ -24,8 +24,9 @@ int main(int argc,char** argv){
  std::ifstream cache_file(argv[2],std::ios::binary);std::vector<unsigned char> cache_bytes((std::istreambuf_iterator<char>(cache_file)),{});
  assert(!cache_bytes.empty());production_bootstrap::InstalledClassIds cache_ids;evolution::ClassSchema cache_schema;
  assert(production_bootstrap::SelectInstalledClass({cache_bytes},"Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;",&cache_schema,&counts,&error,&cache_ids));
- assert(cache_schema.fields.size()==1&&cache_schema.fields[0].name=="number"&&cache_schema.fields[0].descriptor=="I"&&cache_schema.fields[0].access==0x41u);
- assert(cache_schema.fields[0].dex_index<cache_ids.field_count&&cache_schema.methods.size()==3&&cache_ids.type_index<cache_ids.type_count);
+ assert(cache_ids.type_count>1024&&cache_ids.field_count>1024&&cache_ids.method_count>1024);
+ bool number=false;for(const auto& field:cache_schema.fields)number|=field.name=="number"&&field.descriptor=="I"&&field.access==0x41u;assert(number);
+ assert(cache_schema.fields.size()==1026&&cache_schema.methods.size()==1028&&cache_ids.type_index<cache_ids.type_count);
  bool found_read=false,found_warm=false;
  for(const auto& method:cache_schema.methods){
   assert(method.dex_index<cache_ids.method_count);

@@ -1,6 +1,8 @@
 #include "platform/common/native_hierarchy_cache.h"
 #include "platform/common/method_cache_lookup.h"
 #include <limits>
+#include <cstdio>
+#include <algorithm>
 namespace artdcevm::native_hierarchy_cache {
 namespace {
 bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}
@@ -73,12 +75,25 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  const auto expected=reinterpret_cast<uintptr_t>(m.Get(w.expected_class));
  if(!cache||!expected||expected>UINT32_MAX||w.type_index>=counts.types||w.field_index>=counts.fields||w.method_index>=counts.methods)return Fail(error,"independent public cache witnesses missing");
  Source s{cache,nullptr,nullptr,extent,counts};unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
+ char diagnosis[768]{};size_t used=0;
  for(auto model:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays}){
  type_cache::View t;native_cache::View f,methods;
- if(!Read(m,model,s,&t,&f,&methods)||!TypeWitness(t,w.type_index,static_cast<uint32_t>(expected)))continue;
- for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})if(NativeWitness(f,fmt,w.field_index,w.native_field)&&NativeWitness(methods,fmt,w.method_index,w.native_method)){++matches;selected=model;format=fmt;}
+ const bool read=Read(m,model,s,&t,&f,&methods);
+ const bool type=read&&TypeWitness(t,w.type_index,static_cast<uint32_t>(expected));
+ unsigned formats=0;
+ if(type)for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})if(NativeWitness(f,fmt,w.field_index,w.native_field)&&NativeWitness(methods,fmt,w.method_index,w.native_method)){++matches;++formats;selected=model;format=fmt;}
+ int written=std::snprintf(diagnosis+used,sizeof(diagnosis)-used,
+   " %s{read=%d typePairs=%d typeFull=%d fieldPairs=%d fieldFull=%d methodPairs=%d methodFull=%d typeWitness=%d formats=%u}",
+   model==dex_cache_metadata::Model::Pairs?"pairs":"dual",read,
+   read&&t.pairs!=nullptr,read&&t.full!=nullptr,read&&f.pairs!=nullptr,read&&f.full!=nullptr,
+   read&&methods.pairs!=nullptr,read&&methods.full!=nullptr,type,formats);
+ if(written>0)used+=std::min(static_cast<size_t>(written),sizeof(diagnosis)-used-1);
  }
- if(matches!=1)return Fail(error,"cache declarations not uniquely calibrated by actual resolved witnesses");
+ if(matches!=1){
+  if(error)*error="cache declarations not uniquely calibrated by actual resolved witnesses: matches="+std::to_string(matches)+
+   " IDs="+std::to_string(counts.types)+"/"+std::to_string(counts.fields)+"/"+std::to_string(counts.methods)+diagnosis;
+  return false;
+ }
  mapper_=&m;model_=selected;format_=format;calibration_=s;witness_=w;return true;
 }
 bool Owner::Witnesses()const noexcept{
