@@ -57,6 +57,7 @@ runnable_jni::Result With(JNIEnv* env,jobject,runnable_jni::Operation op,void* d
 }
 namespace artdcevm::retirement {
 bool MethodEntryGuardsOwn(const RetiredMethodRegistry& owner){return &owner==&method_registry;}
+bool MethodEntryGuardsOwn(const RetiredMethodRegistry& owner,const void* manager){return MethodEntryGuardsOwn(owner)&&manager==reinterpret_cast<void*>(3);}
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& owner){return &owner==&field_registry;}
 bool RejectRetiredMethod(void* target,void*,void* result){if(!method_registry.Contains(target))return false;exception_kind=1;if(result)std::memset(result,0,8);return true;}
 bool RejectFinalFieldSetter(void*,void*,void* result){
@@ -152,9 +153,23 @@ int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=
  override_kind=10;assert(call(true)&&result==0x1234&&invoked==before_final+1);
  final_targets=false;override_kind=11;assert(call(false)&&result==0x1234&&invoked==before_final+2);
  override_kind=UINT32_MAX;
+ // The actual same exported owner also proves constructor-specific positive
+ // and negative dispatch, rather than borrowing general method readiness.
+ root=uint32_t(uintptr_t(Object(2)));override_kind=3;
+ assert(BeginConstructorMethodHandleTargetProof(env,methods[1].strong_global,methods[1].method,&error));
+ assert(call(false)&&EndMethodHandleTargetProof(true,&error));
+ override_kind=6;assert(!BeginConstructorMethodHandleTargetProof(env,methods[1].strong_global,methods[1].method,&error));override_kind=3;
+ assert(!BeginConstructorMethodHandleTargetProof(env,methods[1].strong_global,methods[0].method,&error));
+ method_registry.Retire(reinterpret_cast<void*>(methods[1].method));
+ for(bool exact:{false,true}){const auto original_before=invoked;
+  assert(BeginConstructorMethodHandleTargetProof(env,methods[1].strong_global,methods[1].method,&error));
+  assert(!call(exact)&&exception_kind==1&&result==0&&invoked==original_before);
+  assert(EndRetiredConstructorMethodHandleTargetProof(true,&error));
+ }
+ assert(!EndRetiredConstructorMethodHandleTargetProof(true,&error));override_kind=UINT32_MAX;
  root=uint32_t(uintptr_t(Object(1)));method_registry.Retire(reinterpret_cast<void*>(methods[0].method));const auto before=invoked;result=99;assert(!call(true)&&exception_kind==1&&result==0&&invoked==before);
  root=uint32_t(uintptr_t(Object(4)));field_registry.Retire(Identity(Object(4)));result=99;assert(!call(false)&&exception_kind==2&&result==0&&invoked==before);
  assert(private_lookups==0&&installed_count==2&&!MethodHandleGuardsReady(wrong_method_registry)&&!MethodHandleFieldGuardsReady(wrong_field_registry));
  assert(direct_field_calls==0);
- std::cout<<"Unique exported MethodHandle owner: 3 method/4 field independent readonly oracles across two batches; 6-argument exact/invoke forwarding, true original proofs, false/exception preservation and shared retirement rejection passed\n";
+ std::cout<<"Unique exported MethodHandle owner: 3 method/4 field independent readonly oracles across two batches; 6-argument exact/invoke forwarding, true original proofs, false/exception preservation and shared retirement rejection and exact constructor positive/retired-negative export proofs passed\n";
 }

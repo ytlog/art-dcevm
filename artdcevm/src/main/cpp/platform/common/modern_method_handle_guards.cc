@@ -36,7 +36,7 @@ struct State {Binding binding;void* manager=nullptr;RetiredMethodRegistry* metho
  std::vector<FieldMethodHandleOracle> field_oracles;
  std::vector<void*> field_targets;std::atomic<uint64_t> field_observed{0};};
 State state;
-struct Proof {void* self=nullptr;void* target=nullptr;size_t hits=0;bool field=false;uint64_t batch=0;};
+struct Proof {void* self=nullptr;void* target=nullptr;size_t hits=0;bool field=false;uint64_t batch=0;size_t rejections=0,original_entries=0;bool constructor=false;};
 thread_local Proof proof;
 struct Member {void* value=nullptr;bool field=false,valid=false;const char* error=nullptr;uint32_t source_kind=0;size_t callbacks=0;};
 class Target final:public art::ReflectiveValueVisitor {
@@ -75,10 +75,11 @@ template<bool exact> bool Dispatch(void* self,void* frame,Handle handle,Handle t
   }
  }else if(state.methods_calibrated){
   if(!MethodEntryGuardsOwn(*state.methods))std::abort();
-  if(RejectRetiredMethod(target.value,self,result))return false;
+  if(RejectRetiredMethod(target.value,self,result)){if(proof.self==self&&self==state.binding.current()&&proof.target==target.value&&!proof.field)++proof.rejections;return false;}
  }
  if(receiver_guard::CheckHandle(self,object,target.value,target.field,frame,static_cast<const receiver_guard::InstructionOperands*>(operands),result))return false;
  // Forward every exported ABI argument unchanged, including both root slots.
+ if(proof.self==self&&proof.target==target.value&&proof.field==target.field)++proof.original_entries;
  const bool success=state.originals[exact?1:0](self,frame,handle,type,operands,result);
  if(success&&self==state.binding.current()){
   if(proof.self==self&&proof.target==target.value&&proof.field==target.field)++proof.hits;
@@ -165,15 +166,20 @@ bool Calibrate(const runnable_jni::Context& context,void* raw){
  }
  request.valid=true;return true;
 }
-struct Begin {jmethodID method=nullptr;jfieldID field=nullptr;bool valid=false;jobject root=nullptr;};
+struct Begin {jmethodID method=nullptr;jfieldID field=nullptr;bool valid=false;jobject root=nullptr;bool constructor=false;};
 bool Capture(const runnable_jni::Context& context,void* raw){auto& request=*static_cast<Begin*>(raw);
  if(context.self!=state.binding.current()||proof.self)return false;
  void* target=nullptr;
  if(request.field){void* object=nullptr;if(!request.root||!runnable_executor::DecodeStrongGlobal(context,request.root,&object))return false;
   const auto observed=TargetOf(state.binding,object);if(!observed.valid||!observed.field)return false;
   for(const auto& oracle:state.field_oracles)if(oracle.field==request.field&&contextual_field_id::NativeField(oracle.identity)==observed.value){target=observed.value;break;}
- }else target=state.binding.method(state.manager,request.method);if(!target)return false;
- proof={context.self,target,0,request.field!=nullptr,state.field_batch};request.valid=true;return true;
+ }else {target=state.binding.method(state.manager,request.method);
+  if(request.constructor){void* object=nullptr;
+   if(!state.field_kinds_calibrated||!state.binding.kind||!request.root||!runnable_executor::DecodeStrongGlobal(context,request.root,&object)||state.binding.kind(object)!=3)return false;
+   const auto observed=TargetOf(state.binding,object);if(!observed.valid||observed.field||observed.value!=target)return false;
+  }
+ }if(!target)return false;
+ proof={context.self,target,0,request.field!=nullptr,state.field_batch};proof.constructor=request.constructor;request.valid=true;return true;
 }
 }
 bool RegisterMethodHandleFieldOwner(RetiredFieldRegistry& registry,std::string* error){
@@ -210,6 +216,15 @@ bool BeginMethodHandleTargetProof(JNIEnv* env,jobject root,jmethodID method,std:
  if(!state.methods_calibrated||proof.self||!env||!root||!method){if(error)*error="Unprepared/active MethodHandle target proof";return false;}
  Begin request{method,nullptr,false};const bool valid=runnable_executor::With(env,root,Capture,&request)==runnable_jni::Result::kSuccess&&request.valid;
  if(!valid&&error)*error="MethodHandle proof lacks actual current Thread/JNI identity";return valid;
+}
+bool BeginConstructorMethodHandleTargetProof(JNIEnv* env,jobject root,jmethodID method,std::string* error){
+ if(!state.methods_calibrated||!state.methods||!MethodEntryGuardsOwn(*state.methods,state.manager)||proof.self||!env||!root||!method){if(error)*error="Unprepared/active constructor MethodHandle proof";return false;}
+ Begin request{method,nullptr,false,root,true};const bool valid=runnable_executor::With(env,root,Capture,&request)==runnable_jni::Result::kSuccess&&request.valid;
+ if(!valid&&error)*error="Constructor handle differs from actual source target/kind/JNI identity";return valid;
+}
+bool EndRetiredConstructorMethodHandleTargetProof(bool public_oracle,std::string* error){
+ const bool valid=public_oracle&&proof.constructor&&proof.self==state.binding.current()&&proof.self&&!proof.field&&proof.rejections>0&&!proof.hits&&!proof.original_entries;proof={};
+ if(!valid&&error)*error="Retired constructor did not reject before actual original MethodHandle dispatch";return valid;
 }
 bool EndMethodHandleTargetProof(bool invocation_succeeded,std::string* error){const bool valid=invocation_succeeded&&proof.self&&proof.hits>0&&!proof.field;proof={};
  if(valid)state.method_observed=true;else if(error)*error="Actual owned MethodHandle call missed calibrated outer dispatch";return valid;}

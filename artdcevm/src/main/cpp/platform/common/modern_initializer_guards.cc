@@ -1,5 +1,6 @@
 #include "platform/common/modern_initializer_guards.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/modern_method_handle_guards.h"
 #include "platform/abi/common/jni_access.h"
 #include "platform/abi/common/suspend_all.h"
 #include <atomic>
@@ -99,6 +100,7 @@ jobject PublicNewV(JNIEnv*env,jclass klass,jmethodID id,...){va_list args;va_sta
 bool CalibrateInitializerEntryGuards(JNIEnv*env,RetiredMethodRegistry&registry,std::string*error){using namespace initializer_entries;
  if(!state.installed||state.registry!=&registry||!MethodEntryGuardsOwn(registry)||!env||env->ExceptionCheck())return Fail(error,"Initializer public producer lacks exact installed owner");
  if(calibrated.load(std::memory_order_acquire))return true;
+ if(!MethodHandleGuardsReady(registry))return Fail(error,"Initializer calibration needs the independently prepared shared MethodHandle owner");
  if(state.probe_retired)return Fail(error,"Private initializer oracle was retired before its complete negative calibration");
  jclass klass=env->FindClass("com/github/ytlog/artdcevm/internal/InitializerGuardOracle");if(!klass||env->ExceptionCheck())return false;
  struct Locals{JNIEnv*env;jobject refs[5]{};~Locals(){for(auto ref:refs)if(ref)env->DeleteLocalRef(ref);}} locals{env,{klass}};
@@ -114,6 +116,19 @@ bool CalibrateInitializerEntryGuards(JNIEnv*env,RetiredMethodRegistry&registry,s
   bool pass=result&&!env->ExceptionCheck();jclass result_class=pass?env->GetObjectClass(result):nullptr;pass=pass&&result_class&&env->IsSameObject(result_class,klass)&&env->GetIntField(result,field)==static_cast<jint>(0x81234567u)&&!env->ExceptionCheck();if(result_class)env->DeleteLocalRef(result_class);if(result)env->DeleteLocalRef(result);if(!pass)return Fail(error,"Actual public constructor result/body differs from independent fixture");}
  if(!observed.identities||!(observed.observed&2u)||!(observed.observed&12u)||!(observed.observed&48u))return Fail(error,"Actual reflection and both JNI allocation entry observations incomplete");
  if(env->GetStaticIntField(klass,counter)!=before_calls+3||env->ExceptionCheck())return Fail(error,"Original private constructor bodies were not independently observed");
+ auto factory=env->GetStaticMethodID(klass,"constructorHandle","()Ljava/lang/Object;");auto invoke_handle=env->GetStaticMethodID(klass,"invokeConstructorHandle","(Ljava/lang/Object;Z)Ljava/lang/Object;");
+ if(!factory||!invoke_handle||env->ExceptionCheck())return false;
+ jobject handle=env->CallStaticObjectMethod(klass,factory);if(!handle||env->ExceptionCheck())return false;
+ struct HandleRoots{JNIEnv*env;jobject local,global=nullptr;~HandleRoots(){if(global)env->DeleteGlobalRef(global);env->DeleteLocalRef(local);}} handle_roots{env,handle};
+ handle_roots.global=env->NewGlobalRef(handle);if(!handle_roots.global||env->ExceptionCheck())return false;
+ for(bool exact:{false,true}){
+  if(!BeginConstructorMethodHandleTargetProof(env,handle_roots.global,id,error))return false;
+  jobject result=env->CallStaticObjectMethod(klass,invoke_handle,handle_roots.global,jboolean(exact));
+  bool pass=result&&!env->ExceptionCheck();jclass result_class=pass?env->GetObjectClass(result):nullptr;pass=pass&&result_class&&env->IsSameObject(result_class,klass)&&env->GetIntField(result,field)==static_cast<jint>(0x81234567u)&&!env->ExceptionCheck();
+  if(result_class)env->DeleteLocalRef(result_class);if(result)env->DeleteLocalRef(result);
+  if(!EndMethodHandleTargetProof(pass,error)||!pass)return false;
+ }
+ if(env->GetStaticIntField(klass,counter)!=before_calls+5||env->ExceptionCheck())return Fail(error,"Actual invoke/invokeExact constructor bodies were not independently observed");
  // Publish a real retirement in the same persistent registry, never a trial
  // Boolean. This private one-shot oracle is never used by application code.
  state.probe_root=env->NewGlobalRef(mirror);if(!state.probe_root||env->ExceptionCheck())return false;
@@ -124,7 +139,14 @@ bool CalibrateInitializerEntryGuards(JNIEnv*env,RetiredMethodRegistry&registry,s
  for(unsigned path=0;path<3;++path){observed.rejected=0;jobject result=path==0?env->NewObjectA(klass,id,nullptr):path==1?PublicNewV(env,klass,id):env->CallObjectMethod(mirror,new_instance,empty);
   const uint32_t required=path==2?2u:1u|(positive_mask&(path==0?12u:48u));
   jthrowable exception=env->ExceptionOccurred();env->ExceptionClear();bool pass=!result&&exception&&env->IsInstanceOf(exception,missing);if(result)env->DeleteLocalRef(result);if(exception)env->DeleteLocalRef(exception);if(!pass||!(observed.rejected&required)||env->ExceptionCheck())return Fail(error,"Actual retired private constructor did not reject with NoSuchMethodError at its original allocation boundary");}
- if(observed.delegated||!observed.identities||env->GetStaticIntField(klass,counter)!=before_calls+3||env->ExceptionCheck())return Fail(error,"Retired constructor reached original allocation/body or lost an actual entry observation");
+ if(observed.delegated||!observed.identities||env->GetStaticIntField(klass,counter)!=before_calls+5||env->ExceptionCheck())return Fail(error,"Retired constructor reached original allocation/body or lost an actual entry observation");
+ for(bool exact:{false,true}){
+  if(!BeginConstructorMethodHandleTargetProof(env,handle_roots.global,id,error))return false;
+  jobject result=env->CallStaticObjectMethod(klass,invoke_handle,handle_roots.global,jboolean(exact));
+  jthrowable exception=env->ExceptionOccurred();env->ExceptionClear();const bool pass=!result&&exception&&env->IsInstanceOf(exception,missing)&&env->GetStaticIntField(klass,counter)==before_calls+5&&!env->ExceptionCheck();
+  if(result)env->DeleteLocalRef(result);if(exception)env->DeleteLocalRef(exception);
+  if(!EndRetiredConstructorMethodHandleTargetProof(pass,error)||!pass)return false;
+ }
  calibrated.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
 bool InitializerEntryGuardsOwn(const RetiredMethodRegistry&registry){using namespace initializer_entries;return state.installed&&state.registry==&registry&&MethodEntryGuardsOwn(registry)&&calibrated.load(std::memory_order_acquire);}

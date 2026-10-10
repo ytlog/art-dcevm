@@ -28,5 +28,11 @@ bool PrepareMethodHandleGuards(HookEngine&,JNIEnv*,void* manager,
     RetiredMethodRegistry&,const std::vector<MethodHandleOracle>&,std::string*);
 bool BeginMethodHandleTargetProof(JNIEnv*,jobject strong_global,jmethodID,std::string*);
 bool EndMethodHandleTargetProof(bool invocation_succeeded,std::string*);
+// A real public findConstructor oracle plus the independently calibrated kind
+// reader must identify the exact rooted constructor target before invocation.
+bool BeginConstructorMethodHandleTargetProof(JNIEnv*,jobject strong_global,jmethodID,std::string*);
+// Completes only an observed actual retirement rejection before original
+// dispatch; the caller separately verifies the public NSME and unchanged body.
+bool EndRetiredConstructorMethodHandleTargetProof(bool public_nsme_and_body_unchanged,std::string*);
 bool MethodHandleGuardsReady(const RetiredMethodRegistry&);
 }
