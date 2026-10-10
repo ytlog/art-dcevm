@@ -69,7 +69,7 @@ def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False,
     put(104,len(data)-start);put(108,start);data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     path=out/('shape-%d-%d-%d-%d-%d.dex'%(method_deleted,field_deleted,evolved,final_guard,hierarchy));path.write_bytes(data);return str(path)
 sources = ['native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
-           'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
+           'modern_field_metadata', 'native_interface_graph', 'native_receiver_class_source', 'native_receiver_relations', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'native_schema_policy','native_schema_binding','native_method_evolution_policy','source_handle_roots',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']

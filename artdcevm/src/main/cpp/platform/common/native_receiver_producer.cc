@@ -1,5 +1,6 @@
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_receiver_code_item.h"
+#include "platform/common/native_receiver_resolution_source.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
@@ -17,19 +18,25 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  stack_visitor_service::Service stack;auto finder=[&](const char*n){return hooks.FindSymbol("libart.so",n);};
  // Fixed runtime/class_linker.h: ResolveMode::kCheckICCEAndIAE=1, exact
  // Thread/referrer overload. Its null return has the original Java exception.
- auto resolve=reinterpret_cast<ResolveMethod>(finder("_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE"));
+ auto resolve=reinterpret_cast<ResolveMethod>(finder(kCheckedResolveMethod));
  auto root_reference=reinterpret_cast<void*(*)(void*)>(finder("artReadBarrierForRootSlow"));
  if(!root_reference){if(error)*error="Receiver source named root-slot barrier unavailable";return false;}
  if(!stack_visitor_service::Service::Bind(declaration,finder,&stack)){if(error)*error="Receiver source calibrated StackVisitor named declaration unavailable";return false;}
- if(declaration==stack_visitor_service::Declaration::kAndroid17){
-  if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Android17 source requires its calibrated Standard Method12 declaration";return false;}
-  using namespace abi::arm64::android17;
-  auto klass=reinterpret_cast<ResolveMethodClass>(finder(kResolveMethodClass));
-  auto member=reinterpret_cast<FindResolvedMethod>(finder(kFindResolvedMethod));
-  auto checked=reinterpret_cast<CheckedNterpMethod>(finder(kCheckedNterpMethod));
-  if(!vm||!klass||!member||!checked){if(error)*error="Receiver source Android17 checked Nterp/type/member named declarations or actual VM unavailable";return false;}
+ // StackVisitor geometry is shared by multiple releases. Choose the resolver
+ // from its own exact declarations, never from the scanner family's label.
+ using namespace abi::arm64::android17;
+ auto klass=reinterpret_cast<ResolveMethodClass>(finder(kResolveMethodClass));
+ auto member=reinterpret_cast<FindResolvedMethod>(finder(kFindResolvedMethod));
+ auto checked=reinterpret_cast<CheckedNterpMethod>(finder(kCheckedNterpMethod));
+ ResolutionSource source;const char* diagnostic=nullptr;
+ if(!SelectResolutionSource(resolve!=nullptr,klass!=nullptr,member!=nullptr,
+                            checked!=nullptr,vm!=nullptr,&source,&diagnostic)){
+  if(error)*error=diagnostic;return false;
+ }
+ if(source==ResolutionSource::Nterp){
+  if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Nterp source requires its calibrated Standard Method12 declaration";return false;}
   vm_=vm;resolve_class17_=klass;find_method17_=member;checked_method17_=checked;
- }else if(!resolve){if(error)*error="Receiver source original checked ResolveMethod named declaration unavailable";return false;}
+ }
  obsolete_cache_=reinterpret_cast<void*(*)(void*)>(finder("_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv"));
  stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;root_reference_=root_reference;bound_=true;return true;
 }

@@ -50,3 +50,27 @@ struct PublicSample final {
  jint caller_flags=0,target_flags=0,bytes=0;unsigned char*public_bytes=nullptr;
 };
 }
+
+namespace artdcevm::receiver_guard {
+struct PublicClassSample final {
+ explicit PublicClassSample(JNIEnv*e):env(e){}
+ PublicClassSample(const PublicClassSample&)=delete;
+ ~PublicClassSample(){for(jobject v:{jobject(type),parent,loader,jobject(interfaces),jobject(object_type)})if(v)env->DeleteLocalRef(v);}
+ bool Read(jclass holder){
+  if(!env||!holder||env->ExceptionCheck())return false;
+  type=env->GetObjectClass(holder);if(env->ExceptionCheck()||!type)return false;
+  auto parent_id=env->GetMethodID(type,"getSuperclass","()Ljava/lang/Class;");if(env->ExceptionCheck()||!parent_id)return false;
+  auto interfaces_id=env->GetMethodID(type,"getInterfaces","()[Ljava/lang/Class;");if(env->ExceptionCheck()||!interfaces_id)return false;
+  auto loader_id=env->GetMethodID(type,"getClassLoader","()Ljava/lang/ClassLoader;");if(env->ExceptionCheck()||!loader_id)return false;
+  auto modifiers_id=env->GetMethodID(type,"getModifiers","()I");if(env->ExceptionCheck()||!modifiers_id)return false;
+  modifiers=env->CallIntMethod(holder,modifiers_id);if(env->ExceptionCheck())return false;
+  parent=env->CallObjectMethod(holder,parent_id);if(env->ExceptionCheck())return false;
+  loader=env->CallObjectMethod(holder,loader_id);if(env->ExceptionCheck())return false;
+  interfaces=static_cast<jobjectArray>(env->CallObjectMethod(holder,interfaces_id));if(env->ExceptionCheck()||!interfaces)return false;
+  count=env->GetArrayLength(interfaces);if(env->ExceptionCheck()||count<0)return false;
+  if(modifiers&0x200){if(parent)return false;object_type=env->FindClass("java/lang/Object");if(env->ExceptionCheck()||!object_type)return false;}
+  return true;
+ }
+ JNIEnv*env;jclass type=nullptr,object_type=nullptr;jobject parent=nullptr,loader=nullptr;jobjectArray interfaces=nullptr;jint modifiers=0;jsize count=0;
+};
+}

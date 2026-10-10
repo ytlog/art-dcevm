@@ -145,6 +145,7 @@ void Methods(class_metadata::Class17* klass,bool deletion){
  if(klass==old_class)old_method=reinterpret_cast<abi::arm64::android12::Method12*>(array+8);
 }
 }
+#include "native_receiver_class_source_cases.h"
 int main(int argc,char** argv){
  assert(argc==8);InitJni();InitializeHeap();InterfaceFixtures();
  const uint32_t field_indexes[]{1,3,0,2};for(size_t i=0;i<4;++i){old_fields[i]->dex_field_index=field_indexes[i];new_fields[i]->dex_field_index=field_indexes[i];}
@@ -157,6 +158,7 @@ int main(int argc,char** argv){
  size_t thread_extent=0,card_extent=0;assert(method_identity::ReadableMappingExtent(thread.data(),&thread_extent)&&thread_extent>=thread.size());assert(method_identity::ReadableMappingExtent(cards,&card_extent));
  assert(metadata.InterfaceDeclarationCalibrated());
  CheckGraphExceptionStops(metadata);
+ CheckActualClassSource();
  std::vector<void*> observed_interfaces;assert(native_interface_graph::Read(metadata,public_list,&observed_interfaces,&error)&&observed_interfaces.size()==3);
  const uint32_t positive_table=static_cast<class_metadata::Class17*>(public_list)->iftable;
  modern_field_metadata::ReadContext interface_interval{&heap,[](void*raw,const void*p,size_t*out){auto&h=*static_cast<Heap*>(raw);const auto begin=uintptr_t(h.base),at=uintptr_t(p);if(!out||at<begin||at>=begin+h.used)return false;*out=begin+h.used-at;return true;}};

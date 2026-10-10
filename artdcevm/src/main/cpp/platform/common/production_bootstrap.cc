@@ -42,6 +42,8 @@
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
 #include "platform/common/native_receiver_producer.h"
+#include "platform/common/native_receiver_class_source.h"
+#include "platform/common/native_receiver_resolution_source.h"
 #include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_receiver_public_sample.h"
 #include "platform/common/native_removal_policy.h"
@@ -112,11 +114,15 @@ struct NativeEngine final:Engine {
  std::unique_ptr<receiver_guard::SourceCalibration> receiver_source_calibration;
  bool ReceiverInvokeSourceCalibrated()const override{return receiver_source_calibration&&receiver_source_calibration->Proven();}
  std::string ReceiverInvokeSourceDiagnostic()const override{return ReceiverInvokeSourceCalibrated()?"":receiver_producer_diagnostic.empty()?"receiver-invoke-source-not-observed":receiver_producer_diagnostic;}
+ receiver_guard::ClassSource receiver_classes;bool receiver_classes_bound=false;
  bool CalibrateReceiverSource(JNIEnv*,jvmtiEnv*);
  bool BindReceiverProducer(code_info_view::SourceFamily family){
   if(receiver_producer_bound)return true;
   const auto declaration=family==code_info_view::SourceFamily::kAndroid11?stack_visitor_service::Declaration::kAndroid11:family==code_info_view::SourceFamily::kAndroid12?stack_visitor_service::Declaration::kAndroid12:family==code_info_view::SourceFamily::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
-  const auto layout=model.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:family==code_info_view::SourceFamily::kAndroid17?code_item_metadata::kStandard:code_item_metadata::kTagged;
+  // Code storage follows the independently named resolver declaration;
+  // shared scanner geometry alone cannot remove CompactDex tag decoding.
+  const bool checked_method=hooks.FindSymbol("libart.so",receiver_guard::kCheckedResolveMethod)!=nullptr;
+  const auto layout=model.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:checked_method?code_item_metadata::kTagged:code_item_metadata::kStandard;
   auto current_thread=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
   receiver_producer_bound=receiver_producer.Bind(hooks,declaration,layout,metadata,runtime.receivers.class_linker,current_thread,&receiver_producer_diagnostic,vm);return receiver_producer_bound;
  }
@@ -1205,6 +1211,7 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;
  auto fail=[&](const char*text){receiver_producer_diagnostic=text;return false;};
  if(!receiver_producer_bound||!permissions_proven||!permission_decoder.Ready()||!graph_current||!graph_decode_method||!input||!env||!ti||env->ExceptionCheck()||!redefinition_gate::Owned(vm))return fail("Receiver source awaits calibrated producer/roots/ordinary gate");
+ if(!receiver_classes_bound){receiver_classes_bound=receiver_classes.Bind(hooks,metadata,graph_current,&receiver_producer_diagnostic,runtime.receivers.class_linker);if(!receiver_classes_bound)return false;}
  if(!receiver_frames){receiver_frames=std::make_unique<receiver_guard::FrameReader>(receiver_producer.Frames());receiver_bytecode=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames,receiver_producer.Access());receiver_source_calibration=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames,*receiver_bytecode,permission_decoder);}
  if(!final_write_guard::BindSourceEvents(runtime.instrumentation,receiver_source_calibration->Observer(),&receiver_producer_diagnostic))return false;
  struct Episode {
@@ -1245,6 +1252,29 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
   const auto caller_flags=public_sample.caller_flags,target_flags=public_sample.target_flags;
   NativeSample sample{*this,leaf,caller,target,caller_id,target_id,uint32_t(caller_flags),uint32_t(target_flags)};
   if(runnable_executor::With(env,caller,NativeSample::Read,&sample)!=runnable_jni::Result::kSuccess)return fail("Receiver public reflected/JNI/native member identities disagree");
+  // Public topology is collected before borrowing any managed Class address.
+  // These native observations attest actual source facts only; no listener or
+  // narrowing/publication permission follows from this ordinary episode.
+  for(const auto& member: {std::pair<jmethodID,void*>{caller_id,sample.method},{target_id,sample.member}}){
+   jclass declaring=nullptr;const auto status=ti->GetMethodDeclaringClass(member.first,&declaring);Local declaring_ref{env,declaring};
+   if(status!=JVMTI_ERROR_NONE||env->ExceptionCheck()||!declaring)return fail("Receiver public member declaring Class unavailable");
+   receiver_guard::PublicClassSample topology(env);if(!topology.Read(declaring))return fail("Receiver public Class topology unavailable");
+   auto class_root=episode.Own(declaring);if(!class_root||!episode.Register(class_root))return false;
+   jobject parent_local=topology.object_type?jobject(topology.object_type):topology.parent;
+   auto parent_root=parent_local?episode.Own(parent_local):nullptr;if(parent_local&&(!parent_root||!episode.Register(parent_root)))return false;
+   auto loader_root=topology.loader?episode.Own(topology.loader):nullptr;if(topology.loader&&(!loader_root||!episode.Register(loader_root)))return false;
+   std::vector<jobject> interfaces;
+   for(jsize at=0;at<topology.count;++at){auto value=env->GetObjectArrayElement(topology.interfaces,at);Local value_ref{env,value};if(env->ExceptionCheck()||!value)return fail("Receiver public direct interface unavailable");auto root=episode.Own(value);if(!root||!episode.Register(root))return false;interfaces.push_back(root);}
+   struct ClassEpisode {
+    NativeEngine&e;jobject klass,parent,loader;const std::vector<jobject>&direct;bool interface;void*method;
+    static bool Read(const runnable_jni::Context&scope,void*raw){auto&r=*static_cast<ClassEpisode*>(raw);
+     if(scope.vm!=r.e.vm||scope.self!=r.e.graph_current())return false;
+     if(!r.e.receiver_classes.CalibrateInterfaces(scope,r.klass,&r.e.receiver_producer_diagnostic))return false;
+     void*owner=r.e.metadata.MethodDeclaringClass(r.method);return owner&&r.e.receiver_classes.Observe(scope,r.klass,r.parent,r.loader,r.direct,r.interface,owner);
+    }
+   }class_episode{*this,class_root,parent_root,loader_root,interfaces,bool(topology.modifiers&0x200),member.second};
+   if(runnable_executor::With(env,class_root,ClassEpisode::Read,&class_episode)!=runnable_jni::Result::kSuccess)return fail("Receiver public/native Class topology or source history differs");
+  }
   const auto kind=static_cast<receiver_guard::InvokeKind>(i/2);jobject special=nullptr;
   if(kind==receiver_guard::InvokeKind::Super){jclass declaring=nullptr;const auto status=ti->GetMethodDeclaringClass(caller_id,&declaring);Local declaring_ref{env,declaring};if(status!=JVMTI_ERROR_NONE||env->ExceptionCheck()||!declaring)return fail("Public special caller Class unavailable");special=episode.Own(declaring);if(!special||!episode.Register(special))return false;}
   Install install{sample.method,&receiver_producer_diagnostic};if(!permission_exclusive.With(env,&caller,1,Install::Run,&install,&receiver_producer_diagnostic))return false;
