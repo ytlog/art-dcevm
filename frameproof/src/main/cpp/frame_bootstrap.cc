@@ -5,7 +5,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
 #include "platform/abi/arm64/common/runtime_debuggable.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <array>
 #include <mutex>
 #include <sstream>
@@ -21,7 +21,7 @@ std::mutex installation,operation;
 bool attempted=false,installed=false,owned=false,debug_observed=false,java_debuggable=false;
 std::array<jobject,6> roots{};std::array<jint,10> dex{};
 runtime_receiver::Receivers receivers;
-using Leaf=abi::arm64::android_common::FromReflectedMethod;
+using Leaf=abi::common::FromReflectedMethod;
 using Contains=bool (*)(void*,void*);
 Leaf leaf=nullptr;Contains contains=nullptr;
 void EnqueueProxy(void* receiver,void* method,void* self){observation.Enqueued(receiver,method);enqueue(receiver,method,self);}
@@ -51,10 +51,10 @@ bool Install(HookEngine& hooks,std::string* error){
  auto h=hooks.FindSymbol("libart.so",kHeapTotalMemory);
  auto collect=hooks.FindSymbol("libart.so",kHeapCollect);
  using namespace abi::arm64::android_common;
- auto suspend=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
- auto resume=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+ auto suspend=reinterpret_cast<abi::common::SuspendConstruct>(hooks.FindSymbol("libart.so",abi::common::kSuspendConstruct));
+ auto resume=reinterpret_cast<abi::common::SuspendDestroy>(hooks.FindSymbol("libart.so",abi::common::kSuspendDestroy));
  if(!e||!d||!h||!suspend||!resume)return Fail(error,"Missing named enqueue/DoneCompiling/public totalMemory observation binding");
- attempted=true;SuspendAll stop{};suspend(&stop,"owned nondebug frame observation",false);
+ attempted=true;abi::common::SuspendAll stop{};suspend(&stop,"owned nondebug frame observation",false);
  void *eo=nullptr,*dc=nullptr,*ho=nullptr;
  auto et=hooks.Install(e,legacy?reinterpret_cast<void*>(LegacyEnqueueProxy):reinterpret_cast<void*>(EnqueueProxy),&eo,error);
  if(legacy)legacy_enqueue=reinterpret_cast<LegacyEnqueue>(eo);else enqueue=reinterpret_cast<Enqueue>(eo);
@@ -83,7 +83,7 @@ bool Resolve(const runnable_jni::Context& context,void* opaque){
  for(size_t i=0;i<5;++i)oracles[i]={roots[i],static_cast<uint32_t>(dex[i]),static_cast<uint32_t>(dex[5+i])};
  method_identity::Calibration calibration;
  if(!method_identity::Calibrate(context,leaf,oracles,5,&calibration,&request.error))return false;
- abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+ abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
  request.self=context.self;request.method=leaf(scope,roots[0]);return request.method&&!context.env->ExceptionCheck();
 }
 bool QueryPublicHeap(const runnable_jni::Context& context,void* opaque){
@@ -143,7 +143,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_Fram
  debug_observed=debug!=nullptr;java_debuggable=debug&&debug(env,nullptr)!=JNI_FALSE;
  if(!debug||java_debuggable)return env->NewStringUTF("Missing read-only native nondebuggable runtime policy proof");
  if(!runtime_receiver::Calibrate(hooks,env,&receivers,&error)||!Install(hooks,&error))return env->ExceptionCheck()?nullptr:env->NewStringUTF(error.c_str());
- leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  contains=reinterpret_cast<Contains>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"));
  if(!leaf||!contains)return env->NewStringUTF("Missing named method/compiled JIT identity leaf");
  env->GetIntArrayRegion(shape,0,10,dex.data());for(auto value:dex)if(value<0)return env->NewStringUTF("Invalid independent method metadata");
