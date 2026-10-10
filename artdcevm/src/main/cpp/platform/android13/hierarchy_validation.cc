@@ -1,6 +1,5 @@
 #include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/hierarchy_allocation.h"
-#include "platform/android13/member_access_guards.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"
@@ -54,8 +53,10 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
     return fail("Invalid or inaccessible superclass");
   if(IsValidationSubclassOf(roots.Get(2),roots.Get(0))) return fail("Cyclic superclass change");
   const bool loses_parent=!IsValidationSubclassOf(roots.Get(2),Parent(roots.Get(0)));
-  if(loses_parent && !ReceiverGuardEnabled()) return fail("Removing a superclass requires the active receiver guard");
-  if(loses_parent) state|=kNarrowed;
+  // Receiver rejection alone cannot keep ancestor-typed fields, static cells
+  // and arrays assignable. This retired route has no same-plan stopped whole-
+  // heap storage proof; only the common full-schema owner can authorize loss.
+  if(loses_parent) return fail("Legacy hierarchy narrowing lacks stopped typed-storage proof");
   if(*changed && !Initialized(roots.Get(2))) return fail("Initialize the added superclass before applying this evolution");
   for(size_t i=0;i<replacement.interfaces.size();++i) {
     roots.Set(3+i,reinterpret_cast<void*>(find_class(RuntimeClassLinker(),self,replacement.interfaces[i].c_str(),roots.Slot(1))));
@@ -69,8 +70,7 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
     bool retained=IsValidationAssignableFrom(old_interface,roots.Get(2));
     for(size_t j=0;j<replacement.interfaces.size();++j)
       retained|=IsValidationAssignableFrom(old_interface,roots.Get(3+j));
-    if(!retained && !ReceiverGuardEnabled()) return fail("Removing an interface requires the active receiver guard");
-    if(!retained) state|=kNarrowed;
+    if(!retained) return fail("Legacy interface narrowing lacks stopped typed-storage proof");
   }
   *changed|=current.interfaces!=replacement.interfaces;
   if(*changed) state|=kChanged;

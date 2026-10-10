@@ -318,6 +318,8 @@ struct NativeEngine final:Engine {
   *object=e.field_factory_root(const_cast<void*>(slot));return *object!=nullptr;
  }
  bool ObserveFieldFactory(JNIEnv*,jvmtiEnv*,std::string*);
+ std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
+ bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
  void* (*lazy_decode_field)(void*,jfieldID)=nullptr;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
@@ -340,16 +342,12 @@ struct NativeEngine final:Engine {
   if(lazy_fields.Ready())return true;
   lazy_decode_field=reinterpret_cast<decltype(lazy_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
   if(!lazy_decode_field)return true; // Preserve the existing public factory route.
+  if(!PrepareLiveFieldOracles(env,error))return false;
   native_lazy_field_mirror::Bindings b;b.owner=this;
   b.matched_release_carrier=runnable_executor::Available()&&metadata.Calibrated()&&field_mirror.matched&&field_mirror.checked==28;
   b.scope=FieldScope;b.oracle=FieldOracle;b.decode=FieldRoot;b.decode_field=DecodeLazyField;b.field=FieldLeaf;b.declaring=FieldOwner;
   std::string unavailable;if(!lazy_fields.Bind(hooks,b,&unavailable))return !env->ExceptionCheck();
-  std::vector<native_lazy_field_mirror::Oracle> oracles;
-  for(size_t i=0;i<bootstrap_field_proofs.size();++i){
-   if(i>=field_handles.size())return Fail(error,"Lazy Field calibration lacks distinct original public mirrors");
-   const auto& p=bootstrap_field_proofs[i];oracles.push_back({field_handles[i].reflected_field,bootstrap_field_owner,contextual_field_id::Id(p),contextual_field_id::NativeField(p),contextual_field_id::IsStatic(p)});
-  }
-  return lazy_fields.Calibrate(env,oracles,error);
+  return lazy_fields.Calibrate(env,live_field_oracles,error);
  }
  rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner,FieldElement,ProduceFieldMirror}};
  static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
@@ -1334,6 +1332,41 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(!receiver_source_calibration->Seal())return fail("Receiver source lacks all ten original invoke forms");
  receiver_producer_diagnostic.clear();return true;
 }
+bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
+ if(live_field_oracles.size()==2)return true;
+ if(!live_field_oracles.empty()||!input||env->ExceptionCheck())return Fail(error,"Live Field oracle lifecycle is incomplete");
+ jclass input_type=env->GetObjectClass(input);
+ jfieldID slot=input_type?env->GetFieldID(input_type,"lazyFieldCalibration","Ljava/lang/Object;"):nullptr;
+ if(input_type)env->DeleteLocalRef(input_type);
+ jobject object=slot?env->GetObjectField(input,slot):nullptr;
+ jclass local=object?env->GetObjectClass(object):nullptr;
+ if(object)env->DeleteLocalRef(object);
+ Roots prepared{env,{}};jclass owner=local?static_cast<jclass>(prepared.Own(local)):nullptr;
+ if(local)env->DeleteLocalRef(local);
+ if(!owner||env->ExceptionCheck())return Fail(error,"Independent live Field calibration Class unavailable");
+ const std::array<jfieldID,2> ids{{env->GetFieldID(owner,"instanceValue","I"),env->GetStaticFieldID(owner,"staticValue","J")}};
+ std::vector<native_lazy_field_mirror::Oracle> oracles;
+ for(size_t i=0;i<ids.size();++i){
+  jobject reflected=ids[i]?env->ToReflectedField(owner,ids[i],i?JNI_TRUE:JNI_FALSE):nullptr;
+  jobject mirror=reflected?prepared.Own(reflected):nullptr;
+  if(reflected)env->DeleteLocalRef(reflected);
+  if(!mirror||env->ExceptionCheck()||env->FromReflectedField(mirror)!=ids[i])return Fail(error,"Independent live Field public ID round trip failed");
+  struct Decode {
+   NativeEngine& engine;jclass owner;jobject mirror;jfieldID id;void* field=nullptr;
+   static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Decode*>(raw);void *klass=nullptr,*mirror=nullptr;
+    if(!FieldOracle(&r.engine,context,r.owner,&klass)||!FieldOracle(&r.engine,context,r.mirror,&mirror))return false;
+    r.field=FieldLeaf(&r.engine,mirror);
+    return r.field&&FieldOwner(&r.engine,r.field)==klass&&DecodeLazyField(&r.engine,context,klass,r.id)==r.field;
+   }
+  } decode{*this,owner,mirror,ids[i]};
+  if(!FieldScope(this,env,mirror,Decode::Run,&decode))return Fail(error,"Independent live Field native/public identities differ");
+  oracles.push_back({mirror,owner,ids[i],decode.field,i!=0});
+ }
+ roots.reserve(roots.size()+prepared.values.size());
+ live_field_oracles=std::move(oracles);
+ for(auto root:prepared.values)roots.push_back(root);
+ prepared.values.clear();return true;
+}
 bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* error){
  if(field_factory_observed)return true;
  // No unknown Handle factory is called here. All evidence comes from ART's
@@ -1349,6 +1382,9 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
  } install{*this,error};
  if(!permission_exclusive.With(env,&anchor,1,Install::Run,&install,error))return false;
  field_factory_observed=true; // The transparent hook shares the process engine lifetime.
+ // The shared sole proxy also supports declared three-argument/template alias
+ // callers. Their hook remains installed, but they are not extra-Handle proof.
+ if(!field_factory_observer.FourArgument())return true;
  field_factory_diagnostic="Extra-Handle Field observer installed; original public episodes incomplete";
  jclass class_type=env->GetObjectClass(bootstrap_field_owner);
  jmethodID declared=class_type?env->GetMethodID(class_type,"getDeclaredFields","()[Ljava/lang/reflect/Field;"):nullptr;
@@ -1360,6 +1396,9 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   if(!field_factory_observer.Begin(graph_current(),native,error))return false;
   jobjectArray fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,declared));
   bool ended=field_factory_observer.End(trace,error);
+  if(ended)for(const auto& entry:trace->entries)if(entry.calls&&entry.field!=entry.normalized_field){
+   if(fields)env->DeleteLocalRef(fields);return Fail(error,"Original Field observation targets were normalized; no transparent factory evidence");
+  }
   if(!ended||!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return ended?Fail(error,"Original Field factory public reflection episode failed"):false;}
   std::array<bool,2> found{};const jsize count=env->GetArrayLength(fields);
   for(jsize i=0;i<count&&!env->ExceptionCheck();++i){
@@ -1388,10 +1427,10 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   if(env->ExceptionCheck()||!found[0]||!found[1])return Fail(error,"Field factory observer public IDs do not enumerate both exact targets");
   return true;
  };
- if(bootstrap_field_proofs.size()!=2)return Fail(error,"Field factory observation requires original two-field oracles");
+ if(live_field_oracles.size()!=2)return Fail(error,"Field factory observation requires two live original field oracles");
  std::array<jfieldID,2> ids{};std::array<void*,2> native{};
- for(size_t i=0;i<2;++i){ids[i]=contextual_field_id::Id(bootstrap_field_proofs[i]);native[i]=contextual_field_id::NativeField(bootstrap_field_proofs[i]);}
- if(!episode(bootstrap_field_owner,ids,native,&field_factory_primitive_trace,0))return false;
+ for(size_t i=0;i<2;++i){ids[i]=live_field_oracles[i].id;native[i]=live_field_oracles[i].native_field;}
+ if(!episode(live_field_oracles[0].exact_owner,ids,native,&field_factory_primitive_trace,0))return false;
  jclass input_type=env->GetObjectClass(input);
  jmethodID optional=input_type?env->GetMethodID(input_type,"optionalFieldClass","()Ljava/lang/Class;"):nullptr;
  if(input_type)env->DeleteLocalRef(input_type);

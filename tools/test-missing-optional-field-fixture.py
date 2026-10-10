@@ -58,6 +58,32 @@ classes = out/'java';classes.mkdir(exist_ok=True)
 sources = [root/f'artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/{n}.java' for n in ('ProductionBootstrap','EvolutionCalibration','CalibrationFixture')]
 with (out/'java.log').open('w') as log:
     subprocess.run([str(a.java/'bin/javac'),'-cp',str(a.sdk/'platforms/android-35/android.jar'),'-d',str(classes),*map(str,sources)],stdout=log,stderr=log,check=True)
-result = 'PASS: actual D8 holder-only class_def, exact primitive/absent-reference field IDs; included-class negative rejected; production Java compiles. ART force=false behavior requires device observation.'
+# Exercise the live Java oracle Class independently of Android bootstrap
+# evolution: it must be a different declaring Class from the intentionally
+# rewritten CalibrationFixture, with exactly two original primitive fields.
+probe = out/'LiveFieldOracleProbe.java'
+probe.write_text("""package com.github.ytlog.artdcevm.internal;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+public final class LiveFieldOracleProbe {
+ public static void main(String[] args) throws Exception {
+  Object live = new ProductionBootstrap.LazyFieldCalibration();
+  if (live.getClass() == CalibrationFixture.class) throw new AssertionError();
+  Field[] fields = live.getClass().getDeclaredFields();
+  if (fields.length != 2) throw new AssertionError();
+  Field instance = live.getClass().getDeclaredField("instanceValue");
+  Field statik = live.getClass().getDeclaredField("staticValue");
+  if (instance.getDeclaringClass() != live.getClass() || statik.getDeclaringClass() != live.getClass()) throw new AssertionError();
+  if (instance.getType() != int.class || statik.getType() != long.class || Modifier.isStatic(instance.getModifiers()) || !Modifier.isStatic(statik.getModifiers())) throw new AssertionError();
+  instance.setInt(live, 17); statik.setLong(null, 29L);
+  if (instance.getInt(live) != 17 || statik.getLong(null) != 29L) throw new AssertionError();
+  System.out.println("Independent live field Class: two exact distinct primitive public oracles PASS");
+ }
+}
+""")
+with (out/'live-oracle.log').open('w') as log:
+    subprocess.run([str(a.java/'bin/javac'),'-cp',str(classes),'-d',str(classes),str(probe)],stdout=log,stderr=log,check=True)
+    subprocess.run([str(a.java/'bin/java'),'-cp',str(classes),'com.github.ytlog.artdcevm.internal.LiveFieldOracleProbe'],stdout=log,stderr=log,check=True)
+result = 'PASS: actual D8 holder-only class_def, exact primitive/absent-reference field IDs; included-class negative rejected; production Java/live-oracle identities execute. ART force=false behavior requires device observation.'
 (out/'result.log').write_text(result+'\n')
 print(result)

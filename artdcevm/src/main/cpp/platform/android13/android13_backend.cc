@@ -115,7 +115,7 @@ std::string Android13Backend::Capabilities() const {
     << ",\"classAbstractConservativeTransition\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"combinedAbstractTransition\":" << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"hierarchyAddition\":" << (evolution_ && evolution_->Available() ? "true" : "false")
-    << ",\"hierarchyNarrowing\":" << (evolution_ && evolution_->Available() ? "true" : "false")
+    << ",\"hierarchyNarrowing\":false"
     << ",\"hierarchyBatchDependencies\":"
     << (evolution_ && evolution_->Available() ? "true" : "false")
     << ",\"hierarchyChange\":false,\"metadataReclamation\":false,\"fullDcevmComplete\":false"

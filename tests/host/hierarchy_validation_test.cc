@@ -17,9 +17,9 @@ using namespace artdcevm;
 using Class=android13::validation_abi::ClassPrefix;
 using Header=android13::handle_root_abi::ScopeHeader;
 namespace {
-constexpr size_t kNodes=11;
-enum Id { Object,Base,OldParent,NewParent,OtherParent,Child,OldIface,NewIface,Loader,BaseTable,InterfaceTable };
-const char* names[kNodes]{"Ljava/lang/Object;","Ltest/Base;","Ltest/OldParent;","Ltest/NewParent;","Ltest/OtherParent;","Ltest/Child;","Ltest/OldIface;","Ltest/NewIface;","Ltest/Loader;","",""};
+constexpr size_t kNodes=12;
+enum Id { Object,Base,OldParent,NewParent,OtherParent,Child,OldIface,NewIface,Loader,BaseTable,InterfaceTable,RetainedCells };
+const char* names[kNodes]{"Ljava/lang/Object;","Ltest/Base;","Ltest/OldParent;","Ltest/NewParent;","Ltest/OtherParent;","Ltest/Child;","Ltest/OldIface;","Ltest/NewIface;","Ltest/Loader;","","",""};
 void* nodes[kNodes]{};
 unsigned char* arena=nullptr; size_t used=0,gcs=0,finds=0;
 alignas(8) unsigned char thread_bytes[320]{};
@@ -110,6 +110,8 @@ int main(){
   Klass(OldIface)->access_flags=Klass(NewIface)->access_flags=0x201;
   Klass(Base)->iftable=Ref(nodes[BaseTable]);Klass(NewIface)->iftable=Ref(nodes[InterfaceTable]);
   Put<int32_t>(nodes[BaseTable],8,2);Put<uint32_t>(nodes[BaseTable],12,Ref(nodes[OldIface]));
+  Put<int32_t>(nodes[RetainedCells],8,3);
+  for(size_t cell=0;cell<3;++cell)Put<uint32_t>(nodes[RetainedCells],12+cell*4,Ref(nodes[Base]));
   Put<int32_t>(nodes[InterfaceTable],8,2);Put<uint32_t>(nodes[InterfaceTable],12,Ref(nodes[OldIface]));
   Hooks hooks;std::string error;void* implementation=dlopen(nullptr,RTLD_NOW);assert(implementation);
   assert(android13::ConfigureLoadedClassGuards(hooks,linker,&error));hooks.missing=true;
@@ -139,11 +141,18 @@ int main(){
   replacement.superclass=names[NewParent];Klass(NewParent)->access_flags=0x11;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible superclass");Klass(NewParent)->access_flags=0x201;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible superclass");
   Klass(NewParent)->access_flags=0;package=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible superclass");package=true;Klass(NewParent)->access_flags=1;
   replacement.interfaces={names[NewParent]};check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible interface");replacement.interfaces={"Lmissing/Interface;"};check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Invalid or inaccessible interface");
-  replacement.interfaces={names[NewIface]};replacement.superclass=names[OtherParent];check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Removing a superclass requires the active receiver guard");
-  guard=true;uint32_t previous=android13::BeginHierarchyTransaction();assert(android13::CheckEvolutionHierarchy(reinterpret_cast<void*>(1),current,replacement,&changed,&error)==0);assert(android13::HasHierarchyChange() && android13::HasHierarchyNarrowing());
-  uint32_t nested=android13::BeginHierarchyTransaction();assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());android13::EndHierarchyTransaction(nested);assert(android13::HasHierarchyChange()&&android13::HasHierarchyNarrowing());
+  replacement.interfaces={names[NewIface]};replacement.superclass=names[OtherParent];check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Legacy hierarchy narrowing lacks stopped typed-storage proof");
+  // Enabling the old receiver guard cannot authorize mutation of a Class that
+  // remains referenced by three retained cells. Real GC callbacks relocate the
+  // cells and all Class roots; failed admission leaves their graph unchanged.
+  guard=true;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Legacy hierarchy narrowing lacks stopped typed-storage proof");
+  assert(Klass(Base)->super_class==Ref(nodes[OldParent]));
+  for(size_t cell=0;cell<3;++cell)assert(Read<uint32_t>(nodes[RetainedCells],12+cell*4)==Ref(nodes[Base]));
+  replacement.superclass=names[NewParent];uint32_t previous=android13::BeginHierarchyTransaction();assert(android13::CheckEvolutionHierarchy(reinterpret_cast<void*>(1),current,replacement,&changed,&error)==0);assert(android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());
+  uint32_t nested=android13::BeginHierarchyTransaction();assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());android13::EndHierarchyTransaction(nested);assert(android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());
   std::thread isolated([]{assert(!android13::HasHierarchyChange()&&!android13::HasHierarchyNarrowing());auto prior=android13::BeginHierarchyTransaction();assert(prior==0);android13::EndHierarchyTransaction(prior);});isolated.join();android13::EndHierarchyTransaction(previous);
-  replacement.superclass=names[NewParent];replacement.interfaces.clear();guard=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Removing an interface requires the active receiver guard");guard=true;check(0);assert(changed);
+  replacement.superclass=names[NewParent];replacement.interfaces.clear();guard=false;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Legacy interface narrowing lacks stopped typed-storage proof");guard=true;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Legacy interface narrowing lacks stopped typed-storage proof");
+  replacement.interfaces={names[NewIface]};
   context=false;check(JVMTI_ERROR_NOT_AVAILABLE,"The device transaction hook did not establish allocation context");context=true;
   subject=Object;check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"The Object root cannot evolve its hierarchy");subject=Base;
   replacement.superclass.clear();check(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Missing superclass");

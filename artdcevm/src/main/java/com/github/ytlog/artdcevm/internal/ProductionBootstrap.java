@@ -35,7 +35,14 @@ public final class ProductionBootstrap {
             return bytes.toByteArray();
         }
     }
+    // These live public oracles never participate in the bootstrap evolution
+    // that intentionally retires CalibrationFixture's original int fields.
+    static final class LazyFieldCalibration {
+        public int instanceValue;
+        public static long staticValue;
+    }
     static final class Inputs {
+        final Object lazyFieldCalibration = new LazyFieldCalibration();
         // The receiver Class stays local until native creates its exact strong root.
         Class<?> optionalFieldClass() throws Exception { return ProductionBootstrap.optionalFieldClass(); }
         final byte[][] dex;
