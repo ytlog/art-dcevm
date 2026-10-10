@@ -16,6 +16,22 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'dev.artdcevm.lab'
 
 
+def validate_mvp_body_report(report):
+    expected = {'suite': 'mvp-body-evolution', 'firstCode': 0, 'schemaCode': 98,
+                'hierarchyCode': 98, 'recoveryCode': 0, 'evolvedValue': 43,
+                'recoveredValue': 48, 'jniValue': 48, 'reflectionValue': 48,
+                'retainedFieldValue': 41, 'staticValue': 113, 'checks': 4}
+    if report.get('passed') is not True or any(type(report.get(key)) is not type(value)
+            or report.get(key) != value for key, value in expected.items()):
+        raise RuntimeError('mvp-body-evolution: missing or incorrect actual behavior proof')
+    for key in ('capabilities', 'capabilitiesAfter'):
+        caps = report.get(key)
+        if not isinstance(caps, dict) or caps.get('methodBody') is not True or caps.get('evolutionAvailable') is not False:
+            raise RuntimeError('mvp-body-evolution: exact independent capability report is required')
+        if caps.get('privateHooksSupported', False) is not False:
+            raise RuntimeError('mvp-body-evolution: private owner was initialized')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial', required=True)
@@ -25,6 +41,8 @@ def main():
     parser.add_argument('--expected-abi', choices=('arm64-v8a',), default='arm64-v8a')
     parser.add_argument('--expected-page-size', type=int, choices=(4096, 16384))
     parser.add_argument('--skip-install', action='store_true')
+    parser.add_argument('--mvp-body', action='store_true',
+                        help='Also verify EVOLVE_SCHEMA body routing before private initialization')
     parser.add_argument('--standard', action='store_true',
                         help='Also run both Agent load orders and transformation callbacks')
     parser.add_argument('--boot-timeout', type=int, default=180)
@@ -120,6 +138,11 @@ def main():
                         '-e', 'transformCase', str(transform).lower())
                     if result.get('publicOnly') is not True or result.get('clientFirst') != first:
                         raise RuntimeError(f'{name}: incorrect test mode')
+        if args.mvp_body:
+            mvp = instrumentation('mvp-body-evolution', 'PublicJvmtiInstrumentation', '-e', 'suite', 'mvp-body')
+            validate_mvp_body_report(mvp)
+            if any(mvp.get(key) != device[key] for key in ('sdk', 'abi', 'pageSize')):
+                raise RuntimeError('MVP runtime report does not match the connected device')
         report['passed'] = True
     except (RuntimeError, ValueError, OSError) as error:
         report['error'] = str(error)

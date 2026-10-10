@@ -5,9 +5,13 @@ import android.os.Bundle;
 import org.json.JSONObject;
 
 public final class PublicJvmtiInstrumentation extends Instrumentation {
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); start(); }
+    private boolean mvpBody;
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments);
+        mvpBody = arguments != null && "mvp-body".equals(arguments.getString("suite"));
+        start(); }
     @Override public void onStart() {
-        JSONObject report = new PublicJvmtiSuite(getTargetContext()).run();
+        JSONObject report = mvpBody ? new MvpBodyEvolutionSuite(getTargetContext()).run()
+                : new PublicJvmtiSuite(getTargetContext()).run();
         Bundle output = new Bundle();
         output.putString("stream", report.toString());
         finish(report.optBoolean("passed") ? -1 : 0, output);
