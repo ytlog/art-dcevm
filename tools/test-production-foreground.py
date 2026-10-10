@@ -3,7 +3,7 @@
 import hashlib,json,os,shutil,subprocess,sys,tempfile
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
-base={'productionBootstrap':True,'formalApplyMethodDeletion':True,'cachedJniRejectedModes':4,
+base={'lastApplyCode':0,'productionBootstrap':True,'formalApplyMethodDeletion':True,'cachedJniRejectedModes':4,
       'cachedReflectionRejected':True,'retainedIdentity':True,'retainedCompute':35,'retainedValue':31,
       'formalApplyFieldDeletion':True,'fieldHandleRejectedPaths':8,'fieldJniRejectedPaths':36,
       'fieldReflectionRejectedPaths':36,'fieldFreshKeptJniChecks':4,'fieldRetainedValue':41,
@@ -14,7 +14,7 @@ base={'productionBootstrap':True,'formalApplyMethodDeletion':True,'cachedJniReje
       'foregroundResumedAfter':True,'foregroundPauseCount':0,'foregroundFinished':True}
 with tempfile.TemporaryDirectory() as directory:
     tmp=Path(directory);tools=tmp/'tools';tools.mkdir()
-    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py','test_phase_file.py']:shutil.copy(root/'tools'/name,tools/name)
+    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','production_foreground_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py','test_phase_file.py']:shutil.copy(root/'tools'/name,tools/name)
     app=tmp/'app.apk';app.write_bytes(b'frozenapp');test=tmp/'test.apk';test.write_bytes(b'frozentest')
     sha=hashlib.sha256(app.read_bytes()).hexdigest();test_sha=hashlib.sha256(test.read_bytes()).hexdigest()
     fake=tmp/'adb';fake.write_text(r'''#!/usr/bin/env python3
@@ -28,9 +28,9 @@ elif 'instrument' in args:
     open(os.environ['RUN_ID'],'w').write(args[args.index('productionRunId')+1])
     if os.environ['MODE']=='crash':print('INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0')
     else:print('OK (1 test)\nINSTRUMENTATION_CODE: -1')
-elif 'logcat' in args:
+elif 'logcat' in args or ('exec-out' in args and 'cat' in args):
     report=json.loads(os.environ['REPORT']);report['runId']=open(os.environ['RUN_ID']).read()
-    print('I ArtDcevmProduction: '+json.dumps(report))
+    print(('I ArtDcevmProduction: ' if 'logcat' in args else '')+json.dumps(report))
 elif 'force-stop' in args and os.environ['MODE']=='cleanup_failure':
     calls=[json.loads(l) for l in open(os.environ['TRACE'])]
     if sum('force-stop' in c for c in calls)>1:sys.exit(9)
@@ -51,6 +51,7 @@ sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_
            ('bool_pauses',{'foregroundPauseCount':False},False),('not_finished',{'foregroundFinished':False},False),
            ('wrong_activity',{'foregroundActivity':'other.Activity'},False),('method_incomplete',{'cachedJniRejectedModes':3},False),
            ('field_incomplete',{'fieldFreshKeptJniChecks':0},False),('crash',{},False),('cleanup_failure',{},False),('timeout',{},False),('stale',{},False)]
+    foreground_cases=cases
     for mode,patch,passed in cases:
         trace=tmp/(mode+'.trace');env=dict(os.environ,MODE=mode,TRACE=str(trace),RUN_ID=str(tmp/(mode+'.id')),REPORT=json.dumps({**base,**patch}),APP_SHA=sha,TEST_SHA=test_sha)
         cmd=[sys.executable,*([str(wrapper)] if mode=='timeout' else []),str(tools/'run-production-bootstrap.py'),'--serial','fixture','--adb',str(fake),'--apk',str(app),'--test-apk',str(test),'--require-fields']
@@ -71,3 +72,28 @@ sys.argv=sys.argv[1:];sys.path.insert(0,os.path.dirname(sys.argv[0]));runpy.run_
         if mode=='cleanup_failure':assert 'foregroundCleanupError' in report
         if mode=='timeout':assert 'PARTIAL formal progress' in (report_path.parent/'instrumentation.log').read_text()
         print('Production foreground:',mode,'passed')
+
+from production_schema_report import CASE_METHODS, CASE_PROOFS, validate as schema_validate
+from production_permission_report import VARIANTS, PROOFS, validate as permission_validate
+for family, cases, validator in [('schema', CASE_METHODS, schema_validate), ('permissions', VARIANTS, permission_validate)]:
+    for case in cases:
+        payload=dict(base, runId='a'*32, case=case, initializationScope='full', route='DcevmRuntime/NativeBridge.apply',
+                     stage='finished', passed=True, sourceEngineUsed=False,
+                     capabilities={'evolutionAvailable':True},lastApplyCode=0)
+        if family=='schema':
+            payload.update(dict.fromkeys(CASE_PROOFS[case],True))
+            if case=='field-staticness':payload.update(retiredJniReadWriteChecks=12,freshJniFields=4)
+            if case=='hierarchy-addition':payload.update(successfulApplyCount=2,interfaceJniChecks=6)
+            if case=='hierarchy-narrowing':payload.update(successfulApplyCount=3,illegalTypedStorageChecks=3,illegalStorageCode0=98,illegalStorageCode1=98,illegalStorageCode2=98)
+        else:
+            payload.update(dict.fromkeys(PROOFS[case],True),applies=[{'variant':v,'code':0} for v in VARIANTS[case]])
+        assert not validator(payload,'a'*32,case,require_foreground=True),(family,case)
+        for key in [k for k in base if k.startswith('foreground')]:
+            missing=dict(payload);missing.pop(key)
+            assert validator(missing,'a'*32,case,require_foreground=True),(family,case,key)
+            assert not validator(missing,'a'*32,case),(family,case,key,'default')
+        for _,patch,passed in foreground_cases:
+            if patch and not passed and all(key.startswith('foreground') for key in patch):
+                assert validator(dict(payload,**patch),'a'*32,case,require_foreground=True),(family,case,patch)
+        assert validator(dict(payload,foregroundCleanupError='finish failed'),'a'*32,case,require_foreground=True)
+print('Shared foreground schema/permission gates: every real case accepts complete proof; missing, typed, lifetime and cleanup failures rejected')

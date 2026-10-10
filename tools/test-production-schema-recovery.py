@@ -6,7 +6,7 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as directory:
     tmp=Path(directory);scripts=tmp/'tools';scripts.mkdir()
-    for name in ('run-production-schema.py','production_schema_report.py','timeout_diagnostics.py','test_phase_file.py'):
+    for name in ('run-production-schema.py','production_schema_report.py','production_foreground_report.py','timeout_diagnostics.py','test_phase_file.py'):
         shutil.copy(root/'tools'/name,scripts/name)
     app=tmp/'app.apk';app.write_bytes(b'APP')
     test=tmp/'test.apk';test.write_bytes(b'TEST')

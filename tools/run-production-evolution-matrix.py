@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 
+from production_foreground_report import validate_foreground
 from production_schema_report import CASE_METHODS as SCHEMA_CASES
 from production_permission_report import CASE_METHODS as PERMISSION_CASES
 
@@ -91,7 +92,7 @@ class EvidenceError(ValueError):
 
 
 def accepted_evidence(stdout, family, started_ns, seen, serial, artifacts, case=None, scope=None, self_route=False,
-                      root=ROOT):
+                      root=ROOT, require_foreground=False):
     """Only the fresh directory emitted by this child can establish success."""
     lines = stdout.splitlines()
     if not lines:
@@ -133,6 +134,20 @@ def accepted_evidence(stdout, family, started_ns, seen, serial, artifacts, case=
         raise EvidenceError('Individual runner failed', current)
     if family != 'production-bootstrap' and result.get('reportFileCaptured') is not True:
         raise EvidenceError('Missing current persisted report', current)
+    if require_foreground:
+        if result.get('foregroundRequested') is not True:
+            raise EvidenceError('Child did not request foreground', current)
+        payload = result.get('transaction') if family == 'production-bootstrap' else None
+        if family != 'production-bootstrap':
+            proof_path = directory / 'report-file.json'
+            if not proof_path.is_file() or proof_path.is_symlink() or proof_path.resolve(strict=True).parent != directory or proof_path.stat().st_mtime_ns < started_ns:
+                raise EvidenceError('Missing fresh foreground report', current)
+            payload = json.loads(proof_path.read_text())
+        if not isinstance(payload, dict) or payload.get('runId') != run_id:
+            raise EvidenceError('Foreground report run identity mismatch', current)
+        errors = validate_foreground(payload, required=True)
+        if errors:
+            raise EvidenceError('; '.join(errors), current)
     return {'runId': run_id, 'evidence': str(directory), 'result': result}
 
 
@@ -144,7 +159,7 @@ def complete(required, completed, errors):
         entry.get('passed') is True for entry in completed)
 
 
-def run_child(command, family, output, label, seen, serial, artifacts, case=None, scope=None, self_route=False):
+def run_child(command, family, output, label, seen, serial, artifacts, case=None, scope=None, self_route=False, require_foreground=False):
     started = time.time_ns()
     # The individual runner owns its timeout and current-run diagnostics. No outer
     # timeout terminates/restarts its live device workflow or retries installation.
@@ -154,7 +169,7 @@ def run_child(command, family, output, label, seen, serial, artifacts, case=None
     record = {'exitCode': child.returncode, 'log': str(output / (label + '.log')), 'command': command, 'passed': False}
     try:
         record.update(accepted_evidence(child.stdout, family, started, seen, serial, artifacts,
-                                       case, scope, self_route))
+                                       case, scope, self_route, require_foreground=require_foreground))
         if child.returncode != 0:
             raise ValueError('Individual runner exited nonzero')
         record['passed'] = True
@@ -174,15 +189,19 @@ def run_device(api, serial, args, manifest, output):
     scope = args.scope or ('full' if api == 33 else args.other_scope)
     required = manifest['required']
     report = {'api': api, 'serial': serial, 'scope': scope, 'required': required,
-              'completed': [], 'errors': [], 'passed': False, 'artifacts': artifacts}
+              'completed': [], 'errors': [], 'passed': False, 'artifacts': artifacts,
+              'foregroundRequested': getattr(args, 'foreground', False)}
     seen = set()
     try:
         report['properties'] = validate_device(args.adb, serial, api)
         base = ['--adb', args.adb, '--serial', serial, '--apk', artifacts['app']['path']]
+        foreground = getattr(args, 'foreground', False)
+        if foreground:
+            base.append('--foreground')
         if args.install and not self_route:
             bootstrap = run_child([sys.executable, str(ROOT / 'tools/run-production-bootstrap.py'),
                                    *base, '--test-apk', artifacts['test']['path'], '--require-fields'],
-                                  'production-bootstrap', directory, 'bootstrap', seen, serial, artifacts)
+                                  'production-bootstrap', directory, 'bootstrap', seen, serial, artifacts, require_foreground=foreground)
             report['bootstrap'] = bootstrap
             if not bootstrap['passed']:
                 raise ValueError('Required installation/bootstrap failed')
@@ -193,7 +212,7 @@ def run_device(api, serial, args, manifest, output):
                 record = run_child([sys.executable, str(ROOT / 'tools' / runner), *base, *route,
                                     '--scope', scope, '--case', case, '--timeout', str(args.timeout)],
                                    evidence, directory, family + '-' + case, seen, serial, artifacts,
-                                   case, scope, self_route)
+                                   case, scope, self_route, require_foreground=foreground)
                 report['completed'].append({'family': family, 'case': case, **record})
                 if not record['passed']:
                     report['errors'].append(family + '/' + case + ': ' + record.get('error', 'failed'))
@@ -220,6 +239,7 @@ def parser():
     p.add_argument('--test-apk')
     p.add_argument('--install', action='store_true', help='Explicitly install both artifacts and require field bootstrap')
     p.add_argument('--self-instrumentation-serial', action='append', default=[])
+    p.add_argument('--foreground', action='store_true', help='Keep each formal suite in its actual instrumentation foreground process')
     p.add_argument('--schema-case', choices=SCHEMA_CASES, action='append')
     p.add_argument('--permission-case', choices=PERMISSION_CASES, action='append')
     p.add_argument('--other-scope', choices=('full', 'common-owned'), default='common-owned')

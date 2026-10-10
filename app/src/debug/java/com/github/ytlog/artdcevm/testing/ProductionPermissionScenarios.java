@@ -72,7 +72,9 @@ public final class ProductionPermissionScenarios {
         report=new JSONObject().put("runId",runId).put("case",name).put("initializationScope",scope)
             .put("passed",false).put("sourceEngineUsed",false).put("route","DcevmRuntime/NativeBridge.apply").put("applies",applies);
         phases=new TestPhaseLog(runId,context.getFilesDir());
+        TestForegroundScope foreground=new TestForegroundScope(instrumentation,arguments,report,phases);
         try {
+            foreground.start();
             stage("initialize.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
             if(scope.equals("full")){stage("required-full-initialize.before");DcevmRuntime.initialize(context);}
             JSONObject caps=new JSONObject(NativeBridge.capabilities());report.put("capabilities",caps);
@@ -83,7 +85,10 @@ public final class ProductionPermissionScenarios {
             stage("finished");report.put("passed",true);
         } catch(Throwable e) {captureFailure(e);throw e;
         } finally {
+            boolean completed=report.optBoolean("passed");
             if(supportLoaded)ProductionPermissionNative.release();
+            boolean foregroundValid=foreground.finish();
+            if(!foregroundValid){report.put("passed",false);report.put("foregroundFailure","Foreground carrier lost its same-process resumed lifetime");}
             File dir=new File(context.getFilesDir(),"production-permissions");
             try {
                 if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("Cannot create report directory");
@@ -93,6 +98,7 @@ public final class ProductionPermissionScenarios {
             } catch(IOException e){report.put("reportPersistenceError",e.toString());}
             Bundle output=new Bundle();output.putString("productionPermissionReport",report.toString());instrumentation.addResults(output);
             Log.i("ArtDcevmProductionPermission",report.toString());
+            if(completed&&!foregroundValid)throw new AssertionError("Foreground carrier proof failed");
         }
     }
     private void finalFields() throws Throwable {

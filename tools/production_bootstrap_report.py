@@ -1,5 +1,6 @@
 """Validate this run's formal production method transaction evidence."""
 import json
+from production_foreground_report import validate_foreground
 import re
 
 def _require_success(instrumentation):
@@ -55,17 +56,8 @@ def _validate_report(report, *, require_fields=False, require_foreground=False):
         observed = report.get(key)
         if type(observed) is not type(value) or observed != value:
             raise RuntimeError(f'Incomplete formal method deletion: {key}={observed!r}')
-    if require_foreground:
-        foreground={'foregroundRequested':True,
-                    'foregroundActivity':'com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity',
-                    'foregroundResumedBefore':True,'foregroundResumedAfter':True,
-                    'foregroundPauseCount':0,'foregroundFinished':True}
-        for key,value in foreground.items():
-            if type(report.get(key)) is not type(value) or report.get(key)!=value:
-                raise RuntimeError(f'Incomplete production foreground proof: {key}={report.get(key)!r}')
-        pid=report.get('foregroundInstrumentationPid');activity_pid=report.get('foregroundActivityPid')
-        if type(pid) is not int or pid<=0 or type(activity_pid) is not int or activity_pid!=pid:
-            raise RuntimeError('Production foreground carrier did not prove the same live process')
+    foreground_errors=validate_foreground(report,require_foreground)
+    if foreground_errors:raise RuntimeError('; '.join(foreground_errors))
     capabilities = report.get('capabilities')
     if not isinstance(capabilities, dict) or capabilities.get('nativeMethodDeletion') is not True:
         raise RuntimeError('Production method deletion capability was not reported')

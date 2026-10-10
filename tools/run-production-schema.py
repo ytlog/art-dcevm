@@ -9,6 +9,7 @@ p.add_argument('--test-apk')
 p.add_argument('--self-instrumentation',action='store_true',help='Use the identical scenario in the lab APK; no test APK required')
 p.add_argument('--case',choices=CASE_METHODS,required=True)
 p.add_argument('--scope',choices=('full','common-owned'),default='full')
+p.add_argument('--foreground',action='store_true',help='Require same-process resumed foreground carrier evidence')
 p.add_argument('--timeout',type=int,default=300)
 a=p.parse_args()
 if not a.self_instrumentation and not a.test_apk:p.error('--test-apk is required for the JUnit route')
@@ -16,7 +17,7 @@ root=pathlib.Path(__file__).resolve().parents[1];run_id=uuid.uuid4().hex
 out=root/'build/evidence/production-schema'/run_id;out.mkdir(parents=True)
 def adb(*args,timeout=30):
     return subprocess.run([a.adb,'-s',a.serial,*args],capture_output=True,timeout=timeout,check=True)
-metadata={'runId':run_id,'case':a.case,'scope':a.scope,'serial':a.serial,'runner':'self' if a.self_instrumentation else 'junit','startedUtc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+metadata={'runId':run_id,'case':a.case,'scope':a.scope,'foregroundRequested':a.foreground,'serial':a.serial,'runner':'self' if a.self_instrumentation else 'junit','startedUtc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
 report=None
 def capture_report_file():
     result=subprocess.run([a.adb,'-s',a.serial,'exec-out','run-as','dev.artdcevm.lab','cat',
@@ -31,7 +32,7 @@ def capture_report_file():
         metadata.update(passed=False,errors=metadata.get('errors',[])+['Persisted report differs from instrumentation result'])
     if report is None:
         (out/'report.json').write_text(json.dumps(recovered,indent=2))
-        metadata['recoveredReportErrors']=validate(recovered,run_id,a.case,a.scope)
+        metadata['recoveredReportErrors']=validate(recovered,run_id,a.case,a.scope,require_foreground=a.foreground)
         # A saved report cannot prove that the JUnit runner finished correctly.
         # It supplies diagnosis after a timeout, never a successful test result.
 try:
@@ -48,6 +49,7 @@ try:
     command=['shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionSchemaEvolutionTest#'+CASE_METHODS[a.case],'-e','productionSchemaScope',a.scope,'-e','productionRunId',run_id,'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner']
     if a.self_instrumentation:
         command=['shell','am','instrument','-w','-r','-e','productionSchemaCase',a.case,'-e','productionSchemaScope',a.scope,'-e','productionRunId',run_id,'dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.ProductionSchemaInstrumentation']
+    if a.foreground:command[-1:-1]=['-e','foreground','true']
     try:result=adb(*command,timeout=a.timeout)
     except subprocess.TimeoutExpired as error:
         (out/'instrumentation.log').write_bytes((error.stdout or b'')+(error.stderr or b''))
@@ -59,7 +61,7 @@ try:
     lines=[line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
     if len(lines)!=1:raise RuntimeError('Missing unique required schema report')
     report=parse_current_report(lines[0],run_id,a.case,a.scope);(out/'report.json').write_text(json.dumps(report,indent=2))
-    errors=validate(report,run_id,a.case,a.scope)
+    errors=validate(report,run_id,a.case,a.scope,require_foreground=a.foreground)
     if a.self_instrumentation:
         if raw.splitlines().count('INSTRUMENTATION_RESULT: schemaRunnerCompleted=true')!=1 or raw.splitlines().count('INSTRUMENTATION_CODE: -1')!=1:
             errors.append('Self instrumentation did not complete the required scenario')

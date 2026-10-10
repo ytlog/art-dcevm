@@ -1,8 +1,6 @@
 package com.github.ytlog.artdcevm.testing;
 import android.content.Context;
-import android.content.Intent;
 import android.app.Instrumentation;
-import android.os.Process;
 import android.util.Log;
 import android.util.AtomicFile;
 import java.io.File;
@@ -51,23 +49,12 @@ public final class ProductionCapabilitiesTest {
         Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();
         Context context=instrumentation.getTargetContext();
         TestPhaseLog phases=new TestPhaseLog(runId,context.getFilesDir());phases.mark("production.begin");
-        boolean foreground="true".equals(InstrumentationRegistry.getArguments().getString("foreground"));
-        RuntimeAccessForegroundActivity carrier=null;int initialPauses=0;
         JSONObject report=new JSONObject();boolean completed=false;
-        report.put("runId",runId).put("foregroundRequested",foreground);
+        report.put("runId",runId);
+        TestForegroundScope foreground=new TestForegroundScope(instrumentation,
+                InstrumentationRegistry.getArguments(),report,phases);
         try {
-        if(foreground){
-            Intent intent=new Intent(context,RuntimeAccessForegroundActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            phases.mark("foreground.start-activity.before");
-            carrier=(RuntimeAccessForegroundActivity)instrumentation.startActivitySync(intent);
-            phases.mark("foreground.start-activity.after");
-            phases.mark("foreground.wait-idle.before");instrumentation.waitForIdleSync();phases.mark("foreground.wait-idle.after");initialPauses=carrier.carrierPauses();
-            report.put("foregroundActivity",carrier.getClass().getName())
-                .put("foregroundInstrumentationPid",Process.myPid()).put("foregroundActivityPid",carrier.carrierPid())
-                .put("foregroundResumedBefore",carrier.carrierResumed());
-            assertEquals("Foreground carrier must share instrumentation PID",Process.myPid(),carrier.carrierPid());
-            assertTrue("Foreground carrier was not resumed",carrier.carrierResumed());
-        }
+        foreground.start();
         phases.mark("capabilities.before");
         JSONObject capabilities=DcevmRuntime.initializeCapabilities(context);
         phases.mark("capabilities.after");
@@ -129,20 +116,7 @@ public final class ProductionCapabilitiesTest {
 report.put("runId",runId).put("cachedReflectionRejected",true).put("retainedIdentity",System.identityHashCode(instance)==identity).put("productionBootstrap",true).put("formalApplyMethodDeletion",true).put("cachedJniRejectedModes",4).put("retainedCompute",instance.compute()).put("retainedValue",instance.value).put("capabilities",new JSONObject(NativeBridge.capabilities()));
         completed=true;
         } finally {
-            boolean validForeground=true;
-            if(foreground){
-                boolean resumed=carrier!=null&&carrier.carrierResumed();
-                int pauses=carrier==null?-1:carrier.carrierPauses()-initialPauses;
-                boolean finished=false;
-                report.put("foregroundResumedAfter",resumed).put("foregroundPauseCount",pauses);
-                if(carrier!=null){
-                    final RuntimeAccessForegroundActivity closing=carrier;
-                    phases.mark("foreground.finish.before");instrumentation.runOnMainSync(closing::finish);
-                    finished=closing.awaitDestroyed();phases.mark("foreground.finish.after");
-                }
-                report.put("foregroundFinished",finished);
-                validForeground=resumed&&pauses==0&&finished;
-            }
+            boolean validForeground=foreground.finish();
             phases.mark("production.finish");
             File directory=new File(context.getFilesDir(),"production-bootstrap");
             if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Cannot create production report directory");

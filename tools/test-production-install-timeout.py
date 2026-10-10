@@ -5,7 +5,7 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as directory:
     tmp=Path(directory);tools=tmp/'tools';tools.mkdir()
-    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py','test_phase_file.py']:
+    for name in ['run-production-bootstrap.py','production_bootstrap_report.py','production_foreground_report.py','apk_verification.py','evidence_paths.py','timeout_diagnostics.py','test_phase_file.py']:
         shutil.copy(root/'tools'/name,tools/name)
     app=tmp/'application.apk';app.write_bytes(b'application exact frozen');test=tmp/'instrumentation.apk';test.write_bytes(b'test exact frozen')
     sha=hashlib.sha256(app.read_bytes()).hexdigest();test_sha=hashlib.sha256(test.read_bytes()).hexdigest()

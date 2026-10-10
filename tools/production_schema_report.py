@@ -1,5 +1,6 @@
 """Strict required production schema report gate; missing capabilities are failures."""
 import json
+from production_foreground_report import validate_foreground
 
 def parse_current_report(text, run_id, case, scope):
     report = json.loads(text)
@@ -29,8 +30,8 @@ CASE_PROOFS = {
     'native-java': ('nativeJavaNative', 'cachedReflectionMethodHandleJni', 'mixedWideFpReferenceArguments', 'oldObjectGcState'),
 }
 
-def validate(report, run_id, case, scope="full"):
-    errors = []
+def validate(report, run_id, case, scope="full", require_foreground=False):
+    errors = validate_foreground(report,require_foreground)
     for key, expected in [('runId', run_id), ('case', case), ('route', 'DcevmRuntime/NativeBridge.apply'), ('stage', 'finished')]:
         if report.get(key) != expected:
             errors.append(f'{key}: expected {expected!r}')

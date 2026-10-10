@@ -99,7 +99,9 @@ public final class ProductionSchemaScenarios {
         report=new JSONObject().put("initializationScope",scope).put("runId",runId).put("case",name).put("passed",false)
             .put("route","DcevmRuntime/NativeBridge.apply").put("sourceEngineUsed",false);
         phases=new TestPhaseLog(runId,context.getFilesDir());
+        TestForegroundScope foreground=new TestForegroundScope(instrumentation,arguments,report,phases);
         try {
+            foreground.start();
             stage("capabilities.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
             if (scope.equals("full")) {
                 stage("required-full-initialize.before");DcevmRuntime.initialize(context);
@@ -116,6 +118,9 @@ public final class ProductionSchemaScenarios {
         } catch(Throwable error) {
             captureFailure(error);throw error;
         } finally {
+            boolean completed=report.optBoolean("passed");
+            boolean foregroundValid=foreground.finish();
+            if(!foregroundValid){report.put("passed",false);report.put("foregroundFailure","Foreground carrier lost its same-process resumed lifetime");}
             try {persistReport(runId);} catch(IOException error) {
                 report.put("reportPersistenceError",String.valueOf(error));
                 Log.e("ArtDcevmProductionSchema","Cannot persist current-run report",error);
@@ -123,6 +128,7 @@ public final class ProductionSchemaScenarios {
             Bundle output=new Bundle();output.putString("productionSchemaReport",report.toString());
             instrumentation.addResults(output);
             Log.i("ArtDcevmProductionSchema",report.toString());
+            if(completed&&!foregroundValid)throw new AssertionError("Foreground carrier proof failed");
         }
     }
     private void fieldTypeEvolutionRequired() throws Throwable { required("field-types",()->{

@@ -41,6 +41,26 @@ class MatrixTests(unittest.TestCase):
                                        set() if seen is None else seen, 'remote', self.artifacts,
                                        'field-types', 'common-owned', root=self.root)
 
+    def test_foreground_requires_current_actual_carrier_proof(self):
+        self.result['foregroundRequested'] = True
+        self.save()
+        payload = {'runId': self.run, 'foregroundRequested': True,
+                   'foregroundActivity':'com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity',
+                   'foregroundInstrumentationPid': 741, 'foregroundActivityPid': 741,
+                   'foregroundResumedBefore': True, 'foregroundResumedAfter': True,
+                   'foregroundPauseCount': 0, 'foregroundFinished': True}
+        proof = self.directory / 'report-file.json'
+        def accept():
+            return matrix.accepted_evidence(str(self.directory), 'production-schema', 0, set(), 'remote',
+                self.artifacts, 'field-types', 'common-owned', root=self.root, require_foreground=True)
+        proof.write_text(json.dumps(payload)); self.assertTrue(accept()['result']['passed'])
+        for patch in ({'runId':'2'*32}, {'foregroundActivityPid':742}, {'foregroundPauseCount':1},
+                      {'foregroundFinished':False}, {'foregroundInstrumentationPid':True}):
+            proof.write_text(json.dumps(dict(payload, **patch)))
+            with self.assertRaises(ValueError): accept()
+        proof.unlink()
+        with self.assertRaises(ValueError): accept()
+
     def test_required_set_not_vacuous_or_partial(self):
         self.assertFalse(matrix.complete(self.required, [], []))
         one = {'family': 'schema', 'case': 'field-types', 'passed': True}
@@ -140,11 +160,11 @@ class MatrixTests(unittest.TestCase):
         apk.write_bytes(b'a'); test.write_bytes(b'b')
         artifacts = {'app': {'path': str(apk), 'sha256': matrix.digest(apk)},
                      'test': {'path': str(test), 'sha256': matrix.digest(test)}}
-        args = argparse.Namespace(adb='unused', install=True, timeout=10, other_scope='common-owned', scope=None,
+        args = argparse.Namespace(adb='unused', install=True, timeout=10, foreground=True, other_scope='common-owned', scope=None,
                                   self_instrumentation_serial=[matrix.USB_SELF_ONLY])
         barrier = threading.Barrier(2)
         calls = {'remote': [], matrix.USB_SELF_ONLY: []}
-        def child(command, family, directory, label, seen, serial, artifacts, *rest):
+        def child(command, family, directory, label, seen, serial, artifacts, *rest, **kwargs):
             calls[serial].append((family, command))
             if family == 'production-schema':
                 barrier.wait(timeout=5)  # Cannot succeed if devices were serialized.
@@ -155,7 +175,8 @@ class MatrixTests(unittest.TestCase):
                 futures = [pool.submit(matrix.run_device, api, serial, args, manifest, output)
                            for api, serial in [(31, 'remote'), (33, matrix.USB_SELF_ONLY)]]
                 reports = [future.result(timeout=10) for future in futures]
-        self.assertTrue(all(r['passed'] for r in reports))
+        self.assertTrue(all(r['passed'] and r['foregroundRequested'] for r in reports))
+        self.assertTrue(all('--foreground' in command for calls_for_device in calls.values() for _, command in calls_for_device))
         self.assertEqual([family for family, _ in calls['remote']], ['production-bootstrap', 'production-schema', 'production-permissions'])
         self.assertEqual([family for family, _ in calls[matrix.USB_SELF_ONLY]], ['production-schema', 'production-permissions'])
         self.assertTrue(all('--self-instrumentation' in command and '--test-apk' not in command

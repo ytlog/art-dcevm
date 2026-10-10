@@ -1,5 +1,6 @@
 """Strict current-run production final/access gate, including every apply result."""
 import json
+from production_foreground_report import validate_foreground
 CASE_METHODS={'final-fields':'finalFieldsRequired','field-access':'fieldAccessRequired'}
 PROOFS={
  'final-fields':('finalDeniedCachedAndFresh','foreignFinalWritesDenied','cachedJniFinalWritesLegal','mutableRestoredAllFourPaths','oldObjectGcState'),
@@ -12,8 +13,8 @@ def parse_current_report(text,run_id,case,scope):
  for key,value in [('runId',run_id),('case',case),('initializationScope',scope),('route','DcevmRuntime/NativeBridge.apply')]:
   if report.get(key)!=value:raise ValueError('Current permission identity mismatch: '+key)
  return report
-def validate(report,run_id,case,scope='full'):
- errors=[]
+def validate(report,run_id,case,scope='full',require_foreground=False):
+ errors=validate_foreground(report,require_foreground)
  for key,value in [('runId',run_id),('case',case),('initializationScope',scope),('route','DcevmRuntime/NativeBridge.apply'),('stage','finished')]:
   if report.get(key)!=value:errors.append('Mismatch: '+key)
  if report.get('passed') is not True or report.get('sourceEngineUsed') is not False:errors.append('Production proof failed or used SourceEngine')
