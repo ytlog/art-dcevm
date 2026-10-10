@@ -23,7 +23,7 @@ std::mutex original_monitor;std::condition_variable original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker};
 Case selected=Case::Positive;
 int type_id,run_episode_id;
 constexpr uint32_t source_tid=913;
@@ -120,7 +120,7 @@ bool OriginalThread(class_metadata::Class17* type,bool owner){
  if(sized_scope)Put32(scope,12,1);Put32(scope,OriginalReferences(),uint32_t(uintptr_t(type)));Publish(scope);Put32(current,0,92u<<24);
  (owner?owner_slot:waiter_slot).store(scope+OriginalReferences(),std::memory_order_release);
  if(!owner&&waiter_native(episode_env,reinterpret_cast<jclass>(parent_class))!=JNI_TRUE)return false;
- Put32(current,0,0);const bool result=initialize_proxy(&linker,current,{scope+OriginalReferences()},true,true);
+ Put32(current,0,0);const bool result=initialize_proxy(selected==Case::WrongClassLinker&&!owner?static_cast<void*>(&runtime):static_cast<void*>(&linker),current,{scope+OriginalReferences()},true,true);
  assert(Top()==scope);Publish(nullptr);return result;
 }
 jint EpisodeRun(JNIEnv* e,jclass type,jmethodID method,va_list args){
@@ -181,6 +181,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  if(ok){native_initializer_episode::Service wrong_owner;assert(!wrong_owner.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));assert(observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));}
  if(ok&&selected==Case::Positive){
   native_initializer_episode::Witness absent;assert(!observer.CaptureCurrent(&env,&absent));
+  assert(observer.UsesClassLinker(&linker)&&!observer.UsesClassLinker(&runtime)&&!observer.UsesClassLinker(nullptr));
   witness_service=&observer;body_native=WitnessBody;StoreStatus(new_class,12);
   std::thread witness_owner([]{assert(OriginalThread(new_class,true));});witness_owner.join();
   modern_field_metadata::ReadContext outside{&observer,[](void*,const void*,size_t*out){*out=4;return true;}};
@@ -190,7 +191,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,
-     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf}){
+     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }
