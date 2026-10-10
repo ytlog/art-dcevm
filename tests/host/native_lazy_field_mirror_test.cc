@@ -9,12 +9,12 @@ struct Class{};struct Field {Class* owner;bool statik;bool missing_type=false;};
 static Class a,b,mirror_class;static int self,owner;static bool pending=false,oom=false,wrong_factory=false,foreign_context=false;
 static size_t globals=0,calls=0,local_calls=0,public_calls=0;static std::vector<std::unique_ptr<Mirror>> mirrors;
 static Field first{&a,false},second{&a,true},unresolved{&b,false,true};static Mirror m1{&first},m2{&second};
-static uintptr_t Factory(void* thread,void* raw,bool force){assert(thread==&self&&!force);++calls;
- if(oom){pending=true;return 0;}auto* f=static_cast<Field*>(raw);
+static native_field_factory_observer::Return Factory(void* thread,void* raw,bool force){assert(thread==&self&&!force);++calls;
+ if(oom){pending=true;return {0};}auto* f=static_cast<Field*>(raw);
  // Original source force=false tolerates its own missing-type resolution and
  // clears that resolution exception internally. The service never clears it.
  if(f->missing_type){pending=true;pending=false;}
- auto m=std::make_unique<Mirror>();m->field=wrong_factory?&second:f;auto p=m.get();mirrors.push_back(std::move(m));return uintptr_t(p);
+ auto m=std::make_unique<Mirror>();m->field=wrong_factory?&second:f;auto p=m.get();mirrors.push_back(std::move(m));return {uintptr_t(p)};
 }
 static jobject Local(JNIEnv*,void* m){assert(m);++local_calls;return reinterpret_cast<jobject>(m);}
 static jobject JNICALL Global(JNIEnv*,jobject p){assert(!pending);if(p)++globals;return p;}

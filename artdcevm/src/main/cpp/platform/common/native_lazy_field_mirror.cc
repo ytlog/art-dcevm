@@ -41,18 +41,24 @@ bool Service::Produce(const runnable_jni::Context& context,void* raw){
  std::unique_ptr<source_handle_roots::Scope> handle;
  if(s.four_){
   if(!s.FourProven()||!s.field_class_)return false;
-  void* field_class=nullptr;
-  if(!b.roots->BorrowOwnedStrongGlobal(context,s.field_class_,&field_class)||!field_class)return false;
+  void* rooted_owner=nullptr;
+  if(!b.roots->BorrowOwnedStrongGlobal(context,r.owner,&rooted_owner)||!rooted_owner||rooted_owner!=owner||b.declaring(b.owner,field)!=rooted_owner)return false;
   handle=b.roots->CreateScope(1,nullptr);if(!handle)return false;
-  handle->Set(0,field_class);
-  using Four=uintptr_t(*)(void*,native_field_factory_observer::HandleCarrier,void*,bool);
-  result=reinterpret_cast<Four>(s.factory_)(context.self,{handle->Slot(0)},field,false);
- }else result=reinterpret_cast<Factory>(s.factory_)(context.self,field,false);
+  handle->Set(0,rooted_owner);
+  result=reinterpret_cast<native_field_factory_observer::Factory>(s.factory_)(context.self,{handle->Slot(0)},field,false).reference;
+ }else result=reinterpret_cast<Factory>(s.factory_)(context.self,field,false).reference;
  if(context.env->ExceptionCheck()||!result)return false;
  jobject local=s.local_(context.env,reinterpret_cast<void*>(result));LocalRoot guard{context.env,local};
  if(context.env->ExceptionCheck()||!local)return false;
  jobject strong=context.env->NewGlobalRef(local);GlobalRoot root{context.env,strong};
  if(context.env->ExceptionCheck()||!strong)return false;
+ if(s.four_){
+  // Reflection Field class is an independent returned-object oracle; it is
+  // never supplied as the original factory's declaring-Class Handle.
+  LocalRoot type{context.env,context.env->GetObjectClass(strong)};
+  if(!type.value||context.env->ExceptionCheck())return false;
+  if(!context.env->IsSameObject(type.value,s.field_class_)||context.env->ExceptionCheck())return false;
+ }
  void *mirror_oracle=nullptr,*mirror=nullptr,*fresh_owner=nullptr;
  if(!b.oracle(b.owner,context,strong,&mirror_oracle)||context.env->ExceptionCheck()||!b.decode(b.owner,strong,&mirror)||mirror!=mirror_oracle||!mirror||
     !b.decode(b.owner,r.owner,&fresh_owner)||!fresh_owner||b.field(b.owner,mirror)!=field||b.declaring(b.owner,field)!=fresh_owner||

@@ -1559,8 +1559,9 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
       void* named=FieldLeaf(&r.engine,mirror);void* native_declaring=FieldOwner(&r.engine,r.native);
       r.identity.named_field=uintptr_t(named);r.identity.native_declaring=uintptr_t(native_declaring);
       if(named!=r.native||native_declaring!=declaring)return false;
-      // Diagnostics grant no permission; preserve the established Field Class proof.
-      r.roots=r.entry.root_before_valid&&r.entry.root_after_valid&&r.entry.root_after==uintptr_t(klass)&&r.entry.result==uintptr_t(mirror);return true;
+      // Four independent actual original targets prove this Handle owns the
+      // exact declaring Class, not the reflection Field allocation Class.
+      r.roots=native_field_factory_observer::DeclaringHandleProof(r.entry,declaring,mirror);return true;
      }
     } proof{*this,strong,strong_type,owner,native[n],trace->entries[n],field_factory_public_identities[trace_offset+n]};
     found[n]=strong&&strong_type&&!env->ExceptionCheck()&&FieldScope(this,env,strong,PublicMirror::Run,&proof);

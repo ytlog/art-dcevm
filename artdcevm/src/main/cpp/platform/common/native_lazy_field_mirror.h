@@ -44,7 +44,7 @@ class Service {
   static bool Produce(const runnable_jni::Context&,void*);
   bool ProducePublic(JNIEnv*,jclass,jfieldID,bool,void* expected,jobject*,std::string*);
   Bindings bindings_{};
-  using Factory=uintptr_t (*)(void*,void*,bool);
+  using Factory=native_field_factory_observer::Return (*)(void*,void*,bool);
   using Local=jobject (*)(JNIEnv*,void*);
   void* factory_=nullptr;Local local_=nullptr;bool four_=false;
   jobject field_class_=nullptr;

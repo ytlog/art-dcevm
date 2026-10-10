@@ -42,6 +42,9 @@ inline const char* RootFalseFailure(const Entry& e){
  if(e.normalized_field!=e.field)return "field-normalized";return nullptr;
 }
 inline bool RootFalseProof(const Trace& trace){for(const auto& e:trace.entries)if(RootFalseFailure(e))return false;return true;}
+inline bool DeclaringHandleProof(const Entry& entry,void* declaring,void* returned_mirror){
+ return !RootFalseFailure(entry)&&declaring&&returned_mirror&&entry.root_after==uintptr_t(declaring)&&entry.result==uintptr_t(returned_mirror);
+}
 inline std::string Describe(const Entry& e){
  const char* failure=RootFalseFailure(e);
  return std::string("proof=")+(failure?failure:"complete")+
