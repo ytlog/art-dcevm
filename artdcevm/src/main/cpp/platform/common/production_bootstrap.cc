@@ -224,6 +224,7 @@ struct NativeEngine final:Engine {
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
  source_cache_resolution::Service cache_resolver;
+ source_cache_resolution::PublicCacheStorage cache_public_storage;
  jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
  static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
@@ -1040,7 +1041,41 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
   if(error&&error->empty())*error="Public cache witness Runnable dispatch rejected: result="+std::to_string(static_cast<int>(result))+", route="+runnable_executor::Route();
   return false;
  }
- return source_cache_witness.cache!=nullptr||Fail(error,"Public cache witness completed without DexCache root");
+ if(!source_cache_witness.cache)return Fail(error,"Public cache witness completed without DexCache root");
+ cache_public_storage={};
+ if(!source_cache_resolution::CapturePublicCacheStorage(env,source_cache_witness.cache,this,
+  [](void*raw,JNIEnv*j,jobject local)->jobject{auto&e=*static_cast<NativeEngine*>(raw);auto g=j->NewGlobalRef(local);if(g)e.roots.push_back(g);return g;},&cache_public_storage,error))return false;
+ auto verify=[](const runnable_jni::Context&scope,void*raw)->bool{
+  auto&r=*static_cast<SourceCacheWitnessRequest*>(raw);auto&e=*r.engine;void*cache=nullptr,*klass=nullptr;
+  if(scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm)||
+    !runnable_executor::DecodeStrongGlobal(scope,e.source_cache_witness.cache,&cache)||
+    !runnable_executor::DecodeStrongGlobal(scope,e.cache_public_storage.strong_class,&klass)||!cache||!klass)
+   return Fail(r.error,"Public DexCache storage native root owner rejected");
+  size_t extent=0;if(!method_identity::ReadableMappingExtent(cache,&extent)||extent<112||e.storage.ObjectClass(cache)!=klass)
+   return Fail(r.error,"Public DexCache source object Class/extent differs from exact JNI Class");
+  bool legacy=true,dual=true;std::string offsets;
+  for(size_t i=0;i<7;++i){void*reflected=nullptr;
+   if(!runnable_executor::DecodeStrongGlobal(scope,e.cache_public_storage.reflected_fields[i],&reflected))return Fail(r.error,"Public DexCache reflected Field root rejected");
+   void*field=e.graph_field_leaf(reflected);field_copy::CopyFieldView text;
+   size_t field_extent=0;if(!field||!method_identity::ReadableMappingExtent(field,&field_extent)||field_extent<sizeof(field_array::Field))return Fail(r.error,"Public DexCache native ArtField extent unavailable");
+   if(!e.metadata.FieldIdentity(field,&text,r.error))return false;
+   uint32_t offset=0;std::memcpy(&offset,static_cast<const unsigned char*>(field)+offsetof(field_array::Field,offset),4);
+   if(!source_cache_resolution::CheckPublicCacheField(i,e.metadata.FieldDeclaringClass(field),klass,text.name,text.descriptor,
+     field_array::Flags(field),offset,&legacy,&dual,r.error))return false;
+   offsets+=" "+std::string(source_cache_resolution::PublicCacheFieldName(i))+"="+std::to_string(offset);
+  }
+  if(!source_cache_resolution::CheckPublicCacheStorage(e.cache_public_storage,cache,r.error)){
+   if(r.error)*r.error="Public DexCache source mismatch; native ArtField offsets:"+offsets+"; "+*r.error;
+   return false;
+  }
+  if(legacy||dual)return true;
+  if(r.error)*r.error="Exact public DexCache ArtField offsets differ from both fixed source declarations:"+offsets;
+  return false;
+ };
+ auto checked=runnable_executor::With(env,source_cache_witness.method,verify,&request);
+ if(checked==runnable_jni::Result::kSuccess)return true;
+ if(error&&error->empty())*error="Public DexCache independent native storage verification dispatch rejected";
+ return false;
 }
 struct AllocatorRequest {
  NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;
