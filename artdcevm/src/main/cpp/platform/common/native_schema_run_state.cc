@@ -13,6 +13,7 @@ struct RunState::State {
  source_handle_roots::Pool pool;native_hierarchy_source_cache::AllocatorBatchAccess access;
  native_hierarchy_graph::Authority authority;native_hierarchy_receiver::Preservation receivers;
  native_boot_method_catalog::Rooted boot_catalog;
+ std::unique_ptr<native_boot_aot_unaffected::Source> boot_unaffected;
  whole_process_frames::Service::Prepared frame_storage;
  std::unique_ptr<native_source_stop::Session> stop;
  std::unique_ptr<native_required_cleanup::Service> cleanup;
@@ -98,6 +99,7 @@ RunState::~RunState(){
  auto&s=*state_;Require(s.phase==State::Phase::Constructed||s.phase==State::Phase::Ended);
  s.d.registry->Clear();s.facade.reset();s.hierarchy.reset();
  if(s.phase==State::Phase::Constructed){if(s.ledger)s.ledger->ReleaseAfterRun(false);if(s.loading)s.loading->Complete(false);}
+ s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
  s.caches.reset();s.mapper.reset();s.ledger.reset();s.loading.reset();s.cleanup.reset();s.stop.reset();
  s.authority.Clear(s.context.env);
  if(current==this)current=s.previous;
@@ -133,6 +135,10 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata))return Fail(e,"Collected cleanup rejected actual holder/driver metadata");
  if(!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return false;
  if(!s.d.frames->PrepareRecoveryPlan(p,&s.frame_storage))return Fail(e,"Ordinary source frame exact Plan preparation refused");
+ if(s.d.boot_catalog&&s.d.boot_vtables&&s.d.boot_code&&s.d.members.method_model){
+  s.boot_unaffected=std::make_unique<native_boot_aot_unaffected::Source>(p,*s.stop,s.context.self,s.boot_catalog,*s.ledger,*s.d.members.metadata,*s.d.members.method_model,*s.d.boot_vtables,*s.d.boot_code);
+  s.frame_storage.boot_unaffected=s.boot_unaffected.get();
+ }
  s.plan=&p;s.holder=g.holder;size_t publication_count=0;
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
  const auto collect=s.d.registry->Collect();
@@ -196,6 +202,7 @@ void RunState::Refund()noexcept{
  if(s.stop)Require(s.stop->RollbackBeforeSource());
  s.facade.reset();
  if(s.hierarchy&&s.hierarchy->Ready())s.hierarchy->Refund();
+ s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
  s.cleanup.reset();s.stop.reset();
  s.phase=State::Phase::Refunded;
 }

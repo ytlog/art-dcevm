@@ -1,5 +1,6 @@
 #include "platform/common/native_boot_method_catalog.h"
 #pragma once
+#include "platform/common/native_boot_aot_unaffected.h"
 #include "platform/common/native_source_stop.h"
 #include "platform/common/native_cache_service.h"
 #include "platform/common/stack_visitor_service.h"
@@ -41,7 +42,7 @@ static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(a
 struct Report {
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
-   async_frames=0,aot_frames=0,shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
+   async_frames=0,aot_frames=0,unaffected_aot_frames=0,shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
  const char* failure="not-scanned";
  bool accepted=false;
 };
@@ -107,6 +108,7 @@ class Service {
     uint64_t recovery_generation=0;
     const native_boot_method_catalog::Rooted* boot_catalog=nullptr;
     const source_handle_roots::StoppedReader* boot_reader=nullptr;
+    const native_boot_aot_unaffected::Proof* boot_unaffected=nullptr;
     ~Prepared(){delete context;}
     Prepared(const Prepared&)=delete;Prepared& operator=(const Prepared&)=delete;
   };
@@ -200,20 +202,26 @@ class Service {
       if(!s.compiled_ready_)return Reject("whole-frame-compiled-geometry-not-calibrated");
       if(!this->header)return Reject("whole-frame-unmarked-or-unknown-compiled-code");
       if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      bool unaffected_aot=false;
       if(r.recovery){
         if(!s.async_.Bound())return Reject("whole-frame-original-async-recovery-reader-unavailable");
         const auto kind=s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit);
         if(kind==native_frame_code_owner::Kind::Aot)++r.report.aot_frames;
         if(kind==native_frame_code_owner::Kind::Unknown)return Reject("whole-frame-recovery-code-owner-unproved");
-        if(!s.async_.Query(*this->quick_frame,this->pc,*r.recovery)){
+        const bool asynchronous=s.async_.Query(*this->quick_frame,this->pc,*r.recovery);
+        if(!asynchronous){
          if(kind==native_frame_code_owner::Kind::Aot&&r.storage.boot_catalog&&r.storage.boot_reader){
           const auto*body=r.storage.boot_catalog->Lookup(*this->quick_frame,*r.storage.boot_reader,*r.recovery);
           if(body){r.report.aot_declaring_class=body->declaring_signature.c_str();r.report.aot_method=body->name.c_str();r.report.aot_descriptor=body->descriptor.c_str();}
-          if(body&&body->body==native_boot_method_catalog::Body::kPrimitiveLocal)return Reject("whole-AOT-primitive-catalog-still-needs-closed-dependency-and-map-proof");
+          if(body&&body->body==native_boot_method_catalog::Body::kPrimitiveLocal&&!r.storage.boot_unaffected)return Reject("whole-AOT-primitive-source-dependency-owner-not-calibrated");
          }
-         return Reject(kind==native_frame_code_owner::Kind::Aot?"whole-AOT-requires-actual-frame-exit-or-dependency-closure":"whole-frame-original-async-recovery-refused");
-        }
-        ++r.report.async_frames;
+         // This is only a candidate. No flagless AOT frame is accepted until
+         // every map/value and the concrete same-Plan source closure below pass.
+         const bool observed_flag=s.flag_||s.family_==Family::kAndroid11||s.family_==Family::kAndroid12;
+         unaffected_aot=kind==native_frame_code_owner::Kind::Aot&&physical&&observed_flag&&
+           !s.MarkedHeader(this->header)&&r.storage.boot_unaffected;
+         if(!unaffected_aot)return Reject(kind==native_frame_code_owner::Kind::Aot?"whole-AOT-requires-actual-frame-exit-or-dependency-closure":"whole-frame-original-async-recovery-refused");
+        }else ++r.report.async_frames;
       }
       if(s.family_==Family::kAndroid11?(!s.legacy_fast_&&(!s.legacy_canonical_||!s.debugger_)):
          s.family_==Family::kAndroid12?(!s.fast_&&(!s.legacy_canonical_||!s.debugger_)):(!s.fast_&&(!s.canonical_||!s.debugger_)))return Reject("whole-frame-original-location-reader-unavailable");
@@ -235,6 +243,7 @@ class Service {
       code_info_view::View view;decoded_frame_recovery::RegisterRange range;
       if(map.table!=&info->stack_maps||!code_info_view::ReadSourceObject(s.family_,info,sizeof(info_storage),&view))return Reject("whole-frame-original-map-source-geometry-mismatch");
       if(view.code_size&&(!*view.code_size||offset>*view.code_size))return Reject("whole-frame-PC-outside-native-code-size");
+      if(unaffected_aot&&!native_boot_aot_unaffected::TablesMapped(view,*r.recovery))return Reject("whole-AOT-map-tables-lack-current-stop-extent");
       uint32_t pc;
       if(!(physical?view.StackMaps().Read(map.row,2,&pc):view.InlineInfos().Read(this->inline_frames.end.row-1,1,&pc))||pc==UINT32_MAX||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-original-versus-complete-map-DexPc-mismatch");
       if(!decoded_frame_recovery::Decode(view,map.row,this->inline_frames.begin.row,this->inline_frames.end.row,r.storage.locations.data(),r.storage.locations.size(),&range))return Reject("whole-frame-incomplete-dex-register-map");
@@ -290,7 +299,12 @@ class Service {
          this->header!=original_header||(!r.recovery&&!s.MarkedHeader(original_header))||this->quick_frame!=original_quick||this->pc!=original_pc||
          this->shadow_frame||this->inline_frames.begin.row!=original_begin||this->inline_frames.end.row!=original_end||
          !s.stack_.Method(this,sizeof(*this),&current)||current!=method||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-source-owner-or-native-cursor-lost-after-map");
-      if(r.recovery&&!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject("whole-frame-original-async-recovery-changed-after-map");
+      if(unaffected_aot){
+       if(s.async_.Query(*this->quick_frame,this->pc,*r.recovery)||s.MarkedHeader(this->header)||
+          s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit)!=native_frame_code_owner::Kind::Aot||
+          !r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery))return Reject("whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
+       ++r.report.unaffected_aot_frames;
+      }else if(r.recovery&&!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject("whole-frame-original-async-recovery-changed-after-map");
       ++r.report.compiled_frames;if(!physical)++r.report.inlined_frames;r.report.map_locations+=range.count;return true;
     }
   };

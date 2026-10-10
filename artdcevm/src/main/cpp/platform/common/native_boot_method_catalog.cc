@@ -42,14 +42,15 @@ struct Loaded {
  ~Loaded(){if(p){for(jint i=0;i<count;++i)env->DeleteLocalRef(p[i]);ti->Deallocate(reinterpret_cast<unsigned char*>(p));}}
 };
 }
-Body Classify(const unsigned char*bytes,size_t size,const char*descriptor)noexcept{
+Body Classify(const unsigned char*bytes,size_t size,const char*descriptor,size_t exact_pc)noexcept{
  if(!bytes||!size||(size&1)||!Signature(descriptor))return Body::kUnknown;
  // Deliberately closed straight-line scalar subset. All reference, field,
  // array, call, branch/payload, synchronization and opaque opcodes remain unknown.
  // A rejection is not a claim that the original method cannot be recovered.
  const char result=std::strchr(descriptor,')')[1];
- bool returned=false;
+ bool returned=false,boundary=exact_pc==SIZE_MAX;
  for(size_t pc=0;pc<size/2;){
+  if(pc==exact_pc)boundary=true;
   const uint16_t unit=uint16_t(bytes[pc*2])|(uint16_t(bytes[pc*2+1])<<8);
   const unsigned op=unit&255;size_t width=0;
   if(returned)return Body::kUnknown;
@@ -68,7 +69,7 @@ Body Classify(const unsigned char*bytes,size_t size,const char*descriptor)noexce
   if(!width||width>size/2-pc)return Body::kUnknown;
   pc+=width;
  }
- return returned?Body::kPrimitiveLocal:Body::kUnknown;
+ return returned&&boundary?Body::kPrimitiveLocal:Body::kUnknown;
 }
 void Catalog::Clear(JNIEnv*env)noexcept{
  if(env)for(auto root:roots_)env->DeleteGlobalRef(root);

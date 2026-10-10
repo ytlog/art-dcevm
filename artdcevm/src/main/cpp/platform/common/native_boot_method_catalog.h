@@ -10,7 +10,8 @@ namespace artdcevm::native_boot_method_catalog {
 // Public ART JVMTI GetBytecodes returns DEX code units, not JVM bytecode.
 // This classification is evidence about this body only, never a recovery grant.
 enum class Body {kPrimitiveLocal,kUnknown};
-Body Classify(const unsigned char*,size_t,const char* descriptor) noexcept;
+// Optional exact PC must identify an instruction start, never an operand unit.
+Body Classify(const unsigned char*,size_t,const char* descriptor,size_t exact_pc=SIZE_MAX) noexcept;
 struct Method {
  void* native_method=nullptr;
  size_t declaring_root=0;

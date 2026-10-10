@@ -20,6 +20,6 @@ inline bool ReadCodeView(const code_item_metadata::Layout&layout,const void*meth
  if(!units||uint64_t(units)*2>SIZE_MAX||!Range(base,bytes,instructions,size_t(units)*2)||identity.dex_method_index>=U32(uintptr_t(map.begin)+88))return false;
  // Call-site IDs live in the DEX map list; ordinary invocation parsing needs
  // only method IDs. Custom/polymorphic remain closed until typed bridge proof.
- *out={reinterpret_cast<const uint16_t*>(instructions),units,registers,U32(uintptr_t(map.begin)+88),0};return true;
+ *out={reinterpret_cast<const uint16_t*>(instructions),units,registers,U32(uintptr_t(map.begin)+88),0,map};return true;
 }
 }
