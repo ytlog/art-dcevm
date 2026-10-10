@@ -1,6 +1,7 @@
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/runtime_instance_probe.h"
 #include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <mutex>
@@ -86,24 +87,7 @@ bool Prepare(const runnable_jni::Context& context,void* opaque){
       identity.dex_method_index==r.oracle->dex_method_index&&
       (identity.access_flags&0x11fu)==(r.oracle->java_modifiers&0x11fu);
 }
-bool ReadAfterObservation(const runnable_jni::Context&,void* opaque){
-  auto& r=*static_cast<Read*>(opaque);size_t extent=0;
-  if(!method_identity::ReadableMappingExtent(r.runtime,&extent))return false;
-  // Each fixed source candidate must match seven independently observed actual
-  // native receivers. Identical source geometries authorize the same View;
-  // neither the API number nor an unobserved Runtime pointer is an oracle.
-  for(auto candidate:{runtime_services::Declaration::kAndroid11,runtime_services::Declaration::kAndroid12,
-      runtime_services::Declaration::kAndroid13,runtime_services::Declaration::kAndroid14,
-      runtime_services::Declaration::kAndroid15To17}){
-    runtime_services::View view;
-    if(runtime_services::Read(candidate,r.runtime,extent,&view)&&
-       view.jit==jit.load()&&view.jit_code_cache==cache.load()&&view.heap==heap.load()&&
-       view.class_linker==r.observed.receivers.class_linker&&
-       view.jni_id_manager==r.observed.receivers.jni_id_manager&&
-       view.thread_list==r.observed.receivers.thread_list&&view.java_vm==r.observed.receivers.java_vm){r.view=view;return true;}
-  }
-  return false;
-}
+
 }
 bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
     const method_identity::Oracle& hot,const method_identity::Calibration& model,
@@ -111,7 +95,8 @@ bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
     runtime_services::View* output,std::string* error){
   std::unique_lock<std::mutex> guard(operation,std::try_to_lock);
   if(!guard.owns_lock()||!env||!strong_class||!output||!services.runtime||
-      !services.receivers.java_vm||!additive_target||!additive_dex||!dex_size||dex_size>INT32_MAX||(model.model!=method_identity::Model::kMethod12Onward&&model.model!=method_identity::Model::kMethod11)||
+      !services.instrumentation||!services.receivers.class_linker||!services.receivers.jni_id_manager||
+      !services.receivers.thread_list||!services.receivers.java_vm||!additive_target||!additive_dex||!dex_size||dex_size>INT32_MAX||(model.model!=method_identity::Model::kMethod12Onward&&model.model!=method_identity::Model::kMethod11)||
       model.identities.size()<3||env->ExceptionCheck())return Fail(error,"Invalid owned JIT receiver request");
   if(!Install(hooks,error))return false;
   auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(
@@ -170,13 +155,16 @@ bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
   if(structural!=JVMTI_ERROR_NONE)return Fail(error,"Owned public additive cache-calibration transaction failed");
   if(gc!=JVMTI_ERROR_NONE||!cache.load()||!heap.load()||conflict.load())
     return Fail(error,(std::string("Public GC receiver observation: cache=")+(cache.load()?"observed":"missing")+", heap="+(heap.load()?"observed":"missing")+", conflict="+(conflict.load()?"true":"false")).c_str());
-  if(runnable_executor::With(env,strong_class,ReadAfterObservation,&request)!=runnable_jni::Result::kSuccess)
-    return Fail(error,"Observed JIT/cache/heap disagree with candidate Runtime slots");
-  // Also retain every earlier independently observed receiver in this snapshot.
-  if(request.view.class_linker!=services.receivers.class_linker||
-      request.view.jni_id_manager!=services.receivers.jni_id_manager||
-      request.view.thread_list!=services.receivers.thread_list||
-      request.view.java_vm!=services.receivers.java_vm)return Fail(error,"Runtime service generation changed during JIT calibration");
+  void* actual_runtime=nullptr;
+  if(!runtime_instance::Calibrate(hooks,static_cast<JavaVM*>(services.receivers.java_vm),&actual_runtime,error))return false;
+  if(actual_runtime!=services.runtime)
+    return Fail(error,"Runtime service generation changed during JIT calibration");
+  // The original enqueue call identifies this owned hot method's JIT. Public
+  // GC and public structural redefinition identify Heap and code cache. Their
+  // conflict checks and the independently observed VM/Runtime identity prove
+  // ownership without authorizing any vendor-specific Runtime storage layout.
+  request.view=services.receivers;
+  request.view.jit=jit.load();request.view.jit_code_cache=cache.load();request.view.heap=heap.load();
   *output=request.view;if(error)error->clear();return true;
 }
 }

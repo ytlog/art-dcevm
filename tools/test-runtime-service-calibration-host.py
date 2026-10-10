@@ -12,7 +12,7 @@ out.mkdir(parents=True,exist_ok=True)
 binary=out/'test'
 subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-pthread','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/runtime_service_calibration_test.cc'),'-o',str(binary)],check=True)
 logs=[]
-for mode in ('success','core-failure','getenv-failure','getenv-missing','capability-failure','callbacks-failure','enable-failure','receiver-bypassed','receiver-missing','receiver-conflict','missing-runtime','pending-carrier','pending-close-failure','mapping-failure','source-mismatch','pending-after-read','disable-failure','dispose-failure','both-close-failures'):
+for mode in ('success','legacy','dual','source-mismatch','attach-missing','attach-install-failure','attach-missing-original','core-failure','getenv-failure','getenv-missing','capability-failure','callbacks-failure','enable-failure','receiver-bypassed','receiver-missing','receiver-conflict','missing-runtime','attach-failure','attach-bypassed','attach-conflict','singleton-mismatch','vm-mismatch','detach-failure','disable-failure','dispose-failure','both-close-failures'):
  result=subprocess.run([str(binary),mode],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
  logs.append(result.stdout+result.stderr)
  (out/'result.txt').write_text(''.join(logs))

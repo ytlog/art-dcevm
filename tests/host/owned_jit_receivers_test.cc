@@ -18,7 +18,7 @@ LegacyEnqueue legacy_proxy=nullptr;
 Enqueue enqueue_proxy;Collect cache_proxy;HeapGc heap_proxy;
 int jit_object,cache_object,heap_object,self,handle[3],suspends=0,warmups=0,collections=0,mutations=0,disposed=0;
 alignas(8) std::array<unsigned char,40> native_method{};
-JNIEnv* current_env;JavaVM* current_vm;
+JNIEnv* current_env;JavaVM* current_vm;void* actual_runtime;
 jvmtiEnv* current_jvmti;
 void EnqueueOriginal(void* receiver,void* method,void* thread){
   assert(receiver==&jit_object&&method==native_method.data()&&thread==&self);++warmups;
@@ -85,6 +85,11 @@ jvmtiError Extensions(jvmtiEnv*,jint* count,jvmtiExtensionFunctionInfo** output)
  *count=1;*output=&extension;return JVMTI_ERROR_NONE;
 }
 }
+namespace artdcevm::runtime_instance {
+bool Calibrate(HookEngine&,JavaVM* vm,void** output,std::string*) {
+ assert(vm==current_vm);*output=actual_runtime;return true;
+}
+}
 namespace artdcevm::runnable_executor {
 runnable_jni::Result With(JNIEnv* env,jobject,runnable_jni::Operation operation,void* data){
  const runnable_jni::Context context{&self,env,current_vm};
@@ -115,12 +120,14 @@ int main(int argc,char** argv){
  method_identity::Calibration model{method_identity::Model::kMethod12Onward,{{1,1},{8,2},{0x102,3}},{32,32,32}};
  if(!std::strcmp(mode,"legacy11"))model.model=method_identity::Model::kMethod11;
  if(!std::strcmp(mode,"wrong-identity"))++oracle.dex_method_index;
- if(!std::strcmp(mode,"wrong-graph"))runtime.jit_code_cache=&handle[0];
+ actual_runtime=core.runtime;
+ if(!std::strcmp(mode,"wrong-graph"))core.runtime=&handle[0];
+ if(!std::strcmp(mode,"source-mismatch"))runtime.jit_code_cache=&handle[0];
  Hooks hooks;runtime_services::View output;output.heap=reinterpret_cast<void*>(77);
  unsigned char dex=7;std::string error;
  const bool result=owned_jit_receivers::CalibrateJitReceivers(hooks,&env,reinterpret_cast<jobject>(&handle[0]),oracle,model,core,
     reinterpret_cast<jclass>(&handle[2]),&dex,1,&output,&error);
- if(!std::strcmp(mode,"success")||std::strstr(mode,"legacy")){
+ if(!std::strcmp(mode,"success")||!std::strcmp(mode,"source-mismatch")||std::strstr(mode,"legacy")){
   assert(result&&error.empty()&&output.jit==&jit_object&&output.jit_code_cache==&cache_object&&output.heap==&heap_object);
   assert(warmups==32&&collections==1&&mutations==1&&disposed==1);
  }else{

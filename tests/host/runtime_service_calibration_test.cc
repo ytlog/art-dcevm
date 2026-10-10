@@ -1,5 +1,6 @@
 // Full production calibration orchestration with independent public JNI/JVMTI
 // tables. Named-hook fixture invokes the real observer while JVMTI enables events.
+#include "platform/common/runtime_instance_probe.cc"
 #include "platform/common/runtime_service_calibration.cc"
 #include <cassert>
 #include <cstring>
@@ -19,7 +20,8 @@ void* thread_list=reinterpret_cast<void*>(0x4400);
 jobject thread=reinterpret_cast<jobject>(0x5500);
 jclass klass=reinterpret_cast<jclass>(0x6600);
 jmethodID method=reinterpret_cast<jmethodID>(0x7700);
-void* listener_proxy=nullptr;
+void* listener_proxy=nullptr;void* attach_proxy=nullptr;
+int attach_calls=0,detach_calls=0;
 JNIEnv jni{};JavaVM vm{};jvmtiEnv owned_env{};
 alignas(8) unsigned char runtime_storage[8192]{};
 void* runtime=runtime_storage;
@@ -28,6 +30,12 @@ void Original(void* receiver,void* listener,uint32_t events,ListenerType kind) {
      listener==&owned_env&&events==4&&kind==ListenerType::kRegularListener);
  ++original_calls;
 }
+bool AttachOriginal(void* receiver,const char* name,bool daemon,jobject group,bool peer,bool callbacks) {
+ assert(name&&!std::strcmp(name,"artdcevm-runtime-proof")&&!daemon&&!group&&peer&&callbacks);
+ assert(receiver==runtime_storage||receiver==reinterpret_cast<void*>(0x8800));++attach_calls;
+ return mode!="attach-failure";
+}
+bool AttachLegacy(void* r,const char* n,bool d,jobject g,bool p){return AttachOriginal(r,n,d,g,p,true);}
 void Construct(void*,const char*,bool) {}
 void Destroy(void*) {}
 struct Hooks:HookEngine {
@@ -40,10 +48,18 @@ struct Hooks:HookEngine {
   if(!std::strcmp(name,"_ZN3art16ScopedSuspendAllC2EPKcb"))return reinterpret_cast<void*>(Construct);
   if(!std::strcmp(name,"_ZN3art16ScopedSuspendAllD2Ev"))return reinterpret_cast<void*>(Destroy);
   if(!std::strcmp(name,"_ZN3art7Runtime9instance_E"))return mode=="missing-runtime"?nullptr:&runtime;
+  if(!std::strcmp(name,"_ZN3art7Runtime19AttachCurrentThreadEPKcbP8_jobjectbb"))
+   return (mode=="legacy"||mode=="attach-missing")?nullptr:reinterpret_cast<void*>(AttachOriginal);
+  if(!std::strcmp(name,"_ZN3art7Runtime19AttachCurrentThreadEPKcbP8_jobjectb"))
+   return (mode=="legacy"||mode=="dual")?reinterpret_cast<void*>(AttachLegacy):nullptr;
   assert(false);return nullptr;
  }
  void* Install(void* target,void* replacement,void** original,std::string*)override {
-  ++hook_installs;listener_proxy=replacement;*original=target;return target;
+  ++hook_installs;
+  if(target!=reinterpret_cast<void*>(Original)&&mode=="attach-install-failure")return nullptr;
+  if(target==reinterpret_cast<void*>(Original))listener_proxy=replacement;
+  else attach_proxy=replacement;
+  *original=(target!=reinterpret_cast<void*>(Original)&&mode=="attach-missing-original")?nullptr:target;return target;
  }
  bool Remove(void*,std::string*)override {assert(false);return false;}
 };
@@ -53,6 +69,18 @@ jint JNICALL GetEnv(JavaVM* actual,void** output,jint version) {
  if(mode=="getenv-missing") {*output=nullptr;return JNI_OK;}
  *output=&owned_env;return JNI_OK;
 }
+jint JNICALL AttachPublic(JavaVM* actual,void** output,void* raw) {
+ assert(actual==&vm);auto* args=static_cast<JavaVMAttachArgs*>(raw);*output=&jni;
+ if(mode=="attach-bypassed")return JNI_OK;
+ auto receiver=mode=="singleton-mismatch"?reinterpret_cast<void*>(0x8800):runtime;
+ bool ok=mode=="legacy"?
+   reinterpret_cast<runtime_instance::Legacy>(attach_proxy)(receiver,args->name,false,args->group,true):
+   reinterpret_cast<runtime_instance::Modern>(attach_proxy)(receiver,args->name,false,args->group,true,true);
+ if(mode=="attach-conflict")reinterpret_cast<runtime_instance::Modern>(attach_proxy)(reinterpret_cast<void*>(0x8800),args->name,false,args->group,true,true);
+ return ok?JNI_OK:JNI_ERR;
+}
+jint JNICALL DetachPublic(JavaVM* actual){assert(actual==&vm);++detach_calls;return mode=="detach-failure"?JNI_ERR:JNI_OK;}
+jint JNICALL PublicVm(JNIEnv*,JavaVM** output){*output=mode=="vm-mismatch"?nullptr:&vm;return JNI_OK;}
 jvmtiError JNICALL AddCapabilities(jvmtiEnv* actual,const jvmtiCapabilities* caps) {
  assert(actual==&owned_env&&caps->can_generate_method_entry_events==1);
  return mode=="capability-failure"?JVMTI_ERROR_NOT_AVAILABLE:JVMTI_ERROR_NONE;
@@ -120,19 +148,14 @@ bool Calibrate(HookEngine&,JNIEnv*,Receivers* result,std::string* error) {
  *result={class_linker,jni_manager,&vm,thread_list};return true;
 }
 }
-namespace artdcevm::method_identity {
-bool ReadableMappingExtent(const void* pointer,size_t* extent) {
- assert(pointer==runtime_storage);*extent=sizeof(runtime_storage);return mode!="mapping-failure";
-}
-}
 int main(int argc,char** argv) {
  assert(argc==2);mode=argv[1];
- JNIInvokeInterface_ invocation{};invocation.GetEnv=GetEnv;vm.functions=&invocation;
+ JNIInvokeInterface_ invocation{};invocation.GetEnv=GetEnv;invocation.AttachCurrentThread=AttachPublic;invocation.DetachCurrentThread=DetachPublic;vm.functions=&invocation;
  jvmtiInterface_1_ functions{};
  functions.AddCapabilities=AddCapabilities;functions.SetEventCallbacks=SetCallbacks;
  functions.SetEventNotificationMode=Events;functions.DisposeEnvironment=Dispose;
  owned_env.functions=&functions;
- JNINativeInterface_ native{};native.ExceptionCheck=ExceptionCheck;native.ExceptionClear=ExceptionClear;
+ JNINativeInterface_ native{};native.ExceptionCheck=ExceptionCheck;native.GetJavaVM=PublicVm;native.ExceptionClear=ExceptionClear;
  native.FindClass=FindClass;native.GetStaticMethodID=GetMethod;native.CallStaticObjectMethodV=CallStatic;
  native.NewGlobalRef=Global;native.DeleteGlobalRef=DeleteGlobal;native.DeleteLocalRef=DeleteLocal;
  jni.functions=&native;
@@ -151,8 +174,8 @@ int main(int argc,char** argv) {
  output.receivers.class_linker=reinterpret_cast<void*>(0xff20);
  const auto before=output;
  bool ok=runtime_services::CalibrateRuntimeServices(hooks,&jni,&output,&error);
- assert(!runtime_services::active&&clear_calls==0&&global_creates==global_deletes&&hook_installs==1);
- if(mode=="success") {
+ assert(!runtime_services::active&&clear_calls==0&&global_creates==global_deletes&&hook_installs>=1);
+ if(mode=="success"||mode=="legacy"||mode=="dual"||mode=="source-mismatch") {
   assert(ok&&error.empty()&&closed&&disable_calls==1&&dispose_calls==1);
   assert(output.runtime==runtime&&output.instrumentation==instrumentation);
   assert(output.receivers.class_linker==class_linker&&output.receivers.jni_id_manager==jni_manager);
@@ -170,14 +193,9 @@ int main(int argc,char** argv) {
   }
   if(mode=="disable-failure"||mode=="both-close-failures")assert(error.find("disable failed")!=std::string::npos);
   if(mode=="dispose-failure")assert(error.find("disposal failed")!=std::string::npos);
-  if(mode=="pending-carrier"||mode=="pending-close-failure") {
-   assert(pending&&error=="Owned Runtime receiver calibration carrier unavailable");
-  }
-  if(mode=="pending-after-read")assert(pending&&error=="Pending JNI exception after Runtime service observation");
-  if(mode=="source-mismatch")assert(error.find("android11/12/13/14/15to17=")!=std::string::npos&&error.find("/30]")!=std::string::npos);
   if(mode=="core-failure")assert(error=="Original public JNI receiver failure");
  }
- if(mode=="success")assert(original_calls==1&&callback_calls==1&&enable_calls==1);
+ if(ok)assert(attach_calls==1&&detach_calls==1&&original_calls==1&&callback_calls==1&&enable_calls==1);
  if(mode=="receiver-bypassed")assert(original_calls==0);
  if(mode=="receiver-conflict")assert(original_calls==2);
  if(mode=="capability-failure")assert(callback_calls==0&&enable_calls==0);

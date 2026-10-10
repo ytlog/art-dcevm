@@ -40,6 +40,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/android13/compiled_frame_diagnostics.cc
     platform/android13/device_diagnostics.cc
     platform/common/runtime_service_calibration.cc
+    platform/common/runtime_instance_probe.cc
     platform/android13/runtime_receiver_probe.cc
     platform/common/runtime_receiver_probe.cc
     platform/android13/owned_jit_receiver_probe.cc

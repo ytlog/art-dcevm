@@ -12,8 +12,8 @@ runnable_jni::Result With(JNIEnv*,jobject,runnable_jni::Operation,void*) {
 namespace artdcevm::runtime_receiver {
 bool Calibrate(HookEngine&,JNIEnv*,Receivers*,std::string*) {return false;}
 }
-namespace artdcevm::method_identity {
-bool ReadableMappingExtent(const void*,size_t*) {return false;}
+namespace artdcevm::runtime_instance {
+bool Calibrate(HookEngine&,JavaVM*,void**,std::string*) {return false;}
 }
 using namespace artdcevm;
 using abi::arm64::android_common::ListenerType;

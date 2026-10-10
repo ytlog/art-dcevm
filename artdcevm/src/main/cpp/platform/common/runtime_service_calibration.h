@@ -3,7 +3,7 @@
 #include "platform/common/runtime_services.h"
 #include <jni.h>
 namespace artdcevm::runtime_services {
-// Named listener ABI + independently observed service receivers select the
-// fixed Runtime declaration. This never selects from SDK or BuildID.
+// Named original receivers and public VM attachment prove service ownership.
+// This does not select or authorize a Runtime layout from SDK or BuildID.
 bool CalibrateRuntimeServices(HookEngine&,JNIEnv*,Snapshot*,std::string* error);
 }
