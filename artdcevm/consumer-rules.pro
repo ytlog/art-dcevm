@@ -24,3 +24,6 @@
 # Native factory parses original installed DEX and resolves fixed caller/gate names.
 -keep class com.github.ytlog.artdcevm.internal.CompiledFrameFixture { *; }
 -keep class com.github.ytlog.artdcevm.internal.CompiledFrameFixture$Run { *; }
+
+# Native initializer dispatch calibration permanently retires this private oracle.
+-keep class com.github.ytlog.artdcevm.internal.InitializerGuardOracle { *; }

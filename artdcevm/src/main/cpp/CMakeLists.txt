@@ -155,6 +155,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/modern_field_guards.cc
     platform/common/modern_retirement_cleanup.cc
     platform/common/modern_method_guards.cc
+        platform/common/modern_initializer_guards.cc
     platform/common/retired_method_registry.cc
     platform/android13/retired_method_registry_bridge.cc
     platform/android13/retired_member_guard.cc

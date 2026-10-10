@@ -177,6 +177,9 @@ size_t RejectedMethodEntries() { return rejected.load(); }
 bool MethodEntryGuardsOwn(const RetiredMethodRegistry& registry) {
   return installed_complete&&state.registry==&registry;
 }
+bool MethodEntryGuardsOwn(const RetiredMethodRegistry& registry,const void* manager) {
+  return MethodEntryGuardsOwn(registry)&&state.manager==manager;
+}
 bool RejectRetiredMethod(void* method,void* self,void* result) {
   return installed_complete&&state.registry&&Guard(method,self,result);
 }

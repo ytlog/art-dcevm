@@ -15,5 +15,7 @@ bool InstallMethodEntryGuards(HookEngine&, JNIEnv*, jobject owned_strong_global,
 size_t RejectedMethodEntries();
 // Shared owner queries for calibrated native MethodHandle dispatch guards.
 bool MethodEntryGuardsOwn(const RetiredMethodRegistry&);
+// Same independently observed decoder owner; extensions must not borrow a foreign manager.
+bool MethodEntryGuardsOwn(const RetiredMethodRegistry&,const void* observed_jni_id_manager);
 bool RejectRetiredMethod(void* method,void* self,void* result);
 }  // namespace artdcevm::retirement
