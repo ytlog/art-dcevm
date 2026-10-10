@@ -85,12 +85,15 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  s.loading=std::make_unique<native_source_class_loading::Run>(*s.d.loading,s.driver,s.context);
  s.ledger=std::make_unique<native_hierarchy_private_ledger::Ledger>(s.driver,s.context,s.pool,s.access,*s.d.members.metadata,*s.d.dex_registry,s.cleanup.get());
  if(s.d.boot_catalog){
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=boot-root-import-begin roots=%zu methods=%zu",s.d.boot_catalog->Roots().size(),s.d.boot_catalog->Methods().size());
   if(!s.boot_catalog.Import(*s.d.boot_catalog,s.context,*s.d.roots,s.pool,s.d.members.metadata,[](const void*owner,void*method)noexcept{return static_cast<const modern_field_metadata::FieldMetadata*>(owner)->MethodDeclaringClass(method);},error))return Fail(error,"Source boot catalog root import refused");
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=boot-root-import-return");
   s.frame_storage.boot_catalog=&s.boot_catalog;s.frame_storage.boot_reader=s.ledger.get();
  }
  s.mapper=std::make_unique<native_hierarchy_source_cache::Mapper>(s.context,s.pool,*s.d.members.metadata,*s.d.members.fields,s.access,s.ledger.get(),w.semantic);
  if(!s.mapper->BindSemanticInspection(this,InspectSemantic))return Fail(error,"Source semantic inspection controller binding failed");
  s.caches=std::make_unique<native_hierarchy_source_cache::Composite>(*s.mapper,s.incoming);
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=incoming-cache-begin");
  void*cache=nullptr,*expected=nullptr;
  if(!w.strong_cache||!w.strong_expected_class||!s.d.roots->BorrowOwnedStrongGlobal(s.context,w.strong_cache,&cache))return Fail(error,"Source type-cache independent strong oracle unavailable");
  void*cache_root=s.pool.Add(cache,error);if(!cache_root)return Fail(error,"Source cache strong oracle could not enter actual root pool");
@@ -101,6 +104,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  witness.semantic_resolution_proved=w.resolve!=nullptr;
  if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error)){if(error&&error->empty())*error="Source cache public storage callback rejected original storage witness";return false;}
  if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error)){if(error&&error->empty())*error="Source incoming cache calibration rejected actual independent witness";return false;}
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=incoming-cache-return");
  if(!s.d.typed_heap||!s.d.typed_heap->Calibrated())return Fail(error,"Schema source Run requires independent typed heap calibration");
  s.typed_storage=std::make_unique<native_hierarchy_typed_storage::Proof>(*s.d.typed_heap,*s.d.roots,*s.d.members.metadata);
  // Public Field.getType can load Classes. Finish its complete fixed point

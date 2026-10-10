@@ -1076,7 +1076,9 @@ struct NativeEngine final:Engine {
    native_boot_method_catalog::Codec codec{runtime.receivers.jni_id_manager,graph_decode_method,
     reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod))};
    boot_method_diagnostic.clear();
+   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned schema dependency phase=boot-catalog-begin");
    boot_methods.Prepare(env,source_ti,codec,&boot_method_diagnostic);
+   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned schema dependency phase=boot-catalog-return complete=%d roots=%zu methods=%zu",int(boot_methods.Complete()),boot_methods.Roots().size(),boot_methods.Methods().size());
    if(env->ExceptionCheck())return Fail(error,"Boot catalog left a pending public JNI exception");
   }
   native_schema_run_state::Dependencies d;
