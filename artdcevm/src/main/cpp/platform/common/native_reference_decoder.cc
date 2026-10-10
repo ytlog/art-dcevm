@@ -103,13 +103,21 @@ bool Decoder::Calibrate(JNIEnv* env,jobject a,jobject b,std::string* error){
  auto ctor=env->GetMethodID(object,"<init>","()V");jobject temporary=ctor?env->NewObject(object,ctor):nullptr;env->DeleteLocalRef(object);
  if(!temporary||env->ExceptionCheck())return false;
  refs.dead=env->NewWeakGlobalRef(temporary);env->DeleteLocalRef(temporary);if(!refs.dead||env->ExceptionCheck()||!RegisterWeak(env,refs.dead,error))return false;
- jclass system=env->FindClass("java/lang/System");auto gc=system?env->GetStaticMethodID(system,"gc","()V"):nullptr;
- if(!system||!gc||env->ExceptionCheck()){if(system)env->DeleteLocalRef(system);return false;}
+ // libcore System.gc() may only queue runGC until runFinalization;
+ // repeated System requests therefore need not reach the collector at all.
+ // Use the public Runtime request in ordinary JNI. It may still decline GC;
+ // only independent public weak promotion and the named cleared proof grant.
+ jclass runtime_class=env->FindClass("java/lang/Runtime");
+ auto get_runtime=runtime_class?env->GetStaticMethodID(runtime_class,"getRuntime","()Ljava/lang/Runtime;"):nullptr;
+ auto gc=get_runtime?env->GetMethodID(runtime_class,"gc","()V"):nullptr;
+ jobject runtime=gc?env->CallStaticObjectMethod(runtime_class,get_runtime):nullptr;
+ if(runtime_class)env->DeleteLocalRef(runtime_class);
+ if(!runtime||env->ExceptionCheck()){if(runtime)env->DeleteLocalRef(runtime);return false;}
  bool observed=false;
- for(size_t i=0;i<8&&!env->ExceptionCheck();++i){env->CallStaticVoidMethod(system,gc);if(env->ExceptionCheck())break;
+ for(size_t i=0;i<8&&!env->ExceptionCheck();++i){env->CallVoidMethod(runtime,gc);if(env->ExceptionCheck())break;
   jobject local=env->NewLocalRef(refs.dead);if(local){env->DeleteLocalRef(local);continue;}
   if(!env->ExceptionCheck()){observed=true;break;}}
- env->DeleteLocalRef(system);if(!observed)return Fail(error,"Public JNI GC-cleared weak oracle was not observed");
+ env->DeleteLocalRef(runtime);if(!observed)return Fail(error,"Public JNI GC-cleared weak oracle was not observed after bounded Runtime GC requests");
  proof.dead=refs.dead;proof.pass=false;
  if(!bindings_.native_scope(bindings_.owner,env,refs.a,ClearedProof,&proof)||!proof.pass)return Fail(error,"Named cleared witness disagrees with independent public JNI weak/GC oracle");
  ready_=true;return true;

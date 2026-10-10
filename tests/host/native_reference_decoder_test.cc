@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 #include <iostream>
@@ -9,22 +10,29 @@ using namespace artdcevm;using namespace native_reference_decoder;
 namespace {
 struct Object{bool live=true;};struct Ref{jobjectRefType kind;Object* object;bool valid=true;};
 std::vector<std::unique_ptr<Ref>> refs;std::vector<std::unique_ptr<Object>> objects;
-JavaVM vm{};int thread,wrong,sentinel;int mode=0,strong_calls=0,weak_calls=0,clear_calls=0,current_calls=0,gcs=0;bool clear_during=false,move_during_clear=false;
+JavaVM vm{};int thread,wrong,sentinel;int mode=0,strong_calls=0,weak_calls=0,clear_calls=0,current_calls=0,gcs=0;bool clear_during=false,move_during_clear=false,pending=false;int runtime_get, runtime_gc;Object* actual_runtime=nullptr;Object* probe_object=nullptr;jobject external_probe_root=nullptr;int deferred_system_calls=0;
 Ref& Reference(jobject ref){auto& r=*reinterpret_cast<Ref*>(ref);assert(r.valid);return r;}
 jobject Reference(Object* object,jobjectRefType kind){refs.push_back(std::make_unique<Ref>(Ref{kind,object}));return reinterpret_cast<jobject>(refs.back().get());}
 Object* NewObject(){objects.push_back(std::make_unique<Object>());return objects.back().get();}
 jobject JNICALL Global(JNIEnv*,jobject ref){return Reference(Reference(ref).object,JNIGlobalRefType);}
-jweak JNICALL WeakRef(JNIEnv*,jobject ref){return Reference(Reference(ref).object,JNIWeakGlobalRefType);}
+jweak JNICALL WeakRef(JNIEnv*,jobject ref){auto* object=Reference(ref).object;if(mode==11&&object==probe_object)external_probe_root=Reference(object,JNIGlobalRefType);return Reference(object,JNIWeakGlobalRefType);}
 void JNICALL Delete(JNIEnv*,jobject ref){Reference(ref).valid=false;}
 jobject JNICALL Local(JNIEnv*,jobject ref){auto& r=Reference(ref);return r.object->live?Reference(r.object,JNILocalRefType):nullptr;}
 jboolean JNICALL Same(JNIEnv*,jobject a,jobject b){return Reference(a).object==Reference(b).object;}
-jboolean JNICALL Exception(JNIEnv*){return false;}
+jboolean JNICALL Exception(JNIEnv*){return pending;}
 jint JNICALL VM(JNIEnv*,JavaVM** result){*result=&vm;return JNI_OK;}
 jobjectRefType JNICALL Kind(JNIEnv*,jobject ref){return Reference(ref).kind;}
 jclass JNICALL Find(JNIEnv*,const char*){return reinterpret_cast<jclass>(Reference(NewObject(),JNILocalRefType));}
-jmethodID JNICALL Method(JNIEnv*,jclass,const char*,const char*){return reinterpret_cast<jmethodID>(&thread);}
-jobject JNICALL Construct(JNIEnv*,jclass,jmethodID,va_list){return Reference(NewObject(),JNILocalRefType);}
-void JNICALL GC(JNIEnv*,jclass,jmethodID,va_list){++gcs;if(mode==5)return;
+jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char* signature){
+ if(!std::strcmp(name,"getRuntime")){assert(!std::strcmp(signature,"()Ljava/lang/Runtime;"));return reinterpret_cast<jmethodID>(&runtime_get);}
+ if(!std::strcmp(name,"gc")){assert(!std::strcmp(signature,"()V"));return reinterpret_cast<jmethodID>(&runtime_gc);}
+ assert(!std::strcmp(name,"<init>"));return reinterpret_cast<jmethodID>(&thread);}
+jobject JNICALL GetRuntime(JNIEnv*,jclass,jmethodID method,va_list){assert(method==reinterpret_cast<jmethodID>(&runtime_get));actual_runtime=NewObject();return Reference(actual_runtime,JNILocalRefType);}
+void JNICALL SystemGC(JNIEnv*,jclass,jmethodID,va_list){++deferred_system_calls;}
+jobject JNICALL Construct(JNIEnv*,jclass,jmethodID,va_list){probe_object=NewObject();return Reference(probe_object,JNILocalRefType);}
+void JNICALL GC(JNIEnv*,jobject receiver,jmethodID method,va_list){
+ assert(Reference(receiver).object==actual_runtime&&method==reinterpret_cast<jmethodID>(&runtime_gc));
+ ++gcs;if(mode==10){pending=true;return;}if(mode==5||(mode==9&&gcs<3))return;
  for(auto& object:objects){bool rooted=false;for(auto& ref:refs)if(ref->valid&&ref->object==object.get()&&(ref->kind==JNIGlobalRefType||ref->kind==JNILocalRefType))rooted=true;if(!rooted)object->live=false;}}
 void* Current(void*){++current_calls;return &thread;}
 using Carrier=abi::arm64::android11::ReleaseObjectPointer;
@@ -52,11 +60,13 @@ struct Engine:HookEngine {
 };
 }
 #include "native_receiver_source_calibration_cases.h"
-int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
- JNINativeInterface_ functions{};functions.NewGlobalRef=Global;functions.NewWeakGlobalRef=WeakRef;functions.DeleteGlobalRef=Delete;functions.DeleteWeakGlobalRef=Delete;functions.DeleteLocalRef=Delete;functions.NewLocalRef=Local;functions.IsSameObject=Same;functions.ExceptionCheck=Exception;functions.GetJavaVM=VM;functions.GetObjectRefType=Kind;functions.FindClass=Find;functions.GetMethodID=Method;functions.GetStaticMethodID=Method;functions.NewObjectV=Construct;functions.CallStaticVoidMethodV=GC;JNIEnv env{&functions};
+int main(int argc,char** argv){assert(argc==2);mode=std::atoi(argv[1]);
+ JNINativeInterface_ functions{};functions.NewGlobalRef=Global;functions.NewWeakGlobalRef=WeakRef;functions.DeleteGlobalRef=Delete;functions.DeleteWeakGlobalRef=Delete;functions.DeleteLocalRef=Delete;functions.NewLocalRef=Local;functions.IsSameObject=Same;functions.ExceptionCheck=Exception;functions.GetJavaVM=VM;functions.GetObjectRefType=Kind;functions.FindClass=Find;functions.GetMethodID=Method;functions.GetStaticMethodID=Method;functions.NewObjectV=Construct;functions.CallStaticVoidMethodV=SystemGC;functions.CallStaticObjectMethodV=GetRuntime;functions.CallVoidMethodV=GC;JNIEnv env{&functions};
  jobject a=Reference(NewObject(),JNIGlobalRefType),b=Reference(NewObject(),JNIGlobalRefType);Engine hooks;Decoder decoder;std::string error;
  assert(decoder.Bind(hooks,{&thread,mode==7?reinterpret_cast<JavaVM*>(&wrong):&vm,Current,Oracle,EnterScope},&error));
- bool pass=decoder.Calibrate(&env,a,b,&error);assert(pass==(mode==0||mode==1||mode==8));assert(decoder.Ready()==pass);
+ bool pass=decoder.Calibrate(&env,a,b,&error);assert(pass==(mode==0||mode==1||mode==8||mode==9));assert(decoder.Ready()==pass);
+ for(const auto& ref:refs)if(ref->valid)assert(ref.get()==reinterpret_cast<Ref*>(a)||ref.get()==reinterpret_cast<Ref*>(b)||ref.get()==reinterpret_cast<Ref*>(external_probe_root));
+ assert(deferred_system_calls==0);if(mode==9)assert(gcs==3);if(mode==5||mode==11)assert(gcs==8);if(mode==10)assert(gcs==1&&pending);
  if(!pass){void* out=nullptr;int before=weak_calls;assert(!decoder.Weak(&thread,Scope::Runnable,reinterpret_cast<jweak>(a),&out)&&weak_calls==before);if(mode==4)assert(gcs>0);std::cout<<"JNI decoder calibration refusal mode "<<mode<<" passed\n";return 0;}
  assert(!decoder.Bind(hooks,{&thread,&vm,Current,Oracle,EnterScope},&error));
  jobject local=Local(&env,a);assert(!decoder.RegisterStrong(&env,local,&error));Delete(&env,local);
