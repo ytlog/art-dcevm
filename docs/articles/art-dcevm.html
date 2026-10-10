@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="ART DCEVM 增强 ART JVMTI 的 RedefineClasses 能力：从原生 JVMTI 痛点、Maven 接入与 Agent 示例，到增强原理、代码架构和贡献方式。">
+<meta name="description" content="ART DCEVM 增强 ART JVMTI 的 RedefineClasses 能力：从原生 JVMTI 痛点、Maven 接入与 Agent 示例，到增强原理、关键方案、风险与后续计划。">
 <title>ART DCEVM：增强 ART JVMTI 的 RedefineClasses 能力</title>
 <style>
 :root{color-scheme:light;--bg:#f5f4ef;--paper:#fffefa;--ink:#172c30;--muted:#526568;--line:#d6dfda;--teal:#087e80;--mint:#d4eee5;--amber:#9b5712;--sand:#fff0d4;--mono:#153c41;--shadow:0 22px 65px #17382b0d}
@@ -13,7 +13,7 @@
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}}
 @media print{body{background:white}.shell{max-width:none;padding:0}.top,.toc,.controls,.scenario{display:none}.hero{padding:20px 0}.section{padding-top:20px}.figure{box-shadow:none;break-inside:avoid}pre{white-space:pre-wrap;overflow-wrap:anywhere}.figure,pre{print-color-adjust:exact}h1{font-size:40px}a{color:inherit}.footer{padding-bottom:0}}
 
-h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-flow{display:grid;gap:10px}.flow-node{padding:17px 20px;border:1px solid var(--line);border-radius:12px;background:var(--bg);text-align:center}.flow-node strong{display:block;font-size:15px}.flow-node span{display:block;font-size:13px;color:var(--muted);margin-top:5px}.flow-node.decision{background:var(--mint);border-color:#a2cfc3}.flow-node.refuse{background:var(--sand)}.flow-branches{display:grid;grid-template-columns:1fr 1fr;gap:16px}.branch-label{text-align:center;font-size:13px;margin:3px 0 10px;color:var(--muted)}.gif-enlarge{display:block}.gif-player img{width:100%;height:auto;display:block;border-radius:12px}.gif-status{margin-bottom:0}.roadmap-list{padding-left:25px}.roadmap-list li{margin:16px 0}.code-routes{display:grid;grid-template-columns:1fr 1fr;gap:24px}.code-routes>div>strong{display:block;font-size:14px;margin-bottom:18px}.route-item{padding:12px 14px;background:var(--bg);border-radius:8px;font-size:13px;overflow-wrap:anywhere;text-align:center}.code-routes .down{margin:8px 0}@media(max-width:650px){.code-routes{grid-template-columns:1fr}.flow-node{padding:13px 10px}.flow-branches{gap:10px}.flow-node span{font-size:12px}.flow-node strong{font-size:14px}.gif-player{padding:12px}}@media print{.gif-status{display:none}}
+h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-flow{display:grid;gap:10px}.flow-node{padding:17px 20px;border:1px solid var(--line);border-radius:12px;background:var(--bg);text-align:center}.flow-node strong{display:block;font-size:15px}.flow-node span{display:block;font-size:13px;color:var(--muted);margin-top:5px}.flow-node.decision{background:var(--mint);border-color:#a2cfc3}.flow-node.refuse{background:var(--sand)}.flow-branches{display:grid;grid-template-columns:1fr 1fr;gap:16px}.branch-label{text-align:center;font-size:13px;margin:3px 0 10px;color:var(--muted)}.gif-enlarge{display:block}.gif-player img{width:100%;height:auto;display:block;border-radius:12px}.gif-status{margin-bottom:0}.roadmap-list{padding-left:25px}.roadmap-list li{margin:16px 0}@media(max-width:650px){.flow-node{padding:13px 10px}.flow-branches{gap:10px}.flow-node span{font-size:12px}.flow-node strong{font-size:14px}.gif-player{padding:12px}}@media print{.gif-status{display:none}}
 </style>
 </head>
 <body><div class="shell">
@@ -23,7 +23,7 @@ h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-fl
 <p class="lead">从方法体替换，到字段、方法和继承关系的结构变化：ART DCEVM 增强 ART 对标准类重定义请求的处理能力。你的 Agent 继续调用 <code>RedefineClasses</code>，运行时负责让变化一致地生效。</p>
 <div class="chips"><span class="chip">标准 JVMTI 入口</span><span class="chip">结构重定义</span><span class="chip">对象状态延续</span><span class="chip">无需 root</span></div>
 <p class="meta">项目介绍 · 2026 年 10 月 10 日 · 技术博客 · 接入示例、增强原理与代码导航</p></div>
-<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 第一次类重定义</a><a href="#principle">03 增强原理与风险</a><a href="#contribute">04 研发阅读指南</a></nav>
+<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 第一次类重定义</a><a href="#principle">03 增强原理与风险</a></nav>
 <article class="article">
 <section class="section" id="pain"><div class="number">01 / WHY ART DCEVM</div><h2>现在的 JVMTI 痛点，我的库做了什么？</h2>
 <p>通过 JVMTI，Native Agent 可以对正在运行的应用发起类重定义。对于开发工具来说，这意味着修改代码后，应用有机会继续运行，当前页面、会话和对象状态可以保留下来。然而，代码迭代经常超出“修改方法体”的范围。</p>
@@ -270,49 +270,10 @@ public final class RedefineDemo {
 <p>后续工作的重点是扩大真实能力覆盖，并把提交成本和生命周期收敛得更明确。我按以下顺序推进，每一项都有可观察的完成条件。</p>
 <ol class="roadmap-list"><li><strong>闭合跨版本结构事务。</strong>把成员、层级、强根、发布和清理接入同一真实生命周期。完成条件是对应冻结 APK 在目标设备上同时证明成功提交、提交前拒绝和失败退款，不能仅凭组件通过启用。</li><li><strong>补齐优化调用与旧引用矩阵。</strong>覆盖更多 AOT/JIT 内联、多个并发帧、同类竞争、转换回调组合和句柄形式。每种形态记录实际机器码状态、结果与旧定义完整性。</li><li><strong>缩小执行回退与提交成本。</strong>在正确性成立后评估停顿，改善受影响方法范围与优化恢复策略；恢复信息不足的非调试 AOT 仍先保留拒绝边界。</li><li><strong>完善回收与长期稳定性。</strong>扩展旧引用保活/释放、ClassLoader 卸载、后台 GC 和前台交互，观察多轮演进后的资源趋势及崩溃。</li><li><strong>改善诊断与接入体验。</strong>让能力报告准确描述当前子集、拒绝阶段和原因，让工具决定何时重试、如何生成和组织补丁。</li></ol>
 </section>
-<section class="section" id="contribute"><div class="number">04 / A DEVELOPER'S MAP</div><h2>代码怎么读，改动从哪里开始？</h2>
-<p>如果你熟悉 Android、JNI 或 C++，可以先沿着一条使用路径读代码，再进入具体算法。仓库里的模块虽然多，主要回答三个问题：库怎样初始化，重定义请求怎样被接管，结构变化怎样安全提交。</p>
-<h3>4.1 先分清两条路径：初始化与每次请求</h3>
-<p><code>DcevmRuntime.initialize</code> 是初始化入口。它加载增强库并附加 Agent，Native 侧选择后端、校准能力和安装路由。后续用户的每一次重定义通过自己的 JVMTI 环境进入标准接口，无需每次再调用 Java 初始化。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">研发阅读的两条主线</span><span class="figure-label">INITIALIZE / REDEFINE</span></div><div class="code-routes"><div><strong>① 初始化：准备引擎与能力</strong><div class="route-item">DcevmRuntime.java</div><div class="down" aria-hidden="true">↓</div><div class="route-item">core/agent.cc</div><div class="down" aria-hidden="true">↓</div><div class="route-item">backend_factory + production_bootstrap</div><div class="down" aria-hidden="true">↓</div><div class="route-item">能力校准、选择后端、安装路由</div></div><div><strong>② 请求：提交一次类变更</strong><div class="route-item">用户 Agent · RedefineClasses</div><div class="down" aria-hidden="true">↓</div><div class="route-item">ART 命名重定义入口与增强 Hook</div><div class="down" aria-hidden="true">↓</div><div class="route-item">后端事务 + 公共迁移 / 守卫服务</div><div class="down" aria-hidden="true">↓</div><div class="route-item">原 ART 服务 · 复核、更新与清理</div></div></div><figcaption>图 7 · 这是阅读路线，省略内部服务交错。<code>core/agent.cc</code> 主要连接库初始化与诊断，不表示用户的每次标准调用都先绕回这个 Java/JNI 入口。</figcaption></figure>
-<p>建议先看 <a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>、<a href="../../artdcevm/src/main/cpp/core/agent.cc">core/agent.cc</a> 和 <a href="../../artdcevm/src/main/cpp/platform/backend_factory.cc">backend_factory.cc</a>。随后读 <a href="../../artdcevm/src/main/cpp/platform/common/capability_backend.cc">capability_backend.cc</a>，理解公开能力、独立子集与完整增强如何被分别报告；再结合 <a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a> 阅读事务路由。</p>
-<h3>4.2 用职责理解目录，不需要先背文件名</h3>
-<div class="table-wrap"><table><thead><tr><th>你关心的问题</th><th>从哪里看</th><th>这一层负责什么</th></tr></thead><tbody>
-<tr><td>怎么加载、附加与初始化？</td><td>Java <code>api/</code>、Native <code>core/</code></td><td>对外入口、Agent 生命周期、诊断和进程协调</td></tr>
-<tr><td>接口如何接到设备实现？</td><td><code>api/</code>、<code>hooks/</code>、<code>platform/backend_factory.*</code></td><td>后端契约、Hook 管理与能力选择</td></tr>
-<tr><td>类结构怎样被分析和迁移？</td><td><code>evolution/</code> 与 <code>platform/common/</code></td><td>DEX schema、迁移规划，以及公共运行时算法</td></tr>
-<tr><td>为什么两个 Android 版本表现不同？</td><td><code>platform/abi/</code>、<code>symbols/</code>、实际版本实现</td><td>固定声明、命名符号、真正不同的布局或调用行为</td></tr>
-<tr><td>怎么复现与证明一个问题？</td><td><code>fixtures/</code>、<code>tests/host/</code>、<code>app/src/debug/</code>、<code>tools/</code></td><td>补丁定义、宿主测试、真实设备用例与执行脚本</td></tr>
-</tbody></table></div>
-<p>表中 Native 路径相对 <code>artdcevm/src/main/cpp/</code>。简单理解：<code>common</code> 放算法，<code>abi</code> 放“与 ART 约定的数据和调用格式”，版本目录放确实不同的行为。Android 11–17 的声明各有唯一归属；共享算法不按版本复制。当前目录细节以 <a href="../../artdcevm/src/main/cpp/platform/README.md">platform/README.md</a> 为准。</p>
-<h3>4.3 几个容易卡住的术语</h3>
-<p><strong>JNI</strong> 是 Java 与 Native 的桥，<strong>JVMTI</strong> 是 Native 工具操作虚拟机的接口；第二章的 Java 方法通过 JNI 把字节交给 Agent，真正的重定义由 JVMTI 发起。<strong>ABI</strong> 是调用与数据布局的约定。<strong>校准</strong> 是用真实运行时行为核对所选声明，而非只查版本号。</p>
-<p><strong>根</strong>可以理解为 GC 能识别并更新的对象引用：对象移动后，通过根重新取得当前位置。<strong>Provider / Service</strong> 是在受约束的上下文中提供具体能力的模块。<strong>RunState</strong> 则把同一次重定义需要的服务与生命周期装在一起。这些名字都服务于同一个目标：后续阶段不要误用之前失效的地址或权限。</p>
-<h3>4.4 以“新增字段值不对”为例，怎样开始修复？</h3>
-<p>先写一个很小的类和补丁：原字段是 7，新补丁新增字段。明确预期——旧字段仍为 7，旧对象新字段使用默认值，新建对象按新构造器初始化。然后分别观察字节码、反射或 JNI 路径，判断是迁移错误、根刷新错误还是某条访问缓存仍旧。</p>
-<p>如果是值迁移，优先阅读 <a href="../../artdcevm/src/main/cpp/platform/common/field_copy.cc">field_copy.cc</a>、<a href="../../artdcevm/src/main/cpp/platform/common/prepared_field_copy.cc">prepared_field_copy.cc</a> 与 <a href="../../artdcevm/src/main/cpp/platform/common/native_member_provider.cc">native_member_provider.cc</a>。如果只有某个版本失败，先核对对应 ABI 和行为证据。如果仅旧反射或句柄异常，则沿缓存与守卫路径追踪。这样比直接给版本后端增加一个条件更容易找到根因。</p>
-<p>测试同时覆盖成功与拒绝：不仅检查新字段值，也检查无效补丁被拒绝时旧对象仍正常；涉及 GC 的路径，增加对象移动或身份保持的证据。Host 测试帮助验证算法、内存和生命周期，设备测试证明真实 ART 调用链。</p>
-<h3>4.5 构建、验证与提交</h3>
-<pre><code>git clone https://github.com/ytlog/art-dcevm.git
-cd art-dcevm
-git switch -c codex/describe-your-change
-
-./gradlew :app:assembleDebug :artdcevm:assembleRelease
-
-# 选择与你的改动有关的 Host 回归
-python3 tools/test-field-copy-host.py
-python3 tools/test-native-schema-guard-verifier-host.py
-
-# 按目标能力选择设备路径
-python3 tools/run-public-jvmti.py --serial DEVICE
-python3 tools/android13/run-source-probe.py --serial DEVICE</code></pre>
-<p>仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、SDK 37、NDK 27.2.12479018 和 CMake 4.3.4。准备兼容 JDK，在本机 <code>local.properties</code> 配置 SDK。验证按改动选择，不要求每次小改动重跑所有矩阵；涉及新设备私有能力时，则必须取得对应设备与调用语义的证据。</p>
-<p>原始日志和逐次报告放在已忽略的 <code>build/evidence/</code>，必要命令、结论、设备和 APK SHA-256 写入 <code>docs/VERIFICATION.md</code>。提交前核对状态与暂存差异，只包含本次代码、测试和文档，排除设备库、本机配置及构建产物。验证后创建清晰的 Git 提交，再通过自己的分支提出 PR。</p>
-<p>欢迎从小而明确的问题开始：补一个真实旧引用用例、改进拒绝诊断、修正公共算法或证明一个 ABI 差异。贡献说明最好回答四件事：触发条件、正确语义、修改位置，以及哪些证据支持结果。</p>
-<h3>参考与复核入口</h3>
+<aside aria-label="参考与复核入口"><h3>参考与复核入口</h3>
 <ul class="sources"><li><a href="../../README.md">README</a>、<a href="../MAVEN_PUBLISHING.md">发布指南</a>：构建与组件接入。</li><li><a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a>、<a href="../SCHEMA_RUN_STATE.md">RunState</a>、<a href="../PREPARED_RUNTIME_ROOTS.md">根与最终窗口</a>：第三章方案的详细设计。</li><li><a href="../ANDROID_COMPATIBILITY.md">兼容性</a>、<a href="../LIMITATIONS.md">当前边界</a>、<a href="../VERIFICATION.md">验证记录</a>：实际运行结果与证据身份。</li></ul>
 <p class="small">保留的既有回归坐标：2026-10-09，Xiaomi M2007J1SC / API 33，1,025 项检查通过；APK SHA-256：<code>6e6ecee925ced03038622ca637711745d7fcd2783346517a888109d26a6ec8b0</code>。这是特定路径与产物的验证，后续变更保留各自的验收记录。</p>
-</section>
+</aside>
 <div class="closing">标准入口，更强的重定义能力。<br><strong>ART DCEVM，增强 ART JVMTI 的 RedefineClasses。</strong></div>
 </article></main><footer class="footer">ART DCEVM · 技术博客 · GIF、配图与交互均为语义示意，文章与 assets 目录可一并离线阅读。</footer></div>
 <script>
