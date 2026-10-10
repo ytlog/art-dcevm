@@ -44,7 +44,7 @@ struct Report {
  uintptr_t failure_thread=0,failure_method=0,failure_quick=0,failure_pc=0,failure_header=0;
  uint32_t failure_declaring_class=0,failure_flags=0,failure_dex_index=0;
  uint32_t failure_map_row=UINT32_MAX,failure_map_mask=UINT32_MAX,failure_map_index=UINT32_MAX,
-   failure_map_dex_regs=0,failure_inline_begin=0,failure_inline_end=0;
+   failure_map_dex_regs=0,failure_map_dex_pc=UINT32_MAX,failure_inline_begin=0,failure_inline_end=0;
  size_t failure_map_capacity=0;
  bool failure_method_prefix=false,failure_physical=false;
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
@@ -210,6 +210,7 @@ class Service {
       auto& r=request;const auto& s=r.service;
       observed_method=nullptr;
       r.report.failure_map_row=r.report.failure_map_mask=r.report.failure_map_index=UINT32_MAX;
+      r.report.failure_map_dex_pc=UINT32_MAX;
       r.report.failure_map_dex_regs=r.report.failure_inline_begin=r.report.failure_inline_end=0;r.report.failure_map_capacity=0;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context)
         return Reject("whole-frame-owner-native-thread-context-changed");
@@ -297,6 +298,7 @@ class Service {
       if(unaffected_aot&&!native_boot_aot_unaffected::TablesMapped(view,*r.recovery))return Reject("whole-AOT-map-tables-lack-current-stop-extent");
       uint32_t pc;
       if(!(physical?view.StackMaps().Read(map.row,2,&pc):view.InlineInfos().Read(this->inline_frames.end.row-1,1,&pc))||pc==UINT32_MAX||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-original-versus-complete-map-DexPc-mismatch");
+      r.report.failure_map_dex_pc=pc;
       r.report.failure_map_row=map.row;r.report.failure_map_dex_regs=view.dex_regs;
       r.report.failure_inline_begin=this->inline_frames.begin.row;r.report.failure_inline_end=this->inline_frames.end.row;r.report.failure_map_capacity=r.storage.locations.size();
       view.StackMaps().Read(map.row,6,&r.report.failure_map_mask);view.StackMaps().Read(map.row,7,&r.report.failure_map_index);
@@ -358,8 +360,9 @@ class Service {
          !s.stack_.Method(this,sizeof(*this),&current)||current!=method||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-source-owner-or-native-cursor-lost-after-map");
       if(unaffected_aot){
        if(s.async_.Query(*this->quick_frame,this->pc,*r.recovery)||s.MarkedHeader(this->header)||
-          s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit)!=native_frame_code_owner::Kind::Aot||
-          !r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery))return Reject("whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
+          s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit)!=native_frame_code_owner::Kind::Aot)return Reject("whole-AOT-current-code-owner-or-async-state-changed");
+       const char*failure=nullptr;
+       if(!r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery,&failure))return Reject(failure?failure:"whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
        ++r.report.unaffected_aot_frames;
       }else if(r.recovery&&!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject("whole-frame-original-async-recovery-changed-after-map");
       ++r.report.compiled_frames;if(!physical)++r.report.inlined_frames;r.report.map_locations+=range.count;return true;

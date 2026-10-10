@@ -14,7 +14,7 @@ class Proof {
  virtual ~Proof()=default;
  virtual bool Verify(void* method,uint32_t dex_pc,const code_info_view::View&,
                      uint32_t stack_row,const decoded_frame_recovery::RegisterRange&,
-                     const modern_field_metadata::ReadContext&)const noexcept=0;
+                     const modern_field_metadata::ReadContext&,const char**failure=nullptr)const noexcept=0;
  private:
  friend class Source;Proof()=default;
 };

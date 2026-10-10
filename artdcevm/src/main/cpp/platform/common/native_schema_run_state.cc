@@ -16,13 +16,16 @@ namespace {
 // Report fields are copied scalars; no stack memory, JNI or live frame reads.
 void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noexcept{
   __android_log_print(ANDROID_LOG_INFO,"artdcevm",
-    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu",
+    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u mapDexPc=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu",
     int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
     reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
     reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
     int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index,
-    frames.failure_map_row,frames.failure_map_mask,frames.failure_map_index,frames.failure_map_dex_regs,
+    frames.failure_map_row,frames.failure_map_mask,frames.failure_map_index,frames.failure_map_dex_pc,frames.failure_map_dex_regs,
     frames.failure_inline_begin,frames.failure_inline_end,frames.failure_map_capacity);
+  if(frames.aot_declaring_class&&frames.aot_method&&frames.aot_descriptor)
+    __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned stopped AOT identity owner=%s method=%s descriptor=%s",
+      frames.aot_declaring_class,frames.aot_method,frames.aot_descriptor);
 }
 }
 struct RunState::State {

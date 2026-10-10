@@ -14,7 +14,7 @@ class Source final:public Proof {
         const native_abstract_instances::Service&vtables,const receiver_guard::SourceProducer&code)
   :plan_(plan),stop_(stop),self_(self),catalog_(catalog),roots_(roots),metadata_(metadata),methods_(methods),vtables_(vtables),code_(code){}
  bool Verify(void*,uint32_t,const code_info_view::View&,uint32_t,
-             const decoded_frame_recovery::RegisterRange&,const modern_field_metadata::ReadContext&)const noexcept override;
+             const decoded_frame_recovery::RegisterRange&,const modern_field_metadata::ReadContext&,const char**failure=nullptr)const noexcept override;
  private:
  const source_commit::Plan&plan_;const native_source_stop::Session&stop_;void*self_;
  const native_boot_method_catalog::Rooted&catalog_;const source_handle_roots::StoppedReader&roots_;
