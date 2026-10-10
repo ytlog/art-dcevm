@@ -72,18 +72,23 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
  jint count=0;TiBuffer fields{ti};status=ti->GetClassFields(owner,&count,reinterpret_cast<jfieldID**>(&fields.data));
  if(env->ExceptionCheck())return Fail(error,"Cache declared fields left an exception");
  if(status!=JVMTI_ERROR_NONE||count<=0||!fields.data)return Fail(error,"Cache declared fields unavailable");
- jfieldID selected=nullptr;
+ jfieldID selected=nullptr;std::string enumerated;
  for(jint i=0;i<count;++i){
   const auto id=fields.Get<jfieldID>()[i];if(!id)return Fail(error,"Cache field enumeration contains a null ID");
   TiBuffer field_name{ti},type{ti};
   status=ti->GetFieldName(owner,id,reinterpret_cast<char**>(&field_name.data),reinterpret_cast<char**>(&type.data),nullptr);
   if(env->ExceptionCheck())return Fail(error,"Cache field name/type left an exception");
   if(status!=JVMTI_ERROR_NONE||!field_name.data||!type.data)return Fail(error,"Cache field name/type unavailable");
-  if(std::strcmp(field_name.Get<char>(),name))continue;
-  if(selected||std::strcmp(type.Get<char>(),"J"))return Fail(error,"Cache field name is duplicate or not long");
   jint flags=0;status=ti->GetFieldModifiers(owner,id,&flags);
   if(env->ExceptionCheck())return Fail(error,"Cache field modifiers left an exception");
-  if(status!=JVMTI_ERROR_NONE||(flags&8))return Fail(error,"Cache field must be a declared instance long");
+  if(status!=JVMTI_ERROR_NONE)return Fail(error,"Cache field modifiers unavailable");
+  if(enumerated.size()<2048){
+   const auto entry=(enumerated.empty()?std::string():std::string(", "))+field_name.Get<char>()+":"+type.Get<char>()+" flags="+std::to_string(flags);
+   enumerated.append(entry,0,2048-enumerated.size());
+  }
+  if(std::strcmp(field_name.Get<char>(),name))continue;
+  if(selected||std::strcmp(type.Get<char>(),"J"))return Fail(error,"Cache field name is duplicate or not long");
+  if(flags&8)return Fail(error,"Cache field must be a declared instance long");
   Local declaring{env};status=ti->GetFieldDeclaringClass(owner,id,reinterpret_cast<jclass*>(&declaring.ref));
   if(env->ExceptionCheck())return Fail(error,"Cache field declaring Class left an exception");
   if(status!=JVMTI_ERROR_NONE||!declaring.ref)return Fail(error,"Cache field declaring Class unavailable");
@@ -92,7 +97,10 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
   if(!same_owner)return Fail(error,"Cache field is not declared by the exact Class");
   selected=id;
  }
- if(!selected)return Fail(error,"Cache instance long field was not enumerated");
+ if(!selected){
+  if(error)*error="Cache instance long field was not enumerated: required="+std::string(name)+" count="+std::to_string(count)+" observed={"+enumerated+"}";
+  return false;
+ }
  auto witness=std::unique_ptr<Witness>(new Witness(env));witness->id_=selected;witness->name_=name;
  witness->cache_=env->NewGlobalRef(cache);
  if(env->ExceptionCheck())return Fail(error,"Cache object strong root left an exception");

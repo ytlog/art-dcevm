@@ -99,7 +99,19 @@ int main(){
  trigger=0;pending=false;
  Put32(current,0,state);const int old_reads=reads;
  for(fault=1;fault<=14;++fault){assert(!observe());assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);}
- fault=0;decode_mismatch=true;assert(!observe());assert(error.find("Calibrated cache Field name/type differs")!=std::string::npos);decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
+ fault=0;
+ // The production caller requests three distinct pair-storage fields. A
+ // missing member must expose the complete literal JVMTI inventory, rather
+ // than implying that an Array field is an interchangeable pair pointer.
+ const auto saved_name=names[1];names[1]="resolvedFieldsArray";
+ assert(!observe()&&output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
+ assert(error.find("required=resolvedFields count=4")!=std::string::npos);
+ assert(error.find("resolvedFieldsArray:J flags=2")!=std::string::npos);
+ assert(error.find(std::string(names[0])+":"+types[0]+" flags=8")!=std::string::npos);
+ names[1]=saved_name;
+ assert(!service.Observe(&env,&ti,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedTypes",metadata,&output,&error));
+ assert(error.find("required=resolvedTypes count=4")!=std::string::npos&&output.get()==retained&&reads==old_reads);
+ decode_mismatch=true;assert(!observe());assert(error.find("Calibrated cache Field name/type differs")!=std::string::npos);decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  native_badname=true;assert(!observe());native_badname=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  const auto original_owner=old_fields[1]->declaring_class;old_fields[1]->declaring_class=uint32_t(uintptr_t(parent_class));assert(!observe());old_fields[1]->declaring_class=original_owner;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  // Every actual JNI/JVMTI leaf can produce a pending exception. Stop rather
