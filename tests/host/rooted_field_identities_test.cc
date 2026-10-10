@@ -104,7 +104,11 @@ jvmtiError JNICALL Signature(jvmtiEnv*,jclass klass,char** signature,char**){con
 jvmtiError JNICALL Status(jvmtiEnv*,jclass,jint* status){*status=JVMTI_CLASS_STATUS_PREPARED;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL ClassFlags(jvmtiEnv*,jclass,jint* flags){*flags=1;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Methods(jvmtiEnv*,jclass,jint* count,jmethodID** values){*count=0;*values=nullptr;return JVMTI_ERROR_NONE;}
-jvmtiError JNICALL Fields(jvmtiEnv*,jclass,jint* count,jfieldID** values){*count=0;*values=nullptr;return JVMTI_ERROR_NONE;}
+bool declaration_failure=false;
+jvmtiError JNICALL Fields(jvmtiEnv*,jclass,jint* count,jfieldID** values){*count=declaration_failure?1:0;*values=nullptr;if(*count){*values=static_cast<jfieldID*>(std::malloc(sizeof(jfieldID)));(*values)[0]=ma.id;}return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL DeclarationName(jvmtiEnv*,jclass,jfieldID,char** name,char** signature,char**){*name=strdup("optional");*signature=strdup("Loptional/Missing;");return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL DeclarationFlags(jvmtiEnv*,jclass,jfieldID,jint* flags){*flags=1;return JVMTI_ERROR_NONE;}
+bool DeclaringFailure(void*,JNIEnv*,jclass,jfieldID,bool,std::string*error){pending_exception=true;if(error)*error="Public contextual Field round trip unavailable";return false;}
 jvmtiError JNICALL Loader(jvmtiEnv*,jclass,jobject* value){*value=Local(&loaded_objects->front());return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Interfaces(jvmtiEnv*,jclass,jint* count,jclass** values){*count=1;*values=static_cast<jclass*>(std::malloc(sizeof(jclass)));(*values)[0]=static_cast<jclass>(Local(&loaded_objects->front()));return JVMTI_ERROR_NONE;}
 
@@ -180,7 +184,14 @@ int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check
  verifier.Clear(&env);assert(globals==existing_class_roots&&arrays==0);globals=0;
  fail_proxy=true;assert(!verifier.Stage(&env,&ti,{input},bindings,&error)&&pending_exception);
  assert(error=="Public proxy Class classification failed");ClearException(&env);fail_proxy=false;
- verifier.Clear(&env);assert(globals==0&&arrays==0);Delete(&env,input);
+ verifier.Clear(&env);assert(globals==0&&arrays==0);
+ // The complete public graph reports the exact unrelated declaration whose
+ // public mirror leaf failed, without clearing its original JNI exception.
+ declaration_failure=true;bindings.stage_field=DeclaringFailure;
+ jvmti_api.GetFieldName=DeclarationName;jvmti_api.GetFieldModifiers=DeclarationFlags;
+ assert(!verifier.Stage(&env,&ti,{input},bindings,&error)&&pending_exception);
+ assert(error=="Public contextual Field stage [class=LTest0; field=optional type=Loptional/Missing;] Public contextual Field round trip unavailable");
+ ClearException(&env);declaration_failure=false;verifier.Clear(&env);assert(globals==0&&arrays==0);Delete(&env,input);
  Delete(&env,ar);Delete(&env,br);Delete(&env,cr);
  std::cout<<"Actual rooted Field store: 60000 complete identities +15140 existing Class globals under51200 cap, shared slot/GC proof, noJNI/noalloc final reads, duplicate/refund and three clean cycles; shared schema roots 180000 distinct slots, GC and exception refunds; public Proxy/name roots, unequal/duplicate Holder rejection and classification exception refund PASS\n";
 }

@@ -51,6 +51,14 @@ int main(int argc,char**argv){
   assert(verifier.MatchesAffected(&env,{reinterpret_cast<jclass>(old_class)},&error));
   deps.members.schema_guards=&verifier;deps.guards=&verifier;
   auto* same_parent_root=pool.Add(base,&error);assert(same_parent_root);
+  // The shared generator includes the baseline's initially rejecting public
+  // storage oracle. Exercise its actual refusal and cleanup here too before
+  // allowing that same oracle to publish its real original cache addresses.
+  error.clear();
+  assert(!native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},witness,&error));
+  assert(public_state.resolved&&public_state.reads==1&&!native_schema_run_state::RunState::Current());
+  assert(error=="Source cache public storage callback rejected original storage witness");
+  public_state.accept=true;error.clear();
   auto run=native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},witness,&error);
   if(!run){std::cerr<<"matched Begin: "<<error<<"\n";std::abort();}
   PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);

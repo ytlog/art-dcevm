@@ -82,15 +82,16 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  s.caches=std::make_unique<native_hierarchy_source_cache::Composite>(*s.mapper,s.incoming);
  void*cache=nullptr,*expected=nullptr;
  if(!w.strong_cache||!w.strong_expected_class||!s.d.roots->BorrowOwnedStrongGlobal(s.context,w.strong_cache,&cache))return Fail(error,"Source type-cache independent strong oracle unavailable");
- void*cache_root=s.pool.Add(cache,error);if(!cache_root||!s.d.roots->BorrowOwnedStrongGlobal(s.context,w.strong_expected_class,&expected))return false;
- void*expected_root=s.pool.Add(expected,error);if(!expected_root)return false;
+ void*cache_root=s.pool.Add(cache,error);if(!cache_root)return Fail(error,"Source cache strong oracle could not enter actual root pool");
+ if(!s.d.roots->BorrowOwnedStrongGlobal(s.context,w.strong_expected_class,&expected))return Fail(error,"Source cache expected Class strong oracle was rejected");
+ void*expected_root=s.pool.Add(expected,error);if(!expected_root)return Fail(error,"Source cache expected Class could not enter actual root pool");
  native_hierarchy_cache::Witness witness{w.type_index,w.field_index,w.method_index,expected_root,w.native_field,w.native_method};
- if(w.resolve&&!w.resolve(w.resolution_owner,s.context,s.pool,cache_root,expected_root,error))return false;
- if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error))return false;
- if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error))return false;
+ if(w.resolve&&!w.resolve(w.resolution_owner,s.context,s.pool,cache_root,expected_root,error)){if(error&&error->empty())*error="Source cache original resolution callback rejected independent root witness";return false;}
+ if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error)){if(error&&error->empty())*error="Source cache public storage callback rejected original storage witness";return false;}
+ if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error)){if(error&&error->empty())*error="Source incoming cache calibration rejected actual independent witness";return false;}
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get(),[](void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongPair(c,a,b,left,right);}};
  if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
- if(!s.authority.Stage(s.context,ti,inputs,graph,error))return false;
+ if(!s.authority.Stage(s.context,ti,inputs,graph,error)){if(error&&error->empty())*error="Source hierarchy authority staging rejected actual public graph";return false;}
  native_hierarchy_session::Bindings b{s.driver,s.context,s.d.hooks,s.d.members.metadata,s.d.roots,&s.pool,&s.authority,s.d.allocator,&s.access,native_hierarchy_source_checks::RefuseActualClass,native_owned_removal::ObserveSourceFailure,s.ledger.get()};
  s.hierarchy=std::make_unique<native_hierarchy_session::Session>(b);
  if(!s.hierarchy->Ready())return Fail(error,"Actual original schema Session did not accept staged graph");

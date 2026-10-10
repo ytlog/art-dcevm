@@ -126,7 +126,11 @@ bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* 
  struct Fields {jvmtiEnv* ti;jfieldID* p;~Fields(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_fields{ti,fields};
  for(jint i=0;i<field_count;++i){Strings text{ti};jint flags=0;
   if(!fields[i]||ti->GetFieldName(klass,fields[i],&text.name,&text.signature,nullptr)!=JVMTI_ERROR_NONE||!text.name||!text.signature||ti->GetFieldModifiers(klass,fields[i],&flags)!=JVMTI_ERROR_NONE)return Fail(error,"Public field identity/modifiers unavailable");
-  if(bindings&&(!bindings->stage_field||!bindings->stage_field(bindings->owner,env,klass,fields[i],(flags&8)!=0,error)))return false;
+  if(bindings&&(!bindings->stage_field||!bindings->stage_field(bindings->owner,env,klass,fields[i],(flags&8)!=0,error))){
+   if(error){const std::string cause=*error;
+    *error="Public contextual Field stage [class="+out->schema.descriptor+" field="+text.name+" type="+text.signature+"] "+cause;}
+   return false;
+  }
   out->field_ids.push_back(fields[i]);out->schema.fields.push_back({text.name,text.signature,native_schema_policy::JavaFlags(uint32_t(flags)),UINT32_MAX});
  }
  if(env->ExceptionCheck())return Fail(error,"Public schema stage left a pending exception");
