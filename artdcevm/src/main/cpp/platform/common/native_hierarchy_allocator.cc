@@ -10,6 +10,10 @@
 #include <cstring>
 #include <new>
 #include <algorithm>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#include <chrono>
+#endif
 namespace artdcevm::native_hierarchy_allocator {
 namespace {
 using Obj=abi::arm64::android11::ReleaseObjectPointer;
@@ -242,6 +246,11 @@ struct Batch::State final:rooted_hierarchy::Access {
  void Fail(const char* text)override{failed=true;if(invoking_owner)service.functions_.failure(invoking_owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,text);}
  void* Allocate(void* owner,rooted_hierarchy::Root old,rooted_hierarchy::Root parent,rooted_hierarchy::Root cache,uint16_t index,rooted_hierarchy::Root result)override{
   if(failed)return nullptr;
+#if defined(__ANDROID__)
+  const auto allocation_started=std::chrono::steady_clock::now();
+  const auto allocation_queries=method_identity::MappingOsQueries();
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned source allocator phase=allocate-enter classIndex=%u",unsigned(index));
+#endif
   records.emplace_back();auto& record=records.back();record.view={owner,index,old,result,cache,parent,&record.declarations,{}};
   std::string declarations_error;
   if(!Dex(Get(cache),index,&record.view.dex)||!evolution::ReadMappedDexDeclarations(record.view.dex,&record.declarations,&declarations_error)){Fail("Actual incoming source declarations unavailable");return nullptr;}
@@ -253,7 +262,26 @@ struct Batch::State final:rooted_hierarchy::Access {
   const auto public_original=service.functions_.find(service.class_linker_,context.self,before.descriptor,record.loader_root);
   if(public_original.reference!=uintptr_t(Get(old))){Fail("Original ClassLinker lookup differs from rooted source Class");return nullptr;}
   native_hierarchy_graph::Prepared value{owner,Get(old),nullptr,Get(cache),Get(parent),index,&record.declarations,old};
-  if(!authority.AuthorizeAllocation(context,value,nullptr)){Fail("Staged graph rejected actual source allocation");return nullptr;}
+  std::string allocation_error;
+#if defined(__ANDROID__)
+  const auto authorization_started=std::chrono::steady_clock::now();
+  const auto authorization_queries=method_identity::MappingOsQueries();
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned source allocator phase=authorize-begin classIndex=%u setupMs=%lld setupMapQueries=%llu",unsigned(index),
+    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(authorization_started-allocation_started).count()),
+    static_cast<unsigned long long>(authorization_queries-allocation_queries));
+#endif
+  const bool authorized=authority.AuthorizeAllocation(context,value,&allocation_error);
+#if defined(__ANDROID__)
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned source allocator phase=authorize-return accepted=%d elapsedMs=%lld mapQueries=%llu",int(authorized),
+    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-authorization_started).count()),
+    static_cast<unsigned long long>(method_identity::MappingOsQueries()-authorization_queries));
+#endif
+  if(!authorized){
+   if(allocation_error.empty())allocation_error="Staged graph rejected actual source allocation";
+   // The original RecordFailure synchronously copies this borrowed text. Keep
+   // its storage alive through Fail (including the original refund observer).
+   Fail(allocation_error.c_str());return nullptr;
+  }
   record.phase=Phase::Authorized;
   auto* previous=pending;pending=&record;void* returned=nullptr;
   {ScopedCapture guard(&service,&pool,result,record.allocated_root,context);returned=reinterpret_cast<void*>(service.functions_.allocate(owner,old,parent,cache,index).reference);}

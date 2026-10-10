@@ -1,5 +1,6 @@
 #include "platform/common/native_hierarchy_graph.h"
 #include "platform/common/native_hierarchy_parent.h"
+#include "platform/common/bounded_root_cohort.h"
 #include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
@@ -144,6 +145,11 @@ struct Authority::State {
  static bool RootPair(void*raw,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_pair&&s.bindings.borrow_pair(s.bindings.decoder_owner,c,a,b,left,right);}
  static void* RootElement(void*raw,void*array,size_t index){auto&s=*static_cast<State*>(raw);return index<size_t(bounded_managed_roots::Store::kChunkSize)?s.bindings.metadata->Reference(array,12+index*4):nullptr;}
  Graph graph;std::vector<Input> inputs;
+ static bool PublishClassRoot(void* raw,const size_t& index,bounded_managed_roots::Slot slot)noexcept{
+  auto& s=*static_cast<State*>(raw);if(index>=s.graph.nodes.size()||!s.public_roots.Valid(slot))return false;
+  auto& root=s.graph.nodes[index].class_root;if(root.slot)return false;root.slot=slot;return true;
+ }
+
  std::vector<std::vector<size_t>> closure_before,closure_after,order_before,order_after;
  std::vector<std::vector<void*>> native_before,native_after;
  std::vector<Prepared> allocations;std::vector<evolution::ClassSchema> allocation_declarations;
@@ -212,6 +218,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0||(count&&!loaded))return Fail(error,"Complete loaded Class graph unavailable");
  struct Loaded{JNIEnv* e;jvmtiEnv* ti;jclass* p;jint n;~Loaded(){if(p){for(jint i=0;i<n;++i)if(p[i])e->DeleteLocalRef(p[i]);ti->Deallocate(reinterpret_cast<unsigned char*>(p));}}} loaded_cleanup{env,ti,loaded,count};
  std::vector<size_t> facade_loaders;
+ bounded_managed_roots::RootCohort<size_t> class_roots{s.public_roots,context,error,&s,State::PublishClassRoot};
  for(jint i=0;i<count;++i){jint status=0,flags=0;char* signature=nullptr;
   if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return Fail(error,"Loaded Class status unavailable");if(status&(JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE))continue;
   if(ti->GetClassSignature(loaded[i],&signature,nullptr)!=JVMTI_ERROR_NONE||!signature)return Fail(error,"Loaded Class descriptor unavailable");
@@ -219,7 +226,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   if((status&JVMTI_CLASS_STATUS_ERROR)&&!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,("Unresolved erroneous Class lacks complete hierarchy proof: "+descriptor).c_str());
   if(ti->GetClassModifiers(loaded[i],&flags)!=JVMTI_ERROR_NONE)return false;
   Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;n.resolved_error=status&JVMTI_CLASS_STATUS_ERROR;
-  n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();if(!s.public_roots.Stage(context,loaded[i],&n.class_root.slot,error))return false;
+  n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();
   jvalue class_arg{};class_arg.l=loaded[i];const bool proxy=env->CallStaticBooleanMethodA(static_cast<jclass>(proxy_type.v),is_proxy,&class_arg);
   if(env->ExceptionCheck())return Fail(error,"Public proxy Class classification failed");
   if(proxy){
@@ -233,8 +240,10 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   if(l&&boot_loader.v&&env->IsSameObject(l,boot_loader.v))facade_loaders.push_back(s.graph.nodes.size());if(env->ExceptionCheck())return false;
   if(l){n.loader_root.owner=&s.public_roots;n.loader_root.generation=s.public_roots.Generation();for(const auto slot:s.loaders)if(s.public_roots.Same(env,slot,l)){n.loader_root.slot=slot;break;}
    if(env->ExceptionCheck())return false;if(!n.loader_root.slot){if(!s.public_roots.Stage(context,l,&n.loader_root.slot,error))return false;s.loaders.push_back(n.loader_root.slot);}}
-  s.graph.nodes.push_back(std::move(n));
+  const size_t index=s.graph.nodes.size();s.graph.nodes.push_back(std::move(n));
+  if(!class_roots.Add(loaded[i],index))return false;
  }
+ if(!class_roots.Flush())return false;
  trace.Mark("public-roots",s.graph.nodes.size());
  std::unordered_map<std::string,std::vector<size_t>> descriptor_index;for(size_t i=0;i<s.graph.nodes.size();++i)descriptor_index[s.graph.nodes[i].descriptor].push_back(i);
  const auto find=[&](jobject k){char* text=nullptr;if(!k||ti->GetClassSignature(static_cast<jclass>(k),&text,nullptr)!=JVMTI_ERROR_NONE||!text)return absent;auto it=descriptor_index.find(text);ti->Deallocate(reinterpret_cast<unsigned char*>(text));if(it!=descriptor_index.end())for(auto i:it->second)if(s.public_roots.Same(env,s.graph.nodes[i].class_root.slot,k))return i;return absent;};
@@ -299,8 +308,14 @@ bool Authority::AuthorizeAllocation(const runnable_jni::Context& context,const P
  auto it=std::find_if(s.graph.nodes.begin(),s.graph.nodes.end(),[&](const auto& n){return n.klass==p.old_class;});if(it==s.graph.nodes.end()||!it->affected||it->replacement)return Fail(error,"Preallocation is outside exact affected graph");size_t index=size_t(it-s.graph.nodes.begin());
  auto target=std::find(s.graph.inputs.begin(),s.graph.inputs.end(),index);if(target!=s.graph.inputs.end()&&!Same(*p.declarations,s.inputs[size_t(target-s.graph.inputs.begin())].after))return Fail(error,"Preallocation incoming declarations differ");
  if(it->proposed_parent!=absent&&s.graph.nodes[it->proposed_parent].affected&&!s.graph.nodes[it->proposed_parent].replacement)return Fail(error,"Affected parent has not been actually linked first");
- void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);if(parent!=p.parent||!s.Native(false))return Fail(error,"Preallocation source parent or staged native graph differs");
- return s.bindings.allocation->VerifyAllocation(s.graph,p,error)&&s.bindings.receivers->VerifyAllocation(s.graph,p,error)&&s.bindings.caches->VerifyAllocation(s.graph,p,error);
+ void* parent=it->proposed_parent==absent?nullptr:(s.graph.nodes[it->proposed_parent].replacement?s.graph.nodes[it->proposed_parent].replacement:s.graph.nodes[it->proposed_parent].klass);
+ if(parent!=p.parent){if(error)*error="Preallocation source parent differs: "+it->descriptor;return false;}
+ if(!s.Native(false,error)){if(error&&error->empty())*error="Preallocation staged native graph refused";return false;}
+ const auto verify=[&](const auto* owner,const char* role){
+  std::string detail;if(owner->VerifyAllocation(s.graph,p,error?&detail:nullptr))return true;
+  if(error)*error=std::string(role)+(detail.empty()?" refused preallocation proof":": "+detail);return false;
+ };
+ return verify(s.bindings.allocation,"Allocation owner")&&verify(s.bindings.receivers,"Receiver owner")&&verify(s.bindings.caches,"Type-cache owner");
 }
 bool Authority::PrepareLinked(const runnable_jni::Context& context,Prepared* p,std::string* error){auto& s=*state_;
  {State::OrdinaryRead ordinary{s};

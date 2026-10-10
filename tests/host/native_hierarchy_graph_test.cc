@@ -75,6 +75,7 @@ namespace artdcevm::modern_field_metadata {void* FieldMetadata::Reference(void* 
 static jclass JNICALL Find(JNIEnv*,const char*){return reinterpret_cast<jclass>(loaded.front());}
 static jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"getSuperclass")?1:!std::strcmp(name,"getInterfaces")?2:!std::strcmp(name,"getName")?5:3);}
 static jmethodID JNICALL StaticMethod(JNIEnv*,jclass,const char*name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"isProxyClass")?6:4);}
+static jobject JNICALL LocalRef(JNIEnv*,jobject v){return v;}
 static jobject JNICALL Global(JNIEnv*,jobject v){if(v){++globals;peak_globals=std::max(peak_globals,globals);assert(globals<51200);auto it=locals.find(v);if(it!=locals.end()&&it->second==1)++array_globals[reinterpret_cast<Array*>(v)];}return v;}
 static void JNICALL DeleteGlobal(JNIEnv*,jobject v){if(v){assert(globals);--globals;auto it=array_globals.find(reinterpret_cast<Array*>(v));if(it!=array_globals.end()&&!--it->second){auto*a=it->first;array_globals.erase(it);if(!locals.count(v))delete a;}}}
 static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1){if(!array_globals.count(reinterpret_cast<Array*>(v)))delete reinterpret_cast<Array*>(v);}else if(it->second==2)delete reinterpret_cast<std::string*>(v);locals.erase(it);}
@@ -96,7 +97,8 @@ static jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char** out,char**){*out=s
 static jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){auto*f=reinterpret_cast<Fake*>(c);*out=(f->prepared?JVMTI_CLASS_STATUS_PREPARED:0)|(f->initialized?JVMTI_CLASS_STATUS_INITIALIZED:0)|(f->erroneous?JVMTI_CLASS_STATUS_ERROR:0);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Modifiers(jvmtiEnv*,jclass c,jint* out){*out=jint(reinterpret_cast<Fake*>(c)->bytes.access_flags);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
-static bool Borrow(void*,const runnable_jni::Context&,jobject value,void** out){auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
+static size_t root_borrows=0;
+static bool Borrow(void*,const runnable_jni::Context& c,jobject value,void** out){assert(c.self&&c.env);++root_borrows;auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
 static size_t pair_reads=0;
 static bool PairBorrow(void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){++pair_reads;return Borrow(owner,c,a,left)&&Borrow(owner,c,b,right);}
 struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
@@ -120,7 +122,7 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
 static void Lifecycle(){
  Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),parent("Lpkg/P;",&object),i("Lpkg/I;",&object,0x601);
  Fake facade("Lboot/Facade;"),foreign_loader("Lloader/Foreign;");boot_facade=&facade;
- loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.CallStaticBooleanMethodA=IsProxy;jni.GetStringUTFChars=UtfChars;jni.ReleaseStringUTFChars=ReleaseUtf;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
+ loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.NewLocalRef=LocalRef;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.CallStaticBooleanMethodA=IsProxy;jni.GetStringUTFChars=UtfChars;jni.ReleaseStringUTFChars=ReleaseUtf;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner,PairBorrow};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};input.after.access|=0x400u;
@@ -245,8 +247,12 @@ static void Lifecycle(){
   loaded={&object,&a,&b,&parent,&i};
   for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object,index%2?0x601u:1u);value->loader=&shared_loader;value->interfaces={&i};value->native_interfaces={&i};loaded.push_back(value.get());many.push_back(std::move(value));}
   for(auto loader_identity:{&shared_loader,&other_loader}){auto value=std::make_unique<Fake>("Lstress/Collision;",&object);value->loader=loader_identity;loaded.push_back(value.get());many.push_back(std::move(value));}
-  auto stage_start=std::chrono::steady_clock::now();peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots,before_pairs=pair_reads;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
-  std::cout<<"Full interface graph Stage nodes="<<class_count<<" seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-stage_start).count()<<"\n";const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==graph->nodes.size()+3);
+  auto stage_start=std::chrono::steady_clock::now();peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots,before_pairs=pair_reads,before_borrows=root_borrows;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
+  std::cout<<"Full interface graph Stage nodes="<<class_count<<" seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-stage_start).count()<<"\n";const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==3);
+  // All Class roots were independently checked against their original JNI
+  // identities. Native root decoding is per array cohort, not per Class.
+  const size_t cohorts=(graph->nodes.size()+127)/128;
+  assert(root_borrows-before_borrows<cohorts*10+graph->nodes.size()*3);
   const size_t chunks=(graph->nodes.size()+3+1023)/1024;
   assert(globals==chunks+1&&peak_globals<=chunks+2&&peak_globals<51200);
   auto old_witness=graph->nodes[5].class_root,loader_witness=graph->nodes[5].loader_root;

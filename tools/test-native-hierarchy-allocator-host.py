@@ -19,7 +19,7 @@ sources = ['native_hierarchy_allocator', 'native_hierarchy_graph', 'rooted_hiera
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
-           '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(out),
+           '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-ffunction-sections', '-fdata-sections', '-I', str(cpp), '-I', str(out),
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
            str(root / 'tests/host/native_hierarchy_allocator_test.cc')]
 command += [str(cpp / 'platform/common' / (s + '.cc')) for s in sources]
@@ -27,7 +27,9 @@ command += [str(cpp / 'evolution/dex_schema.cc')]
 # Compressed-root fixtures need a real heap below 4 GiB. Mach-O otherwise
 # reserves that entire address range as __PAGEZERO. Keep the null guard intact.
 if platform == 'darwin':
-    command += ['-Wl,-pagezero_size,0x10000']
+    command += ['-Wl,-pagezero_size,0x10000', '-Wl,-dead_strip']
+else:
+    command += ['-Wl,--gc-sections']
 command += ['-o', str(binary)]
 subprocess.run(command, check=True)
 if args.compile_only:

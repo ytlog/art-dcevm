@@ -151,6 +151,7 @@ void OwnerTest(){
  const auto writes=mapper.calibration.writes;
  mapper.deny_inspection=true;
  assert(!owner.VerifyStaged({}, {}, &error)&&error=="Cache semantic witness inspection refused before callback");
+ assert(!owner.VerifyAllocation({},mapper.prepared,&error)&&error=="Cache semantic witness inspection refused before callback");
  mapper.deny_inspection=false;
  mapper.calibration.full[1]=0x456;
  assert(!owner.VerifyStaged({}, {}, &error));

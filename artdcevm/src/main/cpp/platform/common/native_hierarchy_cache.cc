@@ -395,7 +395,8 @@ bool Owner::CheckSemantic(const Record&r)const noexcept{
 }
 bool Owner::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&i,std::string* e)const{return Witnesses(e)&&mapper_->VerifyStaged(g,i,e);}
 bool Owner::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,std::string*e)const{
- if(!Witnesses()||p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
+ if(!Witnesses(e))return false;
+ if(p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
  if(semantic_){
   Source source;if(!mapper_->DescribeAllocation(p,&source,e))return false;
   struct Call {const Owner* owner;native_hierarchy_graph::Prepared prepared;Source source;};Call call{this,p,source};

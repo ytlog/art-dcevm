@@ -34,8 +34,13 @@ class Store {
  // temporary array, and publishes only after one native-only slot proof.
  // The bound limits temporary roots, never the full process inventory.
  static constexpr size_t kCohortSize=128;
- bool StageMany(JNIEnv* env,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error){
-  if(!env||!out||objects.empty()||objects.size()>kCohortSize||env->ExceptionCheck()||!bindings_.scope||!bindings_.oracle||!bindings_.decode||!bindings_.element)
+ bool StageMany(JNIEnv* env,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error){return StageManyImpl(env,objects,out,error,nullptr);}
+ // The original source callback is already Runnable; retain its actual context
+ // instead of nesting an executor or changing the thread phase.
+ bool StageMany(const runnable_jni::Context& context,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error){return StageManyImpl(context.env,objects,out,error,&context);}
+ private:
+ bool StageManyImpl(JNIEnv* env,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error,const runnable_jni::Context* context){
+  if(!env||!out||objects.empty()||objects.size()>kCohortSize||env->ExceptionCheck()||(!context&&!bindings_.scope)||(context&&!context->self)||!bindings_.oracle||!bindings_.decode||!bindings_.element)
    return Fail(error,"Managed root cohort lacks actual public/native owner");
   for(auto object:objects)if(!object)return Fail(error,"Managed root cohort contains null identity");
   Local type{env,env->FindClass("java/lang/Object")};if(!type.ref||env->ExceptionCheck())return false;
@@ -70,10 +75,11 @@ class Store {
     ++chunk.used;
    }
    Cohort request{this,source.ref,&slots};
-   if(!bindings_.scope(bindings_.owner,env,source.ref,ObserveMany,&request))return Fail(error,"Managed root cohort differs from independent public slots");
+   if(!(context?ObserveMany(*context,&request):bindings_.scope(bindings_.owner,env,source.ref,ObserveMany,&request)))return Fail(error,"Managed root cohort differs from independent public slots");
    *out=std::move(slots);rollback.committed=true;return true;
   }catch(const std::bad_alloc&){return Fail(error,"Managed root cohort publication exhausted native memory");}
  }
+ public:
  // An independently proven original source Runnable context needs no nested
  // runnable executor. Public JNI and the same oracle still attest each slot.
  bool Stage(const runnable_jni::Context& context,jobject object,Slot* out,std::string* error){return StageImpl(context.env,object,out,error,&context);}

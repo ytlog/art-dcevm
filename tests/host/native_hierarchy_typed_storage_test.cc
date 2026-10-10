@@ -249,13 +249,17 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  if(!original_staged){std::cerr<<"typed Stage: "<<error<<"\n";std::abort();}assert(typed_inventory_passes>=3&&typed_late_class&&typed_defining_loaders>=typed_classes.size());return result;
 }
 void TestRootCohort(const runnable_jni::Context& c,const source_handle_roots::Service& source,const modern_field_metadata::FieldMetadata& metadata){
+ using Cohort=bounded_managed_roots::RootCohort<size_t>;
+ static_assert(!std::is_constructible<Cohort,bounded_managed_roots::Store&,runnable_jni::Context&&,std::string*,void*,Cohort::Publish>::value,"Source context temporary cannot outlive callback");
+ static_assert(!std::is_constructible<Cohort,bounded_managed_roots::Store&,const runnable_jni::Context&&,std::string*,void*,Cohort::Publish>::value,"Const source context temporary cannot outlive callback");
  struct Owner {const runnable_jni::Context& c;const source_handle_roots::Service& source;const modern_field_metadata::FieldMetadata& metadata;std::vector<bounded_managed_roots::Slot> slots;bool refuse=false;} owner{c,source,metadata,{},false};
- bounded_managed_roots::Store roots{{&owner,
+ bounded_managed_roots::Bindings root_bindings{&owner,
   [](void*p,JNIEnv*e,jobject,runnable_jni::Operation op,void*d){auto&o=*static_cast<Owner*>(p);return e==o.c.env&&o.source.ReadyForSourceAccess()&&op(o.c,d);},
-  [](void*p,const runnable_jni::Context&ctx,jobject root,void**out){return static_cast<Owner*>(p)->source.BorrowStrongGlobal(ctx,root,out);},
+  [](void*p,const runnable_jni::Context&ctx,jobject root,void**out){auto&o=*static_cast<Owner*>(p);assert(&ctx==&o.c);return o.source.BorrowStrongGlobal(ctx,root,out);},
   [](void*p,jobject root,void**out){auto&o=*static_cast<Owner*>(p);return o.source.BorrowOwnedStrongGlobal(o.c,root,out);},
   [](void*p,void*a,size_t i){return static_cast<Owner*>(p)->metadata.Reference(a,12+4*i);},
-  [](void*p,const runnable_jni::Context&ctx,jobject a,jobject b,void**x,void**y){return static_cast<Owner*>(p)->source.BorrowOwnedStrongPair(ctx,a,b,x,y);}}};
+  [](void*p,const runnable_jni::Context&ctx,jobject a,jobject b,void**x,void**y){return static_cast<Owner*>(p)->source.BorrowOwnedStrongPair(ctx,a,b,x,y);}};
+ bounded_managed_roots::Store roots{root_bindings};
  std::string error;owner.slots.resize(typed_large_classes.size());const auto start=typed_source_decodes;
  for(size_t i=0;i<typed_large_classes.size();++i)assert(roots.Stage(c,reinterpret_cast<jobject>(typed_large_classes[i]),&owner.slots[i],&error));
  const auto direct=typed_source_decodes-start;roots.Clear(c.env);
@@ -267,9 +271,19 @@ void TestRootCohort(const runnable_jni::Context& c,const source_handle_roots::Se
  roots.Clear(c.env);assert(!typed_failure_globals);
  std::cout<<"Actual source root publication direct="<<direct<<" batched="<<batched<<" for "<<typed_large_classes.size()<<" exact identities\n";
  assert(direct==2*typed_large_classes.size()&&batched<direct/10);
- owner.refuse=true;
- {bounded_managed_roots::RootCohort<size_t> rejected{roots,c.env,&error,&owner,publish};assert(rejected.Add(reinterpret_cast<jobject>(typed_large_classes[0]),0)&&rejected.Add(reinterpret_cast<jobject>(typed_large_classes[1]),1));assert(!rejected.Flush());const auto stopped=typed_source_decodes;assert(!rejected.Flush()&&!rejected.Add(reinterpret_cast<jobject>(typed_large_classes[2]),2)&&typed_source_decodes==stopped);}
+ // The original source Runnable callback has no executor TLS permission.
+ // Preserve this exact context object (not a matching-field copy) in a cohort.
+ const auto source_scope=root_bindings.scope;assert(!runnable_executor::host_executor_active);root_bindings.scope=nullptr;roots.Bind(root_bindings);
+ const auto source_start=typed_source_decodes;
+ {bounded_managed_roots::RootCohort<size_t> cohort{roots,c,&error,&owner,publish};for(size_t i=0;i<typed_large_classes.size();++i)assert(cohort.Add(reinterpret_cast<jobject>(typed_large_classes[i]),i));assert(cohort.Flush());}
+ assert(!runnable_executor::host_executor_active&&typed_source_decodes-source_start==batched);
+ for(size_t i=0;i<owner.slots.size();++i){void* actual=nullptr;assert(roots.Read(owner.slots[i],&actual)&&actual==typed_large_classes[i]);}
  roots.Clear(c.env);assert(!typed_failure_globals);
+ owner.refuse=true;
+ for(bool original_source:{false,true}){root_bindings.scope=original_source?nullptr:source_scope;roots.Bind(root_bindings);
+ const auto reject=[&](auto& rejected){assert(rejected.Add(reinterpret_cast<jobject>(typed_large_classes[0]),0)&&rejected.Add(reinterpret_cast<jobject>(typed_large_classes[1]),1));assert(!rejected.Flush());const auto stopped=typed_source_decodes;assert(!rejected.Flush()&&!rejected.Add(reinterpret_cast<jobject>(typed_large_classes[2]),2)&&typed_source_decodes==stopped);};
+ if(original_source){bounded_managed_roots::RootCohort<size_t> rejected{roots,c,&error,&owner,publish};reject(rejected);}else{bounded_managed_roots::RootCohort<size_t> rejected{roots,c.env,&error,&owner,publish};reject(rejected);}
+ roots.Clear(c.env);assert(!typed_failure_globals);}
 }
 void MoveTypedRootsAfterStage(){
  // A real collector boundary double moves the Class and updates compressed

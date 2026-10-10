@@ -165,21 +165,24 @@ int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=
  constexpr size_t root_count=180000;std::vector<Object> objects(root_count);
  std::vector<bounded_managed_roots::Slot> slots(root_count);
  for(size_t i=0;i<root_count;++i)objects[i].native=&objects[i];
- for(int cycle=0;cycle<3;++cycle){globals=existing_class_roots;peak=globals;
+ for(int cycle=0;cycle<4;++cycle){globals=existing_class_roots;peak=globals;
+  if(cycle==3)roots.Bind({&vm,nullptr,Oracle,Decode,Element,Pair});
+  const runnable_jni::Context original_context{&thread,&env,reinterpret_cast<JavaVM*>(&vm)};
   const size_t scope_before=scope_calls;
-  if(cycle==2){
+  if(cycle>=2){
    for(size_t start=0;start<root_count;start+=bounded_managed_roots::Store::kCohortSize){
     std::vector<jobject> refs;for(size_t i=start;i<std::min(root_count,start+bounded_managed_roots::Store::kCohortSize);++i)refs.push_back(Local(&objects[i]));
-    std::vector<bounded_managed_roots::Slot> published;assert(roots.StageMany(&env,refs,&published,&error));assert(published.size()==refs.size());
+    std::vector<bounded_managed_roots::Slot> published;assert(cycle==3?roots.StageMany(original_context,refs,&published,&error):roots.StageMany(&env,refs,&published,&error));assert(published.size()==refs.size());
     for(size_t i=0;i<refs.size();++i){slots[start+i]=published[i];Delete(&env,refs[i]);}
    }
-   assert(scope_calls-scope_before==(root_count+127)/128);
+   assert(scope_calls-scope_before==(cycle==3?0:(root_count+127)/128));
   }else for(size_t i=0;i<root_count;++i){auto ref=Local(&objects[i]);assert(cycle==1?roots.Stage(runnable_jni::Context{&thread,&env,reinterpret_cast<JavaVM*>(&vm)},ref,&slots[i],&error):roots.Stage(&env,ref,&slots[i],&error));Delete(&env,ref);}
   const size_t chunks=(root_count+1023)/1024;assert(globals==existing_class_roots+chunks&&peak<=globals+2&&peak<51200);
   const size_t calls=jni_calls;no_alloc=true;for(size_t i=0;i<root_count;++i){void* native=nullptr;assert(roots.Read(slots[i],&native)&&native==objects[i].native);}no_alloc=false;assert(jni_calls==calls);
-  move_array=true;auto ref=Local(&objects[0]);bounded_managed_roots::Slot gc_slot;assert(roots.Stage(&env,ref,&gc_slot,&error)&&!move_array);Delete(&env,ref);void* native=nullptr;assert(roots.Read(gc_slot,&native)&&native==objects[0].native);
+  move_array=true;auto ref=Local(&objects[0]);bounded_managed_roots::Slot gc_slot;assert(roots.Stage(original_context,ref,&gc_slot,&error)&&!move_array);Delete(&env,ref);void* native=nullptr;assert(roots.Read(gc_slot,&native)&&native==objects[0].native);
   roots.Clear(&env);assert(globals==existing_class_roots&&arrays==0&&roots.Empty());globals=0;
  }
+ roots.Bind({&vm,Scope,Oracle,Decode,Element,Pair});
  bounded_managed_roots::Slot rejected;wrong_element=true;assert(!roots.Stage(&env,ar,&rejected,&error)&&!rejected);wrong_element=false;assert(globals==0&&arrays==0);
  fail_set=true;assert(!roots.Stage(&env,ar,&rejected,&error)&&pending_exception&&!rejected);assert(globals==0&&arrays==0);ClearException(&env);
  auto object_ref=Local(&objects[0]);assert(roots.Stage(&env,object_ref,&rejected,&error));assert(roots.Same(&env,rejected,object_ref));Delete(&env,object_ref);size_t baseline=globals;
@@ -187,27 +190,36 @@ int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=
  void* native=nullptr;assert(roots.Read(rejected,&native)&&native==objects[0].native);roots.Clear(&env);assert(globals==0);
  // A cohort crossing the retained array boundary refunds both the old tail
  // and newly created chunk, preserves pending exception and publishes nothing.
- {
+ for(bool original_source:{false,true}){
+  roots.Bind({&vm,original_source?nullptr:Scope,Oracle,Decode,Element,Pair});
+  const runnable_jni::Context original_context{&thread,&env,reinterpret_cast<JavaVM*>(&vm)};
+  const auto initial_scopes=scope_calls;
+  const auto stage_many=[&](const std::vector<jobject>& values,std::vector<bounded_managed_roots::Slot>* out){return original_source?roots.StageMany(original_context,values,out,&error):roots.StageMany(&env,values,out,&error);};
   std::vector<jobject> refs;for(size_t i=0;i<128;++i)refs.push_back(Local(&objects[i]));
   std::vector<bounded_managed_roots::Slot> published;
-  for(size_t i=0;i<7;++i)assert(roots.StageMany(&env,refs,&published,&error));
-  std::vector<jobject> tail(refs.begin(),refs.begin()+120);assert(roots.StageMany(&env,tail,&published,&error));
+  for(size_t i=0;i<7;++i)assert(stage_many(refs,&published));
+  std::vector<jobject> tail(refs.begin(),refs.begin()+120);assert(stage_many(tail,&published));
   assert(published.back().index==1015);auto retained=published.front();const auto baseline=globals;
-  move_array=true;assert(roots.StageMany(&env,refs,&published,&error)&&!move_array);
+  move_array=true;assert(stage_many(refs,&published)&&!move_array);
   assert(published.front().index==1016&&published.back().chunk==1);
   void* value=nullptr;assert(roots.Read(retained,&value)&&value==&objects[0]);
   roots.Clear(&env);assert(globals==0&&arrays==0);
-  for(size_t i=0;i<7;++i)assert(roots.StageMany(&env,refs,&published,&error));
-  assert(roots.StageMany(&env,tail,&published,&error));const auto old=published;assert(globals==baseline);
+  for(size_t i=0;i<7;++i)assert(stage_many(refs,&published));
+  assert(stage_many(tail,&published));const auto old=published;assert(globals==baseline);
   wrong_element=true;std::vector<bounded_managed_roots::Slot> rejected_many;
-  assert(!roots.StageMany(&env,refs,&rejected_many,&error)&&rejected_many.empty());wrong_element=false;
+  assert(!stage_many(refs,&rejected_many)&&rejected_many.empty());wrong_element=false;
   assert(globals==baseline&&arrays==1&&roots.Read(old.front(),&value)&&value==&objects[0]);
-  fail_set=true;assert(!roots.StageMany(&env,refs,&rejected_many,&error)&&pending_exception&&rejected_many.empty());
+  fail_set=true;assert(!stage_many(refs,&rejected_many)&&pending_exception&&rejected_many.empty());
   assert(globals==baseline&&arrays==1);ClearException(&env);
-  assert(roots.StageMany(&env,refs,&published,&error)&&published.front().index==1016);
+  assert(stage_many(refs,&published)&&published.front().index==1016);
   pending_exception=true;const auto calls=scope_calls;
-  assert(!roots.StageMany(&env,refs,&rejected_many,&error)&&scope_calls==calls&&pending_exception);ClearException(&env);
-  std::vector<jobject> oversize(129,refs.front());assert(!roots.StageMany(&env,oversize,&rejected_many,&error));
+  assert(!stage_many(refs,&rejected_many)&&scope_calls==calls&&pending_exception);ClearException(&env);
+  std::vector<jobject> oversize(129,refs.front());assert(!stage_many(oversize,&rejected_many));
+  auto invalid_context=original_context;invalid_context.self=nullptr;
+  assert(!roots.StageMany(invalid_context,refs,&rejected_many,&error)&&rejected_many.empty());
+  invalid_context=original_context;invalid_context.env=nullptr;
+  assert(!roots.StageMany(invalid_context,refs,&rejected_many,&error)&&rejected_many.empty());
+  assert(original_source?scope_calls==initial_scopes:scope_calls>initial_scopes);
   roots.Clear(&env);for(auto ref:refs)Delete(&env,ref);assert(globals==0&&arrays==0);
  }
  // The production Store retains every identity through its source-lazy path
