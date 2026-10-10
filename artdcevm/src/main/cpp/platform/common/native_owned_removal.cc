@@ -105,6 +105,15 @@ void CollectionDiagnostic(const char* stage,const void* owner,const void* token,
    static_cast<unsigned long long>(passive_run?passive_run->collection_epoch:0),result);
 }
 
+
+// Ordinary Run boundaries only. Log scalar evidence before/after source calls;
+// the final publication callback never uses this diagnostic.
+void RunDiagnostic(const char* stage,const void* driver,int result=2)noexcept {
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+   "Owned source Run phase=%s driver=%p mappingQueries=%llu result=%d",
+   stage,const_cast<void*>(driver),static_cast<unsigned long long>(method_identity::MappingOsQueries()),result);
+}
+
 // A whole-loop `this` is unused in fixed source and may not survive optimisation.
 // Provenance is the real Holder/Iterator owner range, never that receiver.
 void PassiveCollected(const void* holder) noexcept {
@@ -415,10 +424,12 @@ jvmtiError RunOwned(void* driver){
  auto& r=*active;if(r.source_run_active)return JVMTI_ERROR_NOT_AVAILABLE;
  r.source_driver=driver;r.source_run_active=true;std::string error;bool begun=false;
  jvmtiError result=JVMTI_ERROR_NOT_AVAILABLE;
+ RunDiagnostic("owner-begin-enter",driver);
  try{begun=r.provider->begin_run(driver,r.provider->state,&error);}
  catch(const std::bad_alloc&){result=JVMTI_ERROR_OUT_OF_MEMORY;RememberFailure("Source Session creation exhausted native memory");}
  catch(...){result=JVMTI_ERROR_INTERNAL;RememberFailure("Source Session creation threw");}
- if(begun){result=InvokeOriginalRun(driver);
+ RunDiagnostic("owner-begin-return",driver,int(begun));
+ if(begun){RunDiagnostic("original-enter",driver);result=InvokeOriginalRun(driver);RunDiagnostic("original-return",driver,int(result));
   // Every owned rejection and original RecordFailure refunds while source
   // locals still exist. EndRun must never perform a late Holder retirement.
   if(result!=JVMTI_ERROR_NONE&&!r.refunded)std::abort();
