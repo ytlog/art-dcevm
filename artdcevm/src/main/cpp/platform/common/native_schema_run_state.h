@@ -5,6 +5,7 @@
 #include "platform/common/native_required_cleanup.h"
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/native_owned_removal.h"
+#include "platform/common/native_boot_method_catalog.h"
 namespace artdcevm::native_schema_run_state {
 // Public independently warmed resolved entries. Indices come from the installed
 // DEX/public member oracle, never the candidate DexCache representation.
@@ -39,6 +40,7 @@ struct Dependencies {
  native_member_provider::Dependencies members{};
  prepared_roots::Registry* registry=nullptr;
  native_schema_guard_verifier::Verifier* guards=nullptr;
+ const native_boot_method_catalog::Catalog* boot_catalog=nullptr;
  Mapping mapping{};
 };
 // Unique original Run aggregate. Stage, JNI roots and scanner storage precede

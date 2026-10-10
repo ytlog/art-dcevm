@@ -1,3 +1,4 @@
+#include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/source_cache_resolution.h"
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/owned_failure_diagnostic.h"
@@ -63,7 +64,7 @@ struct Roots {
 struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
 struct NativeEngine final:Engine {
  ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
- ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){boot_methods.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -93,6 +94,8 @@ struct NativeEngine final:Engine {
  std::string SourceFactoryDiagnostic()const override{
   return !source_factory_diagnostic.empty()?source_factory_diagnostic:source_capabilities.Ready()?"":source_capabilities.Diagnostic();
  }
+ native_boot_method_catalog::Catalog boot_methods;
+ std::string boot_method_diagnostic;
  jobject source_fixture=nullptr;JNIEnv* source_env=nullptr;jvmtiEnv* source_ti=nullptr;
  frame_family_calibration::Service frame_calibrator;
  frame_family_calibration::Service::Prepared frame_calibration_storage;
@@ -605,10 +608,20 @@ struct NativeEngine final:Engine {
  bool PrepareSchemaDependencies(JNIEnv* env,std::string* error){
   if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
   if(!frame_geometry_proven)return Fail(error,frame_geometry_diagnostic.empty()?"Independent frame geometry not calibrated":frame_geometry_diagnostic.c_str());
+  // Ordinary public catalog preparation has no stop permission. Unknown or
+  // unavailable bytecode remains a precise missing dependency, never readiness.
+  if(!boot_methods.Complete()){
+   native_boot_method_catalog::Codec codec{runtime.receivers.jni_id_manager,graph_decode_method,
+    reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod))};
+   boot_method_diagnostic.clear();
+   boot_methods.Prepare(env,source_ti,codec,&boot_method_diagnostic);
+   if(env->ExceptionCheck())return Fail(error,"Boot catalog left a pending public JNI exception");
+  }
   native_schema_run_state::Dependencies d;
   if(!source_capabilities.BindDependencies(&d,error)||!PrepareStoppedMaps(error))return false;
   d.hooks=&hooks;d.loading=&source_observers.Loading();d.stop=&source_stop;d.frames=&whole_frames;
   d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.members=MemberDependencies();
+  d.boot_catalog=boot_methods.Complete()?&boot_methods:nullptr;
   d.mapping={this,RefreshStoppedMaps,GraphExtent};
   if(!native_required_cleanup::Binding::Bind(hooks,env,d.members,&cleanup_binding,error))return false;
   d.cleanup=&cleanup_binding;schema_dependencies=d;return true;

@@ -12,6 +12,7 @@ struct RunState::State {
  Dependencies d;modern_field_metadata::ReadContext read_context{};void* driver;const runnable_jni::Context context;
  source_handle_roots::Pool pool;native_hierarchy_source_cache::AllocatorBatchAccess access;
  native_hierarchy_graph::Authority authority;native_hierarchy_receiver::Preservation receivers;
+ native_boot_method_catalog::Rooted boot_catalog;
  whole_process_frames::Service::Prepared frame_storage;
  std::unique_ptr<native_source_stop::Session> stop;
  std::unique_ptr<native_required_cleanup::Service> cleanup;
@@ -72,6 +73,10 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  s.cleanup=std::make_unique<native_required_cleanup::Service>(*s.d.cleanup,s.context.self,s.driver,*s.stop,*s.d.frames,s.frame_storage,*s.d.members.cache,s.d.members.runtime.receivers.jit_code_cache,*s.d.provider,*s.d.registry);
  s.loading=std::make_unique<native_source_class_loading::Run>(*s.d.loading,s.driver,s.context);
  s.ledger=std::make_unique<native_hierarchy_private_ledger::Ledger>(s.driver,s.context,s.pool,s.access,*s.d.members.metadata,*s.d.dex_registry,s.cleanup.get());
+ if(s.d.boot_catalog){
+  if(!s.boot_catalog.Import(*s.d.boot_catalog,s.context,*s.d.roots,s.pool,s.d.members.metadata,[](const void*owner,void*method)noexcept{return static_cast<const modern_field_metadata::FieldMetadata*>(owner)->Reference(method,0);},error))return Fail(error,"Source boot catalog root import refused");
+  s.frame_storage.boot_catalog=&s.boot_catalog;s.frame_storage.boot_reader=s.ledger.get();
+ }
  s.mapper=std::make_unique<native_hierarchy_source_cache::Mapper>(s.context,s.pool,*s.d.members.metadata,*s.d.members.fields,s.access,s.ledger.get());
  s.caches=std::make_unique<native_hierarchy_source_cache::Composite>(*s.mapper,s.incoming);
  void*cache=nullptr,*expected=nullptr;

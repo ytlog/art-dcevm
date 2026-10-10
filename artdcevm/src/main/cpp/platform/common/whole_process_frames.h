@@ -1,3 +1,4 @@
+#include "platform/common/native_boot_method_catalog.h"
 #pragma once
 #include "platform/common/native_source_stop.h"
 #include "platform/common/native_cache_service.h"
@@ -38,6 +39,7 @@ class StoppedRecoveryProof final {
 using Family=code_info_view::SourceFamily;
 static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(abi::arm64::android12::Method12,access_flags));
 struct Report {
+ const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
    async_frames=0,aot_frames=0,shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
  const char* failure="not-scanned";
@@ -103,6 +105,8 @@ class Service {
     source_commit::Plan recovery_identity;
     const source_commit::Plan* recovery_plan=nullptr;
     uint64_t recovery_generation=0;
+    const native_boot_method_catalog::Rooted* boot_catalog=nullptr;
+    const source_handle_roots::StoppedReader* boot_reader=nullptr;
     ~Prepared(){delete context;}
     Prepared(const Prepared&)=delete;Prepared& operator=(const Prepared&)=delete;
   };
@@ -201,7 +205,14 @@ class Service {
         const auto kind=s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit);
         if(kind==native_frame_code_owner::Kind::Aot)++r.report.aot_frames;
         if(kind==native_frame_code_owner::Kind::Unknown)return Reject("whole-frame-recovery-code-owner-unproved");
-        if(!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject(kind==native_frame_code_owner::Kind::Aot?"whole-AOT-requires-actual-frame-exit-or-dependency-closure":"whole-frame-original-async-recovery-refused");
+        if(!s.async_.Query(*this->quick_frame,this->pc,*r.recovery)){
+         if(kind==native_frame_code_owner::Kind::Aot&&r.storage.boot_catalog&&r.storage.boot_reader){
+          const auto*body=r.storage.boot_catalog->Lookup(*this->quick_frame,*r.storage.boot_reader,*r.recovery);
+          if(body){r.report.aot_declaring_class=body->declaring_signature.c_str();r.report.aot_method=body->name.c_str();r.report.aot_descriptor=body->descriptor.c_str();}
+          if(body&&body->body==native_boot_method_catalog::Body::kPrimitiveLocal)return Reject("whole-AOT-primitive-catalog-still-needs-closed-dependency-and-map-proof");
+         }
+         return Reject(kind==native_frame_code_owner::Kind::Aot?"whole-AOT-requires-actual-frame-exit-or-dependency-closure":"whole-frame-original-async-recovery-refused");
+        }
         ++r.report.async_frames;
       }
       if(s.family_==Family::kAndroid11?(!s.legacy_fast_&&(!s.legacy_canonical_||!s.debugger_)):
