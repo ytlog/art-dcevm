@@ -1,5 +1,6 @@
 #include "platform/common/source_handle_roots.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/readable_mapping_scope.h"
 #include "platform/abi/arm64/android11/thread_state.h"
 #include "platform/abi/arm64/android13/thread_state.h"
 #include "platform/abi/arm64/common/hierarchy_allocation.h"
@@ -95,18 +96,37 @@ void Service::Visit(void* self,HandleRootVisitor* visitor)const{
 bool Service::Contains(void* self,const void* slot,uint32_t value,size_t references,void** owner)const{
  if(!references)references=references_;
  if(references!=sizeof(HandleScopeHeader)&&references!=sizeof(SizedHandleScopeHeader))return false;
- std::array<const void*,1024> visited{};size_t used=0;bool found=false,variable=false;
- for(void* scope=Read<void*>(self,top_);scope;scope=Read<HandleScopeHeader>(scope).link){
-  if(used==visited.size()||!Mapped(scope,sizeof(HandleScopeHeader)))return false;
-  for(size_t i=0;i<used;++i)if(visited[i]==scope)return false;visited[used++]=scope;
+ // Validate the entire live chain, including its tail after finding the slot.
+ // Brent cycle detection has constant storage and no inventory-size ceiling;
+ // a long owned Pool is not a cycle. Every traversed source header/storage is
+ // still independently bounded before its link or roots are used.
+ void* scope=Read<void*>(self,top_);void* checkpoint=scope;
+ size_t power=1,distance=0;bool found=false,variable=false;
+ {
+ // This snapshot belongs only to the immediate header/slot traversal. There
+ // is no JNI, allocation of managed objects or original ART callee here; it
+ // is destroyed before the variable-scope walker or caller can safepoint.
+ method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return false;
+ while(scope){
+  if(!Mapped(scope,sizeof(HandleScopeHeader)))return false;
   const auto header=Read<HandleScopeHeader>(scope);
-  if(header.count==-1){variable=true;continue;} // Local scopes are traversed by ART, not the Thread chain.
-  if(header.count<0||size_t(header.count)>(SIZE_MAX-references)/4||!Mapped(scope,references+size_t(header.count)*4))return false;
-  uint32_t size=uint32_t(header.count);
-  if(references==sizeof(SizedHandleScopeHeader))size=Read<uint32_t>(scope,offsetof(SizedHandleScopeHeader,size));
-  if(size>uint32_t(header.count))return false;
-  const uintptr_t start=uintptr_t(scope)+references,address=uintptr_t(slot);
-  if(address>=start&&(address-start)%4==0&&(address-start)/4<size){if(Read<uint32_t>(slot)!=value)return false;found=true;if(owner)*owner=scope;}
+  if(header.count==-1)variable=true; // Local scopes are walked by original ART.
+  else{
+   if(header.count<0||size_t(header.count)>(SIZE_MAX-references)/4||!Mapped(scope,references+size_t(header.count)*4))return false;
+   uint32_t size=uint32_t(header.count);
+   if(references==sizeof(SizedHandleScopeHeader))size=Read<uint32_t>(scope,offsetof(SizedHandleScopeHeader,size));
+   if(size>uint32_t(header.count))return false;
+   const uintptr_t start=uintptr_t(scope)+references,address=uintptr_t(slot);
+   if(address>=start&&(address-start)%4==0&&(address-start)/4<size){if(Read<uint32_t>(slot)!=value)return false;found=true;if(owner)*owner=scope;}
+  }
+  scope=header.link;
+  if(scope&&scope==checkpoint)return false;
+  if(++distance==power){
+   checkpoint=scope;distance=0;
+   if(power>SIZE_MAX/2)return false; // Counter overflow never proves ownership.
+   power*=2;
+  }
+ }
  }
  if(found)return true;
  // A VariableSizedHandleScope owns local scopes outside the Thread's link

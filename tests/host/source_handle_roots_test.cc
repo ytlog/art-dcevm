@@ -3,6 +3,8 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/native_class_lookup.h"
+#include "platform/common/readable_mapping_scope.h"
 #include "platform/common/source_cache_writer_root.h"
 #include "platform/common/source_allocation_transaction.h"
 #include <chrono>
@@ -61,8 +63,17 @@ jobject PrivateGlobal(JNIEnv* e,jobject value){if(private_monitor&&value==privat
 void PrivateDeleteGlobal(JNIEnv* e,jobject value){if(private_monitor&&value==private_monitor){assert(Top()==private_top);++private_deleted;}Delete(e,value);}
 void PrivateMonitorJni(){table.GetMethodID=PrivateMethod;table.NewObjectV=PrivateNew;table.NewGlobalRef=PrivateGlobal;table.DeleteGlobalRef=PrivateDeleteGlobal;}
 abi::arm64::android11::ReleaseObjectPointer AllocationMirror(void* raw){return {uintptr_t(static_cast<abi::arm64::android15::ClassRedefinition*>(raw)->klass)};}
+size_t original_lookup_calls=0;
+abi::arm64::android11::ReleaseObjectPointer OriginalClassFind(void* receiver,void* self,const char* descriptor,const void* loader){
+ assert(receiver==&linker&&self==thread.data()&&Read32(self)==0&&!std::strcmp(descriptor,"LFixture;")&&loader);
+ // The original table's Class root moves with the collector independently of
+ // the querying source Pool; its loader Handle is consumed by original ART.
+ assert(Read32(loader)==Read32(old_class,offsetof(class_metadata::Class11,class_loader)));
+ ++original_lookup_calls;return {uintptr_t(Root(const_cast<void*>(public_slot)))};
+}
 class RootHooks final:public Hooks{public:
  void* FindSymbol(const char* lib,const char* name)override{
+  if(!std::strcmp(name,"_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror11ClassLoaderEEE"))return reinterpret_cast<void*>(OriginalClassFind);
   if(std::strstr(name,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);
   if(std::strstr(name,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(OriginalRoots);
   if(std::strstr(name,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots); // Presence only; actual allocator is not invoked by this test.
@@ -223,6 +234,12 @@ int main(){
    *card=0;assert(!data.fields->SourceBarrier(invalid,pool,slots.back())&&*card==0);
    assert(!data.fields->SourceBarrier(context,pool,public_slot)&&*card==0);
   }
+  runtime_services::Snapshot lookup_runtime{};lookup_runtime.receivers.class_linker=&linker;
+  RootHooks lookup_hooks;native_class_lookup::Service lookup;
+  assert(native_class_lookup::Service::Bind(lookup_hooks,lookup_runtime,&lookup,&error));
+  // Recalibrate against the collector's current exact public table root.
+  assert(s.BorrowHandle(context,public_slot,&borrowed));
+  assert(lookup.Calibrate(context,reinterpret_cast<jclass>(borrowed),metadata,s,&error));
   // The actual named collector walker sees all owned compressed roots even
   // when original temporary source scopes sit above the persistent anchor.
   for(size_t count:{size_t(30000),size_t(60000)}){
@@ -232,6 +249,37 @@ int main(){
     for(size_t i=1;i<count;++i){slots.push_back(large.Add(i%2?old_class:new_class,&error));assert(slots.back()&&Top()==source_top);}
     MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
     for(auto slot:slots){void* actual=nullptr;assert(large.Read(slot,&actual)&&actual==new_class);}
+    // Pool.Read verifies owned storage only; an original Handle consumer must
+    // additionally attest the ENTIRE live source chain, even beyond 1024 scopes.
+    auto* loader=large.Add(Root(static_cast<unsigned char*>(static_cast<void*>(old_class))+offsetof(class_metadata::Class11,class_loader)),&error);assert(loader&&Top()==source_top);
+    size_t capture_queries=0;
+    {method_identity::ScopedReadableMappings capture;assert(capture.Ready());capture_queries=capture.OsQueries();}
+    const auto borrow_queries=method_identity::MappingOsQueries();
+    void* complete=nullptr;assert(s.BorrowHandle(context,slots.front(),&complete)&&complete==new_class);
+    const auto fresh_queries=method_identity::MappingOsQueries()-borrow_queries;
+    std::cerr<<"Long-chain snapshot query accounting: capture="<<capture_queries<<" borrow="<<fresh_queries<<"\n";
+    assert(fresh_queries<=capture_queries*2+16); // Allow native snapshot allocator VMAs; never queries per scope.
+    std::cout<<"Long-chain exact handle borrow: roots="<<count<<" OSQueries="<<fresh_queries<<"\n";
+    assert(s.BorrowHandle(context,slots.back(),&complete)&&complete==new_class);
+    assert(s.BorrowHandle(context,temporary->Slot(0),&complete)&&complete==new_class);
+    const auto queries=original_lookup_calls;
+    const auto resolved=lookup.Find(context,"LFixture;",loader);
+    assert(resolved.reference==uintptr_t(Root(const_cast<void*>(public_slot)))&&original_lookup_calls==queries+1);
+    uint32_t outside=uint32_t(uintptr_t(new_class));complete=old_class;
+    assert(!s.BorrowHandle(context,&outside,&complete)&&complete==old_class);
+    assert(!lookup.Find(context,"LFixture;",&outside).reference&&original_lookup_calls==queries+1);
+    // A slot near the head never excuses an invalid or cyclic tail. Preserve
+    // all original source headers after each rejection before teardown.
+    auto* tail=static_cast<unsigned char*>(const_cast<void*>(public_slot))-OriginalReferences();
+    OriginalHeader original_tail{};std::memcpy(&original_tail,tail,sizeof(original_tail));
+    auto broken=original_tail;broken.count=-2;std::memcpy(tail,&broken,sizeof(broken));
+    complete=old_class;assert(!s.BorrowHandle(context,temporary->Slot(0),&complete)&&complete==old_class);
+    assert(!lookup.Find(context,"LFixture;",loader).reference&&original_lookup_calls==queries+1);
+    broken=original_tail;broken.previous=source_top;std::memcpy(tail,&broken,sizeof(broken));
+    assert(!s.BorrowHandle(context,temporary->Slot(0),&complete)&&complete==old_class);
+    assert(!lookup.Find(context,"LFixture;",loader).reference&&original_lookup_calls==queries+1);
+    std::memcpy(tail,&original_tail,sizeof(original_tail));
+    assert(lookup.Find(context,"LFixture;",loader).reference==uintptr_t(Root(const_cast<void*>(public_slot)))&&original_lookup_calls==queries+2);
     assert(temporary->Get(0)==new_class&&Top()==source_top);
    }assert(Top()==anchor);
   }
