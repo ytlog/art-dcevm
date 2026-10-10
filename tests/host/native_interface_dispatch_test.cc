@@ -3,6 +3,19 @@
 #include "public_roles_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_interface_dispatch.h"
+#include <type_traits>
+class UnissuedDispatch final:public artdcevm::native_interface_dispatch::Proof {
+ public:
+ bool Verify(const artdcevm::receiver_guard::CodeView&,uint32_t,void*,void*,
+             const artdcevm::modern_field_metadata::ReadContext&,
+             artdcevm::native_interface_dispatch::Match*,const char**)const noexcept override{return true;}
+};
+static_assert(!std::is_default_constructible_v<UnissuedDispatch>);
+static_assert(std::is_final_v<artdcevm::native_interface_dispatch::Source>);
+static_assert(std::is_abstract_v<artdcevm::native_interface_dispatch::Proof>);
+static_assert(!std::is_default_constructible_v<artdcevm::native_interface_dispatch::Proof>);
+static_assert(!std::is_copy_constructible_v<artdcevm::native_interface_dispatch::Proof>);
+static_assert(std::is_base_of_v<artdcevm::native_interface_dispatch::Proof,artdcevm::native_interface_dispatch::Source>);
 namespace {
 void* interface_class=nullptr;std::array<void*,2> interface_methods{};
 jvmtiError DispatchLoaded(jvmtiEnv*,jint*n,jclass**out){Jni();*n=1;*out=TiArray<jclass>(1);**out=reinterpret_cast<jclass>(interface_class);return JVMTI_ERROR_NONE;}
@@ -50,10 +63,10 @@ int main(int argc,char**argv){
  modern_field_metadata::ReadContext bounded{&read,[](void*raw,const void*p,size_t*out){auto&s=*static_cast<Read*>(raw);if(p==s.denied){*out=s.limit;return s.limit!=0;}if(p==s.code){*out=s.bytes;return true;}for(auto*bytes:s.extra){const auto at=uintptr_t(p),begin=uintptr_t(bytes->data());if(at>=begin&&at<begin+bytes->size()){*out=begin+bytes->size()-at;return true;}}return s.mapper->context.extent(s.mapper,p,out);}};
  native_interface_dispatch::Source source(metadata,layout,rooted,mapper);native_interface_dispatch::Match match{};const char*failure=nullptr;
  stopped=1;const int jni_before=jni_calls;const auto os_before=method_identity::MappingOsQueries();forbid_provider_allocation=true;
- if(!source.Verify(caller,0,new_instance,callee,bounded,&match,&failure)){std::cerr<<"verify: "<<(failure?failure:"?")<<"\n";std::abort();}assert(match.interface==old_class&&match.declaration==interface_methods[0]&&match.target==callee&&match.slot==0);
- auto refuse=[&](){assert(!source.Verify(caller,0,new_instance,callee,bounded,&match,&failure)&&failure);};
- assert(!source.Verify(caller,1,new_instance,callee,bounded,&match,&failure));assert(!source.Verify(caller,0,new_instance,next_method,bounded,&match,&failure));
- const uint16_t opcode=code[0];code[0]=0x106e;refuse();code[0]=0x0178;assert(source.Verify(caller,0,new_instance,callee,bounded,&match,&failure));code[0]=opcode;
+ if(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure)){std::cerr<<"verify: "<<(failure?failure:"?")<<"\n";std::abort();}assert(match.interface==old_class&&match.declaration==interface_methods[0]&&match.target==callee&&match.slot==0);
+ auto refuse=[&](){assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure)&&failure);};
+ assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,1,new_instance,callee,bounded,&match,&failure));assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,next_method,bounded,&match,&failure));
+ const uint16_t opcode=code[0];code[0]=0x106e;refuse();code[0]=0x0178;assert(static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure));code[0]=opcode;
  const auto expected_index=code[1];code[1]=uint16_t(caller.method_ids);refuse();code[1]=uint16_t(other_index);refuse();code[1]=expected_index;
  const auto source_size=caller.source_dex.size;caller.source_dex.size=0;refuse();caller.source_dex.size=source_size;
  const auto proto_at=Read32(dex.data(),92)+invoke_index*8+2;uint16_t proto=0;std::memcpy(&proto,dex.data()+proto_at,2);const uint16_t other_proto=uint16_t(proto^1);std::memcpy(dex.data()+proto_at,&other_proto,2);refuse();std::memcpy(dex.data()+proto_at,&proto,2);
@@ -74,8 +87,8 @@ int main(int argc,char**argv){
  Put32(table_array,8,3);refuse();Put32(table_array,8,2);
  read.denied=interface_dex.data();read.limit=111;refuse();read.denied=receiver_dex.data();read.limit=111;refuse();read.denied=pointers;read.limit=24;refuse();read.denied=methods;read.limit=8+layout.size;refuse();read.denied=callee;read.limit=0;refuse();read.denied=nullptr;
  mapper.active=false;refuse();mapper.active=true;
- Put32(callee,4,1|0x01000000);assert(source.Verify(caller,0,new_instance,callee,bounded,&match,&failure));
- Put32(callee,0,uint32_t(uintptr_t(old_class)));Put32(callee,layout.dex_method_index,declaration_keep);assert(source.Verify(caller,0,new_instance,callee,bounded,&match,&failure));
+ Put32(callee,4,1|0x01000000);assert(static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure));
+ Put32(callee,0,uint32_t(uintptr_t(old_class)));Put32(callee,layout.dex_method_index,declaration_keep);assert(static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure));
  Put32(callee,0,uint32_t(uintptr_t(new_class)));Put32(callee,layout.dex_method_index,callee_keep);Put32(callee,4,1);
  forbid_provider_allocation=false;stopped=0;assert(jni_calls==jni_before&&method_identity::MappingOsQueries()==os_before);
  // Actual source Handle slots, receiver/Class references and IfTable pair
@@ -87,10 +100,10 @@ int main(int argc,char**argv){
  std::memset(old_class,0,160);std::memset(new_class,0,160);std::memset(new_instance,0,32);std::memset(table_array,0,20);std::memset(pointers,0,32);mapper.heap_end=uintptr_t(heap.base)+heap.used;
  stopped=1;forbid_provider_allocation=true;
  assert(mapper.Get(receiver_root)==moved_receiver&&mapper.Get(receiver_class_root)==moved_receiver_class&&mapper.Get(table_root)==moved_table&&mapper.Get(array_root)==moved_array);
- assert(source.Verify(caller,0,mapper.Get(receiver_root),callee,bounded,&match,&failure));assert(match.interface==moved_interface&&match.target==callee&&match.slot==0);
- assert(!source.Verify(caller,0,new_instance,callee,bounded,&match,&failure));mapper.active=false;assert(!source.Verify(caller,0,moved_receiver,callee,bounded,&match,&failure));mapper.active=true;
+ assert(static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,mapper.Get(receiver_root),callee,bounded,&match,&failure));assert(match.interface==moved_interface&&match.target==callee&&match.slot==0);
+ assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,new_instance,callee,bounded,&match,&failure));mapper.active=false;assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,moved_receiver,callee,bounded,&match,&failure));mapper.active=true;
 
- forbid_provider_allocation=false;stopped=0;assert(jni_calls==jni_before&&method_identity::MappingOsQueries()==os_before);assert(pool.DropManagedReferences());stopped=1;assert(!source.Verify(caller,0,moved_receiver,callee,bounded,&match,&failure));stopped=0;
+ forbid_provider_allocation=false;stopped=0;assert(jni_calls==jni_before&&method_identity::MappingOsQueries()==os_before);assert(pool.DropManagedReferences());stopped=1;assert(!static_cast<const native_interface_dispatch::Proof&>(source).Verify(caller,0,moved_receiver,callee,bounded,&match,&failure));stopped=0;
 
  }
  catalog.Clear(&env);assert(Top()==original_scope);Publish(nullptr);std::cout<<"Actual public Boot catalog + source Pool + independent DEX namespaces + exact IfTable slot + moved GC roots + no JNI/OS/allocation PASS\n";

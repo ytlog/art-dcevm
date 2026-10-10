@@ -14,14 +14,29 @@ bool ReadPointerSlot(const void*array,size_t extent,uint32_t slot,void**out)noex
 // caller CodeView must come from that exact current caller via calibrated
 // SourceProducer::Code, and receiver from the actual younger callee map/root
 // binding. A readable DEX or object pointer alone is never such provenance.
-class Source final {
+class Source;
+// Only the concrete current-root/source-Dex/IfTable verifier can construct this
+// typed capability. Scanner consumers dispatch through it without linking a
+// concrete implementation into fixtures that never install this capability.
+class Proof {
+ public:
+ virtual ~Proof()=default;
+ virtual bool Verify(const receiver_guard::CodeView&,uint32_t,void*,void*,
+                     const modern_field_metadata::ReadContext&,Match*,
+                     const char**failure=nullptr)const noexcept=0;
+ private:
+ friend class Source;
+ Proof()=default;
+ Proof(const Proof&)=delete;Proof&operator=(const Proof&)=delete;
+};
+class Source final:public Proof {
  public:
  Source(const modern_field_metadata::FieldMetadata&m,const method_metadata::Layout&layout,
         const native_boot_method_catalog::Rooted&catalog,const source_handle_roots::StoppedReader&roots)
   :metadata_(m),layout_(layout),catalog_(catalog),roots_(roots){}
  bool Verify(const receiver_guard::CodeView&caller,uint32_t pc,void*receiver,
              void*actual_callee,const modern_field_metadata::ReadContext&,Match*,
-             const char**failure=nullptr)const noexcept;
+             const char**failure=nullptr)const noexcept override;
  private:
  const modern_field_metadata::FieldMetadata&metadata_;method_metadata::Layout layout_;
  const native_boot_method_catalog::Rooted&catalog_;const source_handle_roots::StoppedReader&roots_;
