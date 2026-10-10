@@ -27,3 +27,5 @@
 
 # Native initializer dispatch calibration permanently retires this private oracle.
 -keep class com.github.ytlog.artdcevm.internal.InitializerGuardOracle { *; }
+
+-keep class com.github.ytlog.artdcevm.internal.InitializerStateOracle** { *; }
