@@ -12,12 +12,26 @@ bool Signature(const char*s){
  if(*s!='V'&&!Primitive(*s))return false;
  return s[1]==0;
 }
-struct Identity {Codec codec;jobject reflected;jmethodID id;void* method=nullptr;};
+struct Identity {jobject reflected;jmethodID id;void* method=nullptr;};
+struct Identities {
+ Codec codec;JNIEnv* env;std::vector<Identity> entries;
+ ~Identities(){for(const auto&entry:entries)env->DeleteGlobalRef(entry.reflected);}
+};
 bool Observe(const runnable_jni::Context& c,void*raw){
- auto&r=*static_cast<Identity*>(raw);
+ auto&r=*static_cast<Identities*>(raw);
+ if(c.env!=r.env||!c.self||!c.vm||c.env->ExceptionCheck())return false;
  const abi::common::RunnableJniScope actual{c.self,c.env,c.vm};
- void*a=r.codec.leaf(actual,r.reflected),*b=r.codec.decode(r.codec.manager,r.id);
- if(!a||a!=b)return false;r.method=a;return true;
+ for(auto&entry:r.entries){
+  // Every original Method remains independently rooted across the ordinary
+  // collection's allocations. ART owns the real Runnable scope here; native
+  // ArtMethod identities remain alive through the catalog's strong Class root.
+  void*a=r.codec.leaf(actual,entry.reflected);
+  if(c.env->ExceptionCheck())return false;
+  void*b=r.codec.decode(r.codec.manager,entry.id);
+  if(c.env->ExceptionCheck()||!a||a!=b)return false;
+  entry.method=a;
+ }
+ return true;
 }
 template<class T>struct Memory {
  jvmtiEnv*ti;T*p;
@@ -64,6 +78,7 @@ bool Catalog::Prepare(JNIEnv*env,jvmtiEnv*ti,const Codec&codec,std::string*error
  if(!env){if(error)*error="boot-catalog-missing-JNI-environment";return false;}
  Clear(env);
  auto fail=[&](const char*why){Clear(env);if(error)*error=why;return false;};
+ if(env->ExceptionCheck())return fail("boot-catalog-entered-with-pending-exception");
  if(!env||!ti||!codec.manager||!codec.decode||!codec.leaf)return fail("boot-catalog-missing-actual-source-codec");
  try{
  jvmtiCapabilities caps{};if(ti->GetCapabilities(&caps)!=JVMTI_ERROR_NONE)return fail("boot-catalog-capabilities-unavailable");
@@ -93,6 +108,7 @@ bool Catalog::Prepare(JNIEnv*env,jvmtiEnv*ti,const Codec&codec,std::string*error
    jint n=0;jmethodID*ids=nullptr;
    const auto methods_result=ti->GetClassMethods(klass,&n,&ids);Memory<jmethodID> method_memory{ti,ids};
    if(methods_result!=JVMTI_ERROR_NONE||n<0||(n&&!ids)){ok=false;break;}
+   Identities identities{codec,env,{}};std::vector<Method> declarations;
    for(jint m=0;m<n&&ok;++m){
     Method entry;entry.declaring_root=index;entry.declaring_signature=name;
     char*desc=nullptr;char*method_name=nullptr;
@@ -106,13 +122,11 @@ bool Catalog::Prepare(JNIEnv*env,jvmtiEnv*ti,const Codec&codec,std::string*error
     const bool same=env->IsSameObject(declaring,klass);env->DeleteLocalRef(declaring);
     if(!same)continue; // Inherited/copied methods require their own declaring root.
     jobject reflected=env->ToReflectedMethod(klass,ids[m],(entry.modifiers&8)!=0);
-    jobject strong=reflected?env->NewGlobalRef(reflected):nullptr;
-    if(reflected)env->DeleteLocalRef(reflected);
+    if(!reflected||env->ExceptionCheck()){if(reflected)env->DeleteLocalRef(reflected);ok=false;break;}
+    jobject strong=env->NewGlobalRef(reflected);env->DeleteLocalRef(reflected);
     if(!strong||env->ExceptionCheck()){if(strong)env->DeleteGlobalRef(strong);ok=false;break;}
-    Identity request{codec,strong,ids[m],nullptr};
-    const auto observed=runnable_executor::With(env,strong,Observe,&request);env->DeleteGlobalRef(strong);
-    if(observed!=runnable_jni::Result::kSuccess||!request.method){ok=false;break;}
-    entry.native_method=request.method;
+    try{identities.entries.push_back({strong,ids[m],nullptr});}
+    catch(...){env->DeleteGlobalRef(strong);throw;}
     jint size=0;unsigned char*bytes=nullptr;
     const auto result=ti->GetBytecodes(ids[m],&size,&bytes);Memory<unsigned char> byte_memory{ti,bytes};
     if(result==JVMTI_ERROR_NONE&&size>=0){
@@ -120,7 +134,18 @@ bool Catalog::Prepare(JNIEnv*env,jvmtiEnv*ti,const Codec&codec,std::string*error
      if(ti->GetMaxLocals(ids[m],&entry.max_locals)!=JVMTI_ERROR_NONE)entry.max_locals=0;
      entry.body=Classify(entry.dex.data(),entry.dex.size(),entry.descriptor.c_str());
     }else if(result!=JVMTI_ERROR_NATIVE_METHOD&&result!=JVMTI_ERROR_ABSENT_INFORMATION)ok=false;
-    if(ok)methods_.push_back(std::move(entry));
+    if(ok)declarations.push_back(std::move(entry));
+   }
+   if(!ok)break;
+   if(!identities.entries.empty()){
+    if(declarations.size()!=identities.entries.size()){ok=false;break;}
+    const auto observed=runnable_executor::With(env,identities.entries.front().reflected,Observe,&identities);
+    if(observed!=runnable_jni::Result::kSuccess||env->ExceptionCheck()){ok=false;break;}
+    for(size_t i=0;i<declarations.size();++i){
+     if(!identities.entries[i].method){ok=false;break;}
+     declarations[i].native_method=identities.entries[i].method;
+     methods_.push_back(std::move(declarations[i]));
+    }
    }
    if(!ok)break;
   }
