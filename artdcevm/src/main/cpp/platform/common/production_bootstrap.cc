@@ -55,6 +55,7 @@
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/rooted_field_identities.h"
 #include "platform/common/native_lazy_field_mirror.h"
+#include "platform/common/native_declared_field_lookup.h"
 #include "platform/common/native_final_field_service.h"
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
@@ -662,23 +663,7 @@ struct NativeEngine final:Engine {
   if(scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current()||!e.metadata.Calibrated()){
    Fail(error,"Declared Field native metadata/current Runnable context unavailable");return nullptr;
   }
-  // This immediate native declaration traversal performs no JNI/safepoint.
-  // Capture after the caller's root decoding, reuse only within this traversal,
-  // and recapture on the next call (including after the original Field factory).
-  method_identity::ScopedReadableMappings mappings;
-  if(!mappings.Ready()){Fail(error,"Declared Field native mapping snapshot unavailable");return nullptr;}
-  modern_field_metadata::ReadContext read{&mappings,[](void* raw,const void* address,size_t* extent){
-   return static_cast<method_identity::ScopedReadableMappings*>(raw)->Extent(address,extent);
-  }};
-  field_array::View table;
-  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,error,&read))return nullptr;
-  const char* failure=nullptr;
-  void* matched=original_field_declaration::Match(table,owner,declaration,[&](void* field,field_copy::CopyFieldView* text,void** declaring){
-   if(!e.metadata.FieldIdentity(field,text,error,&read))return false;
-   *declaring=e.metadata.FieldDeclaringClass(field);return scope.self==e.graph_current();
-  },&failure);
-  if(!matched&&failure&&error&&error->empty())*error=failure;
-  return matched;
+  return native_declared_field_lookup::Read(e.metadata,scope.self,e.graph_current,owner,declaration,error);
  }
  static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
   auto& e=*static_cast<NativeEngine*>(raw);
