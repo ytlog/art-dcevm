@@ -29,7 +29,7 @@ struct Bindings {
  source_handle_roots::Service* roots=nullptr;
  // Independent exact public declaration, matched against the complete current
  // native Class table. It never consumes an ID as a native pointer.
- void* (*declared_field)(void*,const runnable_jni::Context&,void*,const original_field_declaration::Declaration&)=nullptr;
+ void* (*declared_field)(void*,const runnable_jni::Context&,void*,const original_field_declaration::Declaration&,std::string*)=nullptr;
 };
 struct Oracle {jobject strong_field=nullptr;jclass exact_owner=nullptr;jfieldID id=nullptr;void* native_field=nullptr;bool is_static=false;};
 class Service {

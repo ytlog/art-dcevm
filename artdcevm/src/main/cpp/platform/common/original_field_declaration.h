@@ -27,12 +27,17 @@ inline bool Read(JNIEnv* env,jvmtiEnv* ti,jclass owner,jfieldID id,bool statik,D
 }
 // The identity leaf must be calibrated metadata under current mutator access.
 // Inspect every selected physical member, including duplicates, before grant.
-template<class Identity> void* Match(const field_array::View& table,void* owner,const Declaration& declaration,Identity identity){
- if(!owner)return nullptr;void* found=nullptr;
+template<class Identity> void* Match(const field_array::View& table,void* owner,const Declaration& declaration,Identity identity,const char** failure=nullptr){
+ const auto fail=[&](const char* text)->void*{if(failure)*failure=text;return nullptr;};
+ if(!owner)return fail("native declaring Class absent");void* found=nullptr;
  for(uint32_t i=0;i<table.count;++i){if(!table.Selected(i))continue;void* field=table.At(i);field_copy::CopyFieldView text{};void* declaring=nullptr;
-  if(!identity(field,&text,&declaring)||text.field!=field||!text.name||!text.descriptor||declaring!=owner)return nullptr;
-  if(declaration.name==text.name&&declaration.descriptor==text.descriptor&&declaration.flags==jvmti_field_flags::Public(field_array::Flags(field))){if(found)return nullptr;found=field;}
+  if(!identity(field,&text,&declaring))return fail("native field text/owner leaf rejected");
+  if(text.field!=field)return fail("native field text identity differs");
+  if(!text.name||!text.descriptor)return fail("native field name/descriptor absent");
+  if(declaring!=owner)return fail("native field declaring Class differs");
+  if(declaration.name==text.name&&declaration.descriptor==text.descriptor&&declaration.flags==jvmti_field_flags::Public(field_array::Flags(field))){if(found)return fail("native exact declaration duplicated");found=field;}
  }
- return found;
+ if(!found)return fail("native exact name/descriptor/modifiers declaration absent");
+ if(failure)*failure=nullptr;return found;
 }
 }

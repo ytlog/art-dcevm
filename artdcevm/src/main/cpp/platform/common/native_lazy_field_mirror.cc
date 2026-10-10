@@ -9,7 +9,7 @@ bool Fail(std::string* error,const char* text){if(error)*error=text;return false
 struct LocalRoot {JNIEnv* env;jobject value;~LocalRoot(){if(value)env->DeleteLocalRef(value);}};
 struct GlobalRoot {JNIEnv* env;jobject value;~GlobalRoot(){if(value)env->DeleteGlobalRef(value);}};
 }
-struct Service::Request {Service* service;JNIEnv* env;jobject owner;jfieldID id;void* expected;jobject output=nullptr;const original_field_declaration::Declaration* declaration=nullptr;};
+struct Service::Request {Service* service;JNIEnv* env;jobject owner;jfieldID id;void* expected;jobject output=nullptr;const original_field_declaration::Declaration* declaration=nullptr;const char* failure="callback-not-entered";std::string declaration_failure;};
 bool Service::Bind(HookEngine& hooks,const Bindings& b,std::string* error){
  if(bound_||!b.owner||!b.matched_release_carrier||!b.scope||!b.oracle||!b.decode||!b.decode_field||!b.field||!b.declaring)return Fail(error,"Lazy Field factory lacks independently matched original codec/root owner");
  four_=false;
@@ -30,50 +30,68 @@ bool Service::FourProven()const{
 }
 bool Service::Produce(const runnable_jni::Context& context,void* raw){
  auto& r=*static_cast<Request*>(raw);auto& s=*r.service;auto& b=s.bindings_;
- if(!context.self||context.env!=r.env||!context.env||context.env->ExceptionCheck())return false;
+ const auto fail=[&](const char* leaf){r.failure=leaf;return false;};
+ if(!context.self||context.env!=r.env||!context.env)return fail("current-Runnable-context");
+ if(context.env->ExceptionCheck())return fail("incoming-pending-exception");
  void *oracle=nullptr,*owner=nullptr;
- if(!b.oracle(b.owner,context,r.owner,&oracle)||context.env->ExceptionCheck()||!b.decode(b.owner,r.owner,&owner)||!owner||owner!=oracle)return false;
- const auto resolve=[&](void* klass){return r.declaration?(b.declared_field?b.declared_field(b.owner,context,klass,*r.declaration):nullptr):b.decode_field(b.owner,context,klass,r.id);};
+ if(!b.oracle(b.owner,context,r.owner,&oracle))return fail("declaring-Class-public-root");
+ if(context.env->ExceptionCheck())return fail("declaring-Class-root-pending-exception");
+ if(!b.decode(b.owner,r.owner,&owner)||!owner||owner!=oracle)return fail("declaring-Class-root-codec");
+ const auto resolve=[&](void* klass){return r.declaration?(b.declared_field?b.declared_field(b.owner,context,klass,*r.declaration,&r.declaration_failure):nullptr):b.decode_field(b.owner,context,klass,r.id);};
  void* field=resolve(owner);
- if(!field||(r.expected&&field!=r.expected)||b.declaring(b.owner,field)!=owner)return false;
+ if(!field)return fail("native-declaration-before-factory");
+ if(r.expected&&field!=r.expected)return fail("independent-calibration-native-identity");
+ if(b.declaring(b.owner,field)!=owner)return fail("native-declaring-Class-before-factory");
  // ART may resolve a type and suspend here. Exact declaring Class is strongly
  // rooted; no borrowed managed identity is reused after the original factory.
  uintptr_t result=0;
  std::unique_ptr<source_handle_roots::Scope> handle;
  if(s.four_){
-  if(!s.FourProven()||!s.field_class_)return false;
+  if(!s.FourProven()||!s.field_class_)return fail("extra-Handle-independent-public-proof");
   void* rooted_owner=nullptr;
-  if(!b.roots->BorrowOwnedStrongGlobal(context,r.owner,&rooted_owner)||!rooted_owner||rooted_owner!=owner||b.declaring(b.owner,field)!=rooted_owner)return false;
-  handle=b.roots->CreateScope(1,nullptr);if(!handle)return false;
+  if(!b.roots->BorrowOwnedStrongGlobal(context,r.owner,&rooted_owner)||!rooted_owner||rooted_owner!=owner)return fail("extra-Handle-strong-declaring-Class");
+  if(b.declaring(b.owner,field)!=rooted_owner)return fail("extra-Handle-native-declaring-Class");
+  handle=b.roots->CreateScope(1,nullptr);if(!handle)return fail("extra-Handle-source-root-scope");
   handle->Set(0,rooted_owner);
   result=reinterpret_cast<native_field_factory_observer::Factory>(s.factory_)(context.self,{handle->Slot(0)},field,false).reference;
  }else result=reinterpret_cast<Factory>(s.factory_)(context.self,field,false).reference;
- if(context.env->ExceptionCheck()||!result)return false;
+ if(context.env->ExceptionCheck())return fail("original-false-factory-pending-exception");
+ if(!result)return fail("original-false-factory-null-result");
  jobject local=s.local_(context.env,reinterpret_cast<void*>(result));LocalRoot guard{context.env,local};
- if(context.env->ExceptionCheck()||!local)return false;
+ if(context.env->ExceptionCheck()||!local)return fail("original-local-reference-root");
  jobject strong=context.env->NewGlobalRef(local);GlobalRoot root{context.env,strong};
- if(context.env->ExceptionCheck()||!strong)return false;
+ if(context.env->ExceptionCheck()||!strong)return fail("mirror-strong-global-root");
  if(s.four_){
   // Reflection Field class is an independent returned-object oracle; it is
   // never supplied as the original factory's declaring-Class Handle.
   LocalRoot type{context.env,context.env->GetObjectClass(strong)};
-  if(!type.value||context.env->ExceptionCheck())return false;
-  if(!context.env->IsSameObject(type.value,s.field_class_)||context.env->ExceptionCheck())return false;
+  if(!type.value||context.env->ExceptionCheck())return fail("mirror-public-Class");
+  if(!context.env->IsSameObject(type.value,s.field_class_)||context.env->ExceptionCheck())return fail("mirror-public-Class-identity");
  }
  void *mirror_oracle=nullptr,*mirror=nullptr,*fresh_owner=nullptr;
- if(!b.oracle(b.owner,context,strong,&mirror_oracle)||context.env->ExceptionCheck()||!b.decode(b.owner,strong,&mirror)||mirror!=mirror_oracle||!mirror||
-    !b.decode(b.owner,r.owner,&fresh_owner)||!fresh_owner||b.field(b.owner,mirror)!=field||b.declaring(b.owner,field)!=fresh_owner||
-    resolve(fresh_owner)!=field)return false;
- r.output=strong;root.value=nullptr;return true;
+ if(!b.oracle(b.owner,context,strong,&mirror_oracle))return fail("mirror-public-root");
+ if(context.env->ExceptionCheck())return fail("mirror-public-root-pending-exception");
+ if(!b.decode(b.owner,strong,&mirror)||mirror!=mirror_oracle||!mirror)return fail("mirror-root-codec");
+ if(!b.decode(b.owner,r.owner,&fresh_owner)||!fresh_owner)return fail("fresh-declaring-Class-root-codec");
+ if(b.field(b.owner,mirror)!=field)return fail("named-GetArtField-round-trip");
+ if(b.declaring(b.owner,field)!=fresh_owner)return fail("fresh-native-declaring-Class");
+ if(resolve(fresh_owner)!=field)return fail("native-declaration-after-factory");
+ r.output=strong;root.value=nullptr;r.failure="scope-return-after-complete-proof";return true;
 }
 bool Service::ProducePublic(JNIEnv* env,jclass owner,jfieldID id,bool statik,void* expected,jobject* output,std::string* error,const original_field_declaration::Declaration* declaration){
  if(!env||!owner||!id||!output||env->ExceptionCheck())return Fail(error,"Lazy Field request invalid or entering with pending exception");
  *output=nullptr;GlobalRoot exact{env,env->NewGlobalRef(owner)};
  if(!exact.value||env->ExceptionCheck())return Fail(error,"Lazy Field declaring Class strong root unavailable");
- Request request{this,env,exact.value,id,expected,nullptr,declaration};
+ Request request{this,env,exact.value,id,expected,nullptr,declaration,"callback-not-entered",{}};
  const bool produced=bindings_.scope(bindings_.owner,env,carrier_,Produce,&request);
  GlobalRoot mirror{env,request.output};
- if(!produced||env->ExceptionCheck()||!mirror.value)return Fail(error,"Original lazy Field factory/codec identity proof failed");
+ if(!produced||env->ExceptionCheck()||!mirror.value){
+  if(error){*error=std::string("Original lazy Field factory/codec identity proof failed [leaf=")+request.failure;
+   if(!request.declaration_failure.empty())*error+="; declaration="+request.declaration_failure;
+   *error+="]";
+  }
+  return false;
+ }
  if(env->FromReflectedField(mirror.value)!=id||env->ExceptionCheck())return Fail(error,"Lazy Field original opaque ID round trip differs");
  LocalRoot type{env,env->GetObjectClass(mirror.value)};
  if(!type.value||env->ExceptionCheck())return Fail(error,"Lazy Field public mirror Class unavailable");

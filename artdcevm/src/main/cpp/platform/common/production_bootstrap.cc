@@ -419,15 +419,20 @@ struct NativeEngine final:Engine {
   }
   return scope.self==e.graph_current()?found:nullptr;
  }
- static void* DecodeDeclaredField(void* raw,const runnable_jni::Context& scope,void* owner,const original_field_declaration::Declaration& declaration){
+ static void* DecodeDeclaredField(void* raw,const runnable_jni::Context& scope,void* owner,const original_field_declaration::Declaration& declaration,std::string* error){
   auto& e=*static_cast<NativeEngine*>(raw);
-  if(scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current()||!e.metadata.Calibrated())return nullptr;
-  field_array::View table;std::string error;
-  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,&error))return nullptr;
-  return original_field_declaration::Match(table,owner,declaration,[&](void* field,field_copy::CopyFieldView* text,void** declaring){
-   if(!e.metadata.FieldIdentity(field,text,&error))return false;
+  if(scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current()||!e.metadata.Calibrated()){
+   Fail(error,"Declared Field native metadata/current Runnable context unavailable");return nullptr;
+  }
+  field_array::View table;
+  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,error))return nullptr;
+  const char* failure=nullptr;
+  void* matched=original_field_declaration::Match(table,owner,declaration,[&](void* field,field_copy::CopyFieldView* text,void** declaring){
+   if(!e.metadata.FieldIdentity(field,text,error))return false;
    *declaring=e.metadata.FieldDeclaringClass(field);return scope.self==e.graph_current();
-  });
+  },&failure);
+  if(!matched&&failure&&error&&error->empty())*error=failure;
+  return matched;
  }
  static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
   auto& e=*static_cast<NativeEngine*>(raw);
