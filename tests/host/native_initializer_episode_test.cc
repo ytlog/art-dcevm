@@ -19,14 +19,14 @@ BodyNative body_native=nullptr;WaiterNative waiter_native=nullptr;
 abi::arm64::android11::InitializeClass initialize_proxy=nullptr;WaitForInitializeClass wait_proxy=nullptr;WaitIgnoringInterrupts inner_proxy=nullptr;ClassLockConstruct construct_proxy=nullptr;ClassLockDestroy destroy_proxy=nullptr;
 thread_local JNIEnv* episode_env=&env;
 
-std::mutex original_monitor;std::condition_variable original_condition;
+std::recursive_mutex original_monitor;std::condition_variable_any original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongUnresolvedError,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid,InnerPositive,InnerInlinedCtor,InnerMovingRoots,InnerSpurious,InnerMultiple,InnerWrongStatus,InnerWrongSelf,InnerWrongOwner,InnerDestroyedLock,InnerInlinedDestroyedLock,InnerMissingCtor,InnerBadConstructor,InnerInlinedDestroyThenConstruct,InnerEarlyReturn,EnteringPending};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongUnresolvedError,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid,InnerPositive,InnerInlinedCtor,InnerMovingRoots,InnerSpurious,InnerMultiple,InnerWrongStatus,InnerWrongSelf,InnerWrongOwner,InnerDestroyedLock,InnerInlinedDestroyedLock,InnerMissingCtor,InnerBadConstructor,InnerInlinedDestroyThenConstruct,InnerNested,InnerNestedInlinedCtor,InnerCapacity,InnerEarlyReturn,EnteringPending};
 Case selected=Case::Positive;
 bool InnerCase(){return selected>=Case::InnerPositive&&selected<=Case::InnerEarlyReturn;}
-bool PositiveCase(){return selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner||selected==Case::InnerPositive||selected==Case::InnerInlinedCtor||selected==Case::InnerMovingRoots||selected==Case::InnerSpurious||selected==Case::InnerMultiple;}
+bool PositiveCase(){return selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner||selected==Case::InnerPositive||selected==Case::InnerInlinedCtor||selected==Case::InnerMovingRoots||selected==Case::InnerSpurious||selected==Case::InnerMultiple||selected==Case::InnerInlinedDestroyThenConstruct||selected==Case::InnerNested||selected==Case::InnerNestedInlinedCtor;}
 thread_local bool episode_pending=false;
 jboolean EpisodeException(JNIEnv*){return episode_pending?JNI_TRUE:JNI_FALSE;}
 thread_local class_metadata::Class17* inner_class=nullptr;
@@ -39,13 +39,13 @@ void StoreStatus(class_metadata::Class17* type,uint32_t status){__atomic_store_n
 // these locks, status transitions, wait outcomes or condition notification.
 struct OriginalClassHandle{const uint32_t* slot;};
 struct OriginalSourceClassLock {void* self;OriginalClassHandle object;};
-thread_local std::map<void*,std::unique_ptr<std::unique_lock<std::mutex>>> original_locks;
-std::unique_lock<std::mutex>& OriginalLock(void* opaque){return *original_locks.at(opaque);}
+thread_local std::map<void*,std::unique_ptr<std::unique_lock<std::recursive_mutex>>> original_locks;
+std::unique_lock<std::recursive_mutex>& OriginalLock(void* opaque){return *original_locks.at(opaque);}
 
 void OriginalClassLockConstruct(void* opaque,void* self,ClassHandle handle){
  assert(self==current&&handle.slot);assert(original_locks.find(opaque)==original_locks.end());
  auto& source=*static_cast<OriginalSourceClassLock*>(opaque);source.self=selected==Case::InnerBadConstructor?foreign_thread.data():self;source.object.slot=static_cast<const uint32_t*>(handle.slot);
- original_locks.emplace(opaque,std::make_unique<std::unique_lock<std::mutex>>(original_monitor));
+ original_locks.emplace(opaque,std::make_unique<std::unique_lock<std::recursive_mutex>>(original_monitor));
 }
 void OriginalClassLockDestroy(void* opaque){
  auto& lock=OriginalLock(opaque);assert(lock.owns_lock());lock.unlock();original_locks.erase(opaque);
@@ -60,7 +60,7 @@ void OriginalInnerWait(void* opaque){
 bool OriginalWait(void*,ClassHandle abi_handle,void* self,void* opaque){
  const OriginalClassHandle handle{static_cast<const uint32_t*>(abi_handle.slot)};
  assert(self==(selected==Case::WrongWaitSelf?foreign_thread.data():current)&&Read32(current)==0&&opaque);
- auto& lock=InnerCase()?OriginalLock(opaque):*static_cast<std::unique_lock<std::mutex>*>(opaque);assert(lock.owns_lock());
+ auto& lock=InnerCase()?OriginalLock(opaque):*static_cast<std::unique_lock<std::recursive_mutex>*>(opaque);assert(lock.owns_lock());
  auto* type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(*handle.slot));
  ++original_waits;inner_cycles=0;
  if(selected==Case::InnerEarlyReturn)return true;
@@ -83,9 +83,9 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  const OriginalClassHandle handle{static_cast<const uint32_t*>(abi_handle.slot)};
  assert(self==current&&Read32(current)==0&&statics&&parents);
  auto* type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(*handle.slot));
- std::unique_lock<std::mutex> legacy_lock(original_monitor,std::defer_lock);OriginalSourceClassLock native_lock{};
+ std::unique_lock<std::recursive_mutex> legacy_lock(original_monitor,std::defer_lock);OriginalSourceClassLock native_lock{};
  uint32_t foreign_class=uint32_t(uintptr_t(type==new_class?old_class:new_class));
- if(InnerCase())((selected==Case::InnerInlinedCtor||selected==Case::InnerInlinedDestroyedLock)?OriginalClassLockConstruct:construct_proxy)(&native_lock,self,selected==Case::InnerWrongOwner&&LoadStatus(type)==13?ClassHandle{&foreign_class}:abi_handle);
+ if(InnerCase())((selected==Case::InnerInlinedCtor||selected==Case::InnerInlinedDestroyedLock||selected==Case::InnerNestedInlinedCtor)?OriginalClassLockConstruct:construct_proxy)(&native_lock,self,selected==Case::InnerWrongOwner&&LoadStatus(type)==13?ClassHandle{&foreign_class}:abi_handle);
  else legacy_lock.lock();
  // Independent source sequence: an inlined original destructor releases the
  // first real monitor, then a named constructor creates the next lock scope.
@@ -93,6 +93,22 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  if(selected==Case::InnerInlinedDestroyThenConstruct){
   OriginalClassLockDestroy(&native_lock);
   construct_proxy(&native_lock,self,abi_handle);
+  // A witnessed destructor leaves a tombstone; another actual named original
+  // construction at that same address must establish a new live generation.
+  destroy_proxy(&native_lock);
+  construct_proxy(&native_lock,self,abi_handle);
+ }
+ // Recursive monitors match the original source nested VerifyClass Class lock.
+ // Destroying that distinct inner receiver must retain the outer receiver.
+ if(selected==Case::InnerNested||selected==Case::InnerNestedInlinedCtor){
+  OriginalSourceClassLock nested{};
+  construct_proxy(&nested,self,abi_handle);
+  destroy_proxy(&nested);
+ }
+ if(selected==Case::InnerCapacity){
+  std::array<OriginalSourceClassLock,16> nested{};
+  for(auto& receiver:nested)construct_proxy(&receiver,self,abi_handle);
+  for(auto i=nested.rbegin();i!=nested.rend();++i)destroy_proxy(&*i);
  }
  auto& lock=InnerCase()?OriginalLock(&native_lock):legacy_lock;
  struct Destruction {void*receiver;bool inner;~Destruction(){if(inner)destroy_proxy(receiver);}} destruction{&native_lock,InnerCase()};
@@ -267,8 +283,9 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  if(selected==Case::WrongPublicResult){
   assert(!ok&&error.find("lockEntryFaults=0")!=std::string::npos&&error.find("bodyFaults=0")!=std::string::npos);
  }
- if(selected==Case::InnerInlinedDestroyThenConstruct){
-  assert(!ok&&error.find("lockEntryFaults=4")!=std::string::npos&&error.find("bodyFaults=8")!=std::string::npos);
+ if(selected==Case::InnerInlinedDestroyThenConstruct||selected==Case::InnerNested||selected==Case::InnerNestedInlinedCtor)assert(ok);
+ if(selected==Case::InnerCapacity){
+  assert(!ok&&error.find("lockEntryFaults=16")!=std::string::npos&&error.find("bodyFaults=8")!=std::string::npos);
  }
  if(selected==Case::WrongUnresolvedError)assert(!ok&&error.find("faults=20")!=std::string::npos);
  if(selected==Case::InnerDestroyedLock||selected==Case::InnerInlinedDestroyedLock){
@@ -291,7 +308,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,Case::WrongUnresolvedError,
-Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid,Case::InnerPositive,Case::InnerInlinedCtor,Case::InnerMovingRoots,Case::InnerSpurious,Case::InnerMultiple,Case::InnerWrongStatus,Case::InnerWrongSelf,Case::InnerWrongOwner,Case::InnerDestroyedLock,Case::InnerInlinedDestroyedLock,Case::InnerMissingCtor,Case::InnerBadConstructor,Case::InnerInlinedDestroyThenConstruct,Case::InnerEarlyReturn,Case::EnteringPending}){
+Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid,Case::InnerPositive,Case::InnerInlinedCtor,Case::InnerMovingRoots,Case::InnerSpurious,Case::InnerMultiple,Case::InnerWrongStatus,Case::InnerWrongSelf,Case::InnerWrongOwner,Case::InnerDestroyedLock,Case::InnerInlinedDestroyedLock,Case::InnerMissingCtor,Case::InnerBadConstructor,Case::InnerInlinedDestroyThenConstruct,Case::InnerNested,Case::InnerNestedInlinedCtor,Case::InnerCapacity,Case::InnerEarlyReturn,Case::EnteringPending}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }

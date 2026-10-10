@@ -4,6 +4,7 @@
 #include "platform/abi/arm64/android11/class_initialization.h"
 #include "platform/abi/common/suspend_all.h"
 #include <atomic>
+#include <array>
 #include <cstdlib>
 #include <chrono>
 #include <thread>
@@ -45,11 +46,16 @@ struct BorrowTrial {
  ~BorrowTrial(){Release();}
 };
 std::atomic<bool> ready{false};
+struct LockLifetime {
+ void*receiver=nullptr;const void*slot=nullptr;uint64_t generation=0;bool live=false;
+};
 struct SourceEntry {
  SourceEntry*previous;const Service*owner;void*linker;void*self;
  const void*slot;uint64_t epoch;bool statics,parents;
  uint32_t inner_entries=0,inner_returns=0;bool waiting=false;
- void*lock=nullptr;const void*lock_slot=nullptr;bool lock_destroyed=false;
+ // Tombstones prevent a destroyed receiver's residual bytes from proving a
+ // new inlined construction. Only an actual named construction can renew it.
+ std::array<LockLifetime,16> locks{};uint64_t lock_epoch=0;
 };
 thread_local SourceEntry*source_entry=nullptr;
 thread_local uint64_t source_epoch=0;
@@ -191,8 +197,27 @@ bool HookWait(void* linker,ClassHandle handle,void* self,void* lock){
  }
  return result;
 }
-// Original public constructor arguments establish the opaque lock receiver's
-// actual same-Thread/live-Class Handle. Its members are never interpreted.
+LockLifetime* FindLock(SourceEntry&entry,void*receiver){
+ for(auto&lock:entry.locks)if(lock.receiver==receiver)return &lock;
+ return nullptr;
+}
+LockLifetime* LockSlot(SourceEntry&entry,void*receiver){
+ if(auto*lock=FindLock(entry,receiver))return lock;
+ for(auto&lock:entry.locks)if(!lock.receiver)return &lock;
+ return nullptr;
+}
+bool ReadSourceLock(Trial&trial,SourceEntry&entry,void*receiver,SourceClassLock*out){
+ size_t readable=0;uint32_t status=0,tid=0;
+ if(!trial.lock_source_verified||!receiver||!out||
+    !modern_field_metadata::ReadMappingExtent(nullptr,receiver,&readable)||readable<sizeof(*out))return false;
+ std::memcpy(out,receiver,sizeof(*out));
+ return out->self==entry.self&&
+     ReadHandle(trial,entry.self,{entry.slot},&status,&tid)&&
+     ReadHandle(trial,entry.self,out->object,&status,&tid);
+}
+// Each original constructor establishes a distinct receiver lifetime. ART can
+// nest Class locks in VerifyClass and later construct another InitializeClass
+// lock, with individual constructor/destructor calls inlined independently.
 void HookClassLockConstruct(void* lock,void* self,ClassHandle handle){
  BorrowTrial borrowed;Trial* trial=borrowed.value;SourceEntry* entry=source_entry;
  uint32_t status=0,tid=0;
@@ -201,38 +226,56 @@ void HookClassLockConstruct(void* lock,void* self,ClassHandle handle){
  if(!matched)borrowed.Release();
  installed.lock_construct(lock,self,handle);
  if(matched){
-  // Scalar diagnostics preserve the original short-circuit: reborrow only if
-  // the entry, receiver and tracked-lock checks all succeeded.
-  uint32_t predicates=0;
+  uint32_t predicates=0;LockLifetime* lifetime=nullptr;
   if(source_entry!=entry)predicates=1u;
   else if(!lock)predicates=2u;
-  else if(entry->lock)predicates=4u;
-  else if(!ReadHandle(*trial,self,handle,&status,&tid))predicates=8u;
+  else if(!ReadHandle(*trial,self,handle,&status,&tid)||
+          !ReadHandle(*trial,self,{entry->slot},&status,&tid))predicates=8u;
+  else if(!(lifetime=LockSlot(*entry,lock)))predicates=16u;
+  else if(entry->lock_epoch==UINT64_MAX)predicates=32u;
   if(predicates){trial->lock_entry_faults.fetch_or(predicates,std::memory_order_release);
    trial->faults.fetch_or(kWaitEntry,std::memory_order_release);}
-  else{entry->lock=lock;entry->lock_slot=handle.slot;entry->lock_destroyed=false;trial->lock_constructed.fetch_add(1,std::memory_order_relaxed);}
+  else{
+   // Even at a reused address, the original named constructor just established
+   // this generation. No stale receiver/slot is reused to prove the new one.
+   *lifetime={lock,handle.slot,++entry->lock_epoch,true};
+   trial->lock_constructed.fetch_add(1,std::memory_order_relaxed);
+  }
  }
 }
 void HookClassLockDestroy(void* lock){
  auto* entry=source_entry;BorrowTrial borrowed;auto* trial=borrowed.value;
- bool matched=entry&&entry->lock==lock;
- if(!matched&&entry&&trial&&trial->lock_source_verified&&lock){
-  SourceClassLock source_lock{};size_t readable=0;uint32_t status=0,tid=0;
-  if(modern_field_metadata::ReadMappingExtent(nullptr,lock,&readable)&&readable>=sizeof(source_lock)){
-   std::memcpy(&source_lock,lock,sizeof(source_lock));
-   matched=source_lock.self==entry->self&&ReadHandle(*trial,entry->self,source_lock.object,&status,&tid);
+ LockLifetime* lifetime=entry&&lock?FindLock(*entry,lock):nullptr;
+ uint32_t status=0,tid=0;
+ bool matched=trial&&entry&&entry->owner==installed.owner&&lifetime&&lifetime->live&&
+     ReadHandle(*trial,entry->self,{lifetime->slot},&status,&tid)&&
+     ReadHandle(*trial,entry->self,{entry->slot},&status,&tid);
+ if(!lifetime&&entry&&trial&&entry->owner==installed.owner){
+  SourceClassLock source_lock{};
+  if(ReadSourceLock(*trial,*entry,lock,&source_lock)){
+   lifetime=LockSlot(*entry,lock);
+   if(lifetime&&entry->lock_epoch!=UINT64_MAX){
+    *lifetime={lock,source_lock.object.slot,++entry->lock_epoch,true};matched=true;
+   }else{trial->lock_entry_faults.fetch_or(16u,std::memory_order_release);
+    trial->faults.fetch_or(kWaitEntry,std::memory_order_release);}
   }
  }
+ if(trial&&lifetime&&lifetime->live&&!matched){
+  trial->lock_entry_faults.fetch_or(64u,std::memory_order_release);
+  trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+ }
+ const uint64_t generation=matched?lifetime->generation:0;
  if(!matched)borrowed.Release();
  installed.lock_destroy(lock);
- if(matched&&entry&&source_entry==entry){
-  if(trial)trial->lock_destroyed.fetch_add(1,std::memory_order_relaxed);
-  entry->lock=nullptr;entry->lock_slot=nullptr;entry->lock_destroyed=true;
+ if(matched&&source_entry==entry&&lifetime->receiver==lock&&lifetime->generation==generation){
+  trial->lock_destroyed.fetch_add(1,std::memory_order_relaxed);
+  lifetime->live=false;lifetime->slot=nullptr;
  }
 }
 // The fixed WaitForInitializeClass source calls this exact member inside its
 // status-rereading loop. The active outer source entry provides the live Class
-// Handle and actual Thread; no ObjectLock member or monitor layout is read.
+// Handle and actual Thread. The lock declaration is read only after the
+// independent original constructor calibration; no monitor layout is inferred.
 void HookInnerWait(void* lock){
  BorrowTrial borrowed;Trial* trial=borrowed.value;SourceEntry* entry=source_entry;
  uint32_t status=0,tid=0;
@@ -247,13 +290,15 @@ void HookInnerWait(void* lock){
   if(source_readable)std::memcpy(&source_lock,lock,sizeof(source_lock));
   // Read the fixed declaration only after actual original construction proved
   // it. The caller's own constructor may have been inlined by the source compiler.
-  const void* lock_slot=source_readable&&!entry->lock_destroyed&&source_lock.self==entry->self?source_lock.object.slot:nullptr;
+  LockLifetime* lifetime=lock?FindLock(*entry,lock):nullptr;
+  const bool live_receiver=!lifetime||lifetime->live;
+  const void* lock_slot=source_readable&&live_receiver&&source_lock.self==entry->self?source_lock.object.slot:nullptr;
   // Record independent predicates without changing the required conjunction.
   // A named constructor can exist even when this original caller inlined it.
   // An uncalibrated lock remains refused rather than accepted by TLS alone.
   uint32_t faults=0;
   if(!lock)faults|=1u;
-  if(entry->lock&&entry->lock!=lock)faults|=2u;
+  if(lifetime&&lifetime->live&&lifetime->slot!=lock_slot)faults|=2u;
   if(!lock_slot)faults|=4u;
   if(!lock_slot||!ReadHandle(*trial,entry->self,{lock_slot},&lock_status,&lock_tid))faults|=8u;
   if(lock_status!=status||lock_tid!=tid)faults|=16u;
@@ -262,6 +307,11 @@ void HookInnerWait(void* lock){
   if(!trial->body_ready.load(std::memory_order_acquire))faults|=128u;
   if(status!=13||tid!=trial->tid.load(std::memory_order_acquire))faults|=256u;
   if(entry->linker!=trial->linker.load(std::memory_order_acquire))faults|=512u;
+  if(!faults&&!lifetime){
+   lifetime=LockSlot(*entry,lock);
+   if(!lifetime||entry->lock_epoch==UINT64_MAX)faults|=1024u;
+   else *lifetime={lock,lock_slot,++entry->lock_epoch,true};
+  }
   if(faults){trial->inner_entry_faults.fetch_or(faults,std::memory_order_relaxed);
    trial->faults.fetch_or(kWaitEntry,std::memory_order_release);}
   ++entry->inner_entries;
