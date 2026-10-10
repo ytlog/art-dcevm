@@ -29,6 +29,8 @@ class Registry final {
    if(frozen_||!roots_.empty()||!owner||!insert||!read||!clear||!epoch)return false;
    access_={owner,nullptr,nullptr,nullptr,insert,read,clear,epoch};return true;
   }
+  // Storage ownership only; actual Runnable/slot permission stays with callbacks.
+  bool IsNativeBoundTo(const void* owner)const noexcept {return owner&&access_.owner==owner&&access_.insert&&access_.read&&access_.clear&&access_.epoch;}
   bool Reserve(size_t capacity){
    if(frozen_||!roots_.empty()||!capacity||capacity>SIZE_MAX/4)return false;
    if(access_.insert&&(!access_.read||!access_.clear||!access_.epoch))return false;

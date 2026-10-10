@@ -1,3 +1,6 @@
+#include "platform/common/readable_mapping_scope.h"
+#include <android/log.h>
+#include <optional>
 #include "platform/common/native_schema_run_state.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/method_identity_calibration.h"
@@ -134,17 +137,34 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.phase!=State::Phase::Running)return Fail(e,"Collected schema requires the running transaction phase");
  if(!g.holder)return Fail(e,"Collected schema has no actual transaction root holder");
  if(!s.loading->Paused())return Fail(e,"Collected schema requires the paused source loading owner");
+ if(current!=this||!s.pool.ReadyForSourceAccess()||!s.d.registry->IsNativeBoundTo(&s))return Fail(e,"Collected ordinary root registration lost its exact Runnable/native storage owner");
+ // Native Pool registration never invokes JNI or an original ART callee. Keep
+ // one fresh mapping snapshot only for this ordinary read/root insertion cohort;
+ // every Pool slot still checks its actual source Thread and owned slot range.
+ // Destroy the view before entering sourceStop (which can safepoint/collect).
+ std::optional<method_identity::ScopedReadableMappings> ordinary;
+ ordinary.emplace();if(!ordinary->Ready())return Fail(e,"Collected ordinary root mapping capture failed");
+ const auto checkpoint=[](const char* stage){__android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState Collected phase=%s",stage);};
+ checkpoint("attach-holder-begin");
  if(!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata))return Fail(e,"Collected cleanup rejected actual holder/driver metadata");
- if(!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return false;
+ checkpoint("attach-holder-return");checkpoint("hierarchy-collected-begin");
+ if(!s.hierarchy->PrepareCollected(p,e))return false;
+ checkpoint("hierarchy-collected-return");checkpoint("authority-roots-begin");
+ if(!s.authority.PrepareRoots(p,e))return false;
+ checkpoint("authority-roots-return");checkpoint("frame-plan-begin");
  if(!s.d.frames->PrepareRecoveryPlan(p,&s.frame_storage))return Fail(e,"Ordinary source frame exact Plan preparation refused");
+ checkpoint("frame-plan-return");
  if(s.d.boot_catalog&&s.d.boot_vtables&&s.d.boot_code&&s.d.members.method_model){
   s.boot_unaffected=std::make_unique<native_boot_aot_unaffected::Source>(p,*s.stop,s.context.self,s.boot_catalog,*s.ledger,*s.d.members.metadata,*s.d.members.method_model,*s.d.boot_vtables,*s.d.boot_code);
   s.frame_storage.boot_unaffected=s.boot_unaffected.get();
  }
- s.plan=&p;s.holder=g.holder;size_t publication_count=0;
+ s.plan=&p;s.holder=g.holder;size_t publication_count=0;checkpoint("publication-plan-begin");
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
+ checkpoint("publication-plan-return");checkpoint("native-root-registration-begin");
  const auto collect=s.d.registry->Collect();
  if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
+ checkpoint("native-root-registration-return");
+ ordinary.reset();checkpoint("source-stop-begin");
  if(s.d.stop->RequiresOriginalWaiting()){
   StoppedAttempt attempt{this,e};
   const bool accepted=s.stop->BeginOriginalWaiting(s.context.self,s.extent,&attempt,PrepareOriginalWaiting);
@@ -157,6 +177,7 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  }
  // The waiting path restores Runnable in the original StartGC scope before
  // this callback returns. Both paths now retain the same owned reservation.
+ checkpoint("source-stop-preparation-return");
  s.phase=State::Phase::Collected;return true;
 }
 bool RunState::PrepareStopped(std::string*e){

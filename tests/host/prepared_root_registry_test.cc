@@ -22,7 +22,9 @@ struct NativeState {
 void LargeNative(){using namespace artdcevm::prepared_roots;
  for(size_t count:{size_t(30000),size_t(60000)}){
   NativeState state;state.live.reserve(count);Registry roots({});
-  assert(roots.BindNative(&state,NativeState::Insert,NativeState::Read,NativeState::Clear,NativeState::Epoch));assert(roots.Reserve(count/3));
+  assert(!roots.IsNativeBoundTo(&state));
+  assert(roots.BindNative(&state,NativeState::Insert,NativeState::Read,NativeState::Clear,NativeState::Epoch));
+  NativeState foreign;assert(roots.IsNativeBoundTo(&state)&&!roots.IsNativeBoundTo(&foreign)&&!roots.IsNativeBoundTo(nullptr));assert(roots.Reserve(count/3));
   for(size_t i=0;i<count;++i){size_t slot=SIZE_MAX;void* identity=reinterpret_cast<void*>((i+1)*4096);assert(roots.Add(identity,&slot)&&slot==i);}
   assert(state.writes==count&&state.reads==count);
   for(size_t i=0;i<count;++i){size_t slot=SIZE_MAX;assert(roots.Add(reinterpret_cast<void*>((i+1)*4096),&slot)&&slot==i);}
@@ -37,7 +39,7 @@ void LargeNative(){using namespace artdcevm::prepared_roots;
  std::cout<<"Bounded native registry 30k/60k roots, linear decoding, epoch refusal, GC-updated slots, replacement aliases and null refusal and allocation-free final lookup PASS\n";
 }
 int main(){LargeNative();using namespace artdcevm::prepared_roots;int a=1,b=2,new_a=3,new_b=4;State state;
- Registry registry({&state,Root,Decode,Release});Bindings bindings;void *left=&a,*right=&b,*null_parent=nullptr;
+ Registry registry({&state,Root,Decode,Release});assert(!registry.IsNativeBoundTo(&state));Bindings bindings;void *left=&a,*right=&b,*null_parent=nullptr;
  assert(bindings.Add(&left,registry.Collect())&&bindings.Add(&right,registry.Collect())&&bindings.Add(&null_parent,registry.Collect()));
  size_t duplicate=99;assert(registry.Add(&a,&duplicate)&&duplicate==0&&registry.Size()==2);
  Bindings stopped;void* stopped_left=&a;void* missing=&a;
