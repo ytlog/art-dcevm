@@ -18,14 +18,17 @@ static void KernelPrefixes(){
   assert(length>0&&Parse(line,size_t(length),&region));
   assert(region.begin==UINT64_C(0x7b12345000)&&region.end==UINT64_C(0x7b12348000));
   assert(region.readable==bool(permissions&1)&&region.writable==bool(permissions&2));
+  char zero[160];const int zero_length=std::snprintf(zero,sizeof(zero),"7b68a72000-7b68a72000 %s 0002d000 fe:43 106",mode);
+  assert(zero_length>0&&Parse(zero,size_t(zero_length),&region));
+  assert(region.begin==UINT64_C(0x7b68a72000)&&region.end==region.begin&&!region.readable&&!region.writable);
   // A truncated pathname is permitted only after the complete mode prefix.
   const auto* suffix=std::strstr(line,"00000000");assert(suffix&&Parse(line,size_t(suffix-line),&region));
  }
- const char* invalid[]={"","1-2 r--p","1-2 r--pX","1-2 q--p ","1-2 rQ-p ","1-2 r-Qp ","1-2 r--Q ","1-1 r--p ","2-1 r--p ","-2 r--p ","1- r--p "," 1-2 r--p ","+1-2 r--p ","0x1-2 r--p ","1-10000000000000000 r--p ","10000000000000000-2 r--p ","1\n-2 r--p "};
+ const char* invalid[]={"","1-2 r--p","1-2 r--pX","1-2 q--p ","1-2 rQ-p ","1-2 r-Qp ","1-2 r--Q ","2-1 r--p ","-2 r--p ","1- r--p "," 1-2 r--p ","+1-2 r--p ","0x1-2 r--p ","1-10000000000000000 r--p ","10000000000000000-2 r--p ","1\n-2 r--p "};
  for(const char* line:invalid){region={1,2,true,true};assert(!Parse(line,std::strlen(line),&region));assert(!region.begin&&!region.end&&!region.readable&&!region.writable);}
  assert(!Parse(nullptr,0,&region)&&!Parse("1-2 r--p ",10,nullptr));
  const char maximum[]="FFFFFFFFFFFFFFFE-FFFFFFFFFFFFFFFF r--p ";assert(Parse(maximum,sizeof(maximum)-1,&region)&&region.end==UINTPTR_MAX);
- std::puts("Kernel map prefixes: 16 permission combinations, filename/truncation independence, malformed/overflow/empty ranges and stale-output revocation PASS");
+ std::puts("Kernel map prefixes: 16 permission combinations, filename/truncation independence, zero-length no-grant, malformed/overflow/reversed ranges and stale-output revocation PASS");
 }
 static void CapturedKernelMappings(const char* path){
  std::ifstream source(path);assert(source.is_open());std::string line;size_t count=0;
@@ -34,9 +37,9 @@ static void CapturedKernelMappings(const char* path){
   assert(std::sscanf(line.c_str(),"%llx-%llx %4s",&begin,&end,mode)==3);
   artdcevm::proc_mapping_region::Region region;
   assert(artdcevm::proc_mapping_region::Parse(line.data(),line.size(),&region));
-  assert(region.begin==begin&&region.end==end&&region.readable==(mode[0]=='r')&&region.writable==(mode[1]=='w'));++count;
+  assert(region.begin==begin&&region.end==end&&region.readable==(begin<end&&mode[0]=='r')&&region.writable==(begin<end&&mode[1]=='w'));++count;
  }
- assert(source.eof()&&count>0);std::printf("Captured real kernel mappings: %zu exact ranges/read/write modes agree with independent formatted-parser oracle PASS\n",count);
+ assert(source.eof()&&count>0);std::printf("Supplied kernel mapping records: %zu exact ranges/read/write modes agree with independent formatted-parser oracle PASS\n",count);
 }
 int main(int argc,char** argv){
  assert(argc<=2);if(argc==2)CapturedKernelMappings(argv[1]);

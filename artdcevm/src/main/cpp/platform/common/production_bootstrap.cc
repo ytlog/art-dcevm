@@ -2,6 +2,8 @@
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/proc_mapping_region.h"
+#include "platform/common/stopped_mapping_reader.h"
+#include <cerrno>
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
@@ -205,7 +207,7 @@ struct NativeEngine final:Engine {
    threw=scan.threw;mapping_failed=scan.attempted&&!scan.mappings;
    if(!proven&&!scan.attempted)r.error=stopped.Failure();
   } // Actual resume/FinishGC/RestoreRunnable precede Pool destruction.
-  if(mapping_failed)r.error="Compiled frame stopped mapping snapshot rejected";
+  if(mapping_failed)r.error="Compiled frame stopped mapping snapshot rejected: "+e.StoppedMappingDiagnostic();
   if(threw)r.error="Compiled frame stopped inspection threw";
   if(!proven&&r.error.empty())r.error=r.result.failure?r.result.failure:"Compiled frame original map/value oracle rejected";
   return proven&&r.result.compiled_ready;
@@ -475,6 +477,20 @@ struct NativeEngine final:Engine {
  static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
  bool (*graph_same)(void*,void*)=nullptr;
  struct MapRange {uintptr_t begin,end;bool write;};std::vector<MapRange> graph_maps;
+ stopped_mapping_reader::Result stopped_mapping_result{};
+ const char* stopped_mapping_boundary="not-attempted";
+ int stopped_mapping_errno=0;size_t stopped_mapping_capacity=0;
+ // Format only after the calibration stop has released its native rights.
+ std::string StoppedMappingDiagnostic()const {
+  std::string prefix;constexpr char hex[]="0123456789abcdef";
+  for(size_t n=0;n<stopped_mapping_result.failure_prefix_length;++n){
+   const auto byte=static_cast<unsigned char>(stopped_mapping_result.failure_prefix[n]);prefix+=hex[byte>>4];prefix+=hex[byte&15];
+  }
+  return std::string(stopped_mapping_boundary)+" failure="+stopped_mapping_reader::Name(stopped_mapping_result.failure)+
+   " errno="+std::to_string(stopped_mapping_errno)+" regions="+std::to_string(stopped_mapping_result.readable_regions)+
+   " capacity="+std::to_string(stopped_mapping_capacity)+" lines="+std::to_string(stopped_mapping_result.lines)+
+   " bytes="+std::to_string(stopped_mapping_result.bytes)+" lineLength="+std::to_string(stopped_mapping_result.line_length)+" prefixHex="+prefix;
+ }
  bool RefreshMaps(std::string* error){
   graph_maps.clear();FILE* file=std::fopen("/proc/self/maps","r");if(!file)return Fail(error,"Native caller mapping snapshot unavailable");
   char line[1024];while(std::fgets(line,sizeof(line),file)){proc_mapping_region::Region parsed;
@@ -504,22 +520,25 @@ struct NativeEngine final:Engine {
   return e.RefreshStoppedMappings(error);
  }
  bool RefreshStoppedMappings(std::string* error){
+  stopped_mapping_result={};stopped_mapping_errno=0;stopped_mapping_capacity=graph_maps.capacity();stopped_mapping_boundary="owner";
   auto& e=*this;auto* run=native_schema_run_state::RunState::Current();const bool owned_schema=run&&run->OwnsMapping(&e)&&run->StoppedWindow();
   const bool owned_fixture=calibration_stop&&calibration_stop->IsStopped(calibration_self);
   if(!owned_schema&&!owned_fixture)return Fail(error,"Mapping refresh requires an actual independent native stop");
-  const int fd=::open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0)return Fail(error,"Stopped mapping open failed");
+  stopped_mapping_boundary="open";
+  const int fd=::open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0){stopped_mapping_errno=errno;return Fail(error,"Stopped mapping open failed");}
   struct Close{int fd;~Close(){::close(fd);}} close{fd};
-  e.graph_maps.clear();char buffer[4096],line[1024];size_t used=0;bool valid=true;
-  auto consume=[&](){
-   proc_mapping_region::Region parsed;if(!proc_mapping_region::Parse(line,used,&parsed))return false;
-   if(!parsed.readable)return true;
-   if(e.graph_maps.size()==e.graph_maps.capacity()||(!e.graph_maps.empty()&&parsed.begin<e.graph_maps.back().end))return false;
-   e.graph_maps.push_back({parsed.begin,parsed.end,parsed.writable});return true;
-  };
-  while(valid){const ssize_t count=::read(fd,buffer,sizeof(buffer));if(count<0){valid=false;break;}if(count==0)break;
-   for(ssize_t n=0;n<count;++n){if(buffer[n]=='\n'){if(!consume()){valid=false;break;}used=0;}else if(used==sizeof(line)){valid=false;break;}else line[used++]=buffer[n];}}
-  if(valid&&used)valid=consume();
-  if(!valid||e.graph_maps.empty()||!(owned_schema?run->StoppedWindow():calibration_stop->IsStopped(calibration_self))){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
+  e.graph_maps.clear();stopped_mapping_boundary="stream";
+  stopped_mapping_result=stopped_mapping_reader::Read([&](char* buffer,size_t size)->ptrdiff_t{
+   const ssize_t count=::read(fd,buffer,size);if(count<0)stopped_mapping_errno=errno;return count;
+  },[&](const proc_mapping_region::Region& parsed){
+   if(e.graph_maps.size()==e.graph_maps.capacity())return stopped_mapping_reader::Failure::Capacity;
+   if(!e.graph_maps.empty()&&parsed.begin<e.graph_maps.back().end)return stopped_mapping_reader::Failure::Overlap;
+   e.graph_maps.push_back({parsed.begin,parsed.end,parsed.writable});return stopped_mapping_reader::Failure::None;
+  });
+  if(stopped_mapping_result.failure!=stopped_mapping_reader::Failure::None){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
+  stopped_mapping_boundary="stop-owner-recheck";
+  if(!(owned_schema?run->StoppedWindow():calibration_stop->IsStopped(calibration_self))){e.graph_maps.clear();return Fail(error,"Stopped mapping stop ownership changed");}
+  stopped_mapping_boundary="complete";
   return true;
  }
  static bool GraphExtent(void* raw,const void* address,size_t* extent){
