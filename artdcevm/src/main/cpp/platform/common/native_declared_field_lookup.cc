@@ -10,14 +10,16 @@ void* Read(const modern_field_metadata::FieldMetadata& metadata,void* self,
   if(error)*error="Declared Field native metadata/current Runnable context unavailable";
   return nullptr;
  }
- method_identity::ScopedReadableMappings mappings;
- if(observation)observation->mapping_os_queries=mappings.OsQueries();
- if(!mappings.Ready()){
-  if(error)*error="Declared Field native mapping snapshot unavailable";
-  return nullptr;
- }
+ // Only this immediate traversal owns the bounded VMA cache. The original
+ // factory can safepoint, so its after-factory lookup constructs a fresh reader.
+ // Every cache miss queries the actual current VMA; no prior snapshot or JNI
+ // object address supplies mapping permission to this traversal.
+ method_identity::ImmediateReadableRegions mappings;
+ struct Record final {Observation* out;method_identity::ImmediateReadableRegions& mappings;
+  ~Record(){if(out)out->mapping_os_queries=mappings.OsQueries();}
+ } record{observation,mappings};
  const modern_field_metadata::ReadContext read{&mappings,[](void* raw,const void* address,size_t* extent){
-  return static_cast<method_identity::ScopedReadableMappings*>(raw)->Extent(address,extent);
+  return static_cast<method_identity::ImmediateReadableRegions*>(raw)->Extent(address,extent);
  }};
  field_array::View table;
  if(!metadata.Fields(owner,(declaration.flags&8)!=0,&table,error,&read))return nullptr;

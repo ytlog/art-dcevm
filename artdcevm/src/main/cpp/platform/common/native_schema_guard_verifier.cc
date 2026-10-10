@@ -17,6 +17,9 @@
 #include <limits>
 #include <cstdlib>
 #include <cstdio>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 namespace artdcevm::native_schema_guard_verifier {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
@@ -480,6 +483,12 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
   }
   if(env->ExceptionCheck())return false;
   if(existing){++known;continue;}
+#if defined(__ANDROID__)
+  // Ordinary-stage diagnostics only: no managed identity is retained and no
+  // completion or permission is inferred from these inventory counters.
+  if(state_->nodes.size()%64==0)__android_log_print(ANDROID_LOG_INFO,"artdcevm",
+   "Caller inventory staged=%zu enumeration=%d next=%s",state_->nodes.size(),int(count),identity.signature);
+#endif
   Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;
   state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();staged_names[stored.schema.descriptor].push_back(state_->nodes.size()-1);
   if(!cohort.Add(classes[i],&stored.root))return false;

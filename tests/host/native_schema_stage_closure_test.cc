@@ -15,6 +15,7 @@ Object* Cast(jobject o){for(const auto& h:handles)if(reinterpret_cast<jobject>(h
 jclass Add(const char* name,bool descendant=false){auto o=std::make_unique<Object>();o->descriptor=name;o->descendant=descendant;auto c=reinterpret_cast<jclass>(o.get());objects.push_back(std::move(o));loaded.push_back(c);return c;}
 jobject JNICALL Global(JNIEnv*,jobject o){++globals;peak=std::max(peak,globals);auto h=std::make_unique<GlobalHandle>();h->live=Cast(o);auto result=reinterpret_cast<jobject>(h.get());handles.push_back(std::move(h));return result;}
 void JNICALL DropGlobal(JNIEnv*,jobject o){assert(globals);--globals;auto i=std::find_if(handles.begin(),handles.end(),[&](const auto& h){return reinterpret_cast<jobject>(h.get())==o;});assert(i!=handles.end());handles.erase(i);}
+jobject JNICALL Local(JNIEnv*,jobject object){return reinterpret_cast<jobject>(Cast(object));}
 void JNICALL DropLocal(JNIEnv*,jobject){}
 jboolean JNICALL Pending(JNIEnv*){return JNI_FALSE;}
 jboolean JNICALL Same(JNIEnv*,jobject a,jobject b){return Cast(a)==Cast(b);}
@@ -54,7 +55,7 @@ bool StageField(void*,JNIEnv*,jclass c,jfieldID,bool,std::string*){
 }
 }
 int main(){
- JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DropGlobal;jni.DeleteLocalRef=DropLocal;jni.ExceptionCheck=Pending;jni.IsSameObject=Same;jni.FindClass=Find;jni.NewObjectArray=Array;jni.GetArrayLength=Length;jni.SetObjectArrayElement=Set;jni.GetObjectArrayElement=Get;jni.GetSuperclass=Parent;jni.GetMethodID=PublicMethod;jni.GetStaticMethodID=PublicMethod;jni.CallStaticBooleanMethodA=Proxy;jni.CallObjectMethodA=ObjectMethod;jni.GetStringUTFChars=UTF;jni.ReleaseStringUTFChars=ReleaseUTF;jni.IsAssignableFrom=Assignable;
+ JNINativeInterface_ jni{};jni.NewLocalRef=Local;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DropGlobal;jni.DeleteLocalRef=DropLocal;jni.ExceptionCheck=Pending;jni.IsSameObject=Same;jni.FindClass=Find;jni.NewObjectArray=Array;jni.GetArrayLength=Length;jni.SetObjectArrayElement=Set;jni.GetObjectArrayElement=Get;jni.GetSuperclass=Parent;jni.GetMethodID=PublicMethod;jni.GetStaticMethodID=PublicMethod;jni.CallStaticBooleanMethodA=Proxy;jni.CallObjectMethodA=ObjectMethod;jni.GetStringUTFChars=UTF;jni.ReleaseStringUTFChars=ReleaseUTF;jni.IsAssignableFrom=Assignable;
  JNIEnv env{&jni};jvmtiInterface_1_ ti{};ti.GetLoadedClasses=Enumerate;ti.Deallocate=Free;ti.GetClassStatus=Status;ti.GetClassSignature=Signature;ti.GetClassModifiers=ClassFlags;ti.GetClassMethods=Methods;ti.GetClassFields=Fields;ti.GetFieldName=FieldName;ti.GetFieldModifiers=FieldFlags;ti.GetClassLoader=Loader;ti.GetImplementedInterfaces=Interfaces;jvmtiEnv jvmti{&ti};
  using namespace artdcevm::native_schema_guard_verifier;
  Bindings bindings{};bindings.roots={nullptr,Scope,Oracle,Decode,Element};bindings.stage_field=StageField;

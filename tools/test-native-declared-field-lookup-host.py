@@ -17,10 +17,10 @@ cmd+=['-Wl,-dead_strip','-Wl,-pagezero_size,0x10000'] if platform=='darwin' else
 cmd+=['-o',str(out/'test')]
 r=subprocess.run(cmd,text=True,capture_output=True);(out/'compile.log').write_text(r.stdout+r.stderr);r.check_returncode()
 r=subprocess.run([str(out/'test')],text=True,capture_output=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'));(out/'result.log').write_text(r.stdout+r.stderr);r.check_returncode()
-match=re.search(r'Actual lazy\+Store Stage fields=(\d+) declaration-scans=(\d+) inspected-selected-fields=(\d+) mapping-snapshot-queries=(\d+) total-mapping-queries=(\d+) public-JNI-calls=(\d+) factory-calls=(\d+) native-read-JNI=(\d+)',r.stdout)
+match=re.search(r'Actual lazy\+Store Stage fields=(\d+) declaration-scans=(\d+) inspected-selected-fields=(\d+) mapping-capture-queries=(\d+) total-mapping-queries=(\d+) public-JNI-calls=(\d+) factory-calls=(\d+) native-read-JNI=(\d+)',r.stdout)
 assert match
-keys=['staged_fields','declaration_scans','inspected_selected_fields','mapping_snapshot_queries','total_mapping_queries','public_jni_calls','original_false_factory_calls','jni_within_native_reads']
+keys=['staged_fields','declaration_scans','inspected_selected_fields','mapping_capture_queries','total_mapping_queries','public_jni_calls','original_false_factory_calls','jni_within_native_reads']
 counts=dict(zip(keys,map(int,match.groups())))
 assert counts['staged_fields']==8 and counts['declaration_scans']==16 and counts['inspected_selected_fields']==40 and counts['original_false_factory_calls']==8 and not counts['jni_within_native_reads']
-(out/'observation.json').write_text(json.dumps({'platform':platform,'scope':'actual metadata + lazy service + shared Store with named ART/JNI leaf doubles; not device timing', 'counts':counts,'moved_class_reread':True,'opaque_id_collision_namespaces':True},indent=2)+'\n')
+(out/'observation.json').write_text(json.dumps({'platform':platform,'scope':'actual metadata + lazy service + shared Store with named ART/JNI leaf doubles; not device timing', 'mapping_reader':'immediate current VMA cache; new instance before and after each factory', 'counts':counts,'moved_class_reread':True,'opaque_id_collision_namespaces':True},indent=2)+'\n')
 print(r.stdout.strip())

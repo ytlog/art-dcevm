@@ -60,6 +60,22 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
 }
 }
 uint64_t MappingOsQueries()noexcept{return mapping_os_queries;}
+bool ImmediateReadableRegions::Extent(const void* address,size_t* extent)noexcept{
+ if(extent)*extent=0;
+ if(!address||!extent)return false;
+ const uintptr_t pointer=LookupAddress(address);
+ for(size_t i=0;i<count_;++i){const auto& region=regions_[i];
+  if(pointer>=region.first&&pointer<region.second){*extent=size_t(region.second-pointer);return true;}
+ }
+ std::pair<uintptr_t,uintptr_t> region{};++os_queries_;
+ if(!ReadRegion(pointer,&region)||region.first>pointer||pointer>=region.second)return false;
+ // A bounded FIFO retains only kernel-proven ranges in this immediate read
+ // interval. Eviction causes a fresh OS lookup, never a fabricated extent.
+ regions_[next_]=region;next_=(next_+1)%kCapacity;
+ if(count_<kCapacity)++count_;
+ *extent=size_t(region.second-pointer);return true;
+}
+
 ScopedReadableMappings::ScopedReadableMappings() noexcept:previous_(active_mappings){
 #if defined(__APPLE__)
   try {
