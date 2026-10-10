@@ -2,6 +2,7 @@
 namespace artdcevm::native_lazy_field_mirror {
 namespace {
 constexpr const char* kFactory="_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadEPNS_8ArtFieldEb";
+constexpr const char* kFour="_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadENS_6HandleINS0_5ClassEEEPNS_8ArtFieldEb";
 constexpr const char* kLegacy="_ZN3art6mirror5Field18CreateFromArtFieldILNS_11PointerSizeE8ELb0EEENS_6ObjPtrIS1_EEPNS_6ThreadEPNS_8ArtFieldEb";
 constexpr const char* kLocal="_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE";
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
@@ -11,13 +12,23 @@ struct GlobalRoot {JNIEnv* env;jobject value;~GlobalRoot(){if(value)env->DeleteG
 struct Service::Request {Service* service;JNIEnv* env;jobject owner;jfieldID id;void* expected;jobject output=nullptr;};
 bool Service::Bind(HookEngine& hooks,const Bindings& b,std::string* error){
  if(bound_||!b.owner||!b.matched_release_carrier||!b.scope||!b.oracle||!b.decode||!b.decode_field||!b.field||!b.declaring)return Fail(error,"Lazy Field factory lacks independently matched original codec/root owner");
+ four_=false;
  auto factory=hooks.FindSymbol("libart.so",kFactory);
  if(!factory)factory=hooks.FindSymbol("libart.so",kLegacy);
  auto local=hooks.FindSymbol("libart.so",kLocal);
- // The observed extra Handle<Class> overload is not called without a primary
- // source declaration proving its argument meaning. Never infer it from ABI size.
+ bindings_=b;
+ if(!factory){factory=hooks.FindSymbol("libart.so",kFour);four_=factory!=nullptr;if(four_&&!FourProven())return Fail(error,"Extra-Handle lazy factory lacks original public episodes and calibrated live roots");}
  if(!factory||!local)return Fail(error,"Source-declared lazy Field factory/local-reference leaf unavailable");
- bindings_=b;factory_=reinterpret_cast<Factory>(factory);local_=reinterpret_cast<Local>(local);bound_=true;return true;
+ bindings_=b;factory_=factory;local_=reinterpret_cast<Local>(local);bound_=true;return true;
+}
+bool Service::FourProven()const{
+ const auto&b=bindings_;
+ if(!b.observer||!b.observer->FourArgument()||!b.observer->NormalizerInstalled()||b.observer->Poisoned()||!b.roots||!b.roots->Calibrated()||!b.public_roots||!b.primitive_trace||!b.optional_trace)return false;
+ for(bool proven:*b.public_roots)if(!proven)return false;
+ for(auto*t:{b.primitive_trace,b.optional_trace})for(const auto&e:t->entries){
+  if(!e.field||!e.calls||e.false_calls!=e.calls||!e.root_before_valid||!e.root_after_valid||!e.result||!e.root_after||e.root_before!=e.root_after||e.normalized_field!=e.field)return false;
+ }
+ return true;
 }
 bool Service::Produce(const runnable_jni::Context& context,void* raw){
  auto& r=*static_cast<Request*>(raw);auto& s=*r.service;auto& b=s.bindings_;
@@ -28,7 +39,17 @@ bool Service::Produce(const runnable_jni::Context& context,void* raw){
  if(!field||(r.expected&&field!=r.expected)||b.declaring(b.owner,field)!=owner)return false;
  // ART may resolve a type and suspend here. Exact declaring Class is strongly
  // rooted; no borrowed managed identity is reused after the original factory.
- const uintptr_t result=s.factory_(context.self,field,false);
+ uintptr_t result=0;
+ std::unique_ptr<source_handle_roots::Scope> handle;
+ if(s.four_){
+  if(!s.FourProven()||!s.field_class_)return false;
+  void* field_class=nullptr;
+  if(!b.roots->BorrowOwnedStrongGlobal(context,s.field_class_,&field_class)||!field_class)return false;
+  handle=b.roots->CreateScope(1,nullptr);if(!handle)return false;
+  handle->Set(0,field_class);
+  using Four=uintptr_t(*)(void*,native_field_factory_observer::HandleCarrier,void*,bool);
+  result=reinterpret_cast<Four>(s.factory_)(context.self,{handle->Slot(0)},field,false);
+ }else result=reinterpret_cast<Factory>(s.factory_)(context.self,field,false);
  if(context.env->ExceptionCheck()||!result)return false;
  jobject local=s.local_(context.env,reinterpret_cast<void*>(result));LocalRoot guard{context.env,local};
  if(context.env->ExceptionCheck()||!local)return false;
@@ -69,6 +90,14 @@ bool Service::Calibrate(JNIEnv* env,const std::vector<Oracle>& oracles,std::stri
   if(!o.strong_field||!o.exact_owner||!o.id||!o.native_field)return Fail(error,"Lazy Field independent oracle incomplete");
   for(size_t j=0;j<i;++j)if(oracles[j].native_field==o.native_field)return Fail(error,"Lazy Field oracle targets must be distinct");
  }
+ if(four_){
+  if(!FourProven())return Fail(error,"Original extra-Handle public proof is no longer live");
+  LocalRoot type{env,env->GetObjectClass(oracles.front().strong_field)};
+  if(!type.value||env->ExceptionCheck())return false;
+  field_class_=env->NewGlobalRef(type.value);
+  if(!field_class_||env->ExceptionCheck()){Clear(env);return false;}
+  for(const auto&o:oracles){LocalRoot other{env,env->GetObjectClass(o.strong_field)};if(!other.value||env->ExceptionCheck()||!env->IsSameObject(other.value,field_class_)||env->ExceptionCheck()){Clear(env);return Fail(error,"Original Field factory public mirror classes differ");}}
+ }
  carrier_=env->NewGlobalRef(oracles.front().strong_field);
  if(!carrier_||env->ExceptionCheck()){Clear(env);return false;}
  for(const auto& o:oracles){
@@ -91,5 +120,5 @@ bool Service::Create(JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* o
  if(!calibrated_)return Fail(error,"Lazy Field factory has no actual public/native calibration");
  return ProducePublic(env,owner,id,statik,nullptr,output,error);
 }
-void Service::Clear(JNIEnv* env){if(carrier_&&env)env->DeleteGlobalRef(carrier_);carrier_=nullptr;calibrated_=false;}
+void Service::Clear(JNIEnv* env){if(field_class_&&env)env->DeleteGlobalRef(field_class_);field_class_=nullptr;if(carrier_&&env)env->DeleteGlobalRef(carrier_);carrier_=nullptr;calibrated_=false;}
 }

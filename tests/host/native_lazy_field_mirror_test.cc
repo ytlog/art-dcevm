@@ -27,11 +27,12 @@ static jmethodID JNICALL Method(JNIEnv*,jclass c,const char* n,const char*){asse
 static jobject JNICALL Call(JNIEnv*,jobject p,jmethodID id,va_list){assert(!pending&&id==reinterpret_cast<jmethodID>(1));++public_calls;return reinterpret_cast<jobject>(reinterpret_cast<Mirror*>(p)->field->owner);}
 static jint JNICALL Int(JNIEnv*,jobject p,jmethodID id,va_list){assert(!pending&&id==reinterpret_cast<jmethodID>(2));++public_calls;return reinterpret_cast<Mirror*>(p)->field->statik?8:0;}
 static jboolean JNICALL Same(JNIEnv*,jobject x,jobject y){assert(!pending);++public_calls;return x==y;}
-class Hooks:public HookEngine {public:bool legacy=false,absent=false;bool Initialize(std::string*)override{return true;}
+class Hooks:public HookEngine {public:bool legacy=false,absent=false,four=false;bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*l,const char*n)override{assert(!std::strcmp(l,"libart.so"));
   if(!std::strcmp(n,"_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE"))return reinterpret_cast<void*>(Local);
-  if(!std::strcmp(n,"_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadEPNS_8ArtFieldEb"))return !absent&&!legacy?reinterpret_cast<void*>(Factory):nullptr;
-  if(!std::strcmp(n,"_ZN3art6mirror5Field18CreateFromArtFieldILNS_11PointerSizeE8ELb0EEENS_6ObjPtrIS1_EEPNS_6ThreadEPNS_8ArtFieldEb"))return !absent&&legacy?reinterpret_cast<void*>(Factory):nullptr;
+  if(!std::strcmp(n,"_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadEPNS_8ArtFieldEb"))return !absent&&!legacy&&!four?reinterpret_cast<void*>(Factory):nullptr;
+  if(!std::strcmp(n,"_ZN3art6mirror5Field18CreateFromArtFieldILNS_11PointerSizeE8ELb0EEENS_6ObjPtrIS1_EEPNS_6ThreadEPNS_8ArtFieldEb"))return !absent&&legacy&&!four?reinterpret_cast<void*>(Factory):nullptr;
+  if(!std::strcmp(n,"_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadENS_6HandleINS0_5ClassEEEPNS_8ArtFieldEb"))return four?reinterpret_cast<void*>(Factory):nullptr;
   assert(false);return nullptr;
  }
  void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}bool Remove(void*,std::string*)override{assert(false);return false;}};
@@ -59,6 +60,11 @@ int main(){JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef
   service.Clear(&env);assert(!globals);
  }
  Hooks absent;absent.absent=true;lazy::Service unsupported;assert(!unsupported.Bind(absent,binding,&error));
+ Hooks four;four.four=true;lazy::Service missing;const auto before_four=calls;assert(!missing.Bind(four,binding,&error)&&calls==before_four);
+ native_field_factory_observer::Service observer;source_handle_roots::Service uncalibrated;
+ native_field_factory_observer::Trace primitive{},optional{};std::array<bool,4> roots{{true,true,true,true}};
+ auto incomplete=binding;incomplete.observer=&observer;incomplete.roots=&uncalibrated;incomplete.primitive_trace=&primitive;incomplete.optional_trace=&optional;incomplete.public_roots=&roots;
+ lazy::Service unproven;assert(!unproven.Bind(four,incomplete,&error)&&calls==before_four&&!unproven.Ready());
  Hooks hooks;lazy::Service wrong;assert(wrong.Bind(hooks,binding,&error));wrong_factory=true;assert(!wrong.Calibrate(&env,samples,&error)&&!wrong.Ready()&&!globals);wrong_factory=false;
  std::cout<<"Lazy source Field factories: two public/native oracles, opaque ID/owner/static identity, original false missing-type semantics, incoming/OOME preservation, wrong codec/namespace/context rejection and reference cleanup PASS\n";
 }

@@ -387,6 +387,8 @@ struct NativeEngine final:Engine {
   native_lazy_field_mirror::Bindings b;b.owner=this;
   b.matched_release_carrier=runnable_executor::Available()&&metadata.Calibrated()&&field_mirror.matched&&field_mirror.checked==28;
   b.scope=FieldScope;b.oracle=FieldOracle;b.decode=FieldRoot;b.decode_field=DecodeLazyField;b.field=FieldLeaf;b.declaring=FieldOwner;
+  b.observer=&field_factory_observer;b.primitive_trace=&field_factory_primitive_trace;b.optional_trace=&field_factory_optional_trace;
+  b.public_roots=&field_factory_public_roots;b.roots=&source_capabilities.Roots();
   std::string unavailable;if(!lazy_fields.Bind(hooks,b,&unavailable))return !env->ExceptionCheck();
   return lazy_fields.Calibrate(env,live_field_oracles,error);
  }
@@ -1533,7 +1535,7 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  graph_same=reinterpret_cast<decltype(graph_same)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
  if(!graph_decode||!graph_decode_method||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
- if(!PrepareLazyFields(env,error)||!ObserveFieldFactory(env,ti,error))return false;
+ if(!PrepareLiveFieldOracles(env,error)||!ObserveFieldFactory(env,ti,error)||!PrepareLazyFields(env,error))return false;
  for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
  if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");
