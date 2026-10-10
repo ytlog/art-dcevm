@@ -6,6 +6,7 @@
 #include "platform/common/ordinary_source_fixture.h"
 #include "platform/common/source_cache_method_witness.h"
 #include "platform/common/source_cache_writer_dex.h"
+#include "platform/common/source_cache_writer_root.h"
 #include "platform/common/source_cache_field_witness.h"
 #include "platform/common/production_provenance.h"
 #include "platform/common/contextual_field_id.h"
@@ -874,9 +875,12 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
  field_copy::CopyClassView identity;
  if(!e.metadata.ClassIdentity(klass,&identity,error))return false;
  auto* loader=pool.Add(identity.loader,error);if(!loader)return false;
+ void* writer_root=nullptr;
+ if(!source_cache_writer_root::Import(e.source_capabilities.Roots(),scope,pool,
+       e.source_cache_witness.writer,&writer_root,error))return false;
  class Proof final:public source_cache_resolution::Roots {
   public:
-   Proof(NativeEngine&engine,const runnable_jni::Context&scope,source_handle_roots::Pool&pool):e(engine),c(scope),p(pool){}
+   Proof(NativeEngine&engine,const runnable_jni::Context&scope,source_handle_roots::Pool&pool,void*writer):e(engine),c(scope),p(pool),writer_slot(writer){}
    bool Snapshot(const source_cache_resolution::Witness&w,source_cache_resolution::Objects*out,std::string*error)const override{
     if(c.env->ExceptionCheck())return Fail(error,"Original cache resolution raised JNI exception");
     void* cache=nullptr,*klass=nullptr,*loader=nullptr;
@@ -888,7 +892,7 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
     if(!identity.descriptor||std::strcmp(identity.descriptor,"Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;")||identity.loader!=loader||e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)
      return Fail(error,"Cache resolution exact public Class cache/loader namespace changed");
     void* writer=nullptr;
-    if(!runnable_executor::DecodeStrongGlobal(c,e.source_cache_witness.writer,&writer)||!writer||writer==klass)
+    if(!p.Read(writer_slot,&writer)||!writer||writer==klass)
      return Fail(error,"Cache writer must be a distinct rooted public Class");
     field_copy::CopyClassView writer_identity;
     if(!e.metadata.ClassIdentity(writer,&writer_identity,error))return false;
@@ -915,8 +919,8 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
      roots,klass,cache,loader,field==klass?"Class":roots&&field==cache?"DexCache":roots&&field==loader?"ClassLoader":"none");
     return identities;
    }
-  private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;
- } proof(e,scope,pool);
+  private:NativeEngine&e;const runnable_jni::Context&c;source_handle_roots::Pool&p;void*writer_slot;
+ } proof(e,scope,pool,writer_root);
  const auto&w=e.source_cache_witness;
  source_cache_resolution::Witness witness{cache_root,class_root,loader,w.ids.type_index,w.field_index,w.method_index,w.native_field,w.native_method,(w.public_field_modifiers&8u)!=0};
  return source_cache_resolution::WarmPublic(scope.env,

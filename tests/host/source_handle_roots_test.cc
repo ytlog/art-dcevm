@@ -3,6 +3,7 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/source_cache_writer_root.h"
 #include "platform/common/source_allocation_transaction.h"
 #include <chrono>
 #include <sys/mman.h>
@@ -177,6 +178,16 @@ int main(){
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
    assert(outer->Get(0)==new_class&&inner->Get(1)==new_class&&!inner->Get(0));}
   assert(outer->Get(0)==new_class);
+  {source_handle_roots::Pool writer_pool(s);void*writer_slot=nullptr;const auto before=jni_calls;
+   assert(source_cache_writer_root::Import(s,context,writer_pool,reinterpret_cast<jobject>(old_class),&writer_slot,&error));
+   void*live=nullptr;assert(writer_pool.Read(writer_slot,&live)&&live==old_class&&jni_calls==before);
+   MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
+   assert(writer_pool.Read(writer_slot,&live)&&live==new_class); // fresh post-GC slot, no stale Class
+   source_handle_roots::Pool foreign_pool(*data.pair);void*unchanged=old_class;
+   assert(!source_cache_writer_root::Import(s,context,foreign_pool,reinterpret_cast<jobject>(old_class),&unchanged,&error)&&unchanged==old_class);
+   assert(!source_cache_writer_root::Import(s,invalid,writer_pool,reinterpret_cast<jobject>(old_class),&unchanged,&error)&&unchanged==old_class);
+   assert(!source_cache_writer_root::Import(s,context,writer_pool,nullptr,&unchanged,&error)&&unchanged==old_class);
+  }
   {source_handle_roots::Pool pool(s);std::array<void*,70> slots{};
    for(size_t i=0;i<32;++i){slots[i]=pool.Add(old_class,&error);assert(slots[i]);}
    void* anchor_top=Top();
