@@ -62,7 +62,18 @@ int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
  assert(decoder.RegisterStrong(&env,a,&error)&&decoder.RegisterStrong(&env,a,&error));jweak wa=WeakRef(&env,a);assert(decoder.RegisterWeak(&env,wa,&error)&&!decoder.RegisterStrong(&env,wa,&error));
  runnable_jni::Context context{&thread,&env,&vm};void* out=nullptr;
  assert(decoder.Strong(context,Scope::NoSuspend,a,&out)&&out==Reference(a).object);
+ void* unchanged=reinterpret_cast<void*>(0x1234);out=unchanged;
+ assert(!decoder.StrongRunnable(&wrong,a,&out)&&out==unchanged);
+ assert(!decoder.StrongRunnable(&thread,reinterpret_cast<jobject>(wa),&out)&&out==unchanged);
+ assert(!decoder.StrongRunnable(&thread,b,&out)&&out==unchanged);
+ assert(decoder.StrongRunnable(&thread,a,&out)&&out==Reference(a).object);
+ // The event rereads its retained root, rather than reusing a raw pointer
+ // captured by a prior JNI Runnable calibration interval.
+ auto* prior=Reference(a).object;Reference(a).object=NewObject();
+ assert(decoder.StrongRunnable(&thread,a,&out)&&out==Reference(a).object&&out!=prior);
+ Reference(a).object=prior;
  decoder.Forget(a);assert(decoder.Strong(context,Scope::Runnable,a,&out));decoder.Forget(a);assert(!decoder.Strong(context,Scope::NoSuspend,a,&out));
+ out=unchanged;assert(!decoder.StrongRunnable(&thread,a,&out)&&out==unchanged);
  int before_weak=weak_calls,before_clear=clear_calls,before_current=current_calls;
  assert(!decoder.Weak(&thread,Scope::NoSuspend,wa,&out)&&weak_calls==before_weak&&clear_calls==before_clear&&current_calls==before_current);
  assert(!decoder.Weak(&wrong,Scope::Runnable,wa,&out)&&weak_calls==before_weak);assert(decoder.Weak(&thread,Scope::Runnable,wa,&out)&&out==Reference(a).object);

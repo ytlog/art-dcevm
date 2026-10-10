@@ -41,6 +41,11 @@ bool Decoder::Strong(const runnable_jni::Context& context,Scope,jobject ref,void
  auto result=strong_(context.self,ref);if(!result.reference)return false;
  *out=reinterpret_cast<void*>(result.reference);return true;
 }
+bool Decoder::StrongRunnable(void* thread,jobject ref,void** out)const{
+ if(!ready_||!out||!thread||bindings_.current_thread(bindings_.owner)!=thread||!Registered(ref,JNIGlobalRefType))return false;
+ auto result=strong_(thread,ref);if(!result.reference||bindings_.current_thread(bindings_.owner)!=thread)return false;
+ *out=reinterpret_cast<void*>(result.reference);return true;
+}
 bool Decoder::IsCleared(void* thread,jweak ref)const{
  return thread_cleared_?thread_cleared_(thread,ref):cleared_(bindings_.vm,thread,static_cast<void*>(ref));
 }

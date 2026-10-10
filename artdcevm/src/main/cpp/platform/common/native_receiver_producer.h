@@ -14,6 +14,7 @@ class SourceProducer final {
            const modern_field_metadata::FieldMetadata&,void*actual_class_linker,
            void*(*actual_current)(),std::string*);
  BytecodeAccess Access()noexcept;
+ FrameAccess Frames()noexcept;
  // Read bounded fixed Standard/Compact CodeItem under the same actual current
  // Runnable source callback. This never infers fields from machine code.
  bool Code(void*thread,void*method,CodeView*)const noexcept;
@@ -25,10 +26,13 @@ class SourceProducer final {
  static bool GetCode(void*,void*,void*,CodeView*)noexcept;
  static bool Resolve(void*,void*,void*,const InvokeInstruction&,void**,void**)noexcept;
  static bool Pending(void*,void*)noexcept;
+ static bool FrameExtent(void*,void*,const void*,size_t*)noexcept;
+ static bool FrameReference(void*,void*,uint32_t,void**)noexcept;
  using ResolveMethod=void*(*)(void*,void*,uint32_t,void*,uint32_t);
  stack_visitor_service::Service stack_;stack_visitor_service::Declaration declaration_{};
  code_item_metadata::Layout layout_{};const modern_field_metadata::FieldMetadata*metadata_=nullptr;
  void*linker_=nullptr;void*(*current_)()=nullptr;ResolveMethod resolve_=nullptr;void*(*obsolete_cache_)(void*)=nullptr;
  bool bound_=false;
+ void*(*root_reference_)(void*)=nullptr;
 };
 }

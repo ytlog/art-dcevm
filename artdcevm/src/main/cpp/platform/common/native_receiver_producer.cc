@@ -18,9 +18,10 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  // Fixed runtime/class_linker.h: ResolveMode::kCheckICCEAndIAE=1, exact
  // Thread/referrer overload. Its null return has the original Java exception.
  auto resolve=reinterpret_cast<ResolveMethod>(finder("_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE1EEEPNS_9ArtMethodEPNS_6ThreadEjS4_NS_10InvokeTypeE"));
- if(!resolve||!stack_visitor_service::Service::Bind(declaration,finder,&stack)){if(error)*error="Named checked ResolveMethod or calibrated StackVisitor unavailable";return false;}
+ auto root_reference=reinterpret_cast<void*(*)(void*)>(finder("artReadBarrierForRootSlow"));
+ if(!resolve||!root_reference||!stack_visitor_service::Service::Bind(declaration,finder,&stack)){if(error)*error="Named checked ResolveMethod, root-slot barrier or calibrated StackVisitor unavailable";return false;}
  obsolete_cache_=reinterpret_cast<void*(*)(void*)>(finder("_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv"));
- stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;bound_=true;return true;
+ stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;root_reference_=root_reference;bound_=true;return true;
 }
 bool SourceProducer::Current(void*p,void*self)noexcept{auto&s=*static_cast<SourceProducer*>(p);return s.bound_&&self&&s.current_&&s.current_()==self;}
 bool SourceProducer::Code(void*self,void*method,CodeView*out)const noexcept{
@@ -46,4 +47,13 @@ bool SourceProducer::GetCode(void*p,void*self,void*caller,CodeView*out)noexcept{
 bool SourceProducer::Resolve(void*p,void*self,void*caller,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};auto*resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.metadata_->Reference(caller,0):nullptr;return resolved!=nullptr;}
 bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_null;}
 BytecodeAccess SourceProducer::Access()noexcept{return {this,Current,GetFrame,GetCode,Resolve,Pending};}
+bool SourceProducer::FrameExtent(void*p,void*self,const void*address,size_t*out)noexcept{return Current(p,self)&&Extent(address,out)&&Current(p,self);}
+bool SourceProducer::FrameReference(void*p,void*self,uint32_t reference,void**out)noexcept{
+ auto&s=*static_cast<SourceProducer*>(p);if(!out||!Current(p,self)||!s.root_reference_)return false;
+ // Fixed ShadowFrame roots are compressed GcRoot slots, not mirror objects.
+ // The root barrier consumes the slot address; no synthetic monitor/header.
+ void*object=reference?s.root_reference_(&reference):nullptr;
+ if((reference&&!object)||!Current(p,self))return false;*out=object;return true;
+}
+FrameAccess SourceProducer::Frames()noexcept{return {this,Current,FrameExtent,FrameReference};}
 }

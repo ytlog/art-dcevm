@@ -30,6 +30,10 @@ class Decoder {
  bool Ready()const noexcept{return ready_;}
  // No JNI, allocation, or inferred handle tag. Only registered public globals.
  bool Strong(const runnable_jni::Context&,Scope,jobject,void**)const;
+ // Original ART listener/entry callback, already under its source-declared
+ // shared mutator scope. Recheck its actual current Thread and registered
+ // strong global without inventing a JNI Context or retaining a prior raw value.
+ bool StrongRunnable(void* actual_thread,jobject,void**)const;
  // FieldWritten supplies its actual Thread. Runnable/shared mutator ownership
  // is mandatory; decoder can suspend. NoSuspend refuses BEFORE any leaf call.
  // Source Thread decoder normalizes cleared weak references; named
