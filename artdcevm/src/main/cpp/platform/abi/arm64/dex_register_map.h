@@ -11,7 +11,7 @@ using Location=android11::frame_registers::Location;
 // ART's DecodeDexRegisterMap only writes caller-owned locations. It never grows
 // or destroys this container; allocation/destruction stay in our C++ runtime.
 class CheckedLocations:private std::vector<Location> {
- public:using std::vector<Location>::data;using std::vector<Location>::resize;
+ public:using std::vector<Location>::data;using std::vector<Location>::resize;using std::vector<Location>::size;
 };
 struct Map {
   explicit Map(size_t count):count(count),small{} {
@@ -21,6 +21,10 @@ struct Map {
   }
   Location* data(){return count<=small.size()?small.data():large.data();}
   const Location* data()const{return count<=small.size()?small.data():large.data();}
+  bool Reset(size_t requested)noexcept {
+    if(requested>small.size()&&requested>large.size())return false;
+    count=requested;std::fill_n(data(),count,Location{-2,0});return true;
+  }
   size_t count;
   std::array<Location,16> small;
   CheckedLocations large;

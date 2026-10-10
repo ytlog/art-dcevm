@@ -11,6 +11,20 @@
 #include <new>
 namespace artdcevm::native_schema_run_state {
 namespace {thread_local RunState* current=nullptr;bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}void Require(bool v){if(!v)std::abort();}}
+namespace {
+// Called only after original stop rollback or StartGC restored Runnable.
+// Report fields are copied scalars; no stack memory, JNI or live frame reads.
+void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noexcept{
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu",
+    int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
+    reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
+    reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
+    int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index,
+    frames.failure_map_row,frames.failure_map_mask,frames.failure_map_index,frames.failure_map_dex_regs,
+    frames.failure_inline_begin,frames.failure_inline_end,frames.failure_map_capacity);
+}
+}
 struct RunState::State {
  RunState* owner=nullptr;native_source_stop::Session* inspection=nullptr;
  Dependencies d;modern_field_metadata::ReadContext read_context{},inspection_context{};void* driver;const runnable_jni::Context context;
@@ -195,15 +209,8 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.d.stop->RequiresOriginalWaiting()){
   StoppedAttempt attempt{this,e};
   const bool accepted=s.stop->BeginOriginalWaiting(s.context.self,s.extent,&attempt,PrepareOriginalWaiting);
-  // Original StartGC has restored Runnable. Copy-only diagnostics here never
-  // inspect frame memory or log inside the owned stopped callback.
-  const auto& frames=s.cleanup->Frames();
-  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
-    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u",
-    int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
-    reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
-    reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
-    int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index);
+  // Original StartGC has restored Runnable.
+  LogFrameReport(s.cleanup->Frames(),accepted);
   if(attempt.failure==StoppedAttempt::Failure::Allocation)return Fail(e,"Stopped schema preparation exhausted native memory");
   if(attempt.failure==StoppedAttempt::Failure::Unexpected)return Fail(e,"Stopped schema preparation threw");
   if(!accepted)return e&&!e->empty()?false:Fail(e,s.stop->Failure());
@@ -271,6 +278,10 @@ void RunState::Refund()noexcept{
  // borrows stop. Revoke the live stop before private cleanup/JNI, retain both
  // witnesses until all hierarchy refund readers have returned.
  if(s.stop)Require(s.stop->RollbackBeforeSource());
+ // Direct-transition preparation failures retain a stopped reservation until
+ // this rollback. Diagnose only after that owner restores actual Runnable.
+ if(s.cleanup&&!s.cleanup->Frames().accepted&&s.cleanup->Frames().failure_thread)
+  LogFrameReport(s.cleanup->Frames(),false);
  s.facade.reset();
  if(s.hierarchy&&s.hierarchy->Ready())s.hierarchy->Refund();
  // Session defers the callback while an original Finish/verifier view remains

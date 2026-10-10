@@ -1,4 +1,5 @@
 #include "platform/common/decoded_frame_recovery.h"
+#include "platform/abi/arm64/dex_register_map.h"
 #include <array>
 #include <cassert>
 #include <cstdio>
@@ -73,7 +74,16 @@ template<class T> void Check(code_info_view::SourceFamily family) {
   assert(!Decode(view,1,0,0,nullptr,4,&range));
   assert(!Decode(view,1,0,0,values,1,&range));
   fixture.stack.Cell(1,64,7,UINT32_MAX);view=fixture.View();
-  assert(!Decode(view,1,0,0,values,4,&range)); // missing map is not recoverable
+  assert(Decode(view,1,0,0,nullptr,0,&range)&&range.count==0);
+  assert(Decode(view,1,0,1,nullptr,0,&range)&&range.count==0);
+  // A changed register can explicitly become None; a later unchanged map
+  // must preserve that death rather than resurrect the older live value.
+  fixture.stack.Cell(1,64,7,3);fixture.maps.Cell(3,8,0,UINT32_MAX);view=fixture.View();
+  assert(Decode(view,1,0,0,values,4,&range)&&values[1].kind==-1);
+  fixture.maps.Cell(3,8,0,3);
+  fixture.maps.Cell(1,8,0,UINT32_MAX);fixture.mask.Raw(4,4,0);view=fixture.View();
+  assert(Decode(view,1,0,0,values,4,&range)&&values[1].kind==-1);
+  fixture.maps.Cell(1,8,0,1);fixture.mask.Raw(4,4,2);
   fixture.stack.Cell(1,64,7,3);fixture.stack.Cell(1,64,6,7);view=fixture.View();
   assert(!Decode(view,1,0,0,values,4,&range)); // mask index outside owned table
   fixture.stack.Cell(1,64,6,1);fixture.maps.Cell(3,8,0,7);view=fixture.View();
@@ -88,6 +98,18 @@ template<class T> void Check(code_info_view::SourceFamily family) {
   assert(!code_info_view::ReadDecoded(fixture.object,&view));
 }
 int main() {
+  // Model the original decoder's Invalid-only write protocol through actual
+  // small/large ABI buffers reused across successive physical/inline frames.
+  abi::arm64::dex_register_map::Map native(64);
+  auto* backing=native.large.data();
+  for(size_t count:{size_t{1},size_t{17},size_t{16},size_t{64},size_t{0},size_t{17},size_t{1}}){
+    assert(native.Reset(count)&&native.count==count&&native.large.data()==backing);
+    for(size_t i=0;i<count;++i){
+      assert(native.data()[i].kind==-2);
+      if(native.data()[i].kind==-2)native.data()[i]={static_cast<int32_t>(i%6),static_cast<int32_t>(i+9)};
+    }
+  }
+  assert(!native.Reset(65)&&native.count==1&&native.large.data()==backing);
   using code_info_view::SourceFamily;
   Check<abi::arm64::android11::CodeInfo>(SourceFamily::kAndroid11);
   Check<abi::arm64::android12::CodeInfo>(SourceFamily::kAndroid12);

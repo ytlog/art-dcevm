@@ -14,7 +14,10 @@ inline bool Range(const View& view,uint32_t row,uint32_t begin,uint32_t end,
                   RegisterRange* output) {
   if(!output || begin>end)return false;
   uint32_t map;
-  if(!view.StackMaps().Read(row,7,&map) || map==kNoValue)return false;
+  if(!view.StackMaps().Read(row,7,&map))return false;
+  // GetDexRegisterMapOf/GetInlineDexRegisterMapOf return an empty map when
+  // HasDexRegisterMap() is false. Do not manufacture inherited registers.
+  if(map==kNoValue){*output={0,0};return true;}
   RegisterRange range{0,view.dex_regs};
   if(begin!=end) {
     uint32_t start;
@@ -43,6 +46,9 @@ inline bool MaskBit(const code_info_view::Table& mask,uint32_t row,uint32_t bit,
 }
 inline bool Catalog(const View& view,uint32_t index,Location* out) {
   if(!out)return false;
+  // A set delta bit can kill a formerly live register. The map's catalog
+  // sentinel is None, exactly as GetDexRegisterCatalogEntry specifies.
+  if(index==kNoValue){*out={-1,0};return true;}
   uint32_t kind,value;
   if(!view.tables[7].Read(index,0,&kind) || !view.tables[7].Read(index,1,&value) ||
      (kind!=kNoValue && kind>5))return false;

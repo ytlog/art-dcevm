@@ -6,7 +6,7 @@
 #include <array>
 namespace {
 int thread_list,list_mutex,worker,empty_thread,jit_cache;void* list_mutex_pointer=&list_mutex;
-bool interpreter_only=false;
+bool interpreter_only=false,empty_register_map=false,dead_register=false;
 bool list_locked=false,include_self=true,unknown=false,unmarked=false,aot=false,nterp=false,wrong_native_map=false,wrong_dexpc=false,inline_frame=false,wrong_native_value=false,cursor_drift=false;
 struct MethodPrefix {uint32_t klass=0,flags=0,dex_index=0,padding=0;} shadow_method,native_method{0,0x100},compiled_method;
 abi::arm64::android12::Method12 runtime_method{};
@@ -72,13 +72,13 @@ native_runtime_frame::FrameInfo RuntimeInfo(const void* raw){
 size_t Offset(const void*){return 32;}
 template<size_t N>void Table(abi::arm64::android13::BitTable<N>& table,void* data,size_t bits,uint32_t rows,unsigned width){table.region={data,0,bits};table.rows=rows;for(size_t i=0;i<=N;++i)table.columns[i]=i*width;}
 void CodeInfo(abi::arm64::android13::CodeInfo* storage,const void* h){
- assert(h==header);auto& info=*storage;info={};info.flags=1;info.frame_size=4;info.code_size=64;info.dex_regs=1;
+ assert(h==header);stack_row[7]=empty_register_map?0u:1u;dexmaps[0]=dead_register?0u:1u;auto& info=*storage;info={};info.flags=1;info.frame_size=4;info.code_size=64;info.dex_regs=1;
  Table(info.stack_maps,stack_row.data(),256,1,32);Table(info.inline_infos,inline_row.data(),192,1,32);
  Table(info.dex_masks,&dexmask,2,1,2);Table(info.dex_maps,dexmaps,64,2,32);Table(info.dex_catalog,catalog,128,2,32);
 }
 abi::arm64::android11::TableIterator FindMap(const abi::arm64::android13::CodeInfo* storage,uintptr_t pc,int32_t isa){assert(pc==32&&isa==2);auto* info=static_cast<const abi::arm64::android13::CodeInfo*>(storage);return {const_cast<void*>(static_cast<const void*>(&info->stack_maps)),0};}
 bool NativeFast(const void* visitor,abi::arm64::android12::frame_registers::Location location,uint32_t* out){assert(location.kind==0&&(location.value==8||location.value==12));*out=quick.values[location.value/4-2]+(wrong_native_value?1:0);if(cursor_drift)++static_cast<abi::arm64::stack::Visitor13*>(const_cast<void*>(visitor))->pc;return true;}
-void NativeMap(const void*,uint32_t row,uint32_t first,abi::arm64::dex_register_map::Map* map){assert(row==0&&first==(inline_frame?1u:0u)&&map->count==1);map->data()[0]={wrong_native_map?1:0,inline_frame?12:8};}
+void NativeMap(const void*,uint32_t row,uint32_t first,abi::arm64::dex_register_map::Map* map){assert(row==0&&first==(inline_frame?1u:0u)&&map->count==(empty_register_map?0u:1u));if(empty_register_map)return;assert(map->data()[0].kind==-2);if(map->data()[0].kind==-2)map->data()[0]={dead_register?-1:wrong_native_map?1:0,dead_register?0:inline_frame?12:8};}
 class FrameHooks:public Hooks {
  public:void* FindSymbol(const char* library,const char* name)override {
 #define FN(symbol,fn) if(!std::strcmp(name,symbol))return Fn(fn)
@@ -107,6 +107,9 @@ int RunModernFrameFixture(){
  {native_source_stop::Session owner(stop);auto r=scanner.Scan(owner,&self,cache,&jit_cache,storage);assert(!r.accepted);}
  auto scan=[&](){native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));return scanner.Scan(owner,&self,cache,&jit_cache,storage);};
  auto report=scan();assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.empty_threads==1&&report.native_frames==1&&report.shadow_frames==1&&report.compiled_frames==1&&report.map_locations==1&&report.native_value_reads==1&&!list_locked&&!gc);
+ empty_register_map=true;report=scan();assert(report.accepted&&report.compiled_frames==1&&report.map_locations==0&&report.native_value_reads==0);empty_register_map=false;
+ dead_register=true;report=scan();assert(report.accepted&&report.map_locations==1&&report.native_value_reads==0);dead_register=false;
+ report=scan();assert(report.accepted&&report.native_value_reads==1);
  runtime_method.dex_method_index=UINT32_MAX;runtime_frame=true;
  for(auto info:{native_runtime_frame::FrameInfo{96,0x7ff00000u,0},
                native_runtime_frame::FrameInfo{224,0x7ff000feu,0xffu},

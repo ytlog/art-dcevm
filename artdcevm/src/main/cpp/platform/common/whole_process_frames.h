@@ -43,6 +43,9 @@ static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(a
 struct Report {
  uintptr_t failure_thread=0,failure_method=0,failure_quick=0,failure_pc=0,failure_header=0;
  uint32_t failure_declaring_class=0,failure_flags=0,failure_dex_index=0;
+ uint32_t failure_map_row=UINT32_MAX,failure_map_mask=UINT32_MAX,failure_map_index=UINT32_MAX,
+   failure_map_dex_regs=0,failure_inline_begin=0,failure_inline_end=0;
+ size_t failure_map_capacity=0;
  bool failure_method_prefix=false,failure_physical=false;
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
@@ -206,6 +209,8 @@ class Service {
     bool VisitFrame()override {
       auto& r=request;const auto& s=r.service;
       observed_method=nullptr;
+      r.report.failure_map_row=r.report.failure_map_mask=r.report.failure_map_index=UINT32_MAX;
+      r.report.failure_map_dex_regs=r.report.failure_inline_begin=r.report.failure_inline_end=0;r.report.failure_map_capacity=0;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context)
         return Reject("whole-frame-owner-native-thread-context-changed");
       if(runtime_successor){
@@ -292,8 +297,14 @@ class Service {
       if(unaffected_aot&&!native_boot_aot_unaffected::TablesMapped(view,*r.recovery))return Reject("whole-AOT-map-tables-lack-current-stop-extent");
       uint32_t pc;
       if(!(physical?view.StackMaps().Read(map.row,2,&pc):view.InlineInfos().Read(this->inline_frames.end.row-1,1,&pc))||pc==UINT32_MAX||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-original-versus-complete-map-DexPc-mismatch");
+      r.report.failure_map_row=map.row;r.report.failure_map_dex_regs=view.dex_regs;
+      r.report.failure_inline_begin=this->inline_frames.begin.row;r.report.failure_inline_end=this->inline_frames.end.row;r.report.failure_map_capacity=r.storage.locations.size();
+      view.StackMaps().Read(map.row,6,&r.report.failure_map_mask);view.StackMaps().Read(map.row,7,&r.report.failure_map_index);
       if(!decoded_frame_recovery::Decode(view,map.row,this->inline_frames.begin.row,this->inline_frames.end.row,r.storage.locations.data(),r.storage.locations.size(),&range))return Reject("whole-frame-incomplete-dex-register-map");
-      auto& native=r.storage.native_map;native.count=range.count;
+      auto& native=r.storage.native_map;
+      // The source decoder fills only Invalid entries. Both the small buffer
+      // and reused large buffer must be reset for this exact current frame.
+      if(!native.Reset(range.count))return Reject("whole-frame-native-map-scratch-capacity-insufficient");
       s.decode_(info,map.row,range.first,&native);
       if(native.count!=range.count)return Reject("whole-frame-native-map-count-changed");
       for(uint32_t index=0;index<range.count;++index){auto own=r.storage.locations[index];auto actual=native.data()[index];
