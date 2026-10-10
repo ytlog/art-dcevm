@@ -76,6 +76,7 @@ bool CanonicalizeFlags(const modern_field_metadata::FieldMetadata& metadata,Grap
   if(state.access_flags&0x40000u)defining_flags=public_flags;
   else if(!metadata.DefiningClassFlags(node.klass,&defining_flags,error,context))return false;
   if((defining_flags&source_flags)!=(state.access_flags&source_flags))return Fail(error,("Defining DEX/native Class flags disagree: "+node.descriptor+" definingFlags="+std::to_string(defining_flags)+" nativeFlags="+std::to_string(state.access_flags)).c_str());
+  if(node.resolved_error?state.status!=2:(state.status==2||state.status==3))return Fail(error,("Public/native Class error classification differs: "+node.descriptor).c_str());
   node.public_flags=public_flags;node.flags=state.access_flags&source_flags;
   if(node.proposed_flags)node.proposed_flags=(node.flags&~0x410u)|(*node.proposed_flags&0x410u);
  }return true;
@@ -92,8 +93,10 @@ bool ValidateGraph(Graph* graph,std::string* error){
   if(((node.flags^node.ProposedFlags())&~0x410u)||((node.ProposedFlags()&0x410u)==0x410u))return Fail(error,"Proposed Class changes role/access or combines final and abstract");
   const auto edge=[&](size_t p,bool interface,bool original){if(p>=count||p==n)return false;const auto& target=g.nodes[p];if(bool(target.ProposedFlags()&0x200u)!=interface)return false;if(!interface&&(target.ProposedFlags()&0x10u))return false;return original||(target.ProposedFlags()&1u)||(target.loader==node.loader&&Package(target.descriptor)==Package(node.descriptor));};
   if(node.proposed_parent!=absent&&!edge(node.proposed_parent,false,node.proposed_parent==node.parent))return Fail(error,("Proposed parent has wrong role, finality, identity or access: child="+node.descriptor+" parent="+(node.proposed_parent<count?g.nodes[node.proposed_parent].descriptor:std::string("<out-of-bounds>"))+" retained="+(node.proposed_parent==node.parent?"true":"false")+" childFlags="+std::to_string(node.ProposedFlags())+" parentFlags="+(node.proposed_parent<count?std::to_string(g.nodes[node.proposed_parent].ProposedFlags()):std::string("<none>"))).c_str());
+  if(node.parent!=node.proposed_parent&&node.proposed_parent!=absent&&g.nodes[node.proposed_parent].resolved_error)return Fail(error,("Erroneous proposed parent cannot authorize changes: "+g.nodes[node.proposed_parent].descriptor).c_str());
   if(node.parent!=node.proposed_parent&&node.proposed_parent!=absent&&!g.nodes[node.proposed_parent].initialized)return Fail(error,"Added superclass has not independently initialized");
   for(size_t i=0;i<node.proposed_interfaces.size();++i){if(!edge(node.proposed_interfaces[i],true,std::find(node.interfaces.begin(),node.interfaces.end(),node.proposed_interfaces[i])!=node.interfaces.end())||std::find(node.proposed_interfaces.begin(),node.proposed_interfaces.begin()+i,node.proposed_interfaces[i])!=node.proposed_interfaces.begin()+i)return Fail(error,"Proposed interface role, identity, access or duplicates invalid");}
+  for(auto p:node.proposed_interfaces)if(std::find(node.interfaces.begin(),node.interfaces.end(),p)==node.interfaces.end()&&g.nodes[p].resolved_error)return Fail(error,("Erroneous proposed interface cannot authorize changes: "+g.nodes[p].descriptor).c_str());
   // java.lang.Object is the sole ordinary class with no superclass. Interfaces
   // have null public superclass even though their DEX superclass is Object.
   if(!(node.flags&0x200u)&&node.proposed_parent==absent&&(node.descriptor!="Ljava/lang/Object;"||node.loader))return Fail(error,"Ordinary class lost bootstrap Object ancestry");
@@ -111,6 +114,16 @@ bool ValidateGraph(Graph* graph,std::string* error){
  // Current and proposed reverse reachability includes implicit implementors and
  // subclasses, in linear edge traversal regardless of loaded snapshot order.
  for(size_t cursor=0;cursor<affected.size();++cursor)for(auto n:reverse[affected[cursor]])if(!g.nodes[n].affected){g.nodes[n].affected=true;affected.push_back(n);}
+ // Preserve every resolved erroneous node and its independently checked edges.
+ // It must be outside both the change closure and all old/new dependencies of
+ // that closure; a read-only inventory node never proves a replacement role.
+ std::vector<unsigned char> dependencies(count);std::vector<size_t> pending=affected;
+ for(auto n:pending)dependencies[n]=1;
+ for(size_t cursor=0;cursor<pending.size();++cursor){const auto n=pending[cursor];const auto& node=g.nodes[n];
+  if(node.resolved_error)return Fail(error,(std::string(node.affected?"Erroneous affected Class cannot authorize changes: ":"Erroneous hierarchy dependency cannot authorize changes: ")+node.descriptor).c_str());
+  const auto add=[&](size_t p){if(p!=absent&&!dependencies[p]){dependencies[p]=1;pending.push_back(p);}};
+  add(node.parent);add(node.proposed_parent);for(auto p:node.interfaces)add(p);for(auto p:node.proposed_interfaces)add(p);
+ }
  if(bootstrap_object!=absent)g.bootstrap_object_=bootstrap_object;g.indexed_count_=count;return true;
 }
 struct Authority::State {
@@ -159,6 +172,10 @@ struct Authority::State {
    void* original_parent=nullptr;
    if(!NativeSuperclass(graph,node,false,&original_parent))return reject("Native superclass identity unavailable");
    if(!Flags(node.klass,node.flags))return reject("Native/public Class flags differ");
+   // Calibrated merged Class16/17 share the scalar status prefix; this
+   // uses the same fixed declaration selection as Flags/CanonicalizeFlags.
+   size_t extent=0;class_metadata::State state;const auto& layout=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
+   if(!Extent(node.klass,&extent)||!class_metadata::ReadState(layout,node.klass,extent,&state)||(node.resolved_error?state.status!=2:(state.status==2||state.status==3)))return reject("Native Class error classification changed");
    if(!ClassIdentity(*bindings.metadata,node,node.klass,&view,error,Context()))return false;
    if(view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor)return reject("Native/public Class namespace differs");
    if(view.parent!=original_parent)return reject("Native/public superclass differs");
@@ -197,10 +214,11 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  std::vector<size_t> facade_loaders;
  for(jint i=0;i<count;++i){jint status=0,flags=0;char* signature=nullptr;
   if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return Fail(error,"Loaded Class status unavailable");if(status&(JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE))continue;
-  if(status&JVMTI_CLASS_STATUS_ERROR)return Fail(error,"Erroneous loaded Class graph cannot authorize changes");
   if(ti->GetClassSignature(loaded[i],&signature,nullptr)!=JVMTI_ERROR_NONE||!signature)return Fail(error,"Loaded Class descriptor unavailable");
-  std::string descriptor(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));if(ti->GetClassModifiers(loaded[i],&flags)!=JVMTI_ERROR_NONE)return false;
-  Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;
+  std::string descriptor(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));
+  if((status&JVMTI_CLASS_STATUS_ERROR)&&!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,("Unresolved erroneous Class lacks complete hierarchy proof: "+descriptor).c_str());
+  if(ti->GetClassModifiers(loaded[i],&flags)!=JVMTI_ERROR_NONE)return false;
+  Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;n.resolved_error=status&JVMTI_CLASS_STATUS_ERROR;
   n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();if(!s.public_roots.Stage(context,loaded[i],&n.class_root.slot,error))return false;
   jvalue class_arg{};class_arg.l=loaded[i];const bool proxy=env->CallStaticBooleanMethodA(static_cast<jclass>(proxy_type.v),is_proxy,&class_arg);
   if(env->ExceptionCheck())return Fail(error,"Public proxy Class classification failed");

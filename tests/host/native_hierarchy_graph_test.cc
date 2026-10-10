@@ -26,7 +26,7 @@ struct Fake {
  class_metadata::Class11 bytes{};
  std::string descriptor,public_name;Fake* parent=nullptr;void* loader=nullptr;
  std::vector<Fake*> interfaces;std::vector<void*> native_interfaces;
- bool initialized=true;uint32_t defining_flags=1;
+ bool initialized=true,erroneous=false,prepared=true;uint32_t defining_flags=1;
  Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;defining_flags=flags;public_name=descriptor.substr(1,descriptor.size()-2);std::replace(public_name.begin(),public_name.end(),'/','.');}
 };
 static std::vector<Fake*> loaded;
@@ -93,7 +93,7 @@ static jstring JNICALL String(JNIEnv*,const char* text){auto* s=new std::string(
 static jobjectRefType JNICALL RefType(JNIEnv*,jobject v){return v?JNIGlobalRefType:JNIInvalidRefType;}
 static jvmtiError JNICALL Loaded(jvmtiEnv*,jint* count,jclass** result){*count=jint(loaded.size());*result=static_cast<jclass*>(std::malloc(loaded.size()*sizeof(jclass)));for(size_t i=0;i<loaded.size();++i)(*result)[i]=reinterpret_cast<jclass>(loaded[i]);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char** out,char**){*out=strdup(reinterpret_cast<Fake*>(c)->descriptor.c_str());return JVMTI_ERROR_NONE;}
-static jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){*out=JVMTI_CLASS_STATUS_PREPARED|(reinterpret_cast<Fake*>(c)->initialized?JVMTI_CLASS_STATUS_INITIALIZED:0);return JVMTI_ERROR_NONE;}
+static jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){auto*f=reinterpret_cast<Fake*>(c);*out=(f->prepared?JVMTI_CLASS_STATUS_PREPARED:0)|(f->initialized?JVMTI_CLASS_STATUS_INITIALIZED:0)|(f->erroneous?JVMTI_CLASS_STATUS_ERROR:0);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Modifiers(jvmtiEnv*,jclass c,jint* out){*out=jint(reinterpret_cast<Fake*>(c)->bytes.access_flags);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
 static bool Borrow(void*,const runnable_jni::Context&,jobject value,void** out){auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
@@ -175,6 +175,34 @@ static void Lifecycle(){
  owner.final_granted=false;MustAbort([&]{authority.BeginCommit(plan);});
  owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);assert(!authority.VerifyPrepared(plan,0));assert(!authority.VerifyFinal(plan,0));MustAbort([&]{authority.BeginCommit(plan);});forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
  authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
+ // A genuine public ERROR+PREPARED inventory Class retains all roots/edges
+ // but never serves the affected or proposed hierarchy. Scalar native state
+ // independently agrees with JVMTI; repeated native checks observe changes.
+ Fake failure("Lfixture/Failure;",&object);failure.initialized=false;failure.erroneous=true;failure.bytes.status=2u<<28;loaded.push_back(&failure);
+ assert(authority.Stage(context,&ti,{input},bindings,&error));
+ assert(authority.Staged()->nodes.size()==6&&authority.Staged()->nodes.back().resolved_error&&!authority.Staged()->nodes.back().affected);
+ assert(authority.CheckClass(context,input.strong_original,input.after));
+ Fake moved_failure=failure;moved_globals={{reinterpret_cast<jobject>(&failure),&moved_failure}};
+ assert(authority.CheckClass(context,input.strong_original,input.after));
+ moved_failure.bytes.status=3u<<28;assert(!authority.CheckClass(context,input.strong_original,input.after));
+ moved_failure.bytes.status=2u<<28;assert(authority.CheckClass(context,input.strong_original,input.after));
+ authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
+ failure.parent=&a;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous affected Class")!=std::string::npos);assert(!globals&&locals.empty());failure.parent=&object;
+ auto saved_parent=input.after.superclass;input.after.superclass=failure.descriptor;
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous proposed parent")!=std::string::npos);assert(!globals&&locals.empty());input.after.superclass=saved_parent;
+ failure.bytes.access_flags=0x601;failure.defining_flags=0x601;input.after.interfaces.push_back(failure.descriptor);
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous proposed interface")!=std::string::npos);assert(!globals&&locals.empty());input.after.interfaces.pop_back();failure.bytes.access_flags=1;failure.defining_flags=1;
+ // Unresolved ERROR has no complete edge authority; do not hide it from the
+ // inventory or pretend an opaque node cannot intersect the change closure.
+ failure.prepared=false;failure.bytes.status=3u<<28;
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Unresolved erroneous Class")!=std::string::npos&&error.find(failure.descriptor)!=std::string::npos);assert(!globals&&locals.empty());
+ failure.prepared=true;failure.bytes.status=3u<<28;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("error classification differs")!=std::string::npos);assert(!globals&&locals.empty());
+ failure.bytes.status=2u<<28;deny_interface_read=&failure;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find(failure.descriptor)!=std::string::npos);deny_interface_read=nullptr;assert(!globals&&locals.empty());
+ loaded.pop_back();
+ object.initialized=false;object.erroneous=true;object.bytes.status=2u<<28;
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous hierarchy dependency")!=std::string::npos);assert(!globals&&locals.empty());object.initialized=true;object.erroneous=false;object.bytes.status=0;
+ a.initialized=false;a.erroneous=true;a.bytes.status=2u<<28;
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous affected Class")!=std::string::npos);assert(!globals&&locals.empty());a.initialized=true;a.erroneous=false;a.bytes.status=0;
  // Public Stage cyclic proposal rejects and releases every independently owned
  // global even though all individual lookups resolve valid Classes.
  input.after.superclass=b.descriptor;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());
@@ -286,6 +314,8 @@ int main(){
  graph.inputs={2,1};assert(ValidateGraph(&graph,&error));
  graph=Basic(object,a,b,i);graph.nodes[1].proposed_parent=3;assert(!ValidateGraph(&graph,&error)); // Interface cannot become superclass.
  graph=Basic(object,a,b,i);graph.nodes[1].proposed_interfaces={0};assert(!ValidateGraph(&graph,&error));
+ graph=Basic(object,a,b,i);graph.nodes[1].proposed_interfaces={graph.nodes.size()};assert(!ValidateGraph(&graph,&error));
+ graph=Basic(object,a,b,i);graph.nodes[1].proposed_interfaces={SIZE_MAX};assert(!ValidateGraph(&graph,&error));
  graph=Basic(object,a,b,i);graph.nodes[1].proposed_interfaces={3,3};assert(!ValidateGraph(&graph,&error));
  graph=Basic(object,a,b,i);graph.nodes[2].proposed_parent=0;graph.nodes[0].initialized=false;assert(!ValidateGraph(&graph,&error));
  graph=Basic(object,a,b,i);graph.nodes[0].flags|=0x10;assert(!ValidateGraph(&graph,&error));

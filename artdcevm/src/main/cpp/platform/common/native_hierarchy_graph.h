@@ -35,6 +35,9 @@ struct Node {
  uint32_t ProposedFlags()const noexcept{return proposed_flags.value_or(flags);}
  size_t parent=SIZE_MAX,proposed_parent=SIZE_MAX;
  std::vector<size_t> interfaces,proposed_interfaces;
+ // JVMTI ERROR+PREPARED is a resolved initialization failure. Such a
+ // node remains in the complete read-only inventory, never a change authority.
+ bool resolved_error=false;
  bool initialized=false,affected=false;
 };
 struct Graph {
