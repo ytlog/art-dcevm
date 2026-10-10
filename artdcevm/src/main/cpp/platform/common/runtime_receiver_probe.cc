@@ -79,8 +79,7 @@ bool Install(HookEngine& hooks,std::string* error) {
   if(installed)return true;
   if(attempted)return Fail(error,"Runtime receiver hook installation previously failed; restart process");
   auto find=hooks.FindSymbol("libart.so",kFindClass);
-  const bool with_length=find==nullptr;
-  if(with_length)find=hooks.FindSymbol("libart.so",kLengthFindClass);
+  auto length_find=hooks.FindSymbol("libart.so",kLengthFindClass);
   auto encode=hooks.FindSymbol("libart.so",kEncodeMethod);
   using namespace abi::common;
   auto query_c=reinterpret_cast<JniIdQueryConstruct>(hooks.FindSymbol("libart.so",kJniIdQueryConstruct));
@@ -89,30 +88,34 @@ bool Install(HookEngine& hooks,std::string* error) {
   auto suspend=hooks.FindSymbol("libart.so",kSuspendThreads);
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!find || (!encode && !query_available) || !suspend || !construct || !destroy)
+  if((!find && !length_find) || (!encode && !query_available) || !suspend || !construct || !destroy)
     return Fail(error,"Missing named Runtime receiver observation functions");
   attempted=true;
   if(query_available){query_construct=query_c;query_destroy=query_d;}
   // Entry is a regular Native JNI call. ScopedSuspendAll obtains the original
   // ThreadList itself, so no uncalibrated Thread or Runtime receiver is passed.
   SuspendAll storage{};construct(&storage,"artdcevm Runtime receiver calibration",false);
-  void* find_original=nullptr;void* encode_original=nullptr;
-  auto find_token=hooks.Install(find,with_length?reinterpret_cast<void*>(ObserveLengthFind):
-      reinterpret_cast<void*>(ObserveFind),&find_original,error);
-  if(find_token) {
-    if(with_length)original_length_find=reinterpret_cast<LengthFindClass>(find_original);
-    else original_find=reinterpret_cast<FindClass>(find_original);
-  }
-  auto encode_token=encode && find_token && find_original?
+  // Both named overloads may coexist: JNI can call the length overload
+  // directly while the short overload remains an out-of-line wrapper. Observe
+  // every available declaration independently; presence of one is no route proof.
+  void* find_original=nullptr;void* length_original=nullptr;void* encode_original=nullptr;
+  auto find_token=find?hooks.Install(find,reinterpret_cast<void*>(ObserveFind),
+      &find_original,error):nullptr;
+  if(find_token)original_find=reinterpret_cast<FindClass>(find_original);
+  auto length_token=length_find?hooks.Install(length_find,reinterpret_cast<void*>(ObserveLengthFind),
+      &length_original,error):nullptr;
+  if(length_token)original_length_find=reinterpret_cast<LengthFindClass>(length_original);
+  const bool find_ready=(!find || (find_token && original_find)) &&
+      (!length_find || (length_token && original_length_find));
+  auto encode_token=encode && find_ready?
       hooks.Install(encode,reinterpret_cast<void*>(ObserveEncode),&encode_original,error):nullptr;
   if(encode_token)original_encode=reinterpret_cast<EncodeMethod>(encode_original);
   void* suspend_original=nullptr;
   const bool encode_ready=!encode || (encode_token && original_encode);
-  auto suspend_token=find_token && find_original && encode_ready?
+  auto suspend_token=find_ready && encode_ready?
       hooks.Install(suspend,reinterpret_cast<void*>(ObserveSuspend),&suspend_original,error):nullptr;
   if(suspend_token)original_suspend=reinterpret_cast<SuspendThreads>(suspend_original);
-  installed=find_token && encode_ready && suspend_token &&
-      find_original && original_suspend;
+  installed=find_ready && encode_ready && suspend_token && original_suspend;
   if(installed){suspend_construct=construct;suspend_destroy=destroy;}
   destroy(&storage);
   if(!installed)return Fail(error,"Runtime receiver observation hooks unavailable; restart process");
