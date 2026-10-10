@@ -86,8 +86,8 @@ int main(int argc,char**argv){
   matched_plan=&plan;
   publication_proxy(&linker,{uintptr_t(cache)},{uintptr_t(app_loader)});
   owner_disable_proxy(&owner_heap,thread.data());OwnerNative(thread.data());unsigned char carrier;owner_stop_proxy(&carrier,s::kFinalCause,true);
-  const source_commit::Plan* final_plan=nullptr;const auto final_os_queries=method_identity::MappingOsQueries();forbid_provider_allocation=true;
-  auto facade=run->Finalize(&holder,&final_plan);assert(facade&&final_plan==&plan);
+  const source_commit::Plan* final_plan=nullptr;forbid_provider_allocation=true;
+  auto facade=run->Finalize(&holder,&final_plan);assert(facade&&final_plan==&plan);assert(mappings.final_refreshes==1);const auto final_os_queries=method_identity::MappingOsQueries();
   assert(facade->Validate(plan));
   assert(run->Frames().unaffected_aot_frames==1&&run->Frames().aot_frames==1&&run->Frames().native_value_reads==1);
   assert(source_commit::Run(plan,*facade,{run.get(),[](const source_commit::Plan& value,void* owner)noexcept{static_cast<native_schema_run_state::RunState*>(owner)->Commit(value);}}));
@@ -95,7 +95,7 @@ int main(int argc,char**argv){
   facade.reset();class_remove_proxy(&linker,&pauser);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());
   assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);matched_plan=nullptr;assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_walks>=4);
   assert(!gc&&!disabled&&!stopped&&replaced&&boot_quick.value==0&&Read32(boot_compiled_method,4)==9&&!BootFlag(boot_header));
-  std::cout<<"Actual concrete Boot AOT owner, original async=false/unmarked header, full maps/value, unchanged Boot prefix, public/native source bytes and full RunState Stage+Seal+guard proofs, moving allocation, Collected, original publication, final native Validate+Commit+cleanup+End passed with no C++ allocation or OS mapping query (publication has Android17 no-inner-GC semantics)\n";
+  std::cout<<"Actual concrete Boot AOT owner, original async=false/unmarked header, full maps/value, unchanged Boot prefix, public/native source bytes and full RunState Stage+Seal+guard proofs, moving allocation, Collected, original publication, final native Validate+Commit+cleanup+End passed with no C++ allocation, explicit fresh final OS bounds capture, then zero OS mapping queries in Validate/Commit (publication has Android17 no-inner-GC semantics)\n";
   return true;
  };
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),run,&use)==runnable_jni::Result::kSuccess);

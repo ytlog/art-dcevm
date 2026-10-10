@@ -1,5 +1,6 @@
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/native_receiver_guard.h"
+#include "platform/common/native_receiver_original_ingress.h"
 #include "platform/abi/common/suspend_all.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/common/jni_access.h"
@@ -40,6 +41,11 @@ bool Guard(void* method, void* self, void* result = nullptr) {
   state.throw_exception(self, "Ljava/lang/NoSuchMethodError;", "Method removed by ART DCEVM");
   return true;
 }
+bool Receiver(const Scope& access,void*member,jobject receiver,receiver_guard::Path path){
+ bool unavailable=false;const bool refused=receiver_guard::OriginalIngress::Check(access,member,receiver,path,&unavailable);
+ if(unavailable)state.throw_exception(access.self,"Ljava/lang/IllegalStateException;","Receiver original ingress lacks live source-owned typed roots");
+ return refused;
+}
 void Invoke(void* method, void* self, uint32_t* args, uint32_t size,
             void* result, const char* shorty) {
   if (Guard(method, self, result)) return;
@@ -50,20 +56,20 @@ void Invoke(void* method, void* self, uint32_t* args, uint32_t size,
 jobject Reflect(const Scope& access, jobject method, jobject receiver,
                 jobject args, size_t frames) {
   void* native=state.reflected(access,method);
-  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::ReflectMethod,access.self,native,receiver)) return nullptr;
+  if (Guard(native,access.self)||Receiver(access,native,receiver,receiver_guard::Path::ReflectMethod)) return nullptr;
   using Fn = jobject (*)(const Scope&, jobject, jobject, jobject, size_t);
   return reinterpret_cast<Fn>(original_reflect)(access, method, receiver, args, frames);
 }
 uint64_t NativeValues(const Scope& access, jobject receiver, void* method,
                       const jvalue* args) {
-  if (Guard(method,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,method,receiver)) return 0;
+  if (Guard(method,access.self)||Receiver(access,method,receiver,receiver_guard::Path::JniMethod)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, void*, const jvalue*);
   return reinterpret_cast<Fn>(original_native_values)(access, receiver, method, args);
 }
 template<bool virtual_call> uint64_t IdValues(const Scope& access, jobject receiver,
                                               jmethodID id, const jvalue* args) {
   void* native=state.decode(state.manager,id);
-  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver)) return 0;
+  if (Guard(native,access.self)||Receiver(access,native,receiver,receiver_guard::Path::JniMethod)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, const jvalue*);
   return reinterpret_cast<Fn>(virtual_call ? original_virtual_values : original_id_values)(
       access, receiver, id, args);
@@ -71,7 +77,7 @@ template<bool virtual_call> uint64_t IdValues(const Scope& access, jobject recei
 template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject receiver,
                                                jmethodID id, va_list args) {
   void* native=state.decode(state.manager,id);
-  if (Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver)) return 0;
+  if (Guard(native,access.self)||Receiver(access,native,receiver,receiver_guard::Path::JniMethod)) return 0;
   using Fn = uint64_t (*)(const Scope&, jobject, jmethodID, va_list);
   return reinterpret_cast<Fn>(virtual_call ? original_virtual_varargs : original_id_varargs)(
       access, receiver, id, args);
@@ -81,7 +87,7 @@ template<bool virtual_call> uint64_t IdVarargs(const Scope& access, jobject rece
 // established shared mutator access before this native validation callback.
 bool CheckSignature(void* check,const Scope& access,jobject receiver,jclass klass,
                     jmethodID id,uint32_t type,uint32_t invoke) {
-  if(access.self==state.current()){void* native=state.decode(state.manager,id);if(Guard(native,access.self)||receiver_guard::CheckReference(receiver_guard::Path::JniMethod,access.self,native,receiver))return false;}
+  if(access.self==state.current()){void* native=state.decode(state.manager,id);if(Guard(native,access.self)||Receiver(access,native,receiver,receiver_guard::Path::JniMethod))return false;}
   using Fn=bool(*)(void*,const Scope&,jobject,jclass,jmethodID,uint32_t,uint32_t);
   return reinterpret_cast<Fn>(original_check_signature)(check,access,receiver,klass,id,type,invoke);
 }

@@ -21,6 +21,16 @@ std::array<abi::arm64::Field*,4> typed_fields{};std::array<Mirror,4> typed_mirro
 std::array<const char*,4> typed_names{{"referenceValue","staticReferenceValue","ancestor","staticAncestor"}};
 std::array<const char*,4> typed_descriptors{{"Ljava/lang/Object;","Ljava/lang/Object;","LAncestor;","LAncestor;"}};
 std::vector<void*> typed_classes,typed_public_arrays;ExplicitMappings typed_maps;source_commit::Plan typed_wrong_plan;
+bool typed_wrong_public_name=false;size_t typed_failure_globals=0;bool typed_stage_watch=false;bool typed_mirrors_moved=false;std::array<void*,4> typed_moved_mirrors{};size_t typed_stage_native_fields=0;uint64_t typed_stage_native_queries=0;int typed_stage_native_jni=0;bool typed_stage_reentered_jni=false;
+void* TypedStageFieldLeaf(void* mirror){
+ if(typed_stage_watch){
+  if(!typed_stage_native_fields){typed_stage_native_queries=method_identity::MappingOsQueries();typed_stage_native_jni=jni_calls;}
+  else typed_stage_reentered_jni|=jni_calls!=typed_stage_native_jni;
+  if(typed_mirrors_moved)for(auto& original:typed_mirrors)assert(mirror!=&original);
+  ++typed_stage_native_fields;
+ }
+ return FieldLeaf(mirror);
+}
 int component_id,primitive_id,field_type_id,typed_loader_id,typed_facade;bool typed_foreign_boot=false;size_t typed_defining_loaders=0;bool typed_helper_calibration=false;bool typed_late_class=false;size_t typed_inventory_passes=0;
 using HeapCtor=void(*)(void*,void*,void*,size_t*,bool);using HeapRef=bool(*)(const void*,void*,void*,uint32_t);
 HeapCtor typed_ctor=nullptr;HeapRef typed_ref=nullptr;int typed_heap;bool typed_scan_arrays=false;uint32_t typed_array_offset=12;
@@ -42,6 +52,7 @@ size_t TypedHeap(void*h,bool refs){assert(stopped&&h==&typed_heap&&refs);size_t 
 }
 class TypedHooks final:public OwnerHooks {public:
  void* FindSymbol(const char* lib,const char* n)override{
+  if(std::strstr(n,"GetArtFieldEv"))return reinterpret_cast<void*>(TypedStageFieldLeaf);
   if(!std::strcmp(n,native_typed_heap_walk::kVerifyHeap))return reinterpret_cast<void*>(TypedHeap);
   if(!std::strcmp(n,native_typed_heap_walk::kVisitorCtor))return reinterpret_cast<void*>(TypedCtor);
   if(!std::strcmp(n,native_typed_heap_walk::kVerifyReference))return reinterpret_cast<void*>(TypedRef);
@@ -70,11 +81,21 @@ jobjectArray TypedNewArray(JNIEnv*,jsize n,jclass,jobject){Jni();void*a=heap.New
 jsize TypedLength(JNIEnv*,jarray a){Jni();return jsize(Read32(a,8));}
 jobject TypedElement(JNIEnv*,jobjectArray a,jsize i){Jni();assert(i>=0&&i<jsize(Read32(a,8)));return reinterpret_cast<jobject>(uintptr_t(Read32(a,12+4*size_t(i))));}
 void TypedSet(JNIEnv*,jobjectArray a,jsize i,jobject v){Jni();assert(i>=0&&i<jsize(Read32(a,8)));Put32(a,12+4*size_t(i),uint32_t(uintptr_t(v)));}
-jvmtiError TypedLoaded(jvmtiEnv*,jint*n,jclass**out){assert(!stopped);++typed_inventory_passes;*n=jint(typed_classes.size()+(typed_late_class?1:0));*out=static_cast<jclass*>(std::malloc(size_t(*n)*sizeof(jclass)));for(size_t i=0;i<typed_classes.size();++i)(*out)[i]=reinterpret_cast<jclass>(typed_classes[i]);if(typed_late_class)(*out)[typed_classes.size()]=reinterpret_cast<jclass>(typed_ancestor);return JVMTI_ERROR_NONE;}
+jvmtiError TypedLoaded(jvmtiEnv*,jint*n,jclass**out){assert(!stopped);++typed_inventory_passes;
+ if(typed_stage_watch&&typed_inventory_passes>1&&!typed_mirrors_moved){
+  // A collector boundary during later public enumeration moves previously
+  // staged reflected mirrors. Update their strongly owned managed array slots;
+  // the final native pass must decode those slots again, never use old locals.
+  for(size_t i=0;i<typed_mirrors.size();++i){auto* moved=heap.New(sizeof(Mirror));std::memcpy(moved,&typed_mirrors[i],sizeof(Mirror));typed_moved_mirrors[i]=moved;
+   for(auto* array:typed_public_arrays)for(uint32_t j=0;j<Read32(array,8);++j)
+    if(Root(static_cast<char*>(array)+12+4*j)==&typed_mirrors[i])Put32(array,12+4*j,uint32_t(uintptr_t(moved)));
+  }typed_mirrors_moved=true;
+ }
+*n=jint(typed_classes.size()+(typed_late_class?1:0));*out=static_cast<jclass*>(std::malloc(size_t(*n)*sizeof(jclass)));for(size_t i=0;i<typed_classes.size();++i)(*out)[i]=reinterpret_cast<jclass>(typed_classes[i]);if(typed_late_class)(*out)[typed_classes.size()]=reinterpret_cast<jclass>(typed_ancestor);return JVMTI_ERROR_NONE;}
 jvmtiError TypedSignature(jvmtiEnv*,jclass c,char**s,char**){const char*n=c==parent_class?"Ljava/lang/Object;":c==typed_probe_class?"LProbe;":c==typed_ancestor?"LAncestor;":c==typed_int?"I":c==typed_array_class?"[Ljava/lang/Object;":c==typed_ancestor_array?"[LAncestor;":c==typed_old_array_class?"[LFixture;":c==typed_ancestor_2d?"[[LAncestor;":c==typed_old_2d?"[[LFixture;":"LFixture;";*s=strdup(n);return JVMTI_ERROR_NONE;}
 jvmtiError TypedDefiningLoader(jvmtiEnv*,jclass c,jobject*out){assert(!stopped);++typed_defining_loaders;*out=(c==parent_class&&!typed_foreign_boot)?nullptr:reinterpret_cast<jobject>(&typed_facade);return JVMTI_ERROR_NONE;}
 jvmtiError TypedFields(jvmtiEnv*,jclass c,jint*n,jfieldID**out){*n=c==typed_probe_class||c==reinterpret_cast<jclass>(old_class)||c==reinterpret_cast<jclass>(new_class)?4:0;*out=nullptr;if(*n){*out=static_cast<jfieldID*>(std::malloc(4*sizeof(jfieldID)));auto& fs=c==typed_probe_class?typed_fields:c==reinterpret_cast<jclass>(old_class)?old_fields:new_fields;for(size_t i=0;i<4;++i)(*out)[i]=reinterpret_cast<jfieldID>(fs[i]);}return JVMTI_ERROR_NONE;}
-jvmtiError TypedFieldPublicName(jvmtiEnv*,jclass,jfieldID f,char**n,char**s,char**){*n=strdup(TypedFieldName(f));*s=strdup(TypedFieldType(f));return JVMTI_ERROR_NONE;}
+jvmtiError TypedFieldPublicName(jvmtiEnv*,jclass,jfieldID f,char**n,char**s,char**){*n=strdup(typed_wrong_public_name&&f==reinterpret_cast<jfieldID>(typed_fields[3])?"wrongPublicName":TypedFieldName(f));*s=strdup(TypedFieldType(f));return JVMTI_ERROR_NONE;}
 jvmtiError TypedFieldFlags(jvmtiEnv*,jclass,jfieldID f,jint*out){*out=jint(reinterpret_cast<abi::arm64::Field*>(f)->access_flags);return JVMTI_ERROR_NONE;}
 jvmtiError TypedDeallocate(jvmtiEnv*,unsigned char*p){std::free(p);return JVMTI_ERROR_NONE;}
 std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadata::FieldMetadata& metadata,modern_field_storage::Service& fields,source_handle_roots::Service& source,native_typed_heap_walk::Service&walk,std::string&error){
@@ -105,8 +126,23 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  // Hook owner is a real dependency, never inferred from a staged bool.
  struct StageRequest{Request*request;TypedHooks*hooks;native_typed_heap_walk::Service*walk;modern_field_metadata::FieldMetadata*metadata;} sr{&request,&hooks,&walk,&metadata};
  auto actual_stage=[](const runnable_jni::Context&c,void*p){auto&r=*static_cast<StageRequest*>(p);if(!r.request->source->ObserveAllocatorHandle(c,reinterpret_cast<jobject>(old_class),public_slot,r.request->error))return false;auto facade=c.env->CallObjectMethod(reinterpret_cast<jobject>(parent_class),reinterpret_cast<jmethodID>(&typed_loader_id));assert(facade==reinterpret_cast<jobject>(&typed_facade));c.env->DeleteLocalRef(facade);
- if(!r.request->proof->Stage(*r.hooks,c,&ti,r.request->error))return false;
- typed_foreign_boot=true;StorageProof foreign(*r.walk,*r.request->source,*r.metadata);assert(!foreign.Stage(*r.hooks,c,&ti,r.request->error)&&!foreign.Staged());foreign.Clear(c.env);typed_foreign_boot=false;return true;};
+ const auto stage_queries=method_identity::MappingOsQueries();typed_stage_watch=true;typed_stage_native_fields=0;typed_stage_reentered_jni=false;
+ const bool staged=r.request->proof->Stage(*r.hooks,c,&ti,r.request->error);typed_stage_watch=false;
+ std::cout<<"Actual typed Stage mapping queries="<<method_identity::MappingOsQueries()-stage_queries<<" reference-fields="<<typed_stage_native_fields<<" post-first-native-field queries="<<method_identity::MappingOsQueries()-typed_stage_native_queries<<" JNI-reentered="<<typed_stage_reentered_jni<<"\n";
+ if(!staged)return false;
+ assert(typed_mirrors_moved&&typed_stage_native_fields==8&&!typed_stage_reentered_jni);
+ assert(method_identity::MappingOsQueries()==typed_stage_native_queries);
+ typed_foreign_boot=true;StorageProof foreign(*r.walk,*r.request->source,*r.metadata);assert(!foreign.Stage(*r.hooks,c,&ti,r.request->error)&&!foreign.Staged());foreign.Clear(c.env);typed_foreign_boot=false;
+ // A mismatching independent public declaration refuses in the late native
+ // pass after preceding identities were read. Failed staging owns no published
+ // proof, and Clear refunds every global produced by that failed attempt.
+ const auto new_global=table.NewGlobalRef;const auto delete_global=table.DeleteGlobalRef;
+ table.NewGlobalRef=[](JNIEnv*e,jobject value){++typed_failure_globals;return Global(e,value);};
+ table.DeleteGlobalRef=[](JNIEnv*e,jobject value){assert(typed_failure_globals);--typed_failure_globals;Delete(e,value);};
+ typed_wrong_public_name=true;StorageProof mismatch(*r.walk,*r.request->source,*r.metadata);
+ assert(!mismatch.Stage(*r.hooks,c,&ti,r.request->error)&&!mismatch.Staged()&&*r.request->error=="Native typed field differs from independent public declaration");
+ mismatch.Clear(c.env);assert(!typed_failure_globals);typed_wrong_public_name=false;
+ table.NewGlobalRef=new_global;table.DeleteGlobalRef=delete_global;return true;};
  typed_maps.Cover(heap.base);if(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),actual_stage,&sr)!=runnable_jni::Result::kSuccess){std::cerr<<"typed Stage: "<<error<<"\n";std::abort();}assert(typed_inventory_passes>=3&&typed_late_class&&typed_defining_loaders>=typed_classes.size());return result;
 }
 void MoveTypedRootsAfterStage(){

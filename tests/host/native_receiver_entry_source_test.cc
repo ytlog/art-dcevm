@@ -104,6 +104,9 @@ int main(int argc,char**){
  // no-wait dispatch still refuses the same index before the lock-taking leaf.
  receiver_guard::EntrySource indexed;assert(indexed.Bind(hooks,binding,metadata,state,&error));index_calibration=true;Put32(actual_thread,0,92u<<24);assert(indexed.Calibrate(&env,samples,&error));Put32(actual_thread,0,0);
  {receiver_guard::EntrySource::InvocationScope scope(indexed,context,Bounds(nullptr,context));assert(scope.Valid());auto leaf=indexed.Leaves();auto before=field_decodes;no_alloc=true;assert(!leaf.field_id(leaf.owner,actual_thread,reinterpret_cast<void*>(1),&out)&&before==field_decodes);no_alloc=false;}index_calibration=false;
+#ifdef ARTDCEVM_ORIGINAL_INGRESS_TEST
+ RunIngressTest(source,context,method_members[0],samples.receivers[0],bootstrap);
+#endif
  env.DeleteLocalRef(local);for(size_t i=0;i<2;++i){env.DeleteGlobalRef(samples.methods[i]);env.DeleteGlobalRef(samples.fields[i]);env.DeleteGlobalRef(samples.receivers[i]);}assert(global_count==0);
  std::puts("Actual independently calibrated FieldMetadata plus public reflected Method/Field/Object/strong-local-global-transition JNI oracle: permanent source leaves, exact invocation/state/root scope, weak/indices refusal before decoder, no allocation/JNI/OS during reads and temporary-root balance PASS; full Guard proof/device not claimed");
 }

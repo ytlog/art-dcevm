@@ -38,6 +38,19 @@ int main(){int thread;Class base{nullptr},before{&base},after{nullptr};Object ob
  // virtual ID and varargs entry owners. Original exceptions/results are kept.
  for(unsigned entry=0;entry<3;++entry){object.klass=&after;Invocation call{Path::JniMethod,&thread,&member,&object,nullptr,nullptr,false};assert(guard.BeginProof({call,&base,&after,true}));
  uint64_t value=entry==0?retirement::NativeValues(scope,reinterpret_cast<jobject>(&object),&member,nullptr):entry==1?retirement::IdValues<true>(scope,reinterpret_cast<jobject>(&object),reinterpret_cast<jmethodID>(&member),nullptr):VarCall(scope,reinterpret_cast<jobject>(&object),reinterpret_cast<jmethodID>(&member));assert(value==0&&guard.EndProof(false,true,true));}
+ // A matching ingress owner cannot authorize original dispatch from an
+ // uncalibrated EntrySource or merely from the supplied Runnable fields.
+ struct Missing:OriginalIngress::TypedBounds {unsigned calls=0;bool Enter(const abi::common::RunnableJniScope&,void*,jobject,modern_field_metadata::ReadContext*)noexcept override{++calls;return false;}void Leave()noexcept override{std::abort();}} missing;
+ EntrySource unproven;ClassSource classes;OriginalIngress ingress(unproven,classes,missing);assert(!ingress.Publish());assert(ingress.Attach(guard)&&ingress.Publish());
+ retirement::state.throw_exception=[](void*self,const char*type,const char*){assert(self==context.self);context.exception=type;};
+ object.klass=&before;context.exception=nullptr;auto old=context.originals;
+ Invocation rejected{Path::JniMethod,&thread,&member,&object};assert(guard.BeginProof({rejected,&base,&before,false}));
+ assert(retirement::IdValues<false>(scope,reinterpret_cast<jobject>(&object),reinterpret_cast<jmethodID>(&member),nullptr)==0);
+ assert(context.originals==old&&missing.calls==0&&context.exception&&!std::strcmp(context.exception,"Ljava/lang/IllegalStateException;"));assert(!guard.EndProof(false,false,true));
+ context.exception=nullptr;rejected.path=Path::ReflectMethod;assert(guard.BeginProof({rejected,&base,&before,false}));
+ assert(!retirement::Reflect(scope,reinterpret_cast<jobject>(&member),reinterpret_cast<jobject>(&object),nullptr,0)&&context.originals==old);assert(!guard.EndProof(false,false,true));
+ assert(!guard.Active());
+ consumer.store(nullptr,std::memory_order_release);assert(ingress.RetireForTesting());
  assert(!guard.Proven()); // Other actual source paths remain required.
  std::puts("Sole native method entry owners: Invoke/reflection/native JNI/virtual ID/varargs pass or ICCE before original body with a migrated old receiver PASS; incomplete coverage never ready");
 }

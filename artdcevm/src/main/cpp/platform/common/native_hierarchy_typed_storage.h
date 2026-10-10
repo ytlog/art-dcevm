@@ -13,6 +13,8 @@ class Proof final {
  Proof(const native_typed_heap_walk::Service&,const source_handle_roots::Service&,
        const modern_field_metadata::FieldMetadata&);
  ~Proof();Proof(const Proof&)=delete;Proof&operator=(const Proof&)=delete;
+ // Resolves public declarations to a fixed point using owned mirror/type roots,
+ // then verifies all native declarations in one fresh bounds-only read window.
  bool Stage(HookEngine&,const runnable_jni::Context&,jvmtiEnv*,std::string*);
  bool Staged()const noexcept;
  bool Capture(const source_commit::Plan&,const prepared_roots::Registrar&,std::string*);

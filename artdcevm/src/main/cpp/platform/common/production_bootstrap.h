@@ -24,6 +24,8 @@ class Engine {
   virtual std::string ReceiverInvokeSourceDiagnostic()const{return "receiver-invoke-source-not-observed";}
   virtual bool ReceiverEntrySourceCalibrated()const{return false;}
   virtual std::string ReceiverEntrySourceDiagnostic()const{return "receiver-entry-source-not-observed";}
+  virtual bool ReceiverHandleSourceCalibrated()const{return false;}
+  virtual std::string ReceiverHandleSourceDiagnostic()const{return "receiver-handle-source-not-observed";}
   virtual bool TypedHeapCalibrated()const{return false;}
   virtual std::string TypedHeapDiagnostic()const{return "typed-heap-source-not-observed";}
   virtual bool Activate(JNIEnv*,std::string*)=0;

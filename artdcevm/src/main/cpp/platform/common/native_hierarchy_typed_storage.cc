@@ -5,13 +5,17 @@
 #include "platform/common/typed_storage_assignability.h"
 #include <cstring>
 #include <unordered_map>
+#include "platform/common/readable_mapping_scope.h"
 namespace artdcevm::native_hierarchy_typed_storage {
 namespace {bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}}
 struct Proof::State final:native_typed_heap_walk::Sink {
  const native_typed_heap_walk::Service& walk;const source_handle_roots::Service& source;
  const modern_field_metadata::FieldMetadata& metadata;runnable_jni::Context context{};
  using Slot=bounded_managed_roots::Slot;
- struct Field {void* identity=nullptr;void* declared_type=nullptr;Slot type_root{};uint32_t offset=0;bool statik=false;};
+ struct Field {
+  void* identity=nullptr;void* declared_type=nullptr;Slot type_root{},mirror_root{};
+  std::string public_name,public_descriptor;uint32_t public_modifiers=0,offset=0;bool statik=false;
+ };
  struct Type {void* klass=nullptr;void* component=nullptr;Slot root{},component_root{};bool array=false,primitive=false,object=false,cloneable=false,serializable=false;std::vector<Field> fields;};
  std::vector<Type> types;bounded_managed_roots::Store public_roots;prepared_roots::Bindings roots;
  const source_commit::Plan* plan=nullptr;source_commit::Plan expected;
@@ -147,13 +151,13 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
     pass=ti->GetFieldName(loaded[i],fields[j],&name_bytes,&descriptor,nullptr)==JVMTI_ERROR_NONE&&name_bytes&&descriptor&&ti->GetFieldModifiers(loaded[i],fields[j],&modifiers)==JVMTI_ERROR_NONE;
     if(pass&&(descriptor[0]=='L'||descriptor[0]=='[')){
      jobject reflected=env->ToReflectedField(loaded[i],fields[j],(modifiers&8)!=0);jobject declared_type=reflected?env->CallObjectMethod(reflected,declared):nullptr;
-     State::Field field;field.statik=(modifiers&8)!=0;State::Slot mirror;
-     pass=reflected&&declared_type&&!env->ExceptionCheck()&&s.public_roots.Stage(c,declared_type,&field.type_root,error)&&s.public_roots.Stage(c,reflected,&mirror,error);
-     void* native_mirror=nullptr;if(pass)pass=s.public_roots.Read(mirror,&native_mirror);
-     field.identity=pass?s.field_leaf(native_mirror):nullptr;field_copy::CopyFieldView view;
-     if(pass)pass=field.identity&&s.metadata.FieldIdentity(field.identity,&view,error)&&view.name&&view.descriptor&&!std::strcmp(view.name,name_bytes)&&!std::strcmp(view.descriptor,descriptor)&&
-        (static_cast<abi::arm64::Field*>(field.identity)->access_flags&0xffffu)==(uint32_t(modifiers)&0xffffu);
-     if(pass){field.offset=static_cast<abi::arm64::Field*>(field.identity)->offset;type.fields.push_back(field);}
+     State::Field field;field.statik=(modifiers&8)!=0;
+     pass=reflected&&declared_type&&!env->ExceptionCheck()&&s.public_roots.Stage(c,declared_type,&field.type_root,error)&&s.public_roots.Stage(c,reflected,&field.mirror_root,error);
+     // Type resolution and root publication can safepoint. Retain only the
+     // independent public witnesses and owned slots until the whole fixed point
+     // is complete; never carry a borrowed managed mirror through later JNI.
+     if(pass){field.public_name=name_bytes;field.public_descriptor=descriptor;
+      field.public_modifiers=uint32_t(modifiers);type.fields.push_back(std::move(field));}
      if(reflected)env->DeleteLocalRef(reflected);if(declared_type)env->DeleteLocalRef(declared_type);
     }
     if(name_bytes)ti->Deallocate(reinterpret_cast<unsigned char*>(name_bytes));if(descriptor)ti->Deallocate(reinterpret_cast<unsigned char*>(descriptor));
@@ -176,13 +180,34 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
  const bool public_reverse=object_ref&&sample_ref&&env->IsAssignableFrom(static_cast<jclass>(object_ref),static_cast<jclass>(sample_ref));
  if(object_ref)env->DeleteLocalRef(object_ref);if(sample_ref)env->DeleteLocalRef(sample_ref);
  if(!public_forward||public_reverse||env->ExceptionCheck())return Fail(error,"Public ordinary Class relation oracle is ambiguous");
- // Every JNI allocation and type resolution has finished. Borrow all native
- // identities in the same no-JNI interval, checking calibrated field membership.
+ // Every JNI allocation, public relation check and type resolution has
+ // finished. Capture bounds once for this immediate no-JNI traversal, not once
+ // per Field/Class/DEX lookup. This view grants no source/mutator/GC permission:
+ // the independently calibrated original source Runnable owner supplies that.
+ method_identity::ScopedReadableMappings mappings;
+ if(!mappings.Ready())return Fail(error,"Typed declaration mapping snapshot is incomplete");
+ const modern_field_metadata::ReadContext read_context{&mappings,[](void* raw,const void* address,size_t* extent){
+  return static_cast<method_identity::ScopedReadableMappings*>(raw)->Extent(address,extent);
+ }};
+ struct NativeBorrow final {State& state;~NativeBorrow(){if(state.staged)return;
+  for(auto& type:state.types){type.klass=type.component=nullptr;for(auto& field:type.fields)field.identity=field.declared_type=nullptr;}
+ }} native_borrow{s};
  for(auto& type:s.types){if(!s.public_roots.Read(type.root,&type.klass)||!type.klass)return false;
   if(type.component_root&&!s.public_roots.Read(type.component_root,&type.component))return false;
   if(s.metadata.Reference(type.klass,offsetof(abi::arm64::android11::Class11,component_type))!=type.component)return Fail(error,"Native array component differs from public Class oracle");
-  for(auto& field:type.fields){if(!s.public_roots.Read(field.type_root,&field.declared_type)||!field.declared_type||s.metadata.FieldDeclaringClass(field.identity)!=type.klass)return Fail(error,"Native field declaration owner/type differs");
-   field_array::View array;if(!s.metadata.Fields(type.klass,field.statik,&array,error))return false;bool found=false;for(uint32_t i=0;i<array.selected_count;++i)found|=array.AtSelected(i)==field.identity;if(!found)return Fail(error,"Reflected typed field is outside complete native declaration array");
+  field_array::View arrays[2];bool have_array[2]{};
+  for(auto& field:type.fields){void* native_mirror=nullptr;
+   if(!s.public_roots.Read(field.mirror_root,&native_mirror)||!native_mirror)return Fail(error,"Rooted typed reflected Field is unavailable");
+   field.identity=s.field_leaf(native_mirror);field_copy::CopyFieldView view;
+   if(!field.identity||!s.metadata.FieldIdentity(field.identity,&view,error,&read_context)||!view.name||!view.descriptor||
+      field.public_name!=view.name||field.public_descriptor!=view.descriptor||
+      (static_cast<abi::arm64::Field*>(field.identity)->access_flags&0xffffu)!=(field.public_modifiers&0xffffu))
+    return Fail(error,"Native typed field differs from independent public declaration");
+   field.offset=static_cast<abi::arm64::Field*>(field.identity)->offset;
+   if(!s.public_roots.Read(field.type_root,&field.declared_type)||!field.declared_type||s.metadata.FieldDeclaringClass(field.identity)!=type.klass)return Fail(error,"Native field declaration owner/type differs");
+   const size_t kind=field.statik?1:0;
+   if(!have_array[kind]){if(!s.metadata.Fields(type.klass,field.statik,&arrays[kind],error,&read_context))return false;have_array[kind]=true;}
+   const auto& array=arrays[kind];bool found=false;for(uint32_t i=0;i<array.selected_count;++i)found|=array.AtSelected(i)==field.identity;if(!found)return Fail(error,"Reflected typed field is outside complete native declaration array");
   }
  }
  if(!s.assign(s.types[object_index].klass,s.types[sample_index].klass)||s.assign(s.types[sample_index].klass,s.types[object_index].klass))return Fail(error,"Named Class assignment leaf differs from independent JNI relation");

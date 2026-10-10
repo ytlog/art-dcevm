@@ -8,6 +8,7 @@ SOURCE_EPISODES = {
     'compiled-frames': ('compiledFramesCalibrated', 'frameCalibrationDiagnostic'),
     'receiver-invoke': ('receiverInvokeSourceCalibrated', 'receiverInvokeSourceDiagnostic'),
     'receiver-entry': ('receiverEntrySourceCalibrated', 'receiverEntrySourceDiagnostic'),
+    'receiver-handle': ('receiverHandleSourceCalibrated', 'receiverHandleSourceDiagnostic'),
 }
 
 def _require_success(instrumentation, self_instrumentation=False):

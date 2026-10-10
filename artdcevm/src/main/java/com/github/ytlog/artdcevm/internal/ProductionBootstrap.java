@@ -66,6 +66,7 @@ public final class ProductionBootstrap {
         final Method[] receiverEntryMethods;
         final java.lang.reflect.Field[] receiverEntryFields;
         final Object[] receiverEntryObjects;
+        final MethodHandleReceiverOracle.Sample[] receiverHandleSamples;
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
         Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex, byte[] receiverDex) throws Exception {
@@ -123,6 +124,7 @@ public final class ProductionBootstrap {
                 CalibrationFixture.class.getDeclaredField("intValue"),
                 CalibrationFixture.class.getDeclaredField("staticIntValue")};
             receiverEntryObjects = new Object[]{methodReceiver, storage};
+            receiverHandleSamples = receiverHandleSamples();
             instanceHandle = lookup.findVarHandle(CalibrationFixture.class, "intValue", int.class);
             staticHandle = lookup.findStaticVarHandle(CalibrationFixture.class, "staticIntValue", int.class);
             instanceGetter = lookup.findGetter(CalibrationFixture.class, "intValue", int.class);
@@ -130,6 +132,10 @@ public final class ProductionBootstrap {
             staticGetter = lookup.findStaticGetter(CalibrationFixture.class, "staticIntValue", int.class);
             staticSetter = lookup.findStaticSetter(CalibrationFixture.class, "staticIntValue", int.class);
         }
+    }
+    private static MethodHandleReceiverOracle.Sample[] receiverHandleSamples() {
+        try { return MethodHandleReceiverOracle.samples(); }
+        catch (ReflectiveOperationException | RuntimeException unavailable) { return null; }
     }
     static int runReceiverSource(Inputs input, int index) throws Exception {
         if (index < 0 || index >= input.receiverCallers.length) throw new IllegalArgumentException("receiver sample index");

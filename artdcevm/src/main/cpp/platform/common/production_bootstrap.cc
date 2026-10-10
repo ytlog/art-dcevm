@@ -2,6 +2,8 @@
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/ordinary_receiver_calibration_context.h"
 #include "platform/common/native_receiver_entry_sample.h"
+#include "platform/common/native_method_handle_source_calibration.h"
+#include "platform/common/native_method_handle_public_inputs.h"
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/proc_mapping_region.h"
 #include "platform/common/stopped_mapping_reader.h"
@@ -183,6 +185,35 @@ struct NativeEngine final:Engine {
  bool ReceiverEntrySourceCalibrated()const override{return receiver_entry_source.Proven();}
  std::string ReceiverEntrySourceDiagnostic()const override{return ReceiverEntrySourceCalibrated()?"":receiver_entry_diagnostic.empty()?"receiver-entry-source-not-observed":receiver_entry_diagnostic;}
  bool CalibrateReceiverEntrySource(JNIEnv*);
+ std::unique_ptr<receiver_guard::MethodHandleReceiverSource> receiver_handle_source;
+ std::string receiver_handle_diagnostic;
+ abi::common::DecodeFieldId receiver_handle_field_id=nullptr;
+ inline static thread_local receiver_guard::Relations* receiver_handle_relations=nullptr;
+ bool ReceiverHandleSourceCalibrated()const override{return receiver_handle_source&&receiver_handle_source->Proven();}
+ std::string ReceiverHandleSourceDiagnostic()const override{return ReceiverHandleSourceCalibrated()?"":receiver_handle_diagnostic.empty()?"receiver-handle-source-not-observed":receiver_handle_diagnostic;}
+ bool CalibrateReceiverHandleSource(JNIEnv*);
+ static bool ReceiverHandleCurrent(void*raw,void*self)noexcept{auto&e=*static_cast<NativeEngine*>(raw);auto a=e.receiver_entry_source.Leaves();return a.current(a.owner,self);}
+ static bool ReceiverHandleExtent(void*raw,void*self,const void*address,size_t*extent)noexcept{return ReceiverHandleCurrent(raw,self)&&ReceiverEntryExtent(raw,address,extent);}
+ static bool ReceiverHandleReference(void*raw,void*self,void*object,size_t offset,void**out)noexcept{auto&e=*static_cast<NativeEngine*>(raw);if(!out||!ReceiverHandleCurrent(raw,self))return false;*out=e.metadata.Reference(object,offset);return ReceiverHandleCurrent(raw,self);}
+ static bool ReceiverHandleStrong(void*raw,void*self,jobject root,void**out)noexcept{auto&e=*static_cast<NativeEngine*>(raw);auto a=e.receiver_entry_source.Leaves();return a.reference(a.owner,self,root,out);}
+ static bool ReceiverHandleDeclaring(void*raw,void*self,void*member,bool field,void**out)noexcept{auto&e=*static_cast<NativeEngine*>(raw);auto a=e.receiver_entry_source.Leaves();uint32_t flags=0;return ReceiverHandleCurrent(raw,self)&&a.member(a.owner,member,field,&flags,out);}
+ static bool ReceiverHandleSpecial(void*raw,void*self,void*declaring,void*caller,bool*out)noexcept{return ReceiverHandleCurrent(raw,self)&&receiver_handle_relations&&receiver_handle_relations->Special(declaring,caller,out);}
+ static bool ReceiverHandleMember(void*raw,const runnable_jni::Context&c,jobject,jmethodID method,jfieldID field,void**out)noexcept{
+  auto&e=*static_cast<NativeEngine*>(raw);
+  if(!out||current!=&e||!e.receiver_entry_calibrating||c.env!=e.source_env||c.vm!=e.vm||!e.graph_current||c.self!=e.graph_current()||bool(method)==bool(field))return false;
+  // All IDs are decoded before the observation window borrows managed roots.
+  *out=method?e.graph_decode_method(e.runtime.receivers.jni_id_manager,method):e.receiver_handle_field_id(e.runtime.receivers.jni_id_manager,field);
+  return *out&&c.self==e.graph_current();
+ }
+ static bool ReceiverHandlePrepare(void*raw){auto&e=*static_cast<NativeEngine*>(raw);return current==&e&&e.receiver_entry_calibrating&&e.RefreshMaps(&e.receiver_handle_diagnostic);}
+ static bool ReceiverHandleWindow(void*raw,const runnable_jni::Context&c,runnable_jni::Operation op,void*payload){
+  auto&e=*static_cast<NativeEngine*>(raw);if(!op||receiver_handle_relations||current!=&e||!e.receiver_classes_bound)return false;
+  const auto bounds=ReceiverEntryBounds(raw,c);
+  receiver_guard::EntrySource::InvocationScope entry(e.receiver_entry_source,c,bounds);if(!entry.Valid())return false;
+  receiver_guard::ClassSource::ReadWindow classes(e.receiver_classes,bounds);receiver_guard::Relations relations(classes.Access());
+  struct Reset{~Reset(){receiver_handle_relations=nullptr;}}reset;
+  receiver_handle_relations=&relations;return op(c,payload);
+ }
  static bool ReceiverEntryExtent(void*raw,const void*address,size_t*extent){
   auto&e=*static_cast<NativeEngine*>(raw);
   return e.receiver_entry_calibrating&&current==&e&&!e.schema_run&&!e.graph_staging&&e.source_env&&e.source_ti&&e.schema_root_env==e.source_env&&e.declared_field_ti==e.source_ti&&redefinition_gate::Owned(e.vm)&&CachedExtent(raw,address,extent);
@@ -1521,7 +1552,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  staged_classes.push_back(std::move(stage));return true;
 }
 bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
- if(ReceiverInvokeSourceCalibrated()&&ReceiverEntrySourceCalibrated())return true;
+ if(ReceiverInvokeSourceCalibrated()&&ReceiverEntrySourceCalibrated()&&ReceiverHandleSourceCalibrated())return true;
  if(!env||!ti||env->ExceptionCheck()||current||schema_run||graph_staging||
     source_env||source_ti||declared_field_ti||!receiver_producer_bound)
   return Fail(&receiver_producer_diagnostic,"Receiver source calibration requires ordinary unstaged owner");
@@ -1551,6 +1582,7 @@ bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  // The optional entry oracle owns only its private exception. Its failure does
  // not replace a successful original invoke episode or grant any Guard policy.
  if(!env->ExceptionCheck())CalibrateReceiverEntrySource(env);
+ if(!env->ExceptionCheck()&&ReceiverEntrySourceCalibrated())CalibrateReceiverHandleSource(env);
  return invoke;
 }
 bool NativeEngine::CalibrateReceiverEntrySource(JNIEnv*env){
@@ -1570,6 +1602,25 @@ bool NativeEngine::CalibrateReceiverEntrySource(JNIEnv*env){
   if(!receiver_entry_source.Calibrate(env,*samples.Samples(),&receiver_entry_diagnostic)){if(receiver_entry_diagnostic.empty())receiver_entry_diagnostic="Receiver entry independent native/public identity observation refused";return false;}
   receiver_entry_diagnostic.clear();return true;
  }catch(...){return Fail(&receiver_entry_diagnostic,"Receiver entry private sample producer threw");}
+}
+bool NativeEngine::CalibrateReceiverHandleSource(JNIEnv*env){
+ if(ReceiverHandleSourceCalibrated())return true;
+ if(!env||env->ExceptionCheck()||receiver_entry_calibrating||current!=this||schema_run||graph_staging||source_env!=env||schema_root_env!=env||!redefinition_gate::Owned(vm)||!ReceiverEntrySourceCalibrated()||!receiver_classes_bound||!graph_decode_method||!input)
+  return Fail(&receiver_handle_diagnostic,"Receiver handle source requires exact ordinary entry/Class/gate owner");
+ receiver_handle_diagnostic.clear();
+ struct Pending {JNIEnv*env;std::string&diagnostic;~Pending(){if(env->ExceptionCheck()){compiled_frame_fixture::DescribePending(env,"receiver-handle-source-calibration",&diagnostic);env->ExceptionClear();}}}pending{env,receiver_handle_diagnostic};
+ struct Borrow {NativeEngine&e;explicit Borrow(NativeEngine&owner):e(owner){e.receiver_entry_calibrating=true;}~Borrow(){e.receiver_entry_calibrating=false;}}borrow(*this);
+ try{
+  receiver_guard::MethodHandlePublicInputs public_inputs(env);
+  if(!public_inputs.Read(input))return Fail(&receiver_handle_diagnostic,"Receiver handle public samples require nine original families");
+  const auto& samples=*public_inputs.Samples();
+  receiver_handle_field_id=reinterpret_cast<abi::common::DecodeFieldId>(hooks.FindSymbol("libart.so",abi::common::kDecodeFieldId));
+  if(!receiver_handle_field_id)return Fail(&receiver_handle_diagnostic,"Receiver handle named Field ID declaration unavailable");
+  receiver_guard::MethodHandleSourceAccess access{this,ReceiverHandleCurrent,ReceiverHandleExtent,ReceiverHandleReference,ReceiverHandleStrong,nullptr,ReceiverHandleDeclaring,ReceiverHandleSpecial};
+  if(!receiver_handle_source)receiver_handle_source=std::make_unique<receiver_guard::MethodHandleReceiverSource>(access);
+  if(!receiver_guard::PrepareMethodHandleReceiverSource(env,samples[0].reflected_member,samples,access,{this,ReceiverHandleMember},{this,ReceiverHandlePrepare,ReceiverHandleWindow},receiver_handle_source.get(),&receiver_handle_diagnostic))return false;
+  receiver_handle_diagnostic.clear();return true;
+ }catch(...){return Fail(&receiver_handle_diagnostic,"Receiver handle private public sample producer threw");}
 }
 bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;

@@ -225,7 +225,12 @@ bool RunState::PrepareStopped(std::string*e){
  return true;
 }
 std::unique_ptr<source_commit::Services> RunState::Finalize(const void*h,const source_commit::Plan**p)noexcept{
- auto&s=*state_;if(!p||s.phase!=State::Phase::Collected||h!=s.holder||!s.facade||!s.stop->IsFinalWindow(s.context.self)||!s.d.registry->Resolve())return nullptr;
+ auto&s=*state_;if(!p||s.phase!=State::Phase::Collected||h!=s.holder||!s.facade||!s.stop->IsFinalWindow(s.context.self))return nullptr;
+ // Source publication ran after the Collected snapshot. Refresh the exact
+ // owner's preallocated OS bounds in the actual original final window before
+ // any registry/provider read. This explicit capture is the only OS boundary;
+ // subsequent metadata/validation reads continue to use the owned context.
+ if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,nullptr)||!s.stop->IsFinalWindow(s.context.self)||!s.d.registry->Resolve())return nullptr;
  const auto r=s.d.registry->Final();if(!s.plan_roots.CanRefresh(r)||!s.ledger->CanRefresh(r)||!s.authority.CanRefresh(r)||!s.typed_storage||!s.typed_storage->CanRefresh(r)||(s.d.guards&&!s.d.guards->CanRefreshManagedRoots(r)))return nullptr;
  s.plan_roots.Refresh(r);s.ledger->Refresh(r);s.authority.Refresh(r);
  s.typed_storage->Refresh(r);

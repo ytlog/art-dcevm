@@ -74,6 +74,8 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"receiverInvokeSourceDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverInvokeSourceDiagnostic():"receiver-invoke-source-owner-not-observed")+
    ",\"receiverEntrySourceCalibrated\":"+(common_&&common_->ReceiverEntrySourceCalibrated()?"true":"false")+
    ",\"receiverEntrySourceDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverEntrySourceDiagnostic():"receiver-entry-source-owner-not-observed")+
+   ",\"receiverHandleSourceCalibrated\":"+(common_&&common_->ReceiverHandleSourceCalibrated()?"true":"false")+
+   ",\"receiverHandleSourceDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverHandleSourceDiagnostic():"receiver-handle-source-owner-not-observed")+
    ",\"typedHeapCalibrated\":"+(common_&&common_->TypedHeapCalibrated()?"true":"false")+
    ",\"typedHeapDiagnostic\":"+QuoteJsonMutf8(common_?common_->TypedHeapDiagnostic():"typed-heap-source-owner-not-observed")+
    ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+

@@ -1,10 +1,12 @@
 // Host mapping oracle: query actual readable regions while the aggregate owns
-// its initial stop, then serve immutable bounds during final validation/commit.
+// both source stops, then serve immutable bounds during final validation/commit.
 struct RunStateMappings : ExplicitMappings {
+ unsigned final_refreshes=0;bool reject_final_refresh=false;
  static bool Refresh(void* raw,std::string*) {
   auto& s=*static_cast<RunStateMappings*>(raw);
   auto* run=native_schema_run_state::RunState::Current();
-  if(!run||!run->StoppedWindow()||!stopped||current!=thread.data())return false;
+  if(!run||!run->OwnsMapping(raw)||!run->StoppedWindow()||!stopped||current!=thread.data())return false;
+  if(disabled){++s.final_refreshes;if(s.reject_final_refresh)return false;}
   s.ranges.clear();s.Cover(heap.base);s.Cover(thread.data());
   for(auto text:names)s.Cover(text);for(auto text:types)s.Cover(text);
   for(const auto& klass:public_classes)s.Cover(klass.descriptor.c_str());

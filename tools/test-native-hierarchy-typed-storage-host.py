@@ -5,6 +5,8 @@ import os
 import hashlib
 import struct
 import zlib
+import json
+import re
 from pathlib import Path
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -164,4 +166,21 @@ schema_result=subprocess.run([str(binary)]+[str(p) for p in dex_files],capture_o
 (out/'result-schema-copies.log').write_text(schema_result.stdout+schema_result.stderr)
 schema_result.check_returncode()
 print('nonempty schema copies: '+schema_result.stdout.strip())
+stage_pattern=re.compile(r'Actual typed Stage mapping queries=(\d+) reference-fields=(\d+) post-first-native-field queries=(\d+) JNI-reentered=(\d+)')
+def stage_observation(output):
+    matches=stage_pattern.findall(output)
+    assert len(matches)==1, 'Need the one actual ordinary Stage observation'
+    total, fields, reads, jni=map(int,matches[0])
+    assert fields==8 and reads==0 and jni==0
+    return {'actual_mapping_os_queries':total, 'validated_reference_fields':fields,
+            'os_queries_after_first_native_field':reads, 'jni_reentered_after_first_native_field':bool(jni)}
+(out/'mapping-stage.json').write_text(json.dumps({
+    'platform':platform,
+    'scope':'actual host Stage with named source leaf doubles; no device timing claim',
+    'mapping_capture':'macOS VM-region enumeration' if platform=='darwin' else 'Linux proc-self-maps snapshot',
+    'methods_only':stage_observation(result.stdout),
+    'nonempty_schema_copies':stage_observation(schema_result.stdout),
+    'later_public_enumeration_moved_reflected_mirrors':4,
+    'mismatched_public_witness_refused_and_global_roots_refunded':True,
+},indent=2)+'\n')
 print('Complete typed-storage source lifecycle: ASan/UBSan passed')

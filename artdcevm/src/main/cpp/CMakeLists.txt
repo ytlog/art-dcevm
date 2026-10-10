@@ -107,6 +107,8 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_receiver_guard.cc
     platform/common/native_receiver_guard_episode.cc
     platform/common/native_receiver_entry_source.cc
+    platform/common/native_method_handle_source_calibration.cc
+    platform/common/native_receiver_jni_fixture.cc
     platform/common/native_receiver_frame.cc
     platform/common/native_receiver_bytecode.cc
     platform/common/native_receiver_class_source.cc

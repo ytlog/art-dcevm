@@ -50,6 +50,10 @@ class Guard final {
  void Activate()noexcept;
  bool Check(const Invocation&)noexcept;
  bool InUse()const noexcept;
+ // Original wrappers borrow typed roots only for a dispatch actually consumed
+ // by this Guard. An outer reflection/JNI call must not obstruct a different
+ // bytecode/source probe before it reaches its witnessed original entry.
+ bool RequiresIngress(Path path,void*thread,void*member)const noexcept{return Interested(path,thread,member);}
  bool CheckBytecode(void*thread,void*caller,uint32_t pc)noexcept;
  bool CheckFrame(Path,void* thread,void* member,const void* frame,const InstructionOperands*,void* result,bool field,void* special_caller=nullptr)noexcept;
  bool CheckHandle(void* thread,void* object,void* member,bool field,const void* frame,const InstructionOperands*,void* result)noexcept;
