@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual producer/hook TUs with calibrated roots and independent blocking source threads."""
 import ast,os,subprocess
+from host_tu_cache import compile_cached
 from pathlib import Path
 root=Path(__file__).resolve().parents[1];cpp=root/'artdcevm/src/main/cpp'
 out=root/'build/evidence/host/native-initializer-episode';out.mkdir(parents=True,exist_ok=True)
@@ -23,10 +24,12 @@ tree=ast.parse((root/'tools/test-source-handle-roots-host.py').read_text())
 sources=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='sources' for t in n.targets));sources+=['native_initializer_episode']
 jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip());platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 binary=out/'native_initializer_episode_test'
-cmd=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_initializer_episode_test.cc')]
-cmd += [str(cpp/'platform/common'/(s+'.cc')) for s in sources]+[str(cpp/'evolution/dex_schema.cc')]
+base=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-pthread','-I',str(cpp),'-I',str(out),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform)]
+units=[root/'tests/host/native_initializer_episode_test.cc']+[cpp/'platform/common'/(s+'.cc') for s in sources]+[cpp/'evolution/dex_schema.cc']
+compiled=compile_cached(base,units,out/'objects',max_workers=2)
+cmd=base+compiled
 if platform=='darwin':cmd+=['-Wl,-pagezero_size,0x10000']
-cmd+=['-pthread','-o',str(binary)];subprocess.run(cmd,check=True)
+cmd+=['-o',str(binary)];subprocess.run(cmd,check=True)
 for layout in ('legacy','sized'):
  env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1')
  if layout=='sized':env['SOURCE_SCOPE_SIZED']='1'
