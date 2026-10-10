@@ -11,6 +11,13 @@
 namespace artdcevm::source_cache_public_roles {
 namespace {
 struct ObserveRequest {Public* roles;std::string* error;};
+// Each instance belongs to just one native traversal after its last JNI call.
+// It expires before the next decoder/reflection call; readability never grants
+// lifetime. Actual strong roots are borrowed again before creating this view.
+struct ImmediateRead {
+ method_identity::ImmediateReadableRegions regions;
+ modern_field_metadata::ReadContext context{&regions,[](void*raw,const void*p,size_t*out){return static_cast<method_identity::ImmediateReadableRegions*>(raw)->Extent(p,out);}};
+};
 bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}
 // Capture only the fixed, independently calibrated ownership prefixes. The
 // stopped path never reparses DEX or produces a diagnostic allocation. DexFile
@@ -61,7 +68,7 @@ bool Flags(JNIEnv*e,jvmtiEnv*ti,jclass start,const source_cache_role_catalog::Me
 void Public::Clear(JNIEnv*e)noexcept{if(e){for(auto&t:types_)if(t.klass)e->DeleteGlobalRef(t.klass);for(auto*list:{&fields_,&methods_})for(auto&m:*list){if(m.declaring)e->DeleteGlobalRef(m.declaring);if(m.reflected)e->DeleteGlobalRef(m.reflected);}for(auto root:{static_cast<jobject>(anchor_),cache_,loader_})if(root)e->DeleteGlobalRef(root);}types_.clear();fields_.clear();methods_.clear();original_.clear();anchor_=nullptr;cache_=loader_=nullptr;dex_={};ready_=false;}
 bool Public::Prepare(JNIEnv*e,jvmtiEnv*ti,const source_cache_role_catalog::Catalog&catalog,const std::vector<unsigned char>&original,jclass anchor,jobject cache,const Bindings&b,std::string*error){
  Clear(e);bindings_=b;auto fail=[&](const char*s){Clear(e);return Fail(error,s);};
- if(!e||!ti||!anchor||!cache||e->ExceptionCheck()||!b.owner||!b.method||!b.field||!b.reflected_method||!b.reflected_field||!b.metadata||!b.metadata->Calibrated())return fail("Public cache complete role preparation lacks independent calibrated bindings");
+ if(!e||!ti||!anchor||!cache||e->ExceptionCheck()||!b.owner||!b.method||!b.field||!b.reflected_method||!b.reflected_field||!b.metadata||!b.metadata->Calibrated()||!b.roots||!b.roots->Calibrated())return fail("Public cache complete role preparation lacks independent calibrated bindings");
  try{
  original_=original;
  anchor_=static_cast<jclass>(e->NewGlobalRef(anchor));cache_=e->NewGlobalRef(cache);jobject loader=nullptr;if(ti->GetClassLoader(anchor,&loader)!=JVMTI_ERROR_NONE)return fail("Public cache loader unavailable");Local loader_root{e,loader};if(loader)loader_=e->NewGlobalRef(loader);
@@ -114,29 +121,42 @@ bool Public::Observe(const runnable_jni::Context&c,void*raw){
  for(size_t index=0;index<s.types_.size();++index){const auto&type=s.types_[index];
   void*klass=nullptr;field_copy::CopyClassView identity{};std::string detail;
   if(!runnable_executor::DecodeStrongGlobal(c,type.klass,&klass))return fail("Type Class owned strong decode",index,type.descriptor);
-  if(!b.metadata->ClassIdentityVerified(klass,type.descriptor.c_str(),nullptr,nullptr,nullptr,&identity,&detail))return fail("Type native Class descriptor",index,type.descriptor,detail);
+  if(!b.roots->BorrowOwnedStrongGlobal(c,type.klass,&klass))return fail("Type Class current owned strong borrow",index,type.descriptor);
+  ImmediateRead traversal;const auto&read=traversal.context;
+  if(!b.metadata->ClassIdentityVerified(klass,type.descriptor.c_str(),nullptr,nullptr,nullptr,&identity,&detail,&read))return fail("Type native Class descriptor",index,type.descriptor,detail);
  }
+ {
+ if(!b.roots->BorrowOwnedStrongGlobal(c,s.anchor_,&anchor)||!b.roots->BorrowOwnedStrongGlobal(c,s.cache_,&cache)||(s.loader_&&!b.roots->BorrowOwnedStrongGlobal(c,s.loader_,&loader)))return fail("anchor/cache/loader current owned strong borrow");
+ ImmediateRead traversal;const auto&read=traversal.context;
+ size_t anchor_extent=0;
+ const size_t anchor_prefix=b.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy.size:class_metadata::k17.size;
+ if(!traversal.regions.Extent(anchor,&anchor_extent)||anchor_extent<anchor_prefix)return fail("anchor current Class readable prefix");
  if(b.metadata->Reference(anchor,offsetof(class_metadata::Class11,dex_cache))!=cache)return fail("anchor Class exact DexCache");
  if(b.metadata->Reference(anchor,offsetof(class_metadata::Class11,class_loader))!=loader)return fail("anchor Class exact loader");
  size_t extent_dex=0;evolution::MappedDexClassIdentity identity;std::string detail;
- if(!b.metadata->DefiningClassMapping(anchor,&s.dex_,&identity,&detail))return fail("anchor original defining DEX mapping",SIZE_MAX,{},detail);
+ if(!b.metadata->DefiningClassMapping(anchor,&s.dex_,&identity,&detail,&read))return fail("anchor original defining DEX mapping",SIZE_MAX,{},detail);
  if(!s.dex_.begin||!s.dex_.size||s.dex_.size!=s.original_.size())return fail("anchor original DEX size");
- if(!method_identity::ReadableMappingExtent(s.dex_.begin,&extent_dex)||extent_dex<s.dex_.size)return fail("anchor original DEX readable extent");
+ if(!traversal.regions.Extent(s.dex_.begin,&extent_dex)||extent_dex<s.dex_.size)return fail("anchor original DEX readable extent");
  if(std::memcmp(s.dex_.begin,s.original_.data(),s.dex_.size))return fail("anchor mapped DEX versus authenticated original bytes");
- if(!ReadDex(*b.metadata,anchor,nullptr,&s.namespace_dex_))return fail("anchor calibrated DEX ownership prefixes");
+ if(!ReadDex(*b.metadata,anchor,&read,&s.namespace_dex_))return fail("anchor calibrated DEX ownership prefixes");
+ }
  for(size_t index=0;index<s.fields_.size();++index){auto&m=s.fields_[index];const std::string role=m.name+":"+m.descriptor;
   void*declaring=nullptr,*mirror=nullptr;
   if(!runnable_executor::DecodeStrongGlobal(c,m.declaring,&declaring))return fail("Field declaring Class owned strong decode",index,role);
   if(!runnable_executor::DecodeStrongGlobal(c,m.reflected,&mirror))return fail("Field reflected carrier owned strong decode",index,role);
   void*n=b.reflected_field(mirror);
   if(!n||n!=b.field(b.owner,m.field))return fail("Field named reflected leaf versus public ID codec",index,role);
+  if(!b.roots->BorrowOwnedStrongGlobal(c,m.declaring,&declaring)||!b.roots->BorrowOwnedStrongGlobal(c,m.reflected,&mirror))return fail("Field current owned declaring/carrier borrow",index,role);
+  ImmediateRead traversal;const auto&read=traversal.context;
+  if(b.reflected_field(mirror)!=n||b.field(b.owner,m.field)!=n)return fail("Field current reflected carrier/native ID identity",index,role);
+  size_t field_extent=0;if(!traversal.regions.Extent(n,&field_extent)||field_extent<sizeof(field_array::Field))return fail("Field current native readable prefix",index,role);
   if(b.metadata->FieldDeclaringClass(n)!=declaring)return fail("Field native declaring Class",index,role);
-  field_copy::CopyFieldView f;detail.clear();
-  if(!b.metadata->FieldIdentity(n,&f,&detail))return fail("Field native text reader",index,role,detail);
+  field_copy::CopyFieldView f;std::string detail;
+  if(!b.metadata->FieldIdentity(n,&f,&detail,&read))return fail("Field native text reader",index,role,detail);
   if(!f.name||!f.descriptor||m.name!=f.name||m.descriptor!=f.descriptor)return fail("Field native name or descriptor",index,role);
   if((field_array::Flags(n)&0xffffu)!=m.flags)return fail("Field native Java modifiers",index,role);
   std::memcpy(&m.native_index,static_cast<const unsigned char*>(n)+offsetof(field_array::Field,dex_field_index),4);
-  if(!ReadDex(*b.metadata,declaring,nullptr,&m.dex))return fail("Field calibrated declaring DEX ownership prefixes",index,role);
+  if(!ReadDex(*b.metadata,declaring,&read,&m.dex))return fail("Field calibrated declaring DEX ownership prefixes",index,role);
   m.native=n;
  }
  for(size_t index=0;index<s.methods_.size();++index){auto&m=s.methods_[index];const std::string role=m.name+m.descriptor;
@@ -144,15 +164,19 @@ bool Public::Observe(const runnable_jni::Context&c,void*raw){
   if(!runnable_executor::DecodeStrongGlobal(c,m.declaring,&declaring))return fail("Method declaring Class owned strong decode",index,role);
   void*n=b.method(b.owner,m.method);
   if(!n)return fail("Method public ID codec",index,role);
-  if(b.metadata->MethodDeclaringClass(n)!=declaring)return fail("Method native declaring Class",index,role);
   if(m.reflected&&b.reflected_method(scope,m.reflected)!=n)return fail("Method named reflected leaf versus public ID codec",index,role);
-  size_t extent=0;method_metadata::Identity id;
-  if(!method_identity::ReadableMappingExtent(n,&extent)||!method_metadata::ReadIdentity(b.method_layout,n,extent,&id))return fail("Method native identity declaration",index,role);
+  if(!b.roots->BorrowOwnedStrongGlobal(c,m.declaring,&declaring))return fail("Method current owned declaring Class borrow",index,role);
+  ImmediateRead traversal;const auto&read=traversal.context;
+  void*current_native=b.method(b.owner,m.method);
+  if(!current_native||current_native!=n)return fail("Method current public ID codec versus original/reflected identity",index,role);
+  n=current_native;size_t extent=0;method_metadata::Identity id;
+  if(!traversal.regions.Extent(n,&extent)||!method_metadata::ReadIdentity(b.method_layout,n,extent,&id))return fail("Method native identity declaration",index,role);
+  if(b.metadata->MethodDeclaringClass(n)!=declaring)return fail("Method native declaring Class",index,role);
   if((id.access_flags&0xffffu)!=m.flags)return fail("Method native Java modifiers",index,role);
-  if(!ReadDex(*b.metadata,declaring,nullptr,&m.dex))return fail("Method calibrated declaring DEX ownership prefixes",index,role);
+  if(!ReadDex(*b.metadata,declaring,&read,&m.dex))return fail("Method calibrated declaring DEX ownership prefixes",index,role);
   m.native_index=id.dex_method_index;
-  evolution::MappedDexMetadata mapping{};evolution::MappedDexClassIdentity klass_identity{};bool matches=false;detail.clear();
-  if(!b.metadata->DefiningClassMapping(declaring,&mapping,&klass_identity,&detail))return fail("Method original defining DEX mapping",index,role,detail);
+  evolution::MappedDexMetadata mapping{};evolution::MappedDexClassIdentity klass_identity{};bool matches=false;std::string detail;
+  if(!b.metadata->DefiningClassMapping(declaring,&mapping,&klass_identity,&detail,&read))return fail("Method original defining DEX mapping",index,role,detail);
   if(!evolution::ReadMappedDexMethodMatches(mapping,m.native_index,m.name,m.descriptor,&matches,&detail)||!matches)return fail("Method native DEX index versus public name/signature",index,role,detail);
   m.native=n;
  }

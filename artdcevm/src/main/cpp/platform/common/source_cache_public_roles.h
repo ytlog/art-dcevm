@@ -15,6 +15,7 @@ struct Bindings {
  field_mirror::NamedField reflected_field=nullptr;
  const modern_field_metadata::FieldMetadata* metadata=nullptr;
  method_metadata::Layout method_layout{};
+ const source_handle_roots::Service* roots=nullptr;
 };
 // Public identities are prepared before snapshots; all movable Classes and
 // reflection carriers remain owned globals until Clear. Never read cache slots.

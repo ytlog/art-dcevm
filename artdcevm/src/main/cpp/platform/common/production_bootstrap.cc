@@ -1571,7 +1571,7 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::strin
  if(!source_cache_roles.Ready()){
   if(!graph_decode_method||!receiver_handle_field_id||!graph_field_leaf||!runtime.receivers.jni_id_manager)return Fail(error,"Complete public cache roles require actual independently calibrated named ID codecs");
   source_cache_public_roles::Bindings roles;roles.owner=this;roles.method=DecodeGraphMethod;roles.field=[](void*raw,jfieldID id)->void*{auto&e=*static_cast<NativeEngine*>(raw);return e.receiver_handle_field_id(e.runtime.receivers.jni_id_manager,id);};
-  roles.reflected_method=leaf;roles.reflected_field=graph_field_leaf;roles.metadata=&metadata;
+  roles.reflected_method=leaf;roles.reflected_field=graph_field_leaf;roles.metadata=&metadata;roles.roots=&source_capabilities.Roots();
   roles.method_layout=model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
   if(!source_cache_roles.Prepare(env,ti,source_cache_catalog,source_cache_original,static_cast<jclass>(source_cache_witness.klass),source_cache_witness.cache,roles,error))return false;
  }

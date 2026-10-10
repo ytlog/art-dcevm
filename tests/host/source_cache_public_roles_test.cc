@@ -6,12 +6,40 @@
 #include "platform/common/source_cache_public_roles.h"
 namespace {
 namespace roles=source_cache_public_roles;
-struct PublicMember {void* native;void* declaring;std::string name,descriptor;uint32_t flags;Mirror mirror;};
+struct PublicMember {void* native;void* declaring;std::string name,descriptor;uint32_t flags;Mirror* mirror;};
 std::vector<PublicMember> public_fields,public_methods;
 std::map<std::string,void*> public_types;
 std::map<jobject,std::string> strings;
 size_t globals_created=0,globals_deleted=0,ti_allocations=0,ti_deletions=0;bool public_pending=false,bad_native=false,bad_owner=false,wrong_primitive=false,wrong_for_name=false;
 int for_name,primitive_type;void* loader_object=nullptr;void* primitive_i=nullptr;void* primitive_v=nullptr;
+std::map<jobject,void*> forwarded;int move_at=0;size_t moves=0;bool current_method_codec_changes=false;std::map<jmethodID,size_t> method_decodes;bool reject_borrow=false;std::array<unsigned char,160> ordinary_original{};bool ordinary_saved=false;void* ordinary_cache_handle=nullptr;
+void* Live(jobject p){auto i=forwarded.find(p);return i==forwarded.end()?static_cast<void*>(p):i->second;}
+void MoveOrdinary(){
+ if(!ordinary_saved){std::memcpy(ordinary_original.data(),old_class,160);ordinary_cache_handle=Root(&old_class->dex_cache);ordinary_saved=true;}
+ auto*previous=static_cast<class_metadata::Class17*>(Live(reinterpret_cast<jobject>(old_class)));
+ auto*next=static_cast<class_metadata::Class17*>(heap.New(160));std::memcpy(next,previous,160);
+ auto*cache=Root(&previous->dex_cache);auto*loader=Root(&previous->class_loader);
+ void*next_cache=heap.New(sizeof(abi::arm64::android11::LegacyCache));std::memcpy(next_cache,cache,sizeof(abi::arm64::android11::LegacyCache));
+ void*next_loader=heap.New(16);std::memcpy(next_loader,loader,16);
+ forwarded[reinterpret_cast<jobject>(old_class)]=next;
+ forwarded[reinterpret_cast<jobject>(ordinary_cache_handle)]=next_cache;
+ forwarded[reinterpret_cast<jobject>(loader_object)]=next_loader;
+ next->dex_cache=uint32_t(uintptr_t(next_cache));next->class_loader=uint32_t(uintptr_t(next_loader));
+ public_types["LFixture;"]=next;
+ for(auto&f:public_fields){Put32(f.native,0,uint32_t(uintptr_t(next)));auto*mirror=static_cast<Mirror*>(heap.New(sizeof(Mirror)));*mirror=*f.mirror;forwarded[reinterpret_cast<jobject>(f.mirror)]=mirror;}
+ for(auto&m:public_methods)Put32(m.native,0,uint32_t(uintptr_t(next)));
+ std::memset(previous,0,160); // Evacuated storage must never supply an identity.
+ ++moves;
+}
+bool ObserveDecode(jobject p,void**out){
+ // This models the real public decoder's JNI validation boundary, which may GC.
+ Jni();if(move_at==1&&p==reinterpret_cast<jobject>(primitive_i)){MoveOrdinary();move_at=0;}
+ if(move_at==2&&!public_fields.empty()&&p==reinterpret_cast<jobject>(public_fields[0].mirror)){MoveOrdinary();move_at=0;}
+ *out=Live(p);return *out!=nullptr;
+}
+abi::arm64::android11::ReleaseObjectPointer OwnedDecode(const void*,jobject p){return {reject_borrow?0:uintptr_t(Live(p))};}
+void ResetOrdinary(){if(ordinary_saved){std::memcpy(old_class,ordinary_original.data(),160);ordinary_saved=false;}forwarded.clear();public_types["LFixture;"]=old_class;for(auto&f:public_fields)Put32(f.native,0,uint32_t(uintptr_t(old_class)));for(auto&m:public_methods)Put32(m.native,0,uint32_t(uintptr_t(old_class)));move_at=0;runnable_executor::public_role_decode_hook=nullptr;reject_borrow=false;}
+
 jobject PGlobal(JNIEnv*,jobject p){Jni();if(p)++globals_created;return p;}
 void PDeleteGlobal(JNIEnv*,jobject p){Jni();if(p)++globals_deleted;}
 jboolean PException(JNIEnv*){Jni();return public_pending;}
@@ -25,10 +53,10 @@ jfieldID PField(JNIEnv*,jclass k,const char*n,const char*d){Jni();for(auto&f:pub
 jfieldID PStaticField(JNIEnv* e,jclass k,const char*n,const char*d){if(!std::strcmp(n,"TYPE")){Jni();return reinterpret_cast<jfieldID>(&primitive_type);}return PField(e,k,n,d);}
 jobject PStaticObject(JNIEnv*,jclass k,jfieldID id){Jni();assert(id==reinterpret_cast<jfieldID>(&primitive_type));return wrong_primitive?reinterpret_cast<jobject>(parent_class):k;}
 jclass PSuper(JNIEnv*,jclass k){Jni();if(k==public_types["LChild;"])return reinterpret_cast<jclass>(old_class);return nullptr;}
-jobject PReflectField(JNIEnv*,jclass k,jfieldID id,jboolean is_static){Jni();for(auto&f:public_fields)if(f.native==id){assert((bad_owner||k==f.declaring)&&bool(is_static)==bool(f.flags&8));return reinterpret_cast<jobject>(&f.mirror);}return nullptr;}
-jobject PReflectMethod(JNIEnv*,jclass k,jmethodID id,jboolean is_static){Jni();for(auto&m:public_methods)if(m.native==id){assert((bad_owner||k==m.declaring)&&bool(is_static)==bool(m.flags&8));assert(m.name!="<clinit>");return reinterpret_cast<jobject>(&m.mirror);}return nullptr;}
-void* PReflectedMethod(const abi::common::RunnableJniScope&,jobject object){assert(!stopped&&Read32(current)==0);return reinterpret_cast<Mirror*>(object)->field;}
-void* PCodecMethod(void*,jmethodID id){return bad_native?next_method:reinterpret_cast<void*>(id);}
+jobject PReflectField(JNIEnv*,jclass k,jfieldID id,jboolean is_static){Jni();for(auto&f:public_fields)if(f.native==id){assert((bad_owner||k==f.declaring)&&bool(is_static)==bool(f.flags&8));return reinterpret_cast<jobject>(f.mirror);}return nullptr;}
+jobject PReflectMethod(JNIEnv*,jclass k,jmethodID id,jboolean is_static){Jni();for(auto&m:public_methods)if(m.native==id){assert((bad_owner||k==m.declaring)&&bool(is_static)==bool(m.flags&8));assert(m.name!="<clinit>");return reinterpret_cast<jobject>(m.mirror);}return nullptr;}
+void* PReflectedMethod(const abi::common::RunnableJniScope&,jobject object){assert(!stopped&&Read32(current)==0);if(move_at==3){MoveOrdinary();move_at=0;}return reinterpret_cast<Mirror*>(Live(object))->field;}
+void* PCodecMethod(void*,jmethodID id){if(current_method_codec_changes&&++method_decodes[id]==2)return next_method;return bad_native?next_method:reinterpret_cast<void*>(id);}
 void* PCodecField(void*,jfieldID id){return bad_native?new_fields[0]:reinterpret_cast<void*>(id);}
 char* TiString(const std::string&s){++ti_allocations;auto*p=static_cast<char*>(std::malloc(s.size()+1));std::memcpy(p,s.c_str(),s.size()+1);return p;}
 template<class T>T* TiArray(size_t n){if(!n)return nullptr;++ti_allocations;return static_cast<T*>(std::malloc(n*sizeof(T)));}
@@ -45,7 +73,7 @@ jvmtiError TiMethodOwner(jvmtiEnv*,jmethodID id,jclass*out){Jni();for(auto&m:pub
 jvmtiError TiFieldOwner(jvmtiEnv*,jclass,jfieldID id,jclass*out){Jni();for(auto&f:public_fields)if(f.native==id){*out=reinterpret_cast<jclass>(bad_owner?parent_class:f.declaring);return JVMTI_ERROR_NONE;}return JVMTI_ERROR_INVALID_FIELDID;}
 jvmtiError TiSignature(jvmtiEnv*,jclass k,char**out,char**generic){Jni();if(generic)*generic=nullptr;for(const auto&entry:public_types)if(entry.second==k){*out=TiString(entry.first);return JVMTI_ERROR_NONE;}return JVMTI_ERROR_INVALID_CLASS;}
 const char* PublicDescriptor(void*k,void*storage){for(const auto&entry:public_types)if(entry.second==k)return entry.first.c_str();return ResolutionDescriptor(k,storage);}
-class PublicHooks final:public Hooks {public:void* FindSymbol(const char*lib,const char*n)override {if(std::strstr(n,"Class13GetDescriptor"))return reinterpret_cast<void*>(PublicDescriptor);if(std::strstr(n,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);if(std::strstr(n,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(OriginalRoots);if(std::strstr(n,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots);return Hooks::FindSymbol(lib,n);}};
+class PublicHooks final:public Hooks {public:void* FindSymbol(const char*lib,const char*n)override {if(std::strstr(n,"Thread13DecodeJObject"))return reinterpret_cast<void*>(OwnedDecode);if(std::strstr(n,"Class13GetDescriptor"))return reinterpret_cast<void*>(PublicDescriptor);if(std::strstr(n,"GetMirrorClass"))return reinterpret_cast<void*>(AllocationMirror);if(std::strstr(n,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(OriginalRoots);if(std::strstr(n,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots);return Hooks::FindSymbol(lib,n);}};
 void InstallPublicJni(jvmtiInterface_1&ti){table.NewGlobalRef=PGlobal;table.DeleteGlobalRef=PDeleteGlobal;table.DeleteLocalRef=PDeleteLocal;table.ExceptionCheck=PException;table.FindClass=PFind;table.NewStringUTF=PString;table.GetStaticMethodID=PStaticMethod;table.GetMethodID=PMethod;table.CallStaticObjectMethodV=PStaticCall;table.GetFieldID=PField;table.GetStaticFieldID=PStaticField;table.GetStaticObjectField=PStaticObject;table.GetSuperclass=PSuper;table.ToReflectedField=PReflectField;table.ToReflectedMethod=PReflectMethod;
  ti.GetClassSignature=TiSignature;ti.Deallocate=TiDelete;ti.GetClassLoader=TiLoader;ti.GetImplementedInterfaces=TiInterfaces;ti.GetClassMethods=TiMethods;ti.GetClassFields=TiFields;ti.GetMethodName=TiMethodName;ti.GetFieldName=TiFieldName;ti.GetMethodModifiers=TiMethodFlags;ti.GetFieldModifiers=TiFieldFlags;ti.GetMethodDeclaringClass=TiMethodOwner;ti.GetFieldDeclaringClass=TiFieldOwner;}
 struct FinalMapper: native_hierarchy_cache::SourceMapper,source_handle_roots::StoppedReader {
@@ -82,20 +110,32 @@ int main(int argc,char**argv){
  primitive_i=heap.New(160);primitive_v=heap.New(160);public_types={{"I",primitive_i},{"V",primitive_v},{"LFixture;",old_class},{"LChild;",new_class},{"Ljava/lang/Object;",parent_class},{"[I",heap.New(160)}};
  // Public declarations are independent of the cache; external inherited IDs
  // resolve onto the same actual declaring-class members and native indexes.
- for(size_t i=0;i<catalog.fields.size();++i){const auto&r=catalog.fields[i];if(!r.declared)continue;size_t physical=0;while(names[physical]!=r.name)++physical;auto*n=old_fields[physical];n->dex_field_index=uint32_t(i);public_fields.push_back({n,old_class,r.name,r.descriptor,r.access,{n}});}
- for(size_t i=0;i<catalog.methods.size();++i){const auto&r=catalog.methods[i];if(!r.declared)continue;auto*n=new(heap.New(sizeof(abi::arm64::android12::Method12)))abi::arm64::android12::Method12{};n->declaring_class=uint32_t(uintptr_t(old_class));n->dex_method_index=uint32_t(i);n->access_flags=r.access;public_methods.push_back({n,old_class,r.name,r.descriptor,r.access,{n}});}
+ for(size_t i=0;i<catalog.fields.size();++i){const auto&r=catalog.fields[i];if(!r.declared)continue;size_t physical=0;while(names[physical]!=r.name)++physical;auto*n=old_fields[physical];n->dex_field_index=uint32_t(i);public_fields.push_back({n,old_class,r.name,r.descriptor,r.access,new(heap.New(sizeof(Mirror)))Mirror{n}});}
+ for(size_t i=0;i<catalog.methods.size();++i){const auto&r=catalog.methods[i];if(!r.declared)continue;auto*n=new(heap.New(sizeof(abi::arm64::android12::Method12)))abi::arm64::android12::Method12{};n->declaring_class=uint32_t(uintptr_t(old_class));n->dex_method_index=uint32_t(i);n->access_flags=r.access;public_methods.push_back({n,old_class,r.name,r.descriptor,r.access,new(heap.New(sizeof(Mirror)))Mirror{n}});}
  Put32(public_types["[I"],offsetof(class_metadata::Class17,component_type),uint32_t(uintptr_t(primitive_i)));
  jvmtiInterface_1 ti_table{};jvmtiEnv ti{&ti_table};InstallPublicJni(ti_table);
- roles::Bindings binding{&metadata,PCodecMethod,PCodecField,PReflectedMethod,FieldLeaf,&metadata,method_metadata::kAndroid12Onward};auto cache=reinterpret_cast<jobject>(Root(&old_class->dex_cache));roles::Public prepared;
- auto prepare=[&](){return prepared.Prepare(&env,&ti,catalog,dex,reinterpret_cast<jclass>(old_class),cache,binding,&error);};
+ roles::Bindings binding{&metadata,PCodecMethod,PCodecField,PReflectedMethod,FieldLeaf,&metadata,method_metadata::kAndroid12Onward};binding.roots=&roots;auto cache=reinterpret_cast<jobject>(Root(&old_class->dex_cache));roles::Public prepared;
+ auto prepare=[&](){return prepared.Prepare(&independent_env.env,&ti,catalog,dex,reinterpret_cast<jclass>(old_class),cache,binding,&error);};
+ const auto prepare_queries=method_identity::MappingOsQueries();const int prepare_jni=jni_calls;
  if(!prepare()){std::cerr<<"prepare: "<<error<<"\n";return 1;}
+ if(std::getenv("PUBLIC_ROLES_BENCH_ONLY")){std::cout<<"queries="<<(method_identity::MappingOsQueries()-prepare_queries)<<" jni="<<(jni_calls-prepare_jni)<<"\n";prepared.Clear(&env);Publish(nullptr);return 0;}
  assert(prepared.Ready()&&prepared.Types().size()==6&&prepared.Fields().size()==5&&prepared.Methods().size()==4);assert(prepared.Fields()[0].declaring==reinterpret_cast<jclass>(old_class)&&prepared.Methods()[0].declaring==reinterpret_cast<jclass>(old_class));assert(prepared.Methods()[1].name=="<clinit>"&&!prepared.Methods()[1].reflected);prepared.Clear(&env);assert(globals_created==globals_deleted&&ti_allocations==ti_deletions&&strings.empty());
+ if(std::getenv("PUBLIC_ROLES_GC_PROBE_ONLY")){
+ for(int boundary:{1,2,3}){if(const char*only=std::getenv("PUBLIC_ROLES_GC_BOUNDARY"))if(std::atoi(only)!=boundary)continue;runnable_executor::public_role_decode_hook=ObserveDecode;move_at=boundary;const auto before_moves=moves;if(!prepare()||moves!=before_moves+1){std::cerr<<"ordinary GC boundary="<<boundary<<" rejected: "<<error<<"\n";return 1;}prepared.Clear(&env);ResetOrdinary();}
+ std::cout<<"ordinary GC boundaries Type/Field/Method accepted current owned roots\n";Publish(nullptr);return 0;
+ }
+ binding.roots=nullptr;assert(!prepare());binding.roots=&roots;current_method_codec_changes=true;method_decodes.clear();assert(!prepare()&&error.find("current public ID codec")!=std::string::npos);current_method_codec_changes=false;method_decodes.clear();
  wrong_primitive=true;assert(!prepare()&&!prepared.Ready());wrong_primitive=false;wrong_for_name=true;assert(!prepare()&&!prepared.Ready());wrong_for_name=false;bad_native=true;assert(!prepare()&&!prepared.Ready());bad_native=false;bad_owner=true;assert(!prepare()&&!prepared.Ready());bad_owner=false;public_pending=true;assert(!prepare());public_pending=false;auto saved=dex[100];dex[100]^=1;assert(!prepare());dex[100]=saved;
- auto wrong_original=dex;wrong_original[200]^=1;assert(!prepared.Prepare(&env,&ti,catalog,wrong_original,reinterpret_cast<jclass>(old_class),cache,binding,&error));
+ auto wrong_original=dex;wrong_original[200]^=1;assert(!prepared.Prepare(&independent_env.env,&ti,catalog,wrong_original,reinterpret_cast<jclass>(old_class),cache,binding,&error));
  auto original_component=Read32(public_types["[I"],offsetof(class_metadata::Class17,component_type));Put32(public_types["[I"],offsetof(class_metadata::Class17,component_type),uint32_t(uintptr_t(primitive_v)));assert(!prepare());Put32(public_types["[I"],offsetof(class_metadata::Class17,component_type),original_component);
- auto malformed=catalog;malformed.types[0]="";assert(!prepared.Prepare(&env,&ti,malformed,dex,reinterpret_cast<jclass>(old_class),cache,binding,&error));assert(globals_created==globals_deleted&&ti_allocations==ti_deletions&&strings.empty());assert(prepare());
+ auto malformed=catalog;malformed.types[0]="";assert(!prepared.Prepare(&independent_env.env,&ti,malformed,dex,reinterpret_cast<jclass>(old_class),cache,binding,&error));assert(globals_created==globals_deleted&&ti_allocations==ti_deletions&&strings.empty());assert(prepare());
  Put32(thread.data(),0,0);const runnable_jni::Context context{self,&independent_env.env,&runtime};{
  source_handle_roots::Pool rejected_pool(roots);roles::Rooted rejected;auto wrong_context=context;wrong_context.vm=&linker;assert(!rejected.Import(prepared,wrong_context,roots,rejected_pool,&error));assert(!rejected.Import(prepared,context,roots,rejected_pool,&error));
+ for(int boundary:{1,2,3}){
+ runnable_executor::public_role_decode_hook=ObserveDecode;move_at=boundary;const auto before_moves=moves;
+ assert(prepare()&&moves==before_moves+1&&move_at==0);prepared.Clear(&env);ResetOrdinary();
+ }
+ runnable_executor::public_role_decode_hook=ObserveDecode;reject_borrow=true;assert(!prepare()&&!prepared.Ready());ResetOrdinary();assert(prepare());Put32(thread.data(),0,0);
  source_handle_roots::Pool pool(roots);roles::Rooted rooted;assert(rooted.Import(prepared,context,roots,pool,&error));assert(!rooted.Import(prepared,context,roots,pool,&error));void*cache_root=pool.Add(cache,&error);assert(cache_root);FinalMapper mapper(pool);mapper.dex_begin=uintptr_t(dex.data());mapper.dex_end=mapper.dex_begin+dex.size();native_hierarchy_cache::Counts counts{6,5,4};
  stopped=1;const int before_jni=jni_calls;const auto before_os=method_identity::MappingOsQueries();forbid_provider_allocation=true;
  assert(rooted.Cache(mapper,cache_root,counts));assert(!rejected.Cache(mapper,cache_root,counts)&&!rejected.Type(mapper,0,primitive_i)&&!rejected.Field(mapper,0,prepared.Fields()[0].native)&&!rejected.Method(mapper,0,prepared.Methods()[0].native));assert(!rooted.Cache(mapper,cache_root,{7,5,4}));for(uint32_t i=0;i<6;++i){assert(rooted.Type(mapper,i,prepared.Types()[i].klass));assert(!rooted.Type(mapper,i,loader_object));}assert(!rooted.Type(mapper,6,old_class));
@@ -111,5 +151,5 @@ int main(int argc,char**argv){
  forbid_provider_allocation=false;stopped=0;assert(jni_calls==before_jni&&method_identity::MappingOsQueries()==before_os);assert(pool.DropManagedReferences());stopped=1;assert(!rooted.Type(mapper,2,moved));stopped=0;
  }
  assert(Top()==original_scope);Publish(nullptr);Put32(thread.data(),0,92u<<24);prepared.Clear(&env);assert(globals_created==globals_deleted&&ti_allocations==ti_deletions&&strings.empty());
- std::cout<<"Complete public cache roles: real metadata, inherited/static/clinit/primitive/array IDs; actual source Pool import, GC-moved Class/cache/loader current roles; malformed identity, ownership, flags/index/count, mapping denial and cleanup refusal; stopped callbacks no JNI, OS mapping queries or C++ allocation\n";
+ std::cout<<"Complete public cache roles: three ordinary JNI GC boundaries and borrow refusal; real metadata, inherited/static/clinit/primitive/array IDs; actual source Pool import, GC-moved Class/cache/loader current roles; malformed identity, ownership, flags/index/count, mapping denial and cleanup refusal; stopped callbacks no JNI, OS mapping queries or C++ allocation\n";
 }

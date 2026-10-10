@@ -7,6 +7,7 @@ out=root/'build/evidence/host/source-cache-public-roles';out.mkdir(parents=True,
 jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip())
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 fixture=(root/'tests/host/native_source_commit_test.cc').read_text().split('int main(){')[0].replace('std::array<unsigned char,200>','std::array<unsigned char,512>')
+fixture=fixture.replace('bool DecodeStrongGlobal(const runnable_jni::Context&,jobject p,void** out){if(!p||!out)return false;*out=p;return true;}', 'bool(*public_role_decode_hook)(jobject,void**)=nullptr;\nbool DecodeStrongGlobal(const runnable_jni::Context&,jobject p,void** out){if(!p||!out)return false;if(public_role_decode_hook)return public_role_decode_hook(p,out);*out=p;return true;}')
 (out/'native_commit_fixture.inc').write_text(fixture)
 provider=(root/'tests/host/native_member_provider_test.cc').read_text().split('int main(int argc,char** argv){')[0]
 provider=provider.replace('#include "native_receiver_class_source_cases.h"','')
