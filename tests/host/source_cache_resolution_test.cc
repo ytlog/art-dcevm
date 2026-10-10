@@ -98,57 +98,90 @@ bool CalibrateCache(Fixture&f){Mapper mapper(f);native_hierarchy_cache::Owner ow
  native_hierarchy_cache::Witness w{1026,1025,2051,&f.klass,reinterpret_cast<void*>(0x8440),reinterpret_cast<void*>(0x9550)};
  return owner.Calibrate(mapper,&f.cache,sizeof(f.cache_object),{1033,1026,2056},w,&error);
 }
+namespace {
+unsigned java_calls=0,local_deletes=0;int java_failure=0;
+jobject JavaWriter(JNIEnv*,jclass type,jmethodID method,va_list arguments){
+ assert(type==reinterpret_cast<jclass>(0x4000)&&method==reinterpret_cast<jmethodID>(0x7000));
+ assert(va_arg(arguments,jobject)==reinterpret_cast<jobject>(active));++java_calls;
+ // Independent public-original writer double. Production WarmPublic only
+ // invokes JNI; it never writes these arrays or calls a private resolver.
+ active->fields[1].key.store((uint64_t{2}<<32)|1);active->fields[1].method.store(0x4440);
+ if(active->move)active->klass=0x6000;
+ active->fields[1].key.store((uint64_t{4}<<32)|1025);active->fields[1].method.store(0x8440);
+ active->methods[2051%1024].key.store((uint64_t{2}<<32)|2051);active->methods[2051%1024].method.store(0x9550);
+ active->types[1026%1024]={active->klass,1026};
+ if(java_failure==1)active->exception=true;
+ if(java_failure==3)active->loader=0x3333;
+ return java_failure==2?reinterpret_cast<jobject>(&active->cache):reinterpret_cast<jobject>(&active->klass);
+}
+jboolean SameJava(JNIEnv*,jobject a,jobject b){if(java_failure==4)active->exception=true;return a==b;}
+void DeleteJava(JNIEnv*,jobject value){assert(value);++local_deletes;}
+jboolean PendingJava(JNIEnv*){return active->exception;}
+}
 int main(){
+ {JNINativeInterface_ table{};table.CallStaticObjectMethodV=JavaWriter;table.IsSameObject=SameJava;
+  table.DeleteLocalRef=DeleteJava;table.ExceptionCheck=PendingJava;JNIEnv env{&table};
+  for(int failure=0;failure<5;++failure){Fixture f;active=&f;f.move=true;java_failure=failure;java_calls=0;local_deletes=0;
+   JavaWarm call{reinterpret_cast<jclass>(0x4000),reinterpret_cast<jmethodID>(0x7000),reinterpret_cast<jobject>(&f),reinterpret_cast<jobject>(&f.klass)};std::string error;
+   assert(!CalibrateCache(f));assert(WarmPublic(&env,call,f.witness(),f,&error)==(failure==0));
+   assert(java_calls==1&&local_deletes==1&&f.calls==0); // No unknown direct leaf call.
+   if(!failure)assert(f.klass==0x6000&&f.checks==2&&CalibrateCache(f));
+   else assert(f.checks==(failure==3?2u:1u));
+  }
+  Fixture f;active=&f;java_failure=0;java_calls=0;JavaWarm missing{};std::string error;
+  assert(!WarmPublic(&env,missing,f.witness(),f,&error)&&java_calls==0);
+ }
+
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));native_fixture.native=false;
+  assert(Service::BindDiagnostics(h,&f,&s,&error));native_fixture.native=false;
   assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.installs==0&&h.removals==0&&f.calls==0&&error.find("ordinary Native JNI")!=std::string::npos);
   native_fixture.native=true;
  }
 
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));
+  assert(Service::BindDiagnostics(h,&f,&s,&error));
   assert(s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.installs==2&&h.removals==2&&!h.jls_replacement&&!h.find_replacement&&f.calls==2);
   // Independent original Java calls were exact, but direct mismatch still
   // refuses: observation is not a capability and cannot override an oracle.
-  f.class_field=true;assert(!s.Resolve(f.witness(),f,&error));
+  f.class_field=true;assert(!s.DiagnoseDirect(f.witness(),f,&error));
   assert(error.find("javaJls=1/")!=std::string::npos&&error.find("javaFind=1/")!=std::string::npos);
  }
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));h.fail_install=true;
+  assert(Service::BindDiagnostics(h,&f,&s,&error));h.fail_install=true;
   assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.installs==2&&h.removals==1&&f.calls==0&&!h.jls_replacement);
  }
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));
+  assert(Service::BindDiagnostics(h,&f,&s,&error));
   assert(s.TraceJavaWarm(h,native_fixture,1025,[](void*){},nullptr,&error));
-  f.class_field=true;assert(!s.Resolve(f.witness(),f,&error));
+  f.class_field=true;assert(!s.DiagnoseDirect(f.witness(),f,&error));
   assert(error.find("javaJls=0/")!=std::string::npos&&error.find("javaFind=0/")!=std::string::npos);
  }
 
 
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));
+  assert(Service::BindDiagnostics(h,&f,&s,&error));
   assert(s.TraceJavaWarm(h,native_fixture,1025,[](void* raw){Hooks::Warm(raw);active->exception=true;},&h,&error));
   assert(f.exception&&h.removals==2&&!h.jls_replacement&&!h.find_replacement);
-  assert(!s.Resolve(f.witness(),f,&error)&&f.calls==2); // No source call after exception.
+  assert(!s.DiagnoseDirect(f.witness(),f,&error)&&f.calls==2); // No source call after exception.
  }
  for(bool class_specific:{false,true})for(bool legacy:{false,true}){
   Fixture f;active=&f;Hooks hooks;hooks.legacy=legacy;hooks.class_specific=class_specific;Service service;std::string e;
-  assert(Service::Bind(hooks,&f,&service,&e));
+  assert(Service::BindDiagnostics(hooks,&f,&service,&e));
   // Cache warming was displaced by another public declaration in slot 1.
   assert(f.field_key==1&&f.field_value!=f.witness().field&&!CalibrateCache(f));
-  assert(service.Resolve(f.witness(),f,&e)&&f.calls==3&&f.checks==4&&CalibrateCache(f));
+  assert(service.DiagnoseDirect(f.witness(),f,&e)&&f.calls==3&&f.checks==4&&CalibrateCache(f));
   f.fields[1].key.store((uint64_t{2}<<32)|1);assert(!CalibrateCache(f));
-  assert(service.Resolve(f.witness(),f,&e)&&CalibrateCache(f));
+  assert(service.DiagnoseDirect(f.witness(),f,&e)&&CalibrateCache(f));
   assert(f.field_key==1025&&f.method_key==2051&&f.type_key==1026&&f.field_value==f.witness().field&&f.method_value==f.witness().method);
-  f.move=true;assert(service.Resolve(f.witness(),f,&e)&&f.klass==0x6000);
+  f.move=true;assert(service.DiagnoseDirect(f.witness(),f,&e)&&f.klass==0x6000);
   for(int bad=0;bad<7;++bad){
-   Fixture failed;active=&failed;Hooks h;h.legacy=legacy;h.class_specific=class_specific;h.throw_field=bad==5;Service s;assert(Service::Bind(h,&failed,&s,&e));
+   Fixture failed;active=&failed;Hooks h;h.legacy=legacy;h.class_specific=class_specific;h.throw_field=bad==5;Service s;assert(Service::BindDiagnostics(h,&failed,&s,&e));
    if(bad==0)failed.loader=0x3333;if(bad==1)failed.cache=0x1111;
    failed.foreign_field=bad==2;failed.foreign_method=bad==3;failed.foreign_type=bad==4;failed.class_field=bad==6;
-   assert(!s.Resolve(failed.witness(),failed,&e));
+   assert(!s.DiagnoseDirect(failed.witness(),failed,&e));
    if(bad==2)assert(e.find("idx=1025 expected=")!=std::string::npos&&e.find("pre=0x8888 post=0x8888 preExact=0")!=std::string::npos&&e.find("outside-public-Class-native-arrays")!=std::string::npos);
    if(bad==6)assert(e.find("pre=0x2000 post=0x2000 preExact=0")!=std::string::npos);
    assert(failed.descriptions==(bad==2||bad==6?1u:0u));
@@ -156,25 +189,25 @@ int main(){
   }
  }
  {Fixture moved;active=&moved;moved.move_in_snapshot=true;Hooks h;Service s;std::string e;
-  assert(Service::Bind(h,&moved,&s,&e)&&s.Resolve(moved.witness(),moved,&e));
+  assert(Service::BindDiagnostics(h,&moved,&s,&e)&&s.DiagnoseDirect(moved.witness(),moved,&e));
   assert(moved.klass==0x6000&&moved.field_value==moved.witness().field&&moved.calls==3);
  }
  {Fixture no_side_effect;active=&no_side_effect;no_side_effect.skip_field_cache=true;Hooks h;Service s;std::string e;
-  assert(Service::Bind(h,&no_side_effect,&s,&e)&&s.Resolve(no_side_effect.witness(),no_side_effect,&e));
+  assert(Service::BindDiagnostics(h,&no_side_effect,&s,&e)&&s.DiagnoseDirect(no_side_effect.witness(),no_side_effect,&e));
   assert(!CalibrateCache(no_side_effect)); // Exact return alone cannot grant format/table authority.
  }
  {Fixture bad_static;active=&bad_static;Hooks h;Service s;std::string e;auto w=bad_static.witness();w.field_static=true;
-  assert(Service::Bind(h,&bad_static,&s,&e)&&!s.Resolve(w,bad_static,&e)&&bad_static.calls==1);
+  assert(Service::BindDiagnostics(h,&bad_static,&s,&e)&&!s.DiagnoseDirect(w,bad_static,&e)&&bad_static.calls==1);
   assert(!CalibrateCache(bad_static));
  }
  {Fixture boot;active=&boot;boot.loader=boot.actual_loader=0;Hooks h;Service s;std::string e;
-  assert(Service::Bind(h,&boot,&s,&e)&&s.Resolve(boot.witness(),boot,&e)&&CalibrateCache(boot));
+  assert(Service::BindDiagnostics(h,&boot,&s,&e)&&s.DiagnoseDirect(boot.witness(),boot,&e)&&CalibrateCache(boot));
  }
- Hooks h;Fixture f;active=&f;Service s;std::string e;h.missing=true;assert(!Service::Bind(h,&f,&s,&e));
- h.missing=false;h.aliased=true;assert(!Service::Bind(h,&f,&s,&e)&&f.calls==0);h.aliased=false;assert(!Service::Bind(h,nullptr,&s,&e));assert(Service::Bind(h,&f,&s,&e));
- auto w=f.witness();w.type_index=65535;assert(!s.Resolve(w,f,&e)&&f.calls==0);
+ Hooks h;Fixture f;active=&f;Service s;std::string e;h.missing=true;assert(!Service::BindDiagnostics(h,&f,&s,&e));
+ h.missing=false;h.aliased=true;assert(!Service::BindDiagnostics(h,&f,&s,&e)&&f.calls==0);h.aliased=false;assert(!Service::BindDiagnostics(h,nullptr,&s,&e));assert(Service::BindDiagnostics(h,&f,&s,&e));
+ auto w=f.witness();w.type_index=65535;assert(!s.DiagnoseDirect(w,f,&e)&&f.calls==0);
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
-  assert(Service::Bind(h,&f,&s,&error));h.fail_remove=true;
+  assert(Service::BindDiagnostics(h,&f,&s,&error));h.fail_remove=true;
   assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.removals==2&&error.find("observer removal refused")!=std::string::npos);
   assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error)&&error.find("restart process")!=std::string::npos);

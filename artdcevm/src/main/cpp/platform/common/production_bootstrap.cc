@@ -210,6 +210,7 @@ struct NativeEngine final:Engine {
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
  source_cache_resolution::Service cache_resolver;
+ jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
  static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
  native_schema_run_state::CacheCalibration CacheCalibration()const {
@@ -879,7 +880,8 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
  } proof(e,scope,pool);
  const auto&w=e.source_cache_witness;
  source_cache_resolution::Witness witness{cache_root,class_root,loader,w.ids.type_index,w.field_index,w.method_index,w.native_field,w.native_method,(w.public_field_modifiers&8u)!=0};
- return e.cache_resolver.Resolve(witness,proof,error);
+ return source_cache_resolution::WarmPublic(scope.env,
+  {e.source_cache_bootstrap,e.source_cache_warm,e.input,w.klass},witness,proof,error);
 }
 struct SourceCacheWitnessRequest {
  NativeEngine* engine;std::string* error;
@@ -923,7 +925,7 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
  if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
- if(!source_cache_resolution::Service::Bind(hooks,runtime.receivers.class_linker,&cache_resolver,error))return false;
+ if(!source_cache_resolution::Service::BindObservation(hooks,runtime.receivers.class_linker,&cache_resolver,error))return false;
  jclass type=env->GetObjectClass(input);
  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
  if(!type||env->ExceptionCheck())return Fail(error,"Public cache witness Inputs class unavailable");
@@ -967,6 +969,12 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!bootstrap||env->ExceptionCheck())return Fail(error,"Public cache witness bootstrap class unavailable");
  auto warm=env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;");
  if(!warm||env->ExceptionCheck())return Fail(error,"Public cache witness original warm method unavailable");
+ if(!source_cache_bootstrap){
+  source_cache_bootstrap=static_cast<jclass>(env->NewGlobalRef(bootstrap));
+  if(source_cache_bootstrap)roots.push_back(source_cache_bootstrap);
+  if(!source_cache_bootstrap||env->ExceptionCheck())return Fail(error,"Public cache Java writer retained bootstrap Class unavailable");
+ }
+ source_cache_warm=warm;
  struct WarmCall {JNIEnv* env;jclass bootstrap;jmethodID warm;jobject input;jobject expected=nullptr;} call{env,bootstrap,warm,input};
  struct NativeProof final:source_cache_resolution::NativeWindow {
   NativeEngine& engine;JNIEnv* env;

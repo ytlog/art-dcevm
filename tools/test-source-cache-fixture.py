@@ -22,6 +22,13 @@ for opcode in ('const-class','new-instance','invoke-direct','invoke-virtual','ig
  assert re.search(r'\b'+opcode+r'.*SourceCacheFixture',warm),opcode
 assert re.search(r'invoke-virtual.*SourceCacheFixture;\.read:\(\)I',warm)
 assert re.search(r'iget.*SourceCacheFixture;\.number:I',warm)
+collision=re.search(r'sget-object.*SourceCacheFixture;\.cachePadding0001:.*// field@([0-9a-f]+)',warm)
+number=re.search(r'iget.*SourceCacheFixture;\.number:I.*// field@([0-9a-f]+)',warm)
+assert collision and number, 'missing independent collision field opcode indices'
+collision_index=int(collision.group(1),16);number_index=int(number.group(1),16)
+assert collision_index==1 and number_index==1025 and collision_index%1024==number_index%1024
+assert collision.start()<number.start(), 'number read must follow actual sget displacement'
+
 out=root/'build/evidence/cache-pair-fixture';out.mkdir(parents=True,exist_ok=True);(out/'dexdump.txt').write_text(dump)
 print(f'Actual StandardDEX pair oracle PASS: type/field/method IDs={counts}; same-DEX Class/new/number/read opcodes; small-table and missing-marker refusals')
 

@@ -29,6 +29,30 @@ void* TraceFind(void* linker,abi::arm64::android11::ReleaseObjectPointer klass,a
  return result;
 }
 }
+bool WarmPublic(JNIEnv* env,const JavaWarm& call,const Witness& witness,const Roots& roots,std::string* error){
+ if(!env||!call.bootstrap||!call.method||!call.input||!call.expected_class)return Fail(error,"Public cache original Java witness inputs incomplete");
+ if(env->ExceptionCheck())return Fail(error,"Public cache original Java witness entered with pending exception");
+ Objects current;if(!roots.Snapshot(witness,&current,error))return false;
+ jobject returned=env->CallStaticObjectMethod(call.bootstrap,call.method,call.input);
+ // DeleteLocalRef is safe cleanup with a pending original exception. Do not
+ // perform identity JNI or another source observer until the exception check.
+ if(env->ExceptionCheck()){if(returned)env->DeleteLocalRef(returned);return Fail(error,"Public cache original Java writer raised exception");}
+ if(!returned)return Fail(error,"Public cache original Java writer returned no Class");
+ const bool same=env->IsSameObject(returned,call.expected_class);
+ const bool pending=env->ExceptionCheck();env->DeleteLocalRef(returned);
+ if(pending||!same)return Fail(error,"Public cache original Java writer changed exact Class identity");
+ // JNI restored its incoming Runnable state; reborrow all strong Pool roots
+ // after the Java invocation's possible allocation/GC before native Calibrate.
+ return roots.Snapshot(witness,&current,error);
+}
+bool Service::BindObservation(HookEngine& hooks,void* linker,Service* out,std::string* error){
+ if(!out||!linker)return Fail(error,"Cache Java observer actual ClassLinker owner unavailable");
+ Service candidate;candidate.linker_=linker;
+ candidate.field_specific_=reinterpret_cast<abi::arm64::android_common::FindCacheField>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFindCacheField));
+ candidate.field_=reinterpret_cast<abi::arm64::android_common::ResolveCacheMember>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kResolveCacheField));
+ if(!candidate.field_specific_&&!candidate.field_)return Fail(error,"Cache Java observer named field source entries unavailable");
+ *out=candidate;return true;
+}
 bool Service::TraceJavaWarm(HookEngine& hooks,const NativeWindow& native,uint32_t index,void(*invoke)(void*),void* context,std::string* error){
  if(!invoke||java_warm||!native.OrdinaryNative())return Fail(error,"Cache Java witness observer requires actual ordinary Native JNI");
  std::lock_guard<std::mutex> lock(trace_mutex);
@@ -68,7 +92,7 @@ bool Service::TraceJavaWarm(HookEngine& hooks,const NativeWindow& native,uint32_
  java_trace_=facts;
  return installed&&removed;
 }
-bool Service::Bind(HookEngine& h,void* linker,Service*out,std::string*e){
+bool Service::BindDiagnostics(HookEngine& h,void* linker,Service*out,std::string*e){
  if(!out||!linker)return Fail(e,"Cache resolution actual ClassLinker owner unavailable");
  using namespace abi::arm64::android_common;
  Service s;s.linker_=linker;
@@ -89,7 +113,7 @@ bool Service::Bind(HookEngine& h,void* linker,Service*out,std::string*e){
   return Fail(e,"Named cache resolution targets alias different source declarations");
  *out=s;return true;
 }
-bool Service::Resolve(const Witness&w,const Roots&r,std::string*e)const{
+bool Service::DiagnoseDirect(const Witness&w,const Roots&r,std::string*e)const{
  Objects current;
  if(!linker_||!type_||(!field_&&!field_specific_)||!method_||!w.cache_slot||!w.class_slot||!w.loader_slot||
     w.type_index>=UINT16_MAX||!w.field||!w.method)return Fail(e,"Cache resolution immutable witnesses incomplete");

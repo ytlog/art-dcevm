@@ -71,8 +71,7 @@ public final class ProductionBootstrap {
             cacheRead = cacheClass.getDeclaredMethod("read");
             cacheWarm = cacheClass.getDeclaredMethod("warm", cacheClass);
             cacheField = cacheClass.getDeclaredField("number");
-            if (cacheWarm.invoke(null, cacheFixture) != cacheClass)
-                throw new IllegalStateException("Isolated source cache witness changed");
+            // Native preflight observes the first actual cold warm call.
             storage = new CalibrationFixture();
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             methods = new Method[] {EvolutionCalibration.class.getDeclaredMethod("compute"),

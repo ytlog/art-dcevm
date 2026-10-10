@@ -18,6 +18,11 @@ class Roots {
  // array membership before reading a foreign original return as ArtField.
  virtual std::string DescribeField(const Witness&,void*)const{return {}; }
 };
+struct JavaWarm {jclass bootstrap=nullptr;jmethodID method=nullptr;jobject input=nullptr,expected_class=nullptr;};
+// JNI's fixed ScopedObjectAccess/ScopedThreadStateChange permits nested
+// Runnable entry. Caller supplies already retained public globals and method ID;
+// Snapshot verifies the real current Runnable/root owner before/after Java GC.
+bool WarmPublic(JNIEnv*,const JavaWarm&,const Witness&,const Roots&,std::string*);
 class NativeWindow {
  public:virtual ~NativeWindow()=default;
  // Must independently prove ordinary Native JNI and the exact current
@@ -26,8 +31,11 @@ class NativeWindow {
 };
 class Service final {
  public:
- static bool Bind(HookEngine&,void* observed_linker,Service*,std::string*);
- bool Resolve(const Witness&,const Roots&,std::string*)const;
+ static bool BindDiagnostics(HookEngine&,void* observed_linker,Service*,std::string*);
+ static bool BindObservation(HookEngine&,void* observed_linker,Service*,std::string*);
+ // Optional diagnostic only; production admission uses WarmPublic followed
+ // by immutable native three-table calibration, never this private return.
+ bool DiagnoseDirect(const Witness&,const Roots&,std::string*)const;
  // Diagnostic only. A real ordinary-JNI Java call runs between suspended
  // installation/removal of unique source-typed observers. Never grants readiness.
  bool TraceJavaWarm(HookEngine&,const NativeWindow&,uint32_t field_index,void(*invoke)(void*),void*,std::string*);
