@@ -22,7 +22,11 @@ class Service final {
  public:
  static bool Bind(HookEngine&,void* observed_linker,Service*,std::string*);
  bool Resolve(const Witness&,const Roots&,std::string*)const;
+ // Diagnostic only. A real ordinary-JNI Java call runs between suspended
+ // installation/removal of unique source-typed observers. Never grants readiness.
+ bool TraceJavaWarm(HookEngine&,uint32_t field_index,void(*invoke)(void*),void*,std::string*);
  private:
+ std::string java_trace_;
  void* linker_=nullptr;
  abi::arm64::android_common::ResolveCacheType type_=nullptr;
  abi::arm64::android_common::ResolveCacheMember field_=nullptr,method_=nullptr;

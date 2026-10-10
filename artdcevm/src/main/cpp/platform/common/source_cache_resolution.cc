@@ -1,8 +1,69 @@
 #include "platform/common/source_cache_resolution.h"
 #include <cstdio>
+#include <cstring>
 #include <dlfcn.h>
+#include <mutex>
+#include "platform/abi/arm64/android-common/suspend_all.h"
 namespace artdcevm::source_cache_resolution {
-namespace {bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}}
+namespace {
+bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}
+using namespace abi::arm64::android_common;
+// Fixed source declarations. No observer touches JNI, managed objects, cache
+// entries or original results; the recorded words are diagnostics, never roots.
+struct WarmTrace {uint32_t index;unsigned jls=0,find=0;uintptr_t jls_owner=0,find_owner=0,jls_result=0,find_result=0;
+ uintptr_t jls_cache=0,jls_loader=0,find_class=0,find_cache=0,find_loader=0;bool find_static=false;};
+thread_local WarmTrace* java_warm=nullptr;
+std::mutex trace_mutex;
+bool trace_poisoned=false;
+ResolveCacheMember original_jls=nullptr;
+FindCacheField original_find=nullptr;
+void* TraceJls(void* linker,uint32_t index,const void* cache,const void* loader){
+ auto* result=original_jls(linker,index,cache,loader);
+ if(java_warm&&java_warm->index==index){++java_warm->jls;java_warm->jls_owner=uintptr_t(linker);java_warm->jls_result=uintptr_t(result);java_warm->jls_cache=uintptr_t(cache);java_warm->jls_loader=uintptr_t(loader);}
+ return result;
+}
+void* TraceFind(void* linker,abi::arm64::android11::ReleaseObjectPointer klass,abi::arm64::android11::ReleaseObjectPointer cache,
+ abi::arm64::android11::ReleaseObjectPointer loader,uint32_t index,bool is_static){
+ auto* result=original_find(linker,klass,cache,loader,index,is_static);
+ if(java_warm&&java_warm->index==index){++java_warm->find;java_warm->find_owner=uintptr_t(linker);java_warm->find_result=uintptr_t(result);java_warm->find_class=klass.reference;java_warm->find_cache=cache.reference;java_warm->find_loader=loader.reference;java_warm->find_static=is_static;}
+ return result;
+}
+}
+bool Service::TraceJavaWarm(HookEngine& hooks,uint32_t index,void(*invoke)(void*),void* context,std::string* error){
+ if(!invoke||java_warm)return Fail(error,"Cache Java witness observer scope invalid");
+ std::lock_guard<std::mutex> lock(trace_mutex);
+ if(trace_poisoned)return Fail(error,"Cache Java witness prior observer removal failed; restart process");
+ const auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
+ const auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
+ if(!construct||!destroy)return Fail(error,"Cache Java witness observer suspension declarations unavailable");
+ void* jls=hooks.FindSymbol("libart.so",kResolveCacheField);
+ void* find=reinterpret_cast<void*>(field_specific_);
+ if(jls&&jls==find)return Fail(error,"Cache Java witness different source entries alias");
+ if(!jls&&!find)return Fail(error,"Cache Java witness observer source targets unavailable");
+ void* jt=nullptr,*ft=nullptr;
+ {SuspendAll scope{};construct(&scope,"artdcevm cache original Java observer",false);
+  original_jls=nullptr;original_find=nullptr;
+  if(jls)jt=hooks.Install(jls,reinterpret_cast<void*>(TraceJls),reinterpret_cast<void**>(&original_jls),error);
+  if((!jls||jt)&&find)ft=hooks.Install(find,reinterpret_cast<void*>(TraceFind),reinterpret_cast<void**>(&original_find),error);
+  destroy(&scope);
+ }
+ const bool installed=(!jls||(jt&&original_jls))&&(!find||(ft&&original_find));
+ WarmTrace trace{index};
+ if(installed){java_warm=&trace;invoke(context);java_warm=nullptr;}
+ bool removed=true;
+ {SuspendAll scope{};construct(&scope,"artdcevm cache Java observer removal",false);
+  std::string removal;
+  if(ft&&!hooks.Remove(ft,&removal))removed=false;
+  if(jt&&!hooks.Remove(jt,&removal))removed=false;
+  destroy(&scope);
+  if(!removed){trace_poisoned=true;if(error)*error="Cache Java witness observer removal refused: "+removal;}
+ }
+ char facts[320];std::snprintf(facts,sizeof(facts)," javaJls=%u/%p/%p/%p/%p javaFind=%u/%p/%p/%p/%p/%p/%d expectedThis=%p",
+  trace.jls,reinterpret_cast<void*>(trace.jls_owner),reinterpret_cast<void*>(trace.jls_result),reinterpret_cast<void*>(trace.jls_cache),reinterpret_cast<void*>(trace.jls_loader),
+  trace.find,reinterpret_cast<void*>(trace.find_owner),reinterpret_cast<void*>(trace.find_result),reinterpret_cast<void*>(trace.find_class),reinterpret_cast<void*>(trace.find_cache),reinterpret_cast<void*>(trace.find_loader),trace.find_static,linker_);
+ java_trace_=facts;
+ return installed&&removed;
+}
 bool Service::Bind(HookEngine& h,void* linker,Service*out,std::string*e){
  if(!out||!linker)return Fail(e,"Cache resolution actual ClassLinker owner unavailable");
  using namespace abi::arm64::android_common;
@@ -44,13 +105,17 @@ bool Service::Resolve(const Witness&w,const Roots&r,std::string*e)const{
  if(!field_exact_before||field!=w.field||uintptr_t(field)!=field_before){
   char detail[192];std::snprintf(detail,sizeof(detail),"Named field resolution differs from public immutable DEX witness: idx=%u expected=%p pre=%p post=%p preExact=%d",w.field_index,w.field,reinterpret_cast<void*>(field_before),field,field_exact_before);
   if(e){
-   *e=std::string(detail)+r.DescribeField(w,field);
+   *e=std::string(detail);
    // Attribute the address returned by the named loader itself. This is
    // evidence only: no derived address/offset or alias fallback is executed.
    Dl_info info{};
-   if(dladdr(field_specific_?reinterpret_cast<void*>(field_specific_):reinterpret_cast<void*>(field_),&info)&&info.dli_sname)
-    *e+=" target="+std::string(info.dli_sname);
+   if(dladdr(field_specific_?reinterpret_cast<void*>(field_specific_):reinterpret_cast<void*>(field_),&info)&&info.dli_sname){
+    *e+=field_specific_?" target=FindResolvedField":" target=ResolveFieldJLS";
+    if(info.dli_fname)*e+=" module="+std::string(info.dli_fname);
+    char address[112];std::snprintf(address,sizeof(address)," base=%p entry=%p symbol=%p nameExact=%d",info.dli_fbase,field_specific_?reinterpret_cast<void*>(field_specific_):reinterpret_cast<void*>(field_),info.dli_saddr,!std::strcmp(info.dli_sname,field_specific_?abi::arm64::android_common::kFindCacheField:abi::arm64::android_common::kResolveCacheField));*e+=address;
+   }
    else *e+=" target-symbol=unattributed";
+   *e+=java_trace_+r.DescribeField(w,field);
   }
   return false;
  }

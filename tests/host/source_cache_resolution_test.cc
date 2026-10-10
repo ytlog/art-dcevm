@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+#include "platform/abi/arm64/android-common/suspend_all.h"
 using namespace artdcevm;
 using namespace source_cache_resolution;
 namespace fixed=abi::arm64::android_common;
@@ -44,9 +45,14 @@ void* ClassField(void*l,abi::arm64::android11::ReleaseObjectPointer c,
 }
 struct Hooks final:HookEngine {
  bool legacy=false,missing=false,throw_field=false,aliased=false,class_specific=true;
+ void* jls_replacement=nullptr,*find_replacement=nullptr;unsigned installs=0,removals=0;bool fail_install=false,fail_remove=false;
+ static void Construct(void*,const char*,bool){}
+ static void Destroy(void*){}
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*lib,const char*name)override{
   assert(!strcmp(lib,"libart.so"));
+  if(!strcmp(name,"_ZN3art16ScopedSuspendAllC2EPKcb"))return reinterpret_cast<void*>(Construct);
+  if(!strcmp(name,"_ZN3art16ScopedSuspendAllD2Ev"))return reinterpret_cast<void*>(Destroy);
   if(!strcmp(name,"_ZN3art11ClassLinker13DoResolveTypeENS_3dex9TypeIndexENS_6HandleINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"))return reinterpret_cast<void*>(Type);
   if(!strcmp(name,"_ZN3art11ClassLinker17FindResolvedFieldENS_6ObjPtrINS_6mirror5ClassEEENS1_INS2_8DexCacheEEENS1_INS2_11ClassLoaderEEEjb"))return !class_specific||missing?nullptr:aliased?reinterpret_cast<void*>(Type):reinterpret_cast<void*>(throw_field?ThrowClassField:ClassField);
   if(!strcmp(name,"_ZN3art11ClassLinker15ResolveFieldJLSEjNS_6HandleINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return missing?nullptr:aliased?reinterpret_cast<void*>(Type):reinterpret_cast<void*>(throw_field?ThrowField:Field);
@@ -56,8 +62,18 @@ struct Hooks final:HookEngine {
  }
  static void* ThrowClassField(void*l,abi::arm64::android11::ReleaseObjectPointer c,abi::arm64::android11::ReleaseObjectPointer d,abi::arm64::android11::ReleaseObjectPointer loader,uint32_t index,bool is_static){auto*r=ClassField(l,c,d,loader,index,is_static);active->exception=true;return r;}
  static void* ThrowField(void*l,uint32_t id,const void*c,const void*d){auto*r=Field(l,id,c,d);active->exception=true;return r;}
- void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}
- bool Remove(void*,std::string*)override{assert(false);return false;}
+ void* Install(void* target,void* replacement,void** original,std::string*)override{
+  ++installs;if(fail_install&&installs==2)return nullptr;
+  *original=target;
+  if(target==reinterpret_cast<void*>(Field)){jls_replacement=replacement;return &jls_replacement;}
+  assert(target==reinterpret_cast<void*>(ClassField));find_replacement=replacement;return &find_replacement;
+ }
+ bool Remove(void* token,std::string* error)override{++removals;*static_cast<void**>(token)=nullptr;if(fail_remove){if(error)*error="real removal refusal";return false;}return true;}
+ static void Warm(void* raw){auto& h=*static_cast<Hooks*>(raw);
+  if(h.jls_replacement){auto f=reinterpret_cast<fixed::ResolveCacheMember>(h.jls_replacement);assert(f(active,1025,&active->cache,&active->loader)==active->field_value);}
+  if(h.find_replacement){auto f=reinterpret_cast<fixed::FindCacheField>(h.find_replacement);assert(f(active,{active->klass},{active->cache},{active->loader},1025,false)==active->field_value);}
+ }
+
 };
 
 struct Mapper final:native_hierarchy_cache::SourceMapper {
@@ -82,6 +98,34 @@ bool CalibrateCache(Fixture&f){Mapper mapper(f);native_hierarchy_cache::Owner ow
  return owner.Calibrate(mapper,&f.cache,sizeof(f.cache_object),{1033,1026,2056},w,&error);
 }
 int main(){
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));
+  assert(s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(h.installs==2&&h.removals==2&&!h.jls_replacement&&!h.find_replacement&&f.calls==2);
+  // Independent original Java calls were exact, but direct mismatch still
+  // refuses: observation is not a capability and cannot override an oracle.
+  f.class_field=true;assert(!s.Resolve(f.witness(),f,&error));
+  assert(error.find("javaJls=1/")!=std::string::npos&&error.find("javaFind=1/")!=std::string::npos);
+ }
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));h.fail_install=true;
+  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(h.installs==2&&h.removals==1&&f.calls==0&&!h.jls_replacement);
+ }
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));
+  assert(s.TraceJavaWarm(h,1025,[](void*){},nullptr,&error));
+  f.class_field=true;assert(!s.Resolve(f.witness(),f,&error));
+  assert(error.find("javaJls=0/")!=std::string::npos&&error.find("javaFind=0/")!=std::string::npos);
+ }
+
+
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));
+  assert(s.TraceJavaWarm(h,1025,[](void* raw){Hooks::Warm(raw);active->exception=true;},&h,&error));
+  assert(f.exception&&h.removals==2&&!h.jls_replacement&&!h.find_replacement);
+  assert(!s.Resolve(f.witness(),f,&error)&&f.calls==2); // No source call after exception.
+ }
  for(bool class_specific:{false,true})for(bool legacy:{false,true}){
   Fixture f;active=&f;Hooks hooks;hooks.legacy=legacy;hooks.class_specific=class_specific;Service service;std::string e;
   assert(Service::Bind(hooks,&f,&service,&e));
@@ -121,5 +165,11 @@ int main(){
  Hooks h;Fixture f;active=&f;Service s;std::string e;h.missing=true;assert(!Service::Bind(h,&f,&s,&e));
  h.missing=false;h.aliased=true;assert(!Service::Bind(h,&f,&s,&e)&&f.calls==0);h.aliased=false;assert(!Service::Bind(h,nullptr,&s,&e));assert(Service::Bind(h,&f,&s,&e));
  auto w=f.witness();w.type_index=65535;assert(!s.Resolve(w,f,&e)&&f.calls==0);
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));h.fail_remove=true;
+  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(h.removals==2&&error.find("observer removal refused")!=std::string::npos);
+  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error)&&error.find("restart process")!=std::string::npos);
+ }
  puts("PASS named original cache resolution, displaced slots, moving roots, exact namespace/identity and exception refusal");
 }

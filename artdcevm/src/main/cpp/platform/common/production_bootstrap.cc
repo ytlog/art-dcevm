@@ -967,7 +967,12 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!bootstrap||env->ExceptionCheck())return Fail(error,"Public cache witness bootstrap class unavailable");
  auto warm=env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;");
  if(!warm||env->ExceptionCheck())return Fail(error,"Public cache witness original warm method unavailable");
- auto expected=env->CallStaticObjectMethod(bootstrap,warm,input);Local expected_scope{env,expected};
+ struct WarmCall {JNIEnv* env;jclass bootstrap;jmethodID warm;jobject input;jobject expected=nullptr;} call{env,bootstrap,warm,input};
+ const bool traced=cache_resolver.TraceJavaWarm(hooks,source_cache_witness.field_index,[](void* raw){
+  auto& c=*static_cast<WarmCall*>(raw);c.expected=c.env->CallStaticObjectMethod(c.bootstrap,c.warm,c.input);
+ },&call,error);
+ auto expected=call.expected;Local expected_scope{env,expected};
+ if(!traced)return false;
  if(!expected||env->ExceptionCheck())return Fail(error,"Original DEX cache warm invocation rejected");
  const bool same=env->IsSameObject(expected,source_cache_witness.klass);
  if(!same||env->ExceptionCheck())return Fail(error,"Original DEX cache warm class identity changed");
