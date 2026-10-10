@@ -796,7 +796,20 @@ struct NativeEngine final:Engine {
  static void AfterSchemaVerification(void* owner,const transaction_root::Iterator* it,bool success,void* raw) noexcept {
   auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)std::abort();e.schema_run->AfterVerification(owner,it,success);
  }
- static void RefundSchema(void* raw) noexcept {auto& e=*static_cast<NativeEngine*>(raw);if(e.schema_run)e.schema_run->Refund();}
+ void ReleaseFailedSchemaRoots()noexcept{
+  if(!source_env||!schema_run)std::abort();
+  // RunState already validated all private allocator/ledger cleanup. These
+  // supplemental JNI roots must end before original Run destroys its DEX;
+  // original Holder handles and owned native anchor headers remain untouched.
+  if(permission_service)permission_service->Clear(source_env);
+  for(const auto& part:schema_roots.partitions)for(auto array:{part.old_classes,part.new_classes,part.old_instances,part.new_instances})if(array)source_env->DeleteGlobalRef(array);
+  if(schema_roots.mirror)source_env->DeleteGlobalRef(schema_roots.mirror);
+  schema_roots={};
+ }
+ static void RefundSchema(void* raw) noexcept {
+  auto&e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)return;
+  e.schema_run->Refund();
+ }
  static void CommitSchema(const source_commit::Plan& plan,void* raw) noexcept {
   auto& e=*static_cast<NativeEngine*>(raw);if(!e.schema_run)std::abort();e.schema_run->Commit(plan);
  }
@@ -815,7 +828,8 @@ struct NativeEngine final:Engine {
   native_schema_run_state::Dependencies d;
   if(!source_capabilities.BindDependencies(&d,error)||!PrepareStoppedMaps(error))return false;
   d.hooks=&hooks;d.loading=&source_observers.Loading();d.stop=&source_stop;d.frames=&whole_frames;
-  d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.members=MemberDependencies();
+  d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.refund_roots_owner=this;
+  d.refund_roots=[](void*raw)noexcept{static_cast<NativeEngine*>(raw)->ReleaseFailedSchemaRoots();};d.members=MemberDependencies();
   d.boot_catalog=boot_methods.Complete()?&boot_methods:nullptr;
   d.boot_vtables=abstract_instances.Ready()?&abstract_instances:nullptr;
   d.boot_code=receiver_producer_bound?&receiver_producer:nullptr;

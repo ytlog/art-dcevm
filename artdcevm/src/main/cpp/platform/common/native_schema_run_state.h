@@ -46,6 +46,10 @@ struct Dependencies {
  const native_abstract_instances::Service* boot_vtables=nullptr;
  const receiver_guard::SourceProducer* boot_code=nullptr;
  Mapping mapping{};
+ // Release only this rejected operation's supplemental strong JNI roots after
+ // exact allocator/ledger readers finish, before original source destruction.
+ void* refund_roots_owner=nullptr;
+ void (*refund_roots)(void*)noexcept=nullptr;
 };
 // Unique original Run aggregate. Stage, JNI roots and scanner storage precede
 // reservation. It never uses the local Native JNI executor across a return.
@@ -80,6 +84,7 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  const modern_field_metadata::ReadContext* CurrentReadContext()const noexcept;
  const whole_process_frames::Report& Frames()const noexcept;
  private:
+ static void CompleteRefund(void*)noexcept;
  struct State;
  struct StoppedAttempt;
  static bool PrepareOriginalWaiting(void*,native_source_stop::Session&) noexcept;

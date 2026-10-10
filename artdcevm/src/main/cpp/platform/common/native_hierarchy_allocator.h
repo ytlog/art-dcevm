@@ -4,6 +4,7 @@
 #include "platform/common/runtime_services.h"
 #include "platform/abi/arm64/common/hierarchy_allocation.h"
 #include <memory>
+namespace artdcevm::native_hierarchy_private_ledger {class Ledger;}
 namespace artdcevm::native_hierarchy_allocator {
 // Fixed named source boundaries are owned by the production hook adapter. The
 // original trampolines (never proxies) must remain live for every Batch.
@@ -17,6 +18,7 @@ struct Functions {
  void (*retire_status)(void*,uint8_t)=nullptr;
  abi::arm64::android_common::HierarchyLoadClass load_class=nullptr;
 };
+
 class Batch;
 class Service final:public native_hierarchy_graph::AllocationOwner {
  public:
@@ -58,6 +60,7 @@ class Service final:public native_hierarchy_graph::AllocationOwner {
  using Enter=abi::arm64::android11::ReleaseObjectPointer(*)(void*,abi::arm64::android11::ReleaseObjectPointer,bool);
  using Exit=bool(*)(void*,abi::arm64::android11::ReleaseObjectPointer);
  Enter enter_=nullptr;Exit exit_=nullptr;
+ bool ValidatePrivateTemporary(const runnable_jni::Context&,source_handle_roots::Pool&,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept;
  bool Retire(const runnable_jni::Context&,source_handle_roots::Pool&,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept;
  Functions functions_{};bool originals_=false,observed_=false,monitor_=false;
  const char* observation_failure_="";
@@ -79,6 +82,9 @@ class Batch final {
  // The source owner must retire every captured temporary before the source
  // DEX disappears. No caller-owned published Class is ever a retirement target.
  bool Complete(bool committed,std::string*);
+ // Exact source-ledger authority, never an arbitrary readiness boolean. No
+ // status mutation: original Holder ownership remains responsible for cleanup.
+ bool DiscardPrivate(const native_hierarchy_private_ledger::Ledger&)noexcept;
  struct RecordView {void* source_owner;uint16_t class_index;void* old_root;void* new_root;void* cache_root;void* parent_root;const evolution::ClassSchema* declarations;evolution::MappedDexMetadata dex;};
  size_t Count()const noexcept;
  bool At(size_t,RecordView*)const noexcept;

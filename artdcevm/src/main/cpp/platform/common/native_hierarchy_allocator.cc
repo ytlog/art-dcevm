@@ -1,4 +1,5 @@
 #include "platform/common/native_hierarchy_allocator.h"
+#include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/class_metadata_abi.h"
@@ -175,7 +176,7 @@ bool Service::EnsureInstanceIds(const void* handle)noexcept {
  if(!originals_)return false;
  CaptureLinked(handle);return functions_.ensure_ids(handle);
 }
-bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept{
+bool Service::ValidatePrivateTemporary(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept{
  if(!monitor_||!originals_||!roots_->ReadyForSourceAccess())return false;
  void* old=nullptr;void* object=nullptr;void* cache=nullptr;
  if(!pool.Read(old_root,&old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache)||!old||!object||old==object)return false;
@@ -186,6 +187,11 @@ bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& p
  if(!pool.Read(old_root,&old)||found.reference!=uintptr_t(old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache)||old==object||
     !Class(*metadata_,object,&after)||after.loader!=metadata_->Reference(old,offsetof(class_metadata::Class11,class_loader))||
     std::strcmp(before.descriptor,after.descriptor)||metadata_->Reference(object,offsetof(class_metadata::Class11,dex_cache))!=cache)return false;
+ return true;
+}
+bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept{
+ if(!ValidatePrivateTemporary(c,pool,old_root,new_root,cache_root,loader_root))return false;
+ void*object=nullptr;if(!pool.Read(new_root,&object))return false;
  // IDs-boundary capture occurs after ForceClassInitialized has made the class
  // visibly initialized. Status 14 cannot be retired even with exclusive locks.
  class_metadata::State state{};const auto& layout=Layout(*metadata_);
@@ -324,6 +330,20 @@ bool Batch::Complete(bool committed,std::string* error){
  if(!committed)for(auto& r:s.records){
   if(r.captured&&!s.service.Retire(s.context,s.pool,r.view.old_root,r.view.new_root,r.view.cache_root,r.loader_root)){Error(error,"Captured linked source temporary retirement failed");return false;}
   if(r.captured_allocated&&s.Get(r.allocated_root)!=s.Get(r.view.new_root)&&!s.service.Retire(s.context,s.pool,r.view.old_root,r.allocated_root,r.view.cache_root,r.loader_root)){Error(error,"Captured allocation source temporary retirement failed");return false;}
+ }
+ s.finished=true;return true;
+}
+bool Batch::DiscardPrivate(const native_hierarchy_private_ledger::Ledger&ledger)noexcept{
+ auto&s=*state_;if(s.finished)return true;if(s.committing||s.pending||!s.pool.ReadyForSourceAccess())return false;
+ // Finish every source/private identity query before releasing ANY root. A
+ // rejected/foreign/registered entry leaves the complete root set intact.
+ for(const auto&r:s.records){
+  if(!r.captured&&!r.captured_allocated)continue;
+  const auto&v=r.view;const native_hierarchy_source_cache::RecordView record{v.source_owner,v.class_index,v.old_root,v.new_root,v.cache_root,v.parent_root,v.declarations,v.dex};
+  if(!ledger.CanDiscard(record))return false;
+  if(r.captured&&!s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.view.new_root,r.view.cache_root,r.loader_root))return false;
+  if(r.captured_allocated&&s.Get(r.allocated_root)!=s.Get(r.view.new_root)&&
+     !s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.allocated_root,r.view.cache_root,r.loader_root))return false;
  }
  s.finished=true;return true;
 }

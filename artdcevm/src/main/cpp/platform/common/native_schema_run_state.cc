@@ -95,7 +95,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get(),[](void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongPair(c,a,b,left,right);}};
  if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
  if(!s.authority.Stage(s.context,ti,inputs,graph,error)){if(error&&error->empty())*error="Source hierarchy authority staging rejected actual public graph";return false;}
- native_hierarchy_session::Bindings b{s.driver,s.context,s.d.hooks,s.d.members.metadata,s.d.roots,&s.pool,&s.authority,s.d.allocator,&s.access,native_hierarchy_source_checks::RefuseActualClass,native_owned_removal::ObserveSourceFailure,s.ledger.get()};
+ native_hierarchy_session::Bindings b{s.driver,s.context,s.d.hooks,s.d.members.metadata,s.d.roots,&s.pool,&s.authority,s.d.allocator,&s.access,native_hierarchy_source_checks::RefuseActualClass,native_owned_removal::ObserveSourceFailure,s.ledger.get(),this,CompleteRefund};
  s.hierarchy=std::make_unique<native_hierarchy_session::Session>(b);
  if(!s.hierarchy->Ready())return Fail(error,"Actual original schema Session did not accept staged graph");
  s.phase=State::Phase::Running;return true;
@@ -217,17 +217,29 @@ void RunState::Refund()noexcept{
  auto&s=*state_;if(s.phase==State::Phase::Refunded)return;
  Require(s.phase!=State::Phase::Committed&&s.phase!=State::Phase::Ended);
  // A retained continuation cannot fail after original publication. Before
- // ContinueSource, rollback restores actual Runnable before retirement/JNI.
+ // ContinueSource, rollback restores actual Runnable before private cleanup/JNI.
  Require(s.phase!=State::Phase::Collected&&s.phase!=State::Phase::Finalized);
  // Ledger and allocator stopped-root readers borrow cleanup, which in turn
- // borrows stop. Revoke the live stop before retirement/JNI, retain both
+ // borrows stop. Revoke the live stop before private cleanup/JNI, retain both
  // witnesses until all hierarchy refund readers have returned.
  if(s.stop)Require(s.stop->RollbackBeforeSource());
  s.facade.reset();
  if(s.hierarchy&&s.hierarchy->Ready())s.hierarchy->Refund();
+ // Session defers the callback while an original Finish/verifier view remains
+ // open. Closing those views completes the same refund before original Run
+ // can destroy Holder/DEX. An empty observer also needs this exact cleanup.
+ if(!s.hierarchy)CompleteRefund(this);
+}
+void RunState::CompleteRefund(void*raw)noexcept{
+ auto&run=*static_cast<RunState*>(raw);auto&s=*run.state_;
+ Require(current==&run&&s.phase==State::Phase::Running);
+ // All allocator/ledger/refund readers have finished. Preserve native anchor
+ // links until original Run unwinds, but stop rooting the private temporary
+ // Classes/caches beyond the original Holder/DEX lifetime.
+ s.d.registry->Clear();Require(s.pool.DropManagedReferences());
+ if(s.d.refund_roots)s.d.refund_roots(s.d.refund_roots_owner);
  s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
- s.cleanup.reset();s.stop.reset();
- s.phase=State::Phase::Refunded;
+ s.cleanup.reset();s.stop.reset();s.phase=State::Phase::Refunded;
 }
 bool RunState::End(void*d,bool success)noexcept{
  auto&s=*state_;Require(d==s.driver&&current==this&&s.phase!=State::Phase::Ended);

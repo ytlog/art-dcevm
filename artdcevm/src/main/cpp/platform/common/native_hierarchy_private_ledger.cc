@@ -158,6 +158,19 @@ bool Ledger::VerifyFrozen(const native_hierarchy_graph::Graph&g,const native_hie
  return Read(e->record.old_root,&old)&&Read(e->record.new_root,&replacement)&&Read(e->record.cache_root,&cache)&&Read(e->record.parent_root,&parent)&&old==p.old_class&&replacement==p.new_class&&cache==p.cache&&parent==p.parent;
 }
 void Ledger::BeginCommit(const native_hierarchy_graph::Graph&g,const source_commit::Plan&p)const noexcept{if(!VerifyCommit(g,p)||!cleanup_->IsFinalWindow(driver_,holder_))std::abort();cleanup_->BeginCommit(p);committed_=true;}
+bool Ledger::CanDiscard(const native_hierarchy_source_cache::RecordView&r)const noexcept{
+ auto*loading=native_source_class_loading::Run::Current();
+ if(!active_||released_||committed_||refunded_||current!=this||!loading||!loading->OwnsDriver(driver_)||!loading->RefundWindow()||!Record(r)||!pool_.ReadyForSourceAccess())return false;
+ const Entry*found=nullptr;
+ for(const auto&e:entries_)if(Same(e.record,r)){if(found)return false;found=&e;}
+ if(!found||found->publishing||found->published)return false;
+ if(!Mapped(r.source_owner,sizeof(abi::arm64::android_common::ClassRedefinitionPrefix)))return false;
+ abi::arm64::android_common::ClassRedefinitionPrefix owner;std::memcpy(&owner,r.source_owner,sizeof(owner));
+ if(owner.driver!=driver_||owner.dex_file!=found->source.dex_identity)return false;
+ // The query refreshes the real GC-updated cache root after returning. It is
+ // independently calibrated against a positively registered public fixture.
+ return registry_.Unregistered(context_,pool_,r.cache_root,found->source.dex_identity,nullptr);
+}
 void Ledger::Refunded()noexcept{if(!active_||released_||committed_)std::abort();for(const auto&e:entries_)if(e.published||e.publishing)std::abort();refunded_=true;}
 bool Ledger::ReleaseAfterRun(bool success)noexcept{if(!active_||released_||current!=this)return false;const bool valid=success?committed_:(refunded_||entries_.empty());if(!valid)std::abort();publication_stop_=nullptr;holder_=nullptr;metadata_={};entries_.clear();root_entries_.clear();graph_=nullptr;released_=true;current=previous_;return true;}
 bool Install(HookEngine&hooks,void*l,std::string*error){std::lock_guard<std::mutex>lock(installation);if(installed_linker)return installed_linker==l;if(!l)return false;

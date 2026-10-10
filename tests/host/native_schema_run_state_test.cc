@@ -52,6 +52,8 @@ int main(){
   whole_process_frames::Service scanner;assert(whole_process_frames::Service::BindGeometryOnly(code_info_view::SourceFamily::kAndroid13,[&](const char*n){return owner_hooks.FindSymbol("libart.so",n);},&scanner));
   prepared_roots::Registry roots({nullptr,Register,Resolve,Release});native_member_provider::Service provider;
   native_schema_run_state::Dependencies deps;deps.hooks=&owner_hooks;deps.loading=&class_loading;deps.stop=&source;deps.roots=d.roots;deps.allocator=&allocation;deps.dex_registry=&registry;deps.lookup=lookup_service;deps.frames=&scanner;deps.cleanup=&closure;deps.provider=&provider;deps.members=members;deps.registry=&roots;
+  size_t released_failed_roots=0;deps.refund_roots_owner=&released_failed_roots;
+  deps.refund_roots=[](void*raw)noexcept{++*static_cast<size_t*>(raw);};
   RunStateMappings mappings;deps.mapping={&mappings,RunStateMappings::Refresh,RunStateMappings::Read};
   native_schema_run_state::CacheCalibration witness{reinterpret_cast<jobject>(published_cache),reinterpret_cast<jobject>(old_class),112,counts,subject_index,0,0,old_fields[0],old_method};
   CheckHooks checks;assert(native_hierarchy_source_checks::Install(checks,&error));native_hierarchy_source_checks::SetFailureObserver(native_owned_removal::ObserveSourceFailure);
@@ -76,6 +78,10 @@ int main(){
    transaction_root::Iterator iter{0,&holder};
    if(!session_finish_proxy(&actual_owner,&holder,&iter)){std::cerr<<"actual aggregate Finish: "<<error<<" result="<<actual_driver.result<<" failure="<<actual_failure_message<<"\n";std::abort();}
    assert(session_allocated&&allocated==2&&relocated_new&&session_allocated==relocated_new);
+   // Actual source ForceClassInitialized leaves the private replacement at 14.
+   // Failed ordinary/stopped preparation must not attempt its forbidden 14->1
+   // transition; original Holder still owns it until original Run unwinds.
+   Put32(session_allocated,offsetof(class_metadata::Class17,status),14u<<28);
    assert(run->BeforeVerification(&actual_owner,&iter,&error));run->AfterVerification(&actual_owner,&iter,true);
    // The actual native provider rejects this intentionally different installed
    // DEX/member declaration set after the aggregate acquires the real stop.
@@ -89,12 +95,41 @@ int main(){
    auto reused_plan=incomplete;assert(!run->VerifyHierarchy(reused_plan,0,actual_loader));
    assert(!run->VerifyHierarchy(incomplete,0,reinterpret_cast<void*>(uintptr_t(actual_loader)+8)));
    assert(!run->VerifyHierarchy(incomplete,1,actual_loader));
-   run->Refund();assert(!run->VerifyHierarchy(incomplete,0,actual_loader));assert(!gc&&!disabled&&!stopped&&Read32(thread.data())==0);assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==1);
-   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();roots.Clear();assert(roots.Size()==0);
+   // Exact live source queries remain necessary even on a failed plan: neither
+   // a published DEX nor a source owner transferred to another driver may be
+   // silently dropped. Child processes preserve the parent's full root set.
+   ExpectAbort([&]{registry_published=true;run->Refund();});
+   ExpectAbort([&]{Driver foreign=actual_driver;actual_owner.driver=&foreign;run->Refund();});
+   run->Refund();assert(!run->VerifyHierarchy(incomplete,0,actual_loader));assert(!gc&&!disabled&&!stopped&&Read32(thread.data())==0);assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);
+   assert(roots.Size()==0); // Registry released before source Holder/DEX exit.
+   assert(Read32(collected,12)==uint32_t(uintptr_t(session_allocated))); // Original root intact.
+   class_remove_proxy(&linker,&pauser);
+   const auto destroyed_holder=holder;std::memset(&holder,0,sizeof(holder)); // Original Run already destroyed Holder.
+   assert(run->End(&actual_driver,false));run.reset();holder=destroyed_holder;roots.Clear();assert(roots.Size()==0);
    assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
+  }
+  {
+   Put32(array,12+11*4,0);Put32(array,12+12*4,0);
+   auto run=begin(witness);assert(run);const auto released_before=released_failed_roots;
+   PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);
+   selected_parent=inserted;session_old_handle=old_root;session_parent_handle=parent_root;session_cache_handle=cache_root;
+   transaction_root::Iterator iter{0,&holder};
+   // Refund inside the real selected original Finish must retain its source
+   // views until it returns. The sole Session then closes cleanup before Run
+   // can leave its Holder/DEX lifetime, preserving source class status 14.
+   static size_t* cleanup_count;cleanup_count=&released_failed_roots;
+   static size_t count_before;count_before=released_before;
+   assert(!native_hierarchy_session::Session::Current()->Finish(&actual_owner,&holder,&iter,+[](void*owner,transaction_root::Holder*h,void*i){
+    assert(SessionFinish(owner,h,i));Put32(session_allocated,offsetof(class_metadata::Class17,status),14u<<28);
+    native_schema_run_state::RunState::Current()->Refund();assert(*cleanup_count==count_before);
+    assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);return false;
+   },&error));
+   assert(released_failed_roots==released_before+1&&Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);
+   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();
+   Put32(array,12+11*4,0);Put32(array,12+12*4,0);
   }
   return true;
  };
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),run,&use)==runnable_jni::Result::kSuccess);
- std::cout<<"Actual RunState aggregate: failed Begin retry, repeated refund/End, early Commit/End abort guards, wrong-phase Finalize noalloc/noOS, actual Finish+GCmove+verification+Collected stopped refusal+rollback+retirement+End; ART/JNI leaf fixtures only\n";
+ std::cout<<"Actual RunState aggregate: failed Begin retry, repeated refund/End, early Commit/End abort guards, wrong-phase Finalize noalloc/noOS, actual Finish+GCmove+verification+Collected stopped refusal+rollback+unpublished initialized-14 discard+End; ART/JNI leaf fixtures only\n";
 }

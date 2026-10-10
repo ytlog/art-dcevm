@@ -196,6 +196,13 @@ int main(){
     MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
     for(auto slot:slots){void* live=nullptr;assert(pool.Read(slot,&live)&&live==new_class);}
     assert(source_temporary->Get(0)==new_class&&Top()==original_top);
+    const auto jni_before_drop=jni_calls;
+    auto saved=current;current=foreign_thread.data();assert(!pool.DropManagedReferences());current=saved;
+    assert(pool.DropManagedReferences()&&Top()==original_top&&jni_calls==jni_before_drop);
+    for(auto slot:slots){void*live=new_class;assert(pool.Read(slot,&live)&&!live);}
+    MoveRoots after_drop;after_drop.old_value=uint32_t(uintptr_t(new_class));after_drop.next_value=uint32_t(uintptr_t(old_class));OriginalRoots(thread.data(),&after_drop,0);
+    assert(source_temporary->Get(0)==old_class&&Top()==original_top); // Original cells remain visited.
+    for(auto slot:slots)assert(pool.Write(slot,new_class));
    }assert(Top()==anchor_top);
    MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&mover,0);
    for(auto slot:slots){void* value=nullptr;assert(pool.Read(slot,&value)&&value==new_class);}

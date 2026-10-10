@@ -35,7 +35,10 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  bool PreparePublication(const native_source_stop::Session&,size_t*,std::string*);
  bool MatchPublication(void* driver,const void* holder,void* linker,void* cache,
                        void* loader,size_t* index)const noexcept;
- void Refunded()noexcept; // AFTER source temp Classes were actually retired.
+ // Ordinary exact source-owned DEX/cache query before any owned roots are
+ // dropped. No published or publishing private entry can be discarded.
+ bool CanDiscard(const native_hierarchy_source_cache::RecordView&)const noexcept;
+ void Refunded()noexcept; // AFTER every captured private object was validated.
  bool ReleaseAfterRun(bool success)noexcept; // No source storage reads here.
  bool PreparePrivate(const native_hierarchy_source_cache::RecordView&,
                      const native_hierarchy_cache::Source&,std::string*)const override;

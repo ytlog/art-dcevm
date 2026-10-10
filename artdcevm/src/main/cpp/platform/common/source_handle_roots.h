@@ -121,6 +121,15 @@ class Pool final {
       if(address>=start&&(address-start)%4==0&&(address-start)/4<count){scopes_[i]->Set((address-start)/4,object);return true;}}
     return false;
   }
+  // Refund releases owned managed references while original source scopes still
+  // point through our anchor. Scope headers and saved links survive until Run
+  // returns; destroying scopes here would violate the original LIFO chain.
+  bool DropManagedReferences(){
+    if(!ReadyForSourceAccess())return false;
+    for(size_t i=0;i<scopes_.size();++i){const size_t count=i+1==scopes_.size()?used_:kChunk;
+      for(size_t n=0;n<count;++n)scopes_[i]->Set(n,nullptr);}
+    return true;
+  }
   void* Add(void* object,std::string* error){
     if(scopes_.empty()||used_==kChunk){auto scope=scopes_.empty()?service_.CreateScope(kChunk,error):service_.CreateAnchored(*scopes_.front(),kChunk,error);if(!scope)return nullptr;scopes_.push_back(std::move(scope));used_=0;
       try{ranges_.emplace(uintptr_t(scopes_.back()->Slot(0)),Range{scopes_.back().get(),0});}

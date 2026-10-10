@@ -22,6 +22,8 @@ struct Bindings {
  native_hierarchy_source_checks::Scope::Refuse refuse=nullptr;
  native_hierarchy_source_checks::FailureObserver failure_observer=nullptr;
  native_hierarchy_private_ledger::Ledger* ledger=nullptr;
+ void* refund_owner=nullptr;
+ void (*refund_complete)(void*)noexcept=nullptr;
 };
 class Session final {
  public:

@@ -153,11 +153,15 @@ void Session::Refund()noexcept{
  if(released_||committed_)std::abort();
  failed_=true;
  // RecordFailure may run under original Allocate Class monitor or verifier
- // views. Mark failure now; retire only after that original scope unwinds.
+ // views. Mark failure now; dispose private ownership only after it unwinds.
  if(finishing_||verification_owner_||refunded_)return;
- if(batch_&&!batch_->Complete(false,nullptr))std::abort();
+ if(batch_){
+  const bool discarded=bindings_.ledger?batch_->DiscardPrivate(*bindings_.ledger):batch_->Complete(false,nullptr);
+  if(!discarded)std::abort();
+ }
  if(bindings_.ledger)bindings_.ledger->Refunded();
  refunded_=true;
+ if(bindings_.refund_complete)bindings_.refund_complete(bindings_.refund_owner);
 }
 void Session::BeginCommit(const source_commit::Plan&p)noexcept{
  if(!Ready()||!sealed_||verification_owner_)std::abort();

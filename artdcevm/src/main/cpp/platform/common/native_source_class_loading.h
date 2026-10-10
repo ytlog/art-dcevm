@@ -30,6 +30,9 @@ class Run final {
  bool BeforeFinish(void* actual_owner,const transaction_root::Holder*,const void* actual_iterator)noexcept;
  void AfterFinish(void* actual_owner,bool original_result)noexcept;
  bool Paused()const noexcept;
+ // A source error closes forward preparation but leaves its actual pauser
+ // installed until original cleanup. Only unpublished-object refund uses this.
+ bool RefundWindow()const noexcept;
  bool BeginCleanup(void* actual_carrier)noexcept;
  bool EndCleanup(void* actual_carrier)noexcept;
  bool CleanupCompleted()const noexcept;

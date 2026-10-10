@@ -86,6 +86,11 @@ void Run::AfterFinish(void*owner,bool success)noexcept{
 }
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
 bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}
+bool Run::RefundWindow()const noexcept{
+ if(!active_||complete_||!added_||!wait_complete_||finish_owner_||removal_!=Removal::kNone||current!=this||!Mapped(pauser_,sizeof(PauserPrefix)))return false;
+ PauserPrefix p;std::memcpy(&p,pauser_,sizeof(p));
+ return p.vtable==service_.vtable_&&p.self==context_.self&&p.running==1;
+}
 bool Run::BeginCleanup(void* carrier)noexcept{
  if(!Paused()||finish_owner_||!carrier||cleanup_started_||!Mapped(pauser_,sizeof(PauserPrefix))){failed_=true;return false;}
  PauserPrefix p;std::memcpy(&p,pauser_,sizeof(p));
