@@ -1209,12 +1209,16 @@ struct NativeEngine final:Engine {
    if(!lease->Acquired())return Fail(error,"Another normal JVMTI transaction is active"),JVMTI_ERROR_NOT_AVAILABLE;
   }
   ClearFieldProofs(env);
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=abstract-instance-begin");
   if(schema_operation&&!abstract_instances.Ready()&&!abstract_instances.Calibrate(hooks,env,metadata,model,error))return owned_failure_diagnostic::Unavailable(error,"abstract-instance calibration");
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=abstract-instance-return");
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
   // Every original source operation may preserve a static field allocation.
   // Prepare its sole factory/exception consumer before publishing that Run,
   // including private automatic ordinary calibration and single-Class removal.
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=static-consumers-begin");
   if(!PrepareStaticFieldConsumers(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"static field source consumer preparation");
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=static-consumers-return");
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error)){
    if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
@@ -2111,8 +2115,12 @@ bool NativeEngine::BindGraphReaders(std::string* error){
 }
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
  graph_staging=true;
+ const auto checkpoint=[](const char*phase){__android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned graph staging phase=%s",phase);};
+ checkpoint("readers-begin");
  if(!BindGraphReaders(error))return false;
+ checkpoint("readers-return");checkpoint("field-oracles-begin");
  if(!PrepareLiveFieldOracles(env,error)||!ObserveFieldFactory(env,ti,error)||!PrepareLazyFields(env,error))return false;
+ checkpoint("field-oracles-return");checkpoint("descendants-begin");
  for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
  if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");
@@ -2126,10 +2134,13 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
   if(!(status&JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Candidate descendant is not prepared");
   if(!Preflight(env,ti,loaded[i],error))return false;
  }
+ checkpoint("descendants-return");
  if(!StagedInputs(env,ti,definitions,this,error))return false;
  for(const auto& definition:definitions)for(const auto& stage:staged_classes)if(env->IsSameObject(definition.klass,stage.owner))graph_bases.push_back(stage.owner);
  if(graph_bases.size()!=definitions.size())return false;
+ checkpoint("native-readers-begin");
  if(runnable_executor::With(env,anchor,ObserveGraphReaders,this)!=runnable_jni::Result::kSuccess)return Fail(error,graph_reader_error.empty()?"Native graph Runnable scope failed before reader proof":graph_reader_error.c_str());
+ checkpoint("native-readers-return");
  if(schema_operation){
   // These public original Class globals belong to this one staged operation.
   // Proposed declarations come from the actual incoming DEX, not replacement
@@ -2142,12 +2153,16 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
       !evolution::ReadDexDeclarations(definition.dex,&input.after,error))return false;
    schema_inputs.push_back(std::move(input));
   }
+  checkpoint("permission-owner-begin");
   PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
+  checkpoint("permission-owner-return");
   if(receiver_producer_bound&&permissions_proven){
    const bool observed=CalibrateReceiverSource(env,ti);
    if(!observed&&env->ExceptionCheck())env->ExceptionClear(); // New private fixture failure only; entry was exception-free.
   }
+  checkpoint("caller-verifier-begin");
   if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
+  checkpoint("caller-verifier-return");
   std::vector<jclass> affected;affected.reserve(staged_classes.size());
   for(const auto& stage:staged_classes)affected.push_back(stage.owner);
   if(!schema_verifier.MatchesAffected(env,affected,error))return Fail(error,"Caller staging loaded an unstaged affected descendant; complete candidate preflight is required before source entry");
