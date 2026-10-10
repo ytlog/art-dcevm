@@ -1432,13 +1432,31 @@ bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
   if(!mirror||env->ExceptionCheck()||env->FromReflectedField(mirror)!=ids[i])return Fail(error,"Independent live Field public ID round trip failed");
   struct Decode {
    NativeEngine& engine;jclass owner;jobject mirror;jfieldID id;void* field=nullptr;
-   static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Decode*>(raw);void *klass=nullptr,*mirror=nullptr;
-    if(!FieldOracle(&r.engine,context,r.owner,&klass)||!FieldOracle(&r.engine,context,r.mirror,&mirror))return false;
-    r.field=FieldLeaf(&r.engine,mirror);
-    return r.field&&FieldOwner(&r.engine,r.field)==klass&&DecodeLazyField(&r.engine,context,klass,r.id)==r.field;
+   const char* stage="callback-not-entered";void *klass=nullptr,*raw_mirror=nullptr,*opaque_field=nullptr,*declaring=nullptr,*actual_self=nullptr,*actual_vm=nullptr;
+   static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Decode*>(raw);r.actual_self=context.self;r.actual_vm=context.vm;
+    r.stage="public-Class-root";if(!FieldOracle(&r.engine,context,r.owner,&r.klass)||!r.klass)return false;
+    r.stage="public-Field-root";if(!FieldOracle(&r.engine,context,r.mirror,&r.raw_mirror)||!r.raw_mirror)return false;
+    r.stage="actual-Thread-VM";if(context.vm!=r.engine.vm||!context.env||context.self!=r.engine.graph_current())return false;
+    r.stage="original-opaque-ID";if(!r.engine.lazy_decode_field||!r.engine.runtime.receivers.jni_id_manager)return false;
+    r.opaque_field=r.engine.lazy_decode_field(r.engine.runtime.receivers.jni_id_manager,r.id);if(!r.opaque_field)return false;
+    r.stage="original-GetArtField";r.field=FieldLeaf(&r.engine,r.raw_mirror);
+    // Only an exact original opaque-ID identity may be read as ArtField.
+    // A returned managed Class/mirror or foreign identity must never enter
+    // the ArtField root reader merely to obtain an explanatory diagnostic.
+    r.stage="original-leaf-ID-equality";if(!r.field||r.field!=r.opaque_field)return false;
+    r.stage="declaring-Class";r.declaring=FieldOwner(&r.engine,r.field);
+    if(r.declaring!=r.klass)return false;r.stage="verified";return true;
    }
   } decode{*this,owner,mirror,ids[i]};
-  if(!FieldScope(this,env,mirror,Decode::Run,&decode))return Fail(error,"Independent live Field native/public identities differ");
+  if(!FieldScope(this,env,mirror,Decode::Run,&decode)){
+   if(error)*error="Independent live Field native/public identities differ index="+std::to_string(i)+" stage="+decode.stage+
+    " class="+std::to_string(uintptr_t(decode.klass))+" mirror="+std::to_string(uintptr_t(decode.raw_mirror))+
+    " leaf="+std::to_string(uintptr_t(decode.field))+" opaque="+std::to_string(uintptr_t(decode.opaque_field))+
+    " declaring="+std::to_string(uintptr_t(decode.declaring))+" self="+std::to_string(uintptr_t(decode.actual_self))+
+    " vm="+std::to_string(uintptr_t(decode.actual_vm))+" expectedVM="+std::to_string(uintptr_t(vm))+
+    " route="+runnable_executor::Route();
+   return false;
+  }
   oracles.push_back({mirror,owner,ids[i],decode.field,i!=0});
  }
  roots.reserve(roots.size()+prepared.values.size());
