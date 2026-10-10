@@ -2,6 +2,7 @@
 #include "platform/common/runnable_executor.h"
 #include <jvmti.h>
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/readable_mapping_scope.h"
 #include <cstdint>
 #include <algorithm>
 #include <string>
@@ -56,6 +57,13 @@ class Rooted {
              const void*reference_owner,void*(*declaring)(const void*,void*)noexcept,std::string*error){
   if(catalog_||!catalog.Complete()||!reference_owner||!declaring)return false;
   slots_.reserve(catalog.Roots().size());
+  // This entire import is one original Runnable, no-JNI/no-safepoint interval.
+  // Native scope allocation never allocates a managed object. The fresh view
+  // only bounds Thread/JNIEnv reads: every root still checks actual Current,
+  // Runnable state/environment, named decode and the original owned slot write.
+  // New native scopes are owned allocations, not targets of this mapping view.
+  method_identity::ScopedReadableMappings mappings;
+  if(!mappings.Ready()){if(error)*error="Boot root import mapping snapshot is incomplete";return false;}
   for(auto strong:catalog.Roots()){
    void*klass=nullptr;
    if(!roots.BorrowOwnedStrongGlobal(context,strong,&klass)||!klass)return false;

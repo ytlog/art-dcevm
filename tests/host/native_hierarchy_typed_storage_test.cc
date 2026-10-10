@@ -40,6 +40,10 @@ const char* TypedFieldType(void*f){auto i=TypedFieldIndex(f);return i==SIZE_MAX?
 const char* TypedDescriptor(void*c,void*storage){if(c==typed_probe_class)return "LProbe;";if(c==typed_ancestor)return "LAncestor;";return ResolutionDescriptor(c,storage);}
 bool typed_code_only=std::getenv("ARTDCEVM_TYPED_ASSIGN_CODE")!=nullptr,typed_code_bad=false;
 std::array<void*,11> typed_assignment_roles{};
+enum class MatrixFailure {None,Find,Component,Root,Relation};
+MatrixFailure matrix_failure=MatrixFailure::None;bool matrix_pending=false;
+int matrix_exception_identity;
+
 bool TypedPrimitiveClass(void*p){return p==typed_int||p==typed_assignment_roles[10];}
 bool TypedAssignable(void* target,void* value){
  if(target==value)return true;if(target==parent_class)return !TypedPrimitiveClass(value);
@@ -60,7 +64,7 @@ bool TypedPublicAssignment(size_t target,size_t actual){
 }
 jclass TypedAssignmentFind(JNIEnv*,const char*n){
  const char*names[]{"java/lang/Object","java/lang/String","java/lang/Cloneable","java/io/Serializable","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I"};
- for(size_t i=0;i<9;++i)if(!std::strcmp(n,names[i])){Jni();return reinterpret_cast<jclass>(typed_assignment_roles[i]);}
+ for(size_t i=0;i<9;++i)if(!std::strcmp(n,names[i])){Jni();if(matrix_failure==MatrixFailure::Find&&i==3){matrix_pending=true;return nullptr;}return reinterpret_cast<jclass>(typed_assignment_roles[i]);}
  return Find(&env,n);
 }
 size_t TypedAssignableCode(void* target,void* value){return typed_code_bad?256u:(TypedAssignable(target,value)?1u:0u);}
@@ -96,6 +100,7 @@ class TypedHooks final:public OwnerHooks {public:
 jmethodID TypedMethod(JNIEnv*e,jclass c,const char*n,const char*s){if(!std::strcmp(n,"getClassLoader"))return reinterpret_cast<jmethodID>(&typed_loader_id);if(!std::strcmp(n,"getComponentType"))return reinterpret_cast<jmethodID>(&component_id);if(!std::strcmp(n,"isPrimitive"))return reinterpret_cast<jmethodID>(&primitive_id);if(!std::strcmp(n,"getType"))return reinterpret_cast<jmethodID>(&field_type_id);return InterfaceMethod(e,c,n,s);}
 jobject TypedObject(JNIEnv*e,jobject o,jmethodID id,va_list args){Jni();
  if(id==reinterpret_cast<jmethodID>(&typed_loader_id))return reinterpret_cast<jobject>(&typed_facade);
+ if(id==reinterpret_cast<jmethodID>(&component_id)&&matrix_failure==MatrixFailure::Component&&o==typed_assignment_roles[6]){matrix_pending=true;return nullptr;}
  if(id==reinterpret_cast<jmethodID>(&component_id))return reinterpret_cast<jobject>(Root(static_cast<char*>(static_cast<void*>(o))+offsetof(class_metadata::Class17,component_type)));
  if(id==reinterpret_cast<jmethodID>(&field_type_id)){auto*f=static_cast<Mirror*>(static_cast<void*>(o))->field;const auto i=TypedFieldIndex(f);if(i==2||i==3){typed_late_class=true;return reinterpret_cast<jobject>(typed_ancestor);}return reinterpret_cast<jobject>(parent_class);}
  return InterfaceObject(e,o,id,args);
@@ -147,6 +152,7 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  table.FindClass=TypedAssignmentFind;
  table.IsAssignableFrom=[](JNIEnv*,jclass actual,jclass target)->jboolean{Jni();
   auto t=std::find(typed_assignment_roles.begin(),typed_assignment_roles.end(),target),a=std::find(typed_assignment_roles.begin(),typed_assignment_roles.end(),actual);
+  if(matrix_failure==MatrixFailure::Relation&&t==typed_assignment_roles.begin()+2&&a==typed_assignment_roles.begin()+4){matrix_pending=true;return false;}
   if(t!=typed_assignment_roles.end()&&a!=typed_assignment_roles.end())return TypedPublicAssignment(size_t(t-typed_assignment_roles.begin()),size_t(a-typed_assignment_roles.begin()));
   if(actual==target)return true;if(target==parent_class)return true;return false;};
  table.GetFieldID=[](JNIEnv*,jclass c,const char*n,const char*s){Jni();assert(c==typed_probe_class&&!std::strcmp(n,"referenceValue")&&!std::strcmp(s,"Ljava/lang/Object;"));return reinterpret_cast<jfieldID>(typed_fields[0]);};
@@ -158,7 +164,7 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  assert(walk.Calibrated());
  typed_array=heap.New(24);Put32(typed_array,0,uint32_t(uintptr_t(typed_array_class)));Put32(typed_array,8,3);Put32(typed_array,12,uint32_t(uintptr_t(ref_a)));Put32(typed_array,16,uint32_t(uintptr_t(ref_b)));
 
- void*self=current;JNIEnv*source_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&source_env,8);assert(source_handle_roots::Service::Bind(hooks,fields,&source,&error));
+ void*self=current;JNIEnv*source_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&source_env,8);typed_env_owner.self=self;typed_env_owner.vm=&runtime;table.GetJavaVM=PairVM;assert(source_handle_roots::Service::Bind(hooks,fields,runnable_jni::Context{self,&env,&runtime},&source,&error));
  alignas(8) static unsigned char source_scope[32]{};OriginalHeader head{nullptr,3};std::memcpy(source_scope,&head,sizeof(head));Put32(source_scope,12,uint32_t(uintptr_t(old_class)));public_slot=source_scope+12;Publish(source_scope);
  typed_classes={old_class,new_class,parent_class,meta_class,typed_probe_class,typed_int,typed_array_class,typed_ancestor_array,typed_old_array_class,typed_ancestor_2d,typed_old_2d};
  for(auto*role:typed_assignment_roles)if(std::find(typed_classes.begin(),typed_classes.end(),role)==typed_classes.end())typed_classes.push_back(role);
@@ -182,7 +188,34 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  const bool prior_code=typed_code_only;typed_code_only=typed_code_bad=true;
  StorageProof bad_encoding(*r.walk,*r.request->source,*r.metadata);
  assert(!bad_encoding.Stage(*r.hooks,c,&ti,r.request->error)&&!bad_encoding.Staged()&&*r.request->error=="Named Class assignment leaf differs from independent JNI relation or result encoding");
- bad_encoding.Clear(c.env);assert(!typed_failure_globals);typed_code_bad=false;typed_code_only=prior_code;
+ bad_encoding.Clear(c.env);assert(!typed_failure_globals);typed_code_bad=false;
+ // Actual public JNI leaf failures must identify their role/operation, retain
+ // the original pending Throwable and release only this failed Proof's roots.
+ // Context identity is independent of executor TLS. Foreign self/VM must
+ // refuse exact source-root pair publication, even with valid public objects.
+ for(const bool foreign_vm:{false,true}){
+  auto wrong=c;if(foreign_vm)wrong.vm=&typed_facade;else wrong.self=foreign_thread.data();
+  StorageProof foreign_context(*r.walk,*r.request->source,*r.metadata);r.request->error->clear();
+  assert(!foreign_context.Stage(*r.hooks,wrong,&ti,r.request->error)&&!foreign_context.Staged());
+  assert(r.request->error->find("root Stage target=java/lang/Object")!=std::string::npos);
+  foreign_context.Clear(c.env);assert(!typed_failure_globals);
+ }
+ const auto check_exception=table.ExceptionCheck;const auto occurred=table.ExceptionOccurred;
+ table.ExceptionCheck=[](JNIEnv*)->jboolean{Jni();return matrix_pending;};
+ table.ExceptionOccurred=[](JNIEnv*)->jthrowable{Jni();return matrix_pending?reinterpret_cast<jthrowable>(&matrix_exception_identity):nullptr;};
+ const auto matrix_global=table.NewGlobalRef;
+ table.NewGlobalRef=[](JNIEnv*e,jobject value)->jobject{if(matrix_failure==MatrixFailure::Root&&value==typed_assignment_roles[2]){matrix_pending=true;return nullptr;}++typed_failure_globals;return Global(e,value);};
+ for(const auto which:{MatrixFailure::Find,MatrixFailure::Component,MatrixFailure::Root,MatrixFailure::Relation}){
+  matrix_failure=which;StorageProof rejected(*r.walk,*r.request->source,*r.metadata);
+  assert(!rejected.Stage(*r.hooks,c,&ti,r.request->error)&&!rejected.Staged());
+  const char* phase=which==MatrixFailure::Find?"FindClass target=java/io/Serializable":which==MatrixFailure::Component?"getComponentType target=int.class":which==MatrixFailure::Root?"root Stage target=java/lang/Cloneable":"IsAssignableFrom target=java/lang/Cloneable source=[Ljava/lang/Object;";
+  assert(r.request->error->find(phase)!=std::string::npos&&r.request->error->find("pending JNI exception preserved")!=std::string::npos);
+  assert(c.env->ExceptionOccurred()==reinterpret_cast<jthrowable>(&matrix_exception_identity));
+  rejected.Clear(c.env);assert(!typed_failure_globals&&matrix_pending);
+  matrix_pending=false;matrix_failure=MatrixFailure::None;
+ }
+ table.NewGlobalRef=matrix_global;table.ExceptionCheck=check_exception;table.ExceptionOccurred=occurred;
+ typed_code_only=prior_code;
  typed_foreign_boot=true;StorageProof foreign(*r.walk,*r.request->source,*r.metadata);assert(!foreign.Stage(*r.hooks,c,&ti,r.request->error)&&!foreign.Staged());foreign.Clear(c.env);assert(!typed_failure_globals);typed_foreign_boot=false;
  // A mismatching independent public declaration refuses in the late native
  // pass after preceding identities were read. Failed staging owns no published
@@ -191,7 +224,14 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  assert(!mismatch.Stage(*r.hooks,c,&ti,r.request->error)&&!mismatch.Staged()&&*r.request->error=="Native typed field differs from independent public declaration");
  mismatch.Clear(c.env);assert(!typed_failure_globals);typed_wrong_public_name=false;
  table.NewGlobalRef=new_global;table.DeleteGlobalRef=delete_global;return true;};
- typed_maps.Cover(heap.base);if(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),actual_stage,&sr)!=runnable_jni::Result::kSuccess){std::cerr<<"typed Stage: "<<error<<"\n";std::abort();}assert(typed_inventory_passes>=3&&typed_late_class&&typed_defining_loaders>=typed_classes.size());return result;
+ typed_maps.Cover(heap.base);
+ // The original ART source caller establishes Runnable ownership itself. It
+ // never enters With and must not borrow the executor's TLS decode permission.
+ assert(!runnable_executor::host_executor_active);Put32(thread.data(),0,0);
+ const runnable_jni::Context original_context{current,&env,&runtime};void* executor_borrow=nullptr;
+ assert(!runnable_executor::DecodeStrongGlobal(original_context,reinterpret_cast<jobject>(old_class),&executor_borrow)&&!executor_borrow);
+ const bool original_staged=actual_stage(original_context,&sr);Put32(thread.data(),0,92u<<24);
+ if(!original_staged){std::cerr<<"typed Stage: "<<error<<"\n";std::abort();}assert(typed_inventory_passes>=3&&typed_late_class&&typed_defining_loaders>=typed_classes.size());return result;
 }
 void MoveTypedRootsAfterStage(){
  // A real collector boundary double moves the Class and updates compressed

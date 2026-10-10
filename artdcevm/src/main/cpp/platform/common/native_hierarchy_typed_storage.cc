@@ -1,5 +1,4 @@
 #include "platform/common/native_hierarchy_typed_storage.h"
-#include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/art_field.h"
 #include <algorithm>
 #include <array>
@@ -27,9 +26,14 @@ struct Proof::State final:native_typed_heap_walk::Sink {
  mutable const native_source_commit::Services* copies=nullptr;
  mutable Refusal refusal=Refusal::None;
  bool staged=false,captured=false,refreshed=false;
- State(const native_typed_heap_walk::Service&w,const source_handle_roots::Service&s,const modern_field_metadata::FieldMetadata&m):walk(w),source(s),metadata(m),public_roots({this,Scope,Oracle,Decode,Element}){}
+ State(const native_typed_heap_walk::Service&w,const source_handle_roots::Service&s,const modern_field_metadata::FieldMetadata&m):walk(w),source(s),metadata(m),public_roots({this,Scope,Oracle,Decode,Element,Pair}){}
  static bool Scope(void* raw,JNIEnv* env,jobject,runnable_jni::Operation op,void* data){auto&s=*static_cast<State*>(raw);return s.context.env==env&&s.source.ReadyForSourceAccess()&&op(s.context,data);}
- static bool Oracle(void*,const runnable_jni::Context& c,jobject root,void** out){return runnable_executor::DecodeStrongGlobal(c,root,out);}
+ // Original source Runnable contexts do not belong to runnable_executor TLS.
+ // Store has just produced and independently round-tripped both strong globals;
+ // borrow their exact current native identities with the calibrated source
+ // root owner, in one no-JNI interval, before checking the managed array slot.
+ static bool Oracle(void* raw,const runnable_jni::Context& c,jobject root,void** out){return static_cast<State*>(raw)->source.BorrowStrongGlobal(c,root,out);}
+ static bool Pair(void* raw,const runnable_jni::Context& c,jobject a,jobject b,void** left,void** right){return static_cast<State*>(raw)->source.BorrowOwnedStrongPair(c,a,b,left,right);}
  static bool Decode(void* raw,jobject root,void** out){auto&s=*static_cast<State*>(raw);return s.source.BorrowOwnedStrongGlobal(s.context,root,out);}
  static void* Element(void* raw,void* array,size_t index){return static_cast<State*>(raw)->metadata.Reference(array,12+index*4);}
  bool Readable(const void* p,size_t n)const noexcept{size_t extent=0;return maps&&maps->owner&&maps->extent&&maps->extent(maps->owner,p,&extent)&&extent>=n;}
@@ -124,16 +128,31 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
  std::array<State::Slot,assignment_count> assignment_roots{};
  std::array<bool,assignment_count*assignment_count> assignment_results{};
  if(s.assignment.UsesCodeLeaf()){
-  const char* names[]{"java/lang/Object","java/lang/String","java/lang/Cloneable","java/io/Serializable","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I"};
+  const char* names[]{"java/lang/Object","java/lang/String","java/lang/Cloneable","java/io/Serializable","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I","int.class","long.class"};
   std::array<jclass,assignment_count> locals{};bool ready=true;
-  for(size_t i=0;i<9&&ready;++i){locals[i]=env->FindClass(names[i]);ready=locals[i]&&!env->ExceptionCheck();}
-  for(size_t i=9;i<assignment_count&&ready;++i){locals[i]=static_cast<jclass>(env->CallObjectMethod(locals[i-3],component));ready=locals[i]&&!env->ExceptionCheck();}
-  for(size_t i=0;i<assignment_count&&ready;++i)ready=s.public_roots.Stage(c,locals[i],&assignment_roots[i],error);
+  // These are ordinary public JNI operations. Record the precise failing
+  // operation before cleanup, preserve Store diagnostics, and leave the actual
+  // pending Throwable untouched for the public caller to report.
+  std::string matrix_error;
+  const auto rejected=[&](const char* phase,size_t role,const std::string& detail=std::string{},size_t source=SIZE_MAX){
+   matrix_error="Public Class assignment matrix ";matrix_error+=phase;matrix_error+=" target=";matrix_error+=names[role];
+   if(source!=SIZE_MAX){matrix_error+=" source=";matrix_error+=names[source];}
+   if(!detail.empty()){matrix_error+=": ";matrix_error+=detail;}
+   if(env->ExceptionCheck())matrix_error+=" [pending JNI exception preserved]";
+   ready=false;
+  };
+  for(size_t i=0;i<9&&ready;++i){locals[i]=env->FindClass(names[i]);if(!locals[i]||env->ExceptionCheck())rejected("FindClass",i);}
+  for(size_t i=9;i<assignment_count&&ready;++i){locals[i]=static_cast<jclass>(env->CallObjectMethod(locals[i-3],component));if(!locals[i]||env->ExceptionCheck())rejected("getComponentType",i);}
+  for(size_t i=0;i<assignment_count&&ready;++i){std::string root_error;
+   if(!s.public_roots.Stage(c,locals[i],&assignment_roots[i],&root_error))rejected("root Stage",i,root_error);
+  }
   for(size_t i=0;i<assignment_count&&ready;++i)for(size_t j=0;j<assignment_count&&ready;++j){
-   assignment_results[i*assignment_count+j]=env->IsAssignableFrom(locals[j],locals[i]);ready=!env->ExceptionCheck();
+   assignment_results[i*assignment_count+j]=env->IsAssignableFrom(locals[j],locals[i]);
+   if(env->ExceptionCheck())rejected("IsAssignableFrom",i,{},j);
   }
   for(auto local:locals)if(local)env->DeleteLocalRef(local);
-  if(!ready){env->DeleteLocalRef(system);env->DeleteLocalRef(class_type);env->DeleteLocalRef(field_type);return Fail(error,"Public complete Class assignment matrix unavailable");}
+  if(!ready){env->DeleteLocalRef(system);env->DeleteLocalRef(class_type);env->DeleteLocalRef(field_type);if(error)*error=std::move(matrix_error);return false;}
+
  }
  bool pass=true;std::unordered_multimap<jint,size_t> identities;
  // Resolving public Field.getType may load new Classes. Enumerate until a
@@ -228,7 +247,7 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
    if(!s.public_roots.Read(field.type_root,&field.declared_type)||!field.declared_type||s.metadata.FieldDeclaringClass(field.identity)!=type.klass)return Fail(error,"Native field declaration owner/type differs");
    const size_t kind=field.statik?1:0;
    if(!have_array[kind]){if(!s.metadata.Fields(type.klass,field.statik,&arrays[kind],error,&read_context))return false;have_array[kind]=true;}
-   const auto& array=arrays[kind];bool found=false;for(uint32_t i=0;i<array.selected_count;++i)found|=array.AtSelected(i)==field.identity;if(!found)return Fail(error,"Reflected typed field is outside complete native declaration array");
+   uint32_t physical=0;if(!arrays[kind].IndexOf(field.identity,&physical))return Fail(error,"Reflected typed field is outside complete native declaration array");
   }
  }
  const native_class_assignability::Service::Oracle assignment_oracles[]{

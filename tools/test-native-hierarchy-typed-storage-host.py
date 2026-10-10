@@ -20,7 +20,15 @@ out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_hierarchy_typed_storage_test'
 fixture = (root / 'tests/host/native_source_commit_test.cc').read_text()
 assert fixture.count('int main(){') == 1
-(out / 'native_commit_fixture.inc').write_text(fixture.split('int main(){')[0].replace('std::array<unsigned char,200>','std::array<unsigned char,512>'))
+fixture=fixture.split('int main(){')[0].replace('std::array<unsigned char,200>','std::array<unsigned char,512>')
+fixture=fixture.replace('JNIEnv env{&table};','struct TypedEnvOwner {JNIEnv env;void* self;void* vm;};TypedEnvOwner typed_env_owner{{&table},nullptr,nullptr};JNIEnv& env=typed_env_owner.env;')
+# Faithfully distinguish an executor invocation from an already-original
+# source Runnable context; executor-only decode must refuse in the latter.
+fixture=fixture.replace('bool DecodeStrongGlobal(const runnable_jni::Context&,jobject p,void** out){if(!p||!out)',
+ 'bool host_executor_active=false;\n bool DecodeStrongGlobal(const runnable_jni::Context&,jobject p,void** out){if(!host_executor_active||!p||!out)')
+fixture=fixture.replace('bool ok=fn({current,e,&runtime},data);',
+ 'host_executor_active=true;bool ok=fn({current,e,&runtime},data);host_executor_active=false;')
+(out / 'native_commit_fixture.inc').write_text(fixture)
 provider=(root/'tests/host/native_member_provider_test.cc').read_text()
 prefix,body=provider.split('int main(int argc,char** argv){',1)
 (out/'provider_fixture.inc').write_text(prefix)
