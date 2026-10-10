@@ -13,7 +13,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
            '-fno-omit-frame-pointer', '-I', str(cpp),
            str(root / 'tests/host/field_evolution_policy_test.cc'),
-           str(cpp / 'platform/android13/field_evolution_policy.cc'), '-o', str(binary)]
+           str(cpp / 'platform/common/native_schema_policy.cc'), str(cpp / 'platform/common/native_method_evolution_policy.cc'), str(cpp / 'evolution/migration_plan.cc'), str(cpp / 'evolution/dex_schema.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 result = subprocess.run([str(binary)], capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1',

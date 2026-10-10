@@ -16,7 +16,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-stdlib=libc++', '-g
            '-fsanitize='+os.environ.get('ARTDCEVM_HOST_SANITIZER','address,undefined'), '-fno-omit-frame-pointer', '-pthread', '-I', str(cpp),
            '-I', str(java_home / 'include'), '-I', str(java_home / 'include' / platform),
            str(root / 'tests/host/failure_calibration_test.cc'),
-           str(cpp / 'platform/android13/failure_calibration.cc'), str(cpp / 'platform/android13/redefinition_failure.cc'), str(cpp / 'platform/android13/device_profile.cc'), str(cpp / 'platform/android13/field_validation.cc'), str(cpp / 'platform/android13/field_evolution_policy.cc'), '-o', str(binary)]
+           str(cpp / 'platform/android13/failure_calibration.cc'), str(cpp / 'platform/android13/redefinition_failure.cc'), str(cpp / 'platform/android13/device_profile.cc'), str(cpp / 'platform/android13/field_validation.cc'), str(cpp / 'platform/common/native_schema_policy.cc'), str(cpp / 'platform/common/native_method_evolution_policy.cc'), str(cpp / 'evolution/migration_plan.cc'), str(cpp / 'evolution/dex_schema.cc'), '-o', str(binary)]
 if platform == 'darwin':
     command.extend(['-Wl,-pagezero_size,0x10000'])
 else:

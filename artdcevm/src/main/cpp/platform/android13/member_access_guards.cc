@@ -7,7 +7,7 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/retired_member_guard.h"
-#include "platform/android13/final_field_guard_state.h"
+#include "platform/common/modern_final_field_guard.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
@@ -141,11 +141,11 @@ bool GuardFieldVarHandle(void* handle,int mode,void* frame,const void* operands,
 bool GuardMethodHandleFieldPut(void* field) {
   void* self=CurrentHierarchyThread();
   if (GuardRetiredField(field,self,nullptr)) return true;
-  if (!FinalFieldGuardEnabled() || !(Flags(field)&kFinalFlag)) return false;
+  if (!final_field_guard::FinalFieldGuardEnabled() || !(Flags(field)&kFinalFlag)) return false;
   Throw(self,"Ljava/lang/IllegalAccessError;","MethodHandle setter targets a final field"); return true;
 }
 bool GuardNterpFinalFieldPut(void* self,void* method,uint16_t* pc) {
-  if (!FinalFieldGuardEnabled()) return false;
+  if (!final_field_guard::FinalFieldGuardEnabled()) return false;
   const uint8_t op=pc[0]&0xff;
   if (!((op>=0x59 && op<=0x5f) || (op>=0x67 && op<=0x6d))) return false;
   HandleRootScope roots(self,2);

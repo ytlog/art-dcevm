@@ -1,8 +1,8 @@
 #include "platform/android13/field_validation.h"
 #include "platform/android13/redefinition_failure.h"
 #include "platform/android13/failure_calibration.h"
-#include "platform/android13/field_evolution_policy.h"
-#include "platform/android13/final_field_guard_state.h"
+#include "platform/common/native_schema_policy.h"
+#include "platform/common/modern_final_field_guard.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
@@ -44,13 +44,13 @@ bool CheckEvolutionFields(void* definition) {
                       offsetof(redefinition_abi::ClassRedefinition, has_virtuals),
                   &has_virtuals, sizeof(has_virtuals));
     }
-    auto decision = CheckFieldEvolution(old_fields, replacement.fields);
+    auto decision = native_schema_policy::CheckFieldEvolution(old_fields, replacement.fields);
     if (!decision.accepted) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                      decision.error.c_str());
       return false;
     }
-    if (decision.final_guard) MarkFinalFieldGuard();
+    if (decision.final_guard) final_field_guard::MarkFinalFieldGuard();
     if (decision.structural) record_new_field(definition);
     return true;
   } catch (const std::bad_alloc&) {

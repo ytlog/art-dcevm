@@ -1,6 +1,10 @@
 #include "platform/common/modern_final_field_guard.h"
 #include <cstring>
 namespace artdcevm::final_field_guard {
+namespace { FinalFieldGuardState process_state; }
+void MarkFinalFieldGuard() noexcept { process_state.Mark(); }
+bool FinalFieldGuardEnabled() noexcept { return process_state.Enabled(); }
+
 Decision Check(const Access& access) noexcept {
   if(access.path==Path::VarHandle &&
      (!access.var_mode_valid||access.var_mode_template>4))return Decision::Unavailable;

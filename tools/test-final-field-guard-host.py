@@ -15,7 +15,7 @@ for sanitizer in ('address,undefined', 'thread'):
                '-Wall', '-Wextra', '-Werror', '-pthread',
                f'-fsanitize={sanitizer}', '-fno-omit-frame-pointer', '-I', str(cpp),
                str(root / 'tests/host/final_field_guard_state_test.cc'),
-               str(cpp / 'platform/android13/final_field_guard_state.cc'),
+               str(cpp / 'platform/common/modern_final_field_guard.cc'),
                '-o', str(binary)]
     subprocess.run(command, check=True)
     result = subprocess.run([str(binary)], capture_output=True, text=True,

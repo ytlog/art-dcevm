@@ -1,6 +1,22 @@
 #pragma once
 #include <cstdint>
+#include <atomic>
 namespace artdcevm::final_field_guard {
+
+// Once a field gains final, cached setters must stay guarded for the process.
+// A later rejected transaction or field change must not disable these guards.
+class FinalFieldGuardState {
+ public:
+  void Mark() noexcept { enabled_.store(true, std::memory_order_release); }
+  bool Enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
+
+ private:
+  std::atomic<bool> enabled_{false};
+};
+
+void MarkFinalFieldGuard() noexcept;
+bool FinalFieldGuardEnabled() noexcept;
+
 // These are ART permission paths. JNI and accessible reflection are intentional
 // escape hatches in ART, and must not acquire Java bytecode permissions.
 enum class Path { Bytecode, MethodHandleSetter, VarHandle, Jni, Reflection };

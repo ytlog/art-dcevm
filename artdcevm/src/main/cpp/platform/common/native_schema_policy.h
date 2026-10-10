@@ -2,6 +2,18 @@
 #include "evolution/migration_plan.h"
 #include "platform/common/source_commit.h"
 namespace artdcevm::native_schema_policy {
+// Declaration-only field delta policy used by the structural validation hook.
+// It grants no layout or runtime permission and preserves that hook's boundary.
+
+struct FieldEvolutionDecision {
+  bool accepted = true;
+  bool structural = false;
+  bool final_guard = false;
+  std::string error;
+};
+FieldEvolutionDecision CheckFieldEvolution(const std::vector<evolution::Member>& old_fields,
+                                         const std::vector<evolution::Member>& new_fields);
+
 enum class GuardKind {LoadedSubclasses,FinalMethodOverrides,AbstractMethodDependents,FinalFields,ExistingInstances,AccessPermissions,InterfaceIdentities,HierarchyGraph};
 struct Requirement {GuardKind kind;std::string member_name,descriptor;};
 struct GuardRequest {size_t class_pair;void* loader;Requirement requirement;};

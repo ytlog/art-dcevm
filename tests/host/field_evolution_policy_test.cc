@@ -1,7 +1,7 @@
-#include "platform/android13/field_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include <cassert>
 
-using artdcevm::android13::CheckFieldEvolution;
+using artdcevm::native_schema_policy::CheckFieldEvolution;
 using artdcevm::evolution::Member;
 
 int main() {

@@ -61,7 +61,7 @@ namespace artdcevm {LoadedModule FindLoadedModule(const char* name){return Find(
 namespace artdcevm::android13 {
 jvmtiEnv* ValidationHooks::TransactionEnvironment(){return active?reinterpret_cast<jvmtiEnv*>(1):nullptr;}
 int ReadRedefinitionInput(void*,redefinition_abi::ClassRedefinition* metadata,evolution::ClassSchema* schema,std::string* error){schema->fields=new_fields;metadata->klass=reinterpret_cast<jclass>(1);if(input_error)*error="Malformed input";return input_error;}
-void MarkFinalFieldGuard()noexcept{++final_guards;}
+
 }
 struct DefinitionFixture {
  failure_calibration_abi::PlatformString text;
@@ -94,3 +94,5 @@ int main(){Hooks hooks;DeviceProfile profile;std::string error;assert(!Calibrate
 namespace artdcevm::live_schema {
 int ReadLiveFields(jvmtiEnv*,jclass,std::vector<evolution::Member>* fields,std::string* error){*fields=old_fields;if(snapshot_error)*error="Snapshot failed";return snapshot_error;}
 }
+
+namespace artdcevm::final_field_guard { void MarkFinalFieldGuard()noexcept{++final_guards;} }

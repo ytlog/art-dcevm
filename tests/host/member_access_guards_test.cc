@@ -97,7 +97,7 @@ bool IsValidationAssignableFrom(void* target,void* source){return target==source
 void* RuntimeClassLinker(){return reinterpret_cast<void*>(123);}
 void* DecodeMethodId(jmethodID id){return id;}
 void* DecodeFieldId(jfieldID id){return id;}
-bool FinalFieldGuardEnabled() noexcept{return final_enabled;}
+
 bool GuardRetiredMethod(void* m,void*,void* result){if(m!=retired_method)return false;if(result)std::memset(result,0,8);return true;}
 bool GuardRetiredField(void* f,void*,void* result){if(f!=retired_field)return false;if(result)std::memset(result,0,8);return true;}
 }
@@ -175,3 +175,5 @@ int main(){
  std::cout<<"member access guards: JNI receiver states, retirement dispatch, direct-interface/super guards, all 31 VarHandle modes, result semantics, final writes, obsolete clinit and rooted resolution passed\n";
  munmap(arena,65536);
 }
+
+namespace artdcevm::final_field_guard { bool FinalFieldGuardEnabled() noexcept{return final_enabled;} }

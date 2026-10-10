@@ -1,10 +1,10 @@
-#include "platform/android13/final_field_guard_state.h"
+#include "platform/common/modern_final_field_guard.h"
 
 #include <cassert>
 #include <thread>
 #include <vector>
 
-using artdcevm::android13::FinalFieldGuardState;
+using artdcevm::final_field_guard::FinalFieldGuardState;
 
 int main() {
   // Guard publication must synchronize readers on threads that already hold
@@ -39,9 +39,9 @@ int main() {
   }
   for (auto& worker : workers) worker.join();
   assert(shared.Enabled());
-  assert(!artdcevm::android13::FinalFieldGuardEnabled());
-  artdcevm::android13::MarkFinalFieldGuard();
-  assert(artdcevm::android13::FinalFieldGuardEnabled());
-  artdcevm::android13::MarkFinalFieldGuard();
-  assert(artdcevm::android13::FinalFieldGuardEnabled());
+  assert(!artdcevm::final_field_guard::FinalFieldGuardEnabled());
+  artdcevm::final_field_guard::MarkFinalFieldGuard();
+  assert(artdcevm::final_field_guard::FinalFieldGuardEnabled());
+  artdcevm::final_field_guard::MarkFinalFieldGuard();
+  assert(artdcevm::final_field_guard::FinalFieldGuardEnabled());
 }

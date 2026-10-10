@@ -26,3 +26,5 @@ Android 11、12、14、15、16 目前主要通过 `common/` 实现行为，相�
 Android 13 直接使用 `common/field_copy.h`、`common/object_replacement_map.h` 和 `common/retired_*_registry.h` 的公共命名空间；不再为这些公共算法保留版本转发头。`abi/arm64/android13/` 只保留真实的版本声明，不为公共 POD 视图或已有算法重新起版本别名。
 
 Android 13 的固定 Legacy DexCache 仍按 API33 的真实声明和独立校准读取，但直接使用公共 `method_cache::LegacyCache`，不增加别名头。FindClass 演化处理器也直接向公共 `runtime_receiver` 观察者登记和恢复；Android13 的完整 Runtime receiver 校准继续独立保留。
+
+Android 13 的字段声明差异策略直接归入现有 `common/native_schema_policy`，final cached-setter 的单调发布状态归入 `common/modern_final_field_guard`，不保留版本转发或另建公共包装。完整后端的原始结构校验 Hook 仍使用自己的语义边界。其 allocator membership adapter 仍需平衡原 NativeObjectAccess 生命周期并核对 unsafe/locked/Arena 三个命名路径，因此保留有效校准与 fallback；不能仅因公共层也有 allocator 校准就删除不同作用域的实现。
