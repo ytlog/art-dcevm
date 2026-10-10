@@ -115,6 +115,9 @@ int main(int argc,char** argv){
  assert(!cleanup.IsStopped(&driver_marker,&holder));assert(!cleanup.Verify(&driver,&holder,plan));
  native_frame.flags=0;assert(!cleanup.PrepareCollected(plan,&error));native_frame.flags=0x100;
  assert(cleanup.PrepareCollected(plan,&error)&&cleanup.Verify(&driver,&holder,plan));
+ // Fixed ti_redefine.h: structural=0, normal=1. The live same-Holder check
+ // must refuse a changed source transaction type even after attachment.
+ driver.type=1;assert(!cleanup.Verify(&driver,&holder,plan));driver.type=0;assert(cleanup.Verify(&driver,&holder,plan));
  driver.runtime=&linker;assert(!cleanup.Verify(&driver,&holder,plan));driver.runtime=dependencies.runtime.runtime;
  driver.environment=nullptr;assert(!cleanup.Verify(&driver,&holder,plan));driver.environment=&runtime;
  owner->driver=&driver_marker;assert(!cleanup.Verify(&driver,&holder,plan));owner->driver=&driver;
