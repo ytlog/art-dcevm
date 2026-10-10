@@ -3,7 +3,7 @@
 #include "platform/android13/native_object_access.h"
 #include "platform/abi/arm64/android13/native_object_access_abi.h"
 #include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_field_registry.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cassert>
 #include <cstring>
@@ -18,7 +18,7 @@ struct FieldArray { uint32_t size; guard::field_copy_abi::ArtField fields[3]; };
 FieldArray instance_fields{3, {}}, static_fields{3, {}};
 guard::validation_abi::ClassPrefix klass{};
 guard::member_decode_abi::ReflectedField reflected{};
-guard::RetiredFieldRegistry registry;
+artdcevm::retirement::RetiredFieldRegistry registry;
 int retired_field, method, access;
 size_t heap_reads = 0, method_decodes = 0, guard_calls = 0;
 size_t retired_count = 0, id_method_decodes = 0, id_field_decodes = 0;

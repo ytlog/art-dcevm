@@ -1,10 +1,9 @@
-#include "platform/android13/retired_method_registry.h"
+#include "platform/common/retired_method_registry.h"
 
 #include <cstdlib>
 #include <unordered_set>
 
-using artdcevm::android13::RetiredMethodRegistry;
-
+using namespace artdcevm::retirement;
 namespace {
 struct Allocator {
   std::unordered_set<void*> methods;

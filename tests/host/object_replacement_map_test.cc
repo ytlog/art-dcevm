@@ -1,4 +1,4 @@
-#include "platform/android13/object_replacement_map.h"
+#include "platform/common/object_replacement_map.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <cassert>
@@ -12,7 +12,7 @@ void* operator new[](size_t n){return ::operator new(n);}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete[](void* p)noexcept{std::free(p);}
 struct Roots{std::vector<void*> values;static bool Add(void* raw,void* value,size_t* slot){auto& self=*static_cast<Roots*>(raw);*slot=self.values.size();self.values.push_back(value);return true;}static void* Get(void* raw,size_t slot)noexcept{return static_cast<Roots*>(raw)->values[slot];}};
-using namespace artdcevm::android13;
+using namespace artdcevm::object_replacement;
 // The real host libc++ oracle must accept the fixed Android libc++ map view.
 // A changed host ABI/hash fails these checks rather than substituting a mirrored oracle.
 #ifndef _LIBCPP_VERSION

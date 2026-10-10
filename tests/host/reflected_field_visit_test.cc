@@ -4,7 +4,7 @@
 #include "platform/abi/arm64/android13/structural_reflective_abi.h"
 #include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_field_registry.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -18,7 +18,7 @@ using Native=field_copy_abi::ArtField;
 using Class=validation_abi::ClassPrefix;
 using Source=structural_reflective_abi::SourceInfo;
 struct Array{uint32_t size;Native fields[3];};
-RetiredFieldRegistry registry;std::unordered_map<void*,void*> roots;
+artdcevm::retirement::RetiredFieldRegistry registry;std::unordered_map<void*,void*> roots;
 size_t barriers=0,describes=0,visits=0,reference_stores=0;
 Field* active=nullptr;void* expected_original=nullptr;void* result=nullptr;
 // Real virtual declaration matching ART's ReflectionSourceInfo/HeapReflectiveSourceInfo.

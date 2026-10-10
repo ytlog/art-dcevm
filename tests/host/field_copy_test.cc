@@ -1,4 +1,4 @@
-#include "platform/android13/field_copy.h"
+#include "platform/common/field_copy.h"
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -17,7 +17,7 @@ void* operator new(size_t size) {
 void* operator new[](size_t size) { return ::operator new(size); }
 void operator delete(void* value) noexcept { std::free(value); }
 void operator delete[](void* value) noexcept { std::free(value); }
-using namespace artdcevm::android13;
+using namespace artdcevm::field_copy;
 namespace {
 struct Field { const char* name; const char* type; size_t slot; bool is_volatile = false; };
 struct Class { const char* descriptor; void* loader; Class* parent; std::vector<Field> instance, statics; bool object = false; };

@@ -5,7 +5,7 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/hierarchy_validation.h"
-#include "platform/android13/object_replacement_map.h"
+#include "platform/common/object_replacement_map.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/selective_deopt.h"
 #include "platform/abi/arm64/android13/selective_deopt_abi.h"
@@ -63,11 +63,11 @@ void CommitEvolutionStructurally(void*,const void* raw) {
     }
     Require(found);
   }
-  ObjectReplacementMap map(replacements);std::string error;
-  Require(VerifyObjectReplacementMap(map,&error));
+  object_replacement::ObjectReplacementMap map(replacements);std::string error;
+  Require(object_replacement::VerifyObjectReplacementMap(map,&error));
   class NativeCommit final:public source_commit::Services {
    public:
-    NativeCommit(const StructuralMemberMappings& mappings,const ObjectReplacementMap& map)
+    NativeCommit(const StructuralMemberMappings& mappings,const object_replacement::ObjectReplacementMap& map)
         :mappings_(mappings),map_(map){}
     bool Validate(const source_commit::Plan&)const override{return true;}
     uint32_t Status(void* klass)const override {
@@ -100,7 +100,7 @@ void CommitEvolutionStructurally(void*,const void* raw) {
       for_each(Read<void*>(*singleton,offsetof(runtime_access_abi::RuntimePrefix,thread_list)),ClearThread,nullptr);unlock(*list_lock,self);
     }
    private:
-    const StructuralMemberMappings& mappings_;const ObjectReplacementMap& map_;
+    const StructuralMemberMappings& mappings_;const object_replacement::ObjectReplacementMap& map_;
   } services(mappings,map);
   source_commit::Plan plan{roots.mirror,roots.new_classes,olds,news,old_instances,new_instances,abstract_instances};
   Require(source_commit::Run(plan,services));

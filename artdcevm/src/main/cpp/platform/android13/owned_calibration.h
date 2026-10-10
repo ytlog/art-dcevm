@@ -1,7 +1,7 @@
 #pragma once
 #include "api/hook_engine.h"
 #include "platform/android13/device_profile.h"
-#include "platform/abi/arm64/android13/field_copy_abi.h"
+#include "platform/common/field_copy.h"
 #include "platform/abi/arm64/android13/runtime_access_abi.h"
 #include <jni.h>
 #include <jvmti.h>
@@ -12,7 +12,7 @@ struct OwnedCalibrationReaders {
   void* (*reflected_field)(void*);
   void* (*reflected_method)(JNIEnv*,jobject);
   void* (*canonical_method)(void*);
-  FieldCopyAccess fields;
+  field_copy::FieldCopyAccess fields;
 };
 // Bindings must already be prepared, but hooks are not needed. Matching identity
 // is necessary and never substitutes for the public JNI/JVMTI observations.
@@ -33,5 +33,5 @@ bool CalibrateOwnedFieldStorage(const DeviceProfile&,JNIEnv*,jvmtiEnv*,jobject,c
 bool CalibrateOwnedCardTable(const DeviceProfile&,JNIEnv*,jobject,const OwnedCalibrationReaders&,std::string*);
 // Requires prepared native transitions/SuspendAll. Real managed lock words are
 // transferred only with exclusive mutator ownership, on temporary objects.
-bool CalibrateOwnedMonitorTransfer(const DeviceProfile&,JNIEnv*,jobject,const FieldCopyAccess&,std::string*);
+bool CalibrateOwnedMonitorTransfer(const DeviceProfile&,JNIEnv*,jobject,const field_copy::FieldCopyAccess&,std::string*);
 }

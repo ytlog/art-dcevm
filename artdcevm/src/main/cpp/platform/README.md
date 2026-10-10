@@ -22,3 +22,5 @@ Android 11、12、14、15、16 目前主要通过 `common/` 实现行为，相�
 新增代码规则：先确认是否确有版本或 ARM64 差异。跨版本算法放 `common/`；版本独有声明放 `abi/arm64/androidXX/`；版本独有行为放相应 `androidXX/`。保留代码命名空间，移动目录不改变运行时语义。厂商差异只有在真实符号/调用语义需要时加入，不能凭机型、SDK 或构建编号授予私有能力。
 
 设备采集库位于工程 assets/runtime_lib 的既有分类目录，不纳入源码提交；原始日志和逐次报告写入已忽略的 `build/evidence/`，验证摘要在 `docs/VERIFICATION.md`。
+
+Android 13 直接使用 `common/field_copy.h`、`common/object_replacement_map.h` 和 `common/retired_*_registry.h` 的公共命名空间；不再为这些公共算法保留版本转发头。`abi/arm64/android13/` 只保留真实的版本声明，不为公共 POD 视图或已有算法重新起版本别名。

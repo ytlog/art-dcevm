@@ -61,9 +61,9 @@ jvmtiError Free(jvmtiEnv*,unsigned char* text){++freed_text;std::free(text);retu
 jvmtiError ClassSignature(jvmtiEnv*,jclass k,char** sig,char**){assert(!scopes);*sig=strdup(k==reinterpret_cast<jclass>(klass)?"LCalibrationFixture;":"Ljava/lang/Object;");return JVMTI_ERROR_NONE;}
 jvmtiError PublicLoader(jvmtiEnv*,jclass k,jobject* out){assert(!scopes);*out=k==reinterpret_cast<jclass>(klass)?reinterpret_cast<jobject>(class_loader):nullptr;return JVMTI_ERROR_NONE;}
 jvmtiError PublicFields(jvmtiEnv*,jclass k,jint* n,jfieldID** out){assert(!scopes);if(move_public_metadata&&k==reinterpret_cast<jclass>(klass))metadata_moved=true;*n=k==reinterpret_cast<jclass>(klass)?count:0;*out=*n?static_cast<jfieldID*>(std::malloc(count*sizeof(jfieldID))):nullptr;for(int i=0;i<*n;++i)(*out)[i]=Id(count-1-i);return JVMTI_ERROR_NONE;}
-CopyClassView CopyClass(void* owner,bool stat){assert(scopes&&(owner==(metadata_moved?relocated_class:klass)||owner==parent_class));++metadata_classes;if(owner==parent_class)return {nullptr,nullptr,metadata_fault==9?"LWrong;":"Ljava/lang/Object;",0,true};size_t n=0;for(const auto& spec:specs)if(spec.stat==stat)++n;
+artdcevm::field_copy::CopyClassView CopyClass(void* owner,bool stat){assert(scopes&&(owner==(metadata_moved?relocated_class:klass)||owner==parent_class));++metadata_classes;if(owner==parent_class)return {nullptr,nullptr,metadata_fault==9?"LWrong;":"Ljava/lang/Object;",0,true};size_t n=0;for(const auto& spec:specs)if(spec.stat==stat)++n;
  return {metadata_fault==1?nullptr:parent_class,metadata_fault==2?nullptr:class_loader,metadata_fault==3?"LWrong;":"LCalibrationFixture;",n+(metadata_fault==4),metadata_fault==5};}
-CopyFieldView CopyField(void* owner,bool stat,size_t index){assert(scopes&&owner==(metadata_moved?relocated_class:klass));++metadata_fields;
+artdcevm::field_copy::CopyFieldView CopyField(void* owner,bool stat,size_t index){assert(scopes&&owner==(metadata_moved?relocated_class:klass));++metadata_fields;
  // The device reader's fixture enumeration is deliberately a different order
  // from JVMTI's result; calibration must match identities, not array positions.
  for(size_t i=0;i<count;++i)if(specs[i].stat==stat){if(index--==0)return {metadata_fault==8?&fields[(i+1)%count]:&fields[i],metadata_fault==6?"wrongName":specs[i].name,metadata_fault==7?"F":specs[i].signature};}

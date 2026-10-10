@@ -1,6 +1,6 @@
 #include "platform/android13/retired_member_guard.h"
-#include "platform/android13/retired_method_registry.h"
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_method_registry.h"
+#include "platform/common/retired_field_registry.h"
 
 #include <cassert>
 #include <csetjmp>
@@ -9,8 +9,8 @@
 
 namespace guard = artdcevm::android13;
 namespace {
-guard::RetiredMethodRegistry methods;
-guard::RetiredFieldRegistry fields;
+artdcevm::retirement::RetiredMethodRegistry methods;
+artdcevm::retirement::RetiredFieldRegistry fields;
 int method, field, live_member, current_thread, explicit_thread;
 size_t current_calls = 0, throws = 0, deliveries = 0;
 const char* expected_descriptor;

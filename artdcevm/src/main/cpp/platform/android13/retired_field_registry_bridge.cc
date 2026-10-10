@@ -1,12 +1,12 @@
 #include "platform/android13/retired_field_registry_bridge.h"
 
 #include <cstdlib>
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_field_registry.h"
 
 namespace artdcevm::android13 {
 namespace {
-RetiredFieldRegistry registry;
-RetiredFieldRegistry::ContainsUnsafe contains_unsafe = nullptr;
+retirement::RetiredFieldRegistry registry;
+retirement::RetiredFieldRegistry::ContainsUnsafe contains_unsafe = nullptr;
 
 void Retire(void* field) noexcept {
   try { registry.Retire(field); } catch (...) { std::abort(); }

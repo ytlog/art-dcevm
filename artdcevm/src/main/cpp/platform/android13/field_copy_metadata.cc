@@ -31,7 +31,7 @@ field_array::View FieldArray(void* klass, bool is_static) {
   return view;
 }
 }
-CopyClassView ReadCopyClass(void* klass, bool is_static) {
+field_copy::CopyClassView ReadCopyClass(void* klass, bool is_static) {
   using namespace validation_abi;
   Require(klass != nullptr);
   auto* parent = ReadHeapReference(klass, offsetof(ClassPrefix, super_class));
@@ -41,7 +41,7 @@ CopyClassView ReadCopyClass(void* klass, bool is_static) {
           fields.selected_count,
           parent == nullptr};
 }
-CopyFieldView ReadCopyField(void* klass, bool is_static, size_t index) {
+field_copy::CopyFieldView ReadCopyField(void* klass, bool is_static, size_t index) {
   const auto fields = FieldArray(klass, is_static);
   Require(name != nullptr && descriptor != nullptr && index < fields.selected_count);
   auto* field = fields.AtSelected(static_cast<uint32_t>(index));

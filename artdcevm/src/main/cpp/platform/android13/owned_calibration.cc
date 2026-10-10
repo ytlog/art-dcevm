@@ -214,7 +214,7 @@ bool CalibrateOwnedCardTable(const DeviceProfile& profile,JNIEnv* env,jobject fi
  }
  return true;
 }
-bool CalibrateOwnedMonitorTransfer(const DeviceProfile& profile,JNIEnv* env,jobject fixture,const FieldCopyAccess& fields,std::string* error){
+bool CalibrateOwnedMonitorTransfer(const DeviceProfile& profile,JNIEnv* env,jobject fixture,const field_copy::FieldCopyAccess& fields,std::string* error){
  if(!Begin(profile,env,fixture,error))return false;if(!fields.transfer_monitor)return Fail(error,"Missing owned monitor transfer");
  Local type{env,env->GetObjectClass(fixture)};Local system{env,env->FindClass("java/lang/System")};if(!type.value||!system.value||env->ExceptionCheck())return Fail(error,"Monitor fixture classes unavailable");
  Local source{env,env->AllocObject(static_cast<jclass>(type.value))},target{env,env->AllocObject(static_cast<jclass>(type.value))};

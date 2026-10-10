@@ -1,14 +1,14 @@
 #include "platform/android13/retired_method_registry_bridge.h"
 
 #include <cstdlib>
-#include "platform/android13/retired_method_registry.h"
+#include "platform/common/retired_method_registry.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_member_guard.h"
 
 namespace artdcevm::android13 {
 namespace {
-RetiredMethodRegistry registry;
-RetiredMethodRegistry::ContainsUnsafe contains_unsafe = nullptr;
+retirement::RetiredMethodRegistry registry;
+retirement::RetiredMethodRegistry::ContainsUnsafe contains_unsafe = nullptr;
 
 void Retire(void* method) noexcept {
   try { registry.Retire(method); } catch (...) { std::abort(); }

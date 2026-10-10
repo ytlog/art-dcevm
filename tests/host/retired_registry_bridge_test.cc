@@ -1,6 +1,6 @@
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/retired_field_registry_bridge.h"
-#include "platform/android13/retired_field_token.h"
+#include "platform/common/retired_field_token.h"
 #include "platform/android13/retired_member_guard.h"
 #include <cassert>
 #include <cstring>
@@ -41,7 +41,7 @@ int main(){
  assert(g::IsRetiredMethodPointer(&method)&&g::RetiredMethodCount()==1);
  g::RetireFieldPointer(&field);g::RetireFieldPointer(&field);auto token=g::RetiredFieldTokenFor(&field);
  assert(g::IsRetiredFieldPointer(&field)&&g::RetiredFieldSlotCount()==1);
- assert(token&g::kRetiredFieldTag);assert(g::ResolveRetiredFieldToken(token)==&field);
+ assert(token&artdcevm::retirement::kRetiredFieldTag);assert(g::ResolveRetiredFieldToken(token)==&field);
  assert(g::PruneRetiredMethods(&method)==1&&!g::IsRetiredMethodPointer(&method)&&g::RetiredMethodCount()==0);
  assert(g::PruneRetiredFields(&field)==1&&g::RetiredFieldTokenFor(&field)==0&&g::ResolveRetiredFieldToken(token)==nullptr);
  std::cout<<"retired registry bridge: owned method/field retirement, token identity and allocator prune passed\n";

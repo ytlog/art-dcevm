@@ -6,7 +6,7 @@
 #include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/retired_field_registry_bridge.h"
-#include "platform/android13/retired_field_token.h"
+#include "platform/common/retired_field_token.h"
 #include "platform/android13/retired_member_guard.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cstdlib>
@@ -29,7 +29,7 @@ void* DecodeReflectedField(void* reflected_field) {
   reflection_metadata::FieldIdentity identity;
   Require(reflection_metadata::ReadField(reflection_metadata::k12,reflected_field,sizeof(ReflectedField),&identity));
   const uint32_t index = identity.array_index;
-  if ((index & kRetiredFieldTag) != 0) {
+  if ((index & retirement::kRetiredFieldTag) != 0) {
     auto* field = ResolveRetiredFieldToken(index);
     Require(field != nullptr);
     return field;

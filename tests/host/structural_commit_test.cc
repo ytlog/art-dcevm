@@ -4,7 +4,7 @@
 #include "platform/abi/arm64/android13/allocation_validation_abi.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/structural_reflective.h"
-#include "platform/abi/arm64/android13/object_replacement_map_abi.h"
+#include "platform/common/object_replacement_map_abi.h"
 #include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "platform/android13/symbols/profile.h"
 #include <cassert>
@@ -54,9 +54,9 @@ void Each(void* list,void(*callback)(void*,void*),void* context) {
 }
 void Clear(void* cache,void* self) { assert(locked && self==thread && cache==thread+2608);events.push_back("clear"); }
 void Replace(void* self,const void* raw) {
-  assert(self==thread);events.push_back("replace");auto& map=*static_cast<const object_map_abi::Map*>(raw);
+  assert(self==thread);events.push_back("replace");auto& map=*static_cast<const artdcevm::object_replacement::object_map_abi::Map*>(raw);
   assert(map.size==3);std::vector<std::pair<void*,void*>> pairs;
-  for(auto* base=map.sentinel.next;base;base=base->next) {auto* node=static_cast<object_map_abi::Node*>(base);pairs.emplace_back(node->key,node->value);}
+  for(auto* base=map.sentinel.next;base;base=base->next) {auto* node=static_cast<artdcevm::object_replacement::object_map_abi::Node*>(base);pairs.emplace_back(node->key,node->value);}
   auto swap=[&](uint32_t reference) { for(auto [old,fresh]:pairs) if(reference==Ref(old)) return Ref(fresh);return reference; };
   // Model ART's heap and holder-root rewrite, without touching native vectors.
   for(void* array:{old_classes,new_classes,old_instances,new_instances,holder_array})

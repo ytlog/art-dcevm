@@ -4,8 +4,8 @@
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/field_copy_metadata.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
-#include "platform/android13/retired_method_registry.h"
-#include "platform/android13/retired_field_registry.h"
+#include "platform/common/retired_method_registry.h"
+#include "platform/common/retired_field_registry.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -19,7 +19,7 @@ struct Field {uint32_t declaring_class=0,flags=0;const char* name;const char* ty
 struct Fields {std::vector<Field*> statik,instance;};
 std::unordered_map<void*,Fields> fields;
 std::unordered_map<void*,void*> roots;
-RetiredMethodRegistry methods;RetiredFieldRegistry retired_fields;
+artdcevm::retirement::RetiredMethodRegistry methods;artdcevm::retirement::RetiredFieldRegistry retired_fields;
 size_t field_dispatch=0;size_t dispatch=0;void* mirror=nullptr;void* assignable=nullptr;
 Visitor* active=nullptr;void (*scenario)(Visitor*)=nullptr;
 namespace artdcevm::android13 {
@@ -27,8 +27,8 @@ void RetireMethodPointer(void* p)noexcept{methods.Retire(p);}void RetireFieldPoi
 bool IsRetiredMethodPointer(void* p){return methods.Contains(p);}bool IsRetiredFieldPointer(void* p){return retired_fields.TokenFor(p)!=0;}
 void RequireDispatchChecks(){++dispatch;}
 void RequireFieldAccessChecks(){++field_dispatch;}
-CopyClassView ReadCopyClass(void* p,bool statik){return {nullptr,nullptr,nullptr,statik?fields[p].statik.size():fields[p].instance.size(),false};}
-CopyFieldView ReadCopyField(void* p,bool statik,size_t i){auto* f=(statik?fields[p].statik:fields[p].instance).at(i);return {f,f->name,f->type};}
+artdcevm::field_copy::CopyClassView ReadCopyClass(void* p,bool statik){return {nullptr,nullptr,nullptr,statik?fields[p].statik.size():fields[p].instance.size(),false};}
+artdcevm::field_copy::CopyFieldView ReadCopyField(void* p,bool statik,size_t i){auto* f=(statik?fields[p].statik:fields[p].instance).at(i);return {f,f->name,f->type};}
 bool IsValidationAssignableFrom(void* a,void* b){assert(b==mirror);return a==assignable;}
 void* CanonicalizeJniMethod(void* m){return static_cast<unsigned char*>(m)+32;}
 }
