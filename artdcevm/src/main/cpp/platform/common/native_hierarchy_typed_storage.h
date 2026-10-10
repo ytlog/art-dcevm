@@ -18,12 +18,20 @@ class Proof final {
  bool Capture(const source_commit::Plan&,const prepared_roots::Registrar&,std::string*);
  bool CanRefresh(const prepared_roots::Resolver&)const noexcept;
  void Refresh(const prepared_roots::Resolver&)noexcept;
+ // Runs the same complete heap inspection in the actual collected stop after
+ // cleanup owns the concrete delegate. Final Validate still repeats the walk.
+ bool ValidatePrepared(const source_commit::Plan&,const modern_field_metadata::ReadContext&,
+       const native_required_cleanup::Service&,void* actual_driver,const transaction_root::Holder*,
+       const native_source_commit::Services&)const noexcept;
  bool Validate(const source_commit::Plan&,const modern_field_metadata::ReadContext&,
        const native_required_cleanup::Service&,void* actual_driver,const transaction_root::Holder*,
        const native_source_commit::Services&)const noexcept;
  void Clear(JNIEnv*);
  enum class Refusal {None,Owner,Inventory,SourceCopy,UnknownCell,IncompatibleField,IncompatibleArray};
  Refusal LastRefusal()const noexcept;
- private:struct State;std::unique_ptr<State> state_;
+ private:
+ bool ValidateHeap(const source_commit::Plan&,const modern_field_metadata::ReadContext&,
+       const native_source_commit::Services&)const noexcept;
+ struct State;std::unique_ptr<State> state_;
 };
 }

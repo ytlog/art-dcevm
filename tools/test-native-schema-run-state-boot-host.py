@@ -13,7 +13,7 @@ sys.path.insert(0,str(root/'tests/host'))
 from schema_run_state_dex_fixture import write_fixture,write_graph_fixture
 from schema_run_state_boot_dex_fixture import write_boot_fixture
 import struct,hashlib,zlib
-before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex')
+before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex',typed_probe=True)
 # Same original superclass: this is member schema evolution, not prefix-changing hierarchy.
 b=bytearray(after.read_bytes());types_at=struct.unpack_from('<I',b,68)[0];strings_at=struct.unpack_from('<I',b,60)[0]
 base_index=None

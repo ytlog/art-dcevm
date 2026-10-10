@@ -16,6 +16,7 @@ struct RunState::State {
  Dependencies d;modern_field_metadata::ReadContext read_context{},inspection_context{};void* driver;const runnable_jni::Context context;
  source_handle_roots::Pool pool;native_hierarchy_source_cache::AllocatorBatchAccess access;
  native_hierarchy_graph::Authority authority;native_hierarchy_receiver::Preservation receivers;
+ std::unique_ptr<native_hierarchy_typed_storage::Proof> typed_storage;
  native_boot_method_catalog::Rooted boot_catalog;
  std::unique_ptr<native_boot_aot_unaffected::Source> boot_unaffected;
  whole_process_frames::Service::Prepared frame_storage;
@@ -100,6 +101,11 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  witness.semantic_resolution_proved=w.resolve!=nullptr;
  if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error)){if(error&&error->empty())*error="Source cache public storage callback rejected original storage witness";return false;}
  if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error)){if(error&&error->empty())*error="Source incoming cache calibration rejected actual independent witness";return false;}
+ if(!s.d.typed_heap||!s.d.typed_heap->Calibrated())return Fail(error,"Schema source Run requires independent typed heap calibration");
+ s.typed_storage=std::make_unique<native_hierarchy_typed_storage::Proof>(*s.d.typed_heap,*s.d.roots,*s.d.members.metadata);
+ // Public Field.getType can load Classes. Finish its complete fixed point
+ // before the hierarchy owner snapshots the actual loaded-Class graph.
+ if(!s.typed_storage->Stage(*s.d.hooks,s.context,ti,error))return false;
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get(),[](void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongPair(c,a,b,left,right);}};
  if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
  if(!s.authority.Stage(s.context,ti,inputs,graph,error)){if(error&&error->empty())*error="Source hierarchy authority staging rejected actual public graph";return false;}
@@ -115,6 +121,7 @@ RunState::~RunState(){
  s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
  s.caches.reset();s.mapper.reset();s.ledger.reset();s.loading.reset();s.cleanup.reset();s.stop.reset();
  s.authority.Clear(s.context.env);
+ if(s.typed_storage)s.typed_storage->Clear(s.context.env);
  if(current==this)current=s.previous;
 }
 RunState* RunState::Current()noexcept{return current;}
@@ -170,7 +177,7 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
  checkpoint("publication-plan-return");checkpoint("native-root-registration-begin");
  const auto collect=s.d.registry->Collect();
- if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
+ if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||!s.typed_storage||!s.typed_storage->Capture(p,collect,e)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
  checkpoint("native-root-registration-return");
  ordinary.reset();checkpoint("source-stop-begin");
  if(s.d.stop->RequiresOriginalWaiting()){
@@ -200,8 +207,9 @@ bool RunState::PrepareStopped(std::string*e){
  }
  // From here no JNI root can be created. Existing binds only known identities.
  if(!s.d.registry->Resolve())return Fail(e,"Stopped schema root resolution failed");const auto resolve=s.d.registry->Final();
- if(!s.plan_roots.CanRefresh(resolve)||!s.ledger->CanRefresh(resolve)||!s.authority.CanRefresh(resolve))return Fail(e,"Stopped schema root locations cannot refresh");
+ if(!s.plan_roots.CanRefresh(resolve)||!s.ledger->CanRefresh(resolve)||!s.authority.CanRefresh(resolve)||!s.typed_storage||!s.typed_storage->CanRefresh(resolve))return Fail(e,"Stopped schema root locations cannot refresh");
  s.plan_roots.Refresh(resolve);s.ledger->Refresh(resolve);s.authority.Refresh(resolve);
+ s.typed_storage->Refresh(resolve);
  if(!s.incoming.Refresh()||(s.d.guards&&!s.d.guards->RefreshManagedRoots(p,resolve))||!s.cleanup->PrepareCollected(p,e)||!s.hierarchy->Collected(p,e))return false;
  if(s.d.guards&&!s.d.guards->UseHierarchyAuthority(this))return Fail(e,"Frozen schema guard rejected the actual sealed hierarchy authority");
  auto native=s.d.provider->Prepare(p,s.d.members,e);if(!native)return false;
@@ -210,14 +218,20 @@ bool RunState::PrepareStopped(std::string*e){
   return Fail(e,"Native provider attempted an unregistered stopped root");
  }
  s.facade=s.cleanup->Prepare(std::move(native),p,e);if(!s.facade)return false;
+ if(!s.typed_storage->ValidatePrepared(p,s.read_context,*s.cleanup,s.driver,
+     static_cast<const transaction_root::Holder*>(s.holder),s.facade->Delegate()))
+  return Fail(e,"Collected typed reference assignment proof refused");
  if(!s.stop->ContinueSource())return Fail(e,s.stop->Failure());
  return true;
 }
 std::unique_ptr<source_commit::Services> RunState::Finalize(const void*h,const source_commit::Plan**p)noexcept{
  auto&s=*state_;if(!p||s.phase!=State::Phase::Collected||h!=s.holder||!s.facade||!s.stop->IsFinalWindow(s.context.self)||!s.d.registry->Resolve())return nullptr;
- const auto r=s.d.registry->Final();if(!s.plan_roots.CanRefresh(r)||!s.ledger->CanRefresh(r)||!s.authority.CanRefresh(r)||(s.d.guards&&!s.d.guards->CanRefreshManagedRoots(r)))return nullptr;
+ const auto r=s.d.registry->Final();if(!s.plan_roots.CanRefresh(r)||!s.ledger->CanRefresh(r)||!s.authority.CanRefresh(r)||!s.typed_storage||!s.typed_storage->CanRefresh(r)||(s.d.guards&&!s.d.guards->CanRefreshManagedRoots(r)))return nullptr;
  s.plan_roots.Refresh(r);s.ledger->Refresh(r);s.authority.Refresh(r);
+ s.typed_storage->Refresh(r);
  if(!s.incoming.Refresh()||(s.d.guards&&!s.d.guards->RefreshManagedRoots(*s.plan,r))||!s.d.provider->RefreshManagedRoots(*s.plan,s.facade->Delegate(),r)||!s.cleanup->RefreshFinal(r))return nullptr;
+ if(!s.typed_storage->Validate(*s.plan,s.read_context,*s.cleanup,s.driver,
+     static_cast<const transaction_root::Holder*>(s.holder),s.facade->Delegate()))return nullptr;
  *p=s.plan;s.phase=State::Phase::Finalized;return std::move(s.facade);
 }
 void RunState::Commit(const source_commit::Plan&p)noexcept{auto&s=*state_;Require(s.phase==State::Phase::Finalized&&s.plan==&p&&s.cleanup->CommitObserver(p));s.hierarchy->BeginCommit(p);s.phase=State::Phase::Committed;}
@@ -245,6 +259,7 @@ void RunState::CompleteRefund(void*raw)noexcept{
  // links until original Run unwinds, but stop rooting the private temporary
  // Classes/caches beyond the original Holder/DEX lifetime.
  s.d.registry->Clear();Require(s.pool.DropManagedReferences());
+ if(s.typed_storage)s.typed_storage->Clear(s.context.env);
  if(s.d.refund_roots)s.d.refund_roots(s.d.refund_roots_owner);
  s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
  s.cleanup.reset();s.stop.reset();s.phase=State::Phase::Refunded;

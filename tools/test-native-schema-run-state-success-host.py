@@ -11,7 +11,7 @@ exec(compile(baseline.read_text().split('fixture=Path',1)[0],str(baseline),'exec
 root=namespace['root'];cpp=namespace['cpp'];out=namespace['out'];java=namespace['java'];platform=namespace['platform'];sources=namespace['sources']
 sys.path.insert(0,str(root/'tests/host'))
 from schema_run_state_dex_fixture import write_fixture,write_graph_fixture
-before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex')
+before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex',typed_probe=True)
 setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  // Additional actual owners',1)[1].split('  auto begin=',1)[0]
 # The baseline also contains a deliberate public-storage rejection case. This
 # matched positive fixture must opt into its independently populated JNI oracle;

@@ -6,6 +6,7 @@
 #pragma clang diagnostic pop
 #include "platform/common/native_schema_run_state.h"
 #include "native_schema_run_state_mapping_fixture.h"
+#include "native_schema_run_state_typed_fixture.h"
 #include "native_schema_run_state_public_fixture.h"
 int main(){
 #include "root_setup.inc"
@@ -25,7 +26,7 @@ int main(){
   native_schema_policy::Plan policy;assert(native_schema_policy::Plan::Prepare(proposal.before,proposal.after,&policy,&error));
   std::vector<native_schema_policy::Plan> policies{policy};
   deps.members.retirement.owner=&retired_records;deps.members.schemas=&policies;deps.members.expected_removal=native_member_provider::Removal::kSchemaEvolution;
-  native_schema_guard_verifier::Verifier verifier;guard_expected_loader=app_loader;guard_base_class=base;auto* base_methods=static_cast<unsigned char*>(heap.New(40));Put32(base_methods,0,1);base->methods=uintptr_t(base_methods);auto* base_method=new(base_methods+8)abi::arm64::android12::Method12{};base_method->declaring_class=uint32_t(uintptr_t(base));base_method->access_flags=1;base_method->dex_method_index=1;guard_base_method=base_method;ConfigurePublicGuard(table,funcs);
+  native_schema_guard_verifier::Verifier verifier;guard_expected_loader=app_loader;guard_base_class=base;auto* base_methods=static_cast<unsigned char*>(heap.New(40));Put32(base_methods,0,1);base->methods=uintptr_t(base_methods);auto* base_method=new(base_methods+8)abi::arm64::android12::Method12{};base_method->declaring_class=uint32_t(uintptr_t(base));base_method->access_flags=1;base_method->dex_method_index=1;guard_base_method=base_method;ConfigurePublicGuard(table,funcs);ConfigureSchemaTypedPublic(table,funcs);
   native_schema_guard_verifier::Bindings guards;guards.vm=static_cast<JavaVM*>(aggregate_context.vm);guards.metadata=d.metadata;guards.methods=&method_model;
   guards.roots={nullptr,GuardScope,GuardOracle,GuardDecode,GuardElement};guards.decode_global=GuardDecode;guards.decode_method=GuardMethod;guards.decode_field=GuardField;guards.decode_native_field=GuardNativeField;guards.stage_field=GuardStageField;guards.method_class=GuardMethodClass;guards.same_method=GuardSameMethod;guards.readable=GuardReadable;guards.writable=GuardReadable;guards.extent=GuardExtent;
   if(!verifier.Stage(&env,&ti,{reinterpret_cast<jclass>(old_class)},guards,&error)){std::cerr<<"actual Stage: "<<error<<"\n";std::abort();}
@@ -58,7 +59,7 @@ int main(){
   assert(source_commit::Run(plan,*facade,{run.get(),[](const source_commit::Plan& value,void* owner)noexcept{static_cast<native_schema_run_state::RunState*>(owner)->Commit(value);}}));
   assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
   facade.reset();class_remove_proxy(&linker,&pauser);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());
-  assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);matched_plan=nullptr;
+  assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);matched_plan=nullptr;assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_walks>=4);
   assert(!gc&&!disabled&&!stopped&&replaced);
   std::cout<<"Actual matched RunState public Stage+Seal+guard proofs, moving allocation, Collected, original publication, final native Validate+Commit+cleanup+End passed with no C++ allocation or OS mapping query (publication has Android17 no-inner-GC semantics)\n";
   return true;

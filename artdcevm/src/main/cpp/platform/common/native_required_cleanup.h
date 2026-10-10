@@ -16,6 +16,7 @@ class Binding final {
   friend class Service;
   bool Current(JavaVM*,void*)const noexcept;
   bool Matches(const native_source_commit::Services&,const native_member_provider::Service&)const noexcept;
+  bool CopiesCurrent(const source_commit::Plan&,const modern_field_metadata::ReadContext&,const native_source_commit::Services&)const noexcept;
   JavaVM* vm_=nullptr;void* (*current_)()=nullptr;
   native_member_provider::Dependencies dependencies_;
   std::array<void*,8> symbols_{};
@@ -47,6 +48,9 @@ class Service final:public native_hierarchy_private_ledger::CleanupOwner {
   bool Verify(void*,const transaction_root::Holder*,const source_commit::Plan&)const noexcept override;
   bool IsStopped(void*,const transaction_root::Holder*)const noexcept override;
   bool IsFinalWindow(void*,const transaction_root::Holder*)const noexcept override;
+  // Readonly collected-owner/copy witness; grants no final or publication permission.
+  bool VerifyFinalCopies(const source_commit::Plan&,const modern_field_metadata::ReadContext&,void*,const transaction_root::Holder*,const native_source_commit::Services&)const noexcept;
+  bool VerifyPreparedCopies(const source_commit::Plan&,const modern_field_metadata::ReadContext&,void*,const transaction_root::Holder*,const native_source_commit::Services&)const noexcept;
   void BeginCommit(const source_commit::Plan&)const noexcept override;
   bool Completed()const noexcept;
   // Readonly witness of the actual full Facade/observer/ledger BeginCommit path.

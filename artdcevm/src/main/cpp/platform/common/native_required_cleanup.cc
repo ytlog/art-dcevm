@@ -22,6 +22,18 @@ bool Binding::Current(JavaVM* vm,void* self)const noexcept{return vm_&&vm==vm_&&
 bool Binding::Matches(const native_source_commit::Services& s,const native_member_provider::Service& p)const noexcept{
  const auto& d=s.dependencies_;return p.reflection_==dependencies_.reflection&&d.reflective.state==&p&&d.reflective.prepared==native_member_provider::Service::ReflectReady&&d.reflective.update==native_member_provider::Service::ReflectUpdate&&d.reflective.begin_commit==native_member_provider::Service::ReflectRetire&&s.self_&&Current(vm_,s.self_)&&d.metadata==dependencies_.metadata&&d.fields==dependencies_.fields&&d.caches==dependencies_.cache&&d.observed.runtime==dependencies_.runtime.runtime&&d.observed.instrumentation==dependencies_.runtime.instrumentation&&d.observed.receivers.java_vm==vm_&&d.observed.receivers.thread_list==dependencies_.runtime.receivers.thread_list&&d.observed.receivers.jit==dependencies_.runtime.receivers.jit&&d.observed.receivers.jit_code_cache==dependencies_.runtime.receivers.jit_code_cache&&reinterpret_cast<void*>(s.set_status_)==symbols_[0]&&reinterpret_cast<void*>(s.retain_)==symbols_[1]&&reinterpret_cast<void*>(s.invalidate_)==symbols_[2]&&reinterpret_cast<void*>(s.deopt_frames_)==symbols_[3]&&reinterpret_cast<void*>(s.deopt_everything_)==symbols_[4]&&reinterpret_cast<void*>(s.replace_)==symbols_[5];
 }
+bool Binding::CopiesCurrent(const source_commit::Plan& p,const modern_field_metadata::ReadContext& context,const native_source_commit::Services& source)const noexcept{
+ if(source.plan_!=&p||!context.owner||!context.extent)return false;
+ const auto& d=source.dependencies_;
+ if(!d.fields||!d.metadata||p.old_classes.size()!=p.new_classes.size())return false;
+ if(!d.prepare_field_copy)return source.copies_.empty();
+ if(source.copies_.size()!=p.old_classes.size())return false;
+ modern_field_storage::ScopedAccess scope(*d.fields);const auto access=scope.Access(&context);
+ for(size_t i=0;i<source.copies_.size();++i){const auto& pair=source.copies_[i];
+  if(pair.old_class!=p.old_classes[i]||pair.new_class!=p.new_classes[i]||!pair.statics.Validate(access)||!pair.instances.Validate(access))return false;
+ }
+ return true;
+}
 Service::Service(const Binding& binding,void* self,void* driver,
  native_source_stop::Session& stop,const whole_process_frames::Service& frames,
  whole_process_frames::Service::Prepared& storage,const native_cache::Service& cache,
@@ -59,6 +71,12 @@ bool Service::IsStopped(void* d,const transaction_root::Holder* h)const noexcept
  return vm_&&self_&&driver_&&holder_&&&cache_==binding_.dependencies_.cache&&jit_==binding_.dependencies_.runtime.receivers.jit_code_cache&&d==driver_&&h==holder_&&redefinition_gate::Owned(vm_)&&binding_.Current(vm_,self_)&&stop_.IsStopped(self_)&&HolderCurrent();
 }
 bool Service::IsFinalWindow(void* d,const transaction_root::Holder* h)const noexcept{return IsStopped(d,h)&&stop_.IsFinalWindow(self_);}
+bool Service::VerifyPreparedCopies(const source_commit::Plan& p,const modern_field_metadata::ReadContext& context,void* driver,const transaction_root::Holder* holder,const native_source_commit::Services& copies)const noexcept{
+ return recovery_context_&&context.owner==recovery_context_->owner&&context.extent==recovery_context_->extent&&phase_==Phase::kCollected&&delegate_==&copies&&IsStopped(driver,holder)&&stop_.IsCollectedStop(self_)&&Exact(p)&&frames_report_.accepted&&provider_.OwnsPreparedSource(p,copies)&&binding_.Matches(copies,provider_)&&binding_.CopiesCurrent(p,context,copies);
+}
+bool Service::VerifyFinalCopies(const source_commit::Plan& p,const modern_field_metadata::ReadContext& context,void* driver,const transaction_root::Holder* holder,const native_source_commit::Services& copies)const noexcept{
+ return (phase_==Phase::kFinalRefreshed||phase_==Phase::kValidated||phase_==Phase::kObserver)&&recovery_context_&&context.owner==recovery_context_->owner&&context.extent==recovery_context_->extent&&delegate_==&copies&&IsFinalWindow(driver,holder)&&Verify(driver,holder,p)&&binding_.CopiesCurrent(p,context,copies);
+}
 bool Service::Exact(const source_commit::Plan& p)const noexcept{return plan_==&p&&source_commit::SameIdentity(p,expected_);}
 bool Service::UseRecoveryContext(const modern_field_metadata::ReadContext&context) noexcept{
  if(phase_!=Phase::kEmpty||!stop_.IsCollectedStop(self_)||!context.owner||!context.extent||!frame_storage_.recovery_plan||(recovery_context_&&recovery_context_!=&context))return false;

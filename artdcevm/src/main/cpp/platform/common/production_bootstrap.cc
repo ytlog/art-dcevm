@@ -897,7 +897,7 @@ struct NativeEngine final:Engine {
   native_schema_run_state::Dependencies d;
   if(!source_capabilities.BindDependencies(&d,error)||!PrepareStoppedMaps(error))return false;
   d.hooks=&hooks;d.loading=&source_observers.Loading();d.stop=&source_stop;d.frames=&whole_frames;
-  d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.refund_roots_owner=this;
+  d.provider=&provider;d.registry=&schema_registry;d.guards=&schema_verifier;d.typed_heap=&typed_heap;d.refund_roots_owner=this;
   d.refund_roots=[](void*raw)noexcept{static_cast<NativeEngine*>(raw)->ReleaseFailedSchemaRoots();};d.members=MemberDependencies();
   d.boot_catalog=boot_methods.Complete()?&boot_methods:nullptr;
   d.boot_vtables=abstract_instances.Ready()?&abstract_instances:nullptr;

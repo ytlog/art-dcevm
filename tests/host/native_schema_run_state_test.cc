@@ -6,6 +6,7 @@
 #pragma clang diagnostic pop
 #include "platform/common/native_schema_run_state.h"
 #include "native_schema_run_state_mapping_fixture.h"
+#include "native_schema_run_state_typed_fixture.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
 #include "native_schema_run_state_public_fixture.h"
@@ -19,10 +20,10 @@ int main(){
   // Compose only the newly consumed JNI leaves; preserve graph/provider negative inputs.
   table.CallStaticBooleanMethodA=GuardProxy;table.NewObjectArray=GuardNewArray;table.GetArrayLength=GuardLength;table.GetObjectArrayElement=GuardGet;table.SetObjectArrayElement=GuardSet;
   std::vector<unsigned char> graph_bytes=File(RUN_STATE_GRAPH_DEX_FIXTURE);
-  ConfigureDefiningGraph(graph_bytes,*d.metadata);
+  PrepareSchemaTypedObjects();ConfigureDefiningGraph(graph_bytes,*d.metadata);
   // Additional actual owners required by the aggregate. Calibrate all providers
   // ordinary; no injectable RunState readiness shortcuts are used.
-  OwnerHooks owner_hooks;native_cache::Service process_cache;OwnerNative(thread.data());assert(process_cache.Bind(owner_hooks,&thread_list,&error)&&process_cache.Prepare(&error));OwnerRunnable(thread.data());
+  PrepareSchemaTypedObjects();OwnerHooks owner_hooks;native_cache::Service process_cache;OwnerNative(thread.data());assert(process_cache.Bind(owner_hooks,&thread_list,&error)&&process_cache.Prepare(&error));OwnerRunnable(thread.data());
   table.GetJavaVM=PublicVM;
   native_structural_reflection::Service reflection;
   method_identity::Calibration method_model;
@@ -55,6 +56,7 @@ int main(){
   size_t released_failed_roots=0;deps.refund_roots_owner=&released_failed_roots;
   deps.refund_roots=[](void*raw)noexcept{++*static_cast<size_t*>(raw);};
   RunStateMappings mappings;deps.mapping={&mappings,RunStateMappings::Refresh,RunStateMappings::Read};
+  native_typed_heap_walk::Service typed_heap;CalibrateSchemaTypedHeap(owner_hooks,typed_heap,*d.metadata,funcs,error);deps.typed_heap=&typed_heap;
   native_schema_run_state::CacheCalibration witness{reinterpret_cast<jobject>(published_cache),reinterpret_cast<jobject>(old_class),112,counts,subject_index,0,0,old_fields[0],old_method};
   CheckHooks checks;assert(native_hierarchy_source_checks::Install(checks,&error));native_hierarchy_source_checks::SetFailureObserver(native_owned_removal::ObserveSourceFailure);
   auto aggregate_context=context;aggregate_context.vm=reinterpret_cast<JavaVM*>(&::runtime);
@@ -66,11 +68,13 @@ int main(){
   witness.resolution_owner=&public_state;
   witness.resolve=[](void*raw,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*){static_cast<PublicStorageState*>(raw)->resolved=true;return true;};
   witness.public_storage=[](void*raw,const runnable_jni::Context& c,native_hierarchy_cache::Witness*out,std::string*){auto& p=*static_cast<PublicStorageState*>(raw);assert(p.resolved&&c.env&&!stopped);++p.reads;if(!p.accept)return false;out->has_public_storage=true;out->public_types=p.cache->types;out->public_fields=p.cache->fields;out->public_methods=p.cache->methods;return true;};
+  const auto typed_globals_before_begin=SchemaTypedGlobals();
   auto begin=[&](const native_schema_run_state::CacheCalibration& w){return native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},w,&error);};
   for(int missing_map=0;missing_map<3;++missing_map){auto complete=deps.mapping;if(missing_map==0)deps.mapping.owner=nullptr;else if(missing_map==1)deps.mapping.refresh_stopped=nullptr;else deps.mapping.extent=nullptr;assert(!begin(witness));assert(!native_schema_run_state::RunState::Current());deps.mapping=complete;}
-  assert(!begin(witness)&&public_state.resolved&&public_state.reads==1);assert(!native_schema_run_state::RunState::Current());public_state.accept=true;
+  assert(!begin(witness)&&public_state.resolved&&public_state.reads==1);assert(!native_schema_run_state::RunState::Current());assert(SchemaTypedGlobals()==typed_globals_before_begin);public_state.accept=true;
   auto missing=witness;missing.strong_cache=nullptr;assert(!begin(missing));assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
-  for(int repeat=0;repeat<2;++repeat){auto run=begin(witness);if(!run){std::cerr<<"aggregate Begin: "<<error<<"\n";std::abort();}assert(native_schema_run_state::RunState::Current()==run.get());assert(!begin(witness));ExpectAbort([&]{run->End(&actual_driver,false);});ExpectAbort([&]{source_commit::Plan wrong;run->Commit(wrong);});assert(!run->StoppedWindow());source_commit::Plan not_sealed;assert(!run->VerifyHierarchy(not_sealed,0,nullptr));transaction_root::Iterator unallocated{0,&holder};assert(!run->BeforeVerification(&actual_owner,&unallocated,&error));run->AfterVerification(&actual_owner,&unallocated,false);source_commit::Plan uncollected;assert(!run->Collected({},uncollected,&error));const source_commit::Plan* ignored=nullptr;const auto os_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(!run->Finalize(&holder,&ignored));assert(method_identity::MappingOsQueries()==os_queries);forbid_allocation=false;run->Refund();run->Refund();assert(run->End(&actual_driver,false));run.reset();assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());}
+  {const auto original=proposal.strong_original;proposal.strong_original=nullptr;assert(!begin(witness));proposal.strong_original=original;assert(!native_schema_run_state::RunState::Current());assert(SchemaTypedGlobals()==typed_globals_before_begin);}
+  for(int repeat=0;repeat<2;++repeat){auto run=begin(witness);if(!run){std::cerr<<"aggregate Begin: "<<error<<"\n";std::abort();}assert(native_schema_run_state::RunState::Current()==run.get());assert(!begin(witness));ExpectAbort([&]{run->End(&actual_driver,false);});ExpectAbort([&]{source_commit::Plan wrong;run->Commit(wrong);});assert(!run->StoppedWindow());source_commit::Plan not_sealed;assert(!run->VerifyHierarchy(not_sealed,0,nullptr));transaction_root::Iterator unallocated{0,&holder};assert(!run->BeforeVerification(&actual_owner,&unallocated,&error));run->AfterVerification(&actual_owner,&unallocated,false);source_commit::Plan uncollected;assert(!run->Collected({},uncollected,&error));const source_commit::Plan* ignored=nullptr;const auto os_queries=method_identity::MappingOsQueries();forbid_allocation=true;assert(!run->Finalize(&holder,&ignored));assert(method_identity::MappingOsQueries()==os_queries);forbid_allocation=false;run->Refund();run->Refund();assert(run->End(&actual_driver,false));run.reset();assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());}
   {
    auto run=begin(witness);assert(run);
    PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);
@@ -105,7 +109,7 @@ int main(){
    assert(Read32(collected,12)==uint32_t(uintptr_t(session_allocated))); // Original root intact.
    class_remove_proxy(&linker,&pauser);
    const auto destroyed_holder=holder;std::memset(&holder,0,sizeof(holder)); // Original Run already destroyed Holder.
-   assert(run->End(&actual_driver,false));run.reset();holder=destroyed_holder;roots.Clear();assert(roots.Size()==0);
+   assert(run->End(&actual_driver,false));run.reset();assert(SchemaTypedGlobals()==typed_globals_before_begin);holder=destroyed_holder;roots.Clear();assert(roots.Size()==0);
    assert(!native_schema_run_state::RunState::Current()&&!native_hierarchy_session::Session::Current()&&!native_source_class_loading::Run::Current());
   }
   {
@@ -125,7 +129,7 @@ int main(){
     assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);return false;
    },&error));
    assert(released_failed_roots==released_before+1&&Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);
-   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();
+   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();assert(SchemaTypedGlobals()==typed_globals_before_begin);
    Put32(array,12+11*4,0);Put32(array,12+12*4,0);
   }
   return true;

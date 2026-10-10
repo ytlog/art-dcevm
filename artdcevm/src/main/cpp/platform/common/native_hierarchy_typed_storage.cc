@@ -108,10 +108,9 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
  auto* env=c.env;jclass class_type=env->FindClass("java/lang/Class"),field_type=env->FindClass("java/lang/reflect/Field");
  auto component=class_type?env->GetMethodID(class_type,"getComponentType","()Ljava/lang/Class;"):nullptr;
  auto primitive=class_type?env->GetMethodID(class_type,"isPrimitive","()Z"):nullptr;
- auto loader=class_type?env->GetMethodID(class_type,"getClassLoader","()Ljava/lang/ClassLoader;"):nullptr;
  auto declared=field_type?env->GetMethodID(field_type,"getType","()Ljava/lang/Class;"):nullptr;
  jclass system=env->FindClass("java/lang/System");auto hash=system?env->GetStaticMethodID(system,"identityHashCode","(Ljava/lang/Object;)I"):nullptr;
- if(!component||!primitive||!loader||!declared||!hash||env->ExceptionCheck())return Fail(error,"Public typed declaration oracle unavailable");
+ if(!component||!primitive||!declared||!hash||env->ExceptionCheck())return Fail(error,"Public typed declaration oracle unavailable");
  bool pass=true;std::unordered_multimap<jint,size_t> identities;
  // Resolving public Field.getType may load new Classes. Enumerate until a
  // complete pass adds none; native identities are borrowed only after this
@@ -126,7 +125,11 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
    if(env->ExceptionCheck()){pass=false;break;}if(seen)continue;
    State::Type type;char* signature=nullptr;pass=ti->GetClassSignature(loaded[i],&signature,nullptr)==JVMTI_ERROR_NONE&&signature;
   if(!pass)break;const std::string name(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));
-  jobject cl=env->CallObjectMethod(loaded[i],loader);const bool boot=!cl;if(cl)env->DeleteLocalRef(cl);
+  // JNI Class.getClassLoader may return a BootClassLoader facade. Only the
+  // independent JVMTI defining-loader identity supplies the boot oracle.
+  jobject cl=nullptr;const auto loader_error=ti->GetClassLoader(loaded[i],&cl);
+  const bool boot=loader_error==JVMTI_ERROR_NONE&&!cl;if(cl)env->DeleteLocalRef(cl);
+  if(loader_error!=JVMTI_ERROR_NONE||env->ExceptionCheck()){pass=false;break;}
   type.object=boot&&name=="Ljava/lang/Object;";type.cloneable=boot&&name=="Ljava/lang/Cloneable;";type.serializable=boot&&name=="Ljava/io/Serializable;";
   type.primitive=env->CallBooleanMethod(loaded[i],primitive);type.array=!name.empty()&&name.front()=='[';
   pass=!env->ExceptionCheck()&&s.public_roots.Stage(c,loaded[i],&type.root,error);
@@ -208,8 +211,16 @@ void Proof::Refresh(const prepared_roots::Resolver&r)noexcept{auto&s=*state_;if(
  for(size_t i=0;i<s.expected.old_classes.size();++i)s.class_index[i]={uintptr_t(s.expected.old_classes[i]),i};
  for(size_t i=0;i<s.expected.old_instances.size();++i)s.instance_index[i]={uintptr_t(s.expected.old_instances[i]),i};
  std::sort(s.class_index.begin(),s.class_index.end());std::sort(s.instance_index.begin(),s.instance_index.end());}
-bool Proof::Validate(const source_commit::Plan& plan,const modern_field_metadata::ReadContext& maps,const native_required_cleanup::Service& cleanup,void* driver,const transaction_root::Holder* holder,const native_source_commit::Services& copies)const noexcept{auto&s=*state_;s.refusal=Refusal::Owner;
- if(!s.captured||!s.refreshed||s.plan!=&plan||!holder||!maps.owner||!maps.extent||!cleanup.IsFinalWindow(driver,holder)||
+bool Proof::ValidatePrepared(const source_commit::Plan& plan,const modern_field_metadata::ReadContext& maps,const native_required_cleanup::Service& cleanup,void* driver,const transaction_root::Holder* holder,const native_source_commit::Services& copies)const noexcept{
+ state_->refusal=Refusal::Owner;
+ return cleanup.VerifyPreparedCopies(plan,maps,driver,holder,copies)&&ValidateHeap(plan,maps,copies);
+}
+bool Proof::Validate(const source_commit::Plan& plan,const modern_field_metadata::ReadContext& maps,const native_required_cleanup::Service& cleanup,void* driver,const transaction_root::Holder* holder,const native_source_commit::Services& copies)const noexcept{
+ state_->refusal=Refusal::Owner;
+ return cleanup.VerifyFinalCopies(plan,maps,driver,holder,copies)&&ValidateHeap(plan,maps,copies);
+}
+bool Proof::ValidateHeap(const source_commit::Plan& plan,const modern_field_metadata::ReadContext& maps,const native_source_commit::Services& copies)const noexcept{auto&s=*state_;s.refusal=Refusal::Owner;
+ if(!s.captured||!s.refreshed||s.plan!=&plan||!maps.owner||!maps.extent||
     plan.mirror!=s.expected.mirror||plan.new_classes_root!=s.expected.new_classes_root||plan.abstract_instances!=s.expected.abstract_instances||plan.class_root_origins.size()!=s.expected.class_root_origins.size()||plan.old_classes!=s.expected.old_classes||plan.new_classes!=s.expected.new_classes||plan.old_instances!=s.expected.old_instances||plan.new_instances!=s.expected.new_instances)return false;
  for(size_t i=0;i<plan.class_root_origins.size();++i)if(plan.class_root_origins[i].array!=s.expected.class_root_origins[i].array||plan.class_root_origins[i].index!=s.expected.class_root_origins[i].index)return false;
  s.maps=&maps;s.copies=&copies;s.refusal=Refusal::Inventory;

@@ -33,16 +33,37 @@ prefix=prefix.replace('#include "provider_fixture.inc"','#include "provider_fixt
 main=main.replace(' dependencies.is_retired=OwnerRetired;', ''' source_handle_roots::Service source_roots;native_typed_heap_walk::Service walk;
  auto typed=PrepareTyped(hooks,metadata,fields,source_roots,walk,error);assert(typed&&typed->Staged());TestNarrowingOrdinary(*typed);MoveTypedRootsAfterStage();
  dependencies.is_retired=OwnerRetired;''')
+main=main.replace('assert(scanner.PrepareRecoveryPlan(plan,&storage));','typed_maps.Cover(names[0]);for(const auto&bytes:dex)typed_maps.Cover(bytes.data());assert(scanner.PrepareRecoveryPlan(plan,&storage));')
 main=main.replace('assert(registry.Freeze()&&registry.Resolve());','typed_wrong_plan=plan;assert(typed->Capture(plan,registry.Collect(),&error));assert(registry.Freeze()&&registry.Resolve());typed->Refresh(registry.Final());')
 
 
 anchor=' assert(!cleanup.CommitObserver(foreign_plan)&&!cleanup.MutationBegun(plan));'
 assert main.count(anchor)==1
-main=main.replace(anchor,' TestFinalTyped(*typed,plan,cleanup,&driver,&holder,*concrete);\n'+anchor)
+main=main.replace(anchor,' TestTypedCells(false,*typed,plan,cleanup,&driver,&holder,*concrete);\n'+anchor)
 main=main.replace(' provider.ReleasePreparedSource(*concrete);',' typed->Clear(&env);Publish(nullptr);provider.ReleasePreparedSource(*concrete);')
 # Clear JNI roots only after the original final source window has ended.
 main=main.replace(' typed->Clear(&env);Publish(nullptr);provider.ReleasePreparedSource(*concrete);',' provider.ReleasePreparedSource(*concrete);')
 main=main.replace('assert(session.Completed());registry.Clear();','assert(session.Completed());registry.Clear();typed->Clear(&env);Publish(nullptr);')
+# Both typed checks use the actual cleanup-owned stopped read context.
+start=main.index(' modern_field_metadata::ReadContext recovery_context{')
+end=main.index(';\n',start)+1
+main=main[:start]+' modern_field_metadata::ReadContext recovery_context{&typed_maps,ExplicitMappings::Extent};'+main[end:]
+anchor=' assert(!facade->Validate(plan)&&!cleanup.CommitObserver(plan)&&!cleanup.Completed());'
+assert main.count(anchor)==1
+main=main.replace(anchor,' forbid_provider_allocation=true;TestTypedCells(true,*typed,plan,cleanup,&driver,&holder,*concrete);forbid_provider_allocation=false;\n'+anchor)
+# Also exercise nonempty actual source-copy plans through the schema provider.
+anchor=' auto native=provider.Prepare(plan,dependencies,&error);'
+assert main.count(anchor)==1
+main=main.replace(anchor,""" native_schema_policy::Plan typed_copy_policy;std::vector<native_schema_policy::Plan> typed_copy_policies;
+ if(std::getenv("ARTDCEVM_TYPED_SCHEMA_COPY")){
+  evolution::ClassSchema before_copy,after_copy;assert(native_schema_policy::ReadNativeDeclarations(metadata,model,old_class,&before_copy,&error)&&native_schema_policy::ReadNativeDeclarations(metadata,model,new_class,&after_copy,&error));
+  assert(native_schema_policy::Plan::Prepare(before_copy,after_copy,&typed_copy_policy,&error));typed_copy_policies.push_back(typed_copy_policy);
+  dependencies.read_context=&recovery_context;dependencies.schemas=&typed_copy_policies;dependencies.expected_removal=native_member_provider::Removal::kSchemaEvolution;
+ }
+"""+anchor)
+anchor=' mutation_owner=nullptr;mutation_plan=nullptr;mutation_foreign=nullptr;'
+assert main.count(anchor)==1
+main=main.replace(anchor,' assert(!typed->Validate(plan,recovery_context,cleanup,&driver,&holder,*concrete)&&!typed->ValidatePrepared(plan,recovery_context,cleanup,&driver,&holder,*concrete));\n'+anchor)
 (out/'cleanup_main.inc').write_text(main)
 
 def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False, hierarchy=False):
@@ -132,9 +153,15 @@ else:
     subprocess.run(link+['-o',str(binary)],check=True)
 if args.syntax_only or args.compile_only:
     print('Native member production TU '+('syntax PASS' if args.syntax_only else 'link PASS; execution pending'));raise SystemExit(0)
-result = subprocess.run([str(binary)] + [dex_fixture(m, f) for f in (False, True) for m in (False, True)]+[dex_fixture(False,False,True),dex_fixture(False,False,True,True),dex_fixture(False,False,True,False,True)], capture_output=True, text=True,
+dex_files=[dex_fixture(m, f) for f in (False, True) for m in (False, True)]+[dex_fixture(False,False,True),dex_fixture(False,False,True,True),dex_fixture(False,False,True,False,True)]
+result = subprocess.run([str(binary)] + dex_files, capture_output=True, text=True,
                         env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
 (out / 'result.log').write_text(result.stdout + result.stderr)
 result.check_returncode()
 print(result.stdout.strip())
+schema_env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1',ARTDCEVM_TYPED_SCHEMA_COPY='1')
+schema_result=subprocess.run([str(binary)]+[str(p) for p in dex_files],capture_output=True,text=True,env=schema_env)
+(out/'result-schema-copies.log').write_text(schema_result.stdout+schema_result.stderr)
+schema_result.check_returncode()
+print('nonempty schema copies: '+schema_result.stdout.strip())
 print('Complete typed-storage source lifecycle: ASan/UBSan passed')

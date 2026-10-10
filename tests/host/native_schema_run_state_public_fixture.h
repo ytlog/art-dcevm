@@ -29,8 +29,11 @@ bool GuardScope(void*,JNIEnv* e,jobject root,runnable_jni::Operation operation,v
 bool GuardDecode(void*,jobject ref,void** out){*out=ref;return ref;}
 bool GuardOracle(void*,const runnable_jni::Context&,jobject ref,void** out){return GuardDecode(nullptr,ref,out);}
 void* GuardElement(void*,void* array,size_t index){assert(IsGuardArray(array)&&index<Read32(array,8));return reinterpret_cast<void*>(uintptr_t(Read32(array,12+index*4)));}
-bool GuardStageField(void*,JNIEnv*,jclass c,jfieldID id,bool is_static,std::string*){assert(c==reinterpret_cast<jclass>(old_class));const auto n=PublicFieldIndex(id);assert(is_static==(n==0));return mirrors[n].field==old_fields[n];}
-void* GuardField(void*,jclass c,jfieldID id){return c==reinterpret_cast<jclass>(old_class)?old_fields[PublicFieldIndex(id)]:nullptr;}
+bool GuardStageField(void*,JNIEnv* env,jclass c,jfieldID id,bool is_static,std::string*){
+ if(c==schema_typed_class){for(size_t i=0;i<2;++i)if(id==reinterpret_cast<jfieldID>(schema_typed_fields[i]))return is_static==bool(i)&&schema_typed_mirrors[i].field==schema_typed_fields[i]&&env->FromReflectedField(reinterpret_cast<jobject>(&schema_typed_mirrors[i]))==id&&schema_typed_fields[i]->declaring_class==uintptr_t(c);return false;}
+ assert(c==reinterpret_cast<jclass>(old_class));const auto n=PublicFieldIndex(id);assert(is_static==(n==0));return mirrors[n].field==old_fields[n];
+}
+void* GuardField(void*,jclass c,jfieldID id){if(c==schema_typed_class){for(auto* field:schema_typed_fields)if(id==reinterpret_cast<jfieldID>(field)&&field->declaring_class==uintptr_t(c))return field;return nullptr;}return c==reinterpret_cast<jclass>(old_class)?old_fields[PublicFieldIndex(id)]:nullptr;}
 void* GuardNativeField(void* p,void* c,jfieldID id){return GuardField(p,reinterpret_cast<jclass>(c),id);}
 void* GuardMethod(void*,jmethodID id){(void)PublicMethodIndex(id);return id;}
 void* GuardMethodClass(void*,void* method){return Root(method);}

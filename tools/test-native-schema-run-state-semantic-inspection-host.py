@@ -23,7 +23,7 @@ assert needle in body
 body=body.replace(needle, '  native_cache_semantic::Service semantic;native_cache_semantic::HostFixture::Bind(semantic,*d.metadata,*deps.members.fields);semantic_type_index=witness.type_index;semantic_type_count=witness.counts.types;witness.semantic=&semantic;proposal.strong_original=nullptr;\n'+needle)
 needle='  if(!run){std::cerr<<"matched Begin: "<<error<<"\\n";std::abort();}'
 assert needle in body
-body=body.replace(needle, '  assert(!run&&!native_schema_run_state::RunState::Current()&&!gc&&!stopped&&Read32(thread.data())==0);std::cerr<<"semantic Begin: "<<error<<" visits="<<semantic_visits<<"\\n";assert(semantic.Calibrated()==!std::strcmp(waiting_case,"valid"));assert(semantic_visits==(!std::strcmp(waiting_case,"valid")?1u:0u));verifier.Clear(&env);return true;')
+body=body.replace(needle, '  assert(!run&&!native_schema_run_state::RunState::Current()&&!gc&&!stopped&&Read32(thread.data())==0);std::cerr<<"semantic Begin: "<<error<<" visits="<<semantic_visits<<"\\n";assert(semantic.Calibrated()==!std::strcmp(waiting_case,"valid"));assert(semantic_visits==(!std::strcmp(waiting_case,"valid")?1u:0u));verifier.Clear(&env);assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_local_refs>0);return true;')
 (out/'waiting_success_body.inc').write_text(body)
 setup=(out/'aggregate_owner_setup.inc').read_text().replace('MatchedHooks owner_hooks;', 'WaitingHooks owner_hooks;')
 setup=setup.replace('return owner_hooks.FindSymbol("libart.so",n);', 'if(!std::strcmp(n,abi::arm64::android13::kToNative)||!std::strcmp(n,abi::arm64::android13::kToRunnable))return static_cast<void*>(nullptr);return owner_hooks.FindSymbol("libart.so",n);')

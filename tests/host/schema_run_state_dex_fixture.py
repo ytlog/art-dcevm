@@ -49,22 +49,32 @@ def write_fixture(directory: Path, before: bool) -> Path:
     data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     directory.mkdir(parents=True,exist_ok=True);path=directory/('before.dex' if before else 'after.dex');path.write_bytes(data);return path
 
-def write_graph_fixture(directory: Path, package: str = 'Lcom/example/') -> Path:
+def write_graph_fixture(directory: Path, package: str = 'Lcom/example/', typed_probe: bool = False) -> Path:
     """Independent immutable defining DEX for the public loaded boot/parent graph."""
     root=package+'HierarchyRoot;';tag=package+'HierarchyTag;'
     base=package+'HierarchyBase;';inserted=package+'HierarchyInserted;';more=package+'HierarchyMore;'
     parents={OBJECT:None,root:OBJECT,base:root,inserted:base,tag:OBJECT,more:OBJECT}
+    probe=package+'TypedCalibrationProbe;'
+    if typed_probe:parents[probe]=OBJECT
     flags={name:(0x601 if name in (tag,more) else 1) for name in parents}
-    strings=sorted(parents);types=strings;ids={s:i for i,s in enumerate(strings)}
+    types=sorted(parents);strings=sorted(list(parents)+(['typedInstance','typedStatic'] if typed_probe else []));ids={s:i for i,s in enumerate(strings)};tids={s:i for i,s in enumerate(types)}
     data=bytearray(0x70)
     def put(at,n):struct.pack_into('<I',data,at,n)
-    strings_at=len(data);data.extend(bytes(len(strings)*4));types_at=len(data);data.extend(bytes(len(types)*4));classes_at=len(data);data.extend(bytes(len(types)*32));start=len(data)
-    for i,s in enumerate(strings):put(strings_at+i*4,len(data));assert len(s)<128;data.extend(bytes([len(s)])+s.encode()+b'\0');put(types_at+i*4,i)
+    strings_at=len(data);data.extend(bytes(len(strings)*4));types_at=len(data);data.extend(bytes(len(types)*4));fields_at=len(data);data.extend(bytes(16 if typed_probe else 0));classes_at=len(data);data.extend(bytes(len(types)*32));start=len(data)
+    for i,s in enumerate(strings):put(strings_at+i*4,len(data));assert len(s)<128;data.extend(bytes([len(s)])+s.encode()+b'\0')
+    for i,name in enumerate(types):put(types_at+i*4,ids[name])
     data.extend(bytes((-len(data))%4));more_interfaces=len(data);data.extend(struct.pack('<IH',1,ids[tag]));data.extend(bytes((-len(data))%4))
-    for i,name in enumerate(types):struct.pack_into('<IIIIIIII',data,classes_at+32*i,i,flags[name],ids[parents[name]] if parents[name] else 0xffffffff,more_interfaces if name==more else 0,0xffffffff,0,0,0)
+    probe_data=0
+    if typed_probe:
+        for i,name in enumerate(['typedInstance','typedStatic']):struct.pack_into('<HHI',data,fields_at+8*i,tids[probe],tids[OBJECT],ids[name])
+        probe_data=len(data);data.extend(bytes([1,1,0,0,1,8,0,1]))
+    for i,name in enumerate(types):struct.pack_into('<IIIIIIII',data,classes_at+32*i,i,flags[name],ids[parents[name]] if parents[name] else 0xffffffff,more_interfaces if name==more else 0,0xffffffff,0,probe_data if typed_probe and name==probe else 0,0)
     map_at=len(data);entries=[(0,1,0),(1,len(strings),strings_at),(2,len(types),types_at),(6,len(types),classes_at),(0x2002,len(strings),start),(0x1001,1,more_interfaces),(0x1000,1,map_at)]
+    if typed_probe:entries.extend([(4,2,fields_at),(0x2000,1,probe_data)])
+    entries.sort(key=lambda e:e[2])
     data.extend(struct.pack('<I',len(entries)))
     for kind,count,offset in entries:data.extend(struct.pack('<HHII',kind,0,count,offset))
     data[:8]=b'dex\n040\0'
     for at,value in [(32,len(data)),(36,0x70),(40,0x12345678),(52,map_at),(56,len(strings)),(60,strings_at),(64,len(types)),(68,types_at),(96,len(types)),(100,classes_at),(104,len(data)-start),(108,start)]:put(at,value)
+    if typed_probe:put(80,2);put(84,fields_at)
     data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]));directory.mkdir(parents=True,exist_ok=True);path=directory/'graph.dex';path.write_bytes(data);return path
