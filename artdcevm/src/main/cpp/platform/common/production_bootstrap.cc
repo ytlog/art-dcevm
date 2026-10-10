@@ -370,7 +370,8 @@ struct NativeEngine final:Engine {
     ",mirror="+std::to_string(p.mirror)+",mirrorClass="+std::to_string(p.mirror_class)+
     ",declaringClass="+std::to_string(p.declaring)+",namedField="+std::to_string(p.named_field)+
     ",nativeDeclaringClass="+std::to_string(p.native_declaring)+"]";++index;
-  }return text;
+  }
+  return text;
  }
  native_field_factory_observer::EpisodeCompletion field_factory_completion;
  std::string field_factory_diagnostic;
