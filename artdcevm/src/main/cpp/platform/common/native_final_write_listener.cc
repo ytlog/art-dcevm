@@ -4,7 +4,7 @@
 #include "platform/abi/arm64/common/instrumentation.h"
 #include <cstdlib>
 #include <atomic>
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <mutex>
 namespace artdcevm::final_write_guard {
 namespace {
@@ -65,7 +65,7 @@ bool ObserveLegacyDeoptimizationStartup(HookEngine& hooks,std::string* error){
  if(!disable)return Fail(error,"Legacy final guard lacks named DisableDeoptimization lifetime observation");
  if(observer_installed)return true;
  if(observer_attempted)return Fail(error,"Legacy deoptimization observer installation failed; restart process");
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
  if(!construct||!destroy)return Fail(error,"Legacy final guard lacks named startup suspend capability");

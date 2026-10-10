@@ -1,11 +1,11 @@
 #include "platform/common/runtime_receiver_probe.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstring>
 #include <atomic>
 #include <mutex>
 #include <sstream>
-#include "platform/abi/arm64/common/jni_id_query_scope.h"
+#include "platform/abi/common/jni_id_query_scope.h"
 namespace artdcevm::runtime_receiver {
 namespace {
 // Fixed class_linker.h/handle.h: Handle<ClassLoader> is one StackReference slot
@@ -27,10 +27,10 @@ FindClass original_find=nullptr;
 LengthFindClass original_length_find=nullptr;
 EncodeMethod original_encode=nullptr;
 SuspendThreads original_suspend=nullptr;
-abi::arm64::android_common::SuspendConstruct suspend_construct=nullptr;
-abi::arm64::android_common::SuspendDestroy suspend_destroy=nullptr;
-abi::arm64::android_common::JniIdQueryConstruct query_construct=nullptr;
-abi::arm64::android_common::JniIdQueryDestroy query_destroy=nullptr;
+abi::common::SuspendConstruct suspend_construct=nullptr;
+abi::common::SuspendDestroy suspend_destroy=nullptr;
+abi::common::JniIdQueryConstruct query_construct=nullptr;
+abi::common::JniIdQueryDestroy query_destroy=nullptr;
 std::atomic<FindClass> find_handler{nullptr};
 std::atomic<LengthFindClass> length_find_handler{nullptr};
 std::mutex installation;
@@ -44,7 +44,7 @@ void ObserveQueryScope(Request& request) {
   // JNIImpl::FindClass already holds original ScopedObjectAccess: runnable and
   // shared mutator ownership. EndDefer explicitly forbids exclusive ownership.
   // Do not move this into ScopedSuspendAll or perform JNI/ID allocation here.
-  abi::arm64::android_common::JniIdQueryScope scope{};
+  abi::common::JniIdQueryScope scope{};
   query_construct(&scope);
   ++request.query_scopes;
   Observe(request.receivers.jni_id_manager,scope.manager,request);
@@ -82,7 +82,7 @@ bool Install(HookEngine& hooks,std::string* error) {
   const bool with_length=find==nullptr;
   if(with_length)find=hooks.FindSymbol("libart.so",kLengthFindClass);
   auto encode=hooks.FindSymbol("libart.so",kEncodeMethod);
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   auto query_c=reinterpret_cast<JniIdQueryConstruct>(hooks.FindSymbol("libart.so",kJniIdQueryConstruct));
   auto query_d=reinterpret_cast<JniIdQueryDestroy>(hooks.FindSymbol("libart.so",kJniIdQueryDestroy));
   const bool query_available=query_c && query_d;
@@ -150,7 +150,7 @@ bool Calibrate(HookEngine& hooks,JNIEnv* env,Receivers* output,
   if(request.query_scopes && !env->ExceptionCheck())repeated=env->FindClass(kClass);
   // C2 obtains the real ThreadList internally. Observe its named SuspendAll
   // receiver, and immediately release the owned stop before any public JNI work.
-  abi::arm64::android_common::SuspendAll storage{};
+  abi::common::SuspendAll storage{};
   suspend_construct(&storage,"artdcevm ThreadList receiver calibration",false);
   suspend_destroy(&storage);
   active=nullptr;

@@ -1,7 +1,7 @@
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <mutex>
 #include <jvmti.h>
@@ -52,7 +52,7 @@ bool Install(HookEngine& hooks,std::string* error){
   const bool legacy=!e;
   if(legacy)e=hooks.FindSymbol("libart.so",kLegacyEnqueue);
   auto c=hooks.FindSymbol("libart.so",kCollect);
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
   if(!e||!c||!construct||!destroy)return Fail(error,"Missing named JIT/cache/heap observation capability");
@@ -70,14 +70,14 @@ bool Install(HookEngine& hooks,std::string* error){
 }
 struct Read {
   void* runtime;const method_identity::Oracle* oracle;
-  abi::arm64::android_common::FromReflectedMethod leaf;
+  abi::common::FromReflectedMethod leaf;
   runtime_services::Snapshot observed;
   method_identity::Model model;
   runtime_services::View view;void* method=nullptr;
 };
 bool Prepare(const runnable_jni::Context& context,void* opaque){
   auto& r=*static_cast<Read*>(opaque);
-  abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+  abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
   if(context.env->GetObjectRefType(r.oracle->strong_global_method)!=JNIGlobalRefType)return false;
   r.method=r.leaf(scope,r.oracle->strong_global_method);
   size_t extent=0;method_metadata::Identity identity;
@@ -114,8 +114,8 @@ bool CalibrateJitReceivers(HookEngine& hooks,JNIEnv* env,jobject strong_class,
       !services.receivers.java_vm||!additive_target||!additive_dex||!dex_size||dex_size>INT32_MAX||(model.model!=method_identity::Model::kMethod12Onward&&model.model!=method_identity::Model::kMethod11)||
       model.identities.size()<3||env->ExceptionCheck())return Fail(error,"Invalid owned JIT receiver request");
   if(!Install(hooks,error))return false;
-  auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
-      hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+  auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(
+      hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
   if(!leaf)return Fail(error,"Missing named reflected hot-method identity capability");
   Read request{services.runtime,&hot,leaf,services,model.model,{}};
   if(runnable_executor::With(env,strong_class,Prepare,&request)!=runnable_jni::Result::kSuccess)

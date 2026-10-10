@@ -613,7 +613,7 @@ struct NativeEngine final:Engine {
   // unavailable bytecode remains a precise missing dependency, never readiness.
   if(!boot_methods.Complete()){
    native_boot_method_catalog::Codec codec{runtime.receivers.jni_id_manager,graph_decode_method,
-    reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod))};
+    reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod))};
    boot_method_diagnostic.clear();
    boot_methods.Prepare(env,source_ti,codec,&boot_method_diagnostic);
    if(env->ExceptionCheck())return Fail(error,"Boot catalog left a pending public JNI exception");
@@ -802,7 +802,7 @@ struct Request {
  const std::vector<method_identity::Oracle>* method_oracles;
  const std::vector<modern_field_metadata::FieldOracle>* field_oracles;
  evolution::MappedDexMemberCounts counts;
- abi::arm64::android_common::FromReflectedMethod leaf;
+ abi::common::FromReflectedMethod leaf;
  field_mirror::NamedField field_leaf;
  std::string error;
 };
@@ -811,7 +811,7 @@ bool Observe(const runnable_jni::Context& scope,void* raw){
  if(!method_identity::Calibrate(scope,r.leaf,r.method_oracles->data(),r.method_oracles->size(),&e.model,&r.error))return false;
  e.frame_methods.clear();e.frame_methods.reserve(r.method_oracles->size());
  for(size_t n=0;n<r.method_oracles->size();++n){const auto& oracle=(*r.method_oracles)[n];
-  const abi::arm64::android_common::RunnableJniScope actual{scope.self,scope.env,scope.vm};
+  const abi::common::RunnableJniScope actual{scope.self,scope.env,scope.vm};
   void* method=r.leaf(actual,oracle.strong_global_method);
   if(!method)return false;e.frame_methods.push_back({method,e.model.readable_extents[n],oracle.dex_method_index,oracle.java_modifiers});
  }
@@ -827,12 +827,12 @@ bool Observe(const runnable_jni::Context& scope,void* raw){
 }
 struct HandleRequest {
  NativeEngine* engine;jobject method;jobject mirrors[2];
- abi::arm64::android_common::FromReflectedMethod method_leaf;
+ abi::common::FromReflectedMethod method_leaf;
  field_mirror::NamedField field_leaf;
 };
 bool ObserveHandles(const runnable_jni::Context& scope,void* raw){
  auto& r=*static_cast<HandleRequest*>(raw);auto& e=*r.engine;
- const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ const abi::common::RunnableJniScope native{scope.self,scope.env,scope.vm};
  e.proof_method=r.method_leaf(native,r.method);
  if(!e.proof_method)return false;
  for(size_t i=0;i<2;i++){
@@ -910,7 +910,7 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
 }
 struct SourceCacheWitnessRequest {
  NativeEngine* engine;std::string* error;
- abi::arm64::android_common::FromReflectedMethod method_leaf;
+ abi::common::FromReflectedMethod method_leaf;
 };
 bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  auto& request=*static_cast<SourceCacheWitnessRequest*>(raw);auto& e=*request.engine;
@@ -1032,8 +1032,8 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(modifiers!=0x41)return Fail(error,"Public cache Field modifiers differ from immutable DEX");
  source_cache_witness.public_field_modifiers=static_cast<uint32_t>(modifiers);
  if(source_cache_witness.cache){env->DeleteGlobalRef(source_cache_witness.cache);source_cache_witness.cache=nullptr;}
- auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
-   hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(
+   hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  if(!leaf)return Fail(error,"Public cache witness named FromReflectedMethod unavailable");
  SourceCacheWitnessRequest request{this,error,leaf};
  auto result=runnable_executor::With(env,source_cache_witness.method,CaptureSourceCacheWitness,&request);
@@ -1080,12 +1080,12 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
 struct AllocatorRequest {
  NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;
  const std::vector<modern_field_metadata::FieldOracle>* fields;
- jobject boot_method;abi::arm64::android_common::FromReflectedMethod method_leaf;
+ jobject boot_method;abi::common::FromReflectedMethod method_leaf;
  field_mirror::NamedField field_leaf;std::vector<void*> owned,foreign;std::string error;
 };
 bool CollectAllocator(const runnable_jni::Context& scope,void* raw){
  auto& r=*static_cast<AllocatorRequest*>(raw);
- const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ const abi::common::RunnableJniScope native{scope.self,scope.env,scope.vm};
  for(const auto& oracle:*r.methods){void* method=r.method_leaf(native,oracle.strong_global_method);if(!method)return false;r.owned.push_back(method);}
  for(const auto& oracle:*r.fields){void* mirror=nullptr;if(!runnable_executor::DecodeStrongGlobal(scope,oracle.strong_global_field,&mirror))return false;void* field=r.field_leaf(mirror);if(!field)return false;r.owned.push_back(field);}
  void* foreign=r.method_leaf(native,r.boot_method);if(!foreign)return false;r.foreign.push_back(foreign);return true;
@@ -1097,7 +1097,7 @@ struct TargetRequest {
  NativeEngine* engine;jobject owner;const evolution::ClassSchema* schema;
  std::vector<method_identity::Oracle> methods;std::vector<jmethodID> ids;
  std::vector<modern_field_metadata::FieldOracle> fields;
- abi::arm64::android_common::FromReflectedMethod method_leaf;field_mirror::NamedField field_leaf;
+ abi::common::FromReflectedMethod method_leaf;field_mirror::NamedField field_leaf;
  void* (*decode_method)(void*,jmethodID);std::string error;size_t field_proof_base=0;
 };
 bool TargetObserve(const runnable_jni::Context& scope,void* raw){
@@ -1109,7 +1109,7 @@ bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  for(const auto& m:r.schema->methods){if((m.access&(8u|2u))||m.name=="<init>"||m.name=="<clinit>")++counts.direct_methods;else ++counts.virtual_methods;}
  method_array::View table;
  if(!owned_method_table::ReadProvenDeclaration(scope,r.method_leaf,e.model.model,klass,counts,r.methods.data(),r.methods.size(),&table,&r.error))return false;
- const abi::arm64::android_common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+ const abi::common::RunnableJniScope native{scope.self,scope.env,scope.vm};
  for(size_t i=0;i<r.methods.size();i++)if(r.method_leaf(native,r.methods[i].strong_global_method)!=r.decode_method(e.runtime.receivers.jni_id_manager,r.ids[i]))return false;
  if(!e.metadata.VerifyProvenDeclaration(scope,r.owner,r.schema->descriptor.c_str(),r.fields.data(),r.fields.size(),&r.error)){
   r.error="Target proven field declaration count="+std::to_string(r.fields.size())+": "+r.error;return false;
@@ -1147,7 +1147,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  if(schema.descriptor!=signature.p)return Fail(error,"Target Class differs from DEX provenance");
  Roots owned{env,{}};auto owner=owned.Own(target);
  TargetRequest request{this,owner,&schema,{},{},{},
-  reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod)),
+  reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod)),
   reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
   reinterpret_cast<void*(*)(void*,jmethodID)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
   {}};
@@ -1363,7 +1363,7 @@ std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std
  // The public Field oracle uses the independently calibrated Runnable carrier.
  // A fresh production process has no carrier before runtime service bootstrap.
  if(!contextual_field_id::Initialize(e.hooks,error))return nullptr;
- auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(e.hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(e.hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  auto field_leaf=reinterpret_cast<field_mirror::NamedField>(e.hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
  Request request{&e,owner_root,storage_class,&method_oracles,&field_oracles,counts,leaf,field_leaf,{}};
  if(!leaf||!field_leaf||runnable_executor::With(env,owner_root,Observe,&request)!=runnable_jni::Result::kSuccess){if(error)*error=request.error;return nullptr;}

@@ -7,7 +7,7 @@
 #include "platform/abi/arm64/android11/method_handle.h"
 #include "platform/common/native_structural_reflection_visitor.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <cstring>
 #include <cstdlib>
@@ -27,8 +27,8 @@ constexpr const char* kInvoke="_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11Sha
 constexpr const char* kExact="_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE";
 struct Binding {Visit visit=nullptr;Root root=nullptr;void*(*current)()=nullptr;
  DecodeMethod method=nullptr;uint32_t(*kind)(const void*)=nullptr;void* targets[2]{};
- abi::arm64::android_common::SuspendConstruct construct=nullptr;
- abi::arm64::android_common::SuspendDestroy destroy=nullptr;};
+ abi::common::SuspendConstruct construct=nullptr;
+ abi::common::SuspendDestroy destroy=nullptr;};
 struct State {Binding binding;void* manager=nullptr;RetiredMethodRegistry* methods=nullptr;
  RetiredFieldRegistry* fields=nullptr;bool methods_calibrated=false,fields_calibrated=false;
  bool installed=false,incomplete=false,method_observed=false,field_kinds_calibrated=false;Invoke originals[2]{};
@@ -68,7 +68,7 @@ template<bool exact> bool Dispatch(void* self,void* frame,Handle handle,Handle t
    if(!FieldEntryGuardsOwn(*state.fields))std::abort();
    if(RejectRetiredField(target.value,self,result))return false;
    if(state.field_kinds_calibrated){
-    using namespace abi::arm64::android_common;
+    using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
     const auto kind=state.binding.kind(object);
     if((kind==kInstancePut||kind==kStaticPut)&&RejectFinalFieldSetter(target.value,self,result))return false;
    }
@@ -93,7 +93,7 @@ bool Resolve(HookEngine& hooks,Binding* out,std::string* error){
  b.current=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
  b.method=reinterpret_cast<DecodeMethod>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  b.targets[0]=hooks.FindSymbol("libart.so",kInvoke);b.targets[1]=hooks.FindSymbol("libart.so",kExact);
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  b.construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  b.destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
  if(!b.visit||!b.root||!b.current||!b.method||!b.targets[0]||!b.targets[1]||!b.construct||!b.destroy){if(error)*error="Missing stable exported MethodHandle outer/visitor/root declarations";return false;}
@@ -103,7 +103,7 @@ bool Install(HookEngine& hooks,const Binding& b,std::string* error){
  if(state.incomplete){if(error)*error="Incomplete outer MethodHandle rollback";return false;}
  if(state.installed)return true;
  state.binding=b;
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  SuspendAll stopped{};b.construct(&stopped,"artdcevm shared outer MethodHandle owner",false);
  void* tokens[2]{};
  tokens[0]=hooks.Install(b.targets[0],reinterpret_cast<void*>(Dispatch<false>),reinterpret_cast<void**>(&state.originals[0]),error);

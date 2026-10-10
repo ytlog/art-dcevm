@@ -30,7 +30,7 @@ void CacheOriginal(void* receiver){assert(receiver==&cache_object);++mutations;}
 void HeapOriginal(void* receiver,bool clear,heap_collect_observer::Cause cause){assert(receiver==&heap_object&&!clear&&cause==9);++collections;}
 void Construct(void*,const char*,bool long_suspend){assert(!long_suspend&&suspends==0);++suspends;}
 void Destroy(void*){assert(suspends==1);--suspends;}
-void* Leaf(const abi::arm64::android_common::RunnableJniScope& scope,jobject object){
+void* Leaf(const abi::common::RunnableJniScope& scope,jobject object){
  assert(scope.self==&self&&scope.env==current_env&&scope.vm==current_vm&&object==reinterpret_cast<jobject>(&handle[1]));
  return native_method.data();
 }

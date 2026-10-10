@@ -4,7 +4,7 @@
 #include "platform/common/native_schema_policy.h"
 #include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/common/redefinition_boundaries.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/common/jni_global_ref.h"
@@ -506,7 +506,7 @@ bool Install(HookEngine& hooks,std::string* error){
   add_global=reinterpret_cast<abi::arm64::android_common::AddGlobalRef>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kAddGlobalRef));
   current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
   root_barrier=reinterpret_cast<decltype(root_barrier)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
-  using namespace abi::arm64::android_common;
+  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
   if(!record_fields||!record_methods||!failure||!add_global||!current_thread||!root_barrier||!construct||!destroy||

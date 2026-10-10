@@ -16,7 +16,7 @@ std::array<void*, 3> native_methods{};
 std::array<int, 3> handles{};
 jboolean ExceptionCheck(JNIEnv*) { return pending ? JNI_TRUE : JNI_FALSE; }
 jobjectRefType RefType(JNIEnv*, jobject object) { return object == local_ref ? JNILocalRefType : JNIGlobalRefType; }
-void* Leaf(const abi::arm64::android_common::RunnableJniScope& scope, jobject method) {
+void* Leaf(const abi::common::RunnableJniScope& scope, jobject method) {
   assert(scope.env == expected_env && scope.self && scope.vm);
   if (leaf_exception) pending = true;
   for (size_t i = 0; i < handles.size(); ++i)
@@ -40,7 +40,7 @@ void Write(unsigned char* method, bool old, uint32_t index, uint32_t flags, bool
 }
 void Fails(const runnable_jni::Context& context,
            const std::array<method_identity::Oracle, 3>& oracles,
-           abi::arm64::android_common::FromReflectedMethod leaf = Leaf) {
+           abi::common::FromReflectedMethod leaf = Leaf) {
   method_identity::Calibration result{method_identity::Model::kMethod11, {{99, 88}}, {77}};
   std::string error;
   assert(!method_identity::Calibrate(context, leaf, oracles.data(), oracles.size(), &result, &error));

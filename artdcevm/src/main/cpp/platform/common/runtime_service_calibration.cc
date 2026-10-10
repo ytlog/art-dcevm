@@ -3,7 +3,7 @@
 #include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
 namespace artdcevm::runtime_services {
@@ -45,7 +45,7 @@ bool Install(HookEngine& hooks,std::string* error) {
   std::lock_guard<std::mutex> lock(installation);
   if(installed)return true;
   // Missing candidates do not poison a later independent family selection.
-  using namespace abi::arm64::android_common;
+  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
   auto target=hooks.FindSymbol("libart.so",kTypedAddListener);
   void* observer=reinterpret_cast<void*>(ObserveTypedListener);
   if(!target) {

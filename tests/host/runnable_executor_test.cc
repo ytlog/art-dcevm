@@ -17,7 +17,7 @@ void* Current(){return self;}
 void* Peer(void*){return reinterpret_cast<void*>(thread);}
 abi::arm64::android11::ReleaseObjectPointer Decode(const void*,jobject value){return {std::strcmp(mode,"peer-mismatch")?reinterpret_cast<uintptr_t>(value):0x9990};}
 jobject OriginalGlobal(void* value,void* actual,abi::arm64::android11::ReleaseObjectPointer object){assert(value==vm&&actual==self);return reinterpret_cast<jobject>(object.reference);}
-void* OriginalLeaf(const abi::arm64::android_common::RunnableJniScope&,jobject){return reinterpret_cast<void*>(0x5000);}
+void* OriginalLeaf(const abi::common::RunnableJniScope&,jobject){return reinterpret_cast<void*>(0x5000);}
 void Suspend(void*,const char*,bool){assert(!suspended);++suspended;}
 void Resume(void*){assert(suspended==1);--suspended;}
 class Hooks:public HookEngine{
@@ -57,7 +57,7 @@ jobjectRefType JNICALL Kind(JNIEnv*,jobject){return JNIGlobalRefType;}
 jint JNICALL Vm(JNIEnv*,JavaVM** result){*result=vm;return JNI_OK;}
 jboolean JNICALL Same(JNIEnv*,jobject a,jobject b){return a==b;}
 jmethodID JNICALL FromReflect(JNIEnv* env,jobject value){
- abi::arm64::android_common::RunnableJniScope scope{self,env,vm};
+ abi::common::RunnableJniScope scope{self,env,vm};
  return reinterpret_cast<jmethodID>(leaf_hook(scope,value));
 }
 bool ExecuteOperation(const Context& context,void*){

@@ -31,8 +31,8 @@ struct Hooks:HookEngine {
  unsigned family=14;bool modern=true,missing=false,missing_memory=false,has_collect=true;std::array<void*,4> replacements{};unsigned installed_count=0;
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* name)override{
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendConstruct))return reinterpret_cast<void*>(Suspend);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
+  if(!std::strcmp(name,abi::common::kSuspendConstruct))return reinterpret_cast<void*>(Suspend);
+  if(!std::strcmp(name,abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
   if(!missing&&!std::strcmp(name,kEnqueue)&&modern)return reinterpret_cast<void*>(NewEnqueue);
   if(!missing&&!std::strcmp(name,kLegacyEnqueue)&&!modern)return reinterpret_cast<void*>(OldEnqueue);
   if(!std::strcmp(name,kDone11)&&family==11)return reinterpret_cast<void*>(OldDone);

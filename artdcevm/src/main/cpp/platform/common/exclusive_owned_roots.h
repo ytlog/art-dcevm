@@ -2,7 +2,7 @@
 #include "api/hook_engine.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 namespace artdcevm::exclusive_owned_roots {
 // No JNI environment is exposed during the ART-owned stop. These pointers are
 // borrowed only until operation returns; globals stay owned by the caller.
@@ -25,7 +25,7 @@ class Service {
   using Decode=abi::arm64::android11::ReleaseObjectPointer (*)(const void*,jobject);
   abi::arm64::android11::CurrentThread current_=nullptr;
   Decode decode_=nullptr;
-  abi::arm64::android_common::SuspendConstruct suspend_=nullptr;
-  abi::arm64::android_common::SuspendDestroy resume_=nullptr;
+  abi::common::SuspendConstruct suspend_=nullptr;
+  abi::common::SuspendDestroy resume_=nullptr;
 };
 }

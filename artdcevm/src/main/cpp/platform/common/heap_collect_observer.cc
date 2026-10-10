@@ -1,5 +1,5 @@
 #include "platform/common/heap_collect_observer.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <array>
 #include <atomic>
 #include <cstdlib>
@@ -25,7 +25,7 @@ bool Install(HookEngine& hooks,Observer observer,std::string* error) {
   std::lock_guard<std::mutex> guard(installation);
   if(!installed) {
     if(attempted)return Fail(error,"Heap collector observation installation failed; restart process");
-    using namespace abi::arm64::android_common;
+    using namespace abi::common;
     auto target=hooks.FindSymbol("libart.so",kCollect);
     auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
     auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));

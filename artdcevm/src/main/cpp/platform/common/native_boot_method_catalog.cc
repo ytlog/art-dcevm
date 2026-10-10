@@ -15,7 +15,7 @@ bool Signature(const char*s){
 struct Identity {Codec codec;jobject reflected;jmethodID id;void* method=nullptr;};
 bool Observe(const runnable_jni::Context& c,void*raw){
  auto&r=*static_cast<Identity*>(raw);
- const abi::arm64::android_common::RunnableJniScope actual{c.self,c.env,c.vm};
+ const abi::common::RunnableJniScope actual{c.self,c.env,c.vm};
  void*a=r.codec.leaf(actual,r.reflected),*b=r.codec.decode(r.codec.manager,r.id);
  if(!a||a!=b)return false;r.method=a;return true;
 }

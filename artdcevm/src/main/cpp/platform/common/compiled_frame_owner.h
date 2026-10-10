@@ -40,7 +40,7 @@ class Owner final {
  std::array<compiled_frame_dex_oracle::Frame,3> code_{};
  std::array<int32_t,3> integers_{};
  std::array<void*,3> slots_{};
- abi::arm64::android_common::FromReflectedMethod leaf_=nullptr;
+ abi::common::FromReflectedMethod leaf_=nullptr;
  frame_family_calibration::Service service_;
  mutable frame_family_calibration::Service::Prepared prepared_;
  mutable std::array<decoded_frame_recovery::Location,16> scratch_{};

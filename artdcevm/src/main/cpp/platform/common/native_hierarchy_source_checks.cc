@@ -5,7 +5,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include "platform/abi/arm64/common/redefiner_prefix.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <cstring>
 #include <mutex>
 #include <atomic>
@@ -120,7 +120,7 @@ bool Install(HookEngine& hooks,std::string* error) {
  auto* failure=hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner13RecordFailureE10jvmtiErrorRKNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEESA_");
  marker=reinterpret_cast<decltype(marker)>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"));
  mirror=reinterpret_cast<Mirror>(hooks.FindSymbol("libopenjdkjvmti.so","_ZN12openjdkjvmti9Redefiner17ClassRedefinition14GetMirrorClassEv"));
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
  if(!check||!failure||!marker||!mirror||!construct||!destroy){if(error)*error="Missing named hierarchy source check boundary";return false;}

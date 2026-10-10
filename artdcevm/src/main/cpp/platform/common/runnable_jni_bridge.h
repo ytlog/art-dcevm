@@ -1,6 +1,6 @@
 #pragma once
 #include "platform/common/borrowed_jni_callback.h"
-#include "platform/abi/arm64/common/jni_access.h"
+#include "platform/abi/common/jni_access.h"
 #include "platform/abi/arm64/android14/jni_global_decode.h"
 namespace artdcevm::runnable_jni {
 using borrowed_jni_callback::Context;

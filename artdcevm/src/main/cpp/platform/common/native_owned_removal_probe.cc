@@ -174,12 +174,12 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeOwnedMethodDeleti
  JNIEnv* env,jclass suite,jclass target,jobject instance,jbyteArray dex,jobjectArray handles,jint baseline){return RunDeletion(env,suite,target,instance,dex,false,handles,baseline);}
 namespace {
 struct JitMethodState {
- jobject method;void* cache;artdcevm::abi::arm64::android_common::FromReflectedMethod leaf;
+ jobject method;void* cache;artdcevm::abi::common::FromReflectedMethod leaf;
  bool (*contains)(void*,void*);int value=0;
 };
 bool ObserveJitMethod(const artdcevm::runnable_jni::Context& context,void* raw){
  auto& request=*static_cast<JitMethodState*>(raw);
- const artdcevm::abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+ const artdcevm::abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
  void* method=request.leaf(scope,request.method);
  if(!method)return false;request.value=request.contains(request.cache,method)?2:1;return true;
 }
@@ -206,7 +206,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeOwnedJitMethodSta
  ShadowHookEngine hooks;auto root=method?env->NewGlobalRef(method):nullptr;
  if(!root||env->ExceptionCheck())return -1;
  JitMethodState request{root,jni_access::OwnedEvolutionProofs().observed.receivers.jit_code_cache,
-   reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod)),
+   reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod)),
    reinterpret_cast<bool(*)(void*,void*)>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"))};
  const auto result=request.cache&&request.leaf&&request.contains?
    runnable_executor::With(env,root,ObserveJitMethod,&request):runnable_jni::Result::kInvalidRequest;

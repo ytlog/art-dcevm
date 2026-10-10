@@ -41,8 +41,8 @@ class Service {
   abi::arm64::android_common::source_stop::StartGC start_=nullptr;
   abi::arm64::android_common::source_stop::FinishGC finish_=nullptr;
   abi::arm64::android_common::source_stop::MutatorOperation lock_=nullptr,unlock_=nullptr;
-  abi::arm64::android_common::SuspendConstruct stop_=nullptr;
-  abi::arm64::android_common::SuspendDestroy resume_=nullptr;
+  abi::common::SuspendConstruct stop_=nullptr;
+  abi::common::SuspendDestroy resume_=nullptr;
   thread_suspend_service::Service state_;
   bool waiting_calibrated_=false;void* waiting_mutex_=nullptr;uint32_t waiting_argument_=0;
   bool publication_calibrated_=false;void* publication_linker_=nullptr;
@@ -173,7 +173,7 @@ class Session {
   bool MatchPublication(void*,void*,void*,size_t*)const noexcept;
   void Rollback() noexcept;
   Service service_;void* self_=nullptr;size_t extent_=0;
-  abi::arm64::android_common::SuspendAll storage_{};
+  abi::common::SuspendAll storage_{};
   void* source_carrier_=nullptr;
   Phase phase_=Phase::kEmpty;bool gc_=false,suspended_=false,exclusive_=false,source_disable_=false;
   bool borrowed_=false,borrowed_failed_=false,waiting_window_=false;

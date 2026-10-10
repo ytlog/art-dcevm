@@ -10,7 +10,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include <memory>
 #include "platform/common/jni_field_dispatch.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <cstdlib>
 #include <type_traits>
@@ -290,7 +290,7 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
   if(!env||!anchor||!manager||!mirror.matched||mirror.checked<2||!runnable_executor::Available()||env->ExceptionCheck()) {
     *error="Field entry guards require actual complete mirror/owned JNI calibration";return false;
   }
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   State candidate{&registry,anchor,manager,
       reinterpret_cast<Throw>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"))};
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
@@ -362,7 +362,7 @@ bool InstallFieldVarHandleGuards(HookEngine& hooks,JNIEnv* env,
       !vars.reader||vars.reader->Visitor()!=visit||reinterpret_cast<void*>(vars.decode_class)!=declarations.decode)) {
     *error="VarHandle named declarations disagree with the durable owner";return false;
   }
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   auto construct=reinterpret_cast<SuspendConstruct>(declarations.construct);
   auto destroy=reinterpret_cast<SuspendDestroy>(declarations.destroy);
   jclass base=env->FindClass("java/lang/invoke/FieldVarHandle");

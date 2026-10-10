@@ -1,11 +1,13 @@
 #pragma once
 #include <jni.h>
+#include <cstddef>
 namespace artdcevm::abi::common {
 // Fixed 11--17 jni_id_manager.h: original C2 initializes the sole manager_
 // pointer and starts deferred allocation; original D2 balances it. This scope
 // does not read/write Runtime offsets or change JNI ID representation.
+// Both named operations require SHARED mutator ownership.
 struct JniIdQueryScope {void* manager=nullptr;};
-static_assert(sizeof(JniIdQueryScope)==sizeof(void*));
+static_assert(sizeof(JniIdQueryScope)==sizeof(void*) && offsetof(JniIdQueryScope,manager)==0);
 using JniIdQueryConstruct=void (*)(JniIdQueryScope*);
 using JniIdQueryDestroy=void (*)(JniIdQueryScope*);
 using DecodeMethodId=void* (*)(void*,jmethodID);

@@ -7,7 +7,7 @@ using namespace artdcevm;
 namespace {std::map<const void*,size_t> mapped;std::map<jobject,void*> targets;
 jboolean Exception(JNIEnv*){return JNI_FALSE;}
 jobjectRefType Ref(JNIEnv*,jobject p){return targets.count(p)?JNIGlobalRefType:JNIInvalidRefType;}
-void* Leaf(const abi::arm64::android_common::RunnableJniScope&,jobject p){return targets.at(p);}
+void* Leaf(const abi::common::RunnableJniScope&,jobject p){return targets.at(p);}
 void Put(void* p,size_t offset,uint32_t value){std::memcpy(static_cast<unsigned char*>(p)+offset,&value,4);}
 }
 namespace artdcevm::method_identity {bool ReadableMappingExtent(const void* p,size_t* extent){auto found=mapped.find(p);if(found==mapped.end())return false;*extent=found->second;return true;}}

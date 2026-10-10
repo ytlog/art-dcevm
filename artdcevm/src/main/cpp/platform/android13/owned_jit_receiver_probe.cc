@@ -1,6 +1,6 @@
 #include "platform/android13/owned_jit_receiver_probe.h"
 #include "platform/common/heap_collect_observer.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
 #include <chrono>
@@ -57,7 +57,7 @@ bool Install(HookEngine& hooks,std::string* error) {
   auto sweep=hooks.FindSymbol("libart.so",a::kSweep);
   auto jit_ctor=reinterpret_cast<JitScope>(hooks.FindSymbol("libart.so",a::kSuspend));
   auto jit_dtor=reinterpret_cast<JitScope>(hooks.FindSymbol("libart.so",a::kResume));
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
   if(!compile || !sweep || !jit_ctor || !jit_dtor || !construct || !destroy)

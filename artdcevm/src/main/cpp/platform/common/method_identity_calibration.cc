@@ -117,7 +117,7 @@ bool ReadableMappingExtent(const void* address,size_t* extent){
 }
 
 bool Calibrate(const runnable_jni::Context& context,
-               abi::arm64::android_common::FromReflectedMethod named_leaf,
+               abi::common::FromReflectedMethod named_leaf,
                const Oracle* oracles, size_t count, Calibration* output,
                std::string* error) {
   const auto fail = [&](const char* message) {
@@ -150,7 +150,7 @@ bool Calibrate(const runnable_jni::Context& context,
   // Stable Java visibility, static, final and native bits. ART's verifier/JIT
   // flags occupy additional bits and are neither identity nor a reflection oracle.
   constexpr uint32_t kModifierMask = 0x11fu;
-  const abi::arm64::android_common::RunnableJniScope scope{context.self, context.env, context.vm};
+  const abi::common::RunnableJniScope scope{context.self, context.env, context.vm};
   for (size_t i = 0; i < count; ++i) {
     const auto& oracle = oracles[i];
     void* method = named_leaf(scope, oracle.strong_global_method);

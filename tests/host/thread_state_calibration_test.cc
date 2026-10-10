@@ -24,8 +24,8 @@ struct Hooks:HookEngine {
  void* FindSymbol(const char*,const char* name)override{
   using namespace abi::arm64;
   if(!std::strcmp(name,android11::kCurrentThread))return missing_current?nullptr:reinterpret_cast<void*>(Current);
-  if(!std::strcmp(name,android_common::kSuspendConstruct))return missing_scope?nullptr:reinterpret_cast<void*>(Construct);
-  if(!std::strcmp(name,android_common::kSuspendDestroy))return reinterpret_cast<void*>(Destroy);
+  if(!std::strcmp(name,::artdcevm::abi::common::kSuspendConstruct))return missing_scope?nullptr:reinterpret_cast<void*>(Construct);
+  if(!std::strcmp(name,::artdcevm::abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Destroy);
   if(pair&&!std::strcmp(name,android13::kToNative))return reinterpret_cast<void*>(Native);
   if(pair&&!std::strcmp(name,android13::kToRunnable))return reinterpret_cast<void*>(Runnable);
   return nullptr;

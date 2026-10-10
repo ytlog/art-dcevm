@@ -27,8 +27,8 @@ class Hooks:public HookEngine {
   if(missing)return nullptr;
   if(!std::strcmp(name,abi::arm64::android11::kCurrentThread))return reinterpret_cast<void*>(Current);
   if(!std::strcmp(name,"_ZNK3art6Thread13DecodeJObjectEP8_jobject"))return reinterpret_cast<void*>(Decode);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendDestroy))return reinterpret_cast<void*>(Release);
+  if(!std::strcmp(name,abi::common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
+  if(!std::strcmp(name,abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Release);
   assert(!std::strcmp(name,runnable_jni::GlobalDecoder::SymbolName()));return reinterpret_cast<void*>(Decode);
  }
  void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}

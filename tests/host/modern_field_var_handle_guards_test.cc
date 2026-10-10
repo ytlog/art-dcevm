@@ -71,7 +71,7 @@ struct Hooks:HookEngine {bool Initialize(std::string*)override{return true;}
  if(s=="artReadBarrierForRootSlow")return reinterpret_cast<void*>(Mark);
  if(s=="_ZN3art6mirror5Class13GetDescriptorEPNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE")return reinterpret_cast<void*>(Descriptor);
  if(s=="_ZNK3art6Thread19DecodeGlobalJObjectEP8_jobject")return reinterpret_cast<void*>(DecodeClass);
- if(s=="_ZN3art6mirror9VarHandle6AccessENS1_10AccessModeEPNS_11ShadowFrameEPKNS_19InstructionOperandsEPNS_6JValueE")return reinterpret_cast<void*>(Access);if(s==var_handle_field::kCurrent)return reinterpret_cast<void*>(Current);if(s==var_handle_field::kVisit)return named?reinterpret_cast<void*>(Visit):nullptr;if(s==abi::arm64::android_common::kSuspendConstruct)return reinterpret_cast<void*>(Stop);if(s==abi::arm64::android_common::kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;}
+ if(s=="_ZN3art6mirror9VarHandle6AccessENS1_10AccessModeEPNS_11ShadowFrameEPKNS_19InstructionOperandsEPNS_6JValueE")return reinterpret_cast<void*>(Access);if(s==var_handle_field::kCurrent)return reinterpret_cast<void*>(Current);if(s==var_handle_field::kVisit)return named?reinterpret_cast<void*>(Visit):nullptr;if(s==abi::common::kSuspendConstruct)return reinterpret_cast<void*>(Stop);if(s==abi::common::kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;}
  void* Install(void* target,void*,void** original,std::string*)override{assert(stopped);++installs;*original=target;return this;}bool Remove(void*,std::string*)override{return true;}};
 }
 namespace artdcevm::method_identity {bool ReadableMappingExtent(const void*,size_t*){return false;}}

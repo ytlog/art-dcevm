@@ -32,12 +32,12 @@ class Service final : public structural_methods::Services {
   // JNI/native registration oracle belongs to bootstrap, never final commit.
   static std::unique_ptr<Binding> BindOwned(HookEngine&,
       const runnable_jni::Context&,
-      abi::arm64::android_common::FromReflectedMethod,
+      abi::common::FromReflectedMethod,
       const method_identity::Oracle&,const void* registered_binding,
       void* observed_class_linker,std::string* error);
   static std::unique_ptr<Binding> BindOwned(HookEngine&,
       const runnable_jni::Context&,
-      abi::arm64::android_common::FromReflectedMethod,
+      abi::common::FromReflectedMethod,
       const method_identity::Oracle&,const void* registered_binding,
       void* observed_class_linker,method_identity::Model,std::string* error);
   // Native-only preparation: no JNI, managed allocation or suspension. The
@@ -47,7 +47,7 @@ class Service final : public structural_methods::Services {
       void* new_class,const method_array::View&,Retired,std::string* error,const modern_field_metadata::ReadContext* =nullptr);
   static std::unique_ptr<Service> Prepare(HookEngine&,
       const runnable_jni::Context&,
-      abi::arm64::android_common::FromReflectedMethod,
+      abi::common::FromReflectedMethod,
       const method_identity::Oracle& registered_native, const void* binding,
       void* observed_class_linker, void* old_class, const method_array::View&,
       void* new_class, const method_array::View&, Retired, std::string* error);

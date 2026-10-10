@@ -22,7 +22,7 @@ struct Method {
 struct Codec {
  void* manager=nullptr;
  void* (*decode)(void*,jmethodID)=nullptr;
- abi::arm64::android_common::FromReflectedMethod leaf=nullptr;
+ abi::common::FromReflectedMethod leaf=nullptr;
 };
 // Strong JNI Class roots stay live until Clear. Native ArtMethod identities are
 // accepted only when the source codec agrees with the independent reflected leaf.

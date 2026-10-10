@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/common/native_reflective_value_abi.h"
 #include "api/hook_engine.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include "platform/abi/arm64/android14/jni_global_decode.h"
 #include <cstddef>
 #include <cstdint>
@@ -17,8 +17,8 @@ struct Declarations {
   void *access=nullptr,*current=nullptr,*construct=nullptr,*destroy=nullptr,*visit=nullptr,*decode=nullptr;
   bool Resolve(HookEngine& hooks){
     access=hooks.FindSymbol("libart.so",kAccess);current=hooks.FindSymbol("libart.so",kCurrent);
-    construct=hooks.FindSymbol("libart.so",abi::arm64::android_common::kSuspendConstruct);
-    destroy=hooks.FindSymbol("libart.so",abi::arm64::android_common::kSuspendDestroy);
+    construct=hooks.FindSymbol("libart.so",abi::common::kSuspendConstruct);
+    destroy=hooks.FindSymbol("libart.so",abi::common::kSuspendDestroy);
     visit=hooks.FindSymbol("libart.so",kVisit);
     decode=hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject);
     if(!decode)decode=hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject);

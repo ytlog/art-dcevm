@@ -99,7 +99,7 @@ void CheckGraphExceptionStops(const modern_field_metadata::FieldMetadata& metada
 void* forbidden_descriptor_class=nullptr;int forbidden_descriptor_calls=0;
 const char* ResolutionDescriptor(void* klass,void* storage){if(klass==forbidden_descriptor_class){++forbidden_descriptor_calls;assert(false&&"Unrelated cache Class descriptor is not an eligibility prerequisite");}return Descriptor(klass,storage);}
 std::array<executable_mirror::Declaration*,3> executable{};
-void* Leaf(const abi::arm64::android_common::RunnableJniScope&,jobject object){return reinterpret_cast<void*>(uintptr_t(reinterpret_cast<executable_mirror::Declaration*>(object)->art_method));}
+void* Leaf(const abi::common::RunnableJniScope&,jobject object){return reinterpret_cast<void*>(uintptr_t(reinterpret_cast<executable_mirror::Declaration*>(object)->art_method));}
 bool DecodeMirror(const runnable_jni::Context&,jobject object,void** out){*out=object;return true;}
 void Visit(void* receiver,art::ReflectiveValueVisitor* visitor){
  assert(receiver==&runtime&&stopped);

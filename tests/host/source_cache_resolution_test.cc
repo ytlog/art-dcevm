@@ -4,7 +4,7 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 using namespace artdcevm;
 using namespace source_cache_resolution;
 namespace fixed=abi::arm64::android_common;

@@ -72,7 +72,7 @@ int main(){
  JNIInvokeInterface_ invoke{};invoke.GetEnv=GetEnv;vm.functions=&invoke;wrong_vm.functions=&invoke;Hooks hooks;std::string error;
  for(auto declaration:{thread_suspend_service::Declaration::kLegacy16,thread_suspend_service::Declaration::kModern24}){
   shift=declaration==thread_suspend_service::Declaration::kLegacy16?16:24;runnable=declaration==thread_suspend_service::Declaration::kLegacy16?67:0;
-  thread_suspend_service::Service state;assert(thread_suspend_service::Service::Bind(declaration,[](const char* n)->void*{using namespace abi::arm64::android_common;if(std::string(n)==kSuspendConstruct)return reinterpret_cast<void*>(Stop);if(std::string(n)==kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;},&state));assert(!state.CanTransitionRunnable());
+  thread_suspend_service::Service state;assert(thread_suspend_service::Service::Bind(declaration,[](const char* n)->void*{using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;if(std::string(n)==kSuspendConstruct)return reinterpret_cast<void*>(Stop);if(std::string(n)==kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;},&state));assert(!state.CanTransitionRunnable());
   Executor executor;executing=&executor;Reset();SetState(92);assert(executor.Prepare(hooks,&env,state,&error)&&!executor.Ready());SetState(runnable);
   runnable_context={&self,&env,&vm};assert(executor.WithNative(runnable_context,Work,nullptr)==Result::Unavailable);
   mode=Mode::None;assert(executor.Calibrate(runnable_context)==Result::NoCallback&&!executor.Ready());Reset();

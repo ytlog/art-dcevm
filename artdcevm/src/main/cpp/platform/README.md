@@ -7,7 +7,7 @@
 | `common/` | 跨版本能力、事务、校准、对象与字段迁移、缓存、帧和层级处理 |
 | `android13/`、`android17/` | 已有的版本专有运行时实现 |
 | `abi/arm64/android11/` … `android17/` | 各版本唯一的固定 ARM64 ABI 声明 |
-| `abi/common/` | 不依赖版本或指令集的固定 ART 调用声明 |
+| `abi/common/` | 不依赖版本或指令集的固定 ART 调用声明，例如 Runnable JNI scope、SuspendAll、JNI ID query scope |
 | `abi/arm64/` | ARM64 公共布局与汇编；`common/` 保存跨版本 ARM64 ART 声明 |
 | `symbols/` | 跨版本符号选择与兼容性解析 |
 | `android13/symbols/` | Android 13 符号配置与已核对厂商符号定义 |
@@ -15,7 +15,7 @@
 | `jvmti/` | 公共 JVMTI 后端 |
 | `backend_factory.*` | 后端选择入口 |
 
-版本布局只有一个归属，例如 Android 14 的 ARM64 声明在 `abi/arm64/android14/`，不再同时维护 `android14/abi/`。Android 13 原先分散在运行时目录的 `*_abi.h` 也统一归入 `abi/arm64/android13/`。旧的 `arch/arm64/` 汇编也已并入 `abi/arm64/`。
+版本布局只有一个归属，例如 Android 14 的 ARM64 声明在 `abi/arm64/android14/`，不再同时维护 `android14/abi/`。Android 13 原先分散在运行时目录的 `*_abi.h` 也统一归入 `abi/arm64/android13/`。旧的 `arch/arm64/` 汇编也已并入 `abi/arm64/`。相同声明只保留一处：`abi/common/` 的 JNI 访问、SuspendAll 与 JNI ID query scope 不再在 `abi/arm64/common/` 建纯别名或重复结构；其调用者直接使用 `abi::common`。真正依赖 ARM64 的布局与调用声明仍在架构层。
 
 Android 11、12、14、15、16 目前主要通过 `common/` 实现行为，相应 ABI 目录包含实际不同的声明；没有创建空运行时目录或重复复制公共 `.cc` 文件。Android 13 保留其独有的完整后端和测试诊断；Android 17 保留实际不同的 Class 方法表校准。Runtime 服务、接收者、JIT 与结构事务直接复用 `common/`，不保留按版本包装的别名或转发入口。目录存在不表示真机全功能验证完成。Android 12L/API 32 当前不在支持目标中。
 

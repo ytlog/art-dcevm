@@ -9,7 +9,7 @@
 #include <new>
 namespace artdcevm::source_handle_roots {
 namespace {
-using namespace abi::arm64::android_common;
+using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
 template<class T>T Read(const void* p,size_t at=0){T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+at,sizeof(value));return value;}
 template<class T>void Write(void* p,size_t at,T value){std::memcpy(static_cast<unsigned char*>(p)+at,&value,sizeof(value));}
 // A real native allocation can span adjacent readable VM regions (notably

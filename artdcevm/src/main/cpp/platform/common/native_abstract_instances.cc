@@ -53,9 +53,9 @@ bool Read(const modern_field_metadata::FieldMetadata& metadata,method_identity::
  if(error)error->clear();return true;
 }
 struct Probe {const modern_field_metadata::FieldMetadata* metadata;method_identity::Model model;size_t embedded_prefix;
- abi::arm64::android_common::FromReflectedMethod leaf;jobject classes[3],methods[3];jint flags[3];};
+ abi::common::FromReflectedMethod leaf;jobject classes[3],methods[3];jint flags[3];};
 bool Observe(const runnable_jni::Context& context,void* raw){auto& p=*static_cast<Probe*>(raw);
- const abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+ const abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
  for(size_t i=0;i<3;++i){void* klass=nullptr;if(!runnable_executor::DecodeStrongGlobal(context,p.classes[i],&klass))return false;
   class_metadata::State state;if(!State(*p.metadata,klass,&state)||(state.access_flags&0x7611u)!=(uint32_t(p.flags[i])&0x7611u))return false;
   void* method=p.leaf(scope,p.methods[i]);const auto& layout=p.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
@@ -69,7 +69,7 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,const modern_field_metadat
                         const method_identity::Calibration& model,std::string* error){
  if(!env||env->ExceptionCheck()||!metadata.Calibrated()||model.identities.size()<3||
     (model.model!=method_identity::Model::kMethod11&&model.model!=method_identity::Model::kMethod12Onward))return Fail(error,"Abstract vtable bootstrap lacks independent native Class/method identities");
- auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  if(!leaf)return Fail(error,"Abstract vtable public reflection decoder is unavailable");
  struct Roots{JNIEnv* env;std::vector<jobject> globals,locals;~Roots(){for(auto root:globals)env->DeleteGlobalRef(root);for(auto local:locals)if(local)env->DeleteLocalRef(local);}
   jobject Add(jobject local){if(!local||env->ExceptionCheck())return nullptr;locals.push_back(local);auto root=env->NewGlobalRef(local);if(root)globals.push_back(root);return root;}} roots{env,{},{}};

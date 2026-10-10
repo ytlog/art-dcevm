@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
-#include "platform/abi/arm64/common/jni_id_query_scope.h"
+#include "platform/abi/common/jni_id_query_scope.h"
 using namespace artdcevm;
 using Carrier=abi::arm64::android11::ReleaseObjectPointer;
 using Find=Carrier (*)(void*,void*,const char*,void*);
@@ -23,12 +23,12 @@ const char* mode="success";
 bool in_public_find=false;int query_live=0,query_balanced=0;
 void* linker=reinterpret_cast<void*>(0x1000);
 void* manager=reinterpret_cast<void*>(0x2000);
-void QueryConstruct(abi::arm64::android_common::JniIdQueryScope* scope){
+void QueryConstruct(abi::common::JniIdQueryScope* scope){
  assert(in_public_find && !suspended && !query_live);++query_live;
  scope->manager=!std::strcmp(mode,"scope-null")?nullptr:manager;
  if(!std::strcmp(mode,"scope-conflict")||(!std::strcmp(mode,"scope-switch")&&query_balanced))scope->manager=reinterpret_cast<void*>(0x7770);
 }
-void QueryDestroy(abi::arm64::android_common::JniIdQueryScope*){
+void QueryDestroy(abi::common::JniIdQueryScope*){
  assert(in_public_find && !suspended && query_live==1);--query_live;++query_balanced;
 }
 Carrier RealFind(void* l,void*,const char*,void*){assert(l==linker);++finds;return {0x3000};}

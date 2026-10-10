@@ -7,11 +7,11 @@
 #include <array>
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 namespace artdcevm::source_cache_resolution {
 namespace {
 bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}
-using namespace abi::arm64::android_common;
+using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
 // Fixed source declarations. No observer touches JNI, managed objects, cache
 // entries or original results; the recorded words are diagnostics, never roots.
 struct WarmTrace {uint32_t index;unsigned jls=0,find=0;uintptr_t jls_owner=0,find_owner=0,jls_result=0,find_result=0;
@@ -154,7 +154,7 @@ bool Service::TraceJavaWarm(HookEngine& hooks,const NativeWindow& native,uint32_
 }
 bool Service::BindDiagnostics(HookEngine& h,void* linker,Service*out,std::string*e){
  if(!out||!linker)return Fail(e,"Cache resolution actual ClassLinker owner unavailable");
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  Service s;s.linker_=linker;
  s.type_=reinterpret_cast<ResolveCacheType>(h.FindSymbol("libart.so",kResolveCacheType));
  s.field_specific_=reinterpret_cast<FindCacheField>(h.FindSymbol("libart.so",kFindCacheField));

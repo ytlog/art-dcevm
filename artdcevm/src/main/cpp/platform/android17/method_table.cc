@@ -2,7 +2,7 @@
 #include <set>
 namespace artdcevm::android17 {
 bool CalibrateMethodTable(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Calibration& identity_model, const void* klass,
     const evolution::MappedDexMemberCounts& dex,
     const method_identity::Oracle* methods, size_t count,
@@ -35,7 +35,7 @@ bool CalibrateMethodTable(const runnable_jni::Context& context,
       static_cast<uint32_t>(count), method_array::Order::ByFlags};
   if (count > UINT32_MAX || !method_array::Read(method_metadata::kAndroid12Onward, array, array_extent, boundaries, &table))
     return fail("Android17 method array exceeds its mapped extent");
-  const abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+  const abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
   std::set<uint32_t> physical, indices;
   uint32_t direct = 0;
   constexpr uint32_t kModifiers = 0x11fu;

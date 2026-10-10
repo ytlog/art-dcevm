@@ -47,8 +47,8 @@ struct Hooks:HookEngine {
   // Independent fixed external source/ELF catalog, never internal private ABI.
   if(s=="_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE"||
      s=="_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE")return reinterpret_cast<void*>(Normal);
-  if(s==abi::arm64::android_common::kSuspendConstruct)return reinterpret_cast<void*>(Stop);
-  if(s==abi::arm64::android_common::kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;}
+  if(s==abi::common::kSuspendConstruct)return reinterpret_cast<void*>(Stop);
+  if(s==abi::common::kSuspendDestroy)return reinterpret_cast<void*>(Resume);return nullptr;}
  void* Install(void* target,void*,void** original,std::string*)override{assert(stopped);*original=target;++installed_count;return this;}bool Remove(void*,std::string*)override{return true;}};
 }
 namespace artdcevm::runnable_executor {

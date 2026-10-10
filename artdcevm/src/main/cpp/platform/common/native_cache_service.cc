@@ -5,7 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include "platform/abi/arm64/common/checkpoint.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 namespace artdcevm::native_cache {
 namespace {
 using Closure=art::Closure;
@@ -13,7 +13,7 @@ bool Fail(std::string* error,const char* text){if(error)*error=text;return false
 // Observe the native owner's function-static Closure only during its synchronous
 // ClearAll window, with the independently observed ThreadList receiver. All
 // original arguments/results pass through the exact fixed-source signature.
-using namespace abi::arm64::android_common;
+using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
 struct Capture {void* threads;void* closure=nullptr;bool conflict=false;};
 thread_local Capture* capturing=nullptr;
 void* original_checkpoint_storage=nullptr;
@@ -80,7 +80,7 @@ void ObserveVendorLock(void* mutex,void* self,uint32_t argument){
 }
 bool InstallVendorLock(HookEngine& hooks,std::string* error){
   std::lock_guard<std::mutex> guard(vendor_installation);if(vendor_token)return true;
-  using namespace abi::arm64::android_common;
+  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
   auto target=hooks.FindSymbol("libart.so","_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadEj");
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));

@@ -4,7 +4,7 @@
 #include <thread>
 #include <stdexcept>
 using namespace artdcevm::runnable_jni;
-using Scope=artdcevm::abi::arm64::android_common::RunnableJniScope;
+using Scope=artdcevm::abi::common::RunnableJniScope;
 struct State {bool runnable=false,exception=false,skip=false,mismatch=false,original_null=false,original_exception=false,duplicate=false,throw_jni=false;int originals=0,operations=0,transitions=0,decodes=0;};
 thread_local State state;
 Bridge bridge;GlobalDecoder decoder;int vm;

@@ -105,7 +105,7 @@ void Invalidate(void* cache){assert(stopped&&cache==&jit_cache);events.push_back
 void Deopt(void* receiver){assert(stopped&&receiver==&instrumentation);events.push_back("deopt");}
 void DeoptAll(void* receiver,const char* why){assert(stopped&&receiver==&instrumentation&&!std::strcmp(why,"artdcevm-class-abstract"));events.push_back("abstract");}
 int binding_value;
-void* MethodLeaf(const abi::arm64::android_common::RunnableJniScope&,jobject p){assert(!stopped&&Read32(current)==0);return p==reinterpret_cast<jobject>(old_method)?old_method:nullptr;}
+void* MethodLeaf(const abi::common::RunnableJniScope&,jobject p){assert(!stopped&&Read32(current)==0);return p==reinterpret_cast<jobject>(old_method)?old_method:nullptr;}
 bool SameMethod(void*,void*){return true;}
 bool Implements(void*,uintptr_t){return false;}
 void Obsolete(void* receiver,void* method){assert(stopped&&receiver==&linker&&method==old_method);events.push_back("obsolete");}
@@ -129,8 +129,8 @@ class Hooks:public HookEngine {
   CALLEE("artReadBarrierMark",Mark);CALLEE("artReadBarrierForRootSlow",Root);
   CALLEE("CurrentFromGdbEv",Current);CALLEE("Thread14CurrentFromGdbEv",Current);CALLEE("Thread13DecodeJObject",Decode);
   if(!std::strcmp(name,abi::arm64::android11::kCurrentThread))return reinterpret_cast<void*>(Current);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
+  if(!std::strcmp(name,abi::common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
+  if(!std::strcmp(name,abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
   if(std::strstr(name,"E7closure"))return &closure;
   CALLEE("ClearAllInterpreterCachesEv",CachePrepare);
   if(std::strstr(name,"thread_list_lock_E"))return &list_lock;

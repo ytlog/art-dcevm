@@ -7,7 +7,7 @@ namespace artdcevm::native_method_binding {
 // fixture before entering Runnable; no concurrent registrations are permitted.
 // This validates the mutable JNI data slot without guessing an entry point.
 inline bool Calibrate(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Oracle& oracle, const void* expected_binding,
     method_identity::Model model, std::string* error) {
   const auto fail = [&](const char* message) {
@@ -25,7 +25,7 @@ inline bool Calibrate(const runnable_jni::Context& context,
       context.env->ExceptionCheck() ||
       context.env->GetObjectRefType(oracle.strong_global_method) != JNIGlobalRefType)
     return fail("Invalid owned registered-native binding oracle");
-  const abi::arm64::android_common::RunnableJniScope scope{
+  const abi::common::RunnableJniScope scope{
       context.self, context.env, context.vm};
   void* method = leaf(scope, oracle.strong_global_method);
   size_t extent = 0;
@@ -50,7 +50,7 @@ inline bool Calibrate(const runnable_jni::Context& context,
 // Existing modern callers retain their fixed declaration until their binding
 // service accepts the independently calibrated identity model explicitly.
 inline bool Calibrate(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Oracle& oracle,const void* binding,std::string* error){
   return Calibrate(context,leaf,oracle,binding,method_identity::Model::kMethod12Onward,error);
 }

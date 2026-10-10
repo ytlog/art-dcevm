@@ -22,9 +22,9 @@ jobject AbstractFactory(JNIEnv*,jclass,jmethodID,va_list){Jni();if(broken_factor
 jsize AbstractLength(JNIEnv*,jarray array){Jni();return jsize(Read32(array,8));}
 jobject AbstractElement(JNIEnv*,jobjectArray array,jsize index){Jni();assert(array==public_array&&index>=0&&index<6);return reinterpret_cast<jobject>(uintptr_t(Read32(array,12+4*size_t(index))));}
 jint AbstractModifiers(JNIEnv*,jobject owner,jmethodID,va_list){Jni();assert(owner==incomplete||owner==complete||owner==embedded_complete);return wrong_public_flags?1:(owner==embedded_complete?1:0x401);}
-void* AbstractLeaf(const abi::arm64::android_common::RunnableJniScope& scope,jobject method){assert(scope.self==current&&Read32(current)==0&&!stopped);return wrong_method?static_cast<void*>(old_method):static_cast<void*>(method);}
+void* AbstractLeaf(const abi::common::RunnableJniScope& scope,jobject method){assert(scope.self==current&&Read32(current)==0&&!stopped);return wrong_method?static_cast<void*>(old_method):static_cast<void*>(method);}
 class AbstractHooks:public Hooks {public:bool missing_leaf=false;void* FindSymbol(const char* lib,const char* name)override{
- if(std::string(name)==abi::arm64::android_common::kFromReflectedMethod)return missing_leaf?nullptr:reinterpret_cast<void*>(AbstractLeaf);
+ if(std::string(name)==abi::common::kFromReflectedMethod)return missing_leaf?nullptr:reinterpret_cast<void*>(AbstractLeaf);
  return Hooks::FindSymbol(lib,name);
 }};
 void* Vtable(void* method){void* table=heap.New(24);Put32(table,0,uint32_t(uintptr_t(long_array_class)));Put32(table,8,1);uint64_t value=uintptr_t(method);std::memcpy(static_cast<char*>(table)+16,&value,8);return table;}

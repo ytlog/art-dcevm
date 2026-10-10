@@ -1,8 +1,8 @@
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/native_receiver_guard.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/common/jni_access.h"
+#include "platform/abi/common/jni_access.h"
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
@@ -11,10 +11,10 @@
 
 namespace artdcevm::retirement {
 namespace {
-using Scope = abi::arm64::android_common::RunnableJniScope;
+using Scope = abi::common::RunnableJniScope;
 using Throw = void (*)(void*, const char*, const char*);
 using Decode = void* (*)(void*, jmethodID);
-using Reflected = abi::arm64::android_common::FromReflectedMethod;
+using Reflected = abi::common::FromReflectedMethod;
 struct State {
   RetiredMethodRegistry* registry = nullptr;
   void* manager = nullptr;
@@ -116,7 +116,7 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
   calibration.candidate = {&registry, manager,
       reinterpret_cast<Throw>(hooks.FindSymbol("libart.so", "_ZN3art6Thread17ThrowNewExceptionEPKcS2_")),
       reinterpret_cast<Decode>(hooks.FindSymbol("libart.so", "_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID")),
-      reinterpret_cast<Reflected>(hooks.FindSymbol("libart.so", abi::arm64::android_common::kFromReflectedMethod)),nullptr};
+      reinterpret_cast<Reflected>(hooks.FindSymbol("libart.so", abi::common::kFromReflectedMethod)),nullptr};
   calibration.current = reinterpret_cast<void* (*)()>(
       hooks.FindSymbol("libart.so", "_ZN3art6Thread14CurrentFromGdbEv"));
   if (!calibration.candidate.throw_exception || !calibration.candidate.decode ||
@@ -147,7 +147,7 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
     }
     if (!entry.target) { *error = std::string("Missing method guard entry: ") + entry.symbol; return false; }
   }
-  using namespace abi::arm64::android_common;
+  using namespace abi::common;
   auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
   auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
   if(!construct||!destroy){*error="Missing native exclusive method hook installation declarations";return false;}

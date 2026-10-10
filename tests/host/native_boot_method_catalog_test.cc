@@ -33,7 +33,7 @@ jvmtiError JNICALL Bytecodes(jvmtiEnv*,jmethodID id,jint*n,unsigned char**out){*
 jvmtiError JNICALL Locals(jvmtiEnv*,jmethodID,jint*out){*out=2;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char*p){--allocations;std::free(p);return JVMTI_ERROR_NONE;}
 void* Decode(void*m,jmethodID id){assert(m==manager);return Native(id==Id(0)?0:1);}
-void* Leaf(const abi::arm64::android_common::RunnableJniScope&s,jobject reflected){assert(s.self&&s.vm&&s.env==&env);return bad_codec?Native(99):Native(reflected==reinterpret_cast<jobject>(Id(0))?0:1);}
+void* Leaf(const abi::common::RunnableJniScope&s,jobject reflected){assert(s.self&&s.vm&&s.env==&env);return bad_codec?Native(99):Native(reflected==reinterpret_cast<jobject>(Id(0))?0:1);}
 }
 namespace artdcevm::runnable_executor {
 runnable_jni::Result With(JNIEnv*e,jobject strong,runnable_jni::Operation f,void*p){assert(e==&env&&strong&&globals>0);runnable_jni::Context actual{reinterpret_cast<void*>(0x111),e,reinterpret_cast<void*>(0x222)};return f(actual,p)?runnable_jni::Result::kSuccess:runnable_jni::Result::kOperationRejected;}

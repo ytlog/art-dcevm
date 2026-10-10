@@ -2,7 +2,7 @@
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/jni_access/capability_selection.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <mutex>
 namespace artdcevm::runnable_executor {
@@ -21,7 +21,7 @@ std::atomic<bool> ready{false};
 std::mutex initialization;
 thread_local bool executing=false;
 thread_local const char* last_route="uncalibrated";
-void* ReflectedProxy(const abi::arm64::android_common::RunnableJniScope& scope,jobject carrier){
+void* ReflectedProxy(const abi::common::RunnableJniScope& scope,jobject carrier){
   return reflected.OnFromReflectedMethod(scope,carrier);
 }
 jobject GlobalProxy(void* vm,void* self,abi::arm64::android11::ReleaseObjectPointer object){
@@ -96,7 +96,7 @@ bool Initialize(HookEngine& hooks,JNIEnv* env,std::string* error){
       abi::arm64::android11::kDecodeJObject:runnable_jni::GlobalDecoder::SymbolName());
   auto global_target=resolver(&hooks,runnable_jni::GlobalRefBridge::SymbolName());
   auto reflected_target=resolver(&hooks,runnable_jni::Bridge::SymbolName());
-  using namespace abi::arm64::android_common;
+  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
   auto suspend=reinterpret_cast<SuspendConstruct>(resolver(&hooks,kSuspendConstruct));
   auto resume=reinterpret_cast<SuspendDestroy>(resolver(&hooks,kSuspendDestroy));
   if(!get_current || !peer || !decoder || !suspend || !resume || (!global_target && !reflected_target))

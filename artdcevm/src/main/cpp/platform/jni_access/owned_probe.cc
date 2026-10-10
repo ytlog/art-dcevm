@@ -26,7 +26,7 @@ namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include "hooks/shadow_hook_engine.h"
 #include "support/elf_modules.h"
 #include <mutex>
@@ -72,7 +72,7 @@ bool Observe(const runnable_jni::Context& context,void* data) {
 }
 struct MethodProbe {
   Probe probe;
-  abi::arm64::android_common::FromReflectedMethod leaf;
+  abi::common::FromReflectedMethod leaf;
   const method_identity::Oracle* oracles;
   size_t count;
   method_identity::Calibration calibration;
@@ -267,7 +267,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
   std::unique_lock<std::mutex> guard(initialization);
   if(!initialized||!std::strcmp(last_route,"uncalibrated"))return -306;
   ShadowHookEngine hooks;
-  auto leaf=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(
+  auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(
       hooks.FindSymbol("libart.so",runnable_jni::Bridge::SymbolName()));
   if(!leaf)return -307;
   // This debug-owned class has exactly one private native fixture. Public JNI
@@ -315,7 +315,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeNativeCache(JNIEn
     const auto& services=artdcevm::jni_access::runtime_services_observed;
     artdcevm::native_cache::Service cache;
     if(cache.Bind(hooks,services.receivers.thread_list,&error)&&cache.Prepare(&error)) {
-      using namespace artdcevm::abi::arm64::android_common;
+      using namespace artdcevm::abi::arm64::android_common; using namespace ::artdcevm::abi::common;
       auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
       auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
       if(!construct||!destroy)error="Missing named owned cache calibration stop";
@@ -565,14 +565,14 @@ namespace {
 struct AllocatorRequest {
  artdcevm::HookEngine* hooks;void* linker;std::vector<jobject> fields,methods;
  jobject boot_method;artdcevm::field_mirror::NamedField field;
- artdcevm::abi::arm64::android_common::FromReflectedMethod method;
+ artdcevm::abi::common::FromReflectedMethod method;
  std::vector<void*> owned,foreign;artdcevm::retirement::Membership proof;std::string error;
 };
 bool CollectAllocatorMembers(const artdcevm::runnable_jni::Context& context,void* data) {
  auto& r=*static_cast<AllocatorRequest*>(data);
  for(auto root:r.fields){void* mirror=nullptr;if(!artdcevm::runnable_executor::DecodeStrongGlobal(context,root,&mirror))return false;
   void* field=r.field(mirror);if(!field)return false;r.owned.push_back(field);}
- auto scope=artdcevm::abi::arm64::android_common::RunnableJniScope{context.self,context.env,context.vm};
+ auto scope=artdcevm::abi::common::RunnableJniScope{context.self,context.env,context.vm};
  for(auto root:r.methods){void* method=r.method(scope,root);if(!method)return false;r.owned.push_back(method);}
  void* foreign=r.method(scope,r.boot_method);if(!foreign)return false;r.foreign.push_back(foreign);return true;
 }
@@ -593,7 +593,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeAllocatorCleanup(
  jobject roots[]={own(loader),own(owner)};
  AllocatorRequest request{&hooks,services.receivers.class_linker,{},{},own(boot_method),
   reinterpret_cast<artdcevm::field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv")),
-  reinterpret_cast<artdcevm::abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",artdcevm::abi::arm64::android_common::kFromReflectedMethod)),{},{},{},{}};
+  reinterpret_cast<artdcevm::abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",artdcevm::abi::common::kFromReflectedMethod)),{},{},{},{}};
  bool success=roots[0]&&roots[1]&&request.boot_method&&request.field&&request.method&&!env->ExceptionCheck();
  for(jobjectArray array:{fields,methods}) {
   if(!array){success=false;break;}

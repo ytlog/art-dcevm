@@ -22,7 +22,7 @@ using Decode = bool (*)(const runnable_jni::Context&, jobject, void**);
 // between mirror decoding and scalar reads. The result permits this mirror
 // declaration only; it does not prove reflected Field or native method entries.
 inline bool Calibrate(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf, Decode decode,
+    abi::common::FromReflectedMethod leaf, Decode decode,
     const method_identity::Oracle* oracles, size_t count, std::string* error) {
   const auto fail = [&](const char* message) {
     if (error) *error = message;
@@ -31,7 +31,7 @@ inline bool Calibrate(const runnable_jni::Context& context,
   if (!context.self || !context.env || !context.vm || !leaf || !decode ||
       !oracles || count < 3 || context.env->ExceptionCheck())
     return fail("Invalid owned Executable mirror calibration");
-  const abi::arm64::android_common::RunnableJniScope scope{
+  const abi::common::RunnableJniScope scope{
       context.self, context.env, context.vm};
   std::set<void*> distinct;
   constexpr uint32_t kJavaModifiers = 0x11fu;
@@ -65,7 +65,7 @@ class Layout final {
  public:
   Layout(const Layout&)=delete;
   static std::unique_ptr<Layout> Probe(const runnable_jni::Context& context,
-      abi::arm64::android_common::FromReflectedMethod leaf,Decode decode,
+      abi::common::FromReflectedMethod leaf,Decode decode,
       const method_identity::Oracle* oracles,size_t count,std::string* error) {
     return Calibrate(context,leaf,decode,oracles,count,error)?
         std::unique_ptr<Layout>(new Layout):nullptr;

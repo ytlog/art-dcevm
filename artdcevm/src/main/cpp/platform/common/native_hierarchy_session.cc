@@ -212,7 +212,7 @@ bool Install(HookEngine&hooks,native_hierarchy_allocator::Service&service,const 
  std::lock_guard<std::mutex>lock(installation);
  if(installed_service){if(installed_service==&service)return true;Error(error,"Hierarchy capture hooks have a different service owner");return false;}
  if(!supplied.find||!supplied.failure||!supplied.retire_status){Error(error,"Source lookup/failure/retirement bindings are mandatory");return false;}
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  const char*libs[]={"libopenjdkjvmti.so","libopenjdkjvmti.so","libart.so","libart.so"};
  const char*names[]={kFinishSubtreeAllocations,kHierarchyAllocator,kHierarchyLoadClass,kCaptureLinkedClass};
  void*proxies[]={reinterpret_cast<void*>(FinishProxy),reinterpret_cast<void*>(AllocateProxy),reinterpret_cast<void*>(LoadProxy),reinterpret_cast<void*>(IdsProxy)};

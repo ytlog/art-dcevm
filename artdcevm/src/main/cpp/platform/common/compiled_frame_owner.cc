@@ -21,7 +21,7 @@ Owner::~Owner(){
 bool Owner::Resolve(const runnable_jni::Context& context,void* raw){
  auto& o=*static_cast<Owner*>(raw);method_identity::Calibration calibration;
  if(!method_identity::Calibrate(context,o.leaf_,o.public_.data(),o.public_.size(),&calibration,nullptr))return false;
- const abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+ const abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
  for(size_t i=0;i<o.native_.size();++i){auto method=o.leaf_(scope,o.reflected_[i]);if(!method)return false;o.native_[i]={method,calibration.readable_extents[i],o.public_[i].dex_method_index,o.public_[i].java_modifiers};}
  return true;
 }
@@ -31,7 +31,7 @@ std::unique_ptr<Owner> Owner::PrepareMode(HookEngine& hooks,JNIEnv* env,jvmtiEnv
  if(!env||!ti||!dex||env->ExceptionCheck()){Fail(error,"Missing ordinary compiled fixture input");return nullptr;}
  auto o=std::unique_ptr<Owner>(new Owner);
  if(env->GetJavaVM(&o->vm_)!=JNI_OK||!o->vm_){Fail(error,"Missing compiled fixture native VM");return nullptr;}
- o->leaf_=reinterpret_cast<abi::arm64::android_common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ o->leaf_=reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  if(!Initialize(hooks)||!o->leaf_||!frame_family_calibration::Service::Bind([&](const char* name){return hooks.FindSymbol("libart.so",name);},&o->service_)||!o->service_.Prepare(&o->prepared_)){Fail(error,"Missing named compiled fixture preparation bindings");return nullptr;}
  // Optional original named Nterp candidates are bound only while ordinary.
  // Actual geometry and complete physical proof, never SDK, select a candidate.

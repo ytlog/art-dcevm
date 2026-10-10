@@ -18,7 +18,7 @@ namespace artdcevm::owned_active_frame {
 namespace {
 Gate gate;
 std::atomic<abi::arm64::android11::CurrentThread> current{nullptr};
-using Leaf=abi::arm64::android_common::FromReflectedMethod;
+using Leaf=abi::common::FromReflectedMethod;
 using ContainsMethod=bool (*)(void*,void*);
 struct Roots {JNIEnv* env;std::array<jobject,8> refs{};
  ~Roots(){for(auto ref:refs)if(ref)env->DeleteGlobalRef(ref);}};
@@ -38,7 +38,7 @@ bool Resolve(const runnable_jni::Context& context,void* data) {
  auto& request=*static_cast<Request*>(data);method_identity::Oracle oracles[5];
  for(size_t i=0;i<5;++i)oracles[i]={request.roots->refs[i],static_cast<uint32_t>(request.dex[i]),static_cast<uint32_t>(request.dex[5+i])};
  if(!method_identity::Calibrate(context,request.leaf,oracles,5,&request.calibration,&request.error))return false;
- abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+ abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
  for(size_t i=0;i<5;++i){request.methods[i]=request.leaf(scope,request.roots->refs[i]);if(!request.methods[i]){request.error="Missing native reflected fixture method";return false;}}
  return true;
 }
@@ -184,7 +184,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_github_ytlog_artdcevm_testing_Owne
  env->GetIntArrayRegion(shape,0,22,identities.dex.data());
  for(size_t i=0;i<5;++i){auto local=env->GetObjectArrayElement(methods,static_cast<jsize>(i));roots.refs[i]=local?env->NewGlobalRef(local):nullptr;if(local)env->DeleteLocalRef(local);if(!roots.refs[i]||env->ExceptionCheck())return nullptr;}
  if(!hooks.Initialize(&identities.error))return finish();
- identities.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ identities.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  auto native_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  auto contains=reinterpret_cast<ContainsMethod>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"));
  const auto& observed=jni_access::OwnedEvolutionProofs().observed.receivers;
@@ -232,7 +232,7 @@ static jstring ProveOwnedCallers(JNIEnv* env,jobjectArray methods,jintArray shap
  // It returns a boolean and does not access the unused JNI receiver.
  auto debug_query=reinterpret_cast<abi::arm64::android_common::JavaDebuggableQuery>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kJavaDebuggableQuery));
  if(debug_query){request.debug_observed=true;request.java_debuggable=debug_query(env,nullptr)==JNI_TRUE;}
- request.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kFromReflectedMethod));
+ request.leaf=reinterpret_cast<Leaf>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
  request.contains=reinterpret_cast<ContainsMethod>(hooks.FindSymbol("libart.so","_ZN3art3jit12JitCodeCache14ContainsMethodEPNS_9ArtMethodE"));
  exclusive_owned_roots::Service exclusive;
  if(!request.leaf||!request.contains)request.error="Missing native method/JIT identity leaf";

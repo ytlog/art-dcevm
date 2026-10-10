@@ -3,7 +3,7 @@
 #include "platform/common/class_loader_cleanup.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android15/linear_alloc.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <cstdlib>
 namespace artdcevm::retirement {
@@ -54,7 +54,7 @@ bool InstallRetirementCleanup(HookEngine& hooks,const Membership& proof,RetiredF
  auto selected=class_loader_cleanup::Declaration::kPrepareForBatchDelete;
  void* target=hooks.FindSymbol("libart.so",class_loader_cleanup::Symbol(selected));
  if(!target){selected=class_loader_cleanup::Declaration::kDeleteAndDestroy;target=hooks.FindSymbol("libart.so",class_loader_cleanup::Symbol(selected));}
- using namespace abi::arm64::android_common;
+ using namespace abi::common;
  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
  if(!target||!contains||!construct||!destroy)return Fail(error,"Missing named native class-loader cleanup/stop declarations");

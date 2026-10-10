@@ -26,7 +26,7 @@ bool Contains(const method_array::View& table,void* method) {
 }
 std::unique_ptr<Service> Service::Prepare(HookEngine& hooks,
     const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Oracle& native,const void* binding,
     void* linker,void* old_class,const method_array::View& old,
     void* new_class,const method_array::View& replacement,Retired retired,
@@ -37,7 +37,7 @@ std::unique_ptr<Service> Service::Prepare(HookEngine& hooks,
 }
 std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
     const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Oracle& native,const void* binding,
     void* linker,std::string* error) {
   return BindOwned(hooks,context,leaf,native,binding,linker,
@@ -45,7 +45,7 @@ std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
 }
 std::unique_ptr<Binding> Service::BindOwned(HookEngine& hooks,
     const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Oracle& native,const void* binding,
     void* linker,method_identity::Model model,std::string* error) {
   const method_metadata::Layout* layout=nullptr;

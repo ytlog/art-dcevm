@@ -9,7 +9,7 @@ namespace artdcevm::android17 {
 // members and holds a calibrated Runnable scope throughout this operation.
 // This validates table storage and identity, not ArtMethod data/entry points.
 bool CalibrateMethodTable(const runnable_jni::Context&,
-    abi::arm64::android_common::FromReflectedMethod named_leaf,
+    abi::common::FromReflectedMethod named_leaf,
     const method_identity::Calibration& identity_model, const void* rooted_class,
     const evolution::MappedDexMemberCounts& dex_counts,
     const method_identity::Oracle* methods, size_t count,

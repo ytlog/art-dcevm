@@ -15,8 +15,8 @@ bool Service::Bind(HookEngine& hooks,Service* output,std::string* error) {
   if(!output)return Fail(error,"Missing exclusive-root service output");
   Service candidate;
   candidate.current_=reinterpret_cast<decltype(candidate.current_)>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
-  candidate.suspend_=reinterpret_cast<decltype(candidate.suspend_)>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kSuspendConstruct));
-  candidate.resume_=reinterpret_cast<decltype(candidate.resume_)>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kSuspendDestroy));
+  candidate.suspend_=reinterpret_cast<decltype(candidate.suspend_)>(hooks.FindSymbol("libart.so",abi::common::kSuspendConstruct));
+  candidate.resume_=reinterpret_cast<decltype(candidate.resume_)>(hooks.FindSymbol("libart.so",abi::common::kSuspendDestroy));
   // These fixed source declarations return the same release ObjPtr ABI. The
   // executor independently verifies the selected decoder against owned JNI
   // identities before any exclusive use. No JNI transition entrypoint is used.
@@ -75,9 +75,9 @@ bool Service::With(JNIEnv* env,const jobject* globals,size_t count,Operation ope
   std::vector<void*> roots(count);
   bool completed=false;
   try {
-    abi::arm64::android_common::SuspendAll storage{};
+    abi::common::SuspendAll storage{};
     suspend_(&storage,"artdcevm owned exclusive roots",false);
-    struct Release {abi::arm64::android_common::SuspendDestroy resume;void* storage;
+    struct Release {abi::common::SuspendDestroy resume;void* storage;
       ~Release(){resume(storage);}} release{resume_,&storage};
     for(size_t i=0;i<count;++i) {
       roots[i]=reinterpret_cast<void*>(decode_(self,globals[i]).reference);

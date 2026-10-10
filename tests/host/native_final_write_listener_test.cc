@@ -1,6 +1,6 @@
 #include "platform/common/native_final_write_listener.h"
 #include "platform/abi/arm64/common/instrumentation.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -26,8 +26,8 @@ struct Engine:HookEngine {
   if(!available)return nullptr;
   if(legacy&&!std::strcmp(name,"_ZN3art15instrumentation15Instrumentation20EnableDeoptimizationEv"))return reinterpret_cast<void*>(Enable);
   if(legacy&&!std::strcmp(name,"_ZN3art15instrumentation15Instrumentation21DisableDeoptimizationEPKc"))return reinterpret_cast<void*>(Disable);
-  if(legacy&&!std::strcmp(name,abi::arm64::android_common::kSuspendConstruct))return reinterpret_cast<void*>(Suspend);
-  if(legacy&&!std::strcmp(name,abi::arm64::android_common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
+  if(legacy&&!std::strcmp(name,abi::common::kSuspendConstruct))return reinterpret_cast<void*>(Suspend);
+  if(legacy&&!std::strcmp(name,abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
   if(!std::strcmp(name,"_ZN3art15instrumentation15Instrumentation20DeoptimizeEverythingEPKc"))return reinterpret_cast<void*>(Deopt);
   if(!std::strcmp(name,"_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE"))return reinterpret_cast<void*>(MethodDeopt);
   if(family==3&&!std::strcmp(name,"_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEj"))return reinterpret_cast<void*>(Legacy);

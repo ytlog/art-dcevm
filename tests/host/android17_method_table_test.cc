@@ -37,7 +37,7 @@ bool Decode(const runnable_jni::Context&, jobject method, void** out) {
 }
 jboolean Exception(JNIEnv*) {++jni_checks;return pending;}
 jobjectRefType RefType(JNIEnv*,jobject){return JNIGlobalRefType;}
-void* Leaf(const abi::arm64::android_common::RunnableJniScope&,jobject method){
+void* Leaf(const abi::common::RunnableJniScope&,jobject method){
   for(size_t i=0;i<handles.size();++i)if(method==reinterpret_cast<jobject>(&handles[i]))return native[i];
   return nullptr;
 }

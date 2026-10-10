@@ -53,7 +53,7 @@ bool Owner::InstallHooks(native_hierarchy_source_checks::FailureObserver observe
  if(!retire)return Error(error,"Missing named original Class retirement boundary");
  native_hierarchy_allocator::Functions functions{};
  functions.find=FindOriginal;functions.failure=native_hierarchy_source_checks::RefuseActualClass;functions.retire_status=retire;
- using namespace abi::arm64::android_common;
+ using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
  auto construct=reinterpret_cast<SuspendConstruct>(hooks_->FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks_->FindSymbol("libart.so",kSuspendDestroy));
  if(!construct||!destroy)return Error(error,"Production schema installation requires actual named SuspendAll pair");

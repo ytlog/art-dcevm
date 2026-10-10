@@ -10,7 +10,7 @@ void* self=reinterpret_cast<void*>(0x2200);
 JNIEnv* env=reinterpret_cast<JNIEnv*>(0x3300);
 void* vm=reinterpret_cast<void*>(0x4400);
 size_t calls=0;bool readable=true,returns=true;size_t available=40;
-void* Leaf(const abi::arm64::android_common::RunnableJniScope& scope,jobject method){
+void* Leaf(const abi::common::RunnableJniScope& scope,jobject method){
  assert(scope.self==self&&scope.env==env&&scope.vm==vm&&method==expected);++calls;
  return returns?storage:nullptr;
 }

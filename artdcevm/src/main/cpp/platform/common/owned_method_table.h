@@ -15,7 +15,7 @@ static_assert(offsetof(class_metadata::Class17,methods)==48);
 // the runtime bootstrap. Each target entry still needs an independent complete
 // DEX/reflection oracle; bootstrap calibration vectors are not target evidence.
 inline bool ReadProvenDeclaration(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     method_identity::Model proven_model,const void* klass,
     const evolution::MappedDexMemberCounts& dex,const method_identity::Oracle* methods,
     size_t count,method_array::View* output,std::string* error) {
@@ -39,7 +39,7 @@ inline bool ReadProvenDeclaration(const runnable_jni::Context& context,
   const method_array::Boundaries boundaries{dex.direct_methods,static_cast<uint32_t>(count),method_array::Order::ByFlags};
   if(!method_array::Read(declaration,array,array_extent,boundaries,&table))
     return fail("Owned method table exceeds independent mapped extent");
-  const abi::arm64::android_common::RunnableJniScope scope{context.self,context.env,context.vm};
+  const abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
   std::set<uint32_t> physical,indices;
   uint32_t direct=0;
   for(size_t i=0;i<count;++i) {
@@ -64,7 +64,7 @@ inline bool ReadProvenDeclaration(const runnable_jni::Context& context,
   *output=table;if(error)error->clear();return true;
 }
 inline bool Calibrate(const runnable_jni::Context& context,
-    abi::arm64::android_common::FromReflectedMethod leaf,
+    abi::common::FromReflectedMethod leaf,
     const method_identity::Calibration& identity_model,const void* klass,
     const evolution::MappedDexMemberCounts& dex,const method_identity::Oracle* methods,
     size_t count,method_array::View* output,std::string* error) {

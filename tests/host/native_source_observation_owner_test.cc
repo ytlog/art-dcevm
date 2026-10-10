@@ -16,8 +16,8 @@ struct Hooks:HookEngine {
  bool Initialize(std::string*)override{return true;}
  void* FindSymbol(const char*,const char* symbol)override{
   if(std::strcmp(symbol,abi::arm64::android11::kCurrentThread)==0)return reinterpret_cast<void*>(Current);
-  if(std::strcmp(symbol,abi::arm64::android_common::kSuspendConstruct)==0)return reinterpret_cast<void*>(Stop);
-  if(std::strcmp(symbol,abi::arm64::android_common::kSuspendDestroy)==0)return reinterpret_cast<void*>(Resume);
+  if(std::strcmp(symbol,abi::common::kSuspendConstruct)==0)return reinterpret_cast<void*>(Stop);
+  if(std::strcmp(symbol,abi::common::kSuspendDestroy)==0)return reinterpret_cast<void*>(Resume);
   return nullptr;
  }
  void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}

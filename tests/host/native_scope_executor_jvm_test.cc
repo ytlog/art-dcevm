@@ -45,7 +45,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_NativeScopeExecutorHostProbe_run(JNIE
  original=env->functions;routed=*original;routed.RegisterNatives=Register;env->functions=&routed;
  thread_suspend_service::Service state;
  assert(thread_suspend_service::Service::Bind(thread_suspend_service::Declaration::kLegacy16,[](const char* name)->void*{
-  using namespace abi::arm64::android_common;
+  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
   if(!std::strcmp(name,kSuspendConstruct))return reinterpret_cast<void*>(Stop);
   if(!std::strcmp(name,kSuspendDestroy))return reinterpret_cast<void*>(Resume);return nullptr;
  },&state));

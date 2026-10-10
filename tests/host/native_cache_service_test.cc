@@ -1,6 +1,6 @@
 #include "platform/common/native_cache_service.h"
 #include "platform/abi/arm64/common/closure.h"
-#include "platform/abi/arm64/common/suspend_all.h"
+#include "platform/abi/common/suspend_all.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -17,7 +17,7 @@ VendorLock vendor_proxy=nullptr;
 constexpr uint32_t observed_argument=0xaf001234u;
 int vendor_calls=0;
 int shape=5;
-using namespace abi::arm64::android_common;
+using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
 CheckpointMutator active5=nullptr;CheckpointChecking active4=nullptr;CheckpointCallback active3=nullptr;
 size_t Invoke(void* receiver,art::Closure* closure,art::Closure* callback,bool checking=true,bool acquire=false){
  if(shape==5)return active5(receiver,closure,callback,checking,acquire);
@@ -77,8 +77,8 @@ class Hooks:public HookEngine {
   if(!std::strcmp(name,kCheckpointMutator))return shape==5?reinterpret_cast<void*>(Checkpoints5):nullptr;
   if(!std::strcmp(name,kCheckpointChecking))return shape==4?reinterpret_cast<void*>(Checkpoints4):nullptr;
   if(!std::strcmp(name,kCheckpointCallback))return shape==3?reinterpret_cast<void*>(Checkpoints3):nullptr;
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
-  if(!std::strcmp(name,abi::arm64::android_common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
+  if(!std::strcmp(name,abi::common::kSuspendConstruct))return reinterpret_cast<void*>(Stop);
+  if(!std::strcmp(name,abi::common::kSuspendDestroy))return reinterpret_cast<void*>(Resume);
   return nullptr;
  }
  void* Install(void* target,void* proxy,void** original,std::string*)override {

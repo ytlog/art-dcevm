@@ -31,7 +31,7 @@ uint64_t MappingOsQueries()noexcept;
 // This proves identity field placement, not all fields or private evolution.
 // No SDK/Build ID dispatch. Failure preserves output and pending exceptions.
 bool Calibrate(const runnable_jni::Context& context,
-               abi::arm64::android_common::FromReflectedMethod named_leaf,
+               abi::common::FromReflectedMethod named_leaf,
                const Oracle* oracles, size_t count, Calibration* output,
                std::string* error);
 #ifdef ARTDCEVM_TESTING
