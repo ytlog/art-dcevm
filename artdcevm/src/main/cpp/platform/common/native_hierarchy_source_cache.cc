@@ -62,8 +62,12 @@ bool Mapper::InspectSemantic(void* payload,native_hierarchy_cache::SemanticOpera
 void Mapper::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{read_context_=c;contextual_=true;}
 bool Mapper::Extent(const void*p,size_t*out)const noexcept{return contextual_?read_context_.extent&&read_context_.extent(read_context_.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
 bool Mapper::Readable(const void*p,size_t n)const noexcept{size_t extent=0;return p&&Extent(p,&extent)&&extent>=n;}
+bool Mapper::ReadableRootWindow()const noexcept{
+ return (inspection_reader_&&inspection_reader_->FinalRootWindow())||
+   (services_&&services_->FinalRootWindow())||pool_.ReadyForSourceAccess();
+}
 bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)const noexcept{
- if(!out||(!(inspection_reader_&&inspection_reader_->FinalRootWindow())&&!(services_&&services_->FinalRootWindow())&&!pool_.ReadyForSourceAccess())||!fields_.Calibrated()||!p.source_owner)return false;
+ if(!out||!ReadableRootWindow()||!fields_.Calibrated()||!p.source_owner)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
  if(r.source_owner==p.source_owner&&r.class_index==p.class_index&&r.declarations==p.declarations&&r.dex.class_def_index==r.class_index&&Get(r.old_root)==p.old_class&&Get(r.new_root)==p.new_class&&Get(r.cache_root)==p.cache&&Get(r.parent_root)==p.parent){*out=r;return true;}}
  return false;
@@ -147,7 +151,7 @@ bool Mapper::Describe(const native_hierarchy_graph::Prepared&p,native_hierarchy_
  *out=entry->source;return true;
 }
 bool Mapper::RefreshAllocation(native_hierarchy_graph::Prepared*p)const noexcept{
- if(!p||p->new_class||!p->source_old_root||!services_||!pool_.ReadyForSourceAccess())return false;
+ if(!p||p->new_class||!p->source_old_root||!services_||!ReadableRootWindow())return false;
  const auto*entry=EntryFor(*p);if(!entry||entry->record.old_root!=p->source_old_root)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
   if(SameRecord(r,entry->record)&&!Get(r.new_root)){p->old_class=Get(r.old_root);p->cache=Get(r.cache_root);p->parent=Get(r.parent_root);return p->old_class&&p->cache;}}

@@ -6,6 +6,11 @@
 #include <memory>
 namespace artdcevm::native_hierarchy_private_ledger {class Ledger;}
 namespace artdcevm::native_hierarchy_allocator {
+// Locate an immutable graph index from fresh owned roots in one immediate
+// native read window. This grants no allocation or publication permission.
+bool FindCurrentAffectedNode(const native_hierarchy_graph::Graph&,
+                            const source_handle_roots::Pool&,const void* old_root,
+                            size_t* index);
 // Fixed named source boundaries are owned by the production hook adapter. The
 // original trampolines (never proxies) must remain live for every Batch.
 struct Functions {

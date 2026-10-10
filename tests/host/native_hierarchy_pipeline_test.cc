@@ -98,6 +98,37 @@ void* managed_array_class=nullptr;
 std::vector<void*> managed_arrays;
 unsigned managed_array_creations=0,managed_array_writes=0;bool managed_array_corrupt_write=false;
 bool ManagedArray(const void* p){return std::find(managed_arrays.begin(),managed_arrays.end(),p)!=managed_arrays.end();}
+void AllocationIndexProof(const Graph& staged,source_handle_roots::Pool& pool,const void* old_root){
+ auto subject=std::find_if(staged.nodes.begin(),staged.nodes.end(),[](const auto&n){return n.klass==old_class;});
+ auto other=std::find_if(staged.nodes.begin(),staged.nodes.end(),[](const auto&n){return n.klass!=old_class;});
+ assert(subject!=staged.nodes.end()&&other!=staged.nodes.end());
+ Graph small;small.nodes={*other,*subject};
+ Graph complete;complete.nodes.assign(22571,*other);complete.nodes.push_back(*subject);
+ const auto calls=jni_calls;size_t found=SIZE_MAX;
+ auto queries=method_identity::MappingOsQueries();
+ assert(native_hierarchy_allocator::FindCurrentAffectedNode(small,pool,old_root,&found)&&found==1);
+ const auto capture_queries=method_identity::MappingOsQueries()-queries;
+ queries=method_identity::MappingOsQueries();
+ assert(native_hierarchy_allocator::FindCurrentAffectedNode(complete,pool,old_root,&found)&&found==22571);
+ assert(method_identity::MappingOsQueries()-queries<=capture_queries+16&&jni_calls==calls);
+ // Actual source HandleScope visitor moves the Pool root; independently move
+ // its retained public Object[] slots. Deliberately leave graph raw Class stale.
+ void* moved=heap.New(sizeof(class_metadata::Class17));std::memcpy(moved,old_class,sizeof(class_metadata::Class17));
+ const auto move_public=[&](void*from,void*to){for(auto array:managed_arrays){const auto count=Read32(static_cast<unsigned char*>(array)+8);
+  for(uint32_t i=0;i<count;++i)if(Read32(static_cast<unsigned char*>(array)+12+size_t(i)*4)==uintptr_t(from))Put32(array,12+size_t(i)*4,uint32_t(uintptr_t(to)));}};
+ MoveRoots mover;mover.old_value=uint32_t(uintptr_t(old_class));mover.next_value=uint32_t(uintptr_t(moved));OriginalRoots(thread.data(),&mover,0);move_public(old_class,moved);
+ assert(complete.nodes.back().klass==old_class);
+ assert(native_hierarchy_allocator::FindCurrentAffectedNode(complete,pool,old_root,&found)&&found==22571);
+ ++complete.nodes.back().class_root.generation;
+ assert(!native_hierarchy_allocator::FindCurrentAffectedNode(complete,pool,old_root,&found)&&found==SIZE_MAX);
+ --complete.nodes.back().class_root.generation;
+ complete.nodes.push_back(complete.nodes.back());
+ assert(!native_hierarchy_allocator::FindCurrentAffectedNode(complete,pool,old_root,&found));complete.nodes.pop_back();
+ complete.nodes.back().affected=false;
+ assert(!native_hierarchy_allocator::FindCurrentAffectedNode(complete,pool,old_root,&found));
+ mover.old_value=uint32_t(uintptr_t(moved));mover.next_value=uint32_t(uintptr_t(old_class));OriginalRoots(thread.data(),&mover,0);move_public(moved,old_class);
+ assert(jni_calls==calls);
+}
 jobjectArray NewArray(JNIEnv*,jsize count,jclass,jobject initial){
  Jni();assert(count>=0&&managed_array_class&&uintptr_t(initial)<=UINT32_MAX);
  auto* p=heap.New(12+size_t(count)*4);Put32(p,0,uint32_t(uintptr_t(managed_array_class)));Put32(p,8,uint32_t(count));
@@ -176,15 +207,15 @@ class SessionHooks final:public SourceHooks {
 };
 class SourceOwners final:public native_hierarchy_source_cache::RequiredServices {
  const runnable_jni::Context&context_;source_handle_roots::Pool&pool_;
- mutable bool inspecting_=false;
+ mutable const source_handle_roots::StoppedReader* inspection_=nullptr;
  public:SourceOwners(const runnable_jni::Context&c,source_handle_roots::Pool&p):context_(c),pool_(p){}
- bool EnterSemanticInspection(const source_handle_roots::StoppedReader&r)const noexcept override{if(inspecting_||!r.FinalRootWindow())return false;inspecting_=true;return true;}
- void LeaveSemanticInspection()const noexcept override{assert(inspecting_);inspecting_=false;}
+ bool EnterSemanticInspection(const source_handle_roots::StoppedReader&r)const noexcept override{if(inspection_||!r.FinalRootWindow())return false;inspection_=&r;return true;}
+ void LeaveSemanticInspection()const noexcept override{assert(inspection_);inspection_=nullptr;}
  bool VerifyStaged(const Graph&g,const std::vector<Input>&inputs)const noexcept override{return Current()==context_.self&&pool_.ReadyForSourceAccess()&&g.nodes.size()==public_classes.size()&&inputs.size()==1&&!stopped;}
  bool PreparePrivate(const native_hierarchy_source_cache::RecordView&r,const native_hierarchy_cache::Source&s,std::string*)const override{return VerifyPrivate(r,s,context_,pool_);}
  bool VerifyPrivate(const native_hierarchy_source_cache::RecordView&r,const native_hierarchy_cache::Source&s,const runnable_jni::Context&c,const source_handle_roots::Pool&p)const noexcept override{
   void*old=nullptr,*cache=nullptr;void*holder_array=Root(const_cast<uint32_t*>(actual_holder->array_handle));
-  return &p==&pool_&&c.self==context_.self&&Current()==c.self&&r.source_owner==&actual_owner&&actual_owner.driver==&actual_driver&&actual_driver.self==c.self&&actual_owner.dex_file==s.dex_identity&&s.dex_identity==incoming_file&&!IsRegistered(s.dex_identity)&&p.Read(r.old_root,&old)&&old==old_class&&p.Read(r.cache_root,&cache)&&cache==Root(static_cast<unsigned char*>(holder_array)+12+12)&&r.cache_root==s.cache_root;
+  return &p==&pool_&&c.self==context_.self&&Current()==c.self&&r.source_owner==&actual_owner&&actual_owner.driver==&actual_driver&&actual_driver.self==c.self&&actual_owner.dex_file==s.dex_identity&&s.dex_identity==incoming_file&&!IsRegistered(s.dex_identity)&&(inspection_?p.ReadStopped(*inspection_,r.old_root,&old):p.Read(r.old_root,&old))&&old==old_class&&(inspection_?p.ReadStopped(*inspection_,r.cache_root,&cache):p.Read(r.cache_root,&cache))&&cache==Root(static_cast<unsigned char*>(holder_array)+12+12)&&r.cache_root==s.cache_root;
  }
  bool VerifyReadonlyStaged(const Graph&,const native_hierarchy_source_cache::RecordView&)const noexcept override{return false;}
  bool VerifyReadonlyPrepared(const Graph&,const native_hierarchy_source_cache::RecordView&,const Prepared&)const noexcept override{return false;}
@@ -265,7 +296,7 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
    bool FinalRootWindow()const noexcept override{return stopped==1;}
    bool ReadStoppedRoot(const void*r,void**out)const noexcept override{return pool.ReadStopped(*this,r,out);}
    static bool Run(void*raw,void*payload,native_hierarchy_cache::SemanticOperation op)noexcept{
-    auto&s=*static_cast<Inspection*>(raw);void* inspection_thread=Current();const auto saved=Read32(inspection_thread);Put32(inspection_thread,0,92u<<24);Stop(nullptr,"pipeline-cache-role-inspection",true);
+    auto&s=*static_cast<Inspection*>(raw);void* inspection_thread=Current();const auto saved=Read32(inspection_thread);Put32(inspection_thread,0,92u<<24);Stop(nullptr,"pipeline-cache-role-inspection",true);assert(!s.pool.ReadyForSourceAccess());
     modern_field_metadata::ReadContext maps{&s,[](void*,const void*p,size_t*out){return method_identity::ReadableMappingExtent(p,out);}};
     const bool entered=s.mapper.EnterSemanticInspection(s,maps);const bool accepted=entered&&op(payload,s.mapper);
     if(entered)s.mapper.LeaveSemanticInspection();Resume(nullptr);Put32(inspection_thread,0,saved);return accepted;
@@ -279,7 +310,7 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
   Input proposal;proposal.strong_original=reinterpret_cast<jclass>(old_class);proposal.after=*d.schema;proposal.before=proposal.after;proposal.before.superclass=pkg+"HierarchyBase;";
   native_hierarchy_source_cache::Mapper absent_mapper(context,pool,*d.metadata,*d.storage,access,nullptr);Inspection absent_inspection(absent_mapper,pool);assert(absent_mapper.BindSemanticInspection(&absent_inspection,Inspection::Run));native_hierarchy_cache::Owner absent_cache;assert(absent_cache.Calibrate(absent_mapper,calibration,112,counts,calibration_witness,&error));native_hierarchy_source_cache::Composite absent_caches(absent_mapper,absent_cache);native_hierarchy_receiver::Preservation missing_receivers(*d.metadata);Authority rejected;Bindings missing{d.metadata,d.roots,Borrow,&allocation,&missing_receivers,&absent_caches};assert(!rejected.Stage(context,&ti,{proposal},missing,&error));
   class FinalFixture final:public native_hierarchy_private_ledger::CleanupOwner {public:bool final=false;mutable unsigned commits=0;bool Verify(void*d,const transaction_root::Holder*h,const source_commit::Plan&p)const noexcept override{return d==&actual_driver&&h==actual_holder&&stopped==1&&!p.old_classes.empty();}bool IsStopped(void*d,const transaction_root::Holder*h)const noexcept override{return final&&d==&actual_driver&&h==actual_holder&&stopped==1;}bool IsFinalWindow(void*d,const transaction_root::Holder*h)const noexcept override{return final&&d==&actual_driver&&h==actual_holder&&stopped==1;}void BeginCommit(const source_commit::Plan&)const noexcept override{++commits;}} final_fixture;
-  Authority authority;Bindings bindings{d.metadata,d.roots,Borrow,&allocation,&receivers,&caches};Authority corrupt_roots;managed_array_corrupt_write=true;assert(!corrupt_roots.Stage(context,&ti,{proposal},bindings,&error));managed_array_corrupt_write=false;assert(!access.Count());if(!authority.Stage(context,&ti,{proposal},bindings,&error)){std::cerr<<error<<"\n";std::abort();}assert(authority.CheckClass(context,proposal.strong_original,proposal.after));assert(managed_array_creations&&managed_array_writes>=public_classes.size());
+  Authority authority;Bindings bindings{d.metadata,d.roots,Borrow,&allocation,&receivers,&caches};Authority corrupt_roots;managed_array_corrupt_write=true;assert(!corrupt_roots.Stage(context,&ti,{proposal},bindings,&error));managed_array_corrupt_write=false;assert(!access.Count());if(!authority.Stage(context,&ti,{proposal},bindings,&error)){std::cerr<<error<<"\n";std::abort();}assert(authority.CheckClass(context,proposal.strong_original,proposal.after));assert(managed_array_creations&&managed_array_writes>=public_classes.size());AllocationIndexProof(*authority.Staged(),pool,old_root);
   CheckHooks checks;assert(native_hierarchy_source_checks::Install(checks,&error));assert(!native_hierarchy_source_checks::Ready(NotifyFailure));native_hierarchy_source_checks::SetFailureObserver(NotifyFailure);assert(native_hierarchy_source_checks::Ready(NotifyFailure));{native_hierarchy_source_checks::Scope scope(&actual_driver,context,*d.roots,authority,SourceRefuse);assert(source_check_proxy(&actual_owner));assert(actual_driver.result==113&&actual_owner.added_methods&&!source_failure_notifications);auto*source_file=actual_owner.dex_file;actual_owner.dex_file=nullptr;assert(!source_check_proxy(&actual_owner)&&actual_driver.result==66);actual_owner.dex_file=source_file;actual_driver.result=113;}
   {native_hierarchy_source_checks::Scope scope(&actual_driver,context,*d.roots,authority,SourceRefuse);const auto notifications=source_failure_notifications;native_hierarchy_source_checks::RefuseActualClass(&actual_owner,JVMTI_ERROR_OUT_OF_MEMORY,"actual typed refusal");assert(actual_driver.result==JVMTI_ERROR_OUT_OF_MEMORY&&source_failure_notifications==notifications+1&&actual_failure_message=="actual typed refusal");actual_driver.result=113;}
   native_hierarchy_source_checks::SetFailureObserver(nullptr);{native_hierarchy_session::Session refused({&actual_driver,context,&hooks,d.metadata,d.roots,&pool,&authority,&allocation,&access,SourceRefuse,NotifyFailure});assert(!refused.Ready()&&!native_hierarchy_session::Session::Current());}native_hierarchy_source_checks::SetFailureObserver(NotifyFailure);

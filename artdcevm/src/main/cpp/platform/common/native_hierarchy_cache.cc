@@ -399,14 +399,19 @@ bool Owner::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_h
  if(p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
  if(semantic_){
   Source source;if(!mapper_->DescribeAllocation(p,&source,e))return false;
-  struct Call {const Owner* owner;native_hierarchy_graph::Prepared prepared;Source source;};Call call{this,p,source};
-  return mapper_->InspectSemantic(&call,[](void* raw,const SourceMapper& m) noexcept {
-   auto& c=*static_cast<Call*>(raw);type_cache::View types;native_cache::View fields,methods;
-   return m.RefreshAllocation(&c.prepared)&&c.source.dex_identity&&c.source.private_token&&
-    m.Get(c.source.cache_root)==c.prepared.cache&&m.OwnsUnpublished(c.prepared,c.source)&&
-    c.owner->Views(c.source,&types,&fields,&methods)&&
-    c.owner->semantic_->Readonly(m.Get(c.source.cache_root),c.source.counts.fields,c.source.counts.methods);
-  })||Fail(e,"Unallocated semantic cache requires exact exclusive private ownership");
+  struct Call {const Owner* owner;native_hierarchy_graph::Prepared prepared;Source source;bool entered=false;const char* refusal=nullptr;};Call call{this,p,source};
+  const bool accepted=mapper_->InspectSemantic(&call,[](void* raw,const SourceMapper& m) noexcept {
+   auto& c=*static_cast<Call*>(raw);c.entered=true;type_cache::View types;native_cache::View fields,methods;
+   const auto refuse=[&](const char* reason){c.refusal=reason;return false;};
+   if(!m.RefreshAllocation(&c.prepared))return refuse("Unallocated semantic cache stopped allocation-root refresh refused");
+   if(!c.source.dex_identity||!c.source.private_token)return refuse("Unallocated semantic cache immutable DEX/private token absent");
+   if(m.Get(c.source.cache_root)!=c.prepared.cache)return refuse("Unallocated semantic cache current source/cache identity differs");
+   if(!m.OwnsUnpublished(c.prepared,c.source))return refuse("Unallocated semantic cache exact private ownership refused");
+   if(!c.owner->Views(c.source,&types,&fields,&methods))return refuse("Unallocated semantic cache stopped type views refused");
+   if(!c.owner->semantic_->Readonly(m.Get(c.source.cache_root),c.source.counts.fields,c.source.counts.methods))return refuse("Unallocated semantic cache original native visitor provenance refused");
+   return true;
+  });
+  return accepted||Fail(e,call.refusal?call.refusal:(call.entered?"Unallocated semantic cache inspection exit refused":"Unallocated semantic cache inspection refused before callback"));
  }
  Source source;type_cache::View types;native_cache::View fields,methods;
  auto actual=p;

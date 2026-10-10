@@ -110,6 +110,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  const modern_field_metadata::FieldMetadata& fields_;const modern_field_storage::Service& storage_;
  native_cache_semantic::Service* semantic_=nullptr;
  const BatchAccess& batch_;const RequiredServices* services_;mutable std::vector<std::unique_ptr<Entry>> entries_;mutable std::vector<RecordView> readonly_;mutable const native_hierarchy_graph::Graph* staged_graph_=nullptr;
+ bool ReadableRootWindow()const noexcept;
  bool Record(const native_hierarchy_graph::Prepared&,RecordView*)const noexcept;
  bool Namespace(const RecordView&,bool linked,bool readonly=false)const noexcept;
  bool Identity(void*,field_copy::CopyClassView*,std::string*)const;

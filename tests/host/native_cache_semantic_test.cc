@@ -105,7 +105,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper,public native_hie
  native_cache_semantic::Service service;
  native_hierarchy_cache::Source source{&incoming_root,this,&incoming,0,{4,4,4}};
  native_hierarchy_graph::Prepared prepared{};
- bool private_window=true,frozen=true,readable=true,change_during_lookup=false,deny_inspection=false,move_during_lookup=false,change_occupancy=false,deny_barrier=false;mutable unsigned inspections=0;unsigned barriers=0;
+ bool private_window=true,frozen=true,readable=true,change_during_lookup=false,deny_inspection=false,move_during_lookup=false,change_occupancy=false,deny_barrier=false,deny_allocation_refresh=false;mutable unsigned inspections=0;unsigned barriers=0;
  Mapper(){calibration.require_exclusive=incoming.require_exclusive=moved.require_exclusive=true;native_cache_semantic::HostFixture::Bind(&service);prepared.source_owner=this;prepared.old_class=old_class;prepared.new_class=replacement;prepared.cache=incoming_root;static evolution::ClassSchema declaration;prepared.declarations=&declaration;}
  void* Get(native_hierarchy_cache::Root root)const noexcept override{return root?*static_cast<void**>(root):nullptr;}
  bool Readable(const void* p,size_t n)const noexcept override{return readable&&p&&n<=sizeof(Fixture);}
@@ -118,7 +118,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper,public native_hie
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override{return true;}
  bool Describe(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source* out,std::string*)const override{*out=source;return true;}
  bool DescribeAllocation(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source* out,std::string*)const override{*out=source;return true;}
- bool RefreshAllocation(native_hierarchy_graph::Prepared* p)const noexcept override{p->cache=incoming_root;return true;}
+ bool RefreshAllocation(native_hierarchy_graph::Prepared* p)const noexcept override{if(deny_allocation_refresh)return false;p->cache=incoming_root;return true;}
  bool FindSource(const native_hierarchy_graph::Prepared&,uint32_t i,native_hierarchy_cache::Root* out,std::string*)const override{
  assert(!exclusive_window);if(i!=1)return false;auto& self=*const_cast<Mapper*>(this);auto& current=*static_cast<Fixture*>(incoming_root);
   assert(current.writes==0&&current.types[1].object==uintptr_t(old_class)&&current.full[1]==uintptr_t(old_class));
@@ -187,6 +187,10 @@ void OwnerTest(){
  Mapper gc;native_hierarchy_cache::Owner moving;auto gcw=gc.Witness();
  assert(moving.Calibrate(gc,&gc.cal_root,0,{4,4,4},gcw,&error));
  auto pre=gc.prepared;pre.new_class=nullptr;pre.source_old_root=&gc.old_class;
+ assert(moving.VerifyAllocation({},pre,&error));
+ gc.deny_allocation_refresh=true;assert(!moving.VerifyAllocation({},pre,&error)&&error=="Unallocated semantic cache stopped allocation-root refresh refused");gc.deny_allocation_refresh=false;
+ gc.private_window=false;assert(!moving.VerifyAllocation({},pre,&error)&&error=="Unallocated semantic cache exact private ownership refused");gc.private_window=true;
+ auto original_token=gc.source.private_token;gc.source.private_token=nullptr;assert(!moving.VerifyAllocation({},pre,&error)&&error=="Unallocated semantic cache immutable DEX/private token absent");gc.source.private_token=original_token;
  assert(moving.VerifyAllocation({},pre,&error));
  gc.move_during_lookup=true;assert(moving.Prepare(gc.prepared,&error));
  assert(gc.incoming_root==&gc.moved&&gc.moved.writes==3&&gc.barriers==1&&gc.incoming.writes==0);

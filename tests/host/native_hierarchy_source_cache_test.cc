@@ -118,6 +118,38 @@ class MissingPrepare final:public RequiredServices {
   assert(mapper.DescribeAllocation(p,&source,&error));assert(!mapper.DescribeAllocation(p,&source,&error));
   assert(!proof.PreparePrivate(batch.record,source,&error));
   assert(proof.VerifyPrivate(batch.record,source,context,pool));
+  // A real non-Runnable Thread cannot borrow ordinary source roots. The
+  // preallocation identity must refresh through the actual owned stopped view.
+  {
+   struct AllocationStop final:source_handle_roots::StoppedReader {
+    bool enabled=true;
+    bool FinalRootWindow()const noexcept override{return enabled&&stopped==1&&Read32(current)!=0;}
+    bool ReadStoppedRoot(const void*,void**)const noexcept override{return false;}
+   } allocation_stop;
+   struct AllocationMaps{const evolution::MappedDexMetadata& dex;} maps{d.mapping};
+   modern_field_metadata::ReadContext bounds{&maps,[](void*raw,const void*address,size_t*out){
+    const auto& m=*static_cast<AllocationMaps*>(raw);const uintptr_t value=uintptr_t(address);
+    if(value>=uintptr_t(thread.data())&&value-uintptr_t(thread.data())<thread.size()){*out=thread.size()-(value-uintptr_t(thread.data()));return true;}
+    if(value>=uintptr_t(m.dex.data_begin)&&value-uintptr_t(m.dex.data_begin)<m.dex.data_size){*out=m.dex.data_size-(value-uintptr_t(m.dex.data_begin));return true;}
+    return HeapExtent(&heap,address,out);
+   }};
+   auto* moved_cache=heap.New(112);std::memcpy(moved_cache,cache,112);
+   assert(pool.Write(batch.record.cache_root,moved_cache));auto pending=p;
+   const auto state=Read32(current);Put32(current,0,92u<<24);Stop(nullptr,"preallocation-owned-stop",true);
+   void* unavailable=nullptr;assert(!pool.Read(batch.record.cache_root,&unavailable)&&!mapper.RefreshAllocation(&pending));
+   assert(mapper.EnterSemanticInspection(allocation_stop,bounds));
+   const auto calls=jni_calls;forbid_allocation=true;
+   assert(mapper.RefreshAllocation(&pending)&&pending.cache==moved_cache&&pending.old_class==old_class&&!pending.new_class);
+   assert(mapper.OwnsUnpublished(pending,source));
+   auto foreign=pending;foreign.source_old_root=batch.record.cache_root;assert(!mapper.RefreshAllocation(&foreign));
+   auto wrong=source;wrong.private_token=&batch;assert(!mapper.OwnsUnpublished(pending,wrong));
+   wrong=source;wrong.dex_identity=&batch;assert(!mapper.OwnsUnpublished(pending,wrong));
+   allocation_stop.enabled=false;assert(!mapper.RefreshAllocation(&pending));allocation_stop.enabled=true;
+   assert(jni_calls==calls);forbid_allocation=false;
+   mapper.LeaveSemanticInspection();Resume(nullptr);Put32(current,0,state);
+   assert(pool.Write(batch.record.cache_root,cache));
+  }
+
   auto wrong_source=source;wrong_source.cache_root=batch.record.old_root;assert(!proof.VerifyPrivate(batch.record,wrong_source,context,pool));
   wrong_source=source;wrong_source.dex_identity=&batch;assert(!proof.VerifyPrivate(batch.record,wrong_source,context,pool));
   wrong_source=source;wrong_source.private_token=&batch;assert(!proof.VerifyPrivate(batch.record,wrong_source,context,pool));

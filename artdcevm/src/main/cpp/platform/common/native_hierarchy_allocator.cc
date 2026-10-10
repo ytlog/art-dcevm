@@ -5,6 +5,7 @@
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/readable_mapping_scope.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include <deque>
 #include <cstring>
@@ -42,6 +43,22 @@ thread_local Capture* capture=nullptr;
 thread_local Batch* active_batch=nullptr;
 struct ScopedCapture {Capture value;ScopedCapture(Service* s,source_handle_roots::Pool* p,void* r,void* allocated,const runnable_jni::Context& c):value{s,p,r,allocated,c,capture}{capture=&value;}~ScopedCapture(){capture=value.previous;}};
 bool Class(const modern_field_metadata::FieldMetadata& m,void* p,field_copy::CopyClassView* out){return m.ClassIdentity(p,out,nullptr);}
+}
+bool FindCurrentAffectedNode(const native_hierarchy_graph::Graph& graph,
+                            const source_handle_roots::Pool& pool,const void* old_root,
+                            size_t* index){
+ if(!index)return false;*index=SIZE_MAX;
+ // No JNI or source callee occurs here. Root slots retain their real GC-updated
+ // objects; only the stable index escapes this fresh mapping/read window.
+ method_identity::ScopedReadableMappings mappings;
+ void* old=nullptr;if(!mappings.Ready()||!pool.Read(old_root,&old)||!old)return false;
+ size_t found=SIZE_MAX;
+ for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];void* current=nullptr;
+  if(!node.class_root.Valid()||!node.class_root.owner->Read(node.class_root.slot,&current)||!current)return false;
+  if(current!=old)continue;
+  if(found!=SIZE_MAX||!node.affected)return false;found=n;
+ }
+ if(found==SIZE_MAX)return false;*index=found;return true;
 }
 bool Service::Bind(HookEngine& h,const modern_field_metadata::FieldMetadata& m,source_handle_roots::Service& roots,const runtime_services::Snapshot& snapshot,Service* out,std::string* error){
  if(!out||!m.Calibrated()||!snapshot.receivers.class_linker){Error(error,"Hierarchy allocator lacks observed ClassLinker and metadata");return false;}
@@ -256,8 +273,7 @@ struct Batch::State final:rooted_hierarchy::Access {
   if(!Dex(Get(cache),index,&record.view.dex)||!evolution::ReadMappedDexDeclarations(record.view.dex,&record.declarations,&declarations_error)){Fail("Actual incoming source declarations unavailable");return nullptr;}
   auto* graph=authority.Staged();field_copy::CopyClassView before{};
   if(!graph||!Class(*service.metadata_,Get(old),&before)||record.declarations.descriptor!=before.descriptor){Fail("Source old Class/incoming descriptor differs");return nullptr;}
-  for(size_t n=0;n<graph->nodes.size();++n)if(graph->nodes[n].klass==Get(old)){record.node=n;break;}
-  if(record.node==SIZE_MAX||!graph->nodes[record.node].affected){Fail("Source allocator class absent from staged affected graph");return nullptr;}
+  if(!FindCurrentAffectedNode(*graph,pool,old,&record.node)){Fail("Source allocator Class has no unique current affected root");return nullptr;}
   record.loader_root=Loader(old);record.allocated_root=Empty();if(!record.loader_root||!record.allocated_root)return nullptr;
   const auto public_original=service.functions_.find(service.class_linker_,context.self,before.descriptor,record.loader_root);
   if(public_original.reference!=uintptr_t(Get(old))){Fail("Original ClassLinker lookup differs from rooted source Class");return nullptr;}
