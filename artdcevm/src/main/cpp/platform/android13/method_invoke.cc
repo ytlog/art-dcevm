@@ -129,7 +129,7 @@ bool ConfigureMethodInvoke(HookEngine& hooks,const DeviceProfile& profile,JNIEnv
   // Independently compare the live header declaration with its named libdexfile override.
   bool default_methods=false;
   if(!ReadCachedDexSupportsDefaultMethods(roots.Get(3),&default_methods,error))return false;
-  auto dex=reinterpret_cast<void*>(Read<uint64_t>(roots.Get(3),offsetof(dex_cache_method_abi::Cache,dex_file)));
+  auto dex=reinterpret_cast<void*>(Read<uint64_t>(roots.Get(3),offsetof(method_cache::LegacyCache,dex_file)));
   const auto map=Read<validation_abi::DexMappingPrefix>(dex,0);
   using Supports=bool(*)(void*);
   auto supports=reinterpret_cast<Supports>(hooks.FindSymbol("libdexfile.so",

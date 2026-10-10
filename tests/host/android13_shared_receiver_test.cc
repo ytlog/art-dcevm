@@ -1,4 +1,5 @@
 #include "platform/android13/runtime_receiver_probe.h"
+#include "platform/common/runtime_receiver_probe.h"
 #include "platform/android13/native_deletion_capabilities.h"
 #include "platform/common/runtime_service_calibration.h"
 #include <cassert>
@@ -68,10 +69,10 @@ int main() {
   assert(output.class_linker==complete.receivers.class_linker&&output.jni_id_manager==complete.receivers.jni_id_manager);
   assert(output.java_vm==complete.receivers.java_vm&&output.thread_list==complete.receivers.thread_list&&output.instrumentation==complete.instrumentation);
  }
- assert(!android13::SetRuntimeFindClassHandler(reinterpret_cast<void*>(0x80),nullptr));
+ assert(!runtime_receiver::SetFindClassHandler(reinterpret_cast<void*>(0x80),nullptr));
  handler_ready=true;void* original=nullptr;
- assert(android13::SetRuntimeFindClassHandler(reinterpret_cast<void*>(0x80),&original)&&handler==reinterpret_cast<void*>(0x80)&&original==reinterpret_cast<void*>(0x90));
- assert(android13::SetRuntimeFindClassHandler(nullptr,nullptr)&&handler==nullptr);
+ assert(runtime_receiver::SetFindClassHandler(reinterpret_cast<void*>(0x80),&original)&&handler==reinterpret_cast<void*>(0x80)&&original==reinterpret_cast<void*>(0x90));
+ assert(runtime_receiver::SetFindClassHandler(nullptr,nullptr)&&handler==nullptr);
  // Formal capability consumers require both native and field deletion keys.
  std::ostringstream unavailable,available;
  android13::WriteNativeDeletionCapabilities(unavailable,false);

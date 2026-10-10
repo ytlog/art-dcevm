@@ -1,10 +1,6 @@
 #include "platform/android13/runtime_receiver_probe.h"
-#include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runtime_service_calibration.h"
 namespace artdcevm::android13 {
-bool SetRuntimeFindClassHandler(void* handler,void** original) {
-  return runtime_receiver::SetFindClassHandler(handler,original);
-}
 bool CalibrateRuntimeReceivers(HookEngine& hooks,JNIEnv* env,RuntimeReceivers* output,
                               std::string* error) {
   if(error)error->clear();

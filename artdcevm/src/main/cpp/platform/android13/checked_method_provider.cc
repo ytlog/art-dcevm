@@ -151,7 +151,7 @@ bool ConfigureCheckedMethodProvider(HookEngine& hooks,const DeviceProfile& profi
   }
   // Preserve the calibrated owned method's valid cache hash slot; the huge ID
   // is invalid in DEX, so the negative probe reaches metadata validation.
-  constexpr uint32_t mask=dex_cache_method_abi::kSlots-1;
+  constexpr uint32_t mask=method_cache::kSlots-1;
   const uint32_t invalid_index=(UINT32_MAX & ~mask) | (index & mask);
   Context unavailable{RuntimeClassLinker(),invalid_index,roots.Slot(1),roots.Slot(2),nullptr,2};
   if(Resolve(unavailable,fail)!=nullptr ||

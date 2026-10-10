@@ -1,7 +1,7 @@
 #include "platform/android13/hierarchy_resolution_hooks.h"
 
 #include <cstddef>
-#include "platform/android13/runtime_receiver_probe.h"
+#include "platform/common/runtime_receiver_probe.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstdint>
 #include "platform/android13/hierarchy_allocation.h"
@@ -78,7 +78,7 @@ bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& pro
   bool reused_find=false;
   for (const auto& entry : entries) {
     if(entry.proxy==reinterpret_cast<void*>(FindProxy) &&
-       SetRuntimeFindClassHandler(entry.proxy,entry.original)) {
+       runtime_receiver::SetFindClassHandler(entry.proxy,entry.original)) {
       reused_find=true;
       continue;
     }
@@ -92,7 +92,7 @@ bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& pro
         continue;
       }
     }
-    if(reused_find)SetRuntimeFindClassHandler(nullptr,nullptr);
+    if(reused_find)runtime_receiver::SetFindClassHandler(nullptr,nullptr);
     for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
       std::string rollback;
       if (!hooks.Remove(*it, &rollback)) *error += "; unhook failed: " + rollback;

@@ -23,10 +23,10 @@ template<class T>T Read(const void* object,size_t offset) {
 }
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
 bool ReadCache(void* cache,uint32_t index,void** output) {
-  return method_cache::ReadCache(33,cache,sizeof(dex_cache_method_abi::Cache),0,index,output);
+  return method_cache::ReadCache(33,cache,sizeof(method_cache::LegacyCache),0,index,output);
 }
 bool ReadMapping(void* cache,evolution::MappedDexMetadata* output,std::string* error) {
-  return dex_file_metadata::ReadCache(33,cache,sizeof(dex_cache_method_abi::Cache),
+  return dex_file_metadata::ReadCache(33,cache,sizeof(method_cache::LegacyCache),
       sizeof(validation_abi::DexMappingPrefix),0,output,error);
 }
 bool ReadReference(void* cache,uint32_t index,evolution::MappedDexMethodReference* output,std::string* error) {
@@ -134,7 +134,7 @@ bool ConfigureDexCacheMethodReader(HookEngine& hooks,const DeviceProfile& profil
   for(jint i=0;i<count;++i) {
     char* name=nullptr;char* signature=nullptr;
     if(ti->GetFieldName(cache_class,field_ids[i],&name,&signature,nullptr)==JVMTI_ERROR_NONE && name && signature) {
-      using C=dex_cache_method_abi::Cache;
+      using C=method_cache::LegacyCache;
       if(std::strcmp(name,"dexFile")==0 && std::strcmp(signature,"J")==0)fields.push_back({field_ids[i],offsetof(C,dex_file)});
       if(std::strcmp(name,"resolvedMethods")==0 && std::strcmp(signature,"J")==0)fields.push_back({field_ids[i],offsetof(C,methods)});
       if(std::strcmp(name,"numResolvedMethods")==0 && std::strcmp(signature,"I")==0)fields.push_back({field_ids[i],offsetof(C,num_methods)});

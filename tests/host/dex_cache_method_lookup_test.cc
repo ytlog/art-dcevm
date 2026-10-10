@@ -1,9 +1,9 @@
-#include "platform/abi/arm64/android13/dex_cache_method_abi.h"
+#include "platform/common/method_cache_lookup.h"
 #include <cassert>
 #include <iostream>
 #include <memory>
 #include <thread>
-namespace g=artdcevm::android13::dex_cache_method_abi;
+namespace g=artdcevm::method_cache;
 namespace modern=artdcevm::method_cache;
 int main() {
   int first,second;void* result=&first;

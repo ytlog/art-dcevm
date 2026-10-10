@@ -1,7 +1,7 @@
 #pragma once
 #include "api/hook_engine.h"
 #include "platform/android13/device_profile.h"
-#include "platform/abi/arm64/android13/dex_cache_method_abi.h"
+#include "platform/common/method_cache_lookup.h"
 #include "evolution/class_schema.h"
 #include "platform/android13/handle_root_scope.h"
 #include <cstdint>

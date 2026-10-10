@@ -34,7 +34,7 @@ bool MissingMethod(const Functions& bound,void* class_handle,void* cache_handle,
   if(!klass || !cache)return Fail(error,"Missing-method error has no class/cache");
   evolution::MappedDexMethodReference reference;
   if(!ReadCachedMethodReference(cache,index,&reference,error))return false;
-  const Signature signature{reinterpret_cast<const void*>(Read<uint64_t>(cache,offsetof(dex_cache_method_abi::Cache,dex_file))),reference.proto_id};
+  const Signature signature{reinterpret_cast<const void*>(Read<uint64_t>(cache,offsetof(method_cache::LegacyCache,dex_file))),reference.proto_id};
   const StringView name{reference.name.data(),reference.name.size()};
   bound.missing(type,HandleValue(class_handle),name,signature);
   return true;

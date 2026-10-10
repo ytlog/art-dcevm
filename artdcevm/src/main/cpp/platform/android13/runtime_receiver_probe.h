@@ -15,8 +15,4 @@ struct RuntimeReceivers {
 // still separately validates its complete fixed Runtime declaration.
 bool CalibrateRuntimeReceivers(HookEngine& hooks,JNIEnv* env,RuntimeReceivers* output,
                               std::string* error);
-// Reuse the process-lifetime FindClass hook for evolution. Setting a handler
-// returns the original platform trampoline; nullptr restores passthrough.
-// Returns false if this observer has not installed its hook.
-bool SetRuntimeFindClassHandler(void* handler,void** original);
 }

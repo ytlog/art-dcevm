@@ -24,3 +24,5 @@ Android 11、12、14、15、16 目前主要通过 `common/` 实现行为，相�
 设备采集库位于工程 assets/runtime_lib 的既有分类目录，不纳入源码提交；原始日志和逐次报告写入已忽略的 `build/evidence/`，验证摘要在 `docs/VERIFICATION.md`。
 
 Android 13 直接使用 `common/field_copy.h`、`common/object_replacement_map.h` 和 `common/retired_*_registry.h` 的公共命名空间；不再为这些公共算法保留版本转发头。`abi/arm64/android13/` 只保留真实的版本声明，不为公共 POD 视图或已有算法重新起版本别名。
+
+Android 13 的固定 Legacy DexCache 仍按 API33 的真实声明和独立校准读取，但直接使用公共 `method_cache::LegacyCache`，不增加别名头。FindClass 演化处理器也直接向公共 `runtime_receiver` 观察者登记和恢复；Android13 的完整 Runtime receiver 校准继续独立保留。
