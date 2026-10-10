@@ -13,6 +13,13 @@ void operator delete[](void* p)noexcept{::operator delete(p);}
 #include "native_owned_batch_test.cc"
 #undef ARTDCEVM_BATCH_BOUNDARY_NAME
 #pragma clang diagnostic pop
+struct CollectionTraceEntry {const char*phase;const void*owner;const void*token;unsigned long long owned,passive;int result;};
+static CollectionTraceEntry collection_diagnostics[1024]{};
+static size_t collection_diagnostic_count=0;
+void OnCollectionDiagnostic(const char*phase,const void*owner,const void*token,unsigned long long owned,unsigned long long passive,int result){
+ assert(!stopped&&collection_diagnostic_count<1024);
+ collection_diagnostics[collection_diagnostic_count++]={phase,owner,token,owned,passive,result};
+}
 namespace graph_window {
 using namespace artdcevm::native_owned_removal;
 std::map<jobject,std::vector<jobject>> managed;
@@ -35,6 +42,7 @@ struct ReadonlyServices final:batch_boundary::CommitServices {
 std::unique_ptr<source_commit::Services> PrepareReadonly(const source_commit::Plan& p,void*,std::string*){assert(!stopped);++batch_boundary::prepared;return std::make_unique<ReadonlyServices>(p);}
 bool Check(JNIEnv* env,jvmtiEnv*,const std::vector<jclass>& actual,const RootedGraph& graph,GraphWindow window,void*,std::string* error){
  if(!schema_mode)assert(graph.partitions.empty());else {assert(graph.mirror&&graph.partitions.size()==2);for(size_t n=0;n<graph.partitions.size();++n){const auto& p=graph.partitions[n];assert(p.holder_index==n&&p.class_count==1&&p.old_classes&&p.new_classes);assert(p.new_classes==batch_boundary::partitions[n].plan.new_classes_root);assert(p.instance_count==(window==GraphWindow::Collected?1u:0u));}}assert(window==(graph_checks==0?GraphWindow::Verified:GraphWindow::Collected));
+ if(window==GraphWindow::Collected){assert(collection_diagnostic_count);const auto&boundary=collection_diagnostics[collection_diagnostic_count-1];assert(!std::strcmp(boundary.phase,"collected-graph-begin")&&boundary.owner==&driver&&boundary.token==&batch_boundary::holder&&boundary.owned&&!boundary.passive);}
  ++graph_checks;if(!injected_rejection.empty()){*error=injected_rejection;return false;}if(actual.size()!=staged.size()||!field_ok){*error="Unstaged child or changed field proof";return false;}
  for(auto klass:actual){size_t matches=0;for(auto candidate:staged)matches+=env->IsSameObject(klass,candidate);if(matches!=1){*error="Class namespace mismatch";return false;}}
  if(schema_mode&&window==GraphWindow::Collected){source_commit::Plan plan;plan.mirror=graph.mirror;plan.new_classes_root=graph.partitions[0].new_classes;
@@ -51,7 +59,7 @@ std::unique_ptr<source_commit::Services> Finalize(const void* holder,const sourc
 bool Collect(void* d,transaction_root::Holder* h){assert(d==&driver&&h==&batch_boundary::holder&&!stopped);if(late_child)field_ok=false;return true;}
 int leaf_mode=0,verification_calls=0,collection_calls=0;
 bool OriginalVerification(void* owner,const transaction_root::Iterator* it){assert(!stopped&&it&&it->holder==&batch_boundary::holder&&owner==&batch_boundary::owners[size_t(it->index)]);++verification_calls;if(!original_ok)recorded=JVMTI_ERROR_FAILS_VERIFICATION;return original_ok;}
-bool OriginalCollection(void* owner,transaction_root::Iterator* it){assert(!stopped&&it&&it->holder==&batch_boundary::holder&&owner==&batch_boundary::owners[size_t(it->index)]);++collection_calls;if(late_child)field_ok=false;if(!collection_ok)recorded=JVMTI_ERROR_OUT_OF_MEMORY;return collection_ok;}
+bool OriginalCollection(void* owner,transaction_root::Iterator* it){assert(collection_diagnostic_count);const auto&boundary=collection_diagnostics[collection_diagnostic_count-1];assert(!std::strcmp(boundary.phase,"original-leaf-enter")&&boundary.owner==owner&&boundary.token==it&&boundary.owned&&!boundary.passive);assert(!stopped&&it&&it->holder==&batch_boundary::holder&&owner==&batch_boundary::owners[size_t(it->index)]);++collection_calls;if(late_child)field_ok=false;if(!collection_ok)recorded=JVMTI_ERROR_OUT_OF_MEMORY;return collection_ok;}
 bool Leaves(){
  for(size_t n=0;n<batch_boundary::owners.size();++n){
   if((leaf_mode==1&&n==0)||leaf_mode==2)continue;
@@ -160,7 +168,7 @@ void Reset(){
  for(auto& owner:owners)owner.driver=&driver;foreign_owner.driver=&driver;
  range={reinterpret_cast<const unsigned char*>(owners.data()),reinterpret_cast<const unsigned char*>(owners.data()+owners.size()),reinterpret_cast<const unsigned char*>(owners.data()+owners.size())};
  transaction_root::Bits b{&bits,2,1};holder={&handle,&range,b,b,b};other_holder=holder;
- depth=bodies=begins=collections=ends=leaf_calls=0;complete=true;reported=JVMTI_ERROR_NONE;
+ depth=bodies=begins=collections=ends=leaf_calls=0;complete=true;reported=JVMTI_ERROR_NONE;collection_diagnostic_count=0;
 }
 void Test(){
  assert(!active);run_original=OriginalRun;collect_original=Collect;collection_leaf_original=Leaf;run_ready=window_ready=installed=true;
@@ -173,6 +181,21 @@ void Test(){
   forbid_final_allocation=false;
   assert(begins==1&&ends==1&&!passive_run&&reported==result&&complete==(mode==0||mode==10));
   assert(bodies==(mode==7?2:1));
+  if(mode==0){
+   const char*expected[]={"original-whole-enter",
+     "passive-boundary-begin","passive-boundary-return","original-leaf-enter","original-leaf-return","passive-return-boundary-begin","passive-return-boundary-return",
+     "passive-boundary-begin","passive-boundary-return","original-leaf-enter","original-leaf-return","passive-return-boundary-begin","passive-return-boundary-return",
+     "passive-collected-begin","passive-collected-return","original-whole-return"};
+   assert(collection_diagnostic_count==std::size(expected));
+   const auto epoch=collection_diagnostics[0].passive;assert(epoch);
+   for(size_t n=0;n<std::size(expected);++n){const auto&entry=collection_diagnostics[n];assert(!std::strcmp(entry.phase,expected[n])&&!entry.owned&&entry.passive==epoch&&entry.token);}
+  }
+  if(mode==3){
+   bool leaf_refused=false;
+   for(size_t n=0;n<collection_diagnostic_count;++n){const auto&entry=collection_diagnostics[n];assert(std::strcmp(entry.phase,"passive-collected-begin"));if(!std::strcmp(entry.phase,"original-leaf-return"))leaf_refused=entry.result==0;}
+   assert(leaf_refused&&collection_diagnostic_count&&collection_diagnostics[collection_diagnostic_count-1].result==0);
+  }
+
   if(mode==0||mode==10)assert(result==JVMTI_ERROR_NONE&&collections==1&&leaf_calls==2);
   if(mode==1)assert(result==JVMTI_ERROR_INVALID_CLASS&&collections==0);
   if(mode==2)assert(result==JVMTI_ERROR_NONE&&collections==0);

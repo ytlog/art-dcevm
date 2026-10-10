@@ -11,6 +11,7 @@
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android13/platform_string_abi.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -25,6 +26,7 @@ using Check=bool(*)(void*);
 using Commit=void(*)(void*,const void*);
 using Structural=jvmtiError(*)(jvmtiEnv*,jint,const jvmtiClassDefinition*);
 struct Item {const Definition* definition;void* validated_owner=nullptr;bool has_virtuals=false;};
+std::atomic<uint64_t> collection_epochs{0};
 struct Request {
  HookEngine* hooks;JNIEnv* env;const Provider* provider;std::vector<Item> items;
  bool committed=false;transaction_root::Holder* holder=nullptr;
@@ -35,6 +37,7 @@ struct Request {
  void* source_driver=nullptr;bool source_run_active=false,refunded=false,publication_started=false;
  size_t completed_validated=0;
  void* verification_owner=nullptr;const transaction_root::Iterator* verification_iterator=nullptr;
+ uint64_t collection_epoch=0;
 };
 thread_local Request* active=nullptr;
 void Phase(const char* text) noexcept {if(active)active->phase=text;}
@@ -89,10 +92,19 @@ struct PassiveRun {
  size_t collections=0;const void* holder=nullptr;jvmtiError result=JVMTI_ERROR_INTERNAL;
  void* self=nullptr;PassiveTrace trace{};
  transaction_root::Holder* leaf_holder=nullptr;transaction_root::Holder leaf_header{};transaction_root::Metadata leaf_metadata{};
- size_t leaves=0;bool leaf_active=false;
+ size_t leaves=0;bool leaf_active=false;uint64_t collection_epoch=0;
  void Refuse(uint8_t reason) noexcept {valid=false;if(!trace.first_failure)trace.first_failure=reason;}
 };
 thread_local PassiveRun* passive_run=nullptr;
+// Ordinary original collection only. No managed values, JNI, source locks or
+// changes to original returns/pending errors. Never called from final Update.
+void CollectionDiagnostic(const char* stage,const void* owner,const void* token,int result=2)noexcept {
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+   "Owned collection phase=%s owner=%p token=%p ownedEpoch=%llu passiveEpoch=%llu result=%d",
+   stage,const_cast<void*>(owner),const_cast<void*>(token),static_cast<unsigned long long>(active?active->collection_epoch:0),
+   static_cast<unsigned long long>(passive_run?passive_run->collection_epoch:0),result);
+}
+
 // A whole-loop `this` is unused in fixed source and may not survive optimisation.
 // Provenance is the real Holder/Iterator owner range, never that receiver.
 void PassiveCollected(const void* holder) noexcept {
@@ -100,7 +112,9 @@ void PassiveCollected(const void* holder) noexcept {
  if(!r.valid||r.collections||!holder){r.Refuse(5);return;}
  ++r.collections;r.holder=holder;r.trace.events.Record(3);
  r.trace.collected_same_thread=current_thread&&current_thread()==r.self;
+ CollectionDiagnostic("passive-collected-begin",r.driver,holder);
  r.observer.collected(r.driver,holder,r.observer.state);
+ CollectionDiagnostic("passive-collected-return",r.driver,holder);
 }
 jvmtiError InvokeOriginalRun(void* driver){
  if(passive_run){auto& r=*passive_run;r.trace.events.Record(2);if(r.trace.original_calls!=UINT32_MAX)++r.trace.original_calls;
@@ -141,14 +155,27 @@ bool PassiveBoundary(void* owner,const transaction_root::Iterator* iterator,bool
  r.leaf_holder=it.holder;r.leaf_header=header;r.leaf_metadata=metadata;return true;
 }
 bool CollectionOriginal(void* owner,transaction_root::Iterator* iterator) {
- if(!passive_run)return collection_leaf_original(owner,iterator);
- auto& r=*passive_run;const bool bound=PassiveBoundary(owner,iterator);
+ if(!passive_run){
+  CollectionDiagnostic("original-leaf-enter",owner,iterator);
+  const bool result=collection_leaf_original(owner,iterator);
+  CollectionDiagnostic("original-leaf-return",owner,iterator,result);return result;
+ }
+ auto& r=*passive_run;CollectionDiagnostic("passive-boundary-begin",owner,iterator);
+ const bool bound=PassiveBoundary(owner,iterator);
+ CollectionDiagnostic("passive-boundary-return",owner,iterator,bound);
  if(!bound)r.Refuse(11);
  const bool enclosing=r.leaf_active;r.leaf_active=true;
  struct Close {PassiveRun& run;bool previous;~Close(){run.leaf_active=previous;}} close{r,enclosing};
+ CollectionDiagnostic("original-leaf-enter",owner,iterator);
  const bool result=collection_leaf_original(owner,iterator);
+ CollectionDiagnostic("original-leaf-return",owner,iterator,result);
  if(!result){r.Refuse(6);return false;}
- if(bound&&r.valid&&!PassiveBoundary(owner,iterator,true))r.Refuse(11);
+ if(bound&&r.valid){
+  CollectionDiagnostic("passive-return-boundary-begin",owner,iterator);
+  const bool returning=PassiveBoundary(owner,iterator,true);
+  CollectionDiagnostic("passive-return-boundary-return",owner,iterator,returning);
+  if(!returning)r.Refuse(11);
+ }
  if(bound&&r.valid){++r.leaves;if(r.leaves==r.leaf_metadata.count)PassiveCollected(r.leaf_holder);}
  return result;
 }
@@ -338,7 +365,10 @@ bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
  if(!active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Collection lacks completed source verification witness");
  if(!CollectionOriginal(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;}
  if(++active->collected_count!=active->items.size())return true;
- if(!GuardGraph(driver,holder,GraphWindow::Collected))return false;
+ CollectionDiagnostic("collected-graph-begin",driver,holder);
+ const bool graph=GuardGraph(driver,holder,GraphWindow::Collected);
+ CollectionDiagnostic("collected-graph-return",driver,holder,graph);
+ if(!graph)return false;
  active->graph_sealed=true;return true;
 }
 bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
@@ -352,11 +382,17 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
 }
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
- const bool original_result=collect_original(driver,raw);PassiveWhole(raw,original_result);
+ CollectionDiagnostic("original-whole-enter",driver,raw);
+ const bool original_result=collect_original(driver,raw);
+ CollectionDiagnostic("original-whole-return",driver,raw,original_result);
+ PassiveWhole(raw,original_result);
  if(!original_result){RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
  if(!active||!active->provider->closed_graph)return true;
  if(active->graph_sealed)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf collection Holder mismatch");
- if(!GuardGraph(driver,raw,GraphWindow::Collected))return false;
+ CollectionDiagnostic("collected-graph-begin",driver,raw);
+ const bool graph=GuardGraph(driver,raw,GraphWindow::Collected);
+ CollectionDiagnostic("collected-graph-return",driver,raw,graph);
+ if(!graph)return false;
  active->graph_sealed=true;return true;
 }
 void NotifyCommit(const source_commit::Plan& plan,void* owner) noexcept {
@@ -394,7 +430,7 @@ jvmtiError RunOwned(void* driver){
 jvmtiError SourceRun(void* driver){
  if(!passive_observer.begin)return RunOwned(driver);
  if(passive_run){passive_run->trace.events.Record(5);passive_run->Refuse(2);return RunOwned(driver);}
- PassiveRun observed{passive_observer,driver};passive_run=&observed;
+ PassiveRun observed{passive_observer,driver};observed.collection_epoch=collection_epochs.fetch_add(1,std::memory_order_relaxed)+1;passive_run=&observed;
  // One named CurrentThread leaf, no JNI/managed decoding or allocation. The
  // independent calibration consumer proves the receiver and mapped extent.
  void* self=current_thread?current_thread():nullptr;
@@ -551,7 +587,7 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
   if(Lifecycle(provider)&&(!CompleteLifecycle(provider)||!provider.schema_evolution||!provider.closed_graph||!run_ready)){
     if(error)*error="Source Session requires complete lifecycle and installed original Run";return JVMTI_ERROR_NOT_AVAILABLE;
   }
-  Request request{&hooks,env,&provider,{},false,nullptr,{}};bool removed=false;
+  Request request{&hooks,env,&provider,{},false,nullptr,{}};request.collection_epoch=collection_epochs.fetch_add(1,std::memory_order_relaxed)+1;bool removed=false;
   request.jvmti=jvmti;
   if(provider.closed_graph&&(!window_ready||env->GetJavaVM(&request.vm)!=JNI_OK||!request.vm)){
     if(error)*error="Named rejectable graph window is not bound";return JVMTI_ERROR_NOT_AVAILABLE;

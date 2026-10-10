@@ -11,7 +11,21 @@ out = root / 'build/evidence/host/native-owned-batch'
 out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_owned_graph_window_test'
 (out/'android').mkdir(exist_ok=True)
-(out/'android/log.h').write_text('#pragma once\n#define ANDROID_LOG_ERROR 6\n#define ANDROID_LOG_INFO 4\ninline int __android_log_print(int,const char*,const char*,...){return 0;}\n')
+(out/'android/log.h').write_text(r'''#pragma once
+#include <cstdarg>
+#include <cstdint>
+#include <cstring>
+#define ANDROID_LOG_ERROR 6
+#define ANDROID_LOG_INFO 4
+void OnCollectionDiagnostic(const char*,const void*,const void*,unsigned long long,unsigned long long,int);
+inline int __android_log_print(int,const char*,const char* format,...){
+ if(std::strcmp(format,"Owned collection phase=%s owner=%p token=%p ownedEpoch=%llu passiveEpoch=%llu result=%d"))return 0;
+ va_list arguments;va_start(arguments,format);
+ const char*phase=va_arg(arguments,const char*);const void*owner=va_arg(arguments,void*);const void*token=va_arg(arguments,void*);
+ const auto owned=va_arg(arguments,unsigned long long),passive=va_arg(arguments,unsigned long long);const int result=va_arg(arguments,int);va_end(arguments);
+ OnCollectionDiagnostic(phase,owner,token,owned,passive,result);return 0;
+}
+''')
 sources = ['native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit', 'native_removal_policy', 'native_schema_policy', 'native_method_evolution_policy',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'source_handle_roots', 'native_cache_service', 'modern_method_services',
