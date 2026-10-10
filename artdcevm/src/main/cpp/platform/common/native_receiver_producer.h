@@ -11,7 +11,14 @@ namespace artdcevm::receiver_guard {
 // Native producer for the actual listener thread. Geometry and method identity
 // must have independent public source calibration before Bind; Bind itself
 // neither seals BytecodeSource nor supplies a dispatch/publication permission.
-class SourceProducer final {
+class SourceProducer;
+class StoppedCodeReader {
+ public:StoppedCodeReader(const StoppedCodeReader&)=delete;StoppedCodeReader&operator=(const StoppedCodeReader&)=delete;
+ virtual ~StoppedCodeReader()=default;
+ virtual bool Code(void*,void*,CodeView*,const modern_field_metadata::ReadContext&)const noexcept=0;
+ private:friend class SourceProducer;StoppedCodeReader()=default;
+};
+class SourceProducer final:public StoppedCodeReader {
  public:
  bool Bind(HookEngine&,stack_visitor_service::Declaration,const code_item_metadata::Layout&,
            const modern_field_metadata::FieldMetadata&,void*actual_class_linker,
@@ -23,7 +30,7 @@ class SourceProducer final {
  bool Code(void*thread,void*method,CodeView*)const noexcept;
  // Explicit owned stopped/read window; no OS extent fallback. This supplies
  // immutable source bytes only, never an async-frame/publication permission.
- bool Code(void*thread,void*method,CodeView*,const modern_field_metadata::ReadContext&)const noexcept;
+ bool Code(void*thread,void*method,CodeView*,const modern_field_metadata::ReadContext&)const noexcept override;
  bool Frame(void*thread,void*method,uint32_t pc,const void**)const noexcept;
  private:
  template<class Base> bool Walk(void*,void*,uint32_t,const void**)const noexcept;

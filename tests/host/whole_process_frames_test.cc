@@ -15,7 +15,7 @@ bool runtime_frame=false,runtime_bad_geometry=false,runtime_bad_successor=false,
 native_runtime_frame::FrameInfo runtime_info{native_runtime_frame::Size(0x7ff00000u,0),0x7ff00000u,0};
 void* current_method=nullptr;
 alignas(8) uint32_t header[2]{};
-struct Quick {void* method=&compiled_method;uint32_t values[14]{123,345};} quick;
+struct Quick {void* method=&compiled_method;uint32_t values[14]{123,345};};alignas(16) Quick quick;
 std::array<uint32_t,8> stack_row{{0,0,11,0,0,1,1,1}};
 std::array<uint32_t,6> inline_row{{0,12,0,0,0,3}};
 uint32_t dexmask=3;uint32_t dexmaps[2]{1,2},catalog[4]{1,3,1,4};

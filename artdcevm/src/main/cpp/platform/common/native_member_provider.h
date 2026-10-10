@@ -25,6 +25,9 @@ struct Dependencies {
  const native_schema_policy::GuardVerifier* schema_guards=nullptr;
  // Borrowed for the entire synchronous Run; owner refreshes its stopped-window view.
  const modern_field_metadata::ReadContext* read_context=nullptr;
+ native_frame_root_relocation::Proof* frame_root_proof=nullptr;
+ const native_typed_heap_walk::RootProvenance* frame_roots=nullptr;
+ const whole_process_frames::RecaptureInterface* frame_root_binding=nullptr;
 };
 // One common algorithm prepares complete Method11/12 tables, reflective maps
 // and final native commit services. It is used by production and debug owners.

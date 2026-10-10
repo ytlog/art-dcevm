@@ -30,6 +30,12 @@ setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  /
 prefix=(out/'pipeline_fixture.inc').read_text().replace('OriginalRoots(self,&mover,0);','OriginalRoots(self,&mover,0);for(auto* field:new_fields)field->declaring_class=uint32_t(uintptr_t(relocated_new));for(size_t n=0;n<3;++n)reinterpret_cast<abi::arm64::android12::Method12*>(uintptr_t(new_class->methods)+8+32*n)->declaring_class=uint32_t(uintptr_t(relocated_new));')
 prefix=prefix.replace('HierarchyInserted;','HierarchyBase;')
 (out/'pipeline_fixture.inc').write_text(prefix)
+# HandleScopeVisitRoots is also an original GC visitor over a Native thread.
+# Preserve actual TLS/root traversal and accept the fixture's independently
+# calibrated Native state while StartGC waits for the preceding collector.
+walker=out/'source_cache_walker_fixture.inc'
+walker.write_text(walker.read_text().replace('assert(self==thread.data()&&flags==0&&Read32(self)==0);','assert(self==thread.data()&&flags==0&&(Read32(self)==0||Read32(self)==92u<<24));'))
+
 native=(out/'native_commit_fixture.inc').read_text();native=native.replace('void ForEach(void* receiver,','void(*boot_enumeration)(void*,void(*)(void*,void*),void*)=nullptr;\nvoid ForEach(void* receiver,').replace('assert(receiver==&thread_list&&stopped&&locked);action(thread.data(),data);', 'assert(receiver==&thread_list&&stopped&&locked);if(boot_enumeration){boot_enumeration(receiver,action,data);return;}action(thread.data(),data);')
 (out/'native_commit_fixture.inc').write_text(native)
 (out/'pipeline_setup.inc').write_text((out/'pipeline_setup.inc').read_text().replace('d.schema->superclass==pkg+"HierarchyInserted;"','d.schema->superclass==pkg+"HierarchyBase;"'))

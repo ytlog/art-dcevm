@@ -66,6 +66,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_boot_aot_source.cc
     platform/common/native_boot_method_catalog.cc
     platform/common/native_interface_dispatch.cc
+    platform/common/native_frame_root_relocation.cc
     platform/common/native_required_cleanup.cc
         platform/common/native_schema_run_state.cc
         platform/common/source_cache_public_roles.cc

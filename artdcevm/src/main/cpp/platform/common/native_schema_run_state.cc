@@ -16,13 +16,14 @@ namespace {
 // Report fields are copied scalars; no stack memory, JNI or live frame reads.
 void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noexcept{
   __android_log_print(ANDROID_LOG_INFO,"artdcevm",
-    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u mapDexPc=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu",
+    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u mapDexPc=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu rootFailure=%u rootStreamFailure=%u rootFrames=%zu rootSlots=%zu rootCallbacks=%zu",
     int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
     reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
     reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
     int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index,
     frames.failure_map_row,frames.failure_map_mask,frames.failure_map_index,frames.failure_map_dex_pc,frames.failure_map_dex_regs,
-    frames.failure_inline_begin,frames.failure_inline_end,frames.failure_map_capacity);
+    frames.failure_inline_begin,frames.failure_inline_end,frames.failure_map_capacity,
+    frames.root_failure,frames.root_stream_failure,frames.root_frames,frames.root_slots,frames.root_callbacks);
   if(frames.aot_declaring_class&&frames.aot_method&&frames.aot_descriptor)
     __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned stopped AOT identity owner=%s method=%s descriptor=%s",
       frames.aot_declaring_class,frames.aot_method,frames.aot_descriptor);
@@ -36,6 +37,19 @@ struct RunState::State {
  std::unique_ptr<native_hierarchy_typed_storage::Proof> typed_storage;
  native_boot_method_catalog::Rooted boot_catalog;
  std::unique_ptr<native_boot_aot_unaffected::Source> boot_unaffected;
+ std::unique_ptr<native_interface_dispatch::Source> interface_dispatch;
+ std::unique_ptr<native_frame_root_relocation::Proof> frame_roots;
+ whole_process_frames::FrameRootBinding frame_root_binding;
+ prepared_roots::Resolver frame_root_resolver;
+ void RevokeFrameOwners()noexcept {
+  frame_storage.frame_roots=nullptr;frame_storage.root_provenance=nullptr;
+  frame_storage.dispatch=nullptr;frame_storage.continuation=nullptr;
+  frame_storage.source_code=nullptr;
+  frame_storage.frame_root_resolver=nullptr;frame_storage.boot_unaffected=nullptr;
+  d.members.frame_root_proof=nullptr;d.members.frame_roots=nullptr;d.members.frame_root_binding=nullptr;
+  frame_root_binding.Clear();frame_root_resolver={};
+  interface_dispatch.reset();frame_roots.reset();boot_unaffected.reset();
+ }
  whole_process_frames::Service::Prepared frame_storage;
  std::unique_ptr<native_source_stop::Session> stop;
  std::unique_ptr<native_required_cleanup::Service> cleanup;
@@ -73,6 +87,7 @@ struct RunState::State {
  }
  static bool RootRead(void* raw,size_t slot,void** value){
   auto& s=*static_cast<State*>(raw);if(!slot||slot==SIZE_MAX)return false;
+  if(s.inspection_roots.FinalRootWindow())return s.inspection_roots.ReadStoppedRoot(reinterpret_cast<const void*>(slot),value);
   RootReader stopped(s);
   return stopped.FinalRootWindow()?stopped.ReadStoppedRoot(reinterpret_cast<const void*>(slot),value):
       RootEpoch(raw)&&s.pool.Read(reinterpret_cast<const void*>(slot),value);
@@ -147,7 +162,7 @@ RunState::~RunState(){
  auto&s=*state_;Require(s.phase==State::Phase::Constructed||s.phase==State::Phase::Ended);
  s.d.registry->Clear();s.facade.reset();s.hierarchy.reset();
  if(s.phase==State::Phase::Constructed){if(s.ledger)s.ledger->ReleaseAfterRun(false);if(s.loading)s.loading->Complete(false);}
- s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
+ s.RevokeFrameOwners();
  s.caches.reset();s.mapper.reset();s.ledger.reset();s.loading.reset();s.cleanup.reset();s.stop.reset();
  s.authority.Clear(s.context.env);
  if(s.typed_storage)s.typed_storage->Clear(s.context.env);
@@ -166,6 +181,27 @@ struct RunState::StoppedAttempt {
  enum class Failure {None,Allocation,Unexpected};
  Failure failure=Failure::None;
 };
+struct RunState::FrameCensusAttempt {
+ RunState& run;whole_process_frames::Service::Census census;
+};
+bool RunState::CensusFramesStopped(void*raw,native_source_stop::Session&stop)noexcept {
+ auto&request=*static_cast<FrameCensusAttempt*>(raw);auto&r=request.run;auto&s=*r.state_;
+ if(current!=&r||s.inspection||!s.plan||!stop.IsStopped(s.context.self))return false;
+ s.inspection=&stop;
+ // The temporary stop's resolved pointers must expire before the original
+ // StartGC resumes Runnable and permits another collection. The final stop
+ // resolves the retained root slots again before any consumer reads them.
+ struct Reset {State& state;~Reset(){state.d.registry->Invalidate();state.inspection=nullptr;}} reset{s};
+ try{
+  request.census.failure="census-current-root-resolution-or-mapping-refused";
+  if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,nullptr)||!s.d.registry->Resolve())return false;
+  const auto roots=s.d.registry->Final();
+  if(!s.plan_roots.CanRefresh(roots))return false;
+  s.plan_roots.Refresh(roots);
+  request.census=s.d.frames->CensusRecovery(stop,s.context.self,*s.d.members.cache,s.frame_storage,s.inspection_context);
+  return request.census.accepted;
+ }catch(...){return false;}
+}
 bool RunState::PrepareOriginalWaiting(void*raw,native_source_stop::Session&stop)noexcept{
  auto*a=static_cast<StoppedAttempt*>(raw);
  if(!a||!a->run||current!=a->run||a->run->state_->stop.get()!=&stop)return false;
@@ -206,9 +242,28 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
  checkpoint("publication-plan-return");checkpoint("native-root-registration-begin");
  const auto collect=s.d.registry->Collect();
- if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||!s.typed_storage||!s.typed_storage->Capture(p,collect,e)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e))||!s.d.registry->Freeze())return Fail(e,"Ordinary schema roots did not register completely");
+ if(!rooted_schema_plan::CollectBindings(&p,collect,&s.plan_roots)||!s.ledger->CollectManagedRoots(collect)||!s.authority.CollectManagedRoots(collect)||!s.typed_storage||!s.typed_storage->Capture(p,collect,e)||(s.d.guards&&!s.d.guards->CollectManagedRoots(collect,e)))return Fail(e,"Ordinary schema roots did not register completely");
+ if(s.boot_unaffected&&s.d.frame_roots){
+  s.frame_roots=std::make_unique<native_frame_root_relocation::Proof>();
+  if(!s.frame_roots->PrepareIdentity(p,collect))return Fail(e,"Ordinary frame relocation Plan roots did not register");
+  const auto&layout=s.d.members.method_model->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+  s.interface_dispatch=std::make_unique<native_interface_dispatch::Source>(*s.d.members.metadata,layout,s.boot_catalog,*s.ledger);
+  s.frame_storage.source_code=s.d.boot_code;
+ }
+ if(!s.d.registry->Freeze())return Fail(e,"Ordinary schema root registry could not freeze");
  checkpoint("native-root-registration-return");
- ordinary.reset();checkpoint("source-stop-begin");
+ ordinary.reset();
+ if(s.frame_roots){
+  FrameCensusAttempt request{*this,{}};native_source_stop::Session inspection(*s.d.stop);
+  const bool counted=s.d.stop->RequiresOriginalWaiting()?inspection.InspectOriginalWaiting(s.context.self,s.extent,&request,CensusFramesStopped):inspection.Inspect(s.context.self,s.extent,&request,CensusFramesStopped);
+  if(!counted)return Fail(e,request.census.accepted?inspection.Failure():request.census.failure);
+  size_t units=0;for(const auto&method:s.d.boot_catalog->Methods())units=std::max(units,method.dex.size()/2);
+  units=std::max(units,request.census.code_units);
+  if(!s.frame_roots->ReserveFramesSlots(request.census.frames,request.census.slots)||!s.frame_storage.PrepareContinuations(request.census.frames,units,request.census.tries,request.census.handlers))return Fail(e,"Ordinary complete frame/continuation capacity preparation refused");
+  s.frame_storage.frame_roots=s.frame_roots.get();s.frame_storage.root_provenance=s.d.frame_roots;
+  s.frame_storage.dispatch=s.interface_dispatch.get();s.frame_storage.continuation=s.boot_unaffected.get();
+ }
+ checkpoint("source-stop-begin");
  if(s.d.stop->RequiresOriginalWaiting()){
   StoppedAttempt attempt{this,e};
   const bool accepted=s.stop->BeginOriginalWaiting(s.context.self,s.extent,&attempt,PrepareOriginalWaiting);
@@ -241,6 +296,11 @@ bool RunState::PrepareStopped(std::string*e){
  if(!s.plan_roots.CanRefresh(resolve)||!s.ledger->CanRefresh(resolve)||!s.authority.CanRefresh(resolve)||!s.typed_storage||!s.typed_storage->CanRefresh(resolve))return Fail(e,"Stopped schema root locations cannot refresh");
  s.plan_roots.Refresh(resolve);s.ledger->Refresh(resolve);s.authority.Refresh(resolve);
  s.typed_storage->Refresh(resolve);
+ if(s.frame_roots){
+  s.frame_root_resolver=resolve;s.frame_storage.frame_root_resolver=&s.frame_root_resolver;
+  if(!s.d.frames->BindFrameRoots(*s.stop,s.context.self,*s.d.members.cache,s.frame_storage,p,s.read_context,*s.frame_roots,&s.frame_root_binding))return Fail(e,"Collected actual frame root binding refused");
+  s.d.members.frame_root_proof=s.frame_roots.get();s.d.members.frame_roots=s.d.frame_roots;s.d.members.frame_root_binding=&s.frame_root_binding;
+ }
  if(!s.incoming.Refresh()||(s.d.guards&&!s.d.guards->RefreshManagedRoots(p,resolve))||!s.cleanup->PrepareCollected(p,e)||!s.hierarchy->Collected(p,e))return false;
  if(s.d.guards&&!s.d.guards->UseHierarchyAuthority(this))return Fail(e,"Frozen schema guard rejected the actual sealed hierarchy authority");
  auto native=s.d.provider->Prepare(p,s.d.members,e);if(!native)return false;
@@ -301,7 +361,7 @@ void RunState::CompleteRefund(void*raw)noexcept{
  s.d.registry->Clear();Require(s.pool.DropManagedReferences());
  if(s.typed_storage)s.typed_storage->Clear(s.context.env);
  if(s.d.refund_roots)s.d.refund_roots(s.d.refund_roots_owner);
- s.frame_storage.boot_unaffected=nullptr;s.boot_unaffected.reset();
+ s.RevokeFrameOwners();
  s.cleanup.reset();s.stop.reset();s.phase=State::Phase::Refunded;
 }
 bool RunState::End(void*d,bool success)noexcept{

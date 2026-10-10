@@ -112,7 +112,8 @@ std::unique_ptr<source_commit::Services> Service::Prepare(const source_commit::P
     (d.expected_removal==Removal::kFieldsOnly&&(!fields||methods)))return fail("Native member removal differs from the proven transaction shape");
  if(!reflection_->Validate(*mapping_,error))return nullptr;
  modern_source_commit::Dependencies dependencies;dependencies.observed=d.runtime;dependencies.metadata=d.metadata;
- dependencies.read_context=d.read_context;dependencies.fields=d.fields;dependencies.prepare_field_copy=bool(d.schemas);dependencies.require_initialized_transfer=bool(d.schemas);
+ dependencies.read_context=d.read_context;dependencies.frame_root_proof=d.frame_root_proof;
+ dependencies.frame_roots=d.frame_roots;dependencies.frame_root_binding=d.frame_root_binding;dependencies.fields=d.fields;dependencies.prepare_field_copy=bool(d.schemas);dependencies.require_initialized_transfer=bool(d.schemas);
  dependencies.allow_removed_ancestors=std::any_of(schemas_.begin(),schemas_.end(),[](const auto& schema){return schema.Requires(native_schema_policy::GuardKind::HierarchyGraph);});
  dependencies.diagnostics=d.diagnostics;dependencies.caches=d.cache;dependencies.reflective={ReflectReady,ReflectUpdate,this,ReflectRetire,ReflectRebindStatics};
  // Preparation is readonly, including the persistent retirement registries.

@@ -29,6 +29,10 @@ bool Extent(void*owner,const void*value,size_t*out)noexcept {
  if(value==&runtime_method){*out=sizeof(runtime_method);return true;}
  const auto address=uintptr_t(value),begin=uintptr_t(runtime_stack);
  if(address>=begin&&address<begin+sizeof(runtime_stack)){*out=begin+sizeof(runtime_stack)-address;return true;}
+ struct Region {const void*data;size_t bytes;};
+ const Region regions[]={{stack_row.data(),sizeof(stack_row)},{inline_row.data(),sizeof(inline_row)},
+  {&dexmask,sizeof(dexmask)},{dexmaps,sizeof(dexmaps)},{catalog,sizeof(catalog)},{&quick,sizeof(quick)},{header,sizeof(header)}};
+ for(const auto&region:regions){const auto first=uintptr_t(region.data);if(address>=first&&address-first<region.bytes){*out=region.bytes-(address-first);return true;}}
  return false;
 }
 }
@@ -48,6 +52,8 @@ int main(){
   {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));modern_field_metadata::ReadContext context{&owner,Extent};
    runtime_method.dex_method_index=UINT32_MAX;runtime_frame=true;
    const auto queries=method_identity::MappingOsQueries();forbid_native_allocation=true;async_calls=0;
+   aot=true;auto census=scanner.CensusRecovery(owner,&self,cache,storage,context);
+   assert(census.accepted&&census.frames>=3&&census.slots==0&&async_calls==0);aot=false;
    auto report=scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&proof);
    assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.async_frames==1&&report.runtime_frames==1&&async_calls==2&&proof.Validate(plan));
    source_commit::Plan other;assert(!proof.Validate(other));

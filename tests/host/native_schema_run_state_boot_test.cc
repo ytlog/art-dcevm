@@ -44,6 +44,7 @@ int main(int argc,char**argv){
   for(void* klass:{static_cast<void*>(old_class),static_cast<void*>(new_class),static_cast<void*>(parent_class)}){Put32(klass,offsetof(class_metadata::Class17,vtable),uint32_t(uintptr_t(empty_vtable)));Put32(klass,offsetof(class_metadata::Class17,object_size),64);Put32(klass,offsetof(class_metadata::Class17,class_size),160);Put32(klass,sizeof(class_metadata::Class17),0);}
   receiver_guard::SourceProducer boot_source;assert(boot_source.Bind(owner_hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kTagged,*d.metadata,&linker,Current,&error));
   deps.mapping.refresh_stopped=BootRefreshMaps;
+  native_typed_heap_walk::RootProvenance frame_provenance;assert(frame_provenance.Bind(owner_hooks,&::runtime,Current,&error));assert(frame_provenance.CalibrateLocks(aggregate_context,&error)&&frame_provenance.LocksCalibrated());deps.frame_roots=&frame_provenance;
   deps.boot_catalog=&boot_catalog;deps.boot_vtables=&vtables;deps.boot_code=&boot_source;
   native_schema_policy::Plan policy;assert(native_schema_policy::Plan::Prepare(proposal.before,proposal.after,&policy,&error));
   std::vector<native_schema_policy::Plan> policies{policy};
@@ -83,18 +84,38 @@ int main(int argc,char**argv){
   if(!std::strcmp(boot_case,"body")){uint32_t code_offset=0;assert(BootCodeOffset(boot_bytes,0,&code_offset));boot_bytes[code_offset+17]=0x10;}
   if(!std::strcmp(boot_case,"prefix"))Put32(session_allocated,offsetof(class_metadata::Class17,object_size),4);
   if(!std::strcmp(boot_case,"declaring"))Put32(boot_compiled_method,0,uint32_t(uintptr_t(old_class)));
+  boot_census_registry=&roots;boot_census_plan=&plan;boot_runtime_root=old_class;const size_t walks_before_collected=boot_frame_walks;
   native_owned_removal::RootedGraph graph;graph.holder=&holder;assert(transaction_root::ReadMetadata(holder,1,transaction_root::OwnerFamily::kAndroid15,&graph.metadata));
-  if(!run->Collected(graph,plan,&error)){std::cerr<<"matched Collected: "<<error<<"\n";assert(*boot_case);if(!std::strcmp(boot_case,"mask"))assert(error=="boot-AOT-current-reference-roots-not-empty");if(!std::strcmp(boot_case,"body"))assert(error=="boot-AOT-source-public-body-DEX-or-PC-mismatch");if(std::strcmp(boot_case,"declaring"))assert(run->Frames().frames==1);else assert(!run->Frames().frames);run->Refund();class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);assert(SchemaTypedGlobals()==typed_globals_before_begin);std::cout<<"Actual concrete Boot AOT prepublication refusal/rollback case="<<boot_case<<" error="<<error<<"\n";return true;}
-  assert(!*boot_case);
+  if(!run->Collected(graph,plan,&error)){
+   std::cerr<<"matched Collected: "<<error<<" streams="<<boot_original_root_streams<<" walks="<<boot_frame_walks<<"\n";
+   struct Rejection{const char*name;const char*reason;size_t frames;};
+   const Rejection expected[]{
+    {"pc","whole-frame-original-versus-complete-map-DexPc-mismatch",0},
+    {"value","whole-frame-original-versus-physical-value-mismatch",1},
+    {"mask","whole-census-registermask-unreadable",0},
+    {"cursor","whole-frame-source-owner-or-native-cursor-lost-after-map",1},
+    {"body","whole-continuation-actual-younger-receiver-unproved",1},
+    {"prefix","whole-continuation-actual-younger-receiver-unproved",1},
+    {"declaring","Ordinary schema roots did not register completely",0}};
+   const Rejection*match=nullptr;for(const auto&candidate:expected)if(!std::strcmp(boot_case,candidate.name))match=&candidate;
+   assert(match&&error==match->reason&&run->Frames().frames==match->frames);
+   assert(!boot_original_root_streams&&!boot_root_writebacks&&!replaced);
+   run->Refund();const auto refunded=roots.Final();assert(refunded.get&&refunded.get(refunded.owner,0)==nullptr);
+   const source_commit::Plan*refunded_plan=nullptr;assert(!run->Finalize(&holder,&refunded_plan)&&!refunded_plan);
+   class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);
+   assert(!gc&&!disabled&&!stopped&&SchemaTypedGlobals()==typed_globals_before_begin);
+   std::cout<<"Actual concrete Boot AOT prepublication refusal/rollback case="<<boot_case<<" error="<<error<<"\n";return true;
+  }
+  assert(!*boot_case);assert(boot_census_moves==1&&plan.new_classes[0]==boot_census_moved&&boot_census_invalidations==1);assert(boot_frame_walks>=walks_before_collected+2&&boot_original_root_streams>=1);
   matched_plan=&plan;
   publication_proxy(&linker,{uintptr_t(cache)},{uintptr_t(app_loader)});
   owner_disable_proxy(&owner_heap,thread.data());OwnerNative(thread.data());unsigned char carrier;owner_stop_proxy(&carrier,s::kFinalCause,true);
-  const source_commit::Plan* final_plan=nullptr;forbid_provider_allocation=true;
-  auto facade=run->Finalize(&holder,&final_plan);assert(facade&&final_plan==&plan);assert(mappings.final_refreshes==1);const auto final_os_queries=method_identity::MappingOsQueries();
-  assert(facade->Validate(plan));
+  const unsigned snapshots_before_final=mappings.final_refreshes;const source_commit::Plan* final_plan=nullptr;forbid_provider_allocation=true;
+  auto facade=run->Finalize(&holder,&final_plan);assert(facade&&final_plan==&plan);assert(mappings.final_refreshes==snapshots_before_final+1);const auto final_os_queries=method_identity::MappingOsQueries();
+  const size_t streams_before_final=boot_original_root_streams;assert(facade->Validate(plan));assert(boot_original_root_streams>streams_before_final);
   assert(run->Frames().unaffected_aot_frames==1&&run->Frames().aot_frames==1&&run->Frames().native_value_reads==1);
   assert(source_commit::Run(plan,*facade,{run.get(),[](const source_commit::Plan& value,void* owner)noexcept{static_cast<native_schema_run_state::RunState*>(owner)->Commit(value);}}));
-  assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
+  assert(boot_runtime_root==plan.new_classes[0]&&boot_root_writebacks==1);assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
   facade.reset();class_remove_proxy(&linker,&pauser);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());
   assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);matched_plan=nullptr;assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_walks>=4);
   assert(!gc&&!disabled&&!stopped&&replaced&&boot_quick.value==0&&Read32(boot_compiled_method,4)==9&&!BootFlag(boot_header));

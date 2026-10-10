@@ -1092,6 +1092,7 @@ struct NativeEngine final:Engine {
   d.boot_catalog=boot_methods.Complete()?&boot_methods:nullptr;
   d.boot_vtables=abstract_instances.Ready()?&abstract_instances:nullptr;
   d.boot_code=receiver_producer_bound?&receiver_producer:nullptr;
+  d.frame_roots=RootProvenanceObserved()&&root_provenance.LocksCalibrated()?&root_provenance:nullptr;
   d.mapping={this,RefreshStoppedMaps,GraphExtent};
   if(!native_required_cleanup::Binding::Bind(hooks,env,d.members,&cleanup_binding,error))return false;
   d.cleanup=&cleanup_binding;schema_dependencies=d;return true;

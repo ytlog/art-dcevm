@@ -6,7 +6,11 @@ enum class InvokeKind:uint8_t {Virtual,Super,Direct,Static,Interface,Polymorphic
 struct InvokeInstruction {InvokeKind kind=InvokeKind::NonInvoke;uint32_t index=0,receiver_register=0,argument_count=0;bool range=false;};
 // Instructions and ID counts must come from the actual immutable caller DEX
 // CodeItem. The caller's source frame independently supplies the current PC.
-struct CodeView {const uint16_t*instructions=nullptr;size_t units=0;uint32_t registers=0,method_ids=0,call_sites=0;evolution::MappedDexMetadata source_dex{};};
+struct CodeView {
+ const uint16_t*instructions=nullptr;size_t units=0;uint32_t registers=0,method_ids=0,call_sites=0;evolution::MappedDexMetadata source_dex{};
+ // Exact Standard/Compact source CodeItem, not inferred from instruction data.
+ const void*code_item=nullptr;uint32_t ins_size=0,tries_size=0;bool compact=false;
+};
 bool DecodeInvoke(const CodeView&,uint32_t actual_pc,InvokeInstruction*)noexcept;
 enum class BytecodeOutcome:uint8_t {Unavailable,NonInvoke,Resolved,OriginalException,GuardedBridge};
 struct BytecodeResult {BytecodeOutcome outcome=BytecodeOutcome::Unavailable;void*member=nullptr;void*receiver=nullptr;void*special_caller=nullptr;};

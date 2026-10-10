@@ -9,6 +9,12 @@ namespace artdcevm::native_boot_aot_unaffected {
 class DexIdentity {
  public:
  explicit DexIdentity(const evolution::MappedDexMetadata& map):m_(map){}
+ bool ReturnsVoid(uint32_t index)noexcept{
+  if(!Initialize())return false;
+  size_t method=0,proto=0;uint16_t prototype=0;uint32_t ret=0;std::string_view value;
+  return Item(88,8,index,&method)&&Read(ids_,id_size_,method+2,&prototype)&&
+    Item(72,12,prototype,&proto)&&Read(ids_,id_size_,proto+4,&ret)&&Type(ret,&value)&&value=="V";
+ }
  bool Matches(uint32_t index,std::string_view owner,std::string_view name,std::string_view signature)noexcept{
   if(!Initialize())return false;
   size_t method=0,proto=0;uint16_t type=0,prototype=0;uint32_t string=0,ret=0,parameters=0;

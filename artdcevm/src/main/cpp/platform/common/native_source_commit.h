@@ -10,6 +10,9 @@
 #include <memory>
 #include "platform/common/prepared_field_copy.h"
 namespace artdcevm::native_required_cleanup {class Binding;}
+namespace artdcevm::native_frame_root_relocation {class Proof;}
+namespace artdcevm::native_typed_heap_walk {class RootProvenance;}
+namespace artdcevm::whole_process_frames {class RecaptureInterface;}
 namespace artdcevm::native_source_commit {
 enum class NativeRootPolicy {kPreserve, kRestore};
 struct MethodPair {
@@ -49,6 +52,9 @@ struct Dependencies {
   bool require_initialized_transfer=false;
   // Borrowed for the entire synchronous Run; owner refreshes its stopped-window view.
   const modern_field_metadata::ReadContext* read_context=nullptr;
+  native_frame_root_relocation::Proof* frame_root_proof=nullptr;
+  const native_typed_heap_walk::RootProvenance* frame_roots=nullptr;
+  const whole_process_frames::RecaptureInterface* frame_root_binding=nullptr;
 };
 // Fixed source heap-replacement policy is supplied by the original transaction
 // provider. The complete field oracle selects only the shared Class scalar

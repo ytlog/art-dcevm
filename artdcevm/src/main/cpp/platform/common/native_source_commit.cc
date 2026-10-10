@@ -1,3 +1,5 @@
+#include "platform/common/native_frame_root_relocation.h"
+#include "platform/common/native_frame_root_binding.h"
 #include "platform/common/native_source_commit.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/method_identity_calibration.h"
@@ -91,6 +93,9 @@ void Services::RefreshManagedRoots(const prepared_roots::Resolver& resolver)noex
   replacements_->RefreshManagedRoots(resolver);
 }
 bool Services::Validate(const source_commit::Plan& p)const {
+ const bool any_frame_root=dependencies_.frame_root_proof||dependencies_.frame_roots||dependencies_.frame_root_binding;
+ if(any_frame_root&&(!dependencies_.frame_root_proof||!dependencies_.frame_roots||!dependencies_.frame_root_binding||
+                    !dependencies_.frame_root_proof->ValidateBeforeReplacement(p)))return false;
   const auto* context=dependencies_.read_context;
   if(dependencies_.require_initialized_transfer&&!initialized_.Validate(p,context))return false;
   if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
@@ -171,7 +176,24 @@ void Services::BeginCommit(const source_commit::Plan& plan)const{
 }
 void Services::UpdateReflectiveReferences(const source_commit::Plan& plan)const{dependencies_.reflective.update(plan,dependencies_.reflective.state);}
 void Services::ForceDeoptimizeFrames()const{deopt_frames_(dependencies_.observed.instrumentation);}
-void Services::ReplaceObjectReferences()const{Require(replacements_!=nullptr);replace_(self_,replacements_->BorrowedMap());}
+void Services::ReplaceObjectReferences()const{
+ Require(replacements_!=nullptr);
+ auto*proof=dependencies_.frame_root_proof;
+ if(proof){
+  Require(dependencies_.frame_roots&&dependencies_.frame_root_binding);
+  Require(dependencies_.frame_root_binding->Recapture(false));
+  Require(proof->VerifyBeforeReplacement(*dependencies_.frame_roots,*plan_));
+  Require(proof->BindExactReplacement(*plan_,*replacements_));
+ }
+ replace_(self_,replacements_->BorrowedMap());
+ if(proof){
+  // The actual original replacement already mutated roots. Any broken source
+  // receipt/census is fatal here; returning a refundable failure is unsound.
+  Require(proof->OriginalReplacementReturned(*plan_));
+  Require(dependencies_.frame_root_binding->Recapture(true));
+  Require(proof->VerifyAfter(*dependencies_.frame_roots,*plan_).completed);
+ }
+}
 void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
   Require(&plan==plan_);
   if(dependencies_.native_roots==NativeRootPolicy::kPreserve){

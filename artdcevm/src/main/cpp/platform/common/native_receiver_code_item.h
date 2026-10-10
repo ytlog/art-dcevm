@@ -27,6 +27,18 @@ inline bool ReadCodeView(const code_item_metadata::Layout&layout,const void*meth
  if(!units||uint64_t(units)*2>SIZE_MAX||!Range(base,bytes,instructions,size_t(units)*2)||identity.dex_method_index>=U32(uintptr_t(map.begin)+88))return false;
  // Call-site IDs live in the DEX map list; ordinary invocation parsing needs
  // only method IDs. Custom/polymorphic remain closed until typed bridge proof.
- *out={reinterpret_cast<const uint16_t*>(instructions),units,registers,U32(uintptr_t(map.begin)+88),0,map};return true;
+ uint32_t incoming=0,tries=0;
+ if(!compact){incoming=U16(code+2);tries=U16(code+6);}
+ else {
+  const auto fields=U16(code),flags=U16(code+2);incoming=(fields>>8)&15;tries=fields&15;
+  uintptr_t pre=code;
+  if(flags&16){if(pre<4||!Range(base,bytes,pre-4,4))return false;pre-=4;}
+  for(unsigned bit=0;bit<4;++bit)if(flags&(1u<<bit)){
+   if(pre<2||!Range(base,bytes,pre-2,2))return false;pre-=2;const auto extension=U16(pre);
+   if(bit==1)incoming+=extension;else if(bit==3)tries+=extension;
+  }
+ }
+ if(incoming>registers||incoming>UINT16_MAX||tries>UINT16_MAX)return false;
+ *out={reinterpret_cast<const uint16_t*>(instructions),units,registers,U32(uintptr_t(map.begin)+88),0,map,reinterpret_cast<const void*>(code),incoming,tries,compact};return true;
 }
 }

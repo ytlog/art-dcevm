@@ -1,3 +1,4 @@
+#include "platform/common/native_frame_root_binding.h"
 #include "platform/common/native_boot_method_catalog.h"
 #pragma once
 #include "platform/common/native_boot_aot_unaffected.h"
@@ -8,6 +9,10 @@
 #include "platform/common/native_frame_async_recovery.h"
 #include "platform/common/native_frame_code_owner.h"
 #include "platform/common/native_runtime_frame.h"
+#include "platform/common/native_frame_root_relocation.h"
+#include "platform/common/native_callee_edge.h"
+#include "platform/common/native_interface_dispatch.h"
+#include "platform/common/native_receiver_producer.h"
 #include "platform/common/source_commit.h"
 #include "platform/common/source_commit_plan_identity.h"
 #include "platform/abi/arm64/dex_register_map.h"
@@ -23,6 +28,21 @@
 namespace artdcevm::whole_process_frames {
 namespace detail {bool VisitThread(void*,void*);}
 class Service;
+class FrameRootBinding;
+class FrameRootBinding final:public RecaptureInterface {
+ public:
+  FrameRootBinding()=default;
+  FrameRootBinding(const FrameRootBinding&)=delete;FrameRootBinding&operator=(const FrameRootBinding&)=delete;
+  FrameRootBinding(FrameRootBinding&&)=delete;FrameRootBinding&operator=(FrameRootBinding&&)=delete;
+  void Clear()noexcept {service_=nullptr;stop_=nullptr;threads_=nullptr;self_=nullptr;storage_=nullptr;plan_=nullptr;read_=nullptr;proof_=nullptr;}
+  bool Recapture(bool after)const noexcept override;
+ private:
+  friend class Service;
+  const Service* service_=nullptr; const native_source_stop::Session* stop_=nullptr;
+  const native_cache::Service* threads_=nullptr; void*self_=nullptr;void*storage_=nullptr;
+  const source_commit::Plan*plan_=nullptr;const modern_field_metadata::ReadContext*read_=nullptr;
+  native_frame_root_relocation::Interface*proof_=nullptr;
+};
 // Borrowed capability: Service, Prepared, Plan, Session, thread service and
 // ReadContext must outlive it. The owner clears it before releasing those
 // resources. Validation rewalks the actual window; it cannot extend a lifetime.
@@ -46,6 +66,8 @@ struct Report {
  uint32_t failure_map_row=UINT32_MAX,failure_map_mask=UINT32_MAX,failure_map_index=UINT32_MAX,
    failure_map_dex_regs=0,failure_map_dex_pc=UINT32_MAX,failure_inline_begin=0,failure_inline_end=0;
  size_t failure_map_capacity=0;
+ uint32_t root_failure=UINT32_MAX,root_stream_failure=UINT32_MAX;
+ size_t root_frames=0,root_slots=0,root_callbacks=0;
  bool failure_method_prefix=false,failure_physical=false;
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
@@ -106,6 +128,7 @@ class Service {
  public:
   // Allocate all Context/container/scratch storage BEFORE Session::Begin.
   // Native CodeItem register counts are uint16; no walk-time native allocations.
+  struct Census {size_t frames=0,slots=0,code_units=0,tries=0,handlers=0;bool accepted=false;const char*failure="not-counted";};
   struct Prepared {
     Prepared():locations(65535),native_map(65535){}
     std::vector<decoded_frame_recovery::Location> locations;
@@ -117,6 +140,25 @@ class Service {
     const native_boot_method_catalog::Rooted* boot_catalog=nullptr;
     const source_handle_roots::StoppedReader* boot_reader=nullptr;
     const native_boot_aot_unaffected::Proof* boot_unaffected=nullptr;
+    native_frame_root_relocation::Interface* frame_roots=nullptr;
+    const native_typed_heap_walk::RootProvenance* root_provenance=nullptr;
+    const prepared_roots::Resolver* frame_root_resolver=nullptr;
+    const native_interface_dispatch::Proof* dispatch=nullptr;
+    const native_boot_aot_unaffected::Proof* continuation=nullptr;
+    const receiver_guard::StoppedCodeReader* source_code=nullptr;
+    struct Pending {native_frame_root_relocation::Frame frame{};uint32_t dex_pc=0;bool aot=false,boundary=false;native_callee_edge::Kind kind=native_callee_edge::Kind::Unknown;
+      native_callee_edge::Frame younger{};const void* receiver_address=nullptr;void*receiver=nullptr;native_frame_root_relocation::Frame receiver_frame{};};
+    std::vector<Pending> pending;
+    std::vector<unsigned char> boundaries,seen;
+    std::vector<uint32_t> queue;
+    std::vector<native_boot_return_continuation::Try> tries;
+    std::vector<native_boot_return_continuation::Catch> handlers;
+    bool continuation_prepared=false;
+    bool PrepareContinuations(size_t frames,size_t units,size_t try_capacity=0,size_t handler_capacity=0){
+      if(!units||continuation_prepared)return false;
+      pending.reserve(frames);boundaries.resize(units);seen.resize(units);queue.resize(units);
+      tries.resize(try_capacity);handlers.resize(handler_capacity);continuation_prepared=true;return true;
+    }
     ~Prepared(){delete context;}
     Prepared(const Prepared&)=delete;Prepared& operator=(const Prepared&)=delete;
   };
@@ -130,6 +172,22 @@ class Service {
     if(!storage||storage->recovery_plan)return false;
     storage->recovery_identity=plan;storage->recovery_plan=&plan;return true;
   }
+  Census CensusRecovery(const native_source_stop::Session& owner,void*self,
+      const native_cache::Service&threads,Prepared&storage,const modern_field_metadata::ReadContext&read)const {
+    Report report;Census census;
+    if(!owner.IsStopped(self)||!threads.PreparedForCurrentThread()||!storage.context||!read.owner||!read.extent){census.failure="census-lacks-source-stop";return census;}
+    Request request{*this,owner,self,nullptr,storage,report,&read};request.census=&census;
+    const bool ok=threads.VisitStoppedWorld(detail::VisitThread,&request,&report.registered_threads,nullptr);
+    census.accepted=ok&&report.registered_threads&&report.registered_threads==report.walked_threads&&request.owner_seen&&owner.IsStopped(self);
+    census.failure=census.accepted?"":report.failure;return census;
+  }
+  bool BindFrameRoots(const native_source_stop::Session&owner,void*self,const native_cache::Service&threads,
+      Prepared&storage,const source_commit::Plan&plan,const modern_field_metadata::ReadContext&read,
+      native_frame_root_relocation::Interface&proof,FrameRootBinding*out)const noexcept {
+    if(!out||storage.recovery_plan!=&plan||!storage.context||storage.frame_roots!=&proof||!owner.IsStopped(self))return false;
+    out->service_=this;out->stop_=&owner;out->threads_=&threads;out->self_=self;out->storage_=&storage;
+    out->plan_=&plan;out->read_=&read;out->proof_=&proof;return true;
+  }
   Report ScanRecovery(const native_source_stop::Session&owner,void*self,
       const native_cache::Service&threads,void*jit,Prepared&storage,
       const source_commit::Plan&plan,const modern_field_metadata::ReadContext&context,
@@ -138,6 +196,7 @@ class Service {
     if(storage.recovery_plan!=&plan||!context.owner||!context.extent||!SameShape(storage.recovery_identity,plan)){
       denied.failure="recovery-lacks-prepared-exact-Plan-or-owned-read-context";return denied;
     }
+    if(storage.frame_roots&&(!storage.frame_root_resolver||!storage.frame_roots->Begin(owner,self,context,plan,*storage.frame_root_resolver))){denied.failure="whole-frame-root-exact-window-begin-refused";return denied;}
     auto report=ScanImpl(owner,self,threads,jit,storage,&context);
     if(!report.accepted||!proof)return report;
     if(storage.recovery_generation==UINT64_MAX){report.accepted=false;report.failure="recovery-generation-exhausted";return report;}
@@ -152,6 +211,7 @@ class Service {
   }
  private:
   friend class StoppedRecoveryProof;
+  friend class FrameRootBinding;
   static bool SameShape(const source_commit::Plan&a,const source_commit::Plan&b)noexcept {
     return a.old_classes.size()==b.old_classes.size()&&a.new_classes.size()==b.new_classes.size()&&a.old_instances.size()==b.old_instances.size()&&a.new_instances.size()==b.new_instances.size()&&a.class_root_origins.size()==b.class_root_origins.size();
   }
@@ -163,13 +223,57 @@ class Service {
   }
   Report ScanImpl(const native_source_stop::Session&owner,void*self,const native_cache::Service&threads,void*jit,Prepared&storage,const modern_field_metadata::ReadContext*context)const {
     Report report;if(!owner.IsStopped(self)||!threads.PreparedForCurrentThread()||!storage.context){report.failure="whole-scan-lacks-actual-source-stop-or-preparation";return report;}
+    storage.pending.clear();
     Request request{*this,owner,self,jit,storage,report,context};
     const bool ok=threads.VisitStoppedWorld(detail::VisitThread,&request,&report.registered_threads,nullptr);
-    if(ok&&report.registered_threads>0&&report.registered_threads==report.walked_threads&&request.owner_seen&&owner.IsStopped(self)){report.accepted=true;report.failure="";}
+    if(ok&&report.registered_threads>0&&report.registered_threads==report.walked_threads&&request.owner_seen&&owner.IsStopped(self)){
+      if(storage.frame_roots){
+        if(!storage.root_provenance){report.failure="whole-frame-original-root-stream-owner-missing";return report;}
+        const auto roots=storage.frame_roots->Seal(*storage.root_provenance);
+        report.root_failure=static_cast<uint32_t>(roots.failure);report.root_stream_failure=static_cast<uint32_t>(roots.stream.failure);
+        report.root_frames=roots.frames;report.root_slots=roots.slots;report.root_callbacks=roots.callbacks;
+        if(!roots.completed){report.failure="whole-frame-original-root-stream-seal-refused";return report;}
+      }
+      if(!AuthorizePending(storage,context,report))return report;
+      report.accepted=true;report.failure="";}
     else if(!std::strcmp(report.failure,"not-scanned"))report.failure="whole-scan-native-enumeration-or-owner-refused";
     return report;
   }
  private:
+  bool AuthorizePending(Prepared&storage,const modern_field_metadata::ReadContext*read,Report&report)const noexcept {
+    if(storage.pending.empty())return true;
+    if(!storage.frame_roots||!storage.continuation||!read)return (report.failure="whole-continuation-owner-unavailable"),false;
+    native_boot_return_continuation::HandlerStorage handlers{storage.tries.data(),storage.tries.size(),storage.handlers.data(),storage.handlers.size()};
+    native_boot_return_continuation::Scratch scratch{storage.boundaries.data(),storage.seen.data(),storage.queue.data(),storage.queue.size()};
+    bool escape=false;void*thread=nullptr;
+    for(const auto&p:storage.pending){
+      if(thread!=p.frame.thread){if(escape)return (report.failure="whole-continuation-exception-upcall-boundary-unproved"),false;thread=p.frame.thread;}
+      report.failure_thread=uintptr_t(p.frame.thread);report.failure_method=uintptr_t(p.frame.method);
+      report.failure_quick=uintptr_t(p.frame.quick);report.failure_pc=p.frame.pc;report.failure_header=uintptr_t(p.frame.header);
+      report.failure_method_prefix=false;report.failure_declaring_class=report.failure_flags=report.failure_dex_index=0;
+      report.failure_map_dex_pc=p.dex_pc;
+      if(p.boundary){
+       // Fragment transitions and runtime/native callbacks are not the end of
+       // WalkStack. Preserve the unresolved obligation through every callback;
+       // the actual older managed entry or terminal upcall must discharge it.
+       if(escape&&p.kind!=native_callee_edge::Kind::Transition&&p.kind!=native_callee_edge::Kind::Runtime)return (report.failure="whole-continuation-exception-noncompiled-owner-unproved"),false;
+       continue;
+      }
+      receiver_guard::CodeView source;native_boot_return_continuation::Shape shape;const char*failure=nullptr;
+      if(escape){
+        if(!storage.continuation->InspectExceptionalEntry(p.frame.method,p.dex_pc,*read,handlers,scratch,&source,&shape,&failure))return (report.failure=failure?failure:"whole-continuation-older-exception-entry-unproved"),false;
+        escape=shape.exception_escape;
+      }
+      if(!p.aot)continue;
+      if(!storage.frame_roots->VerifyLocationRoot(p.receiver_frame,p.receiver_address,p.receiver))return (report.failure="whole-continuation-younger-receiver-root-unproved"),false;
+      if(!storage.continuation->InspectContinuation(p.frame.method,p.dex_pc,*read,handlers,scratch,&source,&shape,&failure))return (report.failure=failure?failure:"whole-continuation-current-source-closure-unproved"),false;
+      native_interface_dispatch::Match match;
+      if(!storage.dispatch||!storage.dispatch->Verify(source,p.dex_pc,p.receiver,p.younger.method,*read,&match,&failure))return (report.failure=failure?failure:"whole-continuation-current-interface-dispatch-unproved"),false;
+      escape|=shape.exception_escape;++report.unaffected_aot_frames;
+    }
+    if(escape)return (report.failure="whole-continuation-exception-upcall-boundary-unproved"),false;
+    return true;
+  }
   bool MarkedHeader(const void* header)const noexcept {
     if(flag_)return flag_(header);
     // Fixed legacy inline method; a missing symbol alone grants nothing.
@@ -185,13 +289,15 @@ class Service {
     }
     return false;
   }
-  struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;const modern_field_metadata::ReadContext* recovery;bool owner_seen=false;};
+  struct Request {const Service& service;const native_source_stop::Session& owner;void* self;void* jit;Prepared& storage;Report& report;const modern_field_metadata::ReadContext* recovery;bool owner_seen=false;Census*census=nullptr;bool recapture=false;};
   friend bool detail::VisitThread(void*,void*);
   template<class Info,class Pair> struct Visitor final:abi::arm64::stack::Visitor<Pair> {
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
     Request& request;void* target;size_t before;
     void** next_quick=nullptr;uintptr_t next_pc=0;bool runtime_successor=false;
     void* observed_method=nullptr;
+    native_callee_edge::Adjacent adjacent;
+    const void*younger_receiver_address=nullptr;native_frame_root_relocation::Frame younger_root_frame{};
     Visitor(Request& r,void* t):abi::arm64::stack::Visitor<Pair>{},request(r),target(t),before(r.report.frames){}
     bool Reject(const char* reason){
      auto& report=request.report;report.failure=reason;report.failure_thread=uintptr_t(target);report.failure_method=uintptr_t(observed_method);
@@ -205,6 +311,15 @@ class Service {
       std::memcpy(&report.failure_dex_index,static_cast<unsigned char*>(observed_method)+dex_offset,4);report.failure_method_prefix=true;
      }
      return false;
+    }
+    bool Boundary(native_callee_edge::Kind kind=native_callee_edge::Kind::Unknown)noexcept {
+      auto&r=request;adjacent.Clear();
+      if(r.census){if(r.census->frames==SIZE_MAX)return Reject("whole-census-capacity-overflow");++r.census->frames;}
+      if(!r.census&&!r.recapture&&r.storage.continuation){
+        if(r.storage.pending.size()==r.storage.pending.capacity())return Reject("whole-continuation-frame-capacity-insufficient");
+        Prepared::Pending p;p.frame.thread=target;p.frame.method=observed_method;p.boundary=true;p.kind=kind;r.storage.pending.push_back(p);
+      }
+      return true;
     }
     bool VisitFrame()override {
       auto& r=request;const auto& s=r.service;
@@ -220,16 +335,16 @@ class Service {
       }
       void* method=nullptr;if(!s.stack_.Method(this,sizeof(*this),&method))return Reject("whole-frame-native-method-unavailable");
       observed_method=method;
-      if(!method){++r.report.transitions;return true;}
+      if(!method){++r.report.transitions;return Boundary(native_callee_edge::Kind::Transition);}
       ++r.report.frames;
-      if(this->shadow_frame&&!this->quick_frame){++r.report.shadow_frames;return true;}
+      if(this->shadow_frame&&!this->quick_frame){++r.report.shadow_frames;return Boundary();}
       if(!this->quick_frame||this->shadow_frame)return Reject("whole-frame-unknown-native-cursor");
       // Original GetMethod owns the live ArtMethod. The fixed 11--17 common
       // prefix is Class32, access_flags32; only JNI kAccNative is used here.
       const bool physical=this->inline_frames.begin.row==this->inline_frames.end.row;
       if(physical&&*this->quick_frame!=method)return Reject("whole-frame-original-method-versus-current-quick-frame-mismatch");
       uint32_t flags;std::memcpy(&flags,static_cast<const unsigned char*>(method)+offsetof(abi::arm64::android12::Method12,access_flags),4);
-      if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return true;}
+      if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return Boundary(native_callee_edge::Kind::NativePhysical);}
       if(!s.compiled_ready_)return Reject("whole-frame-compiled-geometry-not-calibrated");
       if(!this->header){
        auto& report=r.report;report.failure_thread=uintptr_t(target);report.failure_method=uintptr_t(method);
@@ -251,11 +366,11 @@ class Service {
        // SP. Even its last quick frame is followed by the fragment transition
        // callback; no guessed PC normalization or missing-successor exemption.
        next_quick=reinterpret_cast<void**>(base+info.size);std::memcpy(&next_pc,reinterpret_cast<void*>(base+info.size-8),8);
-       runtime_successor=true;++report.runtime_frames;return true;
+       runtime_successor=true;++report.runtime_frames;return Boundary(native_callee_edge::Kind::Runtime);
       }
       if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-compiled-header-unmarked");
       bool unaffected_aot=false;
-      if(r.recovery){
+      if(r.recovery&&!r.census&&!r.recapture){
         if(!s.async_.Bound())return Reject("whole-frame-original-async-recovery-reader-unavailable");
         const auto kind=s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit);
         if(kind==native_frame_code_owner::Kind::Aot)++r.report.aot_frames;
@@ -295,9 +410,34 @@ class Service {
       code_info_view::View view;decoded_frame_recovery::RegisterRange range;
       if(map.table!=&info->stack_maps||!code_info_view::ReadSourceObject(s.family_,info,sizeof(info_storage),&view))return Reject("whole-frame-original-map-source-geometry-mismatch");
       if(view.code_size&&(!*view.code_size||offset>*view.code_size))return Reject("whole-frame-PC-outside-native-code-size");
-      if(unaffected_aot&&!native_boot_aot_unaffected::TablesMapped(view,*r.recovery))return Reject("whole-AOT-map-tables-lack-current-stop-extent");
+      if(r.recovery&&(unaffected_aot||r.census||r.recapture||r.storage.frame_roots)&&!native_boot_aot_unaffected::TablesMapped(view,*r.recovery))return Reject("whole-AOT-map-tables-lack-current-stop-extent");
       uint32_t pc;
       if(!(physical?view.StackMaps().Read(map.row,2,&pc):view.InlineInfos().Read(this->inline_frames.end.row-1,1,&pc))||pc==UINT32_MAX||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-original-versus-complete-map-DexPc-mismatch");
+      if(info->frame_size>UINT32_MAX/16||info->frame_size*16<16||uintptr_t(this->quick_frame)%16)return Reject("whole-physical-frame-geometry-invalid");
+      const uint32_t frame_bytes=info->frame_size*16;
+      if(physical&&r.census){
+        size_t slots=0;uint32_t stack_index=0,register_index=0;
+        if(!view.StackMaps().Read(map.row,4,&stack_index)||!view.StackMaps().Read(map.row,3,&register_index))return Reject("whole-census-mask-unreadable");
+        if(stack_index!=UINT32_MAX)for(size_t bit=0;bit<view.tables[2].row_bits;++bit){bool set=false;
+          if(bit>UINT32_MAX||!decoded_frame_recovery::MaskBit(view.tables[2],stack_index,uint32_t(bit),&set))return Reject("whole-census-stackmask-unreadable");
+          if(set){if(bit>=frame_bytes/4)return Reject("whole-census-stackmask-outside-frame");++slots;}}
+        if(register_index!=UINT32_MAX){uint32_t value=0,shift=0;
+          if(!view.tables[1].Read(register_index,0,&value)||!view.tables[1].Read(register_index,1,&shift)||shift>=32||value>UINT32_MAX>>shift)return Reject("whole-census-registermask-unreadable");
+          value<<=shift;for(unsigned reg=0;reg<32;++reg)slots+=(value>>reg)&1u;}
+        if(r.census->frames==SIZE_MAX||slots>SIZE_MAX-r.census->slots)return Reject("whole-census-capacity-overflow");
+        ++r.census->frames;r.census->slots+=slots;
+        if(r.storage.source_code){receiver_guard::CodeView source;
+          if(!r.storage.source_code->Code(r.self,method,&source,*r.recovery))return Reject("whole-census-source-CodeItem-unreadable");
+          const auto capacity=native_boot_return_continuation::CountStorage(source,*r.recovery);
+          if(!capacity.complete)return Reject("whole-census-source-complete-handler-list-unreadable");
+          r.census->code_units=std::max(r.census->code_units,capacity.units);
+          r.census->tries=std::max(r.census->tries,capacity.tries);
+          r.census->handlers=std::max(r.census->handlers,capacity.handlers);
+        }
+      }
+      native_frame_root_relocation::Frame root_frame{target,0,method,this->quick_frame,this->header,this->pc,r.storage.context,frame_bytes,s.family_};
+      if(physical&&!r.census&&r.storage.frame_roots&&!r.storage.frame_roots->CaptureFrame(root_frame,view,map.row))return Reject("whole-frame-root-capture-refused");
+      if(r.census||r.recapture){++r.report.compiled_frames;return true;}
       r.report.failure_map_dex_pc=pc;
       r.report.failure_map_row=map.row;r.report.failure_map_dex_regs=view.dex_regs;
       r.report.failure_inline_begin=this->inline_frames.begin.row;r.report.failure_inline_end=this->inline_frames.end.row;r.report.failure_map_capacity=r.storage.locations.size();
@@ -353,18 +493,39 @@ class Service {
           ++r.report.native_value_reads;
         }
       }
+      native_callee_edge::Frame fact{target,method,nullptr,this->quick_frame,this->pc,
+        physical?native_callee_edge::Kind::ManagedPhysical:native_callee_edge::Kind::Inline};
+      native_callee_edge::Frame younger{};const bool has_younger=adjacent.Younger(fact,&younger);
+      const void* receiver_address=nullptr;
+      if(physical&&r.storage.continuation){receiver_guard::CodeView callee_code;
+       if(!(flags&0x8u)&&r.storage.continuation->CurrentCalleeCode(method,*r.recovery,&callee_code)&&callee_code.ins_size&&callee_code.ins_size<=callee_code.registers&&range.first==0&&range.count==callee_code.registers){
+        const auto location=r.storage.locations[callee_code.registers-callee_code.ins_size];
+        if(location.kind==0){receiver_address=reinterpret_cast<const unsigned char*>(this->quick_frame)+location.value;uint32_t bits=0;std::memcpy(&bits,receiver_address,4);fact.receiver=reinterpret_cast<void*>(uintptr_t(bits));}
+        else if(location.kind==2&&location.value<32&&r.storage.context->IsAccessibleGPR(location.value)){receiver_address=r.storage.context->GetGPRAddress(location.value);fact.receiver=reinterpret_cast<void*>(r.storage.context->GetGPR(location.value));}
+       }
+      }
       void* current=nullptr;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context||
          this->header!=original_header||(!r.recovery&&!s.MarkedHeader(original_header))||this->quick_frame!=original_quick||this->pc!=original_pc||
          this->shadow_frame||this->inline_frames.begin.row!=original_begin||this->inline_frames.end.row!=original_end||
          !s.stack_.Method(this,sizeof(*this),&current)||current!=method||s.dex_pc_(this,false)!=pc)return Reject("whole-frame-source-owner-or-native-cursor-lost-after-map");
+      bool deferred_aot=false;
       if(unaffected_aot){
        if(s.async_.Query(*this->quick_frame,this->pc,*r.recovery)||s.MarkedHeader(this->header)||
           s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit)!=native_frame_code_owner::Kind::Aot)return Reject("whole-AOT-current-code-owner-or-async-state-changed");
        const char*failure=nullptr;
-       if(!r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery,&failure))return Reject(failure?failure:"whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
-       ++r.report.unaffected_aot_frames;
+       if(!r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery,&failure)){
+        if(!r.storage.continuation||!r.storage.frame_roots||!r.storage.root_provenance||!r.storage.dispatch)return Reject(failure?failure:"whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
+        if(!physical||!has_younger||!younger.receiver||!younger_receiver_address)return Reject("whole-continuation-actual-younger-receiver-unproved");
+        if(r.storage.pending.size()==r.storage.pending.capacity())return Reject("whole-continuation-frame-capacity-insufficient");
+        deferred_aot=true;
+       }else ++r.report.unaffected_aot_frames;
       }else if(r.recovery&&!s.async_.Query(*this->quick_frame,this->pc,*r.recovery))return Reject("whole-frame-original-async-recovery-changed-after-map");
+      if(physical&&r.storage.continuation){
+       if(r.storage.pending.size()==r.storage.pending.capacity())return Reject("whole-continuation-frame-capacity-insufficient");
+       r.storage.pending.push_back({root_frame,pc,deferred_aot,false,native_callee_edge::Kind::ManagedPhysical,younger,younger_receiver_address,younger.receiver,younger_root_frame});
+       adjacent.Observe(fact);younger_receiver_address=receiver_address;younger_root_frame=root_frame;
+      }else adjacent.Clear();
       ++r.report.compiled_frames;if(!physical)++r.report.inlined_frames;r.report.map_locations+=range.count;return true;
     }
   };
@@ -411,4 +572,13 @@ inline bool artdcevm::whole_process_frames::StoppedRecoveryProof::Validate(const
  // Do not trust a prior scan, listener installation or cached PC: the complete
  // actual thread list and every compiled reader/async leaf are checked again.
  return service_->ScanRecovery(*stop_,self_,*threads_,jit_,storage,plan,*context_).accepted;
+}
+
+inline bool artdcevm::whole_process_frames::FrameRootBinding::Recapture(bool after)const noexcept {
+ if(!service_||!stop_||!threads_||!storage_||!plan_||!read_||!proof_||!stop_->IsStopped(self_))return false;
+ auto&storage=*static_cast<Service::Prepared*>(storage_);
+ if(storage.recovery_plan!=plan_||storage.frame_roots!=proof_||!source_commit::SameIdentity(storage.recovery_identity,*plan_)||!proof_->BeginRecapture(*plan_,after))return false;
+ Report report;Service::Request request{*service_,*stop_,self_,nullptr,storage,report,read_};request.recapture=true;
+ const bool ok=threads_->VisitStoppedWorld(detail::VisitThread,&request,&report.registered_threads,nullptr);
+ return ok&&report.registered_threads&&report.registered_threads==report.walked_threads&&request.owner_seen&&stop_->IsStopped(self_)&&proof_->EndRecapture();
 }

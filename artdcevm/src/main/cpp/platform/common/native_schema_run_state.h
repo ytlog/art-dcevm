@@ -47,6 +47,9 @@ struct Dependencies {
  prepared_roots::Registry* registry=nullptr;
  native_schema_guard_verifier::Verifier* guards=nullptr;
  const native_typed_heap_walk::Service* typed_heap=nullptr;
+ // The persistent named original root visitor, independently lock-calibrated
+ // in this runtime. Supplying it does not grant frame recovery authority.
+ const native_typed_heap_walk::RootProvenance* frame_roots=nullptr;
  const native_boot_method_catalog::Catalog* boot_catalog=nullptr;
  const native_abstract_instances::Service* boot_vtables=nullptr;
  const receiver_guard::SourceProducer* boot_code=nullptr;
@@ -93,6 +96,8 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  static void CompleteRefund(void*)noexcept;
  struct State;
  struct StoppedAttempt;
+ struct FrameCensusAttempt;
+ static bool CensusFramesStopped(void*,native_source_stop::Session&) noexcept;
  static bool PrepareOriginalWaiting(void*,native_source_stop::Session&) noexcept;
  bool PrepareStopped(std::string*);
  RunState(const Dependencies&,void*,const runnable_jni::Context&);

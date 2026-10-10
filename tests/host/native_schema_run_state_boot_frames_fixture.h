@@ -1,14 +1,16 @@
+#include <pthread.h>
 // Actual whole scanner leaf composition. No stop, root or dependency authority
 // is replaced here: the surrounding RunState owns those production services.
 namespace {
-void* boot_compiled_method=nullptr;
+void* boot_compiled_method=nullptr;size_t boot_frame_walks=0;
 int boot_worker,boot_empty,boot_list_mutex;
 void* boot_list_mutex_slot=&boot_list_mutex;
 void* boot_runtime_slot=&runtime;
 bool boot_frame_binding=false;
 bool boot_list_locked=false,boot_bad_pc=false,boot_bad_value=false,boot_bad_mask=false,boot_bad_cursor=false;
 alignas(8) uint32_t boot_header[2]{};
-struct BootQuick {void* method=nullptr;uint32_t value=0,padding=0;} boot_quick;
+struct alignas(16) BootQuick {void* method=nullptr;uint32_t value=0,padding=0;std::array<unsigned char,48> tail{};} boot_quick;
+static_assert(sizeof(BootQuick)==64);
 std::array<uint32_t,8> boot_stack_map{{0,0,2,0,0,1,1,1}};
 uint32_t boot_dex_mask=1,boot_dex_map=1;
 std::array<uint32_t,2> boot_location{{1,3}};
@@ -35,7 +37,7 @@ void BootWalkVisitor(void*raw,bool transitions){
  assert(gc&&stopped==1&&locked&&transitions);auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);
  if(v->thread==thread.data()||v->thread==&boot_empty)return;
  assert(v->thread==foreign_thread.data()&&boot_compiled_method);boot_visit_method=boot_compiled_method;boot_quick.method=boot_compiled_method;
- v->quick_frame=reinterpret_cast<void**>(&boot_quick);v->header=boot_header;v->pc=uintptr_t(boot_header)+36;v->VisitFrame();
+ v->quick_frame=reinterpret_cast<void**>(&boot_quick);v->header=boot_header;v->pc=uintptr_t(boot_header)+36;++boot_frame_walks;v->VisitFrame();
 }
 void* BootGetMethod(const void*){return boot_visit_method;}
 uint32_t BootDexPc(const void*,bool crash){assert(!crash);return boot_bad_pc?0:1;}
@@ -57,7 +59,8 @@ abi::arm64::android11::TableIterator BootFindMap(const abi::arm64::android13::Co
 void BootDecodeMap(const void*,uint32_t row,uint32_t first,abi::arm64::dex_register_map::Map*map){assert(row==0&&!first&&map->count==1);map->data()[0]={0,8};}
 bool BootNativeValue(const void*raw,abi::arm64::android12::frame_registers::Location location,uint32_t*out){assert(location.kind==0&&location.value==8);*out=boot_quick.value+(boot_bad_value?1:0);if(boot_bad_cursor)++static_cast<abi::arm64::stack::Visitor13*>(const_cast<void*>(raw))->pc;return true;}
 }
-bool BootRefreshMaps(void*raw,std::string*error){if(!RunStateMappings::Refresh(raw,error))return false;auto&s=*static_cast<RunStateMappings*>(raw);s.Cover(boot_header);s.Cover(boot_stack_map.data());s.Cover(&boot_dex_mask);s.Cover(&boot_dex_map);s.Cover(boot_location.data());s.Cover(&boot_quick);auto*cache=reinterpret_cast<void*>(uintptr_t(Read32(BootCreatedClass(),offsetof(class_metadata::Class17,dex_cache))));void*file=nullptr;std::memcpy(&file,static_cast<char*>(cache)+16,8);s.Cover(static_cast<dex_mapping_abi::Prefix*>(file)->begin);return true;}
+void CoverBootRootMaps(RunStateMappings&);
+bool BootRefreshMaps(void*raw,std::string*error){if(!RunStateMappings::Refresh(raw,error))return false;auto&s=*static_cast<RunStateMappings*>(raw);s.Cover(boot_header);s.Cover(boot_stack_map.data());s.Cover(&boot_dex_mask);s.Cover(&boot_dex_map);s.Cover(boot_location.data());s.Cover(&boot_quick);CoverBootRootMaps(s);auto*cache=reinterpret_cast<void*>(uintptr_t(Read32(BootCreatedClass(),offsetof(class_metadata::Class17,dex_cache))));void*file=nullptr;std::memcpy(&file,static_cast<char*>(cache)+16,8);s.Cover(static_cast<dex_mapping_abi::Prefix*>(file)->begin);return true;}
 void* BootResolve(void*,void*,uint32_t,void*,uint32_t){std::abort();}
 bool BootSameSignature(void*a,void*b){
  if(a!=BootCreatedMethod()&&b!=BootCreatedMethod())return SameIndex(a,b);
@@ -68,8 +71,18 @@ bool BootSameSignature(void*a,void*b){
 }
 void* BootGuardMethod(void*p,jmethodID id){return BootIsMethod(id)?BootDecodeMethod(&linker,id):GuardMethod(p,id);}
 bool BootGuardSame(void*p,void*a,void*b){return a==BootCreatedMethod()||b==BootCreatedMethod()?BootSameSignature(a,b):GuardSameMethod(p,a,b);}
+#include "native_schema_run_state_frame_roots_fixture.h"
+void CoverBootRootMaps(RunStateMappings&s){
+#if defined(__APPLE__)
+ const uintptr_t high=uintptr_t(pthread_get_stackaddr_np(pthread_self()));const size_t bytes=pthread_get_stacksize_np(pthread_self());assert(high>bytes);uintptr_t low=high-bytes;size_t readable=0;if(!method_identity::ReadableMappingExtent(reinterpret_cast<void*>(low),&readable))low+=uintptr_t(sysconf(_SC_PAGESIZE));s.Cover(reinterpret_cast<void*>(low));
+#else
+ pthread_attr_t attr;assert(!pthread_getattr_np(pthread_self(),&attr));void*low=nullptr;size_t bytes=0;assert(!pthread_attr_getstack(&attr,&low,&bytes)&&bytes);pthread_attr_destroy(&attr);s.Cover(low);
+#endif
+s.Cover(&boot_trace_slot);s.Cover(&boot_class_slot);s.Cover(&boot_trace_lock);s.Cover(&boot_class_lock);s.Cover(&boot_original_cursor);s.Cover(&boot_original_context);}
 class BootHooks:public BootPublicHooks {
+ public:void* Install(void*t,void*proxy,void**original,std::string*error)override{if(t==reinterpret_cast<void*>(BootFinish)){assert(stopped&&Read32(thread.data())==92u<<24);*original=t;owner_finish_proxy=reinterpret_cast<s::FinishGC>(proxy);return t;}if(t==reinterpret_cast<void*>(BootStart)){assert(stopped&&Read32(thread.data())==92u<<24);*original=t;owner_start_proxy=reinterpret_cast<s::StartGC>(proxy);return t;}return BootPublicHooks::Install(t,proxy,original,error);}
  public:void* FindSymbol(const char*lib,const char*name)override{
+  if(auto*p=BootRootSymbol(name))return p;
 #define BOOT_FN(symbol,fn) if(!std::strcmp(name,symbol))return reinterpret_cast<void*>(fn)
   if(std::strstr(name,"HasSameNameAndSignature"))return reinterpret_cast<void*>(BootSameSignature);
   if(!boot_frame_binding)return BootPublicHooks::FindSymbol(lib,name);
