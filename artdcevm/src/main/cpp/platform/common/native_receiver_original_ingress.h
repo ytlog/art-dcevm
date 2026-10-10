@@ -18,6 +18,8 @@ class OriginalIngress final {
   // No JNI/safepoint/OS mapping lookup while a borrowed pointer is in use.
   virtual bool Enter(const abi::common::RunnableJniScope&,void*member,jobject receiver,
       modern_field_metadata::ReadContext*)noexcept=0;
+  virtual bool EnterField(const abi::common::RunnableJniScope&,void*,jobject,
+      modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual void Leave()noexcept=0;
  };
  OriginalIngress(EntrySource&e,const ClassSource&c,TypedBounds&b):entry_(e),classes_(c),bounds_(b){}
@@ -34,18 +36,26 @@ class OriginalIngress final {
  // Called by the sole existing original wrapper. A foreign/unpublished owner
  // leaves the existing dispatch unchanged; an owned unavailable borrow must
  // be raised through the wrapper's actual source ThrowNewException leaf.
- static bool Check(const abi::common::RunnableJniScope&source,void*member,jobject receiver,Path path,bool*unavailable)noexcept{
+ static bool Check(const abi::common::RunnableJniScope&source,void*member,jobject receiver,Path path,bool*unavailable,bool field=false)noexcept{
   if(!unavailable)return false;*unavailable=false;auto*owner=published_.load(std::memory_order_acquire);
-  if(!owner||consumer.load(std::memory_order_acquire)!=owner->guard_||!owner->guard_->RequiresIngress(path,source.self,member))return CheckReference(path,source.self,member,receiver);
-  Scope scope(*owner,source,member,receiver);if(!scope.Valid()){*unavailable=true;return true;}
-  return owner->guard_->CheckReference(path,source.self,member,receiver);
+  if(!owner||consumer.load(std::memory_order_acquire)!=owner->guard_||!owner->guard_->RequiresIngress(path,source.self,member))return CheckReference(path,source.self,member,receiver,nullptr,field);
+  Scope scope(*owner,source,member,receiver,field);if(!scope.Valid()){*unavailable=true;return true;}
+  return owner->guard_->CheckReference(path,source.self,member,receiver,nullptr,field);
+ }
+ static bool WantsBridge(Path path)noexcept{auto*o=published_.load(std::memory_order_acquire);return o&&consumer.load(std::memory_order_acquire)==o->guard_&&o->guard_->RequiresIngress(path,o->entry_.OriginalThreadIdentity(),nullptr);}
+ static bool OwnsConsumer()noexcept{auto*o=published_.load(std::memory_order_acquire);return o&&consumer.load(std::memory_order_acquire)==o->guard_;}
+ static bool CheckFieldId(const abi::common::RunnableJniScope&source,jfieldID id,jobject receiver,Path path,bool*unavailable)noexcept{
+  if(!unavailable)return false;*unavailable=false;auto*owner=published_.load(std::memory_order_acquire);
+  if(!owner||consumer.load(std::memory_order_acquire)!=owner->guard_||!owner->guard_->RequiresIngress(path,source.self,nullptr))return receiver_guard::CheckFieldId(path,source.self,id,receiver);
+  void*field=nullptr;if(!owner->entry_.DecodeOriginalFieldId(source,id,&field)){*unavailable=true;return true;}
+  return Check(source,field,receiver,path,unavailable,true);
  }
  private:
  class Scope final {
   public:
-  Scope(OriginalIngress&o,const abi::common::RunnableJniScope&s,void*m,jobject r)noexcept:owner(o),context{s.self,s.env,s.vm}{
+  Scope(OriginalIngress&o,const abi::common::RunnableJniScope&s,void*m,jobject r,bool field)noexcept:owner(o),context{s.self,s.env,s.vm}{
    if(active_||!s.self||!s.env||!s.vm||!o.entry_.Proven())return;
-   entered=o.bounds_.Enter(s,m,r,&bounds);if(!entered)return;
+   entered=field?o.bounds_.EnterField(s,m,r,&bounds):o.bounds_.Enter(s,m,r,&bounds);if(!entered)return;
    if(!bounds.owner||!bounds.extent)return;
    entry.emplace(o.entry_,context,bounds);if(!entry->Valid())return;
    classes.emplace(o.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;

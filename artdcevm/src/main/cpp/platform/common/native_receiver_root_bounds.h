@@ -7,29 +7,40 @@
 #include <algorithm>
 #include <cstring>
 namespace artdcevm::receiver_guard {
-// Concrete original-method ingress provider. Every inventory is rebuilt from
+// Concrete original method/field ingress provider. Every inventory is rebuilt from
 // that callback's live JNI root and ArtMethod; no map/cache authorizes pointers.
 // Fixed common Class prefixes are independently calibrated by FieldMetadata.
 // ART owns the reached Class/native arrays/DexFile until this no-safepoint
-// shared-mutator borrow ends. It does not support field/handle/listener ingress.
+// shared-mutator borrow ends. It does not support handle/listener ingress.
 class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  public:
  OriginalRootBounds(EntrySource&entry,const modern_field_metadata::FieldMetadata&metadata)
    :entry_(entry),metadata_(metadata){}
  bool Enter(const abi::common::RunnableJniScope&actual,void*method,jobject receiver,
             modern_field_metadata::ReadContext*out)noexcept override {
+  return EnterMember(actual,method,false,receiver,out);
+ }
+ bool EnterField(const abi::common::RunnableJniScope&actual,void*field,jobject receiver,
+                 modern_field_metadata::ReadContext*out)noexcept override {
+  return EnterMember(actual,field,true,receiver,out);
+ }
+ private:
+ bool EnterMember(const abi::common::RunnableJniScope&actual,void*method,bool field,jobject receiver,
+                  modern_field_metadata::ReadContext*out)noexcept {
   if(!out)return false;*out={};
   if(inventory_.owner||!metadata_.Calibrated()||!entry_.OwnsMetadata(metadata_))return false;
   EntrySource::OriginalRoots roots;
-  if(!entry_.SeedOriginalRoots(actual,method,receiver,&roots))return false;
+  if(!(field?entry_.SeedOriginalFieldRoots(actual,method,receiver,&roots):entry_.SeedOriginalRoots(actual,method,receiver,&roots)))return false;
   auto&i=inventory_;i.owner=this;i.actual=&actual;i.count=0;i.class_count=0;
-  bool ok=Add(actual.self,4)&&Add(method,8)&&Class(roots.declaring);
+  bool ok=Add(actual.self,4)&&Add(method,field?sizeof(field_array::Field):8)&&Class(roots.declaring);
   if(ok&&roots.local_slot)ok=Add(roots.local_slot,4);
   if(ok&&roots.receiver)ok=Add(roots.receiver,8)&&Class(metadata_.Reference(roots.receiver,0));
   for(size_t n=0;ok&&n<i.class_count;++n)ok=ExpandClass(i.classes[n]);
+  if(ok&&field)ok=OwnsField(roots.declaring,method);
   if(!ok||!Current()){Reset();return false;}
   *out={this,Extent};return true;
  }
+ public:
  void Leave()noexcept override {if(inventory_.owner!=this)std::abort();Reset();}
  private:
  struct Range {uintptr_t begin;size_t size;};
@@ -59,6 +70,19 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   if(!Add(klass,prefix))return false;i.classes[i.class_count++]=klass;return true;
  }
  template<class T>static T Scalar(const void*p,size_t offset)noexcept {T value;std::memcpy(&value,static_cast<const char*>(p)+offset,sizeof(value));return value;}
+ bool OwnsField(void*klass,void*field)noexcept {
+  const auto&layout=metadata_.StorageModel()==modern_field_metadata::Model::kSplit?
+      field_array::kSplit:field_array::kMerged17;
+  // Exact physical membership in that live declaring Class-owned native array
+  // closes the decoded field provenance; a matching header alone is insufficient.
+  for(bool statics:{false,true}){
+   void*array=nullptr;if(!field_array::ReadPointer(layout,klass,layout.class_size,statics,&array))return false;
+   if(!array)continue;size_t extent=0;field_array::View view;
+   if(!Extent(this,array,&extent)||!field_array::Read(layout,array,extent,statics,&view))return false;
+   uint32_t index=0;if(view.IndexOf(field,&index))return true;
+  }
+  return false;
+ }
  bool NativeFields(void*klass,const field_array::Layout&layout,bool statics)noexcept {
   void*array=nullptr;
   if(!field_array::ReadPointer(layout,klass,layout.class_size,statics,&array))return false;

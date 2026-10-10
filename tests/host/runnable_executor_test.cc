@@ -67,6 +67,10 @@ bool ExecuteOperation(const Context& context,void*){
  return true;
 }
 }
+bool OriginalOperation(const Context&context,void*){
+ auto*actual=Bridge::BorrowOriginalScope(context);assert(actual&&actual->self==context.self&&actual->env==context.env&&actual->vm==context.vm);
+ auto copied=context;assert(!Bridge::BorrowOriginalScope(copied));return true;
+}
 int main(int argc,char** argv){
  if(argc>1)mode=argv[1];
  JNINativeInterface_ table{};table.ExceptionCheck=Exception;table.FindClass=Find;
@@ -78,8 +82,10 @@ int main(int argc,char** argv){
  if(!std::strcmp(mode,"missing")||!std::strcmp(mode,"peer-mismatch")){
   assert(!ok&&!runnable_executor::Available());
   assert(runnable_executor::With(&env,thread,ExecuteOperation,nullptr)==Result::kUnavailable);
+  assert(runnable_executor::WithOriginalScope(&env,thread,OriginalOperation,nullptr)==Result::kUnavailable);
  }else{
-  assert(ok&&runnable_executor::Available());assert(runnable_executor::Initialize(hooks,&env,&error));
+  assert(ok&&runnable_executor::Available());
+ assert(runnable_executor::WithOriginalScope(&env,thread,OriginalOperation,nullptr)==Result::kSuccess);assert(runnable_executor::Initialize(hooks,&env,&error));
   assert(runnable_executor::With(&env,thread,ExecuteOperation,nullptr)==Result::kSuccess);
   assert(callbacks==1);
   assert(!std::strcmp(runnable_executor::Route(),!std::strcmp(mode,"fallback")?"from-reflected-method":"new-global-ref"));

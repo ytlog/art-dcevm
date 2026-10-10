@@ -117,12 +117,24 @@ bool EntrySource::OriginalScopeCurrent(const abi::common::RunnableJniScope&actua
    state==states_.RunnableState()&&binding_.current()==actual.self;
 }
 bool EntrySource::SeedOriginalRoots(const abi::common::RunnableJniScope&actual,void*method,
+ jobject receiver,OriginalRoots*out)const noexcept{return SeedRoots(actual,method,false,receiver,out);}
+bool EntrySource::SeedOriginalFieldRoots(const abi::common::RunnableJniScope&actual,void*field,
+ jobject receiver,OriginalRoots*out)const noexcept{return SeedRoots(actual,field,true,receiver,out);}
+bool EntrySource::DecodeOriginalFieldId(const abi::common::RunnableJniScope&actual,jfieldID id,void**out)const noexcept{
+ if(!out)return false;*out=nullptr;if(invocation_||!id||!OriginalScopeCurrent(actual))return false;
+ // No receiver has been decoded/borrowed yet. The actual named indexed decoder
+ // may acquire jni_id_lock_; the real original ART scope remains its owner.
+ void*field=field_id_(binding_.jni_id_manager,id);
+ if(!field||uintptr_t(field)%4||!OriginalScopeCurrent(actual))return false;
+ *out=field;return true;
+}
+bool EntrySource::SeedRoots(const abi::common::RunnableJniScope&actual,void*method,bool field,
  jobject receiver,OriginalRoots*out)const noexcept{
  if(!out)return false;*out={};
  if(!method||uintptr_t(method)%4||!OriginalScopeCurrent(actual))return false;
- // actual_method is the original wrapper's already decoded ArtMethod; indexed
+ // The original member is an already decoded live ArtMethod/ArtField. Indexed
  // JNI IDs never reach a pointer read here. The member owns its declaring root.
- OriginalRoots roots;roots.declaring=metadata_->MethodDeclaringClass(method);
+ OriginalRoots roots;roots.declaring=field?metadata_->FieldDeclaringClass(method):metadata_->MethodDeclaringClass(method);
  if(!roots.declaring||!OriginalScopeCurrent(actual))return false;
  if(receiver){
   const auto kind=uintptr_t(receiver)&kKindMask;

@@ -14,7 +14,7 @@ out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_typed_heap_walk_test'
 fixture=(root/'tests/host/native_source_commit_test.cc').read_text().split('int main(){')[0].replace('std::array<unsigned char,200>', 'std::array<unsigned char,512>')
 (out/'native_commit_fixture.inc').write_text(fixture)
-sources = ['native_typed_heap_walk','source_handle_roots', 'source_allocation_transaction', 'native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
+sources = ['native_typed_heap_walk','native_source_stop','native_source_class_loading','source_handle_roots', 'source_allocation_transaction', 'native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']

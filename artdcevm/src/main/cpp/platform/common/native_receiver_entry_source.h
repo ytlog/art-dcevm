@@ -56,7 +56,15 @@ class EntrySource final {
  struct OriginalRoots {void* receiver=nullptr;void* declaring=nullptr;void* local_slot=nullptr;};
  bool SeedOriginalRoots(const abi::common::RunnableJniScope&,void* actual_method,
                         jobject actual_receiver,OriginalRoots*)const noexcept;
+ bool SeedOriginalFieldRoots(const abi::common::RunnableJniScope&,void* actual_field,
+                             jobject actual_receiver,OriginalRoots*)const noexcept;
+ // May wait for indexed IDs; call before borrowing any managed receiver/root.
+ // Revalidates the same actual original scope after the named decoder returns.
+ bool DecodeOriginalFieldId(const abi::common::RunnableJniScope&,jfieldID,void**)const noexcept;
  bool OriginalScopeCurrent(const abi::common::RunnableJniScope&)const noexcept;
+ // Named current identity is only a routing hint; it grants no Runnable/root
+ // borrow and is checked again against the actual original callback scope.
+ void* OriginalThreadIdentity()const noexcept{return Proven()?binding_.current():nullptr;}
  bool OwnsMetadata(const modern_field_metadata::FieldMetadata& metadata)const noexcept{return Proven()&&metadata_==&metadata;}
  Access Leaves()noexcept;
  private:
@@ -72,6 +80,7 @@ class EntrySource final {
  static bool Compressed(void*,void*,uint32_t,void**)noexcept;
  static bool FieldId(void*,void*,void*,void**)noexcept;
  static void Raise(void*,void*,const char*,const char*)noexcept;
+ bool SeedRoots(const abi::common::RunnableJniScope&,void*,bool,jobject,OriginalRoots*)const noexcept;
  bool Borrow(void*)const noexcept;
  bool Extent(const void*,size_t)const noexcept;
  bool ReadReference(void*,jobject,void**)const noexcept;

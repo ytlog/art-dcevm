@@ -27,6 +27,8 @@ jmethodID FromReflected(JNIEnv* env,jobject object){
 }
 bool Success(const Context& context,void*){
  assert(state.runnable&&context.self==&state&&context.vm==&vm);++state.operations;
+ auto*actual=Bridge::BorrowOriginalScope(context);assert(actual&&actual->self==context.self&&actual->env==context.env&&actual->vm==context.vm);
+ auto copied=context;assert(!Bridge::BorrowOriginalScope(copied));
  void* result=reinterpret_cast<void*>(0x9999);
  assert(decoder.Decode(context,global,&result)&&result==reinterpret_cast<void*>(0x6000));
  assert(decoder.Decode(context,nullptr,&result)&&!result);
@@ -51,6 +53,7 @@ int main(){
  assert(!GlobalDecoder::Bind(static_cast<GlobalDecoder::Representation>(99),reinterpret_cast<void*>(Decode),&decoder));
  assert(!Bridge::Bind(nullptr,&bridge));
  assert(bridge.Invoke(&env,carrier,Success,nullptr)==Result::kSuccess);
+ assert(!Bridge::BorrowOriginalScope(Context{&state,&env,&vm}));
  assert(!state.runnable&&state.operations==1&&state.originals==2&&state.transitions==1&&state.decodes==1);
  state={};state.runnable=true;assert(bridge.Invoke(&env,carrier,Success,nullptr)==Result::kSuccess);assert(state.runnable&&state.transitions==0);
  state={};state.exception=true;assert(bridge.Invoke(&env,carrier,Success,nullptr)==Result::kPendingException);assert(!state.originals&&state.exception);

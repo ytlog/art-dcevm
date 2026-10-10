@@ -13,6 +13,13 @@ enum class Result {kSuccess,kUnavailable,kInvalidRequest,kPendingException,kReen
 class Bridge {
  public:
   using Leaf=abi::common::FromReflectedMethod;
+  // Only the exact Context object dispatched by this original named callback
+  // can borrow its live ART scope. Copying matching fields grants no scope.
+  static const abi::common::RunnableJniScope* BorrowOriginalScope(const Context&context)noexcept {
+    return active_&&active_->claimed&&original_context_==&context&&original_scope_&&
+      original_scope_->self==context.self&&original_scope_->env==context.env&&original_scope_->vm==context.vm?
+      original_scope_:nullptr;
+  }
   static bool HasActiveInvocation(){return active_!=nullptr;}
   static const char* SymbolName(){return abi::common::kFromReflectedMethod;}
   static bool Bind(void* original,Bridge* output) {
@@ -53,8 +60,11 @@ class Bridge {
     if(scope.env->ExceptionCheck()) {request->result=Result::kJniException;return method;}
     if(!method) {request->result=Result::kOriginalRejected;return method;}
     try {
-      request->result=request->operation({scope.self,scope.env,scope.vm,method,original_},request->data)
-          ? Result::kSuccess : Result::kOperationRejected;
+      Context context{scope.self,scope.env,scope.vm,method,original_};
+      if(original_context_||original_scope_){request->result=Result::kReentrant;return method;}
+      struct Borrow {~Borrow(){original_context_=nullptr;original_scope_=nullptr;}} borrow;
+      original_context_=&context;original_scope_=&scope;
+      request->result=request->operation(context,request->data)?Result::kSuccess:Result::kOperationRejected;
     } catch(...) {request->result=Result::kOperationThrew;}
     return method;
   }
@@ -64,6 +74,8 @@ class Bridge {
     bool claimed=false;Result result=Result::kLeafNotReached;
   };
   inline static thread_local Request* active_=nullptr;
+  inline static thread_local const Context* original_context_=nullptr;
+  inline static thread_local const abi::common::RunnableJniScope* original_scope_=nullptr;
   Leaf original_=nullptr;
 };
 }

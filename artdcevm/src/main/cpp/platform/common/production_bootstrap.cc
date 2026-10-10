@@ -314,6 +314,133 @@ struct NativeEngine final:Engine {
   if(!proven&&r.error.empty())r.error=r.result.failure?r.result.failure:"Compiled frame original map/value oracle rejected";
   return proven&&r.result.compiled_ready;
  }
+ native_typed_heap_walk::RootProvenance root_provenance;
+ native_typed_heap_walk::RootReport root_observation;
+ bool root_observation_attempted=false,root_observation_matches=false;
+ std::string root_observation_diagnostic;
+ struct RootSummary {std::array<uint32_t,2> stack_type{},stack_thread{},global_type{},global_thread{};
+  std::array<native_typed_heap_walk::RootRepresentation,2> stack_rep{},global_rep{};
+  std::array<bool,2> stack_seen{},global_seen{};
+ } root_summary;
+ bool RootProvenanceObserved()const override{return root_observation_matches&&root_observation.completed;}
+ std::string RootProvenanceDiagnostic()const override{return RootProvenanceObserved()?"":root_observation_diagnostic.empty()?"runtime-root-observation-not-attempted":root_observation_diagnostic;}
+ std::string RootProvenanceReport()const override{
+  const auto pair=[](const auto&values){return "["+std::to_string(values[0])+","+std::to_string(values[1])+"]";};
+  const auto reps=[](const auto&values,const auto&seen){const auto name=[](auto v,bool observed){return !observed?"unobserved":v==native_typed_heap_walk::RootRepresentation::Compressed?"compressed":"pointer";};return std::string("[\"")+name(values[0],seen[0])+"\",\""+name(values[1],seen[1])+"\"]";};
+  // Literal observations only; an uncompleted episode cannot be interpreted as
+  // root coverage, no-escape, public two-overload calibration or permission.
+  return "{\"completed\":"+std::string(root_observation.completed?"true":"false")+
+   ",\"failure\":"+std::to_string(static_cast<unsigned>(root_observation.failure))+
+   ",\"pointerRoots\":"+std::to_string(root_observation.pointer_roots)+
+   ",\"compressedRoots\":"+std::to_string(root_observation.compressed_roots)+
+   ",\"publicRootsMatched\":"+(root_observation_matches?"true":"false")+
+   ",\"nativeStackTypes\":"+pair(root_summary.stack_type)+",\"nativeStackThreadIds\":"+pair(root_summary.stack_thread)+
+   ",\"jniGlobalTypes\":"+pair(root_summary.global_type)+",\"jniGlobalThreadIds\":"+pair(root_summary.global_thread)+
+   ",\"nativeStackRepresentations\":"+reps(root_summary.stack_rep,root_summary.stack_seen)+",\"jniGlobalRepresentations\":"+reps(root_summary.global_rep,root_summary.global_seen)+"}";
+ }
+ struct RootRequest {NativeEngine&engine;std::array<jobject,2>globals{};abi::arm64::android11::CurrentThread current_thread=nullptr;std::string error;};
+ struct RootOracle final:native_typed_heap_walk::RootSink {
+  // Exact pinned gc_root.h enums. This class never supplies synthetic records
+  // to the root walker; metadata comes only from the original Runtime visitor.
+  static constexpr uint32_t jni_global=1,native_stack=4;
+  std::array<const void*,2>slots{};std::array<void*,2>values{};
+  std::array<bool,2>stack_seen{},global_seen{};
+  std::array<const void*,2>global_slots{};RootSummary summary;
+  bool Root(const native_typed_heap_walk::RootRecord&record)noexcept override{
+   for(size_t n=0;n<2;++n){
+    if(record.slot==slots[n]){
+     if(record.type!=native_stack||record.value!=values[n]||stack_seen[n])return false;
+     stack_seen[n]=true;summary.stack_seen[n]=true;summary.stack_type[n]=record.type;summary.stack_thread[n]=record.thread_id;summary.stack_rep[n]=record.representation;
+    }
+    if(record.type==jni_global&&record.value==values[n]){
+     if(!record.slot||global_seen[n])return false;
+     global_seen[n]=true;summary.global_seen[n]=true;global_slots[n]=record.slot;summary.global_type[n]=record.type;summary.global_thread[n]=record.thread_id;summary.global_rep[n]=record.representation;
+    }
+   }
+   return true;
+  }
+  bool Matched()const noexcept{return values[0]&&values[1]&&values[0]!=values[1]&&slots[0]&&slots[1]&&slots[0]!=slots[1]&&stack_seen[0]&&stack_seen[1]&&global_seen[0]&&global_seen[1]&&global_slots[0]!=global_slots[1];}
+ };
+ struct RootScan {RootRequest&request;source_handle_roots::Pool&pool;CalibrationRoots&roots;RootOracle oracle;void*self;bool attempted=false,mappings=false;};
+ static bool RootObservationExtent(void*raw,const void*address,size_t*extent){
+  auto&e=*static_cast<NativeEngine*>(raw);return e.calibration_stop&&e.calibration_stop->IsStopped(e.calibration_self)&&CachedExtent(raw,address,extent);
+ }
+ static bool ObserveRootsStopped(void*raw,native_source_stop::Session&stopped)noexcept{
+  auto&s=*static_cast<RootScan*>(raw);auto&e=s.request.engine;
+  if(!stopped.IsStopped(s.self)||!s.roots.FinalRootWindow())return false;
+  s.attempted=true;e.calibration_stop=&stopped;e.calibration_self=s.self;
+  struct Restore {NativeEngine&e;~Restore(){e.calibration_stop=nullptr;e.calibration_self=nullptr;}} restore{e};
+  s.mappings=e.RefreshStoppedMappings(nullptr);if(!s.mappings)return false;
+  const modern_field_metadata::ReadContext read{&e,RootObservationExtent};
+  // GC may have moved values since ordinary decoding. The same owned slots
+  // are re-read under the exact real stop, before any visitor comparison.
+  for(size_t n=0;n<2;++n){size_t extent=0;
+   if(!read.extent(read.owner,s.oracle.slots[n],&extent)||extent<4||!s.pool.ReadStopped(s.roots,s.oracle.slots[n],&s.oracle.values[n]))return false;
+  }
+  e.root_observation=e.root_provenance.Observe(stopped,s.self,read,s.oracle);
+  e.root_summary=s.oracle.summary;e.root_observation_matches=s.oracle.Matched();
+  return e.root_observation.completed&&e.root_observation_matches;
+ }
+ static bool ObserveRootsRunnable(const runnable_jni::Context&context,void*raw){
+  auto&r=*static_cast<RootRequest*>(raw);auto&e=r.engine;
+  if(!compiled_frame_fixture::SameOrdinaryOwner(context,e.source_env,static_cast<JavaVM*>(e.vm),r.current_thread)||!e.source_stop.Calibrated())return Fail(&r.error,"Runtime root observation lacks actual ordinary Runnable owner");
+  if(!e.root_provenance.CalibrateLocks(context,&r.error))return false;
+  source_handle_roots::Pool pool(e.source_capabilities.Roots());
+  // All public JNI identity/kind observations completed before With. No public
+  // JNI follows this pair borrow until the actual inspection has resumed.
+  void*left=nullptr,*right=nullptr;
+  if(!e.source_capabilities.Roots().BorrowOwnedStrongPair(context,r.globals[0],r.globals[1],&left,&right)||!left||!right||left==right)return Fail(&r.error,"Runtime root observation strong pair borrow failed");
+  auto first=pool.Add(left,&r.error),second=pool.Add(right,&r.error);if(!first||!second)return false;
+  size_t extent=0;if(!method_identity::ReadableMappingExtent(context.self,&extent))return Fail(&r.error,"Runtime root observation Thread mapping unavailable");
+  bool matched=false;bool attempted=false,mappings=false;
+  {native_source_stop::Session stopped(e.source_stop);CalibrationRoots roots(stopped,context.self);
+   roots.slots[0]=first;roots.slots[1]=second;roots.count=2;
+   RootScan scan{r,pool,roots,{},context.self};scan.oracle.slots={first,second};
+   matched=e.source_stop.RequiresOriginalWaiting()?stopped.InspectOriginalWaiting(context.self,extent,&scan,ObserveRootsStopped):stopped.Inspect(context.self,extent,&scan,ObserveRootsStopped);
+   attempted=scan.attempted;mappings=scan.mappings;
+   if(!matched&&!attempted)r.error=stopped.Failure();
+  } // Original resume/FinishGC/RestoreRunnable BEFORE Pool/header destruction.
+  if(attempted&&!mappings)r.error="Runtime root stopped mappings rejected: "+e.StoppedMappingDiagnostic();
+  if(!matched&&r.error.empty())r.error="Runtime root original report/public slot oracle refused failure="+std::to_string(static_cast<unsigned>(e.root_observation.failure));
+  return matched;
+ }
+ bool PrepareRootObservation(JNIEnv*env,jvmtiEnv*ti){
+  if(RootProvenanceObserved())return true;
+  if(root_observation_attempted)return false;
+  if(!source_capabilities.Ready()||!source_stop.Calibrated())return Fail(&root_observation_diagnostic,"Runtime root observation awaits actual source capabilities/stop");
+  if(!env||!ti||env->ExceptionCheck()||current||schema_run||graph_staging||source_env||source_ti||declared_field_ti||calibration_stop||!input)
+   return Fail(&root_observation_diagnostic,"Runtime root observation requires ordinary unstaged owner");
+  if(!ordinary_receiver_calibration::StorageAvailable(graph_fields,graph_maps))
+   return Fail(&root_observation_diagnostic,"Runtime root observation found unrelated staged storage");
+  redefinition_gate::Lease lease(vm);
+  if(!lease.Acquired())return Fail(&root_observation_diagnostic,"Runtime root observation actual gate unavailable");
+  root_observation_attempted=true;
+  ordinary_receiver_calibration::MappingLifetime<decltype(graph_maps)> mappings{graph_maps};
+  struct PrivateException {JNIEnv*env;std::string&diagnostic;~PrivateException(){if(env->ExceptionCheck()){compiled_frame_fixture::DescribePending(env,"runtime-root-private-oracle",&diagnostic);env->ExceptionClear();}}} private_exception{env,root_observation_diagnostic};
+  ordinary_receiver_calibration::Context<NativeEngine> borrowed{*this,current,vm,env,ti,source_env,source_ti,schema_root_env,declared_field_ti};
+  if(!borrowed.Entered())return Fail(&root_observation_diagnostic,"Runtime root observation actual ordinary borrow refused");
+  try{
+   auto named_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+   if(!named_current||!root_provenance.Bind(hooks,runtime.runtime,named_current,&root_observation_diagnostic))return false;
+   struct Local {JNIEnv*env;jobject value=nullptr;~Local(){if(value)env->DeleteLocalRef(value);}};
+   Local type{env,env->FindClass("java/lang/Object")};if(!type.value||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root public Object class unavailable");
+   auto ctor=env->GetMethodID(static_cast<jclass>(type.value),"<init>","()V");if(!ctor||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root public Object constructor unavailable");
+   Local left{env,env->NewObject(static_cast<jclass>(type.value),ctor)};if(!left.value||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root first public object unavailable");
+   Local right{env,env->NewObject(static_cast<jclass>(type.value),ctor)};if(!right.value||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root second public object unavailable");
+   Roots globals{env,{}};globals.values.reserve(2);auto first=globals.Own(left.value);if(!first||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root first strong global unavailable");
+   auto second=globals.Own(right.value);if(!second||env->ExceptionCheck())return Fail(&root_observation_diagnostic,"Runtime root second strong global unavailable");
+   const auto same=[&](jobject a,jobject b,bool expected){auto value=env->IsSameObject(a,b);return !env->ExceptionCheck()&&bool(value)==expected;};
+   const auto kind=[&](jobject value,jobjectRefType expected){auto actual=env->GetObjectRefType(value);return !env->ExceptionCheck()&&actual==expected;};
+   if(!kind(first,JNIGlobalRefType)||!kind(second,JNIGlobalRefType)||!kind(left.value,JNILocalRefType)||!kind(right.value,JNILocalRefType)||!same(first,left.value,true)||!same(second,right.value,true)||!same(first,second,false))return Fail(&root_observation_diagnostic,"Runtime root independent public global/local identity proof failed");
+   if(!PrepareStoppedMaps(&root_observation_diagnostic))return false;
+   RootRequest request{*this,{first,second},named_current,{}};
+   const auto result=runnable_executor::With(env,anchor,ObserveRootsRunnable,&request);
+   if(result!=runnable_jni::Result::kSuccess||!RootProvenanceObserved()){
+    root_observation_matches=false;root_observation_diagnostic=request.error.empty()?"Runtime root original Runnable observation refused":request.error;return false;
+   }
+   root_observation_diagnostic.clear();return true;
+  }catch(...){root_observation_matches=false;return Fail(&root_observation_diagnostic,"Runtime root private observation producer threw");}
+ }
  bool PrepareCompiledFrames(JNIEnv* env,jvmtiEnv* ti){
   PrepareInitializerEpisode(env);
   if(compiled_frames_proven)return true;
@@ -993,7 +1120,7 @@ struct NativeEngine final:Engine {
  bool applying=false;size_t ordinary_source_step=0;std::string ordinary_source_diagnostic;
  bool PrimeOrdinarySource(JNIEnv* env,jvmtiEnv* ti,std::string* error){
   if(!ordinary_source_diagnostic.empty())return Fail(error,ordinary_source_diagnostic.c_str());
-  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareCompiledFrames(env,ti);PrepareOrdinaryReceiverSource(env,ti);return true;}
+  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareCompiledFrames(env,ti);PrepareRootObservation(env,ti);PrepareOrdinaryReceiverSource(env,ti);return true;}
   if(current||schema_run||graph_staging)return Fail(error,"Private ordinary source priming requires an unstaged outer operation");
   jclass type=env->GetObjectClass(input);struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_root{env,type};
   auto class_id=type?env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;"):nullptr;
@@ -1034,6 +1161,7 @@ struct NativeEngine final:Engine {
   if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
   PrepareInitializerEpisode(env);
   PrepareCompiledFrames(env,ti);
+  PrepareRootObservation(env,ti);
   PrepareOrdinaryReceiverSource(env,ti);
   return true;
  }
@@ -1062,7 +1190,7 @@ struct NativeEngine final:Engine {
   // lease have all unwound. Private public calibration must run at this actual
   // ordinary boundary, never while the source transaction still owns them.
   if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck()){
-   PrepareCompiledFrames(env,ti);PrepareOrdinaryReceiverSource(env,ti);
+   PrepareCompiledFrames(env,ti);PrepareRootObservation(env,ti);PrepareOrdinaryReceiverSource(env,ti);
   }
   return result;
  }

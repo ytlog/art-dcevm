@@ -88,6 +88,8 @@ bool DecodeStrongGlobal(const runnable_jni::Context&,jobject object,void** out){
  else *out=reinterpret_cast<void*>(object);return object;
 }
 runnable_jni::Result With(JNIEnv* e,jobject,runnable_jni::Operation op,void* data){return op({wrong_context?&wrong_thread:Current(),e,nullptr},data)?runnable_jni::Result::kSuccess:runnable_jni::Result::kOperationRejected;}
+runnable_jni::Result WithOriginalScope(JNIEnv*,jobject,runnable_jni::Operation,void*){std::abort();} // Unowned baseline never needs original ingress.
+
 }
 int main(int argc,char** argv){using namespace retirement;
  // Binding validates all named modes, not merely get/set. Preserve output

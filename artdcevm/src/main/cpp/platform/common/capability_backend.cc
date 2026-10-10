@@ -78,6 +78,9 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"receiverHandleSourceDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverHandleSourceDiagnostic():"receiver-handle-source-owner-not-observed")+
    ",\"receiverOriginalEntriesObserved\":"+(common_&&common_->ReceiverOriginalEntriesObserved()?"true":"false")+
    ",\"receiverOriginalEntriesDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverOriginalEntriesDiagnostic():"receiver-original-entries-owner-not-observed")+
+   ",\"rootProvenanceObserved\":"+(common_&&common_->RootProvenanceObserved()?"true":"false")+
+   ",\"rootProvenanceDiagnostic\":"+QuoteJsonMutf8(common_?common_->RootProvenanceDiagnostic():"runtime-root-observation-owner-not-observed")+
+   ",\"rootProvenanceReport\":"+(common_?common_->RootProvenanceReport():"{}")+
    ",\"typedHeapCalibrated\":"+(common_&&common_->TypedHeapCalibrated()?"true":"false")+
    ",\"typedHeapDiagnostic\":"+QuoteJsonMutf8(common_?common_->TypedHeapDiagnostic():"typed-heap-source-owner-not-observed")+
    ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+

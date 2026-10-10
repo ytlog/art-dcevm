@@ -13,6 +13,11 @@ bool Available();
 // or escape. Each invocation independently verifies the current Thread identity.
 runnable_jni::Result With(JNIEnv* env,jobject strong_global,
                           runnable_jni::Operation operation,void* data);
+// Dispatch exclusively through the calibrated named reflected JNI bridge,
+// whose original callback retains an actual ART RunnableJniScope argument.
+// AddGlobalRef Contexts cannot substitute for this source-owned scope.
+runnable_jni::Result WithOriginalScope(JNIEnv*,jobject strong_global,
+                                      runnable_jni::Operation,void*);
 // Use only inside With's current callback. A strong reference is required.
 bool DecodeStrongGlobal(const runnable_jni::Context&,jobject strong_global,void** output);
 const char* Route();

@@ -1,6 +1,7 @@
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/native_receiver_guard.h"
+#include "platform/common/native_receiver_original_ingress.h"
 #include "platform/common/modern_final_field_guard.h"
 #include "platform/abi/arm64/art_field.h"
 #include "platform/common/modern_method_handle_guards.h"
@@ -61,7 +62,15 @@ bool Observe(const runnable_jni::Context& context,void* data) {
     ++rejected;
     state.throw_exception(context.self,"Ljava/lang/NoSuchFieldError;","Field removed by ART DCEVM");
   }
-  if(!request.guarded)request.guarded=receiver_guard::CheckReference(request.write?receiver_guard::Path::ReflectWrite:receiver_guard::Path::ReflectRead,context.self,field,request.receiver,nullptr,true);
+  if(!request.guarded){
+    const auto path=request.write?receiver_guard::Path::ReflectWrite:receiver_guard::Path::ReflectRead;
+    if(receiver_guard::OriginalIngress::WantsBridge(path)){
+      const auto*actual=runnable_jni::Bridge::BorrowOriginalScope(context);
+      bool unavailable=false;
+      request.guarded=actual?receiver_guard::OriginalIngress::Check(*actual,field,request.receiver,path,&unavailable,true):true;
+      if(!actual||unavailable)state.throw_exception(context.self,"Ljava/lang/IllegalStateException;","Receiver reflected field lost actual original Runnable scope");
+    }else request.guarded=receiver_guard::CheckReference(path,context.self,field,request.receiver,nullptr,true);
+  }
   return true;
 }
 bool Guard(JNIEnv* env,jfieldID id,jobject reflected,jobject receiver=nullptr,bool write=false) {
@@ -71,8 +80,10 @@ bool Guard(JNIEnv* env,jfieldID id,jobject reflected,jobject receiver=nullptr,bo
   jobject global=reflected?env->NewGlobalRef(reflected):nullptr;
   jobject receiver_root=receiver?env->NewGlobalRef(receiver):nullptr;
   Request request{id,global,false,receiver_root,write};
+  const auto path=write?receiver_guard::Path::ReflectWrite:receiver_guard::Path::ReflectRead;
   auto result=(reflected&&!global)||(receiver&&!receiver_root)?runnable_jni::Result::kInvalidRequest:
-      runnable_executor::With(env,global?global:state.anchor,Observe,&request);
+      (receiver_guard::OriginalIngress::WantsBridge(path)?runnable_executor::WithOriginalScope(env,global?global:state.anchor,Observe,&request):
+       runnable_executor::With(env,global?global:state.anchor,Observe,&request));
   if(global)env->DeleteGlobalRef(global);
   if(receiver_root)env->DeleteGlobalRef(receiver_root);
   if(request.guarded)return true;
@@ -90,8 +101,16 @@ bool GuardReceiverJni(JNIEnv* env,jobject receiver,jfieldID id,bool write){
  if(env->ExceptionCheck())return true;
  jobject root=receiver?env->NewGlobalRef(receiver):nullptr;
  struct Probe{jobject receiver;jfieldID id;bool write;bool rejected=false;}request{root,id,write};
- const auto operation=[](const runnable_jni::Context&context,void*p){auto&r=*static_cast<Probe*>(p);r.rejected=receiver_guard::CheckFieldId(r.write?receiver_guard::Path::JniWrite:receiver_guard::Path::JniRead,context.self,r.id,r.receiver);return true;};
- const auto result=receiver&&!root?runnable_jni::Result::kInvalidRequest:runnable_executor::With(env,state.anchor,operation,&request);
+ const auto operation=[](const runnable_jni::Context&context,void*p){auto&r=*static_cast<Probe*>(p);const auto path=r.write?receiver_guard::Path::JniWrite:receiver_guard::Path::JniRead;
+  if(receiver_guard::OriginalIngress::WantsBridge(path)){
+   const auto*actual=runnable_jni::Bridge::BorrowOriginalScope(context);bool unavailable=false;
+   r.rejected=actual?receiver_guard::OriginalIngress::CheckFieldId(*actual,r.id,r.receiver,path,&unavailable):true;
+   if(!actual||unavailable)state.throw_exception(context.self,"Ljava/lang/IllegalStateException;","Receiver JNI field lost actual original Runnable scope");
+  }else r.rejected=receiver_guard::CheckFieldId(path,context.self,r.id,r.receiver);
+  return true;};
+ const auto path=write?receiver_guard::Path::JniWrite:receiver_guard::Path::JniRead;
+ const auto result=receiver&&!root?runnable_jni::Result::kInvalidRequest:
+  (receiver_guard::OriginalIngress::WantsBridge(path)?runnable_executor::WithOriginalScope(env,state.anchor,operation,&request):runnable_executor::With(env,state.anchor,operation,&request));
  if(root)env->DeleteGlobalRef(root);
  if(result!=runnable_jni::Result::kSuccess&&!env->ExceptionCheck()){auto type=env->FindClass("java/lang/IllegalStateException");if(type){env->ThrowNew(type,"Receiver JNI field guard lost owned Runnable access");env->DeleteLocalRef(type);}}
  return request.rejected||result!=runnable_jni::Result::kSuccess;

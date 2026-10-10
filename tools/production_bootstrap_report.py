@@ -4,6 +4,7 @@ from production_foreground_report import validate_foreground
 import re
 
 SOURCE_EPISODES = {
+    'root-provenance': ('rootProvenanceObserved', 'rootProvenanceDiagnostic'),
     'initializer': ('initializerEpisodeObserved', 'initializerEpisodeDiagnostic'),
     'compiled-frames': ('compiledFramesCalibrated', 'frameCalibrationDiagnostic'),
     'receiver-invoke': ('receiverInvokeSourceCalibrated', 'receiverInvokeSourceDiagnostic'),

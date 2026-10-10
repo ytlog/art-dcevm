@@ -43,14 +43,17 @@ bool Dispatch(const runnable_jni::Context& context,void* data){
   auto& request=*static_cast<Request*>(data);
   if(context.env!=request.env || context.vm!=request.vm || context.self!=request.self ||
      current()!=context.self)return false;
-  void* thread=nullptr;if(!Decode(context,request.thread,&thread))return false;
-  // No managed dereference or safepoint between borrowed peer identities.
-  void* peer=const_peer?const_peer(context.self):mutable_peer(context.self);
-  if(!thread || thread!=peer)return false;
+  {
+    void* thread=nullptr;if(!Decode(context,request.thread,&thread))return false;
+    // End these borrowed identities before an operation can decode an indexed
+    // member ID or otherwise suspend. Only the comparison survives this block.
+    void* peer=const_peer?const_peer(context.self):mutable_peer(context.self);
+    if(!thread || thread!=peer)return false;
+  }
   return request.operation(context,request.data);
 }
 bool Identity(const runnable_jni::Context&,void*){return true;}
-runnable_jni::Result Invoke(JNIEnv* env,jobject strong,runnable_jni::Operation operation,void* data){
+runnable_jni::Result Invoke(JNIEnv* env,jobject strong,runnable_jni::Operation operation,void* data,bool original_scope=false){
   using Result=runnable_jni::Result;
   if(!env || !strong || !operation)return Result::kInvalidRequest;
   if(executing)return Result::kReentrant;
@@ -68,7 +71,7 @@ runnable_jni::Result Invoke(JNIEnv* env,jobject strong,runnable_jni::Operation o
   if(env->ExceptionCheck())return Result::kJniException;
   if(!thread || !current())return Result::kContextMismatch;
   Request request{env,vm,current(),thread,operation,data};
-  auto result=global_bound?globals.Invoke(env,strong,Dispatch,&request):Result::kUnavailable;
+  auto result=global_bound&&!original_scope?globals.Invoke(env,strong,Dispatch,&request):Result::kUnavailable;
   last_route="new-global-ref";
   if((result==Result::kLeafNotReached || result==Result::kUnavailable) && reflected_bound){
     // Immutable boot Method carrier is never the application object being
@@ -138,6 +141,10 @@ bool Available(){return ready.load(std::memory_order_acquire);}
 runnable_jni::Result With(JNIEnv* env,jobject strong,runnable_jni::Operation operation,void* data){
   if(!Available())return runnable_jni::Result::kUnavailable;
   return Invoke(env,strong,operation,data);
+}
+runnable_jni::Result WithOriginalScope(JNIEnv* env,jobject strong,runnable_jni::Operation operation,void* data){
+  if(!Available()||!reflected_bound)return runnable_jni::Result::kUnavailable;
+  return Invoke(env,strong,operation,data,true);
 }
 bool DecodeStrongGlobal(const runnable_jni::Context& context,jobject strong,void** output){
   return executing && Available() && Decode(context,strong,output);
