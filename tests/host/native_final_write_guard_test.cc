@@ -30,6 +30,18 @@ int main(){
  s.obsolete_owner=nullptr;write(45);assert(value==44);
  s.available=false;write(46);assert(value==44&&!std::strcmp(s.type,"Ljava/lang/IllegalStateException;"));
  assert(!guard.BeginProof(oracle));assert(!guard.FieldWritten(nullptr,&method,&field));
+ State calibration;calibration.field_owner=&owner;calibration.method_owner=&foreign;
+ Guard isolated({&calibration,Field,Method,Equivalent,Raise});int unrelated_field=0;
+ assert(isolated.BeginCalibration()&&!isolated.CompleteCalibration());
+ assert(isolated.BeginProof(oracle));
+ assert(!isolated.FieldWritten(&thread,&method,&unrelated_field));
+ assert(isolated.FieldWritten(&thread,&method,&field)&&isolated.EndProof(true,true));
+ assert(!isolated.FieldWritten(&thread,&method,&unrelated_field));
+ assert(!isolated.ValidateProof(isolated.FreezeProof()));
+ assert(isolated.FieldWritten(&other_thread,&method,&field)); // exact field remains enforced
+ assert(isolated.CompleteCalibration());
+ assert(isolated.ValidateProof(isolated.FreezeProof()));
+ assert(isolated.FieldWritten(&thread,&method,&unrelated_field)); // production enforcement retained
  State refreshed;refreshed.field_owner=&owner;refreshed.method_owner=&foreign;
  Guard native({&refreshed,Field,Method,Equivalent,Raise,WriterEquivalent});
  assert(native.BeginProof(oracle)&&native.FieldWritten(&thread,&method,&field)&&native.EndProof(true,true));

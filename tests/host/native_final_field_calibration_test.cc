@@ -27,7 +27,12 @@ void JNICALL JavaWrite(JNIEnv*,jclass,jmethodID,va_list args){(void)va_arg(args,
  }
  if(!pending){f.value=value;f.reference=object;}
 }
-jint JNICALL Paths(JNIEnv*,jclass,jmethodID method,va_list args){(void)va_arg(args,jobject);(void)va_arg(args,jobject);bool statik=va_arg(args,int);if(method==Ref<jmethodID>(&wrong)){(void)va_arg(args,jobject);fields[unsigned(statik)+2].reference=&handles;}else{int value=va_arg(args,int);fields[statik].value=value+1;}return mode==5?31:63;}
+jint JNICALL Paths(JNIEnv*,jclass,jmethodID method,va_list args){
+ // The Java handle oracle may run unrelated original ART bytecode after the
+ // first isolated proof. It must not acquire whole-process final enforcement.
+ Field unrelated{0x10u,17};
+ assert(!guard.FieldWritten(&thread,&writer,&unrelated));assert(!pending);
+(void)va_arg(args,jobject);(void)va_arg(args,jobject);bool statik=va_arg(args,int);if(method==Ref<jmethodID>(&wrong)){(void)va_arg(args,jobject);fields[unsigned(statik)+2].reference=&handles;}else{int value=va_arg(args,int);fields[statik].value=value+1;}return mode==5?31:63;}
 jint JNICALL Get(JNIEnv*,jobject,jfieldID field){return reinterpret_cast<Field*>(field)->value;}
 jint JNICALL GetStatic(JNIEnv*,jclass,jfieldID field){return reinterpret_cast<Field*>(field)->value;}
 void JNICALL Set(JNIEnv*,jobject,jfieldID field,jint value){if(mode!=4||!(reinterpret_cast<Field*>(field)->flags&0x10u))reinterpret_cast<Field*>(field)->value=value;}
@@ -51,7 +56,7 @@ bool Service::PrepareEnvironment(JNIEnv*,std::string*){return true;}
 bool Service::PrepareProofMethod(jmethodID method,std::string*){return method==Ref<jmethodID>(&writer);}
 bool Service::RegisterStrong(JNIEnv*,jobject ref,std::string*){return ref!=nullptr;}
 void Service::ForgetStrong(jobject){}
-bool Service::Bind(HookEngine&,void* actual,std::string*){return actual==&target;}
+bool Service::Bind(HookEngine&,void* actual,std::string*){return actual==&target&&guard.BeginCalibration();}
 bool Service::InstallAtExclusiveBoundary(std::string*){return true;}
 bool Service::FixtureField(void* actual,jclass t,jclass w,jmethodID m,jfieldID f,bool statik,final_write_guard::Oracle* out,uint32_t* flags,std::string*)const{
  assert(actual==&thread&&t==Ref<jclass>(&target)&&w==Ref<jclass>(&writer)&&m==Ref<jmethodID>(&writer)&&(f==Ref<jfieldID>(&fields[statik])||f==Ref<jfieldID>(&fields[unsigned(statik)+2])));auto* field=reinterpret_cast<Field*>(f);*out={actual,&writer,field,field>=fields+2};*flags=field->flags;return true;}
@@ -60,7 +65,7 @@ bool Service::BeginProof(const final_write_guard::Oracle& oracle){return guard.B
 bool Service::EndProof(bool exception,bool unchanged){return guard.EndProof(exception,unchanged);}
 bool Service::AlreadyCalibrated()const{return false;}
 void Service::AbortCalibration(){guard.ResetUncommittedProof();ready=false;}
-bool Service::CompleteCalibration(){ready=guard.Proven();return ready;}
+bool Service::CompleteCalibration(){ready=guard.Proven()&&guard.CompleteCalibration();return ready;}
 bool Service::RefreshPlan(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::VerifyAliases(const source_commit::Plan&,std::string*)const{return false;}
 bool Service::Verify(const source_commit::Plan&,std::string*)const{return false;}

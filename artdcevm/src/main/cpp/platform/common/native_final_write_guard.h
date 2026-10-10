@@ -31,6 +31,9 @@ class Guard {
  bool ValidateProof(const ProofWitness&)const noexcept;
  void CommitProof(const ProofWitness&)noexcept;
  explicit Guard(Access access):access_(access){}
+ // Calibration is an isolated producer, not a process permission lease.
+ bool BeginCalibration() noexcept;
+ bool CompleteCalibration() noexcept;
  bool BeginProof(const Oracle&) noexcept;
  bool EndProof(bool illegal_access_error,bool unchanged_sentinel) noexcept;
  bool Proven() const noexcept;
@@ -40,6 +43,6 @@ class Guard {
  // was raised. ART DoFieldPutCommon checks its pending exception after event.
  bool FieldWritten(void* thread,void* method,void* field,bool reference=false) noexcept;
  private:
- Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false;std::atomic<uint64_t> proof_epoch_{0};std::atomic<bool> proof_ready_{false},proof_committed_{false};
+ Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false,calibrating_=false;void* calibration_field_=nullptr;std::atomic<uint64_t> proof_epoch_{0};std::atomic<bool> proof_ready_{false},proof_committed_{false};
 };
 } // namespace artdcevm::final_write_guard

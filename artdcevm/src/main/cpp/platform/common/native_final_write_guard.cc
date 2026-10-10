@@ -1,6 +1,16 @@
 #include "platform/common/native_final_write_guard.h"
 #include <cstdlib>
 namespace artdcevm::final_write_guard {
+bool Guard::BeginCalibration() noexcept {
+ std::lock_guard<std::mutex> lock(lock_);
+ if(proof_committed_.load(std::memory_order_acquire)||proven_||probing_)return false;
+ calibrating_=true;calibration_field_=nullptr;return true;
+}
+bool Guard::CompleteCalibration() noexcept {
+ std::lock_guard<std::mutex> lock(lock_);
+ if(!calibrating_||probing_||!proven_||!proof_ready_.load(std::memory_order_acquire))return false;
+ calibrating_=false;calibration_field_=nullptr;return true;
+}
 bool Guard::BeginProof(const Oracle& oracle) noexcept {
  if(proof_committed_.load(std::memory_order_acquire))return false;
  if(!oracle.thread||!oracle.method||!oracle.field||!access_.owner||
@@ -10,7 +20,7 @@ bool Guard::BeginProof(const Oracle& oracle) noexcept {
     !access_.method_owner(access_.owner,oracle.method,&method_owner)||!field_owner||!method_owner||
     (access_.equivalent_writer?access_.equivalent_writer(access_.owner,oracle.thread,oracle.field,oracle.method):access_.equivalent_owner(access_.owner,field_owner,method_owner)))return false;
  std::lock_guard<std::mutex> lock(lock_);if(probing_)return false;
- proof_ready_.store(false,std::memory_order_release);++epoch_;proof_epoch_.store(epoch_,std::memory_order_release);oracle_=oracle;probing_=true;seen_=false;rejected_=false;return true;
+ proof_ready_.store(false,std::memory_order_release);++epoch_;proof_epoch_.store(epoch_,std::memory_order_release);oracle_=oracle;if(calibrating_)calibration_field_=oracle.field;probing_=true;seen_=false;rejected_=false;return true;
 }
 bool Guard::EndProof(bool exception,bool unchanged) noexcept {
  std::lock_guard<std::mutex> lock(lock_);if(!probing_)return false;
@@ -19,8 +29,8 @@ bool Guard::EndProof(bool exception,bool unchanged) noexcept {
  // A failed new proof cannot authorize a previously unproven dispatcher.
  proven_=proven_||pass;proof_ready_.store(pass,std::memory_order_release);return pass;
 }
-void Guard::ResetUncommittedProof() noexcept {if(proof_committed_.load(std::memory_order_acquire))std::abort();std::lock_guard<std::mutex> lock(lock_);proof_ready_.store(false,std::memory_order_release);++epoch_;proof_epoch_.store(epoch_,std::memory_order_release);oracle_={};probing_=false;seen_=false;rejected_=false;proven_=false;}
-Guard::ProofWitness Guard::FreezeProof()const noexcept{std::lock_guard<std::mutex> lock(lock_);ProofWitness witness;if(proven_&&!probing_&&proof_ready_.load(std::memory_order_acquire)){witness.owner_=this;witness.epoch_=epoch_;}return witness;}
+void Guard::ResetUncommittedProof() noexcept {if(proof_committed_.load(std::memory_order_acquire))std::abort();std::lock_guard<std::mutex> lock(lock_);proof_ready_.store(false,std::memory_order_release);++epoch_;proof_epoch_.store(epoch_,std::memory_order_release);oracle_={};probing_=false;seen_=false;rejected_=false;proven_=false;calibrating_=false;calibration_field_=nullptr;}
+Guard::ProofWitness Guard::FreezeProof()const noexcept{std::lock_guard<std::mutex> lock(lock_);ProofWitness witness;if(proven_&&!probing_&&!calibrating_&&proof_ready_.load(std::memory_order_acquire)){witness.owner_=this;witness.epoch_=epoch_;}return witness;}
 bool Guard::ValidateProof(const ProofWitness&witness)const noexcept{return witness.owner_==this&&witness.epoch_&&proof_ready_.load(std::memory_order_acquire)&&proof_epoch_.load(std::memory_order_acquire)==witness.epoch_;}
 void Guard::CommitProof(const ProofWitness&witness)noexcept{if(!ValidateProof(witness))std::abort();proof_committed_.store(true,std::memory_order_release);}
 bool Guard::Proven() const noexcept {std::lock_guard<std::mutex> lock(lock_);return proven_;}
@@ -28,6 +38,9 @@ bool Guard::FieldWritten(void* thread,void* method,void* field,bool reference) n
  if(!thread||!method||!field)return false;
  uint64_t epoch=0;
  {std::lock_guard<std::mutex> lock(lock_);
+  // Outside the exact mutable fixture, original ART owns permissions until
+  // every calibration storage path has independently passed.
+  if(calibrating_&&field!=calibration_field_)return false;
   if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference){epoch=epoch_;seen_=true;}
   if(!proven_&&!epoch)return false;}
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;

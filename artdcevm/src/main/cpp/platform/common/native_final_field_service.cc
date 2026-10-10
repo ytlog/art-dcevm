@@ -89,7 +89,7 @@ bool Service::Bind(HookEngine& hooks,void* instrumentation,std::string* error){a
  if(!s.permission_env||!s.proof_method||!s.bindings.register_strong||!s.bindings.forget_strong||!s.bindings.decode_weak||!s.bindings.register_weak||!s.bindings.forget_weak||!s.bindings.raise||!s.bindings.native.metadata||!s.bindings.native.metadata->Calibrated()||
     !s.bindings.native.methods||!s.bindings.native.decode_global||!s.bindings.native.method_class)
   return Fail(error,"Final-field service lacks the calibrated process identity/root owner");
- return final_write_guard::BindListener(hooks,instrumentation,s.guard,error);
+ return s.guard.BeginCalibration()&&final_write_guard::BindListener(hooks,instrumentation,s.guard,error);
 }
 bool Service::InstallAtExclusiveBoundary(std::string* error){return final_write_guard::InstallListenerAtExclusiveBoundary(error);}
 bool Service::FixtureField(void* thread,jclass target,jclass writer,jmethodID method,jfieldID id,bool statik,final_write_guard::Oracle* oracle,uint32_t* flags,std::string* error)const{const auto& s=*state_;
@@ -125,7 +125,7 @@ bool Service::BeginProof(const final_write_guard::Oracle& oracle){auto& s=*state
 bool Service::EndProof(bool exception,bool unchanged){auto& s=*state_;bool pass=s.guard.EndProof(exception,unchanged);if(pass)s.proved_storage|=uint8_t(1u<<((s.current_static?1u:0u)+(s.current_reference?2u:0u)));return pass;}
 bool Service::AlreadyCalibrated()const{return state_->calibration_complete&&final_write_guard::ListenerProven(state_->guard);}
 void Service::AbortCalibration(){auto& s=*state_;if(s.calibration_complete)return;s.guard.ResetUncommittedProof();s.proved_storage=0;}
-bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==15u&&final_write_guard::ListenerProven(s.guard);return s.calibration_complete;}
+bool Service::CompleteCalibration(){auto& s=*state_;s.calibration_complete=s.proved_storage==15u&&final_write_guard::ListenerProven(s.guard)&&s.guard.CompleteCalibration();return s.calibration_complete;}
 bool Service::Stage(JNIEnv* env,jvmtiEnv* jvmti,const std::vector<jclass>& roots,const std::vector<jclass>& replacements,std::string* error){auto& s=*state_;
  if(!s.bindings.register_weak||!s.bindings.forget_weak)return Fail(error,"Final-field roots lack owned weak registration lifecycle");
  if(roots.size()!=replacements.size()||!env||!jvmti||s.prepared||s.sealed||!s.staged.empty()||!redefinition_gate::Owned(s.bindings.native.vm))return Fail(error,"Final-field public stage lacks its operation lease");
