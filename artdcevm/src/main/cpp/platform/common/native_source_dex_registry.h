@@ -13,14 +13,17 @@ class Service final {
                 const modern_field_metadata::FieldMetadata&,source_handle_roots::Service&,std::string*);
  bool Calibrated()const noexcept{return calibrated_;}
  // Caller supplies the source-owned GC-updated cache slot. It is refreshed
- // after EACH native registry query; no borrowed managed pointer spans a query.
+ // after the safe IsDexFileRegistered query; no borrowed managed pointer spans
+ // it. False is accepted only after independent positive registered fixture
+ // calibration and exact private cache/DEX root checks. FindDexCache is NOT a
+ // nullable query and is used only for that strongly rooted positive fixture.
  bool Unregistered(const runnable_jni::Context&,source_handle_roots::Pool&,
                    const void* cache_root,const void* expected_dex,std::string*)const;
  private:
  using Object=abi::arm64::android11::ReleaseObjectPointer;
  using Registered=bool(*)(void*,void*,const void*);
- using Find=Object(*)(void*,void*,const void*);
- void*linker_=nullptr;Registered registered_=nullptr;Find find_=nullptr;
+ using RegisteredCache=Object(*)(void*,void*,const void*);
+ void*linker_=nullptr;Registered registered_=nullptr;RegisteredCache registered_cache_=nullptr;
  bool calibrated_=false;
 };
 }

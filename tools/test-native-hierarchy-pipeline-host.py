@@ -48,4 +48,4 @@ for layout in ('legacy','sized'):
     if layout=='legacy': (out/'result.log').write_text(result.stdout+result.stderr)
     result.check_returncode()
     print(layout+' (plain + length FindClass): '+result.stdout.strip())
-print('Source cache native adapter: ASan/UBSan passed')
+print('Native DEX registry owner: ASan/UBSan passed' if os.environ.get('SOURCE_REGISTRY_ONLY') else 'Source cache native adapter: ASan/UBSan passed')

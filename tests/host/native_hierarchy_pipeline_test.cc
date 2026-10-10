@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "platform/common/native_source_dex_registry.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/native_source_class_loading.h"
@@ -32,10 +33,10 @@ Driver actual_driver{};abi::arm64::android_common::ClassRedefinitionPrefix actua
 transaction_root::Holder*actual_holder=nullptr;source_handle_roots::Service*root_service=nullptr;
 native_hierarchy_allocator::Service*allocator_service=nullptr;void*selected_parent=nullptr;bool held=false;void*held_object=nullptr;unsigned allocated=0;int monitor_id;
 bool IsRegistered(const void*file){return file==original_file;}
-void*FindDexCache(const void*file){return IsRegistered(file)?published_cache:nullptr;}
-bool registry_wrong=false,registry_published=false;
-bool RegistryRegistered(void*l,void*self,const void*f){assert(l==&linker&&self==thread.data());return registry_wrong?false:(registry_published||IsRegistered(f));}
-abi::arm64::android11::ReleaseObjectPointer RegistryFind(void*l,void*self,const void*f){assert(l==&linker&&self==thread.data());return {uintptr_t(FindDexCache(f))};}
+void*LookupRegisteredCache(const void*file){assert(IsRegistered(file));return published_cache;}
+bool registry_wrong=false,registry_published=false;unsigned registry_find_calls=0;void*registry_changed_cache=nullptr;
+bool RegistryRegistered(void*l,void*self,const void*f){assert(l==&linker&&self==thread.data());if(registry_changed_cache){uint64_t wrong=uintptr_t(original_file);std::memcpy(static_cast<unsigned char*>(registry_changed_cache)+16,&wrong,8);}return registry_wrong?false:(registry_published||IsRegistered(f));}
+abi::arm64::android11::ReleaseObjectPointer RegistryFind(void*l,void*self,const void*f){assert(l==&linker&&self==thread.data());++registry_find_calls;return {uintptr_t(LookupRegisteredCache(f))};}
 abi::arm64::android11::ReleaseObjectPointer Enter(void*self,abi::arm64::android11::ReleaseObjectPointer p,bool attempt){assert(self==thread.data()&&!held&&!attempt);held=true;held_object=reinterpret_cast<void*>(p.reference);return p;}
 bool Exit(void*self,abi::arm64::android11::ReleaseObjectPointer p){assert(self==thread.data()&&held&&held_object==reinterpret_cast<void*>(p.reference));held=false;held_object=nullptr;return true;}
 jmethodID StaticMethod(JNIEnv*,jclass,const char*n,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(n,"holdsLock")?uintptr_t(&monitor_id):4);}
@@ -130,10 +131,10 @@ void NotifyFailure(void*driver,jvmtiError)noexcept{++source_failure_notification
 unsigned untouched_finish_calls=0;bool throw_first_finish=false;
 bool OriginalSessionFinish(void*owner,transaction_root::Holder*h,void*i){if(auto*loading=native_source_class_loading::Run::Current();loading&&owner==&actual_owner)assert(loading->Paused());if(throw_first_finish)throw 9;auto*s=native_hierarchy_session::Session::Current();if(!s||!s->OwnsClassOwner(owner)){if(native_hierarchy_session::CalibrationScope::Current())return SessionFinish(owner,h,i);++untouched_finish_calls;return true;}return SessionFinish(owner,h,i);}
 class SessionHooks final:public SourceHooks {
- public:int fail=-1;size_t installs=0,removes=0;bool missing=false;
+ public:int fail=-1;size_t installs=0,removes=0;bool missing=false;int registry_missing=0;
  void*FindSymbol(const char*lib,const char*n)override{
-  if(!std::strcmp(n,"_ZN3art11ClassLinker19IsDexFileRegisteredEPNS_6ThreadERKNS_7DexFileE"))return reinterpret_cast<void*>(RegistryRegistered);
-  if(!std::strcmp(n,"_ZN3art11ClassLinker12FindDexCacheEPNS_6ThreadERKNS_7DexFileE"))return reinterpret_cast<void*>(RegistryFind);
+  if(!std::strcmp(n,"_ZN3art11ClassLinker19IsDexFileRegisteredEPNS_6ThreadERKNS_7DexFileE"))return registry_missing==1?nullptr:reinterpret_cast<void*>(RegistryRegistered);
+  if(!std::strcmp(n,"_ZN3art11ClassLinker12FindDexCacheEPNS_6ThreadERKNS_7DexFileE"))return registry_missing==2?nullptr:reinterpret_cast<void*>(RegistryFind);
   if(!std::strcmp(n,"_ZN3art11ClassLinker24RegisterExistingDexCacheENS_6ObjPtrINS_6mirror8DexCacheEEENS1_INS2_11ClassLoaderEEE"))return reinterpret_cast<void*>(OriginalPublication);
   if(!std::strcmp(n,"_ZTVN12openjdkjvmti21ClassDefinitionPauserE"))return pauser_vtable.data();
   if(!std::strcmp(n,"_ZN3art16RuntimeCallbacks20AddClassLoadCallbackEPNS_17ClassLoadCallbackE"))return reinterpret_cast<void*>(OriginalClassAdd);
@@ -162,7 +163,7 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
  bool PreparePrivate(const native_hierarchy_source_cache::RecordView&r,const native_hierarchy_cache::Source&s,std::string*)const override{return VerifyPrivate(r,s,context_,pool_);}
  bool VerifyPrivate(const native_hierarchy_source_cache::RecordView&r,const native_hierarchy_cache::Source&s,const runnable_jni::Context&c,const source_handle_roots::Pool&p)const noexcept override{
   void*old=nullptr,*cache=nullptr;void*holder_array=Root(const_cast<uint32_t*>(actual_holder->array_handle));
-  return &p==&pool_&&c.self==context_.self&&Current()==c.self&&r.source_owner==&actual_owner&&actual_owner.driver==&actual_driver&&actual_driver.self==c.self&&actual_owner.dex_file==s.dex_identity&&s.dex_identity==incoming_file&&!IsRegistered(s.dex_identity)&&!FindDexCache(s.dex_identity)&&p.Read(r.old_root,&old)&&old==old_class&&p.Read(r.cache_root,&cache)&&cache==Root(static_cast<unsigned char*>(holder_array)+12+12)&&r.cache_root==s.cache_root;
+  return &p==&pool_&&c.self==context_.self&&Current()==c.self&&r.source_owner==&actual_owner&&actual_owner.driver==&actual_driver&&actual_driver.self==c.self&&actual_owner.dex_file==s.dex_identity&&s.dex_identity==incoming_file&&!IsRegistered(s.dex_identity)&&p.Read(r.old_root,&old)&&old==old_class&&p.Read(r.cache_root,&cache)&&cache==Root(static_cast<unsigned char*>(holder_array)+12+12)&&r.cache_root==s.cache_root;
  }
  bool VerifyReadonlyStaged(const Graph&,const native_hierarchy_source_cache::RecordView&)const noexcept override{return false;}
  bool VerifyReadonlyPrepared(const Graph&,const native_hierarchy_source_cache::RecordView&,const Prepared&)const noexcept override{return false;}
@@ -210,7 +211,11 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
 
   auto*old_root=pool.Add(old_class,&error),*parent_root=pool.Add(base,&error),*cache_root=pool.Add(cache,&error);selected_parent=base;
   {native_hierarchy_session::CalibrationScope observation(&actual_driver,context,reinterpret_cast<jobject>(old_class),*d.roots,allocation);native_source_class_loading::Run loading(class_loading,&actual_driver,context);assert(native_hierarchy_session::CalibrationScope::Current()==&observation);PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);assert(!loading.Paused()&&!class_loading.ObservedOriginal());session_old_handle=old_root;session_parent_handle=parent_root;session_cache_handle=cache_root;transaction_root::Iterator iter{0,&holder};assert(session_finish_proxy(&actual_owner,&holder,&iter)&&loading.Paused());class_remove_proxy(&linker,&pauser);assert(!loading.Paused());std::memset(&pauser,0,sizeof(pauser));assert(loading.Complete(true)&&class_loading.ObservedOriginal());}assert(!native_hierarchy_session::CalibrationScope::Current()&&allocated==1);
-  native_source_dex_registry::Service registry;assert(native_source_dex_registry::Service::Bind(session_hooks,runtime,&registry,&error));registry_wrong=true;assert(!registry.Calibrate(context,reinterpret_cast<jobject>(old_class),*d.metadata,*d.roots,&error));registry_wrong=false;assert(registry.Calibrate(context,reinterpret_cast<jobject>(old_class),*d.metadata,*d.roots,&error));assert(registry.Unregistered(context,pool,cache_root,incoming_file,&error));registry_published=true;assert(!registry.Unregistered(context,pool,cache_root,incoming_file,&error));registry_published=false;assert(!registry.Unregistered(context,pool,cache_root,original_file,&error));
+  for(int missing:{1,2}){native_source_dex_registry::Service unavailable;session_hooks.registry_missing=missing;assert(!native_source_dex_registry::Service::Bind(session_hooks,runtime,&unavailable,&error));assert(!unavailable.Unregistered(context,pool,cache_root,incoming_file,&error)&&registry_find_calls==0);}session_hooks.registry_missing=0;
+  native_source_dex_registry::Service registry;assert(native_source_dex_registry::Service::Bind(session_hooks,runtime,&registry,&error));assert(!registry.Unregistered(context,pool,cache_root,incoming_file,&error)&&registry_find_calls==0);registry_wrong=true;assert(!registry.Calibrate(context,reinterpret_cast<jobject>(old_class),*d.metadata,*d.roots,&error));registry_wrong=false;assert(registry.Calibrate(context,reinterpret_cast<jobject>(old_class),*d.metadata,*d.roots,&error));assert(registry_find_calls==1);assert(registry.Unregistered(context,pool,cache_root,incoming_file,&error));assert(registry_find_calls==1);
+  registry_changed_cache=cache;assert(!registry.Unregistered(context,pool,cache_root,incoming_file,&error));registry_changed_cache=nullptr;uint64_t restored_file=uintptr_t(incoming_file);std::memcpy(static_cast<unsigned char*>(cache)+16,&restored_file,8);assert(registry_find_calls==1);
+  registry_published=true;assert(!registry.Unregistered(context,pool,cache_root,incoming_file,&error));registry_published=false;assert(!registry.Unregistered(context,pool,cache_root,original_file,&error));
+  if(std::getenv("SOURCE_REGISTRY_ONLY"))return true;
   native_hierarchy_source_cache::AllocatorBatchAccess access(pool);SourceOwners source_owners(context,pool);native_hierarchy_source_cache::Mapper mapper(context,pool,*d.metadata,*d.storage,access,&source_owners);
   native_hierarchy_cache::Counts counts;assert(native_hierarchy_source_cache::Inspect(d.mapping,*d.schema,&counts,&error));uint32_t subject_index=UINT32_MAX;for(uint32_t i=0;i<counts.types;++i){const char*name=nullptr;assert(evolution::ReadMappedDexTypeDescriptor(d.mapping,i,&name,&error));if(subject_descriptor==name)subject_index=i;}assert(subject_index!=UINT32_MAX&&counts.fields&&counts.methods);
   auto populate=[&](void*raw_cache){auto*c=static_cast<type_cache::Dual*>(raw_cache);auto*t=static_cast<type_cache::Pair*>(heap.New(8192));t[subject_index%1024]={uint32_t(uintptr_t(old_class)),subject_index};c->types=uintptr_t(t);auto*full=static_cast<uint32_t*>(heap.New(counts.types*4));full[subject_index]=uint32_t(uintptr_t(old_class));c->types_array=uintptr_t(full);auto*f=static_cast<method_cache::Pair*>(heap.New(16384));f[0]={uintptr_t(old_fields[0]),0};c->fields=uintptr_t(f);auto*m=static_cast<method_cache::Pair*>(heap.New(16384));m[0]={uintptr_t(old_method),0};c->methods=uintptr_t(m);auto*fa=static_cast<std::atomic<uintptr_t>*>(heap.New(counts.fields*8));fa[0]=uintptr_t(old_fields[0]);c->fields_array=uintptr_t(fa);auto*ma=static_cast<std::atomic<uintptr_t>*>(heap.New(counts.methods*8));ma[0]=uintptr_t(old_method);c->methods_array=uintptr_t(ma);};populate(published_cache);populate(cache);
@@ -340,5 +345,5 @@ class SourceOwners final:public native_hierarchy_source_cache::RequiredServices 
   }
   assert(local_objects.empty());return true;
  };
- assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),run,&use)==runnable_jni::Result::kSuccess);Publish(nullptr);std::puts("actual modules expected graph -> first allocator -> private cache -> exact Collected graph PASS");
+ assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),run,&use)==runnable_jni::Result::kSuccess);Publish(nullptr);std::puts(std::getenv("SOURCE_REGISTRY_ONLY")?"actual native DEX registry positive identity + safe negative query/root checks PASS":"actual modules expected graph -> first allocator -> private cache -> exact Collected graph PASS");
 }
