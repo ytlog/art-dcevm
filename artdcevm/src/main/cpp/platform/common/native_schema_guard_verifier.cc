@@ -443,23 +443,49 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  const auto get_name=env->GetMethodID(public_names.klass,"getName","()Ljava/lang/String;");
  const auto get_component=env->GetMethodID(public_names.klass,"getComponentType","()Ljava/lang/Class;");
  if(!is_proxy||!get_name||!get_component||env->ExceptionCheck())return Fail(error,"Public Class kind/name declarations unavailable");
+ // Each public reference is retained as a movable JNI local until its
+ // cohort is attested. Only Slot destinations (not native Class pointers)
+ // survive JNI calls; node/interface storage is reserved before queueing.
+ struct RootCohort {
+  bounded_managed_roots::Store& roots;JNIEnv* env;std::string* error;
+  std::vector<jobject> objects;std::vector<bounded_managed_roots::Slot*> destinations;
+  RootCohort(bounded_managed_roots::Store& r,JNIEnv* e,std::string* why):roots(r),env(e),error(why){objects.reserve(bounded_managed_roots::Store::kCohortSize);destinations.reserve(bounded_managed_roots::Store::kCohortSize);}
+  ~RootCohort(){for(auto object:objects)env->DeleteLocalRef(object);}
+  bool Flush(){if(objects.empty())return true;std::vector<bounded_managed_roots::Slot> slots;
+   if(!roots.StageMany(env,objects,&slots,error)||slots.size()!=destinations.size())return false;
+   for(size_t i=0;i<slots.size();++i)*destinations[i]=slots[i];
+   for(auto object:objects)env->DeleteLocalRef(object);objects.clear();destinations.clear();return true;
+  }
+  bool Add(jobject object,bounded_managed_roots::Slot* destination){
+   if(!object||!destination||env->ExceptionCheck())return false;
+   if(objects.size()==bounded_managed_roots::Store::kCohortSize&&!Flush())return false;
+   jobject local=env->NewLocalRef(object);if(!local||env->ExceptionCheck())return false;
+   objects.push_back(local);destinations.push_back(destination);return true;
+  }
+ } cohort{state_->roots,env,error};
  auto& staged_names=state_->public_index.buckets;
  for(;;){
  const size_t before=state_->nodes.size();size_t known=0;
  jint count=0;jclass* classes=nullptr;if(ti->GetLoadedClasses(&count,&classes)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Complete loaded caller graph unavailable");
  struct Classes {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Classes(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,classes};
+ if(!cohort.Flush())return false;
+ state_->nodes.reserve(state_->nodes.size()+size_t(count));
  for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
   if(!PreparedCaller(status))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
   Strings identity{ti};if(ti->GetClassSignature(classes[i],&identity.signature,nullptr)!=JVMTI_ERROR_NONE||!identity.signature)return Fail(error,"Loaded Class signature unavailable while closing staging");
   bool existing=false;const auto candidates=staged_names.find(identity.signature);
-  if(candidates!=staged_names.end())for(size_t index:candidates->second)existing|=state_->roots.Same(env,state_->nodes[index].root,classes[i]);
+  if(candidates!=staged_names.end()){
+   if(!cohort.Flush())return false; // Compare current public roots, including this enumeration's pending nodes.
+   for(size_t index:candidates->second)existing|=state_->roots.Same(env,state_->nodes[index].root,classes[i]);
+  }
   if(env->ExceptionCheck())return false;
   if(existing){++known;continue;}
-  Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;if(!state_->roots.Stage(env,classes[i],&node.root,error))return false;
+  Node node;if(!PublicMembers(env,ti,classes[i],&node,error,&bindings))return false;
   state_->nodes.push_back(std::move(node));auto& stored=state_->nodes.back();staged_names[stored.schema.descriptor].push_back(state_->nodes.size()-1);
-  jobject loader=nullptr;if(ti->GetClassLoader(classes[i],&loader)!=JVMTI_ERROR_NONE)return false;if(loader){const bool pass=state_->roots.Stage(env,loader,&stored.loader,error);env->DeleteLocalRef(loader);if(!pass)return false;}
+  if(!cohort.Add(classes[i],&stored.root))return false;
+  jobject loader=nullptr;if(ti->GetClassLoader(classes[i],&loader)!=JVMTI_ERROR_NONE)return false;if(loader){const bool pass=cohort.Add(loader,&stored.loader);env->DeleteLocalRef(loader);if(!pass)return false;}
   if(status&JVMTI_CLASS_STATUS_ARRAY){auto component=env->CallObjectMethodA(classes[i],get_component,nullptr);
-   const bool pass=component&&!env->ExceptionCheck()&&state_->roots.Stage(env,component,&stored.component,error);if(component)env->DeleteLocalRef(component);if(!pass)return Fail(error,"Public array component identity unavailable");}
+   const bool pass=component&&!env->ExceptionCheck()&&cohort.Add(component,&stored.component);if(component)env->DeleteLocalRef(component);if(!pass)return Fail(error,"Public array component identity unavailable");}
   jvalue class_arg{};class_arg.l=classes[i];const bool proxy=env->CallStaticBooleanMethodA(public_names.proxy,is_proxy,&class_arg);
   if(env->ExceptionCheck())return Fail(error,"Public proxy Class classification failed");
   if(proxy){
@@ -468,15 +494,17 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
    name.chars=env->GetStringUTFChars(name.value,nullptr);
    if(!name.chars||env->ExceptionCheck())return false;
    stored.class_name_text=name.chars;stored.negative_class_name=stored.class_name_text+"!";
-   if(!state_->roots.Stage(env,name.value,&stored.class_name,error))return false;
+   if(!cohort.Add(name.value,&stored.class_name))return false;
   }
-  auto parent=env->GetSuperclass(classes[i]);if(parent){const bool pass=state_->roots.Stage(env,parent,&stored.parent,error);env->DeleteLocalRef(parent);if(!pass)return false;}
+  auto parent=env->GetSuperclass(classes[i]);if(parent){const bool pass=cohort.Add(parent,&stored.parent);env->DeleteLocalRef(parent);if(!pass)return false;}
   jint interfaces_count=0;jclass* interfaces=nullptr;if(ti->GetImplementedInterfaces(classes[i],&interfaces_count,&interfaces)!=JVMTI_ERROR_NONE||interfaces_count<0)return false;
-  for(jint j=0;j<interfaces_count;++j){bounded_managed_roots::Slot slot;const bool pass=state_->roots.Stage(env,interfaces[j],&slot,error);env->DeleteLocalRef(interfaces[j]);if(!pass){if(interfaces)ti->Deallocate(reinterpret_cast<unsigned char*>(interfaces));return false;}stored.interfaces.push_back(slot);}
+  stored.interfaces.resize(size_t(interfaces_count));
+  for(jint j=0;j<interfaces_count;++j){const bool pass=cohort.Add(interfaces[j],&stored.interfaces[size_t(j)]);env->DeleteLocalRef(interfaces[j]);if(!pass){for(jint k=j+1;k<interfaces_count;++k)env->DeleteLocalRef(interfaces[k]);if(interfaces)ti->Deallocate(reinterpret_cast<unsigned char*>(interfaces));return false;}}
   if(interfaces)ti->Deallocate(reinterpret_cast<unsigned char*>(interfaces));
   for(auto input:inputs)if(env->IsAssignableFrom(classes[i],input))stored.affected=true;
   if(env->ExceptionCheck())return false;
  }
+ if(!cohort.Flush())return false;
  // ToReflectedField resolves declared field types, and interface/root
  // staging may also load Classes. Only newly observed identities are staged;
  // finish after a complete fresh enumeration adds none. There is no SDK,
