@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="ART DCEVM 增强 ART JVMTI 的 RedefineClasses 能力：沿用标准调用入口，扩展字段、方法与继承关系重定义，并协调对象状态、旧引用与活动帧。">
+<meta name="description" content="ART DCEVM 增强 ART JVMTI 的 RedefineClasses 能力：从原生 JVMTI 痛点、Maven 接入与 Agent 示例，到增强原理、代码架构和贡献方式。">
 <title>ART DCEVM：增强 ART JVMTI 的 RedefineClasses 能力</title>
 <style>
 :root{color-scheme:light;--bg:#f5f4ef;--paper:#fffefa;--ink:#172c30;--muted:#526568;--line:#d6dfda;--teal:#087e80;--mint:#d4eee5;--amber:#9b5712;--sand:#fff0d4;--mono:#153c41;--shadow:0 22px 65px #17382b0d}
@@ -14,155 +14,301 @@
 @media print{body{background:white}.shell{max-width:none;padding:0}.top,.toc,.controls,.scenario{display:none}.hero{padding:20px 0}.section{padding-top:20px}.figure{box-shadow:none;break-inside:avoid}pre{white-space:pre-wrap;overflow-wrap:anywhere}.figure,pre{print-color-adjust:exact}h1{font-size:40px}a{color:inherit}.footer{padding-bottom:0}}
 </style>
 </head>
-<body>
-<div class="shell">
+<body><div class="shell">
 <header class="top"><span class="brand">ART DCEVM / 技术手记</span><a href="https://github.com/ytlog/art-dcevm">查看项目 ↗</a></header>
-<main>
-<div class="hero">
-<div class="eyebrow">ART JVMTI · Enhanced RedefineClasses</div>
+<main><div class="hero"><div class="eyebrow">ART JVMTI · Enhanced RedefineClasses</div>
 <h1>增强 ART JVMTI 的<br><span class="api-title">RedefineClasses</span><br>能力。</h1>
-<p class="lead">仍然调用标准 <code>jvmtiEnv::RedefineClasses</code>，获得更强的类重定义能力。ART DCEVM 将 ART JVMTI 的能力扩展到字段、方法和继承关系的结构变化，并协调运行中的对象、旧引用与执行状态。</p>
-<div class="chips"><span class="chip">标准 JVMTI 入口</span><span class="chip">对象状态延续</span><span class="chip">成员与层级演进</span><span class="chip">无需 root</span></div>
-<p class="meta">项目介绍 · 2026 年 10 月 10 日 · 配图为语义示意，动画可播放或逐步查看</p>
-</div>
-<nav class="toc" aria-label="文章目录"><a href="#what">01 是什么</a><a href="#capabilities">02 可以做什么</a><a href="#usage">03 怎么用</a><a href="#principle">04 如何实现</a><a href="#roadmap">05 技术路线</a></nav>
+<p class="lead">从方法体替换，到字段、方法和继承关系的结构变化：ART DCEVM 增强 ART 对标准类重定义请求的处理能力。你的 Agent 继续调用 <code>RedefineClasses</code>，运行时负责让变化一致地生效。</p>
+<div class="chips"><span class="chip">标准 JVMTI 入口</span><span class="chip">结构重定义</span><span class="chip">对象状态延续</span><span class="chip">无需 root</span></div>
+<p class="meta">项目介绍 · 2026 年 10 月 10 日 · 四章读懂接入、原理与贡献方式</p></div>
+<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 接入与使用</a><a href="#principle">03 原生能力与原理</a><a href="#contribute">04 架构与贡献</a></nav>
 <article class="article">
-<section class="section" id="what"><div class="number">01 / WHAT IT IS</div><h2>从标准 RedefineClasses 出发，扩展 ART 的重定义能力</h2>
-<p>JVMTI 为 Native Agent 提供了 <code>RedefineClasses</code>：把已加载的目标类与新定义交给虚拟机，在运行期间重新定义类。Android 的 ART 实现使用 DEX 字节作为输入，已有方法体替换是这条路径的基础能力。字段增删、成员签名变化和继承关系调整，则涉及更深的结构约束。</p>
-<p><strong>ART DCEVM 是一个增强 ART JVMTI <code>RedefineClasses</code> 能力的库。</strong>它在已适配的 ART 构建上接管标准重定义入口，扩展运行时对类结构变化的处理能力。调用方继续使用自己的 JVMTI 环境、标准类定义数组和返回错误码；增强库负责新增的结构校验、状态迁移与执行一致性。项目面向自有、从进程启动时就可调试的应用。</p>
-<p>ART DCEVM 将 Dynamic Code Evolution 的方向落实到 ART 的标准重定义链路中。IDE、补丁编译器和调试工具可以基于这项增强构建热重载工作流：工具产生新的 DEX，用户 Agent 调用 <code>RedefineClasses</code>，增强库在 ART 事务中完成变化，延续兼容的对象状态。</p>
-<blockquote class="pull">沿用标准 RedefineClasses 入口，扩展 ART 能处理的类变化。</blockquote>
-<p>增强 <code>RedefineClasses</code>，需要让它背后的运行时处理链共同支持结构变化：字段布局更新后，已有对象如何读取？方法删除后，旧反射引用如何处理？机器码内联了旧实现后，活动调用如何继续？ART DCEVM 在同一批重定义事务中协调这些问题。</p>
-</section>
-<section class="section" id="capabilities"><div class="number">02 / WHAT IT CAN DO</div><h2>RedefineClasses 可以承载哪些变化？</h2>
-<p>ART 原有标准路径支持方法体替换；部分 ART 构建还暴露独立的结构扩展入口。ART DCEVM 的增强目标，是让已支持的新增、删除、签名和层级变化统一通过标准 <code>RedefineClasses</code> 提交。独立扩展入口可用与标准入口已经增强，是两个需要分别验证的结论。</p>
-<div class="table-wrap"><table><thead><tr><th>变化</th><th>带来的能力</th><th>运行语义</th></tr></thead><tbody>
-<tr><td>方法体替换</td><td>更新业务逻辑与调试代码</td><td>后续调用进入新实现；活动调用按帧安全条件处理</td></tr>
-<tr><td>字段、方法与构造器增删</td><td>让类结构跟随代码迭代</td><td>兼容字段保留值；新增字段在已有对象中为零值或 null</td></tr>
-<tr><td>类型、签名与成员形态变化</td><td>调整字段类型、方法签名、static / 实例或 native / Java 形式</td><td>相关变化按旧成员退役、新成员建立处理</td></tr>
-<tr><td>修饰符变化</td><td>调整访问权限及已覆盖的 final、volatile、synchronized、abstract 语义</td><td>同时检查已有子类、旧访问路径与存活实例的约束</td></tr>
-<tr><td>父类与接口变化</td><td>重组类型关系和分派路径</td><td>同步处理接收者有效性、对象字段与已覆盖的类型缓存</td></tr>
-<tr><td>批量重定义</td><td>把相互依赖的类作为一次变化提交</td><td>在可失败的事务边界上拒绝整批，保留旧定义</td></tr>
+<section class="section" id="pain"><div class="number">01 / WHY ART DCEVM</div><h2>现在的 JVMTI 痛点，我的库做了什么？</h2>
+<p>通过 JVMTI，Native Agent 可以对正在运行的应用发起类重定义。对于开发工具来说，这意味着修改代码后，应用有机会继续运行，当前页面、会话和对象状态可以保留下来。然而，代码迭代经常超出“修改方法体”的范围。</p>
+<p>给对象加一个字段、删除旧方法、调整方法签名，或者换一个父类，都会改变类的结构。原有标准 <code>RedefineClasses</code> 对这些变化有严格约束；ART 提供的独立结构扩展也有自己的能力边界。一次正常的代码重构，可能就让原本顺畅的热替换流程停下来，回到重新构建和启动应用。</p>
+<h3>真正困难的是结构变化之后的运行时一致性</h3>
+<p>新增字段后，已有对象需要什么初值？删除方法后，缓存的反射对象和 JNI ID 是否还能访问它？换了父类后，旧接收者还符合调用要求吗？被 JIT 内联进机器码的旧方法又如何处理？这些问题必须在提交前后同时成立，才能把结构变化纳入可用的重定义能力。</p>
+<blockquote class="pull">ART DCEVM：增强 ART JVMTI 的 RedefineClasses，让标准入口承载更多类变化。</blockquote>
+<p>我把增强能力放在 ART 的重定义处理链中。调用方依然使用自己的 <code>jvmtiEnv*</code>，提交标准的 <code>jvmtiClassDefinition[]</code> 并接收 JVMTI 错误码。库在已适配的运行时上处理成员变化、对象状态迁移、缓存与旧引用、活动帧以及整批提交。</p>
+<div class="table-wrap"><table><thead><tr><th>代码变化</th><th>库提供的增强</th><th>对应运行语义</th></tr></thead><tbody>
+<tr><td>字段、方法、构造器增删</td><td>结构重定义与成员退役</td><td>兼容字段延续已有值，新字段为零值或 null</td></tr>
+<tr><td>类型、签名、static / 实例变化</td><td>更新成员结构与访问路径</td><td>相关变化按旧成员退役、新成员创建处理</td></tr>
+<tr><td>访问权限与修饰符变化</td><td>处理已覆盖的 final、volatile、synchronized、abstract 等语义</td><td>检查存活对象、已加载子类与旧权限路径</td></tr>
+<tr><td>父类与接口变化</td><td>协调层级、接收者、字段与类型缓存</td><td>变化后的访问和类型关系保持一致</td></tr>
+<tr><td>多个相互依赖的类变化</td><td>完整批次协调与提交</td><td>可恢复失败发生在提交前，整批保留旧定义</td></tr>
 </tbody></table></div>
-<p class="small">上述结构能力在已适配 Android 13 / ARM64 路径上有真机回归证据；具体组合与调用形态以 <a href="../LIMITATIONS.md">能力边界</a> 为准。</p>
-<h3>一个对象，两个版本的类</h3>
-<p>假设运行中的 <code>Counter</code> 已经累加到 7。新版本保留 <code>count</code>，增加 <code>label</code>，并把 <code>value()</code> 改为返回 <code>count * 2</code>。提交完成后，这个已有对象的 <code>count</code> 仍为 7，新增 <code>label</code> 为 <code>null</code>，后续 <code>value()</code> 返回 14。</p>
+<p>举一个贯穿本文的例子：已有 <code>Counter</code> 对象的 <code>count</code> 是 7。新定义增加 <code>label</code>，并让 <code>value()</code> 返回 <code>count * 2</code>。重定义后，已有对象保持 <code>count = 7</code>，后续调用返回 14，新增字段为 <code>null</code>。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">状态延续，定义更新</span><span class="figure-label">OBJECT EVOLUTION</span></div>
 <div class="object-grid" id="objects" data-state="0"><div class="schema"><div class="schema-title">Counter · 旧定义</div><div class="field"><span>count</span><span>7</span></div><div class="field"><span>value()</span><span>→ 7</span></div></div><div class="arrow" aria-hidden="true">→</div><div class="schema"><div class="schema-title" id="new-title">Counter · 待提交定义</div><div class="field" id="kept"><span>count</span><span>7 · 保留</span></div><div class="field new pending" id="added"><span>label</span><span>null · 新增</span></div><div class="field" id="method"><span>value()</span><span id="value">→ 14 · 提交后</span></div></div></div>
 <div class="identity"><span class="dot" aria-hidden="true"></span><span>延续同一业务对象的状态；示意图不表示物理地址或真实内存布局。</span></div>
 <div class="controls"><button type="button" class="primary" id="object-play">播放演进</button><button type="button" id="object-next">下一步</button><button type="button" id="object-reset">重置</button></div><div class="status" id="object-status" aria-live="polite">① 已有对象：count = 7。新定义已经准备，尚未提交。</div>
 <noscript><p class="nojs">提交后的结果：count = 7，label = null，value() = 14。已有对象不重新执行构造器。</p></noscript>
 <figcaption>图 1 · 已有对象新增字段使用默认值，即使补丁中写了 <code>label = "ready"</code>，也不会重跑已有对象的初始化代码。提交后新建的对象才按新定义执行构造器。</figcaption></figure>
-<h3>增强后的标准入口，可以支撑哪些工具？</h3>
-<p>它适合开发期热重载引擎、保留会话状态的调试工具，以及研究类演进和运行时一致性的实验平台。你可以在一个已经进入复杂状态的自有应用中更改逻辑，然后继续观察结果。补丁生成、传输、校验与业务触发时机由上层工具负责，ART DCEVM 聚焦运行时执行。</p>
-<div class="note"><strong>验证坐标。</strong>Android 11–17 的七个 ARM64 版本已有公开 JVMTI 回归记录；Android 13 小米 CAS 的一轮完整既有演进回归通过 1,025 项检查。跨版本通用结构事务仍在接线与验收，公开路径通过不能替代完整结构能力证明。Android 12L 暂不纳入本轮验收。</div>
+<p>这项能力可以支撑开发期热重载、保留现场状态的调试，以及类演进研究。补丁编译、传输、校验和触发策略由工具负责；ART DCEVM 负责标准重定义入口背后的运行时增强。</p>
+<p class="small">验证范围：Android 13 / ARM64 既有增强路径有完整回归记录；Android 11–17 七个 ARM64 版本已有公开 JVMTI 回归。结构能力按实际符号与行为校准启用，具体组合见 <a href="../ANDROID_COMPATIBILITY.md">兼容性</a>与<a href="../LIMITATIONS.md">能力边界</a>。新的跨版本组合仍按各自验收推进。</p>
 </section>
-<section class="section" id="usage"><div class="number">03 / HOW TO USE IT</div><h2>一次初始化，沿用标准 JVMTI 调用</h2>
-<p>ART DCEVM 保留工具链熟悉的入口：<code>jvmtiEnv::RedefineClasses</code>。应用先初始化增强库，用户自己的 JVMTI Agent 再提交新的类定义。目标类需要保持类名与加载上下文一致；Android 侧提交的是包含目标新定义的完整 <strong>DEX 字节</strong>。</p>
-<h3>第一步：构建并接入库</h3>
-<p>当前可直接从源码构建。工程使用 Gradle Wrapper 9.4.1、AGP 9.2.0、SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；准备兼容 JDK，并在本机 <code>local.properties</code> 配置 SDK 路径。</p>
-<pre><code>git clone https://github.com/ytlog/art-dcevm.git
-cd art-dcevm
-./gradlew :app:assembleDebug :artdcevm:assembleRelease</code></pre>
-<p>示例 APK 位于 <code>app/build/outputs/apk/debug/app-debug.apk</code>，AAR 位于 <code>artdcevm/build/outputs/aar/artdcevm-release.aar</code>。在包含源码模块的工程中接入：</p>
-<pre><code>// settings.gradle 需包含 :artdcevm
-// 应用模块 build.gradle
+<section class="section" id="usage"><div class="number">02 / INTEGRATION</div><h2>我的库怎么用：从 Maven 到替换类</h2>
+<p>接入流程分成两件事：先初始化 ART DCEVM，使增强处理链就绪；再由自己的 JVMTI Agent 提交新 DEX。下面使用 <code>demo.Counter</code> 展示一个完整单类示例。应用须从进程启动时可调试，当前库最低 API 30，只构建 <code>arm64-v8a</code>。</p>
+<h3>2.1 配置组件与 Native 构建</h3>
+<p>下面预写发布后的坐标用法：<code>xxx</code> 替换成可获取的发布版本。正式 Maven Central 版本当前尚未上线；发布前可使用源码模块或本地 Maven 仓库，说明见 <a href="../MAVEN_PUBLISHING.md">发布指南</a>。通过 Maven 元数据接入时，ShadowHook 运行时依赖会自动传递。</p>
+<pre><code>// settings.gradle：添加到已有仓库配置中
+ dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}</code></pre><pre><code>// app/build.gradle：合并到已有 Android 应用模块
+android {
+    defaultConfig {
+        minSdk 30
+        ndk { abiFilters &#x27;arm64-v8a&#x27; }
+    }
+    buildTypes {
+        debug { debuggable true }
+    }
+    externalNativeBuild {
+        cmake { path file(&#x27;src/main/cpp/CMakeLists.txt&#x27;) }
+    }
+}
 dependencies {
-    implementation project(':artdcevm')
+    debugImplementation &#x27;com.github.ytlog:artdcevm:xxx&#x27;
 }</code></pre>
-<p>库的最低版本为 API 30，当前构建只支持 <code>arm64-v8a</code>。源码模块通过 Gradle 声明 Hook 依赖；手动接入独立 AAR 时，需要同时处理它的运行时依赖。Maven Central 发布坐标尚未上线，具体发布与依赖说明见 <a href="../MAVEN_PUBLISHING.md">发布指南</a>。</p>
-<h3>第二步：在重定义前初始化</h3>
-<pre><code>import com.github.ytlog.artdcevm.api.DcevmRuntime;
+<p>示例 Java 代码放在 <code>app/src/debug/java/demo/</code>，只在调试变体使用。若已有 Native 构建，直接合并下文的 Agent target。把仓库 <a href="../../third_party/jvmti/jvmti.h">jvmti.h</a> 放入 <code>app/src/main/cpp/include/</code>，保留其来源和许可证声明。</p>
+<h3>2.2 创建自己的 JVMTI Agent</h3>
+<p>新建 <code>app/src/main/cpp/my_agent.cpp</code>。<code>Agent_OnAttach</code> 取得这个 Agent 自己的 JVMTI 环境并申请重定义能力。JNI 方法把 Java 传入的完整 DEX 复制到调用期间有效的缓冲区，再调用标准接口：</p>
+<pre><code data-file="my_agent.cpp">#include &lt;jni.h&gt;
+#include &quot;jvmti.h&quot;
+#include &lt;atomic&gt;
+#include &lt;new&gt;
+#include &lt;vector&gt;
 
-// 在自己的 Agent 第一次发起结构重定义前调用。
-// 此调用会抛出异常；由应用初始化流程处理并记录原因。
-DcevmRuntime.initialize(context);</code></pre>
-<p>应用必须从进程启动时就处于 <code>debuggable</code> 状态。初始化加载增强库、附加 Agent、检查符号和运行时校准，再安装路由。成功后，同一进程的重复调用直接返回；失败时，调用方应记录诊断并停止本次结构请求。</p>
-<p>如果工作流只需要公开 JVMTI 能力，可显式使用：</p>
-<pre><code>org.json.JSONObject capabilities =
-        DcevmRuntime.attachPublicJvmti(context);</code></pre>
-<p>当前源码还提供 <code>initializeCapabilities(context)</code>，用于初始化并返回独立证明的能力子集。使用这个入口时应核对返回的具体范围，不把“某个子集就绪”当作“完整演进就绪”。</p>
-<h3>第三步：附加自己的 Agent</h3>
-<p>用户 Agent 在 <code>Agent_OnAttach</code> 中取得 JVMTI 环境并申请重定义能力。下面是最小附加示例；补丁接收、线程管理和业务接口由自己的 Agent 实现。</p>
-<pre><code>#include &lt;jni.h&gt;
-#include "jvmti.h"
+static std::atomic&lt;jvmtiEnv*&gt; agent_env{nullptr};
 
-static jvmtiEnv* jvmti = nullptr;
+extern &quot;C&quot; JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*, void*) {
+    return JNI_VERSION_1_6;
+}
 
-extern "C" JNIEXPORT jint JNICALL
+extern &quot;C&quot; JNIEXPORT jint JNICALL
 Agent_OnAttach(JavaVM* vm, char*, void*) {
-    if (vm-&gt;GetEnv(reinterpret_cast&lt;void**&gt;(&amp;jvmti),
+    jvmtiEnv* env = nullptr;
+    if (vm-&gt;GetEnv(reinterpret_cast&lt;void**&gt;(&amp;env),
                    JVMTI_VERSION_1_2) != JNI_OK) return JNI_ERR;
     jvmtiCapabilities caps{};
     caps.can_redefine_classes = 1;
-    return jvmti-&gt;AddCapabilities(&amp;caps) == JVMTI_ERROR_NONE
-            ? JNI_OK : JNI_ERR;
-}</code></pre>
-<p>编译并打包 <code>libmy_agent.so</code> 后，在应用中附加它。此名称代表自己的库：</p>
-<pre><code>android.os.Debug.attachJvmtiAgent(
-        "libmy_agent.so", null, context.getClassLoader());</code></pre>
-<h3>第四步：提交目标类与新 DEX</h3>
-<pre><code>// target：已加载的 jclass；dex：完整的新 DEX 字节。
-// 当前线程已附加到 VM；dex_size 可表示为 jint。
-jvmtiClassDefinition definition{};
-definition.klass = target;
-definition.class_byte_count = dex_size;
-definition.class_bytes = dex;
+    if (env-&gt;AddCapabilities(&amp;caps) != JVMTI_ERROR_NONE) return JNI_ERR;
+    agent_env.store(env, std::memory_order_release);
+    return JNI_OK;
+}
 
-jvmtiError result = jvmti-&gt;RedefineClasses(1, &amp;definition);
-if (result != JVMTI_ERROR_NONE) {
-    // 记录错误码，按原因处理；不将这次请求视为已生效。
+extern &quot;C&quot; JNIEXPORT jint JNICALL
+Java_demo_MyAgent_redefineNative(JNIEnv* jni, jclass,
+                                jclass target, jbyteArray dex) {
+    jvmtiEnv* env = agent_env.load(std::memory_order_acquire);
+    if (!env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+    if (!target || !dex) return JVMTI_ERROR_NULL_POINTER;
+    const jint size = jni-&gt;GetArrayLength(dex);
+    if (size &lt;= 0) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+    try {
+        std::vector&lt;unsigned char&gt; bytes(static_cast&lt;size_t&gt;(size));
+        jni-&gt;GetByteArrayRegion(dex, 0, size,
+                               reinterpret_cast&lt;jbyte*&gt;(bytes.data()));
+        if (jni-&gt;ExceptionCheck()) return JVMTI_ERROR_INTERNAL;
+        jvmtiClassDefinition definition{};
+        definition.klass = target;
+        definition.class_byte_count = size;
+        definition.class_bytes = bytes.data();
+        return env-&gt;RedefineClasses(1, &amp;definition);
+    } catch (const std::bad_alloc&amp;) {
+        return JVMTI_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        return JVMTI_ERROR_INTERNAL;
+    }
 }</code></pre>
-<p>多个相互依赖的类应放进同一个 <code>jvmtiClassDefinition[]</code> 一次提交。调用期间保持类引用和 DEX 缓冲区有效。补丁编译可参考仓库的 <a href="../../fixtures/">fixtures</a> 与 <a href="../../tools/build-fixtures.py">build-fixtures.py</a>；Agent 的完整接入参考 <a href="../../app/src/debug/cpp/testing/standard_jvmti_client.cc">standard_jvmti_client.cc</a>。代码生成本身属于上层工具链。</p>
-<h3>从示例回归开始</h3>
-<pre><code># 已适配 Android 13 ARM64：既有完整演进套件
-python3 tools/android13/run-source-probe.py --serial DEVICE
+<p>新建或修改 <code>app/src/main/cpp/CMakeLists.txt</code>：</p>
+<pre><code data-file="CMakeLists.txt">cmake_minimum_required(VERSION 3.22)
+project(my_agent LANGUAGES CXX)
+add_library(my_agent SHARED my_agent.cpp)
+target_include_directories(my_agent PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(my_agent PRIVATE cxx_std_17)
+target_compile_options(my_agent PRIVATE -Wall -Wextra -Werror)</code></pre>
+<p>Gradle 构建会生成并打包 <code>libmy_agent.so</code>。这个库名代表本文创建的用户 Agent；ART DCEVM 自身的增强库名是 <code>libartdcevm.so</code>。</p>
+<h3>2.3 初始化增强库，再附加 Agent</h3>
+<p>新建 <code>demo.MyAgent</code>。初始化顺序明确放在代码里：ART DCEVM 初始化 → 加载用户 JNI 库 → 附加用户 Agent。重复初始化直接返回；附加失败时异常交给上层处理。</p>
+<pre><code data-file="MyAgent.java">package demo;
 
-# 其他目标设备：公开 JVMTI 回归
-python3 tools/run-public-jvmti.py --serial DEVICE</code></pre>
-<p>脚本安装并操作示例应用 <code>dev.artdcevm.lab</code>，每次从初始定义启动。验证记录会关联设备、APK 哈希和当前运行报告。脚本名中的 <code>source</code> 沿用了历史命名；当前构建无需下载或编译 AOSP，也不加载独立源码引擎。</p>
+import android.content.Context;
+import android.os.Debug;
+import com.github.ytlog.artdcevm.api.DcevmRuntime;
+
+public final class MyAgent {
+    private static boolean initialized;
+    private MyAgent() {}
+
+    public static synchronized void initialize(Context context) throws Exception {
+        if (initialized) return;
+        Context app = context.getApplicationContext();
+        DcevmRuntime.initialize(app); // 先安装 ART DCEVM 增强能力
+        System.loadLibrary(&quot;my_agent&quot;); // 加载本示例的 JNI 桥
+        Debug.attachJvmtiAgent(&quot;libmy_agent.so&quot;, null, app.getClassLoader());
+        initialized = true;
+    }
+
+    public static synchronized int redefine(Class&lt;?&gt; target, byte[] dex) {
+        if (!initialized) throw new IllegalStateException(&quot;Agent not initialized&quot;);
+        if (target == null || dex == null) throw new IllegalArgumentException();
+        return redefineNative(target, dex);
+    }
+
+    private static native int redefineNative(Class&lt;?&gt; target, byte[] dex);
+}</code></pre>
+<p><code>DcevmRuntime.initialize(context)</code> 会加载增强库、附加其 Agent、完成校准并安装增强路由。只有初始化成功后才继续本例的结构请求。只需要原生方法体替换时，可选择 <code>attachPublicJvmti(context)</code>；<code>initializeCapabilities(context)</code> 用于查询独立证明的能力子集。</p>
+<h3>2.4 为同名类编译新的 DEX</h3>
+<p>应用中原来的类为：</p>
+<pre><code data-file="original/Counter.java">package demo;
+
+public class Counter {
+    public int count = 7;
+    public int value() { return count; }
+}</code></pre>
+<p>把下面的新定义保存到项目根目录的 <code>patch-src/demo/Counter.java</code>，单独编译。新定义保持相同类名与包名，并增加字段与新的方法体：</p>
+<pre><code data-file="replacement/Counter.java">package demo;
+
+public class Counter {
+    public int count = 7;
+    public String label = &quot;ready&quot;;
+    public int value() { return count * 2; }
+}</code></pre>
+<p>用 JDK 和 Android SDK 的 D8 生成单类 DEX。以下命令在应用工程根目录执行，将 SDK 路径和已安装的 build-tools 版本替换为本机配置：</p>
+<pre><code>ARTDCEVM_SDK=/path/to/android-sdk
+ARTDCEVM_BUILD_TOOLS=35.0.0
+mkdir -p patch-build/classes patch-build/dex app/src/debug/assets
+javac --release 8 -encoding UTF-8 -g \
+  -d patch-build/classes patch-src/demo/Counter.java
+&quot;$ARTDCEVM_SDK/build-tools/$ARTDCEVM_BUILD_TOOLS/d8&quot; \
+  --min-api 30 --lib &quot;$ARTDCEVM_SDK/platforms/android-35/android.jar&quot; \
+  --output patch-build/dex patch-build/classes/demo/Counter.class
+cp patch-build/dex/classes.dex app/src/debug/assets/counter-v2.dex</code></pre>
+<p>将补丁 DEX 作为字节素材打包。应用自己的 Java 源集合仍保留原定义；提交时传入已经加载的 <code>Counter.class</code>，不另建 ClassLoader 去加载第二个 <code>Counter</code>。Android 接口接收 DEX，新版本 <code>.class</code> 是编译中间产物。D8 用法见<a href="https://developer.android.com/tools/d8">官方文档</a>。</p>
+<h3>2.5 调用 JNI，替换已加载的类</h3>
+<p>新建 <code>demo.RedefineDemo</code>。在调试应用的按钮或测试入口中调用 <code>RedefineDemo.run(context)</code>：</p>
+<pre><code data-file="RedefineDemo.java">package demo;
+
+import android.content.Context;
+import android.util.Log;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+
+public final class RedefineDemo {
+    private RedefineDemo() {}
+
+    public static void run(Context context) throws Exception {
+        Counter existing = new Counter();
+        Log.i(&quot;DCEVM&quot;, &quot;before=&quot; + existing.value()); // 7
+        MyAgent.initialize(context);
+        byte[] dex;
+        try (InputStream input = context.getAssets().open(&quot;counter-v2.dex&quot;);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            dex = output.toByteArray();
+        }
+        int error = MyAgent.redefine(Counter.class, dex);
+        if (error != 0) { // JVMTI_ERROR_NONE = 0
+            throw new IllegalStateException(&quot;RedefineClasses failed: &quot; + error);
+        }
+        Log.i(&quot;DCEVM&quot;, &quot;after=&quot; + existing.value()); // 14
+    }
+}</code></pre>
+<p>在支持本次新增字段的已适配设备上，日志从 <code>before=7</code> 变为 <code>after=14</code>。已有对象的 <code>label</code> 为 <code>null</code>：重定义不会重新执行它的构造器和字段初始化代码。提交后新建对象才按新定义初始化 <code>label = "ready"</code>。</p>
+<p>Java 示例中的 <code>MyAgent.redefine</code> 是我们自己创建的 JNI 桥。SDK 对外提供初始化入口，替换请求实际来自用户 Agent 的 <code>jvmtiEnv::RedefineClasses</code>。多个相关类应组成一个定义数组一次提交，完整批次示例见 <a href="../../app/src/debug/cpp/testing/standard_jvmti_client.cc">standard_jvmti_client.cc</a>。</p>
 </section>
-<section class="section" id="principle"><div class="number">04 / UNDER THE HOOD</div><h2>如何增强标准入口背后的 ART 处理链？</h2>
-<p>ART DCEVM 在 ART JVMTI 的命名重定义入口安装 Hook，保留调用者环境和标准检查，再将完整批次接入设备 ART 的真实事务。设备 ART 提供分配、类链接、GC 和线程暂停服务；增强库补充结构演进所需的校验、迁移、缓存清理与活动帧协调。</p>
+<section class="section" id="principle"><div class="number">03 / NATIVE JVMTI &amp; ENHANCEMENT</div><h2>JVMTI 原生能做什么，我是怎么增强的？</h2>
+<h3>3.1 从 ART TI 与标准重定义能力开始</h3>
+<p>JVMTI 是虚拟机面向 Native 工具的接口，提供类与方法查询、事件回调、线程与栈观察、对象分配和 GC 观察、堆遍历，以及重定义等能力。Agent 需要申请相应 capability；能取得一个环境，并不等于已经拥有所有权限。Android 的 <a href="https://source.android.com/docs/core/runtime/art-ti">ART TI</a> 通过 <code>libopenjdkjvmti</code> 暴露这些服务，普通应用附加 Agent 需要从启动时可调试。</p>
+<p>本文关注其中的 <code>RedefineClasses</code>。<a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">标准 JVMTI 规范</a>允许受支持的方法实现更新，对字段、方法的增删或签名、继承和修饰符等结构变化规定了限制。ART 使用 DEX 而非 JVM class-file 字节作为输入，部分构建另有结构扩展入口；实际可用能力需要查询和验证。</p>
+<div class="table-wrap"><table><thead><tr><th>路径</th><th>如何调用</th><th>能力关系</th></tr></thead><tbody>
+<tr><td>ART 原有标准路径</td><td><code>jvmtiEnv::RedefineClasses</code></td><td>方法体重定义；结构变化遵循 ART 原有校验</td></tr>
+<tr><td>ART 独立结构扩展</td><td>查询扩展函数，使用对应的扩展签名</td><td>部分 ART 提供新增成员等能力；独立于标准入口的增强结论</td></tr>
+<tr><td>ART DCEVM 增强路径</td><td>初始化后继续调用标准 <code>RedefineClasses</code></td><td>把已适配的结构变化接入完整批次事务，同时处理一致性</td></tr>
+</tbody></table></div>
+<h3>3.2 在标准入口接管请求，在真实事务中完成增强</h3>
+<p>原有请求从用户 Agent 的 JVMTI 函数表进入 <code>libopenjdkjvmti</code> 的重定义实现。ART DCEVM 对已校准的命名重定义入口安装 Inline Hook，保留调用方环境、参数和能力检查，再把整批请求交给增强事务。设备 ART 仍执行分配、类链接、GC 和最终线程暂停等真实服务。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">标准 RedefineClasses 的增强处理链</span><span class="figure-label">RUNTIME ARCHITECTURE</span></div><div class="layers" role="img" aria-label="上层工具生成DEX，用户Agent通过标准RedefineClasses调用ART DCEVM增强库，再使用设备ART服务更新运行时对象和引用。"><div class="layer"><strong>IDE / 调试工具 / 补丁编译器</strong><span>产生新 DEX，决定提交时机</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>用户 JVMTI Agent</strong><span>自己的环境与能力 · RedefineClasses</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>ART DCEVM · libartdcevm.so</strong><span>RedefineClasses Hook → 结构事务与守卫</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>设备 ART / libopenjdkjvmti</strong><span>真实分配、链接、GC、线程与事务服务</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>类定义 · 对象状态 · 缓存 · 执行帧</strong><span>在一致的边界上更新</span></div></div><figcaption>图 2 · 所有运行时组件位于应用进程中。单一增强库不替换系统 ART；ShadowHook 和用户 Agent 仍是各自的依赖与组件。</figcaption></figure>
-<h3>1. 用命名符号找到入口，用真实行为证明声明</h3>
-<p>公开 JVMTI 已经提供方法体重定义的基础。更深的结构演进则需要 ART 私有服务。项目通过命名 ELF 符号绑定这些服务，依据核对过的源码声明建立 ABI，并使用公开 JNI/JVMTI 观察做独立行为校准。</p>
-<p>对库内部直接调用的重定义入口，项目采用 ShadowHook 安装 Inline Hook；只有确认调用点经过导入表时，PLT Hook 才适用。函数地址与对象字段偏移不从反汇编推算。Android 版本、设备型号或某个符号存在，都不能单独授予演进权限；当前通用适配以真实符号与行为证明选择能力，Build ID 用于记录证据来源。</p>
-<p>这让适配围绕“设备实际上能提供什么”展开。通用算法放在 common 层，ARM64 和不同 ART 声明族保留各自的差异，避免每个版本复制一套引擎。</p>
-<h3>2. 以整批最终 DEX 为准</h3>
-<p>入口保留用户 Agent 原始的 <code>jvmtiEnv*</code>，继续检查调用者的重定义能力、参数和目标类。转换回调可能把原本只改方法体的补丁变成结构补丁，因此结构判断应围绕回调之后的最终 DEX，在 ART 事务内部完成。</p>
-<p>相互依赖的类共享批次协调与进程级事务锁。在已覆盖的可恢复失败路径中，冲突或安全条件不满足时，整批返回错误，旧定义仍然有效。事务一旦进入不可失败的提交阶段，就不能再把内部异常包装成一个普通的“安全拒绝”。</p>
+<p>项目优先使用命名 ELF 符号、固定源码声明和独立行为校准。库内部直接调用不一定经过 PLT，因此重定义入口使用 Inline Hook；只有证明相关调用经过导入表时，PLT Hook 才合适。函数地址和对象字段偏移不通过反汇编推算，SDK、厂商或 Build ID 也不代替真实能力证明。</p>
+<h3>3.3 扩展结构处理，同时保留批次与事件语义</h3>
+<p>修改一个校验条件还不够。新增或删除成员需要建立新旧成员映射，保存兼容字段，初始化新字段，并处理旧类与元数据生命周期。父类和接口变化还会影响接收者有效性、分派和类型关系。增强库在同一事务中协调这些变化。</p>
+<p><code>ClassFileLoadHook</code> 等转换回调可能继续修改补丁，最终的 DEX 才是结构验证依据。多个相关类共享完整批次和进程级协调；在可恢复失败边界上拒绝整批，旧定义保持完整。进入不可失败的提交阶段后，内部故障不能再被包装成普通的安全拒绝。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">准备、检查，再一起提交</span><span class="figure-label">TRANSACTION MODEL</span></div><div class="timeline" id="timeline"><div class="step current"><b>① 收集</b><span>目标类与新 DEX</span></div><div class="step"><b>② 验证</b><span>最终定义与依赖</span></div><div class="step"><b>③ 安全窗口</b><span>线程、GC、活动帧</span></div><div class="step"><b>④ 更新</b><span>对象、缓存与代码</span></div><div class="step"><b>⑤ 完成</b><span>批次提交与恢复</span></div></div><div class="transaction"><div class="version live" id="old-version"><span>当前可见定义</span><strong>V1 · 旧版本</strong></div><div class="version" id="new-version"><span>候选批次</span><strong>V2 · 准备中</strong></div></div><div class="scenario" aria-label="选择事务情景"><button type="button" id="scenario-success" aria-pressed="true">成功提交</button><button type="button" id="scenario-reject" aria-pressed="false">活动帧拒绝</button></div><div class="controls"><button type="button" class="primary" id="transaction-play">播放事务</button><button type="button" id="transaction-next">下一步</button><button type="button" id="transaction-reset">重置</button></div><div class="status" id="transaction-status" aria-live="polite">① 收集完整批次。V1 继续有效，V2 尚未对外生效。</div><figcaption>图 3 · 事务语义的简化演示，不是完整内部调用时序。已适配路径有提交与拒绝证据；新的跨版本 RunState / Ledger 组合仍需完整发布、提交与退款验收。</figcaption></figure>
-<h3>3. 字段迁移与旧引用必须共同成立</h3>
-<p>结构变化会改变类元数据及字段布局。项目为兼容字段建立映射，延续已有值；新增字段使用默认值。类型或 static / 实例形态改变时，旧成员退役，新成员按新定义建立。处理父类变化时，还需要同步验证对象的继承字段来源和接收者类型关系。</p>
-<p>运行时还有许多通往旧成员的路径：字节码解析缓存、反射对象、JNI ID、MethodHandle、VarHandle，以及编译代码中的快速访问。只更新新查询结果远远不够。增强库同时协调这些已覆盖的路径，阻止已退役成员或失效接收者继续被当作有效目标。</p>
-<p>访问权限也有自己的语义。已经合法创建的句柄所持有的访问授权，不一定因后续可见性收窄而失效；final 写入约束、原生 JNI 写入语义与接收者有效性则需要分别处理。项目用具体调用路径的回归来证明这些边界。</p>
-<h3>4. 对正在执行的机器码，先证明能恢复</h3>
-<p>ART 同时存在解释执行、JIT 与 AOT。机器码可能把旧字段位置固化，或者把一个旧方法内联进调用者。重定义时，下一次查询的结果正确，还不足以保证暂停中的机器码能安全继续。</p>
-<p>项目利用设备栈遍历、CodeInfo 和 StackMap 读取实际执行位置，并检查外层和内联层的寄存器恢复信息。信息足够、路径已校准时，协调去优化（Deoptimization），使执行回到安全路径；信息不足时，在旧定义完整的边界上拒绝，等待活动帧退出后重试。</p>
+<h3>3.4 让新定义与旧对象、旧引用共同成立</h3>
+<p>原有字段值通过兼容映射延续。新增字段在已有对象中使用零值或 <code>null</code>；字段类型或 static / 实例形态变化按旧成员退役、新成员建立处理。引用字段的写入还需要遵守 ART 的 GC 根、引用更新和写屏障规则。</p>
+<p>字节码解析缓存、反射对象、JNI ID、MethodHandle 与 VarHandle 都可能保留旧成员信息。项目对已覆盖的路径协调重绑定、权限与接收者守卫，防止已退役成员和失效接收者继续被当作有效目标。合法创建的句柄访问授权、final 写入限制、原生 JNI 写入和接收者有效性分别按其语义处理。</p>
+<h3>3.5 协调 JIT / AOT 与活动帧</h3>
+<p>编译代码可能固化字段位置、缓存分派结果或内联旧实现。已经暂停的机器码能否继续运行，需要根据实际 PC、CodeInfo、StackMap 和内联层寄存器恢复信息判断。信息完整且路径已校准时，协调去优化与提交；条件不足时，在旧定义完整的边界上拒绝，待旧帧退出后重试。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">恢复信息决定执行路径</span><span class="figure-label">ACTIVE FRAME SAFETY</span></div><div class="frame-grid" id="frames" data-stage="0"><div class="frame-lane"><div class="lane-title">可恢复的已校准帧</div><div class="stack" id="recoverable"><div>caller()</div><div class="target" id="recoverable-frame">旧 compiled frame + 完整映射</div><div>暂停点 · Dex 寄存器可恢复</div></div><div class="lane-result" id="recoverable-result">检查实际 PC、栈图和内联恢复信息。</div></div><div class="frame-lane"><div class="lane-title">不可即时恢复的活动非调试 AOT 帧</div><div class="stack"><div>caller()</div><div class="blocked">旧 AOT frame · 恢复资格不足</div><div>旧定义必须继续有效</div></div><div class="lane-result" id="blocked-result">检查失败时，在提交前拒绝本次变更。</div></div></div><div class="controls"><button type="button" class="primary" id="frame-next">查看去优化与拒绝</button><button type="button" id="frame-reset">重置</button></div><div class="status" id="frame-status" aria-live="polite">按两类独立情景查看；它们不表示同一事务可以部分成功。</div><figcaption>图 4 · 当前活动非调试 AOT 帧的即时去优化未实现。已验证策略是拒绝本次变更、让旧调用完成，再退出后重试。跨版本物理帧读取专项也不能等同于全进程栈转换完成。</figcaption></figure>
+<p>跨版本工程正在把根注册、层级证明、DEX 发布账本与连续线程/GC 安全窗口聚合到同一次原始事务的 RunState 中。方向是先准备完整根和存储，再在有效窗口刷新移动后的对象引用，完成发布、清理与提交或退款；完整新组合按生产链和设备验收推进。</p>
 </section>
-<section class="section" id="roadmap"><div class="number">05 / ENGINEERING DIRECTION</div><h2>继续扩展 RedefineClasses 的能力与覆盖范围</h2>
-<p>围绕 <code>RedefineClasses</code>，项目已建立标准路由、结构变化、状态迁移、旧引用守卫和活动帧处理的验证基础。下一阶段沿用这条调用链，将已支持的能力连接到更广的 ART 构建，并完善事务生命周期。</p>
-<div class="note plan"><strong>以下为后续设计与验收方向。</strong>它们表达引擎的发展路线，区别于上文已有的设备能力证据。</div>
-<h3>统一事务所有权</h3>
-<p>通用 RunState 聚合同一次原始 ART 事务的线程状态、GC 排除、移动对象根、层级证明与 DEX 发布账本。先在普通可分配阶段准备完整根与存储，再进入连续安全窗口，刷新 GC 后的引用，最后完成发布、清理和提交。原始事务仍拥有最终边界；临时类与缓存必须在有效生命周期内提交或退款。</p>
-<p>这条路线已经有组件和组合测试，完整正向发布及失败退款仍需实际生产链与设备证明。Android 11/12 的线程转换条件也要独立解决，不能借其他版本的窗口假设放行。</p>
-<h3>跨版本复用算法，逐项证明 ABI</h3>
-<p>Android 11–17 共用元数据、缓存和事务算法，只为真实变化的源码声明、缓存协议与线程服务建立差异层。每次启用能力，都核对实际设备符号、独立对象身份和行为校准，再通过冻结 APK 回归。通过公开能力、删除子集或物理帧读取，是各自的里程碑；完整结构演进有独立完成条件。</p>
-<h3>更精确的帧恢复与长期资源管理</h3>
-<p>扩展真实内联、并发和 AOT/JIT 混合调用的恢复矩阵，缩小解释执行回退范围；继续覆盖旧引用保活、元数据回收、ClassLoader 卸载和长时间前台交互。对缺少恢复信息的编译产物，先明确可恢复条件，再决定编译策略或去优化路径。</p>
-<p>工程目标很具体：每一批类变更，都能解释清楚对象状态如何延续、旧引用如何处理、活动调用如何继续，以及失败时为何仍保留完整旧定义。</p>
-</section>
-<section class="section" id="references"><div class="number">READ FURTHER</div><h2>从文章走到代码与证据</h2>
-<p>本文以 2026 年 10 月 9 日的仓库实现与记录为依据。Android 13 既有路径的 1,025 项检查来自冻结 APK <code>6e6ecee925ced03038622ca637711745d7fcd2783346517a888109d26a6ec8b0</code>，设备为 Xiaomi M2007J1SC / API 33；该结论不自动延伸到后续每一批代码。</p>
-<ul class="sources"><li><a href="../../README.md">项目 README</a>：构建、接入与标准 Agent 示例。</li><li><a href="../ANDROID_COMPATIBILITY.md">Android 兼容性</a>、<a href="../LIMITATIONS.md">能力边界</a>、<a href="../VERIFICATION.md">验证记录</a>：具体环境、命令和结论。</li><li><a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>：当前公开初始化入口。</li><li><a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a>、<a href="../SCHEMA_RUN_STATE.md">RunState 生命周期</a>：事务路由与后续通用接线。</li><li><a href="https://source.android.com/docs/core/runtime/art-ti">AOSP · ART TI</a>：Android 的 Agent 附加、可调试应用要求与 DEX 重定义入口。</li><li><a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">JVMTI · RedefineClasses 规范</a>：标准 API 与重定义约束；ART DCEVM 的结构能力是对运行时处理能力的增强。</li></ul>
+<section class="section" id="contribute"><div class="number">04 / ARCHITECTURE &amp; CONTRIBUTING</div><h2>如何贡献代码：理解分层，再提交可复核的变化</h2>
+<p>仓库围绕“标准入口 → 通用算法 → 平台能力 → 真实 ART 服务”组织代码。先确认问题属于哪一层，再复用现有公共路径，是参与项目最快的方式。</p>
+<h3>4.1 从这些目录进入</h3>
+<pre><code>artdcevm/                        Android 库模块与初始化 API
+  src/main/java/.../api/        DcevmRuntime：加载、附加、初始化
+  src/main/cpp/
+    core/                       Agent 入口与事务协调
+    api/                        后端、Hook 与重定义接口
+    hooks/                      ShadowHook 安装与管理
+    evolution/                  DEX schema、迁移计划与解析
+    platform/
+      common/                   跨版本算法、能力校准与运行时事务
+      jvmti/                    公开 JVMTI 后端
+      jni_access/               JNI 访问能力选择与独立校准
+      symbols/                  跨版本命名符号选择
+      abi/common/               不依赖版本或指令集的调用声明
+      abi/arm64/common/         跨版本 ARM64 布局声明
+      abi/arm64/android11…17/   各版本固定 ARM64 ABI 声明
+      android13/、android17/    实际存在的版本专有运行时实现
+app/src/debug/                  示例 Agent、诊断与设备测试入口
+fixtures/                       新旧类定义与补丁素材
+tests/host/                     原生组合、拒绝路径与宿主回归
+tools/                          构建、源码审计与回归脚本
+docs/                           设计、兼容性、限制与验证记录</code></pre>
+<p>核心入口可从 <a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>、<a href="../../artdcevm/src/main/cpp/core/agent.cc">core/agent.cc</a> 和 <a href="../../artdcevm/src/main/cpp/platform/backend_factory.cc">backend_factory.cc</a> 开始阅读。目录职责详见 <a href="../../artdcevm/src/main/cpp/platform/README.md">原生平台目录说明</a>。</p>
+<h3>4.2 把改动放在正确的层</h3>
+<div class="table-wrap"><table><thead><tr><th>贡献内容</th><th>优先归属</th><th>应避免的做法</th></tr></thead><tbody>
+<tr><td>迁移、缓存、守卫和事务算法</td><td><code>platform/common/</code> 或已有 <code>evolution/</code> 抽象</td><td>每个 Android 版本复制相同逻辑</td></tr>
+<tr><td>真实变化的 ARM64 布局与 ABI</td><td><code>abi/arm64/androidXX/</code></td><td>按反汇编推算布局，或同时维护多处声明</td></tr>
+<tr><td>版本独有运行时行为</td><td>实际需要的 <code>platform/androidXX/</code></td><td>仅建空目录或版本转发包装代表适配完成</td></tr>
+<tr><td>命名符号与能力选择</td><td><code>platform/symbols/</code> 及已有校准路径</td><td>只凭 SDK、机型或构建编号启用能力</td></tr>
+<tr><td>回归与复核证据</td><td><code>tests/host/</code>、<code>app/src/debug/</code>、<code>tools/</code>、<code>docs/</code></td><td>把组件或编译通过当成完整设备语义通过</td></tr>
+</tbody></table></div>
+<h3>4.3 一次贡献的工作流程</h3>
+<p>先复现失败并确定应有语义。问题属于结构或抽象错误时，重构并删除过时路径；复用现有的校准、根管理和事务所有权，不在错误结构上叠加临时条件。私有能力需要命名符号、固定声明和真实行为证据共同成立。</p>
+<pre><code>git clone https://github.com/ytlog/art-dcevm.git
+cd art-dcevm
+git switch -c codex/describe-your-change
+
+# 构建示例 APK 和发布 AAR
+./gradlew :app:assembleDebug :artdcevm:assembleRelease
+
+# 按改动选择相应 Host 回归，例如
+python3 tools/test-class-metadata-abi-host.py
+python3 tools/test-native-schema-guard-verifier-host.py
+
+# 相关设备回归：按公开路径或已适配结构路径选择
+python3 tools/run-public-jvmti.py --serial DEVICE
+python3 tools/android13/run-source-probe.py --serial DEVICE</code></pre>
+<p>本仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；准备兼容 JDK，在本机 <code>local.properties</code> 配置 SDK。按变化选择验证：算法与生命周期可用 Host ASan/UBSan 回归，ABI 与真实运行语义需要对应设备证据。</p>
+<p>将原始日志和逐次报告写入已忽略的 <code>build/evidence/</code>，在 <code>docs/VERIFICATION.md</code> 记录必要命令、结论、设备和 APK SHA-256。提交前检查 <code>git status</code> 与暂存差异，只包含本次代码、测试和文档；设备运行库、本机配置和构建产物留在本地。完成验证后创建清晰的 Git 提交，再通过自己的分支提出 PR。</p>
+<h3>4.4 欢迎哪些方向的贡献？</h3>
+<p>跨版本结构事务的完整接线，更多 JIT/AOT 与并发活动帧形态的恢复证明，旧引用与权限组合的回归，元数据回收、ClassLoader 卸载和长期稳定性，都有明确的工程价值。使用示例、诊断信息和文档同样是贡献入口。讨论能力时带上具体变更、调用路径与设备结果，能够更快判断差异所在。</p>
+<h3>进一步阅读与验证坐标</h3>
+<ul class="sources"><li><a href="../../README.md">README</a> 与 <a href="../MAVEN_PUBLISHING.md">Maven 发布指南</a>：接入与组件发布。</li><li><a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a> 与 <a href="../SCHEMA_RUN_STATE.md">RunState 生命周期</a>：增强路由和事务所有权。</li><li><a href="../ANDROID_COMPATIBILITY.md">兼容性</a>、<a href="../LIMITATIONS.md">能力边界</a>、<a href="../VERIFICATION.md">验证记录</a>：实际能力与回归身份。</li><li><a href="https://source.android.com/docs/core/runtime/art-ti">AOSP ART TI</a>、<a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">JVMTI RedefineClasses</a>、<a href="https://developer.android.com/tools/d8">D8</a>：原生接口与编译工具依据。</li></ul>
+<p class="small">本文保留的既有完整回归坐标：2026-10-09，Xiaomi M2007J1SC / API 33，1,025 项检查通过；APK SHA-256：<code>6e6ecee925ced03038622ca637711745d7fcd2783346517a888109d26a6ec8b0</code>。这是特定路径与产物的验证，后续变更保留各自的验收记录。</p>
 </section>
 <div class="closing">标准入口，更强的重定义能力。<br><strong>ART DCEVM，增强 ART JVMTI 的 RedefineClasses。</strong></div>
-</article>
-</main>
-<footer class="footer">ART DCEVM · 独立离线文章 · 所有配图内嵌，无外部字体或脚本依赖。动画为语义演示，不执行真实重定义。</footer>
-</div>
+</article></main><footer class="footer">ART DCEVM · 离线阅读与交互演示 · 动画描述重定义语义，不执行真实重定义。</footer></div>
 <script>
 (() => {
 'use strict';
