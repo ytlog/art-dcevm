@@ -1,5 +1,7 @@
 # ART DCEVM 实验工程
 
+项目背景、接入示例和结构重定义原理见 [原理说明（含图示与分步动画）](articles/art-dcevm.html)。克隆仓库后可用浏览器打开该 HTML，图片与动画随文档提供。
+
 验证结论与复现入口见 [VERIFICATION.md](VERIFICATION.md)。Android 11–17 的公开路径矩阵、16 KB 构建和 AOSP 私有声明差异见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)。逐次测试报告保存在本地 `build/evidence/`，由 Git 忽略；文中的历史报告链接只在保留了本地报告的工作区可打开。
 
 目标是在自有、从启动时就可调试的应用内，实现接近 DCEVM 的类演进。完整演进的既有真机证据来自 Android 13 / arm64；Android 11–17 的共用私有 provider 正在统一接入和回归。公开 JVMTI 后端支持方法体替换，并在 ART 暴露结构扩展时提供新增成员能力；已校准的删除子集与完整演进分别报告，不能互相替代。不需要 root，也不改系统分区。
