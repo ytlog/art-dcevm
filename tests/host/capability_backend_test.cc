@@ -28,12 +28,14 @@ struct Backend:RuntimeBackend {
  int InitializeEvolution(JNIEnv*,jobject)override{++initialized;return init_error;}
 };
 struct Engine:production_bootstrap::Engine {
- bool source=false,allow=true,fields=false,stop=false;int activation=0,applied=0,recorded=0,apply_result=42;
+ bool source=false,allow=true,fields=false,stop=false,episode=false;int activation=0,applied=0,recorded=0,apply_result=42;
  std::function<void()> apply_callback,record_callback;
  bool Source13Candidate()const override{return source;}
  void RecordDefinitions(JNIEnv*,const std::vector<Definition>&)override{++recorded;if(record_callback)record_callback();}
  bool FieldDeletionReady()const override{return fields&&activation&&allow;}
  bool SourceStopCalibrated()const override{return stop;}
+ bool InitializerEpisodeObserved()const override{return episode;}
+ std::string InitializerEpisodeDiagnostic()const override{return episode?"":"initializer \"wait\" pending";}
  std::string SourceStopDiagnostic()const override{return stop?"":"source \"proof\" pending";}
  bool Activate(JNIEnv*,std::string* error)override{++activation;if(!allow)*error="guard proof rejected";return allow;}
  int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)override{++applied;if(apply_callback)apply_callback();return apply_result;}
@@ -165,6 +167,13 @@ int main(){
   assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
   assert(backend.Capabilities().find("\"sourceStopCalibrated\":false")!=std::string::npos);
   assert(backend.Capabilities().find("source \\\"proof\\\" pending")!=std::string::npos);
+  assert(backend.Capabilities().find("\"initializerEpisodeObserved\":false")!=std::string::npos);
+  assert(backend.Capabilities().find("initializer \\\"wait\\\" pending")!=std::string::npos);
+  engine->episode=true;
+  assert(backend.Capabilities().find("\"initializerEpisodeObserved\":true")!=std::string::npos);
+  assert(backend.Capabilities().find("\"initializerEpisodeDiagnostic\":\"\"")!=std::string::npos);
+  assert(backend.Capabilities().find("\"sourceFactoryDiagnostic\":\"production-schema-services-unprepared\"")!=std::string::npos);
+  assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
   engine->stop=true;
   assert(backend.Capabilities().find("\"sourceStopCalibrated\":true")!=std::string::npos);
   assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);

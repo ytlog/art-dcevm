@@ -30,6 +30,7 @@ class Owner final {
  bool BindDependencies(native_schema_run_state::Dependencies*,std::string*);
  const char* Diagnostic()const noexcept;
  source_handle_roots::Service& Roots()noexcept{return roots_;}
+ const source_handle_roots::Service& Roots()const noexcept{return roots_;}
  native_hierarchy_allocator::Service& Allocator()noexcept{return allocator_;}
  const native_source_dex_registry::Service& DexRegistry()const noexcept{return registry_;}
  const native_class_lookup::Service& Lookup()const noexcept{return lookup_;}

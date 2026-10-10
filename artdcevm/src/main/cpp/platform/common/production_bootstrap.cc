@@ -1,3 +1,4 @@
+#include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_field_factory_observer.h"
 #include "platform/common/source_cache_resolution.h"
@@ -97,6 +98,28 @@ struct NativeEngine final:Engine {
  native_source_stop::Service source_stop;
  native_source_observation::Owner source_observers;
  native_production_schema_capabilities::Owner source_capabilities;
+ native_initializer_episode::Service initializer_episode;
+ bool initializer_episode_attempted=false;std::string initializer_episode_diagnostic;
+ bool InitializerEpisodeObserved()const override{return initializer_episode.ReadyFor(metadata,source_capabilities.Roots());}
+ std::string InitializerEpisodeDiagnostic()const override{return InitializerEpisodeObserved()?"":initializer_episode_diagnostic.empty()?"initializer-source-episode-not-attempted":initializer_episode_diagnostic;}
+ bool PrepareInitializerEpisode(JNIEnv* env){
+  if(InitializerEpisodeObserved())return true;
+  if(initializer_episode_attempted)return false;
+  if(!source_capabilities.Ready())return Fail(&initializer_episode_diagnostic,"initializer-source-episode-awaiting-source-capabilities");
+  if(!env||env->ExceptionCheck()||current||schema_run||graph_staging)
+   return Fail(&initializer_episode_diagnostic,"initializer-source-episode-requires-ordinary-unstaged-owner");
+  // This optional producer owns only exceptions created by its private oracle;
+  // it neither replaces factory diagnostics nor authorizes initializer removal.
+  initializer_episode_attempted=true;
+  bool observed=false;
+  try{observed=initializer_episode.Calibrate(hooks,env,anchor,metadata,source_capabilities.Roots(),&initializer_episode_diagnostic);}
+  catch(...){initializer_episode_diagnostic="initializer-source-episode-producer-threw";}
+  if(env->ExceptionCheck()){
+   compiled_frame_fixture::DescribePending(env,"initializer-source-episode-private-oracle",&initializer_episode_diagnostic);
+   env->ExceptionClear();observed=false;
+  }
+  return observed;
+ }
  std::string source_factory_diagnostic;bool source_calibration_started=false;
  bool SourceCapabilitiesCalibrated()const override{return source_capabilities.Ready();}
  bool FrameGeometryCalibrated()const override{return frame_geometry_proven;}
@@ -183,6 +206,7 @@ struct NativeEngine final:Engine {
   return proven&&r.result.compiled_ready;
  }
  bool PrepareCompiledFrames(JNIEnv* env,jvmtiEnv* ti){
+  PrepareInitializerEpisode(env);
   if(compiled_frames_proven)return true;
   if(!source_capabilities.Roots().Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-roots");
   if(!source_stop.Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-stop");
@@ -747,7 +771,7 @@ struct NativeEngine final:Engine {
  bool applying=false;size_t ordinary_source_step=0;std::string ordinary_source_diagnostic;
  bool PrimeOrdinarySource(JNIEnv* env,jvmtiEnv* ti,std::string* error){
   if(!ordinary_source_diagnostic.empty())return Fail(error,ordinary_source_diagnostic.c_str());
-  if(source_capabilities.Ready()&&source_stop.Calibrated())return true;
+  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareInitializerEpisode(env);return true;}
   if(current||schema_run||graph_staging)return Fail(error,"Private ordinary source priming requires an unstaged outer operation");
   jclass type=env->GetObjectClass(input);struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_root{env,type};
   auto class_id=type?env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;"):nullptr;
@@ -786,6 +810,7 @@ struct NativeEngine final:Engine {
   }
   if(!source_capabilities.Ready())return Fail(error,SourceFactoryDiagnostic().c_str());
   if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
+  PrepareInitializerEpisode(env);
   PrepareCompiledFrames(env,ti);
   return true;
  }

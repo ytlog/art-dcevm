@@ -56,6 +56,8 @@ std::string CapabilityBackend::Capabilities()const {
    (ready_&&common_&&common_->SourceCapabilitiesCalibrated()?"true":"false")+
    ",\"frameGeometryCalibrated\":"+(ready_&&common_&&common_->FrameGeometryCalibrated()?"true":"false")+
    ",\"sourceFactoryDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceFactoryDiagnostic():"production-source-owner-not-observed")+
+   ",\"initializerEpisodeObserved\":"+(common_&&common_->InitializerEpisodeObserved()?"true":"false")+
+   ",\"initializerEpisodeDiagnostic\":"+QuoteJsonMutf8(common_?common_->InitializerEpisodeDiagnostic():"initializer-source-owner-not-observed")+
    ",\"receiverInvokeSourceCalibrated\":"+(common_&&common_->ReceiverInvokeSourceCalibrated()?"true":"false")+
    ",\"receiverInvokeSourceDiagnostic\":"+QuoteJsonMutf8(common_?common_->ReceiverInvokeSourceDiagnostic():"receiver-invoke-source-owner-not-observed")+
    ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+
