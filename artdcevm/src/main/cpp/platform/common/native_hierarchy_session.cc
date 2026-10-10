@@ -141,7 +141,7 @@ void Session::AfterVerification(void*owner,const void*iter,bool result)noexcept{
 }
 bool Session::PrepareCollected(const source_commit::Plan&p,std::string*error){
  if(!Ready()||verification_owner_||finish_next_!=metadata_.count||verify_next_!=metadata_.count){Error(error,"Collected graph lacks complete original source verification");return false;}
- if(bindings_.ledger&&!bindings_.ledger->Collected(p))return false;
+ if(bindings_.ledger&&!bindings_.ledger->Collected(p)){Error(error,"Collected private DEX ledger differs from the exact source Plan or paused owner");return false;}
  return true;
 }
 bool Session::Collected(const source_commit::Plan&p,std::string*error){

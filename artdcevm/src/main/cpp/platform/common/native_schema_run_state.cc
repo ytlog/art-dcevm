@@ -126,7 +126,12 @@ bool RunState::PrepareOriginalWaiting(void*raw,native_source_stop::Session&stop)
  return false;
 }
 bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit::Plan&p,std::string*e){
- auto&s=*state_;if(s.phase!=State::Phase::Running||!g.holder||!s.loading->Paused()||!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata)||!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return Fail(e,"Actual collected schema owner/root preparation refused");
+ auto&s=*state_;
+ if(s.phase!=State::Phase::Running)return Fail(e,"Collected schema requires the running transaction phase");
+ if(!g.holder)return Fail(e,"Collected schema has no actual transaction root holder");
+ if(!s.loading->Paused())return Fail(e,"Collected schema requires the paused source loading owner");
+ if(!s.cleanup->AttachHolder(static_cast<const transaction_root::Holder*>(g.holder),g.metadata))return Fail(e,"Collected cleanup rejected actual holder/driver metadata");
+ if(!s.hierarchy->PrepareCollected(p,e)||!s.authority.PrepareRoots(p,e))return false;
  if(!s.d.frames->PrepareRecoveryPlan(p,&s.frame_storage))return Fail(e,"Ordinary source frame exact Plan preparation refused");
  s.plan=&p;s.holder=g.holder;size_t publication_count=0;
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
