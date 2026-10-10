@@ -4,7 +4,6 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <algorithm>
-#include <array>
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
 #include "platform/abi/common/suspend_all.h"
@@ -48,62 +47,6 @@ bool WarmPublic(JNIEnv* env,const JavaWarm& call,const Witness& witness,const Ro
  // JNI restored its incoming Runnable state; reborrow all strong Pool roots
  // after the Java invocation's possible allocation/GC before native Calibrate.
  return roots.Snapshot(witness,&current,error);
-}
-namespace {
-using Legacy=abi::arm64::android11::LegacyCache;using Dual=abi::arm64::android14::DualCache;
-struct PublicField {const char*name;size_t legacy,dual;};
-const PublicField public_fields[]={
- {"dexFile",offsetof(Legacy,dex_file),offsetof(Dual,dex_file)},
- {"resolvedCallSites",offsetof(Legacy,call_sites),offsetof(Dual,call_sites)},
- {"resolvedFields",offsetof(Legacy,fields),offsetof(Dual,fields)},
- {"resolvedMethodTypes",offsetof(Legacy,method_types),offsetof(Dual,method_types)},
- {"resolvedMethods",offsetof(Legacy,methods),offsetof(Dual,methods)},
- {"resolvedTypes",offsetof(Legacy,types),offsetof(Dual,types)},
- {"strings",offsetof(Legacy,strings),offsetof(Dual,strings)}};
-}
-const char* PublicCacheFieldName(size_t i){return i<7?public_fields[i].name:nullptr;}
-size_t PublicCacheFieldOffset(size_t i,bool dual){return i<7?(dual?public_fields[i].dual:public_fields[i].legacy):SIZE_MAX;}
-bool CheckPublicCacheField(size_t i,void*declaring,void*expected,const char*name,const char*descriptor,uint32_t flags,uint32_t offset,bool*legacy,bool*dual,std::string*error){
- if(i>=7||!expected||declaring!=expected||!name||!descriptor||std::strcmp(name,public_fields[i].name)||std::strcmp(descriptor,"J")||(flags&8u)||!legacy||!dual)
-  return Fail(error,"Public DexCache reflected Field differs from exact native declaring Class/name/type/storage");
- *legacy&=offset==public_fields[i].legacy;*dual&=offset==public_fields[i].dual;return true;
-}
-bool CapturePublicCacheStorage(JNIEnv*env,jobject cache,void*owner,RetainPublicRoot retain,PublicCacheStorage*out,std::string*error){
- if(!env||!cache||!retain||!out||env->ExceptionCheck())return Fail(error,"Public DexCache storage JNI inputs or exception rejected");
- struct Local {JNIEnv*env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}};
- jclass type=env->GetObjectClass(cache);Local type_scope{env,type};
- if(!type||env->ExceptionCheck())return Fail(error,"Public DexCache Class unavailable");
- jclass expected=env->FindClass("java/lang/DexCache");Local expected_scope{env,expected};
- if(!expected||env->ExceptionCheck())return Fail(error,"Public DexCache bootstrap Class unavailable");
- const bool same=env->IsSameObject(type,expected);
- if(env->ExceptionCheck()||!same)return Fail(error,"Public cache differs from exact bootstrap DexCache Class");
- out->strong_class=retain(owner,env,type);
- if(!out->strong_class||env->ExceptionCheck())return Fail(error,"Public DexCache Class retention rejected");
- for(size_t i=0;i<7;++i){
-  auto id=env->GetFieldID(type,public_fields[i].name,"J");
-  if(!id||env->ExceptionCheck())return Fail(error,"Public DexCache exact long field unavailable");
-  jobject reflected=env->ToReflectedField(type,id,JNI_FALSE);Local reflected_scope{env,reflected};
-  if(!reflected||env->ExceptionCheck())return Fail(error,"Public DexCache exact reflected field unavailable");
-  out->reflected_fields[i]=retain(owner,env,reflected);
-  if(!out->reflected_fields[i]||env->ExceptionCheck())return Fail(error,"Public DexCache Field retention rejected");
-  out->values[i]=static_cast<uint64_t>(env->GetLongField(cache,id));
-  if(env->ExceptionCheck())return Fail(error,"Public DexCache original long field read raised exception");
- }
- return true;
-}
-bool CheckPublicCacheStorage(const PublicCacheStorage&values,const void*cache,std::string*error,bool legacy,bool dual){
- if(!values.strong_class||!cache)return Fail(error,"Public DexCache native source comparison lacks independent identity");
- char evidence[512]{};size_t used=0;
- for(size_t position=0;position<7;++position){const size_t i=static_cast<size_t>(std::array<int,7>{2,4,5,0,1,3,6}[position]);uint64_t a=0,b=0;
-  std::memcpy(&a,static_cast<const unsigned char*>(cache)+public_fields[i].legacy,8);
-  std::memcpy(&b,static_cast<const unsigned char*>(cache)+public_fields[i].dual,8);
-  legacy&=a==values.values[i];dual&=b==values.values[i];
-  int n=std::snprintf(evidence+used,sizeof(evidence)-used," %s=%llx/%llx/%llx",public_fields[i].name,
-   static_cast<unsigned long long>(values.values[i]),static_cast<unsigned long long>(a),static_cast<unsigned long long>(b));
-  if(n>0)used+=std::min(static_cast<size_t>(n),sizeof(evidence)-used-1);
- }
- if(!legacy&&!dual){if(error)*error=std::string("Exact public DexCache long fields differ from fixed source declarations (JNI/legacy/dual):")+evidence;return false;}
- return true;
 }
 bool Service::BindObservation(HookEngine& hooks,void* linker,Service* out,std::string* error){
  if(!out||!linker)return Fail(error,"Cache Java observer actual ClassLinker owner unavailable");

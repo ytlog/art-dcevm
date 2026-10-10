@@ -118,48 +118,7 @@ jboolean SameJava(JNIEnv*,jobject a,jobject b){if(java_failure==4)active->except
 void DeleteJava(JNIEnv*,jobject value){assert(value);++local_deletes;}
 jboolean PendingJava(JNIEnv*){return active->exception;}
 }
-namespace {
-uint64_t independent_longs[7]={0x1110,0x2220,0x3330,0x4440,0x5550,0x6660,0x7770};
-unsigned long_reads=0,field_reads=0;int storage_failure=0;
-jclass StorageType(JNIEnv*,jobject value){assert(value==reinterpret_cast<jobject>(0x1000));return reinterpret_cast<jclass>(0x4000);}
-jclass StorageExpected(JNIEnv*,const char*name){assert(!strcmp(name,"java/lang/DexCache"));return reinterpret_cast<jclass>(0x4000);}
-jfieldID StorageField(JNIEnv*,jclass c,const char*name,const char*desc){assert(c==reinterpret_cast<jclass>(0x4000)&&!strcmp(desc,"J"));++field_reads;
- for(size_t i=0;i<7;++i)if(!strcmp(name,PublicCacheFieldName(i))){if(storage_failure==1&&i==2)active->exception=true;return reinterpret_cast<jfieldID>(i+1);}assert(false);return nullptr;}
-jobject StorageReflection(JNIEnv*,jclass c,jfieldID id,jboolean is_static){assert(c==reinterpret_cast<jclass>(0x4000)&&!is_static);return reinterpret_cast<jobject>(uintptr_t(id)+0x5000);}
-jlong StorageLong(JNIEnv*,jobject c,jfieldID id){assert(c==reinterpret_cast<jobject>(0x1000));auto i=uintptr_t(id)-1;++long_reads;if(storage_failure==2&&i==3)active->exception=true;return independent_longs[i];}
-jobject RetainStorage(void*,JNIEnv*,jobject value){return value;}
-}
 int main(){
- {
-  for(bool model:{false,true}){bool legacy=true,dual=true;std::string error;
-   for(size_t i=0;i<7;++i)assert(CheckPublicCacheField(i,(void*)0x1230,(void*)0x1230,PublicCacheFieldName(i),"J",2,PublicCacheFieldOffset(i,model),&legacy,&dual,&error));
-   assert(model?dual&&!legacy:legacy&&!dual);
-  }
-  for(int bad=0;bad<5;++bad){bool legacy=true,dual=true;std::string error;
-   assert(!CheckPublicCacheField(2,bad==0?(void*)0x9990:(void*)0x1230,(void*)0x1230,bad==1?"resolvedMethods":"resolvedFields",bad==2?"I":"J",bad==3?8:2,32,bad==4?nullptr:&legacy,&dual,&error));
-   assert(legacy&&dual);
-  }
- }
- {
-  JNINativeInterface_ table{};table.GetObjectClass=StorageType;table.FindClass=StorageExpected;
-  table.IsSameObject=SameJava;table.GetFieldID=StorageField;table.ToReflectedField=StorageReflection;
-  table.GetLongField=StorageLong;table.ExceptionCheck=PendingJava;table.DeleteLocalRef=DeleteJava;JNIEnv env{&table};
-  for(int failure=0;failure<3;++failure){Fixture f;active=&f;storage_failure=failure;java_failure=0;field_reads=long_reads=0;
-   PublicCacheStorage got{};std::string error;
-   assert(CapturePublicCacheStorage(&env,reinterpret_cast<jobject>(0x1000),nullptr,RetainStorage,&got,&error)==(failure==0));
-   if(!failure){assert(long_reads==7&&field_reads==7);
-    // Independently declared managed long values versus each fixed native ABI.
-    for(bool dual:{false,true}){alignas(8) unsigned char native[112]{};
-     for(size_t i=0;i<7;++i)std::memcpy(native+PublicCacheFieldOffset(i,dual),&independent_longs[i],8);
-     assert(CheckPublicCacheStorage(got,native,&error));
-     assert(!CheckPublicCacheStorage(got,native,&error,dual,!dual)); // Never mix field-offset and long-value source candidates.
-     uint64_t bad=0xdead;std::memcpy(native+PublicCacheFieldOffset(4,dual),&bad,8);
-     assert(!CheckPublicCacheStorage(got,native,&error));assert(error.find("resolvedMethods=5550/")!=std::string::npos);
-    }
-   }else if(failure==1)assert(field_reads==3&&long_reads==2);
-   else assert(field_reads==4&&long_reads==4);
-  }
- }
  {JNINativeInterface_ table{};table.CallStaticObjectMethodV=JavaWriter;table.IsSameObject=SameJava;
   table.DeleteLocalRef=DeleteJava;table.ExceptionCheck=PendingJava;JNIEnv env{&table};
   for(int failure=0;failure<5;++failure){Fixture f;active=&f;f.move=true;java_failure=failure;java_calls=0;local_deletes=0;

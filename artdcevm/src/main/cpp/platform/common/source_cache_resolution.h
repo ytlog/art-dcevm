@@ -23,17 +23,6 @@ struct JavaWarm {jclass bootstrap=nullptr;jmethodID method=nullptr;jobject input
 // Runnable entry. Caller supplies already retained public globals and method ID;
 // Snapshot verifies the real current Runnable/root owner before/after Java GC.
 bool WarmPublic(JNIEnv*,const JavaWarm&,const Witness&,const Roots&,std::string*);
-struct PublicCacheStorage {
- jobject strong_class=nullptr; jobject reflected_fields[7]{}; uint64_t values[7]{};
-};
-using RetainPublicRoot=jobject(*)(void*,JNIEnv*,jobject);
-bool CapturePublicCacheStorage(JNIEnv*,jobject,void*,RetainPublicRoot,PublicCacheStorage*,std::string*);
-// Identities/offsets must first be independently matched through original
-// reflected ArtFields. Both fixed declarations are compared, never inferred.
-bool CheckPublicCacheStorage(const PublicCacheStorage&,const void*,std::string*,bool legacy=true,bool dual=true);
-const char* PublicCacheFieldName(size_t);
-size_t PublicCacheFieldOffset(size_t,bool dual);
-bool CheckPublicCacheField(size_t,void* declaring,void* expected,const char* name,const char* descriptor,uint32_t flags,uint32_t offset,bool* legacy,bool* dual,std::string*);
 class NativeWindow {
  public:virtual ~NativeWindow()=default;
  // Must independently prove ordinary Native JNI and the exact current
