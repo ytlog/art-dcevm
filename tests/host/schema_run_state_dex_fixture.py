@@ -49,18 +49,19 @@ def write_fixture(directory: Path, before: bool) -> Path:
     data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     directory.mkdir(parents=True,exist_ok=True);path=directory/('before.dex' if before else 'after.dex');path.write_bytes(data);return path
 
-def write_graph_fixture(directory: Path) -> Path:
+def write_graph_fixture(directory: Path, package: str = 'Lcom/example/') -> Path:
     """Independent immutable defining DEX for the public loaded boot/parent graph."""
-    root='Lcom/example/HierarchyRoot;';tag='Lcom/example/HierarchyTag;'
-    parents={OBJECT:None,root:OBJECT,BASE:root,INSERTED:BASE,tag:OBJECT,MORE:OBJECT}
-    flags={name:(0x601 if name in (tag,MORE) else 1) for name in parents}
+    root=package+'HierarchyRoot;';tag=package+'HierarchyTag;'
+    base=package+'HierarchyBase;';inserted=package+'HierarchyInserted;';more=package+'HierarchyMore;'
+    parents={OBJECT:None,root:OBJECT,base:root,inserted:base,tag:OBJECT,more:OBJECT}
+    flags={name:(0x601 if name in (tag,more) else 1) for name in parents}
     strings=sorted(parents);types=strings;ids={s:i for i,s in enumerate(strings)}
     data=bytearray(0x70)
     def put(at,n):struct.pack_into('<I',data,at,n)
     strings_at=len(data);data.extend(bytes(len(strings)*4));types_at=len(data);data.extend(bytes(len(types)*4));classes_at=len(data);data.extend(bytes(len(types)*32));start=len(data)
     for i,s in enumerate(strings):put(strings_at+i*4,len(data));assert len(s)<128;data.extend(bytes([len(s)])+s.encode()+b'\0');put(types_at+i*4,i)
     data.extend(bytes((-len(data))%4));more_interfaces=len(data);data.extend(struct.pack('<IH',1,ids[tag]));data.extend(bytes((-len(data))%4))
-    for i,name in enumerate(types):struct.pack_into('<IIIIIIII',data,classes_at+32*i,i,flags[name],ids[parents[name]] if parents[name] else 0xffffffff,more_interfaces if name==MORE else 0,0xffffffff,0,0,0)
+    for i,name in enumerate(types):struct.pack_into('<IIIIIIII',data,classes_at+32*i,i,flags[name],ids[parents[name]] if parents[name] else 0xffffffff,more_interfaces if name==more else 0,0xffffffff,0,0,0)
     map_at=len(data);entries=[(0,1,0),(1,len(strings),strings_at),(2,len(types),types_at),(6,len(types),classes_at),(0x2002,len(strings),start),(0x1001,1,more_interfaces),(0x1000,1,map_at)]
     data.extend(struct.pack('<I',len(entries)))
     for kind,count,offset in entries:data.extend(struct.pack('<HHII',kind,0,count,offset))

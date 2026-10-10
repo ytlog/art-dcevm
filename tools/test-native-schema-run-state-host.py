@@ -3,6 +3,8 @@
 Only ART/JNI leaf receivers, callbacks and public graphs are boundary doubles.
 """
 import os
+import sys
+import re
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,6 +12,11 @@ import subprocess
 root=Path(__file__).resolve().parents[1];cpp=root/'artdcevm/src/main/cpp'
 out=root/'build/evidence/host/native-schema-run-state';out.mkdir(parents=True,exist_ok=True)
 java=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip())
+sys.path.insert(0,str(root/'tests/host'))
+from schema_run_state_dex_fixture import write_graph_fixture
+graph_input=Path(os.environ.get('SOURCE_DEX_FIXTURE',str(root/'app/build/generated/patchAssets/hier-parent/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex')))
+graph_package=re.search(rb'(L(?:[A-Za-z0-9_$]+/)+)HierarchyInserted;\0',graph_input.read_bytes()).group(1).decode() if graph_input.exists() else 'Lcom/example/'
+graph_dex=write_graph_fixture(out/'baseline-graph',graph_package)
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 commit=(root/'tests/host/native_source_commit_test.cc').read_text().split('int main(){')[0].replace('std::array<unsigned char,200>','std::array<unsigned char,512>')
 (out/'native_commit_fixture.inc').write_text(commit)
@@ -42,7 +49,7 @@ body=body.replace(monitor,'{auto prior_find=table.FindClass;auto prior_method=ta
 sources=['native_schema_run_state','native_hierarchy_private_ledger','native_source_dex_registry','native_source_class_loading','native_hierarchy_session','native_class_lookup','native_hierarchy_source_checks','native_hierarchy_graph','native_hierarchy_allocator','native_hierarchy_receiver','rooted_hierarchy_allocator','native_hierarchy_cache','native_hierarchy_source_cache','whole_process_frames','native_required_cleanup','native_source_stop','native_member_provider','native_method_table','native_structural_reflection','resolution_invalidation_plan','native_source_commit','modern_source_commit','source_commit','modern_field_metadata','native_interface_graph','modern_field_storage','field_copy','prepared_field_copy','native_schema_policy','native_schema_binding','native_method_evolution_policy','source_handle_roots','exclusive_owned_roots','native_cache_service','modern_method_services','structural_methods','method_identity_calibration','object_replacement_map','native_owned_removal','native_removal_policy','native_schema_guard_verifier','owned_structural_transaction','source_allocation_transaction','native_abstract_instances']
 fixture=Path(os.environ.get('SOURCE_DEX_FIXTURE',str(root/'app/build/generated/patchAssets/hier-parent/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex')))
 if not fixture.exists():raise SystemExit('SOURCE_DEX_FIXTURE must name the verified hierarchy fixture DEX')
-common=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DPIPELINE_DEX_FIXTURE='+chr(34)+str(fixture)+chr(34)]
+common=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(root/'tests/host'),'-DRUN_STATE_GRAPH_DEX_FIXTURE='+chr(34)+str(graph_dex)+chr(34),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DPIPELINE_DEX_FIXTURE='+chr(34)+str(fixture)+chr(34)]
 units=[root/'tests/host/native_schema_run_state_test.cc']+[cpp/'platform/common'/(s+'.cc') for s in sources]+[cpp/'evolution/dex_schema.cc',cpp/'evolution/migration_plan.cc',cpp/'platform/common/schema_snapshot.cc']
 headers=b''.join(p.read_bytes() for p in sorted(cpp.rglob('*.h')))+b''.join(p.read_bytes() for p in sorted(out.glob('*.inc')))
 headers+=(root/'tests/host/native_schema_run_state_mapping_fixture.h').read_bytes()

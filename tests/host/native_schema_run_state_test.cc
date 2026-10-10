@@ -6,12 +6,20 @@
 #pragma clang diagnostic pop
 #include "platform/common/native_schema_run_state.h"
 #include "native_schema_run_state_mapping_fixture.h"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#include "native_schema_run_state_public_fixture.h"
+#pragma clang diagnostic pop
 #include <sys/wait.h>
 #include <unistd.h>
 template<class F> void ExpectAbort(F fn){const auto child=fork();assert(child>=0);if(!child){fn();_exit(1);}int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);}
 int main(){
 #include "root_setup.inc"
 #include "pipeline_setup.inc"
+  // Compose only the newly consumed JNI leaves; preserve graph/provider negative inputs.
+  table.CallStaticBooleanMethodA=GuardProxy;table.NewObjectArray=GuardNewArray;table.GetArrayLength=GuardLength;table.GetObjectArrayElement=GuardGet;table.SetObjectArrayElement=GuardSet;
+  std::vector<unsigned char> graph_bytes=File(RUN_STATE_GRAPH_DEX_FIXTURE);
+  ConfigureDefiningGraph(graph_bytes,*d.metadata);
   // Additional actual owners required by the aggregate. Calibrate all providers
   // ordinary; no injectable RunState readiness shortcuts are used.
   OwnerHooks owner_hooks;native_cache::Service process_cache;OwnerNative(thread.data());assert(process_cache.Bind(owner_hooks,&thread_list,&error)&&process_cache.Prepare(&error));OwnerRunnable(thread.data());
