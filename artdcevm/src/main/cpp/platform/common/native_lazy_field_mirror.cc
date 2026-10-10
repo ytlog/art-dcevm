@@ -25,9 +25,7 @@ bool Service::FourProven()const{
  const auto&b=bindings_;
  if(!b.observer||!b.observer->FourArgument()||!b.observer->NormalizerInstalled()||b.observer->Poisoned()||!b.roots||!b.roots->Calibrated()||!b.public_roots||!b.primitive_trace||!b.optional_trace)return false;
  for(bool proven:*b.public_roots)if(!proven)return false;
- for(auto*t:{b.primitive_trace,b.optional_trace})for(const auto&e:t->entries){
-  if(!e.field||!e.calls||e.false_calls!=e.calls||!e.root_before_valid||!e.root_after_valid||!e.result||!e.root_after||e.root_before!=e.root_after||e.normalized_field!=e.field)return false;
- }
+ for(auto* t:{b.primitive_trace,b.optional_trace})if(!native_field_factory_observer::RootFalseProof(*t))return false;
  return true;
 }
 bool Service::Produce(const runnable_jni::Context& context,void* raw){

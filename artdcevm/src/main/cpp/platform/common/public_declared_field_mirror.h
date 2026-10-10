@@ -4,6 +4,19 @@
 namespace artdcevm::public_declared_field_mirror {
 // Class.getDeclaredFieldsUnchecked(false) uses the original source's force_resolve=false
 // factory. Do not substitute JNI ToReflectedField (force_resolve=true).
+inline bool Enumerate(JNIEnv* env,jclass owner,jobjectArray* out,std::string* error){
+ if(out)*out=nullptr;
+ auto fail=[&](const char* text){if(error)*error=text;return false;};
+ if(!env||!owner||!out||env->ExceptionCheck())return fail("Declared Field source enumeration invalid or pending");
+ jclass type=env->GetObjectClass(owner);
+ if(!type||env->ExceptionCheck()){if(type)env->DeleteLocalRef(type);return fail("Declared Field Class API unavailable");}
+ auto method=env->GetMethodID(type,"getDeclaredFieldsUnchecked","(Z)[Ljava/lang/reflect/Field;");
+ env->DeleteLocalRef(type);
+ if(!method||env->ExceptionCheck())return fail("Declared Field original source accessor unavailable");
+ auto fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,method,JNI_FALSE));
+ if(!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return fail("Declared Field original source enumeration failed");}
+ *out=fields;return true;
+}
 class Cache {
  jclass owner_=nullptr; jobject fields_=nullptr;
  public:
@@ -18,12 +31,8 @@ class Cache {
  if(owner_){reuse=env->IsSameObject(owner_,owner);if(env->ExceptionCheck())return false;}
  if(!reuse){
   Clear(env);
-  Local type{env,env->GetObjectClass(owner)};
-  if(!type.value||env->ExceptionCheck())return fail("Declared Field Class API unavailable");
-  auto declared=env->GetMethodID(static_cast<jclass>(type.value),"getDeclaredFieldsUnchecked","(Z)[Ljava/lang/reflect/Field;");
-  if(!declared||env->ExceptionCheck())return fail("Declared Field original source accessor unavailable");
-  Local fields{env,env->CallObjectMethod(owner,declared,JNI_FALSE)};
-  if(!fields.value||env->ExceptionCheck())return fail("Declared Field original source enumeration failed");
+  jobjectArray local=nullptr;if(!Enumerate(env,owner,&local,error))return false;
+  Local fields{env,local};
   jobject rooted_owner=env->NewGlobalRef(owner);
   if(!rooted_owner||env->ExceptionCheck()){if(rooted_owner)env->DeleteGlobalRef(rooted_owner);return false;}
   jobject rooted_fields=env->NewGlobalRef(fields.value);

@@ -359,7 +359,7 @@ struct NativeEngine final:Engine {
  native_field_factory_observer::Service field_factory_observer;
  native_field_factory_observer::Trace field_factory_primitive_trace{},field_factory_optional_trace{};
  std::array<bool,4> field_factory_public_roots{};
- bool field_factory_observed=false;
+ native_field_factory_observer::EpisodeCompletion field_factory_completion;
  std::string field_factory_diagnostic;
  void* (*field_factory_root)(void*)=nullptr;
  static bool FactoryRoot(void* raw,void* self,const void* slot,void** object){
@@ -1491,12 +1491,14 @@ bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
  prepared.values.clear();return true;
 }
 bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* error){
- if(field_factory_observed)return true;
+ if(!env||env->ExceptionCheck())return Fail(error,"Original Field observation has invalid or pending public JNI context");
+ if(field_factory_completion.Ready())return true;
+ if(!field_factory_completion.Attempt())return Fail(error,"Original Field observation incomplete after prior attempt; requires fresh process");
  // No unknown Handle factory is called here. All evidence comes from ART's
- // original public getDeclaredFields caller, including its force=false choice.
+ // original getDeclaredFieldsUnchecked(false) caller and its force=false choice.
  native_field_factory_observer::Bindings bindings{this,graph_current,FactoryRoot};
  std::string unavailable;
- if(!field_factory_observer.Bind(hooks,bindings,&unavailable)){field_factory_observed=true;return true;}
+ if(!field_factory_observer.Bind(hooks,bindings,&unavailable)){field_factory_completion.Complete();return true;}
  field_factory_root=reinterpret_cast<decltype(field_factory_root)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
  if(!field_factory_root||!RefreshMaps(error)||!exclusive_owned_roots::Service::Bind(hooks,&permission_exclusive,error))return false;
  struct Install {
@@ -1504,33 +1506,36 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   static bool Run(const exclusive_owned_roots::Context& context,void* raw){auto& r=*static_cast<Install*>(raw);return r.engine.field_factory_observer.InstallAtExclusive(r.engine.hooks,context,r.error)&&r.engine.field_factory_observer.SetNormalizerAtExclusive({&r.engine,NormalizeFactoryField},context,r.error);}
  } install{*this,error};
  if(!permission_exclusive.With(env,&anchor,1,Install::Run,&install,error))return false;
- field_factory_observed=true; // The transparent hook shares the process engine lifetime.
+ // The transparent hook shares the process engine lifetime; installation alone
+ // cannot complete the two original four-argument episodes.
  // The shared sole proxy also supports declared three-argument/template alias
  // callers. Their hook remains installed, but they are not extra-Handle proof.
- if(!field_factory_observer.FourArgument())return true;
+ if(!field_factory_observer.FourArgument()){field_factory_completion.Complete();return true;}
  field_factory_diagnostic="Extra-Handle Field observer installed; original public episodes incomplete";
- jclass class_type=env->GetObjectClass(bootstrap_field_owner);
- jmethodID declared=class_type?env->GetMethodID(class_type,"getDeclaredFields","()[Ljava/lang/reflect/Field;"):nullptr;
- if(class_type)env->DeleteLocalRef(class_type);
- if(!declared||env->ExceptionCheck())return Fail(error,"Field factory observation public Class method unavailable");
  auto episode=[&](jclass owner,const std::array<jfieldID,2>& ids,const std::array<void*,2>& native,native_field_factory_observer::Trace* trace,size_t trace_offset){
   // Public roots remain owned across Java execution; no borrowed Class survives
   // a safepoint. Trace addresses are diagnostics, never restoration permission.
   if(!field_factory_observer.Begin(graph_current(),native,error))return false;
-  jobjectArray fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,declared));
+  jobjectArray fields=nullptr;
+  const bool enumerated=public_declared_field_mirror::Enumerate(env,owner,&fields,error);
   bool ended=field_factory_observer.End(trace,error);
   if(ended)for(const auto& entry:trace->entries)if(entry.calls&&entry.field!=entry.normalized_field){
    if(fields)env->DeleteLocalRef(fields);return Fail(error,"Original Field observation targets were normalized; no transparent factory evidence");
   }
-  if(!ended||!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return ended?Fail(error,"Original Field factory public reflection episode failed"):false;}
+  if(!ended||!enumerated||!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return ended?Fail(error,"Original Field factory public reflection episode failed"):false;}
   std::array<bool,2> found{};const jsize count=env->GetArrayLength(fields);
   for(jsize i=0;i<count&&!env->ExceptionCheck();++i){
-   jobject field=env->GetObjectArrayElement(fields,i);jfieldID id=field?env->FromReflectedField(field):nullptr;
+   jobject field=env->GetObjectArrayElement(fields,i);
+   if(!field||env->ExceptionCheck()){if(field)env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return Fail(error,"Original Field episode lost public mirror");}
+   jfieldID id=env->FromReflectedField(field);
+   if(env->ExceptionCheck()){env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return false;}
    for(size_t n=0;n<ids.size();++n)if(id==ids[n]){
     jobject strong=env->NewGlobalRef(field);
+    if(!strong||env->ExceptionCheck()){if(strong)env->DeleteGlobalRef(strong);env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return false;}
     jclass local_type=env->GetObjectClass(field);
-    jobject strong_type=local_type?env->NewGlobalRef(local_type):nullptr;
-    if(local_type)env->DeleteLocalRef(local_type);
+    if(!local_type||env->ExceptionCheck()){if(local_type)env->DeleteLocalRef(local_type);env->DeleteGlobalRef(strong);env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return false;}
+    jobject strong_type=env->NewGlobalRef(local_type);env->DeleteLocalRef(local_type);
+    if(!strong_type||env->ExceptionCheck()){if(strong_type)env->DeleteGlobalRef(strong_type);env->DeleteGlobalRef(strong);env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return false;}
     struct PublicMirror {
      NativeEngine& engine;jobject mirror,klass;void* native;const native_field_factory_observer::Entry& entry;bool roots=false;
      static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<PublicMirror*>(raw);void *mirror=nullptr,*klass=nullptr;
@@ -1584,6 +1589,10 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   }
  } decode{*this,owner,ids,native};
  if(!FieldScope(this,env,owner,Decode::Run,&decode)||!RefreshMaps(error)||!episode(owner,ids,native,&field_factory_optional_trace,2))return false;
+ if(!std::all_of(field_factory_public_roots.begin(),field_factory_public_roots.end(),[](bool proven){return proven;})||
+    !native_field_factory_observer::RootFalseProof(field_factory_primitive_trace)||
+    !native_field_factory_observer::RootFalseProof(field_factory_optional_trace))return Fail(error,"Original extra-Handle Field episodes lack complete false/root identity proof");
+ field_factory_completion.Complete();
  field_factory_diagnostic="Original extra-Handle Field episodes";
  size_t trace_index=0;for(const auto* trace:{&field_factory_primitive_trace,&field_factory_optional_trace})for(const auto& entry:trace->entries){
   field_factory_diagnostic+=" [calls="+std::to_string(entry.calls)+",false="+std::to_string(entry.false_calls)+",handleRoot="+std::to_string(entry.root_before_valid&&entry.root_after_valid)+",returned="+std::to_string(entry.result!=0)+",publicRoots="+std::to_string(field_factory_public_roots[trace_index++])+"]";

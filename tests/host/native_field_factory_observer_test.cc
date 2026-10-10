@@ -1,11 +1,12 @@
 #include "platform/common/native_field_factory_observer.h"
+#include "platform/common/public_declared_field_mirror.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
 using namespace artdcevm;namespace obs=native_field_factory_observer;
-static int thread,other,root_owner,field1,field2,klass;static void*current=&thread;static bool pending=false,throw_reader=false;static unsigned original_calls=0,root_calls=0;static obs::Factory proxy=nullptr;using Three=obs::Return(*)(void*,void*,bool);static Three proxy3=nullptr;static bool normalize_fail=false;static void*normalize_input=nullptr;
+static int thread,other,root_owner,field1,field2,klass;static void*current=&thread;static bool pending=false,throw_reader=false,factory_oom=false;static unsigned original_calls=0,root_calls=0;static obs::Factory proxy=nullptr;using Three=obs::Return(*)(void*,void*,bool);static Three proxy3=nullptr;static bool normalize_fail=false;static void*normalize_input=nullptr;
 static void* Current(){return current;}
-static obs::Return Original(void*self,obs::HandleCarrier handle,void*field,bool force){assert(self==current&&handle.slot&&field);++original_calls;if(force){pending=true;return {0};}return {uintptr_t(field)};}
+static obs::Return Original(void*self,obs::HandleCarrier handle,void*field,bool force){assert(self==current&&handle.slot&&field);++original_calls;if(force||(factory_oom&&field==&field2)){pending=true;return {0};}return {uintptr_t(field)};}
 static bool Root(void*owner,void*self,const void*slot,void**out){assert(owner==&root_owner&&self==current&&!pending);++root_calls;if(throw_reader)throw 7;*out=*static_cast<void*const*>(slot);return true;}
 static obs::Return OriginalThree(void*self,void*field,bool force){assert(self==current&&field);++original_calls;if(force){pending=true;return {0};}return {uintptr_t(field)};}
 static bool Normalize(void*owner,void*self,obs::HandleCarrier,void*input,bool,void**out)noexcept{assert(owner==&root_owner&&self==current);normalize_input=input;if(normalize_fail){pending=true;return false;}*out=input==&field1?&field2:input;return true;}
@@ -17,7 +18,19 @@ class Hooks:public HookEngine {public:int family=4;bool deny=false,fail_remove=f
  void*Install(void*t,void*p,void**out,std::string*)override{assert(t==(family==4?reinterpret_cast<void*>(Original):reinterpret_cast<void*>(OriginalThree)));++installs;if(deny)return nullptr;if(family==4)proxy=reinterpret_cast<obs::Factory>(p);else proxy3=reinterpret_cast<Three>(p);*out=t;return this;}
  bool Remove(void*token,std::string*)override{assert(token==this);++removes;if(fail_remove)return false;proxy=nullptr;proxy3=nullptr;return true;}
 };
-int main(){Hooks hooks;obs::Bindings bindings{&root_owner,Current,Root};obs::Service observer;std::string error;
+static JNINativeInterface_ jni{};static JNIEnv env{&jni};static int locals=0;
+static jboolean Pending(JNIEnv*){return pending;}
+static jclass Class(JNIEnv*,jobject){assert(!pending);++locals;return reinterpret_cast<jclass>(&klass);}
+static jmethodID Method(JNIEnv*,jclass,const char* name,const char* signature){assert(!pending&&!std::strcmp(name,"getDeclaredFieldsUnchecked")&&!std::strcmp(signature,"(Z)[Ljava/lang/reflect/Field;"));return reinterpret_cast<jmethodID>(&field1);}
+static jobject Enumeration(JNIEnv*,jobject,jmethodID,va_list args){assert(!pending);const bool force=va_arg(args,int)!=0;assert(!force);void* root=&klass;
+ for(void* field:{static_cast<void*>(&field1),static_cast<void*>(&field2)})if(!proxy(current,{&root},field,force).reference)return nullptr;
+ ++locals;return reinterpret_cast<jobject>(&klass);
+}
+static void Delete(JNIEnv*,jobject){assert(locals>0);--locals;}
+int main(){obs::EpisodeCompletion completed,failed;
+ assert(!completed.Ready()&&completed.Attempt()&&!completed.Ready());completed.Complete();assert(completed.Ready()&&!completed.Attempt());
+ assert(failed.Attempt()&&!failed.Ready()&&!failed.Attempt());
+ Hooks hooks;obs::Bindings bindings{&root_owner,Current,Root};obs::Service observer;std::string error;
  assert(observer.Bind(hooks,bindings,&error));void* roots[]{&klass};exclusive_owned_roots::Context context{&thread,roots,1},wrong{&other,roots,1};
  assert(!observer.InstallAtExclusive(hooks,wrong,&error)&&!hooks.installs);assert(observer.InstallAtExclusive(hooks,context,&error));
  void* handle_root=&klass;obs::HandleCarrier handle{&handle_root};obs::Trace trace;
@@ -27,6 +40,14 @@ int main(){Hooks hooks;obs::Bindings bindings{&root_owner,Current,Root};obs::Ser
  assert(!observer.RemoveAtExclusive(hooks,context,&error));assert(observer.End(&trace,&error));assert(trace.entries[0].calls==1&&trace.entries[1].calls==1&&trace.entries[0].false_calls==1&&trace.entries[0].root_before==uintptr_t(&klass)&&trace.entries[0].root_after==uintptr_t(&klass)&&original_calls==3&&root_calls==4);
  assert(observer.Begin(&thread,{&field1,&field2},&error));assert(proxy(&thread,handle,&field1,false).reference==uintptr_t(&field1));const auto reads=root_calls;assert(!proxy(&thread,handle,&field1,true).reference&&pending);assert(observer.End(&trace,&error));assert(trace.entries[0].calls==2&&trace.entries[0].false_calls==1&&!trace.entries[0].root_after_valid&&!trace.entries[0].root_after&&root_calls==reads+1);pending=false;
  throw_reader=true;assert(observer.Begin(&thread,{&field1,&field2},&error));assert(proxy(&thread,handle,&field1,false).reference==uintptr_t(&field1));assert(observer.End(&trace,&error)&&!trace.entries[0].root_before_valid&&!trace.entries[0].root_after_valid);throw_reader=false;
+ jni.ExceptionCheck=Pending;jni.GetObjectClass=Class;jni.GetMethodID=Method;jni.CallObjectMethodV=Enumeration;jni.DeleteLocalRef=Delete;
+ for(bool oom:{false,true}){factory_oom=oom;assert(observer.Begin(&thread,{&field1,&field2},&error));jobjectArray fields=nullptr;
+ const bool enumerated=public_declared_field_mirror::Enumerate(&env,reinterpret_cast<jclass>(&klass),&fields,&error);
+ assert(observer.End(&trace,&error));assert(trace.entries[0].calls==1&&trace.entries[0].false_calls==1&&trace.entries[1].calls==1&&trace.entries[1].false_calls==1);
+ assert(obs::RootFalseProof(trace)==!oom);
+ if(!oom)for(int fault=0;fault<9;++fault){auto invalid=trace;auto& entry=invalid.entries[0];switch(fault){case 0:entry.field=nullptr;break;case 1:entry.calls=0;break;case 2:entry.false_calls=0;break;case 3:entry.root_before_valid=false;break;case 4:entry.root_after_valid=false;break;case 5:entry.result=0;break;case 6:entry.root_after=0;break;case 7:++entry.root_before;break;case 8:entry.normalized_field=&other;break;}assert(!obs::RootFalseProof(invalid));}
+ assert(enumerated==!oom&&pending==oom);if(fields)env.DeleteLocalRef(fields);assert(!locals);pending=false;}
+ factory_oom=false;
  assert(observer.RemoveAtExclusive(hooks,context,&error)&&hooks.removes==1);
  assert(observer.InstallAtExclusive(hooks,context,&error));hooks.fail_remove=true;assert(!observer.RemoveAtExclusive(hooks,context,&error)&&observer.Poisoned());assert(!observer.Begin(&thread,{&field1,&field2},&error));hooks.fail_remove=false;assert(observer.RemoveAtExclusive(hooks,context,&error));assert(!observer.InstallAtExclusive(hooks,context,&error));
  Hooks denied;denied.deny=true;obs::Service failure;assert(failure.Bind(denied,bindings,&error));assert(!failure.InstallAtExclusive(denied,context,&error)&&!failure.Poisoned());

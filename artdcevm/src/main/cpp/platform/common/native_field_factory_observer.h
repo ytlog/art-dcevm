@@ -25,6 +25,18 @@ struct Bindings {
 };
 struct Entry {void* field=nullptr;void* normalized_field=nullptr;bool normalization_invoked=false;size_t calls=0,false_calls=0;uintptr_t self=0,handle_slot=0,root_before=0,root_after=0,result=0;bool root_before_valid=false,root_after_valid=false;};
 struct Trace {std::array<Entry,2> entries{};};
+// Installation is not completion: a failed first original episode stays refused.
+class EpisodeCompletion {
+ enum class State {kNew,kIncomplete,kComplete};State state_=State::kNew;
+ public:
+ bool Attempt(){if(state_!=State::kNew)return false;state_=State::kIncomplete;return true;}
+ bool Ready()const{return state_==State::kComplete;}
+ void Complete(){if(state_==State::kIncomplete)state_=State::kComplete;}
+};
+inline bool RootFalseProof(const Trace& trace){
+ for(const auto& e:trace.entries)if(!e.field||!e.calls||e.false_calls!=e.calls||!e.root_before_valid||!e.root_after_valid||!e.result||!e.root_after||e.root_before!=e.root_after||e.normalized_field!=e.field)return false;
+ return true;
+}
 class Service {
  public:
   Service()=default;Service(const Service&)=delete;Service& operator=(const Service&)=delete;
