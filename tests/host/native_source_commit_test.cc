@@ -25,6 +25,10 @@ struct Heap {
  ~Heap(){munmap(base,1<<20);}
  void* New(size_t bytes){used=(used+15)&~size_t{15};assert(used+bytes<(1<<20));auto* p=base+used;used+=bytes;return p;}
 } heap;
+bool HeapExtent(void* owner,const void* address,size_t* extent){
+ if(owner!=&heap||!extent)return false;const uintptr_t p=uintptr_t(address),start=uintptr_t(heap.base);
+ if(p<start||p-start>=heap.used)return false;*extent=heap.used-size_t(p-start);return true;
+}
 uint32_t Read32(const void* p,size_t at=0){uint32_t n;std::memcpy(&n,static_cast<const char*>(p)+at,4);return n;}
 void Put32(void* p,size_t at,uint32_t n){std::memcpy(static_cast<char*>(p)+at,&n,4);}
 void* Root(void*);
@@ -99,7 +103,7 @@ void CachePrepare(){assert(!stopped);lock_proxy(&mutex,current,lock_argument);}
 struct Closure:art::Closure {void Run(art::Thread*)override{assert(stopped&&locked);++cleared;events.push_back("cache");}} closure;
 void ForEach(void* receiver,void(*action)(void*,void*),void* data){assert(receiver==&thread_list&&stopped&&locked);action(thread.data(),data);action(foreign_thread.data(),data);}
 abi::arm64::android12::Method12* old_method=nullptr;abi::arm64::android12::Method12* next_method=nullptr;
-void SetStatus(void* klass,uint8_t status){assert(stopped&&klass==new_class&&status==15);++mutations;events.push_back("status");Put32(klass,offsetof(class_metadata::Class17,status),uint32_t(status)<<28);}
+void SetStatus(void* klass,uint8_t status){assert(stopped&&klass==new_class&&(status==14||status==15));++mutations;events.push_back("status");Put32(klass,offsetof(class_metadata::Class17,status),uint32_t(status)<<28);}
 void Retain(void* ext,void* old){assert(stopped&&ext==moved_ext&&old==old_class);assert(Root(old_method)==old_class);for(auto* field:old_fields)assert(Root(field)==old_class);if(retain_pipe>=0){const char marker=1;assert(write(retain_pipe,&marker,1)==1);}events.push_back("retain");}
 void Invalidate(void* cache){assert(stopped&&cache==&jit_cache);events.push_back("invalidate");}
 void Deopt(void* receiver){assert(stopped&&receiver==&instrumentation);events.push_back("deopt");}
@@ -212,7 +216,36 @@ int main(){
  assert(!native_source_commit::Services::Prepare(hooks,invalid,plan,{{old_class,new_class,methods.get(),nullptr}},&error)&&unchanged());
  hooks.missing="ReplaceReferences";assert(!prepare()&&unchanged());hooks.missing=nullptr;
  current=foreign_thread.data();assert(!prepare()&&unchanged());current=thread.data();
- deps.prepare_field_copy=true;auto service=prepare();assert(service&&service->Validate(plan));
+ deps.prepare_field_copy=true;
+ modern_field_metadata::ReadContext state_context{&heap,HeapExtent};
+ deps.read_context=&state_context;deps.require_initialized_transfer=true;
+ auto service=prepare();assert(service&&service->Validate(plan));
+ // Actual source readers reject active/unverified/error states before publication.
+ // The independently calibrated monitor and field engines remain unchanged.
+ for(uint32_t status:{0u,2u,3u,11u,12u,13u}){
+  const uint32_t saved_status=old_class->status;old_class->status=status<<28;
+  const std::vector<unsigned char> before(heap.base,heap.base+heap.used);
+  assert(!source_commit::Run(plan,*service)&&!prepare());
+  assert(retirement_publications==0&&mutations==original_mutations&&
+      !std::memcmp(before.data(),heap.base,before.size()));old_class->status=saved_status;
+ }
+ for(uint32_t status:{0u,1u,2u,3u,11u,13u}){
+  const uint32_t saved_status=new_class->status;new_class->status=status<<28;
+  const std::vector<unsigned char> before(heap.base,heap.base+heap.used);
+  assert(!source_commit::Run(plan,*service)&&!prepare());
+  assert(retirement_publications==0&&mutations==original_mutations&&
+      !std::memcmp(before.data(),heap.base,before.size()));new_class->status=saved_status;
+ }
+ const auto saved_context=state_context;state_context.owner=&runtime;
+ assert(!source_commit::Run(plan,*service)&&unchanged());state_context=saved_context;
+ native_initialized_transfer::Proof initialization;
+ assert(initialization.Prepare(plan,metadata,fields,&state_context));
+ auto foreign_context=state_context;assert(!initialization.Validate(plan,&foreign_context));
+ source_commit::Plan other_plan=plan;assert(!initialization.Validate(other_plan,&state_context));
+ new_class->status=12u<<28;assert(initialization.Validate(plan,&state_context));
+ assert(initialization.DestinationStatus(plan,0,&state_context)==15);
+ new_class->status=15u<<28;assert(initialization.DestinationStatus(plan,0,&state_context)==15);
+ assert(!initialization.DestinationStatus(plan,1,&state_context));
  bool retained=false;assert(service->RetainsSourceField(plan,false,old_class,old_fields[2],&retained)&&retained);
  assert(service->RetainsSourceField(plan,true,old_class,old_fields[0],&retained)&&retained);
  assert(service->RetainsSourceField(plan,false,old_class,old_fields[0],&retained)&&!retained);
@@ -224,7 +257,16 @@ int main(){
  // No registry publication, field/status mutation or heap write may occur.
  reflection_ready=false;assert(!source_commit::Run(plan,*service)&&unchanged());reflection_ready=true;
  assert(retirement_publications==0);
- new_class->status=14u<<28;events.clear();int previous_jni=jni_calls;assert(previous_jni==setup_jni);assert(source_commit::Run(plan,*service));Resume(nullptr);
+ for(uint32_t target:{12u,15u}){
+  pid_t branch=fork();assert(branch>=0);
+  if(branch==0){old_class->status=14u<<28;new_class->status=target<<28;
+   events.clear();assert(source_commit::Run(plan,*service));
+   assert((new_class->status>>28)==(target==15?15u:14u));
+   assert(Read32(new_instance,4)==0x01004567u&&Read32(old_instance,4)==0);
+   assert(retirement_publications==1);_exit(0);}
+  int outcome=0;assert(waitpid(branch,&outcome,0)==branch&&WIFEXITED(outcome)&&WEXITSTATUS(outcome)==0);
+ }
+ new_class->status=12u<<28;events.clear();int previous_jni=jni_calls;assert(previous_jni==setup_jni);assert(source_commit::Run(plan,*service));Resume(nullptr);
  assert(retirement_publications==1);
  assert(diagnostics.declaring_roots_verified&&diagnostics.cleared_threads==2);
  assert(jni_calls==previous_jni&&cleared==2&&Read32(new_class,128)==73&&Read32(old_class,128)==0&&Read32(new_instance,8)==31&&Read32(old_instance,8)==0);

@@ -12,7 +12,7 @@ platform = 'darwin' if os.uname().sysname == 'Darwin' else 'linux'
 out = root / 'build/evidence/host/native-source-commit'
 out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_source_commit_test'
-sources = ['native_source_commit', 'modern_source_commit', 'source_commit',
+sources = ['native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'source_handle_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']

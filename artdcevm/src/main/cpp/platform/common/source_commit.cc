@@ -11,8 +11,7 @@ bool Run(const Plan& plan,const Services& services,CommitObserver observer){
   services.BeginCommit(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
     auto* old=plan.old_classes[i];auto* replacement=plan.new_classes[i];
-    const uint32_t status=services.Status(old);
-    if(status>services.Status(replacement))services.SetStatus(replacement,status);
+    services.TransferInitialization(plan,i);
     services.CopyFields(true,replacement,replacement,old,old);
   }
   for(size_t i=0;i<plan.old_instances.size();++i){

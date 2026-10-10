@@ -7,7 +7,7 @@ root=Path(__file__).resolve().parents[1]
 entries=json.loads(args.commands.read_text())
 out=root/'build/evidence/host/schema-mapping-context-arm64';out.mkdir(parents=True,exist_ok=True)
 units=['modern_field_metadata','native_schema_guard_verifier']
-if args.provider:units+=['field_copy','prepared_field_copy','modern_field_storage','modern_method_services','native_member_provider','native_method_table','native_schema_binding','native_source_commit','native_structural_reflection','modern_source_commit']
+if args.provider:units+=['field_copy','prepared_field_copy','modern_field_storage','modern_method_services','native_member_provider','native_method_table','native_schema_binding','native_source_commit', 'native_initialized_transfer','native_structural_reflection','modern_source_commit']
 for unit in units:
     suffix='/artdcevm/src/main/cpp/platform/common/'+unit+'.cc'
     entry=next(e for e in entries if e['file'].endswith(suffix))

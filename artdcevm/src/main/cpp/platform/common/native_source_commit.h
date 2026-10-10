@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/source_commit.h"
+#include "platform/common/native_initialized_transfer.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/modern_field_storage.h"
 #include "platform/common/native_cache_service.h"
@@ -43,6 +44,8 @@ struct Dependencies {
   Diagnostics* diagnostics=nullptr;
   bool prepare_field_copy=false;
   bool allow_removed_ancestors=false;
+  // Request the narrow completed-initialization proof; never initializer removal permission.
+  bool require_initialized_transfer=false;
   // Borrowed for the entire synchronous Run; owner refreshes its stopped-window view.
   const modern_field_metadata::ReadContext* read_context=nullptr;
 };
@@ -64,6 +67,7 @@ class Services final : public source_commit::Services {
   void BeginCommit(const source_commit::Plan&)const override;
   uint32_t Status(void*)const override;
   void SetStatus(void*,uint32_t)const override;
+  void TransferInitialization(const source_commit::Plan&,size_t)const override;
   void CopyFields(bool,void*,void*,void*,void*)const override;
   void* ObjectClass(void*)const override;
   void MarkClassAndMethodsObsolete(void*,void*)const override;
@@ -80,6 +84,7 @@ class Services final : public source_commit::Services {
   friend class native_required_cleanup::Binding;
   Services()=default;
   prepared_roots::Bindings roots_;
+  native_initialized_transfer::Proof initialized_;
   Dependencies dependencies_;
   const source_commit::Plan* plan_=nullptr;
   std::vector<MethodPair> methods_;

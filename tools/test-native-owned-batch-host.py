@@ -12,7 +12,7 @@ out.mkdir(parents=True, exist_ok=True)
 binary = out / 'native_owned_batch_test'
 (out/'android').mkdir(exist_ok=True)
 (out/'android/log.h').write_text('#pragma once\n#define ANDROID_LOG_ERROR 6\n#define ANDROID_LOG_INFO 4\ninline int __android_log_print(int,const char*,const char*,...){return 0;}\n')
-sources = ['native_source_commit', 'modern_source_commit', 'source_commit', 'native_removal_policy', 'native_schema_policy', 'native_method_evolution_policy',
+sources = ['native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit', 'native_removal_policy', 'native_schema_policy', 'native_method_evolution_policy',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'exclusive_owned_roots', 'source_handle_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']

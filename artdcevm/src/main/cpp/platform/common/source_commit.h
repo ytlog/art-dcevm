@@ -28,6 +28,10 @@ class Services {
   virtual void BeginCommit(const Plan&)const {}
   virtual uint32_t Status(void* klass)const=0;
   virtual void SetStatus(void* klass,uint32_t status)const=0;
+  virtual void TransferInitialization(const Plan& plan,size_t index)const {
+    const uint32_t status=Status(plan.old_classes[index]);
+    if(status>Status(plan.new_classes[index]))SetStatus(plan.new_classes[index],status);
+  }
   virtual void CopyFields(bool is_static,void* target,void* target_class,
                           void* source,void* source_class)const=0;
   virtual void* ObjectClass(void* object)const=0;

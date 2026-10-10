@@ -56,6 +56,10 @@ std::unique_ptr<Services> Services::Prepare(HookEngine& hooks,const Dependencies
          !field_copy::PreparedPlan::Prepare(ops,false,copy.new_class,copy.old_class,&copy.instances,error,pairs,dependencies.allow_removed_ancestors))return nullptr;
       result->copies_.push_back(std::move(copy));}
   }
+  if(dependencies.require_initialized_transfer&&(!dependencies.prepare_field_copy||
+      !result->initialized_.Prepare(plan,*dependencies.metadata,*dependencies.fields,dependencies.read_context))){
+    Fail(error,"Completed initialization transfer requires same-plan calibrated static monitor migration");return nullptr;
+  }
   if(!result->self_||!result->Validate(plan)){
     Fail(error,"Native structural commit plan or prepared member services disagree");return nullptr;
   }
@@ -88,6 +92,7 @@ void Services::RefreshManagedRoots(const prepared_roots::Resolver& resolver)noex
 }
 bool Services::Validate(const source_commit::Plan& p)const {
   const auto* context=dependencies_.read_context;
+  if(dependencies_.require_initialized_transfer&&!initialized_.Validate(p,context))return false;
   if(!layout_||!dependencies_.caches||!dependencies_.caches->PreparedForCurrentThread()||
      &p!=plan_||!Mapped(p.mirror,layout_->size,context)||p.old_classes.empty()||p.old_classes.size()!=p.new_classes.size()||
      p.old_instances.size()!=p.new_instances.size()||methods_.size()!=p.old_classes.size()||
@@ -131,6 +136,13 @@ bool Services::Validate(const source_commit::Plan& p)const {
 }
 uint32_t Services::Status(void* klass)const{return __atomic_load_n(Scalar(klass,layout_->status),__ATOMIC_SEQ_CST)>>28;}
 void Services::SetStatus(void* klass,uint32_t status)const{Require(status<=15);set_status_(klass,static_cast<uint8_t>(status));}
+void Services::TransferInitialization(const source_commit::Plan& plan,size_t i)const{
+ if(!dependencies_.require_initialized_transfer){source_commit::Services::TransferInitialization(plan,i);return;}
+ Require(&plan==plan_&&i<plan.new_classes.size());
+ const uint32_t destination=initialized_.DestinationStatus(plan,i,dependencies_.read_context);
+ Require(destination>=14&&destination<=15);
+ if(destination>Status(plan.new_classes[i]))SetStatus(plan.new_classes[i],destination);
+}
 bool Services::RetainsSourceField(const source_commit::Plan& plan,bool statik,const void* klass,const void* field,bool* retained)const noexcept{
  if(!retained||plan_!=&plan||!dependencies_.prepare_field_copy||!klass||!field)return false;
  for(const auto& pair:copies_)if(pair.old_class==klass){*retained=(statik?pair.statics:pair.instances).RetainsSourceField(field);return true;}
