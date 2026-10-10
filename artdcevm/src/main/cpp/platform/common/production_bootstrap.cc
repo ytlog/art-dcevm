@@ -968,7 +968,14 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  auto warm=env->GetStaticMethodID(bootstrap,"warmSourceCache","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Ljava/lang/Class;");
  if(!warm||env->ExceptionCheck())return Fail(error,"Public cache witness original warm method unavailable");
  struct WarmCall {JNIEnv* env;jclass bootstrap;jmethodID warm;jobject input;jobject expected=nullptr;} call{env,bootstrap,warm,input};
- const bool traced=cache_resolver.TraceJavaWarm(hooks,source_cache_witness.field_index,[](void* raw){
+ struct NativeProof final:source_cache_resolution::NativeWindow {
+  NativeEngine& engine;JNIEnv* env;
+  NativeProof(NativeEngine& e,JNIEnv* j):engine(e),env(j){}
+  bool OrdinaryNative()const noexcept override{
+   return engine.source_capabilities.Roots().OrdinaryNative({engine.graph_current(),env,engine.vm});
+  }
+ } native(*this,env);
+ const bool traced=cache_resolver.TraceJavaWarm(hooks,native,source_cache_witness.field_index,[](void* raw){
   auto& c=*static_cast<WarmCall*>(raw);c.expected=c.env->CallStaticObjectMethod(c.bootstrap,c.warm,c.input);
  },&call,error);
  auto expected=call.expected;Local expected_scope{env,expected};

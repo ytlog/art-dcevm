@@ -29,8 +29,8 @@ void* TraceFind(void* linker,abi::arm64::android11::ReleaseObjectPointer klass,a
  return result;
 }
 }
-bool Service::TraceJavaWarm(HookEngine& hooks,uint32_t index,void(*invoke)(void*),void* context,std::string* error){
- if(!invoke||java_warm)return Fail(error,"Cache Java witness observer scope invalid");
+bool Service::TraceJavaWarm(HookEngine& hooks,const NativeWindow& native,uint32_t index,void(*invoke)(void*),void* context,std::string* error){
+ if(!invoke||java_warm||!native.OrdinaryNative())return Fail(error,"Cache Java witness observer requires actual ordinary Native JNI");
  std::lock_guard<std::mutex> lock(trace_mutex);
  if(trace_poisoned)return Fail(error,"Cache Java witness prior observer removal failed; restart process");
  const auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
@@ -41,21 +41,25 @@ bool Service::TraceJavaWarm(HookEngine& hooks,uint32_t index,void(*invoke)(void*
  if(jls&&jls==find)return Fail(error,"Cache Java witness different source entries alias");
  if(!jls&&!find)return Fail(error,"Cache Java witness observer source targets unavailable");
  void* jt=nullptr,*ft=nullptr;
+ if(!native.OrdinaryNative())return Fail(error,"Cache Java observer lost ordinary Native owner before installation");
  {SuspendAll scope{};construct(&scope,"artdcevm cache original Java observer",false);
   original_jls=nullptr;original_find=nullptr;
   if(jls)jt=hooks.Install(jls,reinterpret_cast<void*>(TraceJls),reinterpret_cast<void**>(&original_jls),error);
   if((!jls||jt)&&find)ft=hooks.Install(find,reinterpret_cast<void*>(TraceFind),reinterpret_cast<void**>(&original_find),error);
   destroy(&scope);
  }
+ if(!native.OrdinaryNative()){trace_poisoned=true;return Fail(error,"Cache Java observer installation did not restore ordinary Native owner; restart process");}
  const bool installed=(!jls||(jt&&original_jls))&&(!find||(ft&&original_find));
  WarmTrace trace{index};
  if(installed){java_warm=&trace;invoke(context);java_warm=nullptr;}
+ if(!native.OrdinaryNative()){trace_poisoned=true;return Fail(error,"Cache original Java invocation did not restore ordinary Native owner; restart process");}
  bool removed=true;
  {SuspendAll scope{};construct(&scope,"artdcevm cache Java observer removal",false);
   std::string removal;
   if(ft&&!hooks.Remove(ft,&removal))removed=false;
   if(jt&&!hooks.Remove(jt,&removal))removed=false;
   destroy(&scope);
+  if(!native.OrdinaryNative()){trace_poisoned=true;return Fail(error,"Cache Java observer removal did not restore ordinary Native owner; restart process");}
   if(!removed){trace_poisoned=true;if(error)*error="Cache Java witness observer removal refused: "+removal;}
  }
  char facts[320];std::snprintf(facts,sizeof(facts)," javaJls=%u/%p/%p/%p/%p javaFind=%u/%p/%p/%p/%p/%p/%d expectedThis=%p",

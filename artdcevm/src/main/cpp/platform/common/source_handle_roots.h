@@ -35,6 +35,9 @@ class Service final {
   bool BorrowOwnedStrongPair(const runnable_jni::Context&,jobject,jobject,void**,void**)const noexcept;
   bool BorrowStrongGlobal(const runnable_jni::Context&,jobject,void**)const;
   bool BorrowHandle(const runnable_jni::Context&,const void* slot,void** output)const;
+  // Read-only ordinary JNI Native owner/state proof from the binding-time
+  // actual Native profile. Runnable callbacks must never call SuspendAll.
+  bool OrdinaryNative(const runnable_jni::Context&)const noexcept;
   bool ReadyForSourceAccess()const;
   bool Calibrated()const{return calibrated_.load(std::memory_order_acquire);}
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;

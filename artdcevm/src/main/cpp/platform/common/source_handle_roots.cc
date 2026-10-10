@@ -191,6 +191,12 @@ bool Service::ObserveAllocatorHandle(const runnable_jni::Context& context,jobjec
  if(!Calibrated()&&!CheckNested(context.self,check.value))return Fail(error,"Named root visitor failed owned nesting/update/restoration proof");
  calibrated_.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
+bool Service::OrdinaryNative(const runnable_jni::Context& c)const noexcept{
+ if(!current_||!shift_||!c.self||current_()!=c.self||!Environment(c)||!Mapped(c.self,sizeof(uint32_t)))return false;
+ // BindImpl chose this source shift only by observing actual Native JNI on
+ // the independently proven Current/JNIEnvExt owner. No SDK or TLS writes.
+ return (__atomic_load_n(static_cast<const uint32_t*>(c.self),__ATOMIC_RELAXED)>>shift_)==abi::arm64::android13::kNative;
+}
 bool Service::ReadyForSourceAccess()const{return Calibrated()&&current_&&Runnable(current_());}
 bool Service::BorrowHandle(const runnable_jni::Context& context,const void* slot,void** output)const {
  if(!output||!Calibrated()||!Runnable(context.self)||!Environment(context)||!Mapped(slot,4))return false;

@@ -88,6 +88,13 @@ int main(){
  source_handle_roots::Service service;assert(source_handle_roots::Service::Bind(hooks,fields,&service,&error));assert(!service.Calibrated()&&!service.CreateScope(1,&error));
  EnvironmentOracle independent_env{{&table},self,&runtime};pair_environment=&independent_env;table.GetJavaVM=PairVM;
  source_handle_roots::Service pair_service;assert(source_handle_roots::Service::Bind(hooks,fields,runnable_jni::Context{self,&independent_env.env,&runtime},&pair_service,&error));
+ const runnable_jni::Context native_owner{self,&independent_env.env,&runtime};
+ assert(pair_service.OrdinaryNative(native_owner));
+ auto wrong_native=native_owner;wrong_native.self=foreign_thread.data();assert(!pair_service.OrdinaryNative(wrong_native));
+ wrong_native=native_owner;wrong_native.vm=&linker;assert(!pair_service.OrdinaryNative(wrong_native));
+ independent_env.self=foreign_thread.data();assert(!pair_service.OrdinaryNative(native_owner));independent_env.self=self;
+ const uint32_t native_state=*static_cast<uint32_t*>(self);Put32(self,0,0);assert(!pair_service.OrdinaryNative(native_owner));Put32(self,0,native_state);
+ assert(pair_service.OrdinaryNative(native_owner));
  alignas(8) unsigned char original[32]{};OriginalHeader header{nullptr,3};std::memcpy(original,&header,sizeof(header));if(sized_scope)Put32(original,12,2);Put32(original,OriginalReferences(),uint32_t(uintptr_t(old_class)));public_slot=original+OriginalReferences();
  // Capacity includes an unused nonzero tail; the modern walker must use size.
  if(sized_scope)Put32(original,24,uint32_t(uintptr_t(new_class)));Publish(original);

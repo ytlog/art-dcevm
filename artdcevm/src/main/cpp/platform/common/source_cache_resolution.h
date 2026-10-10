@@ -18,13 +18,19 @@ class Roots {
  // array membership before reading a foreign original return as ArtField.
  virtual std::string DescribeField(const Witness&,void*)const{return {}; }
 };
+class NativeWindow {
+ public:virtual ~NativeWindow()=default;
+ // Must independently prove ordinary Native JNI and the exact current
+ // Thread/environment. This is a suspension precondition, not capability.
+ virtual bool OrdinaryNative()const noexcept=0;
+};
 class Service final {
  public:
  static bool Bind(HookEngine&,void* observed_linker,Service*,std::string*);
  bool Resolve(const Witness&,const Roots&,std::string*)const;
  // Diagnostic only. A real ordinary-JNI Java call runs between suspended
  // installation/removal of unique source-typed observers. Never grants readiness.
- bool TraceJavaWarm(HookEngine&,uint32_t field_index,void(*invoke)(void*),void*,std::string*);
+ bool TraceJavaWarm(HookEngine&,const NativeWindow&,uint32_t field_index,void(*invoke)(void*),void*,std::string*);
  private:
  std::string java_trace_;
  void* linker_=nullptr;

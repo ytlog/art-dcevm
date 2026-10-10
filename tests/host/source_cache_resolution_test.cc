@@ -43,6 +43,7 @@ void* ClassField(void*l,abi::arm64::android11::ReleaseObjectPointer c,
  assert(l==active&&c.reference==active->klass&&d.reference==active->cache&&loader.reference==active->loader);
  if(is_static){++active->calls;return nullptr;}return Field(l,index,&active->cache,&active->loader);
 }
+struct NativeFixture final:NativeWindow {bool native=true;bool OrdinaryNative()const noexcept override{return native;}} native_fixture;
 struct Hooks final:HookEngine {
  bool legacy=false,missing=false,throw_field=false,aliased=false,class_specific=true;
  void* jls_replacement=nullptr,*find_replacement=nullptr;unsigned installs=0,removals=0;bool fail_install=false,fail_remove=false;
@@ -99,8 +100,15 @@ bool CalibrateCache(Fixture&f){Mapper mapper(f);native_hierarchy_cache::Owner ow
 }
 int main(){
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
+  assert(Service::Bind(h,&f,&s,&error));native_fixture.native=false;
+  assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
+  assert(h.installs==0&&h.removals==0&&f.calls==0&&error.find("ordinary Native JNI")!=std::string::npos);
+  native_fixture.native=true;
+ }
+
+ {Fixture f;active=&f;Hooks h;Service s;std::string error;
   assert(Service::Bind(h,&f,&s,&error));
-  assert(s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.installs==2&&h.removals==2&&!h.jls_replacement&&!h.find_replacement&&f.calls==2);
   // Independent original Java calls were exact, but direct mismatch still
   // refuses: observation is not a capability and cannot override an oracle.
@@ -109,12 +117,12 @@ int main(){
  }
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
   assert(Service::Bind(h,&f,&s,&error));h.fail_install=true;
-  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.installs==2&&h.removals==1&&f.calls==0&&!h.jls_replacement);
  }
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
   assert(Service::Bind(h,&f,&s,&error));
-  assert(s.TraceJavaWarm(h,1025,[](void*){},nullptr,&error));
+  assert(s.TraceJavaWarm(h,native_fixture,1025,[](void*){},nullptr,&error));
   f.class_field=true;assert(!s.Resolve(f.witness(),f,&error));
   assert(error.find("javaJls=0/")!=std::string::npos&&error.find("javaFind=0/")!=std::string::npos);
  }
@@ -122,7 +130,7 @@ int main(){
 
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
   assert(Service::Bind(h,&f,&s,&error));
-  assert(s.TraceJavaWarm(h,1025,[](void* raw){Hooks::Warm(raw);active->exception=true;},&h,&error));
+  assert(s.TraceJavaWarm(h,native_fixture,1025,[](void* raw){Hooks::Warm(raw);active->exception=true;},&h,&error));
   assert(f.exception&&h.removals==2&&!h.jls_replacement&&!h.find_replacement);
   assert(!s.Resolve(f.witness(),f,&error)&&f.calls==2); // No source call after exception.
  }
@@ -167,9 +175,9 @@ int main(){
  auto w=f.witness();w.type_index=65535;assert(!s.Resolve(w,f,&e)&&f.calls==0);
  {Fixture f;active=&f;Hooks h;Service s;std::string error;
   assert(Service::Bind(h,&f,&s,&error));h.fail_remove=true;
-  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error));
+  assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error));
   assert(h.removals==2&&error.find("observer removal refused")!=std::string::npos);
-  assert(!s.TraceJavaWarm(h,1025,Hooks::Warm,&h,&error)&&error.find("restart process")!=std::string::npos);
+  assert(!s.TraceJavaWarm(h,native_fixture,1025,Hooks::Warm,&h,&error)&&error.find("restart process")!=std::string::npos);
  }
  puts("PASS named original cache resolution, displaced slots, moving roots, exact namespace/identity and exception refusal");
 }
