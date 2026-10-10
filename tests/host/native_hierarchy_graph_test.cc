@@ -131,12 +131,13 @@ static void Lifecycle(){
  // A complete graph retains ordinary unchanged proxies, with independently
  // rooted public UTF8 names. Missing classification, wrong spelling/negative
  // oracle and stale name root refuse instead of dropping the proxy.
- Fake proxy("Lcustom/中Proxy;",&object,0x40011u);proxy.interfaces={&i};proxy.native_interfaces={&i};loaded.push_back(&proxy);
- assert(authority.Stage(context,&ti,{input},bindings,&error));const auto*proxy_graph=authority.Staged();assert(proxy_graph&&proxy_graph->nodes.size()==6);const auto&proxy_node=proxy_graph->nodes.back();assert(proxy_node.proxy_name_root.Valid()&&proxy_node.proxy_name==&proxy.public_name&&!proxy_node.affected);
+ Fake proxy("Lcustom/中Proxy;",&object,0x40011u);proxy.interfaces={&i};proxy.native_interfaces={&i};loaded.push_back(&proxy);proxy.loader=&facade;
+ assert(authority.Stage(context,&ti,{input},bindings,&error));const auto*proxy_graph=authority.Staged();assert(proxy_graph&&proxy_graph->nodes.size()==6);const auto&proxy_node=proxy_graph->nodes.back();assert(proxy_node.proxy_name_root.Valid()&&proxy_node.proxy_name==&proxy.public_name&&!proxy_node.affected);assert(proxy_node.loader==&facade&&proxy_node.loader_root.Valid());assert(proxy_graph->nodes.front().loader==nullptr&&!proxy_graph->nodes.front().loader_root.owner);
  auto&mutable_proxy=const_cast<Node&>(proxy_node);const auto generation=mutable_proxy.proxy_name_root.generation;mutable_proxy.proxy_name_root.generation++;assert(!authority.CheckClass(context,input.strong_original,input.after));mutable_proxy.proxy_name_root.generation=generation;
  const auto negative=mutable_proxy.negative_proxy_name;mutable_proxy.negative_proxy_name=mutable_proxy.proxy_name_text;assert(!authority.CheckClass(context,input.strong_original,input.after));mutable_proxy.negative_proxy_name=negative;
  Fake moved_proxy=proxy;moved_globals={{reinterpret_cast<jobject>(&proxy),&moved_proxy},{reinterpret_cast<jobject>(&proxy.public_name),&moved_proxy.public_name}};assert(authority.CheckClass(context,input.strong_original,input.after));assert(mutable_proxy.klass==&moved_proxy&&mutable_proxy.proxy_name==&moved_proxy.public_name);moved_globals.clear();
  assert(authority.CheckClass(context,input.strong_original,input.after));proxy.public_name="custom.Other";assert(!authority.CheckClass(context,input.strong_original,input.after));proxy.public_name="custom.中Proxy";authority.Clear(&env);assert(!globals&&locals.empty());
+ proxy.loader=nullptr;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(authority.Staged()->nodes.back().loader==nullptr&&!authority.Staged()->nodes.back().loader_root.owner);authority.Clear(&env);assert(!globals&&locals.empty());
  deny_public_proxy=true;assert(!authority.Stage(context,&ti,{input},bindings,&error));deny_public_proxy=false;assert(!globals&&locals.empty());
  proxy.public_name="custom.Other";assert(!authority.Stage(context,&ti,{input},bindings,&error));proxy.public_name="custom.中Proxy";assert(!globals&&locals.empty());loaded.pop_back();
  Fake shared_loader("LSharedLoader;"),other_loader("LOtherLoader;");
@@ -146,8 +147,8 @@ static void Lifecycle(){
   for(size_t index=0;index<class_count;++index){auto descriptor="Lstress/C"+std::to_string(index)+";";auto value=std::make_unique<Fake>(descriptor.c_str(),&object,index%2?0x601u:1u);value->loader=&shared_loader;value->interfaces={&i};value->native_interfaces={&i};loaded.push_back(value.get());many.push_back(std::move(value));}
   for(auto loader_identity:{&shared_loader,&other_loader}){auto value=std::make_unique<Fake>("Lstress/Collision;",&object);value->loader=loader_identity;loaded.push_back(value.get());many.push_back(std::move(value));}
   auto stage_start=std::chrono::steady_clock::now();peak_globals=0;const auto before_queries=os_queries,before_snapshots=snapshots,before_pairs=pair_reads;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries-before_queries==1&&snapshots-before_snapshots==1);
-  std::cout<<"Full interface graph Stage nodes="<<class_count<<" seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-stage_start).count()<<"\n";const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==graph->nodes.size()+2);
-  const size_t chunks=(graph->nodes.size()+2+1023)/1024;
+  std::cout<<"Full interface graph Stage nodes="<<class_count<<" seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-stage_start).count()<<"\n";const auto* graph=authority.Staged();assert(graph&&graph->nodes.size()==class_count+7&&pair_reads-before_pairs==graph->nodes.size()+3);
+  const size_t chunks=(graph->nodes.size()+3+1023)/1024;
   assert(globals==chunks+1&&peak_globals<=chunks+2&&peak_globals<51200);
   auto old_witness=graph->nodes[5].class_root,loader_witness=graph->nodes[5].loader_root;
   assert(old_witness.Valid()&&loader_witness.Valid());

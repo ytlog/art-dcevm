@@ -173,13 +173,14 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  auto is_proxy=env->GetStaticMethodID(static_cast<jclass>(proxy_type.v),"isProxyClass","(Ljava/lang/Class;)Z");
  auto parent=env->GetMethodID(type,"getSuperclass","()Ljava/lang/Class;");auto interfaces=env->GetMethodID(type,"getInterfaces","()[Ljava/lang/Class;");auto loader=env->GetMethodID(type,"getClassLoader","()Ljava/lang/ClassLoader;");auto lookup=env->GetStaticMethodID(type,"forName","(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
  if(!get_name||!is_proxy||!parent||!interfaces||!loader||!lookup||env->ExceptionCheck())return Fail(error,"Complete public hierarchy API unavailable");
- // Android exposes a BootClassLoader facade for a native null loader. Obtain
- // its public identity from Object; later complete native validation still
- // requires the exact Object descriptor and native null loader for this graph.
+ // Android exposes a BootClassLoader facade for a native null loader, but
+ // CreateProxyClass can also store that actual loader instance. Retain its
+ // public root until native identity distinguishes these two exact cases.
  Local bootstrap{env,env->FindClass("java/lang/Object")};if(!bootstrap.v||env->ExceptionCheck())return Fail(error,"Bootstrap Object public identity unavailable");
  Local boot_loader{env,env->CallObjectMethod(bootstrap.v,loader)};if(env->ExceptionCheck())return Fail(error,"Bootstrap public loader unavailable");
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0||(count&&!loaded))return Fail(error,"Complete loaded Class graph unavailable");
  struct Loaded{JNIEnv* e;jvmtiEnv* ti;jclass* p;jint n;~Loaded(){if(p){for(jint i=0;i<n;++i)if(p[i])e->DeleteLocalRef(p[i]);ti->Deallocate(reinterpret_cast<unsigned char*>(p));}}} loaded_cleanup{env,ti,loaded,count};
+ std::vector<size_t> facade_loaders;
  for(jint i=0;i<count;++i){jint status=0,flags=0;char* signature=nullptr;
   if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return Fail(error,"Loaded Class status unavailable");if(status&(JVMTI_CLASS_STATUS_ARRAY|JVMTI_CLASS_STATUS_PRIMITIVE))continue;
   if(status&JVMTI_CLASS_STATUS_ERROR)return Fail(error,"Erroneous loaded Class graph cannot authorize changes");
@@ -197,7 +198,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
    if(!s.public_roots.Stage(context,name.v,&n.proxy_name_root.slot,error))return false;
   }
   auto l=env->CallObjectMethod(loaded[i],loader);Local local_loader{env,l};if(env->ExceptionCheck())return false;
-  if(l&&boot_loader.v&&env->IsSameObject(l,boot_loader.v))l=nullptr;if(env->ExceptionCheck())return false;
+  if(l&&boot_loader.v&&env->IsSameObject(l,boot_loader.v))facade_loaders.push_back(s.graph.nodes.size());if(env->ExceptionCheck())return false;
   if(l){n.loader_root.owner=&s.public_roots;n.loader_root.generation=s.public_roots.Generation();for(const auto slot:s.loaders)if(s.public_roots.Same(env,slot,l)){n.loader_root.slot=slot;break;}
    if(env->ExceptionCheck())return false;if(!n.loader_root.slot){if(!s.public_roots.Stage(context,l,&n.loader_root.slot,error))return false;s.loaders.push_back(n.loader_root.slot);}}
   s.graph.nodes.push_back(std::move(n));
@@ -226,6 +227,13 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  State::OrdinaryRead ordinary{s};if(!ordinary.Ready())return Fail(error,"Fresh ordinary graph mappings unavailable");
  // No JNI call may follow these borrowed native reads in this Stage callback.
  for(auto& n:s.graph.nodes){if(!s.public_roots.Read(n.class_root.slot,&n.klass)||!n.klass||!s.public_roots.Read(n.loader_root.slot,&n.loader)||!s.public_roots.Read(n.proxy_name_root.slot,&n.proxy_name))return false;}
+ // Select only native null or the exact independently rooted public facade.
+ // Never normalize a foreign native loader into the bootstrap namespace.
+ for(const auto index:facade_loaders){auto& n=s.graph.nodes[index];field_copy::CopyClassView identity;
+  if(!ClassIdentity(*bindings.metadata,n,n.klass,&identity,error,s.Context()))return false;
+  if(!identity.loader){n.loader=nullptr;n.loader_root={};}
+  else if(identity.loader!=n.loader)return Fail(error,("Native/public Class namespace differs: "+n.descriptor).c_str());
+ }
  trace.Mark("native-borrow",s.graph.nodes.size());
  if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error,s.Context())||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
  trace.Mark("canonical",s.graph.nodes.size());
