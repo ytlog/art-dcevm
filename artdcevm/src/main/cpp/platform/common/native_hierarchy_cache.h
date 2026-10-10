@@ -79,7 +79,7 @@ class Owner final:public native_hierarchy_graph::CacheOwner {
  const SourceMapper* mapper_=nullptr;dex_cache_metadata::Model model_=dex_cache_metadata::Model::Pairs;
  PairFormat format_=PairFormat::Ordinary;std::vector<Record> records_;
  Source calibration_;Witness witness_;
- bool Witnesses()const noexcept;
+ bool Witnesses(std::string* error=nullptr)const noexcept;
  bool Views(const Source&,type_cache::View*,native_cache::View*,native_cache::View*)const noexcept;
  bool Check(const Record&)const noexcept;
  bool CheckSemantic(const Record&)const noexcept;

@@ -172,20 +172,40 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  }
  mapper_=&m;model_=selected;format_=format;calibration_=s;witness_=w;return true;
 }
-bool Owner::Witnesses()const noexcept{
+bool Owner::Witnesses(std::string* error)const noexcept{
+ if(!mapper_)return Fail(error,"Cache witness owner not calibrated");
  if(semantic_){
-  return mapper_&&mapper_->InspectSemantic(const_cast<Owner*>(this),[](void* raw,const SourceMapper& m) noexcept {
-   const auto& o=*static_cast<Owner*>(raw);type_cache::View t;native_cache::View f,methods;
+  // The stopped callback only writes bounded stack evidence. Construct the
+  // caller's diagnostic after InspectSemantic releases its exclusive window.
+  struct Inspection {const Owner* owner;bool entered=false;char detail[384]{};};
+  Inspection call{this};
+  const bool accepted=mapper_->InspectSemantic(&call,[](void* raw,const SourceMapper& m) noexcept {
+   auto& c=*static_cast<Inspection*>(raw);c.entered=true;const auto& o=*c.owner;
+   type_cache::View t;native_cache::View f,methods;size_t used=0;
    const auto value=uintptr_t(m.Get(o.witness_.expected_class));
-   return value&&value<=UINT32_MAX&&o.Views(o.calibration_,&t,&f,&methods)&&
-    SemanticTypeWitness(t,o.witness_.type_index,uint32_t(value))&&
-    o.semantic_->CheckWitness(m.Get(o.calibration_.cache_root),o.calibration_.counts.fields,o.calibration_.counts.methods,
-      o.witness_.field_index,o.witness_.native_field,o.witness_.method_index,o.witness_.native_method);
+   if(!value||value>UINT32_MAX){Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness root invalid: e=%llx",static_cast<unsigned long long>(value));return false;}
+   if(!o.Views(o.calibration_,&t,&f,&methods)){Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness type views refused");return false;}
+   if(!SemanticTypeWitness(t,o.witness_.type_index,uint32_t(value))){
+    Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness type mismatch");
+    ObserveType(c.detail,sizeof(c.detail),&used,t,o.witness_.type_index,uint32_t(value));return false;
+   }
+   if(!o.semantic_->CheckWitness(m.Get(o.calibration_.cache_root),o.calibration_.counts.fields,o.calibration_.counts.methods,
+      o.witness_.field_index,o.witness_.native_field,o.witness_.method_index,o.witness_.native_method)){
+    Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness native field/method relation refused: F=%u M=%u",o.witness_.field_index,o.witness_.method_index);return false;
+   }
+   return true;
   });
+  if(accepted)return true;
+  return Fail(error,!call.entered?"Cache semantic witness inspection refused before callback":
+    (call.detail[0]?call.detail:"Cache semantic witness inspection refused after callback"));
  }
- type_cache::View t;native_cache::View f,m;const auto value=mapper_?reinterpret_cast<uintptr_t>(mapper_->Get(witness_.expected_class)):0;
- return value&&value<=UINT32_MAX&&Views(calibration_,&t,&f,&m)&&
-   TypeWitness(t,witness_.type_index,static_cast<uint32_t>(value))&&NativeWitness(f,format_,witness_.field_index,witness_.native_field)&&NativeWitness(m,format_,witness_.method_index,witness_.native_method);
+ type_cache::View t;native_cache::View f,m;const auto value=reinterpret_cast<uintptr_t>(mapper_->Get(witness_.expected_class));
+ if(!value||value>UINT32_MAX)return Fail(error,"Cache witness root invalid");
+ if(!Views(calibration_,&t,&f,&m))return Fail(error,"Cache witness views refused");
+ if(!TypeWitness(t,witness_.type_index,static_cast<uint32_t>(value)))return Fail(error,"Cache witness type mismatch");
+ if(!NativeWitness(f,format_,witness_.field_index,witness_.native_field))return Fail(error,"Cache witness field mismatch");
+ if(!NativeWitness(m,format_,witness_.method_index,witness_.native_method))return Fail(error,"Cache witness method mismatch");
+ return true;
 }
  bool Owner::Refresh() noexcept{
  if(!mapper_)return false;
@@ -323,7 +343,7 @@ bool Owner::CheckSemantic(const Record&r)const noexcept{
  bool found=false;for(const auto&s:r.slots)if(s.full&&s.position==i){auto expected=reinterpret_cast<uintptr_t>(mapper_->Get(s.expected));found=expected&&expected<=UINT32_MAX&&value==expected;break;}if(!found)return false;++seen;}
  return seen==r.slots.size();
 }
-bool Owner::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&i,std::string* e)const{return Witnesses()&&mapper_->VerifyStaged(g,i,e);}
+bool Owner::VerifyStaged(const native_hierarchy_graph::Graph&g,const std::vector<native_hierarchy_graph::Input>&i,std::string* e)const{return Witnesses(e)&&mapper_->VerifyStaged(g,i,e);}
 bool Owner::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,std::string*e)const{
  if(!Witnesses()||p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
  if(semantic_){

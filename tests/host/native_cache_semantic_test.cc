@@ -143,6 +143,23 @@ void OwnerTest(){
  Mapper mapper;native_hierarchy_cache::Owner owner;std::string error;auto witness=mapper.Witness();
  witness.semantic_resolution_proved=false;assert(!owner.Calibrate(mapper,&mapper.cal_root,0,{4,4,4},witness,&error));
  witness=mapper.Witness();assert(owner.Calibrate(mapper,&mapper.cal_root,0,{4,4,4},witness,&error));
+ assert(owner.VerifyStaged({}, {}, &error));
+ const auto writes=mapper.calibration.writes;
+ mapper.deny_inspection=true;
+ assert(!owner.VerifyStaged({}, {}, &error)&&error=="Cache semantic witness inspection refused before callback");
+ mapper.deny_inspection=false;
+ mapper.calibration.full[1]=0;
+ assert(!owner.VerifyStaged({}, {}, &error));
+ assert(error.find("Cache semantic witness type mismatch T{i=1 s=1 p=1 key=1")!=std::string::npos&&error.find("full=1:0")!=std::string::npos);
+ mapper.calibration.full[1]=uint32_t(uintptr_t(mapper.old_class));
+ mapper.calibration.wrong_method=true;
+ assert(!owner.VerifyStaged({}, {}, &error)&&error.find("native field/method relation refused")!=std::string::npos);
+ mapper.calibration.wrong_method=false;
+ auto saved_class=mapper.old_class;mapper.old_class=nullptr;
+ assert(!owner.VerifyStaged({}, {}, &error)&&error.find("root invalid")!=std::string::npos);
+ mapper.old_class=saved_class;
+ assert(owner.VerifyStaged({}, {}, &error)&&mapper.calibration.writes==writes&&mapper.barriers==0);
+
  mapper.deny_inspection=true;assert(!owner.Prepare(mapper.prepared,&error));mapper.deny_inspection=false;
  mapper.private_window=false;assert(!owner.Prepare(mapper.prepared,&error));mapper.private_window=true;
  mapper.incoming.wrong_owner=true;assert(!owner.Prepare(mapper.prepared,&error));mapper.incoming.wrong_owner=false;

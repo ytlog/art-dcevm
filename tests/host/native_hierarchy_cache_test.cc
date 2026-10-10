@@ -65,7 +65,7 @@ struct Mapper final:SourceMapper {
 };
 void Test(dex_cache_metadata::Model model,PairFormat fmt){
  Mapper m(model,fmt);Owner owner;std::string error;native_hierarchy_graph::Graph graph;source_commit::Plan plan;
- assert(!owner.VerifyStaged(graph,{},&error));
+ assert(!owner.VerifyStaged(graph,{},&error));assert(error=="Cache witness owner not calibrated");
  auto witness=m.witness();auto wrong=witness;wrong.native_method=reinterpret_cast<void*>(0x123);assert(!owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},wrong,&error));
  assert(error.find("method{i=3 s=3 p=1")!=std::string::npos&&error.find("e=123")!=std::string::npos);
  assert(error.find("T{i=1 s=1 p=1 key=1 obj=1000 e=1000")!=std::string::npos);
@@ -84,6 +84,13 @@ void Test(dex_cache_metadata::Model model,PairFormat fmt){
  public_witness.public_fields=public_witness.public_methods;Owner public_wrong;assert(!public_wrong.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},public_witness,&error));
  }
  assert(owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},witness,&error));assert(owner.VerifyStaged(graph,{},&error));
+ m.calibration.tables.types[1].index=2;
+ assert(!owner.VerifyStaged(graph,{},&error)&&error=="Cache witness type mismatch");
+ m.calibration.tables.types[1].index=1;
+ unsigned char saved_method[16];std::memcpy(saved_method,m.calibration.tables.methods+3*16,16);std::memset(m.calibration.tables.methods+3*16,0,16);
+ assert(!owner.VerifyStaged(graph,{},&error)&&error=="Cache witness method mismatch");
+ std::memcpy(m.calibration.tables.methods+3*16,saved_method,16);assert(owner.VerifyStaged(graph,{},&error));
+
  m.private_writer=false;assert(!owner.Prepare(m.expected,&error));assert(m.incoming.tables.types[1].object==0x1000);m.private_writer=true;
  assert(owner.Prepare(m.expected,&error));assert(m.barriers==1);assert(m.calibration.tables.types[1].object==0x1000);
  assert(owner.VerifyPrepared(graph,m.expected,&error));assert(owner.Verify(graph,plan));
