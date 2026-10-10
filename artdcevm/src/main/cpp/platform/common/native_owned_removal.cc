@@ -232,6 +232,9 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
  checkpoint("collected-holder-header-begin");
  const auto reject=[&](const char* reason){
   RememberFailure(reason);
+  // Provider preparation has returned to this ordinary boundary. Preserve its
+  // bounded refusal before original RecordFailure can trigger private refund.
+  __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Owned graph preparation refused: %s",request.rejection);
   android13::BorrowedPlatformString signature("OWNED BATCH"),message(reason);
   failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&message);Refund();return false;
  };
