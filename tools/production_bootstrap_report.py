@@ -7,6 +7,7 @@ SOURCE_EPISODES = {
     'initializer': ('initializerEpisodeObserved', 'initializerEpisodeDiagnostic'),
     'compiled-frames': ('compiledFramesCalibrated', 'frameCalibrationDiagnostic'),
     'receiver-invoke': ('receiverInvokeSourceCalibrated', 'receiverInvokeSourceDiagnostic'),
+    'receiver-entry': ('receiverEntrySourceCalibrated', 'receiverEntrySourceDiagnostic'),
 }
 
 def _require_success(instrumentation, self_instrumentation=False):

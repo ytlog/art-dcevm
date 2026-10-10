@@ -13,6 +13,12 @@ struct MethodHandlePrefix {
 };
 #pragma pack(pop)
 static_assert(sizeof(MethodHandlePrefix)==32&&offsetof(MethodHandlePrefix,kind)==20);
+// Fixed original mirror/method_type.h declaration. Runtime consumers must
+// calibrate these fields against public MethodType parameter Class roots.
+struct MethodTypePrefix {
+  uint32_t klass,monitor,form,descriptor,parameters,result,wrap_alt;
+};
+static_assert(sizeof(MethodTypePrefix)==28&&offsetof(MethodTypePrefix,parameters)==16);
 inline constexpr uint32_t kInstanceGet=8,kInstancePut=9,kStaticGet=10,kStaticPut=11;
 inline uint32_t MethodHandleKind(const void* object){
   uint32_t value;std::memcpy(&value,static_cast<const char*>(object)+offsetof(MethodHandlePrefix,kind),sizeof(value));return value;

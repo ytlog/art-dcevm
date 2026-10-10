@@ -16,6 +16,12 @@ for variant in ('original','additive','cache','receiver','source-original','sour
    generated.write_text(source_with_pair_ids(source.read_text()))
    source=generated
   subprocess.run([str(pathlib.Path(a.java)/'bin/javac'),'--release','8','-g','-d',str(classes),str(source)],check=True,env=env)
+  if variant=='receiver':
+   # Keep the existing invoke witness bytecode stable. Additional library-owned
+   # entry witnesses use public VarHandle APIs (Java 9+) on Android API 30+.
+   entry_sources=sorted(path for path in (root/'artdcevm/src/bootstrap/receiver').rglob('*.java') if path!=source)
+   if entry_sources:
+    subprocess.run([str(pathlib.Path(a.java)/'bin/javac'),'--release','11','-g','-cp',str(classes),'-d',str(classes),*map(str,entry_sources)],check=True,env=env)
   if variant=='missing-optional':
    # The compile-only declaration deliberately does not enter the runtime DEX.
    (classes/'com/github/ytlog/artdcevm/internal/MissingOptionalType.class').unlink()

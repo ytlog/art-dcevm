@@ -35,4 +35,9 @@ bool BeginConstructorMethodHandleTargetProof(JNIEnv*,jobject strong_global,jmeth
 // dispatch; the caller separately verifies the public NSME and unchanged body.
 bool EndRetiredConstructorMethodHandleTargetProof(bool public_nsme_and_body_unchanged,std::string*);
 bool MethodHandleGuardsReady(const RetiredMethodRegistry&);
+// Actual shared outer-entry owner. The caller already owns the source Runnable
+// scope and live MethodHandle root. No JNI, allocation or mapping lookup occurs.
+// Readiness of this leaf alone does not prove the receiver/type declaration.
+bool ReadMethodHandleReceiverEntry(void* actual_thread,void* live_handle,
+    uint32_t* normalized_kind,void** native_member,bool* field)noexcept;
 }

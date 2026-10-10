@@ -250,6 +250,19 @@ bool EndMethodHandleFieldTargetProof(bool invocation_succeeded,std::string* erro
  proof={};return matched;
 }
 bool MethodHandleGuardsReady(const RetiredMethodRegistry& registry){return state.installed&&state.methods_calibrated&&state.method_observed&&state.methods==&registry&&MethodEntryGuardsOwn(registry);}
+bool ReadMethodHandleReceiverEntry(void*self,void*object,uint32_t*kind,void**member,bool*field)noexcept{
+ if(!kind||!member||!field||!object||!self||!state.installed||state.incomplete||
+    !state.field_kinds_calibrated||!state.binding.kind||!state.binding.current||state.binding.current()!=self)return false;
+ // The actual independent four-field construction oracles selected this
+ // declaration. The legacy call-site-transform kind has no modern equivalent.
+ uint32_t raw=abi::arm64::android_common::MethodHandleKind(object);
+ const bool legacy=state.binding.kind==abi::arm64::android11::MethodHandleKind;
+ if(legacy){if(raw==8||raw>12)return false;if(raw>=9)--raw;}
+ else if(state.binding.kind!=abi::arm64::android_common::MethodHandleKind||raw>11)return false;
+ const auto target=TargetOf(state.binding,object);
+ if(!target.valid||target.field!=(raw>=8)||state.binding.current()!=self)return false;
+ *kind=raw;*member=target.value;*field=target.field;return true;
+}
 bool MethodHandleFieldGuardsReady(const RetiredFieldRegistry& registry){
  return state.installed&&state.fields_calibrated&&state.fields==&registry&&FieldEntryGuardsOwn(registry)&&
   !state.field_targets.empty()&&state.field_observed.load(std::memory_order_relaxed)==((uint64_t{1}<<state.field_targets.size())-1);

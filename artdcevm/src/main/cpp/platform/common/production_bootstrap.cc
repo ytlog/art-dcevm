@@ -1,6 +1,7 @@
 #include <android/log.h>
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/ordinary_receiver_calibration_context.h"
+#include "platform/common/native_receiver_entry_sample.h"
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/proc_mapping_region.h"
 #include "platform/common/stopped_mapping_reader.h"
@@ -176,6 +177,21 @@ struct NativeEngine final:Engine {
  std::unique_ptr<receiver_guard::SourceCalibration> receiver_source_calibration;
  bool ReceiverInvokeSourceCalibrated()const override{return receiver_source_calibration&&receiver_source_calibration->Proven();}
  std::string ReceiverInvokeSourceDiagnostic()const override{return ReceiverInvokeSourceCalibrated()?"":receiver_producer_diagnostic.empty()?"receiver-invoke-source-not-observed":receiver_producer_diagnostic;}
+ receiver_guard::EntrySource receiver_entry_source;thread_suspend_service::Service receiver_entry_states;
+ bool receiver_entry_states_proven=false,receiver_entry_bound=false,receiver_entry_calibrating=false;
+ std::string receiver_entry_diagnostic;
+ bool ReceiverEntrySourceCalibrated()const override{return receiver_entry_source.Proven();}
+ std::string ReceiverEntrySourceDiagnostic()const override{return ReceiverEntrySourceCalibrated()?"":receiver_entry_diagnostic.empty()?"receiver-entry-source-not-observed":receiver_entry_diagnostic;}
+ bool CalibrateReceiverEntrySource(JNIEnv*);
+ static bool ReceiverEntryExtent(void*raw,const void*address,size_t*extent){
+  auto&e=*static_cast<NativeEngine*>(raw);
+  return e.receiver_entry_calibrating&&current==&e&&!e.schema_run&&!e.graph_staging&&e.source_env&&e.source_ti&&e.schema_root_env==e.source_env&&e.declared_field_ti==e.source_ti&&redefinition_gate::Owned(e.vm)&&CachedExtent(raw,address,extent);
+ }
+ static modern_field_metadata::ReadContext ReceiverEntryBounds(void*raw,const runnable_jni::Context&scope){
+  auto&e=*static_cast<NativeEngine*>(raw);
+  if(!e.receiver_entry_calibrating||current!=&e||scope.env!=e.source_env||scope.vm!=e.vm||!e.graph_current||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return {};
+  return {raw,ReceiverEntryExtent};
+ }
  receiver_guard::ClassSource receiver_classes;bool receiver_classes_bound=false;
  bool CalibrateReceiverSource(JNIEnv*,jvmtiEnv*);
  bool PrepareOrdinaryReceiverSource(JNIEnv*,jvmtiEnv*);
@@ -1039,6 +1055,7 @@ struct NativeEngine final:Engine {
    source_stop={};source_stop_diagnostic.clear();
    const bool state_proven=thread_state_calibration::Calibrate(hooks,env,anchor,&state,&source_stop_diagnostic);
    if(state_proven){
+    receiver_entry_states=state;receiver_entry_states_proven=true;
     std::string native_error;
     if(native_scope.Prepared()||native_scope.Prepare(hooks,env,state,&native_error)){
      auto probe=[](const runnable_jni::Context& context,void* raw){
@@ -1504,7 +1521,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  staged_classes.push_back(std::move(stage));return true;
 }
 bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
- if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;
+ if(ReceiverInvokeSourceCalibrated()&&ReceiverEntrySourceCalibrated())return true;
  if(!env||!ti||env->ExceptionCheck()||current||schema_run||graph_staging||
     source_env||source_ti||declared_field_ti||!receiver_producer_bound)
   return Fail(&receiver_producer_diagnostic,"Receiver source calibration requires ordinary unstaged owner");
@@ -1530,7 +1547,29 @@ bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(!PreparePermissionOwner(env)){
   receiver_producer_diagnostic="Receiver source permission calibration unavailable: "+permission_diagnostic;return false;
  }
- return CalibrateReceiverSource(env,ti);
+ const bool invoke=CalibrateReceiverSource(env,ti);
+ // The optional entry oracle owns only its private exception. Its failure does
+ // not replace a successful original invoke episode or grant any Guard policy.
+ if(!env->ExceptionCheck())CalibrateReceiverEntrySource(env);
+ return invoke;
+}
+bool NativeEngine::CalibrateReceiverEntrySource(JNIEnv*env){
+ if(ReceiverEntrySourceCalibrated())return true;
+ if(!env||env->ExceptionCheck()||receiver_entry_calibrating||current!=this||schema_run||graph_staging||source_env!=env||!source_ti||schema_root_env!=env||declared_field_ti!=source_ti||!redefinition_gate::Owned(vm)||!receiver_entry_states_proven||!metadata.Calibrated()||!permissions_proven||!permission_decoder.Ready()||!graph_current||!input)
+  return Fail(&receiver_entry_diagnostic,"Receiver entry source requires exact ordinary unstaged borrowed gate/state owner");
+ receiver_entry_diagnostic.clear();
+ struct PrivateException {JNIEnv*env;std::string&diagnostic;~PrivateException(){if(env->ExceptionCheck()){compiled_frame_fixture::DescribePending(env,"receiver-entry-source-calibration",&diagnostic);env->ExceptionClear();}}} private_exception{env,receiver_entry_diagnostic};
+ struct Borrow {NativeEngine&e;explicit Borrow(NativeEngine&owner):e(owner){e.receiver_entry_calibrating=true;}~Borrow(){e.receiver_entry_calibrating=false;}} borrow(*this);
+ try{
+  receiver_guard::EntrySamples samples(env);
+  if(!samples.Read(input))return Fail(&receiver_entry_diagnostic,"Receiver entry independent public sample roots unavailable");
+  if(!RefreshMaps(&receiver_entry_diagnostic))return false;
+  if(!receiver_entry_bound){receiver_guard::EntrySource::Binding binding{this,vm,graph_current,PermissionOracle,PermissionNativeScope,ReceiverEntryBounds,runtime.receivers.jni_id_manager};
+   receiver_entry_bound=receiver_entry_source.Bind(hooks,binding,metadata,receiver_entry_states,&receiver_entry_diagnostic);if(!receiver_entry_bound)return false;
+  }
+  if(!receiver_entry_source.Calibrate(env,*samples.Samples(),&receiver_entry_diagnostic)){if(receiver_entry_diagnostic.empty())receiver_entry_diagnostic="Receiver entry independent native/public identity observation refused";return false;}
+  receiver_entry_diagnostic.clear();return true;
+ }catch(...){return Fail(&receiver_entry_diagnostic,"Receiver entry private sample producer threw");}
 }
 bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;

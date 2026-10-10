@@ -105,6 +105,8 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_typed_heap_walk.cc
     platform/common/native_typed_heap_calibration.cc
     platform/common/native_receiver_guard.cc
+    platform/common/native_receiver_guard_episode.cc
+    platform/common/native_receiver_entry_source.cc
     platform/common/native_receiver_frame.cc
     platform/common/native_receiver_bytecode.cc
     platform/common/native_receiver_class_source.cc

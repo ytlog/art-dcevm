@@ -63,6 +63,9 @@ public final class ProductionBootstrap {
         final Object methodReceiver = new EvolutionCalibration();
         final MethodHandle[] methodHandles;
         final Method[] methods;
+        final Method[] receiverEntryMethods;
+        final java.lang.reflect.Field[] receiverEntryFields;
+        final Object[] receiverEntryObjects;
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
         Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex, byte[] receiverDex) throws Exception {
@@ -115,6 +118,11 @@ public final class ProductionBootstrap {
                 methods[i].setAccessible(true);
                 methodHandles[i] = lookup.unreflect(methods[i]);
             }
+            receiverEntryMethods = new Method[]{methods[0], methods[2]};
+            receiverEntryFields = new java.lang.reflect.Field[]{
+                CalibrationFixture.class.getDeclaredField("intValue"),
+                CalibrationFixture.class.getDeclaredField("staticIntValue")};
+            receiverEntryObjects = new Object[]{methodReceiver, storage};
             instanceHandle = lookup.findVarHandle(CalibrationFixture.class, "intValue", int.class);
             staticHandle = lookup.findStaticVarHandle(CalibrationFixture.class, "staticIntValue", int.class);
             instanceGetter = lookup.findGetter(CalibrationFixture.class, "intValue", int.class);
