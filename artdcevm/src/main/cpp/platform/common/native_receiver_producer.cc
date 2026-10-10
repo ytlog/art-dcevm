@@ -22,6 +22,7 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  if(!root_reference){if(error)*error="Receiver source named root-slot barrier unavailable";return false;}
  if(!stack_visitor_service::Service::Bind(declaration,finder,&stack)){if(error)*error="Receiver source calibrated StackVisitor named declaration unavailable";return false;}
  if(declaration==stack_visitor_service::Declaration::kAndroid17){
+  if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Android17 source requires its calibrated Standard Method12 declaration";return false;}
   using namespace abi::arm64::android17;
   auto klass=reinterpret_cast<ResolveMethodClass>(finder(kResolveMethodClass));
   auto member=reinterpret_cast<FindResolvedMethod>(finder(kFindResolvedMethod));
@@ -73,8 +74,7 @@ bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeIns
  bool pending=false;if(!Pending17(self,&pending)||pending)return false;
  CodeView code;evolution::MappedDexMetadata map;InvokeInstruction actual;
  if(!CodeImpl(self,caller,&code,nullptr,&map)||!DecodeInvoke(code,pc,&actual)||actual.kind!=i.kind||actual.index!=i.index||actual.range!=i.range||actual.receiver_register!=i.receiver_register||actual.argument_count!=i.argument_count)return false;
- const auto ids=U32(uintptr_t(map.begin)+92);if(ids>map.size||uint64_t(code.method_ids)*8>map.size-ids)return false;
- uint16_t type=0;std::memcpy(&type,map.begin+ids+size_t(i.index)*8,2);if(type>=U32(uintptr_t(map.begin)+64))return false;
+ uint16_t type=0;if(!ReadInvokeClassIndex(map,i.index,&type))return false;
  const auto resolved_class=resolve_class17_(linker_,{type},caller);
  if(!resolved_class.reference||!Current(const_cast<SourceProducer*>(this),self))return false;
  // ResolveType can suspend. Reread all roots used by FindResolvedMethod now,
@@ -95,13 +95,13 @@ bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeIns
  // path. Do not synthesize a managed register array or bypass these checks.
  const uintptr_t carrier=checked_method17_(self,caller,code.instructions+pc,nullptr);
  if(!Pending17(self,&pending)||pending||!resolved)return false;
- method_metadata::Identity identity;if(!modern_field_metadata::ReadMappingExtent(nullptr,resolved,&extent)||!method_metadata::ReadIdentity(layout_.method,resolved,extent,&identity)||extent<sizeof(method_metadata::Method12))return false;
+ method_metadata::Identity identity;if(!modern_field_metadata::ReadMappingExtent(nullptr,resolved,&extent)||!method_metadata::ReadIdentity(layout_.method,resolved,extent,&identity)||identity.dex_method_index==UINT32_MAX||extent<sizeof(method_metadata::Method12))return false;
  uint16_t index=0;std::memcpy(&index,static_cast<const char*>(resolved)+offsetof(method_metadata::Method12,method_index),2);
  void*declaring=root_reference_(resolved);field_copy::CopyClassView klass;
  if(!declaring||!metadata_->ClassIdentity(declaring,&klass,nullptr)||!klass.descriptor)return false;
  abi::arm64::android17::ResolvedDispatch facts{uintptr_t(resolved),index,identity.access_flags,!std::strcmp(klass.descriptor,"Ljava/lang/Object;"),!std::strcmp(klass.descriptor,"Ljava/lang/String;")};uintptr_t selected=0;
  if(!abi::arm64::android17::DecodeCheckedMethod(static_cast<abi::arm64::android17::MethodDispatch>(i.kind),carrier,facts,&selected))return false;
- if(!modern_field_metadata::ReadMappingExtent(nullptr,reinterpret_cast<void*>(selected),&extent)||!method_metadata::ReadIdentity(layout_.method,reinterpret_cast<void*>(selected),extent,&identity)||!Current(const_cast<SourceProducer*>(this),self))return false;
+ if(!modern_field_metadata::ReadMappingExtent(nullptr,reinterpret_cast<void*>(selected),&extent)||!method_metadata::ReadIdentity(layout_.method,reinterpret_cast<void*>(selected),extent,&identity)||identity.dex_method_index==UINT32_MAX||!Current(const_cast<SourceProducer*>(this),self))return false;
  *out=reinterpret_cast<void*>(selected);return true;
 }
 bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_null;}

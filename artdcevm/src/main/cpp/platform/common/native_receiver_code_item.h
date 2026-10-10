@@ -5,6 +5,13 @@
 namespace artdcevm::receiver_guard {
 // Fixed Standard/Compact source CodeItem declarations; a bounded immutable
 // mapping and independently calibrated ArtMethod layout are mandatory.
+inline bool ReadInvokeClassIndex(const evolution::MappedDexMetadata&map,uint32_t method,uint16_t*out)noexcept {
+ if(!out||!map.begin||map.size<112||(std::memcmp(map.begin,"dex\n",4)&&std::memcmp(map.begin,"cdex",4)))return false;
+ auto u32=[&](size_t at){uint32_t n;std::memcpy(&n,map.begin+at,4);return n;};
+ const auto methods=u32(88),method_offset=u32(92),types=u32(64),type_offset=u32(68);
+ if(method>=methods||method_offset>map.size||uint64_t(methods)*8>map.size-method_offset||type_offset>map.size||uint64_t(types)*4>map.size-type_offset)return false;
+ uint16_t index=0;std::memcpy(&index,map.begin+method_offset+size_t(method)*8,2);if(index>=types)return false;*out=index;return true;
+}
 inline bool ReadCodeView(const code_item_metadata::Layout&layout,const void*method,size_t method_extent,const evolution::MappedDexMetadata&map,CodeView*out)noexcept {
  if(!out||!map.begin||map.size<112||(std::memcmp(map.begin,"dex\n",4)&&std::memcmp(map.begin,"cdex",4)))return false;
  method_metadata::Identity identity;if(!method_metadata::ReadIdentity(layout.method,method,method_extent,&identity)||identity.dex_method_index==UINT32_MAX||(identity.access_flags&0x500u))return false;
