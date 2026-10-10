@@ -1,5 +1,5 @@
 #include "native_hierarchy_receiver_fixture.h"
-#include "platform/common/native_hierarchy_receiver.h"
+#include "platform/common/native_hierarchy_receiver.cc"
 #include <memory>
 using native_hierarchy_receiver::Preservation;
 static Node N(Fake& f,size_t p=SIZE_MAX,std::vector<size_t> interfaces={}){Node n;n.strong_class=reinterpret_cast<jclass>(&f);n.klass=&f;n.descriptor=f.descriptor;n.flags=f.bytes.access_flags;n.initialized=true;n.parent=n.proposed_parent=p;n.interfaces=n.proposed_interfaces=std::move(interfaces);return n;}
@@ -51,6 +51,29 @@ void Test(const modern_field_metadata::FieldMetadata&metadata){JNINativeInterfac
 }
 }
 int main(){
+ {
+  using native_hierarchy_receiver::Relations;
+  Graph graph;graph.nodes.resize(20000);
+  graph.nodes[1].flags=0x200;
+  for(size_t n=2;n<graph.nodes.size();++n){graph.nodes[n].parent=graph.nodes[n].proposed_parent=0;graph.nodes[n].interfaces=graph.nodes[n].proposed_interfaces={1};}
+  std::vector<unsigned char> scratch(graph.nodes.size());std::vector<size_t> relation;size_t visited=0;
+  for(size_t n=0;n<graph.nodes.size();++n)for(bool proposed:{false,true}){
+   assert(Relations(graph,n,proposed,&relation,scratch));visited+=relation.size();
+   if(n>=2)assert((relation==std::vector<size_t>{n,0,1}));
+  }
+  assert(visited==119992&&std::all_of(scratch.begin(),scratch.end(),[](auto c){return c==0;}));
+  graph.nodes[0].parent=2;assert(!Relations(graph,2,false,&relation,scratch));
+  assert(std::all_of(scratch.begin(),scratch.end(),[](auto c){return c==0;}));graph.nodes[0].parent=SIZE_MAX;
+  graph.nodes[2].interfaces.push_back(graph.nodes.size());assert(!Relations(graph,2,false,&relation,scratch));
+  assert(std::all_of(scratch.begin(),scratch.end(),[](auto c){return c==0;}));graph.nodes[2].interfaces.pop_back();
+  assert(Relations(graph,2,false,&relation,scratch)&&(relation==std::vector<size_t>{2,0,1}));
+  graph.nodes[1].proposed_interfaces={2};assert(!Relations(graph,2,true,&relation,scratch));
+  graph.nodes[1].proposed_interfaces.clear();assert(Relations(graph,2,true,&relation,scratch));
+  assert(!Relations(graph,graph.nodes.size(),false,&relation,scratch));
+  std::vector<unsigned char> wrong_size(1);assert(!Relations(graph,2,false,&relation,wrong_size));
+  std::puts("Actual receiver Relations: 20000 roots / 40000 before+after traversals / 119992 visited nodes; cycle/unknown/proposed-cycle cleanup and retry PASS");
+ }
+
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate({},nullptr,nullptr,nullptr,0,nullptr));std::string error;ClassFlags(metadata);RootFixture::Test(metadata);
  {
   Fixture f;Preservation owner(metadata);f.i0.parent=nullptr;assert(!owner.VerifyStaged(f.graph,f.inputs,&error));f.i0.parent=&f.object;assert(owner.VerifyStaged(f.graph,f.inputs,&error));

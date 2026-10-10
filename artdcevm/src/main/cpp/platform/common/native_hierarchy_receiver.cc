@@ -29,11 +29,17 @@ struct Fact {
 };
 // Follow all ancestry and transitive interface edges, including changed batch
 // ancestors. Index identity, never descriptor equality, defines a relation.
-bool Relations(const Graph& graph,size_t root,bool proposed,std::vector<size_t>* output){
- const size_t count=graph.nodes.size();std::vector<unsigned char> color(count);struct Frame{size_t n,edge;};std::vector<Frame> stack{{root,0}};color[root]=1;output->clear();output->push_back(root);
+bool Relations(const Graph& graph,size_t root,bool proposed,std::vector<size_t>* output,std::vector<unsigned char>& color){
+ const size_t count=graph.nodes.size();if(!output||root>=count||color.size()!=count)return false;
+ struct Frame{size_t n,edge;};std::vector<Frame> stack{{root,0}};output->clear();output->push_back(root);color[root]=1;
+ // This ordinary preparation scratch is shared only within one complete graph
+ // walk. Restore exactly the discovered nodes on success, refusal or exception.
+ struct Reset {std::vector<unsigned char>& color;std::vector<size_t>& discovered;
+  ~Reset(){for(auto n:discovered)color[n]=0;}
+ } reset{color,*output};
  while(!stack.empty()){auto& f=stack.back();const auto& node=graph.nodes[f.n];size_t next=absent;const auto& interfaces=proposed?node.proposed_interfaces:node.interfaces;
   if(f.edge==0){++f.edge;next=proposed?node.proposed_parent:node.parent;}else if(f.edge<=interfaces.size())next=interfaces[f.edge++-1];else{color[f.n]=2;stack.pop_back();continue;}
-  if(next==absent)continue;if(next>=count||color[next]==1)return false;if(!color[next]){color[next]=1;output->push_back(next);stack.push_back({next,0});}
+  if(next==absent)continue;if(next>=count||color[next]==1)return false;if(!color[next]){output->push_back(next);color[next]=1;stack.push_back({next,0});}
  }return true;
 }
 std::vector<size_t> Interfaces(const Graph& graph,const std::vector<size_t>& relations,size_t holder){std::vector<size_t> result;for(auto i:relations)if(i!=holder&&(graph.nodes[i].flags&0x200u))result.push_back(i);return result;}
@@ -84,13 +90,14 @@ void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();
 bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inputs,std::string* error)const{
  auto& s=*state_;if(s.staged||!s.metadata->Calibrated()||graph.nodes.empty()||graph.inputs.empty()||inputs.size()!=graph.inputs.size())return Fail(error,"Additive receiver owner requires a fresh actual public graph");
  std::vector<Fact> facts;facts.reserve(graph.nodes.size());
+ std::vector<unsigned char> relation_colors(graph.nodes.size());
  for(size_t i=0;i<graph.nodes.size();++i){const auto& n=graph.nodes[i];if(!RootIdentity(n)||!n.klass||n.descriptor.size()<3||n.descriptor.front()!='L'||n.descriptor.back()!=';'||(n.loader&&!n.RootedLoader())||(n.parent!=absent&&n.parent>=graph.nodes.size())||(n.proposed_parent!=absent&&n.proposed_parent>=graph.nodes.size()))return Fail(error,"Receiver relation has no rooted ordinary Class proof");
   if((n.flags&0x200u)?(n.parent!=absent||n.proposed_parent!=absent):((n.parent==absent||n.proposed_parent==absent)&&(n.descriptor!="Ljava/lang/Object;"||n.loader)))return Fail(error,"Receiver role has unproved Object/interface superclass semantics");
   Fact f{n.strong_class,n.strong_loader,n.class_root,n.loader_root,n.proxy_name_root,n.proxy_name_text,n.negative_proxy_name,n.descriptor,n.flags,n.proposed_flags,n.parent,n.proposed_parent,n.interfaces,n.proposed_interfaces,n.initialized,n.affected,{},{},{},{},{},{},false};
   if(((n.flags^n.ProposedFlags())&~0x410u)||(n.ProposedFlags()&0x410u)==0x410u)return Fail(error,"Receiver proposal changes role/access or combines final and abstract");
   if(n.parent!=absent&&(graph.nodes[n.parent].flags&0x210u))return Fail(error,"Original receiver superclass role or finality is invalid");
   if(n.proposed_parent!=absent&&(graph.nodes[n.proposed_parent].ProposedFlags()&0x210u))return Fail(error,"Proposed receiver superclass role or finality is invalid");
-  if(!Relations(graph,i,false,&f.before_relations)||!Relations(graph,i,true,&f.after_relations))return Fail(error,"Receiver graph contains cycle or unknown identity");
+  if(!Relations(graph,i,false,&f.before_relations,relation_colors)||!Relations(graph,i,true,&f.after_relations,relation_colors))return Fail(error,"Receiver graph contains cycle or unknown identity");
   for(const auto* edges:{&n.interfaces,&n.proposed_interfaces})for(auto edge:*edges)if(!(graph.nodes[edge].flags&0x200u))return Fail(error,"Receiver interface edge names a class");
   if(n.affected)for(auto old:f.before_relations)if(std::find(f.after_relations.begin(),f.after_relations.end(),old)==f.after_relations.end()){if(!s.narrowing)return Fail(error,"Receiver assignability narrowing lacks concrete permanent dispatch, retained storage and frame recovery owner");s.narrows=true;}
   // Each original native IfTable must independently equal its complete public
