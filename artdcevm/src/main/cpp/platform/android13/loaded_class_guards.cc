@@ -2,7 +2,7 @@
 #include "platform/abi/arm64/android13/loaded_class_guards_abi.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
-#include "platform/android13/modifier_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include "platform/android13/validation_metadata.h"
 #include "platform/common/method_array_view.h"
 #include <cstdlib>
@@ -79,7 +79,7 @@ class Guard final : public loaded_class_abi::ClassVisitor {
     auto* subtype = reinterpret_cast<void*>(value);
     if (subtype == target_ || State(subtype).status < 5 || !Assignable(target_,subtype)) return true;
     if (!name_) { invalid = true; return false; }
-    if (action_ == static_cast<int>(ModifierEvolutionAction::kCheckFinalOverride)) {
+    if (action_ == static_cast<int>(native_schema_policy::ModifierEvolutionAction::kCheckFinalOverride)) {
       if (!Accessible(subtype,target_,flags_)) return true;
       invalid = Methods(subtype,[&](void* method) {
         return Matches(method,read_root(method),name_,signature_);

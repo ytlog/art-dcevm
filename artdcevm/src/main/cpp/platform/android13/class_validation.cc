@@ -2,7 +2,7 @@
 #include "platform/abi/arm64/android13/class_validation_abi.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/hierarchy_validation.h"
-#include "platform/android13/modifier_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/android13/redefinition_failure.h"
 #include "platform/common/schema_snapshot.h"
@@ -44,18 +44,18 @@ bool CheckEvolutionClass(void* definition) {
     const uint32_t old_flags = old_metadata.access_flags & kValidationClassFlags;
     const uint32_t new_flags = replacement.access &
         ((replacement.access & 0x200) ? kValidationInterfaceFlags : kValidationClassFlags);
-    const auto action = CheckClassModifierEvolution(old_flags, new_flags, true);
-    if (action == ModifierEvolutionAction::kReject) {
+    const auto action = native_schema_policy::CheckClassModifierEvolution(old_flags, new_flags, true);
+    if (action == native_schema_policy::ModifierEvolutionAction::kReject) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                                "Cannot change modifiers of class by redefinition");
       return false;
     }
-    if (action == ModifierEvolutionAction::kCheckLoadedSubclass && !CheckLoadedSubclassGuard(definition)) {
+    if (action == native_schema_policy::ModifierEvolutionAction::kCheckLoadedSubclass && !CheckLoadedSubclassGuard(definition)) {
       RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                                "A loaded subclass prevents making this class final");
       return false;
     }
-    if (action != ModifierEvolutionAction::kUnchanged) record_new_method(definition);
+    if (action != native_schema_policy::ModifierEvolutionAction::kUnchanged) record_new_method(definition);
     if (current.descriptor != replacement.descriptor) {
       error = "expected file to contain class called '" + current.descriptor +
           "' but found '" + replacement.descriptor + "'!";

@@ -1,10 +1,10 @@
-#include "platform/android13/modifier_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
-using artdcevm::android13::CheckClassModifierEvolution;
-using artdcevm::android13::CheckMethodModifierEvolution;
-using Action = artdcevm::android13::ModifierEvolutionAction;
+using artdcevm::native_schema_policy::CheckClassModifierEvolution;
+using artdcevm::native_schema_policy::CheckMethodModifierEvolution;
+using Action = artdcevm::native_schema_policy::ModifierEvolutionAction;
 namespace {
 constexpr uint32_t kPublic=1, kPrivate=2, kProtected=4, kStatic=8, kFinal=16;
 constexpr uint32_t kSync=32, kNative=256, kAbstract=1024, kDeclaredSync=0x20000;
@@ -84,5 +84,21 @@ int main() {
       checked+=2;
     }
   }
+  // The common owner contains two deliberately different contracts. A legal
+  // combined transition can be planned by the native schema engine while the
+  // original structural hook must still refuse it.
+  artdcevm::evolution::ClassSchema before;
+  before.descriptor="LPolicy;"; before.superclass="Ljava/lang/Object;";
+  before.access=kPublic; before.methods={{"run","()I",kPublic}};
+  auto after=before; after.methods[0].access=kProtected|kFinal;
+  artdcevm::native_schema_policy::Plan plan; std::string error;
+  assert(artdcevm::native_schema_policy::Plan::Prepare(before,after,&plan,&error));
+  assert(plan.Requires(artdcevm::native_schema_policy::GuardKind::FinalMethodOverrides));
+  assert(CheckMethodModifierEvolution(kPublic,kProtected|kFinal,true,false)==Action::kReject);
+  before.access=kPublic|kFinal; after=before; after.access=kPublic|kAbstract;
+  assert(artdcevm::native_schema_policy::Plan::Prepare(before,after,&plan,&error));
+  assert(plan.Requires(artdcevm::native_schema_policy::GuardKind::ExistingInstances));
+  assert(CheckClassModifierEvolution(before.access,after.access,true)==Action::kReject);
+  checked+=6;
   std::printf("modifier evolution policy: %u cases passed\n",checked);
 }

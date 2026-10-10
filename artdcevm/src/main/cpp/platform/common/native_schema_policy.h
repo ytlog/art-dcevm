@@ -14,6 +14,23 @@ struct FieldEvolutionDecision {
 FieldEvolutionDecision CheckFieldEvolution(const std::vector<evolution::Member>& old_fields,
                                          const std::vector<evolution::Member>& new_fields);
 
+// Legacy source-hook policy intentionally accepts fewer flag combinations than
+// Plan. Moving its implementation does not grant broader mutation capabilities.
+// Plain integer ABI: source adapters can request a runtime guard without moving
+// platform C++ objects or policy implementations across the library boundary.
+enum class ModifierEvolutionAction : int {
+  kReject = 0,
+  kUnchanged = 1,
+  kRecreate = 2,
+  kCheckFinalOverride = 3,
+  kCheckAbstractDependents = 4,
+  kCheckLoadedSubclass = 5,
+};
+ModifierEvolutionAction CheckMethodModifierEvolution(uint32_t old_flags, uint32_t new_flags,
+                                                     bool structural, bool new_direct);
+ModifierEvolutionAction CheckClassModifierEvolution(uint32_t old_flags, uint32_t new_flags,
+                                                    bool structural);
+
 enum class GuardKind {LoadedSubclasses,FinalMethodOverrides,AbstractMethodDependents,FinalFields,ExistingInstances,AccessPermissions,InterfaceIdentities,HierarchyGraph};
 struct Requirement {GuardKind kind;std::string member_name,descriptor;};
 struct GuardRequest {size_t class_pair;void* loader;Requirement requirement;};

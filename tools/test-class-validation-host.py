@@ -22,7 +22,7 @@ command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1',
            str(cpp / 'platform/android13/class_validation.cc'),
            str(cpp / 'platform/android13/redefinition_input.cc'),
            str(cpp / 'platform/common/schema_snapshot.cc'),
-           str(cpp / 'platform/android13/modifier_evolution_policy.cc'),
+           str(cpp / 'platform/common/native_schema_policy.cc'), str(cpp / 'platform/common/native_method_evolution_policy.cc'), str(cpp / 'evolution/migration_plan.cc'),
            str(cpp / 'evolution/dex_schema.cc'), str(cpp / 'platform/android13/device_profile.cc'), '-o', str(binary)]
 subprocess.run(command, check=True)
 fixture = fixtures / 'body/com/github/ytlog/artdcevm/fixture/Evolving.dex'

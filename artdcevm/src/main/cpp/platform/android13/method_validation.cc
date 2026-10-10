@@ -1,7 +1,7 @@
 #include "platform/android13/method_validation.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/modifier_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include "platform/android13/redefinition_input.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
@@ -52,17 +52,17 @@ bool CheckEvolutionMethods(void* definition) {
         return candidate.name == method.name && candidate.descriptor == method.descriptor;
       });
       if (old == old_methods.end()) continue;
-      auto action = CheckMethodModifierEvolution(old->access, method.access, true, direct);
-      if (action == ModifierEvolutionAction::kReject) {
+      auto action = native_schema_policy::CheckMethodModifierEvolution(old->access, method.access, true, direct);
+      if (action == native_schema_policy::ModifierEvolutionAction::kReject) {
         const std::string message = "method " + method.name + method.descriptor + " had different access flags";
         RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED, message.c_str());
         return false;
       }
-      if ((action == ModifierEvolutionAction::kCheckFinalOverride ||
-           action == ModifierEvolutionAction::kCheckAbstractDependents) &&
+      if ((action == native_schema_policy::ModifierEvolutionAction::kCheckFinalOverride ||
+           action == native_schema_policy::ModifierEvolutionAction::kCheckAbstractDependents) &&
           !CheckMethodDependentGuard(definition, method.name.c_str(), method.descriptor.c_str(),
                       old->access, static_cast<int>(action))) {
-        const std::string message = std::string(action == ModifierEvolutionAction::kCheckFinalOverride
+        const std::string message = std::string(action == native_schema_policy::ModifierEvolutionAction::kCheckFinalOverride
             ? "Loaded subclass overrides " : "Concrete subclass inherits ") + method.name + method.descriptor;
         RecordRedefinitionFailure(definition, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                                    message.c_str());

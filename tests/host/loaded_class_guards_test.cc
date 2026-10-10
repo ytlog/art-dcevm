@@ -2,7 +2,7 @@
 #include "platform/abi/arm64/android13/loaded_class_guards_abi.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/android13/modifier_evolution_policy.h"
+#include "platform/common/native_schema_policy.h"
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -19,7 +19,7 @@ void operator delete[](void* value) noexcept { std::free(value); }
 using namespace artdcevm;
 using Class = android13::validation_abi::ClassPrefix;
 using Method = android13::art_method_abi::ArtMethod;
-using Action = android13::ModifierEvolutionAction;
+using Action = native_schema_policy::ModifierEvolutionAction;
 namespace {
 struct Methods { uint32_t count=1,padding=0; Method values[3]{}; };
 static_assert(offsetof(Methods,values)==8);

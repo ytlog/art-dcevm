@@ -184,7 +184,6 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/android13/field_copy_storage.cc
     platform/android13/heap_reference.cc
     platform/android13/method_validation.cc platform/android13/class_validation.cc
-    platform/android13/modifier_evolution_policy.cc
     platform/android13/validation_hooks.cc platform/android13/evolution_runtime.cc
     platform/android13/nterp_dispatch.cc
     platform/android13/retired_method_hooks.cc platform/android13/retired_field_hooks.cc)
