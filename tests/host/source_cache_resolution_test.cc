@@ -152,6 +152,7 @@ int main(){
     for(bool dual:{false,true}){alignas(8) unsigned char native[112]{};
      for(size_t i=0;i<7;++i)std::memcpy(native+PublicCacheFieldOffset(i,dual),&independent_longs[i],8);
      assert(CheckPublicCacheStorage(got,native,&error));
+     assert(!CheckPublicCacheStorage(got,native,&error,dual,!dual)); // Never mix field-offset and long-value source candidates.
      uint64_t bad=0xdead;std::memcpy(native+PublicCacheFieldOffset(4,dual),&bad,8);
      assert(!CheckPublicCacheStorage(got,native,&error));assert(error.find("resolvedMethods=5550/")!=std::string::npos);
     }

@@ -1064,7 +1064,7 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
      field_array::Flags(field),offset,&legacy,&dual,r.error))return false;
    offsets+=" "+std::string(source_cache_resolution::PublicCacheFieldName(i))+"="+std::to_string(offset);
   }
-  if(!source_cache_resolution::CheckPublicCacheStorage(e.cache_public_storage,cache,r.error)){
+  if(!source_cache_resolution::CheckPublicCacheStorage(e.cache_public_storage,cache,r.error,legacy,dual)){
    if(r.error)*r.error="Public DexCache source mismatch; native ArtField offsets:"+offsets+"; "+*r.error;
    return false;
   }

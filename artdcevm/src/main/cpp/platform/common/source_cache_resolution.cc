@@ -91,9 +91,9 @@ bool CapturePublicCacheStorage(JNIEnv*env,jobject cache,void*owner,RetainPublicR
  }
  return true;
 }
-bool CheckPublicCacheStorage(const PublicCacheStorage&values,const void*cache,std::string*error){
+bool CheckPublicCacheStorage(const PublicCacheStorage&values,const void*cache,std::string*error,bool legacy,bool dual){
  if(!values.strong_class||!cache)return Fail(error,"Public DexCache native source comparison lacks independent identity");
- bool legacy=true,dual=true;char evidence[512]{};size_t used=0;
+ char evidence[512]{};size_t used=0;
  for(size_t position=0;position<7;++position){const size_t i=static_cast<size_t>(std::array<int,7>{2,4,5,0,1,3,6}[position]);uint64_t a=0,b=0;
   std::memcpy(&a,static_cast<const unsigned char*>(cache)+public_fields[i].legacy,8);
   std::memcpy(&b,static_cast<const unsigned char*>(cache)+public_fields[i].dual,8);
