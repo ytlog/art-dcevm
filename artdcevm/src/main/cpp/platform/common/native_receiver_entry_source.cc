@@ -108,6 +108,38 @@ void EntrySource::Raise(void*p,void*self,const char*type,const char*message)noex
  // value is accessed afterward; it is not a read permission/barrier callback.
  s.raise_(self,type,message);
 }
+bool EntrySource::OriginalScopeCurrent(const abi::common::RunnableJniScope&actual)const noexcept{
+ // Both fixed Thread declarations place flags at the first uint32_t. That
+ // minimum extent comes from the actual original Thread argument, not maps.
+ uint32_t state=UINT32_MAX;
+ return Proven()&&actual.self&&actual.env&&actual.vm==binding_.vm&&
+   binding_.current()==actual.self&&states_.State(actual.self,sizeof(uint32_t),&state)&&
+   state==states_.RunnableState()&&binding_.current()==actual.self;
+}
+bool EntrySource::SeedOriginalRoots(const abi::common::RunnableJniScope&actual,void*method,
+ jobject receiver,OriginalRoots*out)const noexcept{
+ if(!out)return false;*out={};
+ if(!method||uintptr_t(method)%4||!OriginalScopeCurrent(actual))return false;
+ // actual_method is the original wrapper's already decoded ArtMethod; indexed
+ // JNI IDs never reach a pointer read here. The member owns its declaring root.
+ OriginalRoots roots;roots.declaring=metadata_->MethodDeclaringClass(method);
+ if(!roots.declaring||!OriginalScopeCurrent(actual))return false;
+ if(receiver){
+  const auto kind=uintptr_t(receiver)&kKindMask;
+  if(kind==kWeak||(kind==kTransition&&!transition_))return false;
+  if(inline_local_&&kind!=kGlobal){
+   roots.local_slot=reinterpret_cast<void*>(uintptr_t(receiver)&~kKindMask);
+   if(!roots.local_slot||uintptr_t(roots.local_slot)%4)return false;
+   uint32_t reference=0;std::memcpy(&reference,roots.local_slot,4);
+   // CheckJNI/ownership validation belongs to the actual original JNI ingress.
+   // This source-selected root slot is never manufactured from an IRT index.
+   if(!reference||reference%4)return false;
+   roots.receiver=root_(roots.local_slot);
+  }else roots.receiver=reinterpret_cast<void*>(decode_(actual.self,receiver).reference);
+  if(!roots.receiver||uintptr_t(roots.receiver)%4||!OriginalScopeCurrent(actual))return false;
+ }
+ *out=roots;return OriginalScopeCurrent(actual);
+}
 Access EntrySource::Leaves()noexcept{Access a;a.owner=this;a.current=Current;a.member=Member;a.object_class=ObjectClass;a.reference=Reference;a.compressed=Compressed;a.field_id=FieldId;a.raise=Raise;return a;}
 bool EntrySource::Observe(const runnable_jni::Context&c,void*raw){
  auto&p=*static_cast<Proof*>(raw);auto&s=*p.source;

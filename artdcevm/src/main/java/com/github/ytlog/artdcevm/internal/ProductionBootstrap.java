@@ -58,6 +58,7 @@ public final class ProductionBootstrap {
         final Method cacheRead, cacheWarm;
         final byte[] receiverDex;
         final Object receiverSourceObject;
+        final Object receiverGuardFixture;
         final Method[] receiverCallers = new Method[10], receiverTargets = new Method[10];
         final java.lang.reflect.Field cacheField;
         final Object methodReceiver = new EvolutionCalibration();
@@ -97,6 +98,7 @@ public final class ProductionBootstrap {
             Class<?> concrete = Class.forName(receiverName + "$Receiver", true, receiverLoader);
             Class<?> contract = Class.forName(receiverName + "$Contract", true, receiverLoader);
             receiverSourceObject = concrete.getDeclaredConstructor().newInstance();
+            receiverGuardFixture = receiverGuardFixture(receiverLoader);
             String[] kinds = {"Virtual", "Super", "Direct", "Static", "Interface"};
             for (int kind = 0; kind < 5; ++kind) for (int range = 0; range < 2; ++range) {
                 int index = kind * 2 + range;
@@ -131,6 +133,14 @@ public final class ProductionBootstrap {
             instanceSetter = lookup.findSetter(CalibrationFixture.class, "intValue", int.class);
             staticGetter = lookup.findStaticGetter(CalibrationFixture.class, "staticIntValue", int.class);
             staticSetter = lookup.findStaticSetter(CalibrationFixture.class, "staticIntValue", int.class);
+        }
+    }
+    private static Object receiverGuardFixture(ClassLoader receiverLoader) {
+        try {
+            return Class.forName("com.github.ytlog.artdcevm.internal.ReceiverGuardFixture", true,
+                    receiverLoader).getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
+            return null;
         }
     }
     private static MethodHandleReceiverOracle.Sample[] receiverHandleSamples() {

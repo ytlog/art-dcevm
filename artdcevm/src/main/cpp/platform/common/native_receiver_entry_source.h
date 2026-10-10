@@ -49,6 +49,15 @@ class EntrySource final {
  };
  // Only these leaves are supplied; relations and MethodHandle have independent
  // permanent owners/proofs. Proven() is not Guard::Proven().
+ // Only the live original ScopedObjectAccessAlreadyRunnable argument may be
+ // passed here. This is root provenance, not arbitrary Context/map permission.
+ // The original wrapper retains its member and strong receiver; no safepoint,
+ // JNI call or waiting decoder is permitted until the caller releases them.
+ struct OriginalRoots {void* receiver=nullptr;void* declaring=nullptr;void* local_slot=nullptr;};
+ bool SeedOriginalRoots(const abi::common::RunnableJniScope&,void* actual_method,
+                        jobject actual_receiver,OriginalRoots*)const noexcept;
+ bool OriginalScopeCurrent(const abi::common::RunnableJniScope&)const noexcept;
+ bool OwnsMetadata(const modern_field_metadata::FieldMetadata& metadata)const noexcept{return Proven()&&metadata_==&metadata;}
  Access Leaves()noexcept;
  private:
  using Decode=abi::arm64::android11::ReleaseObjectPointer(*)(const void*,jobject);

@@ -8,6 +8,7 @@ SOURCE_EPISODES = {
     'compiled-frames': ('compiledFramesCalibrated', 'frameCalibrationDiagnostic'),
     'receiver-invoke': ('receiverInvokeSourceCalibrated', 'receiverInvokeSourceDiagnostic'),
     'receiver-entry': ('receiverEntrySourceCalibrated', 'receiverEntrySourceDiagnostic'),
+    'receiver-original': ('receiverOriginalEntriesObserved', 'receiverOriginalEntriesDiagnostic'),
     'receiver-handle': ('receiverHandleSourceCalibrated', 'receiverHandleSourceDiagnostic'),
 }
 

@@ -15,11 +15,100 @@ public final class ReceiverGuardFixture {
         public int body() { bodies++; return 113; }
     }
     public static final class Receiver extends Base {
-        public int callSuper() { return super.body(); }
+        private volatile SuperCoordinator superCoordinator;
+        public int callSuper() throws InterruptedException {
+            SuperCoordinator coordinator = superCoordinator;
+            if (coordinator == null) return super.body();
+            try {
+                coordinator.awaitBeforeSuper(this);
+                return super.body();
+            } finally {
+                coordinator.complete(this);
+            }
+        }
+        public synchronized SuperCoordinator coordinateSuper(long timeoutMillis) {
+            if (superCoordinator != null) throw new IllegalStateException("Super coordination already armed");
+            superCoordinator = new SuperCoordinator(this, timeoutMillis);
+            return superCoordinator;
+        }
         static MethodHandle originalSpecial() throws ReflectiveOperationException {
             return MethodHandles.lookup().findSpecial(Base.class, "body",
                     MethodType.methodType(int.class), Receiver.class);
         }
+    }
+    /** An ordinary rooted object; waiting releases its monitor. This is only
+     * a public execution-order oracle, never a migration/frame permission. */
+    public static final class SuperCoordinator {
+        private final Receiver receiver;
+        private final long timeoutNanos;
+        private Thread enteredThread;
+        private boolean entered, released, cancelled, completed;
+        private SuperCoordinator(Receiver receiver, long timeoutMillis) {
+            if (timeoutMillis <= 0 || timeoutMillis > Long.MAX_VALUE / 1000000L)
+                throw new IllegalArgumentException("Positive bounded timeout required");
+            this.receiver = receiver;
+            this.timeoutNanos = timeoutMillis * 1000000L;
+        }
+        private synchronized void awaitBeforeSuper(Receiver actual) throws InterruptedException {
+            if (actual != receiver || entered) throw new IllegalStateException("Wrong receiver or repeated entry");
+            entered = true;
+            enteredThread = Thread.currentThread();
+            notifyAll();
+            long start = System.nanoTime();
+            try {
+                while (!released && !cancelled) {
+                    long remaining = timeoutNanos - (System.nanoTime() - start);
+                    if (remaining <= 0) { cancelled = true; break; }
+                    wait(remaining / 1000000L, (int) (remaining % 1000000L));
+                }
+            } catch (InterruptedException interrupted) {
+                cancelled = true;
+                notifyAll();
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            if (cancelled) throw new InterruptedException("Super coordination cancelled or timed out");
+        }
+        private synchronized void complete(Receiver actual) {
+            if (actual != receiver || enteredThread != Thread.currentThread())
+                throw new IllegalStateException("Wrong super completion owner");
+            completed = true;
+            notifyAll();
+        }
+        public synchronized boolean awaitEntered(long timeoutMillis) throws InterruptedException {
+            if (timeoutMillis <= 0 || timeoutMillis > Long.MAX_VALUE / 1000000L)
+                throw new IllegalArgumentException("Positive bounded timeout required");
+            long duration = timeoutMillis * 1000000L, start = System.nanoTime();
+            try {
+                while (!entered && !cancelled) {
+                    long remaining = duration - (System.nanoTime() - start);
+                    if (remaining <= 0) return false;
+                    wait(remaining / 1000000L, (int) (remaining % 1000000L));
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            return entered;
+        }
+        public synchronized boolean release() {
+            if (!entered || completed || released || cancelled) return false;
+            released = true;
+            notifyAll();
+            return true;
+        }
+        public synchronized boolean cancel() {
+            if (completed || released || cancelled) return false;
+            cancelled = true;
+            notifyAll();
+            return true;
+        }
+        public Receiver receiver() { return receiver; }
+        public synchronized Thread enteredThread() { return enteredThread; }
+        public synchronized boolean entered() { return entered; }
+        public synchronized boolean released() { return released; }
+        public synchronized boolean cancelled() { return cancelled; }
+        public synchronized boolean completed() { return completed; }
     }
     private static long bodies;
     private static long sentinel = 0x1020304050607080L;

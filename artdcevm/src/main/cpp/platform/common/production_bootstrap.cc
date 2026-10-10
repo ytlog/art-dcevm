@@ -2,6 +2,7 @@
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/ordinary_receiver_calibration_context.h"
 #include "platform/common/native_receiver_entry_sample.h"
+#include "platform/common/native_receiver_original_episode.h"
 #include "platform/common/native_method_handle_source_calibration.h"
 #include "platform/common/native_method_handle_public_inputs.h"
 #include "platform/common/readable_mapping_scope.h"
@@ -88,7 +89,20 @@ struct Roots {
 struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
 struct NativeEngine final:Engine {
  ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
- ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);lazy_fields.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ ~NativeEngine(){
+  // Native fixture callbacks borrow only this independent registrar's own
+  // VM/Class/member roots, never NativeEngine. Failed detach transfers that
+  // single process-registry owner to process lifetime; deleting it would leave
+  // installed callbacks dangling (and its destructor correctly aborts).
+  JNIEnv* fixture_env=nullptr;
+  if(receiver_original_entries&&receiver_original_entries->Owned()){
+   const bool safe=vm&&vm->GetEnv(reinterpret_cast<void**>(&fixture_env),JNI_VERSION_1_6)==JNI_OK&&fixture_env&&!fixture_env->ExceptionCheck();
+   if(!safe||!receiver_original_entries->Unregister(fixture_env,nullptr)){
+    __android_log_print(ANDROID_LOG_WARN,"artdcevm","Receiver original fixture detach unavailable; sole independent JNI owner retained for process lifetime");
+    (void)receiver_original_entries.release();
+   }
+  }
+  JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);lazy_fields.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -192,6 +206,16 @@ struct NativeEngine final:Engine {
  bool ReceiverHandleSourceCalibrated()const override{return receiver_handle_source&&receiver_handle_source->Proven();}
  std::string ReceiverHandleSourceDiagnostic()const override{return ReceiverHandleSourceCalibrated()?"":receiver_handle_diagnostic.empty()?"receiver-handle-source-not-observed":receiver_handle_diagnostic;}
  bool CalibrateReceiverHandleSource(JNIEnv*);
+ // Sole registrar has an independent lifetime/root closure. Observation is
+ // report-only: no Guard probe, proof bitmap, activation or schema grant.
+ std::unique_ptr<receiver_guard::JniFixtureEntries> receiver_original_entries;
+ receiver_guard::OriginalEntriesResult receiver_original_result;
+ bool receiver_original_attempted=false;
+ std::string receiver_original_diagnostic;
+ bool ReceiverOriginalEntriesObserved()const override{return receiver_original_result.passed&&receiver_original_result.completed==16&&receiver_original_entries&&!receiver_original_entries->Owned();}
+ std::string ReceiverOriginalEntriesDiagnostic()const override{return ReceiverOriginalEntriesObserved()?"":receiver_original_diagnostic.empty()?"receiver-original-entries-not-observed":receiver_original_diagnostic;}
+ bool CalibrateOriginalReceiverEntries(JNIEnv*);
+ bool RetryOriginalReceiverTeardown(JNIEnv*);
  static bool ReceiverHandleCurrent(void*raw,void*self)noexcept{auto&e=*static_cast<NativeEngine*>(raw);auto a=e.receiver_entry_source.Leaves();return a.current(a.owner,self);}
  static bool ReceiverHandleExtent(void*raw,void*self,const void*address,size_t*extent)noexcept{return ReceiverHandleCurrent(raw,self)&&ReceiverEntryExtent(raw,address,extent);}
  static bool ReceiverHandleReference(void*raw,void*self,void*object,size_t offset,void**out)noexcept{auto&e=*static_cast<NativeEngine*>(raw);if(!out||!ReceiverHandleCurrent(raw,self))return false;*out=e.metadata.Reference(object,offset);return ReceiverHandleCurrent(raw,self);}
@@ -1552,7 +1576,7 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  staged_classes.push_back(std::move(stage));return true;
 }
 bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
- if(ReceiverInvokeSourceCalibrated()&&ReceiverEntrySourceCalibrated()&&ReceiverHandleSourceCalibrated())return true;
+ if(ReceiverInvokeSourceCalibrated()&&ReceiverEntrySourceCalibrated()&&ReceiverHandleSourceCalibrated()&&ReceiverOriginalEntriesObserved())return true;
  if(!env||!ti||env->ExceptionCheck()||current||schema_run||graph_staging||
     source_env||source_ti||declared_field_ti||!receiver_producer_bound)
   return Fail(&receiver_producer_diagnostic,"Receiver source calibration requires ordinary unstaged owner");
@@ -1570,6 +1594,9 @@ bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
   if(e.permission_service)e.permission_service->Clear(env);
   e.graph_fields.Clear(env);e.field_mirror_cache.Clear(env);e.graph_maps.clear();
  }} transient{*this,env};
+ // Independent positive originals require the exact ordinary borrow, but not
+ // any invoke/entry/handle proof being calibrated by the following producers.
+ CalibrateOriginalReceiverEntries(env);
  if(!BindGraphReaders(&receiver_producer_diagnostic)||
     !RefreshMaps(&receiver_producer_diagnostic)||
     !PrepareLiveFieldOracles(env,&receiver_producer_diagnostic)||
@@ -1584,6 +1611,55 @@ bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(!env->ExceptionCheck())CalibrateReceiverEntrySource(env);
  if(!env->ExceptionCheck()&&ReceiverEntrySourceCalibrated())CalibrateReceiverHandleSource(env);
  return invoke;
+}
+bool NativeEngine::RetryOriginalReceiverTeardown(JNIEnv*env){
+ if(!receiver_original_entries||!receiver_original_entries->Owned())return true;
+ if(!env||env->ExceptionCheck())return false;
+ std::string cleanup;
+ const bool detached=receiver_original_entries->Unregister(env,&cleanup);
+ if(!detached){
+  if(!receiver_original_diagnostic.empty())receiver_original_diagnostic+="; ";
+  receiver_original_diagnostic+=cleanup.empty()?"receiver-original owned registrar teardown refused; roots retained":cleanup;
+  if(env->ExceptionCheck()){
+   compiled_frame_fixture::DescribePending(env,"receiver-original-private-unregister",&receiver_original_diagnostic);
+   env->ExceptionClear(); // Only this private teardown was entered exception-free.
+  }
+ }
+ return detached;
+}
+bool NativeEngine::CalibrateOriginalReceiverEntries(JNIEnv*env){
+ if(ReceiverOriginalEntriesObserved())return true;
+ if(!env||env->ExceptionCheck()||current!=this||schema_run||graph_staging||
+    source_env!=env||!source_ti||schema_root_env!=env||declared_field_ti!=source_ti||
+    !input||!redefinition_gate::Owned(vm))
+  return Fail(&receiver_original_diagnostic,"Receiver original entries require exact ordinary borrowed context/gate");
+ // Retry retained native registration only AFTER the private exception has
+ // been described/cleared. A failed retry keeps the independently rooted owner.
+ if(!RetryOriginalReceiverTeardown(env))return false;
+ if(receiver_original_attempted)return false;
+ receiver_original_attempted=true;receiver_original_diagnostic.clear();
+ struct Local {JNIEnv*env;jobject value=nullptr;~Local(){if(value)env->DeleteLocalRef(value);}};
+ try{
+  Local type{env,env->GetObjectClass(input)};
+  auto field=type.value&&!env->ExceptionCheck()?env->GetFieldID(static_cast<jclass>(type.value),"receiverGuardFixture","Ljava/lang/Object;"):nullptr;
+  Local fixture{env,field&&!env->ExceptionCheck()?env->GetObjectField(input,field):nullptr};
+  if(!fixture.value||env->ExceptionCheck())receiver_original_diagnostic="Receiver original optional private fixture unavailable";
+  else{
+   if(!receiver_original_entries)receiver_original_entries=std::make_unique<receiver_guard::JniFixtureEntries>();
+   receiver_original_result=receiver_guard::RunOriginalReceiverEntries(env,fixture.value,*receiver_original_entries,&receiver_original_diagnostic);
+  }
+ }catch(...){receiver_original_diagnostic="Receiver original private entry producer threw";}
+ if(env->ExceptionCheck()){
+  compiled_frame_fixture::DescribePending(env,"receiver-original-private-entries",&receiver_original_diagnostic);
+  env->ExceptionClear(); // The exact optional producer began exception-free.
+ }
+ if(!RetryOriginalReceiverTeardown(env))return false;
+ if(!ReceiverOriginalEntriesObserved()){
+  if(receiver_original_diagnostic.empty())receiver_original_diagnostic="Receiver original public entries incomplete";
+  receiver_original_diagnostic+=" [completed="+std::to_string(receiver_original_result.completed)+"/16]";
+  return false;
+ }
+ receiver_original_diagnostic.clear();return true;
 }
 bool NativeEngine::CalibrateReceiverEntrySource(JNIEnv*env){
  if(ReceiverEntrySourceCalibrated())return true;
