@@ -98,6 +98,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  const BatchAccess& batch_;const RequiredServices* services_;mutable std::vector<std::unique_ptr<Entry>> entries_;mutable std::vector<RecordView> readonly_;mutable const native_hierarchy_graph::Graph* staged_graph_=nullptr;
  bool Record(const native_hierarchy_graph::Prepared&,RecordView*)const noexcept;
  bool Namespace(const RecordView&,bool linked,bool readonly=false)const noexcept;
+ bool Identity(void*,field_copy::CopyClassView*,std::string*)const;
  bool Mapping(const RecordView&,const void** dex_identity)const noexcept;
  const Entry* EntryFor(const native_hierarchy_graph::Prepared&)const noexcept;
 };

@@ -21,13 +21,13 @@ using namespace native_hierarchy_graph;
 // owner proof remains a separate integration obligation.
 struct Fake {
  class_metadata::Class11 bytes{};
- std::string descriptor;Fake* parent=nullptr;void* loader=nullptr;
+ std::string descriptor,public_name;Fake* parent=nullptr;void* loader=nullptr;
  std::vector<Fake*> interfaces;std::vector<void*> native_interfaces;
  bool initialized=true;uint32_t defining_flags=1;
- Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;defining_flags=flags;}
+ Fake(const char* d,Fake* p=nullptr,uint32_t flags=1):descriptor(d),parent(p){bytes.access_flags=flags;defining_flags=flags;public_name=descriptor.substr(1,descriptor.size()-2);std::replace(public_name.begin(),public_name.end(),'/','.');}
 };
 static std::vector<Fake*> loaded;
-static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0,os_queries=0,snapshots=0;static bool deny_snapshot=false,deny_view=false;
+static bool deny_public_proxy=false;static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0,os_queries=0,snapshots=0;static bool deny_snapshot=false,deny_view=false;
 void* operator new(size_t n){if(forbid_alloc)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete(void* p,size_t)noexcept{std::free(p);}
@@ -42,6 +42,10 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context&,jobject,const char*,c
 bool FieldMetadata::DefiningClassFlags(void*k,uint32_t*out,std::string*,const ReadContext*c)const{size_t extent=0;for(int i=0;i<7;++i)if(!ReadMappingExtent(c,k,&extent))return false;*out=static_cast<Fake*>(k)->defining_flags;return true;}
 bool ReadMappingExtent(const ReadContext*c,const void*p,size_t*out){return c?c->extent&&c->extent(c->owner,p,out):method_identity::ReadableMappingExtent(p,out);}
 bool FieldMetadata::ClassIdentity(void* k,field_copy::CopyClassView* out,std::string*,const ReadContext* context)const{size_t extent=0;if(context&&(!context->extent||!context->extent(context->owner,k,&extent)||extent<sizeof(class_metadata::Class11)))return false;auto* f=static_cast<Fake*>(k);*out={f->parent,f->loader,f->descriptor.c_str(),0,f->descriptor=="Ljava/lang/Object;"};return true;}
+bool FieldMetadata::ClassIdentityVerified(void*k,const char*descriptor,void*name,const char*positive,const char*negative,field_copy::CopyClassView*out,std::string*e,const ReadContext*c)const{
+ auto*f=static_cast<Fake*>(k);if(f->bytes.access_flags&0x40000u){if(name!=&f->public_name||!positive||!negative||f->public_name!=positive||f->public_name==negative||f->descriptor!=descriptor)return false;const size_t length=std::strlen(descriptor);if(length<2||std::strlen(positive)!=length-2)return false;for(size_t i=0;i<length-2;++i)if((positive[i]=='.'?'/':positive[i])!=descriptor[i+1])return false;}
+ return ClassIdentity(k,out,e,c);
+}
 }
 namespace artdcevm::native_interface_graph {
 bool Read(const modern_field_metadata::FieldMetadata&,void* k,std::vector<void*>* out,std::string*){*out=static_cast<Fake*>(k)->native_interfaces;return true;}
@@ -58,19 +62,22 @@ static std::unordered_map<Array*,size_t> array_globals;
 static std::unordered_map<jobject,void*> moved_globals;
 namespace artdcevm::modern_field_metadata {void* FieldMetadata::Reference(void* array,size_t offset,bool)const{auto*a=static_cast<Array*>(array);assert(array_globals.count(a)&&offset>=12&&(offset-12)%4==0);auto value=reinterpret_cast<jobject>(a->values.at((offset-12)/4));auto moved=moved_globals.find(value);return moved==moved_globals.end()?static_cast<void*>(value):moved->second;}}
 static jclass JNICALL Find(JNIEnv*,const char*){return reinterpret_cast<jclass>(loaded.front());}
-static jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"getSuperclass")?1:!std::strcmp(name,"getInterfaces")?2:3);}
-static jmethodID JNICALL StaticMethod(JNIEnv*,jclass,const char*,const char*){return reinterpret_cast<jmethodID>(4);}
+static jmethodID JNICALL Method(JNIEnv*,jclass,const char* name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"getSuperclass")?1:!std::strcmp(name,"getInterfaces")?2:!std::strcmp(name,"getName")?5:3);}
+static jmethodID JNICALL StaticMethod(JNIEnv*,jclass,const char*name,const char*){return reinterpret_cast<jmethodID>(!std::strcmp(name,"isProxyClass")?6:4);}
 static jobject JNICALL Global(JNIEnv*,jobject v){if(v){++globals;peak_globals=std::max(peak_globals,globals);assert(globals<51200);auto it=locals.find(v);if(it!=locals.end()&&it->second==1)++array_globals[reinterpret_cast<Array*>(v)];}return v;}
 static void JNICALL DeleteGlobal(JNIEnv*,jobject v){if(v){assert(globals);--globals;auto it=array_globals.find(reinterpret_cast<Array*>(v));if(it!=array_globals.end()&&!--it->second){auto*a=it->first;array_globals.erase(it);if(!locals.count(v))delete a;}}}
-static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1){if(!array_globals.count(reinterpret_cast<Array*>(v)))delete reinterpret_cast<Array*>(v);}else delete reinterpret_cast<std::string*>(v);locals.erase(it);}
+static void JNICALL DeleteLocal(JNIEnv*,jobject v){auto it=locals.find(v);if(it==locals.end())return;if(it->second==1){if(!array_globals.count(reinterpret_cast<Array*>(v)))delete reinterpret_cast<Array*>(v);}else if(it->second==2)delete reinterpret_cast<std::string*>(v);locals.erase(it);}
 static jboolean JNICALL Exception(JNIEnv*){return JNI_FALSE;}
-static jobject JNICALL Call(JNIEnv*,jobject object,jmethodID method,va_list){auto* f=reinterpret_cast<Fake*>(object);if(reinterpret_cast<uintptr_t>(method)==1)return f->bytes.access_flags&0x200u?nullptr:reinterpret_cast<jobject>(f->parent);if(reinterpret_cast<uintptr_t>(method)==2){auto* a=new Array{f->interfaces};auto value=reinterpret_cast<jobject>(a);locals.emplace(value,1);return value;}return reinterpret_cast<jobject>((!f->loader||f==masquerade)?boot_facade:f->loader);}
+static jobject JNICALL Call(JNIEnv*,jobject object,jmethodID method,va_list){auto* f=reinterpret_cast<Fake*>(object);if(reinterpret_cast<uintptr_t>(method)==5){auto value=reinterpret_cast<jobject>(&f->public_name);locals.emplace(value,3);return value;}if(reinterpret_cast<uintptr_t>(method)==1)return f->bytes.access_flags&0x200u?nullptr:reinterpret_cast<jobject>(f->parent);if(reinterpret_cast<uintptr_t>(method)==2){auto* a=new Array{f->interfaces};auto value=reinterpret_cast<jobject>(a);locals.emplace(value,1);return value;}return reinterpret_cast<jobject>((!f->loader||f==masquerade)?boot_facade:f->loader);}
 static jobject JNICALL StaticCall(JNIEnv*,jclass,jmethodID,va_list args){auto text=va_arg(args,jstring);(void)va_arg(args,int);auto loader=va_arg(args,jobject);if(loader==boot_facade)loader=nullptr;auto name=*reinterpret_cast<std::string*>(text);std::replace(name.begin(),name.end(),'.','/');name="L"+name+";";for(auto* f:loaded)if(f->descriptor==name&&f->loader==loader)return reinterpret_cast<jobject>(f);return nullptr;}
 static jsize JNICALL Length(JNIEnv*,jarray v){return jsize(reinterpret_cast<Array*>(v)->values.size());}
 static jobject JNICALL Element(JNIEnv*,jobjectArray v,jsize n){return reinterpret_cast<jobject>(reinterpret_cast<Array*>(v)->values[size_t(n)]);}
 static jobjectArray JNICALL NewArray(JNIEnv*,jsize n,jclass,jobject initial){auto*a=new Array{std::vector<Fake*>(size_t(n),reinterpret_cast<Fake*>(initial))};locals.emplace(reinterpret_cast<jobject>(a),1);return reinterpret_cast<jobjectArray>(a);}
 static void JNICALL SetElement(JNIEnv*,jobjectArray array,jsize index,jobject value){reinterpret_cast<Array*>(array)->values.at(size_t(index))=reinterpret_cast<Fake*>(value);}
 static jboolean JNICALL SameObject(JNIEnv*,jobject a,jobject b){return a==b;}
+static jboolean JNICALL IsProxy(JNIEnv*,jclass,jmethodID,const jvalue*args){return !deny_public_proxy&&(reinterpret_cast<Fake*>(args[0].l)->bytes.access_flags&0x40000u)?JNI_TRUE:JNI_FALSE;}
+static const char* JNICALL UtfChars(JNIEnv*,jstring value,jboolean*){return reinterpret_cast<std::string*>(value)->c_str();}
+static void JNICALL ReleaseUtf(JNIEnv*,jstring,const char*){}
 static jstring JNICALL String(JNIEnv*,const char* text){auto* s=new std::string(text);auto value=reinterpret_cast<jobject>(s);locals.emplace(value,2);return reinterpret_cast<jstring>(s);}
 static jobjectRefType JNICALL RefType(JNIEnv*,jobject v){return v?JNIGlobalRefType:JNIInvalidRefType;}
 static jvmtiError JNICALL Loaded(jvmtiEnv*,jint* count,jclass** result){*count=jint(loaded.size());*result=static_cast<jclass*>(std::malloc(loaded.size()*sizeof(jclass)));for(size_t i=0;i<loaded.size();++i)(*result)[i]=reinterpret_cast<jclass>(loaded[i]);return JVMTI_ERROR_NONE;}
@@ -93,7 +100,7 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
 static void Lifecycle(){
  Fake object("Ljava/lang/Object;"),a("Lpkg/A;",&object),b("Lpkg/B;",&a),parent("Lpkg/P;",&object),i("Lpkg/I;",&object,0x601);
  Fake facade("Lboot/Facade;"),foreign_loader("Lloader/Foreign;");boot_facade=&facade;
- loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
+ loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.CallStaticBooleanMethodA=IsProxy;jni.GetStringUTFChars=UtfChars;jni.ReleaseStringUTFChars=ReleaseUtf;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner,PairBorrow};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};input.after.access|=0x400u;
@@ -119,6 +126,17 @@ static void Lifecycle(){
  // remains strongly rooted while a single real loader is shared by 30k/60k
  // nodes. Same descriptors in different loaders retain separate identities.
  input.after.superclass=parent.descriptor;
+ // A complete graph retains ordinary unchanged proxies, with independently
+ // rooted public UTF8 names. Missing classification, wrong spelling/negative
+ // oracle and stale name root refuse instead of dropping the proxy.
+ Fake proxy("Lcustom/中Proxy;",&object,0x40011u);proxy.interfaces={&i};proxy.native_interfaces={&i};loaded.push_back(&proxy);
+ assert(authority.Stage(context,&ti,{input},bindings,&error));const auto*proxy_graph=authority.Staged();assert(proxy_graph&&proxy_graph->nodes.size()==6);const auto&proxy_node=proxy_graph->nodes.back();assert(proxy_node.proxy_name_root.Valid()&&proxy_node.proxy_name==&proxy.public_name&&!proxy_node.affected);
+ auto&mutable_proxy=const_cast<Node&>(proxy_node);const auto generation=mutable_proxy.proxy_name_root.generation;mutable_proxy.proxy_name_root.generation++;assert(!authority.CheckClass(context,input.strong_original,input.after));mutable_proxy.proxy_name_root.generation=generation;
+ const auto negative=mutable_proxy.negative_proxy_name;mutable_proxy.negative_proxy_name=mutable_proxy.proxy_name_text;assert(!authority.CheckClass(context,input.strong_original,input.after));mutable_proxy.negative_proxy_name=negative;
+ Fake moved_proxy=proxy;moved_globals={{reinterpret_cast<jobject>(&proxy),&moved_proxy},{reinterpret_cast<jobject>(&proxy.public_name),&moved_proxy.public_name}};assert(authority.CheckClass(context,input.strong_original,input.after));assert(mutable_proxy.klass==&moved_proxy&&mutable_proxy.proxy_name==&moved_proxy.public_name);moved_globals.clear();
+ assert(authority.CheckClass(context,input.strong_original,input.after));proxy.public_name="custom.Other";assert(!authority.CheckClass(context,input.strong_original,input.after));proxy.public_name="custom.中Proxy";authority.Clear(&env);assert(!globals&&locals.empty());
+ deny_public_proxy=true;assert(!authority.Stage(context,&ti,{input},bindings,&error));deny_public_proxy=false;assert(!globals&&locals.empty());
+ proxy.public_name="custom.Other";assert(!authority.Stage(context,&ti,{input},bindings,&error));proxy.public_name="custom.中Proxy";assert(!globals&&locals.empty());loaded.pop_back();
  Fake shared_loader("LSharedLoader;"),other_loader("LOtherLoader;");
  for(size_t class_count:{size_t(30000),size_t(60000)}){
   std::vector<std::unique_ptr<Fake>> many;many.reserve(class_count+2);

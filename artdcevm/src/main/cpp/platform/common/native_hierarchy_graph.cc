@@ -1,5 +1,6 @@
 #include "platform/common/native_hierarchy_graph.h"
 #include "platform/common/native_hierarchy_parent.h"
+#include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_interface_graph.h"
 #include "platform/common/method_identity_calibration.h"
@@ -131,7 +132,7 @@ struct Authority::State {
  }
  bool Owners(const source_commit::Plan& p)const noexcept{return bindings.allocation->Verify(graph,p)&&bindings.receivers->Verify(graph,p)&&bindings.caches->Verify(graph,p);}
  bool Borrow(const runnable_jni::Context& c) {
-  root_context=c;for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader))return false;}
+  root_context=c;for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader)||!public_roots.Read(n.proxy_name_root.slot,&n.proxy_name))return false;}
   if(!bindings.allocation->RefreshAllocations(&graph,&allocations))return false;
   for(size_t i=0;i<graph.nodes.size();++i){for(size_t j=0;j<native_before[i].size();++j)native_before[i][j]=graph.nodes[order_before[i][j]].klass;for(size_t j=0;j<native_after[i].size();++j){auto& n=graph.nodes[order_after[i][j]];native_after[i][j]=n.replacement?n.replacement:n.klass;}}return true;
  }
@@ -144,12 +145,12 @@ struct Authority::State {
    void* original_parent=nullptr;
    if(!NativeSuperclass(graph,node,false,&original_parent))return reject("Native superclass identity unavailable");
    if(!Flags(node.klass,node.flags))return reject("Native/public Class flags differ");
-   if(!bindings.metadata->ClassIdentity(node.klass,&view,error,Context()))return false;
+   if(!ClassIdentity(*bindings.metadata,node,node.klass,&view,error,Context()))return false;
    if(view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor)return reject("Native/public Class namespace differs");
    if(view.parent!=original_parent)return reject("Native/public superclass differs");
    if(!native_interface_graph::MatchesInContext(*bindings.metadata,node.klass,native_before[n],error,Context()))return reject("Native/public interface identities differ");
    if(replacements&&node.affected){void* parent=node.proposed_parent==absent?nullptr:(graph.nodes[node.proposed_parent].replacement?graph.nodes[node.proposed_parent].replacement:graph.nodes[node.proposed_parent].klass);
-    if(!node.replacement||!Flags(node.replacement,node.ProposedFlags())||!bindings.metadata->ClassIdentity(node.replacement,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.replacement,native_after[n],nullptr,Context()))return false;
+    if(!node.replacement||!Flags(node.replacement,node.ProposedFlags())||!ClassIdentity(*bindings.metadata,node,node.replacement,&view,nullptr,Context())||view.loader!=node.loader||!view.descriptor||node.descriptor!=view.descriptor||view.parent!=parent||!native_interface_graph::MatchesInContext(*bindings.metadata,node.replacement,native_after[n],nullptr,Context()))return false;
    }
   }return true;
  }
@@ -167,8 +168,11 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  struct Cleanup{Authority* a;JNIEnv* e;bool& ok;~Cleanup(){if(!ok)a->Clear(e);}} cleanup{this,env,success};
  jclass type=env->FindClass("java/lang/Class");if(!type||env->ExceptionCheck())return Fail(error,"Class API unavailable");
  struct Local{JNIEnv* e;jobject v;~Local(){if(v)e->DeleteLocalRef(v);}} local_type{env,type};
+ auto get_name=env->GetMethodID(type,"getName","()Ljava/lang/String;");
+ Local proxy_type{env,env->FindClass("java/lang/reflect/Proxy")};if(!proxy_type.v||env->ExceptionCheck())return Fail(error,"Public proxy classification API unavailable");
+ auto is_proxy=env->GetStaticMethodID(static_cast<jclass>(proxy_type.v),"isProxyClass","(Ljava/lang/Class;)Z");
  auto parent=env->GetMethodID(type,"getSuperclass","()Ljava/lang/Class;");auto interfaces=env->GetMethodID(type,"getInterfaces","()[Ljava/lang/Class;");auto loader=env->GetMethodID(type,"getClassLoader","()Ljava/lang/ClassLoader;");auto lookup=env->GetStaticMethodID(type,"forName","(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
- if(!parent||!interfaces||!loader||!lookup||env->ExceptionCheck())return Fail(error,"Complete public hierarchy API unavailable");
+ if(!get_name||!is_proxy||!parent||!interfaces||!loader||!lookup||env->ExceptionCheck())return Fail(error,"Complete public hierarchy API unavailable");
  // Android exposes a BootClassLoader facade for a native null loader. Obtain
  // its public identity from Object; later complete native validation still
  // requires the exact Object descriptor and native null loader for this graph.
@@ -183,6 +187,15 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
   std::string descriptor(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));if(ti->GetClassModifiers(loaded[i],&flags)!=JVMTI_ERROR_NONE)return false;
   Node n;n.descriptor=std::move(descriptor);n.flags=uint32_t(flags);n.initialized=status&JVMTI_CLASS_STATUS_INITIALIZED;
   n.class_root.owner=&s.public_roots;n.class_root.generation=s.public_roots.Generation();if(!s.public_roots.Stage(context,loaded[i],&n.class_root.slot,error))return false;
+  jvalue class_arg{};class_arg.l=loaded[i];const bool proxy=env->CallStaticBooleanMethodA(static_cast<jclass>(proxy_type.v),is_proxy,&class_arg);
+  if(env->ExceptionCheck())return Fail(error,"Public proxy Class classification failed");
+  if(proxy){
+   Local name{env,env->CallObjectMethod(loaded[i],get_name)};if(!name.v||env->ExceptionCheck())return Fail(error,"Public proxy Class name unavailable");
+   const auto string=static_cast<jstring>(name.v);const char*text=env->GetStringUTFChars(string,nullptr);if(!text||env->ExceptionCheck())return false;
+   struct Utf{JNIEnv*env;jstring value;const char*text;~Utf(){env->ReleaseStringUTFChars(value,text);}} utf{env,string,text};
+   n.proxy_name_text=text;n.negative_proxy_name=n.proxy_name_text+"!";n.proxy_name_root.owner=&s.public_roots;n.proxy_name_root.generation=s.public_roots.Generation();
+   if(!s.public_roots.Stage(context,name.v,&n.proxy_name_root.slot,error))return false;
+  }
   auto l=env->CallObjectMethod(loaded[i],loader);Local local_loader{env,l};if(env->ExceptionCheck())return false;
   if(l&&boot_loader.v&&env->IsSameObject(l,boot_loader.v))l=nullptr;if(env->ExceptionCheck())return false;
   if(l){n.loader_root.owner=&s.public_roots;n.loader_root.generation=s.public_roots.Generation();for(const auto slot:s.loaders)if(s.public_roots.Same(env,slot,l)){n.loader_root.slot=slot;break;}
@@ -212,7 +225,7 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  // through the immediate no-JNI native borrow/graph traversal.
  State::OrdinaryRead ordinary{s};if(!ordinary.Ready())return Fail(error,"Fresh ordinary graph mappings unavailable");
  // No JNI call may follow these borrowed native reads in this Stage callback.
- for(auto& n:s.graph.nodes){if(!s.public_roots.Read(n.class_root.slot,&n.klass)||!n.klass||!s.public_roots.Read(n.loader_root.slot,&n.loader))return false;}
+ for(auto& n:s.graph.nodes){if(!s.public_roots.Read(n.class_root.slot,&n.klass)||!n.klass||!s.public_roots.Read(n.loader_root.slot,&n.loader)||!s.public_roots.Read(n.proxy_name_root.slot,&n.proxy_name))return false;}
  trace.Mark("native-borrow",s.graph.nodes.size());
  if(!CanonicalizeFlags(*bindings.metadata,&s.graph,error,s.Context())||!ValidateGraph(&s.graph,error))return false;s.native_before.resize(s.graph.nodes.size());s.native_after.resize(s.graph.nodes.size());s.order_before.resize(s.graph.nodes.size());s.order_after.resize(s.graph.nodes.size());s.allocation_declarations.resize(s.graph.nodes.size());s.allocations.reserve(s.graph.nodes.size());
  trace.Mark("canonical",s.graph.nodes.size());
@@ -305,7 +318,7 @@ bool Authority::Seal(const source_commit::Plan& p,std::string* error){
 bool Authority::Verify(const source_commit::Plan& p,size_t pair)const noexcept{const auto& s=*state_;if(!s.sealed||s.plan!=&p||pair>=p.old_classes.size()||p.old_classes.size()!=p.new_classes.size()||p.old_classes!=s.old_classes||p.new_classes!=s.new_classes||p.mirror!=s.mirror||p.new_classes_root!=s.new_root||p.old_instances!=s.old_instances||p.new_instances!=s.new_instances||p.abstract_instances!=s.abstract_instances||p.class_root_origins.size()!=s.origins.size())return false;for(size_t i=0;i<s.origins.size();++i)if(p.class_root_origins[i].array!=s.origins[i].array||p.class_root_origins[i].index!=s.origins[i].index)return false;
  size_t count=0;for(const auto& n:s.graph.nodes)if(n.affected){++count;size_t matches=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++matches;if(matches!=1)return false;}return count==p.old_classes.size()&&s.Native(true)&&s.Owners(p);
 }
-bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
+bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.proxy_name,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
 bool Authority::CanRefresh(const prepared_roots::Resolver& r)const noexcept{return state_->collected&&state_->roots.CanRefresh(r);}
 void Authority::Refresh(const prepared_roots::Resolver& r)noexcept{assert(CanRefresh(r));state_->roots.Refresh(r);}
 void Authority::BeginCommit(const source_commit::Plan& p)const noexcept{const auto& s=*state_;assert(s.sealed&&s.plan==&p);s.bindings.allocation->BeginCommit(s.graph,p);s.bindings.receivers->BeginCommit(s.graph,p);s.bindings.caches->BeginCommit(s.graph,p);}

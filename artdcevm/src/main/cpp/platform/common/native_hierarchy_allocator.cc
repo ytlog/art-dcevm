@@ -1,5 +1,6 @@
 #include "platform/common/native_hierarchy_allocator.h"
 #include "platform/common/native_hierarchy_parent.h"
+#include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
@@ -356,8 +357,9 @@ bool Service::VerifyStaged(const native_hierarchy_graph::Graph& graph,const std:
  }
  for(const auto& node:graph.nodes){field_copy::CopyClassView actual{};class_metadata::State state{};const auto& layout=Layout(*metadata_);
   void* native_parent=nullptr;if(!native_hierarchy_graph::NativeSuperclass(graph,node,false,&native_parent))return false;
-  if(!Mapped(node.klass,layout.size)||!class_metadata::ReadState(layout,node.klass,layout.size,&state)||state.IsPrimitive()||(state.access_flags&0x40000u)||
-     !Class(*metadata_,node.klass,&actual)||node.descriptor!=actual.descriptor||node.loader!=actual.loader||
+  if(node.affected&&node.proxy_name_root.owner){Error(error,"Affected proxy replacement requires an independently proven source allocator owner");return false;}
+  if(!Mapped(node.klass,layout.size)||!class_metadata::ReadState(layout,node.klass,layout.size,&state)||state.IsPrimitive()||
+     !native_hierarchy_graph::ClassIdentity(*metadata_,node,node.klass,&actual)||node.descriptor!=actual.descriptor||node.loader!=actual.loader||
      (node.parent!=SIZE_MAX&&node.parent>=graph.nodes.size())||
      actual.parent!=native_parent)return false;
  }

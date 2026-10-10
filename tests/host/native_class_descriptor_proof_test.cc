@@ -3,7 +3,11 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include <map>
+#include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/dex_mapping_abi.h"
+bool forbid_identity_allocation=false;
+void* operator new(size_t bytes){if(forbid_identity_allocation)std::abort();if(auto*p=std::malloc(bytes?bytes:1))return p;throw std::bad_alloc();}
+void operator delete(void*p)noexcept{std::free(p);}void operator delete(void*p,size_t)noexcept{std::free(p);}
 std::map<void*,const char*> terminal_names;
 size_t comparisons=0;bool bogus_equals=false;
 bool StringEquals(void* string,const char* name){++comparisons;return bogus_equals||std::strcmp(static_cast<const char*>(string),name)==0;}
@@ -15,6 +19,10 @@ struct Snapshot {
   *bytes=address==s.truncate?1:(1u<<20)-(uintptr_t(address)-uintptr_t(heap.base));return true;}
 };
 class TypedHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* symbol)override{if(std::strstr(symbol,"String6EqualsEPKc"))return reinterpret_cast<void*>(StringEquals);if(std::strstr(symbol,"Class13GetDescriptor"))return reinterpret_cast<void*>(TerminalDescriptor);return Hooks::FindSymbol(lib,symbol);}};
+jobjectArray RootArray(JNIEnv*,jsize count,jclass,jobject initial){Jni();assert(!initial);auto*p=heap.New(12+size_t(count)*4);Put32(p,8,uint32_t(count));return reinterpret_cast<jobjectArray>(p);}
+jsize RootLength(JNIEnv*,jarray array){Jni();return jsize(Read32(array,8));}
+void RootSet(JNIEnv*,jobjectArray array,jsize index,jobject value){Jni();Put32(array,12+size_t(index)*4,uint32_t(uintptr_t(value)));}
+jobject RootGet(JNIEnv*,jobjectArray array,jsize index){Jni();return reinterpret_cast<jobject>(uintptr_t(Read32(array,12+size_t(index)*4)));}
 int main(){
  InitJni();InitializeHeap();TypedHooks hooks;std::string error;
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
@@ -44,6 +52,14 @@ int main(){
  terminal_names[old_class]="LWrong;";assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));terminal_names.erase(old_class);
  snapshot.deny=prefix;assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));snapshot.deny=nullptr;
  old_class->dex_class_def_index=1;assert(!metadata.DefiningClassFlags(old_class,&defining,&error,&context));old_class->dex_class_def_index=0;
+ // Actual bounded Store JNI setter/getter attests the proxy Class and name
+ // slots, then the shared production helper uses actual calibrated metadata.
+ table.NewObjectArray=RootArray;table.GetArrayLength=RootLength;table.SetObjectArrayElement=RootSet;table.GetObjectArrayElement=RootGet;
+ bounded_managed_roots::Store roots({nullptr,nullptr,[](void*,const runnable_jni::Context&,jobject p,void**out){*out=p;return p!=nullptr;},[](void*,jobject p,void**out){*out=p;return p!=nullptr;},[](void*,void*a,size_t i){return reinterpret_cast<void*>(uintptr_t(Read32(a,12+i*4)));},nullptr});
+ native_hierarchy_graph::Node proxy_node;proxy_node.klass=proxy;proxy_node.descriptor="Lcustom/中Proxy;";proxy_node.proxy_name=name;proxy_node.proxy_name_text=name;proxy_node.negative_proxy_name="wrong";
+ runnable_jni::Context ordinary{current,&env,&runtime};
+ proxy_node.class_root.owner=proxy_node.proxy_name_root.owner=&roots;proxy_node.class_root.generation=proxy_node.proxy_name_root.generation=roots.Generation();
+ assert(roots.Stage(ordinary,reinterpret_cast<jobject>(proxy),&proxy_node.class_root.slot,&error));assert(roots.Stage(ordinary,reinterpret_cast<jobject>(name),&proxy_node.proxy_name_root.slot,&error));
  field_copy::CopyClassView view;const int before=jni_calls;const uint64_t queries=method_identity::MappingOsQueries();
  assert(metadata.ClassIdentityVerified(old_class,"LFixture;",nullptr,nullptr,nullptr,&view,&error,&context));
  assert(metadata.ClassIdentityVerified(primitive,"I",nullptr,nullptr,nullptr,&view,&error,&context));
@@ -54,6 +70,11 @@ int main(){
  assert(!metadata.ClassIdentityVerified(array,"[J",nullptr,nullptr,nullptr,&view,&error,&context));
  const char* descriptor="Lcustom/\xe4\xb8\xadProxy;";
  assert(metadata.ClassIdentityVerified(proxy,descriptor,name,name,"wrong",&view,&error,&context));assert(comparisons==2);
+ forbid_identity_allocation=true;assert(native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));forbid_identity_allocation=false;
+ const auto generation=proxy_node.proxy_name_root.generation;proxy_node.proxy_name_root.generation++;assert(!native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));proxy_node.proxy_name_root.generation=generation;
+ proxy_node.negative_proxy_name=proxy_node.proxy_name_text;assert(!native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));proxy_node.negative_proxy_name="wrong";
+ proxy_node.proxy_name_text="custom.Other";assert(!native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));proxy_node.proxy_name_text=name;
+ auto*replacement_proxy=make();replacement_proxy->access_flags=0x40011;replacement_proxy->name=uint32_t(uintptr_t(name));assert(!native_hierarchy_graph::ClassIdentity(metadata,proxy_node,replacement_proxy,&view,nullptr,&context));
  assert(metadata.ClassIdentityVerified(proxy_array,"[Lcustom/\xe4\xb8\xadProxy;",name,name,"wrong",&view,&error,&context));
  assert(!metadata.ClassIdentityVerified(proxy,descriptor,nullptr,name,"wrong",&view,&error,&context));
  assert(!metadata.ClassIdentityVerified(proxy,descriptor,name,"custom.Other","wrong",&view,&error,&context));
@@ -64,7 +85,8 @@ int main(){
  auto* moved=static_cast<char*>(heap.New(128));std::strcpy(moved,name);proxy->name=uint32_t(uintptr_t(moved));
  assert(!metadata.ClassIdentityVerified(proxy,descriptor,name,name,"wrong",&view,&error,&context));
  assert(metadata.ClassIdentityVerified(proxy,descriptor,moved,name,"wrong",&view,&error,&context));
- assert(jni_calls==before&&method_identity::MappingOsQueries()==queries&&snapshot.calls>20);
+ assert(!native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));proxy_node.proxy_name=moved;forbid_identity_allocation=true;assert(native_hierarchy_graph::ClassIdentity(metadata,proxy_node,proxy,&view,nullptr,&context));forbid_identity_allocation=false;
+ assert(jni_calls==before&&method_identity::MappingOsQueries()==queries&&snapshot.calls>20);roots.Clear(&env);
  // Every nested component prefix is checked before reading it, even when
  // another snapshot still maps the address. No fallback on denial/truncation.
  for(const void* value:{static_cast<void*>(nested),static_cast<void*>(array),static_cast<void*>(primitive)}){

@@ -21,7 +21,8 @@ struct RootWitness {
 struct Node {
  // Only independently owned source inputs require a separate global Class.
  jclass strong_class=nullptr; jobject strong_loader=nullptr;
- RootWitness class_root{},loader_root{};
+ RootWitness class_root{},loader_root{},proxy_name_root{};
+ void* proxy_name=nullptr;std::string proxy_name_text,negative_proxy_name;
  bool RootedClass()const noexcept{return class_root.owner?class_root.Valid():strong_class!=nullptr;}
  bool RootedLoader()const noexcept{return loader_root.owner?loader_root.Valid():strong_loader!=nullptr;}
  void* klass=nullptr; void* loader=nullptr; void* replacement=nullptr;
