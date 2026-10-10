@@ -36,7 +36,7 @@ main=main.replace(' dependencies.is_retired=OwnerRetired;', ''' source_handle_ro
 main=main.replace('assert(registry.Freeze()&&registry.Resolve());','typed_wrong_plan=plan;assert(typed->Capture(plan,registry.Collect(),&error));assert(registry.Freeze()&&registry.Resolve());typed->Refresh(registry.Final());')
 
 
-anchor=' assert(!cleanup.CommitObserver(foreign_plan));'
+anchor=' assert(!cleanup.CommitObserver(foreign_plan)&&!cleanup.MutationBegun(plan));'
 assert main.count(anchor)==1
 main=main.replace(anchor,' TestFinalTyped(*typed,plan,cleanup,&driver,&holder,*concrete);\n'+anchor)
 main=main.replace(' provider.ReleasePreparedSource(*concrete);',' typed->Clear(&env);Publish(nullptr);provider.ReleasePreparedSource(*concrete);')
@@ -95,13 +95,13 @@ def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False,
     data[:8]=b'dex\n040\0';put(32,len(data));put(36,0x70);put(40,0x12345678);put(52,map_offset)
     put(104,len(data)-start);put(108,start);data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     path=out/('shape-%d-%d-%d-%d-%d.dex'%(method_deleted,field_deleted,evolved,final_guard,hierarchy));path.write_bytes(data);return str(path)
-sources = ['native_narrowing_authority','native_receiver_service','native_receiver_guard','native_receiver_frame','native_receiver_bytecode','native_final_write_listener','native_final_write_guard','modern_final_field_guard','native_hierarchy_typed_storage','native_typed_heap_walk','native_typed_heap_calibration','whole_process_frames', 'native_required_cleanup', 'native_source_stop', 'native_source_class_loading', 'native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
+sources = ['native_receiver_class_source','native_receiver_relations','native_narrowing_authority','native_receiver_service','native_receiver_guard','native_receiver_frame','native_receiver_bytecode','native_final_write_listener','native_final_write_guard','modern_final_field_guard','native_hierarchy_typed_storage','native_typed_heap_walk','native_typed_heap_calibration','whole_process_frames', 'native_required_cleanup', 'native_source_stop', 'native_source_class_loading', 'native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'native_initialized_transfer', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'native_schema_policy','native_schema_binding','native_method_evolution_policy','source_handle_roots',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',
            'structural_methods', 'method_identity_calibration', 'object_replacement_map']
 command = [os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
-           '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(out),
+           '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(out), '-I',str(root/'tests/host'),
            '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
            str(root / 'tests/host/native_hierarchy_typed_storage_test.cc')]
 command += ['-I',str(args.method_policy_root)] if args.method_policy_root else []
