@@ -210,6 +210,31 @@ int main(int argc,char** argv){
   const auto saved=observed_interfaces;assert(!native_interface_graph::Read(metadata,old_class,&observed_interfaces,&error)&&observed_interfaces==saved);
  }
  old_class->iftable=fixture_table;
+ // Exercise actual ReadView against independent array headers and mapped bounds.
+ // A failed view and output remain unchanged; nullptr-error is allocation-free.
+ void* diagnostic_table=IfTable({interface_a});old_class->iftable=uint32_t(uintptr_t(diagnostic_table));
+ const auto check_table_failure=[&](int32_t length,const char*reason,const char*required,const modern_field_metadata::ReadContext*ctx){
+  Put32(diagnostic_table,8,uint32_t(length));
+  native_interface_graph::View rejected=interface_view;error.clear();
+  assert(!native_interface_graph::ReadView(metadata,old_class,&rejected,&error,ctx));
+  assert(rejected.Count()==interface_view.Count());
+  assert(error.find(std::string("reason=")+reason)!=std::string::npos);
+  assert(error.find(std::string("length=")+std::to_string(length))!=std::string::npos);
+  assert(error.find("pairWidth=2")!=std::string::npos&&error.find(required)!=std::string::npos);
+  assert(error.find("extentKnown=1")!=std::string::npos&&error.find("mappedExtent=")!=std::string::npos);
+  forbid_provider_allocation=true;
+  assert(!native_interface_graph::ReadView(metadata,old_class,&rejected,nullptr,ctx));
+  forbid_provider_allocation=false;
+ };
+ check_table_failure(-2,"negative-length","requiredBytes=0",&interface_interval);
+ check_table_failure(3,"odd-pair-length","requiredBytes=24",&interface_interval);
+ check_table_failure(1000002,"length-over-limit","requiredBytes=4000020",&interface_interval);
+ modern_field_metadata::ReadContext truncated_interval{diagnostic_table,[](void*table,const void*p,size_t*out){
+  if(p==table){*out=16;return true;}return method_identity::ReadableMappingExtent(p,out);
+ }};
+ check_table_failure(2,"truncated-pair-storage","requiredBytes=20",&truncated_interval);
+ assert(error.find("mappedExtent=16")!=std::string::npos);
+ old_class->iftable=fixture_table;
  modern_field_storage::Service fields;if(!fields.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(old_instance),metadata,oracle.data(),4,&error)){std::cerr<<"Fixture field storage calibration: threadExtent="<<thread_extent<<" cardExtent="<<card_extent<<" bias="<<bias<<" current="<<current<<" "<<error<<std::endl;return 1;}
  native_cache::Service caches;assert(caches.Bind(hooks,&thread_list,&error)&&caches.Prepare(&error));
  Methods(old_class,false);Methods(new_class,false);

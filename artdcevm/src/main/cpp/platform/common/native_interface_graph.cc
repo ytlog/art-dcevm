@@ -5,6 +5,7 @@
 #include "platform/abi/arm64/common/interface_table.h"
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 namespace artdcevm::native_interface_graph {
 namespace {
 constexpr size_t kIfTable=offsetof(class_metadata::Class11,iftable);
@@ -15,6 +16,17 @@ static_assert(kIfTable==offsetof(class_metadata::Class16,iftable)&&kIfTable==off
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 bool Extent(const modern_field_metadata::ReadContext* c,const void*p,size_t*out){return c?c->extent&&c->extent(c->owner,p,out):method_identity::ReadableMappingExtent(p,out);}
 bool Mapped(void* p,size_t bytes,const modern_field_metadata::ReadContext*c){size_t extent=0;return p&&Extent(c,p,&extent)&&extent>=bytes;}
+bool TableBoundsFailure(std::string*error,const char*reason,void*table,int32_t length,
+                        bool extent_known,size_t extent){
+ // Final no-error readers must never construct diagnostic strings or allocate.
+ if(!error)return false;
+ const uint64_t required=length<0?0:uint64_t(kData)+uint64_t(length)*4;
+ char message[320];
+ std::snprintf(message,sizeof(message),
+  "IfTable length/pair storage exceeds live mapped bounds [reason=%s table=%p length=%d pairWidth=%d requiredBytes=%llu extentKnown=%d mappedExtent=%zu]",
+  reason,table,length,kPairWidth,static_cast<unsigned long long>(required),int(extent_known),extent);
+ *error=message;return false;
+}
 const class_metadata::Layout& Layout(const modern_field_metadata::FieldMetadata& m){return m.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;}
 }
 bool ReadView(const modern_field_metadata::FieldMetadata& metadata,void* klass,View* output,std::string* error,const modern_field_metadata::ReadContext* context){
@@ -29,7 +41,12 @@ bool ReadView(const modern_field_metadata::FieldMetadata& metadata,void* klass,V
  if(!Mapped(component,Layout(metadata).size,context)||metadata.Reference(component,0)!=meta_class||!metadata.ClassIdentity(component,&component_identity,error,context)||!component_identity.is_object||component_identity.loader)
   return Fail(error,"IfTable is not the proven bootstrap Object[] declaration");
  int32_t length=0;std::memcpy(&length,static_cast<char*>(table)+kLength,4);
- if(length<0||(length%kPairWidth)||length>1000000||!Mapped(table,kData+size_t(length)*4,context))return Fail(error,"IfTable length/pair storage exceeds live mapped bounds");
+ const char* invalid=length<0?"negative-length":length%kPairWidth?"odd-pair-length":length>1000000?"length-over-limit":nullptr;
+ size_t table_extent=0;
+ if(invalid){const bool known=error&&Extent(context,table,&table_extent);return TableBoundsFailure(error,invalid,table,length,known,table_extent);}
+ const bool extent_known=Extent(context,table,&table_extent);
+ if(!extent_known||table_extent<kData+size_t(length)*4)
+  return TableBoundsFailure(error,extent_known?"truncated-pair-storage":"unmapped-pair-storage",table,length,extent_known,table_extent);
  for(int32_t i=0;i<length;i+=kPairWidth){void* interface=metadata.Reference(table,kData+size_t(i)*4);
   class_metadata::State state;size_t extent=0;
   if(!interface||!Extent(context,interface,&extent)||!class_metadata::ReadState(Layout(metadata),interface,extent,&state)||state.IsPrimitive()||!(state.access_flags&0x200u)||metadata.Reference(interface,0)!=meta_class)
