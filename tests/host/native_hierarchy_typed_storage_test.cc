@@ -38,8 +38,32 @@ size_t TypedFieldIndex(void* f){for(size_t i=0;i<typed_fields.size();++i)if(f==t
 const char* TypedFieldName(void*f){auto i=TypedFieldIndex(f);return i==SIZE_MAX?ResolutionName(f):typed_names[i];}
 const char* TypedFieldType(void*f){auto i=TypedFieldIndex(f);return i==SIZE_MAX?ResolutionType(f):typed_descriptors[i];}
 const char* TypedDescriptor(void*c,void*storage){if(c==typed_probe_class)return "LProbe;";if(c==typed_ancestor)return "LAncestor;";return ResolutionDescriptor(c,storage);}
-bool TypedAssignable(void* target,void* value){for(auto*c=value;c;c=Root(static_cast<char*>(c)+offsetof(class_metadata::Class17,super_class))){if(c==target)return true;
- auto*t=Root(static_cast<char*>(c)+offsetof(class_metadata::Class17,iftable));if(t)for(uint32_t i=0;i<Read32(t,8);i+=2)if(Root(static_cast<char*>(t)+12+4*i)==target)return true;}return false;}
+bool typed_code_only=std::getenv("ARTDCEVM_TYPED_ASSIGN_CODE")!=nullptr,typed_code_bad=false;
+std::array<void*,11> typed_assignment_roles{};
+bool TypedPrimitiveClass(void*p){return p==typed_int||p==typed_assignment_roles[10];}
+bool TypedAssignable(void* target,void* value){
+ if(target==value)return true;if(target==parent_class)return !TypedPrimitiveClass(value);
+ const auto flags=Read32(target,offsetof(class_metadata::Class17,access_flags));
+ if(flags&0x200u){auto*t=Root(static_cast<char*>(value)+offsetof(class_metadata::Class17,iftable));if(t)for(uint32_t i=0;i<Read32(t,8);i+=2)if(Root(static_cast<char*>(t)+12+4*i)==target)return true;return false;}
+ auto*part=Root(static_cast<char*>(value)+offsetof(class_metadata::Class17,component_type));
+ if(part){auto*target_part=Root(static_cast<char*>(target)+offsetof(class_metadata::Class17,component_type));return target_part?TypedAssignable(target_part,part):target==Root(static_cast<char*>(value)+offsetof(class_metadata::Class17,super_class));}
+ if(Read32(value,offsetof(class_metadata::Class17,access_flags))&0x200u)return false;
+ for(auto*c=value;c;c=Root(static_cast<char*>(c)+offsetof(class_metadata::Class17,super_class)))if(c==target)return true;return false;
+}
+// Independent public matrix for fixed boot roles, expressed as public Java
+// assignability outcomes rather than invoking the original ART leaf model.
+bool TypedPublicAssignment(size_t target,size_t actual){
+ if(target==actual)return true;if(target==0)return actual<9;
+ if(target==2||target==3)return (actual>=4&&actual<=8)||(target==3&&actual==1);
+ if(target==4)return actual==5||actual==8;
+ return false;
+}
+jclass TypedAssignmentFind(JNIEnv*,const char*n){
+ const char*names[]{"java/lang/Object","java/lang/String","java/lang/Cloneable","java/io/Serializable","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I"};
+ for(size_t i=0;i<9;++i)if(!std::strcmp(n,names[i])){Jni();return reinterpret_cast<jclass>(typed_assignment_roles[i]);}
+ return Find(&env,n);
+}
+size_t TypedAssignableCode(void* target,void* value){return typed_code_bad?256u:(TypedAssignable(target,value)?1u:0u);}
 void TypedCtor(void*,void*self,void*h,size_t*failures,bool refs){assert(stopped&&self==current&&h==&typed_heap&&failures&&refs);}
 bool TypedRef(const void*,void*,void*,uint32_t){assert(stopped);return true;}
 size_t TypedHeap(void*h,bool refs){assert(stopped&&h==&typed_heap&&refs);size_t failures=0;uintptr_t visitor=0;typed_ctor(&visitor,current,h,&failures,true);
@@ -56,7 +80,8 @@ class TypedHooks final:public OwnerHooks {public:
   if(!std::strcmp(n,native_typed_heap_walk::kVerifyHeap))return reinterpret_cast<void*>(TypedHeap);
   if(!std::strcmp(n,native_typed_heap_walk::kVisitorCtor))return reinterpret_cast<void*>(TypedCtor);
   if(!std::strcmp(n,native_typed_heap_walk::kVerifyReference))return reinterpret_cast<void*>(TypedRef);
-  if(!std::strcmp(n,"_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE"))return typed_probe_class?reinterpret_cast<void*>(TypedAssignable):nullptr;
+  if(!std::strcmp(n,"_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE"))return typed_probe_class&&!typed_code_only?reinterpret_cast<void*>(TypedAssignable):nullptr;
+  if(!std::strcmp(n,"artIsAssignableFromCode"))return reinterpret_cast<void*>(TypedAssignableCode);
   if(std::strstr(n,"GetTypeDescriptor"))return reinterpret_cast<void*>(TypedFieldType);
   if(std::strstr(n,"ArtField7GetName"))return reinterpret_cast<void*>(TypedFieldName);
   if(std::strstr(n,"GetDescriptor"))return reinterpret_cast<void*>(TypedDescriptor);
@@ -75,7 +100,7 @@ jobject TypedObject(JNIEnv*e,jobject o,jmethodID id,va_list args){Jni();
  if(id==reinterpret_cast<jmethodID>(&field_type_id)){auto*f=static_cast<Mirror*>(static_cast<void*>(o))->field;const auto i=TypedFieldIndex(f);if(i==2||i==3){typed_late_class=true;return reinterpret_cast<jobject>(typed_ancestor);}return reinterpret_cast<jobject>(parent_class);}
  return InterfaceObject(e,o,id,args);
 }
-jboolean TypedBoolean(JNIEnv*,jobject o,jmethodID id,va_list){Jni();assert(id==reinterpret_cast<jmethodID>(&primitive_id));return o==typed_int;}
+jboolean TypedBoolean(JNIEnv*,jobject o,jmethodID id,va_list){Jni();assert(id==reinterpret_cast<jmethodID>(&primitive_id));return TypedPrimitiveClass(o);}
 jobject TypedReflected(JNIEnv*,jclass c,jfieldID f,jboolean){Jni();if(c==typed_probe_class)return reinterpret_cast<jobject>(&typed_mirrors[TypedFieldIndex(f)]);auto& ms=c==reinterpret_cast<jclass>(old_class)?mirrors:new_mirrors;for(size_t i=0;i<4;++i)if(ms[i].field==f)return reinterpret_cast<jobject>(&ms[i]);std::abort();}
 jobjectArray TypedNewArray(JNIEnv*,jsize n,jclass,jobject){Jni();void*a=heap.New(12+size_t(n)*4);Put32(a,0,uint32_t(uintptr_t(typed_array_class)));Put32(a,8,uint32_t(n));typed_public_arrays.push_back(a);if(typed_helper_calibration&&n==2)typed_array=a;return reinterpret_cast<jobjectArray>(a);}
 jsize TypedLength(JNIEnv*,jarray a){Jni();return jsize(Read32(a,8));}
@@ -92,8 +117,10 @@ jvmtiError TypedLoaded(jvmtiEnv*,jint*n,jclass**out){assert(!stopped);++typed_in
   }typed_mirrors_moved=true;
  }
 *n=jint(typed_classes.size()+(typed_late_class?1:0));*out=static_cast<jclass*>(std::malloc(size_t(*n)*sizeof(jclass)));for(size_t i=0;i<typed_classes.size();++i)(*out)[i]=reinterpret_cast<jclass>(typed_classes[i]);if(typed_late_class)(*out)[typed_classes.size()]=reinterpret_cast<jclass>(typed_ancestor);return JVMTI_ERROR_NONE;}
-jvmtiError TypedSignature(jvmtiEnv*,jclass c,char**s,char**){const char*n=c==parent_class?"Ljava/lang/Object;":c==typed_probe_class?"LProbe;":c==typed_ancestor?"LAncestor;":c==typed_int?"I":c==typed_array_class?"[Ljava/lang/Object;":c==typed_ancestor_array?"[LAncestor;":c==typed_old_array_class?"[LFixture;":c==typed_ancestor_2d?"[[LAncestor;":c==typed_old_2d?"[[LFixture;":"LFixture;";*s=strdup(n);return JVMTI_ERROR_NONE;}
-jvmtiError TypedDefiningLoader(jvmtiEnv*,jclass c,jobject*out){assert(!stopped);++typed_defining_loaders;*out=(c==parent_class&&!typed_foreign_boot)?nullptr:reinterpret_cast<jobject>(&typed_facade);return JVMTI_ERROR_NONE;}
+jvmtiError TypedSignature(jvmtiEnv*,jclass c,char**s,char**){const char*names[]{"Ljava/lang/Object;","Ljava/lang/String;","Ljava/lang/Cloneable;","Ljava/io/Serializable;","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I","I","J"};
+ for(size_t i=0;i<typed_assignment_roles.size();++i)if(c==typed_assignment_roles[i]){*s=strdup(names[i]);return JVMTI_ERROR_NONE;}
+ const char*n=c==parent_class?"Ljava/lang/Object;":c==typed_probe_class?"LProbe;":c==typed_ancestor?"LAncestor;":c==typed_int?"I":c==typed_array_class?"[Ljava/lang/Object;":c==typed_ancestor_array?"[LAncestor;":c==typed_old_array_class?"[LFixture;":c==typed_ancestor_2d?"[[LAncestor;":c==typed_old_2d?"[[LFixture;":"LFixture;";*s=strdup(n);return JVMTI_ERROR_NONE;}
+jvmtiError TypedDefiningLoader(jvmtiEnv*,jclass c,jobject*out){assert(!stopped);++typed_defining_loaders;*out=((c==parent_class&&!typed_foreign_boot)||(std::find(typed_assignment_roles.begin(),typed_assignment_roles.end(),c)!=typed_assignment_roles.end()&&c!=parent_class))?nullptr:reinterpret_cast<jobject>(&typed_facade);return JVMTI_ERROR_NONE;}
 jvmtiError TypedFields(jvmtiEnv*,jclass c,jint*n,jfieldID**out){*n=c==typed_probe_class||c==reinterpret_cast<jclass>(old_class)||c==reinterpret_cast<jclass>(new_class)?4:0;*out=nullptr;if(*n){*out=static_cast<jfieldID*>(std::malloc(4*sizeof(jfieldID)));auto& fs=c==typed_probe_class?typed_fields:c==reinterpret_cast<jclass>(old_class)?old_fields:new_fields;for(size_t i=0;i<4;++i)(*out)[i]=reinterpret_cast<jfieldID>(fs[i]);}return JVMTI_ERROR_NONE;}
 jvmtiError TypedFieldPublicName(jvmtiEnv*,jclass,jfieldID f,char**n,char**s,char**){*n=strdup(typed_wrong_public_name&&f==reinterpret_cast<jfieldID>(typed_fields[3])?"wrongPublicName":TypedFieldName(f));*s=strdup(TypedFieldType(f));return JVMTI_ERROR_NONE;}
 jvmtiError TypedFieldFlags(jvmtiEnv*,jclass,jfieldID f,jint*out){*out=jint(reinterpret_cast<abi::arm64::Field*>(f)->access_flags);return JVMTI_ERROR_NONE;}
@@ -107,7 +134,21 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  typed_probe_instance=heap.New(24);Put32(typed_probe_instance,0,uint32_t(uintptr_t(typed_probe_class)));Put32(typed_probe_instance,8,uint32_t(uintptr_t(ref_a)));Put32(typed_probe_class,128,uint32_t(uintptr_t(ref_b)));
  typed_array=heap.New(24);Put32(typed_array,0,uint32_t(uintptr_t(typed_array_class)));Put32(typed_array,8,3);Put32(typed_array,12,uint32_t(uintptr_t(ref_a)));Put32(typed_array,16,uint32_t(uintptr_t(ref_b)));
  typed_old_array=heap.New(12);Put32(typed_old_array,0,uint32_t(uintptr_t(typed_old_array_class)));typed_old_2d_value=heap.New(12);Put32(typed_old_2d_value,0,uint32_t(uintptr_t(typed_old_2d)));
- table.IsAssignableFrom=[](JNIEnv*,jclass actual,jclass target)->jboolean{Jni();if(actual==target)return true;if(target==parent_class)return true;return false;};
+ typed_assignment_roles={parent_class,type(),type(),type(),typed_array_class,type(nullptr),type(typed_int),type(),type(),typed_int,type()};
+ static_cast<class_metadata::Class17*>(typed_assignment_roles[2])->access_flags=0x201;
+ static_cast<class_metadata::Class17*>(typed_assignment_roles[3])->access_flags=0x201;
+ Put32(typed_assignment_roles[5],offsetof(class_metadata::Class17,component_type),uint32_t(uintptr_t(typed_assignment_roles[1])));
+ Put32(typed_assignment_roles[7],offsetof(class_metadata::Class17,component_type),uint32_t(uintptr_t(typed_assignment_roles[10])));
+ Put32(typed_assignment_roles[8],offsetof(class_metadata::Class17,component_type),uint32_t(uintptr_t(typed_assignment_roles[6])));
+ for(size_t i=4;i<=8;++i)Put32(typed_assignment_roles[i],offsetof(class_metadata::Class17,iftable),uint32_t(uintptr_t(IfTable({typed_assignment_roles[2],typed_assignment_roles[3]}))));
+ Put32(typed_assignment_roles[1],offsetof(class_metadata::Class17,iftable),uint32_t(uintptr_t(IfTable({typed_assignment_roles[3]}))));
+ // Primitive Class mirrors have no superclass in the real source declaration.
+ Put32(typed_int,offsetof(class_metadata::Class17,super_class),0);Put32(typed_assignment_roles[10],offsetof(class_metadata::Class17,super_class),0);
+ table.FindClass=TypedAssignmentFind;
+ table.IsAssignableFrom=[](JNIEnv*,jclass actual,jclass target)->jboolean{Jni();
+  auto t=std::find(typed_assignment_roles.begin(),typed_assignment_roles.end(),target),a=std::find(typed_assignment_roles.begin(),typed_assignment_roles.end(),actual);
+  if(t!=typed_assignment_roles.end()&&a!=typed_assignment_roles.end())return TypedPublicAssignment(size_t(t-typed_assignment_roles.begin()),size_t(a-typed_assignment_roles.begin()));
+  if(actual==target)return true;if(target==parent_class)return true;return false;};
  table.GetFieldID=[](JNIEnv*,jclass c,const char*n,const char*s){Jni();assert(c==typed_probe_class&&!std::strcmp(n,"referenceValue")&&!std::strcmp(s,"Ljava/lang/Object;"));return reinterpret_cast<jfieldID>(typed_fields[0]);};
  table.GetStaticFieldID=[](JNIEnv*,jclass c,const char*n,const char*s){Jni();assert(c==typed_probe_class&&!std::strcmp(n,"staticReferenceValue")&&!std::strcmp(s,"Ljava/lang/Object;"));return reinterpret_cast<jfieldID>(typed_fields[1]);};
  table.GetMethodID=TypedMethod;table.CallObjectMethodV=TypedObject;table.CallBooleanMethodV=TypedBoolean;table.ToReflectedField=TypedReflected;table.GetStaticObjectField=[](JNIEnv*e,jclass o,jfieldID f){return GetObject(e,o,f);};
@@ -120,6 +161,7 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  void*self=current;JNIEnv*source_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&source_env,8);assert(source_handle_roots::Service::Bind(hooks,fields,&source,&error));
  alignas(8) static unsigned char source_scope[32]{};OriginalHeader head{nullptr,3};std::memcpy(source_scope,&head,sizeof(head));Put32(source_scope,12,uint32_t(uintptr_t(old_class)));public_slot=source_scope+12;Publish(source_scope);
  typed_classes={old_class,new_class,parent_class,meta_class,typed_probe_class,typed_int,typed_array_class,typed_ancestor_array,typed_old_array_class,typed_ancestor_2d,typed_old_2d};
+ for(auto*role:typed_assignment_roles)if(std::find(typed_classes.begin(),typed_classes.end(),role)==typed_classes.end())typed_classes.push_back(role);
  static jvmtiInterface_1 functions{};functions.GetClassLoader=TypedDefiningLoader;functions.GetLoadedClasses=TypedLoaded;functions.GetClassSignature=TypedSignature;functions.GetClassFields=TypedFields;functions.GetFieldName=TypedFieldPublicName;functions.GetFieldModifiers=TypedFieldFlags;functions.Deallocate=TypedDeallocate;static jvmtiEnv ti{&functions};
  auto result=std::make_unique<StorageProof>(walk,source,metadata);
  struct Request{source_handle_roots::Service*source;StorageProof*proof;std::string*error;} request{&source,result.get(),&error};
@@ -132,13 +174,19 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  if(!staged)return false;
  assert(typed_mirrors_moved&&typed_stage_native_fields==8&&!typed_stage_reentered_jni);
  assert(method_identity::MappingOsQueries()==typed_stage_native_queries);
- typed_foreign_boot=true;StorageProof foreign(*r.walk,*r.request->source,*r.metadata);assert(!foreign.Stage(*r.hooks,c,&ti,r.request->error)&&!foreign.Staged());foreign.Clear(c.env);typed_foreign_boot=false;
- // A mismatching independent public declaration refuses in the late native
- // pass after preceding identities were read. Failed staging owns no published
- // proof, and Clear refunds every global produced by that failed attempt.
+ // Same real public inventory and rooted identities, but a broken C ABI
+ // encoding must not become truthy assignment or a staged proof.
  const auto new_global=table.NewGlobalRef;const auto delete_global=table.DeleteGlobalRef;
  table.NewGlobalRef=[](JNIEnv*e,jobject value){++typed_failure_globals;return Global(e,value);};
  table.DeleteGlobalRef=[](JNIEnv*e,jobject value){assert(typed_failure_globals);--typed_failure_globals;Delete(e,value);};
+ const bool prior_code=typed_code_only;typed_code_only=typed_code_bad=true;
+ StorageProof bad_encoding(*r.walk,*r.request->source,*r.metadata);
+ assert(!bad_encoding.Stage(*r.hooks,c,&ti,r.request->error)&&!bad_encoding.Staged()&&*r.request->error=="Named Class assignment leaf differs from independent JNI relation or result encoding");
+ bad_encoding.Clear(c.env);assert(!typed_failure_globals);typed_code_bad=false;typed_code_only=prior_code;
+ typed_foreign_boot=true;StorageProof foreign(*r.walk,*r.request->source,*r.metadata);assert(!foreign.Stage(*r.hooks,c,&ti,r.request->error)&&!foreign.Staged());foreign.Clear(c.env);assert(!typed_failure_globals);typed_foreign_boot=false;
+ // A mismatching independent public declaration refuses in the late native
+ // pass after preceding identities were read. Failed staging owns no published
+ // proof, and Clear refunds every global produced by that failed attempt.
  typed_wrong_public_name=true;StorageProof mismatch(*r.walk,*r.request->source,*r.metadata);
  assert(!mismatch.Stage(*r.hooks,c,&ti,r.request->error)&&!mismatch.Staged()&&*r.request->error=="Native typed field differs from independent public declaration");
  mismatch.Clear(c.env);assert(!typed_failure_globals);typed_wrong_public_name=false;

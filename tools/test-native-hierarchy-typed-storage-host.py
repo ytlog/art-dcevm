@@ -184,3 +184,11 @@ def stage_observation(output):
     'mismatched_public_witness_refused_and_global_roots_refunded':True,
 },indent=2)+'\n')
 print('Complete typed-storage source lifecycle: ASan/UBSan passed')
+
+# The fixed C size_t source leaf independently traverses both actual retained
+# reference lifecycles when the inline ObjPtr leaf is unavailable.
+for label,extra in [('methods',{}),('schema',{'ARTDCEVM_TYPED_SCHEMA_COPY':'1'})]:
+    code_env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1',ARTDCEVM_TYPED_ASSIGN_CODE='1',**extra)
+    code_result=subprocess.run([str(binary)]+[str(p) for p in dex_files],capture_output=True,text=True,env=code_env)
+    (out/('result-code-'+label+'.log')).write_text(code_result.stdout+code_result.stderr)
+    code_result.check_returncode();print('C size_t assignment '+label+': '+code_result.stdout.strip())

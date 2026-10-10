@@ -2,7 +2,9 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/arm64/art_field.h"
 #include <algorithm>
+#include <array>
 #include "platform/common/typed_storage_assignability.h"
+#include "platform/common/native_class_assignability.h"
 #include <cstring>
 #include <unordered_map>
 #include "platform/common/readable_mapping_scope.h"
@@ -19,7 +21,7 @@ struct Proof::State final:native_typed_heap_walk::Sink {
  struct Type {void* klass=nullptr;void* component=nullptr;Slot root{},component_root{};bool array=false,primitive=false,object=false,cloneable=false,serializable=false;std::vector<Field> fields;};
  std::vector<Type> types;bounded_managed_roots::Store public_roots;prepared_roots::Bindings roots;
  const source_commit::Plan* plan=nullptr;source_commit::Plan expected;
- using Assign=bool(*)(void*,void*);using FieldLeaf=void*(*)(void*);Assign assign=nullptr;FieldLeaf field_leaf=nullptr;
+ using FieldLeaf=void*(*)(void*);native_class_assignability::Service assignment;FieldLeaf field_leaf=nullptr;
  std::vector<std::pair<uintptr_t,size_t>> type_index,class_index,instance_index;
  mutable const modern_field_metadata::ReadContext* maps=nullptr;
  mutable const native_source_commit::Services* copies=nullptr;
@@ -46,7 +48,7 @@ struct Proof::State final:native_typed_heap_walk::Sink {
  }
  bool ArraySupertype(void* klass)const noexcept{auto*t=Find(klass);return t&&(t->object||t->cloneable||t->serializable);}
  bool Primitive(void* klass)const noexcept{auto*t=Find(klass);return t&&t->primitive;}
- bool AssignNamed(void* declared,void* actual)const noexcept{return Readable(declared,8)&&Readable(actual,8)&&assign(declared,actual);}
+ bool AssignNamed(void* declared,void* actual)const noexcept{bool result=false;return Readable(declared,8)&&Readable(actual,8)&&assignment.Assignable(declared,actual,&result)&&result;}
  bool ChangedArray(void* klass)const noexcept{return ArrayRelationChanged(*this,klass);}
  bool Assignable(void* declared,void* actual)const noexcept{return AssignableAfter(*this,declared,actual);}
  bool Reference(void* object,void* value,uint32_t offset)noexcept override{
@@ -106,15 +108,33 @@ bool Proof::Staged()const noexcept{return state_->staged;}
 Proof::Refusal Proof::LastRefusal()const noexcept{return state_->refusal;}
 bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,std::string* error){
  auto&s=*state_;if(s.staged||!c.env||!c.self||!ti||!s.walk.Calibrated()||!s.metadata.Calibrated()||!s.source.ReadyForSourceAccess())return Fail(error,"Typed storage needs complete independently calibrated source owners");
- s.context=c;s.assign=reinterpret_cast<State::Assign>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE"));
+ s.context=c;if(!s.assignment.Bind(hooks))return Fail(error,"Named typed Class assignment source unavailable (ObjPtr or C size_t)");
  s.field_leaf=reinterpret_cast<State::FieldLeaf>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
- if(!s.assign||!s.field_leaf)return Fail(error,"Named typed Class/Field declarations unavailable");
+ if(!s.field_leaf)return Fail(error,"Named typed Field declaration unavailable");
  auto* env=c.env;jclass class_type=env->FindClass("java/lang/Class"),field_type=env->FindClass("java/lang/reflect/Field");
  auto component=class_type?env->GetMethodID(class_type,"getComponentType","()Ljava/lang/Class;"):nullptr;
  auto primitive=class_type?env->GetMethodID(class_type,"isPrimitive","()Z"):nullptr;
  auto declared=field_type?env->GetMethodID(field_type,"getType","()Ljava/lang/Class;"):nullptr;
  jclass system=env->FindClass("java/lang/System");auto hash=system?env->GetStaticMethodID(system,"identityHashCode","(Ljava/lang/Object;)I"):nullptr;
  if(!component||!primitive||!declared||!hash||env->ExceptionCheck())return Fail(error,"Public typed declaration oracle unavailable");
+ // The C source adapter has a different return ABI. Independently exercise
+ // interface, covariant/multidimensional array and primitive relations through
+ // public JNI before the loaded-Class fixed point. Only owned slots survive.
+ constexpr size_t assignment_count=11;
+ std::array<State::Slot,assignment_count> assignment_roots{};
+ std::array<bool,assignment_count*assignment_count> assignment_results{};
+ if(s.assignment.UsesCodeLeaf()){
+  const char* names[]{"java/lang/Object","java/lang/String","java/lang/Cloneable","java/io/Serializable","[Ljava/lang/Object;","[Ljava/lang/String;","[I","[J","[[I"};
+  std::array<jclass,assignment_count> locals{};bool ready=true;
+  for(size_t i=0;i<9&&ready;++i){locals[i]=env->FindClass(names[i]);ready=locals[i]&&!env->ExceptionCheck();}
+  for(size_t i=9;i<assignment_count&&ready;++i){locals[i]=static_cast<jclass>(env->CallObjectMethod(locals[i-3],component));ready=locals[i]&&!env->ExceptionCheck();}
+  for(size_t i=0;i<assignment_count&&ready;++i)ready=s.public_roots.Stage(c,locals[i],&assignment_roots[i],error);
+  for(size_t i=0;i<assignment_count&&ready;++i)for(size_t j=0;j<assignment_count&&ready;++j){
+   assignment_results[i*assignment_count+j]=env->IsAssignableFrom(locals[j],locals[i]);ready=!env->ExceptionCheck();
+  }
+  for(auto local:locals)if(local)env->DeleteLocalRef(local);
+  if(!ready){env->DeleteLocalRef(system);env->DeleteLocalRef(class_type);env->DeleteLocalRef(field_type);return Fail(error,"Public complete Class assignment matrix unavailable");}
+ }
  bool pass=true;std::unordered_multimap<jint,size_t> identities;
  // Resolving public Field.getType may load new Classes. Enumerate until a
  // complete pass adds none; native identities are borrowed only after this
@@ -178,8 +198,9 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
  jobject object_ref=s.public_roots.LocalRef(env,s.types[object_index].root),sample_ref=s.public_roots.LocalRef(env,s.types[sample_index].root);
  const bool public_forward=object_ref&&sample_ref&&env->IsAssignableFrom(static_cast<jclass>(sample_ref),static_cast<jclass>(object_ref));
  const bool public_reverse=object_ref&&sample_ref&&env->IsAssignableFrom(static_cast<jclass>(object_ref),static_cast<jclass>(sample_ref));
+ const bool public_identity=object_ref&&env->IsAssignableFrom(static_cast<jclass>(object_ref),static_cast<jclass>(object_ref));
  if(object_ref)env->DeleteLocalRef(object_ref);if(sample_ref)env->DeleteLocalRef(sample_ref);
- if(!public_forward||public_reverse||env->ExceptionCheck())return Fail(error,"Public ordinary Class relation oracle is ambiguous");
+ if(!public_forward||public_reverse||!public_identity||env->ExceptionCheck())return Fail(error,"Public ordinary Class relation oracle is ambiguous");
  // Every JNI allocation, public relation check and type resolution has
  // finished. Capture bounds once for this immediate no-JNI traversal, not once
  // per Field/Class/DEX lookup. This view grants no source/mutator/GC permission:
@@ -210,7 +231,21 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
    const auto& array=arrays[kind];bool found=false;for(uint32_t i=0;i<array.selected_count;++i)found|=array.AtSelected(i)==field.identity;if(!found)return Fail(error,"Reflected typed field is outside complete native declaration array");
   }
  }
- if(!s.assign(s.types[object_index].klass,s.types[sample_index].klass)||s.assign(s.types[sample_index].klass,s.types[object_index].klass))return Fail(error,"Named Class assignment leaf differs from independent JNI relation");
+ const native_class_assignability::Service::Oracle assignment_oracles[]{
+  {s.types[object_index].klass,s.types[sample_index].klass,public_forward},
+  {s.types[sample_index].klass,s.types[object_index].klass,public_reverse},
+  {s.types[object_index].klass,s.types[object_index].klass,public_identity}};
+ if(s.assignment.UsesCodeLeaf()){
+  std::array<void*,assignment_count> native{};
+  for(size_t i=0;i<assignment_count;++i)if(!s.public_roots.Read(assignment_roots[i],&native[i])||!native[i])return Fail(error,"Rooted Class assignment matrix unavailable");
+  // Distinct primitive and reference roles must not silently collapse into
+  // one mirror returned by a broken public producer/decoder.
+  for(size_t i=0;i<assignment_count;++i)for(size_t j=0;j<i;++j)if(native[i]==native[j])return Fail(error,"Public Class assignment matrix has aliased distinct roles");
+  std::array<native_class_assignability::Service::Oracle,assignment_count*assignment_count> oracles{};
+  for(size_t i=0;i<assignment_count;++i)for(size_t j=0;j<assignment_count;++j)oracles[i*assignment_count+j]={native[i],native[j],assignment_results[i*assignment_count+j]};
+  if(!s.assignment.Calibrate(oracles.data(),oracles.size()))return Fail(error,"Named Class assignment leaf differs from independent JNI relation or result encoding");
+ }
+ if(!s.assignment.Calibrate(assignment_oracles,3))return Fail(error,"Named Class assignment leaf differs from independent JNI relation or result encoding");
  s.type_index.resize(s.types.size());s.staged=true;return true;
 }
 bool Proof::Capture(const source_commit::Plan& plan,const prepared_roots::Registrar& registrar,std::string* error){auto&s=*state_;
