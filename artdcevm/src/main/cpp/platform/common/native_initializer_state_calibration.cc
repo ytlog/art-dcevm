@@ -4,7 +4,7 @@
 #include <cstring>
 namespace artdcevm::native_initializer_state {
 namespace {
-constexpr uint32_t kTidUnusedBitsMask=0xffc00000u;
+constexpr uint32_t kTidUnusedBitsMask=abi::arm64::android17::kClinitTidUnusedBitsMask;
 constexpr jint kMarker=0x18491315;
 constexpr size_t kLegacyTid=offsetof(class_metadata::Class11,clinit_thread_id);
 constexpr size_t kMergedTid=offsetof(class_metadata::Class17,clinit_thread_id_or_hash);

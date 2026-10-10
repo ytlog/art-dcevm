@@ -2,6 +2,10 @@
 #include "platform/abi/arm64/object.h"
 namespace artdcevm::abi::arm64::android17 {
 // Fixed runtime/mirror/class.h declaration; match the ART build before use.
+// Class::kTidExtraBits/kTidUnusedBitsMask distinguish Linux tid from the
+// complemented descriptor hash; this declaration alone grants no capability.
+inline constexpr uint32_t kClinitTidExtraBits=10;
+inline constexpr uint32_t kClinitTidUnusedBitsMask=~((uint32_t{1}<<(32-kClinitTidExtraBits))-1);
 #pragma pack(push, 4)
 struct Class17 {
   ObjectPrefix object;
