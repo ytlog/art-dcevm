@@ -25,6 +25,7 @@ bool ReadRaw(const modern_field_metadata::FieldMetadata& metadata,const void* kl
 }
 struct Probe {
  JNIEnv* env=nullptr;jobject anchor=nullptr,fixture=nullptr;
+ jclass oracle=nullptr;jmethodID reenter=nullptr;
  const modern_field_metadata::FieldMetadata* metadata=nullptr;
  State during{},after{};jint tid=0,hash=0;size_t observations=0;
  bool initialized=false;
@@ -40,6 +41,13 @@ jboolean Observe(JNIEnv* env,jclass,jclass fixture,jint tid,jint hash){
  if(!p||env!=p->env||p->observations||tid<=0||
     !env->IsSameObject(fixture,p->fixture)||env->ExceptionCheck())return JNI_FALSE;
  p->tid=tid;p->hash=hash;++p->observations;
+ if(runnable_executor::With(env,p->anchor,Borrow,p)!=runnable_jni::Result::kSuccess||
+    p->during.status!=13||p->during.raw_slot!=uint32_t(tid))return JNI_FALSE;
+ // A genuine public static access reenters the original ClassLinker while the
+ // same Linux thread owns status13. It must return the unassigned default cell,
+ // execute no second body/observer, and leave that live state/tid unchanged.
+ if(!p->oracle||!p->reenter||env->CallStaticIntMethod(p->oracle,p->reenter)!=0||
+    env->ExceptionCheck()||p->observations!=1)return JNI_FALSE;
  return runnable_executor::With(env,p->anchor,Borrow,p)==runnable_jni::Result::kSuccess&&
      p->during.status==13&&p->during.raw_slot==uint32_t(tid)?JNI_TRUE:JNI_FALSE;
 }
@@ -54,11 +62,15 @@ bool Calibration::Calibrate(JNIEnv* env,jobject anchor,
  const JNINativeMethod observer{const_cast<char*>("observe"),const_cast<char*>("(Ljava/lang/Class;II)Z"),reinterpret_cast<void*>(Observe)};
  jmethodID inactive=env->GetStaticMethodID(oracle,"inactiveClass","()Ljava/lang/Class;");
  jmethodID run=env->GetStaticMethodID(oracle,"run","()I");
- bool ok=inactive&&run&&!env->ExceptionCheck()&&env->RegisterNatives(oracle,&observer,1)==JNI_OK;
+ jmethodID reenter=env->GetStaticMethodID(oracle,"reenter","()I");
+ jmethodID failed_class=env->GetStaticMethodID(oracle,"failedClass","()Ljava/lang/Class;");
+ jmethodID run_failure=env->GetStaticMethodID(oracle,"runFailure","()I");
+ bool ok=inactive&&run&&reenter&&failed_class&&run_failure&&!env->ExceptionCheck()&&env->RegisterNatives(oracle,&observer,1)==JNI_OK;
  jobject local=ok?env->CallStaticObjectMethod(oracle,inactive):nullptr;
  jobject fixture=local&&!env->ExceptionCheck()?env->NewGlobalRef(local):nullptr;
  jobject owned_anchor=fixture?env->NewGlobalRef(anchor):nullptr;
- Probe probe{env,owned_anchor,fixture,&metadata};
+ Probe probe{};probe.env=env;probe.anchor=owned_anchor;probe.fixture=fixture;
+ probe.oracle=oracle;probe.reenter=reenter;probe.metadata=&metadata;
  if(!fixture||!owned_anchor||env->ExceptionCheck())ok=false;
  if(ok){active=&probe;const jint value=env->CallStaticIntMethod(oracle,run);active=nullptr;
   ok=!env->ExceptionCheck()&&value==kMarker&&probe.observations==1;
@@ -71,6 +83,20 @@ bool Calibration::Calibrate(JNIEnv* env,jobject anchor,
    storage=TidStorage::kDescriptorHashShared;
   else ok=false;
  }
+ // Independent public failure semantics must agree with the same status
+ // declaration: one EIIE body, later NCDFE without rerunning it, then source
+ // ErrorResolved(3). This remains a fixture observation, not waiter authority.
+ jobject failure_local=ok?env->CallStaticObjectMethod(oracle,failed_class):nullptr;
+ jobject failure=failure_local&&!env->ExceptionCheck()?env->NewGlobalRef(failure_local):nullptr;
+ if(ok){
+  ok=failure&&!env->ExceptionCheck()&&env->CallStaticIntMethod(oracle,run_failure)==1&&
+      !env->ExceptionCheck();
+  if(ok){probe.fixture=failure;probe.initialized=true;
+   ok=runnable_executor::With(env,owned_anchor,Borrow,&probe)==runnable_jni::Result::kSuccess&&
+       probe.after.status==3;}
+ }
+ if(failure)env->DeleteGlobalRef(failure);
+ if(failure_local)env->DeleteLocalRef(failure_local);
  if(owned_anchor)env->DeleteGlobalRef(owned_anchor);
  if(fixture)env->DeleteGlobalRef(fixture);if(local)env->DeleteLocalRef(local);env->DeleteLocalRef(oracle);
  if(!ok)return Fail(error,"Actual public clinit body/state/tid/hash oracle disagrees with fixed source declarations");

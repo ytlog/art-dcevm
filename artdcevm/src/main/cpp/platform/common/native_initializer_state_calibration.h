@@ -6,7 +6,8 @@ enum class TidStorage {kDedicated,kDescriptorHashShared};
 // denotes active initialization; a nonzero getter alone never proves it.
 struct State {uint32_t status=0,initializing_tid=0,raw_slot=0;};
 // Genuine private public <clinit> observation calibrates the fixed state/tid
-// declaration. This is not a migration, waiter, frame or retirement authority.
+// declaration, same-thread reentry/default cell and one-body error poisoning.
+// This is not a migration, waiter, frame or retirement authority.
 class Calibration {
  public:
   bool Calibrate(JNIEnv*,jobject strong_executable_global,
