@@ -3,6 +3,7 @@
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/native_field_factory_observer.h"
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/original_field_declaration.h"
 #include <vector>
 #include <string>
 namespace artdcevm::native_lazy_field_mirror {
@@ -26,6 +27,9 @@ struct Bindings {
  const native_field_factory_observer::Trace* optional_trace=nullptr;
  const std::array<bool,4>* public_roots=nullptr;
  source_handle_roots::Service* roots=nullptr;
+ // Independent exact public declaration, matched against the complete current
+ // native Class table. It never consumes an ID as a native pointer.
+ void* (*declared_field)(void*,const runnable_jni::Context&,void*,const original_field_declaration::Declaration&)=nullptr;
 };
 struct Oracle {jobject strong_field=nullptr;jclass exact_owner=nullptr;jfieldID id=nullptr;void* native_field=nullptr;bool is_static=false;};
 class Service {
@@ -37,12 +41,14 @@ class Service {
   bool Calibrate(JNIEnv*,const std::vector<Oracle>&,std::string*);
   // Output is one caller-owned JNI global, not a borrowed managed pointer.
   bool Create(JNIEnv*,jclass,jfieldID,bool is_static,jobject* strong_field,std::string*);
+  // First-stage mirror, independent of the Store that this result will enter.
+  bool CreateDeclared(JNIEnv*,jvmtiEnv*,jclass,jfieldID,bool,jobject*,std::string*);
   bool Ready()const noexcept{return calibrated_;}
   void Clear(JNIEnv*);
  private:
   struct Request;
   static bool Produce(const runnable_jni::Context&,void*);
-  bool ProducePublic(JNIEnv*,jclass,jfieldID,bool,void* expected,jobject*,std::string*);
+  bool ProducePublic(JNIEnv*,jclass,jfieldID,bool,void* expected,jobject*,std::string*,const original_field_declaration::Declaration* =nullptr);
   Bindings bindings_{};
   using Factory=native_field_factory_observer::Return (*)(void*,void*,bool);
   using Local=jobject (*)(JNIEnv*,void*);

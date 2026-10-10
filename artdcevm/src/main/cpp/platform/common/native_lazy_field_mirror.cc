@@ -9,7 +9,7 @@ bool Fail(std::string* error,const char* text){if(error)*error=text;return false
 struct LocalRoot {JNIEnv* env;jobject value;~LocalRoot(){if(value)env->DeleteLocalRef(value);}};
 struct GlobalRoot {JNIEnv* env;jobject value;~GlobalRoot(){if(value)env->DeleteGlobalRef(value);}};
 }
-struct Service::Request {Service* service;JNIEnv* env;jobject owner;jfieldID id;void* expected;jobject output=nullptr;};
+struct Service::Request {Service* service;JNIEnv* env;jobject owner;jfieldID id;void* expected;jobject output=nullptr;const original_field_declaration::Declaration* declaration=nullptr;};
 bool Service::Bind(HookEngine& hooks,const Bindings& b,std::string* error){
  if(bound_||!b.owner||!b.matched_release_carrier||!b.scope||!b.oracle||!b.decode||!b.decode_field||!b.field||!b.declaring)return Fail(error,"Lazy Field factory lacks independently matched original codec/root owner");
  four_=false;
@@ -33,7 +33,8 @@ bool Service::Produce(const runnable_jni::Context& context,void* raw){
  if(!context.self||context.env!=r.env||!context.env||context.env->ExceptionCheck())return false;
  void *oracle=nullptr,*owner=nullptr;
  if(!b.oracle(b.owner,context,r.owner,&oracle)||context.env->ExceptionCheck()||!b.decode(b.owner,r.owner,&owner)||!owner||owner!=oracle)return false;
- void* field=b.decode_field(b.owner,context,owner,r.id);
+ const auto resolve=[&](void* klass){return r.declaration?(b.declared_field?b.declared_field(b.owner,context,klass,*r.declaration):nullptr):b.decode_field(b.owner,context,klass,r.id);};
+ void* field=resolve(owner);
  if(!field||(r.expected&&field!=r.expected)||b.declaring(b.owner,field)!=owner)return false;
  // ART may resolve a type and suspend here. Exact declaring Class is strongly
  // rooted; no borrowed managed identity is reused after the original factory.
@@ -62,14 +63,14 @@ bool Service::Produce(const runnable_jni::Context& context,void* raw){
  void *mirror_oracle=nullptr,*mirror=nullptr,*fresh_owner=nullptr;
  if(!b.oracle(b.owner,context,strong,&mirror_oracle)||context.env->ExceptionCheck()||!b.decode(b.owner,strong,&mirror)||mirror!=mirror_oracle||!mirror||
     !b.decode(b.owner,r.owner,&fresh_owner)||!fresh_owner||b.field(b.owner,mirror)!=field||b.declaring(b.owner,field)!=fresh_owner||
-    b.decode_field(b.owner,context,fresh_owner,r.id)!=field)return false;
+    resolve(fresh_owner)!=field)return false;
  r.output=strong;root.value=nullptr;return true;
 }
-bool Service::ProducePublic(JNIEnv* env,jclass owner,jfieldID id,bool statik,void* expected,jobject* output,std::string* error){
+bool Service::ProducePublic(JNIEnv* env,jclass owner,jfieldID id,bool statik,void* expected,jobject* output,std::string* error,const original_field_declaration::Declaration* declaration){
  if(!env||!owner||!id||!output||env->ExceptionCheck())return Fail(error,"Lazy Field request invalid or entering with pending exception");
  *output=nullptr;GlobalRoot exact{env,env->NewGlobalRef(owner)};
  if(!exact.value||env->ExceptionCheck())return Fail(error,"Lazy Field declaring Class strong root unavailable");
- Request request{this,env,exact.value,id,expected};
+ Request request{this,env,exact.value,id,expected,nullptr,declaration};
  const bool produced=bindings_.scope(bindings_.owner,env,carrier_,Produce,&request);
  GlobalRoot mirror{env,request.output};
  if(!produced||env->ExceptionCheck()||!mirror.value)return Fail(error,"Original lazy Field factory/codec identity proof failed");
@@ -123,6 +124,13 @@ bool Service::Calibrate(JNIEnv* env,const std::vector<Oracle>& oracles,std::stri
 bool Service::Create(JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* output,std::string* error){
  if(!calibrated_)return Fail(error,"Lazy Field factory has no actual public/native calibration");
  return ProducePublic(env,owner,id,statik,nullptr,output,error);
+}
+bool Service::CreateDeclared(JNIEnv* env,jvmtiEnv* ti,jclass owner,jfieldID id,bool statik,jobject* output,std::string* error){
+ if(!output)return Fail(error,"Declared Field output unavailable");*output=nullptr;
+ if(!calibrated_||!bindings_.declared_field)return Fail(error,"Declared Field requires calibrated factory and complete native declaration witness");
+ original_field_declaration::Declaration declaration;
+ if(!original_field_declaration::Read(env,ti,owner,id,statik,&declaration,error))return false;
+ return ProducePublic(env,owner,id,statik,nullptr,output,error,&declaration);
 }
 void Service::Clear(JNIEnv* env){if(field_class_&&env)env->DeleteGlobalRef(field_class_);field_class_=nullptr;if(carrier_&&env)env->DeleteGlobalRef(carrier_);carrier_=nullptr;calibrated_=false;}
 }

@@ -399,6 +399,7 @@ struct NativeEngine final:Engine {
  std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
  bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
+ bool field_calibration_episode=false;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
   auto& e=*static_cast<NativeEngine*>(raw);
   if(!id||!declaring||scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current())return nullptr;
@@ -416,18 +417,33 @@ struct NativeEngine final:Engine {
   }
   return scope.self==e.graph_current()?found:nullptr;
  }
+ static void* DecodeDeclaredField(void* raw,const runnable_jni::Context& scope,void* owner,const original_field_declaration::Declaration& declaration){
+  auto& e=*static_cast<NativeEngine*>(raw);
+  if(scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current()||!e.metadata.Calibrated())return nullptr;
+  field_array::View table;std::string error;
+  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,&error))return nullptr;
+  return original_field_declaration::Match(table,owner,declaration,[&](void* field,field_copy::CopyFieldView* text,void** declaring){
+   if(!e.metadata.FieldIdentity(field,text,&error))return false;
+   *declaring=e.metadata.FieldDeclaringClass(field);return scope.self==e.graph_current();
+  });
+ }
  static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
   auto& e=*static_cast<NativeEngine*>(raw);
-  // First Stage must obtain an original false-resolve mirror before Store
-  // publication. Reusing lazy Create here would depend on that same Store.
-  return e.field_mirror_cache.Create(env,owner,id,statik,out,error);
+  // Calibration episodes consume the original reflection source. After that
+  // independent proof, graph staging uses complete public/native declarations;
+  // hidden reflection discovery is not a complete native field inventory.
+  if(e.field_calibration_episode)return e.field_mirror_cache.Create(env,owner,id,statik,out,error);
+  if(!e.lazy_fields.Ready())return Fail(error,"Declared Field graph producer requires independent original factory calibration");
+  jvmtiEnv* ti=nullptr;
+  if(e.vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK||!ti)return Fail(error,"Declared Field original JVMTI environment unavailable");
+  return e.lazy_fields.CreateDeclared(env,ti,owner,id,statik,out,error);
  }
  bool PrepareLazyFields(JNIEnv* env,std::string* error){
   if(lazy_fields.Ready())return true;
   if(!PrepareLiveFieldOracles(env,error))return false;
   native_lazy_field_mirror::Bindings b;b.owner=this;
   b.matched_release_carrier=runnable_executor::Available()&&metadata.Calibrated()&&field_mirror.matched&&field_mirror.checked==28;
-  b.scope=FieldScope;b.oracle=FieldOracle;b.decode=FieldRoot;b.decode_field=DecodeLazyField;b.field=FieldLeaf;b.declaring=FieldOwner;
+  b.scope=FieldScope;b.oracle=FieldOracle;b.decode=FieldRoot;b.decode_field=DecodeLazyField;b.declared_field=DecodeDeclaredField;b.field=FieldLeaf;b.declaring=FieldOwner;
   b.observer=&field_factory_observer;b.primitive_trace=&field_factory_primitive_trace;b.optional_trace=&field_factory_optional_trace;
   b.public_roots=&field_factory_public_roots;b.roots=&source_capabilities.Roots();
   std::string unavailable;if(!lazy_fields.Bind(hooks,b,&unavailable))return !env->ExceptionCheck();
@@ -1515,6 +1531,7 @@ bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
  prepared.values.clear();return true;
 }
 bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+ struct Episode {bool& active;bool previous;explicit Episode(bool& value):active(value),previous(value){active=true;}~Episode(){active=previous;}} episode_scope{field_calibration_episode};
  if(!env||env->ExceptionCheck())return Fail(error,"Original Field observation has invalid or pending public JNI context");
  if(field_factory_completion.Ready())return true;
  if(!field_factory_completion.Attempt())return Fail(error,"Original Field observation incomplete after prior attempt; requires fresh process");

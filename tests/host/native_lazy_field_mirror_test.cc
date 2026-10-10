@@ -42,8 +42,34 @@ static bool Decode(void*,jobject p,void**out){*out=p;return true;}
 static void* FieldId(void*,const runnable_jni::Context&,void*c,jfieldID id){auto*f=reinterpret_cast<Field*>(id);return f->owner==c?f:nullptr;}
 static void* MirrorField(void*,void*m){return static_cast<Mirror*>(m)->field;}
 static void* Declaring(void*,void*f){return static_cast<Field*>(f)->owner;}
+static int ti_calls=0,ti_fail=0,ti_pending=0,buffers=0;static bool foreign_decl=false,wrong_text=false,wrong_flags=false,duplicate_native=false,stale_declared=false;static int declared_calls=0;
+static bool TiLeaf(){assert(!pending);++ti_calls;if(ti_calls==ti_pending)pending=true;return ti_calls!=ti_fail;}
+static jvmtiError JNICALL TiOwner(jvmtiEnv*,jclass c,jfieldID,jclass*out){bool ok=TiLeaf();*out=foreign_decl?reinterpret_cast<jclass>(&a):c;return ok?JVMTI_ERROR_NONE:JVMTI_ERROR_INVALID_FIELDID;}
+static char* Buffer(const char* text){++buffers;return strdup(text);}
+static jvmtiError JNICALL TiName(jvmtiEnv*,jclass,jfieldID,char**n,char**d,char**g){bool ok=TiLeaf();*n=Buffer(wrong_text?"foreign":"unresolved");*d=Buffer("Lmissing/Type;");*g=Buffer("generic");return ok?JVMTI_ERROR_NONE:JVMTI_ERROR_INVALID_FIELDID;}
+static jvmtiError JNICALL TiFlags(jvmtiEnv*,jclass,jfieldID,jint*out){bool ok=TiLeaf();*out=wrong_flags?1:0;return ok?JVMTI_ERROR_NONE:JVMTI_ERROR_INVALID_FIELDID;}
+static jvmtiError JNICALL TiFree(jvmtiEnv*,unsigned char*p){assert(buffers>0);--buffers;free(p);return JVMTI_ERROR_NONE;}
+static void* Declared(void*,const runnable_jni::Context& c,void* klass,const original_field_declaration::Declaration& d){
+ assert(c.self==&self);++declared_calls;if(stale_declared&&declared_calls>1)return nullptr;return klass==&b&&d.name=="unresolved"&&d.descriptor=="Lmissing/Type;"&&d.flags==0&&!duplicate_native?&unresolved:nullptr;
+}
+static void MatchTables(){
+ // Actual fixed Field array structure, independently supplied named identities.
+ struct Table{uint32_t count;abi::arm64::Field fields[3];} table{};table.count=3;
+ table.fields[0].access_flags=0;table.fields[1].access_flags=8;table.fields[2].access_flags=0x10000;
+ field_array::View view;assert(field_array::Read(field_array::kMerged17,&table,sizeof(table),false,&view));
+ field_array::View empty{};assert(!original_field_declaration::Match(empty,&b,original_field_declaration::Declaration{},[](void*,field_copy::CopyFieldView*,void**){assert(false);return false;}));
+ original_field_declaration::Declaration d{"hidden","Lmissing/Type;",0};bool duplicate=false,wrong_owner=false,bad_leaf=false;
+ auto leaf=[&](void*f,field_copy::CopyFieldView*t,void**o){*o=wrong_owner?&a:&b;*t={f,f==&table.fields[0]||duplicate?"hidden":"other","Lmissing/Type;"};return !bad_leaf;};
+ assert(original_field_declaration::Match(view,&b,d,leaf)==&table.fields[0]);
+ duplicate=true;assert(!original_field_declaration::Match(view,&b,d,leaf));duplicate=false;
+ wrong_owner=true;assert(!original_field_declaration::Match(view,&b,d,leaf));wrong_owner=false;
+ bad_leaf=true;assert(!original_field_declaration::Match(view,&b,d,leaf));bad_leaf=false;
+ d.flags=1;assert(!original_field_declaration::Match(view,&b,d,leaf));d.flags=0;d.descriptor="Lother;";assert(!original_field_declaration::Match(view,&b,d,leaf));
+}
 int main(){JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.FromReflectedField=From;jni.GetObjectClass=GetClass;jni.GetMethodID=Method;jni.CallObjectMethodV=Call;jni.CallIntMethodV=Int;jni.IsSameObject=Same;JNIEnv env{&jni};
+ MatchTables();jvmtiInterface_1 ti_table{};ti_table.GetFieldDeclaringClass=TiOwner;ti_table.GetFieldName=TiName;ti_table.GetFieldModifiers=TiFlags;ti_table.Deallocate=TiFree;jvmtiEnv ti{&ti_table};
  lazy::Bindings binding{&owner,true,Scope,Oracle,Decode,FieldId,MirrorField,Declaring};
+ binding.declared_field=Declared;
  std::vector<lazy::Oracle> samples{{reinterpret_cast<jobject>(&m1),reinterpret_cast<jclass>(&a),reinterpret_cast<jfieldID>(&first),&first,false},{reinterpret_cast<jobject>(&m2),reinterpret_cast<jclass>(&a),reinterpret_cast<jfieldID>(&second),&second,true}};
  std::string error;
  for(bool legacy:{false,true}){Hooks hooks;hooks.legacy=legacy;lazy::Service service;assert(service.Bind(hooks,binding,&error));jobject result=nullptr;
@@ -51,6 +77,14 @@ int main(){JNINativeInterface_ jni{};jni.NewGlobalRef=Global;jni.DeleteGlobalRef
   auto duplicate=samples;duplicate[1]=duplicate[0];const auto before=calls;assert(!service.Calibrate(&env,duplicate,&error)&&calls==before);
   assert(service.Calibrate(&env,samples,&error)&&service.Ready()&&calls==before+2&&globals==1);
   assert(service.Create(&env,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&result);env.DeleteGlobalRef(result);assert(globals==1);
+  ti_calls=0;assert(service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&result);env.DeleteGlobalRef(result);assert(!buffers&&ti_calls==3&&globals==1);
+  ti_calls=0;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),true,&result,&error)&&!result&&!buffers);
+  for(int leaf=1;leaf<=3;++leaf){ti_calls=0;ti_fail=leaf;const auto count=calls;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&!result&&calls==count&&!buffers&&ti_calls==leaf);ti_fail=0;
+   ti_calls=0;ti_pending=leaf;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&pending&&!result&&calls==count&&!buffers&&ti_calls==leaf);pending=false;ti_pending=0;}
+  for(bool* bad:{&foreign_decl,&wrong_text,&wrong_flags,&duplicate_native}){*bad=true;ti_calls=0;const auto count=calls;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&!result&&calls==count&&!buffers);*bad=false;}
+  stale_declared=true;declared_calls=0;ti_calls=0;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&!result&&!buffers&&declared_calls==2&&globals==1);stale_declared=false;
+  oom=true;ti_calls=0;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&pending&&!result&&!buffers&&globals==1);oom=false;pending=false;
+  wrong_factory=true;ti_calls=0;assert(!service.CreateDeclared(&env,&ti,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&!result&&!buffers);wrong_factory=false;
   assert(!service.Create(&env,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),true,&result,&error)&&globals==1);
   const auto c=calls,p=public_calls;pending=true;assert(!service.Create(&env,reinterpret_cast<jclass>(&b),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&pending&&calls==c&&public_calls==p);pending=false;
   assert(!service.Create(&env,reinterpret_cast<jclass>(&a),reinterpret_cast<jfieldID>(&unresolved),false,&result,&error)&&calls==c);
