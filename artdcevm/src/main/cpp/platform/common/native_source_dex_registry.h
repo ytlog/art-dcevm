@@ -18,7 +18,7 @@ class Service final {
  // calibration and exact private cache/DEX root checks. FindDexCache is NOT a
  // nullable query and is used only for that strongly rooted positive fixture.
  bool Unregistered(const runnable_jni::Context&,source_handle_roots::Pool&,
-                   const void* cache_root,const void* expected_dex,std::string*)const;
+                   const void* cache_root,const void* expected_dex,std::string*,const char** refusal=nullptr)const;
  private:
  using Object=abi::arm64::android11::ReleaseObjectPointer;
  using Registered=bool(*)(void*,void*,const void*);

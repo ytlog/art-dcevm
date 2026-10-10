@@ -39,7 +39,7 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
                        void* loader,size_t* index)const noexcept;
  // Ordinary exact source-owned DEX/cache query before any owned roots are
  // dropped. No published or publishing private entry can be discarded.
- bool CanDiscard(const native_hierarchy_source_cache::RecordView&)const noexcept;
+ bool CanDiscard(const native_hierarchy_source_cache::RecordView&,const char** refusal=nullptr)const noexcept;
  void Refunded()noexcept; // AFTER every captured private object was validated.
  bool ReleaseAfterRun(bool success)noexcept; // No source storage reads here.
  bool PreparePrivate(const native_hierarchy_source_cache::RecordView&,

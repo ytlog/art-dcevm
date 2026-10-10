@@ -36,14 +36,18 @@ bool Service::Calibrate(const runnable_jni::Context&ctx,jobject fixture,const mo
   calibrated_=true;return true;
  }catch(const std::bad_alloc&){return Error(error,"DEX registry calibration roots exhausted native storage");}
 }
-bool Service::Unregistered(const runnable_jni::Context&ctx,source_handle_roots::Pool&pool,const void*cache_root,const void*file,std::string*error)const{
- if(!calibrated_||!ctx.env||!ctx.self||!file||!pool.ReadyForSourceAccess())return Error(error,"Unregistered source cache lacks calibrated registry/root owner");
- void*cache=nullptr;if(!pool.Read(cache_root,&cache)||Dex(cache)!=file)return Error(error,"Private source cache DEX identity differs");
+bool Service::Unregistered(const runnable_jni::Context&ctx,source_handle_roots::Pool&pool,const void*cache_root,const void*file,std::string*error,const char** refusal)const{
+ const auto reject=[&](const char* detail){if(refusal)*refusal=detail;return Error(error,detail);};
+ if(refusal)*refusal=nullptr;
+ if(!calibrated_||!ctx.env||!ctx.self||!file)return reject("private-discard-DEX-registry-owner-unavailable");
+ if(!pool.ReadyForSourceAccess())return reject("private-discard-DEX-registry-roots-not-Runnable");
+ void*cache=nullptr;if(!pool.Read(cache_root,&cache))return reject("private-discard-DEX-registry-cache-root-read-refused");
+ if(Dex(cache)!=file)return reject("private-discard-cache-DexFile-differs-before-query");
  const bool registered=registered_(linker_,ctx.self,file);
- if(!pool.Read(cache_root,&cache)||Dex(cache)!=file||registered)return Error(error,"Incoming source DEX is already registered or moved outside its root");
- // Fixed ClassLinker::IsDexFileRegistered is the safe nullable registry query.
- // FindDexCache is a registered-only lookup: absence logs FATAL/UNREACHABLE.
- // Its negative result is not an API and must never be probed here.
+ if(!pool.Read(cache_root,&cache))return reject("private-discard-DEX-registry-cache-root-read-refused-after-query");
+ if(Dex(cache)!=file)return reject("private-discard-cache-DexFile-differs-after-query");
+ if(registered)return reject("private-discard-source-DexFile-already-registered");
+ // FindDexCache is registered-only and cannot serve as a nullable negative.
  return true;
 }
 }

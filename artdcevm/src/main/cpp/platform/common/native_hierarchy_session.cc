@@ -8,6 +8,11 @@
 #include <cstring>
 #include <mutex>
 #include <new>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#else
+#include <cstdio>
+#endif
 namespace artdcevm::native_hierarchy_session {
 namespace {
 thread_local Session* current=nullptr;
@@ -156,8 +161,17 @@ void Session::Refund()noexcept{
  // views. Mark failure now; dispose private ownership only after it unwinds.
  if(finishing_||verification_owner_||refunded_)return;
  if(batch_){
-  const bool discarded=bindings_.ledger?batch_->DiscardPrivate(*bindings_.ledger):batch_->Complete(false,nullptr);
-  if(!discarded)std::abort();
+  const char* refusal=nullptr;
+  const bool discarded=bindings_.ledger?batch_->DiscardPrivate(*bindings_.ledger,&refusal):batch_->Complete(false,nullptr);
+  if(!discarded){
+   const char* detail=refusal?refusal:"source-temporary-retirement-refused";
+#if defined(__ANDROID__)
+   __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Owned source refund refused: %s",detail);
+#else
+   std::fprintf(stderr,"Owned source refund refused: %s\n",detail);
+#endif
+   std::abort();
+  }
  }
  if(bindings_.ledger)bindings_.ledger->Refunded();
  refunded_=true;

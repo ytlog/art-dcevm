@@ -15,6 +15,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 template<class F> void ExpectAbort(F fn){const auto child=fork();assert(child>=0);if(!child){fn();_exit(1);}int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);}
+// The production refund still aborts on foreign/published ownership; capture
+// its literal diagnostic without substituting any Ledger/Batch permission.
+template<class F> void ExpectRefundRefusal(F fn,const char* expected){
+ int descriptors[2];assert(pipe(descriptors)==0);const auto child=fork();assert(child>=0);
+ if(!child){close(descriptors[0]);assert(dup2(descriptors[1],STDERR_FILENO)>=0);close(descriptors[1]);fn();_exit(1);}
+ close(descriptors[1]);char bytes[1024]{};const auto count=read(descriptors[0],bytes,sizeof(bytes)-1);close(descriptors[0]);
+ int status=0;assert(waitpid(child,&status,0)==child&&WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);
+ assert(count>0&&std::strstr(bytes,expected));
+}
 int main(){
 #include "root_setup.inc"
 #include "pipeline_setup.inc"
@@ -71,7 +80,7 @@ int main(){
   witness.resolve=[](void*raw,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*){static_cast<PublicStorageState*>(raw)->resolved=true;return true;};
   witness.public_storage=[](void*raw,const runnable_jni::Context& c,native_hierarchy_cache::Witness*out,std::string*){auto& p=*static_cast<PublicStorageState*>(raw);assert(p.resolved&&c.env&&!stopped);++p.reads;if(!p.accept)return false;out->has_public_storage=true;out->public_types=p.cache->types;out->public_fields=p.cache->fields;out->public_methods=p.cache->methods;return true;};
   size_t typed_globals_before_begin=SchemaTypedGlobals();
-  if(!cache_role_fixture.Prepare(File(RUN_STATE_CACHE_DEX_FIXTURE),&env,&ti,*d.metadata,&error)){std::cerr<<"aggregate Public cache roles: "<<error<<"\n";std::abort();}
+  if(!cache_role_fixture.Prepare(File(RUN_STATE_CACHE_DEX_FIXTURE),&env,&ti,*d.metadata,*d.roots,&error)){std::cerr<<"aggregate Public cache roles: "<<error<<"\n";std::abort();}
   cache_role_fixture.Witness(&witness);typed_globals_before_begin=SchemaTypedGlobals();
   auto begin=[&](const native_schema_run_state::CacheCalibration& w){return native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},w,&error);};
   for(int missing_map=0;missing_map<3;++missing_map){auto complete=deps.mapping;if(missing_map==0)deps.mapping.owner=nullptr;else if(missing_map==1)deps.mapping.refresh_stopped=nullptr;else deps.mapping.extent=nullptr;assert(!begin(witness));assert(!native_schema_run_state::RunState::Current());deps.mapping=complete;}
@@ -106,8 +115,9 @@ int main(){
    // Exact live source queries remain necessary even on a failed plan: neither
    // a published DEX nor a source owner transferred to another driver may be
    // silently dropped. Child processes preserve the parent's full root set.
-   ExpectAbort([&]{registry_published=true;run->Refund();});
-   ExpectAbort([&]{Driver foreign=actual_driver;actual_owner.driver=&foreign;run->Refund();});
+   ExpectRefundRefusal([&]{registry_published=true;run->Refund();},"private-discard-source-DexFile-already-registered");
+   ExpectRefundRefusal([&]{Driver foreign=actual_driver;actual_owner.driver=&foreign;run->Refund();},"private-discard-source-definition-driver-differs");
+   ExpectRefundRefusal([&]{Put32(session_allocated,offsetof(class_metadata::Class11,dex_cache),0);run->Refund();},"private-temporary-Class-cache-differs");
    run->Refund();assert(!run->VerifyHierarchy(incomplete,0,actual_loader));assert(!gc&&!disabled&&!stopped&&Read32(thread.data())==0);assert(Read32(session_allocated,offsetof(class_metadata::Class17,status))>>28==14);
    assert(roots.Size()==0); // Registry released before source Holder/DEX exit.
    assert(Read32(collected,12)==uint32_t(uintptr_t(session_allocated))); // Original root intact.

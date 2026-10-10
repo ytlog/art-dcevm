@@ -197,17 +197,24 @@ bool Service::EnsureInstanceIds(const void* handle)noexcept {
  if(!originals_)return false;
  CaptureLinked(handle);return functions_.ensure_ids(handle);
 }
-bool Service::ValidatePrivateTemporary(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept{
- if(!monitor_||!originals_||!roots_->ReadyForSourceAccess())return false;
+bool Service::ValidatePrivateTemporary(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root,const char** refusal)const noexcept{
+ const auto reject=[&](const char* detail){if(refusal)*refusal=detail;return false;};
+ if(refusal)*refusal=nullptr;
+ if(!monitor_||!originals_)return reject("private-temporary-source-service-unavailable");
+ if(!roots_->ReadyForSourceAccess())return reject("private-temporary-source-not-Runnable");
  void* old=nullptr;void* object=nullptr;void* cache=nullptr;
- if(!pool.Read(old_root,&old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache)||!old||!object||old==object)return false;
+ if(!pool.Read(old_root,&old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache))return reject("private-temporary-owned-root-read-refused");
+ if(!old||!object||old==object)return reject("private-temporary-old-or-new-Class-identity-refused");
  field_copy::CopyClassView before{},after{};
- if(!Class(*metadata_,old,&before)||!Class(*metadata_,object,&after)||before.loader!=after.loader||
-    std::strcmp(before.descriptor,after.descriptor)||metadata_->Reference(object,offsetof(class_metadata::Class11,dex_cache))!=cache)return false;
+ if(!Class(*metadata_,old,&before)||!Class(*metadata_,object,&after))return reject("private-temporary-Class-metadata-refused");
+ if(before.loader!=after.loader||std::strcmp(before.descriptor,after.descriptor))return reject("private-temporary-Class-loader-or-descriptor-differs");
+ if(metadata_->Reference(object,offsetof(class_metadata::Class11,dex_cache))!=cache)return reject("private-temporary-Class-cache-differs");
  auto found=functions_.find(class_linker_,c.self,before.descriptor,loader_root);
- if(!pool.Read(old_root,&old)||found.reference!=uintptr_t(old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache)||old==object||
-    !Class(*metadata_,object,&after)||after.loader!=metadata_->Reference(old,offsetof(class_metadata::Class11,class_loader))||
-    std::strcmp(before.descriptor,after.descriptor)||metadata_->Reference(object,offsetof(class_metadata::Class11,dex_cache))!=cache)return false;
+ if(!pool.Read(old_root,&old)||!pool.Read(new_root,&object)||!pool.Read(cache_root,&cache))return reject("private-temporary-postlookup-owned-root-read-refused");
+ if(found.reference!=uintptr_t(old))return reject("private-temporary-original-Class-lookup-differs");
+ if(old==object||!Class(*metadata_,object,&after))return reject("private-temporary-postlookup-Class-metadata-refused");
+ if(after.loader!=metadata_->Reference(old,offsetof(class_metadata::Class11,class_loader))||std::strcmp(before.descriptor,after.descriptor))return reject("private-temporary-postlookup-Class-loader-or-descriptor-differs");
+ if(metadata_->Reference(object,offsetof(class_metadata::Class11,dex_cache))!=cache)return reject("private-temporary-postlookup-Class-cache-differs");
  return true;
 }
 bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& pool,void* old_root,void* new_root,void* cache_root,void* loader_root)const noexcept{
@@ -377,17 +384,22 @@ bool Batch::Complete(bool committed,std::string* error){
  }
  s.finished=true;return true;
 }
-bool Batch::DiscardPrivate(const native_hierarchy_private_ledger::Ledger&ledger)noexcept{
- auto&s=*state_;if(s.finished)return true;if(s.committing||s.pending||!s.pool.ReadyForSourceAccess())return false;
+bool Batch::DiscardPrivate(const native_hierarchy_private_ledger::Ledger&ledger,const char** refusal)noexcept{
+ auto&s=*state_;const auto reject=[&](const char* detail){if(refusal)*refusal=detail;return false;};
+ if(refusal)*refusal=nullptr;
+ if(s.finished)return true;
+ if(s.committing)return reject("private-discard-mutation-already-begun");
+ if(s.pending)return reject("private-discard-original-allocation-still-open");
+ if(!s.pool.ReadyForSourceAccess())return reject("private-discard-owned-roots-not-Runnable");
  // Finish every source/private identity query before releasing ANY root. A
  // rejected/foreign/registered entry leaves the complete root set intact.
  for(const auto&r:s.records){
   if(!r.captured&&!r.captured_allocated)continue;
   const auto&v=r.view;const native_hierarchy_source_cache::RecordView record{v.source_owner,v.class_index,v.old_root,v.new_root,v.cache_root,v.parent_root,v.declarations,v.dex};
-  if(!ledger.CanDiscard(record))return false;
-  if(r.captured&&!s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.view.new_root,r.view.cache_root,r.loader_root))return false;
+  if(!ledger.CanDiscard(record,refusal))return false;
+  if(r.captured&&!s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.view.new_root,r.view.cache_root,r.loader_root,refusal))return false;
   if(r.captured_allocated&&s.Get(r.allocated_root)!=s.Get(r.view.new_root)&&
-     !s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.allocated_root,r.view.cache_root,r.loader_root))return false;
+     !s.service.ValidatePrivateTemporary(s.context,s.pool,r.view.old_root,r.allocated_root,r.view.cache_root,r.loader_root,refusal))return false;
  }
  s.finished=true;return true;
 }

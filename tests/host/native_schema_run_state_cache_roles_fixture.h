@@ -27,7 +27,7 @@ struct PreparedCacheRoles {
  static jvmtiError Signature(jvmtiEnv*,jclass c,char**out,char**){if(c==reinterpret_cast<jclass>(active->primitive))*out=strdup("I");else *out=strdup(Public(c).descriptor.c_str());return JVMTI_ERROR_NONE;}
  static void* DecodeMethod(void*,jmethodID id){(void)PublicMethodIndex(id);return id;}
  static void* DecodeField(void*,jfieldID id){(void)PublicFieldIndex(id);return id;}
- bool Prepare(const std::vector<unsigned char>& original,JNIEnv*e,jvmtiEnv*ti,const modern_field_metadata::FieldMetadata& metadata,std::string*error){
+ bool Prepare(const std::vector<unsigned char>& original,JNIEnv*e,jvmtiEnv*ti,const modern_field_metadata::FieldMetadata& metadata,const source_handle_roots::Service& roots,std::string*error){
   env=e;bytes=original;if(!source_cache_role_catalog::Read(bytes.data(),bytes.size(),&catalog,error))return false;
   auto*file=static_cast<dex_mapping_abi::Prefix*>(original_file);*file={nullptr,bytes.data(),bytes.size(),bytes.data(),bytes.size()};
   old_class->dex_class_def_index=0;old_class->dex_type_index=int32_t(Read32(bytes.data(),Read32(bytes.data(),100)));
@@ -37,7 +37,7 @@ struct PreparedCacheRoles {
   auto&jni=*const_cast<JNINativeInterface_*>(e->functions);auto&v=*const_cast<jvmtiInterface_1*>(ti->functions);
   jni.FindClass=FindClass;jni.NewStringUTF=String;jni.DeleteLocalRef=DeleteLocal;jni.GetStaticMethodID=StaticMethod;jni.GetMethodID=Method;jni.CallStaticObjectMethodV=StaticCall;jni.GetStaticFieldID=StaticField;jni.GetFieldID=Field;jni.GetStaticObjectField=StaticObject;jni.ToReflectedField=ReflectedField;jni.ToReflectedMethod=ReflectedMethod;
   v.GetClassSignature=Signature;v.GetClassLoader=Loader;v.GetClassFields=GuardFields;v.GetFieldName=GuardFieldName;v.GetFieldModifiers=GuardFieldFlags;v.GetClassMethods=GuardMethods;v.GetMethodName=GuardMethodName;v.GetMethodModifiers=GuardMethodFlags;v.GetFieldDeclaringClass=FieldOwner;v.GetMethodDeclaringClass=MethodOwner;v.GetImplementedInterfaces=GuardInterfaces;
-  source_cache_public_roles::Bindings binding{this,DecodeMethod,DecodeField,Leaf,FieldLeaf,&metadata,method_metadata::kAndroid12Onward};
+  source_cache_public_roles::Bindings binding{this,DecodeMethod,DecodeField,Leaf,FieldLeaf,&metadata,method_metadata::kAndroid12Onward};binding.roots=&roots;
   // This is the pre-Run ordinary native producer boundary; its internal
   // executor callback returns to Native before original source resumes.
   OwnerNative(thread.data());
