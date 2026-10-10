@@ -103,6 +103,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_hierarchy_receiver.cc
     platform/common/native_hierarchy_typed_storage.cc
     platform/common/native_typed_heap_walk.cc
+    platform/common/native_weak_sweep_observer.cc
     platform/common/native_typed_heap_calibration.cc
     platform/common/native_receiver_guard.cc
     platform/common/native_receiver_guard_episode.cc

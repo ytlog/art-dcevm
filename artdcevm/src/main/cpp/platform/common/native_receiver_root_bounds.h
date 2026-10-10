@@ -2,6 +2,8 @@
 #include "platform/common/native_receiver_original_ingress.h"
 #include "platform/common/class_metadata_abi.h"
 #include "platform/common/dex_mapping_abi.h"
+#include "platform/common/native_receiver_dex_view.h"
+#include "platform/abi/arm64/common/class_relationships.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include <array>
 #include <algorithm>
@@ -16,6 +18,14 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  public:
  OriginalRootBounds(EntrySource&entry,const modern_field_metadata::FieldMetadata&metadata)
    :entry_(entry),metadata_(metadata){}
+ // Ordinary setup only. A named typed leaf grants provenance to its fresh
+ // ClassExt strong-root result; it grants no arbitrary address or Guard proof.
+ bool BindHistory(HookEngine&hooks)noexcept {
+  if(history_||inventory_.owner||!metadata_.Calibrated()||!entry_.OwnsMetadata(metadata_))return false;
+  auto leaf=reinterpret_cast<abi::arm64::android_common::ObsoleteClass>(
+      hooks.FindSymbol("libart.so",abi::arm64::android_common::kObsoleteClass));
+  if(!leaf)return false;history_=leaf;return true;
+ }
  bool Enter(const abi::common::RunnableJniScope&actual,void*method,jobject receiver,
             modern_field_metadata::ReadContext*out)noexcept override {
   return EnterMember(actual,method,false,receiver,out);
@@ -36,6 +46,7 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   if(ok&&roots.local_slot)ok=Add(roots.local_slot,4);
   if(ok&&roots.receiver)ok=Add(roots.receiver,8)&&Class(metadata_.Reference(roots.receiver,0));
   for(size_t n=0;ok&&n<i.class_count;++n)ok=ExpandClass(i.classes[n]);
+  if(ok&&history_)ok=ValidateHistory();
   if(ok&&field)ok=OwnsField(roots.declaring,method);
   if(!ok||!Current()){Reset();return false;}
   *out={this,Extent};return true;
@@ -48,12 +59,12 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  // pointer survives Leave. Deep/custom hierarchies refuse instead of widening.
  struct Inventory {
   OriginalRootBounds*owner;const abi::common::RunnableJniScope*actual;
-  std::array<Range,1024>ranges;std::array<void*,128>classes;
+  std::array<Range,1024>ranges;std::array<void*,128>classes,history;
   size_t count,class_count;
  };
  inline static thread_local Inventory inventory_{};
  bool Current()const noexcept{return inventory_.owner==this&&inventory_.actual&&entry_.OriginalScopeCurrent(*inventory_.actual);}
- void Reset()noexcept {auto&i=inventory_;i.ranges.fill({0,0});i.classes.fill(nullptr);i.owner=nullptr;i.actual=nullptr;i.count=0;i.class_count=0;}
+ void Reset()noexcept {auto&i=inventory_;i.ranges.fill({0,0});i.classes.fill(nullptr);i.history.fill(nullptr);i.owner=nullptr;i.actual=nullptr;i.count=0;i.class_count=0;}
  bool Add(const void*p,size_t size)noexcept {
   auto&i=inventory_;auto begin=uintptr_t(p);
   if(!p||!size||begin>UINTPTR_MAX-size)return false;
@@ -136,8 +147,55 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   if(loader&&!Add(loader,8))return false;
   const auto&fields=metadata_.StorageModel()==modern_field_metadata::Model::kSplit?
       field_array::kSplit:field_array::kMerged17;
-  return NativeFields(klass,fields,false)&&(!fields.merged?NativeFields(klass,fields,true):true)&&
-      Interfaces(klass)&&Dex(klass)&&Current();
+  if(!NativeFields(klass,fields,false)||(!fields.merged&&!NativeFields(klass,fields,true))||
+      !Interfaces(klass)||!Dex(klass)||!Current())return false;
+  if(history_){
+   // GetObsoleteClass -> ClassExt::obsolete_class_ uses ART's original read
+   // barrier and returns ObjPtr<Class> under this shared-mutator borrow. No
+   // ClassExt field offset, JNI decoder, map or cached pointer is consulted.
+   auto*old=reinterpret_cast<void*>(history_(klass).reference);
+   if(!Current()||!Class(old))return false;
+   for(size_t n=0;n<inventory_.class_count;++n)if(inventory_.classes[n]==klass){inventory_.history[n]=old;break;}
+  }
+  return Current();
+ }
+ bool HistoryIdentity(void*klass,field_copy::CopyClassView*out)noexcept {
+  const auto&layout=metadata_.StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
+  class_metadata::State state;class_metadata::Identity identity;
+  if(!Current()||!class_metadata::ReadState(layout,klass,layout.size,&state)||state.IsPrimitive()||
+     (state.access_flags&0x40000u)||metadata_.Reference(klass,offsetof(class_metadata::Class11,component_type))||
+     !class_metadata::ReadIdentity(layout,klass,layout.size,&identity)||identity.class_def_index<0||identity.dex_type_index<0)return false;
+  auto*meta=metadata_.Reference(klass,0);
+  if(!meta||metadata_.Reference(meta,0)!=meta)return false;
+  auto*cache=metadata_.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
+  if(!cache)return false;
+  auto*file=reinterpret_cast<void*>(uintptr_t(Scalar<uint64_t>(cache,offsetof(abi::arm64::android11::LegacyCache,dex_file))));
+  if(!file)return false;dex_mapping_abi::Prefix prefix;std::memcpy(&prefix,file,sizeof(prefix));
+  modern_field_metadata::ReadContext context{this,Extent};
+  BoundedDexView dex({prefix.begin,Scalar<uint32_t>(prefix.begin,32),prefix.data_begin,prefix.data_size,uint32_t(identity.class_def_index)});
+  const char*descriptor=nullptr;uint32_t flags=0,type=0;
+  if(!dex.Initialize()||!dex.Identity(&descriptor,&flags,&type)||type!=uint32_t(identity.dex_type_index)||
+     (flags&0x7631u)!=(state.access_flags&0x7631u)||!metadata_.ClassIdentity(klass,out,nullptr,&context)||
+     !out->descriptor||std::strcmp(out->descriptor,descriptor)||!Current())return false;
+  // The inventory provenance is the original typed root, never this descriptor.
+  out->descriptor=descriptor;return true;
+ }
+ bool ValidateHistory()noexcept {
+  const auto&i=inventory_;
+  for(size_t n=0;n<i.class_count;++n){
+   if(!i.history[n])continue;
+   field_copy::CopyClassView owner;if(!HistoryIdentity(i.classes[n],&owner))return false;
+   void*old=i.history[n];size_t steps=0;
+   while(old){
+    if(++steps>=i.class_count||old==i.classes[n])return false;
+    size_t at=0;for(;at<i.class_count&&i.classes[at]!=old;++at){}
+    if(at==i.class_count)return false;
+    field_copy::CopyClassView identity;
+    if(!HistoryIdentity(old,&identity)||identity.loader!=owner.loader||std::strcmp(identity.descriptor,owner.descriptor))return false;
+    old=i.history[at];
+   }
+  }
+  return Current();
  }
  static bool Extent(void*p,const void*address,size_t*out)noexcept {
   if(!out)return false;*out=0;auto&owner=*static_cast<OriginalRootBounds*>(p);
@@ -147,5 +205,6 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   return *out!=0&&owner.Current();
  }
  EntrySource&entry_;const modern_field_metadata::FieldMetadata&metadata_;
+ abi::arm64::android_common::ObsoleteClass history_=nullptr;
 };
 }

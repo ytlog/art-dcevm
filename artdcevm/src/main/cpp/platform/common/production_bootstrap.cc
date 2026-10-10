@@ -141,9 +141,11 @@ struct NativeEngine final:Engine {
   auto named_current=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
   typed_heap_attempted=true;
   bool observed=false;
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned typed heap calibration phase=prepare-begin");
   try{observed=native_typed_heap_calibration::Prepare(hooks,env,bootstrap_storage,runtime.receivers.heap,
       named_current,metadata,permission_exclusive,&typed_heap,&typed_heap_diagnostic);}
   catch(...){typed_heap_diagnostic="Typed heap private calibration producer threw";}
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned typed heap calibration phase=prepare-return observed=%d",int(observed));
   if(env->ExceptionCheck()){
    compiled_frame_fixture::DescribePending(env,"typed-heap-private-oracle",&typed_heap_diagnostic);
    env->ExceptionClear();observed=false;

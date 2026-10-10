@@ -105,10 +105,16 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  s.typed_storage=std::make_unique<native_hierarchy_typed_storage::Proof>(*s.d.typed_heap,*s.d.roots,*s.d.members.metadata);
  // Public Field.getType can load Classes. Finish its complete fixed point
  // before the hierarchy owner snapshots the actual loaded-Class graph.
- if(!s.typed_storage->Stage(*s.d.hooks,s.context,ti,error))return false;
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=typed-inventory-begin");
+ const bool typed_staged=s.typed_storage->Stage(*s.d.hooks,s.context,ti,error);
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=typed-inventory-return accepted=%d",int(typed_staged));
+ if(!typed_staged)return false;
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get(),[](void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongPair(c,a,b,left,right);}};
  if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
- if(!s.authority.Stage(s.context,ti,inputs,graph,error)){if(error&&error->empty())*error="Source hierarchy authority staging rejected actual public graph";return false;}
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=hierarchy-inventory-begin");
+ const bool hierarchy_staged=s.authority.Stage(s.context,ti,inputs,graph,error);
+ __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=hierarchy-inventory-return accepted=%d",int(hierarchy_staged));
+ if(!hierarchy_staged){if(error&&error->empty())*error="Source hierarchy authority staging rejected actual public graph";return false;}
  native_hierarchy_session::Bindings b{s.driver,s.context,s.d.hooks,s.d.members.metadata,s.d.roots,&s.pool,&s.authority,s.d.allocator,&s.access,native_hierarchy_source_checks::RefuseActualClass,native_owned_removal::ObserveSourceFailure,s.ledger.get(),this,CompleteRefund};
  s.hierarchy=std::make_unique<native_hierarchy_session::Session>(b);
  if(!s.hierarchy->Ready())return Fail(error,"Actual original schema Session did not accept staged graph");
