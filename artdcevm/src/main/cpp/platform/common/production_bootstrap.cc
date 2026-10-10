@@ -1,3 +1,4 @@
+#include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_field_factory_observer.h"
@@ -363,27 +364,31 @@ struct NativeEngine final:Engine {
  std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
  bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
- void* (*lazy_decode_field)(void*,jfieldID)=nullptr;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
   auto& e=*static_cast<NativeEngine*>(raw);
-  if(!id||!declaring||!e.lazy_decode_field||scope.vm!=e.vm||!scope.env||scope.self!=e.graph_current())return nullptr;
-  void* field=e.lazy_decode_field(e.runtime.receivers.jni_id_manager,id);
-  return field&&e.metadata.FieldDeclaringClass(field)==declaring?field:nullptr;
+  if(!id||!declaring||scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current())return nullptr;
+  // Consume only the same exact Class/opaque ID already publicly proved and
+  // strongly rooted by the shared Field Store. A JNI ID is not an ArtField*.
+  if(void* field=e.graph_fields.ReadNative(declaring,id))return field;
+  void* found=nullptr;
+  for(const auto& oracle:e.live_field_oracles){
+   if(oracle.id!=id)continue;void *owner=nullptr,*mirror=nullptr;
+   if(!FieldOracle(&e,scope,oracle.exact_owner,&owner)||!FieldOracle(&e,scope,oracle.strong_field,&mirror))return nullptr;
+   if(owner!=declaring)continue;
+   void* field=FieldLeaf(&e,mirror);
+   if(!field||field!=oracle.native_field||FieldOwner(&e,field)!=declaring||found)return nullptr;
+   found=field;
+  }
+  return scope.self==e.graph_current()?found:nullptr;
  }
  static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
-  auto& e=*static_cast<NativeEngine*>(raw);if(!out||!env||env->ExceptionCheck())return false;*out=nullptr;
-  if(e.lazy_fields.Ready())return e.lazy_fields.Create(env,owner,id,statik,out,error);
-  // Ordinary public behavior remains available when the exact source factory
-  // is absent. Its real exception is preserved; no optional declaration is skipped.
-  jobject local=env->ToReflectedField(owner,id,statik?JNI_TRUE:JNI_FALSE);
-  if(!local||env->ExceptionCheck()){if(local)env->DeleteLocalRef(local);if(error)*error="Public contextual Field round trip unavailable"+(e.field_factory_diagnostic.empty()?std::string{}:"; "+e.field_factory_diagnostic);return false;}
-  *out=env->NewGlobalRef(local);env->DeleteLocalRef(local);
-  return *out&&!env->ExceptionCheck();
+  (void)raw;
+  // First Stage must obtain an original false-resolve mirror before Store
+  // publication. Reusing lazy Create here would depend on that same Store.
+  return public_declared_field_mirror::Create(env,owner,id,statik,out,error);
  }
  bool PrepareLazyFields(JNIEnv* env,std::string* error){
   if(lazy_fields.Ready())return true;
-  lazy_decode_field=reinterpret_cast<decltype(lazy_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
-  if(!lazy_decode_field)return true; // Preserve the existing public factory route.
   if(!PrepareLiveFieldOracles(env,error))return false;
   native_lazy_field_mirror::Bindings b;b.owner=this;
   b.matched_release_carrier=runnable_executor::Available()&&metadata.Calibrated()&&field_mirror.matched&&field_mirror.checked==28;
@@ -1402,10 +1407,9 @@ bool NativeEngine::PrepareStaticFieldConsumers(JNIEnv* env,jvmtiEnv* ti,std::str
  graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
  graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject));
  if(!graph_decode)graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject));
- lazy_decode_field=reinterpret_cast<decltype(lazy_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
  // Binding this original exception leaf grants no final/access permission.
  if(!permission_raise)permission_raise=reinterpret_cast<ThrowException>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"));
- if(!graph_current||!graph_current()||!graph_field_leaf||!graph_decode||!lazy_decode_field||!permission_raise)return Fail(error,"Static field source consumer named readers unavailable");
+ if(!graph_current||!graph_current()||!graph_field_leaf||!graph_decode||!permission_raise)return Fail(error,"Static field source consumer named readers unavailable");
  if(!PrepareLiveFieldOracles(env,error)||!ObserveFieldFactory(env,ti,error))return false;
  if(!field_factory_observer.NormalizerInstalled())return Fail(error,"Static field source consumer lacks sole installed normalizer");
  if(field_factory_observer.FourArgument()&&!std::all_of(field_factory_public_roots.begin(),field_factory_public_roots.end(),[](bool proven){return proven;}))return Fail(error,"Static field source consumer lacks actual extra-Handle public root proof");
@@ -1430,28 +1434,27 @@ bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
   jobject mirror=reflected?prepared.Own(reflected):nullptr;
   if(reflected)env->DeleteLocalRef(reflected);
   if(!mirror||env->ExceptionCheck()||env->FromReflectedField(mirror)!=ids[i])return Fail(error,"Independent live Field public ID round trip failed");
+  std::string identity_error;
+  auto identity=contextual_field_id::Prepare(env,mirror,ids[i],&identity_error);
+  struct ReleaseProof {JNIEnv* env;std::shared_ptr<contextual_field_id::Proof>* proof;~ReleaseProof(){contextual_field_id::Release(env,proof);}} release{env,&identity};
+  if(!identity){if(error)*error="Independent live Field public identity unavailable: "+identity_error;return false;}
   struct Decode {
-   NativeEngine& engine;jclass owner;jobject mirror;jfieldID id;void* field=nullptr;
-   const char* stage="callback-not-entered";void *klass=nullptr,*raw_mirror=nullptr,*opaque_field=nullptr,*declaring=nullptr,*actual_self=nullptr,*actual_vm=nullptr;
+   NativeEngine& engine;jclass owner;jobject mirror;void* expected;void* field=nullptr;
+   const char* stage="callback-not-entered";void *klass=nullptr,*raw_mirror=nullptr,*declaring=nullptr,*actual_self=nullptr,*actual_vm=nullptr;
    static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Decode*>(raw);r.actual_self=context.self;r.actual_vm=context.vm;
     r.stage="public-Class-root";if(!FieldOracle(&r.engine,context,r.owner,&r.klass)||!r.klass)return false;
     r.stage="public-Field-root";if(!FieldOracle(&r.engine,context,r.mirror,&r.raw_mirror)||!r.raw_mirror)return false;
     r.stage="actual-Thread-VM";if(context.vm!=r.engine.vm||!context.env||context.self!=r.engine.graph_current())return false;
-    r.stage="original-opaque-ID";if(!r.engine.lazy_decode_field||!r.engine.runtime.receivers.jni_id_manager)return false;
-    r.opaque_field=r.engine.lazy_decode_field(r.engine.runtime.receivers.jni_id_manager,r.id);if(!r.opaque_field)return false;
     r.stage="original-GetArtField";r.field=FieldLeaf(&r.engine,r.raw_mirror);
-    // Only an exact original opaque-ID identity may be read as ArtField.
-    // A returned managed Class/mirror or foreign identity must never enter
-    // the ArtField root reader merely to obtain an explanatory diagnostic.
-    r.stage="original-leaf-ID-equality";if(!r.field||r.field!=r.opaque_field)return false;
+    r.stage="original-leaf-public-proof-equality";if(!r.field||!r.expected||r.field!=r.expected)return false;
     r.stage="declaring-Class";r.declaring=FieldOwner(&r.engine,r.field);
     if(r.declaring!=r.klass)return false;r.stage="verified";return true;
    }
-  } decode{*this,owner,mirror,ids[i]};
+  } decode{*this,owner,mirror,contextual_field_id::NativeField(identity)};
   if(!FieldScope(this,env,mirror,Decode::Run,&decode)){
    if(error)*error="Independent live Field native/public identities differ index="+std::to_string(i)+" stage="+decode.stage+
     " class="+std::to_string(uintptr_t(decode.klass))+" mirror="+std::to_string(uintptr_t(decode.raw_mirror))+
-    " leaf="+std::to_string(uintptr_t(decode.field))+" opaque="+std::to_string(uintptr_t(decode.opaque_field))+
+    " leaf="+std::to_string(uintptr_t(decode.field))+" expected="+std::to_string(uintptr_t(decode.expected))+
     " declaring="+std::to_string(uintptr_t(decode.declaring))+" self="+std::to_string(uintptr_t(decode.actual_self))+
     " vm="+std::to_string(uintptr_t(decode.actual_vm))+" expectedVM="+std::to_string(uintptr_t(vm))+
     " route="+runnable_executor::Route();
@@ -1546,6 +1549,8 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   number|=std::strcmp(name.p,"number")==0&&std::strcmp(type.p,"I")==0;
   missing|=std::strcmp(name.p,"optional")==0&&std::strcmp(type.p,"Lcom/github/ytlog/artdcevm/internal/MissingOptionalType;")==0;
   ids[size_t(i)]=fields[i];
+  jint flags=0;if(ti->GetFieldModifiers(owner,fields[i],&flags)!=JVMTI_ERROR_NONE||env->ExceptionCheck())return false;
+  if(!graph_fields.Stage(env,owner,fields[i],(flags&8)!=0,error))return false;
  }
  if(!number||!missing)return Fail(error,"Missing-optional public field declarations disagree with fixture");
  struct Decode {
