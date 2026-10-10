@@ -42,10 +42,18 @@ public final class ProductionPermissionScenarios {
             byte[] bytes=new byte[8192];int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);return out.toByteArray();
         }
     }
+    private void captureFailure(Throwable original) {
+        ProductionFailureCapture.record(report, original, new ProductionFailureCapture.Probe() {
+            public String capabilities() { return NativeBridge.capabilities(); }
+            public String errorName(int code) { return NativeBridge.errorName(code); }
+        });
+    }
     private void stage(String value) throws Exception {report.put("stage",value);phases.mark("permission."+value);}
     private void apply(String variant,Class<?> cls) throws Exception {
         stage("apply-"+variant+".before");
-        int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{asset(variant+"/"+cls.getName().replace('.','/')+".dex")});
+        byte[] replacement=asset(variant+"/"+cls.getName().replace('.','/')+".dex");
+        stage("apply-"+variant+".native.before");
+        int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{replacement});
         applies.put(new JSONObject().put("variant",variant).put("code",result));
         report.put("capabilitiesAfterApply",new JSONObject(NativeBridge.capabilities()));
         equal(0,result);stage("apply-"+variant+".after");
@@ -66,14 +74,14 @@ public final class ProductionPermissionScenarios {
         phases=new TestPhaseLog(runId,context.getFilesDir());
         try {
             stage("initialize.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
-            if(scope.equals("full"))DcevmRuntime.initialize(context);
+            if(scope.equals("full")){stage("required-full-initialize.before");DcevmRuntime.initialize(context);}
             JSONObject caps=new JSONObject(NativeBridge.capabilities());report.put("capabilities",caps);
             check(scope.equals("full")?caps.optBoolean("evolutionAvailable"):
                 caps.optString("backend").equals("runtime-capabilities")&&caps.optBoolean("partialEvolutionAvailable"),"Production owner unavailable: "+caps);
-            System.loadLibrary("artdcevm_test_support");supportLoaded=true;stage("scenario.before");
+            stage("support-load.before");System.loadLibrary("artdcevm_test_support");supportLoaded=true;stage("scenario.before");
             if(name.equals("final-fields"))finalFields();else fieldAccess();
             stage("finished");report.put("passed",true);
-        } catch(Throwable e) {report.put("failureType",e.getClass().getName()).put("failure",String.valueOf(e.getMessage()));throw e;
+        } catch(Throwable e) {captureFailure(e);throw e;
         } finally {
             if(supportLoaded)ProductionPermissionNative.release();
             File dir=new File(context.getFilesDir(),"production-permissions");

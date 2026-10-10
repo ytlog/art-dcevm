@@ -60,6 +60,12 @@ public final class ProductionSchemaScenarios {
             file.finishWrite(stream);
         } catch(IOException error) {file.failWrite(stream);throw error;}
     }
+    private void captureFailure(Throwable original) {
+        ProductionFailureCapture.record(report, original, new ProductionFailureCapture.Probe() {
+            public String capabilities() { return NativeBridge.capabilities(); }
+            public String errorName(int code) { return NativeBridge.errorName(code); }
+        });
+    }
     private void stage(String name) throws Exception { report.put("stage",name);phases.mark("schema."+name); }
     private byte[] asset(String variant,Class<?> cls) throws Exception {
         String path=variant+"/"+cls.getName().replace('.','/')+".dex";
@@ -69,7 +75,9 @@ public final class ProductionSchemaScenarios {
     }
     private void apply(String variant,Class<?> cls) throws Exception {
         stage("apply-"+variant+".before");
-        int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{asset(variant,cls)});
+        byte[] replacement=asset(variant,cls);
+        stage("apply-"+variant+".native.before");
+        int result=NativeBridge.apply(2,new Class<?>[]{cls},new byte[][]{replacement});
         report.put("lastApplyCode",result);
         report.put("capabilitiesAfterApply",new JSONObject(NativeBridge.capabilities()));
         assertEquals(variant+": "+NativeBridge.errorName(result),0,result);
@@ -106,7 +114,7 @@ public final class ProductionSchemaScenarios {
             stage("support-load.before");System.loadLibrary("artdcevm_test_support");
             stage("scenario.before");action.run();stage("finished");report.put("passed",true);
         } catch(Throwable error) {
-            report.put("failureType",error.getClass().getName()).put("failure",String.valueOf(error.getMessage()));throw error;
+            captureFailure(error);throw error;
         } finally {
             try {persistReport(runId);} catch(IOException error) {
                 report.put("reportPersistenceError",String.valueOf(error));
