@@ -11,12 +11,14 @@
 namespace artdcevm::native_initializer_episode {
 namespace {
 using namespace abi::arm64::android11;
+enum Fault : uint32_t {kLinkerMismatch=1u,kInitializationFlags=2u,
+ kInitializationCompletion=4u,kWaitEntry=8u,kWaitCompletion=16u};
 struct Trial {
  jobject fixture=nullptr;
  bool failure=false;
  std::atomic<void*> owner{nullptr},waiter{nullptr},linker{nullptr};
- std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},wait_enter{0},wait_exit{0};
- std::atomic<bool> valid{true},body_ready{false};
+ std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},terminal_enter{0},terminal_exit{0},wait_enter{0},wait_exit{0},faults{0};
+ std::atomic<bool> body_ready{false};
 };
 struct Installed {
  const Service* owner=nullptr;
@@ -90,17 +92,23 @@ bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool
  EntryLifetime episode(linker,self,handle,statics,parents);
  BorrowTrial borrowed;Trial* trial=borrowed.value;uint32_t status=0,tid=0;
  const bool matched=trial&&ReadHandle(*trial,self,handle,&status,&tid);
+ // Original source may revisit a poisoned or already initialized Class. The
+ // Java error oracle intentionally does so; these terminal fast returns are
+ // distinct from the one owner and one waiting initialization invocation.
+ const bool terminal=matched&&(status==3||(status>=14&&status<=15));
  if(!matched)borrowed.Release();
  if(matched){void*empty=nullptr;trial->linker.compare_exchange_strong(empty,linker);
-  if(!linker||trial->linker.load()!=linker)trial->valid.store(false,std::memory_order_release);
-  trial->init_enter.fetch_add(1,std::memory_order_relaxed);
-  if(!statics||!parents)trial->valid.store(false,std::memory_order_release);}
+  if(!linker||trial->linker.load()!=linker)trial->faults.fetch_or(kLinkerMismatch,std::memory_order_release);
+  (terminal?trial->terminal_enter:trial->init_enter).fetch_add(1,std::memory_order_relaxed);
+  if(!statics||!parents)trial->faults.fetch_or(kInitializationFlags,std::memory_order_release);}
  const bool result=installed.initialize(linker,self,handle,statics,parents);
  if(matched){uint32_t completed=0,unused=0;
-  if(!ReadHandle(*trial,self,handle,&completed,&unused)||
-     result==trial->failure||(trial->failure?completed!=3:(completed<14||completed>15)))
-   trial->valid.store(false,std::memory_order_release);
-  trial->init_exit.fetch_add(1,std::memory_order_release);
+  const bool completion=ReadHandle(*trial,self,handle,&completed,&unused)&&
+      (terminal?(status==3?trial->failure&&!result&&completed==3:
+                           !trial->failure&&result&&completed>=status&&completed<=15):
+                result!=trial->failure&&(trial->failure?completed==3:(completed>=14&&completed<=15)));
+  if(!completion)trial->faults.fetch_or(kInitializationCompletion,std::memory_order_release);
+  (terminal?trial->terminal_exit:trial->init_exit).fetch_add(1,std::memory_order_release);
  }
  return result;
 }
@@ -114,7 +122,7 @@ bool HookWait(void* linker,ClassHandle handle,void* self,void* lock){
      self==trial->owner.load(std::memory_order_acquire)||status!=13||
      tid!=trial->tid.load(std::memory_order_acquire)||
      trial->wait_enter.fetch_add(1,std::memory_order_acq_rel)!=0)
-   trial->valid.store(false,std::memory_order_release);
+   trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
  }
  // Original source owns ObjectLock::WaitIgnoringInterrupts, status rereads,
  // NCDFE synthesis and the eventual return. The observer never simulates it.
@@ -122,7 +130,7 @@ bool HookWait(void* linker,ClassHandle handle,void* self,void* lock){
  if(matched){uint32_t completed=0,unused=0;
   if(!ReadHandle(*trial,self,handle,&completed,&unused)||
      result==trial->failure||(trial->failure?completed!=3:(completed<14||completed>15)))
-   trial->valid.store(false,std::memory_order_release);
+   trial->faults.fetch_or(kWaitCompletion,std::memory_order_release);
   trial->wait_exit.fetch_add(1,std::memory_order_release);
  }
  return result;
@@ -151,7 +159,7 @@ jboolean Body(JNIEnv* env,jclass,jclass klass,jint public_tid){
   if(std::chrono::steady_clock::now()>=deadline)return JNI_FALSE;
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
  }
- return trial->valid.load(std::memory_order_acquire)?JNI_TRUE:JNI_FALSE;
+ return trial->faults.load(std::memory_order_acquire)==0?JNI_TRUE:JNI_FALSE;
 }
 jboolean Waiter(JNIEnv* env,jclass){
  BorrowTrial borrowed;Trial* trial=borrowed.value;
@@ -263,15 +271,22 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
   // Also drain an unrelated source hook which may have loaded this epoch before
   // it was unpublished. No Class/global/stack Trial is freed while it is read.
   while(readers.load(std::memory_order_seq_cst)!=0)std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  ok=!env->ExceptionCheck()&&result==1&&trial.valid.load(std::memory_order_acquire)&&
+  ok=!env->ExceptionCheck()&&result==1&&trial.faults.load(std::memory_order_acquire)==0&&
       trial.owner.load()!=nullptr&&trial.waiter.load()!=nullptr&&trial.owner.load()!=trial.waiter.load()&&
-      trial.init_enter.load()==2&&trial.init_exit.load()==2&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1&&
+      trial.init_enter.load()==2&&trial.init_exit.load()==2&&trial.terminal_enter.load()==trial.terminal_exit.load()&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1&&
       trial.linker.load()!=nullptr&&(!installed.class_linker||installed.class_linker==trial.linker.load());
   if(ok)installed.class_linker=trial.linker.load();
+  else if(error)*error="Original initialization episode "+std::string(failure?"error":"success")+
+      " rejected [javaResult="+std::to_string(result)+" faults="+std::to_string(trial.faults.load())+
+      " bodyReady="+std::to_string(trial.body_ready.load())+" owner="+std::to_string(trial.owner.load()!=nullptr)+
+      " waiter="+std::to_string(trial.waiter.load()!=nullptr)+" init="+std::to_string(trial.init_enter.load())+
+      "/"+std::to_string(trial.init_exit.load())+" terminal="+std::to_string(trial.terminal_enter.load())+
+      "/"+std::to_string(trial.terminal_exit.load())+" wait="+std::to_string(trial.wait_enter.load())+
+      "/"+std::to_string(trial.wait_exit.load())+"]";
   env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);
  }
  env->DeleteLocalRef(oracle);
- if(!ok)return Fail(error,"Original initialization/wait roots, return, normal/error completion and Java body oracle disagree");
+ if(!ok){if(error&&error->empty())*error="Original initialization/wait roots or Java body oracle unavailable";return false;}
  ready.store(true,std::memory_order_release);if(error)error->clear();return true;
 }
 bool Service::ReadyFor(const modern_field_metadata::FieldMetadata& metadata,

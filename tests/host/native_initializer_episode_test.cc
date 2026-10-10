@@ -23,7 +23,7 @@ std::mutex original_monitor;std::condition_variable original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion};
 Case selected=Case::Positive;
 int type_id,run_episode_id;
 constexpr uint32_t source_tid=913;
@@ -51,6 +51,11 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  assert(self==current&&Read32(current)==0&&statics&&parents);
  auto* type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(*handle.slot));
  std::unique_lock<std::mutex> lock(original_monitor);
+ if(LoadStatus(type)==3||LoadStatus(type)>=14){
+  const bool result=LoadStatus(type)>=14;
+  if(selected==Case::WrongTerminalCompletion)StoreStatus(type,12);
+  return selected==Case::WrongTerminalReturn?!result:result;
+ }
  if(LoadStatus(type)==13){
   uint32_t foreign=uint32_t(uintptr_t(type));ClassHandle waiter_handle{selected==Case::UnownedWaitHandle?&foreign:handle.slot};
   bool result=wait_proxy(linker,waiter_handle,selected==Case::WrongWaitSelf?foreign_thread.data():self,&lock);
@@ -113,15 +118,16 @@ jobject EpisodeType(JNIEnv*,jclass type,jmethodID method,va_list args){
  return reinterpret_cast<jobject>(va_arg(args,int)?old_class:new_class);
 }
 bool OriginalThread(class_metadata::Class17* type,bool owner){
+ void* previous_current=current;JNIEnv* previous_env=episode_env;
  alignas(4096) std::array<unsigned char,512> original_thread{};std::memcpy(original_thread.data(),thread.data(),512);
  JNIEnv local_env{&table};current=original_thread.data();episode_env=&local_env;
  std::memcpy(original_thread.data()+216,&current,8);std::memcpy(original_thread.data()+200,&episode_env,8);
  alignas(8) unsigned char scope[32]{};OriginalHeader header{nullptr,1};std::memcpy(scope,&header,sizeof(header));
  if(sized_scope)Put32(scope,12,1);Put32(scope,OriginalReferences(),uint32_t(uintptr_t(type)));Publish(scope);Put32(current,0,92u<<24);
  (owner?owner_slot:waiter_slot).store(scope+OriginalReferences(),std::memory_order_release);
- if(!owner&&waiter_native(episode_env,reinterpret_cast<jclass>(parent_class))!=JNI_TRUE)return false;
+ if(!owner&&waiter_native(episode_env,reinterpret_cast<jclass>(parent_class))!=JNI_TRUE){Publish(nullptr);current=previous_current;episode_env=previous_env;return false;}
  Put32(current,0,0);const bool result=initialize_proxy(selected==Case::WrongClassLinker&&!owner?static_cast<void*>(&runtime):static_cast<void*>(&linker),current,{scope+OriginalReferences()},true,true);
- assert(Top()==scope);Publish(nullptr);return result;
+ assert(Top()==scope);Publish(nullptr);current=previous_current;episode_env=previous_env;return result;
 }
 jint EpisodeRun(JNIEnv* e,jclass type,jmethodID method,va_list args){
  if(method!=reinterpret_cast<jmethodID>(&run_episode_id))return StaticInt(e,type,method,args);
@@ -130,7 +136,15 @@ jint EpisodeRun(JNIEnv* e,jclass type,jmethodID method,va_list args){
  std::thread owner([&]{owner_result=OriginalThread(klass,true);});
  std::thread waiter([&]{waiter_result=OriginalThread(klass,false);});owner.join();waiter.join();
  const bool oracle=original_waits==1&&original_bodies==1&&owner_result==!fail&&waiter_result==!fail;
- return oracle&&selected!=Case::WrongPublicResult?1:0;
+ // Match the actual Java oracle: a poisoned Class is accessed once more after
+ // joining both threads. The original helper must refuse without another body
+ // or source wait, while normal completed access can fast-return unchanged.
+ const auto bodies_before=original_bodies.load(),waits_before=original_waits.load();
+ bool terminal_ok=true;
+ if(fail||selected==Case::RepeatedSuccess)terminal_ok=OriginalThread(klass,true)==!fail;
+ if(selected==Case::WrongTerminalReturn||selected==Case::WrongTerminalCompletion)terminal_ok=true; // independent Java leaf does not hide observer mismatch.
+ assert(original_waits==waits_before&&original_bodies==bodies_before);
+ return oracle&&terminal_ok&&selected!=Case::WrongPublicResult?1:0;
 }
 }
 abi::arm64::android11::ReleaseObjectPointer EpisodeGlobal(jobject value){
@@ -175,9 +189,12 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  table.RegisterNatives=EpisodeRegister;table.CallStaticObjectMethodV=EpisodeType;table.CallStaticIntMethodV=EpisodeRun;
  const auto mutations_before=mutations,publications=retirement_publications;
  const bool ok=observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error);
- assert(ok==(selected==Case::Positive||selected==Case::MovingRoots));assert(observer.ReadyFor(metadata,roots)==ok);
+ assert(ok==(selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess));assert(observer.ReadyFor(metadata,roots)==ok);
  modern_field_metadata::FieldMetadata foreign=metadata;assert(!observer.ReadyFor(foreign,roots));
  assert(mutations==mutations_before&&retirement_publications==publications);
+ if(selected==Case::WrongTerminalReturn||selected==Case::WrongTerminalCompletion){
+  assert(!ok&&error.find("episode error")!=std::string::npos&&error.find("faults=4")!=std::string::npos&&error.find("terminal=1/1")!=std::string::npos);
+ }
  if(ok){native_initializer_episode::Service wrong_owner;assert(!wrong_owner.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));assert(observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));}
  if(ok&&selected==Case::Positive){
   native_initializer_episode::Witness absent;assert(!observer.CaptureCurrent(&env,&absent));
@@ -191,7 +208,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,
-     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker}){
+     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }
