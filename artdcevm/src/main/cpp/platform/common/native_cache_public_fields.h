@@ -4,6 +4,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include <jvmti.h>
 #include "platform/common/source_handle_roots.h"
+#include "platform/common/contextual_field_id.h"
 #include <memory>
 namespace artdcevm::native_cache_public_fields {
 // Read-only public/native identity observation. It grants no cache layout,
@@ -25,7 +26,7 @@ class Witness {
   friend class Service;
   explicit Witness(JNIEnv* env):env_(env){}
   JNIEnv* env_;jobject cache_=nullptr; jclass owner_=nullptr;
-  jobject reflected_=nullptr;jfieldID id_=nullptr;jlong value_=0;void* native_=nullptr;std::string name_;
+  jobject reflected_=nullptr;std::shared_ptr<contextual_field_id::Proof> identity_;jfieldID id_=nullptr;jlong value_=0;void* native_=nullptr;std::string name_;
 };
 class Service {
  public:
@@ -35,7 +36,7 @@ class Service {
   bool Refresh(const runnable_jni::Context&,const source_handle_roots::Service&,const Witness&,
       const modern_field_metadata::FieldMetadata&,jlong*,std::string*)const;
   static void Release(JNIEnv*,std::unique_ptr<Witness>*);
-  // manager must come from the independent shared Runtime receiver snapshot.
+  // Uses the shared public contextual Field identity owner; no manager ID cast.
   // Binding named leaves does not establish availability or a storage permit.
   bool Bind(HookEngine&,const runtime_services::Snapshot&,std::string*);
   // Exact bootstrap DexCache Class, exact object Class, declared instance J
@@ -46,7 +47,7 @@ class Service {
   bool Observe(JNIEnv*,jvmtiEnv*,jobject,jclass,const char* field_name,
       const modern_field_metadata::FieldMetadata&,std::unique_ptr<Witness>*,std::string*)const;
  private:
-  using Field=void*(*)(void*);using Decode=void*(*)(void*,jfieldID);
-  Field field_=nullptr;Decode decode_=nullptr;void* manager_=nullptr;
+  using Field=void*(*)(void*);
+  Field field_=nullptr;
 };
 }

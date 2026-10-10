@@ -11,8 +11,8 @@ struct TiBuffer {
 };
 struct Local {JNIEnv* env;jobject ref=nullptr;~Local(){if(ref)env->DeleteLocalRef(ref);}};
 struct Request {
- jobject field_root,owner_root; jfieldID id;void* manager;
- void*(*field)(void*);void*(*decode)(void*,jfieldID);
+ jobject field_root,owner_root; jfieldID id;void* expected;
+ void*(*field)(void*);
  const modern_field_metadata::FieldMetadata* metadata;const char* name;
  void* native=nullptr;std::string* error;
  const source_handle_roots::Service* source_roots=nullptr;
@@ -24,9 +24,7 @@ bool ObserveNative(const runnable_jni::Context& scope,void* raw){
   return Fail(r.error,"Cache Field identity roots unavailable");
  auto* native=r.field(mirror);
  if(scope.env->ExceptionCheck())return Fail(r.error,"Named reflected Field leaf left an exception");
- auto* decoded=r.decode(r.manager,r.id);
- if(scope.env->ExceptionCheck())return Fail(r.error,"Original field ID decoder left an exception");
- if(!native||decoded!=native)return Fail(r.error,"Public/native cache Field identity differs");
+ if(!native||r.expected!=native)return Fail(r.error,"Public/native cache Field identity differs");
  field_copy::CopyFieldView text;
  if(!r.metadata->FieldIdentity(native,&text,r.error))return false;
  if(scope.env->ExceptionCheck())return Fail(r.error,"Calibrated cache Field text left an exception");
@@ -39,22 +37,23 @@ bool ObserveNative(const runnable_jni::Context& scope,void* raw){
 }
 }
 Witness::~Witness(){
+ contextual_field_id::Release(env_,&identity_);
  if(reflected_)env_->DeleteGlobalRef(reflected_);
  if(owner_)env_->DeleteGlobalRef(owner_);
  if(cache_)env_->DeleteGlobalRef(cache_);
 }
 bool Service::Bind(HookEngine& hooks,const runtime_services::Snapshot& runtime,std::string* error){
  auto field=reinterpret_cast<Field>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
- auto decode=reinterpret_cast<Decode>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
- if(!field||!decode||!runtime.receivers.jni_id_manager)
-  return Fail(error,"Named cache Field identity leaves/observed manager unavailable");
- field_=field;decode_=decode;manager_=runtime.receivers.jni_id_manager;return true;
+ (void)runtime;
+ if(!field)return Fail(error,"Named cache Field identity leaf unavailable");
+ if(!contextual_field_id::Initialize(hooks,error))return false;
+ field_=field;return true;
 }
 bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const char* name,
  const modern_field_metadata::FieldMetadata& metadata,std::unique_ptr<Witness>* output,std::string* error)const{
  if(!env||!ti)return Fail(error,"Public cache Field observation lacks caller JNI/JVMTI context");
  if(!metadata.Calibrated())return Fail(error,"Public cache Field observation lacks calibrated native metadata");
- if(!cache||!owner||!name||!*name||!output||!field_||!decode_||!manager_)
+ if(!cache||!owner||!name||!*name||!output||!field_)
   return Fail(error,"Invalid public cache Field observation");
  if(env->ExceptionCheck())return Fail(error,"Cache Field observation has a pending exception");
  TiBuffer signature{ti};auto status=ti->GetClassSignature(owner,reinterpret_cast<char**>(&signature.data),nullptr);
@@ -110,8 +109,13 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
  witness->reflected_=env->NewGlobalRef(reflected.ref);
  if(env->ExceptionCheck())return Fail(error,"Cache reflected Field strong root left an exception");
  if(!witness->reflected_)return Fail(error,"Cache reflected Field strong root unavailable");
+ witness->identity_=contextual_field_id::Prepare(env,witness->reflected_,selected,error);
+ if(!witness->identity_){if(error)*error="Public contextual cache Field identity unavailable: "+*error;return false;}
+ if(contextual_field_id::Id(witness->identity_)!=selected||contextual_field_id::IsStatic(witness->identity_))return Fail(error,"Public contextual cache Field ID/storage differs");
+ const auto native_identity=contextual_field_id::NativeField(witness->identity_);
+ if(!native_identity)return Fail(error,"Public contextual cache Field native identity unavailable");
  std::string native_error;
- Request request{witness->reflected_,witness->owner_,selected,manager_,field_,decode_,&metadata,name,nullptr,&native_error};
+ Request request{witness->reflected_,witness->owner_,selected,native_identity,field_,&metadata,name,nullptr,&native_error};
  const auto observed=runnable_executor::With(env,witness->reflected_,ObserveNative,&request);
  if(env->ExceptionCheck())return Fail(error,"Native cache Field observation left an exception");
  if(observed!=runnable_jni::Result::kSuccess||!request.native){
@@ -130,8 +134,8 @@ void Service::Release(JNIEnv* env,std::unique_ptr<Witness>* witness){
 }
 bool Service::Refresh(const runnable_jni::Context& context,const source_handle_roots::Service& roots,const Witness& witness,
  const modern_field_metadata::FieldMetadata& metadata,jlong* value,std::string* error)const {
- if(!value||!context.self||context.env!=witness.env_||!context.vm||!field_||!decode_||!manager_||
-    !metadata.Calibrated()||!witness.cache_||!witness.owner_||!witness.reflected_||!witness.id_)
+ if(!value||!context.self||context.env!=witness.env_||!context.vm||!field_||
+    !metadata.Calibrated()||!witness.cache_||!witness.owner_||!witness.reflected_||!witness.id_||!witness.identity_)
   return Fail(error,"Live public cache Field refresh owner unavailable");
  if(context.env->ExceptionCheck())return Fail(error,"Live public cache Field refresh has pending exception");
  const auto field_kind=context.env->GetObjectRefType(witness.reflected_);
@@ -139,7 +143,8 @@ bool Service::Refresh(const runnable_jni::Context& context,const source_handle_r
  const auto owner_kind=context.env->GetObjectRefType(witness.owner_);
  if(context.env->ExceptionCheck())return Fail(error,"Live cache Class root kind left an exception");
  if(field_kind!=JNIGlobalRefType||owner_kind!=JNIGlobalRefType)return Fail(error,"Live cache Field/Class references are not retained strong globals");
- Request request{witness.reflected_,witness.owner_,witness.id_,manager_,field_,decode_,&metadata,witness.name_.c_str(),nullptr,error,&roots};
+ if(contextual_field_id::Id(witness.identity_)!=witness.id_||contextual_field_id::IsStatic(witness.identity_)||contextual_field_id::NativeField(witness.identity_)!=witness.native_)return Fail(error,"Retained contextual cache Field identity differs");
+ Request request{witness.reflected_,witness.owner_,witness.id_,contextual_field_id::NativeField(witness.identity_),field_,&metadata,witness.name_.c_str(),nullptr,error,&roots};
  if(!ObserveNative(context,&request))return false;
  if(request.native!=witness.native_)return Fail(error,"Live public cache Field native identity changed");
  const auto observed=context.env->GetLongField(witness.cache_,witness.id_);

@@ -2,7 +2,8 @@
 """Read-only DexCache oracle with actual metadata and original JNI/JVMTI doubles.
 Host coverage is not evidence of device hidden-field availability.
 """
-import os,subprocess
+import os,subprocess,json,hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip())
@@ -21,9 +22,31 @@ fixture=fixture.replace('bool ok=fn({current,e,&runtime},data);',
 (out/'native_commit_fixture.inc').write_text(fixture)
 cpp=root/'artdcevm/src/main/cpp'
 cmd=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_cache_public_fields_test.cc')]
-cmd += [str(cpp/'platform/common'/(s+'.cc')) for s in ['source_handle_roots','modern_field_storage','exclusive_owned_roots','native_cache_service','object_replacement_map','field_copy','prepared_field_copy','native_cache_public_fields','modern_field_metadata','method_identity_calibration','native_interface_graph','native_schema_policy','native_method_evolution_policy','native_abstract_instances','native_schema_binding','native_method_table']]
+cmd += [str(cpp/'platform/common'/(s+'.cc')) for s in ['contextual_field_id','retired_field_registry','retired_method_registry','source_handle_roots','modern_field_storage','exclusive_owned_roots','native_cache_service','object_replacement_map','field_copy','prepared_field_copy','native_cache_public_fields','modern_field_metadata','method_identity_calibration','native_interface_graph','native_schema_policy','native_method_evolution_policy','native_abstract_instances','native_schema_binding','native_method_table']]
 cmd += [str(cpp/'evolution/dex_schema.cc'),'-Wl,-dead_strip' if platform=='darwin' else '-Wl,--gc-sections','-o',str(out/'test')]
 if platform=='darwin':cmd+=['-Wl,-pagezero_size,0x10000']
-subprocess.run(cmd,check=True)
+# Cache independent host TUs by exact flags/source/header contents; this keeps
+# iterative callback tests fast without accepting stale production objects.
+headers=hashlib.sha256()
+for path in sorted(cpp.rglob('*.h')):headers.update(str(path).encode());headers.update(path.read_bytes())
+headers.update((out/'native_commit_fixture.inc').read_bytes())
+first=next(i for i,arg in enumerate(cmd) if arg.endswith('.cc'))
+base=cmd[:first];sources=[Path(arg) for arg in cmd[first:] if arg.endswith('.cc')]
+objects=out/'objects';objects.mkdir(exist_ok=True)
+def compile_one(source):
+    key=hashlib.sha256(headers.digest()+json.dumps(base).encode()+source.read_bytes()).hexdigest()
+    target=objects/(source.stem+'-'+key+'.o')
+    if not target.exists():
+        command=base+['-c',str(source),'-o',str(target)]
+        result=subprocess.run(command,capture_output=True,text=True)
+        (objects/(source.stem+'.log')).write_text(result.stdout+result.stderr)
+        if result.returncode:print(result.stderr)
+        result.check_returncode()
+    return str(target)
+with ThreadPoolExecutor(max_workers=2) as pool:compiled=list(pool.map(compile_one,sources))
+link=base+compiled+['-Wl,-dead_strip' if platform=='darwin' else '-Wl,--gc-sections','-o',str(out/'test')]
+if platform=='darwin':link+=['-Wl,-pagezero_size,0x10000']
+(out/'link-command.json').write_text(json.dumps(link,indent=2))
+subprocess.run(link,check=True)
 r=subprocess.run([str(out/'test')],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
 (out/'result.log').write_text(r.stdout+r.stderr);r.check_returncode();print(r.stdout.strip())

@@ -78,7 +78,9 @@ std::shared_ptr<Proof> Prepare(JNIEnv* env,jobject reflected,jfieldID id,std::st
  if(!leaf||!env||!reflected||!id||env->ExceptionCheck()){Fail(error,"Invalid contextual Field oracle");return {};}
  Locals locals{env,{}};
  auto public_field_type=static_cast<jclass>(locals.Own(env->FindClass("java/lang/reflect/Field")));
- if(!public_field_type||env->ExceptionCheck()||!env->IsInstanceOf(reflected,public_field_type)){Fail(error,"Contextual oracle is not a public Field");return {};}
+ if(!public_field_type||env->ExceptionCheck())return {};
+ const bool is_field=env->IsInstanceOf(reflected,public_field_type);if(env->ExceptionCheck())return {};
+ if(!is_field){Fail(error,"Contextual oracle is not a public Field");return {};}
  auto field_type=static_cast<jclass>(locals.Own(env->GetObjectClass(reflected)));
  if(!field_type||env->ExceptionCheck())return {};
  auto declaring=env->GetMethodID(field_type,"getDeclaringClass","()Ljava/lang/Class;");
@@ -110,10 +112,14 @@ std::shared_ptr<Proof> Prepare(JNIEnv* env,jobject reflected,jfieldID id,std::st
  auto descriptor=Descriptor(Utf(env,type_name));if(env->ExceptionCheck())return {};
  auto public_id=is_static?env->GetStaticFieldID(owner,field_name.c_str(),descriptor.c_str()):env->GetFieldID(owner,field_name.c_str(),descriptor.c_str());
  if(env->ExceptionCheck())return {};
- if(public_id!=id||env->FromReflectedField(reflected)!=id){Fail(error,"Public Field name/type/owner ID disagrees with FromReflectedField");return {};}
+ const auto reflected_id=env->FromReflectedField(reflected);if(env->ExceptionCheck())return {};
+ if(public_id!=id||reflected_id!=id){Fail(error,"Public Field name/type/owner ID disagrees with FromReflectedField");return {};}
  auto returned=locals.Own(env->ToReflectedField(owner,id,is_static?JNI_TRUE:JNI_FALSE));
  if(!returned||env->ExceptionCheck())return {};
- if(!env->CallBooleanMethod(reflected,equals,returned)||env->FromReflectedField(returned)!=id||env->ExceptionCheck()){
+ const bool same=env->CallBooleanMethod(reflected,equals,returned);if(env->ExceptionCheck())return {};
+ if(!same){Fail(error,"Public ToReflectedField round trip differs from original Field");return {};}
+ const auto returned_id=env->FromReflectedField(returned);if(env->ExceptionCheck())return {};
+ if(returned_id!=id){
   Fail(error,"Public ToReflectedField round trip differs from original Field");return {};
  }
  void* first=Read(env,reflected,error);if(!first||env->ExceptionCheck())return {};
