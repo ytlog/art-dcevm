@@ -5,7 +5,7 @@ namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
 // Debug-only owned JNI calibration, independent of the full evolution backend.
 #ifdef ARTDCEVM_TESTING
 #include "platform/jni_access/capability_selection.h"
-#include "platform/android15/runtime_services.h"
+#include "platform/common/runtime_service_calibration.h"
 #include "platform/common/native_cache_service.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
@@ -23,7 +23,6 @@ namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
 #include "platform/common/modern_method_services.h"
 #include "platform/common/owned_method_table.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
-#include "platform/android17/runtime_services.h"
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
@@ -295,18 +294,10 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeMethods(
 namespace artdcevm::jni_access {
 bool CalibrateServices(HookEngine& hooks,JNIEnv* env,std::string* error) {
   runtime_services_observed={};
-  // Named source declaration chooses only the observer ABI; actual receivers
-  // must be reached and independently match Runtime before publication.
-  if(hooks.FindSymbol("libart.so","_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjNS1_12ListenerTypeE")) {
-    android17::RuntimeServices services;
-    if(!android17::CalibrateRuntimeServices(hooks,env,&services,error))return false;
-    runtime_services_observed=services;
-  } else {
-    android15::RuntimeServices services;
-    if(!android15::CalibrateRuntimeServices(hooks,env,&services,error))return false;
-    runtime_services_observed={services.runtime,services.instrumentation,services.receivers};
-  }
-  return true;
+  // The common observer selects fixed source declarations from actual named
+  // calls and independently validates the Runtime receiver graph.
+  return runtime_services::CalibrateRuntimeServices(
+      hooks,env,&runtime_services_observed,error);
 }
 }
 extern "C" JNIEXPORT jstring JNICALL

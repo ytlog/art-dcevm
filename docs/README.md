@@ -94,12 +94,12 @@ artdcevm/src/main/cpp/
     retired_method_hooks.*     退役方法的反射、JNI、MethodHandle 调用守卫
     retired_field_hooks.*      反射、JNI、VarHandle 的字段访问守卫
     instrumentation_listener.* 接收者守卫的事件处理与注册
-  platform/common/             共用元数据、提交、退役守卫与运行时证明
+  platform/common/             共用元数据、事务、退役守卫与运行时证明
+                               Runtime 服务、接收者与 JIT 直接复用
     schema_snapshot.*          公共 JVMTI/JNI 读取当前类字段、方法与继承结构
   platform/abi/arm64/android11/ … android17/
                                各版本唯一的固定 ARM64 源码声明
-  platform/android15/、android17/
-                               版本专有的运行时服务
+  platform/android17/          Class17 方法表的版本专有校准
   platform/abi/common/          跨版本、与指令集无关的 ART 调用声明
   platform/abi/arm64/           ARM64 共用布局、寄存器恢复汇编与 common 声明
   platform/symbols/             跨版本命名符号解析

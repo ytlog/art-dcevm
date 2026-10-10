@@ -1,4 +1,4 @@
-#include "platform/android17/jit_receivers.h"
+#include "platform/common/owned_jit_receivers.h"
 #include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
 #include <array>
@@ -103,7 +103,7 @@ int main(int argc,char** argv){
  abi::arm64::android15::RuntimePrefix runtime{};
  runtime.jit=&jit_object;runtime.jit_code_cache=&cache_object;runtime.heap=&heap_object;
  runtime.class_linker=&handle[0];runtime.jni_id_manager=&handle[1];runtime.thread_list=&handle[2];runtime.java_vm=&vm;
- android17::RuntimeServices core{&runtime,&handle[0],{}};
+ runtime_services::Snapshot core{&runtime,&handle[0],{}};
  core.receivers.class_linker=runtime.class_linker;core.receivers.jni_id_manager=runtime.jni_id_manager;
  core.receivers.thread_list=runtime.thread_list;core.receivers.java_vm=&vm;
  abi::arm64::android11::RuntimePrefix legacy11{};abi::arm64::android12::RuntimePrefix legacy12{};
@@ -118,7 +118,7 @@ int main(int argc,char** argv){
  if(!std::strcmp(mode,"wrong-graph"))runtime.jit_code_cache=&handle[0];
  Hooks hooks;runtime_services::View output;output.heap=reinterpret_cast<void*>(77);
  unsigned char dex=7;std::string error;
- const bool result=android17::CalibrateJitReceivers(hooks,&env,reinterpret_cast<jobject>(&handle[0]),oracle,model,core,
+ const bool result=owned_jit_receivers::CalibrateJitReceivers(hooks,&env,reinterpret_cast<jobject>(&handle[0]),oracle,model,core,
     reinterpret_cast<jclass>(&handle[2]),&dex,1,&output,&error);
  if(!std::strcmp(mode,"success")||std::strstr(mode,"legacy")){
   assert(result&&error.empty()&&output.jit==&jit_object&&output.jit_code_cache==&cache_object&&output.heap==&heap_object);
@@ -128,5 +128,5 @@ int main(int argc,char** argv){
   if(!std::strcmp(mode,"wrong-identity"))assert(!warmups&&!collections&&!mutations&&!disposed);
  }
  assert(!suspends);
- std::cout<<"Android17 JIT receivers: "<<mode<<" passed\n";
+ std::cout<<"Owned JIT receivers: "<<mode<<" passed\n";
 }

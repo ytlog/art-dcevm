@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify Exercise native JIT receiver observations, owned operations and fail-closed graph publication."""
+"""Exercise native JIT receiver observations, owned operations and fail-closed graph publication."""
 import os
 from pathlib import Path
 import subprocess
@@ -9,11 +9,11 @@ jdk = Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec
 platform = 'darwin' if os.uname().sysname == 'Darwin' else 'linux'
 out = root / 'build/evidence/host/method-identity-calibration'
 out.mkdir(parents=True, exist_ok=True)
-binary = out / 'android17_jit_receivers_test'
+binary = out / 'owned_jit_receivers_test'
 subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-g', '-O1', '-Wall', '-Wextra', '-Werror',
                 '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(cpp),
                 '-I', str(jdk / 'include'), '-I', str(jdk / 'include' / platform),
-                str(root / 'tests/host/android17_jit_receivers_test.cc'),
+                str(root / 'tests/host/owned_jit_receivers_test.cc'),
                 str(cpp / 'platform/common/method_identity_calibration.cc'), str(cpp / 'platform/common/owned_jit_receivers.cc'), str(cpp / 'platform/common/heap_collect_observer.cc'), '-o', str(binary)], check=True)
 outputs=[]
 for mode in ['success','legacy11','legacy12','missing','wrong-identity','wrong-graph','cache-missing','cleanup-error','gc-error','additive-error']:
@@ -23,4 +23,4 @@ for mode in ['success','legacy11','legacy12','missing','wrong-identity','wrong-g
     result.check_returncode()
 (out/'result.log').write_text(''.join(outputs))
 print(''.join(outputs).strip())
-print('Android17 JIT receivers: ASan/UBSan passed')
+print('Owned JIT receivers: ASan/UBSan passed')
