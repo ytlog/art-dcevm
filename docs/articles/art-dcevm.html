@@ -12,6 +12,8 @@
 @media(max-width:650px){.shell{padding:0 20px}.hero{padding-top:48px}.lead{font-size:18px}h2{font-size:26px}.figure{padding:18px;border-radius:14px}.section{padding-top:44px}.two,.frame-grid{grid-template-columns:1fr}.timeline{grid-template-columns:1fr}.step{display:flex;gap:12px;align-items:center;padding:9px 12px;border-top:0;border-left:3px solid var(--line)}.step span{margin:0}.layer{align-items:flex-start;flex-direction:column;gap:5px}.layer span{text-align:left}.object-grid{grid-template-columns:1fr}.arrow{transform:rotate(90deg);height:40px}.transaction{grid-template-columns:1fr 1fr}.version{padding:13px}.field{font-size:13px}.pull{font-size:20px;padding-left:18px}.top{letter-spacing:0;font-size:12px}.toc{gap:9px 18px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}}
 @media print{body{background:white}.shell{max-width:none;padding:0}.top,.toc,.controls,.scenario{display:none}.hero{padding:20px 0}.section{padding-top:20px}.figure{box-shadow:none;break-inside:avoid}pre{white-space:pre-wrap;overflow-wrap:anywhere}.figure,pre{print-color-adjust:exact}h1{font-size:40px}a{color:inherit}.footer{padding-bottom:0}}
+
+h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-flow{display:grid;gap:10px}.flow-node{padding:17px 20px;border:1px solid var(--line);border-radius:12px;background:var(--bg);text-align:center}.flow-node strong{display:block;font-size:15px}.flow-node span{display:block;font-size:13px;color:var(--muted);margin-top:5px}.flow-node.decision{background:var(--mint);border-color:#a2cfc3}.flow-node.refuse{background:var(--sand)}.flow-branches{display:grid;grid-template-columns:1fr 1fr;gap:16px}.branch-label{text-align:center;font-size:13px;margin:3px 0 10px;color:var(--muted)}.gif-enlarge{display:block}.gif-player img{width:100%;height:auto;display:block;border-radius:12px}.gif-status{margin-bottom:0}.roadmap-list{padding-left:25px}.roadmap-list li{margin:16px 0}.code-routes{display:grid;grid-template-columns:1fr 1fr;gap:24px}.code-routes>div>strong{display:block;font-size:14px;margin-bottom:18px}.route-item{padding:12px 14px;background:var(--bg);border-radius:8px;font-size:13px;overflow-wrap:anywhere;text-align:center}.code-routes .down{margin:8px 0}@media(max-width:650px){.code-routes{grid-template-columns:1fr}.flow-node{padding:13px 10px}.flow-branches{gap:10px}.flow-node span{font-size:12px}.flow-node strong{font-size:14px}.gif-player{padding:12px}}@media print{.gif-status{display:none}}
 </style>
 </head>
 <body><div class="shell">
@@ -20,8 +22,8 @@
 <h1>增强 ART JVMTI 的<br><span class="api-title">RedefineClasses</span><br>能力。</h1>
 <p class="lead">从方法体替换，到字段、方法和继承关系的结构变化：ART DCEVM 增强 ART 对标准类重定义请求的处理能力。你的 Agent 继续调用 <code>RedefineClasses</code>，运行时负责让变化一致地生效。</p>
 <div class="chips"><span class="chip">标准 JVMTI 入口</span><span class="chip">结构重定义</span><span class="chip">对象状态延续</span><span class="chip">无需 root</span></div>
-<p class="meta">项目介绍 · 2026 年 10 月 10 日 · 四章读懂接入、原理与贡献方式</p></div>
-<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 接入与使用</a><a href="#principle">03 原生能力与原理</a><a href="#contribute">04 架构与贡献</a></nav>
+<p class="meta">项目介绍 · 2026 年 10 月 10 日 · 技术博客 · 接入示例、增强原理与代码导航</p></div>
+<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 接入与使用</a><a href="#principle">03 增强原理与风险</a><a href="#contribute">04 研发阅读指南</a></nav>
 <article class="article">
 <section class="section" id="pain"><div class="number">01 / WHY ART DCEVM</div><h2>现在的 JVMTI 痛点，我的库做了什么？</h2>
 <p>通过 JVMTI，Native Agent 可以对正在运行的应用发起类重定义。对于开发工具来说，这意味着修改代码后，应用有机会继续运行，当前页面、会话和对象状态可以保留下来。然而，代码迭代经常超出“修改方法体”的范围。</p>
@@ -225,90 +227,99 @@ public final class RedefineDemo {
 <p>在支持本次新增字段的已适配设备上，日志从 <code>before=7</code> 变为 <code>after=14</code>。已有对象的 <code>label</code> 为 <code>null</code>：重定义不会重新执行它的构造器和字段初始化代码。提交后新建对象才按新定义初始化 <code>label = "ready"</code>。</p>
 <p>Java 示例中的 <code>MyAgent.redefine</code> 是我们自己创建的 JNI 桥。SDK 对外提供初始化入口，替换请求实际来自用户 Agent 的 <code>jvmtiEnv::RedefineClasses</code>。多个相关类应组成一个定义数组一次提交，完整批次示例见 <a href="../../app/src/debug/cpp/testing/standard_jvmti_client.cc">standard_jvmti_client.cc</a>。</p>
 </section>
-<section class="section" id="principle"><div class="number">03 / NATIVE JVMTI &amp; ENHANCEMENT</div><h2>JVMTI 原生能做什么，我是怎么增强的？</h2>
-<h3>3.1 从 ART TI 与标准重定义能力开始</h3>
-<p>JVMTI 是虚拟机面向 Native 工具的接口，提供类与方法查询、事件回调、线程与栈观察、对象分配和 GC 观察、堆遍历，以及重定义等能力。Agent 需要申请相应 capability；能取得一个环境，并不等于已经拥有所有权限。Android 的 <a href="https://source.android.com/docs/core/runtime/art-ti">ART TI</a> 通过 <code>libopenjdkjvmti</code> 暴露这些服务，普通应用附加 Agent 需要从启动时可调试。</p>
-<p>本文关注其中的 <code>RedefineClasses</code>。<a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">标准 JVMTI 规范</a>允许受支持的方法实现更新，对字段、方法的增删或签名、继承和修饰符等结构变化规定了限制。ART 使用 DEX 而非 JVM class-file 字节作为输入，部分构建另有结构扩展入口；实际可用能力需要查询和验证。</p>
-<div class="table-wrap"><table><thead><tr><th>路径</th><th>如何调用</th><th>能力关系</th></tr></thead><tbody>
-<tr><td>ART 原有标准路径</td><td><code>jvmtiEnv::RedefineClasses</code></td><td>方法体重定义；结构变化遵循 ART 原有校验</td></tr>
-<tr><td>ART 独立结构扩展</td><td>查询扩展函数，使用对应的扩展签名</td><td>部分 ART 提供新增成员等能力；独立于标准入口的增强结论</td></tr>
-<tr><td>ART DCEVM 增强路径</td><td>初始化后继续调用标准 <code>RedefineClasses</code></td><td>把已适配的结构变化接入完整批次事务，同时处理一致性</td></tr>
-</tbody></table></div>
-<h3>3.2 在标准入口接管请求，在真实事务中完成增强</h3>
-<p>原有请求从用户 Agent 的 JVMTI 函数表进入 <code>libopenjdkjvmti</code> 的重定义实现。ART DCEVM 对已校准的命名重定义入口安装 Inline Hook，保留调用方环境、参数和能力检查，再把整批请求交给增强事务。设备 ART 仍执行分配、类链接、GC 和最终线程暂停等真实服务。</p>
+<section class="section" id="principle"><div class="number">03 / DESIGN &amp; TRADE-OFFS</div><h2>增强 RedefineClasses：挑战、方案与取舍</h2>
+<p>理解实现前，先明确原生能力的边界。JVMTI 提供类与方法查询、事件回调、线程与栈观察、堆遍历和重定义等接口，Agent 需要申请相应 capability。ART 的标准 <code>RedefineClasses</code> 支持受允许的方法体变化，对成员增删、签名、继承与修饰符等结构变化仍有校验；部分构建另外提供独立结构扩展。Android 使用 DEX 作为输入，普通应用附加 Agent 要求启动时即可调试。依据见 <a href="https://source.android.com/docs/core/runtime/art-ti">ART TI</a> 与 <a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">JVMTI 规范</a>。</p>
+<p>ART DCEVM 的工作，是把更多结构变化接入标准请求背后的处理链。这里按最大的挑战、整体策略、五类方案、风险与后续计划说明，避免淹没在函数签名和 Hook 清单里。</p>
+<h3>3.1 最大的挑战：让新旧两套运行时状态一致过渡</h3>
+<p>新增字段在源码里只是一行修改，在虚拟机里却会改变对象布局。旧对象已经在堆上，旧反射对象和 JNI ID 已经被缓存，调用线程也可能正执行一个内联了旧实现的方法。如果只发布新类定义，这些路径就会同时看到互不匹配的事实。</p>
+<p>例如 <code>Counter</code> 增加字段后，新代码必须能访问它，旧对象的 <code>count</code> 又要保留。再把父类关系收窄，某些旧接收者可能不再满足调用要求；如果它还留在数组或其他对象的字段中，保留存储的类型关系也要检查。与此同时，GC 可能移动对象，JIT 可能缓存旧布局，多线程可能正在解析或调用这些成员。</p>
+<blockquote class="pull">最难的是在一次变更中，协调类定义、存活对象、旧引用和活动调用，并守住失败时的旧状态。</blockquote>
+<p>这使问题具有两个维度：<strong>语义上</strong>，各条访问路径必须认可同一场变化；<strong>生命周期上</strong>，每一步必须拥有正确的线程状态、GC 条件和对象根。一个阶段拿到的裸指针，不能直接被当作后续阶段仍然有效的事实。</p>
+<h3>3.2 我的整体解法：沿用真实 ART 事务，明确准备与提交边界</h3>
+<p>我在标准重定义的命名入口接管请求，保留用户 Agent 的 <code>jvmtiEnv*</code>、参数、能力检查与事件归属。随后把完整批次交给设备 ART 的真实事务，复用它的分配、类链接、堆管理和线程服务，并补齐结构演进需要的协调工作。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">标准 RedefineClasses 的增强处理链</span><span class="figure-label">RUNTIME ARCHITECTURE</span></div><div class="layers" role="img" aria-label="上层工具生成DEX，用户Agent通过标准RedefineClasses调用ART DCEVM增强库，再使用设备ART服务更新运行时对象和引用。"><div class="layer"><strong>IDE / 调试工具 / 补丁编译器</strong><span>产生新 DEX，决定提交时机</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>用户 JVMTI Agent</strong><span>自己的环境与能力 · RedefineClasses</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>ART DCEVM · libartdcevm.so</strong><span>RedefineClasses Hook → 结构事务与守卫</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>设备 ART / libopenjdkjvmti</strong><span>真实分配、链接、GC、线程与事务服务</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>类定义 · 对象状态 · 缓存 · 执行帧</strong><span>在一致的边界上更新</span></div></div><figcaption>图 2 · 所有运行时组件位于应用进程中。单一增强库不替换系统 ART；ShadowHook 和用户 Agent 仍是各自的依赖与组件。</figcaption></figure>
-<p>项目优先使用命名 ELF 符号、固定源码声明和独立行为校准。库内部直接调用不一定经过 PLT，因此重定义入口使用 Inline Hook；只有证明相关调用经过导入表时，PLT Hook 才合适。函数地址和对象字段偏移不通过反汇编推算，SDK、厂商或 Build ID 也不代替真实能力证明。</p>
-<h3>3.3 扩展结构处理，同时保留批次与事件语义</h3>
-<p>修改一个校验条件还不够。新增或删除成员需要建立新旧成员映射，保存兼容字段，初始化新字段，并处理旧类与元数据生命周期。父类和接口变化还会影响接收者有效性、分派和类型关系。增强库在同一事务中协调这些变化。</p>
-<p><code>ClassFileLoadHook</code> 等转换回调可能继续修改补丁，最终的 DEX 才是结构验证依据。多个相关类共享完整批次和进程级协调；在可恢复失败边界上拒绝整批，旧定义保持完整。进入不可失败的提交阶段后，内部故障不能再被包装成普通的安全拒绝。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">准备、检查，再一起提交</span><span class="figure-label">TRANSACTION MODEL</span></div><div class="timeline" id="timeline"><div class="step current"><b>① 收集</b><span>目标类与新 DEX</span></div><div class="step"><b>② 验证</b><span>最终定义与依赖</span></div><div class="step"><b>③ 安全窗口</b><span>线程、GC、活动帧</span></div><div class="step"><b>④ 更新</b><span>对象、缓存与代码</span></div><div class="step"><b>⑤ 完成</b><span>批次提交与恢复</span></div></div><div class="transaction"><div class="version live" id="old-version"><span>当前可见定义</span><strong>V1 · 旧版本</strong></div><div class="version" id="new-version"><span>候选批次</span><strong>V2 · 准备中</strong></div></div><div class="scenario" aria-label="选择事务情景"><button type="button" id="scenario-success" aria-pressed="true">成功提交</button><button type="button" id="scenario-reject" aria-pressed="false">活动帧拒绝</button></div><div class="controls"><button type="button" class="primary" id="transaction-play">播放事务</button><button type="button" id="transaction-next">下一步</button><button type="button" id="transaction-reset">重置</button></div><div class="status" id="transaction-status" aria-live="polite">① 收集完整批次。V1 继续有效，V2 尚未对外生效。</div><figcaption>图 3 · 事务语义的简化演示，不是完整内部调用时序。已适配路径有提交与拒绝证据；新的跨版本 RunState / Ledger 组合仍需完整发布、提交与退款验收。</figcaption></figure>
-<h3>3.4 让新定义与旧对象、旧引用共同成立</h3>
-<p>原有字段值通过兼容映射延续。新增字段在已有对象中使用零值或 <code>null</code>；字段类型或 static / 实例形态变化按旧成员退役、新成员建立处理。引用字段的写入还需要遵守 ART 的 GC 根、引用更新和写屏障规则。</p>
-<p>字节码解析缓存、反射对象、JNI ID、MethodHandle 与 VarHandle 都可能保留旧成员信息。项目对已覆盖的路径协调重绑定、权限与接收者守卫，防止已退役成员和失效接收者继续被当作有效目标。合法创建的句柄访问授权、final 写入限制、原生 JNI 写入和接收者有效性分别按其语义处理。</p>
-<h3>3.5 协调 JIT / AOT 与活动帧</h3>
-<p>编译代码可能固化字段位置、缓存分派结果或内联旧实现。已经暂停的机器码能否继续运行，需要根据实际 PC、CodeInfo、StackMap 和内联层寄存器恢复信息判断。信息完整且路径已校准时，协调去优化与提交；条件不足时，在旧定义完整的边界上拒绝，待旧帧退出后重试。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">恢复信息决定执行路径</span><span class="figure-label">ACTIVE FRAME SAFETY</span></div><div class="frame-grid" id="frames" data-stage="0"><div class="frame-lane"><div class="lane-title">可恢复的已校准帧</div><div class="stack" id="recoverable"><div>caller()</div><div class="target" id="recoverable-frame">旧 compiled frame + 完整映射</div><div>暂停点 · Dex 寄存器可恢复</div></div><div class="lane-result" id="recoverable-result">检查实际 PC、栈图和内联恢复信息。</div></div><div class="frame-lane"><div class="lane-title">不可即时恢复的活动非调试 AOT 帧</div><div class="stack"><div>caller()</div><div class="blocked">旧 AOT frame · 恢复资格不足</div><div>旧定义必须继续有效</div></div><div class="lane-result" id="blocked-result">检查失败时，在提交前拒绝本次变更。</div></div></div><div class="controls"><button type="button" class="primary" id="frame-next">查看去优化与拒绝</button><button type="button" id="frame-reset">重置</button></div><div class="status" id="frame-status" aria-live="polite">按两类独立情景查看；它们不表示同一事务可以部分成功。</div><figcaption>图 4 · 当前活动非调试 AOT 帧的即时去优化未实现。已验证策略是拒绝本次变更、让旧调用完成，再退出后重试。跨版本物理帧读取专项也不能等同于全进程栈转换完成。</figcaption></figure>
-<p>跨版本工程正在把根注册、层级证明、DEX 发布账本与连续线程/GC 安全窗口聚合到同一次原始事务的 RunState 中。方向是先准备完整根和存储，再在有效窗口刷新移动后的对象引用，完成发布、清理与提交或退款；完整新组合按生产链和设备验收推进。</p>
-</section>
-<section class="section" id="contribute"><div class="number">04 / ARCHITECTURE &amp; CONTRIBUTING</div><h2>如何贡献代码：理解分层，再提交可复核的变化</h2>
-<p>仓库围绕“标准入口 → 通用算法 → 平台能力 → 真实 ART 服务”组织代码。先确认问题属于哪一层，再复用现有公共路径，是参与项目最快的方式。</p>
-<h3>4.1 从这些目录进入</h3>
-<pre><code>artdcevm/                        Android 库模块与初始化 API
-  src/main/java/.../api/        DcevmRuntime：加载、附加、初始化
-  src/main/cpp/
-    core/                       Agent 入口与事务协调
-    api/                        后端、Hook 与重定义接口
-    hooks/                      ShadowHook 安装与管理
-    evolution/                  DEX schema、迁移计划与解析
-    platform/
-      common/                   跨版本算法、能力校准与运行时事务
-      jvmti/                    公开 JVMTI 后端
-      jni_access/               JNI 访问能力选择与独立校准
-      symbols/                  跨版本命名符号选择
-      abi/common/               不依赖版本或指令集的调用声明
-      abi/arm64/common/         跨版本 ARM64 布局声明
-      abi/arm64/android11…17/   各版本固定 ARM64 ABI 声明
-      android13/、android17/    实际存在的版本专有运行时实现
-app/src/debug/                  示例 Agent、诊断与设备测试入口
-fixtures/                       新旧类定义与补丁素材
-tests/host/                     原生组合、拒绝路径与宿主回归
-tools/                          构建、源码审计与回归脚本
-docs/                           设计、兼容性、限制与验证记录</code></pre>
-<p>核心入口可从 <a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>、<a href="../../artdcevm/src/main/cpp/core/agent.cc">core/agent.cc</a> 和 <a href="../../artdcevm/src/main/cpp/platform/backend_factory.cc">backend_factory.cc</a> 开始阅读。目录职责详见 <a href="../../artdcevm/src/main/cpp/platform/README.md">原生平台目录说明</a>。</p>
-<h3>4.2 把改动放在正确的层</h3>
-<div class="table-wrap"><table><thead><tr><th>贡献内容</th><th>优先归属</th><th>应避免的做法</th></tr></thead><tbody>
-<tr><td>迁移、缓存、守卫和事务算法</td><td><code>platform/common/</code> 或已有 <code>evolution/</code> 抽象</td><td>每个 Android 版本复制相同逻辑</td></tr>
-<tr><td>真实变化的 ARM64 布局与 ABI</td><td><code>abi/arm64/androidXX/</code></td><td>按反汇编推算布局，或同时维护多处声明</td></tr>
-<tr><td>版本独有运行时行为</td><td>实际需要的 <code>platform/androidXX/</code></td><td>仅建空目录或版本转发包装代表适配完成</td></tr>
-<tr><td>命名符号与能力选择</td><td><code>platform/symbols/</code> 及已有校准路径</td><td>只凭 SDK、机型或构建编号启用能力</td></tr>
-<tr><td>回归与复核证据</td><td><code>tests/host/</code>、<code>app/src/debug/</code>、<code>tools/</code>、<code>docs/</code></td><td>把组件或编译通过当成完整设备语义通过</td></tr>
+<p>实现围绕三条约束展开：首先，以转换回调之后的最终 DEX 规划整个批次，相关类不能逐个部分生效；其次，把可能失败的准备工作尽量前移，预先建立迁移表、根和所需存储；最后，在已证明且由同一事务持有的安全窗口中刷新引用、复核和提交。不能满足条件的请求，在仍可失败的边界拒绝。</p>
+<figure class="figure"><div class="figure-head"><span class="figure-title">增强事务的总体流程</span><span class="figure-label">PREPARE → VERIFY → COMMIT</span></div><div class="blog-flow" role="img" aria-label="收到标准重定义请求，完成权限和转换回调检查，准备完整批次与根，检查安全条件。不满足则在可失败边界拒绝并保留旧定义；满足则进入有所有权的安全窗口，协调更新并完成提交。"><div class="flow-node"><strong>标准 RedefineClasses 请求</strong><span>保留用户 Agent 的环境、权限与整批定义</span></div><div class="down" aria-hidden="true">↓</div><div class="flow-node"><strong>转换与准备</strong><span>读取最终 DEX · 规划迁移 · 预分配存储 · 注册根</span></div><div class="down" aria-hidden="true">↓</div><div class="flow-node decision"><strong>结构与运行时条件是否满足？</strong><span>依赖类、旧引用、活动帧及真实线程 / GC 前提</span></div><div class="flow-branches"><div><div class="branch-label">↓ 不满足</div><div class="flow-node refuse"><strong>在可失败边界拒绝</strong><span>恢复局部状态<br>释放临时资源<br>整批保留旧定义</span></div></div><div><div class="branch-label">↓ 满足</div><div class="flow-node"><strong>进入有效安全窗口</strong><span>刷新根并复核<br>迁移对象、更新定义<br>清理旧访问、完成提交</span></div></div></div></div><figcaption>图 3 · 顺序体现设计约束，省略了 ART 的内部阶段与回调交错。最终不可失败阶段需要已准备好的服务；新的跨版本组合必须证明完整提交和退款生命周期。</figcaption></figure>
+<p>通用实现中的 <code>RunState</code> 可以理解为“一次重定义的上下文”：把计划、对象根、线程/GC 窗口、DEX 发布记录和清理服务绑定到同一次原始 Run。它约束权限和生命周期；Hook 安装成功、符号存在或某个布尔标志，不能替代这些真实前提。当前新的跨版本组合仍按完整生产链与设备验收推进。</p>
+<h3>3.3 五类关键方案</h3>
+<h4>A. 入口与适配：保持标准调用，证明私有能力</h4>
+<p>用户仍提交 <code>jvmtiClassDefinition[]</code>。增强库对已校准的命名入口安装 Inline Hook；库内部调用不一定经过导入表，因此不能默认用 PLT Hook 覆盖。需要调用原 ART 服务时，保留明确的原函数入口，避免递归进入自身代理。</p>
+<p>ART 私有 ABI 没有稳定的公共承诺。我把固定源码声明、命名 ELF 符号与公开 JNI/JVMTI 行为校准结合起来：通过真实 Class、字段、方法和线程观察验证选择的声明。公共算法尽量复用，实际差异进入 ABI 或版本实现层。厂商、SDK 和 Build ID 不能单独授予私有权限，地址与偏移不从反汇编推算。</p>
+<h4>B. 结构与对象：建立映射，延续兼容状态</h4>
+<p>新旧定义先形成成员、字段及层级的对应关系。兼容字段保留已有值，新字段在旧对象中使用零值或 <code>null</code>；类型或 static / 实例形态改变时，相关成员按退役和新建处理。迁移遵守引用写入与 GC 规则，不重新执行已有对象的构造器。</p>
+<p>层级变化还要检查依赖：已加载子类能否继续分派、存活实例是否缺少抽象实现、接收者是否仍有效，以及保留字段和数组中的引用是否符合新类型关系。冲突明确拒绝。新通用路径的层级收窄需要额外的接收者、存储和活动帧证明，这些前提必须一起闭合。</p>
+<figure class="figure gif-player" data-gif="assets/consistent-publication.gif" data-poster="assets/consistent-publication-poster.png"><div class="figure-head"><span class="figure-title">让状态迁移与访问更新保持一致</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/consistent-publication.gif" aria-label="打开完整尺寸动图：让状态迁移与访问更新保持一致"><img src="assets/consistent-publication-poster.png" width="760" height="470" alt="四阶段示意：旧定义运行；准备映射与强根；安全窗口协调更新；提交后count保持7、label为null、value返回14。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 4 · 用 Counter 说明对象状态和访问语义必须共同更新。阶段与时长为讲解而简化，不是 ART 调用日志，也不表示原有执行中的调用必然改变返回值。</figcaption></figure>
+<h4>C. 线程、GC 与事务：先准备，再在有效窗口消费</h4>
+<p>GC 可以移动 Class 与对象，因此跨阶段保留身份要使用运行时管理的根。准备阶段先注册强根、预分配表和扫描存储，随后冻结容器的位置与容量。进入实际安全窗口后，通过根重新取得当前引用，刷新迁移计划及缓存所有者。</p>
+<p>停线程、GC 排除和线程状态转换各有真实持有者与嵌套关系。在已经保留 GC 条件的窗口里调用可能等待同一条件的原函数，会造成自等待；在提交后追加分配，则可能把可预期错误变成不可恢复故障。因此发布、转交和清理必须使用同一事务的具体所有权，不以“当前看起来暂停了”作为通行证。</p>
+<p>对多个类，批次始终是一场事务。<code>ClassFileLoadHook</code> 可能把方法体补丁改成结构补丁，故最终定义必须在回调后验证。失败退款只存在于已证明的可恢复边界；一旦进入原始不可失败提交阶段，不能再把内部故障包装成普通 JVMTI 拒绝。</p>
+<figure class="figure"><div class="figure-head"><span class="figure-title">准备、检查，再一起提交</span><span class="figure-label">TRANSACTION MODEL</span></div><div class="timeline" id="timeline"><div class="step current"><b>① 收集</b><span>目标类与新 DEX</span></div><div class="step"><b>② 验证</b><span>最终定义与依赖</span></div><div class="step"><b>③ 安全窗口</b><span>线程、GC、活动帧</span></div><div class="step"><b>④ 更新</b><span>对象、缓存与代码</span></div><div class="step"><b>⑤ 完成</b><span>批次提交与恢复</span></div></div><div class="transaction"><div class="version live" id="old-version"><span>当前可见定义</span><strong>V1 · 旧版本</strong></div><div class="version" id="new-version"><span>候选批次</span><strong>V2 · 准备中</strong></div></div><div class="scenario" aria-label="选择事务情景"><button type="button" id="scenario-success" aria-pressed="true">成功提交</button><button type="button" id="scenario-reject" aria-pressed="false">活动帧拒绝</button></div><div class="controls"><button type="button" class="primary" id="transaction-play">播放事务</button><button type="button" id="transaction-next">下一步</button><button type="button" id="transaction-reset">重置</button></div><div class="status" id="transaction-status" aria-live="polite">① 收集完整批次。V1 继续有效，V2 尚未对外生效。</div><figcaption>图 5 · 事务语义的简化演示，不是完整内部调用时序。已适配路径有提交与拒绝证据；新的跨版本 RunState / Ledger 组合仍需完整发布、提交与退款验收。</figcaption></figure>
+<h4>D. 缓存与旧引用：更新新查询，也约束旧访问路径</h4>
+<p>类定义更新之后，旧反射对象、JNI ID、MethodHandle、VarHandle、解析缓存和编译调用仍可能指向旧元数据。方案是保留必要的退役记录，对已覆盖的访问路径进行重绑定、失效处理或语义守卫，区分“成员已删除”“接收者不再有效”和“权限变化”。</p>
+<p>同名成员删除后再添加，不能仅凭名称认定旧引用再次合法；同样，合法创建的句柄授权也不能粗暴地与后续可见性收窄混为一谈。实现与回归按真实访问渠道验证，而非只检查新反射查询的结果。旧元数据的保留与回收，是这类方案需要持续管理的成本。</p>
+<h4>E. JIT / AOT 与活动帧：能恢复才转换，否则拒绝并重试</h4>
+<p>编译代码可能固化字段位置，或把目标方法内联进调用者。暂停一条线程，并不意味着它的机器码能自动换用新布局。必须知道实际执行位置，以及外层和内联层的 Dex 寄存器能否从当前栈与寄存器恢复。</p>
+<p>我使用设备栈遍历、CodeInfo 和 StackMap 核对实际 PC 的恢复信息。路径已经校准且信息完整时，协调去优化与提交；不足时，在旧定义完整的边界拒绝。当前活动非调试 AOT 帧不支持即时去优化，策略是让旧调用完成，帧退出后再重新验证和提交。</p>
+<figure class="figure"><div class="figure-head"><span class="figure-title">恢复信息决定执行路径</span><span class="figure-label">ACTIVE FRAME SAFETY</span></div><div class="frame-grid" id="frames" data-stage="0"><div class="frame-lane"><div class="lane-title">可恢复的已校准帧</div><div class="stack" id="recoverable"><div>caller()</div><div class="target" id="recoverable-frame">旧 compiled frame + 完整映射</div><div>暂停点 · Dex 寄存器可恢复</div></div><div class="lane-result" id="recoverable-result">检查实际 PC、栈图和内联恢复信息。</div></div><div class="frame-lane"><div class="lane-title">不可即时恢复的活动非调试 AOT 帧</div><div class="stack"><div>caller()</div><div class="blocked">旧 AOT frame · 恢复资格不足</div><div>旧定义必须继续有效</div></div><div class="lane-result" id="blocked-result">检查失败时，在提交前拒绝本次变更。</div></div></div><div class="controls"><button type="button" class="primary" id="frame-next">查看去优化与拒绝</button><button type="button" id="frame-reset">重置</button></div><div class="status" id="frame-status" aria-live="polite">按两类独立情景查看；它们不表示同一事务可以部分成功。</div><figcaption>图 6 · 当前活动非调试 AOT 帧的即时去优化未实现。已验证策略是拒绝本次变更、让旧调用完成，再退出后重试。跨版本物理帧读取专项也不能等同于全进程栈转换完成。</figcaption></figure><figure class="figure gif-player" data-gif="assets/active-frame-retry.gif" data-poster="assets/active-frame-retry-poster.png"><div class="figure-head"><span class="figure-title">活动帧阻塞变更时，怎样安全重试？</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/active-frame-retry.gif" aria-label="打开完整尺寸动图：活动帧阻塞变更时，怎样安全重试？"><img src="assets/active-frame-retry-poster.png" width="760" height="470" alt="不可即时恢复的旧AOT帧导致事务拒绝；旧调用保持V1并完成；帧退出后发起新请求；完整校验满足后才提交V2。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 7 · 活动非调试 AOT 的处理边界：本次未提交，旧调用继续，退出后重新验证。重试仍可能因其他条件失败；GIF 展示条件满足后的独立新事务。</figcaption></figure>
+<h3>3.4 还有哪些风险？</h3>
+<p>运行时增强的风险集中在几类边界。公开方法体替换、某个删除子集、某类栈读取或 Host 组件通过，分别证明自己的范围；完整结构事务需要它们在真实设备上共同成立。下面说明为什么这些边界仍值得持续验证。</p>
+<div class="table-wrap"><table><thead><tr><th>风险类别</th><th>可能造成什么</th><th>当前边界与应对</th></tr></thead><tbody>
+<tr><td>ART 更新与 ABI 差异</td><td>同一系统版本也可能改变符号、声明或缓存协议</td><td>能力按实际校准启用；更新后重新验证，不按机型名单放行</td></tr>
+<tr><td>生命周期与锁顺序</td><td>自等待、死锁、失去 GC 根或过晚清理</td><td>准备与最终窗口分离，要求同一事务所有权；新组合仍需完整设备链证明</td></tr>
+<tr><td>优化执行与覆盖缺口</td><td>未覆盖的内联、并发、回调或旧引用路径沿用错误事实</td><td>按实际执行形态扩展回归；无法确认恢复的活动帧拒绝</td></tr>
+<tr><td>性能与长期资源</td><td>暂停成本、解释执行回退、退役元数据保留和卸载压力</td><td>长期前台、GC 与 ClassLoader 回归；部分回退仍有进程级影响</td></tr>
+<tr><td>业务语义变化</td><td>新字段默认值不满足业务假设，旧引用触发链接或访问异常</td><td>运行时保留已定义语义，调用方明确初始化与错误处理策略</td></tr>
 </tbody></table></div>
-<h3>4.3 一次贡献的工作流程</h3>
-<p>先复现失败并确定应有语义。问题属于结构或抽象错误时，重构并删除过时路径；复用现有的校准、根管理和事务所有权，不在错误结构上叠加临时条件。私有能力需要命名符号、固定声明和真实行为证据共同成立。</p>
+<p>这里区分了运行时的安全约束和业务的适配责任。例如新增字段在旧对象中为 <code>null</code> 是明确语义，不保证业务代码因此无需调整；而缺乏活动帧恢复条件时拒绝，则是避免不安全提交的运行时边界。更细的当前限制保留在 <a href="../LIMITATIONS.md">LIMITATIONS.md</a>。</p>
+<h3>3.5 后续需要完善的计划</h3>
+<p>后续工作的重点是扩大真实能力覆盖，并把提交成本和生命周期收敛得更明确。我按以下顺序推进，每一项都有可观察的完成条件。</p>
+<ol class="roadmap-list"><li><strong>闭合跨版本结构事务。</strong>把成员、层级、强根、发布和清理接入同一真实生命周期。完成条件是对应冻结 APK 在目标设备上同时证明成功提交、提交前拒绝和失败退款，不能仅凭组件通过启用。</li><li><strong>补齐优化调用与旧引用矩阵。</strong>覆盖更多 AOT/JIT 内联、多个并发帧、同类竞争、转换回调组合和句柄形式。每种形态记录实际机器码状态、结果与旧定义完整性。</li><li><strong>缩小执行回退与提交成本。</strong>在正确性成立后评估停顿，改善受影响方法范围与优化恢复策略；恢复信息不足的非调试 AOT 仍先保留拒绝边界。</li><li><strong>完善回收与长期稳定性。</strong>扩展旧引用保活/释放、ClassLoader 卸载、后台 GC 和前台交互，观察多轮演进后的资源趋势及崩溃。</li><li><strong>改善诊断与接入体验。</strong>让能力报告准确描述当前子集、拒绝阶段和原因，让工具决定何时重试、如何生成和组织补丁。</li></ol>
+</section>
+<section class="section" id="contribute"><div class="number">04 / A DEVELOPER'S MAP</div><h2>代码怎么读，改动从哪里开始？</h2>
+<p>如果你熟悉 Android、JNI 或 C++，可以先沿着一条使用路径读代码，再进入具体算法。仓库里的模块虽然多，主要回答三个问题：库怎样初始化，重定义请求怎样被接管，结构变化怎样安全提交。</p>
+<h3>4.1 先分清两条路径：初始化与每次请求</h3>
+<p><code>DcevmRuntime.initialize</code> 是初始化入口。它加载增强库并附加 Agent，Native 侧选择后端、校准能力和安装路由。后续用户的每一次重定义通过自己的 JVMTI 环境进入标准接口，无需每次再调用 Java 初始化。</p>
+<figure class="figure"><div class="figure-head"><span class="figure-title">研发阅读的两条主线</span><span class="figure-label">INITIALIZE / REDEFINE</span></div><div class="code-routes"><div><strong>① 初始化：准备引擎与能力</strong><div class="route-item">DcevmRuntime.java</div><div class="down" aria-hidden="true">↓</div><div class="route-item">core/agent.cc</div><div class="down" aria-hidden="true">↓</div><div class="route-item">backend_factory + production_bootstrap</div><div class="down" aria-hidden="true">↓</div><div class="route-item">能力校准、选择后端、安装路由</div></div><div><strong>② 请求：提交一次类变更</strong><div class="route-item">用户 Agent · RedefineClasses</div><div class="down" aria-hidden="true">↓</div><div class="route-item">ART 命名重定义入口与增强 Hook</div><div class="down" aria-hidden="true">↓</div><div class="route-item">后端事务 + 公共迁移 / 守卫服务</div><div class="down" aria-hidden="true">↓</div><div class="route-item">原 ART 服务 · 复核、更新与清理</div></div></div><figcaption>图 8 · 这是阅读路线，省略内部服务交错。<code>core/agent.cc</code> 主要连接库初始化与诊断，不表示用户的每次标准调用都先绕回这个 Java/JNI 入口。</figcaption></figure>
+<p>建议先看 <a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>、<a href="../../artdcevm/src/main/cpp/core/agent.cc">core/agent.cc</a> 和 <a href="../../artdcevm/src/main/cpp/platform/backend_factory.cc">backend_factory.cc</a>。随后读 <a href="../../artdcevm/src/main/cpp/platform/common/capability_backend.cc">capability_backend.cc</a>，理解公开能力、独立子集与完整增强如何被分别报告；再结合 <a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a> 阅读事务路由。</p>
+<h3>4.2 用职责理解目录，不需要先背文件名</h3>
+<div class="table-wrap"><table><thead><tr><th>你关心的问题</th><th>从哪里看</th><th>这一层负责什么</th></tr></thead><tbody>
+<tr><td>怎么加载、附加与初始化？</td><td>Java <code>api/</code>、Native <code>core/</code></td><td>对外入口、Agent 生命周期、诊断和进程协调</td></tr>
+<tr><td>接口如何接到设备实现？</td><td><code>api/</code>、<code>hooks/</code>、<code>platform/backend_factory.*</code></td><td>后端契约、Hook 管理与能力选择</td></tr>
+<tr><td>类结构怎样被分析和迁移？</td><td><code>evolution/</code> 与 <code>platform/common/</code></td><td>DEX schema、迁移规划，以及公共运行时算法</td></tr>
+<tr><td>为什么两个 Android 版本表现不同？</td><td><code>platform/abi/</code>、<code>symbols/</code>、实际版本实现</td><td>固定声明、命名符号、真正不同的布局或调用行为</td></tr>
+<tr><td>怎么复现与证明一个问题？</td><td><code>fixtures/</code>、<code>tests/host/</code>、<code>app/src/debug/</code>、<code>tools/</code></td><td>补丁定义、宿主测试、真实设备用例与执行脚本</td></tr>
+</tbody></table></div>
+<p>表中 Native 路径相对 <code>artdcevm/src/main/cpp/</code>。简单理解：<code>common</code> 放算法，<code>abi</code> 放“与 ART 约定的数据和调用格式”，版本目录放确实不同的行为。Android 11–17 的声明各有唯一归属；共享算法不按版本复制。当前目录细节以 <a href="../../artdcevm/src/main/cpp/platform/README.md">platform/README.md</a> 为准。</p>
+<h3>4.3 几个容易卡住的术语</h3>
+<p><strong>JNI</strong> 是 Java 与 Native 的桥，<strong>JVMTI</strong> 是 Native 工具操作虚拟机的接口；第二章的 Java 方法通过 JNI 把字节交给 Agent，真正的重定义由 JVMTI 发起。<strong>ABI</strong> 是调用与数据布局的约定。<strong>校准</strong> 是用真实运行时行为核对所选声明，而非只查版本号。</p>
+<p><strong>根</strong>可以理解为 GC 能识别并更新的对象引用：对象移动后，通过根重新取得当前位置。<strong>Provider / Service</strong> 是在受约束的上下文中提供具体能力的模块。<strong>RunState</strong> 则把同一次重定义需要的服务与生命周期装在一起。这些名字都服务于同一个目标：后续阶段不要误用之前失效的地址或权限。</p>
+<h3>4.4 以“新增字段值不对”为例，怎样开始修复？</h3>
+<p>先写一个很小的类和补丁：原字段是 7，新补丁新增字段。明确预期——旧字段仍为 7，旧对象新字段使用默认值，新建对象按新构造器初始化。然后分别观察字节码、反射或 JNI 路径，判断是迁移错误、根刷新错误还是某条访问缓存仍旧。</p>
+<p>如果是值迁移，优先阅读 <a href="../../artdcevm/src/main/cpp/platform/common/field_copy.cc">field_copy.cc</a>、<a href="../../artdcevm/src/main/cpp/platform/common/prepared_field_copy.cc">prepared_field_copy.cc</a> 与 <a href="../../artdcevm/src/main/cpp/platform/common/native_member_provider.cc">native_member_provider.cc</a>。如果只有某个版本失败，先核对对应 ABI 和行为证据。如果仅旧反射或句柄异常，则沿缓存与守卫路径追踪。这样比直接给版本后端增加一个条件更容易找到根因。</p>
+<p>测试同时覆盖成功与拒绝：不仅检查新字段值，也检查无效补丁被拒绝时旧对象仍正常；涉及 GC 的路径，增加对象移动或身份保持的证据。Host 测试帮助验证算法、内存和生命周期，设备测试证明真实 ART 调用链。</p>
+<h3>4.5 构建、验证与提交</h3>
 <pre><code>git clone https://github.com/ytlog/art-dcevm.git
 cd art-dcevm
 git switch -c codex/describe-your-change
 
-# 构建示例 APK 和发布 AAR
 ./gradlew :app:assembleDebug :artdcevm:assembleRelease
 
-# 按改动选择相应 Host 回归，例如
-python3 tools/test-class-metadata-abi-host.py
+# 选择与你的改动有关的 Host 回归
+python3 tools/test-field-copy-host.py
 python3 tools/test-native-schema-guard-verifier-host.py
 
-# 相关设备回归：按公开路径或已适配结构路径选择
+# 按目标能力选择设备路径
 python3 tools/run-public-jvmti.py --serial DEVICE
 python3 tools/android13/run-source-probe.py --serial DEVICE</code></pre>
-<p>本仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；准备兼容 JDK，在本机 <code>local.properties</code> 配置 SDK。按变化选择验证：算法与生命周期可用 Host ASan/UBSan 回归，ABI 与真实运行语义需要对应设备证据。</p>
-<p>将原始日志和逐次报告写入已忽略的 <code>build/evidence/</code>，在 <code>docs/VERIFICATION.md</code> 记录必要命令、结论、设备和 APK SHA-256。提交前检查 <code>git status</code> 与暂存差异，只包含本次代码、测试和文档；设备运行库、本机配置和构建产物留在本地。完成验证后创建清晰的 Git 提交，再通过自己的分支提出 PR。</p>
-<h3>4.4 欢迎哪些方向的贡献？</h3>
-<p>跨版本结构事务的完整接线，更多 JIT/AOT 与并发活动帧形态的恢复证明，旧引用与权限组合的回归，元数据回收、ClassLoader 卸载和长期稳定性，都有明确的工程价值。使用示例、诊断信息和文档同样是贡献入口。讨论能力时带上具体变更、调用路径与设备结果，能够更快判断差异所在。</p>
-<h3>进一步阅读与验证坐标</h3>
-<ul class="sources"><li><a href="../../README.md">README</a> 与 <a href="../MAVEN_PUBLISHING.md">Maven 发布指南</a>：接入与组件发布。</li><li><a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a> 与 <a href="../SCHEMA_RUN_STATE.md">RunState 生命周期</a>：增强路由和事务所有权。</li><li><a href="../ANDROID_COMPATIBILITY.md">兼容性</a>、<a href="../LIMITATIONS.md">能力边界</a>、<a href="../VERIFICATION.md">验证记录</a>：实际能力与回归身份。</li><li><a href="https://source.android.com/docs/core/runtime/art-ti">AOSP ART TI</a>、<a href="https://docs.oracle.com/en/java/javase/19/docs/specs/jvmti.html#RedefineClasses">JVMTI RedefineClasses</a>、<a href="https://developer.android.com/tools/d8">D8</a>：原生接口与编译工具依据。</li></ul>
-<p class="small">本文保留的既有完整回归坐标：2026-10-09，Xiaomi M2007J1SC / API 33，1,025 项检查通过；APK SHA-256：<code>6e6ecee925ced03038622ca637711745d7fcd2783346517a888109d26a6ec8b0</code>。这是特定路径与产物的验证，后续变更保留各自的验收记录。</p>
+<p>仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、SDK 37、NDK 27.2.12479018 和 CMake 4.3.4。准备兼容 JDK，在本机 <code>local.properties</code> 配置 SDK。验证按改动选择，不要求每次小改动重跑所有矩阵；涉及新设备私有能力时，则必须取得对应设备与调用语义的证据。</p>
+<p>原始日志和逐次报告放在已忽略的 <code>build/evidence/</code>，必要命令、结论、设备和 APK SHA-256 写入 <code>docs/VERIFICATION.md</code>。提交前核对状态与暂存差异，只包含本次代码、测试和文档，排除设备库、本机配置及构建产物。验证后创建清晰的 Git 提交，再通过自己的分支提出 PR。</p>
+<p>欢迎从小而明确的问题开始：补一个真实旧引用用例、改进拒绝诊断、修正公共算法或证明一个 ABI 差异。贡献说明最好回答四件事：触发条件、正确语义、修改位置，以及哪些证据支持结果。</p>
+<h3>参考与复核入口</h3>
+<ul class="sources"><li><a href="../../README.md">README</a>、<a href="../MAVEN_PUBLISHING.md">发布指南</a>：构建与组件接入。</li><li><a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a>、<a href="../SCHEMA_RUN_STATE.md">RunState</a>、<a href="../PREPARED_RUNTIME_ROOTS.md">根与最终窗口</a>：第三章方案的详细设计。</li><li><a href="../ANDROID_COMPATIBILITY.md">兼容性</a>、<a href="../LIMITATIONS.md">当前边界</a>、<a href="../VERIFICATION.md">验证记录</a>：实际运行结果与证据身份。</li></ul>
+<p class="small">保留的既有回归坐标：2026-10-09，Xiaomi M2007J1SC / API 33，1,025 项检查通过；APK SHA-256：<code>6e6ecee925ced03038622ca637711745d7fcd2783346517a888109d26a6ec8b0</code>。这是特定路径与产物的验证，后续变更保留各自的验收记录。</p>
 </section>
 <div class="closing">标准入口，更强的重定义能力。<br><strong>ART DCEVM，增强 ART JVMTI 的 RedefineClasses。</strong></div>
-</article></main><footer class="footer">ART DCEVM · 离线阅读与交互演示 · 动画描述重定义语义，不执行真实重定义。</footer></div>
+</article></main><footer class="footer">ART DCEVM · 技术博客 · GIF、配图与交互均为语义示意，文章与 assets 目录可一并离线阅读。</footer></div>
 <script>
 (() => {
 'use strict';
@@ -377,6 +388,22 @@ function renderFrames() {
 }
 $('frame-next').onclick = () => { frameStage = Math.min(2, frameStage + 1); renderFrames(); };
 $('frame-reset').onclick = () => { frameStage = 0; renderFrames(); };
+
+let gifSequence = 0;
+for (const player of document.querySelectorAll('.gif-player')) {
+ const picture = player.querySelector('img');
+ const status = player.querySelector('.gif-status');
+ function showPoster() {
+  picture.src = player.dataset.poster;
+  status.textContent = '当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。';
+ }
+ player.querySelector('.gif-play').onclick = () => {
+  picture.src = player.dataset.gif + '?play=' + (++gifSequence);
+  status.textContent = 'GIF 单次播放，结束停留在最终状态；点击播放可以重新观看。';
+ };
+ player.querySelector('.gif-static').onclick = showPoster;
+ window.addEventListener('beforeprint', showPoster);
+}
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stopObject(); stopTransaction(); } });
 })();
 </script>
