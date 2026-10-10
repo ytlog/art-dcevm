@@ -18,6 +18,8 @@ class Owner final {
  static std::unique_ptr<Owner> PrepareCold(HookEngine&,JNIEnv*,jvmtiEnv*,jobjectArray original_installed_dex,std::string*);
  ~Owner();
  Owner(const Owner&)=delete;Owner& operator=(const Owner&)=delete;
+ // Worker starts in ordinary JNI while all witnesses remain strong globals.
+ // Register only in the later real Runnable inspection, before any stop.
  bool RegisterRoots(const runnable_jni::Context&,source_handle_roots::Pool&,std::string*);
  bool Start(JNIEnv*,std::string*);
  bool CalibrateStopped(const native_source_stop::Session&,void* self,void* jit_cache,

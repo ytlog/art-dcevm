@@ -93,13 +93,14 @@ std::unique_ptr<Owner> Owner::PrepareMode(HookEngine& hooks,JNIEnv* env,jvmtiEnv
  return o;
 }
 bool Owner::RegisterRoots(const runnable_jni::Context& context,source_handle_roots::Pool& roots,std::string* error){
- if(started_||slots_[0]||context.vm!=vm_||!context.self||!roots.ReadyForSourceAccess())return Fail(error,"Compiled fixture roots require the ordinary preparation scope");
+ if(!started_||!target_||target_!=OrdinaryBlockedTarget()||slots_[0]||context.vm!=vm_||!context.self||!roots.ReadyForSourceAccess())return Fail(error,"Compiled fixture roots require its started worker and fresh Runnable owner");
  for(size_t i=0;i<3;++i){void* object=nullptr;if(!runnable_executor::DecodeStrongGlobal(context,references_[i],&object)||!object||!(slots_[i]=roots.Add(object,error)))return false;}
  root_owner_=context.self;return true;
 }
 bool Owner::Start(JNIEnv* env,std::string* error){
  JavaVM* observed=nullptr;
- if(!env||env->GetJavaVM(&observed)!=JNI_OK||observed!=vm_||started_||!slots_[0]||!slots_[1]||!slots_[2]||env->ExceptionCheck())return Fail(error,"Compiled fixture start requires all pre-registered roots");
+ if(!env||env->GetJavaVM(&observed)!=JNI_OK||observed!=vm_||started_||slots_[0]||env->ExceptionCheck())return Fail(error,"Compiled fixture start requires an ordinary unregistered owner");
+ for(auto root:references_){if(!root||env->GetObjectRefType(root)!=JNIGlobalRefType||env->ExceptionCheck())return Fail(env,error,"Compiled fixture start retained strong witnesses unavailable");}
  // Start may arm the Java/native gate before throwing any Throwable. Retain
  // cleanup responsibility before invoking it, so destruction clears/restores
  // the pending exception while releasing and joining the owned worker.

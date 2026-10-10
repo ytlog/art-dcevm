@@ -30,6 +30,7 @@
 #include "platform/common/native_production_schema_capabilities.h"
 #include "platform/common/frame_family_calibration.h"
 #include "platform/common/compiled_frame_owner.h"
+#include "platform/common/compiled_frame_episode.h"
 #include "platform/common/compiled_fixture_exception.h"
 #include "platform/common/compiled_frame_ordinary_context.h"
 #include "platform/common/thread_state_calibration.h"
@@ -161,12 +162,11 @@ struct NativeEngine final:Engine {
   source_handle_roots::Pool pool(e.source_capabilities.Roots());
   if(!r.fixture->RegisterRoots(context,pool,&r.error))return false;
   size_t extent=0;if(!method_identity::ReadableMappingExtent(context.self,&extent))return Fail(&r.error,"Compiled frame current Thread mapping unavailable");
-  if(!r.fixture->Start(context.env,&r.error))return false;
   bool proven=false;bool threw=false;bool mapping_failed=false;
   {native_source_stop::Session stopped(e.source_stop);
    CalibrationRoots roots(stopped,context.self);
    if(!pool.VisitUsedSlots([&](const void* slot){if(roots.count==roots.slots.size())return false;roots.slots[roots.count++]=slot;return true;})){
-    r.fixture->Close(context.env,&r.error);return false;
+    return Fail(&r.error,"Compiled frame root slot registration rejected");
    }
    CompiledScan scan{r,roots,context.self};
    if(e.source_stop.RequiresOriginalWaiting()){
@@ -176,12 +176,11 @@ struct NativeEngine final:Engine {
    }
    threw=scan.threw;mapping_failed=scan.attempted&&!scan.mappings;
    if(!proven&&!scan.attempted)r.error=stopped.Failure();
-  } // Actual resume/FinishGC/RestoreRunnable happen before any Java close.
-  const bool closed=r.fixture->Close(context.env,&r.error);
+  } // Actual resume/FinishGC/RestoreRunnable precede Pool destruction.
   if(mapping_failed)r.error="Compiled frame stopped mapping snapshot rejected";
   if(threw)r.error="Compiled frame stopped inspection threw";
   if(!proven&&r.error.empty())r.error=r.result.failure?r.result.failure:"Compiled frame original map/value oracle rejected";
-  return proven&&closed&&r.result.compiled_ready;
+  return proven&&r.result.compiled_ready;
  }
  bool PrepareCompiledFrames(JNIEnv* env,jvmtiEnv* ti){
   if(compiled_frames_proven)return true;
@@ -211,7 +210,13 @@ struct NativeEngine final:Engine {
   auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
   if(!current_thread)return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-current-thread-leaf-unavailable");
   CompiledRequest request{this,fixture.get(),{}, {},current_thread};
-  if(runnable_executor::With(env,anchor,CalibrateCompiled,&request)!=runnable_jni::Result::kSuccess){frame_geometry_diagnostic=request.error.empty()?"compiled-frame-calibration-runnable-callback-not-completed":request.error;return false;}
+  const bool episode=compiled_frame_fixture::RunEpisode(
+   [&](std::string* error){return fixture->Start(env,error);},
+   [&](std::string* error){const auto result=runnable_executor::With(env,anchor,CalibrateCompiled,&request);
+    if(result==runnable_jni::Result::kSuccess)return true;
+    if(error)*error=request.error.empty()?"compiled-frame-calibration-runnable-callback-not-completed":request.error;return false;},
+   [&](std::string* error){return fixture->Close(env,error);},&frame_geometry_diagnostic);
+  if(!episode)return false;
   auto finder=[&](const char* symbol){return hooks.FindSymbol("libart.so",symbol);};
   compiled_frames_proven=whole_process_frames::Service::Bind(request.result.scanner_family,finder,&whole_frames);
   if(compiled_frames_proven)BindReceiverProducer(request.result.scanner_family);

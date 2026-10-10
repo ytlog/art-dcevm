@@ -5,6 +5,7 @@ public final class CompiledFrameFixtureHostTest {
  private static native void failWait(boolean value);
  private static native void describe(Throwable original);
  private static native String diagnostic();
+ private static native boolean episode(CompiledFrameFixture.Run run,boolean oldScope,int rejectInspection);
  private static final class BrokenMessage extends RuntimeException {
   @Override public String getMessage(){throw new AssertionError("secondary diagnostic failure");}
  }
@@ -20,6 +21,12 @@ public final class CompiledFrameFixtureHostTest {
    run.close();run.close();
    if(blocked())throw new AssertionError("worker survived close");
   }
+  try{episode(CompiledFrameFixture.prepareCold(),true,0);throw new AssertionError("nested executor start accepted");}
+  catch(IllegalStateException expected){if(!expected.getMessage().contains("reentrant executor"))throw expected;}
+  if(!episode(CompiledFrameFixture.prepareCold(),false,0)||blocked())throw new AssertionError("Native start / Runnable inspect / Native close failed");
+  if(episode(CompiledFrameFixture.prepareCold(),false,1)||blocked())throw new AssertionError("inspection refusal leaked gate or roots");
+  if(episode(CompiledFrameFixture.prepareCold(),false,2)||blocked())throw new AssertionError("throwing inspection leaked gate or roots");
+  System.out.println("Actual worker episode: old nested executor reproduces refusal; Native start/Runnable inspect/Native close joins on success, refusal and thrown inspection");
   CompiledFrameFixture.Run failed=CompiledFrameFixture.prepareCold();failWait(true);
   try{failed.start();throw new AssertionError("start Throwable swallowed");}
   catch(OutOfMemoryError original){if(!original.getMessage().equals("host start Throwable after worker creation"))throw original;}
