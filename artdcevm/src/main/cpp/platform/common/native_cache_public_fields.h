@@ -49,5 +49,11 @@ class Service {
  private:
   using Field=void*(*)(void*);
   Field field_=nullptr;
+  // Fixed openjdkjvmti ti_class/ti_field declarations. Diagnostic only: these
+  // original source leaves never supply a storage grant when live API refuses.
+  using Fields=jvmtiError(*)(jvmtiEnv*,jclass,jint*,jfieldID**);
+  using Name=jvmtiError(*)(jvmtiEnv*,jclass,jfieldID,char**,char**,char**);
+  using Flags=jvmtiError(*)(jvmtiEnv*,jclass,jfieldID,jint*);
+  Fields original_fields_=nullptr;Name original_name_=nullptr;Flags original_flags_=nullptr;
 };
 }

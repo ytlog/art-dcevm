@@ -16,9 +16,10 @@ char* Text(const char* s){++buffers;auto* p=static_cast<char*>(std::malloc(std::
 jvmtiError Free(jvmtiEnv*,unsigned char* p){assert(p&&buffers>0);--buffers;std::free(p);return JVMTI_ERROR_NONE;}
 jvmtiError Signature(jvmtiEnv*,jclass,char** s,char**){Step();*s=Text(fault==1?"LFake;":"Ljava/lang/DexCache;");return fault==2?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 jvmtiError Loader(jvmtiEnv*,jclass,jobject* o){Step();*o=fault==3?reinterpret_cast<jobject>(parent_class):nullptr;return JVMTI_ERROR_NONE;}
-jvmtiError Fields(jvmtiEnv*,jclass,jint* n,jfieldID** p){Step();*n=fault==4?5:4;*p=static_cast<jfieldID*>(std::malloc(sizeof(jfieldID)*size_t(*n)));++buffers;for(int i=0;i<4;++i)(*p)[i]=Opaque(size_t(i));if(*n==5)(*p)[4]=(*p)[1];if(fault==5)(*p)[2]=nullptr;return fault==6?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
+jvmtiError Fields(jvmtiEnv*,jclass,jint* n,jfieldID** p){Step();*n=fault==4?5:fault==15?3:4;*p=static_cast<jfieldID*>(std::malloc(sizeof(jfieldID)*size_t(*n)));++buffers;for(int i=0;i<*n&&i<4;++i)(*p)[i]=Opaque(size_t(i));if(*n==5)(*p)[4]=(*p)[1];if(fault==15){(*p)[0]=Opaque(0);(*p)[1]=Opaque(2);(*p)[2]=Opaque(3);}if(fault==5)(*p)[2]=nullptr;return fault==6?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 size_t Index(jfieldID id){for(size_t i=0;i<4;++i)if(Opaque(i)==id||reinterpret_cast<jfieldID>(old_fields[i])==id)return i;std::abort();}
 jvmtiError Name(jvmtiEnv*,jclass,jfieldID id,char** n,char** t,char**){Step();const auto i=Index(id);*n=Text(names[i]);*t=Text(fault==7&&i==1?"I":types[i]);return fault==8?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
+jvmtiError OriginalFields(jvmtiEnv* ti,jclass owner,jint* n,jfieldID** p){const auto saved=fault;fault=0;const auto result=Fields(ti,owner,n,p);fault=saved;return result;}
 jvmtiError Flags(jvmtiEnv*,jclass,jfieldID id,jint* flags){Step();*flags=Index(id)==0||fault==9?8:2;return JVMTI_ERROR_NONE;}
 jvmtiError Declaring(jvmtiEnv*,jclass,jfieldID,jclass* c){Step();*c=reinterpret_cast<jclass>(fault==10?parent_class:old_class);return JVMTI_ERROR_NONE;}
 jobject Rooted(JNIEnv*,jobject p){Step();++root_attempts;if(fault==11&&root_attempts==1)return nullptr;++globals;++root_counts[p];return p;}
@@ -32,8 +33,10 @@ void* DecodeId(void* m,jfieldID){assert(m==&manager&&Read32(current)==0);++manag
 void* OriginalField(void* mirror){auto* f=FieldLeaf(mirror);return decode_mismatch?old_fields[0]:f;}
 jclass PublicFind(JNIEnv*,const char*){Step();return reinterpret_cast<jclass>(meta_class);}
 jboolean PublicInstance(JNIEnv*,jobject,jclass){Step();return true;}
-jmethodID PublicMethod(JNIEnv*,jclass,const char* name,const char*){Step();int id=!std::strcmp(name,"getDeclaringClass")?1:!std::strcmp(name,"getName")?2:!std::strcmp(name,"getType")?3:!std::strcmp(name,"getModifiers")?4:5;return reinterpret_cast<jmethodID>(uintptr_t(id));}
-jobject PublicObject(JNIEnv*,jobject value,jmethodID method,va_list){Step();if(pending)return nullptr;switch(uintptr_t(method)){case 1:return reinterpret_cast<jobject>(old_class);case 2:return value==reinterpret_cast<jobject>(parent_class)?reinterpret_cast<jobject>(const_cast<char*>("long")):reinterpret_cast<jobject>(const_cast<char*>(names[Index(reinterpret_cast<jfieldID>(reinterpret_cast<Mirror*>(value)->field))]));case 3:return reinterpret_cast<jobject>(parent_class);default:std::abort();}}
+jmethodID PublicMethod(JNIEnv*,jclass,const char* name,const char*){Step();int id=!std::strcmp(name,"getDeclaredFieldsUnchecked")?6:!std::strcmp(name,"getDeclaringClass")?1:!std::strcmp(name,"getName")?2:!std::strcmp(name,"getType")?3:!std::strcmp(name,"getModifiers")?4:5;return reinterpret_cast<jmethodID>(uintptr_t(id));}
+jobject PublicObject(JNIEnv*,jobject value,jmethodID method,va_list args){Step();if(pending)return nullptr;switch(uintptr_t(method)){case 6:assert(va_arg(args,int)==JNI_FALSE);return reinterpret_cast<jobject>(&mirrors);case 1:return reinterpret_cast<jobject>(old_class);case 2:return value==reinterpret_cast<jobject>(parent_class)?reinterpret_cast<jobject>(const_cast<char*>("long")):reinterpret_cast<jobject>(const_cast<char*>(names[Index(reinterpret_cast<jfieldID>(reinterpret_cast<Mirror*>(value)->field))]));case 3:return reinterpret_cast<jobject>(parent_class);default:std::abort();}}
+jsize MirrorLength(JNIEnv*,jarray){Step();return 4;}
+jobject MirrorElement(JNIEnv*,jobjectArray,jsize i){Step();return reinterpret_cast<jobject>(&mirrors[size_t(i)]);}
 jint PublicInt(JNIEnv*,jobject value,jmethodID,va_list){Step();return jint(reinterpret_cast<abi::arm64::Field*>(reinterpret_cast<Mirror*>(value)->field)->access_flags);}
 jboolean PublicEqual(JNIEnv*,jobject a,jmethodID,va_list args){Step();return !pending&&a==va_arg(args,jobject);}
 const char* PublicUtf(JNIEnv*,jstring text,jboolean*){Step();return pending?nullptr:reinterpret_cast<const char*>(text);}
@@ -46,7 +49,7 @@ jint ActualVM(JNIEnv*,JavaVM** out){*out=reinterpret_cast<JavaVM*>(&runtime);ret
 bool unknown_global=false;
 jobjectRefType ActualKind(JNIEnv*,jobject){Step();return unknown_global?JNIInvalidRefType:JNIGlobalRefType;}
 void OriginalRoots(void*,abi::arm64::android_common::HandleRootVisitor*,uint32_t){}
-class PublicHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{if(std::strstr(name,"HandleScopeVisitRoots")||std::strstr(name,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots);if(std::strstr(name,"GetArtFieldEv"))return reinterpret_cast<void*>(OriginalField);if(std::strstr(name,"DecodeFieldId"))return reinterpret_cast<void*>(DecodeId);if(std::strstr(name,"ArtField7GetName"))return reinterpret_cast<void*>(OriginalNativeName);return Hooks::FindSymbol(lib,name);}};
+class PublicHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{if(std::strstr(name,"ClassUtil14GetClassFields"))return reinterpret_cast<void*>(OriginalFields);if(std::strstr(name,"FieldUtil12GetFieldName"))return reinterpret_cast<void*>(Name);if(std::strstr(name,"FieldUtil17GetFieldModifiers"))return reinterpret_cast<void*>(Flags);if(std::strstr(name,"HandleScopeVisitRoots")||std::strstr(name,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots);if(std::strstr(name,"GetArtFieldEv"))return reinterpret_cast<void*>(OriginalField);if(std::strstr(name,"DecodeFieldId"))return reinterpret_cast<void*>(DecodeId);if(std::strstr(name,"ArtField7GetName"))return reinterpret_cast<void*>(OriginalNativeName);return Hooks::FindSymbol(lib,name);}};
 }
 int main(){
  InitJni();InitializeHeap();names[1]="resolvedFields";
@@ -62,7 +65,7 @@ int main(){
  void* self=thread.data();JNIEnv* actual_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&actual_env,8);
  env_owner.self=self;env_owner.vm=&runtime;table.GetJavaVM=ActualVM;
  source_handle_roots::Service roots;assert(source_handle_roots::Service::Bind(hooks,storage,runnable_jni::Context{self,&env,&runtime},&roots,&error));
- table.GetObjectRefType=ActualKind;table.ExceptionCheck=Pending;table.NewGlobalRef=Rooted;table.DeleteGlobalRef=Release;table.GetObjectClass=ExactClass;table.IsSameObject=Exact;table.ToReflectedField=Reflect;table.FromReflectedField=Roundtrip;table.GetLongField=Long;table.FindClass=PublicFind;table.IsInstanceOf=PublicInstance;table.GetMethodID=PublicMethod;table.CallObjectMethodV=PublicObject;table.CallIntMethodV=PublicInt;table.CallBooleanMethodV=PublicEqual;table.GetStringUTFChars=PublicUtf;table.ReleaseStringUTFChars=UtfRelease;table.GetFieldID=PublicFieldId;table.NewWeakGlobalRef=Weak;table.DeleteWeakGlobalRef=WeakDelete;
+ table.GetObjectRefType=ActualKind;table.ExceptionCheck=Pending;table.NewGlobalRef=Rooted;table.DeleteGlobalRef=Release;table.GetObjectClass=ExactClass;table.IsSameObject=Exact;table.ToReflectedField=Reflect;table.FromReflectedField=Roundtrip;table.GetLongField=Long;table.FindClass=PublicFind;table.IsInstanceOf=PublicInstance;table.GetMethodID=PublicMethod;table.CallObjectMethodV=PublicObject;table.CallIntMethodV=PublicInt;table.CallBooleanMethodV=PublicEqual;table.GetStringUTFChars=PublicUtf;table.ReleaseStringUTFChars=UtfRelease;table.GetFieldID=PublicFieldId;table.NewWeakGlobalRef=Weak;table.DeleteWeakGlobalRef=WeakDelete;table.GetArrayLength=MirrorLength;table.GetObjectArrayElement=MirrorElement;
  jvmtiInterface_1_ ti_table{};ti_table.GetClassSignature=Signature;ti_table.GetClassLoader=Loader;ti_table.GetClassFields=Fields;ti_table.GetFieldName=Name;ti_table.GetFieldModifiers=Flags;ti_table.GetFieldDeclaringClass=Declaring;ti_table.Deallocate=Free;jvmtiEnv ti{&ti_table};
  native_cache_public_fields::Service service;runtime_services::Snapshot receiver_snapshot;assert(service.Bind(hooks,receiver_snapshot,&error));
  std::unique_ptr<native_cache_public_fields::Witness> output;
@@ -109,6 +112,21 @@ int main(){
  assert(error.find("resolvedFieldsArray:J flags=2")!=std::string::npos);
  assert(error.find(std::string(names[0])+":"+types[0]+" flags=8")!=std::string::npos);
  names[1]=saved_name;
+ fault=15;assert(!observe()&&output.get()==retained&&globals==3&&weak_refs==1&&reads==old_reads);
+ assert(error.find("required=resolvedFields count=3")!=std::string::npos);
+ assert(error.find("original={count=4 status=0 observed={")!=std::string::npos);
+ assert(error.find("uncheckedFalse={count=4 observed={")!=std::string::npos);
+ assert(error.find("resolvedFields flags=2 nativeOwner=exact")!=std::string::npos);
+ const auto refused_total=leaf;
+ for(trigger=1;trigger<=refused_total;++trigger){pending=false;assert(!observe());assert(pending&&leaf==trigger&&output.get()==retained&&globals==3&&weak_refs==1&&buffers==0);}
+ trigger=0;pending=false;
+ decode_mismatch=true;assert(!observe());decode_mismatch=false;
+ assert(error.find("uncheckedFalse={native-proof-refused: Independent cache mirror public/native name differs}")!=std::string::npos);
+ assert(output.get()==retained&&globals==3&&weak_refs==1&&buffers==0&&reads==old_reads);
+ const auto diagnostic_owner=old_fields[2]->declaring_class;old_fields[2]->declaring_class=uint32_t(uintptr_t(parent_class));
+ assert(!observe());old_fields[2]->declaring_class=diagnostic_owner;
+ assert(error.find("Independent cache mirror public/native owner differs")!=std::string::npos&&output.get()==retained&&globals==3&&buffers==0);
+ fault=0;
  assert(!service.Observe(&env,&ti,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedTypes",metadata,&output,&error));
  assert(error.find("required=resolvedTypes count=4")!=std::string::npos&&output.get()==retained&&reads==old_reads);
  decode_mismatch=true;assert(!observe());assert(error.find("Calibrated cache Field name/type differs")!=std::string::npos);decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
