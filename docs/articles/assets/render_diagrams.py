@@ -82,6 +82,55 @@ def render(font_path, output):
         d.text((30, 398), '非调试 AOT 场景示意 · 没有即时去优化', font=small, fill=MUTED)
         return im
 
+    def independent_progress(d, progress):
+        # Separate tracks avoid implying that one scenario flows into the other.
+        for left, color in ((50, TEAL), (450, AMBER)):
+            d.line((left, 335, left + 260, 335), fill=LINE, width=2)
+            x = left + progress * 260
+            d.ellipse((x - 4, 331, x + 4, 339), fill=color)
+
+    def batches(stage, progress=1):
+        phases = ['① 两个独立批次，各自保留 V1', '② 为每个批次准备与验证',
+                  '③ 安全条件产生两种结果', '④ 成功提交或完整保留旧定义']
+        im, d = base('批次原子性：提交与拒绝', phases[stage])
+        committed = stage == 3
+        refused = stage >= 2
+        box(d, (30, 140, 330, 323), '情景 A · 条件满足',
+            ['整批使用 V2', '各相关类共同更新'] if committed else
+            ['准备完整新定义', '旧 V1 尚未替换'], active=committed)
+        box(d, (430, 140, 730, 323), '情景 B · 条件不足',
+            ['整批仍使用 V1', 'V2 本次未提交'] if refused else
+            ['准备完整新定义', '旧 V1 尚未替换'], warning=refused)
+        independent_progress(d, progress)
+        messages = ['A、B 是独立请求，不是一个批次的两部分',
+                    '转换回调后，以最终 DEX 为准',
+                    '可失败边界中拒绝不满足条件的请求',
+                    '拒绝后，旧类与旧对象保持完整']
+        d.text((30, 352), messages[stage], font=small, fill=INK)
+        d.text((30, 398), '语义示意 · 省略原始 ART 的内部阶段交错', font=small, fill=MUTED)
+        return im
+
+    def recovery(stage, progress=1):
+        phases = ['① 核对真实 PC 与恢复信息', '② 按帧资格选择处理路径',
+                  '③ 继续提交或先让旧调用完成', '④ 两类独立执行结果']
+        im, d = base('活动帧：去优化与安全拒绝', phases[stage])
+        converted = stage >= 1
+        box(d, (30, 140, 330, 323), '可恢复的已校准帧',
+            ['协调去优化', '满足条件后才提交'] if converted else
+            ['完整寄存器映射', '外层与内联层核对'], active=converted)
+        box(d, (430, 140, 730, 323), '非调试 AOT 活动帧',
+            ['退出后重新验证', '重试是独立新事务'] if stage == 3 else
+            ['本次请求拒绝', '旧调用继续 V1'] if stage >= 1 else
+            ['即时恢复条件不足', '先保留旧定义'], warning=stage < 3, active=stage == 3)
+        independent_progress(d, progress)
+        messages = ['能暂停线程，不等于能恢复机器码执行',
+                    '完整映射与正确运行窗口共同决定资格',
+                    '无法恢复的帧退出前，不提交相关变化',
+                    '不同情景各自满足整批一致性']
+        d.text((30, 352), messages[stage], font=small, fill=INK)
+        d.text((30, 398), '语义示意 · 不代表同一事务可以部分成功', font=small, fill=MUTED)
+        return im
+
     def save(name, draw):
         frames, durations = [], []
         for stage in range(4):
@@ -102,6 +151,8 @@ def render(font_path, output):
     output.mkdir(parents=True, exist_ok=True)
     save('consistent-publication', consistency)
     save('active-frame-retry', retry)
+    save('batch-transactions', batches)
+    save('frame-recovery', recovery)
 
 
 if __name__ == '__main__':

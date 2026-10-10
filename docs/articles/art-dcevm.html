@@ -7,8 +7,8 @@
 <title>ART DCEVM：增强 ART JVMTI 的 RedefineClasses 能力</title>
 <style>
 :root{color-scheme:light;--bg:#f5f4ef;--paper:#fffefa;--ink:#172c30;--muted:#526568;--line:#d6dfda;--teal:#087e80;--mint:#d4eee5;--amber:#9b5712;--sand:#fff0d4;--mono:#153c41;--shadow:0 22px 65px #17382b0d}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.9}a{color:var(--teal);text-underline-offset:4px}button{font:inherit;cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--teal);outline-offset:4px}button{border:1px solid var(--line);background:var(--paper);border-radius:99px;padding:8px 18px;color:var(--ink)}button.primary{background:var(--teal);color:white;border-color:var(--teal)}button:disabled{opacity:.45;cursor:default}.shell{max-width:1140px;margin:auto;padding:0 40px}.top{display:flex;justify-content:space-between;gap:16px;padding:26px 0;border-bottom:1px solid var(--line);font-size:13px;letter-spacing:.08em}.brand{font-weight:700}.top a{text-decoration:none}.hero{padding:78px 0 48px;position:relative}.eyebrow{color:var(--teal);font-size:12px;letter-spacing:.18em;font-weight:650;text-transform:uppercase}h1{font-size:clamp(40px,6vw,72px);line-height:1.18;letter-spacing:-.04em;margin:22px 0 26px;font-weight:730}h1 span{color:var(--teal)}.api-title{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:clamp(22px,4.6vw,60px);letter-spacing:-.045em}.lead{font-size:20px;max-width:790px;line-height:1.9}.meta{font-size:13px;color:var(--muted);margin:24px 0}.chips{display:flex;gap:10px;flex-wrap:wrap}.chip{border:1px solid var(--line);border-radius:99px;padding:4px 13px;font-size:12px}.toc{display:flex;flex-wrap:wrap;gap:12px 25px;padding:20px 0 28px;border-bottom:1px solid var(--line)}.toc a{font-size:14px;text-decoration:none}.article{max-width:850px;margin:auto}.section{padding-top:62px}h2{font-size:30px;line-height:1.45;letter-spacing:-.02em;margin:8px 0 24px}h3{font-size:20px;line-height:1.5;margin:34px 0 13px}p{margin:16px 0}strong{font-weight:650}.number{font-size:12px;letter-spacing:.12em;color:var(--teal)}.pull{border-left:3px solid var(--teal);padding:7px 0 7px 24px;font-size:22px;line-height:1.7;margin:30px 0}.note{background:var(--mint);padding:18px 24px;border-radius:12px;font-size:14px;margin:24px 0}.note.plan{background:var(--sand)}.figure{background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:28px;margin:30px 0;box-shadow:var(--shadow)}.figure-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:22px}.figure-title{font-weight:650;font-size:17px}.figure-label{font-size:11px;letter-spacing:.1em;color:var(--muted)}figcaption{font-size:13px;color:var(--muted);margin-top:20px;line-height:1.8}.controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:18px 0 0}.status{min-height:64px;font-size:14px;padding-top:16px;color:var(--muted)}.object-grid{display:grid;grid-template-columns:1fr 46px 1fr;gap:8px;align-items:center}.schema{border-radius:12px;overflow:hidden;border:1px solid var(--line)}.schema-title{padding:12px 16px;background:var(--mono);color:#fff;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.field{padding:13px 16px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.field.new{background:var(--mint)}.field.pending{opacity:.4}.field.active{background:var(--mint)}.arrow{color:var(--teal);font-size:28px;text-align:center}.identity{display:flex;gap:10px;align-items:center;margin-top:16px;font-size:13px}.dot{width:9px;height:9px;background:var(--teal);border-radius:50%;flex-shrink:0}.object-grid[data-state="1"] .schema:last-child{animation:rise .6s both}.object-grid[data-state="2"] .new{animation:highlight .7s both}@keyframes rise{from{transform:translateY(8px);opacity:.5}to{transform:translateY(0);opacity:1}}@keyframes highlight{from{box-shadow:inset 0 0 0 2px var(--teal)}to{box-shadow:inset 0 0 0 0 transparent}}
-.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.8}th{text-align:left;font-weight:650;border-bottom:2px solid var(--line);padding:13px 12px}td{border-bottom:1px solid var(--line);padding:14px 12px;vertical-align:top}td:first-child{min-width:108px}.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}.small{font-size:13px;color:var(--muted)}pre{background:var(--mono);color:#e5f3ee;padding:22px 24px;border-radius:12px;overflow:auto;font:13px/1.85 ui-monospace,SFMono-Regular,Menlo,monospace}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}p code,li code,td code{color:var(--teal);overflow-wrap:anywhere}.architecture{width:100%;height:auto;display:block}.architecture text{font-family:system-ui,-apple-system,"PingFang SC",sans-serif}.layers{display:grid;gap:10px}.layer{padding:16px 20px;border:1px solid var(--line);border-radius:10px;display:flex;gap:20px;justify-content:space-between;align-items:center}.layer:nth-child(3){background:var(--mint);border-color:#a2cfc3}.layer strong{font-size:15px}.layer span{font-size:12px;color:var(--muted);text-align:right}.down{text-align:center;color:var(--teal);height:16px;line-height:16px}.timeline{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{padding:13px 10px;border-top:3px solid var(--line);transition:background .35s,border-color .35s;min-width:0}.step.current{background:var(--mint);border-color:var(--teal)}.step.done{border-color:var(--teal)}.step.failed{background:var(--sand);border-color:var(--amber)}.step b{font-size:13px;display:block}.step span{font-size:11px;color:var(--muted);line-height:1.6;display:block;margin-top:4px}.transaction{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}.version{padding:20px;background:var(--bg);border-radius:10px;transition:background .35s}.version strong{display:block;font-size:18px}.version span{font-size:12px;color:var(--muted)}.version.live{background:var(--mint)}.version.rejected{background:var(--sand)}.scenario{margin:18px 0 0;display:flex;gap:8px;flex-wrap:wrap}.scenario button[aria-pressed="true"]{border-color:var(--teal);background:var(--mint)}.frame-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.frame-lane{padding:18px;border:1px solid var(--line);border-radius:12px}.lane-title{font-size:13px;font-weight:650}.stack{display:flex;flex-direction:column;gap:6px;margin:16px 0}.stack div{padding:9px 12px;background:var(--bg);font:12px/1.6 ui-monospace,SFMono-Regular,monospace;transition:transform .5s,background .5s}.stack .target{background:var(--mint)}.stack .blocked{background:var(--sand)}.stack.converted .target{transform:translateY(-3px)}.lane-result{font-size:13px;min-height:48px;line-height:1.7}.frame-grid[data-stage="2"] .blocked{opacity:.45}.sources{font-size:14px}.sources li{margin:10px 0}.closing{padding:44px 0 64px;font-size:22px;line-height:1.75}.footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:12px;color:var(--muted)}.nojs{padding:12px;background:var(--sand)}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.9}a{color:var(--teal);text-underline-offset:4px}button{font:inherit;cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--teal);outline-offset:4px}button{border:1px solid var(--line);background:var(--paper);border-radius:99px;padding:8px 18px;color:var(--ink)}button.primary{background:var(--teal);color:white;border-color:var(--teal)}button:disabled{opacity:.45;cursor:default}.shell{max-width:1140px;margin:auto;padding:0 40px}.top{display:flex;justify-content:space-between;gap:16px;padding:26px 0;border-bottom:1px solid var(--line);font-size:13px;letter-spacing:.08em}.brand{font-weight:700}.top a{text-decoration:none}.hero{padding:78px 0 48px;position:relative}.eyebrow{color:var(--teal);font-size:12px;letter-spacing:.18em;font-weight:650;text-transform:uppercase}h1{font-size:clamp(40px,6vw,72px);line-height:1.18;letter-spacing:-.04em;margin:22px 0 26px;font-weight:730}h1 span{color:var(--teal)}.api-title{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:clamp(22px,4.6vw,60px);letter-spacing:-.045em}.lead{font-size:20px;max-width:790px;line-height:1.9}.meta{font-size:13px;color:var(--muted);margin:24px 0}.chips{display:flex;gap:10px;flex-wrap:wrap}.chip{border:1px solid var(--line);border-radius:99px;padding:4px 13px;font-size:12px}.toc{display:flex;flex-wrap:wrap;gap:12px 25px;padding:20px 0 28px;border-bottom:1px solid var(--line)}.toc a{font-size:14px;text-decoration:none}.article{max-width:850px;margin:auto}.section{padding-top:62px}h2{font-size:30px;line-height:1.45;letter-spacing:-.02em;margin:8px 0 24px}h3{font-size:20px;line-height:1.5;margin:34px 0 13px}p{margin:16px 0}strong{font-weight:650}.number{font-size:12px;letter-spacing:.12em;color:var(--teal)}.pull{border-left:3px solid var(--teal);padding:7px 0 7px 24px;font-size:22px;line-height:1.7;margin:30px 0}.note{background:var(--mint);padding:18px 24px;border-radius:12px;font-size:14px;margin:24px 0}.note.plan{background:var(--sand)}.figure{background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:28px;margin:30px 0;box-shadow:var(--shadow)}.figure-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:22px}.figure-title{font-weight:650;font-size:17px}.figure-label{font-size:11px;letter-spacing:.1em;color:var(--muted)}figcaption{font-size:13px;color:var(--muted);margin-top:20px;line-height:1.8}.controls{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:18px 0 0}.status{min-height:64px;font-size:14px;padding-top:16px;color:var(--muted)}.object-grid{display:grid;grid-template-columns:1fr 46px 1fr;gap:8px;align-items:center}.schema{border-radius:12px;overflow:hidden;border:1px solid var(--line)}.schema-title{padding:12px 16px;background:var(--mono);color:#fff;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.field{padding:13px 16px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.field.new{background:var(--mint)}.field.pending{opacity:.4}.field.active{background:var(--mint)}.arrow{color:var(--teal);font-size:28px;text-align:center}.identity{display:flex;gap:10px;align-items:center;margin-top:16px;font-size:13px}.dot{width:9px;height:9px;background:var(--teal);border-radius:50%;flex-shrink:0}
+.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.8}th{text-align:left;font-weight:650;border-bottom:2px solid var(--line);padding:13px 12px}td{border-bottom:1px solid var(--line);padding:14px 12px;vertical-align:top}td:first-child{min-width:108px}.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}.small{font-size:13px;color:var(--muted)}pre{background:var(--mono);color:#e5f3ee;padding:22px 24px;border-radius:12px;overflow:auto;font:13px/1.85 ui-monospace,SFMono-Regular,Menlo,monospace}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}p code,li code,td code{color:var(--teal);overflow-wrap:anywhere}.architecture{width:100%;height:auto;display:block;border-radius:12px}.architecture-enlarge{display:block}.architecture-text{margin-top:20px}.architecture-text summary{cursor:pointer;color:var(--teal);font-size:14px}.architecture-text .layers{margin-top:18px}.architecture text{font-family:system-ui,-apple-system,"PingFang SC",sans-serif}.layers{display:grid;gap:10px}.layer{padding:16px 20px;border:1px solid var(--line);border-radius:10px;display:flex;gap:20px;justify-content:space-between;align-items:center}.layer:nth-child(3){background:var(--mint);border-color:#a2cfc3}.layer strong{font-size:15px}.layer span{font-size:12px;color:var(--muted);text-align:right}.down{text-align:center;color:var(--teal);height:16px;line-height:16px}.timeline{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{padding:13px 10px;border-top:3px solid var(--line);transition:background .35s,border-color .35s;min-width:0}.step.current{background:var(--mint);border-color:var(--teal)}.step.done{border-color:var(--teal)}.step.failed{background:var(--sand);border-color:var(--amber)}.step b{font-size:13px;display:block}.step span{font-size:11px;color:var(--muted);line-height:1.6;display:block;margin-top:4px}.transaction{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}.version{padding:20px;background:var(--bg);border-radius:10px;transition:background .35s}.version strong{display:block;font-size:18px}.version span{font-size:12px;color:var(--muted)}.version.live{background:var(--mint)}.version.rejected{background:var(--sand)}.scenario{margin:18px 0 0;display:flex;gap:8px;flex-wrap:wrap}.scenario button[aria-pressed="true"]{border-color:var(--teal);background:var(--mint)}.frame-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.frame-lane{padding:18px;border:1px solid var(--line);border-radius:12px}.lane-title{font-size:13px;font-weight:650}.stack{display:flex;flex-direction:column;gap:6px;margin:16px 0}.stack div{padding:9px 12px;background:var(--bg);font:12px/1.6 ui-monospace,SFMono-Regular,monospace;transition:transform .5s,background .5s}.stack .target{background:var(--mint)}.stack .blocked{background:var(--sand)}.stack.converted .target{transform:translateY(-3px)}.lane-result{font-size:13px;min-height:48px;line-height:1.7}.frame-grid[data-stage="2"] .blocked{opacity:.45}.sources{font-size:14px}.sources li{margin:10px 0}.closing{padding:44px 0 64px;font-size:22px;line-height:1.75}.footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:12px;color:var(--muted)}.nojs{padding:12px;background:var(--sand)}
 @media(max-width:650px){.shell{padding:0 20px}.hero{padding-top:48px}.lead{font-size:18px}h2{font-size:26px}.figure{padding:18px;border-radius:14px}.section{padding-top:44px}.two,.frame-grid{grid-template-columns:1fr}.timeline{grid-template-columns:1fr}.step{display:flex;gap:12px;align-items:center;padding:9px 12px;border-top:0;border-left:3px solid var(--line)}.step span{margin:0}.layer{align-items:flex-start;flex-direction:column;gap:5px}.layer span{text-align:left}.object-grid{grid-template-columns:1fr}.arrow{transform:rotate(90deg);height:40px}.transaction{grid-template-columns:1fr 1fr}.version{padding:13px}.field{font-size:13px}.pull{font-size:20px;padding-left:18px}.top{letter-spacing:0;font-size:12px}.toc{gap:9px 18px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}}
 @media print{body{background:white}.shell{max-width:none;padding:0}.top,.toc,.controls,.scenario{display:none}.hero{padding:20px 0}.section{padding-top:20px}.figure{box-shadow:none;break-inside:avoid}pre{white-space:pre-wrap;overflow-wrap:anywhere}.figure,pre{print-color-adjust:exact}h1{font-size:40px}a{color:inherit}.footer{padding-bottom:0}}
@@ -23,7 +23,7 @@ h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-fl
 <p class="lead">从方法体替换，到字段、方法和继承关系的结构变化：ART DCEVM 增强 ART 对标准类重定义请求的处理能力。你的 Agent 继续调用 <code>RedefineClasses</code>，运行时负责让变化一致地生效。</p>
 <div class="chips"><span class="chip">标准 JVMTI 入口</span><span class="chip">结构重定义</span><span class="chip">对象状态延续</span><span class="chip">无需 root</span></div>
 <p class="meta">项目介绍 · 2026 年 10 月 10 日 · 技术博客 · 接入示例、增强原理与代码导航</p></div>
-<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 接入与使用</a><a href="#principle">03 增强原理与风险</a><a href="#contribute">04 研发阅读指南</a></nav>
+<nav class="toc" aria-label="文章目录"><a href="#pain">01 痛点与增强</a><a href="#usage">02 第一次类重定义</a><a href="#principle">03 增强原理与风险</a><a href="#contribute">04 研发阅读指南</a></nav>
 <article class="article">
 <section class="section" id="pain"><div class="number">01 / WHY ART DCEVM</div><h2>现在的 JVMTI 痛点，我的库做了什么？</h2>
 <p>通过 JVMTI，Native Agent 可以对正在运行的应用发起类重定义。对于开发工具来说，这意味着修改代码后，应用有机会继续运行，当前页面、会话和对象状态可以保留下来。然而，代码迭代经常超出“修改方法体”的范围。</p>
@@ -40,19 +40,14 @@ h4{font-size:18px;line-height:1.65;margin:30px 0 12px;color:var(--teal)}.blog-fl
 <tr><td>多个相互依赖的类变化</td><td>完整批次协调与提交</td><td>可恢复失败发生在提交前，整批保留旧定义</td></tr>
 </tbody></table></div>
 <p>举一个贯穿本文的例子：已有 <code>Counter</code> 对象的 <code>count</code> 是 7。新定义增加 <code>label</code>，并让 <code>value()</code> 返回 <code>count * 2</code>。重定义后，已有对象保持 <code>count = 7</code>，后续调用返回 14，新增字段为 <code>null</code>。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">状态延续，定义更新</span><span class="figure-label">OBJECT EVOLUTION</span></div>
-<div class="object-grid" id="objects" data-state="0"><div class="schema"><div class="schema-title">Counter · 旧定义</div><div class="field"><span>count</span><span>7</span></div><div class="field"><span>value()</span><span>→ 7</span></div></div><div class="arrow" aria-hidden="true">→</div><div class="schema"><div class="schema-title" id="new-title">Counter · 待提交定义</div><div class="field" id="kept"><span>count</span><span>7 · 保留</span></div><div class="field new pending" id="added"><span>label</span><span>null · 新增</span></div><div class="field" id="method"><span>value()</span><span id="value">→ 14 · 提交后</span></div></div></div>
-<div class="identity"><span class="dot" aria-hidden="true"></span><span>延续同一业务对象的状态；示意图不表示物理地址或真实内存布局。</span></div>
-<div class="controls"><button type="button" class="primary" id="object-play">播放演进</button><button type="button" id="object-next">下一步</button><button type="button" id="object-reset">重置</button></div><div class="status" id="object-status" aria-live="polite">① 已有对象：count = 7。新定义已经准备，尚未提交。</div>
-<noscript><p class="nojs">提交后的结果：count = 7，label = null，value() = 14。已有对象不重新执行构造器。</p></noscript>
-<figcaption>图 1 · 已有对象新增字段使用默认值，即使补丁中写了 <code>label = "ready"</code>，也不会重跑已有对象的初始化代码。提交后新建的对象才按新定义执行构造器。</figcaption></figure>
+<figure class="figure gif-player" data-gif="assets/consistent-publication.gif" data-poster="assets/consistent-publication-poster.png"><div class="figure-head"><span class="figure-title">让状态迁移与访问更新保持一致</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/consistent-publication.gif" aria-label="打开完整尺寸动图：让状态迁移与访问更新保持一致"><img src="assets/consistent-publication-poster.png" width="760" height="470" alt="四阶段示意：旧定义运行；准备映射与强根；安全窗口协调更新；提交后count保持7、label为null、value返回14。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 1 · 用 Counter 说明对象状态和访问语义必须共同更新。阶段与时长为讲解而简化，不是 ART 调用日志，也不表示原有执行中的调用必然改变返回值。</figcaption></figure>
 <p>这项能力可以支撑开发期热重载、保留现场状态的调试，以及类演进研究。补丁编译、传输、校验和触发策略由工具负责；ART DCEVM 负责标准重定义入口背后的运行时增强。</p>
 <p class="small">验证范围：Android 13 / ARM64 既有增强路径有完整回归记录；Android 11–17 七个 ARM64 版本已有公开 JVMTI 回归。结构能力按实际符号与行为校准启用，具体组合见 <a href="../ANDROID_COMPATIBILITY.md">兼容性</a>与<a href="../LIMITATIONS.md">能力边界</a>。新的跨版本组合仍按各自验收推进。</p>
 </section>
-<section class="section" id="usage"><div class="number">02 / INTEGRATION</div><h2>我的库怎么用：从 Maven 到替换类</h2>
-<p>接入流程分成两件事：先初始化 ART DCEVM，使增强处理链就绪；再由自己的 JVMTI Agent 提交新 DEX。下面使用 <code>demo.Counter</code> 展示一个完整单类示例。应用须从进程启动时可调试，当前库最低 API 30，只构建 <code>arm64-v8a</code>。</p>
-<h3>2.1 配置组件与 Native 构建</h3>
-<p>下面预写发布后的坐标用法：<code>xxx</code> 替换成可获取的发布版本。正式 Maven Central 版本当前尚未上线；发布前可使用源码模块或本地 Maven 仓库，说明见 <a href="../MAVEN_PUBLISHING.md">发布指南</a>。通过 Maven 元数据接入时，ShadowHook 运行时依赖会自动传递。</p>
+<section class="section" id="usage"><div class="number">02 / INTEGRATION</div><h2>从 Maven 依赖到第一次类重定义</h2>
+<p>一个重定义请求要真正进入增强路径，需要两部分配合：ART DCEVM 先准备运行时能力，用户 Agent 再通过标准 JVMTI 接口提交补丁。下面沿着 <code>demo.Counter</code> 的一次变化展开，把依赖配置、Native 入口和 DEX 输入串成同一条调用链。这个示例面向从启动时即可调试的应用，最低 API 30，当前 ABI 为 <code>arm64-v8a</code>。</p>
+<h3>2.1 先把增强库接入调试构建</h3>
+<p>增强库可以作为一个普通 Maven 组件接入。这里使用 <code>com.github.ytlog:artdcevm:xxx</code> 预写发布后的坐标，<code>xxx</code> 代表实际可获取的版本。选择 <code>debugImplementation</code>，让本文的调试入口随调试变体进入应用；Maven 元数据会传递 ShadowHook 运行时依赖。当前正式 Central 版本尚未上线，源码或本地仓库接入方式见 <a href="../MAVEN_PUBLISHING.md">发布指南</a>。</p>
 <pre><code>// settings.gradle：添加到已有仓库配置中
  dependencyResolutionManagement {
     repositories {
@@ -75,9 +70,9 @@ android {
 dependencies {
     debugImplementation &#x27;com.github.ytlog:artdcevm:xxx&#x27;
 }</code></pre>
-<p>示例 Java 代码放在 <code>app/src/debug/java/demo/</code>，只在调试变体使用。若已有 Native 构建，直接合并下文的 Agent target。把仓库 <a href="../../third_party/jvmti/jvmti.h">jvmti.h</a> 放入 <code>app/src/main/cpp/include/</code>，保留其来源和许可证声明。</p>
-<h3>2.2 创建自己的 JVMTI Agent</h3>
-<p>新建 <code>app/src/main/cpp/my_agent.cpp</code>。<code>Agent_OnAttach</code> 取得这个 Agent 自己的 JVMTI 环境并申请重定义能力。JNI 方法把 Java 传入的完整 DEX 复制到调用期间有效的缓冲区，再调用标准接口：</p>
+<p>本文的 Java 入口位于 <code>app/src/debug/java/demo/</code>。Native 侧只有一个小型 Agent target，可以并入现有 CMake 工程；它需要仓库中的 <a href="../../third_party/jvmti/jvmti.h">jvmti.h</a>，示例将头文件放在 <code>app/src/main/cpp/include/</code>，并保留来源和许可证声明。</p>
+<h3>2.2 用最小 Agent 保持标准调用</h3>
+<p>Agent 的职责可以很小：在附加时取得自己的 JVMTI 环境，申请重定义能力；收到目标类和 DEX 后，再发起标准请求。<code>my_agent.cpp</code> 中的 JNI 方法为 DEX 建立调用期间有效的缓冲区，避免字节数据的生命周期早于重定义调用结束：</p>
 <pre><code data-file="my_agent.cpp">#include &lt;jni.h&gt;
 #include &quot;jvmti.h&quot;
 #include &lt;atomic&gt;
@@ -126,7 +121,7 @@ Java_demo_MyAgent_redefineNative(JNIEnv* jni, jclass,
         return JVMTI_ERROR_INTERNAL;
     }
 }</code></pre>
-<p>新建或修改 <code>app/src/main/cpp/CMakeLists.txt</code>：</p>
+<p>这段 Native 代码由一个 CMake target 编译，文件位置为 <code>app/src/main/cpp/CMakeLists.txt</code>：</p>
 <pre><code data-file="CMakeLists.txt">cmake_minimum_required(VERSION 3.22)
 project(my_agent LANGUAGES CXX)
 add_library(my_agent SHARED my_agent.cpp)
@@ -134,8 +129,8 @@ target_include_directories(my_agent PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(my_agent PRIVATE cxx_std_17)
 target_compile_options(my_agent PRIVATE -Wall -Wextra -Werror)</code></pre>
 <p>Gradle 构建会生成并打包 <code>libmy_agent.so</code>。这个库名代表本文创建的用户 Agent；ART DCEVM 自身的增强库名是 <code>libartdcevm.so</code>。</p>
-<h3>2.3 初始化增强库，再附加 Agent</h3>
-<p>新建 <code>demo.MyAgent</code>。初始化顺序明确放在代码里：ART DCEVM 初始化 → 加载用户 JNI 库 → 附加用户 Agent。重复初始化直接返回；附加失败时异常交给上层处理。</p>
+<h3>2.3 初始化顺序决定增强何时生效</h3>
+<p><code>demo.MyAgent</code> 把初始化顺序固定下来：先使 ART DCEVM 的增强路由就绪，再加载用户 JNI 库并附加 Agent。这样，第一次结构请求就能进入正确的处理链。重复初始化直接返回，失败则把异常交给上层处理：</p>
 <pre><code data-file="MyAgent.java">package demo;
 
 import android.content.Context;
@@ -164,15 +159,15 @@ public final class MyAgent {
     private static native int redefineNative(Class&lt;?&gt; target, byte[] dex);
 }</code></pre>
 <p><code>DcevmRuntime.initialize(context)</code> 会加载增强库、附加其 Agent、完成校准并安装增强路由。只有初始化成功后才继续本例的结构请求。只需要原生方法体替换时，可选择 <code>attachPublicJvmti(context)</code>；<code>initializeCapabilities(context)</code> 用于查询独立证明的能力子集。</p>
-<h3>2.4 为同名类编译新的 DEX</h3>
-<p>应用中原来的类为：</p>
+<h3>2.4 新定义如何变成 ART 接收的 DEX</h3>
+<p>运行中的 <code>Counter</code> 保留一个简单状态：字段值为 7，<code>value()</code> 直接返回这个值：</p>
 <pre><code data-file="original/Counter.java">package demo;
 
 public class Counter {
     public int count = 7;
     public int value() { return count; }
 }</code></pre>
-<p>把下面的新定义保存到项目根目录的 <code>patch-src/demo/Counter.java</code>，单独编译。新定义保持相同类名与包名，并增加字段与新的方法体：</p>
+<p>补丁保持相同的包名和类名，增加 <code>label</code>，并改变 <code>value()</code> 的实现。它保存在应用源集合之外的 <code>patch-src/demo/Counter.java</code>，单独编译：</p>
 <pre><code data-file="replacement/Counter.java">package demo;
 
 public class Counter {
@@ -180,7 +175,7 @@ public class Counter {
     public String label = &quot;ready&quot;;
     public int value() { return count * 2; }
 }</code></pre>
-<p>用 JDK 和 Android SDK 的 D8 生成单类 DEX。以下命令在应用工程根目录执行，将 SDK 路径和已安装的 build-tools 版本替换为本机配置：</p>
+<p>编译链由两段组成：<code>javac</code> 生成 Java class-file，D8 将它转成 ART 接收的 DEX。下面在工程根目录执行，SDK 路径与 build-tools 版本按本机配置替换：</p>
 <pre><code>ARTDCEVM_SDK=/path/to/android-sdk
 ARTDCEVM_BUILD_TOOLS=35.0.0
 mkdir -p patch-build/classes patch-build/dex app/src/debug/assets
@@ -191,8 +186,8 @@ javac --release 8 -encoding UTF-8 -g \
   --output patch-build/dex patch-build/classes/demo/Counter.class
 cp patch-build/dex/classes.dex app/src/debug/assets/counter-v2.dex</code></pre>
 <p>将补丁 DEX 作为字节素材打包。应用自己的 Java 源集合仍保留原定义；提交时传入已经加载的 <code>Counter.class</code>，不另建 ClassLoader 去加载第二个 <code>Counter</code>。Android 接口接收 DEX，新版本 <code>.class</code> 是编译中间产物。D8 用法见<a href="https://developer.android.com/tools/d8">官方文档</a>。</p>
-<h3>2.5 调用 JNI，替换已加载的类</h3>
-<p>新建 <code>demo.RedefineDemo</code>。在调试应用的按钮或测试入口中调用 <code>RedefineDemo.run(context)</code>：</p>
+<h3>2.5 让已有 Counter 对象使用新实现</h3>
+<p>最后把调用链接起来。<code>demo.RedefineDemo</code> 先创建一个旧定义的对象，读取补丁字节，再通过 <code>MyAgent</code> 发起重定义。调试按钮或测试入口可以调用 <code>RedefineDemo.run(context)</code>：</p>
 <pre><code data-file="RedefineDemo.java">package demo;
 
 import android.content.Context;
@@ -237,7 +232,7 @@ public final class RedefineDemo {
 <p>这使问题具有两个维度：<strong>语义上</strong>，各条访问路径必须认可同一场变化；<strong>生命周期上</strong>，每一步必须拥有正确的线程状态、GC 条件和对象根。一个阶段拿到的裸指针，不能直接被当作后续阶段仍然有效的事实。</p>
 <h3>3.2 我的整体解法：沿用真实 ART 事务，明确准备与提交边界</h3>
 <p>我在标准重定义的命名入口接管请求，保留用户 Agent 的 <code>jvmtiEnv*</code>、参数、能力检查与事件归属。随后把完整批次交给设备 ART 的真实事务，复用它的分配、类链接、堆管理和线程服务，并补齐结构演进需要的协调工作。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">标准 RedefineClasses 的增强处理链</span><span class="figure-label">RUNTIME ARCHITECTURE</span></div><div class="layers" role="img" aria-label="上层工具生成DEX，用户Agent通过标准RedefineClasses调用ART DCEVM增强库，再使用设备ART服务更新运行时对象和引用。"><div class="layer"><strong>IDE / 调试工具 / 补丁编译器</strong><span>产生新 DEX，决定提交时机</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>用户 JVMTI Agent</strong><span>自己的环境与能力 · RedefineClasses</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>ART DCEVM · libartdcevm.so</strong><span>RedefineClasses Hook → 结构事务与守卫</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>设备 ART / libopenjdkjvmti</strong><span>真实分配、链接、GC、线程与事务服务</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>类定义 · 对象状态 · 缓存 · 执行帧</strong><span>在一致的边界上更新</span></div></div><figcaption>图 2 · 所有运行时组件位于应用进程中。单一增强库不替换系统 ART；ShadowHook 和用户 Agent 仍是各自的依赖与组件。</figcaption></figure>
+<figure class="figure"><div class="figure-head"><span class="figure-title">标准 RedefineClasses 的增强处理链</span><span class="figure-label">RUNTIME ARCHITECTURE</span></div><a class="architecture-enlarge" href="assets/runtime-architecture.png" aria-label="打开原理总览原图"><img class="architecture" src="assets/runtime-architecture.png" width="1448" height="1086" alt="ART DCEVM增强处理链：补丁工具生成DEX，用户JVMTI Agent调用RedefineClasses，增强库通过Hook、校准与结构事务使用设备ART服务，协调类定义、对象状态、缓存引用和执行帧。" loading="lazy"></a><details class="architecture-text"><summary>查看架构文字版</summary><div class="layers" role="img" aria-label="上层工具生成DEX，用户Agent通过标准RedefineClasses调用ART DCEVM增强库，再使用设备ART服务更新运行时对象和引用。"><div class="layer"><strong>IDE / 调试工具 / 补丁编译器</strong><span>产生新 DEX，决定提交时机</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>用户 JVMTI Agent</strong><span>自己的环境与能力 · RedefineClasses</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>ART DCEVM · libartdcevm.so</strong><span>RedefineClasses Hook → 结构事务与守卫</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>设备 ART / libopenjdkjvmti</strong><span>真实分配、链接、GC、线程与事务服务</span></div><div class="down" aria-hidden="true">↓</div><div class="layer"><strong>类定义 · 对象状态 · 缓存 · 执行帧</strong><span>在一致的边界上更新</span></div></div></details><figcaption>图 2 · 原理总览（imagegen 绘制，可点击查看原图）。所有运行时组件位于应用进程中。单一增强库不替换系统 ART；ShadowHook 和用户 Agent 仍是各自的依赖与组件。</figcaption></figure>
 <p>实现围绕三条约束展开：首先，以转换回调之后的最终 DEX 规划整个批次，相关类不能逐个部分生效；其次，把可能失败的准备工作尽量前移，预先建立迁移表、根和所需存储；最后，在已证明且由同一事务持有的安全窗口中刷新引用、复核和提交。不能满足条件的请求，在仍可失败的边界拒绝。</p>
 <figure class="figure"><div class="figure-head"><span class="figure-title">增强事务的总体流程</span><span class="figure-label">PREPARE → VERIFY → COMMIT</span></div><div class="blog-flow" role="img" aria-label="收到标准重定义请求，完成权限和转换回调检查，准备完整批次与根，检查安全条件。不满足则在可失败边界拒绝并保留旧定义；满足则进入有所有权的安全窗口，协调更新并完成提交。"><div class="flow-node"><strong>标准 RedefineClasses 请求</strong><span>保留用户 Agent 的环境、权限与整批定义</span></div><div class="down" aria-hidden="true">↓</div><div class="flow-node"><strong>转换与准备</strong><span>读取最终 DEX · 规划迁移 · 预分配存储 · 注册根</span></div><div class="down" aria-hidden="true">↓</div><div class="flow-node decision"><strong>结构与运行时条件是否满足？</strong><span>依赖类、旧引用、活动帧及真实线程 / GC 前提</span></div><div class="flow-branches"><div><div class="branch-label">↓ 不满足</div><div class="flow-node refuse"><strong>在可失败边界拒绝</strong><span>恢复局部状态<br>释放临时资源<br>整批保留旧定义</span></div></div><div><div class="branch-label">↓ 满足</div><div class="flow-node"><strong>进入有效安全窗口</strong><span>刷新根并复核<br>迁移对象、更新定义<br>清理旧访问、完成提交</span></div></div></div></div><figcaption>图 3 · 顺序体现设计约束，省略了 ART 的内部阶段与回调交错。最终不可失败阶段需要已准备好的服务；新的跨版本组合必须证明完整提交和退款生命周期。</figcaption></figure>
 <p>通用实现中的 <code>RunState</code> 可以理解为“一次重定义的上下文”：把计划、对象根、线程/GC 窗口、DEX 发布记录和清理服务绑定到同一次原始 Run。它约束权限和生命周期；Hook 安装成功、符号存在或某个布尔标志，不能替代这些真实前提。当前新的跨版本组合仍按完整生产链与设备验收推进。</p>
@@ -248,19 +243,19 @@ public final class RedefineDemo {
 <h4>B. 结构与对象：建立映射，延续兼容状态</h4>
 <p>新旧定义先形成成员、字段及层级的对应关系。兼容字段保留已有值，新字段在旧对象中使用零值或 <code>null</code>；类型或 static / 实例形态改变时，相关成员按退役和新建处理。迁移遵守引用写入与 GC 规则，不重新执行已有对象的构造器。</p>
 <p>层级变化还要检查依赖：已加载子类能否继续分派、存活实例是否缺少抽象实现、接收者是否仍有效，以及保留字段和数组中的引用是否符合新类型关系。冲突明确拒绝。新通用路径的层级收窄需要额外的接收者、存储和活动帧证明，这些前提必须一起闭合。</p>
-<figure class="figure gif-player" data-gif="assets/consistent-publication.gif" data-poster="assets/consistent-publication-poster.png"><div class="figure-head"><span class="figure-title">让状态迁移与访问更新保持一致</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/consistent-publication.gif" aria-label="打开完整尺寸动图：让状态迁移与访问更新保持一致"><img src="assets/consistent-publication-poster.png" width="760" height="470" alt="四阶段示意：旧定义运行；准备映射与强根；安全窗口协调更新；提交后count保持7、label为null、value返回14。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 4 · 用 Counter 说明对象状态和访问语义必须共同更新。阶段与时长为讲解而简化，不是 ART 调用日志，也不表示原有执行中的调用必然改变返回值。</figcaption></figure>
+<p>第一章的 GIF 展示了兼容字段保留和新字段默认值。这个映射还必须与后续缓存及访问路径更新一起成立。</p>
 <h4>C. 线程、GC 与事务：先准备，再在有效窗口消费</h4>
 <p>GC 可以移动 Class 与对象，因此跨阶段保留身份要使用运行时管理的根。准备阶段先注册强根、预分配表和扫描存储，随后冻结容器的位置与容量。进入实际安全窗口后，通过根重新取得当前引用，刷新迁移计划及缓存所有者。</p>
 <p>停线程、GC 排除和线程状态转换各有真实持有者与嵌套关系。在已经保留 GC 条件的窗口里调用可能等待同一条件的原函数，会造成自等待；在提交后追加分配，则可能把可预期错误变成不可恢复故障。因此发布、转交和清理必须使用同一事务的具体所有权，不以“当前看起来暂停了”作为通行证。</p>
 <p>对多个类，批次始终是一场事务。<code>ClassFileLoadHook</code> 可能把方法体补丁改成结构补丁，故最终定义必须在回调后验证。失败退款只存在于已证明的可恢复边界；一旦进入原始不可失败提交阶段，不能再把内部故障包装成普通 JVMTI 拒绝。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">准备、检查，再一起提交</span><span class="figure-label">TRANSACTION MODEL</span></div><div class="timeline" id="timeline"><div class="step current"><b>① 收集</b><span>目标类与新 DEX</span></div><div class="step"><b>② 验证</b><span>最终定义与依赖</span></div><div class="step"><b>③ 安全窗口</b><span>线程、GC、活动帧</span></div><div class="step"><b>④ 更新</b><span>对象、缓存与代码</span></div><div class="step"><b>⑤ 完成</b><span>批次提交与恢复</span></div></div><div class="transaction"><div class="version live" id="old-version"><span>当前可见定义</span><strong>V1 · 旧版本</strong></div><div class="version" id="new-version"><span>候选批次</span><strong>V2 · 准备中</strong></div></div><div class="scenario" aria-label="选择事务情景"><button type="button" id="scenario-success" aria-pressed="true">成功提交</button><button type="button" id="scenario-reject" aria-pressed="false">活动帧拒绝</button></div><div class="controls"><button type="button" class="primary" id="transaction-play">播放事务</button><button type="button" id="transaction-next">下一步</button><button type="button" id="transaction-reset">重置</button></div><div class="status" id="transaction-status" aria-live="polite">① 收集完整批次。V1 继续有效，V2 尚未对外生效。</div><figcaption>图 5 · 事务语义的简化演示，不是完整内部调用时序。已适配路径有提交与拒绝证据；新的跨版本 RunState / Ledger 组合仍需完整发布、提交与退款验收。</figcaption></figure>
+<figure class="figure gif-player" data-gif="assets/batch-transactions.gif" data-poster="assets/batch-transactions-poster.png"><div class="figure-head"><span class="figure-title">整批提交，或整批保留旧定义</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/batch-transactions.gif" aria-label="打开完整尺寸动图：整批提交，或整批保留旧定义"><img src="assets/batch-transactions-poster.png" width="760" height="470" alt="两个独立情景：条件满足的批次完成验证后提交V2；条件不足的批次在可失败边界拒绝并完整保留V1。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 4 · 分别演示两个独立批次的提交与拒绝，不表示一个批次能够部分成功。新的跨版本组合仍需真实发布、提交与退款验收。</figcaption></figure>
 <h4>D. 缓存与旧引用：更新新查询，也约束旧访问路径</h4>
 <p>类定义更新之后，旧反射对象、JNI ID、MethodHandle、VarHandle、解析缓存和编译调用仍可能指向旧元数据。方案是保留必要的退役记录，对已覆盖的访问路径进行重绑定、失效处理或语义守卫，区分“成员已删除”“接收者不再有效”和“权限变化”。</p>
 <p>同名成员删除后再添加，不能仅凭名称认定旧引用再次合法；同样，合法创建的句柄授权也不能粗暴地与后续可见性收窄混为一谈。实现与回归按真实访问渠道验证，而非只检查新反射查询的结果。旧元数据的保留与回收，是这类方案需要持续管理的成本。</p>
 <h4>E. JIT / AOT 与活动帧：能恢复才转换，否则拒绝并重试</h4>
 <p>编译代码可能固化字段位置，或把目标方法内联进调用者。暂停一条线程，并不意味着它的机器码能自动换用新布局。必须知道实际执行位置，以及外层和内联层的 Dex 寄存器能否从当前栈与寄存器恢复。</p>
 <p>我使用设备栈遍历、CodeInfo 和 StackMap 核对实际 PC 的恢复信息。路径已经校准且信息完整时，协调去优化与提交；不足时，在旧定义完整的边界拒绝。当前活动非调试 AOT 帧不支持即时去优化，策略是让旧调用完成，帧退出后再重新验证和提交。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">恢复信息决定执行路径</span><span class="figure-label">ACTIVE FRAME SAFETY</span></div><div class="frame-grid" id="frames" data-stage="0"><div class="frame-lane"><div class="lane-title">可恢复的已校准帧</div><div class="stack" id="recoverable"><div>caller()</div><div class="target" id="recoverable-frame">旧 compiled frame + 完整映射</div><div>暂停点 · Dex 寄存器可恢复</div></div><div class="lane-result" id="recoverable-result">检查实际 PC、栈图和内联恢复信息。</div></div><div class="frame-lane"><div class="lane-title">不可即时恢复的活动非调试 AOT 帧</div><div class="stack"><div>caller()</div><div class="blocked">旧 AOT frame · 恢复资格不足</div><div>旧定义必须继续有效</div></div><div class="lane-result" id="blocked-result">检查失败时，在提交前拒绝本次变更。</div></div></div><div class="controls"><button type="button" class="primary" id="frame-next">查看去优化与拒绝</button><button type="button" id="frame-reset">重置</button></div><div class="status" id="frame-status" aria-live="polite">按两类独立情景查看；它们不表示同一事务可以部分成功。</div><figcaption>图 6 · 当前活动非调试 AOT 帧的即时去优化未实现。已验证策略是拒绝本次变更、让旧调用完成，再退出后重试。跨版本物理帧读取专项也不能等同于全进程栈转换完成。</figcaption></figure><figure class="figure gif-player" data-gif="assets/active-frame-retry.gif" data-poster="assets/active-frame-retry-poster.png"><div class="figure-head"><span class="figure-title">活动帧阻塞变更时，怎样安全重试？</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/active-frame-retry.gif" aria-label="打开完整尺寸动图：活动帧阻塞变更时，怎样安全重试？"><img src="assets/active-frame-retry-poster.png" width="760" height="470" alt="不可即时恢复的旧AOT帧导致事务拒绝；旧调用保持V1并完成；帧退出后发起新请求；完整校验满足后才提交V2。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 7 · 活动非调试 AOT 的处理边界：本次未提交，旧调用继续，退出后重新验证。重试仍可能因其他条件失败；GIF 展示条件满足后的独立新事务。</figcaption></figure>
+<figure class="figure gif-player" data-gif="assets/frame-recovery.gif" data-poster="assets/frame-recovery-poster.png"><div class="figure-head"><span class="figure-title">有恢复条件才去优化，条件不足就安全拒绝</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/frame-recovery.gif" aria-label="打开完整尺寸动图：有恢复条件才去优化，条件不足就安全拒绝"><img src="assets/frame-recovery-poster.png" width="760" height="470" alt="两类独立活动帧情景：可恢复的已校准帧协调去优化与提交；不可即时恢复的非调试AOT帧拒绝本次变更，旧帧退出后才重新验证。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 5 · 活动帧恢复要求真实 PC、完整映射与有效运行窗口。活动非调试 AOT 的即时去优化未实现；其策略为保留旧定义并在退出后重试。</figcaption></figure><figure class="figure gif-player" data-gif="assets/active-frame-retry.gif" data-poster="assets/active-frame-retry-poster.png"><div class="figure-head"><span class="figure-title">活动帧阻塞变更时，怎样安全重试？</span><span class="figure-label">GIF · SEMANTIC DEMO</span></div><a class="gif-enlarge" href="assets/active-frame-retry.gif" aria-label="打开完整尺寸动图：活动帧阻塞变更时，怎样安全重试？"><img src="assets/active-frame-retry-poster.png" width="760" height="470" alt="不可即时恢复的旧AOT帧导致事务拒绝；旧调用保持V1并完成；帧退出后发起新请求；完整校验满足后才提交V2。" loading="lazy"></a><div class="controls"><button type="button" class="primary gif-play">播放 GIF</button><button type="button" class="gif-static">显示静态图</button></div><p class="small gif-status" aria-live="polite">当前显示静态结果；点击播放约 9 秒的单次 GIF，可重复播放。</p><figcaption>图 6 · 活动非调试 AOT 的处理边界：本次未提交，旧调用继续，退出后重新验证。重试仍可能因其他条件失败；GIF 展示条件满足后的独立新事务。</figcaption></figure>
 <h3>3.4 还有哪些风险？</h3>
 <p>运行时增强的风险集中在几类边界。公开方法体替换、某个删除子集、某类栈读取或 Host 组件通过，分别证明自己的范围；完整结构事务需要它们在真实设备上共同成立。下面说明为什么这些边界仍值得持续验证。</p>
 <div class="table-wrap"><table><thead><tr><th>风险类别</th><th>可能造成什么</th><th>当前边界与应对</th></tr></thead><tbody>
@@ -279,7 +274,7 @@ public final class RedefineDemo {
 <p>如果你熟悉 Android、JNI 或 C++，可以先沿着一条使用路径读代码，再进入具体算法。仓库里的模块虽然多，主要回答三个问题：库怎样初始化，重定义请求怎样被接管，结构变化怎样安全提交。</p>
 <h3>4.1 先分清两条路径：初始化与每次请求</h3>
 <p><code>DcevmRuntime.initialize</code> 是初始化入口。它加载增强库并附加 Agent，Native 侧选择后端、校准能力和安装路由。后续用户的每一次重定义通过自己的 JVMTI 环境进入标准接口，无需每次再调用 Java 初始化。</p>
-<figure class="figure"><div class="figure-head"><span class="figure-title">研发阅读的两条主线</span><span class="figure-label">INITIALIZE / REDEFINE</span></div><div class="code-routes"><div><strong>① 初始化：准备引擎与能力</strong><div class="route-item">DcevmRuntime.java</div><div class="down" aria-hidden="true">↓</div><div class="route-item">core/agent.cc</div><div class="down" aria-hidden="true">↓</div><div class="route-item">backend_factory + production_bootstrap</div><div class="down" aria-hidden="true">↓</div><div class="route-item">能力校准、选择后端、安装路由</div></div><div><strong>② 请求：提交一次类变更</strong><div class="route-item">用户 Agent · RedefineClasses</div><div class="down" aria-hidden="true">↓</div><div class="route-item">ART 命名重定义入口与增强 Hook</div><div class="down" aria-hidden="true">↓</div><div class="route-item">后端事务 + 公共迁移 / 守卫服务</div><div class="down" aria-hidden="true">↓</div><div class="route-item">原 ART 服务 · 复核、更新与清理</div></div></div><figcaption>图 8 · 这是阅读路线，省略内部服务交错。<code>core/agent.cc</code> 主要连接库初始化与诊断，不表示用户的每次标准调用都先绕回这个 Java/JNI 入口。</figcaption></figure>
+<figure class="figure"><div class="figure-head"><span class="figure-title">研发阅读的两条主线</span><span class="figure-label">INITIALIZE / REDEFINE</span></div><div class="code-routes"><div><strong>① 初始化：准备引擎与能力</strong><div class="route-item">DcevmRuntime.java</div><div class="down" aria-hidden="true">↓</div><div class="route-item">core/agent.cc</div><div class="down" aria-hidden="true">↓</div><div class="route-item">backend_factory + production_bootstrap</div><div class="down" aria-hidden="true">↓</div><div class="route-item">能力校准、选择后端、安装路由</div></div><div><strong>② 请求：提交一次类变更</strong><div class="route-item">用户 Agent · RedefineClasses</div><div class="down" aria-hidden="true">↓</div><div class="route-item">ART 命名重定义入口与增强 Hook</div><div class="down" aria-hidden="true">↓</div><div class="route-item">后端事务 + 公共迁移 / 守卫服务</div><div class="down" aria-hidden="true">↓</div><div class="route-item">原 ART 服务 · 复核、更新与清理</div></div></div><figcaption>图 7 · 这是阅读路线，省略内部服务交错。<code>core/agent.cc</code> 主要连接库初始化与诊断，不表示用户的每次标准调用都先绕回这个 Java/JNI 入口。</figcaption></figure>
 <p>建议先看 <a href="../../artdcevm/src/main/java/com/github/ytlog/artdcevm/api/DcevmRuntime.java">DcevmRuntime.java</a>、<a href="../../artdcevm/src/main/cpp/core/agent.cc">core/agent.cc</a> 和 <a href="../../artdcevm/src/main/cpp/platform/backend_factory.cc">backend_factory.cc</a>。随后读 <a href="../../artdcevm/src/main/cpp/platform/common/capability_backend.cc">capability_backend.cc</a>，理解公开能力、独立子集与完整增强如何被分别报告；再结合 <a href="../STANDARD_JVMTI_REDEFINE_DESIGN.md">标准入口设计</a> 阅读事务路由。</p>
 <h3>4.2 用职责理解目录，不需要先背文件名</h3>
 <div class="table-wrap"><table><thead><tr><th>你关心的问题</th><th>从哪里看</th><th>这一层负责什么</th></tr></thead><tbody>
@@ -323,72 +318,6 @@ python3 tools/android13/run-source-probe.py --serial DEVICE</code></pre>
 <script>
 (() => {
 'use strict';
-const $ = id => document.getElementById(id);
-const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-let objectStage = 0, objectTimer = null;
-const objectMessages = ['① 已有对象：count = 7。新定义已经准备，尚未提交。','② 提交与状态迁移：保留兼容字段 count，已有对象新增 label = null，不重跑构造器。','③ 提交完成：后续 value() 返回 14；已有状态继续存在。'];
-function stopObject() { clearInterval(objectTimer); objectTimer = null; $('object-play').textContent = '播放演进'; }
-function renderObject() {
- $('objects').dataset.state = String(objectStage);
- $('added').classList.toggle('pending', objectStage === 0);
- $('kept').classList.toggle('active', objectStage > 0);
- $('method').classList.toggle('active', objectStage === 2);
- $('new-title').textContent = objectStage === 2 ? 'Counter · 新定义已生效' : 'Counter · 待提交定义';
- $('value').textContent = objectStage === 2 ? '→ 14' : '→ 14 · 提交后';
- $('object-status').textContent = objectMessages[objectStage];
- $('object-next').disabled = objectStage === 2;
-}
-$('object-next').onclick = () => { stopObject(); objectStage = Math.min(2, objectStage + 1); renderObject(); };
-$('object-reset').onclick = () => { stopObject(); objectStage = 0; renderObject(); };
-$('object-play').onclick = () => {
- if (objectTimer) { stopObject(); return; }
- if (reduced) { objectStage = 2; renderObject(); return; }
- objectStage = 0; renderObject(); $('object-play').textContent = '暂停';
- objectTimer = setInterval(() => { objectStage++; renderObject(); if (objectStage === 2) stopObject(); }, 1700);
-};
-let transactionStage = 0, transactionTimer = null, rejected = false;
-const txMessages = ['① 收集完整批次。V1 继续有效，V2 尚未对外生效。','② 验证转换回调后的最终 DEX、成员与依赖约束。','③ 核对真实线程、GC 和活动帧条件，再进入安全更新窗口。','④ 在已证明的窗口中协调元数据、对象状态、缓存和代码失效。','⑤ 完成整批提交与恢复。后续访问使用 V2 的一致定义。'];
-function stopTransaction() { clearInterval(transactionTimer); transactionTimer = null; $('transaction-play').textContent = '播放事务'; }
-function txFinished() { return transactionStage === (rejected ? 2 : 4); }
-function renderTransaction() {
- const failed = rejected && transactionStage === 2;
- [...$('timeline').children].forEach((el, i) => { el.className = 'step' + (i === transactionStage ? (failed ? ' failed' : ' current') : i < transactionStage ? ' done' : ''); });
- const committed = transactionStage === 4 && !rejected;
- $('old-version').className = 'version' + (committed ? '' : ' live');
- $('new-version').className = 'version' + (committed ? ' live' : failed ? ' rejected' : '');
- $('new-version').querySelector('strong').textContent = committed ? 'V2 · 已生效' : failed ? 'V2 · 未提交' : 'V2 · 准备中';
- $('old-version').querySelector('span').textContent = committed ? '上一版定义' : '当前可见定义';
- $('new-version').querySelector('span').textContent = committed ? '当前可见定义' : '候选批次';
- $('transaction-status').textContent = failed ? '③ 活动帧无法安全恢复：拒绝整批，V1 保持完整；旧帧退出后可重试。' : txMessages[transactionStage];
- $('transaction-next').disabled = txFinished();
- $('scenario-success').setAttribute('aria-pressed', String(!rejected));
- $('scenario-reject').setAttribute('aria-pressed', String(rejected));
-}
-function setScenario(value) { stopTransaction(); rejected = value; transactionStage = 0; renderTransaction(); }
-$('scenario-success').onclick = () => setScenario(false);
-$('scenario-reject').onclick = () => setScenario(true);
-$('transaction-reset').onclick = () => { stopTransaction(); transactionStage = 0; renderTransaction(); };
-$('transaction-next').onclick = () => { stopTransaction(); transactionStage = Math.min(rejected ? 2 : 4, transactionStage + 1); renderTransaction(); };
-$('transaction-play').onclick = () => {
- if (transactionTimer) { stopTransaction(); return; }
- if (reduced) { transactionStage = rejected ? 2 : 4; renderTransaction(); return; }
- transactionStage = 0; renderTransaction(); $('transaction-play').textContent = '暂停';
- transactionTimer = setInterval(() => { transactionStage++; renderTransaction(); if (txFinished()) stopTransaction(); }, 1700);
-};
-let frameStage = 0;
-function renderFrames() {
- $('frames').dataset.stage = String(frameStage);
- $('recoverable').classList.toggle('converted', frameStage > 0);
- $('recoverable-frame').textContent = frameStage > 0 ? '安全执行路径 · 已协调去优化' : '旧 compiled frame + 完整映射';
- $('recoverable-result').textContent = frameStage > 0 ? '恢复执行状态，协调去优化与提交。' : '检查实际 PC、栈图和内联恢复信息。';
- $('blocked-result').textContent = frameStage === 2 ? '旧帧已退出：重新验证，再发起重定义。' : frameStage === 1 ? '返回拒绝，旧调用继续完成，旧定义不变。' : '检查失败时，在提交前拒绝本次变更。';
- $('frame-status').textContent = frameStage === 2 ? '拒绝情景：帧退出后具备重试机会，仍需重新满足完整校验。' : frameStage === 1 ? '两类独立情景：能恢复才继续，不能恢复则保留旧定义。' : '按两类独立情景查看；它们不表示同一事务可以部分成功。';
- $('frame-next').textContent = frameStage === 0 ? '查看去优化与拒绝' : '查看旧帧退出后重试';
- $('frame-next').disabled = frameStage === 2;
-}
-$('frame-next').onclick = () => { frameStage = Math.min(2, frameStage + 1); renderFrames(); };
-$('frame-reset').onclick = () => { frameStage = 0; renderFrames(); };
-
 let gifSequence = 0;
 for (const player of document.querySelectorAll('.gif-player')) {
  const picture = player.querySelector('img');
@@ -404,7 +333,6 @@ for (const player of document.querySelectorAll('.gif-player')) {
  player.querySelector('.gif-static').onclick = showPoster;
  window.addEventListener('beforeprint', showPoster);
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { stopObject(); stopTransaction(); } });
 })();
 </script>
 </body>
