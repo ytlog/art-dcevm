@@ -1,6 +1,7 @@
 #include <android/log.h>
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/readable_mapping_scope.h"
+#include "platform/common/proc_mapping_region.h"
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
@@ -476,8 +477,8 @@ struct NativeEngine final:Engine {
  struct MapRange {uintptr_t begin,end;bool write;};std::vector<MapRange> graph_maps;
  bool RefreshMaps(std::string* error){
   graph_maps.clear();FILE* file=std::fopen("/proc/self/maps","r");if(!file)return Fail(error,"Native caller mapping snapshot unavailable");
-  char line[1024];while(std::fgets(line,sizeof(line),file)){unsigned long long a=0,b=0;char mode[5]{};
-   if(std::sscanf(line,"%llx-%llx %4s",&a,&b,mode)==3&&mode[0]=='r'&&b>a)graph_maps.push_back({uintptr_t(a),uintptr_t(b),mode[1]=='w'});
+  char line[1024];while(std::fgets(line,sizeof(line),file)){proc_mapping_region::Region parsed;
+   if(proc_mapping_region::Parse(line,std::strlen(line),&parsed)&&parsed.readable)graph_maps.push_back({parsed.begin,parsed.end,parsed.writable});
   }std::fclose(file);return !graph_maps.empty()||Fail(error,"Empty native caller mapping snapshot");
  }
  static bool GraphMapped(void* raw,const void* address,size_t length,bool write){
@@ -510,15 +511,10 @@ struct NativeEngine final:Engine {
   struct Close{int fd;~Close(){::close(fd);}} close{fd};
   e.graph_maps.clear();char buffer[4096],line[1024];size_t used=0;bool valid=true;
   auto consume=[&](){
-   size_t cursor=0;uintptr_t begin=0,end=0;
-   auto hex=[&](uintptr_t* out){size_t digits=0;uintptr_t value=0;
-    while(cursor<used){const unsigned char ch=line[cursor];const unsigned digit=ch>='0'&&ch<='9'?ch-'0':ch>='a'&&ch<='f'?ch-'a'+10:16;
-     if(digit==16)break;if(value>(UINTPTR_MAX-digit)/16)return false;value=value*16+digit;++cursor;++digits;}
-    *out=value;return digits!=0;};
-   if(!hex(&begin)||cursor>=used||line[cursor++]!='-'||!hex(&end)||cursor>=used||line[cursor++]!=' '||end<=begin||cursor+4>used)return false;
-   if(line[cursor]!='r')return true;
-   if(e.graph_maps.size()==e.graph_maps.capacity()||(!e.graph_maps.empty()&&begin<e.graph_maps.back().end))return false;
-   e.graph_maps.push_back({begin,end,line[cursor+1]=='w'});return true;
+   proc_mapping_region::Region parsed;if(!proc_mapping_region::Parse(line,used,&parsed))return false;
+   if(!parsed.readable)return true;
+   if(e.graph_maps.size()==e.graph_maps.capacity()||(!e.graph_maps.empty()&&parsed.begin<e.graph_maps.back().end))return false;
+   e.graph_maps.push_back({parsed.begin,parsed.end,parsed.writable});return true;
   };
   while(valid){const ssize_t count=::read(fd,buffer,sizeof(buffer));if(count<0){valid=false;break;}if(count==0)break;
    for(ssize_t n=0;n<count;++n){if(buffer[n]=='\n'){if(!consume()){valid=false;break;}used=0;}else if(used==sizeof(line)){valid=false;break;}else line[used++]=buffer[n];}}

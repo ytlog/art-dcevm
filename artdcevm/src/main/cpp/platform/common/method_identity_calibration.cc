@@ -1,5 +1,6 @@
 #include "platform/common/method_identity_calibration.h"
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <set>
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <unistd.h>
 #endif
 #include "platform/common/readable_mapping_scope.h"
+#include "platform/common/proc_mapping_region.h"
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -41,11 +43,10 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
   // Direct syscalls and fixed stack storage also serve final no-allocation
   // validation. stdio allocates its FILE and read buffer even without C++ new.
   auto match=[&](const char* line,size_t length){
-    size_t at=0;uintptr_t start=0,end=0;
-    auto hex=[&](uintptr_t* value){size_t digits=0;while(at<length){unsigned char c=line[at];unsigned digit;
-      if(c>='0'&&c<='9')digit=c-'0';else if(c>='a'&&c<='f')digit=c-'a'+10;else if(c>='A'&&c<='F')digit=c-'A'+10;else break;
-      if(*value>(UINTPTR_MAX-digit)/16)return false;*value=*value*16+digit;++at;++digits;}return digits!=0;};
-    return hex(&start)&&at<length&&line[at++]=='-'&&hex(&end)&&at+2<length&&line[at++]==' '&&line[at]=='r'&&end>start&&pointer>=start&&pointer<end&&(*region=std::pair<uintptr_t,uintptr_t>{start,end},true);
+    proc_mapping_region::Region parsed;
+    return proc_mapping_region::Parse(line,length,&parsed)&&parsed.readable&&
+      pointer>=parsed.begin&&pointer<parsed.end&&
+      (*region=std::pair<uintptr_t,uintptr_t>{parsed.begin,parsed.end},true);
   };
   char chunk[4096],line[1024];size_t length=0;bool found=false;
   for(ssize_t n;(n=read(fd,chunk,sizeof(chunk)))>0&&!found;){
@@ -78,9 +79,9 @@ ScopedReadableMappings::ScopedReadableMappings() noexcept:previous_(active_mappi
   ++mapping_os_queries;++os_queries_;FILE* maps=std::fopen("/proc/self/maps","r");
   if(maps){try{char line[1024];
     while(std::fgets(line,sizeof(line),maps)){
-      unsigned long long start=0,end=0;char protection[5]{};
-      if(std::sscanf(line,"%llx-%llx %4s",&start,&end,protection)==3&&protection[0]=='r'&&end>start&&end<=UINTPTR_MAX)
-        regions_.emplace_back(uintptr_t(start),uintptr_t(end));
+      proc_mapping_region::Region parsed;
+      if(proc_mapping_region::Parse(line,std::strlen(line),&parsed)&&parsed.readable)
+        regions_.emplace_back(parsed.begin,parsed.end);
     }
     complete_=std::ferror(maps)==0;
    }catch(...){complete_=false;regions_.clear();}
