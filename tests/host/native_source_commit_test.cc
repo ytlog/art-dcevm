@@ -48,14 +48,14 @@ class_metadata::Class17* old_class=nullptr;class_metadata::Class17* new_class=nu
 void* parent_class=nullptr;void* meta_class=nullptr;void* old_instance=nullptr;void* new_instance=nullptr;
 void* ref_a=nullptr;void* ref_b=nullptr;void* class_ext=nullptr;void* class_array=nullptr;
 void* moved_class=nullptr;void* moved_ext=nullptr;bool replaced=false,wrong_readback=false;int retain_pipe=-1, fault_pipe=-1;
-std::array<abi::arm64::Field*,4> old_fields{},new_fields{};
+std::array<abi::arm64::Field*,4> old_fields{},new_fields{},cold_before{},cold_after{};
 std::array<const char*,4> names{"number","value","left","right"};
 std::array<const char*,4> types{"I","I","Ljava/lang/Object;","Ljava/lang/Object;"};
 struct Mirror {void* field;};std::array<Mirror,4> mirrors{};
 void* Root(void* p){if(wrong_readback&&replaced&&p==old_fields[0]){if(fault_pipe>=0){const char marker=1;assert(write(fault_pipe,&marker,1)==1);}return new_class;}return reinterpret_cast<void*>(uintptr_t(Read32(p)));}
 void* Mark(void* p){return replaced&&p==new_class?moved_class:p;}
-const char* FieldName(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field)return names[i];return nullptr;}
-const char* FieldType(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field)return types[i];return nullptr;}
+const char* FieldName(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field||cold_before[i]==field||cold_after[i]==field)return names[i];return nullptr;}
+const char* FieldType(void* field){for(size_t i=0;i<4;++i)if(old_fields[i]==field||new_fields[i]==field||cold_before[i]==field||cold_after[i]==field)return types[i];return nullptr;}
 void* FieldLeaf(void* mirror){assert(!stopped&&Read32(current)==0);return static_cast<Mirror*>(mirror)->field;}
 const char* Descriptor(void* klass,void*){return klass==parent_class?"Ljava/lang/Object;":"LFixture;";}
 void* Current(){return current;}
@@ -250,10 +250,50 @@ int main(){
  assert(initialization.Prepare(plan,metadata,fields,&state_context));
  auto foreign_context=state_context;assert(!initialization.Validate(plan,&foreign_context));
  source_commit::Plan other_plan=plan;assert(!initialization.Validate(other_plan,&state_context));
- new_class->status=12u<<28;assert(initialization.Validate(plan,&state_context));
+ new_class->status=12u<<28;assert(!initialization.Validate(plan,&state_context));
+ assert(initialization.Prepare(plan,metadata,fields,&state_context)&&initialization.Validate(plan,&state_context));
  assert(initialization.DestinationStatus(plan,0,&state_context)==15);
  new_class->status=15u<<28;assert(initialization.DestinationStatus(plan,0,&state_context)==15);
  assert(!initialization.DestinationStatus(plan,1,&state_context));
+ // Exercise the actual adapter with a mixed completed/pre-init rooted cohort.
+ auto* cold_old=static_cast<class_metadata::Class17*>(heap.New(160));
+ auto* cold_new=static_cast<class_metadata::Class17*>(heap.New(160));
+ InitializeClass(cold_old);InitializeClass(cold_new);cold_old->status=11u<<28;cold_new->status=12u<<28;
+ MakeFields(cold_old,cold_before);MakeFields(cold_new,cold_after);
+ auto copy_methods=[&](class_metadata::Class17* target,const class_metadata::Class17* source){
+  auto* array=static_cast<unsigned char*>(heap.New(40));std::memcpy(array,reinterpret_cast<void*>(uintptr_t(source->methods)),40);
+  target->methods=uintptr_t(array);auto* method=reinterpret_cast<abi::arm64::android12::Method12*>(array+8);method->declaring_class=uint32_t(uintptr_t(target));
+ };
+ copy_methods(cold_old,old_class);copy_methods(cold_new,new_class);
+ method_array::View cb,ca;assert(method_array::Read(method_metadata::kAndroid12Onward,reinterpret_cast<void*>(cold_old->methods),40,boundaries,&cb));
+ assert(method_array::Read(method_metadata::kAndroid12Onward,reinterpret_cast<void*>(cold_new->methods),40,boundaries,&ca));
+ auto cold_methods=modern_methods::Service::PrepareTables(*binding,cold_old,cb,cold_new,ca,Retired,&error);assert(cold_methods);
+ auto* mixed_array=heap.New(20);Put32(mixed_array,8,2);Put32(mixed_array,12,uint32_t(uintptr_t(new_class)));Put32(mixed_array,16,uint32_t(uintptr_t(cold_new)));
+ source_commit::Plan mixed{old_class,mixed_array,{old_class,cold_old},{new_class,cold_new},{},{},false};
+ auto mixed_prepare=[&](){return modern_source_commit::Prepare(hooks,deps,mixed,{methods.get(),cold_methods.get()},&error);};
+ auto mixed_service=mixed_prepare();if(!mixed_service)std::cerr<<"Mixed adapter: "<<error<<"\n";assert(mixed_service&&mixed_service->Validate(mixed));
+ const int before_preserve=mutations;mixed_service->TransferInitialization(mixed,1);assert(mutations==before_preserve&&cold_new->status==(12u<<28));
+ for(uint32_t invalid:{0u,2u,3u,8u,13u,14u,15u}){
+  cold_old->status=invalid<<28;const std::vector<unsigned char> untouched(heap.base,heap.base+heap.used);
+  assert(!source_commit::Run(mixed,*mixed_service));assert(mutations==before_preserve&&retirement_publications==0&&!std::memcmp(untouched.data(),heap.base,untouched.size()));
+ }
+ cold_old->status=11u<<28;
+ for(uint32_t invalid:{0u,2u,3u,8u,13u,14u,15u}){
+  cold_new->status=invalid<<28;const std::vector<unsigned char> untouched(heap.base,heap.base+heap.used);
+  assert(!source_commit::Run(mixed,*mixed_service));assert(mutations==before_preserve&&retirement_publications==0&&!std::memcmp(untouched.data(),heap.base,untouched.size()));
+ }
+ cold_new->status=12u<<28;assert(mixed_service->Validate(mixed));
+ const auto mixed_snapshot=std::vector<unsigned char>(heap.base,heap.base+heap.used);
+ std::swap(mixed.old_classes[0],mixed.old_classes[1]);std::swap(mixed.new_classes[0],mixed.new_classes[1]);
+ assert(!source_commit::Run(mixed,*mixed_service)&&mutations==before_preserve&&retirement_publications==0);
+ std::swap(mixed.old_classes[0],mixed.old_classes[1]);std::swap(mixed.new_classes[0],mixed.new_classes[1]);
+ assert(!std::memcmp(mixed_snapshot.data(),heap.base,mixed_snapshot.size()));
+ cold_new->status=11u<<28;assert(!mixed_service->Validate(mixed));cold_new->status=12u<<28;
+ cold_old->status=12u<<28;cold_new->status=11u<<28;assert(!mixed_prepare());
+ cold_new->status=12u<<28;assert(mixed_prepare());
+ cold_old->status=11u<<28;cold_new->status=11u<<28;assert(mixed_prepare());
+ cold_old->status=14u<<28;cold_new->status=14u<<28;assert(!mixed_service->Validate(mixed));
+ cold_old->status=11u<<28;cold_new->status=12u<<28;
  bool retained=false;assert(service->RetainsSourceField(plan,false,old_class,old_fields[2],&retained)&&retained);
  assert(service->RetainsSourceField(plan,true,old_class,old_fields[0],&retained)&&retained);
  assert(service->RetainsSourceField(plan,false,old_class,old_fields[0],&retained)&&!retained);
@@ -268,13 +308,13 @@ int main(){
  for(uint32_t target:{12u,15u}){
   pid_t branch=fork();assert(branch>=0);
   if(branch==0){old_class->status=14u<<28;new_class->status=target<<28;
-   events.clear();assert(source_commit::Run(plan,*service));
+   service=prepare();assert(service);events.clear();assert(source_commit::Run(plan,*service));
    assert((new_class->status>>28)==(target==15?15u:14u));
    assert(Read32(new_instance,4)==0x01004567u&&Read32(old_instance,4)==0);
    assert(retirement_publications==1);_exit(0);}
   int outcome=0;assert(waitpid(branch,&outcome,0)==branch&&WIFEXITED(outcome)&&WEXITSTATUS(outcome)==0);
  }
- new_class->status=12u<<28;events.clear();int previous_jni=jni_calls;assert(previous_jni==setup_jni);assert(source_commit::Run(plan,*service));Resume(nullptr);
+ new_class->status=12u<<28;service=prepare();assert(service);events.clear();int previous_jni=jni_calls;assert(previous_jni==setup_jni);assert(source_commit::Run(plan,*service));Resume(nullptr);
  assert(retirement_publications==1);
  assert(diagnostics.declaring_roots_verified&&diagnostics.cleared_threads==2);
  assert(jni_calls==previous_jni&&cleared==2&&Read32(new_class,128)==73&&Read32(old_class,128)==0&&Read32(new_instance,8)==31&&Read32(old_instance,8)==0);

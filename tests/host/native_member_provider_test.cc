@@ -454,9 +454,28 @@ int main(int argc,char** argv){
  new_class->super_class=original_parent;LinkDex(new_class,evolved_dex);schemas[0]=schema;
  mappings.Cover(evolved_dex.data());
  schema_dependencies.read_context=&read_context;
+ for(const auto& state_pair:std::array<std::pair<uint32_t,uint32_t>,3>{{{11,11},{11,12},{12,12}}}){
+  const pid_t child=fork();assert(child>=0);
+  if(child==0){
+   old_class->status=state_pair.first<<28;new_class->status=state_pair.second<<28;
+   native_member_provider::Service cold_provider;auto cold=cold_provider.Prepare(plan,schema_dependencies,&error);assert(cold&&cold->Validate(plan));
+   const auto before=mutations;cold->TransferInitialization(plan,0);
+   assert(mutations==before&&new_class->status==(state_pair.second<<28));_exit(0);
+  }
+  int result=0;assert(waitpid(child,&result,0)==child&&WIFEXITED(result)&&WEXITSTATUS(result)==0);
+ }
  const auto schema_os_queries=method_identity::MappingOsQueries();
  native_member_provider::Service schema_provider;auto schema_service=schema_provider.Prepare(plan,schema_dependencies,&error);
  if(!schema_service){std::cerr<<"Native schema preparation: "<<error<<'\n';return 1;}
+ // Production schema provider binds the typed initialization proof. A changed
+ // terminal/pre-init category must refuse before retirement/static migration.
+ const auto saved_old_state=old_class->status,saved_new_state=new_class->status;
+ const auto schema_mutations=mutations;const auto schema_publications=retirement_publications;
+ for(uint32_t status:{2u,3u,11u,12u,13u}){
+  old_class->status=status<<28;assert(!source_commit::Run(plan,*schema_service));
+  assert(mutations==schema_mutations&&retirement_publications==schema_publications);
+ }
+ old_class->status=saved_old_state;new_class->status=saved_new_state;
  assert(schema_service->Validate(plan));assert(method_identity::MappingOsQueries()==schema_os_queries);const auto roots_before_retire=retired_fields;
  const auto method_array_before=new_class->methods;
  auto* moved_methods=heap.New(8+3*32);std::memcpy(moved_methods,reinterpret_cast<void*>(uintptr_t(method_array_before)),8+3*32);

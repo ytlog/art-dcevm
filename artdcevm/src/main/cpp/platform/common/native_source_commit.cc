@@ -139,9 +139,12 @@ void Services::SetStatus(void* klass,uint32_t status)const{Require(status<=15);s
 void Services::TransferInitialization(const source_commit::Plan& plan,size_t i)const{
  if(!dependencies_.require_initialized_transfer){source_commit::Services::TransferInitialization(plan,i);return;}
  Require(&plan==plan_&&i<plan.new_classes.size());
- const uint32_t destination=initialized_.DestinationStatus(plan,i,dependencies_.read_context);
- Require(destination>=14&&destination<=15);
- if(destination>Status(plan.new_classes[i]))SetStatus(plan.new_classes[i],destination);
+ const auto decision=initialized_.Transfer(plan,i,dependencies_.read_context);
+ using Action=native_initialized_transfer::Proof::Action;
+ Require(decision.action!=Action::Invalid);
+ if(decision.action==Action::PreservePreInitialization)return;
+ Require(decision.status>=14&&decision.status<=15);
+ if(decision.status>Status(plan.new_classes[i]))SetStatus(plan.new_classes[i],decision.status);
 }
 bool Services::RetainsSourceField(const source_commit::Plan& plan,bool statik,const void* klass,const void* field,bool* retained)const noexcept{
  if(!retained||plan_!=&plan||!dependencies_.prepare_field_copy||!klass||!field)return false;
