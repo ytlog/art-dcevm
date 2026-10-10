@@ -14,7 +14,7 @@ bool Source::Verify(void*method,uint32_t pc,const code_info_view::View&view,uint
  method_metadata::Identity identity;
  if(!method_metadata::ReadIdentity(layout,method,extent,&identity)||identity.dex_method_index==UINT32_MAX||
     (identity.access_flags&0x40508u)!=0x8u)return false; // static, non-native, non-abstract, not obsolete
- void*declaring=metadata_.Reference(method,0);
+ void*declaring=metadata_.MethodDeclaringClass(method);
  constexpr size_t loader=offsetof(class_metadata::Class11,class_loader);
  if(!declaring||!context.extent(context.owner,declaring,&extent)||extent<loader+4||metadata_.Reference(declaring,loader))return false;
  field_copy::CopyClassView named;
