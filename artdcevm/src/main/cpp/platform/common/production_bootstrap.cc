@@ -1305,6 +1305,7 @@ bool TargetObserve(const runnable_jni::Context& scope,void* raw){
  return true;
 }
 bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string* error){
+ if(!field_mirror_cache.Bind(env,ti,error))return false;
  Text signature{ti};if(ti->GetClassSignature(target,&signature.p,nullptr)!=JVMTI_ERROR_NONE||!signature.p)return Fail(error,"Target public signature unavailable");
  evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
  std::vector<unsigned char> committed;
@@ -1447,6 +1448,7 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  receiver_producer_diagnostic.clear();return true;
 }
 bool NativeEngine::PrepareStaticFieldConsumers(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+ if(!field_mirror_cache.Bind(env,ti,error))return false;
  if(!env||!ti||env->ExceptionCheck())return Fail(error,"Static field consumer requires ordinary JNI entry");
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
@@ -1539,7 +1541,7 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
   // a safepoint. Trace addresses are diagnostics, never restoration permission.
   if(!field_factory_observer.Begin(graph_current(),native,error))return false;
   jobjectArray fields=nullptr;
-  const bool enumerated=public_declared_field_mirror::Enumerate(env,owner,&fields,error);
+  const bool enumerated=public_declared_field_mirror::Enumerate(env,ti,owner,&fields,error);
   bool ended=field_factory_observer.End(trace,error);
   if(ended)for(const auto& entry:trace->entries)if(entry.calls&&entry.field!=entry.normalized_field){
    if(fields)env->DeleteLocalRef(fields);return Fail(error,"Original Field observation targets were normalized; no transparent factory evidence");

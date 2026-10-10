@@ -1,31 +1,81 @@
 #pragma once
 #include <jni.h>
+#include <jvmti.h>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <new>
 namespace artdcevm::public_declared_field_mirror {
-// Class.getDeclaredFieldsUnchecked(false) uses the original source's force_resolve=false
-// factory. Do not substitute JNI ToReflectedField (force_resolve=true).
-inline bool Enumerate(JNIEnv* env,jclass owner,jobjectArray* out,std::string* error){
- if(out)*out=nullptr;
- auto fail=[&](const char* text){if(error)*error=text;return false;};
- if(!env||!owner||!out||env->ExceptionCheck())return fail("Declared Field source enumeration invalid or pending");
- jclass type=env->GetObjectClass(owner);
- if(!type||env->ExceptionCheck()){if(type)env->DeleteLocalRef(type);return fail("Declared Field Class API unavailable");}
- auto method=env->GetMethodID(type,"getDeclaredFieldsUnchecked","(Z)[Ljava/lang/reflect/Field;");
- env->DeleteLocalRef(type);
- if(!method||env->ExceptionCheck())return fail("Declared Field original source accessor unavailable");
- auto fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,method,JNI_FALSE));
- if(!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return fail("Declared Field original source enumeration failed");}
- *out=fields;return true;
+// Fixed AOSP Class native declaration uses force_resolve=false. Public no-arg
+// getDeclaredFields instead resolves types and cannot replace this capability.
+class Accessor {
+ jclass klass_=nullptr;jmethodID method_=nullptr;
+ public:
+ Accessor()=default;Accessor(const Accessor&)=delete;Accessor& operator=(const Accessor&)=delete;
+ void Clear(JNIEnv* env){if(klass_)env->DeleteGlobalRef(klass_);klass_=nullptr;method_=nullptr;}
+ bool Bind(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+  const auto fail=[&](const char* text){if(error)*error=text;return false;};
+  if(!env||!ti||env->ExceptionCheck())return fail("Declared Field source method context invalid or pending");
+  if(method_)return true;
+  struct Local{JNIEnv* env;jobject value=nullptr;~Local(){if(value)env->DeleteLocalRef(value);}};
+  struct Buffer{jvmtiEnv* ti;unsigned char* value=nullptr;~Buffer(){if(value)ti->Deallocate(value);}};
+  Local type{env,env->FindClass("java/lang/Class")};
+  if(!type.value||env->ExceptionCheck())return fail("Declared Field bootstrap Class unavailable");
+  auto klass=static_cast<jclass>(type.value);Buffer signature{ti};
+  auto result=ti->GetClassSignature(klass,reinterpret_cast<char**>(&signature.value),nullptr);
+  if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||!signature.value||std::strcmp(reinterpret_cast<char*>(signature.value),"Ljava/lang/Class;"))return fail("Declared Field source requires exact java/lang/Class");
+  Local loader{env};result=ti->GetClassLoader(klass,&loader.value);
+  if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||loader.value)return fail("Declared Field source Class must be bootstrap-defined");
+  jint count=0;Buffer methods{ti};result=ti->GetClassMethods(klass,&count,reinterpret_cast<jmethodID**>(&methods.value));
+  if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||count<0||(count&&!methods.value))return fail("Declared Field source original method inventory unavailable");
+  jmethodID selected=nullptr;const auto* ids=reinterpret_cast<const jmethodID*>(methods.value);
+  for(jint n=0;n<count;++n){Buffer name{ti},descriptor{ti};
+   if(!ids[n])return fail("Declared Field source inventory contains null method ID");
+   result=ti->GetMethodName(ids[n],reinterpret_cast<char**>(&name.value),reinterpret_cast<char**>(&descriptor.value),nullptr);
+   if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||!name.value||!descriptor.value)return fail("Declared Field source original method declaration unavailable");
+   if(std::strcmp(reinterpret_cast<char*>(name.value),"getDeclaredFieldsUnchecked")||std::strcmp(reinterpret_cast<char*>(descriptor.value),"(Z)[Ljava/lang/reflect/Field;"))continue;
+   jint modifiers=0;result=ti->GetMethodModifiers(ids[n],&modifiers);
+   if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||(modifiers&8)||!(modifiers&0x100))return fail("Declared Field source accessor must be original instance native method");
+   Local declaring{env};result=ti->GetMethodDeclaringClass(ids[n],reinterpret_cast<jclass*>(&declaring.value));
+   if(env->ExceptionCheck()||result!=JVMTI_ERROR_NONE||!declaring.value)return fail("Declared Field source accessor declaring Class unavailable");
+   const bool same=env->IsSameObject(declaring.value,klass);if(env->ExceptionCheck())return false;
+   if(!same||selected)return fail("Declared Field source original accessor owner or multiplicity differs");selected=ids[n];
+  }
+  if(!selected)return fail("Declared Field original false-resolve native accessor unavailable");
+  auto root=static_cast<jclass>(env->NewGlobalRef(klass));
+  if(!root||env->ExceptionCheck()){if(root)env->DeleteGlobalRef(root);return false;}
+  klass_=root;method_=selected;return true;
+ }
+ bool Enumerate(JNIEnv* env,jclass owner,jobjectArray* out,std::string* error){
+  if(out)*out=nullptr;
+  const auto fail=[&](const char* text){if(error)*error=text;return false;};
+  if(!env||!owner||!out||!klass_||!method_||env->ExceptionCheck())return fail("Declared Field original source is unbound or pending");
+  auto type=env->GetObjectClass(owner);
+  if(!type||env->ExceptionCheck()){if(type)env->DeleteLocalRef(type);return fail("Declared Field owner Class identity unavailable");}
+  const bool same=env->IsSameObject(type,klass_);env->DeleteLocalRef(type);
+  if(env->ExceptionCheck())return false;if(!same)return fail("Declared Field owner is outside original bootstrap Class namespace");
+  auto fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,method_,JNI_FALSE));
+  if(!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return fail("Declared Field original source enumeration failed");}
+  *out=fields;return true;
+ }
+};
+inline bool Enumerate(JNIEnv* env,jvmtiEnv* ti,jclass owner,jobjectArray* out,std::string* error){
+ if(out)*out=nullptr;Accessor accessor;
+ if(!accessor.Bind(env,ti,error))return false;
+ const bool result=accessor.Enumerate(env,owner,out,error);accessor.Clear(env);return result;
 }
 class Cache {
+ Accessor accessor_;
  jclass owner_=nullptr; jobject fields_=nullptr;
  // Opaque IDs and ordinals only: Field/Class addresses must be decoded anew.
  std::unordered_map<jfieldID,jsize> ordinals_;
  public:
  Cache()=default;Cache(const Cache&)=delete;Cache& operator=(const Cache&)=delete;
- void Clear(JNIEnv* env){if(fields_)env->DeleteGlobalRef(fields_);if(owner_)env->DeleteGlobalRef(owner_);fields_=nullptr;owner_=nullptr;ordinals_.clear();}
+ bool Bind(JNIEnv* env,jvmtiEnv* ti,std::string* error){return accessor_.Bind(env,ti,error);}
+ void Clear(JNIEnv* env){accessor_.Clear(env);ClearFields(env);}
+ private:
+ void ClearFields(JNIEnv* env){if(fields_)env->DeleteGlobalRef(fields_);if(owner_)env->DeleteGlobalRef(owner_);fields_=nullptr;owner_=nullptr;ordinals_.clear();}
+ public:
  bool Create(JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
  if(out)*out=nullptr;
  auto fail=[&](const char* text){if(error)*error=text;return false;};
@@ -34,8 +84,8 @@ class Cache {
  bool reuse=false;
  if(owner_){reuse=env->IsSameObject(owner_,owner);if(env->ExceptionCheck())return false;}
  if(!reuse){
-  Clear(env);
-  jobjectArray local=nullptr;if(!Enumerate(env,owner,&local,error))return false;
+  ClearFields(env);
+  jobjectArray local=nullptr;if(!accessor_.Enumerate(env,owner,&local,error))return false;
   Local fields{env,local};
   const jsize count=env->GetArrayLength(local);if(env->ExceptionCheck())return false;
   if(count<0)return fail("Declared Field source has invalid length");
@@ -82,7 +132,7 @@ class Cache {
  *out=selected;selected=nullptr;return true;
 }
 };
-inline bool Create(JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
- Cache cache;const bool ok=cache.Create(env,owner,id,statik,out,error);cache.Clear(env);return ok;
+inline bool Create(JNIEnv* env,jvmtiEnv* ti,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
+ Cache cache;if(!cache.Bind(env,ti,error)){if(out)*out=nullptr;return false;}const bool ok=cache.Create(env,owner,id,statik,out,error);cache.Clear(env);return ok;
 }
 }

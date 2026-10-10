@@ -21,7 +21,18 @@ class Hooks:public HookEngine {public:int family=4;bool deny=false,fail_remove=f
 static JNINativeInterface_ jni{};static JNIEnv env{&jni};static int locals=0;
 static jboolean Pending(JNIEnv*){return pending;}
 static jclass Class(JNIEnv*,jobject){assert(!pending);++locals;return reinterpret_cast<jclass>(&klass);}
-static jmethodID Method(JNIEnv*,jclass,const char* name,const char* signature){assert(!pending&&!std::strcmp(name,"getDeclaredFieldsUnchecked")&&!std::strcmp(signature,"(Z)[Ljava/lang/reflect/Field;"));return reinterpret_cast<jmethodID>(&field1);}
+static jvmtiInterface_1_ ti_table{};static jvmtiEnv ti{&ti_table};static int globals=0;
+static jclass Find(JNIEnv*,const char* name){assert(!pending&&!std::strcmp(name,"java/lang/Class"));++locals;return reinterpret_cast<jclass>(&klass);}
+static jobject Global(JNIEnv*,jobject object){assert(!pending);++globals;return object;}
+static void DeleteGlobal(JNIEnv*,jobject){assert(globals>0);--globals;}
+static jboolean Same(JNIEnv*,jobject a,jobject b){assert(!pending);return a==b;}
+static jvmtiError Free(jvmtiEnv*,unsigned char*p){free(p);return JVMTI_ERROR_NONE;}
+static jvmtiError ClassSignature(jvmtiEnv*,jclass,char** out,char**){assert(!pending);*out=strdup("Ljava/lang/Class;");return JVMTI_ERROR_NONE;}
+static jvmtiError Loader(jvmtiEnv*,jclass,jobject* out){assert(!pending);*out=nullptr;return JVMTI_ERROR_NONE;}
+static jvmtiError Methods(jvmtiEnv*,jclass,jint* n,jmethodID** out){assert(!pending);*n=1;*out=static_cast<jmethodID*>(malloc(sizeof(jmethodID)));**out=reinterpret_cast<jmethodID>(&field1);return JVMTI_ERROR_NONE;}
+static jvmtiError MethodName(jvmtiEnv*,jmethodID,char** name,char** signature,char**){assert(!pending);*name=strdup("getDeclaredFieldsUnchecked");*signature=strdup("(Z)[Ljava/lang/reflect/Field;");return JVMTI_ERROR_NONE;}
+static jvmtiError Modifiers(jvmtiEnv*,jmethodID,jint* out){assert(!pending);*out=0x101;return JVMTI_ERROR_NONE;}
+static jvmtiError Declaring(jvmtiEnv*,jmethodID,jclass* out){assert(!pending);++locals;*out=reinterpret_cast<jclass>(&klass);return JVMTI_ERROR_NONE;}
 static jobject Enumeration(JNIEnv*,jobject,jmethodID,va_list args){assert(!pending);const bool force=va_arg(args,int)!=0;assert(!force);void* root=&klass;
  for(void* field:{static_cast<void*>(&field1),static_cast<void*>(&field2)})if(!proxy(current,{&root},field,force).reference)return nullptr;
  ++locals;return reinterpret_cast<jobject>(&klass);
@@ -40,16 +51,16 @@ int main(){obs::EpisodeCompletion completed,failed;
  assert(!observer.RemoveAtExclusive(hooks,context,&error));assert(observer.End(&trace,&error));assert(trace.entries[0].calls==1&&trace.entries[1].calls==1&&trace.entries[0].false_calls==1&&trace.entries[0].root_before==uintptr_t(&klass)&&trace.entries[0].root_after==uintptr_t(&klass)&&original_calls==3&&root_calls==4);
  assert(observer.Begin(&thread,{&field1,&field2},&error));assert(proxy(&thread,handle,&field1,false).reference==uintptr_t(&field1));const auto reads=root_calls;assert(!proxy(&thread,handle,&field1,true).reference&&pending);assert(observer.End(&trace,&error));assert(trace.entries[0].calls==2&&trace.entries[0].false_calls==1&&!trace.entries[0].root_after_valid&&!trace.entries[0].root_after&&root_calls==reads+1);pending=false;
  throw_reader=true;assert(observer.Begin(&thread,{&field1,&field2},&error));assert(proxy(&thread,handle,&field1,false).reference==uintptr_t(&field1));assert(observer.End(&trace,&error)&&!trace.entries[0].root_before_valid&&!trace.entries[0].root_after_valid);throw_reader=false;
- jni.ExceptionCheck=Pending;jni.GetObjectClass=Class;jni.GetMethodID=Method;jni.CallObjectMethodV=Enumeration;jni.DeleteLocalRef=Delete;
+ jni.ExceptionCheck=Pending;jni.GetObjectClass=Class;jni.FindClass=Find;jni.NewGlobalRef=Global;jni.DeleteGlobalRef=DeleteGlobal;jni.IsSameObject=Same;ti_table.Deallocate=Free;ti_table.GetClassSignature=ClassSignature;ti_table.GetClassLoader=Loader;ti_table.GetClassMethods=Methods;ti_table.GetMethodName=MethodName;ti_table.GetMethodModifiers=Modifiers;ti_table.GetMethodDeclaringClass=Declaring;jni.CallObjectMethodV=Enumeration;jni.DeleteLocalRef=Delete;
  for(bool oom:{false,true}){factory_oom=oom;assert(observer.Begin(&thread,{&field1,&field2},&error));jobjectArray fields=nullptr;
- const bool enumerated=public_declared_field_mirror::Enumerate(&env,reinterpret_cast<jclass>(&klass),&fields,&error);
+ const bool enumerated=public_declared_field_mirror::Enumerate(&env,&ti,reinterpret_cast<jclass>(&klass),&fields,&error);
  assert(observer.End(&trace,&error));assert(trace.entries[0].calls==1&&trace.entries[0].false_calls==1&&trace.entries[1].calls==1&&trace.entries[1].false_calls==1);
  assert(obs::RootFalseProof(trace)==!oom);
  assert(obs::Describe(trace.entries[0]).find("field="+std::to_string(uintptr_t(&field1)))!=std::string::npos);
  assert(obs::Describe(trace.entries[0]).find("result="+std::to_string(uintptr_t(&field1)))!=std::string::npos);
  if(!oom)for(int fault=0;fault<9;++fault){auto invalid=trace;auto& entry=invalid.entries[0];switch(fault){case 0:entry.field=nullptr;break;case 1:entry.calls=0;break;case 2:entry.false_calls=0;break;case 3:entry.root_before_valid=false;break;case 4:entry.root_after_valid=false;break;case 5:entry.result=0;break;case 6:entry.root_after=0;break;case 7:++entry.root_before;break;case 8:entry.normalized_field=&other;break;}const char* reasons[]{"field-null","original-not-called","non-false-call","before-root-unproven","after-root-unproven","original-result-null","after-root-null","root-address-changed","field-normalized"};
  assert(!obs::RootFalseProof(invalid)&&!std::strcmp(obs::RootFalseFailure(entry),reasons[fault]));assert(obs::Describe(entry).find(reasons[fault])!=std::string::npos);}
- assert(enumerated==!oom&&pending==oom);if(fields)env.DeleteLocalRef(fields);assert(!locals);pending=false;}
+ assert(enumerated==!oom&&pending==oom);if(fields)env.DeleteLocalRef(fields);assert(!locals&&!globals);pending=false;}
  factory_oom=false;
  assert(observer.RemoveAtExclusive(hooks,context,&error)&&hooks.removes==1);
  assert(observer.InstallAtExclusive(hooks,context,&error));hooks.fail_remove=true;assert(!observer.RemoveAtExclusive(hooks,context,&error)&&observer.Poisoned());assert(!observer.Begin(&thread,{&field1,&field2},&error));hooks.fail_remove=false;assert(observer.RemoveAtExclusive(hooks,context,&error));assert(!observer.InstallAtExclusive(hooks,context,&error));
