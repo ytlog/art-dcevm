@@ -143,8 +143,8 @@ bool RootMapped(const modern_field_metadata::ReadContext& c,const void* p,size_t
 }
 struct SourceRoots final:abi::arm64::runtime_root_visit::Visitor {
  const native_source_stop::Session& stop;void* self;void*(*current)();
- const modern_field_metadata::ReadContext& context;void*(*barrier)(void*);RootSink& sink;RootReport& report;
- SourceRoots(const native_source_stop::Session&s,void*t,void*(*f)(),const modern_field_metadata::ReadContext&c,void*(*b)(void*),RootSink&k,RootReport&r):stop(s),self(t),current(f),context(c),barrier(b),sink(k),report(r){}
+ const modern_field_metadata::ReadContext& context;void*(*barrier)(void*);RootSink& sink;RootReport& report;bool frame_details;
+ SourceRoots(const native_source_stop::Session&s,void*t,void*(*f)(),const modern_field_metadata::ReadContext&c,void*(*b)(void*),RootSink&k,RootReport&r,bool frames):stop(s),self(t),current(f),context(c),barrier(b),sink(k),report(r),frame_details(frames){}
  bool Owner()noexcept {if(current()!=self||!stop.IsStopped(self)){report.failure=RootReport::Failure::Owner;return false;}return true;}
  template<class Slot> void Batch(Slot** slots,size_t count,const abi::arm64::runtime_root_visit::Info& info,bool compressed)noexcept {
   if(report.failure!=RootReport::Failure::None)return;
@@ -157,7 +157,14 @@ struct SourceRoots final:abi::arm64::runtime_root_visit::Visitor {
    void* value=nullptr;
    if(compressed)value=barrier(slot);else std::memcpy(&value,slot,sizeof(value));
    if(!Owner())return;
-   const RootRecord record{slot,value,info.type,info.thread_id,compressed?RootRepresentation::Compressed:RootRepresentation::Pointer};
+   RootRecord record{slot,value,info.type,info.thread_id,compressed?RootRepresentation::Compressed:RootRepresentation::Pointer};
+   if(frame_details&&info.type==abi::arm64::runtime_root_visit::kJavaFrameRoot){
+    using JavaFrame=abi::arm64::runtime_root_visit::JavaFrameInfo;
+    if(!RootMapped(context,&info,sizeof(JavaFrame))){report.failure=RootReport::Failure::Memory;return;}
+    JavaFrame frame{};std::memcpy(&frame,&info,sizeof(frame));
+    if(!frame.visitor){report.failure=RootReport::Failure::Original;return;}
+    record.original_frame_visitor=frame.visitor;record.vreg=frame.vreg;
+   }
    if(compressed)++report.compressed_roots;else ++report.pointer_roots;
    if(!sink.Root(record)){report.failure=RootReport::Failure::Sink;return;}
    if(!Owner())return;
@@ -206,7 +213,9 @@ bool RootProvenance::CalibrateLocks(const runnable_jni::Context& c,std::string* 
  if(!valid)return Fail(error,"Original private source Mutex/RW owner oracle differs from pinned declarations");
  mutex_owner_offset_=mo_at;rw_owner_offset_=ro_at;rw_state_offset_=rs;locks_calibrated_=true;return true;
 }
-RootReport RootProvenance::Observe(const native_source_stop::Session& stop,void* self,const modern_field_metadata::ReadContext& context,RootSink& sink)const noexcept {
+RootReport RootProvenance::Observe(const native_source_stop::Session& stop,void* self,const modern_field_metadata::ReadContext& context,RootSink& sink)const noexcept {return ObserveImpl(stop,self,context,sink,true);}
+RootReport RootProvenance::ObserveFrameRoots(const native_source_stop::Session& stop,void* self,const modern_field_metadata::ReadContext& context,RootSink& sink)const noexcept {return ObserveImpl(stop,self,context,sink,false);}
+RootReport RootProvenance::ObserveImpl(const native_source_stop::Session& stop,void* self,const modern_field_metadata::ReadContext& context,RootSink& sink,bool precise)const noexcept {
  RootReport report;
  if(!runtime_||!current_||!visit_||(!locks_calibrated_&&(!mutex_owner_||!rw_owner_)))return report;
  const auto owner=[&](){return self&&current_()==self&&stop.IsStopped(self);};
@@ -225,11 +234,11 @@ RootReport RootProvenance::Observe(const native_source_stop::Session& stop,void*
   return tid>0&&mo!=tid&&ro!=tid&&!shared_(classes,self);};
  if(!locks()||!owner()){report.failure=RootReport::Failure::Lock;return report;}
  report.failure=RootReport::Failure::None;
- SourceRoots visitor(stop,self,current_,context,barrier_,sink,report);
+ SourceRoots visitor(stop,self,current_,context,barrier_,sink,report,!precise);
  // The original source internally acquires/releases its own permitted locks;
  // only the caller's pre/post lock ownership is constrained. Callback owner
  // checks do not incorrectly forbid locks legitimately held by VisitRoots.
- visit_(runtime_,&visitor,abi::arm64::runtime_root_visit::kAllPrecise);
+ visit_(runtime_,&visitor,precise?abi::arm64::runtime_root_visit::kAllPrecise:abi::arm64::runtime_root_visit::kAll);
  if(!owner())report.failure=RootReport::Failure::Owner;
  else if(!locks())report.failure=RootReport::Failure::Lock;
  report.completed=report.failure==RootReport::Failure::None;return report;

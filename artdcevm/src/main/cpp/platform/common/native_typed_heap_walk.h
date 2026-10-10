@@ -11,7 +11,11 @@ inline constexpr char kVerifyHeap[]="_ZN3art2gc4Heap20VerifyHeapReferencesEb";
 inline constexpr char kVisitorCtor[]="_ZN3art2gc22VerifyReferenceVisitorC2EPNS_6ThreadEPNS0_4HeapEPmb";
 inline constexpr char kVerifyReference[]="_ZNK3art2gc22VerifyReferenceVisitor15VerifyReferenceEPNS_6mirror6ObjectES4_NS_12MemberOffsetE";
 enum class RootRepresentation {Pointer,Compressed};
-struct RootRecord {const void* slot;void* value;uint32_t type,thread_id;RootRepresentation representation;};
+struct RootRecord {const void* slot;void* value;uint32_t type,thread_id;RootRepresentation representation;
+ // Only valid synchronously inside RootSink::Root; stack roots can use a
+ // temporary pointer slot, never treat slot as its compressed physical spill.
+ const void* original_frame_visitor=nullptr;size_t vreg=SIZE_MAX;
+};
 class RootSink {public:virtual ~RootSink()=default;virtual bool Root(const RootRecord&)noexcept=0;};
 struct RootReport {enum class Failure {None,Binding,Owner,Memory,Lock,Original,Sink};Failure failure=Failure::Binding;size_t pointer_roots=0,compressed_roots=0;bool completed=false;};
 // Diagnostic source observation only. Neither Bind nor a completed walk is a
@@ -27,7 +31,12 @@ class RootProvenance final {
  bool LocksCalibrated()const noexcept{return locks_calibrated_;}
  RootReport Observe(const native_source_stop::Session&,void* self,
      const modern_field_metadata::ReadContext&,RootSink&)const noexcept;
+ // Complete AllRoots source stream with GC masks and original frame cursor,
+ // independent of optional Dex register maps. This is not a recovery grant.
+ RootReport ObserveFrameRoots(const native_source_stop::Session&,void* self,
+     const modern_field_metadata::ReadContext&,RootSink&)const noexcept;
  private:
+ RootReport ObserveImpl(const native_source_stop::Session&,void*,const modern_field_metadata::ReadContext&,RootSink&,bool)const noexcept;
  using OwnerTid=int32_t(*)(const void*);using SharedHeld=bool(*)(const void*,const void*);
  void* runtime_=nullptr;void*(*current_)()=nullptr;
  abi::arm64::runtime_root_visit::Visit visit_=nullptr;void*(*barrier_)(void*)=nullptr;

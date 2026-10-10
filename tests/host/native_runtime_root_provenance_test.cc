@@ -41,6 +41,8 @@ struct Roots:RootSink {size_t seen=0;bool deny=false;bool Root(const RootRecord&
  else{assert(r.slot==&compressed&&r.value==(move_root?static_cast<void*>(&moved_object):static_cast<void*>(&heap))&&r.type==3&&r.thread_id==987);}++seen;return !deny;
 }};
 }
+
+#ifndef FRAME_RELOCATION_TEST_ONLY
 int main(){RootHooks hooks;std::string error;assert(native_source_stop::Install(hooks,&error));native_source_stop::Service service;
  assert(native_source_stop::Service::Bind(hooks,&heap,State(hooks),&service,&error));Calibrate(service);
  RootProvenance roots;assert(roots.Bind(hooks,&runtime_object,Current,&error)&&!roots.LocksCalibrated());
@@ -72,3 +74,5 @@ int main(){RootHooks hooks;std::string error;assert(native_source_stop::Install(
  assert(original_visits&&barriers&&!exclusive&&!gc);
  std::cout<<"Original Runtime root visitor unit ART leaves + actual SourceStop: both overloads/slot/type/thread, barrier relocation, caller locks, memory/sink/expired/foreign owner refusal PASS; no public root calibration or narrowing granted\n";
 }
+
+#endif

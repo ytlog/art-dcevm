@@ -12,6 +12,16 @@ using Visitor=android_common::HandleRootVisitor;
 using Info=android_common::NativeRootInfo;
 using Visit=void(*)(void*,Visitor*,uint8_t);
 inline constexpr uint8_t kAllPrecise=1u|128u;
+inline constexpr uint8_t kAll=1u;
+// Fixed ed6c runtime/java_frame_root_info.h: callback-only derived RootInfo.
+// The visitor is original ART storage and must never escape its callback.
+struct JavaFrameInfo {Info base;const void* visitor;size_t vreg;};
+inline constexpr size_t kImpreciseVreg=SIZE_MAX-1;
+inline constexpr size_t kDeclaringClassVreg=SIZE_MAX-2;
+inline constexpr size_t kProxyReferenceArgumentVreg=SIZE_MAX-3;
+inline constexpr size_t kNativeReferenceArgumentVreg=SIZE_MAX-4;
+inline constexpr uint32_t kJavaFrameRoot=3; // Fixed gc_root.h kRootJavaFrame.
+static_assert(sizeof(JavaFrameInfo)==32&&offsetof(JavaFrameInfo,visitor)==16&&offsetof(JavaFrameInfo,vreg)==24);
 inline constexpr uint8_t kGenericBottom=8;
 inline constexpr char kVisit[]="_ZN3art7Runtime10VisitRootsEPNS_11RootVisitorENS_14VisitRootFlagsE";
 inline constexpr char kMutexOwner[]="_ZNK3art5Mutex20GetExclusiveOwnerTidEv";
