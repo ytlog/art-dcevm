@@ -38,6 +38,7 @@
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/rooted_field_identities.h"
+#include "platform/common/native_lazy_field_mirror.h"
 #include "platform/common/native_final_field_service.h"
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
@@ -72,7 +73,7 @@ struct Roots {
 struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
 struct NativeEngine final:Engine {
  ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
- ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);lazy_fields.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -304,7 +305,40 @@ struct NativeEngine final:Engine {
  // Fixed ObjectArray<HeapReference<Object>>: 8-byte Object, int32 length,
  // 4-byte elements. Every staged slot is independently checked against JNI.
  static void* FieldElement(void* raw,void* array,size_t index){if(index>=size_t(rooted_field_identities::Store::kChunkSize))return nullptr;return static_cast<NativeEngine*>(raw)->metadata.Reference(array,12+index*4);}
- rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner,FieldElement}};
+ native_lazy_field_mirror::Service lazy_fields;
+ void* (*lazy_decode_field)(void*,jfieldID)=nullptr;
+ static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
+  auto& e=*static_cast<NativeEngine*>(raw);
+  if(!id||!declaring||!e.lazy_decode_field||scope.vm!=e.vm||!scope.env||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return nullptr;
+  void* field=e.lazy_decode_field(e.runtime.receivers.jni_id_manager,id);
+  return field&&e.metadata.FieldDeclaringClass(field)==declaring?field:nullptr;
+ }
+ static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
+  auto& e=*static_cast<NativeEngine*>(raw);if(!out||!env||env->ExceptionCheck())return false;*out=nullptr;
+  if(e.lazy_fields.Ready())return e.lazy_fields.Create(env,owner,id,statik,out,error);
+  // Ordinary public behavior remains available when the exact source factory
+  // is absent. Its real exception is preserved; no optional declaration is skipped.
+  jobject local=env->ToReflectedField(owner,id,statik?JNI_TRUE:JNI_FALSE);
+  if(!local||env->ExceptionCheck()){if(local)env->DeleteLocalRef(local);return Fail(error,"Public contextual Field round trip unavailable");}
+  *out=env->NewGlobalRef(local);env->DeleteLocalRef(local);
+  return *out&&!env->ExceptionCheck();
+ }
+ bool PrepareLazyFields(JNIEnv* env,std::string* error){
+  if(lazy_fields.Ready())return true;
+  lazy_decode_field=reinterpret_cast<decltype(lazy_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
+  if(!lazy_decode_field)return true; // Preserve the existing public factory route.
+  native_lazy_field_mirror::Bindings b;b.owner=this;
+  b.matched_release_carrier=runnable_executor::Available()&&metadata.Calibrated()&&field_mirror.matched&&field_mirror.checked==28;
+  b.scope=FieldScope;b.oracle=FieldOracle;b.decode=FieldRoot;b.decode_field=DecodeLazyField;b.field=FieldLeaf;b.declaring=FieldOwner;
+  std::string unavailable;if(!lazy_fields.Bind(hooks,b,&unavailable))return !env->ExceptionCheck();
+  std::vector<native_lazy_field_mirror::Oracle> oracles;
+  for(size_t i=0;i<bootstrap_field_proofs.size();++i){
+   if(i>=field_handles.size())return Fail(error,"Lazy Field calibration lacks distinct original public mirrors");
+   const auto& p=bootstrap_field_proofs[i];oracles.push_back({field_handles[i].reflected_field,bootstrap_field_owner,contextual_field_id::Id(p),contextual_field_id::NativeField(p),contextual_field_id::IsStatic(p)});
+  }
+  return lazy_fields.Calibrate(env,oracles,error);
+ }
+ rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner,FieldElement,ProduceFieldMirror}};
  static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
  bool (*graph_same)(void*,void*)=nullptr;
  struct MapRange {uintptr_t begin,end;bool write;};std::vector<MapRange> graph_maps;
@@ -1298,6 +1332,7 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  graph_same=reinterpret_cast<decltype(graph_same)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
  if(!graph_decode||!graph_decode_method||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
+ if(!PrepareLazyFields(env,error))return false;
  for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
  if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");

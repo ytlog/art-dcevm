@@ -17,6 +17,9 @@ struct Bindings {
  // Original calibrated heap-reference barrier at fixed ObjectArray slot.
  // Staging proves EVERY slot against its public array/mirror identity.
  void* (*element)(void*,void* array,size_t index)=nullptr;
+ // Calibrated original source lazy factory. One new caller-owned strong Field
+ // root is returned; no borrowed managed result crosses public JNI.
+ bool (*lazy_mirror)(void*,JNIEnv*,jclass,jfieldID,bool,jobject*,std::string*)=nullptr;
 };
 class Store {
  public:

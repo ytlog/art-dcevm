@@ -20,8 +20,22 @@ bool Store::Observe(const runnable_jni::Context& context,void* raw){auto& r=*sta
 bool Store::Stage(JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){
  const auto& b=bindings_;
  if(!env||!owner||!id||env->ExceptionCheck()||!b.owner||!b.scope||!b.oracle||!b.decode||!b.field||!b.declaring||!b.element)return Fail(error,"Rooted Field stage lacks actual public/native owner");
- jobject mirror=env->ToReflectedField(owner,id,statik?JNI_TRUE:JNI_FALSE);Local mirror_local{env,mirror};
- if(!mirror||env->ExceptionCheck())return Fail(error,"Public contextual Field round trip unavailable");
+ Global produced{env};Local mirror_local{env,nullptr};jobject mirror=nullptr;
+ if(b.lazy_mirror){
+  if(!b.lazy_mirror(b.owner,env,owner,id,statik,&produced.ref,error))return false;
+  if(!produced.ref||env->ExceptionCheck())return Fail(error,"Source lazy Field factory did not return an owned strong mirror");
+  const auto kind=env->GetObjectRefType(produced.ref);
+  if(kind!=JNIGlobalRefType){
+   if(kind==JNILocalRefType)mirror_local.ref=produced.ref;
+   else if(kind==JNIWeakGlobalRefType)env->DeleteWeakGlobalRef(static_cast<jweak>(produced.ref));
+   produced.ref=nullptr;
+   return Fail(error,"Source lazy Field factory did not return an owned strong mirror");
+  }
+  mirror=produced.ref;
+ }else{
+  mirror=env->ToReflectedField(owner,id,statik?JNI_TRUE:JNI_FALSE);mirror_local.ref=mirror;
+  if(!mirror||env->ExceptionCheck())return Fail(error,"Public contextual Field round trip unavailable");
+ }
  if(env->FromReflectedField(mirror)!=id||env->ExceptionCheck())return Fail(error,"Public contextual Field ID round trip changed");
  jclass type=env->GetObjectClass(mirror);Local type_local{env,type};
  auto declaring=type?env->GetMethodID(type,"getDeclaringClass","()Ljava/lang/Class;"):nullptr;
@@ -31,7 +45,8 @@ bool Store::Stage(JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* 
  jint flags=env->CallIntMethod(mirror,modifiers);
  if(env->ExceptionCheck()||!actual||!env->IsSameObject(actual,owner)||((flags&8)!=0)!=statik)return Fail(error,"Public Field declaring owner or storage differs from ID context");
  Global owner_root{env,env->NewGlobalRef(owner)};if(!owner_root.ref||env->ExceptionCheck())return false;
- Global mirror_root{env,env->NewGlobalRef(mirror)};if(!mirror_root.ref||env->ExceptionCheck())return false;
+ Global mirror_root{env,produced.ref?produced.ref:env->NewGlobalRef(mirror)};produced.ref=nullptr;
+ if(!mirror_root.ref||env->ExceptionCheck())return false;
  Request request{this,owner_root.ref,mirror_root.ref};
  if(!b.scope(b.owner,env,mirror_root.ref,Observe,&request))return Fail(error,"Rooted native Field differs from exact public declaring Class");
  try {

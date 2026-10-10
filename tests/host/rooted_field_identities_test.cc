@@ -44,8 +44,14 @@ Root* R(jobject ref){return reinterpret_cast<Root*>(ref);}Object* Array(jobject 
 jobject Local(Object* object){auto* root=static_cast<Root*>(std::malloc(sizeof(Root)));assert(root);*root={object,false};++object->roots;return reinterpret_cast<jobject>(root);}
 jobject JNICALL Global(JNIEnv*,jobject ref){++jni_calls;if(globals==51200)return nullptr;auto* root=new Root{R(ref)->object,true};++root->object->roots;++globals;peak=std::max(peak,globals);return reinterpret_cast<jobject>(root);}
 void JNICALL Delete(JNIEnv*,jobject ref){++jni_calls;if(ref){auto* o=R(ref)->object;if(R(ref)->global)--globals;assert(o->roots);--o->roots;delete R(ref);if(o->array&&!o->roots){if(o->native!=o)delete static_cast<Object*>(o->native);delete o;--arrays;}}}
-jobject JNICALL To(JNIEnv*,jclass owner,jfieldID id,jboolean statik){++jni_calls;for(auto* f:fields)if(f->owner==R(owner)->object&&f->id==id&&f->statik==bool(statik))return Local(f);
+bool refuse_public_mirror=false,bad_lazy_local=false;size_t public_mirror_calls=0,lazy_calls=0;
+jobject JNICALL To(JNIEnv*,jclass owner,jfieldID id,jboolean statik){++jni_calls;++public_mirror_calls;if(refuse_public_mirror){pending_exception=true;return nullptr;}for(auto* f:fields)if(f->owner==R(owner)->object&&f->id==id&&f->statik==bool(statik))return Local(f);
  uintptr_t value=reinterpret_cast<uintptr_t>(id);if(value>=4096&&value%4==0){size_t index=value/4-1024;if(index<stress.size()&&stress[index].owner==R(owner)->object&&!statik)return Local(&stress[index]);}return nullptr;}
+jobjectRefType JNICALL RefType(JNIEnv*,jobject root){return R(root)->global?JNIGlobalRefType:JNILocalRefType;}
+bool LazyMirror(void*,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject*out,std::string*){
+ ++lazy_calls;assert(!pending_exception);*out=nullptr;
+ for(auto* f:fields)if(f->owner==R(owner)->object&&f->id==id&&f->statik==statik){auto local=Local(f);if(bad_lazy_local){*out=local;return true;}*out=Global(env,local);Delete(env,local);return true;}return false;
+}
 jfieldID JNICALL From(JNIEnv*,jobject mirror){++jni_calls;return wrong_id?reinterpret_cast<jfieldID>(64):R(mirror)->object->id;}
 jclass JNICALL Find(JNIEnv*,const char* name){++jni_calls;Object* result=&type;
  if(std::strcmp(name,"java/lang/Class")==0)result=&class_api;
@@ -113,7 +119,7 @@ jvmtiError JNICALL Loader(jvmtiEnv*,jclass,jobject* value){*value=Local(&loaded_
 jvmtiError JNICALL Interfaces(jvmtiEnv*,jclass,jint* count,jclass** values){*count=1;*values=static_cast<jclass*>(std::malloc(sizeof(jclass)));(*values)[0]=static_cast<jclass>(Local(&loaded_objects->front()));return JVMTI_ERROR_NONE;}
 
 }
-int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check;api.ExceptionOccurred=Occurred;api.ExceptionClear=ClearException;api.Throw=ThrowException;api.NewGlobalRef=Global;api.DeleteGlobalRef=Delete;api.DeleteLocalRef=Delete;api.ToReflectedField=To;api.FromReflectedField=From;api.GetObjectClass=Type;api.GetMethodID=Method;api.CallObjectMethodV=CallObject;api.CallIntMethodV=CallInt;api.IsSameObject=Same;api.NewObjectArray=NewArray;api.GetArrayLength=Length;api.SetObjectArrayElement=SetElement;api.GetObjectArrayElement=GetElement;JNIEnv env{&api};
+int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=Find;api.ExceptionCheck=Check;api.ExceptionOccurred=Occurred;api.ExceptionClear=ClearException;api.Throw=ThrowException;api.NewGlobalRef=Global;api.DeleteGlobalRef=Delete;api.DeleteLocalRef=Delete;api.ToReflectedField=To;api.FromReflectedField=From;api.GetObjectClass=Type;api.GetMethodID=Method;api.CallObjectMethodV=CallObject;api.CallIntMethodV=CallInt;api.IsSameObject=Same;api.NewObjectArray=NewArray;api.GetArrayLength=Length;api.SetObjectArrayElement=SetElement;api.GetObjectArrayElement=GetElement;JNIEnv env{&api};
  auto ar=static_cast<jclass>(Local(&a)),br=static_cast<jclass>(Local(&b)),cr=static_cast<jclass>(Local(&c));std::string error;
  rooted_field_identities::Store store({&vm,Scope,Oracle,Decode,Field,Owner,Element});
  move_oracle=true;move_array=true;assert(store.Stage(&env,ar,ma.id,false,&error));assert(a.native==&moved_a&&!move_array);assert(store.Stage(&env,br,mb.id,false,&error));assert(store.Stage(&env,ar,ms.id,true,&error));
@@ -164,6 +170,17 @@ int main(){JNINativeInterface_ api{};api.FindClass=Find;api.ExceptionCheck=Check
  auto object_ref=Local(&objects[0]);assert(roots.Stage(&env,object_ref,&rejected,&error));assert(roots.Same(&env,rejected,object_ref));Delete(&env,object_ref);size_t baseline=globals;
  wrong_element=true;bounded_managed_roots::Slot skipped;assert(!roots.Stage(&env,br,&skipped,&error)&&!skipped&&globals==baseline);wrong_element=false;
  void* native=nullptr;assert(roots.Read(rejected,&native)&&native==objects[0].native);roots.Clear(&env);assert(globals==0);
+ // The production Store retains every identity through its source-lazy path
+ // without invoking the public force-resolving factory for unrelated fields.
+ {rooted_field_identities::Store lazy({&vm,Scope,Oracle,Decode,Field,Owner,Element,LazyMirror});
+  const auto force_calls=public_mirror_calls;refuse_public_mirror=true;
+  assert(lazy.Stage(&env,ar,ma.id,false,&error)&&!pending_exception&&lazy.Read(ar,ma.id)==ma.field);
+  assert(public_mirror_calls==force_calls&&lazy_calls==1&&globals==1);
+  wrong_id=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));wrong_id=false;assert(globals==1);
+  bad_lazy_local=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));bad_lazy_local=false;assert(globals==1);
+  const auto calls=lazy_calls;pending_exception=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error)&&lazy_calls==calls&&pending_exception);
+  ClearException(&env);lazy.Clear(&env);refuse_public_mirror=false;assert(globals==0&&arrays==0);
+ }
  // Exercise Verifier::Stage/Clear itself, including every formerly separate
  // root, loader, superclass and interface global publication path.
  api.GetSuperclass=Parent;api.IsAssignableFrom=Assignable;loaded_objects=&objects;
