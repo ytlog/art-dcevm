@@ -47,10 +47,11 @@ bool FieldMetadata::ClassIdentityVerified(void*k,const char*descriptor,void*name
  return ClassIdentity(k,out,e,c);
 }
 }
+static void* deny_interface_read=nullptr;
 namespace artdcevm::native_interface_graph {
 bool Read(const modern_field_metadata::FieldMetadata&,void* k,std::vector<void*>* out,std::string*){*out=static_cast<Fake*>(k)->native_interfaces;return true;}
 bool Matches(const modern_field_metadata::FieldMetadata&,void* k,const std::vector<void*>& expected,std::string*){return static_cast<Fake*>(k)->native_interfaces==expected;}
-bool ReadInContext(const modern_field_metadata::FieldMetadata&m,void*k,std::vector<void*>*out,std::string*e,const modern_field_metadata::ReadContext*c){size_t extent=0;for(int i=0;i<7;++i)if(!modern_field_metadata::ReadMappingExtent(c,k,&extent))return false;return Read(m,k,out,e);}
+bool ReadInContext(const modern_field_metadata::FieldMetadata&m,void*k,std::vector<void*>*out,std::string*e,const modern_field_metadata::ReadContext*c){if(k==deny_interface_read){if(e)*e="Independent native IfTable prefix refused";return false;}size_t extent=0;for(int i=0;i<7;++i)if(!modern_field_metadata::ReadMappingExtent(c,k,&extent))return false;return Read(m,k,out,e);}
 bool MatchesInContext(const modern_field_metadata::FieldMetadata&m,void*k,const std::vector<void*>&e,std::string*error,const modern_field_metadata::ReadContext*c){size_t extent=0;return (!c||(c->extent&&c->extent(c->owner,k,&extent)&&extent>=sizeof(class_metadata::Class11)))&&Matches(m,k,e,error);}
 }
 // Fake JNI implements the public graph APIs, not private ART allocations.
@@ -175,6 +176,23 @@ static void Lifecycle(){
  proxy.loader=nullptr;assert(authority.Stage(context,&ti,{input},bindings,&error));assert(authority.Staged()->nodes.back().loader==nullptr&&!authority.Staged()->nodes.back().loader_root.owner);authority.Clear(&env);assert(!globals&&locals.empty());
  deny_public_proxy=true;assert(!authority.Stage(context,&ti,{input},bindings,&error));deny_public_proxy=false;assert(!globals&&locals.empty());
  proxy.public_name="custom.Other";assert(!authority.Stage(context,&ti,{input},bindings,&error));proxy.public_name="custom.中Proxy";assert(!globals&&locals.empty());loaded.pop_back();
+ // The complete public closure contains inherited diamond interfaces once.
+ // Native row order can differ but exact identities, including namespace, cannot.
+ Fake root_iface("Ldiamond/Root;",&object,0x601),left_iface("Ldiamond/Left;",&object,0x601),right_iface("Ldiamond/Right;",&object,0x601),leaf_iface("Ldiamond/Leaf;",&object,0x601);
+ left_iface.interfaces={&root_iface};left_iface.native_interfaces={&root_iface};right_iface.interfaces={&root_iface};right_iface.native_interfaces={&root_iface};leaf_iface.interfaces={&left_iface,&right_iface};leaf_iface.native_interfaces={&root_iface,&right_iface,&left_iface};
+ a.interfaces={&leaf_iface};a.native_interfaces={&root_iface,&right_iface,&leaf_iface,&left_iface};b.native_interfaces=a.native_interfaces;
+ input.before.interfaces={leaf_iface.descriptor};input.after.interfaces=input.before.interfaces;
+ loaded={&object,&a,&b,&parent,&i,&root_iface,&left_iface,&right_iface,&leaf_iface};
+ assert(authority.Stage(context,&ti,{input},bindings,&error));authority.Clear(&env);assert(!globals&&locals.empty());
+ deny_interface_read=&a;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("class=Lpkg/A;")!=std::string::npos&&error.find("nativeRead=0")!=std::string::npos&&error.find("readError=Independent native IfTable prefix refused")!=std::string::npos);deny_interface_read=nullptr;assert(!globals&&locals.empty());
+ Fake interface_loader("Lloader/Interfaces;"),foreign_iface(root_iface.descriptor.c_str(),&object,0x601);foreign_iface.loader=&interface_loader;loaded.push_back(&foreign_iface);
+ a.native_interfaces[0]=&foreign_iface;
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("class=Lpkg/A;")!=std::string::npos&&error.find("nativeRead=1 expected=4 actual=4")!=std::string::npos&&error.find("missing=Ldiamond/Root;")!=std::string::npos&&error.find("unexpected=Ldiamond/Root;")!=std::string::npos);assert(!globals&&locals.empty());
+ a.native_interfaces[0]=&root_iface;a.native_interfaces.push_back(&root_iface);
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("duplicates=1")!=std::string::npos);assert(!globals&&locals.empty());
+ a.native_interfaces.pop_back();b.native_interfaces.clear();
+ assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("class=Lpkg/B;")!=std::string::npos&&error.find("expected=4 actual=0")!=std::string::npos);assert(!globals&&locals.empty());
+ a.interfaces.clear();a.native_interfaces.clear();input.before.interfaces.clear();input.after.interfaces={i.descriptor};
  Fake shared_loader("LSharedLoader;"),other_loader("LOtherLoader;");
  for(size_t class_count:{size_t(30000),size_t(60000)}){
   std::vector<std::unique_ptr<Fake>> many;many.reserve(class_count+2);

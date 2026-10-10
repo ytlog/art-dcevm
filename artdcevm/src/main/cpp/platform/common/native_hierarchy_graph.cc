@@ -45,6 +45,18 @@ std::vector<size_t> Closure(const Graph& g,size_t start,bool proposed){
   size_t parent=proposed?node.proposed_parent:node.parent;if(parent!=absent)pending.push_back(parent);
  }return result;
 }
+bool InterfaceFailure(std::string* error,const Graph& graph,size_t node,const std::vector<size_t>& expected,const std::vector<void*>& actual,bool read,const std::string& detail){
+ if(error){
+  size_t missing=absent,unexpected=absent,duplicates=0;void* foreign=nullptr;
+  for(auto candidate:expected){const size_t count=std::count(actual.begin(),actual.end(),graph.nodes[candidate].klass);if(count!=1&&missing==absent)missing=candidate;if(count>1)duplicates+=count-1;}
+  for(auto value:actual){bool known=false;for(auto candidate:expected)known|=value==graph.nodes[candidate].klass;if(!known){foreign=value;for(size_t n=0;n<graph.nodes.size();++n)if(graph.nodes[n].klass==value){unexpected=n;break;}break;}}
+  const auto& owner=graph.nodes[node];const auto* missing_name=missing==absent?"<none>":graph.nodes[missing].descriptor.c_str();const auto* foreign_name=unexpected==absent?"<outside rooted graph>":graph.nodes[unexpected].descriptor.c_str();
+  char text[1200];std::snprintf(text,sizeof(text),
+   "Native/public complete interface identities differ [node=%zu class=%.192s nativeClass=%p loader=%p nativeRead=%d expected=%zu actual=%zu missing=%.192s missingClass=%p unexpected=%.192s unexpectedClass=%p unexpectedLoader=%p duplicates=%zu readError=%.256s]",
+   node,owner.descriptor.c_str(),owner.klass,owner.loader,int(read),expected.size(),actual.size(),missing_name,missing==absent?nullptr:graph.nodes[missing].klass,foreign_name,foreign,unexpected==absent?nullptr:graph.nodes[unexpected].loader,duplicates,detail.empty()?"<none>":detail.c_str());
+  *error=text;
+ }return false;
+}
 bool SetMatches(const std::vector<void*>& actual,const std::vector<size_t>& expected,const Graph& g,bool replacement){
  if(actual.size()!=expected.size())return false;for(auto n:expected){void* k=replacement&&g.nodes[n].replacement?g.nodes[n].replacement:g.nodes[n].klass;if(std::count(actual.begin(),actual.end(),k)!=1)return false;}return true;
 }
@@ -242,7 +254,12 @@ bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const st
  // Never retain it across a source callee, JNI operation or moving GC.
  {std::unordered_map<void*,size_t> native_index;native_index.reserve(s.graph.nodes.size());
  for(size_t i=0;i<s.graph.nodes.size();++i)if(!native_index.emplace(s.graph.nodes[i].klass,i).second)return Fail(error,"Duplicate current native Class identity");
- for(size_t i=0;i<s.graph.nodes.size();++i){s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));if(!native_interface_graph::ReadInContext(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],error,s.Context())||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return Fail(error,"Native/public complete interface identities differ");for(auto k:s.native_before[i]){auto it=native_index.find(k);if(it==native_index.end())return Fail(error,"Native interface outside exact public graph");s.order_before[i].push_back(it->second);}}
+ for(size_t i=0;i<s.graph.nodes.size();++i){
+  s.closure_before.push_back(Closure(s.graph,i,false));s.closure_after.push_back(Closure(s.graph,i,true));
+  std::string read_error;const bool read=native_interface_graph::ReadInContext(*bindings.metadata,s.graph.nodes[i].klass,&s.native_before[i],&read_error,s.Context());
+  if(!read||!SetMatches(s.native_before[i],s.closure_before[i],s.graph,false))return InterfaceFailure(error,s.graph,i,s.closure_before[i],s.native_before[i],read,read_error);
+  for(auto k:s.native_before[i]){auto it=native_index.find(k);if(it==native_index.end())return Fail(error,"Native interface outside exact public graph");s.order_before[i].push_back(it->second);}
+ }
  }
  trace.Mark("native-interfaces",s.graph.nodes.size());
  if(!s.Native(false,error))return false;if(!s.OwnersStaged(error))return false;trace.Mark("owners",s.graph.nodes.size());s.staged=true;success=true;return true;
