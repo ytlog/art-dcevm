@@ -39,6 +39,7 @@
 #include "platform/common/native_reference_decoder.h"
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_receiver_source_calibration.h"
+#include "platform/common/native_receiver_public_sample.h"
 #include "platform/common/native_removal_policy.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
@@ -1198,30 +1199,24 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(!final_write_guard::BindSourceEvents(runtime.instrumentation,receiver_source_calibration->Observer(),&receiver_producer_diagnostic))return false;
  struct Episode {
   NativeEngine&e;JNIEnv*env;std::vector<jobject> globals;std::vector<jobject> registered;
-  jobject Own(jobject local){if(!local)return nullptr;auto root=env->NewGlobalRef(local);if(root)globals.push_back(root);return root;}
+  jobject Own(jobject local){auto root=receiver_guard::AcquireGlobal(env,local);if(root)globals.push_back(root);return root;}
   bool Register(jobject root){if(!e.permission_decoder.RegisterStrong(env,root,&e.receiver_producer_diagnostic))return false;registered.push_back(root);return true;}
   ~Episode(){for(auto root:registered)e.permission_decoder.Forget(root);for(auto root:globals)env->DeleteGlobalRef(root);}
  }episode{*this,env,{}, {}};
  struct Local {JNIEnv*env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}};
- jclass type=env->GetObjectClass(input);Local type_ref{env,type};
- auto object_id=type?env->GetFieldID(type,"receiverSourceObject","Ljava/lang/Object;"):nullptr;
- auto callers_id=type?env->GetFieldID(type,"receiverCallers","[Ljava/lang/reflect/Method;"):nullptr;
- auto targets_id=type?env->GetFieldID(type,"receiverTargets","[Ljava/lang/reflect/Method;"):nullptr;
- jobject object=object_id?env->GetObjectField(input,object_id):nullptr;Local object_ref{env,object};
- auto callers=callers_id?static_cast<jobjectArray>(env->GetObjectField(input,callers_id)):nullptr;Local callers_ref{env,callers};
- auto targets=targets_id?static_cast<jobjectArray>(env->GetObjectField(input,targets_id)):nullptr;Local targets_ref{env,targets};
- auto receiver=episode.Own(object);
- if(!receiver||!callers||!targets||env->ExceptionCheck()||env->GetArrayLength(callers)!=10||env->GetArrayLength(targets)!=10||!episode.Register(receiver))return fail("Public receiver source fixture identities unavailable");
- jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_ref{env,bootstrap};
- auto run=bootstrap?env->GetStaticMethodID(bootstrap,"runReceiverSource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)I"):nullptr;
+ receiver_guard::PublicInputs public_input(env);
+ if(!public_input.Read(input))return fail("Public receiver source fixture identities unavailable");
+ auto receiver=episode.Own(public_input.object);
+ if(!receiver||!episode.Register(receiver))return fail("Public receiver source fixture root unavailable");
+ const auto bootstrap=public_input.bootstrap;const auto run=public_input.run;
  auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
- if(!run||!leaf||env->ExceptionCheck())return fail("Public receiver source invocation/native mirror leaf unavailable");
+ if(!leaf)return fail("Public receiver source native mirror leaf unavailable");
  struct NativeSample {
   NativeEngine&e;abi::common::FromReflectedMethod leaf;jobject caller,target;jmethodID caller_id,target_id;
   uint32_t caller_flags,target_flags;void*self=nullptr,*method=nullptr,*member=nullptr;
   static bool Read(const runnable_jni::Context&scope,void*raw){auto&r=*static_cast<NativeSample*>(raw);const abi::common::RunnableJniScope native{scope.self,scope.env,scope.vm};
    if(scope.vm!=r.e.vm||scope.self!=r.e.graph_current())return false;
-   r.method=r.leaf(native,r.caller);r.member=r.leaf(native,r.target);
+   r.method=r.leaf(native,r.caller);if(scope.env->ExceptionCheck()||!r.method)return false;r.member=r.leaf(native,r.target);if(scope.env->ExceptionCheck()||!r.member)return false;
    if(!r.method||!r.member||r.method!=r.e.graph_decode_method(r.e.runtime.receivers.jni_id_manager,r.caller_id)||r.member!=r.e.graph_decode_method(r.e.runtime.receivers.jni_id_manager,r.target_id))return false;
    const auto layout=r.e.model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
    for(auto item:{std::pair<void*,uint32_t>{r.method,r.caller_flags},{r.member,r.target_flags}}){size_t extent=0;method_metadata::Identity identity;
@@ -1232,17 +1227,18 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  struct Install {void*method;std::string*error;static bool Run(const exclusive_owned_roots::Context&,void*raw){auto&r=*static_cast<Install*>(raw);return final_write_guard::InstallSourceEventsAtExclusiveBoundary(r.error)&&final_write_guard::PrepareProofMethodAtExclusiveBoundary(r.method,r.error);}};
  constexpr int expected[]={11,31,21,41,41,61,51,71,31,51};
  for(unsigned i=0;i<10;++i){
-  jobject caller_local=env->GetObjectArrayElement(callers,jint(i)),target_local=env->GetObjectArrayElement(targets,jint(i));Local caller_ref{env,caller_local},target_ref{env,target_local};
-  auto caller=episode.Own(caller_local),target=episode.Own(target_local);auto caller_id=caller?env->FromReflectedMethod(caller):nullptr;auto target_id=target?env->FromReflectedMethod(target):nullptr;
-  jint caller_flags=0,target_flags=0,bytes=0;unsigned char*public_bytes=nullptr;
-  if(!caller_id||!target_id||env->ExceptionCheck()||ti->GetMethodModifiers(caller_id,&caller_flags)!=JVMTI_ERROR_NONE||ti->GetMethodModifiers(target_id,&target_flags)!=JVMTI_ERROR_NONE||ti->GetBytecodes(caller_id,&bytes,&public_bytes)!=JVMTI_ERROR_NONE||bytes<=0||!public_bytes)return fail("Public receiver caller/target modifiers or bytecodes unavailable");
-  struct Bytes {jvmtiEnv*ti;unsigned char*data;~Bytes(){ti->Deallocate(data);}} release{ti,public_bytes};
+  receiver_guard::PublicSample public_sample(env,ti);
+  if(!public_sample.Read(public_input.callers,public_input.targets,jint(i)))return fail("Public receiver caller/target modifiers or bytecodes unavailable");
+  auto caller=episode.Own(public_sample.caller);if(!caller)return fail("Public receiver caller root unavailable");
+  auto target=episode.Own(public_sample.target);if(!target)return fail("Public receiver target root unavailable");
+  const auto caller_id=public_sample.caller_id,target_id=public_sample.target_id;
+  const auto caller_flags=public_sample.caller_flags,target_flags=public_sample.target_flags;
   NativeSample sample{*this,leaf,caller,target,caller_id,target_id,uint32_t(caller_flags),uint32_t(target_flags)};
   if(runnable_executor::With(env,caller,NativeSample::Read,&sample)!=runnable_jni::Result::kSuccess)return fail("Receiver public reflected/JNI/native member identities disagree");
   const auto kind=static_cast<receiver_guard::InvokeKind>(i/2);jobject special=nullptr;
-  if(kind==receiver_guard::InvokeKind::Super){jclass declaring=nullptr;if(ti->GetMethodDeclaringClass(caller_id,&declaring)!=JVMTI_ERROR_NONE||!declaring)return fail("Public special caller Class unavailable");Local declaring_ref{env,declaring};special=episode.Own(declaring);if(!special||!episode.Register(special))return false;}
+  if(kind==receiver_guard::InvokeKind::Super){jclass declaring=nullptr;const auto status=ti->GetMethodDeclaringClass(caller_id,&declaring);Local declaring_ref{env,declaring};if(status!=JVMTI_ERROR_NONE||env->ExceptionCheck()||!declaring)return fail("Public special caller Class unavailable");special=episode.Own(declaring);if(!special||!episode.Register(special))return false;}
   Install install{sample.method,&receiver_producer_diagnostic};if(!permission_exclusive.With(env,&caller,1,Install::Run,&install,&receiver_producer_diagnostic))return false;
-  if(!receiver_source_calibration->Stage(sample.self,sample.method,sample.member,kind==receiver_guard::InvokeKind::Static?nullptr:receiver,special,kind,i%2,public_bytes,size_t(bytes)))return fail("Receiver source sample staging rejected");
+  if(!receiver_source_calibration->Stage(sample.self,sample.method,sample.member,kind==receiver_guard::InvokeKind::Static?nullptr:receiver,special,kind,i%2,public_sample.public_bytes,size_t(public_sample.bytes)))return fail("Receiver source sample staging rejected");
   const jint result=env->CallStaticIntMethod(bootstrap,run,input,jint(i));const bool pending=env->ExceptionCheck();
   const bool proven=receiver_source_calibration->Finish(!pending&&result==expected[i]);
   if(pending)env->ExceptionClear(); // Only this isolated private calibration call.
