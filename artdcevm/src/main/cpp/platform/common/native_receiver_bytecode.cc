@@ -30,8 +30,9 @@ BytecodeResult BytecodeSource::ReadImpl(void*self,void*caller,uint32_t pc,Invoke
  const bool resolved=access_.resolve(access_.owner,self,caller,instruction,&member,&special);
  // The source resolver can suspend or throw. Validate current actual frame
  // identity again before borrowing any receiver or caller Class pointer.
- const void*after=nullptr;if(!access_.current(access_.owner,self)||!access_.frame(access_.owner,self,caller,pc,&after)||after!=frame||!frames_.Identity(self,after,&actual,&position,&registers)||actual!=caller||position!=pc)return result;
+ if(!access_.current(access_.owner,self))return result;
  if(access_.pending(access_.owner,self)){result.outcome=BytecodeOutcome::OriginalException;return result;}
+ const void*after=nullptr;if(!access_.frame(access_.owner,self,caller,pc,&after)||after!=frame||!frames_.Identity(self,after,&actual,&position,&registers)||actual!=caller||position!=pc)return result;
  if(!resolved||!member||(instruction.kind==InvokeKind::Super?!special:special!=nullptr))return result;
  if(instruction.kind!=InvokeKind::Static&&!frames_.ReadRegister(self,after,instruction.receiver_register,&result.receiver))return result;
  result.outcome=BytecodeOutcome::Resolved;result.member=member;result.special_caller=special;return result;

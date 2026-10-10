@@ -77,7 +77,12 @@ class AllocationOwner:public Owner {
  virtual bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept=0;
  virtual bool RefreshPending(Prepared*)const noexcept{return false;}
 };
-class ReceiverOwner:public Owner {};
+class ReceiverOwner:public Owner {
+ public:
+ // Collected Seal freezes structural identity. Final publication additionally
+ // consumes concrete same-Plan lifetime/dispatch/retained-cell recovery proofs.
+ virtual bool VerifyFinal(const Graph&g,const source_commit::Plan&p)const noexcept{return Verify(g,p);}
+};
 class CacheOwner:public Owner {
  public:
  // Explicit fallible incoming-cache mutation after capture/linking, separate

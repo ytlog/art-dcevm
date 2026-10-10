@@ -89,6 +89,8 @@ static bool Borrow(void*,const runnable_jni::Context&,jobject value,void** out){
 static size_t pair_reads=0;
 static bool PairBorrow(void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){++pair_reads;return Borrow(owner,c,a,left)&&Borrow(owner,c,b,right);}
 struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
+ bool final_granted=false;
+ bool VerifyFinal(const Graph&g,const source_commit::Plan&p)const noexcept override{return final_granted&&Verify(g,p);}
  bool granted=true;size_t commits=0;void* cache=nullptr;
  bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept override{return granted;}
  bool VerifyStaged(const Graph&,const std::vector<Input>&,std::string*)const override{return granted;}
@@ -117,7 +119,7 @@ static void Lifecycle(){
  std::unordered_map<void*,void*> relocation{{&moved_object,&final_object},{&moved_a,&final_a},{&moved_b,&final_b},{&moved_parent,&final_parent},{&moved_i,&final_i},{&new_a,&final_new_a},{&new_b,&final_new_b}};
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
  bool mapping_allowed=true;modern_field_metadata::ReadContext read_context{&mapping_allowed,[](void*owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};authority.UseReadContext(read_context);forbid_os=true;
- forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
+ forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(!authority.Verify(plan,0));owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
  authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
  // Public Stage cyclic proposal rejects and releases every independently owned
  // global even though all individual lookups resolve valid Classes.

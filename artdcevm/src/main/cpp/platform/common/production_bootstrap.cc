@@ -36,6 +36,7 @@
 #include "platform/common/native_final_field_service.h"
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
+#include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_removal_policy.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
@@ -96,6 +97,14 @@ struct NativeEngine final:Engine {
  frame_family_calibration::Service frame_calibrator;
  frame_family_calibration::Service::Prepared frame_calibration_storage;
  std::vector<frame_family_calibration::MethodOracle> frame_methods;
+ receiver_guard::SourceProducer receiver_producer;bool receiver_producer_bound=false;std::string receiver_producer_diagnostic;
+ bool BindReceiverProducer(code_info_view::SourceFamily family){
+  if(receiver_producer_bound)return true;
+  const auto declaration=family==code_info_view::SourceFamily::kAndroid11?stack_visitor_service::Declaration::kAndroid11:family==code_info_view::SourceFamily::kAndroid12?stack_visitor_service::Declaration::kAndroid12:family==code_info_view::SourceFamily::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
+  const auto layout=model.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:family==code_info_view::SourceFamily::kAndroid17?code_item_metadata::kStandard:code_item_metadata::kTagged;
+  auto current_thread=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
+  receiver_producer_bound=receiver_producer.Bind(hooks,declaration,layout,metadata,runtime.receivers.class_linker,current_thread,&receiver_producer_diagnostic);return receiver_producer_bound;
+ }
  whole_process_frames::Service whole_frames;bool frame_geometry_proven=false,compiled_frames_proven=false;std::string frame_geometry_diagnostic;
  const native_source_stop::Session* calibration_stop=nullptr;void* calibration_self=nullptr;
  struct CompiledRequest {NativeEngine* engine;compiled_frame_fixture::Owner* fixture;frame_family_calibration::Result result;std::string error;abi::arm64::android11::CurrentThread current_thread=nullptr;};
@@ -176,6 +185,7 @@ struct NativeEngine final:Engine {
   if(runnable_executor::With(env,anchor,CalibrateCompiled,&request)!=runnable_jni::Result::kSuccess){frame_geometry_diagnostic=request.error.empty()?"compiled-frame-calibration-runnable-callback-not-completed":request.error;return false;}
   auto finder=[&](const char* symbol){return hooks.FindSymbol("libart.so",symbol);};
   compiled_frames_proven=whole_process_frames::Service::Bind(request.result.scanner_family,finder,&whole_frames);
+  if(compiled_frames_proven)BindReceiverProducer(request.result.scanner_family);
   if(!compiled_frames_proven)frame_geometry_diagnostic="Full proved compiled scanner binding rejected";return compiled_frames_proven;
  }
  native_required_cleanup::Binding cleanup_binding;
@@ -201,6 +211,7 @@ struct NativeEngine final:Engine {
   {thread_suspend_service::SuspendScope stopped(state,"art-dcevm independent frame geometry");
    if(!stopped.Supported()||!frame_calibrator.ObserveGeometry(self,frame_methods.data(),frame_methods.size(),frame_calibration_storage,&result))return Fail(error,"Actual constructor/public method geometry oracle rejected");}
   frame_geometry_proven=whole_process_frames::Service::BindGeometryOnly(result.scanner_family,finder,&whole_frames);
+  if(frame_geometry_proven)BindReceiverProducer(result.scanner_family);
   return frame_geometry_proven||Fail(error,"Calibrated geometry scanner binding unavailable");
  }
  struct PublicCacheWitness {

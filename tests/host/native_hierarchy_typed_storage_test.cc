@@ -4,8 +4,15 @@
 #pragma clang diagnostic pop
 #include "platform/common/native_hierarchy_typed_storage.h"
 #include "platform/common/native_typed_heap_calibration.h"
+#include "platform/common/native_narrowing_authority.h"
 namespace {
 using StorageProof=native_hierarchy_typed_storage::Proof;
+std::unique_ptr<receiver_guard::Guard> incomplete_guard;std::unique_ptr<receiver_guard::FrameReader> incomplete_frames;std::unique_ptr<native_narrowing::Authority> incomplete_authority;native_hierarchy_graph::Graph incomplete_graph;
+void TestNarrowingOrdinary(StorageProof&proof){
+ incomplete_guard=std::make_unique<receiver_guard::Guard>(receiver_guard::Access{});incomplete_frames=std::make_unique<receiver_guard::FrameReader>(receiver_guard::FrameAccess{});
+ incomplete_authority=std::make_unique<native_narrowing::Authority>(*incomplete_guard,*incomplete_frames,proof);incomplete_graph.nodes.resize(1);incomplete_graph.inputs.push_back(0);std::string error;assert(!incomplete_authority->Prepare(incomplete_graph,&error)&&!error.empty());
+}
+
 void* typed_probe_class=nullptr,*typed_probe_instance=nullptr,*typed_ancestor=nullptr,*typed_int=nullptr;
 void* typed_array=nullptr,*typed_array_class=nullptr,*typed_old_array_class=nullptr,*typed_ancestor_array=nullptr,*typed_old_array=nullptr;
 void* typed_ancestor_2d=nullptr,*typed_old_2d=nullptr,*typed_old_2d_value=nullptr;
@@ -108,6 +115,10 @@ void MoveTypedRootsAfterStage(){
 void TestFinalTyped(StorageProof& proof,const source_commit::Plan& plan,const native_required_cleanup::Service&cleanup,void*driver,const transaction_root::Holder*holder,const native_source_commit::Services&copy){
  auto&mappings=typed_maps;modern_field_metadata::ReadContext context{&mappings,ExplicitMappings::Extent};const auto os=method_identity::MappingOsQueries();
  assert(proof.Validate(plan,context,cleanup,driver,holder,copy));
+ assert(incomplete_authority&&!incomplete_authority->BindRun(cleanup,driver,holder,copy)&&!incomplete_authority->Validate(incomplete_graph,plan,context));
+ // A real complete retained-cell proof and actual final cleanup cannot supply
+ // any missing independently witnessed source/listener/receiver call path.
+
  Put32(old_instance,12,uint32_t(uintptr_t(old_instance)));assert(proof.Validate(plan,context,cleanup,driver,holder,copy));Put32(old_instance,12,uint32_t(uintptr_t(ref_a)));
  const auto&wrong=typed_wrong_plan;assert(!proof.Validate(wrong,context,cleanup,driver,holder,copy));assert(!proof.Validate(plan,context,cleanup,&typed_heap,holder,copy));
  Put32(typed_probe_instance,12,uint32_t(uintptr_t(old_instance)));assert(!proof.Validate(plan,context,cleanup,driver,holder,copy)&&proof.LastRefusal()==StorageProof::Refusal::IncompatibleField);Put32(typed_probe_instance,12,0);

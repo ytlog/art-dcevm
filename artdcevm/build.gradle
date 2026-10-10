@@ -36,6 +36,7 @@ def bootstrapTask = tasks.register('compileProductionBootstrap', Exec) {
     inputs.dir file('src/bootstrap')
     inputs.file rootProject.file('tools/build-production-bootstrap.py')
     inputs.file rootProject.file('tools/source_cache_fixture.py')
+    inputs.file rootProject.file('tools/receiver_source_fixture.py')
     outputs.dir layout.buildDirectory.dir('generated/bootstrapAssets')
     commandLine 'python3', rootProject.file('tools/build-production-bootstrap.py'),
         '--sdk', androidComponents.sdkComponents.sdkDirectory.get().asFile,

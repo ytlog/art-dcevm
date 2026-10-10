@@ -31,13 +31,14 @@ prefix,main=cleanup.split('int main(int argc,char** argv){',1)
 prefix=prefix.replace('#include "provider_fixture.inc"','#include "provider_fixture.inc"\n#include "roots_fixture.inc"').replace('class OwnerHooks:public ProviderHooks','class OwnerHooks:public RootHooks').replace('return ProviderHooks::FindSymbol(lib,name);','return RootHooks::FindSymbol(lib,name);')
 (out/'cleanup_fixture.inc').write_text(prefix)
 main=main.replace(' dependencies.is_retired=OwnerRetired;', ''' source_handle_roots::Service source_roots;native_typed_heap_walk::Service walk;
- auto typed=PrepareTyped(hooks,metadata,fields,source_roots,walk,error);assert(typed&&typed->Staged());MoveTypedRootsAfterStage();
+ auto typed=PrepareTyped(hooks,metadata,fields,source_roots,walk,error);assert(typed&&typed->Staged());TestNarrowingOrdinary(*typed);MoveTypedRootsAfterStage();
  dependencies.is_retired=OwnerRetired;''')
 main=main.replace('assert(registry.Freeze()&&registry.Resolve());','typed_wrong_plan=plan;assert(typed->Capture(plan,registry.Collect(),&error));assert(registry.Freeze()&&registry.Resolve());typed->Refresh(registry.Final());')
 
 
-main=main.replace(' assert(!cleanup.CommitObserver(plan)&&!facade->Validate(foreign_plan)&&facade->Validate(plan));',''' TestFinalTyped(*typed,plan,cleanup,&driver,&holder,*concrete);
- assert(!cleanup.CommitObserver(plan)&&!facade->Validate(foreign_plan)&&facade->Validate(plan));''')
+anchor=' assert(!cleanup.CommitObserver(foreign_plan));'
+assert main.count(anchor)==1
+main=main.replace(anchor,' TestFinalTyped(*typed,plan,cleanup,&driver,&holder,*concrete);\n'+anchor)
 main=main.replace(' provider.ReleasePreparedSource(*concrete);',' typed->Clear(&env);Publish(nullptr);provider.ReleasePreparedSource(*concrete);')
 # Clear JNI roots only after the original final source window has ended.
 main=main.replace(' typed->Clear(&env);Publish(nullptr);provider.ReleasePreparedSource(*concrete);',' provider.ReleasePreparedSource(*concrete);')
@@ -94,7 +95,7 @@ def dex_fixture(method_deleted, field_deleted, evolved=False, final_guard=False,
     data[:8]=b'dex\n040\0';put(32,len(data));put(36,0x70);put(40,0x12345678);put(52,map_offset)
     put(104,len(data)-start);put(108,start);data[12:32]=hashlib.sha1(data[32:]).digest();put(8,zlib.adler32(data[12:]))
     path=out/('shape-%d-%d-%d-%d-%d.dex'%(method_deleted,field_deleted,evolved,final_guard,hierarchy));path.write_bytes(data);return str(path)
-sources = ['native_hierarchy_typed_storage','native_typed_heap_walk','native_typed_heap_calibration','whole_process_frames', 'native_required_cleanup', 'native_source_stop', 'native_source_class_loading', 'native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'modern_source_commit', 'source_commit',
+sources = ['native_narrowing_authority','native_receiver_service','native_receiver_guard','native_receiver_frame','native_receiver_bytecode','native_final_write_listener','native_final_write_guard','modern_final_field_guard','native_hierarchy_typed_storage','native_typed_heap_walk','native_typed_heap_calibration','whole_process_frames', 'native_required_cleanup', 'native_source_stop', 'native_source_class_loading', 'native_member_provider', 'native_method_table', 'native_structural_reflection', 'resolution_invalidation_plan', 'native_source_commit', 'modern_source_commit', 'source_commit',
            'modern_field_metadata', 'native_interface_graph', 'modern_field_storage', 'field_copy', 'prepared_field_copy',
            'native_schema_policy','native_schema_binding','native_method_evolution_policy','source_handle_roots',
            'exclusive_owned_roots', 'native_cache_service', 'modern_method_services',

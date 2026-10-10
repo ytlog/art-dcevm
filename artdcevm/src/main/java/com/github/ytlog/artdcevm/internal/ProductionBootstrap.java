@@ -47,13 +47,16 @@ public final class ProductionBootstrap {
         final Class<?> cacheClass;
         final Object cacheFixture;
         final Method cacheRead, cacheWarm;
+        final byte[] receiverDex;
+        final Object receiverSourceObject;
+        final Method[] receiverCallers = new Method[10], receiverTargets = new Method[10];
         final java.lang.reflect.Field cacheField;
         final Object methodReceiver = new EvolutionCalibration();
         final MethodHandle[] methodHandles;
         final Method[] methods;
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
-        Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex) throws Exception {
+        Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex, byte[] receiverDex) throws Exception {
             this.dex = dex; additiveClass = target; additiveDex = replacement;
             ordinarySourceDex = ordinaryDex;
             ClassLoader ordinaryLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(ordinaryDex[0]), null);
@@ -72,6 +75,26 @@ public final class ProductionBootstrap {
             cacheWarm = cacheClass.getDeclaredMethod("warm", cacheClass);
             cacheField = cacheClass.getDeclaredField("number");
             // Native preflight observes the first actual cold warm call.
+            this.receiverDex = receiverDex;
+            ClassLoader receiverLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(receiverDex), null);
+            String receiverName = "com.github.ytlog.artdcevm.internal.ReceiverSourceFixture";
+            Class<?> fixture = Class.forName(receiverName, true, receiverLoader);
+            Class<?> base = Class.forName(receiverName + "$Base", true, receiverLoader);
+            Class<?> concrete = Class.forName(receiverName + "$Receiver", true, receiverLoader);
+            Class<?> contract = Class.forName(receiverName + "$Contract", true, receiverLoader);
+            receiverSourceObject = concrete.getDeclaredConstructor().newInstance();
+            String[] kinds = {"Virtual", "Super", "Direct", "Static", "Interface"};
+            for (int kind = 0; kind < 5; ++kind) for (int range = 0; range < 2; ++range) {
+                int index = kind * 2 + range;
+                String suffix = range == 0 ? "Small" : "Range";
+                Class<?> callerOwner = kind == 1 || kind == 2 ? concrete : fixture;
+                Class<?> targetOwner = kind == 1 || kind == 0 ? base : kind == 2 ? concrete : kind == 3 ? fixture : contract;
+                Class<?>[] callerArgs = kind == 0 ? new Class<?>[]{base} : kind == 4 ? new Class<?>[]{contract} : new Class<?>[0];
+                Class<?>[] targetArgs = range == 0 ? new Class<?>[]{int.class} : new Class<?>[]{int.class,int.class,int.class,int.class,int.class,int.class};
+                receiverCallers[index] = callerOwner.getDeclaredMethod("call" + kinds[kind] + suffix, callerArgs);
+                receiverTargets[index] = targetOwner.getDeclaredMethod(kinds[kind].toLowerCase() + suffix, targetArgs);
+                receiverCallers[index].setAccessible(true); receiverTargets[index].setAccessible(true);
+            }
             storage = new CalibrationFixture();
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             methods = new Method[] {EvolutionCalibration.class.getDeclaredMethod("compute"),
@@ -89,6 +112,13 @@ public final class ProductionBootstrap {
             staticGetter = lookup.findStaticGetter(CalibrationFixture.class, "staticIntValue", int.class);
             staticSetter = lookup.findStaticSetter(CalibrationFixture.class, "staticIntValue", int.class);
         }
+    }
+    static int runReceiverSource(Inputs input, int index) throws Exception {
+        if (index < 0 || index >= input.receiverCallers.length) throw new IllegalArgumentException("receiver sample index");
+        Method caller = input.receiverCallers[index];
+        Object target = java.lang.reflect.Modifier.isStatic(caller.getModifiers()) ? null : input.receiverSourceObject;
+        Object[] args = caller.getParameterTypes().length == 0 ? new Object[0] : new Object[]{input.receiverSourceObject};
+        return (int) caller.invoke(target, args);
     }
     static boolean verifyOrdinarySource(Inputs input, int step) throws Exception {
         Class<?> type = input.ordinarySourceClass;
@@ -169,6 +199,7 @@ public final class ProductionBootstrap {
             read(application.getAssets().open("artdcevm/bootstrap/source-original.dex")),
             read(application.getAssets().open("artdcevm/bootstrap/source-first.dex")),
             read(application.getAssets().open("artdcevm/bootstrap/source-second.dex"))};
-        return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex, ordinaryDex);
+        byte[] receiverDex = read(application.getAssets().open("artdcevm/bootstrap/receiver.dex"));
+        return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex, ordinaryDex, receiverDex);
     }
 }
