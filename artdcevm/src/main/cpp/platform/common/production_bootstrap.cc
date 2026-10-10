@@ -1,3 +1,4 @@
+#include "platform/common/readonly_field_scope.h"
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
@@ -94,7 +95,7 @@ struct NativeEngine final:Engine {
  abi::arm64::android11::CurrentThread graph_current=nullptr;
  field_mirror::NamedField graph_field_leaf=nullptr;
  void ClearStagedClasses(JNIEnv* env){schema_inputs.clear();graph_bases.clear();for(auto& c:staged_classes){for(auto mirror:c.mirrors)env->DeleteGlobalRef(mirror);env->DeleteGlobalRef(c.owner);}staged_classes.clear();}
- void ClearFieldProofs(JNIEnv* env){graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
+ void ClearFieldProofs(JNIEnv* env){field_mirror_cache.Clear(env);graph_fields.Clear(env);graph_staging=false;ClearSchemaRoots(env);ClearStagedClasses(env);for(auto& proof:target_field_proofs)contextual_field_id::Release(env,&proof);target_field_proofs.clear();contextual_field_id::Prune(env,retired_fields);}
  native_cache::Service cache;
  native_source_stop::Service source_stop;
  native_source_observation::Owner source_observers;
@@ -328,9 +329,28 @@ struct NativeEngine final:Engine {
  DecodeObject graph_decode=nullptr;
  void* (*graph_decode_method)(void*,jmethodID)=nullptr;
  jclass bootstrap_field_owner=nullptr;
- static bool FieldScope(void*,JNIEnv* env,jobject root,runnable_jni::Operation op,void* data){return runnable_executor::With(env,root,op,data)==runnable_jni::Result::kSuccess;}
- static bool FieldOracle(void*,const runnable_jni::Context& scope,jobject root,void** out){return runnable_executor::DecodeStrongGlobal(scope,root,out);}
- static bool FieldRoot(void* raw,jobject root,void** out){auto& e=*static_cast<NativeEngine*>(raw);if(!root||!out||!e.graph_decode||!e.graph_current||!redefinition_gate::Owned(e.vm))return false;*out=reinterpret_cast<void*>(e.graph_decode(e.graph_current(),root).reference);return *out!=nullptr;}
+ static bool FieldScope(void* raw,JNIEnv* env,jobject root,runnable_jni::Operation op,void* data){
+  if(!raw)return false;auto& e=*static_cast<NativeEngine*>(raw);
+  struct Read {NativeEngine& engine;JNIEnv* env;jobject root;runnable_jni::Operation operation;void* data;
+   static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Read*>(raw);
+    return readonly_field_scope::Run(&r.engine,r.env,r.engine.vm,r.engine.graph_current,
+      runnable_executor::DecodeStrongGlobal,context,r.root,r.operation,r.data);
+   }
+  } read{e,env,root,op,data};
+  return runnable_executor::With(env,root,Read::Run,&read)==runnable_jni::Result::kSuccess;
+ }
+ static bool FieldOracle(void* raw,const runnable_jni::Context& scope,jobject root,void** out){
+  return readonly_field_scope::Matches(raw,scope)&&runnable_executor::DecodeStrongGlobal(scope,root,out);
+ }
+ static void* FieldDecode(void* raw,void* self,jobject root){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_decode?reinterpret_cast<void*>(e.graph_decode(self,root).reference):nullptr;}
+ static bool FieldRoot(void* raw,jobject root,void** out){
+  if(!raw)return false;auto& e=*static_cast<NativeEngine*>(raw);
+  if(readonly_field_scope::Read(&e,e.vm,e.graph_current,FieldDecode,root,out))return true;
+  // The final stopped source path retains its original transaction lease.
+  // A failed read scope must not borrow that permission to hide bad roots.
+  if(readonly_field_scope::active||!root||!out||!e.graph_decode||!e.graph_current||!redefinition_gate::Owned(e.vm))return false;
+  *out=reinterpret_cast<void*>(e.graph_decode(e.graph_current(),root).reference);return *out!=nullptr;
+ }
  static void* FieldLeaf(void* raw,void* mirror){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;}
  static void* FieldOwner(void* raw,void* field){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(field);}
  // Fixed ObjectArray<HeapReference<Object>>: 8-byte Object, int32 length,
@@ -382,10 +402,10 @@ struct NativeEngine final:Engine {
   return scope.self==e.graph_current()?found:nullptr;
  }
  static bool ProduceFieldMirror(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
-  (void)raw;
+  auto& e=*static_cast<NativeEngine*>(raw);
   // First Stage must obtain an original false-resolve mirror before Store
   // publication. Reusing lazy Create here would depend on that same Store.
-  return public_declared_field_mirror::Create(env,owner,id,statik,out,error);
+  return e.field_mirror_cache.Create(env,owner,id,statik,out,error);
  }
  bool PrepareLazyFields(JNIEnv* env,std::string* error){
   if(lazy_fields.Ready())return true;
@@ -398,6 +418,7 @@ struct NativeEngine final:Engine {
   std::string unavailable;if(!lazy_fields.Bind(hooks,b,&unavailable))return !env->ExceptionCheck();
   return lazy_fields.Calibrate(env,live_field_oracles,error);
  }
+ public_declared_field_mirror::Cache field_mirror_cache;
  rooted_field_identities::Store graph_fields{{this,FieldScope,FieldOracle,FieldRoot,FieldLeaf,FieldOwner,FieldElement,ProduceFieldMirror}};
  static bool StageGraphField(void* raw,JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){return static_cast<NativeEngine*>(raw)->graph_fields.Stage(env,owner,id,statik,error);}
  bool (*graph_same)(void*,void*)=nullptr;
@@ -620,6 +641,7 @@ struct NativeEngine final:Engine {
  }
  bool Activate(JNIEnv* env,std::string* error)override {
   if(activated)return true;
+  struct MirrorCacheScope{NativeEngine& e;JNIEnv* env;~MirrorCacheScope(){e.field_mirror_cache.Clear(env);}} mirror_cache_scope{*this,env};
   struct BootstrapProofs {NativeEngine& engine;JNIEnv* env;~BootstrapProofs(){for(auto& p:engine.bootstrap_field_proofs)contextual_field_id::Release(env,&p);engine.bootstrap_field_proofs.clear();contextual_field_id::Prune(env,engine.retired_fields);}} proof_scope{*this,env};
   if(!retirement::InstallRetirementCleanup(hooks,allocator_membership,retired_fields,retired_methods,error)||
      !retirement::InstallMethodEntryGuards(hooks,env,anchor,runtime.receivers.jni_id_manager,retired_methods,error)||
@@ -857,6 +879,7 @@ struct NativeEngine final:Engine {
    if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
   }
+  field_mirror_cache.Clear(env);
   if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
   // Preparation precedes source-run publication; use the caller JVMTI rather
   // than source_ti, which is owned only by the later original source scope.
