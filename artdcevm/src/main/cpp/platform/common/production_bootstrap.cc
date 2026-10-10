@@ -2373,9 +2373,10 @@ std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std
  if(env->ExceptionCheck()||!owned_jit_receivers::CalibrateJitReceivers(e.hooks,env,owner_root,hot,e.model,e.runtime,target,replacement.data(),replacement.size(),&jit,error))return nullptr;
  e.runtime.receivers=jit;e.anchor=owner_root;e.bootstrap_field_owner=static_cast<jclass>(storage_class);e.bootstrap_storage=storage_root;
  // Calibration retains the defining Classes, not all original APK byte arrays
- // and temporary reflection/storage objects. ART native members remain alive
- // through these process-owned strong Class roots.
- for(auto& root:roots.values)if(root==owner_root||root==storage_class||root==global_input||root==e.method_handles[0].strong_global||root==e.method_handles[1].strong_global||root==e.method_handles[2].strong_global||root==e.field_handles[0].strong_global||root==e.field_handles[1].strong_global||root==e.field_handles[0].reflected_field||root==e.field_handles[1].reflected_field||root==e.field_method_handles[0].strong_global||root==e.field_method_handles[1].strong_global){e.roots.push_back(root);root=nullptr;}
+ // and temporary reflection objects. Keep the storage instance global as well:
+ // the later typed-heap oracle uses this exact JNI handle, not only its Class.
+ // ART native members remain alive through the process-owned Class roots.
+ for(auto& root:roots.values)if(root==owner_root||root==storage_class||root==storage_root||root==global_input||root==e.method_handles[0].strong_global||root==e.method_handles[1].strong_global||root==e.method_handles[2].strong_global||root==e.field_handles[0].strong_global||root==e.field_handles[1].strong_global||root==e.field_handles[0].reflected_field||root==e.field_handles[1].reflected_field||root==e.field_method_handles[0].strong_global||root==e.field_method_handles[1].strong_global){e.roots.push_back(root);root=nullptr;}
  return engine;
 }
 }
