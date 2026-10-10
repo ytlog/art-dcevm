@@ -67,6 +67,8 @@ class Service {
   // Before mutation, reject a deleted method referenced through an unguarded
   // MethodHandle; guard completeness is never inferred from source kind or SDK.
   bool Validate(const Plan&,std::string*,bool allocation_free=false)const;
+  // Narrow final payload proof; never visits references or consumes init permission.
+  bool ValidateStaticAliases(const Plan&)const noexcept;
   void Retire(const Plan&)const;
   void Update(const Plan&,bool allocation_free=false)const;
   void RebindStaticFields(const Plan&)const noexcept;

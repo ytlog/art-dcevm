@@ -35,6 +35,9 @@ class Service {
   // Identity of the actual prepared provider, not a capability/stop grant.
   bool OwnsPreparedSource(const source_commit::Plan&,const native_source_commit::Services&)const noexcept;
   void ReleasePreparedSource(const native_source_commit::Services&)noexcept;
+  // Requires this exact refreshed prepared source and its explicit bounded view.
+  // Provides payload closure only: no initializer/monitor/recovery permission.
+  bool ValidateStaticAliases(const source_commit::Plan&)const noexcept;
   bool RefreshManagedRoots(const source_commit::Plan&,source_commit::Services&,const prepared_roots::Resolver&)noexcept;
  private:
   friend class native_required_cleanup::Binding;

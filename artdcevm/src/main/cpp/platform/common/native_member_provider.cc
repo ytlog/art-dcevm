@@ -57,6 +57,9 @@ bool Service::MatchFacts(const source_commit::Plan& p)const noexcept{
  }
  return true;
 }
+bool Service::ValidateStaticAliases(const source_commit::Plan& plan)const noexcept{
+ return &plan==plan_&&prepared_source_&&refreshed_&&mapping_&&reflection_&&read_context_&&read_context_->owner&&read_context_->extent&&MatchFacts(plan)&&reflection_->ValidateStaticAliases(*mapping_);
+}
 bool Service::OwnsPreparedSource(const source_commit::Plan& p,const native_source_commit::Services& source)const noexcept{
  return plan_==&p&&prepared_source_==&source&&mapping_&&reflection_&&schema_metadata_&&schema_metadata_->Calibrated()&&schema_model_&&!tables_.empty()&&tables_.size()==p.old_classes.size()&&views_.size()==tables_.size();
 }

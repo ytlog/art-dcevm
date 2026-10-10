@@ -31,6 +31,7 @@ struct OrdinaryAliasOwner {
  factory_alias::Service observer;const modern_field_metadata::FieldOracle* oracles=nullptr;std::array<void*,4> native{};
  static bool Root(void*,void*,const void*,void**){return false;}
  static bool Normalize(void*,void*,factory_alias::HandleCarrier,void*input,bool,void**out)noexcept{*out=input;return true;}
+ static void Publish(void*,void*,void*){std::abort();} // Getter must never consume publication.
  static bool Ready(void*raw,void*field,void*current_field,void*target){auto&o=*static_cast<OrdinaryAliasOwner*>(raw);
   if(!o.observer.NormalizerInstalled()||!target||field!=current_field)return false;
   // Independent real public Field calibration tuple, not a static_ready flag.
@@ -304,7 +305,16 @@ int main(int argc,char** argv){
  assert(alias_owner.observer.SetNormalizerAtExclusive({&alias_owner,OrdinaryAliasOwner::Normalize},alias_context,&error));
  assert(alias_owner.observer.InstallAtExclusive(alias_hooks,alias_context,&error));
  native_member_provider::Service ordinary_alias_provider;auto ordinary_alias_service=ordinary_alias_provider.Prepare(plan,ordinary_alias_dependencies,&error);assert(ordinary_alias_service&&ordinary_alias_service->Validate(plan)&&!retired_methods&&!retired_fields&&!mutations);
- assert(alias_owner.observer.RemoveAtExclusive(alias_hooks,alias_context,&error));assert(!ordinary_alias_service->Validate(plan));
+ assert(!ordinary_alias_provider.ValidateStaticAliases(plan)); // No explicit final read view.
+ ordinary_alias_dependencies.read_context=&read_context;ordinary_alias_dependencies.retirement.publish_static_alias=OrdinaryAliasOwner::Publish;
+ native_member_provider::Service alias_final_provider;auto alias_final_service=alias_final_provider.Prepare(plan,ordinary_alias_dependencies,&error);assert(alias_final_service&&!alias_final_provider.ValidateStaticAliases(plan));
+ RegisteredRoots alias_final_roots;assert(alias_final_provider.CollectManagedRoots(*alias_final_service,{&alias_final_roots,RegisteredRoots::Add}));
+ assert(alias_final_provider.RefreshManagedRoots(plan,*alias_final_service,{&alias_final_roots,RegisteredRoots::Get}));
+ const auto alias_queries=method_identity::MappingOsQueries();auto wrong_alias_plan=plan;
+ forbid_provider_allocation=true;assert(alias_final_provider.ValidateStaticAliases(plan)&&!alias_final_provider.ValidateStaticAliases(wrong_alias_plan));
+ mappings.reject_all=true;assert(!alias_final_provider.ValidateStaticAliases(plan));mappings.reject_all=false;
+ assert(alias_final_provider.ValidateStaticAliases(plan)&&method_identity::MappingOsQueries()==alias_queries);forbid_provider_allocation=false;
+ assert(alias_owner.observer.RemoveAtExclusive(alias_hooks,alias_context,&error));assert(!ordinary_alias_service->Validate(plan)&&!alias_final_provider.ValidateStaticAliases(plan));
  const std::vector<unsigned char> prepared_heap(heap.base,heap.base+heap.used);
  mh_guard=false;assert(!source_commit::Run(plan,*service));mh_guard=true;
  current=foreign_thread.data();assert(!source_commit::Run(plan,*service));current=thread.data();

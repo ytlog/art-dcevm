@@ -246,6 +246,14 @@ bool Service::Validate(const Plan& plan,std::string* error,bool allocation_free)
   }
   if(error)error->clear();return true;
 }
+bool Service::ValidateStaticAliases(const Plan& plan)const noexcept{
+ if(!runtime_||!visit_||!plan.aliases_prepared_||!plan.read_context_||!plan.read_context_->owner||!plan.read_context_->extent||!plan.retirement_.static_alias_ready||!plan.retirement_.publish_static_alias)return false;
+ for(const auto& e:plan.aliases_.Entries()){
+  if(e.target&&!plan.retirement_.static_alias_ready(plan.retirement_.owner,e.field,e.current,e.target))return false;
+  if(e.field!=e.current&&!e.target&&!plan.retirement_.retire_field_alias)return false;
+ }
+ return plan.aliases_.Validate();
+}
 void Service::Retire(const Plan& plan)const{
   for(const auto& entry:plan.methods_)if(!entry.second)plan.retirement_.retire_method(plan.retirement_.owner,entry.first);
   for(const auto& entry:plan.fields_)if(!entry.second){
