@@ -36,6 +36,8 @@ public final class ProductionBootstrap {
         }
     }
     static final class Inputs {
+        // The receiver Class stays local until native creates its exact strong root.
+        Class<?> optionalFieldClass() throws Exception { return ProductionBootstrap.optionalFieldClass(); }
         final byte[][] dex;
         final Class<?> ordinarySourceClass;
         final byte[][] ordinarySourceDex;
@@ -175,6 +177,13 @@ public final class ProductionBootstrap {
             rejected(() -> input.staticHandle.get(), true) &&
             rejected(() -> input.staticHandle.set(9), true);
     }
+    private static synchronized Class<?> optionalFieldClass() throws Exception {
+        if (application == null) throw new IllegalStateException("Bootstrap Context unavailable");
+        byte[] bytes = read(application.getAssets().open("artdcevm/bootstrap/missing-optional.dex"));
+        ClassLoader loader = new InMemoryDexClassLoader(ByteBuffer.wrap(bytes), null);
+        return Class.forName("com.github.ytlog.artdcevm.internal.MissingOptionalFields", false, loader);
+    }
+
     // Native owns every resulting object while checking public reflection and
     // original APK class_data. This method never reads private ART metadata.
     static synchronized Inputs create() throws Exception {

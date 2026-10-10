@@ -1,4 +1,5 @@
 #include "platform/common/native_boot_method_catalog.h"
+#include "platform/common/native_field_factory_observer.h"
 #include "platform/common/source_cache_resolution.h"
 #include "platform/common/native_cache_public_fields.h"
 #include "platform/common/production_bootstrap.h"
@@ -305,6 +306,18 @@ struct NativeEngine final:Engine {
  // Fixed ObjectArray<HeapReference<Object>>: 8-byte Object, int32 length,
  // 4-byte elements. Every staged slot is independently checked against JNI.
  static void* FieldElement(void* raw,void* array,size_t index){if(index>=size_t(rooted_field_identities::Store::kChunkSize))return nullptr;return static_cast<NativeEngine*>(raw)->metadata.Reference(array,12+index*4);}
+ native_field_factory_observer::Service field_factory_observer;
+ native_field_factory_observer::Trace field_factory_primitive_trace{},field_factory_optional_trace{};
+ std::array<bool,4> field_factory_public_roots{};
+ bool field_factory_observed=false;
+ std::string field_factory_diagnostic;
+ void* (*field_factory_root)(void*)=nullptr;
+ static bool FactoryRoot(void* raw,void* self,const void* slot,void** object){
+  auto& e=*static_cast<NativeEngine*>(raw);
+  if(!object||!slot||!e.field_factory_root||!e.graph_current||self!=e.graph_current()||!GraphMapped(raw,slot,sizeof(uint32_t),false))return false;
+  *object=e.field_factory_root(const_cast<void*>(slot));return *object!=nullptr;
+ }
+ bool ObserveFieldFactory(JNIEnv*,jvmtiEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
  void* (*lazy_decode_field)(void*,jfieldID)=nullptr;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
@@ -319,7 +332,7 @@ struct NativeEngine final:Engine {
   // Ordinary public behavior remains available when the exact source factory
   // is absent. Its real exception is preserved; no optional declaration is skipped.
   jobject local=env->ToReflectedField(owner,id,statik?JNI_TRUE:JNI_FALSE);
-  if(!local||env->ExceptionCheck()){if(local)env->DeleteLocalRef(local);return Fail(error,"Public contextual Field round trip unavailable");}
+  if(!local||env->ExceptionCheck()){if(local)env->DeleteLocalRef(local);if(error)*error="Public contextual Field round trip unavailable"+(e.field_factory_diagnostic.empty()?std::string{}:"; "+e.field_factory_diagnostic);return false;}
   *out=env->NewGlobalRef(local);env->DeleteLocalRef(local);
   return *out&&!env->ExceptionCheck();
  }
@@ -1321,6 +1334,98 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(!receiver_source_calibration->Seal())return fail("Receiver source lacks all ten original invoke forms");
  receiver_producer_diagnostic.clear();return true;
 }
+bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+ if(field_factory_observed)return true;
+ // No unknown Handle factory is called here. All evidence comes from ART's
+ // original public getDeclaredFields caller, including its force=false choice.
+ native_field_factory_observer::Bindings bindings{this,graph_current,FactoryRoot};
+ std::string unavailable;
+ if(!field_factory_observer.Bind(hooks,bindings,&unavailable)){field_factory_observed=true;return true;}
+ field_factory_root=reinterpret_cast<decltype(field_factory_root)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
+ if(!field_factory_root||!RefreshMaps(error)||!exclusive_owned_roots::Service::Bind(hooks,&permission_exclusive,error))return false;
+ struct Install {
+  NativeEngine& engine;std::string* error;
+  static bool Run(const exclusive_owned_roots::Context& context,void* raw){auto& r=*static_cast<Install*>(raw);return r.engine.field_factory_observer.InstallAtExclusive(r.engine.hooks,context,r.error);}
+ } install{*this,error};
+ if(!permission_exclusive.With(env,&anchor,1,Install::Run,&install,error))return false;
+ field_factory_observed=true; // The transparent hook shares the process engine lifetime.
+ field_factory_diagnostic="Extra-Handle Field observer installed; original public episodes incomplete";
+ jclass class_type=env->GetObjectClass(bootstrap_field_owner);
+ jmethodID declared=class_type?env->GetMethodID(class_type,"getDeclaredFields","()[Ljava/lang/reflect/Field;"):nullptr;
+ if(class_type)env->DeleteLocalRef(class_type);
+ if(!declared||env->ExceptionCheck())return Fail(error,"Field factory observation public Class method unavailable");
+ auto episode=[&](jclass owner,const std::array<jfieldID,2>& ids,const std::array<void*,2>& native,native_field_factory_observer::Trace* trace,size_t trace_offset){
+  // Public roots remain owned across Java execution; no borrowed Class survives
+  // a safepoint. Trace addresses are diagnostics, never restoration permission.
+  if(!field_factory_observer.Begin(graph_current(),native,error))return false;
+  jobjectArray fields=static_cast<jobjectArray>(env->CallObjectMethod(owner,declared));
+  bool ended=field_factory_observer.End(trace,error);
+  if(!ended||!fields||env->ExceptionCheck()){if(fields)env->DeleteLocalRef(fields);return ended?Fail(error,"Original Field factory public reflection episode failed"):false;}
+  std::array<bool,2> found{};const jsize count=env->GetArrayLength(fields);
+  for(jsize i=0;i<count&&!env->ExceptionCheck();++i){
+   jobject field=env->GetObjectArrayElement(fields,i);jfieldID id=field?env->FromReflectedField(field):nullptr;
+   for(size_t n=0;n<ids.size();++n)if(id==ids[n]){
+    jobject strong=env->NewGlobalRef(field);
+    jclass local_type=env->GetObjectClass(field);
+    jobject strong_type=local_type?env->NewGlobalRef(local_type):nullptr;
+    if(local_type)env->DeleteLocalRef(local_type);
+    struct PublicMirror {
+     NativeEngine& engine;jobject mirror,klass;void* native;const native_field_factory_observer::Entry& entry;bool roots=false;
+     static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<PublicMirror*>(raw);void *mirror=nullptr,*klass=nullptr;
+      if(!FieldOracle(&r.engine,context,r.mirror,&mirror)||!FieldOracle(&r.engine,context,r.klass,&klass)||FieldLeaf(&r.engine,mirror)!=r.native)return false;
+      // Scalar address comparison can conservatively miss a moved result. It
+      // never dereferences a stale address or grants factory-call permission.
+      r.roots=r.entry.root_before_valid&&r.entry.root_after_valid&&r.entry.root_after==uintptr_t(klass)&&r.entry.result==uintptr_t(mirror);return true;
+     }
+    } proof{*this,strong,strong_type,native[n],trace->entries[n]};
+    found[n]=strong&&strong_type&&!env->ExceptionCheck()&&FieldScope(this,env,strong,PublicMirror::Run,&proof);
+    field_factory_public_roots[trace_offset+n]=found[n]&&proof.roots;
+    if(strong)env->DeleteGlobalRef(strong);if(strong_type)env->DeleteGlobalRef(strong_type);
+   }
+   if(field)env->DeleteLocalRef(field);
+  }
+  env->DeleteLocalRef(fields);
+  if(env->ExceptionCheck()||!found[0]||!found[1])return Fail(error,"Field factory observer public IDs do not enumerate both exact targets");
+  return true;
+ };
+ if(bootstrap_field_proofs.size()!=2)return Fail(error,"Field factory observation requires original two-field oracles");
+ std::array<jfieldID,2> ids{};std::array<void*,2> native{};
+ for(size_t i=0;i<2;++i){ids[i]=contextual_field_id::Id(bootstrap_field_proofs[i]);native[i]=contextual_field_id::NativeField(bootstrap_field_proofs[i]);}
+ if(!episode(bootstrap_field_owner,ids,native,&field_factory_primitive_trace,0))return false;
+ jclass input_type=env->GetObjectClass(input);
+ jmethodID optional=input_type?env->GetMethodID(input_type,"optionalFieldClass","()Ljava/lang/Class;"):nullptr;
+ if(input_type)env->DeleteLocalRef(input_type);
+ jobject local=optional?env->CallObjectMethod(input,optional):nullptr;
+ jclass owner=local?static_cast<jclass>(env->NewGlobalRef(local)):nullptr;
+ if(local)env->DeleteLocalRef(local);
+ struct Release {JNIEnv* env;jclass owner;~Release(){if(owner)env->DeleteGlobalRef(owner);}} release{env,owner};
+ if(!owner||env->ExceptionCheck())return Fail(error,"Missing-optional Field observation Class unavailable");
+ jint count=0;jfieldID* fields=nullptr;
+ const auto field_result=ti->GetClassFields(owner,&count,&fields);
+ struct Free {jvmtiEnv* ti;jfieldID* fields;~Free(){if(fields)ti->Deallocate(reinterpret_cast<unsigned char*>(fields));}} free{ti,fields};
+ if(field_result!=JVMTI_ERROR_NONE||count!=2)return Fail(error,"Missing-optional Field fixture requires two exact declared IDs");
+ bool number=false,missing=false;
+ for(jint i=0;i<count;++i){Text name{ti},type{ti};
+  if(ti->GetFieldName(owner,fields[i],&name.p,&type.p,nullptr)!=JVMTI_ERROR_NONE||!name.p||!type.p)return false;
+  number|=std::strcmp(name.p,"number")==0&&std::strcmp(type.p,"I")==0;
+  missing|=std::strcmp(name.p,"optional")==0&&std::strcmp(type.p,"Lcom/github/ytlog/artdcevm/internal/MissingOptionalType;")==0;
+  ids[size_t(i)]=fields[i];
+ }
+ if(!number||!missing)return Fail(error,"Missing-optional public field declarations disagree with fixture");
+ struct Decode {
+  NativeEngine& engine;jclass owner;std::array<jfieldID,2>& ids;std::array<void*,2>& fields;
+  static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<Decode*>(raw);void* klass=nullptr;
+   if(!FieldOracle(&r.engine,context,r.owner,&klass))return false;
+   for(size_t i=0;i<2;++i){r.fields[i]=DecodeLazyField(&r.engine,context,klass,r.ids[i]);if(!r.fields[i])return false;}return true;
+  }
+ } decode{*this,owner,ids,native};
+ if(!FieldScope(this,env,owner,Decode::Run,&decode)||!RefreshMaps(error)||!episode(owner,ids,native,&field_factory_optional_trace,2))return false;
+ field_factory_diagnostic="Original extra-Handle Field episodes";
+ size_t trace_index=0;for(const auto* trace:{&field_factory_primitive_trace,&field_factory_optional_trace})for(const auto& entry:trace->entries){
+  field_factory_diagnostic+=" [calls="+std::to_string(entry.calls)+",false="+std::to_string(entry.false_calls)+",handleRoot="+std::to_string(entry.root_before_valid&&entry.root_after_valid)+",returned="+std::to_string(entry.result!=0)+",publicRoots="+std::to_string(field_factory_public_roots[trace_index++])+"]";
+ }
+ return true;
+}
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
  graph_staging=true;
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
@@ -1332,7 +1437,7 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  graph_same=reinterpret_cast<decltype(graph_same)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
  if(!graph_decode||!graph_decode_method||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
- if(!PrepareLazyFields(env,error))return false;
+ if(!PrepareLazyFields(env,error)||!ObserveFieldFactory(env,ti,error))return false;
  for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
  if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE)return Fail(error,"Public candidate Class graph unavailable");
