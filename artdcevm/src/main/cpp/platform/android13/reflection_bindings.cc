@@ -2,7 +2,7 @@
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstring>
 #include <dlfcn.h>
 #include <jvmti.h>
@@ -23,10 +23,10 @@ std::vector<Binding> Targets() {
         std::string(setter?"set":"get")+(object?"":types[i].name),
         std::string("(Ljava/lang/Object;")+(setter?types[i].code:"")+
             ")"+(setter?"V":types[i].code),
-        cas::ReflectionFieldSymbol(setter,types[i].name,mangled_codes[i],object)});
+        ::artdcevm::symbols::android13::ReflectionFieldSymbol(setter,types[i].name,mangled_codes[i],object)});
   }
   result.push_back({"java/lang/reflect/Constructor","newInstance0",
-      "([Ljava/lang/Object;)Ljava/lang/Object;",cas::kRetiredMethodHooks[20]});
+      "([Ljava/lang/Object;)Ljava/lang/Object;",::artdcevm::symbols::android13::kRetiredMethodHooks[20]});
   return result;
 }
 bool Fail(std::string* error,const std::string& message) {

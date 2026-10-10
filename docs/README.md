@@ -166,7 +166,7 @@ if (!capabilities.optBoolean("methodBody")) throw new IllegalStateException("No 
 
 该解析器读取类、字段、方法及继承元数据，检查相关索引、偏移、长度和 checksum；它不是 ART 的完整 DEX 验证器。代码体、注解、encoded values 仍须由提交实现交给 ART 验证。`analyze()` 是只读预览，后续提交实现必须在自己的事务中重新验证基线，不能直接执行已经过时的客户端预览结果。
 
-当前符号表 `platform/android13/symbols/xiaomi/cas_tkq1_221114_001.h` 源自小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。运行时发现实际加载模块，通过命名符号与公开 JNI/JVMTI 独立行为校准确认私有能力；Build ID 仅记录来源，不参与白名单匹配。同名符号、厂商名称或系统版本不能证明 ABI 兼容。
+当前符号表 `platform/symbols/android13/source_symbols.h` 源自小米 M2007J1SC / cas，Android 13，`V816.0.4.0.TJJCNXM`。运行时发现实际加载模块，通过命名符号与公开 JNI/JVMTI 独立行为校准确认私有能力；Build ID 仅记录来源，不参与白名单匹配。同名符号、厂商名称或系统版本不能证明 ABI 兼容。
 
 版本适配优先复用 `platform/common/` 的算法，在 `platform/abi/arm64/` 保存真正不同的固定源码声明；只有事务或线程语义确有不同才增加版本实现目录。命名符号必须通过实际库解析和对应 owned 行为证明后使用。生产能力选择通过共用 bootstrap 组合已证明的服务；不复制整套后端，不用 API 或 Build ID 授权私有对象布局。公开 JVMTI 后端不推断私有 ART 对象布局。当前整合批次与各版本真实证据范围见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md) 和 [VERIFICATION.md](VERIFICATION.md)。
 

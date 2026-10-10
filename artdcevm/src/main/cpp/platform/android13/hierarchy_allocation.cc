@@ -8,7 +8,7 @@
 #include "platform/abi/arm64/android13/platform_string_abi.h"
 #include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -239,8 +239,8 @@ void* HierarchyVerificationView::Resolve(const char* descriptor,void* loader,boo
 uint64_t HierarchyDiagnostics(int index) { return counters[index>=0 && index<7?index:4].load(); }
 bool ConfigureHierarchyAllocation(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
   if(!profile.Matched()){*error="Hierarchy allocation requires a matched device profile";return false;}
-  auto find=reinterpret_cast<Find>(hooks.FindSymbol("libart.so",cas::kFindClass));
-  auto failure=reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kRecordFailure));
+  auto find=reinterpret_cast<Find>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kFindClass));
+  auto failure=reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so",::artdcevm::symbols::android13::kRecordFailure));
   auto root=reinterpret_cast<void*(*)(void*)>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   auto retire=reinterpret_cast<decltype(set_status_locked)>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE"));
   if(!find || !failure || !root || !retire || !RuntimeClassLinker()) {

@@ -17,7 +17,7 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/thread_suspend_scope.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -240,7 +240,7 @@ uint64_t EvolutionCompiledPrecommitDiagnostics(int index) {return index>=0 && in
 bool ConfigureEvolutionTransactions(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
   if(!profile.Matched()) {if(error)*error="Binding requires a matched device profile";return false;}
 #define ART(dst,name) dst=reinterpret_cast<decltype(dst)>(hooks.FindSymbol("libart.so",name))
-  ART(lookup,cas::kLookupClass);ART(runtime_instance,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
+  ART(lookup,::artdcevm::symbols::android13::kLookupClass);ART(runtime_instance,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
   ART(lock,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");ART(unlock,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");
   ART(for_each,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_");
   ART(return_pc,"_ZNK3art12StackVisitor15GetReturnPcAddrEv");ART(contains_pc,"_ZNK3art3jit12JitCodeCache10ContainsPcEPKv");
@@ -248,7 +248,7 @@ bool ConfigureEvolutionTransactions(HookEngine& hooks,const DeviceProfile& profi
   ART(obsolete_cache,"_ZN3art9ArtMethod19GetObsoleteDexCacheEv");ART(oat_code,"_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE");
   ART(debuggable,"_ZNK3art7OatFile12IsDebuggableEv");
 #undef ART
-  redefine=reinterpret_cast<Redefine>(hooks.FindSymbol("libopenjdkjvmti.so",cas::kStructuralRedefineClasses));
+  redefine=reinterpret_cast<Redefine>(hooks.FindSymbol("libopenjdkjvmti.so",::artdcevm::symbols::android13::kStructuralRedefineClasses));
   if(!lookup || !runtime_instance || !*runtime_instance || !list_lock || !lock || !unlock || !for_each || !return_pc || !contains_pc || !private_contains_pc || !read_root || !obsolete_cache || !oat_code || !debuggable || !redefine) {
     *error="Missing named transaction preflight, compiled-frame or redefinition capability";return false;
   }

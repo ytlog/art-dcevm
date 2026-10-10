@@ -11,7 +11,7 @@
 #include "platform/android13/retired_member_guard.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <atomic>
 #include <cstring>
 #include <new>
@@ -96,7 +96,7 @@ CheckedHandleResolver SelectCheckedHandleResolver(HookEngine& hooks,bool force_s
   if(!ready.load(std::memory_order_acquire)) {
     Fail(error,"Checked Handle provider has not been calibrated");return nullptr;
   }
-  if(!force_source)if(auto native=hooks.FindSymbol("libart.so",cas::kCheckedResolveHandles))
+  if(!force_source)if(auto native=hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kCheckedResolveHandles))
     return reinterpret_cast<CheckedHandleResolver>(native);
   return SourceResolveCheckedHandles;
 }
@@ -106,7 +106,7 @@ bool ConfigureCheckedMethodProvider(HookEngine& hooks,const DeviceProfile& profi
   if(!profile.Matched() || !env || !fixture)return Fail(error,"Checked provider requires owned calibration");
   auto fail=reinterpret_cast<ThrowGuardException>(hooks.FindSymbol("libart.so",kGuardThrowNewException));
   using Native=void*(*)(void*,uint32_t,void*,void*,void*,uint32_t);
-  auto native=reinterpret_cast<Native>(hooks.FindSymbol("libart.so",cas::kCheckedResolveHandles));
+  auto native=reinterpret_cast<Native>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kCheckedResolveHandles));
   if(!fail)return Fail(error,"Checked provider requires named boundary exception installer");
   Frame frame(env);if(!frame.valid)return Fail(error,"Checked provider local frame unavailable");
   auto klass=env->GetObjectClass(fixture);

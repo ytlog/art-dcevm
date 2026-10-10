@@ -6,7 +6,7 @@
 #include "platform/abi/arm64/android13/failure_calibration_abi.h"
 #include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/abi/arm64/android13/platform_string_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <jvmti.h>
 #include <cassert>
 #include <cstdio>
@@ -50,7 +50,7 @@ void Record(void* raw,int result,const void* sig,const BorrowedPlatformString* m
 void Destroy(void* error){assert(strings.erase(error)==1);static_cast<std::string*>(error)->~basic_string();++destroys;}
 class Hooks:public HookEngine{public:bool missing_destroy=false,missing_record=false,missing_marker=false;int finds=0;bool Initialize(std::string*)override{return true;}void* FindSymbol(const char* library,const char* name)override{++finds;
  if(!std::strcmp(library,"libc++.so")){assert(!std::strcmp(name,failure_calibration_abi::kStringDestroy));return missing_destroy?nullptr:reinterpret_cast<void*>(Destroy);}
- assert(!std::strcmp(library,"libopenjdkjvmti.so"));if(!std::strcmp(name,cas::kRecordNewFieldAdded))return missing_marker?nullptr:reinterpret_cast<void*>(Marker);assert(!std::strcmp(name,cas::kRecordFailure));return missing_record?nullptr:reinterpret_cast<void*>(Record);}
+ assert(!std::strcmp(library,"libopenjdkjvmti.so"));if(!std::strcmp(name,::artdcevm::symbols::android13::kRecordNewFieldAdded))return missing_marker?nullptr:reinterpret_cast<void*>(Marker);assert(!std::strcmp(name,::artdcevm::symbols::android13::kRecordFailure));return missing_record?nullptr:reinterpret_cast<void*>(Record);}
  void* Install(void*,void*,void**,std::string*)override{assert(false);return nullptr;}bool Remove(void*,std::string*)override{assert(false);return false;}};
 const char* names[]{"libart.so","libopenjdkjvmti.so","libdexfile.so","libc++.so"};
 const char* ids[]{"14fc77b24db0b351b919c97009dc86bf","2fe21c45581b9c8b0519b71cbde32938","e6aaffcef8ef63baf438267cda44d400","1f426797e505c9b841f55cc49d32b3f4"};

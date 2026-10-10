@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "jvmti.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -58,7 +58,7 @@ bool InstallHierarchyBatchHooks(HookEngine& hooks, const DeviceProfile& profile,
                                 std::string* error) {
   if (!ConfigureHierarchyAllocation(hooks, profile, error)) return false;
   void* allocate_target = hooks.FindSymbol("libopenjdkjvmti.so", abi::arm64::android_common::kFinishSubtreeAllocations);
-  void* run_target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kRedefineRun);
+  void* run_target = hooks.FindSymbol("libopenjdkjvmti.so", ::artdcevm::symbols::android13::kRedefineRun);
   void* class_target = hooks.FindSymbol("libopenjdkjvmti.so", abi::arm64::android_common::kHierarchyAllocator);
   void* ids_target=hooks.FindSymbol("libart.so",abi::arm64::android_common::kCaptureLinkedClass);
   if (!allocate_target || !run_target || !class_target || !ids_target) {

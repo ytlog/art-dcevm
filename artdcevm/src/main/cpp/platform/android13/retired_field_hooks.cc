@@ -1,8 +1,9 @@
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/android13/retired_field_hooks.h"
 #include "platform/android13/member_decode.h"
 #include "platform/android13/reflected_field_visit.h"
 #include "platform/android13/member_access_guards.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <jni.h>
 #include <vector>
 #include <type_traits>
@@ -110,10 +111,10 @@ template <int indexed, typename T, bool is_static> struct JniField {
     reinterpret_cast<Fn>(original_set)(env, object, field, value);
   }
   static void Add(std::vector<Entry>& entries, const char* type, const char* code) {
-    entries.push_back({cas::JniFieldSymbol(indexed, is_static, false, type, code,
+    entries.push_back({::artdcevm::symbols::android13::JniFieldSymbol(indexed, is_static, false, type, code,
                                           std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Get), &original_get});
-    entries.push_back({cas::JniFieldSymbol(indexed, is_static, true, type, code,
+    entries.push_back({::artdcevm::symbols::android13::JniFieldSymbol(indexed, is_static, true, type, code,
                                           std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Set), &original_set});
   }
@@ -132,10 +133,10 @@ template <typename T> struct ReflectionField {
     reinterpret_cast<Fn>(original_set)(env, field, object, value);
   }
   static void Add(std::vector<Entry>& entries, const char* type, const char* code) {
-    entries.push_back({cas::ReflectionFieldSymbol(false, type, code,
+    entries.push_back({::artdcevm::symbols::android13::ReflectionFieldSymbol(false, type, code,
                                                   std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Get), &original_get});
-    entries.push_back({cas::ReflectionFieldSymbol(true, type, code,
+    entries.push_back({::artdcevm::symbols::android13::ReflectionFieldSymbol(true, type, code,
                                                   std::is_same_v<T, jobject>),
                        reinterpret_cast<void*>(Set), &original_set});
   }
@@ -146,13 +147,13 @@ bool FieldAccessChecksRequired(){return field_access_checks.load(std::memory_ord
 bool InstallRetiredFieldHooks(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
   if (!ConfigureReflectedFieldVisit(hooks,profile,error)) return false;
   std::vector<Entry> entries{
-    {cas::kRetiredFieldHooks[0], reinterpret_cast<void*>(GetField), &original_field},
-    {cas::kRetiredFieldHooks[1], reinterpret_cast<void*>(VisitField), &original_visit},
-    {cas::kRetiredFieldHooks[2], reinterpret_cast<void*>(VarHandle), &original_varhandle},
-    {cas::kRetiredFieldHooks[3], reinterpret_cast<void*>(MethodHandleFieldPut), &original_method_handle_put},
-    {cas::kRetiredFieldHooks[4], reinterpret_cast<void*>(CheckField), &original_check},
-    {cas::kRetiredFieldHooks[5], reinterpret_cast<void*>(NterpInstanceField), &original_nterp_instance},
-    {cas::kRetiredFieldHooks[6], reinterpret_cast<void*>(NterpStaticField), &original_nterp_static},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[0], reinterpret_cast<void*>(GetField), &original_field},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[1], reinterpret_cast<void*>(VisitField), &original_visit},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[2], reinterpret_cast<void*>(VarHandle), &original_varhandle},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[3], reinterpret_cast<void*>(MethodHandleFieldPut), &original_method_handle_put},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[4], reinterpret_cast<void*>(CheckField), &original_check},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[5], reinterpret_cast<void*>(NterpInstanceField), &original_nterp_instance},
+    {::artdcevm::symbols::android13::kRetiredFieldHooks[6], reinterpret_cast<void*>(NterpStaticField), &original_nterp_static},
   };
 #define ADD(TYPE, JNI_TYPE, CODE) \
   JniField<0, JNI_TYPE, false>::Add(entries, #TYPE, CODE); \

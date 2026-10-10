@@ -41,8 +41,8 @@ struct Hooks:artdcevm::HookEngine{
 #define LEAF(TYPE) if(symbol==g::FieldResolverSymbol(TYPE,false))*original=reinterpret_cast<void*>(Unchecked<TYPE>);
   LEAF(21)LEAF(37)LEAF(25)LEAF(41)LEAF(22)LEAF(38)LEAF(26)LEAF(42)
 #undef LEAF
-  if(symbol==artdcevm::android13::cas::kRetiredFieldHooks[5])*original=reinterpret_cast<void*>(Instance);
-  if(symbol==artdcevm::android13::cas::kRetiredFieldHooks[6])*original=reinterpret_cast<void*>(Static);
+  if(symbol==::artdcevm::symbols::android13::kRetiredFieldHooks[5])*original=reinterpret_cast<void*>(Instance);
+  if(symbol==::artdcevm::symbols::android13::kRetiredFieldHooks[6])*original=reinterpret_cast<void*>(Static);
   return target;
  }
  bool Remove(void*,std::string*)override{return true;}
@@ -78,8 +78,8 @@ int main(){
   pending=false;target_primitive=!target_primitive;assert(fn(expected_index,&bootstrap,&thread,expected_size)==nullptr&&pending);target_primitive=!target_primitive;expected_caller=&foreign;
  }
  using InstanceFn=uint32_t(*)(void*,void*,uint16_t*,size_t);using StaticFn=size_t(*)(void*,void*,uint16_t*,size_t);
- auto instance=reinterpret_cast<InstanceFn>(hooks.proxies.at(g::cas::kRetiredFieldHooks[5]));
- auto statik=reinterpret_cast<StaticFn>(hooks.proxies.at(g::cas::kRetiredFieldHooks[6]));
+ auto instance=reinterpret_cast<InstanceFn>(hooks.proxies.at(::artdcevm::symbols::android13::kRetiredFieldHooks[5]));
+ auto statik=reinterpret_cast<StaticFn>(hooks.proxies.at(::artdcevm::symbols::android13::kRetiredFieldHooks[6]));
  constexpr size_t sizes[]={4,8,4,1,1,2,2};
  for(unsigned op=0x52;op<=0x6d;++op){unsigned group=(op-0x52)/7,kind=(op-0x52)%7;bool is_static=group>=2,write=group&1,object=kind==2;
   expected_type=g::kFieldTypes[(is_static?4:0)+(object?0:2)+(write?1:0)];expected_size=sizes[kind];target_static=is_static;target_primitive=!object;target_size=expected_size;uint16_t pc[]={uint16_t(op|0xa000),uint16_t(expected_index)};

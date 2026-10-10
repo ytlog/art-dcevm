@@ -1,6 +1,6 @@
 #include "platform/android13/jni_method_targets.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -21,7 +21,7 @@ void* CanonicalizeJniMethod(void* method) { return Canonicalize(method); }
 bool ConfigureJniMethodTargets(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
   if (!profile.Matched()) { *error = "JNI method targets require a matched device profile"; return false; }
   auto canonical = reinterpret_cast<CanonicalMethod>(
-      hooks.FindSymbol("libart.so", cas::kGetCanonicalMethod));
+      hooks.FindSymbol("libart.so", ::artdcevm::symbols::android13::kGetCanonicalMethod));
   if (!canonical) {
     *error = "Missing named ART canonical-method function";
     return false;

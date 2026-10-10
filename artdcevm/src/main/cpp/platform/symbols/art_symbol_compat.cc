@@ -1,10 +1,9 @@
 #include "platform/symbols/art_symbol_compat.h"
-#include "platform/android13/symbols/xiaomi/cas_tkq1_221114_001.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <initializer_list>
 
 namespace artdcevm::symbols {
 namespace {
-namespace cas = android13::xiaomi::cas;
 bool Require(HookEngine& hooks, Library library, const char* name, std::string* error) {
   if (hooks.FindSymbol(LibraryName(library), name)) return true;
   if (error) *error = std::string("Missing private symbol in ") + LibraryName(library) + ": " + name;
@@ -13,8 +12,8 @@ bool Require(HookEngine& hooks, Library library, const char* name, std::string* 
 }
 
 bool CheckValidationSymbols(HookEngine& hooks, std::string* error) {
-  const char* names[]{cas::kCheckFields, cas::kCheckMethods, cas::kCheckClass,
-                      cas::kCollectMappings, cas::kStructuralCommit, cas::kInPlaceCommit};
+  const char* names[]{::artdcevm::symbols::android13::kCheckFields, ::artdcevm::symbols::android13::kCheckMethods, ::artdcevm::symbols::android13::kCheckClass,
+                      ::artdcevm::symbols::android13::kCollectMappings, ::artdcevm::symbols::android13::kStructuralCommit, ::artdcevm::symbols::android13::kInPlaceCommit};
   for (const char* name : names)
     if (!Require(hooks, Library::kJvmti, name, error)) return false;
   return true;
@@ -22,22 +21,22 @@ bool CheckValidationSymbols(HookEngine& hooks, std::string* error) {
 
 bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error) {
   if (!CheckValidationSymbols(hooks, error)) return false;
-  const char* jvmti[]{cas::kRedefineClasses, cas::kStructuralRedefineClasses,
-                      cas::kCollectNewInstances,
-                      cas::kAllocateSubtree, cas::kRedefineRun, cas::kAllocateClass};
+  const char* jvmti[]{::artdcevm::symbols::android13::kRedefineClasses, ::artdcevm::symbols::android13::kStructuralRedefineClasses,
+                      ::artdcevm::symbols::android13::kCollectNewInstances,
+                      ::artdcevm::symbols::android13::kAllocateSubtree, ::artdcevm::symbols::android13::kRedefineRun, ::artdcevm::symbols::android13::kAllocateClass};
   for (const char* name : jvmti)
     if (!Require(hooks, Library::kJvmti, name, error)) return false;
-  const char* art[]{cas::kVerifyClass, cas::kVerifierResolve, cas::kFindClass,
-                    cas::kLookupClass, cas::kDeleteClassLoader,
-                    cas::kIsAsyncDeoptimizeable, cas::kTestSuspendFromCode,
-                    cas::kReadBarrierMark,
-                    cas::kCheckedResolve,
-                    cas::kInvalidateAllCompiledCode};
+  const char* art[]{::artdcevm::symbols::android13::kVerifyClass, ::artdcevm::symbols::android13::kVerifierResolve, ::artdcevm::symbols::android13::kFindClass,
+                    ::artdcevm::symbols::android13::kLookupClass, ::artdcevm::symbols::android13::kDeleteClassLoader,
+                    ::artdcevm::symbols::android13::kIsAsyncDeoptimizeable, ::artdcevm::symbols::android13::kTestSuspendFromCode,
+                    ::artdcevm::symbols::android13::kReadBarrierMark,
+                    ::artdcevm::symbols::android13::kCheckedResolve,
+                    ::artdcevm::symbols::android13::kInvalidateAllCompiledCode};
   for (const char* name : art)
     if (!Require(hooks, Library::kArt, name, error)) return false;
-  for (const char* name : cas::kRetiredMethodHooks)
+  for (const char* name : ::artdcevm::symbols::android13::kRetiredMethodHooks)
     if (!Require(hooks, Library::kArt, name, error)) return false;
-  for (const char* name : cas::kRetiredFieldHooks)
+  for (const char* name : ::artdcevm::symbols::android13::kRetiredFieldHooks)
     if (!Require(hooks, Library::kArt, name, error)) return false;
   struct FieldType { const char* name; const char* code; bool object; };
   constexpr FieldType types[]{{"Boolean", "h", false}, {"Byte", "a", false},
@@ -49,14 +48,14 @@ bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error) {
     for (int indexed = 0; indexed != 2; ++indexed) {
       for (bool is_static : {false, true}) {
         for (bool setter : {false, true}) {
-          auto name = cas::JniFieldSymbol(indexed, is_static, setter,
+          auto name = ::artdcevm::symbols::android13::JniFieldSymbol(indexed, is_static, setter,
                                          type.name, type.code, type.object);
           if (!Require(hooks, Library::kArt, name.c_str(), error)) return false;
         }
       }
     }
     for (bool setter : {false, true}) {
-      auto name = cas::ReflectionFieldSymbol(setter, type.name, type.code, type.object);
+      auto name = ::artdcevm::symbols::android13::ReflectionFieldSymbol(setter, type.name, type.code, type.object);
       if (!Require(hooks, Library::kArt, name.c_str(), error)) return false;
     }
   }

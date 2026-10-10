@@ -1,3 +1,4 @@
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/android13/native_deletion_capabilities.h"
 #include "platform/android13/android13_backend.h"
 #include <android/log.h>
@@ -5,7 +6,7 @@
 #include "support/json.h"
 #include "platform/common/evolution_planner.h"
 #include "platform/android13/evolution_runtime.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "hooks/shadow_hook_engine.h"
 #include "core/transaction_lock.h"
 #include <algorithm>
@@ -169,7 +170,7 @@ int Android13Backend::EnableStandardRedefineRouting() {
   routing_attempted_ = true;
   if (!hook_engine_.Initialize(&evolution_error_)) return JVMTI_ERROR_NOT_AVAILABLE;
   void* target = symbols::FindSymbol(hook_engine_,
-      {symbols::Library::kJvmti, cas::kRedefineClasses, symbols::HookRoute::kInline});
+      {symbols::Library::kJvmti, ::artdcevm::symbols::android13::kRedefineClasses, symbols::HookRoute::kInline});
   if (!target) {
     evolution_error_ = "Missing named RedefineClasses symbol";
     return JVMTI_ERROR_NOT_AVAILABLE;

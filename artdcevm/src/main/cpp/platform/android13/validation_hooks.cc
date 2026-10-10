@@ -1,8 +1,9 @@
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/android13/validation_hooks.h"
 #include "platform/android13/field_validation.h"
 #include "platform/android13/method_validation.h"
 #include "platform/android13/class_validation.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "support/elf_modules.h"
 #include <atomic>
 #include <vector>
@@ -68,12 +69,12 @@ bool ValidationHooks::Install(HookEngine& hooks, std::string* error) {
   if (!symbols::CheckValidationSymbols(hooks, error)) return false;
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
   Entry entries[] = {
-    {cas::kCheckFields, reinterpret_cast<void*>(CheckFields), &original_fields},
-    {cas::kCheckMethods, reinterpret_cast<void*>(CheckMethods), &original_methods},
-    {cas::kCheckClass, reinterpret_cast<void*>(CheckClass), &original_classes},
-    {cas::kCollectMappings, reinterpret_cast<void*>(CollectMappings), &original_mappings},
-    {cas::kStructuralCommit, reinterpret_cast<void*>(CommitHook), &original_commit},
-    {cas::kInPlaceCommit, reinterpret_cast<void*>(InPlaceHook), &original_in_place},
+    {::artdcevm::symbols::android13::kCheckFields, reinterpret_cast<void*>(CheckFields), &original_fields},
+    {::artdcevm::symbols::android13::kCheckMethods, reinterpret_cast<void*>(CheckMethods), &original_methods},
+    {::artdcevm::symbols::android13::kCheckClass, reinterpret_cast<void*>(CheckClass), &original_classes},
+    {::artdcevm::symbols::android13::kCollectMappings, reinterpret_cast<void*>(CollectMappings), &original_mappings},
+    {::artdcevm::symbols::android13::kStructuralCommit, reinterpret_cast<void*>(CommitHook), &original_commit},
+    {::artdcevm::symbols::android13::kInPlaceCommit, reinterpret_cast<void*>(InPlaceHook), &original_in_place},
   };
   for (auto& entry : entries) {
     entry.target = hooks.FindSymbol("libopenjdkjvmti.so", entry.symbol);

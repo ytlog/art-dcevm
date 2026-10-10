@@ -2,7 +2,7 @@
 #include "platform/abi/arm64/android13/mutex_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstddef>
 #include <jvmti.h>
 #include <vector>
@@ -47,7 +47,7 @@ bool ConfigureAllocatorMembership(HookEngine& hooks,const DeviceProfile& profile
   *output=nullptr;
   if(!profile.Matched() || !env || !fixture)
     return Fail(error,"Allocator membership requires calibrated identity and rooted fixture");
-  auto named=reinterpret_cast<AllocatorContains>(hooks.FindSymbol("libart.so",cas::kLinearAllocContainsUnsafe));
+  auto named=reinterpret_cast<AllocatorContains>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kLinearAllocContainsUnsafe));
   if(named && !force_arena){*output=named;return true;}
   auto arena=reinterpret_cast<ArenaContains>(hooks.FindSymbol("libartbase.so",
       "_ZNK3art14ArenaAllocator8ContainsEPKv"));

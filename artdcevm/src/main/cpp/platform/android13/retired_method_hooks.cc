@@ -1,3 +1,4 @@
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/checked_method_provider.h"
 #ifdef ARTDCEVM_TESTING
@@ -16,7 +17,7 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
@@ -199,7 +200,7 @@ template <int indexed> jobject NewV(JNIEnv* env, jclass cls, jmethodID method, v
 }
 
 bool InstallRetiredMethodHooks(HookEngine& hooks, std::string* error) {
-  checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), cas::kCheckedResolve);
+  checked_resolve = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), ::artdcevm::symbols::android13::kCheckedResolve);
 #ifdef ARTDCEVM_FORCE_CHECKED_HANDLES_TEST
   constexpr bool force_source=true;
 #else
@@ -216,31 +217,31 @@ bool InstallRetiredMethodHooks(HookEngine& hooks, std::string* error) {
   }
   struct Entry { const char* symbol; void* proxy; void** original; void* target = nullptr; };
   Entry entries[] = {
-    {cas::kRetiredMethodHooks[0], reinterpret_cast<void*>(Deopt), &original_deopt},
-    {cas::kRetiredMethodHooks[1], reinterpret_cast<void*>(Nterp), &original_nterp},
-    {cas::kRetiredMethodHooks[2], reinterpret_cast<void*>(Resolve), &original_resolve},
-    {cas::kRetiredMethodHooks[3], reinterpret_cast<void*>(ResolveHandles), &original_resolve_handles},
-    {cas::kRetiredMethodHooks[4], reinterpret_cast<void*>(Invoke), &original_invoke},
-    {cas::kRetiredMethodHooks[5], reinterpret_cast<void*>(VirtualJValues), &original_jvalues},
-    {cas::kRetiredMethodHooks[6], reinterpret_cast<void*>(VirtualVarArgs), &original_varargs},
-    {cas::kRetiredMethodHooks[7], reinterpret_cast<void*>(IdJValues), &original_id_jvalues},
-    {cas::kRetiredMethodHooks[8], reinterpret_cast<void*>(IdVarArgs), &original_id_varargs},
-    {cas::kRetiredMethodHooks[9], reinterpret_cast<void*>(DirectJValues), &original_direct_jvalues},
-    {cas::kRetiredMethodHooks[10], reinterpret_cast<void*>(DirectVarArgs), &original_direct_varargs},
-    {cas::kRetiredMethodHooks[11], reinterpret_cast<void*>(DirectIdJValues), &original_direct_id_jvalues},
-    {cas::kRetiredMethodHooks[12], reinterpret_cast<void*>(DirectIdVarArgs), &original_direct_id_varargs},
-    {cas::kRetiredMethodHooks[13], reinterpret_cast<void*>(Reflect), &original_reflection},
-    {cas::kRetiredMethodHooks[14], reinterpret_cast<void*>(Handle), &original_handle},
-    {cas::kRetiredMethodHooks[15], reinterpret_cast<void*>(Exact), &original_exact},
-    {cas::kRetiredMethodHooks[16], reinterpret_cast<void*>(WithFrame), &original_frame},
-    {cas::kRetiredMethodHooks[17], reinterpret_cast<void*>(Obsolete), &original_obsolete},
-    {cas::kRetiredMethodHooks[18], reinterpret_cast<void*>(CheckJniMethod), &original_check_jni},
-    {cas::kRetiredMethodHooks[19], reinterpret_cast<void*>(CheckConstructor), &original_check_constructor},
-    {cas::kRetiredMethodHooks[20], reinterpret_cast<void*>(Constructor), &original_constructor},
-    {cas::kRetiredMethodHooks[21], reinterpret_cast<void*>(NewA<0>), &original_new_a[0]},
-    {cas::kRetiredMethodHooks[22], reinterpret_cast<void*>(NewA<1>), &original_new_a[1]},
-    {cas::kRetiredMethodHooks[23], reinterpret_cast<void*>(NewV<0>), &original_new_v[0]},
-    {cas::kRetiredMethodHooks[24], reinterpret_cast<void*>(NewV<1>), &original_new_v[1]},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[0], reinterpret_cast<void*>(Deopt), &original_deopt},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[1], reinterpret_cast<void*>(Nterp), &original_nterp},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[2], reinterpret_cast<void*>(Resolve), &original_resolve},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[3], reinterpret_cast<void*>(ResolveHandles), &original_resolve_handles},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[4], reinterpret_cast<void*>(Invoke), &original_invoke},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[5], reinterpret_cast<void*>(VirtualJValues), &original_jvalues},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[6], reinterpret_cast<void*>(VirtualVarArgs), &original_varargs},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[7], reinterpret_cast<void*>(IdJValues), &original_id_jvalues},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[8], reinterpret_cast<void*>(IdVarArgs), &original_id_varargs},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[9], reinterpret_cast<void*>(DirectJValues), &original_direct_jvalues},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[10], reinterpret_cast<void*>(DirectVarArgs), &original_direct_varargs},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[11], reinterpret_cast<void*>(DirectIdJValues), &original_direct_id_jvalues},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[12], reinterpret_cast<void*>(DirectIdVarArgs), &original_direct_id_varargs},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[13], reinterpret_cast<void*>(Reflect), &original_reflection},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[14], reinterpret_cast<void*>(Handle), &original_handle},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[15], reinterpret_cast<void*>(Exact), &original_exact},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[16], reinterpret_cast<void*>(WithFrame), &original_frame},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[17], reinterpret_cast<void*>(Obsolete), &original_obsolete},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[18], reinterpret_cast<void*>(CheckJniMethod), &original_check_jni},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[19], reinterpret_cast<void*>(CheckConstructor), &original_check_constructor},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[20], reinterpret_cast<void*>(Constructor), &original_constructor},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[21], reinterpret_cast<void*>(NewA<0>), &original_new_a[0]},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[22], reinterpret_cast<void*>(NewA<1>), &original_new_a[1]},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[23], reinterpret_cast<void*>(NewV<0>), &original_new_v[0]},
+    {::artdcevm::symbols::android13::kRetiredMethodHooks[24], reinterpret_cast<void*>(NewV<1>), &original_new_v[1]},
   };
   for (auto& entry : entries) {
     entry.target = hooks.FindSymbol(symbols::LibraryName(symbols::Library::kArt), entry.symbol);

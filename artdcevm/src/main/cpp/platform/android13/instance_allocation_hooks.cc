@@ -1,7 +1,7 @@
 #include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/allocation_validation.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -14,7 +14,7 @@ bool CollectProxy(void* definition, void* data) {
 bool InstallInstanceAllocationHook(HookEngine& hooks, const DeviceProfile& profile,
                                    std::string* error) {
   if (!ConfigureAllocationValidation(profile, error)) return false;
-  void* target = hooks.FindSymbol("libopenjdkjvmti.so", cas::kCollectNewInstances);
+  void* target = hooks.FindSymbol("libopenjdkjvmti.so", ::artdcevm::symbols::android13::kCollectNewInstances);
   if (!target) { *error = "Missing named device instance-allocation function"; return false; }
   return hooks.Install(target, reinterpret_cast<void*>(CollectProxy),
                         reinterpret_cast<void**>(&original_collect), error) != nullptr;

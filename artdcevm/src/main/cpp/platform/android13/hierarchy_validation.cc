@@ -6,7 +6,7 @@
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstring>
 #include <jvmti.h>
 #include <limits>
@@ -79,7 +79,7 @@ int CheckEvolutionHierarchy(void* definition,const evolution::ClassSchema& curre
 }
 bool ConfigureHierarchyValidation(HookEngine& hooks,const DeviceProfile& profile,std::string* error) {
   if(!profile.Matched()){*error="Hierarchy validation requires a matched device profile";return false;}
-  auto find=reinterpret_cast<FindClass>(hooks.FindSymbol("libart.so",cas::kFindClass));
+  auto find=reinterpret_cast<FindClass>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kFindClass));
   if(!find || !RuntimeClassLinker()) {
     *error="Missing named hierarchy resolver or class linker";return false;
   }

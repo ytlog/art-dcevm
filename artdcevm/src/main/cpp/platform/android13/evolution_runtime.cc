@@ -1,3 +1,4 @@
+#include "platform/symbols/art_symbol_compat.h"
 #include "platform/android13/evolution_runtime.h"
 #include <limits>
 #include <cstring>
@@ -14,7 +15,7 @@
 #include "platform/android13/field_copy_metadata.h"
 #include "platform/android13/field_copy_storage.h"
 #include "hooks/shadow_hook_engine.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "support/elf_modules.h"
 #include "platform/android13/retired_method_hooks.h"
 #include "platform/android13/retired_field_hooks.h"
@@ -99,7 +100,7 @@ bool CompilerSymbolsAvailable() {
   ShadowHookEngine hooks;
   std::string error;
   return MatchCompilerDeviceProfile(device_profile, &error) && hooks.Initialize(&error) &&
-      hooks.FindSymbol("libart-compiler.so", cas::kHGraphInlineInto) != nullptr;
+      hooks.FindSymbol("libart-compiler.so", ::artdcevm::symbols::android13::kHGraphInlineInto) != nullptr;
 }
 #endif
 }
@@ -179,7 +180,7 @@ std::string InitializeEvolutionRuntime(JNIEnv* jni,jobject calibration) {
       !ConfigureDeviceCompilerDiagnostics(symbols, device_profile, &error)) return error;
 #endif
   auto invalidate = reinterpret_cast<ValidationHooks::InvalidateJit>(
-      symbols.FindSymbol("libart.so", cas::kInvalidateAllCompiledCode));
+      symbols.FindSymbol("libart.so", ::artdcevm::symbols::android13::kInvalidateAllCompiledCode));
   if (!invalidate) return "Missing named ART compiled-code invalidation";
   ValidationHooks::ConfigureSource(CommitEvolutionStructurally,RuntimeJitCodeCache,invalidate);
   ready = true;
@@ -397,7 +398,7 @@ Java_com_github_ytlog_artdcevm_platform_android13_SourceEngineInstrumentation_co
       result = -4;
     } else {
       void* target = hooks.FindSymbol("libart-compiler.so",
-                                      artdcevm::android13::cas::kHGraphInlineInto);
+                                      ::artdcevm::symbols::android13::kHGraphInlineInto);
       if (target == nullptr) {
         result = -5;
       } else {

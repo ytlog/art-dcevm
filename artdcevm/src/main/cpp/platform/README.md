@@ -28,3 +28,5 @@ Android 13 直接使用 `common/field_copy.h`、`common/object_replacement_map.h
 Android 13 的固定 Legacy DexCache 仍按 API33 的真实声明和独立校准读取，但直接使用公共 `method_cache::LegacyCache`，不增加别名头。FindClass 演化处理器也直接向公共 `runtime_receiver` 观察者登记和恢复；Android13 的完整 Runtime receiver 校准继续独立保留。
 
 Android 13 的字段、方法和 Class modifier 声明差异策略直接归入现有 `common/native_schema_policy`，final cached-setter 的单调发布状态归入 `common/modern_final_field_guard`，不保留版本转发或另建公共包装。完整后端的原始结构校验 Hook 仍使用自己的语义边界。其 allocator membership adapter 仍需平衡原 NativeObjectAccess 生命周期并核对 unsafe/locked/Arena 三个命名路径，因此保留有效校准与 fallback；不能仅因公共层也有 allocator 校准就删除不同作用域的实现。
+
+Android13 固定源码族的命名 ART/JVMTI 符号只在 `symbols/android13/source_symbols.h` 声明一次。调用者直接引用，不保留厂商路径或 profile 别名；采集机型是验证来源，不能作为能力白名单。符号存在仍需真实 ABI 与独立运行时校准。

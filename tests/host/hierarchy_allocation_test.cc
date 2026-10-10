@@ -8,7 +8,7 @@
 #include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/android13/field_copy_metadata.h"
 #include "platform/android13/thread_suspend_scope.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cassert>
 #include <dlfcn.h>
 #include <cstring>
@@ -179,8 +179,8 @@ void* AllocateThenWrongPublished(void* owner,void* old_slot,void* parent_slot,vo
 struct Hooks:HookEngine {
  bool Initialize(std::string*) override { return true; }
  void* FindSymbol(const char*,const char* symbol) override {
-   if(std::strcmp(symbol,cas::kFindClass)==0) return reinterpret_cast<void*>(Find);
-   if(std::strcmp(symbol,cas::kRecordFailure)==0) return reinterpret_cast<void*>(Fail);
+   if(std::strcmp(symbol,::artdcevm::symbols::android13::kFindClass)==0) return reinterpret_cast<void*>(Find);
+   if(std::strcmp(symbol,::artdcevm::symbols::android13::kRecordFailure)==0) return reinterpret_cast<void*>(Fail);
    if(std::strcmp(symbol,"artReadBarrierForRootSlow")==0) return reinterpret_cast<void*>(Root);
    if(std::strstr(symbol,"HandleScopeVisitRoots"))return reinterpret_cast<void*>(HostHandleScopeVisitRoots);
    if(std::strstr(symbol,"GetPeerFromOtherThread"))return reinterpret_cast<void*>(Peer);

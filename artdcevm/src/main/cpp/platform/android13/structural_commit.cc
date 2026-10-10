@@ -12,7 +12,7 @@
 #include "platform/android13/structural_method_updates.h"
 #include "platform/android13/structural_reflective.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstring>
 #include <cstdlib>
 #include "platform/android13/transaction_metadata.h"
@@ -110,7 +110,7 @@ bool ConfigureStructuralCommit(HookEngine& hooks,std::string* error) {
   ART(singleton,"_ZN3art7Runtime9instance_E");ART(list_lock,"_ZN3art5Locks17thread_list_lock_E");
   ART(set_status,"_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE");
   ART(retain,"_ZN3art6mirror8ClassExt16SetObsoleteClassENS_6ObjPtrINS0_5ClassEEE");
-  ART(invalidate,cas::kInvalidateAllCompiledCode);
+  ART(invalidate,::artdcevm::symbols::android13::kInvalidateAllCompiledCode);
   ART(deopt_all,"_ZN3art15instrumentation15Instrumentation20DeoptimizeEverythingEPKc");
   ART(lock,"_ZN3art5Mutex13ExclusiveLockEPNS_6ThreadE");ART(unlock,"_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE");
   ART(for_each,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_");ART(clear_cache,"_ZN3art16InterpreterCache5ClearEPNS_6ThreadE");

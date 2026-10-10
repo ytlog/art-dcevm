@@ -6,7 +6,7 @@
 #include "platform/android13/structural_reflective.h"
 #include "platform/common/object_replacement_map_abi.h"
 #include "platform/abi/arm64/android13/selective_deopt_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -74,7 +74,7 @@ struct Hooks:HookEngine {
   if(std::strcmp(name,"_ZN3art5Locks17thread_list_lock_E")==0) return &mutex;
   if(std::strstr(name,"SetStatusLocked")) return reinterpret_cast<void*>(SetStatus);
   if(std::strstr(name,"SetObsoleteClass")) return reinterpret_cast<void*>(Retain);
-  if(std::strcmp(name,cas::kInvalidateAllCompiledCode)==0) return reinterpret_cast<void*>(Invalidate);
+  if(std::strcmp(name,::artdcevm::symbols::android13::kInvalidateAllCompiledCode)==0) return reinterpret_cast<void*>(Invalidate);
   if(std::strstr(name,"DeoptimizeEverything")) return reinterpret_cast<void*>(Deopt);
   if(std::strstr(name,"ExclusiveUnlock")) return reinterpret_cast<void*>(Unlock);
   if(std::strstr(name,"ExclusiveLock")) return reinterpret_cast<void*>(Lock);

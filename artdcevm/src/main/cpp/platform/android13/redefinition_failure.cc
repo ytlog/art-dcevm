@@ -1,7 +1,7 @@
 #include "platform/android13/redefinition_failure.h"
 #include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/abi/arm64/android13/platform_string_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstring>
 
 namespace artdcevm::android13 {
@@ -10,7 +10,7 @@ using Failure = void (*)(void*, int, const void*, const BorrowedPlatformString*)
 Failure failure = nullptr;
 }
 bool ConfigureRedefinitionFailures(HookEngine& hooks, std::string* error) {
-  auto target = reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so", cas::kRecordFailure));
+  auto target = reinterpret_cast<Failure>(hooks.FindSymbol("libopenjdkjvmti.so", ::artdcevm::symbols::android13::kRecordFailure));
   if (!target) { *error = "Missing named ART redefinition error recorder"; return false; }
   failure = target;
   return true;

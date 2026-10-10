@@ -3,7 +3,7 @@
 #include "platform/abi/arm64/android13/suspend_deopt_art_abi.h"
 #include "platform/android13/stack_access.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -53,7 +53,7 @@ class Hooks final:public artdcevm::HookEngine {
  void* FindSymbol(const char*,const char* symbol)override{
   if(missing)return nullptr;
 #define FN(name,fn) if(std::strcmp(symbol,name)==0)return reinterpret_cast<void*>(fn)
-  FN(cas::kPushDeoptimizationContext,PushContext);FN(cas::kDeoptimize,Deoptimize);FN(cas::kTestSuspendFromCode,Original);FN(cas::kIsAsyncDeoptimizeable,Async);
+  FN(::artdcevm::symbols::android13::kPushDeoptimizationContext,PushContext);FN(::artdcevm::symbols::android13::kDeoptimize,Deoptimize);FN(::artdcevm::symbols::android13::kTestSuspendFromCode,Original);FN(::artdcevm::symbols::android13::kIsAsyncDeoptimizeable,Async);
 #undef FN
   if(std::strstr(symbol,"StackVisitorC2"))return reinterpret_cast<void*>(Construct);
   if(std::strstr(symbol,"WalkStack"))return reinterpret_cast<void*>(Walk);

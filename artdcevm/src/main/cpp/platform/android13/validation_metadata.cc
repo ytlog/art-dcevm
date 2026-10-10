@@ -1,5 +1,5 @@
 #include "platform/android13/validation_metadata.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "platform/common/dex_file_metadata.h"
 
 namespace artdcevm::android13 {
@@ -41,7 +41,7 @@ bool ReadValidationMetadata(void* definition, ValidationMetadata* output) {
 }
 
 bool ConfigureValidationMetadata(HookEngine& hooks, std::string* error) {
-  auto getter = reinterpret_cast<GetMirrorClass>(hooks.FindSymbol("libopenjdkjvmti.so", cas::kGetMirrorClass));
+  auto getter = reinterpret_cast<GetMirrorClass>(hooks.FindSymbol("libopenjdkjvmti.so", ::artdcevm::symbols::android13::kGetMirrorClass));
   if (!getter) { *error = "Missing named ART class getter"; return false; }
   get_mirror_class = getter;return true;
 }

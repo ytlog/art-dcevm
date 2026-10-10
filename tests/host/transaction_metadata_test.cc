@@ -1,6 +1,6 @@
 #include "platform/android13/transaction_metadata.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/abi/arm64/android13/redefinition_art_abi.h"
@@ -18,7 +18,7 @@ struct PointerArray {g::validation_abi::ObjectPrefix object;int32_t length;align
 struct Methods {uint64_t count;Method values[2];};
 Array* Arr(Class* type,int32_t count){auto* a=New<Array>();a->object.klass=Ref(type);a->length=count;return a;}
 uintptr_t Mirror(void* definition){return uintptr_t(definition);}
-class Hooks:public artdcevm::HookEngine {public:bool missing_mirror=false;bool Initialize(std::string*)override{return true;}void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}void* FindSymbol(const char*,const char* name)override{if(!std::strcmp(name,g::cas::kGetMirrorClass))return missing_mirror?nullptr:reinterpret_cast<void*>(Mirror);return std::strcmp(name,"artReadBarrierForRootSlow")==0?reinterpret_cast<void*>(Root):nullptr;}};
+class Hooks:public artdcevm::HookEngine {public:bool missing_mirror=false;bool Initialize(std::string*)override{return true;}void* Install(void*,void*,void**,std::string*)override{return nullptr;}bool Remove(void*,std::string*)override{return true;}void* FindSymbol(const char*,const char* name)override{if(!std::strcmp(name,::artdcevm::symbols::android13::kGetMirrorClass))return missing_mirror?nullptr:reinterpret_cast<void*>(Mirror);return std::strcmp(name,"artReadBarrierForRootSlow")==0?reinterpret_cast<void*>(Root):nullptr;}};
 const char* names[]={"libart.so","libopenjdkjvmti.so","libdexfile.so","libc++.so"};
 const char* ids[]={"14fc77b24db0b351b919c97009dc86bf","2fe21c45581b9c8b0519b71cbde32938","e6aaffcef8ef63baf438267cda44d400","1f426797e505c9b841f55cc49d32b3f4"};
 }

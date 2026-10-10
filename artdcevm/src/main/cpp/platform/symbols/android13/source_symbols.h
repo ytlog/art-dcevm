@@ -1,7 +1,9 @@
 #pragma once
 #include <string>
 #include "platform/abi/arm64/android11/async_deopt.h"
-namespace artdcevm::symbols::android13::xiaomi::cas {
+// Fixed named ART/JVMTI declarations for the Android13 source family.
+// Symbol presence alone does not establish private ABI or runtime permission.
+namespace artdcevm::symbols::android13 {
 inline constexpr char kRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kStructuralRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kIsStructurallyModifiableClass[] = "_ZN12openjdkjvmti9Redefiner17IsModifiableClassEP9_jvmtiEnvP7_jclassPh";

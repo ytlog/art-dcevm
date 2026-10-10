@@ -7,7 +7,7 @@
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/abi/arm64/android13/field_copy_storage_abi.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <cstring>
 #include <string>
 #include <vector>
@@ -114,10 +114,10 @@ bool CalibrateOwnedMembers(const DeviceProfile& profile,HookEngine& hooks,JNIEnv
  if(!Begin(profile,env,fixture,error))return false;
  if(!ti||!services.class_linker||!services.jni_id_manager||!r.method_id||!r.field_id||!r.reflected_field||!r.reflected_method||!r.canonical_method||!r.fields.klass||!r.fields.field)return Fail(error,"Incomplete owned member calibration bindings");
  using Lookup=void*(*)(void*,void*,const char*,void*);using DecodeMethod=void*(*)(void*,jmethodID);using DecodeField=void*(*)(void*,jfieldID);using Canonical=void*(*)(void*,size_t);
- auto lookup=reinterpret_cast<Lookup>(hooks.FindSymbol("libart.so",cas::kLookupClass));
+ auto lookup=reinterpret_cast<Lookup>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kLookupClass));
  auto method=reinterpret_cast<DecodeMethod>(hooks.FindSymbol("libart.so",runtime_access_abi::kDecodeMethodId));
  auto field=reinterpret_cast<DecodeField>(hooks.FindSymbol("libart.so",runtime_access_abi::kDecodeFieldId));
- auto canonical=reinterpret_cast<Canonical>(hooks.FindSymbol("libart.so",cas::kGetCanonicalMethod));
+ auto canonical=reinterpret_cast<Canonical>(hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kGetCanonicalMethod));
  if(!lookup||!method||!field||!canonical)return Fail(error,"Missing named owned calibration ART functions");
  Local type{env,env->GetObjectClass(fixture)};if(!type.value||env->ExceptionCheck())return Fail(error,"Calibration class unavailable");auto klass=static_cast<jclass>(type.value);
  Text signature{ti};if(ti->GetClassSignature(klass,&signature.value,nullptr)!=JVMTI_ERROR_NONE||!signature.value)return Fail(error,"JVMTI calibration class signature failed");

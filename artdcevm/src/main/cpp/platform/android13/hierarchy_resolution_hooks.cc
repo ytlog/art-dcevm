@@ -7,7 +7,7 @@
 #include "platform/android13/hierarchy_allocation.h"
 #include <vector>
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 
 namespace artdcevm::android13 {
 namespace {
@@ -65,13 +65,13 @@ bool InstallHierarchyResolutionHooks(HookEngine& hooks, const DeviceProfile& pro
   if(!profile.Matched()){*error="Hierarchy resolution requires a matched device profile";return false;}
   struct Entry { const char* name; void* proxy; void** original; };
   const Entry entries[]{
-      {cas::kVerifyClass, reinterpret_cast<void*>(VerifyProxy),
+      {::artdcevm::symbols::android13::kVerifyClass, reinterpret_cast<void*>(VerifyProxy),
        reinterpret_cast<void**>(&original_verify)},
-      {cas::kVerifierResolve, reinterpret_cast<void*>(ResolveProxy),
+      {::artdcevm::symbols::android13::kVerifierResolve, reinterpret_cast<void*>(ResolveProxy),
        reinterpret_cast<void**>(&original_resolve)},
-      {cas::kFindClass, reinterpret_cast<void*>(FindProxy),
+      {::artdcevm::symbols::android13::kFindClass, reinterpret_cast<void*>(FindProxy),
        reinterpret_cast<void**>(&original_find)},
-      {cas::kLookupClass, reinterpret_cast<void*>(LookupProxy),
+      {::artdcevm::symbols::android13::kLookupClass, reinterpret_cast<void*>(LookupProxy),
        reinterpret_cast<void**>(&original_lookup)},
   };
   std::vector<void*> tokens;

@@ -2,7 +2,7 @@
 #include "platform/android13/pending_suspend_deopt.h"
 #include "platform/abi/arm64/android13/suspend_deopt_art_abi.h"
 
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include "platform/android13/stack_access.h"
 #include "platform/android13/frame_recovery.h"
 #include "platform/abi/arm64/android13/art_method_abi.h"
@@ -103,10 +103,10 @@ uint64_t EvolutionSuspendDeoptHits() { return Hits(); }
 
 bool InstallSuspendDeoptHook(HookEngine& hooks, std::string* error) {
   auto push = reinterpret_cast<suspend_abi::PushContext>(
-      hooks.FindSymbol("libart.so", cas::kPushDeoptimizationContext));
+      hooks.FindSymbol("libart.so", ::artdcevm::symbols::android13::kPushDeoptimizationContext));
   auto deopt = reinterpret_cast<suspend_abi::Deoptimize>(
-      hooks.FindSymbol("libart.so", cas::kDeoptimize));
-  void* target = hooks.FindSymbol("libart.so", cas::kTestSuspendFromCode);
+      hooks.FindSymbol("libart.so", ::artdcevm::symbols::android13::kDeoptimize));
+  void* target = hooks.FindSymbol("libart.so", ::artdcevm::symbols::android13::kTestSuspendFromCode);
   // This installer remains behind the calibrated Android 13 profile. The
   // declaration is selected explicitly; no SDK or symbol-fallback ABI guess.
   constexpr auto declaration=async_deopt_service::Declaration::kPcOnly;

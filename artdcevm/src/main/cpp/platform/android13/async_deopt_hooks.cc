@@ -5,7 +5,7 @@
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/frame_recovery.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <atomic>
 #include <cstring>
 namespace artdcevm::android13 {
@@ -73,7 +73,7 @@ bool InstallAsyncDeoptHook(HookEngine& hooks,const DeviceProfile& profile,std::s
   auto cache=reinterpret_cast<void* (*)(void*)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod19GetObsoleteDexCacheEv"));
   auto code=reinterpret_cast<const void* (*)(void*,size_t)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod21GetOatMethodQuickCodeENS_11PointerSizeE"));
   auto debug=reinterpret_cast<bool (*)(const void*)>(hooks.FindSymbol("libart.so","_ZNK3art7OatFile12IsDebuggableEv"));
-  void* target=hooks.FindSymbol("libart.so",cas::kIsAsyncDeoptimizeable);
+  void* target=hooks.FindSymbol("libart.so",::artdcevm::symbols::android13::kIsAsyncDeoptimizeable);
   if (!r || !cache || !code || !debug || !target) { *error="Missing named AOT safety functions"; return false; }
   root=r; obsolete_cache=cache; oat_code=code; debuggable=debug;
   return hooks.Install(target,reinterpret_cast<void*>(Proxy),reinterpret_cast<void**>(&original_is_async),error)!=nullptr;

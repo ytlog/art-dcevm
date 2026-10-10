@@ -6,7 +6,7 @@
 #include "platform/android13/redefinition_input.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/android13/symbols/profile.h"
+#include "platform/symbols/android13/source_symbols.h"
 #include <new>
 #include <cstring>
 #include <algorithm>
@@ -62,7 +62,7 @@ bool CheckEvolutionFields(void* definition) {
 bool ConfigureEvolutionFieldValidation(HookEngine& hooks, const DeviceProfile& profile, std::string* error) {
   if (!CalibrateRedefinitionFailures(hooks, profile, error)) return false;
   auto record = reinterpret_cast<RecordNewField>(
-      hooks.FindSymbol("libopenjdkjvmti.so", cas::kRecordNewFieldAdded));
+      hooks.FindSymbol("libopenjdkjvmti.so", ::artdcevm::symbols::android13::kRecordNewFieldAdded));
   if (!record) {
     *error = "Missing named structural field marker";
     return false;
