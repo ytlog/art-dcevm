@@ -31,6 +31,7 @@ class SourceProducer final {
  static bool GetCode(void*,void*,void*,CodeView*)noexcept;
  static bool Resolve(void*,void*,void*,uint32_t,const InvokeInstruction&,void**,void**)noexcept;
  static bool Pending(void*,void*)noexcept;
+ static void* CallerDeclaring(void*,void*,void*)noexcept;
  static bool FrameExtent(void*,void*,const void*,size_t*)noexcept;
  static bool FrameReference(void*,void*,uint32_t,void**)noexcept;
  bool CodeImpl(void*,void*,CodeView*,const modern_field_metadata::ReadContext*,evolution::MappedDexMetadata* mapping=nullptr)const noexcept;
@@ -44,6 +45,7 @@ class SourceProducer final {
  abi::arm64::android17::ResolveMethodClass resolve_class17_=nullptr;
  abi::arm64::android17::FindResolvedMethod find_method17_=nullptr;
  abi::arm64::android17::CheckedNterpMethod checked_method17_=nullptr;
+ abi::arm64::android17::ClearCallerAccessChecks clear_caller17_=nullptr;
  bool bound_=false;
  void*(*root_reference_)(void*)=nullptr;
 };

@@ -8,6 +8,12 @@ struct MethodTypeIndex {uint16_t index;};
 using MethodObjectPointer=android11::ReleaseObjectPointer;
 using ResolveMethodClass=MethodObjectPointer(*)(void*,MethodTypeIndex,void*);
 using FindResolvedMethod=void*(*)(void*,MethodObjectPointer,MethodObjectPointer,MethodObjectPointer,uint32_t);
+// libartbase/base/pointer_size.h and mirror/class.{h,cc}: shared-lock
+// GetMethods slice iteration + atomic managed-method ClearAccessFlags only.
+enum class MethodPointerSize:uint32_t {k32=4,k64=8};
+using ClearCallerAccessChecks=void(*)(void*,MethodPointerSize);
+inline constexpr char kClearCallerAccessChecks[]="_ZN3art6mirror5Class37ClearSkipAccessChecksFlagOnAllMethodsENS_11PointerSizeE";
+inline constexpr uint32_t kSkipAccessChecks=0x00080000u;
 using CheckedNterpMethod=uintptr_t(*)(void*,void*,const uint16_t*,uint32_t*);
 inline constexpr char kResolveMethodClass[]="_ZN3art11ClassLinker13DoResolveTypeIPNS_9ArtMethodEEENS_6ObjPtrINS_6mirror5ClassEEENS_3dex9TypeIndexET_";
 inline constexpr char kFindResolvedMethod[]="_ZN3art11ClassLinker18FindResolvedMethodENS_6ObjPtrINS_6mirror5ClassEEENS1_INS2_8DexCacheEEENS1_INS2_11ClassLoaderEEEj";

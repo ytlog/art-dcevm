@@ -1,6 +1,7 @@
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_receiver_code_item.h"
 #include "platform/common/native_receiver_resolution_source.h"
+#include "platform/common/native_receiver_checked_caller.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
@@ -35,7 +36,9 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  }
  if(source==ResolutionSource::Nterp){
   if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Nterp source requires its calibrated Standard Method12 declaration";return false;}
-  vm_=vm;resolve_class17_=klass;find_method17_=member;checked_method17_=checked;
+  auto clear=reinterpret_cast<ClearCallerAccessChecks>(finder(kClearCallerAccessChecks));
+  if(!clear){if(error)*error="Receiver source named Class::ClearSkipAccessChecksFlagOnAllMethods unavailable";return false;}
+  clear_caller17_=clear;vm_=vm;resolve_class17_=klass;find_method17_=member;checked_method17_=checked;
  }
  obsolete_cache_=reinterpret_cast<void*(*)(void*)>(finder("_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv"));
  stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;root_reference_=root_reference;bound_=true;return true;
@@ -79,6 +82,8 @@ bool SourceProducer::Pending17(void*self,bool*out)const noexcept {
 bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**out)const noexcept {
  if(!out||!checked_method17_||!resolve_class17_||!find_method17_||i.kind>InvokeKind::Interface)return false;
  bool pending=false;if(!Pending17(self,&pending)||pending)return false;
+ const CheckedCallerAccess checks{const_cast<SourceProducer*>(this),Current,FrameExtent,CallerDeclaring,clear_caller17_};
+ if(!EnsureCheckedCaller(checks,self,caller))return false;
  CodeView code;evolution::MappedDexMetadata map;InvokeInstruction actual;
  if(!CodeImpl(self,caller,&code,nullptr,&map)||!DecodeInvoke(code,pc,&actual)||actual.kind!=i.kind||actual.index!=i.index||actual.range!=i.range||actual.receiver_register!=i.receiver_register||actual.argument_count!=i.argument_count)return false;
  uint16_t type=0;if(!ReadInvokeClassIndex(map,i.index,&type))return false;
@@ -113,6 +118,7 @@ bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeIns
 }
 bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_null;}
 BytecodeAccess SourceProducer::Access()noexcept{return {this,Current,GetFrame,GetCode,Resolve,Pending};}
+void* SourceProducer::CallerDeclaring(void*p,void*self,void*method)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!method||!s.root_reference_||!Current(p,self))return nullptr;void*klass=s.root_reference_(method);return Current(p,self)?klass:nullptr;}
 bool SourceProducer::FrameExtent(void*p,void*self,const void*address,size_t*out)noexcept{return Current(p,self)&&Extent(address,out)&&Current(p,self);}
 bool SourceProducer::FrameReference(void*p,void*self,uint32_t reference,void**out)noexcept{
  auto&s=*static_cast<SourceProducer*>(p);if(!out||!Current(p,self)||!s.root_reference_)return false;
