@@ -3,7 +3,7 @@
 namespace artdcevm::receiver_guard {
 bool Relations::Next(void*klass,bool history,void**next)const noexcept{
  if(!next)return false;if(!klass){*next=nullptr;return true;}
- ClassView view;if(!access_.read||!access_.read(access_.owner,klass,&view)||!view.descriptor||(view.descriptor[0]!='L'&&view.descriptor[0]!='['))return false;
+ ClassView view;if(!access_.read||!access_.read(access_.owner,klass,&view)||(view.kind!=ClassKind::Ordinary&&view.kind!=ClassKind::Array&&view.kind!=ClassKind::Proxy)||(view.kind==ClassKind::Ordinary?(!view.descriptor||view.descriptor[0]!='L'):view.descriptor!=nullptr))return false;
  if(history)return access_.obsolete&&access_.obsolete(access_.owner,klass,next);
  *next=view.parent;return true;
 }
@@ -14,6 +14,10 @@ bool Relations::Acyclic(void*start,bool history)const noexcept{
 bool Relations::Historical(void*current,void*declaring,bool*out)const noexcept{
  *out=false;if(!Acyclic(current,true))return false;
  ClassView owner;if(!access_.read(access_.owner,current,&owner))return false;
+ // Arrays/proxies cannot be redefined by this source owner. Their actual
+ // pointer is a valid current identity only with an empty original history;
+ // never invent a descriptor or use it to alias an obsolete ordinary Class.
+ if(owner.kind!=ClassKind::Ordinary){void*old=nullptr;if(!Next(current,true,&old)||old)return false;*out=current==declaring;return true;}
  for(void*old=current;old;){ClassView historical;if(!access_.read(access_.owner,old,&historical)||historical.loader!=owner.loader||!historical.descriptor||std::strcmp(historical.descriptor,owner.descriptor))return false;
   if(old==declaring)*out=true;if(!Next(old,true,&old))return false;
  }return true;

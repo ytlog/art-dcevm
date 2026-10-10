@@ -1,9 +1,22 @@
 #pragma once
 #include "platform/common/runnable_jni_bridge.h"
 #include <string>
+#include <cstddef>
 #include <vector>
 namespace artdcevm::modern_field_metadata {class FieldMetadata;struct ReadContext;}
 namespace artdcevm::native_interface_graph {
+// Ephemeral, non-owning native view for a single actual no-safepoint read
+// interval. It is not a root or publication permission and cannot survive GC.
+class View final {
+ public:
+ size_t Count()const noexcept{return count_;}
+ private:
+ friend bool ReadView(const modern_field_metadata::FieldMetadata&,void*,View*,std::string*,const modern_field_metadata::ReadContext*);
+ friend bool InterfaceAt(const modern_field_metadata::FieldMetadata&,const View&,size_t,void**,const modern_field_metadata::ReadContext*);
+ void*klass_=nullptr,*table_=nullptr,*meta_class_=nullptr,*array_class_=nullptr;size_t count_=0;
+};
+bool ReadView(const modern_field_metadata::FieldMetadata&,void* klass,View*,std::string*,const modern_field_metadata::ReadContext* =nullptr);
+bool InterfaceAt(const modern_field_metadata::FieldMetadata&,const View&,size_t,void**,const modern_field_metadata::ReadContext* =nullptr);
 // Fixed IfTable : ObjectArray<Object>, pair {interface, method-array}. All
 // managed references pass the existing calibrated ART read barrier.
 bool Read(const modern_field_metadata::FieldMetadata&,void* klass,std::vector<void*>*,std::string*);

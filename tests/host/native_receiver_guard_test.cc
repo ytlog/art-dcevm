@@ -8,7 +8,7 @@ using namespace artdcevm::receiver_guard;
 // Class identities; no Enabled/deny bit substitutes for receiver assignability.
 struct Class {Class* parent=nullptr;std::array<Class*,4> interfaces{};};
 struct Object {Class* klass;};struct Member {uint32_t flags;Class* declaring;};
-struct State {void* self=nullptr;Class* old_class=nullptr;Class* current_class=nullptr;bool context=true;const char* exception=nullptr;unsigned raised=0;};
+struct State {void* self=nullptr;Class* old_class=nullptr;Class* current_class=nullptr;bool context=true;const char* exception=nullptr;unsigned raised=0;uint32_t handle_kind=3;};
 static bool Current(void*p,void*t)noexcept{auto&s=*static_cast<State*>(p);return s.context&&s.self==t;}
 static bool ReadMember(void*,void*m,bool,uint32_t*f,void**c)noexcept{auto& member=*static_cast<Member*>(m);*f=member.flags;*c=member.declaring;return true;}
 static bool ObjectClass(void*,void*o,void**c)noexcept{*c=static_cast<Object*>(o)->klass;return true;}
@@ -16,10 +16,11 @@ static bool Normalize(void*p,void*,void*c,void*,void**n)noexcept{auto&s=*static_
 static bool Related(Class*expected,Class*actual)noexcept{for(auto*c=actual;c;c=c->parent){if(c==expected)return true;for(auto*i:c->interfaces)if(i&&(i==expected||Related(expected,i)))return true;}return false;}
 static bool Assignable(void*,void*d,void*r,bool*out)noexcept{*out=Related(static_cast<Class*>(d),static_cast<Class*>(r));return true;}
 static bool Special(void*,void*d,void*c,bool*out)noexcept{auto*caller=static_cast<Class*>(c);*out=caller->parent&&Related(static_cast<Class*>(d),caller->parent);for(auto*i:caller->interfaces)if(i&&Related(static_cast<Class*>(d),i))*out=true;return true;}
+static bool Handle(void*p,void*,void*,uint32_t*kind,void**caller)noexcept{*kind=static_cast<State*>(p)->handle_kind;*caller=nullptr;return true;}
 static void Raise(void*p,void*,const char*type,const char*)noexcept{auto&s=*static_cast<State*>(p);s.exception=type;++s.raised;}
 int main(){
  int thread=0;Class object,interface,ancestor{&object},before{&ancestor,{&interface}},after{&object},unrelated{&object},special_before{&ancestor},special_after{&object};
- Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Guard guard({&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise});assert(!guard.Proven()&&!guard.ValidateProof(guard.FreezeProof()));assert(Bind(guard));
+ Object receiver{&before};Member method{1,&ancestor},field{1,&ancestor};State state{&thread,&before,&before};Access access{&state,Current,ReadMember,ObjectClass,Normalize,Assignable,Special,nullptr,nullptr,Raise};access.handle=Handle;Guard guard(access);assert(!guard.Proven()&&!guard.ValidateProof(guard.FreezeProof()));assert(Bind(guard));
  uint64_t result=123;for(unsigned p=0;p<static_cast<unsigned>(Path::Count);++p){
   const auto path=static_cast<Path>(p);const bool is_field=path==Path::BytecodeRead||path==Path::BytecodeWrite||path==Path::JniRead||path==Path::JniWrite||path==Path::ReflectRead||path==Path::ReflectWrite||path==Path::HandleRead||path==Path::HandleWrite||path==Path::VarHandle;
   auto* member=is_field?&field:&method;Invocation call{path,&thread,member,&receiver,&special_before,&result,is_field};
@@ -46,5 +47,11 @@ int main(){
  // A relocating identity is reread from the current object/member and alias
  // leaves each time; no old Class pointer is remembered by Guard.
  Class moved_after=after;receiver.klass=&moved_after;state.current_class=&moved_after;method.declaring=&before;call.path=Path::JniMethod;assert(!guard.Check(call));
+ Member constructor{0x10001u,&before};state.exception=nullptr;result=123;
+ assert(!guard.CheckHandle(&thread,&receiver,&constructor,false,nullptr,nullptr,&result)&&result==123&&!state.exception);
+ constructor.flags=1;assert(guard.CheckHandle(&thread,&receiver,&constructor,false,nullptr,nullptr,&result)&&result==0&&!std::strcmp(state.exception,"Ljava/lang/IllegalStateException;"));
+ constructor.flags=0x10009u;assert(guard.CheckHandle(&thread,&receiver,&constructor,false,nullptr,nullptr,&result));constructor.flags=0x10001u;
+ assert(guard.CheckHandle(&thread,&receiver,&constructor,true,nullptr,nullptr,&result));
+ state.handle_kind=0;assert(guard.CheckHandle(&thread,&receiver,&constructor,false,nullptr,nullptr,&result)); // Ordinary invoke needs its real receiver frame.
  (void)unrelated;std::puts("Permanent receiver policy: all 16 paths require observed pass/reject, migrated old object loses superclass/interface, current aliases preserve own cached members, special caller/null/static/context/relocation PASS; native leaves explicit, live source entry proof pending");
 }

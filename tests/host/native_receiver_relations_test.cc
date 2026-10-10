@@ -3,8 +3,8 @@
 #include <cassert>
 #include <cstdio>
 using namespace artdcevm::receiver_guard;
-struct Class {Class* parent=nullptr;Class* obsolete=nullptr;void* loader=nullptr;const char* descriptor="Lpkg/Object;";uint32_t flags=0;std::array<Class*,4> interfaces{};std::array<Class*,4> direct{};bool readable=true;};
-static bool Read(void*,void*k,ClassView*v)noexcept{auto&c=*static_cast<Class*>(k);if(!c.readable)return false;*v={c.parent,c.loader,c.descriptor,c.flags,0,0};for(auto*i:c.interfaces)if(i)++v->interface_count;for(auto*i:c.direct)if(i)++v->direct_count;return true;}
+struct Class {Class* parent=nullptr;Class* obsolete=nullptr;void* loader=nullptr;const char* descriptor="Lpkg/Object;";uint32_t flags=0;std::array<Class*,4> interfaces{};std::array<Class*,4> direct{};bool readable=true;ClassKind kind=ClassKind::Ordinary;};
+static bool Read(void*,void*k,ClassView*v)noexcept{auto&c=*static_cast<Class*>(k);if(!c.readable)return false;*v={c.parent,c.loader,c.descriptor,c.flags,0,0,c.kind};for(auto*i:c.interfaces)if(i)++v->interface_count;for(auto*i:c.direct)if(i)++v->direct_count;return true;}
 static bool Iface(void*,void*k,size_t i,void**v)noexcept{*v=static_cast<Class*>(k)->interfaces.at(i);return *v;}
 static bool Direct(void*,void*k,size_t i,void**v)noexcept{*v=static_cast<Class*>(k)->direct.at(i);return *v;}
 static bool Old(void*,void*k,void**v)noexcept{*v=static_cast<Class*>(k)->obsolete;return true;}
@@ -28,6 +28,12 @@ int main(){Relations r({nullptr,Read,Iface,Direct,Old});int loader;Class object,
  Class malformed=iface;malformed.flags=0;current.interfaces[0]=&malformed;assert(!r.Assignable(&iface,&current,&match));current.interfaces[0]=nullptr;
  // Reread receiver hierarchy after relocation; no process alias table is used.
  Class relocated=current;assert(r.Normalize(&old,&relocated,&selected)&&selected==&relocated);assert(r.Assignable(selected,&relocated,&match)&&match);
- Class array;array.descriptor="[Lpkg/Target;";array.parent=&object;assert(r.Assignable(&object,&array,&match)&&match);
+ Class array;array.descriptor=nullptr;array.kind=ClassKind::Array;array.parent=&object;assert(r.Assignable(&object,&array,&match)&&match);
+ assert(r.Normalize(&object,&array,&selected)&&selected==&object);assert(r.Normalize(&array,&array,&selected)&&selected==&array);
+ array.obsolete=&old;assert(!r.Normalize(&array,&array,&selected));array.obsolete=nullptr;
+ Class proxy;proxy.kind=ClassKind::Proxy;proxy.descriptor=nullptr;proxy.parent=&object;proxy.interfaces[0]=&iface;proxy.direct[0]=&iface;
+ assert(r.Normalize(&proxy,&proxy,&selected)&&selected==&proxy);assert(r.Assignable(&iface,&proxy,&match)&&match);assert(r.Special(&iface,&proxy,&match)&&match);
+ proxy.kind=static_cast<ClassKind>(9);assert(!r.Normalize(&proxy,&proxy,&selected));proxy.kind=ClassKind::Proxy;
+ proxy.obsolete=&old;assert(!r.Normalize(&proxy,&proxy,&selected));proxy.obsolete=nullptr;proxy.descriptor="Lfake/Proxy;";assert(!r.Assignable(&iface,&proxy,&match));
  std::puts("Native receiver relations: retained obsolete chain, removed ancestor/interface, strict direct special interface, cyclic/truncated/foreign metadata, relocation and array Object relation PASS");
 }

@@ -78,6 +78,27 @@ class Reader {
       Fail("A class definition must use a class descriptor");
     return {descriptor.data(), U32(def + 4)};
   }
+  MappedDexDirectInterfaces ReadDirectInterfaces() {
+    Initialize();
+    const size_t def=Item(Table(96,32),class_def_index_);
+    if(TypeView(U32(def)).front()!='L')Fail("Invalid interface owner ClassDef type");
+    const uint32_t offset=U32(def+12);
+    if(!offset)return {};
+    if(offset%4)Fail("Unaligned direct interface type list");
+    const uint32_t count=DataU32(offset);
+    DataRange(size_t{offset}+4,size_t{count}*2);
+    for(uint32_t i=0;i<count;++i){const auto descriptor=TypeView(DataU16(size_t{offset}+4+size_t{i}*2));
+      if(descriptor.front()!='L')Fail("Invalid direct interface descriptor");
+      for(uint32_t j=0;j<i;++j)if(TypeView(DataU16(size_t{offset}+4+size_t{j}*2))==descriptor)Fail("Duplicate direct interface descriptor");
+    }
+    return {count};
+  }
+  const char* ReadDirectInterfaceAt(uint32_t index) {
+    const auto interfaces=ReadDirectInterfaces();
+    if(index>=interfaces.count)Fail("Invalid direct interface index");
+    const uint32_t offset=U32(Item(Table(96,32),class_def_index_)+12);
+    return TypeView(DataU16(size_t{offset}+4+size_t{index}*2)).data();
+  }
   MappedDexFieldReference ReadFieldReference(uint32_t index) {
     Initialize();
     const size_t item = Item(fields_, index);
@@ -552,6 +573,17 @@ bool ReadMappedDexClassIdentity(const MappedDexMetadata& view,
     *error = failure.what();
     return false;
   }
+}
+
+bool ReadMappedDexDirectInterfaces(const MappedDexMetadata&view,MappedDexDirectInterfaces*out,std::string*error){
+  if(!out||!error)return false;
+  try{const auto result=Reader(view).ReadDirectInterfaces();*out=result;error->clear();return true;}
+  catch(const std::bad_alloc&){throw;}catch(const std::exception&failure){*error=failure.what();return false;}
+}
+bool ReadMappedDexDirectInterfaceAt(const MappedDexMetadata&view,uint32_t index,const char**out,std::string*error){
+  if(!out||!error)return false;
+  try{const auto result=Reader(view).ReadDirectInterfaceAt(index);*out=result;error->clear();return true;}
+  catch(const std::bad_alloc&){throw;}catch(const std::exception&failure){*error=failure.what();return false;}
 }
 
 }

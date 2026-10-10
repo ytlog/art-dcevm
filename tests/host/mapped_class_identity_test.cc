@@ -35,6 +35,28 @@ static void Fixture(unsigned char* header, unsigned char* ids,
   std::strcpy(reinterpret_cast<char*>(data + 241), first);
   data[320] = 9; std::memcpy(data + 321, "LFixture;", 10);
 }
+static void VerifyInterfaces(MappedDexMetadata view,unsigned char*ids,unsigned char*data) {
+  const auto put_type=[&](size_t at,uint16_t value){std::memcpy(data+at,&value,2);};
+  Put(ids,172,360);Put(data,360,2);put_type(364,1);put_type(366,0);
+  std::string error;MappedDexDirectInterfaces interfaces;
+  forbid_allocation=true;
+  assert(ReadMappedDexDirectInterfaces(view,&interfaces,&error)&&interfaces.count==2);
+  const char* descriptor=nullptr;
+  assert(ReadMappedDexDirectInterfaceAt(view,0,&descriptor,&error)&&!std::strcmp(descriptor,"LFixture;"));
+  assert(ReadMappedDexDirectInterfaceAt(view,1,&descriptor,&error)&&std::strstr(descriptor,"LongDefining"));
+  auto empty=view;empty.class_def_index=1;assert(ReadMappedDexDirectInterfaces(empty,&interfaces,&error)&&interfaces.count==0);
+  forbid_allocation=false;
+  descriptor="sentinel";assert(!ReadMappedDexDirectInterfaceAt(view,2,&descriptor,&error)&&!std::strcmp(descriptor,"sentinel"));
+  const auto reject=[&](MappedDexMetadata bad){interfaces.count=99;assert(!ReadMappedDexDirectInterfaces(bad,&interfaces,&error)&&interfaces.count==99);descriptor="sentinel";assert(!ReadMappedDexDirectInterfaceAt(bad,0,&descriptor,&error)&&!std::strcmp(descriptor,"sentinel"));};
+  auto bad=view;bad.class_def_index=2;reject(bad);
+  bad=view;bad.data_size=366;reject(bad);
+  Put(ids,172,361);reject(view);Put(ids,172,360);
+  Put(data,360,UINT32_MAX);reject(view);Put(data,360,2);
+  put_type(366,1);reject(view);put_type(366,0);
+  put_type(364,2);reject(view);put_type(364,1);
+  data[320]=1;std::memcpy(data+321,"I",2);reject(view);data[320]=9;std::memcpy(data+321,"LFixture;",10);
+  Put(ids,172,0);
+}
 static void Verify(const MappedDexMetadata& view) {
   std::string error; MappedDexClassIdentity identity;
   forbid_allocation = true;
@@ -55,7 +77,7 @@ static void Verify(const MappedDexMetadata& view) {
 }
 int main() {
   Bytes standard{}; Fixture(standard.data(), standard.data(), standard.data(), "dex\n035", 112);
-  MappedDexMetadata view{standard.data(), 512, standard.data(), 512, 0}; Verify(view);
+  MappedDexMetadata view{standard.data(), 512, standard.data(), 512, 0}; Verify(view);VerifyInterfaces(view,standard.data(),standard.data());
   // Flags/identity do not require allocating or parsing the unrelated complete
   // member set. Invalid member data still fails the separate full parser.
   Put(standard.data(), 184, UINT32_MAX);
@@ -72,10 +94,12 @@ int main() {
   Fixture(compact.data(), compact.data(), data.data(), "cdex001", 136);
   Put(compact.data(), 108, 0);
   Verify({compact.data(), 512, data.data(), 512, 0});
+  VerifyInterfaces({compact.data(),512,data.data(),512,0},compact.data(),data.data());
   Bytes container{}; auto* header = container.data() + 512;
   Fixture(header, container.data(), container.data(), "dex\n041", 120);
   Put(header, 104, 0); Put(header, 108, 0);
   Put(header, 112, 1024); Put(header, 116, 512);
   Verify({header, 512, container.data(), container.size(), 0});
+  VerifyInterfaces({header,512,container.data(),container.size(),0},container.data(),container.data());
   std::cout << "Bounded Standard/Compact/container ClassDef identity: no allocation, exact index/type/flags, unchanged output refusal, independent full-member parsing PASS\n";
 }

@@ -2,7 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::receiver_guard {
-struct ClassView {void* parent=nullptr;void* loader=nullptr;const char* descriptor=nullptr;uint32_t flags=0;size_t interface_count=0;size_t direct_count=0;};
+enum class ClassKind:uint8_t {Ordinary,Array,Proxy};
+struct ClassView {void* parent=nullptr;void* loader=nullptr;const char* descriptor=nullptr;uint32_t flags=0;size_t interface_count=0;size_t direct_count=0;ClassKind kind=ClassKind::Ordinary;};
 // Every callback reads live native roots under the actual calibrated mutator
 // scope. InterfaceAt reads the real complete IfTable, not DEX direct interfaces.
 // Obsolete is the named fixed Class::GetObsoleteClass carrier. Reads may not

@@ -69,6 +69,12 @@ struct MappedDexClassIdentity {
   uint32_t access = 0;
 };
 bool ReadMappedDexClassIdentity(const MappedDexMetadata&, MappedDexClassIdentity*, std::string*);
+struct MappedDexDirectInterfaces {uint32_t count=0;};
+// Exact selected ClassDef direct interfaces; validates the complete bounded
+// type-list, class descriptors and duplicates without healthy-path allocation.
+// InterfaceAt uses the same immutable map; malformed input preserves output.
+bool ReadMappedDexDirectInterfaces(const MappedDexMetadata&,MappedDexDirectInterfaces*,std::string*);
+bool ReadMappedDexDirectInterfaceAt(const MappedDexMetadata&,uint32_t,const char**,std::string*);
 // Borrowed FieldId identity from an immutable, bounded DEX mapping.
 struct MappedDexFieldReference {
   const char* declaring_class = nullptr;

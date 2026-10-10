@@ -159,7 +159,23 @@ int main(int argc,char** argv){
  CheckGraphExceptionStops(metadata);
  std::vector<void*> observed_interfaces;assert(native_interface_graph::Read(metadata,public_list,&observed_interfaces,&error)&&observed_interfaces.size()==3);
  const uint32_t positive_table=static_cast<class_metadata::Class17*>(public_list)->iftable;
+ modern_field_metadata::ReadContext interface_interval{&heap,[](void*raw,const void*p,size_t*out){auto&h=*static_cast<Heap*>(raw);const auto begin=uintptr_t(h.base),at=uintptr_t(p);if(!out||at<begin||at>=begin+h.used)return false;*out=begin+h.used-at;return true;}};
+ forbid_provider_allocation=true;
+ native_interface_graph::View interface_view;assert(native_interface_graph::ReadView(metadata,public_list,&interface_view,nullptr,&interface_interval)&&interface_view.Count()==3);
+ for(size_t i=0;i<3;++i){void*selected=nullptr;assert(native_interface_graph::InterfaceAt(metadata,interface_view,i,&selected,&interface_interval)&&selected==observed_interfaces[i]);}
+ forbid_provider_allocation=false;
+ for(size_t i=0;i<3;++i){void*selected=nullptr;assert(native_interface_graph::InterfaceAt(metadata,interface_view,i,&selected)&&selected==observed_interfaces[i]);}
+ void*selected=reinterpret_cast<void*>(uintptr_t(0x1234));assert(!native_interface_graph::InterfaceAt(metadata,interface_view,3,&selected)&&selected==reinterpret_cast<void*>(uintptr_t(0x1234)));
+ modern_field_metadata::ReadContext no_view{&metadata,[](void*,const void*,size_t*){return false;}};
+ assert(!native_interface_graph::InterfaceAt(metadata,interface_view,0,&selected,&no_view)&&selected==reinterpret_cast<void*>(uintptr_t(0x1234)));
+ native_interface_graph::View failed_view=interface_view;assert(!native_interface_graph::ReadView(metadata,public_list,&failed_view,&error,&no_view)&&failed_view.Count()==3);
+ auto*live_table=reinterpret_cast<void*>(uintptr_t(positive_table));uint32_t table_class=0;std::memcpy(&table_class,live_table,4);
+ Put32(live_table,0,uint32_t(uintptr_t(old_class)));assert(!native_interface_graph::InterfaceAt(metadata,interface_view,0,&selected)&&selected==reinterpret_cast<void*>(uintptr_t(0x1234)));Put32(live_table,0,table_class);
+ Put32(live_table,8,4);assert(!native_interface_graph::InterfaceAt(metadata,interface_view,0,&selected));Put32(live_table,8,6);
+ uint32_t first_interface=0;std::memcpy(&first_interface,static_cast<char*>(live_table)+12,4);Put32(live_table,12,uint32_t(uintptr_t(old_class)));assert(!native_interface_graph::InterfaceAt(metadata,interface_view,0,&selected));Put32(live_table,12,first_interface);
+
  static_cast<class_metadata::Class17*>(public_list)->iftable=uint32_t(uintptr_t(IfTable({interface_a,interface_b}))); // inherited C omitted
+ assert(!native_interface_graph::InterfaceAt(metadata,interface_view,0,&selected));
  modern_field_metadata::FieldMetadata missing_closure;assert(missing_closure.Bind(hooks,&error));
  cal.metadata=&missing_closure;assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),calibrate,&cal)!=runnable_jni::Result::kSuccess&&!missing_closure.Calibrated());cal.metadata=&metadata;
  static_cast<class_metadata::Class17*>(public_list)->iftable=positive_table;

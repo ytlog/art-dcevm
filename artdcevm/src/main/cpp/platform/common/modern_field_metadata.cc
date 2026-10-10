@@ -55,8 +55,14 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   mark_=mark;root_=root;bound_=true;
   if(error)error->clear();return true;
 }
-bool FieldMetadata::DefiningClassFlags(void* klass,uint32_t* flags,std::string* error,const ReadContext* context)const {
-  if(!Calibrated()||!flags)return Fail(error,"Defining Class flags require calibrated metadata");
+bool FieldMetadata::DefiningClassFlags(void*klass,uint32_t*flags,std::string*error,const ReadContext*context)const {
+  if(!flags)return Fail(error,"Defining Class flags require an output");
+  evolution::MappedDexMetadata mapping;evolution::MappedDexClassIdentity identity;
+  if(!DefiningClassMapping(klass,&mapping,&identity,error,context))return false;
+  *flags=identity.access;return true;
+}
+bool FieldMetadata::DefiningClassMapping(void* klass,evolution::MappedDexMetadata* output,evolution::MappedDexClassIdentity* output_identity,std::string* error,const ReadContext* context)const {
+  if(!Calibrated()||!output||!output_identity)return Fail(error,"Defining Class mapping requires calibrated metadata and outputs");
   const auto& layout=model_==Model::kSplit?class_metadata::kLegacy:class_metadata::k17;
   size_t extent=0;class_metadata::Identity identity;
   if(!Extent(context,klass,&extent)||!class_metadata::ReadIdentity(layout,klass,extent,&identity)||identity.class_def_index<0)
@@ -80,7 +86,7 @@ bool FieldMetadata::DefiningClassFlags(void* klass,uint32_t* flags,std::string* 
   std::string diagnostic;evolution::MappedDexClassIdentity definition;if(!evolution::ReadMappedDexClassIdentity(mapping,&definition,error?error:&diagnostic))return false;
   const char* descriptor=nullptr;if(!Descriptor(klass,model_,&descriptor,error,context)||!descriptor||std::strcmp(definition.descriptor,descriptor))
     return Fail(error,"Defining ClassDef differs from exact native Class descriptor");
-  *flags=definition.access;return true;
+  *output=mapping;*output_identity=definition;return true;
 }
 bool FieldMetadata::Text(void* field,Model model,const char** name,const char** descriptor,std::string* error,const ReadContext* context)const {
   // Fixed legacy Class/DexCache/DexFile declarations, used only after the

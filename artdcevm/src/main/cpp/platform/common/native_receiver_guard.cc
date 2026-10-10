@@ -50,7 +50,11 @@ bool Guard::CheckHandle(void*self,void*object,void*member,bool field,const void*
  if(kind>=5&&kind<=7)return field?fail():false;
  uint32_t flags=0;void*declaring=nullptr;
  if(!access_.member||!access_.member(access_.owner,member,field,&flags,&declaring)||!declaring)return fail();
- const bool static_kind=kind==3||kind==10||kind==11;
+ // Invoke-constructor has no pre-existing receiver operand. Its source
+ // allocation entry performs constructor retirement/initialization checks;
+ // the resulting object's ordinary member entry retains receiver checking.
+ if(kind==3){if(field||(flags&8u)||!(flags&0x10000u))return fail();return false;}
+ const bool static_kind=kind==10||kind==11;
  if((kind>=8)!=field||static_kind!=bool(flags&8u))return fail();
  if(static_kind)return false;
  const Path path=field?(kind==8?Path::HandleRead:Path::HandleWrite):(kind==1?Path::HandleSpecial:Path::HandleMethod);

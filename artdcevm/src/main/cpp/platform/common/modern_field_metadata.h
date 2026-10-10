@@ -1,6 +1,7 @@
 #pragma once
 #include "api/hook_engine.h"
 #include "platform/common/field_copy.h"
+#include "evolution/class_schema.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/field_array_view.h"
 #include <string>
@@ -51,6 +52,8 @@ class FieldMetadata {
       const char* proxy_name,const char* negative_proxy_name,
       field_copy::CopyClassView*,std::string*,const ReadContext* =nullptr)const;
   bool DefiningClassFlags(void*,uint32_t*,std::string*,const ReadContext* =nullptr)const;
+  // Same defining ClassDef/native descriptor proof, borrowed immutable map.
+  bool DefiningClassMapping(void*,evolution::MappedDexMetadata*,evolution::MappedDexClassIdentity*,std::string*,const ReadContext* =nullptr)const;
   bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext* =nullptr)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal,const ReadContext* =nullptr) const;
   void* FieldDeclaringClass(void* field)const;
