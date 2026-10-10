@@ -140,7 +140,7 @@ class MatrixTests(unittest.TestCase):
         apk.write_bytes(b'a'); test.write_bytes(b'b')
         artifacts = {'app': {'path': str(apk), 'sha256': matrix.digest(apk)},
                      'test': {'path': str(test), 'sha256': matrix.digest(test)}}
-        args = argparse.Namespace(adb='unused', install=True, timeout=10, other_scope='common-owned',
+        args = argparse.Namespace(adb='unused', install=True, timeout=10, other_scope='common-owned', scope=None,
                                   self_instrumentation_serial=[matrix.USB_SELF_ONLY])
         barrier = threading.Barrier(2)
         calls = {'remote': [], matrix.USB_SELF_ONLY: []}
@@ -161,10 +161,31 @@ class MatrixTests(unittest.TestCase):
         self.assertTrue(all('--self-instrumentation' in command and '--test-apk' not in command
                             for _, command in calls[matrix.USB_SELF_ONLY]))
 
+    def test_api33_common_route_override_reaches_both_case_runners(self):
+        output = self.root / 'common-api33'
+        output.mkdir()
+        args = argparse.Namespace(adb='unused', install=False, timeout=10, other_scope='full',
+                                  scope='common-owned', self_instrumentation_serial=[matrix.USB_SELF_ONLY])
+        apk = self.root / 'common.apk'
+        apk.write_bytes(b'frozen ARM64 app fixture')
+        artifacts = {'app': {'path': str(apk), 'sha256': matrix.digest(apk)}}
+        with patch.object(matrix, 'validate_device', return_value={}), patch.object(matrix, 'run_child',
+                return_value={'passed': True, 'runId': 'current', 'result': {}}) as child:
+            report = matrix.run_device(33, matrix.USB_SELF_ONLY, args,
+                                       {'required': self.required, 'artifacts': artifacts}, output)
+        self.assertTrue(report['passed'])
+        self.assertEqual(report['scope'], 'common-owned')
+        self.assertEqual(child.call_count, 2)
+        for call in child.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[command.index('--scope') + 1], 'common-owned')
+            self.assertIn('--self-instrumentation', command)
+            self.assertNotIn('--test-apk', command)
+
     def test_timeout_stops_device_queue_without_retry(self):
         output = self.root / 'timed'
         output.mkdir()
-        args = argparse.Namespace(adb='unused', install=False, timeout=10, other_scope='common-owned', self_instrumentation_serial=[])
+        args = argparse.Namespace(adb='unused', install=False, timeout=10, other_scope='common-owned', scope=None, self_instrumentation_serial=[])
         with patch.object(matrix, 'validate_device', return_value={}), patch.object(matrix, 'run_child', return_value={
                 'passed': False, 'error': 'failed', 'result': {'instrumentationTimedOut': True}}) as child:
             report = matrix.run_device(31, 'remote', args, {'required': self.required, 'artifacts': self.artifacts}, output)

@@ -171,7 +171,7 @@ def run_device(api, serial, args, manifest, output):
     directory.mkdir()
     artifacts = manifest['artifacts']
     self_route = serial in args.self_instrumentation_serial
-    scope = 'full' if api == 33 else args.other_scope
+    scope = args.scope or ('full' if api == 33 else args.other_scope)
     required = manifest['required']
     report = {'api': api, 'serial': serial, 'scope': scope, 'required': required,
               'completed': [], 'errors': [], 'passed': False, 'artifacts': artifacts}
@@ -223,6 +223,8 @@ def parser():
     p.add_argument('--schema-case', choices=SCHEMA_CASES, action='append')
     p.add_argument('--permission-case', choices=PERMISSION_CASES, action='append')
     p.add_argument('--other-scope', choices=('full', 'common-owned'), default='common-owned')
+    p.add_argument('--scope', choices=('full', 'common-owned'),
+                   help='Override every device scope, including API 33, to exercise the same runtime route')
     p.add_argument('--timeout', type=int, default=300)
     return p
 
