@@ -170,7 +170,7 @@ assert(pool.Write(batch.record.new_root,new_class));p.new_class=new_class;assert
   // Whole typed engine -> real SourceMapper -> actual source Pool/Class/DEX
   // reader/barrier integration. Public native ID boundary values are fixtures.
   auto populate=[&](void*raw_cache){auto*c=static_cast<type_cache::Dual*>(raw_cache);
-   auto*t=static_cast<type_cache::Pair*>(heap.New(1024*8));t[type_index]={uint32_t(uintptr_t(old_class)),type_index};c->types=uintptr_t(t);
+   auto*t=static_cast<type_cache::Pair*>(heap.New(1024*8));t[0].index=1;t[type_index]={uint32_t(uintptr_t(old_class)),type_index};c->types=uintptr_t(t);
    auto*full=static_cast<uint32_t*>(heap.New(source.counts.types*4));full[type_index]=uint32_t(uintptr_t(old_class));c->types_array=uintptr_t(full);
    auto*f=static_cast<method_cache::Pair*>(heap.New(1024*16));f[0]={uintptr_t(old_fields[0]),0};c->fields=uintptr_t(f);
    auto*mf=static_cast<method_cache::Pair*>(heap.New(1024*16));mf[0]={uintptr_t(old_method),0};c->methods=uintptr_t(mf);
@@ -178,8 +178,32 @@ assert(pool.Write(batch.record.new_root,new_class));p.new_class=new_class;assert
    auto*ma=static_cast<std::atomic<uintptr_t>*>(heap.New(source.counts.methods*8));ma[0]=uintptr_t(old_method);c->methods_array=uintptr_t(ma);
   };
   populate(published);populate(cache);void*calibration_root=pool.Add(published,&error);
+  // Independent public/native fixture boundary roles; the production owner
+  // still validates every occupied entry through the real current Pool reader.
+  struct Roles final:native_hierarchy_cache::CurrentRoles {
+   void* cache_root;void* cache_value;void* class_root;native_hierarchy_cache::Counts counts;
+   uint32_t type_index;void* field;void* method;
+   Roles(void*c,void*v,void*k,native_hierarchy_cache::Counts n,uint32_t t,void*f,void*m)
+    :cache_root(c),cache_value(v),class_root(k),counts(n),type_index(t),field(f),method(m){}
+   bool Cache(const native_hierarchy_cache::SourceMapper&m,void*r,native_hierarchy_cache::Counts n)const noexcept override{
+    return m.CacheReadContext()&&r==cache_root&&m.Get(r)==cache_value&&m.Get(class_root)&&n.types==counts.types&&n.fields==counts.fields&&n.methods==counts.methods;
+   }
+   bool Type(const native_hierarchy_cache::SourceMapper&m,uint32_t i,void*p)const noexcept override{return i==type_index&&p==m.Get(class_root);}
+   bool Field(const native_hierarchy_cache::SourceMapper&,uint32_t i,void*p)const noexcept override{return i==0&&p==field;}
+   bool Method(const native_hierarchy_cache::SourceMapper&,uint32_t i,void*p)const noexcept override{return i==0&&p==method;}
+  } roles(calibration_root,published,batch.record.old_root,source.counts,type_index,old_fields[0],old_method);
+  struct Inspection {Mapper& mapper;Reader& reader;modern_field_metadata::ReadContext& maps;bool deny=false;} inspection{mapper,reader,stopped_maps};
+  assert(mapper.BindSemanticInspection(&inspection,[](void*raw,void*payload,native_hierarchy_cache::SemanticOperation op)noexcept{
+   auto&s=*static_cast<Inspection*>(raw);if(s.deny)return false;
+   const auto saved_state=Read32(current);Put32(current,0,92u<<24);Stop(nullptr,"fixture-cache-roles",true);
+   const bool entered=s.mapper.EnterSemanticInspection(s.reader,s.maps);
+   const bool accepted=entered&&op(payload,s.mapper);
+   if(entered)s.mapper.LeaveSemanticInspection();Resume(nullptr);Put32(current,0,saved_state);return accepted;
+  }));
   native_hierarchy_cache::Owner incoming;native_hierarchy_cache::Witness witness{type_index,0,0,batch.record.old_root,old_fields[0],old_method};
+  witness.current_roles=&roles;
   assert(incoming.Calibrate(mapper,calibration_root,112,source.counts,witness,&error));Composite composite(mapper,incoming);
+  inspection.deny=true;assert(!composite.VerifyStaged(graph,{},&error));assert(error.find("inspection refused before callback")!=std::string::npos);inspection.deny=false;
   assert(!composite.VerifyStaged(graph,{},&error));assert(composite.Prepare(graph,p,&error));assert(composite.VerifyPrepared(graph,p,&error));assert(composite.Verify(graph,plan));
   assert(reinterpret_cast<type_cache::Pair*>(static_cast<type_cache::Dual*>(static_cast<void*>(cache))->types)[type_index].object==uint32_t(uintptr_t(moved)));
   auto*published_types=reinterpret_cast<type_cache::Pair*>(static_cast<type_cache::Dual*>(published)->types);assert(published_types[type_index].object==uint32_t(uintptr_t(old_class)));

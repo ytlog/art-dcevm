@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/native_hierarchy_session.h"
+#include "platform/common/source_cache_public_roles.h"
 #include "platform/common/native_hierarchy_receiver.h"
 #include "platform/common/native_class_lookup.h"
 #include "platform/common/native_required_cleanup.h"
@@ -12,6 +13,7 @@ namespace artdcevm::native_schema_run_state {
 // Public independently warmed resolved entries. Indices come from the installed
 // DEX/public member oracle, never the candidate DexCache representation.
 struct CacheCalibration {
+ const source_cache_public_roles::Public* public_roles=nullptr;
  jobject strong_cache=nullptr,strong_expected_class=nullptr;
  size_t extent=0;
  native_hierarchy_cache::Counts counts{};

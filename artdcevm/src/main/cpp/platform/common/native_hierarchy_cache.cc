@@ -35,11 +35,6 @@ bool NativeWitness(const native_cache::View& v,PairFormat fmt,uint32_t index,voi
  }
  return !v.full || (index<v.full_count && v.full[index].load(std::memory_order_relaxed)==reinterpret_cast<uintptr_t>(expected));
 }
-bool SemanticTypeWitness(const type_cache::View& v,uint32_t index,uint32_t expected){
- if(!expected||(!v.pairs&&!v.full))return false;
- if(v.full)return index<v.full_count&&__atomic_load_n(v.full+index,__ATOMIC_RELAXED)==expected;
- type_cache::Pair p;__atomic_load(v.pairs+index%1024,&p,__ATOMIC_ACQUIRE);return p.index==index&&p.object==expected;
-}
 bool TypeWitness(const type_cache::View& v,uint32_t index,uint32_t expected){
  if(!expected || !v.pairs || index%1024>=v.pair_count)return false;
  type_cache::Pair p;__atomic_load(v.pairs+index%1024,&p,__ATOMIC_ACQUIRE);
@@ -72,6 +67,58 @@ void ObserveType(char*text,size_t capacity,size_t*used,const type_cache::View&v,
  if(v.full&&index<v.full_count){full=__atomic_load_n(v.full+index,__ATOMIC_RELAXED);has_full=true;}
  Append(text,capacity,used," T{i=%u s=%u p=%d key=%u obj=%x e=%x full=%d:%x}",
   index,index%1024,found,pair.index,pair.object,expected,has_full,full);
+}
+bool ValidateTypes(const SourceMapper& m,const CurrentRoles& roles,const Source& source,
+ const type_cache::View& t,const native_cache_semantic::Service* semantic,char* detail,size_t capacity){
+ size_t used=0;void* cache=m.Get(source.cache_root);
+ if((t.pairs?t.pair_count>1024:t.pair_count!=0)||
+    (t.full?t.full_count!=source.counts.types:t.full_count!=0)){
+  Append(detail,capacity,&used,"Cache current type array bounds refused");return false;
+ }
+   for(uint32_t position=0;position<t.pair_count;++position){
+    type_cache::Pair pair;__atomic_load(t.pairs+position,&pair,__ATOMIC_ACQUIRE);
+    if(!pair.object){if(pair.index!=(position==0?1u:0u)){Append(detail,capacity,&used,"Cache semantic empty type pair invalid: s=%u key=%u",position,pair.index);return false;}continue;}
+    if(pair.index>=source.counts.types||pair.index%1024!=position||
+       !roles.Type(m,pair.index,reinterpret_cast<void*>(uintptr_t(pair.object)))){
+     Append(detail,capacity,&used,"Cache semantic occupied type pair role refused: s=%u key=%u obj=%x",position,pair.index,pair.object);return false;
+    }
+    const auto visible=t.full?__atomic_load_n(t.full+pair.index,__ATOMIC_RELAXED):pair.object;
+    if(semantic&&!semantic->CheckTypeEntry(cache,pair.index,reinterpret_cast<void*>(uintptr_t(visible)))){
+     Append(detail,capacity,&used,"Cache semantic named type entry differs: s=%u key=%u",position,pair.index);return false;
+    }
+   }
+   for(uint32_t index=0;index<t.full_count;++index){
+    const auto value=__atomic_load_n(t.full+index,__ATOMIC_RELAXED);if(!value)continue;
+    if(index>=source.counts.types||!roles.Type(m,index,reinterpret_cast<void*>(uintptr_t(value)))||
+       (semantic&&!semantic->CheckTypeEntry(cache,index,reinterpret_cast<void*>(uintptr_t(value))))){
+     Append(detail,capacity,&used,"Cache semantic full type role refused: i=%u obj=%x",index,value);return false;
+    }
+   }
+ return true;
+}
+bool ValidateNative(const SourceMapper& m,const CurrentRoles& roles,const native_cache::View& view,
+ PairFormat format,uint32_t count,bool field,char* detail,size_t capacity){
+ size_t used=0;
+ if((view.pairs?view.pair_count>1024:view.pair_count!=0)||
+    (view.full?view.full_count!=count:view.full_count!=0)){
+  Append(detail,capacity,&used,"Cache current native array bounds refused");return false;
+ }
+ const auto role=[&](uint32_t index,void* member){return field?roles.Field(m,index,member):roles.Method(m,index,member);};
+ for(uint32_t slot=0;slot<view.pair_count;++slot){
+  uint64_t key=0;uintptr_t member=0;
+  if(format==PairFormat::Ordinary){method_cache::Pair pair;__atomic_load(static_cast<method_cache::Pair*>(view.pairs)+slot,&pair,__ATOMIC_ACQUIRE);key=pair.index;member=pair.method;}
+  else{const auto& pair=static_cast<const method_cache::SequencePair*>(view.pairs)[slot];
+   const auto before=pair.key.load(std::memory_order_acquire);member=pair.method.load(std::memory_order_acquire);
+   if((before&method_cache::kSequenceLock)||before!=pair.key.load(std::memory_order_relaxed)){Append(detail,capacity,&used,"Cache current native sequence changed or locked");return false;}
+   key=before&~method_cache::kSequenceMask;
+  }
+  if(!member){if(key!=(slot==0?1u:0u)){Append(detail,capacity,&used,"Cache current empty native pair invalid");return false;}continue;}
+  if(key>=count||key%1024!=slot||!role(uint32_t(key),reinterpret_cast<void*>(member))){
+   Append(detail,capacity,&used,"Cache current occupied native %s pair role refused: s=%u key=%llu",field?"field":"method",slot,static_cast<unsigned long long>(key));return false;
+  }
+ }
+ for(uint32_t index=0;index<view.full_count;++index){const auto value=view.full[index].load(std::memory_order_relaxed);if(value&&!role(index,reinterpret_cast<void*>(value))){Append(detail,capacity,&used,"Cache current full native %s role refused: i=%u",field?"field":"method",index);return false;}}
+ return true;
 }
 bool Same(const type_cache::View&a,const type_cache::View&b){return a.pairs==b.pairs&&a.pair_count==b.pair_count&&a.full==b.full&&a.full_count==b.full_count;}
 bool Same(const native_cache::View&a,const native_cache::View&b){return a.pairs==b.pairs&&a.pair_count==b.pair_count&&a.full==b.full&&a.full_count==b.full_count;}
@@ -174,7 +221,7 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
 }
 bool Owner::Witnesses(std::string* error)const noexcept{
  if(!mapper_)return Fail(error,"Cache witness owner not calibrated");
- if(semantic_){
+ {
   // The stopped callback only writes bounded stack evidence. Construct the
   // caller's diagnostic after InspectSemantic releases its exclusive window.
   struct Inspection {const Owner* owner;bool entered=false;char detail[384]{};};
@@ -182,16 +229,26 @@ bool Owner::Witnesses(std::string* error)const noexcept{
   const bool accepted=mapper_->InspectSemantic(&call,[](void* raw,const SourceMapper& m) noexcept {
    auto& c=*static_cast<Inspection*>(raw);c.entered=true;const auto& o=*c.owner;
    type_cache::View t;native_cache::View f,methods;size_t used=0;
-   const auto value=uintptr_t(m.Get(o.witness_.expected_class));
-   if(!value||value>UINT32_MAX){Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness root invalid: e=%llx",static_cast<unsigned long long>(value));return false;}
-   if(!o.Views(o.calibration_,&t,&f,&methods)){Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness type views refused");return false;}
-   if(!SemanticTypeWitness(t,o.witness_.type_index,uint32_t(value))){
-    Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness type mismatch");
-    ObserveType(c.detail,sizeof(c.detail),&used,t,o.witness_.type_index,uint32_t(value));return false;
+   const auto* roles=o.witness_.current_roles;
+   if(!roles||!roles->Cache(m,o.calibration_.cache_root,o.calibration_.counts)){
+    Append(c.detail,sizeof(c.detail),&used,"Cache semantic current immutable/public role owner refused");return false;
    }
-   if(!o.semantic_->CheckWitness(m.Get(o.calibration_.cache_root),o.calibration_.counts.fields,o.calibration_.counts.methods,
-      o.witness_.field_index,o.witness_.native_field,o.witness_.method_index,o.witness_.native_method)){
-    Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness native field/method relation refused: F=%u M=%u",o.witness_.field_index,o.witness_.method_index);return false;
+   if(!o.Views(o.calibration_,&t,&f,&methods)){Append(c.detail,sizeof(c.detail),&used,"Cache semantic witness type views refused");return false;}
+   void* cache=m.Get(o.calibration_.cache_root);
+   if(!ValidateTypes(m,*roles,o.calibration_,t,o.semantic_,c.detail,sizeof(c.detail)))return false;
+   if(!o.semantic_)return
+    ValidateNative(m,*roles,f,o.format_,o.calibration_.counts.fields,true,c.detail,sizeof(c.detail))&&
+    ValidateNative(m,*roles,methods,o.format_,o.calibration_.counts.methods,false,c.detail,sizeof(c.detail));
+   struct Members {const CurrentRoles* roles;const SourceMapper* mapper;Inspection* inspection;};
+   Members members{roles,&m,&c};
+   if(!o.semantic_->CheckRoles(cache,o.calibration_.counts.fields,o.calibration_.counts.methods,&members,
+      [](void* raw,bool field,uint32_t index,void* member) noexcept {
+       auto& a=*static_cast<Members*>(raw);const bool accepted=field?a.roles->Field(*a.mapper,index,member):a.roles->Method(*a.mapper,index,member);
+       if(!accepted){size_t used=0;Append(a.inspection->detail,sizeof(a.inspection->detail),&used,
+          "Cache semantic occupied native %s role refused: i=%u",field?"field":"method",index);}
+       return accepted;
+      })){
+    if(!c.detail[0])Append(c.detail,sizeof(c.detail),&used,"Cache semantic native visitor provenance refused");return false;
    }
    return true;
   });
@@ -199,13 +256,6 @@ bool Owner::Witnesses(std::string* error)const noexcept{
   return Fail(error,!call.entered?"Cache semantic witness inspection refused before callback":
     (call.detail[0]?call.detail:"Cache semantic witness inspection refused after callback"));
  }
- type_cache::View t;native_cache::View f,m;const auto value=reinterpret_cast<uintptr_t>(mapper_->Get(witness_.expected_class));
- if(!value||value>UINT32_MAX)return Fail(error,"Cache witness root invalid");
- if(!Views(calibration_,&t,&f,&m))return Fail(error,"Cache witness views refused");
- if(!TypeWitness(t,witness_.type_index,static_cast<uint32_t>(value)))return Fail(error,"Cache witness type mismatch");
- if(!NativeWitness(f,format_,witness_.field_index,witness_.native_field))return Fail(error,"Cache witness field mismatch");
- if(!NativeWitness(m,format_,witness_.method_index,witness_.native_method))return Fail(error,"Cache witness method mismatch");
- return true;
 }
  bool Owner::Refresh() noexcept{
  if(!mapper_)return false;

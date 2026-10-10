@@ -39,6 +39,11 @@ class Service {
   bool Calibrated()const noexcept{return calibrated_;}
   bool CheckWitness(void* cache,uint32_t fields,uint32_t methods,uint32_t field_index,
       void* expected_field,uint32_t method_index,void* expected_method)const noexcept;
+  using MemberRole=bool(*)(void*,bool field,uint32_t index,void* member) noexcept;
+  // Validate every original visitor entry against independent immutable public
+  // roles. Empty/evicted witnesses are permitted; unknown occupied roles refuse.
+  bool CheckRoles(void* cache,uint32_t fields,uint32_t methods,void* owner,MemberRole)const noexcept;
+  bool CheckTypeEntry(void* cache,uint32_t index,void* expected)const noexcept;
   bool Readonly(void* cache,uint32_t fields,uint32_t methods)const noexcept;
   bool Clear(void* cache,uint32_t fields,uint32_t methods)const noexcept;
   bool Cleared(void* cache,uint32_t fields,uint32_t methods)const noexcept;

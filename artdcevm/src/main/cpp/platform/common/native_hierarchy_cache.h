@@ -7,12 +7,24 @@ namespace artdcevm::native_hierarchy_cache {
 using Root=void*;
 enum class PairFormat { Ordinary, Sequence };
 struct Counts { uint32_t types=0,fields=0,methods=0; };
+class SourceMapper;
+// Immutable DEX roles resolved by public Java/JNI before staging. Implementors
+// read only current owned roots through the supplied stopped source mapper.
+class CurrentRoles {
+ public:
+ virtual ~CurrentRoles()=default;
+ virtual bool Cache(const SourceMapper&,Root,Counts)const noexcept=0;
+ virtual bool Type(const SourceMapper&,uint32_t,void*)const noexcept=0;
+ virtual bool Field(const SourceMapper&,uint32_t,void*)const noexcept=0;
+ virtual bool Method(const SourceMapper&,uint32_t,void*)const noexcept=0;
+};
 struct Witness {
  uint32_t type_index=0,field_index=0,method_index=0;
  Root expected_class=nullptr;
  void* native_field=nullptr; void* native_method=nullptr;
  bool has_public_storage=false;uintptr_t public_types=0,public_fields=0,public_methods=0;
  bool semantic_resolution_proved=false;uintptr_t public_types_array=0;
+ const CurrentRoles* current_roles=nullptr;
 };
 // Identity and counts come from the allocator's immutable incoming StandardDEX,
 // not from the cache layout being calibrated. token identifies that source

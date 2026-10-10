@@ -23,7 +23,7 @@ for i in range(struct.unpack_from('<I',b,64)[0]):
 assert base_index is not None
 struct.pack_into('<I',b,struct.unpack_from('<I',b,100)[0]+8,base_index);b[12:32]=hashlib.sha1(b[32:]).digest();struct.pack_into('<I',b,8,zlib.adler32(b[12:]));after.write_bytes(b)
 boot_dex=write_boot_fixture(out/'matched-boot')
-setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  // Additional actual owners',1)[1].split('  auto begin=',1)[0]
+setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  // Additional actual owners',1)[1].split('  if(!cache_role_fixture.Prepare(',1)[0]
 (out/'aggregate_owner_setup.inc').write_text(('  // Additional actual owners'+setup).replace('OwnerHooks owner_hooks;','BootHooks owner_hooks;').replace('whole_process_frames::Service scanner;','boot_frame_binding=true;whole_process_frames::Service scanner;').replace('BindGeometryOnly(code_info_view::SourceFamily::kAndroid13','Bind(code_info_view::SourceFamily::kAndroid14'))
 # A moving-GC leaf must also update the actual Field/Method GcRoot<Class>
 # members, not just the native TLS handles. This is the named lookup boundary.

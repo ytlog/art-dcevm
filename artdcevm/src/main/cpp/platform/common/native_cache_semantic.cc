@@ -21,6 +21,7 @@ class Visitor final:public art::ReflectiveValueVisitor {
     Observe(p,s,kField,fields_);return clear_&&valid_?nullptr:p;
   }
   void Expect(uint32_t f,void* field,uint32_t m,void* method){fi_=f;fp_=field;mi_=m;mp_=method;}
+  void Roles(void* owner,Service::MemberRole role,Service::Entry method){role_owner_=owner;role_=role;method_=method;}
   bool Valid()const{return valid_;}
   bool Witness()const{return valid_&&method_hits_&&(!field_count_||field_hits_);}
   bool Empty()const{return valid_&&!field_count_&&!method_count_;}
@@ -28,10 +29,18 @@ class Visitor final:public art::ReflectiveValueVisitor {
   void Observe(void* p,const art::ReflectionSourceInfo& info,uint32_t kind,uint32_t bound){
     SourcePrefix source{};std::memcpy(&source,&info,sizeof(source));
     if(source.kind!=kind||source.cache!=uintptr_t(cache_)||source.index>=bound||!p){valid_=false;return;}
+    if(role_&&!role_(role_owner_,kind==kField,uint32_t(source.index),p)){valid_=false;return;}
+    if(role_&&kind==kMethod&&method_){
+      // A full array may hide an older pair (including with a null full slot).
+      // Any current named getter result must still match the same public role.
+      void* visible=method_(cache_,uint32_t(source.index));
+      if(visible&&!role_(role_owner_,false,uint32_t(source.index),visible)){valid_=false;return;}
+    }
     if(kind==kMethod){++method_count_;if(source.index==mi_){if(p!=mp_)valid_=false;else ++method_hits_;}}
     else {++field_count_;if(source.index==fi_){if(p!=fp_)valid_=false;else ++field_hits_;}}
   }
   void* cache_;uint32_t fields_,methods_;bool clear_,valid_=true;
+  void* role_owner_=nullptr;Service::MemberRole role_=nullptr;Service::Entry method_=nullptr;
   uint32_t fi_=UINT32_MAX,mi_=UINT32_MAX;void* fp_=nullptr,*mp_=nullptr;
   size_t field_count_=0,method_count_=0,field_hits_=0,method_hits_=0;
 };
@@ -66,6 +75,13 @@ bool Service::Calibrate(void* cache,uint32_t types,uint32_t fields,uint32_t meth
 bool Service::CheckWitness(void* cache,uint32_t fields,uint32_t methods,uint32_t fi,void* field,uint32_t mi,void* method)const noexcept{
  if(!calibrated_||!cache||!field||!method||fi>=fields||mi>=methods||leaves_.method(cache,mi)!=method)return false;
  Visitor read(cache,fields,methods);read.Expect(fi,field,mi,method);leaves_.visit(cache,&read);return read.Witness();
+}
+bool Service::CheckTypeEntry(void* cache,uint32_t index,void* expected)const noexcept{
+ return calibrated_&&cache&&leaves_.type(cache,index)==expected;
+}
+bool Service::CheckRoles(void* cache,uint32_t fields,uint32_t methods,void* owner,MemberRole role)const noexcept{
+ if(!calibrated_||!cache||!owner||!role)return false;
+ Visitor read(cache,fields,methods);read.Roles(owner,role,leaves_.method);leaves_.visit(cache,&read);return read.Valid();
 }
 bool Service::Readonly(void* cache,uint32_t fields,uint32_t methods)const noexcept{
  if(!calibrated_||!cache)return false;Visitor read(cache,fields,methods);leaves_.visit(cache,&read);return read.Valid();

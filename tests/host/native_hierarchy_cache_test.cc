@@ -14,8 +14,8 @@ struct RootSlot{void*value;};
 struct Tables {
  alignas(16) type_cache::Pair types[1024]{};
  alignas(16) unsigned char fields[16384]{},methods[16384]{};
- uint32_t type_full[4]{};
- std::atomic<uintptr_t> field_full[4]{},method_full[4]{};
+ uint32_t type_full[1028]{};
+ std::atomic<uintptr_t> field_full[1028]{},method_full[1028]{};
 };
 struct Cache {
  alignas(8) unsigned char bytes[112]{};
@@ -24,6 +24,8 @@ struct Cache {
  auto ptr=[](const void*p){return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p));};
  if(model==dex_cache_metadata::Model::Pairs){auto*c=reinterpret_cast<type_cache::Legacy*>(bytes);c->types=ptr(tables.types);c->fields=ptr(tables.fields);c->methods=ptr(tables.methods);c->num_types=c->num_fields=c->num_methods=1024;}
  else{auto*c=reinterpret_cast<type_cache::Dual*>(bytes);c->types=ptr(tables.types);c->types_array=ptr(tables.type_full);c->fields=ptr(tables.fields);c->fields_array=ptr(tables.field_full);c->methods=ptr(tables.methods);c->methods_array=ptr(tables.method_full);}
+ tables.types[0].index=1;
+ if(fmt==PairFormat::Ordinary){reinterpret_cast<method_cache::Pair*>(tables.fields)[0].index=1;reinterpret_cast<method_cache::Pair*>(tables.methods)[0].index=1;}else{reinterpret_cast<method_cache::SequencePair*>(tables.fields)[0].key.store(1);reinterpret_cast<method_cache::SequencePair*>(tables.methods)[0].key.store(1);}
  tables.types[1]={0x1000,1};tables.type_full[1]=0x1000;
  for(auto pair:{std::pair<void*,uint32_t>{tables.fields,2},{tables.methods,3}}){
  if(fmt==PairFormat::Ordinary){auto*p=static_cast<method_cache::Pair*>(pair.first);p[pair.second]={incoming?uintptr_t{0x999}:uintptr_t{0xabc}+pair.second,pair.second};}
@@ -34,10 +36,12 @@ struct Cache {
 };
 // JNI/native leaf fixture doubles are explicit. All cache objects/tables and
 // fixed declaration reads/rewrite/reset below are the actual common engine.
-struct Mapper final:SourceMapper {
+struct Mapper final:SourceMapper,CurrentRoles {
  struct Range{const void*p;size_t n;};std::vector<Range>ranges;
- RootSlot old_class{reinterpret_cast<void*>(0x1000)},new_class{reinterpret_cast<void*>(0x2000)};
- Cache calibration,incoming;dex_cache_metadata::Model model;PairFormat format;
+ RootSlot old_class{reinterpret_cast<void*>(0x1000)},new_class{reinterpret_cast<void*>(0x2000)},collision_class{reinterpret_cast<void*>(0x4000)};
+ struct Cache calibration,incoming;dex_cache_metadata::Model model;PairFormat format;
+ bool deny_inspection=false;mutable bool inspecting=false;mutable unsigned inspections=0;
+ modern_field_metadata::ReadContext inspection_context{};
  bool staged=true,private_writer=true,frozen=true,commit=true,barrier=true;int barriers=0,begins=0;void* moved_cache=nullptr;
  native_hierarchy_graph::Prepared expected;Source source;
  Mapper(dex_cache_metadata::Model m,PairFormat f):model(m),format(f){
@@ -50,6 +54,11 @@ struct Mapper final:SourceMapper {
  }
  void*Get(Root r)const noexcept override{return r?static_cast<RootSlot*>(r)->value:nullptr;}
  bool Readable(const void*p,size_t n)const noexcept override{auto a=reinterpret_cast<uintptr_t>(p);for(auto r:ranges){auto b=reinterpret_cast<uintptr_t>(r.p);if(a>=b&&a-b<=r.n&&n<=r.n-(a-b))return true;}return false;}
+ const modern_field_metadata::ReadContext* CacheReadContext()const noexcept override{return inspecting?&inspection_context:nullptr;}
+ bool InspectSemantic(void* payload,SemanticOperation operation)const noexcept override{
+  if(deny_inspection||inspecting||!operation)return false;
+  ++inspections;inspecting=true;const bool accepted=operation(payload,*this);inspecting=false;return accepted;
+ }
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override{return staged;}
  bool Describe(const native_hierarchy_graph::Prepared&p,Source*out,std::string*)const override{if(p.source_owner!=this)return false;*out=source;return true;}
  bool FindSource(const native_hierarchy_graph::Prepared&p,uint32_t index,Root*out,std::string*)const override{if(p.source_owner!=this||index!=1)return false;*out=const_cast<RootSlot*>(&new_class);return true;}
@@ -61,7 +70,11 @@ struct Mapper final:SourceMapper {
  bool VerifyFrozen(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&p,const Source&s)const noexcept override{return frozen&&p.source_owner==this&&p.new_class==new_class.value&&p.cache==Get(s.cache_root)&&s.dex_identity==this&&s.private_token==&incoming;}
  bool VerifyCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{return commit;}
  void BeginCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{++const_cast<Mapper*>(this)->begins;}
- Witness witness(){return {1,2,3,&old_class,reinterpret_cast<void*>(0xabe),reinterpret_cast<void*>(0xabf)};}
+ bool Cache(const SourceMapper& mapper,Root cache,Counts counts)const noexcept override{return &mapper==this&&mapper.CacheReadContext()&&cache==&calibration.root&&Get(cache)==calibration.root.value&&counts.types&&counts.fields&&counts.methods;}
+ bool Type(const SourceMapper& mapper,uint32_t index,void* value)const noexcept override{return &mapper==this&&mapper.CacheReadContext()&&((index==1&&value==old_class.value)||(index==1025&&value==collision_class.value));}
+ bool Field(const SourceMapper& mapper,uint32_t index,void* value)const noexcept override{return &mapper==this&&mapper.CacheReadContext()&&((index==2&&value==reinterpret_cast<void*>(0xabe))||(index==1026&&value==reinterpret_cast<void*>(0xbeef)));}
+ bool Method(const SourceMapper& mapper,uint32_t index,void* value)const noexcept override{return &mapper==this&&mapper.CacheReadContext()&&((index==3&&value==reinterpret_cast<void*>(0xabf))||(index==1027&&value==reinterpret_cast<void*>(0xcafe)));}
+ Witness witness(){Witness w{1,2,3,&old_class,reinterpret_cast<void*>(0xabe),reinterpret_cast<void*>(0xabf)};w.current_roles=this;return w;}
 };
 void Test(dex_cache_metadata::Model model,PairFormat fmt){
  Mapper m(model,fmt);Owner owner;std::string error;native_hierarchy_graph::Graph graph;source_commit::Plan plan;
@@ -84,11 +97,15 @@ void Test(dex_cache_metadata::Model model,PairFormat fmt){
  public_witness.public_fields=public_witness.public_methods;Owner public_wrong;assert(!public_wrong.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},public_witness,&error));
  }
  assert(owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},witness,&error));assert(owner.VerifyStaged(graph,{},&error));
+ assert(!m.CacheReadContext()&&!m.inspecting);
+ m.deny_inspection=true;assert(!owner.VerifyStaged(graph,{},&error)&&error.find("inspection refused before callback")!=std::string::npos);m.deny_inspection=false;
+ assert(owner.VerifyStaged(graph,{},&error)&&!m.inspecting&&!m.CacheReadContext());
+
  m.calibration.tables.types[1].index=2;
- assert(!owner.VerifyStaged(graph,{},&error)&&error=="Cache witness type mismatch");
+ assert(!owner.VerifyStaged(graph,{},&error)&&error.find("type pair role refused")!=std::string::npos);
  m.calibration.tables.types[1].index=1;
- unsigned char saved_method[16];std::memcpy(saved_method,m.calibration.tables.methods+3*16,16);std::memset(m.calibration.tables.methods+3*16,0,16);
- assert(!owner.VerifyStaged(graph,{},&error)&&error=="Cache witness method mismatch");
+ unsigned char saved_method[16];std::memcpy(saved_method,m.calibration.tables.methods+3*16,16);if(fmt==PairFormat::Ordinary)reinterpret_cast<method_cache::Pair*>(m.calibration.tables.methods)[3].method=0x123;else reinterpret_cast<method_cache::SequencePair*>(m.calibration.tables.methods)[3].method.store(0x123);
+ assert(!owner.VerifyStaged(graph,{},&error)&&error.find("native method pair role refused")!=std::string::npos);
  std::memcpy(m.calibration.tables.methods+3*16,saved_method,16);assert(owner.VerifyStaged(graph,{},&error));
 
  m.private_writer=false;assert(!owner.Prepare(m.expected,&error));assert(m.incoming.tables.types[1].object==0x1000);m.private_writer=true;
@@ -125,4 +142,28 @@ void FullOnlyIncoming(){
  assert(error.find("matches=0")!=std::string::npos&&error.find("arrays=01/01/01")!=std::string::npos);
  assert(error.find("field{i=2 s=2 p=0 w=0/0")!=std::string::npos&&error.find("full=1:abe")!=std::string::npos);
 }
-int main(){FullOnlyIncoming();for(auto m:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays})for(auto f:{PairFormat::Ordinary,PairFormat::Sequence})Test(m,f);std::puts("PASS cache model/format calibration, owned source rewrite, moving roots, allocation-free final refusal");}
+void CollisionRoles(dex_cache_metadata::Model model,PairFormat format){
+ Mapper mapper(model,format);Owner owner;std::string error;auto witness=mapper.witness();
+ assert(owner.Calibrate(mapper,&mapper.calibration.root,mapper.source.cache_extent,{1028,1028,1028},witness,&error));
+ auto& tables=mapper.calibration.tables;
+ tables.types[1]={0x4000,1025};
+ const auto member=[&](unsigned char* storage,uint32_t slot,uint32_t index,uintptr_t value){
+  if(format==PairFormat::Ordinary)reinterpret_cast<method_cache::Pair*>(storage)[slot]={value,index};
+  else{auto& pair=reinterpret_cast<method_cache::SequencePair*>(storage)[slot];pair.key.store((uint64_t{7}<<32)|index);pair.method.store(value);}
+ };
+ member(tables.fields,2,1026,0xbeef);member(tables.methods,3,1027,0xcafe);
+ assert(owner.VerifyStaged({}, {}, &error));
+ if(model==dex_cache_metadata::Model::DualArrays){tables.type_full[1025]=0x4000;tables.field_full[1026]=0xbeef;tables.method_full[1027]=0xcafe;assert(owner.VerifyStaged({}, {}, &error));}
+ // Current roots, rather than stale object addresses, authorize moved roles.
+ mapper.collision_class.value=reinterpret_cast<void*>(0x5000);tables.types[1].object=0x5000;
+ if(model==dex_cache_metadata::Model::DualArrays)tables.type_full[1025]=0x5000;
+ assert(owner.VerifyStaged({}, {}, &error));
+ tables.types[1].object=0x6000;assert(!owner.VerifyStaged({}, {}, &error));tables.types[1].object=0x5000;
+ member(tables.fields,2,1026,0x123);assert(!owner.VerifyStaged({}, {}, &error));member(tables.fields,2,1026,0xbeef);
+ member(tables.methods,3,1027,0x234);assert(!owner.VerifyStaged({}, {}, &error));member(tables.methods,3,1027,0xcafe);
+ member(tables.fields,2,1025,0xbeef);assert(!owner.VerifyStaged({}, {}, &error));member(tables.fields,2,1026,0xbeef);
+ if(model==dex_cache_metadata::Model::DualArrays){tables.type_full[1025]=0x777;assert(!owner.VerifyStaged({}, {}, &error));tables.type_full[1025]=0x5000;tables.field_full[1026]=0x777;assert(!owner.VerifyStaged({}, {}, &error));tables.field_full[1026]=0xbeef;tables.method_full[1027]=0x777;assert(!owner.VerifyStaged({}, {}, &error));tables.method_full[1027]=0xcafe;}
+ if(format==PairFormat::Sequence){auto& pair=reinterpret_cast<method_cache::SequencePair*>(tables.methods)[3];auto key=pair.key.load();pair.key.store(key|method_cache::kSequenceLock);assert(!owner.VerifyStaged({}, {}, &error));pair.key.store(key);}
+ assert(owner.VerifyStaged({}, {}, &error)&&mapper.barriers==0);
+}
+int main(){FullOnlyIncoming();for(auto m:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays})for(auto f:{PairFormat::Ordinary,PairFormat::Sequence}){Test(m,f);CollisionRoles(m,f);}std::puts("PASS cache model/format calibration, owned source rewrite, moving roots, allocation-free final refusal");}

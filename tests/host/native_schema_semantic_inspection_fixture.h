@@ -5,6 +5,8 @@ class ReflectionSourceInfo {public:virtual ~ReflectionSourceInfo()=default;virtu
 class DexCacheSourceInfo final:public ReflectionSourceInfo {public:DexCacheSourceInfo(uint32_t k,size_t i,void* c):ReflectionSourceInfo(k),index_(i),cache_(c){}void Describe(std::ostream& out)const override{ReflectionSourceInfo::Describe(out);out<<index_<<cache_;}private:size_t index_;void* cache_;};
 }
 static unsigned semantic_visits=0;
+static void* semantic_native_field=nullptr;
+static void* semantic_native_method=nullptr;
 static uint32_t semantic_type_index=0,semantic_type_count=0;
 static bool SemanticMappings(void* raw,std::string*) {
  auto* run=artdcevm::native_schema_run_state::RunState::Current();
@@ -19,12 +21,12 @@ static void SemanticVisit(void* cache,art::ReflectiveValueVisitor* visitor){
  auto* run=artdcevm::native_schema_run_state::RunState::Current();assert(run&&run->CurrentReadContext());
  const auto queries=artdcevm::method_identity::MappingOsQueries();++semantic_visits;
  art::DexCacheSourceInfo field(9,0,cache),method(8,0,cache);
- assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(old_fields[0]),field)==reinterpret_cast<art::ArtField*>(old_fields[0]));
- assert(visitor->VisitMethod(reinterpret_cast<art::ArtMethod*>(old_method),method)==reinterpret_cast<art::ArtMethod*>(old_method));
+ assert(visitor->VisitField(reinterpret_cast<art::ArtField*>(semantic_native_field),field)==reinterpret_cast<art::ArtField*>(semantic_native_field));
+ assert(visitor->VisitMethod(reinterpret_cast<art::ArtMethod*>(semantic_native_method),method)==reinterpret_cast<art::ArtMethod*>(semantic_native_method));
  assert(artdcevm::method_identity::MappingOsQueries()==queries);
 }
 static void* SemanticType(void* cache,uint32_t index){assert(cache==published_cache&&index==semantic_type_index&&gc&&stopped);return old_class;}
-static void* SemanticMethod(void* cache,uint32_t index){assert(cache==published_cache&&index==0&&gc&&stopped);return old_method;}
+static void* SemanticMethod(void* cache,uint32_t index){assert(cache==published_cache&&index==0&&gc&&stopped);return semantic_native_method;}
 struct SemanticTypes final:artdcevm::native_cache_semantic::TypeReader {
  bool Read(const artdcevm::native_cache_semantic::Service&,void* cache,uint32_t n,artdcevm::type_cache::View* out,const artdcevm::modern_field_metadata::ReadContext* context)const noexcept override{
   if(cache!=published_cache||n!=semantic_type_count||!out||!context||!context->owner||!context->extent||!gc||!stopped)return false;

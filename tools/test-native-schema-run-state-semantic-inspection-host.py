@@ -20,7 +20,7 @@ body=body.replace('  matched_plan=&plan;', '  assert(!std::strcmp(waiting_case,"
 body=body.replace('#include "native_schema_run_state_public_fixture.h"', '#include "native_schema_run_state_public_fixture.h"\n#include "native_schema_semantic_inspection_fixture.h"')
 needle='  auto run=native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},witness,&error);'
 assert needle in body
-body=body.replace(needle, '  native_cache_semantic::Service semantic;native_cache_semantic::HostFixture::Bind(semantic,*d.metadata,*deps.members.fields);semantic_type_index=witness.type_index;semantic_type_count=witness.counts.types;witness.semantic=&semantic;proposal.strong_original=nullptr;\n'+needle)
+body=body.replace(needle, '  native_cache_semantic::Service semantic;native_cache_semantic::HostFixture::Bind(semantic,*d.metadata,*deps.members.fields);semantic_type_index=witness.type_index;semantic_type_count=witness.counts.types;semantic_native_field=witness.native_field;semantic_native_method=witness.native_method;witness.semantic=&semantic;proposal.strong_original=nullptr;\n'+needle)
 needle='  if(!run){std::cerr<<"matched Begin: "<<error<<"\\n";std::abort();}'
 assert needle in body
 body=body.replace(needle, '  assert(!run&&!native_schema_run_state::RunState::Current()&&!gc&&!stopped&&Read32(thread.data())==0);std::cerr<<"semantic Begin: "<<error<<" visits="<<semantic_visits<<"\\n";assert(semantic.Calibrated()==!std::strcmp(waiting_case,"valid"));assert(semantic_visits==(!std::strcmp(waiting_case,"valid")?1u:0u));verifier.Clear(&env);assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_local_refs>0);return true;')

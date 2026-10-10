@@ -103,7 +103,7 @@ struct NativeEngine final:Engine {
     (void)receiver_original_entries.release();
    }
   }
-  JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);lazy_fields.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+  JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);source_cache_roles.Clear(env);boot_methods.Clear(env);lazy_fields.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -518,6 +518,8 @@ struct NativeEngine final:Engine {
   uint32_t public_field_modifiers=0;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
+ source_cache_public_roles::Public source_cache_roles;
+ source_cache_role_catalog::Catalog source_cache_catalog;std::vector<unsigned char> source_cache_original;
  native_cache_public_fields::Service public_cache_fields;
  native_cache_semantic::Service semantic_cache;
  std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> public_cache_storage;
@@ -527,6 +529,7 @@ struct NativeEngine final:Engine {
  bool PrepareSourceCacheWitness(JNIEnv*,jvmtiEnv*,std::string*);
  native_schema_run_state::CacheCalibration CacheCalibration()const {
   const auto& w=source_cache_witness;native_schema_run_state::CacheCalibration c;
+  c.public_roles=&source_cache_roles;
   c.semantic=semantic_cache.StoragePrepared()?const_cast<native_cache_semantic::Service*>(&semantic_cache):nullptr;
   c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=c.semantic?8:112;
   c.counts={w.ids.type_count,w.ids.field_count,w.ids.method_count};
@@ -1488,6 +1491,8 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::strin
   std::vector<unsigned char> original(static_cast<size_t>(length));
   env->GetByteArrayRegion(bytes,0,length,reinterpret_cast<jbyte*>(original.data()));
   if(env->ExceptionCheck())return Fail(error,"Public cache witness immutable DEX copy rejected");
+  if(!source_cache_role_catalog::Read(original.data(),original.size(),&source_cache_catalog,error))return false;
+  source_cache_original=original;
   evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
   if(!SelectInstalledClass({original},descriptor,&schema,&counts,error,&candidate.ids))return false;
   evolution::ClassSchema writer_schema;evolution::MappedDexMemberCounts writer_counts;InstalledClassIds writer_ids;
@@ -1563,6 +1568,13 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::strin
   return false;
  }
  if(!source_cache_witness.cache)return Fail(error,"Public cache witness completed without DexCache root");
+ if(!source_cache_roles.Ready()){
+  if(!graph_decode_method||!receiver_handle_field_id||!graph_field_leaf||!runtime.receivers.jni_id_manager)return Fail(error,"Complete public cache roles require actual independently calibrated named ID codecs");
+  source_cache_public_roles::Bindings roles;roles.owner=this;roles.method=DecodeGraphMethod;roles.field=[](void*raw,jfieldID id)->void*{auto&e=*static_cast<NativeEngine*>(raw);return e.receiver_handle_field_id(e.runtime.receivers.jni_id_manager,id);};
+  roles.reflected_method=leaf;roles.reflected_field=graph_field_leaf;roles.metadata=&metadata;
+  roles.method_layout=model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+  if(!source_cache_roles.Prepare(env,ti,source_cache_catalog,source_cache_original,static_cast<jclass>(source_cache_witness.klass),source_cache_witness.cache,roles,error))return false;
+ }
  if(!public_cache_fields.Bind(hooks,runtime,error))return false;
  jclass cache_type=env->GetObjectClass(source_cache_witness.cache);Local cache_type_scope{env,cache_type};
  if(!cache_type||env->ExceptionCheck())return Fail(error,"Original public cache Class observation unavailable");

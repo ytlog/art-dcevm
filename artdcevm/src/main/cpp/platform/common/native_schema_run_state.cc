@@ -24,7 +24,7 @@ struct RunState::State {
  std::unique_ptr<native_required_cleanup::Service> cleanup;
  std::unique_ptr<native_hierarchy_private_ledger::Ledger> ledger;
  std::unique_ptr<native_hierarchy_source_cache::Mapper> mapper;
- native_hierarchy_cache::Owner incoming;
+ native_hierarchy_cache::Owner incoming;source_cache_public_roles::Rooted public_roles;
  std::unique_ptr<native_hierarchy_source_cache::Composite> caches;
  std::unique_ptr<native_source_class_loading::Run> loading;
  std::unique_ptr<native_hierarchy_session::Session> hierarchy;
@@ -102,6 +102,8 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  native_hierarchy_cache::Witness witness{w.type_index,w.field_index,w.method_index,expected_root,w.native_field,w.native_method};
  if(w.resolve&&!w.resolve(w.resolution_owner,s.context,s.pool,cache_root,expected_root,error)){if(error&&error->empty())*error="Source cache original resolution callback rejected independent root witness";return false;}
  witness.semantic_resolution_proved=w.resolve!=nullptr;
+ if(!w.public_roles||!s.public_roles.Import(*w.public_roles,s.context,*s.d.roots,s.pool,error))return Fail(error,"Source cache complete independent public roles import failed");
+ witness.current_roles=&s.public_roles;
  if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error)){if(error&&error->empty())*error="Source cache public storage callback rejected original storage witness";return false;}
  if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error)){if(error&&error->empty())*error="Source incoming cache calibration rejected actual independent witness";return false;}
  __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned RunState stage phase=incoming-cache-return");

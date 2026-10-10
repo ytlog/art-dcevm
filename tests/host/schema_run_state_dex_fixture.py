@@ -10,7 +10,10 @@ INSERTED='Lcom/example/HierarchyInserted;'
 MORE='Lcom/example/HierarchyMore;'
 OBJECT='Ljava/lang/Object;'
 
-def write_fixture(directory: Path, before: bool) -> Path:
+def write_fixture(directory: Path, before: bool, target: str = TARGET) -> Path:
+    TARGET=target
+    package=target[:target.rfind("/")+1]
+    BASE=package+"HierarchyBase;";INSERTED=package+"HierarchyInserted;";MORE=package+"HierarchyMore;"
     strings=sorted([TARGET,BASE,INSERTED,MORE,OBJECT,'I','gone','keep','staticKeep','number','value','left','right'])
     types=sorted([TARGET,BASE,INSERTED,MORE,OBJECT,'I'])
     ids={s:i for i,s in enumerate(strings)};tids={s:i for i,s in enumerate(types)}

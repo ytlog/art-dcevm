@@ -31,7 +31,7 @@ struct Entry {uint32_t index;void* value;};
 struct Fixture {
  // Opaque actual cache object is never interpreted as a DexCache layout.
  std::array<type_cache::Pair,1024> types{};
- std::array<uint32_t,4> full{};
+ std::array<uint32_t,1028> full{};bool pair_only=false;
  std::array<Entry,4> fields{},methods{};
  uintptr_t string=0x1133,callsite=0x2255;
  void* expected_class=reinterpret_cast<void*>(0x12345000);
@@ -40,7 +40,7 @@ struct Fixture {
  uint32_t bad_kind=0;bool wrong_owner=false,wrong_index=false,wrong_type=false,wrong_method=false;
  unsigned callbacks=0,writes=0,barriers=0,last_write_epoch=0;bool require_exclusive=false;
  Fixture(bool fields_present){
-  types[1]={uint32_t(uintptr_t(expected_class)),1};full[1]=uint32_t(uintptr_t(expected_class));
+  types[0].index=1;types[1]={uint32_t(uintptr_t(expected_class)),1};full[1]=uint32_t(uintptr_t(expected_class));
   if(fields_present)fields[0]={2,expected_field};
   methods[0]={3,expected_method};methods[1]={3,expected_method};
  }
@@ -55,12 +55,12 @@ void OriginalVisit(void* cache,art::ReflectiveValueVisitor* visitor){
  }};
  apply(f.fields,9);apply(f.methods,8);if(wrote)++f.barriers;
 }
-void* OriginalType(void* cache,uint32_t i){auto& f=*static_cast<Fixture*>(cache);return i==1&&!f.wrong_type?f.expected_class:nullptr;}
-void* OriginalMethod(void* cache,uint32_t i){auto& f=*static_cast<Fixture*>(cache);return i==3&&!f.wrong_method?f.expected_method:nullptr;}
+void* OriginalType(void* cache,uint32_t i){auto& f=*static_cast<Fixture*>(cache);if(f.wrong_type)return nullptr;if(!f.pair_only)return i<f.full.size()?reinterpret_cast<void*>(uintptr_t(f.full[i])):nullptr;const auto& p=f.types[i%1024];return p.index==i?reinterpret_cast<void*>(uintptr_t(p.object)):nullptr;}
+void* OriginalMethod(void* cache,uint32_t i){auto& f=*static_cast<Fixture*>(cache);return i==3?(f.wrong_method?reinterpret_cast<void*>(0x76543000):f.expected_method):nullptr;}
 struct SourceTypes final:native_cache_semantic::TypeReader {
 bool Read(const native_cache_semantic::Service&,void* cache,uint32_t n,type_cache::View* out,const modern_field_metadata::ReadContext*)const noexcept override{
- if(!cache||!out||n!=4)return false;auto& f=*static_cast<Fixture*>(cache);
- *out={f.types.data(),1024,f.full.data(),4};return true;
+ if(!cache||!out||(n!=4&&n!=1028))return false;auto& f=*static_cast<Fixture*>(cache);
+ *out={f.types.data(),1024,f.pair_only?nullptr:f.full.data(),f.pair_only?0u:n};return true;
 }};
 }
 namespace artdcevm::native_cache_semantic {
@@ -97,7 +97,7 @@ void Test(bool fields_present){
  f.methods[0]={3,f.expected_method};assert(!service.Cleared(&f,4,4));
  assert(service.Clear(&f,4,4)&&service.Cleared(&f,4,4));
 }
-class Mapper final:public native_hierarchy_cache::SourceMapper {
+class Mapper final:public native_hierarchy_cache::SourceMapper,public native_hierarchy_cache::CurrentRoles {
  public:
  Fixture calibration{false},incoming{true},moved{true};
  void* cal_root=&calibration;void* incoming_root=&incoming;
@@ -120,7 +120,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  bool DescribeAllocation(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source* out,std::string*)const override{*out=source;return true;}
  bool RefreshAllocation(native_hierarchy_graph::Prepared* p)const noexcept override{p->cache=incoming_root;return true;}
  bool FindSource(const native_hierarchy_graph::Prepared&,uint32_t i,native_hierarchy_cache::Root* out,std::string*)const override{
-  assert(!exclusive_window);if(i!=1)return false;auto& self=*const_cast<Mapper*>(this);auto& current=*static_cast<Fixture*>(incoming_root);
+ assert(!exclusive_window);if(i!=1)return false;auto& self=*const_cast<Mapper*>(this);auto& current=*static_cast<Fixture*>(incoming_root);
   assert(current.writes==0&&current.types[1].object==uintptr_t(old_class)&&current.full[1]==uintptr_t(old_class));
   if(change_during_lookup)current.wrong_owner=true;
   if(change_occupancy)current.full[2]=uint32_t(uintptr_t(old_class));
@@ -137,7 +137,11 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  bool VerifyFrozen(const native_hierarchy_graph::Graph&,const native_hierarchy_graph::Prepared&,const native_hierarchy_cache::Source&)const noexcept override{return frozen;}
  bool VerifyCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{return frozen;}
  void BeginCommit(const native_hierarchy_graph::Graph&,const source_commit::Plan&)const noexcept override{}
- native_hierarchy_cache::Witness Witness(){native_hierarchy_cache::Witness w{1,2,3,&old_class,calibration.expected_field,calibration.expected_method};w.has_public_storage=true;w.public_types=uintptr_t(calibration.types.data());w.public_types_array=uintptr_t(calibration.full.data());w.semantic_resolution_proved=true;return w;}
+ bool Cache(const native_hierarchy_cache::SourceMapper& m,native_hierarchy_cache::Root cache,native_hierarchy_cache::Counts counts)const noexcept override{return &m==this&&cache==&cal_root&&Get(cache)==cal_root&&old_class&&(counts.types==4||counts.types==1028)&&counts.fields==4&&counts.methods==4;}
+ bool Type(const native_hierarchy_cache::SourceMapper& m,uint32_t index,void* value)const noexcept override{return &m==this&&((index==1&&value==Get(const_cast<void**>(&old_class)))||(index==1025&&value==reinterpret_cast<void*>(0x22222000)));}
+ bool Field(const native_hierarchy_cache::SourceMapper& m,uint32_t index,void* value)const noexcept override{return &m==this&&index==2&&value==calibration.expected_field;}
+ bool Method(const native_hierarchy_cache::SourceMapper& m,uint32_t index,void* value)const noexcept override{return &m==this&&index==3&&value==calibration.expected_method;}
+ native_hierarchy_cache::Witness Witness(){native_hierarchy_cache::Witness w{1,2,3,&old_class,calibration.expected_field,calibration.expected_method};w.has_public_storage=true;w.public_types=uintptr_t(calibration.types.data());w.public_types_array=uintptr_t(calibration.full.data());w.semantic_resolution_proved=true;w.current_roles=this;return w;}
 };
 void OwnerTest(){
  Mapper mapper;native_hierarchy_cache::Owner owner;std::string error;auto witness=mapper.Witness();
@@ -148,15 +152,19 @@ void OwnerTest(){
  mapper.deny_inspection=true;
  assert(!owner.VerifyStaged({}, {}, &error)&&error=="Cache semantic witness inspection refused before callback");
  mapper.deny_inspection=false;
- mapper.calibration.full[1]=0;
+ mapper.calibration.full[1]=0x456;
  assert(!owner.VerifyStaged({}, {}, &error));
- assert(error.find("Cache semantic witness type mismatch T{i=1 s=1 p=1 key=1")!=std::string::npos&&error.find("full=1:0")!=std::string::npos);
+ assert(error.find("Cache semantic full type role refused: i=1")!=std::string::npos);
  mapper.calibration.full[1]=uint32_t(uintptr_t(mapper.old_class));
+ mapper.calibration.methods[0].value=reinterpret_cast<void*>(0x789);
+ assert(!owner.VerifyStaged({}, {}, &error)&&error.find("occupied native method role refused")!=std::string::npos);
+ mapper.calibration.methods[0].value=mapper.calibration.expected_method;
  mapper.calibration.wrong_method=true;
- assert(!owner.VerifyStaged({}, {}, &error)&&error.find("native field/method relation refused")!=std::string::npos);
+ assert(!owner.VerifyStaged({}, {}, &error)&&error.find("occupied native method role refused")!=std::string::npos);
  mapper.calibration.wrong_method=false;
+
  auto saved_class=mapper.old_class;mapper.old_class=nullptr;
- assert(!owner.VerifyStaged({}, {}, &error)&&error.find("root invalid")!=std::string::npos);
+ assert(!owner.VerifyStaged({}, {}, &error)&&error.find("role owner refused")!=std::string::npos);
  mapper.old_class=saved_class;
  assert(owner.VerifyStaged({}, {}, &error)&&mapper.calibration.writes==writes&&mapper.barriers==0);
 
@@ -192,6 +200,19 @@ void OwnerTest(){
  assert(!uncalibrated.Calibrate(missing,&missing.cal_root,0,{4,4,4},missing.Witness(),&error)&&!missing.service.Calibrated());
  Mapper barrier;native_hierarchy_cache::Owner aborted;assert(aborted.Calibrate(barrier,&barrier.cal_root,0,{4,4,4},barrier.Witness(),&error));
  barrier.deny_barrier=true;assert(!aborted.Prepare(barrier.prepared,&error));assert(barrier.incoming.writes==3&&!aborted.Verify({},{}));
+ // Large pair cache calibration is strict, then a valid colliding type may
+ // occupy the former selected witness slot. Every occupied role still checks.
+ Mapper collision;native_hierarchy_cache::Owner collided;auto cw=collision.Witness();
+ assert(collided.Calibrate(collision,&collision.cal_root,0,{1028,4,4},cw,&error));
+ collision.calibration.pair_only=true;collision.calibration.types[1]={0x22222000,1025};
+ assert(collided.VerifyStaged({}, {}, &error));
+ collision.calibration.types[1].object=0x33333000;
+ assert(!collided.VerifyStaged({}, {}, &error)&&error.find("occupied type pair role refused")!=std::string::npos);
+ collision.calibration.types[1]={0x22222000,1024};assert(!collided.VerifyStaged({}, {}, &error));
+ collision.calibration.types[1]={0x22222000,1025};collision.calibration.wrong_type=true;
+ assert(!collided.VerifyStaged({}, {}, &error)&&error.find("named type entry differs")!=std::string::npos);
+ collision.calibration.wrong_type=false;assert(collided.VerifyStaged({}, {}, &error));
+ assert(collision.calibration.writes==0&&collision.barriers==0);
  assert(!exclusive_window);
 
 }
