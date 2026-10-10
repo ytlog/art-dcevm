@@ -115,6 +115,7 @@ void Service::Finish(const source_commit::Plan& p)const noexcept{
  // is performed after mutation; the native Run identities remain authoritative.
  Require(plan_==&p&&phase_==Phase::kDelegating&&IsFinalWindow(driver_,holder_));phase_=Phase::kCompleted;
 }
+bool Service::MutationBegun(const source_commit::Plan& p)const noexcept{return phase_==Phase::kDelegating&&Exact(p)&&IsFinalWindow(driver_,holder_);}
 bool Service::Completed()const noexcept{return phase_==Phase::kCompleted;}
 Facade::Facade(Service& owner,std::unique_ptr<native_source_commit::Services> delegate):owner_(owner),delegate_(std::move(delegate)){}
 Facade::~Facade(){Require(owner_.delegate_==delegate_.get());owner_.provider_.ReleasePreparedSource(*delegate_);owner_.delegate_=nullptr;}

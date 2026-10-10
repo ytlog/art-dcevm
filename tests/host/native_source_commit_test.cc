@@ -104,7 +104,15 @@ struct Closure:art::Closure {void Run(art::Thread*)override{assert(stopped&&lock
 void ForEach(void* receiver,void(*action)(void*,void*),void* data){assert(receiver==&thread_list&&stopped&&locked);action(thread.data(),data);action(foreign_thread.data(),data);}
 abi::arm64::android12::Method12* old_method=nullptr;abi::arm64::android12::Method12* next_method=nullptr;
 void SetStatus(void* klass,uint8_t status){assert(stopped&&klass==new_class&&(status==14||status==15));++mutations;events.push_back("status");Put32(klass,offsetof(class_metadata::Class17,status),uint32_t(status)<<28);}
-void Retain(void* ext,void* old){assert(stopped&&ext==moved_ext&&old==old_class);assert(Root(old_method)==old_class);for(auto* field:old_fields)assert(Root(field)==old_class);if(retain_pipe>=0){const char marker=1;assert(write(retain_pipe,&marker,1)==1);}events.push_back("retain");}
+void Retain(void* ext,void* old){assert(stopped&&ext==moved_ext&&old==old_class);assert(Root(old_method)==old_class);for(auto* field:old_fields){
+  if(Root(field)==old_class)continue;
+  // Surviving static aliases deliberately keep their ArtField address while
+  // copying the complete current source declaration. Instance/removed fields
+  // still retain their obsolete owner; a bare changed owner is not sufficient.
+  assert(Root(field)==new_class&&(Read32(field,4)&8u));
+  bool exact=false;for(auto* target:new_fields)if(!std::memcmp(field,target,16)){exact=true;break;}
+  assert(exact);
+ }if(retain_pipe>=0){const char marker=1;assert(write(retain_pipe,&marker,1)==1);}events.push_back("retain");}
 void Invalidate(void* cache){assert(stopped&&cache==&jit_cache);events.push_back("invalidate");}
 void Deopt(void* receiver){assert(stopped&&receiver==&instrumentation);events.push_back("deopt");}
 void DeoptAll(void* receiver,const char* why){assert(stopped&&receiver==&instrumentation&&!std::strcmp(why,"artdcevm-class-abstract"));events.push_back("abstract");}

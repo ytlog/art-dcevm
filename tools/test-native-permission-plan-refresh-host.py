@@ -9,7 +9,7 @@ jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/j
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 out=root/'build/evidence/host/permission-plan-refresh';out.mkdir(parents=True,exist_ok=True)
 command=[os.environ.get('CXX','clang++'),'-std=c++17','-DARTDCEVM_TESTING','-g','-O1','-Wall','-Wextra','-Werror','-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_permission_plan_refresh_test.cc')]
-for name in ['native_final_write_guard','native_final_write_listener','modern_final_field_guard','native_final_field_aliases','modern_field_metadata','method_identity_calibration','native_schema_policy']:
+for name in ['native_receiver_guard','native_receiver_bytecode','native_receiver_frame','native_final_write_guard','native_final_write_listener','modern_final_field_guard','native_final_field_aliases','modern_field_metadata','method_identity_calibration','native_schema_policy']:
  command.append(str(cpp/'platform/common'/(name+'.cc')))
 command.append(str(cpp/'evolution/dex_schema.cc'))
 command.extend(['-Wl,-dead_strip' if platform=='darwin' else '-Wl,--gc-sections','-o',str(out/'test')])

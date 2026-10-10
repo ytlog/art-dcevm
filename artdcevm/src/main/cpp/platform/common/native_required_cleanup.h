@@ -49,6 +49,8 @@ class Service final:public native_hierarchy_private_ledger::CleanupOwner {
   bool IsFinalWindow(void*,const transaction_root::Holder*)const noexcept override;
   void BeginCommit(const source_commit::Plan&)const noexcept override;
   bool Completed()const noexcept;
+  // Readonly witness of the actual full Facade/observer/ledger BeginCommit path.
+  bool MutationBegun(const source_commit::Plan&)const noexcept;
   const whole_process_frames::Report& Frames()const noexcept{return frames_report_;}
  private:
   friend class Facade;

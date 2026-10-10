@@ -9,8 +9,11 @@ namespace artdcevm::redefinition_gate {bool Owned(JavaVM*) noexcept{return curre
 namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;
 std::array<void*,8> retired_records{};size_t retired_count=0;
+const native_required_cleanup::Service*mutation_owner=nullptr;
+const source_commit::Plan*mutation_plan=nullptr;
+const source_commit::Plan*mutation_foreign=nullptr;size_t mutation_witnesses=0;
 bool OwnerRetired(void* m){return std::find(retired_records.begin(),retired_records.begin()+retired_count,m)!=retired_records.begin()+retired_count;}
-void OwnerRetire(void*,void* m){assert(stopped&&retired_count<retired_records.size()&&!OwnerRetired(m));retired_records[retired_count++]=m;++retired_methods;}
+void OwnerRetire(void*,void* m){if(mutation_owner){assert(mutation_owner->MutationBegun(*mutation_plan)&&!mutation_owner->MutationBegun(*mutation_foreign));++mutation_witnesses;}assert(stopped&&retired_count<retired_records.size()&&!OwnerRetired(m));retired_records[retired_count++]=m;++retired_methods;}
 int owner_heap,owner_mutex;void* owner_mutator=&owner_mutex;bool gc=false;int disabled=0;
 abi::common::SuspendConstruct owner_stop_proxy=nullptr;abi::common::SuspendDestroy owner_resume_proxy=nullptr;
 s::MutatorOperation owner_disable_proxy=nullptr,owner_enable_proxy=nullptr;
@@ -108,6 +111,7 @@ int main(int argc,char** argv){
  driver.environment=nullptr;assert(!cleanup.AttachHolder(&holder,actual));driver.environment=&runtime;
  driver.type=1;assert(!cleanup.AttachHolder(&holder,actual));driver.type=0;
  assert(cleanup.AttachHolder(&holder,actual)&&!cleanup.AttachHolder(&holder,actual));
+ assert(!cleanup.MutationBegun(plan));
  assert(!cleanup.PrepareCollected(plan,&error));assert(session.Begin(thread.data(),thread.size()));
  modern_field_metadata::ReadContext recovery_context{&session,[](void*raw,const void*p,size_t*out)noexcept {if(!static_cast<native_source_stop::Session*>(raw)->IsStopped(thread.data()))return false;return method_identity::ReadableMappingExtent(p,out);}};
  assert(!cleanup.PrepareCollected(plan,&error)&&error=="Cleanup frame recovery lacks ordinary exact Plan preparation and stopped read context"&&!cleanup.RecoveryProof().ValidateFinal(plan));
@@ -138,9 +142,11 @@ int main(int argc,char** argv){
  assert(registry.Resolve()&&provider.RefreshManagedRoots(plan,facade->Delegate(),registry.Final())&&cleanup.RefreshFinal(registry.Final()));
  assert(!cleanup.RecoveryProof().ValidateFinal(plan));
  assert(!cleanup.CommitObserver(plan)&&!facade->Validate(foreign_plan)&&facade->Validate(plan)&&cleanup.RecoveryProof().ValidateFinal(plan));
- assert(!cleanup.CommitObserver(foreign_plan));
- auto observer=[](const source_commit::Plan& p,void* raw) noexcept{auto& service=*static_cast<native_required_cleanup::Service*>(raw);assert(service.CommitObserver(p)&&!service.CommitObserver(p)&&!service.Completed());service.BeginCommit(p);};
- assert(source_commit::Run(plan,*facade,{&cleanup,observer})&&cleanup.Completed());
+ assert(!cleanup.CommitObserver(foreign_plan)&&!cleanup.MutationBegun(plan));
+ mutation_owner=&cleanup;mutation_plan=&plan;mutation_foreign=&foreign_plan;
+ auto observer=[](const source_commit::Plan& p,void* raw) noexcept{auto& service=*static_cast<native_required_cleanup::Service*>(raw);assert(service.CommitObserver(p)&&!service.CommitObserver(p)&&!service.Completed());service.BeginCommit(p);assert(!service.MutationBegun(p));};
+ assert(source_commit::Run(plan,*facade,{&cleanup,observer})&&cleanup.Completed()&&!cleanup.MutationBegun(plan)&&mutation_witnesses==1);
+ mutation_owner=nullptr;mutation_plan=nullptr;mutation_foreign=nullptr;
  forbid_provider_allocation=false;
  assert(Read32(new_class,128)==73&&Read32(new_instance,8)==31&&retired_methods==1&&cleared==2&&gc&&stopped==1);
  provider.ReleasePreparedSource(*concrete);assert(!provider.OwnsPreparedSource(plan,*concrete));facade.reset();
