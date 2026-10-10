@@ -4,6 +4,7 @@
 #include "platform/abi/arm64/android11/class_initialization.h"
 #include "platform/abi/common/suspend_all.h"
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <type_traits>
@@ -13,7 +14,7 @@ using namespace abi::arm64::android11;
 struct Trial {
  jobject fixture=nullptr;
  bool failure=false;
- std::atomic<void*> owner{nullptr},waiter{nullptr};
+ std::atomic<void*> owner{nullptr},waiter{nullptr},linker{nullptr};
  std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},wait_enter{0},wait_exit{0};
  std::atomic<bool> valid{true},body_ready{false};
 };
@@ -21,7 +22,7 @@ struct Installed {
  const Service* owner=nullptr;
  const modern_field_metadata::FieldMetadata* metadata=nullptr;
  const source_handle_roots::Service* roots=nullptr;
- JavaVM* vm=nullptr;jobject anchor=nullptr;
+ JavaVM* vm=nullptr;jobject anchor=nullptr;void*class_linker=nullptr;
  void*(*current)()=nullptr;
  InitializeClass initialize=nullptr;WaitForInitializeClass wait=nullptr;
  bool installed=false;
@@ -36,6 +37,20 @@ struct BorrowTrial {
  ~BorrowTrial(){Release();}
 };
 std::atomic<bool> ready{false};
+struct SourceEntry {
+ SourceEntry*previous;const Service*owner;void*linker;void*self;
+ const void*slot;uint64_t epoch;bool statics,parents;
+};
+thread_local SourceEntry*source_entry=nullptr;
+thread_local uint64_t source_epoch=0;
+struct EntryLifetime {
+ SourceEntry entry;
+ EntryLifetime(void*linker,void*self,ClassHandle handle,bool statics,bool parents):
+     entry{source_entry,installed.owner,linker,self,handle.slot,++source_epoch,statics,parents}{
+  if(!entry.epoch)std::abort();source_entry=&entry;
+ }
+ ~EntryLifetime(){if(source_entry!=&entry)std::abort();source_entry=entry.previous;}
+};
 struct BodyRequest{Trial* trial;JNIEnv* env;void* self;uint32_t tid;};
 bool StateAt(const void*,uint32_t*,uint32_t*);
 }
@@ -72,10 +87,13 @@ bool ReadHandle(Trial& trial,void* self,ClassHandle handle,uint32_t* status,uint
  }catch(...){return false;}
 }
 bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool parents){
+ EntryLifetime episode(linker,self,handle,statics,parents);
  BorrowTrial borrowed;Trial* trial=borrowed.value;uint32_t status=0,tid=0;
  const bool matched=trial&&ReadHandle(*trial,self,handle,&status,&tid);
  if(!matched)borrowed.Release();
- if(matched){trial->init_enter.fetch_add(1,std::memory_order_relaxed);
+ if(matched){void*empty=nullptr;trial->linker.compare_exchange_strong(empty,linker);
+  if(!linker||trial->linker.load()!=linker)trial->valid.store(false,std::memory_order_release);
+  trial->init_enter.fetch_add(1,std::memory_order_relaxed);
   if(!statics||!parents)trial->valid.store(false,std::memory_order_release);}
  const bool result=installed.initialize(linker,self,handle,statics,parents);
  if(matched){uint32_t completed=0,unused=0;
@@ -145,6 +163,50 @@ jboolean Waiter(JNIEnv* env,jclass){
  return JNI_TRUE;
 }
 }
+
+namespace {
+struct CaptureRequest {const Service*owner;const void*entry;uint64_t epoch;bool verified=false;};
+bool CaptureSourceRoot(const runnable_jni::Context&context,void*raw){
+ auto&r=*static_cast<CaptureRequest*>(raw);void*managed=nullptr;
+ if(!source_entry||source_entry!=r.entry||source_entry->epoch!=r.epoch||
+    source_entry->owner!=r.owner||source_entry->self!=context.self)return false;
+ r.verified=installed.roots->BorrowHandle(context,source_entry->slot,&managed)&&managed;
+ return r.verified;
+}
+}
+bool Service::UsesClassLinker(const void*linker)const noexcept{
+ return linker&&installed.class_linker==linker&&installed.metadata&&installed.roots&&
+     ReadyFor(*installed.metadata,*installed.roots);
+}
+bool Service::CaptureCurrent(JNIEnv*env,Witness*out)const noexcept{
+ if(!out)return false;*out={};
+ if(!env||!installed.metadata||!installed.roots||!ReadyFor(*installed.metadata,*installed.roots)||
+    !source_entry||source_entry->owner!=this||!source_entry->self||
+    !installed.current||installed.current()!=source_entry->self)return false;
+ CaptureRequest request{this,source_entry,source_entry->epoch};
+ try{
+  if(runnable_executor::With(env,installed.anchor,CaptureSourceRoot,&request)!=runnable_jni::Result::kSuccess||
+     !request.verified||source_entry!=request.entry||source_entry->epoch!=request.epoch)return false;
+ }catch(...){return false;}
+ out->owner_=this;out->entry_=source_entry;out->self_=source_entry->self;out->epoch_=source_entry->epoch;return true;
+}
+bool Service::MatchesSourceClass(const Witness&w,const modern_field_metadata::ReadContext&context,
+    const void*klass)const noexcept{
+ if(!klass||!context.owner||!context.extent||w.owner_!=this||!source_entry||
+    w.entry_!=source_entry||w.epoch_!=source_entry->epoch||w.self_!=source_entry->self||
+    !installed.current||installed.current()!=w.self_||!installed.metadata||!installed.roots||
+    !ReadyFor(*installed.metadata,*installed.roots))return false;
+ for(const SourceEntry*entry=source_entry;entry;entry=entry->previous){
+  if(entry->owner!=this||entry->self!=w.self_||!entry->linker||entry->linker!=installed.class_linker||!entry->slot||
+     !entry->epoch||!entry->statics||!entry->parents)return false;
+  size_t extent=0;uint32_t value=0;
+  if(!modern_field_metadata::ReadMappingExtent(&context,entry->slot,&extent)||extent<4)return false;
+  std::memcpy(&value,entry->slot,4);
+  if(uintptr_t(value)==uintptr_t(klass))return true;
+ }
+ return false;
+}
+
 bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
     const modern_field_metadata::FieldMetadata& metadata,const source_handle_roots::Service& roots,
     std::string* error){
@@ -203,7 +265,9 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
   while(readers.load(std::memory_order_seq_cst)!=0)std::this_thread::sleep_for(std::chrono::milliseconds(1));
   ok=!env->ExceptionCheck()&&result==1&&trial.valid.load(std::memory_order_acquire)&&
       trial.owner.load()!=nullptr&&trial.waiter.load()!=nullptr&&trial.owner.load()!=trial.waiter.load()&&
-      trial.init_enter.load()==2&&trial.init_exit.load()==2&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1;
+      trial.init_enter.load()==2&&trial.init_exit.load()==2&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1&&
+      trial.linker.load()!=nullptr&&(!installed.class_linker||installed.class_linker==trial.linker.load());
+  if(ok)installed.class_linker=trial.linker.load();
   env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);
  }
  env->DeleteLocalRef(oracle);

@@ -137,6 +137,38 @@ abi::arm64::android11::ReleaseObjectPointer EpisodeGlobal(jobject value){
  return {source_moved.load(std::memory_order_acquire)&&value==reinterpret_cast<jobject>(new_class)?uintptr_t(moved_class):uintptr_t(value)};
 }
 JavaVM* EpisodeVM(){static JNIInvokeInterface_ methods=[] {JNIInvokeInterface_ value{};value.GetEnv=VMEnv;return value;}();static JavaVM value{&methods};return &value;}
+
+native_initializer_episode::Service*witness_service=nullptr;
+native_initializer_episode::Witness stale_witness;
+jboolean WitnessBody(JNIEnv*e,jclass,jclass type,jint actual_tid){
+ assert(witness_service&&actual_tid==source_tid);
+ native_initializer_episode::Witness witness;
+ assert(witness_service->CaptureCurrent(e,&witness));
+ const void*slot=owner_slot.load();
+ struct Bounds{const void*slot;} bounds{slot};
+ modern_field_metadata::ReadContext context{&bounds,[](void*p,const void*address,size_t*out){
+  auto&b=*static_cast<Bounds*>(p);if(address!=b.slot||!out)return false;*out=4;return true;
+ }};
+ const auto before=method_identity::MappingOsQueries();
+ assert(witness_service->MatchesSourceClass(witness,context,type));
+ assert(!witness_service->MatchesSourceClass(witness,context,old_class));
+ native_initializer_episode::Service wrong_owner;
+ assert(!wrong_owner.MatchesSourceClass(witness,context,type));
+ auto denied=context;denied.extent=[](void*,const void*,size_t*){return false;};
+ assert(!witness_service->MatchesSourceClass(witness,denied,type));
+ native_initializer_episode::Witness empty;
+ assert(!witness_service->MatchesSourceClass(empty,context,type));
+ // Independent moving collector changes the actual compressed source root.
+ // A witness keeps the source slot identity and never caches the Class value.
+ std::memcpy(moved_class,type,160);
+ __atomic_store_n(static_cast<uint32_t*>(const_cast<void*>(slot)),uint32_t(uintptr_t(moved_class)),__ATOMIC_SEQ_CST);
+ assert(witness_service->MatchesSourceClass(witness,context,moved_class));
+ assert(!witness_service->MatchesSourceClass(witness,context,type));
+ __atomic_store_n(static_cast<uint32_t*>(const_cast<void*>(slot)),uint32_t(uintptr_t(type)),__ATOMIC_SEQ_CST);
+ assert(witness_service->MatchesSourceClass(witness,context,type));
+ assert(method_identity::MappingOsQueries()==before);stale_witness=witness;return JNI_TRUE;
+}
+
 void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_roots::Service& roots){
  assert(Read32(current)==(92u<<24));EpisodeHooks hooks;native_initializer_episode::Service observer;std::string error;
  auto saved=table;table.GetJavaVM=EpisodeGetVM;table.FindClass=EpisodeFind;table.GetStaticMethodID=EpisodeMethod;
@@ -147,6 +179,13 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  modern_field_metadata::FieldMetadata foreign=metadata;assert(!observer.ReadyFor(foreign,roots));
  assert(mutations==mutations_before&&retirement_publications==publications);
  if(ok){native_initializer_episode::Service wrong_owner;assert(!wrong_owner.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));assert(observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));}
+ if(ok&&selected==Case::Positive){
+  native_initializer_episode::Witness absent;assert(!observer.CaptureCurrent(&env,&absent));
+  witness_service=&observer;body_native=WitnessBody;StoreStatus(new_class,12);
+  std::thread witness_owner([]{assert(OriginalThread(new_class,true));});witness_owner.join();
+  modern_field_metadata::ReadContext outside{&observer,[](void*,const void*,size_t*out){*out=4;return true;}};
+  assert(!observer.MatchesSourceClass(stale_witness,outside,new_class));witness_service=nullptr;
+ }
  table=saved;
 }
 int main(){
