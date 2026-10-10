@@ -3,6 +3,7 @@
 #include "platform/abi/arm64/android17/checked_method_resolution.h"
 #include <jni.h>
 #include "platform/common/native_receiver_bytecode.h"
+#include "platform/common/native_receiver_resolution_source.h"
 #include "platform/common/code_item_metadata.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/stack_visitor_service.h"
@@ -37,11 +38,13 @@ class SourceProducer final {
  bool CodeImpl(void*,void*,CodeView*,const modern_field_metadata::ReadContext*,evolution::MappedDexMetadata* mapping=nullptr)const noexcept;
  bool Resolve17(void*,void*,uint32_t,const InvokeInstruction&,void**)const noexcept;
  bool Pending17(void*,bool*)const noexcept;
+ static bool ReadPending(void*,void*,bool*)noexcept;
  using ResolveMethod=void*(*)(void*,void*,uint32_t,void*,uint32_t);
  stack_visitor_service::Service stack_;stack_visitor_service::Declaration declaration_{};
  code_item_metadata::Layout layout_{};const modern_field_metadata::FieldMetadata*metadata_=nullptr;
  void*linker_=nullptr;void*(*current_)()=nullptr;ResolveMethod resolve_=nullptr;void*(*obsolete_cache_)(void*)=nullptr;
  JavaVM* vm_=nullptr;
+ CheckedResolveMethodCurrent resolve_current_=nullptr;
  abi::arm64::android17::ResolveMethodClass resolve_class17_=nullptr;
  abi::arm64::android17::FindResolvedMethod find_method17_=nullptr;
  abi::arm64::android17::CheckedNterpMethod checked_method17_=nullptr;

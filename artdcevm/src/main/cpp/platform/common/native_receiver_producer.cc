@@ -2,6 +2,7 @@
 #include "platform/common/native_receiver_code_item.h"
 #include "platform/common/native_receiver_resolution_source.h"
 #include "platform/common/native_receiver_checked_caller.h"
+#include "platform/common/native_receiver_checked_resolution.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
@@ -20,6 +21,7 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  // Fixed runtime/class_linker.h: ResolveMode::kCheckICCEAndIAE=1, exact
  // Thread/referrer overload. Its null return has the original Java exception.
  auto resolve=reinterpret_cast<ResolveMethod>(finder(kCheckedResolveMethod));
+ auto resolve_current=reinterpret_cast<CheckedResolveMethodCurrent>(finder(kCheckedResolveMethodCurrent));
  auto root_reference=reinterpret_cast<void*(*)(void*)>(finder("artReadBarrierForRootSlow"));
  if(!root_reference){if(error)*error="Receiver source named root-slot barrier unavailable";return false;}
  if(!stack_visitor_service::Service::Bind(declaration,finder,&stack)){if(error)*error="Receiver source calibrated StackVisitor named declaration unavailable";return false;}
@@ -31,9 +33,10 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  auto checked=reinterpret_cast<CheckedNterpMethod>(finder(kCheckedNterpMethod));
  ResolutionSource source;const char* diagnostic=nullptr;
  if(!SelectResolutionSource(resolve!=nullptr,klass!=nullptr,member!=nullptr,
-                            checked!=nullptr,vm!=nullptr,&source,&diagnostic)){
+                            checked!=nullptr,vm!=nullptr,&source,&diagnostic,resolve_current!=nullptr)){
   if(error)*error=diagnostic;return false;
  }
+ if(source==ResolutionSource::CheckedMethodCurrent){vm_=vm;resolve_current_=resolve_current;}
  if(source==ResolutionSource::Nterp){
   if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Nterp source requires its calibrated Standard Method12 declaration";return false;}
   auto clear=reinterpret_cast<ClearCallerAccessChecks>(finder(kClearCallerAccessChecks));
@@ -73,7 +76,12 @@ template<class Base>bool SourceProducer::Walk(void*self,void*caller,uint32_t pc,
 bool SourceProducer::Frame(void*self,void*caller,uint32_t pc,const void**out)const noexcept{if(!out||!Current(const_cast<SourceProducer*>(this),self)||!caller)return false;switch(declaration_){case stack_visitor_service::Declaration::kAndroid11:return Walk<abi::arm64::stack::Visitor11>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid12:return Walk<abi::arm64::stack::Visitor12>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid13To16:return Walk<abi::arm64::stack::Visitor13>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid17:return Walk<abi::arm64::stack::Visitor17>(self,caller,pc,out);}return false;}
 bool SourceProducer::GetFrame(void*p,void*self,void*caller,uint32_t pc,const void**out)noexcept{return static_cast<SourceProducer*>(p)->Frame(self,caller,pc,out);}
 bool SourceProducer::GetCode(void*p,void*self,void*caller,CodeView*out)noexcept{return static_cast<SourceProducer*>(p)->Code(self,caller,out);}
-bool SourceProducer::Resolve(void*p,void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};void*resolved=nullptr;if(s.checked_method17_){const bool success=s.Resolve17(self,caller,pc,i,&resolved);bool pending=false;if(!s.Pending17(self,&pending))return false;resolution={&s,self,pending};if(!success&&!pending)return false;}else{resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};}if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.root_reference_(caller):nullptr;return resolved!=nullptr;}
+bool SourceProducer::Resolve(void*p,void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);resolution={};if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};void*resolved=nullptr;if(s.resolve_current_){
+ const CurrentCheckedAccess access{&s,Current,ReadPending,s.resolve_current_};
+ const auto result=ResolveCurrentChecked(access,self,s.linker_,i.index,caller,i.kind);
+ resolved=result.method;resolution={&s,self,result.original_exception};
+ }else if(s.checked_method17_){const bool success=s.Resolve17(self,caller,pc,i,&resolved);bool pending=false;if(!s.Pending17(self,&pending))return false;resolution={&s,self,pending};if(!success&&!pending)return false;}else{resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};}if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.root_reference_(caller):nullptr;return resolved!=nullptr;}
+bool SourceProducer::ReadPending(void*p,void*self,bool*out)noexcept{return static_cast<SourceProducer*>(p)->Pending17(self,out);}
 bool SourceProducer::Pending17(void*self,bool*out)const noexcept {
  if(!out||!vm_||!Current(const_cast<SourceProducer*>(this),self))return false;
  JNIEnv*env=nullptr;if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)!=JNI_OK||!env)return false;

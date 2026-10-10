@@ -32,12 +32,12 @@ jvmtiError Deallocate(jvmtiEnv*,unsigned char*value){assert(value);--buffers;std
 void Reset(int fail=0,bool null=false,bool tool=false){assert(!locals&&!globals&&!buffers);calls=0;fail_at=fail;pending=false;null_failure=null;tool_error=tool;}
 }
 int main(){
- for(unsigned mask=0;mask<32;++mask){
+ for(unsigned mask=0;mask<64;++mask){
   ResolutionSource source=ResolutionSource::CheckedMethod;const char* error=nullptr;
-  const bool checked=mask&1,type=mask&2,member=mask&4,nterp=mask&8,vm=mask&16;
-  const bool success=SelectResolutionSource(checked,type,member,nterp,vm,&source,&error);
-  assert(success==(checked||(type&&member&&nterp&&vm)));
-  if(success)assert(source==(checked?ResolutionSource::CheckedMethod:ResolutionSource::Nterp));
+  const bool checked=mask&1,type=mask&2,member=mask&4,nterp=mask&8,vm=mask&16,checked_current=mask&32;
+  const bool success=SelectResolutionSource(checked,type,member,nterp,vm,&source,&error,checked_current);
+  assert(success==(checked||(checked_current&&vm)||(!checked_current&&type&&member&&nterp&&vm)));
+  if(success)assert(source==(checked?ResolutionSource::CheckedMethod:checked_current?ResolutionSource::CheckedMethodCurrent:ResolutionSource::Nterp));
   else assert(source==ResolutionSource::CheckedMethod&&error&&*error);
  }
 
