@@ -17,13 +17,17 @@ bool Prepare(HookEngine& hooks,JNIEnv* env,jobject fixture,void* heap,void*(*cur
  local.values[1]=env->ToReflectedField(klass,instance,false);if(!local.values[1]||env->ExceptionCheck())return false;
  local.values[2]=env->ToReflectedField(klass,statik,true);if(!local.values[2]||env->ExceptionCheck())return false;
  local.values[3]=env->GetObjectField(fixture,instance);if(!local.values[3]||env->ExceptionCheck())return false;
- local.values[4]=env->GetStaticObjectField(klass,statik);if(!local.values[4]||env->ExceptionCheck()||env->IsSameObject(local.values[3],local.values[4]))return Fail(error,"Typed heap existing fixture references are not distinct");
+ local.values[4]=env->GetStaticObjectField(klass,statik);if(!local.values[4]||env->ExceptionCheck())return false;
+ const bool same=env->IsSameObject(local.values[3],local.values[4]);if(env->ExceptionCheck())return false;
+ if(same)return Fail(error,"Typed heap existing fixture references are not distinct");
  local.values[5]=env->FindClass("java/lang/Object");if(!local.values[5]||env->ExceptionCheck())return false;
  roots.values[0]=env->NewGlobalRef(fixture);if(!roots.values[0]||env->ExceptionCheck())return false;
  for(size_t i=0;i<5;++i){roots.values[i+1]=env->NewGlobalRef(local.values[i]);if(!roots.values[i+1]||env->ExceptionCheck())return false;}
- auto array=env->NewObjectArray(2,static_cast<jclass>(local.values[5]),nullptr);if(!array||env->ExceptionCheck())return false;
- // Reuse the Object-class local slot as the owned temporary array local.
- env->DeleteLocalRef(local.values[5]);local.values[5]=array;
+ auto array=env->NewObjectArray(2,static_cast<jclass>(local.values[5]),nullptr);
+ // Own a non-null JNI result before checking its pending exception. Both
+ // Object-class and temporary array locals must be released on this path.
+ if(array){env->DeleteLocalRef(local.values[5]);local.values[5]=array;}
+ if(!array||env->ExceptionCheck())return false;
  env->SetObjectArrayElement(array,0,roots.values[4]);if(env->ExceptionCheck())return false;
  env->SetObjectArrayElement(array,1,roots.values[5]);if(env->ExceptionCheck())return false;
  roots.values[6]=env->NewGlobalRef(array);if(!roots.values[6]||env->ExceptionCheck())return false;

@@ -124,6 +124,11 @@ class Authority final {
  // Collected source owner window, after all actual early allocations/linking.
  // After PrepareRoots/registration this validates without copying containers.
  bool Seal(const source_commit::Plan&,std::string*);
+ // Collected preparation checks the complete sealed graph without claiming
+ // original-final receiver/storage/frame permission.
+ bool VerifyPrepared(const source_commit::Plan&,size_t pair)const noexcept;
+ bool VerifyFinal(const source_commit::Plan&,size_t pair)const noexcept;
+ // Compatibility: existing commit callers retain final semantics.
  bool Verify(const source_commit::Plan&,size_t pair)const noexcept;
  bool CollectManagedRoots(const prepared_roots::Registrar&);
  bool CanRefresh(const prepared_roots::Resolver&)const noexcept;
@@ -132,6 +137,7 @@ class Authority final {
  void Clear(JNIEnv*);
  const Graph* Staged()const noexcept;
  private:
+ bool VerifyPlan(const source_commit::Plan&,size_t pair,bool final)const noexcept;
  struct State;std::unique_ptr<State> state_;
 };
 }

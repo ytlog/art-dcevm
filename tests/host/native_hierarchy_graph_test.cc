@@ -14,6 +14,9 @@
 #include <new>
 #include <cstdarg>
 #include <unordered_map>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
 using namespace artdcevm;
 using namespace native_hierarchy_graph;
 // These leaf stubs deliberately do not prove ART metadata. This fixture tests
@@ -28,6 +31,13 @@ struct Fake {
 };
 static std::vector<Fake*> loaded;
 static bool deny_public_proxy=false;static bool forbid_alloc=false,forbid_os=false;static size_t context_reads=0,os_queries=0,snapshots=0;static bool deny_snapshot=false,deny_view=false;
+template<class Operation> static void MustAbort(Operation operation){
+ const bool allocation_guard=forbid_alloc;forbid_alloc=false;
+ const pid_t child=fork();assert(child>=0);
+ if(child==0){forbid_alloc=allocation_guard;operation();_exit(0);}
+ int status=0;assert(waitpid(child,&status,0)==child);forbid_alloc=allocation_guard;
+ assert(WIFSIGNALED(status)&&WTERMSIG(status)==SIGABRT);
+}
 void* operator new(size_t n){if(forbid_alloc)std::abort();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete(void* p,size_t)noexcept{std::free(p);}
@@ -155,7 +165,15 @@ static void Lifecycle(){
  std::unordered_map<void*,void*> relocation{{&collected_object,&final_object},{&collected_a,&final_a},{&collected_b,&final_b},{&collected_parent,&final_parent},{&collected_i,&final_i},{&latest_new_a,&final_new_a},{&latest_new_b,&final_new_b}};
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
  bool mapping_allowed=true;modern_field_metadata::ReadContext read_context{&mapping_allowed,[](void*owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};authority.UseReadContext(read_context);forbid_os=true;
- forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(!authority.Verify(plan,0));owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
+ forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));
+ // Real Stage/Seal/GC-root-refresh owner: Collected graph permission is
+ // independent from the original final-only receiver proof.
+ assert(authority.VerifyPrepared(plan,0));assert(!authority.VerifyFinal(plan,0));assert(!authority.Verify(plan,0));
+ forbid_alloc=false;auto foreign_plan=plan;forbid_alloc=true;assert(!authority.VerifyPrepared(foreign_plan,0));assert(!authority.VerifyFinal(foreign_plan,0));
+ MustAbort([&]{authority.BeginCommit(plan);});
+ owner.final_granted=true;assert(authority.VerifyFinal(plan,0));
+ owner.final_granted=false;MustAbort([&]{authority.BeginCommit(plan);});
+ owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);assert(!authority.VerifyPrepared(plan,0));assert(!authority.VerifyFinal(plan,0));MustAbort([&]{authority.BeginCommit(plan);});forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
  authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
  // Public Stage cyclic proposal rejects and releases every independently owned
  // global even though all individual lookups resolve valid Classes.

@@ -7,6 +7,7 @@
 #include <cerrno>
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
+#include "platform/common/native_typed_heap_calibration.h"
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_field_factory_observer.h"
 #include "platform/common/source_cache_resolution.h"
@@ -107,6 +108,33 @@ struct NativeEngine final:Engine {
  native_source_observation::Owner source_observers;
  native_production_schema_capabilities::Owner source_capabilities;
  native_initializer_episode::Service initializer_episode;
+ native_typed_heap_walk::Service typed_heap;
+ bool typed_heap_attempted=false;std::string typed_heap_diagnostic;
+ bool TypedHeapCalibrated()const override{return typed_heap.Calibrated();}
+ std::string TypedHeapDiagnostic()const override{return TypedHeapCalibrated()?"":typed_heap_diagnostic.empty()?"typed-heap-source-not-attempted":typed_heap_diagnostic;}
+ bool PrepareTypedHeap(JNIEnv* env){
+  if(TypedHeapCalibrated())return true;
+  if(typed_heap_attempted)return false;
+  if(!env||env->ExceptionCheck()||current||schema_run||graph_staging||declared_field_ti||
+     !source_capabilities.Ready()||!metadata.Calibrated())
+   return Fail(&typed_heap_diagnostic,"Typed heap requires an ordinary unstaged calibrated source owner");
+  redefinition_gate::Lease gate(vm);
+  if(!gate.Acquired())return Fail(&typed_heap_diagnostic,"Typed heap requires the actual redefinition gate");
+  if(!exclusive_owned_roots::Service::Bind(hooks,&permission_exclusive,&typed_heap_diagnostic))return false;
+  auto named_current=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
+  typed_heap_attempted=true;
+  bool observed=false;
+  try{observed=native_typed_heap_calibration::Prepare(hooks,env,bootstrap_storage,runtime.receivers.heap,
+      named_current,metadata,permission_exclusive,&typed_heap,&typed_heap_diagnostic);}
+  catch(...){typed_heap_diagnostic="Typed heap private calibration producer threw";}
+  if(env->ExceptionCheck()){
+   compiled_frame_fixture::DescribePending(env,"typed-heap-private-oracle",&typed_heap_diagnostic);
+   env->ExceptionClear();observed=false;
+  }
+  if(!observed&&typed_heap_diagnostic.empty())typed_heap_diagnostic="Typed heap private public/source oracle refused";
+  if(observed)typed_heap_diagnostic.clear();
+  return observed;
+ }
  bool initializer_episode_attempted=false;std::string initializer_episode_diagnostic;
  bool InitializerEpisodeObserved()const override{return initializer_episode.ReadyFor(metadata,source_capabilities.Roots());}
  std::string InitializerEpisodeDiagnostic()const override{return InitializerEpisodeObserved()?"":initializer_episode_diagnostic.empty()?"initializer-source-episode-not-attempted":initializer_episode_diagnostic;}
@@ -340,6 +368,7 @@ struct NativeEngine final:Engine {
  DecodeObject graph_decode=nullptr;
  void* (*graph_decode_method)(void*,jmethodID)=nullptr;
  jclass bootstrap_field_owner=nullptr;
+ jobject bootstrap_storage=nullptr; // Strong global already owned by roots.
  static bool FieldScope(void* raw,JNIEnv* env,jobject root,runnable_jni::Operation op,void* data){
   if(!raw)return false;auto& e=*static_cast<NativeEngine*>(raw);
   struct Read {NativeEngine& engine;JNIEnv* env;jobject root;runnable_jni::Operation operation;void* data;
@@ -949,6 +978,13 @@ struct NativeEngine final:Engine {
    if(error)source_factory_diagnostic=*error;
    schema_operation=false;
    return owned_failure_diagnostic::Unavailable(error,"Automatic private ordinary source lifecycle calibration");
+  }
+  // Complete retained-reference proof needs the independently observed whole
+  // heap visitor. Calibrate before the original driver or any staged graph owns
+  // borrowed managed addresses; simple deletion does not run a full heap scan.
+  if(requested_schema&&!PrepareTypedHeap(env)){
+   if(error)*error=TypedHeapDiagnostic();
+   return owned_failure_diagnostic::Unavailable(error,"Independent typed heap source calibration");
   }
   const int result=ExecuteOperation(env,ti,defs,requested_schema,error);
   // The operation's current engine, declaration borrow, staged roots and gate
@@ -2041,7 +2077,7 @@ std::unique_ptr<Engine> Prepare(JNIEnv* env,jvmtiEnv* ti,jobject calibration,std
  env->GetByteArrayRegion(dex,0,static_cast<jsize>(replacement.size()),reinterpret_cast<jbyte*>(replacement.data()));
  runtime_services::View jit;
  if(env->ExceptionCheck()||!owned_jit_receivers::CalibrateJitReceivers(e.hooks,env,owner_root,hot,e.model,e.runtime,target,replacement.data(),replacement.size(),&jit,error))return nullptr;
- e.runtime.receivers=jit;e.anchor=owner_root;e.bootstrap_field_owner=static_cast<jclass>(storage_class);
+ e.runtime.receivers=jit;e.anchor=owner_root;e.bootstrap_field_owner=static_cast<jclass>(storage_class);e.bootstrap_storage=storage_root;
  // Calibration retains the defining Classes, not all original APK byte arrays
  // and temporary reflection/storage objects. ART native members remain alive
  // through these process-owned strong Class roots.

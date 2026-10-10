@@ -297,7 +297,9 @@ bool RunState::VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* lo
     !s.stop->IsStopped(s.context.self)||!redefinition_gate::Owned(static_cast<JavaVM*>(s.context.vm)))return false;
  const auto* graph=s.authority.Staged();if(!graph)return false;
  size_t matches=0;for(const auto& node:graph->nodes)if(node.affected&&node.klass==p.old_classes[pair]&&node.loader==loader)++matches;
- return matches==1&&s.authority.Verify(p,pair);
+ if(matches!=1)return false;
+ if(s.stop->IsFinalWindow(s.context.self))return s.authority.VerifyFinal(p,pair);
+ return s.stop->IsCollectedStop(s.context.self)&&s.authority.VerifyPrepared(p,pair);
 }
 const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return !StoppedWindow()?nullptr:state_->inspection?&state_->inspection_context:state_->read_context.extent?&state_->read_context:nullptr;}
 const whole_process_frames::Report& RunState::Frames()const noexcept{Require(state_->cleanup!=nullptr);return state_->cleanup->Frames();}
