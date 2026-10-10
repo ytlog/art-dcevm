@@ -1016,7 +1016,7 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
 bool NativeEngine::RefreshPublicCacheStorage(void* raw,const runnable_jni::Context& scope,native_hierarchy_cache::Witness* witness,std::string* error){
  auto& e=*static_cast<NativeEngine*>(raw);if(!witness||scope.env->ExceptionCheck()||scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return Fail(error,"Public cache storage actual source owner rejected");
  std::array<jlong,3> values{};
- for(size_t i=0;i<values.size();++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
+ for(size_t i=0;i<values.size();++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,e.source_capabilities.Roots(),*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
  witness->has_public_storage=true;witness->public_types=static_cast<uintptr_t>(values[0]);witness->public_fields=static_cast<uintptr_t>(values[1]);witness->public_methods=static_cast<uintptr_t>(values[2]);return true;
 }
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::string* error){

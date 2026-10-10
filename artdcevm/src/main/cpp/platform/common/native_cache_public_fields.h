@@ -3,6 +3,7 @@
 #include "platform/common/runtime_services.h"
 #include "platform/common/modern_field_metadata.h"
 #include <jvmti.h>
+#include "platform/common/source_handle_roots.h"
 #include <memory>
 namespace artdcevm::native_cache_public_fields {
 // Read-only public/native identity observation. It grants no cache layout,
@@ -28,7 +29,10 @@ class Witness {
 };
 class Service {
  public:
-  bool Refresh(const runnable_jni::Context&,const Witness&,
+  // Refresh inside the actual original source Runnable owner. Its bound roots
+  // service proves current Thread/JNIEnv/VM; executor TLS is not this owner.
+  // Never fall back to a second bridge or decode path on an identity refusal.
+  bool Refresh(const runnable_jni::Context&,const source_handle_roots::Service&,const Witness&,
       const modern_field_metadata::FieldMetadata&,jlong*,std::string*)const;
   static void Release(JNIEnv*,std::unique_ptr<Witness>*);
   // manager must come from the independent shared Runtime receiver snapshot.

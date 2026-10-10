@@ -29,18 +29,29 @@ jfieldID Roundtrip(JNIEnv*,jobject f){Step();auto* m=reinterpret_cast<Mirror*>(f
 jlong Long(JNIEnv*,jobject o,jfieldID id){Step();++reads;assert(o==reinterpret_cast<jobject>(old_instance)&&id==reinterpret_cast<jfieldID>(old_fields[1]));return jlong(0x123400005678ULL);}
 void* DecodeId(void* m,jfieldID id){assert(m==&manager&&Read32(current)==0);return decode_mismatch?old_fields[0]:reinterpret_cast<void*>(id);}
 const char* OriginalNativeName(void* field){return native_badname&&field==old_fields[1]?"wrong":FieldName(field);}
-class PublicHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{if(std::strstr(name,"DecodeFieldId"))return reinterpret_cast<void*>(DecodeId);if(std::strstr(name,"ArtField7GetName"))return reinterpret_cast<void*>(OriginalNativeName);return Hooks::FindSymbol(lib,name);}};
+jint ActualVM(JNIEnv*,JavaVM** out){*out=reinterpret_cast<JavaVM*>(&runtime);return JNI_OK;}
+bool unknown_global=false;
+jobjectRefType ActualKind(JNIEnv*,jobject){Step();return unknown_global?JNIInvalidRefType:JNIGlobalRefType;}
+void OriginalRoots(void*,abi::arm64::android_common::HandleRootVisitor*,uint32_t){}
+class PublicHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{if(std::strstr(name,"HandleScopeVisitRoots")||std::strstr(name,"AllocateNewClassObject"))return reinterpret_cast<void*>(OriginalRoots);if(std::strstr(name,"DecodeFieldId"))return reinterpret_cast<void*>(DecodeId);if(std::strstr(name,"ArtField7GetName"))return reinterpret_cast<void*>(OriginalNativeName);return Hooks::FindSymbol(lib,name);}};
 }
 int main(){
- InitJni();InitializeHeap();names[1]="resolvedFields";types[1]="J";old_fields[1]->access_flags=2;
- PublicHooks hooks;modern_field_metadata::FieldMetadata metadata;std::string error;
- assert(metadata.Bind(hooks,&error));std::array<modern_field_metadata::FieldOracle,4> oracle{};
- for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:i==1?2u:1u};
- struct Calibration{modern_field_metadata::FieldMetadata* metadata;const modern_field_metadata::FieldOracle* oracle;std::string* error;} cal{&metadata,oracle.data(),&error};
+ InitJni();InitializeHeap();names[1]="resolvedFields";
+ PublicHooks hooks;modern_field_metadata::FieldMetadata baseline_metadata;std::string error;
+ assert(baseline_metadata.Bind(hooks,&error));std::array<modern_field_metadata::FieldOracle,4> oracle{};
+ for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
+ struct Calibration{modern_field_metadata::FieldMetadata* metadata;const modern_field_metadata::FieldOracle* oracle;std::string* error;} cal{&baseline_metadata,oracle.data(),&error};
  assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),[](const runnable_jni::Context& c,void* raw){auto& r=*static_cast<Calibration*>(raw);return r.metadata->Calibrate(c,reinterpret_cast<jobject>(old_class),"LFixture;",r.oracle,4,r.error);},&cal)==runnable_jni::Result::kSuccess);
- table.ExceptionCheck=Pending;table.NewGlobalRef=Rooted;table.DeleteGlobalRef=Release;table.GetObjectClass=ExactClass;table.IsSameObject=Exact;table.ToReflectedField=Reflect;table.FromReflectedField=Roundtrip;table.GetLongField=Long;
+ modern_field_storage::Service storage;assert(storage.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_class),reinterpret_cast<jobject>(old_instance),baseline_metadata,oracle.data(),oracle.size(),&error));
+ types[1]="J";old_fields[1]->access_flags=2;oracle[1].descriptor="J";oracle[1].modifiers=2;
+ modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));cal.metadata=&metadata;
+ assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),[](const runnable_jni::Context& c,void* raw){auto& r=*static_cast<Calibration*>(raw);return r.metadata->Calibrate(c,reinterpret_cast<jobject>(old_class),"LFixture;",r.oracle,4,r.error);},&cal)==runnable_jni::Result::kSuccess);
+ void* self=thread.data();JNIEnv* actual_env=&env;std::memcpy(thread.data()+216,&self,8);std::memcpy(thread.data()+200,&actual_env,8);
+ env_owner.self=self;env_owner.vm=&runtime;table.GetJavaVM=ActualVM;
+ source_handle_roots::Service roots;assert(source_handle_roots::Service::Bind(hooks,storage,runnable_jni::Context{self,&env,&runtime},&roots,&error));
+ table.GetObjectRefType=ActualKind;table.ExceptionCheck=Pending;table.NewGlobalRef=Rooted;table.DeleteGlobalRef=Release;table.GetObjectClass=ExactClass;table.IsSameObject=Exact;table.ToReflectedField=Reflect;table.FromReflectedField=Roundtrip;table.GetLongField=Long;
  jvmtiInterface_1_ ti_table{};ti_table.GetClassSignature=Signature;ti_table.GetClassLoader=Loader;ti_table.GetClassFields=Fields;ti_table.GetFieldName=Name;ti_table.GetFieldModifiers=Flags;ti_table.GetFieldDeclaringClass=Declaring;ti_table.Deallocate=Free;jvmtiEnv ti{&ti_table};
- native_cache_public_fields::Service service;runtime_services::Snapshot runtime;assert(!service.Bind(hooks,runtime,&error));runtime.receivers.jni_id_manager=&manager;assert(service.Bind(hooks,runtime,&error));
+ native_cache_public_fields::Service service;runtime_services::Snapshot receiver_snapshot;assert(!service.Bind(hooks,receiver_snapshot,&error));receiver_snapshot.receivers.jni_id_manager=&manager;assert(service.Bind(hooks,receiver_snapshot,&error));
  std::unique_ptr<native_cache_public_fields::Witness> output;
  auto observe=[&]{leaf=0;root_attempts=0;return service.Observe(&env,&ti,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedFields",metadata,&output,&error);};
  // Ordinary preparation precedes production's source-run context publication:
@@ -54,14 +65,27 @@ int main(){
  runnable_jni::Context scope{current,&env,&runtime};jlong fresh=-1;
  const auto state=Read32(current);Put32(current,0,0);
  runnable_jni::Context missing_scope{current,nullptr,&runtime};
- assert(!service.Refresh(missing_scope,*output,metadata,&fresh,&error)&&fresh==-1);
+ assert(!service.Refresh(missing_scope,roots,*output,metadata,&fresh,&error)&&fresh==-1);
  runnable_jni::Context missing_vm{current,&env,nullptr};
- assert(!service.Refresh(missing_vm,*output,metadata,&fresh,&error)&&fresh==-1);
- assert(service.Refresh(scope,*output,metadata,&fresh,&error)&&fresh==output->Value());
- decode_mismatch=true;fresh=-1;assert(!service.Refresh(scope,*output,metadata,&fresh,&error)&&fresh==-1);decode_mismatch=false;
+ assert(!service.Refresh(missing_vm,roots,*output,metadata,&fresh,&error)&&fresh==-1);
+ assert(!runnable_executor::host_executor_active);void* rejected=nullptr;
+ assert(!runnable_executor::DecodeStrongGlobal(scope,output->ReflectedField(),&rejected)&&!rejected);
+ auto wrong=scope;wrong.self=foreign_thread.data();
+ assert(!service.Refresh(wrong,roots,*output,metadata,&fresh,&error)&&fresh==-1&&error=="Cache Field identity roots unavailable");
+ wrong=scope;wrong.vm=&linker;assert(!service.Refresh(wrong,roots,*output,metadata,&fresh,&error)&&fresh==-1&&error=="Cache Field identity roots unavailable");
+ JNIEnv old_env{&table};wrong=scope;wrong.env=&old_env;
+ assert(!service.Refresh(wrong,roots,*output,metadata,&fresh,&error)&&fresh==-1&&error=="Live public cache Field refresh owner unavailable");
+ unknown_global=true;assert(!service.Refresh(scope,roots,*output,metadata,&fresh,&error)&&fresh==-1&&error=="Live cache Field/Class references are not retained strong globals");unknown_global=false;
+ assert(service.Refresh(scope,roots,*output,metadata,&fresh,&error)&&fresh==output->Value());
+ decode_mismatch=true;fresh=-1;assert(!service.Refresh(scope,roots,*output,metadata,&fresh,&error)&&fresh==-1&&error=="Public/native cache Field identity differs");decode_mismatch=false;
+ for(trigger=1;trigger<=3;++trigger){leaf=0;pending=false;fresh=-1;const auto before=reads;
+  assert(!service.Refresh(scope,roots,*output,metadata,&fresh,&error)&&fresh==-1&&pending&&leaf==trigger);
+  assert(reads==before+(trigger==3));
+ }
+ trigger=0;pending=false;
  Put32(current,0,state);const int old_reads=reads;
  for(fault=1;fault<=14;++fault){assert(!observe());assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);}
- fault=0;decode_mismatch=true;assert(!observe());decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
+ fault=0;decode_mismatch=true;assert(!observe());assert(error.find("Public/native cache Field identity differs")!=std::string::npos);decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  native_badname=true;assert(!observe());native_badname=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  const auto original_owner=old_fields[1]->declaring_class;old_fields[1]->declaring_class=uint32_t(uintptr_t(parent_class));assert(!observe());old_fields[1]->declaring_class=original_owner;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  // Every actual JNI/JVMTI leaf can produce a pending exception. Stop rather
