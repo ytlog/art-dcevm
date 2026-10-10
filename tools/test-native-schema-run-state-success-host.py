@@ -13,6 +13,11 @@ sys.path.insert(0,str(root/'tests/host'))
 from schema_run_state_dex_fixture import write_fixture,write_graph_fixture
 before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex')
 setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  // Additional actual owners',1)[1].split('  auto begin=',1)[0]
+# The baseline also contains a deliberate public-storage rejection case. This
+# matched positive fixture must opt into its independently populated JNI oracle;
+# do not inherit the baseline's false `accept` default when slicing its prelude.
+assert 'public_state{published}' in setup
+setup=setup.replace('public_state{published}', 'public_state{published,false,true,0}')
 (out/'aggregate_owner_setup.inc').write_text(('  // Additional actual owners'+setup).replace('OwnerHooks owner_hooks;','MatchedHooks owner_hooks;'))
 # A moving-GC leaf must also update the actual Field/Method GcRoot<Class>
 # members, not just the native TLS handles. This is the named lookup boundary.
