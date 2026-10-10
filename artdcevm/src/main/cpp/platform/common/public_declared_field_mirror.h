@@ -1,6 +1,8 @@
 #pragma once
 #include <jni.h>
 #include <string>
+#include <unordered_map>
+#include <new>
 namespace artdcevm::public_declared_field_mirror {
 // Class.getDeclaredFieldsUnchecked(false) uses the original source's force_resolve=false
 // factory. Do not substitute JNI ToReflectedField (force_resolve=true).
@@ -19,9 +21,11 @@ inline bool Enumerate(JNIEnv* env,jclass owner,jobjectArray* out,std::string* er
 }
 class Cache {
  jclass owner_=nullptr; jobject fields_=nullptr;
+ // Opaque IDs and ordinals only: Field/Class addresses must be decoded anew.
+ std::unordered_map<jfieldID,jsize> ordinals_;
  public:
  Cache()=default;Cache(const Cache&)=delete;Cache& operator=(const Cache&)=delete;
- void Clear(JNIEnv* env){if(fields_)env->DeleteGlobalRef(fields_);if(owner_)env->DeleteGlobalRef(owner_);fields_=nullptr;owner_=nullptr;}
+ void Clear(JNIEnv* env){if(fields_)env->DeleteGlobalRef(fields_);if(owner_)env->DeleteGlobalRef(owner_);fields_=nullptr;owner_=nullptr;ordinals_.clear();}
  bool Create(JNIEnv* env,jclass owner,jfieldID id,bool statik,jobject* out,std::string* error){
  if(out)*out=nullptr;
  auto fail=[&](const char* text){if(error)*error=text;return false;};
@@ -33,21 +37,35 @@ class Cache {
   Clear(env);
   jobjectArray local=nullptr;if(!Enumerate(env,owner,&local,error))return false;
   Local fields{env,local};
+  const jsize count=env->GetArrayLength(local);if(env->ExceptionCheck())return false;
+  if(count<0)return fail("Declared Field source has invalid length");
+  std::unordered_map<jfieldID,jsize> index;
+  try {
+   index.reserve(size_t(count));
+   for(jsize i=0;i<count;++i){
+    Local field{env,env->GetObjectArrayElement(local,i)};
+    if(!field.value||env->ExceptionCheck())return fail("Declared Field array lost an original mirror");
+    const auto actual=env->FromReflectedField(field.value);if(env->ExceptionCheck())return false;
+    if(!actual||!index.emplace(actual,i).second)return fail("Declared Field ID namespace/storage is inconsistent or ambiguous");
+   }
+  }catch(const std::bad_alloc&){return fail("Declared Field ordinal storage allocation failed");}
   jobject rooted_owner=env->NewGlobalRef(owner);
   if(!rooted_owner||env->ExceptionCheck()){if(rooted_owner)env->DeleteGlobalRef(rooted_owner);return false;}
   jobject rooted_fields=env->NewGlobalRef(fields.value);
   if(!rooted_fields||env->ExceptionCheck()){if(rooted_fields)env->DeleteGlobalRef(rooted_fields);env->DeleteGlobalRef(rooted_owner);return false;}
-  owner_=static_cast<jclass>(rooted_owner);fields_=rooted_fields;
+  owner_=static_cast<jclass>(rooted_owner);fields_=rooted_fields;ordinals_=std::move(index);
  }
+ const auto found=ordinals_.find(id);
+ if(found==ordinals_.end())return fail("Declared Field source does not contain requested opaque ID");
  const jsize count=env->GetArrayLength(static_cast<jarray>(fields_));
  if(env->ExceptionCheck())return false;
+ if(found->second<0||found->second>=count)return fail("Declared Field source ordinal is outside current array");
  jobject selected=nullptr;
  struct Root{JNIEnv* env;jobject& value;~Root(){if(value)env->DeleteGlobalRef(value);}} root{env,selected};
- for(jsize i=0;i<count;++i){
-  Local field{env,env->GetObjectArrayElement(static_cast<jobjectArray>(fields_),i)};
-  if(!field.value||env->ExceptionCheck())return fail("Declared Field array lost an original mirror");
-  const auto actual=env->FromReflectedField(field.value);if(env->ExceptionCheck())return false;
-  if(actual!=id)continue;
+ Local field{env,env->GetObjectArrayElement(static_cast<jobjectArray>(fields_),found->second)};
+ if(!field.value||env->ExceptionCheck())return fail("Declared Field array lost an original mirror");
+ const auto actual=env->FromReflectedField(field.value);if(env->ExceptionCheck())return false;
+ if(actual!=id)return fail("Declared Field source ordinal changed opaque ID");
   Local field_type{env,env->GetObjectClass(field.value)};
   if(!field_type.value||env->ExceptionCheck())return false;
   auto get_owner=env->GetMethodID(static_cast<jclass>(field_type.value),"getDeclaringClass","()Ljava/lang/Class;");
@@ -60,7 +78,6 @@ class Cache {
   const jint flags=env->CallIntMethod(field.value,get_flags);if(env->ExceptionCheck())return false;
   if(!same||((flags&8)!=0)!=statik||selected)return fail("Declared Field ID namespace/storage is inconsistent or ambiguous");
   selected=env->NewGlobalRef(field.value);if(!selected||env->ExceptionCheck())return false;
- }
  if(!selected)return fail("Declared Field source does not contain requested opaque ID");
  *out=selected;selected=nullptr;return true;
 }
