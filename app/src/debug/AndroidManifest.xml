@@ -3,7 +3,8 @@
     <activity android:name="com.github.ytlog.artdcevm.MainActivity" android:exported="true">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
-    <activity android:name="com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity" android:exported="false"/>
+    <!-- Allows adb to foreground the inert debug carrier on devices that reject background starts. -->
+    <activity android:name="com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity" android:exported="true"/>
     <activity android:name="com.github.ytlog.artdcevm.testing.ForegroundStressActivity" android:exported="true"/>
   </application>
   <instrumentation android:name="com.github.ytlog.artdcevm.ConformanceInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="DCEVM conformance" android:functionalTest="true"/>
