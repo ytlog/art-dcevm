@@ -44,6 +44,7 @@ class Guard final {
  bool EndProof(bool original_succeeded,bool incompatible_class_change,bool unchanged_sentinel)noexcept;
  bool Proven()const noexcept;
  bool UsesFrames(const FrameReader&frames)const noexcept{return access_.frames==&frames;}
+ bool UsesBytecode(const BytecodeSource&source)const noexcept{return access_.bytecode==&source;}
  bool BytecodeProven(const FrameReader&)const noexcept;
  bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
  void Activate()noexcept;

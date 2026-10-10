@@ -38,6 +38,7 @@
 #include "platform/common/native_final_field_calibration.h"
 #include "platform/common/native_reference_decoder.h"
 #include "platform/common/native_receiver_producer.h"
+#include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_removal_policy.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
@@ -101,6 +102,12 @@ struct NativeEngine final:Engine {
  frame_family_calibration::Service::Prepared frame_calibration_storage;
  std::vector<frame_family_calibration::MethodOracle> frame_methods;
  receiver_guard::SourceProducer receiver_producer;bool receiver_producer_bound=false;std::string receiver_producer_diagnostic;
+ std::unique_ptr<receiver_guard::FrameReader> receiver_frames;
+ std::unique_ptr<receiver_guard::BytecodeSource> receiver_bytecode;
+ std::unique_ptr<receiver_guard::SourceCalibration> receiver_source_calibration;
+ bool ReceiverInvokeSourceCalibrated()const override{return receiver_source_calibration&&receiver_source_calibration->Proven();}
+ std::string ReceiverInvokeSourceDiagnostic()const override{return ReceiverInvokeSourceCalibrated()?"":receiver_producer_diagnostic.empty()?"receiver-invoke-source-not-observed":receiver_producer_diagnostic;}
+ bool CalibrateReceiverSource(JNIEnv*,jvmtiEnv*);
  bool BindReceiverProducer(code_info_view::SourceFamily family){
   if(receiver_producer_bound)return true;
   const auto declaration=family==code_info_view::SourceFamily::kAndroid11?stack_visitor_service::Declaration::kAndroid11:family==code_info_view::SourceFamily::kAndroid12?stack_visitor_service::Declaration::kAndroid12:family==code_info_view::SourceFamily::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
@@ -1183,6 +1190,67 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  for(jint i=0;i<f;i++){stage.ids.push_back(fields[i]);auto mirror=env->NewGlobalRef(request.fields[i].strong_global_field);if(!mirror||env->ExceptionCheck()){for(auto m:stage.mirrors)env->DeleteGlobalRef(m);env->DeleteGlobalRef(stage.owner);return false;}stage.mirrors.push_back(mirror);}
  staged_classes.push_back(std::move(stage));return true;
 }
+bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
+ if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;
+ auto fail=[&](const char*text){receiver_producer_diagnostic=text;return false;};
+ if(!receiver_producer_bound||!permissions_proven||!permission_decoder.Ready()||!graph_current||!graph_decode_method||!input||!env||!ti||env->ExceptionCheck()||!redefinition_gate::Owned(vm))return fail("Receiver source awaits calibrated producer/roots/ordinary gate");
+ if(!receiver_frames){receiver_frames=std::make_unique<receiver_guard::FrameReader>(receiver_producer.Frames());receiver_bytecode=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames,receiver_producer.Access());receiver_source_calibration=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames,*receiver_bytecode,permission_decoder);}
+ if(!final_write_guard::BindSourceEvents(runtime.instrumentation,receiver_source_calibration->Observer(),&receiver_producer_diagnostic))return false;
+ struct Episode {
+  NativeEngine&e;JNIEnv*env;std::vector<jobject> globals;std::vector<jobject> registered;
+  jobject Own(jobject local){if(!local)return nullptr;auto root=env->NewGlobalRef(local);if(root)globals.push_back(root);return root;}
+  bool Register(jobject root){if(!e.permission_decoder.RegisterStrong(env,root,&e.receiver_producer_diagnostic))return false;registered.push_back(root);return true;}
+  ~Episode(){for(auto root:registered)e.permission_decoder.Forget(root);for(auto root:globals)env->DeleteGlobalRef(root);}
+ }episode{*this,env,{}, {}};
+ struct Local {JNIEnv*env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}};
+ jclass type=env->GetObjectClass(input);Local type_ref{env,type};
+ auto object_id=type?env->GetFieldID(type,"receiverSourceObject","Ljava/lang/Object;"):nullptr;
+ auto callers_id=type?env->GetFieldID(type,"receiverCallers","[Ljava/lang/reflect/Method;"):nullptr;
+ auto targets_id=type?env->GetFieldID(type,"receiverTargets","[Ljava/lang/reflect/Method;"):nullptr;
+ jobject object=object_id?env->GetObjectField(input,object_id):nullptr;Local object_ref{env,object};
+ auto callers=callers_id?static_cast<jobjectArray>(env->GetObjectField(input,callers_id)):nullptr;Local callers_ref{env,callers};
+ auto targets=targets_id?static_cast<jobjectArray>(env->GetObjectField(input,targets_id)):nullptr;Local targets_ref{env,targets};
+ auto receiver=episode.Own(object);
+ if(!receiver||!callers||!targets||env->ExceptionCheck()||env->GetArrayLength(callers)!=10||env->GetArrayLength(targets)!=10||!episode.Register(receiver))return fail("Public receiver source fixture identities unavailable");
+ jclass bootstrap=env->FindClass("com/github/ytlog/artdcevm/internal/ProductionBootstrap");Local bootstrap_ref{env,bootstrap};
+ auto run=bootstrap?env->GetStaticMethodID(bootstrap,"runReceiverSource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)I"):nullptr;
+ auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));
+ if(!run||!leaf||env->ExceptionCheck())return fail("Public receiver source invocation/native mirror leaf unavailable");
+ struct NativeSample {
+  NativeEngine&e;abi::common::FromReflectedMethod leaf;jobject caller,target;jmethodID caller_id,target_id;
+  uint32_t caller_flags,target_flags;void*self=nullptr,*method=nullptr,*member=nullptr;
+  static bool Read(const runnable_jni::Context&scope,void*raw){auto&r=*static_cast<NativeSample*>(raw);const abi::common::RunnableJniScope native{scope.self,scope.env,scope.vm};
+   if(scope.vm!=r.e.vm||scope.self!=r.e.graph_current())return false;
+   r.method=r.leaf(native,r.caller);r.member=r.leaf(native,r.target);
+   if(!r.method||!r.member||r.method!=r.e.graph_decode_method(r.e.runtime.receivers.jni_id_manager,r.caller_id)||r.member!=r.e.graph_decode_method(r.e.runtime.receivers.jni_id_manager,r.target_id))return false;
+   const auto layout=r.e.model.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+   for(auto item:{std::pair<void*,uint32_t>{r.method,r.caller_flags},{r.member,r.target_flags}}){size_t extent=0;method_metadata::Identity identity;
+    if(!method_identity::ReadableMappingExtent(item.first,&extent)||!method_metadata::ReadIdentity(layout,item.first,extent,&identity)||(identity.access_flags&0x1fffu)!=(item.second&0x1fffu)||identity.dex_method_index==UINT32_MAX)return false;
+   }r.self=scope.self;return true;
+  }
+ };
+ struct Install {void*method;std::string*error;static bool Run(const exclusive_owned_roots::Context&,void*raw){auto&r=*static_cast<Install*>(raw);return final_write_guard::InstallSourceEventsAtExclusiveBoundary(r.error)&&final_write_guard::PrepareProofMethodAtExclusiveBoundary(r.method,r.error);}};
+ constexpr int expected[]={11,31,21,41,41,61,51,71,31,51};
+ for(unsigned i=0;i<10;++i){
+  jobject caller_local=env->GetObjectArrayElement(callers,jint(i)),target_local=env->GetObjectArrayElement(targets,jint(i));Local caller_ref{env,caller_local},target_ref{env,target_local};
+  auto caller=episode.Own(caller_local),target=episode.Own(target_local);auto caller_id=caller?env->FromReflectedMethod(caller):nullptr;auto target_id=target?env->FromReflectedMethod(target):nullptr;
+  jint caller_flags=0,target_flags=0,bytes=0;unsigned char*public_bytes=nullptr;
+  if(!caller_id||!target_id||env->ExceptionCheck()||ti->GetMethodModifiers(caller_id,&caller_flags)!=JVMTI_ERROR_NONE||ti->GetMethodModifiers(target_id,&target_flags)!=JVMTI_ERROR_NONE||ti->GetBytecodes(caller_id,&bytes,&public_bytes)!=JVMTI_ERROR_NONE||bytes<=0||!public_bytes)return fail("Public receiver caller/target modifiers or bytecodes unavailable");
+  struct Bytes {jvmtiEnv*ti;unsigned char*data;~Bytes(){ti->Deallocate(data);}} release{ti,public_bytes};
+  NativeSample sample{*this,leaf,caller,target,caller_id,target_id,uint32_t(caller_flags),uint32_t(target_flags)};
+  if(runnable_executor::With(env,caller,NativeSample::Read,&sample)!=runnable_jni::Result::kSuccess)return fail("Receiver public reflected/JNI/native member identities disagree");
+  const auto kind=static_cast<receiver_guard::InvokeKind>(i/2);jobject special=nullptr;
+  if(kind==receiver_guard::InvokeKind::Super){jclass declaring=nullptr;if(ti->GetMethodDeclaringClass(caller_id,&declaring)!=JVMTI_ERROR_NONE||!declaring)return fail("Public special caller Class unavailable");Local declaring_ref{env,declaring};special=episode.Own(declaring);if(!special||!episode.Register(special))return false;}
+  Install install{sample.method,&receiver_producer_diagnostic};if(!permission_exclusive.With(env,&caller,1,Install::Run,&install,&receiver_producer_diagnostic))return false;
+  if(!receiver_source_calibration->Stage(sample.self,sample.method,sample.member,kind==receiver_guard::InvokeKind::Static?nullptr:receiver,special,kind,i%2,public_bytes,size_t(bytes)))return fail("Receiver source sample staging rejected");
+  const jint result=env->CallStaticIntMethod(bootstrap,run,input,jint(i));const bool pending=env->ExceptionCheck();
+  const bool proven=receiver_source_calibration->Finish(!pending&&result==expected[i]);
+  if(pending)env->ExceptionClear(); // Only this isolated private calibration call.
+  if(!proven){receiver_producer_diagnostic="Actual receiver source episode failed index="+std::to_string(i)+" result="+std::to_string(result)+" pending="+std::to_string(pending);return false;}
+ }
+ if(!receiver_source_calibration->Seal())return fail("Receiver source lacks all ten original invoke forms");
+ receiver_producer_diagnostic.clear();return true;
+}
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
  graph_staging=true;
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
@@ -1224,6 +1292,10 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
    schema_inputs.push_back(std::move(input));
   }
   PreparePermissionOwner(env);if(env->ExceptionCheck())return Fail(error,"Final permission calibration left a pending exception");
+  if(receiver_producer_bound&&permissions_proven){
+   const bool observed=CalibrateReceiverSource(env,ti);
+   if(!observed&&env->ExceptionCheck())env->ExceptionClear(); // New private fixture failure only; entry was exception-free.
+  }
   if(!schema_verifier.Stage(env,ti,graph_bases,SchemaBindings(),error))return false;
   std::vector<jclass> affected;affected.reserve(staged_classes.size());
   for(const auto& stage:staged_classes)affected.push_back(stage.owner);

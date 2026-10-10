@@ -1,5 +1,6 @@
 #include "platform/common/native_final_write_listener.h"
 #include "platform/common/native_receiver_guard.h"
+#include "platform/common/native_receiver_source_observer.h"
 #include <cstring>
 #include "platform/abi/arm64/common/instrumentation.h"
 #include <cstdlib>
@@ -23,7 +24,7 @@ class FieldOnlyListener {
  virtual void MethodExited(void*,void*,OptionalFrame,Handle&){std::abort();}
  virtual void MethodExited(void*,void*,OptionalFrame,uint64_t&){std::abort();}
  virtual void MethodUnwind(void*,Handle,void*,uint32_t){std::abort();}
- virtual void DexPcMoved(void*t,Handle,void*m,uint32_t pc){if(!receivers)std::abort();receivers->CheckBytecode(t,m,pc);invoke_events.fetch_add(1,std::memory_order_relaxed);}
+ virtual void DexPcMoved(void*t,Handle,void*m,uint32_t pc){if(!receivers&&!source)std::abort();if(source)source->DexPcMoved(t,m,pc);if(receivers)receivers->CheckBytecode(t,m,pc);invoke_events.fetch_add(1,std::memory_order_relaxed);}
  virtual void FieldRead(void*t,Handle object,void*,uint32_t,void*f){if(!receivers)std::abort();ReceiverField(t,object,f,false);read_events.fetch_add(1,std::memory_order_relaxed);}
  virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,Handle){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f,true);}
  virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,const uint64_t&){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f);}
@@ -33,6 +34,7 @@ class FieldOnlyListener {
  virtual void WatchedFramePop(void*,const ShadowFrame&){std::abort();}
  bool ReceiverField(void*t,Handle object,void*f,bool write){if(!receivers)return false;uint32_t reference=0;if(object.slot)std::memcpy(&reference,object.slot,4);if(write)write_events.fetch_add(1,std::memory_order_relaxed);return receivers->CheckCompressed(write?receiver_guard::Path::BytecodeWrite:receiver_guard::Path::BytecodeRead,t,f,reference,nullptr,true);}
  Guard* guard=nullptr;receiver_guard::Guard* receivers=nullptr;
+ const receiver_guard::SourceObservation* source=nullptr;
  std::atomic<uint64_t> invoke_events{0},read_events{0},write_events{0};
 };
 // Last vtable callback has no role in kFieldWritten; define its exact reference
@@ -46,7 +48,7 @@ enum class AddKind {None,Legacy,Bool,Typed};
 using MethodDeopt=void(*)(void*,void*);
 void* instrumentation=nullptr;void* add=nullptr;Deopt deopt=nullptr;MethodDeopt method_deopt=nullptr;
 std::atomic<receiver_guard::Guard*> published_receivers{nullptr};std::atomic<void*> published_instrumentation{nullptr};std::atomic<uint64_t> receiver_generation{0};
-AddKind kind=AddKind::None;bool installed=false,receiver_installed=false;std::mutex configuration;
+AddKind kind=AddKind::None;bool installed=false,receiver_installed=false,source_installed=false;std::mutex configuration;
 constexpr char kEnable[]="_ZN3art15instrumentation15Instrumentation20EnableDeoptimizationEv";
 constexpr char kDisable[]="_ZN3art15instrumentation15Instrumentation21DisableDeoptimizationEPKc";
 void* disable_original=nullptr;void* enable_original=nullptr;std::atomic<void*> enabled_receiver{nullptr};bool observer_installed=false,observer_attempted=false;bool legacy=false;
@@ -115,18 +117,40 @@ bool BindReceiverEvents(void*receiver,receiver_guard::Guard&guard,std::string*er
  std::lock_guard<std::mutex> lock(configuration);
  if(!installed||!receiver||receiver!=instrumentation||!listener.guard||!add||!deopt||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=receiver))return Fail(error,"Receiver listener lacks the exact installed process Instrumentation owner");
  if(listener.receivers)return listener.receivers==&guard||Fail(error,"Receiver events already belong to another permanent guard");
+ if(listener.source&&(!guard.UsesFrames(listener.source->Frames())||!guard.UsesBytecode(listener.source->Source())))return Fail(error,"Receiver guard differs from the permanent source frame/resolver owner");
  listener.receivers=&guard;return true;
 }
 bool InstallReceiverEventsAtExclusiveBoundary(std::string*error){
  std::lock_guard<std::mutex> lock(configuration);
  if(!installed||!listener.receivers||!add||!instrumentation||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return Fail(error,"Receiver events have no live exact Instrumentation binding");
- if(receiver_installed)return true;constexpr uint32_t additional=0x18;
+ if(receiver_installed)return true;const uint32_t additional=source_installed?0x08:0x18;
  switch(kind){
   case AddKind::Typed:reinterpret_cast<TypedAdd>(add)(instrumentation,&listener,additional,abi::arm64::android_common::ListenerType::kRegularListener);break;
   case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;
   case AddKind::Legacy:reinterpret_cast<LegacyAdd>(add)(instrumentation,&listener,additional);break;
   default:return Fail(error,"Receiver event source AddListener declaration missing");
  }receiver_installed=true;published_receivers.store(listener.receivers,std::memory_order_release);published_instrumentation.store(instrumentation,std::memory_order_release);receiver_generation.fetch_add(1,std::memory_order_acq_rel);return true;
+}
+bool BindSourceEvents(void*receiver,const receiver_guard::SourceObservation&source,std::string*error){
+ std::lock_guard<std::mutex> lock(configuration);
+ if(!installed||!receiver||receiver!=instrumentation||!listener.guard||!add||!deopt||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=receiver))return Fail(error,"Source calibration lacks exact installed Instrumentation owner");
+ if(listener.source)return listener.source==&source||Fail(error,"Source events already belong to another permanent calibration owner");
+ if(listener.receivers&&(!listener.receivers->UsesFrames(source.Frames())||!listener.receivers->UsesBytecode(source.Source())))return Fail(error,"Source calibration differs from the permanent receiver frame/resolver owner");
+ listener.source=&source;return true;
+}
+bool InstallSourceEventsAtExclusiveBoundary(std::string*error){
+ std::lock_guard<std::mutex> lock(configuration);
+ if(!installed||!listener.source||!add||!instrumentation||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return Fail(error,"Source calibration has no live exact Instrumentation binding");
+ if(source_installed)return true;
+ if(!receiver_installed){constexpr uint32_t additional=0x10;
+  switch(kind){
+   case AddKind::Typed:reinterpret_cast<TypedAdd>(add)(instrumentation,&listener,additional,abi::arm64::android_common::ListenerType::kRegularListener);break;
+   case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;
+   case AddKind::Legacy:reinterpret_cast<LegacyAdd>(add)(instrumentation,&listener,additional);break;
+   default:return Fail(error,"Source calibration AddListener declaration missing");
+  }
+ }
+ source_installed=true;return true;
 }
 bool ReceiverListenerProven(const receiver_guard::Guard&guard)noexcept{
  std::lock_guard<std::mutex> lock(configuration);

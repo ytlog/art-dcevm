@@ -51,6 +51,7 @@ struct Engine:HookEngine {
  }
 };
 }
+#include "native_receiver_source_calibration_cases.h"
 int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
  JNINativeInterface_ functions{};functions.NewGlobalRef=Global;functions.NewWeakGlobalRef=WeakRef;functions.DeleteGlobalRef=Delete;functions.DeleteWeakGlobalRef=Delete;functions.DeleteLocalRef=Delete;functions.NewLocalRef=Local;functions.IsSameObject=Same;functions.ExceptionCheck=Exception;functions.GetJavaVM=VM;functions.GetObjectRefType=Kind;functions.FindClass=Find;functions.GetMethodID=Method;functions.GetStaticMethodID=Method;functions.NewObjectV=Construct;functions.CallStaticVoidMethodV=GC;JNIEnv env{&functions};
  jobject a=Reference(NewObject(),JNIGlobalRefType),b=Reference(NewObject(),JNIGlobalRefType);Engine hooks;Decoder decoder;std::string error;
@@ -72,6 +73,7 @@ int main(int argc,char** argv){assert(argc==2);mode=argv[1][0]-'0';
  auto* prior=Reference(a).object;Reference(a).object=NewObject();
  assert(decoder.StrongRunnable(&thread,a,&out)&&out==Reference(a).object&&out!=prior);
  Reference(a).object=prior;
+ TestSourceCalibration(decoder,&env,a,b);
  decoder.Forget(a);assert(decoder.Strong(context,Scope::Runnable,a,&out));decoder.Forget(a);assert(!decoder.Strong(context,Scope::NoSuspend,a,&out));
  out=unchanged;assert(!decoder.StrongRunnable(&thread,a,&out)&&out==unchanged);
  int before_weak=weak_calls,before_clear=clear_calls,before_current=current_calls;

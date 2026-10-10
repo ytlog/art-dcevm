@@ -32,6 +32,7 @@ class BytecodeSource final {
  bool UsesFrames(const FrameReader&frames)const noexcept{return &frames_==&frames;}
  BytecodeResult Read(void*thread,void*actual_caller,uint32_t actual_pc)const noexcept;
  private:
+ friend class SourceCalibration;
  BytecodeResult ReadImpl(void*,void*,uint32_t,InvokeInstruction*)const noexcept;
  const FrameReader&frames_;BytecodeAccess access_;uint16_t forms_=0;bool sealed_=false;
 };

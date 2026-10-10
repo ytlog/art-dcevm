@@ -2,6 +2,7 @@
 #include "api/hook_engine.h"
 #include "platform/common/native_final_write_guard.h"
 #include "platform/common/native_receiver_guard.h"
+namespace artdcevm::receiver_guard {class SourceObservation;}
 namespace artdcevm::final_write_guard {
 // Call during the first Native JNI load before plugin initialization. Older
 // named EnableDeoptimization must be witnessed before DeoptimizeEverything,
@@ -17,6 +18,10 @@ bool InstallListenerAtExclusiveBoundary(std::string*);
 // Receiver rejection precedes final-field checks and forbids original access.
 bool BindReceiverEvents(void* independently_observed_instrumentation,receiver_guard::Guard&,std::string*);
 bool InstallReceiverEventsAtExclusiveBoundary(std::string*);
+// Initial source geometry/resolver calibration reuses the same permanent
+// listener; installs DexPcMoved only and does not grant receiver readiness.
+bool BindSourceEvents(void* independently_observed_instrumentation,const receiver_guard::SourceObservation&,std::string*);
+bool InstallSourceEventsAtExclusiveBoundary(std::string*);
 bool ReceiverListenerProven(const receiver_guard::Guard&)noexcept;
 class ReceiverProofWitness final {
  public:ReceiverProofWitness()=default;
