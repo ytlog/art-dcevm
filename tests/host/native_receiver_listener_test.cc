@@ -27,7 +27,7 @@ static bool RCompressed(void*p,void*,uint32_t v,void**o)noexcept{if(v!=0x1234)re
 static std::array<uint16_t,7> source_instructions{0,0x106e,0,0,0x106f,0,0};
 static bool RSourceFrame(void*p,void*,void*caller,uint32_t,const void**frame)noexcept;
 static bool RSourceCode(void*,void*,void*,rg::CodeView*out)noexcept{*out={source_instructions.data(),source_instructions.size(),2,2,2};return true;}
-static bool RSourceResolve(void*p,void*,void*,const rg::InvokeInstruction&invoke,void**member,void**special)noexcept{auto&s=*static_cast<RState*>(p);*member=s.method;*special=invoke.kind==rg::InvokeKind::Super?s.caller:nullptr;return true;}
+static bool RSourceResolve(void*p,void*,void*,uint32_t,const rg::InvokeInstruction&invoke,void**member,void**special)noexcept{auto&s=*static_cast<RState*>(p);*member=s.method;*special=invoke.kind==rg::InvokeKind::Super?s.caller:nullptr;return true;}
 static bool RPending(void*p,void*)noexcept{return static_cast<RState*>(p)->pending!=nullptr;}
 static void RRaise(void*p,void*,const char*t,const char*)noexcept{static_cast<RState*>(p)->pending=t;}
 static std::array<unsigned char,80> native_frame{};static const void* native_operands=nullptr;

@@ -116,7 +116,7 @@ struct NativeEngine final:Engine {
   const auto declaration=family==code_info_view::SourceFamily::kAndroid11?stack_visitor_service::Declaration::kAndroid11:family==code_info_view::SourceFamily::kAndroid12?stack_visitor_service::Declaration::kAndroid12:family==code_info_view::SourceFamily::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
   const auto layout=model.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:family==code_info_view::SourceFamily::kAndroid17?code_item_metadata::kStandard:code_item_metadata::kTagged;
   auto current_thread=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
-  receiver_producer_bound=receiver_producer.Bind(hooks,declaration,layout,metadata,runtime.receivers.class_linker,current_thread,&receiver_producer_diagnostic);return receiver_producer_bound;
+  receiver_producer_bound=receiver_producer.Bind(hooks,declaration,layout,metadata,runtime.receivers.class_linker,current_thread,&receiver_producer_diagnostic,vm);return receiver_producer_bound;
  }
  whole_process_frames::Service whole_frames;bool frame_geometry_proven=false,compiled_frames_proven=false;std::string frame_geometry_diagnostic;
  const native_source_stop::Session* calibration_stop=nullptr;void* calibration_self=nullptr;

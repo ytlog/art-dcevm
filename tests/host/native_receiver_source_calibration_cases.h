@@ -10,7 +10,7 @@ static bool SFrame(void*p,void*t,void*m,uint32_t,const void**out)noexcept{auto&s
 static bool SCode(void*p,void*,void*,rg::CodeView*out)noexcept{auto&s=*static_cast<SourceCase*>(p);*out={s.code.data(),s.code.size(),2,2,0};return true;}
 static bool SExtent(void*p,void*,const void*address,size_t*out)noexcept{auto&s=*static_cast<SourceCase*>(p);*out=address==s.frame.data()?s.frame.size():sizeof(rg::InstructionOperands);return true;}
 static bool SReference(void*,void*,uint32_t value,void**out)noexcept{*out=reinterpret_cast<void*>(uintptr_t(value));return true;}
-static bool SResolve(void*p,void*,void*,const rg::InvokeInstruction&i,void**out,void**special)noexcept{auto&s=*static_cast<SourceCase*>(p);
+static bool SResolve(void*p,void*,void*,uint32_t,const rg::InvokeInstruction&i,void**out,void**special)noexcept{auto&s=*static_cast<SourceCase*>(p);
  if(s.move){Reference(s.root).object=reinterpret_cast<Object*>(0x5678);uint32_t root=0x5678;std::memcpy(s.frame.data()+72,&root,4);s.move=false;}
  *out=s.wrong_target?s.method:s.target;*special=i.kind==rg::InvokeKind::Super?reinterpret_cast<void*>(0x8765):nullptr;return true;
 }

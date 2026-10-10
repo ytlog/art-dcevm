@@ -11,7 +11,7 @@ bool Reference(void*p,void*,uint32_t raw,void**out)noexcept{auto&s=*static_cast<
 class Operand:public r::InstructionOperands{public:Operand():InstructionOperands(1){}uint32_t GetOperand(size_t)const override{return 0;}};
 bool Frame(void*p,void*,void*,uint32_t,const void**out)noexcept{*out=static_cast<State*>(p)->frame.data();return true;}
 bool Code(void*p,void*,void*,r::CodeView*out)noexcept{auto&s=*static_cast<State*>(p);*out={s.code.data(),s.code.size(),4,3,2};return true;}
-bool Resolve(void*p,void*,void*,const r::InvokeInstruction&i,void**member,void**special)noexcept{auto&s=*static_cast<State*>(p);++s.resolves;*member=&s.target;*special=i.kind==r::InvokeKind::Super?&s.super:nullptr;if(s.move){uint32_t raw=19;std::memcpy(s.frame.data()+80,&raw,4);}if(s.change_pc){uint32_t pc=1;std::memcpy(s.frame.data()+52,&pc,4);}return !s.fail;}
+bool Resolve(void*p,void*,void*,uint32_t,const r::InvokeInstruction&i,void**member,void**special)noexcept{auto&s=*static_cast<State*>(p);++s.resolves;*member=&s.target;*special=i.kind==r::InvokeKind::Super?&s.super:nullptr;if(s.move){uint32_t raw=19;std::memcpy(s.frame.data()+80,&raw,4);}if(s.change_pc){uint32_t pc=1;std::memcpy(s.frame.data()+52,&pc,4);}return !s.fail;}
 bool Pending(void*p,void*)noexcept{return static_cast<State*>(p)->pending;}
 int main(){
  std::array<uint16_t,4>bytes{};r::CodeView view{bytes.data(),bytes.size(),8,3,2};r::InvokeInstruction decoded;

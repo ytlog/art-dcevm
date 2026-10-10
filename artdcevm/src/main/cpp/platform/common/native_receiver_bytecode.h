@@ -18,7 +18,7 @@ struct BytecodeAccess {
  bool(*code)(void*,void*,void*,CodeView*)noexcept=nullptr;
  // Original named source ResolveMethod. It may suspend; Source rereads the
  // actual frame and receiver afterward. Null without actual pending is denied.
- bool(*resolve)(void*,void*,void*,const InvokeInstruction&,void**,void**)noexcept=nullptr;
+ bool(*resolve)(void*,void*,void*,uint32_t actual_pc,const InvokeInstruction&,void**,void**)noexcept=nullptr;
  bool(*pending)(void*,void*)noexcept=nullptr;
  // invoke-custom/polymorphic remain unavailable until their original source
  // bridge to the sole MH/VH consumer has an independently owned typed proof.
