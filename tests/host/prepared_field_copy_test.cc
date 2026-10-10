@@ -185,6 +185,16 @@ int main() {
   // Only a separately attested hierarchy owner may remove an ancestor. Its
   // old fields still clear, while new ancestor fields remain allocation defaults.
   assert(PreparedPlan::Prepare(ops,false,&after,&before,&prepared,&error,pairs,true));
+  // The typed-storage owner consumes this exact copy table. Removed ancestor,
+  // deleted and changed-type fields are genuinely cleared, never retained.
+  forbid_allocation=true;
+  assert(prepared.RetainsSourceField(&before.instance[8]));
+  assert(prepared.RetainsSourceField(&before.instance[9]));
+  assert(!prepared.RetainsSourceField(&before.instance[11]));
+  assert(!prepared.RetainsSourceField(&before.instance[12]));
+  assert(!prepared.RetainsSourceField(&before_parent.instance[0]));
+  assert(!prepared.RetainsSourceField(nullptr));
+  forbid_allocation=false;
   Object narrowed_source,narrowed_target;Put(&narrowed_source,&before,false,10,111);
   Put(&narrowed_source,&before_parent,false,0,222);Put(&narrowed_source,&before_parent,false,1,333);
   forbid_allocation=true;prepared.CopyAndClear(ops,&narrowed_target,&narrowed_source);forbid_allocation=false;

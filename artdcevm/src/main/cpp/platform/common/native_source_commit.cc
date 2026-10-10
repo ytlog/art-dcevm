@@ -131,6 +131,11 @@ bool Services::Validate(const source_commit::Plan& p)const {
 }
 uint32_t Services::Status(void* klass)const{return __atomic_load_n(Scalar(klass,layout_->status),__ATOMIC_SEQ_CST)>>28;}
 void Services::SetStatus(void* klass,uint32_t status)const{Require(status<=15);set_status_(klass,static_cast<uint8_t>(status));}
+bool Services::RetainsSourceField(const source_commit::Plan& plan,bool statik,const void* klass,const void* field,bool* retained)const noexcept{
+ if(!retained||plan_!=&plan||!dependencies_.prepare_field_copy||!klass||!field)return false;
+ for(const auto& pair:copies_)if(pair.old_class==klass){*retained=(statik?pair.statics:pair.instances).RetainsSourceField(field);return true;}
+ return false;
+}
 void Services::CopyFields(bool statik,void* target,void* target_class,void* source,void* source_class)const{
   if(dependencies_.prepare_field_copy){
     for(const auto& pair:copies_)if(pair.old_class==source_class&&pair.new_class==target_class){

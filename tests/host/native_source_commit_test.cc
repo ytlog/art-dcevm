@@ -212,7 +212,13 @@ int main(){
  assert(!native_source_commit::Services::Prepare(hooks,invalid,plan,{{old_class,new_class,methods.get(),nullptr}},&error)&&unchanged());
  hooks.missing="ReplaceReferences";assert(!prepare()&&unchanged());hooks.missing=nullptr;
  current=foreign_thread.data();assert(!prepare()&&unchanged());current=thread.data();
- auto service=prepare();assert(service&&service->Validate(plan));source_commit::Plan copied=plan;assert(!service->Validate(copied));
+ deps.prepare_field_copy=true;auto service=prepare();assert(service&&service->Validate(plan));
+ bool retained=false;assert(service->RetainsSourceField(plan,false,old_class,old_fields[2],&retained)&&retained);
+ assert(service->RetainsSourceField(plan,true,old_class,old_fields[0],&retained)&&retained);
+ assert(service->RetainsSourceField(plan,false,old_class,old_fields[0],&retained)&&!retained);
+ source_commit::Plan foreign_plan=plan;assert(!service->RetainsSourceField(foreign_plan,false,old_class,old_fields[2],&retained));
+ assert(!service->RetainsSourceField(plan,false,new_class,old_fields[2],&retained));
+ assert(!service->RetainsSourceField(plan,false,old_class,old_fields[2],nullptr));source_commit::Plan copied=plan;assert(!service->Validate(copied));
  current=foreign_thread.data();assert(!source_commit::Run(plan,*service)&&unchanged());current=thread.data();
  // Prepare succeeded, but the independent reflective oracle rejects at Run.
  // No registry publication, field/status mutation or heap write may occur.

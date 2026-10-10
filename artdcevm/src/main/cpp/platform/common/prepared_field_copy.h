@@ -15,6 +15,9 @@ class PreparedPlan {
   bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
   void RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{roots_.Refresh(r);}
   void CopyAndClear(const FieldCopyAccess&,void* target,void* source)const noexcept;
+  bool RetainsSourceField(const void* field)const noexcept{
+    for(const auto& copy:copies_)if(copy.source==field)return true;return false;
+  }
   size_t RetainedCount()const{return copies_.size();}
   size_t RetiredCount()const{return clear_.size()-copies_.size();}
  private:

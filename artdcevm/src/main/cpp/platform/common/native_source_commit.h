@@ -57,6 +57,7 @@ class Services final : public source_commit::Services {
   static std::unique_ptr<Services> Prepare(HookEngine&,const Dependencies&,
       const source_commit::Plan&,std::vector<MethodPair>,std::string* error);
   bool Validate(const source_commit::Plan&)const override;
+  bool RetainsSourceField(const source_commit::Plan&,bool is_static,const void* source_class,const void* field,bool* retained)const noexcept;
   bool CollectManagedRoots(const prepared_roots::Registrar&);
   bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;
   void RefreshManagedRoots(const prepared_roots::Resolver&)noexcept;
