@@ -25,14 +25,22 @@ int main(int argc,char** argv){
  assert(!cache_bytes.empty());production_bootstrap::InstalledClassIds cache_ids;evolution::ClassSchema cache_schema;
  assert(production_bootstrap::SelectInstalledClass({cache_bytes},"Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;",&cache_schema,&counts,&error,&cache_ids));
  assert(cache_ids.type_count>1024&&cache_ids.field_count>1024&&cache_ids.method_count>1024);
- bool number=false;for(const auto& field:cache_schema.fields)number|=field.name=="number"&&field.descriptor=="I"&&field.access==0x41u;assert(number);
- assert(cache_schema.fields.size()==1026&&cache_schema.methods.size()==1028&&cache_ids.type_index<cache_ids.type_count);
- bool found_read=false,found_warm=false;
+ bool number=false;for(const auto& field:cache_schema.fields)number|=field.name=="number"&&field.descriptor=="I"&&field.access==0x49u;assert(number);
+ assert(cache_schema.fields.size()==1026&&cache_schema.methods.size()==1029&&cache_ids.type_index<cache_ids.type_count);
+ assert(counts.static_fields==1026&&counts.instance_fields==0&&counts.direct_methods==1029&&counts.virtual_methods==0);
+ bool found_read=false,found_warm=false,found_clinit=false;
  for(const auto& method:cache_schema.methods){
   assert(method.dex_index<cache_ids.method_count);
-  found_read|=method.name=="read"&&method.descriptor=="()I"&&method.access==1u;
+  found_clinit|=method.name=="<clinit>"&&method.descriptor=="()V"&&method.access==0x10008u;
+  found_read|=method.name=="read"&&method.descriptor=="()I"&&method.access==9u;
   found_warm|=method.name=="warm"&&method.descriptor=="(Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;)Ljava/lang/Class;"&&method.access==9u;
  }
- assert(found_read&&found_warm);
+ assert(found_read&&found_warm&&found_clinit);
+ evolution::ClassSchema writer;production_bootstrap::InstalledClassIds writer_ids;
+ assert(production_bootstrap::SelectInstalledClass({cache_bytes},"Lcom/github/ytlog/artdcevm/internal/ZCacheWriter;",&writer,&counts,&error,&writer_ids));
+ assert(writer_ids.type_index!=cache_ids.type_index&&writer_ids.type_count==cache_ids.type_count&&writer_ids.field_count==cache_ids.field_count&&writer_ids.method_count==cache_ids.method_count);
+ assert(writer.fields.empty()&&writer.methods.size()==2&&counts.direct_methods==2&&counts.virtual_methods==0);
+ bool cross_warm=false;for(const auto&method:writer.methods)cross_warm|=method.name=="warm"&&method.descriptor=="(Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;)Ljava/lang/Class;"&&method.access==8u;
+ assert(cross_warm);
  std::cout<<"Installed APK oracle: complete real DEX declarations, duplicate/missing class and malformed extent refusal preserve output\n";
 }
