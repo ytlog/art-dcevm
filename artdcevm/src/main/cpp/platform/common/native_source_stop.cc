@@ -13,7 +13,7 @@ thread_local Session* borrowed=nullptr;
 thread_local Observation* observation=nullptr;
 thread_local native_source_gc_publication::Scope* publication=nullptr;
 std::mutex installation;bool installed=false;
-a::SuspendConstruct original_stop=nullptr;a::SuspendDestroy original_resume=nullptr;
+abi::common::SuspendConstruct original_stop=nullptr;abi::common::SuspendDestroy original_resume=nullptr;
 s::MutatorOperation original_disable=nullptr,original_enable=nullptr;
 s::StartGC original_start=nullptr;s::FinishGC original_finish=nullptr;
 using WaitGC=int32_t (*)(void*,int32_t,void*);
@@ -209,8 +209,8 @@ bool Fail(std::string* error,const char* text){if(error)*error=text;return false
 }
 bool Install(HookEngine& hooks,std::string* error) {
  std::lock_guard<std::mutex> guard(installation);if(installed)return true;
- auto ctor=hooks.FindSymbol("libart.so",a::kSuspendConstruct);
- auto dtor=hooks.FindSymbol("libart.so",a::kSuspendDestroy);
+ auto ctor=hooks.FindSymbol("libart.so",abi::common::kSuspendConstruct);
+ auto dtor=hooks.FindSymbol("libart.so",abi::common::kSuspendDestroy);
  // Empty carrier C1/C2 and D1/D2 must share the actual named implementation;
  // no caller-PC inference or arbitrary source final window is accepted.
  if(!ctor||!dtor||hooks.FindSymbol("libart.so","_ZN3art16ScopedSuspendAllC1EPKcb")!=ctor||
@@ -229,7 +229,7 @@ bool Install(HookEngine& hooks,std::string* error) {
   for(size_t j=0;j<i;++j)if(bindings[j].target==bindings[i].target)
     return Fail(error,"Source observer distinct native operations share a target");
  }
- a::SuspendAll scope{};reinterpret_cast<a::SuspendConstruct>(ctor)(&scope,"artdcevm source stop installation",false);
+ abi::common::SuspendAll scope{};reinterpret_cast<abi::common::SuspendConstruct>(ctor)(&scope,"artdcevm source stop installation",false);
  void* tokens[6]{};size_t count=0;
  for(auto& binding:bindings){
   auto token=hooks.Install(binding.target,binding.proxy,binding.original,error);
@@ -238,7 +238,7 @@ bool Install(HookEngine& hooks,std::string* error) {
  installed=count==6;
  if(!installed){std::string rollback;while(count)if(!hooks.Remove(tokens[--count],&rollback))std::abort();
   for(auto& binding:bindings)*binding.original=nullptr;}
- reinterpret_cast<a::SuspendDestroy>(dtor)(&scope);
+ reinterpret_cast<abi::common::SuspendDestroy>(dtor)(&scope);
  if(installed)NativeHooks::BindPublication();
  return installed;
 }
@@ -264,7 +264,7 @@ bool InstallOriginalWaitingScope(HookEngine& hooks,std::string* error) {
  }
  for(size_t i=0;i<3;++i){if(vendor&&i==1)continue;if(!b[i].target)return Fail(error,"Original WaitingGC bridge lacks canonical named mutex/wait leaves");
   for(size_t j=0;j<i;++j)if(b[j].target&&b[i].target==b[j].target)return Fail(error,"Original WaitingGC bridge aliases distinct leaves");}
- a::SuspendAll storage{};original_stop(&storage,"artdcevm original WaitingGC bridge installation",false);
+ abi::common::SuspendAll storage{};original_stop(&storage,"artdcevm original WaitingGC bridge installation",false);
  void* tokens[3]{};size_t n=0;
  for(auto& x:b){if(!x.target)continue;auto token=hooks.Install(x.target,x.proxy,x.original,error);if(!token)break;
   if(!*x.original)std::abort();tokens[n++]=token;}
@@ -298,7 +298,7 @@ bool Service::Bind(HookEngine& hooks,void* heap,const thread_suspend_service::Se
  Service c;c.heap_=heap;c.state_=state;
 #define ART(member,name) c.member=reinterpret_cast<decltype(c.member)>(hooks.FindSymbol("libart.so",name))
  ART(mutator_,s::kMutator);ART(current_,s::kCurrent);ART(start_,s::kStartGC);ART(finish_,s::kFinishGC);
- ART(lock_,s::kLock);ART(unlock_,s::kUnlock);ART(stop_,a::kSuspendConstruct);ART(resume_,a::kSuspendDestroy);
+ ART(lock_,s::kLock);ART(unlock_,s::kUnlock);ART(stop_,abi::common::kSuspendConstruct);ART(resume_,abi::common::kSuspendDestroy);
 #undef ART
  if(!c.mutator_||!*c.mutator_||!c.current_||!c.start_||!c.finish_||!c.lock_||!c.unlock_||!c.stop_||!c.resume_)
    return Fail(error,"Source stop lacks exact native heap/mutator/scope leaves");

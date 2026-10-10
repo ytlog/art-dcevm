@@ -27,7 +27,7 @@ uint32_t gc_argument=0x8a51729bu,last_vendor_argument=0;int vendor_original_call
 using Wait=int32_t(*)(void*,int32_t,void*);
 Wait wait_proxy=nullptr;s::MutatorOperation ml_proxy=nullptr,mu_proxy=nullptr;
 using VendorLock=void(*)(void*,void*,uint32_t);VendorLock vendor_proxy=nullptr;
-a::SuspendConstruct stop_proxy=nullptr;a::SuspendDestroy resume_proxy=nullptr;
+abi::common::SuspendConstruct stop_proxy=nullptr;abi::common::SuspendDestroy resume_proxy=nullptr;
 s::StartGC start_proxy=nullptr;s::FinishGC finish_proxy=nullptr;
 s::MutatorOperation disable_proxy=nullptr,enable_proxy=nullptr;
 void* Current(){return &flags;}
@@ -85,8 +85,8 @@ class Hooks:public HookEngine {
   if(vendor&&!std::strcmp(n,"_ZZN3art6Thread25ClearAllInterpreterCachesEvE7closure"))return &other_mutex;
   if(vendor&&!std::strcmp(n,"_ZN3art5Locks17thread_list_lock_E"))return &list_mutex;
   if(vendor&&!std::strcmp(n,"_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_"))return Fn(CacheForEach);
-  if(!std::strcmp(n,a::kSuspendConstruct)||!std::strcmp(n,"_ZN3art16ScopedSuspendAllC1EPKcb"))return Fn(stop_proxy?stop_proxy:Stop);
-  if(!std::strcmp(n,a::kSuspendDestroy)||!std::strcmp(n,"_ZN3art16ScopedSuspendAllD1Ev"))return Fn(resume_proxy?resume_proxy:Resume);
+  if(!std::strcmp(n,abi::common::kSuspendConstruct)||!std::strcmp(n,"_ZN3art16ScopedSuspendAllC1EPKcb"))return Fn(stop_proxy?stop_proxy:Stop);
+  if(!std::strcmp(n,abi::common::kSuspendDestroy)||!std::strcmp(n,"_ZN3art16ScopedSuspendAllD1Ev"))return Fn(resume_proxy?resume_proxy:Resume);
   if(!std::strcmp(n,s::kStartGC))return Fn(start_proxy?start_proxy:Start);
   if(!std::strcmp(n,s::kFinishGC))return Fn(finish_proxy?finish_proxy:Finish);
   if(!std::strcmp(n,s::kCurrent))return Fn(Current);
@@ -103,8 +103,8 @@ class Hooks:public HookEngine {
  }
  void* Install(void*t,void*p,void**o,std::string*)override{
   assert(exclusive);++count;if(count==fail_at)return nullptr;*o=t;
-  if(t==Fn(Stop))stop_proxy=reinterpret_cast<a::SuspendConstruct>(p);
-  else if(t==Fn(Resume))resume_proxy=reinterpret_cast<a::SuspendDestroy>(p);
+  if(t==Fn(Stop))stop_proxy=reinterpret_cast<abi::common::SuspendConstruct>(p);
+  else if(t==Fn(Resume))resume_proxy=reinterpret_cast<abi::common::SuspendDestroy>(p);
   else if(t==Fn(Start))start_proxy=reinterpret_cast<s::StartGC>(p);
   else if(t==Fn(Finish))finish_proxy=reinterpret_cast<s::FinishGC>(p);
   else if(t==Fn(Disable))disable_proxy=reinterpret_cast<s::MutatorOperation>(p);

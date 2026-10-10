@@ -12,7 +12,7 @@ std::array<void*,8> retired_records{};size_t retired_count=0;
 bool OwnerRetired(void* m){return std::find(retired_records.begin(),retired_records.begin()+retired_count,m)!=retired_records.begin()+retired_count;}
 void OwnerRetire(void*,void* m){assert(stopped&&retired_count<retired_records.size()&&!OwnerRetired(m));retired_records[retired_count++]=m;++retired_methods;}
 int owner_heap,owner_mutex;void* owner_mutator=&owner_mutex;bool gc=false;int disabled=0;
-a::SuspendConstruct owner_stop_proxy=nullptr;a::SuspendDestroy owner_resume_proxy=nullptr;
+abi::common::SuspendConstruct owner_stop_proxy=nullptr;abi::common::SuspendDestroy owner_resume_proxy=nullptr;
 s::MutatorOperation owner_disable_proxy=nullptr,owner_enable_proxy=nullptr;
 s::StartGC owner_start_proxy=nullptr;s::FinishGC owner_finish_proxy=nullptr;
 void OwnerNative(void* p){assert(p==thread.data()&&!stopped&&Read32(p)==0);Put32(p,0,92u<<24);}
@@ -45,8 +45,8 @@ class OwnerHooks:public ProviderHooks {
  public:void* FindSymbol(const char* lib,const char* name)override{
  if(missing&&std::strstr(name,missing))return nullptr;
 #define MATCH(n,f) if(!std::strcmp(name,n))return reinterpret_cast<void*>(f)
- MATCH(a::kSuspendConstruct,owner_stop_proxy?owner_stop_proxy:OwnerStop);MATCH("_ZN3art16ScopedSuspendAllC1EPKcb",owner_stop_proxy?owner_stop_proxy:OwnerStop);
- MATCH(a::kSuspendDestroy,owner_resume_proxy?owner_resume_proxy:OwnerResume);MATCH("_ZN3art16ScopedSuspendAllD1Ev",owner_resume_proxy?owner_resume_proxy:OwnerResume);
+ MATCH(abi::common::kSuspendConstruct,owner_stop_proxy?owner_stop_proxy:OwnerStop);MATCH("_ZN3art16ScopedSuspendAllC1EPKcb",owner_stop_proxy?owner_stop_proxy:OwnerStop);
+ MATCH(abi::common::kSuspendDestroy,owner_resume_proxy?owner_resume_proxy:OwnerResume);MATCH("_ZN3art16ScopedSuspendAllD1Ev",owner_resume_proxy?owner_resume_proxy:OwnerResume);
  MATCH(abi::arm64::android13::kToNative,OwnerNative);MATCH(abi::arm64::android13::kToRunnable,OwnerRunnable);
  if(!std::strcmp(name,s::kMutator))return &owner_mutator;
  MATCH(s::kStartGC,owner_start_proxy?owner_start_proxy:OwnerStart);MATCH(s::kFinishGC,owner_finish_proxy?owner_finish_proxy:OwnerFinish);
@@ -60,7 +60,7 @@ class OwnerHooks:public ProviderHooks {
  void* Install(void* target,void* proxy,void** original,std::string* e)override{
   assert(stopped&&Read32(thread.data())==92u<<24);*original=target;
 #define INSTALL(f,p,T) if(target==reinterpret_cast<void*>(f)){p=reinterpret_cast<T>(proxy);return target;}
- INSTALL(OwnerStop,owner_stop_proxy,a::SuspendConstruct);INSTALL(OwnerResume,owner_resume_proxy,a::SuspendDestroy);
+ INSTALL(OwnerStop,owner_stop_proxy,abi::common::SuspendConstruct);INSTALL(OwnerResume,owner_resume_proxy,abi::common::SuspendDestroy);
  INSTALL(OwnerDisable,owner_disable_proxy,s::MutatorOperation);INSTALL(OwnerEnable,owner_enable_proxy,s::MutatorOperation);
  INSTALL(OwnerStart,owner_start_proxy,s::StartGC);INSTALL(OwnerFinish,owner_finish_proxy,s::FinishGC);
 #undef INSTALL
