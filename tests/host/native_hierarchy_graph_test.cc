@@ -92,7 +92,14 @@ struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
  bool final_granted=false;
  bool VerifyFinal(const Graph&g,const source_commit::Plan&p)const noexcept override{return final_granted&&Verify(g,p);}
  bool granted=true;size_t commits=0;void* cache=nullptr;
- bool RefreshAllocations(Graph*,std::vector<Prepared>*)const noexcept override{return granted;}
+ std::unordered_map<void*,void*> allocation_moves;
+ bool RefreshAllocations(Graph*g,std::vector<Prepared>*values)const noexcept override{
+  if(!granted)return false;
+  const auto move=[&](void*&p){auto found=allocation_moves.find(p);if(found!=allocation_moves.end())p=found->second;};
+  for(auto& value:*values){move(value.old_class);move(value.new_class);move(value.parent);move(value.cache);}
+  for(auto& node:g->nodes)move(node.replacement);
+  return true;
+ }
  bool VerifyStaged(const Graph&,const std::vector<Input>&,std::string*)const override{return granted;}
  bool VerifyPrepared(const Graph&,const Prepared& p,std::string*)const override{return granted&&p.cache==cache&&p.class_index==2;}
  bool VerifyAllocation(const Graph&g,const Prepared&p,std::string*e)const override{return !p.new_class&&VerifyPrepared(g,p,e);}
@@ -125,10 +132,26 @@ static void Lifecycle(){
  assert(!authority.PrepareRoots(rejected,&error));assert(error.find("matches=0 oldMatches=0 newMatches=1")!=std::string::npos);
  rejected=plan;rejected.new_classes[0]=&a;
  assert(!authority.PrepareRoots(rejected,&error));assert(error.find("matches=0 oldMatches=1 newMatches=0")!=std::string::npos);
- owner.granted=false;assert(authority.PrepareRoots(plan,&error));assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,&error));std::vector<void*> root_values;prepared_roots::Registrar registrar{&root_values,[](void* owner,void* value,size_t* slot){auto* roots=static_cast<std::vector<void*>*>(owner);*slot=roots->size();roots->push_back(value);return true;}};assert(authority.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&root_values,[](void* owner,size_t index)noexcept{return (*static_cast<std::vector<void*>*>(owner))[index];}};
- Fake final_object=moved_object,final_a=moved_a,final_b=moved_b,final_parent=moved_parent,final_i=moved_i,final_new_a=new_a,final_new_b=new_b;
+ // Holder capture can move both old public Classes and captured replacements
+ // after VerifyPrepared. PrepareRoots must refresh both independent owners,
+ // rather than compare stale graph addresses to a fresh Holder Plan.
+ Fake collected_object=moved_object,collected_a=moved_a,collected_b=moved_b,collected_parent=moved_parent,collected_i=moved_i,collected_new_a=new_a,collected_new_b=new_b;
+ collected_a.parent=&collected_object;collected_b.parent=&collected_a;collected_parent.parent=&collected_object;collected_i.parent=&collected_object;collected_new_a.parent=&collected_parent;collected_new_b.parent=&collected_new_a;collected_new_a.native_interfaces={&collected_i};collected_new_b.native_interfaces={&collected_i};
+ moved_globals={{reinterpret_cast<jobject>(&object),&collected_object},{reinterpret_cast<jobject>(&a),&collected_a},{reinterpret_cast<jobject>(&b),&collected_b},{reinterpret_cast<jobject>(&parent),&collected_parent},{reinterpret_cast<jobject>(&i),&collected_i}};
+ owner.allocation_moves={{&moved_a,&collected_a},{&moved_b,&collected_b},{&moved_parent,&collected_parent},{&new_a,&collected_new_a},{&new_b,&collected_new_b}};
+ plan.old_classes={&collected_a,&collected_b};plan.new_classes={&collected_new_a,&collected_new_b};
+ owner.granted=false;assert(!authority.PrepareRoots(plan,&error));owner.granted=true;
+ // A later new-only move must refresh the captured replacement independently;
+ // the stale Holder candidate still fails the exact pair guard.
+ Fake latest_new_a=collected_new_a,latest_new_b=collected_new_b;latest_new_b.parent=&latest_new_a;
+ owner.allocation_moves[&collected_new_a]=&latest_new_a;owner.allocation_moves[&collected_new_b]=&latest_new_b;
+ owner.allocation_moves[&new_a]=&latest_new_a;owner.allocation_moves[&new_b]=&latest_new_b;
+ assert(!authority.PrepareRoots(plan,&error));assert(error.find("oldMatches=1 newMatches=0")!=std::string::npos);
+ plan.new_classes={&latest_new_a,&latest_new_b};
+ assert(authority.PrepareRoots(plan,&error));owner.granted=false;assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,&error));std::vector<void*> root_values;prepared_roots::Registrar registrar{&root_values,[](void* owner,void* value,size_t* slot){auto* roots=static_cast<std::vector<void*>*>(owner);*slot=roots->size();roots->push_back(value);return true;}};assert(authority.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&root_values,[](void* owner,size_t index)noexcept{return (*static_cast<std::vector<void*>*>(owner))[index];}};
+ Fake final_object=collected_object,final_a=collected_a,final_b=collected_b,final_parent=collected_parent,final_i=collected_i,final_new_a=latest_new_a,final_new_b=latest_new_b;
  final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_i.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
- std::unordered_map<void*,void*> relocation{{&moved_object,&final_object},{&moved_a,&final_a},{&moved_b,&final_b},{&moved_parent,&final_parent},{&moved_i,&final_i},{&new_a,&final_new_a},{&new_b,&final_new_b}};
+ std::unordered_map<void*,void*> relocation{{&collected_object,&final_object},{&collected_a,&final_a},{&collected_b,&final_b},{&collected_parent,&final_parent},{&collected_i,&final_i},{&latest_new_a,&final_new_a},{&latest_new_b,&final_new_b}};
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
  bool mapping_allowed=true;modern_field_metadata::ReadContext read_context{&mapping_allowed,[](void*owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};authority.UseReadContext(read_context);forbid_os=true;
  forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));assert(!authority.Verify(plan,0));owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);

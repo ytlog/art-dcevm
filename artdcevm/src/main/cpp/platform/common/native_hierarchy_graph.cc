@@ -301,6 +301,11 @@ bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepar
 bool Authority::PrepareRoots(const source_commit::Plan& p,std::string* error){
  auto& s=*state_;State::OrdinaryRead ordinary{s};
  if(!ordinary.Ready()||!s.staged||s.roots_prepared||s.sealed||s.registration_started||p.old_classes.size()!=p.new_classes.size())return Fail(error,"Root preparation requires fresh complete source allocation graph");
+ // Original source work and Holder JNI capture can safepoint after linked
+ // allocation verification. Reborrow both public Classes and the allocator
+ // captured replacement roots in this same ordinary read interval before
+ // comparing the fresh Holder Plan; raw graph addresses are not GC roots.
+ if(!s.Borrow(s.root_context))return Fail(error,"Root preparation could not refresh actual public/allocated source roots");
  const size_t affected=std::count_if(s.graph.nodes.begin(),s.graph.nodes.end(),[](const auto& n){return n.affected;});
  for(size_t node=0;node<s.graph.nodes.size();++node){const auto& n=s.graph.nodes[node];if(!n.affected)continue;
   size_t pairs=0,old_matches=0,new_matches=0;
