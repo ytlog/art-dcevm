@@ -39,7 +39,7 @@ bool ObserveNative(const runnable_jni::Context& scope,void* raw){
 struct MirrorRequest {
  jobject mirror,owner;void*(*leaf)(void*);
  const modern_field_metadata::FieldMetadata* metadata;
- const char* name;std::string* error;
+ const char* name;uint32_t public_offset;std::string* error;
 };
 bool InspectMirror(const runnable_jni::Context& context,void* raw){
  auto& r=*static_cast<MirrorRequest*>(raw);void* mirror=nullptr;void* owner=nullptr;
@@ -55,7 +55,14 @@ bool InspectMirror(const runnable_jni::Context& context,void* raw){
  if(!identity.name||std::strcmp(identity.name,r.name))return Fail(r.error,"Independent cache mirror public/native name differs");
  void* declaring=r.metadata->FieldDeclaringClass(native);
  if(context.env->ExceptionCheck())return Fail(r.error,"Independent cache mirror native owner pending");
- return declaring==owner||Fail(r.error,"Independent cache mirror public/native owner differs");
+ if(declaring!=owner)return Fail(r.error,"Independent cache mirror public/native owner differs");
+ // The existing calibrated source ArtField declaration, not a DexCache-layout
+ // scan. This independent public/native offset observation is diagnostic only.
+ size_t extent=0;
+ if(!modern_field_metadata::ReadMappingExtent(nullptr,native,&extent)||extent<sizeof(abi::arm64::Field))
+  return Fail(r.error,"Independent cache mirror native Field prefix unavailable");
+ uint32_t offset=0;std::memcpy(&offset,static_cast<const unsigned char*>(native)+offsetof(abi::arm64::Field,offset),sizeof(offset));
+ return offset==r.public_offset||Fail(r.error,"Independent cache mirror public/native offset differs");
 }
 std::string MirrorInventory(JNIEnv* env,jclass owner,void*(*leaf)(void*),
  const modern_field_metadata::FieldMetadata& metadata){
@@ -70,6 +77,8 @@ std::string MirrorInventory(JNIEnv* env,jclass owner,void*(*leaf)(void*),
  if(env->ExceptionCheck()||!name)return "name-method-unavailable";
  const auto flags=env->GetMethodID(static_cast<jclass>(field_type.ref),"getModifiers","()I");
  if(env->ExceptionCheck()||!flags)return "flags-method-unavailable";
+ const auto offset=env->GetMethodID(static_cast<jclass>(field_type.ref),"getOffset","()I");
+ if(env->ExceptionCheck()||!offset)return "offset-method-unavailable";
  jobject owner_root=env->NewGlobalRef(owner);
  struct Global{JNIEnv* env;jobject ref;~Global(){if(ref)env->DeleteGlobalRef(ref);}} owner_scope{env,owner_root};
  if(env->ExceptionCheck()||!owner_root)return "owner-root-unavailable";
@@ -84,16 +93,19 @@ std::string MirrorInventory(JNIEnv* env,jclass owner,void*(*leaf)(void*),
   if(env->ExceptionCheck()||!chars)return "name-UTF-unavailable";
   const auto modifiers=env->CallIntMethod(field.ref,flags);
   if(env->ExceptionCheck())return "modifiers-pending";
+  const auto field_offset=env->CallIntMethod(field.ref,offset);
+  if(env->ExceptionCheck())return "offset-pending";
+  if(field_offset<0)return "offset-invalid";
   const auto id=env->FromReflectedField(field.ref);
   if(env->ExceptionCheck()||!id)return "opaque-ID-unavailable";
   jobject mirror_root=env->NewGlobalRef(field.ref);Global mirror_scope{env,mirror_root};
   if(env->ExceptionCheck()||!mirror_root)return "mirror-root-unavailable";
-  MirrorRequest request{mirror_root,owner_root,leaf,&metadata,chars,&error};
+  MirrorRequest request{mirror_root,owner_root,leaf,&metadata,chars,static_cast<uint32_t>(field_offset),&error};
   const auto result=runnable_executor::With(env,mirror_root,InspectMirror,&request);
   if(env->ExceptionCheck())return "native-proof-pending";
   if(result!=runnable_jni::Result::kSuccess)return "native-proof-refused: "+error;
   if(text.size()<2048){
-   const auto entry=(text.empty()?std::string():std::string(", "))+chars+" flags="+std::to_string(modifiers)+" nativeOwner=exact";
+   const auto entry=(text.empty()?std::string():std::string(", "))+chars+" flags="+std::to_string(modifiers)+" nativeOwner=exact offset="+std::to_string(field_offset)+" nativeOffset=exact";
    text.append(entry,0,2048-text.size());
   }
  }
@@ -197,8 +209,11 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
     original+=" observed={"+source_text+"}";
    }
   }
+  jlong bytes=0;const auto size_status=ti->GetObjectSize(cache,&bytes);
+  if(env->ExceptionCheck()){if(error)*error=live+" original={"+original+"} objectSize=pending";return false;}
+  const auto size="bytes="+std::to_string(bytes)+" status="+std::to_string(size_status);
   const auto mirrors=MirrorInventory(env,owner,field_,metadata);
-  if(error)*error=live+" original={"+original+"} uncheckedFalse={"+mirrors+"}";
+  if(error)*error=live+" original={"+original+"} objectSize={"+size+"} uncheckedFalse={"+mirrors+"}";
   return false;
  }
  auto witness=std::unique_ptr<Witness>(new Witness(env));witness->id_=selected;witness->name_=name;
