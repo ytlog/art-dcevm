@@ -35,6 +35,18 @@ bool FrameReader::Observe(const void*frame,const InstructionOperands*operands,co
  if(!next)return false;candidates_=next;observed_=true;return true;
 }
 bool FrameReader::Seal()noexcept{if(!observed_||(candidates_!=1&&candidates_!=2))return false;sealed_=true;return true;}
+bool FrameReader::Identity(void*self,const void*frame,void**method,uint32_t*pc,uint32_t*registers)const noexcept{
+ if(!sealed_||!self||!frame||!method||!pc||!registers||!access_.current||!access_.extent||!access_.current(access_.owner,self))return false;
+ size_t extent=0;const unsigned i=candidates_==1?0:1;
+ if(!access_.extent(access_.owner,self,frame,&extent)||extent<vregs[i])return false;uint32_t count=0;std::memcpy(&count,static_cast<const char*>(frame)+counts[i],4);if(count>(extent-vregs[i])/8)return false;
+ void*caller=nullptr;uint32_t position=0;std::memcpy(&caller,static_cast<const char*>(frame)+8,8);std::memcpy(&position,static_cast<const char*>(frame)+counts[i]+4,4);
+ if(!caller||!access_.current(access_.owner,self))return false;*method=caller;*pc=position;*registers=count;return true;
+}
+bool FrameReader::ReadRegister(void*self,const void*frame,uint32_t index,void**receiver)const noexcept{
+ void*method=nullptr;uint32_t pc=0,count=0;if(!receiver||!Identity(self,frame,&method,&pc,&count)||index>=count||!access_.reference)return false;
+ const unsigned i=candidates_==1?0:1;uint32_t reference=0;std::memcpy(&reference,static_cast<const char*>(frame)+vregs[i]+(uint64_t(count)+index)*4,4);void*object=nullptr;
+ if(reference&&(!access_.reference(access_.owner,self,reference,&object)||!object))return false;if(!access_.current(access_.owner,self))return false;*receiver=object;return true;
+}
 bool FrameReader::Read(void*self,const void*frame,const InstructionOperands*operands,void**receiver)const noexcept{
  if(!sealed_||!receiver)return false;uint32_t reg=0,reference=0;const unsigned i=candidates_==1?0:1;
  if(!Bounds(self,frame,operands,counts[i],vregs[i],&reg,&reference))return false;

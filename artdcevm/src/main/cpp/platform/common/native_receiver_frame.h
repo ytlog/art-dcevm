@@ -31,6 +31,8 @@ class FrameReader final {
  bool Observe(const void* frame,const InstructionOperands*,const FrameOracle&)noexcept;
  bool Seal()noexcept;
  bool Read(void*thread,const void*frame,const InstructionOperands*,void**receiver)const noexcept;
+ bool Identity(void*thread,const void*frame,void**method,uint32_t*pc,uint32_t*registers)const noexcept;
+ bool ReadRegister(void*thread,const void*frame,uint32_t,void**receiver)const noexcept;
  bool Proven()const noexcept{return sealed_;}
  private:
  bool Bounds(void*,const void*,const InstructionOperands*,size_t,size_t,uint32_t*,uint32_t*)const noexcept;

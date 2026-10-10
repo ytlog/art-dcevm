@@ -46,5 +46,5 @@ int main(){
  // A relocating identity is reread from the current object/member and alias
  // leaves each time; no old Class pointer is remembered by Guard.
  Class moved_after=after;receiver.klass=&moved_after;state.current_class=&moved_after;method.declaring=&before;call.path=Path::JniMethod;assert(!guard.Check(call));
- (void)unrelated;std::puts("Permanent receiver policy: all 15 paths require observed pass/reject, migrated old object loses superclass/interface, current aliases preserve own cached members, special caller/null/static/context/relocation PASS; native leaves explicit, live source entry proof pending");
+ (void)unrelated;std::puts("Permanent receiver policy: all 16 paths require observed pass/reject, migrated old object loses superclass/interface, current aliases preserve own cached members, special caller/null/static/context/relocation PASS; native leaves explicit, live source entry proof pending");
 }

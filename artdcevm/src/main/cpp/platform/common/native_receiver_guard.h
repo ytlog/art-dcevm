@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <mutex>
 namespace artdcevm::receiver_guard {
-class FrameReader;class InstructionOperands;
+class FrameReader;class InstructionOperands;class BytecodeSource;
 // Paths are independently witnessed. The bytecode interpreter paths also cover
 // former compiled/AOT callers only after the permanent process deopt owner seals.
-enum class Path:uint8_t {BytecodeInvoke,BytecodeRead,BytecodeWrite,JniMethod,JniRead,JniWrite,ReflectMethod,ReflectRead,ReflectWrite,HandleMethod,HandleRead,HandleWrite,HandleSpecial,VarHandle,NativeInvoke,Count};
+enum class Path:uint8_t {BytecodeInvoke,BytecodeSpecial,BytecodeRead,BytecodeWrite,JniMethod,JniRead,JniWrite,ReflectMethod,ReflectRead,ReflectWrite,HandleMethod,HandleRead,HandleWrite,HandleSpecial,VarHandle,NativeInvoke,Count};
 struct Invocation {Path path;void* thread=nullptr;void* member=nullptr;void* receiver=nullptr;void* special_caller=nullptr;void* result=nullptr;bool field=false;};
 struct Access {
  void* owner=nullptr;
@@ -26,7 +26,7 @@ struct Access {
  bool (*handle)(void*,void*,void*,uint32_t*,void**)noexcept=nullptr;
  // Resolve only real invoke instructions from the source caller/PC. A null
  // member means a proven non-invoke; false means unavailable source identity.
- bool (*bytecode)(void*,void*,void*,uint32_t,void**,uint32_t*)noexcept=nullptr;
+ const BytecodeSource* bytecode=nullptr;
 };
 struct Oracle {Invocation invocation;void* declaring=nullptr;void* receiver_class=nullptr;bool rejection=false;};
 class Guard final {
@@ -44,6 +44,7 @@ class Guard final {
  bool EndProof(bool original_succeeded,bool incompatible_class_change,bool unchanged_sentinel)noexcept;
  bool Proven()const noexcept;
  bool UsesFrames(const FrameReader&frames)const noexcept{return access_.frames==&frames;}
+ bool BytecodeProven(const FrameReader&)const noexcept;
  bool Active()const noexcept{return active_.load(std::memory_order_acquire);}
  void Activate()noexcept;
  bool Check(const Invocation&)noexcept;

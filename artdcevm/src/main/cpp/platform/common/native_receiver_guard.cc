@@ -1,5 +1,6 @@
 #include "platform/common/native_receiver_guard.h"
 #include "platform/common/native_receiver_frame.h"
+#include "platform/common/native_receiver_bytecode.h"
 #include <cstring>
 #include <cstdlib>
 namespace artdcevm::receiver_guard {
@@ -24,12 +25,14 @@ Guard::ProofWitness Guard::FreezeProof()const noexcept{
 bool Guard::ValidateProof(const ProofWitness&witness)const noexcept{return witness.owner_==this&&witness.epoch_&&proof_ready_.load(std::memory_order_acquire)&&proof_epoch_.load(std::memory_order_acquire)==witness.epoch_;}
 void Guard::Activate(const ProofWitness&witness)noexcept{if(!ValidateProof(witness))std::abort();active_.store(true,std::memory_order_release);}
 void Guard::Activate()noexcept{if(!Proven())std::abort();active_.store(true,std::memory_order_release);}
+bool Guard::BytecodeProven(const FrameReader&frames)const noexcept{return access_.bytecode&&access_.bytecode->Proven()&&access_.bytecode->UsesFrames(frames);}
 bool Guard::CheckBytecode(void*self,void*caller,uint32_t pc)noexcept{
- if(!Interested(Path::BytecodeInvoke,self,nullptr))return false;
+ if(!Interested(Path::BytecodeInvoke,self,nullptr)&&!Interested(Path::BytecodeSpecial,self,nullptr))return false;
  const auto fail=[&](){if(!access_.raise||!self)std::abort();access_.raise(access_.owner,self,"Ljava/lang/IllegalStateException;","Receiver bytecode invocation lost exact source caller/PC");return true;};
- void*member=nullptr;uint32_t receiver=0;
- if(!caller||!access_.current||!access_.current(access_.owner,self)||!access_.bytecode||!access_.bytecode(access_.owner,self,caller,pc,&member,&receiver))return fail();
- if(!member)return false;return CheckCompressed(Path::BytecodeInvoke,self,member,receiver);
+ if(!caller||!access_.current||!access_.current(access_.owner,self)||!access_.bytecode)return fail();const auto result=access_.bytecode->Read(self,caller,pc);
+ if(result.outcome==BytecodeOutcome::Unavailable)return fail();if(result.outcome==BytecodeOutcome::OriginalException)return true;
+ if(result.outcome==BytecodeOutcome::NonInvoke||result.outcome==BytecodeOutcome::GuardedBridge)return false;
+ return Check({result.special_caller?Path::BytecodeSpecial:Path::BytecodeInvoke,self,result.member,result.receiver,result.special_caller,nullptr,false});
 }
 bool Guard::CheckFrame(Path path,void*self,void*member,const void*frame,const InstructionOperands*operands,void*result,bool field,void*special)noexcept{
  if(!Interested(path,self,member))return false;
@@ -88,7 +91,7 @@ bool Guard::Check(const Invocation& call)noexcept{
  if(flags&8u||!call.receiver)return false;
  if(!access_.object_class(access_.owner,call.receiver,&receiver_class)||!receiver_class||!access_.normalize(access_.owner,call.thread,declaring,receiver_class,&selected)||!selected)return fail("Ljava/lang/IllegalStateException;","Receiver guard lost current Class alias");
  bool related=false;if(!access_.assignable(access_.owner,selected,receiver_class,&related))return fail("Ljava/lang/IllegalStateException;","Receiver guard could not prove native assignability");
- if(related&&call.path==Path::HandleSpecial){void*caller=nullptr;if(!call.special_caller||!access_.special||!access_.normalize(access_.owner,call.thread,call.special_caller,receiver_class,&caller)||!caller||!access_.special(access_.owner,selected,caller,&related))return fail("Ljava/lang/IllegalStateException;","Special MethodHandle caller relation could not be proved");}
+ if(related&&(call.path==Path::HandleSpecial||call.path==Path::BytecodeSpecial)){void*caller=nullptr;if(!call.special_caller||!access_.special||!access_.normalize(access_.owner,call.thread,call.special_caller,receiver_class,&caller)||!caller||!access_.special(access_.owner,selected,caller,&related))return fail("Ljava/lang/IllegalStateException;","Special MethodHandle caller relation could not be proved");}
  if(probe){std::lock_guard<std::mutex> lock(lock_);if(probing_&&Same(call,oracle_.invocation)&&declaring==expected.declaring&&receiver_class==expected.receiver_class){seen_=true;rejected_=!related;}}
  if(related)return false;
  return fail("Ljava/lang/IncompatibleClassChangeError;","Receiver lost its member declaring Class relationship");

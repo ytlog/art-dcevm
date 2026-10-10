@@ -8,7 +8,7 @@ s=re.sub(r' if\(engine\.legacy\)\{disable_observer.*?assert\(!BindListener\(engi
 s=s.replace('guard.ResetUncommittedProof();assert(!guard.ValidateProof(fresh)&&!guard.ValidateProof(guard.FreezeProof()));','')
 s=s.replace('std::cout<<"Named final FieldWritten listener family "', 'std::cout<<"Named final FieldWritten listener family "').replace('route passed\\n";','route passed\\n";return 0;')
 (out/'listener_fixture.cc').write_text(s)
-sources=['tests/host/native_receiver_listener_test.cc','artdcevm/src/main/cpp/platform/common/native_final_write_guard.cc','artdcevm/src/main/cpp/platform/common/modern_final_field_guard.cc','artdcevm/src/main/cpp/platform/common/native_receiver_guard.cc','artdcevm/src/main/cpp/platform/common/native_receiver_frame.cc','artdcevm/src/main/cpp/platform/common/native_receiver_service.cc']
+sources=['tests/host/native_receiver_listener_test.cc','artdcevm/src/main/cpp/platform/common/native_final_write_guard.cc','artdcevm/src/main/cpp/platform/common/modern_final_field_guard.cc','artdcevm/src/main/cpp/platform/common/native_receiver_guard.cc','artdcevm/src/main/cpp/platform/common/native_receiver_frame.cc','artdcevm/src/main/cpp/platform/common/native_receiver_bytecode.cc','artdcevm/src/main/cpp/platform/common/native_receiver_service.cc']
 binary=out/'test'
 subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-DARTDCEVM_TESTING','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-pthread','-I',str(out),'-I',str(root/'artdcevm/src/main/cpp'),*[str(root/p) for p in sources],'-o',str(binary)],check=True)
 for family in ('3','4','5','6'):
