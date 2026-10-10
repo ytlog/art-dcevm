@@ -359,6 +359,19 @@ struct NativeEngine final:Engine {
  native_field_factory_observer::Service field_factory_observer;
  native_field_factory_observer::Trace field_factory_primitive_trace{},field_factory_optional_trace{};
  std::array<bool,4> field_factory_public_roots{};
+ struct FactoryPublicIdentity {bool reached=false;uintptr_t mirror=0,mirror_class=0,declaring=0,named_field=0,native_declaring=0;};
+ std::array<FactoryPublicIdentity,4> field_factory_public_identities{};
+ std::string DescribeFieldFactory()const {
+  std::string text="Original extra-Handle Field episodes";size_t index=0;
+  for(const auto* trace:{&field_factory_primitive_trace,&field_factory_optional_trace})for(const auto& entry:trace->entries){
+   const auto& p=field_factory_public_identities[index];
+   text+=" [target="+std::to_string(index)+","+native_field_factory_observer::Describe(entry)+
+    ",publicRoots="+std::to_string(field_factory_public_roots[index])+",publicCallback="+std::to_string(p.reached)+
+    ",mirror="+std::to_string(p.mirror)+",mirrorClass="+std::to_string(p.mirror_class)+
+    ",declaringClass="+std::to_string(p.declaring)+",namedField="+std::to_string(p.named_field)+
+    ",nativeDeclaringClass="+std::to_string(p.native_declaring)+"]";++index;
+  }return text;
+ }
  native_field_factory_observer::EpisodeCompletion field_factory_completion;
  std::string field_factory_diagnostic;
  void* (*field_factory_root)(void*)=nullptr;
@@ -1537,14 +1550,18 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
     jobject strong_type=env->NewGlobalRef(local_type);env->DeleteLocalRef(local_type);
     if(!strong_type||env->ExceptionCheck()){if(strong_type)env->DeleteGlobalRef(strong_type);env->DeleteGlobalRef(strong);env->DeleteLocalRef(field);env->DeleteLocalRef(fields);return false;}
     struct PublicMirror {
-     NativeEngine& engine;jobject mirror,klass;void* native;const native_field_factory_observer::Entry& entry;bool roots=false;
-     static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<PublicMirror*>(raw);void *mirror=nullptr,*klass=nullptr;
-      if(!FieldOracle(&r.engine,context,r.mirror,&mirror)||!FieldOracle(&r.engine,context,r.klass,&klass)||FieldLeaf(&r.engine,mirror)!=r.native)return false;
-      // Scalar address comparison can conservatively miss a moved result. It
-      // never dereferences a stale address or grants factory-call permission.
+     NativeEngine& engine;jobject mirror,klass,declaring;void* native;const native_field_factory_observer::Entry& entry;FactoryPublicIdentity& identity;bool roots=false;
+     static bool Run(const runnable_jni::Context& context,void* raw){auto& r=*static_cast<PublicMirror*>(raw);void *mirror=nullptr,*klass=nullptr,*declaring=nullptr;
+      r.identity.reached=true;
+      if(!FieldOracle(&r.engine,context,r.mirror,&mirror)||!FieldOracle(&r.engine,context,r.klass,&klass)||!FieldOracle(&r.engine,context,r.declaring,&declaring))return false;
+      r.identity.mirror=uintptr_t(mirror);r.identity.mirror_class=uintptr_t(klass);r.identity.declaring=uintptr_t(declaring);
+      void* named=FieldLeaf(&r.engine,mirror);void* native_declaring=FieldOwner(&r.engine,r.native);
+      r.identity.named_field=uintptr_t(named);r.identity.native_declaring=uintptr_t(native_declaring);
+      if(named!=r.native||native_declaring!=declaring)return false;
+      // Diagnostics grant no permission; preserve the established Field Class proof.
       r.roots=r.entry.root_before_valid&&r.entry.root_after_valid&&r.entry.root_after==uintptr_t(klass)&&r.entry.result==uintptr_t(mirror);return true;
      }
-    } proof{*this,strong,strong_type,native[n],trace->entries[n]};
+    } proof{*this,strong,strong_type,owner,native[n],trace->entries[n],field_factory_public_identities[trace_offset+n]};
     found[n]=strong&&strong_type&&!env->ExceptionCheck()&&FieldScope(this,env,strong,PublicMirror::Run,&proof);
     field_factory_public_roots[trace_offset+n]=found[n]&&proof.roots;
     if(strong)env->DeleteGlobalRef(strong);if(strong_type)env->DeleteGlobalRef(strong_type);
@@ -1552,7 +1569,10 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
    if(field)env->DeleteLocalRef(field);
   }
   env->DeleteLocalRef(fields);
-  if(env->ExceptionCheck()||!found[0]||!found[1])return Fail(error,"Field factory observer public IDs do not enumerate both exact targets");
+  if(env->ExceptionCheck()||!found[0]||!found[1]){
+   field_factory_diagnostic=DescribeFieldFactory();
+   return Fail(error,("Field factory observer public IDs do not enumerate both exact targets: "+field_factory_diagnostic).c_str());
+  }
   return true;
  };
  if(live_field_oracles.size()!=2)return Fail(error,"Field factory observation requires two live original field oracles");
@@ -1591,12 +1611,12 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
  if(!FieldScope(this,env,owner,Decode::Run,&decode)||!RefreshMaps(error)||!episode(owner,ids,native,&field_factory_optional_trace,2))return false;
  if(!std::all_of(field_factory_public_roots.begin(),field_factory_public_roots.end(),[](bool proven){return proven;})||
     !native_field_factory_observer::RootFalseProof(field_factory_primitive_trace)||
-    !native_field_factory_observer::RootFalseProof(field_factory_optional_trace))return Fail(error,"Original extra-Handle Field episodes lack complete false/root identity proof");
+    !native_field_factory_observer::RootFalseProof(field_factory_optional_trace)){
+     field_factory_diagnostic=DescribeFieldFactory();
+     return Fail(error,("Original extra-Handle Field episodes lack complete false/root identity proof: "+field_factory_diagnostic).c_str());
+    }
  field_factory_completion.Complete();
- field_factory_diagnostic="Original extra-Handle Field episodes";
- size_t trace_index=0;for(const auto* trace:{&field_factory_primitive_trace,&field_factory_optional_trace})for(const auto& entry:trace->entries){
-  field_factory_diagnostic+=" [calls="+std::to_string(entry.calls)+",false="+std::to_string(entry.false_calls)+",handleRoot="+std::to_string(entry.root_before_valid&&entry.root_after_valid)+",returned="+std::to_string(entry.result!=0)+",publicRoots="+std::to_string(field_factory_public_roots[trace_index++])+"]";
- }
+ field_factory_diagnostic=DescribeFieldFactory();
  return true;
 }
 bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){

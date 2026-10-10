@@ -45,7 +45,10 @@ int main(){obs::EpisodeCompletion completed,failed;
  const bool enumerated=public_declared_field_mirror::Enumerate(&env,reinterpret_cast<jclass>(&klass),&fields,&error);
  assert(observer.End(&trace,&error));assert(trace.entries[0].calls==1&&trace.entries[0].false_calls==1&&trace.entries[1].calls==1&&trace.entries[1].false_calls==1);
  assert(obs::RootFalseProof(trace)==!oom);
- if(!oom)for(int fault=0;fault<9;++fault){auto invalid=trace;auto& entry=invalid.entries[0];switch(fault){case 0:entry.field=nullptr;break;case 1:entry.calls=0;break;case 2:entry.false_calls=0;break;case 3:entry.root_before_valid=false;break;case 4:entry.root_after_valid=false;break;case 5:entry.result=0;break;case 6:entry.root_after=0;break;case 7:++entry.root_before;break;case 8:entry.normalized_field=&other;break;}assert(!obs::RootFalseProof(invalid));}
+ assert(obs::Describe(trace.entries[0]).find("field="+std::to_string(uintptr_t(&field1)))!=std::string::npos);
+ assert(obs::Describe(trace.entries[0]).find("result="+std::to_string(uintptr_t(&field1)))!=std::string::npos);
+ if(!oom)for(int fault=0;fault<9;++fault){auto invalid=trace;auto& entry=invalid.entries[0];switch(fault){case 0:entry.field=nullptr;break;case 1:entry.calls=0;break;case 2:entry.false_calls=0;break;case 3:entry.root_before_valid=false;break;case 4:entry.root_after_valid=false;break;case 5:entry.result=0;break;case 6:entry.root_after=0;break;case 7:++entry.root_before;break;case 8:entry.normalized_field=&other;break;}const char* reasons[]{"field-null","original-not-called","non-false-call","before-root-unproven","after-root-unproven","original-result-null","after-root-null","root-address-changed","field-normalized"};
+ assert(!obs::RootFalseProof(invalid)&&!std::strcmp(obs::RootFalseFailure(entry),reasons[fault]));assert(obs::Describe(entry).find(reasons[fault])!=std::string::npos);}
  assert(enumerated==!oom&&pending==oom);if(fields)env.DeleteLocalRef(fields);assert(!locals);pending=false;}
  factory_oom=false;
  assert(observer.RemoveAtExclusive(hooks,context,&error)&&hooks.removes==1);

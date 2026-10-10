@@ -33,10 +33,25 @@ class EpisodeCompletion {
  bool Ready()const{return state_==State::kComplete;}
  void Complete(){if(state_==State::kIncomplete)state_=State::kComplete;}
 };
-inline bool RootFalseProof(const Trace& trace){
- for(const auto& e:trace.entries)if(!e.field||!e.calls||e.false_calls!=e.calls||!e.root_before_valid||!e.root_after_valid||!e.result||!e.root_after||e.root_before!=e.root_after||e.normalized_field!=e.field)return false;
- return true;
+inline const char* RootFalseFailure(const Entry& e){
+ if(!e.field)return "field-null";if(!e.calls)return "original-not-called";
+ if(e.false_calls!=e.calls)return "non-false-call";
+ if(!e.root_before_valid)return "before-root-unproven";if(!e.root_after_valid)return "after-root-unproven";
+ if(!e.result)return "original-result-null";if(!e.root_after)return "after-root-null";
+ if(e.root_before!=e.root_after)return "root-address-changed";
+ if(e.normalized_field!=e.field)return "field-normalized";return nullptr;
 }
+inline bool RootFalseProof(const Trace& trace){for(const auto& e:trace.entries)if(RootFalseFailure(e))return false;return true;}
+inline std::string Describe(const Entry& e){
+ const char* failure=RootFalseFailure(e);
+ return std::string("proof=")+(failure?failure:"complete")+
+  ",field="+std::to_string(uintptr_t(e.field))+",normalized="+std::to_string(uintptr_t(e.normalized_field))+
+  ",calls="+std::to_string(e.calls)+",false="+std::to_string(e.false_calls)+
+  ",self="+std::to_string(e.self)+",slot="+std::to_string(e.handle_slot)+
+  ",beforeValid="+std::to_string(e.root_before_valid)+",before="+std::to_string(e.root_before)+
+  ",afterValid="+std::to_string(e.root_after_valid)+",after="+std::to_string(e.root_after)+",result="+std::to_string(e.result);
+}
+
 class Service {
  public:
   Service()=default;Service(const Service&)=delete;Service& operator=(const Service&)=delete;
