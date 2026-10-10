@@ -5,6 +5,26 @@
 #include <iostream>
 using namespace artdcevm;
 int main(){
+ {
+  using namespace native_schema_guard_verifier;
+  const auto reference=[](const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return m.name==n.name&&m.descriptor==n.descriptor&&native_schema_policy::JavaFlags(m.access)==native_schema_policy::JavaFlags(n.access);})==1;});};
+  const auto check=[&](const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){assert(MembersEqual(a,b)==reference(a,b));};
+  std::vector<evolution::Member> small{{"value","I",1,UINT32_MAX},{"value","J",1,UINT32_MAX},{"value","I",8,UINT32_MAX},{"valueOther","I",1,UINT32_MAX}};
+  check(small,small);auto normalized=small;normalized[0].access|=0x80000;check(small,normalized);assert(MembersEqual(small,normalized));normalized=small;normalized[0].access|=0x20000;check(small,normalized);assert(!MembersEqual(small,normalized));auto changed=small;std::reverse(changed.begin(),changed.end());check(small,changed);
+  changed[0].name="foreign";check(small,changed);assert(!MembersEqual(small,changed));
+  changed=small;changed[0].access^=0x10;check(small,changed);assert(!MembersEqual(small,changed));
+  changed=small;changed[1]=changed[0];check(small,changed);assert(!MembersEqual(small,changed));
+  // Preserve count==1 orientation even for malformed duplicate input vectors.
+  check(changed,small);check(changed,changed);check({},{});check(small,{});
+  constexpr size_t count=16000;std::vector<evolution::Member> many;many.reserve(count);
+  for(size_t n=0;n<count;++n)many.push_back({"member"+std::to_string(n),n%2?"(I)J":"Ljava/lang/Object;",uint32_t(n%2?9:1),UINT32_MAX});
+  auto reversed=many;std::reverse(reversed.begin(),reversed.end());assert(MembersEqual(many,reversed));
+  reversed[count/2].descriptor="[Ljava/lang/Object;";assert(!MembersEqual(many,reversed));
+  reversed=many;reversed[count/2]=reversed[0];assert(!MembersEqual(many,reversed));
+  reversed=many;reversed[0].access^=0x10;assert(!MembersEqual(many,reversed));
+  std::cout<<"Actual exact member index: 16000 declarations/reordered/foreign descriptor/flags/duplicate negatives and original count==1 differential semantics passed\n";
+ }
+
  // The exact helper used by State::Roots and CollectManagedRoots consumes
  // actual native Class allocations; opaque identity has no permission value.
  // Every root snapshot builds independently, including after movement.

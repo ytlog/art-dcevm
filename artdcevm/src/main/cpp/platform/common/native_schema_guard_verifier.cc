@@ -10,6 +10,7 @@
 #include <cstring>
 #include <map>
 #include <unordered_map>
+#include <string_view>
 #include <set>
 #include <limits>
 #include <cstdlib>
@@ -126,8 +127,26 @@ bool FieldWindowFailure(std::string* error,const evolution::ClassSchema& klass,c
    int(DiagnosticPrefix(why,256)),why);*error=message;
  }return false;
 }
-bool MemberEqual(const evolution::Member& a,const evolution::Member& b){return a.name==b.name&&a.descriptor==b.descriptor&&native_schema_policy::JavaFlags(a.access)==native_schema_policy::JavaFlags(b.access);}
-bool MembersEqual(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){return a.size()==b.size()&&std::all_of(a.begin(),a.end(),[&](const auto& m){return std::count_if(b.begin(),b.end(),[&](const auto& n){return MemberEqual(m,n);})==1;});}
+struct MemberKey {
+ std::string_view name,descriptor;uint32_t flags;
+ bool operator==(const MemberKey& other)const{return name==other.name&&descriptor==other.descriptor&&flags==other.flags;}
+};
+struct MemberKeyHash {
+ size_t operator()(const MemberKey& key)const noexcept{
+  size_t value=std::hash<std::string_view>{}(key.name);
+  const auto mix=[&](size_t next){value^=next+size_t(0x9e3779b9u)+(value<<6)+(value>>2);};
+  mix(std::hash<std::string_view>{}(key.descriptor));mix(std::hash<uint32_t>{}(key.flags));return value;
+ }
+};
+MemberKey ExactMemberKey(const evolution::Member& member){return {member.name,member.descriptor,native_schema_policy::JavaFlags(member.access)};}
+bool MembersEqual(const std::vector<evolution::Member>& a,const std::vector<evolution::Member>& b){
+ if(a.size()!=b.size())return false;
+ // Preserve the original exact count==1 proof (including duplicate refusal),
+ // with keys borrowing these two immutable declarations only for this call.
+ std::unordered_map<MemberKey,size_t,MemberKeyHash> counts;counts.reserve(b.size());
+ for(const auto& member:b)++counts[ExactMemberKey(member)];
+ return std::all_of(a.begin(),a.end(),[&](const auto& member){const auto found=counts.find(ExactMemberKey(member));return found!=counts.end()&&found->second==1;});
+}
 std::string Package(const std::string& descriptor){const auto slash=descriptor.rfind('/');return slash==std::string::npos?std::string{}:descriptor.substr(0,slash);}
 bool Virtual(const evolution::Member& method){return !(method.access&(8u|2u))&&method.name!="<init>"&&method.name!="<clinit>";}
 template<class T>T Read(const void* p,size_t offset=0){T value;std::memcpy(&value,static_cast<const unsigned char*>(p)+offset,sizeof(value));return value;}
