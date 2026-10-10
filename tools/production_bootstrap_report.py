@@ -3,6 +3,12 @@ import json
 from production_foreground_report import validate_foreground
 import re
 
+SOURCE_EPISODES = {
+    'initializer': ('initializerEpisodeObserved', 'initializerEpisodeDiagnostic'),
+    'compiled-frames': ('compiledFramesCalibrated', 'frameCalibrationDiagnostic'),
+    'receiver-invoke': ('receiverInvokeSourceCalibrated', 'receiverInvokeSourceDiagnostic'),
+}
+
 def _require_success(instrumentation, self_instrumentation=False):
     code = re.findall(r'^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$', instrumentation, re.M)
     if self_instrumentation:
@@ -15,7 +21,7 @@ def _require_success(instrumentation, self_instrumentation=False):
     if code != ['-1'] or len(re.findall(r'^(?:INSTRUMENTATION_RESULT: stream=)?OK \(1 test\)\s*$', instrumentation,re.M)) != 1 or 'FAILURES!!!' in instrumentation:
         raise RuntimeError('Production instrumentation did not finish exactly one successful test')
 
-def validate_production_bootstrap_payload(instrumentation, persisted, run_id, *, require_fields=False, require_foreground=False, self_instrumentation=False):
+def validate_production_bootstrap_payload(instrumentation, persisted, run_id, *, require_fields=False, require_foreground=False, self_instrumentation=False, require_source_episodes=()):
     """Full current-run atomic payload, independent of logcat's per-record size limit."""
     _require_success(instrumentation,self_instrumentation)
     def unique_keys(pairs):
@@ -27,9 +33,9 @@ def validate_production_bootstrap_payload(instrumentation, persisted, run_id, *,
     report=json.loads(persisted,object_pairs_hook=unique_keys)
     if not isinstance(report,dict) or report.get('runId')!=run_id:
         raise RuntimeError('Missing current-run persisted production transaction report')
-    return _validate_report(report,require_fields=require_fields,require_foreground=require_foreground)
+    return _validate_report(report,require_fields=require_fields,require_foreground=require_foreground, require_source_episodes=require_source_episodes)
 
-def validate_production_bootstrap(instrumentation, device_log, run_id, *, require_fields=False, require_foreground=False):
+def validate_production_bootstrap(instrumentation, device_log, run_id, *, require_fields=False, require_foreground=False, require_source_episodes=()):
     """Legacy log reader kept for evidence checks; device runner uses the complete file."""
     _require_success(instrumentation)
     reports = []
@@ -47,9 +53,9 @@ def validate_production_bootstrap(instrumentation, device_log, run_id, *, requir
             reports.append(candidate)
     if len(reports) != 1:
         raise RuntimeError('Missing or ambiguous current-run production transaction report')
-    return _validate_report(reports[0],require_fields=require_fields,require_foreground=require_foreground)
+    return _validate_report(reports[0],require_fields=require_fields,require_foreground=require_foreground, require_source_episodes=require_source_episodes)
 
-def _validate_report(report, *, require_fields=False, require_foreground=False):
+def _validate_report(report, *, require_fields=False, require_foreground=False, require_source_episodes=()):
     expected = {'lastApplyCode': 0, 'productionBootstrap': True, 'formalApplyMethodDeletion': True,
                 'cachedJniRejectedModes': 4, 'cachedReflectionRejected': True,
                 'retainedIdentity': True, 'retainedCompute': 35, 'retainedValue': 31}
@@ -70,4 +76,12 @@ def _validate_report(report, *, require_fields=False, require_foreground=False):
         raise RuntimeError('Production method deletion capability was not reported')
     if require_fields and capabilities.get('fieldDeletion') is not True:
         raise RuntimeError('Production field deletion capability was not reported')
+    for episode in require_source_episodes:
+        if episode not in SOURCE_EPISODES:
+            raise ValueError('Unknown required source episode: '+str(episode))
+        proven, diagnostic = SOURCE_EPISODES[episode]
+        if capabilities.get(proven) is not True or capabilities.get(diagnostic) != '':
+            raise RuntimeError(f'Incomplete source calibration {episode}: '
+                               f'{proven}={capabilities.get(proven)!r}, '
+                               f'{diagnostic}={capabilities.get(diagnostic)!r}')
     return report

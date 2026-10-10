@@ -152,3 +152,30 @@ for key,bad in [('foregroundRequested',False),('foregroundResumedAfter',False),
  else:raise AssertionError('Self route lost same-process foreground proof: '+key)
 
 print('Production report: current-run structured evidence, successful terminal code and retained-state proofs enforced')
+
+# Optional source proof requirements must use this exact successful run. A
+# calibration is narrower than complete evolution, which remains false here.
+from production_bootstrap_report import SOURCE_EPISODES
+calibrated={**full,'capabilities':dict(full['capabilities'])}
+for proven,diagnostic in SOURCE_EPISODES.values():
+ calibrated['capabilities'].update({proven:True,diagnostic:''})
+for episode,(proven,diagnostic) in SOURCE_EPISODES.items():
+ for reader in [lambda value:validate_production_bootstrap_payload(output,json.dumps(value),run_id,require_source_episodes=[episode]),
+                lambda value:validate_production_bootstrap(output,logged(value),run_id,require_source_episodes=[episode])]:
+  assert reader(calibrated)==calibrated
+  for key,bad in [(proven,False),(proven,1),(proven,'true'),(diagnostic,'unobserved'),(diagnostic,None)]:
+   candidate={**calibrated,'capabilities':{**calibrated['capabilities'],key:bad}}
+   try:reader(candidate)
+   except RuntimeError:pass
+   else:raise AssertionError('Missing actual source proof accepted: '+episode+'/'+key)
+  candidate={**calibrated,'capabilities':{k:v for k,v in calibrated['capabilities'].items() if k!=diagnostic}}
+  try:reader(candidate)
+  except RuntimeError:pass
+  else:raise AssertionError('Absent source diagnostic accepted')
+assert validate_production_bootstrap_payload(self_output,json.dumps(calibrated),run_id,
+ self_instrumentation=True,require_source_episodes=list(SOURCE_EPISODES))==calibrated
+assert calibrated['capabilities']['fullDcevmComplete'] is False
+try:validate_production_bootstrap_payload(output,json.dumps(calibrated),run_id,require_source_episodes=['unknown'])
+except ValueError:pass
+else:raise AssertionError('Unknown source requirement accepted')
+print('Exact-run source episode requirements reject missing, false, mistyped and diagnostic-bearing calibration')
