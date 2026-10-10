@@ -4,6 +4,7 @@
 #include <array>
 #include "platform/common/typed_storage_assignability.h"
 #include "platform/common/native_class_assignability.h"
+#include "platform/common/bounded_root_cohort.h"
 #include <cstring>
 #include <unordered_map>
 #include "platform/common/readable_mapping_scope.h"
@@ -154,6 +155,14 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
   if(!ready){env->DeleteLocalRef(system);env->DeleteLocalRef(class_type);env->DeleteLocalRef(field_type);if(error)*error=std::move(matrix_error);return false;}
 
  }
+ struct Destination {size_t type,field;enum Role{Class,Component,FieldType,Mirror} role;};
+ bounded_managed_roots::RootCohort<Destination> cohort{s.public_roots,env,error,&s,
+  [](void*raw,const Destination& d,State::Slot root)noexcept{auto&s=*static_cast<State*>(raw);
+   if(d.type>=s.types.size())return false;auto& type=s.types[d.type];
+   if(d.role==Destination::Class)type.root=root;else if(d.role==Destination::Component)type.component_root=root;
+   else {if(d.field>=type.fields.size())return false;auto& field=type.fields[d.field];if(d.role==Destination::FieldType)field.type_root=root;else field.mirror_root=root;}
+   return true;
+  }};
  bool pass=true;std::unordered_multimap<jint,size_t> identities;
  // Resolving public Field.getType may load new Classes. Enumerate until a
  // complete pass adds none; native identities are borrowed only after this
@@ -164,9 +173,10 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
   for(jint i=0;i<count&&pass;++i){
    const jint identity=env->CallStaticIntMethod(system,hash,loaded[i]);bool seen=false;
    const auto range=identities.equal_range(identity);
+   if(range.first!=range.second&&!cohort.Flush()){pass=false;break;}
    for(auto at=range.first;at!=range.second;++at)if(s.public_roots.Same(env,s.types[at->second].root,loaded[i])){seen=true;break;}
    if(env->ExceptionCheck()){pass=false;break;}if(seen)continue;
-   State::Type type;char* signature=nullptr;pass=ti->GetClassSignature(loaded[i],&signature,nullptr)==JVMTI_ERROR_NONE&&signature;
+   const size_t type_index=s.types.size();s.types.emplace_back();auto& type=s.types[type_index];char* signature=nullptr;pass=ti->GetClassSignature(loaded[i],&signature,nullptr)==JVMTI_ERROR_NONE&&signature;
   if(!pass)break;const std::string name(signature);ti->Deallocate(reinterpret_cast<unsigned char*>(signature));
   // JNI Class.getClassLoader may return a BootClassLoader facade. Only the
   // independent JVMTI defining-loader identity supplies the boot oracle.
@@ -175,9 +185,9 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
   if(loader_error!=JVMTI_ERROR_NONE||env->ExceptionCheck()){pass=false;break;}
   type.object=boot&&name=="Ljava/lang/Object;";type.cloneable=boot&&name=="Ljava/lang/Cloneable;";type.serializable=boot&&name=="Ljava/io/Serializable;";
   type.primitive=env->CallBooleanMethod(loaded[i],primitive);type.array=!name.empty()&&name.front()=='[';
-  pass=!env->ExceptionCheck()&&s.public_roots.Stage(c,loaded[i],&type.root,error);
+  pass=!env->ExceptionCheck()&&cohort.Add(loaded[i],{type_index,0,Destination::Class});
   jobject part=pass?env->CallObjectMethod(loaded[i],component):nullptr;
-  if(pass&&part)pass=s.public_roots.Stage(c,part,&type.component_root,error);if(part)env->DeleteLocalRef(part);
+  if(pass&&part)pass=cohort.Add(part,{type_index,0,Destination::Component});if(part)env->DeleteLocalRef(part);
   if(pass&&!type.array&&!type.primitive){jint fields_count=0;jfieldID* fields=nullptr;
    const auto fields_error=ti->GetClassFields(loaded[i],&fields_count,&fields);
    // JVMTI does not expose declarations of an unprepared class. Keep its
@@ -190,23 +200,25 @@ bool Proof::Stage(HookEngine& hooks,const runnable_jni::Context& c,jvmtiEnv* ti,
     pass=ti->GetFieldName(loaded[i],fields[j],&name_bytes,&descriptor,nullptr)==JVMTI_ERROR_NONE&&name_bytes&&descriptor&&ti->GetFieldModifiers(loaded[i],fields[j],&modifiers)==JVMTI_ERROR_NONE;
     if(pass&&(descriptor[0]=='L'||descriptor[0]=='[')){
      jobject reflected=env->ToReflectedField(loaded[i],fields[j],(modifiers&8)!=0);jobject declared_type=reflected?env->CallObjectMethod(reflected,declared):nullptr;
-     State::Field field;field.statik=(modifiers&8)!=0;
-     pass=reflected&&declared_type&&!env->ExceptionCheck()&&s.public_roots.Stage(c,declared_type,&field.type_root,error)&&s.public_roots.Stage(c,reflected,&field.mirror_root,error);
+     const size_t field_index=type.fields.size();type.fields.emplace_back();auto& field=type.fields[field_index];field.statik=(modifiers&8)!=0;
+     pass=reflected&&declared_type&&!env->ExceptionCheck()&&cohort.Add(declared_type,{type_index,field_index,Destination::FieldType})&&cohort.Add(reflected,{type_index,field_index,Destination::Mirror});
      // Type resolution and root publication can safepoint. Retain only the
      // independent public witnesses and owned slots until the whole fixed point
      // is complete; never carry a borrowed managed mirror through later JNI.
      if(pass){field.public_name=name_bytes;field.public_descriptor=descriptor;
-      field.public_modifiers=uint32_t(modifiers);type.fields.push_back(std::move(field));}
+      field.public_modifiers=uint32_t(modifiers);}
      if(reflected)env->DeleteLocalRef(reflected);if(declared_type)env->DeleteLocalRef(declared_type);
     }
     if(name_bytes)ti->Deallocate(reinterpret_cast<unsigned char*>(name_bytes));if(descriptor)ti->Deallocate(reinterpret_cast<unsigned char*>(descriptor));
    }if(fields)ti->Deallocate(reinterpret_cast<unsigned char*>(fields));
   }
-  if(pass){identities.emplace(identity,s.types.size());s.types.push_back(std::move(type));++added;}
+  if(pass){identities.emplace(identity,type_index);++added;}
   }
+  if(pass)pass=cohort.Flush();
   for(jint i=0;i<count;++i)env->DeleteLocalRef(loaded[i]);ti->Deallocate(reinterpret_cast<unsigned char*>(loaded));
   if(!pass||!added)break;
  }
+ if(pass)pass=cohort.Flush();
  env->DeleteLocalRef(system);env->DeleteLocalRef(class_type);env->DeleteLocalRef(field_type);
  if(!pass||env->ExceptionCheck())return Fail(error,"Complete public/native typed field inventory refused");
  // The fixed named ObjPtr<Class> leaf needs an independent public positive

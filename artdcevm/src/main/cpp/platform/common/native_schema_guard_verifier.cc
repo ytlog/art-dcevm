@@ -1,4 +1,5 @@
 #include "platform/common/readable_mapping_scope.h"
+#include "platform/common/bounded_root_cohort.h"
 #include <optional>
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/loaded_member_guards.h"
@@ -449,23 +450,11 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  // Each public reference is retained as a movable JNI local until its
  // cohort is attested. Only Slot destinations (not native Class pointers)
  // survive JNI calls; node/interface storage is reserved before queueing.
- struct RootCohort {
-  bounded_managed_roots::Store& roots;JNIEnv* env;std::string* error;
-  std::vector<jobject> objects;std::vector<bounded_managed_roots::Slot*> destinations;
-  RootCohort(bounded_managed_roots::Store& r,JNIEnv* e,std::string* why):roots(r),env(e),error(why){objects.reserve(bounded_managed_roots::Store::kCohortSize);destinations.reserve(bounded_managed_roots::Store::kCohortSize);}
-  ~RootCohort(){for(auto object:objects)env->DeleteLocalRef(object);}
-  bool Flush(){if(objects.empty())return true;std::vector<bounded_managed_roots::Slot> slots;
-   if(!roots.StageMany(env,objects,&slots,error)||slots.size()!=destinations.size())return false;
-   for(size_t i=0;i<slots.size();++i)*destinations[i]=slots[i];
-   for(auto object:objects)env->DeleteLocalRef(object);objects.clear();destinations.clear();return true;
-  }
-  bool Add(jobject object,bounded_managed_roots::Slot* destination){
-   if(!object||!destination||env->ExceptionCheck())return false;
-   if(objects.size()==bounded_managed_roots::Store::kCohortSize&&!Flush())return false;
-   jobject local=env->NewLocalRef(object);if(!local||env->ExceptionCheck())return false;
-   objects.push_back(local);destinations.push_back(destination);return true;
-  }
- } cohort{state_->roots,env,error};
+ using RootSlot=bounded_managed_roots::Slot;
+ bounded_managed_roots::RootCohort<RootSlot*> cohort{
+  state_->roots,env,error,nullptr,[](void*,RootSlot* const& destination,RootSlot slot)noexcept{
+   if(!destination)return false;*destination=slot;return true;
+  }};
  auto& staged_names=state_->public_index.buckets;
  for(;;){
  const size_t before=state_->nodes.size();size_t known=0;

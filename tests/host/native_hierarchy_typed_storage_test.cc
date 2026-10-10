@@ -6,6 +6,7 @@
 #include "platform/common/native_schema_binding.h"
 #include "platform/common/native_typed_heap_calibration.h"
 #include "platform/common/native_narrowing_authority.h"
+#include "platform/common/bounded_root_cohort.h"
 namespace {
 using StorageProof=native_hierarchy_typed_storage::Proof;
 std::unique_ptr<receiver_guard::Guard> incomplete_guard;std::unique_ptr<receiver_guard::FrameReader> incomplete_frames;std::unique_ptr<native_narrowing::Authority> incomplete_authority;native_hierarchy_graph::Graph incomplete_graph;
@@ -22,6 +23,7 @@ std::array<const char*,4> typed_names{{"referenceValue","staticReferenceValue","
 std::array<const char*,4> typed_descriptors{{"Ljava/lang/Object;","Ljava/lang/Object;","LAncestor;","LAncestor;"}};
 std::vector<void*> typed_classes,typed_public_arrays;ExplicitMappings typed_maps;source_commit::Plan typed_wrong_plan;
 bool typed_wrong_public_name=false;size_t typed_failure_globals=0;bool typed_stage_watch=false;bool typed_mirrors_moved=false;std::array<void*,4> typed_moved_mirrors{};size_t typed_stage_native_fields=0;uint64_t typed_stage_native_queries=0;int typed_stage_native_jni=0;bool typed_stage_reentered_jni=false;
+void TestRootCohort(const runnable_jni::Context& c,const source_handle_roots::Service& source,const modern_field_metadata::FieldMetadata& metadata);
 void* TypedStageFieldLeaf(void* mirror){
  if(typed_stage_watch){
   if(!typed_stage_native_fields){typed_stage_native_queries=method_identity::MappingOsQueries();typed_stage_native_jni=jni_calls;}
@@ -40,6 +42,9 @@ const char* TypedFieldType(void*f){auto i=TypedFieldIndex(f);return i==SIZE_MAX?
 const char* TypedDescriptor(void*c,void*storage){if(c==typed_probe_class)return "LProbe;";if(c==typed_ancestor)return "LAncestor;";return ResolutionDescriptor(c,storage);}
 bool typed_code_only=std::getenv("ARTDCEVM_TYPED_ASSIGN_CODE")!=nullptr,typed_code_bad=false;
 std::array<void*,11> typed_assignment_roles{};
+std::vector<void*> typed_large_classes;size_t typed_source_decodes=0;
+abi::arm64::android11::ReleaseObjectPointer TypedRootDecode(const void*s,jobject object){++typed_source_decodes;return Decode(s,object);}
+
 enum class MatrixFailure {None,Find,Component,Root,Relation};
 MatrixFailure matrix_failure=MatrixFailure::None;bool matrix_pending=false;
 int matrix_exception_identity;
@@ -80,6 +85,7 @@ size_t TypedHeap(void*h,bool refs){assert(stopped&&h==&typed_heap&&refs);size_t 
 }
 class TypedHooks final:public OwnerHooks {public:
  void* FindSymbol(const char* lib,const char* n)override{
+  if(!std::strcmp(n,abi::arm64::android11::kDecodeJObject)||!std::strcmp(n,runnable_jni::GlobalDecoder::SymbolName()))return reinterpret_cast<void*>(TypedRootDecode);
   if(std::strstr(n,"GetArtFieldEv"))return reinterpret_cast<void*>(TypedStageFieldLeaf);
   if(!std::strcmp(n,native_typed_heap_walk::kVerifyHeap))return reinterpret_cast<void*>(TypedHeap);
   if(!std::strcmp(n,native_typed_heap_walk::kVisitorCtor))return reinterpret_cast<void*>(TypedCtor);
@@ -158,6 +164,7 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  table.GetFieldID=[](JNIEnv*,jclass c,const char*n,const char*s){Jni();assert(c==typed_probe_class&&!std::strcmp(n,"referenceValue")&&!std::strcmp(s,"Ljava/lang/Object;"));return reinterpret_cast<jfieldID>(typed_fields[0]);};
  table.GetStaticFieldID=[](JNIEnv*,jclass c,const char*n,const char*s){Jni();assert(c==typed_probe_class&&!std::strcmp(n,"staticReferenceValue")&&!std::strcmp(s,"Ljava/lang/Object;"));return reinterpret_cast<jfieldID>(typed_fields[1]);};
  table.GetMethodID=TypedMethod;table.CallObjectMethodV=TypedObject;table.CallBooleanMethodV=TypedBoolean;table.ToReflectedField=TypedReflected;table.GetStaticObjectField=[](JNIEnv*e,jclass o,jfieldID f){return GetObject(e,o,f);};
+ table.NewLocalRef=[](JNIEnv*,jobject value)->jobject{Jni();return value;};
  table.NewObjectArray=TypedNewArray;table.GetArrayLength=TypedLength;table.GetObjectArrayElement=TypedElement;table.SetObjectArrayElement=TypedSet;
  exclusive_owned_roots::Service exclusive;assert(exclusive_owned_roots::Service::Bind(hooks,&exclusive,&error));typed_helper_calibration=true;
  assert(native_typed_heap_calibration::Prepare(hooks,&env,reinterpret_cast<jobject>(typed_probe_instance),&typed_heap,Current,metadata,exclusive,&walk,&error));typed_helper_calibration=false;
@@ -168,16 +175,23 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  alignas(8) static unsigned char source_scope[32]{};OriginalHeader head{nullptr,3};std::memcpy(source_scope,&head,sizeof(head));Put32(source_scope,12,uint32_t(uintptr_t(old_class)));public_slot=source_scope+12;Publish(source_scope);
  typed_classes={old_class,new_class,parent_class,meta_class,typed_probe_class,typed_int,typed_array_class,typed_ancestor_array,typed_old_array_class,typed_ancestor_2d,typed_old_2d};
  for(auto*role:typed_assignment_roles)if(std::find(typed_classes.begin(),typed_classes.end(),role)==typed_classes.end())typed_classes.push_back(role);
+ for(size_t i=0;i<300;++i){auto*c=type();Put32(c,4,uint32_t(0x10000+i));typed_large_classes.push_back(c);typed_classes.push_back(c);}
  static jvmtiInterface_1 functions{};functions.GetClassLoader=TypedDefiningLoader;functions.GetLoadedClasses=TypedLoaded;functions.GetClassSignature=TypedSignature;functions.GetClassFields=TypedFields;functions.GetFieldName=TypedFieldPublicName;functions.GetFieldModifiers=TypedFieldFlags;functions.Deallocate=TypedDeallocate;static jvmtiEnv ti{&functions};
  auto result=std::make_unique<StorageProof>(walk,source,metadata);
  struct Request{source_handle_roots::Service*source;StorageProof*proof;std::string*error;} request{&source,result.get(),&error};
  // Hook owner is a real dependency, never inferred from a staged bool.
  struct StageRequest{Request*request;TypedHooks*hooks;native_typed_heap_walk::Service*walk;modern_field_metadata::FieldMetadata*metadata;} sr{&request,&hooks,&walk,&metadata};
  auto actual_stage=[](const runnable_jni::Context&c,void*p){auto&r=*static_cast<StageRequest*>(p);if(!r.request->source->ObserveAllocatorHandle(c,reinterpret_cast<jobject>(old_class),public_slot,r.request->error))return false;auto facade=c.env->CallObjectMethod(reinterpret_cast<jobject>(parent_class),reinterpret_cast<jmethodID>(&typed_loader_id));assert(facade==reinterpret_cast<jobject>(&typed_facade));c.env->DeleteLocalRef(facade);
- const auto stage_queries=method_identity::MappingOsQueries();typed_stage_watch=true;typed_stage_native_fields=0;typed_stage_reentered_jni=false;
+ const auto stage_decodes=typed_source_decodes; const auto stage_queries=method_identity::MappingOsQueries();typed_stage_watch=true;typed_stage_native_fields=0;typed_stage_reentered_jni=false;
  const bool staged=r.request->proof->Stage(*r.hooks,c,&ti,r.request->error);typed_stage_watch=false;
  std::cout<<"Actual typed Stage mapping queries="<<method_identity::MappingOsQueries()-stage_queries<<" reference-fields="<<typed_stage_native_fields<<" post-first-native-field queries="<<method_identity::MappingOsQueries()-typed_stage_native_queries<<" JNI-reentered="<<typed_stage_reentered_jni<<"\n";
  if(!staged)return false;
+ // 300 independently rooted original-source Classes exceed two cohort limits.
+ // Native Stage still reads every Class, but publication now decodes each
+ // array only per cohort, rather than both object+array for every root.
+ const size_t staged_decodes=typed_source_decodes-stage_decodes;
+ std::cout<<"Original-source typed cohort Classes="<<typed_classes.size()<<" total source decodes="<<staged_decodes<<" (including complete final native inventory reads)\n";
+ assert(typed_classes.size()>300&&staged_decodes<2*typed_classes.size());
  assert(typed_mirrors_moved&&typed_stage_native_fields==8&&!typed_stage_reentered_jni);
  assert(method_identity::MappingOsQueries()==typed_stage_native_queries);
  // Same real public inventory and rooted identities, but a broken C ABI
@@ -220,6 +234,7 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  // A mismatching independent public declaration refuses in the late native
  // pass after preceding identities were read. Failed staging owns no published
  // proof, and Clear refunds every global produced by that failed attempt.
+ TestRootCohort(c,*r.request->source,*r.metadata);
  typed_wrong_public_name=true;StorageProof mismatch(*r.walk,*r.request->source,*r.metadata);
  assert(!mismatch.Stage(*r.hooks,c,&ti,r.request->error)&&!mismatch.Staged()&&*r.request->error=="Native typed field differs from independent public declaration");
  mismatch.Clear(c.env);assert(!typed_failure_globals);typed_wrong_public_name=false;
@@ -232,6 +247,29 @@ std::unique_ptr<StorageProof> PrepareTyped(TypedHooks&hooks,modern_field_metadat
  assert(!runnable_executor::DecodeStrongGlobal(original_context,reinterpret_cast<jobject>(old_class),&executor_borrow)&&!executor_borrow);
  const bool original_staged=actual_stage(original_context,&sr);Put32(thread.data(),0,92u<<24);
  if(!original_staged){std::cerr<<"typed Stage: "<<error<<"\n";std::abort();}assert(typed_inventory_passes>=3&&typed_late_class&&typed_defining_loaders>=typed_classes.size());return result;
+}
+void TestRootCohort(const runnable_jni::Context& c,const source_handle_roots::Service& source,const modern_field_metadata::FieldMetadata& metadata){
+ struct Owner {const runnable_jni::Context& c;const source_handle_roots::Service& source;const modern_field_metadata::FieldMetadata& metadata;std::vector<bounded_managed_roots::Slot> slots;bool refuse=false;} owner{c,source,metadata,{},false};
+ bounded_managed_roots::Store roots{{&owner,
+  [](void*p,JNIEnv*e,jobject,runnable_jni::Operation op,void*d){auto&o=*static_cast<Owner*>(p);return e==o.c.env&&o.source.ReadyForSourceAccess()&&op(o.c,d);},
+  [](void*p,const runnable_jni::Context&ctx,jobject root,void**out){return static_cast<Owner*>(p)->source.BorrowStrongGlobal(ctx,root,out);},
+  [](void*p,jobject root,void**out){auto&o=*static_cast<Owner*>(p);return o.source.BorrowOwnedStrongGlobal(o.c,root,out);},
+  [](void*p,void*a,size_t i){return static_cast<Owner*>(p)->metadata.Reference(a,12+4*i);},
+  [](void*p,const runnable_jni::Context&ctx,jobject a,jobject b,void**x,void**y){return static_cast<Owner*>(p)->source.BorrowOwnedStrongPair(ctx,a,b,x,y);}}};
+ std::string error;owner.slots.resize(typed_large_classes.size());const auto start=typed_source_decodes;
+ for(size_t i=0;i<typed_large_classes.size();++i)assert(roots.Stage(c,reinterpret_cast<jobject>(typed_large_classes[i]),&owner.slots[i],&error));
+ const auto direct=typed_source_decodes-start;roots.Clear(c.env);
+ const auto publish=[](void*p,const size_t& index,bounded_managed_roots::Slot slot)noexcept{auto&o=*static_cast<Owner*>(p);if(o.refuse&&index==1)return false;if(index>=o.slots.size())return false;o.slots[index]=slot;return true;};
+ const auto before=typed_source_decodes;
+ {bounded_managed_roots::RootCohort<size_t> cohort{roots,c.env,&error,&owner,publish};for(size_t i=0;i<typed_large_classes.size();++i)assert(cohort.Add(reinterpret_cast<jobject>(typed_large_classes[i]),i));assert(cohort.Flush());}
+ const auto batched=typed_source_decodes-before;
+ for(size_t i=0;i<owner.slots.size();++i){void* actual=nullptr;assert(roots.Read(owner.slots[i],&actual)&&actual==typed_large_classes[i]);}
+ roots.Clear(c.env);assert(!typed_failure_globals);
+ std::cout<<"Actual source root publication direct="<<direct<<" batched="<<batched<<" for "<<typed_large_classes.size()<<" exact identities\n";
+ assert(direct==2*typed_large_classes.size()&&batched<direct/10);
+ owner.refuse=true;
+ {bounded_managed_roots::RootCohort<size_t> rejected{roots,c.env,&error,&owner,publish};assert(rejected.Add(reinterpret_cast<jobject>(typed_large_classes[0]),0)&&rejected.Add(reinterpret_cast<jobject>(typed_large_classes[1]),1));assert(!rejected.Flush());const auto stopped=typed_source_decodes;assert(!rejected.Flush()&&!rejected.Add(reinterpret_cast<jobject>(typed_large_classes[2]),2)&&typed_source_decodes==stopped);}
+ roots.Clear(c.env);assert(!typed_failure_globals);
 }
 void MoveTypedRootsAfterStage(){
  // A real collector boundary double moves the Class and updates compressed
