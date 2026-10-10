@@ -31,11 +31,21 @@ int main(){
  field_copy::CopyFieldView view{};assert(good.FieldIdentity(old_fields[1],&view,&error));assert(view.name==names[1]&&view.descriptor==types[1]);
  assert(good.MethodDeclaringClass(old_method)==old_class);
  old_fields[1]->declaring_class=uint32_t(uintptr_t(new_class));assert(good.FieldDeclaringClass(old_fields[1])==new_class);old_fields[1]->declaring_class=uint32_t(uintptr_t(old_class));
+ bad_owner=true;assert(!calibrate(good)&&!good.Calibrated());
+ assert(!good.FieldIdentity(old_fields[1],&view,&error));
+ bad_owner=false;assert(calibrate(good)&&good.Calibrated());
+ raised=true;assert(!calibrate(good)&&pending&&!good.Calibrated());
+ assert(!good.FieldIdentity(old_fields[1],&view,&error));raised=pending=false;
+ assert(calibrate(good));pending=true;assert(!calibrate(good)&&!good.Calibrated());pending=false;
+ assert(calibrate(good));
  bad_owner=true;modern_field_metadata::FieldMetadata foreign;assert(foreign.Bind(hooks,&error));assert(!calibrate(foreign)&&!foreign.Calibrated());assert(error.find("exact public owner")!=std::string::npos);bad_owner=false;
  bad_cookie=true;modern_field_metadata::FieldMetadata cookie;assert(cookie.Bind(hooks,&error));assert(!calibrate(cookie)&&!cookie.Calibrated());assert(error.find("ObjPtr codec")!=std::string::npos);bad_cookie=false;
  raised=true;modern_field_metadata::FieldMetadata exception;assert(exception.Bind(hooks,&error));auto before=named_calls;assert(!calibrate(exception)&&pending&&!exception.Calibrated());assert(named_calls==before+1&&error.find("pending exception")!=std::string::npos);raised=pending=false;
  auto saved=oracle[1];oracle[1]=oracle[0];modern_field_metadata::FieldMetadata duplicate;assert(duplicate.Bind(hooks,&error));assert(!calibrate(duplicate)&&error.find("duplicated")!=std::string::npos);oracle[1]=saved;
  oracle[1].modifiers^=8;modern_field_metadata::FieldMetadata flags;assert(flags.Bind(hooks,&error));assert(!calibrate(flags)&&error.find("modifiers/static")!=std::string::npos);oracle[1]=saved;
  hooks.absent=true;modern_field_metadata::FieldMetadata generic;assert(generic.Bind(hooks,&error));before=named_calls;assert(calibrate(generic)&&named_calls==before);assert(generic.FieldIdentity(old_fields[1],&view,&error));
+ oracle[1].modifiers^=8;assert(!calibrate(generic)&&!generic.Calibrated());
+ assert(!generic.FieldIdentity(old_fields[1],&view,&error));oracle[1]=saved;
+ assert(calibrate(generic)&&generic.Calibrated());
  std::cout<<"actual FieldMetadata original declaring getter calibration/Text/current-root, method generic independence, exact owner/cookie/duplicate/static/pending negatives PASS\n";
 }

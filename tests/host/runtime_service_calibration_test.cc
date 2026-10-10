@@ -174,6 +174,7 @@ int main(int argc,char** argv) {
    assert(pending&&error=="Owned Runtime receiver calibration carrier unavailable");
   }
   if(mode=="pending-after-read")assert(pending&&error=="Pending JNI exception after Runtime service observation");
+  if(mode=="source-mismatch")assert(error.find("android11/12/13/14/15to17=")!=std::string::npos&&error.find("/30]")!=std::string::npos);
   if(mode=="core-failure")assert(error=="Original public JNI receiver failure");
  }
  if(mode=="success")assert(original_calls==1&&callback_calls==1&&enable_calls==1);

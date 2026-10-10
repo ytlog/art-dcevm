@@ -6,6 +6,8 @@
 #include "platform/abi/common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
+#include <array>
+#include <sstream>
 namespace artdcevm::runtime_services {
 namespace {
 // Fixed source overloads are independent named capabilities. Observers only
@@ -100,18 +102,24 @@ struct ReadRequest {
   runtime_receiver::Receivers observed;
   runtime_services::View view;
   size_t extent=0;
+  std::array<unsigned,5> declaration_proofs{};
 };
 bool ReadServices(const runnable_jni::Context&,void* opaque) {
   auto& request=*static_cast<ReadRequest*>(opaque);
-  bool matched=false;
+  bool matched=false;size_t index=0;
   for(auto declaration:{Declaration::kAndroid11,Declaration::kAndroid12,
       Declaration::kAndroid13,Declaration::kAndroid14,Declaration::kAndroid15To17}) {
     View view;
-    if(!Read(declaration,request.runtime,request.extent,&view)||
-        view.class_linker!=request.observed.class_linker||
-        view.jni_id_manager!=request.observed.jni_id_manager||
-        view.thread_list!=request.observed.thread_list||
-        view.java_vm!=request.observed.java_vm||!view.heap)continue;
+    unsigned proof=0;
+    if(Read(declaration,request.runtime,request.extent,&view)){
+      if(view.class_linker==request.observed.class_linker)proof|=1u;
+      if(view.jni_id_manager==request.observed.jni_id_manager)proof|=2u;
+      if(view.thread_list==request.observed.thread_list)proof|=4u;
+      if(view.java_vm==request.observed.java_vm)proof|=8u;
+      if(view.heap)proof|=16u;
+    }
+    request.declaration_proofs[index++]=proof;
+    if(proof!=31u)continue;
     // Only these independently observed slots are published. Equivalent fixed
     // declarations do not grant their unobserved JIT/Heap/Instrumentation fields.
     request.view=view;matched=true;
@@ -161,7 +169,14 @@ bool CalibrateRuntimeServices(HookEngine& hooks,JNIEnv* env,Snapshot* output,
   }
   auto result=runnable_executor::With(env,root,ReadServices,&request);
   env->DeleteGlobalRef(root);
-  if(result!=runnable_jni::Result::kSuccess)return Fail(error,"Runtime source declaration disagrees with observed service receivers");
+  if(result!=runnable_jni::Result::kSuccess){
+    if(error){std::ostringstream text;
+      text<<"Runtime source declaration disagrees with observed service receivers [proof bits: linker=1 manager=2 threadList=4 javaVm=8 heapPresent=16; android11/12/13/14/15to17=";
+      for(size_t i=0;i<request.declaration_proofs.size();++i){if(i)text<<'/';text<<request.declaration_proofs[i];}
+      text<<']';*error=text.str();
+    }
+    return false;
+  }
   if(env->ExceptionCheck())return Fail(error,"Pending JNI exception after Runtime service observation");
   if(!owned.Close(error))return false;
   request.view.heap=nullptr;request.view.jit=nullptr;request.view.jit_code_cache=nullptr;

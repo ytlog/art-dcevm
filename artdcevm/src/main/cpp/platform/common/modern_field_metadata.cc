@@ -254,6 +254,9 @@ bool FieldMetadata::Candidate(const runnable_jni::Context& context,void* klass,M
 }
 bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject global_class,
     const char* expected_class_descriptor,const FieldOracle* oracles,size_t count,std::string* error){
+  // Every attempt owns a new proof. Never expose the old published family
+  // after its declaring-root producer has been revoked or a new request fails.
+  calibrated_=false;interface_declaration_calibrated_=false;field_declaring_.Begin();
   if(!bound_||!context.self||!context.env||!context.vm||!global_class||!expected_class_descriptor||
       !oracles||count<2||count>1024||context.env->ExceptionCheck())
     return Fail(error,"Invalid owned field calibration request");
@@ -261,7 +264,6 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject globa
   if(!runnable_executor::DecodeStrongGlobal(context,global_class,&klass)||!klass)return Fail(error,"Cannot decode owned fixture class");
   // Select the original source producer before any layout/text candidate.
   // A present but invalid named getter is never hidden by the generic reader.
-  field_declaring_.Begin();
   for(size_t i=0;i<count;++i){void* mirror=nullptr;
     if(!oracles[i].strong_global_field||!runnable_executor::DecodeStrongGlobal(context,oracles[i].strong_global_field,&mirror)||!mirror||context.env->ExceptionCheck()){
       field_declaring_.Reject();return Fail(error,"Field declaring producer original public mirror root unavailable or pending");
