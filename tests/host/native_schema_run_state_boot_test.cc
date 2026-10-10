@@ -32,7 +32,7 @@ int main(int argc,char**argv){
   assert(proposal.before.descriptor==proposal.after.descriptor&&proposal.before.superclass==proposal.after.superclass);
   std::vector<unsigned char> graph_bytes=File(RUN_STATE_GRAPH_DEX_FIXTURE);
   ConfigureDefiningGraph(graph_bytes,*d.metadata);
-  if(!cache_role_fixture.Prepare(before_bytes,&env,&ti,*d.metadata,&error)){std::cerr<<"matched Public cache roles: "<<error<<"\n";std::abort();}
+  if(!cache_role_fixture.Prepare(before_bytes,&env,&ti,*d.metadata,*d.roots,&error)){std::cerr<<"matched Public cache roles: "<<error<<"\n";std::abort();}
   cache_role_fixture.Witness(&witness);typed_globals_before_begin=SchemaTypedGlobals();
   guard_expected_loader=app_loader;
   std::vector<unsigned char> boot_bytes=File(RUN_STATE_BOOT_DEX_FIXTURE);

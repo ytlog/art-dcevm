@@ -24,7 +24,7 @@ int main(){
   assert(proposal.before.descriptor==proposal.after.descriptor&&proposal.before.superclass!=proposal.after.superclass);
   std::vector<unsigned char> graph_bytes=File(RUN_STATE_GRAPH_DEX_FIXTURE);
   ConfigureDefiningGraph(graph_bytes,*d.metadata);
-  if(!cache_role_fixture.Prepare(before_bytes,&env,&ti,*d.metadata,&error)){std::cerr<<"matched Public cache roles: "<<error<<"\n";std::abort();}
+  if(!cache_role_fixture.Prepare(before_bytes,&env,&ti,*d.metadata,*d.roots,&error)){std::cerr<<"matched Public cache roles: "<<error<<"\n";std::abort();}
   cache_role_fixture.Witness(&witness);typed_globals_before_begin=SchemaTypedGlobals();
   native_schema_policy::Plan policy;assert(native_schema_policy::Plan::Prepare(proposal.before,proposal.after,&policy,&error));
   std::vector<native_schema_policy::Plan> policies{policy};
