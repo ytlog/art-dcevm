@@ -51,8 +51,10 @@ bool Service::Bind(HookEngine& hooks,const runtime_services::Snapshot& runtime,s
 }
 bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const char* name,
  const modern_field_metadata::FieldMetadata& metadata,std::unique_ptr<Witness>* output,std::string* error)const{
- if(!env||!ti||!cache||!owner||!name||!*name||!output||!field_||!decode_||!manager_||
-    !metadata.Calibrated())return Fail(error,"Invalid public cache Field observation");
+ if(!env||!ti)return Fail(error,"Public cache Field observation lacks caller JNI/JVMTI context");
+ if(!metadata.Calibrated())return Fail(error,"Public cache Field observation lacks calibrated native metadata");
+ if(!cache||!owner||!name||!*name||!output||!field_||!decode_||!manager_)
+  return Fail(error,"Invalid public cache Field observation");
  if(env->ExceptionCheck())return Fail(error,"Cache Field observation has a pending exception");
  TiBuffer signature{ti};auto status=ti->GetClassSignature(owner,reinterpret_cast<char**>(&signature.data),nullptr);
  if(env->ExceptionCheck())return Fail(error,"Cache Class signature left an exception");

@@ -246,7 +246,7 @@ struct NativeEngine final:Engine {
  static bool RefreshPublicCacheStorage(void*,const runnable_jni::Context&,native_hierarchy_cache::Witness*,std::string*);
  jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
  static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
- bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
+ bool PrepareSourceCacheWitness(JNIEnv*,jvmtiEnv*,std::string*);
  native_schema_run_state::CacheCalibration CacheCalibration()const {
   const auto& w=source_cache_witness;native_schema_run_state::CacheCalibration c;
   c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=112;
@@ -738,7 +738,9 @@ struct NativeEngine final:Engine {
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
   }
   if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
-  if(batch&&!PrepareSourceCacheWitness(env,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
+  // Preparation precedes source-run publication; use the caller JVMTI rather
+  // than source_ti, which is owned only by the later original source scope.
+  if(batch&&!PrepareSourceCacheWitness(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
   // Observe a bounded ordinary unchanged-hierarchy removal first. Schema graph
   // preparation cannot stand in for the original source GC/final-stop proof.
   // Capability gaps leave ordinary behavior intact and cannot authorize Session.
@@ -977,8 +979,8 @@ bool NativeEngine::RefreshPublicCacheStorage(void* raw,const runnable_jni::Conte
  for(size_t i=0;i<values.size();++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
  witness->has_public_storage=true;witness->public_types=static_cast<uintptr_t>(values[0]);witness->public_fields=static_cast<uintptr_t>(values[1]);witness->public_methods=static_cast<uintptr_t>(values[2]);return true;
 }
-bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
- if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
+bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+ if(!env||!ti||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction/JVMTI context");
  if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
  jclass type=env->GetObjectClass(input);
  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
@@ -1089,7 +1091,7 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!cache_type||env->ExceptionCheck())return Fail(error,"Original public cache Class observation unavailable");
  const char* storage_names[]={"resolvedTypes","resolvedFields","resolvedMethods"};
  std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> observations;
- for(size_t i=0;i<observations.size();++i)if(!public_cache_fields.Observe(env,source_ti,source_cache_witness.cache,cache_type,storage_names[i],metadata,&observations[i],error))return false;
+ for(size_t i=0;i<observations.size();++i)if(!public_cache_fields.Observe(env,ti,source_cache_witness.cache,cache_type,storage_names[i],metadata,&observations[i],error))return false;
  for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);
  public_cache_storage=std::move(observations);return true;
 }
