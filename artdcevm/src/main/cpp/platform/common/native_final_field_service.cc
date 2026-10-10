@@ -149,7 +149,7 @@ bool Service::PreparePermissions(const source_commit::Plan& plan,std::string* er
  std::vector<size_t> rooted;
  for(size_t i=0;i<plan.old_classes.size();++i){size_t found=s.staged.size();
   for(size_t n=0;n<s.staged.size();++n){void *old=nullptr,*next=nullptr;
-   if(!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].root,&old)||!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].replacement,&next))return false;
+   if(!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].root,&old)||!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].replacement,&next))return Fail(error,"Prepared permission paired strong-root decode refused");
    if(old==plan.old_classes[i]&&next==plan.new_classes[i]){if(found!=s.staged.size())return Fail(error,"Duplicate independently rooted Class pair");found=n;}
   }
   if(found==s.staged.size())return Fail(error,"Permission Plan lacks independently owned paired public Class roots");
@@ -167,7 +167,7 @@ bool Service::PreparePermissions(const source_commit::Plan& plan,std::string* er
   if(changed.empty())continue;
   if(!s.calibration_complete||!s.permission_env||!final_write_guard::ListenerProven(s.guard)||!Handles(s.bindings))return Fail(error,"Final-field transition lacks actual bytecode/MethodHandle/VarHandle permission proof");
   size_t index=s.staged.size();
-  for(size_t n=0;n<s.staged.size();++n){void* old=nullptr;if(!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].root,&old))return false;if(old==plan.old_classes[i]){if(index!=s.staged.size())return Fail(error,"Duplicate staged final-field Class");index=n;}}
+  for(size_t n=0;n<s.staged.size();++n){void* old=nullptr;if(!s.bindings.native.decode_global(s.bindings.native.owner,s.staged[n].root,&old))return Fail(error,"Prepared final-field original strong-root decode refused");if(old==plan.old_classes[i]){if(index!=s.staged.size())return Fail(error,"Duplicate staged final-field Class");index=n;}}
   if(index==s.staged.size()||!Schema(before,s.staged[index].schema))return Fail(error,"Final-field native owner differs from the complete staged public schema");
   const auto view=s.bindings.native.metadata->Class(plan.old_classes[i],false);
   if(!view.descriptor||view.descriptor!=before.descriptor)return Fail(error,"Final-field Class/loader provenance unavailable");

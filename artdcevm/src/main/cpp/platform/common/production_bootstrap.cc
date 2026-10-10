@@ -1621,6 +1621,7 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
 }
 bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,const native_owned_removal::RootedGraph& rooted,native_owned_removal::GraphWindow window,void* raw,std::string* error){
  auto& e=*static_cast<NativeEngine*>(raw);
+ const auto stage_failure=[&](const char* stage){if(error)*error=std::string(stage)+": "+(error->empty()?"actual proof refused without lower-level detail":*error);return false;};
  if(actual.size()!=e.staged_classes.size())return Fail(error,"Class loaded after candidate staging; retry whole batch");
  // The original pause exempts its defining thread. Re-enumerate registered
  // live Classes to catch children loaded by verification/allocation callbacks
@@ -1663,7 +1664,8 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
  }
  if(e.schema_operation){
   const auto checkpoint=window==native_owned_removal::GraphWindow::Verified?native_schema_guard_verifier::Window::Verified:native_schema_guard_verifier::Window::Collected;
-  if(!e.CaptureSchemaRoots(env,rooted,window,error)||!e.schema_verifier.CheckWindow(env,ti,actual,checkpoint,error))return false;
+  if(!e.CaptureSchemaRoots(env,rooted,window,error))return stage_failure("Source Holder strong-root capture");
+  if(!e.schema_verifier.CheckWindow(env,ti,actual,checkpoint,error))return stage_failure("Public schema window validation");
   if(window==native_owned_removal::GraphWindow::Verified&&e.permissions_proven){
    std::vector<jclass> old_classes,replacements;
    struct Locals{JNIEnv* env;std::vector<jclass>& a;std::vector<jclass>& b;~Locals(){for(auto root:a)env->DeleteLocalRef(root);for(auto root:b)env->DeleteLocalRef(root);}} release{env,old_classes,replacements};
@@ -1674,14 +1676,16 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
    if(env->ExceptionCheck()||!e.permission_service->Stage(env,ti,old_classes,replacements,error))return false;
   }
   if(window==native_owned_removal::GraphWindow::Collected){
-   if(!e.RefreshMaps(error)||!e.RootedSchemaPlan(&e.prepared_schema_plan,error))return false;
+   if(!e.RefreshMaps(error)||!e.RootedSchemaPlan(&e.prepared_schema_plan,error))return stage_failure("Collected rooted Source Plan capture");
    if(e.permissions_proven){
-    if(!e.permission_service->PreparePermissions(e.prepared_schema_plan,error))return false;
+    if(!e.permission_service->PreparePermissions(e.prepared_schema_plan,error))return stage_failure("Collected permission preparation");
     // Public root publication may safepoint; refresh the actual Holder globals
     // before sealing against the permission owner's paired strong globals.
-    if(!e.RootedSchemaPlan(&e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error))return false;
+    if(!e.RootedSchemaPlan(&e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error))return stage_failure("Collected permission rooted seal");
    }
-   if(!e.schema_run||!e.schema_verifier.Seal(e.prepared_schema_plan,error)||!e.PrepareSchemaPolicy(e.prepared_schema_plan,error))return false;
+   if(!e.schema_run)return stage_failure("Collected source Run owner");
+   if(!e.schema_verifier.Seal(e.prepared_schema_plan,error))return stage_failure("Collected schema verifier seal");
+   if(!e.PrepareSchemaPolicy(e.prepared_schema_plan,error))return stage_failure("Collected schema policy proof preparation");
    if(!e.permissions_proven)for(const auto& policy:e.schema_policies)for(const auto& requirement:policy.Requirements())
     if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
      if(error)*error="Actual final/access permission calibration unavailable: "+e.permission_diagnostic;return false;
