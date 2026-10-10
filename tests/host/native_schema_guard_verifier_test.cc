@@ -33,6 +33,28 @@ int main(){
   }
  }
  using namespace native_schema_guard_verifier;
+ // The actual CheckWindow query path selects only the descriptor bucket and
+ // invokes the rooted identity predicate for every same-name candidate.
+ for(size_t count:{size_t(30000),size_t(60000)}){
+  PublicClassIndex index;std::vector<size_t> rooted(count);size_t queries=0;
+  for(size_t i=0;i<count;++i){index.Add("Lgraph/C"+std::to_string(i)+";",i);rooted[i]=i+count;}
+  for(size_t i=0;i<count;++i){size_t matched=absent;
+   assert(index.Find("Lgraph/C"+std::to_string(i)+";",[&](size_t slot){++queries;return rooted[slot]==i+count;},&matched)==PublicClassIndex::Result::Unique&&matched==i);
+  }
+  assert(queries==count); // Old whole-vector search performs N(N+1)/2 comparisons.
+  // GC moves each live public root: the index owns no old object address.
+  for(auto& root:rooted)root+=count;
+  size_t matched=absent;assert(index.Find("Lgraph/C0;",[&](size_t slot){return rooted[slot]==2*count;},&matched)==PublicClassIndex::Result::Unique&&matched==0);
+  assert(index.Find("Lgraph/C0;",[&](size_t slot){return rooted[slot]==count;},&matched)==PublicClassIndex::Result::Missing);
+  std::cout<<"Public CheckWindow descriptor buckets nodes="<<count<<" rooted identity comparisons="<<queries<<"\n";
+ }
+ PublicClassIndex collisions;collisions.Add("Lsame/Name;",0);collisions.Add("Lsame/Name;",1);collisions.Add("Lother/Name;",2);
+ size_t matched=absent,candidates=0;
+ assert(collisions.Find("Lsame/Name;",[&](size_t slot){++candidates;return slot==1;},&matched)==PublicClassIndex::Result::Unique&&matched==1&&candidates==2);
+ assert(collisions.Find("Lsame/Name;",[](size_t){return false;},&matched)==PublicClassIndex::Result::Missing); // foreign ClassLoader/identity
+ assert(collisions.Find("Lsame/Name;",[](size_t){return true;},&matched)==PublicClassIndex::Result::Duplicate); // corrupt duplicate staged identity
+ assert(collisions.Find("Lmissing/Name;",[](size_t){std::abort();return true;},&matched)==PublicClassIndex::Result::Missing);
+
  struct BatchProbe final:native_schema_policy::GuardVerifier {
   mutable size_t calls=0;size_t refuse=SIZE_MAX;
   bool Verify(const source_commit::Plan&,size_t pair,void* loader,const native_schema_policy::Requirement& r,std::string* error)const override {

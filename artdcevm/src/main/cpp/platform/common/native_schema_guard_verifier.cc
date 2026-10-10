@@ -28,6 +28,19 @@ struct Node {
  std::string class_name_text,negative_class_name;
  bool affected=false;
 };
+// Immutable descriptor buckets contain indices only: every lookup still proves
+// the current managed Class identity through the independently rooted JNI slot.
+// No raw managed address or ClassLoader hash survives a safepoint here.
+struct PublicClassIndex {
+ std::map<std::string,std::vector<size_t>> buckets;
+ void Add(const std::string& descriptor,size_t index){buckets[descriptor].push_back(index);}
+ enum class Result {Missing,Unique,Duplicate};
+ template<class Match> Result Find(const std::string& descriptor,Match match,size_t* index)const {
+  *index=absent;auto found=buckets.find(descriptor);if(found==buckets.end())return Result::Missing;
+  for(size_t candidate:found->second)if(match(candidate)){if(*index!=absent)return Result::Duplicate;*index=candidate;}
+  return *index==absent?Result::Missing:Result::Unique;
+ }
+};
 struct Snapshot {
  std::vector<void*> classes,loaders;
  std::vector<size_t> parents;
@@ -142,7 +155,7 @@ bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schem
 struct Verifier::State {
  const modern_field_metadata::ReadContext* stopped_context=nullptr;
  const HierarchyAuthority* hierarchy_authority=nullptr;
- Bindings bindings{};std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
+ Bindings bindings{};PublicClassIndex public_index;std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
  mutable std::vector<uint32_t*> access_slots,readonly_access_slots;
@@ -380,7 +393,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  const auto get_name=env->GetMethodID(public_names.klass,"getName","()Ljava/lang/String;");
  const auto get_component=env->GetMethodID(public_names.klass,"getComponentType","()Ljava/lang/Class;");
  if(!is_proxy||!get_name||!get_component||env->ExceptionCheck())return Fail(error,"Public Class kind/name declarations unavailable");
- std::map<std::string,std::vector<size_t>> staged_names;
+ auto& staged_names=state_->public_index.buckets;
  for(;;){
  const size_t before=state_->nodes.size();size_t known=0;
  jint count=0;jclass* classes=nullptr;if(ti->GetLoadedClasses(&count,&classes)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Complete loaded caller graph unavailable");
@@ -434,14 +447,21 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  if(!MatchesAffected(env,actual,error))return false;
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
+ std::vector<uint8_t> seen(s.nodes.size(),0);
  size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
   if(!PreparedCaller(status)){
    Strings text{ti};ti->GetClassSignature(loaded[i],&text.signature,nullptr);
    return ClassWindowFailure(error,"Unprepared Class appeared before native schema sealing",text.signature,status);
   }
   Node current;if(!PublicMembers(env,ti,loaded[i],&current,error))return false;
-  auto node=std::find_if(s.nodes.begin(),s.nodes.end(),[&](const auto& n){return n.schema.descriptor==current.schema.descriptor&&s.roots.Same(env,n.root,loaded[i]);});
-  if(node==s.nodes.end())return ClassWindowFailure(error,"Class was defined after caller staging; retry complete schema operation",current.schema.descriptor.c_str(),status);
+  size_t matched=absent;
+  const auto membership=s.public_index.Find(current.schema.descriptor,[&](size_t candidate){
+   return !env->ExceptionCheck()&&s.roots.Same(env,s.nodes[candidate].root,loaded[i]);
+  },&matched);
+  if(env->ExceptionCheck())return Fail(error,"Public Class identity comparison raised an exception inside source window");
+  if(membership==PublicClassIndex::Result::Missing)return ClassWindowFailure(error,"Class was defined after caller staging; retry complete schema operation",current.schema.descriptor.c_str(),status);
+  if(membership!=PublicClassIndex::Result::Unique||seen[matched])return Fail(error,"Loaded caller graph repeats an independently rooted Class identity");
+  seen[matched]=1;auto node=s.nodes.begin()+matched;
   if(!SamePublic(*node,current))return Fail(error,"Public member flags/identities changed inside the source window");
   jobject loader=nullptr;if(ti->GetClassLoader(loaded[i],&loader)!=JVMTI_ERROR_NONE)return Fail(error,"Paused ClassLoader identity unavailable");const bool same_loader=s.roots.Same(env,node->loader,loader);if(loader)env->DeleteLocalRef(loader);if(!same_loader)return Fail(error,"Public ClassLoader identity changed inside source window");
   auto parent=env->GetSuperclass(loaded[i]);const bool same_parent=s.roots.Same(env,node->parent,parent);if(parent)env->DeleteLocalRef(parent);if(!same_parent)return Fail(error,"Public superclass identity changed inside the source window");
