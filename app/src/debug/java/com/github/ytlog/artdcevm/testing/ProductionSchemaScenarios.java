@@ -104,9 +104,7 @@ public final class ProductionSchemaScenarios {
             foreground.start();
             stage("capabilities.before");
             if (scope.equals("common-owned")) {
-                report.put("initialCapabilities",DcevmRuntime.attachPublicJvmti(context));
-                int initialized=NativeBridge.initializeCommonCapabilities(new com.github.ytlog.artdcevm.internal.EvolutionCalibration());
-                assertEquals("Explicit whole common owner: "+NativeBridge.capabilities(),0,initialized);
+                report.put("initialCapabilities",ProductionCommonOwnerInitializer.initialize(context));
             } else report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
             if (scope.equals("full")) {
                 stage("required-full-initialize.before");DcevmRuntime.initialize(context);

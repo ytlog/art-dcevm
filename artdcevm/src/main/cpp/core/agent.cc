@@ -97,8 +97,12 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_api_DcevmRuntim
 
 #ifdef ARTDCEVM_TESTING
 // Debug probes share production initialization and the process transaction lock.
-extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_NativeBridge_initializeCommonCapabilities(JNIEnv* env,jclass,jobject calibration) {
-  if(!calibration||env->ExceptionCheck())return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+extern "C" JNIEXPORT jint JNICALL Java_com_github_ytlog_artdcevm_testing_NativeBridge_initializeCommonCapabilities(JNIEnv* env,jclass) {
+  if(env->ExceptionCheck())return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  auto type=env->FindClass("com/github/ytlog/artdcevm/internal/EvolutionCalibration");
+  auto ctor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
+  auto calibration=ctor?env->NewObject(type,ctor):nullptr;
+  if(!calibration||env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
   try {
     std::lock_guard<std::mutex> lock(TransactionMutex());
     return backend?backend->InitializeCommonCapabilities(env,calibration):JVMTI_ERROR_INVALID_ENVIRONMENT;

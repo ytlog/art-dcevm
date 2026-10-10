@@ -17,5 +17,5 @@ public final class NativeBridge {
     public static native int enableStandardRedefineRouting();
     public static native int initializeEvolution();
     /** Selects the entire shared owner before any legacy private hook installation. */
-    public static native int initializeCommonCapabilities(Object calibration);
+    public static native int initializeCommonCapabilities();
 }

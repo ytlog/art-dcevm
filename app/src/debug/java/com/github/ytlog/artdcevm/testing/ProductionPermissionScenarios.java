@@ -75,7 +75,8 @@ public final class ProductionPermissionScenarios {
         TestForegroundScope foreground=new TestForegroundScope(instrumentation,arguments,report,phases);
         try {
             foreground.start();
-            stage("initialize.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
+            stage("initialize.before");report.put("initialCapabilities",scope.equals("common-owned")
+                ?ProductionCommonOwnerInitializer.initialize(context):DcevmRuntime.initializeCapabilities(context));
             if(scope.equals("full")){stage("required-full-initialize.before");DcevmRuntime.initialize(context);}
             JSONObject caps=new JSONObject(NativeBridge.capabilities());report.put("capabilities",caps);
             check(scope.equals("full")?caps.optBoolean("evolutionAvailable"):
