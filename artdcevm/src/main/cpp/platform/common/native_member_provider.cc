@@ -50,7 +50,7 @@ bool Service::MatchFacts(const source_commit::Plan& p)const noexcept{
  for(const auto& fact:member_facts_){
   size_t extent=0;const size_t need=fact.method?(schema_model_->model==method_identity::Model::kMethod11?method_metadata::kAndroid11.size:method_metadata::kAndroid12Onward.size):sizeof(abi::arm64::Field);
   if(read_context_&&(!modern_field_metadata::ReadMappingExtent(read_context_,fact.member,&extent)||extent<need))return false;
-  if(metadata.FieldDeclaringClass(fact.member)!=fact.declaring)return false;
+  if((fact.method?metadata.MethodDeclaringClass(fact.member):metadata.FieldDeclaringClass(fact.member))!=fact.declaring)return false;
   if(fact.method){if(native_schema_policy::JavaFlags(method_metadata::ReadAccessFlags(fact.member))!=fact.flags||([&]{method_metadata::Identity value;const auto& method_layout=schema_model_->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;return method_metadata::ReadIdentity(method_layout,fact.member,method_layout.size,&value)?value.dex_method_index:UINT32_MAX;}())!=fact.index)return false;}
   else{const auto* field=static_cast<const abi::arm64::Field*>(fact.member);if((field->access_flags&0xffffu)!=fact.flags||field->dex_field_index!=fact.index)return false;}
  }

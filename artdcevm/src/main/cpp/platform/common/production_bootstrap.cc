@@ -396,7 +396,7 @@ struct NativeEngine final:Engine {
  static void* DecodeGraphMethod(void* raw,jmethodID id){auto& e=*static_cast<NativeEngine*>(raw);return e.graph_decode_method(e.runtime.receivers.jni_id_manager,id);}
  static void* DecodeGraphField(void* raw,jclass owner,jfieldID id){return static_cast<NativeEngine*>(raw)->graph_fields.Read(owner,id);}
  static void* DecodeNativeGraphField(void* raw,void* owner,jfieldID id){return static_cast<NativeEngine*>(raw)->graph_fields.ReadNative(owner,id);}
- static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.FieldDeclaringClass(method);}
+ static void* GraphMethodClass(void* raw,void* method){return static_cast<NativeEngine*>(raw)->metadata.MethodDeclaringClass(method);}
  static bool GraphSame(void* raw,void* a,void* b){return static_cast<NativeEngine*>(raw)->graph_same(a,b);}
  void ClearSchemaRoots(JNIEnv* env){
   schema_root_env=env;if(permission_service)permission_service->Clear(env);prepared_schema_plan={};schema_registry.Clear();schema_finalizing=false;

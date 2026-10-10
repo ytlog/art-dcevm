@@ -142,6 +142,11 @@ bool FieldMetadata::Text(void* field,Model model,const char** name,const char** 
 void* FieldMetadata::FieldDeclaringClass(void* field)const {
   Require(calibrated_&&field&&root_);return root_(field);
 }
+void* FieldMetadata::MethodDeclaringClass(void* method)const {
+  static_assert(offsetof(method_metadata::Method11,declaring_class)==0 &&
+      offsetof(method_metadata::Method12,declaring_class)==0);
+  Require(calibrated_&&method&&root_);return root_(method);
+}
 void* FieldMetadata::Reference(void* object,size_t offset,bool is_volatile) const {
   Require(bound_&&object);
   const auto* bytes=static_cast<const unsigned char*>(object);

@@ -1,5 +1,6 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/art_method_metadata.h"
 #include "platform/abi/arm64/android11/class.h"
 #include "platform/abi/arm64/android17/class.h"
 #include <sys/mman.h>
@@ -17,8 +18,9 @@ void Put32(void* p,size_t offset,uint32_t value){std::memcpy(static_cast<char*>(
 struct Mirror{void* field;};
 std::map<void*,std::pair<std::string,std::string>> identities;
 void* bootstrap=nullptr;
-void* Root(void* p){uint32_t n;std::memcpy(&n,p,4);return reinterpret_cast<void*>(uintptr_t(n));}
-void* Mark(void* p){return p;}
+void* watched_method=nullptr;void* moved_class=nullptr;unsigned method_roots=0,marks=0;
+void* Root(void* p){if(p==watched_method){++method_roots;return moved_class;}uint32_t n;std::memcpy(&n,p,4);return reinterpret_cast<void*>(uintptr_t(n));}
+void* Mark(void* p){++marks;return p;}
 void* Leaf(void* p){return static_cast<Mirror*>(p)->field;}
 const char* Name(void* p){return identities.at(p).first.c_str();}
 const char* Type(void* p){return identities.at(p).second.c_str();}
@@ -70,6 +72,28 @@ int main(){
   modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));
   assert(metadata.Calibrate(context,reinterpret_cast<jobject>(bootstrap),"LBootstrap;",independent.fields.data(),independent.fields.size(),&error));
   assert(metadata.StorageModel()==(split?modern_field_metadata::Model::kSplit:modern_field_metadata::Model::kMerged));
+  // The same declared GcRoot slot exists in both actual source Method layouts.
+  // Named root reading observes relocation even without Baker mirror marking;
+  // access_flags bit28 must never be interpreted as Object::monitor_.
+  for(size_t size:{sizeof(method_metadata::Method11),sizeof(method_metadata::Method12)}) {
+   void* method=Allocate(size);Put32(method,0,uint32_t(uintptr_t(bootstrap)));
+   watched_method=method;method_roots=0;
+   void* relocated=Allocate(160);
+   for(uint32_t flags:{1u,0x10000001u}) {
+    Put32(method,4,flags);moved_class=bootstrap;marks=0;
+    assert(metadata.MethodDeclaringClass(method)==bootstrap&&marks==0);
+    moved_class=relocated;
+    assert(metadata.MethodDeclaringClass(method)==relocated&&marks==0);
+    // The wrong mirror path misses the move and may invoke a mark based on a
+    // method flag. This negative control detects reverting the real reader.
+    assert(metadata.Reference(method,0)==bootstrap);
+    assert(marks==unsigned((flags>>28)&1u));
+    uint32_t unchanged=0;std::memcpy(&unchanged,static_cast<char*>(method)+4,4);
+    assert(unchanged==flags);
+   }
+   assert(method_roots==4);watched_method=nullptr;moved_class=nullptr;
+  }
+
   for(const auto& roles:std::vector<std::vector<bool>>{{},{false},{true},{false,false},{true,true},{false,true}}){
    auto target=Build(split,roles);
    const auto verify=[&](){return metadata.VerifyProvenDeclaration(context,reinterpret_cast<jobject>(target.klass),"LTarget;",target.fields.data(),target.fields.size(),&error);};
@@ -95,5 +119,5 @@ int main(){
    assert(verify());
   }
  }
- munmap(heap,65536);std::cout<<"Actual proven FieldMetadata: independently calibrated split/merged; zero/one/all-static/all-instance/mixed complete arrays, wrong Class/root/index/flags/name/type/missing/duplicate/foreign/unproved-family rejection PASS\n";
+ munmap(heap,65536);std::cout<<"Actual proven FieldMetadata: independently calibrated split/merged; zero/one/all-static/all-instance/mixed complete arrays, wrong Class/root/index/flags/name/type/missing/duplicate/foreign/unproved-family rejection; Method11/12 moving GcRoot and access_flags bit28 mirror negative control PASS\n";
 }

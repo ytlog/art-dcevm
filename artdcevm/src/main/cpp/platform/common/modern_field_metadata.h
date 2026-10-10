@@ -54,6 +54,9 @@ class FieldMetadata {
   bool FieldIdentity(void*,field_copy::CopyFieldView*,std::string*,const ReadContext* =nullptr)const;
   field_copy::CopyFieldView Field(void* klass, bool is_static, size_t ordinal,const ReadContext* =nullptr) const;
   void* FieldDeclaringClass(void* field)const;
+  // Rooted native ArtMethod::declaring_class_ is a GcRoot, not a mirror Object.
+  // The named root barrier reads its declared slot; access_flags is no monitor.
+  void* MethodDeclaringClass(void* method)const;
   void* Reference(void* object, size_t offset, bool is_volatile=false) const;
  private:
   using FieldLeaf = void* (*)(void*);

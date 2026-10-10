@@ -74,7 +74,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  s.loading=std::make_unique<native_source_class_loading::Run>(*s.d.loading,s.driver,s.context);
  s.ledger=std::make_unique<native_hierarchy_private_ledger::Ledger>(s.driver,s.context,s.pool,s.access,*s.d.members.metadata,*s.d.dex_registry,s.cleanup.get());
  if(s.d.boot_catalog){
-  if(!s.boot_catalog.Import(*s.d.boot_catalog,s.context,*s.d.roots,s.pool,s.d.members.metadata,[](const void*owner,void*method)noexcept{return static_cast<const modern_field_metadata::FieldMetadata*>(owner)->Reference(method,0);},error))return Fail(error,"Source boot catalog root import refused");
+  if(!s.boot_catalog.Import(*s.d.boot_catalog,s.context,*s.d.roots,s.pool,s.d.members.metadata,[](const void*owner,void*method)noexcept{return static_cast<const modern_field_metadata::FieldMetadata*>(owner)->MethodDeclaringClass(method);},error))return Fail(error,"Source boot catalog root import refused");
   s.frame_storage.boot_catalog=&s.boot_catalog;s.frame_storage.boot_reader=s.ledger.get();
  }
  s.mapper=std::make_unique<native_hierarchy_source_cache::Mapper>(s.context,s.pool,*s.d.members.metadata,*s.d.members.fields,s.access,s.ledger.get());

@@ -24,7 +24,7 @@ bool ReadNativeDeclarations(const modern_field_metadata::FieldMetadata& metadata
  for(size_t i=0;i<view.methods.boundaries.declared_count;++i){void* native=view.methods.At(uint32_t(i));
   // ArtField and ArtMethod both begin with the fixed GcRoot<Class> declaration;
   // this existing service calls the named generic root-slow barrier.
-  if(metadata.FieldDeclaringClass(native)!=klass){if(error)*error="Declared native schema method has another Class root";return false;}
+  if(metadata.MethodDeclaringClass(native)!=klass){if(error)*error="Declared native schema method has another Class root";return false;}
   method_metadata::Identity identity;if(!method_metadata::ReadIdentity(method_layout,native,method_layout.size,&identity)){if(error)*error="Unreadable native schema method";return false;}
   auto member=std::find_if(schema.methods.begin(),schema.methods.end(),[&](const auto& m){return m.dex_index==identity.dex_method_index;});
   if(member==schema.methods.end()){if(error)*error="Native schema method is outside complete DEX declarations";return false;}
