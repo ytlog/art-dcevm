@@ -10,6 +10,7 @@ struct Witness {
  uint32_t type_index=0,field_index=0,method_index=0;
  Root expected_class=nullptr;
  void* native_field=nullptr; void* native_method=nullptr;
+ bool has_public_storage=false;uintptr_t public_types=0,public_fields=0,public_methods=0;
 };
 // Identity and counts come from the allocator's immutable incoming StandardDEX,
 // not from the cache layout being calibrated. token identifies that source

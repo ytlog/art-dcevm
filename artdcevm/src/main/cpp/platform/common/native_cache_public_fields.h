@@ -24,10 +24,13 @@ class Witness {
   friend class Service;
   explicit Witness(JNIEnv* env):env_(env){}
   JNIEnv* env_;jobject cache_=nullptr; jclass owner_=nullptr;
-  jobject reflected_=nullptr;jfieldID id_=nullptr;jlong value_=0;void* native_=nullptr;
+  jobject reflected_=nullptr;jfieldID id_=nullptr;jlong value_=0;void* native_=nullptr;std::string name_;
 };
 class Service {
  public:
+  bool Refresh(const runnable_jni::Context&,const Witness&,
+      const modern_field_metadata::FieldMetadata&,jlong*,std::string*)const;
+  static void Release(JNIEnv*,std::unique_ptr<Witness>*);
   // manager must come from the independent shared Runtime receiver snapshot.
   // Binding named leaves does not establish availability or a storage permit.
   bool Bind(HookEngine&,const runtime_services::Snapshot&,std::string*);

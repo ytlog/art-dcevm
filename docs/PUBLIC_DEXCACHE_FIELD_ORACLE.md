@@ -15,6 +15,6 @@
 
 `native_cache_public_fields::Service` 实现独立只读观察：确切 bootstrap DexCache Class、实例自身 Class、JVMTI declared instance `J` 字段、原 ID 的反射 roundtrip、真实 Runnable 回调中的命名 `Field::GetArtField` 与原 `JniIdManager::DecodeFieldId` 一致、已独立校准元数据中的原生 name/type/declaring Class 一致，最后用原 JNI `GetLongField` 读取。Witness 持有 cache、declaring Class 和 reflected Field 的真实强引用；失败时不替换旧输出，每个 JNI/JVMTI 叶后的异常都停止并保留，错误返回的非空 JVMTI buffer 同样释放。
 
-该 witness 没有存储范围、cache 布局或写入权限，也没有独立功能可用性标志。主生产路径当前不调用它。源码证明的是这条 ID 路径的实现语义；Host 测试验证的是所有者、错误和身份条件，不能证明厂商真机已经允许访问。
+该 witness 没有存储范围、cache 布局或写入权限，也没有独立功能可用性标志。生产 preflight 在普通 Native JNI 上获取三个字段 witness；原 Java writer 执行后，在原有真实 Runnable 范围内重新读值并核对原生 Field/Class 身份。严格缓存校准只接收与同一候选的三个 pair 表指针完全一致的公共输入。源码证明的是这条 ID 路径的实现语义；Host 测试验证的是所有者、错误和身份条件，不能证明厂商真机已经允许访问。
 
-下一步在新 APK 的普通 Native JNI 阶段，对真实 Java writer 已建立的同一 DexCache 执行观察并记录原 field ID/declaring identity/value。分别证明公共值与唯一原生 cache 候选相符、对象移动后的 Class/Field 身份、原 writer 对目标缓存槽的实际发布、重新借用和最终窗口一致性。只有这些实际设备证据满足后，才可由原 cache 校准服务消费这份只读输入；不关闭 hidden API 策略，不把字段名或一个 nonzero long 值直接当作 capability。
+下一步在新 APK 真机回归，核对真实 Java writer 已建立的同一 DexCache 的原 field ID/declaring identity/value。分别证明公共值与唯一原生 cache 候选相符、对象移动后的 Class/Field 身份、原 writer 对目标缓存槽的实际发布、重新借用和最终窗口一致性。只有这些实际设备证据满足后，才可由原 cache 校准服务消费这份只读输入；不关闭 hidden API 策略，不把字段名或一个 nonzero long 值直接当作 capability。

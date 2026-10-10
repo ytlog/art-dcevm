@@ -74,6 +74,15 @@ void Test(dex_cache_metadata::Model model,PairFormat fmt){
  const auto bounded=error.substr(0,512);
  assert(bounded.find("field{i=2")!=std::string::npos&&bounded.find("method{i=3")!=std::string::npos&&bounded.find("e=123")!=std::string::npos);
  assert(error.find(model==dex_cache_metadata::Model::Pairs?" pairs{r=1 T=1":" dual{r=1 T=1")<error.find("field{"));
+ {
+ auto public_witness=witness;public_witness.has_public_storage=true;
+ public_witness.public_types=reinterpret_cast<uintptr_t>(m.calibration.tables.types);
+ public_witness.public_fields=reinterpret_cast<uintptr_t>(m.calibration.tables.fields);
+ public_witness.public_methods=reinterpret_cast<uintptr_t>(m.calibration.tables.methods);
+ Owner public_owner;assert(public_owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},public_witness,&error));
+ public_witness.public_fields=0;Owner public_empty;assert(!public_empty.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},public_witness,&error));assert(error.find("public{")!=std::string::npos&&error.find("P=0")!=std::string::npos);
+ public_witness.public_fields=public_witness.public_methods;Owner public_wrong;assert(!public_wrong.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},public_witness,&error));
+ }
  assert(owner.Calibrate(m,&m.calibration.root,m.source.cache_extent,{4,4,4},witness,&error));assert(owner.VerifyStaged(graph,{},&error));
  m.private_writer=false;assert(!owner.Prepare(m.expected,&error));assert(m.incoming.tables.types[1].object==0x1000);m.private_writer=true;
  assert(owner.Prepare(m.expected,&error));assert(m.barriers==1);assert(m.calibration.tables.types[1].object==0x1000);

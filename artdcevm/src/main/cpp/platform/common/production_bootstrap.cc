@@ -1,5 +1,6 @@
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/source_cache_resolution.h"
+#include "platform/common/native_cache_public_fields.h"
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/bootstrap_dex_oracle.h"
@@ -69,7 +70,7 @@ struct Roots {
 struct Text {jvmtiEnv* ti;char* p=nullptr;~Text(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}};
 struct NativeEngine final:Engine {
  ShadowHookEngine hooks;JavaVM* vm=nullptr;std::vector<jobject> roots;
- ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){boot_methods.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
+ ~NativeEngine(){JNIEnv* env=nullptr;if(vm&&vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK){for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);boot_methods.Clear(env);provenance.Clear(env);ClearFieldProofs(env);if(source_cache_witness.cache)env->DeleteGlobalRef(source_cache_witness.cache);for(auto& p:bootstrap_field_proofs)contextual_field_id::Release(env,&p);contextual_field_id::Prune(env,retired_fields);for(auto p:roots)env->DeleteGlobalRef(p);}}
  runtime_services::Snapshot runtime;
  method_identity::Calibration model;
  modern_field_metadata::FieldMetadata metadata;
@@ -240,6 +241,9 @@ struct NativeEngine final:Engine {
   uint32_t public_field_modifiers=0;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
+ native_cache_public_fields::Service public_cache_fields;
+ std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> public_cache_storage;
+ static bool RefreshPublicCacheStorage(void*,const runnable_jni::Context&,native_hierarchy_cache::Witness*,std::string*);
  jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
  static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
@@ -249,7 +253,7 @@ struct NativeEngine final:Engine {
   c.counts={w.ids.type_count,w.ids.field_count,w.ids.method_count};
   c.type_index=w.ids.type_index;c.field_index=w.field_index;c.method_index=w.method_index;
   c.native_field=w.native_field;c.native_method=w.native_method;
-  c.resolution_owner=const_cast<NativeEngine*>(this);c.resolve=ResolveCacheWitness;return c;
+  c.resolution_owner=const_cast<NativeEngine*>(this);c.resolve=ResolveCacheWitness;c.public_storage=RefreshPublicCacheStorage;return c;
  }
  native_scope_executor::Executor native_scope;
  bool NativeScopeCalibrated()const override{return native_scope.Ready();}
@@ -967,6 +971,12 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  witness.cache=root;witness.native_field=field;witness.native_method=method;
  return true;
 }
+bool NativeEngine::RefreshPublicCacheStorage(void* raw,const runnable_jni::Context& scope,native_hierarchy_cache::Witness* witness,std::string* error){
+ auto& e=*static_cast<NativeEngine*>(raw);if(!witness||scope.env->ExceptionCheck()||scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return Fail(error,"Public cache storage actual source owner rejected");
+ std::array<jlong,3> values{};
+ for(size_t i=0;i<values.size();++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
+ witness->has_public_storage=true;witness->public_types=static_cast<uintptr_t>(values[0]);witness->public_fields=static_cast<uintptr_t>(values[1]);witness->public_methods=static_cast<uintptr_t>(values[2]);return true;
+}
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
  if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
@@ -1074,9 +1084,14 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
   return false;
  }
  if(!source_cache_witness.cache)return Fail(error,"Public cache witness completed without DexCache root");
- // DexCache implementation fields are hidden from application JNI. Native
- // cache admission remains the independently rooted immutable three-table proof.
- return true;
+ if(!public_cache_fields.Bind(hooks,runtime,error))return false;
+ jclass cache_type=env->GetObjectClass(source_cache_witness.cache);Local cache_type_scope{env,cache_type};
+ if(!cache_type||env->ExceptionCheck())return Fail(error,"Original public cache Class observation unavailable");
+ const char* storage_names[]={"resolvedTypes","resolvedFields","resolvedMethods"};
+ std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> observations;
+ for(size_t i=0;i<observations.size();++i)if(!public_cache_fields.Observe(env,source_ti,source_cache_witness.cache,cache_type,storage_names[i],metadata,&observations[i],error))return false;
+ for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);
+ public_cache_storage=std::move(observations);return true;
 }
 struct AllocatorRequest {
  NativeEngine* engine;const std::vector<method_identity::Oracle>* methods;

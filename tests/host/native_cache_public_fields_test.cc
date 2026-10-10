@@ -44,7 +44,12 @@ int main(){
  std::unique_ptr<native_cache_public_fields::Witness> output;
  auto observe=[&]{leaf=0;root_attempts=0;return service.Observe(&env,&ti,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedFields",metadata,&output,&error);};
  assert(observe());const int total=leaf;assert(output->Id()==reinterpret_cast<jfieldID>(old_fields[1])&&output->NativeField()==old_fields[1]&&output->Value()==0x123400005678LL&&globals==3&&buffers==0);
- auto* retained=output.get();const int old_reads=reads;
+ auto* retained=output.get();
+ runnable_jni::Context scope{current,&env,&runtime};jlong fresh=-1;
+ const auto state=Read32(current);Put32(current,0,0);
+ assert(service.Refresh(scope,*output,metadata,&fresh,&error)&&fresh==output->Value());
+ decode_mismatch=true;fresh=-1;assert(!service.Refresh(scope,*output,metadata,&fresh,&error)&&fresh==-1);decode_mismatch=false;
+ Put32(current,0,state);const int old_reads=reads;
  for(fault=1;fault<=14;++fault){assert(!observe());assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);}
  fault=0;decode_mismatch=true;assert(!observe());decode_mismatch=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);
  native_badname=true;assert(!observe());native_badname=false;assert(output.get()==retained&&globals==3&&buffers==0&&reads==old_reads);

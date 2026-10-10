@@ -106,14 +106,18 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  Source s{cache,nullptr,nullptr,extent,counts};unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
  struct Observation {
   dex_cache_metadata::Model model;type_cache::View types{};
-  native_cache::View fields{},methods{};bool read=false,type=false;unsigned formats=0;
+  native_cache::View fields{},methods{};bool read=false,type=false,public_match=false;unsigned formats=0;
  } observations[2];
  size_t n=0;
  for(auto model:{dex_cache_metadata::Model::Pairs,dex_cache_metadata::Model::DualArrays}){
  auto& o=observations[n++];o.model=model;
  o.read=Read(m,model,s,&o.types,&o.fields,&o.methods);
+ o.public_match=o.read&&(!w.has_public_storage||(
+  reinterpret_cast<uintptr_t>(o.types.pairs)==w.public_types&&
+  reinterpret_cast<uintptr_t>(o.fields.pairs)==w.public_fields&&
+  reinterpret_cast<uintptr_t>(o.methods.pairs)==w.public_methods));
  o.type=o.read&&TypeWitness(o.types,w.type_index,static_cast<uint32_t>(expected));
- if(o.type)for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})
+ if(o.type&&o.public_match)for(auto fmt:{PairFormat::Ordinary,PairFormat::Sequence})
   if(NativeWitness(o.fields,fmt,w.field_index,w.native_field)&&NativeWitness(o.methods,fmt,w.method_index,w.native_method)){
    ++matches;++o.formats;selected=model;format=fmt;
   }
@@ -125,10 +129,13 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  // a genuine hashed-slot collision from a declaration mismatch.
  const size_t first=observations[0].type&&!observations[1].type?0:1;
  char diagnosis[768]{};size_t used=0;
+ if(w.has_public_storage)Append(diagnosis,sizeof(diagnosis),&used," public{T=%llx F=%llx M=%llx empty=%d%d%d}",
+  static_cast<unsigned long long>(w.public_types),static_cast<unsigned long long>(w.public_fields),static_cast<unsigned long long>(w.public_methods),
+  w.public_types==0,w.public_fields==0,w.public_methods==0);
  for(size_t pos=0;pos<2;++pos){
  const auto& o=observations[pos==0?first:1-first];
- Append(diagnosis,sizeof(diagnosis),&used," %s{r=%d T=%d F=%u}",
-  o.model==dex_cache_metadata::Model::Pairs?"pairs":"dual",o.read,o.type,o.formats);
+ Append(diagnosis,sizeof(diagnosis),&used," %s{r=%d T=%d P=%d F=%u}",
+  o.model==dex_cache_metadata::Model::Pairs?"pairs":"dual",o.read,o.type,o.public_match,o.formats);
  if(pos==0&&o.read){
   ObserveNative(diagnosis,sizeof(diagnosis),&used,"field",o.fields,w.field_index,w.native_field);
   ObserveNative(diagnosis,sizeof(diagnosis),&used,"method",o.methods,w.method_index,w.native_method);

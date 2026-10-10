@@ -21,6 +21,7 @@ struct CacheCalibration {
  void* resolution_owner=nullptr;
  bool (*resolve)(void*,const runnable_jni::Context&,source_handle_roots::Pool&,
                  void* cache_root,void* class_root,std::string*)=nullptr;
+ bool (*public_storage)(void*,const runnable_jni::Context&,native_hierarchy_cache::Witness*,std::string*)=nullptr;
 };
 struct Mapping {
  void* owner=nullptr;

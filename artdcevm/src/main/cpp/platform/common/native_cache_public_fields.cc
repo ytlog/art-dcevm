@@ -91,7 +91,7 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
   selected=id;
  }
  if(!selected)return Fail(error,"Cache instance long field was not enumerated");
- auto witness=std::unique_ptr<Witness>(new Witness(env));witness->id_=selected;
+ auto witness=std::unique_ptr<Witness>(new Witness(env));witness->id_=selected;witness->name_=name;
  witness->cache_=env->NewGlobalRef(cache);
  if(env->ExceptionCheck())return Fail(error,"Cache object strong root left an exception");
  if(!witness->cache_)return Fail(error,"Cache object strong root unavailable");
@@ -114,5 +114,26 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
  witness->value_=env->GetLongField(witness->cache_,selected);
  if(env->ExceptionCheck())return Fail(error,"Original JNI cache long read left an exception");
  witness->native_=request.native;*output=std::move(witness);return true;
+}
+}
+
+namespace artdcevm::native_cache_public_fields {
+void Service::Release(JNIEnv* env,std::unique_ptr<Witness>* witness){
+ if(env&&witness&&*witness){(*witness)->env_=env;witness->reset();}
+}
+bool Service::Refresh(const runnable_jni::Context& context,const Witness& witness,
+ const modern_field_metadata::FieldMetadata& metadata,jlong* value,std::string* error)const {
+ if(!value||!context.self||context.env!=witness.env_||!context.vm||!field_||!decode_||!manager_||
+    !metadata.Calibrated()||!witness.cache_||!witness.owner_||!witness.reflected_||!witness.id_)
+  return Fail(error,"Live public cache Field refresh owner unavailable");
+ if(context.env->ExceptionCheck())return Fail(error,"Live public cache Field refresh has pending exception");
+ Request request{witness.reflected_,witness.owner_,witness.id_,manager_,field_,decode_,&metadata,witness.name_.c_str(),nullptr,error};
+ if(!ObserveNative(context,&request)||request.native!=witness.native_)return Fail(error,"Live public cache Field native identity changed");
+ const auto observed=context.env->GetLongField(witness.cache_,witness.id_);
+ if(context.env->ExceptionCheck())return Fail(error,"Live original JNI cache long read left an exception");
+ // JNI can safepoint. Reborrow reflected Field/Class roots in the caller's
+ // already-owned scope, rather than nesting the process bridge recursively.
+ request.native=nullptr;if(!ObserveNative(context,&request)||request.native!=witness.native_)return Fail(error,"Live public cache Field identity changed after JNI read");
+ *value=observed;return true;
 }
 }

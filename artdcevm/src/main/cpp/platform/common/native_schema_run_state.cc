@@ -86,6 +86,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
  void*expected_root=s.pool.Add(expected,error);if(!expected_root)return false;
  native_hierarchy_cache::Witness witness{w.type_index,w.field_index,w.method_index,expected_root,w.native_field,w.native_method};
  if(w.resolve&&!w.resolve(w.resolution_owner,s.context,s.pool,cache_root,expected_root,error))return false;
+ if(w.public_storage&&!w.public_storage(w.resolution_owner,s.context,&witness,error))return false;
  if(!s.incoming.Calibrate(*s.mapper,cache_root,w.extent,w.counts,witness,error))return false;
  native_hierarchy_graph::Bindings graph{s.d.members.metadata,s.d.roots,[](void*owner,const runnable_jni::Context&c,jobject g,void**out){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongGlobal(c,g,out);},s.d.allocator,&s.receivers,s.caches.get(),[](void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){return static_cast<source_handle_roots::Service*>(owner)->BorrowOwnedStrongPair(c,a,b,left,right);}};
  if(!s.d.registry->BindNative(&s,State::RootInsert,State::RootRead,State::RootClear,State::RootEpoch))return Fail(error,"Actual schema native root registry owner refused");
