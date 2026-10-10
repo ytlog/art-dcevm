@@ -64,10 +64,10 @@ bool InspectMirror(const runnable_jni::Context& context,void* raw){
  uint32_t offset=0;std::memcpy(&offset,static_cast<const unsigned char*>(native)+offsetof(abi::arm64::Field,offset),sizeof(offset));
  return offset==r.public_offset||Fail(r.error,"Independent cache mirror public/native offset differs");
 }
-std::string MirrorInventory(JNIEnv* env,jclass owner,void*(*leaf)(void*),
+std::string MirrorInventory(JNIEnv* env,jvmtiEnv* ti,jclass owner,void*(*leaf)(void*),
  const modern_field_metadata::FieldMetadata& metadata){
  std::string error;jobjectArray array=nullptr;
- if(!public_declared_field_mirror::Enumerate(env,owner,&array,&error))return "unavailable: "+error;
+ if(!public_declared_field_mirror::Enumerate(env,ti,owner,&array,&error))return "unavailable: "+error;
  Local fields{env,array};const auto count=env->GetArrayLength(array);
  if(env->ExceptionCheck())return "count-pending";
  if(count<0)return "invalid-count";
@@ -212,7 +212,7 @@ bool Service::Observe(JNIEnv* env,jvmtiEnv* ti,jobject cache,jclass owner,const 
   jlong bytes=0;const auto size_status=ti->GetObjectSize(cache,&bytes);
   if(env->ExceptionCheck()){if(error)*error=live+" original={"+original+"} objectSize=pending";return false;}
   const auto size="bytes="+std::to_string(bytes)+" status="+std::to_string(size_status);
-  const auto mirrors=MirrorInventory(env,owner,field_,metadata);
+  const auto mirrors=MirrorInventory(env,ti,owner,field_,metadata);
   if(error)*error=live+" original={"+original+"} objectSize={"+size+"} uncheckedFalse={"+mirrors+"}";
   return false;
  }
