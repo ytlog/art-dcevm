@@ -219,6 +219,8 @@ bool Methods(void* owner){Phase("Class CheckMethods entry");if(!Matches(owner)){
 bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window){
  if(!active||!active->provider->closed_graph)return true;
  auto& request=*active;Phase(window==GraphWindow::Verified?"Verified graph capture":"Collected graph preparation");std::string error;
+ const auto checkpoint=[&](const char* stage){if(window==GraphWindow::Collected)CollectionDiagnostic(stage,driver,raw);};
+ checkpoint("collected-holder-header-begin");
  const auto reject=[&](const char* reason){
   RememberFailure(reason);
   android13::BorrowedPlatformString signature("OWNED BATCH"),message(reason);
@@ -240,6 +242,7 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
  if(!global)return reject("Precommit array could not be rooted");
  struct Global {JNIEnv* env;jobject object;~Global(){env->DeleteGlobalRef(object);}} global_scope{request.env,global};
  if(request.env->ExceptionCheck())return reject("Precommit rooting left a pending exception");
+ checkpoint("collected-global-root-ready");
  const jsize slots=request.env->GetArrayLength(static_cast<jarray>(global));
  transaction_root::Metadata metadata{};
  if(request.env->ExceptionCheck()||slots<=0||slots%abi::arm64::android11::kRootSlots||
@@ -280,8 +283,12 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
    classes.push_back(klass);
   }
  }
- if(classes.empty()||!request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error))
-  return reject(error.empty()?"Affected Class graph was not independently staged":error.c_str());
+ checkpoint("collected-partition-roots-ready");
+ if(classes.empty())return reject("Affected Class graph has no rooted Classes");
+ checkpoint("collected-provider-enter");
+ const bool proven=request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error);
+ checkpoint("collected-provider-return");
+ if(!proven)return reject(error.empty()?"Affected Class graph was not independently staged":error.c_str());
  if(request.provider->schema_evolution&&window==GraphWindow::Collected){
   request.holder=raw;request.remaining_owners.clear();
   for(const auto& partition:graph.partitions){

@@ -1,3 +1,4 @@
+#include <android/log.h>
 #include "platform/common/readonly_field_scope.h"
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
@@ -1683,6 +1684,8 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
 bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,const native_owned_removal::RootedGraph& rooted,native_owned_removal::GraphWindow window,void* raw,std::string* error){
  auto& e=*static_cast<NativeEngine*>(raw);
  const auto stage_failure=[&](const char* stage){if(error)*error=std::string(stage)+": "+(error->empty()?"actual proof refused without lower-level detail":*error);return false;};
+ const auto checkpoint=[&](const char* stage){if(window==native_owned_removal::GraphWindow::Collected)__android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned Collected provider phase=%s",stage);};
+ checkpoint("public-inventory-begin");
  if(actual.size()!=e.staged_classes.size())return Fail(error,"Class loaded after candidate staging; retry whole batch");
  // The original pause exempts its defining thread. Re-enumerate registered
  // live Classes to catch children loaded by verification/allocation callbacks
@@ -1702,6 +1705,7 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
   ++affected_count;
  }
  if(affected_count!=actual.size())return Fail(error,"Paused live graph disagrees with native rooted graph");
+ checkpoint("public-inventory-return");
  // No FindClass, reflection calls, class initialization, or new class loading
  // here. The startup Direct lease prevents changes to these member tables.
  for(auto klass:actual){
@@ -1723,10 +1727,15 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
   for(size_t n=0;n<stage->ids.size();++n){uint32_t index=0;void* field=contextual_field_id::NativeField(e.target_field_proofs[stage->field_base+n]);
    if(!field||!(instance.IndexOf(field,&index)||statics.IndexOf(field,&index))||e.metadata.FieldDeclaringClass(field)!=native)return Fail(error,"Paused field proof is outside its native declaring table");}
  }
+ checkpoint("field-identities-return");
  if(e.schema_operation){
-  const auto checkpoint=window==native_owned_removal::GraphWindow::Verified?native_schema_guard_verifier::Window::Verified:native_schema_guard_verifier::Window::Collected;
+  const auto graph_window=window==native_owned_removal::GraphWindow::Verified?native_schema_guard_verifier::Window::Verified:native_schema_guard_verifier::Window::Collected;
+  checkpoint("holder-strong-roots-begin");
   if(!e.CaptureSchemaRoots(env,rooted,window,error))return stage_failure("Source Holder strong-root capture");
-  if(!e.schema_verifier.CheckWindow(env,ti,actual,checkpoint,error))return stage_failure("Public schema window validation");
+  checkpoint("holder-strong-roots-return");
+  checkpoint("public-schema-window-begin");
+  if(!e.schema_verifier.CheckWindow(env,ti,actual,graph_window,error))return stage_failure("Public schema window validation");
+  checkpoint("public-schema-window-return");
   if(window==native_owned_removal::GraphWindow::Verified&&e.permissions_proven){
    std::vector<jclass> old_classes,replacements;
    struct Locals{JNIEnv* env;std::vector<jclass>& a;std::vector<jclass>& b;~Locals(){for(auto root:a)env->DeleteLocalRef(root);for(auto root:b)env->DeleteLocalRef(root);}} release{env,old_classes,replacements};
@@ -1745,9 +1754,15 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
     if(!e.RootedSchemaPlan(&e.prepared_schema_plan,error)||!e.permission_service->Seal(e.prepared_schema_plan,error))return stage_failure("Collected permission rooted seal");
    }
    if(!e.schema_run)return stage_failure("Collected source Run owner");
+   checkpoint("native-verifier-seal-begin");
    if(!e.schema_verifier.Seal(e.prepared_schema_plan,error))return stage_failure("Collected schema verifier seal");
+   checkpoint("native-verifier-seal-return");
+   checkpoint("schema-policy-prepare-begin");
    if(!e.PrepareSchemaPolicy(e.prepared_schema_plan,error))return stage_failure("Collected schema policy proof preparation");
-   return e.schema_run->Collected(rooted,e.prepared_schema_plan,error);
+   checkpoint("schema-policy-prepare-return");
+   checkpoint("run-state-collected-begin");
+   const bool complete=e.schema_run->Collected(rooted,e.prepared_schema_plan,error);
+   checkpoint("run-state-collected-return");return complete;
   }
  }
  return true;

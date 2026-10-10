@@ -82,6 +82,14 @@ int main(){
  s.nodes[0].schema.fields[1].name="wrong";assert(!s.Roots(&out,&error));s.nodes[0].schema.fields[1].name=names[1];
  s.nodes[0].schema.fields[1].descriptor="J";assert(!s.Roots(&out,&error));s.nodes[0].schema.fields[1].descriptor=types[1];
  assert(s.Roots(&out,&error)&&method_identity::MappingOsQueries()==queries);
+ // The production ordinary traversal has no externally supplied stopped view.
+ // Warm native storage, then prove its only OS work is one full fresh mapping
+ // capture, rather than per-member fallback. Root callbacks are native-only.
+ s.bindings.extent=nullptr;assert(s.Roots(&out,&error));
+ const auto ordinary_before=method_identity::MappingOsQueries();assert(s.Roots(&out,&error));
+ assert(s.ordinary_mapping_queries>0&&method_identity::MappingOsQueries()-ordinary_before==s.ordinary_mapping_queries);
+ // A supplied denied view must still fail without ordinary recapture/fallback.
+ s.bindings.extent=Maps::Extent;maps.denied=old_class;const auto denied_before=method_identity::MappingOsQueries();assert(!s.Roots(&out,&error));assert(method_identity::MappingOsQueries()==denied_before);maps.denied=nullptr;
  Resume(nullptr);verifier.Clear(&env);
  std::cout<<"Actual schema Roots TU: shared snapshot, zero OS mapping queries, field flags/name/type and snapshot refusal PASS\n";
 }

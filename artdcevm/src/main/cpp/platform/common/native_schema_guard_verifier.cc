@@ -1,3 +1,5 @@
+#include "platform/common/readable_mapping_scope.h"
+#include <optional>
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/loaded_member_guards.h"
 #include "platform/common/jvmti_method_flags.h"
@@ -187,6 +189,7 @@ bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schem
 }
 struct Verifier::State {
  const modern_field_metadata::ReadContext* stopped_context=nullptr;
+ mutable size_t ordinary_mapping_queries=0;
  const HierarchyAuthority* hierarchy_authority=nullptr;
  Bindings bindings{};PublicClassIndex public_index;std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
@@ -257,7 +260,20 @@ struct Verifier::State {
    if(!success&&error&&!error->empty()){char suffix[64];std::snprintf(suffix,sizeof(suffix)," [mappingOsQueries=%llu]",static_cast<unsigned long long>(method_identity::MappingOsQueries()-before));try{error->append(suffix);}catch(const std::bad_alloc&){}}
   }} diagnostics{error,method_identity::MappingOsQueries()};
   const modern_field_metadata::ReadContext read_context{bindings.owner,bindings.extent};
-  const auto* context=stopped_context?stopped_context:bindings.extent?&read_context:nullptr;
+  // This traversal invokes only borrowed native root/metadata readers: no JNI
+  // operation or managed safepoint follows until it returns. Capture one fresh
+  // ordinary mapping view here instead of querying the OS for every Class,
+  // Field, DEX and method in the complete graph. Explicit stopped/owner views
+  // retain precedence, including denial; never recapture to bypass a refused
+  // provided view or retain this ordinary snapshot across a source callee.
+  ordinary_mapping_queries=0;
+  std::optional<method_identity::ScopedReadableMappings> ordinary;
+  modern_field_metadata::ReadContext ordinary_context{};
+  if(!stopped_context&&!bindings.extent){
+   ordinary.emplace();ordinary_mapping_queries=ordinary->OsQueries();if(!ordinary->Ready())return Fail(error,"Fresh ordinary schema root mapping capture failed");
+   ordinary_context={&*ordinary,[](void* owner,const void* address,size_t* extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+  }
+  const auto* context=stopped_context?stopped_context:bindings.extent?&read_context:&ordinary_context;
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!redefinition_gate::Owned(bindings.vm)||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.methods||bindings.methods->identities.size()<3||bindings.methods->readable_extents.size()!=bindings.methods->identities.size()||!bindings.decode_global||!bindings.decode_method||!bindings.decode_native_field||!bindings.method_class||!bindings.same_method||!bindings.readable||!bindings.writable||!bindings.metadata||!bindings.methods)return Fail(error,"Schema verifier lacks the calibrated native process owner");
   Snapshot result;result.classes.resize(nodes.size());result.loaders.resize(nodes.size());result.parents.resize(nodes.size(),absent);result.declared.resize(nodes.size());result.all_methods.resize(nodes.size());
