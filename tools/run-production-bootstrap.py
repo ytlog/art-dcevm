@@ -5,12 +5,13 @@ from apk_verification import require_install_success,base_apk_path,verified_apk_
 from timeout_diagnostics import collect_timeout_diagnostics
 from evidence_paths import new_evidence_directory
 from production_bootstrap_report import validate_production_bootstrap_payload
-p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk',required=True);p.add_argument('--foreground',action='store_true',help='Require same-process foreground carrier evidence');p.add_argument('--require-fields',action='store_true',help='Require formal field removal, cached JNI/reflection/MethodHandle/VarHandle coverage and retained state');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--serial',required=True);p.add_argument('--adb',required=True);p.add_argument('--apk',required=True);p.add_argument('--test-apk');p.add_argument('--self-instrumentation',action='store_true',help='Run the identical bootstrap suite from only the lab application APK');p.add_argument('--foreground',action='store_true',help='Require same-process foreground carrier evidence');p.add_argument('--require-fields',action='store_true',help='Require formal field removal, cached JNI/reflection/MethodHandle/VarHandle coverage and retained state');a=p.parse_args()
+if not a.self_instrumentation and not a.test_apk:p.error('--test-apk is required for the default JUnit route')
 root=pathlib.Path(__file__).resolve().parents[1];out=new_evidence_directory(root/'build/evidence/production-bootstrap','run')
 run_id=uuid.uuid4().hex
 instrumentation_started=False
 instrumentation_timed_out=False
-report={'serial':a.serial,'runId':run_id,'foregroundRequested':a.foreground,'passed':False,'scope':'production bootstrap and formal method deletion with four cached JNI invocation modes and reflection; field deletion and full evolution are not established by this suite'}
+report={'runner':'self' if a.self_instrumentation else 'junit','serial':a.serial,'runId':run_id,'foregroundRequested':a.foreground,'passed':False,'scope':'production bootstrap and formal method deletion with four cached JNI invocation modes and reflection; field deletion and full evolution are not established by this suite'}
 if a.require_fields:
  report['scope']='production bootstrap and formal method/field deletion with cached JNI/reflection/MethodHandle/VarHandle rejection and retained state; full evolution is not established by this suite'
 def adb(label,*args,timeout=120):
@@ -36,7 +37,9 @@ def diagnose_install_timeout(label):
  report['installTimeoutDiagnostics']=diagnostics
  return diagnostics
 try:
- for key,path,package in [('application',a.apk,'dev.artdcevm.lab'),('test',a.test_apk,'dev.artdcevm.lab.test')]:
+ artifacts=[('application',a.apk,'dev.artdcevm.lab')]
+ if not a.self_instrumentation:artifacts.append(('test',a.test_apk,'dev.artdcevm.lab.test'))
+ for key,path,package in artifacts:
   expected=hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
   report[key+'RequestedSha256']=expected
   try:
@@ -51,9 +54,13 @@ try:
   report[key+'Sha256']=verified_apk_sha256(sha.stdout,expected)
  stopped=adb('stop','shell','am','force-stop','dev.artdcevm.lab');stopped.check_returncode()
  instrumentation_started=True
- result=adb('instrumentation','shell','am','instrument','-w','-r','-e','class','com.github.ytlog.artdcevm.testing.ProductionCapabilitiesTest','-e','productionRunId',run_id,*(['-e','foreground','true'] if a.foreground else []),'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner');result.check_returncode()
+ command=['shell','am','instrument','-w','-r']
+ if not a.self_instrumentation:command+=['-e','class','com.github.ytlog.artdcevm.testing.ProductionCapabilitiesTest']
+ command+=['-e','productionRunId',run_id]+(['-e','foreground','true'] if a.foreground else [])
+ command.append('dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.ProductionCapabilitiesInstrumentation' if a.self_instrumentation else 'dev.artdcevm.lab.test/androidx.test.runner.AndroidJUnitRunner')
+ result=adb('instrumentation',*command);result.check_returncode()
  persisted=adb('transaction-file','exec-out','run-as','dev.artdcevm.lab','cat','files/production-bootstrap/'+run_id+'.json',timeout=15);persisted.check_returncode()
- transaction=validate_production_bootstrap_payload(result.stdout,persisted.stdout,run_id,require_fields=a.require_fields,require_foreground=a.foreground)
+ transaction=validate_production_bootstrap_payload(result.stdout,persisted.stdout,run_id,require_fields=a.require_fields,require_foreground=a.foreground,self_instrumentation=a.self_instrumentation)
  report['reportFileCaptured']=True
  # Logcat is diagnostic only: large valid transaction JSON may be truncated by Android.
  try:

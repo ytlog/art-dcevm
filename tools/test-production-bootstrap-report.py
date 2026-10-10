@@ -69,7 +69,9 @@ elif 'sha256sum' in args:
 elif 'instrument' in args:
  run_id=args[args.index('productionRunId')+1]
  with open(os.environ['PRODUCTION_TEST_RUN_ID'],'w') as out:out.write(run_id)
- print('INSTRUMENTATION_RESULT: stream=OK (1 test)')
+ if args[-1].endswith('ProductionCapabilitiesInstrumentation'):
+  print('INSTRUMENTATION_RESULT: bootstrapRunnerCompleted='+('false' if mode=='unfinished' else 'true'))
+ else:print('INSTRUMENTATION_RESULT: stream=OK (1 test)')
  print('INSTRUMENTATION_CODE: '+('0' if mode=='unfinished' else '-1'))
 elif args[:3]==['exec-out','run-as','dev.artdcevm.lab']:
  if mode=='missing_file':sys.exit(1)
@@ -106,4 +108,47 @@ elif 'logcat' in args:
   else:assert report['applicationSha256']==report['applicationRequestedSha256'] and report['testSha256']==report['testRequestedSha256']
   if mode in ('matching','full_matching','large_truncated','large_log_failure'):assert (path/'transaction.json').exists() and report['transaction']['runId']==report['runId']
   print('Production runner:',mode,'passed')
+ for mode in ['matching','stale','unfinished','missing_fresh_jni','incomplete','bad_app_hash','corrupt_file','duplicate_keys']:
+  trace=p/('self-'+mode+'.jsonl')
+  env=dict(os.environ,PRODUCTION_TEST_MODE=mode,PRODUCTION_TEST_RUN_ID=str(p/'run-id'),
+   PRODUCTION_TEST_TRACE=str(trace),PRODUCTION_TEST_REPORT=json.dumps(full),
+   PRODUCTION_TEST_APP_SHA=hashlib.sha256(app.read_bytes()).hexdigest(),
+   PRODUCTION_TEST_TEST_SHA=hashlib.sha256(test.read_bytes()).hexdigest())
+  result=subprocess.run([sys.executable,str(root/'tools/run-production-bootstrap.py'),
+   '--serial','mock','--adb',str(fake),'--apk',str(app),'--self-instrumentation','--require-fields'],env=env,capture_output=True,text=True)
+  assert (result.returncode==0)==(mode=='matching'),(mode,result.stdout,result.stderr)
+  report=json.loads((pathlib.Path(result.stdout.splitlines()[-1])/'report.json').read_text())
+  assert report['runner']=='self' and report['foregroundRequested'] is False and 'testSha256' not in report
+  commands=[json.loads(line) for line in trace.read_text().splitlines()]
+  assert not any('dev.artdcevm.lab.test' in str(c) or str(test) in c for c in commands)
+  invocations=[c for c in commands if 'instrument' in c]
+  if mode=='bad_app_hash':assert not invocations
+  else:
+   assert len(invocations)==1 and invocations[0][-1]=='dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.ProductionCapabilitiesInstrumentation'
+   assert 'foreground' not in invocations[0]
+  print('Production self runner:',mode,'passed')
+
+self_output='INSTRUMENTATION_RESULT: bootstrapRunnerCompleted=true\nINSTRUMENTATION_CODE: -1\n'
+assert validate_production_bootstrap_payload(self_output,json.dumps(full),run_id,require_fields=True,self_instrumentation=True)==full
+for malformed in [output,self_output+self_output,self_output.replace('true','false'),
+                  self_output.replace('-1','0'),self_output+'OK (1 test)\n']:
+ try:validate_production_bootstrap_payload(malformed,json.dumps(full),run_id,self_instrumentation=True)
+ except RuntimeError:pass
+ else:raise AssertionError('Ambiguous/cross-route self completion accepted')
+try:validate_production_bootstrap_payload(self_output,json.dumps(full),run_id)
+except RuntimeError:pass
+else:raise AssertionError('Self completion accepted for JUnit route')
+foreground={**full,'foregroundRequested':True,
+ 'foregroundActivity':'com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity',
+ 'foregroundResumedBefore':True,'foregroundResumedAfter':True,'foregroundPauseCount':0,
+ 'foregroundFinished':True,'foregroundInstrumentationPid':123,'foregroundActivityPid':123}
+assert validate_production_bootstrap_payload(self_output,json.dumps(foreground),run_id,
+ require_fields=True,require_foreground=True,self_instrumentation=True)==foreground
+for key,bad in [('foregroundRequested',False),('foregroundResumedAfter',False),
+                ('foregroundPauseCount',1),('foregroundActivityPid',124),('foregroundFinished',False)]:
+ try:validate_production_bootstrap_payload(self_output,json.dumps({**foreground,key:bad}),run_id,
+  require_fields=True,require_foreground=True,self_instrumentation=True)
+ except RuntimeError:pass
+ else:raise AssertionError('Self route lost same-process foreground proof: '+key)
+
 print('Production report: current-run structured evidence, successful terminal code and retained-state proofs enforced')

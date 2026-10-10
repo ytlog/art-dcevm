@@ -3,14 +3,21 @@ import json
 from production_foreground_report import validate_foreground
 import re
 
-def _require_success(instrumentation):
+def _require_success(instrumentation, self_instrumentation=False):
     code = re.findall(r'^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$', instrumentation, re.M)
+    if self_instrumentation:
+        completion=re.findall(r'^INSTRUMENTATION_RESULT: bootstrapRunnerCompleted=(.*)$',instrumentation,re.M)
+        if code != ['-1'] or completion != ['true'] or 'FAILURES!!!' in instrumentation or re.search(r'OK \(\d+ tests?\)',instrumentation):
+            raise RuntimeError('Production self instrumentation did not finish the complete shared suite')
+        return
+    if 'bootstrapRunnerCompleted=' in instrumentation:
+        raise RuntimeError('Self completion cannot establish the default JUnit route')
     if code != ['-1'] or len(re.findall(r'^(?:INSTRUMENTATION_RESULT: stream=)?OK \(1 test\)\s*$', instrumentation,re.M)) != 1 or 'FAILURES!!!' in instrumentation:
         raise RuntimeError('Production instrumentation did not finish exactly one successful test')
 
-def validate_production_bootstrap_payload(instrumentation, persisted, run_id, *, require_fields=False, require_foreground=False):
+def validate_production_bootstrap_payload(instrumentation, persisted, run_id, *, require_fields=False, require_foreground=False, self_instrumentation=False):
     """Full current-run atomic payload, independent of logcat's per-record size limit."""
-    _require_success(instrumentation)
+    _require_success(instrumentation,self_instrumentation)
     def unique_keys(pairs):
         result={}
         for key,value in pairs:
