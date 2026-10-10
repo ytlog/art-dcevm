@@ -23,7 +23,7 @@ std::mutex original_monitor;std::condition_variable original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongUnresolvedError,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid,InnerPositive,InnerInlinedCtor,InnerMovingRoots,InnerSpurious,InnerMultiple,InnerWrongStatus,InnerWrongSelf,InnerWrongOwner,InnerDestroyedLock,InnerInlinedDestroyedLock,InnerMissingCtor,InnerBadConstructor,InnerEarlyReturn,EnteringPending};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongUnresolvedError,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid,InnerPositive,InnerInlinedCtor,InnerMovingRoots,InnerSpurious,InnerMultiple,InnerWrongStatus,InnerWrongSelf,InnerWrongOwner,InnerDestroyedLock,InnerInlinedDestroyedLock,InnerMissingCtor,InnerBadConstructor,InnerInlinedDestroyThenConstruct,InnerEarlyReturn,EnteringPending};
 Case selected=Case::Positive;
 bool InnerCase(){return selected>=Case::InnerPositive&&selected<=Case::InnerEarlyReturn;}
 bool PositiveCase(){return selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner||selected==Case::InnerPositive||selected==Case::InnerInlinedCtor||selected==Case::InnerMovingRoots||selected==Case::InnerSpurious||selected==Case::InnerMultiple;}
@@ -87,6 +87,13 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  uint32_t foreign_class=uint32_t(uintptr_t(type==new_class?old_class:new_class));
  if(InnerCase())((selected==Case::InnerInlinedCtor||selected==Case::InnerInlinedDestroyedLock)?OriginalClassLockConstruct:construct_proxy)(&native_lock,self,selected==Case::InnerWrongOwner&&LoadStatus(type)==13?ClassHandle{&foreign_class}:abi_handle);
  else legacy_lock.lock();
+ // Independent source sequence: an inlined original destructor releases the
+ // first real monitor, then a named constructor creates the next lock scope.
+ // No observer supplies either operation or any synthetic root/status.
+ if(selected==Case::InnerInlinedDestroyThenConstruct){
+  OriginalClassLockDestroy(&native_lock);
+  construct_proxy(&native_lock,self,abi_handle);
+ }
  auto& lock=InnerCase()?OriginalLock(&native_lock):legacy_lock;
  struct Destruction {void*receiver;bool inner;~Destruction(){if(inner)destroy_proxy(receiver);}} destruction{&native_lock,InnerCase()};
  if(LoadStatus(type)==2||LoadStatus(type)==3||LoadStatus(type)>=14){
@@ -257,6 +264,12 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  if(selected==Case::WrongReentrantReturn||selected==Case::WrongReentrantCompletion||selected==Case::WrongReentrantTid){
   assert(!ok&&error.find("faults=4")!=std::string::npos&&error.find("reentrant=1/1")!=std::string::npos);
  }
+ if(selected==Case::WrongPublicResult){
+  assert(!ok&&error.find("lockEntryFaults=0")!=std::string::npos&&error.find("bodyFaults=0")!=std::string::npos);
+ }
+ if(selected==Case::InnerInlinedDestroyThenConstruct){
+  assert(!ok&&error.find("lockEntryFaults=4")!=std::string::npos&&error.find("bodyFaults=8")!=std::string::npos);
+ }
  if(selected==Case::WrongUnresolvedError)assert(!ok&&error.find("faults=20")!=std::string::npos);
  if(selected==Case::InnerDestroyedLock||selected==Case::InnerInlinedDestroyedLock){
   assert(!ok&&error.find("innerEntryFaults=28")!=std::string::npos);
@@ -278,7 +291,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,Case::WrongUnresolvedError,
-Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid,Case::InnerPositive,Case::InnerInlinedCtor,Case::InnerMovingRoots,Case::InnerSpurious,Case::InnerMultiple,Case::InnerWrongStatus,Case::InnerWrongSelf,Case::InnerWrongOwner,Case::InnerDestroyedLock,Case::InnerInlinedDestroyedLock,Case::InnerMissingCtor,Case::InnerBadConstructor,Case::InnerEarlyReturn,Case::EnteringPending}){
+Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid,Case::InnerPositive,Case::InnerInlinedCtor,Case::InnerMovingRoots,Case::InnerSpurious,Case::InnerMultiple,Case::InnerWrongStatus,Case::InnerWrongSelf,Case::InnerWrongOwner,Case::InnerDestroyedLock,Case::InnerInlinedDestroyedLock,Case::InnerMissingCtor,Case::InnerBadConstructor,Case::InnerInlinedDestroyThenConstruct,Case::InnerEarlyReturn,Case::EnteringPending}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }

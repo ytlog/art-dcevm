@@ -21,6 +21,7 @@ struct Trial {
  std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},terminal_enter{0},terminal_exit{0},reentrant_enter{0},reentrant_exit{0},reentrant_tid{0},wait_enter{0},wait_exit{0},faults{0};
  std::atomic<bool> body_ready{false};
  std::atomic<uint32_t> lock_constructed{0},lock_destroyed{0},inner_entry_faults{0};
+ std::atomic<uint32_t> lock_entry_faults{0},body_faults{0};
  std::atomic<void*> reentrant_owner{nullptr};
 };
 struct Installed {
@@ -200,8 +201,15 @@ void HookClassLockConstruct(void* lock,void* self,ClassHandle handle){
  if(!matched)borrowed.Release();
  installed.lock_construct(lock,self,handle);
  if(matched){
-  if(source_entry!=entry||!lock||entry->lock||
-     !ReadHandle(*trial,self,handle,&status,&tid))trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+  // Scalar diagnostics preserve the original short-circuit: reborrow only if
+  // the entry, receiver and tracked-lock checks all succeeded.
+  uint32_t predicates=0;
+  if(source_entry!=entry)predicates=1u;
+  else if(!lock)predicates=2u;
+  else if(entry->lock)predicates=4u;
+  else if(!ReadHandle(*trial,self,handle,&status,&tid))predicates=8u;
+  if(predicates){trial->lock_entry_faults.fetch_or(predicates,std::memory_order_release);
+   trial->faults.fetch_or(kWaitEntry,std::memory_order_release);}
   else{entry->lock=lock;entry->lock_slot=handle.slot;entry->lock_destroyed=false;trial->lock_constructed.fetch_add(1,std::memory_order_relaxed);}
  }
 }
@@ -294,7 +302,9 @@ jboolean Body(JNIEnv* env,jclass,jclass klass,jint public_tid){
   if(std::chrono::steady_clock::now()>=deadline)return JNI_FALSE;
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
  }
- return trial->faults.load(std::memory_order_acquire)==0?JNI_TRUE:JNI_FALSE;
+ const uint32_t body_faults=trial->faults.load(std::memory_order_acquire);
+ trial->body_faults.store(body_faults,std::memory_order_release);
+ return body_faults==0?JNI_TRUE:JNI_FALSE;
 }
 jboolean Waiter(JNIEnv* env,jclass){
  BorrowTrial borrowed;Trial* trial=borrowed.value;
@@ -432,7 +442,9 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
       "/"+std::to_string(trial.terminal_exit.load())+" reentrant="+std::to_string(trial.reentrant_enter.load())+
       "/"+std::to_string(trial.reentrant_exit.load())+" wait="+std::to_string(trial.wait_enter.load())+
       "/"+std::to_string(trial.wait_exit.load())+" lock="+std::to_string(trial.lock_constructed.load())+
-      "/"+std::to_string(trial.lock_destroyed.load())+" innerEntryFaults="+std::to_string(trial.inner_entry_faults.load())+"]";
+      "/"+std::to_string(trial.lock_destroyed.load())+" innerEntryFaults="+std::to_string(trial.inner_entry_faults.load())+
+      " lockEntryFaults="+std::to_string(trial.lock_entry_faults.load())+
+      " bodyFaults="+std::to_string(trial.body_faults.load())+"]";
   env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);
  }
  env->DeleteLocalRef(oracle);
