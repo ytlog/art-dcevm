@@ -889,7 +889,7 @@ struct NativeEngine final:Engine {
  bool applying=false;size_t ordinary_source_step=0;std::string ordinary_source_diagnostic;
  bool PrimeOrdinarySource(JNIEnv* env,jvmtiEnv* ti,std::string* error){
   if(!ordinary_source_diagnostic.empty())return Fail(error,ordinary_source_diagnostic.c_str());
-  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareInitializerEpisode(env);return true;}
+  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareCompiledFrames(env,ti);return true;}
   if(current||schema_run||graph_staging)return Fail(error,"Private ordinary source priming requires an unstaged outer operation");
   jclass type=env->GetObjectClass(input);struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_root{env,type};
   auto class_id=type?env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;"):nullptr;
@@ -945,7 +945,12 @@ struct NativeEngine final:Engine {
    schema_operation=false;
    return owned_failure_diagnostic::Unavailable(error,"Automatic private ordinary source lifecycle calibration");
   }
-  return ExecuteOperation(env,ti,defs,requested_schema,error);
+  const int result=ExecuteOperation(env,ti,defs,requested_schema,error);
+  // The operation's current engine, declaration borrow, staged roots and gate
+  // lease have all unwound. Private public calibration must run at this actual
+  // ordinary boundary, never while the source transaction still owns them.
+  if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck())PrepareCompiledFrames(env,ti);
+  return result;
  }
  int ExecuteOperation(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,bool schema,std::string* error){
   if(!ti||declared_field_ti)return Fail(error,"Declared Field JVMTI operation is missing or nested"),JVMTI_ERROR_NOT_AVAILABLE;
@@ -1036,9 +1041,6 @@ struct NativeEngine final:Engine {
    if(source_observation->Authorized())source_stop=source_observation->Binding();
    else source_stop_diagnostic=source_observation->Failure();
    source_observation.reset();
-   if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck()){
-    PrepareCompiledFrames(env,ti);
-   }
   }
   if(schema_operation&&result!=JVMTI_ERROR_NONE&&error)source_factory_diagnostic=*error;
   if(result==JVMTI_ERROR_NONE)RecordDefinitions(env,defs);
