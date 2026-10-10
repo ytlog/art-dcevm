@@ -17,9 +17,9 @@ bool State(const modern_field_metadata::FieldMetadata& metadata,void* klass,clas
  return Mapped(klass,Layout(metadata).size,context)&&class_metadata::ReadState(Layout(metadata),klass,Layout(metadata).size,state);
 }
 bool Read(const modern_field_metadata::FieldMetadata& metadata,method_identity::Model model,
-          void* klass,bool* abstract,size_t concrete_prefix,void* expected=nullptr,bool* found=nullptr,std::string* error=nullptr,const modern_field_metadata::ReadContext* context=nullptr){
+          void* klass,bool* abstract,size_t concrete_prefix,void* expected=nullptr,bool* found=nullptr,std::string* error=nullptr,const modern_field_metadata::ReadContext* context=nullptr,VTableView* view=nullptr){
  class_metadata::State state;if(!abstract||!metadata.Calibrated()||!State(metadata,klass,&state,context))return Fail(error,"Abstract vtable lacks a calibrated live Class declaration");
- *abstract=false;if(found)*found=false;
+ *abstract=false;if(found)*found=false;if(view)*view={};
  if(state.IsPrimitive()||(state.access_flags&0x200u)||metadata.Reference(klass,kComponent))return Fail(error,"Abstract replacement is not an ordinary Class with external vtable");
  void* meta=metadata.Reference(klass,0);if(!Mapped(meta,Layout(metadata).size,context))return Fail(error,"Abstract holder lacks actual Class metatype");
  void* table=nullptr;size_t payload=0;int32_t length=0;
@@ -50,6 +50,7 @@ bool Read(const modern_field_metadata::FieldMetadata& metadata,method_identity::
   if(expected==entry&&found)*found=true;
   *abstract|=(identity.access_flags&0x400u)!=0;
  }
+ if(view)*view={table,payload,size_t(length)};
  if(error)error->clear();return true;
 }
 struct Probe {const modern_field_metadata::FieldMetadata* metadata;method_identity::Model model;size_t embedded_prefix;
@@ -97,6 +98,12 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,const modern_field_metadat
  for(auto prefix:candidates){probe.embedded_prefix=prefix;if(runnable_executor::With(env,probe.methods[0],Observe,&probe)==runnable_jni::Result::kSuccess){++matched;selected=prefix;}if(env->ExceptionCheck())return Fail(error,"Native vtable oracle raised exception");}
  if(matched!=1)return Fail(error,"No unique fixed external/embedded vtable declaration matches public Class/Method identities");
  metadata_=&metadata;method_model_=model.model;embedded_prefix_=selected;if(error)error->clear();return true;
+}
+bool Service::ReadVTable(void*klass,const modern_field_metadata::FieldMetadata&metadata,
+ VTableView*view,std::string*error,const modern_field_metadata::ReadContext*context)const{
+ if(view)*view={};
+ if(!view||metadata_!=&metadata||!context||!context->owner||!context->extent)return Fail(error,"Vtable observation lacks calibrated owner and explicit read context");
+ bool abstract=false;return Read(metadata,method_model_,klass,&abstract,embedded_prefix_,nullptr,nullptr,error,context,view);
 }
 bool Service::Validate(const source_commit::Plan& plan,size_t pair,const modern_field_metadata::FieldMetadata& metadata,std::string* error,const modern_field_metadata::ReadContext* context)const{
  if(metadata_!=&metadata||!metadata.Calibrated()||pair>=plan.old_classes.size()||plan.old_classes.size()!=plan.new_classes.size()||plan.old_instances.size()!=plan.new_instances.size())
