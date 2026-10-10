@@ -56,6 +56,22 @@ bool Service::SourceBarrier(const runnable_jni::Context& context,const source_ha
  if(!Mapped(card,1))return false;
  __atomic_store_n(card,kDirty,__ATOMIC_RELAXED);return true;
 }
+bool Service::SourceBarrierStopped(const runnable_jni::Context& context,const source_handle_roots::Pool& pool,
+ const source_handle_roots::StoppedReader& reader,const void* root,const modern_field_metadata::ReadContext* mappings)const noexcept{
+ if(!calibrated_||!current_||!context.self||current_()!=context.self||!context.env||
+    !reader.FinalRootWindow()||!mappings||!mappings->owner||!mappings->extent)return false;
+ auto readable=[&](const void* p,size_t n){size_t extent=0;return p&&
+    modern_field_metadata::ReadMappingExtent(mappings,p,&extent)&&extent>=n;};
+ if(!readable(context.self,card_offset_+sizeof(uintptr_t)))return false;
+ void* object=nullptr;
+ if(!pool.ReadStopped(reader,root,&object)||!readable(object,8))return false;
+ uintptr_t biased=0;std::memcpy(&biased,static_cast<const char*>(context.self)+card_offset_,sizeof(biased));
+ const uintptr_t index=uintptr_t(object)>>kCardShift;
+ if(!biased||index>UINTPTR_MAX-biased)return false;
+ auto* card=reinterpret_cast<uint8_t*>(biased+index);
+ if(!readable(card,1))return false;
+ __atomic_store_n(card,kDirty,__ATOMIC_RELAXED);return true;
+}
 struct Adapter {
  static field_copy::CopyClassView Class(void* c,bool s){return selected->metadata_.Class(c,s);}
  static field_copy::CopyFieldView Field(void* c,bool s,size_t i){return selected->metadata_.Field(c,s,i);}

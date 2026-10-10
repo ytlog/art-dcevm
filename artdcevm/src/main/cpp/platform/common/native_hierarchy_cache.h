@@ -20,6 +20,8 @@ struct Witness {
 // granted by this interface. root remains owned until source cleanup finishes.
 struct Source { Root cache_root=nullptr;const void* dex_identity=nullptr;
  const void* private_token=nullptr;size_t cache_extent=0;Counts counts; };
+class SourceMapper;
+using SemanticOperation=bool(*)(void*,const SourceMapper&) noexcept;
 class SourceMapper {
  public:
  virtual ~SourceMapper()=default;
@@ -27,6 +29,10 @@ class SourceMapper {
  virtual bool Readable(const void*,size_t)const noexcept=0;
  virtual native_cache_semantic::Service* Semantic()const noexcept{return nullptr;}
  virtual const modern_field_metadata::ReadContext* CacheReadContext()const noexcept{return nullptr;}
+ // Original VisitReflectiveTargets requires exclusive mutator ownership even
+ // for identity-only reads. Ordinary callers must supply a real stopped root
+ // window; final callbacks reuse their existing stop without another SSA.
+ virtual bool InspectSemantic(void*,SemanticOperation)const noexcept{return false;}
  virtual bool VerifyStaged(const native_hierarchy_graph::Graph&,
                           const std::vector<native_hierarchy_graph::Input>&,std::string*)const=0;
  virtual bool Describe(const native_hierarchy_graph::Prepared&,Source*,std::string*)const=0;
@@ -76,5 +82,7 @@ class Owner final:public native_hierarchy_graph::CacheOwner {
  bool Witnesses()const noexcept;
  bool Views(const Source&,type_cache::View*,native_cache::View*,native_cache::View*)const noexcept;
  bool Check(const Record&)const noexcept;
+ bool CheckSemantic(const Record&)const noexcept;
+ bool PrepareSemantic(const native_hierarchy_graph::Prepared&,std::string*);
 };
 }

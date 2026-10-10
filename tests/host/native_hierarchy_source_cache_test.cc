@@ -30,6 +30,7 @@ class Batch final:public BatchAccess {
 class Proof final:public RequiredServices {
  const runnable_jni::Context& context_;const source_handle_roots::Pool& pool_;
  RecordView expected_;const void* dex_;native_hierarchy_cache::Counts counts_;
+ mutable const source_handle_roots::StoppedReader* inspection_=nullptr;
  mutable bool prepared_=false;mutable native_hierarchy_cache::Source receipt_{};
  bool ExactRecord(const RecordView&r)const noexcept{
   return r.source_owner==expected_.source_owner&&r.class_index==expected_.class_index&&
@@ -46,6 +47,10 @@ class Proof final:public RequiredServices {
  public:bool live=true,private_cache=true;mutable int begins=0,prepare_calls=0;
  Proof(const runnable_jni::Context&c,const source_handle_roots::Pool&p,RecordView expected,
        const void*dex,native_hierarchy_cache::Counts counts):context_(c),pool_(p),expected_(expected),dex_(dex),counts_(counts){}
+ bool EnterSemanticInspection(const source_handle_roots::StoppedReader& r)const noexcept override{
+  if(inspection_||!live||!r.FinalRootWindow())return false;inspection_=&r;return true;
+ }
+ void LeaveSemanticInspection()const noexcept override{assert(inspection_);inspection_=nullptr;}
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&)const noexcept override{return live;}
  bool PreparePrivate(const RecordView&r,const native_hierarchy_cache::Source&s,std::string*error)const override{
   ++prepare_calls;
@@ -63,7 +68,7 @@ class Proof final:public RequiredServices {
   return live&&private_cache&&prepared_&&ExactRecord(r)&&ExactSource(s)&&
    s.private_token==receipt_.private_token&&s.cache_extent==receipt_.cache_extent&&
    c.self==context_.self&&c.env==context_.env&&c.vm==context_.vm&&&p==&pool_&&
-   pool_.Read(r.cache_root,&cache)&&cache&&old_class->dex_cache!=uint32_t(uintptr_t(cache));
+   (inspection_?pool_.ReadStopped(*inspection_,r.cache_root,&cache):pool_.Read(r.cache_root,&cache))&&cache&&old_class->dex_cache!=uint32_t(uintptr_t(cache));
  }
  bool VerifyReadonlyStaged(const native_hierarchy_graph::Graph&,const RecordView&)const noexcept override{return live;}
  bool VerifyReadonlyPrepared(const native_hierarchy_graph::Graph&,const RecordView&,const native_hierarchy_graph::Prepared&)const noexcept override{return live;}
@@ -126,6 +131,36 @@ assert(pool.Write(batch.record.new_root,new_class));p.new_class=new_class;assert
   assert(type_index!=UINT32_MAX);void*root=nullptr;assert(mapper.FindSource(p,type_index,&root,&error));assert(root==batch.record.new_root&&mapper.Get(root)==new_class&&batch.finds>=3);
   assert(!mapper.FindSource(p,source.counts.types,&root,&error));
   auto*card=cards+((uintptr_t(cache)-uintptr_t(heap.base))>>10);*card=0;assert(mapper.Barrier(source.cache_root)&&*card==0x70);
+  // The named SuspendAll boundary and non-Runnable state force the real
+  // production Pool stopped reader and barrier path; JNI is forbidden here.
+  struct Reader final:source_handle_roots::StoppedReader{
+   bool FinalRootWindow()const noexcept override{return stopped==1&&Read32(current)!=0;}
+   bool ReadStoppedRoot(const void*,void**)const noexcept override{return false;}
+  } reader;
+  struct Maps{const unsigned char* dex;size_t size;bool deny_card=false;size_t calls=0;} maps{d.mapping.begin,d.mapping.size};
+  auto extent=[](void* raw,const void* address,size_t* out){auto&m=*static_cast<Maps*>(raw);++m.calls;
+   if(m.deny_card&&address>=cards&&address<cards+2048)return false;
+   if(address>=thread.data()&&address<thread.data()+thread.size()){*out=thread.size()-size_t(static_cast<const unsigned char*>(address)-thread.data());return true;}
+   const auto value=uintptr_t(address),start=uintptr_t(m.dex);
+   if(value>=start&&value-start<m.size){*out=m.size-size_t(value-start);return true;}
+   return HeapExtent(&heap,address,out);
+  };
+  modern_field_metadata::ReadContext stopped_maps{&maps,extent};
+  assert(!mapper.EnterSemanticInspection(reader,stopped_maps));
+  const auto state=Read32(current);Put32(current,0,92u<<24);Stop(nullptr,"fixture-semantic",true);
+  assert(!pool.Read(source.cache_root,&root));
+  assert(!mapper.EnterSemanticInspection(reader,{}));
+  assert(mapper.EnterSemanticInspection(reader,stopped_maps));
+  assert(!mapper.EnterSemanticInspection(reader,stopped_maps));
+  const int before_jni=jni_calls;*card=0;forbid_allocation=true;
+  assert(mapper.Get(source.cache_root)==cache);assert(mapper.RefreshPrepared(&p));assert(mapper.OwnsUnpublished(p,source));
+  assert(mapper.Barrier(source.cache_root)&&*card==0x70&&maps.calls>0);
+  maps.deny_card=true;*card=0;assert(!mapper.Barrier(source.cache_root)&&*card==0);maps.deny_card=false;
+  assert(!d.fields->SourceBarrierStopped(context,pool,reader,source.cache_root,nullptr));
+  assert(!mapper.Barrier(&batch)&&jni_calls==before_jni);
+  assert(mapper.InspectSemantic(&mapper,[](void* raw,const native_hierarchy_cache::SourceMapper& m)noexcept{return raw==&m;}));
+  forbid_allocation=false;mapper.LeaveSemanticInspection();Resume(nullptr);Put32(current,0,state);
+  assert(mapper.Get(source.cache_root)==cache&&mapper.CacheReadContext()==nullptr);
   batch.wrong_original=true;assert(!mapper.FindSource(p,type_index,&root,&error));batch.wrong_original=false;
   assert(mapper.VerifyFrozen(graph,p,source));native_hierarchy_cache::Source foreign=source;foreign.private_token=&batch;assert(!mapper.OwnsUnpublished(p,foreign));
   new_class->dex_class_def_index=1;assert(!mapper.OwnsUnpublished(p,source));new_class->dex_class_def_index=0;

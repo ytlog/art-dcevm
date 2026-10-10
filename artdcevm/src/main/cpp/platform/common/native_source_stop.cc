@@ -319,6 +319,16 @@ bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
     bool (*prepare)(void*,Session&) noexcept) noexcept {
  return RunOriginalWaiting(self,extent,owner,prepare,false);
 }
+bool Session::Inspect(void* self,size_t extent,void* owner,
+    bool (*inspect)(void*,Session&) noexcept) noexcept {
+ if(!owner||!inspect){failure_="source-inspection-callback-missing";return false;}
+ if(!service_.state_.CanTransitionRunnable())return InspectOriginalWaiting(self,extent,owner,inspect);
+ if(!Begin(self,extent))return false;
+ const bool accepted=inspect(owner,*this);
+ if(phase_!=Phase::kStopped||!IsCollectedStop(self))std::abort();
+ if(!RollbackBeforeSource())std::abort();
+ return accepted;
+}
 bool Session::InspectOriginalWaiting(void* self,size_t extent,void* owner,
     bool (*inspect)(void*,Session&) noexcept) noexcept {
  return RunOriginalWaiting(self,extent,owner,inspect,true);

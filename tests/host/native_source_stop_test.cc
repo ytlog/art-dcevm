@@ -468,6 +468,21 @@ int main(int argc,char** argv){
  bad_transition=true;
  {native_source_stop::Session owner(service);assert(!owner.Begin(&self,sizeof(self))&&!gc&&!exclusive&&self.flags==(runnable_state<<shift));}
  bad_transition=false;
+ // Generic scoped inspection uses the actual calibrated Native pair when
+ // present. Success and refusal both restore Runnable and release all rights.
+ for(bool accept:{false,true}){
+  struct Request{bool accept;unsigned calls=0;};Request request{accept};
+  native_source_stop::Session inspection(service);
+  const auto operation=[](void* raw,native_source_stop::Session& scope)noexcept{
+   auto& request=*static_cast<Request*>(raw);++request.calls;
+   assert(scope.IsCollectedStop(&self)&&scope.IsStopped(&self)&&gc&&exclusive);
+   assert(!scope.IsFinalWindow(&self));return request.accept;
+  };
+  const int starts=gc_starts;
+  assert(inspection.Inspect(&self,sizeof(self),&request,operation)==accept);
+  assert(request.calls==1&&gc_starts==starts+1&&!gc&&!exclusive&&self.flags==(runnable_state<<shift));
+  assert(!inspection.Reserved()&&!inspection.IsStopped(&self));
+ }
  // A real refundable scan refusal unwinds the actual reservation, not just flags.
  {native_source_stop::Session owner(service);assert(owner.Begin(&self,sizeof(self))&&owner.IsStopped(&self)&&owner.IsCollectedStop(&self)&&!owner.IsFinalWindow(&self)&&gc&&exclusive);
   assert(!owner.IsStopped(&foreign)&&!owner.IsCollectedStop(&foreign)&&!owner.IsFinalWindow(&foreign));foreign_current=true;assert(!owner.IsStopped(&self));foreign_current=false;

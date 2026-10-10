@@ -40,7 +40,16 @@ Ledger::Ledger(void*d,const runnable_jni::Context&c,source_handle_roots::Pool&p,
  current=this;active_=true;
 }
 Ledger::~Ledger(){if(active_&&!released_)std::abort();}
-bool Ledger::Live()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&(FinalRootWindow()||PublicationRootWindow()||pool_.ReadyForSourceAccess());}
+bool Ledger::Live()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&((inspection_reader_&&inspection_reader_->FinalRootWindow())||FinalRootWindow()||PublicationRootWindow()||pool_.ReadyForSourceAccess());}
+bool Ledger::EnterSemanticInspection(const source_handle_roots::StoppedReader& reader)const noexcept{
+ if(inspection_reader_||!active_||released_||failed_||refunded_||current!=this||
+    FinalRootWindow()||PublicationRootWindow()||!reader.FinalRootWindow())return false;
+ inspection_reader_=&reader;return true;
+}
+void Ledger::LeaveSemanticInspection()const noexcept{
+ if(!inspection_reader_)std::abort();
+ inspection_reader_=nullptr;
+}
 bool Ledger::FinalRootWindow()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&roots_refreshed_&&cleanup_&&cleanup_->IsStopped(driver_,holder_);}
 bool Ledger::ReadStoppedRoot(const void*token,void**out)const noexcept{
  if(!out||!FinalRootWindow())return false;
@@ -50,7 +59,7 @@ bool Ledger::ReadRegisteredRoot(const void*token,void**out)const noexcept{
  if(!out||!roots_registered_||!roots_refreshed_)return false;
  for(const auto&e:root_entries_)if(e.token==token){*out=e.value;return true;}return false;
 }
-bool Ledger::Read(const void*token,void**out)const noexcept{return FinalRootWindow()?ReadStoppedRoot(token,out):PublicationRootWindow()?ReadRegisteredRoot(token,out):pool_.Read(token,out);}
+bool Ledger::Read(const void*token,void**out)const noexcept{return inspection_reader_?pool_.ReadStopped(*inspection_reader_,token,out):FinalRootWindow()?ReadStoppedRoot(token,out):PublicationRootWindow()?ReadRegisteredRoot(token,out):pool_.Read(token,out);}
 bool Ledger::CollectManagedRoots(const prepared_roots::Registrar&r){
  if(!Live()||!collected_||registration_started_||!r.add||FinalRootWindow()||!pool_.ReadyForSourceAccess())return false;
  registration_started_=true;

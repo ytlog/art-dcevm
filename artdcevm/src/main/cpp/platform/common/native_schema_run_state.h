@@ -81,6 +81,7 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  bool End(void* exact_driver,bool original_success)noexcept;
  // Read-only actual continuous owner proof for mapping/guard consumers.
  bool StoppedWindow()const noexcept;
+ bool OwnsMapping(const void* owner)const noexcept;
  bool VerifyHierarchy(const source_commit::Plan&,size_t,void* loader)const noexcept override;
  const modern_field_metadata::ReadContext* CurrentReadContext()const noexcept;
  const whole_process_frames::Report& Frames()const noexcept;
@@ -92,6 +93,9 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  bool PrepareStopped(std::string*);
  RunState(const Dependencies&,void*,const runnable_jni::Context&);
  static bool MappingExtent(void*,const void*,size_t*) noexcept;
+ static bool InspectSemantic(void*,void*,native_hierarchy_cache::SemanticOperation) noexcept;
+ struct SemanticAttempt;
+ static bool InspectSemanticStopped(void*,native_source_stop::Session&) noexcept;
  static bool MatchDexPublication(void*,void*,const void*,void*,void*,void*,size_t*) noexcept;
  bool Start(jvmtiEnv*,const std::vector<native_hierarchy_graph::Input>&,const CacheCalibration&,std::string*);
  std::unique_ptr<State> state_;

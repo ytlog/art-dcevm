@@ -12,7 +12,8 @@
 namespace artdcevm::native_schema_run_state {
 namespace {thread_local RunState* current=nullptr;bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}void Require(bool v){if(!v)std::abort();}}
 struct RunState::State {
- Dependencies d;modern_field_metadata::ReadContext read_context{};void* driver;const runnable_jni::Context context;
+ RunState* owner=nullptr;native_source_stop::Session* inspection=nullptr;
+ Dependencies d;modern_field_metadata::ReadContext read_context{},inspection_context{};void* driver;const runnable_jni::Context context;
  source_handle_roots::Pool pool;native_hierarchy_source_cache::AllocatorBatchAccess access;
  native_hierarchy_graph::Authority authority;native_hierarchy_receiver::Preservation receivers;
  native_boot_method_catalog::Rooted boot_catalog;
@@ -32,6 +33,11 @@ struct RunState::State {
  size_t extent=0;RunState* previous=nullptr;
  enum class Phase {Constructed,Running,Collected,Finalized,Committed,Refunded,Ended};
  Phase phase=Phase::Constructed;
+ struct InspectionReader final:source_handle_roots::StoppedReader {
+  const State& state;explicit InspectionReader(const State&s):state(s){}
+  bool FinalRootWindow()const noexcept override{return state.owner==current&&state.inspection&&state.inspection->IsStopped(state.context.self);}
+  bool ReadStoppedRoot(const void* token,void** value)const noexcept override{return state.pool.ReadStopped(*this,token,value);}
+ } inspection_roots{*this};
  struct RootReader final:source_handle_roots::StoppedReader {
   const State& state;explicit RootReader(const State&s):state(s){}
   bool FinalRootWindow()const noexcept override{return state.cleanup&&state.holder&&state.cleanup->IsStopped(state.driver,static_cast<const transaction_root::Holder*>(state.holder));}
@@ -57,7 +63,7 @@ struct RunState::State {
  State(const Dependencies& deps,void* dr,const runnable_jni::Context&ctx)
   :d(deps),driver(dr),context(ctx),pool(*deps.roots),access(pool),receivers(*deps.members.metadata){}
 };
-RunState::RunState(const Dependencies&d,void*driver,const runnable_jni::Context&c):state_(new State(d,driver,c)){}
+RunState::RunState(const Dependencies&d,void*driver,const runnable_jni::Context&c):state_(new State(d,driver,c)){state_->owner=this;state_->inspection_context={this,MappingExtent};}
 std::unique_ptr<RunState> RunState::Begin(const Dependencies&d,void*driver,const runnable_jni::Context&c,jvmtiEnv*ti,
  const std::vector<native_hierarchy_graph::Input>&inputs,const CacheCalibration&w,std::string*error){
  if(current||native_source_class_loading::Run::Current()||native_hierarchy_session::Session::Current()||!driver||!c.env||!c.self||!ti||!d.hooks||!d.loading||!d.stop||!d.stop->Calibrated()||!d.roots||!d.allocator||!d.dex_registry||!d.dex_registry->Calibrated()||!d.lookup||!d.lookup->Calibrated()||!d.frames||!d.cleanup||!d.provider||!d.registry||!d.members.metadata||!d.members.fields||!d.members.cache||!d.members.runtime.runtime||!native_hierarchy_source_checks::Ready(native_owned_removal::ObserveSourceFailure)||!d.mapping.owner||!d.mapping.refresh_stopped||!d.mapping.extent){
@@ -82,6 +88,7 @@ bool RunState::Start(jvmtiEnv*ti,const std::vector<native_hierarchy_graph::Input
   s.frame_storage.boot_catalog=&s.boot_catalog;s.frame_storage.boot_reader=s.ledger.get();
  }
  s.mapper=std::make_unique<native_hierarchy_source_cache::Mapper>(s.context,s.pool,*s.d.members.metadata,*s.d.members.fields,s.access,s.ledger.get(),w.semantic);
+ if(!s.mapper->BindSemanticInspection(this,InspectSemantic))return Fail(error,"Source semantic inspection controller binding failed");
  s.caches=std::make_unique<native_hierarchy_source_cache::Composite>(*s.mapper,s.incoming);
  void*cache=nullptr,*expected=nullptr;
  if(!w.strong_cache||!w.strong_expected_class||!s.d.roots->BorrowOwnedStrongGlobal(s.context,w.strong_cache,&cache))return Fail(error,"Source type-cache independent strong oracle unavailable");
@@ -253,8 +260,36 @@ bool RunState::MatchDexPublication(void*raw,void*driver,const void*holder,void*l
  auto*r=static_cast<RunState*>(raw);if(!r||current!=r)return false;const auto&s=*r->state_;
  return s.phase==State::Phase::Collected&&s.stop&&s.stop->CanPublishDex(driver,holder,linker)&&s.ledger&&s.ledger->MatchPublication(driver,holder,linker,cache,loader,index);
 }
+struct RunState::SemanticAttempt {
+ RunState& run;void* payload;native_hierarchy_cache::SemanticOperation operation;
+};
+bool RunState::InspectSemanticStopped(void* raw,native_source_stop::Session& stop)noexcept {
+ auto& request=*static_cast<SemanticAttempt*>(raw);auto& r=request.run;auto&s=*r.state_;
+ if(current!=&r||s.inspection||!s.mapper||!request.operation||!stop.IsStopped(s.context.self))return false;
+ s.inspection=&stop;
+ struct Reset {State& state;~Reset(){state.inspection=nullptr;}} reset{s};
+ try {
+  if(!s.d.mapping.refresh_stopped(s.d.mapping.owner,nullptr))return false;
+  if(!s.mapper->EnterSemanticInspection(s.inspection_roots,s.inspection_context))return false;
+  struct Leave {native_hierarchy_source_cache::Mapper& mapper;~Leave(){mapper.LeaveSemanticInspection();}} leave{*s.mapper};
+  return request.operation(request.payload,*s.mapper);
+ }catch(...){return false;}
+}
+bool RunState::InspectSemantic(void* raw,void* payload,native_hierarchy_cache::SemanticOperation operation)noexcept {
+ auto*r=static_cast<RunState*>(raw);
+ if(!r||current!=r||!operation)return false;auto&s=*r->state_;
+ if(!s.mapper||s.inspection||!s.d.stop||!s.d.mapping.owner||!s.d.mapping.refresh_stopped||!s.d.mapping.extent)return false;
+ SemanticAttempt request{*r,payload,operation};
+ // A stopped source owner is reused. A continuing reservation is never a
+ // license to suspend again or read a published semantic cache as Runnable.
+ if(s.stop&&s.stop->IsStopped(s.context.self))return InspectSemanticStopped(&request,*s.stop);
+ if((s.stop&&s.stop->Reserved())||(s.phase!=State::Phase::Constructed&&s.phase!=State::Phase::Running))return false;
+ native_source_stop::Session temporary(*s.d.stop);
+ return temporary.Inspect(s.context.self,s.extent,&request,InspectSemanticStopped);
+}
 bool RunState::MappingExtent(void*raw,const void*p,size_t*out)noexcept{auto*r=static_cast<RunState*>(raw);return r&&r==current&&r->StoppedWindow()&&r->state_->d.mapping.extent&&r->state_->d.mapping.extent(r->state_->d.mapping.owner,p,out);}
-bool RunState::StoppedWindow()const noexcept{return current==this&&state_->stop&&state_->stop->IsStopped(state_->context.self);}
+bool RunState::StoppedWindow()const noexcept{return current==this&&((state_->inspection&&state_->inspection->IsStopped(state_->context.self))||(state_->stop&&state_->stop->IsStopped(state_->context.self)));}
+bool RunState::OwnsMapping(const void* owner)const noexcept{return current==this&&owner&&state_->d.mapping.owner==owner;}
 bool RunState::VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* loader)const noexcept {
  const auto& s=*state_;
  if(current!=this||s.plan!=&p||pair>=p.old_classes.size()||!s.stop||
@@ -264,6 +299,6 @@ bool RunState::VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* lo
  size_t matches=0;for(const auto& node:graph->nodes)if(node.affected&&node.klass==p.old_classes[pair]&&node.loader==loader)++matches;
  return matches==1&&s.authority.Verify(p,pair);
 }
-const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return StoppedWindow()&&state_->read_context.extent?&state_->read_context:nullptr;}
+const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return !StoppedWindow()?nullptr:state_->inspection?&state_->inspection_context:state_->read_context.extent?&state_->read_context:nullptr;}
 const whole_process_frames::Report& RunState::Frames()const noexcept{Require(state_->cleanup!=nullptr);return state_->cleanup->Frames();}
 }

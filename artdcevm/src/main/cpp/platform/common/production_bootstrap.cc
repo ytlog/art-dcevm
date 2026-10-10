@@ -500,11 +500,11 @@ struct NativeEngine final:Engine {
  static bool RefreshStoppedMaps(void* raw,std::string* error){
   auto& e=*static_cast<NativeEngine*>(raw);
   auto* run=native_schema_run_state::RunState::Current();
-  if(!run||run!=e.schema_run.get()||!run->StoppedWindow())return Fail(error,"Mapping refresh lacks actual schema stop owner");
+  if(!run||!run->OwnsMapping(&e)||!run->StoppedWindow())return Fail(error,"Mapping refresh lacks actual schema stop owner");
   return e.RefreshStoppedMappings(error);
  }
  bool RefreshStoppedMappings(std::string* error){
-  auto& e=*this;const bool owned_schema=schema_run&&native_schema_run_state::RunState::Current()==schema_run.get()&&schema_run->StoppedWindow();
+  auto& e=*this;auto* run=native_schema_run_state::RunState::Current();const bool owned_schema=run&&run->OwnsMapping(&e)&&run->StoppedWindow();
   const bool owned_fixture=calibration_stop&&calibration_stop->IsStopped(calibration_self);
   if(!owned_schema&&!owned_fixture)return Fail(error,"Mapping refresh requires an actual independent native stop");
   const int fd=::open("/proc/self/maps",O_RDONLY|O_CLOEXEC);if(fd<0)return Fail(error,"Stopped mapping open failed");
@@ -519,12 +519,12 @@ struct NativeEngine final:Engine {
   while(valid){const ssize_t count=::read(fd,buffer,sizeof(buffer));if(count<0){valid=false;break;}if(count==0)break;
    for(ssize_t n=0;n<count;++n){if(buffer[n]=='\n'){if(!consume()){valid=false;break;}used=0;}else if(used==sizeof(line)){valid=false;break;}else line[used++]=buffer[n];}}
   if(valid&&used)valid=consume();
-  if(!valid||e.graph_maps.empty()||!(owned_schema?schema_run->StoppedWindow():calibration_stop->IsStopped(calibration_self))){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
+  if(!valid||e.graph_maps.empty()||!(owned_schema?run->StoppedWindow():calibration_stop->IsStopped(calibration_self))){e.graph_maps.clear();return Fail(error,"Stopped mapping bounds/capacity rejected");}
   return true;
  }
  static bool GraphExtent(void* raw,const void* address,size_t* extent){
   auto& e=*static_cast<NativeEngine*>(raw);auto* run=native_schema_run_state::RunState::Current();
-  if(!extent||!run||run!=e.schema_run.get()||!run->StoppedWindow())return false;
+  if(!extent||!run||!run->OwnsMapping(&e)||!run->StoppedWindow())return false;
   return CachedExtent(raw,address,extent);
  }
  static bool CachedExtent(void* raw,const void* address,size_t* extent){
@@ -540,7 +540,8 @@ struct NativeEngine final:Engine {
  }
  static bool GraphReadable(void* raw,const void* address,size_t bytes){
   const auto& e=*static_cast<NativeEngine*>(raw);
-  if(e.schema_run&&native_schema_run_state::RunState::Current()==e.schema_run.get()&&e.schema_run->StoppedWindow()){
+  auto* run=native_schema_run_state::RunState::Current();
+  if(run&&run->OwnsMapping(&e)&&run->StoppedWindow()){
    size_t extent=0;return GraphExtent(raw,address,&extent)&&extent>=bytes;
   }
   if(!e.schema_finalizing)return GraphMapped(raw,address,bytes,false);

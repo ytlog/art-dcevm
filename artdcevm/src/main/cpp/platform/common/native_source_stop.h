@@ -126,9 +126,18 @@ class Session {
   // refusal/resume/FinishGC completes before original C++ restores Runnable.
   bool BeginOriginalWaiting(void* self,size_t mapped_extent,void* owner,
       bool (*prepare)(void*,Session&) noexcept) noexcept;
-  // Pure inspection: true means the callback completed while genuinely stopped.
-  // Always resumes SSA/finishes GC inside the original scope before returning.
+  // Scoped inspection: true means the callback completed while genuinely stopped.
+  // This scope grants exclusion and root readability only. A separate exact
+  // unpublished-cache owner may transform its own private storage here; this
+  // Session never grants that ownership, source continuation or publication.
+  // Always resumes SSA/finishes GC before returning; the Waiting variant does
+  // so inside the original C++ state scope.
   // No source continuation/publication permission survives this call.
+  // Choose only an independently calibrated source mechanism: the actual
+  // Runnable/Native pair when available, otherwise the original Waiting scope.
+  // Neither inspection path may retain a reservation across its return.
+  bool Inspect(void* self,size_t mapped_extent,void* owner,
+      bool (*inspect)(void*,Session&) noexcept) noexcept;
   bool InspectOriginalWaiting(void* self,size_t mapped_extent,void* owner,
       bool (*inspect)(void*,Session&) noexcept) noexcept;
   bool PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,

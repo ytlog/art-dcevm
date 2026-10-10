@@ -6,6 +6,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include <cstring>
 #include <new>
+#include <cstdlib>
 namespace artdcevm::native_hierarchy_source_cache {
 namespace {
 bool Fail(std::string*e,const char*s){if(e)*e=s;return false;}
@@ -31,12 +32,38 @@ size_t AllocatorBatchAccess::Count()const noexcept{return batch_?batch_->Count()
 bool AllocatorBatchAccess::At(size_t n,RecordView*out)const noexcept{if(!batch_||!out)return false;native_hierarchy_allocator::Batch::RecordView r;if(!batch_->At(n,&r))return false;*out={r.source_owner,r.class_index,r.old_root,r.new_root,r.cache_root,r.parent_root,r.declarations,r.dex};return true;}
 void* AllocatorBatchAccess::Find(const char*name,void*loader)const noexcept{return batch_?batch_->Find(name,loader):nullptr;}
 void* AllocatorBatchAccess::OriginalFind(const char*name,void*loader)const{return batch_?batch_->OriginalFind(name,loader):nullptr;}
-void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;if(services_&&services_->FinalRootWindow())return services_->ReadStoppedRoot(root,&value)?value:nullptr;return pool_.Read(root,&value)?value:nullptr;}
+void* Mapper::Get(native_hierarchy_cache::Root root)const noexcept{void*value=nullptr;
+ if(inspection_reader_)return pool_.ReadStopped(*inspection_reader_,root,&value)?value:nullptr;
+ if(services_&&services_->FinalRootWindow())return services_->ReadStoppedRoot(root,&value)?value:nullptr;
+ return pool_.Read(root,&value)?value:nullptr;
+}
+bool Mapper::BindSemanticInspection(void* owner,bool(*run)(void*,void*,native_hierarchy_cache::SemanticOperation) noexcept)noexcept{
+ if(!owner||!run||inspection_owner_||inspection_run_)return false;
+ inspection_owner_=owner;inspection_run_=run;return true;
+}
+bool Mapper::EnterSemanticInspection(const source_handle_roots::StoppedReader& reader,const modern_field_metadata::ReadContext& context)noexcept{
+ if(inspection_reader_||!reader.FinalRootWindow()||!context.owner||!context.extent||
+    (services_&&!services_->EnterSemanticInspection(reader)))return false;
+ prior_read_context_=read_context_;prior_contextual_=contextual_;
+ inspection_reader_=&reader;read_context_=context;contextual_=true;return true;
+}
+void Mapper::LeaveSemanticInspection()noexcept{
+ if(!inspection_reader_)std::abort();
+ if(services_)services_->LeaveSemanticInspection();
+ inspection_reader_=nullptr;read_context_=prior_read_context_;contextual_=prior_contextual_;
+ prior_read_context_={};prior_contextual_=false;
+}
+bool Mapper::InspectSemantic(void* payload,native_hierarchy_cache::SemanticOperation operation)const noexcept{
+ if(!operation)return false;
+ if(inspection_reader_)return inspection_reader_->FinalRootWindow()&&operation(payload,*this);
+ if(services_&&services_->FinalRootWindow())return operation(payload,*this);
+ return inspection_owner_&&inspection_run_&&inspection_run_(inspection_owner_,payload,operation);
+}
 void Mapper::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{read_context_=c;contextual_=true;}
 bool Mapper::Extent(const void*p,size_t*out)const noexcept{return contextual_?read_context_.extent&&read_context_.extent(read_context_.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
 bool Mapper::Readable(const void*p,size_t n)const noexcept{size_t extent=0;return p&&Extent(p,&extent)&&extent>=n;}
 bool Mapper::Record(const native_hierarchy_graph::Prepared&p,RecordView*out)const noexcept{
- if(!out||(!(services_&&services_->FinalRootWindow())&&!pool_.ReadyForSourceAccess())||!fields_.Calibrated()||!p.source_owner)return false;
+ if(!out||(!(inspection_reader_&&inspection_reader_->FinalRootWindow())&&!(services_&&services_->FinalRootWindow())&&!pool_.ReadyForSourceAccess())||!fields_.Calibrated()||!p.source_owner)return false;
  for(size_t i=0;i<batch_.Count();++i){RecordView r;if(!batch_.At(i,&r))return false;
  if(r.source_owner==p.source_owner&&r.class_index==p.class_index&&r.declarations==p.declarations&&r.dex.class_def_index==r.class_index&&Get(r.old_root)==p.old_class&&Get(r.new_root)==p.new_class&&Get(r.cache_root)==p.cache&&Get(r.parent_root)==p.parent){*out=r;return true;}}
  return false;
@@ -154,7 +181,12 @@ bool Mapper::OwnsUnpublished(const native_hierarchy_graph::Prepared&p,const nati
  // retained publication/cleanup lifetime in the final owner as well.
  return services_&&Get(entry->loader_root)==fields_.Reference(Get(r.old_root),offsetof(class_metadata::Class11,class_loader))&&services_->VerifyPrivate(r,s,context_,pool_);
 }
-bool Mapper::Barrier(native_hierarchy_cache::Root root)const noexcept{return services_&&storage_.SourceBarrier(context_,pool_,root);}
+bool Mapper::Barrier(native_hierarchy_cache::Root root)const noexcept{
+ if(!services_)return false;
+ if(inspection_reader_)return storage_.SourceBarrierStopped(context_,pool_,*inspection_reader_,root,Context());
+ if(services_->FinalRootWindow())return storage_.SourceBarrierStopped(context_,pool_,*services_,root,Context());
+ return storage_.SourceBarrier(context_,pool_,root);
+}
 bool Mapper::RefreshPrepared(native_hierarchy_graph::Prepared*p)const noexcept{
  if(!p)return false;const auto*entry=EntryFor(*p);
  if(!entry||entry->record.class_index!=p->class_index||entry->record.declarations!=p->declarations)return false;

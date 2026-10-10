@@ -49,9 +49,13 @@ class Bridge final {
     // The actual ordinary Run entry is independently Runnable. Calibrate the
     // optional original C++ state scope before attaching passive observation;
     // the temporary real GC reservation is fully finished before Run proceeds.
-    if(b.service_.RequiresOriginalWaiting()&&!b.service_.OriginalWaitingCalibrated()&&
-       !b.service_.CalibrateOriginalWaiting(self,b.extent_,nullptr))
-      b.Refuse("ordinary-source-original-WaitingGC-scope-not-calibrated");
+    if(b.service_.RequiresOriginalWaiting()&&!b.service_.OriginalWaitingCalibrated()){
+      std::string error;
+      if(!b.service_.CalibrateOriginalWaiting(self,b.extent_,&error)){
+        char detail[256];std::snprintf(detail,sizeof(detail),"ordinary-source-original-WaitingGC-scope-not-calibrated: %s",error.c_str());
+        b.Refuse(detail);return;
+      }
+    }
     b.observation_.emplace(b.service_,driver,body,self,b.extent_);
     if(!b.observation_->Ready()){b.Refuse(b.observation_->Failure());return;}
     if(b.loading_service_){

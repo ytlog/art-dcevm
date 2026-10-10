@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/exclusive_owned_roots.h"
-namespace artdcevm::source_handle_roots { class Pool; }
+namespace artdcevm::source_handle_roots { class Pool; class StoppedReader; }
 namespace artdcevm::modern_field_storage {
 // Calibrate with an initialized, exclusively owned fixture class/instance and
 // the complete independent reflection oracle. Static mutations are restored.
@@ -16,10 +16,14 @@ class Service {
   size_t CardTableOffset()const{return calibrated_?card_offset_:0;}
   // Borrowed references and mutations require the transaction owner's actual
   // exclusive mutator/disabled-GC scope. No roots escape that lifetime.
-  // Real private incoming cache writes run in the original source Runnable
-  // scope. The root must belong to its live independently calibrated Pool;
-  // this API grants no cache ownership or publication permission.
+  // Runnable and stopped callers use separate root readers. Neither API
+  // grants private-cache ownership or publication permission.
   bool SourceBarrier(const runnable_jni::Context&,const source_handle_roots::Pool&,const void* root)const noexcept;
+  // Requires the actual exclusive reader and its fresh preallocated mapping
+  // context; performs no JNI, mapping query, allocation or safepoint.
+  bool SourceBarrierStopped(const runnable_jni::Context&,const source_handle_roots::Pool&,
+      const source_handle_roots::StoppedReader&,const void* root,
+      const modern_field_metadata::ReadContext*)const noexcept;
   void* ObjectClass(void*)const;
   void CopyFields(bool is_static,void* target,void* target_class,
                   void* source,void* source_class,const modern_field_metadata::ReadContext* =nullptr)const;

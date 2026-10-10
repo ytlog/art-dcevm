@@ -42,6 +42,9 @@ class RequiredServices:public source_handle_roots::StoppedReader {
  virtual ~RequiredServices()=default;
  bool FinalRootWindow()const noexcept override{return false;}
  bool ReadStoppedRoot(const void*,void**)const noexcept override{return false;}
+ // Temporary exclusive inspection reads do not grant final/publication authority.
+ virtual bool EnterSemanticInspection(const source_handle_roots::StoppedReader&)const noexcept{return false;}
+ virtual void LeaveSemanticInspection()const noexcept{}
  virtual bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&)const noexcept=0;
  // Actual allocation/publication hook ownership and no-suspend writer window,
  // independently proving the cache is private to this source transaction.
@@ -71,6 +74,10 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
         const modern_field_metadata::FieldMetadata&,const modern_field_storage::Service&,
         const BatchAccess&,const RequiredServices*,native_cache_semantic::Service* semantic=nullptr);
  void UseReadContext(const modern_field_metadata::ReadContext&)noexcept;
+ bool BindSemanticInspection(void*,bool(*)(void*,void*,native_hierarchy_cache::SemanticOperation) noexcept)noexcept;
+ bool EnterSemanticInspection(const source_handle_roots::StoppedReader&,const modern_field_metadata::ReadContext&)noexcept;
+ void LeaveSemanticInspection()noexcept;
+ bool InspectSemantic(void*,native_hierarchy_cache::SemanticOperation)const noexcept override;
  void* Get(native_hierarchy_cache::Root)const noexcept override;
  bool Readable(const void*,size_t)const noexcept override;
  native_cache_semantic::Service* Semantic()const noexcept override{return semantic_;}
@@ -93,6 +100,10 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  private:
  struct Entry {RecordView record;native_hierarchy_cache::Source source;void* loader_root=nullptr;};
  modern_field_metadata::ReadContext read_context_{};bool contextual_=false;
+ void* inspection_owner_=nullptr;
+ bool(*inspection_run_)(void*,void*,native_hierarchy_cache::SemanticOperation) noexcept=nullptr;
+ const source_handle_roots::StoppedReader* inspection_reader_=nullptr;
+ modern_field_metadata::ReadContext prior_read_context_{};bool prior_contextual_=false;
  const modern_field_metadata::ReadContext* Context()const noexcept{return contextual_?&read_context_:nullptr;}
  bool Extent(const void*,size_t*)const noexcept;
  const runnable_jni::Context context_;source_handle_roots::Pool& pool_;

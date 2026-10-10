@@ -27,6 +27,8 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  bool CollectManagedRoots(const prepared_roots::Registrar&);
  bool CanRefresh(const prepared_roots::Resolver&)const noexcept;
  void Refresh(const prepared_roots::Resolver&)noexcept;
+ bool EnterSemanticInspection(const source_handle_roots::StoppedReader&)const noexcept override;
+ void LeaveSemanticInspection()const noexcept override;
  bool FinalRootWindow()const noexcept override;
  bool ReadStoppedRoot(const void*,void**)const noexcept override;
  bool Collected(const source_commit::Plan&)noexcept;
@@ -66,6 +68,7 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  void*driver_;runnable_jni::Context context_;source_handle_roots::Pool&pool_;
  const native_hierarchy_source_cache::BatchAccess&batch_;const modern_field_metadata::FieldMetadata&fields_;
  const native_source_dex_registry::Service&registry_;const CleanupOwner*cleanup_;
+ mutable const source_handle_roots::StoppedReader*inspection_reader_=nullptr;
  const native_source_stop::Session*publication_stop_=nullptr;
  const transaction_root::Holder*holder_=nullptr;transaction_root::Metadata metadata_{};
  mutable const native_hierarchy_graph::Graph*graph_=nullptr;mutable std::vector<Entry> entries_;
