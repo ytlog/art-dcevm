@@ -210,7 +210,10 @@ public final class CompiledFrameFixture {
                 if (!waitEntered(30000)) throw new IllegalStateException("Actual native compiled fixture worker did not enter gate");
                 if (retained0 != null || retained1 != null || retained2 != null || retainedInt0 != 0 || retainedInt1 != 0 || retainedInt2 != 0)
                     throw new IllegalStateException("Compiled fixture wrote witnesses before gate release");
-            } catch (Exception error) {close(); throw error;}
+            } catch (Throwable error) {
+                try {close();} catch (Throwable cleanup) {if (cleanup != error) error.addSuppressed(cleanup);}
+                throw error;
+            }
         }
         @Override public void close() throws Exception {
             if (!armed) return;

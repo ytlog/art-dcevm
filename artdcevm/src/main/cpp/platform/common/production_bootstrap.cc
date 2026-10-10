@@ -28,6 +28,7 @@
 #include "platform/common/native_production_schema_capabilities.h"
 #include "platform/common/frame_family_calibration.h"
 #include "platform/common/compiled_frame_owner.h"
+#include "platform/common/compiled_fixture_exception.h"
 #include "platform/common/compiled_frame_ordinary_context.h"
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
@@ -178,6 +179,12 @@ struct NativeEngine final:Engine {
   if(!source_capabilities.Roots().Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-roots");
   if(!source_stop.Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-stop");
   if(!env||!ti||env->ExceptionCheck()||schema_run||graph_staging||(current&&current!=this))return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-requires-ordinary-unstaged-owner");
+  // This is a private optional episode, entered with no pending operation
+  // exception. All later owners die before this diagnostic/clear boundary;
+  // an exception present on entry is refused above and remains untouched.
+  struct PrivateException {JNIEnv*env;std::string&diagnostic;~PrivateException(){
+   if(env->ExceptionCheck()){compiled_frame_fixture::DescribePending(env,diagnostic.c_str(),&diagnostic);env->ExceptionClear();}
+  }} private_exception{env,frame_geometry_diagnostic};
   // Priming may already have acquired the independent source proof in an
   // earlier operation. Borrow a fresh ordinary context for this retry; never
   // rely on the finished operation's JNIEnv or transient current engine.
@@ -189,7 +196,7 @@ struct NativeEngine final:Engine {
   if(!PrepareStoppedMaps(&frame_geometry_diagnostic))return false;
   jclass type=env->GetObjectClass(input);jfieldID id=type?env->GetFieldID(type,"dex","[[B"):nullptr;
   auto dex=id?static_cast<jobjectArray>(env->GetObjectField(input,id)):nullptr;if(type)env->DeleteLocalRef(type);
-  if(!dex||env->ExceptionCheck())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-installed-dex-input-unavailable");
+  if(!dex||env->ExceptionCheck()){if(!compiled_frame_fixture::DescribePending(env,"compiled-frame-calibration.installed-dex-input",&frame_geometry_diagnostic))Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-installed-dex-input-unavailable");return false;}
   auto fixture=compiled_frame_fixture::Owner::Prepare(hooks,env,ti,dex,&frame_geometry_diagnostic);env->DeleteLocalRef(dex);
   if(!fixture)return false;
   auto current_thread=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
@@ -693,9 +700,6 @@ struct NativeEngine final:Engine {
   if(!source_capabilities.Ready())return Fail(error,SourceFactoryDiagnostic().c_str());
   if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
   PrepareCompiledFrames(env,ti);
-  // The private worker must finish before clearing only its new exception.
-  // Its refusal is reported separately; it never changes the ordinary Run.
-  if(env->ExceptionCheck()){env->ExceptionClear();frame_geometry_diagnostic="Private compiled fixture calibration raised a Java exception";}
   return true;
  }
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
@@ -794,10 +798,6 @@ struct NativeEngine final:Engine {
    source_observation.reset();
    if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck()){
     PrepareCompiledFrames(env,ti);
-    // A private post-Run calibration cannot change a committed original result.
-    // Preserve its refusal as capability diagnostics, release its worker first,
-    // then clear only the newly raised private-fixture exception.
-    if(env->ExceptionCheck()){env->ExceptionClear();frame_geometry_diagnostic="Private compiled fixture calibration raised a Java exception";}
    }
   }
   if(schema_operation&&result!=JVMTI_ERROR_NONE&&error)source_factory_diagnostic=*error;
