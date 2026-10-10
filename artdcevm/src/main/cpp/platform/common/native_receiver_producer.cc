@@ -25,16 +25,25 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
 }
 bool SourceProducer::Current(void*p,void*self)noexcept{auto&s=*static_cast<SourceProducer*>(p);return s.bound_&&self&&s.current_&&s.current_()==self;}
 bool SourceProducer::Code(void*self,void*method,CodeView*out)const noexcept{
+ return CodeImpl(self,method,out,nullptr);
+}
+bool SourceProducer::Code(void*self,void*method,CodeView*out,const modern_field_metadata::ReadContext&context)const noexcept{
+ if(!context.owner||!context.extent)return false;return CodeImpl(self,method,out,&context);
+}
+bool SourceProducer::CodeImpl(void*self,void*method,CodeView*out,const modern_field_metadata::ReadContext*context)const noexcept{
  if(!out||!Current(const_cast<SourceProducer*>(this),self)||!method)return false;size_t extent=0;method_metadata::Identity identity;
- if(!Extent(method,&extent)||!method_metadata::ReadIdentity(layout_.method,method,extent,&identity)||identity.dex_method_index==UINT32_MAX||(identity.access_flags&0x500u))return false;
- void*klass=metadata_->Reference(method,0);
+ const auto readable=[&](const void*p,size_t*n){return modern_field_metadata::ReadMappingExtent(context,p,n);};
+ if(!readable(method,&extent)||!method_metadata::ReadIdentity(layout_.method,method,extent,&identity)||identity.dex_method_index==UINT32_MAX||(identity.access_flags&0x500u))return false;
+ // ArtMethod's first field is a GcRoot, not a mirror Object followed by a
+ // monitor. Its access_flags word cannot select an object read-barrier state.
+ void*klass=root_reference_(method);
  // Fixed ArtMethod::GetDexCache selects the retained obsolete cache instead
  // of a restored declaring Class whose current DEX can already be different.
- void*cache=nullptr;if(identity.access_flags&0x40000u){if(!obsolete_cache_)return false;cache=obsolete_cache_(method);}else cache=klass?metadata_->Reference(klass,offsetof(class_metadata::Class11,dex_cache)):nullptr;
+ void*cache=nullptr;if(identity.access_flags&0x40000u){if(!obsolete_cache_)return false;cache=obsolete_cache_(method);}else {constexpr size_t cache_offset=offsetof(class_metadata::Class11,dex_cache);if(!klass||!readable(klass,&extent)||extent<cache_offset+4)return false;cache=metadata_->Reference(klass,cache_offset);}
  static_assert(offsetof(abi::arm64::android11::LegacyCache,dex_file)==offsetof(abi::arm64::android14::DualCache,dex_file));
- constexpr auto offset=offsetof(abi::arm64::android11::LegacyCache,dex_file);if(!cache||!Extent(cache,&extent)||extent<offset+8)return false;void*file=nullptr;std::memcpy(&file,static_cast<const char*>(cache)+offset,8);
- dex_mapping_abi::Prefix prefix;if(!file||!Extent(file,&extent)||extent<sizeof(prefix))return false;std::memcpy(&prefix,file,sizeof(prefix));size_t header=0,data=0;
- if(!prefix.begin||!prefix.data_begin||!Extent(prefix.begin,&header)||header<112||!Extent(prefix.data_begin,&data)||prefix.data_size>data)return false;
+ constexpr auto offset=offsetof(abi::arm64::android11::LegacyCache,dex_file);if(!cache||!readable(cache,&extent)||extent<offset+8)return false;void*file=nullptr;std::memcpy(&file,static_cast<const char*>(cache)+offset,8);
+ dex_mapping_abi::Prefix prefix;if(!file||!readable(file,&extent)||extent<sizeof(prefix))return false;std::memcpy(&prefix,file,sizeof(prefix));size_t header=0,data=0;
+ if(!prefix.begin||!prefix.data_begin||!readable(prefix.begin,&header)||header<112||!readable(prefix.data_begin,&data)||prefix.data_size>data)return false;
  uint32_t size=U32(uintptr_t(prefix.begin)+32);if(size<112||size>header)return false;evolution::MappedDexMetadata map{prefix.begin,size,prefix.data_begin,prefix.data_size,0};CodeView view;if(!ReadCodeView(layout_,method,layout_.method.size,map,&view)||!Current(const_cast<SourceProducer*>(this),self))return false;*out=view;return true;
 }
 template<class Base>bool SourceProducer::Walk(void*self,void*caller,uint32_t pc,const void**out)const noexcept{
@@ -44,7 +53,7 @@ template<class Base>bool SourceProducer::Walk(void*self,void*caller,uint32_t pc,
 bool SourceProducer::Frame(void*self,void*caller,uint32_t pc,const void**out)const noexcept{if(!out||!Current(const_cast<SourceProducer*>(this),self)||!caller)return false;switch(declaration_){case stack_visitor_service::Declaration::kAndroid11:return Walk<abi::arm64::stack::Visitor11>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid12:return Walk<abi::arm64::stack::Visitor12>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid13To16:return Walk<abi::arm64::stack::Visitor13>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid17:return Walk<abi::arm64::stack::Visitor17>(self,caller,pc,out);}return false;}
 bool SourceProducer::GetFrame(void*p,void*self,void*caller,uint32_t pc,const void**out)noexcept{return static_cast<SourceProducer*>(p)->Frame(self,caller,pc,out);}
 bool SourceProducer::GetCode(void*p,void*self,void*caller,CodeView*out)noexcept{return static_cast<SourceProducer*>(p)->Code(self,caller,out);}
-bool SourceProducer::Resolve(void*p,void*self,void*caller,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};auto*resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.metadata_->Reference(caller,0):nullptr;return resolved!=nullptr;}
+bool SourceProducer::Resolve(void*p,void*self,void*caller,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};auto*resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.root_reference_(caller):nullptr;return resolved!=nullptr;}
 bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_null;}
 BytecodeAccess SourceProducer::Access()noexcept{return {this,Current,GetFrame,GetCode,Resolve,Pending};}
 bool SourceProducer::FrameExtent(void*p,void*self,const void*address,size_t*out)noexcept{return Current(p,self)&&Extent(address,out)&&Current(p,self);}

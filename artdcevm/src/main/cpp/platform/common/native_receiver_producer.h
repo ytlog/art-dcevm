@@ -18,6 +18,9 @@ class SourceProducer final {
  // Read bounded fixed Standard/Compact CodeItem under the same actual current
  // Runnable source callback. This never infers fields from machine code.
  bool Code(void*thread,void*method,CodeView*)const noexcept;
+ // Explicit owned stopped/read window; no OS extent fallback. This supplies
+ // immutable source bytes only, never an async-frame/publication permission.
+ bool Code(void*thread,void*method,CodeView*,const modern_field_metadata::ReadContext&)const noexcept;
  bool Frame(void*thread,void*method,uint32_t pc,const void**)const noexcept;
  private:
  template<class Base> bool Walk(void*,void*,uint32_t,const void**)const noexcept;
@@ -28,6 +31,7 @@ class SourceProducer final {
  static bool Pending(void*,void*)noexcept;
  static bool FrameExtent(void*,void*,const void*,size_t*)noexcept;
  static bool FrameReference(void*,void*,uint32_t,void**)noexcept;
+ bool CodeImpl(void*,void*,CodeView*,const modern_field_metadata::ReadContext*)const noexcept;
  using ResolveMethod=void*(*)(void*,void*,uint32_t,void*,uint32_t);
  stack_visitor_service::Service stack_;stack_visitor_service::Declaration declaration_{};
  code_item_metadata::Layout layout_{};const modern_field_metadata::FieldMetadata*metadata_=nullptr;
