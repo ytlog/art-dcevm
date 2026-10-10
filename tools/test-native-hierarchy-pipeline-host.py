@@ -4,6 +4,8 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import sys
+import struct
 parser=argparse.ArgumentParser();parser.add_argument('--compile-only',action='store_true');args=parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 cpp = root / 'artdcevm/src/main/cpp'
@@ -33,6 +35,15 @@ if platform == 'darwin':
     command += ['-Wl,-pagezero_size,0x10000']
 fixture_path=Path(os.environ['SOURCE_DEX_FIXTURE']) if 'SOURCE_DEX_FIXTURE' in os.environ else root/'app/build/generated/patchAssets/hier-parent/com/github/ytlog/artdcevm/fixture/HierarchySubject.dex'
 if not fixture_path.is_file(): raise SystemExit('Set SOURCE_DEX_FIXTURE to an existing verified SchemaSubject.dex fixture')
+# Independent immutable DEX for every public parent/interface/boot Class.
+sys.path.insert(0,str(root/'tests/host'))
+from schema_run_state_dex_fixture import write_graph_fixture
+raw=fixture_path.read_bytes();word=lambda at:struct.unpack_from('<I',raw,at)[0]
+type_index=word(word(100));string_index=word(word(68)+4*type_index);offset=word(word(60)+4*string_index)
+while raw[offset]&128:offset+=1
+offset+=1;descriptor=raw[offset:raw.index(0,offset)].decode();assert descriptor.startswith('L') and '/' in descriptor
+graph_fixture=write_graph_fixture(out/'defining-graph',descriptor[:descriptor.rfind('/')+1])
+command += ['-DPIPELINE_GRAPH_DEX_FIXTURE='+chr(34)+str(graph_fixture)+chr(34)]
 command += ['-DPIPELINE_DEX_FIXTURE='+chr(34)+str(fixture_path)+chr(34),'-o',str(binary)]
 subprocess.run(command, check=True)
 if args.compile_only:
