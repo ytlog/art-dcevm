@@ -29,6 +29,10 @@ void DeleteGlobal(JNIEnv*,jobject value){assert(value);--globals;}
 jvmtiError Modifiers(jvmtiEnv*,jmethodID,jint*out){Query();*out=1;return calls==fail_at&&tool_error?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 jvmtiError Bytes(jvmtiEnv*,jmethodID,jint*size,unsigned char**out){Query();*size=null_failure&&calls==fail_at?0:4;*out=static_cast<unsigned char*>(std::malloc(4));++buffers;return calls==fail_at&&tool_error?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
 jvmtiError Deallocate(jvmtiEnv*,unsigned char*value){assert(value);--buffers;std::free(value);return JVMTI_ERROR_NONE;}
+bool bytecode_cap=false,grant=true;int capability_reads=0,capability_adds=0;
+jvmtiError capability_read_error=JVMTI_ERROR_NONE,capability_add_error=JVMTI_ERROR_NONE;
+jvmtiError Capabilities(jvmtiEnv*,jvmtiCapabilities*out){++capability_reads;*out={};out->can_get_bytecodes=bytecode_cap;return capability_read_error;}
+jvmtiError AddCapabilities(jvmtiEnv*,const jvmtiCapabilities*in){++capability_adds;assert(in->can_get_bytecodes&&!in->can_redefine_classes&&!in->can_retransform_classes);if(grant&&capability_add_error==JVMTI_ERROR_NONE)bytecode_cap=true;return capability_add_error;}
 void Reset(int fail=0,bool null=false,bool tool=false){assert(!locals&&!globals&&!buffers);calls=0;fail_at=fail;pending=false;null_failure=null;tool_error=tool;}
 }
 int main(){
@@ -42,6 +46,15 @@ int main(){
  }
 
  jni.ExceptionCheck=Exception;jni.GetObjectClass=Class;jni.FindClass=Find;jni.GetFieldID=Field;jni.GetObjectField=Object;jni.GetArrayLength=Length;jni.GetStaticMethodID=Method;jni.GetObjectArrayElement=Element;jni.FromReflectedMethod=Reflected;jni.NewGlobalRef=Global;jni.DeleteLocalRef=DeleteLocal;jni.DeleteGlobalRef=DeleteGlobal;
+ jvmti.GetCapabilities=Capabilities;jvmti.AddCapabilities=AddCapabilities;
+ assert(PreparePublicBytecodes(nullptr)==JVMTI_ERROR_INVALID_ENVIRONMENT);
+ assert(PreparePublicBytecodes(&ti)==JVMTI_ERROR_NONE&&bytecode_cap&&capability_reads==2&&capability_adds==1);
+ assert(PreparePublicBytecodes(&ti)==JVMTI_ERROR_NONE&&capability_reads==3&&capability_adds==1);
+ bytecode_cap=false;grant=false;assert(PreparePublicBytecodes(&ti)==JVMTI_ERROR_MUST_POSSESS_CAPABILITY);
+ capability_add_error=JVMTI_ERROR_NOT_AVAILABLE;assert(PreparePublicBytecodes(&ti)==JVMTI_ERROR_NOT_AVAILABLE);
+ capability_read_error=JVMTI_ERROR_INTERNAL;const int before=capability_adds;
+ assert(PreparePublicBytecodes(&ti)==JVMTI_ERROR_INTERNAL&&capability_adds==before);
+ capability_read_error=JVMTI_ERROR_NONE;capability_add_error=JVMTI_ERROR_NONE;grant=true;
  jvmti.GetMethodModifiers=Modifiers;jvmti.GetBytecodes=Bytes;jvmti.Deallocate=Deallocate;
  Reset();{PublicInputs input(&env);assert(input.Read(object));assert(calls==11);}assert(!locals);
  for(int i=1;i<=11;++i)for(bool null:{false,true}){Reset(i,null);{PublicInputs input(&env);assert(!input.Read(object));assert(calls==i);}assert(!locals);}

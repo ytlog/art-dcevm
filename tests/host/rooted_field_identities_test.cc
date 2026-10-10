@@ -1,4 +1,5 @@
 #include "platform/common/rooted_field_identities.h"
+#include "platform/common/ordinary_receiver_calibration_context.h"
 #include "platform/common/native_schema_guard_verifier.cc"
 #include <cassert>
 #include <cstdarg>
@@ -122,8 +123,14 @@ jvmtiError JNICALL Interfaces(jvmtiEnv*,jclass,jint* count,jclass** values){*cou
 int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=Find;api.ExceptionCheck=Check;api.ExceptionOccurred=Occurred;api.ExceptionClear=ClearException;api.Throw=ThrowException;api.NewGlobalRef=Global;api.NewLocalRef=LocalCopy;api.DeleteGlobalRef=Delete;api.DeleteLocalRef=Delete;api.ToReflectedField=To;api.FromReflectedField=From;api.GetObjectClass=Type;api.GetMethodID=Method;api.CallObjectMethodV=CallObject;api.CallIntMethodV=CallInt;api.IsSameObject=Same;api.NewObjectArray=NewArray;api.GetArrayLength=Length;api.SetObjectArrayElement=SetElement;api.GetObjectArrayElement=GetElement;JNIEnv env{&api};
  auto ar=static_cast<jclass>(Local(&a)),br=static_cast<jclass>(Local(&b)),cr=static_cast<jclass>(Local(&c));std::string error;
  rooted_field_identities::Store store({&vm,Scope,Oracle,Decode,Field,Owner,Element});
+ std::vector<int> ordinary_maps;assert(ordinary_receiver_calibration::StorageAvailable(store,ordinary_maps));
+ ordinary_maps.push_back(7);assert(!ordinary_receiver_calibration::StorageAvailable(store,ordinary_maps));
+ {ordinary_receiver_calibration::MappingLifetime<std::vector<int>> compiled_snapshot{ordinary_maps};}
+ assert(ordinary_receiver_calibration::StorageAvailable(store,ordinary_maps));
  move_oracle=true;move_array=true;assert(store.Stage(&env,ar,ma.id,false,&error));assert(a.native==&moved_a&&!move_array);assert(store.Stage(&env,br,mb.id,false,&error));assert(store.Stage(&env,ar,ms.id,true,&error));
  assert(store.Stage(&env,ar,ma.id,false,&error));assert(globals==1&&arrays==1);
+ assert(!store.Empty()&&!ordinary_receiver_calibration::StorageAvailable(store,ordinary_maps));
+ assert(store.Read(ar,ma.id)==&fa&&globals==1);
  fn.owner=a.native;std::string oom_error;fail_container=true;assert(!store.Stage(&env,ar,mn.id,false,&oom_error));no_alloc=false;assert(globals==1);
  assert(!store.Stage(&env,cr,mc.id,false,nullptr));no_alloc=false;fail_container=false;assert(globals==1);
  assert(!store.Read(ar,mn.id)&&!store.Read(cr,mc.id));
@@ -139,7 +146,7 @@ int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=
  assert(!store.Read(br,ms.id)&&!store.Read(ar,reinterpret_cast<jfieldID>(24)));
  auto* original=ma.field;ma.field=&fs;assert(!store.Read(ar,ma.id));ma.field=original;
  fa.owner=&native_b;assert(!store.Read(ar,ma.id));fa.owner=saved;assert(store.Read(ar,ma.id)==&fa);
- no_alloc=false;assert(jni_calls==before);store.Clear(&env);assert(globals==0&&arrays==0);
+ no_alloc=false;assert(jni_calls==before);store.Clear(&env);assert(globals==0&&arrays==0&&store.Empty());
  wrong_element=true;assert(!store.Stage(&env,ar,ma.id,false,&error));wrong_element=false;assert(globals==0&&arrays==0);store.Clear(&env);
  fail_set=true;assert(!store.Stage(&env,ar,ma.id,false,&error)&&pending_exception);assert(globals==0&&arrays==0);ClearException(&env);store.Clear(&env);
  constexpr size_t count=60000,existing_class_roots=15140;stress.resize(count);stress_fields.resize(count);

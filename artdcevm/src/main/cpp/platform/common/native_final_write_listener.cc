@@ -123,7 +123,7 @@ bool BindReceiverEvents(void*receiver,receiver_guard::Guard&guard,std::string*er
 bool InstallReceiverEventsAtExclusiveBoundary(std::string*error){
  std::lock_guard<std::mutex> lock(configuration);
  if(!installed||!listener.receivers||!add||!instrumentation||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return Fail(error,"Receiver events have no live exact Instrumentation binding");
- if(receiver_installed)return true;const uint32_t additional=source_installed?0x08:0x18;
+ if(receiver_installed)return true;const uint32_t additional=source_installed?0x10:0x18;
  switch(kind){
   case AddKind::Typed:reinterpret_cast<TypedAdd>(add)(instrumentation,&listener,additional,abi::arm64::android_common::ListenerType::kRegularListener);break;
   case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;
@@ -142,7 +142,7 @@ bool InstallSourceEventsAtExclusiveBoundary(std::string*error){
  std::lock_guard<std::mutex> lock(configuration);
  if(!installed||!listener.source||!add||!instrumentation||(legacy&&enabled_receiver.load(std::memory_order_acquire)!=instrumentation))return Fail(error,"Source calibration has no live exact Instrumentation binding");
  if(source_installed)return true;
- if(!receiver_installed){constexpr uint32_t additional=0x10;
+ if(!receiver_installed){constexpr uint32_t additional=0x08;
   switch(kind){
    case AddKind::Typed:reinterpret_cast<TypedAdd>(add)(instrumentation,&listener,additional,abi::arm64::android_common::ListenerType::kRegularListener);break;
    case AddKind::Bool:reinterpret_cast<BoolAdd>(add)(instrumentation,&listener,additional,false);break;

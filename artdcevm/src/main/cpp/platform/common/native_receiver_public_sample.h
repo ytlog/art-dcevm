@@ -3,6 +3,18 @@
 #include <jvmti.h>
 #include <initializer_list>
 namespace artdcevm::receiver_guard {
+// Capability belongs to the actual borrowed environment, not the VM globally.
+// A successful AddCapabilities is insufficient without a fresh readback.
+inline jvmtiError PreparePublicBytecodes(jvmtiEnv* ti){
+ if(!ti)return JVMTI_ERROR_INVALID_ENVIRONMENT;
+ jvmtiCapabilities caps{};
+ auto result=ti->GetCapabilities(&caps);if(result!=JVMTI_ERROR_NONE)return result;
+ if(caps.can_get_bytecodes)return JVMTI_ERROR_NONE;
+ jvmtiCapabilities requested{};requested.can_get_bytecodes=1;
+ result=ti->AddCapabilities(&requested);if(result!=JVMTI_ERROR_NONE)return result;
+ caps={};result=ti->GetCapabilities(&caps);if(result!=JVMTI_ERROR_NONE)return result;
+ return caps.can_get_bytecodes?JVMTI_ERROR_NONE:JVMTI_ERROR_MUST_POSSESS_CAPABILITY;
+}
 // Ordinary JNI only. Every public leaf is checked before another JNI query;
 // destructors perform only reference/buffer cleanup, including refusal paths.
 inline jobject AcquireGlobal(JNIEnv*env,jobject local){

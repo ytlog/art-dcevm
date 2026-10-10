@@ -31,6 +31,7 @@ class Store {
   void* Read(jclass,jfieldID)const noexcept;
   void* ReadNative(void* owner,jfieldID)const noexcept;
   void Clear(JNIEnv*);
+  bool Empty()const noexcept{return entries_.empty()&&chunks_.empty();}
  private:
   struct Entry {jfieldID id=nullptr;void* native=nullptr;bool is_static=false;size_t chunk=0;jsize slot=0;};
   struct Chunk {jobjectArray root=nullptr;jsize used=0;};

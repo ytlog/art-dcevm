@@ -41,10 +41,15 @@ int main(int argc,char**argv){assert(argc==2);assert(ExistingFinalMain(argc,argv
  rg::BytecodeSource bytecode(frames,{&state,RCurrent,RSourceFrame,RSourceCode,RSourceResolve,RPending});
  for(unsigned kind=0;kind<5;++kind)for(bool range:{false,true}){RPosition(1);const unsigned count=kind==3?0:1;source_instructions[1]=uint16_t((range?0x74:0x6e)+kind)|uint16_t(count<<(range?8:12));rg::InvokeInstruction invoke{static_cast<rg::InvokeKind>(kind),0,0,count,range};assert(bytecode.Observe({&thread,&method,1,invoke,&method,kind==3?nullptr:&object,kind==1?&before:nullptr}));}assert(bytecode.Seal());source_instructions[1]=0x106e;
  rg::Access access{&state,RCurrent,RMemberRead,RClassRead,RNormalize,RAssignable,RSpecial,nullptr,RCompressed,RRaise};access.bytecode=&bytecode;access.frames=&frames;rg::Guard guard(access);
- assert(rg::Bind(guard));rg::PermanentDispatch lease(guard,frames);std::string error;assert(!lease.Prepare(&error)&&!lease.Validate());int foreign_owner=0;assert(!BindReceiverEvents(&foreign_owner,guard,&error));assert(BindReceiverEvents(receiver,guard,&error));assert(!ReceiverListenerProven(guard)&&!ValidateReceiverProof(FreezeReceiverProof(guard)));
+ assert(rg::Bind(guard));rg::PermanentDispatch lease(guard,frames);std::string error;assert(!lease.Prepare(&error)&&!lease.Validate());int foreign_owner=0;assert(!BindReceiverEvents(&foreign_owner,guard,&error));assert(!ReceiverListenerProven(guard)&&!ValidateReceiverProof(FreezeReceiverProof(guard)));
  artdcevm::native_reference_decoder::Decoder missing_roots;rg::SourceCalibration source_calibration(frames,bytecode,missing_roots);assert(!source_calibration.Proven()&&!source_calibration.Seal());
- assert(!BindSourceEvents(&foreign_owner,source_calibration.Observer(),&error));assert(BindSourceEvents(receiver,source_calibration.Observer(),&error));assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2);assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2);
- assert(InstallReceiverEventsAtExclusiveBoundary(&error));assert(adds==3&&receiver_events==1);assert(InstallReceiverEventsAtExclusiveBoundary(&error)&&adds==3);assert(!ReceiverListenerProven(guard));
+ assert(!BindSourceEvents(&foreign_owner,source_calibration.Observer(),&error));assert(BindSourceEvents(receiver,source_calibration.Observer(),&error));assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2&&last_events==0x08);
+ // Actual AOSP event numbers: source-only observes DexPcMoved (0x08), never
+ // FieldRead (0x10) before a receiver consumer exists. Dispatch its real slot.
+ assert(!listener.receivers&&listener.source);
+ static_cast<FieldOnlyListener*>(actual_listener)->DexPcMoved(&thread,{},&native_method,0);
+ assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2);assert(BindReceiverEvents(receiver,guard,&error));
+ assert(InstallReceiverEventsAtExclusiveBoundary(&error));assert(adds==3&&receiver_events==1&&last_events==0x10);assert(InstallReceiverEventsAtExclusiveBoundary(&error)&&adds==3);assert(!ReceiverListenerProven(guard));
  auto* actual=static_cast<FieldOnlyListener*>(actual_listener);uint32_t reference=0x1234;Handle handle{&reference};unsigned bodies=0;uint64_t sentinel=71;
  // JNI NotifyGet/SetField reaches the same vtable with a native caller.
  // It must not become receiver bytecode evidence or increment its counters.

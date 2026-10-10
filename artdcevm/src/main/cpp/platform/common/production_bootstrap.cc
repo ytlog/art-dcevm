@@ -1,5 +1,6 @@
 #include <android/log.h>
 #include "platform/common/readonly_field_scope.h"
+#include "platform/common/ordinary_receiver_calibration_context.h"
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/proc_mapping_region.h"
 #include "platform/common/stopped_mapping_reader.h"
@@ -149,6 +150,8 @@ struct NativeEngine final:Engine {
  std::string ReceiverInvokeSourceDiagnostic()const override{return ReceiverInvokeSourceCalibrated()?"":receiver_producer_diagnostic.empty()?"receiver-invoke-source-not-observed":receiver_producer_diagnostic;}
  receiver_guard::ClassSource receiver_classes;bool receiver_classes_bound=false;
  bool CalibrateReceiverSource(JNIEnv*,jvmtiEnv*);
+ bool PrepareOrdinaryReceiverSource(JNIEnv*,jvmtiEnv*);
+ bool BindGraphReaders(std::string*);
  bool BindReceiverProducer(code_info_view::SourceFamily family){
   if(receiver_producer_bound)return true;
   const auto declaration=family==code_info_view::SourceFamily::kAndroid11?stack_visitor_service::Declaration::kAndroid11:family==code_info_view::SourceFamily::kAndroid12?stack_visitor_service::Declaration::kAndroid12:family==code_info_view::SourceFamily::kAndroid17?stack_visitor_service::Declaration::kAndroid17:stack_visitor_service::Declaration::kAndroid13To16;
@@ -217,7 +220,8 @@ struct NativeEngine final:Engine {
   if(compiled_frames_proven)return true;
   if(!source_capabilities.Roots().Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-roots");
   if(!source_stop.Calibrated())return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-awaiting-source-stop");
-  if(!env||!ti||env->ExceptionCheck()||schema_run||graph_staging||(current&&current!=this))return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-requires-ordinary-unstaged-owner");
+  if(!env||!ti||env->ExceptionCheck()||schema_run||graph_staging||current||source_env||source_ti||declared_field_ti)return Fail(&frame_geometry_diagnostic,"compiled-frame-calibration-requires-ordinary-unstaged-owner");
+  ordinary_receiver_calibration::MappingLifetime<decltype(graph_maps)> mappings{graph_maps};
   // This is a private optional episode, entered with no pending operation
   // exception. All later owners die before this diagnostic/clear boundary;
   // an exception present on entry is refused above and remains untouched.
@@ -889,7 +893,7 @@ struct NativeEngine final:Engine {
  bool applying=false;size_t ordinary_source_step=0;std::string ordinary_source_diagnostic;
  bool PrimeOrdinarySource(JNIEnv* env,jvmtiEnv* ti,std::string* error){
   if(!ordinary_source_diagnostic.empty())return Fail(error,ordinary_source_diagnostic.c_str());
-  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareCompiledFrames(env,ti);return true;}
+  if(source_capabilities.Ready()&&source_stop.Calibrated()){PrepareCompiledFrames(env,ti);PrepareOrdinaryReceiverSource(env,ti);return true;}
   if(current||schema_run||graph_staging)return Fail(error,"Private ordinary source priming requires an unstaged outer operation");
   jclass type=env->GetObjectClass(input);struct Local{JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_root{env,type};
   auto class_id=type?env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;"):nullptr;
@@ -930,6 +934,7 @@ struct NativeEngine final:Engine {
   if(!source_stop.Calibrated())return Fail(error,SourceStopDiagnostic().c_str());
   PrepareInitializerEpisode(env);
   PrepareCompiledFrames(env,ti);
+  PrepareOrdinaryReceiverSource(env,ti);
   return true;
  }
  int Apply(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,std::string* error)override {
@@ -949,7 +954,9 @@ struct NativeEngine final:Engine {
   // The operation's current engine, declaration borrow, staged roots and gate
   // lease have all unwound. Private public calibration must run at this actual
   // ordinary boundary, never while the source transaction still owns them.
-  if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck())PrepareCompiledFrames(env,ti);
+  if(result==JVMTI_ERROR_NONE&&!env->ExceptionCheck()){
+   PrepareCompiledFrames(env,ti);PrepareOrdinaryReceiverSource(env,ti);
+  }
   return result;
  }
  int ExecuteOperation(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,bool schema,std::string* error){
@@ -1460,10 +1467,43 @@ bool NativeEngine::Preflight(JNIEnv* env,jvmtiEnv* ti,jclass target,std::string*
  for(jint i=0;i<f;i++){stage.ids.push_back(fields[i]);auto mirror=env->NewGlobalRef(request.fields[i].strong_global_field);if(!mirror||env->ExceptionCheck()){for(auto m:stage.mirrors)env->DeleteGlobalRef(m);env->DeleteGlobalRef(stage.owner);return false;}stage.mirrors.push_back(mirror);}
  staged_classes.push_back(std::move(stage));return true;
 }
+bool NativeEngine::PrepareOrdinaryReceiverSource(JNIEnv* env,jvmtiEnv* ti){
+ if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;
+ if(!env||!ti||env->ExceptionCheck()||current||schema_run||graph_staging||
+    source_env||source_ti||declared_field_ti||!receiver_producer_bound)
+  return Fail(&receiver_producer_diagnostic,"Receiver source calibration requires ordinary unstaged owner");
+ // Never clear someone else's candidate roots or transient permissions.
+ if(!ordinary_receiver_calibration::StorageAvailable(graph_fields,graph_maps))
+  return Fail(&receiver_producer_diagnostic,"Receiver source calibration found unrelated staged storage");
+ redefinition_gate::Lease lease(vm);
+ if(!lease.Acquired())return Fail(&receiver_producer_diagnostic,"Receiver source calibration actual gate unavailable");
+ struct PrivateException {JNIEnv*env;std::string&diagnostic;~PrivateException(){
+  if(env->ExceptionCheck()){compiled_frame_fixture::DescribePending(env,"receiver-source-calibration",&diagnostic);env->ExceptionClear();}
+ }} private_exception{env,receiver_producer_diagnostic};
+ ordinary_receiver_calibration::Context<NativeEngine> borrowed{*this,current,vm,env,ti,source_env,source_ti,schema_root_env,declared_field_ti};
+ if(!borrowed.Entered())return Fail(&receiver_producer_diagnostic,"Receiver source calibration context borrow refused");
+ struct Transient {NativeEngine&e;JNIEnv*env;~Transient(){
+  if(e.permission_service)e.permission_service->Clear(env);
+  e.graph_fields.Clear(env);e.field_mirror_cache.Clear(env);e.graph_maps.clear();
+ }} transient{*this,env};
+ if(!BindGraphReaders(&receiver_producer_diagnostic)||
+    !RefreshMaps(&receiver_producer_diagnostic)||
+    !PrepareLiveFieldOracles(env,&receiver_producer_diagnostic)||
+    !ObserveFieldFactory(env,ti,&receiver_producer_diagnostic)||
+    !PrepareLazyFields(env,&receiver_producer_diagnostic))return false;
+ if(!PreparePermissionOwner(env)){
+  receiver_producer_diagnostic="Receiver source permission calibration unavailable: "+permission_diagnostic;return false;
+ }
+ return CalibrateReceiverSource(env,ti);
+}
 bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  if(receiver_source_calibration&&receiver_source_calibration->Proven())return true;
  auto fail=[&](const char*text){receiver_producer_diagnostic=text;return false;};
  if(!receiver_producer_bound||!permissions_proven||!permission_decoder.Ready()||!graph_current||!graph_decode_method||!input||!env||!ti||env->ExceptionCheck()||!redefinition_gate::Owned(vm))return fail("Receiver source awaits calibrated producer/roots/ordinary gate");
+ const auto bytecode_capability=receiver_guard::PreparePublicBytecodes(ti);
+ if(bytecode_capability!=JVMTI_ERROR_NONE){
+  receiver_producer_diagnostic="Receiver public bytecode capability unavailable: "+std::to_string(bytecode_capability);return false;
+ }
  if(!receiver_classes_bound){receiver_classes_bound=receiver_classes.Bind(hooks,metadata,graph_current,&receiver_producer_diagnostic,runtime.receivers.class_linker);if(!receiver_classes_bound)return false;}
  if(!receiver_frames){receiver_frames=std::make_unique<receiver_guard::FrameReader>(receiver_producer.Frames());receiver_bytecode=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames,receiver_producer.Access());receiver_source_calibration=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames,*receiver_bytecode,permission_decoder);}
  if(!final_write_guard::BindSourceEvents(runtime.instrumentation,receiver_source_calibration->Observer(),&receiver_producer_diagnostic))return false;
@@ -1725,8 +1765,7 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
  field_factory_diagnostic=DescribeFieldFactory();
  return true;
 }
-bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
- graph_staging=true;
+bool NativeEngine::BindGraphReaders(std::string* error){
  graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
  graph_add_global=reinterpret_cast<decltype(graph_add_global)>(hooks.FindSymbol("libart.so",abi::arm64::android_common::kAddGlobalRef));
@@ -1736,6 +1775,11 @@ bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definit
  graph_decode_method=reinterpret_cast<decltype(graph_decode_method)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  graph_same=reinterpret_cast<decltype(graph_same)>(hooks.FindSymbol("libart.so","_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"));
  if(!graph_decode||!graph_decode_method||!graph_same)return Fail(error,"Named source-owned graph readers unavailable");
+ return true;
+}
+bool NativeEngine::StageGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& definitions,std::string* error){
+ graph_staging=true;
+ if(!BindGraphReaders(error))return false;
  if(!PrepareLiveFieldOracles(env,error)||!ObserveFieldFactory(env,ti,error)||!PrepareLazyFields(env,error))return false;
  for(const auto& oracle:field_method_handles)if(!StageGraphField(this,env,bootstrap_field_owner,oracle.field,contextual_field_id::IsStatic(oracle.identity),error))return false;
  jint count=0;jclass* loaded=nullptr;
