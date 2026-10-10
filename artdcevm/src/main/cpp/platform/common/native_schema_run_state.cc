@@ -195,6 +195,15 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.d.stop->RequiresOriginalWaiting()){
   StoppedAttempt attempt{this,e};
   const bool accepted=s.stop->BeginOriginalWaiting(s.context.self,s.extent,&attempt,PrepareOriginalWaiting);
+  // Original StartGC has restored Runnable. Copy-only diagnostics here never
+  // inspect frame memory or log inside the owned stopped callback.
+  const auto& frames=s.cleanup->Frames();
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u",
+    int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
+    reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
+    reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
+    int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index);
   if(attempt.failure==StoppedAttempt::Failure::Allocation)return Fail(e,"Stopped schema preparation exhausted native memory");
   if(attempt.failure==StoppedAttempt::Failure::Unexpected)return Fail(e,"Stopped schema preparation threw");
   if(!accepted)return e&&!e->empty()?false:Fail(e,s.stop->Failure());

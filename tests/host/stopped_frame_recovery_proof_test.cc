@@ -24,7 +24,12 @@ struct RecoveryHooks:FrameHooks {
 };
 bool Extent(void*owner,const void*value,size_t*out)noexcept {
  auto*session=static_cast<native_source_stop::Session*>(owner);
- if(deny_slot||!session->IsStopped(&self)||value!=&runtime_slot)return false;*out=sizeof(runtime_slot);return true;
+ if(deny_slot||!session->IsStopped(&self))return false;
+ if(value==&runtime_slot){*out=sizeof(runtime_slot);return true;}
+ if(value==&runtime_method){*out=sizeof(runtime_method);return true;}
+ const auto address=uintptr_t(value),begin=uintptr_t(runtime_stack);
+ if(address>=begin&&address<begin+sizeof(runtime_stack)){*out=begin+sizeof(runtime_stack)-address;return true;}
+ return false;
 }
 }
 int main(){
@@ -41,9 +46,10 @@ int main(){
   whole_process_frames::Service::Prepared storage;assert(scanner.Prepare(&storage)&&scanner.PrepareRecoveryPlan(plan,&storage));
   whole_process_frames::StoppedRecoveryProof proof;
   {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));modern_field_metadata::ReadContext context{&owner,Extent};
+   runtime_method.dex_method_index=UINT32_MAX;runtime_frame=true;
    const auto queries=method_identity::MappingOsQueries();forbid_native_allocation=true;async_calls=0;
    auto report=scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&proof);
-   assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.async_frames==1&&async_calls==2&&proof.Validate(plan));
+   assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.async_frames==1&&report.runtime_frames==1&&async_calls==2&&proof.Validate(plan));
    source_commit::Plan other;assert(!proof.Validate(other));
    plan.old_classes[0]=&native_method;assert(!proof.Validate(plan));plan.old_classes[0]=&compiled_method;
    refuse_async=true;assert(!proof.Validate(plan));refuse_async=false;
@@ -56,7 +62,7 @@ int main(){
    assert(!report.accepted&&report.aot_frames==1&&!refused.Validate(plan)&&!std::strcmp(report.failure,"whole-AOT-requires-actual-frame-exit-or-dependency-closure"));aot=false;
    whole_process_frames::StoppedRecoveryProof fresh;assert(scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&fresh).accepted);
    assert(!proof.Validate(plan)&&fresh.Validate(plan));proof=fresh;
-   assert(method_identity::MappingOsQueries()==queries);forbid_native_allocation=false;
+   assert(method_identity::MappingOsQueries()==queries);forbid_native_allocation=false;runtime_frame=false;
    assert(!proof.ValidateFinal(plan));assert(owner.RollbackBeforeSource());assert(!proof.Validate(plan));
   }
   proof={};assert(!gc&&!exclusive&&!list_locked);
@@ -71,7 +77,8 @@ int main(){
    assert(scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&proof).accepted);
    assert(owner.ContinueSource());assert(!proof.Validate(plan));disable_proxy(&heap,&self);Native(&self);unsigned char carrier;stop_proxy(&carrier,s::kFinalCause,true);
    assert(!proof.ValidateFinal(plan));forbid_native_allocation=true;const auto queries=method_identity::MappingOsQueries();
-   whole_process_frames::StoppedRecoveryProof final_proof;assert(scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&final_proof).accepted&&final_proof.ValidateFinal(plan));
+   runtime_frame=true;
+   whole_process_frames::StoppedRecoveryProof final_proof;assert(scanner.ScanRecovery(owner,&self,cache,&jit_cache,storage,plan,context,&final_proof).accepted&&final_proof.ValidateFinal(plan));runtime_frame=false;
    assert(method_identity::MappingOsQueries()==queries);forbid_native_allocation=false;resume_proxy(&carrier);assert(!final_proof.ValidateFinal(plan));Runnable(&self);enable_proxy(&heap,&self);assert(owner.Completed());}
   proof={};
  }

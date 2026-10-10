@@ -4,6 +4,7 @@
 namespace {
 using LegacyKind=abi::arm64::android11::frame_registers::Kind;
 int family=11,location_kind=0;uint32_t location_value=8;
+abi::arm64::android11::Method11 legacy_runtime_method{};
 bool mark_drift=false,no_mark_helper=false,no_fast=false,no_canonical=false,no_accessible=false,reader_reject=false,debugger_override=false;
 uint32_t reader_calls=0;void* read_receiver=nullptr;
 constexpr uintptr_t core_bits=0x8877665544332211ULL,fp_bits=0x1122334499aabbccULL;
@@ -28,6 +29,16 @@ template<class V>void LegacyWalkBody(void* p,bool transitions){
  current_method=v->thread==&self?static_cast<void*>(&native_method):&compiled_method;
  quick.method=current_method;v->quick_frame=reinterpret_cast<void**>(&quick);
  if(v->thread==&self){v->VisitFrame();return;}
+ if(runtime_frame){
+  current_method=family==11?static_cast<void*>(&legacy_runtime_method):&runtime_method;
+  std::memcpy(runtime_stack,&current_method,sizeof(current_method));
+  const auto saved_pc=reinterpret_cast<uintptr_t>(header)+(family==11?8:4)+32;
+  std::memcpy(runtime_stack+runtime_info.size-8,&saved_pc,8);
+  v->quick_frame=reinterpret_cast<void**>(runtime_stack);v->header=nullptr;v->pc=0;
+  if(!v->VisitFrame())return;
+  v->quick_frame=reinterpret_cast<void**>(runtime_stack+runtime_info.size);v->pc=saved_pc;
+  current_method=&compiled_method;quick.method=current_method;std::memcpy(v->quick_frame,&quick,sizeof(quick));
+ }
  assert(v->thread==&worker);v->header=header;v->pc=reinterpret_cast<uintptr_t>(header)+(family==11?8:4)+32;
  if(inline_frame)v->inline_frames.end.row=1;
  v->VisitFrame();
@@ -36,6 +47,7 @@ void LegacyWalk(void* p,bool transitions){
  if(family==11)LegacyWalkBody<abi::arm64::stack::Visitor11>(p,transitions);
  else LegacyWalkBody<abi::arm64::stack::Visitor12>(p,transitions);
 }
+native_runtime_frame::FrameInfo LegacyRuntimeInfo(const void*){assert(current_method==(family==11?static_cast<void*>(&legacy_runtime_method):&runtime_method));return runtime_info;}
 template<size_t N>void LegacyTable(abi::arm64::android11::BitTable<N>& table,void* data,size_t bits,uint32_t rows,unsigned width){
  table.region={data,0,bits};table.rows=rows;for(size_t i=0;i<=N;++i)table.columns[i]=i*width;
 }
@@ -80,6 +92,7 @@ class LegacyFrameHooks:public FrameHooks {
  if(no_mark_helper&&!std::strcmp(name,"_ZNK3art20OatQuickMethodHeader23HasShouldDeoptimizeFlagEv"))return nullptr;
 #define FN(symbol,fn) if(!std::strcmp(name,symbol))return Fn(fn)
  FN(abi::arm64::context::kCreate,LegacyCreate);FN(abi::arm64::stack::kConstruct,LegacyConstruct);FN(abi::arm64::stack::kWalk,LegacyWalk);
+ FN(native_runtime_frame::Service::kFrameInfo,LegacyRuntimeInfo);
  if(!std::strcmp(name,abi::arm64::android11::kConstructCodeInfo))return family==11?Fn(LegacyInfo11):Fn(LegacyInfo12);FN(abi::arm64::android11::kFindStackMap,LegacyMap11);FN(abi::arm64::android12::kFindStackMap,LegacyMap12);
  FN(abi::arm64::dex_register_map::kDecode,LegacyNativeMap);
  if(!std::strcmp(name,abi::arm64::android11::frame_registers::kFast))return no_fast?nullptr:Fn(LegacyFast);
@@ -114,6 +127,8 @@ int main(){
     wrong_native_value=true;assert(!scan().accepted);wrong_native_value=false;
    }
    location_kind=0;location_value=8;catalog[0]=catalog[2]=1;catalog[1]=catalog[3]=3;
+   legacy_runtime_method.dex_method_index=runtime_method.dex_method_index=UINT32_MAX;
+   runtime_frame=true;auto runtime_report=scan();assert(runtime_report.accepted&&runtime_report.runtime_frames==1&&runtime_report.compiled_frames==1);runtime_frame=false;
    header[family==11?1:0]=0;assert(!scan().accepted);header[family==11?1:0]=0x80000000u;
    for(auto* flag:{&aot,&nterp,&wrong_dexpc,&cursor_drift}){*flag=true;assert(!scan().accepted);*flag=false;}
    mark_drift=true;assert(!scan().accepted);mark_drift=false;header[family==11?1:0]=0x80000000u;

@@ -7,6 +7,7 @@
 #include "platform/common/decoded_frame_recovery.h"
 #include "platform/common/native_frame_async_recovery.h"
 #include "platform/common/native_frame_code_owner.h"
+#include "platform/common/native_runtime_frame.h"
 #include "platform/common/source_commit.h"
 #include "platform/common/source_commit_plan_identity.h"
 #include "platform/abi/arm64/dex_register_map.h"
@@ -40,9 +41,12 @@ class StoppedRecoveryProof final {
 using Family=code_info_view::SourceFamily;
 static_assert(offsetof(abi::arm64::android11::Method11,access_flags)==offsetof(abi::arm64::android12::Method12,access_flags));
 struct Report {
+ uintptr_t failure_thread=0,failure_method=0,failure_quick=0,failure_pc=0,failure_header=0;
+ uint32_t failure_declaring_class=0,failure_flags=0,failure_dex_index=0;
+ bool failure_method_prefix=false,failure_physical=false;
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
-   async_frames=0,aot_frames=0,unaffected_aot_frames=0,shadow_frames=0,native_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
+   async_frames=0,aot_frames=0,unaffected_aot_frames=0,shadow_frames=0,native_frames=0,runtime_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
  const char* failure="not-scanned";
  bool accepted=false;
 };
@@ -72,6 +76,7 @@ class Service {
     if(!stack_visitor_service::Service::Bind(declaration,finder,&c.stack_))return false;
     c.async_=native_frame_async_recovery::Service::Bind(finder);
     c.code_owner_=native_frame_code_owner::Service::Bind(finder);
+    c.runtime_=native_runtime_frame::Service::Bind(finder);
     c.create_=reinterpret_cast<abi::arm64::context::Create>(finder(abi::arm64::context::kCreate));
     c.construct_=finder(abi::arm64::android13::kConstructCodeInfo);
     c.map_=finder(family==Family::kAndroid11?abi::arm64::android11::kFindStackMap:abi::arm64::android13::kFindStackMap);
@@ -182,13 +187,33 @@ class Service {
   template<class Info,class Pair> struct Visitor final:abi::arm64::stack::Visitor<Pair> {
     unsigned char native_tail[sizeof(abi::arm64::stack::Visitor12)-sizeof(abi::arm64::stack::Visitor<Pair>)+8]{};
     Request& request;void* target;size_t before;
+    void** next_quick=nullptr;uintptr_t next_pc=0;bool runtime_successor=false;
+    void* observed_method=nullptr;
     Visitor(Request& r,void* t):abi::arm64::stack::Visitor<Pair>{},request(r),target(t),before(r.report.frames){}
-    bool Reject(const char* reason){request.report.failure=reason;return false;}
+    bool Reject(const char* reason){
+     auto& report=request.report;report.failure=reason;report.failure_thread=uintptr_t(target);report.failure_method=uintptr_t(observed_method);
+     report.failure_quick=uintptr_t(this->quick_frame);report.failure_pc=this->pc;report.failure_header=uintptr_t(this->header);
+     report.failure_physical=this->inline_frames.begin.row==this->inline_frames.end.row;report.failure_method_prefix=false;
+     report.failure_declaring_class=report.failure_flags=report.failure_dex_index=0;
+     const size_t dex_offset=request.service.family_==Family::kAndroid11?offsetof(abi::arm64::android11::Method11,dex_method_index):offsetof(abi::arm64::android12::Method12,dex_method_index);size_t extent=0;
+     if(observed_method&&request.owner.IsStopped(request.self)&&this->thread==target&&this->context==request.storage.context&&native_runtime_frame::Extent(request.recovery,observed_method,&extent)&&extent>=dex_offset+4){
+      std::memcpy(&report.failure_declaring_class,observed_method,4);
+      report.failure_flags=method_metadata::ReadAccessFlags(observed_method);
+      std::memcpy(&report.failure_dex_index,static_cast<unsigned char*>(observed_method)+dex_offset,4);report.failure_method_prefix=true;
+     }
+     return false;
+    }
     bool VisitFrame()override {
       auto& r=request;const auto& s=r.service;
+      observed_method=nullptr;
       if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context)
         return Reject("whole-frame-owner-native-thread-context-changed");
+      if(runtime_successor){
+       if(this->quick_frame!=next_quick||this->pc!=next_pc)return Reject("whole-runtime-original-walker-successor-differs");
+       runtime_successor=false;
+      }
       void* method=nullptr;if(!s.stack_.Method(this,sizeof(*this),&method))return Reject("whole-frame-native-method-unavailable");
+      observed_method=method;
       if(!method){++r.report.transitions;return true;}
       ++r.report.frames;
       if(this->shadow_frame&&!this->quick_frame){++r.report.shadow_frames;return true;}
@@ -200,8 +225,29 @@ class Service {
       uint32_t flags;std::memcpy(&flags,static_cast<const unsigned char*>(method)+offsetof(abi::arm64::android12::Method12,access_flags),4);
       if(flags&0x100u){if(!physical)return Reject("whole-frame-unproved-native-inlinee");++r.report.native_frames;return true;}
       if(!s.compiled_ready_)return Reject("whole-frame-compiled-geometry-not-calibrated");
-      if(!this->header)return Reject("whole-frame-unmarked-or-unknown-compiled-code");
-      if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-unmarked-or-unknown-compiled-code");
+      if(!this->header){
+       auto& report=r.report;report.failure_thread=uintptr_t(target);report.failure_method=uintptr_t(method);
+       report.failure_quick=uintptr_t(this->quick_frame);report.failure_pc=this->pc;report.failure_header=uintptr_t(this->header);
+       report.failure_physical=physical;size_t extent=0;
+       const size_t dex_offset=s.family_==Family::kAndroid11?offsetof(abi::arm64::android11::Method11,dex_method_index):offsetof(abi::arm64::android12::Method12,dex_method_index);
+       if(native_runtime_frame::Extent(r.recovery,method,&extent)&&extent>=dex_offset+4){
+        std::memcpy(&report.failure_declaring_class,method,4);report.failure_flags=flags;
+        std::memcpy(&report.failure_dex_index,static_cast<unsigned char*>(method)+dex_offset,4);report.failure_method_prefix=true;
+       }
+       if(!report.failure_method_prefix||report.failure_dex_index!=UINT32_MAX)return Reject("whole-frame-null-header-managed-method");
+       if(!physical)return Reject("whole-runtime-inline-frame-unproved");
+       if(!s.runtime_.Bound())return Reject("whole-runtime-frame-info-reader-unavailable");
+       native_runtime_frame::FrameInfo info;const auto original_pc=this->pc;auto*original_quick=this->quick_frame;
+       if(!s.runtime_.Observe(this,method,this->quick_frame,s.family_==Family::kAndroid11,r.recovery,&info))return Reject("whole-runtime-frame-geometry-or-method-unproved");
+       void* again=nullptr;if(!r.owner.IsStopped(r.self)||this->thread!=target||this->context!=r.storage.context||this->header||this->quick_frame!=original_quick||this->pc!=original_pc||!s.stack_.Method(this,sizeof(*this),&again)||again!=method)return Reject("whole-runtime-original-cursor-changed");
+       const auto base=uintptr_t(original_quick);if(info.size>UINTPTR_MAX-base)return Reject("whole-runtime-frame-address-overflow");
+       // WalkStack(include_transitions=true) advances with this exact LR and
+       // SP. Even its last quick frame is followed by the fragment transition
+       // callback; no guessed PC normalization or missing-successor exemption.
+       next_quick=reinterpret_cast<void**>(base+info.size);std::memcpy(&next_pc,reinterpret_cast<void*>(base+info.size-8),8);
+       runtime_successor=true;++report.runtime_frames;return true;
+      }
+      if(!r.recovery&&!s.MarkedHeader(this->header))return Reject("whole-frame-compiled-header-unmarked");
       bool unaffected_aot=false;
       if(r.recovery){
         if(!s.async_.Bound())return Reject("whole-frame-original-async-recovery-reader-unavailable");
@@ -313,6 +359,7 @@ class Service {
     if(!stack_.Construct(&visitor,sizeof(visitor),target,r.storage.context,abi::arm64::stack::WalkKind::kIncludeInlined)||
        visitor.thread!=target||visitor.context!=r.storage.context||visitor.kind!=abi::arm64::stack::WalkKind::kIncludeInlined){r.report.failure="whole-thread-original-constructor-geometry-mismatch";return false;}
     if(!stack_.Walk(&visitor,sizeof(visitor),true)){r.report.failure="whole-thread-native-walk-unavailable";return false;}
+    if(visitor.runtime_successor){r.report.failure="whole-runtime-original-walker-successor-missing";return false;}
     if(std::strcmp(r.report.failure,"not-scanned"))return false;
     ++r.report.walked_threads;if(r.report.frames==visitor.before)++r.report.empty_threads;return true;
   }
@@ -325,6 +372,7 @@ class Service {
     return Walk<abi::arm64::android13::CodeInfo,abi::arm64::android13::CodeInfoPair>(r,target);
   }
   native_frame_async_recovery::Service async_;native_frame_code_owner::Service code_owner_;
+  native_runtime_frame::Service runtime_;
   bool compiled_ready_=false;
   Family family_=Family::kAndroid13;stack_visitor_service::Service stack_;
   abi::arm64::context::Create create_=nullptr;void* construct_=nullptr;void* map_=nullptr;

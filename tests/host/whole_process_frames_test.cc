@@ -8,7 +8,11 @@ namespace {
 int thread_list,list_mutex,worker,empty_thread,jit_cache;void* list_mutex_pointer=&list_mutex;
 bool interpreter_only=false;
 bool list_locked=false,include_self=true,unknown=false,unmarked=false,aot=false,nterp=false,wrong_native_map=false,wrong_dexpc=false,inline_frame=false,wrong_native_value=false,cursor_drift=false;
-struct MethodPrefix {uint32_t klass=0,flags=0;} shadow_method,native_method{0,0x100},compiled_method;
+struct MethodPrefix {uint32_t klass=0,flags=0,dex_index=0,padding=0;} shadow_method,native_method{0,0x100},compiled_method;
+abi::arm64::android12::Method12 runtime_method{};
+alignas(16) unsigned char runtime_stack[1024]{};
+bool runtime_frame=false,runtime_bad_geometry=false,runtime_bad_successor=false,runtime_cursor_drift=false,runtime_no_successor=false,runtime_transition=false,missing_runtime_reader=false;
+native_runtime_frame::FrameInfo runtime_info{native_runtime_frame::Size(0x7ff00000u,0),0x7ff00000u,0};
 void* current_method=nullptr;
 alignas(8) uint32_t header[2]{};
 struct Quick {void* method=&compiled_method;uint32_t values[14]{123,345};} quick;
@@ -39,7 +43,18 @@ void WalkVisitor(void* p,bool transitions){
  assert(v->thread==&worker);
  current_method=&shadow_method;v->shadow_frame=&worker;if(!v->VisitFrame())return;
  if(interpreter_only)return;
- current_method=&compiled_method;quick.method=current_method;v->shadow_frame=nullptr;v->quick_frame=reinterpret_cast<void**>(&quick);v->header=header;v->pc=reinterpret_cast<uintptr_t>(header)+36;
+ v->shadow_frame=nullptr;
+ if(runtime_frame){
+  current_method=&runtime_method;std::memcpy(runtime_stack,&current_method,sizeof(current_method));
+  const auto return_pc=reinterpret_cast<uintptr_t>(header)+36;std::memcpy(runtime_stack+runtime_info.size-8,&return_pc,8);
+  v->quick_frame=reinterpret_cast<void**>(runtime_stack);v->header=nullptr;v->pc=0;
+  if(inline_frame)v->inline_frames.end.row=1;
+  if(!v->VisitFrame())return;
+  if(runtime_no_successor)return;
+  v->quick_frame=reinterpret_cast<void**>(runtime_stack+runtime_info.size+(runtime_bad_successor?16:0));v->pc=return_pc;
+  if(runtime_transition){current_method=nullptr;*v->quick_frame=nullptr;v->VisitFrame();return;}
+ }else v->quick_frame=reinterpret_cast<void**>(&quick);
+ current_method=&compiled_method;quick.method=current_method;if(runtime_frame)std::memcpy(v->quick_frame,&quick,sizeof(quick));else *v->quick_frame=current_method;v->header=header;v->pc=reinterpret_cast<uintptr_t>(header)+36;
  if(unknown)v->header=nullptr;
  if(inline_frame)v->inline_frames.end.row=1;
  v->VisitFrame();
@@ -49,6 +64,11 @@ uint32_t DexPc(const void*,bool crash){assert(!crash);return (inline_frame?11:10
 bool Flag(const void* h){assert(h==header);return !unmarked;}
 bool Contains(const void* j,const void*){assert(j==&jit_cache);return !aot;}
 bool IsNterp(const void* h){assert(h==header);return nterp;}
+native_runtime_frame::FrameInfo RuntimeInfo(const void* raw){
+ assert(current_method==&runtime_method);auto info=runtime_info;if(runtime_bad_geometry)info.core_spills^=1;
+ if(runtime_cursor_drift)++static_cast<abi::arm64::stack::Visitor13*>(const_cast<void*>(raw))->pc;
+ return info;
+}
 size_t Offset(const void*){return 32;}
 template<size_t N>void Table(abi::arm64::android13::BitTable<N>& table,void* data,size_t bits,uint32_t rows,unsigned width){table.region={data,0,bits};table.rows=rows;for(size_t i=0;i<=N;++i)table.columns[i]=i*width;}
 void CodeInfo(abi::arm64::android13::CodeInfo* storage,const void* h){
@@ -71,6 +91,7 @@ class FrameHooks:public Hooks {
  FN(abi::arm64::context::kCreate,CreateContext);FN(abi::arm64::stack::kConstruct,ConstructVisitor);FN(abi::arm64::stack::kWalk,WalkVisitor);FN(abi::arm64::stack::kMethod,GetMethod);
  FN(abi::arm64::android13::kConstructCodeInfo,CodeInfo);FN(abi::arm64::android13::kFindStackMap,FindMap);FN(abi::arm64::dex_register_map::kDecode,NativeMap);
  FN("_ZNK3art12StackVisitor8GetDexPcEb",DexPc);FN("_ZNK3art20OatQuickMethodHeader23HasShouldDeoptimizeFlagEv",Flag);FN("_ZNK3art3jit12JitCodeCache10ContainsPcEPKv",Contains);FN("_ZNK3art20OatQuickMethodHeader19IsNterpMethodHeaderEv",IsNterp);FN(abi::arm64::android14::frame_registers::kNativePcOffset,Offset);
+ if(!std::strcmp(name,native_runtime_frame::Service::kFrameInfo))return missing_runtime_reader?nullptr:Fn(RuntimeInfo);
 #undef FN
  return Hooks::FindSymbol(library,name);
  }
@@ -86,6 +107,22 @@ int RunModernFrameFixture(){
  {native_source_stop::Session owner(stop);auto r=scanner.Scan(owner,&self,cache,&jit_cache,storage);assert(!r.accepted);}
  auto scan=[&](){native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));return scanner.Scan(owner,&self,cache,&jit_cache,storage);};
  auto report=scan();assert(report.accepted&&report.registered_threads==3&&report.walked_threads==3&&report.empty_threads==1&&report.native_frames==1&&report.shadow_frames==1&&report.compiled_frames==1&&report.map_locations==1&&report.native_value_reads==1&&!list_locked&&!gc);
+ runtime_method.dex_method_index=UINT32_MAX;runtime_frame=true;
+ for(auto info:{native_runtime_frame::FrameInfo{96,0x7ff00000u,0},
+               native_runtime_frame::FrameInfo{224,0x7ff000feu,0xffu},
+               native_runtime_frame::FrameInfo{176,0x7ff80000u,0xff00u},
+               native_runtime_frame::FrameInfo{512,0x7ffbffffu,0xffffffffu}}){
+  runtime_info=info;report=scan();if(!report.accepted)std::cerr<<"Runtime frame refusal: "<<report.failure<<" size="<<info.size<<"\n";assert(report.accepted&&report.runtime_frames==1&&report.compiled_frames==1);
+ }
+ for(auto* bad:{&runtime_bad_geometry,&runtime_bad_successor,&runtime_cursor_drift,&runtime_no_successor}){*bad=true;assert(!scan().accepted);*bad=false;}
+ runtime_transition=true;report=scan();assert(report.accepted&&report.runtime_frames==1&&report.transitions==1&&report.compiled_frames==0);runtime_transition=false;
+ missing_runtime_reader=true;whole_process_frames::Service missing_runtime;
+ assert(whole_process_frames::Service::Bind(code_info_view::SourceFamily::kAndroid14,[&](const char*n){return hooks.FindSymbol("libart.so",n);},&missing_runtime));missing_runtime_reader=false;
+ {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));report=missing_runtime.Scan(owner,&self,cache,&jit_cache,storage);assert(!report.accepted&&!std::strcmp(report.failure,"whole-runtime-frame-info-reader-unavailable"));}
+ runtime_method.entry_point=1;assert(!scan().accepted);runtime_method.entry_point=0;
+ runtime_method.declaring_class=1;assert(!scan().accepted);runtime_method.declaring_class=0;
+ runtime_method.dex_method_index=0;report=scan();assert(!report.accepted&&report.failure_method_prefix&&report.failure_dex_index==0&&!std::strcmp(report.failure,"whole-frame-null-header-managed-method"));runtime_method.dex_method_index=UINT32_MAX;
+ inline_frame=true;assert(!scan().accepted);inline_frame=false;runtime_frame=false;
  whole_process_frames::Service geometry;
  assert(whole_process_frames::Service::BindGeometryOnly(code_info_view::SourceFamily::kAndroid13,[&](const char* name){
    if(!std::strcmp(name,abi::arm64::android13::kConstructCodeInfo)||!std::strcmp(name,abi::arm64::dex_register_map::kDecode))return static_cast<void*>(nullptr);
