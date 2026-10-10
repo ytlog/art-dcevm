@@ -18,3 +18,10 @@ inline constexpr char kClassLockConstruct[]="_ZN3art10ObjectLockINS_6mirror5Clas
 inline constexpr char kClassLockDestroy[]="_ZN3art10ObjectLockINS_6mirror5ClassEED1Ev";
 inline constexpr char kWaitIgnoringInterrupts[]="_ZN3art10ObjectLockINS_6mirror5ClassEE22WaitIgnoringInterruptsEv";
 }
+
+namespace artdcevm::abi::arm64::android11 {
+// Fixed ObjectLock<mirror::Class> source members. Read access requires the
+// original named constructor's independent Thread/owned Handle calibration.
+struct SourceClassLock { void* self; ClassHandle object; };
+static_assert(sizeof(SourceClassLock)==16,"ARM64 source Class lock declaration");
+}

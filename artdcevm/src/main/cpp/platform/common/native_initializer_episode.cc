@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <type_traits>
+#include <cstring>
 namespace artdcevm::native_initializer_episode {
 namespace {
 using namespace abi::arm64::android11;
@@ -15,10 +16,11 @@ enum Fault : uint32_t {kLinkerMismatch=1u,kInitializationFlags=2u,
  kInitializationCompletion=4u,kWaitEntry=8u,kWaitCompletion=16u};
 struct Trial {
  jobject fixture=nullptr;
- bool failure=false;
+ bool failure=false,lock_source_verified=false;
  std::atomic<void*> owner{nullptr},waiter{nullptr},linker{nullptr};
  std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},terminal_enter{0},terminal_exit{0},reentrant_enter{0},reentrant_exit{0},reentrant_tid{0},wait_enter{0},wait_exit{0},faults{0};
  std::atomic<bool> body_ready{false};
+ std::atomic<uint32_t> lock_constructed{0},lock_destroyed{0},inner_entry_faults{0};
  std::atomic<void*> reentrant_owner{nullptr};
 };
 struct Installed {
@@ -46,7 +48,7 @@ struct SourceEntry {
  SourceEntry*previous;const Service*owner;void*linker;void*self;
  const void*slot;uint64_t epoch;bool statics,parents;
  uint32_t inner_entries=0,inner_returns=0;bool waiting=false;
- void*lock=nullptr;const void*lock_slot=nullptr;
+ void*lock=nullptr;const void*lock_slot=nullptr;bool lock_destroyed=false;
 };
 thread_local SourceEntry*source_entry=nullptr;
 thread_local uint64_t source_epoch=0;
@@ -68,6 +70,22 @@ bool CaptureBody(const runnable_jni::Context& context,void* raw){
      installed.roots->BorrowOwnedStrongGlobal(context,request.trial->fixture,&klass)&&
      StateAt(klass,&status,&tid)&&status==13&&tid==request.tid;
 }
+struct LockCalibration {Trial* trial;bool verified=false;};
+bool CalibrateClassLock(const runnable_jni::Context& context,void* raw){
+ auto& request=*static_cast<LockCalibration*>(raw);void* klass=nullptr;
+ if(context.self!=installed.current()||context.vm!=installed.vm||
+    !installed.roots->BorrowOwnedStrongGlobal(context,request.trial->fixture,&klass))return false;
+ auto scope=installed.roots->CreateScope(1,nullptr);if(!scope)return false;
+ scope->Set(0,klass);ClassHandle handle{scope->Slot(0)};SourceClassLock lock{};
+ installed.lock_construct(&lock,context.self,handle);
+ void* actual=nullptr,*expected=nullptr;
+ const bool valid=lock.self==context.self&&lock.object.slot==handle.slot&&
+    installed.roots->BorrowHandle(context,lock.object.slot,&actual)&&actual&&
+    installed.roots->BorrowOwnedStrongGlobal(context,request.trial->fixture,&expected)&&actual==expected;
+ installed.lock_destroy(&lock);
+ request.verified=valid;return valid;
+}
+static_assert(std::is_same<decltype(&CalibrateClassLock),runnable_jni::Operation>::value,"Actual Class-lock calibration callback ABI");
 static_assert(std::is_same<decltype(&CaptureBody),runnable_jni::Operation>::value,"Actual source callback ABI must match");
 
 namespace {
@@ -100,7 +118,7 @@ void CompleteInnerWait(SourceEntry& entry,Trial& trial,void* self,ClassHandle ha
     entry.self!=self||entry.linker!=trial.linker.load(std::memory_order_acquire)||
     self!=trial.waiter.load(std::memory_order_acquire)||
     !ReadHandle(trial,self,handle,&status,&tid)||result==trial.failure||
-    (trial.failure?status!=3:(status<14||status>15)))
+    (trial.failure?status!=2:(status<14||status>15)))
   trial.faults.fetch_or(kWaitCompletion,std::memory_order_release);
  // One completed outer InitializeClass, not one monitor wake, is the source
  // wait outcome. Spurious wakeups may have returned while status stayed 13.
@@ -113,7 +131,7 @@ bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool
  // Original source may revisit a poisoned or already initialized Class. The
  // Java error oracle intentionally does so; these terminal fast returns are
  // distinct from the one owner and one waiting initialization invocation.
- const bool terminal=matched&&(status==3||(status>=14&&status<=15));
+ const bool terminal=matched&&(status==2||(status>=14&&status<=15));
  // AOSP InitializeClass permits the initializing thread to reenter this same
  // Class and return true while it remains initializing. Prove an actual outer
  // invocation with a freshly read identical owned root; a foreign waiter or an
@@ -141,9 +159,9 @@ bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool
  if(matched){uint32_t completed=0,unused=0;
   const bool completion=ReadHandle(*trial,self,handle,&completed,&unused)&&
       (reentrant?result&&completed==13&&unused==tid:
-       terminal?(status==3?trial->failure&&!result&&completed==3:
+       terminal?(status==2?trial->failure&&!result&&completed==2:
                            !trial->failure&&result&&completed>=status&&completed<=15):
-                result!=trial->failure&&(trial->failure?completed==3:(completed>=14&&completed<=15)));
+                result!=trial->failure&&(trial->failure?completed==2:(completed>=14&&completed<=15)));
   if(!completion)trial->faults.fetch_or(kInitializationCompletion,std::memory_order_release);
   (terminal?trial->terminal_exit:(reentrant?trial->reentrant_exit:trial->init_exit)).fetch_add(1,std::memory_order_release);
  }
@@ -166,7 +184,7 @@ bool HookWait(void* linker,ClassHandle handle,void* self,void* lock){
  const bool result=installed.wait(linker,handle,self,lock);
  if(matched){uint32_t completed=0,unused=0;
   if(!ReadHandle(*trial,self,handle,&completed,&unused)||
-     result==trial->failure||(trial->failure?completed!=3:(completed<14||completed>15)))
+     result==trial->failure||(trial->failure?completed!=2:(completed<14||completed>15)))
    trial->faults.fetch_or(kWaitCompletion,std::memory_order_release);
   trial->wait_exit.fetch_add(1,std::memory_order_release);
  }
@@ -184,13 +202,25 @@ void HookClassLockConstruct(void* lock,void* self,ClassHandle handle){
  if(matched){
   if(source_entry!=entry||!lock||entry->lock||
      !ReadHandle(*trial,self,handle,&status,&tid))trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
-  else{entry->lock=lock;entry->lock_slot=handle.slot;}
+  else{entry->lock=lock;entry->lock_slot=handle.slot;entry->lock_destroyed=false;trial->lock_constructed.fetch_add(1,std::memory_order_relaxed);}
  }
 }
 void HookClassLockDestroy(void* lock){
- auto* entry=source_entry;
+ auto* entry=source_entry;BorrowTrial borrowed;auto* trial=borrowed.value;
+ bool matched=entry&&entry->lock==lock;
+ if(!matched&&entry&&trial&&trial->lock_source_verified&&lock){
+  SourceClassLock source_lock{};size_t readable=0;uint32_t status=0,tid=0;
+  if(modern_field_metadata::ReadMappingExtent(nullptr,lock,&readable)&&readable>=sizeof(source_lock)){
+   std::memcpy(&source_lock,lock,sizeof(source_lock));
+   matched=source_lock.self==entry->self&&ReadHandle(*trial,entry->self,source_lock.object,&status,&tid);
+  }
+ }
+ if(!matched)borrowed.Release();
  installed.lock_destroy(lock);
- if(entry&&source_entry==entry&&entry->lock==lock){entry->lock=nullptr;entry->lock_slot=nullptr;}
+ if(matched&&entry&&source_entry==entry){
+  if(trial)trial->lock_destroyed.fetch_add(1,std::memory_order_relaxed);
+  entry->lock=nullptr;entry->lock_slot=nullptr;entry->lock_destroyed=true;
+ }
 }
 // The fixed WaitForInitializeClass source calls this exact member inside its
 // status-rereading loop. The active outer source entry provides the live Class
@@ -203,15 +233,29 @@ void HookInnerWait(void* lock){
  if(!matched)borrowed.Release();
  if(matched){
   uint32_t lock_status=0,lock_tid=0;
-  if(!lock||entry->lock!=lock||!entry->lock_slot||
-     !ReadHandle(*trial,entry->self,{entry->lock_slot},&lock_status,&lock_tid)||
-     lock_status!=status||lock_tid!=tid||entry->self!=installed.current()||
-     entry->self!=trial->waiter.load(std::memory_order_acquire)||
-     entry->self==trial->owner.load(std::memory_order_acquire)||
-     !trial->body_ready.load(std::memory_order_acquire)||status!=13||
-     tid!=trial->tid.load(std::memory_order_acquire)||
-     entry->linker!=trial->linker.load(std::memory_order_acquire))
-   trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+  SourceClassLock source_lock{};size_t readable=0;
+  const bool source_readable=trial->lock_source_verified&&lock&&
+      modern_field_metadata::ReadMappingExtent(nullptr,lock,&readable)&&readable>=sizeof(source_lock);
+  if(source_readable)std::memcpy(&source_lock,lock,sizeof(source_lock));
+  // Read the fixed declaration only after actual original construction proved
+  // it. The caller's own constructor may have been inlined by the source compiler.
+  const void* lock_slot=source_readable&&!entry->lock_destroyed&&source_lock.self==entry->self?source_lock.object.slot:nullptr;
+  // Record independent predicates without changing the required conjunction.
+  // A named constructor can exist even when this original caller inlined it.
+  // An uncalibrated lock remains refused rather than accepted by TLS alone.
+  uint32_t faults=0;
+  if(!lock)faults|=1u;
+  if(entry->lock&&entry->lock!=lock)faults|=2u;
+  if(!lock_slot)faults|=4u;
+  if(!lock_slot||!ReadHandle(*trial,entry->self,{lock_slot},&lock_status,&lock_tid))faults|=8u;
+  if(lock_status!=status||lock_tid!=tid)faults|=16u;
+  if(entry->self!=installed.current())faults|=32u;
+  if(entry->self!=trial->waiter.load(std::memory_order_acquire)||entry->self==trial->owner.load(std::memory_order_acquire))faults|=64u;
+  if(!trial->body_ready.load(std::memory_order_acquire))faults|=128u;
+  if(status!=13||tid!=trial->tid.load(std::memory_order_acquire))faults|=256u;
+  if(entry->linker!=trial->linker.load(std::memory_order_acquire))faults|=512u;
+  if(faults){trial->inner_entry_faults.fetch_or(faults,std::memory_order_relaxed);
+   trial->faults.fetch_or(kWaitEntry,std::memory_order_release);}
   ++entry->inner_entries;
   if(!entry->waiting){entry->waiting=true;
    if(trial->wait_enter.fetch_add(1,std::memory_order_acq_rel)!=0)
@@ -221,7 +265,7 @@ void HookInnerWait(void* lock){
  installed.inner_wait(lock);
  if(matched){uint32_t after=0,unused=0;
   if(source_entry!=entry||!ReadHandle(*trial,entry->self,{entry->slot},&after,&unused)||
-     (after!=13&&after!=3&&(after<14||after>15)))
+     (after!=13&&after!=2&&(after<14||after>15)))
    trial->faults.fetch_or(kWaitCompletion,std::memory_order_release);
   ++entry->inner_returns;
  }
@@ -363,7 +407,11 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
   jobject local=env->CallStaticObjectMethod(oracle,type,jboolean(failure));
   jobject strong=local&&!env->ExceptionCheck()?env->NewGlobalRef(local):nullptr;
   if(!strong||env->ExceptionCheck()){if(local)env->DeleteLocalRef(local);ok=false;break;}
-  Trial trial;trial.fixture=strong;trial.failure=failure;active.store(&trial,std::memory_order_seq_cst);
+  Trial trial;trial.fixture=strong;trial.failure=failure;
+  if(installed.inner_wait){LockCalibration calibration{&trial};
+   trial.lock_source_verified=runnable_executor::With(env,installed.anchor,CalibrateClassLock,&calibration)==runnable_jni::Result::kSuccess&&calibration.verified&&!env->ExceptionCheck();
+   if(!trial.lock_source_verified){env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);ok=false;Fail(error,"Original Class-lock constructor source declaration calibration rejected");break;}}
+  active.store(&trial,std::memory_order_seq_cst);
   const jint result=env->CallStaticIntMethod(oracle,run,jboolean(failure));
   active.store(nullptr,std::memory_order_seq_cst);
   // Also drain an unrelated source hook which may have loaded this epoch before
@@ -383,7 +431,8 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
       "/"+std::to_string(trial.init_exit.load())+" terminal="+std::to_string(trial.terminal_enter.load())+
       "/"+std::to_string(trial.terminal_exit.load())+" reentrant="+std::to_string(trial.reentrant_enter.load())+
       "/"+std::to_string(trial.reentrant_exit.load())+" wait="+std::to_string(trial.wait_enter.load())+
-      "/"+std::to_string(trial.wait_exit.load())+"]";
+      "/"+std::to_string(trial.wait_exit.load())+" lock="+std::to_string(trial.lock_constructed.load())+
+      "/"+std::to_string(trial.lock_destroyed.load())+" innerEntryFaults="+std::to_string(trial.inner_entry_faults.load())+"]";
   env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);
  }
  env->DeleteLocalRef(oracle);
