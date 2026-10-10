@@ -9,6 +9,7 @@ import concurrent.futures
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -23,7 +24,7 @@ from production_permission_report import CASE_METHODS as PERMISSION_CASES
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SUPPORTED_APIS = {30, 31, 33, 34, 35, 36, 37}
-USB_SELF_ONLY = 'DEVICE_001'
+USB_SELF_ONLY = os.environ.get('ART_DCEVM_SELF_ONLY_SERIAL')
 
 
 def digest(path):
@@ -261,8 +262,8 @@ def main():
         if len(args.self_instrumentation_serial) != len(set(args.self_instrumentation_serial)) or any(
                 serial not in serials for serial in args.self_instrumentation_serial):
             raise ValueError('Self instrumentation serial must identify a unique selected device')
-        if USB_SELF_ONLY in serials and USB_SELF_ONLY not in args.self_instrumentation_serial:
-            raise ValueError('DEVICE_001 requires --self-instrumentation-serial DEVICE_001')
+        if USB_SELF_ONLY and USB_SELF_ONLY in serials and USB_SELF_ONLY not in args.self_instrumentation_serial:
+            raise ValueError('Configured self-only device requires --self-instrumentation-serial')
         if len(args.self_instrumentation_serial) != len(serials) and not args.test_apk:
             raise ValueError('--test-apk required for JUnit/installation')
         if args.timeout <= 0:
