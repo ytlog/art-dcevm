@@ -1,5 +1,7 @@
 #include "platform/common/capability_backend.h"
 #include "support/json.h"
+#include "platform/common/schema_snapshot.h"
+#include "platform/common/body_only_policy.h"
 namespace artdcevm {
 CapabilityBackend::CapabilityBackend(std::unique_ptr<RuntimeBackend> public_backend,SourceFactory source,Producer producer):public_(std::move(public_backend)),source_factory_(std::move(source)),producer_(std::move(producer)){}
 int CapabilityBackend::Attach(JavaVM* vm){
@@ -97,6 +99,26 @@ int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definit
    JNIEnv* env=nullptr;if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK&&env)common_->RecordDefinitions(env,definitions);
   }
   return result;
+ }
+ // A declaration-equivalent evolution request uses the already attached
+ // public JVMTI body route. ART still validates code/annotations and applies
+ // ordinary constructor/clinit/native semantics; schema readiness grants none
+ // of those effects. Every class in a batch must independently match.
+ if(!definitions.empty()&&env_&&vm_){
+  JNIEnv* ordinary=nullptr;
+  if(vm_->GetEnv(reinterpret_cast<void**>(&ordinary),JNI_VERSION_1_6)==JNI_OK&&ordinary&&!ordinary->ExceptionCheck()){
+   bool body=true;
+   for(const auto& d:definitions){evolution::ClassSchema live,dex;std::string diagnostic;
+    if(live_schema::ReadLiveSchema(env_,ordinary,d.klass,&live,&diagnostic)!=JVMTI_ERROR_NONE||
+       ordinary->ExceptionCheck()||!evolution::ReadDexDeclarations(d.dex,&dex,&diagnostic)||
+       !body_only::SameDeclarations(live,dex)){body=false;break;}
+   }
+   if(ordinary->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
+   if(body){const int result=public_->Apply(Operation::kBody,definitions);
+    if(result==JVMTI_ERROR_NONE&&common_)common_->RecordDefinitions(ordinary,definitions);
+    return result;
+   }
+  }
  }
  if(source_ready_)return source_->Apply(op,definitions);
  if(!ready_||!common_)return JVMTI_ERROR_NOT_AVAILABLE;

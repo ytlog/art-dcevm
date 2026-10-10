@@ -1,4 +1,5 @@
 #include "platform/common/capability_backend.h"
+#include "platform/common/body_only_policy.h"
 #include <cassert>
 #include <iostream>
 #include <atomic>
@@ -138,6 +139,26 @@ void Concurrency(JavaVM* vm,jobject calibration) {
 }
 }
 int main(){
+ {evolution::ClassSchema before;before.descriptor="LBody;";before.superclass="Ljava/lang/Object;";before.access=1;
+  before.interfaces={"LTag;"};before.fields={{"value","I",1,0}};
+  before.methods={{"run","()I",1,0},{"<init>","()V",1,1},{"<clinit>","()V",8,2},{"nativeRun","()V",0x101,3}};
+  auto after=before;after.methods[1].access|=0x10000;after.methods[2].access|=0x10000;
+  assert(body_only::SameDeclarations(before,after));
+  for(int i=0;i<8;++i){auto changed=after;
+   switch(i){case 0:changed.methods[0].descriptor="()J";break;case 1:changed.methods[0].name="other";break;
+    case 2:changed.methods[0].access|=0x10;break;case 3:changed.fields[0].descriptor="J";break;
+    case 4:changed.fields[0].access|=8;break;case 5:changed.superclass="LOther;";break;
+    case 6:changed.interfaces={"LOther;"};break;case 7:changed.access|=0x10;break;}
+   assert(!body_only::SameDeclarations(before,changed));
+  }
+  auto duplicate=after;duplicate.methods.push_back(duplicate.methods[0]);assert(!body_only::SameDeclarations(before,duplicate));
+  auto fakeConstructor=after;fakeConstructor.methods[0].access|=0x10000;assert(!body_only::SameDeclarations(before,fakeConstructor));
+  auto changedNative=after;changedNative.methods[3].access=1;assert(!body_only::SameDeclarations(before,changedNative));
+  auto synchronized=before;synchronized.methods[0].access|=0x20;
+  auto declared=synchronized;declared.methods[0].access=(declared.methods[0].access&~0x20u)|0x20000u;
+  assert(body_only::SameDeclarations(synchronized,declared));
+ }
+
  jvmtiInterface_1_ jvmti_functions{};jvmti_functions.GetPotentialCapabilities=Potential;jvmti_functions.AddCapabilities=Add;_jvmtiEnv jvmti_environment{&jvmti_functions};ti=&jvmti_environment;
  JNIInvokeInterface_ functions{};functions.GetEnv=GetEnv;JavaVM vm{&functions};auto calibration=reinterpret_cast<jobject>(uintptr_t(0x6000));
  {
