@@ -102,7 +102,12 @@ public final class ProductionSchemaScenarios {
         TestForegroundScope foreground=new TestForegroundScope(instrumentation,arguments,report,phases);
         try {
             foreground.start();
-            stage("capabilities.before");report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
+            stage("capabilities.before");
+            if (scope.equals("common-owned")) {
+                report.put("initialCapabilities",DcevmRuntime.attachPublicJvmti(context));
+                int initialized=NativeBridge.initializeCommonCapabilities(new com.github.ytlog.artdcevm.internal.EvolutionCalibration());
+                assertEquals("Explicit whole common owner: "+NativeBridge.capabilities(),0,initialized);
+            } else report.put("initialCapabilities",DcevmRuntime.initializeCapabilities(context));
             if (scope.equals("full")) {
                 stage("required-full-initialize.before");DcevmRuntime.initialize(context);
             } else stage("required-common-owned.before");

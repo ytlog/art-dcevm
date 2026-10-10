@@ -49,6 +49,16 @@ int CapabilityBackend::InitializeCapabilities(JNIEnv* env,jobject calibration){
  if(!common_->Activate(env,&error_))return JVMTI_ERROR_NOT_AVAILABLE;
  ready_=true;error_.clear();return JVMTI_ERROR_NONE;
 }
+int CapabilityBackend::InitializeCommonCapabilities(JNIEnv* env,jobject calibration){
+ OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
+ // A legacy validation-only or failed bootstrap may already own private hooks.
+ // There is no mixed owner or silent switch, even if source_ready_ is false.
+ if(source_||source_attempted_||source_ready_){error_="Legacy private owner already selected; restart before common-owner initialization";return JVMTI_ERROR_NOT_AVAILABLE;}
+ if(ready_)return JVMTI_ERROR_NONE;
+ const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
+ if(!common_->Activate(env,&error_))return JVMTI_ERROR_NOT_AVAILABLE;
+ ready_=true;error_.clear();return JVMTI_ERROR_NONE;
+}
 std::string CapabilityBackend::Capabilities()const {
  OperationScope operation(operation_);
  if(!operation)return "{\"backend\":\"runtime-capabilities\",\"operationBusy\":true,\"evolutionError\":\"Runtime backend operation already in progress\"}";

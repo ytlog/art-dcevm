@@ -18,6 +18,7 @@ class CapabilityBackend final:public RuntimeBackend {
   std::string ErrorName(int)const override;
   int InitializeEvolution(JNIEnv*,jobject)override;
   int InitializeCapabilities(JNIEnv*,jobject)override;
+  int InitializeCommonCapabilities(JNIEnv*,jobject)override;
   int EnableValidationHooks()override;
   int EnableStandardRedefineRouting()override;
  private:

@@ -1,5 +1,6 @@
 #pragma once
 #include <jni.h>
+#include <jvmti.h>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,11 @@ class RuntimeBackend {
   virtual int EnableValidationHooks() = 0;
   virtual int EnableStandardRedefineRouting() = 0;
   virtual int InitializeEvolution(JNIEnv* jni, jobject calibration) = 0;
+  // Debug whole-owner selection; unsupported backends must not fall back to
+  // an independently installed legacy private owner.
+  virtual int InitializeCommonCapabilities(JNIEnv*, jobject) {
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  }
   // Explicitly initializes only capabilities independently proven by the backend.
   virtual int InitializeCapabilities(JNIEnv* jni, jobject calibration) {
     return InitializeEvolution(jni, calibration);
