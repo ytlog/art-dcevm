@@ -100,7 +100,8 @@ std::shared_ptr<Proof> Prepare(JNIEnv* env,jobject reflected,jfieldID id,std::st
  if(!name||env->ExceptionCheck())return {};
  auto type=static_cast<jclass>(locals.Own(env->CallObjectMethod(reflected,type_id)));
  if(!type||env->ExceptionCheck())return {};
- const bool is_static=(env->CallIntMethod(reflected,modifiers)&8)!=0;
+ const auto original_modifiers=env->CallIntMethod(reflected,modifiers);
+ const bool is_static=(original_modifiers&8)!=0;
  if(env->ExceptionCheck())return {};
  auto class_type=static_cast<jclass>(locals.Own(env->FindClass("java/lang/Class")));
  if(!class_type||env->ExceptionCheck())return {};
@@ -110,18 +111,37 @@ std::shared_ptr<Proof> Prepare(JNIEnv* env,jobject reflected,jfieldID id,std::st
  if(!owner||!name||!type_name||env->ExceptionCheck())return {};
  auto field_name=Utf(env,name);if(env->ExceptionCheck())return {};
  auto descriptor=Descriptor(Utf(env,type_name));if(env->ExceptionCheck())return {};
- auto public_id=is_static?env->GetStaticFieldID(owner,field_name.c_str(),descriptor.c_str()):env->GetFieldID(owner,field_name.c_str(),descriptor.c_str());
- if(env->ExceptionCheck())return {};
+ // A selected public mirror may represent a hidden field which name-based JNI
+ // lookup deliberately refuses. Prove its opaque ID by both mirror round trips;
+ // ToReflectedField ignores its owner/static arguments in ART, so independently
+ // inspect the returned mirror's actual declaration before accepting it.
  const auto reflected_id=env->FromReflectedField(reflected);if(env->ExceptionCheck())return {};
- if(public_id!=id||reflected_id!=id){Fail(error,"Public Field name/type/owner ID disagrees with FromReflectedField");return {};}
+ if(reflected_id!=id){Fail(error,"Public Field ID disagrees with FromReflectedField");return {};}
  auto returned=locals.Own(env->ToReflectedField(owner,id,is_static?JNI_TRUE:JNI_FALSE));
  if(!returned||env->ExceptionCheck())return {};
+ const bool returned_is_field=env->IsInstanceOf(returned,public_field_type);if(env->ExceptionCheck())return {};
+ if(!returned_is_field){Fail(error,"Returned contextual oracle is not a public Field");return {};}
+ const auto returned_id=env->FromReflectedField(returned);if(env->ExceptionCheck())return {};
+ if(returned_id!=id){Fail(error,"Public ToReflectedField round trip differs from original Field");return {};}
+ auto returned_owner=locals.Own(env->CallObjectMethod(returned,declaring));
+ if(!returned_owner||env->ExceptionCheck())return {};
+ const bool same_owner=env->IsSameObject(owner,returned_owner);if(env->ExceptionCheck())return {};
+ auto returned_name=static_cast<jstring>(locals.Own(env->CallObjectMethod(returned,name_id)));
+ if(!returned_name||env->ExceptionCheck())return {};
+ auto returned_type=locals.Own(env->CallObjectMethod(returned,type_id));
+ if(!returned_type||env->ExceptionCheck())return {};
+ const bool same_type=env->IsSameObject(type,returned_type);if(env->ExceptionCheck())return {};
+ const auto returned_modifiers=env->CallIntMethod(returned,modifiers);if(env->ExceptionCheck())return {};
+ auto returned_type_name=static_cast<jstring>(locals.Own(env->CallObjectMethod(returned_type,class_name)));
+ if(!returned_type_name||env->ExceptionCheck())return {};
+ auto returned_field_name=Utf(env,returned_name);if(env->ExceptionCheck())return {};
+ auto returned_descriptor=Descriptor(Utf(env,returned_type_name));if(env->ExceptionCheck())return {};
+ if(!same_owner||!same_type||field_name!=returned_field_name||descriptor!=returned_descriptor||
+    original_modifiers!=returned_modifiers){
+  Fail(error,"Public Field owner/name/type/modifiers round trip differs");return {};
+ }
  const bool same=env->CallBooleanMethod(reflected,equals,returned);if(env->ExceptionCheck())return {};
  if(!same){Fail(error,"Public ToReflectedField round trip differs from original Field");return {};}
- const auto returned_id=env->FromReflectedField(returned);if(env->ExceptionCheck())return {};
- if(returned_id!=id){
-  Fail(error,"Public ToReflectedField round trip differs from original Field");return {};
- }
  void* first=Read(env,reflected,error);if(!first||env->ExceptionCheck())return {};
  void* second=Read(env,returned,error);
  if(!first||first!=second||env->ExceptionCheck()){Fail(error,"Owned native Field round trip differs");return {};}

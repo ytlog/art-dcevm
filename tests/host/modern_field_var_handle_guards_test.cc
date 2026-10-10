@@ -43,10 +43,16 @@ const char* Utf(JNIEnv*,jstring value,jboolean*){return reinterpret_cast<const c
 void ReleaseUtf(JNIEnv*,jstring,const char*){}
 jobject NewRef(JNIEnv*,jobject value){assert(!in_hot);++roots_created;return value;}
 jweak NewWeak(JNIEnv*,jobject value){return value;}
-Field* PublicField(jclass owner,bool stat){return owner==Cls(&owner_a)?(stat?&statik:&instance):(stat?&next_static:&next_instance);}
 jfieldID PublicId(JNIEnv*,jclass owner,const char* name,const char* sig){assert(std::string(name)=="i"&&std::string(sig)=="I");return reinterpret_cast<jfieldID>(owner==Cls(&owner_a)?&field_a:&field_c);}
 jfieldID PublicStaticId(JNIEnv*,jclass owner,const char* name,const char* sig){assert(std::string(name)=="s"&&std::string(sig)=="I");return reinterpret_cast<jfieldID>(owner==Cls(&owner_a)?&field_b:&field_d);}
-jobject PublicMirror(JNIEnv*,jclass owner,jfieldID id,jboolean stat){auto* f=PublicField(owner,stat);return f->id==id?Obj(f):nullptr;}
+// ART decodes the opaque ID; owner/static arguments do not select a mirror.
+jobject PublicMirror(JNIEnv*,jclass,jfieldID id,jboolean){
+ if(id==reinterpret_cast<jfieldID>(&field_a))return Obj(&instance);
+ if(id==reinterpret_cast<jfieldID>(&field_b))return Obj(&statik);
+ if(id==reinterpret_cast<jfieldID>(&field_c))return Obj(&next_instance);
+ if(id==reinterpret_cast<jfieldID>(&field_d))return Obj(&next_static);
+ return nullptr;
+}
 
 void* Current(){return actual_thread;}
 void ThrowRetired(void* self,const char* type,const char*){assert(self==&current_thread);assert(std::string(type)=="Ljava/lang/NoSuchFieldError;"||std::string(type)=="Ljava/lang/IllegalStateException;"||std::string(type)=="Ljava/lang/UnsupportedOperationException;");++thrown;}

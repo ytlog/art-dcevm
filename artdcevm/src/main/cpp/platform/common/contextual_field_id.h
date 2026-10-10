@@ -9,8 +9,8 @@ namespace artdcevm::contextual_field_id {
 // named Field::GetArtField/root decoding runs in the owned Runnable callback.
 struct Proof;
 bool Initialize(HookEngine&,std::string* error);
-// Verifies FromReflectedField, Get[Static]FieldID and ToReflectedField against
-// the same public Field/Class/name/type/modifiers before retaining a weak owner.
+// Verifies both FromReflectedField/ToReflectedField round trips, exact returned
+// Class/name/type/modifiers and named native leaves before retaining a weak owner.
 std::shared_ptr<Proof> Prepare(JNIEnv*,jobject reflected,jfieldID,
     std::string* error);
 void* NativeField(const std::shared_ptr<Proof>&);

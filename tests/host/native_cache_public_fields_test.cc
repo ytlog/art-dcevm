@@ -3,9 +3,11 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_cache_public_fields.h"
+#include "platform/common/contextual_field_id.h"
 #include <cstdlib>
 #include <map>
 namespace {
+int contextual_fault=0,contextual_owner_calls=0,contextual_type_calls=0,contextual_flags_calls=0,name_lookup_calls=0;
 int fault=0,leaf=0,trigger=0,globals=0,buffers=0,reads=0,manager,root_attempts=0;
 bool pending=false,decode_mismatch=false,native_badname=false,offset_mismatch=false;int weak_refs=0,manager_decodes=0,opaque_mode=0;bool flip_native_after_read=false;
 jfieldID Opaque(size_t i){return i==1?reinterpret_cast<jfieldID>(opaque_mode?17:0x12345002):reinterpret_cast<jfieldID>(old_fields[i]);}
@@ -39,14 +41,14 @@ void* OriginalField(void* mirror){auto* f=FieldLeaf(mirror);return decode_mismat
 jclass PublicFind(JNIEnv*,const char*){Step();return reinterpret_cast<jclass>(meta_class);}
 jboolean PublicInstance(JNIEnv*,jobject,jclass){Step();return true;}
 jmethodID PublicMethod(JNIEnv*,jclass,const char* name,const char*){assert(std::strcmp(name,"getDeclaredFieldsUnchecked"));Step();int id=!std::strcmp(name,"getOffset")?7:!std::strcmp(name,"getDeclaredFieldsUnchecked")?6:!std::strcmp(name,"getDeclaringClass")?1:!std::strcmp(name,"getName")?2:!std::strcmp(name,"getType")?3:!std::strcmp(name,"getModifiers")?4:5;return reinterpret_cast<jmethodID>(uintptr_t(id));}
-jobject PublicObject(JNIEnv*,jobject value,jmethodID method,va_list args){Step();if(pending)return nullptr;switch(uintptr_t(method)){case 6:assert(va_arg(args,int)==JNI_FALSE);return reinterpret_cast<jobject>(&mirrors);case 1:return reinterpret_cast<jobject>(old_class);case 2:return value==reinterpret_cast<jobject>(parent_class)?reinterpret_cast<jobject>(const_cast<char*>("long")):reinterpret_cast<jobject>(const_cast<char*>(names[Index(reinterpret_cast<jfieldID>(reinterpret_cast<Mirror*>(value)->field))]));case 3:return reinterpret_cast<jobject>(parent_class);default:std::abort();}}
+jobject PublicObject(JNIEnv*,jobject value,jmethodID method,va_list args){Step();if(pending)return nullptr;switch(uintptr_t(method)){case 6:assert(va_arg(args,int)==JNI_FALSE);return reinterpret_cast<jobject>(&mirrors);case 1:return reinterpret_cast<jobject>(contextual_fault==1&&++contextual_owner_calls==2?parent_class:old_class);case 2:return (value==reinterpret_cast<jobject>(parent_class)||(contextual_fault==2&&value==reinterpret_cast<jobject>(meta_class)))?reinterpret_cast<jobject>(const_cast<char*>("long")):reinterpret_cast<jobject>(const_cast<char*>(names[Index(reinterpret_cast<jfieldID>(reinterpret_cast<Mirror*>(value)->field))]));case 3:return reinterpret_cast<jobject>(contextual_fault==2&&++contextual_type_calls==2?meta_class:parent_class);default:std::abort();}}
 jsize MirrorLength(JNIEnv*,jarray){Step();return 4;}
 jobject MirrorElement(JNIEnv*,jobjectArray,jsize i){Step();return reinterpret_cast<jobject>(&mirrors[size_t(i)]);}
-jint PublicInt(JNIEnv*,jobject value,jmethodID method,va_list){Step();const auto* field=reinterpret_cast<abi::arm64::Field*>(reinterpret_cast<Mirror*>(value)->field);return uintptr_t(method)==7?jint(field->offset+(offset_mismatch?8:0)):jint(field->access_flags);}
-jboolean PublicEqual(JNIEnv*,jobject a,jmethodID,va_list args){Step();return !pending&&a==va_arg(args,jobject);}
+jint PublicInt(JNIEnv*,jobject value,jmethodID method,va_list){Step();const auto* field=reinterpret_cast<abi::arm64::Field*>(reinterpret_cast<Mirror*>(value)->field);return uintptr_t(method)==7?jint(field->offset+(offset_mismatch?8:0)):jint(field->access_flags^(contextual_fault==3&&++contextual_flags_calls==2?1:0));}
+jboolean PublicEqual(JNIEnv*,jobject a,jmethodID,va_list args){Step();return !pending&&(contextual_fault||a==va_arg(args,jobject));}
 const char* PublicUtf(JNIEnv*,jstring text,jboolean*){Step();return pending?nullptr:reinterpret_cast<const char*>(text);}
 void UtfRelease(JNIEnv*,jstring,const char*){}
-jfieldID PublicFieldId(JNIEnv*,jclass owner,const char* name,const char* signature){Step();assert(owner==reinterpret_cast<jclass>(old_class)&&!std::strcmp(signature,"J"));return !std::strcmp(name,names[1])?Opaque(1):nullptr;}
+jfieldID PublicFieldId(JNIEnv*,jclass,const char*,const char*){Step();++name_lookup_calls;pending=true;return nullptr;}
 jweak Weak(JNIEnv*,jobject p){Step();++weak_refs;return p;}
 void WeakDelete(JNIEnv*,jweak){assert(weak_refs>0);--weak_refs;}
 const char* OriginalNativeName(void* field){return native_badname&&field==old_fields[1]?"wrong":FieldName(field);}
@@ -82,6 +84,24 @@ int main(){
  assert(!service.Observe(&env,nullptr,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedFields",metadata,&output,&error));
  assert(error=="Public cache Field observation lacks caller JNI/JVMTI context"&&leaf==0&&reads==initial_reads&&!output&&globals==0&&buffers==0);
  assert(observe());const int total=leaf;assert(output->Id()==Opaque(1)&&output->NativeField()==old_fields[1]&&output->Value()==0x123400005678LL&&globals==3&&buffers==0);
+ // JVMTI-selected hidden resolvedTypes remains a valid exact public mirror.
+ // Name-based JNI lookup is denied above. Even forged equals cannot hide a
+ // returned mirror whose actual owner/type/full modifiers have changed.
+ const auto selected_name=names[1];names[1]="resolvedTypes";
+ std::unique_ptr<native_cache_public_fields::Witness> hidden_output;
+ assert(service.Observe(&env,&ti,reinterpret_cast<jobject>(old_instance),reinterpret_cast<jclass>(old_class),"resolvedTypes",metadata,&hidden_output,&error));
+ assert(hidden_output->Id()==Opaque(1)&&hidden_output->NativeField()==old_fields[1]&&!pending&&name_lookup_calls==0);
+ hidden_output.reset();assert(globals==3&&weak_refs==1);
+ auto selected=contextual_field_id::Prepare(&env,reinterpret_cast<jobject>(&mirrors[1]),Opaque(1),&error);
+ assert(selected&&!pending&&name_lookup_calls==0);
+ contextual_field_id::Release(&env,&selected);
+ for(contextual_fault=1;contextual_fault<=3;++contextual_fault){
+  contextual_owner_calls=contextual_type_calls=contextual_flags_calls=0;
+  assert(!contextual_field_id::Prepare(&env,reinterpret_cast<jobject>(&mirrors[1]),Opaque(1),&error)&&!pending);
+  assert(error.find("owner/name/type/modifiers round trip differs")!=std::string::npos);
+  assert(globals==3&&weak_refs==1&&buffers==0);
+ }
+ contextual_fault=0;names[1]=selected_name;
  auto* retained=output.get();
  runnable_jni::Context scope{current,&env,&runtime};jlong fresh=-1;
  const auto state=Read32(current);Put32(current,0,0);
@@ -146,7 +166,7 @@ int main(){
  assert(pending&&leaf==trigger&&output.get()==retained&&globals==3&&buffers==0);assert(reads==before||trigger==total);}
  trigger=0;pending=true;leaf=0;assert(!observe()&&leaf==0);pending=false;
  opaque_mode=1;assert(observe()&&output->Id()==Opaque(1)&&output->NativeField()==old_fields[1]&&globals==3&&weak_refs==1);assert(manager_decodes==0);
- output.reset();assert(globals==0&&buffers==0&&weak_refs==0&&manager_decodes==0);std::cout<<"Public DexCache field oracle: actual calibrated metadata, opaque original field IDs, exact bootstrap Class, native identity, readonly JNI long, every-leaf pending stop and owned-root/error-buffer lifetime passed\n";
+ assert(name_lookup_calls==0);output.reset();assert(globals==0&&buffers==0&&weak_refs==0&&manager_decodes==0);std::cout<<"Public DexCache field oracle: actual calibrated metadata, opaque original field IDs, exact bootstrap Class, native identity, readonly JNI long, every-leaf pending stop and owned-root/error-buffer lifetime passed\n";
 }
 
 namespace artdcevm::runnable_executor {bool Available(){return true;}}

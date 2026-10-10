@@ -1204,15 +1204,18 @@ struct NativeEngine final:Engine {
   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=static-consumers-begin");
   if(!PrepareStaticFieldConsumers(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"static field source consumer preparation");
   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned apply preparation phase=static-consumers-return");
+  // Public cache witnesses can resolve field types and load helper Classes.
+  // Prepare them before closing the loaded-caller graph so its complete
+  // inventory includes those identities, and ordinary failures return early.
+  if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
+  // Preparation precedes source-run publication; use the caller JVMTI rather
+  // than source_ti, which is owned only by the later original source scope.
+  if(batch&&!PrepareSourceCacheWitness(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error)){
    if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
   }
   field_mirror_cache.Clear(env);
-  if(!cache.Prepare(error))return owned_failure_diagnostic::Unavailable(error,"interpreter-cache preparation");
-  // Preparation precedes source-run publication; use the caller JVMTI rather
-  // than source_ti, which is owned only by the later original source scope.
-  if(batch&&!PrepareSourceCacheWitness(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
   // Observe a bounded ordinary unchanged-hierarchy removal first. Schema graph
   // preparation cannot stand in for the original source GC/final-stop proof.
   // Capability gaps leave ordinary behavior intact and cannot authorize Session.

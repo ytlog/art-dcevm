@@ -10,28 +10,29 @@
 #include <set>
 using namespace artdcevm;
 namespace {
-struct Field {jclass owner;jfieldID id;void* native;bool stat;const char* name;};
+struct Field {jclass owner;jfieldID id;void* native;bool stat;const char* name;jclass type=nullptr;jint extra_modifiers=0;};
 jclass Class(size_t n){return reinterpret_cast<jclass>(0x1000+n*16);}
 Field fields[]={{Class(1),reinterpret_cast<jfieldID>(0x40002000),reinterpret_cast<void*>(0x7000001000),false,"first"},{Class(1),reinterpret_cast<jfieldID>(17),reinterpret_cast<void*>(0x7000002000),true,"second"},{Class(2),reinterpret_cast<jfieldID>(0x40002000),reinterpret_cast<void*>(0x7000003000),false,"first"}};
+Field altered{};Field* returned_override=nullptr;bool forged_equals=false;size_t name_lookup_calls=0;
 std::set<jobject> cleared;size_t weak_created=0,weak_deleted=0,strong_created=0,strong_deleted=0;bool pending=false,wrong_roundtrip=false,wrong_native=false,weak_throws=false,global_throws=false;std::string fail_method;int fail_call=0,call_index=0;
 std::map<std::string,jmethodID> methods;size_t next_method=1;
 Field& AsField(jobject f){return *reinterpret_cast<Field*>(f);}
-bool IsField(jobject f){return f==reinterpret_cast<jobject>(&fields[0])||f==reinterpret_cast<jobject>(&fields[1])||f==reinterpret_cast<jobject>(&fields[2]);}
+bool IsField(jobject f){return f==reinterpret_cast<jobject>(&altered)||f==reinterpret_cast<jobject>(&fields[0])||f==reinterpret_cast<jobject>(&fields[1])||f==reinterpret_cast<jobject>(&fields[2]);}
 jboolean IsInstance(JNIEnv*,jobject object,jclass){return IsField(object);}
 jboolean Exception(JNIEnv*){return pending;}
 jclass Find(JNIEnv*,const char*){assert(!pending);return Class(10);}
 jclass ObjectClass(JNIEnv*,jobject object){assert(!pending);return IsField(object)?Class(11):reinterpret_cast<jclass>(object);}
 jmethodID Method(JNIEnv*,jclass owner,const char* name,const char*){assert(!pending);if(fail_method==name||(fail_method=="Class.getName"&&owner==Class(10)&&std::string(name)=="getName")){pending=true;return nullptr;}auto it=methods.find(name);if(it!=methods.end())return it->second;auto id=reinterpret_cast<jmethodID>(next_method++);methods[name]=id;return id;}
 std::string Name(jmethodID id){for(auto& p:methods)if(p.second==id)return p.first;assert(false);return {};}
-jobject CallObject(JNIEnv*,jobject object,jmethodID id,va_list){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return nullptr;}auto name=Name(id);if(name=="getDeclaringClass")return AsField(object).owner;if(name=="getType")return Class(12);if(name=="getName")return reinterpret_cast<jobject>(const_cast<char*>(IsField(object)?AsField(object).name:"int"));assert(false);return nullptr;}
-jint CallInt(JNIEnv*,jobject object,jmethodID id,va_list){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return 0;}assert(Name(id)=="getModifiers");return AsField(object).stat?8:0;}
-jboolean CallBool(JNIEnv*,jobject object,jmethodID id,va_list args){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return false;}assert(Name(id)=="equals");return object==va_arg(args,jobject);}
+jobject CallObject(JNIEnv*,jobject object,jmethodID id,va_list){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return nullptr;}auto name=Name(id);if(name=="getDeclaringClass")return AsField(object).owner;if(name=="getType")return AsField(object).type?AsField(object).type:Class(12);if(name=="getName")return reinterpret_cast<jobject>(const_cast<char*>(IsField(object)?AsField(object).name:"int"));assert(false);return nullptr;}
+jint CallInt(JNIEnv*,jobject object,jmethodID id,va_list){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return 0;}assert(Name(id)=="getModifiers");return (AsField(object).stat?8:0)|AsField(object).extra_modifiers;}
+jboolean CallBool(JNIEnv*,jobject object,jmethodID id,va_list args){assert(!pending);if(fail_call&&++call_index==fail_call){pending=true;return false;}assert(Name(id)=="equals");return forged_equals||object==va_arg(args,jobject);}
 const char* Utf(JNIEnv*,jstring string,jboolean*){assert(!pending);return reinterpret_cast<const char*>(string);}
 void ReleaseUtf(JNIEnv*,jstring,const char*){}
-jfieldID FieldId(JNIEnv*,jclass owner,const char* name,const char* sig){assert(std::string(sig)=="I");for(auto& f:fields)if(f.owner==owner&&std::string(f.name)==name&&!f.stat)return f.id;pending=true;return nullptr;}
-jfieldID StaticFieldId(JNIEnv*,jclass owner,const char* name,const char* sig){assert(std::string(sig)=="I");for(auto& f:fields)if(f.owner==owner&&std::string(f.name)==name&&f.stat)return f.id;pending=true;return nullptr;}
+jfieldID FieldId(JNIEnv*,jclass,const char*,const char*){++name_lookup_calls;pending=true;return nullptr;}
+jfieldID StaticFieldId(JNIEnv*,jclass,const char*,const char*){++name_lookup_calls;pending=true;return nullptr;}
 jfieldID From(JNIEnv*,jobject field){assert(!pending);return AsField(field).id;}
-jobject To(JNIEnv*,jclass owner,jfieldID id,jboolean stat){assert(!pending);for(auto& f:fields)if(f.owner==owner&&f.id==id&&f.stat==bool(stat))return reinterpret_cast<jobject>(wrong_roundtrip?&fields[2]:&f);pending=true;return nullptr;}
+jobject To(JNIEnv*,jclass owner,jfieldID id,jboolean stat){assert(!pending);if(returned_override)return reinterpret_cast<jobject>(returned_override);for(auto& f:fields)if(f.owner==owner&&f.id==id&&f.stat==bool(stat))return reinterpret_cast<jobject>(wrong_roundtrip?&fields[2]:&f);pending=true;return nullptr;}
 jobject NewStrong(JNIEnv*,jobject object){assert(!pending);++strong_created;if(global_throws)pending=true;return object;}
 void DeleteStrong(JNIEnv*,jobject){++strong_deleted;}
 jweak NewWeak(JNIEnv*,jobject object){assert(!pending);++weak_created;if(weak_throws)pending=true;return object;}
@@ -79,9 +80,27 @@ void OriginalCleanup(void* linker,void* thread,const void*,bool cha){assert(link
 int main(){JNINativeInterface_ table{};table.ExceptionCheck=Exception;table.IsInstanceOf=IsInstance;table.FindClass=Find;table.GetObjectClass=ObjectClass;table.GetMethodID=Method;table.CallObjectMethodV=CallObject;table.CallIntMethodV=CallInt;table.CallBooleanMethodV=CallBool;table.GetStringUTFChars=Utf;table.ReleaseStringUTFChars=ReleaseUtf;table.GetFieldID=FieldId;table.GetStaticFieldID=StaticFieldId;table.FromReflectedField=From;table.ToReflectedField=To;table.NewGlobalRef=NewStrong;table.DeleteGlobalRef=DeleteStrong;table.NewWeakGlobalRef=NewWeak;table.DeleteWeakGlobalRef=DeleteWeak;table.NewLocalRef=NewLocal;table.DeleteLocalRef=DeleteLocal;table.IsSameObject=Same;table.IsAssignableFrom=Assignable;JNIEnv env{&table};Hooks hooks;std::string error;using namespace contextual_field_id;
  assert(Initialize(hooks,&error));auto f=reinterpret_cast<jobject>(&fields[0]),s=reinterpret_cast<jobject>(&fields[1]);
  for(const char* name:{"getDeclaringClass","getName","getType","getModifiers","equals","Class.getName"}){fail_method=name;assert(!Prepare(&env,f,fields[0].id,&error)&&pending);pending=false;}fail_method.clear();
- for(int failure=1;failure<=6;failure++){fail_call=failure;call_index=0;assert(!Prepare(&env,f,fields[0].id,&error)&&pending);pending=false;}fail_call=0;
+ for(int failure=1;failure<=11;failure++){fail_call=failure;call_index=0;assert(!Prepare(&env,f,fields[0].id,&error)&&pending);pending=false;}fail_call=0;
  weak_throws=true;assert(!Prepare(&env,f,fields[0].id,&error)&&pending);pending=false;weak_throws=false;assert(weak_created==weak_deleted);
  global_throws=true;assert(!Prepare(&env,f,fields[0].id,&error)&&pending);pending=false;global_throws=false;assert(strong_created==strong_deleted);
+ // Hidden-field JNI name lookup always throws in this fixture. Exact mirror
+ // selection remains valid; forged equals cannot hide a wrong declaration.
+ forged_equals=true;returned_override=&altered;
+ for(int mismatch=0;mismatch<7;++mismatch){
+  altered=fields[0];
+  switch(mismatch){
+   case 0:altered.owner=Class(2);break;
+   case 1:altered.name="foreign";break;
+   case 2:altered.type=Class(13);break;
+   case 3:altered.extra_modifiers=1;break;
+   case 4:altered.stat=true;break;
+   case 5:altered.id=fields[1].id;break;
+   case 6:altered.native=fields[2].native;break;
+  }
+  assert(!Prepare(&env,f,fields[0].id,&error)&&!pending);
+  assert(strong_created==strong_deleted&&weak_created==weak_deleted);
+ }
+ returned_override=nullptr;forged_equals=false;
  auto first=Prepare(&env,f,fields[0].id,&error),second=Prepare(&env,s,fields[1].id,&error);assert(first&&second&&NativeField(first)==fields[0].native&&!IsStatic(first)&&IsStatic(second));
  assert(DecodeLive(&env,Class(1),false,fields[0].id,&error)==fields[0].native);
  runnable_executor::reject_decode=true;assert(!DecodeLive(&env,Class(1),false,fields[0].id,&error)&&error.find("strong-Field-root-decode-rejected")!=std::string::npos);runnable_executor::reject_decode=false;
@@ -170,5 +189,6 @@ int main(){JNINativeInterface_ table{};table.ExceptionCheck=Exception;table.IsIn
  assert(!NativeSurvivingTarget(fields[1].native)&&!HasNativeProof(fields[1].native));Prune(&env,registry);
  assert(weak_created==weak_deleted);
  pending=true;assert(!Prepare(&env,f,fields[0].id,&error)&&!DecodeLive(&env,Class(1),false,fields[0].id,&error)&&pending);pending=false;
- std::cout<<"Contextual JNI field identity: public even/odd roundtrip, scoped leaf proof, class/static/registry namespace, opaque collision refusal, weak cleanup, same-pointer/tag epochs, owner destruction/reuse, lock-free native publication and pending preservation passed\n";
+ assert(name_lookup_calls==0);
+ std::cout<<"Contextual JNI field identity: hidden-name lookup refusal, exact public returned declaration, public even/odd roundtrip, scoped leaf proof, class/static/registry namespace, opaque collision refusal, weak cleanup, same-pointer/tag epochs, owner destruction/reuse, lock-free native publication and pending preservation passed\n";
 }
