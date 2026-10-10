@@ -31,3 +31,5 @@
 -keep class com.github.ytlog.artdcevm.internal.InitializerStateOracle** { *; }
 
 -keep class com.github.ytlog.artdcevm.internal.InitializerEpisodeOracle** { *; }
+
+-keep class com.github.ytlog.artdcevm.internal.InitializerWriterOracle** { *; }
