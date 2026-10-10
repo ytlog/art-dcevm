@@ -36,6 +36,18 @@ Guard::ProofWitness Guard::FreezeProof()const noexcept{std::lock_guard<std::mute
 bool Guard::ValidateProof(const ProofWitness&witness)const noexcept{return witness.owner_==this&&witness.epoch_&&proof_ready_.load(std::memory_order_acquire)&&proof_epoch_.load(std::memory_order_acquire)==witness.epoch_;}
 void Guard::CommitProof(const ProofWitness&witness)noexcept{if(!ValidateProof(witness))std::abort();proof_committed_.store(true,std::memory_order_release);}
 bool Guard::Proven() const noexcept {std::lock_guard<std::mutex> lock(lock_);return proven_;}
+EventSource Guard::SourceOfEvent(void* thread,void* method)const noexcept {
+ uint32_t flags=0;
+ if(!thread||!method||!access_.method_access_flags||
+    !access_.method_access_flags(access_.owner,method,&flags)){
+  if(thread&&access_.raise)access_.raise(access_.owner,thread,"Ljava/lang/IllegalStateException;",
+    "Field event lost calibrated method access flags");
+  return EventSource::Unknown;
+ }
+ // NotifyGet/SetField uses its native current method for the listener event.
+ // That callback belongs to original JNI, never bytecode receiver proof.
+ return flags&0x100u?EventSource::Native:EventSource::Bytecode;
+}
 bool Guard::FieldWritten(void* thread,void* method,void* field,bool reference) noexcept {
  if(!thread||!method||!field)return false;
  uint64_t epoch=0;
@@ -44,16 +56,8 @@ bool Guard::FieldWritten(void* thread,void* method,void* field,bool reference) n
   // every calibration storage path has independently passed.
   if(calibrating_&&field!=calibration_field_)return false;
   if(!proven_&&!(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference))return false;}
- uint32_t method_flags=0;
- if(!access_.method_access_flags||!access_.method_access_flags(access_.owner,method,&method_flags)){
-  if(access_.raise)access_.raise(access_.owner,thread,"Ljava/lang/IllegalStateException;",
-    "Final write event lost calibrated method access flags");
-  return access_.raise!=nullptr;
- }
- // ART NotifySet{Object,Primitive}Field emits the same listener event from
- // JNI with a native current method (dex_pc=0). Original JNI permissions own
- // this path; a native event must never become bytecode calibration evidence.
- if(method_flags&0x100u)return false;
+ const auto source=SourceOfEvent(thread,method);
+ if(source!=EventSource::Bytecode)return source==EventSource::Unknown&&access_.raise;
  {std::lock_guard<std::mutex> lock(lock_);
   if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference){epoch=epoch_;seen_=true;}}
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;

@@ -46,6 +46,30 @@ int main(int argc,char**argv){assert(argc==2);assert(ExistingFinalMain(argc,argv
  assert(!BindSourceEvents(&foreign_owner,source_calibration.Observer(),&error));assert(BindSourceEvents(receiver,source_calibration.Observer(),&error));assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2);assert(InstallSourceEventsAtExclusiveBoundary(&error)&&adds==2);
  assert(InstallReceiverEventsAtExclusiveBoundary(&error));assert(adds==3&&receiver_events==1);assert(InstallReceiverEventsAtExclusiveBoundary(&error)&&adds==3);assert(!ReceiverListenerProven(guard));
  auto* actual=static_cast<FieldOnlyListener*>(actual_listener);uint32_t reference=0x1234;Handle handle{&reference};unsigned bodies=0;uint64_t sentinel=71;
+ // JNI NotifyGet/SetField reaches the same vtable with a native caller.
+ // It must not become receiver bytecode evidence or increment its counters.
+ for(auto path:{rg::Path::BytecodeRead,rg::Path::BytecodeWrite}){
+  object.klass=&after;state.pending=nullptr;
+  rg::Invocation invocation{path,&thread,&field,&object,nullptr,nullptr,true};
+  assert(guard.BeginProof({invocation,&ancestor,&after,true}));
+  const auto reads=listener.read_events.load(),writes=listener.write_events.load();
+  if(path==rg::Path::BytecodeRead)actual->FieldRead(&thread,handle,&native_method,0,&field);
+  else {const uint64_t value=99;actual->FieldWritten(&thread,handle,&native_method,0,&field,value);actual->FieldWritten(&thread,handle,&native_method,0,&field,Handle{});}
+  assert(!state.pending&&reads==listener.read_events.load()&&writes==listener.write_events.load());
+  assert(!guard.EndProof(false,false,true));
+ }
+ for(auto path:{rg::Path::BytecodeRead,rg::Path::BytecodeWrite}){
+  rg::Invocation invocation{path,&thread,&field,&object,nullptr,nullptr,true};
+  assert(guard.BeginProof({invocation,&ancestor,&after,true}));
+  const auto reads=listener.read_events.load(),writes=listener.write_events.load();
+  const int previous_throws=throws;event_error=nullptr;
+  if(path==rg::Path::BytecodeRead)actual->FieldRead(&thread,handle,&unknown_method,0,&field);
+  else {const uint64_t value=99;actual->FieldWritten(&thread,handle,&unknown_method,0,&field,value);actual->FieldWritten(&thread,handle,&unknown_method,0,&field,Handle{});}
+  assert(event_error&&!std::strcmp(event_error,"Ljava/lang/IllegalStateException;"));
+  assert(throws==previous_throws+(path==rg::Path::BytecodeRead?1:2));
+  assert(reads==listener.read_events.load()&&writes==listener.write_events.load());
+  assert(!guard.EndProof(false,false,true));
+ }
  for(unsigned i=0;i<static_cast<unsigned>(rg::Path::Count);++i){auto path=static_cast<rg::Path>(i);bool f=path==rg::Path::BytecodeRead||path==rg::Path::BytecodeWrite||path==rg::Path::JniRead||path==rg::Path::JniWrite||path==rg::Path::ReflectRead||path==rg::Path::ReflectWrite||path==rg::Path::HandleRead||path==rg::Path::HandleWrite||path==rg::Path::VarHandle;auto*m=f?&field:&method;
   for(bool rejection:{false,true}){object.klass=rejection?&after:&before;state.pending=nullptr;sentinel=71;const unsigned previous=bodies;rg::Invocation invocation{path,&thread,m,&object,(path==rg::Path::HandleSpecial||path==rg::Path::BytecodeSpecial)?&before:nullptr,nullptr,f};assert(guard.BeginProof({invocation,&ancestor,object.klass,rejection}));
    if(path==rg::Path::BytecodeInvoke){RPosition(1);actual->DexPcMoved(&thread,handle,&method,1);}

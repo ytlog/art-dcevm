@@ -25,9 +25,9 @@ class FieldOnlyListener {
  virtual void MethodExited(void*,void*,OptionalFrame,uint64_t&){std::abort();}
  virtual void MethodUnwind(void*,Handle,void*,uint32_t){std::abort();}
  virtual void DexPcMoved(void*t,Handle,void*m,uint32_t pc){if(!receivers&&!source)std::abort();if(source)source->DexPcMoved(t,m,pc);if(receivers)receivers->CheckBytecode(t,m,pc);invoke_events.fetch_add(1,std::memory_order_relaxed);}
- virtual void FieldRead(void*t,Handle object,void*,uint32_t,void*f){if(!receivers)std::abort();ReceiverField(t,object,f,false);read_events.fetch_add(1,std::memory_order_relaxed);}
- virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,Handle){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f,true);}
- virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,const uint64_t&){if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f);}
+ virtual void FieldRead(void*t,Handle object,void*m,uint32_t,void*f){if(!receivers||!guard)std::abort();if(guard->SourceOfEvent(t,m)!=EventSource::Bytecode)return;ReceiverField(t,object,f,false);read_events.fetch_add(1,std::memory_order_relaxed);}
+ virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,Handle){if(receivers&&guard->SourceOfEvent(t,m)!=EventSource::Bytecode)return;if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f,true);}
+ virtual void FieldWritten(void* t,Handle object,void* m,uint32_t,void* f,const uint64_t&){if(receivers&&guard->SourceOfEvent(t,m)!=EventSource::Bytecode)return;if(!ReceiverField(t,object,f,true))guard->FieldWritten(t,m,f);}
  virtual void ExceptionThrown(void*,Handle){std::abort();}
  virtual void ExceptionHandled(void*,Handle){std::abort();}
  virtual void Branch(void*,void*,uint32_t,int32_t){std::abort();}

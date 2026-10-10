@@ -28,6 +28,7 @@ struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;boo
 // sentinel unchanged. Native-method events delegate to original ART and cannot
 // prove the bytecode dispatcher. The bytecode event proves callback/target identity;
 // EndProof consumes the independently observed exception/value result.
+enum class EventSource {Unknown,Native,Bytecode};
 class Guard {
  public:
  class ProofWitness final {public:ProofWitness()=default;private:friend class Guard;const Guard*owner_=nullptr;uint64_t epoch_=0;};
@@ -46,6 +47,9 @@ class Guard {
  // Returns true iff the original field write must stop because an exception
  // was raised. ART DoFieldPutCommon checks its pending exception after event.
  bool FieldWritten(void* thread,void* method,void* field,bool reference=false) noexcept;
+ // Shared by the sole listener before bytecode receiver proof dispatch.
+ // Native JNI events delegate. Unknown source raises, and proves neither path.
+ EventSource SourceOfEvent(void* thread,void* method)const noexcept;
  private:
  Access access_;mutable std::mutex lock_;uint64_t epoch_=0;Oracle oracle_{};bool probing_=false,seen_=false,rejected_=false,proven_=false,calibrating_=false;void* calibration_field_=nullptr;std::atomic<uint64_t> proof_epoch_{0};std::atomic<bool> proof_ready_{false},proof_committed_{false};
 };

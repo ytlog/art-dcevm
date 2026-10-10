@@ -39,9 +39,10 @@ struct Engine:HookEngine {
 bool Field(void* p,void*,uint32_t* flags,void** owner){*flags=0x10;*owner=p;return true;}
 bool Method(void*,void* method,void** owner){*owner=method;return true;}
 bool Equivalent(void*,void* a,void* b){return a==b;}
-void Raise(void*,void*,const char* type,const char*){assert(!std::strcmp(type,"Ljava/lang/IllegalAccessError;"));++throws;}
-int native_method=0;
-bool MethodFlags(void*,void* method,uint32_t* flags){*flags=method==&native_method?0x100u:0u;return true;}
+const char* event_error=nullptr;
+void Raise(void*,void*,const char* type,const char*){assert(!std::strcmp(type,"Ljava/lang/IllegalAccessError;")||!std::strcmp(type,"Ljava/lang/IllegalStateException;"));event_error=type;++throws;}
+int native_method=0,unknown_method=0;
+bool MethodFlags(void*,void* method,uint32_t* flags){if(!method||method==&unknown_method)return false;*flags=method==&native_method?0x100u:0u;return true;}
 int main(int argc,char** argv){assert(argc==2);Engine engine(argv[1][0]-'0');int r=0,thread=0,method=0,field=0;receiver=&r;
  Guard guard({receiver,Field,Method,Equivalent,Raise,nullptr,MethodFlags});std::string error;
  assert(!BindListener(engine,receiver,guard,&error));engine.available=true;
