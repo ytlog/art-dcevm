@@ -359,13 +359,14 @@ struct NativeEngine final:Engine {
   *out=target;return true;
  }
  bool ObserveFieldFactory(JNIEnv*,jvmtiEnv*,std::string*);
+ bool PrepareStaticFieldConsumers(JNIEnv*,jvmtiEnv*,std::string*);
  std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
  bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
  void* (*lazy_decode_field)(void*,jfieldID)=nullptr;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
   auto& e=*static_cast<NativeEngine*>(raw);
-  if(!id||!declaring||!e.lazy_decode_field||scope.vm!=e.vm||!scope.env||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return nullptr;
+  if(!id||!declaring||!e.lazy_decode_field||scope.vm!=e.vm||!scope.env||scope.self!=e.graph_current())return nullptr;
   void* field=e.lazy_decode_field(e.runtime.receivers.jni_id_manager,id);
   return field&&e.metadata.FieldDeclaringClass(field)==declaring?field:nullptr;
  }
@@ -843,6 +844,10 @@ struct NativeEngine final:Engine {
   ClearFieldProofs(env);
   if(schema_operation&&!abstract_instances.Ready()&&!abstract_instances.Calibrate(hooks,env,metadata,model,error))return owned_failure_diagnostic::Unavailable(error,"abstract-instance calibration");
   struct FieldProofs {NativeEngine& engine;JNIEnv* env;~FieldProofs(){engine.ClearFieldProofs(env);}} field_scope{*this,env};
+  // Every original source operation may preserve a static field allocation.
+  // Prepare its sole factory/exception consumer before publishing that Run,
+  // including private automatic ordinary calibration and single-Class removal.
+  if(!PrepareStaticFieldConsumers(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"static field source consumer preparation");
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error)){
    if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");
@@ -1390,6 +1395,21 @@ bool NativeEngine::CalibrateReceiverSource(JNIEnv* env,jvmtiEnv* ti){
  }
  if(!receiver_source_calibration->Seal())return fail("Receiver source lacks all ten original invoke forms");
  receiver_producer_diagnostic.clear();return true;
+}
+bool NativeEngine::PrepareStaticFieldConsumers(JNIEnv* env,jvmtiEnv* ti,std::string* error){
+ if(!env||!ti||env->ExceptionCheck())return Fail(error,"Static field consumer requires ordinary JNI entry");
+ graph_current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ graph_field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject));
+ if(!graph_decode)graph_decode=reinterpret_cast<DecodeObject>(hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject));
+ lazy_decode_field=reinterpret_cast<decltype(lazy_decode_field)>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"));
+ // Binding this original exception leaf grants no final/access permission.
+ if(!permission_raise)permission_raise=reinterpret_cast<ThrowException>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"));
+ if(!graph_current||!graph_current()||!graph_field_leaf||!graph_decode||!lazy_decode_field||!permission_raise)return Fail(error,"Static field source consumer named readers unavailable");
+ if(!PrepareLiveFieldOracles(env,error)||!ObserveFieldFactory(env,ti,error))return false;
+ if(!field_factory_observer.NormalizerInstalled())return Fail(error,"Static field source consumer lacks sole installed normalizer");
+ if(field_factory_observer.FourArgument()&&!std::all_of(field_factory_public_roots.begin(),field_factory_public_roots.end(),[](bool proven){return proven;}))return Fail(error,"Static field source consumer lacks actual extra-Handle public root proof");
+ return true;
 }
 bool NativeEngine::PrepareLiveFieldOracles(JNIEnv* env,std::string* error){
  if(live_field_oracles.size()==2)return true;

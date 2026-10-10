@@ -3,6 +3,7 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_member_provider.h"
+#include "platform/common/native_field_factory_observer.cc"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/common/native_reflective_value_abi.h"
@@ -18,6 +19,25 @@ void* operator new[](size_t n){return ::operator new(n);}
 void operator delete(void* p)noexcept{std::free(p);}
 void operator delete[](void* p)noexcept{std::free(p);}
 namespace {
+namespace factory_alias=native_field_factory_observer;
+factory_alias::Return OrdinaryFactory(void*,void*field,bool){return {uintptr_t(field)};}
+struct OrdinaryAliasHooks:HookEngine {
+ bool Initialize(std::string*)override{return true;}
+ void* FindSymbol(const char*,const char*name)override{return !std::strcmp(name,"_ZN3art6mirror5Field18CreateFromArtFieldEPNS_6ThreadEPNS_8ArtFieldEb")?reinterpret_cast<void*>(OrdinaryFactory):nullptr;}
+ void* Install(void*,void*,void**original,std::string*)override{*original=reinterpret_cast<void*>(OrdinaryFactory);return this;}
+ bool Remove(void*token,std::string*)override{return token==this;}
+};
+struct OrdinaryAliasOwner {
+ factory_alias::Service observer;const modern_field_metadata::FieldOracle* oracles=nullptr;std::array<void*,4> native{};
+ static bool Root(void*,void*,const void*,void**){return false;}
+ static bool Normalize(void*,void*,factory_alias::HandleCarrier,void*input,bool,void**out)noexcept{*out=input;return true;}
+ static bool Ready(void*raw,void*field,void*current_field,void*target){auto&o=*static_cast<OrdinaryAliasOwner*>(raw);
+  if(!o.observer.NormalizerInstalled()||!target||field!=current_field)return false;
+  // Independent real public Field calibration tuple, not a static_ready flag.
+  for(size_t i=0;i<4;++i)if((o.oracles[i].modifiers&8u)&&o.native[i]==current_field)return true;
+  return false;
+ }
+};
 struct ExplicitMappings {
  struct Range {uintptr_t begin,end;};std::vector<Range> ranges;
  const void* denied=nullptr;bool reject_all=false;size_t calls=0;
@@ -206,6 +226,9 @@ int main(int argc,char** argv){
  native_member_provider::Dependencies dependencies;dependencies.hooks=&hooks;dependencies.methods=binding.get();dependencies.method_model=&model;dependencies.metadata=&metadata;dependencies.fields=&fields;dependencies.cache=&caches;dependencies.reflection=&reflection;dependencies.is_retired=Retired;dependencies.allow_field_removal=true;dependencies.diagnostics=&diagnostics;
  dependencies.retirement={&retired_methods,NotRetired,NotRetired,RetireMethod,RetireField};dependencies.handle_guards={&retired_methods,Mh,Vh};
  dependencies.runtime.runtime=&runtime;dependencies.runtime.instrumentation=&instrumentation;dependencies.runtime.receivers.thread_list=&thread_list;dependencies.runtime.receivers.jit=&jit;dependencies.runtime.receivers.jit_code_cache=&jit_cache;
+ OrdinaryAliasOwner alias_owner;alias_owner.oracles=oracle.data();
+ auto capture_alias=[](const runnable_jni::Context&,void*raw){auto&o=*static_cast<OrdinaryAliasOwner*>(raw);for(size_t i=0;i<4;++i)o.native[i]=FieldLeaf(o.oracles[i].strong_global_field);return true;};
+ assert(runnable_executor::With(&env,reinterpret_cast<jobject>(old_class),capture_alias,&alias_owner)==runnable_jni::Result::kSuccess);
  Stop(nullptr,nullptr,false);
  auto shape=[&](bool methods,bool removed_fields){Methods(new_class,methods);Put32(reinterpret_cast<void*>(new_class->fields),0,removed_fields?3:4);LinkDex(new_class,dex[(methods?1:0)+(removed_fields?2:0)]);};
  auto rejected=[&](native_member_provider::Dependencies d,const source_commit::Plan& p,const char* expected=nullptr){const std::vector<unsigned char> bytes(heap.base,heap.base+heap.used);const int before=mutations;native_member_provider::Service provider;assert(!provider.Prepare(p,d,&error));assert(!error.empty());if(expected&&error.find(expected)==std::string::npos){std::cerr<<"Expected "<<expected<<" got "<<error<<"\n";std::abort();}assert(mutations==before&&events.empty()&&retired_methods==0&&retired_fields==0);assert(!std::memcmp(bytes.data(),heap.base,bytes.size()));assert(diagnostics.cleared_threads==87&&diagnostics.declaring_roots_verified);};
@@ -269,6 +292,19 @@ int main(int argc,char** argv){
  shape(true,false);dependencies.expected_removal=native_member_provider::Removal::kMethodsOnly;mh_guard=true;visit_mh=true;
  hooks.missing="ReplaceReferences";rejected(dependencies,plan);hooks.missing=nullptr;
  native_member_provider::Service provider;auto service=provider.Prepare(plan,dependencies,&error);if(!service){std::cerr<<error<<'\n';return 1;}assert(service->Validate(plan));assert(retired_methods==0&&retired_fields==0&&mutations==0&&events.empty());
+ // Single-Class MethodsOnly reaches the same static alias authority as schema.
+ // Missing real sole consumer must reject; install its actual source proxy,
+ // retain the independently calibrated public field tuple, and validate again.
+ OrdinaryAliasHooks alias_hooks;
+ auto ordinary_alias_dependencies=dependencies;ordinary_alias_dependencies.retirement.owner=&alias_owner;
+ ordinary_alias_dependencies.retirement.static_alias_ready=OrdinaryAliasOwner::Ready;
+ native_member_provider::Service missing_alias_provider;assert(!missing_alias_provider.Prepare(plan,ordinary_alias_dependencies,&error)&&error.find("Static alias")!=std::string::npos);
+ void* alias_roots[]{old_class};exclusive_owned_roots::Context alias_context{current,alias_roots,1};
+ assert(alias_owner.observer.Bind(alias_hooks,{&alias_owner,Current,OrdinaryAliasOwner::Root},&error));
+ assert(alias_owner.observer.SetNormalizerAtExclusive({&alias_owner,OrdinaryAliasOwner::Normalize},alias_context,&error));
+ assert(alias_owner.observer.InstallAtExclusive(alias_hooks,alias_context,&error));
+ native_member_provider::Service ordinary_alias_provider;auto ordinary_alias_service=ordinary_alias_provider.Prepare(plan,ordinary_alias_dependencies,&error);assert(ordinary_alias_service&&ordinary_alias_service->Validate(plan)&&!retired_methods&&!retired_fields&&!mutations);
+ assert(alias_owner.observer.RemoveAtExclusive(alias_hooks,alias_context,&error));assert(!ordinary_alias_service->Validate(plan));
  const std::vector<unsigned char> prepared_heap(heap.base,heap.base+heap.used);
  mh_guard=false;assert(!source_commit::Run(plan,*service));mh_guard=true;
  current=foreign_thread.data();assert(!source_commit::Run(plan,*service));current=thread.data();
