@@ -20,6 +20,39 @@ bool Store::Observe(const runnable_jni::Context& context,void* raw){auto& r=*sta
 bool Store::Stage(JNIEnv* env,jclass owner,jfieldID id,bool statik,std::string* error){
  const auto& b=bindings_;
  if(!env||!owner||!id||env->ExceptionCheck()||!b.owner||!b.scope||!b.oracle||!b.decode||!b.field||!b.declaring||!b.element)return Fail(error,"Rooted Field stage lacks actual public/native owner");
+ // A duplicate must be independently reattested before reuse. The opaque
+ // ID selects a namespace bucket only; current public declaring identity and
+ // fresh native roots select the exact contextual entry.
+ const auto staged=entries_.find(id);
+ if(staged!=entries_.end())for(const auto& prior:staged->second){
+  if(prior.id!=id||prior.chunk>=chunks_.size()||prior.slot<0||prior.slot>=chunks_[prior.chunk].used)
+   return Fail(error,"Staged contextual Field entry/slot is invalid");
+  Local mirror{env,env->GetObjectArrayElement(chunks_[prior.chunk].root,prior.slot)};
+  if(!mirror.ref||env->ExceptionCheck())return Fail(error,"Staged contextual Field mirror missing");
+  if(env->FromReflectedField(mirror.ref)!=id||env->ExceptionCheck())
+   return Fail(error,"Staged contextual Field public ID changed");
+  Local type{env,env->GetObjectClass(mirror.ref)};
+  auto declaring=type.ref?env->GetMethodID(static_cast<jclass>(type.ref),"getDeclaringClass","()Ljava/lang/Class;"):nullptr;
+  auto modifiers=type.ref?env->GetMethodID(static_cast<jclass>(type.ref),"getModifiers","()I"):nullptr;
+  if(!declaring||!modifiers||env->ExceptionCheck())return Fail(error,"Staged contextual Field accessors unavailable");
+  Local actual{env,env->CallObjectMethod(mirror.ref,declaring)};
+  const jint flags=env->CallIntMethod(mirror.ref,modifiers);
+  if(!actual.ref||env->ExceptionCheck()||((flags&8)!=0)!=prior.is_static)
+   return Fail(error,"Staged contextual Field public storage changed");
+  const bool same=env->IsSameObject(actual.ref,owner);
+  if(env->ExceptionCheck())return false;
+  if(!same)continue; // Same opaque ID, independently distinct declaring Class.
+  if(prior.is_static!=statik)return Fail(error,"Duplicate contextual Field storage differs");
+  Global owner_root{env,env->NewGlobalRef(owner)};
+  if(!owner_root.ref||env->ExceptionCheck())return false;
+  Global mirror_root{env,env->NewGlobalRef(mirror.ref)};
+  if(!mirror_root.ref||env->ExceptionCheck())return false;
+  Request request{this,owner_root.ref,mirror_root.ref,chunks_[prior.chunk].root,prior.slot,prior.native};
+  // Observe rereads owner/mirror/array after all public JNI, proves the actual
+  // array slot and original named native leaf, and refuses changed identity.
+  return b.scope(b.owner,env,mirror_root.ref,Observe,&request)||
+   Fail(error,"Staged contextual Field native/root/slot identity changed");
+ }
  Global produced{env};Local mirror_local{env,nullptr};jobject mirror=nullptr;
  if(b.lazy_mirror){
   if(!b.lazy_mirror(b.owner,env,owner,id,statik,&produced.ref,error))return false;

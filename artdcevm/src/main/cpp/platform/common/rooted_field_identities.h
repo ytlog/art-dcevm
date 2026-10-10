@@ -25,6 +25,8 @@ class Store {
  public:
   static constexpr jsize kChunkSize=1024;
   explicit Store(Bindings bindings):bindings_(bindings){}
+  // Repeated contextual IDs reuse only a freshly reattested strong mirror:
+  // public ID/declaring/storage and current native array-slot roots must agree.
   bool Stage(JNIEnv*,jclass,jfieldID,bool is_static,std::string*);
   void* Read(jclass,jfieldID)const noexcept;
   void* ReadNative(void* owner,jfieldID)const noexcept;

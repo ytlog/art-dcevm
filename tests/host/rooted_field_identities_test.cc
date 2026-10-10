@@ -38,7 +38,7 @@ NativeField fa{&native_a},fb{&native_b},fs{&native_a},fc{&native_c},fn{&native_a
 Object ma{nullptr,&a,&fa,reinterpret_cast<jfieldID>(4)},mb{nullptr,&b,&fb,reinterpret_cast<jfieldID>(4)},ms{nullptr,&a,&fs,reinterpret_cast<jfieldID>(8),true};
 Object mc{nullptr,&c,&fc,reinterpret_cast<jfieldID>(4)},mn{nullptr,&a,&fn,reinterpret_cast<jfieldID>(16)};
 Object* fields[]={&ma,&mb,&ms,&mc,&mn};std::vector<Object> stress;std::vector<NativeField> stress_fields;
-size_t globals=0,peak=0,arrays=0,jni_calls=0,scope_calls=0;bool wrong_id=false,move_oracle=false,move_array=false,fail_container=false,wrong_element=false,fail_set=false,pending_exception=false;Object exception{&vm};
+size_t globals=0,peak=0,arrays=0,jni_calls=0,scope_calls=0;bool wrong_id=false,move_oracle=false,move_array=false,fail_container=false,wrong_element=false,fail_set=false,pending_exception=false;Object exception{&vm};void* oracle_move_target=&moved_a;
 Root* R(jobject ref){return reinterpret_cast<Root*>(ref);}Object* Array(jobject ref){auto* o=R(ref)->object;return static_cast<Object*>(o->native);}
 jobject Local(Object* object){auto* root=static_cast<Root*>(std::malloc(sizeof(Root)));assert(root);*root={object,false};++object->roots;return reinterpret_cast<jobject>(root);}
 jobject JNICALL LocalCopy(JNIEnv*,jobject ref){++jni_calls;return ref?Local(R(ref)->object):nullptr;}
@@ -93,7 +93,7 @@ void JNICALL SetElement(JNIEnv*,jobjectArray array,jsize index,jobject value){++
 jobject JNICALL GetElement(JNIEnv*,jobjectArray array,jsize index){++jni_calls;Object* value=Array(array)->elements.at(index);return value?Local(value):nullptr;}
 bool Decode(void*,jobject root,void** out){if(!root)return false;Object* o=R(root)->object;*out=o->field?static_cast<void*>(o):o->native;return *out!=nullptr;}
 bool Oracle(void*,const runnable_jni::Context&,jobject root,void** out){Object* o=R(root)->object;
- if(move_oracle&&o==&ma){a.native=&moved_a;fa.owner=&moved_a;fs.owner=&moved_a;move_oracle=false;}
+ if(move_oracle&&o==&ma){a.native=oracle_move_target;fa.owner=oracle_move_target;fs.owner=oracle_move_target;move_oracle=false;}
  if(move_array&&o->array){auto* copy=new Object{};copy->array=true;copy->elements=static_cast<Object*>(o->native)->elements;copy->native=copy;if(o->native!=o)delete static_cast<Object*>(o->native);o->native=copy;move_array=false;}
  return Decode(nullptr,root,out);}
 void* Field(void*,void* mirror){return static_cast<Object*>(mirror)->field;}
@@ -209,8 +209,28 @@ int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=
   const auto force_calls=public_mirror_calls;refuse_public_mirror=true;
   assert(lazy.Stage(&env,ar,ma.id,false,&error)&&!pending_exception&&lazy.Read(ar,ma.id)==ma.field);
   assert(public_mirror_calls==force_calls&&lazy_calls==1&&globals==1);
-  wrong_id=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));wrong_id=false;assert(globals==1);
-  bad_lazy_local=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));bad_lazy_local=false;assert(globals==1);
+  // Exact duplicate reuses the strong mirror only AFTER public ID/owner/static
+  // and actual native array-slot observations. Movable roots are reread.
+  auto duplicates=lazy_calls;assert(a.native==&moved_a);oracle_move_target=&native_a;move_oracle=true;move_array=true;
+  assert(lazy.Stage(&env,ar,ma.id,false,&error)&&!move_oracle&&!move_array&&a.native==&native_a);oracle_move_target=&moved_a;
+  assert(lazy_calls==duplicates&&public_mirror_calls==force_calls&&globals==1);
+  // Same opaque ID in a different declaring namespace must produce a distinct
+  // original mirror once, then validate its own entry without another factory.
+  assert(lazy.Stage(&env,br,mb.id,false,&error)&&lazy_calls==duplicates+1);
+  duplicates=lazy_calls;assert(lazy.Stage(&env,br,mb.id,false,&error)&&lazy_calls==duplicates);
+  wrong_element=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));wrong_element=false;
+  assert(lazy_calls==duplicates);
+  ma.statik=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));ma.statik=false;
+  assert(lazy_calls==duplicates);
+  auto* prior_field=ma.field;fn.owner=a.native;ma.field=&fn;
+  assert(!lazy.Stage(&env,ar,ma.id,false,&error));ma.field=prior_field;
+  assert(lazy_calls==duplicates);
+  const auto prior_owner=fa.owner;fa.owner=b.native;
+  assert(!lazy.Stage(&env,ar,ma.id,false,&error));fa.owner=prior_owner;
+  assert(lazy_calls==duplicates);
+
+  wrong_id=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error));wrong_id=false;assert(globals==1&&lazy_calls==duplicates);
+  bad_lazy_local=true;assert(!lazy.Stage(&env,ar,mn.id,false,&error));bad_lazy_local=false;assert(globals==1);
   const auto calls=lazy_calls;pending_exception=true;assert(!lazy.Stage(&env,ar,ma.id,false,&error)&&lazy_calls==calls&&pending_exception);
   ClearException(&env);lazy.Clear(&env);refuse_public_mirror=false;assert(globals==0&&arrays==0);
  }
