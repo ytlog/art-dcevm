@@ -1,5 +1,6 @@
 #include <android/log.h>
 #include "platform/common/readonly_field_scope.h"
+#include "platform/common/readable_mapping_scope.h"
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_boot_method_catalog.h"
@@ -401,6 +402,7 @@ struct NativeEngine final:Engine {
  std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
  bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
  native_lazy_field_mirror::Service lazy_fields;
+ jvmtiEnv* declared_field_ti=nullptr; // Borrowed only during the current original operation.
  bool field_calibration_episode=false;
  static void* DecodeLazyField(void* raw,const runnable_jni::Context& scope,void* declaring,jfieldID id){
   auto& e=*static_cast<NativeEngine*>(raw);
@@ -424,11 +426,19 @@ struct NativeEngine final:Engine {
   if(scope.vm!=e.vm||!scope.env||!scope.self||scope.self!=e.graph_current()||!e.metadata.Calibrated()){
    Fail(error,"Declared Field native metadata/current Runnable context unavailable");return nullptr;
   }
+  // This immediate native declaration traversal performs no JNI/safepoint.
+  // Capture after the caller's root decoding, reuse only within this traversal,
+  // and recapture on the next call (including after the original Field factory).
+  method_identity::ScopedReadableMappings mappings;
+  if(!mappings.Ready()){Fail(error,"Declared Field native mapping snapshot unavailable");return nullptr;}
+  modern_field_metadata::ReadContext read{&mappings,[](void* raw,const void* address,size_t* extent){
+   return static_cast<method_identity::ScopedReadableMappings*>(raw)->Extent(address,extent);
+  }};
   field_array::View table;
-  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,error))return nullptr;
+  if(!e.metadata.Fields(owner,(declaration.flags&8)!=0,&table,error,&read))return nullptr;
   const char* failure=nullptr;
   void* matched=original_field_declaration::Match(table,owner,declaration,[&](void* field,field_copy::CopyFieldView* text,void** declaring){
-   if(!e.metadata.FieldIdentity(field,text,error))return false;
+   if(!e.metadata.FieldIdentity(field,text,error,&read))return false;
    *declaring=e.metadata.FieldDeclaringClass(field);return scope.self==e.graph_current();
   },&failure);
   if(!matched&&failure&&error&&error->empty())*error=failure;
@@ -441,9 +451,12 @@ struct NativeEngine final:Engine {
   // hidden reflection discovery is not a complete native field inventory.
   if(e.field_calibration_episode)return e.field_mirror_cache.Create(env,owner,id,statik,out,error);
   if(!e.lazy_fields.Ready())return Fail(error,"Declared Field graph producer requires independent original factory calibration");
-  jvmtiEnv* ti=nullptr;
-  if(e.vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK||!ti)return Fail(error,"Declared Field original JVMTI environment unavailable");
-  return e.lazy_fields.CreateDeclared(env,ti,owner,id,statik,out,error);
+  // ART GetEnv creates a fresh ArtJvmTiEnv. Acquiring one for every loaded
+  // field leaks environments and repeatedly grows ART's event/ownership lists.
+  // Reuse the caller's borrowed environment; this producer owns neither its
+  // lifetime nor disposal and may not run outside the exact operation scope.
+  if(!e.declared_field_ti)return Fail(error,"Declared Field original JVMTI operation owner unavailable");
+  return e.lazy_fields.CreateDeclared(env,e.declared_field_ti,owner,id,statik,out,error);
  }
  bool PrepareLazyFields(JNIEnv* env,std::string* error){
   if(lazy_fields.Ready())return true;
@@ -919,6 +932,9 @@ struct NativeEngine final:Engine {
   return ExecuteOperation(env,ti,defs,requested_schema,error);
  }
  int ExecuteOperation(JNIEnv* env,jvmtiEnv* ti,const std::vector<Definition>& defs,bool schema,std::string* error){
+  if(!ti||declared_field_ti)return Fail(error,"Declared Field JVMTI operation is missing or nested"),JVMTI_ERROR_NOT_AVAILABLE;
+  declared_field_ti=ti;
+  struct DeclarationScope {NativeEngine& engine;~DeclarationScope(){engine.declared_field_ti=nullptr;}} declaration_scope{*this};
   schema_operation=schema;
   const bool batch=defs.size()>1||schema_operation;
   std::unique_ptr<redefinition_gate::Lease> lease;
