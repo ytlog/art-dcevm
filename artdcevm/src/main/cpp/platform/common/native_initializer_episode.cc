@@ -17,8 +17,9 @@ struct Trial {
  jobject fixture=nullptr;
  bool failure=false;
  std::atomic<void*> owner{nullptr},waiter{nullptr},linker{nullptr};
- std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},terminal_enter{0},terminal_exit{0},wait_enter{0},wait_exit{0},faults{0};
+ std::atomic<uint32_t> tid{0},init_enter{0},init_exit{0},terminal_enter{0},terminal_exit{0},reentrant_enter{0},reentrant_exit{0},reentrant_tid{0},wait_enter{0},wait_exit{0},faults{0};
  std::atomic<bool> body_ready{false};
+ std::atomic<void*> reentrant_owner{nullptr};
 };
 struct Installed {
  const Service* owner=nullptr;
@@ -96,19 +97,37 @@ bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool
  // Java error oracle intentionally does so; these terminal fast returns are
  // distinct from the one owner and one waiting initialization invocation.
  const bool terminal=matched&&(status==3||(status>=14&&status<=15));
+ // AOSP InitializeClass permits the initializing thread to reenter this same
+ // Class and return true while it remains initializing. Prove an actual outer
+ // invocation with a freshly read identical owned root; a foreign waiter or an
+ // unrelated recursive initialization is never classified by status alone.
+ bool reentrant=false;
+ if(matched&&status==13&&tid)for(auto* outer=episode.entry.previous;outer;outer=outer->previous){
+  uint32_t outer_status=0,outer_tid=0;
+  if(outer->owner==installed.owner&&outer->self==self&&outer->linker==linker&&
+     ReadHandle(*trial,self,ClassHandle{outer->slot},&outer_status,&outer_tid)&&
+     outer_status==13&&outer_tid==tid){reentrant=true;break;}
+ }
+ if(reentrant){
+  void* empty=nullptr;trial->reentrant_owner.compare_exchange_strong(empty,self);
+  uint32_t zero=0;trial->reentrant_tid.compare_exchange_strong(zero,tid);
+  if(trial->reentrant_owner.load()!=self||trial->reentrant_tid.load()!=tid)
+   trial->faults.fetch_or(kInitializationCompletion,std::memory_order_release);
+ }
  if(!matched)borrowed.Release();
  if(matched){void*empty=nullptr;trial->linker.compare_exchange_strong(empty,linker);
   if(!linker||trial->linker.load()!=linker)trial->faults.fetch_or(kLinkerMismatch,std::memory_order_release);
-  (terminal?trial->terminal_enter:trial->init_enter).fetch_add(1,std::memory_order_relaxed);
+  (terminal?trial->terminal_enter:(reentrant?trial->reentrant_enter:trial->init_enter)).fetch_add(1,std::memory_order_relaxed);
   if(!statics||!parents)trial->faults.fetch_or(kInitializationFlags,std::memory_order_release);}
  const bool result=installed.initialize(linker,self,handle,statics,parents);
  if(matched){uint32_t completed=0,unused=0;
   const bool completion=ReadHandle(*trial,self,handle,&completed,&unused)&&
-      (terminal?(status==3?trial->failure&&!result&&completed==3:
+      (reentrant?result&&completed==13&&unused==tid:
+       terminal?(status==3?trial->failure&&!result&&completed==3:
                            !trial->failure&&result&&completed>=status&&completed<=15):
                 result!=trial->failure&&(trial->failure?completed==3:(completed>=14&&completed<=15)));
   if(!completion)trial->faults.fetch_or(kInitializationCompletion,std::memory_order_release);
-  (terminal?trial->terminal_exit:trial->init_exit).fetch_add(1,std::memory_order_release);
+  (terminal?trial->terminal_exit:(reentrant?trial->reentrant_exit:trial->init_exit)).fetch_add(1,std::memory_order_release);
  }
  return result;
 }
@@ -273,7 +292,9 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
   while(readers.load(std::memory_order_seq_cst)!=0)std::this_thread::sleep_for(std::chrono::milliseconds(1));
   ok=!env->ExceptionCheck()&&result==1&&trial.faults.load(std::memory_order_acquire)==0&&
       trial.owner.load()!=nullptr&&trial.waiter.load()!=nullptr&&trial.owner.load()!=trial.waiter.load()&&
-      trial.init_enter.load()==2&&trial.init_exit.load()==2&&trial.terminal_enter.load()==trial.terminal_exit.load()&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1&&
+      trial.init_enter.load()==2&&trial.init_exit.load()==2&&
+      trial.reentrant_enter.load()==trial.reentrant_exit.load()&&
+      (!trial.reentrant_enter.load()||(trial.reentrant_owner.load()==trial.owner.load()&&trial.reentrant_tid.load()==trial.tid.load()))&&trial.terminal_enter.load()==trial.terminal_exit.load()&&trial.wait_enter.load()==1&&trial.wait_exit.load()==1&&
       trial.linker.load()!=nullptr&&(!installed.class_linker||installed.class_linker==trial.linker.load());
   if(ok)installed.class_linker=trial.linker.load();
   else if(error)*error="Original initialization episode "+std::string(failure?"error":"success")+
@@ -281,7 +302,8 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
       " bodyReady="+std::to_string(trial.body_ready.load())+" owner="+std::to_string(trial.owner.load()!=nullptr)+
       " waiter="+std::to_string(trial.waiter.load()!=nullptr)+" init="+std::to_string(trial.init_enter.load())+
       "/"+std::to_string(trial.init_exit.load())+" terminal="+std::to_string(trial.terminal_enter.load())+
-      "/"+std::to_string(trial.terminal_exit.load())+" wait="+std::to_string(trial.wait_enter.load())+
+      "/"+std::to_string(trial.terminal_exit.load())+" reentrant="+std::to_string(trial.reentrant_enter.load())+
+      "/"+std::to_string(trial.reentrant_exit.load())+" wait="+std::to_string(trial.wait_enter.load())+
       "/"+std::to_string(trial.wait_exit.load())+"]";
   env->DeleteGlobalRef(strong);env->DeleteLocalRef(local);
  }

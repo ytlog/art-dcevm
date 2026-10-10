@@ -23,7 +23,7 @@ std::mutex original_monitor;std::condition_variable original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid};
 Case selected=Case::Positive;
 int type_id,run_episode_id;
 constexpr uint32_t source_tid=913;
@@ -46,6 +46,7 @@ bool OriginalWait(void*,ClassHandle abi_handle,void* self,void* opaque){
  type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(__atomic_load_n(handle.slot,__ATOMIC_SEQ_CST)));
  bool result=LoadStatus(type)>=14;return selected==Case::WrongWaitReturn?!result:result;
 }
+thread_local bool original_reentrant=false;
 bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool statics,bool parents){
  const OriginalClassHandle handle{static_cast<const uint32_t*>(abi_handle.slot)};
  assert(self==current&&Read32(current)==0&&statics&&parents);
@@ -57,6 +58,11 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
   return selected==Case::WrongTerminalReturn?!result:result;
  }
  if(LoadStatus(type)==13){
+  if(original_reentrant){
+   if(selected==Case::WrongReentrantCompletion)StoreStatus(type,14);
+   if(selected==Case::WrongReentrantTid)++type->clinit_thread_id_or_hash;
+   return selected!=Case::WrongReentrantReturn;
+  }
   uint32_t foreign=uint32_t(uintptr_t(type));ClassHandle waiter_handle{selected==Case::UnownedWaitHandle?&foreign:handle.slot};
   bool result=wait_proxy(linker,waiter_handle,selected==Case::WrongWaitSelf?foreign_thread.data():self,&lock);
   return selected==Case::WrongInitReturn?!result:result;
@@ -65,7 +71,15 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  lock.unlock();Put32(current,0,92u<<24);
  ++original_bodies;
  bool body_ok=body_native(episode_env,reinterpret_cast<jclass>(parent_class),reinterpret_cast<jclass>(type),selected==Case::WrongBodyTid?source_tid+1:source_tid)==JNI_TRUE;
- Put32(current,0,0);lock.lock();
+ Put32(current,0,0);
+ if(selected==Case::ReentrantOwner||selected==Case::WrongReentrantReturn||selected==Case::WrongReentrantCompletion||selected==Case::WrongReentrantTid||selected==Case::WrongReentrantEntryTid){
+  if(selected==Case::WrongReentrantEntryTid)++type->clinit_thread_id_or_hash;
+  original_reentrant=true;
+  (void)initialize_proxy(linker,self,abi_handle,statics,parents);
+  original_reentrant=false;
+  if(selected==Case::WrongReentrantEntryTid)--type->clinit_thread_id_or_hash;
+ }
+ lock.lock();
  bool success=body_ok&&type==new_class;
  if(selected==Case::MovingRoots&&success){
   assert(owner_slot.load()&&waiter_slot.load());
@@ -189,12 +203,16 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  table.RegisterNatives=EpisodeRegister;table.CallStaticObjectMethodV=EpisodeType;table.CallStaticIntMethodV=EpisodeRun;
  const auto mutations_before=mutations,publications=retirement_publications;
  const bool ok=observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error);
- assert(ok==(selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess));assert(observer.ReadyFor(metadata,roots)==ok);
+ assert(ok==(selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner));assert(observer.ReadyFor(metadata,roots)==ok);
  modern_field_metadata::FieldMetadata foreign=metadata;assert(!observer.ReadyFor(foreign,roots));
  assert(mutations==mutations_before&&retirement_publications==publications);
  if(selected==Case::WrongTerminalReturn||selected==Case::WrongTerminalCompletion){
   assert(!ok&&error.find("episode error")!=std::string::npos&&error.find("faults=4")!=std::string::npos&&error.find("terminal=1/1")!=std::string::npos);
  }
+ if(selected==Case::WrongReentrantReturn||selected==Case::WrongReentrantCompletion||selected==Case::WrongReentrantTid){
+  assert(!ok&&error.find("faults=4")!=std::string::npos&&error.find("reentrant=1/1")!=std::string::npos);
+ }
+ if(selected==Case::WrongReentrantEntryTid)assert(!ok&&error.find("reentrant=1/1")!=std::string::npos);
  if(ok){native_initializer_episode::Service wrong_owner;assert(!wrong_owner.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));assert(observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error));}
  if(ok&&selected==Case::Positive){
   native_initializer_episode::Witness absent;assert(!observer.CaptureCurrent(&env,&absent));
@@ -208,7 +226,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,
-     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion}){
+     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }
