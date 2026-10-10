@@ -35,6 +35,11 @@ bool NativeWitness(const native_cache::View& v,PairFormat fmt,uint32_t index,voi
  }
  return !v.full || (index<v.full_count && v.full[index].load(std::memory_order_relaxed)==reinterpret_cast<uintptr_t>(expected));
 }
+bool SemanticTypeWitness(const type_cache::View& v,uint32_t index,uint32_t expected){
+ if(!expected||(!v.pairs&&!v.full))return false;
+ if(v.full)return index<v.full_count&&__atomic_load_n(v.full+index,__ATOMIC_RELAXED)==expected;
+ type_cache::Pair p;__atomic_load(v.pairs+index%1024,&p,__ATOMIC_ACQUIRE);return p.index==index&&p.object==expected;
+}
 bool TypeWitness(const type_cache::View& v,uint32_t index,uint32_t expected){
  if(!expected || !v.pairs || index%1024>=v.pair_count)return false;
  type_cache::Pair p;__atomic_load(v.pairs+index%1024,&p,__ATOMIC_ACQUIRE);
@@ -103,7 +108,17 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
  if(mapper_)return Fail(error,"cache owner cannot rebind");
  const auto expected=reinterpret_cast<uintptr_t>(m.Get(w.expected_class));
  if(!cache||!expected||expected>UINT32_MAX||w.type_index>=counts.types||w.field_index>=counts.fields||w.method_index>=counts.methods)return Fail(error,"independent public cache witnesses missing");
- Source s{cache,nullptr,nullptr,extent,counts};unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
+ Source s{cache,nullptr,nullptr,extent,counts};
+ if(auto* service=m.Semantic()){
+  type_cache::View types;
+  if(!w.has_public_storage||!w.semantic_resolution_proved||
+     !service->Types(m.Get(cache),counts.types,&types,m.CacheReadContext())||
+     uintptr_t(types.pairs)!=w.public_types||uintptr_t(types.full)!=w.public_types_array||
+     !service->Calibrate(m.Get(cache),counts.types,counts.fields,counts.methods,w.type_index,m.Get(w.expected_class),
+         w.field_index,w.native_field,w.method_index,w.native_method,w.semantic_resolution_proved,m.CacheReadContext(),error))return false;
+  semantic_=service;mapper_=&m;calibration_=s;witness_=w;return true;
+ }
+ unsigned matches=0;dex_cache_metadata::Model selected{};PairFormat format{};
  struct Observation {
   dex_cache_metadata::Model model;type_cache::View types{};
   native_cache::View fields{},methods{};bool read=false,type=false,public_match=false;unsigned formats=0;
@@ -155,20 +170,27 @@ bool Owner::Calibrate(const SourceMapper& m,Root cache,size_t extent,Counts coun
 }
 bool Owner::Witnesses()const noexcept{
  type_cache::View t;native_cache::View f,m;const auto value=mapper_?reinterpret_cast<uintptr_t>(mapper_->Get(witness_.expected_class)):0;
- return value&&value<=UINT32_MAX&&Views(calibration_,&t,&f,&m)&&TypeWitness(t,witness_.type_index,static_cast<uint32_t>(value))&&NativeWitness(f,format_,witness_.field_index,witness_.native_field)&&NativeWitness(m,format_,witness_.method_index,witness_.native_method);
+ return value&&value<=UINT32_MAX&&Views(calibration_,&t,&f,&m)&&
+ (semantic_?(SemanticTypeWitness(t,witness_.type_index,static_cast<uint32_t>(value))&&
+   semantic_->CheckWitness(mapper_->Get(calibration_.cache_root),calibration_.counts.fields,calibration_.counts.methods,
+       witness_.field_index,witness_.native_field,witness_.method_index,witness_.native_method)):
+   (TypeWitness(t,witness_.type_index,static_cast<uint32_t>(value))&&NativeWitness(f,format_,witness_.field_index,witness_.native_field)&&NativeWitness(m,format_,witness_.method_index,witness_.native_method)));
 }
  bool Owner::Refresh() noexcept{
  if(!mapper_)return false;
  for(auto&r:records_){auto p=r.prepared;if(!mapper_->RefreshPrepared(&p)||p.source_owner!=r.prepared.source_owner||p.class_index!=r.prepared.class_index||p.declarations!=r.prepared.declarations||mapper_->Get(r.source.cache_root)!=p.cache)return false;r.prepared=p;}
  return true;
 }
- bool Owner::Views(const Source&s,type_cache::View*t,native_cache::View*f,native_cache::View*m)const noexcept{return mapper_&&Read(*mapper_,model_,s,t,f,m);}
+ bool Owner::Views(const Source&s,type_cache::View*t,native_cache::View*f,native_cache::View*m)const noexcept{if(!mapper_)return false;
+ if(semantic_){*f={};*m={};return semantic_->Types(mapper_->Get(s.cache_root),s.counts.types,t,mapper_->CacheReadContext());}
+ return Read(*mapper_,model_,s,t,f,m);}
 bool Owner::Prepare(const native_hierarchy_graph::Prepared& p,std::string* error){
  if(!mapper_||!p.source_owner||!p.new_class||!p.cache||!p.declarations)return Fail(error,"source cache owner not calibrated");
  for(const auto&r:records_)if(r.prepared.source_owner==p.source_owner)return Fail(error,"source cache already transformed");
  Record r;r.prepared=p;
  if(!mapper_->Describe(p,&r.source,error)||!r.source.dex_identity||!r.source.private_token||mapper_->Get(r.source.cache_root)!=p.cache||!mapper_->OwnsUnpublished(p,r.source)||
- !Views(r.source,&r.types,&r.fields,&r.methods)||!Unlocked(r.fields,format_)||!Unlocked(r.methods,format_))return Fail(error,"unpublished incoming source cache ownership not proved");
+ !Views(r.source,&r.types,&r.fields,&r.methods)||!Unlocked(r.fields,format_)||!Unlocked(r.methods,format_)||
+ (semantic_&&!semantic_->Readonly(mapper_->Get(r.source.cache_root),r.source.counts.fields,r.source.counts.methods)))return Fail(error,"unpublished incoming source cache ownership not proved");
  // Resolve all roots and allocate the complete journal before the first write.
  auto add=[&](uint32_t pos,uint32_t index,bool full){Root root=nullptr;
  if(index>=r.source.counts.types||!mapper_->RefreshPrepared(&r.prepared)||!mapper_->FindSource(r.prepared,index,&root,error)||!root)return false;
@@ -181,7 +203,7 @@ bool Owner::Prepare(const native_hierarchy_graph::Prepared& p,std::string* error
  // Mapping can have suspended during preparation. Recheck all current pointers
  // and owned writer context before borrowing mutable arrays.
  type_cache::View t;native_cache::View f,m;
- if(!mapper_->RefreshPrepared(&record.prepared)||!mapper_->OwnsUnpublished(record.prepared,record.source)||!Views(record.source,&t,&f,&m)||!Same(t,record.types)||!Same(f,record.fields)||!Same(m,record.methods)||!Unlocked(f,format_)||!Unlocked(m,format_)){records_.pop_back();return Fail(error,"source cache changed before writer window");}
+ if(!mapper_->RefreshPrepared(&record.prepared)||!mapper_->OwnsUnpublished(record.prepared,record.source)||!Views(record.source,&t,&f,&m)||!Same(t,record.types)||!Same(f,record.fields)||!Same(m,record.methods)||!Unlocked(f,format_)||!Unlocked(m,format_)||(semantic_&&!semantic_->Readonly(mapper_->Get(record.source.cache_root),record.source.counts.fields,record.source.counts.methods))){records_.pop_back();return Fail(error,"source cache changed before writer window");}
  // Root lookup may safepoint before OwnsUnpublished establishes the writer
  // window. Prove that every occupied entry still has its journaled DEX role;
  // no newly populated slot may escape transformation.
@@ -197,13 +219,16 @@ bool Owner::Prepare(const native_hierarchy_graph::Prepared& p,std::string* error
  for(const auto& slot:record.slots){auto value=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(mapper_->Get(slot.expected)));
  if(slot.full)__atomic_store_n(t.full+slot.position,value,__ATOMIC_RELAXED);
  else{type_cache::Pair pair{value,slot.index};__atomic_store(t.pairs+slot.position,&pair,__ATOMIC_RELEASE);}}
- Reset(f,format_);Reset(m,format_);
+ if(semantic_){
+ if(!semantic_->Clear(mapper_->Get(record.source.cache_root),record.source.counts.fields,record.source.counts.methods))return Fail(error,"Original source cache semantic invalidation failed; source operation must abort");
+ }else{Reset(f,format_);Reset(m,format_);}
  if(!mapper_->Barrier(record.source.cache_root))return Fail(error,"source DexCache write barrier failed; source operation must abort");
  record.transformed=true;return Check(record);
 }
 bool Owner::Check(const Record&r)const noexcept{
  type_cache::View t;native_cache::View f,m;
- if(!r.transformed||!Views(r.source,&t,&f,&m)||!Same(t,r.types)||!Same(f,r.fields)||!Same(m,r.methods)||!Cleared(f,format_)||!Cleared(m,format_))return false;
+ if(!r.transformed||!Views(r.source,&t,&f,&m)||!Same(t,r.types)||!Same(f,r.fields)||!Same(m,r.methods)||!Cleared(f,format_)||!Cleared(m,format_)||
+ (semantic_&&!semantic_->Cleared(mapper_->Get(r.source.cache_root),r.source.counts.fields,r.source.counts.methods)))return false;
  size_t seen=0;
  for(uint32_t i=0;i<t.pair_count;++i){type_cache::Pair p;__atomic_load(t.pairs+i,&p,__ATOMIC_ACQUIRE);if(!p.object)continue;
  bool found=false;for(const auto&s:r.slots)if(!s.full&&s.position==i){auto expected=reinterpret_cast<uintptr_t>(mapper_->Get(s.expected));found=expected&&expected<=UINT32_MAX&&p.object==expected&&p.index==s.index;break;}if(!found)return false;++seen;}
@@ -216,7 +241,8 @@ bool Owner::VerifyAllocation(const native_hierarchy_graph::Graph&,const native_h
  if(!Witnesses()||p.new_class||!p.source_old_root)return Fail(e,"Unallocated source cache witness absent");
  Source source;type_cache::View types;native_cache::View fields,methods;
  auto actual=p;
- return mapper_->DescribeAllocation(p,&source,e)&&mapper_->RefreshAllocation(&actual)&&source.dex_identity&&source.private_token&&mapper_->Get(source.cache_root)==actual.cache&&mapper_->OwnsUnpublished(actual,source)&&Views(source,&types,&fields,&methods)&&Unlocked(fields,format_)&&Unlocked(methods,format_);
+ return mapper_->DescribeAllocation(p,&source,e)&&mapper_->RefreshAllocation(&actual)&&source.dex_identity&&source.private_token&&mapper_->Get(source.cache_root)==actual.cache&&mapper_->OwnsUnpublished(actual,source)&&Views(source,&types,&fields,&methods)&&Unlocked(fields,format_)&&Unlocked(methods,format_)&&
+  (!semantic_||semantic_->Readonly(mapper_->Get(source.cache_root),source.counts.fields,source.counts.methods));
 }
 bool Owner::VerifyPrepared(const native_hierarchy_graph::Graph&g,const native_hierarchy_graph::Prepared&p,std::string* e)const{
  for(const auto&r:records_)if(Exact(r.prepared,p))return mapper_->VerifyFrozen(g,p,r.source)&&Check(r);

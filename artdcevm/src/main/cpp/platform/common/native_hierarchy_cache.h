@@ -2,6 +2,7 @@
 #include "platform/common/native_hierarchy_graph.h"
 #include "platform/common/native_cache_view.h"
 #include "platform/common/type_cache_update.h"
+#include "platform/common/native_cache_semantic.h"
 namespace artdcevm::native_hierarchy_cache {
 using Root=void*;
 enum class PairFormat { Ordinary, Sequence };
@@ -11,6 +12,7 @@ struct Witness {
  Root expected_class=nullptr;
  void* native_field=nullptr; void* native_method=nullptr;
  bool has_public_storage=false;uintptr_t public_types=0,public_fields=0,public_methods=0;
+ bool semantic_resolution_proved=false;uintptr_t public_types_array=0;
 };
 // Identity and counts come from the allocator's immutable incoming StandardDEX,
 // not from the cache layout being calibrated. token identifies that source
@@ -23,6 +25,8 @@ class SourceMapper {
  virtual ~SourceMapper()=default;
  virtual void* Get(Root)const noexcept=0;
  virtual bool Readable(const void*,size_t)const noexcept=0;
+ virtual native_cache_semantic::Service* Semantic()const noexcept{return nullptr;}
+ virtual const modern_field_metadata::ReadContext* CacheReadContext()const noexcept{return nullptr;}
  virtual bool VerifyStaged(const native_hierarchy_graph::Graph&,
                           const std::vector<native_hierarchy_graph::Input>&,std::string*)const=0;
  virtual bool Describe(const native_hierarchy_graph::Prepared&,Source*,std::string*)const=0;
@@ -65,6 +69,7 @@ class Owner final:public native_hierarchy_graph::CacheOwner {
  struct TypeSlot {uint32_t position,index;Root expected;bool full;};
  struct Record {native_hierarchy_graph::Prepared prepared;Source source;
  type_cache::View types;native_cache::View fields,methods;std::vector<TypeSlot> slots;bool transformed=false;};
+ native_cache_semantic::Service* semantic_=nullptr;
  const SourceMapper* mapper_=nullptr;dex_cache_metadata::Model model_=dex_cache_metadata::Model::Pairs;
  PairFormat format_=PairFormat::Ordinary;std::vector<Record> records_;
  Source calibration_;Witness witness_;

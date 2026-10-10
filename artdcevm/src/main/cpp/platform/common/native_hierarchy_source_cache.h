@@ -69,10 +69,12 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  public:
  Mapper(const runnable_jni::Context&,source_handle_roots::Pool&,
         const modern_field_metadata::FieldMetadata&,const modern_field_storage::Service&,
-        const BatchAccess&,const RequiredServices*);
+        const BatchAccess&,const RequiredServices*,native_cache_semantic::Service* semantic=nullptr);
  void UseReadContext(const modern_field_metadata::ReadContext&)noexcept;
  void* Get(native_hierarchy_cache::Root)const noexcept override;
  bool Readable(const void*,size_t)const noexcept override;
+ native_cache_semantic::Service* Semantic()const noexcept override{return semantic_;}
+ const modern_field_metadata::ReadContext* CacheReadContext()const noexcept override{return Context();}
  bool VerifyStaged(const native_hierarchy_graph::Graph&,const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;
  bool Describe(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source*,std::string*)const override;
  bool DescribeAllocation(const native_hierarchy_graph::Prepared&,native_hierarchy_cache::Source*,std::string*)const override;
@@ -95,6 +97,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  bool Extent(const void*,size_t*)const noexcept;
  const runnable_jni::Context context_;source_handle_roots::Pool& pool_;
  const modern_field_metadata::FieldMetadata& fields_;const modern_field_storage::Service& storage_;
+ native_cache_semantic::Service* semantic_=nullptr;
  const BatchAccess& batch_;const RequiredServices* services_;mutable std::vector<std::unique_ptr<Entry>> entries_;mutable std::vector<RecordView> readonly_;mutable const native_hierarchy_graph::Graph* staged_graph_=nullptr;
  bool Record(const native_hierarchy_graph::Prepared&,RecordView*)const noexcept;
  bool Namespace(const RecordView&,bool linked,bool readonly=false)const noexcept;

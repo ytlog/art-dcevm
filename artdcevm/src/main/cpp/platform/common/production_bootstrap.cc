@@ -282,6 +282,7 @@ struct NativeEngine final:Engine {
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
  native_cache_public_fields::Service public_cache_fields;
+ native_cache_semantic::Service semantic_cache;
  std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> public_cache_storage;
  static bool RefreshPublicCacheStorage(void*,const runnable_jni::Context&,native_hierarchy_cache::Witness*,std::string*);
  jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
@@ -289,7 +290,8 @@ struct NativeEngine final:Engine {
  bool PrepareSourceCacheWitness(JNIEnv*,jvmtiEnv*,std::string*);
  native_schema_run_state::CacheCalibration CacheCalibration()const {
   const auto& w=source_cache_witness;native_schema_run_state::CacheCalibration c;
-  c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=112;
+  c.semantic=semantic_cache.StoragePrepared()?const_cast<native_cache_semantic::Service*>(&semantic_cache):nullptr;
+  c.strong_cache=w.cache;c.strong_expected_class=w.klass;c.extent=c.semantic?8:112;
   c.counts={w.ids.type_count,w.ids.field_count,w.ids.method_count};
   c.type_index=w.ids.type_index;c.field_index=w.field_index;c.method_index=w.method_index;
   c.native_field=w.native_field;c.native_method=w.native_method;
@@ -1162,8 +1164,8 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  // No safepoint between this rooted Class read and the original AddGlobalRef.
  // The real global is published before ART's allocation-tracking callback.
  void* cache=e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
- if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<112)
-  return Fail(request.error,"Public fixture DexCache extent unavailable");
+ if(!cache||!method_identity::ReadableMappingExtent(cache,&extent)||extent<8)
+  return Fail(request.error,"Public fixture DexCache root prefix unavailable");
  auto root=NativeEngine::RootManaged(&e,cache);if(!root)return Fail(request.error,"Public fixture DexCache strong root creation rejected");
  witness.cache=root;witness.native_field=field;witness.native_method=method;
  return true;
@@ -1171,8 +1173,10 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
 bool NativeEngine::RefreshPublicCacheStorage(void* raw,const runnable_jni::Context& scope,native_hierarchy_cache::Witness* witness,std::string* error){
  auto& e=*static_cast<NativeEngine*>(raw);if(!witness||scope.env->ExceptionCheck()||scope.vm!=e.vm||scope.self!=e.graph_current()||!redefinition_gate::Owned(e.vm))return Fail(error,"Public cache storage actual source owner rejected");
  std::array<jlong,3> values{};
- for(size_t i=0;i<values.size();++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,e.source_capabilities.Roots(),*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
- witness->has_public_storage=true;witness->public_types=static_cast<uintptr_t>(values[0]);witness->public_fields=static_cast<uintptr_t>(values[1]);witness->public_methods=static_cast<uintptr_t>(values[2]);return true;
+ for(size_t i=0;i<(e.semantic_cache.StoragePrepared()?2u:values.size());++i)if(!e.public_cache_storage[i]||!e.public_cache_fields.Refresh(scope,e.source_capabilities.Roots(),*e.public_cache_storage[i],e.metadata,&values[i],error))return false;
+ witness->has_public_storage=true;witness->public_types=static_cast<uintptr_t>(values[0]);
+ if(e.semantic_cache.StoragePrepared())witness->public_types_array=static_cast<uintptr_t>(values[1]);
+ else{witness->public_fields=static_cast<uintptr_t>(values[1]);witness->public_methods=static_cast<uintptr_t>(values[2]);}return true;
 }
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::string* error){
  if(!env||!ti||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction/JVMTI context");
@@ -1284,9 +1288,29 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,jvmtiEnv* ti,std::strin
  if(!public_cache_fields.Bind(hooks,runtime,error))return false;
  jclass cache_type=env->GetObjectClass(source_cache_witness.cache);Local cache_type_scope{env,cache_type};
  if(!cache_type||env->ExceptionCheck())return Fail(error,"Original public cache Class observation unavailable");
- const char* storage_names[]={"resolvedTypes","resolvedFields","resolvedMethods"};
+ std::string semantic_unavailable;
+ const bool semantic=semantic_cache.Bound()||semantic_cache.Bind(hooks,&semantic_unavailable);
+ const char* legacy_names[]={"resolvedTypes","resolvedFields","resolvedMethods"};
+ const char* semantic_names[]={"resolvedTypes","resolvedTypesArray"};
  std::array<std::unique_ptr<native_cache_public_fields::Witness>,3> observations;
- for(size_t i=0;i<observations.size();++i)if(!public_cache_fields.Observe(env,ti,source_cache_witness.cache,cache_type,storage_names[i],metadata,&observations[i],error))return false;
+ const size_t count=semantic?2:observations.size();
+ for(size_t i=0;i<count;++i)if(!public_cache_fields.Observe(env,ti,source_cache_witness.cache,cache_type,
+     semantic?semantic_names[i]:legacy_names[i],metadata,&observations[i],error))return false;
+ if(semantic){
+  struct Request {NativeEngine* engine;decltype(observations)* observed;std::string* error;};
+  Request request{this,&observations,error};
+  const auto result=runnable_executor::With(env,source_cache_witness.cache,
+   [](const runnable_jni::Context& context,void* raw){
+    auto& r=*static_cast<Request*>(raw);auto& e=*r.engine;void* cache=nullptr,*owner=nullptr;
+    if(!runnable_executor::DecodeStrongGlobal(context,e.source_cache_witness.cache,&cache)||
+       !runnable_executor::DecodeStrongGlobal(context,(*r.observed)[0]->DeclaringClass(),&owner))
+     return Fail(r.error,"Semantic cache actual independent public Class root rejected");
+    return e.semantic_cache.PrepareStorage(e.metadata,e.storage,cache,owner,
+       (*r.observed)[0]->NativeField(),(*r.observed)[1]->NativeField(),
+       uint64_t((*r.observed)[0]->Value()),uint64_t((*r.observed)[1]->Value()),nullptr,r.error);
+   },&request);
+  if(result!=runnable_jni::Result::kSuccess)return error&&!error->empty()?false:Fail(error,"Semantic cache public long preparation scope rejected");
+ }
  for(auto& witness:public_cache_storage)native_cache_public_fields::Service::Release(env,&witness);
  public_cache_storage=std::move(observations);return true;
 }

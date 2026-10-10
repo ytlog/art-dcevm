@@ -24,7 +24,7 @@ bool Inspect(const evolution::MappedDexMetadata&d,const evolution::ClassSchema&e
  *out={U32(d.begin,64),U32(d.begin,80),U32(d.begin,88)};return true;
  }catch(const std::bad_alloc&){return Fail(e,"incoming source declarations native storage exhausted");}
 }
-Mapper::Mapper(const runnable_jni::Context&ctx,source_handle_roots::Pool&p,const modern_field_metadata::FieldMetadata&f,const modern_field_storage::Service&s,const BatchAccess&b,const RequiredServices*r):context_(ctx),pool_(p),fields_(f),storage_(s),batch_(b),services_(r){}
+Mapper::Mapper(const runnable_jni::Context&ctx,source_handle_roots::Pool&p,const modern_field_metadata::FieldMetadata&f,const modern_field_storage::Service&s,const BatchAccess&b,const RequiredServices*r,native_cache_semantic::Service* semantic):context_(ctx),pool_(p),fields_(f),storage_(s),semantic_(semantic),batch_(b),services_(r){}
 bool AllocatorBatchAccess::Attach(native_hierarchy_allocator::Batch&batch)noexcept{if(attached_once_||batch_||&batch.Roots()!=&pool_||!pool_.ReadyForSourceAccess())return false;batch_=&batch;attached_once_=true;return true;}
 bool AllocatorBatchAccess::Detach(native_hierarchy_allocator::Batch&batch)noexcept{if(batch_!=&batch)return false;batch_=nullptr;return true;}
 size_t AllocatorBatchAccess::Count()const noexcept{return batch_?batch_->Count():0;}

@@ -95,6 +95,8 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/rooted_hierarchy_allocator.cc
     platform/common/source_handle_roots.cc
     platform/common/native_hierarchy_cache.cc
+    platform/common/native_cache_semantic.cc
+    platform/common/native_cache_semantic_storage.cc
     platform/common/native_hierarchy_source_cache.cc
     platform/common/source_allocation_transaction.cc
     platform/common/native_hierarchy_receiver.cc
