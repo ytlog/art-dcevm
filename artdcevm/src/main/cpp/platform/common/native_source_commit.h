@@ -27,6 +27,7 @@ struct Reflective {
   void* state=nullptr;
   // Optional publication after final Validate, never during Prepare.
   void (*begin_commit)(const source_commit::Plan&,void*)=nullptr;
+  void (*rebind_static_fields)(const source_commit::Plan&,void*)=nullptr;
 };
 struct Diagnostics {
   size_t cleared_threads=0;

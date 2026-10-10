@@ -15,6 +15,7 @@ bool Service::ReflectReady(const source_commit::Plan& p,void* raw){auto& s=*stat
  return s.schema_metadata_&&s.schema_model_&&native_schema_policy::ValidateNative(p,*s.schema_metadata_,*s.schema_model_,s.views_,s.schemas_,s.schema_guards_,nullptr,s.read_context_);
  })();}
 void Service::ReflectRetire(const source_commit::Plan&,void* raw){auto& s=*static_cast<Service*>(raw);if(s.schema_guards_&&std::any_of(s.schemas_.begin(),s.schemas_.end(),[](const auto& policy){return !policy.Requirements().empty();}))s.schema_guards_->BeginCommit(*s.plan_);s.reflection_->Retire(*s.mapping_);}
+void Service::ReflectRebindStatics(const source_commit::Plan&,void* raw){auto& s=*static_cast<Service*>(raw);s.reflection_->RebindStaticFields(*s.mapping_);}
 void Service::ReflectUpdate(const source_commit::Plan&,void* raw){auto& s=*static_cast<Service*>(raw);s.reflection_->Update(*s.mapping_,s.refreshed_);}
 bool Service::CaptureFacts(const source_commit::Plan& p){
  const auto& metadata=*schema_metadata_;
@@ -110,7 +111,7 @@ std::unique_ptr<source_commit::Services> Service::Prepare(const source_commit::P
  modern_source_commit::Dependencies dependencies;dependencies.observed=d.runtime;dependencies.metadata=d.metadata;
  dependencies.read_context=d.read_context;dependencies.fields=d.fields;dependencies.prepare_field_copy=bool(d.schemas);
  dependencies.allow_removed_ancestors=std::any_of(schemas_.begin(),schemas_.end(),[](const auto& schema){return schema.Requires(native_schema_policy::GuardKind::HierarchyGraph);});
- dependencies.diagnostics=d.diagnostics;dependencies.caches=d.cache;dependencies.reflective={ReflectReady,ReflectUpdate,this,ReflectRetire};
+ dependencies.diagnostics=d.diagnostics;dependencies.caches=d.cache;dependencies.reflective={ReflectReady,ReflectUpdate,this,ReflectRetire,ReflectRebindStatics};
  // Preparation is readonly, including the persistent retirement registries.
  // The source adapter publishes only after Run completes its final Validate.
  auto prepared=modern_source_commit::Prepare(*d.hooks,dependencies,p,views,error);prepared_source_=prepared.get();return prepared;

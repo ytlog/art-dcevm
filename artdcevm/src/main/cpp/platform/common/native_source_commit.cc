@@ -171,7 +171,9 @@ void Services::ForceDeoptimizeFrames()const{deopt_frames_(dependencies_.observed
 void Services::ReplaceObjectReferences()const{Require(replacements_!=nullptr);replace_(self_,replacements_->BorrowedMap());}
 void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
   Require(&plan==plan_);
-  if(dependencies_.native_roots==NativeRootPolicy::kPreserve)return;
+  if(dependencies_.native_roots==NativeRootPolicy::kPreserve){
+    if(dependencies_.reflective.rebind_static_fields)dependencies_.reflective.rebind_static_fields(plan,dependencies_.reflective.state);return;
+  }
   for(const auto& pair:methods_) {
     Require(pair.restore_old_roots!=nullptr);
     pair.restore_old_roots(pair.service);
@@ -190,6 +192,7 @@ void Services::RestoreDeclaringClasses(const source_commit::Plan& plan)const {
       }
     }
   }
+  if(dependencies_.reflective.rebind_static_fields)dependencies_.reflective.rebind_static_fields(plan,dependencies_.reflective.state);
   if(dependencies_.diagnostics)dependencies_.diagnostics->declaring_roots_verified=true;
 }
 void* Services::NewClassAfterReplacement(void* array,size_t index)const{return dependencies_.metadata->Reference(array,12+4*index);}

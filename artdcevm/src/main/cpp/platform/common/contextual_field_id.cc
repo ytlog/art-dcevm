@@ -10,19 +10,20 @@ using Leaf=void*(*)(void*);
 std::atomic<Leaf> leaf{nullptr};
 std::mutex aliases_mutex;
 bool Fail(std::string* error,const char* message){if(error)*error=message;return false;}
-struct Observe {jobject root;void* field=nullptr;};
+struct Observe {jobject root;void* field=nullptr;const char* stage="callback-not-entered";};
 bool ObserveField(const runnable_jni::Context& scope,void* opaque){
  auto& request=*static_cast<Observe*>(opaque);void* mirror=nullptr;
  auto named=leaf.load(std::memory_order_acquire);
- if(!named||!runnable_executor::DecodeStrongGlobal(scope,request.root,&mirror))return false;
- request.field=named(mirror);return request.field!=nullptr;
+ if(!named){request.stage="missing-named-Field-leaf";return false;}
+ if(!runnable_executor::DecodeStrongGlobal(scope,request.root,&mirror)){request.stage="strong-Field-root-decode-rejected";return false;}
+ request.field=named(mirror);request.stage=request.field?"named-Field-leaf-returned":"named-Field-leaf-returned-null";return request.field!=nullptr;
 }
 void* Read(JNIEnv* env,jobject mirror,std::string* error){
  if(!env||!mirror||env->ExceptionCheck())return nullptr;
  jobject root=env->NewGlobalRef(mirror);if(!root||env->ExceptionCheck()){if(root)env->DeleteGlobalRef(root);return nullptr;}
  Observe request{root};auto result=runnable_executor::With(env,root,ObserveField,&request);
  env->DeleteGlobalRef(root);
- if(result!=runnable_jni::Result::kSuccess){Fail(error,"Owned public reflected Field identity unavailable");return nullptr;}
+ if(result!=runnable_jni::Result::kSuccess){if(error)*error="Owned public reflected Field identity unavailable: result="+std::to_string(static_cast<int>(result))+" stage="+request.stage+(result==runnable_jni::Result::kReentrant?" (reentrant Runnable executor)":"");return nullptr;}
  return request.field;
 }
 struct Locals {
@@ -43,6 +44,7 @@ std::string Descriptor(std::string name){
 }
 }
 struct Proof {
+ std::atomic<void*> live_target{nullptr};
  std::atomic<jweak> owner{nullptr};jfieldID id=nullptr;void* native=nullptr;bool is_static=false;
  std::shared_ptr<const retirement::RetiredFieldRegistry::Lifetime> lifetime;uint32_t token=0;uint64_t generation=0;std::atomic<bool> published{false},invalid{false};
 };
@@ -138,6 +140,19 @@ void* DecodeLive(JNIEnv* env,jobject receiver,bool is_static,jfieldID id,std::st
  if(!env||!receiver||!id||env->ExceptionCheck())return nullptr;
  Locals locals{env,{}};auto owner=is_static?static_cast<jclass>(receiver):static_cast<jclass>(locals.Own(env->GetObjectClass(receiver)));
  if(!owner||env->ExceptionCheck())return nullptr;
+ if(is_static){
+  void* target=nullptr;bool ambiguous=false;
+  std::lock_guard<std::mutex> lock(aliases_mutex);
+  for(auto* slot=alias_head.load(std::memory_order_acquire);slot;slot=slot->next){const auto& p=slot->proof;
+   if(p->id!=id||!p->is_static||p->invalid||p->published)continue;
+   void* current=p->live_target.load(std::memory_order_acquire);if(!current||!p->lifetime->Alive())continue;
+   auto declaring=static_cast<jclass>(locals.Own(env->NewLocalRef(p->owner)));
+   if(env->ExceptionCheck())return nullptr;
+   if(declaring&&env->IsAssignableFrom(owner,declaring)){if(target&&target!=current)ambiguous=true;target=current;}
+  }
+  if(ambiguous){Fail(error,"Live static alias ID has ambiguous independently owned namespaces");return nullptr;}
+  if(target)return target;
+ }
  auto reflected=locals.Own(env->ToReflectedField(owner,id,is_static?JNI_TRUE:JNI_FALSE));
  if(!reflected||env->ExceptionCheck())return nullptr;
  if(env->FromReflectedField(reflected)!=id||env->ExceptionCheck()){Fail(error,"Live public Field ID round trip differs");return nullptr;}
@@ -147,7 +162,37 @@ void PublishRetired(const std::shared_ptr<Proof>& p,retirement::RetiredFieldRegi
  if(!p||!p->owner||!p->native)std::abort();
  auto identity=registry.IdentityFor(p->native);uint32_t token=identity.token;uint64_t generation=identity.generation;if(!token||!generation)std::abort();
  if(p->published){if(p->lifetime!=registry.LifetimeState()||p->token!=token||p->generation!=generation)std::abort();return;}
- p->lifetime=registry.LifetimeState();p->token=token;p->generation=generation;p->published.store(true,std::memory_order_release);
+ if(p->live_target.load(std::memory_order_acquire)){if(p->lifetime!=registry.LifetimeState())std::abort();}else p->lifetime=registry.LifetimeState();p->token=token;p->generation=generation;p->published.store(true,std::memory_order_release);
+}
+void PublishNativeRetired(void* field,retirement::RetiredFieldRegistry& registry){
+ if(!field||!registry.TokenFor(field))std::abort();
+ native_readers.fetch_add(1,std::memory_order_seq_cst);
+ for(auto* slot=alias_head.load(std::memory_order_seq_cst);slot;slot=slot->next)
+  if(slot->proof->native==field&&!slot->proof->invalid)PublishRetired(slot->proof,registry);
+ native_readers.fetch_sub(1,std::memory_order_seq_cst);
+}
+bool HasNativeProof(void* field)noexcept{
+ bool found=false;native_readers.fetch_add(1,std::memory_order_seq_cst);
+ for(auto* slot=alias_head.load(std::memory_order_seq_cst);slot;slot=slot->next){const auto& p=slot->proof;
+  if(p->native==field&&p->is_static&&p->owner&&!p->invalid&&!p->published&&
+     (!p->live_target.load(std::memory_order_acquire)||p->lifetime->Alive()))found=true;
+ }native_readers.fetch_sub(1,std::memory_order_seq_cst);return found;
+}
+void PublishNativeSurviving(void* field,void* target,retirement::RetiredFieldRegistry& registry)noexcept{
+ if(!field||!target)std::abort();native_readers.fetch_add(1,std::memory_order_seq_cst);
+ for(auto* slot=alias_head.load(std::memory_order_seq_cst);slot;slot=slot->next){const auto& p=slot->proof;
+  if(p->native==field&&p->is_static&&p->owner&&!p->invalid&&!p->published){
+   if(p->live_target.load(std::memory_order_acquire)){if(p->lifetime!=registry.LifetimeState())std::abort();}
+   else p->lifetime=registry.LifetimeState();
+   p->live_target.store(target,std::memory_order_release);
+  }
+ }native_readers.fetch_sub(1,std::memory_order_seq_cst);
+}
+void* NativeSurvivingTarget(void* field)noexcept{
+ void* target=nullptr;bool ambiguous=false;native_readers.fetch_add(1,std::memory_order_seq_cst);
+ for(auto* slot=alias_head.load(std::memory_order_seq_cst);slot;slot=slot->next){const auto& p=slot->proof;
+  if(p->native==field&&p->is_static&&p->owner&&!p->invalid&&!p->published){auto* current=p->live_target.load(std::memory_order_acquire);if(current&&p->lifetime->Alive()){if(target&&target!=current)ambiguous=true;target=current;}}
+ }native_readers.fetch_sub(1,std::memory_order_seq_cst);if(ambiguous)std::abort();return target;
 }
 bool Retired(JNIEnv* env,jobject receiver,bool is_static,jfieldID id,retirement::RetiredFieldRegistry& registry){
  if(!env||!receiver||!id||env->ExceptionCheck())return false;
@@ -175,7 +220,7 @@ void Prune(JNIEnv* env,retirement::RetiredFieldRegistry& registry){
  if(!env||env->ExceptionCheck())return;
  std::lock_guard<std::mutex> lock(aliases_mutex);
  for(auto* slot=alias_head.load(std::memory_order_acquire);slot;slot=slot->next){const auto& p=slot->proof;
-  if(p->owner&&p->published.load(std::memory_order_acquire)&&
+  if(p->owner&&(p->published.load(std::memory_order_acquire)||p->live_target.load(std::memory_order_acquire))&&
       (!p->lifetime->Alive()||(p->lifetime==registry.LifetimeState()&&(p->invalid.load(std::memory_order_acquire)||!SameRetirement(*p)||env->IsSameObject(p->owner,nullptr))))){
    p->invalid.store(true,std::memory_order_release);env->DeleteWeakGlobalRef(p->owner);p->owner=nullptr;
   }
@@ -184,7 +229,7 @@ void Prune(JNIEnv* env,retirement::RetiredFieldRegistry& registry){
 }
 void Release(JNIEnv* env,std::shared_ptr<Proof>* p){
  if(!p||!*p)return;std::lock_guard<std::mutex> lock(aliases_mutex);
- if(!(*p)->published){if((*p)->owner){env->DeleteWeakGlobalRef((*p)->owner);(*p)->owner=nullptr;}
+ if(!(*p)->published&&!(*p)->live_target.load(std::memory_order_acquire)){if((*p)->owner){env->DeleteWeakGlobalRef((*p)->owner);(*p)->owner=nullptr;}
   RebuildSlots();}p->reset();
 }
 }

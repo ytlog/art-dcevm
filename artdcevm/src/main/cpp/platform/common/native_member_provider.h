@@ -41,6 +41,7 @@ class Service {
   static bool ReflectReady(const source_commit::Plan&,void*);
   static void ReflectRetire(const source_commit::Plan&,void*);
   static void ReflectUpdate(const source_commit::Plan&,void*);
+  static void ReflectRebindStatics(const source_commit::Plan&,void*);
   struct MemberFact{void* member;void* declaring;uint32_t flags,index;bool method;};
   struct ClassFact{void* klass;void* parent;void* loader;uint32_t flags;size_t instance_fields,static_fields,methods;void* instance_array=nullptr;void* static_array=nullptr;};
   bool CaptureFacts(const source_commit::Plan&);

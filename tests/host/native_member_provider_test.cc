@@ -121,7 +121,9 @@ void SchemaObsolete(void* receiver,void* method){
  for(uint32_t n=0;n<Read32(methods);++n)actual|=method==methods+8+size_t(n)*32;
  assert(actual);events.push_back("obsolete");
 }
+abi::arm64::android11::ReleaseObjectPointer NoObsoleteHistory(void*){return {0};}
 class ProviderHooks:public Hooks {public:void* FindSymbol(const char* lib,const char* name)override{
+ if(std::strstr(name,"GetObsoleteClass"))return reinterpret_cast<void*>(NoObsoleteHistory);
  if(std::strstr(name,"SetEntryPointsForObsoleteMethod"))return reinterpret_cast<void*>(SchemaObsolete);
  if(std::strstr(name,"Class10Implements")||std::strstr(name,"Class16IsAssignableFrom"))return nullptr;
  if(std::strstr(name,"Class13GetDescriptor"))return reinterpret_cast<void*>(ResolutionDescriptor);

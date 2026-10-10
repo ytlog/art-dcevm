@@ -23,6 +23,12 @@ void* DecodeLive(JNIEnv*,jobject receiver,bool is_static,jfieldID,
 // No JNI call or Java allocation is performed here. Publication consumes the
 // prevalidated proof; this is not a generic pointer->ID reconstruction.
 void PublishRetired(const std::shared_ptr<Proof>&,retirement::RetiredFieldRegistry&);
+// Publish only already independently captured aliases of this exact native ID.
+void PublishNativeRetired(void*,retirement::RetiredFieldRegistry&);
+// Exact final History plan consumers; no JNI, allocation, ordinary-reader mutex.
+bool HasNativeProof(void*)noexcept;
+void PublishNativeSurviving(void*,void*,retirement::RetiredFieldRegistry&)noexcept;
+void* NativeSurvivingTarget(void*)noexcept;
 // True only when namespace, static mode, ID and the exact retirement generation
 // agree. Invalid/cleared aliases are removed by Prune outside Runnable scopes.
 bool Retired(JNIEnv*,jobject receiver,bool is_static,jfieldID,

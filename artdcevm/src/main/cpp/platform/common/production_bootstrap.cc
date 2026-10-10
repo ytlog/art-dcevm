@@ -317,6 +317,18 @@ struct NativeEngine final:Engine {
   if(!object||!slot||!e.field_factory_root||!e.graph_current||self!=e.graph_current()||!GraphMapped(raw,slot,sizeof(uint32_t),false))return false;
   *object=e.field_factory_root(const_cast<void*>(slot));return *object!=nullptr;
  }
+ static bool NormalizeFactoryField(void* raw,void* self,native_field_factory_observer::HandleCarrier,void* input,bool,void** out)noexcept{
+  if(!out||!input)return false;*out=input;
+  auto* target=contextual_field_id::NativeSurvivingTarget(input);if(!target)return true;
+  auto& e=*static_cast<NativeEngine*>(raw);void* current=e.graph_current?e.graph_current():nullptr;
+  if(!self||self!=current||!e.field_factory_observer.NormalizerInstalled()||!e.permission_raise){
+   if(current&&e.permission_raise)e.permission_raise(current,"Ljava/lang/IllegalStateException;","Live static alias factory lost its actual Thread owner");
+   return false;
+  }
+  // The final exact History plan published this native-array member only after
+  // root/scalar migration. Preserve every other original source argument.
+  *out=target;return true;
+ }
  bool ObserveFieldFactory(JNIEnv*,jvmtiEnv*,std::string*);
  std::vector<native_lazy_field_mirror::Oracle> live_field_oracles;
  bool PrepareLiveFieldOracles(JNIEnv*,std::string*);
@@ -627,13 +639,28 @@ struct NativeEngine final:Engine {
   if(proof==engine.target_field_proofs.end())std::abort();
   engine.retired_fields.Retire(f);contextual_field_id::PublishRetired(*proof,engine.retired_fields);
  }
+ static bool StaticAliasReady(void* p,void* field,void* current_field,void* target){
+  auto& engine=*static_cast<NativeEngine*>(p);
+  return target&&engine.field_factory_observer.NormalizerInstalled()&&engine.permission_raise&&
+   (!engine.field_factory_observer.FourArgument()||std::all_of(engine.field_factory_public_roots.begin(),engine.field_factory_public_roots.end(),[](bool proven){return proven;}))&&
+   contextual_field_id::HasNativeProof(field)&&std::any_of(engine.target_field_proofs.begin(),engine.target_field_proofs.end(),[&](const auto& proof){return contextual_field_id::IsStatic(proof)&&contextual_field_id::NativeField(proof)==current_field;});
+ }
+ static void PublishStaticAlias(void* owner,void* field,void* target){contextual_field_id::PublishNativeSurviving(field,target,static_cast<NativeEngine*>(owner)->retired_fields);}
+ static void RetireHistoricalField(void* p,void* alias,void* current_field){
+  auto& engine=*static_cast<NativeEngine*>(p);
+  // Called only by the final same-plan history proof. The current field must
+  // still have the original independently staged public JNI identity.
+  auto proof=std::find_if(engine.target_field_proofs.begin(),engine.target_field_proofs.end(),[&](const auto& candidate){return contextual_field_id::NativeField(candidate)==current_field;});
+  if(!alias||alias==current_field||proof==engine.target_field_proofs.end())std::abort();
+  engine.retired_fields.Retire(alias);contextual_field_id::PublishNativeRetired(alias,engine.retired_fields);
+ }
  static bool Retired(void* p){return current&&current->retired_methods.Contains(p);}
  static bool MethodRetired(void* p,void* m){return static_cast<NativeEngine*>(p)->retired_methods.Contains(m);}
  static void RetireMethod(void* p,void* m){static_cast<NativeEngine*>(p)->retired_methods.Retire(m);}
  native_member_provider::Dependencies MemberDependencies() {
   native_member_provider::Dependencies d;d.hooks=&hooks;d.methods=methods.get();d.method_model=&model;
   d.metadata=&metadata;d.fields=&storage;d.cache=&cache;d.runtime=runtime;d.reflection=&reflection;
-  d.retirement={this,MethodRetired,FieldRetired,RetireMethod,RetireField};d.is_retired=Retired;
+  d.retirement={this,MethodRetired,FieldRetired,RetireMethod,RetireField,RetireHistoricalField,StaticAliasReady,PublishStaticAlias};d.is_retired=Retired;
   d.allow_field_removal=handles_proven;d.handle_guards={this,MethodHandlesReady,FieldVarHandlesReady,FieldMethodHandlesReady};
   if(schema_operation){d.expected_removal=native_member_provider::Removal::kSchemaEvolution;d.schemas=&schema_policies;d.schema_guards=&schema_verifier;}
   return d;
@@ -1378,7 +1405,7 @@ bool NativeEngine::ObserveFieldFactory(JNIEnv* env,jvmtiEnv* ti,std::string* err
  if(!field_factory_root||!RefreshMaps(error)||!exclusive_owned_roots::Service::Bind(hooks,&permission_exclusive,error))return false;
  struct Install {
   NativeEngine& engine;std::string* error;
-  static bool Run(const exclusive_owned_roots::Context& context,void* raw){auto& r=*static_cast<Install*>(raw);return r.engine.field_factory_observer.InstallAtExclusive(r.engine.hooks,context,r.error);}
+  static bool Run(const exclusive_owned_roots::Context& context,void* raw){auto& r=*static_cast<Install*>(raw);return r.engine.field_factory_observer.InstallAtExclusive(r.engine.hooks,context,r.error)&&r.engine.field_factory_observer.SetNormalizerAtExclusive({&r.engine,NormalizeFactoryField},context,r.error);}
  } install{*this,error};
  if(!permission_exclusive.With(env,&anchor,1,Install::Run,&install,error))return false;
  field_factory_observed=true; // The transparent hook shares the process engine lifetime.

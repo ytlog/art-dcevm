@@ -204,6 +204,11 @@ std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
       result->methods_[method]=next;
     }
   }
+  if(resolution.hooks){
+    if(!result->aliases_.Prepare(*resolution.hooks,metadata,source,&result->fields_,error,context))return nullptr;
+    result->aliases_prepared_=true;
+    for(const auto& entry:result->aliases_.Entries())if(entry.field!=entry.current&&!entry.target&&!retirement.retire_field_alias)return fail("Historical static field deletion requires exact alias retirement owner");
+  }else if(schemas)return fail("Schema static alias closure lacks original history binding");
   if(resolution.hooks||resolution.method_model||resolution.storage){
     result->resolution_=PrepareResolution(source,metadata,resolution,error,context);if(!result->resolution_)return nullptr;
   }else if(additions)return fail("Added declarations require complete native resolution invalidation provenance");
@@ -220,6 +225,10 @@ bool Service::Bind(HookEngine& hooks,void* runtime,const executable_mirror::Layo
 bool Service::Validate(const Plan& plan,std::string* error,bool allocation_free)const{
   if(!runtime_||!visit_){if(error)*error="Unbound structural reflective visitor";return false;}
   std::optional<method_identity::ScopedReadableMappings> mapped_scope;if(!allocation_free&&!plan.read_context_)mapped_scope.emplace();
+  if(plan.aliases_prepared_&&plan.retirement_.static_alias_ready){
+    for(const auto& e:plan.aliases_.Entries())if(e.target&&!plan.retirement_.static_alias_ready(plan.retirement_.owner,e.field,e.current,e.target)){if(error)*error="Static alias lacks independently captured original opaque JNI ID/factory owner";return false;}
+  }
+  if(plan.aliases_prepared_&&!plan.aliases_.Validate()){if(error)*error="Prepared static field alias history changed";return false;}
   const auto& guards=plan.handle_guards_;
   Visitor visitor(plan.methods_,plan.fields_,true,
       guards.method_handles&&guards.method_handles(guards.owner),
@@ -239,7 +248,15 @@ bool Service::Validate(const Plan& plan,std::string* error,bool allocation_free)
 }
 void Service::Retire(const Plan& plan)const{
   for(const auto& entry:plan.methods_)if(!entry.second)plan.retirement_.retire_method(plan.retirement_.owner,entry.first);
-  for(const auto& entry:plan.fields_)if(!entry.second)plan.retirement_.retire_field(plan.retirement_.owner,entry.first);
+  for(const auto& entry:plan.fields_)if(!entry.second){
+    auto alias=std::find_if(plan.aliases_.Entries().begin(),plan.aliases_.Entries().end(),[&](const auto& e){return e.field==entry.first&&e.field!=e.current;});
+    if(alias!=plan.aliases_.Entries().end())plan.retirement_.retire_field_alias(plan.retirement_.owner,alias->field,alias->current);
+    else plan.retirement_.retire_field(plan.retirement_.owner,entry.first);
+  }
+}
+void Service::RebindStaticFields(const Plan& plan)const noexcept{
+ if(!plan.aliases_prepared_)return;plan.aliases_.Rebind();
+ if(plan.retirement_.publish_static_alias)for(const auto& e:plan.aliases_.Entries())if(e.target)plan.retirement_.publish_static_alias(plan.retirement_.owner,e.field,e.target);
 }
 void Service::Update(const Plan& plan,bool allocation_free)const{
   if(!runtime_||!visit_)std::abort();
