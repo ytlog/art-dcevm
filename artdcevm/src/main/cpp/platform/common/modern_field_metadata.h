@@ -4,6 +4,7 @@
 #include "evolution/class_schema.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/field_array_view.h"
+#include "platform/common/field_declaring_class_source.h"
 #include <string>
 namespace artdcevm::modern_field_metadata {
 struct FieldOracle {
@@ -70,6 +71,7 @@ class FieldMetadata {
   bool Descriptor(void* klass, Model, const char** output, std::string*, const ReadContext* =nullptr) const;
   bool Candidate(const runnable_jni::Context&, void* klass, Model, const char*, const FieldOracle*, size_t, std::string*) const;
   bool FieldsCandidate(void*,Model,bool,field_array::View*,std::string*,const ReadContext* =nullptr) const;
+  field_declaring_class_source::Source field_declaring_;
   FieldLeaf field_leaf_ = nullptr;
   FieldText name_ = nullptr, descriptor_ = nullptr;
   ClassText class_descriptor_ = nullptr;

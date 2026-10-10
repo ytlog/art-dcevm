@@ -48,6 +48,7 @@ bool FieldMetadata::Bind(HookEngine& hooks, std::string* error) {
   auto root=reinterpret_cast<Mark>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
   if(!leaf||!class_descriptor||!mark||!root)
     return Fail(error,"Missing named reflected Field, Class descriptor or read barrier capability");
+  if(!field_declaring_.Bind(hooks,error))return false;
   named_interface_relation_=hooks.FindSymbol("libart.so","_ZN3art6mirror5Class10ImplementsENS_6ObjPtrIS1_EE")||
       hooks.FindSymbol("libart.so","_ZN3art6mirror5Class16IsAssignableFromENS_6ObjPtrIS1_EE");
   field_leaf_=leaf;name_=name;descriptor_=descriptor;class_descriptor_=class_descriptor;
@@ -95,10 +96,10 @@ bool FieldMetadata::Text(void* field,Model model,const char** name,const char** 
   size_t field_extent=0;
   if(context&&(!Extent(context,field,&field_extent)||field_extent<sizeof(field_array::Field)))
     return Fail(error,"Field source prefix is not readable in this mapping context");
-  void* klass=root_(field);size_t extent=0;
+  void* klass=field_declaring_.Read(field);size_t extent=0;
   const auto& source=Source(model);
   if(!klass||!Extent(context,klass,&extent)||extent<source.fields.class_size)
-    return Fail(error,"Field declaring Class source prefix is not readable");
+    return Fail(error,field_declaring_.MappingFailure());
   uint32_t flags=0;std::memcpy(&flags,static_cast<const unsigned char*>(klass)+source.access_flags,4);
   // Fixed ArtField::IsProxyField/GetName/GetTypeDescriptor: only the rooted
   // declaring Class proxy flag selects these two synthetic static fields.
@@ -146,7 +147,7 @@ bool FieldMetadata::Text(void* field,Model model,const char** name,const char** 
   return true;
 }
 void* FieldMetadata::FieldDeclaringClass(void* field)const {
-  Require(calibrated_&&field&&root_);return root_(field);
+  Require(calibrated_&&field&&field_declaring_.Ready());return field_declaring_.Read(field);
 }
 void* FieldMetadata::MethodDeclaringClass(void* method)const {
   static_assert(offsetof(method_metadata::Method11,declaring_class)==0 &&
@@ -208,11 +209,11 @@ bool FieldMetadata::Candidate(const runnable_jni::Context& context,void* klass,M
         !method_identity::ReadableMappingExtent(native,&field_extent)||field_extent<sizeof(field_array::Field))
       return Fail(error,"Named reflected Field accessor rejected independent identity");
     const char* name=nullptr;const char* descriptor=nullptr;
-    if(root_(native)!=klass)return Fail(error,"Native field declaring root differs from owned fixture class");
+    if(field_declaring_.Read(native)!=klass)return Fail(error,"Native field declaring root differs from owned fixture class");
     if(!Text(native,model,&name,&descriptor,error)||std::strcmp(name,oracle.name)||std::strcmp(descriptor,oracle.descriptor)||
         (field_array::Flags(native)&0xdfu)!=(oracle.modifiers&0xdfu))
       return Fail(error,"Native field identity differs from independent reflection");
-    if(root_(native)!=klass)return Fail(error,"Native field declaring root differs from owned fixture class");
+    if(field_declaring_.Read(native)!=klass)return Fail(error,"Native field declaring root differs from owned fixture class");
     native_fields.push_back(native);
     const uintptr_t address=reinterpret_cast<uintptr_t>(native);
     first_all=std::min(first_all,address);
@@ -258,6 +259,27 @@ bool FieldMetadata::Calibrate(const runnable_jni::Context& context,jobject globa
     return Fail(error,"Invalid owned field calibration request");
   void* klass=nullptr;
   if(!runnable_executor::DecodeStrongGlobal(context,global_class,&klass)||!klass)return Fail(error,"Cannot decode owned fixture class");
+  // Select the original source producer before any layout/text candidate.
+  // A present but invalid named getter is never hidden by the generic reader.
+  field_declaring_.Begin();
+  for(size_t i=0;i<count;++i){void* mirror=nullptr;
+    if(!oracles[i].strong_global_field||!runnable_executor::DecodeStrongGlobal(context,oracles[i].strong_global_field,&mirror)||!mirror||context.env->ExceptionCheck()){
+      field_declaring_.Reject();return Fail(error,"Field declaring producer original public mirror root unavailable or pending");
+    }
+    void* field=field_leaf_(mirror);size_t extent=0;
+    if(context.env->ExceptionCheck()||!field||!method_identity::ReadableMappingExtent(field,&extent)||extent<sizeof(field_array::Field)){
+      field_declaring_.Reject();return Fail(error,"Field declaring producer original named Field leaf unavailable");
+    }
+    // Decode after the mirror leaf: JNI root inspection may safepoint, so no
+    // borrowed mirror or previous managed Class survives this boundary.
+    if(!runnable_executor::DecodeStrongGlobal(context,global_class,&klass)||!klass||context.env->ExceptionCheck()){
+      field_declaring_.Reject();return Fail(error,"Field declaring producer current exact public Class root unavailable or pending");
+    }
+    const bool proven=field_declaring_.Observe(field,klass,oracles[i].modifiers,error);
+    if(context.env->ExceptionCheck()){field_declaring_.Reject();return Fail(error,"Original Field declaring producer left a pending exception");}
+    if(!proven)return false;
+  }
+  if(!field_declaring_.Complete(error))return false;
   std::string split_error,merged_error;
   const bool split=Candidate(context,klass,Model::kSplit,expected_class_descriptor,oracles,count,&split_error);
   if(context.env->ExceptionCheck())return Fail(error,"Named field calibration raised JNI exception");
@@ -303,7 +325,7 @@ bool FieldMetadata::VerifyProvenDeclaration(const runnable_jni::Context& context
    return Fail(error,"Target reflected native field storage is absent, duplicated or unreadable");
   const auto* entry=static_cast<const field_array::Field*>(field);uint32_t physical=0;
   const auto& view=oracle.modifiers&8u?statics:instances;
-  if(root_(field)!=klass||entry->dex_field_index!=oracle.dex_index||
+  if(field_declaring_.Read(field)!=klass||entry->dex_field_index!=oracle.dex_index||
      (field_array::Flags(field)&0x50dfu)!=(oracle.modifiers&0x50dfu)||!view.IndexOf(field,&physical))
    return Fail(error,"Target native field owner/index/modifiers/array membership differ from its public immutable identity");
   const char* name=nullptr;const char* type=nullptr;
@@ -311,7 +333,7 @@ bool FieldMetadata::VerifyProvenDeclaration(const runnable_jni::Context& context
    return Fail(error,"Target native field name/type differ from its public immutable identity");
  }
  for(const auto* view:{&instances,&statics})for(uint32_t n=0;n<view->selected_count;++n){void* field=view->AtSelected(n);
-  if(!field||!native_fields.count(field)||root_(field)!=klass)
+  if(!field||!native_fields.count(field)||field_declaring_.Read(field)!=klass)
    return Fail(error,"Target native arrays contain a field omitted by complete public reflection");
  }
  if(error)error->clear();return true;
