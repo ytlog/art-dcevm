@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <limits>
 #include <cstdlib>
@@ -17,6 +18,19 @@ namespace artdcevm::native_schema_guard_verifier {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
 constexpr size_t absent=SIZE_MAX;
+// Ephemeral index of one complete freshly borrowed snapshot. Never retain
+// native keys across a JNI safepoint or a managed-root refresh.
+using NativeOrdinals=std::unordered_map<void*,size_t>;
+bool IndexNativeClasses(const std::vector<void*>& classes,NativeOrdinals* output,std::string* error){
+ if(!output)return Fail(error,"Native Class ordinal index needs an output");
+ NativeOrdinals candidate;candidate.reserve(classes.size());
+ for(size_t n=0;n<classes.size();++n){
+  if(!classes[n])return Fail(error,"Null staged native Class identity");
+  if(!candidate.emplace(classes[n],n).second)return Fail(error,"Duplicate staged native Class identity");
+ }
+ *output=std::move(candidate);return true;
+}
+
 constexpr uint32_t skip_access_checks=0x00080000u,native_flag=0x100u;
 struct Node {
  bounded_managed_roots::Slot root{},loader{};
@@ -233,10 +247,10 @@ struct Verifier::State {
    if(nodes[n].loader&&!roots.Read(nodes[n].loader,&result.loaders[n]))return Fail(error,"Staged ClassLoader strong root could not be decoded");
 
   }
-  if(std::set<void*>(result.classes.begin(),result.classes.end()).size()!=nodes.size())return Fail(error,"Duplicate staged native Class identity");
+  NativeOrdinals class_index;if(!IndexNativeClasses(result.classes,&class_index,error))return false;
   const auto& layout=bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
   for(size_t n=0;n<nodes.size();++n){const auto& node=nodes[n];void* klass=result.classes[n];
-   if(node.parent){void* parent=nullptr;if(!roots.Read(node.parent,&parent))return false;auto it=std::find(result.classes.begin(),result.classes.end(),parent);if(it==result.classes.end())return Fail(error,"Staged ancestor is outside complete loaded roots");result.parents[n]=size_t(it-result.classes.begin());}
+   if(node.parent){void* parent=nullptr;if(!roots.Read(node.parent,&parent))return false;auto it=class_index.find(parent);if(it==class_index.end())return Fail(error,"Staged ancestor is outside complete loaded roots");result.parents[n]=it->second;}
    field_copy::CopyClassView identity;
    std::string identity_error;void* terminal=klass;size_t dimension=0;
    while(dimension<node.schema.descriptor.size()&&node.schema.descriptor[dimension]=='['){
@@ -244,8 +258,8 @@ struct Verifier::State {
     terminal=bindings.metadata->Reference(terminal,offsetof(class_metadata::Class11,component_type));++dimension;
    }
    void* proxy_name=nullptr;const char* name=nullptr;const char* negative=nullptr;
-   const auto terminal_node=std::find(result.classes.begin(),result.classes.end(),terminal);
-   if(terminal_node!=result.classes.end()){const auto& source=nodes[size_t(terminal_node-result.classes.begin())];
+   const auto terminal_node=class_index.find(terminal);
+   if(terminal_node!=class_index.end()){const auto& source=nodes[terminal_node->second];
     if(source.class_name){if(!roots.Read(source.class_name,&proxy_name))return Fail(error,"Public proxy name root could not be decoded");name=source.class_name_text.c_str();negative=source.negative_class_name.c_str();}}
    const bool identified=bindings.metadata->ClassIdentityVerified(klass,node.schema.descriptor.c_str(),proxy_name,name,negative,&identity,&identity_error,context);
    const bool same_descriptor=identified&&identity.descriptor&&node.schema.descriptor==identity.descriptor;
@@ -278,8 +292,8 @@ struct Verifier::State {
     const bool mapped=Mapped(method,layout.size);void* owner=mapped?bindings.method_class(bindings.owner,method):nullptr;
     const uint32_t raw=mapped?method_metadata::ReadAccessFlags(method):0;
     if(!MethodWindowProof(mapped,owner==klass,raw,node.schema.methods[i].access)){
-     const char* owner_name=mapped?nullptr:"<unmapped>";const auto index=std::find(result.classes.begin(),result.classes.end(),owner);
-     if(index!=result.classes.end())owner_name=nodes[size_t(index-result.classes.begin())].schema.descriptor.c_str();
+     const char* owner_name=mapped?nullptr:"<unmapped>";const auto index=class_index.find(owner);
+     if(index!=class_index.end())owner_name=nodes[index->second].schema.descriptor.c_str();
      return MethodWindowFailure(error,node.schema,node.schema.methods[i],mapped,owner_name,raw);
     }
     result.declared[n].push_back(method);
@@ -301,9 +315,9 @@ struct Verifier::State {
    std::set<void*> found;
    for(uint32_t i=0;i<count;++i){void* method=static_cast<unsigned char*>(array)+8+size_t(i)*layout.size;result.all_methods[n].push_back(method);
     if(std::find(result.declared[n].begin(),result.declared[n].end(),method)!=result.declared[n].end()){found.insert(method);continue;}
-    void* owner=bindings.method_class(bindings.owner,method);auto cls=std::find(result.classes.begin(),result.classes.end(),owner);
-    if(cls==result.classes.end()||owner==klass)return Fail(error,"Nondeclared native method lacks foreign copied-member ownership");
-    const size_t source=size_t(cls-result.classes.begin());
+    void* owner=bindings.method_class(bindings.owner,method);auto cls=class_index.find(owner);
+    if(cls==class_index.end()||owner==klass)return Fail(error,"Nondeclared native method lacks foreign copied-member ownership");
+    const size_t source=cls->second;
     // A proxy source must first be normalized using its own independently
     // proved data witness. Do not call the DEX comparator on a raw proxy.
     if(nodes[source].class_name)return Fail(error,"Copied native method has an unproved proxy source");
@@ -351,15 +365,16 @@ struct Verifier::State {
  bool Interfaces(const Snapshot& roots,const source_commit::Plan& transaction,std::string* error)const{
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
   if(!interfaces_proven)return Fail(error,"Native interface table lacks public positive/negative calibration");
+  NativeOrdinals class_index;if(!IndexNativeClasses(roots.classes,&class_index,error))return false;
   const auto mapped=[&](void* value){for(size_t i=0;i<transaction.old_classes.size();++i)if(transaction.old_classes[i]==value)return transaction.new_classes[i];return value;};
   for(size_t n=0;n<nodes.size();++n){if(!nodes[n].affected)continue;
    std::vector<void*> expected;std::vector<size_t> visiting;
    const auto collect=[&](const auto& self,size_t index)->bool {
     if(std::find(visiting.begin(),visiting.end(),index)!=visiting.end())return Fail(error,"Cyclic staged interface hierarchy");visiting.push_back(index);
     if(roots.parents[index]!=absent&&!self(self,roots.parents[index]))return false;
-    for(auto iface:nodes[index].interfaces){void* native=nullptr;if(!this->roots.Read(iface,&native))return false;auto it=std::find(roots.classes.begin(),roots.classes.end(),native);if(it==roots.classes.end())return Fail(error,"Interface identity is outside staged Class roots");
+    for(auto iface:nodes[index].interfaces){void* native=nullptr;if(!this->roots.Read(iface,&native))return false;auto it=class_index.find(native);if(it==class_index.end())return Fail(error,"Interface identity is outside staged Class roots");
      if(std::find(expected.begin(),expected.end(),native)==expected.end())expected.push_back(native);
-     if(!self(self,size_t(it-roots.classes.begin())))return false;
+     if(!self(self,it->second))return false;
     }visiting.pop_back();return true;
    };
    if(!collect(collect,n))return false;
@@ -474,6 +489,7 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
  auto& s=*state_;if(!s.collected||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");
  s.sealed=false;s.access_proven=false;s.final_fields_proven=false;s.aliases_proven=false;s.access_slots.clear();s.readonly_access_slots.clear();s.grants.clear();s.required_requests.clear();s.requirements_plan=nullptr;s.hierarchy_authority=nullptr;
  Snapshot roots;if(!s.Roots(&roots,error))return false;
+ NativeOrdinals class_index;if(!IndexNativeClasses(roots.classes,&class_index,error))return false;
  const auto Mapped=[&](const void* address,size_t bytes){return address&&s.bindings.readable(s.bindings.owner,address,bytes);};
  size_t count=0;for(size_t n=0;n<s.nodes.size();++n)if(s.nodes[n].affected){++count;if(std::count(transaction.old_classes.begin(),transaction.old_classes.end(),roots.classes[n])!=1)return Fail(error,"Native Holder Class is outside public affected graph");}
  if(count!=transaction.old_classes.size())return Fail(error,"Native Holder repeats or omits a staged Class");
@@ -482,7 +498,7 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
  bool positive=false,negative=false;
  for(size_t n=0;n<s.nodes.size();++n){if(s.nodes[n].schema.descriptor.empty()||s.nodes[n].schema.descriptor.front()!='L')continue;
   std::set<void*> expected;std::set<size_t> traversed;
-  const auto walk=[&](const auto& self,size_t k)->bool{if(!traversed.insert(k).second)return true;if(roots.parents[k]!=absent&&!self(self,roots.parents[k]))return false;for(auto iface:s.nodes[k].interfaces){void* native=nullptr;if(!s.roots.Read(iface,&native))return false;auto it=std::find(roots.classes.begin(),roots.classes.end(),native);if(it==roots.classes.end())return false;expected.insert(native);if(!self(self,size_t(it-roots.classes.begin())))return false;}return true;};
+  const auto walk=[&](const auto& self,size_t k)->bool{if(!traversed.insert(k).second)return true;if(roots.parents[k]!=absent&&!self(self,roots.parents[k]))return false;for(auto iface:s.nodes[k].interfaces){void* native=nullptr;if(!s.roots.Read(iface,&native))return false;auto it=class_index.find(native);if(it==class_index.end())return false;expected.insert(native);if(!self(self,it->second))return false;}return true;};
   if(!walk(walk,n))return Fail(error,"Public interface calibration roots are incomplete");void* table=s.bindings.metadata->Reference(roots.classes[n],24);uint32_t length=0;if(table){if(!Mapped(table,12))return Fail(error,"Collected source IfTable header is unreadable in the current mapping view");length=Read<uint32_t>(table,8);}
   if(length%2||size_t(length)/2!=expected.size()||(table&&!Mapped(table,12+size_t(length)*4)))return Fail(error,"Source IfTable differs from independently observed interfaces");
   std::set<void*> observed;for(size_t i=0;i<expected.size();++i){void* value=s.bindings.metadata->Reference(table,12+i*8);if(!expected.count(value)||!observed.insert(value).second)return Fail(error,"Source IfTable contains a different interface identity");}
@@ -510,7 +526,7 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
   return true;
  }
  const auto prove=[&]()->bool {
- Snapshot local;const Snapshot* episode=s.batch_snapshot;if(!episode){if(!s.Roots(&local,error))return false;episode=&local;}const auto& roots=*episode;auto it=std::find(roots.classes.begin(),roots.classes.end(),transaction.old_classes[pair]);if(it==roots.classes.end())return false;const size_t target=size_t(it-roots.classes.begin());
+ Snapshot local;const Snapshot* episode=s.batch_snapshot;if(!episode){if(!s.Roots(&local,error))return false;episode=&local;}const auto& roots=*episode;NativeOrdinals class_index;if(!IndexNativeClasses(roots.classes,&class_index,error))return false;auto it=class_index.find(transaction.old_classes[pair]);if(it==class_index.end())return false;const size_t target=it->second;
  if(!s.nodes[target].affected||roots.loaders[target]!=loader)return Fail(error,"Schema guard owner/ClassLoader identity differs");
  field_copy::CopyClassView old_identity,new_identity;if(!s.bindings.metadata->ClassIdentity(transaction.old_classes[pair],&old_identity,error)||!s.bindings.metadata->ClassIdentity(transaction.new_classes[pair],&new_identity,error)||old_identity.loader!=loader||new_identity.loader!=loader)return false;
  const auto mapped=[&](void* value){for(size_t i=0;i<transaction.old_classes.size();++i)if(transaction.old_classes[i]==value)return transaction.new_classes[i];return value;};
@@ -526,7 +542,7 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
   const auto walk=[&](const auto& self,size_t current)->bool {
    if(current==target)return true;if(current==absent||!visited.insert(current).second)return false;
    if(self(self,parent(current)))return true;
-   for(auto iface:s.nodes[current].interfaces){void* value=nullptr;if(!s.roots.Read(iface,&value))continue;auto found=std::find(roots.classes.begin(),roots.classes.end(),value);if(found!=roots.classes.end()&&self(self,size_t(found-roots.classes.begin())))return true;}
+   for(auto iface:s.nodes[current].interfaces){void* value=nullptr;if(!s.roots.Read(iface,&value))continue;auto found=class_index.find(value);if(found!=class_index.end()&&self(self,found->second))return true;}
    return false;
   };return walk(walk,node);
  };
@@ -558,11 +574,11 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
    // A bootstrap ClassLinker lookup cannot resolve a Class defined only in
    // an application/custom defining-loader namespace. Its dynamic reflection,
    // JNI and handle consumers remain governed by their independent entry guards.
-   bool child_targets=true;for(void* klass:transaction.old_classes){auto node=std::find(roots.classes.begin(),roots.classes.end(),klass);if(node==roots.classes.end()||!roots.loaders[size_t(node-roots.classes.begin())])child_targets=false;}
+   bool child_targets=true;for(void* klass:transaction.old_classes){auto node=class_index.find(klass);if(node==class_index.end()||!roots.loaders[node->second])child_targets=false;}
    std::vector<uint32_t*> slots,readonly;
    const auto add=[&](void* method)->bool {
-    void* declaring=s.bindings.method_class(s.bindings.owner,method);auto native_owner=std::find(roots.classes.begin(),roots.classes.end(),declaring);
-    if(native_owner!=roots.classes.end()){if(child_targets&&!roots.loaders[size_t(native_owner-roots.classes.begin())])return true;}
+    void* declaring=s.bindings.method_class(s.bindings.owner,method);auto native_owner=class_index.find(declaring);
+    if(native_owner!=class_index.end()){if(child_targets&&!roots.loaders[native_owner->second])return true;}
     else if(std::find(transaction.new_classes.begin(),transaction.new_classes.end(),declaring)==transaction.new_classes.end())return false;
     const uint32_t flags=method_metadata::ReadAccessFlags(method);if(flags&native_flag)return true;
     auto* slot=reinterpret_cast<uint32_t*>(static_cast<unsigned char*>(method)+4);
@@ -650,6 +666,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
  auto& s=*state_;if(!s.sealed||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||!s.Roots(&s.frozen_snapshot,error))return false;
  const bool split=s.bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;
  const auto& layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ NativeOrdinals class_index;if(!IndexNativeClasses(s.frozen_snapshot.classes,&class_index,error))return false;
  s.class_proofs.resize(s.nodes.size());
  for(size_t n=0;n<s.nodes.size();++n){void* klass=s.frozen_snapshot.classes[n];auto& proof=s.class_proofs[n];
   proof.methods=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,48)));proof.instances=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,40)));
@@ -664,9 +681,9 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
    for(uint32_t i=0;i<length/2;++i)proof.interface_classes.push_back(s.bindings.metadata->Reference(proof.interfaces,12+size_t(i)*8));}
   for(size_t i=0;i<s.nodes[n].field_ids.size();++i){void* field=s.bindings.decode_native_field(s.bindings.owner,klass,s.nodes[n].field_ids[i]);
    const auto* native=static_cast<const abi::arm64::Field*>(field);s.member_proofs.push_back({field,n,jvmti_field_flags::Public(native->access_flags),native->dex_field_index,native->offset,true,s.nodes[n].field_ids[i]});}
-  for(void* method:s.frozen_snapshot.all_methods[n]){void* owner=s.bindings.method_class(s.bindings.owner,method);auto it=std::find(s.frozen_snapshot.classes.begin(),s.frozen_snapshot.classes.end(),owner);method_metadata::Identity identity;
-   if(it==s.frozen_snapshot.classes.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
-   s.member_proofs.push_back({method,size_t(it-s.frozen_snapshot.classes.begin()),jvmti_method_flags::Public(identity.access_flags),identity.dex_method_index,0,false});}
+  for(void* method:s.frozen_snapshot.all_methods[n]){void* owner=s.bindings.method_class(s.bindings.owner,method);auto it=class_index.find(owner);method_metadata::Identity identity;
+   if(it==class_index.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
+   s.member_proofs.push_back({method,it->second,jvmti_method_flags::Public(identity.access_flags),identity.dex_method_index,0,false});}
  }
  for(void* klass:s.expected.new_classes){State::InterfaceProof proof;proof.klass=klass;proof.table=s.bindings.metadata->Reference(klass,24);
   if(proof.table){if(!s.bindings.readable(s.bindings.owner,proof.table,12))return false;const uint32_t length=Read<uint32_t>(proof.table,8);

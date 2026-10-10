@@ -5,6 +5,30 @@
 #include <iostream>
 using namespace artdcevm;
 int main(){
+ // The exact helper used by State::Roots and CollectManagedRoots consumes
+ // actual native Class allocations; opaque identity has no permission value.
+ // Every root snapshot builds independently, including after movement.
+ {
+  using namespace native_schema_guard_verifier;
+  constexpr size_t count=17470,methods_per_class=20;
+  std::vector<class_metadata::Class11> old_classes(count),moved_classes(count);
+  std::vector<void*> roots(count);for(size_t n=0;n<count;++n)roots[n]=&old_classes[n];
+  NativeOrdinals before;std::string error;assert(IndexNativeClasses(roots,&before,&error));
+  for(size_t n=0;n<count;++n){assert(before.at(&old_classes[n])==n);
+   for(size_t m=0;m<methods_per_class;++m)assert(before.at(roots[n])==n);}
+  void* unknown=&error;assert(before.find(unknown)==before.end()&&before.find(nullptr)==before.end());
+  for(size_t n=0;n<count;++n)roots[n]=&moved_classes[n];
+  NativeOrdinals after;assert(IndexNativeClasses(roots,&after,&error));
+  for(size_t n=0;n<count;++n){assert(after.at(&moved_classes[n])==n&&after.find(&old_classes[n])==after.end());
+   assert(before.find(&moved_classes[n])==before.end());}
+  const auto retained=after;roots[3]=roots[2];
+  assert(!IndexNativeClasses(roots,&after,&error)&&error=="Duplicate staged native Class identity"&&after==retained);
+  roots[3]=nullptr;assert(!IndexNativeClasses(roots,&after,&error)&&error=="Null staged native Class identity"&&after==retained);
+  roots[3]=&moved_classes[3];assert(IndexNativeClasses(roots,&after,&error));
+  assert(after.at(roots[3])==3&&!IndexNativeClasses(roots,nullptr,&error));
+  std::cout<<"Actual snapshot Class ordinal index: 17470 Classes/349400 method-owner lookups, moved snapshot rejects old owners, duplicate/null roots preserve output passed\n";
+ }
+
  // Test the same normalization helper used by the actual verifier TU.
  // The comparator source must be an attested native arena entry; arbitrary
  // mapped addresses and recursive proxy origins cannot grant provenance.
