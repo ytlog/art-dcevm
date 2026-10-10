@@ -16,15 +16,21 @@ using namespace abi::arm64::android11;
 using BodyNative=jboolean(*)(JNIEnv*,jclass,jclass,jint);
 using WaiterNative=jboolean(*)(JNIEnv*,jclass);
 BodyNative body_native=nullptr;WaiterNative waiter_native=nullptr;
-abi::arm64::android11::InitializeClass initialize_proxy=nullptr;WaitForInitializeClass wait_proxy=nullptr;
+abi::arm64::android11::InitializeClass initialize_proxy=nullptr;WaitForInitializeClass wait_proxy=nullptr;WaitIgnoringInterrupts inner_proxy=nullptr;ClassLockConstruct construct_proxy=nullptr;ClassLockDestroy destroy_proxy=nullptr;
 thread_local JNIEnv* episode_env=&env;
 
 std::mutex original_monitor;std::condition_variable original_condition;
 std::atomic<int> original_waits{0},original_bodies{0};
 std::atomic<bool> source_moved{false};
 std::atomic<const void*> owner_slot{nullptr},waiter_slot{nullptr};
-enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid};
+enum class Case{Positive,MovingRoots,MissingWait,WrongWaitReturn,WrongInitReturn,WrongCompletion,WrongPublicResult,WrongBodyTid,UnownedWaitHandle,WrongWaitSelf,WrongClassLinker,RepeatedSuccess,WrongTerminalReturn,WrongTerminalCompletion,ReentrantOwner,WrongReentrantReturn,WrongReentrantCompletion,WrongReentrantTid,WrongReentrantEntryTid,InnerPositive,InnerMovingRoots,InnerSpurious,InnerMultiple,InnerWrongStatus,InnerWrongSelf,InnerWrongOwner,InnerDestroyedLock,InnerMissingCtor,InnerEarlyReturn,EnteringPending};
 Case selected=Case::Positive;
+bool InnerCase(){return selected>=Case::InnerPositive&&selected<=Case::InnerEarlyReturn;}
+bool PositiveCase(){return selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner||selected==Case::InnerPositive||selected==Case::InnerMovingRoots||selected==Case::InnerSpurious||selected==Case::InnerMultiple;}
+thread_local bool episode_pending=false;
+jboolean EpisodeException(JNIEnv*){return episode_pending?JNI_TRUE:JNI_FALSE;}
+thread_local class_metadata::Class17* inner_class=nullptr;
+thread_local unsigned inner_cycles=0;
 int type_id,run_episode_id;
 constexpr uint32_t source_tid=913;
 uint32_t LoadStatus(class_metadata::Class17* type){return __atomic_load_n(&type->status,__ATOMIC_SEQ_CST)>>28;}
@@ -32,16 +38,37 @@ void StoreStatus(class_metadata::Class17* type,uint32_t status){__atomic_store_n
 // Separate original source declarations/algorithms: the observer never supplies
 // these locks, status transitions, wait outcomes or condition notification.
 struct OriginalClassHandle{const uint32_t* slot;};
+void OriginalClassLockConstruct(void* opaque,void* self,ClassHandle handle){
+ assert(self==current&&handle.slot);auto& lock=*static_cast<std::unique_lock<std::mutex>*>(opaque);
+ assert(!lock.owns_lock());lock.lock();
+}
+void OriginalClassLockDestroy(void* opaque){
+ auto& lock=*static_cast<std::unique_lock<std::mutex>*>(opaque);assert(lock.owns_lock());lock.unlock();
+}
+void OriginalInnerWait(void* opaque){
+ auto& lock=*static_cast<std::unique_lock<std::mutex>*>(opaque);assert(lock.owns_lock());
+ assert(inner_class);++inner_cycles;
+ if(selected==Case::InnerWrongStatus)StoreStatus(inner_class,13);
+ if((selected==Case::InnerSpurious&&inner_cycles==1)||(selected==Case::InnerMultiple&&inner_cycles<=2))return;
+ Put32(current,0,92u<<24);original_condition.wait(lock);Put32(current,0,0);
+}
 bool OriginalWait(void*,ClassHandle abi_handle,void* self,void* opaque){
  const OriginalClassHandle handle{static_cast<const uint32_t*>(abi_handle.slot)};
  assert(self==(selected==Case::WrongWaitSelf?foreign_thread.data():current)&&Read32(current)==0&&opaque);
  auto& lock=*static_cast<std::unique_lock<std::mutex>*>(opaque);assert(lock.owns_lock());
  auto* type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(*handle.slot));
- ++original_waits;
+ ++original_waits;inner_cycles=0;
+ if(selected==Case::InnerEarlyReturn)return true;
  for(;;){
   type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(__atomic_load_n(handle.slot,__ATOMIC_SEQ_CST)));
   if(LoadStatus(type)!=13)break;
-  Put32(current,0,92u<<24);original_condition.wait(lock);Put32(current,0,0);
+  if(InnerCase()){
+   inner_class=type;
+   if(selected==Case::InnerDestroyedLock){destroy_proxy(opaque);lock.lock();}
+   if(selected==Case::InnerWrongStatus)StoreStatus(type,12);
+   void* previous=current;if(selected==Case::InnerWrongSelf)current=foreign_thread.data();
+   inner_proxy(opaque);current=previous;
+  }else{Put32(current,0,92u<<24);original_condition.wait(lock);Put32(current,0,0);}
  }
  type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(__atomic_load_n(handle.slot,__ATOMIC_SEQ_CST)));
  bool result=LoadStatus(type)>=14;return selected==Case::WrongWaitReturn?!result:result;
@@ -51,7 +78,11 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  const OriginalClassHandle handle{static_cast<const uint32_t*>(abi_handle.slot)};
  assert(self==current&&Read32(current)==0&&statics&&parents);
  auto* type=reinterpret_cast<class_metadata::Class17*>(uintptr_t(*handle.slot));
- std::unique_lock<std::mutex> lock(original_monitor);
+ std::unique_lock<std::mutex> lock(original_monitor,std::defer_lock);
+ uint32_t foreign_class=uint32_t(uintptr_t(type==new_class?old_class:new_class));
+ if(InnerCase())construct_proxy(&lock,self,selected==Case::InnerWrongOwner&&LoadStatus(type)==13?ClassHandle{&foreign_class}:abi_handle);
+ else lock.lock();
+ struct Destruction {std::unique_lock<std::mutex>&lock;bool inner;~Destruction(){if(inner)destroy_proxy(&lock);}} destruction{lock,InnerCase()};
  if(LoadStatus(type)==3||LoadStatus(type)>=14){
   const bool result=LoadStatus(type)>=14;
   if(selected==Case::WrongTerminalCompletion)StoreStatus(type,12);
@@ -64,7 +95,7 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
    return selected!=Case::WrongReentrantReturn;
   }
   uint32_t foreign=uint32_t(uintptr_t(type));ClassHandle waiter_handle{selected==Case::UnownedWaitHandle?&foreign:handle.slot};
-  bool result=wait_proxy(linker,waiter_handle,selected==Case::WrongWaitSelf?foreign_thread.data():self,&lock);
+  bool result=(InnerCase()?OriginalWait:wait_proxy)(linker,waiter_handle,selected==Case::WrongWaitSelf?foreign_thread.data():self,&lock);
   return selected==Case::WrongInitReturn?!result:result;
  }
  assert(LoadStatus(type)==12);__atomic_store_n(&type->clinit_thread_id_or_hash,source_tid,__ATOMIC_SEQ_CST);StoreStatus(type,13);
@@ -81,7 +112,7 @@ bool OriginalInitialize(void* linker,void* self,ClassHandle abi_handle,bool stat
  }
  lock.lock();
  bool success=body_ok&&type==new_class;
- if(selected==Case::MovingRoots&&success){
+ if((selected==Case::MovingRoots||selected==Case::InnerMovingRoots)&&success){
   assert(owner_slot.load()&&waiter_slot.load());
   std::memcpy(moved_class,type,160);
   // Independent collector updates the real source compressed cells and the
@@ -98,12 +129,18 @@ class EpisodeHooks final:public Hooks {
  public:
  void* FindSymbol(const char* lib,const char* name)override{
   if(!std::strcmp(name,kInitializeClass))return reinterpret_cast<void*>(OriginalInitialize);
-  if(!std::strcmp(name,kWaitForInitializeClass))return selected==Case::MissingWait?nullptr:reinterpret_cast<void*>(OriginalWait);
+  if(!std::strcmp(name,kWaitForInitializeClass))return selected==Case::MissingWait||InnerCase()?nullptr:reinterpret_cast<void*>(OriginalWait);
+  if(!std::strcmp(name,kWaitIgnoringInterrupts))return InnerCase()?reinterpret_cast<void*>(OriginalInnerWait):nullptr;
+  if(!std::strcmp(name,kClassLockConstruct))return InnerCase()&&selected!=Case::InnerMissingCtor?reinterpret_cast<void*>(OriginalClassLockConstruct):nullptr;
+  if(!std::strcmp(name,kClassLockDestroy))return InnerCase()?reinterpret_cast<void*>(OriginalClassLockDestroy):nullptr;
   return Hooks::FindSymbol(lib,name);
  }
  void* Install(void* target,void* proxy,void** original,std::string*)override{
   assert(stopped==1&&Read32(current)==(92u<<24));*original=target;
   if(target==reinterpret_cast<void*>(OriginalInitialize))initialize_proxy=reinterpret_cast<abi::arm64::android11::InitializeClass>(proxy);
+  else if(target==reinterpret_cast<void*>(OriginalClassLockConstruct))construct_proxy=reinterpret_cast<ClassLockConstruct>(proxy);
+  else if(target==reinterpret_cast<void*>(OriginalClassLockDestroy))destroy_proxy=reinterpret_cast<ClassLockDestroy>(proxy);
+  else if(target==reinterpret_cast<void*>(OriginalInnerWait))inner_proxy=reinterpret_cast<WaitIgnoringInterrupts>(proxy);
   else {assert(target==reinterpret_cast<void*>(OriginalWait));wait_proxy=reinterpret_cast<WaitForInitializeClass>(proxy);}
   return target;
  }
@@ -201,9 +238,11 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
  assert(Read32(current)==(92u<<24));EpisodeHooks hooks;native_initializer_episode::Service observer;std::string error;
  auto saved=table;table.GetJavaVM=EpisodeGetVM;table.FindClass=EpisodeFind;table.GetStaticMethodID=EpisodeMethod;
  table.RegisterNatives=EpisodeRegister;table.CallStaticObjectMethodV=EpisodeType;table.CallStaticIntMethodV=EpisodeRun;
+ if(selected==Case::EnteringPending){table.ExceptionCheck=EpisodeException;episode_pending=true;}
  const auto mutations_before=mutations,publications=retirement_publications;
  const bool ok=observer.Calibrate(hooks,&env,reinterpret_cast<jobject>(old_method),metadata,roots,&error);
- assert(ok==(selected==Case::Positive||selected==Case::MovingRoots||selected==Case::RepeatedSuccess||selected==Case::ReentrantOwner));assert(observer.ReadyFor(metadata,roots)==ok);
+ assert(ok==PositiveCase());
+ if(selected==Case::EnteringPending){assert(episode_pending&&!initialize_proxy&&!inner_proxy&&!wait_proxy);episode_pending=false;}assert(observer.ReadyFor(metadata,roots)==ok);
  modern_field_metadata::FieldMetadata foreign=metadata;assert(!observer.ReadyFor(foreign,roots));
  assert(mutations==mutations_before&&retirement_publications==publications);
  if(selected==Case::WrongTerminalReturn||selected==Case::WrongTerminalCompletion){
@@ -226,7 +265,7 @@ void RunEpisodes(modern_field_metadata::FieldMetadata& metadata,source_handle_ro
 }
 int main(){
  for(Case test:{Case::Positive,Case::MovingRoots,Case::MissingWait,Case::WrongWaitReturn,Case::WrongInitReturn,Case::WrongCompletion,
-     Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid}){
+Case::WrongPublicResult,Case::WrongBodyTid,Case::UnownedWaitHandle,Case::WrongWaitSelf,Case::WrongClassLinker,Case::RepeatedSuccess,Case::WrongTerminalReturn,Case::WrongTerminalCompletion,Case::ReentrantOwner,Case::WrongReentrantReturn,Case::WrongReentrantCompletion,Case::WrongReentrantTid,Case::WrongReentrantEntryTid,Case::InnerPositive,Case::InnerMovingRoots,Case::InnerSpurious,Case::InnerMultiple,Case::InnerWrongStatus,Case::InnerWrongSelf,Case::InnerWrongOwner,Case::InnerDestroyedLock,Case::InnerMissingCtor,Case::InnerEarlyReturn,Case::EnteringPending}){
   pid_t child=fork();assert(child>=0);if(child==0){selected=test;int result=RootsFixtureMain();_exit(result);}
   int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==0);
  }

@@ -28,6 +28,8 @@ struct Installed {
  JavaVM* vm=nullptr;jobject anchor=nullptr;void*class_linker=nullptr;
  void*(*current)()=nullptr;
  InitializeClass initialize=nullptr;WaitForInitializeClass wait=nullptr;
+ WaitIgnoringInterrupts inner_wait=nullptr;
+ ClassLockConstruct lock_construct=nullptr;ClassLockDestroy lock_destroy=nullptr;
  bool installed=false;
 };
 Installed installed;
@@ -43,6 +45,8 @@ std::atomic<bool> ready{false};
 struct SourceEntry {
  SourceEntry*previous;const Service*owner;void*linker;void*self;
  const void*slot;uint64_t epoch;bool statics,parents;
+ uint32_t inner_entries=0,inner_returns=0;bool waiting=false;
+ void*lock=nullptr;const void*lock_slot=nullptr;
 };
 thread_local SourceEntry*source_entry=nullptr;
 thread_local uint64_t source_epoch=0;
@@ -89,6 +93,19 @@ bool ReadHandle(Trial& trial,void* self,ClassHandle handle,uint32_t* status,uint
      StateAt(actual,status,tid);
  }catch(...){return false;}
 }
+void CompleteInnerWait(SourceEntry& entry,Trial& trial,void* self,ClassHandle handle,bool result){
+ if(!installed.inner_wait||!entry.waiting)return;
+ uint32_t status=0,tid=0;
+ if(!entry.inner_entries||entry.inner_entries!=entry.inner_returns||
+    entry.self!=self||entry.linker!=trial.linker.load(std::memory_order_acquire)||
+    self!=trial.waiter.load(std::memory_order_acquire)||
+    !ReadHandle(trial,self,handle,&status,&tid)||result==trial.failure||
+    (trial.failure?status!=3:(status<14||status>15)))
+  trial.faults.fetch_or(kWaitCompletion,std::memory_order_release);
+ // One completed outer InitializeClass, not one monitor wake, is the source
+ // wait outcome. Spurious wakeups may have returned while status stayed 13.
+ trial.wait_exit.fetch_add(1,std::memory_order_release);
+}
 bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool parents){
  EntryLifetime episode(linker,self,handle,statics,parents);
  BorrowTrial borrowed;Trial* trial=borrowed.value;uint32_t status=0,tid=0;
@@ -120,6 +137,7 @@ bool HookInitialize(void* linker,void* self,ClassHandle handle,bool statics,bool
   (terminal?trial->terminal_enter:(reentrant?trial->reentrant_enter:trial->init_enter)).fetch_add(1,std::memory_order_relaxed);
   if(!statics||!parents)trial->faults.fetch_or(kInitializationFlags,std::memory_order_release);}
  const bool result=installed.initialize(linker,self,handle,statics,parents);
+ if(matched)CompleteInnerWait(episode.entry,*trial,self,handle,result);
  if(matched){uint32_t completed=0,unused=0;
   const bool completion=ReadHandle(*trial,self,handle,&completed,&unused)&&
       (reentrant?result&&completed==13&&unused==tid:
@@ -153,6 +171,60 @@ bool HookWait(void* linker,ClassHandle handle,void* self,void* lock){
   trial->wait_exit.fetch_add(1,std::memory_order_release);
  }
  return result;
+}
+// Original public constructor arguments establish the opaque lock receiver's
+// actual same-Thread/live-Class Handle. Its members are never interpreted.
+void HookClassLockConstruct(void* lock,void* self,ClassHandle handle){
+ BorrowTrial borrowed;Trial* trial=borrowed.value;SourceEntry* entry=source_entry;
+ uint32_t status=0,tid=0;
+ const bool matched=trial&&entry&&entry->owner==installed.owner&&entry->self==self&&
+     ReadHandle(*trial,self,handle,&status,&tid)&&ReadHandle(*trial,self,{entry->slot},&status,&tid);
+ if(!matched)borrowed.Release();
+ installed.lock_construct(lock,self,handle);
+ if(matched){
+  if(source_entry!=entry||!lock||entry->lock||
+     !ReadHandle(*trial,self,handle,&status,&tid))trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+  else{entry->lock=lock;entry->lock_slot=handle.slot;}
+ }
+}
+void HookClassLockDestroy(void* lock){
+ auto* entry=source_entry;
+ installed.lock_destroy(lock);
+ if(entry&&source_entry==entry&&entry->lock==lock){entry->lock=nullptr;entry->lock_slot=nullptr;}
+}
+// The fixed WaitForInitializeClass source calls this exact member inside its
+// status-rereading loop. The active outer source entry provides the live Class
+// Handle and actual Thread; no ObjectLock member or monitor layout is read.
+void HookInnerWait(void* lock){
+ BorrowTrial borrowed;Trial* trial=borrowed.value;SourceEntry* entry=source_entry;
+ uint32_t status=0,tid=0;
+ const bool matched=trial&&entry&&entry->owner==installed.owner&&
+     ReadHandle(*trial,entry->self,{entry->slot},&status,&tid);
+ if(!matched)borrowed.Release();
+ if(matched){
+  uint32_t lock_status=0,lock_tid=0;
+  if(!lock||entry->lock!=lock||!entry->lock_slot||
+     !ReadHandle(*trial,entry->self,{entry->lock_slot},&lock_status,&lock_tid)||
+     lock_status!=status||lock_tid!=tid||entry->self!=installed.current()||
+     entry->self!=trial->waiter.load(std::memory_order_acquire)||
+     entry->self==trial->owner.load(std::memory_order_acquire)||
+     !trial->body_ready.load(std::memory_order_acquire)||status!=13||
+     tid!=trial->tid.load(std::memory_order_acquire)||
+     entry->linker!=trial->linker.load(std::memory_order_acquire))
+   trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+  ++entry->inner_entries;
+  if(!entry->waiting){entry->waiting=true;
+   if(trial->wait_enter.fetch_add(1,std::memory_order_acq_rel)!=0)
+    trial->faults.fetch_or(kWaitEntry,std::memory_order_release);
+  }
+ }
+ installed.inner_wait(lock);
+ if(matched){uint32_t after=0,unused=0;
+  if(source_entry!=entry||!ReadHandle(*trial,entry->self,{entry->slot},&after,&unused)||
+     (after!=13&&after!=3&&(after<14||after>15)))
+   trial->faults.fetch_or(kWaitCompletion,std::memory_order_release);
+  ++entry->inner_returns;
+ }
 }
 // Waiting here occurs only in ordinary Native JNI, with no borrowed raw roots.
 // Bounded failure lets the original body throw and wake its source waiter.
@@ -250,22 +322,29 @@ bool Service::Calibrate(HookEngine& hooks,JNIEnv* env,jobject anchor,
  candidate.current=reinterpret_cast<void*(*)()>(hooks.FindSymbol("libart.so","_ZN3art6Thread14CurrentFromGdbEv"));
  void* initialize=hooks.FindSymbol("libart.so",kInitializeClass);
  void* wait=hooks.FindSymbol("libart.so",kWaitForInitializeClass);
+ void* inner=wait?nullptr:hooks.FindSymbol("libart.so",kWaitIgnoringInterrupts);
+ void* construct=inner?hooks.FindSymbol("libart.so",kClassLockConstruct):nullptr;
+ void* destroy=inner?hooks.FindSymbol("libart.so",kClassLockDestroy):nullptr;
  using namespace abi::common;
  auto suspend=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto resume=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
- if(!candidate.current||!initialize||!wait||initialize==wait||!suspend||!resume||
+ if(!candidate.current||!initialize||(!wait&&!inner)||initialize==wait||initialize==inner||(inner&&(!construct||!destroy||construct==destroy||construct==inner||destroy==inner))||!suspend||!resume||
     env->GetJavaVM(&candidate.vm)!=JNI_OK||!candidate.vm||
     !roots.OrdinaryNative({candidate.current(),env,candidate.vm}))
   return Fail(error,"Original initialization/wait declarations or ordinary Native owner unavailable");
  candidate.anchor=env->NewGlobalRef(anchor);if(!candidate.anchor||env->ExceptionCheck())return false;
- void* tokens[2]{};bool ok=false;
+ void* tokens[4]{};bool ok=false;
  {
   SuspendAll stop{};suspend(&stop,"artdcevm source initialization observers",false);
   installed=candidate;
   tokens[0]=hooks.Install(initialize,reinterpret_cast<void*>(HookInitialize),reinterpret_cast<void**>(&installed.initialize),error);
-  if(tokens[0])tokens[1]=hooks.Install(wait,reinterpret_cast<void*>(HookWait),reinterpret_cast<void**>(&installed.wait),error);
-  ok=tokens[0]&&tokens[1];
-  if(!ok){bool removed=true;for(int i=1;i>=0;--i)if(tokens[i]){std::string rollback;if(!hooks.Remove(tokens[i],&rollback))removed=false;}
+  if(tokens[0])tokens[1]=wait?hooks.Install(wait,reinterpret_cast<void*>(HookWait),reinterpret_cast<void**>(&installed.wait),error):
+      hooks.Install(inner,reinterpret_cast<void*>(HookInnerWait),reinterpret_cast<void**>(&installed.inner_wait),error);
+  if(inner&&tokens[1])tokens[2]=hooks.Install(construct,reinterpret_cast<void*>(HookClassLockConstruct),reinterpret_cast<void**>(&installed.lock_construct),error);
+  if(inner&&tokens[2])tokens[3]=hooks.Install(destroy,reinterpret_cast<void*>(HookClassLockDestroy),reinterpret_cast<void**>(&installed.lock_destroy),error);
+  ok=tokens[0]&&tokens[1]&&installed.initialize&&(wait?installed.wait!=nullptr:
+      tokens[2]&&tokens[3]&&installed.inner_wait&&installed.lock_construct&&installed.lock_destroy);
+  if(!ok){bool removed=true;for(int i=3;i>=0;--i)if(tokens[i]){std::string rollback;if(!hooks.Remove(tokens[i],&rollback))removed=false;}
    if(removed)installed={};}
   resume(&stop);
  }
