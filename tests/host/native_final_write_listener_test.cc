@@ -40,8 +40,10 @@ bool Field(void* p,void*,uint32_t* flags,void** owner){*flags=0x10;*owner=p;retu
 bool Method(void*,void* method,void** owner){*owner=method;return true;}
 bool Equivalent(void*,void* a,void* b){return a==b;}
 void Raise(void*,void*,const char* type,const char*){assert(!std::strcmp(type,"Ljava/lang/IllegalAccessError;"));++throws;}
+int native_method=0;
+bool MethodFlags(void*,void* method,uint32_t* flags){*flags=method==&native_method?0x100u:0u;return true;}
 int main(int argc,char** argv){assert(argc==2);Engine engine(argv[1][0]-'0');int r=0,thread=0,method=0,field=0;receiver=&r;
- Guard guard({receiver,Field,Method,Equivalent,Raise});std::string error;
+ Guard guard({receiver,Field,Method,Equivalent,Raise,nullptr,MethodFlags});std::string error;
  assert(!BindListener(engine,receiver,guard,&error));engine.available=true;
  if(engine.legacy){
   assert(!BindListener(engine,receiver,guard,&error));assert(ObserveLegacyDeoptimizationStartup(engine,&error));
@@ -54,7 +56,12 @@ int main(int argc,char** argv){assert(argc==2);Engine engine(argv[1][0]-'0');int
  fixture=&method;assert(PrepareProofMethodAtExclusiveBoundary(fixture,&error)&&method_deopts==1&&deopts==0);
  assert(guard.BeginProof({&thread,&method,&field}));NotifyWrittenForTesting(false,&thread,&method,&field);
  assert(guard.EndProof(true,true)&&ListenerProven()&&ListenerProven(guard));
- Guard foreign({receiver,Field,Method,Equivalent,Raise});assert(!ListenerProven(foreign));
+ const int bytecode_throws=throws;
+ NotifyWrittenForTesting(false,&thread,&native_method,&field);
+ NotifyWrittenForTesting(true,&thread,&native_method,&field);
+ assert(throws==bytecode_throws); // both real listener overloads preserve native setters
+ assert(!guard.BeginProof({&thread,&native_method,&field}));
+ Guard foreign({receiver,Field,Method,Equivalent,Raise,nullptr,MethodFlags});assert(!ListenerProven(foreign));
  NotifyWrittenForTesting(true,&thread,&method,&field);assert(throws==2);
  // A primitive callback must not prove the reference-handle vtable slot,
  // even after a previous scalar proof has enabled normal enforcement.

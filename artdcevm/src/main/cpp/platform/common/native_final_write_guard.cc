@@ -14,7 +14,9 @@ bool Guard::CompleteCalibration() noexcept {
 bool Guard::BeginProof(const Oracle& oracle) noexcept {
  if(proof_committed_.load(std::memory_order_acquire))return false;
  if(!oracle.thread||!oracle.method||!oracle.field||!access_.owner||
-    !access_.field||!access_.method_owner||(!access_.equivalent_owner&&!access_.equivalent_writer)||!access_.raise)return false;
+    !access_.field||!access_.method_owner||!access_.method_access_flags||(!access_.equivalent_owner&&!access_.equivalent_writer)||!access_.raise)return false;
+ uint32_t method_flags=0;
+ if(!access_.method_access_flags(access_.owner,oracle.method,&method_flags)||(method_flags&0x100u))return false;
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;
  if(!access_.field(access_.owner,oracle.field,&flags,&field_owner)||!(flags&0x10u)||
     !access_.method_owner(access_.owner,oracle.method,&method_owner)||!field_owner||!method_owner||
@@ -41,8 +43,19 @@ bool Guard::FieldWritten(void* thread,void* method,void* field,bool reference) n
   // Outside the exact mutable fixture, original ART owns permissions until
   // every calibration storage path has independently passed.
   if(calibrating_&&field!=calibration_field_)return false;
-  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference){epoch=epoch_;seen_=true;}
-  if(!proven_&&!epoch)return false;}
+  if(!proven_&&!(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference))return false;}
+ uint32_t method_flags=0;
+ if(!access_.method_access_flags||!access_.method_access_flags(access_.owner,method,&method_flags)){
+  if(access_.raise)access_.raise(access_.owner,thread,"Ljava/lang/IllegalStateException;",
+    "Final write event lost calibrated method access flags");
+  return access_.raise!=nullptr;
+ }
+ // ART NotifySet{Object,Primitive}Field emits the same listener event from
+ // JNI with a native current method (dex_pc=0). Original JNI permissions own
+ // this path; a native event must never become bytecode calibration evidence.
+ if(method_flags&0x100u)return false;
+ {std::lock_guard<std::mutex> lock(lock_);
+  if(probing_&&thread==oracle_.thread&&method==oracle_.method&&field==oracle_.field&&reference==oracle_.reference){epoch=epoch_;seen_=true;}}
  uint32_t flags=0;void *field_owner=nullptr,*method_owner=nullptr;
  const bool field_valid=access_.owner&&access_.field&&access_.raise&&
     access_.field(access_.owner,field,&flags,&field_owner)&&field_owner;

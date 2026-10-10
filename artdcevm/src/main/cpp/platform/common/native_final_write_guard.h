@@ -16,13 +16,17 @@ struct Access {
  // Native anchors survive suspension in weak-root readers. Prefer this path
  // when equivalence may suspend, then reread declaring roots after decoding.
  bool (*equivalent_writer)(void*,void* thread,void* field,void* method)=nullptr;
+ // JNI setters also emit FieldWritten with the current native ArtMethod.
+ // Read its flags through an independently calibrated, live mapped declaration.
+ bool (*method_access_flags)(void*,void*,uint32_t*)=nullptr;
 };
 // reference comes from the independently decoded Field descriptor. A proof
 // must observe the matching real listener overload, not another event slot.
 struct Oracle {void* thread=nullptr;void* method=nullptr;void* field=nullptr;bool reference=false;};
 // A listener's existence does not prove enforcement. The exact bytecode writer
 // must reach the listener, receive IllegalAccessError, and leave its independent
-// sentinel unchanged. The native event only proves callback/target identity;
+// sentinel unchanged. Native-method events delegate to original ART and cannot
+// prove the bytecode dispatcher. The bytecode event proves callback/target identity;
 // EndProof consumes the independently observed exception/value result.
 class Guard {
  public:

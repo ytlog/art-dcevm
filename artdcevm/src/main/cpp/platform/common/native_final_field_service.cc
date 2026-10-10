@@ -35,7 +35,7 @@ struct Service::State {
  struct Public {jclass root=nullptr,replacement=nullptr;jweak weak=nullptr;evolution::ClassSchema schema;};
  using Node=final_field_aliases::Node;
  struct Pair {size_t index=0;size_t public_index=0;void* old_anchor=nullptr;void* new_anchor=nullptr;evolution::ClassSchema before,after;};
- explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise,EquivalentWriter}),aliases({this,nullptr,OldOwner,DecodeWeak,OldOwner,ReadMethodOwner}){}
+ explicit State(Bindings b):bindings(b),guard({this,ReadField,MethodOwner,Equivalent,Raise,EquivalentWriter,MethodAccessFlags}),aliases({this,nullptr,OldOwner,DecodeWeak,OldOwner,ReadMethodOwner}){}
  uint8_t proved_storage=0;bool current_static=false,current_reference=false,calibration_complete=false;
  Bindings bindings;jvmtiEnv* permission_env=nullptr;jmethodID proof_method=nullptr;final_write_guard::Guard guard;std::vector<Public> staged;
  source_commit::Plan expected;std::vector<size_t> rooted_pairs;std::vector<Pair> pairs;std::unique_ptr<Node> pending;
@@ -44,6 +44,22 @@ struct Service::State {
   if(!s.bindings.native.metadata||!s.bindings.native.metadata->Calibrated()||!field)return false;
   *flags=field_array::Flags(field);*owner=s.bindings.native.metadata->FieldDeclaringClass(field);return *owner!=nullptr;}
  static bool MethodOwner(void* p,void* method,void** owner){auto& s=*static_cast<State*>(p);if(!s.bindings.native.method_class)return false;*owner=s.bindings.native.method_class(s.bindings.native.owner,method);return *owner!=nullptr;}
+ static bool MethodAccessFlags(void* p,void* method,uint32_t* flags){auto& s=*static_cast<State*>(p);
+  const auto* calibrated=s.bindings.native.methods;
+  if(!method||!flags||!calibrated||calibrated->identities.size()<3||
+     calibrated->readable_extents.size()!=calibrated->identities.size()||
+     !s.bindings.native.metadata||!s.bindings.native.metadata->Calibrated())return false;
+  const method_metadata::Layout* declaration=nullptr;
+  switch(calibrated->model){
+   case method_identity::Model::kMethod11:declaration=&method_metadata::kAndroid11;break;
+   case method_identity::Model::kMethod12Onward:declaration=&method_metadata::kAndroid12Onward;break;
+   default:return false;
+  }
+  size_t extent=0;method_metadata::Identity identity{};
+  if(!method_identity::ReadableMappingExtent(method,&extent)||
+     !method_metadata::ReadIdentity(*declaration,method,extent,&identity))return false;
+  *flags=identity.access_flags;return true;
+ }
  static void Raise(void* p,void* thread,const char* type,const char* text){auto& s=*static_cast<State*>(p);s.bindings.raise(s.bindings.native.owner,thread,type,text);}
  static bool DecodeWeak(void* p,void* thread,void* weak,void** current){auto& s=*static_cast<State*>(p);return s.bindings.decode_weak(s.bindings.native.owner,thread,static_cast<jweak>(weak),current);}
  static void* OldOwner(void* p,void* field){auto& s=*static_cast<State*>(p);return s.bindings.native.metadata->FieldDeclaringClass(field);}
