@@ -85,7 +85,7 @@ bool Calibration::Calibrate(JNIEnv* env,jobject anchor,
  }
  // Independent public failure semantics must agree with the same status
  // declaration: one EIIE body, later NCDFE without rerunning it, then source
- // ErrorResolved(3). This remains a fixture observation, not waiter authority.
+ // ErrorResolved(2), because static access ran a resolved Class initializer. This remains a fixture observation, not waiter authority.
  jobject failure_local=ok?env->CallStaticObjectMethod(oracle,failed_class):nullptr;
  jobject failure=failure_local&&!env->ExceptionCheck()?env->NewGlobalRef(failure_local):nullptr;
  if(ok){
@@ -93,7 +93,7 @@ bool Calibration::Calibrate(JNIEnv* env,jobject anchor,
       !env->ExceptionCheck();
   if(ok){probe.fixture=failure;probe.initialized=true;
    ok=runnable_executor::With(env,owned_anchor,Borrow,&probe)==runnable_jni::Result::kSuccess&&
-       probe.after.status==3;}
+       probe.after.status==2;}
  }
  if(failure)env->DeleteGlobalRef(failure);
  if(failure_local)env->DeleteLocalRef(failure_local);

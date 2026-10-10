@@ -3,7 +3,7 @@
 namespace {
 using Observer=jboolean(*)(JNIEnv*,jclass,jclass,jint,jint);
 Observer observer=nullptr;
-enum class Variant{Dedicated,Shared,WrongTid,WrongClass,WrongStatus,Missing,Duplicate,WrongHash,WrongReentrantValue,ReentrantStateChange,ReentrantTidChange,WrongPoisonState,WrongPoisonResult};
+enum class Variant{Dedicated,Shared,WrongTid,WrongClass,WrongStatus,Missing,Duplicate,WrongHash,WrongReentrantValue,ReentrantStateChange,ReentrantTidChange,WrongPoisonState,WrongPoisonUnresolved,WrongPoisonResult};
 Variant variant=Variant::Dedicated;
 int inactive_id,run_id,reenter_id,failed_class_id,run_failure_id;
 int reentries=0;
@@ -37,7 +37,7 @@ jobject Inactive(JNIEnv*,jclass klass,jmethodID method,va_list){
 jint Run(JNIEnv* e,jclass klass,jmethodID method,va_list args){
  if(method==reinterpret_cast<jmethodID>(&run_failure_id)){
   Jni();assert(klass==reinterpret_cast<jclass>(parent_class));
-  old_class->status=(variant==Variant::WrongPoisonState?14u:3u)<<28;
+  old_class->status=(variant==Variant::WrongPoisonState?14u:(variant==Variant::WrongPoisonUnresolved?3u:2u))<<28;
   return variant==Variant::WrongPoisonResult?2:1;
  }
  if(method==reinterpret_cast<jmethodID>(&reenter_id)){
@@ -58,7 +58,7 @@ jint Run(JNIEnv* e,jclass klass,jmethodID method,va_list args){
  if(variant!=Variant::Missing)ok=observer(e,klass,reinterpret_cast<jclass>(variant==Variant::WrongClass?old_class:new_class),
      variant==Variant::WrongTid?tid+1:tid,hash)==JNI_TRUE;
  if(variant==Variant::Duplicate)ok=ok&&observer(e,klass,reinterpret_cast<jclass>(new_class),tid,hash)==JNI_TRUE;
- if(!ok){new_class->status=3u<<28;return 0;}
+ if(!ok){new_class->status=2u<<28;return 0;}
  new_class->status=14u<<28;
  if(variant==Variant::Shared||variant==Variant::WrongHash)
   new_class->clinit_thread_id_or_hash=~uint32_t(variant==Variant::WrongHash?hash+1:hash);

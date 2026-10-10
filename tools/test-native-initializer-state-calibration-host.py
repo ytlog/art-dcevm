@@ -20,6 +20,17 @@ tree=ast.parse((root/'tools/test-native-source-commit-host.py').read_text())
 sources=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='sources' for t in n.targets))
 sources.append('native_initializer_state_calibration')
 jdk=Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'],text=True).strip())
+# Execute the unchanged Java failure body, independently of the native status
+# fixture. Active's Android tid branch must never be used by this failure test.
+java_dir=out/'java/android/os';java_dir.mkdir(parents=True,exist_ok=True)
+process_stub=java_dir/'Process.java'
+process_stub.write_text('package android.os; public final class Process { public static int myTid() { throw new AssertionError("Active oracle unexpectedly used"); } }\n')
+subprocess.run([str(jdk/'bin/javac'),'-d',str(out/'java-classes'),str(process_stub),
+ str(root/'tests/host/InitializerFailureOracleTest.java'),
+ str(root/'artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/InitializerStateOracle.java')],check=True)
+java_result=subprocess.run([str(jdk/'bin/java'),'-cp',str(out/'java-classes'),'InitializerFailureOracleTest'],capture_output=True,text=True)
+(out/'java-result.log').write_text(java_result.stdout+java_result.stderr)
+java_result.check_returncode();print(java_result.stdout.strip())
 platform='darwin' if os.uname().sysname=='Darwin' else 'linux'
 binary=out/'native_initializer_state_calibration_test'
 command=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(jdk/'include'),'-I',str(jdk/'include'/platform),str(root/'tests/host/native_initializer_state_calibration_test.cc')]
