@@ -69,6 +69,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_source_commit.cc
         platform/common/native_initialized_transfer.cc
         platform/common/native_initializer_state_calibration.cc
+        platform/common/native_initializer_episode.cc
     platform/common/modern_source_commit.cc
     platform/common/source_commit.cc
     platform/common/owned_structural_transaction.cc
