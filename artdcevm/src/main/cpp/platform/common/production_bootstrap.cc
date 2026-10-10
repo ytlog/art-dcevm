@@ -5,6 +5,7 @@
 #include "platform/common/bootstrap_dex_oracle.h"
 #include "platform/common/ordinary_source_fixture.h"
 #include "platform/common/source_cache_method_witness.h"
+#include "platform/common/source_cache_writer_dex.h"
 #include "platform/common/source_cache_field_witness.h"
 #include "platform/common/production_provenance.h"
 #include "platform/common/contextual_field_id.h"
@@ -226,12 +227,11 @@ struct NativeEngine final:Engine {
   return frame_geometry_proven||Fail(error,"Calibrated geometry scanner binding unavailable");
  }
  struct PublicCacheWitness {
-  jobject cache=nullptr,klass=nullptr,field=nullptr,method=nullptr;
+  jobject cache=nullptr,klass=nullptr,writer=nullptr,field=nullptr,method=nullptr;
   InstalledClassIds ids;uint32_t field_index=UINT32_MAX,method_index=UINT32_MAX;
   uint32_t public_field_modifiers=0;
   void* native_field=nullptr;void* native_method=nullptr;
  } source_cache_witness;
- source_cache_resolution::Service cache_resolver;
  jclass source_cache_bootstrap=nullptr;jmethodID source_cache_warm=nullptr;
  static bool ResolveCacheWitness(void*,const runnable_jni::Context&,source_handle_roots::Pool&,void*,void*,std::string*);
  bool PrepareSourceCacheWitness(JNIEnv*,std::string*);
@@ -885,8 +885,15 @@ bool NativeEngine::ResolveCacheWitness(void* raw,const runnable_jni::Context& sc
      return Fail(error,"Cache resolution live Class/cache/loader root provenance rejected");
     field_copy::CopyClassView identity;
     if(!e.metadata.ClassIdentity(klass,&identity,error))return false;
-    if(identity.loader!=loader||e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)
+    if(!identity.descriptor||std::strcmp(identity.descriptor,"Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;")||identity.loader!=loader||e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache))!=cache)
      return Fail(error,"Cache resolution exact public Class cache/loader namespace changed");
+    void* writer=nullptr;
+    if(!runnable_executor::DecodeStrongGlobal(c,e.source_cache_witness.writer,&writer)||!writer||writer==klass)
+     return Fail(error,"Cache writer must be a distinct rooted public Class");
+    field_copy::CopyClassView writer_identity;
+    if(!e.metadata.ClassIdentity(writer,&writer_identity,error))return false;
+    if(!writer_identity.descriptor||std::strcmp(writer_identity.descriptor,"Lcom/github/ytlog/artdcevm/internal/ZCacheWriter;")||writer_identity.loader!=loader||e.metadata.Reference(writer,offsetof(class_metadata::Class11,dex_cache))!=cache)
+     return Fail(error,"Cross-class cache writer changed exact DEX/cache/loader identity");
     *out={klass,cache,loader};return true;
    }
    std::string DescribeField(const source_cache_resolution::Witness&w,void*field)const override{
@@ -931,7 +938,7 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  // The executor's carrier is a GlobalRef (or immutable boot Method), not read().
  // Read the rooted fixture Method through ART's named leaf in this real scope.
  if(!source_cache_method_witness::Read(scope,request.method_leaf,witness.method,
-       layout,witness.method_index,method_identity::ReadableMappingExtent,&method,request.error))return false;
+       layout,witness.method_index,method_identity::ReadableMappingExtent,&method,request.error,9u))return false;
  auto* field=e.graph_field_leaf?e.graph_field_leaf(mirror):nullptr;field_copy::CopyFieldView text;
  if(!field)return Fail(request.error,"Public cache Field named GetArtField returned null");
  if(!method_identity::ReadableMappingExtent(field,&extent)||extent<sizeof(field_array::Field))
@@ -944,7 +951,7 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
  }
  uint32_t index=0;std::memcpy(&index,static_cast<unsigned char*>(field)+offsetof(field_array::Field,dex_field_index),sizeof(index));
  if(!source_cache_field_witness::Check(klass,declaring,text.name,text.descriptor,index,
-     witness.field_index,field_array::Flags(field),witness.public_field_modifiers,request.error))return false;
+     witness.field_index,field_array::Flags(field),witness.public_field_modifiers,request.error,0x49u))return false;
  // No safepoint between this rooted Class read and the original AddGlobalRef.
  // The real global is published before ART's allocation-tracking callback.
  void* cache=e.metadata.Reference(klass,offsetof(class_metadata::Class11,dex_cache));
@@ -957,7 +964,6 @@ bool CaptureSourceCacheWitness(const runnable_jni::Context& scope,void* raw){
 bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!env||!input||!redefinition_gate::Owned(vm))return Fail(error,"Source cache witness lacks ordinary owning transaction");
  if(env->ExceptionCheck())return Fail(error,"Public cache witness entered with pending JNI exception");
- if(!source_cache_resolution::Service::BindObservation(hooks,runtime.receivers.class_linker,&cache_resolver,error))return false;
  jclass type=env->GetObjectClass(input);
  struct Local {JNIEnv* env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}} type_scope{env,type};
  if(!type||env->ExceptionCheck())return Fail(error,"Public cache witness Inputs class unavailable");
@@ -975,6 +981,7 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
    return global;
   };
   candidate.klass=own("cacheClass","Ljava/lang/Class;");if(!candidate.klass)return false;
+  candidate.writer=own("cacheWriterClass","Ljava/lang/Class;");if(!candidate.writer)return false;
   candidate.field=own("cacheField","Ljava/lang/reflect/Field;");if(!candidate.field)return false;
   candidate.method=own("cacheRead","Ljava/lang/reflect/Method;");if(!candidate.method)return false;
   auto id=env->GetFieldID(type,"cacheDex","[B");
@@ -988,8 +995,20 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
   if(env->ExceptionCheck())return Fail(error,"Public cache witness immutable DEX copy rejected");
   evolution::ClassSchema schema;evolution::MappedDexMemberCounts counts;
   if(!SelectInstalledClass({original},descriptor,&schema,&counts,error,&candidate.ids))return false;
-  for(const auto& f:schema.fields)if(f.name=="number"&&f.descriptor=="I"&&f.access==(1u|0x40u))candidate.field_index=f.dex_index;
-  for(const auto& m:schema.methods)if(m.name=="read"&&m.descriptor=="()I"&&m.access==1u)candidate.method_index=m.dex_index;
+  evolution::ClassSchema writer_schema;evolution::MappedDexMemberCounts writer_counts;InstalledClassIds writer_ids;
+  if(!SelectInstalledClass({original},"Lcom/github/ytlog/artdcevm/internal/ZCacheWriter;",&writer_schema,&writer_counts,error,&writer_ids))return false;
+  uint32_t writer_index=UINT32_MAX,padding_field=UINT32_MAX,padding_method=UINT32_MAX;
+  bool writer_warm=false;for(const auto&m:writer_schema.methods)
+   if(m.name=="warm"&&m.descriptor=="(Lcom/github/ytlog/artdcevm/internal/SourceCacheFixture;)Ljava/lang/Class;"&&m.access==8u){writer_warm=true;writer_index=m.dex_index;}
+  if(!writer_warm||writer_ids.type_index==candidate.ids.type_index)
+   return Fail(error,"Immutable same-DEX distinct static cache writer declaration unavailable");
+  for(const auto& f:schema.fields)if(f.name=="number"&&f.descriptor=="I"&&f.access==(1u|8u|0x40u))candidate.field_index=f.dex_index;
+  for(const auto& m:schema.methods)if(m.name=="read"&&m.descriptor=="()I"&&m.access==9u)candidate.method_index=m.dex_index;
+  for(const auto&f:schema.fields)if(f.name=="cachePadding0001"&&f.descriptor=="Lcom/github/ytlog/artdcevm/internal/CachePairType0001;"&&f.access==8u)padding_field=f.dex_index;
+  for(const auto&m:schema.methods)if(m.name=="cachePaddingMethod0001"&&m.descriptor=="()I"&&m.access==8u)padding_method=m.dex_index;
+  if(!source_cache_writer_dex::Read(original.data(),original.size(),candidate.ids.type_index,
+     candidate.field_index,padding_field,candidate.method_index,padding_method,writer_index))
+   return Fail(error,"Immutable cross-class static cache writer/collision opcodes differ");
   if(candidate.field_index==UINT32_MAX||candidate.method_index==UINT32_MAX)
    return Fail(error,"Immutable cache fixture member declarations unavailable");
   roots.insert(roots.end(),owned.values.begin(),owned.values.end());owned.values.clear();
@@ -1007,22 +1026,9 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
   if(!source_cache_bootstrap||env->ExceptionCheck())return Fail(error,"Public cache Java writer retained bootstrap Class unavailable");
  }
  source_cache_warm=warm;
- struct WarmCall {JNIEnv* env;jclass bootstrap;jmethodID warm;jobject input;jobject expected=nullptr;} call{env,bootstrap,warm,input};
- struct NativeProof final:source_cache_resolution::NativeWindow {
-  NativeEngine& engine;JNIEnv* env;
-  NativeProof(NativeEngine& e,JNIEnv* j):engine(e),env(j){}
-  bool OrdinaryNative()const noexcept override{
-   return engine.source_capabilities.Roots().OrdinaryNative({engine.graph_current(),env,engine.vm});
-  }
- } native(*this,env);
- const bool traced=cache_resolver.TraceJavaWarm(hooks,native,source_cache_witness.field_index,[](void* raw){
-  auto& c=*static_cast<WarmCall*>(raw);c.expected=c.env->CallStaticObjectMethod(c.bootstrap,c.warm,c.input);
- },&call,error);
- auto expected=call.expected;Local expected_scope{env,expected};
- if(!traced)return false;
- if(!expected||env->ExceptionCheck())return Fail(error,"Original DEX cache warm invocation rejected");
- const bool same=env->IsSameObject(expected,source_cache_witness.klass);
- if(!same||env->ExceptionCheck())return Fail(error,"Original DEX cache warm class identity changed");
+ // Keep the original DEX writer cold until ResolveCacheWitness immediately
+ // before strict calibration. Early diagnostic warm would populate Nterp's
+ // instruction cache and permit later calls to bypass the DexCache writer.
  // Independent ordinary-JNI public Field oracle, completed before Runnable.
  jclass field_type=env->GetObjectClass(source_cache_witness.field);Local field_type_scope{env,field_type};
  if(!field_type||env->ExceptionCheck())return Fail(error,"Public cache Field reflection class unavailable");
@@ -1036,8 +1042,21 @@ bool NativeEngine::PrepareSourceCacheWitness(JNIEnv* env,std::string* error){
  if(!modifiers_id||env->ExceptionCheck())return Fail(error,"Public cache Field modifiers oracle unavailable");
  const jint modifiers=env->CallIntMethod(source_cache_witness.field,modifiers_id);
  if(env->ExceptionCheck())return Fail(error,"Public cache Field modifiers oracle invocation rejected");
- if(modifiers!=0x41)return Fail(error,"Public cache Field modifiers differ from immutable DEX");
+ if(modifiers!=0x49)return Fail(error,"Public cache Field modifiers differ from immutable DEX");
  source_cache_witness.public_field_modifiers=static_cast<uint32_t>(modifiers);
+ jclass method_type=env->GetObjectClass(source_cache_witness.method);Local method_type_scope{env,method_type};
+ if(!method_type||env->ExceptionCheck())return Fail(error,"Public cache Method Class oracle unavailable");
+ auto method_declaring_id=env->GetMethodID(method_type,"getDeclaringClass","()Ljava/lang/Class;");
+ if(!method_declaring_id||env->ExceptionCheck())return Fail(error,"Public cache Method declaring oracle unavailable");
+ auto method_declaring=env->CallObjectMethod(source_cache_witness.method,method_declaring_id);Local method_declaring_scope{env,method_declaring};
+ if(!method_declaring||env->ExceptionCheck())return Fail(error,"Public cache Method declaring oracle failed");
+ const bool method_owner=env->IsSameObject(method_declaring,source_cache_witness.klass);
+ if(!method_owner||env->ExceptionCheck())return Fail(error,"Public cache Method declaring Class identity differs");
+ auto method_modifiers_id=env->GetMethodID(method_type,"getModifiers","()I");
+ if(!method_modifiers_id||env->ExceptionCheck())return Fail(error,"Public cache Method modifiers oracle unavailable");
+ const jint method_modifiers=env->CallIntMethod(source_cache_witness.method,method_modifiers_id);
+ if(env->ExceptionCheck()||method_modifiers!=9)return Fail(error,"Public cache Method modifiers differ from immutable static DEX");
+
  if(source_cache_witness.cache){env->DeleteGlobalRef(source_cache_witness.cache);source_cache_witness.cache=nullptr;}
  auto leaf=reinterpret_cast<abi::common::FromReflectedMethod>(
    hooks.FindSymbol("libart.so",abi::common::kFromReflectedMethod));

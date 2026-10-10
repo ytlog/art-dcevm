@@ -31,6 +31,8 @@ int main(){
   result=reinterpret_cast<void*>(0xbeef);
   assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,8,Extent,&result,&error)&&result==reinterpret_cast<void*>(0xbeef)&&!error.empty());
   Set(layout,9,7);assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error));
+  assert(source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error,9u));
+  Set(layout,1,7);assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error,9u));
   Set(layout,1,7);available=8;assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error));available=40;
   readable=false;assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error));readable=true;
   returns=false;assert(!source_cache_method_witness::Read(context,Leaf,expected,layout,7,Extent,&result,&error));returns=true;

@@ -9,7 +9,7 @@ inline bool Read(const runnable_jni::Context& context,
                  abi::common::FromReflectedMethod leaf,
                  jobject strong_method,const method_metadata::Layout& layout,
                  uint32_t dex_index,bool (*extent_of)(const void*,size_t*),
-                 void** output,std::string* error){
+                 void** output,std::string* error,uint32_t expected_access=1u){
  auto fail=[&](const char* text){if(error)*error=text;return false;};
  if(!context.self||!context.env||!context.vm||!leaf||!strong_method||!extent_of||!output)
   return fail("Public cache fixture Method native reader/context unavailable");
@@ -17,7 +17,7 @@ inline bool Read(const runnable_jni::Context& context,
  void* method=leaf(scope,strong_method);size_t extent=0;method_metadata::Identity identity;
  if(!method||!extent_of(method,&extent)||!method_metadata::ReadIdentity(layout,method,extent,&identity))
   return fail("Public cache fixture Method native declaration unreadable");
- if(identity.dex_method_index!=dex_index||(identity.access_flags&0xffffu)!=1u)
+ if(identity.dex_method_index!=dex_index||(identity.access_flags&0xffffu)!=expected_access)
   return fail("Public cache Method differs from immutable fixture DEX");
  *output=method;return true;
 }

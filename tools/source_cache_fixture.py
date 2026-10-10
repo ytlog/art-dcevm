@@ -13,8 +13,9 @@ def source_with_pair_ids(source):
         # Simple never-instantiated sibling types avoid expensive deeply nested
         # Java array type checking while supplying genuine distinct DEX type IDs.
         name=f'CachePairType{n:04d}'
-        fields.append(f'    private static {name} cachePadding{n:04d};')
-        methods.append(f'    private static int cachePaddingMethod{n:04d}() {{ return {n}; }}')
+        visibility = '' if n == 1 else 'private '
+        fields.append(f'    {visibility}static {name} cachePadding{n:04d};')
+        methods.append(f'    {visibility}static int cachePaddingMethod{n:04d}() {{ return {n}; }}')
         types.append(f'final class {name} {{}}')
     return source.replace(MARKER,'\n'.join(fields+methods))+'\n'+'\n'.join(types)+'\n'
 

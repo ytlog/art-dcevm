@@ -8,6 +8,10 @@ int main(){
  // kAccCorePlatformApi; all public language modifiers remain independently exact.
  for(uint32_t flags:{0x41u,0x10000041u,0x30000041u})
   assert(Check(klass,klass,"number","I",7,7,flags,0x41,&error));
+ for(uint32_t flags:{0x49u,0x10000049u,0x30000049u})
+  assert(Check(klass,klass,"number","I",7,7,flags,0x49,&error,0x49u));
+ assert(!Check(klass,klass,"number","I",7,7,0x41,0x41,&error,0x49u));
+ assert(!Check(klass,klass,"number","I",7,7,0x41,0x49,&error,0x49u));
  assert(!Check(klass,reinterpret_cast<void*>(0x5678),"number","I",7,7,0x10000041,0x41,&error)&&error.find("declaring Class")!=std::string::npos);
  assert(!Check(klass,klass,"other","I",7,7,0x10000041,0x41,&error)&&error.find("DEX name")!=std::string::npos);
  assert(!Check(klass,klass,"number","J",7,7,0x10000041,0x41,&error)&&error.find("DEX descriptor")!=std::string::npos);

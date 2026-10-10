@@ -44,7 +44,7 @@ public final class ProductionBootstrap {
         final byte[] additiveDex;
         final Object storage;
         final byte[] cacheDex;
-        final Class<?> cacheClass;
+        final Class<?> cacheClass, cacheWriterClass;
         final Object cacheFixture;
         final Method cacheRead, cacheWarm;
         final byte[] receiverDex;
@@ -70,11 +70,12 @@ public final class ProductionBootstrap {
             this.cacheDex = cacheDex;
             ClassLoader cacheLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(cacheDex), null);
             cacheClass = Class.forName("com.github.ytlog.artdcevm.internal.SourceCacheFixture", true, cacheLoader);
+            cacheWriterClass = Class.forName("com.github.ytlog.artdcevm.internal.ZCacheWriter", true, cacheLoader);
             cacheFixture = cacheClass.getDeclaredConstructor().newInstance();
             cacheRead = cacheClass.getDeclaredMethod("read");
             cacheWarm = cacheClass.getDeclaredMethod("warm", cacheClass);
             cacheField = cacheClass.getDeclaredField("number");
-            // Native preflight observes the first actual cold warm call.
+            // The source calibration callback owns the first actual cold writer.
             this.receiverDex = receiverDex;
             ClassLoader receiverLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(receiverDex), null);
             String receiverName = "com.github.ytlog.artdcevm.internal.ReceiverSourceFixture";
