@@ -15,7 +15,7 @@ def git(*args):
 
 
 HOME = re.compile(rb'(?:/Users/|/home/)[A-Za-z][A-Za-z0-9._-]*/')
-IP = re.compile(rb'\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b')
+IP = re.compile(rb'\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b')
 SERIAL = re.compile(rb'(?i)(?:--serial|adb\s+-s|"(?:serial|deviceSerial|adb_serial)"\s*:)\s*["\x27]?([a-z0-9][a-z0-9._:-]{5,})')
 PLACEHOLDERS = (b'device', b'serial', b'frozen', b'pixel', b'android',
                 b'emulator', b'target', b'localhost', b'your_',
