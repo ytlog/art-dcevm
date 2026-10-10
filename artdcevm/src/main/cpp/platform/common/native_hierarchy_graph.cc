@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <cstdio>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -300,8 +301,20 @@ bool Authority::VerifyPrepared(const runnable_jni::Context& context,const Prepar
 bool Authority::PrepareRoots(const source_commit::Plan& p,std::string* error){
  auto& s=*state_;State::OrdinaryRead ordinary{s};
  if(!ordinary.Ready()||!s.staged||s.roots_prepared||s.sealed||s.registration_started||p.old_classes.size()!=p.new_classes.size())return Fail(error,"Root preparation requires fresh complete source allocation graph");
- size_t affected=0;
- for(const auto& n:s.graph.nodes)if(n.affected){++affected;size_t found=0;for(size_t i=0;i<p.old_classes.size();++i)if(p.old_classes[i]==n.klass&&p.new_classes[i]==n.replacement)++found;if(found!=1)return Fail(error,"Source Plan omitted or duplicated actual affected allocation");}
+ const size_t affected=std::count_if(s.graph.nodes.begin(),s.graph.nodes.end(),[](const auto& n){return n.affected;});
+ for(size_t node=0;node<s.graph.nodes.size();++node){const auto& n=s.graph.nodes[node];if(!n.affected)continue;
+  size_t pairs=0,old_matches=0,new_matches=0;
+  for(size_t i=0;i<p.old_classes.size();++i){const bool old=p.old_classes[i]==n.klass,fresh=p.new_classes[i]==n.replacement;old_matches+=old;new_matches+=fresh;pairs+=old&&fresh;}
+  if(pairs!=1){
+   // Ordinary preregistration evidence only. Do not refresh, dereference unknown
+   // Plan classes, or weaken the exact bijection when reporting a mismatch.
+   char detail[384];std::snprintf(detail,sizeof(detail),
+    "Source Plan omitted or duplicated actual affected allocation: node=%zu descriptor=%.120s graphAffected=%zu planPairs=%zu matches=%zu oldMatches=%zu newMatches=%zu old=%p new=%p firstOld=%p firstNew=%p",
+    node,n.descriptor.c_str(),affected,p.old_classes.size(),pairs,old_matches,new_matches,n.klass,n.replacement,
+    p.old_classes.empty()?nullptr:p.old_classes.front(),p.new_classes.empty()?nullptr:p.new_classes.front());
+   return Fail(error,detail);
+  }
+ }
  if(affected!=p.old_classes.size()||!s.Native(true))return Fail(error,"Root preparation lacks actual complete native replacement graph");
  // Native storage allocation happens only here, before managed registration.
  // Final Seal never writes or resizes a registered location.

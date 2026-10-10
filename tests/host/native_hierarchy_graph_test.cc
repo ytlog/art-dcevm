@@ -113,7 +113,19 @@ static void Lifecycle(){
  Prepared p{&owner,&a,nullptr,&metadata,&parent,2,&input.after};assert(!authority.AuthorizeAllocation(context,p,&error));p.old_class=&moved_a;p.parent=&moved_parent;assert(authority.AuthorizeAllocation(context,p,&error));p.class_index=1;assert(!authority.AuthorizeAllocation(context,p,&error));p.class_index=2;
  Fake new_a(a.descriptor.c_str(),&moved_parent),new_b(b.descriptor.c_str(),&new_a);new_a.bytes.access_flags=input.after.access;new_a.native_interfaces={&moved_i};new_b.native_interfaces={&moved_i};p.new_class=&new_a;new_a.bytes.access_flags=1;assert(!authority.VerifyPrepared(context,p,&error));new_a.bytes.access_flags=input.after.access;assert(authority.VerifyPrepared(context,p,&error));
  auto implicit=input.before;implicit.descriptor=b.descriptor;implicit.superclass=a.descriptor;implicit.interfaces={};Prepared q{&owner,&moved_b,&new_b,&metadata,&new_a,2,&implicit};assert(authority.VerifyPrepared(context,q,&error));
- source_commit::Plan plan;plan.old_classes={&moved_a,&moved_b};plan.new_classes={&new_a,&new_b};owner.granted=false;assert(authority.PrepareRoots(plan,&error));assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,&error));std::vector<void*> root_values;prepared_roots::Registrar registrar{&root_values,[](void* owner,void* value,size_t* slot){auto* roots=static_cast<std::vector<void*>*>(owner);*slot=roots->size();roots->push_back(value);return true;}};assert(authority.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&root_values,[](void* owner,size_t index)noexcept{return (*static_cast<std::vector<void*>*>(owner))[index];}};
+ source_commit::Plan plan;plan.old_classes={&moved_a,&moved_b};plan.new_classes={&new_a,&new_b};
+ // Actual Authority rejects every non-bijective Plan without freezing its root
+ // layout. Independent old/new matches distinguish missing, duplicated and
+ // stale identities; all failures are retryable with the exact complete Plan.
+ auto rejected=plan;rejected.old_classes.resize(1);rejected.new_classes.resize(1);
+ assert(!authority.PrepareRoots(rejected,&error));assert(error.find("descriptor=Lpkg/B;")!=std::string::npos&&error.find("graphAffected=2 planPairs=1 matches=0 oldMatches=0 newMatches=0")!=std::string::npos);
+ rejected=plan;rejected.old_classes.push_back(&moved_a);rejected.new_classes.push_back(&new_a);
+ assert(!authority.PrepareRoots(rejected,&error));assert(error.find("matches=2 oldMatches=2 newMatches=2")!=std::string::npos);
+ rejected=plan;rejected.old_classes[0]=&a;
+ assert(!authority.PrepareRoots(rejected,&error));assert(error.find("matches=0 oldMatches=0 newMatches=1")!=std::string::npos);
+ rejected=plan;rejected.new_classes[0]=&a;
+ assert(!authority.PrepareRoots(rejected,&error));assert(error.find("matches=0 oldMatches=1 newMatches=0")!=std::string::npos);
+ owner.granted=false;assert(authority.PrepareRoots(plan,&error));assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,&error));std::vector<void*> root_values;prepared_roots::Registrar registrar{&root_values,[](void* owner,void* value,size_t* slot){auto* roots=static_cast<std::vector<void*>*>(owner);*slot=roots->size();roots->push_back(value);return true;}};assert(authority.CollectManagedRoots(registrar));prepared_roots::Resolver resolver{&root_values,[](void* owner,size_t index)noexcept{return (*static_cast<std::vector<void*>*>(owner))[index];}};
  Fake final_object=moved_object,final_a=moved_a,final_b=moved_b,final_parent=moved_parent,final_i=moved_i,final_new_a=new_a,final_new_b=new_b;
  final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_i.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
  std::unordered_map<void*,void*> relocation{{&moved_object,&final_object},{&moved_a,&final_a},{&moved_b,&final_b},{&moved_parent,&final_parent},{&moved_i,&final_i},{&new_a,&final_new_a},{&new_b,&final_new_b}};
