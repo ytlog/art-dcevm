@@ -1,5 +1,5 @@
 #include "platform/common/code_info_flags.h"
-#include "platform/android13/code_info_flags_abi.h"
+#include "platform/abi/arm64/android13/code_info_flags_abi.h"
 #include <cassert>
 #include <cstdio>
 using namespace artdcevm;

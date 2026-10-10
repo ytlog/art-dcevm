@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/common/native_reflective_value_abi.h"
 #include "api/hook_engine.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include "platform/abi/arm64/android14/jni_global_decode.h"
 #include <cstddef>
 #include <cstdint>

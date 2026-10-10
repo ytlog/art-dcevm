@@ -1,9 +1,9 @@
 #include "device_profile_fixture.h"
 #include "platform/android13/suspend_deopt_hooks.h"
-#include "platform/android13/suspend_deopt_art_abi.h"
+#include "platform/abi/arm64/android13/suspend_deopt_art_abi.h"
 #include "platform/android13/stack_access.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/symbols/android13.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/android13/symbols/profile.h"
 #include <cassert>
 #include <cstring>
 #include <vector>

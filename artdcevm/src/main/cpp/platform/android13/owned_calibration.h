@@ -1,8 +1,8 @@
 #pragma once
 #include "api/hook_engine.h"
 #include "platform/android13/device_profile.h"
-#include "platform/android13/field_copy_abi.h"
-#include "platform/android13/runtime_access_abi.h"
+#include "platform/abi/arm64/android13/field_copy_abi.h"
+#include "platform/abi/arm64/android13/runtime_access_abi.h"
 #include <jni.h>
 #include <jvmti.h>
 namespace artdcevm::android13 {

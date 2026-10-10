@@ -1,8 +1,8 @@
 #pragma once
 
 #include "evolution/class_schema.h"
-#include "platform/dex_mapping_abi.h"
-#include "platform/class_metadata_abi.h"
+#include "platform/common/dex_mapping_abi.h"
+#include "platform/common/class_metadata_abi.h"
 #include <cstdint>
 
 namespace artdcevm::android13 {

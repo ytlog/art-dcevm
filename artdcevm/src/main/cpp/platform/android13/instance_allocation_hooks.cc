@@ -1,7 +1,7 @@
 #include "platform/android13/instance_allocation_hooks.h"
 #include "platform/android13/allocation_validation.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 
 namespace artdcevm::android13 {
 namespace {

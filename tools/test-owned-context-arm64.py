@@ -21,7 +21,7 @@ out = root / 'build/evidence/host/owned-context-consumer'
 out.mkdir(parents=True, exist_ok=True)
 obj = out / 'long-jump.o'
 subprocess.run([str(args.ndk_bin / 'clang'), '--target=aarch64-linux-android30', '-c',
-                str(cpp / 'platform/arch/arm64/owned_context_long_jump.S'), '-o', str(obj)], check=True)
+                str(cpp / 'platform/abi/arm64/owned_context_long_jump.S'), '-o', str(obj)], check=True)
 subprocess.run([str(args.ndk_bin / 'clang++'), '--target=aarch64-linux-android30', '-std=c++17',
                 '-Wall', '-Wextra', '-Werror', '-I', str(cpp), '-c',
                 str(cpp / 'platform/common/owned_context_consumer.cc'),

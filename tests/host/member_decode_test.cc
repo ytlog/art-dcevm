@@ -1,10 +1,10 @@
 #include "platform/android13/member_decode.h"
-#include "platform/android13/member_decode_abi.h"
+#include "platform/abi/arm64/android13/member_decode_abi.h"
 #include "platform/android13/native_object_access.h"
-#include "platform/android13/native_object_access_abi.h"
-#include "platform/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/native_object_access_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
 #include "platform/android13/retired_field_registry.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cassert>
 #include <cstring>
 #include <cstdlib>

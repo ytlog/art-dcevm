@@ -1,8 +1,8 @@
 #include "platform/android13/evolution_transaction.h"
-#include "platform/android13/evolution_transaction_abi.h"
+#include "platform/abi/arm64/android13/evolution_transaction_abi.h"
 #include "platform/android13/device_dex_input.h"
 #include "platform/common/dex_mapping_abi.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/hierarchy_validation.h"
@@ -11,13 +11,13 @@
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/selective_deopt_abi.h"
+#include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "platform/android13/stack_access.h"
 #include "platform/android13/frame_recovery.h"
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/thread_suspend_scope.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>

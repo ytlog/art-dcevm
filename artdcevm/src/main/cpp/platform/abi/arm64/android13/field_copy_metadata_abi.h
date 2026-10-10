@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/field_array_view.h"
+#include "platform/common/field_array_view.h"
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::android13::field_copy_abi {

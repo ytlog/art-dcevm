@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
-#include "platform/android13/thread_suspend_scope_abi.h"
+#include "platform/abi/arm64/android13/thread_suspend_scope_abi.h"
 #include <string>
 namespace artdcevm::android13 {
 bool ConfigureThreadSuspendScopes(HookEngine&,const DeviceProfile& profile,std::string* error);

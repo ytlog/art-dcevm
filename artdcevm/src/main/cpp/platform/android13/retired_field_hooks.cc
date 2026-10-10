@@ -2,7 +2,7 @@
 #include "platform/android13/member_decode.h"
 #include "platform/android13/reflected_field_visit.h"
 #include "platform/android13/member_access_guards.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <jni.h>
 #include <vector>
 #include <type_traits>

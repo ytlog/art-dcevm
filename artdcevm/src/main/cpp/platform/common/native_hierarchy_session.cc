@@ -2,8 +2,8 @@
 #include "platform/common/native_source_class_loading.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/method_identity_calibration.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
 #include <cstdlib>
 #include <cstring>
 #include <mutex>

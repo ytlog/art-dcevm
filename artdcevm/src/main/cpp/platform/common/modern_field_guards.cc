@@ -10,7 +10,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include <memory>
 #include "platform/common/jni_field_dispatch.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <atomic>
 #include <cstdlib>
 #include <type_traits>

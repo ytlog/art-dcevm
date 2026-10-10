@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/android13/device_profile.h"
 #include "api/hook_engine.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cstddef>
 #include <string>
 namespace artdcevm::android13 {

@@ -2,7 +2,7 @@
 #include "platform/common/bounded_native_event_trace.h"
 #include "api/hook_engine.h"
 #include "platform/common/thread_suspend_service.h"
-#include "platform/abi/arm64/android-common/source_stop.h"
+#include "platform/abi/arm64/common/source_stop.h"
 #include "platform/common/native_source_gc_publication.h"
 #include <vector>
 namespace artdcevm::native_source_class_loading {class Run;}

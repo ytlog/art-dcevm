@@ -3,8 +3,8 @@
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/redefinition_gate.h"
 #include <cstdlib>
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
 #include "platform/common/method_identity_calibration.h"
 #include <cstring>
 namespace artdcevm::native_required_cleanup {

@@ -5,7 +5,7 @@
 #include "support/json.h"
 #include "platform/common/evolution_planner.h"
 #include "platform/android13/evolution_runtime.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include "hooks/shadow_hook_engine.h"
 #include "core/transaction_lock.h"
 #include <algorithm>

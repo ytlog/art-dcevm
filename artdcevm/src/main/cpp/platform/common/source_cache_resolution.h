@@ -1,6 +1,6 @@
 #pragma once
 #include "api/hook_engine.h"
-#include "platform/abi/arm64/android-common/cache_resolution.h"
+#include "platform/abi/arm64/common/cache_resolution.h"
 namespace artdcevm::source_cache_resolution {
 struct Witness {
  const void* cache_slot=nullptr;const void* class_slot=nullptr;const void* loader_slot=nullptr;

@@ -1,8 +1,8 @@
 #include "platform/android13/reflection_bindings.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstring>
 #include <dlfcn.h>
 #include <jvmti.h>

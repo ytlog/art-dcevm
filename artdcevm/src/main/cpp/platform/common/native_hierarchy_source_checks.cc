@@ -1,11 +1,11 @@
 #include "platform/common/native_hierarchy_source_checks.h"
 #include "platform/common/source_check_episode.h"
-#include "platform/android13/platform_string_abi.h"
+#include "platform/abi/arm64/android13/platform_string_abi.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_identity_calibration.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <cstring>
 #include <mutex>
 #include <atomic>

@@ -1,6 +1,6 @@
 #include "platform/android13/structural_member_mapping.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/field_copy_metadata.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_method_registry_bridge.h"

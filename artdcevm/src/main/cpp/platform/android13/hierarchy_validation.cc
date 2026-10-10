@@ -6,7 +6,7 @@
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstring>
 #include <jvmti.h>
 #include <limits>

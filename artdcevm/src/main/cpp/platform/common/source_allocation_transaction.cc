@@ -1,7 +1,7 @@
 #include "platform/common/source_allocation_transaction.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/common/class_metadata_abi.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include <cstring>
 #include <new>
 namespace artdcevm::source_allocation_transaction {

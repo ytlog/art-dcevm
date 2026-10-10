@@ -1,4 +1,4 @@
-#include "platform/class_metadata_abi.h"
+#include "platform/common/class_metadata_abi.h"
 #include <array>
 #include <cassert>
 #include <iostream>

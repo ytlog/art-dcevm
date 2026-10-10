@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/android13/device_profile.h"
 #include "platform/android13/structural_member_mapping.h"
-#include "platform/android13/structural_reflective_abi.h"
+#include "platform/abi/arm64/android13/structural_reflective_abi.h"
 namespace artdcevm::android13 {
 bool ConfigureStructuralReflectiveTargets(HookEngine&,const DeviceProfile& profile,std::string*);
 structural_reflective_abi::SourceView ReadStructuralReflectionSource(const structural_reflective_abi::SourceInfo&);

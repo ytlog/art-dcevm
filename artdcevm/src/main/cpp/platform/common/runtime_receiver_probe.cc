@@ -1,11 +1,11 @@
 #include "platform/common/runtime_receiver_probe.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 #include <cstring>
 #include <atomic>
 #include <mutex>
 #include <sstream>
-#include "platform/abi/arm64/android-common/jni_id_query_scope.h"
+#include "platform/abi/arm64/common/jni_id_query_scope.h"
 namespace artdcevm::runtime_receiver {
 namespace {
 // Fixed class_linker.h/handle.h: Handle<ClassLoader> is one StackReference slot

@@ -1,6 +1,6 @@
 #pragma once
-#include "platform/android13/allocation_validation_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/allocation_validation_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/abi/arm64/android11/gc_cache_pair.h"
 #include <cstddef>
 #include <cstdint>

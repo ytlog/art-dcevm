@@ -1,11 +1,11 @@
 #include "platform/android13/async_deopt_hooks.h"
 #include "platform/android13/stack_access.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/handle_root_scope.h"
 #include "platform/android13/frame_recovery.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <atomic>
 #include <cstring>
 namespace artdcevm::android13 {

@@ -2,7 +2,7 @@
 #include "platform/common/modern_source_commit.h"
 #include "platform/common/modern_method_services.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/android-common/closure.h"
+#include "platform/abi/arm64/common/closure.h"
 #include "platform/common/object_replacement_map_abi.h"
 #include <sys/mman.h>
 #include <sys/wait.h>

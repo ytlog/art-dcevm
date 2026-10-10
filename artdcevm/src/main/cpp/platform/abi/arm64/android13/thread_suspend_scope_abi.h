@@ -1,6 +1,6 @@
 #pragma once
-#include "platform/android13/native_object_access_abi.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/android13/native_object_access_abi.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 namespace artdcevm::android13::thread_suspend_abi {
 // runtime/thread_list.h ScopedSuspendAll is an empty nonvirtual ValueObject;
 // the named ctor/dtor use Runtime::Current rather than their this storage.

@@ -1,9 +1,9 @@
 #include "platform/android13/transaction_metadata.h"
 #include "platform/android13/validation_metadata.h"
-#include "platform/symbols/android13.h"
-#include "platform/android13/validation_metadata_abi.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/redefinition_art_abi.h"
+#include "platform/android13/symbols/profile.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

@@ -1,7 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/abi/arm64/android13/code_info.h"
 #include "platform/abi/arm64/stack_visitor.h"
 namespace artdcevm::android13::stack_abi {

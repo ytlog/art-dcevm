@@ -1,7 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
-#include "platform/android13/mutex_abi.h"
+#include "platform/abi/arm64/android13/mutex_abi.h"
 namespace artdcevm::android13::compiler_diagnostics_abi {
 // Borrowed platform libc++ v1 storage; no host STL constructors/destructors.
 struct Vector { void* begin;void* end;void* capacity; };

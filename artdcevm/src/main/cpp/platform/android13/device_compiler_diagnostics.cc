@@ -1,11 +1,11 @@
 #include "platform/android13/device_compiler_diagnostics.h"
-#include "platform/android13/device_compiler_diagnostics_abi.h"
+#include "platform/abi/arm64/android13/device_compiler_diagnostics_abi.h"
 #include "platform/android13/device_diagnostics.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/native_object_access.h"
-#include "platform/android13/member_decode_abi.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/member_decode_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/common/jit_service.h"
 #include <atomic>
 #include <cstdlib>

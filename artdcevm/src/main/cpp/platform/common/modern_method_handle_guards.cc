@@ -3,11 +3,11 @@
 #include "platform/common/native_receiver_guard.h"
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/modern_field_guards.h"
-#include "platform/abi/arm64/android-common/method_handle.h"
+#include "platform/abi/arm64/common/method_handle.h"
 #include "platform/abi/arm64/android11/method_handle.h"
 #include "platform/common/native_structural_reflection_visitor.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <atomic>
 #include <cstring>
 #include <cstdlib>

@@ -1,5 +1,5 @@
 #include "platform/common/modern_final_field_guard.h"
-#include "platform/abi/arm64/android-common/method_handle.h"
+#include "platform/abi/arm64/common/method_handle.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

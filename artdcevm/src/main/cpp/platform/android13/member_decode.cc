@@ -1,14 +1,14 @@
 #include "platform/android13/member_decode.h"
-#include "platform/android13/member_decode_abi.h"
+#include "platform/abi/arm64/android13/member_decode_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/retired_method_registry_bridge.h"
-#include "platform/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_field_token.h"
 #include "platform/android13/retired_member_guard.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cstdlib>
 #include <cstring>
 

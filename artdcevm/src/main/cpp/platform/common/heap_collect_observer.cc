@@ -1,5 +1,5 @@
 #include "platform/common/heap_collect_observer.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <array>
 #include <atomic>
 #include <cstdlib>

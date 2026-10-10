@@ -2,7 +2,7 @@
 #include "handle_scope_fixture.h"
 #include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/handle_root_scope.h"
-#include "platform/android13/handle_root_scope_abi.h"
+#include "platform/abi/arm64/android13/handle_root_scope_abi.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/validation_metadata.h"
 #include <cassert>

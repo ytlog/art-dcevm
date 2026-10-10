@@ -2,7 +2,7 @@
 #include "platform/android13/field_validation.h"
 #include "platform/android13/method_validation.h"
 #include "platform/android13/class_validation.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include "support/elf_modules.h"
 #include <atomic>
 #include <vector>

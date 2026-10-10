@@ -1,10 +1,10 @@
 #include "platform/common/native_final_write_listener.h"
 #include "platform/common/native_receiver_guard.h"
 #include <cstring>
-#include "platform/abi/arm64/android-common/instrumentation.h"
+#include "platform/abi/arm64/common/instrumentation.h"
 #include <cstdlib>
 #include <atomic>
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <mutex>
 namespace artdcevm::final_write_guard {
 namespace {

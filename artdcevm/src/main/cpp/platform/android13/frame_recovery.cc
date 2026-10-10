@@ -1,6 +1,6 @@
 #include "platform/android13/frame_recovery.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/common/code_item_metadata.h"
 #include "platform/common/decoded_frame_recovery.h"

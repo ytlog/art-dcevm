@@ -1,5 +1,5 @@
 #include "platform/android13/device_dex_input.h"
-#include "platform/android13/platform_string_abi.h"
+#include "platform/abi/arm64/android13/platform_string_abi.h"
 #include <cstring>
 namespace artdcevm::android13 {
 namespace {

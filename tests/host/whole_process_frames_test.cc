@@ -2,7 +2,7 @@
 #include "native_source_stop_test.cc"
 #undef main
 #include "platform/common/whole_process_frames.h"
-#include "platform/abi/arm64/android-common/closure.h"
+#include "platform/abi/arm64/common/closure.h"
 #include <array>
 namespace {
 int thread_list,list_mutex,worker,empty_thread,jit_cache;void* list_mutex_pointer=&list_mutex;

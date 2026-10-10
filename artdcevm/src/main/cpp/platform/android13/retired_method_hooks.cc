@@ -4,8 +4,8 @@
 #include "platform/android13/calibration_exception.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/heap_reference.h"
-#include "platform/android13/validation_metadata_abi.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/handle_root_scope.h"
 #include <cstring>
 #endif
@@ -16,7 +16,7 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/nterp_dispatch.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>

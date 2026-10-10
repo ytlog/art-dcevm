@@ -1,6 +1,6 @@
 #pragma once
 #include "platform/android13/device_profile.h"
-#include "platform/android13/allocation_validation_abi.h"
+#include "platform/abi/arm64/android13/allocation_validation_abi.h"
 #include <string>
 namespace artdcevm::android13 {
 using CollectInstances = bool (*)(void*, void*);

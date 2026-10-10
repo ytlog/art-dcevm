@@ -1,6 +1,6 @@
 #include "device_profile_fixture.h"
 #include "platform/android13/frame_recovery.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>

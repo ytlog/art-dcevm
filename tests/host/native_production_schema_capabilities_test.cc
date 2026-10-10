@@ -5,8 +5,8 @@
 #include "platform/common/native_production_schema_capabilities.h"
 #include "platform/common/native_schema_run_state.h"
 #include "platform/common/dex_mapping_abi.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
 // Only the inactive production RunState dispatch seam is doubled; all owner,
 // root, allocation, lookup, registry, monitor and scope code below is linked.
 namespace artdcevm::native_schema_run_state {

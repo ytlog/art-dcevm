@@ -1,9 +1,9 @@
 #include "device_profile_fixture.h"
 #include "platform/android13/reflected_field_visit.h"
-#include "platform/android13/member_decode_abi.h"
-#include "platform/android13/structural_reflective_abi.h"
-#include "platform/android13/field_copy_metadata_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/member_decode_abi.h"
+#include "platform/abi/arm64/android13/structural_reflective_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/retired_field_registry.h"
 #include <cassert>
 #include <cstdio>

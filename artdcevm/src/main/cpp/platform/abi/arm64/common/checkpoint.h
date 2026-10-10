@@ -1,6 +1,6 @@
 #pragma once
 #include <cstddef>
-#include "platform/abi/arm64/android-common/closure.h"
+#include "platform/abi/arm64/common/closure.h"
 namespace artdcevm::abi::arm64::android_common {
 // Fixed AOSP runtime/thread_list.h declarations. Selection is by exact named
 // symbol, never API/vendor identity. A receiver is independently observed.

@@ -1,6 +1,6 @@
 #pragma once
 #include "api/hook_engine.h"
-#include "platform/abi/arm64/android-common/gc_cause.h"
+#include "platform/abi/arm64/common/gc_cause.h"
 namespace artdcevm::heap_collect_observer {
 // Fixed heap.h: GcCause has a 32-bit enum representation. Observers are static functions
 // with process lifetime; they filter their own owned request before recording.

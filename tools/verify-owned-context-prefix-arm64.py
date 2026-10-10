@@ -33,7 +33,7 @@ enum class InstructionSet {kX86,kX86_64,kArm64};
 constexpr size_t GetInstructionSetPointerSize(InstructionSet){return 8;}
 }
 '''+clean(context)+clean(regs)+'''
-#include "platform/abi/arm64/android-common/context.h"
+#include "platform/abi/arm64/common/context.h"
 static_assert(art::arm64::SP==31);
 static_assert(art::arm64::kNumberOfXRegisters==33);
 '''

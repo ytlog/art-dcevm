@@ -1,7 +1,7 @@
 #include "platform/android13/structural_method_updates.h"
 #include "platform/common/structural_methods.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/nterp_dispatch.h"
 #include <cstring>

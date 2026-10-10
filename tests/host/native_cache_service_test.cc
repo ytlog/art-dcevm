@@ -1,11 +1,11 @@
 #include "platform/common/native_cache_service.h"
-#include "platform/abi/arm64/android-common/closure.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/closure.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
-#include "platform/abi/arm64/android-common/checkpoint.h"
+#include "platform/abi/arm64/common/checkpoint.h"
 using namespace artdcevm;
 namespace {
 int self,threads,other_threads,mutex,worker[3];

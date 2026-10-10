@@ -1,13 +1,13 @@
 #include "platform/android13/structural_reflective.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/field_copy_metadata.h"
 #include "platform/android13/retired_field_registry_bridge.h"
 #include "platform/android13/retired_method_registry_bridge.h"
 #include "platform/android13/jni_method_targets.h"
 #include "platform/android13/transaction_metadata.h"
-#include "platform/method_array_view.h"
+#include "platform/common/method_array_view.h"
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>

@@ -3,8 +3,8 @@
 #include "provider_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_required_cleanup.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
 namespace artdcevm::redefinition_gate {bool Owned(JavaVM*) noexcept{return current==thread.data();}}
 namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;

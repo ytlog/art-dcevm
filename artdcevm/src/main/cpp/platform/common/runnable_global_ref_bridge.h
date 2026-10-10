@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/abi/arm64/android-common/jni_global_ref.h"
+#include "platform/abi/arm64/common/jni_global_ref.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/common/runnable_jni_bridge.h"
 namespace artdcevm::runnable_jni {

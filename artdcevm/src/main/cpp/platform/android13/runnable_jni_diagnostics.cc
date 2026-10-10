@@ -2,7 +2,7 @@
 #ifdef ARTDCEVM_TESTING
 #include "platform/android13/evolution_runtime.h"
 #include "platform/android13/native_object_access.h"
-#include "platform/android13/native_object_access_abi.h"
+#include "platform/abi/arm64/android13/native_object_access_abi.h"
 #include "platform/common/runnable_executor.h"
 #include "hooks/shadow_hook_engine.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"

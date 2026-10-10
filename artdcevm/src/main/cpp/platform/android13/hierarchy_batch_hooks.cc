@@ -1,12 +1,12 @@
 #include "platform/android13/hierarchy_batch_hooks.h"
 
 #include "platform/android13/hierarchy_allocation.h"
-#include "platform/abi/arm64/android-common/hierarchy_allocation.h"
+#include "platform/abi/arm64/common/hierarchy_allocation.h"
 #include "platform/android13/hierarchy_validation.h"
 #include <cstdint>
 #include "jvmti.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 
 namespace artdcevm::android13 {
 namespace {

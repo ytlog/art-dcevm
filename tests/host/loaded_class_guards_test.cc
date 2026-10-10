@@ -1,6 +1,6 @@
 #include "platform/android13/loaded_class_guards.h"
-#include "platform/android13/loaded_class_guards_abi.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/loaded_class_guards_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/validation_metadata.h"
 #include "platform/android13/modifier_evolution_policy.h"
 #include <cassert>

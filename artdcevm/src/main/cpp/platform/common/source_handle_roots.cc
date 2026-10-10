@@ -2,7 +2,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android11/thread_state.h"
 #include "platform/abi/arm64/android13/thread_state.h"
-#include "platform/abi/arm64/android-common/hierarchy_allocation.h"
+#include "platform/abi/arm64/common/hierarchy_allocation.h"
 #include <array>
 #include <cstring>
 #include <cstdlib>

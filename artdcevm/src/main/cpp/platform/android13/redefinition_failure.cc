@@ -1,7 +1,7 @@
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/redefinition_art_abi.h"
-#include "platform/android13/platform_string_abi.h"
-#include "platform/symbols/android13.h"
+#include "platform/abi/arm64/android13/redefinition_art_abi.h"
+#include "platform/abi/arm64/android13/platform_string_abi.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstring>
 
 namespace artdcevm::android13 {

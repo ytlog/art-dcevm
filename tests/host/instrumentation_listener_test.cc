@@ -1,8 +1,8 @@
 #include "device_profile_fixture.h"
 #include "platform/android13/instrumentation_listener.h"
-#include "platform/android13/instrumentation_listener_abi.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/instrumentation_listener_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/thread_suspend_scope.h"
 #include <cassert>

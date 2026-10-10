@@ -1,5 +1,5 @@
 #include "platform/android13/native_object_access.h"
-#include "platform/android13/native_object_access_abi.h"
+#include "platform/abi/arm64/android13/native_object_access_abi.h"
 #include <cstdlib>
 #include <cstring>
 

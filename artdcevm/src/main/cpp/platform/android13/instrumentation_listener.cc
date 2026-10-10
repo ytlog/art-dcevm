@@ -1,6 +1,6 @@
 #include "platform/android13/instrumentation_listener.h"
-#include "platform/android13/instrumentation_listener_abi.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/instrumentation_listener_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/member_access_guards.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"

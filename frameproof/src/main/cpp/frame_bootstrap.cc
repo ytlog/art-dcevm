@@ -4,8 +4,8 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
-#include "platform/abi/arm64/android-common/runtime_debuggable.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/runtime_debuggable.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <array>
 #include <mutex>
 #include <sstream>

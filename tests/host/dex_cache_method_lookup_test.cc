@@ -1,4 +1,4 @@
-#include "platform/android13/dex_cache_method_abi.h"
+#include "platform/abi/arm64/android13/dex_cache_method_abi.h"
 #include <cassert>
 #include <iostream>
 #include <memory>

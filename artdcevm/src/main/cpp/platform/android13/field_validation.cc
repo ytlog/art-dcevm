@@ -6,7 +6,7 @@
 #include "platform/android13/redefinition_input.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/android13/validation_hooks.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <new>
 #include <cstring>
 #include <algorithm>

@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/abi/arm64/android11/thread_state.h"
 #include "platform/abi/arm64/android13/thread_state.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 
 namespace artdcevm::thread_suspend_service {
 enum class Declaration {kLegacy16,kModern24};

@@ -1,5 +1,5 @@
 #include "platform/android13/class_validation.h"
-#include "platform/android13/class_validation_abi.h"
+#include "platform/abi/arm64/android13/class_validation_abi.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/hierarchy_validation.h"
 #include "platform/android13/modifier_evolution_policy.h"

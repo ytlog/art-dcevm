@@ -27,7 +27,7 @@ namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include "hooks/shadow_hook_engine.h"
 #include "support/elf_modules.h"
 #include <mutex>

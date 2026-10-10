@@ -29,7 +29,7 @@
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/prepared_root_registry.h"
-#include "platform/abi/arm64/android-common/jni_global_ref.h"
+#include "platform/abi/arm64/common/jni_global_ref.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_schema_guard_verifier.h"
 #include "platform/common/rooted_field_identities.h"
@@ -45,7 +45,7 @@
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/native_scope_executor.h"
-#include "platform/android13/selective_deopt_abi.h"
+#include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "hooks/shadow_hook_engine.h"
 #include <cstring>
 #include <map>

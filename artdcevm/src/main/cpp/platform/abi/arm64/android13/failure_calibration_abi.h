@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/android13/redefinition_art_abi.h"
+#include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>

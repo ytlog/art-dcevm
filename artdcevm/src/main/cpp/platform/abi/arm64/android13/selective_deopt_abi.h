@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/android13/runtime_access_abi.h"
+#include "platform/abi/arm64/android13/runtime_access_abi.h"
 namespace artdcevm::android13::selective_abi {
 #pragma pack(push,4)
 struct RuntimeStats { uint64_t counters[7]; };

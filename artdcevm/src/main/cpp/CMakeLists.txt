@@ -121,7 +121,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/jni_access/capability_selection.cc
     platform/jni_access/owned_probe.cc
     platform/common/owned_active_frame_probe.cc
-    platform/arch/arm64/owned_context_long_jump.S
+    platform/abi/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc
     platform/android13/checked_method_provider.cc
     platform/android13/method_lookup.cc

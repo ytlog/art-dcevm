@@ -2,7 +2,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/android-common/interface_table.h"
+#include "platform/abi/arm64/common/interface_table.h"
 #include <algorithm>
 #include <cstring>
 namespace artdcevm::native_interface_graph {

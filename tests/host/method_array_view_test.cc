@@ -1,4 +1,4 @@
-#include "platform/method_array_view.h"
+#include "platform/common/method_array_view.h"
 #include <array>
 #include <cassert>
 #include <iostream>

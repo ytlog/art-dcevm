@@ -1,8 +1,8 @@
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/native_receiver_guard.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/android-common/jni_access.h"
+#include "platform/abi/arm64/common/jni_access.h"
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>

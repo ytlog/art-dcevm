@@ -2,7 +2,7 @@
 #include "platform/common/runnable_global_ref_bridge.h"
 #include "platform/jni_access/capability_selection.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <atomic>
 #include <mutex>
 namespace artdcevm::runnable_executor {

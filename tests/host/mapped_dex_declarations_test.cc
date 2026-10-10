@@ -1,5 +1,5 @@
 #include "evolution/class_schema.h"
-#include "platform/dex_mapping_abi.h"
+#include "platform/common/dex_mapping_abi.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>

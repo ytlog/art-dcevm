@@ -49,7 +49,7 @@ constexpr size_t kHeapReferenceSize=4,kBitsPerByte=8,kObjectAlignmentShift=3;
 namespace mirror {class Object;}
 }
 '''+re.sub(r'^#include.*$','',obj,flags=re.M)+'''
-#include "platform/abi/arm64/android-common/jni_global_ref.h"
+#include "platform/abi/arm64/common/jni_global_ref.h"
 namespace art {class Thread;class JavaVMExt {public:
 '''+declaration+'''
 };}

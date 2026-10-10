@@ -1,6 +1,6 @@
 #include "platform/android13/jni_method_targets.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/symbols/android13.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstddef>
 #include <cstdint>
 

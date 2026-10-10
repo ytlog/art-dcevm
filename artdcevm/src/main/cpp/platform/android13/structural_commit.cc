@@ -1,6 +1,6 @@
 #include "platform/android13/structural_commit.h"
 #include "platform/common/source_commit.h"
-#include "platform/android13/allocation_validation_abi.h"
+#include "platform/abi/arm64/android13/allocation_validation_abi.h"
 #include "platform/android13/field_copy_binding.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/handle_root_scope.h"
@@ -8,11 +8,11 @@
 #include "platform/android13/object_replacement_map.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/android13/selective_deopt.h"
-#include "platform/android13/selective_deopt_abi.h"
+#include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "platform/android13/structural_method_updates.h"
 #include "platform/android13/structural_reflective.h"
-#include "platform/android13/validation_metadata_abi.h"
-#include "platform/symbols/android13.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstring>
 #include <cstdlib>
 #include "platform/android13/transaction_metadata.h"

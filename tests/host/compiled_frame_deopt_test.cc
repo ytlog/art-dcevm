@@ -2,9 +2,9 @@
 #include "platform/android13/stack_access.h"
 #include "platform/android13/async_deopt_hooks.h"
 #include "platform/android13/selective_deopt.h"
-#include "platform/android13/selective_deopt_abi.h"
-#include "platform/android13/art_method_abi.h"
-#include "platform/android13/code_info_flags_abi.h"
+#include "platform/abi/arm64/android13/selective_deopt_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/code_info_flags_abi.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>

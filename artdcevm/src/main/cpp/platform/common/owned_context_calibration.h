@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/abi/arm64/android-common/context.h"
+#include "platform/abi/arm64/common/context.h"
 #include <cstdint>
 namespace artdcevm::owned_context_calibration {
 enum class Failure {kNone,kInvalidRequest,kUnavailable,kAllocation,kResetModel,kRegisterWrite,kResetRestore};

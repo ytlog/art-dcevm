@@ -7,7 +7,7 @@
 #include "platform/common/method_identity_calibration.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
-#include "platform/abi/arm64/android-common/runtime_debuggable.h"
+#include "platform/abi/arm64/common/runtime_debuggable.h"
 #include "hooks/shadow_hook_engine.h"
 #include <atomic>
 #include <array>

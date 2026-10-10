@@ -2,7 +2,7 @@
 #include "platform/common/source_allocation_transaction.h"
 #include "platform/common/native_hierarchy_graph.h"
 #include "platform/common/runtime_services.h"
-#include "platform/abi/arm64/android-common/hierarchy_allocation.h"
+#include "platform/abi/arm64/common/hierarchy_allocation.h"
 #include <memory>
 namespace artdcevm::native_hierarchy_allocator {
 // Fixed named source boundaries are owned by the production hook adapter. The

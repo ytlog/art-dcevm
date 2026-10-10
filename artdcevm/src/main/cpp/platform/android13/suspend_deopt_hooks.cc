@@ -1,11 +1,11 @@
 #include "platform/android13/suspend_deopt_hooks.h"
 #include "platform/android13/pending_suspend_deopt.h"
-#include "platform/android13/suspend_deopt_art_abi.h"
+#include "platform/abi/arm64/android13/suspend_deopt_art_abi.h"
 
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include "platform/android13/stack_access.h"
 #include "platform/android13/frame_recovery.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/runtime_access.h"
 #include "platform/common/async_deopt_service.h"
 #include <cstring>

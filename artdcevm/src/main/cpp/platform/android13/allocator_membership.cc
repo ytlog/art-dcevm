@@ -1,8 +1,8 @@
 #include "platform/android13/allocator_membership.h"
-#include "platform/android13/mutex_abi.h"
+#include "platform/abi/arm64/android13/mutex_abi.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include <cstddef>
 #include <jvmti.h>
 #include <vector>

@@ -1,6 +1,6 @@
 #pragma once
-#include "platform/android13/stack_access_abi.h"
-#include "platform/android13/member_access_guards_abi.h"
+#include "platform/abi/arm64/android13/stack_access_abi.h"
+#include "platform/abi/arm64/android13/member_access_guards_abi.h"
 #include <type_traits>
 namespace artdcevm::android13::listener_abi {
 // Android 13 instrumentation.h and libc++ optional/reference_wrapper, release

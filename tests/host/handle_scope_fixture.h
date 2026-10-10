@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/android13/handle_root_scope_abi.h"
+#include "platform/abi/arm64/android13/handle_root_scope_abi.h"
 #include <cassert>
 #include <cstring>
 #include <vector>

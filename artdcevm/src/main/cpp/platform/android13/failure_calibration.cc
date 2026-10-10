@@ -1,8 +1,8 @@
 #include "platform/android13/failure_calibration.h"
-#include "platform/android13/failure_calibration_abi.h"
-#include "platform/android13/redefinition_art_abi.h"
+#include "platform/abi/arm64/android13/failure_calibration_abi.h"
+#include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/platform_string_abi.h"
+#include "platform/abi/arm64/android13/platform_string_abi.h"
 #include <cstring>
 #include <jvmti.h>
 namespace artdcevm::android13 {

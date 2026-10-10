@@ -2,7 +2,7 @@
 #include "api/hook_engine.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 namespace artdcevm::exclusive_owned_roots {
 // No JNI environment is exposed during the ART-owned stop. These pointers are
 // borrowed only until operation returns; globals stay owned by the caller.

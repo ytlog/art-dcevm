@@ -1,5 +1,5 @@
 #include "platform/symbols/art_symbol_compat.h"
-#include "platform/symbols/android13/xiaomi/cas_tkq1_221114_001.h"
+#include "platform/android13/symbols/xiaomi/cas_tkq1_221114_001.h"
 #include <initializer_list>
 
 namespace artdcevm::symbols {

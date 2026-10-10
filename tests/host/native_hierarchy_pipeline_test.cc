@@ -8,12 +8,12 @@
 #include "platform/common/native_hierarchy_allocator.h"
 #include "platform/common/native_hierarchy_receiver.h"
 #include "platform/common/native_hierarchy_source_checks.h"
-#include "platform/android13/platform_string_abi.h"
+#include "platform/abi/arm64/android13/platform_string_abi.h"
 #include "platform/common/native_class_lookup.h"
 #include "platform/common/native_hierarchy_source_cache.h"
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/common/method_cache_lookup.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include <fstream>
 #include <iterator>
 #include <new>

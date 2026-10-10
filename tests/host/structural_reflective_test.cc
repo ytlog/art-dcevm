@@ -1,9 +1,9 @@
 #include "transaction_metadata_profile.h"
-#include "platform/android13/redefinition_art_abi.h"
+#include "platform/abi/arm64/android13/redefinition_art_abi.h"
 #include "platform/android13/structural_reflective.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/field_copy_metadata.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include "platform/android13/retired_method_registry.h"
 #include "platform/android13/retired_field_registry.h"
 #include <cassert>

@@ -3,7 +3,7 @@
 #include "platform/common/class_loader_cleanup.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android15/linear_alloc.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <atomic>
 #include <cstdlib>
 namespace artdcevm::retirement {

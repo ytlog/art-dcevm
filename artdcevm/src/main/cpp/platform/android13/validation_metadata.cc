@@ -1,5 +1,5 @@
 #include "platform/android13/validation_metadata.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 #include "platform/common/dex_file_metadata.h"
 
 namespace artdcevm::android13 {

@@ -1,7 +1,7 @@
 #include "platform/common/owned_jit_receivers.h"
 #include "platform/common/heap_collect_observer.h"
 #include "platform/common/runnable_executor.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <atomic>
 #include <mutex>
 #include <jvmti.h>

@@ -1,6 +1,6 @@
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/runtime_access_abi.h"
-#include "platform/android13/selective_deopt_abi.h"
+#include "platform/abi/arm64/android13/runtime_access_abi.h"
+#include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "platform/common/runtime_services.h"
 #include <cstdlib>
 #include "platform/android13/native_object_access.h"

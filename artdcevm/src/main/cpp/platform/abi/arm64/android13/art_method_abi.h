@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/art_method_metadata.h"
+#include "platform/common/art_method_metadata.h"
 #include <cstddef>
 #include <cstdint>
 namespace artdcevm::android13::art_method_abi {

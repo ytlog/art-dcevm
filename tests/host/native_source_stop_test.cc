@@ -6,8 +6,8 @@ void operator delete(void* p) noexcept {std::free(p);}
 void* operator new[](std::size_t bytes){return ::operator new(bytes);}
 void operator delete[](void* p) noexcept {::operator delete(p);}
 #include "platform/common/native_source_calibration_bridge.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
-#include "platform/abi/arm64/android-common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

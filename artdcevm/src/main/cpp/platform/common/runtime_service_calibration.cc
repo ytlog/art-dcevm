@@ -1,9 +1,9 @@
 #include "platform/common/runtime_service_calibration.h"
-#include "platform/abi/arm64/android-common/instrumentation.h"
+#include "platform/abi/arm64/common/instrumentation.h"
 #include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/method_identity_calibration.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
 namespace artdcevm::runtime_services {

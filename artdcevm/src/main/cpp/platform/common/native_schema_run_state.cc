@@ -2,7 +2,7 @@
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/common/redefinition_gate.h"
-#include "platform/abi/arm64/android-common/redefiner_prefix.h"
+#include "platform/abi/arm64/common/redefiner_prefix.h"
 #include <cstring>
 #include <cstdlib>
 #include <new>

@@ -7,7 +7,7 @@
 #include "platform/android13/hierarchy_allocation.h"
 #include <vector>
 #include "platform/android13/validation_hooks.h"
-#include "platform/symbols/android13.h"
+#include "platform/android13/symbols/profile.h"
 
 namespace artdcevm::android13 {
 namespace {

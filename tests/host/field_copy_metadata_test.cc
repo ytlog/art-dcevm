@@ -1,6 +1,6 @@
 #include "platform/android13/field_copy_metadata.h"
-#include "platform/android13/field_copy_metadata_abi.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cassert>
 #include <cstring>
 #include <fstream>

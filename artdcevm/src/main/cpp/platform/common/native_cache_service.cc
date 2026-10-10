@@ -1,11 +1,11 @@
 #include "platform/common/native_cache_service.h"
-#include "platform/abi/arm64/android-common/closure.h"
+#include "platform/abi/arm64/common/closure.h"
 #include "platform/common/method_identity_calibration.h"
 #include <cstring>
 #include <mutex>
 #include <atomic>
-#include "platform/abi/arm64/android-common/checkpoint.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/checkpoint.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 namespace artdcevm::native_cache {
 namespace {
 using Closure=art::Closure;

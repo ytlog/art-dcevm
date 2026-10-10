@@ -1,11 +1,11 @@
 #include "platform/android13/owned_jit_receiver_probe.h"
 #include "platform/common/heap_collect_observer.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <jvmti.h>
 #include <mutex>
 #include <chrono>
 #include <thread>
-#include "platform/android13/runtime_access_abi.h"
+#include "platform/abi/arm64/android13/runtime_access_abi.h"
 namespace artdcevm::android13 {
 namespace {
 namespace a=owned_jit_probe_abi;

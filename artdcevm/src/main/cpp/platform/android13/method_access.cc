@@ -1,12 +1,12 @@
 #include "platform/android13/method_access.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/calibration_exception.h"
 #include "platform/android13/dex_cache_method_reader.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/loaded_class_guards.h"
 #include "platform/android13/native_object_access.h"
 #include "platform/android13/runtime_access.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <atomic>
 #include <cstring>
 #include <jvmti.h>

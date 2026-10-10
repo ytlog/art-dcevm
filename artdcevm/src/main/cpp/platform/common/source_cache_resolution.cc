@@ -3,7 +3,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 namespace artdcevm::source_cache_resolution {
 namespace {
 bool Fail(std::string* e,const char* s){if(e)*e=s;return false;}

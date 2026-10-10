@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
-#include "platform/abi/arm64/android-common/jni_id_query_scope.h"
+#include "platform/abi/arm64/common/jni_id_query_scope.h"
 using namespace artdcevm;
 using Carrier=abi::arm64::android11::ReleaseObjectPointer;
 using Find=Carrier (*)(void*,void*,const char*,void*);

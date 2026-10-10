@@ -1,6 +1,6 @@
 #include "platform/common/native_final_write_listener.h"
-#include "platform/abi/arm64/android-common/instrumentation.h"
-#include "platform/abi/arm64/android-common/suspend_all.h"
+#include "platform/abi/arm64/common/instrumentation.h"
+#include "platform/abi/arm64/common/suspend_all.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

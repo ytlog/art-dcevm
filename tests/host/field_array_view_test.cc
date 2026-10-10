@@ -1,4 +1,4 @@
-#include "platform/field_array_view.h"
+#include "platform/common/field_array_view.h"
 #include <array>
 #include <cassert>
 #include <iostream>

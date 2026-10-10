@@ -1,4 +1,4 @@
-#include "platform/art_method_metadata.h"
+#include "platform/common/art_method_metadata.h"
 #include <array>
 #include <cassert>
 #include <iostream>

@@ -1,7 +1,7 @@
 #include "platform/android13/field_copy_storage.h"
-#include "platform/android13/field_copy_storage_abi.h"
-#include "platform/android13/field_copy_metadata_abi.h"
-#include "platform/android13/heap_reference_abi.h"
+#include "platform/abi/arm64/android13/field_copy_storage_abi.h"
+#include "platform/abi/arm64/android13/field_copy_metadata_abi.h"
+#include "platform/abi/arm64/android13/heap_reference_abi.h"
 #include <array>
 #include <atomic>
 #include <cassert>

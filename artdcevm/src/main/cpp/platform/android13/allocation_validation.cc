@@ -1,8 +1,8 @@
 #include "platform/android13/allocation_validation.h"
-#include "platform/android13/art_method_abi.h"
+#include "platform/abi/arm64/android13/art_method_abi.h"
 #include "platform/android13/heap_reference.h"
 #include "platform/android13/redefinition_failure.h"
-#include "platform/android13/validation_metadata_abi.h"
+#include "platform/abi/arm64/android13/validation_metadata_abi.h"
 #include <cstring>
 #include "platform/android13/transaction_metadata.h"
 #include <limits>

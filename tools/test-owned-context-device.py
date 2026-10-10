@@ -24,7 +24,7 @@ command = [str(args.ndk_bin / 'aarch64-linux-android30-clang++'), '-std=c++17',
            str(root / 'tests/device/owned_context_arm64_test.cc'),
            str(root / 'tests/device/owned_context_arm64_test.S'),
            str(cpp / 'platform/common/owned_context_consumer.cc'),
-           str(cpp / 'platform/arch/arm64/owned_context_long_jump.S'), '-o', str(binary)]
+           str(cpp / 'platform/abi/arm64/owned_context_long_jump.S'), '-o', str(binary)]
 build = subprocess.run(command, capture_output=True, text=True)
 (out / 'build.log').write_text(build.stdout + build.stderr)
 build.check_returncode()
