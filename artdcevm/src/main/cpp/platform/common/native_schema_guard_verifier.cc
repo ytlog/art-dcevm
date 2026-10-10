@@ -529,6 +529,10 @@ bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
 }
 bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* loader,const native_schema_policy::Requirement& requirement,std::string* error)const{
  auto& s=*state_;if(!s.sealed||!redefinition_gate::Owned(s.bindings.vm)||pair>=transaction.old_classes.size()||!SamePlan(transaction,s.expected))return Fail(error,"Schema guard has no exact sealed native Holder proof");
+ if(requirement.kind==native_schema_policy::GuardKind::FinalFields&&!s.bindings.final_fields)
+  return Fail(error,"Final-field guard lacks the independently calibrated permission owner");
+ if(requirement.kind==native_schema_policy::GuardKind::AccessPermissions&&!s.bindings.access_permissions)
+  return Fail(error,"Access guard lacks the independently calibrated permission owner");
  if(requirement.kind==native_schema_policy::GuardKind::HierarchyGraph){
   if(!s.frozen||!s.refreshed||(!s.batch_snapshot&&!s.FrozenProof())||!s.hierarchy_authority)
    return Fail(error,"Hierarchy guard lacks the actual frozen source authority");

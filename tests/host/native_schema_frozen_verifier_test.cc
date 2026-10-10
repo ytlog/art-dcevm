@@ -79,6 +79,16 @@ int main(){
  deny_alloc=true;bool allocation_refused=false;try{(void)::operator new(1);}catch(const std::bad_alloc&){allocation_refused=true;}assert(allocation_refused);assert(registry.Resolve());assert(verifier.RefreshManagedRoots(plan,registry.Final()));assert(s.refreshed&&s.FrozenProof());
  proxy_origin=0;assert(!s.FrozenProof());proxy_origin=reinterpret_cast<uintptr_t>(old_method);assert(s.FrozenProof());
  deny_alloc=false;
+ // Missing permission producers must remain a refusal even if a stale grant
+ // exists, and ordinary preparation must retain an actionable root cause.
+ for(auto kind:{native_schema_policy::GuardKind::FinalFields,native_schema_policy::GuardKind::AccessPermissions}){
+  const native_schema_policy::Requirement requirement{kind,"value","I"};
+  s.grants.push_back({0,nullptr,requirement});error.clear();
+  assert(!verifier.Verify(plan,0,nullptr,requirement,&error));
+  assert(error.find("independently calibrated permission owner")!=std::string::npos);
+  deny_alloc=true;assert(!verifier.Verify(plan,0,nullptr,requirement,nullptr));deny_alloc=false;
+  s.grants.pop_back();
+ }
  // These explicit authority boundaries test actual frozen dispatch and request
  // completeness, not ART authority readiness. The aggregate fixture owns the
  // actual RunState/Authority proof independently.

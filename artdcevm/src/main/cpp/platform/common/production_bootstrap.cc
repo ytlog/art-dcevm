@@ -626,6 +626,13 @@ struct NativeEngine final:Engine {
    if(!native_schema_policy::ReadNativeDeclarations(metadata,model,plan.old_classes[i],&before,error)||!native_schema_policy::ReadNativeDeclarations(metadata,model,plan.new_classes[i],&after,error)||!native_schema_policy::Plan::Prepare(before,after,&policy,error))return false;
    schema_policies.push_back(std::move(policy));
   }
+  // The verifier receives concrete permission owners only after their actual
+  // interpreter/JNI/handle calibration. Report that failed producer before an
+  // absent owner can obscure its diagnostic during guard preparation.
+  if(!permissions_proven)for(const auto& policy:schema_policies)for(const auto& requirement:policy.Requirements())
+   if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
+    if(error)*error="Actual final/access permission calibration unavailable: "+permission_diagnostic;return false;
+   }
   std::vector<native_schema_policy::GuardRequest> requests;
   for(size_t i=0;i<schema_policies.size();++i){field_copy::CopyClassView identity;
    if(!metadata.ClassIdentity(plan.old_classes[i],&identity,error))return false;
@@ -1740,10 +1747,6 @@ bool NativeEngine::CheckGraph(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>
    if(!e.schema_run)return stage_failure("Collected source Run owner");
    if(!e.schema_verifier.Seal(e.prepared_schema_plan,error))return stage_failure("Collected schema verifier seal");
    if(!e.PrepareSchemaPolicy(e.prepared_schema_plan,error))return stage_failure("Collected schema policy proof preparation");
-   if(!e.permissions_proven)for(const auto& policy:e.schema_policies)for(const auto& requirement:policy.Requirements())
-    if(requirement.kind==native_schema_policy::GuardKind::FinalFields||requirement.kind==native_schema_policy::GuardKind::AccessPermissions){
-     if(error)*error="Actual final/access permission calibration unavailable: "+e.permission_diagnostic;return false;
-    }
    return e.schema_run->Collected(rooted,e.prepared_schema_plan,error);
   }
  }
