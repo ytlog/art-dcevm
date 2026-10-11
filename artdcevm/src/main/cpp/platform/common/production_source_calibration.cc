@@ -41,7 +41,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -238,6 +238,43 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  // no borrowed movable Class, JNI Context or Thread crosses this stop.
  const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
+}
+struct SourceCalibration::ReceiverEvents {SourceCalibration&owner;std::string*error;bool completed=false;};
+bool SourceCalibration::InstallReceiverEvents(const runnable_jni::Context&actual,void*raw){
+ auto&r=*static_cast<ReceiverEvents*>(raw);auto&owner=r.owner;size_t extent=0;
+ if(!runnable_jni::Bridge::BorrowOriginalScope(actual)||!actual.env||actual.env->ExceptionCheck()||
+    actual.vm!=owner.metadata_->Runtime().receivers.java_vm||!redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm))||
+    !owner.receiver_listener_bound_||!method_identity::ReadableMappingExtent(actual.self,&extent))
+  return Fail(r.error,"source-receiver-listener-original-installation-context-unavailable");
+ struct Install {ReceiverEvents&request;void*self;}request{r,actual.self};
+ native_source_stop::Session stop(owner.stop_);
+ const bool inspected=stop.Inspect(actual.self,extent,&request,[](void*raw,native_source_stop::Session&session)noexcept{
+  auto&r=*static_cast<Install*>(raw);
+  try{return r.request.owner.receiver_listener_->Install(session,r.self,r.request.error);}
+  catch(...){return false;} // Report only after the actual stop has resumed.
+ });
+ if(stop.Reserved()||stop.IsStopped(actual.self))std::abort();
+ r.completed=inspected&&owner.receiver_listener_->Installed()&&
+  runnable_jni::Bridge::BorrowOriginalScope(actual)&&!actual.env->ExceptionCheck();
+ return r.completed;
+}
+bool SourceCalibration::PrepareReceiverEvents(JNIEnv*env,std::string*error){
+ if(!receiver_code_calibrated_||!references_.Ready()||!stop_.Calibrated())
+  return Fail(error,"source-receiver-listener-code-or-original-stop-dependencies-unavailable");
+ if(!receiver_frames_)receiver_frames_=std::make_unique<receiver_guard::FrameReader>(receiver_producer_.Frames());
+ if(!receiver_bytecode_)receiver_bytecode_=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames_,receiver_producer_.Access());
+ if(!receiver_calibration_)receiver_calibration_=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames_,*receiver_bytecode_,references_);
+ if(!receiver_listener_)receiver_listener_=std::make_unique<receiver_guard::ListenerOwner>(receiver_calibration_->Observer());
+ if(!receiver_listener_bound_){
+  if(!receiver_listener_->Bind(hooks_,metadata_->Runtime(),stack_declaration_,error))return false;
+  receiver_listener_bound_=true;
+ }
+ if(receiver_listener_->Installed())return true;
+ ReceiverEvents request{*this,error};
+ const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),InstallReceiverEvents,&request);
+ if(result!=runnable_jni::Result::kSuccess||!request.completed||env->ExceptionCheck())
+  return error&&!error->empty()?false:Fail(error,"source-receiver-listener-original-installation-did-not-complete");
+ return true;
 }
 struct SourceCalibration::ReceiverCode {SourceCalibration&owner;std::string*error;bool completed=false;};
 bool SourceCalibration::ObserveReceiverCode(const runnable_jni::Context&actual,void*raw){

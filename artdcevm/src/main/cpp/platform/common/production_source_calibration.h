@@ -9,6 +9,8 @@
 #include "platform/common/native_reference_decoder.h"
 #include "platform/common/stack_visitor_calibration.h"
 #include "platform/common/native_receiver_producer.h"
+#include "platform/common/native_receiver_source_calibration.h"
+#include "platform/common/native_receiver_listener.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
 // Sole process-lifetime owner of metadata and original-source calibration
@@ -51,6 +53,9 @@ class SourceCalibration final {
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
  bool PrepareReceiverCode(JNIEnv*,std::string*);
+ bool PrepareReceiverEvents(JNIEnv*,std::string*);
+ struct ReceiverEvents;
+ static bool InstallReceiverEvents(const runnable_jni::Context&,void*);
  struct ReceiverCode;
  static bool ObserveReceiverCode(const runnable_jni::Context&,void*);
  static void*ReferenceCurrent(void*);
@@ -90,6 +95,11 @@ class SourceCalibration final {
  bool stack_calibrated_=false;
  receiver_guard::SourceProducer receiver_producer_;
  bool receiver_bound_=false,receiver_code_calibrated_=false;
+ std::unique_ptr<receiver_guard::FrameReader>receiver_frames_;
+ std::unique_ptr<receiver_guard::BytecodeSource>receiver_bytecode_;
+ std::unique_ptr<receiver_guard::SourceCalibration>receiver_calibration_;
+ std::unique_ptr<receiver_guard::ListenerOwner>receiver_listener_;
+ bool receiver_listener_bound_=false;
  bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;
  bool exclusive_bound_=false;
  bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false;

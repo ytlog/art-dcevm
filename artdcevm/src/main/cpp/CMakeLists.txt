@@ -126,6 +126,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_receiver_class_source.cc
     platform/common/native_receiver_producer.cc
     platform/common/native_receiver_source_calibration.cc
+    platform/common/native_receiver_listener.cc
     platform/common/native_receiver_relations.cc
     platform/common/native_hierarchy_graph.cc
     platform/common/native_hierarchy_allocator.cc
