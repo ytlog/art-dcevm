@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/common/native_typed_heap_walk.h"
 #include "platform/common/decoded_frame_recovery.h"
+#include "platform/common/compiled_stack_root_window.h"
 #include "platform/common/source_commit_plan_identity.h"
 #include "platform/common/rooted_schema_plan.h"
 #include "platform/common/object_replacement_map.h"
@@ -21,6 +22,7 @@ struct Frame {
  void** quick=nullptr;const void* header=nullptr;uintptr_t pc=0;
  abi::arm64::context::Prefix* context=nullptr;uint32_t frame_bytes=0;
  code_info_view::SourceFamily family=code_info_view::SourceFamily::kAndroid11;
+ compiled_stack_root_window::Window incoming{};
 };
 class Proof;
 // Only the concrete source-root Proof may issue this interface. This preserves
@@ -98,8 +100,9 @@ class Proof final:public Interface,private native_typed_heap_walk::RootSink {
    for(size_t bit=0;bit<table.row_bits;++bit){bool set=false;
     if(bit>UINT32_MAX||!decoded_frame_recovery::MaskBit(table,stack_index,uint32_t(bit),&set))return Deny(Failure::Mask);
     if(!set)continue;
-    if(bit>=f.frame_bytes/4)return Deny(Failure::Mask);
-    auto* address=reinterpret_cast<const unsigned char*>(f.quick)+bit*4;
+    const void* address=nullptr;
+    if(!f.incoming.Slot(f.method,f.quick,f.frame_bytes,uint32_t(bit),&address))return Deny(Failure::Mask);
+    if(!Mapped(address,sizeof(uint32_t)))return Deny(Failure::Memory);
     uint32_t value=0;std::memcpy(&value,address,sizeof(value));
     if(!Add(address,reinterpret_cast<void*>(uintptr_t(value)),false,UINT32_MAX))return false;
    }
@@ -218,7 +221,7 @@ class Proof final:public Interface,private native_typed_heap_walk::RootSink {
  }
  void* Replacement(void*value)const noexcept{for(const auto&pair:replacements_)if(pair.first==value)return pair.second;return value;}
  void SkipNull(SavedFrame&f)noexcept{while(f.next<f.limit&&!slots_[f.next].before)++f.next;}
- static bool SameFrame(const Frame&a,const Frame&b)noexcept{return a.thread==b.thread&&a.method==b.method&&a.quick==b.quick&&a.header==b.header&&a.pc==b.pc&&a.frame_bytes==b.frame_bytes&&a.family==b.family&&(!a.thread_id||!b.thread_id||a.thread_id==b.thread_id);}
+ static bool SameFrame(const Frame&a,const Frame&b)noexcept{return a.thread==b.thread&&a.method==b.method&&a.quick==b.quick&&a.header==b.header&&a.pc==b.pc&&a.frame_bytes==b.frame_bytes&&a.family==b.family&&a.incoming.Same(b.incoming)&&(!a.thread_id||!b.thread_id||a.thread_id==b.thread_id);}
  bool HasGpr(const SavedFrame&f)const noexcept{for(size_t i=f.first;i<f.limit;++i)if(slots_[i].pointer)return true;return false;}
  bool Root(const native_typed_heap_walk::RootRecord&r)noexcept override;
 };

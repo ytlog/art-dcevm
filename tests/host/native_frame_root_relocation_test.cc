@@ -14,7 +14,7 @@ struct Registers:abi::arm64::context::Prefix{
 };
 struct OriginalVisitor:abi::arm64::stack::Visitor13{bool VisitFrame()override{return true;}};
 OriginalVisitor original;Registers registers,foreign_registers;
-alignas(void*) unsigned char physical[32];int method,header;int stream_mode=0;
+alignas(void*) unsigned char physical[96];int method,header;int stream_mode=0;bool incoming_stream=false;
 void FrameRoots(void*p,Visitor*v,uint8_t flags){assert(p==&runtime_object&&exclusive&&gc&&flags==kAll);if(stream_mode==4)return;
  JavaFrameInfo decl{{nullptr,kJavaFrameRoot,19},&original,kDeclaringClassVreg};void* klass=&header;void**one[]{&klass};v->VisitRoots(one,1,decl.base);
  // Source special roots are distinct from physical compiled GC-mask roots.
@@ -26,6 +26,11 @@ void FrameRoots(void*p,Visitor*v,uint8_t flags){assert(p==&runtime_object&&exclu
  if(temp&&stream_mode!=2)v->VisitRoots(stack,1,info.base);
  // Exact original stack source writes a moved temporary back to compressed storage.
  if(reinterpret_cast<uintptr_t>(temp)!=compressed_root){auto value=uint32_t(reinterpret_cast<uintptr_t>(temp));std::memcpy(physical+16,&value,4);}
+ if(incoming_stream){
+  const size_t offsets[]{stream_mode==6?44u:40u,stream_mode==6?40u:44u,48u};
+  for(size_t offset:offsets){if(stream_mode==7&&offset==48)continue;uint32_t word=0;std::memcpy(&word,physical+offset,4);void*incoming=reinterpret_cast<void*>(uintptr_t(word));void**slot[]{&incoming};if(incoming)v->VisitRoots(slot,1,info.base);
+   if(uintptr_t(incoming)!=word){word=uint32_t(uintptr_t(incoming));std::memcpy(physical+offset,&word,4);}}
+ }
  if(registers.spill)v->VisitRoots(gpr,1,info.base);
 }
 class FrameHooks:public RootHooks{void*FindSymbol(const char*l,const char*n)override{return !std::strcmp(n,kVisit)?Fn(FrameRoots):RootHooks::FindSymbol(l,n);}};
@@ -80,5 +85,46 @@ int main(){FrameHooks hooks;std::string error;assert(native_source_stop::Install
   MoveTemporary move;auto observed=provenance.ObserveFrameRoots(stop,&self,context,move);assert(observed.completed);
   uint32_t moved=0;std::memcpy(&moved,physical+16,4);assert(moved==18);uintptr_t saved_lr=0;std::memcpy(&saved_lr,physical+24,8);assert(saved_lr==73);
   assert(stop.RollbackBeforeSource());}
- std::cout<<"Actual Session + original Runtime root leaf boundary: nonprecise ordered stack-temp/GPR census, special roots, foreign Context/order/missing refusal and complete physical recapture PASS; no device continuation authority granted\n";
+ // ARM64 parameters live after the physical frame and the caller Method*
+ // reserved slot. Three incoming vreg words include receiver/wide-word slots;
+ // no extra `this` word or GPR/FPR-specific reduction is applied here.
+ alignas(4) std::array<unsigned char,160> dex{};std::memcpy(dex.data(),"dex\n035",7);
+ auto*item=dex.data()+112;uint16_t nregs=3,ins=3;uint32_t units=1;
+ std::memcpy(item,&nregs,2);std::memcpy(item+2,&ins,2);std::memcpy(item+12,&units,4);
+ receiver_guard::CodeView code;code.code_item=item;code.instructions=reinterpret_cast<const uint16_t*>(item+16);code.units=1;code.registers=3;code.ins_size=3;code.source_dex={dex.data(),dex.size(),dex.data(),dex.size(),0};
+ compiled_stack_root_window::Window window;assert(compiled_stack_root_window::Window::BindSameMethodCode(&method,frame.quick,32,code,context,&window));
+ const void*slot=nullptr;assert(window.Slot(&method,frame.quick,32,10,&slot)&&slot==physical+40);
+ assert(window.Slot(&method,frame.quick,32,12,&slot)&&slot==physical+48);
+ for(uint32_t bit:{8u,9u,13u,UINT32_MAX})assert(!window.Slot(&method,frame.quick,32,bit,&slot)&&!slot);
+ assert(!window.Slot(&header,frame.quick,32,10,&slot));
+ auto bad_code=code;bad_code.ins_size=4;compiled_stack_root_window::Window bad;
+ assert(!compiled_stack_root_window::Window::BindSameMethodCode(&method,frame.quick,32,bad_code,context,&bad));
+ bad_code=code;bad_code.instructions++;assert(!compiled_stack_root_window::Window::BindSameMethodCode(&method,frame.quick,32,bad_code,context,&bad));
+ assert(!compiled_stack_root_window::Window::BindSameMethodCode(&method,reinterpret_cast<void**>(UINTPTR_MAX-15),32,code,context,&bad));
+ auto compact_dex=dex;std::memcpy(compact_dex.data(),"cdex001",7);auto compact_code=code;compact_code.compact=true;compact_code.code_item=compact_dex.data()+112;compact_code.instructions=reinterpret_cast<const uint16_t*>(compact_dex.data()+116);compact_code.source_dex={compact_dex.data(),compact_dex.size(),compact_dex.data(),compact_dex.size(),0};
+ uint16_t compact_fields=3u<<8,compact_units=1u<<5;std::memcpy(compact_dex.data()+112,&compact_fields,2);std::memcpy(compact_dex.data()+114,&compact_units,2);
+ compiled_stack_root_window::Window compact_window;assert(compiled_stack_root_window::Window::BindSameMethodCode(&method,frame.quick,32,compact_code,context,&compact_window));assert(compact_window.Slot(&method,frame.quick,32,12,&slot)&&slot==physical+48);
+ assert(!compact_window.Same(window));auto no_arguments=code;no_arguments.ins_size=0;compiled_stack_root_window::Window no_incoming;assert(compiled_stack_root_window::Window::BindSameMethodCode(&method,frame.quick,32,no_arguments,context,&no_incoming));assert(!no_incoming.Slot(&method,frame.quick,32,10,&slot)&&no_incoming.Slot(&method,frame.quick,32,4,&slot));
+ unsigned char incoming_mask[2]{16,28};auto incoming_view=view;incoming_view.tables[2].region={incoming_mask,0,16};incoming_view.tables[2].row_bits=16;incoming_view.tables[2].columns[1]=16;
+ auto incoming_frame=frame;incoming_frame.incoming=window;
+ for(int mode=0;mode<8;++mode){Proof proof;plan_roots.clear();assert(proof.Prepare(plan,1,8,{nullptr,AddPlan}));native_source_stop::Session stop(service);assert(stop.Begin(&self,sizeof(self)));
+  incoming_stream=true;stream_mode=mode==1?6:mode==2?7:0;original.context=&registers;SetRoot(16);registers.spill=17;
+  uint32_t roots[]{20,21,22};for(size_t i=0;i<3;++i)std::memcpy(physical+40+i*4,&roots[i],4);
+  auto incoming_read=context;if(mode==7)incoming_read.extent=[](void*o,const void*p,size_t*n){if(p==physical+48){*n=3;return true;}return Extent(o,p,n);};
+  assert(proof.Begin(stop,&self,incoming_read,plan,{nullptr,GetPlan}));forbid_native_allocation=true;
+  auto capture=incoming_frame;if(mode==3)capture.incoming={};
+  auto mask=incoming_view;unsigned char denied[2]{16,28};if(mode>=4&&mode<=6){denied[1]|=mode==4?1u:mode==5?2u:32u;mask.tables[2].region.data=denied;}
+  bool accepted=proof.CaptureFrame(capture,mask,0);
+  if(mode>=3)assert(!accepted);else{assert(accepted);auto result=proof.Seal(provenance);if(mode)assert(!result.completed);else{
+    assert(result.completed&&result.slots==5&&result.callbacks==5);assert(proof.VerifyLocationRoot(incoming_frame,physical+48,reinterpret_cast<void*>(22)));
+    assert(proof.BeginRecapture(plan,false)&&proof.CaptureFrame(incoming_frame,incoming_view,0)&&proof.EndRecapture()&&proof.VerifyBeforeReplacement(provenance,plan));
+    uintptr_t saved_lr=0;std::memcpy(&saved_lr,physical+24,8);assert(saved_lr==73);
+    assert(proof.BeginRecapture(plan,false));auto foreign_code_frame=incoming_frame;foreign_code_frame.incoming=compact_window;
+    assert(!proof.CaptureFrame(foreign_code_frame,incoming_view,0)); // Same slots do not waive original CodeItem identity.
+
+   }}
+  forbid_native_allocation=false;assert(stop.RollbackBeforeSource());
+ }
+ incoming_stream=false;stream_mode=0;
+ std::cout<<"Actual Session + original Runtime root leaf boundary: nonprecise ordered stack-temp/GPR census, special roots, foreign Context/order/missing refusal and complete physical/incoming-argument recapture with unchanged LR, bounded CodeItem window and forbidden caller Method gap PASS; no device continuation authority granted\n";
 }
