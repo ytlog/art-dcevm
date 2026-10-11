@@ -11,6 +11,7 @@
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_receiver_listener.h"
+#include "platform/common/native_receiver_class_source.h"
 #include "platform/common/native_final_write_access.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
@@ -40,6 +41,8 @@ class SourceCalibration final {
  // Constructor storage only; actual receiver events and complete stopped
  // frame walks must independently prove their own consumers.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
+ // ReadWindow still requires its caller-owned live native mapping authority.
+ receiver_guard::ClassSource*ReceiverClassesSource()noexcept{return receiver_classes_calibrated_?&receiver_classes_:nullptr;}
  // Read-only code/identity sample calibration, not actual invoke-event coverage.
  receiver_guard::SourceProducer*ReceiverProducer()noexcept{return receiver_code_calibrated_?&receiver_producer_:nullptr;}
  const receiver_guard::SourceCalibration*ReceiverInvocations()const noexcept{
@@ -64,6 +67,9 @@ class SourceCalibration final {
  bool PrepareInterpretation(JNIEnv*,std::string*);
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
+ bool PrepareReceiverClasses(JNIEnv*,std::string*);
+ struct ReceiverClasses;
+ static bool ObserveReceiverClasses(const runnable_jni::Context&,void*);
  bool PrepareReceiverCode(JNIEnv*,std::string*);
  bool PrepareReceiverEvents(JNIEnv*,std::string*);
  struct ReceiverEvents;
@@ -105,6 +111,8 @@ class SourceCalibration final {
  bool references_bound_=false;
  stack_visitor_service::Declaration stack_declaration_=stack_visitor_service::Declaration::kAndroid12;
  bool stack_calibrated_=false;
+ receiver_guard::ClassSource receiver_classes_;
+ bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;
  receiver_guard::SourceProducer receiver_producer_;
  bool receiver_bound_=false,receiver_code_calibrated_=false;
  std::unique_ptr<receiver_guard::FrameReader>receiver_frames_;

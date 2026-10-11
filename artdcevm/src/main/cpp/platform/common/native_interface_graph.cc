@@ -83,9 +83,22 @@ bool Matches(const modern_field_metadata::FieldMetadata& metadata,void* klass,co
 bool ReadInContext(const modern_field_metadata::FieldMetadata& metadata,void* klass,std::vector<void*>* output,std::string* error,const modern_field_metadata::ReadContext* context){std::vector<void*> result;if(!output||!ReadTable(metadata,klass,&result,nullptr,error,context))return false;*output=std::move(result);return true;}
 bool MatchesInContext(const modern_field_metadata::FieldMetadata& metadata,void* klass,const std::vector<void*>& expected,std::string* error,const modern_field_metadata::ReadContext* context){return ReadTable(metadata,klass,nullptr,&expected,error,context);}
 
-bool Calibrate(const runnable_jni::Context& context,jobject fixture,const modern_field_metadata::FieldMetadata& metadata,std::string* error){
+bool Calibrate(const runnable_jni::Context& context,jobject fixture,const modern_field_metadata::FieldMetadata& metadata,std::string* error,const StrongRoots*decoder){
  JNIEnv* env=context.env;if(!env||!fixture||env->ExceptionCheck())return Fail(error,"Missing public interface graph calibration scope");
- struct Roots{JNIEnv* env;std::vector<jobject> values;~Roots(){for(auto value:values)env->DeleteGlobalRef(value);}jobject Add(jobject local){if(!local||env->ExceptionCheck())return nullptr;auto root=env->NewGlobalRef(local);if(root)values.push_back(root);return env->ExceptionCheck()?nullptr:root;}} roots{env,{}};
+ struct Roots {
+  JNIEnv*env;const StrongRoots*decoder;std::vector<jobject>values,registered;
+  ~Roots(){if(decoder)for(auto root:registered)decoder->forget(decoder->owner,root);for(auto value:values)env->DeleteGlobalRef(value);}
+  jobject Add(jobject local){
+   if(!local||env->ExceptionCheck())return nullptr;auto root=env->NewGlobalRef(local);
+   if(!root||env->ExceptionCheck()){if(root)env->DeleteGlobalRef(root);return nullptr;}
+   try{values.push_back(root);}catch(...){env->DeleteGlobalRef(root);throw;}return root;
+  }
+  bool Register(jobject root,std::string*error){
+   if(!decoder)return true;registered.push_back(root);
+   if(decoder->register_root(decoder->owner,env,root,error))return true;registered.pop_back();return false;
+  }
+ } roots{env,decoder,{},{}};
+ if(decoder&&(!decoder->owner||!decoder->register_root||!decoder->forget||!decoder->read))return Fail(error,"Interface calibration native root decoder is not ready");
  jclass class_type=env->FindClass("java/lang/Class");
  if(!class_type||env->ExceptionCheck()){if(class_type)env->DeleteLocalRef(class_type);return Fail(error,"Public Class lookup failed");}
  jmethodID interfaces=env->GetMethodID(class_type,"getInterfaces","()[Ljava/lang/Class;");
@@ -115,10 +128,14 @@ bool Calibrate(const runnable_jni::Context& context,jobject fixture,const modern
    if(env->ExceptionCheck()){if(local_parent)env->DeleteLocalRef(local_parent);return Fail(error,"Public superclass closure unavailable");}
    if(local_parent){auto owned=roots.Add(local_parent);env->DeleteLocalRef(local_parent);if(!owned)return Fail(error,"Public superclass root unavailable");pending.push_back(owned);}
   }
-  void* native_root=nullptr;if(!runnable_executor::DecodeStrongGlobal(context,root,&native_root))return Fail(error,"Interface holder strong root failed to decode");
+  if(!roots.Register(root,error))return false;
+  for(auto owned:expected)if(!roots.Register(owned,error))return false;
+  const auto decode=[&](jobject owned,void**out){return decoder?
+      decoder->read(decoder->owner,context.self,owned,out):runnable_executor::DecodeStrongGlobal(context,owned,out);};
+  void* native_root=nullptr;if(!decode(root,&native_root))return Fail(error,"Interface holder strong root failed to decode");
   std::vector<void*> actual;if(!Read(metadata,native_root,&actual,error))return false;
   if(actual.size()!=expected.size()||(root==positive&&expected.empty()))return Fail(error,"Native IfTable differs from independent complete public interface closure");
-  for(auto owned:expected){void* native=nullptr;if(!runnable_executor::DecodeStrongGlobal(context,owned,&native)||std::count(actual.begin(),actual.end(),native)!=1)return Fail(error,"IfTable native interface identity differs from public Class");}
+  for(auto owned:expected){void* native=nullptr;if(!decode(owned,&native)||std::count(actual.begin(),actual.end(),native)!=1)return Fail(error,"IfTable native interface identity differs from public Class");}
  }
  if(error)error->clear();return true;
 }

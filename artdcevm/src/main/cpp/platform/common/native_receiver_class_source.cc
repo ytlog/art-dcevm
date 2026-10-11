@@ -20,10 +20,10 @@ bool ClassSource::Bind(HookEngine&hooks,const modern_field_metadata::FieldMetada
  if(!obsolete||(!direct&&(!linker||!type||!lookup))){if(error)*error="Named original Class history/direct interface source unavailable";return false;}
  metadata_=&metadata;current_=current;obsolete_=obsolete;direct_=direct;direct_type_=type;lookup_direct_=lookup;linker_=linker;interfaces_calibrated_=metadata.InterfaceDeclarationCalibrated();bound_=true;return true;
 }
-bool ClassSource::CalibrateInterfaces(const runnable_jni::Context&context,jobject fixture,std::string*error){
+bool ClassSource::CalibrateInterfaces(const runnable_jni::Context&context,jobject fixture,std::string*error,const native_interface_graph::StrongRoots*decoder){
  if(!Current()||context.self!=current_()||!fixture)return false;
- if(interfaces_calibrated_)return true;
- if(!native_interface_graph::Calibrate(context,fixture,*metadata_,error)||!Current()||context.self!=current_())return false;
+ if(interfaces_calibrated_&&!decoder)return true;
+ if(!native_interface_graph::Calibrate(context,fixture,*metadata_,error,decoder)||!Current()||context.self!=current_())return false;
  interfaces_calibrated_=true;return true;
 }
 bool ClassSource::ProxyInterfaces(void*klass,void**array,size_t*count,const modern_field_metadata::ReadContext*ctx)const{

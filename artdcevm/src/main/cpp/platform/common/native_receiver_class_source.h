@@ -2,6 +2,7 @@
 #include "api/hook_engine.h"
 #include "platform/abi/arm64/common/class_relationships.h"
 #include "platform/common/native_receiver_relations.h"
+#include "platform/common/native_interface_graph.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/runnable_jni_bridge.h"
 #include <vector>
@@ -32,7 +33,7 @@ class ClassSource final {
   const ClassSource&source_;const modern_field_metadata::ReadContext&context_;
   void*owner_;decltype(modern_field_metadata::ReadContext::extent)extent_;void*self_;
  };
- bool CalibrateInterfaces(const runnable_jni::Context&,jobject strong_fixture,std::string*);
+ bool CalibrateInterfaces(const runnable_jni::Context&,jobject strong_fixture,std::string*,const native_interface_graph::StrongRoots* =nullptr);
  bool InterfacesCalibrated()const noexcept{return interfaces_calibrated_;}
  // Public direct edges/parent/loader were collected before the native borrow.
  // This checks only that current original Class episode, not old-history or

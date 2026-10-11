@@ -46,7 +46,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
   if(!process->final_writer_calibrated_){
    if(!CalibrateFinalWrites(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,
        process->final_writer_->Writer(),error))return nullptr;
@@ -453,6 +453,36 @@ bool SourceCalibration::ObserveReceiverCode(const runnable_jni::Context&actual,v
  r.completed=owner.receiver_producer_.OwnsCurrentThread(actual.self)&&
   runnable_jni::Bridge::BorrowOriginalScope(actual)&&!actual.env->ExceptionCheck();
  return r.completed;
+}
+struct SourceCalibration::ReceiverClasses {SourceCalibration&owner;std::string*error;bool completed=false;};
+bool SourceCalibration::ObserveReceiverClasses(const runnable_jni::Context&actual,void*raw){
+ auto&r=*static_cast<ReceiverClasses*>(raw);auto&owner=r.owner;
+ if(!actual.env||actual.env->ExceptionCheck()||!owner.reference_current_||owner.reference_current_()!=actual.self||
+    actual.vm!=owner.metadata_->Runtime().receivers.java_vm||!runnable_jni::Bridge::BorrowOriginalScope(actual)||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm)))
+  return Fail(r.error,"source-receiver-Class-calibration-original-context-unavailable");
+ const native_interface_graph::StrongRoots roots{&owner.references_,
+  [](void*raw,JNIEnv*env,jobject root,std::string*error){return static_cast<native_reference_decoder::Decoder*>(raw)->RegisterStrong(env,root,error);},
+  [](void*raw,jobject root){static_cast<native_reference_decoder::Decoder*>(raw)->Forget(root);},
+  [](void*raw,void*self,jobject root,void**out){return static_cast<native_reference_decoder::Decoder*>(raw)->StrongRunnable(self,root,out);}};
+ r.completed=owner.receiver_classes_.CalibrateInterfaces(actual,owner.metadata_->Inputs().StorageClass(),
+     r.error,&roots)&&owner.receiver_classes_.InterfacesCalibrated()&&
+     owner.reference_current_()==actual.self&&runnable_jni::Bridge::BorrowOriginalScope(actual)&&!actual.env->ExceptionCheck();
+ return r.completed;
+}
+bool SourceCalibration::PrepareReceiverClasses(JNIEnv*env,std::string*error){
+ if(!references_.Ready()||!reference_current_||!metadata_->Fields().Calibrated())
+  return Fail(error,"source-receiver-Class-calibration-root-or-metadata-unavailable");
+ if(!receiver_classes_bound_){
+  if(!receiver_classes_.Bind(hooks_,metadata_->Fields(),reference_current_,error,
+       metadata_->Runtime().receivers.class_linker))return false;
+  receiver_classes_bound_=true;
+ }
+ if(receiver_classes_calibrated_)return true;
+ ReceiverClasses request{*this,error};
+ const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),ObserveReceiverClasses,&request);
+ receiver_classes_calibrated_=result==runnable_jni::Result::kSuccess&&request.completed&&!env->ExceptionCheck();
+ return receiver_classes_calibrated_||Fail(error,"source-receiver-Class-interface-calibration-not-completed");
 }
 bool SourceCalibration::PrepareReceiverCode(JNIEnv*env,std::string*error){
  if(!stack_calibrated_||!references_.Ready()||!reference_current_||!schema_.Ready())

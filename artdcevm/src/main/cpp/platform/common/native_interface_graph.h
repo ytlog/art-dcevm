@@ -5,6 +5,14 @@
 #include <vector>
 namespace artdcevm::modern_field_metadata {class FieldMetadata;struct ReadContext;}
 namespace artdcevm::native_interface_graph {
+// Production supplies its already calibrated native strong-root decoder.
+// Register before borrowing any values; read invokes no JNI or safepoint.
+struct StrongRoots {
+ void*owner=nullptr;
+ bool(*register_root)(void*,JNIEnv*,jobject,std::string*)=nullptr;
+ void(*forget)(void*,jobject)=nullptr;
+ bool(*read)(void*,void*actual_thread,jobject,void**)=nullptr;
+};
 // Ephemeral, non-owning native view for a single actual no-safepoint read
 // interval. It is not a root or publication permission and cannot survive GC.
 class View final {
@@ -27,5 +35,5 @@ bool MatchesInContext(const modern_field_metadata::FieldMetadata&,void* klass,co
 // closure, including inherited and transitive interfaces, inside ordinary JNI.
 // A positive ArrayList oracle and the real field fixture must both match.
 // No borrowed managed Class or JNI root survives this call.
-bool Calibrate(const runnable_jni::Context&,jobject fixture,const modern_field_metadata::FieldMetadata&,std::string*);
+bool Calibrate(const runnable_jni::Context&,jobject fixture,const modern_field_metadata::FieldMetadata&,std::string*,const StrongRoots* =nullptr);
 }
