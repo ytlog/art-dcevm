@@ -43,22 +43,36 @@ static void RunIngressTest(receiver_guard::EntrySource&entry,const runnable_jni:
  abi::common::RunnableJniScope actual{context.self,context.env,context.vm};
  receiver_guard::Invocation call{receiver_guard::Path::JniMethod,context.self,member,public_receivers[0]};
  assert(!leaves.current(leaves.owner,context.self));auto previous=raises;
+ // Exception construction can reenter the same original native wrapper.
+ // The outer root inventory must be gone at the named throw leaf, and the
+ // nested invocation must obtain/release a new window without JNI/allocation.
+ struct Reentry {Inventory&inventory;receiver_guard::Access leaves;const runnable_jni::Context&context;
+  const abi::common::RunnableJniScope&actual;void*member;jobject receiver;bool seen=false;}reentry{inventory,leaves,context,actual,member,receiver};
+ raise_observer_data=&reentry;raise_observer=+[](void*raw){auto&r=*static_cast<Reentry*>(raw);
+  raise_observer=nullptr; // The nested rejection uses the same leaf once more.
+  assert(!r.inventory.entered&&r.inventory.closes==1&&!r.leaves.current(r.leaves.owner,r.context.self));
+  const auto opens=r.inventory.opens,closes=r.inventory.closes;
+  assert(retirement::IdValues<false>(r.actual,r.receiver,reinterpret_cast<jmethodID>(r.member),nullptr)==0);
+  assert(r.inventory.opens==opens+1&&r.inventory.closes==closes+1&&!r.inventory.entered);
+  assert(!r.leaves.current(r.leaves.owner,r.context.self));r.seen=true;
+ };
  no_alloc=true;assert(guard.BeginProof({call,declaring,declaring,false}));
  assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==0);
- assert(inventory.opens==1&&inventory.closes==1&&!inventory.entered&&originals==0&&raises==previous+1&&!leaves.current(leaves.owner,context.self));
+ assert(reentry.seen&&inventory.opens==2&&inventory.closes==2&&!inventory.entered&&originals==0&&raises==previous+2&&!leaves.current(leaves.owner,context.self));
+ raise_observer_data=nullptr;
  assert(!guard.EndProof(false,false,true)&&!guard.Proven()&&!guard.Active());
  // A bytecode probe's outer ordinary JNI call must reach the actual bytecode
  // source. It does not borrow this unrelated JNI member/path inventory.
  auto other=call;other.path=receiver_guard::Path::BytecodeInvoke;assert(guard.BeginProof({other,declaring,declaring,false}));
- assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==99&&inventory.opens==1&&inventory.closes==1);
+ assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==99&&inventory.opens==2&&inventory.closes==2);
  assert(!guard.EndProof(true,false,true));originals=0;
  // Missing typed root permission rejects at original ingress, preserving the
  // same original body count and releasing only inventories actually entered.
  inventory.allow=false;assert(guard.BeginProof({call,declaring,declaring,false}));
  assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==0);
- assert(inventory.opens==2&&inventory.closes==1&&raises==previous+2&&originals==0);assert(!guard.EndProof(false,false,true));
+ assert(inventory.opens==3&&inventory.closes==2&&raises==previous+3&&originals==0);assert(!guard.EndProof(false,false,true));
  inventory.allow=true;actual.vm=nullptr;assert(guard.BeginProof({call,declaring,declaring,false}));
- assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==0&&inventory.opens==2&&originals==0);assert(!guard.EndProof(false,false,true));
+ assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==0&&inventory.opens==3&&originals==0);assert(!guard.EndProof(false,false,true));
  // An unrelated consumer is never borrowed from this process ingress owner.
  receiver_guard::consumer.store(nullptr,std::memory_order_release);assert(retirement::IdValues<false>(actual,receiver,reinterpret_cast<jmethodID>(member),nullptr)==99&&originals==1);
  assert(ingress.RetireForTesting());

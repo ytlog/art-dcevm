@@ -8,6 +8,7 @@
 #include <unordered_map>
 namespace {
 bool no_alloc=false,pending=false,wrong_flags=false,wrong_class=false,bounds_enabled=true,leave_native=false,decode_wrong=false,index_calibration=false,modern_inline=false;unsigned decodes=0,field_decodes=0,raises=0,root_reads=0;
+void(*raise_observer)(void*)=nullptr;void*raise_observer_data=nullptr;
 bool fresh_bounds_probe=false;uint64_t mapping_epoch=0;
 struct MappingReceipt{uint64_t epoch;};std::array<MappingReceipt,8> mapping_receipts{};size_t mapping_captures=0;
 void* actual_thread=nullptr;void*receiver_classes[2]{};int manager;void* method_objects[2]{};void* method_members[2]{};void* public_method_owner[2]{};void* public_field_owner[2]{};void* public_receivers[2]{};std::array<void*,2> public_fields{};
@@ -32,7 +33,7 @@ abi::arm64::android11::ReleaseObjectPointer DecodeGlobal(const void*self,jobject
 void* EntryRoot(void*p){++root_reads;return Root(p);}
 void* DecodeField(void*m,jfieldID id){assert(m==&manager);++field_decodes;if(uintptr_t(id)&1){assert(!no_alloc&&index_calibration);if(fresh_bounds_probe)++mapping_epoch;auto i=(uintptr_t(id)-1)/2;assert(i<2);return static_cast<Mirror*>(public_fields[i])->field;}return reinterpret_cast<void*>(id);}
 void* DecodeMethod(void*m,jmethodID id){assert(m==&manager);return reinterpret_cast<void*>(id);}
-void Throw(void*self,const char*,const char*){assert(self==actual_thread);++raises;}
+void Throw(void*self,const char*,const char*){assert(self==actual_thread);++raises;if(raise_observer)raise_observer(raise_observer_data);}
 void Suspend(void*,const char*,bool){}void Resume(void*){}
 struct EntryHooks:Hooks{void*FindSymbol(const char*l,const char*n)override{
  if(!std::strcmp(n,abi::arm64::android11::kDecodeJObject))return modern_inline?nullptr:reinterpret_cast<void*>(Decode);

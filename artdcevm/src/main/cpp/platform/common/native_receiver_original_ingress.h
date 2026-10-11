@@ -133,7 +133,13 @@ class OriginalIngress final {
    if(!entry->Valid())return;
    classes.emplace(owner.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
   }
-  ~Scope(){if(valid){if(active_!=this)std::abort();active_=nullptr;}relations.reset();classes.reset();entry.reset();if(entered)owner.bounds_.Leave();}
+  void Close()noexcept{
+   if(valid){if(active_!=this)std::abort();active_=nullptr;valid=false;}
+   relations.reset();classes.reset();entry.reset();
+   if(entered){owner.bounds_.Leave();entered=false;}
+   bounds={};
+  }
+  ~Scope(){Close();}
   bool Valid()const noexcept{return valid&&active_==this&&owner.entry_.Leaves().current(&owner.entry_,context.self);}
   OriginalIngress&owner;runnable_jni::Context context;modern_field_metadata::ReadContext bounds{};
   std::optional<EntrySource::InvocationScope>entry;std::optional<ClassSource::ReadWindow>classes;std::optional<Relations>relations;
@@ -146,7 +152,15 @@ class OriginalIngress final {
  static bool Reference(void*p,void*t,void*r,void**out)noexcept{auto*s=Borrow(p);return s&&s->owner.entry_.Leaves().reference(&s->owner.entry_,t,r,out);}
  static bool Compressed(void*p,void*t,uint32_t r,void**out)noexcept{auto*s=Borrow(p);return s&&s->owner.entry_.Leaves().compressed(&s->owner.entry_,t,r,out);}
  static bool FieldId(void*p,void*t,void*id,void**out)noexcept{auto*s=Borrow(p);return s&&s->owner.entry_.Leaves().field_id(&s->owner.entry_,t,id,out);}
- static void Raise(void*p,void*t,const char*type,const char*text)noexcept{auto*s=Borrow(p);if(!s)std::abort();s->owner.entry_.Leaves().raise(&s->owner.entry_,t,type,text);}
+ static void Raise(void*p,void*t,const char*type,const char*text)noexcept{
+  auto*s=Borrow(p);
+  if(!s||s->context.self!=t||!type||!text||!s->owner.entry_.raise_)std::abort();
+  const auto raise=s->owner.entry_.raise_;
+  // Terminal ART exception construction may allocate, suspend and dispatch
+  // another original entry. Retire every borrowed root/read scope first;
+  // after this point only the named leaf and scalar Thread are consumed.
+  s->Close();raise(t,type,text);
+ }
  static bool Normalize(void*p,void*t,void*d,void*r,void**out)noexcept{auto*s=Borrow(p);return s&&s->context.self==t&&s->relations->Normalize(d,r,out);}
  static bool Assignable(void*p,void*d,void*r,bool*out)noexcept{auto*s=Borrow(p);return s&&s->relations->Assignable(d,r,out);}
  static bool Special(void*p,void*d,void*c,bool*out)noexcept{auto*s=Borrow(p);return s&&s->relations->Special(d,c,out);}
