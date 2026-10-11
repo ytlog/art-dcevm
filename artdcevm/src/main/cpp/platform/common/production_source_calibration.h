@@ -5,6 +5,7 @@
 #include "platform/common/native_source_calibration_bridge.h"
 #include "platform/common/jvmti_extensions.h"
 #include "platform/common/native_call_graph_commit.h"
+#include "platform/common/modern_retirement_cleanup.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
 // Sole process-lifetime owner of metadata and original-source calibration
@@ -27,6 +28,7 @@ class SourceCalibration final {
  // caller when OEM mutex arguments have a current-thread-specific oracle.
  native_cache::Service&Cache()noexcept{return cache_;}
  native_source_compilation::Service&Compilation()noexcept{return compilation_;}
+ retirement::Owners Retired()noexcept{return {membership_,retired_fields_,retired_methods_};}
  private:
  SourceCalibration(HookEngine&hooks,std::unique_ptr<MetadataCalibration>metadata):hooks_(hooks),metadata_(std::move(metadata)){}
  ~SourceCalibration()=default;
@@ -34,6 +36,10 @@ class SourceCalibration final {
  bool Calibrate(JNIEnv*,jvmtiEnv*,std::string*);
  bool PrepareCommitReaders(JNIEnv*,std::string*);
  bool PrepareTypedHeap(JNIEnv*,std::string*);
+ bool PrepareRetirement(JNIEnv*,jvmtiEnv*,std::string*);
+ struct Allocator;
+ static bool CollectAllocator(const runnable_jni::Context&,void*);
+ static bool ProveAllocator(const exclusive_owned_roots::Context&,void*);
  struct RootLocks;
  static bool ObserveRootLocks(const runnable_jni::Context&,void*);
  struct Round;
@@ -52,8 +58,11 @@ class SourceCalibration final {
  native_source_compilation::Service compilation_;
  exclusive_owned_roots::Service exclusive_;
  native_typed_heap_walk::Service heap_;
+ retirement::Membership membership_;
+ retirement::RetiredFieldRegistry retired_fields_;
+ retirement::RetiredMethodRegistry retired_methods_;
  bool exclusive_bound_=false;
- bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false,compilation_bound_=false;
+ bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false;
  bool bound_=false,installed_=false,poisoned_=false;
  size_t completed_=0;
 };

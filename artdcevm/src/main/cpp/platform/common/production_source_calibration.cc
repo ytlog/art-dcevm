@@ -39,7 +39,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -142,7 +142,6 @@ bool SourceCalibration::PrepareCommitReaders(JNIEnv*env,std::string*error){
  }
  if(!cache_bound_){if(!cache_.Bind(hooks_,runtime.receivers.thread_list,error))return false;cache_bound_=true;}
  if(!roots_bound_){if(!roots_.Bind(hooks_,runtime.runtime,current,error))return false;roots_bound_=true;}
- if(!compilation_bound_){if(!compilation_.Bind(hooks_,runtime,error))return false;compilation_bound_=true;}
  if(!cache_.Prepare(error)||!cache_.PreparedForCurrentThread())return false;
  if(!roots_.LocksCalibrated()){
   RootLocks request{*this,error};
@@ -167,6 +166,72 @@ bool SourceCalibration::PrepareTypedHeap(JNIEnv*env,std::string*error){
  auto current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks_.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
  return native_typed_heap_calibration::Prepare(hooks_,env,metadata_->Inputs().Storage(),
   runtime.receivers.heap,current,metadata_->Fields(),exclusive_,&heap_,error);
+}
+struct SourceCalibration::Allocator {
+ SourceCalibration&owner;jobject boot_method;
+ field_mirror::NamedField field_leaf;
+ std::vector<void*>owned,foreign;std::string*error;
+};
+bool SourceCalibration::CollectAllocator(const runnable_jni::Context&context,void*raw){
+ auto&request=*static_cast<Allocator*>(raw);auto&owner=request.owner;
+ if(!runnable_jni::Bridge::BorrowOriginalScope(context)||!context.original_leaf||
+    context.vm!=owner.metadata_->Runtime().receivers.java_vm||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(context.vm)))
+  return Fail(request.error,"source-allocator-original-context-unavailable");
+ const abi::common::RunnableJniScope scope{context.self,context.env,context.vm};
+ const auto&inputs=owner.metadata_->Inputs();
+ for(const auto&oracle:inputs.Methods()){
+  void*method=context.original_leaf(scope,oracle.strong_global_method);
+  if(!method||context.env->ExceptionCheck())return false;
+  request.owned.push_back(method);
+ }
+ for(const auto&oracle:inputs.Fields()){
+  void*mirror=nullptr;
+  if(!runnable_executor::DecodeStrongGlobal(context,oracle.strong_global_field,&mirror))return false;
+  void*field=request.field_leaf(mirror);if(!field)return false;
+  request.owned.push_back(field);
+ }
+ void*foreign=context.original_leaf(scope,request.boot_method);
+ if(!foreign||context.env->ExceptionCheck())return false;
+ request.foreign.push_back(foreign);return true;
+}
+bool SourceCalibration::ProveAllocator(const exclusive_owned_roots::Context&context,void*raw){
+ auto&request=*static_cast<Allocator*>(raw);auto&owner=request.owner;
+ return retirement::CalibrateAllocatorMembership(owner.hooks_,owner.metadata_->Runtime().receivers.class_linker,
+  context,request.owned,request.foreign,&owner.membership_,request.error);
+}
+bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*error){
+ if(membership_.matched)return true;
+ const auto&inputs=metadata_->Inputs();
+ if(!env||!ti||env->ExceptionCheck()||!exclusive_bound_||
+    !BorrowFinalDexRecords(static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm)))
+  return Fail(error,"source-allocator-needs-ordinary-JNI-and-actual-final-DEX-lease");
+ struct Locals {JNIEnv*env;jobject loader=nullptr,storage_loader=nullptr,boot=nullptr,method=nullptr;
+  ~Locals(){for(auto value:{method,boot,storage_loader,loader})if(value)env->DeleteLocalRef(value);}}local{env};
+ struct Globals {JNIEnv*env;jobject loader=nullptr,boot=nullptr,method=nullptr;
+  ~Globals(){for(auto value:{method,boot,loader})if(value)env->DeleteGlobalRef(value);}}global{env};
+ if(ti->GetClassLoader(inputs.Anchor(),&local.loader)!=JVMTI_ERROR_NONE||!local.loader||env->ExceptionCheck()||
+    ti->GetClassLoader(inputs.StorageClass(),&local.storage_loader)!=JVMTI_ERROR_NONE||
+    !local.storage_loader||env->ExceptionCheck()||!env->IsSameObject(local.loader,local.storage_loader)||env->ExceptionCheck())
+  return Fail(error,"source-allocator-complete-fixtures-do-not-share-the-owned-loader");
+ global.loader=env->NewGlobalRef(local.loader);if(!global.loader||env->ExceptionCheck())return false;
+ local.boot=env->FindClass("java/lang/Object");if(!local.boot||env->ExceptionCheck())return false;
+ auto method=env->GetMethodID(static_cast<jclass>(local.boot),"toString","()Ljava/lang/String;");
+ if(!method||env->ExceptionCheck())return false;
+ local.method=env->ToReflectedMethod(static_cast<jclass>(local.boot),method,JNI_FALSE);
+ if(!local.method||env->ExceptionCheck())return false;
+ global.boot=env->NewGlobalRef(local.boot);if(!global.boot||env->ExceptionCheck())return false;
+ global.method=env->NewGlobalRef(local.method);if(!global.method||env->ExceptionCheck())return false;
+ auto field_leaf=reinterpret_cast<field_mirror::NamedField>(hooks_.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ if(!field_leaf)return Fail(error,"source-allocator-original-field-leaf-unavailable");
+ Allocator request{*this,global.method,field_leaf,{},{},error};
+ request.owned.reserve(inputs.Methods().size()+inputs.Fields().size());request.foreign.reserve(1);
+ if(runnable_executor::WithOriginalScope(env,inputs.Anchor(),CollectAllocator,&request)!=runnable_jni::Result::kSuccess||env->ExceptionCheck())
+  return Fail(error,"source-allocator-complete-native-member-oracles-unavailable");
+ // Native metadata identities remain owned by the full Class/mirror globals;
+ // no borrowed movable Class, JNI Context or Thread crosses this stop.
+ const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
+ return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
 }
 void SourceCalibration::Begin(void*driver,const runnable_jni::Context&context,void*raw)noexcept{
  auto&round=*static_cast<Round*>(raw);
