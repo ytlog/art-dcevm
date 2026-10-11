@@ -33,13 +33,13 @@ bool Source::OwnsWindow()const noexcept{
    methods_.identities.size()>=3&&methods_.identities.size()==methods_.readable_extents.size()&&
    !plan_.old_classes.empty()&&plan_.old_classes.size()==plan_.new_classes.size();
 }
-bool Source::Prefix(void*method,const native_boot_method_catalog::Method&entry,const modern_field_metadata::ReadContext&context,method_metadata::Identity*identity,const char**failure)const noexcept{
+bool Source::Prefix(void*method,const native_boot_method_catalog::Method&entry,const modern_field_metadata::ReadContext&context,method_metadata::Identity*identity,const char**failure,bool require_static)const noexcept{
  auto deny=[&](const char*reason){if(failure)*failure=reason;return false;};
  if(!identity||!context.owner||!context.extent)return deny("boot-AOT-current-prefix-context-unproved");
  size_t extent=0;if(!context.extent(context.owner,method,&extent))return deny("boot-AOT-current-method-extent-unproved");
  const auto&layout=methods_.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
  if(!method_metadata::ReadIdentity(layout,method,extent,identity)||identity->dex_method_index==UINT32_MAX||
-    (identity->access_flags&0x40508u)!=0x8u)return deny("boot-AOT-current-method-source-prefix-unproved"); // static, non-native, non-abstract, not obsolete
+    (identity->access_flags&0x40500u)||(require_static&&!(identity->access_flags&0x8u)))return deny("boot-AOT-current-method-source-prefix-unproved"); // Non-native, non-abstract, not obsolete; normal AOT entry remains static.
  void*declaring=metadata_.MethodDeclaringClass(method);
  constexpr size_t loader=offsetof(class_metadata::Class11,class_loader);
  if(!declaring||!context.extent(context.owner,declaring,&extent)||extent<loader+4||metadata_.Reference(declaring,loader))return deny("boot-AOT-current-boot-declaring-Class-unproved");
@@ -60,7 +60,7 @@ bool Source::InspectEntry(void*method,uint32_t pc,native_boot_return_continuatio
  const auto*entry=catalog_.Lookup(method,roots_,context);
  if(!entry)return deny("boot-continuation-current-rooted-public-identity-unproved");
  method_metadata::Identity identity;
- if(!Prefix(method,*entry,context,&identity,failure))return false;
+ if(!Prefix(method,*entry,context,&identity,failure,entry_kind==native_boot_return_continuation::Entry::NormalAndExceptional))return false;
  if((identity.access_flags&(0x20u|0x20000u))||(entry->modifiers&0x20u))return deny("boot-continuation-implicit-monitor-state-unproved");
  receiver_guard::CodeView source;
  if(!code_.Code(self_,method,&source,context)||!ImmutableBodyMatches(*entry,source,identity.dex_method_index,context)||(entry_kind==native_boot_return_continuation::Entry::NormalAndExceptional&&!DexIdentity(source.source_dex).ReturnsVoid(identity.dex_method_index)))return deny("boot-continuation-current-public-source-body-DEX-mismatch");

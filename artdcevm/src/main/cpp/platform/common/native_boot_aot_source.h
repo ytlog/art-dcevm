@@ -28,7 +28,7 @@ class Source final:public Proof {
  private:
  bool OwnsWindow()const noexcept;
  bool Prefix(void*,const native_boot_method_catalog::Method&,const modern_field_metadata::ReadContext&,
-             method_metadata::Identity*,const char**)const noexcept;
+             method_metadata::Identity*,const char**,bool require_static=true)const noexcept;
  bool InspectEntry(void*,uint32_t,native_boot_return_continuation::Entry,
   const modern_field_metadata::ReadContext&,native_boot_return_continuation::HandlerStorage,
   native_boot_return_continuation::Scratch,receiver_guard::CodeView*,native_boot_return_continuation::Shape*,const char**)const noexcept;

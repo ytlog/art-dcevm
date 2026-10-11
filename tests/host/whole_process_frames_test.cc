@@ -6,11 +6,13 @@
 #include <array>
 namespace {
 int thread_list,list_mutex,worker,empty_thread,jit_cache;void* list_mutex_pointer=&list_mutex;
+bool logical_chain=false;
 bool interpreter_only=false,empty_register_map=false,dead_register=false;
 bool list_locked=false,include_self=true,unknown=false,unmarked=false,aot=false,nterp=false,wrong_native_map=false,wrong_dexpc=false,inline_frame=false,wrong_native_value=false,cursor_drift=false;
 struct MethodPrefix {uint32_t klass=0,flags=0,dex_index=0,padding=0;} shadow_method,native_method{0,0x100},compiled_method;
 abi::arm64::android12::Method12 runtime_method{};
 alignas(16) unsigned char runtime_stack[1024]{};
+bool runtime_name_drift=false;size_t runtime_name_calls=0;abi::arm64::stack::Visitor13*runtime_name_cursor=nullptr;
 bool runtime_frame=false,runtime_bad_geometry=false,runtime_bad_successor=false,runtime_cursor_drift=false,runtime_no_successor=false,runtime_transition=false,missing_runtime_reader=false;
 native_runtime_frame::FrameInfo runtime_info{native_runtime_frame::Size(0x7ff00000u,0),0x7ff00000u,0};
 void* current_method=nullptr;
@@ -37,7 +39,7 @@ void ConstructVisitor(void* p,void* t,void* c,abi::arm64::stack::WalkKind kind,b
  auto* v=static_cast<abi::arm64::stack::Visitor13*>(p);std::memset(static_cast<unsigned char*>(p)+8,0,sizeof(*v)-8);v->thread=t;v->kind=kind;v->context=c;
 }
 void WalkVisitor(void* p,bool transitions){
- assert(gc&&exclusive&&list_locked&&transitions);auto* v=static_cast<abi::arm64::stack::Visitor13*>(p);
+ assert(gc&&exclusive&&list_locked&&transitions);auto* v=static_cast<abi::arm64::stack::Visitor13*>(p);runtime_name_cursor=v;
  if(v->thread==&empty_thread)return;
  if(v->thread==&self){current_method=&native_method;quick.method=current_method;v->quick_frame=reinterpret_cast<void**>(&quick);v->header=nullptr;v->VisitFrame();return;}
  assert(v->thread==&worker);
@@ -57,7 +59,7 @@ void WalkVisitor(void* p,bool transitions){
  current_method=&compiled_method;quick.method=current_method;if(runtime_frame)std::memcpy(v->quick_frame,&quick,sizeof(quick));else *v->quick_frame=current_method;v->header=header;v->pc=reinterpret_cast<uintptr_t>(header)+36;
  if(unknown)v->header=nullptr;
  if(inline_frame)v->inline_frames.end.row=1;
- v->VisitFrame();
+ if(logical_chain){assert(inline_frame);if(!v->VisitFrame())return;inline_frame=false;v->inline_frames.end.row=0;v->VisitFrame();inline_frame=true;}else v->VisitFrame();
 }
 void* GetMethod(const void*){return current_method;}
 uint32_t DexPc(const void*,bool crash){assert(!crash);return (inline_frame?11:10)+(wrong_dexpc?1:0);}
@@ -68,6 +70,10 @@ native_runtime_frame::FrameInfo RuntimeInfo(const void* raw){
  assert(current_method==&runtime_method);auto info=runtime_info;if(runtime_bad_geometry)info.core_spills^=1;
  if(runtime_cursor_drift)++static_cast<abi::arm64::stack::Visitor13*>(const_cast<void*>(raw))->pc;
  return info;
+}
+const char* RuntimeName(void*method){assert(gc&&exclusive&&list_locked&&method==current_method);++runtime_name_calls;
+ if(runtime_name_drift)++runtime_name_cursor->pc;
+ return "<runtime internal callee-save reference registers method>";
 }
 size_t Offset(const void*){return 32;}
 template<size_t N>void Table(abi::arm64::android13::BitTable<N>& table,void* data,size_t bits,uint32_t rows,unsigned width){table.region={data,0,bits};table.rows=rows;for(size_t i=0;i<=N;++i)table.columns[i]=i*width;}
@@ -82,6 +88,7 @@ void NativeMap(const void*,uint32_t row,uint32_t first,abi::arm64::dex_register_
 class FrameHooks:public Hooks {
  public:void* FindSymbol(const char* library,const char* name)override {
 #define FN(symbol,fn) if(!std::strcmp(name,symbol))return Fn(fn)
+ FN(native_runtime_frame::Service::kRuntimeName,RuntimeName);
  FN("_ZN3art6Thread25ClearAllInterpreterCachesEv",ClearCaches);
  if(!std::strcmp(name,"_ZZN3art6Thread25ClearAllInterpreterCachesEvE7closure"))return &closure;
  if(!std::strcmp(name,"_ZN3art5Locks17thread_list_lock_E"))return &list_mutex_pointer;
@@ -115,8 +122,11 @@ int RunModernFrameFixture(){
                native_runtime_frame::FrameInfo{224,0x7ff000feu,0xffu},
                native_runtime_frame::FrameInfo{176,0x7ff80000u,0xff00u},
                native_runtime_frame::FrameInfo{512,0x7ffbffffu,0xffffffffu}}){
-  runtime_info=info;report=scan();if(!report.accepted)std::cerr<<"Runtime frame refusal: "<<report.failure<<" size="<<info.size<<"\n";assert(report.accepted&&report.runtime_frames==1&&report.compiled_frames==1);
+  runtime_info=info;report=scan();if(!report.accepted)std::cerr<<"Runtime frame refusal: "<<report.failure<<" size="<<info.size<<" known="<<native_runtime_frame::CalleeGeometry(info)<<" class="<<runtime_method.declaring_class<<" flags="<<runtime_method.access_flags<<" entry="<<runtime_method.entry_point<<" dex="<<runtime_method.dex_method_index<<" lr="<<*reinterpret_cast<uintptr_t*>(runtime_stack+info.size-8)<<"\n";assert(report.accepted&&report.runtime_frames==1&&report.compiled_frames==1);
  }
+ assert(runtime_name_calls&&report.runtime_name_method==uintptr_t(&runtime_method)&&report.runtime_name_thread==uintptr_t(&worker));
+ assert(report.runtime_name_status==uint32_t(native_runtime_frame::NameStatus::UnmappedResult)&&!report.runtime_name[0]);
+ runtime_name_drift=true;report=scan();assert(!report.accepted&&report.runtime_name_status==uint32_t(native_runtime_frame::NameStatus::CursorChanged)&&!report.runtime_name[0]&&!std::strcmp(report.failure,"whole-runtime-original-cursor-changed"));runtime_name_drift=false;
  for(auto* bad:{&runtime_bad_geometry,&runtime_bad_successor,&runtime_cursor_drift,&runtime_no_successor}){*bad=true;assert(!scan().accepted);*bad=false;}
  runtime_transition=true;report=scan();assert(report.accepted&&report.runtime_frames==1&&report.transitions==1&&report.compiled_frames==0);runtime_transition=false;
  missing_runtime_reader=true;whole_process_frames::Service missing_runtime;
@@ -135,6 +145,22 @@ int RunModernFrameFixture(){
  auto geometry_report=geometry_scan();assert(!geometry_report.accepted&&geometry_report.compiled_frames==0&&!std::strcmp(geometry_report.failure,"whole-frame-compiled-geometry-not-calibrated"));
  interpreter_only=true;geometry_report=geometry_scan();assert(geometry_report.accepted&&geometry_report.compiled_frames==0&&geometry_report.shadow_frames==1&&geometry_report.native_frames==1);interpreter_only=false;
  inline_frame=true;report=scan();assert(report.accepted&&report.inlined_frames==1&&report.compiled_frames==1);inline_frame=false;
+ // Original include-inline callbacks share physical roots but require separate
+ // exception obligations and source scratch capacity. Count each callback in
+ // the actual registered-thread Session rather than infer it from table rows.
+ inline_frame=logical_chain=true;
+ modern_field_metadata::ReadContext census_read{&storage,[](void*,const void*p,size_t*out){
+  const std::pair<const void*,size_t> spans[]{{header,sizeof(header)},{stack_row.data(),sizeof(stack_row)},{inline_row.data(),sizeof(inline_row)},
+   {&dexmask,sizeof(dexmask)},{dexmaps,sizeof(dexmaps)},{catalog,sizeof(catalog)}};
+  for(const auto&span:spans){const auto start=uintptr_t(span.first),at=uintptr_t(p);if(at>=start&&at-start<span.second){*out=span.second-(at-start);return true;}}return false;
+ }};
+ {native_source_stop::Session owner(stop);assert(owner.Begin(&self,sizeof(self)));
+  const auto census=scanner.CensusRecovery(owner,&self,cache,storage,census_read);
+  assert(census.accepted&&census.frames==3&&census.logical_frames==4&&census.slots==0);
+ }
+ report=scan();assert(report.accepted&&report.compiled_frames==2&&report.inlined_frames==1);
+ inline_frame=logical_chain=false;
+
  for(auto* flag:{&unknown,&unmarked,&aot,&nterp,&wrong_native_map,&wrong_dexpc,&wrong_native_value}){*flag=true;report=scan();assert(!report.accepted&&report.registered_threads==3&&report.walked_threads==1&&!list_locked&&!gc&&self.flags==0);*flag=false;}
  cursor_drift=true;report=scan();assert(!report.accepted&&!std::strcmp(report.failure,"whole-frame-source-owner-or-native-cursor-lost-after-map"));cursor_drift=false;
  inline_frame=true;unmarked=true;report=scan();assert(!report.accepted);inline_frame=unmarked=false;

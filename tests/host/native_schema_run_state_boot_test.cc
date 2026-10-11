@@ -14,7 +14,24 @@
 #include "native_schema_run_state_boot_public_fixture.h"
 #include "platform/common/native_boot_dex_identity.h"
 #include "native_schema_run_state_boot_frames_fixture.h"
+#include "native_schema_run_state_managed_stack_fixture.h"
+#ifdef WHOLE_UPCALL_FIXTURE
+#include "native_upcall_entry_guards_fixture.h"
+#include "native_whole_managed_upcall_fixture.h"
+#ifdef WHOLE_INLINE_FIXTURE
+#include "native_whole_inline_scanner_fixture.h"
+#endif
+void UpcallRaise(void*,const char*,const char*){std::abort();}
+bool UpcallExclusive(){return stopped==1;}
+void* UpcallMirror(size_t bytes){return heap.New(bytes);}
+#endif
 #pragma clang diagnostic pop
+// The shared host composition models the original regular Runnable bridge.
+// No borrowed original-scope bridge exists here; refuse that ingress strictly.
+namespace artdcevm::runnable_executor {
+bool Available(){return current==thread.data()&&!stopped;}
+runnable_jni::Result WithOriginalScope(JNIEnv*,jobject,runnable_jni::Operation,void*){return runnable_jni::Result::kUnavailable;}
+}
 const char* boot_case="";
 int main(int argc,char**argv){
  if(argc>1)boot_case=argv[1];
@@ -64,6 +81,22 @@ int main(int argc,char**argv){
   assert(public_state.resolved&&public_state.reads==1&&!native_schema_run_state::RunState::Current());
   assert(error=="Source cache public storage callback rejected original storage witness");
   public_state.accept=true;error.clear();
+  TestManagedStackReads(*d.roots,source,process_cache,d.storage->CardTableOffset());
+#ifdef WHOLE_UPCALL_FIXTURE
+  retirement::RetiredMethodRegistry upcall_methods;retirement::RetiredFieldRegistry upcall_fields;
+  const auto retained_before=SchemaTypedGlobals();jobject upcall_anchor=env.NewGlobalRef(reinterpret_cast<jobject>(old_class));assert(upcall_anchor);
+  upcall_entry_fixture::Hooks guard_hooks(owner_hooks,{Current,UpcallRaise,BootDecodeMethod,Leaf,FieldLeaf,OwnerStop,OwnerResume,UpcallExclusive,UpcallMirror});
+  OwnerNative(thread.data());auto upcall_owner=upcall_entry_fixture::Prepare(guard_hooks,&env,upcall_anchor,&linker,*d.metadata,upcall_methods,upcall_fields,&error);OwnerRunnable(thread.data());
+  if(!upcall_owner){std::cerr<<"Upcall installed entries: "<<error<<"\n";std::abort();}
+  typed_globals_before_begin+=SchemaTypedGlobals()-retained_before;
+  TestWholeManagedUpcall(*d.roots,source,process_cache,scanner,*upcall_owner,d.storage->CardTableOffset(),&env,&error);
+#ifdef WHOLE_INLINE_FIXTURE
+  const auto interface_dex=File((std::string(INLINE_DEX_DIR)+"/interface-dispatch.dex").c_str()),receiver_dex=File((std::string(INLINE_DEX_DIR)+"/receiver-call.dex").c_str());
+  for(bool unsafe:{false,true}){const auto inline_dex=File((std::string(INLINE_DEX_DIR)+(unsafe?"/inline-unsafe.dex":"/inline-safe.dex")).c_str());
+   whole_inline_fixture::Test(inline_dex,interface_dex,receiver_dex,*d.roots,source,process_cache,scanner,frame_provenance,*upcall_owner,*d.metadata,method_model,vtables,boot_source,aggregate_context,&ti,d.storage->CardTableOffset(),unsafe,&error);}
+#endif
+#endif
+  const size_t streams_before_run=boot_original_root_streams,writebacks_before_run=boot_root_writebacks;
   auto run=native_schema_run_state::RunState::Begin(deps,&actual_driver,aggregate_context,&ti,{proposal},witness,&error);
   if(!run){std::cerr<<"matched Begin: "<<error<<"\n";std::abort();}
   PauserFixture pauser{pauser_vtable.data()+2,context.self,1};class_add_proxy(&linker,&pauser);
@@ -99,14 +132,14 @@ int main(int argc,char**argv){
     {"declaring","Ordinary schema roots did not register completely",0}};
    const Rejection*match=nullptr;for(const auto&candidate:expected)if(!std::strcmp(boot_case,candidate.name))match=&candidate;
    assert(match&&error==match->reason&&run->Frames().frames==match->frames);
-   assert(!boot_original_root_streams&&!boot_root_writebacks&&!replaced);
+   assert(boot_original_root_streams==streams_before_run&&boot_root_writebacks==writebacks_before_run&&!replaced);
    run->Refund();const auto refunded=roots.Final();assert(refunded.get&&refunded.get(refunded.owner,0)==nullptr);
    const source_commit::Plan*refunded_plan=nullptr;assert(!run->Finalize(&holder,&refunded_plan)&&!refunded_plan);
    class_remove_proxy(&linker,&pauser);assert(run->End(&actual_driver,false));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);
    assert(!gc&&!disabled&&!stopped&&SchemaTypedGlobals()==typed_globals_before_begin);
    std::cout<<"Actual concrete Boot AOT prepublication refusal/rollback case="<<boot_case<<" error="<<error<<"\n";return true;
   }
-  assert(!*boot_case);assert(boot_census_moves==1&&plan.new_classes[0]==boot_census_moved&&boot_census_invalidations==1);assert(boot_frame_walks>=walks_before_collected+2&&boot_original_root_streams>=1);
+  assert(!*boot_case);assert(boot_census_moves==1&&plan.new_classes[0]==boot_census_moved&&boot_census_invalidations==1);assert(boot_frame_walks>=walks_before_collected+2&&boot_original_root_streams>streams_before_run);
   matched_plan=&plan;
   publication_proxy(&linker,{uintptr_t(cache)},{uintptr_t(app_loader)});
   owner_disable_proxy(&owner_heap,thread.data());OwnerNative(thread.data());unsigned char carrier;owner_stop_proxy(&carrier,s::kFinalCause,true);
@@ -115,7 +148,7 @@ int main(int argc,char**argv){
   const size_t streams_before_final=boot_original_root_streams;assert(facade->Validate(plan));assert(boot_original_root_streams>streams_before_final);
   assert(run->Frames().unaffected_aot_frames==1&&run->Frames().aot_frames==1&&run->Frames().native_value_reads==1);
   assert(source_commit::Run(plan,*facade,{run.get(),[](const source_commit::Plan& value,void* owner)noexcept{static_cast<native_schema_run_state::RunState*>(owner)->Commit(value);}}));
-  assert(boot_runtime_root==plan.new_classes[0]&&boot_root_writebacks==1);assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
+  assert(boot_runtime_root==plan.new_classes[0]&&boot_root_writebacks==writebacks_before_run+1);assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
   facade.reset();class_remove_proxy(&linker,&pauser);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());
   assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);matched_plan=nullptr;assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_walks>=4);
   assert(!gc&&!disabled&&!stopped&&replaced&&boot_quick.value==0&&Read32(boot_compiled_method,4)==9&&!BootFlag(boot_header));

@@ -276,4 +276,6 @@ Scope::~Scope(){
 void* Scope::Slot(size_t index){Require(index<count_);return storage_.get()+service_.references_+index*4;}
 void* Scope::Get(size_t index){Require(service_.Runnable(self_));return reinterpret_cast<void*>(uintptr_t(Read<uint32_t>(Slot(index))));}
 void Scope::Set(size_t index,void* object){Require(service_.Runnable(self_)&&uintptr_t(object)<=UINT32_MAX);Write<uint32_t>(Slot(index),0,uint32_t(uintptr_t(object)));}
+
+
 }

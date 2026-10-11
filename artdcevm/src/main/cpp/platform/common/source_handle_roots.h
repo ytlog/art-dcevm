@@ -1,12 +1,17 @@
 #pragma once
 #include "platform/common/modern_field_storage.h"
 #include "platform/abi/arm64/common/handle_roots.h"
+#include "platform/common/managed_stack_source.h"
 #include <memory>
 #include <vector>
 #include <map>
 #include <cstring>
 #include "platform/abi/arm64/android11/jni_object_decode.h"
+namespace artdcevm::native_source_stop {class Session;}
+namespace artdcevm::native_cache {class Service;}
+namespace artdcevm::whole_process_frames {class Service;}
 namespace artdcevm::source_handle_roots {
+using ManagedStackSnapshot=managed_stack_source::Snapshot;
 class Scope;
 class Service final {
  public:
@@ -40,8 +45,21 @@ class Service final {
   bool OrdinaryNative(const runnable_jni::Context&)const noexcept;
   bool ReadyForSourceAccess()const;
   bool Calibrated()const{return calibrated_.load(std::memory_order_acquire);}
+  // Readonly facts, never an upcall or arbitrary native-consumer permission.
+  // Actual native thread enumeration proves the target is registered before
+  // its previously calibrated pointer-TLS prefix is read. No SDK offset table.
+  bool ReadStoppedManagedStack(const native_source_stop::Session&,void*self,void*thread,
+       const native_cache::Service&,const modern_field_metadata::ReadContext&,ManagedStackSnapshot*)const noexcept;
+  bool ReadStoppedManagedFragment(const native_source_stop::Session&,void*self,
+       const abi::arm64::android16::ManagedStack*,const modern_field_metadata::ReadContext&,
+       ManagedStackSnapshot*)const noexcept;
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;
  private:
+  friend class whole_process_frames::Service;
+  // Only the concrete scanner inside actual native_cache enumeration may use
+  // this path. Public callers must prove current registration independently.
+  bool ReadEnumeratedStoppedManagedStack(const native_source_stop::Session&,void*self,void*thread,
+       const modern_field_metadata::ReadContext&,ManagedStackSnapshot*)const noexcept;
   friend class Scope;
   friend class Pool;
   bool Runnable(void*)const;

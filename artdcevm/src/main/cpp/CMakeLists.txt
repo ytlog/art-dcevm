@@ -66,6 +66,9 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_field_factory_observer.cc
     platform/common/native_source_stop.cc
     platform/common/whole_process_frames.cc
+    platform/common/native_managed_stack_source.cc
+    platform/common/native_exception_entry_ownership.cc
+    platform/common/native_jni_exception_calibration.cc
     platform/common/compiled_frame_fixture.cc
     platform/common/compiled_frame_owner.cc
     platform/common/native_boot_aot_source.cc

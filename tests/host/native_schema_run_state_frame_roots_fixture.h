@@ -38,7 +38,7 @@ void BootRootMutexUnlock(void*p,void*self){if(p==&boot_list_mutex){BootListUnloc
 void BootRootRwLock(void*p,void*self){assert(self==thread.data()&&!stopped);auto*m=static_cast<br::RwPrefix*>(p);m->state=-1;m->owner=123;}
 void BootRootRwUnlock(void*p,void*self){assert(self==thread.data()&&!stopped);auto*m=static_cast<br::RwPrefix*>(p);m->state=0;m->owner=0;}
 void*BootRootBarrier(void*p){return reinterpret_cast<void*>(uintptr_t(Read32(p)));}
-void BootRuntimeRoots(void*r,br::Visitor*v,uint8_t flags){assert(r==&runtime&&gc&&stopped==1&&(flags==br::kAll||flags==br::kAllPrecise));++boot_original_root_streams;
+void BootRuntimeRoots(void*r,br::Visitor*v,uint8_t flags){assert(r==&runtime&&gc&&stopped==1&&(flags==br::kAll||flags==br::kAllPrecise));++boot_original_root_streams;if(boot_inline_roots){boot_inline_roots(v);return;}
  br::Info ordinary{nullptr,1,0};void**global[]{&boot_runtime_root};if(boot_runtime_root)v->VisitRoots(global,1,ordinary);
  boot_original_cursor.thread=foreign_thread.data();boot_original_cursor.quick_frame=reinterpret_cast<void**>(&boot_quick);boot_original_cursor.header=boot_header;boot_original_cursor.pc=uintptr_t(boot_header)+36;boot_original_cursor.context=&boot_original_context;
  void*declaring=Root(boot_compiled_method);br::JavaFrameInfo info{{nullptr,br::kJavaFrameRoot,19},&boot_original_cursor,br::kDeclaringClassVreg};void**one[]{&declaring};v->VisitRoots(one,1,info.base);

@@ -50,6 +50,8 @@ struct Dependencies {
  // The persistent named original root visitor, independently lock-calibrated
  // in this runtime. Supplying it does not grant frame recovery authority.
  const native_typed_heap_walk::RootProvenance* frame_roots=nullptr;
+ const native_jni_exception_calibration::Service* exception_calibration=nullptr;
+ const native_exception_entry_ownership::Proof* upcall_native_owner=nullptr;
  const native_boot_method_catalog::Catalog* boot_catalog=nullptr;
  const native_abstract_instances::Service* boot_vtables=nullptr;
  const receiver_guard::SourceProducer* boot_code=nullptr;

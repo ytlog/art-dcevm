@@ -12,6 +12,8 @@
 #include "platform/common/public_declared_field_mirror.h"
 #include "platform/common/native_initializer_episode.h"
 #include "platform/common/native_typed_heap_calibration.h"
+#include "platform/common/native_jni_exception_calibration.h"
+#include "platform/common/native_exception_entry_ownership.h"
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_field_factory_observer.h"
 #include "platform/common/source_cache_resolution.h"
@@ -253,6 +255,9 @@ struct NativeEngine final:Engine {
  receiver_guard::ClassSource receiver_classes;bool receiver_classes_bound=false;
  bool CalibrateReceiverSource(JNIEnv*,jvmtiEnv*);
  bool PrepareOrdinaryReceiverSource(JNIEnv*,jvmtiEnv*);
+ native_jni_exception_calibration::Service exception_upcall;
+ std::unique_ptr<native_exception_entry_ownership::Service> exception_entries;
+ std::string exception_upcall_diagnostic;
  bool BindGraphReaders(std::string*);
  bool BindReceiverProducer(code_info_view::SourceFamily family){
   if(receiver_producer_bound)return true;
@@ -1093,6 +1098,11 @@ struct NativeEngine final:Engine {
   d.boot_vtables=abstract_instances.Ready()?&abstract_instances:nullptr;
   d.boot_code=receiver_producer_bound?&receiver_producer:nullptr;
   d.frame_roots=RootProvenanceObserved()&&root_provenance.LocksCalibrated()?&root_provenance:nullptr;
+  if(exception_upcall.MatchesVm(vm)){
+   if(!exception_entries)exception_entries=native_exception_entry_ownership::Service::Prepare(retired_methods,retired_fields,runtime.receivers.jni_id_manager);
+   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned native JNI entry guard ownership accepted=%d",int(exception_entries!=nullptr));
+   d.exception_calibration=&exception_upcall;d.upcall_native_owner=exception_entries.get();
+  }
   d.mapping={this,RefreshStoppedMaps,GraphExtent};
   if(!native_required_cleanup::Binding::Bind(hooks,env,d.members,&cleanup_binding,error))return false;
   d.cleanup=&cleanup_binding;schema_dependencies=d;return true;
@@ -1217,6 +1227,15 @@ struct NativeEngine final:Engine {
   // Preparation precedes source-run publication; use the caller JVMTI rather
   // than source_ti, which is owned only by the later original source scope.
   if(batch&&!PrepareSourceCacheWitness(env,ti,error))return owned_failure_diagnostic::Unavailable(error,"source cache public witness preparation");
+  // JNI calibration loads its owned Java fixture. Complete that ordinary
+  // preparation before StageGraph seals the full loaded-caller inventory.
+  // Later dependency binding reads only the retained VM receipt.
+  if(schema_operation&&!exception_upcall.MatchesVm(vm)){
+   exception_upcall_diagnostic.clear();
+   const bool calibrated=!schema_run&&!native_schema_run_state::RunState::Current()&&exception_upcall.Calibrate(env,&exception_upcall_diagnostic);
+   __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned JNI exception propagation calibration accepted=%d failure=%s",int(calibrated),exception_upcall_diagnostic.c_str());
+   if(env->ExceptionCheck())return owned_failure_diagnostic::Unavailable(error,"JNI exception propagation calibration left its original pending exception");
+  }
   if(batch?!StageGraph(env,ti,defs,error):!Preflight(env,ti,defs[0].klass,error)){
    if(error)*error=(batch?"graph/member staging: ":"single-Class member preflight: ")+*error;
    return owned_failure_diagnostic::Unavailable(error,batch?"candidate graph/member staging":"single-Class member preflight");

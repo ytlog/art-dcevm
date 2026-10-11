@@ -16,14 +16,25 @@ namespace {
 // Report fields are copied scalars; no stack memory, JNI or live frame reads.
 void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noexcept{
   __android_log_print(ANDROID_LOG_INFO,"artdcevm",
-    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u mapDexPc=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu rootFailure=%u rootStreamFailure=%u rootFrames=%zu rootSlots=%zu rootCallbacks=%zu",
+    "Owned stopped frame report prepareAccepted=%d frameAccepted=%d frames=%zu runtime=%zu failure=%s thread=%p method=%p quick=%p pc=%p header=%p prefix=%d physical=%d declaring=%u flags=%u dexIndex=%u mapRow=%u mapMask=%u mapIndex=%u mapDexPc=%u dexRegs=%u inlineBegin=%u inlineEnd=%u capacity=%zu rootFailure=%u rootStreamFailure=%u rootFrames=%zu rootSlots=%zu rootCallbacks=%zu upcallThreads=%zu upcallClosed=%zu upcallFragments=%zu upcallTransitions=%zu upcallFailure=%u frameBytes=%u stackBit=%u",
     int(accepted),int(frames.accepted),frames.frames,frames.runtime_frames,frames.failure,
     reinterpret_cast<void*>(frames.failure_thread),reinterpret_cast<void*>(frames.failure_method),
     reinterpret_cast<void*>(frames.failure_quick),reinterpret_cast<void*>(frames.failure_pc),reinterpret_cast<void*>(frames.failure_header),
     int(frames.failure_method_prefix),int(frames.failure_physical),frames.failure_declaring_class,frames.failure_flags,frames.failure_dex_index,
     frames.failure_map_row,frames.failure_map_mask,frames.failure_map_index,frames.failure_map_dex_pc,frames.failure_map_dex_regs,
     frames.failure_inline_begin,frames.failure_inline_end,frames.failure_map_capacity,
-    frames.root_failure,frames.root_stream_failure,frames.root_frames,frames.root_slots,frames.root_callbacks);
+    frames.root_failure,frames.root_stream_failure,frames.root_frames,frames.root_slots,frames.root_callbacks,
+    frames.upcall_threads,frames.upcall_closed,frames.upcall_fragments,frames.upcall_transitions,frames.upcall_failure,frames.failure_frame_bytes,frames.failure_stack_bit);
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+    "Owned stopped callee diagnostics callerThread=%p callerMethod=%p callerQuick=%p callerPc=%p youngerPresent=%d previousKind=%u youngerMethod=%p youngerQuick=%p youngerPc=%p receiverState=%u registers=%u ins=%u thisIndex=%u mapFirst=%u mapCount=%u locationKind=%d locationValue=%u receiverSlot=%p receiverValue=%p",
+    reinterpret_cast<void*>(frames.receiver_caller_thread),reinterpret_cast<void*>(frames.receiver_caller_method),reinterpret_cast<void*>(frames.receiver_caller_quick),reinterpret_cast<void*>(frames.receiver_caller_pc),
+    int(frames.younger_present),frames.previous_kind,reinterpret_cast<void*>(frames.younger_method),reinterpret_cast<void*>(frames.younger_quick),reinterpret_cast<void*>(frames.younger_pc),
+    frames.receiver_state,frames.receiver_registers,frames.receiver_ins,frames.receiver_this_index,frames.receiver_map_first,frames.receiver_map_count,
+    frames.receiver_location_kind,frames.receiver_location_value,reinterpret_cast<void*>(frames.receiver_slot),reinterpret_cast<void*>(frames.receiver_value));
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+    "Owned stopped runtime name status=%u thread=%p method=%p quick=%p name=%s",
+    frames.runtime_name_status,reinterpret_cast<void*>(frames.runtime_name_thread),reinterpret_cast<void*>(frames.runtime_name_method),
+    reinterpret_cast<void*>(frames.runtime_name_quick),frames.runtime_name);
   if(frames.aot_declaring_class&&frames.aot_method&&frames.aot_descriptor)
     __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned stopped AOT identity owner=%s method=%s descriptor=%s",
       frames.aot_declaring_class,frames.aot_method,frames.aot_descriptor);
@@ -45,6 +56,8 @@ struct RunState::State {
   frame_storage.frame_roots=nullptr;frame_storage.root_provenance=nullptr;
   frame_storage.dispatch=nullptr;frame_storage.continuation=nullptr;
   frame_storage.source_code=nullptr;
+  frame_storage.managed_stack_source=nullptr;frame_storage.exception_calibration=nullptr;
+  frame_storage.exception_vm=nullptr;frame_storage.upcall_native_owner=nullptr;
   frame_storage.frame_root_resolver=nullptr;frame_storage.boot_unaffected=nullptr;
   d.members.frame_root_proof=nullptr;d.members.frame_roots=nullptr;d.members.frame_root_binding=nullptr;
   frame_root_binding.Clear();frame_root_resolver={};
@@ -249,6 +262,12 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
   const auto&layout=s.d.members.method_model->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
   s.interface_dispatch=std::make_unique<native_interface_dispatch::Source>(*s.d.members.metadata,layout,s.boot_catalog,*s.ledger);
   s.frame_storage.source_code=s.d.boot_code;
+  if(s.d.exception_calibration&&s.d.exception_calibration->MatchesVm(static_cast<JavaVM*>(s.context.vm))&&s.d.upcall_native_owner){
+   s.frame_storage.managed_stack_source=s.d.roots;
+   s.frame_storage.exception_calibration=s.d.exception_calibration;
+   s.frame_storage.exception_vm=static_cast<JavaVM*>(s.context.vm);
+   s.frame_storage.upcall_native_owner=s.d.upcall_native_owner;
+  }
  }
  if(!s.d.registry->Freeze())return Fail(e,"Ordinary schema root registry could not freeze");
  checkpoint("native-root-registration-return");
@@ -256,10 +275,11 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.frame_roots){
   FrameCensusAttempt request{*this,{}};native_source_stop::Session inspection(*s.d.stop);
   const bool counted=s.d.stop->RequiresOriginalWaiting()?inspection.InspectOriginalWaiting(s.context.self,s.extent,&request,CensusFramesStopped):inspection.Inspect(s.context.self,s.extent,&request,CensusFramesStopped);
-  if(!counted)return Fail(e,request.census.accepted?inspection.Failure():request.census.failure);
+  if(!counted){LogFrameReport(request.census.diagnostic,false);return Fail(e,request.census.accepted?inspection.Failure():request.census.failure);}
   size_t units=0;for(const auto&method:s.d.boot_catalog->Methods())units=std::max(units,method.dex.size()/2);
   units=std::max(units,request.census.code_units);
-  if(!s.frame_roots->ReserveFramesSlots(request.census.frames,request.census.slots)||!s.frame_storage.PrepareContinuations(request.census.frames,units,request.census.tries,request.census.handlers))return Fail(e,"Ordinary complete frame/continuation capacity preparation refused");
+  if(!s.frame_roots->ReserveFramesSlots(request.census.frames,request.census.slots)||!s.frame_storage.PrepareContinuations(request.census.logical_frames,units,request.census.tries,request.census.handlers))return Fail(e,"Ordinary complete frame/continuation capacity preparation refused");
+  if(s.frame_storage.managed_stack_source&&!s.d.frames->PrepareUpcalls(request.census,*s.d.roots,&s.frame_storage))return Fail(e,"Ordinary native upcall source preparation refused");
   s.frame_storage.frame_roots=s.frame_roots.get();s.frame_storage.root_provenance=s.d.frame_roots;
   s.frame_storage.dispatch=s.interface_dispatch.get();s.frame_storage.continuation=s.boot_unaffected.get();
  }
