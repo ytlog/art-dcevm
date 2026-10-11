@@ -27,7 +27,8 @@ bool IndexedLess(const std::vector<Frame>&frames,size_t a,size_t b)noexcept{
 // the same thread. Transitions, shadow fragments and missing geometry cannot
 // substitute for that physical successor; inline cursors share its carrier.
 bool ReturnCarrier(const Frame&boundary,const Frame&next)noexcept{
- return boundary.physical_boundary&&boundary.carrier_method==boundary.method&&boundary.quick&&boundary.geometry.size&&
+ return (boundary.kind==FrameKind::Native||boundary.kind==FrameKind::Runtime)&&
+  boundary.physical_boundary&&boundary.carrier_method==boundary.method&&boundary.quick&&boundary.geometry.size&&
   boundary.geometry.size<=UINTPTR_MAX-uintptr_t(boundary.quick)&&
   next.thread==boundary.thread&&next.depth>boundary.depth&&!next.shadow&&next.quick&&next.method&&next.carrier_method&&
   next.kind!=FrameKind::Transition&&uintptr_t(next.quick)==uintptr_t(boundary.quick)+boundary.geometry.size&&
@@ -41,7 +42,7 @@ bool Service::Bind(HookEngine&hooks,stack_visitor_service::Declaration declarati
  if(!stack_visitor_service::Service::Bind(declaration,[&](const char*s){return hooks.FindSymbol("libart.so",s);},&stack))return fail("call-graph-stack-original-visitor-unavailable");
  auto create=reinterpret_cast<abi::arm64::context::Create>(hooks.FindSymbol("libart.so",abi::arm64::context::kCreate));
  if(!create)return fail("call-graph-stack-original-context-unavailable");
- boundaries_=native_runtime_frame::Service::Bind([&](const char*symbol){return hooks.FindSymbol("libart.so",symbol);});
+ geometry_=native_runtime_frame::Service::Bind([&](const char*symbol){return hooks.FindSymbol("libart.so",symbol);});
  stack_=stack;declaration_=declaration;create_=create;bound_=true;return true;
 }
 bool Service::Reserve(Prepared*out,std::string*error,size_t frame_capacity)const{
@@ -103,7 +104,7 @@ bool Service::ValidateStream(const Prepared&p,const native_source_stop::Session&
     (identity.access_flags&0x100u)?FrameKind::Native:FrameKind::Managed;
   if(kind!=frame.kind||(kind==FrameKind::Managed&&(!frame.shadow&&!frame.quick)))return false;
   if(frame.physical_boundary){
-   if((kind!=FrameKind::Native&&kind!=FrameKind::Runtime)||frame.shadow||!frame.quick||
+   if(frame.shadow||!frame.quick||frame.carrier_method!=frame.method||
       uintptr_t(frame.quick)%16||frame.geometry.size<16||frame.geometry.size%16||
       frame.geometry.size>UINTPTR_MAX-uintptr_t(frame.quick)||!frame.return_slot||!frame.return_pc)return false;
    const auto address=uintptr_t(frame.return_slot),base=uintptr_t(frame.quick);
@@ -192,10 +193,12 @@ template<class Base>bool Service::Walk(void*target,const native_source_stop::Ses
      if(read.owner&&read.extent&&read.extent(read.owner,frame.quick,&extent)&&extent>=sizeof(void*))
       std::memcpy(&frame.carrier_method,frame.quick,sizeof(frame.carrier_method));
     }
-    if((kind==FrameKind::Native||kind==FrameKind::Runtime)&&this->quick_frame&&!this->shadow_frame&&
-       service.boundaries_.Physical(this,method,this->quick_frame,read,&frame.geometry,&frame.return_slot,&frame.return_pc)){
+    if(kind!=FrameKind::Transition&&this->quick_frame&&!this->shadow_frame&&
+       frame.carrier_method==method&&service.geometry_.Physical(this,method,this->quick_frame,read,&frame.geometry,&frame.return_slot,&frame.return_pc)){
      frame.physical_boundary=true;
-     if(kind==FrameKind::Native)++report.native_geometry;else ++report.runtime_geometry;
+     if(kind==FrameKind::Managed)++report.managed_geometry;
+     else if(kind==FrameKind::Native)++report.native_geometry;
+     else ++report.runtime_geometry;
     }
     ++report.recorded_frames;return true;
    };

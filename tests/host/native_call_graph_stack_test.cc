@@ -22,19 +22,26 @@ int main(){
   if(w.report.walk_complete){
    assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
    const auto*stream=w.scanner.Frames(w.prepared);assert(stream);
+   size_t checked_managed=0;
    for(const auto&frame:*stream)if(frame.physical_boundary){
     assert(frame.geometry.size==64&&frame.return_pc==0x123450&&frame.return_slot==static_cast<uintptr_t*>(frame.quick)+7);
     const auto saved=*frame.return_slot;*frame.return_slot^=16;
     assert(!w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));*frame.return_slot=saved;
     assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+    if(frame.kind==native_call_graph_stack::FrameKind::Managed){
+     // A physical managed frame's saved PC must be current, but it supplies
+     // no native-return continuation ordinal or native permission by itself.
+     assert(frame.carrier_method==frame.method&&frame.return_carrier==SIZE_MAX);
+    }
     if(frame.return_carrier!=SIZE_MAX){
      const auto&next=(*stream)[frame.return_carrier];auto*slot=static_cast<void**>(next.quick);
      const auto outer=*slot;*slot=nullptr;
      assert(!w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));*slot=outer;
      assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
     }
-    break;
+    checked_managed+=frame.kind==native_call_graph_stack::FrameKind::Managed;
    }
+   assert(checked_managed==w.report.managed_geometry);
   }
   if(!w.scenario&&w.report.walk_complete){
    // Original continuation addresses outside the frame, inside the method
@@ -43,7 +50,7 @@ int main(){
    for(uintptr_t offset:{uintptr_t(64),uintptr_t(0),uintptr_t(57)}){
     return_address_offset=offset;
     const auto refused=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
-    assert(refused.walk_complete&&!refused.native_geometry&&!refused.runtime_geometry);
+    assert(refused.walk_complete&&!refused.managed_geometry&&!refused.native_geometry&&!refused.runtime_geometry);
     const auto*stream=w.scanner.Frames(w.prepared);assert(stream);
     for(const auto&frame:*stream)assert(!frame.physical_boundary&&!frame.return_slot&&!frame.return_pc);
    }
@@ -53,7 +60,7 @@ int main(){
   }
   forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==os);return true;};
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
- assert(work.report.walk_complete&&work.report.registered_threads==3&&work.report.visited_threads==3&&work.report.selected_quick==2&&work.report.selected_shadow==1&&work.report.drain_required&&!work.report.selected_drained&&work.report.native_boundaries==1&&work.report.runtime_boundaries==1&&work.report.transitions==2&&work.report.boundary_owners_required&&work.report.native_geometry==1&&work.report.runtime_geometry==1);
+ assert(work.report.walk_complete&&work.report.registered_threads==3&&work.report.visited_threads==3&&work.report.selected_quick==2&&work.report.selected_shadow==1&&work.report.drain_required&&!work.report.selected_drained&&work.report.native_boundaries==1&&work.report.runtime_boundaries==1&&work.report.transitions==2&&work.report.boundary_owners_required&&work.report.managed_geometry==2&&work.report.native_geometry==1&&work.report.runtime_geometry==1);
  frames[0][0].shadow=frames[0][1].shadow=true;work.scenario=1;
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
  assert(work.report.walk_complete&&work.report.selected_drained&&!work.report.drain_required&&work.report.selected_shadow==3&&work.report.boundary_owners_required);

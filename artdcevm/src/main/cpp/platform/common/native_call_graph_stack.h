@@ -21,6 +21,8 @@ struct Frame {
  uint32_t index=UINT32_MAX,flags=0;
  native_runtime_frame::FrameInfo geometry{};
  uintptr_t*return_slot=nullptr;uintptr_t return_pc=0;
+ // Physical outer frame only, including managed Java. Logical inline
+ // cursors share a carrier but cannot claim its independent geometry.
  bool physical_boundary=false;
  // Next cursor in this complete walk whose physical stack address and PC
  // match the original boundary's return. This is a carrier fact, including
@@ -32,7 +34,7 @@ struct Frame {
 struct Report {
  size_t registered_threads=0,visited_threads=0,java_frames=0,selected_quick=0,selected_shadow=0;
  size_t native_boundaries=0,runtime_boundaries=0,transitions=0;
- size_t recorded_frames=0,native_geometry=0,runtime_geometry=0;
+ size_t recorded_frames=0,managed_geometry=0,native_geometry=0,runtime_geometry=0;
  size_t native_continuations=0,runtime_continuations=0;
  bool walk_complete=false,drain_required=false,selected_drained=false;
  bool boundary_owners_required=false;const char*failure=nullptr;
@@ -94,7 +96,7 @@ class Service final {
  template<class Base>bool Walk(void*,const native_source_stop::Session&,void*,Prepared&,
   const modern_field_metadata::ReadContext&,Report&)const noexcept;
  bool SelectionSame(const Prepared&)const noexcept;
- native_runtime_frame::Service boundaries_;
+ native_runtime_frame::Service geometry_;
  stack_visitor_service::Service stack_;stack_visitor_service::Declaration declaration_{};
  abi::arm64::context::Create create_=nullptr;bool bound_=false;
 };
