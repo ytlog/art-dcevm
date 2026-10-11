@@ -20,7 +20,12 @@ void* thread_list=reinterpret_cast<void*>(0x4400);
 jobject thread=reinterpret_cast<jobject>(0x5500);
 jclass klass=reinterpret_cast<jclass>(0x6600);
 jmethodID method=reinterpret_cast<jmethodID>(0x7700);
-void* listener_proxy=nullptr;void* attach_proxy=nullptr;
+void* listener_proxy=nullptr;void* attach_proxy=nullptr;void*heap_proxy=nullptr;
+void*heap=reinterpret_cast<void*>(0xaa00);bool heap_wrong_thread=false;int heap_calls=0,heap_originals=0;
+void*Current(){return reinterpret_cast<void*>(heap_wrong_thread?0x9910:0x9900);}
+void Collect(void*receiver,bool clear,int32_t cause){
+ assert((receiver==heap||!receiver||receiver==reinterpret_cast<void*>(0xaa10))&&clear==(mode=="heap-clear")&&cause==(mode=="heap-cause"?2:3));++heap_originals;
+}
 int attach_calls=0,detach_calls=0;
 JNIEnv jni{};JavaVM vm{};jvmtiEnv owned_env{};
 alignas(8) unsigned char runtime_storage[8192]{};
@@ -47,6 +52,8 @@ struct Hooks:HookEngine {
    return reinterpret_cast<void*>(Original);
   if(!std::strcmp(name,"_ZN3art16ScopedSuspendAllC2EPKcb"))return reinterpret_cast<void*>(Construct);
   if(!std::strcmp(name,"_ZN3art16ScopedSuspendAllD2Ev"))return reinterpret_cast<void*>(Destroy);
+  if(!std::strcmp(name,"_ZN3art2gc4Heap14CollectGarbageEbNS0_7GcCauseE"))return mode=="heap-missing"?nullptr:reinterpret_cast<void*>(Collect);
+  if(!std::strcmp(name,"_ZN3art6Thread14CurrentFromGdbEv"))return reinterpret_cast<void*>(Current);
   if(!std::strcmp(name,"_ZN3art7Runtime9instance_E"))return mode=="missing-runtime"?nullptr:&runtime;
   if(!std::strcmp(name,"_ZN3art7Runtime19AttachCurrentThreadEPKcbP8_jobjectbb"))
    return (mode=="legacy"||mode=="attach-missing")?nullptr:reinterpret_cast<void*>(AttachOriginal);
@@ -58,13 +65,16 @@ struct Hooks:HookEngine {
   ++hook_installs;
   if(target!=reinterpret_cast<void*>(Original)&&mode=="attach-install-failure")return nullptr;
   if(target==reinterpret_cast<void*>(Original))listener_proxy=replacement;
+  else if(target==reinterpret_cast<void*>(Collect))heap_proxy=replacement;
   else attach_proxy=replacement;
   *original=(target!=reinterpret_cast<void*>(Original)&&mode=="attach-missing-original")?nullptr:target;return target;
  }
  bool Remove(void*,std::string*)override {assert(false);return false;}
 };
 jint JNICALL GetEnv(JavaVM* actual,void** output,jint version) {
- assert(actual==&vm&&version==JVMTI_VERSION_1_2);
+ assert(actual==&vm);
+ if(version==JNI_VERSION_1_6){*output=&jni;return JNI_OK;}
+ assert(version==JVMTI_VERSION_1_2);
  if(mode=="getenv-failure")return JNI_EVERSION;
  if(mode=="getenv-missing") {*output=nullptr;return JNI_OK;}
  *output=&owned_env;return JNI_OK;
@@ -107,6 +117,18 @@ jvmtiError JNICALL Events(jvmtiEnv* actual,jvmtiEventMode event_mode,jvmtiEvent 
   if(mode=="receiver-conflict")invoke(reinterpret_cast<void*>(0x8800),&owned_env,4,ListenerType::kRegularListener);
  }
  return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL ForceGC(jvmtiEnv*actual){
+ assert(actual==&owned_env&&!closed);++heap_calls;
+ if(mode=="heap-bypassed")return JVMTI_ERROR_NONE;
+ auto invoke=reinterpret_cast<void(*)(void*,bool,int32_t)>(heap_proxy);
+ heap_wrong_thread=mode=="heap-thread";
+ invoke(mode=="heap-null"?nullptr:heap,mode=="heap-clear",mode=="heap-cause"?2:3);
+ if(mode=="heap-conflict")invoke(reinterpret_cast<void*>(0xaa10),false,3);
+ if(mode=="heap-repeat")invoke(heap,false,3);
+ heap_wrong_thread=false;
+ if(mode=="heap-pending")pending=true;
+ return mode=="heap-error"?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Dispose(jvmtiEnv* actual) {
  assert(actual==&owned_env&&!artdcevm::runtime_services::active);++dispose_calls;closed=true;
@@ -153,7 +175,7 @@ int main(int argc,char** argv) {
  JNIInvokeInterface_ invocation{};invocation.GetEnv=GetEnv;invocation.AttachCurrentThread=AttachPublic;invocation.DetachCurrentThread=DetachPublic;vm.functions=&invocation;
  jvmtiInterface_1_ functions{};
  functions.AddCapabilities=AddCapabilities;functions.SetEventCallbacks=SetCallbacks;
- functions.SetEventNotificationMode=Events;functions.DisposeEnvironment=Dispose;
+ functions.SetEventNotificationMode=Events;functions.DisposeEnvironment=Dispose;functions.ForceGarbageCollection=ForceGC;
  owned_env.functions=&functions;
  JNINativeInterface_ native{};native.ExceptionCheck=ExceptionCheck;native.GetJavaVM=PublicVm;native.ExceptionClear=ExceptionClear;
  native.FindClass=FindClass;native.GetStaticMethodID=GetMethod;native.CallStaticObjectMethodV=CallStatic;
@@ -180,7 +202,7 @@ int main(int argc,char** argv) {
   assert(output.runtime==runtime&&output.instrumentation==instrumentation);
   assert(output.receivers.class_linker==class_linker&&output.receivers.jni_id_manager==jni_manager);
   assert(output.receivers.thread_list==thread_list&&output.receivers.java_vm==&vm);
-  assert(!output.receivers.heap&&!output.receivers.jit&&!output.receivers.jit_code_cache);
+  assert(output.receivers.heap==heap&&!output.receivers.jit&&!output.receivers.jit_code_cache&&heap_calls==1&&heap_originals==1);
  } else {
   assert(!ok&&!error.empty());
   assert(output.runtime==before.runtime&&output.instrumentation==before.instrumentation&&

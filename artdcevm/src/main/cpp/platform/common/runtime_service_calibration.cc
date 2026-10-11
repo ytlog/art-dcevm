@@ -1,4 +1,5 @@
 #include "platform/common/runtime_service_calibration.h"
+#include "platform/common/runtime_heap_receiver.h"
 #include "platform/abi/arm64/common/instrumentation.h"
 #include "platform/common/runtime_receiver_probe.h"
 #include "platform/common/runnable_executor.h"
@@ -124,13 +125,15 @@ bool CalibrateRuntimeServices(HookEngine& hooks,JNIEnv* env,Snapshot* output,
   void* runtime=nullptr;
   if(!runtime_instance::Calibrate(hooks,observed.java_vm,&runtime,error))return false;
   if(env->ExceptionCheck())return Fail(error,"Pending JNI exception after Runtime service observation");
+  void*heap=nullptr;
+  if(!runtime_heap_receiver::Calibrate(hooks,env,observed.java_vm,owned.env,&heap,error))return false;
   if(!owned.Close(error))return false;
   // Every published receiver comes from its independent original public path.
   // Runtime identity is proven through public VM attachment, without reading
-  // vendor/Mainline Runtime layout. No unobserved Heap/JIT slot is authorized.
+  // vendor/Mainline Runtime layout. Heap came from public ForceGC; no unobserved JIT slot is authorized.
   View view{};
   view.class_linker=observed.class_linker;view.jni_id_manager=observed.jni_id_manager;
-  view.thread_list=observed.thread_list;view.java_vm=observed.java_vm;
+  view.thread_list=observed.thread_list;view.java_vm=observed.java_vm;view.heap=heap;
   *output={runtime,observation.instrumentation,view};
   return true;
 }

@@ -32,6 +32,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   target_sources(artdcevm PRIVATE platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc
     platform/common/object_replacement_map.cc
+    platform/common/runtime_heap_receiver.cc
     platform/common/runtime_service_calibration.cc
     platform/common/runtime_instance_probe.cc
     platform/common/runtime_receiver_probe.cc
