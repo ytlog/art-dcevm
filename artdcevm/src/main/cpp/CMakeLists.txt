@@ -153,6 +153,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/abi/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc
     platform/common/modern_final_field_guard.cc
+    platform/common/production_stack_stream.cc
     platform/common/production_final_write_calibration.cc
     platform/common/native_final_write_access.cc
     platform/common/native_final_write_guard.cc

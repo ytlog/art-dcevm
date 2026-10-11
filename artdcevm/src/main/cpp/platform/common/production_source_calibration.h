@@ -12,6 +12,7 @@
 #include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_receiver_listener.h"
 #include "platform/common/native_receiver_class_source.h"
+#include "platform/common/production_stack_stream.h"
 #include "platform/common/native_final_write_access.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
@@ -38,8 +39,11 @@ class SourceCalibration final {
  retirement::Owners Retired()noexcept{return {membership_,retired_fields_,retired_methods_};}
  native_interpretation_registry::Registry&Interpretation()noexcept{return interpretation_;}
  native_reference_decoder::Decoder&References()noexcept{return references_;}
- // Constructor storage only; actual receiver events and complete stopped
- // frame walks must independently prove their own consumers.
+ // Actual complete stopped stream/root join; each transaction must rescan in
+ // its own stop and separately discharge native/compiled execution obligations.
+ const native_call_graph_stack::Service*StackService()const noexcept{return stack_stream_.completed?&stack_service_:nullptr;}
+ const StackStreamObservation&StackObservation()const noexcept{return stack_stream_;}
+ // Constructor storage only; invocation events remain independently proven.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
  // ReadWindow still requires its caller-owned live native mapping authority.
  receiver_guard::ClassSource*ReceiverClassesSource()noexcept{return receiver_classes_calibrated_?&receiver_classes_:nullptr;}
@@ -67,6 +71,7 @@ class SourceCalibration final {
  bool PrepareInterpretation(JNIEnv*,std::string*);
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
+ bool PrepareStackStream(JNIEnv*,std::string*);
  bool PrepareReceiverClasses(JNIEnv*,std::string*);
  struct ReceiverClasses;
  static bool ObserveReceiverClasses(const runnable_jni::Context&,void*);
@@ -111,6 +116,8 @@ class SourceCalibration final {
  bool references_bound_=false;
  stack_visitor_service::Declaration stack_declaration_=stack_visitor_service::Declaration::kAndroid12;
  bool stack_calibrated_=false;
+ native_call_graph_stack::Service stack_service_;
+ StackStreamObservation stack_stream_{};bool stack_service_bound_=false;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;
  receiver_guard::SourceProducer receiver_producer_;
