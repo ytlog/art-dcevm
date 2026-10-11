@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：Phase 1–2 已实现并通过首台 Android 16 / API 36 设备验证；Phase 3–5 尚未完成。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：方案已确定，旧代码已清除，Phase 1–2 实施中，尚未通过设备验证。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -26,22 +26,18 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ## 符号证据
 
-以下命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找，这些引擎符号不依赖 `.gnu_debugdata`：
+以下命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找，不依赖 `.gnu_debugdata`：
 
 - `libopenjdkjvmti.so`：`Redefiner::RedefineClasses`、`Redefiner::StructurallyRedefineClasses`；`ClassRedefinition::CheckClass`、`CheckFields`、`CheckMethods`、`RecordNewFieldAdded`、`RecordNewMethodAdded`、`CollectNewFieldAndMethodMappings`、`AllocateNewClassObject`、`FinishNewClassAllocations`、`CollectAndCreateNewInstances`、`UpdateClassStructurally`；`HeapExtensions::ReplaceReferences`。
 - `libart.so`：`Runtime::VisitReflectiveTargets`、`Instrumentation::DeoptimizeAllThreadFrames`、`jni::JniIdManager::DecodeFieldId`、`DecodeMethodId`。
 
-标准 JVMTI 表的实际入口是 `JvmtiFunctions::RedefineClasses`（固定声明见 [AOSP OpenjdkJvmTi.cc](https://android.googlesource.com/platform/art/+/master/openjdkjvmti/OpenjdkJvmTi.cc)）。其完整命名符号在这 27 套库的 `.gnu_debugdata` 中均存在。首轮 Android 16 测试证明：只 Hook 导出的 `Redefiner::RedefineClasses` 不会覆盖标准表调用，校验点收到的批次上下文为空；改为 Hook 命名 wrapper 后全部 MVP 场景通过。可能绕过导出函数的优化构建不能仅凭 `.dynsym` 中存在该函数来认定路由成功。
-
-MVP 通过 `symbols::Find()` 请求 ShadowHook 按名字解析该 wrapper（`.dynsym`、`.symtab` 或 `.gnu_debugdata`），并核对解析结果与公开 JVMTI 表入口一致；仍不推算地址或字段偏移。其余符号只查 `.dynsym`。目录合计 18 个命名符号，符号检查只核对名称，不解析地址。
-
-复核命令：`python3 tools/check-structural-symbols.py`。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少 MVP 必需符号时初始化失败。
+复核命令：`python3 tools/check-structural-symbols.py`。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少任一符号的 ART 构建只开放公开 JVMTI 能力。
 
 ## 接管点
 
 | ART 决策点 | ART 原行为 | 增强库行为 |
 | --- | --- | --- |
-| `JvmtiFunctions::RedefineClasses`（标准表入口） | 普通重定义，结构变化一律拒绝 | 路由到原始 `StructurallyRedefineClasses`，保留调用者的 `jvmtiEnv*`、能力检查和 `ClassFileLoadHook`。仅方法体变化时 ART 仍走原地更新路径，行为不变 |
+| `Redefiner::RedefineClasses` | 普通重定义，结构变化一律拒绝 | 路由到原始 `StructurallyRedefineClasses`，保留调用者的 `jvmtiEnv*`、能力检查和 `ClassFileLoadHook`。仅方法体变化时 ART 仍走原地更新路径，行为不变 |
 | `CheckClass` | 修饰符、父类、接口不得变化 | 自有策略：允许修饰符和继承关系变化，冲突时（加 final 与已加载子类冲突等）拒绝 |
 | `CheckFields` / `CheckMethods` | 只允许新增，修饰符不得变化 | 自有策略：允许删除、类型和签名变化、修饰符变化；有任何结构变化时调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，确保 ART 走结构路径 |
 | `CollectNewFieldAndMethodMappings` | 找不到同名同签名方法时 `CHECK` 失败 | 自有映射：按名称加类型或签名匹配；退役成员映射到**墓碑成员** |
@@ -72,7 +68,7 @@ MVP 通过 `symbols::Find()` 请求 ShadowHook 按名字解析该 wrapper（`.dy
 | 内容 | 位置 |
 | --- | --- |
 | JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
-| ShadowHook 封装（官方 Maven prefab，按声明选择命名 ELF 符号表） | `hooks/shadow_hook.{h,cc}` |
+| ShadowHook 封装（官方 Maven prefab，只查 `.dynsym`） | `hooks/shadow_hook.{h,cc}` |
 | 接管点命名符号（11–17 共用） | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
 | 11–17 共用的 `ClassRedefinition` / `Redefiner` / `DexFile` 前缀声明 | `platform/abi/arm64/common/redefinition.h`；确有版本差异的声明放 `platform/abi/arm64/androidNN/` |
 | 引擎：前提检查、Hook 安装、路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
@@ -103,10 +99,10 @@ MVP 通过 `symbols::Find()` 请求 ShadowHook 按名字解析该 wrapper（`.dy
 
 1. **Install**（幂等，由 agent 的互斥锁串行化）：
    1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
-   2. 通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：标准表 wrapper 与结构入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号。
-   3. 保存结构入口和三个校验点的原始地址；核对命名标准入口与公开 JVMTI 表一致。用 `hooks::Install()` 先替换三个校验点，最后替换标准入口。任一步失败，用 `hooks::Remove()` 撤销已安装的部分。
+   2. 通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：两个入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号。
+   3. 保存结构入口和三个校验点的原始地址；用 `hooks::Install()` 替换标准入口和三个校验点。任一步失败，用 `hooks::Remove()` 撤销已安装的部分。
 2. **标准入口**：
-   1. 保留调用者的 `can_redefine_classes` 检查。进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
+   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）。
    3. 原样调用原始 `StructurallyRedefineClasses`，返回后清理上下文（RAII），返回 ART 的结果。
 
@@ -114,7 +110,7 @@ MVP 通过 `symbols::Find()` 请求 ShadowHook 按名字解析该 wrapper（`.dy
 3. **CheckClass**：
    1. 按 `redefinition.h` 取出 `klass` 和 `dex_file`。上下文中找不到该类时，调用原函数。
    2. 由 `DexFilePrefix` 构造 `DexView`（文件大小取自 DEX 头），用 `ReadClassDeclarations` 读取新类。读取失败或描述符不一致时，调用原函数。
-   3. 调用 `structural_policy::Evaluate`：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时先保留原 `CheckClass` 对类锁和原始 ClassDef 修饰符的检查（公开 JVMTI 对嵌套类使用 InnerClass 标志，不能直接比较全部位）；通过后按 `ClassRedefinition*` 在线程局部保存决策，返回 true。
+   3. 调用 `structural_policy::Evaluate`：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存决策，返回 true。
 4. **CheckFields / CheckMethods**：有对应决策时，按 `fields_structural` / `methods_structural` 调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，然后返回 true，`CheckMethods` 之后清除决策；没有决策时调用原函数。
 5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`；`memberDeletion`、`memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 为 false；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
 

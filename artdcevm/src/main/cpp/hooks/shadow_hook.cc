@@ -7,10 +7,10 @@ bool Initialize(std::string* error) {
   if (result) *error = shadowhook_to_errmsg(result);
   return result == 0;
 }
-void* FindSymbol(const char* library, const char* symbol, bool include_local) {
+void* FindSymbol(const char* library, const char* symbol) {
   void* handle = shadowhook_dlopen(library);
   if (!handle) return nullptr;
-  void* address = include_local ? shadowhook_dlsym(handle, symbol) : shadowhook_dlsym_dynsym(handle, symbol);
+  void* address = shadowhook_dlsym_dynsym(handle, symbol);
   shadowhook_dlclose(handle);
   return address;
 }

@@ -3,16 +3,12 @@
 
 // Named ART structural-redefinition decision points and services. The mangled
 // names are identical in every collected Android 11--17 arm64 runtime and all
-// live in .dynsym except the public-table wrapper in .gnu_debugdata;
-// tools/check-structural-symbols.py re-verifies this catalog
+// live in .dynsym; tools/check-structural-symbols.py re-verifies this catalog
 // against assets/runtime_lib. Keep one declaration per line in this exact form,
 // the tool parses it.
 namespace artdcevm::symbols::structural {
 
 // Entry routing.
-// OpenjdkJvmTi.cc: the standard JVMTI table points at this wrapper. Optimized
-// builds can bypass the out-of-line Redefiner entry, so hook the wrapper itself.
-inline constexpr NamedSymbol kJvmtiRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti14JvmtiFunctions15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"};
 inline constexpr NamedSymbol kStructurallyRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"};
 
