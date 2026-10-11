@@ -156,14 +156,19 @@ public final class ProductionBootstrap {
     }
     static boolean verifyOrdinarySource(Inputs input, int step) throws Exception {
         Class<?> type = input.ordinarySourceClass;
-        if (type.getDeclaredMethods().length != 3 - step ||
+        if (step < 0 || step > 2 || type.getDeclaredMethods().length != 1 + step ||
             type.getDeclaredField("value").getInt(input.ordinarySourceObject) != 6 ||
             type.getDeclaredField("staticValue").getInt(null) != 17 ||
-            (int) type.getDeclaredMethod("compute").invoke(input.ordinarySourceObject) != 7)
+            !verifyOrdinaryObject(type, input.ordinarySourceObject, step))
             return false;
         Object fresh = type.getDeclaredConstructor().newInstance();
         type.getDeclaredField("value").setInt(fresh, 6);
-        return (int) type.getDeclaredMethod("compute").invoke(fresh) == 7;
+        return verifyOrdinaryObject(type, fresh, step);
+    }
+    private static boolean verifyOrdinaryObject(Class<?> type, Object object, int step) throws Exception {
+        return (int) type.getDeclaredMethod("compute").invoke(object) == 7 &&
+            (step < 1 || (int) type.getDeclaredMethod("second").invoke(object) == 9) &&
+            (step < 2 || (int) type.getDeclaredMethod("first").invoke(object) == 8);
     }
     static Class<?> warmSourceCache(Inputs input) throws Exception {
         return (Class<?>) input.cacheWarm.invoke(null, input.cacheFixture);
@@ -236,10 +241,13 @@ public final class ProductionBootstrap {
         ClassLoader loader = new InMemoryDexClassLoader(ByteBuffer.wrap(original), null);
         Class<?> target = Class.forName("com.github.ytlog.artdcevm.internal.BootstrapAdditive", true, loader);
         byte[] cacheDex = read(application.getAssets().open("artdcevm/bootstrap/cache.dex"));
+        // Bootstrap with the smallest declaration, then add second and first
+        // through ART's original structural extension. Calibration must not
+        // depend on the private deletion commit engine it is establishing.
         byte[][] ordinaryDex = new byte[][] {
-            read(application.getAssets().open("artdcevm/bootstrap/source-original.dex")),
+            read(application.getAssets().open("artdcevm/bootstrap/source-second.dex")),
             read(application.getAssets().open("artdcevm/bootstrap/source-first.dex")),
-            read(application.getAssets().open("artdcevm/bootstrap/source-second.dex"))};
+            read(application.getAssets().open("artdcevm/bootstrap/source-original.dex"))};
         byte[] receiverDex = read(application.getAssets().open("artdcevm/bootstrap/receiver.dex"));
         return new Inputs(dex.toArray(new byte[0][]), target, additive, cacheDex, ordinaryDex, receiverDex);
     }

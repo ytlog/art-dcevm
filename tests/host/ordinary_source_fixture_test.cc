@@ -14,8 +14,14 @@ int main(int argc,char** argv){
  auto bad=live;bad.superclass="LForeign;";assert(!ordinary_source_fixture::Validate(bad,dex,&error));
  bad=live;bad.fields[0].access=2;assert(!ordinary_source_fixture::Validate(bad,dex,&error));
  bad=live;bad.methods[0].name="foreign";assert(!ordinary_source_fixture::Validate(bad,dex,&error));
+ // The former deletion-first sequence would require an already authorized
+ // private commit engine. It must not be accepted as bootstrap calibration.
+ auto reversed=dex;std::swap(reversed[0],reversed[2]);
+ evolution::ClassSchema full;assert(evolution::ReadDexDeclarations(reversed[0],&full,&error));
+ for(auto& member:full.methods)member.access&=0xffffu;
+ assert(!ordinary_source_fixture::Validate(full,reversed,&error));
  auto corrupt=dex;corrupt[1]=dex[0];assert(!ordinary_source_fixture::Validate(live,corrupt,&error));
  corrupt=dex;corrupt[2]=dex[1];assert(!ordinary_source_fixture::Validate(live,corrupt,&error));
  corrupt=dex;corrupt[0].resize(20);assert(!ordinary_source_fixture::Validate(live,corrupt,&error));
- std::cout<<"Actual generated private DEX: public original/complete immutable three-stage declarations, two exact removals, foreign/altered/duplicate/corrupt definitions refuse PASS\n";
+ std::cout<<"Actual generated private DEX: public original/complete immutable three-stage declarations, two exact additions, foreign/altered/duplicate/corrupt definitions refuse PASS\n";
 }

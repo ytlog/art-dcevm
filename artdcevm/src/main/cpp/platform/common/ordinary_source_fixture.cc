@@ -14,7 +14,7 @@ bool Validate(const evolution::ClassSchema& live,const std::array<std::vector<un
  for(size_t i=0;i<schemas.size();++i)if(!evolution::ReadDexDeclarations(dex[i],&schemas[i],error))return false;
  if(!Same(live,schemas[0]))return Fail(error,"Private ordinary source Class differs from its original immutable DEX");
  for(size_t step=0;step<schemas.size();++step){const auto& s=schemas[step];
-  if(s.descriptor!=kDescriptor||s.superclass!="Ljava/lang/Object;"||!s.interfaces.empty()||s.access!=1||s.fields.size()!=2||s.methods.size()!=4-step)
+  if(s.descriptor!=kDescriptor||s.superclass!="Ljava/lang/Object;"||!s.interfaces.empty()||s.access!=1||s.fields.size()!=2||s.methods.size()!=2+step)
    return Fail(error,"Private ordinary source fixture shape differs from the independent declaration");
   size_t instance=0,statik=0;
   for(const auto& f:s.fields){
@@ -31,8 +31,8 @@ bool Validate(const evolution::ClassSchema& live,const std::array<std::vector<un
    else if(m.name=="second"&&m.descriptor=="()I"&&m.access==1)++second;
    else return Fail(error,"Private ordinary source fixture has an unexpected member");
   }
-  if(ctor!=1||compute!=1||first!=(step==0?1u:0u)||second!=(step<2?1u:0u))
-   return Fail(error,"Private ordinary source fixture does not perform its two exact removals");
+  if(ctor!=1||compute!=1||first!=(step==2?1u:0u)||second!=(step>0?1u:0u))
+   return Fail(error,"Private ordinary source fixture does not perform its two exact additions");
  }
  return true;
 }
