@@ -1,4 +1,5 @@
 #include "native_call_graph_stack_fixture.h"
+#include "platform/common/native_managed_stack_stream.h"
 int main(){
  using namespace drain_fixture;std::string error;Environment environment;environment.Prepare(error);
  auto&hooks=environment.hooks;auto&owner_hooks=environment.owner_hooks;auto&metadata=environment.metadata;
@@ -119,6 +120,55 @@ int main(){
  };
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&transition,check_recursive_inline));}
  frames[2].erase(frames[2].begin());
+ // The fragment correspondence consumes all physical and inline cursors,
+ // not merely the head and final zero slot.
+ alignas(16) uintptr_t fragment_words[18]{};maps.Cover(fragment_words);
+ android13::member_access_abi::ShadowFrame shadow0{},shadow1{};maps.Cover(&shadow0);maps.Cover(&shadow1);
+ struct FragmentCheck {modern_field_metadata::ReadContext&read;uintptr_t*words;
+  android13::member_access_abi::ShadowFrame&shadow0,&shadow1;};
+ FragmentCheck fragment_check{read,fragment_words,shadow0,shadow1};
+ const auto check_fragment=[](void*raw,native_source_stop::Session&)noexcept{
+  auto&r=*static_cast<FragmentCheck*>(raw);auto*w=r.words;
+  using Cursor=native_managed_stack_stream::Cursor;using Frame=native_call_graph_stack::Frame;
+  using Kind=native_call_graph_stack::FrameKind;
+  w[0]=w[8]=uintptr_t(old_method);w[7]=0x123450;w[15]=0x456780;w[16]=0;
+  managed_stack_source::Snapshot head;head.tagged_quick=uintptr_t(w);
+  Frame first;first.kind=Kind::Managed;first.method=first.carrier_method=old_method;
+  first.quick=w;first.geometry.size=64;first.physical_boundary=true;first.return_slot=w+7;first.return_pc=w[7];
+  Frame outer=first;outer.quick=w+8;outer.pc=w[7];outer.return_slot=w+15;outer.return_pc=w[15];
+  Frame inlined=outer;inlined.inline_depth=2;inlined.physical_boundary=false;inlined.geometry={};
+  inlined.return_slot=nullptr;inlined.return_pc=0;
+  Frame transition;transition.quick=w+16;transition.pc=w[15];
+  Cursor cursor;assert(cursor.Begin(head)&&cursor.Consume(first,r.read));
+  assert(cursor.Consume(inlined,r.read));inlined.inline_depth=1;assert(cursor.Consume(inlined,r.read));
+  assert(cursor.Consume(outer,r.read)&&!cursor.Complete());
+  assert(cursor.Consume(transition,r.read)&&cursor.Complete());
+  assert(!cursor.Consume(transition,r.read));
+  // Skipped inline cursors, missing outer geometry and disconnected PCs fail.
+  assert(cursor.Begin(head)&&cursor.Consume(first,r.read));inlined.inline_depth=2;
+  assert(cursor.Consume(inlined,r.read)&&!cursor.Consume(outer,r.read)&&!cursor.Complete());
+  assert(cursor.Begin(head)&&cursor.Consume(first,r.read)&&!cursor.Consume(transition,r.read));
+  assert(cursor.Begin(head)&&cursor.Consume(first,r.read));outer.pc^=16;
+  assert(!cursor.Consume(outer,r.read));outer.pc^=16;
+  assert(cursor.Begin(head));w[7]^=16;assert(!cursor.Consume(first,r.read));w[7]^=16;
+  assert(cursor.Begin(head)&&cursor.Consume(first,r.read)&&cursor.Consume(outer,r.read));
+  w[16]=uintptr_t(old_method);assert(!cursor.Consume(transition,r.read));w[16]=0;
+  // Shadow identity and every source link are checked independently.
+  head={};head.shadow=&r.shadow0;r.shadow0.link=&r.shadow1;
+  r.shadow0.method=r.shadow1.method=old_method;
+  Frame shadow;shadow.kind=Kind::Managed;shadow.method=old_method;shadow.shadow=&r.shadow0;
+  assert(cursor.Begin(head)&&cursor.Consume(shadow,r.read));
+  Frame empty;assert(!cursor.Consume(empty,r.read));
+  assert(cursor.Begin(head)&&cursor.Consume(shadow,r.read));shadow.shadow=&r.shadow1;
+  assert(cursor.Consume(shadow,r.read)&&cursor.Consume(empty,r.read)&&cursor.Complete());
+  assert(cursor.Begin(head));shadow.shadow=&r.shadow0;r.shadow0.method=nullptr;
+  assert(!cursor.Consume(shadow,r.read));r.shadow0.method=old_method;
+  head={};assert(cursor.Begin(head)&&cursor.Consume(empty,r.read)&&cursor.Complete());
+  head.tagged_quick=uintptr_t(w+16);transition.pc=0;
+  assert(cursor.Begin(head)&&cursor.Consume(transition,r.read)&&cursor.Complete());
+  assert(cursor.Begin(head));transition.pc=0x456780;assert(!cursor.Consume(transition,r.read));return true;
+ };
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&fragment_check,check_fragment));}
  // Two adjacent physical frames model the original native return carrier.
  // Matching PC alone cannot connect disjoint stack storage, and matching
  // addresses alone cannot connect a different continuation PC.

@@ -3,29 +3,24 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_managed_stack_chain.h"
+#include "platform/common/native_managed_stack_stream.h"
 namespace artdcevm::production_bootstrap {
 namespace {
 bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}
-// Match each actual source fragment's first cursor and terminal transition.
-// This is a chain/stream correspondence, not a continuation or handler grant.
+// Match every logical/physical cursor, including the terminal transition,
+// against the same stopped fragment chain. This is not a native permission.
 bool MatchFragments(const native_managed_stack_chain::Chain&chain,
-    const std::vector<native_call_graph_stack::Frame>&frames,void*self,size_t*out)noexcept{
+    const std::vector<native_call_graph_stack::Frame>&frames,void*self,
+    const modern_field_metadata::ReadContext&read,size_t*out)noexcept{
  if(!out||chain.Thread()!=self||!chain.Fragments()||!chain.Validate())return false;
- size_t fragment=0;bool first=true;
+ size_t fragment=0;bool first=true;native_managed_stack_stream::Cursor cursor;
  for(const auto&frame:frames){
   if(frame.thread!=self)continue;
-  const auto*head=chain.At(fragment);if(!head)return false;
-  const auto quick=head->tagged_quick&~uintptr_t{3};
+  if(first){const auto*head=chain.At(fragment);if(!head||!cursor.Begin(*head))return false;first=false;}
+  if(!cursor.Consume(frame,read))return false;
   if(frame.kind==native_call_graph_stack::FrameKind::Transition){
-   if(quick){if(first||uintptr_t(frame.quick)==0||frame.shadow||!frame.pc)return false;}
-   else if(head->shadow){if(first||frame.quick||frame.shadow||frame.pc)return false;}
-   else if(!first||frame.quick||frame.shadow||frame.pc)return false;
-   ++fragment;first=true;continue;
+   if(!cursor.Complete())return false;++fragment;first=true;
   }
-  if(quick){if(!frame.quick||frame.shadow||(first&&(uintptr_t(frame.quick)!=quick||frame.pc)))return false;}
-  else if(head->shadow){if(!frame.shadow||frame.quick||frame.pc||(first&&frame.shadow!=head->shadow))return false;}
-  else return false;
-  first=false;
  }
  if(!first||fragment!=chain.Fragments()||!chain.Validate())return false;
  *out=fragment;return true;
@@ -78,7 +73,7 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
    if(!native||!managed)return false;
    const auto captured=w.chain.Capture(r.handles,stop,w.self,w.self,r.cache,read);
    size_t transitions=0;
-   if(!captured.complete||!MatchFragments(w.chain,*stream,w.self,&transitions)||
+   if(!captured.complete||!MatchFragments(w.chain,*stream,w.self,read,&transitions)||
       !r.stack.ValidateStream(w.prepared,stop,w.self,read))return false;
    r.observation={frames,roots,captured.fragments,transitions,true};return true;
   },r.error);
