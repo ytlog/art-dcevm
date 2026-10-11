@@ -36,6 +36,10 @@ int main(){std::string error;
  entries.emplace_back(entries[0].first,reinterpret_cast<void*>(0xdeadbeef));
  for(size_t buckets:{size_t{2},size_t{4},size_t{128},size_t{2048}}){ObjectReplacementMap map(entries,buckets);assert(map.Size()==1000);assert(VerifyObjectReplacementMap(map,&error));assert(CheckPlatformMap(map.BorrowedMap(),map.Nodes(),map.Size()));
  const auto& view=*static_cast<const PlatformMap*>(map.BorrowedMap());for(const auto& item:oracle)assert(view.at(item.first)==item.second);
+ no_map_allocations=true;
+ for(const auto& item:oracle)assert(map.Replacement(item.first)==item.second&&map.Maps(item.first,item.second));
+ assert(!map.Replacement(nullptr)&&!map.Replacement(reinterpret_cast<void*>(0x70000008)));
+ no_map_allocations=false;
  std::thread reader([&]{for(unsigned round=0;round<5;++round)for(const auto& item:oracle)assert(view.at(item.first)==item.second);});
  for(unsigned round=0;round<5;++round)for(const auto& item:oracle)assert(view.at(item.first)==item.second);reader.join();}
  ObjectReplacementMap empty({});assert(VerifyObjectReplacementMap(empty,&error));assert(CheckPlatformMap(empty.BorrowedMap(),empty.Nodes(),empty.Size()));
@@ -51,6 +55,9 @@ int main(){std::string error;
   assert(moving.Nodes()==nodes_before&&moving.BucketCount()==buckets_before&&moving.Size()==1000);
   assert(VerifyObjectReplacementMap(moving,&error));assert(CheckPlatformMap(moving.BorrowedMap(),moving.Nodes(),moving.Size()));
   const auto& map=*static_cast<const PlatformMap*>(moving.BorrowedMap());for(size_t i=0;i<roots.values.size();i+=2)assert(map.at(roots.values[i])==roots.values[i+1]);
+  no_map_allocations=true;
+  for(size_t i=0;i<roots.values.size();i+=2)assert(moving.Replacement(roots.values[i])==roots.values[i+1]);
+  no_map_allocations=false;
  }
  // Malformed borrowed views must fail before calling the real ART consumer.
  ObjectReplacementMap damaged(entries,128);

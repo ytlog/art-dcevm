@@ -127,7 +127,8 @@ bool Service::CanRefresh(const prepared_roots::Resolver&resolver)const noexcept{
  return true;
 }
 void Service::Refresh(const prepared_roots::Resolver&resolver)noexcept{
- if(!CanRefresh(resolver))std::abort();final_validated_=false;plan_roots_.Refresh(resolver);map_->RefreshManagedRoots(resolver);
+ if(!CanRefresh(resolver))std::abort();final_validated_=false;replacement_roots_={};
+ plan_roots_.Refresh(resolver);map_->RefreshManagedRoots(resolver);
  for(auto*methods:deps_.methods)methods->RefreshManagedRoots(resolver);refreshed_=true;
 }
 bool Service::Window(bool final)const noexcept{
@@ -153,6 +154,13 @@ bool Service::ValidatePrepared(const source_commit::Plan&plan)const{
  final_validated_=false;
  return ValidateFor(plan,false);
 }
+bool Service::ObserveReplacementRoots(bool final)noexcept{
+ replacement_roots_={};replacement_roots_final_=final;
+ if(!registered_||!refreshed_||begun_||!map_||!Window(final)||!PlanLayoutMatches(*plan_))return false;
+ replacement_roots_=native_replacement_root_census::Observe(*map_,*deps_.root_provenance,
+   *deps_.stop,deps_.self,*deps_.read);
+ return replacement_roots_.completed&&Window(final);
+}
 bool Service::ValidateFor(const source_commit::Plan&plan,bool final,bool schema_guards)const{
  if(begun_||!registered_||!refreshed_||!Window(final)||!PlanLayoutMatches(plan)||!map_||
     !(final?deps_.execution->ValidateFinalProof(*deps_.stop,*deps_.read):deps_.execution->ValidateCollectedProof(*deps_.stop,*deps_.read))||
@@ -162,7 +170,8 @@ bool Service::ValidateFor(const source_commit::Plan&plan,bool final,bool schema_
     (schema_guards&&!deps_.schema->VerifyFrozenGuards(plan,*deps_.read))||
     !deps_.initialization->Validate(plan,deps_.read)||
     !deps_.reflection->Validate(*deps_.reflection_plan,nullptr,true)||
-    !object_replacement::VerifyObjectReplacementMap(*map_,nullptr))return false;
+    !object_replacement::VerifyObjectReplacementMap(*map_,nullptr)||
+    !replacement_roots_.completed||replacement_roots_final_!=final)return false;
 
  if(map_->Size()!=plan.old_classes.size()+plan.old_instances.size())return false;
  for(size_t i=0;i<plan.old_classes.size();++i){
@@ -358,6 +367,8 @@ bool SourceOwner::Collected(native_hierarchy_session::Session&hierarchy,const ch
   return deny("call-graph-commit-collected-boundary-member-census-refused");
  const auto roots=deps.execution->ObserveFrameRoots(stop_,*deps.read,*deps.root_provenance);
  if(!roots.completed)return deny(roots.failure?roots.failure:"call-graph-commit-collected-frame-root-stream-refused");
+ if(!service_->ObserveReplacementRoots(false))
+  return deny("call-graph-commit-collected-replacement-root-census-refused");
  if(!hierarchy.Collected(*service_->plan_,nullptr))
   return deny("call-graph-commit-collected-hierarchy-seal-refused");
  // Hierarchy requests require the sealed, independently refreshed authority.
@@ -416,7 +427,7 @@ bool SourceOwner::ContinueCollected(const runnable_jni::Context&context,
 void SourceOwner::Finalize(void*driver,const transaction_root::Holder*holder)noexcept{
  if(!SourceMatches(driver,holder)||!stop_.IsFinalWindow(self_)||service_->begun_||
     !service_->registered_||!service_->PlanLayoutMatches(*service_->plan_)||!RefreshRoots()||
-    !authority_||!authority_->VerifyFinal(*service_->plan_,0))std::abort();
+    !authority_)std::abort();
  const auto&deps=service_->deps_;
  const auto report=deps.execution->ValidateFinal(stop_,loading_,driver,*deps.read);
  if(report.status!=native_call_graph_execution::Status::FinalDrained||
@@ -425,6 +436,8 @@ void SourceOwner::Finalize(void*driver,const transaction_root::Holder*holder)noe
  const auto*frames=deps.execution->ValidatedFrames(stop_,*deps.read);
  if(!frames||!deps.schema->VerifyFrozenBoundaryMembers(*service_->plan_,*frames,*deps.read))std::abort();
  if(!deps.execution->ObserveFrameRoots(stop_,*deps.read,*deps.root_provenance).completed||
+    !service_->ObserveReplacementRoots(true)||
+    !authority_->VerifyFinal(*service_->plan_,0)||
     !service_->Validate(*service_->plan_))std::abort();
 }
 std::unique_ptr<source_commit::Services>SourceOwner::TakeFinalService(const void*holder,
@@ -477,7 +490,7 @@ bool SourceOwner::DropPreparedReferences(void*driver)noexcept{
 void SourceOwner::InvalidateRoots()noexcept{
  if(root_registry_)root_registry_->Invalidate();
  if(ledger_)ledger_->InvalidateRoots();
- if(service_){service_->refreshed_=false;service_->final_validated_=false;}
+ if(service_){service_->refreshed_=false;service_->final_validated_=false;service_->replacement_roots_={};}
 }
 void SourceOwner::Close()noexcept{
  InvalidateRoots();

@@ -4,6 +4,7 @@
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/native_typed_heap_walk.h"
 #include "platform/common/object_replacement_map.h"
+#include "platform/common/native_replacement_root_census.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/prepared_root_registry.h"
 #include "platform/common/native_source_compilation.h"
@@ -86,6 +87,7 @@ class Service final:public source_commit::Services,
  bool PlanLayoutMatches(const source_commit::Plan&)const noexcept;
  bool Window(bool final=true)const noexcept;
  bool ValidateFor(const source_commit::Plan&,bool final,bool schema_guards=true)const;
+ bool ObserveReplacementRoots(bool final)noexcept;
  void RequireCommit()const noexcept;
  source_commit::Plan*plan_;Dependencies deps_;
  // Root bindings address vector elements. Freeze the storage layout before
@@ -96,6 +98,8 @@ class Service final:public source_commit::Services,
  bool abstract_instances_=false;
  prepared_roots::Bindings plan_roots_;
  std::unique_ptr<object_replacement::ObjectReplacementMap>map_;
+ native_replacement_root_census::Report replacement_roots_{};
+ bool replacement_roots_final_=false;
  mutable bool final_validated_=false,begun_=false,execution_released_=false,replaced_=false,restored_=false,cache_cleared_=false;
  bool registration_started_=false,registered_=false,refreshed_=false;
 };

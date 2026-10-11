@@ -22,6 +22,7 @@ class ObjectReplacementMap {
   // Borrowed native-only lookup after verification; no allocation or platform
   // STL call. Keys may have moved during the operation's preceding GC refresh.
   bool Maps(void* source,void* destination)const noexcept;
+  void* Replacement(void* source)const noexcept;
   bool CollectManagedRoots(const prepared_roots::Registrar&);
   bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
   void RefreshManagedRoots(const prepared_roots::Resolver&)noexcept;

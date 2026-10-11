@@ -58,12 +58,15 @@ void ObjectReplacementMap::Rebuild()noexcept{
   for(auto& node:nodes_){size_t bucket=node.hash&mask;if(!buckets_[bucket])buckets_[bucket]=previous;previous->next=&node;previous=&node;}
 }
 bool ObjectReplacementMap::Maps(void*source,void*destination)const noexcept{
- if(!source||!destination||buckets_.empty())return false;
+ return destination&&Replacement(source)==destination;
+}
+void* ObjectReplacementMap::Replacement(void*source)const noexcept{
+ if(!source||buckets_.empty())return nullptr;
  const size_t mask=buckets_.size()-1,bucket=HashReplacementPointer(source)&mask;
  auto current=std::lower_bound(nodes_.begin(),nodes_.end(),bucket,[mask](const auto&node,size_t value){return (node.hash&mask)<value;});
  for(;current!=nodes_.end()&&(current->hash&mask)==bucket;++current)
-  if(current->key==source)return current->value==destination;
- return false;
+  if(current->key==source)return current->value;
+ return nullptr;
 }
 bool VerifyObjectReplacementMap(const ObjectReplacementMap& map,std::string* error) {
   const auto& view=*static_cast<const object_map_abi::Map*>(map.BorrowedMap());
