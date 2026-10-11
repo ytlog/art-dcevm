@@ -2,6 +2,7 @@
 #include "shadowhook.h"
 #include "support/declared_symbol_lookup.h"
 namespace artdcevm {
+HookEngine& ProcessHookEngine(){static ShadowHookEngine hooks;return hooks;}
 bool ShadowHookEngine::Initialize(std::string* error) {
   int result = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
   if (result) *error = shadowhook_to_errmsg(result);

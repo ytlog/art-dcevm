@@ -1,5 +1,6 @@
 #pragma once
 #include "api/runtime_backend.h"
+#include "api/hook_engine.h"
 #include <memory>
 #include <jvmti.h>
 namespace artdcevm::production_bootstrap {
@@ -31,9 +32,9 @@ class Engine {
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;
 };
-// Private construction remains unavailable until the replacement transaction
-// callgraph/bootstrap proves execution safety. Preparation currently returns
-// nullptr with a diagnostic before any JNI, hooks, calibration or mutation.
-// Pure installed-DEX metadata helpers live in bootstrap_dex_oracle.h/.cc.
-std::unique_ptr<Engine> Prepare(JNIEnv*,jvmtiEnv*,jobject,std::string*);
+// Run the sole source calibration through the startup mechanism owner. This
+// may install retained observers and evolve only the SDK calibration fixtures.
+// No private Engine is published until the full transaction's execution and
+// receiver proofs are connected. A preparation failure retains its diagnostic.
+std::unique_ptr<Engine> Prepare(HookEngine&,JNIEnv*,jvmtiEnv*,jobject,std::string*);
 }

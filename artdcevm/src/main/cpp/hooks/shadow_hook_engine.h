@@ -1,6 +1,9 @@
 #pragma once
 #include "api/hook_engine.h"
 namespace artdcevm {
+// Startup gate, final-DEX observation and transaction calibration share this
+// process-lifetime mechanism owner; callers still prove their own scopes.
+HookEngine& ProcessHookEngine();
 class ShadowHookEngine final : public HookEngine {
  public:
   bool Initialize(std::string* error) override;

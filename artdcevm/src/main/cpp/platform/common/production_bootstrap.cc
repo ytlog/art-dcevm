@@ -1,14 +1,19 @@
 #include "platform/common/production_bootstrap.h"
 #include "platform/common/contextual_field_id.h"
+#include "platform/common/production_source_calibration.h"
 
 namespace artdcevm::production_bootstrap {
-std::unique_ptr<Engine> Prepare(JNIEnv*,jvmtiEnv*,jobject,std::string* error){
- // The retired private bootstrap authorized transactions through independent
- // JIT/compiled-frame episodes and the old source RunState. Those owners have
- // been removed. Ordinary metadata or a runtime receiver match cannot replace
- // transaction-wide execution safety, so do not construct a partial engine or
- // run any calibration/redefinition before rejecting private initialization.
- if(error)*error="Private evolution unavailable: transaction callgraph bootstrap is not integrated after removal of legacy JIT/AOT, compiled-frame and source lifecycle owners; public JVMTI body/additive operations remain available";
+std::unique_ptr<Engine> Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*error){
+ std::string ignored;if(!error)error=&ignored;
+ if(!env||!ti||!fixture){*error="Private evolution preparation requires current JNI/JVMTI and the SDK fixture";return nullptr;}
+ if(env->ExceptionCheck()){*error="Private evolution preparation preserves the pending JNI exception";return nullptr;}
+ if(!hooks.Initialize(error))return nullptr;
+ auto*source=SourceCalibration::Prepare(hooks,env,ti,fixture,error);
+ if(!source){if(error->empty())*error="Private evolution source calibration did not complete";return nullptr;}
+ // Source calibration is now reachable, but its samples do not replace the
+ // full union/stack/native-boundary and permanent receiver permissions. Never
+ // publish a partial Engine whose Apply could bypass those requirements.
+ *error="Private evolution source calibration completed; transaction construction still requires complete stopped-stack/native-boundary proof and permanent receiver protection";
  return nullptr;
 }
 }

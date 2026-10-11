@@ -19,7 +19,7 @@ using artdcevm::TransactionMutex;
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   // This executes before VMDebug.attachAgent/GetEnv can initialize the plugin.
   // A native loader image is pinned even when the lifetime proof rejects it.
-  static artdcevm::ShadowHookEngine hooks;
+  auto& hooks=artdcevm::ProcessHookEngine();
   static std::string mapping;static void* plugin_image=artdcevm::redefinition_gate::MapPluginForStartup(hooks,vm,&mapping);
   __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pluginMapping=%s mapped=%d",mapping.c_str(),plugin_image!=nullptr);
   if(plugin_image){
@@ -38,7 +38,7 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   if (backend) return JNI_OK;
   // Retry diagnostics before creating our Env; an already initialized plugin
   // cannot replace the pristine proof obtained by JNI_OnLoad before attach.
-  static artdcevm::ShadowHookEngine first_live_hooks;
+  auto& first_live_hooks=artdcevm::ProcessHookEngine();
   std::string gate_error;
   if(artdcevm::redefinition_gate::InstallFirstLive(first_live_hooks,vm,&gate_error))
     (void)artdcevm::production_bootstrap::InstallFinalDexAtStartup(first_live_hooks,vm,&gate_error);
@@ -53,7 +53,7 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm,char* options,void* re
   // RedefineClasses calls. A LIVE Agent_OnAttach never supplies this proof.
   jvmtiEnv* ti=nullptr;
   if(!vm||vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK||!ti)return JNI_ERR;
-  static artdcevm::ShadowHookEngine startup_hooks;
+  auto& startup_hooks=artdcevm::ProcessHookEngine();
   std::string error;
   const bool installed=artdcevm::redefinition_gate::InstallStartup(startup_hooks,vm,ti,&error);
   if(installed)(void)artdcevm::production_bootstrap::InstallFinalDexAtStartup(startup_hooks,vm,&error);
