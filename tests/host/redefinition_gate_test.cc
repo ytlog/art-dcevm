@@ -24,6 +24,22 @@ jvmtiError Body(void* env,void* runtime,void* self,const void* defs,int32_t type
  if(block){entered=true;while(!release_body.load())std::this_thread::yield();}
  return body_result;
 }
+int observation_owner,observation_token;size_t observed_begin=0,observed_end=0;
+int32_t observed_type=-1;bool null_token=false,last_returned=false;
+jvmtiError last_result=JVMTI_ERROR_NONE,prepare_result=JVMTI_ERROR_NONE;
+void* ObserveBegin(void*owner,void*env,void*runtime,void*self,const void*defs,int32_t type)noexcept{
+ assert(owner==&observation_owner&&env==expected[0]&&runtime==expected[1]&&self==expected[2]&&defs==expected[3]);
+ assert(redefinition_gate::direct&&!redefinition_gate::owned);
+ ++observed_begin;observed_type=type;return null_token?nullptr:&observation_token;
+}
+void ObserveEnd(void*owner,void*token,jvmtiError result,bool returned)noexcept{
+ assert(owner==&observation_owner&&token==(null_token?nullptr:&observation_token));
+ assert(redefinition_gate::direct&&!redefinition_gate::owned);
+ // Completion still holds the operation mutex; recursive calls cannot race it.
+ assert(redefinition_gate::Proxy(expected[0],expected[1],expected[2],expected[3],expected_type,expected[4])==JVMTI_ERROR_INTERNAL);
+ ++observed_end;last_result=result;last_returned=returned;
+}
+jvmtiError PrepareInput(void*,void*,void*,const void*,int32_t){return prepare_result;}
 struct Hooks:HookEngine {
  bool missing=false;
  bool Initialize(std::string*)override{return true;}
@@ -75,5 +91,23 @@ int main(){
  }
  assert(!Owned(&vm)&&invoke()==JVMTI_ERROR_NONE);
  {Lease next(&vm);assert(next.Acquired());}
+ // One immutable observer on the existing dispatcher, never another hook.
+ DirectObservation observer{&observation_owner,ObserveBegin,ObserveEnd},other_observer=observer;
+ assert(!InstallDirectObservation(hooks,nullptr,&error));
+ assert(InstallDirectObservation(hooks,&observer,&error)&&InstallDirectObservation(hooks,&observer,&error));
+ assert(!InstallDirectObservation(hooks,&other_observer,&error));
+ assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==1&&observed_end==1&&last_returned&&last_result==JVMTI_ERROR_NONE&&observed_type==expected_type);
+ body_result=JVMTI_ERROR_FAILS_VERIFICATION;
+ assert(invoke()==body_result&&observed_begin==2&&observed_end==2&&last_returned&&last_result==body_result);
+ throw_body=true;try{invoke();assert(false);}catch(const std::runtime_error&){}
+ throw_body=false;assert(observed_begin==3&&observed_end==3&&!last_returned&&last_result==JVMTI_ERROR_INTERNAL);
+ null_token=true;body_result=JVMTI_ERROR_NONE;
+ assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==4&&observed_end==4&&last_returned);
+ null_token=false;
+ {Lease lease(&vm);assert(lease.Acquired()&&invoke()==JVMTI_ERROR_NONE);}
+ assert(observed_begin==4&&observed_end==4);
+ assert(InstallDirectPreparation(hooks,PrepareInput,&error));prepare_result=JVMTI_ERROR_INVALID_CLASS_FORMAT;
+ const auto before_refusal=calls.load();assert(invoke()==prepare_result&&calls==before_refusal&&observed_begin==4&&observed_end==4);
+ prepare_result=JVMTI_ERROR_NONE;assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==5&&observed_end==5);
  std::cout<<"Actual Direct gate: startup proof, LIVE refusal, retained phase-change gate, all six arguments/results, nonblocking public INTERNAL contention/retry, private exclusion, recursion and original exception rollback PASS\n";
 }

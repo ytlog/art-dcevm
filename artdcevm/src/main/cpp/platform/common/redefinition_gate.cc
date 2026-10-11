@@ -21,6 +21,7 @@ constexpr char symbol[]="_ZN12openjdkjvmti9Redefiner21RedefineClassesDirectEPNS_
 using Direct=jvmtiError(*)(void*,void*,void*,const void*,int32_t,void*);
 std::atomic<Direct> original{nullptr};JavaVM* startup_vm=nullptr;
 std::atomic<DirectPreparation>preparation{nullptr};
+std::atomic<const DirectObservation*>observation{nullptr};
 std::atomic<bool> ready{false};std::mutex install_mutex,operation;
 thread_local bool owned=false;thread_local bool direct=false;
 std::atomic<const char*> diagnostic{"Startup redefinition gate was not installed before LIVE"};
@@ -37,7 +38,17 @@ jvmtiError Proxy(void* env,void* runtime,void* self,const void* definitions,int3
   const auto result=prepare(env,runtime,self,definitions,type);
   if(result!=JVMTI_ERROR_NONE)return result;
  }
- auto body=original.load(std::memory_order_acquire);return body?body(env,runtime,self,definitions,type,error):JVMTI_ERROR_NOT_AVAILABLE;
+ // This scope ends before Release unlocks operation or resets Direct. No
+ // concurrent public/private batch can replace the provenance being recorded.
+ struct Observe {
+  const DirectObservation*observer;void*token=nullptr;
+  jvmtiError result=JVMTI_ERROR_INTERNAL;bool returned=false;
+  ~Observe(){if(observer)observer->end(observer->owner,token,result,returned);}
+ }observed{borrowed?nullptr:observation.load(std::memory_order_acquire)};
+ if(observed.observer)observed.token=observed.observer->begin(observed.observer->owner,env,runtime,self,definitions,type);
+ auto body=original.load(std::memory_order_acquire);
+ observed.result=body?body(env,runtime,self,definitions,type,error):JVMTI_ERROR_NOT_AVAILABLE;
+ observed.returned=true;return observed.result;
 }
 bool EnsureDirect(HookEngine&hooks,std::string*error,void*known_target=nullptr){
  if(original.load(std::memory_order_acquire))return true;
@@ -50,13 +61,7 @@ bool EnsureDirect(HookEngine&hooks,std::string*error,void*known_target=nullptr){
  original.store(reinterpret_cast<Direct>(saved),std::memory_order_release);return true;
 }
 
-}
-bool InstallDirectPreparation(HookEngine&hooks,DirectPreparation prepare,std::string*error){
- std::lock_guard<std::mutex>guard(install_mutex);
- const auto previous=preparation.load(std::memory_order_acquire);
- if(!prepare||(previous&&previous!=prepare)){
-  if(error)*error="Named Direct already has a different preparation owner";return false;
- }
+bool EnsureInstalledDirect(HookEngine&hooks,std::string*error){
  if(!original.load(std::memory_order_acquire)){
   // Acquire installation serialization and resolve every named dependency
   // BEFORE stopping threads. Never acquire install_mutex inside another
@@ -71,7 +76,26 @@ bool InstallDirectPreparation(HookEngine&hooks,DirectPreparation prepare,std::st
   struct Resume{SuspendAll&stop;SuspendDestroy destroy;~Resume(){destroy(&stop);}}resume{stop,destroy};
   if(!EnsureDirect(hooks,error,target))return false;
  }
+ return true;
+}
+}
+bool InstallDirectPreparation(HookEngine&hooks,DirectPreparation prepare,std::string*error){
+ std::lock_guard<std::mutex>guard(install_mutex);
+ const auto previous=preparation.load(std::memory_order_acquire);
+ if(!prepare||(previous&&previous!=prepare)){
+  if(error)*error="Named Direct already has a different preparation owner";return false;
+ }
+ if(!EnsureInstalledDirect(hooks,error))return false;
  preparation.store(prepare,std::memory_order_release);return true;
+}
+bool InstallDirectObservation(HookEngine&hooks,const DirectObservation*observer,std::string*error){
+ std::lock_guard<std::mutex>guard(install_mutex);
+ const auto previous=observation.load(std::memory_order_acquire);
+ if(!observer||!observer->owner||!observer->begin||!observer->end||(previous&&previous!=observer)){
+  if(error)*error="Named Direct observation owner is incomplete or changed";return false;
+ }
+ if(!EnsureInstalledDirect(hooks,error))return false;
+ observation.store(observer,std::memory_order_release);return true;
 }
 void* MapPluginForStartup(HookEngine& hooks,JavaVM* vm,std::string* report){
  constexpr const char* plugin="libopenjdkjvmti.so";

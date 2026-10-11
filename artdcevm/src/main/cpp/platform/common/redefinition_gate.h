@@ -21,6 +21,21 @@ bool InstallFirstLive(HookEngine&,JavaVM*,std::string*);
 // only this dispatcher invokes original Direct, exactly once after success.
 using DirectPreparation=jvmtiError(*)(void*,void*,void*,const void*,int32_t);
 bool InstallDirectPreparation(HookEngine&,DirectPreparation,std::string*);
+// Process-lifetime observer of foreign/public Direct calls. Begin sees the
+// final transformed native definitions before the original source Run. End
+// runs after its native owners unwind, while operation serialization is still
+// held. This is bookkeeping only: neither callback can replace the original
+// result or grant private execution/publication rights. Both must be noexcept.
+// A null begin token still receives End so a failed capture can invalidate the
+// process owner's oracle. Owned private calls retain their transaction record.
+struct DirectObservation {
+ void*owner=nullptr;
+ void*(*begin)(void*owner,void*env,void*runtime,void*self,const void*definitions,int32_t type)noexcept=nullptr;
+ void(*end)(void*owner,void*token,jvmtiError result,bool returned)noexcept=nullptr;
+};
+// Observer and its owner must outlive every Direct invocation. The sole
+// registration is immutable; readiness still requires startup/pristine proof.
+bool InstallDirectObservation(HookEngine&,const DirectObservation*,std::string*);
 bool Ready(JavaVM*);
 // Capability belongs to this actual operation thread, including its Direct body.
 bool Owned(JavaVM*);
