@@ -40,10 +40,11 @@ void ObserveEnd(void*owner,void*token,jvmtiError result,bool returned)noexcept{
  ++observed_end;last_result=result;last_returned=returned;
 }
 jvmtiError PrepareInput(void*,void*,void*,const void*,int32_t){return prepare_result;}
+void Target(){std::abort();}
 struct Hooks:HookEngine {
  bool missing=false;
  bool Initialize(std::string*)override{return true;}
- void* FindSymbol(const char*,const char* name)override{assert(std::strstr(name,"RedefineClassesDirect"));return missing?nullptr:reinterpret_cast<void*>(Body);}
+ void* FindSymbol(const char*,const char* name)override{assert(std::strstr(name,"RedefineClassesDirect"));return missing?nullptr:reinterpret_cast<void*>(Target);}
  void* Install(void*,void*,void** original,std::string*)override{*original=reinterpret_cast<void*>(Body);if(phase_change)phase=JVMTI_PHASE_LIVE;return this;}
  bool Remove(void*,std::string*)override{++rollbacks;return true;}
 };
@@ -61,7 +62,7 @@ int main(){
  // The published startup gate remains transparent even before authority is
  // activated; both lifecycle paths share the same contention dispatcher.
  ready=false;nested=true;assert(invoke()==JVMTI_ERROR_FAILS_VERIFICATION&&calls==1);
- assert(native[4]==0x5678&&pending_exception==reinterpret_cast<void*>(0x1234));
+ assert(native[4]==0x5678&&pending_exception==reinterpret_cast<void*>(0x1234)&&!unobserved_public.load());
  ready=true;nested=false;
  assert(!Owned(&vm));
  {Lease wrong(&other);assert(!wrong.Acquired()&&!Owned(&other));}
@@ -96,6 +97,8 @@ int main(){
  assert(!InstallDirectObservation(hooks,nullptr,&error));
  assert(InstallDirectObservation(hooks,&observer,&error)&&InstallDirectObservation(hooks,&observer,&error));
  assert(!InstallDirectObservation(hooks,&other_observer,&error));
+ assert(!ObservationComplete(&vm,&observer));
+ {Lease lease(&vm);assert(lease.Acquired()&&!ObservationComplete(&vm,&observer));}
  assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==1&&observed_end==1&&last_returned&&last_result==JVMTI_ERROR_NONE&&observed_type==expected_type);
  body_result=JVMTI_ERROR_FAILS_VERIFICATION;
  assert(invoke()==body_result&&observed_begin==2&&observed_end==2&&last_returned&&last_result==body_result);

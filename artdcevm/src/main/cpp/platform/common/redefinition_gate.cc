@@ -22,6 +22,7 @@ using Direct=jvmtiError(*)(void*,void*,void*,const void*,int32_t,void*);
 std::atomic<Direct> original{nullptr};JavaVM* startup_vm=nullptr;
 std::atomic<DirectPreparation>preparation{nullptr};
 std::atomic<const DirectObservation*>observation{nullptr};
+std::atomic<bool>unobserved_public{false};
 std::atomic<bool> ready{false};std::mutex install_mutex,operation;
 thread_local bool owned=false;thread_local bool direct=false;
 std::atomic<const char*> diagnostic{"Startup redefinition gate was not installed before LIVE"};
@@ -42,11 +43,16 @@ jvmtiError Proxy(void* env,void* runtime,void* self,const void* definitions,int3
  // concurrent public/private batch can replace the provenance being recorded.
  struct Observe {
   const DirectObservation*observer;void*token=nullptr;
-  jvmtiError result=JVMTI_ERROR_INTERNAL;bool returned=false;
-  ~Observe(){if(observer)observer->end(observer->owner,token,result,returned);}
+  jvmtiError result=JVMTI_ERROR_INTERNAL;bool returned=false,unobserved_body=false;
+  ~Observe(){
+   if(observer)observer->end(observer->owner,token,result,returned);
+   else if(unobserved_body&&(!returned||result==JVMTI_ERROR_NONE))
+    unobserved_public.store(true,std::memory_order_release);
+  }
  }observed{borrowed?nullptr:observation.load(std::memory_order_acquire)};
  if(observed.observer)observed.token=observed.observer->begin(observed.observer->owner,env,runtime,self,definitions,type);
  auto body=original.load(std::memory_order_acquire);
+ observed.unobserved_body=body&&!borrowed&&!observed.observer;
  observed.result=body?body(env,runtime,self,definitions,type,error):JVMTI_ERROR_NOT_AVAILABLE;
  observed.returned=true;return observed.result;
 }
@@ -187,6 +193,10 @@ bool InstallFirstLive(HookEngine& hooks,JavaVM* vm,std::string* error){
 }
 bool Ready(JavaVM* vm){return ready.load(std::memory_order_acquire)&&vm==startup_vm;}
 bool Owned(JavaVM* vm){return Ready(vm)&&owned;}
+bool ObservationComplete(JavaVM*vm,const DirectObservation*observer)noexcept{
+ return observer&&Owned(vm)&&!direct&&observation.load(std::memory_order_acquire)==observer&&
+  !unobserved_public.load(std::memory_order_acquire);
+}
 const char* Diagnostic(){return diagnostic.load();}
 Lease::Lease(JavaVM* vm){if(Ready(vm)&&!owned&&!direct&&operation.try_lock()){owned=true;acquired_=true;}}
 Lease::~Lease(){if(acquired_){if(direct)std::abort();owned=false;operation.unlock();}}

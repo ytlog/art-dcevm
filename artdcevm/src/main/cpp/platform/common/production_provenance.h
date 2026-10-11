@@ -39,7 +39,7 @@ class Provenance {
   Provenance(const Provenance&)=delete;Provenance&operator=(const Provenance&)=delete;
   ~Provenance(){if(pending_||!entries_.empty())std::abort();}
   std::unique_ptr<Reservation>Prepare(JNIEnv*env,const std::vector<Definition>&definitions){
-    if(!env||env->ExceptionCheck()||definitions.empty()||pending_||definitions.size()>SIZE_MAX-entries_.size())return nullptr;
+    if(!trusted_||!env||env->ExceptionCheck()||definitions.empty()||pending_||definitions.size()>SIZE_MAX-entries_.size())return nullptr;
     Sweep(env);if(env->ExceptionCheck())return nullptr;
     auto candidate=std::unique_ptr<Reservation>(new Reservation(*this,env));pending_=candidate.get();
     candidate->candidate_=entries_;
@@ -68,7 +68,7 @@ class Provenance {
     return candidate;
   }
   bool Find(JNIEnv* env,jclass klass,std::vector<unsigned char>* dex){
-    if(!env||!klass||!dex||env->ExceptionCheck())return false;
+    if(!trusted_||!env||!klass||!dex||env->ExceptionCheck())return false;
     Sweep(env);if(env->ExceptionCheck())return false;
     for(auto& entry:entries_){
       auto live=env->NewLocalRef(entry.klass);
@@ -92,9 +92,14 @@ class Provenance {
     if(pending_||(!env&&!entries_.empty()))std::abort();
     for(auto& entry:entries_)env->DeleteWeakGlobalRef(entry.klass);entries_.clear();
   }
+  // An unrecorded successful batch can affect any Class. Keep handles for
+  // ordinary cleanup, but never fall back to stale cache/APK bytes afterward.
+  void Invalidate()noexcept{trusted_=false;}
+  bool Trusted()const noexcept{return trusted_;}
   size_t Size()const{return entries_.size();}
  private:
   std::vector<Entry> entries_;
   Reservation*pending_=nullptr;
+  bool trusted_=true;
 };
 }

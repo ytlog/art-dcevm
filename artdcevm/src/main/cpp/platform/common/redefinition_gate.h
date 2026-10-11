@@ -36,6 +36,9 @@ struct DirectObservation {
 // Observer and its owner must outlive every Direct invocation. The sole
 // registration is immutable; readiness still requires startup/pristine proof.
 bool InstallDirectObservation(HookEngine&,const DirectObservation*,std::string*);
+// Exact observer, actual owned lease and startup/pristine lifetime proof.
+// Refuses a successful/unknown public outcome before observer registration.
+bool ObservationComplete(JavaVM*,const DirectObservation*)noexcept;
 bool Ready(JavaVM*);
 // Capability belongs to this actual operation thread, including its Direct body.
 bool Owned(JavaVM*);

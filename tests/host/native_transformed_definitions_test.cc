@@ -49,5 +49,12 @@ int main(){
  values[1].dex_begin=reinterpret_cast<const unsigned char*>(UINTPTR_MAX);rejected(&source,2);values[1]=original;
  assert(native_transformed_definitions::Capture(&source,2,&copied,&error));
  assert(copied[0].dex[0]==9&&copied[1].dex[0]==8);
+ std::vector<Definition>foreign;
+ assert(native_transformed_definitions::Capture(&source,&foreign,&error)&&Same(foreign,copied));
+ const auto installed=foreign;Vector empty{values,values,values};
+ assert(!native_transformed_definitions::Capture(&empty,&foreign,&error)&&Same(foreign,installed));
+ values[1].initialized=0;
+ assert(!native_transformed_definitions::Capture(&source,&foreign,&error)&&Same(foreign,installed));
+ values[1]=original;
  std::cout<<"Actual final-vector reader: ordered deep copy, malformed geometry/count/flags/spans and late-member failure preserve prior output PASS; no JNI identity, DEX semantics or transaction permission granted\n";
 }

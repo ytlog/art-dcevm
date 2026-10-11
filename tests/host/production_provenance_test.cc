@@ -48,7 +48,10 @@ int main(){
  assert(!records.Find(&env,a,&bytes));
  {auto pending=records.Prepare(&env,{{a,{7,8}}});assert(pending);pending->Commit();}
  assert(records.Find(&env,b,&bytes)&&bytes==std::vector<unsigned char>({3,4}));
- records.Clear(&env);assert(records.Size()==0&&references.empty());
+ const auto retained=bytes;records.Invalidate();assert(!records.Trusted());
+ assert(!records.Find(&env,b,&bytes)&&bytes==retained);
+ assert(!records.Prepare(&env,{{a,{9,10}}}));
+ records.Clear(&env);assert(records.Size()==0&&references.empty()&&!records.Trusted());
  assert(weak_created==weak_deleted&&local_created==local_deleted&&strong_created==0);
  std::cout<<"Weak production provenance: loader identity, multi-generation replacement, cleared weak pruning, address reuse, bounded pins and zero permanent strong references passed\n";
 }

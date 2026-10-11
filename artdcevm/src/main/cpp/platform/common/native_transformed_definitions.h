@@ -12,4 +12,7 @@ namespace artdcevm::native_transformed_definitions {
 // Readability alone grants no Class identity or transaction permission.
 bool Capture(const void* source,size_t expected_count,
              std::vector<Definition>*output,std::string*error);
+// Foreign Direct has no submitted-count owner. Derive the nonempty bounded
+// count from the same final native vector using the identical reader.
+bool Capture(const void*source,std::vector<Definition>*output,std::string*error);
 }
