@@ -24,9 +24,10 @@ bool Binding::Bind(HookEngine&hooks,const runtime_services::Snapshot&runtime,std
  auto replace=reinterpret_cast<Replace>(hooks.FindSymbol("libopenjdkjvmti.so",kReplace));
  auto status=reinterpret_cast<SetStatus>(hooks.FindSymbol("libart.so",kStatus));
  auto retain=reinterpret_cast<Retain>(hooks.FindSymbol("libart.so",kRetain));
- if(!runtime.runtime||!runtime.receivers.heap||!runtime.receivers.class_linker||!slot||*slot!=runtime.runtime||
+ if(!runtime.runtime||!runtime.receivers.heap||!runtime.receivers.class_linker||!runtime.receivers.thread_list||!slot||*slot!=runtime.runtime||
     !replace||!status||!retain)return Fail(error,"call-graph-commit-fixed-original-operations-unavailable");
- runtime_=runtime.runtime;runtime_slot_=slot;replace_=replace;status_=status;retain_=retain;
+ runtime_=runtime.runtime;runtime_slot_=slot;thread_list_=runtime.receivers.thread_list;
+ replace_=replace;status_=status;retain_=retain;
  return true;
 }
 std::unique_ptr<Service>Service::Prepare(const runnable_jni::Context&context,
@@ -36,7 +37,7 @@ std::unique_ptr<Service>Service::Prepare(const runnable_jni::Context&context,
     !deps.metadata||!deps.metadata->Calibrated()||!deps.fields||!deps.fields->Calibrated()||
     !deps.reflection||!deps.reflection_plan||!deps.initialization||!deps.heap||!deps.heap->Calibrated()||
     !deps.root_provenance||!deps.root_provenance->LocksCalibrated()||
-    !deps.weak_replacement||!deps.weak_replacement->BoundTo(deps.binding->runtime_)||!deps.cache||!deps.cache->Prepared()||
+    !deps.weak_replacement||!deps.weak_replacement->BoundTo(deps.binding->runtime_,deps.binding->thread_list_)||!deps.cache||!deps.cache->Prepared()||
     !deps.schema||!deps.execution||!deps.interpretation||!deps.compilation||!deps.compilation_receipt||
     !deps.compilation->Validate(*deps.compilation_receipt,context.self)||
     !deps.stop||!deps.loading||!deps.read||!deps.read->owner||!deps.read->extent||

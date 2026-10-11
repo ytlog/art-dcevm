@@ -24,7 +24,7 @@ class Binding final {
  using Replace=void(*)(void*,const void*);
  using SetStatus=void(*)(void*,uint8_t);
  using Retain=void(*)(void*,abi::arm64::android11::ReleaseObjectPointer);
- void*runtime_=nullptr;void**runtime_slot_=nullptr;
+ void*runtime_=nullptr;void**runtime_slot_=nullptr;void*thread_list_=nullptr;
  Replace replace_=nullptr;SetStatus status_=nullptr;Retain retain_=nullptr;
 };
 struct Dependencies {

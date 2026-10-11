@@ -520,9 +520,9 @@ bool SourceCalibration::PrepareNativeEntries(JNIEnv*env,std::string*error){
   const auto current=reinterpret_cast<native_weak_sweep_observer::CurrentThread>(
     hooks_.FindSymbol("libart.so",abi::common::kCurrentThread));
   weak_replacement_=native_weak_replacement::Service::Prepare(hooks_,env,metadata_->Inputs().Anchor(),
-    exclusive_,runtime.runtime,current,error);
+    exclusive_,runtime.runtime,runtime.receivers.thread_list,current,error);
  }
- return weak_replacement_&&weak_replacement_->BoundTo(runtime.runtime);
+ return weak_replacement_&&weak_replacement_->BoundTo(runtime.runtime,runtime.receivers.thread_list);
 }
 bool SourceCalibration::PrepareStackStream(JNIEnv*env,std::string*error){
  if(!stack_calibrated_||!references_.Ready()||!schema_.Ready()||!native_entries_||

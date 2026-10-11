@@ -1,4 +1,5 @@
 #include "platform/common/native_weak_sweep_observer.h"
+#include "platform/common/native_weak_replacement_sequence.h"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -47,6 +48,22 @@ struct Visitor final : art::IsMarkedVisitor {
   }
 };
 void Run() {
+  using Sequence=artdcevm::native_weak_replacement::Sequence;
+  using SequenceReport=artdcevm::native_weak_replacement::Report;
+  Visitor first_identity,second_identity;
+  SequenceReport ordered_report;Sequence ordered(ordered_report);
+  ordered.Advance(0,&first_identity);assert(!ordered.Complete());
+  ordered.Advance(1,&first_identity);assert(ordered.Complete()&&!ordered_report.completed);
+  ordered.Advance(1,&first_identity);assert(!ordered.Complete()&&ordered_report.order_changed);
+  SequenceReport reversed_report;Sequence reversed(reversed_report);
+  reversed.Advance(1,&first_identity);reversed.Advance(0,&first_identity);assert(!reversed.Complete());
+  SequenceReport changed_report;Sequence changed(changed_report);
+  changed.Advance(0,&first_identity);changed.Advance(1,&second_identity);
+  assert(!changed.Complete()&&changed_report.visitor_changed);
+  SequenceReport null_report;Sequence null_sequence(null_report);
+  null_sequence.Advance(0,nullptr);null_sequence.Advance(1,nullptr);assert(!null_sequence.Complete());
+  SequenceReport overflow_report;overflow_report.sweeps=SIZE_MAX;Sequence overflow(overflow_report);
+  overflow.Advance(0,&first_identity);assert(overflow_report.sweeps==SIZE_MAX&&overflow_report.order_changed);
   Observer observer(&runtime, &owner, Current, Sweep);
   Record records[4]; Report report;
   Visitor normal;
