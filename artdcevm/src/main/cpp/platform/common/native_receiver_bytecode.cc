@@ -1,9 +1,9 @@
 #include "platform/common/native_receiver_bytecode.h"
-#include "platform/common/compiled_frame_dex_oracle.h"
+#include "platform/common/native_dex_instruction_width.h"
 namespace artdcevm::receiver_guard {
 bool DecodeInvoke(const CodeView&code,uint32_t pc,InvokeInstruction*out)noexcept{
  if(!out||!code.instructions||pc>=code.units||code.registers>UINT16_MAX)return false;const uint16_t first=code.instructions[pc];const unsigned op=first&255u;
- InvokeInstruction value;unsigned width=compiled_frame_dex_oracle::detail::Width(op);
+ InvokeInstruction value;unsigned width=dex_instruction::Width(op);
  if(op==0&&first!=0)return false; // Payloads are never executable source PCs.
  if(!width||width>code.units-pc)return false;
  unsigned ordinal=0;

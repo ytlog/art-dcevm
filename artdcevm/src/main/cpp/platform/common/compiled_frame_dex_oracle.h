@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/native_dex_instruction_width.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,13 +14,8 @@ struct Dex {
  bool U32(size_t at,uint32_t* v)const{if(!Range(at,4))return false;*v=uint32_t(bytes[at])|uint32_t(bytes[at+1])<<8|uint32_t(bytes[at+2])<<16|uint32_t(bytes[at+3])<<24;return true;}
  bool Uleb(size_t* at,uint32_t* v)const{uint32_t value=0;for(unsigned i=0;i<5;++i){if(!Range(*at,1))return false;const auto b=bytes[(*at)++];if(i==4&&(b&0xf0))return false;value|=uint32_t(b&127)<<(7*i);if(!(b&128)){*v=value;return true;}}return false;}
 };
-inline unsigned Width(unsigned op){
- if(op==3||op==6||op==9||op==0x14||op==0x17||op==0x1b||op==0x24||op==0x25||op==0x26||op==0x2a||op==0x2b||op==0x2c||(op>=0x6e&&op<=0x72)||(op>=0x74&&op<=0x78)||op==0xfc||op==0xfd)return 3;
- if(op==0x18)return 5;if(op==0xfa||op==0xfb)return 4;
- if(op==2||op==5||op==8||op==0x13||op==0x15||op==0x16||op==0x19||op==0x1a||op==0x1c||op==0x1f||op==0x20||op==0x22||op==0x23||op==0x29||(op>=0x2d&&op<=0x3d)||(op>=0x44&&op<=0x6d)||(op>=0x90&&op<=0xaf)||(op>=0xd0&&op<=0xe2)||op==0xfe||op==0xff)return 2;
- if(op<=0x12||op==0x1d||op==0x1e||op==0x21||op==0x27||op==0x28||(op>=0x7b&&op<=0x8f)||(op>=0xb0&&op<=0xcf))return 1;
- return 0;
-}
+using dex_instruction::Width;
+
 inline bool ChildPc(const Dex& d,size_t code,uint32_t units,uint32_t child,uint32_t* out){
  bool seen=false;uint32_t result=0;
  for(uint32_t pc=0;pc<units;){uint16_t word;if(!d.U16(code+size_t(pc)*2,&word))return false;unsigned op=word&255,w=Width(op);

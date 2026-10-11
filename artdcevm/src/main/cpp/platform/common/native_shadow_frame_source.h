@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/native_dex_instruction_width.h"
 #include "platform/common/native_boot_aot_source.h"
 #include "platform/common/native_managed_stack_chain.h"
 namespace artdcevm::native_shadow_frame_source {
@@ -44,7 +45,7 @@ class Source final {
    !window_.CurrentCalleeCode(method,read,&code)||!native_boot_aot_unaffected::ImmutableBodyMatches(*entry,code,identity.dex_method_index,read))return deny("shadow-source-current-rooted-public-CodeItem-unproved");
   // Reuse fixed DEX widths. Payload-bearing bodies are unsupported here until
   // their complete payload/branch boundary owner is provided; never guess PC.
-  bool boundary=false;for(size_t at=0;at<code.units;){const auto word=code.instructions[at];const auto width=compiled_frame_dex_oracle::detail::Width(word&255u);
+  bool boundary=false;for(size_t at=0;at<code.units;){const auto word=code.instructions[at];const auto width=dex_instruction::Width(word&255u);
    if(!width||width>code.units-at||(!(word&255u)&&word))return deny("shadow-source-instruction-boundary-unproved");if(at==pc)boundary=true;at+=width;}
   if(!boundary)return deny("shadow-source-current-dex-pc-not-instruction");
   void*again=nullptr,*again_thread=nullptr,*again_shadow=nullptr;uint32_t again_pc=UINT32_MAX;

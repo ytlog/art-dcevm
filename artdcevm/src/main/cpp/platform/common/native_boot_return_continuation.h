@@ -1,5 +1,5 @@
 #pragma once
-#include "platform/common/compiled_frame_dex_oracle.h"
+#include "platform/common/native_dex_instruction_width.h"
 #include "platform/common/native_receiver_bytecode.h"
 #include "platform/common/native_boot_dex_identity.h"
 #include "platform/common/modern_field_metadata.h"
@@ -23,7 +23,7 @@ inline Shape Inspect(const Body&b,uint32_t invoke,Scratch s,Entry entry=Entry::N
  if(!b.units||!b.count||!s.boundaries||!s.seen||!s.queue||s.capacity<b.count||(b.try_count&&!b.tries))return deny("storage");
  for(uint32_t i=0;i<b.count;++i)s.boundaries[i]=s.seen[i]=0;
  for(uint32_t pc=0;pc<b.count;){
-  const auto word=b.units[pc];const auto op=word&255u;uint64_t w=artdcevm::compiled_frame_dex_oracle::detail::Width(op);
+  const auto word=b.units[pc];const auto op=word&255u;uint64_t w=artdcevm::dex_instruction::Width(op);
   if(op==0&&word){
    if(pc+2>b.count)return deny("payload-header");const auto kind=word>>8;
    if(kind==1)w=4ull+uint64_t(b.units[pc+1])*2;
@@ -36,7 +36,7 @@ inline Shape Inspect(const Body&b,uint32_t invoke,Scratch s,Entry entry=Entry::N
  if(invoke>=b.count||!s.boundaries[invoke])return deny("invoke-boundary");
  const auto current=b.units[invoke]&255u;
  if(entry==Entry::NormalAndExceptional&&!OrdinaryInvoke(current))return deny("ordinary-invoke-required");
- const auto width=artdcevm::compiled_frame_dex_oracle::detail::Width(current);
+ const auto width=artdcevm::dex_instruction::Width(current);
  for(size_t i=0;i<b.try_count;++i){const auto&t=b.tries[i];
   if(!t.count||t.first>=b.count||t.count>b.count-t.first||!s.boundaries[t.first]||(t.first+t.count<b.count&&!s.boundaries[t.first+t.count])||!t.handler_count||!t.handlers)return deny("try-range");
   if(i&&b.tries[i-1].first+b.tries[i-1].count>t.first)return deny("overlapping-try");
@@ -65,7 +65,7 @@ inline Shape Inspect(const Body&b,uint32_t invoke,Scratch s,Entry entry=Entry::N
   auto enqueue=[&](int64_t pc){if(pc<0||uint64_t(pc)>=b.count||!s.boundaries[pc])return false;if(!s.seen[pc]){s.seen[pc]=1;s.queue[tail++]=uint32_t(pc);}return true;};
   if(!enqueue(first))return "continuation-entry-outside-body";
   while(head<tail){const auto pc=s.queue[head++];++r.reachable;if(pc<=invoke)r.backedge=true;
-   const auto word=b.units[pc];const auto op=word&255u;const auto w=artdcevm::compiled_frame_dex_oracle::detail::Width(op);
+   const auto word=b.units[pc];const auto op=word&255u;const auto w=artdcevm::dex_instruction::Width(op);
    // No normal edge or later exceptional edge can reissue a pending exception.
    // A back edge to even this owner's entry is a repeated reference definition.
    if(op==0x0d)return "continuation-move-exception-not-owned-entry";
