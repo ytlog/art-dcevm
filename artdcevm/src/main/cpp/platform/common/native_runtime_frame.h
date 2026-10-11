@@ -22,9 +22,12 @@ inline bool CalleeGeometry(FrameInfo f)noexcept{
  for(auto k:known)if(k.size==f.size&&k.core_spills==f.core_spills&&k.fp_spills==f.fp_spills)return true;
  return false;
 }
+enum class NameStatus:uint32_t {NotObserved,MissingReader,NullResult,UnmappedResult,Truncated,Complete,CursorChanged};
+// Diagnostic only. The named source returns process-lifetime literals, never
+// Java strings or a receiver/class ownership capability.
 class Service {
  public:
- template<class Finder>static Service Bind(Finder finder){Service s;s.info_=reinterpret_cast<FrameInfo(*)(const void*)>(finder(kFrameInfo));return s;}
+ template<class Finder>static Service Bind(Finder finder){Service s;s.info_=reinterpret_cast<FrameInfo(*)(const void*)>(finder(kFrameInfo));s.name_=reinterpret_cast<const char*(*)(void*)>(finder(kRuntimeName));return s;}
  bool Bound()const noexcept{return info_!=nullptr;}
  bool Observe(const void* visitor,void* method,void** quick,bool legacy,
               const modern_field_metadata::ReadContext* context,FrameInfo* out)const noexcept{
@@ -45,7 +48,23 @@ class Service {
   if(!return_pc||*quick!=method)return false;
   *out=info;return true;
  }
+ NameStatus CopyObservedName(void*method,const modern_field_metadata::ReadContext*context,
+                             char*out,size_t capacity)const noexcept{
+  if(!out||!capacity)return NameStatus::Truncated;
+  out[0]=0;
+  if(!name_)return NameStatus::MissingReader;
+  const char*name=name_(method);
+  if(!name)return NameStatus::NullResult;
+  size_t extent=0;
+  // Never query /proc in the stopped diagnostic path. Missing prepared bounds
+  // leaves the name unavailable, without changing frame acceptance.
+  if(!context||!context->owner||!context->extent||!context->extent(context->owner,name,&extent)||!extent)return NameStatus::UnmappedResult;
+  const size_t limit=extent<capacity?extent:capacity;
+  for(size_t i=0;i<limit;++i){const char c=name[i];if(!c){out[i]=0;return NameStatus::Complete;}if(i+1<capacity)out[i]=c;}
+  out[0]=0;return NameStatus::Truncated;
+ }
+ inline static constexpr char kRuntimeName[]="_ZN3art9ArtMethod20GetRuntimeMethodNameEv";
  inline static constexpr char kFrameInfo[]="_ZNK3art12StackVisitor24GetCurrentQuickFrameInfoEv";
- private:FrameInfo(*info_)(const void*)=nullptr;
+ private:FrameInfo(*info_)(const void*)=nullptr;const char*(*name_)(void*)=nullptr;
 };
 }
