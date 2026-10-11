@@ -1,143 +1,52 @@
 #pragma once
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace artdcevm::evolution {
-inline constexpr uint32_t kStatic = 0x0008;
-inline constexpr uint32_t kNative = 0x0100;
-inline constexpr uint32_t kAbstract = 0x0400;
+inline constexpr uint32_t kAccPublic = 0x0001;
+inline constexpr uint32_t kAccPrivate = 0x0002;
+inline constexpr uint32_t kAccProtected = 0x0004;
+inline constexpr uint32_t kAccStatic = 0x0008;
+inline constexpr uint32_t kAccFinal = 0x0010;
+inline constexpr uint32_t kAccSynchronized = 0x0020;
+inline constexpr uint32_t kAccVolatile = 0x0040;
+inline constexpr uint32_t kAccNative = 0x0100;
+inline constexpr uint32_t kAccInterface = 0x0200;
+inline constexpr uint32_t kAccAbstract = 0x0400;
+inline constexpr uint32_t kAccConstructor = 0x10000;
+inline constexpr uint32_t kAccDeclaredSynchronized = 0x20000;
 
+// Field type or complete method descriptor; names alone never identify members.
 struct Member {
   std::string name;
-  // Field type or complete method descriptor. Names alone never identify members.
   std::string descriptor;
   uint32_t access = 0;
-  uint32_t dex_index = UINT32_MAX;
-  bool IsStatic() const { return (access & kStatic) != 0; }
+  bool IsStatic() const { return (access & kAccStatic) != 0; }
 };
+
+// One class declaration. Access flags are either raw DEX flags or the public
+// JVMTI view, as stated by the producer.
 struct ClassSchema {
   std::string descriptor;
-  std::string superclass;
+  std::string superclass;  // Empty for java.lang.Object.
   std::vector<std::string> interfaces;
   uint32_t access = 0;
   std::vector<Member> fields;
   std::vector<Member> methods;
 };
 
-// Borrowed regions from an already verified ART DEX. CompactDex shares a data
-// region outside its ID-table mapping. DEX 041 uses the full container as
-// data_begin; begin/size select its header/file. No JNI member IDs are created.
-struct MappedDexMetadata {
-  const unsigned char* begin;
-  size_t size;
-  const unsigned char* data_begin;
-  size_t data_size;
-  uint32_t class_def_index;
+// A standard DEX (035--040) in memory. For an ART DexFile, begin is the
+// mapping, size the header file_size_ and data the DexFile data_ range.
+struct DexView {
+  const uint8_t* begin = nullptr;
+  size_t size = 0;
+  const uint8_t* data = nullptr;
+  size_t data_size = 0;
 };
-// Counts from the selected ordinary class's class_data, as used by ART 17
-// ClassAccessor. These are DEX declaration counts, not ArtMethod array slice
-// offsets: ART 17 interleaves direct/virtual declarations by DEX method index.
-struct MappedDexMemberCounts {
-  uint32_t static_fields = 0, instance_fields = 0, direct_methods = 0, virtual_methods = 0;
-};
-// Requires a live, immutable, verified DEX mapping and an ordinary class definition.
-// Reads the four bounded ULEBs only; format failure preserves output.
-bool ReadMappedDexMemberCounts(const MappedDexMetadata&, MappedDexMemberCounts*, std::string*);
-// Borrowed null-terminated type descriptor; the caller keeps the immutable
-// mapping live. Uses full uint32 type indices and shared/container ID bases.
-// Format errors preserve output; allocation failures propagate.
-bool ReadMappedDexTypeDescriptor(const MappedDexMetadata&, uint32_t index,
-                                 const char**, std::string*);
-// Selected class_def superclass, or nullptr for the DEX NO_INDEX root.
-// Same borrowed lifetime/error contract as type descriptor lookup.
-bool ReadMappedDexSuperclassDescriptor(const MappedDexMetadata&, const char**, std::string*);
-// Selected class hierarchy only; does not parse members/code. Output is unchanged
-// on format failure. Uses shared/container ID bases and full superclass indices.
-struct MappedDexHierarchy {
-  std::string superclass;
-  std::vector<std::string> interfaces;
-};
-bool ReadMappedDexHierarchy(const MappedDexMetadata&, MappedDexHierarchy*, std::string*);
-// Exact defining ClassDef identity only. Borrowed descriptor remains valid
-// while its immutable mapping is live; no member enumeration or allocation on
-// a valid mapping. This does not verify bodies, annotations or member data.
-struct MappedDexClassIdentity {
-  const char* descriptor = nullptr;
-  uint32_t access = 0;
-};
-bool ReadMappedDexClassIdentity(const MappedDexMetadata&, MappedDexClassIdentity*, std::string*);
-struct MappedDexDirectInterfaces {uint32_t count=0;};
-// Exact selected ClassDef direct interfaces; validates the complete bounded
-// type-list, class descriptors and duplicates without healthy-path allocation.
-// InterfaceAt uses the same immutable map; malformed input preserves output.
-bool ReadMappedDexDirectInterfaces(const MappedDexMetadata&,MappedDexDirectInterfaces*,std::string*);
-bool ReadMappedDexDirectInterfaceAt(const MappedDexMetadata&,uint32_t,const char**,std::string*);
-// Borrowed FieldId identity from an immutable, bounded DEX mapping.
-struct MappedDexFieldReference {
-  const char* declaring_class = nullptr;
-  const char* name = nullptr;
-  const char* descriptor = nullptr;
-};
-bool ReadMappedDexFieldReference(const MappedDexMetadata&, uint32_t index,
-                                MappedDexFieldReference*, std::string*);
-// A method ID may reference another class, including an array, with no local
-// class definition. Explicit cache resolution must use this owner, not referrer.
-struct MappedDexMethodReference {
-  uint16_t class_index = 0;
-  uint16_t proto_index = 0;
-  // Borrowed 12-byte ProtoId; valid while the immutable DEX mapping is live.
-  const unsigned char* proto_id = nullptr;
-  std::string declaring_class;
-  std::string name;
-  std::string descriptor;
-};
-// Reads ID tables and shared data only; class_def_index is unused. Output is
-// unchanged on format errors; bad_alloc propagates to the ART/JVMTI boundary.
-bool ReadMappedDexMethodReference(const MappedDexMetadata&, uint32_t index,
-                                  MappedDexMethodReference*, std::string*);
-// Compares borrowed ID/name/type views without allocating on valid mappings.
-// class_def_index is unused; format errors preserve output, mismatch succeeds
-// with false, and allocation failures in error reporting propagate.
-bool ReadMappedDexMethodMatches(const MappedDexMetadata&, uint32_t index,
-                                std::string_view name, std::string_view signature,
-                                bool*, std::string*);
-bool ReadMappedDexSupportsDefaultMethods(const MappedDexMetadata&,bool*,std::string*);
-bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::string*);
 
-// Reads metadata only. ART must still verify method bodies, annotations and encoded values.
-// On format error the output is unchanged; allocation failures propagate as bad_alloc.
-// No ART layout or OS-specific symbol is used here.
-// Validation against original DEX declarations retains constructor and declared-sync bits.
-bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output,
-                         std::string* error);
-// Select a unique descriptor in one complete standard DEX. A missing class
-// succeeds with UINT32_MAX, so multi-file APK lookup can continue. Duplicate
-// ClassDefs and malformed input fail without publishing an index.
-bool FindDexClassDefinition(const std::vector<unsigned char>&,std::string_view descriptor,
-                            uint32_t* class_def_index,std::string*);
-// Validate declarations for the actual target identity in a multi-class DEX.
-// Missing/ambiguous descriptors fail without changing the output.
-bool ReadDexDeclarations(const std::vector<unsigned char>&,std::string_view descriptor,
-                         ClassSchema*,std::string*);
-// Incoming transaction input, copied before any source pause. Selects one
-// ClassDef from a complete standard DEX (including a single-file v041 input).
-// Reuses declaration validation and retains every encoded method's original
-// code offset, including zero for native/abstract declarations. ART must still
-// verify control flow, handlers, annotations and encoded values. Outputs remain
-// unchanged on format failure; allocation failures propagate.
-struct DexMethodCode {
-  uint32_t dex_index=UINT32_MAX,code_offset=0;
-  bool direct=false;
-};
-bool ReadDexClassCode(const std::vector<unsigned char>&,uint32_t class_def_index,
-                     ClassSchema*,std::vector<DexMethodCode>*,std::string*);
-bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error);
-// Public/JVMTI modifier view for an independently selected ClassDef.
-bool ReadDexClassSchema(const std::vector<unsigned char>&,uint32_t class_def_index,
-                        ClassSchema*,std::string*);
-bool IsTypeDescriptor(const std::string& value, bool allow_void);
-bool IsMethodDescriptor(const std::string& value);
-}
+// Reads ClassDef 0 with raw DEX access flags. Every read is bounds-checked;
+// malformed input fails with a message and leaves the output unchanged.
+bool ReadClassDeclarations(const DexView& dex, ClassSchema* output, std::string* error);
+}  // namespace artdcevm::evolution

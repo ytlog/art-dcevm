@@ -1,35 +1,21 @@
 #pragma once
-
-#include <string>
-#include "api/hook_engine.h"
+#include "hooks/shadow_hook.h"
 
 namespace artdcevm::symbols {
 
-enum class Library { kArt, kJvmti, kCompiler, kLinker };
-enum class HookRoute { kInline, kPlt };
+enum class Library { kArt, kJvmti };
 
 constexpr const char* LibraryName(Library library) {
-  switch (library) {
-    case Library::kArt: return "libart.so";
-    case Library::kJvmti: return "libopenjdkjvmti.so";
-    case Library::kCompiler: return "libart-compiler.so";
-    case Library::kLinker: return "linker64";
-  }
-  return nullptr;
+  return library == Library::kArt ? "libart.so" : "libopenjdkjvmti.so";
 }
 
+// A named ELF symbol. Every catalogued symbol is a .dynsym entry; addresses
+// and offsets are never derived from disassembly.
 struct NamedSymbol {
   Library library;
   const char* name;
-  // PLT is valid only when every required caller imports this symbol through a
-  // relocation. Same-DSO direct calls require an inline hook.
-  HookRoute route;
 };
 
-// Presence is only the first gate. Independent public-JNI receiver observations
-// and owned JNI/JVMTI calibration must pass before evolution hooks are installed.
-bool CheckValidationSymbols(HookEngine& hooks, std::string* error);
-bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error);
-void* FindSymbol(HookEngine& hooks, NamedSymbol symbol);
+inline void* Find(NamedSymbol symbol) { return hooks::FindSymbol(LibraryName(symbol.library), symbol.name); }
 
 }  // namespace artdcevm::symbols

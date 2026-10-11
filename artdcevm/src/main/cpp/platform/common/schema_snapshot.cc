@@ -89,7 +89,7 @@ int ReadLiveFields(jvmtiEnv* jvmti, jclass klass,
     jint access = 0;
     result = jvmti->GetFieldModifiers(klass, fields.value[i], &access);
     if (result) return fail(result, "GetFieldModifiers failed");
-    members.push_back({name.value, descriptor.value, static_cast<uint32_t>(access), UINT32_MAX});
+    members.push_back({name.value, descriptor.value, static_cast<uint32_t>(access)});
   }
   *output = std::move(members);
   error->clear();
@@ -110,7 +110,7 @@ int ReadLiveMethods(jvmtiEnv* jvmti, jclass klass,
     if (result) return fail(result, "GetMethodName failed");
     result = jvmti->GetMethodModifiers(methods.value[i], &access);
     if (result) return fail(result, "GetMethodModifiers failed");
-    members.push_back({name.value, descriptor.value, static_cast<uint32_t>(access), UINT32_MAX});
+    members.push_back({name.value, descriptor.value, static_cast<uint32_t>(access)});
   }
   *output = std::move(members);
   error->clear();
