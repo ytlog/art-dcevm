@@ -38,8 +38,8 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error))return nullptr;
-  return process;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error))return nullptr;
+  error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
 bool SourceCalibration::Install(JNIEnv*env,std::string*error){
@@ -111,6 +111,47 @@ bool SourceCalibration::Observe(const runnable_jni::Context&context,void*raw){
  round.result=round.structural(round.ti,1,&definition);round.returned=true;
  if(bridge.Authorized())owner.stop_=bridge.Binding();
  else if(round.diagnostic.empty())round.diagnostic=bridge.Failure();
+ return true;
+}
+struct SourceCalibration::RootLocks {
+ SourceCalibration&owner;std::string*error;
+};
+bool SourceCalibration::ObserveRootLocks(const runnable_jni::Context&context,void*raw){
+ auto&request=*static_cast<RootLocks*>(raw);auto&owner=request.owner;
+ if(!runnable_jni::Bridge::BorrowOriginalScope(context)||
+    context.vm!=owner.metadata_->Runtime().receivers.java_vm||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(context.vm)))
+  return Fail(request.error,"source-commit-readers-original-root-lock-context-unavailable");
+ return owner.roots_.CalibrateLocks(context,request.error);
+}
+bool SourceCalibration::PrepareCommitReaders(JNIEnv*env,std::string*error){
+ const auto&runtime=metadata_->Runtime();
+ auto current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks_.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ void*self=current?current():nullptr;size_t extent=0;uint32_t state=UINT32_MAX;
+ if(!env||env->ExceptionCheck()||!self||!method_identity::ReadableMappingExtent(self,&extent)||
+    !state_.State(self,extent,&state)||state!=abi::arm64::android11::kNative||current()!=self||
+    !BorrowFinalDexRecords(static_cast<JavaVM*>(runtime.receivers.java_vm)))
+  return Fail(error,"source-commit-readers-need-actual-Native-owner-and-final-DEX-lease");
+ // Each binding publishes only after success. Retain partial progress across
+ // installation failure; never rebind an original operation or hook owner.
+ if(!commit_bound_){if(!commit_.Bind(hooks_,runtime,error))return false;commit_bound_=true;}
+ if(!reflection_bound_){
+  if(!reflection_.Bind(hooks_,runtime.runtime,metadata_->ExecutableMirrors(),error))return false;
+  reflection_bound_=true;
+ }
+ if(!cache_bound_){if(!cache_.Bind(hooks_,runtime.receivers.thread_list,error))return false;cache_bound_=true;}
+ if(!roots_bound_){if(!roots_.Bind(hooks_,runtime.runtime,current,error))return false;roots_bound_=true;}
+ if(!compilation_bound_){if(!compilation_.Bind(hooks_,runtime,error))return false;compilation_bound_=true;}
+ if(!cache_.Prepare(error)||!cache_.PreparedForCurrentThread())return false;
+ if(!roots_.LocksCalibrated()){
+  RootLocks request{*this,error};
+  const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),ObserveRootLocks,&request);
+  if(result!=runnable_jni::Result::kSuccess||env->ExceptionCheck()||!roots_.LocksCalibrated())
+   return Fail(error,"source-commit-readers-original-root-lock-calibration-did-not-complete");
+ }
+ // No original callback, Thread, mapping extent or root cursor is retained.
+ if(current()!=self||!state_.State(self,extent,&state)||state!=abi::arm64::android11::kNative||env->ExceptionCheck())
+  return Fail(error,"source-commit-readers-did-not-return-to-original-Native-owner");
  return true;
 }
 void SourceCalibration::Begin(void*driver,const runnable_jni::Context&context,void*raw)noexcept{

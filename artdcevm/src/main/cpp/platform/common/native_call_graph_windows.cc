@@ -30,7 +30,7 @@ jvmtiError Factory::Apply(jvmtiEnv*ti,const std::vector<Definition>&definitions,
  // Keep the operation lease through native owner closure and root cleanup.
  // A startup witness is required even for a single structural target: its
  // loaded-caller graph can span Classes outside the submitted batch.
- redefinition_gate::Lease lease(run_.hierarchy.context->vm);
+ redefinition_gate::Lease lease(static_cast<JavaVM*>(run_.hierarchy.context->vm));
  struct Close{Factory&factory;~Close(){factory.Finish();}}close{*this};
  if(!lease.Acquired()){
   owned_failure_diagnostic::Publish(redefinition_gate::Diagnostic(),error);
