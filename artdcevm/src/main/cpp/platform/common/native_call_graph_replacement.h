@@ -63,9 +63,27 @@ class Batch final {
  const std::vector<native_selective_interpretation::Method>&Selection()const noexcept{return prepared_?selection_:empty_;}
  size_t ClassCount()const noexcept{return prepared_?bindings_.size():0;}
  const bounded_managed_roots::Store*RootStore()const noexcept{return prepared_?roots_:nullptr;}
+ // Rooted replacement declarations and every actual incoming invoke. Exact
+ // edges are same-Class direct/static declarations only. Other calls remain
+ // explicit gaps until original resolution/dispatch and BEFORE union joining.
+ // Even complete OutgoingPlan() covers this batch only, never union closure.
+ // Loader tokens are this batch's rooted equivalence classes; union joining
+ // must independently rebase them against the BEFORE roots. These symbolic
+ // replacement targets do not attest the unpublished DexCache resolver state.
+ const std::vector<native_call_graph::Node>&Nodes()const noexcept{return prepared_?nodes_:empty_nodes_;}
+ const std::vector<native_call_graph::Edge>&Edges()const noexcept{return prepared_?edges_:empty_edges_;}
+ const native_call_graph::Plan&OutgoingPlan()const noexcept{return prepared_?plan_:empty_plan_;}
  private:
+ bool BuildGraph(const modern_field_metadata::ReadContext&,std::string*);
+ bool CheckGraph(const modern_field_metadata::ReadContext&)const noexcept;
  std::vector<std::unique_ptr<Binding>>bindings_;
  std::vector<native_selective_interpretation::Method>selection_,empty_;
+ struct NodeBinding {size_t binding=SIZE_MAX,declared=SIZE_MAX;};
+ std::vector<NodeBinding>node_bindings_;
+ std::vector<bounded_managed_roots::Slot>loaders_;
+ std::vector<native_call_graph::Node>nodes_,empty_nodes_;
+ std::vector<native_call_graph::Edge>edges_,empty_edges_;
+ native_call_graph::Plan plan_{},empty_plan_{};
  const bounded_managed_roots::Store*roots_=nullptr;
  uint64_t generation_=0;bool attempted_=false,prepared_=false;
 };

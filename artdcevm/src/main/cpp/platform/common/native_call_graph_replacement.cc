@@ -170,7 +170,81 @@ bool Batch::Stage(HookEngine&hooks,const runnable_jni::Context&context,jvmtiEnv*
    return deny("call-graph-replacement-batch-native-method-alias-refused");
   selection_.insert(selection_.end(),b->Selection().begin(),b->Selection().end());
  }
- roots_=&roots;generation_=roots.Generation();prepared_=true;if(error)error->clear();return true;
+ roots_=&roots;generation_=roots.Generation();
+ if(!BuildGraph(read,error))return false;
+ if(!CheckGraph(read))return deny("call-graph-replacement-rooted-outgoing-graph-refused");
+ prepared_=true;if(error)error->clear();return true;
+}
+bool Batch::BuildGraph(const modern_field_metadata::ReadContext&read,std::string*error){
+ const auto deny=[&](const char*why){if(error)*error=why;return false;};
+ std::vector<size_t>seeds;
+ for(size_t i=0;i<bindings_.size();++i){const auto&b=*bindings_[i];
+  void*klass=nullptr;void*loader=nullptr;evolution::MappedDexMetadata dex{};field_copy::CopyClassView named{};
+  if(!b.Check(read)||!roots_->Read(b.new_class_,&klass)||!roots_->Read(b.loader_,&loader)||
+     !native_interface_dispatch::ReadCurrentNamespace(*b.metadata_,klass,read,&dex,&named))
+   return deny("call-graph-replacement-outgoing-current-Class-unproved");
+  uint64_t token=0;
+  if(loader){
+   size_t index=0;
+   for(;index<loaders_.size();++index){void*other=nullptr;
+    if(!roots_->Read(loaders_[index],&other))return deny("call-graph-replacement-outgoing-loader-unproved");
+    if(loader==other)break;
+   }
+   if(index==loaders_.size())loaders_.push_back(b.loader_);
+   token=index+1;
+  }
+  const size_t base=nodes_.size();
+  std::unordered_map<uint32_t,size_t>indices;
+  for(size_t n=0;n<b.declared_.size();++n){const auto&m=b.declared_[n];
+   const size_t ordinal=nodes_.size();
+   if(!indices.emplace(m.index,n).second)return deny("call-graph-replacement-outgoing-index-ambiguous");
+   nodes_.push_back({{dex.begin,token,m.method},(jvmti_method_flags::Public(m.flags)&0x100u)?native_call_graph::MethodKind::Native:native_call_graph::MethodKind::Managed});
+   node_bindings_.push_back({i,n});if(m.body)seeds.push_back(ordinal);
+  }
+  // Incoming facts and native declarations have the same independently
+  // checked order/index. DEX indices never join across namespaces or loaders.
+  const auto&methods=b.incoming_->Methods();
+  for(size_t n=0;n<methods.size();++n)for(const auto&call:methods[n].calls){
+   const auto kind=native_call_graph::Kind(call.site.instruction.kind);size_t target=SIZE_MAX;
+   if((kind==native_call_graph::InvokeKind::Direct||kind==native_call_graph::InvokeKind::Static)&&
+      call.reference.declaring_class==b.incoming_->Schema()->descriptor){
+    auto found=indices.find(call.site.instruction.index);
+    if(found!=indices.end()){const size_t candidate=found->second;const auto&m=methods[candidate];
+     const bool is_static=(m.declaration.access&8u)!=0;
+     const bool direct=m.direct&&!is_static&&((m.declaration.access&2u)||m.declaration.name=="<init>");
+     if(!(m.declaration.access&0x400u)&&call.reference.name==m.declaration.name&&
+        call.reference.descriptor==m.declaration.descriptor&&
+        ((kind==native_call_graph::InvokeKind::Static&&m.direct&&is_static)||
+         (kind==native_call_graph::InvokeKind::Direct&&direct)))target=base+candidate;
+    }
+   }
+   edges_.push_back({base+n,target,call.site.dex_pc,kind,target==SIZE_MAX?
+    native_call_graph::Coverage::Unresolved:native_call_graph::Coverage::Exact});
+  }
+ }
+ plan_=native_call_graph::Build(nodes_,edges_,seeds);
+ return plan_.failure==native_call_graph::Failure::None||deny("call-graph-replacement-outgoing-graph-invalid");
+}
+bool Batch::CheckGraph(const modern_field_metadata::ReadContext&read)const noexcept{
+ if(!roots_||roots_->Generation()!=generation_||nodes_.size()!=node_bindings_.size())return false;
+ for(size_t i=0;i<loaders_.size();++i){void*loader=nullptr;
+  if(!roots_->Read(loaders_[i],&loader)||!loader)return false;
+  for(size_t j=0;j<i;++j){void*other=nullptr;if(!roots_->Read(loaders_[j],&other)||other==loader)return false;}
+ }
+ for(size_t i=0;i<nodes_.size();++i){const auto&binding=node_bindings_[i];
+  if(binding.binding>=bindings_.size())return false;const auto&b=*bindings_[binding.binding];
+  if(binding.declared>=b.declared_.size())return false;
+  const auto&node=nodes_[i];void*klass=nullptr;void*loader=nullptr;evolution::MappedDexMetadata dex{};field_copy::CopyClassView named{};
+  if(!roots_->Read(b.new_class_,&klass)||!roots_->Read(b.loader_,&loader)||
+     !native_interface_dispatch::ReadCurrentNamespace(*b.metadata_,klass,read,&dex,&named)||
+     node.identity.dex_namespace!=dex.begin||node.identity.native_method!=b.declared_[binding.declared].method)return false;
+  const auto token=node.identity.loader_token;
+  if(!token){if(loader)return false;}
+  else {void*representative=nullptr;
+   if(token>loaders_.size()||!roots_->Read(loaders_[token-1],&representative)||representative!=loader)return false;
+  }
+ }
+ return true;
 }
 bool Batch::Validate(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
  if(!prepared_||!roots_||roots_->Generation()!=generation_)return false;
@@ -183,6 +257,6 @@ bool Batch::Validate(const native_source_stop::Session&stop,const modern_field_m
       old==other_old||old==other_new||replacement==other_old||replacement==other_new)return false;
   }
  }
- return true;
+ return CheckGraph(read)&&stop.IsStopped(bindings_.front()->self_);
 }
 }

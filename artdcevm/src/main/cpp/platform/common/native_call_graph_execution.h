@@ -26,6 +26,7 @@ struct Report {
  native_call_graph_stack::Report replacement_inspected{};
  native_call_graph_stack::Report before_reinspected{};
  size_t replacement_classes=0;
+ size_t replacement_calls=0,replacement_call_gaps=0,replacement_native_boundaries=0;
  bool replacement_bodies_drained=false;
  size_t graph_native_boundaries=0;
  bool compiled_drained=false,native_boundary_obligations=false;

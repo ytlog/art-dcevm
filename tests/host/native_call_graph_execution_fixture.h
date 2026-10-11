@@ -19,7 +19,8 @@ jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char*p){std::free(p);return JVM
 jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char**out,char**){*out=strdup(c==reinterpret_cast<jclass>(old_class)?"LFixture;":"Ljava/lang/Object;");return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Status(jvmtiEnv*,jclass,jint*out){*out=JVMTI_CLASS_STATUS_VERIFIED|JVMTI_CLASS_STATUS_PREPARED|JVMTI_CLASS_STATUS_INITIALIZED;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL ClassFlags(jvmtiEnv*,jclass,jint*out){*out=1;return JVMTI_ERROR_NONE;}
-jvmtiError JNICALL Loader(jvmtiEnv*,jclass,jobject*out){*out=nullptr;return JVMTI_ERROR_NONE;}
+jobject replacement_loader=nullptr;
+jvmtiError JNICALL Loader(jvmtiEnv*,jclass klass,jobject*out){*out=klass==reinterpret_cast<jclass>(new_class)||klass==reinterpret_cast<jclass>(old_class)?replacement_loader:nullptr;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Interfaces(jvmtiEnv*,jclass,jint*n,jclass**out){*n=0;*out=nullptr;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL ClassMethods(jvmtiEnv*,jclass c,jint*n,jmethodID**out){*n=c==reinterpret_cast<jclass>(old_class)?3:1;*out=nullptr;if(*n){*out=static_cast<jmethodID*>(std::malloc(size_t(*n)*sizeof(jmethodID)));for(size_t i=0;i<size_t(*n);++i)(*out)[i]=reinterpret_cast<jmethodID>(uintptr_t(MethodAt(c==reinterpret_cast<jclass>(old_class)?i:3))|1u);}return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Name(jvmtiEnv*,jmethodID id,char**name,char**signature,char**){const char*names[]{"gone","keep","staticKeep","keep"};*name=strdup(names[MethodIndex(id)]);*signature=strdup("()I");return JVMTI_ERROR_NONE;}

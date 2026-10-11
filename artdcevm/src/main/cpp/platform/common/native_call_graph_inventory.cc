@@ -6,14 +6,6 @@
 #include <tuple>
 #include <unordered_map>
 namespace artdcevm::native_call_graph_inventory {
-namespace {
-native_call_graph::InvokeKind Kind(receiver_guard::InvokeKind k){
- using K=receiver_guard::InvokeKind;using O=native_call_graph::InvokeKind;
- switch(k){case K::Direct:return O::Direct;case K::Static:return O::Static;case K::Super:return O::Super;
- case K::Virtual:return O::Virtual;case K::Interface:return O::Interface;case K::Custom:return O::Custom;
- default:return O::Polymorphic;}
-}
-}
 bool Inventory::Prepare(const runnable_jni::Context&context,const native_schema_guard_verifier::Verifier&verifier,
  const receiver_guard::SourceProducer&source,const std::vector<void*>&changed,bool changed_fields,std::string*error){
  const auto deny=[&](const char*s){if(error)*error=s;return false;};
@@ -36,7 +28,7 @@ bool Inventory::Prepare(const runnable_jni::Context&context,const native_schema_
   if(!declarations.emplace(Key{id.dex_namespace,id.loader_token,methods_[i].native.dex_index},i).second)return deny("call-graph-source-declaration-ambiguous");
  }
  for(size_t caller=0;caller<methods_.size();++caller)for(const auto&site:methods_[caller].calls){
-  const auto kind=Kind(site.instruction.kind);size_t target=SIZE_MAX;
+  const auto kind=native_call_graph::Kind(site.instruction.kind);size_t target=SIZE_MAX;
   if(kind==native_call_graph::InvokeKind::Direct||kind==native_call_graph::InvokeKind::Static){
    const auto&from=nodes_[caller].identity;
    auto found=declarations.find(Key{from.dex_namespace,from.loader_token,site.instruction.index});

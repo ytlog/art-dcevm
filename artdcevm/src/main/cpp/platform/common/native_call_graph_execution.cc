@@ -61,6 +61,10 @@ bool Execution::PrepareReplacements(HookEngine&hooks,const runnable_jni::Context
  if(!SameGeneration())return RefusePrepare(Status::PreparationRefused,"call-graph-execution-before-roots-changed-during-replacement-stage",error);
  report_.scope=GraphScope::InstalledBeforeAndReplacementBodies;
  report_.replacement_classes=replacements_.ClassCount();
+ report_.replacement_calls=replacements_.Edges().size();
+ report_.replacement_call_gaps=replacements_.OutgoingPlan().gaps.size();
+ report_.replacement_native_boundaries=replacements_.OutgoingPlan().native_boundaries.size();
+ report_.native_boundary_obligations|=report_.replacement_native_boundaries!=0;
  phase_=Phase::ReplacementPrepared;report_.status=Status::ReplacementPrepared;report_.failure=nullptr;return true;
 }
 bool Execution::Inspect(void*raw,native_source_stop::Session&stop)noexcept {

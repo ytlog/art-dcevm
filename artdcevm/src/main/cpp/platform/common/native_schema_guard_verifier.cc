@@ -682,9 +682,7 @@ bool Verifier::ApplyCallGraphResolution(const runnable_jni::Context&context,
    !supers.emplace(std::make_pair(w.caller,inventory->methods_[w.caller].calls[w.site].dex_pc),&w).second)return Fail(error,"Super source receipt is ambiguous");
  std::vector<native_call_graph::Edge> edges;size_t at=0;
  for(size_t caller=0;caller<inventory->methods_.size();++caller)for(const auto&site:inventory->methods_[caller].calls){
-  const auto kind=[&]{using I=receiver_guard::InvokeKind;using O=native_call_graph::InvokeKind;
-   switch(site.instruction.kind){case I::Direct:return O::Direct;case I::Static:return O::Static;case I::Super:return O::Super;
-    case I::Virtual:return O::Virtual;case I::Interface:return O::Interface;case I::Custom:return O::Custom;default:return O::Polymorphic;}}();
+  const auto kind=native_call_graph::Kind(site.instruction.kind);
   const auto unresolved=[&]{edges.push_back({caller,SIZE_MAX,site.dex_pc,kind,native_call_graph::Coverage::Unresolved});};
   if(kind==native_call_graph::InvokeKind::Custom||kind==native_call_graph::InvokeKind::Polymorphic){unresolved();continue;}
   if(at>=results.size())return Fail(error,"Call graph original result count mismatch");const auto&r=results[at++];

@@ -1,6 +1,12 @@
 #include "platform/common/native_call_graph_code.h"
 #include "platform/common/native_dex_instruction_width.h"
 namespace artdcevm::native_call_graph {
+InvokeKind Kind(receiver_guard::InvokeKind kind)noexcept{
+ using I=receiver_guard::InvokeKind;
+ switch(kind){case I::Direct:return InvokeKind::Direct;case I::Static:return InvokeKind::Static;
+  case I::Super:return InvokeKind::Super;case I::Virtual:return InvokeKind::Virtual;case I::Interface:return InvokeKind::Interface;
+  case I::Custom:return InvokeKind::Custom;default:return InvokeKind::Polymorphic;}
+}
 bool ScanCode(const receiver_guard::CodeView&code,std::vector<CallSite>*out,const char**failure){
  if(failure)*failure=nullptr;
  auto deny=[&](const char*reason){if(out)out->clear();if(failure)*failure=reason;return false;};

@@ -2,7 +2,7 @@
 from pathlib import Path
 import hashlib,struct,zlib
 
-def write(directory:Path,incoming_extra=False,abstract_keep=False,native_all=False)->Path:
+def write(directory:Path,incoming_extra=False,abstract_keep=False,native_all=False,outgoing='static')->Path:
     method_names=['gone','keep']+(['newKeep'] if incoming_extra else [])+['staticKeep']
     strings=sorted(['I','LFixture;','Ljava/lang/Object;','number','value','left','right']+method_names)
     types=sorted(['I','LFixture;','Ljava/lang/Object;']);sid={s:i for i,s in enumerate(strings)};tid={s:i for i,s in enumerate(types)}
@@ -21,17 +21,19 @@ def write(directory:Path,incoming_extra=False,abstract_keep=False,native_all=Fal
     for i,(n,t,_) in enumerate(fields):struct.pack_into('<HHI',b,fa+8*i,tid['LFixture;'],tid[t],sid[n])
     for i,n in enumerate(method_names):struct.pack_into('<HHI',b,ma+8*i,tid['LFixture;'],0,sid[n])
     struct.pack_into('<HHI',b,ma+len(method_names)*8,tid['Ljava/lang/Object;'],0,sid['keep'])
-    b.extend(bytes((-len(b))%4));keep=len(b);b.extend(struct.pack('<HHHHII5H',1,1,0,0,0,5,0x0071,2,0,0x000a,0x000f))
+    invoke=0x1070 if outgoing in ('direct','wrong-direct') else 0x106e if outgoing in ('virtual','external') else 0x0071
+    target=len(method_names) if outgoing=='external' else 2
+    b.extend(bytes((-len(b))%4));keep=len(b);b.extend(struct.pack('<HHHHII5H',1,1,0,0,0,5,invoke,target,0,0x000a,0x000f))
     b.extend(bytes((-len(b))%4));static=len(b);b.extend(struct.pack('<HHHHII2H',1,0,0,0,0,2,0x0012,0x000f))
     b.extend(bytes((-len(b))%4));parent_code=len(b);b.extend(struct.pack('<HHHHII2H',1,1,0,0,0,2,0x0012,0x000f))
     extra=0
     if incoming_extra:
-        b.extend(bytes((-len(b))%4));extra=len(b);b.extend(struct.pack('<HHHHII5H',1,0,0,0,0,5,0x0071,3,0,0x000a,0x000f))
+        b.extend(bytes((-len(b))%4));extra=len(b);b.extend(struct.pack('<HHHHII5H',1,1 if outgoing=='direct' else 0,0,0,0,5,0x0071,3,0,0x000a,0x000f))
     cd=len(b);b.extend(bytes([1,3,2 if incoming_extra else 1,2]))
     for group in ([x for x in enumerate(fields) if x[1][2]&8],[x for x in enumerate(fields) if not x[1][2]&8]):
         previous=0
         for index,(_,_,flags) in group:b.extend(leb(index-previous)+leb(flags));previous=index
-    if incoming_extra:b.extend(leb(2)+leb(0x109 if native_all else 9)+leb(0 if native_all else extra)+leb(1)+leb(0x109 if native_all else 9)+leb(0 if native_all else static))
+    if incoming_extra:b.extend(leb(2)+leb(0x109 if native_all else 2 if outgoing=='direct' else 9)+leb(0 if native_all else extra)+leb(1)+leb(0x109 if native_all or outgoing=='native' else 9)+leb(0 if native_all or outgoing=='native' else static))
     else:b.extend(leb(2)+leb(0x109 if native_all else 9)+leb(0 if native_all else static))
     b.extend(leb(0)+leb(0x101)+leb(0));b.extend(leb(1)+leb(0x101 if native_all else 0x401 if abstract_keep else 1)+leb(0 if abstract_keep or native_all else keep))
     struct.pack_into('<8I',b,ca,tid['LFixture;'],0x401 if abstract_keep else 1,tid['Ljava/lang/Object;'],0,0xffffffff,0,cd,0)

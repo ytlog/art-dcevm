@@ -1,10 +1,11 @@
 #include "native_call_graph_execution_fixture.h"
 #include "platform/common/native_call_graph_replacement.h"
 int main(int argc,char**argv){
- assert(argc==4);const std::string scenario=argv[3];const bool abstract=scenario=="abstract";const bool native_all=scenario=="native-only";const size_t selected=native_all?1:abstract?3:4;std::string error;
+ assert(argc==4);const std::string scenario=argv[3];const bool abstract=scenario=="abstract";const bool native_all=scenario=="native-only";const bool native_target=scenario=="outgoing-native";const size_t selected=native_all?1:abstract||native_target?3:4;std::string error;
  drain_fixture::Environment environment;environment.Prepare(error);execution_fixture::Hooks hooks;
  jvmtiInterface_1 functions{};jvmtiEnv ti{&functions};native_schema_guard_verifier::Bindings bindings{};
  execution_fixture::Configure(environment,functions,bindings,argv[1]);
+ if(scenario=="outgoing-loader"){old_class->class_loader=uint32_t(uintptr_t(parent_class));execution_fixture::replacement_loader=reinterpret_cast<jobject>(parent_class);}
  receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kStandard,environment.metadata,&linker,Current,&error,&::runtime));
  assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
  native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
@@ -21,6 +22,7 @@ int main(int argc,char**argv){
  auto incoming_bytes=File(argv[2]);native_call_graph_incoming::Inventory incoming;
  assert(incoming.Capture(incoming_bytes,0,"LFixture;",&error));
  LinkDex(new_class,incoming_bytes);new_class->access_flags=abstract?0x401:1;new_class->dex_class_def_index=0;new_class->dex_type_index=1;
+ if(scenario=="outgoing-loader"){new_class->class_loader=uint32_t(uintptr_t(parent_class));execution_fixture::replacement_loader=reinterpret_cast<jobject>(parent_class);}
  // Independent native Method12 array model, intentionally interleaved rather
  // than following incoming class_data's direct/virtual record order.
  auto*array=static_cast<unsigned char*>(heap.New(8+4*32));Put32(array,0,4);new_class->methods=uintptr_t(array);
@@ -28,9 +30,9 @@ int main(int argc,char**argv){
  size_t p=Read32(incoming_bytes.data(),Read32(incoming_bytes.data(),100)+24);
  auto leb=[&](){uint32_t n=0;for(unsigned s=0;s<35;s+=7){auto b=incoming_bytes[p++];n|=uint32_t(b&127)<<s;if(!(b&128))return n;}std::abort();};
  uint32_t counts[4];for(auto&n:counts)n=leb();for(size_t i=0;i<counts[0]+counts[1];++i){leb();leb();}
- std::array<uint32_t,4>offsets{};for(unsigned kind=2;kind<4;++kind){uint32_t index=0;for(size_t i=0;i<counts[kind];++i){index+=leb();leb();offsets[index]=leb();}}
+ std::array<uint32_t,4>offsets{},modifiers{};for(unsigned kind=2;kind<4;++kind){uint32_t index=0;for(size_t i=0;i<counts[kind];++i){index+=leb();modifiers[index]=leb();offsets[index]=leb();}}
  for(size_t n=0;n<4;++n){auto*m=reinterpret_cast<abi::arm64::android12::Method12*>(array+8+32*n);const auto index=order[n];
-  native[index]=m;m->declaring_class=uint32_t(uintptr_t(new_class));m->dex_method_index=index;m->access_flags=index==0?0x101:index==1?(native_all?0x101:abstract?0x501:1):(native_all?0x109:9);m->data=offsets[index]?uintptr_t(incoming_bytes.data()+offsets[index]):uintptr_t(&binding_value);}
+  native[index]=m;m->declaring_class=uint32_t(uintptr_t(new_class));m->dex_method_index=index;m->access_flags=modifiers[index]|((modifiers[index]&0x400u)?0x100u:0);m->data=offsets[index]?uintptr_t(incoming_bytes.data()+offsets[index]):uintptr_t(&binding_value);}
  auto old_array=reinterpret_cast<jobjectArray>(Array({old_class}));auto new_array=reinterpret_cast<jobjectArray>(Array({new_class}));
  std::vector<void*>holder_slots(13);holder_slots[11]=old_array;holder_slots[12]=new_array;
  void*root_array=Array(holder_slots);uint32_t array_handle=uint32_t(uintptr_t(root_array));
@@ -62,7 +64,7 @@ int main(int argc,char**argv){
  wrong=graph;wrong.holder=&owner;refused(wrong);
  wrong=graph;wrong.partitions[0].old_classes=new_array;wrong.partitions[0].new_classes=old_array;refused(wrong);
  Put32(array,0,5);refused(graph);Put32(array,0,4);
- const auto public_loader=new_class->class_loader;new_class->class_loader=uint32_t(uintptr_t(parent_class));refused(graph);new_class->class_loader=public_loader;
+ const auto public_loader=new_class->class_loader;new_class->class_loader=public_loader?0:uint32_t(uintptr_t(parent_class));refused(graph);new_class->class_loader=public_loader;
  auto result=execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),callback,&request);
  if(result!=runnable_jni::Result::kSuccess){std::cerr<<"Actual replacement Stage: "<<error<<"\n";return 2;}
  assert(replacement.DeclaredCount()==4&&replacement.Selection().size()==selected-1);
@@ -93,6 +95,27 @@ int main(int argc,char**argv){
  struct ReplacementRequest {native_call_graph_execution::Execution&operation;Request&request;const std::vector<native_call_graph_replacement::Definition>&definitions;}coordinator{operation,request,definitions};
  assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),[](const runnable_jni::Context&ctx,void*p){auto&b=*static_cast<ReplacementRequest*>(p);auto&r=b.request;return b.operation.PrepareReplacements(r.hooks,ctx,&r.ti,r.loading,r.driver,r.graph,b.definitions,r.environment.store,&r.error);},&coordinator)==runnable_jni::Result::kSuccess);
  assert(operation.Replacements().ClassCount()==1&&operation.Replacements().Selection().size()==selected-1);
+ const auto&outgoing=operation.Replacements();const auto&nodes=outgoing.Nodes();const auto&edges=outgoing.Edges();
+ assert(nodes.size()==4&&outgoing.OutgoingPlan().failure==native_call_graph::Failure::None);
+ const auto ordinal=[&](void*m){for(size_t i=0;i<nodes.size();++i)if(nodes[i].identity.native_method==m)return i;std::abort();};
+ for(const auto&node:nodes)assert(node.identity.dex_namespace==incoming_bytes.data()&&node.identity.dex_namespace!=execution_fixture::dex.data()&&node.identity.loader_token==uint64_t(scenario=="outgoing-loader"));
+ if(abstract)assert(nodes[ordinal(native[1])].kind==native_call_graph::MethodKind::Managed);
+ const size_t calls=native_all?0:abstract?1:2;
+ assert(edges.size()==calls&&operation.LastReport().replacement_calls==calls);
+ const bool gap=scenario=="outgoing-wrong-direct"||scenario=="outgoing-virtual"||scenario=="outgoing-external";
+ assert(outgoing.OutgoingPlan().complete==!gap&&outgoing.OutgoingPlan().gaps.size()==size_t(gap));
+ assert(operation.LastReport().replacement_call_gaps==size_t(gap));
+ for(const auto&edge:edges){
+  assert(edge.dex_pc==0);
+  if(edge.caller==ordinal(native[1])){
+   assert(edge.target==(gap?SIZE_MAX:ordinal(native[2])));
+   assert(edge.coverage==(gap?native_call_graph::Coverage::Unresolved:native_call_graph::Coverage::Exact));
+   assert(edge.kind==(scenario=="outgoing-direct"||scenario=="outgoing-wrong-direct"?native_call_graph::InvokeKind::Direct:
+    scenario=="outgoing-virtual"||scenario=="outgoing-external"?native_call_graph::InvokeKind::Virtual:native_call_graph::InvokeKind::Static));
+  }else assert(edge.caller==ordinal(native[2])&&edge.target==ordinal(native[3])&&edge.coverage==native_call_graph::Coverage::Exact);
+ }
+ if(native_target){assert(nodes[ordinal(native[3])].kind==native_call_graph::MethodKind::Native);
+  assert(outgoing.OutgoingPlan().native_boundaries==std::vector<size_t>{ordinal(native[3])}&&operation.LastReport().replacement_native_boundaries==1);}
  if(abstract)for(const auto&m:replacement.Selection())assert(m.method!=native[1]);
  for(const auto&m:replacement.Selection())assert(m.method==native[m.dex_index]&&m.method!=execution_fixture::MethodAt(m.dex_index));
  std::vector<native_selective_interpretation::Method>combined{{execution_fixture::MethodAt(1),environment.root,environment.root,1,1}};
@@ -102,7 +125,8 @@ int main(int argc,char**argv){
  assert(stack.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,&error)&&stack.Prepare(selection,&stack_prepared,&error));
  drain_fixture::frames[0]={{execution_fixture::MethodAt(1),true},{native[2],!native_all}};
  drain_fixture::frames[1]={{native[3],!native_all}};drain_fixture::frames[2]={{nullptr,false}};
- ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(execution_fixture::dex.data());maps.Cover(incoming_bytes.data());maps.Cover(&holder);
+ auto relocated_bytes=incoming_bytes;
+ ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(execution_fixture::dex.data());maps.Cover(incoming_bytes.data());maps.Cover(relocated_bytes.data());maps.Cover(&holder);maps.Cover(&array_handle);
  modern_field_metadata::ReadContext read{&maps,ExplicitMappings::Extent};execution_fixture::stopped_read=&read;
  using Status=native_call_graph_execution::Status;
  const auto refund=[&](bool live_frames,bool expect_invalid=false){
@@ -155,6 +179,7 @@ int main(int argc,char**argv){
  }
  if(scenario=="body-changed")reinterpret_cast<unsigned char*>(static_cast<abi::arm64::android12::Method12*>(native[2])->data)[16]^=1;
  const auto inspected=operation.InspectActivation(thread.size(),read);
+ if(inspected.status==Status::InspectionRefused)std::cerr<<"Inspection refusal: "<<(inspected.failure?inspected.failure:"missing diagnostic")<<"\n";
  assert(!stopped&&!locked&&!drain_fixture::gc&&!operation.InspectionStopped());
  if(scenario=="quick"||scenario=="before-quick"||scenario=="body-changed"||scenario=="replacement-generation"||scenario=="partial-activation"){
   assert(inspected.status==((scenario=="body-changed"||scenario=="replacement-generation"||scenario=="partial-activation")?Status::InspectionRefused:Status::UnsupportedActiveCompiled));
@@ -169,9 +194,20 @@ int main(int argc,char**argv){
  assert(inspected.replacement_activation.activated==selected-1-(scenario=="preexisting"?1:0)&&inspected.replacement_activation.selected==selected-1);
  assert(inspected.before_reinspected.walk_complete&&inspected.before_reinspected.selected_shadow==1&&inspected.before_reinspected.registered_threads==3);
  if(native_all)assert(!inspected.replacement_inspected.walk_complete&&operation.Replacements().Selection().empty()&&inspected.before_reinspected.boundary_owners_required);
- else assert(inspected.replacement_inspected.walk_complete&&inspected.replacement_inspected.selected_shadow==2&&inspected.replacement_inspected.registered_threads==3);
- struct UnionFinal {native_call_graph_execution::Execution&operation;native_source_class_loading::Run&loading;void*driver;modern_field_metadata::ReadContext&read;}union_final{operation,loading,&driver,read};
+ else assert(inspected.replacement_inspected.walk_complete&&inspected.replacement_inspected.selected_shadow==size_t(native_target?1:2)&&inspected.replacement_inspected.registered_threads==3);
+ struct UnionFinal {native_call_graph_execution::Execution&operation;native_source_class_loading::Run&loading;void*driver;modern_field_metadata::ReadContext&read;native_call_graph_replacement::Binding&binding;std::vector<unsigned char>&bytes;std::vector<unsigned char>&relocated;}union_final{operation,loading,&driver,read,replacement,incoming_bytes,relocated_bytes};
  const auto union_refused=[](void*p,native_source_stop::Session&stop)noexcept{auto&r=*static_cast<UnionFinal*>(p);const auto os=method_identity::MappingOsQueries();const auto jni=jni_calls;forbid_provider_allocation=true;
+  assert(r.operation.Replacements().Validate(stop,r.read));
+  // Same DEX content at another address preserves the independent binding,
+  // but revokes the graph's captured namespace identity. No allocation/GC is
+  // performed by this model mutation inside the actual stopped callback.
+  auto*cache=reinterpret_cast<unsigned char*>(uintptr_t(new_class->dex_cache));dex_mapping_abi::Prefix*prefix=nullptr;
+  std::memcpy(&prefix,cache+offsetof(abi::arm64::android11::LegacyCache,dex_file),8);
+  prefix->begin=r.relocated.data();prefix->data_begin=r.relocated.data();
+  for(const auto&selected:r.operation.Replacements().Selection()){auto*m=static_cast<abi::arm64::android12::Method12*>(selected.method);m->data=uintptr_t(r.relocated.data())+(m->data-uintptr_t(r.bytes.data()));}
+  assert(r.binding.Validate(stop,r.read)&&!r.operation.Replacements().Validate(stop,r.read));
+  prefix->begin=r.bytes.data();prefix->data_begin=r.bytes.data();
+  for(const auto&selected:r.operation.Replacements().Selection()){auto*m=static_cast<abi::arm64::android12::Method12*>(selected.method);m->data=uintptr_t(r.bytes.data())+(m->data-uintptr_t(r.relocated.data()));}
   assert(r.operation.Replacements().Validate(stop,r.read));
   const auto report=r.operation.ValidateFinal(stop,r.loading,r.driver,r.read);
   assert(report.status==Status::UnsupportedIncompleteGraph&&!report.compiled_drained&&!report.replacement_bodies_drained&&std::string_view(report.failure)=="call-graph-execution-replacement-union-resolution-closure-unavailable");
@@ -188,7 +224,7 @@ int main(int argc,char**argv){
   assert(r.binding.Validate(stop,r.read));++r.validations;
   native_selective_interpretation::Report retained;assert(r.selection.ValidateRetained(stop,thread.data(),r.read,&retained)&&retained.already_interpreted==r.selected);
   auto scanned=r.stack.Scan(stop,thread.data(),r.threads,r.stack_prepared,r.read);
-  assert(scanned.walk_complete&&scanned.selected_drained&&scanned.selected_shadow==3&&scanned.registered_threads==3);
+  assert(scanned.walk_complete&&scanned.selected_drained&&scanned.selected_shadow==size_t((static_cast<abi::arm64::android12::Method12*>(r.methods[3])->access_flags&0x100u)?2:3)&&scanned.registered_threads==3);
   drain_fixture::frames[0][1].shadow=false;
   scanned=r.stack.Scan(stop,thread.data(),r.threads,r.stack_prepared,r.read);
   assert(scanned.walk_complete&&!scanned.selected_drained&&scanned.drain_required&&scanned.selected_quick==1);
@@ -202,7 +238,7 @@ int main(int argc,char**argv){
   Put32(r.array,0,3);assert(!r.binding.Validate(stop,r.read));Put32(r.array,0,4);
   const auto class_array=new_class->methods;new_class->methods=old_class->methods;assert(!r.binding.Validate(stop,r.read));new_class->methods=class_array;
   const auto class_flags=new_class->access_flags;new_class->access_flags^=0x10u;assert(!r.binding.Validate(stop,r.read));new_class->access_flags=class_flags;
-  const auto loader=new_class->class_loader;new_class->class_loader=uint32_t(uintptr_t(parent_class));assert(!r.binding.Validate(stop,r.read));new_class->class_loader=loader;
+  const auto loader=new_class->class_loader;new_class->class_loader=loader?0:uint32_t(uintptr_t(parent_class));assert(!r.binding.Validate(stop,r.read));new_class->class_loader=loader;
   const auto handle=*r.handle;*r.handle=0;assert(!r.binding.Validate(stop,r.read));*r.handle=handle;
   assert(r.binding.Validate(stop,r.read));++r.validations;
   forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==os&&jni_calls==jni);return true;
