@@ -6,6 +6,8 @@
 #include "platform/common/object_replacement_map.h"
 #include "platform/common/native_replacement_root_census.h"
 #include "platform/common/native_weak_replacement.h"
+#include "platform/common/native_exception_entry_ownership.h"
+#include "platform/common/native_jni_exception_calibration.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/prepared_root_registry.h"
 #include "platform/common/native_source_compilation.h"
@@ -24,7 +26,7 @@ class Binding final {
  using Replace=void(*)(void*,const void*);
  using SetStatus=void(*)(void*,uint8_t);
  using Retain=void(*)(void*,abi::arm64::android11::ReleaseObjectPointer);
- void*runtime_=nullptr;void**runtime_slot_=nullptr;void*thread_list_=nullptr;
+ void*runtime_=nullptr;void**runtime_slot_=nullptr;void*thread_list_=nullptr;void*vm_=nullptr;
  Replace replace_=nullptr;SetStatus status_=nullptr;Retain retain_=nullptr;
 };
 struct Dependencies {
@@ -37,6 +39,10 @@ struct Dependencies {
  const native_typed_heap_walk::Service*heap=nullptr;
  const native_typed_heap_walk::RootProvenance*root_provenance=nullptr;
  const native_weak_replacement::Service*weak_replacement=nullptr;
+ const source_handle_roots::Service*handle_roots=nullptr;
+ const native_exception_upcall_boundary::Service*upcall=nullptr;
+ const native_exception_entry_ownership::Proof*native_entries=nullptr;
+ const native_jni_exception_calibration::Service*jni_returns=nullptr;
  const native_cache::Service*cache=nullptr;
  native_schema_guard_verifier::Verifier*schema=nullptr;
  native_call_graph_execution::Execution*execution=nullptr;
@@ -90,6 +96,8 @@ class Service final:public source_commit::Services,
  bool Window(bool final=true)const noexcept;
  bool ValidateFor(const source_commit::Plan&,bool final,bool schema_guards=true)const;
  bool ObserveReplacementRoots(bool final)noexcept;
+ bool ObserveNativeBoundaryPrerequisites(bool final)noexcept;
+ bool ValidateNativeBoundaryPrerequisites(bool final)const noexcept;
  void RequireCommit()const noexcept;
  source_commit::Plan*plan_;Dependencies deps_;
  // Root bindings address vector elements. Freeze the storage layout before
@@ -102,6 +110,10 @@ class Service final:public source_commit::Services,
  std::unique_ptr<object_replacement::ObjectReplacementMap>map_;
  native_replacement_root_census::Report replacement_roots_{};
  mutable native_weak_replacement::Report weak_replacement_report_{};
+ native_managed_stack_chain::Chain native_chain_;
+ native_exception_upcall_boundary::Service::CaptureStorage upcall_storage_;
+ const native_exception_upcall_boundary::Proof*upcall_proof_=nullptr;
+ bool native_prerequisites_final_=false;
  bool replacement_roots_final_=false;
  mutable bool final_validated_=false,begun_=false,execution_released_=false,replaced_=false,restored_=false,cache_cleared_=false;
  bool registration_started_=false,registered_=false,refreshed_=false;

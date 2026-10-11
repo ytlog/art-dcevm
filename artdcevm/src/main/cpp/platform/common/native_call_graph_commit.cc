@@ -24,9 +24,11 @@ bool Binding::Bind(HookEngine&hooks,const runtime_services::Snapshot&runtime,std
  auto replace=reinterpret_cast<Replace>(hooks.FindSymbol("libopenjdkjvmti.so",kReplace));
  auto status=reinterpret_cast<SetStatus>(hooks.FindSymbol("libart.so",kStatus));
  auto retain=reinterpret_cast<Retain>(hooks.FindSymbol("libart.so",kRetain));
- if(!runtime.runtime||!runtime.receivers.heap||!runtime.receivers.class_linker||!runtime.receivers.thread_list||!slot||*slot!=runtime.runtime||
+ if(!runtime.runtime||!runtime.receivers.heap||!runtime.receivers.class_linker||!runtime.receivers.thread_list||
+    !runtime.receivers.java_vm||!slot||*slot!=runtime.runtime||
     !replace||!status||!retain)return Fail(error,"call-graph-commit-fixed-original-operations-unavailable");
  runtime_=runtime.runtime;runtime_slot_=slot;thread_list_=runtime.receivers.thread_list;
+ vm_=runtime.receivers.java_vm;
  replace_=replace;status_=status;retain_=retain;
  return true;
 }
@@ -38,6 +40,9 @@ std::unique_ptr<Service>Service::Prepare(const runnable_jni::Context&context,
     !deps.reflection||!deps.reflection_plan||!deps.initialization||!deps.heap||!deps.heap->Calibrated()||
     !deps.root_provenance||!deps.root_provenance->LocksCalibrated()||
     !deps.weak_replacement||!deps.weak_replacement->BoundTo(deps.binding->runtime_,deps.binding->thread_list_)||!deps.cache||!deps.cache->Prepared()||
+    !deps.handle_roots||!deps.handle_roots->Calibrated()||!deps.upcall||!deps.upcall->Prepared()||
+    !deps.native_entries||!deps.jni_returns||context.vm!=deps.binding->vm_||
+    !deps.jni_returns->MatchesVm(static_cast<JavaVM*>(context.vm))||
     !deps.schema||!deps.execution||!deps.interpretation||!deps.compilation||!deps.compilation_receipt||
     !deps.compilation->Validate(*deps.compilation_receipt,context.self)||
     !deps.stop||!deps.loading||!deps.read||!deps.read->owner||!deps.read->extent||
@@ -82,6 +87,7 @@ std::unique_ptr<Service>Service::Prepare(const runnable_jni::Context&context,
  for(auto destination:destinations)if(std::binary_search(sources.begin(),sources.end(),destination))
   return deny("call-graph-commit-replacement-is-an-original-carrier");
  auto result=std::unique_ptr<Service>(new Service(plan,deps));
+ if(!result->native_chain_.Prepare(65536))return deny("call-graph-commit-native-chain-reservation-refused");
  result->plan_storage_={plan.old_classes.data(),plan.new_classes.data(),plan.old_instances.data(),plan.new_instances.data(),plan.class_root_origins.data()};
  result->plan_counts_={plan.old_classes.size(),plan.new_classes.size(),plan.old_instances.size(),plan.new_instances.size(),plan.class_root_origins.size()};
  result->abstract_instances_=plan.abstract_instances;
@@ -129,7 +135,7 @@ bool Service::CanRefresh(const prepared_roots::Resolver&resolver)const noexcept{
  return true;
 }
 void Service::Refresh(const prepared_roots::Resolver&resolver)noexcept{
- if(!CanRefresh(resolver))std::abort();final_validated_=false;replacement_roots_={};
+ if(!CanRefresh(resolver))std::abort();final_validated_=false;replacement_roots_={};upcall_proof_=nullptr;
  plan_roots_.Refresh(resolver);map_->RefreshManagedRoots(resolver);
  for(auto*methods:deps_.methods)methods->RefreshManagedRoots(resolver);refreshed_=true;
 }
@@ -163,6 +169,23 @@ bool Service::ObserveReplacementRoots(bool final)noexcept{
    *deps_.stop,deps_.self,*deps_.read);
  return replacement_roots_.completed&&Window(final);
 }
+bool Service::ObserveNativeBoundaryPrerequisites(bool final)noexcept{
+ upcall_proof_=nullptr;native_prerequisites_final_=final;
+ if(!registered_||!refreshed_||begun_||!Window(final)||!PlanLayoutMatches(*plan_)||
+    !deps_.native_entries->ValidateNativeEntries(*deps_.stop,deps_.self)||
+    !deps_.jni_returns->MatchesVm(static_cast<JavaVM*>(deps_.binding->vm_)))return false;
+ const auto chain=native_chain_.Capture(*deps_.handle_roots,*deps_.stop,deps_.self,deps_.self,*deps_.cache,*deps_.read);
+ if(!chain.complete)return false;
+ upcall_proof_=deps_.execution->CaptureUpcallBoundary(*deps_.upcall,upcall_storage_,native_chain_,
+   *plan_,*deps_.stop,*deps_.read);
+ if(!ValidateNativeBoundaryPrerequisites(final)){upcall_proof_=nullptr;return false;}
+ return true;
+}
+bool Service::ValidateNativeBoundaryPrerequisites(bool final)const noexcept{
+ return upcall_proof_&&native_prerequisites_final_==final&&Window(final)&&
+   deps_.jni_returns->MatchesVm(static_cast<JavaVM*>(deps_.binding->vm_))&&
+   deps_.native_entries->ValidateNativeEntries(*deps_.stop,deps_.self)&&upcall_proof_->Validate(*plan_)&&Window(final);
+}
 bool Service::ValidateFor(const source_commit::Plan&plan,bool final,bool schema_guards)const{
  if(begun_||!registered_||!refreshed_||!Window(final)||!PlanLayoutMatches(plan)||!map_||
     !(final?deps_.execution->ValidateFinalProof(*deps_.stop,*deps_.read):deps_.execution->ValidateCollectedProof(*deps_.stop,*deps_.read))||
@@ -173,7 +196,7 @@ bool Service::ValidateFor(const source_commit::Plan&plan,bool final,bool schema_
     !deps_.initialization->Validate(plan,deps_.read)||
     !deps_.reflection->Validate(*deps_.reflection_plan,nullptr,true)||
     !object_replacement::VerifyObjectReplacementMap(*map_,nullptr)||
-    !replacement_roots_.completed||replacement_roots_final_!=final)return false;
+    !replacement_roots_.completed||replacement_roots_final_!=final||!ValidateNativeBoundaryPrerequisites(final))return false;
 
  if(map_->Size()!=plan.old_classes.size()+plan.old_instances.size())return false;
  for(size_t i=0;i<plan.old_classes.size();++i){
@@ -373,6 +396,8 @@ bool SourceOwner::Collected(native_hierarchy_session::Session&hierarchy,const ch
  if(!roots.completed)return deny(roots.failure?roots.failure:"call-graph-commit-collected-frame-root-stream-refused");
  if(!service_->ObserveReplacementRoots(false))
   return deny("call-graph-commit-collected-replacement-root-census-refused");
+ if(!service_->ObserveNativeBoundaryPrerequisites(false))
+  return deny("call-graph-commit-collected-native-boundary-prerequisites-refused");
  if(!hierarchy.Collected(*service_->plan_,nullptr))
   return deny("call-graph-commit-collected-hierarchy-seal-refused");
  // Hierarchy requests require the sealed, independently refreshed authority.
@@ -441,6 +466,7 @@ void SourceOwner::Finalize(void*driver,const transaction_root::Holder*holder)noe
  if(!frames||!deps.schema->VerifyFrozenBoundaryMembers(*service_->plan_,*frames,*deps.read))std::abort();
  if(!deps.execution->ObserveFrameRoots(stop_,*deps.read,*deps.root_provenance).completed||
     !service_->ObserveReplacementRoots(true)||
+    !service_->ObserveNativeBoundaryPrerequisites(true)||
     !authority_->VerifyFinal(*service_->plan_,0)||
     !service_->Validate(*service_->plan_))std::abort();
 }
@@ -494,7 +520,7 @@ bool SourceOwner::DropPreparedReferences(void*driver)noexcept{
 void SourceOwner::InvalidateRoots()noexcept{
  if(root_registry_)root_registry_->Invalidate();
  if(ledger_)ledger_->InvalidateRoots();
- if(service_){service_->refreshed_=false;service_->final_validated_=false;service_->replacement_roots_={};}
+ if(service_){service_->refreshed_=false;service_->final_validated_=false;service_->replacement_roots_={};service_->upcall_proof_=nullptr;}
 }
 void SourceOwner::Close()noexcept{
  InvalidateRoots();

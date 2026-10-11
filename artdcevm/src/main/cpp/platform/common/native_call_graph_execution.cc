@@ -530,6 +530,16 @@ native_call_graph_stack::FrameRootReport Execution::ObserveFrameRoots(const nati
 bool Execution::ValidateCollectedProof(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
  return ValidateWindowProof(stop,read,false);
 }
+const native_exception_upcall_boundary::Proof*Execution::CaptureUpcallBoundary(
+ const native_exception_upcall_boundary::Service&source,
+ native_exception_upcall_boundary::Service::CaptureStorage&storage,
+ const native_managed_stack_chain::Chain&chain,const source_commit::Plan&plan,
+ const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
+ const bool final=phase_==Phase::Finalized;
+ if(!ValidateWindowProof(stop,read,final))return nullptr;
+ const auto*proof=source.Capture(storage,plan,chain,stack_,stack_prepared_,stop,self_,read);
+ return proof&&proof->Validate(plan)&&ValidateWindowProof(stop,read,final)?proof:nullptr;
+}
 bool Execution::ValidateWindowProof(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read,bool final)const noexcept{
  if((final?phase_!=Phase::Finalized:phase_!=Phase::CollectedReady)||final_stop_!=&stop||final_read_!=&read||
     !(final?stop.IsFinalWindow(self_):stop.IsCollectedStop(self_))||

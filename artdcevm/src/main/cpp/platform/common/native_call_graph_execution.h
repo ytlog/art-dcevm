@@ -3,6 +3,7 @@
 #include "platform/common/native_call_graph_stack.h"
 #include "platform/common/native_call_graph_replacement.h"
 #include "platform/common/native_interpretation_registry.h"
+#include "platform/common/native_exception_upcall_boundary.h"
 namespace artdcevm::native_hierarchy_session {struct Bindings;}
 
 namespace artdcevm::native_call_graph_execution {
@@ -157,6 +158,12 @@ class Execution final {
  // authority; the full graph receipt is checked before and after the callee.
  native_call_graph_stack::FrameRootReport ObserveFrameRoots(const native_source_stop::Session&,
    const modern_field_metadata::ReadContext&,const native_typed_heap_walk::RootProvenance&)const noexcept;
+ // Consume the same complete graph stream; never expose its private Prepared
+ // owner or let a calibration sample substitute for this transaction window.
+ const native_exception_upcall_boundary::Proof*CaptureUpcallBoundary(
+   const native_exception_upcall_boundary::Service&,native_exception_upcall_boundary::Service::CaptureStorage&,
+   const native_managed_stack_chain::Chain&,const source_commit::Plan&,
+   const native_source_stop::Session&,const modern_field_metadata::ReadContext&)const noexcept;
  // Before original source refund can dispose replacement metadata: requires
  // the same live Holder/Run, a complete walk with no selected quick OR shadow
  // frame, then original removal of this operation's new deoptimized entries
