@@ -58,6 +58,7 @@ ARTDCEVM_CHECK_VISITOR(Visitor17,android17::CodeInfoPair)
 inline constexpr size_t kThreadOffset=offsetof(Visitor13,thread);
 inline constexpr size_t kShadowOffset=offsetof(Visitor13,shadow_frame);
 inline constexpr size_t kQuickOffset=offsetof(Visitor13,quick_frame);
+inline constexpr size_t kQuickPcOffset=offsetof(Visitor13,pc);
 // Diagnostic only: compare the constructor's independently supplied Context at
 // each complete fixed source declaration. This never selects a new geometry or
 // permits walking a failed candidate; it identifies which declaration needs

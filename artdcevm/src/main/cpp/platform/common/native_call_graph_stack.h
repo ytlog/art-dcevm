@@ -4,6 +4,7 @@
 #include "platform/common/stack_visitor_service.h"
 #include "platform/abi/arm64/context.h"
 #include "platform/common/native_runtime_frame.h"
+#include "platform/common/native_typed_heap_walk.h"
 #include <vector>
 namespace artdcevm::native_call_graph_stack {
 enum class FrameKind:uint8_t {Managed,Native,Runtime,Transition};
@@ -35,6 +36,11 @@ struct Report {
  size_t native_continuations=0,runtime_continuations=0;
  bool walk_complete=false,drain_required=false,selected_drained=false;
  bool boundary_owners_required=false;const char*failure=nullptr;
+};
+struct FrameRootReport {
+ native_typed_heap_walk::RootReport roots{};
+ size_t managed_roots=0,native_roots=0,runtime_roots=0;
+ bool completed=false;const char*failure=nullptr;
 };
 class Service final {
  public:
@@ -71,7 +77,15 @@ class Service final {
  // owners, and does not infer that an active compiled frame has drained.
  bool ValidateStream(const Prepared&,const native_source_stop::Session&,void*self,
                      const modern_field_metadata::ReadContext&)const noexcept;
+ // Join the actual Runtime AllRoots frame cursors to this same-stop complete
+ // walk. Callback slots and root values never escape. Completion proves this
+ // source stream/cursor correspondence only, not weak-root or native no-escape
+ // coverage, a writable physical spill, or a commit capability.
+ FrameRootReport ObserveFrameRoots(const Prepared&,const native_source_stop::Session&,void*self,
+  const modern_field_metadata::ReadContext&,const native_typed_heap_walk::RootProvenance&)const noexcept;
  private:
+ bool MatchFrameRoot(const Prepared&,const modern_field_metadata::ReadContext&,
+  const native_typed_heap_walk::RootRecord&,size_t*)const noexcept;
  Report ScanImpl(const native_source_stop::Session&,void*,const native_cache::Service&,
   Prepared&,const modern_field_metadata::ReadContext&,bool retained)const noexcept;
  template<class Base>bool Walk(void*,const native_source_stop::Session&,void*,Prepared&,

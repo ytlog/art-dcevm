@@ -90,6 +90,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/source_allocation_transaction.cc
     platform/common/native_hierarchy_receiver.cc
     platform/common/native_typed_heap_walk.cc
+    platform/common/native_runtime_root_provenance.cc
     platform/common/native_weak_sweep_observer.cc
     platform/common/native_typed_heap_calibration.cc
     platform/common/native_receiver_guard.cc

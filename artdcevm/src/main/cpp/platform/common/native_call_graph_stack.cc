@@ -91,6 +91,60 @@ bool Service::ValidateStream(const Prepared&p,const native_source_stop::Session&
  }
  return stop.IsStopped(self);
 }
+bool Service::MatchFrameRoot(const Prepared&p,const modern_field_metadata::ReadContext&read,
+ const native_typed_heap_walk::RootRecord&root,size_t*out)const noexcept{
+ using namespace abi::arm64::runtime_root_visit;
+ if(!out||root.type!=kJavaFrameRoot||!root.thread_id||!root.original_frame_visitor||
+    p.service!=this||!p.stream_complete||p.stream_read!=&read||!p.stream_stop||
+    !p.stream_stop->IsStopped(p.stream_self)||!read.owner||!read.extent)return false;
+ const auto*cursor=root.original_frame_visitor;size_t extent=0;
+ if(!read.extent(read.owner,cursor,&extent)||extent<stack_visitor_service::Service::StorageSize(declaration_))return false;
+ void*method=nullptr,*thread=nullptr,*shadow=nullptr,*quick=nullptr;uintptr_t pc=0;
+ if(!stack_.Method(cursor,extent,&method)||!method)return false;
+ const auto*bytes=static_cast<const unsigned char*>(cursor);
+ std::memcpy(&thread,bytes+abi::arm64::stack::kThreadOffset,sizeof(thread));
+ std::memcpy(&shadow,bytes+abi::arm64::stack::kShadowOffset,sizeof(shadow));
+ std::memcpy(&quick,bytes+abi::arm64::stack::kQuickOffset,sizeof(quick));
+ std::memcpy(&pc,bytes+abi::arm64::stack::kQuickPcOffset,sizeof(pc));
+ if(!thread||(shadow&&quick)||(!shadow&&!quick))return false;
+ for(size_t ordinal=0;ordinal<p.frames.size();++ordinal){const auto&frame=p.frames[ordinal];
+  if(frame.thread!=thread||frame.kind==FrameKind::Transition)continue;
+  // ReferenceMapVisitor skips inline cursors; our complete walk includes them.
+  // Match its original outer method in the actual quick slot, never an inline
+  // logical method or a coincidentally equal descriptor/depth.
+  if(shadow){if(frame.shadow!=shadow||frame.quick||frame.method!=method)continue;}
+  else if(frame.shadow||frame.quick!=quick||frame.pc!=pc||frame.carrier_method!=method)continue;
+  if(root.vreg==kNativeReferenceArgumentVreg&&frame.kind!=FrameKind::Native)return false;
+  *out=ordinal;return p.stream_stop->IsStopped(p.stream_self);
+ }
+ return false;
+}
+FrameRootReport Service::ObserveFrameRoots(const Prepared&p,const native_source_stop::Session&stop,void*self,
+ const modern_field_metadata::ReadContext&read,const native_typed_heap_walk::RootProvenance&roots)const noexcept{
+ FrameRootReport report;
+ if(!ValidateStream(p,stop,self,read)){report.failure="call-graph-frame-roots-current-stream-refused";return report;}
+ struct Sink final:native_typed_heap_walk::RootSink {
+  const Service&service;const Prepared&prepared;const modern_field_metadata::ReadContext&read;FrameRootReport&report;
+  Sink(const Service&s,const Prepared&p,const modern_field_metadata::ReadContext&r,FrameRootReport&o):service(s),prepared(p),read(r),report(o){}
+  bool Root(const native_typed_heap_walk::RootRecord&root)noexcept override{
+   if(root.type!=abi::arm64::runtime_root_visit::kJavaFrameRoot)return true;
+   size_t ordinal=SIZE_MAX;
+   if(!service.MatchFrameRoot(prepared,read,root,&ordinal)||ordinal>=prepared.frames.size()){
+    report.failure="call-graph-frame-roots-original-cursor-not-in-complete-stream";return false;}
+   switch(prepared.frames[ordinal].kind){
+    case FrameKind::Managed:++report.managed_roots;break;
+    case FrameKind::Native:++report.native_roots;break;
+    case FrameKind::Runtime:++report.runtime_roots;break;
+    default:return false;
+   }
+   return true;
+  }
+ }sink(*this,p,read,report);
+ report.roots=roots.ObserveFrameRoots(stop,self,read,sink);
+ if(!report.roots.completed){if(!report.failure)report.failure="call-graph-frame-roots-original-runtime-stream-refused";return report;}
+ if(!ValidateStream(p,stop,self,read)){report.failure="call-graph-frame-roots-stream-changed-after-original-visit";return report;}
+ report.completed=true;return report;
+}
 template<class Base>bool Service::Walk(void*target,const native_source_stop::Session&stop,void*self,
  Prepared&prepared,const modern_field_metadata::ReadContext&read,Report&report)const noexcept{
  struct Visitor final:Base {

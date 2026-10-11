@@ -516,6 +516,17 @@ const std::vector<native_call_graph_stack::Frame>*Execution::ValidatedFrames(con
  const modern_field_metadata::ReadContext&read)const noexcept{
  return ValidateWindowProof(stop,read,phase_==Phase::Finalized)?stack_.Frames(stack_prepared_):nullptr;
 }
+native_call_graph_stack::FrameRootReport Execution::ObserveFrameRoots(const native_source_stop::Session&stop,
+ const modern_field_metadata::ReadContext&read,const native_typed_heap_walk::RootProvenance&roots)const noexcept{
+ native_call_graph_stack::FrameRootReport report;
+ const bool final=phase_==Phase::Finalized;
+ if(!ValidateWindowProof(stop,read,final)){report.failure="call-graph-frame-roots-whole-graph-receipt-refused";return report;}
+ report=stack_.ObserveFrameRoots(stack_prepared_,stop,self_,read,roots);
+ if(report.completed&&!ValidateWindowProof(stop,read,final)){
+  report.completed=false;report.failure="call-graph-frame-roots-whole-graph-receipt-changed";
+ }
+ return report;
+}
 bool Execution::ValidateCollectedProof(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
  return ValidateWindowProof(stop,read,false);
 }

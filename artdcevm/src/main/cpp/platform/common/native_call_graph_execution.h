@@ -152,6 +152,11 @@ class Execution final {
  // Native continuation and root ownership remain separate commit obligations.
  const std::vector<native_call_graph_stack::Frame>*ValidatedFrames(
    const native_source_stop::Session&,const modern_field_metadata::ReadContext&)const noexcept;
+ // Synchronous original Runtime root stream joined to the collected/final
+ // complete walk. No root slot/value is retained or upgraded to publication
+ // authority; the full graph receipt is checked before and after the callee.
+ native_call_graph_stack::FrameRootReport ObserveFrameRoots(const native_source_stop::Session&,
+   const modern_field_metadata::ReadContext&,const native_typed_heap_walk::RootProvenance&)const noexcept;
  // Before original source refund can dispose replacement metadata: requires
  // the same live Holder/Run, a complete walk with no selected quick OR shadow
  // frame, then original removal of this operation's new deoptimized entries

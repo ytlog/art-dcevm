@@ -356,6 +356,8 @@ bool SourceOwner::Collected(native_hierarchy_session::Session&hierarchy,const ch
  const auto*frames=deps.execution->ValidatedFrames(stop_,*deps.read);
  if(!frames||!deps.schema->VerifyFrozenBoundaryMembers(*service_->plan_,*frames,*deps.read))
   return deny("call-graph-commit-collected-boundary-member-census-refused");
+ const auto roots=deps.execution->ObserveFrameRoots(stop_,*deps.read,*deps.root_provenance);
+ if(!roots.completed)return deny(roots.failure?roots.failure:"call-graph-commit-collected-frame-root-stream-refused");
  if(!hierarchy.Collected(*service_->plan_,nullptr))
   return deny("call-graph-commit-collected-hierarchy-seal-refused");
  // Hierarchy requests require the sealed, independently refreshed authority.
@@ -421,7 +423,8 @@ void SourceOwner::Finalize(void*driver,const transaction_root::Holder*holder)noe
     report.scope!=native_call_graph_execution::GraphScope::InstalledUnionSelection||
     !report.union_complete)std::abort();
  const auto*frames=deps.execution->ValidatedFrames(stop_,*deps.read);
- if(!frames||!deps.schema->VerifyFrozenBoundaryMembers(*service_->plan_,*frames,*deps.read)||
+ if(!frames||!deps.schema->VerifyFrozenBoundaryMembers(*service_->plan_,*frames,*deps.read))std::abort();
+ if(!deps.execution->ObserveFrameRoots(stop_,*deps.read,*deps.root_provenance).completed||
     !service_->Validate(*service_->plan_))std::abort();
 }
 std::unique_ptr<source_commit::Services>SourceOwner::TakeFinalService(const void*holder,
