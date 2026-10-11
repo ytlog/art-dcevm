@@ -7,13 +7,15 @@
 namespace artdcevm::final_field_aliases {
 // Weak Class handles are owned by the JNI adapter; native metadata is retained
 // by source ClassExt only while that replacement Class is live. Decode the weak
-// first, before dereferencing the old ArtField's declaring-class root.
-struct Alias {void* weak=nullptr;void* old_field=nullptr;void* retiring=nullptr;size_t readers=0;};
+// first, before dereferencing a retained native member's declaring-class root.
+// A method anchor also supports old Classes with no fields when final fields
+// are introduced. The source retains the native member through ClassExt.
+enum class MemberKind:uint8_t {Field,Method};
+struct Alias {void* weak=nullptr;void* member=nullptr;void* retiring=nullptr;size_t readers=0;MemberKind kind=MemberKind::Field;};
 struct Node {std::vector<Alias> aliases;Node* next=nullptr;uint64_t sequence=0;};
 struct Reader {
  void* owner=nullptr;
  bool (*weak)(void*,void*,void**)=nullptr;
- void* (*old_owner)(void*,void*)=nullptr;
  bool (*weak_thread)(void*,void* thread,void* weak,void**)=nullptr;
  void* (*field_owner)(void*,void*)=nullptr;
  void* (*method_owner)(void*,void*)=nullptr;
@@ -35,7 +37,8 @@ class Set {
  // DeleteWeakGlobalRef outside this mutex. Frees fully inactive native nodes.
  bool Deactivate(void* weak)noexcept;
  private:
- struct Lease{Alias* alias=nullptr;void* weak=nullptr;void* old_field=nullptr;};
+ struct Lease{Alias* alias=nullptr;void* weak=nullptr;void* member=nullptr;MemberKind kind=MemberKind::Field;};
+ void* HistoricalOwner(const Lease&)const noexcept;
  bool Next(uint64_t*,size_t*,Lease*)const noexcept;
  void Release(const Lease&)const noexcept;
  Reader reader_;mutable std::mutex mutex_;mutable std::condition_variable readers_;

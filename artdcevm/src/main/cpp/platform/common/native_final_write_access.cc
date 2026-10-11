@@ -12,7 +12,7 @@ bool AlignedLiveDeclaration(const void*value,size_t size){
 NativeAccess::NativeAccess(const modern_field_metadata::FieldMetadata&metadata,
     native_reference_decoder::Decoder&references,abi::arm64::android11::CurrentThread current,Throw raise)
  :metadata_(metadata),references_(references),current_(current),throw_(raise),
-  aliases_({this,nullptr,FieldOwner,Weak,FieldOwner,MethodOwner}),
+  aliases_({this,nullptr,Weak,FieldOwner,MethodOwner}),
   writer_({this,Field,Method,nullptr,Raise,Equivalent,Flags}){}
 std::unique_ptr<NativeAccess> NativeAccess::Create(HookEngine&hooks,
     const modern_field_metadata::FieldMetadata&metadata,const method_identity::Calibration&methods,

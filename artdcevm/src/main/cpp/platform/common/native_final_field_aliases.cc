@@ -13,7 +13,7 @@ bool Set::Next(uint64_t* sequence,size_t* index,Lease* lease)const noexcept{
  for(Node* node=first_;node;node=node->next)if(node->sequence<=*sequence){
   size_t begin=node->sequence==*sequence?*index:0;
   for(size_t i=begin;i<node->aliases.size();++i){auto& alias=node->aliases[i];if(!alias.weak)continue;
-   ++alias.readers;*sequence=node->sequence;*index=i+1;*lease={&alias,alias.weak,alias.old_field};return true;
+   ++alias.readers;*sequence=node->sequence;*index=i+1;*lease={&alias,alias.weak,alias.member,alias.kind};return true;
   }
  }
  return false;
@@ -22,18 +22,26 @@ void Set::Release(const Lease& lease)const noexcept{
  std::lock_guard<std::mutex> lock(mutex_);if(!lease.alias||!lease.alias->readers)std::abort();
  --lease.alias->readers;readers_.notify_all();
 }
+void* Set::HistoricalOwner(const Lease&lease)const noexcept{
+ if(!lease.member)return nullptr;
+ switch(lease.kind){
+  case MemberKind::Field:return reader_.field_owner?reader_.field_owner(reader_.owner,lease.member):nullptr;
+  case MemberKind::Method:return reader_.method_owner?reader_.method_owner(reader_.owner,lease.member):nullptr;
+ }
+ return nullptr;
+}
 bool Set::Equivalent(void* current,void* historical)const noexcept{
  if(!current||!historical)return false;if(current==historical)return true;
- if(!reader_.owner||!reader_.weak||!reader_.old_owner)return false;
+ if(!reader_.owner||!reader_.weak||(!reader_.field_owner&&!reader_.method_owner))return false;
  uint64_t sequence=UINT64_MAX;size_t index=0;Lease lease;
  while(Next(&sequence,&index,&lease)){void* live=nullptr;
-  bool same=reader_.weak(reader_.owner,lease.weak,&live)&&live==current&&reader_.old_owner(reader_.owner,lease.old_field)==historical;
+  bool same=reader_.weak(reader_.owner,lease.weak,&live)&&live==current&&HistoricalOwner(lease)==historical;
   Release(lease);if(same)return true;
  }
  return false;
 }
 bool Set::EquivalentWriter(void* thread,void* field,void* method)const noexcept{
- if(!thread||!field||!method||!reader_.owner||!reader_.weak_thread||!reader_.old_owner||!reader_.field_owner||!reader_.method_owner)return false;
+ if(!thread||!field||!method||!reader_.owner||!reader_.weak_thread||!reader_.field_owner||!reader_.method_owner)return false;
  void* current=reader_.field_owner(reader_.owner,field);void* historical=reader_.method_owner(reader_.owner,method);
  if(current&&current==historical)return true;
  uint64_t sequence=UINT64_MAX;size_t index=0;Lease lease;
@@ -43,7 +51,7 @@ bool Set::EquivalentWriter(void* thread,void* field,void* method)const noexcept{
   if(reader_.weak_thread(reader_.owner,thread,lease.weak,&live)&&live){
    current=reader_.field_owner(reader_.owner,field);
    historical=reader_.method_owner(reader_.owner,method);
-   same=current==live&&historical&&reader_.old_owner(reader_.owner,lease.old_field)==historical;
+   same=current==live&&historical&&HistoricalOwner(lease)==historical;
   }
   Release(lease);if(same)return true;
  }
@@ -60,7 +68,7 @@ bool Set::Deactivate(void* weak)noexcept{
  for(Node* node=first_;node;node=node->next)for(auto& alias:node->aliases)if(alias.weak==weak){alias.weak=nullptr;alias.retiring=weak;found=true;}
  if(!found)return false;
  readers_.wait(lock,[&]{for(Node* node=first_;node;node=node->next)for(const auto& alias:node->aliases)if(alias.retiring==weak&&alias.readers)return false;return true;});
- for(Node* node=first_;node;node=node->next)for(auto& alias:node->aliases)if(alias.retiring==weak){alias.retiring=nullptr;alias.old_field=nullptr;}
+ for(Node* node=first_;node;node=node->next)for(auto& alias:node->aliases)if(alias.retiring==weak){alias.retiring=nullptr;alias.member=nullptr;alias.kind=MemberKind::Field;}
  Node** cursor=&first_;
  while(*cursor){Node* node=*cursor;
   if(std::none_of(node->aliases.begin(),node->aliases.end(),[](const auto& alias){return alias.weak||alias.retiring||alias.readers;})){
