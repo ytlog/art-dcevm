@@ -5,6 +5,7 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/native_call_graph_incoming.h"
 #include "platform/common/production_receiver_invocation.h"
+#include "platform/common/production_final_write_calibration.h"
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/modern_method_guards.h"
@@ -46,6 +47,11 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
   if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->final_writer_calibrated_){
+   if(!CalibrateFinalWrites(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,
+       process->final_writer_->Writer(),error))return nullptr;
+   process->final_writer_calibrated_=true;
+  }
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }

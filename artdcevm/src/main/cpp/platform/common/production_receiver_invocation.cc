@@ -1,7 +1,5 @@
 #include "platform/common/production_receiver_invocation.h"
-#include "platform/common/source_fixture_roots.h"
-#include "platform/common/native_selective_interpretation.h"
-#include "platform/common/readable_mapping_scope.h"
+#include "platform/common/source_fixture_interpretation.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/redefinition_gate.h"
 #include <array>
@@ -26,44 +24,6 @@ struct Request {
  const native_source_stop::Service&stop;receiver_guard::SourceCalibration&calibration;
  Journals&journals;std::string*error;bool completed=false;
 };
-// One immediate original-scope stop. Capture VMAs after the actual GC-stable
-// inspection begins; no snapshot is carried across the public Java execution.
-bool Pause(Request&r,const runnable_jni::Context&actual,source_fixture_roots::Owner&roots,
-           native_selective_interpretation::Service&journal,bool activate){
- size_t extent=0;if(!method_identity::ReadableMappingExtent(actual.self,&extent))return false;
- struct Operation {
-  source_fixture_roots::Owner&roots;native_selective_interpretation::Service&journal;
-  void*self;bool activate;const char*failure=nullptr;bool completed=false;
- }operation{roots,journal,actual.self,activate};
- native_source_stop::Session stop(r.stop);
- const bool inspected=stop.Inspect(actual.self,extent,&operation,[](void*raw,native_source_stop::Session&stop)noexcept{
-  auto&r=*static_cast<Operation*>(raw);source_fixture_roots::Owner::Window window(r.roots,stop);
-  method_identity::ScopedReadableMappings mappings;
-  if(!mappings.Ready()){r.failure="receiver-invocation-current-stopped-mappings-unavailable";return false;}
-  const modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
-  if(r.activate){native_selective_interpretation::Report report;
-   r.completed=r.journal.Activate(stop,r.self,read,&report);r.failure=report.failure;
-  }else {native_selective_interpretation::RefundReport report;
-   r.completed=r.journal.Refund(stop,r.self,read,&report)&&report.complete&&!report.pending;
-   r.failure=report.failure;
-  }
-  return r.completed;
- });
- if(stop.Reserved()||stop.IsStopped(actual.self))std::abort();
- if(!inspected||!operation.completed)return Fail(r.error,operation.failure?operation.failure:
-   "receiver-invocation-actual-activation-or-refund-inspection-refused");
- return runnable_jni::Bridge::BorrowOriginalScope(actual);
-}
-// Recovery must not unwind past an owned native-set entry, even when producing
-// an error string fails. No pending ownership may outlive these scoped roots.
-bool RefundOwned(Request&r,const runnable_jni::Context&actual,source_fixture_roots::Owner&roots,
-                 native_selective_interpretation::Service&journal)noexcept{
- bool refunded=false;
- try{refunded=Pause(r,actual,roots,journal,false);}catch(...){
-  if(journal.PendingRefund())std::abort();return false;
- }
- if(journal.PendingRefund())std::abort();return refunded;
-}
 bool Observe(const runnable_jni::Context&actual,void*raw){
  auto&r=*static_cast<Request*>(raw);const auto&inputs=r.metadata.Inputs();
  if(!actual.env||actual.env->ExceptionCheck()||!actual.original_leaf||
@@ -94,7 +54,7 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
  for(size_t n=0;n<r.journals.size();++n){
   auto&journal=r.journals[n];bool activated=false,passed=false;
   try{
-   activated=Pause(r,actual,roots,journal,true);
+   activated=source_fixture_interpretation::Activate(r.stop,actual,roots,journal,r.error);
    if(activated){
     const auto&sample=inputs.ReceiverSamples()[n];const auto kind=static_cast<receiver_guard::InvokeKind>(n/2);
     const auto receiver=kind==receiver_guard::InvokeKind::Static?nullptr:inputs.ReceiverObject();
@@ -110,11 +70,11 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
    // This same-thread public call has unwound. Finish also cancels any armed
    // sample before its ephemeral registered roots leave the episode.
    r.calibration.Finish(false);
-   if(journal.PendingRefund())RefundOwned(r,actual,roots,journal);
+   if(journal.PendingRefund())source_fixture_interpretation::Refund(r.stop,actual,roots,journal,r.error);
    throw;
   }
   if(activated||journal.PendingRefund()){
-   if(!RefundOwned(r,actual,roots,journal))return false;
+   if(!source_fixture_interpretation::Refund(r.stop,actual,roots,journal,r.error))return false;
   }
   if(!activated||!passed)return Fail(r.error,"receiver-invocation-original-event-or-public-result-not-proven");
  }

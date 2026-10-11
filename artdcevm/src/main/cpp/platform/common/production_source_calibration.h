@@ -45,6 +45,8 @@ class SourceCalibration final {
  const receiver_guard::SourceCalibration*ReceiverInvocations()const noexcept{
   return receiver_calibration_&&receiver_calibration_->Proven()?receiver_calibration_.get():nullptr;
  }
+ // Actual four-path writer proof, never binding or listener installation alone.
+ final_write_guard::NativeAccess*FinalWriter()noexcept{return final_writer_calibrated_?final_writer_.get():nullptr;}
  private:
  SourceCalibration(HookEngine&hooks,std::unique_ptr<MetadataCalibration>metadata):hooks_(hooks),metadata_(std::move(metadata)){}
  ~SourceCalibration()=default;
@@ -110,6 +112,7 @@ class SourceCalibration final {
  std::unique_ptr<receiver_guard::SourceCalibration>receiver_calibration_;
  std::unique_ptr<receiver_guard::ListenerOwner>receiver_listener_;
  std::unique_ptr<final_write_guard::NativeAccess>final_writer_;
+ bool final_writer_calibrated_=false;
  native_pending_exception::Service pending_exception_;
  bool receiver_listener_bound_=false;
  bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;
