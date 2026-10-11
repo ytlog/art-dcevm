@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Verify collected ELF hashes and inventory Android 13 named-symbol dependencies."""
+"""Verify collected ELF hashes and inventory production named-symbol dependencies."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 from xz_host_objects import compile_xz
@@ -71,11 +70,6 @@ def main():
         detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
         parser.error('Cannot enumerate production evolution dependencies: ' + detail)
     dependencies = {}
-    for path in sorted((ROOT / 'artdcevm/src/main/cpp/platform/android13').rglob('*')):
-        if path.suffix not in ('.h', '.cc'):
-            continue
-        for symbol in set(re.findall(r'"(_Z[^"\s]+)"', path.read_text())):
-            dependencies.setdefault(symbol, []).append(str(path.relative_to(ROOT)))
     for symbol in required:
         dependencies.setdefault(symbol, []).append('artdcevm/src/main/cpp/platform/symbols/art_symbol_compat.cc')
     devices = []

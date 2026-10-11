@@ -3,7 +3,7 @@
 #include "platform/common/dex_mapping_abi.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
-#include "platform/common/native_boot_dex_identity.h"
+#include "platform/common/native_dex_identity.h"
 #include "platform/abi/arm64/common/interface_table.h"
 #include <cstring>
 namespace artdcevm::native_interface_dispatch {
@@ -97,16 +97,16 @@ bool Source::Verify(const receiver_guard::CodeView&caller,uint32_t pc,void*recei
    if(metadata_.MethodDeclaringClass(method)!=interface)continue; // Inherited/copied methods cannot supply original interface slot.
    const auto*entry=catalog_.Lookup(method,roots_,context);if(!entry)continue;
    if(entry->modifiers&(0x8u|0x2u|0x10000u))continue;
-   native_boot_aot_unaffected::DexIdentity ids(caller.source_dex);
+   native_dex_identity::DexIdentity ids(caller.source_dex);
    if(!ids.Matches(invoke.index,entry->declaring_signature,entry->name,entry->descriptor))continue;
    method_metadata::Identity identity{};
    if(!method_metadata::ReadIdentity(layout_,method,layout_.size,&identity)||identity.dex_method_index==UINT32_MAX||(identity.access_flags&0xffffu)!=(uint32_t(entry->modifiers)&0xffffu)||(identity.access_flags&0x40000u)||(identity.access_flags&0x81000000u)==0x01000000u)return deny("interface-edge-current-public-declaration-changed");
    evolution::MappedDexMetadata declaration_dex{},callee_dex{};field_copy::CopyClassView declaration_name{},callee_name{};
    if(!ReadCurrentNamespace(metadata_,interface,context,&declaration_dex,&declaration_name)||entry->declaring_signature!=declaration_name.descriptor||
-      !native_boot_aot_unaffected::DexIdentity(declaration_dex).Matches(identity.dex_method_index,entry->declaring_signature,entry->name,entry->descriptor))return deny("interface-edge-native-declaration-DEX-role-mismatch");
+      !native_dex_identity::DexIdentity(declaration_dex).Matches(identity.dex_method_index,entry->declaring_signature,entry->name,entry->descriptor))return deny("interface-edge-native-declaration-DEX-role-mismatch");
    void*callee_owner=metadata_.MethodDeclaringClass(callee);
    if(!ReadCurrentNamespace(metadata_,callee_owner,context,&callee_dex,&callee_name)||
-      !native_boot_aot_unaffected::DexIdentity(callee_dex).Matches(callee_identity.dex_method_index,callee_name.descriptor,entry->name,entry->descriptor))return deny("interface-edge-native-callee-DEX-role-mismatch");
+      !native_dex_identity::DexIdentity(callee_dex).Matches(callee_identity.dex_method_index,callee_name.descriptor,entry->name,entry->descriptor))return deny("interface-edge-native-callee-DEX-role-mismatch");
    const size_t slot_offset=layout_.size==sizeof(method_metadata::Method11)?offsetof(method_metadata::Method11,method_index):offsetof(method_metadata::Method12,method_index);
    uint16_t slot=0;std::memcpy(&slot,static_cast<const unsigned char*>(method)+slot_offset,2);
    void*array=metadata_.Reference(table,abi::arm64::android_common::kIfTableData+(i*2+1)*4);

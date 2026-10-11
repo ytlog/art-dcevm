@@ -1,6 +1,6 @@
 #include "platform/common/native_interface_dispatch_domain.h"
 #include "platform/common/native_interface_dispatch.h"
-#include "platform/common/native_boot_dex_identity.h"
+#include "platform/common/native_dex_identity.h"
 #include <cstring>
 
 namespace artdcevm::native_interface_dispatch_domain {
@@ -31,7 +31,7 @@ bool Source::Verify(void*caller,uint32_t pc,const modern_field_metadata::ReadCon
     (caller_method.access_flags&0x81000000u)==0x01000000u||
     !native_interface_dispatch::ReadCurrentNamespace(metadata_,caller_class,read,&caller_namespace,&caller_identity)||
     caller_identity.loader||!caller_identity.descriptor||caller_entry->declaring_signature!=caller_identity.descriptor||
-    !native_boot_aot_unaffected::DexIdentity(caller_namespace).Matches(caller_method.dex_method_index,
+    !native_dex_identity::DexIdentity(caller_namespace).Matches(caller_method.dex_method_index,
         caller_entry->declaring_signature,caller_entry->name,caller_entry->descriptor))
   return deny("interface-domain-caller-resolution-namespace-unproved");
  receiver_guard::CodeView code{};
@@ -45,7 +45,7 @@ bool Source::Verify(void*caller,uint32_t pc,const modern_field_metadata::ReadCon
  receiver_guard::InvokeInstruction invoke{};
  if(!receiver_guard::DecodeInvoke(code,pc,&invoke)||invoke.kind!=receiver_guard::InvokeKind::Interface)
   return deny("interface-domain-current-interface-invoke-unproved");
- native_boot_aot_unaffected::DexIdentity caller_ids(code.source_dex);
+ native_dex_identity::DexIdentity caller_ids(code.source_dex);
  void*matched=nullptr;size_t matches=0;
  for(const auto&entry:catalog_.Methods()){
   if(!caller_ids.Matches(invoke.index,entry.declaring_signature,entry.name,entry.descriptor))continue;
@@ -62,7 +62,7 @@ bool Source::Verify(void*caller,uint32_t pc,const modern_field_metadata::ReadCon
   evolution::MappedDexMetadata dex{};field_copy::CopyClassView identity{};
   if(!native_interface_dispatch::ReadCurrentNamespace(metadata_,interface,read,&dex,&identity)||
      identity.loader||!identity.descriptor||entry.declaring_signature!=identity.descriptor||
-     !native_boot_aot_unaffected::DexIdentity(dex).Matches(method.dex_method_index,
+     !native_dex_identity::DexIdentity(dex).Matches(method.dex_method_index,
          entry.declaring_signature,entry.name,entry.descriptor))
    return deny("interface-domain-current-declaration-namespace-unproved");
   if(!callers_.VerifyHierarchyDomain(plan_,*graph,interface,read))

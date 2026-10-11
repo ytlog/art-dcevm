@@ -3,7 +3,7 @@
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/body_only_policy.h"
 namespace artdcevm {
-CapabilityBackend::CapabilityBackend(std::unique_ptr<RuntimeBackend> public_backend,SourceFactory source,Producer producer):public_(std::move(public_backend)),source_factory_(std::move(source)),producer_(std::move(producer)){}
+CapabilityBackend::CapabilityBackend(std::unique_ptr<RuntimeBackend> public_backend,Producer producer):public_(std::move(public_backend)),producer_(std::move(producer)){}
 int CapabilityBackend::Attach(JavaVM* vm){
  OperationScope operation(operation_);if(!operation)return JNI_ERR;
  if(vm_)return JNI_OK;
@@ -25,41 +25,28 @@ int CapabilityBackend::Prepare(JNIEnv* env,jobject calibration){
  if(!common_&&error_.empty())error_="No independently proven production bootstrap";
  return common_?JVMTI_ERROR_NONE:JVMTI_ERROR_NOT_AVAILABLE;
 }
-int CapabilityBackend::PrepareSource(JNIEnv* env,jobject calibration){
- const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
- if(source_ready_)return JVMTI_ERROR_NONE;
- if(!common_->Source13Candidate()||!source_factory_){error_="Full source evolution is not proven; use initializeCapabilities for the proven subset";return JVMTI_ERROR_NOT_AVAILABLE;}
- if(source_attempted_){error_="Source initialization already failed; restart the process";return JVMTI_ERROR_NOT_AVAILABLE;}
- source_attempted_=true;
- if(!source_)source_=source_factory_();
- if(!source_||source_->Attach(vm_)!=JNI_OK){error_="Proven source backend could not attach";return JVMTI_ERROR_NOT_AVAILABLE;}
- const int initialized=source_->InitializeEvolution(env,calibration);
- if(initialized!=JVMTI_ERROR_NONE){error_="Proven source candidate failed full initialization; restart before retry";return initialized;}
- source_ready_=true;ready_=true;return JVMTI_ERROR_NONE;
-}
 int CapabilityBackend::InitializeEvolution(JNIEnv* env,jobject calibration){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- // Explicit full initialization never reports a subset as success.
- if(ready_&&!source_ready_){error_="Subset initialized; full evolution is not proven";return JVMTI_ERROR_NOT_AVAILABLE;}
- return PrepareSource(env,calibration);
+ const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
+ // Common activation proves individual capabilities, never the complete
+ // evolution contract. Do not install a second owner or activate a subset on
+ // behalf of a caller that explicitly requested full initialization.
+ error_="Full evolution unavailable: complete schema, hierarchy, active-frame and entry-path behavior contract has not been independently proven; use initializeCapabilities for individually proven common capabilities";
+ return JVMTI_ERROR_NOT_AVAILABLE;
+}
+int CapabilityBackend::ActivateCommon(JNIEnv* env,jobject calibration){
+ if(ready_)return JVMTI_ERROR_NONE;
+ const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
+ if(!common_->Activate(env,&error_))return JVMTI_ERROR_NOT_AVAILABLE;
+ ready_=true;error_.clear();return JVMTI_ERROR_NONE;
 }
 int CapabilityBackend::InitializeCapabilities(JNIEnv* env,jobject calibration){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- if(ready_)return JVMTI_ERROR_NONE;
- const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
- if(common_->Source13Candidate())return PrepareSource(env,calibration);
- if(!common_->Activate(env,&error_))return JVMTI_ERROR_NOT_AVAILABLE;
- ready_=true;error_.clear();return JVMTI_ERROR_NONE;
+ return ActivateCommon(env,calibration);
 }
 int CapabilityBackend::InitializeCommonCapabilities(JNIEnv* env,jobject calibration){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- // A legacy validation-only or failed bootstrap may already own private hooks.
- // There is no mixed owner or silent switch, even if source_ready_ is false.
- if(source_||source_attempted_||source_ready_){error_="Legacy private owner already selected; restart before common-owner initialization";return JVMTI_ERROR_NOT_AVAILABLE;}
- if(ready_)return JVMTI_ERROR_NONE;
- const int result=Prepare(env,calibration);if(result!=JVMTI_ERROR_NONE)return result;
- if(!common_->Activate(env,&error_))return JVMTI_ERROR_NOT_AVAILABLE;
- ready_=true;error_.clear();return JVMTI_ERROR_NONE;
+ return ActivateCommon(env,calibration);
 }
 std::string CapabilityBackend::Capabilities()const {
  OperationScope operation(operation_);
@@ -85,11 +72,6 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"typedHeapDiagnostic\":"+QuoteJsonMutf8(common_?common_->TypedHeapDiagnostic():"typed-heap-source-owner-not-observed")+
    ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+
    ",\"frameCalibrationDiagnostic\":"+QuoteJsonMutf8(common_?common_->FrameCalibrationDiagnostic():"compiled-frame-calibration-not-attempted");
- if(source_){
-  auto report=source_->Capabilities();
-  if(!report.empty()&&report.back()=='}'){report.pop_back();report+=source_diagnostics+"}";}
-  return report;
- }
  const std::string public_report=public_->Capabilities();
  auto supported=[&](const char* key){return public_report.find(std::string("\"")+key+"\":true")!=std::string::npos;};
  std::string result="{\"backend\":\"runtime-capabilities\",\"attached\":"+std::string(vm_?"true":"false")+
@@ -131,7 +113,6 @@ int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definit
    }
   }
  }
- if(source_ready_)return source_->Apply(op,definitions);
  if(!ready_||!common_)return JVMTI_ERROR_NOT_AVAILABLE;
  JNIEnv* env=nullptr;
  if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)!=JNI_OK||!env)return JVMTI_ERROR_INVALID_ENVIRONMENT;
@@ -140,7 +121,7 @@ int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definit
 std::string CapabilityBackend::Analyze(JNIEnv* env,const std::vector<Definition>& defs){
  OperationScope operation(operation_);
  if(!operation)return "{\"operationBusy\":true,\"error\":\"Runtime backend operation already in progress\"}";
- return source_ready_?source_->Analyze(env,defs):public_->Analyze(env,defs);
+ return public_->Analyze(env,defs);
 }
 std::string CapabilityBackend::ErrorName(int code)const{
  OperationScope operation(operation_);
@@ -148,29 +129,12 @@ std::string CapabilityBackend::ErrorName(int code)const{
 }
 int CapabilityBackend::EnableValidationHooks(){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- if(source_)return source_->EnableValidationHooks();
- if(!vm_||ready_||(!common_&&attempted_))return JVMTI_ERROR_NOT_AVAILABLE;
- JNIEnv* env=nullptr;
- if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)!=JNI_OK||!env)return JVMTI_ERROR_INVALID_ENVIRONMENT;
- // The diagnostic validation-first API remains supported, but it obtains the
- // same complete production oracles before installing any private callback.
- if(!common_){
-  jclass type=env->FindClass("com/github/ytlog/artdcevm/internal/EvolutionCalibration");
-  jmethodID ctor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
-  jobject calibration=ctor?env->NewObject(type,ctor):nullptr;
-  const int result=calibration&&!env->ExceptionCheck()?Prepare(env,calibration):JVMTI_ERROR_NOT_AVAILABLE;
-  if(calibration)env->DeleteLocalRef(calibration);if(type)env->DeleteLocalRef(type);
-  if(result!=JVMTI_ERROR_NONE)return result;
- }
- if(!common_->Source13Candidate()||!source_factory_)return JVMTI_ERROR_NOT_AVAILABLE;
- source_=source_factory_();
- if(!source_||source_->Attach(vm_)!=JNI_OK)return JVMTI_ERROR_NOT_AVAILABLE;
- // These callbacks preserve original ART behavior until full source bootstrap
- // configures its actual transaction handler. No incomplete private evolution.
- return source_->EnableValidationHooks();
+ error_="Validation-first hook installation is not independently proven by the common owner";
+ return JVMTI_ERROR_NOT_AVAILABLE;
 }
 int CapabilityBackend::EnableStandardRedefineRouting(){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- return source_ready_?source_->EnableStandardRedefineRouting():JVMTI_ERROR_NONE;
+ error_="Standard RedefineClasses routing is not independently proven by the common owner";
+ return JVMTI_ERROR_NOT_AVAILABLE;
 }
 }

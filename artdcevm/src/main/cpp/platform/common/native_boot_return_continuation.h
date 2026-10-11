@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/common/native_dex_instruction_width.h"
 #include "platform/common/native_receiver_bytecode.h"
-#include "platform/common/native_boot_dex_identity.h"
+#include "platform/common/native_dex_identity.h"
 #include "platform/common/modern_field_metadata.h"
 #include <cstddef>
 #include <cstdint>
@@ -172,7 +172,7 @@ inline Shape Read(const receiver_guard::CodeView&source,uint32_t pc,
  if(!contains(base,bytes)){base=dex.begin;bytes=dex.size;}if(!contains(base,bytes)||!context.extent(context.owner,base,&extent)||extent<bytes)return deny("source-CodeItem-data-owner");
  if(!dex.begin||dex.size<112||!context.extent(context.owner,dex.begin,&extent)||extent<dex.size)return deny("source-DEX-ID-owner");
  if(pc>=source.units)return deny("source-current-PC-outside-body");
- if(entry==Entry::NormalAndExceptional&&(source.units-pc<3||!OrdinaryInvoke(source.instructions[pc]&255u)||!native_boot_aot_unaffected::DexIdentity(dex).ReturnsVoid(source.instructions[pc+1])))return deny("source-ordinary-void-invoke-required");
+ if(entry==Entry::NormalAndExceptional&&(source.units-pc<3||!OrdinaryInvoke(source.instructions[pc]&255u)||!native_dex_identity::DexIdentity(dex).ReturnsVoid(source.instructions[pc+1])))return deny("source-ordinary-void-invoke-required");
  detail::Bytes memory{base,bytes};const size_t code_offset=code-uintptr_t(base);
  size_t tail=code_offset+header+source.units*2;
  // Fixed Standard/Compact GetTryItems uses 4-byte alignment, not merely an

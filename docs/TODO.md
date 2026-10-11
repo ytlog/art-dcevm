@@ -1,15 +1,11 @@
-# 待验证能力
+# 调用图解释执行改造待完成项
 
-## 活动 boot JIT 帧内联应用方法
+生产入口统一到公共引擎，旧 Android 13 演进后端不再作为另一套运行路径。下面各项完成前，不能宣称完整结构替换或 Android 11–17 全部调通。
 
-目标手机：`DEVICE_001`，Android 13 / arm64。需要在一个尚未执行到应用方法内联点的活动 boot JIT 物理帧上发起结构替换，确认提交前该帧已转为解释器状态，或在旧定义未改动时安全拒绝。
+1. **完整调用图。** 已安装方法的真实 DEX、loader、声明和动态 dispatch 域需要经过解析后的公共 census 复核；`invoke-custom`、`invoke-polymorphic`、proxy 及尚未证明的 interface-super 目标仍明确拒绝。反射和 JNI 反射按当前开发范围延期。
+2. **替换后的解释执行。** 现有库存扫描覆盖替换前的代码。必须加入真实 incoming DEX 的新增调用、替换 Class 的新 ArtMethod 根，并对新的上下游集合保持解释执行；旧方法进入 ART deoptimized set 不能证明新方法也在集合中。
+3. **活动编译帧。** 在真实短暂停世界窗口激活逐方法解释入口，随后恢复线程。重新扫描全部注册线程和 inline 帧；若仍有选中的 quick 帧，明确拒绝。常驻启动帧未必退出，禁止无限等待或宣称入口已切换等于活动帧已切换。
+4. **生产提交链替换。** 新调用图协调器尚不能替代 `RunState` 的完整提交权限。删除旧 CodeInfo、boot AOT continuation 和 whole-process recovery 路径时，保留并独立验证 GC 根替换、原生边界、缓存、初始化、monitor、DEX 发布和退款语义。
+5. **设备验证。** 新调用图模块的主机测试和严格 ARM64 编译属于开发验证。Android 16 的完整 schema 操作尚未成功；最终按 Android 11、12、13、14、15、16、17 / ARM64 逐台验证，不包含 12L、ARM32 或 x86。
 
-2026-10-06 的 `ArrayList.forEach` → `BootInlineConsumer.accept` 历史专项在缩小回调后仍只有当时的 JIT 缓存状态 17，`HGraph::InlineInto` 目标命中 0 次，未构造出所需帧。见 `build/evidence/source-engine/20261006T084146Z/probe.json`。当前预检的 `RecoveryVisitor` / `CheckEvolutionCompiledFramesRecoverable` 与活动帧排空逻辑位于 [evolution_transaction.cc](../artdcevm/src/main/cpp/platform/android13/evolution_transaction.cc)，共用 [frame_recovery.cc](../artdcevm/src/main/cpp/platform/android13/frame_recovery.cc) 检查真实恢复映射；历史源码入口已删除。当前仍未构造出上述目标 boot 内联帧，不能以其他 JIT 内联样例通过替代此专项证据。
-
-已试过设备 `dex2oat64 --compiler-filter=speed`：它能生成应用 AOT 帧。非调试 AOT sidecar 还能把同一 oat 内的应用静态调用折叠成常量，见 `build/evidence/device-aot/20261006T085612Z/oatdump.txt`；但应用 DEX 的 AOT 编译不会重新编译 boot `ArrayList.forEach`，不能替代上述 boot JIT 验证。按当前优先级先跳过此专项。以后若能稳定产生目标内联帧，再做提交前帧状态、拒绝/提交结果及恢复后返回值的双 Hook 顺序验证。
-
-## 非调试 AOT 活动帧的即时切换
-
-当前预检会拒绝无法确认可去优化的非调试 AOT 活动帧。两种 Hook 顺序已验证返回 66 时旧帧正常执行、帧退出后重试提交，见 `build/evidence/source-engine/20261006T091127Z/probe.json` 与 `build/evidence/source-engine/20261006T091149Z/probe.json`。若将来支持即时 DeOPT，需先验证该编译策略的栈图足以恢复任意暂停点的解释器状态，再将提交条件从安全拒绝改为实际切换成功；还需覆盖优化内联与多个并发帧。
-
-当前 AOSP `runtime.cc::IsAsyncDeoptimizeable()` 明确只默认接受可调试 JIT；设备非调试 AOT sidecar 的调用者 `CodeInfo` 没有 Dex 寄存器映射（`build/evidence/device-aot/20261006T091108Z/oatdump.txt`），而可调试 AOT 对照产物有该映射（`build/evidence/device-aot/20261006T061031Z/oatdump.txt`）。因此不能仅放开现有 `oat->IsDebuggable()` 预检来宣称即时切换安全。
+原始测试日志和设备报告保存在忽略的 `build/evidence/`。必要结论、命令、设备与 APK 哈希记录在 [VERIFICATION.md](VERIFICATION.md)。

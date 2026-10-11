@@ -96,7 +96,7 @@ bool BootSameSignature(void*a,void*b){
  if(a==b)return true;void*other=a==BootCreatedMethod()?b:a;void*klass=Root(other);assert(klass);
  auto*cache=reinterpret_cast<void*>(uintptr_t(Read32(klass,offsetof(class_metadata::Class17,dex_cache))));void*file=nullptr;std::memcpy(&file,static_cast<char*>(cache)+16,8);assert(file);
  const auto&p=*static_cast<dex_mapping_abi::Prefix*>(file);evolution::MappedDexMetadata map{p.begin,p.size,p.data_begin,p.data_size,0};
- native_boot_aot_unaffected::DexIdentity identity(map);return identity.Matches(Read32(other,8),Public(klass).descriptor,"staticKeep","()I");
+ native_dex_identity::DexIdentity identity(map);return identity.Matches(Read32(other,8),Public(klass).descriptor,"staticKeep","()I");
 }
 void* BootGuardMethod(void*p,jmethodID id){return BootIsMethod(id)?BootDecodeMethod(&linker,id):GuardMethod(p,id);}
 bool BootGuardSame(void*p,void*a,void*b){return a==BootCreatedMethod()||b==BootCreatedMethod()?BootSameSignature(a,b):GuardSameMethod(p,a,b);}

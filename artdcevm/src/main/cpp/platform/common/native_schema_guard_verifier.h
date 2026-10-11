@@ -8,7 +8,13 @@
 #include <jni.h>
 #include <jvmti.h>
 #include <memory>
+#include <optional>
 namespace artdcevm::native_interface_dispatch_domain {class Source;}
+namespace artdcevm::native_call_graph_inventory {class Inventory;}
+namespace artdcevm::receiver_guard {class SourceProducer;}
+namespace artdcevm::native_call_graph_resolution {struct Result;}
+namespace artdcevm::native_call_graph_super {class Resolver;}
+namespace artdcevm::native_source_stop {class Session;}
 namespace artdcevm::native_hierarchy_graph {struct Graph;}
 namespace artdcevm::native_schema_guard_verifier {
 // A synchronous typed authority, owned by the exact original schema Run.
@@ -88,6 +94,11 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // fixed ART's latter calls ResolveDirectInterface and may load a class.
   bool CheckWindow(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& old_classes,
                    Window,std::string*);
+  // Ordinary public census refresh for graph preparation; never consumes the
+  // original source Verified/Collected state transitions.
+  bool RefreshCallGraphCensus(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& inputs,std::string*);
+  bool ValidateCallGraphOrdinary(const native_call_graph_inventory::Inventory&,
+      const modern_field_metadata::ReadContext&)const noexcept;
   // Original rooted native-only window, after public checks and before the
   // source irreversible point. Plan includes real Holder old/new instances.
   // Final provider Verify rechecks all native data against this same proof.
@@ -108,11 +119,28 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   bool UseStoppedReadContext(const modern_field_metadata::ReadContext*) noexcept;
   bool CanRefreshManagedRoots(const prepared_roots::Resolver&)const noexcept;
   bool RefreshManagedRoots(const source_commit::Plan&,const prepared_roots::Resolver&) noexcept;
+  // Independent ordinary source inventory. Only the actual original Runnable
+  // callback can mint it; public bytes were retained at JNI staging time.
+  bool CaptureCallGraph(const runnable_jni::Context&,const receiver_guard::SourceProducer&,
+      native_call_graph_inventory::Inventory*,std::string*)const;
+  bool ValidateCallGraph(const native_call_graph_inventory::Inventory&,
+      const modern_field_metadata::ReadContext&)const noexcept;
   // Ordinary JNI, after the transaction gate is released; no permanent Class
   // roots, public method-ID caches or loader retention survive an operation.
   void Clear(JNIEnv*);
  private:
   friend class native_interface_dispatch_domain::Source;
+  friend class native_call_graph_inventory::Inventory;
+  bool CheckCallerWindow(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,
+      std::optional<Window>,std::string*);
+  bool ValidateCallGraphSource(const native_call_graph_inventory::Inventory&,
+      const modern_field_metadata::ReadContext&,bool final,const native_source_stop::Session* =nullptr)const noexcept;
+  bool ResolveCallGraphSuper(const runnable_jni::Context&,receiver_guard::SourceProducer&,
+      const native_call_graph_super::Resolver&,size_t caller,size_t site,void*declaration,
+      native_call_graph_inventory::Inventory*,std::string*)const;
+  bool ApplyCallGraphResolution(const runnable_jni::Context&,
+      const std::vector<native_call_graph_resolution::Result>&,
+      native_call_graph_inventory::Inventory*,std::string*)const;
   bool VerifyHierarchyDomain(const source_commit::Plan&,const native_hierarchy_graph::Graph&,void*,
       const modern_field_metadata::ReadContext&)const noexcept;
   struct State;std::unique_ptr<State> state_;

@@ -28,12 +28,12 @@ jvmtiError Add(jvmtiEnv*,const jvmtiCapabilities*){return JVMTI_ERROR_NONE;}
 JNIEnv* jni; jvmtiEnv* ti;
 jint GetEnv(JavaVM*,void**p,jint v){*p=v==JVMTI_VERSION_1_2?static_cast<void*>(ti):static_cast<void*>(jni);return JNI_OK;}
 struct Public:RuntimeBackend{int EnableValidationHooks()override{return 0;}int EnableStandardRedefineRouting()override{return 0;}int InitializeEvolution(JNIEnv*,jobject)override{return 0;}int calls=0,result=0;Operation last=Operation::kEvolve;int Attach(JavaVM*)override{return JNI_OK;}std::string Capabilities()const override{return "{}";}int Apply(Operation op,const std::vector<Definition>&defs)override{assert(defs.size()==1);last=op;++calls;return result;}std::string Analyze(JNIEnv*,const std::vector<Definition>&)override{return "{}";}std::string ErrorName(int)const override{return "error";}};
-struct Engine:production_bootstrap::Engine{int recorded=0,applied=0;bool Source13Candidate()const override{return false;}bool Activate(JNIEnv*,std::string*)override{return true;}void RecordDefinitions(JNIEnv*,const std::vector<Definition>&)override{++recorded;}int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)override{++applied;return 98;}};
+struct Engine:production_bootstrap::Engine{int recorded=0,applied=0;bool Activate(JNIEnv*,std::string*)override{return true;}void RecordDefinitions(JNIEnv*,const std::vector<Definition>&)override{++recorded;}int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)override{++applied;return 98;}};
 }
 int main(int argc,char**argv){assert(argc==2);JNINativeInterface_ jt{};jt.GetSuperclass=Super;jt.ExceptionCheck=Exception;jt.DeleteLocalRef=Delete;JNIEnv j{&jt};jni=&j;
 jvmtiInterface_1 tt{};tt.Deallocate=Free;tt.GetClassSignature=Signature;tt.GetClassModifiers=ClassFlags;tt.GetImplementedInterfaces=Interfaces;tt.GetClassFields=Fields;tt.GetFieldName=FieldName;tt.GetFieldModifiers=FieldFlags;tt.GetClassMethods=Methods;tt.GetMethodName=MethodName;tt.GetMethodModifiers=MethodFlags;tt.GetPotentialCapabilities=Potential;tt.AddCapabilities=Add;jvmtiEnv t{&tt};ti=&t;
 JNIInvokeInterface_ vt{};vt.GetEnv=GetEnv;JavaVM vm{&vt};auto p=std::make_unique<Public>();auto*pub=p.get();Engine*engine=nullptr;
-CapabilityBackend b(std::move(p),{},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});assert(b.Attach(&vm)==JNI_OK);
+CapabilityBackend b(std::move(p),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});assert(b.Attach(&vm)==JNI_OK);
 std::ifstream in(argv[1],std::ios::binary);std::vector<unsigned char>dex((std::istreambuf_iterator<char>(in)),{});assert(!dex.empty());std::vector<Definition>defs={{reinterpret_cast<jclass>(target),dex}};
 assert(b.Apply(Operation::kEvolve,defs)==0&&pub->last==Operation::kBody&&pub->calls==1); // works before private readiness
 assert(b.InitializeCommonCapabilities(jni,reinterpret_cast<jobject>(target))==0);

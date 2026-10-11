@@ -29,9 +29,8 @@ struct Backend:RuntimeBackend {
  int InitializeEvolution(JNIEnv*,jobject)override{++initialized;return init_error;}
 };
 struct Engine:production_bootstrap::Engine {
- bool source=false,allow=true,fields=false,stop=false,episode=false;int activation=0,applied=0,recorded=0,apply_result=42;
+ bool allow=true,fields=false,stop=false,episode=false;int activation=0,applied=0,recorded=0,apply_result=42;
  std::function<void()> apply_callback,record_callback;
- bool Source13Candidate()const override{return source;}
  void RecordDefinitions(JNIEnv*,const std::vector<Definition>&)override{++recorded;if(record_callback)record_callback();}
  bool FieldDeletionReady()const override{return fields&&activation&&allow;}
  bool SourceStopCalibrated()const override{return stop;}
@@ -66,10 +65,10 @@ void RejectEveryEntry(CapabilityBackend& backend,JavaVM* vm,jobject calibration)
 }
 void Concurrency(JavaVM* vm,jobject calibration) {
  // Hold each actual operation at its delegate. A second OS thread must reject
- // every public entry without any extra JNI/JVMTI/public/source/producer work.
+ // every public entry without any extra JNI/JVMTI/public/common/producer work.
  for(auto operation:{Operation::kBody,Operation::kStructure,Operation::kEvolve}) {
   auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;
-  CapabilityBackend backend(std::move(public_backend),{},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
   assert(backend.Attach(vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==0);
   p->apply_result=0;engine->apply_result=0;Blocker hold;
   if(operation==Operation::kEvolve)engine->apply_callback=[&]{hold.Hold();};
@@ -84,24 +83,11 @@ void Concurrency(JavaVM* vm,jobject calibration) {
   assert(backend.Apply(operation,{})==0); // Scope released after completion.
   assert(engine->recorded==(operation==Operation::kEvolve?0:2));
  }
- // The same boundary applies when a proven full source backend owns evolution.
- {
-  auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Backend* source=nullptr;
-  CapabilityBackend backend(std::move(public_backend),[&]{auto result=std::make_unique<Backend>();source=result.get();return result;},
-    [](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;return e;});
-  assert(backend.Attach(vm)==JNI_OK&&backend.InitializeEvolution(env,calibration)==0);
-  source->apply_result=0;Blocker hold;source->apply_callback=[&]{hold.Hold();};int result=-1;
-  std::thread first([&]{result=backend.Apply(Operation::kEvolve,{});});hold.Wait();
-  RejectEveryEntry(backend,vm,calibration);
-  assert(source->applied==1&&p->applied==0&&source->reports==0&&source->analyses==0&&source->error_names==0&&source->initialized==1&&source->attached==1);
-  hold.Release();first.join();assert(result==0);source->apply_callback={};
-  assert(backend.Apply(Operation::kEvolve,{})==0&&source->applied==2);
- }
  // Public success does not release exclusion before RecordDefinitions updates
  // native/provenance state. Keep the complete Apply interval protected.
  {
   auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;
-  CapabilityBackend backend(std::move(public_backend),{},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
   assert(backend.Attach(vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==0);p->apply_result=0;
   Blocker hold;engine->record_callback=[&]{hold.Hold();};int result=-1;
   std::thread first([&]{result=backend.Apply(Operation::kBody,{});});hold.Wait();
@@ -109,12 +95,12 @@ void Concurrency(JavaVM* vm,jobject calibration) {
   hold.Release();first.join();assert(result==0);engine->record_callback={};
   assert(backend.Apply(Operation::kStructure,{})==0&&engine->recorded==2);
  }
- // Preparation uses the same scope: no racing attempted_/source/common state,
+ // Preparation uses the same scope: no racing attempted_/common state,
  // and a callback cannot recursively initialize or mutate before publication.
  {
   auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Blocker hold;int productions=0;
   CapabilityBackend* owner=nullptr;
-  CapabilityBackend backend(std::move(public_backend),{},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){
    ++productions;RejectEveryEntry(*owner,vm,calibration);hold.Hold();return std::make_unique<Engine>();
   });owner=&backend;assert(backend.Attach(vm)==JNI_OK);int result=-1;
   std::thread first([&]{result=backend.InitializeCapabilities(env,calibration);});hold.Wait();
@@ -124,7 +110,7 @@ void Concurrency(JavaVM* vm,jobject calibration) {
  // Same-thread recursive operations are rejected before any delegates, too.
  {
   auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;
-  CapabilityBackend backend(std::move(public_backend),{},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
   assert(backend.Attach(vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==0);
   p->apply_result=0;engine->apply_result=0;
   p->apply_callback=[&]{RejectEveryEntry(backend,vm,calibration);};
@@ -162,118 +148,63 @@ int main(){
  jvmtiInterface_1_ jvmti_functions{};jvmti_functions.GetPotentialCapabilities=Potential;jvmti_functions.AddCapabilities=Add;_jvmtiEnv jvmti_environment{&jvmti_functions};ti=&jvmti_environment;
  JNIInvokeInterface_ functions{};functions.GetEnv=GetEnv;JavaVM vm{&functions};auto calibration=reinterpret_cast<jobject>(uintptr_t(0x6000));
  {
-  auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();int source_created=0;
-  CapabilityBackend backend(std::move(public_backend),[&] {++source_created;return std::make_unique<Backend>();},[](JNIEnv*,jvmtiEnv*,jobject,std::string* e)->std::unique_ptr<production_bootstrap::Engine>{*e="missing/wrong independent proof";return nullptr;});
+  auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();int productions=0;
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string* e)->std::unique_ptr<production_bootstrap::Engine>{++productions;*e="missing/wrong independent proof";return nullptr;});
   assert(backend.Attach(&vm)==JNI_OK&&p->attached==1);
   assert(backend.InitializeCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
-  assert(source_created==0&&backend.EnableValidationHooks()==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(backend.InitializeCommonCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&productions==1);
+  assert(backend.EnableValidationHooks()==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(backend.EnableStandardRedefineRouting()==JVMTI_ERROR_NOT_AVAILABLE);
   assert(backend.Apply(Operation::kBody,{})==41&&backend.Apply(Operation::kStructure,{})==41);
   assert(backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_NOT_AVAILABLE&&p->applied==2);
   assert(backend.Capabilities().find("\"partialEvolutionAvailable\":false")!=std::string::npos);
  }
- // A proven common source family preserves the public engine and cannot grant
- // the fixed13 route, even when full initialization was requested first.
- {auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;int source_created=0;
-  CapabilityBackend backend(std::move(public_backend),[&] {++source_created;return std::make_unique<Backend>();},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
+ // Full initialization must not activate a partial owner. Both capability
+ // entry points then activate the same prepared owner exactly once.
+ for(bool common_first:{false,true}) {
+  auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;int productions=0;
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){++productions;auto e=std::make_unique<Engine>();engine=e.get();return e;});
   assert(backend.Attach(&vm)==JNI_OK);
   assert(backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
-  assert(backend.InitializeCapabilities(env,calibration)==0&&engine->activation==1&&source_created==0);
+  assert(engine->activation==0&&productions==1);
+  assert(backend.Capabilities().find("complete schema, hierarchy, active-frame and entry-path behavior contract")!=std::string::npos);
+  assert(backend.EnableValidationHooks()==JVMTI_ERROR_NOT_AVAILABLE&&p->validation==0);
+  assert(backend.EnableStandardRedefineRouting()==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(engine->activation==0);
+  assert((common_first?backend.InitializeCommonCapabilities(env,calibration):backend.InitializeCapabilities(env,calibration))==0);
+  assert(backend.InitializeCapabilities(env,calibration)==0&&backend.InitializeCommonCapabilities(env,calibration)==0);
+  assert(engine->activation==1&&productions==1);
+  assert(backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&engine->activation==1);
   assert(backend.Apply(Operation::kEvolve,{})==42&&engine->applied==1);
-  assert(backend.Apply(Operation::kBody,{})==41&&p->applied==1);
-  assert(backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(backend.Analyze(env,{})=="public analysis"&&p->analyses==1);
   assert(backend.Capabilities().find("\"fullDcevmComplete\":false")!=std::string::npos);
   assert(backend.Capabilities().find("\"fieldDeletion\":false")!=std::string::npos);
-  engine->fields=true;
-  assert(backend.Capabilities().find("\"fieldDeletion\":true")!=std::string::npos);
-  assert(backend.Capabilities().find("\"nativeDelete\":true")!=std::string::npos);
-  assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
-  assert(backend.Capabilities().find("\"sourceStopCalibrated\":false")!=std::string::npos);
-  assert(backend.Capabilities().find("source \\\"proof\\\" pending")!=std::string::npos);
-  assert(backend.Capabilities().find("\"initializerEpisodeObserved\":false")!=std::string::npos);
-  assert(backend.Capabilities().find("initializer \\\"wait\\\" pending")!=std::string::npos);
-  engine->episode=true;
-  assert(backend.Capabilities().find("\"initializerEpisodeObserved\":true")!=std::string::npos);
-  assert(backend.Capabilities().find("\"initializerEpisodeDiagnostic\":\"\"")!=std::string::npos);
-  assert(backend.Capabilities().find("\"sourceFactoryDiagnostic\":\"production-schema-services-unprepared\"")!=std::string::npos);
-  assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
-  engine->stop=true;
-  assert(backend.Capabilities().find("\"sourceStopCalibrated\":true")!=std::string::npos);
-  assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
-  assert(backend.Capabilities().find("\"fullDcevmComplete\":false")!=std::string::npos);
- }
- {
-  Engine* engine=nullptr;Backend* source=nullptr;
-  CapabilityBackend backend(std::make_unique<Backend>(),[&] {auto s=std::make_unique<Backend>();source=s.get();return s;},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeEvolution(env,calibration)==0);
-  assert(source&&source->attached==1&&source->initialized==1&&engine->activation==0);
-  assert(backend.Apply(Operation::kEvolve,{})==41&&source->applied==1);
- }
- {
-  Engine* engine=nullptr;
-  CapabilityBackend backend(std::make_unique<Backend>(),[]{return std::make_unique<Backend>();},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->allow=false;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
-  assert(engine->activation==1&&backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_NOT_AVAILABLE);
-  assert(backend.Apply(Operation::kBody,{})==41);
- }
- {
-  int created=0;Engine* engine=nullptr;
-  CapabilityBackend backend(std::make_unique<Backend>(),[&] {++created;auto b=std::make_unique<Backend>();b->init_error=JVMTI_ERROR_NOT_AVAILABLE;return b;},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK);
-  assert(backend.InitializeCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
-  assert(backend.InitializeCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&created==1&&engine->activation==0);
-  assert(backend.Apply(Operation::kBody,{})==41&&backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_NOT_AVAILABLE);
- }
- {
-  auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();Engine* engine=nullptr;
-  CapabilityBackend backend(std::move(public_backend),[]{return std::make_unique<Backend>();},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==0);
-  // Failed public evolution cannot publish bytes as successful provenance.
+  engine->fields=true;engine->stop=true;engine->episode=true;
+  const auto caps=backend.Capabilities();
+  assert(caps.find("\"fieldDeletion\":true")!=std::string::npos);
+  assert(caps.find("\"sourceStopCalibrated\":true")!=std::string::npos);
+  assert(caps.find("\"initializerEpisodeObserved\":true")!=std::string::npos);
+  assert(caps.find("\"evolutionAvailable\":false")!=std::string::npos);
+  assert(caps.find("\"fullDcevmComplete\":false")!=std::string::npos);
+  // Failed public calls must not publish provenance. Success publishes once.
   assert(backend.Apply(Operation::kStructure,{})==41&&engine->recorded==0);
   p->apply_result=0;
   assert(backend.Apply(Operation::kBody,{})==0&&engine->recorded==1);
   assert(backend.Apply(Operation::kStructure,{})==0&&engine->recorded==2);
-  assert(backend.Apply(Operation::kStructure,{})==0&&engine->recorded==3);
- }
- // Explicit debug selection changes the whole process owner, never one feature.
- {
-  Engine* engine=nullptr;int source_created=0;auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();
-  CapabilityBackend backend(std::move(public_backend),[&]{++source_created;return std::make_unique<Backend>();},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeCommonCapabilities(env,calibration)==0);
-  assert(source_created==0&&engine->activation==1);
   engine->apply_result=JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-  assert(backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&engine->applied==1&&p->applied==0&&source_created==0);
-  assert(backend.InitializeCapabilities(env,calibration)==0&&engine->activation==1&&source_created==0);
-  assert(backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&source_created==0);
-  assert(backend.Capabilities().find("\"backend\":\"runtime-capabilities\"")!=std::string::npos);
-  assert(backend.Capabilities().find("\"evolutionAvailable\":false")!=std::string::npos);
+  assert(backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED&&p->applied==3);
+ }
+ {
+  Engine* engine=nullptr;auto public_backend=std::make_unique<Backend>();auto* p=public_backend.get();
+  CapabilityBackend backend(std::move(public_backend),[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->allow=false;engine=e.get();return e;});
+  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(engine->activation==1&&backend.Apply(Operation::kEvolve,{})==JVMTI_ERROR_NOT_AVAILABLE);
+  assert(backend.Capabilities().find("guard proof rejected")!=std::string::npos);
   assert(backend.Apply(Operation::kBody,{})==41&&p->applied==1);
- }
- // Default source initialization is retained, and cannot switch owners later.
- {
-  Engine* engine=nullptr;int source_created=0;
-  CapabilityBackend backend(std::make_unique<Backend>(),[&]{++source_created;return std::make_unique<Backend>();},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeCapabilities(env,calibration)==0);
-  assert(source_created==1&&engine->activation==0);
-  assert(backend.InitializeCommonCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&engine->activation==0&&source_created==1);
- }
- // Exercise the diagnostic-only owner before any full initialization: the
- // engine boundary first declines full selection, then supplies its candidate
- // to the actual validation entry. No activation or evolution call is made.
- {
-  Engine* engine=nullptr;Backend* source=nullptr;
-  CapabilityBackend backend(std::make_unique<Backend>(),[&]{auto s=std::make_unique<Backend>();source=s.get();return s;},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE);
-  engine->source=true;
-  assert(backend.EnableValidationHooks()==0&&source&&source->validation==1&&source->initialized==0);
-  assert(backend.InitializeCommonCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&engine->activation==0&&source->initialized==0);
- }
- // A failed legacy attachment/initialization also cannot select a second owner.
- {
-  Engine* engine=nullptr;
-  CapabilityBackend backend(std::make_unique<Backend>(),[]{auto s=std::make_unique<Backend>();s->init_error=JVMTI_ERROR_INTERNAL;return s;},[&](JNIEnv*,jvmtiEnv*,jobject,std::string*){auto e=std::make_unique<Engine>();e->source=true;engine=e.get();return e;});
-  assert(backend.Attach(&vm)==JNI_OK&&backend.InitializeEvolution(env,calibration)==JVMTI_ERROR_INTERNAL);
-  assert(backend.InitializeCommonCapabilities(env,calibration)==JVMTI_ERROR_NOT_AVAILABLE&&engine->activation==0);
+  engine->allow=true;
+  assert(backend.InitializeCommonCapabilities(env,calibration)==0&&engine->activation==2);
+  assert(backend.InitializeCapabilities(env,calibration)==0&&engine->activation==2);
  }
  Concurrency(&vm,calibration);
- std::cout<<"Capability backend: proof refusal, public preservation, common/source separation and full/subset initialization, true cross-thread all-entry refusal, recursive refusal and provenance interval exclusion passed\n";
+ std::cout<<"Capability backend: proof refusal, public preservation, single common owner and honest full/subset initialization, true cross-thread all-entry refusal, recursive refusal and provenance interval exclusion passed\n";
 }

@@ -4,7 +4,7 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 
 应用必须从进程启动时就处于可调试状态。无需 root，无需修改系统分区。初始化后，调用方通过自己的 JVMTI Agent 使用标准 `jvmtiEnv::RedefineClasses` 提交替换请求。
 
-**当前为实验实现。** 完整结构演进仅在已适配的 Android 13 / arm64 ART 构建上启用；其他设备可使用公开 JVMTI 路径。尚未达到完整 DCEVM 语义或生产环境稳定性要求。
+**当前为实验实现，正在重写调用图解释执行路径。** 旧 Android 13 专用演进引擎已删除，私有功能统一到公共引擎。完整结构演进尚未调通，完整初始化不会把部分能力报告为成功；公开 JVMTI 路径仍可使用。下面的结构演进清单描述开发目标，历史验证结果见验证记录。
 
 ## 功能
 
@@ -24,9 +24,9 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 | 路径 | 环境 | 能力 |
 | --- | --- | --- |
 | 公开 JVMTI | Android 11 / API 30 及以上，当前构建仅支持 arm64-v8a | 方法体替换；ART 暴露结构扩展时可经扩展入口新增成员 |
-| 增强结构演进 | 已匹配并校准的 Android 13 / API 33 / arm64 ART 构建 | 通过标准 `RedefineClasses` 使用上述结构演进功能 |
+| 增强结构演进 | Android 11–17 / arm64 的共用引擎正在开发，排除 12L | 按真实校准逐项报告；完整初始化和完整 schema 验证尚未完成 |
 
-目前完整演进的真机验证目标为 Xiaomi CAS，系统指纹为 `Xiaomi/cas/cas:13/TKQ1.221114.001/V816.0.4.0.TJJCNXM:user/release-keys`。启用条件还包括实际运行库的必需命名符号、独立 JNI receiver 和运行时行为校准（Build ID 仅记录证据）；同型号、同 Android 版本不等于兼容，系统或 ART 更新后也可能无法启用。
+历史旧实现的完整演进结果来自 Android 13 Xiaomi CAS；它不证明当前重写版本可用。当前优先验证 Android 16，适配按实际运行库的命名符号和独立运行时校准进行，不以厂商或 Build ID 选择实现。
 
 Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)。
 
@@ -160,20 +160,22 @@ if (error != JVMTI_ERROR_NONE) {
 - 对象新增字段初值为零或 `null`；新建对象仍按新定义执行构造器。字段类型或 static / 实例形式变化按旧成员退役、新成员创建处理。
 - 删除成员、收窄继承关系后，旧引用可能抛出链接或访问异常。业务代码需处理这些语义变化。
 - 已加载子类覆写将变为 final 的方法、存活实例将继承未实现抽象方法等冲突，会导致事务拒绝。
-- 活动编译帧的处理受已验证路径限制。活动非调试 AOT 帧不支持即时去优化，部分请求需等待旧帧退出后重试；某些类演进会触发进程级解释执行回退。
+- 新路径按调用图选择上下游方法进行解释执行。仍在栈上的选中编译帧会导致明确拒绝；常驻帧未必退出，不通过无限等待或全进程回退假装完成。
 - `RetransformClasses` 不属于增强结构演进入口。补丁分发、签名校验、访问控制和发布系统需由调用方实现。
 
 ## 示例与验证
 
 ```sh
-# 在已适配的 Android 13 arm64 设备运行完整演进回归
-python3 tools/android13/run-source-probe.py --serial DEVICE
+# 共用结构路径的开发验证（当前不代表完整演进已通过）
+python3 tools/run-production-schema.py --adb /path/to/sdk/platform-tools/adb \
+  --serial DEVICE --apk app/build/outputs/apk/debug/app-debug.apk \
+  --self-instrumentation --case field-types --scope common-owned
 
 # 在其他设备运行公开 JVMTI 回归；APK 需匹配设备 ABI
 python3 tools/run-public-jvmti.py --serial DEVICE
 ```
 
-测试脚本安装并操作示例应用 `dev.artdcevm.lab`，会结束其旧进程并从初始类定义开始运行。原始报告保存到本地 `build/evidence/`，不随仓库发布。`run-source-probe.py` 是沿用的脚本名称，当前构建不需要下载或编译 AOSP，也不加载独立源码引擎。
+测试脚本操作示例应用 `dev.artdcevm.lab`，会结束其旧进程并从初始类定义开始运行。结构测试使用已安装且经过哈希核验的 APK。原始报告保存到本地 `build/evidence/`，不随仓库发布。旧 `run-source-probe.py` 及其专属引擎和测试已删除。
 
 ## 文档
 

@@ -75,7 +75,6 @@
 #include "platform/common/native_structural_reflection.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/native_scope_executor.h"
-#include "platform/abi/arm64/android13/selective_deopt_abi.h"
 #include "hooks/shadow_hook_engine.h"
 #include <cstring>
 #include <map>
@@ -927,18 +926,6 @@ struct NativeEngine final:Engine {
  std::vector<retirement::FieldMethodHandleOracle> field_method_handles;
  jint original_field_values[2]={};
  void* proof_method=nullptr;
- bool Source13Candidate()const override {
-  if(!methods||!mirrors||model.model!=method_identity::Model::kMethod12Onward||
-      metadata.StorageModel()!=modern_field_metadata::Model::kSplit)return false;
-  size_t extent=0;runtime_services::View view;
-  if(!method_identity::ReadableMappingExtent(runtime.runtime,&extent)||
-      !runtime_services::Read(runtime_services::Declaration::kAndroid13,runtime.runtime,extent,&view))return false;
-  const auto& r=runtime.receivers;
-  return view.class_linker==r.class_linker&&view.jni_id_manager==r.jni_id_manager&&
-      view.java_vm==r.java_vm&&view.thread_list==r.thread_list&&view.jit==r.jit&&
-      view.jit_code_cache==r.jit_code_cache&&view.heap==r.heap&&
-      runtime.instrumentation==static_cast<unsigned char*>(runtime.runtime)+offsetof(android13::selective_abi::RuntimePrefix,instrumentation);
- }
  bool Activate(JNIEnv* env,std::string* error)override {
   if(activated)return true;
   struct MirrorCacheScope{NativeEngine& e;JNIEnv* env;~MirrorCacheScope(){e.field_mirror_cache.Clear(env);}} mirror_cache_scope{*this,env};

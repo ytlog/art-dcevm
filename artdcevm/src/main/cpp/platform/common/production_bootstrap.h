@@ -6,7 +6,6 @@ namespace artdcevm::production_bootstrap {
 class Engine {
  public:
   virtual ~Engine()=default;
-  virtual bool Source13Candidate()const=0;
   virtual void RecordDefinitions(JNIEnv*,const std::vector<Definition>&){}
   virtual bool FieldDeletionReady()const{return false;}
   virtual bool AtomicBatchReady()const{return false;}

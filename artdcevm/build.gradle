@@ -19,7 +19,6 @@ android {
             arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
             arguments '-DARTDCEVM_SHADOWHOOK_SOURCE_DIR=' + shadowhookSourceDir.get().asFile.absolutePath
             targets 'artdcevm', 'shadowhook', 'shadowhook_nothing'
-            arguments '-DARTDCEVM_FORCE_CHECKED_HANDLES_TEST=' + (providers.gradleProperty('forceCheckedHandles').orElse('false').get().toBoolean() ? 'ON' : 'OFF')
         } }
     }
     buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }

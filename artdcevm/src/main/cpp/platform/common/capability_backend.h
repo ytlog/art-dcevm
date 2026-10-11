@@ -5,12 +5,11 @@
 #include <atomic>
 namespace artdcevm {
 // Public JVMTI is always attached first. A live production bootstrap is the
-// only authority allowed to choose a private source candidate.
+// only authority allowed to activate the common private owner.
 class CapabilityBackend final:public RuntimeBackend {
  public:
-  using SourceFactory=std::function<std::unique_ptr<RuntimeBackend>()>;
   using Producer=std::function<std::unique_ptr<production_bootstrap::Engine>(JNIEnv*,jvmtiEnv*,jobject,std::string*)>;
-  CapabilityBackend(std::unique_ptr<RuntimeBackend>,SourceFactory,Producer);
+  CapabilityBackend(std::unique_ptr<RuntimeBackend>,Producer);
   int Attach(JavaVM*)override;
   std::string Capabilities()const override;
   int Apply(Operation,const std::vector<Definition>&)override;
@@ -36,12 +35,12 @@ class CapabilityBackend final:public RuntimeBackend {
   };
   mutable std::atomic_flag operation_=ATOMIC_FLAG_INIT;
   int Prepare(JNIEnv*,jobject);
-  int PrepareSource(JNIEnv*,jobject);
-  std::unique_ptr<RuntimeBackend> public_,source_;
-  SourceFactory source_factory_;Producer producer_;
+  int ActivateCommon(JNIEnv*,jobject);
+  std::unique_ptr<RuntimeBackend> public_;
+  Producer producer_;
   std::unique_ptr<production_bootstrap::Engine> common_;
   JavaVM* vm_=nullptr;jvmtiEnv* env_=nullptr;
-  bool ready_=false,source_ready_=false,attempted_=false,source_attempted_=false;
+  bool ready_=false,attempted_=false;
   std::string error_;
 };
 }

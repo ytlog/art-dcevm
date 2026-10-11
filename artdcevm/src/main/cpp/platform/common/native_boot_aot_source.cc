@@ -95,7 +95,7 @@ bool Source::InspectEntry(void*method,uint32_t pc,native_boot_return_continuatio
  if(!Prefix(method,*entry,context,&identity,failure,entry_kind==native_boot_return_continuation::Entry::NormalAndExceptional))return false;
  if((identity.access_flags&(0x20u|0x20000u))||(entry->modifiers&0x20u))return deny("boot-continuation-implicit-monitor-state-unproved");
  receiver_guard::CodeView source;
- if(!code_.Code(self_,method,&source,context)||!ImmutableBodyMatches(*entry,source,identity.dex_method_index,context)||(entry_kind==native_boot_return_continuation::Entry::NormalAndExceptional&&!DexIdentity(source.source_dex).ReturnsVoid(identity.dex_method_index)))return deny("boot-continuation-current-public-source-body-DEX-mismatch");
+ if(!code_.Code(self_,method,&source,context)||!ImmutableBodyMatches(*entry,source,identity.dex_method_index,context)||(entry_kind==native_boot_return_continuation::Entry::NormalAndExceptional&&!native_dex_identity::DexIdentity(source.source_dex).ReturnsVoid(identity.dex_method_index)))return deny("boot-continuation-current-public-source-body-DEX-mismatch");
  const auto result=native_boot_return_continuation::Read(source,pc,context,storage,scratch,entry_kind);
  if(!result.complete||!result.primitive_return)return deny(result.failure);
  if(!OwnsWindow()||catalog_.Lookup(method,roots_,context)!=entry)return deny("boot-continuation-final-source-window-or-root-changed");

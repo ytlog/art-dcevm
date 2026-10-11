@@ -1,4 +1,9 @@
 #include "platform/common/readable_mapping_scope.h"
+#include "platform/common/native_call_graph_inventory.h"
+#include "platform/common/native_call_graph_dispatch.h"
+#include "platform/common/native_interface_dispatch.h"
+#include "platform/common/native_dex_identity.h"
+#include "platform/common/native_dex_instruction_width.h"
 #include "platform/common/bounded_root_cohort.h"
 #include <optional>
 #include "platform/common/native_schema_guard_verifier.h"
@@ -14,6 +19,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <string_view>
 #include <set>
@@ -26,6 +32,27 @@
 namespace artdcevm::native_schema_guard_verifier {
 namespace {
 bool Fail(std::string* error,const char* text){if(error)*error=text;return false;}
+bool EnsureCallGraphBytecodes(jvmtiEnv*ti,std::string*error){
+ if(!ti||!ti->functions||!ti->functions->GetCapabilities)return Fail(error,"Call graph JVMTI capabilities are unavailable");
+ jvmtiCapabilities current{};
+ if(ti->GetCapabilities(&current)!=JVMTI_ERROR_NONE)return Fail(error,"Call graph JVMTI capabilities query failed");
+ if(current.can_get_bytecodes)return true;
+ if(!ti->functions->GetPotentialCapabilities||!ti->functions->AddCapabilities)return Fail(error,"Call graph bytecode capability cannot be requested");
+ jvmtiCapabilities potential{};
+ if(ti->GetPotentialCapabilities(&potential)!=JVMTI_ERROR_NONE||!potential.can_get_bytecodes)return Fail(error,"Call graph bytecode capability is not available in this JVMTI phase");
+ jvmtiCapabilities requested{};requested.can_get_bytecodes=1;
+ if(ti->AddCapabilities(&requested)!=JVMTI_ERROR_NONE)return Fail(error,"Call graph bytecode capability request was rejected");
+ current={};
+ if(ti->GetCapabilities(&current)!=JVMTI_ERROR_NONE||!current.can_get_bytecodes)return Fail(error,"Call graph bytecode capability was not granted");
+ return true;
+}
+std::vector<size_t> WalkCallGraphDomain(const std::vector<std::vector<size_t>>&children,size_t owner){
+ if(owner>=children.size())return {};
+ std::vector<size_t>queue{owner};std::vector<uint8_t>seen(children.size(),0);seen[owner]=1;
+ for(size_t at=0;at<queue.size();++at)for(auto child:children[queue[at]]){
+  if(child>=children.size())return {};if(!seen[child]){seen[child]=1;queue.push_back(child);}}
+ return queue;
+}
 constexpr size_t absent=SIZE_MAX;
 // Ephemeral index of one complete freshly borrowed snapshot. Never retain
 // native keys across a JNI safepoint or a managed-root refresh.
@@ -45,6 +72,7 @@ struct Node {
  bounded_managed_roots::Slot root{},loader{};
  evolution::ClassSchema schema;
  std::vector<jmethodID> method_ids;
+ std::vector<std::vector<unsigned char>> method_bytes;
  std::vector<jfieldID> field_ids;
  std::vector<bounded_managed_roots::Slot> interfaces;
  bounded_managed_roots::Slot parent{},component{},class_name{};
@@ -173,6 +201,16 @@ bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* 
  struct Methods {jvmtiEnv* ti;jmethodID* p;~Methods(){if(p)ti->Deallocate(reinterpret_cast<unsigned char*>(p));}} release_methods{ti,methods};
  for(jint i=0;i<method_count;++i){Strings text{ti};jint flags=0;
   if(!methods[i]||ti->GetMethodName(methods[i],&text.name,&text.signature,nullptr)!=JVMTI_ERROR_NONE||!text.name||!text.signature||ti->GetMethodModifiers(methods[i],&flags)!=JVMTI_ERROR_NONE)return Fail(error,"Public method identity/modifiers unavailable");
+  std::vector<unsigned char> bytes;
+  if(!(flags&0x500)){
+   if(!ti->functions||!ti->functions->GetBytecodes)return Fail(error,"Call graph public GetBytecodes is unavailable");
+   jint count=0;unsigned char*raw=nullptr;
+   const auto result=ti->GetBytecodes(methods[i],&count,&raw);
+   struct Bytes {jvmtiEnv*ti;unsigned char*p;~Bytes(){if(p)ti->Deallocate(p);}} release{ti,raw};
+   if(result!=JVMTI_ERROR_NONE||count<=0||(count&1)||!raw)return Fail(error,"Call graph public DEX bytecodes unavailable");
+   bytes.assign(raw,raw+count);
+  }
+  out->method_bytes.push_back(std::move(bytes));
   out->method_ids.push_back(methods[i]);out->schema.methods.push_back({text.name,text.signature,native_schema_policy::JavaFlags(uint32_t(flags)),UINT32_MAX});
  }
  jint field_count=0; jfieldID* fields=nullptr;
@@ -191,7 +229,7 @@ bool PublicMembers(JNIEnv* env,jvmtiEnv* ti,jclass klass,Node* out,std::string* 
  if(std::set<jmethodID>(out->method_ids.begin(),out->method_ids.end()).size()!=out->method_ids.size()||std::set<jfieldID>(out->field_ids.begin(),out->field_ids.end()).size()!=out->field_ids.size())return Fail(error,"Duplicate public member IDs");
  return true;
 }
-bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schema.descriptor&&a.schema.access==b.schema.access&&MembersEqual(a.schema.fields,b.schema.fields)&&MembersEqual(a.schema.methods,b.schema.methods)&&a.method_ids==b.method_ids&&a.field_ids==b.field_ids;}
+bool SamePublic(const Node& a,const Node& b){return a.schema.descriptor==b.schema.descriptor&&a.schema.access==b.schema.access&&MembersEqual(a.schema.fields,b.schema.fields)&&MembersEqual(a.schema.methods,b.schema.methods)&&a.method_ids==b.method_ids&&a.method_bytes==b.method_bytes&&a.field_ids==b.field_ids;}
 }
 struct Verifier::State {
  const modern_field_metadata::ReadContext* stopped_context=nullptr;
@@ -200,6 +238,7 @@ struct Verifier::State {
  native_interface_dispatch_domain::detail::ErrorCensus error_census;
  mutable std::vector<uint64_t> domain_seen;mutable uint64_t domain_epoch=0;
  Bindings bindings{};PublicClassIndex public_index;std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
+ uint64_t census_revision=0;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
  mutable std::vector<uint32_t*> access_slots,readonly_access_slots;
@@ -441,8 +480,326 @@ struct Verifier::State {
 Verifier::Verifier():state_(new State){}
 Verifier::~Verifier(){if(!state_->nodes.empty()||!state_->inputs.empty()||!state_->roots.Empty())std::abort();}
 void Verifier::Clear(JNIEnv* env){if(!env&&(!state_->nodes.empty()||!state_->inputs.empty()||!state_->roots.Empty()))std::abort();if(env)state_->roots.Clear(env);*state_=State{};}
+bool Verifier::CaptureCallGraph(const runnable_jni::Context&context,
+ const receiver_guard::SourceProducer&source,native_call_graph_inventory::Inventory*out,std::string*error)const{
+ const auto&s=*state_;
+ if(!out||out->roots_||!s.staged||s.stopped_context||!runnable_jni::Bridge::BorrowOriginalScope(context)||
+    context.vm!=s.bindings.vm)return Fail(error,"Call graph requires actual original ordinary Runnable scope");
+ Snapshot snapshot;if(!s.Roots(&snapshot,error))return false;
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return Fail(error,"Call graph current native mapping capture failed");
+ modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ NativeOrdinals classes; if(!IndexNativeClasses(snapshot.classes,&classes,error))return false;
+ std::unordered_map<void*,uint64_t> loader_tokens;
+ for(size_t n=0;n<snapshot.loaders.size();++n)if(snapshot.loaders[n])loader_tokens.emplace(snapshot.loaders[n],uint64_t(n)+1);
+ std::unordered_map<void*,std::pair<size_t,size_t>> declarations;
+ std::vector<std::unordered_map<uint32_t,size_t>> dex_indices(s.nodes.size());
+ for(size_t n=0;n<s.nodes.size();++n)for(size_t i=0;i<snapshot.declared[n].size();++i){
+  void*method=snapshot.declared[n][i];size_t extent=0;method_metadata::Identity identity{};
+  if(!declarations.emplace(method,std::make_pair(n,i)).second||!read.extent(read.owner,method,&extent)||
+     !method_metadata::ReadIdentity(layout,method,extent,&identity)||
+     !dex_indices[n].emplace(identity.dex_method_index,i).second)return Fail(error,"Call graph declaration index is ambiguous");
+ }
+ std::map<std::pair<std::string,std::string>,std::vector<size_t>> signatures;
+ std::set<std::pair<std::string,std::string>> affected_fields;
+ std::vector<std::vector<size_t>> ancestors(s.nodes.size());
+ for(size_t n=0;n<s.nodes.size();++n){
+  for(const auto&m:s.nodes[n].schema.methods)signatures[{m.name,m.descriptor}].push_back(n);
+  if(s.nodes[n].affected)for(const auto&f:s.nodes[n].schema.fields)affected_fields.emplace(f.name,f.descriptor);
+  if(snapshot.parents[n]!=SIZE_MAX)ancestors[n].push_back(snapshot.parents[n]);
+  else if(s.nodes[n].schema.access&0x200u){void*object=nullptr;
+   if(!NativeSuperclass(s.nodes,snapshot,n,&object))return Fail(error,"Call graph interface Object ancestry is unavailable");
+   auto found=classes.find(object);if(found==classes.end())return Fail(error,"Call graph interface Object root is absent");ancestors[n].push_back(found->second);
+  }
+  for(auto root:s.nodes[n].interfaces){void*klass=nullptr;if(!s.roots.Read(root,&klass))return false;
+   auto found=classes.find(klass);if(found==classes.end())return Fail(error,"Call graph actual reference graph is outside rooted census");ancestors[n].push_back(found->second);}
+ }
+ std::map<std::tuple<std::string,std::string,std::string>,bool> candidate_cache;
+ const auto related=[&](const evolution::MappedDexMethodReference&ref){
+  const auto key=std::make_tuple(ref.declaring_class,ref.name,ref.descriptor);
+  auto cached=candidate_cache.find(key);if(cached!=candidate_cache.end())return cached->second;
+  bool present=false;auto owners=s.public_index.buckets.find(ref.declaring_class);
+  auto methods=signatures.find({ref.name,ref.descriptor});
+  if(owners!=s.public_index.buckets.end()&&methods!=signatures.end()){
+   std::vector<uint8_t>declared(s.nodes.size(),0);for(auto n:methods->second)declared[n]=1;
+   for(auto owner:owners->second){auto lineage=WalkCallGraphDomain(ancestors,owner);
+    for(auto n:lineage)if(declared[n]){present=true;break;}if(present)break;}
+  }
+  candidate_cache.emplace(key,present);return present;
+ };
+ for(size_t containing=0;containing<s.nodes.size();++containing)for(void*method:snapshot.all_methods[containing]){
+  void*declaring=s.bindings.method_class(s.bindings.owner,method);
+  auto cls=classes.find(declaring);
+  if(cls==classes.end())return Fail(error,"Call graph actual declaring Class is outside rooted census");
+  const size_t owner=cls->second;const auto&node=s.nodes[owner];size_t public_index=SIZE_MAX;
+  auto exact=declarations.find(method);
+  if(exact!=declarations.end()&&exact->second.first==owner)public_index=exact->second.second;
+  else if(owner!=containing){size_t extent=0;method_metadata::Identity copied{};
+   if(!read.extent(read.owner,method,&extent)||!method_metadata::ReadIdentity(layout,method,extent,&copied))return Fail(error,"Call graph copied method prefix is unreadable");
+   auto original=dex_indices[owner].find(copied.dex_method_index);
+   if(original!=dex_indices[owner].end()&&s.bindings.same_method(s.bindings.owner,method,snapshot.declared[owner][original->second]))public_index=original->second;
+  }
+  if(public_index==SIZE_MAX||public_index>=node.method_bytes.size())return Fail(error,"Call graph method lacks independent public declaration");
+  const auto&member=node.schema.methods[public_index];
+  if(member.access&0x400u)continue; // Abstract declarations have no executable body.
+  if(node.class_name)return Fail(error,"Call graph proxy implementation source is unsupported");
+  size_t extent=0;method_metadata::Identity identity{};
+  if(!read.extent(read.owner,method,&extent)||!method_metadata::ReadIdentity(layout,method,extent,&identity)||
+    identity.dex_method_index==UINT32_MAX||(identity.access_flags&0x40000u))return Fail(error,"Call graph fresh method identity is unavailable");
+  evolution::MappedDexMetadata dex{};field_copy::CopyClassView named{};
+  if(!native_interface_dispatch::ReadCurrentNamespace(*s.bindings.metadata,declaring,read,&dex,&named)||
+   !native_dex_identity::DexIdentity(dex).Matches(identity.dex_method_index,node.schema.descriptor,member.name,member.descriptor))
+    return Fail(error,"Call graph independent public declaration differs from actual DEX namespace");
+  native_call_graph_inventory::Inventory::Method record;
+  record.native={method,node.root,s.nodes[containing].root,identity.dex_method_index,member.access};
+  record.declaring=owner;record.containing=containing;record.owner=node.schema.descriptor;record.name=member.name;
+  record.signature=member.descriptor;record.bytes=node.method_bytes[public_index];
+  const bool native=(member.access&0x100u)!=0;
+  if(!native){
+   if(!source.Code(context.self,method,&record.code,read)||record.code.source_dex.begin!=dex.begin||
+      record.code.units>SIZE_MAX/2||record.bytes.size()!=record.code.units*2||
+      std::memcmp(record.bytes.data(),record.code.instructions,record.bytes.size()))return Fail(error,"Call graph native CodeItem differs from independently staged public bytes");
+   const char*failure=nullptr;if(!native_call_graph::ScanCode(record.code,&record.calls,&failure))return Fail(error,failure);
+   for(const auto&site:record.calls){
+    if(site.instruction.kind==receiver_guard::InvokeKind::Custom||site.instruction.kind==receiver_guard::InvokeKind::Polymorphic){record.related.push_back(false);continue;}
+    evolution::MappedDexMethodReference reference;std::string reason;
+    if(!evolution::ReadMappedDexMethodReference(record.code.source_dex,site.instruction.index,&reference,&reason))return Fail(error,"Call graph actual invoke reference is malformed");
+    record.related.push_back(related(reference));
+   }
+   for(size_t pc=0;pc<record.code.units;){uint32_t width=0;bool payload=false;
+    if(!dex_instruction::Step(record.code.instructions,record.code.units,pc,&width,&payload))return Fail(error,"Call graph field instruction boundary is unavailable");
+    const unsigned op=record.code.instructions[pc]&255u;
+    if(!payload&&op>=0x52&&op<=0x6d){uint32_t fields=0;
+     std::memcpy(&fields,record.code.source_dex.begin+80,4);
+     if(width!=2||record.code.instructions[pc+1]>=fields)return Fail(error,"Call graph actual field operand is outside source DEX namespace");
+     evolution::MappedDexFieldReference reference;std::string reason;
+     if(!evolution::ReadMappedDexFieldReference(record.code.source_dex,record.code.instructions[pc+1],&reference,&reason)||
+       !reference.name||!reference.descriptor)return Fail(error,"Call graph actual field reference is malformed");
+     record.fields|=affected_fields.find({reference.name,reference.descriptor})!=affected_fields.end();
+    }
+    pc+=width;
+   }
+  }
+  uint64_t loader_token=snapshot.loaders[owner]?loader_tokens.at(snapshot.loaders[owner]):0;
+  if(!native&&(s.nodes[containing].affected||node.affected))out->affected_seeds_.push_back(out->nodes_.size());
+  out->nodes_.push_back({{dex.begin,loader_token,method},native?native_call_graph::MethodKind::Native:native_call_graph::MethodKind::Managed});
+  out->methods_.push_back(std::move(record));
+ }
+ out->roots_=&s.roots;out->generation_=s.roots.Generation();out->census_revision_=s.census_revision;return true;
+}
+bool Verifier::ResolveCallGraphSuper(const runnable_jni::Context&context,receiver_guard::SourceProducer&source,
+ const native_call_graph_super::Resolver&resolver,size_t caller,size_t site,void*declaration,
+ native_call_graph_inventory::Inventory*inventory,std::string*error)const{
+ const auto&s=*state_;
+ if(!inventory||inventory->verifier_!=this||caller>=inventory->methods_.size()||
+   site>=inventory->methods_[caller].calls.size()||s.stopped_context||
+   inventory->generation_!=s.roots.Generation())return Fail(error,"Call graph super rooted owner unavailable");
+ const auto&m=inventory->methods_[caller];const auto&call=m.calls[site];
+ evolution::MappedDexMethodReference reference;
+ if(!evolution::ReadMappedDexMethodReference(m.code.source_dex,call.instruction.index,&reference,error))return false;
+ // This public bucket is only a candidate index. Actual current managed root
+ // identity, read immediately after the potentially moving original call,
+ // is the authority; a descriptor never substitutes for a loader identity.
+ auto candidates=s.public_index.buckets.find(reference.declaring_class);
+ if(candidates==s.public_index.buckets.end())return Fail(error,"Super referenced type requires restaging");
+ method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return false;
+ modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ native_call_graph_super::Observation observed{};
+ if(!resolver.ResolveOriginal(context,source,m.native.method,m.code,m.bytes,call,declaration,read,&observed,error))return false;
+ // No JNI or other resolver may run before these borrowed Class addresses are
+ // converted to slots owned by the independently complete staged census.
+ void*actual=nullptr;
+ if(!s.roots.Read(m.native.declaring_root,&actual)||actual!=observed.caller_class||
+   observed.caller!=m.native.method||observed.declaration!=declaration||observed.dex_pc!=call.dex_pc||
+   observed.dex_namespace!=m.code.source_dex.begin||observed.type_index!=reference.class_index)return Fail(error,"Super caller source changed; needs-restage");
+ bounded_managed_roots::Slot referenced{};size_t matches=0;
+ for(auto n:candidates->second){if(!s.roots.Read(s.nodes[n].root,&actual))return false;
+  if(actual==observed.referenced_class){referenced=s.nodes[n].root;++matches;}}
+ if(matches!=1)return Fail(error,"Super referenced type outside current rooted census; needs-restage");
+ // Interface default selection needs a full frozen conflict/override proof.
+ // Its ordinary result alone cannot authorize a stopped publication.
+ if(observed.interface_super)return true;
+ if(m.declaring>=s.nodes.size()||!s.nodes[m.declaring].parent||
+   !s.roots.Read(s.nodes[m.declaring].parent,&actual)||actual!=observed.super_class)return Fail(error,"Super parent source changed; needs-restage");
+ auto target=inventory->method_ordinals_.find(observed.target);
+ if(target==inventory->method_ordinals_.end())return Fail(error,"Super target outside rooted method census; needs-restage");
+ const auto&selected=inventory->methods_[target->second];void*containing=nullptr;
+ if(!s.roots.Read(selected.native.declaring_root,&actual)||
+   actual!=s.bindings.metadata->MethodDeclaringClass(observed.target)||
+   !s.roots.Read(selected.native.containing_root,&containing)||!containing)
+  return Fail(error,"Super selected declaration/containing roots changed; needs-restage");
+ inventory->supers_.push_back({caller,site,referenced,s.nodes[m.declaring].parent,
+  declaration,observed.target,observed.type_index,observed.slot,std::move(reference)});return true;
+}
+bool Verifier::ApplyCallGraphResolution(const runnable_jni::Context&context,
+ const std::vector<native_call_graph_resolution::Result>&results,
+ native_call_graph_inventory::Inventory*inventory,std::string*error)const{
+ const auto&s=*state_;
+ if(!inventory||inventory->verifier_!=this||s.stopped_context||s.verified||s.collected||
+    !runnable_jni::Bridge::BorrowOriginalScope(context)||context.vm!=s.bindings.vm||
+    inventory->generation_!=s.roots.Generation())return Fail(error,"Call graph fresh resolved source window is unavailable");
+ Snapshot snapshot;if(!s.Roots(&snapshot,error))return false;
+ NativeOrdinals classes;if(!IndexNativeClasses(snapshot.classes,&classes,error))return false;
+ std::unordered_map<void*,size_t> graph_methods,declaring;
+ for(size_t i=0;i<inventory->methods_.size();++i)graph_methods.emplace(inventory->methods_[i].native.method,i);
+ // Abstract declarations remain independently indexed even though they have
+ // no executable graph node. The actual dispatch target comes from ART tables.
+ for(size_t n=0;n<snapshot.declared.size();++n)for(void*method:snapshot.declared[n])declaring.emplace(method,n);
+ for(size_t n=0;n<snapshot.all_methods.size();++n)for(void*method:snapshot.all_methods[n]){
+  auto cls=classes.find(s.bindings.method_class(s.bindings.owner,method));
+  if(cls==classes.end())return Fail(error,"Call graph resolved copied owner requires restaging");
+  declaring.emplace(method,cls->second);
+ }
+ method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return Fail(error,"Call graph resolved mapping snapshot failed");
+ modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ for(const auto&m:inventory->methods_){
+  if(m.containing>=snapshot.all_methods.size()||m.declaring>=snapshot.classes.size()||
+    s.bindings.method_class(s.bindings.owner,m.native.method)!=snapshot.classes[m.declaring])return Fail(error,"Call graph resolved source roots changed; restage required");
+  if(!(m.native.modifiers&0x100u)){receiver_guard::CodeView current{};
+   if(!inventory->source_->Code(context.self,m.native.method,&current,read)||current.code_item!=m.code.code_item||
+     current.source_dex.begin!=m.code.source_dex.begin||current.units>SIZE_MAX/2||current.units*2!=m.bytes.size()||
+     std::memcmp(m.bytes.data(),current.instructions,m.bytes.size()))return Fail(error,"Call graph source body changed during resolving; restage required");
+  }
+ }
+ // Reverse actual rooted parent/interface edges. Domain traversal visits each
+ // identity once and is cached per resolved declaration's declaring Class.
+ std::vector<std::vector<size_t>> children(s.nodes.size());
+ for(size_t n=0;n<s.nodes.size();++n){if(snapshot.parents[n]!=SIZE_MAX)children[snapshot.parents[n]].push_back(n);
+  for(auto root:s.nodes[n].interfaces){void*interface=nullptr;if(!s.roots.Read(root,&interface))return false;
+   auto cls=classes.find(interface);if(cls==classes.end())return Fail(error,"Call graph interface domain requires restaging");children[cls->second].push_back(n);}}
+ std::unordered_map<size_t,std::vector<size_t>> domains;
+ const auto domain=[&](size_t owner)->const std::vector<size_t>&{
+  auto existing=domains.find(owner);if(existing!=domains.end())return existing->second;
+  return domains.emplace(owner,WalkCallGraphDomain(children,owner)).first->second;
+ };
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ std::optional<native_call_graph_dispatch::Reader> dispatch;
+ if(s.bindings.abstract_instances&&s.bindings.abstract_instances->Ready())dispatch.emplace(*s.bindings.metadata,*s.bindings.abstract_instances,layout);
+ using CacheKey=std::pair<void*,native_call_graph::InvokeKind>;
+ std::map<CacheKey,std::vector<size_t>> dispatched;
+ std::map<std::pair<size_t,uint32_t>,const native_call_graph_inventory::Inventory::Super*> supers;
+ for(const auto&w:inventory->supers_)if(w.caller>=inventory->methods_.size()||w.site>=inventory->methods_[w.caller].calls.size()||
+   !supers.emplace(std::make_pair(w.caller,inventory->methods_[w.caller].calls[w.site].dex_pc),&w).second)return Fail(error,"Super source receipt is ambiguous");
+ std::vector<native_call_graph::Edge> edges;size_t at=0;
+ for(size_t caller=0;caller<inventory->methods_.size();++caller)for(const auto&site:inventory->methods_[caller].calls){
+  const auto kind=[&]{using I=receiver_guard::InvokeKind;using O=native_call_graph::InvokeKind;
+   switch(site.instruction.kind){case I::Direct:return O::Direct;case I::Static:return O::Static;case I::Super:return O::Super;
+    case I::Virtual:return O::Virtual;case I::Interface:return O::Interface;case I::Custom:return O::Custom;default:return O::Polymorphic;}}();
+  const auto unresolved=[&]{edges.push_back({caller,SIZE_MAX,site.dex_pc,kind,native_call_graph::Coverage::Unresolved});};
+  if(kind==native_call_graph::InvokeKind::Custom||kind==native_call_graph::InvokeKind::Polymorphic){unresolved();continue;}
+  if(at>=results.size())return Fail(error,"Call graph original result count mismatch");const auto&r=results[at++];
+  if(r.status!=native_call_graph_resolution::Status::Resolved){unresolved();continue;}
+  if(r.caller!=inventory->methods_[caller].native.method||r.dex_pc!=site.dex_pc||
+    r.dex_namespace!=inventory->nodes_[caller].identity.dex_namespace||
+    !native_call_graph_resolution::detail::Same(r.instruction,site.instruction))return Fail(error,"Call graph original result namespace/callsite mismatch");
+  auto owner=declaring.find(r.declaration);
+  if(owner==declaring.end())return Fail(error,"Call graph resolved declaration is outside loaded census; needs-restage");
+  if(kind==native_call_graph::InvokeKind::Direct||kind==native_call_graph::InvokeKind::Static){
+   auto target=graph_methods.find(r.declaration);
+   if(target==graph_methods.end()){unresolved();continue;}
+   const bool is_static=(inventory->methods_[target->second].native.modifiers&8u)!=0;
+   if(is_static!=(kind==native_call_graph::InvokeKind::Static)){unresolved();continue;}
+   edges.push_back({caller,target->second,site.dex_pc,kind,native_call_graph::Coverage::Exact});continue;
+  }
+  if(kind==native_call_graph::InvokeKind::Super){
+   auto witness=supers.find({caller,site.dex_pc});
+   if(witness==supers.end()||witness->second->declaration!=r.declaration){unresolved();continue;}
+   auto target=graph_methods.find(witness->second->target);if(target==graph_methods.end())return Fail(error,"Super selected method outside current census; needs-restage");
+   edges.push_back({caller,target->second,site.dex_pc,kind,native_call_graph::Coverage::Exact});continue;
+  }
+  if(!dispatch){unresolved();continue;}
+  const CacheKey key{r.declaration,kind};auto cached=dispatched.find(key);
+  if(cached==dispatched.end()){
+   std::vector<size_t> targets;std::vector<native_call_graph_inventory::Inventory::Dispatch> witnesses;bool closed=true;
+   for(auto receiver:domain(owner->second)){
+    // An actual object cannot have an abstract/interface runtime Class. All
+    // concrete descendants still appear through the complete rooted graph.
+    if(s.nodes[receiver].schema.access&0x600u)continue;
+    native_call_graph_dispatch::Observation observed{};const char*failure=nullptr;
+    if(!dispatch->Observe(kind,r.declaration,snapshot.classes[receiver],read,&observed,&failure)||
+       observed.declaration!=r.declaration||observed.declaring_class!=snapshot.classes[owner->second]||
+       observed.receiver_class!=snapshot.classes[receiver]){closed=false;break;}
+    auto target=graph_methods.find(observed.target);
+    if(target==graph_methods.end()){closed=false;break;}targets.push_back(target->second);
+    witnesses.push_back({r.declaration,kind,s.nodes[receiver].root,s.nodes[owner->second].root,observed.target});
+   }
+   // A call with no currently loaded concrete receiver remains unresolved;
+   // future definitions require a new inventory, never a vacuous safe grant.
+   if(!closed||targets.empty()){dispatched.emplace(key,std::vector<size_t>{});unresolved();continue;}
+   std::sort(targets.begin(),targets.end());targets.erase(std::unique(targets.begin(),targets.end()),targets.end());
+   inventory->dispatches_.insert(inventory->dispatches_.end(),witnesses.begin(),witnesses.end());
+   cached=dispatched.emplace(key,std::move(targets)).first;
+  }
+  if(cached->second.empty()){unresolved();continue;}
+  for(auto target:cached->second)edges.push_back({caller,target,site.dex_pc,kind,native_call_graph::Coverage::ClosedDispatch});
+ }
+ if(at!=results.size())return Fail(error,"Call graph original result count mismatch");
+ inventory->edges_=std::move(edges);inventory->census_revision_=s.census_revision;return true;
+}
+bool Verifier::ValidateCallGraph(const native_call_graph_inventory::Inventory&inventory,const modern_field_metadata::ReadContext&read)const noexcept{
+ return ValidateCallGraphSource(inventory,read,true);
+}
+bool Verifier::ValidateCallGraphOrdinary(const native_call_graph_inventory::Inventory&inventory,const modern_field_metadata::ReadContext&read)const noexcept{
+ return ValidateCallGraphSource(inventory,read,false);
+}
+bool Verifier::ValidateCallGraphSource(const native_call_graph_inventory::Inventory&inventory,
+ const modern_field_metadata::ReadContext&read,bool final,const native_source_stop::Session*stop)const noexcept{
+ const auto&s=*state_;
+ if(inventory.verifier_!=this||inventory.roots_!=&s.roots||inventory.generation_!=s.roots.Generation()||
+   (inventory.resolved_&&s.census_revision<=inventory.census_revision_)||
+   (final&&(s.stopped_context!=&read||!s.FrozenProof()))||!redefinition_gate::Owned(s.bindings.vm)||!read.owner||!read.extent)return false;
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ for(size_t i=0;i<inventory.methods_.size();++i){const auto&m=inventory.methods_[i];void*declaring=nullptr;
+  if(!s.roots.Read(m.native.declaring_root,&declaring)||s.bindings.method_class(s.bindings.owner,m.native.method)!=declaring)return false;
+  void*containing=nullptr;
+  if(!s.roots.Read(m.native.containing_root,&containing))return false;
+  size_t extent=0;if(!read.extent(read.owner,containing,&extent)||extent<56)return false;
+  uint64_t array=Read<uint64_t>(containing,offsetof(class_metadata::Class11,methods));
+  if(!read.extent(read.owner,reinterpret_cast<void*>(uintptr_t(array)),&extent)||
+    !native_selective_interpretation::detail::Member(reinterpret_cast<void*>(uintptr_t(array)),extent,m.native.method,layout.size))return false;
+  method_metadata::Identity identity{};
+  if(!read.extent(read.owner,m.native.method,&extent)||!method_metadata::ReadIdentity(layout,m.native.method,extent,&identity)||
+    identity.dex_method_index!=m.native.dex_index||jvmti_method_flags::Public(identity.access_flags)!=m.native.modifiers)return false;
+  evolution::MappedDexMetadata dex{};field_copy::CopyClassView named{};
+  if(!native_interface_dispatch::ReadCurrentNamespace(*s.bindings.metadata,declaring,read,&dex,&named)||dex.begin!=inventory.nodes_[i].identity.dex_namespace||
+    !native_dex_identity::DexIdentity(dex).Matches(identity.dex_method_index,m.owner,m.name,m.signature))return false;
+  if(!(m.native.modifiers&0x100u)){receiver_guard::CodeView code{};
+   if(!inventory.source_||!inventory.source_->Code(inventory.self_,m.native.method,&code,read)||
+      code.source_dex.begin!=dex.begin||code.code_item!=m.code.code_item||code.instructions!=m.code.instructions||
+      code.units>SIZE_MAX/2||m.bytes.size()!=code.units*2||
+      std::memcmp(m.bytes.data(),code.instructions,m.bytes.size()))return false;
+  }
+ }
+ if(!inventory.dispatches_.empty()){
+  if(!s.bindings.abstract_instances||!s.bindings.abstract_instances->Ready())return false;
+  native_call_graph_dispatch::Reader dispatch(*s.bindings.metadata,*s.bindings.abstract_instances,layout);
+  for(const auto&w:inventory.dispatches_){void*receiver=nullptr;void*declaring=nullptr;
+   if(!s.roots.Read(w.receiver,&receiver)||!s.roots.Read(w.declaring,&declaring))return false;
+   native_call_graph_dispatch::Observation current{};
+   if(!dispatch.Observe(w.kind,w.declaration,receiver,read,&current)||current.target!=w.target||
+      current.declaring_class!=declaring||current.receiver_class!=receiver)return false;
+  }
+ }
+
+ if(!inventory.supers_.empty()){
+  if(!stop||!inventory.super_resolver_||!inventory.source_)return false;
+  for(const auto&w:inventory.supers_){
+   if(w.caller>=inventory.methods_.size())return false;const auto&m=inventory.methods_[w.caller];
+   if(w.site>=m.calls.size())return false;
+   void*caller=nullptr;void*referenced=nullptr;void*parent=nullptr;
+   if(!s.roots.Read(m.native.declaring_root,&caller)||!s.roots.Read(w.referenced,&referenced)||
+     !s.roots.Read(w.parent,&parent))return false;
+   receiver_guard::CodeView code{};
+   if(!inventory.source_->Code(inventory.self_,m.native.method,&code,read))return false;
+   native_call_graph_super::Observation current{m.native.method,referenced,caller,parent,w.declaration,w.target,
+     m.code.source_dex.begin,m.calls[w.site].dex_pc,w.type_index,w.slot,false};
+   if(!inventory.super_resolver_->ValidateObserved(*stop,inventory.self_,code,m.bytes,m.calls[w.site],w.reference,current,read))return false;
+  }
+ }
+ return true;
+}
 bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,const Bindings& bindings,std::string* error){
- if(!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");state_->bindings=bindings;state_->roots.Bind(bindings.roots);
+ if(!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");if(!EnsureCallGraphBytecodes(ti,error))return false;state_->bindings=bindings;state_->roots.Bind(bindings.roots);
  for(auto klass:inputs){bounded_managed_roots::Slot slot;if(!state_->roots.Stage(env,klass,&slot,error))return false;state_->inputs.push_back(slot);}
  struct NameMethods {JNIEnv* env;jclass proxy=nullptr,klass=nullptr;~NameMethods(){if(proxy)env->DeleteLocalRef(proxy);if(klass)env->DeleteLocalRef(klass);}} public_names{env};
  public_names.proxy=env->FindClass("java/lang/reflect/Proxy");public_names.klass=env->FindClass("java/lang/Class");
@@ -519,7 +876,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  if(known!=before)return Fail(error,"Loaded caller graph lost a rooted Class while closing staging");
  if(state_->nodes.size()+state_->error_census.Size()==before)break;
  }
- if(state_->nodes.empty())return Fail(error,"Empty public Class graph");state_->staged=true;return true;
+ if(state_->nodes.empty())return Fail(error,"Empty public Class graph");state_->staged=true;++state_->census_revision;return true;
 }
 bool Verifier::MatchesAffected(JNIEnv* env,const std::vector<jclass>& actual,std::string* error)const {
  const auto& s=*state_;if(!env||!s.staged||env->ExceptionCheck())return Fail(error,"Closed caller graph is unavailable");
@@ -527,9 +884,21 @@ bool Verifier::MatchesAffected(JNIEnv* env,const std::vector<jclass>& actual,std
  if(affected!=actual.size())return Fail(error,"Duplicate or unstaged Holder Class");
  return !env->ExceptionCheck();
 }
-bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,Window window,std::string* error){
- auto& s=*state_;if(!s.staged||s.collected||(window==Window::Verified&&s.verified)||!redefinition_gate::Owned(s.bindings.vm)||!env||!ti||env->ExceptionCheck()||(window==Window::Collected&&!s.verified))return Fail(error,"Schema window order or context is invalid");
- if(!MatchesAffected(env,actual,error))return false;
+bool Verifier::CheckWindow(JNIEnv*env,jvmtiEnv*ti,const std::vector<jclass>&actual,Window window,std::string*error){
+ return CheckCallerWindow(env,ti,actual,window,error);
+}
+bool Verifier::RefreshCallGraphCensus(JNIEnv*env,jvmtiEnv*ti,const std::vector<jclass>&inputs,std::string*error){
+ if(native_source_class_loading::Run::Current())return Fail(error,"Call graph census requires ordinary pre-source JNI");
+ return CheckCallerWindow(env,ti,inputs,std::nullopt,error);
+}
+bool Verifier::CheckCallerWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,std::optional<Window> window,std::string* error){
+ auto& s=*state_;if(!s.staged||(window&&s.collected)||(!window&&(s.frozen||s.stopped_context))||(window==Window::Verified&&s.verified)||!redefinition_gate::Owned(s.bindings.vm)||!env||!ti||env->ExceptionCheck()||(window==Window::Collected&&!s.verified))return Fail(error,"Schema window order or context is invalid");
+ if(window){if(!MatchesAffected(env,actual,error))return false;}
+ else {
+  if(actual.size()!=s.inputs.size())return Fail(error,"Call graph census inputs differ from original stage");
+  for(auto root:s.inputs){size_t count=0;for(auto klass:actual)count+=s.roots.Same(env,root,klass);
+   if(count!=1||env->ExceptionCheck())return Fail(error,"Call graph census inputs differ from original rooted identities");}
+ }
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
  std::vector<uint8_t> seen(s.nodes.size(),0);s.error_census.BeginCheck();
@@ -554,7 +923,7 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
   bool affects=false;for(auto input:s.inputs){auto ref=static_cast<jclass>(s.roots.LocalRef(env,input));if(!ref||env->ExceptionCheck())return false;affects|=env->IsAssignableFrom(loaded[i],ref);env->DeleteLocalRef(ref);}if(affects!=node->affected)return Fail(error,"Loaded Class assignability changed after staging");++live;
  }
  if(live!=s.nodes.size()||!s.error_census.EndCheck()||env->ExceptionCheck())return Fail(error,"Loaded caller graph lost staged Class identity");
- if(window==Window::Verified)s.verified=true;else s.collected=true;return true;
+ if(window==Window::Verified)s.verified=true;else if(window==Window::Collected)s.collected=true;++s.census_revision;return true;
 }
 bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
  auto& s=*state_;if(!s.collected||s.frozen||!redefinition_gate::Owned(s.bindings.vm)||transaction.old_classes.empty()||transaction.old_classes.size()!=transaction.new_classes.size())return Fail(error,"Schema graph cannot seal before its real collected window");

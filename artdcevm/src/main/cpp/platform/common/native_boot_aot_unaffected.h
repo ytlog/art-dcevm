@@ -4,7 +4,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_receiver_bytecode.h"
-#include "platform/common/native_boot_dex_identity.h"
+#include "platform/common/native_dex_identity.h"
 #include "platform/common/native_boot_return_continuation.h"
 namespace artdcevm::native_boot_aot_unaffected {
 class Source;
@@ -58,7 +58,7 @@ inline bool ImmutableBodyMatches(const native_boot_method_catalog::Method&entry,
  const auto&dex=source.source_dex;
  if(!dex.begin||!dex.data_begin||!context.extent(context.owner,dex.begin,&extent)||extent<dex.size||
     !context.extent(context.owner,dex.data_begin,&extent)||extent<dex.data_size)return false;
- return DexIdentity(dex).Matches(method_index,entry.declaring_signature,entry.name,entry.descriptor);
+ return native_dex_identity::DexIdentity(dex).Matches(method_index,entry.declaring_signature,entry.name,entry.descriptor);
 }
 inline bool BodyMatches(const native_boot_method_catalog::Method&entry,
  const receiver_guard::CodeView&source,uint32_t method_index,uint32_t pc,

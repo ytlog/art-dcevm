@@ -12,7 +12,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
 #include "native_schema_run_state_boot_public_fixture.h"
-#include "platform/common/native_boot_dex_identity.h"
+#include "platform/common/native_dex_identity.h"
 #include "native_schema_run_state_boot_frames_fixture.h"
 #include "native_schema_run_state_managed_stack_fixture.h"
 #ifdef INTERFACE_DOMAIN_FIXTURE
