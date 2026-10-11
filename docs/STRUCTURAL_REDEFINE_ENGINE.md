@@ -51,7 +51,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 - **删除方法、改签名**：旧方法退役，调用时抛 `NoSuchMethodError`；删除覆写方法后，虚调用按新 vtable 分派到父类实现。
 - **退役引用**：`VisitReflectiveTargets` 把退役的 ArtField/ArtMethod 改写为墓碑成员，覆盖反射、MethodHandle、VarHandle 和 DexCache；JNI 字段和方法 ID 只在 `JniIdManager::DecodeFieldId` / `DecodeMethodId` 这两个解码点检查退役状态。不再逐条 Hook JNI、反射和句柄的访问路径。
 - **修饰符**：新类直接使用新 DEX 的修饰符。访问收窄后，已解析的旧访问会因 DexCache 被清除而重新做访问检查。
-- **继承关系变化**：父类和接口的变化由 ClassLinker 链接新类时处理。收窄（失去某个父类型）前检查：若有不可去优化的帧持有受影响类的实例，返回 `JVMTI_ERROR_UNMODIFIABLE_CLASS`（66）并保持旧定义，帧退出后可重试。
+- **继承关系变化**：父类和接口的变化由 ClassLinker 链接新类时处理。收窄（失去某个父类型）前检查：若有不可去优化的帧持有受影响类的实例，返回 `JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66）并保持旧定义，帧退出后可重试。
 - **冲突拒绝**：加 final 但已有子类覆写、存活实例将继承未实现的抽象方法等，沿用现有拒绝码，整批不提交。
 
 ## 活动帧策略
