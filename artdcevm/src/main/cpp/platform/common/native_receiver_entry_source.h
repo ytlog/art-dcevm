@@ -16,7 +16,9 @@ class EntrySource final {
   // Independent calibrated owned strong decoder; ordinary calibration only.
   bool (*strong_oracle)(void*,const runnable_jni::Context&,jobject,void**)=nullptr;
   bool (*with)(void*,JNIEnv*,jobject,runnable_jni::Operation,void*)=nullptr;
-  // Context made in the live ordinary callback; bounds only, no OS fallback.
+  // Fresh view for each ordinary Native check and for the Runnable borrow
+  // after all waiting ID decodes. Never reuse a view across the bridge call.
+  // Bounds only; a supplied denial has no OS fallback.
   modern_field_metadata::ReadContext (*bounds)(void*,const runnable_jni::Context&)=nullptr;
   void* jni_id_manager=nullptr;
  };

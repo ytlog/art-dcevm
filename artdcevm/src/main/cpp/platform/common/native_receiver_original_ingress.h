@@ -25,7 +25,7 @@ class OriginalIngress final {
  OriginalIngress(EntrySource&e,const ClassSource&c,TypedBounds&b):entry_(e),classes_(c),bounds_(b){}
  // Construct Guard with Leaves() before attaching it; no circular lifetime or
  // partially constructed Guard is borrowed. This owner must outlive dispatch.
- bool Attach(Guard&g)noexcept{if(guard_)return guard_==&g;guard_=&g;return true;}
+ bool Attach(Guard&g)noexcept{if(!g.UsesOriginalAccess(Leaves()))return false;if(guard_)return guard_==&g;guard_=&g;return true;}
  bool Publish()noexcept{if(!guard_)return false;OriginalIngress*none=nullptr;return published_.compare_exchange_strong(none,this,std::memory_order_acq_rel)||none==this;}
 #ifdef ARTDCEVM_TESTING
  // Single-thread host fixture only, after its consumer has been retired. No

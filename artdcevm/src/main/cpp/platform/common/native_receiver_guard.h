@@ -61,6 +61,18 @@ class Guard final {
  bool CheckReference(Path,void* thread,void* member,void* handle,void* result=nullptr,bool field=false)noexcept;
  bool CheckCompressed(Path,void* thread,void* member,uint32_t reference,void* result=nullptr,bool field=false)noexcept;
  private:
+ friend class OriginalIngress;
+ // Original JNI wrappers can establish only this ingress's rooted read leaves.
+ // Supplemental frame/bytecode/handle sources have their own exact owners.
+ bool UsesOriginalAccess(const Access&a)const noexcept {
+  return a.owner&&a.current&&a.member&&a.object_class&&a.normalize&&a.assignable&&
+   a.special&&a.reference&&a.compressed&&a.raise&&a.field_id&&
+   access_.owner==a.owner&&access_.current==a.current&&access_.member==a.member&&
+   access_.object_class==a.object_class&&access_.normalize==a.normalize&&
+   access_.assignable==a.assignable&&access_.special==a.special&&
+   access_.reference==a.reference&&access_.compressed==a.compressed&&
+   access_.raise==a.raise&&access_.field_id==a.field_id;
+ }
  bool Interested(Path,void*,void*)const noexcept;
  bool Entry(Path,void*,void*,void*,uint32_t,bool,void*,bool)noexcept;
  public:

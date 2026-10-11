@@ -156,11 +156,17 @@ Access EntrySource::Leaves()noexcept{Access a;a.owner=this;a.current=Current;a.m
 bool EntrySource::Observe(const runnable_jni::Context&c,void*raw){
  auto&p=*static_cast<Proof*>(raw);auto&s=*p.source;
  if(c.env!=p.env||c.vm!=s.binding_.vm||s.binding_.current()!=c.self)return false;
- InvocationScope scope(s,c,s.binding_.bounds(s.binding_.owner,c));if(!scope.Valid())return false;
- // Decode IDs before borrowing any managed pointer. Indexed calibration IDs
- // may acquire the original JNI manager lock; they are not permanent leaves.
+ // The actual named current Thread supplies its calibrated fixed state prefix;
+ // validate Runnable before a waiting decoder without capturing a read view.
+ uint32_t state=UINT32_MAX;
+ if(!c.self||!s.states_.State(c.self,sizeof(uint32_t),&state)||state!=s.states_.RunnableState())return false;
+ // Decode IDs before capturing the read window or borrowing managed pointers.
+ // Indexed IDs may acquire the original JNI manager lock; they are not
+ // permanent leaves.
  void*members[2][2]{};
  for(size_t i=0;i<2;++i){members[i][0]=s.method_id_(s.binding_.jni_id_manager,p.method_ids[i]);members[i][1]=s.field_id_(s.binding_.jni_id_manager,p.field_ids[i]);}
+ if(c.env!=p.env||c.vm!=s.binding_.vm||s.binding_.current()!=c.self)return false;
+ InvocationScope scope(s,c,s.binding_.bounds(s.binding_.owner,c));if(!scope.Valid())return false;
  if(!s.Borrow(c.self))return false;
  void*objects[2]{};void*classes[2]{};
  for(size_t i=0;i<2;++i){
@@ -206,9 +212,18 @@ bool EntrySource::Calibrate(JNIEnv*env,const Samples&samples,std::string*e){
  if(samples.transition_reference){auto t=samples.transition_reference;if((uintptr_t(t)&kKindMask)!=kTransition||env->GetObjectRefType(t)!=JNILocalRefType||env->ExceptionCheck()||!env->IsSameObject(t,samples.receivers[0])||env->ExceptionCheck())return Fail(e,"Original JNI transition reference has no independent public local identity");proof.transition=t;}
  // Native ordinary before/after + actual same-current Runnable inside bridge
  // independently match the supplied Thread declaration; no SDK selects it.
- runnable_jni::Context native{binding_.current(),env,binding_.vm};auto bounds=binding_.bounds(binding_.owner,native);size_t n=0;uint32_t state=UINT32_MAX;
- if(!native.self||!bounds.owner||!bounds.extent||!bounds.extent(bounds.owner,native.self,&n)||!states_.State(native.self,n,&state)||state!=abi::arm64::android11::kNative)return Fail(e,"Receiver entry calibration lacks original Native Thread declaration");
- if(!binding_.with(binding_.owner,env,samples.methods[0],Observe,&proof)||!proof.passed||env->ExceptionCheck()||binding_.current()!=native.self||!bounds.extent(bounds.owner,native.self,&n)||!states_.State(native.self,n,&state)||state!=abi::arm64::android11::kNative)return Fail(e,"Receiver entry independent native/public Runnable source oracle failed");
+ void*self=binding_.current();
+ const auto native_state=[&](){
+  runnable_jni::Context actual{binding_.current(),env,binding_.vm};
+  if(!self||actual.self!=self)return false;
+  auto bounds=binding_.bounds(binding_.owner,actual);size_t n=0;uint32_t state=UINT32_MAX;
+  return bounds.owner&&bounds.extent&&bounds.extent(bounds.owner,actual.self,&n)&&
+   states_.State(actual.self,n,&state)&&state==abi::arm64::android11::kNative&&binding_.current()==self;
+ };
+ if(!native_state())return Fail(e,"Receiver entry calibration lacks original Native Thread declaration");
+ if(!binding_.with(binding_.owner,env,samples.methods[0],Observe,&proof)||!proof.passed||
+    env->ExceptionCheck()||!native_state())
+  return Fail(e,"Receiver entry independent native/public Runnable source oracle failed");
  transition_=proof.transition!=nullptr;ready_.store(true,std::memory_order_release);return true;
 }
 }

@@ -8,6 +8,8 @@
 #include <unordered_map>
 namespace {
 bool no_alloc=false,pending=false,wrong_flags=false,wrong_class=false,bounds_enabled=true,leave_native=false,decode_wrong=false,index_calibration=false,modern_inline=false;unsigned decodes=0,field_decodes=0,raises=0,root_reads=0;
+bool fresh_bounds_probe=false;uint64_t mapping_epoch=0;
+struct MappingReceipt{uint64_t epoch;};std::array<MappingReceipt,8> mapping_receipts{};size_t mapping_captures=0;
 void* actual_thread=nullptr;void*receiver_classes[2]{};int manager;void* method_objects[2]{};void* method_members[2]{};void* public_method_owner[2]{};void* public_field_owner[2]{};void* public_receivers[2]{};std::array<void*,2> public_fields{};
 std::unordered_map<jobject,void*> handles;std::unordered_map<void*,jint> modifiers;size_t global_count=0;int modifier_id,declaring_id;
 void* Resolve(jobject r){if(!r)return nullptr;auto i=handles.find(r);return i==handles.end()?reinterpret_cast<void*>(r):i->second;}
@@ -28,7 +30,7 @@ void* Current(){return actual_thread;}
 abi::arm64::android11::ReleaseObjectPointer Decode(const void*self,jobject r){assert(self==actual_thread);++decodes;return {uintptr_t(decode_wrong?public_receivers[1]:Resolve(r))};}
 abi::arm64::android11::ReleaseObjectPointer DecodeGlobal(const void*self,jobject r){assert((uintptr_t(r)&3)==2);return Decode(self,r);}
 void* EntryRoot(void*p){++root_reads;return Root(p);}
-void* DecodeField(void*m,jfieldID id){assert(m==&manager);++field_decodes;if(uintptr_t(id)&1){assert(!no_alloc&&index_calibration);auto i=(uintptr_t(id)-1)/2;assert(i<2);return static_cast<Mirror*>(public_fields[i])->field;}return reinterpret_cast<void*>(id);}
+void* DecodeField(void*m,jfieldID id){assert(m==&manager);++field_decodes;if(uintptr_t(id)&1){assert(!no_alloc&&index_calibration);if(fresh_bounds_probe)++mapping_epoch;auto i=(uintptr_t(id)-1)/2;assert(i<2);return static_cast<Mirror*>(public_fields[i])->field;}return reinterpret_cast<void*>(id);}
 void* DecodeMethod(void*m,jmethodID id){assert(m==&manager);return reinterpret_cast<void*>(id);}
 void Throw(void*self,const char*,const char*){assert(self==actual_thread);++raises;}
 void Suspend(void*,const char*,bool){}void Resume(void*){}
@@ -44,9 +46,14 @@ struct EntryHooks:Hooks{void*FindSymbol(const char*l,const char*n)override{
  return Hooks::FindSymbol(l,n);
 }};
 bool Extent(void*,const void*p,size_t*n){if(!bounds_enabled||!p)return false;auto a=uintptr_t(p),begin=uintptr_t(heap);if(a<begin||a>=begin+used)return false;*n=begin+used-a;return true;}
-modern_field_metadata::ReadContext Bounds(void*,const runnable_jni::Context&){return {&manager,Extent};}
+bool FreshExtent(void*owner,const void*p,size_t*n){return static_cast<MappingReceipt*>(owner)->epoch==mapping_epoch&&Extent(nullptr,p,n);}
+modern_field_metadata::ReadContext Bounds(void*,const runnable_jni::Context&){
+ if(!fresh_bounds_probe)return {&manager,Extent};
+ assert(mapping_captures<mapping_receipts.size());auto&receipt=mapping_receipts[mapping_captures++];
+ receipt.epoch=mapping_epoch;return {&receipt,FreshExtent};
+}
 bool Strong(void*,const runnable_jni::Context&c,jobject r,void**out){assert(c.self==actual_thread);*out=Resolve(r);return *out!=nullptr;}
-bool With(void*,JNIEnv*e,jobject,runnable_jni::Operation op,void*p){assert(e==&env);Put32(actual_thread,0,0);bool result=op({actual_thread,e,&vm},p);Put32(actual_thread,0,leave_native?0:92u<<24);return result;}
+bool With(void*,JNIEnv*e,jobject,runnable_jni::Operation op,void*p){assert(e==&env);Put32(actual_thread,0,0);bool result=op({actual_thread,e,&vm},p);if(fresh_bounds_probe)++mapping_epoch;Put32(actual_thread,0,leave_native?0:92u<<24);return result;}
 }
 void*operator new(size_t n){if(no_alloc)std::abort();if(auto*p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void operator delete(void*p)noexcept{std::free(p);}void operator delete(void*p,size_t)noexcept{std::free(p);}
@@ -102,7 +109,11 @@ int main(int argc,char**){
  {receiver_guard::EntrySource::InvocationScope scope(no_transition,context,Bounds(nullptr,context));assert(scope.Valid());auto leaf=no_transition.Leaves();auto before=decodes;assert(!leaf.reference(leaf.owner,actual_thread,samples.transition_reference,&out)&&before==decodes);}
  // Indexed public IDs can calibrate native metadata ordinarily; permanent
  // no-wait dispatch still refuses the same index before the lock-taking leaf.
- receiver_guard::EntrySource indexed;assert(indexed.Bind(hooks,binding,metadata,state,&error));index_calibration=true;Put32(actual_thread,0,92u<<24);assert(indexed.Calibrate(&env,samples,&error));Put32(actual_thread,0,0);
+ receiver_guard::EntrySource indexed;assert(indexed.Bind(hooks,binding,metadata,state,&error));index_calibration=true;fresh_bounds_probe=true;mapping_epoch=0;mapping_captures=0;
+ Put32(actual_thread,0,92u<<24);assert(indexed.Calibrate(&env,samples,&error));
+ assert(mapping_captures==3&&mapping_receipts[0].epoch==0&&mapping_receipts[1].epoch==2&&mapping_receipts[2].epoch==3);
+ size_t expired_extent=0;assert(!FreshExtent(&mapping_receipts[0],actual_thread,&expired_extent)&&!FreshExtent(&mapping_receipts[1],actual_thread,&expired_extent));
+ fresh_bounds_probe=false;Put32(actual_thread,0,0);
  {receiver_guard::EntrySource::InvocationScope scope(indexed,context,Bounds(nullptr,context));assert(scope.Valid());auto leaf=indexed.Leaves();auto before=field_decodes;no_alloc=true;assert(!leaf.field_id(leaf.owner,actual_thread,reinterpret_cast<void*>(1),&out)&&before==field_decodes);no_alloc=false;}index_calibration=false;
 #ifdef ARTDCEVM_ORIGINAL_INGRESS_TEST
  RunIngressTest(source,context,method_members[0],samples.receivers[0],bootstrap);

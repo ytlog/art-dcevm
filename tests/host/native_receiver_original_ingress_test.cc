@@ -21,7 +21,22 @@ static void RunIngressTest(receiver_guard::EntrySource&entry,const runnable_jni:
  // source is intentionally absent: entry proof cannot manufacture relations.
  receiver_guard::ClassSource missing_classes;
  receiver_guard::OriginalIngress ingress(entry,missing_classes,inventory);
- auto leaves=ingress.Leaves();receiver_guard::Guard guard(leaves);assert(ingress.Attach(guard)&&ingress.Publish()&&receiver_guard::Bind(guard));
+ auto leaves=ingress.Leaves();
+ // Every native read leaf must belong to this exact ingress, including owners
+ // that copy its address but substitute just one callback. No scope is opened.
+ for(unsigned i=0;i<13;++i){auto foreign=leaves;
+  switch(i){case 0:foreign.owner=&inventory;break;case 1:foreign.current=nullptr;break;
+   case 2:foreign.member=nullptr;break;case 3:foreign.object_class=nullptr;break;
+   case 4:foreign.normalize=nullptr;break;case 5:foreign.assignable=nullptr;break;
+   case 6:foreign.special=nullptr;break;case 7:foreign.reference=nullptr;break;
+   case 8:foreign.compressed=nullptr;break;case 9:foreign.raise=nullptr;break;
+   case 10:foreign.field_id=nullptr;break;case 11:foreign=entry.Leaves();break;
+   default:foreign.current=+[](void*,void*)noexcept{return true;};break;}
+  receiver_guard::Guard foreign_guard(foreign);assert(!ingress.Attach(foreign_guard)&&!ingress.Publish());
+ }
+ receiver_guard::Guard guard(leaves),other_guard(leaves);
+ assert(ingress.Attach(guard)&&ingress.Attach(guard)&&!ingress.Attach(other_guard)&&
+   ingress.Publish()&&receiver_guard::Bind(guard)&&inventory.opens==0);
  retirement::RetiredMethodRegistry registry;retirement::state.registry=&registry;
  retirement::state.throw_exception=Throw;retirement::state.decode=[](void*,jmethodID id){return static_cast<void*>(id);};
  static unsigned originals=0;retirement::original_id_values=reinterpret_cast<void*>(+[](const abi::common::RunnableJniScope&,jobject,jmethodID,const jvalue*)->uint64_t{++originals;return 99;});
