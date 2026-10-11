@@ -51,7 +51,7 @@ struct Request {
  std::vector<Definition> effective;
  const void*transformed_vector=nullptr;
  void*transform_self=nullptr;
- bool transform_complete=false,transform_invalid=false,direct_entered=false;
+ bool transform_complete=false,transform_invalid=false,direct_entered=false,preflight_active=false;
 };
 thread_local Request* active=nullptr;
 using Transform=void(*)(void*,void*);
@@ -295,9 +295,15 @@ jvmtiError PrepareDirect(void*,void*,void*self,const void*definitions,int32_t ty
   }
   auto result=ValidateEffective(request,&reason);
   if(result!=JVMTI_ERROR_NONE)return refuse(result,reason.empty()?"owned final transformed semantic validation failed":reason.c_str());
-  if(request.provider->preflight&&
-     !request.provider->preflight(request.env,request.jvmti,request.effective,request.provider->state,&reason))
-   return refuse(JVMTI_ERROR_NOT_AVAILABLE,reason.empty()?"owned final transformed preflight failed":reason.c_str());
+  if(request.provider->preflight){
+   struct Preflight {
+    Request&request;
+    explicit Preflight(Request&r):request(r){request.preflight_active=true;}
+    ~Preflight(){request.preflight_active=false;}
+   }preflight(request);
+   if(!request.provider->preflight(request.env,request.jvmti,request.effective,request.provider->state,&reason))
+    return refuse(JVMTI_ERROR_NOT_AVAILABLE,reason.empty()?"owned final transformed preflight failed":reason.c_str());
+  }
  }catch(const std::bad_alloc&){return refuse(JVMTI_ERROR_OUT_OF_MEMORY,"owned final transformed preparation allocation failed");}
  catch(...){return refuse(JVMTI_ERROR_INTERNAL,"owned final transformed preparation threw");}
  return JVMTI_ERROR_NONE;
@@ -738,6 +744,14 @@ bool Install(HookEngine& hooks,std::string* error){
   if(!okay)run_ready=false;
   if(!okay)for(auto at=tokens.rbegin();at!=tokens.rend();++at){std::string rollback;if(!hooks.Remove(*at,&rollback))std::abort();}
   destroy(&stop);installed=okay;window_ready=okay;return okay;
+}
+bool BorrowFinalInputBoundary(const std::vector<Definition>&effective,
+ void**self,const void**definitions)noexcept{
+ if(!self||!definitions||!active||!active->preflight_active||!redefinition_gate::Owned(active->vm)||
+    &effective!=&active->effective||!active->direct_entered||
+    !active->transform_complete||active->transform_invalid||!active->transformed_vector||
+    !active->transform_self||!current_thread||current_thread()!=active->transform_self)return false;
+ *self=active->transform_self;*definitions=active->transformed_vector;return true;
 }
 bool GraphWindowReady(){return window_ready;}
 bool ReadPassiveTrace(PassiveTrace* out) noexcept {

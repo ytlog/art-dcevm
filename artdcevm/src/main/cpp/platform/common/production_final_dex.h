@@ -11,7 +11,7 @@ namespace artdcevm::production_bootstrap {
 class FinalDex final {
  public:
  explicit FinalDex(Provenance&records):records_(records),observer_{this,Begin,End}{}
- ~FinalDex(){if(pending_)std::abort();}
+ ~FinalDex(){if(pending_||deferred_)std::abort();}
  FinalDex(const FinalDex&)=delete;FinalDex&operator=(const FinalDex&)=delete;
  // Installation callers serialize; the published VM/leaf stay immutable.
  bool Install(HookEngine&,JavaVM*,std::string*);
@@ -23,6 +23,7 @@ class FinalDex final {
  const redefinition_gate::DirectObservation observer_;
  JavaVM*vm_=nullptr;abi::common::CurrentThread current_=nullptr;
  std::unique_ptr<Provenance::Reservation>pending_;
+ Provenance::Reservation*deferred_=nullptr;
 };
 // Install immediately after the actual startup/pristine Direct gate, before
 // plugin/environment attachment or public calls. The single process owner

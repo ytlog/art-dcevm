@@ -29,12 +29,12 @@ int32_t observed_type=-1;bool null_token=false,last_returned=false;
 jvmtiError last_result=JVMTI_ERROR_NONE,prepare_result=JVMTI_ERROR_NONE;
 void* ObserveBegin(void*owner,void*env,void*runtime,void*self,const void*defs,int32_t type)noexcept{
  assert(owner==&observation_owner&&env==expected[0]&&runtime==expected[1]&&self==expected[2]&&defs==expected[3]);
- assert(redefinition_gate::direct&&!redefinition_gate::owned);
+ assert(redefinition_gate::direct);
  ++observed_begin;observed_type=type;return null_token?nullptr:&observation_token;
 }
 void ObserveEnd(void*owner,void*token,jvmtiError result,bool returned)noexcept{
  assert(owner==&observation_owner&&token==(null_token?nullptr:&observation_token));
- assert(redefinition_gate::direct&&!redefinition_gate::owned);
+ assert(redefinition_gate::direct);
  // Completion still holds the operation mutex; recursive calls cannot race it.
  assert(redefinition_gate::Proxy(expected[0],expected[1],expected[2],expected[3],expected_type,expected[4])==JVMTI_ERROR_INTERNAL);
  ++observed_end;last_result=result;last_returned=returned;
@@ -62,7 +62,7 @@ int main(){
  // The published startup gate remains transparent even before authority is
  // activated; both lifecycle paths share the same contention dispatcher.
  ready=false;nested=true;assert(invoke()==JVMTI_ERROR_FAILS_VERIFICATION&&calls==1);
- assert(native[4]==0x5678&&pending_exception==reinterpret_cast<void*>(0x1234)&&!unobserved_public.load());
+ assert(native[4]==0x5678&&pending_exception==reinterpret_cast<void*>(0x1234)&&!unobserved_source.load());
  ready=true;nested=false;
  assert(!Owned(&vm));
  {Lease wrong(&other);assert(!wrong.Acquired()&&!Owned(&other));}
@@ -108,9 +108,9 @@ int main(){
  assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==4&&observed_end==4&&last_returned);
  null_token=false;
  {Lease lease(&vm);assert(lease.Acquired()&&invoke()==JVMTI_ERROR_NONE);}
- assert(observed_begin==4&&observed_end==4);
+ assert(observed_begin==5&&observed_end==5);
  assert(InstallDirectPreparation(hooks,PrepareInput,&error));prepare_result=JVMTI_ERROR_INVALID_CLASS_FORMAT;
- const auto before_refusal=calls.load();assert(invoke()==prepare_result&&calls==before_refusal&&observed_begin==4&&observed_end==4);
- prepare_result=JVMTI_ERROR_NONE;assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==5&&observed_end==5);
+ const auto before_refusal=calls.load();assert(invoke()==prepare_result&&calls==before_refusal&&observed_begin==5&&observed_end==5);
+ prepare_result=JVMTI_ERROR_NONE;assert(invoke()==JVMTI_ERROR_NONE&&observed_begin==6&&observed_end==6);
  std::cout<<"Actual Direct gate: startup proof, LIVE refusal, retained phase-change gate, all six arguments/results, nonblocking public INTERNAL contention/retry, private exclusion, recursion and original exception rollback PASS\n";
 }

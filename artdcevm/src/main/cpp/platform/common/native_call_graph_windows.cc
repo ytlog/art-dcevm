@@ -228,7 +228,11 @@ bool Factory::Preflight(JNIEnv*env,jvmtiEnv*ti,const std::vector<Definition>&def
  // Copy final definitions and reserve weak identity bookkeeping before
  // original Run can mutate anything. A failed batch discards this candidate.
  record_=bindings_.installed->Records().Prepare(env,definitions);
- if(!record_){phase_=Phase::Refused;if(error)*error="call-graph-windows-final-DEX-record-preparation-refused";return false;}
+ void*direct_self=nullptr;const void*direct_definitions=nullptr;
+ if(!record_||!native_owned_removal::BorrowFinalInputBoundary(definitions,&direct_self,&direct_definitions)||
+    direct_self!=run_.hierarchy.context->self||!record_->BindDirect(direct_self,direct_definitions)){
+  phase_=Phase::Refused;if(error)*error="call-graph-windows-final-DEX-record-source-binding-refused";return false;
+ }
  input_jvmti_=ti;preflight_complete_=true;return true;
 }
 bool Factory::PrepareBefore(JNIEnv*env,jvmtiEnv*ti,

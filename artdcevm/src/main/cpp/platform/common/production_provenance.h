@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <memory>
 #include <vector>
+namespace artdcevm::native_call_graph_windows {class Factory;}
 namespace artdcevm::production_bootstrap {
+class FinalDex;
 // Callers serialize operations. Weak Class identity distinguishes equal names
 // from different loaders; each comparison pins a live Class only for that call.
 class Provenance {
@@ -27,9 +29,19 @@ class Provenance {
       if(!owner_||owner_->pending_!=this)std::abort();
       owner_->entries_.swap(candidate_);created_.clear();
       owner_->pending_=nullptr;owner_=nullptr;
+      direct_self_=nullptr;direct_definitions_=nullptr;
     }
    private:
     friend class Provenance;
+    friend class FinalDex;
+    friend class artdcevm::native_call_graph_windows::Factory;
+    // Only Factory binds its actual final-input observer receipt. This opaque
+    // identity is cleared by Direct completion; it retains no native view.
+    bool BindDirect(void*self,const void*definitions)noexcept{
+      if(!owner_||owner_->pending_!=this||direct_self_||direct_definitions_||!self||!definitions)return false;
+      direct_self_=self;direct_definitions_=definitions;return true;
+    }
+    void*direct_self_=nullptr;const void*direct_definitions_=nullptr;
     Reservation(Provenance&owner,JNIEnv*env):owner_(&owner),env_(env){}
     Provenance*owner_;JNIEnv*env_;
     std::vector<Entry>candidate_;
@@ -98,6 +110,10 @@ class Provenance {
   bool Trusted()const noexcept{return trusted_;}
   size_t Size()const{return entries_.size();}
  private:
+  friend class FinalDex;
+  Reservation*Deferred(void*self,const void*definitions)const noexcept{
+    return pending_&&pending_->direct_self_==self&&pending_->direct_definitions_==definitions?pending_:nullptr;
+  }
   std::vector<Entry> entries_;
   Reservation*pending_=nullptr;
   bool trusted_=true;

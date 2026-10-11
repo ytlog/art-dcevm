@@ -69,6 +69,11 @@ bool Install(HookEngine&,std::string* error);
 // Bound entry points only; no per-operation graph permission is implied.
 // Actual original successes and both owned seals remain mandatory in RunBatch.
 bool GraphWindowReady();
+// Borrow scalar identity only in this request's actual final preflight. No
+// native storage read or lifetime/commit grant; Factory binds its bookkeeping
+// reservation to the exact source vector and original transforming thread.
+bool BorrowFinalInputBoundary(const std::vector<Definition>&effective,
+                             void**self,const void**definitions)noexcept;
 // Passive calibration observes an ordinary source Run without an owned schema
 // Request. Callbacks do not change source arguments, booleans or JVMTI errors.
 // The caller owns state until unregister. Registration is thread-local and

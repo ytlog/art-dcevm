@@ -74,10 +74,12 @@ int main(int argc,char**argv){
   mutate=true;assert(invoke()==JVMTI_ERROR_NONE);mutate=false;
   {redefinition_gate::Lease lease(&vm);assert(lease.Acquired());
    auto*source_records=production_bootstrap::BorrowFinalDexRecords(&vm);assert(source_records);
+   std::vector<unsigned char>before;
+   assert(source_records->Find(&env,definition.klass,&before)&&before[0]==1);
    assert(invoke()==JVMTI_ERROR_NONE);
    JavaVM other{};assert(!production_bootstrap::BorrowFinalDexRecords(&other));
    std::vector<unsigned char>installed;
-   assert(source_records->Find(&env,definition.klass,&installed)&&installed[0]==1&&bytes[0]==9);
+   assert(source_records->Find(&env,definition.klass,&installed)&&installed[0]==9&&bytes[0]==9);
    source_records->Clear(&env);
   }
   assert(!production_bootstrap::BorrowFinalDexRecords(&vm));
@@ -100,7 +102,15 @@ int main(int argc,char**argv){
    result=JVMTI_ERROR_NONE;const auto weak_count=created;
    {redefinition_gate::Lease lease(&vm);assert(lease.Acquired()&&invoke()==JVMTI_ERROR_NONE);}
    assert(created==weak_count&&records.Trusted());
+   assert(records.Find(&env,definition.klass,&installed)&&installed[0]==9);
    definition.initialized=0;result=JVMTI_ERROR_NONE;assert(invoke()==result&&!records.Trusted());
+  }else if(mode=="unbound"){
+   // A generic reservation has no source receipt and cannot defer Direct.
+   auto candidate=records.Prepare(&env,{{definition.klass,{7,8}}});assert(candidate);
+   {redefinition_gate::Lease lease(&vm);assert(lease.Acquired());
+    assert(invoke()==JVMTI_ERROR_NONE&&!records.Trusted());
+   }
+   candidate.reset();
   }else if(mode=="oom"){
    weak_oom=true;assert(invoke()==JVMTI_ERROR_NONE&&!exception&&cleared==1&&!records.Trusted());
   }else{
