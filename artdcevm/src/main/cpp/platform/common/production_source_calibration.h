@@ -13,6 +13,7 @@
 #include "platform/common/native_receiver_listener.h"
 #include "platform/common/native_receiver_class_source.h"
 #include "platform/common/native_receiver_entry_source.h"
+#include "platform/common/native_receiver_root_bounds.h"
 #include "platform/common/production_stack_stream.h"
 #include "platform/common/native_final_write_access.h"
 #include <utility>
@@ -51,8 +52,11 @@ class SourceCalibration final {
  const StackStreamObservation&StackObservation()const noexcept{return stack_stream_;}
  // Constructor storage only; invocation events remain independently proven.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
- // ReadWindow still requires its caller-owned live native mapping authority.
+ // ReadWindow still requires its caller-owned live bounded read authority.
  receiver_guard::ClassSource*ReceiverClassesSource()noexcept{return receiver_classes_calibrated_?&receiver_classes_:nullptr;}
+ // Actual original method/field rooted inventory; a read calibration grants
+ // neither dispatch coverage nor permanent Guard activation.
+ receiver_guard::OriginalIngress*ReceiverOriginalIngress()noexcept{return receiver_roots_calibrated_?receiver_ingress_.get():nullptr;}
  // Read-only code/identity sample calibration, not actual invoke-event coverage.
  receiver_guard::SourceProducer*ReceiverProducer()noexcept{return receiver_code_calibrated_?&receiver_producer_:nullptr;}
  const receiver_guard::SourceCalibration*ReceiverInvocations()const noexcept{
@@ -82,6 +86,9 @@ class SourceCalibration final {
  bool PrepareReceiverEntries(JNIEnv*,std::string*);
  static modern_field_metadata::ReadContext ReceiverEntryBounds(void*,const runnable_jni::Context&);
  static bool ReceiverEntryExtent(void*,const void*,size_t*);
+ bool PrepareReceiverRoots(JNIEnv*,std::string*);
+ struct ReceiverRoots;
+ static bool ObserveReceiverRoots(const runnable_jni::Context&,void*);
  bool PrepareReceiverClasses(JNIEnv*,std::string*);
  struct ReceiverClasses;
  static bool ObserveReceiverClasses(const runnable_jni::Context&,void*);
@@ -135,6 +142,9 @@ class SourceCalibration final {
  receiver_guard::EntrySource receiver_entries_;
  bool receiver_entries_bound_=false;
  inline static thread_local SourceCalibration*receiver_entry_calibration_=nullptr;
+ std::unique_ptr<receiver_guard::OriginalRootBounds>receiver_roots_;
+ std::unique_ptr<receiver_guard::OriginalIngress>receiver_ingress_;
+ bool receiver_roots_calibrated_=false;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;
  receiver_guard::SourceProducer receiver_producer_;

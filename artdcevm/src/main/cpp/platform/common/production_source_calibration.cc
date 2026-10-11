@@ -47,7 +47,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareNativeEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverEntries(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareNativeEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverEntries(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverRoots(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
   if(!process->final_writer_calibrated_){
    if(!CalibrateFinalWrites(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,
        process->final_writer_->Writer(),error))return nullptr;
@@ -549,6 +549,82 @@ bool SourceCalibration::PrepareReceiverClasses(JNIEnv*env,std::string*error){
  const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),ObserveReceiverClasses,&request);
  receiver_classes_calibrated_=result==runnable_jni::Result::kSuccess&&request.completed&&!env->ExceptionCheck();
  return receiver_classes_calibrated_||Fail(error,"source-receiver-Class-interface-calibration-not-completed");
+}
+struct SourceCalibration::ReceiverRoots {
+ SourceCalibration&owner;jfieldID field;bool method_related,field_related;bool completed=false;
+};
+bool SourceCalibration::ObserveReceiverRoots(const runnable_jni::Context&actual,void*raw){
+ auto&r=*static_cast<ReceiverRoots*>(raw);auto&owner=r.owner;
+ if(!actual.env||!actual.original_leaf||!owner.receiver_roots_||
+    !runnable_jni::Bridge::BorrowOriginalScope(actual)||
+    actual.vm!=owner.metadata_->Runtime().receivers.java_vm||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm)))return false;
+ const auto&inputs=owner.metadata_->Inputs();const auto&sample=inputs.ReceiverSamples()[0];
+ const abi::common::RunnableJniScope scope{actual.self,actual.env,actual.vm};
+ // All potentially waiting ID/member decodes precede the first raw root borrow.
+ void*field=nullptr;
+ if(!owner.receiver_entries_.DecodeOriginalFieldId(scope,r.field,&field))return false;
+ void*method=actual.original_leaf(scope,sample.caller.strong_global_method);
+ if(!method||actual.env->ExceptionCheck()||!runnable_jni::Bridge::BorrowOriginalScope(actual))return false;
+ void*receiver=nullptr;void*declaring[2]{};
+ if(!ReferenceOracle(&owner,actual,inputs.Storage(),&receiver)||!receiver||
+    !ReferenceOracle(&owner,actual,sample.caller_class,&declaring[0])||!declaring[0]||
+    !ReferenceOracle(&owner,actual,inputs.StorageClass(),&declaring[1])||!declaring[1])return false;
+ // Each independent original ingress rebuilds its own typed inventory. Neither
+ // an ordinary OS map nor the previous ingress's bounds authorizes these reads.
+ for(size_t i=0;i<2;++i){
+  modern_field_metadata::ReadContext read;
+  auto&bounds=*owner.receiver_roots_;void*member=i?field:method;
+  if(!(i?bounds.EnterField(scope,member,inputs.Storage(),&read):
+         bounds.Enter(scope,member,inputs.Storage(),&read)))return false;
+  struct Leave {receiver_guard::OriginalRootBounds&bounds;~Leave(){bounds.Leave();}}leave{bounds};
+  receiver_guard::EntrySource::InvocationScope entry(owner.receiver_entries_,actual,read);
+  if(!entry.Valid())return false;
+  auto access=owner.receiver_entries_.Leaves();uint32_t flags=0;void*member_class=nullptr,*actual_class=nullptr;
+  if(!access.member(access.owner,member,bool(i),&flags,&member_class)||member_class!=declaring[i]||
+     !access.object_class(access.owner,receiver,&actual_class)||actual_class!=declaring[1])return false;
+  receiver_guard::ClassSource::ReadWindow window(owner.receiver_classes_,read);
+  auto classes=window.Access();receiver_guard::ClassView identity;
+  const auto&descriptor=i?inputs.FieldsSchema().descriptor:sample.caller_descriptor;
+  if(!classes.read(classes.owner,member_class,&identity)||!identity.descriptor||
+     std::strcmp(identity.descriptor,descriptor.c_str()))return false;
+  receiver_guard::Relations relations(classes);void*normalized=nullptr;bool related=false;
+  if(!relations.Normalize(member_class,actual_class,&normalized)||normalized!=member_class||
+     !relations.Assignable(normalized,actual_class,&related)||related!=(i?r.field_related:r.method_related))return false;
+ }
+ r.completed=owner.receiver_entries_.OriginalScopeCurrent(scope)&&
+  runnable_jni::Bridge::BorrowOriginalScope(actual);
+ return r.completed;
+}
+bool SourceCalibration::PrepareReceiverRoots(JNIEnv*env,std::string*error){
+ if(!env||env->ExceptionCheck()||!receiver_entries_.Proven()||!receiver_classes_calibrated_||
+    !receiver_classes_.InterfacesCalibrated()||!references_.Ready())
+  return Fail(error,"source-receiver-root-inventory-calibration-dependencies-unavailable");
+ if(receiver_roots_calibrated_)return true;
+ const auto&inputs=metadata_->Inputs();const auto&sample=inputs.ReceiverSamples()[0];
+ if(inputs.Fields().empty()||!sample.caller.strong_global_method||!sample.caller_class||
+    sample.caller_descriptor.empty()||!inputs.Storage()||!inputs.StorageClass())
+  return Fail(error,"source-receiver-root-inventory-independent-inputs-unavailable");
+ // Public JNI queries finish before entering the rooted native read interval.
+ const bool method_related=env->IsInstanceOf(inputs.Storage(),sample.caller_class);
+ if(env->ExceptionCheck())return false;
+ const bool field_related=env->IsInstanceOf(inputs.Storage(),inputs.StorageClass());
+ if(env->ExceptionCheck()||!field_related)return false;
+ const auto field=env->FromReflectedField(inputs.Fields().front().strong_global_field);
+ if(!field||env->ExceptionCheck())return false;
+ if(!receiver_roots_){
+  auto roots=std::make_unique<receiver_guard::OriginalRootBounds>(receiver_entries_,metadata_->Fields());
+  if(!roots->BindHistory(hooks_))return Fail(error,"source-receiver-root-inventory-named-history-leaf-unavailable");
+  receiver_roots_=std::move(roots);
+ }
+ // Construct the sole permanent ingress against stable process owners. It is
+ // neither attached nor published until the complete Guard is assembled.
+ if(!receiver_ingress_)receiver_ingress_=std::make_unique<receiver_guard::OriginalIngress>(
+   receiver_entries_,receiver_classes_,*receiver_roots_);
+ ReceiverRoots request{*this,field,method_related,field_related};
+ const auto result=runnable_executor::WithOriginalScope(env,inputs.Anchor(),ObserveReceiverRoots,&request);
+ receiver_roots_calibrated_=result==runnable_jni::Result::kSuccess&&request.completed&&!env->ExceptionCheck();
+ return receiver_roots_calibrated_||Fail(error,"source-receiver-root-inventory-original-bounded-read-did-not-complete");
 }
 bool SourceCalibration::PrepareReceiverCode(JNIEnv*env,std::string*error){
  if(!stack_calibrated_||!references_.Ready()||!reference_current_||!schema_.Ready())
