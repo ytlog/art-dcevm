@@ -45,6 +45,8 @@ class SourceCalibration final {
  const native_exception_upcall_boundary::Service*UpcallService()const noexcept{return stack_stream_.completed?&upcall_service_:nullptr;}
  const native_exception_entry_ownership::Proof*NativeEntries()const noexcept{return stack_stream_.completed?native_entries_.get():nullptr;}
  const native_jni_exception_calibration::Service*JniReturnCalibration()const noexcept{return stack_stream_.completed?&jni_returns_:nullptr;}
+ // Installed ingress only. The real replacement observes its own weak sweep.
+ const native_weak_replacement::Service*WeakReplacement()const noexcept{return stack_stream_.completed?weak_replacement_:nullptr;}
  const StackStreamObservation&StackObservation()const noexcept{return stack_stream_;}
  // Constructor storage only; invocation events remain independently proven.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
@@ -124,6 +126,7 @@ class SourceCalibration final {
  native_exception_upcall_boundary::Service upcall_service_;
  std::unique_ptr<native_exception_entry_ownership::Service>native_entries_;
  native_jni_exception_calibration::Service jni_returns_;
+ native_weak_replacement::Service*weak_replacement_=nullptr;
  StackStreamObservation stack_stream_{};bool stack_service_bound_=false;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;

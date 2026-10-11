@@ -515,7 +515,14 @@ bool SourceCalibration::PrepareNativeEntries(JNIEnv*env,std::string*error){
  }
  // Ordinary original Java catch consumes its actual pending Throwable. This
  // never clears/rethrows an exception and grants no native stack escape.
- return jni_returns_.Calibrate(env,error)&&jni_returns_.MatchesVm(vm)&&!env->ExceptionCheck();
+ if(!jni_returns_.Calibrate(env,error)||!jni_returns_.MatchesVm(vm)||env->ExceptionCheck())return false;
+ if(!weak_replacement_){
+  const auto current=reinterpret_cast<native_weak_sweep_observer::CurrentThread>(
+    hooks_.FindSymbol("libart.so",abi::common::kCurrentThread));
+  weak_replacement_=native_weak_replacement::Service::Prepare(hooks_,env,metadata_->Inputs().Anchor(),
+    exclusive_,runtime.runtime,current,error);
+ }
+ return weak_replacement_&&weak_replacement_->BoundTo(runtime.runtime);
 }
 bool SourceCalibration::PrepareStackStream(JNIEnv*env,std::string*error){
  if(!stack_calibrated_||!references_.Ready()||!schema_.Ready()||!native_entries_||

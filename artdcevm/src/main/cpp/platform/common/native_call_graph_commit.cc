@@ -35,7 +35,8 @@ std::unique_ptr<Service>Service::Prepare(const runnable_jni::Context&context,
  if(!deps.binding||!deps.binding->runtime_slot_||*deps.binding->runtime_slot_!=deps.binding->runtime_||
     !deps.metadata||!deps.metadata->Calibrated()||!deps.fields||!deps.fields->Calibrated()||
     !deps.reflection||!deps.reflection_plan||!deps.initialization||!deps.heap||!deps.heap->Calibrated()||
-    !deps.root_provenance||!deps.root_provenance->LocksCalibrated()||!deps.cache||!deps.cache->Prepared()||
+    !deps.root_provenance||!deps.root_provenance->LocksCalibrated()||
+    !deps.weak_replacement||!deps.weak_replacement->BoundTo(deps.binding->runtime_)||!deps.cache||!deps.cache->Prepared()||
     !deps.schema||!deps.execution||!deps.interpretation||!deps.compilation||!deps.compilation_receipt||
     !deps.compilation->Validate(*deps.compilation_receipt,context.self)||
     !deps.stop||!deps.loading||!deps.read||!deps.read->owner||!deps.read->extent||
@@ -221,7 +222,9 @@ void Service::UpdateReflectiveReferences(const source_commit::Plan&plan)const{
  RequireCommit();if(&plan!=plan_)std::abort();deps_.reflection->Update(*deps_.reflection_plan,true);
 }
 void Service::ReplaceObjectReferences()const{
- RequireCommit();if(replaced_||!execution_released_)std::abort();deps_.binding->replace_(deps_.self,map_->BorrowedMap());replaced_=true;
+ RequireCommit();if(replaced_||!execution_released_)std::abort();
+ weak_replacement_report_=deps_.weak_replacement->ReplaceReferences(*deps_.stop,deps_.self,*map_,deps_.binding->replace_);
+ if(!weak_replacement_report_.completed)std::abort();replaced_=true;
 }
 void Service::ReleaseExecutionEntries()const{
  RequireCommit();if(execution_released_||replaced_)std::abort();

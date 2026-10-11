@@ -60,6 +60,21 @@ void Run() {
   }
   assert(outcomes[0] == objects[0] && !outcomes[1]);
   assert(outcomes[2] == reinterpret_cast<art::mirror::Object*>(0x4000) && !outcomes[3]);
+  struct SinkCheck final:Sink{
+    size_t calls=0;bool reject=false;
+    bool Observe(const Record&record)noexcept override{
+      assert(record.before==objects[calls]);++calls;
+      return !reject;
+    }
+  }sink;
+  Visitor synchronous;
+  observer.OnOriginalSweep(&runtime,&synchronous,nullptr,0,report,&sink);
+  assert(sink.calls==4&&report.calls==4&&!report.stored&&!report.overflow&&!report.sink_rejected);
+  sink.calls=0;sink.reject=true;Visitor rejected_sink;
+  observer.OnOriginalSweep(&runtime,&rejected_sink,nullptr,0,report,&sink);
+  assert(sink.calls==4&&rejected_sink.calls==4&&report.sink_rejected&&!report.overflow);
+  assert(outcomes[2]==reinterpret_cast<art::mirror::Object*>(0x4000));
+  assert(allocations==allocations_before);
   Visitor limited;
   observer.OnOriginalSweep(&runtime, &limited, records, 1, report);
   assert(report.calls == 4 && report.stored == 1 && report.overflow && limited.calls == 4);

@@ -5,6 +5,7 @@
 #include "platform/common/native_typed_heap_walk.h"
 #include "platform/common/object_replacement_map.h"
 #include "platform/common/native_replacement_root_census.h"
+#include "platform/common/native_weak_replacement.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/common/prepared_root_registry.h"
 #include "platform/common/native_source_compilation.h"
@@ -35,6 +36,7 @@ struct Dependencies {
  const native_initialized_transfer::Proof*initialization=nullptr;
  const native_typed_heap_walk::Service*heap=nullptr;
  const native_typed_heap_walk::RootProvenance*root_provenance=nullptr;
+ const native_weak_replacement::Service*weak_replacement=nullptr;
  const native_cache::Service*cache=nullptr;
  native_schema_guard_verifier::Verifier*schema=nullptr;
  native_call_graph_execution::Execution*execution=nullptr;
@@ -99,6 +101,7 @@ class Service final:public source_commit::Services,
  prepared_roots::Bindings plan_roots_;
  std::unique_ptr<object_replacement::ObjectReplacementMap>map_;
  native_replacement_root_census::Report replacement_roots_{};
+ mutable native_weak_replacement::Report weak_replacement_report_{};
  bool replacement_roots_final_=false;
  mutable bool final_validated_=false,begun_=false,execution_released_=false,replaced_=false,restored_=false,cache_cleared_=false;
  bool registration_started_=false,registered_=false,refreshed_=false;
