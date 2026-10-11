@@ -1,4 +1,5 @@
 #include "platform/common/native_owned_removal.h"
+#include "platform/common/jvmti_extensions.h"
 #include "platform/common/native_removal_policy.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/owned_failure_diagnostic.h"
@@ -30,7 +31,7 @@ namespace {
 using NativeDefinition=abi::arm64::android_common::ClassRedefinitionPrefix;
 using Check=bool(*)(void*);
 using Commit=void(*)(void*,const void*);
-using Structural=jvmtiError(*)(jvmtiEnv*,jint,const jvmtiClassDefinition*);
+using Structural=jvmti_extensions::Structural;
 struct Item {const Definition* definition;void* validated_owner=nullptr;bool has_virtuals=false;};
 std::atomic<uint64_t> collection_epochs{0};
 struct Request {
@@ -795,19 +796,9 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
     return JVMTI_ERROR_ILLEGAL_ARGUMENT;
    if(env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
   }
-  jint count=0;jvmtiExtensionFunctionInfo* functions=nullptr;Structural structural=nullptr;
-  const auto extension_error=jvmti->GetExtensionFunctions(&count,&functions);
-  if(extension_error!=JVMTI_ERROR_NONE)return extension_error;
-  for(jint n=0;n<count;++n)if(functions[n].id&&!std::strcmp(functions[n].id,"com.android.art.class.structurally_redefine_classes"))
-    structural=reinterpret_cast<Structural>(functions[n].func);
-  if(functions){for(jint n=0;n<count;++n){auto& f=functions[n];
-    if(f.id)jvmti->Deallocate(reinterpret_cast<unsigned char*>(f.id));
-    if(f.short_description)jvmti->Deallocate(reinterpret_cast<unsigned char*>(f.short_description));
-    for(jint j=0;j<f.param_count;++j)if(f.params[j].name)jvmti->Deallocate(reinterpret_cast<unsigned char*>(f.params[j].name));
-    if(f.params)jvmti->Deallocate(reinterpret_cast<unsigned char*>(f.params));
-    if(f.errors)jvmti->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
-  }jvmti->Deallocate(reinterpret_cast<unsigned char*>(functions));}
-  if(!structural){if(error)*error="Missing public owned structural extension";return JVMTI_ERROR_NOT_AVAILABLE;}
+  Structural structural=nullptr;
+  const auto extension_error=jvmti_extensions::FindStructural(jvmti,&structural);
+  if(extension_error!=JVMTI_ERROR_NONE){if(error)*error="Missing public owned structural extension";return extension_error;}
   struct Window {explicit Window(Request& r){active=&r;}~Window(){active=nullptr;}} window(request);
   request.remaining_owners.reserve(definitions.size());
   std::vector<jvmtiClassDefinition> incoming;incoming.reserve(definitions.size());

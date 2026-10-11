@@ -1,4 +1,5 @@
 #include "platform/jvmti/public_backend.h"
+#include "platform/common/jvmti_extensions.h"
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -29,24 +30,17 @@ int PublicBackend::Attach(JavaVM* vm) {
   requested.can_retransform_classes = potential.can_retransform_classes;
   if (env_->AddCapabilities(&requested) != JVMTI_ERROR_NONE ||
       env_->GetCapabilities(&caps_) != JVMTI_ERROR_NONE) return JNI_ERR;
-  jint count = 0;
-  jvmtiExtensionFunctionInfo* functions = nullptr;
-  if (env_->GetExtensionFunctions(&count, &functions) != JVMTI_ERROR_NONE) return JNI_ERR;
-  for (jint i = 0; i < count; ++i) {
-    auto& f = functions[i];
+  jvmti_extensions::Functions functions(env_);
+  if (functions.Load() != JVMTI_ERROR_NONE) return JNI_ERR;
+  for (jint i = 0; i < functions.Count(); ++i) {
+    const auto& f = functions.At(i);
+    if (!f.id) continue;
     extensions_.emplace_back(f.id);
     if (std::strcmp(f.id, "com.android.art.class.structurally_redefine_classes") == 0)
       structural_ = reinterpret_cast<StructuralFn>(f.func);
     if (std::strcmp(f.id, "com.android.art.class.is_structurally_modifiable_class") == 0)
       modifiable_ = reinterpret_cast<ModifiableFn>(f.func);
-    env_->Deallocate(reinterpret_cast<unsigned char*>(f.id));
-    env_->Deallocate(reinterpret_cast<unsigned char*>(f.short_description));
-    for (jint j = 0; j < f.param_count; ++j)
-      env_->Deallocate(reinterpret_cast<unsigned char*>(f.params[j].name));
-    env_->Deallocate(reinterpret_cast<unsigned char*>(f.params));
-    env_->Deallocate(reinterpret_cast<unsigned char*>(f.errors));
   }
-  env_->Deallocate(reinterpret_cast<unsigned char*>(functions));
   return JNI_OK;
 }
 

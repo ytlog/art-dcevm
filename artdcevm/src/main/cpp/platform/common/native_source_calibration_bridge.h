@@ -38,6 +38,8 @@ class Bridge final {
     if(registered_&&!native_owned_removal::SetPassiveObserver(nullptr))std::abort();
   }
   Bridge(const Bridge&)=delete;Bridge& operator=(const Bridge&)=delete;
+  // Registration permits observation only, never a source operation or stop.
+  bool Registered()const noexcept{return registered_;}
   bool Authorized()const noexcept{return authorized_;}
   const native_source_stop::Service& Binding()const noexcept{return service_;}
   const char* Failure()const noexcept{return failure_;}
