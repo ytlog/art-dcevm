@@ -13,7 +13,8 @@ namespace artdcevm::receiver_guard {
 // that callback's live JNI root and ArtMethod; no map/cache authorizes pointers.
 // Fixed common Class prefixes are independently calibrated by FieldMetadata.
 // ART owns the reached Class/native arrays/DexFile until this no-safepoint
-// shared-mutator borrow ends. It does not support handle/listener ingress.
+// shared-mutator borrow ends. Field listener Handle slots use the same inventory;
+// MethodHandle / invoke listener ingress still require their source operands.
 class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  public:
  OriginalRootBounds(EntrySource&entry,const modern_field_metadata::FieldMetadata&metadata)
@@ -34,6 +35,15 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
                  modern_field_metadata::ReadContext*out)noexcept override {
   return EnterMember(actual,field,true,receiver,out);
  }
+ bool EnterListenerField(void*self,void*caller,void*field,const uint32_t*slot,
+                         modern_field_metadata::ReadContext*out)noexcept override {
+  if(!out)return false;*out={};
+  if(inventory_.owner||!metadata_.Calibrated()||!entry_.OwnsMetadata(metadata_))return false;
+  EntrySource::OriginalRoots roots;
+  if(!entry_.SeedListenerFieldRoots(self,caller,field,slot,&roots))return false;
+  auto&i=inventory_;i.owner=this;i.actual=nullptr;i.listener_thread=self;i.count=0;i.class_count=0;
+  return Build(self,field,true,roots,out,caller);
+ }
  private:
  bool EnterMember(const abi::common::RunnableJniScope&actual,void*method,bool field,jobject receiver,
                   modern_field_metadata::ReadContext*out)noexcept {
@@ -41,8 +51,14 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   if(inventory_.owner||!metadata_.Calibrated()||!entry_.OwnsMetadata(metadata_))return false;
   EntrySource::OriginalRoots roots;
   if(!(field?entry_.SeedOriginalFieldRoots(actual,method,receiver,&roots):entry_.SeedOriginalRoots(actual,method,receiver,&roots)))return false;
-  auto&i=inventory_;i.owner=this;i.actual=&actual;i.count=0;i.class_count=0;
-  bool ok=Add(actual.self,4)&&Add(method,field?sizeof(field_array::Field):8)&&Class(roots.declaring);
+  auto&i=inventory_;i.owner=this;i.actual=&actual;i.listener_thread=nullptr;i.count=0;i.class_count=0;
+  return Build(actual.self,method,field,roots,out);
+ }
+ bool Build(void*self,void*method,bool field,const EntrySource::OriginalRoots&roots,
+            modern_field_metadata::ReadContext*out,void*caller=nullptr)noexcept {
+  auto&i=inventory_;
+  bool ok=Add(self,4)&&Add(method,field?sizeof(field_array::Field):8)&&Class(roots.declaring);
+  if(ok&&caller)ok=Add(caller,8)&&Class(roots.caller_declaring);
   if(ok&&roots.local_slot)ok=Add(roots.local_slot,4);
   if(ok&&roots.receiver)ok=Add(roots.receiver,8)&&Class(metadata_.Reference(roots.receiver,0));
   for(size_t n=0;ok&&n<i.class_count;++n)ok=ExpandClass(i.classes[n]);
@@ -58,13 +74,13 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  // A bounded native stack-like TLS inventory: no allocation and no managed
  // pointer survives Leave. Deep/custom hierarchies refuse instead of widening.
  struct Inventory {
-  OriginalRootBounds*owner;const abi::common::RunnableJniScope*actual;
+  OriginalRootBounds*owner;const abi::common::RunnableJniScope*actual;void*listener_thread;
   std::array<Range,1024>ranges;std::array<void*,128>classes,history;
   size_t count,class_count;
  };
  inline static thread_local Inventory inventory_{};
- bool Current()const noexcept{return inventory_.owner==this&&inventory_.actual&&entry_.OriginalScopeCurrent(*inventory_.actual);}
- void Reset()noexcept {auto&i=inventory_;i.ranges.fill({0,0});i.classes.fill(nullptr);i.history.fill(nullptr);i.owner=nullptr;i.actual=nullptr;i.count=0;i.class_count=0;}
+ bool Current()const noexcept{return inventory_.owner==this&&(inventory_.actual?entry_.OriginalScopeCurrent(*inventory_.actual):entry_.ListenerThreadCurrent(inventory_.listener_thread));}
+ void Reset()noexcept {auto&i=inventory_;i.ranges.fill({0,0});i.classes.fill(nullptr);i.history.fill(nullptr);i.owner=nullptr;i.actual=nullptr;i.listener_thread=nullptr;i.count=0;i.class_count=0;}
  bool Add(const void*p,size_t size)noexcept {
   auto&i=inventory_;auto begin=uintptr_t(p);
   if(!p||!size||begin>UINTPTR_MAX-size)return false;

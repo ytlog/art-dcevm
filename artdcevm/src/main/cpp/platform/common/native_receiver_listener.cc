@@ -1,5 +1,6 @@
 #include "platform/common/native_receiver_listener.h"
 #include "platform/common/native_receiver_guard.h"
+#include "platform/common/native_receiver_original_ingress.h"
 #include "platform/common/modern_field_guards.h"
 #include <atomic>
 #include <cstdlib>
@@ -61,13 +62,13 @@ struct ListenerOwner::Listener final:ListenerDeclaration {
   if(retirement::RejectRetiredField(field,self,nullptr))return;
   const auto source=owner.writer_->SourceOfEvent(self,method);
   if(source!=final_write_guard::EventSource::Bytecode)return;
-  auto*guard=consumer.load(std::memory_order_acquire);
-  if(guard){
-   uint32_t receiver_reference=0;
-   if(receiver.slot)std::memcpy(&receiver_reference,receiver.slot,sizeof(receiver_reference));
-   // The event's Handle tracks GC; decode freshly in the sole receiver Guard.
-   if(guard->CheckCompressed(write?Path::BytecodeWrite:Path::BytecodeRead,
-       self,field,receiver_reference,nullptr,true))return;
+  bool unavailable=false;
+  // The sole ingress borrows the actual ART Handle slot and source members;
+  // no synthetic JNI scope, mapping cache or separate receiver Guard is used.
+  if(OriginalIngress::CheckListenerField(self,method,field,receiver.slot,
+      write?Path::BytecodeWrite:Path::BytecodeRead,&unavailable)){
+   if(unavailable)owner.raise_(self,"Ljava/lang/IllegalStateException;","Receiver field listener lost its original typed roots");
+   return;
   }
   if(!owner.pending_->Read(self,&pending))std::abort();if(pending)return;
   // Receiver checking precedes permissions. Both write overloads reach this
@@ -94,11 +95,12 @@ bool ListenerOwner::Bind(HookEngine&hooks,const runtime_services::Snapshot&runti
   return Fail(error,"receiver-listener-fixed-source-or-independent-runtime-unavailable");
  auto add=reinterpret_cast<Add>(hooks.FindSymbol("libart.so",kAdd));
  auto current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ auto raise=reinterpret_cast<Throw>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"));
  auto slot=static_cast<void**>(hooks.FindSymbol("libart.so","_ZN3art7Runtime9instance_E"));
- if(!add||!current||!slot||*slot!=runtime.runtime)
+ if(!add||!current||!raise||!slot||*slot!=runtime.runtime)
   return Fail(error,"receiver-listener-named-fixed-source-or-runtime-slot-unavailable");
  auto listener=std::make_unique<Listener>(*this);
- add_=add;current_=current;runtime_=runtime.runtime;runtime_slot_=slot;instrumentation_=runtime.instrumentation;
+ raise_=raise;add_=add;current_=current;runtime_=runtime.runtime;runtime_slot_=slot;instrumentation_=runtime.instrumentation;
  fields_=&fields;pending_=&pending;writer_=&writer;
  listener_=std::move(listener);bound_=true;return true;
 }

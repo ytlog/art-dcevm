@@ -27,11 +27,13 @@ class ListenerOwner final {
  private:
  struct Listener;
  using Add=void(*)(void*,void*,uint32_t,bool);
+ using Throw=void(*)(void*,const char*,const char*);
  const SourceObservation&observer_;
  const native_pending_exception::Service*pending_=nullptr;
  retirement::RetiredFieldRegistry*fields_=nullptr;
  final_write_guard::Guard*writer_=nullptr;
  std::unique_ptr<Listener>listener_;
+ Throw raise_=nullptr;
  Add add_=nullptr;void*runtime_=nullptr;void**runtime_slot_=nullptr;void*instrumentation_=nullptr;
  abi::arm64::android11::CurrentThread current_=nullptr;
  bool bound_=false,claimed_=false,installed_=false;

@@ -8,6 +8,7 @@
 namespace artdcevm::receiver_guard {
 // Read leaves for the actual original Runnable/shared-mutator ingress. An OS
 // mapping, Thread state or successful Bind never establishes this borrow.
+class OriginalIngress;class OriginalRootBounds;
 class EntrySource final {
  public:
  struct Binding {
@@ -38,15 +39,22 @@ class EntrySource final {
  // its live args/root slots retain managed values until this stack scope exits.
  // The context is that ingress's actual Context, never recreated from bounds.
  // No JNI, suspension or relocation may occur while a borrowed value is used.
+ class ListenerTag final {
+  private:ListenerTag()=default;friend class OriginalIngress;
+ };
  class InvocationScope final {
   public:
    InvocationScope(EntrySource&,const runnable_jni::Context&,modern_field_metadata::ReadContext)noexcept;
+   // Only OriginalIngress can mint the listener tag. No synthetic JNI env
+   // or ScopedObjectAccess is created for an ART instrumentation event.
+   InvocationScope(EntrySource&,ListenerTag,void*actual_thread,modern_field_metadata::ReadContext)noexcept;
    ~InvocationScope();
    bool Valid()const noexcept{return valid_;}
    InvocationScope(const InvocationScope&)=delete;
    InvocationScope&operator=(const InvocationScope&)=delete;
   private:
    friend class EntrySource;
+   void Open()noexcept;
    EntrySource& source_;runnable_jni::Context context_;modern_field_metadata::ReadContext bounds_;bool valid_=false;
  };
  // Only these leaves are supplied; relations and MethodHandle have independent
@@ -55,7 +63,7 @@ class EntrySource final {
  // passed here. This is root provenance, not arbitrary Context/map permission.
  // The original wrapper retains its member and strong receiver; no safepoint,
  // JNI call or waiting decoder is permitted until the caller releases them.
- struct OriginalRoots {void* receiver=nullptr;void* declaring=nullptr;void* local_slot=nullptr;};
+ struct OriginalRoots {void* receiver=nullptr;void* declaring=nullptr;void* local_slot=nullptr;void* caller_declaring=nullptr;};
  bool SeedOriginalRoots(const abi::common::RunnableJniScope&,void* actual_method,
                         jobject actual_receiver,OriginalRoots*)const noexcept;
  bool SeedOriginalFieldRoots(const abi::common::RunnableJniScope&,void* actual_field,
@@ -70,6 +78,10 @@ class EntrySource final {
  bool OwnsMetadata(const modern_field_metadata::FieldMetadata& metadata)const noexcept{return Proven()&&metadata_==&metadata;}
  Access Leaves()noexcept;
  private:
+ friend class OriginalIngress;friend class OriginalRootBounds;
+ bool ListenerThreadCurrent(void*)const noexcept;
+ bool SeedListenerFieldRoots(void*actual_thread,void*actual_caller,void*actual_field,
+     const uint32_t*actual_receiver_slot,OriginalRoots*)const noexcept;
  using Decode=abi::arm64::android11::ReleaseObjectPointer(*)(const void*,jobject);
  using Root=void*(*)(void*);
  using Throw=void(*)(void*,const char*,const char*);

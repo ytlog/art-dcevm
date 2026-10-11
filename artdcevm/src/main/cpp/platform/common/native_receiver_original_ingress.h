@@ -3,9 +3,11 @@
 #include "platform/common/native_receiver_class_source.h"
 #include <optional>
 #include <cstdlib>
+#include <cstring>
 namespace artdcevm::receiver_guard {
 // One process owner; registration grants no Guard proof or activation. Bounds
 // are supplied only for the original borrowed ScopedObjectAccess argument.
+class ListenerOwner;
 class OriginalIngress final {
  public:
  class TypedBounds {
@@ -20,6 +22,8 @@ class OriginalIngress final {
       modern_field_metadata::ReadContext*)noexcept=0;
   virtual bool EnterField(const abi::common::RunnableJniScope&,void*,jobject,
       modern_field_metadata::ReadContext*)noexcept{return false;}
+  virtual bool EnterListenerField(void*actual_thread,void*actual_caller,void*actual_field,
+      const uint32_t*actual_receiver_slot,modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual void Leave()noexcept=0;
  };
  OriginalIngress(EntrySource&e,const ClassSource&c,TypedBounds&b):entry_(e),classes_(c),bounds_(b){}
@@ -51,6 +55,21 @@ class OriginalIngress final {
   return Check(source,field,receiver,path,unavailable,true);
  }
  private:
+ friend class ListenerOwner;
+ // Only the sole ART listener routes this live native member / Handle slot.
+ static bool CheckListenerField(void*self,void*caller,void*field,const uint32_t*slot,
+     Path path,bool*unavailable)noexcept{
+  if(!unavailable)return false;*unavailable=false;
+  auto*owner=published_.load(std::memory_order_acquire);
+  if(!owner||consumer.load(std::memory_order_acquire)!=owner->guard_||
+     !owner->guard_->RequiresIngress(path,self,field)){
+   uint32_t reference=0;if(slot)std::memcpy(&reference,slot,4);
+   return receiver_guard::CheckCompressed(path,self,field,reference,nullptr,true);
+  }
+  Scope scope(*owner,self,caller,field,slot);if(!scope.Valid()){*unavailable=true;return true;}
+  uint32_t reference=0;if(slot)std::memcpy(&reference,slot,4);
+  return owner->guard_->CheckCompressed(path,self,field,reference,nullptr,true);
+ }
  class Scope final {
   public:
   Scope(OriginalIngress&o,const abi::common::RunnableJniScope&s,void*m,jobject r,bool field)noexcept:owner(o),context{s.self,s.env,s.vm}{
@@ -58,6 +77,13 @@ class OriginalIngress final {
    entered=field?o.bounds_.EnterField(s,m,r,&bounds):o.bounds_.Enter(s,m,r,&bounds);if(!entered)return;
    if(!bounds.owner||!bounds.extent)return;
    entry.emplace(o.entry_,context,bounds);if(!entry->Valid())return;
+   classes.emplace(o.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
+  }
+  Scope(OriginalIngress&o,void*self,void*caller,void*field,const uint32_t*slot)noexcept:owner(o),context{self,nullptr,o.entry_.binding_.vm}{
+   if(active_||!o.entry_.ListenerThreadCurrent(self))return;
+   entered=o.bounds_.EnterListenerField(self,caller,field,slot,&bounds);if(!entered)return;
+   if(!bounds.owner||!bounds.extent)return;
+   entry.emplace(o.entry_,EntrySource::ListenerTag{},self,bounds);if(!entry->Valid())return;
    classes.emplace(o.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
   }
   ~Scope(){if(valid){if(active_!=this)std::abort();active_=nullptr;}relations.reset();classes.reset();entry.reset();if(entered)owner.bounds_.Leave();}

@@ -42,6 +42,28 @@ static void RunRootBoundsTest(receiver_guard::EntrySource&entry,const modern_fie
   field_array::View fields;assert(metadata.Fields(declaring,false,&fields,nullptr,&read)&&fields.count==2&&fields.selected_count==1);
  }
  auto expired=read;bounds.Leave();assert(!expired.extent(expired.owner,declaring,&n));
+ // Actual field-listener source roots have no JNI env or encoded jobject.
+ // They borrow the same inventory from the original caller/field/Handle slot,
+ // with map access, JNI and native allocation still trapped above.
+ auto*listener_field=static_cast<Mirror*>(public_fields[0])->field;
+ uint32_t listener_slot=uint32_t(uintptr_t(public_receivers[0]));
+ auto previous_decodes=decodes;
+ assert(bounds.EnterListenerField(actual.self,member,listener_field,&listener_slot,&read));
+ assert(decodes==previous_decodes&&read.extent(read.owner,&listener_slot,&n)&&n==4);
+ assert(read.extent(read.owner,listener_field,&n)&&n>=sizeof(field_array::Field));
+ assert(read.extent(read.owner,member,&n)&&n==8&&read.extent(read.owner,public_receivers[0],&n)&&n==8);
+ assert(!bounds.EnterListenerField(actual.self,member,listener_field,&listener_slot,&nested));
+ auto listener_expired=read;bounds.Leave();assert(!listener_expired.extent(listener_expired.owner,&listener_slot,&n));
+ assert(!bounds.EnterListenerField(&manager,member,listener_field,&listener_slot,&read));
+ assert(!bounds.EnterListenerField(actual.self,nullptr,listener_field,&listener_slot,&read));
+ assert(!bounds.EnterListenerField(actual.self,member,reinterpret_cast<void*>(1),&listener_slot,&read));
+ Put32(actual.self,0,92u<<24);assert(!bounds.EnterListenerField(actual.self,member,listener_field,&listener_slot,&read));Put32(actual.self,0,0);
+ // Null/static receiver semantics remain with ART; caller and field roots are
+ // still verified even when the actual Handle slot is empty.
+ listener_slot=0;assert(bounds.EnterListenerField(actual.self,member,listener_field,&listener_slot,&read));
+ assert(!read.extent(read.owner,public_receivers[0],&n));bounds.Leave();
+ assert(bounds.EnterListenerField(actual.self,member,listener_field,nullptr,&read));bounds.Leave();
+
  assert(!bounds.Enter(actual,reinterpret_cast<void*>(1),receiver,&read));
  auto old=actual;actual.vm=nullptr;assert(!bounds.Enter(actual,member,receiver,&read));actual=old;
  Put32(actual.self,0,92u<<24);assert(!bounds.Enter(actual,member,receiver,&read));Put32(actual.self,0,0);

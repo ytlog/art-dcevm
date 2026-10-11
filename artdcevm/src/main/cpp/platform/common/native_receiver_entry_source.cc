@@ -38,7 +38,15 @@ bool EntrySource::Bind(HookEngine&hooks,Binding b,const modern_field_metadata::F
  binding_=b;states_=s;metadata_=&m;inline_local_=inline_local;decode_=d;root_=root;raise_=raise;field_id_=field;method_id_=method;bound_=true;return true;
 }
 EntrySource::InvocationScope::InvocationScope(EntrySource&s,const runnable_jni::Context&c,modern_field_metadata::ReadContext b)noexcept:source_(s),context_(c),bounds_(b){
- if(invocation_||!s.bound_||!c.self||!c.env||c.vm!=s.binding_.vm||!b.owner||!b.extent||s.binding_.current()!=c.self)return;
+ if(!c.env||c.vm!=s.binding_.vm)return;Open();
+}
+EntrySource::InvocationScope::InvocationScope(EntrySource&s,ListenerTag,void*self,modern_field_metadata::ReadContext b)noexcept
+ :source_(s),context_{self,nullptr,s.binding_.vm},bounds_(b){
+ if(!s.ListenerThreadCurrent(self))return;Open();
+}
+void EntrySource::InvocationScope::Open()noexcept{
+ auto&s=source_;const auto&c=context_;const auto&b=bounds_;
+ if(invocation_||!s.bound_||!c.self||!b.owner||!b.extent||s.binding_.current()!=c.self)return;
  size_t n=0;uint32_t state=UINT32_MAX;
  if(!b.extent(b.owner,c.self,&n)||!s.states_.State(c.self,n,&state)||state!=s.states_.RunnableState()||s.binding_.current()!=c.self)return;
  invocation_=this;valid_=true;
@@ -115,6 +123,25 @@ bool EntrySource::OriginalScopeCurrent(const abi::common::RunnableJniScope&actua
  return Proven()&&actual.self&&actual.env&&actual.vm==binding_.vm&&
    binding_.current()==actual.self&&states_.State(actual.self,sizeof(uint32_t),&state)&&
    state==states_.RunnableState()&&binding_.current()==actual.self;
+}
+bool EntrySource::ListenerThreadCurrent(void*self)const noexcept{
+ uint32_t state=UINT32_MAX;
+ return Proven()&&self&&binding_.current()==self&&states_.State(self,sizeof(uint32_t),&state)&&
+  state==states_.RunnableState()&&binding_.current()==self;
+}
+bool EntrySource::SeedListenerFieldRoots(void*self,void*caller,void*field,
+ const uint32_t*receiver_slot,OriginalRoots*out)const noexcept{
+ if(!out)return false;*out={};
+ if(invocation_||!caller||!field||uintptr_t(caller)%4||uintptr_t(field)%4||
+    (receiver_slot&&uintptr_t(receiver_slot)%4)||!ListenerThreadCurrent(self))return false;
+ OriginalRoots roots;roots.declaring=metadata_->FieldDeclaringClass(field);
+ roots.caller_declaring=metadata_->MethodDeclaringClass(caller);
+ if(!roots.declaring||!roots.caller_declaring||!ListenerThreadCurrent(self))return false;
+ if(receiver_slot){
+  roots.local_slot=const_cast<uint32_t*>(receiver_slot);uint32_t value=0;std::memcpy(&value,receiver_slot,4);
+  if(value){roots.receiver=root_(roots.local_slot);if(!roots.receiver||uintptr_t(roots.receiver)%4)return false;}
+ }
+ *out=roots;return ListenerThreadCurrent(self);
 }
 bool EntrySource::SeedOriginalRoots(const abi::common::RunnableJniScope&actual,void*method,
  jobject receiver,OriginalRoots*out)const noexcept{return SeedRoots(actual,method,false,receiver,out);}
