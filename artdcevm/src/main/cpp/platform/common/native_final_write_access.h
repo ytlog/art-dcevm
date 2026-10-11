@@ -7,6 +7,7 @@
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include <memory>
 namespace artdcevm::final_write_guard {
+class AliasBatch;
 // Process-owned native access for the sole field dispatcher. Binding supplies
 // identity readers, never an enforcement proof. Metadata/decoder outlive this owner.
 class NativeAccess final {
@@ -20,6 +21,7 @@ class NativeAccess final {
  // registered in the shared decoder. Cleanup deactivates before Forget/delete.
  final_field_aliases::Set& Aliases()noexcept{return aliases_;}
  private:
+ friend class AliasBatch;
  using Throw=void(*)(void*,const char*,const char*);
  NativeAccess(const modern_field_metadata::FieldMetadata&,native_reference_decoder::Decoder&,
               abi::arm64::android11::CurrentThread,Throw);
@@ -35,5 +37,6 @@ class NativeAccess final {
  native_reference_decoder::Decoder&references_;
  abi::arm64::android11::CurrentThread current_;Throw throw_;
  final_field_aliases::Set aliases_;Guard writer_;
+ std::mutex alias_cleanup_;
 };
 }

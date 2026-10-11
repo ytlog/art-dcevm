@@ -6,6 +6,7 @@
 #include "platform/common/native_call_graph_incoming.h"
 #include "platform/common/production_receiver_invocation.h"
 #include "platform/common/production_final_write_calibration.h"
+#include "platform/common/native_final_write_alias_batch.h"
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/modern_method_guards.h"
@@ -53,6 +54,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
        process->final_writer_->Writer(),error))return nullptr;
    process->final_writer_calibrated_=true;
   }
+  if(!final_write_guard::AliasBatch::Cleanup(*process->final_writer_,env,process->schema_.Roots(),error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }

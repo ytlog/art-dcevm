@@ -157,6 +157,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/production_stack_stream.cc
     platform/common/production_final_write_calibration.cc
     platform/common/native_final_write_access.cc
+    platform/common/native_final_write_alias_batch.cc
     platform/common/native_final_write_guard.cc
     platform/common/native_reference_decoder.cc
     platform/common/native_final_field_aliases.cc

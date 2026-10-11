@@ -55,6 +55,7 @@ class Service final : public structural_methods::Services {
   // Restore only the old non-copied methods before the class is retained.
   void RestoreOldDeclaringClasses()const;
   bool MatchesClassTable(void*)const noexcept;
+  bool UsesReadContext(const modern_field_metadata::ReadContext&context)const noexcept{return read_context_==&context;}
   bool CollectManagedRoots(const prepared_roots::Registrar& r){if(!roots_.Add(&old_class_,r)||!roots_.Add(&new_class_,r))return false;roots_.Seal();return true;}
   bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
   void RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{roots_.Refresh(r);}
