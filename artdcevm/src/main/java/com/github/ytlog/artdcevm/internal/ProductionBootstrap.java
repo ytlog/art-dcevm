@@ -176,6 +176,17 @@ public final class ProductionBootstrap {
     static int invokeMethod(Inputs input) throws Throwable {
         return (int) input.methodHandles[0].invoke(input.methodReceiver);
     }
+    static boolean exerciseMethodHandle(Inputs input, int index) throws Throwable {
+        if (index < 0 || index >= input.methods.length)
+            throw new IllegalArgumentException("method MethodHandle sample index");
+        EvolutionCalibration receiver = (EvolutionCalibration) input.methodReceiver;
+        int before = receiver.value;
+        boolean statik = java.lang.reflect.Modifier.isStatic(input.methods[index].getModifiers());
+        int expected = (int) input.methods[index].invoke(statik ? null : receiver);
+        int actual = statik ? (int) input.methodHandles[index].invoke()
+                            : (int) input.methodHandles[index].invoke(receiver);
+        return actual == expected && receiver.value == before;
+    }
     static int invokeField(Inputs input, int index) throws Throwable {
         return index == 0 ? (int) input.instanceGetter.invoke(input.storage)
                           : (int) input.staticGetter.invoke();

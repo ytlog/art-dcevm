@@ -147,6 +147,15 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   field_method_handles_[n]=Own(env,handle.value);
   if(!field_method_handles_[n])return Fail(error,"calibration-input-field-MethodHandle-unavailable");
  }
+ auto handles_id=env->GetFieldID(static_cast<jclass>(type.value),"methodHandles","[Ljava/lang/invoke/MethodHandle;");
+ Local handles{env,handles_id?env->GetObjectField(input_,handles_id):nullptr};
+ if(!handles.value||env->ExceptionCheck()||env->GetArrayLength(static_cast<jobjectArray>(handles.value))!=jsize(method_handles_.size()))
+  return Fail(error,"calibration-input-method-MethodHandle-count-differs");
+ for(size_t n=0;n<method_handles_.size();++n){
+  Local handle{env,env->GetObjectArrayElement(static_cast<jobjectArray>(handles.value),jsize(n))};
+  method_handles_[n]=Own(env,handle.value);
+  if(!method_handles_[n])return Fail(error,"calibration-input-method-MethodHandle-unavailable");
+ }
  if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error)||
     !LoadReceiver(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
@@ -191,6 +200,17 @@ bool CalibrationInputs::ExerciseFieldMethodHandle(JNIEnv*env,size_t index,std::s
  const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_,jint(index))==JNI_TRUE;
  if(env->ExceptionCheck())return false;
  return matched||Fail(error,"calibration-input-field-MethodHandle-public-readback-differs");
+}
+bool CalibrationInputs::ExerciseMethodHandle(JNIEnv*env,size_t index,std::string*error)const{
+ JavaVM*vm=nullptr;
+ if(index>=method_handles_.size()||!env||env->ExceptionCheck()||!bootstrap_||!input_||
+    env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-method-MethodHandle-invalid-caller-or-index");
+ auto run=env->GetStaticMethodID(bootstrap_,"exerciseMethodHandle","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z");
+ if(!run||env->ExceptionCheck())return false;
+ const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_,jint(index))==JNI_TRUE;
+ if(env->ExceptionCheck())return false;
+ return matched||Fail(error,"calibration-input-method-MethodHandle-public-result-differs");
 }
 bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  std::string ignored;if(!error)error=&ignored;

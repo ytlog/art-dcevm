@@ -1,7 +1,7 @@
 #include "platform/common/modern_method_guards.h"
 #include "platform/common/native_receiver_guard.h"
 #include "platform/common/native_receiver_original_ingress.h"
-#include "platform/abi/common/suspend_all.h"
+#include "platform/common/exclusive_owned_roots.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/abi/common/jni_access.h"
 #include <atomic>
@@ -109,13 +109,15 @@ struct Entry {
 bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
                              void* manager, RetiredMethodRegistry& registry,
                              std::string* error) {
+  std::string ignored;if(!error)error=&ignored;
+  if (!env || !root || !manager || !runnable_executor::Available() || env->ExceptionCheck() ||
+      env->GetObjectRefType(root)!=JNIGlobalRefType || env->ExceptionCheck()) {
+    *error = "Method guards require owned Runnable scope and observed JNI manager";
+    return false;
+  }
   if (state.registry) {
     if (installed_complete && state.registry == &registry && state.manager == manager) return true;
     *error = "Method entry guards have an active owner or incomplete rollback; cannot reinstall";
-    return false;
-  }
-  if (!env || !root || !manager || !runnable_executor::Available()) {
-    *error = "Method guards require owned Runnable scope and observed JNI manager";
     return false;
   }
   Calibration calibration{};
@@ -153,31 +155,35 @@ bool InstallMethodEntryGuards(HookEngine& hooks, JNIEnv* env, jobject root,
     }
     if (!entry.target) { *error = std::string("Missing method guard entry: ") + entry.symbol; return false; }
   }
-  using namespace abi::common;
-  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
-  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!construct||!destroy){*error="Missing native exclusive method hook installation declarations";return false;}
-  SuspendAll stopped{};construct(&stopped,"artdcevm method guard installation",false);
-  struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
-  // Hooks become visible before Install returns. Publish their durable owner
-  // first; never clear it if rollback fails and an installed hook remains live.
-  state = calibration.candidate;
-  std::vector<void*> tokens;
-  for (auto& entry : entries) {
-    void* token = hooks.Install(entry.target, entry.proxy, entry.original, error);
-    if (!token) {
-      bool removed = true;
-      for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
-        std::string rollback;
-        if (!hooks.Remove(*it, &rollback)) { removed = false; *error += "; " + rollback; }
+  exclusive_owned_roots::Service exclusive;
+  if(!exclusive_owned_roots::Service::Bind(hooks,&exclusive,error))return false;
+  std::vector<void*>tokens;tokens.reserve(sizeof(entries)/sizeof(entries[0]));
+  auto install=[&](const exclusive_owned_roots::Context&actual){
+    if(!actual.self||actual.self!=calibration.current()||actual.count!=1||
+       !actual.roots||!actual.roots[0])return false;
+    // Publish only inside the calibrated exclusive window; retain the owner
+    // whenever incomplete rollback leaves an installed callback alive.
+    state=calibration.candidate;
+    try{
+      for(auto&entry:entries){
+        void*token=hooks.Install(entry.target,entry.proxy,entry.original,error);
+        if(!token)break;tokens.push_back(token);
       }
-      if (removed) state = {};
-      return false;
+    }catch(...){}
+    if(tokens.size()!=sizeof(entries)/sizeof(entries[0])){
+      bool removed=true;
+      for(auto it=tokens.rbegin();it!=tokens.rend();++it){
+        try{std::string rollback;if(!hooks.Remove(*it,&rollback))removed=false;}
+        catch(...){removed=false;}
+      }
+      if(removed)state={};return false;
     }
-    tokens.push_back(token);
-  }
-  installed_complete = true;
-  return true;
+    installed_complete=true;return true;
+  };
+  const jobject roots[]{root};
+  return exclusive.With(env,roots,1,[](const exclusive_owned_roots::Context&actual,void*raw){
+    return (*static_cast<decltype(install)*>(raw))(actual);
+  },&install,error)&&MethodEntryGuardsOwn(registry,manager);
 }
 size_t RejectedMethodEntries() { return rejected.load(); }
 bool MethodEntryGuardsOwn(const RetiredMethodRegistry& registry) {

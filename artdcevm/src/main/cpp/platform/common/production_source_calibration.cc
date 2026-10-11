@@ -7,6 +7,7 @@
 #include "platform/common/production_receiver_invocation.h"
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_method_handle_guards.h"
+#include "platform/common/modern_method_guards.h"
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -44,7 +45,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -243,6 +244,42 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
 }
 struct SourceCalibration::ReceiverEvents {SourceCalibration&owner;std::string*error;bool completed=false;};
+bool SourceCalibration::PrepareMethodEntries(JNIEnv*env,std::string*error){
+ const auto&inputs=metadata_->Inputs();const auto manager=metadata_->Runtime().receivers.jni_id_manager;
+ if(!membership_.matched||!retirement::InstallMethodEntryGuards(hooks_,env,inputs.Anchor(),manager,retired_methods_,error)||
+    !retirement::MethodEntryGuardsOwn(retired_methods_,manager))return false;
+ const char*names[]{"compute","privateAccessCalibration","staticInvokeCalibration"};
+ std::vector<retirement::MethodHandleOracle>oracles;oracles.reserve(inputs.MethodHandles().size());
+ for(size_t n=0;n<inputs.MethodHandles().size();++n){
+  const evolution::Member*declaration=nullptr;
+  for(const auto&method:inputs.MethodsSchema().methods)
+   if(method.name==names[n]&&method.descriptor=="()I"){
+    if(declaration)return Fail(error,"source-method-handle-independent-declaration-ambiguous");
+    declaration=&method;
+   }
+  jobject mirror=nullptr;
+  if(declaration)for(const auto&method:inputs.Methods())
+   if(method.dex_method_index==declaration->dex_index&&!(method.java_modifiers&0x100u)&&
+      bool(method.java_modifiers&8u)==(n==2)){
+    if(mirror)return Fail(error,"source-method-handle-independent-mirror-ambiguous");
+    mirror=method.strong_global_method;
+   }
+  if(!mirror||!inputs.MethodHandles()[n])return Fail(error,"source-method-handle-independent-input-unavailable");
+  auto id=env->FromReflectedMethod(mirror);
+  if(!id||env->ExceptionCheck())return false;
+  oracles.push_back({inputs.MethodHandles()[n],id});
+ }
+ if(!retirement::PrepareMethodHandleGuards(hooks_,env,manager,retired_methods_,oracles,error))return false;
+ for(size_t n=0;n<oracles.size();++n){
+  if(!retirement::BeginMethodHandleTargetProof(env,oracles[n].strong_global,oracles[n].method,error))return false;
+  bool succeeded=false;
+  try{succeeded=inputs.ExerciseMethodHandle(env,n,error);}
+  catch(...){retirement::EndMethodHandleTargetProof(false,nullptr);throw;}
+  if(!retirement::EndMethodHandleTargetProof(succeeded&&!env->ExceptionCheck(),error))return false;
+ }
+ return retirement::MethodHandleGuardsReady(retired_methods_)||
+  Fail(error,"source-method-handle-original-outer-invocation-not-observed");
+}
 bool SourceCalibration::PrepareFieldEntries(JNIEnv*env,std::string*error){
  if(!membership_.matched||!metadata_->Fields().Calibrated())
   return Fail(error,"source-field-entry-independent-metadata-or-retirement-owner-unavailable");
