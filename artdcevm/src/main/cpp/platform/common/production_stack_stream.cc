@@ -2,9 +2,34 @@
 #include "platform/common/source_fixture_interpretation.h"
 #include "platform/common/runnable_executor.h"
 #include "platform/common/redefinition_gate.h"
+#include "platform/common/native_managed_stack_chain.h"
 namespace artdcevm::production_bootstrap {
 namespace {
 bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}
+// Match each actual source fragment's first cursor and terminal transition.
+// This is a chain/stream correspondence, not a continuation or handler grant.
+bool MatchFragments(const native_managed_stack_chain::Chain&chain,
+    const std::vector<native_call_graph_stack::Frame>&frames,void*self,size_t*out)noexcept{
+ if(!out||chain.Thread()!=self||!chain.Fragments()||!chain.Validate())return false;
+ size_t fragment=0;bool first=true;
+ for(const auto&frame:frames){
+  if(frame.thread!=self)continue;
+  const auto*head=chain.At(fragment);if(!head)return false;
+  const auto quick=head->tagged_quick&~uintptr_t{3};
+  if(frame.kind==native_call_graph_stack::FrameKind::Transition){
+   if(quick){if(first||uintptr_t(frame.quick)==0||frame.shadow||!frame.pc)return false;}
+   else if(head->shadow){if(first||frame.quick||frame.shadow||frame.pc)return false;}
+   else if(!first||frame.quick||frame.shadow||frame.pc)return false;
+   ++fragment;first=true;continue;
+  }
+  if(quick){if(!frame.quick||frame.shadow||(first&&(uintptr_t(frame.quick)!=quick||frame.pc)))return false;}
+  else if(head->shadow){if(!frame.shadow||frame.quick||frame.pc||(first&&frame.shadow!=head->shadow))return false;}
+  else return false;
+  first=false;
+ }
+ if(!first||fragment!=chain.Fragments()||!chain.Validate())return false;
+ *out=fragment;return true;
+}
 struct Request {
  HookEngine&hooks;const MetadataCalibration&metadata;const source_handle_roots::Service&handles;
  const native_source_stop::Service&stop;const native_cache::Service&cache;
@@ -25,8 +50,11 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
  // it never changes an interpretation entry or asserts that compiled frames drained.
  native_call_graph_stack::Service::Prepared prepared;
  if(!r.stack.Prepare(r.selection,&prepared,r.error))return false;
- struct Window {Request&request;native_call_graph_stack::Service::Prepared&prepared;void*self;};
- Window window{r,prepared,actual.self};
+ native_managed_stack_chain::Chain chain;
+ if(!chain.Prepare(65536))return Fail(r.error,"source-stack-stream-managed-chain-reservation-refused");
+ struct Window {Request&request;native_call_graph_stack::Service::Prepared&prepared;
+  native_managed_stack_chain::Chain&chain;void*self;};
+ Window window{r,prepared,chain,actual.self};
  const bool inspected=source_fixture_interpretation::Inspect(r.stop,actual,roots,&window,
   [](void*raw,native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)noexcept{
    auto&w=*static_cast<Window*>(raw);auto&r=w.request;
@@ -48,7 +76,11 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
     managed|=frame.kind==native_call_graph_stack::FrameKind::Managed;
    }
    if(!native||!managed)return false;
-   r.observation={frames,roots,true};return true;
+   const auto captured=w.chain.Capture(r.handles,stop,w.self,w.self,r.cache,read);
+   size_t transitions=0;
+   if(!captured.complete||!MatchFragments(w.chain,*stream,w.self,&transitions)||
+      !r.stack.ValidateStream(w.prepared,stop,w.self,read))return false;
+   r.observation={frames,roots,captured.fragments,transitions,true};return true;
   },r.error);
  return inspected&&r.observation.completed&&runnable_jni::Bridge::BorrowOriginalScope(actual)&&
      !actual.env->ExceptionCheck();

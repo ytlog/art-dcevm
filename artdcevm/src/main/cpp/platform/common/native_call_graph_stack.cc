@@ -93,7 +93,15 @@ bool Service::ValidateStream(const Prepared&p,const native_source_stop::Session&
      (frame.return_carrier!=ordinal+1||frame.return_carrier>=p.frames.size()||
       !ReturnCarrier(frame,p.frames[frame.return_carrier])))return false;
   if(frame.kind==FrameKind::Transition){
-   if(frame.method||frame.shadow||frame.quick||frame.index!=UINT32_MAX||frame.flags)return false;
+   if(frame.method||frame.shadow||frame.carrier_method||frame.index!=UINT32_MAX||frame.flags||
+      frame.physical_boundary||frame.return_slot||frame.return_pc)return false;
+   // Original quick fragments retain their terminal zero method slot and PC.
+   // Shadow/empty fragments instead leave the cursor null and PC zero.
+   if(frame.quick){
+    size_t extent=0;void*terminal=reinterpret_cast<void*>(uintptr_t{1});
+    if(uintptr_t(frame.quick)%16||!read.extent(read.owner,frame.quick,&extent)||extent<sizeof(terminal))return false;
+    std::memcpy(&terminal,frame.quick,sizeof(terminal));if(terminal)return false;
+   }else if(frame.pc)return false;
    continue;
   }
   size_t extent=0;method_metadata::Identity identity{};
@@ -202,7 +210,16 @@ template<class Base>bool Service::Walk(void*target,const native_source_stop::Ses
     }
     ++report.recorded_frames;return true;
    };
-   if(!method){if(this->shadow_frame||this->quick_frame)return deny("call-graph-stack-null-managed-method");
+   if(!method){
+    if(this->shadow_frame)return deny("call-graph-stack-null-shadow-method");
+    if(this->quick_frame){
+     size_t extent=0;void*terminal=reinterpret_cast<void*>(uintptr_t{1});
+     if(uintptr_t(this->quick_frame)%16||!read.owner||!read.extent||
+        !read.extent(read.owner,this->quick_frame,&extent)||extent<sizeof(terminal))
+      return deny("call-graph-stack-quick-transition-slot-unreadable");
+     std::memcpy(&terminal,this->quick_frame,sizeof(terminal));
+     if(terminal)return deny("call-graph-stack-quick-transition-method-is-not-zero");
+    }else if(this->pc)return deny("call-graph-stack-empty-transition-PC-is-not-zero");
     if(!record(FrameKind::Transition,nullptr))return false;
     ++report.transitions;report.boundary_owners_required=true;return true;}
    size_t extent=0;method_metadata::Identity identity{};

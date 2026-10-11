@@ -64,6 +64,34 @@ int main(){
  frames[0][0].shadow=frames[0][1].shadow=true;work.scenario=1;
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
  assert(work.report.walk_complete&&work.report.selected_drained&&!work.report.drain_required&&work.report.selected_shadow==3&&work.report.boundary_owners_required);
+ // Original quick fragment transition: zero method slot, retained quick
+ // cursor and returned PC. The reader must preserve and revalidate all three.
+ alignas(16) uintptr_t terminal[8]{};maps.Cover(terminal);
+ frames[2][0].carrier=terminal;frames[2][0].pc=0x456780;
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
+ assert(work.report.walk_complete&&work.report.transitions==2);
+ struct TransitionCheck {native_call_graph_stack::Service&scanner;native_call_graph_stack::Service::Prepared&prepared;
+  native_cache::Service&threads;modern_field_metadata::ReadContext&read;uintptr_t*terminal;};
+ TransitionCheck transition{scanner,prepared,threads,read,terminal};
+ const auto check_transition=[](void*raw,native_source_stop::Session&stop)noexcept{
+  auto&r=*static_cast<TransitionCheck*>(raw);
+  assert(r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read).walk_complete);
+  const auto*stream=r.scanner.Frames(r.prepared);assert(stream);bool found=false;
+  for(const auto&frame:*stream)if(frame.kind==native_call_graph_stack::FrameKind::Transition&&frame.quick==r.terminal){
+   assert(!frame.method&&!frame.carrier_method&&frame.pc==0x456780);found=true;
+  }
+  assert(found&&r.scanner.ValidateStream(r.prepared,stop,thread.data(),r.read));
+  r.terminal[0]=uintptr_t(old_method);
+  assert(!r.scanner.ValidateStream(r.prepared,stop,thread.data(),r.read));
+  r.terminal[0]=0;assert(r.scanner.ValidateStream(r.prepared,stop,thread.data(),r.read));
+  transition_method_override=old_method;
+  const auto rejected=r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read);
+  assert(!rejected.walk_complete&&rejected.failure&&r.scanner.Frames(r.prepared)==nullptr);
+  transition_method_override=nullptr;
+  assert(r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read).walk_complete);return true;
+ };
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&transition,check_transition));}
+ frames[2][0].carrier=nullptr;frames[2][0].pc=0;
  // Two adjacent physical frames model the original native return carrier.
  // Matching PC alone cannot connect disjoint stack storage, and matching
  // addresses alone cannot connect a different continuation PC.

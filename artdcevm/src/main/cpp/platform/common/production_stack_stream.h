@@ -8,6 +8,7 @@ namespace artdcevm::production_bootstrap {
 struct StackStreamObservation {
  native_call_graph_stack::Report frames{};
  native_call_graph_stack::FrameRootReport roots{};
+ size_t managed_fragments=0,current_thread_transitions=0;
  bool completed=false;
 };
 bool ObserveStackStream(HookEngine&,JNIEnv*,const MetadataCalibration&,
