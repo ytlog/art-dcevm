@@ -245,9 +245,55 @@ struct SourceCalibration::ReceiverEvents {SourceCalibration&owner;std::string*er
 bool SourceCalibration::PrepareFieldEntries(JNIEnv*env,std::string*error){
  if(!membership_.matched||!metadata_->Fields().Calibrated())
   return Fail(error,"source-field-entry-independent-metadata-or-retirement-owner-unavailable");
- return retirement::InstallFieldEntryGuards(hooks_,env,metadata_->Inputs().Anchor(),
-  metadata_->Runtime().receivers.jni_id_manager,metadata_->FieldMirrors(),retired_fields_,error)&&
-  retirement::FieldEntryGuardsOwn(retired_fields_);
+ if(!retirement::InstallFieldEntryGuards(hooks_,env,metadata_->Inputs().Anchor(),
+  metadata_->Runtime().receivers.jni_id_manager,metadata_->FieldMirrors(),retired_fields_,error)||
+  !retirement::FieldEntryGuardsOwn(retired_fields_))return false;
+ return PrepareFieldVarHandles(env,error);
+}
+struct SourceCalibration::FieldHandles {
+ SourceCalibration&owner;field_mirror::NamedField leaf;
+ std::array<jobject,2>fields{};
+ std::vector<retirement::FieldVarHandleOracle>oracles;
+ std::string*error;bool completed=false;
+};
+bool SourceCalibration::ObserveFieldHandles(const runnable_jni::Context&actual,void*raw){
+ auto&r=*static_cast<FieldHandles*>(raw);const auto&inputs=r.owner.metadata_->Inputs();
+ if(!actual.env||actual.env->ExceptionCheck()||!r.leaf||
+    actual.vm!=r.owner.metadata_->Runtime().receivers.java_vm||
+    !runnable_jni::Bridge::BorrowOriginalScope(actual)||!redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm)))
+  return Fail(r.error,"source-field-VarHandle-original-context-unavailable");
+ for(size_t n=0;n<r.fields.size();++n){
+  void*mirror=nullptr;
+  if(!runnable_executor::DecodeStrongGlobal(actual,r.fields[n],&mirror)||!mirror)return false;
+  void*field=r.leaf(mirror);
+  if(!field||actual.env->ExceptionCheck())return false;
+  r.oracles.push_back({inputs.FieldVarHandles()[n],field,r.fields[n]});
+ }
+ r.completed=r.oracles.size()==r.fields.size()&&runnable_jni::Bridge::BorrowOriginalScope(actual);
+ return r.completed;
+}
+bool SourceCalibration::PrepareFieldVarHandles(JNIEnv*env,std::string*error){
+ const auto&inputs=metadata_->Inputs();
+ auto leaf=reinterpret_cast<field_mirror::NamedField>(hooks_.FindSymbol("libart.so","_ZN3art6mirror5Field11GetArtFieldEv"));
+ if(!leaf)return Fail(error,"source-field-VarHandle-named-field-reader-unavailable");
+ FieldHandles request{*this,leaf,{}, {},error};request.oracles.reserve(request.fields.size());
+ const char*names[]{"intValue","staticIntValue"};
+ for(size_t n=0;n<request.fields.size();++n){
+  for(const auto&field:inputs.Fields())
+   if(field.name&&field.descriptor&&std::strcmp(field.name,names[n])==0&&std::strcmp(field.descriptor,"I")==0&&
+      bool(field.modifiers&8u)==bool(n)){
+    if(request.fields[n])return Fail(error,"source-field-VarHandle-independent-field-ambiguous");
+    request.fields[n]=field.strong_global_field;
+   }
+  if(!request.fields[n]||!inputs.FieldVarHandles()[n])
+   return Fail(error,"source-field-VarHandle-independent-input-unavailable");
+ }
+ if(runnable_executor::WithOriginalScope(env,inputs.Anchor(),ObserveFieldHandles,&request)!=runnable_jni::Result::kSuccess||
+    !request.completed||env->ExceptionCheck())return Fail(error,"source-field-VarHandle-original-target-collection-refused");
+ if(!retirement::InstallFieldVarHandleGuards(hooks_,env,request.oracles,retired_fields_,error)||
+    !inputs.ExerciseFieldHandles(env,error))return false;
+ return retirement::FieldVarHandleGuardsReady(retired_fields_)||
+  Fail(error,"source-field-VarHandle-original-Access-targets-not-observed");
 }
 bool SourceCalibration::InstallReceiverEvents(const runnable_jni::Context&actual,void*raw){
  auto&r=*static_cast<ReceiverEvents*>(raw);auto&owner=r.owner;size_t extent=0;

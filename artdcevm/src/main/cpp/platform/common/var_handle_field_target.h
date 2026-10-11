@@ -14,15 +14,13 @@ inline constexpr char kAccess[]="_ZN3art6mirror9VarHandle6AccessENS1_10AccessMod
 inline constexpr char kVisit[]="_ZN3art6mirror14FieldVarHandle11VisitTargetEPNS_22ReflectiveValueVisitorE";
 inline constexpr char kCurrent[]="_ZN3art6Thread14CurrentFromGdbEv";
 struct Declarations {
-  void *access=nullptr,*current=nullptr,*construct=nullptr,*destroy=nullptr,*visit=nullptr,*decode=nullptr;
+  void *access=nullptr,*current=nullptr,*visit=nullptr,*decode=nullptr;
   bool Resolve(HookEngine& hooks){
     access=hooks.FindSymbol("libart.so",kAccess);current=hooks.FindSymbol("libart.so",kCurrent);
-    construct=hooks.FindSymbol("libart.so",abi::common::kSuspendConstruct);
-    destroy=hooks.FindSymbol("libart.so",abi::common::kSuspendDestroy);
     visit=hooks.FindSymbol("libart.so",kVisit);
     decode=hooks.FindSymbol("libart.so",abi::arm64::android14::kDecodeGlobalJObject);
     if(!decode)decode=hooks.FindSymbol("libart.so",abi::arm64::android11::kDecodeJObject);
-    return access&&current&&construct&&destroy&&decode;
+    return access&&current&&decode;
   }
 };
 // Fixed mirror/var_handle.h + managed VarHandle: Object, three Class

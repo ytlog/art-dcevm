@@ -133,6 +133,13 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   fields_.push_back({root,field_names_.back().c_str(),field_types_.back().c_str(),uint32_t(flags),found->second->dex_index});expected_fields.erase(found);
  }
  if(!expected_fields.empty()||env->ExceptionCheck())return false;
+ const char*handle_names[]{"instanceHandle","staticHandle"};
+ for(size_t n=0;n<field_var_handles_.size();++n){
+  auto id=env->GetFieldID(static_cast<jclass>(type.value),handle_names[n],"Ljava/lang/invoke/VarHandle;");
+  Local handle{env,id?env->GetObjectField(input_,id):nullptr};
+  field_var_handles_[n]=Own(env,handle.value);
+  if(!field_var_handles_[n])return Fail(error,"calibration-input-field-VarHandle-unavailable");
+ }
  if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error)||
     !LoadReceiver(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
@@ -155,6 +162,17 @@ bool CalibrationInputs::InvokeReceiver(JNIEnv*env,size_t index,bool*matched,std:
  if(env->ExceptionCheck())return false;
  constexpr jint expected[]{11,31,21,41,41,61,51,71,31,51};
  *matched=result==expected[index];return true;
+}
+bool CalibrationInputs::ExerciseFieldHandles(JNIEnv*env,std::string*error)const{
+ JavaVM*vm=nullptr;
+ if(!env||env->ExceptionCheck()||!bootstrap_||!input_||env->GetJavaVM(&vm)!=JNI_OK||
+    vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-field-handle-exercise-invalid-caller");
+ auto run=env->GetStaticMethodID(bootstrap_,"exerciseFieldHandles","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;)Z");
+ if(!run||env->ExceptionCheck())return false;
+ const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_)==JNI_TRUE;
+ if(env->ExceptionCheck())return false;
+ return matched||Fail(error,"calibration-input-field-handle-public-readback-differs");
 }
 bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  std::string ignored;if(!error)error=&ignored;

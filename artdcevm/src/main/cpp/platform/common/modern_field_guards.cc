@@ -12,7 +12,6 @@
 #include "platform/common/modern_field_metadata.h"
 #include <memory>
 #include "platform/common/jni_field_dispatch.h"
-#include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <cstdlib>
 #include <type_traits>
@@ -385,6 +384,7 @@ bool InstallMethodHandleFieldGuards(HookEngine&,std::string* error){
 }
 bool InstallFieldVarHandleGuards(HookEngine& hooks,JNIEnv* env,
     const std::vector<FieldVarHandleOracle>& oracles,RetiredFieldRegistry& registry,std::string* error){
+  std::string ignored;if(!error)error=&ignored;
   if(vars_installed&&vars.registry!=&registry){*error="VarHandle guards already owned by another registry";return false;}
   if(!installed||state.registry!=&registry||!env||env->ExceptionCheck()||
       oracles.size()<2||oracles.size()>63){*error="VarHandle guards require complete same field owner and independent rooted oracles";return false;}
@@ -397,9 +397,8 @@ bool InstallFieldVarHandleGuards(HookEngine& hooks,JNIEnv* env,
       !vars.reader||vars.reader->Visitor()!=visit||reinterpret_cast<void*>(vars.decode_class)!=declarations.decode)) {
     *error="VarHandle named declarations disagree with the durable owner";return false;
   }
-  using namespace abi::common;
-  auto construct=reinterpret_cast<SuspendConstruct>(declarations.construct);
-  auto destroy=reinterpret_cast<SuspendDestroy>(declarations.destroy);
+  exclusive_owned_roots::Service exclusive;
+  if(!exclusive_owned_roots::Service::Bind(hooks,&exclusive,error))return false;
   jclass base=env->FindClass("java/lang/invoke/FieldVarHandle");
   jclass field=base?env->FindClass("java/lang/reflect/Field"):nullptr;
   jclass list=field?env->FindClass("java/util/List"):nullptr;
@@ -422,7 +421,9 @@ bool InstallFieldVarHandleGuards(HookEngine& hooks,JNIEnv* env,
   if(!metadata.Bind(hooks,error))return false;
   const auto decode_class=reinterpret_cast<abi::arm64::android11::DecodeJObject>(declarations.decode);
   struct Roots {JNIEnv* env;std::vector<jobject> values;~Roots(){for(auto value:values)if(value)env->DeleteGlobalRef(value);}
-    jobject Add(jobject value){jobject root=value?env->NewGlobalRef(value):nullptr;if(root)values.push_back(root);return root;}
+    jobject Add(jobject value){
+      jobject root=value?env->NewGlobalRef(value):nullptr;
+      if(root){try{values.push_back(root);}catch(...){env->DeleteGlobalRef(root);throw;}}return root;}
     void Keep(jobject value){for(auto& root:values)if(root==value){root=nullptr;return;}}} roots{env,{}};
   jobject instance_class=nullptr,static_class=nullptr;
   auto reader=std::make_unique<var_handle_field::Reader>(visit);
@@ -492,25 +493,36 @@ bool InstallFieldVarHandleGuards(HookEngine& hooks,JNIEnv* env,
   if(runnable_executor::With(env,other,ProbeOtherClass,&other_probe)!=runnable_jni::Result::kSuccess){
     *error="Native VarHandle Class reader disagrees with independent public non-field Class";return false;
   }
-  SuspendAll stopped{};construct(&stopped,"artdcevm VarHandle field guard installation",false);
-  struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
-  // Every preparation proves the current rooted instance/static pair readonly.
-  // Publish a fresh proof epoch only after all public/JNI/native checks pass.
-  // The suspended durable owner keeps its sole original Access trampoline.
-  if(!vars_installed) {
-    void* token=hooks.Install(target,reinterpret_cast<void*>(VarAccess),&original_var_access,error);
-    if(!token)return false;
-    if(!original_var_access)std::abort();
-  }
-  vars.reader=std::move(reader);vars.registry=&registry;vars.current=current;vars.access_target=target;
-  vars.complete=(uint64_t{1}<<oracles.size())-1;vars.observed.store(0);
-  vars.metadata=metadata;vars.decode_class=decode_class;
-  // Same boot Classes keep their existing process roots; new preparation roots
-  // remain temporary. Never replace/release a live root under SuspendAll.
-  if(!vars_installed){vars.instance_class=instance_class;vars.static_class=static_class;roots.Keep(instance_class);roots.Keep(static_class);}
-  vars.entries.store(0);vars.field_entries.store(0);vars.other_entries.store(0);vars.target_seen.store(0);
-  vars.original_true.store(0);vars.original_false.store(0);vars.context_failures.store(0);vars.class_failures.store(0);
-  ++vars.generation;vars_installed=true;return true;
+  // Recheck Native/Runnable ownership and reload all public Class roots in the
+  // shared exclusive service. No decoded Class crosses this possible GC boundary.
+  bool published=false;
+  auto install=[&](const exclusive_owned_roots::Context&actual){
+    if(!actual.self||actual.self!=current()||actual.count!=3||!actual.roots||
+       !actual.roots[0]||!actual.roots[1]||!actual.roots[2])return false;
+    // Every preparation proves the current rooted instance/static pair readonly.
+    // Publish a fresh proof epoch only after all public/JNI/native checks pass.
+    // The suspended durable owner keeps its sole original Access trampoline.
+    if(!vars_installed) {
+      void* token=hooks.Install(target,reinterpret_cast<void*>(VarAccess),&original_var_access,error);
+      if(!token)return false;
+      if(!original_var_access)std::abort();
+    }
+    vars.reader=std::move(reader);vars.registry=&registry;vars.current=current;vars.access_target=target;
+    vars.complete=(uint64_t{1}<<oracles.size())-1;vars.observed.store(0);
+    vars.metadata=metadata;vars.decode_class=decode_class;
+    // Same boot Classes keep their existing process roots; new preparation roots
+    // remain temporary. No JNI root is released in the exclusive callback.
+    if(!vars_installed){vars.instance_class=instance_class;vars.static_class=static_class;roots.Keep(instance_class);roots.Keep(static_class);}
+    vars.entries.store(0);vars.field_entries.store(0);vars.other_entries.store(0);vars.target_seen.store(0);
+    vars.original_true.store(0);vars.original_false.store(0);vars.context_failures.store(0);vars.class_failures.store(0);
+    ++vars.generation;vars_installed=true;published=true;return true;
+  };
+  const jobject binding_roots[]{instance_class,static_class,other_class};
+  const bool stopped=exclusive.With(env,binding_roots,3,
+    [](const exclusive_owned_roots::Context&actual,void*raw){
+      return (*static_cast<decltype(install)*>(raw))(actual);
+    },&install,error);
+  return stopped&&published&&!env->ExceptionCheck();
 }
 FieldVarHandleGuardDiagnostics InspectFieldVarHandleGuards(const RetiredFieldRegistry& registry){
   return {vars_installed,vars.registry==&registry,vars.reader&&vars.reader->Prepared(),

@@ -84,8 +84,7 @@ int main(){
   assert(fixed.Target(&first)==&field_a&&fixed.Target(&second)==&field_b);
   assert(!std::memcmp(&first,&saved_first,sizeof(first))&&!std::memcmp(&second,&saved_second,sizeof(second)));
   Hook hook;Declarations declarations;assert(declarations.Resolve(hook)&&declarations.visit);assert(hook.installs==0);
-  const char* required[]={kAccess,kCurrent,artdcevm::abi::common::kSuspendConstruct,
-      artdcevm::abi::common::kSuspendDestroy};
+  const char* required[]={kAccess,kCurrent};
   for(const auto* missing:required){hook.missing=missing;assert(!declarations.Resolve(hook));assert(hook.installs==0);}
   hook.missing.clear();hook.no_decode=true;assert(!declarations.Resolve(hook));hook.no_decode=false;
   hook.missing=kVisit;assert(declarations.Resolve(hook)&&!declarations.visit);
