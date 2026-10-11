@@ -1,25 +1,32 @@
 #pragma once
 #include "platform/common/native_call_graph_inventory.h"
 #include "platform/common/native_call_graph_stack.h"
+#include "platform/common/native_call_graph_replacement.h"
 
 namespace artdcevm::native_call_graph_execution {
-// One synchronous operation over the installed BEFORE graph. Incoming DEX,
-// replacement Classes and newly allocated ArtMethods are not covered. A future
-// mutation owner must independently retain/revalidate their union selection.
+// One synchronous operation over the installed BEFORE graph and, after original
+// class loading, all supplied replacement bodies. Replacement inspection does
+// not yet prove their outgoing resolution or the BEFORE/incoming union closure.
 // These results describe installed selected compiled carriers and independent
 // native-boundary obligations, never schema completion, GC/publication rights
-// or future interpreter coverage of replacement methods.
+// or complete interpretation coverage of the replacement call graph.
 enum class Status {
  Empty, Prepared, PreparationRefused, UnsupportedIncompleteGraph,
  UnsupportedEmptySelection, InspectionRefused, UnsupportedActiveCompiled,
- InspectedDrained, FinalRefused, FinalDrained
+ InspectedDrained, ReplacementPrepared, ReplacementInspectedDrained,
+ FinalRefused, FinalDrained
 };
-enum class GraphScope {InstalledBeforeOnly};
+enum class GraphScope {InstalledBeforeOnly,InstalledBeforeAndReplacementBodies};
 struct Report {
  GraphScope scope=GraphScope::InstalledBeforeOnly;
  Status status=Status::Empty;
  native_selective_interpretation::Report activation{};
  native_call_graph_stack::Report inspected{},final{};
+ native_selective_interpretation::Report replacement_activation{};
+ native_call_graph_stack::Report replacement_inspected{};
+ native_call_graph_stack::Report before_reinspected{};
+ size_t replacement_classes=0;
+ bool replacement_bodies_drained=false;
  size_t graph_native_boundaries=0;
  bool compiled_drained=false,native_boundary_obligations=false;
  const char*failure=nullptr;
@@ -43,9 +50,22 @@ class Execution final {
   receiver_guard::SourceProducer&,const method_identity::Calibration&,
   const modern_field_metadata::FieldMetadata&,stack_visitor_service::Declaration,
   std::string*error,const native_call_graph_super::Resolver*super_resolver=nullptr);
+ // Same original Runnable/source loading operation, after BEFORE inspection
+ // and every original FinishClassAllocations. Definitions must cover exactly
+ // every Class in graph's structural partitions. Roots and input inventories
+ // must outlive this Execution. Calibrations are borrowed from Prepare; no
+ // owner calibration is attempted inside the class-loading pause.
+ bool PrepareReplacements(HookEngine&,const runnable_jni::Context&,jvmtiEnv*,
+  const native_source_class_loading::Run&,const void*driver,
+  const native_owned_removal::RootedGraph&,
+  const std::vector<native_call_graph_replacement::Definition>&,
+  bounded_managed_roots::Store&,std::string*);
  // Exactly one actual scoped inspection. All paths return after Session cleanup
  // has resumed the world. A selected quick/inline carrier is an explicit refusal;
  // no retry, sleep, drain loop, or inference from deoptimized entrypoints exists.
+ // After PrepareReplacements this also validates/activates all new bodies and
+ // rescans both selections. ReplacementInspectedDrained is a body-selection
+ // fact only; ValidateFinal refuses it until complete union proof is integrated.
  Report InspectActivation(size_t self_extent,const modern_field_metadata::ReadContext&)noexcept;
  // Caller supplies its actual same-operation source pause and current snapshot.
  // FinalDrained means only the same installed-before selection is drained at
@@ -57,13 +77,16 @@ class Execution final {
  // True only inside this operation's private actual Inspect callback. The
  // caller may use this as a read-only snapshot guard, never mutation permission.
  bool InspectionStopped()const noexcept {
-  return phase_==Phase::Inspecting&&inspection_stop_&&inspection_stop_->IsStopped(self_);
+  return (phase_==Phase::Inspecting||phase_==Phase::ReplacementInspecting)&&
+   inspection_stop_&&inspection_stop_->IsStopped(self_);
  }
  const Report&LastReport()const noexcept{return report_;}
  const native_call_graph_inventory::Inventory&Inventory()const noexcept{return inventory_;}
  const native_selective_interpretation::Service&Selection()const noexcept{return selection_;}
+ const native_call_graph_replacement::Batch&Replacements()const noexcept{return replacements_;}
  private:
- enum class Phase {Empty,Preparing,Prepared,Inspecting,Inspected,Finalized,Refused};
+ enum class Phase {Empty,Preparing,Prepared,Inspecting,Inspected,
+  ReplacementPreparing,ReplacementPrepared,ReplacementInspecting,ReplacementInspected,Finalized,Refused};
  static bool Inspect(void*,native_source_stop::Session&)noexcept;
  bool SameGeneration()const noexcept;
  bool RefusePrepare(Status,const char*,std::string*);
@@ -73,6 +96,12 @@ class Execution final {
  native_selective_interpretation::Service selection_;
  native_call_graph_stack::Service stack_;
  native_call_graph_stack::Service::Prepared stack_prepared_;
+ native_call_graph_replacement::Batch replacements_;
+ native_selective_interpretation::Service replacement_selection_;
+ native_call_graph_stack::Service::Prepared replacement_stack_;
+ const method_identity::Calibration*methods_=nullptr;
+ const modern_field_metadata::FieldMetadata*metadata_=nullptr;
+ const receiver_guard::SourceProducer*source_=nullptr;
  const bounded_managed_roots::Store*roots_=nullptr;uint64_t generation_=0;
  void*self_=nullptr;const modern_field_metadata::ReadContext*inspection_read_=nullptr;
  const native_source_stop::Session*inspection_stop_=nullptr;

@@ -2,7 +2,7 @@
 from pathlib import Path
 import hashlib,struct,zlib
 
-def write(directory:Path,incoming_extra=False,abstract_keep=False)->Path:
+def write(directory:Path,incoming_extra=False,abstract_keep=False,native_all=False)->Path:
     method_names=['gone','keep']+(['newKeep'] if incoming_extra else [])+['staticKeep']
     strings=sorted(['I','LFixture;','Ljava/lang/Object;','number','value','left','right']+method_names)
     types=sorted(['I','LFixture;','Ljava/lang/Object;']);sid={s:i for i,s in enumerate(strings)};tid={s:i for i,s in enumerate(types)}
@@ -31,9 +31,9 @@ def write(directory:Path,incoming_extra=False,abstract_keep=False)->Path:
     for group in ([x for x in enumerate(fields) if x[1][2]&8],[x for x in enumerate(fields) if not x[1][2]&8]):
         previous=0
         for index,(_,_,flags) in group:b.extend(leb(index-previous)+leb(flags));previous=index
-    if incoming_extra:b.extend(leb(2)+leb(9)+leb(extra)+leb(1)+leb(9)+leb(static))
-    else:b.extend(leb(2)+leb(9)+leb(static))
-    b.extend(leb(0)+leb(0x101)+leb(0));b.extend(leb(1)+leb(0x401 if abstract_keep else 1)+leb(0 if abstract_keep else keep))
+    if incoming_extra:b.extend(leb(2)+leb(0x109 if native_all else 9)+leb(0 if native_all else extra)+leb(1)+leb(0x109 if native_all else 9)+leb(0 if native_all else static))
+    else:b.extend(leb(2)+leb(0x109 if native_all else 9)+leb(0 if native_all else static))
+    b.extend(leb(0)+leb(0x101)+leb(0));b.extend(leb(1)+leb(0x101 if native_all else 0x401 if abstract_keep else 1)+leb(0 if abstract_keep or native_all else keep))
     struct.pack_into('<8I',b,ca,tid['LFixture;'],0x401 if abstract_keep else 1,tid['Ljava/lang/Object;'],0,0xffffffff,0,cd,0)
     parent_cd=len(b);b.extend(bytes([0,0,0,1])+leb(len(method_names))+leb(1)+leb(parent_code))
     struct.pack_into('<8I',b,ca+32,tid['Ljava/lang/Object;'],1,0xffffffff,0,0xffffffff,0,parent_cd,0)

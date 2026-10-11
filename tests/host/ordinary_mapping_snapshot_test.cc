@@ -49,6 +49,11 @@ int main(int argc,char** argv){
  {
   ScopedReadableMappings scope;assert(scope.Ready());
   const auto captured=MappingOsQueries();assert(captured>before);
+  bool(*read_context)(void*,const void*,size_t*)=ScopedReadableMappings::ReadExtent;
+  assert(read_context(&scope,classes.data(),&extent)&&extent>=256);
+  extent=99;assert(!read_context(nullptr,classes.data(),&extent)&&!extent);
+  extent=99;assert(!read_context(&scope,reinterpret_cast<void*>(1),&extent)&&!extent);
+  assert(!read_context(&scope,classes.data(),nullptr));
   for(size_t count:{size_t(30000),size_t(60000)})for(size_t i=0;i<count;++i){
    const auto*address=classes.data()+i*256;
    for(int read=0;read<21;++read)assert(scope.Extent(address,&extent)&&extent>=256);
@@ -60,9 +65,12 @@ int main(int argc,char** argv){
   {
    ScopedReadableMappings nested;assert(nested.Ready());auto count=MappingOsQueries();
    assert(!scope.Extent(classes.data(),&extent));
+   assert(!read_context(&scope,classes.data(),&extent));
+   assert(read_context(&nested,classes.data(),&extent));
    assert(nested.Extent(classes.data(),&extent));assert(MappingOsQueries()==count);
   }
   assert(scope.Extent(classes.data(),&extent));
+  assert(read_context(&scope,classes.data(),&extent));
  }
  // A fresh traversal captures after a possible safepoint; it does not retain
  // the previous snapshot or reuse a negative lookup from an earlier window.

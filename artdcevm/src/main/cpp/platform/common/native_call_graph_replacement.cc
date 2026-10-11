@@ -49,7 +49,7 @@ bool Binding::Stage(HookEngine&hooks,const runnable_jni::Context&context,jvmtiEn
  root_=reinterpret_cast<RootBarrier>(hooks.FindSymbol("libart.so","artReadBarrierForRootSlow"));
  method_identity::ScopedReadableMappings mappings;
  if(!mappings.Ready())return deny("call-graph-replacement-current-mappings-unavailable");
- modern_field_metadata::ReadContext read{&mappings,[](void*p,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(p)->Extent(address,extent);}};
+ modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
  void*klass=nullptr;
  if(!root_||!metadata.Calibrated()||!roots.Read(new_class_,&klass)||!HolderArrays(read))
   return deny("call-graph-replacement-original-native-Holder-arrays-refused");
@@ -79,7 +79,7 @@ bool Binding::Stage(HookEngine&hooks,const runnable_jni::Context&context,jvmtiEn
  prepared_=true;if(error)error->clear();return true;
 }
 bool Binding::HolderArrays(const modern_field_metadata::ReadContext&read)const noexcept{
- if(!roots_||roots_->Generation()!=generation_||!loading_||!loading_->OwnsDriver(driver_)||
+ if(!roots_||roots_->Generation()!=generation_||!loading_||native_source_class_loading::Run::Current()!=loading_||!loading_->OwnsDriver(driver_)||
     !loading_->OwnsFinishedHolder(holder_,owner_count_)||!root_||!metadata_||
     !Mapped(read,holder_,sizeof(transaction_root::Holder)))return false;
  transaction_root::Holder holder{};
@@ -125,5 +125,64 @@ bool Binding::Check(const modern_field_metadata::ReadContext&read)const noexcept
 }
 bool Binding::Validate(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
  return prepared_&&stop.IsStopped(self_)&&Check(read)&&stop.IsStopped(self_);
+}
+bool Batch::Stage(HookEngine&hooks,const runnable_jni::Context&context,jvmtiEnv*ti,
+ const native_source_class_loading::Run&loading,const void*driver,
+ const native_owned_removal::RootedGraph&graph,const std::vector<Definition>&definitions,
+ bounded_managed_roots::Store&roots,const modern_field_metadata::FieldMetadata&metadata,
+ const method_identity::Calibration&methods,const receiver_guard::SourceProducer&source,std::string*error){
+ const auto deny=[&](const char*why){if(error)*error=why;return false;};
+ if(attempted_)return deny("call-graph-replacement-batch-repeated-stage");attempted_=true;
+ if(!runnable_jni::Bridge::BorrowOriginalScope(context)||!loading.OwnsDriver(driver)||
+    !loading.OwnsFinishedHolder(graph.holder,graph.metadata.count)||graph.partitions.empty())
+  return deny("call-graph-replacement-batch-original-Holder-unavailable");
+ std::vector<std::vector<bool>>covered;std::unordered_map<size_t,size_t>owners;
+ size_t count=0;
+ for(const auto&p:graph.partitions){
+  if(!p.class_count||p.class_count>size_t(INT32_MAX)||p.holder_index>=graph.metadata.count||
+     !owners.emplace(p.holder_index,covered.size()).second||p.class_count>SIZE_MAX-count)
+   return deny("call-graph-replacement-batch-partition-shape-invalid");
+  covered.emplace_back(p.class_count,false);count+=p.class_count;
+ }
+ if(count!=definitions.size())return deny("call-graph-replacement-batch-incoming-coverage-incomplete");
+ for(const auto&d:definitions){
+  if(!d.incoming||!d.incoming->Schema()||d.partition>=covered.size()||
+     d.class_index>=covered[d.partition].size()||covered[d.partition][d.class_index])
+   return deny("call-graph-replacement-batch-definition-ambiguous");
+  covered[d.partition][d.class_index]=true;
+ }
+ for(const auto&d:definitions){auto binding=std::make_unique<Binding>();
+  if(!binding->Stage(hooks,context,ti,loading,driver,graph,d.partition,d.class_index,*d.incoming,
+                    roots,metadata,methods,source,error))return false;
+  bindings_.push_back(std::move(binding));
+ }
+ // No JNI after this snapshot. Recheck earlier bindings after later roots were
+ // staged, rather than trusting a managed address retained across those calls.
+ method_identity::ScopedReadableMappings mappings;
+ if(!mappings.Ready())return deny("call-graph-replacement-batch-current-mappings-unavailable");
+ modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
+ std::unordered_map<void*,bool>classes,native;
+ for(const auto&b:bindings_){void*old=nullptr;void*replacement=nullptr;
+  if(!b->Check(read)||!roots.Read(b->old_class_,&old)||!roots.Read(b->new_class_,&replacement)||
+     !classes.emplace(old,false).second||!classes.emplace(replacement,true).second)
+   return deny("call-graph-replacement-batch-Class-alias-or-fresh-binding-refused");
+  for(const auto&m:b->declared_)if(!native.emplace(m.method,true).second)
+   return deny("call-graph-replacement-batch-native-method-alias-refused");
+  selection_.insert(selection_.end(),b->Selection().begin(),b->Selection().end());
+ }
+ roots_=&roots;generation_=roots.Generation();prepared_=true;if(error)error->clear();return true;
+}
+bool Batch::Validate(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
+ if(!prepared_||!roots_||roots_->Generation()!=generation_)return false;
+ for(size_t i=0;i<bindings_.size();++i){const auto&b=*bindings_[i];
+  if(!b.Validate(stop,read))return false;
+  void*old=nullptr;void*replacement=nullptr;
+  if(!roots_->Read(b.old_class_,&old)||!roots_->Read(b.new_class_,&replacement))return false;
+  for(size_t j=0;j<i;++j){void*other_old=nullptr;void*other_new=nullptr;
+   if(!roots_->Read(bindings_[j]->old_class_,&other_old)||!roots_->Read(bindings_[j]->new_class_,&other_new)||
+      old==other_old||old==other_new||replacement==other_old||replacement==other_new)return false;
+  }
+ }
+ return true;
 }
 }

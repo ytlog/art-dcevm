@@ -29,6 +29,7 @@ class Binding final {
  const std::vector<native_selective_interpretation::Method>&Selection()const noexcept{return prepared_?selection_:empty_;}
  size_t DeclaredCount()const noexcept{return prepared_?declared_.size():0;}
  private:
+ friend class Batch;
  struct Declared {void*method=nullptr;uint32_t index=UINT32_MAX,flags=0;bool body=false;};
  bool Check(const modern_field_metadata::ReadContext&)const noexcept;
  bool HolderArrays(const modern_field_metadata::ReadContext&)const noexcept;
@@ -43,5 +44,29 @@ class Binding final {
  method_metadata::Layout layout_{};void*array_=nullptr;
  std::vector<Declared>declared_;std::vector<native_selective_interpretation::Method>selection_;const std::vector<native_selective_interpretation::Method>empty_{};
  bool attempted_=false,prepared_=false;
+};
+struct Definition {
+ size_t partition=SIZE_MAX,class_index=SIZE_MAX;
+ const native_call_graph_incoming::Inventory*incoming=nullptr;
+};
+// All Classes in the supplied structural Holder partitions, exactly once.
+// This batch owns bindings, not the caller's roots or incoming byte inventories.
+// Complete binding is deliberately distinct from a complete union call graph.
+class Batch final {
+ public:
+ bool Stage(HookEngine&,const runnable_jni::Context&,jvmtiEnv*,
+  const native_source_class_loading::Run&,const void*driver,
+  const native_owned_removal::RootedGraph&,const std::vector<Definition>&,
+  bounded_managed_roots::Store&,const modern_field_metadata::FieldMetadata&,
+  const method_identity::Calibration&,const receiver_guard::SourceProducer&,std::string*);
+ bool Validate(const native_source_stop::Session&,const modern_field_metadata::ReadContext&)const noexcept;
+ const std::vector<native_selective_interpretation::Method>&Selection()const noexcept{return prepared_?selection_:empty_;}
+ size_t ClassCount()const noexcept{return prepared_?bindings_.size():0;}
+ const bounded_managed_roots::Store*RootStore()const noexcept{return prepared_?roots_:nullptr;}
+ private:
+ std::vector<std::unique_ptr<Binding>>bindings_;
+ std::vector<native_selective_interpretation::Method>selection_,empty_;
+ const bounded_managed_roots::Store*roots_=nullptr;
+ uint64_t generation_=0;bool attempted_=false,prepared_=false;
 };
 }

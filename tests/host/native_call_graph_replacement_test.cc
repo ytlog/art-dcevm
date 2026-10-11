@@ -1,11 +1,22 @@
 #include "native_call_graph_execution_fixture.h"
 #include "platform/common/native_call_graph_replacement.h"
 int main(int argc,char**argv){
- assert(argc==4);const bool abstract=std::string(argv[3])=="abstract";const size_t selected=abstract?3:4;std::string error;
+ assert(argc==4);const std::string scenario=argv[3];const bool abstract=scenario=="abstract";const bool native_all=scenario=="native-only";const size_t selected=native_all?1:abstract?3:4;std::string error;
  drain_fixture::Environment environment;environment.Prepare(error);execution_fixture::Hooks hooks;
  jvmtiInterface_1 functions{};jvmtiEnv ti{&functions};native_schema_guard_verifier::Bindings bindings{};
  execution_fixture::Configure(environment,functions,bindings,argv[1]);
  receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kStandard,environment.metadata,&linker,Current,&error,&::runtime));
+ assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
+ native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
+ assert(verifier.Stage(&env,&ti,affected,bindings,&error));
+ native_call_graph_execution::Execution operation(environment.source,environment.threads);
+ struct Before {native_call_graph_execution::Execution&operation;execution_fixture::Hooks&hooks;jvmtiEnv&ti;std::vector<jclass>&affected;native_schema_guard_verifier::Verifier&verifier;receiver_guard::SourceProducer&source;drain_fixture::Environment&environment;std::string&error;}before{operation,hooks,ti,affected,verifier,source,environment,error};
+ assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),[](const runnable_jni::Context&ctx,void*p){auto&r=*static_cast<Before*>(p);return r.operation.Prepare(r.hooks,&env,&r.ti,r.affected,ctx,r.verifier,r.source,r.environment.model,r.environment.metadata,stack_visitor_service::Declaration::kAndroid13To16,&r.error);},&before)==runnable_jni::Result::kSuccess);
+ ExplicitMappings before_maps;before_maps.Cover(heap.base);before_maps.Cover(execution_fixture::dex.data());modern_field_metadata::ReadContext before_read{&before_maps,ExplicitMappings::Extent};execution_fixture::stopped_read=&before_read;
+ drain_fixture::frames[0]={{execution_fixture::MethodAt(1),true}};drain_fixture::frames[1]={{execution_fixture::MethodAt(2),true}};drain_fixture::frames[2]={{nullptr,false}};
+ assert(operation.InspectActivation(thread.size(),before_read).status==native_call_graph_execution::Status::InspectedDrained);
+ // The independent leaf selection remains a comparison check below. Its owner
+ // must also be calibrated before entering the original loading pause.
  native_selective_interpretation::Service selection;assert(selection.CalibrateOwner(hooks,&env,&error));
  auto incoming_bytes=File(argv[2]);native_call_graph_incoming::Inventory incoming;
  assert(incoming.Capture(incoming_bytes,0,"LFixture;",&error));
@@ -19,7 +30,7 @@ int main(int argc,char**argv){
  uint32_t counts[4];for(auto&n:counts)n=leb();for(size_t i=0;i<counts[0]+counts[1];++i){leb();leb();}
  std::array<uint32_t,4>offsets{};for(unsigned kind=2;kind<4;++kind){uint32_t index=0;for(size_t i=0;i<counts[kind];++i){index+=leb();leb();offsets[index]=leb();}}
  for(size_t n=0;n<4;++n){auto*m=reinterpret_cast<abi::arm64::android12::Method12*>(array+8+32*n);const auto index=order[n];
-  native[index]=m;m->declaring_class=uint32_t(uintptr_t(new_class));m->dex_method_index=index;m->access_flags=index==0?0x101:index==1?(abstract?0x501:1):9;m->data=offsets[index]?uintptr_t(incoming_bytes.data()+offsets[index]):uintptr_t(&binding_value);}
+  native[index]=m;m->declaring_class=uint32_t(uintptr_t(new_class));m->dex_method_index=index;m->access_flags=index==0?0x101:index==1?(native_all?0x101:abstract?0x501:1):(native_all?0x109:9);m->data=offsets[index]?uintptr_t(incoming_bytes.data()+offsets[index]):uintptr_t(&binding_value);}
  auto old_array=reinterpret_cast<jobjectArray>(Array({old_class}));auto new_array=reinterpret_cast<jobjectArray>(Array({new_class}));
  std::vector<void*>holder_slots(13);holder_slots[11]=old_array;holder_slots[12]=new_array;
  void*root_array=Array(holder_slots);uint32_t array_handle=uint32_t(uintptr_t(root_array));
@@ -55,6 +66,33 @@ int main(int argc,char**argv){
  auto result=execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),callback,&request);
  if(result!=runnable_jni::Result::kSuccess){std::cerr<<"Actual replacement Stage: "<<error<<"\n";return 2;}
  assert(replacement.DeclaredCount()==4&&replacement.Selection().size()==selected-1);
+ const std::vector<native_call_graph_replacement::Definition>definitions{{0,0,&incoming}};
+ struct BatchRequest {native_call_graph_replacement::Batch&batch;Request&request;const std::vector<native_call_graph_replacement::Definition>&definitions;} ;
+ const auto batch_callback=[](const runnable_jni::Context&ctx,void*p){auto&b=*static_cast<BatchRequest*>(p);auto&r=b.request;return b.batch.Stage(r.hooks,ctx,&r.ti,r.loading,r.driver,r.graph,b.definitions,r.environment.store,r.environment.metadata,r.environment.model,r.source,&r.error);};
+ for(const auto&bad:std::vector<std::vector<native_call_graph_replacement::Definition>>{{},{{0,1,&incoming}},{{0,0,nullptr}},{{0,0,&incoming},{0,0,&incoming}}}){
+  native_call_graph_replacement::Batch rejected;BatchRequest sample{rejected,request,bad};
+  assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),batch_callback,&sample)!=runnable_jni::Result::kSuccess);
+  assert(rejected.Selection().empty()&&!rejected.ClassCount());
+ }
+ // Exercise complete-slot coverage and failure after a first binding actually
+ // succeeded. Even a supplied graph with duplicate Class roots cannot publish.
+ auto repeated=graph;repeated.partitions[0].class_count=2;
+ auto repeated_old=reinterpret_cast<jobjectArray>(Array({old_class,old_class}));
+ auto repeated_new=reinterpret_cast<jobjectArray>(Array({new_class,new_class}));
+ repeated.partitions[0].old_classes=repeated_old;repeated.partitions[0].new_classes=repeated_new;
+ Put32(root_array,12+11*4,uint32_t(uintptr_t(repeated_old)));Put32(root_array,12+12*4,uint32_t(uintptr_t(repeated_new)));
+ native_call_graph_incoming::Inventory incompatible;assert(incompatible.Capture(execution_fixture::dex,0,"LFixture;",&error));
+ for(const auto&candidate:std::vector<std::vector<native_call_graph_replacement::Definition>>{
+   {{0,0,&incoming},{0,0,&incoming}},{{0,0,&incoming},{0,1,&incoming}},{{0,0,&incoming},{0,1,&incompatible}}}){
+  native_call_graph_replacement::Batch rejected;
+  Request sample_request{replacement,hooks,ti,loading,&driver,repeated,incoming,environment,source,error};BatchRequest sample{rejected,sample_request,candidate};
+  assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),batch_callback,&sample)!=runnable_jni::Result::kSuccess);
+  assert(!rejected.ClassCount()&&rejected.Selection().empty());
+ }
+ Put32(root_array,12+11*4,uint32_t(uintptr_t(old_array)));Put32(root_array,12+12*4,uint32_t(uintptr_t(new_array)));
+ struct ReplacementRequest {native_call_graph_execution::Execution&operation;Request&request;const std::vector<native_call_graph_replacement::Definition>&definitions;}coordinator{operation,request,definitions};
+ assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),[](const runnable_jni::Context&ctx,void*p){auto&b=*static_cast<ReplacementRequest*>(p);auto&r=b.request;return b.operation.PrepareReplacements(r.hooks,ctx,&r.ti,r.loading,r.driver,r.graph,b.definitions,r.environment.store,&r.error);},&coordinator)==runnable_jni::Result::kSuccess);
+ assert(operation.Replacements().ClassCount()==1&&operation.Replacements().Selection().size()==selected-1);
  if(abstract)for(const auto&m:replacement.Selection())assert(m.method!=native[1]);
  for(const auto&m:replacement.Selection())assert(m.method==native[m.dex_index]&&m.method!=execution_fixture::MethodAt(m.dex_index));
  std::vector<native_selective_interpretation::Method>combined{{execution_fixture::MethodAt(1),environment.root,environment.root,1,1}};
@@ -62,14 +100,45 @@ int main(int argc,char**argv){
  assert(selection.Prepare(hooks,environment.model,environment.metadata,environment.store,combined.data(),combined.size(),&error));
  native_call_graph_stack::Service stack;native_call_graph_stack::Service::Prepared stack_prepared;
  assert(stack.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,&error)&&stack.Prepare(selection,&stack_prepared,&error));
- drain_fixture::frames[0]={{execution_fixture::MethodAt(1),true},{native[2],true}};
- drain_fixture::frames[1]={{native[3],true}};drain_fixture::frames[2]={{nullptr,false}};
+ drain_fixture::frames[0]={{execution_fixture::MethodAt(1),true},{native[2],!native_all}};
+ drain_fixture::frames[1]={{native[3],!native_all}};drain_fixture::frames[2]={{nullptr,false}};
  ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(execution_fixture::dex.data());maps.Cover(incoming_bytes.data());maps.Cover(&holder);
  modern_field_metadata::ReadContext read{&maps,ExplicitMappings::Extent};execution_fixture::stopped_read=&read;
+ using Status=native_call_graph_execution::Status;
+ if(scenario=="quick")drain_fixture::frames[0][1].shadow=false;
+ if(scenario=="before-quick")drain_fixture::frames[0][0].shadow=false;
+ if(scenario=="replacement-generation"){
+  environment.store.Clear(&env);assert(environment.store.Stage(&env,reinterpret_cast<jobject>(old_class),&environment.root,&error));
+ }
+ if(scenario=="body-changed")reinterpret_cast<unsigned char*>(static_cast<abi::arm64::android12::Method12*>(native[2])->data)[16]^=1;
+ const auto inspected=operation.InspectActivation(thread.size(),read);
+ assert(!stopped&&!locked&&!drain_fixture::gc&&!operation.InspectionStopped());
+ if(scenario=="quick"||scenario=="before-quick"||scenario=="body-changed"||scenario=="replacement-generation"){
+  assert(inspected.status==((scenario=="body-changed"||scenario=="replacement-generation")?Status::InspectionRefused:Status::UnsupportedActiveCompiled));
+  assert(!inspected.compiled_drained&&!inspected.replacement_bodies_drained);
+  execution_fixture::remove_proxy(&callbacks,&pauser);assert(loading.Complete(true));verifier.Clear(&env);environment.store.Clear(&env);
+  std::cout<<"Execution actual replacement/before quick or incoming body change refused and world resumed PASS\n";return 0;
+ }
+ assert(inspected.status==Status::ReplacementInspectedDrained&&inspected.replacement_bodies_drained&&!inspected.compiled_drained);
+ assert(inspected.scope==native_call_graph_execution::GraphScope::InstalledBeforeAndReplacementBodies);
+ assert(inspected.replacement_activation.activated==selected-1&&inspected.replacement_activation.selected==selected-1);
+ assert(inspected.before_reinspected.walk_complete&&inspected.before_reinspected.selected_shadow==1&&inspected.before_reinspected.registered_threads==3);
+ if(native_all)assert(!inspected.replacement_inspected.walk_complete&&operation.Replacements().Selection().empty()&&inspected.before_reinspected.boundary_owners_required);
+ else assert(inspected.replacement_inspected.walk_complete&&inspected.replacement_inspected.selected_shadow==2&&inspected.replacement_inspected.registered_threads==3);
+ struct UnionFinal {native_call_graph_execution::Execution&operation;native_source_class_loading::Run&loading;void*driver;modern_field_metadata::ReadContext&read;}union_final{operation,loading,&driver,read};
+ const auto union_refused=[](void*p,native_source_stop::Session&stop)noexcept{auto&r=*static_cast<UnionFinal*>(p);const auto os=method_identity::MappingOsQueries();const auto jni=jni_calls;forbid_provider_allocation=true;
+  assert(r.operation.Replacements().Validate(stop,r.read));
+  const auto report=r.operation.ValidateFinal(stop,r.loading,r.driver,r.read);
+  assert(report.status==Status::UnsupportedIncompleteGraph&&!report.compiled_drained&&!report.replacement_bodies_drained&&std::string_view(report.failure)=="call-graph-execution-replacement-union-resolution-closure-unavailable");
+  forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==os&&jni_calls==jni);return true;};
+ {native_source_stop::Session stop(environment.source);assert(stop.Inspect(thread.data(),thread.size(),&union_final,union_refused));}
+ if(native_all){execution_fixture::remove_proxy(&callbacks,&pauser);assert(loading.Complete(true));verifier.Clear(&env);environment.store.Clear(&env);
+  std::cout<<"Execution native-only replacement has no interpreter body selection; BEFORE rescan observes native boundaries; complete union still refused PASS\n";return 0;}
+
  struct Final {native_call_graph_replacement::Binding&binding;native_selective_interpretation::Service&selection;native_call_graph_stack::Service&stack;native_call_graph_stack::Service::Prepared&stack_prepared;const native_cache::Service&threads;modern_field_metadata::ReadContext&read;decltype(native)&methods;void*array;uint32_t*handle;std::vector<unsigned char>&bytes;size_t selected=0,validations=0;}final{replacement,selection,stack,stack_prepared,environment.threads,read,native,array,&array_handle,incoming_bytes,selected,0};
  const auto inspect=[](void*p,native_source_stop::Session&stop)noexcept{auto&r=*static_cast<Final*>(p);
   native_selective_interpretation::Report activation;assert(r.binding.Validate(stop,r.read));
-  assert(r.selection.Activate(stop,thread.data(),r.read,&activation)&&activation.activated==r.selected);
+  assert(r.selection.Activate(stop,thread.data(),r.read,&activation)&&activation.activated==0&&activation.already_interpreted==r.selected);
   const auto os=method_identity::MappingOsQueries();const auto jni=jni_calls;forbid_provider_allocation=true;
   assert(r.binding.Validate(stop,r.read));++r.validations;
   native_selective_interpretation::Report retained;assert(r.selection.ValidateRetained(stop,thread.data(),r.read,&retained)&&retained.already_interpreted==r.selected);
@@ -100,6 +169,6 @@ int main(int argc,char**argv){
  environment.store.Clear(&env);assert(environment.store.Stage(&env,reinterpret_cast<jobject>(old_class),&environment.root,&error));
  const auto revoked=[](void*p,native_source_stop::Session&stop)noexcept{auto&r=*static_cast<Final*>(p);assert(!r.binding.Validate(stop,r.read));return true;};
  {native_source_stop::Session stop(environment.source);assert(stop.Inspect(thread.data(),thread.size(),&final,revoked));}
- execution_fixture::remove_proxy(&callbacks,&pauser);assert(!loading.OwnsFinishedHolder(&holder,1));assert(loading.Complete(true));environment.store.Clear(&env);
- std::cout<<"Actual finished Holder roots + independent incoming/new ArtMethod mapping + BEFORE/new selective activation/complete ThreadList/new quick refusal and stopped noallocation/JNI/OS identity revocation PASS; no complete union graph or schema commit\n";
+ execution_fixture::remove_proxy(&callbacks,&pauser);assert(!loading.OwnsFinishedHolder(&holder,1));assert(loading.Complete(true));verifier.Clear(&env);environment.store.Clear(&env);
+ std::cout<<"Actual Execution BEFORE + complete replacement batch/Holder mapping + new selective activation/complete ThreadList/new quick refusal and stopped noallocation/JNI/OS identity revocation PASS; no complete union graph or schema commit\n";
 }

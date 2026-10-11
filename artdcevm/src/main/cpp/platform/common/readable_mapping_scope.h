@@ -36,6 +36,9 @@ class ScopedReadableMappings final {
   size_t OsQueries()const{return os_queries_;}
   // Explicit views never query the OS on a miss or incomplete capture.
   bool Extent(const void*,size_t*)const noexcept;
+  // Shared typed callback for explicit ReadContexts. The owner is this live
+  // snapshot; no OS discovery, root identity or mutator permission is added.
+  static bool ReadExtent(void*owner,const void*,size_t*)noexcept;
   bool Ready()const noexcept{return complete_;}
  private:
   friend bool ReadableMappingExtent(const void*,size_t*);

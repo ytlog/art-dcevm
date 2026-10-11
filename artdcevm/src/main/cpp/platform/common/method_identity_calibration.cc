@@ -60,6 +60,10 @@ bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
 }
 }
 uint64_t MappingOsQueries()noexcept{return mapping_os_queries;}
+bool ScopedReadableMappings::ReadExtent(void*owner,const void*address,size_t*extent)noexcept{
+ if(!owner){if(extent)*extent=0;return false;}
+ return static_cast<const ScopedReadableMappings*>(owner)->Extent(address,extent);
+}
 bool ImmediateReadableRegions::Extent(const void* address,size_t* extent)noexcept{
  if(extent)*extent=0;
  if(!address||!extent)return false;

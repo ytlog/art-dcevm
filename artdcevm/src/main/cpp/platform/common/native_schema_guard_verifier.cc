@@ -318,7 +318,7 @@ struct Verifier::State {
   modern_field_metadata::ReadContext ordinary_context{};
   if(!stopped_context&&!bindings.extent){
    ordinary.emplace();ordinary_mapping_queries=ordinary->OsQueries();if(!ordinary->Ready())return Fail(error,"Fresh ordinary schema root mapping capture failed");
-   ordinary_context={&*ordinary,[](void* owner,const void* address,size_t* extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+   ordinary_context={&*ordinary,method_identity::ScopedReadableMappings::ReadExtent};
   }
   const auto* context=stopped_context?stopped_context:bindings.extent?&read_context:&ordinary_context;
   const auto Mapped=[&](const void* address,size_t bytes){return address&&bindings.readable&&bindings.readable(bindings.owner,address,bytes);};
@@ -488,7 +488,7 @@ bool Verifier::CaptureCallGraph(const runnable_jni::Context&context,
  Snapshot snapshot;if(!s.Roots(&snapshot,error))return false;
  const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
  method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return Fail(error,"Call graph current native mapping capture failed");
- modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
  NativeOrdinals classes; if(!IndexNativeClasses(snapshot.classes,&classes,error))return false;
  std::unordered_map<void*,uint64_t> loader_tokens;
  for(size_t n=0;n<snapshot.loaders.size();++n)if(snapshot.loaders[n])loader_tokens.emplace(snapshot.loaders[n],uint64_t(n)+1);
@@ -603,7 +603,7 @@ bool Verifier::ResolveCallGraphSuper(const runnable_jni::Context&context,receive
  auto candidates=s.public_index.buckets.find(reference.declaring_class);
  if(candidates==s.public_index.buckets.end())return Fail(error,"Super referenced type requires restaging");
  method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return false;
- modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
  native_call_graph_super::Observation observed{};
  if(!resolver.ResolveOriginal(context,source,m.native.method,m.code,m.bytes,call,declaration,read,&observed,error))return false;
  // No JNI or other resolver may run before these borrowed Class addresses are
@@ -651,7 +651,7 @@ bool Verifier::ApplyCallGraphResolution(const runnable_jni::Context&context,
   declaring.emplace(method,cls->second);
  }
  method_identity::ScopedReadableMappings mappings;if(!mappings.Ready())return Fail(error,"Call graph resolved mapping snapshot failed");
- modern_field_metadata::ReadContext read{&mappings,[](void*owner,const void*address,size_t*extent){return static_cast<method_identity::ScopedReadableMappings*>(owner)->Extent(address,extent);}};
+ modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
  for(const auto&m:inventory->methods_){
   if(m.containing>=snapshot.all_methods.size()||m.declaring>=snapshot.classes.size()||
     s.bindings.method_class(s.bindings.owner,m.native.method)!=snapshot.classes[m.declaring])return Fail(error,"Call graph resolved source roots changed; restage required");
