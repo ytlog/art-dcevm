@@ -27,7 +27,14 @@ class Service final {
  bool Prepare(const native_selective_interpretation::Service&,Prepared*,std::string*)const;
  Report Scan(const native_source_stop::Session&,void*self,const native_cache::Service&,
   Prepared&,const modern_field_metadata::ReadContext&)const noexcept;
+ // Same complete frame walk and rooted identities, without requiring every
+ // selected method to be retained. Partial activation must still be refundable.
+ // The refund owner must reject *both* selected quick and shadow carriers.
+ Report ScanForRefund(const native_source_stop::Session&,void*self,const native_cache::Service&,
+  Prepared&,const modern_field_metadata::ReadContext&)const noexcept;
  private:
+ Report ScanImpl(const native_source_stop::Session&,void*,const native_cache::Service&,
+  Prepared&,const modern_field_metadata::ReadContext&,bool retained)const noexcept;
  template<class Base>bool Walk(void*,const native_source_stop::Session&,void*,Prepared&,
   const modern_field_metadata::ReadContext&,Report&)const noexcept;
  bool SelectionSame(const Prepared&)const noexcept;

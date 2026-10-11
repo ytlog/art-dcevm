@@ -30,6 +30,10 @@ inline bool Member(const void*array,size_t extent,const void*method,size_t strid
 }
 }
 struct Report {size_t selected=0,already_interpreted=0,activated=0;bool requires_stack_drain=false;const char*failure=nullptr;};
+struct RefundReport {
+ size_t selected=0,removed=0,already_absent=0,foreign_retained=0,pending=0;
+ bool complete=false;const char*failure=nullptr;
+};
 class Service final {
  public:
   Service()=default;Service(const Service&)=delete;Service&operator=(const Service&)=delete;
@@ -47,18 +51,33 @@ class Service final {
       const modern_field_metadata::ReadContext&,Report*) noexcept;
   bool ValidateRetained(const native_source_stop::Session&,void*self,
       const modern_field_metadata::ReadContext&,Report*)const noexcept;
+  bool ValidateIdentities(const native_source_stop::Session&,void*self,
+      const modern_field_metadata::ReadContext&,const char**failure)const noexcept;
+  // Bind the fixed named Undeoptimize declaration before activation. Ordinary
+  // preparation only; it borrows the independently calibrated original owner.
+  bool PrepareRefund(HookEngine&,std::string*);
+  // Removes only entries this Service actually attempted to add, including a
+  // partially failed activation. Preexisting/foreign entries are preserved.
+  // Caller must first prove no selected frame can retain discarded metadata.
+  // Completion is owned-set cleanup only, never Class/cache/GC reclamation.
+  bool Refund(const native_source_stop::Session&,void*self,
+      const modern_field_metadata::ReadContext&,RefundReport*)noexcept;
+  size_t PendingRefund()const noexcept;
   method_metadata::Layout MethodLayout()const noexcept{return layout_;}
   size_t SelectedCount()const noexcept{return methods_.size();}
   const std::vector<Method>& SelectedMethods()const noexcept{return methods_;}
   bool Contains(void* method)const noexcept;
  private:
   using Deopt=void(*)(void*,void*);using Query=bool(*)(void*,void*);
+  enum class Phase {Empty,Prepared,Activated,Refunded};
+  enum class Entry {Untouched,Preexisting,Owned,Released};
   bool Window(const native_source_stop::Session&,void*)const noexcept;
   bool Check(const Method&,const modern_field_metadata::ReadContext&,const char**)const noexcept;
   void*runtime_=nullptr;void*instrumentation_=nullptr;void**runtime_slot_=nullptr;
   const modern_field_metadata::FieldMetadata*metadata_=nullptr;
   const bounded_managed_roots::Store*roots_=nullptr;uint64_t generation_=0;
   method_metadata::Layout layout_{};std::vector<Method>methods_;
-  Deopt deopt_=nullptr;Query query_=nullptr;bool prepared_=false;
+  std::vector<Entry>entries_;
+  Deopt deopt_=nullptr,undeopt_=nullptr;Query query_=nullptr;Phase phase_=Phase::Empty;
 };
 }

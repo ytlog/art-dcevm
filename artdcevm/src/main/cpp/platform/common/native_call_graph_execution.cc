@@ -55,6 +55,7 @@ bool Execution::PrepareReplacements(HookEngine&hooks,const runnable_jni::Context
   return RefusePrepare(Status::PreparationRefused,"call-graph-execution-complete-replacement-binding-refused",error);
  const auto&selected=replacements_.Selection();
  if(!selected.empty()&&(!replacement_selection_.Prepare(hooks,*methods_,*metadata_,roots,selected.data(),selected.size(),error)||
+                       !replacement_selection_.PrepareRefund(hooks,error)||
                        !stack_.Prepare(replacement_selection_,&replacement_stack_,error)))
   return RefusePrepare(Status::PreparationRefused,"call-graph-execution-replacement-selection-stack-refused",error);
  if(!SameGeneration())return RefusePrepare(Status::PreparationRefused,"call-graph-execution-before-roots-changed-during-replacement-stage",error);
@@ -164,5 +165,35 @@ Report Execution::ValidateFinal(const native_source_stop::Session&stop,
                 "call-graph-execution-final-selected-compiled-frame-active");
  phase_=Phase::Finalized;report_.status=Status::FinalDrained;
  report_.compiled_drained=true;report_.failure=nullptr;return report_;
+}
+RefundReport Execution::RefundReplacements(const native_source_stop::Session&stop,
+ const native_source_class_loading::Run&loading,const void*driver,
+ const modern_field_metadata::ReadContext&read)noexcept{
+ RefundReport result;
+ result.entries.selected=replacement_selection_.SelectedCount();
+ result.entries.pending=replacement_selection_.PendingRefund();
+ const auto deny=[&](const char*why){result.failure=why;return result;};
+ // Refused operations keep their replacement bindings/journal. Never use the
+ // derived readiness flags as a lifetime or cleanup capability.
+ if(!replacements_.ClassCount()||phase_==Phase::ReplacementPreparing||
+    phase_==Phase::Inspecting||phase_==Phase::ReplacementInspecting||phase_==Phase::Finalized||
+    native_source_class_loading::Run::Current()!=&loading||!loading.OwnsDriver(driver)||
+    !stop.IsStopped(self_)||!replacements_.Validate(stop,read))
+  return deny("call-graph-execution-refund-current-replacement-Holder-owner-refused");
+ if(!replacements_.Selection().empty()){
+  result.inspected=stack_.ScanForRefund(stop,self_,threads_,replacement_stack_,read);
+  if(!result.inspected.walk_complete)return deny(result.inspected.failure?result.inspected.failure:
+   "call-graph-execution-refund-complete-thread-walk-refused");
+  if(result.inspected.selected_quick||result.inspected.selected_shadow)
+   return deny("call-graph-execution-refund-replacement-frame-still-retains-method");
+  if(!replacements_.Validate(stop,read)||!replacement_selection_.Refund(stop,self_,read,&result.entries))
+   return deny(result.entries.failure?result.entries.failure:"call-graph-execution-refund-owned-entry-removal-refused");
+ }else result.entries.complete=true;
+ if(!stop.IsStopped(self_)||!replacements_.Validate(stop,read))
+  return deny("call-graph-execution-refund-postremoval-Holder-owner-changed");
+ phase_=Phase::Refused;report_.compiled_drained=false;report_.replacement_bodies_drained=false;
+ report_.status=Status::FinalRefused;
+ report_.failure="call-graph-execution-replacement-entries-refunded-no-commit";
+ result.owned_entries_removed=true;return result;
 }
 } // namespace artdcevm::native_call_graph_execution

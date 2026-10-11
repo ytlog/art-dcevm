@@ -57,10 +57,20 @@ template<class Base>bool Service::Walk(void*target,const native_source_stop::Ses
 }
 Report Service::Scan(const native_source_stop::Session&stop,void*self,const native_cache::Service&threads,
  Prepared&prepared,const modern_field_metadata::ReadContext&read)const noexcept{
+ return ScanImpl(stop,self,threads,prepared,read,true);
+}
+Report Service::ScanForRefund(const native_source_stop::Session&stop,void*self,const native_cache::Service&threads,
+ Prepared&prepared,const modern_field_metadata::ReadContext&read)const noexcept{
+ return ScanImpl(stop,self,threads,prepared,read,false);
+}
+Report Service::ScanImpl(const native_source_stop::Session&stop,void*self,const native_cache::Service&threads,
+ Prepared&prepared,const modern_field_metadata::ReadContext&read,bool require_retained)const noexcept{
  Report report;auto deny=[&](const char*s){report.failure=s;return report;};
  if(!bound_||prepared.service!=this||!prepared.context||!prepared.selection||!stop.IsStopped(self)||!SelectionSame(prepared))return deny("call-graph-stack-original-stop-or-selection-unproved");
  native_selective_interpretation::Report retained;
- if(!prepared.selection->ValidateRetained(stop,self,read,&retained))return deny(retained.failure?retained.failure:"call-graph-stack-retained-selection-unproved");
+ const auto validate=[&](){return require_retained?prepared.selection->ValidateRetained(stop,self,read,&retained):
+  prepared.selection->ValidateIdentities(stop,self,read,&retained.failure);};
+ if(!validate())return deny(retained.failure?retained.failure:"call-graph-stack-selection-identity-unproved");
  struct Request{const Service&service;const native_source_stop::Session&stop;void*self;Prepared&prepared;const modern_field_metadata::ReadContext&read;Report&report;}request{*this,stop,self,prepared,read,report};
  const auto visit=[](void*thread,void*raw){auto&r=*static_cast<Request*>(raw);++r.report.visited_threads;
   switch(r.service.declaration_){
@@ -71,7 +81,7 @@ Report Service::Scan(const native_source_stop::Session&stop,void*self,const nati
   }return false;};
  if(!threads.VisitStoppedWorld(visit,&request,&report.registered_threads,nullptr))return deny(report.failure?report.failure:"call-graph-stack-complete-thread-enumeration-failed");
  if(!report.registered_threads||report.registered_threads!=report.visited_threads||!stop.IsStopped(self)||!SelectionSame(prepared))return deny("call-graph-stack-complete-thread-or-selection-changed");
- if(!prepared.selection->ValidateRetained(stop,self,read,&retained))return deny(retained.failure?retained.failure:"call-graph-stack-final-retained-selection-unproved");
+ if(!validate())return deny(retained.failure?retained.failure:"call-graph-stack-final-selection-identity-unproved");
  report.walk_complete=true;report.selected_drained=!report.drain_required;
  if(report.drain_required)report.failure="call-graph-stack-selected-compiled-frame-drain-required";
  return report;

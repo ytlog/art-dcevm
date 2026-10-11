@@ -72,7 +72,7 @@ struct Hooks final:drain_fixture::Hooks{
   if(!std::strcmp(n,receiver_guard::kCheckedResolveMethod))return reinterpret_cast<void*>(Resolve);
   if(!std::strcmp(n,"artReadBarrierForRootSlow"))return reinterpret_cast<void*>(RootBarrier);
   if(!std::strcmp(n,"_ZN3art16ScopedSuspendAllC2EPKcb")||!std::strcmp(n,"_ZN3art16ScopedSuspendAllD2Ev"))return owner.FindSymbol(lib,n);
-  if(std::strstr(n,"Instrumentation10Deoptimize")||std::strstr(n,"Instrumentation13IsDeoptimized")||std::strstr(n,"Instrumentation11AddListener")||std::strstr(n,"Runtime9instance_E")||std::strstr(n,"AttachCurrentThreadEPKc"))return owner.FindSymbol(lib,n);
+  if(std::strstr(n,"Instrumentation10Deoptimize")||std::strstr(n,"Instrumentation12Undeoptimize")||std::strstr(n,"Instrumentation13IsDeoptimized")||std::strstr(n,"Instrumentation11AddListener")||std::strstr(n,"Runtime9instance_E")||std::strstr(n,"AttachCurrentThreadEPKc"))return owner.FindSymbol(lib,n);
   return drain_fixture::Hooks::FindSymbol(lib,n);
  }
  void*Install(void*t,void*p,void**o,std::string*e)override{

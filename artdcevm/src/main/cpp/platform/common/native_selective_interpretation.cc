@@ -9,6 +9,7 @@ namespace artdcevm::native_selective_interpretation {
 namespace {
 constexpr const char*kDeopt="_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE";
 constexpr const char*kQuery="_ZN3art15instrumentation15Instrumentation13IsDeoptimizedEPNS_9ArtMethodE";
+constexpr const char*kUndeopt="_ZN3art15instrumentation15Instrumentation12UndeoptimizeEPNS_9ArtMethodE";
 bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}
 bool Deny(const char**error,const char*why)noexcept{if(error)*error=why;return false;}
 }
@@ -29,7 +30,9 @@ bool Service::Contains(void*method)const noexcept{
 bool Service::Prepare(HookEngine&hooks,
  const method_identity::Calibration&methods,const modern_field_metadata::FieldMetadata&metadata,
  const bounded_managed_roots::Store&roots,const Method*selection,size_t count,std::string*error){
- if(prepared_&&(roots_!=&roots||generation_!=roots.Generation()))
+ if(phase_==Phase::Activated||phase_==Phase::Refunded)
+  return Fail(error,"selective-interpretation-reprepare-after-activation-refused");
+ if(phase_!=Phase::Empty&&(roots_!=&roots||generation_!=roots.Generation()))
   return Fail(error,"selective-interpretation-reprepare-owner-or-root-generation-changed");
  if(!runtime_||!runtime_slot_||*runtime_slot_!=runtime_||!instrumentation_)
   return Fail(error,"selective-interpretation-exact-instrumentation-owner-unproved");
@@ -46,14 +49,16 @@ bool Service::Prepare(HookEngine&hooks,
   if(!selection[i].method||selection[i].dex_index==UINT32_MAX||(selection[i].modifiers&0x500u))return Fail(error,"selective-interpretation-invalid-public-method");
   if(!unique.insert(selection[i].method).second)return Fail(error,"selective-interpretation-duplicate-method");
  }
- methods_.assign(selection,selection+count);
- std::sort(methods_.begin(),methods_.end(),[](const Method&a,const Method&b){return reinterpret_cast<uintptr_t>(a.method)<reinterpret_cast<uintptr_t>(b.method);});
+ std::vector<Method>prepared_methods(selection,selection+count);
+ std::sort(prepared_methods.begin(),prepared_methods.end(),[](const Method&a,const Method&b){return reinterpret_cast<uintptr_t>(a.method)<reinterpret_cast<uintptr_t>(b.method);});
+ std::vector<Entry>prepared_entries(count,Entry::Untouched);
+ methods_=std::move(prepared_methods);entries_=std::move(prepared_entries);
  metadata_=&metadata;roots_=&roots;generation_=roots.Generation();
  layout_=methods.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
- deopt_=deopt;query_=query;prepared_=true;return true;
+ deopt_=deopt;query_=query;phase_=Phase::Prepared;return true;
 }
 bool Service::Window(const native_source_stop::Session&stop,void*self)const noexcept{
- return prepared_&&stop.IsStopped(self)&&runtime_slot_&&*runtime_slot_==runtime_&&instrumentation_&&
+ return phase_!=Phase::Empty&&stop.IsStopped(self)&&runtime_slot_&&*runtime_slot_==runtime_&&instrumentation_&&
   roots_&&roots_->Generation()==generation_&&metadata_&&metadata_->Calibrated();
 }
 bool Service::Check(const Method&m,const modern_field_metadata::ReadContext&read,const char**failure)const noexcept{
@@ -91,14 +96,21 @@ bool Service::Check(const Method&m,const modern_field_metadata::ReadContext&read
 }
 bool Service::Activate(const native_source_stop::Session&stop,void*self,const modern_field_metadata::ReadContext&read,Report*out)noexcept{
  if(!out)return false;*out={};out->selected=methods_.size();
+ if(phase_==Phase::Refunded){out->failure="selective-interpretation-activation-after-refund-refused";return false;}
  if(!Window(stop,self)){out->failure="selective-interpretation-actual-exclusive-stop-or-owner-unproved";return false;}
  // Check the complete selection before changing any entrypoint. Deoptimize has
  // an internal native set allocation, so failure after a successful call leaves
- // that method safely retained and the caller must not publish its mutation.
+ // its declaring Class/metadata pinned until actual refund; refusal alone does
+ // not remove the native set reference or authorize reclaiming new methods.
  for(const auto&m:methods_)if(!Check(m,read,&out->failure))return false;
- for(const auto&m:methods_){
+ phase_=Phase::Activated;
+ for(size_t i=0;i<methods_.size();++i){const auto&m=methods_[i];auto&entry=entries_[i];
   if(!Window(stop,self)){out->failure="selective-interpretation-owner-changed-during-activation";return false;}
-  if(query_(instrumentation_,m.method)){++out->already_interpreted;continue;}
+  if(query_(instrumentation_,m.method)){if(entry==Entry::Untouched)entry=Entry::Preexisting;++out->already_interpreted;continue;}
+  if(entry!=Entry::Untouched){out->failure="selective-interpretation-retained-entry-disappeared-during-reactivation";return false;}
+  // Journal before the original call: if its postcondition fails, refund must
+  // still query this exact rooted method before deciding whether to remove it.
+  entry=Entry::Owned;
   deopt_(instrumentation_,m.method);++out->activated;out->requires_stack_drain=true;
   if(!query_(instrumentation_,m.method)){out->failure="selective-interpretation-original-deopt-did-not-retain-method";return false;}
  }
@@ -106,11 +118,51 @@ bool Service::Activate(const native_source_stop::Session&stop,void*self,const mo
 }
 bool Service::ValidateRetained(const native_source_stop::Session&stop,void*self,const modern_field_metadata::ReadContext&read,Report*out)const noexcept{
  if(!out)return false;*out={};out->selected=methods_.size();out->requires_stack_drain=true;
- if(!Window(stop,self)){out->failure="selective-interpretation-retained-owner-or-stop-unproved";return false;}
+ if(phase_==Phase::Refunded||!Window(stop,self)){out->failure="selective-interpretation-retained-owner-or-stop-unproved";return false;}
  for(const auto&m:methods_){if(!Check(m,read,&out->failure))return false;
   if(!query_(instrumentation_,m.method)){out->failure="selective-interpretation-selected-method-left-deoptimized-set";return false;}
   ++out->already_interpreted;
  }
  if(!Window(stop,self)){out->failure="selective-interpretation-owner-changed-after-retained-query";return false;}return true;
+}
+size_t Service::PendingRefund()const noexcept{
+ return size_t(std::count(entries_.begin(),entries_.end(),Entry::Owned));
+}
+bool Service::ValidateIdentities(const native_source_stop::Session&stop,void*self,
+ const modern_field_metadata::ReadContext&read,const char**failure)const noexcept{
+ if(!Window(stop,self))return Deny(failure,"selective-interpretation-identity-owner-or-stop-unproved");
+ for(const auto&m:methods_)if(!Check(m,read,failure))return false;
+ return Window(stop,self)||Deny(failure,"selective-interpretation-final-identity-owner-changed");
+}
+bool Service::PrepareRefund(HookEngine&hooks,std::string*error){
+ if(phase_!=Phase::Prepared||!runtime_slot_||*runtime_slot_!=runtime_||!instrumentation_)
+  return Fail(error,"selective-interpretation-refund-preactivation-owner-unproved");
+ auto original=reinterpret_cast<Deopt>(hooks.FindSymbol("libart.so",kUndeopt));
+ if(!original||original==deopt_||reinterpret_cast<void*>(original)==reinterpret_cast<void*>(query_))
+  return Fail(error,"selective-interpretation-named-original-undeoptimize-unavailable");
+ undeopt_=original;return true;
+}
+bool Service::Refund(const native_source_stop::Session&stop,void*self,
+ const modern_field_metadata::ReadContext&read,RefundReport*out)noexcept{
+ if(!out)return false;*out={};out->selected=methods_.size();out->pending=PendingRefund();
+ if(!undeopt_||!Window(stop,self)){out->failure="selective-interpretation-refund-original-owner-or-stop-unproved";return false;}
+ // Preflight every identity before the first original removal. No allocation,
+ // JNI or OS lookup is needed for the journal or explicit mapping checks.
+ for(const auto&m:methods_)if(!Check(m,read,&out->failure))return false;
+ for(size_t i=0;i<methods_.size();++i){const auto&m=methods_[i];auto&entry=entries_[i];
+  if(!Window(stop,self)){out->failure="selective-interpretation-refund-owner-changed";return false;}
+  const bool present=query_(instrumentation_,m.method);
+  if(entry!=Entry::Owned){if(present)++out->foreign_retained;continue;}
+  if(present){
+   undeopt_(instrumentation_,m.method);
+   if(!Window(stop,self)||query_(instrumentation_,m.method)){
+    out->failure="selective-interpretation-original-undeoptimize-did-not-release-entry";return false;
+   }
+   ++out->removed;
+  }else ++out->already_absent;
+  entry=Entry::Released;--out->pending;
+ }
+ if(!Window(stop,self)){out->failure="selective-interpretation-refund-final-owner-changed";return false;}
+ phase_=Phase::Refunded;out->complete=!out->pending;return out->complete;
 }
 }

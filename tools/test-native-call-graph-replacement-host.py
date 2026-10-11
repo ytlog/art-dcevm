@@ -32,7 +32,7 @@ link=[flags[0]]+compiled+['-fsanitize=address,undefined']
 link+=['-Wl,-pagezero_size,0x10000'] if platform=='darwin' else ['-ldl']
 result=subprocess.run(link+['-o',str(out/'test')],capture_output=True,text=True)
 (out/'link.log').write_text(result.stdout+result.stderr);result.check_returncode()
-for case,path in (('concrete',incoming),('abstract',abstract),('quick',incoming),('before-quick',incoming),('body-changed',incoming),('replacement-generation',incoming),('native-only',native)):
+for case,path in (('concrete',incoming),('abstract',abstract),('quick',incoming),('before-quick',incoming),('body-changed',incoming),('replacement-generation',incoming),('native-only',native),('partial-activation',incoming),('preexisting',incoming),('refund-failure',incoming)):
  result=subprocess.run([str(out/'test'),str(before),str(path),case],capture_output=True,text=True,
   env=dict(os.environ,ASAN_OPTIONS='halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1'))
  (out/('result-'+case+'.log')).write_text(result.stdout+result.stderr);result.check_returncode()

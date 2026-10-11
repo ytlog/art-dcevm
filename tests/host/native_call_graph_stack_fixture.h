@@ -60,8 +60,10 @@ struct Frame{void*method=nullptr;bool shadow=false;};std::vector<Frame>frames[3]
 void Construct(void*raw,void*target,void*context,stack_visitor_service::WalkKind kind,bool checked){assert(stopped&&locked&&context&&kind==stack_visitor_service::WalkKind::kIncludeInlined&&checked);auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);v->thread=target;v->kind=kind;v->context=context;v->shadow_frame=nullptr;v->quick_frame=nullptr;}
 void Walk(void*raw,bool transitions){assert(stopped&&locked&&transitions);++walk_calls;auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);size_t n=0;while(n<3&&registered[n]!=v->thread)++n;assert(n<3);for(const auto&f:frames[n]){current_method=f.method;v->shadow_frame=f.shadow?const_cast<Frame*>(&f):nullptr;v->quick_frame=f.method&&!f.shadow?&current_method:nullptr;if(!v->VisitFrame())break;}}
 void*Method(const void*){assert(stopped&&locked);return current_method;}
-std::vector<void*>deoptimized;size_t queries=0;
-void Deopt(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);deoptimized.push_back(method);}
+std::vector<void*>deoptimized;size_t queries=0,deopt_calls=0,undeopt_calls=0;
+size_t fail_deopt=SIZE_MAX,fail_undeopt=SIZE_MAX;
+void Deopt(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);if(deopt_calls++==fail_deopt)return;deoptimized.push_back(method);}
+void Undeopt(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);auto found=std::find(deoptimized.begin(),deoptimized.end(),method);assert(found!=deoptimized.end());if(undeopt_calls++==fail_undeopt)return;deoptimized.erase(found);}
 bool Query(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);++queries;return std::find(deoptimized.begin(),deoptimized.end(),method)!=deoptimized.end();}
 struct Hooks:HookEngine{
  RootHooks delegate;bool Initialize(std::string*)override{return true;}bool Remove(void*,std::string*)override{return false;}
@@ -100,7 +102,7 @@ struct Hooks:HookEngine{
  }
 };
 struct OwnerHooks:early_owner_fixture::Hooks{
- void*FindSymbol(const char*lib,const char*n)override{if(!std::strcmp(n,"_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE"))return reinterpret_cast<void*>(Deopt);if(!std::strcmp(n,"_ZN3art15instrumentation15Instrumentation13IsDeoptimizedEPNS_9ArtMethodE"))return reinterpret_cast<void*>(Query);return early_owner_fixture::Hooks::FindSymbol(lib,n);}
+ void*FindSymbol(const char*lib,const char*n)override{if(!std::strcmp(n,"_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE"))return reinterpret_cast<void*>(Deopt);if(!std::strcmp(n,"_ZN3art15instrumentation15Instrumentation12UndeoptimizeEPNS_9ArtMethodE"))return reinterpret_cast<void*>(Undeopt);if(!std::strcmp(n,"_ZN3art15instrumentation15Instrumentation13IsDeoptimizedEPNS_9ArtMethodE"))return reinterpret_cast<void*>(Query);return early_owner_fixture::Hooks::FindSymbol(lib,n);}
 };
 void InitOwner(){using namespace early_owner_fixture;mode="success";early_owner_fixture::thread_list=&::thread_list;class_linker=&::linker;
  static JNIInvokeInterface_ invocation{};invocation.GetEnv=GetEnv;invocation.AttachCurrentThread=AttachPublic;invocation.DetachCurrentThread=DetachPublic;vm.functions=&invocation;

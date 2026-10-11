@@ -31,6 +31,12 @@ struct Report {
  bool compiled_drained=false,native_boundary_obligations=false;
  const char*failure=nullptr;
 };
+struct RefundReport {
+ native_call_graph_stack::Report inspected{};
+ native_selective_interpretation::RefundReport entries{};
+ bool owned_entries_removed=false;
+ const char*failure=nullptr;
+};
 class Execution final {
  public:
  Execution(const native_source_stop::Service&stop,const native_cache::Service&threads)
@@ -73,6 +79,15 @@ class Execution final {
  // Native/root/publication owners remain independent.
  Report ValidateFinal(const native_source_stop::Session&,
   const native_source_class_loading::Run&,const void*actual_driver,
+  const modern_field_metadata::ReadContext&)noexcept;
+ // Before original source refund can dispose replacement metadata: requires
+ // the same live Holder/Run, a complete walk with no selected quick OR shadow
+ // frame, then original removal of this operation's new deoptimized entries.
+ // A failed/partial removal may be retried with these roots still pinned.
+ // Owned-set cleanup does not authorize Class/cache/GC reclamation; foreign
+ // retained entries remain explicit independent obligations.
+ RefundReport RefundReplacements(const native_source_stop::Session&,
+  const native_source_class_loading::Run&,const void*driver,
   const modern_field_metadata::ReadContext&)noexcept;
  // True only inside this operation's private actual Inspect callback. The
  // caller may use this as a read-only snapshot guard, never mutation permission.
