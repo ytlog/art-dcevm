@@ -6,6 +6,7 @@
 #include "platform/common/jvmti_extensions.h"
 #include "platform/common/native_call_graph_commit.h"
 #include "platform/common/modern_retirement_cleanup.h"
+#include "platform/common/native_reference_decoder.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
 // Sole process-lifetime owner of metadata and original-source calibration
@@ -30,6 +31,7 @@ class SourceCalibration final {
  native_source_compilation::Service&Compilation()noexcept{return compilation_;}
  retirement::Owners Retired()noexcept{return {membership_,retired_fields_,retired_methods_};}
  native_interpretation_registry::Registry&Interpretation()noexcept{return interpretation_;}
+ native_reference_decoder::Decoder&References()noexcept{return references_;}
  private:
  SourceCalibration(HookEngine&hooks,std::unique_ptr<MetadataCalibration>metadata):hooks_(hooks),metadata_(std::move(metadata)){}
  ~SourceCalibration()=default;
@@ -39,6 +41,10 @@ class SourceCalibration final {
  bool PrepareTypedHeap(JNIEnv*,std::string*);
  bool PrepareRetirement(JNIEnv*,jvmtiEnv*,std::string*);
  bool PrepareInterpretation(JNIEnv*,std::string*);
+ bool PrepareReferences(JNIEnv*,std::string*);
+ static void*ReferenceCurrent(void*);
+ static bool ReferenceOracle(void*,const runnable_jni::Context&,jobject,void**);
+ static bool ReferenceScope(void*,JNIEnv*,jobject,runnable_jni::Operation,void*);
  struct Interpretation;
  static bool ObserveInterpretation(const runnable_jni::Context&,void*);
  struct Allocator;
@@ -66,6 +72,9 @@ class SourceCalibration final {
  retirement::RetiredFieldRegistry retired_fields_;
  retirement::RetiredMethodRegistry retired_methods_;
  native_interpretation_registry::Registry interpretation_;
+ native_reference_decoder::Decoder references_;
+ abi::arm64::android11::CurrentThread reference_current_=nullptr;
+ bool references_bound_=false;
  bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;
  bool exclusive_bound_=false;
  bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false;

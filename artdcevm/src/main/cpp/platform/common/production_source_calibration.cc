@@ -39,7 +39,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -236,6 +236,45 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  // no borrowed movable Class, JNI Context or Thread crosses this stop.
  const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
+}
+void*SourceCalibration::ReferenceCurrent(void*raw){
+ auto&owner=*static_cast<SourceCalibration*>(raw);
+ return owner.reference_current_?owner.reference_current_():nullptr;
+}
+bool SourceCalibration::ReferenceOracle(void*raw,const runnable_jni::Context&context,jobject root,void**out){
+ auto&owner=*static_cast<SourceCalibration*>(raw);
+ return context.vm==owner.metadata_->Runtime().receivers.java_vm&&
+  redefinition_gate::Owned(static_cast<JavaVM*>(context.vm))&&
+  runnable_jni::Bridge::BorrowOriginalScope(context)&&owner.schema_.Ready()&&
+  owner.schema_.Roots().BorrowOwnedStrongGlobal(context,root,out);
+}
+bool SourceCalibration::ReferenceScope(void*raw,JNIEnv*env,jobject root,runnable_jni::Operation operation,void*data){
+ auto&owner=*static_cast<SourceCalibration*>(raw);JavaVM*vm=nullptr;
+ if(!env||!root||!operation||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||
+    vm!=owner.metadata_->Runtime().receivers.java_vm||!redefinition_gate::Owned(vm)||!owner.schema_.Ready())return false;
+ return runnable_executor::WithOriginalScope(env,root,operation,data)==runnable_jni::Result::kSuccess&&
+  !env->ExceptionCheck();
+}
+bool SourceCalibration::PrepareReferences(JNIEnv*env,std::string*error){
+ const auto&runtime=metadata_->Runtime();JavaVM*vm=nullptr;
+ if(!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||vm!=runtime.receivers.java_vm||
+    !redefinition_gate::Owned(vm)||!schema_.Ready()||!schema_.Roots().Calibrated())
+  return Fail(error,"source-reference-decoder-owner-or-original-root-calibration-unavailable");
+ // Only a named, independently calibrated Current and actual Native caller
+ // may enter preparation. No Thread/Context is retained across its GC requests.
+ auto current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks_.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ void*self=current?current():nullptr;size_t extent=0;uint32_t state=UINT32_MAX;
+ if(!self||!method_identity::ReadableMappingExtent(self,&extent)||!state_.State(self,extent,&state)||
+    state!=abi::arm64::android11::kNative||current()!=self||(references_bound_&&reference_current_!=current))
+  return Fail(error,"source-reference-decoder-preparation-needs-actual-Native-thread");
+ if(!references_bound_){
+  reference_current_=current;
+  if(!references_.Bind(hooks_,{this,vm,ReferenceCurrent,ReferenceOracle,ReferenceScope},error))return false;
+  references_bound_=true;
+ }
+ // Decoder owns and registers temporary strong/weak copies of these distinct
+ // public globals. Only its actual cleared-weak GC oracle can make it ready.
+ return references_.Calibrate(env,metadata_->Inputs().Anchor(),metadata_->Inputs().Storage(),error);
 }
 struct SourceCalibration::Interpretation {SourceCalibration&owner;std::string*error;};
 bool SourceCalibration::PrepareInterpretation(JNIEnv*env,std::string*error){
