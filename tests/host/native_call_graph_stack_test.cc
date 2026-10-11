@@ -92,6 +92,33 @@ int main(){
  };
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&transition,check_transition));}
  frames[2][0].carrier=nullptr;frames[2][0].pc=0;
+ // Recursive inline and outer cursors have equal ArtMethod identities. Only
+ // the original empty inline range distinguishes the physical outer frame.
+ frames[2].insert(frames[2].begin(),{old_method,false});
+ frames[2][0].carrier=terminal;frames[2][0].inline_depth=1;
+ const auto check_recursive_inline=[](void*raw,native_source_stop::Session&stop)noexcept{
+  auto&r=*static_cast<TransitionCheck*>(raw);
+  const auto report=r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read);
+  assert(report.walk_complete);const auto*stream=r.scanner.Frames(r.prepared);assert(stream);bool found=false;
+  for(const auto&frame:*stream)if(frame.thread==registered[2]&&frame.method==old_method){
+   assert(frame.carrier_method==frame.method&&frame.inline_depth==1);
+   assert(!frame.physical_boundary&&!frame.return_slot&&!frame.return_pc&&frame.return_carrier==SIZE_MAX);found=true;
+  }
+  assert(found&&r.scanner.ValidateStream(r.prepared,stop,thread.data(),r.read));
+  frames[2][0].inline_depth=0;
+  assert(r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read).walk_complete);
+  stream=r.scanner.Frames(r.prepared);found=false;
+  for(const auto&frame:*stream)if(frame.thread==registered[2]&&frame.method==old_method){
+   assert(!frame.inline_depth&&frame.physical_boundary&&frame.return_slot&&frame.return_pc);found=true;
+  }
+  assert(found&&r.scanner.ValidateStream(r.prepared,stop,thread.data(),r.read));
+  frames[0][2].inline_depth=1;
+  assert(!r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read).walk_complete);
+  assert(!r.scanner.Frames(r.prepared));frames[0][2].inline_depth=0;
+  assert(r.scanner.Scan(stop,thread.data(),r.threads,r.prepared,r.read).walk_complete);return true;
+ };
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&transition,check_recursive_inline));}
+ frames[2].erase(frames[2].begin());
  // Two adjacent physical frames model the original native return carrier.
  // Matching PC alone cannot connect disjoint stack storage, and matching
  // addresses alone cannot connect a different continuation PC.

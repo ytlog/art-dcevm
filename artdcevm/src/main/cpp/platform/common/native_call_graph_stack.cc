@@ -84,7 +84,9 @@ bool Service::ValidateStream(const Prepared&p,const native_source_stop::Session&
      (i&&!IndexedLess(p.frames,p.root_index[i-1],p.root_index[i])))return false;
  }
  for(size_t ordinal=0;ordinal<p.frames.size();++ordinal){const auto&frame=p.frames[ordinal];
-  if(!frame.thread||(frame.shadow&&frame.quick))return false;
+  if(!frame.thread||(frame.shadow&&frame.quick)||
+     (frame.inline_depth&&(frame.kind!=FrameKind::Managed||!frame.quick||frame.shadow||
+       frame.physical_boundary||frame.return_slot||frame.return_pc||frame.return_carrier!=SIZE_MAX)))return false;
   if(frame.carrier_method){size_t extent=0;void*current=nullptr;
    if(!frame.quick||frame.shadow||!read.extent(read.owner,frame.quick,&extent)||extent<sizeof(current))return false;
    std::memcpy(&current,frame.quick,sizeof(current));if(current!=frame.carrier_method)return false;
@@ -191,17 +193,24 @@ template<class Base>bool Service::Walk(void*target,const native_source_stop::Ses
    if(this->thread!=target||this->context!=prepared.context)return deny("call-graph-stack-original-thread-or-context-cursor-changed");
    void*method=nullptr;if(!service.stack_.Method(this,sizeof(Base),&method))return deny("call-graph-stack-original-method-read-failed");
    if(this->shadow_frame&&this->quick_frame)return deny("call-graph-stack-mixed-managed-carrier");
+   const auto&inlined=this->inline_frames;
+   if(inlined.begin.table!=inlined.end.table||inlined.begin.row>inlined.end.row)
+    return deny("call-graph-stack-original-inline-range-invalid");
+   const size_t inline_depth=inlined.end.row-inlined.begin.row;
+   if(inline_depth&&(!method||!this->quick_frame||this->shadow_frame))
+    return deny("call-graph-stack-original-inline-carrier-unavailable");
    const auto record=[&](FrameKind kind,const method_metadata::Identity*identity){
     if(prepared.frames.size()>=prepared.frame_limit||prepared.frames.size()>=prepared.frames.capacity())
      return deny("call-graph-stack-complete-frame-stream-capacity-exhausted");
     prepared.frames.push_back({kind,this->thread,method,this->shadow_frame,this->quick_frame,nullptr,this->pc,this->depth,
       identity?identity->dex_method_index:UINT32_MAX,identity?identity->access_flags:0});
     auto&frame=prepared.frames.back();
+    frame.inline_depth=inline_depth;
     if(frame.quick&&!frame.shadow){size_t extent=0;
      if(read.owner&&read.extent&&read.extent(read.owner,frame.quick,&extent)&&extent>=sizeof(void*))
       std::memcpy(&frame.carrier_method,frame.quick,sizeof(frame.carrier_method));
     }
-    if(kind!=FrameKind::Transition&&this->quick_frame&&!this->shadow_frame&&
+    if(kind!=FrameKind::Transition&&!inline_depth&&this->quick_frame&&!this->shadow_frame&&
        frame.carrier_method==method&&service.geometry_.Physical(this,method,this->quick_frame,read,&frame.geometry,&frame.return_slot,&frame.return_pc)){
      frame.physical_boundary=true;
      if(kind==FrameKind::Managed)++report.managed_geometry;
@@ -224,6 +233,8 @@ template<class Base>bool Service::Walk(void*target,const native_source_stop::Ses
     ++report.transitions;report.boundary_owners_required=true;return true;}
    size_t extent=0;method_metadata::Identity identity{};
    if(!read.owner||!read.extent||!read.extent(read.owner,method,&extent)||!method_metadata::ReadIdentity(prepared.selection->MethodLayout(),method,extent,&identity))return deny("call-graph-stack-method-source-span-unproved");
+   if(inline_depth&&(identity.dex_method_index==UINT32_MAX||(identity.access_flags&0x100u)))
+    return deny("call-graph-stack-native-or-runtime-inline-method");
    if(identity.dex_method_index==UINT32_MAX){if(!record(FrameKind::Runtime,&identity))return false;
     ++report.runtime_boundaries;report.boundary_owners_required=true;return true;}
    if(identity.access_flags&0x100u){if(!record(FrameKind::Native,&identity))return false;

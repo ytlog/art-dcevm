@@ -28,6 +28,9 @@ struct Frame {
  // match the original boundary's return. This is a carrier fact, including
  // a possible inline cursor; it does not identify a Java callsite or consumer.
  size_t return_carrier=SIZE_MAX;
+ // Original BitTableRange size, independent of logical/outer ArtMethod identity.
+ // Recursive inlining can use the very same method for both cursors.
+ size_t inline_depth=0;
 };
 // Selection-stack facts only. Complete loaded call-graph inventory and all
 // native boundary obligations remain independent prerequisites to publication.
