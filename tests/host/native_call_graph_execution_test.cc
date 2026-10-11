@@ -7,7 +7,7 @@ int main(int argc,char**argv){
  assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
  native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
  if(!execution_fixture::Stage(verifier,&ti,affected,bindings,&error)){std::cerr<<"Actual Stage: "<<error<<"\n";return 2;}
- receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kStandard,environment.metadata,&linker,Current,&error,&::runtime));
+ receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,environment.model,environment.metadata,&linker,Current,&error,&::runtime));
  native_call_graph_execution::Execution operation(environment.source,environment.threads);
  struct Preparation {native_call_graph_execution::Execution&operation;execution_fixture::Hooks&hooks;jvmtiEnv&ti;std::vector<jclass>&affected;native_schema_guard_verifier::Verifier&verifier;receiver_guard::SourceProducer&source;drain_fixture::Environment&environment;std::string&error;}request{operation,hooks,ti,affected,verifier,source,environment,error};
  const size_t staged_enumerations=execution_fixture::public_enumerations;

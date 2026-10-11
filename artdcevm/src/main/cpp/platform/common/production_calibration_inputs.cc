@@ -172,7 +172,7 @@ bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::str
  // Public names/modifiers and bytecodes must match this separately copied
  // fixture DEX, not an ArtMethod, DexCache or guessed source declaration.
  const auto capture=[&](jobject mirror,jmethodID id,uint32_t flags,method_identity::Oracle*out,
-                        jclass*klass,std::vector<unsigned char>*instructions)->bool{
+                        jclass*klass,std::string*class_descriptor,std::vector<unsigned char>*instructions)->bool{
   jclass declaring=nullptr;
   if(ti->GetMethodDeclaringClass(id,&declaring)!=JVMTI_ERROR_NONE||!declaring){
    if(declaring)env->DeleteLocalRef(declaring);return false;
@@ -208,6 +208,7 @@ bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::str
   }
   auto root=Own(env,mirror);if(!root)return false;
   *klass=static_cast<jclass>(Own(env,declaring));if(!*klass)return false;
+  *class_descriptor=signature.value;
   *out={root,found->dex_index,flags};return true;
  };
  for(size_t n=0;n<receiver_samples_.size();++n){
@@ -215,8 +216,8 @@ bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::str
   if(!sample.Read(input.callers,input.targets,jint(n)))
    return Fail(error,"calibration-input-receiver-public-method-sample-unavailable");
   auto&owned=receiver_samples_[n];
-  if(!capture(sample.caller,sample.caller_id,uint32_t(sample.caller_flags),&owned.caller,&owned.caller_class,&owned.instructions)||
-     !capture(sample.target,sample.target_id,uint32_t(sample.target_flags),&owned.target,&owned.target_class,nullptr))return false;
+  if(!capture(sample.caller,sample.caller_id,uint32_t(sample.caller_flags),&owned.caller,&owned.caller_class,&owned.caller_descriptor,&owned.instructions)||
+     !capture(sample.target,sample.target_id,uint32_t(sample.target_flags),&owned.target,&owned.target_class,&owned.target_descriptor,nullptr))return false;
   if(size_t(sample.bytes)!=owned.instructions.size()||
      std::memcmp(sample.public_bytes,owned.instructions.data(),owned.instructions.size()))
    return Fail(error,"calibration-input-receiver-public-bytecodes-differ-from-DEX");

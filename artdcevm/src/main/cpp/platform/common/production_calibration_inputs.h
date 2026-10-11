@@ -14,6 +14,7 @@ class CalibrationInputs final {
  struct ReceiverSample {
   method_identity::Oracle caller{},target{};
   jclass caller_class=nullptr,target_class=nullptr;
+  std::string caller_descriptor,target_descriptor;
   std::vector<unsigned char>instructions;
  };
  static std::unique_ptr<CalibrationInputs>Create(JNIEnv*,jvmtiEnv*,jobject calibration,std::string*);

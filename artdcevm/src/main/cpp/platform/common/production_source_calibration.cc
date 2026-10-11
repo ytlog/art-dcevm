@@ -3,6 +3,8 @@
 #include "platform/common/thread_state_calibration.h"
 #include "platform/common/native_typed_heap_calibration.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/native_call_graph_incoming.h"
+#include <cstring>
 #include <mutex>
 #include <new>
 namespace artdcevm::production_bootstrap {
@@ -39,7 +41,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareReceiverCode(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -236,6 +238,63 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  // no borrowed movable Class, JNI Context or Thread crosses this stop.
  const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
+}
+struct SourceCalibration::ReceiverCode {SourceCalibration&owner;std::string*error;bool completed=false;};
+bool SourceCalibration::ObserveReceiverCode(const runnable_jni::Context&actual,void*raw){
+ auto&r=*static_cast<ReceiverCode*>(raw);auto&owner=r.owner;
+ if(!runnable_jni::Bridge::BorrowOriginalScope(actual)||!actual.original_leaf||!actual.env||
+    actual.env->ExceptionCheck()||actual.vm!=owner.metadata_->Runtime().receivers.java_vm||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm))||!owner.receiver_producer_.OwnsCurrentThread(actual.self))
+  return Fail(r.error,"source-receiver-code-original-context-unavailable");
+ const auto&inputs=owner.metadata_->Inputs();
+ const auto layout=owner.metadata_->Methods().model==method_identity::Model::kMethod11?
+  method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ const abi::common::RunnableJniScope scope{actual.self,actual.env,actual.vm};
+ const auto identity=[&](const method_identity::Oracle&oracle,jclass klass,const std::string&descriptor,void**out){
+  void*method=actual.original_leaf(scope,oracle.strong_global_method);size_t extent=0;
+  method_metadata::Identity observed{};
+  if(!method||actual.env->ExceptionCheck()||!method_identity::ReadableMappingExtent(method,&extent)||
+     !method_metadata::ReadIdentity(layout,method,extent,&observed)||
+     observed.dex_method_index!=oracle.dex_method_index||(observed.access_flags&0x1fffu)!=(oracle.java_modifiers&0x1fffu))return false;
+  void*root=nullptr;
+  if(!owner.schema_.Roots().BorrowOwnedStrongGlobal(actual,klass,&root)||
+     owner.metadata_->Fields().MethodDeclaringClass(method)!=root)return false;
+  field_copy::CopyClassView view;
+  if(!owner.metadata_->Fields().ClassIdentity(root,&view,nullptr)||!view.descriptor||descriptor!=view.descriptor)return false;
+  *out=method;return owner.receiver_producer_.OwnsCurrentThread(actual.self);
+ };
+ for(const auto&sample:inputs.ReceiverSamples()){
+  void*caller=nullptr,*target=nullptr;
+  if(!identity(sample.caller,sample.caller_class,sample.caller_descriptor,&caller)||
+     !identity(sample.target,sample.target_class,sample.target_descriptor,&target))
+   return Fail(r.error,"source-receiver-code-independent-method-or-Class-identity-mismatch");
+  native_call_graph_incoming::Inventory inventory;
+  if(!inventory.Capture(inputs.ReceiverDex(),sample.caller_descriptor,r.error))return false;
+  receiver_guard::CodeView code;
+  if(!owner.receiver_producer_.Code(actual.self,caller,&code)||
+     !inventory.MatchesCode(sample.caller.dex_method_index,code)||
+     !code.instructions||code.units!=sample.instructions.size()/2||sample.instructions.size()%2||
+     std::memcmp(code.instructions,sample.instructions.data(),sample.instructions.size()))
+   return Fail(r.error,"source-receiver-code-original-CodeItem-differs-from-independent-DEX-and-JVMTI");
+ }
+ r.completed=owner.receiver_producer_.OwnsCurrentThread(actual.self)&&
+  runnable_jni::Bridge::BorrowOriginalScope(actual)&&!actual.env->ExceptionCheck();
+ return r.completed;
+}
+bool SourceCalibration::PrepareReceiverCode(JNIEnv*env,std::string*error){
+ if(!stack_calibrated_||!references_.Ready()||!reference_current_||!schema_.Ready())
+  return Fail(error,"source-receiver-code-constructor-or-root-dependencies-unavailable");
+ if(!receiver_bound_){
+  if(!receiver_producer_.Bind(hooks_,stack_declaration_,metadata_->Methods(),metadata_->Fields(),
+       metadata_->Runtime().receivers.class_linker,reference_current_,error,
+       static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm)))return false;
+  receiver_bound_=true;
+ }
+ receiver_code_calibrated_=false;ReceiverCode request{*this,error};
+ const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),ObserveReceiverCode,&request);
+ receiver_code_calibrated_=result==runnable_jni::Result::kSuccess&&request.completed&&!env->ExceptionCheck();
+ if(!receiver_code_calibrated_&&error&&error->empty())*error="source-receiver-code-original-samples-did-not-complete";
+ return receiver_code_calibrated_;
 }
 bool SourceCalibration::PrepareStack(JNIEnv*env,std::string*error){
  stack_visitor_service::Declaration observed;

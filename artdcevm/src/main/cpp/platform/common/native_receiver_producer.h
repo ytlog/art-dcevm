@@ -7,6 +7,7 @@
 #include "platform/common/code_item_metadata.h"
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/stack_visitor_service.h"
+#include "platform/common/method_identity_calibration.h"
 namespace artdcevm::receiver_guard {
 // Native producer for the actual listener thread. Geometry and method identity
 // must have independent public source calibration before Bind; Bind itself
@@ -20,7 +21,7 @@ class StoppedCodeReader {
 };
 class SourceProducer final:public StoppedCodeReader {
  public:
- bool Bind(HookEngine&,stack_visitor_service::Declaration,const code_item_metadata::Layout&,
+ bool Bind(HookEngine&,stack_visitor_service::Declaration,const method_identity::Calibration&,
            const modern_field_metadata::FieldMetadata&,void*actual_class_linker,
            void*(*actual_current)(),std::string*,JavaVM* actual_vm=nullptr);
  BytecodeAccess Access()noexcept;

@@ -15,8 +15,11 @@ thread_local Resolution resolution;
 bool Extent(const void*p,size_t*n)noexcept{return modern_field_metadata::ReadMappingExtent(nullptr,p,n);}
 uint32_t U32(uintptr_t p)noexcept{uint32_t n;std::memcpy(&n,reinterpret_cast<const void*>(p),4);return n;}
 }
-bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration declaration,const code_item_metadata::Layout&layout,const modern_field_metadata::FieldMetadata&metadata,void*linker,void*(*current)(),std::string*error,JavaVM*vm){
- if(bound_||!metadata.Calibrated()||!linker||!current){if(error)*error="Receiver producer needs exact calibrated metadata/current Thread/ClassLinker";return false;}
+bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration declaration,const method_identity::Calibration&methods,const modern_field_metadata::FieldMetadata&metadata,void*linker,void*(*current)(),std::string*error,JavaVM*vm){
+ if(bound_||!metadata.Calibrated()||!linker||!current||methods.identities.empty()||
+    (methods.model!=method_identity::Model::kMethod11&&methods.model!=method_identity::Model::kMethod12Onward)){
+  if(error)*error="Receiver producer needs exact calibrated method/field metadata/current Thread/ClassLinker";return false;
+ }
  stack_visitor_service::Service stack;auto finder=[&](const char*n){return hooks.FindSymbol("libart.so",n);};
  // Fixed runtime/class_linker.h: ResolveMode::kCheckICCEAndIAE=1, exact
  // Thread/referrer overload. Its null return has the original Java exception.
@@ -36,6 +39,11 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
                             checked!=nullptr,vm!=nullptr,&source,&diagnostic,resolve_current!=nullptr)){
   if(error)*error=diagnostic;return false;
  }
+ // The one producer owns this selection. Callers supply the independent
+ // Method model, never a guessed CodeItem storage mode. Binding remains only
+ // a source candidate until original CodeItem/public DEX samples agree.
+ const auto layout=methods.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:
+  source==ResolutionSource::Nterp?code_item_metadata::kStandard:code_item_metadata::kTagged;
  if(source==ResolutionSource::CheckedMethodCurrent){vm_=vm;resolve_current_=resolve_current;}
  if(source==ResolutionSource::Nterp){
   if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Nterp source requires its calibrated Standard Method12 declaration";return false;}
