@@ -82,7 +82,7 @@ class EntrySource final {
  bool ListenerThreadCurrent(void*)const noexcept;
  bool SeedListenerFieldRoots(void*actual_thread,void*actual_caller,void*actual_field,
      const uint32_t*actual_receiver_slot,OriginalRoots*)const noexcept;
- bool SeedListenerInvokeRoots(void*actual_thread,void*actual_caller,void*actual_member,
+ bool SeedSourceFrameRoots(void*actual_thread,void*actual_caller,void*actual_member,bool field,
      void*actual_receiver,void*actual_special_caller,OriginalRoots*)const noexcept;
  bool SeedListenerRoots(void*,void*caller,void*member,bool field,const uint32_t*receiver_slot,
      void*receiver,void*special_caller,OriginalRoots*)const noexcept;

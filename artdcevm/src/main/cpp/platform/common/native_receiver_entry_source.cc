@@ -133,9 +133,9 @@ bool EntrySource::SeedListenerFieldRoots(void*self,void*caller,void*field,
  const uint32_t*receiver_slot,OriginalRoots*out)const noexcept{
  return SeedListenerRoots(self,caller,field,true,receiver_slot,nullptr,nullptr,out);
 }
-bool EntrySource::SeedListenerInvokeRoots(void*self,void*caller,void*member,void*receiver,
+bool EntrySource::SeedSourceFrameRoots(void*self,void*caller,void*member,bool field,void*receiver,
  void*special,OriginalRoots*out)const noexcept{
- return SeedListenerRoots(self,caller,member,false,nullptr,receiver,special,out);
+ return SeedListenerRoots(self,caller,member,field,nullptr,receiver,special,out);
 }
 bool EntrySource::SeedListenerRoots(void*self,void*caller,void*member,bool field,
  const uint32_t*receiver_slot,void*receiver,void*special,OriginalRoots*out)const noexcept{
@@ -146,8 +146,8 @@ bool EntrySource::SeedListenerRoots(void*self,void*caller,void*member,bool field
  OriginalRoots roots;roots.declaring=field?metadata_->FieldDeclaringClass(member):metadata_->MethodDeclaringClass(member);
  roots.caller_declaring=metadata_->MethodDeclaringClass(caller);
  if(!roots.declaring||!roots.caller_declaring||(special&&special!=roots.caller_declaring)||!ListenerThreadCurrent(self))return false;
- // Invoke receiver comes only from the same source's post-resolution live
- // ShadowFrame read. Field receiver comes from the actual ART Handle slot.
+ // Frame receiver comes only from the calibrated original ShadowFrame read;
+ // bytecode resolution has already completed before this seed. Field receiver comes from the actual ART Handle slot.
  // Neither pointer is borrowed before a potentially suspending resolver.
  roots.receiver=receiver;
  if(receiver_slot){

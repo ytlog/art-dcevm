@@ -25,7 +25,7 @@ class OriginalIngress final {
       modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual bool EnterListenerField(void*actual_thread,void*actual_caller,void*actual_field,
       const uint32_t*actual_receiver_slot,modern_field_metadata::ReadContext*)noexcept{return false;}
-  virtual bool EnterListenerInvoke(void*actual_thread,void*actual_caller,void*actual_member,
+  virtual bool EnterSourceFrame(void*actual_thread,void*actual_caller,void*actual_member,bool field,
       void*actual_receiver,void*actual_special_caller,modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual void Leave()noexcept=0;
  };
@@ -56,6 +56,26 @@ class OriginalIngress final {
   if(!owner||consumer.load(std::memory_order_acquire)!=owner->guard_||!owner->guard_->RequiresIngress(path,source.self,nullptr))return receiver_guard::CheckFieldId(path,source.self,id,receiver);
   void*field=nullptr;if(!owner->entry_.DecodeOriginalFieldId(source,id,&field)){*unavailable=true;return true;}
   return Check(source,field,receiver,path,unavailable,true);
+ }
+ // Actual exported FieldVarHandle::Access supplies the live ShadowFrame /
+ // operands and decoded field. Source-only frame reads cannot suspend; open
+ // the common rooted window only after the calibrated receiver was read.
+ static bool CheckVarHandle(void*self,void*field,const void*frame,const InstructionOperands*operands,
+                            void*result,bool*unavailable)noexcept{
+  if(!unavailable)return false;*unavailable=false;auto*guard=consumer.load(std::memory_order_acquire);
+  if(!guard)return false;auto*owner=published_.load(std::memory_order_acquire);
+  if(!owner||guard!=owner->guard_)return guard->CheckFrame(Path::VarHandle,self,field,frame,operands,result,true);
+  if(!guard->RequiresIngress(Path::VarHandle,self,field))return false;
+  const auto fail=[&](){if(result){const uint64_t zero=0;std::memcpy(result,&zero,8);}*unavailable=true;return true;};
+  if(active_||!field||uintptr_t(field)%4||!owner->entry_.ListenerThreadCurrent(self))return fail();
+  // The original calibrated VarHandle target is an ArtField, not an opaque
+  // JNI ID. A static access has no instance receiver operand to consume.
+  if(field_array::Flags(field)&8u)return false;
+  const auto*frames=guard->access_.frames;void*caller=nullptr,*receiver=nullptr;uint32_t pc=0,registers=0;
+  if(!frames||!frames->Identity(self,frame,&caller,&pc,&registers)||
+     !frames->Read(self,frame,operands,&receiver)||!owner->entry_.ListenerThreadCurrent(self))return fail();
+  Scope scope(*owner,self,caller,field,true,receiver,nullptr);if(!scope.Valid())return fail();
+  return guard->Check({Path::VarHandle,self,field,receiver,nullptr,result,true});
  }
  private:
  friend class ListenerOwner;
@@ -100,9 +120,11 @@ class OriginalIngress final {
    if(active_||!o.entry_.ListenerThreadCurrent(self))return;
    entered=o.bounds_.EnterListenerField(self,caller,field,slot,&bounds);Open(true);
   }
-  Scope(OriginalIngress&o,void*self,void*caller,const BytecodeResult&result)noexcept:owner(o),context{self,nullptr,o.entry_.binding_.vm}{
+  Scope(OriginalIngress&o,void*self,void*caller,const BytecodeResult&result)noexcept
+   :Scope(o,self,caller,result.member,false,result.receiver,result.special_caller){}
+  Scope(OriginalIngress&o,void*self,void*caller,void*member,bool field,void*receiver,void*special)noexcept:owner(o),context{self,nullptr,o.entry_.binding_.vm}{
    if(active_||!o.entry_.ListenerThreadCurrent(self))return;
-   entered=o.bounds_.EnterListenerInvoke(self,caller,result.member,result.receiver,result.special_caller,&bounds);Open(true);
+   entered=o.bounds_.EnterSourceFrame(self,caller,member,field,receiver,special,&bounds);Open(true);
   }
   void Open(bool listener)noexcept{
    if(!entered||!bounds.owner||!bounds.extent)return;

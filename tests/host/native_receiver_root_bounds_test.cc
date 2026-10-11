@@ -65,19 +65,28 @@ static void RunRootBoundsTest(receiver_guard::EntrySource&entry,const modern_fie
  assert(bounds.EnterListenerField(actual.self,member,listener_field,nullptr,&read));bounds.Leave();
  // Post-resolution invoke roots share the same bounded inventory. The real
  // source BytecodeSource separately owns frame/PC and resolution provenance.
- assert(bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],declaring,&read));
+ assert(bounds.EnterSourceFrame(actual.self,member,method_members[0],false,public_receivers[0],declaring,&read));
  assert(decodes==previous_decodes&&read.extent(read.owner,method_members[0],&n)&&n==8);
  assert(read.extent(read.owner,public_receivers[0],&n)&&n==8&&read.extent(read.owner,declaring,&n));
- assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],declaring,&nested));
+ assert(!bounds.EnterSourceFrame(actual.self,member,method_members[0],false,public_receivers[0],declaring,&nested));
  auto invoke_expired=read;bounds.Leave();assert(!invoke_expired.extent(invoke_expired.owner,declaring,&n));
- assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],receiver_classes[1],&read));
- assert(!bounds.EnterListenerInvoke(&manager,member,method_members[0],public_receivers[0],nullptr,&read));
- assert(!bounds.EnterListenerInvoke(actual.self,nullptr,method_members[0],public_receivers[0],nullptr,&read));
- assert(!bounds.EnterListenerInvoke(actual.self,member,reinterpret_cast<void*>(1),public_receivers[0],nullptr,&read));
- assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],reinterpret_cast<void*>(1),nullptr,&read));
- Put32(actual.self,0,92u<<24);assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],nullptr,&read));Put32(actual.self,0,0);
- assert(bounds.EnterListenerInvoke(actual.self,member,method_members[1],nullptr,nullptr,&read));
+ assert(!bounds.EnterSourceFrame(actual.self,member,method_members[0],false,public_receivers[0],receiver_classes[1],&read));
+ assert(!bounds.EnterSourceFrame(&manager,member,method_members[0],false,public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterSourceFrame(actual.self,nullptr,method_members[0],false,public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterSourceFrame(actual.self,member,reinterpret_cast<void*>(1),false,public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterSourceFrame(actual.self,member,method_members[0],false,reinterpret_cast<void*>(1),nullptr,&read));
+ Put32(actual.self,0,92u<<24);assert(!bounds.EnterSourceFrame(actual.self,member,method_members[0],false,public_receivers[0],nullptr,&read));Put32(actual.self,0,0);
+ assert(bounds.EnterSourceFrame(actual.self,member,method_members[1],false,nullptr,nullptr,&read));
  assert(!read.extent(read.owner,public_receivers[0],&n));bounds.Leave();
+ // The calibrated VarHandle frame receiver uses the same source-root build,
+ // additionally requiring actual native field-array membership.
+ assert(bounds.EnterSourceFrame(actual.self,member,listener_field,true,public_receivers[0],nullptr,&read));
+ assert(read.extent(read.owner,listener_field,&n)&&n>=sizeof(field_array::Field));
+ assert(read.extent(read.owner,public_receivers[0],&n)&&n==8);auto var_expired=read;bounds.Leave();
+ assert(!var_expired.extent(var_expired.owner,listener_field,&n));
+ assert(!bounds.EnterSourceFrame(actual.self,member,method_members[0],true,public_receivers[0],nullptr,&read));
+ assert(bounds.EnterSourceFrame(actual.self,member,listener_field,true,nullptr,nullptr,&read));bounds.Leave();
+
 
 
  assert(!bounds.Enter(actual,reinterpret_cast<void*>(1),receiver,&read));
