@@ -55,6 +55,9 @@ ARTDCEVM_CHECK_VISITOR(Visitor12,android12::CodeInfoPair)
 ARTDCEVM_CHECK_VISITOR(Visitor13,android13::CodeInfoPair)
 ARTDCEVM_CHECK_VISITOR(Visitor17,android17::CodeInfoPair)
 #undef ARTDCEVM_CHECK_VISITOR
+inline constexpr size_t kThreadOffset=offsetof(Visitor13,thread);
+inline constexpr size_t kShadowOffset=offsetof(Visitor13,shadow_frame);
+inline constexpr size_t kQuickOffset=offsetof(Visitor13,quick_frame);
 // Diagnostic only: compare the constructor's independently supplied Context at
 // each complete fixed source declaration. This never selects a new geometry or
 // permits walking a failed candidate; it identifies which declaration needs
@@ -79,6 +82,7 @@ inline uint32_t ConstructorContextEchoMask(const void* storage,size_t extent,con
 using Construct=void (*)(void*,void*,void*,WalkKind,bool);
 using Walk=void (*)(void*,bool);
 using Method=void* (*)(const void*);
+using DexPc=uint32_t (*)(const void*,bool);
 inline constexpr char kConstruct[]=
     "_ZN3art12StackVisitorC2EPNS_6ThreadEPNS_7ContextENS0_13StackWalkKindEb";
 inline constexpr char kWalk[]=
@@ -87,5 +91,7 @@ inline constexpr char kWalk[]=
 // This is CountTransitions::kYes, kTolerateNullMethods=false.
 inline constexpr char kWalk17[]=
     "_ZN3art12StackVisitor9WalkStackILNS0_16CountTransitionsE0ELb0EEEvb";
+// Fixed runtime/stack.h: GetDexPc(bool abort_on_failure) const.
+inline constexpr char kDexPc[]="_ZNK3art12StackVisitor8GetDexPcEb";
 inline constexpr char kMethod[]="_ZNK3art12StackVisitor9GetMethodEv";
 }

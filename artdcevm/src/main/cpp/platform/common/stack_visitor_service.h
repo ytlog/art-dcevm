@@ -22,6 +22,7 @@ class Service {
     return 0;
   }
   static const char* ConstructSymbol() {return abi::arm64::stack::kConstruct;}
+  static const char* DexPcSymbol() {return abi::arm64::stack::kDexPc;}
   static const char* MethodSymbol() {return abi::arm64::stack::kMethod;}
   static const char* WalkSymbol(Declaration declaration) {
     if(!StorageSize(declaration)) return nullptr;
@@ -40,6 +41,26 @@ class Service {
     candidate.size_=size;
     *output=candidate;
     return true;
+  }
+  // Optional named capability: existing walkers do not silently require it.
+  // Failed bindings retain the old capability; no ABI/family fallback exists.
+  template<class Finder> bool BindDexPc(Finder finder) {
+    if(!size_)return false;
+    auto candidate=reinterpret_cast<abi::arm64::stack::DexPc>(finder(DexPcSymbol()));
+    if(!candidate)return false;dex_pc_=candidate;return true;
+  }
+  bool DexPc(const void*visitor,size_t extent,uint32_t*out)const {
+    if(!dex_pc_||!out||!Valid(visitor,extent))return false;
+    *out=dex_pc_(visitor,false);return true;
+  }
+  // These are common source-declared prefix fields, never a ShadowFrame layout.
+  bool ShadowHead(const void*visitor,size_t extent,void**thread,void**shadow)const {
+    if(!thread||!shadow||!Valid(visitor,extent))return false;
+    void* quick=nullptr;void* actual_thread=nullptr;void* actual_shadow=nullptr;
+    const auto*bytes=static_cast<const unsigned char*>(visitor);
+    std::memcpy(&actual_thread,bytes+abi::arm64::stack::kThreadOffset,sizeof(void*));std::memcpy(&actual_shadow,bytes+abi::arm64::stack::kShadowOffset,sizeof(void*));std::memcpy(&quick,bytes+abi::arm64::stack::kQuickOffset,sizeof(void*));
+    if(!actual_thread||!actual_shadow||quick)return false;
+    *thread=actual_thread;*shadow=actual_shadow;return true;
   }
   // ART's base constructor temporarily installs its vptr while initializing the
   // complete native cache. Restore the caller vptr before any callback can run.
@@ -75,5 +96,6 @@ class Service {
   abi::arm64::stack::Construct construct_=nullptr;
   abi::arm64::stack::Walk walk_=nullptr;
   abi::arm64::stack::Method method_=nullptr;
+  abi::arm64::stack::DexPc dex_pc_=nullptr;
 };
 }

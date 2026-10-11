@@ -21,6 +21,10 @@ template<class Storage> void Test(Declaration declaration) {
   auto finder=[&](const char* name){return stack_fixture::Symbol(declaration,name);};
   assert(Service::StorageSize(declaration)==sizeof(Storage));
   assert(Service::Bind(declaration,finder,&service));
+  uint32_t dex_pc=77;assert(!service.DexPc(&visitor,sizeof(Storage),&dex_pc)&&dex_pc==77);
+  assert(service.BindDexPc(finder));visitor.pc=3;assert(service.DexPc(&visitor,sizeof(Storage),&dex_pc)&&dex_pc==3);
+  assert(!service.BindDexPc([](const char*)->void*{return nullptr;}));visitor.pc=UINT32_MAX;assert(service.DexPc(&visitor,sizeof(Storage),&dex_pc)&&dex_pc==UINT32_MAX);
+  assert(!service.DexPc(&visitor,sizeof(Storage)-1,&dex_pc));
   int thread_storage=0,context_storage=0,method_storage=0;
   void* thread=&thread_storage;
   void* context=&context_storage;

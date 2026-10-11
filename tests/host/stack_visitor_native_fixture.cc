@@ -41,10 +41,12 @@ template<class Storage> void* Method(const void* raw) {
   auto* storage=static_cast<const Storage*>(raw);
   return storage->quick_frame ? *storage->quick_frame : nullptr;
 }
+template<class Storage> uint32_t DexPc(const void*raw,bool abort){if(abort)std::abort();return uint32_t(static_cast<const Storage*>(raw)->pc);}
 template<class Storage> void* Find(const char* name,const char* walk_name) {
   using Service=stack_visitor_service::Service;
   if(std::strcmp(name,Service::ConstructSymbol())==0) return reinterpret_cast<void*>(Construct<Storage>);
   if(std::strcmp(name,walk_name)==0) return reinterpret_cast<void*>(Walk<Storage>);
+  if(std::strcmp(name,Service::DexPcSymbol())==0)return reinterpret_cast<void*>(DexPc<Storage>);
   if(std::strcmp(name,Service::MethodSymbol())==0) return reinterpret_cast<void*>(Method<Storage>);
   return nullptr;
 }
