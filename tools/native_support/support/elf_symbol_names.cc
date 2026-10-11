@@ -4,7 +4,7 @@
 #include <fstream>
 #include <mutex>
 extern "C" {
-#include "third_party/xz_embedded/xz.h"
+#include "xz.h"
 }
 #include <unordered_set>
 #include <vector>

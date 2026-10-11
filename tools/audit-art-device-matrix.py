@@ -19,10 +19,10 @@ def evolution_dependencies(cxx, directory, manifests):
     with tempfile.TemporaryDirectory(prefix='symbol-inventory-', dir=directory) as temporary:
         binary = Path(temporary) / 'inventory'
         xz_objects = compile_xz(ROOT, Path(temporary))
-        subprocess.run([cxx, '-std=c++17', '-DXZ_USE_CRC64', '-fsanitize=address,undefined', '-I', str(cpp),
+        subprocess.run([cxx, '-std=c++17', '-DXZ_USE_CRC64', '-fsanitize=address,undefined', '-I', str(cpp), '-I', str(ROOT / 'tools/native_support'), '-I', str(ROOT / 'tools/third_party/xz_embedded'),
                         str(ROOT / 'tools/art-symbol-dependencies.cc'),
                         str(cpp / 'platform/symbols/art_symbol_compat.cc'),
-                        str(cpp / 'support/elf_symbol_names.cc'), *xz_objects,
+                        str(ROOT / 'tools/native_support/support/elf_symbol_names.cc'), *xz_objects,
                         '-o', str(binary)], check=True, capture_output=True, text=True)
         output = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout
         aliases = {}
@@ -139,7 +139,7 @@ def main():
             errors.append(f'{manifest}: {error}')
     firebase = [x for x in devices if x['origin'] == 'firebase']
     covered = sorted(set(x['device']['sdk'] for x in firebase))
-    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; exact and unique local names from production ELF reader; optional dependencies included; bounded mini names supplemented from independently hashed ELF; presence does not prove address, ABI, loader namespace or callability compatibility',
+    report = dict(scope='Production evolution gate plus Android 13 literal dependencies; exact and unique local names from host-only ELF reader; optional dependencies included; bounded mini names supplemented from independently hashed ELF; presence does not prove address, ABI, loader namespace or callability compatibility',
                   devices=devices, firebaseApis=covered,
                   missingFirebaseApis=sorted(set(range(30, 38)) - set(covered)),
                   firebaseManufacturers=sorted(set(x['device']['manufacturer'] for x in firebase)),

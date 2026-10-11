@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise unique ELF name parsing on malformed metadata and real device SOs."""
+"""Development-only unique ELF name inventory on malformed metadata and device SOs."""
 import argparse
 import hashlib
 import json
@@ -15,7 +15,6 @@ import subprocess
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('manifests', nargs='*', type=Path)
-parser.add_argument('--shadow-fixture', type=Path, help='Pixel 7 or Samsung 13 libart ELF for HookEngine integration')
 args = parser.parse_args()
 out = root / 'build/evidence/host/elf-symbol-names'
 out.mkdir(parents=True, exist_ok=True)
@@ -24,9 +23,9 @@ cpp = root / 'artdcevm/src/main/cpp'
 xz_objects = compile_xz(root, out)
 subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-O1', '-g',
                 '-DXZ_USE_CRC64', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-                '-fno-omit-frame-pointer', '-I', str(cpp),
+                '-fno-omit-frame-pointer', '-I', str(cpp), '-I', str(root / 'tools/native_support'), '-I', str(root / 'tools/third_party/xz_embedded'),
                 str(root / 'tests/host/elf_symbol_names_test.cc'),
-                str(cpp / 'support/elf_symbol_names.cc'), *xz_objects, '-o', str(binary)], check=True)
+                str(root / 'tools/native_support/support/elf_symbol_names.cc'), *xz_objects, '-o', str(binary)], check=True)
 
 
 def run(path, expected=None):
@@ -166,25 +165,5 @@ for manifest in args.manifests:
     devices.append(dict(manifest=str(manifest), uniqueNames=len(names), fieldGetInt=names.get(canonical)))
 report = dict(syntheticNegativeCases=negative_count, compressedCases=compressed_cases, devices=devices,
               result='Passed address/undefined sanitizers; unique names only, ambiguous names omitted')
-# Exercise actual HookEngine name fallback on fixed ELF64.
-arm64_fixture = out / "arm64-names.elf"
-arm64_fixture.write_bytes(data)
-integration = out / 'shadow-test'
-subprocess.run([os.environ.get('CXX', 'clang++'), '-std=c++17', '-O1', '-g',
-                '-DXZ_USE_CRC64', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-                '-I', str(cpp), '-I', str(root / 'tests/host/shadowhook_stub'),
-                str(root / 'tests/host/shadow_unique_symbol_test.cc'),
-                str(cpp / 'hooks/shadow_hook_engine.cc'),
-                str(cpp / 'support/elf_symbol_names.cc'), *xz_objects, '-o', str(integration)], check=True)
-synthetic = subprocess.run([str(integration), str(arm64_fixture), '_Zlocal', '_Zlocal.__uniq.123'],
-                           capture_output=True, text=True,
-                           env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
-synthetic.check_returncode()
-report['shadowArm64Integration'] = synthetic.stdout.strip()
-if args.shadow_fixture:
-    result = subprocess.run([str(integration), str(args.shadow_fixture)], capture_output=True, text=True,
-                            env=dict(os.environ, ASAN_OPTIONS='halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1'))
-    result.check_returncode()
-    report['shadowIntegration'] = result.stdout.strip()
 (out / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
 print(json.dumps(report, indent=2))

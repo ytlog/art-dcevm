@@ -7,22 +7,27 @@ endif()
 add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
   platform/jvmti/public_backend.cc evolution/checked_method_resolution.cc)
-  target_sources(artdcevm PRIVATE
-    third_party/xz_embedded/xz_dec_stream.c
-    third_party/xz_embedded/xz_dec_lzma2.c
-    third_party/xz_embedded/xz_crc32.c
-    third_party/xz_embedded/xz_crc64.c)
-  set_source_files_properties(
-    third_party/xz_embedded/xz_dec_stream.c
-    third_party/xz_embedded/xz_dec_lzma2.c
-    third_party/xz_embedded/xz_crc32.c
-    third_party/xz_embedded/xz_crc64.c
-    PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
-  target_compile_definitions(artdcevm PRIVATE XZ_USE_CRC64)
-
-  find_package(shadowhook REQUIRED CONFIG)
-  target_sources(artdcevm PRIVATE support/elf_modules.cc support/elf_symbol_names.cc hooks/shadow_hook_engine.cc)
-  target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook)
+  # One source-built official ShadowHook instance owns both lookup and metadata.
+  # Gradle prepares the SHA-pinned official source before every native task.
+  set(ARTDCEVM_SHADOWHOOK_SOURCE_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/generated/shadowhook/cpp"
+      CACHE PATH "Prepared official ShadowHook 2.0.1 source")
+  if(NOT EXISTS "${ARTDCEVM_SHADOWHOOK_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "Missing prepared ShadowHook source; run prepareShadowHookSource first")
+  endif()
+  add_subdirectory("${ARTDCEVM_SHADOWHOOK_SOURCE_DIR}"
+                   "${CMAKE_CURRENT_BINARY_DIR}/shadowhook")
+  # NDK r27 diagnostics added since the official source's original toolchain.
+  # Keep compatibility flags local to the upstream target, with -Werror intact.
+  target_compile_options(shadowhook PRIVATE
+    -Wno-declaration-after-statement -Wno-unsafe-buffer-usage
+    -Wno-reserved-identifier -Wno-unused-macros)
+  # The official shared version script also lists ARM32-only interceptor exports.
+  target_link_options(shadowhook PRIVATE "LINKER:--undefined-version")
+  target_include_directories(artdcevm PRIVATE "${ARTDCEVM_SHADOWHOOK_SOURCE_DIR}/include")
+  target_sources(artdcevm PRIVATE support/elf_modules.cc
+    support/named_symbol_extent.cc hooks/shadow_hook_engine.cc)
+  target_link_libraries(artdcevm PRIVATE shadowhook)
   enable_language(ASM)
   target_sources(artdcevm PRIVATE platform/symbols/art_symbol_compat.cc
     evolution/dex_schema.cc evolution/migration_plan.cc

@@ -1,11 +1,11 @@
-"""Compile the vendored decoder as C for C++ host tests."""
+"""Compile the development-only decoder as C for host audits."""
 import os
 from pathlib import Path
 import subprocess
 
 
 def compile_xz(root: Path, out: Path):
-    source = root / 'artdcevm/src/main/cpp/third_party/xz_embedded'
+    source = root / 'tools/third_party/xz_embedded'
     objects = []
     for name in ('xz_dec_stream', 'xz_dec_lzma2', 'xz_crc32', 'xz_crc64'):
         obj = out / (name + '.o')
