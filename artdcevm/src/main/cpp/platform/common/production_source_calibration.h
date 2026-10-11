@@ -12,6 +12,7 @@
 #include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_receiver_listener.h"
 #include "platform/common/native_receiver_class_source.h"
+#include "platform/common/native_receiver_entry_source.h"
 #include "platform/common/production_stack_stream.h"
 #include "platform/common/native_final_write_access.h"
 #include <utility>
@@ -78,6 +79,9 @@ class SourceCalibration final {
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
  bool PrepareStackStream(JNIEnv*,std::string*);
+ bool PrepareReceiverEntries(JNIEnv*,std::string*);
+ static modern_field_metadata::ReadContext ReceiverEntryBounds(void*,const runnable_jni::Context&);
+ static bool ReceiverEntryExtent(void*,const void*,size_t*);
  bool PrepareReceiverClasses(JNIEnv*,std::string*);
  struct ReceiverClasses;
  static bool ObserveReceiverClasses(const runnable_jni::Context&,void*);
@@ -128,6 +132,9 @@ class SourceCalibration final {
  native_jni_exception_calibration::Service jni_returns_;
  native_weak_replacement::Service*weak_replacement_=nullptr;
  StackStreamObservation stack_stream_{};bool stack_service_bound_=false;
+ receiver_guard::EntrySource receiver_entries_;
+ bool receiver_entries_bound_=false;
+ inline static thread_local SourceCalibration*receiver_entry_calibration_=nullptr;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;
  receiver_guard::SourceProducer receiver_producer_;

@@ -9,6 +9,7 @@
 #include "platform/common/modern_field_guards.h"
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/modern_method_guards.h"
+#include "platform/common/readable_mapping_scope.h"
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -46,7 +47,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareNativeEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareNativeEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverEntries(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
   if(!process->final_writer_calibrated_){
    if(!CalibrateFinalWrites(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,
        process->final_writer_->Writer(),error))return nullptr;
@@ -453,6 +454,71 @@ bool SourceCalibration::ObserveReceiverCode(const runnable_jni::Context&actual,v
  r.completed=owner.receiver_producer_.OwnsCurrentThread(actual.self)&&
   runnable_jni::Bridge::BorrowOriginalScope(actual)&&!actual.env->ExceptionCheck();
  return r.completed;
+}
+// Ordinary calibration only: every extent query obtains current VMA facts.
+// No cached mapping spans the public JNI calls or waiting indexed-ID decoders.
+// This callback is never supplied to OriginalIngress or the permanent Guard.
+bool SourceCalibration::ReceiverEntryExtent(void*raw,const void*p,size_t*out){
+ auto*owner=static_cast<SourceCalibration*>(raw);
+ if(!owner||receiver_entry_calibration_!=owner||!owner->reference_current_||
+    !owner->reference_current_()||!redefinition_gate::Owned(owner->metadata_->Runtime().receivers.java_vm))return false;
+ method_identity::ImmediateReadableRegions immediate;
+ return immediate.Extent(p,out);
+}
+modern_field_metadata::ReadContext SourceCalibration::ReceiverEntryBounds(void*raw,const runnable_jni::Context&actual){
+ auto*owner=static_cast<SourceCalibration*>(raw);
+ if(!owner||receiver_entry_calibration_!=owner||!owner->reference_current_||
+    actual.self!=owner->reference_current_()||actual.vm!=owner->metadata_->Runtime().receivers.java_vm||
+    !actual.env||!redefinition_gate::Owned(static_cast<JavaVM*>(actual.vm)))return {};
+ if(actual.original_leaf&&!runnable_jni::Bridge::BorrowOriginalScope(actual))return {};
+ return {owner,ReceiverEntryExtent};
+}
+bool SourceCalibration::PrepareReceiverEntries(JNIEnv*env,std::string*error){
+ const auto&inputs=metadata_->Inputs();const auto&runtime=metadata_->Runtime();JavaVM*vm=nullptr;
+ if(!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||vm!=runtime.receivers.java_vm||
+    !redefinition_gate::Owned(vm)||!references_.Ready()||!schema_.Ready()||
+    !schema_.Roots().Calibrated()||!reference_current_||receiver_entry_calibration_)
+  return Fail(error,"source-receiver-entry-independent-owners-unavailable");
+ if(receiver_entries_.Proven())return true;
+ receiver_guard::EntrySource::Samples samples;
+ const char*method_names[]{"compute","staticInvokeCalibration"};
+ const char*field_names[]{"intValue","staticIntValue"};
+ for(size_t i=0;i<2;++i){
+  const evolution::Member*declaration=nullptr;
+  for(const auto&method:inputs.MethodsSchema().methods)
+   if(method.name==method_names[i]&&method.descriptor=="()I"){
+    if(declaration)return Fail(error,"source-receiver-entry-method-declaration-ambiguous");
+    declaration=&method;
+   }
+  if(declaration)for(const auto&method:inputs.Methods())
+   if(method.dex_method_index==declaration->dex_index&&!(method.java_modifiers&0x100u)&&
+      bool(method.java_modifiers&8u)==bool(i)){
+    if(samples.methods[i])return Fail(error,"source-receiver-entry-method-mirror-ambiguous");
+    samples.methods[i]=method.strong_global_method;
+   }
+  for(const auto&field:inputs.Fields())
+   if(field.name&&field.descriptor&&std::strcmp(field.name,field_names[i])==0&&
+      std::strcmp(field.descriptor,"I")==0&&bool(field.modifiers&8u)==bool(i)){
+    if(samples.fields[i])return Fail(error,"source-receiver-entry-field-mirror-ambiguous");
+    samples.fields[i]=field.strong_global_field;
+   }
+  if(!samples.methods[i]||!samples.fields[i])return Fail(error,"source-receiver-entry-independent-samples-unavailable");
+ }
+ // Distinct retained object/Class values and actual classes; these samples
+ // calibrate decoding, not invocation assignability or stale-receiver refusal.
+ samples.receivers[0]=inputs.Storage();samples.receivers[1]=inputs.StorageClass();
+ if(!receiver_entries_bound_){
+  receiver_guard::EntrySource::Binding binding{this,vm,reference_current_,ReferenceOracle,
+    ReferenceScope,ReceiverEntryBounds,runtime.receivers.jni_id_manager};
+  if(!receiver_entries_.Bind(hooks_,binding,metadata_->Fields(),state_,error))return false;
+  receiver_entries_bound_=true;
+ }
+ struct Episode {
+  SourceCalibration*&slot;explicit Episode(SourceCalibration*&s,SourceCalibration*owner):slot(s){slot=owner;}
+  ~Episode(){slot=nullptr;}
+ }episode(receiver_entry_calibration_,this);
+ return receiver_entries_.Calibrate(env,samples,error)&&receiver_entries_.Proven()&&
+  !env->ExceptionCheck();
 }
 struct SourceCalibration::ReceiverClasses {SourceCalibration&owner;std::string*error;bool completed=false;};
 bool SourceCalibration::ObserveReceiverClasses(const runnable_jni::Context&actual,void*raw){
