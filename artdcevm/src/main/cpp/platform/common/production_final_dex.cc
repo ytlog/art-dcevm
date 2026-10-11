@@ -1,23 +1,57 @@
 #include "platform/common/production_final_dex.h"
 #include "platform/common/native_transformed_definitions.h"
+#include <atomic>
+#include <mutex>
+#include <new>
 
 namespace artdcevm::production_bootstrap {
 bool FinalDex::Install(HookEngine&hooks,JavaVM*vm,std::string*error){
  const auto fail=[&](const char*why){if(error)*error=why;return false;};
- if(!vm||(vm_&&vm_!=vm)||!records_.Trusted())return fail("final-DEX-observer-VM-or-source-invalid");
+ if(!vm||(vm_&&vm_!=vm))return fail("final-DEX-observer-VM-or-source-invalid");
  if(!current_){
   if(!hooks.Initialize(error))return false;
   current_=reinterpret_cast<abi::common::CurrentThread>(hooks.FindSymbol("libart.so",abi::common::kCurrentThread));
   if(!current_)return fail("final-DEX-observer-original-current-thread-unavailable");
  }
- vm_=vm;
+ if(!vm_)vm_=vm;
  if(!redefinition_gate::InstallDirectObservation(hooks,&observer_,error))return false;
  redefinition_gate::Lease lease(vm);
  if(!lease.Acquired())return fail("final-DEX-observer-history-lease-unavailable");
+ if(!records_.Trusted())return fail("final-DEX-observer-source-invalidated");
  if(!redefinition_gate::ObservationComplete(vm,&observer_)){
   records_.Invalidate();return fail("final-DEX-observer-missed-public-source-history");
  }
  return true;
+}
+Provenance*FinalDex::Borrow(JavaVM*vm)const noexcept{
+ if(vm!=vm_||!redefinition_gate::ObservationComplete(vm,&observer_)||!records_.Trusted())return nullptr;
+ return &records_;
+}
+namespace {
+struct ProcessFinalDex {
+ Provenance records;
+ FinalDex observer{records};
+};
+std::mutex installation;
+std::atomic<ProcessFinalDex*>published{nullptr};
+}
+bool InstallFinalDexAtStartup(HookEngine&hooks,JavaVM*vm,std::string*error){
+ if(!redefinition_gate::Ready(vm)){
+  if(error)*error="final-DEX-process-startup-or-pristine-gate-unproved";return false;
+ }
+ std::lock_guard<std::mutex>guard(installation);
+ // Named hooks are retained for the process lifetime. Destructing this owner
+ // at C++ static teardown would leave the live Direct trampoline dangling and
+ // require JNI cleanup after the VM may already be gone. Retain the owner too.
+ static ProcessFinalDex*process=nullptr;
+ if(!process)process=new(std::nothrow) ProcessFinalDex;
+ if(!process){if(error)*error="final-DEX-process-owner-allocation-failed";return false;}
+ if(!process->observer.Install(hooks,vm,error))return false;
+ published.store(process,std::memory_order_release);return true;
+}
+Provenance*BorrowFinalDexRecords(JavaVM*vm)noexcept{
+ const auto*process=published.load(std::memory_order_acquire);
+ return process?process->observer.Borrow(vm):nullptr;
 }
 void*FinalDex::Begin(void*owner,void*,void*,void*self,const void*definitions,int32_t)noexcept{
  auto&state=*static_cast<FinalDex*>(owner);

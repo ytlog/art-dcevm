@@ -2,6 +2,7 @@
 #include "jvmti.h"
 #include "core/transaction_lock.h"
 #include "platform/common/redefinition_gate.h"
+#include "platform/common/production_final_dex.h"
 #include "hooks/shadow_hook_engine.h"
 #include <android/log.h>
 #include <memory>
@@ -25,6 +26,10 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     std::string error;
     const bool gated=artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
     __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pristineGate=%d diagnostic=%s",gated,gated?artdcevm::redefinition_gate::Diagnostic():error.c_str());
+    if(gated){
+      const bool recorded=artdcevm::production_bootstrap::InstallFinalDexAtStartup(hooks,vm,&error);
+      __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad finalDexSource=%d diagnostic=%s",recorded,recorded?"observing final Direct inputs":error.c_str());
+    }
   }
   return JNI_VERSION_1_6;
 }
@@ -35,7 +40,8 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   // cannot replace the pristine proof obtained by JNI_OnLoad before attach.
   static artdcevm::ShadowHookEngine first_live_hooks;
   std::string gate_error;
-  (void)artdcevm::redefinition_gate::InstallFirstLive(first_live_hooks,vm,&gate_error);
+  if(artdcevm::redefinition_gate::InstallFirstLive(first_live_hooks,vm,&gate_error))
+    (void)artdcevm::production_bootstrap::InstallFinalDexAtStartup(first_live_hooks,vm,&gate_error);
   auto candidate = artdcevm::CreateBackend();
   if (!candidate || candidate->Attach(vm) != JNI_OK) return JNI_ERR;
   backend = std::move(candidate);
@@ -50,6 +56,7 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm,char* options,void* re
   static artdcevm::ShadowHookEngine startup_hooks;
   std::string error;
   const bool installed=artdcevm::redefinition_gate::InstallStartup(startup_hooks,vm,ti,&error);
+  if(installed)(void)artdcevm::production_bootstrap::InstallFinalDexAtStartup(startup_hooks,vm,&error);
   ti->DisposeEnvironment();
   // Preserve public/body support when startup proof or named gate is missing;
   // the separate atomic capability remains false with a precise diagnostic.

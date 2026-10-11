@@ -12,7 +12,8 @@
 using namespace artdcevm;
 namespace {
 JNIEnv*current_env=nullptr;int self_object,runtime_object,env_object,class_object;
-bool exception=false,weak_oom=false,throw_original=false,mutate=false;
+bool exception=false,weak_oom=false,throw_original=false,mutate=false,expect_process=false;
+JavaVM*process_vm=nullptr;
 size_t originals=0,created=0,deleted=0,cleared=0;
 jvmtiError result=JVMTI_ERROR_NONE;
 struct Weak {jobject klass;};std::vector<Weak*>weak_refs;
@@ -30,6 +31,8 @@ void*Current(){return &self_object;}
 unsigned char bytes[]{1,2,3};
 jvmtiError Body(void*env,void*runtime,void*self,const void*,int32_t,void*){
  assert(env==&env_object&&runtime==&runtime_object&&self==&self_object);++originals;
+ if(expect_process&&redefinition_gate::owned)
+  assert(production_bootstrap::BorrowFinalDexRecords(process_vm));
  if(mutate)bytes[0]=9;
  if(throw_original)throw std::runtime_error("original unwind");
  return result;
@@ -59,7 +62,30 @@ int main(int argc,char**argv){
  abi::arm64::android_common::TransformedDefinitions source{&definition,&definition+1,&definition+1};
  const auto invoke=[&]{return redefinition_gate::Proxy(&env_object,&runtime_object,&self_object,&source,0,nullptr);};
  production_bootstrap::Provenance records;production_bootstrap::FinalDex recorder(records);
- if(mode=="history"){
+ if(mode=="process"||mode=="failed-history"){
+  assert(!production_bootstrap::BorrowFinalDexRecords(&vm));
+  if(mode=="failed-history"){
+   result=JVMTI_ERROR_FAILS_VERIFICATION;assert(invoke()==result);result=JVMTI_ERROR_NONE;
+  }
+  assert(production_bootstrap::InstallFinalDexAtStartup(hooks,&vm,&error));
+  assert(production_bootstrap::InstallFinalDexAtStartup(hooks,&vm,&error));
+  assert(!production_bootstrap::BorrowFinalDexRecords(&vm));
+  expect_process=true;process_vm=&vm;
+  mutate=true;assert(invoke()==JVMTI_ERROR_NONE);mutate=false;
+  {redefinition_gate::Lease lease(&vm);assert(lease.Acquired());
+   auto*source_records=production_bootstrap::BorrowFinalDexRecords(&vm);assert(source_records);
+   assert(invoke()==JVMTI_ERROR_NONE);
+   JavaVM other{};assert(!production_bootstrap::BorrowFinalDexRecords(&other));
+   std::vector<unsigned char>installed;
+   assert(source_records->Find(&env,definition.klass,&installed)&&installed[0]==1&&bytes[0]==9);
+   source_records->Clear(&env);
+  }
+  assert(!production_bootstrap::BorrowFinalDexRecords(&vm));
+ }else if(mode=="process-history"){
+  assert(invoke()==JVMTI_ERROR_NONE);
+  assert(!production_bootstrap::InstallFinalDexAtStartup(hooks,&vm,&error));
+  {redefinition_gate::Lease lease(&vm);assert(lease.Acquired()&&!production_bootstrap::BorrowFinalDexRecords(&vm));}
+ }else if(mode=="history"){
   assert(invoke()==JVMTI_ERROR_NONE);
   assert(!recorder.Install(hooks,&vm,&error)&&!records.Trusted());
  }else{

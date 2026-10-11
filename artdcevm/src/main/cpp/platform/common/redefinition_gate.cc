@@ -194,7 +194,7 @@ bool InstallFirstLive(HookEngine& hooks,JavaVM* vm,std::string* error){
 bool Ready(JavaVM* vm){return ready.load(std::memory_order_acquire)&&vm==startup_vm;}
 bool Owned(JavaVM* vm){return Ready(vm)&&owned;}
 bool ObservationComplete(JavaVM*vm,const DirectObservation*observer)noexcept{
- return observer&&Owned(vm)&&!direct&&observation.load(std::memory_order_acquire)==observer&&
+ return observer&&Owned(vm)&&observation.load(std::memory_order_acquire)==observer&&
   !unobserved_public.load(std::memory_order_acquire);
 }
 const char* Diagnostic(){return diagnostic.load();}

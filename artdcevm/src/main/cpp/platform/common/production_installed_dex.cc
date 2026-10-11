@@ -1,5 +1,6 @@
 #include "platform/common/production_installed_dex.h"
 #include "platform/common/bootstrap_dex_oracle.h"
+#include "platform/common/production_final_dex.h"
 #include <cstdlib>
 
 namespace artdcevm::production_bootstrap {
@@ -19,6 +20,8 @@ bool InstalledDex::Bind(JNIEnv*env,jvmtiEnv*ti,jclass anchor,std::string*error){
  JavaVM*vm=nullptr;JNIEnv*current=nullptr;
  if(env->GetJavaVM(&vm)!=JNI_OK||!vm||vm->GetEnv(reinterpret_cast<void**>(&current),JNI_VERSION_1_6)!=JNI_OK||current!=env)
   return Fail(error,"installed-DEX-source-current-VM-owner-unavailable");
+ if(BorrowFinalDexRecords(vm)!=&provenance_)
+  return Fail(error,"installed-DEX-source-process-record-or-operation-lease-unavailable");
  Local loader{env};
  if(ti->GetClassLoader(anchor,&loader.value)!=JVMTI_ERROR_NONE||!loader.value||env->ExceptionCheck())
   return Fail(error,"installed-DEX-source-APK-loader-anchor-unavailable");
@@ -31,7 +34,8 @@ bool InstalledDex::Read(const runnable_jni::Context&context,jclass klass,const s
  if(!vm_||!ti_||!loader_||!out||!klass||descriptor.empty()||context.vm!=vm_||!context.env||
     context.env->ExceptionCheck()||!runnable_jni::Bridge::BorrowOriginalScope(context))
   return Fail(error,"installed-DEX-source-original-Runnable-owner-unavailable");
- if(!provenance_.Trusted())return Fail(error,"installed-DEX-source-unrecorded-success-or-unknown-outcome");
+ if(BorrowFinalDexRecords(static_cast<JavaVM*>(context.vm))!=&provenance_)
+  return Fail(error,"installed-DEX-source-process-record-or-operation-lease-unavailable");
  std::vector<unsigned char>candidate;
  if(provenance_.Find(context.env,klass,&candidate)){
   *out=std::move(candidate);return true;
