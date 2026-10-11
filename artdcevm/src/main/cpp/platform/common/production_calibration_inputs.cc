@@ -19,15 +19,20 @@ struct Text {jvmtiEnv*ti;char*value=nullptr;~Text(){if(value)ti->Deallocate(rein
 struct Ids {jvmtiEnv*ti;unsigned char*value=nullptr;~Ids(){if(value)ti->Deallocate(value);}};
 bool Declaration(JNIEnv*env,jvmtiEnv*ti,jclass klass,Provenance&records,
  const std::vector<std::vector<unsigned char>>&apk,evolution::ClassSchema*out,
- evolution::MappedDexMemberCounts*counts,std::string*error){
+ evolution::MappedDexMemberCounts*counts,std::string*error,std::vector<unsigned char>*selected=nullptr){
  Text signature{ti};
  if(ti->GetClassSignature(klass,&signature.value,nullptr)!=JVMTI_ERROR_NONE||!signature.value)
   return Fail(error,"calibration-input-Class-signature-unavailable");
  std::vector<unsigned char>effective;
- if(records.Find(env,klass,&effective))
-  return SelectInstalledClass({std::move(effective)},signature.value,out,counts,error);
+ const bool recorded=records.Find(env,klass,&effective);
  if(env->ExceptionCheck()||!records.Trusted())return Fail(error,"calibration-input-current-DEX-source-unavailable");
- return SelectInstalledClass(apk,signature.value,out,counts,error);
+ const std::vector<std::vector<unsigned char>>current=recorded?
+     std::vector<std::vector<unsigned char>>{std::move(effective)}:std::vector<std::vector<unsigned char>>{};
+ const auto&files=recorded?current:apk;
+ InstalledClassLocation location;
+ if(!SelectInstalledClass(files,signature.value,out,counts,error,nullptr,selected?&location:nullptr))return false;
+ if(selected){if(location.file_index>=files.size())return false;*selected=files[location.file_index];}
+ return true;
 }
 }
 void*CalibrationInputs::NativeMarker()noexcept{return reinterpret_cast<void*>(Marker);}
@@ -157,7 +162,8 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   if(!method_handles_[n])return Fail(error,"calibration-input-method-MethodHandle-unavailable");
  }
  if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error)||
-    !LoadReceiver(env,ti,static_cast<jclass>(type.value),error))return false;
+    !LoadReceiver(env,ti,static_cast<jclass>(type.value),error)||
+    !LoadFinalWriter(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
  for(const auto&method:methods_schema_.methods)
   if(method.name=="bootstrapNativeMarker"&&method.descriptor=="()V"&&
@@ -211,6 +217,114 @@ bool CalibrationInputs::ExerciseMethodHandle(JNIEnv*env,size_t index,std::string
  const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_,jint(index))==JNI_TRUE;
  if(env->ExceptionCheck())return false;
  return matched||Fail(error,"calibration-input-method-MethodHandle-public-result-differs");
+}
+bool CalibrationInputs::PrepareFinalWrite(JNIEnv*env,size_t index,std::string*error)const{
+ JavaVM*vm=nullptr;
+ if(index>=final_fields_.size()||!env||env->ExceptionCheck()||!bootstrap_||!input_||
+    env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-final-writer-prepare-invalid-owner-or-index");
+ auto run=env->GetStaticMethodID(bootstrap_,"prepareFinalWrite","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z");
+ if(!run||env->ExceptionCheck())return false;
+ const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_,jint(index))==JNI_TRUE;
+ if(env->ExceptionCheck())return false;
+ return matched||Fail(error,"calibration-input-final-writer-legal-write-or-sentinel-differs");
+}
+bool CalibrationInputs::ExerciseFinalWrite(JNIEnv*env,size_t index,bool*illegal,bool*unchanged,std::string*error)const{
+ if(illegal)*illegal=false;if(unchanged)*unchanged=false;JavaVM*vm=nullptr;
+ if(!illegal||!unchanged||index>=final_fields_.size()||!env||env->ExceptionCheck()||!bootstrap_||!input_||
+    env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-final-writer-exercise-invalid-owner-or-index");
+ auto run=env->GetStaticMethodID(bootstrap_,"exerciseFinalWrite","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)I");
+ if(!run||env->ExceptionCheck())return false;
+ const jint facts=env->CallStaticIntMethod(bootstrap_,run,input_,jint(index));
+ if(env->ExceptionCheck())return false;
+ if(facts<0||(facts&~3))return Fail(error,"calibration-input-final-writer-public-facts-invalid");
+ *illegal=(facts&1)!=0;*unchanged=(facts&2)!=0;return true;
+}
+bool CalibrationInputs::LoadFinalWriter(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
+ std::string ignored;if(!error)error=&ignored;
+ auto*records=BorrowFinalDexRecords(vm_);
+ if(!records||receiver_guard::PreparePublicBytecodes(ti)!=JVMTI_ERROR_NONE)
+  return Fail(error,"calibration-input-final-writer-DEX-history-or-bytecodes-unavailable");
+ Local expected_target{env,env->FindClass("com/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target")},
+       expected_writer{env,env->FindClass("com/github/ytlog/artdcevm/internal/FinalPermissionOracle$Writer")};
+ auto target_id=env->GetFieldID(type,"finalTarget","Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;");
+ auto writer_id=env->GetFieldID(type,"finalWriter","Ljava/lang/reflect/Method;");
+ if(!expected_target.value||!expected_writer.value||!target_id||!writer_id||env->ExceptionCheck())return false;
+ Local target{env,env->GetObjectField(input_,target_id)},mirror{env,env->GetObjectField(input_,writer_id)};
+ if(!target.value||!mirror.value||env->ExceptionCheck())return false;
+ Local actual_target{env,env->GetObjectClass(target.value)};
+ if(!actual_target.value||!env->IsSameObject(actual_target.value,expected_target.value)||env->ExceptionCheck())
+  return Fail(error,"calibration-input-final-target-is-not-the-SDK-fixture");
+ final_target_class_=static_cast<jclass>(Own(env,expected_target.value));
+ final_writer_class_=static_cast<jclass>(Own(env,expected_writer.value));
+ if(!final_target_class_||!final_writer_class_)return false;
+ evolution::ClassSchema writer_schema,live;std::vector<unsigned char>writer_dex;
+ evolution::MappedDexMemberCounts writer_counts{},field_counts{};
+ if(!Declaration(env,ti,final_writer_class_,*records,apk_,&writer_schema,&writer_counts,error,&writer_dex)||
+    !Declaration(env,ti,final_target_class_,*records,apk_,&final_fields_schema_,&field_counts,error)||
+    live_schema::ReadLiveSchema(ti,env,final_writer_class_,&live,error)!=JVMTI_ERROR_NONE||
+    env->ExceptionCheck()||!body_only::SameDeclarations(live,writer_schema))
+  return Fail(error,"calibration-input-final-writer-complete-declarations-differ-from-DEX");
+ if(live_schema::ReadLiveSchema(ti,env,final_target_class_,&live,error)!=JVMTI_ERROR_NONE||
+    env->ExceptionCheck()||!body_only::SameDeclarations(live,final_fields_schema_)||
+    final_fields_schema_.fields.size()!=final_fields_.size())
+  return Fail(error,"calibration-input-final-target-complete-declarations-differ-from-DEX");
+ const auto id=env->FromReflectedMethod(mirror.value);if(!id||env->ExceptionCheck())return false;
+ jclass declaring=nullptr;
+ if(ti->GetMethodDeclaringClass(id,&declaring)!=JVMTI_ERROR_NONE||!declaring){
+  if(declaring)env->DeleteLocalRef(declaring);return false;
+ }
+ Local owned_declaring{env,declaring};Text name{ti},descriptor{ti};jint flags=0;
+ if(!env->IsSameObject(declaring,final_writer_class_)||env->ExceptionCheck()||
+    ti->GetMethodName(id,&name.value,&descriptor.value,nullptr)!=JVMTI_ERROR_NONE||
+    ti->GetMethodModifiers(id,&flags)!=JVMTI_ERROR_NONE||!name.value||!descriptor.value||
+    std::strcmp(name.value,"write")||std::strcmp(descriptor.value,
+      "(Lcom/github/ytlog/artdcevm/internal/FinalPermissionOracle$Target;ILjava/lang/Object;ZZ)V")||
+    !(flags&8)||(flags&(0x100|0x400)))
+  return Fail(error,"calibration-input-final-writer-public-method-identity-refused");
+ native_call_graph_incoming::Inventory inventory;
+ if(!inventory.Capture(writer_dex,writer_schema.descriptor,error))return false;
+ const evolution::Member*member=nullptr;
+ for(const auto&method:inventory.Methods())if(method.declaration.name==name.value&&method.declaration.descriptor==descriptor.value){
+  if(member)return Fail(error,"calibration-input-final-writer-DEX-identity-ambiguous");member=&method.declaration;
+ }
+ if(!member||(member->access&0xffffu)!=(uint32_t(flags)&0xffffu))return false;
+ const auto*instructions=inventory.InstructionBytes(member->dex_index);
+ jint byte_count=0;unsigned char*public_bytes=nullptr;
+ const auto byte_result=ti->GetBytecodes(id,&byte_count,&public_bytes);Ids owned_bytes{ti,public_bytes};
+ if(!instructions||instructions->empty()||byte_result!=JVMTI_ERROR_NONE||!public_bytes||byte_count<=0||
+    size_t(byte_count)!=instructions->size()||std::memcmp(public_bytes,instructions->data(),instructions->size()))
+  return Fail(error,"calibration-input-final-writer-public-bytecodes-differ-from-final-DEX");
+ final_writer_instructions_=*instructions;
+ final_writer_={Own(env,mirror.value),member->dex_index,uint32_t(flags)};
+ if(!final_writer_.strong_global_method)return false;
+ jint field_count=0;jfieldID*ids=nullptr;
+ const auto field_result=ti->GetClassFields(final_target_class_,&field_count,&ids);
+ Ids owned_fields{ti,reinterpret_cast<unsigned char*>(ids)};
+ if(field_result!=JVMTI_ERROR_NONE||field_count!=jint(final_fields_.size())||!ids)return false;
+ constexpr const char*names[]{"instanceValue","staticValue","instanceReference","staticReference"};
+ uint32_t seen=0;
+ for(jint n=0;n<field_count;++n){
+  Text field_name{ti},field_type{ti};jint field_flags=0;
+  if(ti->GetFieldName(final_target_class_,ids[n],&field_name.value,&field_type.value,nullptr)!=JVMTI_ERROR_NONE||
+     ti->GetFieldModifiers(final_target_class_,ids[n],&field_flags)!=JVMTI_ERROR_NONE||
+     !field_name.value||!field_type.value)return false;
+  size_t index=0;while(index<final_fields_.size()&&std::strcmp(names[index],field_name.value))++index;
+  if(index==final_fields_.size()||(seen&(1u<<index))||
+     std::strcmp(field_type.value,index<2?"I":"Ljava/lang/Object;")||
+     (uint32_t(field_flags)&0xffffu)!=(index&1?9u:1u))
+   return Fail(error,"calibration-input-final-field-storage-path-identity-refused");
+  const evolution::Member*field=nullptr;
+  for(const auto&candidate:final_fields_schema_.fields)
+   if(candidate.name==field_name.value&&candidate.descriptor==field_type.value){if(field)return false;field=&candidate;}
+  if(!field||(field->access&0xffffu)!=(uint32_t(field_flags)&0xffffu))return false;
+  Local field_mirror{env,env->ToReflectedField(final_target_class_,ids[n],index&1?JNI_TRUE:JNI_FALSE)};
+  auto root=Own(env,field_mirror.value);if(!root)return false;
+  final_fields_[index]={root,field->name.c_str(),field->descriptor.c_str(),uint32_t(field_flags),field->dex_index};
+  seen|=1u<<index;
+ }
+ return seen==0xfu&&!env->ExceptionCheck();
 }
 bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  std::string ignored;if(!error)error=&ignored;

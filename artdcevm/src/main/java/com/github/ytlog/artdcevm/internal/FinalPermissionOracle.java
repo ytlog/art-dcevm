@@ -42,15 +42,18 @@ final class FinalPermissionOracle {
     }
     static Target create() { return new Target(); }
     static Handles prepareHandles() throws Exception { return new Handles(); }
-    // A single foreign-owner writer covers both field event overload/storage paths.
-    static void write(Target target, int value, Object object, boolean statik, boolean reference) {
-        if (reference) {
-            if (statik) Target.staticReference = object;
-            else target.instanceReference = object;
-            return;
+    // Separate declaring owner with no signature-polymorphic handle helpers:
+    // its complete DEX body is the public bytecode writer oracle.
+    static final class Writer {
+        static void write(Target target, int value, Object object, boolean statik, boolean reference) {
+            if (reference) {
+                if (statik) Target.staticReference = object;
+                else target.instanceReference = object;
+                return;
+            }
+            if (statik) Target.staticValue = value;
+            else target.instanceValue = value;
         }
-        if (statik) Target.staticValue = value;
-        else target.instanceValue = value;
     }
     static int checkHandles(Handles handles, Target target, boolean statik, int value) throws Throwable {
         int result = 0;

@@ -36,6 +36,15 @@ class CalibrationInputs final {
  // Public Java execution of the retained isolated fixture. Preserves original
  // exceptions; matched is a behavior oracle, never an event/coverage receipt.
  bool InvokeReceiver(JNIEnv*,size_t index,bool*matched,std::string*)const;
+ // Independent APK/final-DEX identities for all four bytecode storage paths.
+ const method_identity::Oracle&FinalWriter()const noexcept{return final_writer_;}
+ jclass FinalWriterClass()const noexcept{return final_writer_class_;}
+ jclass FinalTargetClass()const noexcept{return final_target_class_;}
+ const std::vector<unsigned char>&FinalWriterInstructions()const noexcept{return final_writer_instructions_;}
+ const std::array<modern_field_metadata::FieldOracle,4>&FinalFields()const noexcept{return final_fields_;}
+ const evolution::ClassSchema&FinalFieldsSchema()const noexcept{return final_fields_schema_;}
+ bool PrepareFinalWrite(JNIEnv*,size_t,std::string*)const;
+ bool ExerciseFinalWrite(JNIEnv*,size_t,bool*illegal_access,bool*unchanged,std::string*)const;
  const std::array<jobject,2>&FieldVarHandles()const noexcept{return field_var_handles_;}
  bool ExerciseFieldHandles(JNIEnv*,std::string*)const;
  const std::array<jobject,4>&FieldMethodHandles()const noexcept{return field_method_handles_;}
@@ -55,6 +64,7 @@ class CalibrationInputs final {
  CalibrationInputs()=default;
  bool Load(JNIEnv*,jvmtiEnv*,jobject,std::string*);
  bool LoadOrdinary(JNIEnv*,jvmtiEnv*,jclass input_type,std::string*);
+ bool LoadFinalWriter(JNIEnv*,jvmtiEnv*,jclass input_type,std::string*);
  bool LoadReceiver(JNIEnv*,jvmtiEnv*,jclass input_type,std::string*);
  jobject Own(JNIEnv*,jobject);
  JavaVM*vm_=nullptr;std::vector<jobject>roots_;
@@ -68,6 +78,11 @@ class CalibrationInputs final {
  std::vector<method_identity::Oracle>methods_;
  std::vector<std::string>field_names_,field_types_;
  std::vector<modern_field_metadata::FieldOracle>fields_;
+ method_identity::Oracle final_writer_{};
+ jclass final_writer_class_=nullptr,final_target_class_=nullptr;
+ evolution::ClassSchema final_fields_schema_;
+ std::array<modern_field_metadata::FieldOracle,4>final_fields_{};
+ std::vector<unsigned char>final_writer_instructions_;
  jobject receiver_object_=nullptr;
  std::array<jobject,2>field_var_handles_{};
  std::array<jobject,4>field_method_handles_{};

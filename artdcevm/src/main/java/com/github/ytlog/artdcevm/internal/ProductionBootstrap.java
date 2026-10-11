@@ -61,6 +61,9 @@ public final class ProductionBootstrap {
         final Object receiverGuardFixture;
         final Method[] receiverCallers = new Method[10], receiverTargets = new Method[10];
         final java.lang.reflect.Field cacheField;
+        final FinalPermissionOracle.Target finalTarget = FinalPermissionOracle.create();
+        final Object finalReferenceSentinel = new Object();
+        final Method finalWriter;
         final Object methodReceiver = new EvolutionCalibration();
         final MethodHandle[] methodHandles;
         final Method[] methods;
@@ -71,6 +74,8 @@ public final class ProductionBootstrap {
         final VarHandle instanceHandle, staticHandle;
         final MethodHandle instanceGetter, instanceSetter, staticGetter, staticSetter;
         Inputs(byte[][] dex, Class<?> target, byte[] replacement, byte[] cacheDex, byte[][] ordinaryDex, byte[] receiverDex) throws Exception {
+            finalWriter = FinalPermissionOracle.Writer.class.getDeclaredMethod("write",
+                FinalPermissionOracle.Target.class, int.class, Object.class, boolean.class, boolean.class);
             this.dex = dex; additiveClass = target; additiveDex = replacement;
             ordinarySourceDex = ordinaryDex;
             ClassLoader ordinaryLoader = new InMemoryDexClassLoader(ByteBuffer.wrap(ordinaryDex[0]), null);
@@ -153,6 +158,34 @@ public final class ProductionBootstrap {
         Object target = java.lang.reflect.Modifier.isStatic(caller.getModifiers()) ? null : input.receiverSourceObject;
         Object[] args = caller.getParameterTypes().length == 0 ? new Object[0] : new Object[]{input.receiverSourceObject};
         return (int) caller.invoke(target, args);
+    }
+    private static java.lang.reflect.Field finalWriteField(int index) throws Exception {
+        if (index < 0 || index >= 4) throw new IllegalArgumentException("final writer sample index");
+        String[] names = {"instanceValue", "staticValue", "instanceReference", "staticReference"};
+        return FinalPermissionOracle.Target.class.getDeclaredField(names[index]);
+    }
+    static boolean prepareFinalWrite(Inputs input, int index) throws Exception {
+        java.lang.reflect.Field field = finalWriteField(index);
+        boolean statik = (index & 1) != 0, reference = index >= 2;
+        FinalPermissionOracle.Writer.write(input.finalTarget, 41 + index,
+            input.finalReferenceSentinel, statik, reference);
+        Object target = statik ? null : input.finalTarget;
+        return reference ? field.get(target) == input.finalReferenceSentinel
+                         : field.getInt(target) == 41 + index;
+    }
+    // Two independent facts: the exact exception type and the unchanged public
+    // reflection value. Native must separately witness the actual writer event.
+    static int exerciseFinalWrite(Inputs input, int index) throws Exception {
+        java.lang.reflect.Field field = finalWriteField(index);
+        boolean statik = (index & 1) != 0, reference = index >= 2;
+        int result = 0;
+        try {
+            FinalPermissionOracle.Writer.write(input.finalTarget, 48 + index, input, statik, reference);
+        } catch (IllegalAccessError expected) { result |= 1; }
+        Object target = statik ? null : input.finalTarget;
+        if (reference ? field.get(target) == input.finalReferenceSentinel
+                      : field.getInt(target) == 41 + index) result |= 2;
+        return result;
     }
     static boolean verifyOrdinarySource(Inputs input, int step) throws Exception {
         Class<?> type = input.ordinarySourceClass;
