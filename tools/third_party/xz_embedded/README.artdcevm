@@ -1,6 +1,0 @@
-XZ Embedded minimal LZMA2/CRC32/CRC64 decoder subset.
-Upstream: https://github.com/tukaani-project/xz-embedded
-Fixed revision: ae63ae3a36ed01724674e8f3d750dc47bf125410
-License: 0BSD, see COPYING and original file headers.
-Sources unmodified. xz_config.h compiled with XZ_USE_CRC64.
-Only .gnu_debugdata names are decoded; decoder never resolves ART addresses.

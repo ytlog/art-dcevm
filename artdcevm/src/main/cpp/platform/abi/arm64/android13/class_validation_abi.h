@@ -1,6 +1,0 @@
-#pragma once
-#include <cstdint>
-namespace artdcevm::android13 {
-inline constexpr uint32_t kValidationClassFlags = 0x5431;
-inline constexpr uint32_t kValidationInterfaceFlags = 0x3601;
-}
