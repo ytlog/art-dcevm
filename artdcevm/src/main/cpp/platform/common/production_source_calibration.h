@@ -29,6 +29,7 @@ class SourceCalibration final {
  native_cache::Service&Cache()noexcept{return cache_;}
  native_source_compilation::Service&Compilation()noexcept{return compilation_;}
  retirement::Owners Retired()noexcept{return {membership_,retired_fields_,retired_methods_};}
+ native_interpretation_registry::Registry&Interpretation()noexcept{return interpretation_;}
  private:
  SourceCalibration(HookEngine&hooks,std::unique_ptr<MetadataCalibration>metadata):hooks_(hooks),metadata_(std::move(metadata)){}
  ~SourceCalibration()=default;
@@ -61,6 +62,8 @@ class SourceCalibration final {
  retirement::Membership membership_;
  retirement::RetiredFieldRegistry retired_fields_;
  retirement::RetiredMethodRegistry retired_methods_;
+ native_interpretation_registry::Registry interpretation_;
+ bool interpretation_bound_=false;
  bool exclusive_bound_=false;
  bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false;
  bool bound_=false,installed_=false,poisoned_=false;

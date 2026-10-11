@@ -168,16 +168,23 @@ bool Registry::Initialize(HookEngine&hooks,const runnable_jni::Context&context,
  const auto deny=[&](const char*why){if(error)*error=why;return false;};
  if(!context.env||!context.vm||!context.self||!self_extent||!runnable_jni::Bridge::BorrowOriginalScope(context)||
     context.env->ExceptionCheck()||!native_source_stop::Session::InspectionAvailable()||!source.Calibrated()||
-    !yes.method||!no.method||yes.method==no.method||query_token_||pending_||Count())
+    !yes.method||!no.method||yes.method==no.method||query_token_||pending_||Count()||
+    !runtime_||!runtime_slot_||*runtime_slot_!=runtime_||!instrumentation_||!class_linker_)
   return deny("interpretation-bootstrap-needs-original-runnable-scope-and-fresh-rooted-fixture");
  native_selective_interpretation::Service positive,negative;
  retirement::CleanupBinding cleanup;
- // All JNI/receiver calibration and allocation precedes the fresh mapping
- // snapshot and actual stop. These owners journal ART's native set separately
- // from the persistent query installed by the callback below.
- if(!BindQuery(hooks,context.env,error)||!BindCompilationPolicy(hooks,calibration,metadata,error)||
+ // BindQuery independently calibrated these receivers at the ordinary
+ // Native boundary. Re-entering that producer here would nest its Runnable
+ // executor inside this retained original callback and cannot prove ownership.
+ // Registry is the sole private friend supplying this already observed owner;
+ // no caller-selected Snapshot or readiness Boolean binds either journal.
+ positive.runtime_=negative.runtime_=runtime_;
+ positive.instrumentation_=negative.instrumentation_=instrumentation_;
+ positive.runtime_slot_=negative.runtime_slot_=runtime_slot_;
+ // All remaining preparation precedes the fresh mapping snapshot and stop.
+ // The journals preserve ART's native set independently of persistent policy.
+ if(!BindCompilationPolicy(hooks,calibration,metadata,error)||
     !BindEntryQuery(hooks,error)||!BindEntryUpdates(hooks,error)||
-    !positive.CalibrateOwner(hooks,context.env,error)||!negative.CalibrateOwner(hooks,context.env,error)||
     !positive.Prepare(hooks,calibration,metadata,roots,&yes,1,error)||!positive.PrepareRefund(hooks,error)||
     !negative.Prepare(hooks,calibration,metadata,roots,&no,1,error))return false;
  if(runtime.runtime!=runtime_||runtime.instrumentation!=instrumentation_||runtime.receivers.class_linker!=class_linker_)

@@ -142,6 +142,10 @@ bool SourceCalibration::PrepareCommitReaders(JNIEnv*env,std::string*error){
  }
  if(!cache_bound_){if(!cache_.Bind(hooks_,runtime.receivers.thread_list,error))return false;cache_bound_=true;}
  if(!roots_bound_){if(!roots_.Bind(hooks_,runtime.runtime,current,error))return false;roots_bound_=true;}
+ if(!interpretation_bound_){
+  if(!interpretation_.BindQuery(hooks_,env,error))return false;
+  interpretation_bound_=true;
+ }
  if(!cache_.Prepare(error)||!cache_.PreparedForCurrentThread())return false;
  if(!roots_.LocksCalibrated()){
   RootLocks request{*this,error};

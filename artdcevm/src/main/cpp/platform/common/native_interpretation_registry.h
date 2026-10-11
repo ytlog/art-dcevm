@@ -48,8 +48,10 @@ class Registry final {
  std::unique_ptr<Reservation>Prepare(const std::vector<void*>&,std::string*);
  bool Contains(void*)const noexcept;
  size_t Count()const noexcept;
- // Synchronous ordinary bootstrap over two independently rooted managed
- // fixture methods in one Class. The caller retains their Store and source
+ // BindQuery must first complete at the actual ordinary Native JNI boundary;
+ // its independently observed owner is shared with both temporary journals.
+ // Synchronous original Runnable bootstrap over two independently rooted
+ // managed fixture methods in one Class. The caller retains their Store and source
  // calibration throughout. Once any hook is installed this Registry must be
  // process-owned even if a later step refuses initialization.
  bool Initialize(HookEngine&,const runnable_jni::Context&,
