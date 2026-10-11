@@ -52,6 +52,10 @@ void Factory::Finish()noexcept{
  owner_.CloseBeforeRun();
  if(owner_.SourceViewsLive()||run_.execution->HasOwnedEntries())std::abort();
  native_read_=false;mappings_.reset();
+ // Run has restored the original callback and released its source stop. No
+ // native member/Session is read while public handles are forgotten/deleted.
+ if(final_fields_){if(!final_fields_->Close())std::abort();final_fields_.reset();}
+ bindings_.verifier.final_fields=nullptr;bindings_.payload.final_fields=nullptr;
  registry_.Clear();
  record_.reset();inputs_.clear();incoming_.clear();submitted_incoming_.clear();
  run_.hierarchy.authority->Clear(run_.hierarchy.context->env);
@@ -70,7 +74,9 @@ bool Factory::Ready()const noexcept{
   bindings_.verifier.vm==run_.hierarchy.context->vm&&
   bindings_.verifier.metadata==run_.hierarchy.metadata&&
   bindings_.verifier.methods==bindings_.payload.method_model&&
-  bindings_.payload.final_fields&&bindings_.verifier.final_fields==bindings_.payload.final_fields&&
+  bindings_.final_writer&&bindings_.payload.commit.handle_roots&&
+  run_.hierarchy.pool->UsesService(*bindings_.payload.commit.handle_roots)&&
+  bindings_.verifier.final_fields==final_fields_.get()&&bindings_.payload.final_fields==final_fields_.get()&&
   bindings_.hierarchy.metadata==run_.hierarchy.metadata&&
   bindings_.hierarchy.allocation==run_.hierarchy.allocation&&
   bindings_.payload.commit.schema==bindings_.schema&&
@@ -145,6 +151,13 @@ bool Factory::Stage(JNIEnv*env,jvmtiEnv*ti,const std::vector<Definition>&definit
  }
  // Resolve proposed relations before closing the verifier's loaded-caller
  // census. Both owners receive the same exact callback Context and final DEX.
+ final_fields_=final_write_guard::AliasBatch::Prepare(*bindings_.final_writer,
+   *run_.hierarchy.context,*bindings_.payload.commit.handle_roots,error);
+ if(!final_fields_)return false;
+ if(!final_fields_->UsesMetadata(*run_.hierarchy.metadata)){
+  if(error)*error="call-graph-final-writer-metadata-owner-mismatch";return false;
+ }
+ bindings_.verifier.final_fields=final_fields_.get();bindings_.payload.final_fields=final_fields_.get();
  if(!run_.hierarchy.authority->Stage(*run_.hierarchy.context,ti,proposals,bindings_.hierarchy,error)||
     !bindings_.schema->Stage(*run_.hierarchy.context,ti,classes,bindings_.verifier,error))return false;
  struct Locals{JNIEnv*env;std::vector<jclass>values;~Locals(){for(auto value:values)env->DeleteLocalRef(value);}}affected{env,{}};
@@ -207,6 +220,19 @@ bool Factory::CaptureInputs(JNIEnv*env,const std::vector<Definition>&definitions
  if(!MatchInputs(env,definitions,rooted,error))return false;
  inputs_=std::move(rooted);incoming_=std::move(incoming);inputs_staged_=true;return true;
 }
+bool Factory::StageFinalAliases(JNIEnv*env,std::string*error){
+ if(!Ready()||!inputs_staged_||!final_fields_||env!=run_.hierarchy.context->env||
+    !native_source_stop::Session::InspectionAvailable()){
+  if(error)*error="call-graph-final-alias-cohort-stage-owner-refused";return false;
+ }
+ struct Locals{JNIEnv*env;std::vector<jclass>values;~Locals(){for(auto value:values)env->DeleteLocalRef(value);}}classes{env,{}};
+ classes.values.reserve(inputs_.size());
+ for(const auto&input:inputs_){auto klass=static_cast<jclass>(roots_->LocalRef(env,input.original));
+  if(!klass||env->ExceptionCheck()){if(klass)env->DeleteLocalRef(klass);return false;}
+  classes.values.push_back(klass);
+ }
+ return roots_->Generation()==generation_&&final_fields_->StageClasses(classes.values,error);
+}
 bool Factory::Preflight(JNIEnv*env,jvmtiEnv*ti,const std::vector<Definition>&definitions,std::string*error){
  if(preflight_attempted_||!Ready()||!ti||!attached_||
     !native_source_stop::Session::InspectionAvailable()||
@@ -221,7 +247,7 @@ bool Factory::Preflight(JNIEnv*env,jvmtiEnv*ti,const std::vector<Definition>&def
  preflight_inputs_=&definitions;
  struct CloseInputBorrow{const std::vector<Definition>*&slot;~CloseInputBorrow(){slot=nullptr;}}close{preflight_inputs_};
  if(!Stage(env,ti,definitions,error)||
-    !CaptureInputs(env,definitions,error)||!PrepareBefore(env,ti,definitions,error)||!BeforePrepared()||!runnable_jni::Bridge::BorrowOriginalScope(*run_.hierarchy.context)||
+    !CaptureInputs(env,definitions,error)||!StageFinalAliases(env,error)||!PrepareBefore(env,ti,definitions,error)||!BeforePrepared()||!runnable_jni::Bridge::BorrowOriginalScope(*run_.hierarchy.context)||
     !native_source_stop::Session::InspectionAvailable()||
     !MatchInputs(env,definitions,inputs_,error)){
   phase_=Phase::Refused;return false;

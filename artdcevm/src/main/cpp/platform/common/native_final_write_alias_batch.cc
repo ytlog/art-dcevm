@@ -3,48 +3,66 @@
 #include <cstdlib>
 namespace artdcevm::final_write_guard {
 namespace {bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}}
-bool AliasBatch::Native()const noexcept{
- return env_&&vm_&&self_&&access_.current_()==self_&&
-  roots_.OrdinaryNative({self_,env_,vm_});
+bool AliasBatch::PublicWindow()const noexcept{
+ return context_&&env_&&vm_&&self_&&context_->env==env_&&context_->vm==vm_&&context_->self==self_&&
+  access_.current_()==self_&&roots_.ReadyForSourceAccess()&&redefinition_gate::Owned(vm_)&&
+  native_source_stop::Session::InspectionAvailable()&&runnable_jni::Bridge::BorrowOriginalScope(*context_);
 }
-std::unique_ptr<AliasBatch>AliasBatch::Prepare(NativeAccess&access,JNIEnv*env,
- const source_handle_roots::Service&roots,const std::vector<jclass>&classes,std::string*error){
- JavaVM*vm=nullptr;void*self=access.current_();
- if(!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||!vm||!self||classes.empty()||
-    !roots.Calibrated()||!roots.OrdinaryNative({self,env,vm})||!redefinition_gate::Owned(vm)||
-    !access.references_.Ready()){
-  Fail(error,"final-alias-preparation-requires-actual-ordinary-Native-owner");return nullptr;
+std::unique_ptr<AliasBatch>AliasBatch::Prepare(NativeAccess&access,const runnable_jni::Context&context,
+ const source_handle_roots::Service&roots,std::string*error){
+ if(!context.env||!context.vm||!context.self||context.env->ExceptionCheck()||
+    !runnable_jni::Bridge::BorrowOriginalScope(context)||!native_source_stop::Session::InspectionAvailable()||
+    access.current_()!=context.self||!roots.ReadyForSourceAccess()||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(context.vm))||!access.references_.Ready()){
+  Fail(error,"final-alias-preparation-requires-actual-original-Runnable-owner");return nullptr;
  }
- auto result=std::unique_ptr<AliasBatch>(new AliasBatch(access,env,roots,vm,self));
+ auto result=std::unique_ptr<AliasBatch>(new AliasBatch(access,context,roots));
  result->proof_=access.writer_.FreezeProof();
  if(!access.writer_.ValidateProof(result->proof_)){
   Fail(error,"final-alias-writer-four-path-proof-unavailable");return nullptr;
  }
- result->handles_.resize(classes.size());result->records_.reserve(classes.size());
- result->node_=std::make_unique<final_field_aliases::Node>();result->node_->aliases.reserve(classes.size());
- for(size_t i=0;i<classes.size();++i){
-  if(!classes[i]||!result->Native()){Fail(error,"final-alias-public-Class-owner-unavailable");return nullptr;}
-  for(size_t j=0;j<i;++j)if(env->IsSameObject(classes[i],result->handles_[j].strong)){
-   Fail(error,"final-alias-public-Class-duplicate");return nullptr;
-  }
-  if(env->ExceptionCheck())return nullptr;
-  auto&r=result->handles_[i];r.strong=env->NewGlobalRef(classes[i]);
-  if(!r.strong||env->ExceptionCheck())return nullptr;
-  if(!access.references_.RegisterStrong(env,r.strong,error))return nullptr;r.strong_registered=true;
-  r.weak=env->NewWeakGlobalRef(r.strong);if(!r.weak||env->ExceptionCheck())return nullptr;
-  if(!access.references_.RegisterWeak(env,r.weak,error))return nullptr;r.weak_registered=true;
- }
  return result;
+}
+bool AliasBatch::StageClasses(const std::vector<jclass>&classes,std::string*error){
+ if(phase_!=Phase::Created||classes.empty()||!PublicWindow()||env_->ExceptionCheck()||
+    !access_.writer_.ValidateProof(proof_))return Fail(error,"final-alias-affected-cohort-staging-refused");
+ phase_=Phase::Staging; // Failed/partial JNI registration cannot be retried.
+ handles_.resize(classes.size());records_.reserve(classes.size());
+ node_=std::make_unique<final_field_aliases::Node>();node_->aliases.reserve(classes.size());
+ for(size_t i=0;i<classes.size();++i){
+  if(!classes[i]||!PublicWindow())return Fail(error,"final-alias-public-Class-owner-unavailable");
+  for(size_t j=0;j<i;++j)if(env_->IsSameObject(classes[i],handles_[j].strong))
+   return Fail(error,"final-alias-public-Class-duplicate");
+  if(env_->ExceptionCheck())return false;
+  auto&r=handles_[i];r.strong=env_->NewGlobalRef(classes[i]);
+  if(!r.strong||env_->ExceptionCheck())return false;
+  if(!access_.references_.RegisterStrong(env_,r.strong,error))return false;r.strong_registered=true;
+  r.weak=env_->NewWeakGlobalRef(r.strong);if(!r.weak||env_->ExceptionCheck())return false;
+  if(!access_.references_.RegisterWeak(env_,r.weak,error))return false;r.weak_registered=true;
+ }
+ if(!PublicWindow()||env_->ExceptionCheck())return Fail(error,"final-alias-public-staging-scope-changed");
+ phase_=Phase::Prepared;return true;
 }
 bool AliasBatch::Bind(const runnable_jni::Context&context,const native_source_stop::Session&stop,const source_commit::Plan&plan,
  const std::vector<modern_methods::Service*>&methods,
  const modern_field_metadata::ReadContext&read,std::string*error){
- if(phase_!=Phase::Prepared||stop.Reserved()||!native_source_stop::Session::InspectionAvailable()||context.env!=env_||context.vm!=vm_||context.self!=self_||
-    !runnable_jni::Bridge::BorrowOriginalScope(context)||!redefinition_gate::Owned(vm_)||
+ if(phase_!=Phase::Prepared||context_!=&context||!PublicWindow()||stop.Reserved()||
     !read.owner||!read.extent||!node_||plan.old_classes.size()!=handles_.size()||
     plan.new_classes.size()!=handles_.size()||methods.size()!=handles_.size()||
     !access_.writer_.ValidateProof(proof_))return Fail(error,"final-alias-Collected-binding-owner-refused");
  phase_=Phase::Binding; // A partial native bind is terminal until Close.
+ // Holder order is authoritative. Match the complete registered public
+ // cohort by current strong-root identity, without JNI or raw roots across GC.
+ for(size_t i=0;i<handles_.size();++i){size_t match=SIZE_MAX;
+  for(size_t j=i;j<handles_.size();++j){void*klass=nullptr;
+   if(!handles_[j].strong_registered||!handles_[j].weak_registered||
+      !access_.references_.StrongRunnable(self_,handles_[j].strong,&klass)||!klass)
+    return Fail(error,"final-alias-registered-cohort-root-refused");
+   if(klass==plan.old_classes[i]){if(match!=SIZE_MAX)return Fail(error,"final-alias-Holder-Class-ambiguous");match=j;}
+  }
+  if(match==SIZE_MAX)return Fail(error,"final-alias-Holder-Class-outside-affected-cohort");
+  if(match!=i)std::swap(handles_[i],handles_[match]);
+ }
  for(size_t i=0;i<handles_.size();++i){void*original=nullptr;auto*m=methods[i];
   if(!access_.references_.StrongRunnable(self_,handles_[i].strong,&original)||original!=plan.old_classes[i]||
      !original||!plan.new_classes[i]||original==plan.new_classes[i]||!m||!m->UsesReadContext(read)||
@@ -67,7 +85,7 @@ bool AliasBatch::Bind(const runnable_jni::Context&context,const native_source_st
   Record record{i,m};if(!Member(alias,record,original,read))return Fail(error,"final-alias-native-member-anchor-refused");
   node_->aliases.push_back(alias);records_.push_back(record);
  }
- context_=&context;stop_=&stop;plan_=&plan;read_=&read;
+ stop_=&stop;plan_=&plan;read_=&read;
  storage_={plan.old_classes.data(),plan.new_classes.data(),plan.old_instances.data(),plan.new_instances.data(),plan.class_root_origins.data()};
  counts_={plan.old_classes.size(),plan.new_classes.size(),plan.old_instances.size(),plan.new_instances.size(),plan.class_root_origins.size()};
  phase_=Phase::Bound;return true;
@@ -117,15 +135,12 @@ void AliasBatch::Publish(const source_commit::Plan&plan,const native_source_stop
  if(!stop.IsFinalWindow(self)||!Verify(plan,stop,self,read))std::abort();
  access_.writer_.CommitProof(proof_);
  if(!node_->aliases.empty())access_.aliases_.Publish(std::move(node_));
- // Empty native storage is disposed by Close in ordinary Native, not here.
+ // Empty native storage is disposed by Close after original Run, not here.
  for(const auto&r:records_)handles_[r.root].transferred=true;
  published_=true;phase_=Phase::Published;
 }
 bool AliasBatch::Ordinary()const noexcept{
- return context_&&stop_&&!stop_->Reserved()&&native_source_stop::Session::InspectionAvailable()&&
-  context_->env==env_&&context_->vm==vm_&&context_->self==self_&&
-  access_.current_()==self_&&redefinition_gate::Owned(vm_)&&
-  runnable_jni::Bridge::BorrowOriginalScope(*context_);
+ return stop_&&!stop_->Reserved()&&PublicWindow();
 }
 bool AliasBatch::Permissions(const source_commit::Plan&plan,
  const modern_field_metadata::ReadContext&read)const noexcept{
@@ -226,7 +241,7 @@ bool AliasBatch::Cleanup(NativeAccess&access,JNIEnv*env,
 }
 bool AliasBatch::Close()noexcept{
  if(phase_==Phase::Closed)return true;
- if(!Native())return false;
+ if(!PublicWindow())return false;
  // Native metadata is never touched after original Run destroys private data.
  node_.reset();records_.clear();permissions_.clear();plan_=nullptr;read_=nullptr;context_=nullptr;stop_=nullptr;
  for(auto&r:handles_){

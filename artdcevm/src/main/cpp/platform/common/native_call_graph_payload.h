@@ -15,7 +15,7 @@ struct Bindings {
  rooted_schema_plan::Reader reader{};
  native_hierarchy_graph::Authority*authority=nullptr;
  void*class_linker=nullptr;
- // Prepared in ordinary Native; retained until the original executor returns.
+ // Owned by the same Factory; public staging finishes before the source stop.
  final_write_guard::AliasBatch*final_fields=nullptr;
 };
 // Operation-owned storage: construct before preparation and retain through

@@ -7,27 +7,24 @@
 #include "platform/common/native_schema_guard_verifier.h"
 #include <array>
 namespace artdcevm::final_write_guard {
-// One operation owns the public handles before entering the original Runnable
-// executor, and closes them after it returns to that same ordinary Native caller.
+// The operation factory stages public handles in its actual original Runnable
+// callback before the source stop, and closes them after original Run returns.
 // Publishing transfers only used weak handles to NativeAccess's sole alias Set.
 class AliasBatch final:public native_schema_guard_verifier::FinalFields {
  public:
- static std::unique_ptr<AliasBatch>Prepare(NativeAccess&,JNIEnv*,
-     const source_handle_roots::Service&,const std::vector<jclass>&,std::string*);
+ static std::unique_ptr<AliasBatch>Prepare(NativeAccess&,const runnable_jni::Context&,
+     const source_handle_roots::Service&,std::string*);
+ // Complete affected cohort after final transforms and public census closure.
+ bool StageClasses(const std::vector<jclass>&,std::string*);
  // Ordinary Native only. Deactivate expired leases before forgetting/deleting
  // their weak handles; never wait for a reader while holding shared mutator.
  static bool Cleanup(NativeAccess&,JNIEnv*,const source_handle_roots::Service&,std::string*);
  ~AliasBatch()override;AliasBatch(const AliasBatch&)=delete;AliasBatch&operator=(const AliasBatch&)=delete;
  // No JNI/safepoint; use actual Collected Plan and concrete method services.
- // All public handle creation/registration has already completed in Prepare.
+ // All public handle creation/registration has completed in StageClasses.
  bool Bind(const runnable_jni::Context&,const native_source_stop::Session&,const source_commit::Plan&,
      const std::vector<modern_methods::Service*>&,
      const modern_field_metadata::ReadContext&,std::string*);
- // Same actual stopped operation and Plan; reread current roots after refresh.
- bool Verify(const source_commit::Plan&,const native_source_stop::Session&,void*self,
-     const modern_field_metadata::ReadContext&)const noexcept;
- void Publish(const source_commit::Plan&,const native_source_stop::Session&,void*self,
-     const modern_field_metadata::ReadContext&)const noexcept;
  // The same operation owner supplies ordinary permission checks, stopped
  // root refresh, and final publication; there is no second permission plan.
  bool Verify(const source_commit::Plan&,size_t,void* loader,
@@ -36,18 +33,24 @@ class AliasBatch final:public native_schema_guard_verifier::FinalFields {
  bool RefreshPlan(const source_commit::Plan&,std::string*)const override;
  bool VerifyAliases(const source_commit::Plan&,std::string*)const override;
  void BeginCommit(const source_commit::Plan&)const override;
- // Close after original Run/executor unwinds. Pending exceptions are preserved.
+ // Close in the same original callback after Run unwinds, before its scope
+ // ends. No metadata read or stop-pointer dereference; preserve exceptions.
  bool Close()noexcept;
  bool Published()const noexcept{return published_;}
  bool UsesMetadata(const modern_field_metadata::FieldMetadata&metadata)const noexcept{return &access_.metadata_==&metadata;}
  private:
+ // Same actual stopped operation and Plan; reread current roots after refresh.
+ bool Verify(const source_commit::Plan&,const native_source_stop::Session&,void*self,
+     const modern_field_metadata::ReadContext&)const noexcept;
+ void Publish(const source_commit::Plan&,const native_source_stop::Session&,void*self,
+     const modern_field_metadata::ReadContext&)const noexcept;
  struct Root {jobject strong=nullptr;jweak weak=nullptr;bool strong_registered=false,weak_registered=false,transferred=false;modern_methods::Service*methods=nullptr;};
  struct Record {size_t root=0;modern_methods::Service*methods=nullptr;};
  struct Permission {size_t pair;void*before;void*after;bool statics;uint32_t before_flags,after_flags,before_index,after_index;};
- enum class Phase {Prepared,Binding,Bound,Published,Closed};
- AliasBatch(NativeAccess&access,JNIEnv*env,const source_handle_roots::Service&roots,JavaVM*vm,void*self)
-  :access_(access),env_(env),roots_(roots),vm_(vm),self_(self){}
- bool Native()const noexcept;
+ enum class Phase {Created,Staging,Prepared,Binding,Bound,Published,Closed};
+ AliasBatch(NativeAccess&access,const runnable_jni::Context&context,const source_handle_roots::Service&roots)
+  :access_(access),env_(context.env),roots_(roots),vm_(static_cast<JavaVM*>(context.vm)),self_(context.self),context_(&context){}
+ bool PublicWindow()const noexcept;
  bool Ordinary()const noexcept;
  bool Permissions(const source_commit::Plan&,const modern_field_metadata::ReadContext&)const noexcept;
  bool Match(const source_commit::Plan&,void*self,const modern_field_metadata::ReadContext&)const noexcept;
@@ -63,6 +66,6 @@ class AliasBatch final:public native_schema_guard_verifier::FinalFields {
  const modern_field_metadata::ReadContext*read_=nullptr;
  std::array<const void*,5>storage_{};std::array<size_t,5>counts_{};
  Guard::ProofWitness proof_;
- mutable Phase phase_=Phase::Prepared;mutable bool published_=false;
+ mutable Phase phase_=Phase::Created;mutable bool published_=false;
 };
 }

@@ -13,6 +13,7 @@ struct Bindings {
  const stack_visitor_service::Declaration*stack_declaration=nullptr;
  const native_call_graph_super::Resolver*super_resolver=nullptr;
  native_call_graph_payload::Bindings payload;
+ final_write_guard::NativeAccess*final_writer=nullptr;
 };
 // Owns the actual Verified/Collected preparation callbacks. Construct after
 // the Run owner and destroy after RunBatch/end_run. Final incoming inventories
@@ -40,6 +41,7 @@ class Factory final:private source_handle_roots::StoppedReader,
  };
  bool Ready()const noexcept;
  bool BeforePrepared()const noexcept;
+ bool StageFinalAliases(JNIEnv*,std::string*);
  bool CaptureInputs(JNIEnv*,const std::vector<Definition>&,std::string*);
  bool PrepareBefore(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*);
  bool Preflight(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*);
@@ -82,6 +84,8 @@ class Factory final:private source_handle_roots::StoppedReader,
  std::unique_ptr<method_identity::ReadableMappingSnapshot>mappings_;
  modern_field_metadata::ReadContext read_{this,Extent};
  native_call_graph_payload::Payload payload_;
+ // Outlives schema publication; explicitly closed before callback scope ends.
+ std::unique_ptr<final_write_guard::AliasBatch>final_fields_;
  Phase phase_=Phase::Prepared;bool attached_=false,native_read_=false;
  bool roots_released_=false;
  jvmtiEnv*input_jvmti_=nullptr;
