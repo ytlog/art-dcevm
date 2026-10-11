@@ -30,8 +30,15 @@ void SourceCalibration::DexPcMoved(void*self,void*caller,uint32_t pc)noexcept{
 }
 bool SourceCalibration::Finish(bool success)noexcept{
  if(!armed_.exchange(false,std::memory_order_acq_rel))return false;
- if(!success||!seen_.load(std::memory_order_acquire)||!witnessed_form_)return false;
- forms_|=witnessed_form_;source_.forms_|=witnessed_form_;return true;
+ const bool passed=success&&seen_.load(std::memory_order_acquire)&&witnessed_form_;
+ const auto witnessed=witnessed_form_;
+ // The same-thread public invocation has returned. Retain only the witnessed
+ // form, never its borrowed Thread/Method identities or temporary JNI roots.
+ thread_=caller_=target_=nullptr;receiver_=special_=nullptr;public_code_.clear();
+ kind_=InvokeKind::NonInvoke;range_=false;witnessed_form_=0;
+ seen_.store(false,std::memory_order_relaxed);
+ if(!passed)return false;
+ forms_|=witnessed;source_.forms_|=witnessed;return true;
 }
 bool SourceCalibration::Seal()noexcept{if(sealed_.load(std::memory_order_acquire)||forms_!=0x3ffu||armed_.load(std::memory_order_acquire)||!source_.Seal())return false;sealed_.store(true,std::memory_order_release);return true;}
 }

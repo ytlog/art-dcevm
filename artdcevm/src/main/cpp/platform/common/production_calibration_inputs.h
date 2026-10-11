@@ -33,6 +33,9 @@ class CalibrationInputs final {
  jobject ReceiverObject()const noexcept{return receiver_object_;}
  const std::array<ReceiverSample,10>&ReceiverSamples()const noexcept{return receiver_samples_;}
  const std::vector<unsigned char>&ReceiverDex()const noexcept{return receiver_dex_;}
+ // Public Java execution of the retained isolated fixture. Preserves original
+ // exceptions; matched is a behavior oracle, never an event/coverage receipt.
+ bool InvokeReceiver(JNIEnv*,size_t index,bool*matched,std::string*)const;
  // Isolated ordinary-source inputs share this sole JNI root owner. The DEX
  // copies are initial SDK inputs, not records of a completed redefinition.
  jclass OrdinaryClass()const noexcept{return ordinary_class_;}

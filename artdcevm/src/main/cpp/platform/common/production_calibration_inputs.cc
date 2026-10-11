@@ -144,6 +144,18 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
  if(env->RegisterNatives(anchor_,&marker,1)!=JNI_OK||env->ExceptionCheck())return Fail(error,"calibration-input-native-marker-registration-failed");
  return true;
 }
+bool CalibrationInputs::InvokeReceiver(JNIEnv*env,size_t index,bool*matched,std::string*error)const{
+ if(matched)*matched=false;JavaVM*vm=nullptr;
+ if(!matched||!env||index>=receiver_samples_.size()||!bootstrap_||!input_||env->ExceptionCheck()||
+    env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-receiver-invocation-invalid-caller-or-index");
+ auto run=env->GetStaticMethodID(bootstrap_,"runReceiverSource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)I");
+ if(!run||env->ExceptionCheck())return false;
+ const auto result=env->CallStaticIntMethod(bootstrap_,run,input_,jint(index));
+ if(env->ExceptionCheck())return false;
+ constexpr jint expected[]{11,31,21,41,41,61,51,71,31,51};
+ *matched=result==expected[index];return true;
+}
 bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  std::string ignored;if(!error)error=&ignored;
  if(receiver_guard::PreparePublicBytecodes(ti)!=JVMTI_ERROR_NONE)

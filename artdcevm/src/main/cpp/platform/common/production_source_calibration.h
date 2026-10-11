@@ -41,6 +41,9 @@ class SourceCalibration final {
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
  // Read-only code/identity sample calibration, not actual invoke-event coverage.
  receiver_guard::SourceProducer*ReceiverProducer()noexcept{return receiver_code_calibrated_?&receiver_producer_:nullptr;}
+ const receiver_guard::SourceCalibration*ReceiverInvocations()const noexcept{
+  return receiver_calibration_&&receiver_calibration_->Proven()?receiver_calibration_.get():nullptr;
+ }
  private:
  SourceCalibration(HookEngine&hooks,std::unique_ptr<MetadataCalibration>metadata):hooks_(hooks),metadata_(std::move(metadata)){}
  ~SourceCalibration()=default;
