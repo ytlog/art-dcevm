@@ -68,6 +68,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/resolution_invalidation_plan.cc
     platform/common/ordinary_source_fixture.cc
     platform/common/bootstrap_dex_oracle.cc
+    platform/common/production_metadata_calibration.cc
     platform/common/production_calibration_inputs.cc
     platform/common/production_final_dex.cc
     platform/common/production_installed_dex.cc
