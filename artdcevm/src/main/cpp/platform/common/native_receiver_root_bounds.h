@@ -14,7 +14,8 @@ namespace artdcevm::receiver_guard {
 // Fixed common Class prefixes are independently calibrated by FieldMetadata.
 // ART owns the reached Class/native arrays/DexFile until this no-safepoint
 // shared-mutator borrow ends. Field listener Handle slots use the same inventory;
-// MethodHandle / invoke listener ingress still require their source operands.
+// Invoke listener roots are built only after source resolution/frame reread;
+// MethodHandle ingress still requires its independently owned source operands.
 class OriginalRootBounds final:public OriginalIngress::TypedBounds {
  public:
  OriginalRootBounds(EntrySource&entry,const modern_field_metadata::FieldMetadata&metadata)
@@ -43,6 +44,15 @@ class OriginalRootBounds final:public OriginalIngress::TypedBounds {
   if(!entry_.SeedListenerFieldRoots(self,caller,field,slot,&roots))return false;
   auto&i=inventory_;i.owner=this;i.actual=nullptr;i.listener_thread=self;i.count=0;i.class_count=0;
   return Build(self,field,true,roots,out,caller);
+ }
+ bool EnterListenerInvoke(void*self,void*caller,void*member,void*receiver,void*special,
+                          modern_field_metadata::ReadContext*out)noexcept override {
+  if(!out)return false;*out={};
+  if(inventory_.owner||!metadata_.Calibrated()||!entry_.OwnsMetadata(metadata_))return false;
+  EntrySource::OriginalRoots roots;
+  if(!entry_.SeedListenerInvokeRoots(self,caller,member,receiver,special,&roots))return false;
+  auto&i=inventory_;i.owner=this;i.actual=nullptr;i.listener_thread=self;i.count=0;i.class_count=0;
+  return Build(self,member,false,roots,out,caller);
  }
  private:
  bool EnterMember(const abi::common::RunnableJniScope&actual,void*method,bool field,jobject receiver,

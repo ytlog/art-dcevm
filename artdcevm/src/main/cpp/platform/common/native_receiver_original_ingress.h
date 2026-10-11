@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/common/native_receiver_entry_source.h"
 #include "platform/common/native_receiver_class_source.h"
+#include "platform/common/native_receiver_bytecode.h"
 #include <optional>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,8 @@ class OriginalIngress final {
       modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual bool EnterListenerField(void*actual_thread,void*actual_caller,void*actual_field,
       const uint32_t*actual_receiver_slot,modern_field_metadata::ReadContext*)noexcept{return false;}
+  virtual bool EnterListenerInvoke(void*actual_thread,void*actual_caller,void*actual_member,
+      void*actual_receiver,void*actual_special_caller,modern_field_metadata::ReadContext*)noexcept{return false;}
   virtual void Leave()noexcept=0;
  };
  OriginalIngress(EntrySource&e,const ClassSource&c,TypedBounds&b):entry_(e),classes_(c),bounds_(b){}
@@ -56,6 +59,23 @@ class OriginalIngress final {
  }
  private:
  friend class ListenerOwner;
+ // Resolve before entering any GC-stable inventory. Read() independently
+ // rereads the source frame/receiver after the original resolver can suspend.
+ static bool CheckListenerBytecode(void*self,void*caller,uint32_t pc,bool*unavailable)noexcept{
+  if(!unavailable)return false;*unavailable=false;auto*guard=consumer.load(std::memory_order_acquire);
+  if(!guard)return false;auto*owner=published_.load(std::memory_order_acquire);
+  if(!owner||guard!=owner->guard_)return guard->CheckBytecode(self,caller,pc);
+  if(!guard->RequiresIngress(Path::BytecodeInvoke,self,nullptr)&&
+     !guard->RequiresIngress(Path::BytecodeSpecial,self,nullptr))return false;
+  if(active_||!caller||!owner->entry_.ListenerThreadCurrent(self)||!guard->access_.bytecode){*unavailable=true;return true;}
+  const auto result=guard->access_.bytecode->Read(self,caller,pc);
+  if(result.outcome==BytecodeOutcome::OriginalException)return true;
+  if(result.outcome==BytecodeOutcome::NonInvoke||result.outcome==BytecodeOutcome::GuardedBridge)return false;
+  if(result.outcome!=BytecodeOutcome::Resolved||!owner->entry_.ListenerThreadCurrent(self)){*unavailable=true;return true;}
+  Scope scope(*owner,self,caller,result);if(!scope.Valid()){*unavailable=true;return true;}
+  return guard->Check({result.special_caller?Path::BytecodeSpecial:Path::BytecodeInvoke,
+    self,result.member,result.receiver,result.special_caller,nullptr,false});
+ }
  // Only the sole ART listener routes this live native member / Handle slot.
  static bool CheckListenerField(void*self,void*caller,void*field,const uint32_t*slot,
      Path path,bool*unavailable)noexcept{
@@ -74,17 +94,22 @@ class OriginalIngress final {
   public:
   Scope(OriginalIngress&o,const abi::common::RunnableJniScope&s,void*m,jobject r,bool field)noexcept:owner(o),context{s.self,s.env,s.vm}{
    if(active_||!s.self||!s.env||!s.vm||!o.entry_.Proven())return;
-   entered=field?o.bounds_.EnterField(s,m,r,&bounds):o.bounds_.Enter(s,m,r,&bounds);if(!entered)return;
-   if(!bounds.owner||!bounds.extent)return;
-   entry.emplace(o.entry_,context,bounds);if(!entry->Valid())return;
-   classes.emplace(o.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
+   entered=field?o.bounds_.EnterField(s,m,r,&bounds):o.bounds_.Enter(s,m,r,&bounds);Open(false);
   }
   Scope(OriginalIngress&o,void*self,void*caller,void*field,const uint32_t*slot)noexcept:owner(o),context{self,nullptr,o.entry_.binding_.vm}{
    if(active_||!o.entry_.ListenerThreadCurrent(self))return;
-   entered=o.bounds_.EnterListenerField(self,caller,field,slot,&bounds);if(!entered)return;
-   if(!bounds.owner||!bounds.extent)return;
-   entry.emplace(o.entry_,EntrySource::ListenerTag{},self,bounds);if(!entry->Valid())return;
-   classes.emplace(o.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
+   entered=o.bounds_.EnterListenerField(self,caller,field,slot,&bounds);Open(true);
+  }
+  Scope(OriginalIngress&o,void*self,void*caller,const BytecodeResult&result)noexcept:owner(o),context{self,nullptr,o.entry_.binding_.vm}{
+   if(active_||!o.entry_.ListenerThreadCurrent(self))return;
+   entered=o.bounds_.EnterListenerInvoke(self,caller,result.member,result.receiver,result.special_caller,&bounds);Open(true);
+  }
+  void Open(bool listener)noexcept{
+   if(!entered||!bounds.owner||!bounds.extent)return;
+   if(listener)entry.emplace(owner.entry_,EntrySource::ListenerTag{},context.self,bounds);
+   else entry.emplace(owner.entry_,context,bounds);
+   if(!entry->Valid())return;
+   classes.emplace(owner.classes_,bounds);relations.emplace(classes->Access());active_=this;valid=true;
   }
   ~Scope(){if(valid){if(active_!=this)std::abort();active_=nullptr;}relations.reset();classes.reset();entry.reset();if(entered)owner.bounds_.Leave();}
   bool Valid()const noexcept{return valid&&active_==this&&owner.entry_.Leaves().current(&owner.entry_,context.self);}

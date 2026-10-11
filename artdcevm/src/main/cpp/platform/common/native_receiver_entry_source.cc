@@ -131,12 +131,25 @@ bool EntrySource::ListenerThreadCurrent(void*self)const noexcept{
 }
 bool EntrySource::SeedListenerFieldRoots(void*self,void*caller,void*field,
  const uint32_t*receiver_slot,OriginalRoots*out)const noexcept{
+ return SeedListenerRoots(self,caller,field,true,receiver_slot,nullptr,nullptr,out);
+}
+bool EntrySource::SeedListenerInvokeRoots(void*self,void*caller,void*member,void*receiver,
+ void*special,OriginalRoots*out)const noexcept{
+ return SeedListenerRoots(self,caller,member,false,nullptr,receiver,special,out);
+}
+bool EntrySource::SeedListenerRoots(void*self,void*caller,void*member,bool field,
+ const uint32_t*receiver_slot,void*receiver,void*special,OriginalRoots*out)const noexcept{
  if(!out)return false;*out={};
- if(invocation_||!caller||!field||uintptr_t(caller)%4||uintptr_t(field)%4||
-    (receiver_slot&&uintptr_t(receiver_slot)%4)||!ListenerThreadCurrent(self))return false;
- OriginalRoots roots;roots.declaring=metadata_->FieldDeclaringClass(field);
+ if(invocation_||!caller||!member||uintptr_t(caller)%4||uintptr_t(member)%4||
+    (receiver_slot&&uintptr_t(receiver_slot)%4)||
+    (receiver&&(uintptr_t(receiver)%4||uintptr_t(receiver)>UINT32_MAX))||!ListenerThreadCurrent(self))return false;
+ OriginalRoots roots;roots.declaring=field?metadata_->FieldDeclaringClass(member):metadata_->MethodDeclaringClass(member);
  roots.caller_declaring=metadata_->MethodDeclaringClass(caller);
- if(!roots.declaring||!roots.caller_declaring||!ListenerThreadCurrent(self))return false;
+ if(!roots.declaring||!roots.caller_declaring||(special&&special!=roots.caller_declaring)||!ListenerThreadCurrent(self))return false;
+ // Invoke receiver comes only from the same source's post-resolution live
+ // ShadowFrame read. Field receiver comes from the actual ART Handle slot.
+ // Neither pointer is borrowed before a potentially suspending resolver.
+ roots.receiver=receiver;
  if(receiver_slot){
   roots.local_slot=const_cast<uint32_t*>(receiver_slot);uint32_t value=0;std::memcpy(&value,receiver_slot,4);
   if(value){roots.receiver=root_(roots.local_slot);if(!roots.receiver||uintptr_t(roots.receiver)%4)return false;}

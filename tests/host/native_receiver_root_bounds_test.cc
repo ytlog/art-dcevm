@@ -63,6 +63,22 @@ static void RunRootBoundsTest(receiver_guard::EntrySource&entry,const modern_fie
  listener_slot=0;assert(bounds.EnterListenerField(actual.self,member,listener_field,&listener_slot,&read));
  assert(!read.extent(read.owner,public_receivers[0],&n));bounds.Leave();
  assert(bounds.EnterListenerField(actual.self,member,listener_field,nullptr,&read));bounds.Leave();
+ // Post-resolution invoke roots share the same bounded inventory. The real
+ // source BytecodeSource separately owns frame/PC and resolution provenance.
+ assert(bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],declaring,&read));
+ assert(decodes==previous_decodes&&read.extent(read.owner,method_members[0],&n)&&n==8);
+ assert(read.extent(read.owner,public_receivers[0],&n)&&n==8&&read.extent(read.owner,declaring,&n));
+ assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],declaring,&nested));
+ auto invoke_expired=read;bounds.Leave();assert(!invoke_expired.extent(invoke_expired.owner,declaring,&n));
+ assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],receiver_classes[1],&read));
+ assert(!bounds.EnterListenerInvoke(&manager,member,method_members[0],public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterListenerInvoke(actual.self,nullptr,method_members[0],public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterListenerInvoke(actual.self,member,reinterpret_cast<void*>(1),public_receivers[0],nullptr,&read));
+ assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],reinterpret_cast<void*>(1),nullptr,&read));
+ Put32(actual.self,0,92u<<24);assert(!bounds.EnterListenerInvoke(actual.self,member,method_members[0],public_receivers[0],nullptr,&read));Put32(actual.self,0,0);
+ assert(bounds.EnterListenerInvoke(actual.self,member,method_members[1],nullptr,nullptr,&read));
+ assert(!read.extent(read.owner,public_receivers[0],&n));bounds.Leave();
+
 
  assert(!bounds.Enter(actual,reinterpret_cast<void*>(1),receiver,&read));
  auto old=actual;actual.vm=nullptr;assert(!bounds.Enter(actual,member,receiver,&read));actual=old;

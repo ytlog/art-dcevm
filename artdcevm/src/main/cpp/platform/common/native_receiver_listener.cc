@@ -51,8 +51,9 @@ struct ListenerOwner::Listener final:ListenerDeclaration {
   // independently checks the staged exact thread/method/public instruction.
   owner.observer_.DexPcMoved(self,method,pc);
   if(!owner.pending_->Read(self,&pending))std::abort();if(pending)return;
-  auto*guard=consumer.load(std::memory_order_acquire);
-  if(guard)guard->CheckBytecode(self,method,pc);
+  bool unavailable=false;
+  if(OriginalIngress::CheckListenerBytecode(self,method,pc,&unavailable)&&unavailable)
+   owner.raise_(self,"Ljava/lang/IllegalStateException;","Receiver invoke listener lost its post-resolution typed roots");
  }
  void Field(void*self,Handle receiver,void*method,void*field,bool write,bool reference=false){
   if(!self||!method||!field||!owner.current_||owner.current_()!=self||!owner.pending_||
