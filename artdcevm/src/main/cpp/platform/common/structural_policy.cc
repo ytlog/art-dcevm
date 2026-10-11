@@ -15,7 +15,7 @@ constexpr uint32_t kClassKind = acc::kAccFinal | acc::kAccInterface | acc::kAccA
 constexpr uint32_t kFieldTransient = 0x0080;
 constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
 constexpr uint32_t kMethodVarargs = 0x0080, kMethodStrict = 0x0800;
-constexpr uint32_t kMethodAllowed = acc::kAccPublic | acc::kAccProtected | acc::kAccFinal |
+constexpr uint32_t kMethodAllowed = kAccessLevel | acc::kAccFinal |
     acc::kAccSynchronized | kMethodVarargs | kMethodStrict;
 
 Decision Reject(jvmtiError error, std::string reason) {
@@ -82,6 +82,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "unsupported method modifier change: " + Describe(old));
     if ((now & acc::kAccFinal) && !(old.access & acc::kAccFinal) &&
+        !old.IsStatic() && !(old.access & acc::kAccPrivate) && old.name != "<init>" &&
         subclass_methods.count({old.name, old.descriptor}))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "method made final is overridden by a loaded subclass: " + Describe(old));
