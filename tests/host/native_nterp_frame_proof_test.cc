@@ -15,7 +15,6 @@ uint32_t DexPc(void**f){for(unsigned i=0;i<3;++i)if(f==Frame(i))return 19+i;std:
 uint32_t Value(void**f,uint16_t reg){uint32_t v;std::memcpy(&v,reinterpret_cast<void*>(Regs(f)+reg*4),4);return v;}
 uint32_t Reference(void**f,uint16_t reg){uint32_t v;std::memcpy(&v,reinterpret_cast<void*>(Refs(f)+reg*4),4);return v;}
 const void* MethodHeader(void*m,uintptr_t pc){for(unsigned i=0;i<3;++i)if(m==&methods[i]&&pc==101+i)return &header;return nullptr;}
-bool Contains(const void*h,uintptr_t pc){return h==&header&&pc>=101&&pc<=103;}
 bool Nterp(const void*h){return h==&header;}
 template<class Pair>auto* Prefix(void*v){return static_cast<a::stack::Visitor<Pair>*>(v);}
 template<class Pair>void ConstructImpl(void*v,void*t,void*c,a::stack::WalkKind k,bool check){auto*f=Prefix<Pair>(v);assert(check);f->thread=t;f->context=c;f->kind=k;}
@@ -32,7 +31,7 @@ struct Finder{template<class F>static void*Fn(F f){return reinterpret_cast<void*
 #define LEAF(name,f) if(!std::strcmp(s,name))return Fn(f)
  LEAF(a::stack::kConstruct,Construct);LEAF(a::stack::kWalk,Walk);LEAF(a::stack::kWalk17,Walk);LEAF(a::stack::kMethod,GetMethod);
  LEAF(n::Service::kReferences,Refs);LEAF(n::Service::kRegisters,Regs);LEAF(n::Service::kFrameInfo,Info);LEAF(n::Service::kDexPc,DexPc);LEAF(n::Service::kValue,Value);LEAF(n::Service::kReference,Reference);
- LEAF(native_frame_code_owner::Service::kMethodHeader,MethodHeader);LEAF(native_frame_code_owner::Service::kContains,Contains);LEAF(native_frame_code_owner::Service::kNterp,Nterp);
+ LEAF(native_frame_code_owner::Service::kMethodHeader,MethodHeader);LEAF(native_frame_code_owner::Service::kNterp,Nterp);
  LEAF("_ZNK3art12StackVisitor8GetDexPcEb",VisitorPc);LEAF(a::android14::frame_registers::kDebuggerValue,Debugger);LEAF(a::android12::frame_registers::kCanonical,Canonical);LEAF(a::android14::frame_registers::kCanonical,CanonicalFull);
 #undef LEAF
  return nullptr;}};

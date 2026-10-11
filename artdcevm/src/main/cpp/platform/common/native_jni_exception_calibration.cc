@@ -1,6 +1,5 @@
 #include "platform/common/native_jni_exception_calibration.h"
 #include "platform/common/native_jni_exception_upcall.h"
-#include "platform/common/native_schema_run_state.h"
 
 namespace artdcevm::native_jni_exception_calibration {
 namespace {
@@ -15,7 +14,7 @@ struct Invocation {
 thread_local Invocation* current = nullptr;
 thread_local jni_exception_upcall::Probe probe;
 bool Owns(JNIEnv* env, jclass fixture) {
-  return current && current->env == env && !native_schema_run_state::RunState::Current() &&
+  return current && current->env == env &&
     !env->ExceptionCheck() && env->IsSameObject(current->fixture, fixture) && !env->ExceptionCheck();
 }
 jlong JNICALL Prepare(JNIEnv* env, jclass fixture, jthrowable token) {
@@ -48,7 +47,7 @@ JNINativeMethod methods[] = {
 };
 }
 bool Service::CleanupLocked(JNIEnv* env, std::string* error) {
-  if (!env || env->ExceptionCheck() || current || native_schema_run_state::RunState::Current())
+  if (!env || env->ExceptionCheck() || current)
     return Fail(error, "JNI upcall cleanup requires ordinary exception-free owner");
   JavaVM* vm = nullptr;
   if (env->GetJavaVM(&vm) != JNI_OK || !vm || (vm_.load(std::memory_order_relaxed) && vm_.load(std::memory_order_relaxed) != vm))
@@ -69,7 +68,7 @@ bool Service::Cleanup(JNIEnv* env, std::string* error) {
 bool Service::Calibrate(JNIEnv* env, std::string* error) {
   std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock()) return Fail(error, "JNI upcall owner is busy");
-  if (!env || env->ExceptionCheck() || current || native_schema_run_state::RunState::Current())
+  if (!env || env->ExceptionCheck() || current)
     return Fail(error, "JNI upcall calibration requires ordinary exception-free owner outside schema Run");
   JavaVM* vm = nullptr;
   if (env->GetJavaVM(&vm) != JNI_OK || !vm) return Fail(error, "JNI upcall VM unavailable");
@@ -102,8 +101,7 @@ bool Service::Calibrate(JNIEnv* env, std::string* error) {
   current = nullptr;
   if (env->ExceptionCheck()) return Fail(error, "JNI upcall original Java calibration failed with pending exception");
   const bool receipt = result == JNI_TRUE && invocation.request && invocation.prepares == 1 &&
-    invocation.invokes == 1 && invocation.completions == 1 && invocation.pending_returned && invocation.matched &&
-    !native_schema_run_state::RunState::Current();
+    invocation.invokes == 1 && invocation.completions == 1 && invocation.pending_returned && invocation.matched;
   if (!CleanupLocked(env, error)) return false;
   if (!receipt) return Fail(error, "JNI upcall complete original catch/identity receipt missing");
   ready_.store(true, std::memory_order_release);

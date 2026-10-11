@@ -1,5 +1,4 @@
 #include "platform/common/native_hierarchy_receiver.h"
-#include "platform/common/native_narrowing_authority.h"
 #include "platform/common/native_hierarchy_parent.h"
 #include "platform/common/rooted_graph_class_identity.h"
 #include "platform/common/modern_field_metadata.h"
@@ -58,7 +57,6 @@ struct Preservation::State {
  const modern_field_metadata::FieldMetadata* metadata;modern_field_metadata::ReadContext read_context{};bool contextual=false;
  const modern_field_metadata::ReadContext* Context()const noexcept{return contextual?&read_context:nullptr;}
  bool Extent(const void*p,size_t*out)const noexcept{return contextual?read_context.extent&&read_context.extent(read_context.owner,p,out):method_identity::ReadableMappingExtent(p,out);}
- native_narrowing::Authority*narrowing=nullptr;bool narrows=false;
  const Graph* graph=nullptr;
  std::vector<Fact> facts;std::vector<size_t> inputs;mutable std::vector<size_t> pair_nodes;mutable const source_commit::Plan* plan=nullptr;bool staged=false;
  bool Matches(const Graph& g)const noexcept{
@@ -84,9 +82,8 @@ struct Preservation::State {
 };
 Preservation::Preservation(const modern_field_metadata::FieldMetadata& m):state_(new State(m)){}
 void Preservation::UseReadContext(const modern_field_metadata::ReadContext&c)noexcept{state_->read_context=c;state_->contextual=true;}
-bool Preservation::UseNarrowing(native_narrowing::Authority&owner)noexcept{if(state_->staged||state_->narrowing)return false;state_->narrowing=&owner;return true;}
 Preservation::~Preservation()=default;
-void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();state_->pair_nodes.clear();state_->plan=nullptr;state_->graph=nullptr;state_->staged=false;state_->contextual=false;state_->narrowing=nullptr;state_->narrows=false;}
+void Preservation::Reset()noexcept{state_->facts.clear();state_->inputs.clear();state_->pair_nodes.clear();state_->plan=nullptr;state_->graph=nullptr;state_->staged=false;state_->contextual=false;}
 bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inputs,std::string* error)const{
  auto& s=*state_;if(s.staged||!s.metadata->Calibrated()||graph.nodes.empty()||graph.inputs.empty()||inputs.size()!=graph.inputs.size())return Fail(error,"Additive receiver owner requires a fresh actual public graph");
  std::vector<Fact> facts;facts.reserve(graph.nodes.size());
@@ -99,7 +96,7 @@ bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inp
   if(n.proposed_parent!=absent&&(graph.nodes[n.proposed_parent].ProposedFlags()&0x210u))return Fail(error,"Proposed receiver superclass role or finality is invalid");
   if(!Relations(graph,i,false,&f.before_relations,relation_colors)||!Relations(graph,i,true,&f.after_relations,relation_colors))return Fail(error,"Receiver graph contains cycle or unknown identity");
   for(const auto* edges:{&n.interfaces,&n.proposed_interfaces})for(auto edge:*edges)if(!(graph.nodes[edge].flags&0x200u))return Fail(error,"Receiver interface edge names a class");
-  if(n.affected)for(auto old:f.before_relations)if(std::find(f.after_relations.begin(),f.after_relations.end(),old)==f.after_relations.end()){if(!s.narrowing)return Fail(error,"Receiver assignability narrowing lacks concrete permanent dispatch, retained storage and frame recovery owner");s.narrows=true;}
+  if(n.affected)for(auto old:f.before_relations)if(std::find(f.after_relations.begin(),f.after_relations.end(),old)==f.after_relations.end())return Fail(error,"Receiver assignability narrowing is unsupported");
   // Each original native IfTable must independently equal its complete public
   // interface closure; source order is kept for no-allocation final checking.
   void*native_parent=nullptr;if(!NativeSuperclass(graph,n,false,&native_parent)||!s.Identity(n.klass,n,native_parent)||!native_interface_graph::Read(*s.metadata,n.klass,&f.before_native,error)||!Order(graph,f.before_native,Interfaces(graph,f.before_relations,i),false,&f.before_order))return Fail(error,"Original native receiver graph differs from public proof");
@@ -107,7 +104,6 @@ bool Preservation::VerifyStaged(const Graph& graph,const std::vector<Input>& inp
  }
  for(size_t i=0;i<inputs.size();++i){size_t n=graph.inputs[i];if(n>=graph.nodes.size()||!graph.nodes[n].affected||inputs[i].strong_original!=graph.nodes[n].strong_class||((inputs[i].before.access^inputs[i].after.access)&~0x410u)||inputs[i].before.descriptor!=graph.nodes[n].descriptor||inputs[i].after.descriptor!=graph.nodes[n].descriptor||!Schema(graph,graph.nodes[n],inputs[i].before,false)||!Schema(graph,graph.nodes[n],inputs[i].after,true)||std::find(graph.inputs.begin(),graph.inputs.begin()+i,n)!=graph.inputs.begin()+i)return Fail(error,"Receiver source role/modifier or exact target proof differs");}
  for(size_t n=0;n<facts.size();++n){bool expected=false;for(auto root:graph.inputs)expected|=std::find(facts[n].before_relations.begin(),facts[n].before_relations.end(),root)!=facts[n].before_relations.end()||std::find(facts[n].after_relations.begin(),facts[n].after_relations.end(),root)!=facts[n].after_relations.end();if(expected!=graph.nodes[n].affected)return Fail(error,"Receiver snapshot omitted implicit affected relation cohort");}
- if(s.narrows&&!s.narrowing->Prepare(graph,error))return false;
  s.pair_nodes.assign(size_t(std::count_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.affected;})),absent);s.facts=std::move(facts);s.inputs=graph.inputs;s.graph=&graph;s.staged=true;return true;
 }
 bool Preservation::VerifyPrepared(const Graph& graph,const Prepared& prepared,std::string* error)const{
@@ -123,6 +119,6 @@ bool Preservation::Verify(const Graph& graph,const source_commit::Plan& plan)con
  for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];if(!node.affected)continue;++affected;size_t pair=absent;for(size_t i=0;i<plan.old_classes.size();++i)if(plan.old_classes[i]==node.klass){if(pair!=absent)return false;pair=i;}if(pair==absent||plan.new_classes[pair]!=node.replacement||!s.Replacement(graph,n,node.replacement))return false;}
  if(affected!=plan.old_classes.size())return false;if(!s.plan){for(size_t i=0;i<plan.old_classes.size();++i){auto it=std::find_if(graph.nodes.begin(),graph.nodes.end(),[&](const auto& n){return n.klass==plan.old_classes[i];});s.pair_nodes[i]=size_t(it-graph.nodes.begin());}s.plan=&plan;}return true;
 }
-bool Preservation::VerifyFinal(const Graph&graph,const source_commit::Plan&plan)const noexcept{auto&s=*state_;return Verify(graph,plan)&&(!s.narrows||(s.contextual&&s.narrowing&&s.narrowing->Validate(graph,plan,s.read_context)));}
-void Preservation::BeginCommit(const Graph& graph,const source_commit::Plan& plan)const noexcept{(void)graph;(void)plan;assert(state_->graph==&graph&&state_->staged&&state_->plan==&plan&&plan.old_classes.size()==plan.new_classes.size());if(state_->narrows){if(!state_->narrowing)std::abort();state_->narrowing->BeginCommit(graph,plan);}}
+bool Preservation::VerifyFinal(const Graph&graph,const source_commit::Plan&plan)const noexcept{return Verify(graph,plan);}
+void Preservation::BeginCommit(const Graph& graph,const source_commit::Plan& plan)const noexcept{(void)graph;(void)plan;assert(state_->graph==&graph&&state_->staged&&state_->plan==&plan&&plan.old_classes.size()==plan.new_classes.size());}
 }

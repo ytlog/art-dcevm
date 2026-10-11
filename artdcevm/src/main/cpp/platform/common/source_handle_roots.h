@@ -9,7 +9,6 @@
 #include "platform/abi/arm64/android11/jni_object_decode.h"
 namespace artdcevm::native_source_stop {class Session;}
 namespace artdcevm::native_cache {class Service;}
-namespace artdcevm::whole_process_frames {class Service;}
 namespace artdcevm::source_handle_roots {
 using ManagedStackSnapshot=managed_stack_source::Snapshot;
 class Scope;
@@ -55,7 +54,7 @@ class Service final {
        ManagedStackSnapshot*)const noexcept;
   std::unique_ptr<Scope> CreateScope(uint32_t count,std::string*)const;
  private:
-  friend class whole_process_frames::Service;
+
   // Only the concrete scanner inside actual native_cache enumeration may use
   // this path. Public callers must prove current registration independently.
   bool ReadEnumeratedStoppedManagedStack(const native_source_stop::Session&,void*self,void*thread,

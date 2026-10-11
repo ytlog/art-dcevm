@@ -2,7 +2,6 @@
 #include "jvmti.h"
 #include "core/transaction_lock.h"
 #include "platform/common/redefinition_gate.h"
-#include "platform/common/native_final_write_listener.h"
 #include "hooks/shadow_hook_engine.h"
 #include <android/log.h>
 #include <memory>
@@ -24,9 +23,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pluginMapping=%s mapped=%d",mapping.c_str(),plugin_image!=nullptr);
   if(plugin_image){
     std::string error;
-    const bool observed=artdcevm::final_write_guard::ObserveLegacyDeoptimizationStartup(hooks,&error);
-    __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad legacyStartup=%d diagnostic=%s",observed,error.c_str());
-    error.clear();const bool gated=artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
+    const bool gated=artdcevm::redefinition_gate::InstallFirstLive(hooks,vm,&error);
     __android_log_print(ANDROID_LOG_INFO,"ArtDcevmStartup","JNI_OnLoad pristineGate=%d diagnostic=%s",gated,gated?artdcevm::redefinition_gate::Diagnostic():error.c_str());
   }
   return JNI_VERSION_1_6;

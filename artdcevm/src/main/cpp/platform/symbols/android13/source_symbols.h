@@ -1,13 +1,11 @@
 #pragma once
 #include <string>
-#include "platform/abi/arm64/android11/async_deopt.h"
 // Fixed named ART/JVMTI declarations for the Android13 source family.
 // Symbol presence alone does not establish private ABI or runtime permission.
 namespace artdcevm::symbols::android13 {
 inline constexpr char kRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kStructuralRedefineClasses[] = "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition";
 inline constexpr char kIsStructurallyModifiableClass[] = "_ZN12openjdkjvmti9Redefiner17IsModifiableClassEP9_jvmtiEnvP7_jclassPh";
-inline constexpr char kHGraphInlineInto[] = "_ZN3art6HGraph10InlineIntoEPS0_PNS_7HInvokeE";
 inline constexpr char kCheckFields[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv";
 inline constexpr char kRecordFailure[] = "_ZN12openjdkjvmti9Redefiner13RecordFailureE10jvmtiErrorRKNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEESA_";
 inline constexpr char kGetCanonicalMethod[] = "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE";
@@ -25,12 +23,8 @@ inline constexpr char kFindClass[] = "_ZN3art11ClassLinker9FindClassEPNS_6Thread
 inline constexpr char kLookupClass[] = "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE";
 inline constexpr char kDeleteClassLoader[] = "_ZN3art11ClassLinker17DeleteClassLoaderEPNS_6ThreadERKNS0_15ClassLoaderDataEb";
 inline constexpr char kLinearAllocContainsUnsafe[] = "_ZNK3art11LinearAlloc14ContainsUnsafeEPv";
-inline constexpr auto& kIsAsyncDeoptimizeable = ::artdcevm::abi::arm64::android11::kIsAsyncDeoptimizeable;
 inline constexpr char kTestSuspendFromCode[] = "artTestSuspendFromCode";
-inline constexpr char kPushDeoptimizationContext[] = "_ZN3art6Thread25PushDeoptimizationContextERKNS_6JValueEbNS_6ObjPtrINS_6mirror9ThrowableEEEbNS_24DeoptimizationMethodTypeE";
-inline constexpr char kDeoptimize[] = "artDeoptimize";
 inline constexpr char kReadBarrierMark[] = "artReadBarrierMark";
-inline constexpr char kInvalidateAllCompiledCode[] = "_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv";
 inline constexpr char kCollectMappings[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition32CollectNewFieldAndMethodMappingsERKNS_20RedefinitionDataIterEPNSt3__13mapIPN3art9ArtMethodES9_NS5_4lessIS9_EENS5_9allocatorINS5_4pairIKS9_S9_EEEEEEPNS6_IPNS7_8ArtFieldESK_NSA_ISK_EENSC_INSD_IKSK_SK_EEEEEE";
 inline constexpr char kStructuralCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE";
 inline constexpr char kInPlaceCommit[] = "_ZN12openjdkjvmti9Redefiner17ClassRedefinition18UpdateClassInPlaceERKNS_20RedefinitionDataIterE";

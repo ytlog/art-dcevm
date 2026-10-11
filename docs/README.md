@@ -2,7 +2,7 @@
 
 目标是在 ARM64 Android 应用内实现类演进。当前开发范围为 Android 11 / API 30、12 / 31、13 / 33、14 / 34、15 / 35、16 / 36、17 / 37；不包含 Android 12L / API 32、ARM32 或 x86。
 
-公开 JVMTI 后端提供方法体替换，并按运行时实际暴露的 ART 扩展提供新增成员能力。私有演进统一使用 `platform/common` 的生产引擎；旧 `platform/android13` 演进后端和自动选择它的路由已清退。历史 Android 13 测试结果不代表当前重写版本已完成完整演进。
+公开 JVMTI 后端提供方法体替换，并按运行时实际暴露的 ART 扩展提供新增成员能力。旧 `platform/android13` 后端和旧公共 AOT/JIT 私有提交引擎已清退；新的 `platform/common/native_call_graph_*` 组件正在接入完整私有事务。历史 Android 13 测试结果不代表当前重写版本已完成完整演进。
 
 完整初始化 `DcevmRuntime.initialize(context)` 不能把部分能力初始化当作成功。完整生产契约尚未验证时，它返回不可用；公开代理可通过 `DcevmRuntime.attachPublicJvmti(context)` 附加。开发测试中的公共能力初始化单独报告可用子集。
 

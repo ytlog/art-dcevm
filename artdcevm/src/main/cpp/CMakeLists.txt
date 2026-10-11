@@ -38,7 +38,6 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/owned_context_consumer.cc
     platform/common/owned_context_calibration.cc
     platform/common/heap_collect_observer.cc
-    platform/common/owned_jit_receivers.cc
     platform/android17/method_table.cc
     platform/common/modern_method_services.cc
     platform/common/native_method_table.cc
@@ -49,33 +48,23 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_declared_field_lookup.cc
     platform/common/native_field_factory_observer.cc
     platform/common/native_source_stop.cc
-    platform/common/whole_process_frames.cc
     platform/common/native_managed_stack_source.cc
     platform/common/native_exception_entry_ownership.cc
     platform/common/native_jni_exception_calibration.cc
-    platform/common/compiled_frame_fixture.cc
-    platform/common/compiled_frame_owner.cc
-    platform/common/native_boot_aot_source.cc
     platform/common/native_boot_method_catalog.cc
     platform/common/native_interface_dispatch.cc
     platform/common/native_interface_dispatch_domain.cc
-    platform/common/native_frame_root_relocation.cc
-    platform/common/native_required_cleanup.cc
-        platform/common/native_schema_run_state.cc
         platform/common/source_cache_public_roles.cc
         platform/common/source_cache_role_catalog.cc
     platform/common/thread_state_calibration.cc
-    platform/common/native_source_commit.cc
         platform/common/native_initialized_transfer.cc
         platform/common/native_initializer_state_calibration.cc
         platform/common/native_initializer_episode.cc
         platform/common/native_initializer_tid_writer.cc
-    platform/common/modern_source_commit.cc
     platform/common/source_commit.cc
     platform/common/owned_structural_transaction.cc
     platform/common/native_structural_reflection.cc
     platform/common/resolution_invalidation_plan.cc
-    platform/common/native_member_provider.cc
     platform/common/ordinary_source_fixture.cc
     platform/common/bootstrap_dex_oracle.cc
     platform/common/production_bootstrap.cc
@@ -83,7 +72,6 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/capability_backend.cc
     platform/common/native_owned_removal.cc
     platform/common/redefinition_gate.cc
-    platform/common/native_owned_removal_probe.cc
     platform/common/contextual_field_id.cc
     platform/common/modern_method_handle_guards.cc
     platform/common/native_removal_policy.cc
@@ -99,7 +87,6 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_hierarchy_source_cache.cc
     platform/common/source_allocation_transaction.cc
     platform/common/native_hierarchy_receiver.cc
-    platform/common/native_hierarchy_typed_storage.cc
     platform/common/native_typed_heap_walk.cc
     platform/common/native_weak_sweep_observer.cc
     platform/common/native_typed_heap_calibration.cc
@@ -123,8 +110,6 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_receiver_class_source.cc
     platform/common/native_receiver_producer.cc
     platform/common/native_receiver_source_calibration.cc
-    platform/common/native_narrowing_authority.cc
-    platform/common/native_receiver_service.cc
     platform/common/native_receiver_relations.cc
     platform/common/native_hierarchy_graph.cc
     platform/common/native_hierarchy_allocator.cc
@@ -145,15 +130,11 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/runnable_executor.cc
     platform/jni_access/capability_selection.cc
     platform/jni_access/owned_probe.cc
-    platform/common/owned_active_frame_probe.cc
     platform/abi/arm64/owned_context_long_jump.S
     platform/common/method_cache_lookup.cc
     platform/common/modern_final_field_guard.cc
     platform/common/native_final_write_guard.cc
-    platform/common/native_final_write_listener.cc
     platform/common/native_reference_decoder.cc
-    platform/common/native_final_field_calibration.cc
-    platform/common/native_final_field_service.cc
     platform/common/native_final_field_aliases.cc
     platform/common/modern_field_guards.cc
     platform/common/modern_retirement_cleanup.cc

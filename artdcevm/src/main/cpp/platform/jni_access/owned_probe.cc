@@ -1,7 +1,4 @@
 #include "platform/common/contextual_field_stage.h"
-#if defined(ARTDCEVM_TESTING)
-namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
-#endif
 // Debug-only owned JNI calibration, independent of the full evolution backend.
 #ifdef ARTDCEVM_TESTING
 #include "platform/jni_access/capability_selection.h"
@@ -23,7 +20,6 @@ namespace artdcevm::jni_access {void ReleaseOwnedFieldProofStage();}
 #include "platform/common/modern_method_services.h"
 #include "platform/common/owned_method_table.h"
 #include "platform/jni_access/owned_evolution_proofs.h"
-#include "platform/common/owned_jit_receivers.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/abi/arm64/android15/jni_current_thread.h"
 #include "platform/abi/common/suspend_all.h"
@@ -189,27 +185,6 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probe(JNIEnv* env,jcla
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_methodTableCount(JNIEnv*,jclass) {
   return artdcevm::jni_access::last_table_count;
-}
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_probeJitServices(JNIEnv* env,jclass,jobject hot,jclass owner,jint index,jint flags,jclass target,jbyteArray dex) {
-  using namespace artdcevm;
-  if(!hot||!owner||!target||!dex||env->ExceptionCheck())return nullptr;
-  struct Roots {JNIEnv* env;jobject method,klass;
-    ~Roots(){if(method)env->DeleteGlobalRef(method);if(klass)env->DeleteGlobalRef(klass);}
-  } roots{env,env->NewGlobalRef(hot),nullptr};
-  if(!roots.method||env->ExceptionCheck())return nullptr;
-  roots.klass=env->NewGlobalRef(owner);
-  if(!roots.klass||env->ExceptionCheck()||env->GetArrayLength(dex)<=0)return nullptr;
-  jobject method=roots.method,klass=roots.klass;
-  std::vector<unsigned char> bytes(static_cast<size_t>(env->GetArrayLength(dex)));
-  env->GetByteArrayRegion(dex,0,static_cast<jsize>(bytes.size()),reinterpret_cast<jbyte*>(bytes.data()));
-  ShadowHookEngine hooks;std::string error;runtime_services::View view;
-  method_identity::Oracle oracle{method,static_cast<uint32_t>(index),static_cast<uint32_t>(flags)};
-  bool passed=owned_jit_receivers::CalibrateJitReceivers(hooks,env,klass,oracle,
-      jni_access::last_method_model,jni_access::runtime_services_observed,target,bytes.data(),bytes.size(),&view,&error);
-  if(passed){auto& proofs=jni_access::OwnedEvolutionProofs();proofs.observed=jni_access::runtime_services_observed;proofs.observed.receivers=view;}
-  if(env->ExceptionCheck())return nullptr;
-  return env->NewStringUTF(passed?"jit,code-cache,heap":error.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_artBuildId(JNIEnv* env,jclass) {
@@ -446,7 +421,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_beginFieldHandleProof(
       artdcevm::retirement::BeginMethodHandleFieldTargetProof(env,root,id,&error);
   if(root)env->DeleteGlobalRef(root);
   if(env->ExceptionCheck())return nullptr;
-  if(!success){debug_field_stage.reset();artdcevm::jni_access::ReleaseOwnedFieldProofStage();}
+  if(!success){debug_field_stage.reset();}
   if(!success&&error.empty())error="Missing public field ID/strong MethodHandle proof anchor";
   return env->NewStringUTF(error.c_str());
 }
@@ -455,7 +430,7 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_endFieldHandleProof(
     JNIEnv* env,jclass,jboolean invocation_succeeded) {
   std::string error;
   const bool success=artdcevm::retirement::EndMethodHandleFieldTargetProof(invocation_succeeded==JNI_TRUE,&error);
-  if(!success){debug_field_stage.reset();artdcevm::jni_access::ReleaseOwnedFieldProofStage();}
+  if(!success){debug_field_stage.reset();}
   return env->ExceptionCheck()?nullptr:env->NewStringUTF(error.c_str());
 }
 extern "C" JNIEXPORT void JNICALL
@@ -464,7 +439,6 @@ Java_com_github_ytlog_artdcevm_testing_RuntimeAccessSuite_releaseFieldProofStage
   // Java may fail during warmup or fixture loading after both getter proofs.
   // End both cross-call scopes while this JNI environment is still attached.
   debug_field_stage.reset();
-  artdcevm::jni_access::ReleaseOwnedFieldProofStage();
   artdcevm::contextual_field_id::Prune(env,debug_retired_fields);
 }
 extern "C" JNIEXPORT jstring JNICALL

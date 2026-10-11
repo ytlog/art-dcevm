@@ -17,7 +17,7 @@ base={**full,'mainCallbackHits':128,'workerCallbackHits':[128,128],
       'foregroundRequested':True,'foregroundActivity':'com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity',
       'foregroundInstrumentationPid':713,'foregroundActivityPid':713,'foregroundResumedBefore':True,
       'foregroundResumedAfter':True,'foregroundPauseCount':0,'foregroundFinished':True}
-flags=['--runtime-services','--exclusive-roots','--native-cache','--jit-receivers','--method-guards','--field-storage']
+flags=['--runtime-services','--exclusive-roots','--native-cache','--method-guards','--field-storage']
 with tempfile.TemporaryDirectory() as tmp:
     tmp=Path(tmp);apk=tmp/'fixture.apk';apk.write_bytes(b'foreground exact artifact');sha=hashlib.sha256(apk.read_bytes()).hexdigest()
     fake=tmp/'adb';fake.write_text('''#!/usr/bin/env python3
@@ -78,7 +78,7 @@ runpy.run_path(sys.argv[0],run_name='__main__')
         else:
             assert len(instrumentation)==1
             args=instrumentation[0]
-            for key in ['runtimeServices','exclusiveRoots','nativeCache','jitReceivers','methodGuards','fieldStorage']:
+            for key in ['runtimeServices','exclusiveRoots','nativeCache','methodGuards','fieldStorage']:
                 at=args.index(key);assert args[at-1]=='-e' and args[at+1]=='true'
             assert ('foreground' in args)==(mode!='legacy')
             if mode!='legacy':

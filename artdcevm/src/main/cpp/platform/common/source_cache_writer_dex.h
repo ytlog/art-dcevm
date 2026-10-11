@@ -1,11 +1,13 @@
 #pragma once
-#include "platform/common/compiled_frame_dex_oracle.h"
+#include "platform/common/native_dex_instruction_width.h"
+#include <cstring>
+#include "platform/common/bounded_dex_reader.h"
 namespace artdcevm::source_cache_writer_dex {
 // StandardDEX immutable original instructions, not quickened runtime memory.
 // Public/native declaration readers separately verify these exact IDs and flags.
 inline bool Read(const unsigned char* bytes,size_t size,uint32_t type,uint32_t field,
                  uint32_t padding_field,uint32_t method,uint32_t padding_method,uint32_t writer){
- using namespace compiled_frame_dex_oracle::detail;
+ using namespace bounded_dex_reader;
  if(!bytes||size<112||std::memcmp(bytes,"dex\n",4)||bytes[7])return false;
  Dex d{bytes,size};uint32_t types,fields,methods,fo,mo,classes,co,total;
  if(!d.U32(32,&total)||total!=size||!d.U32(64,&types)||!d.U32(80,&fields)||!d.U32(84,&fo)||!d.U32(88,&methods)||!d.U32(92,&mo)||!d.U32(96,&classes)||!d.U32(100,&co)||!d.Range(fo,size_t(fields)*8)||!d.Range(mo,size_t(methods)*8)||!d.Range(co,size_t(classes)*32))return false;

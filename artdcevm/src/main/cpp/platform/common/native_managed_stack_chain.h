@@ -3,7 +3,6 @@
 #include "platform/common/native_source_stop.h"
 #include "platform/common/native_cache_service.h"
 #include <vector>
-namespace artdcevm::whole_process_frames {class Service;}
 namespace artdcevm::native_managed_stack_chain {
 // This owns actual stopped registered-thread fragment facts only. It does not
 // discharge an exception or authorize any native consumer on its own.
@@ -21,7 +20,7 @@ class Chain final {
   if(result.complete&&!Validate())return Deny(Failure::Changed);return result;
  }
  private:
- friend class whole_process_frames::Service;
+
  Result CaptureEnumerated(const source_handle_roots::Service&source,const native_source_stop::Session&stop,
    void*self,void*thread,const native_cache::Service&threads,const modern_field_metadata::ReadContext&read,
    const source_handle_roots::ManagedStackSnapshot&head)noexcept {

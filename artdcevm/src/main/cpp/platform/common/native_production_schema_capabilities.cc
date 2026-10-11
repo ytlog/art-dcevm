@@ -1,5 +1,4 @@
 #include "platform/common/native_production_schema_capabilities.h"
-#include "platform/common/native_schema_run_state.h"
 #include "platform/common/native_hierarchy_private_ledger.h"
 #include "platform/abi/arm64/android11/thread_state.h"
 #include "platform/abi/arm64/android13/thread_state.h"
@@ -96,19 +95,11 @@ bool Owner::End(void* driver,bool success,std::string* error){
  active=nullptr;driver_=nullptr;fixture_=nullptr;context_={};return ok;
 }
 abi::arm64::android11::ReleaseObjectPointer Owner::FindOriginal(void* linker,void* self,const char* descriptor,void* loader){
- if(native_schema_run_state::RunState::Current())return native_schema_run_state::RunState::FindOriginal(linker,self,descriptor,loader);
  auto* owner=active;
  if(!owner||linker!=owner->runtime_.receivers.class_linker||self!=owner->context_.self||!owner->roots_.ReadyForSourceAccess())return {0};
  return owner->lookup_.Find(owner->context_,descriptor,loader);
 }
 bool Owner::Ready()const noexcept{return installed_&&completed_&&roots_.Calibrated()&&allocator_.Calibrated()&&lookup_.Calibrated()&&registry_.Calibrated();}
-bool Owner::BindDependencies(native_schema_run_state::Dependencies* output,std::string* error){
- if(!output||!Ready())return Error(error,Diagnostic());
- if((output->roots&&output->roots!=&roots_)||(output->allocator&&output->allocator!=&allocator_)||
-    (output->dex_registry&&output->dex_registry!=&registry_)||(output->lookup&&output->lookup!=&lookup_))
-  return Error(error,"Production schema dependencies have a different calibrated owner");
- output->roots=&roots_;output->allocator=&allocator_;output->dex_registry=&registry_;output->lookup=&lookup_;return true;
-}
 const char* Owner::Diagnostic()const noexcept{
  if(!prepared_)return "production-schema-services-unprepared";
  if(!installed_)return "production-schema-hooks-uninstalled";

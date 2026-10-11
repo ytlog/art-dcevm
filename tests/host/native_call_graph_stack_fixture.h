@@ -3,26 +3,20 @@
 // No private permission, inventory, selection or Session state is forged.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
-#include "provider_fixture.inc"
-#include "roots_fixture.inc"
+#include "native_call_graph_leaf_fixture.h"
 
 #pragma clang diagnostic pop
 #include "platform/common/native_call_graph_stack.h"
-#include "platform/common/native_owned_removal.h"
 #include "platform/common/runtime_instance_probe.cc"
 #include "platform/common/runtime_service_calibration.cc"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
-#include "early_owner_fixture.inc"
+#include "native_call_graph_runtime_fixture.h"
 namespace artdcevm::runnable_executor {
 // This host leaf is the independently configured public JNI callback bridge.
 bool Initialize(HookEngine&,JNIEnv*,std::string*) { return true; }
 }
 #pragma clang diagnostic pop
-const char*SchemaTypedFieldName(void*){return nullptr;}const char*SchemaTypedFieldType(void*){return nullptr;}
-namespace artdcevm::native_owned_removal {
-bool ReadPassiveTrace(PassiveTrace*out)noexcept{if(!out)return false;*out={};out->original_calls=1;out->whole_collections=1;return true;}
-}
 namespace drain_fixture {
 
 void* root_carrier=nullptr;

@@ -6,13 +6,12 @@ import android.os.Process;
 import org.json.JSONObject;
 public final class RuntimeAccessInstrumentation extends Instrumentation {
     private String runId;
-    private boolean runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,foreground,activeFrames,physicalActiveFrames;
+    private boolean runtimeServices,exclusiveRoots,nativeCache,methodGuards,fieldStorage,foreground;
     @Override public void onCreate(Bundle args) {
         super.onCreate(args);
         runtimeServices=enabled(args,"runtimeServices");exclusiveRoots=enabled(args,"exclusiveRoots");
-        nativeCache=enabled(args,"nativeCache");jitReceivers=enabled(args,"jitReceivers");
+        nativeCache=enabled(args,"nativeCache");
         methodGuards=enabled(args,"methodGuards");fieldStorage=enabled(args,"fieldStorage");
-        activeFrames=enabled(args,"activeFrames");physicalActiveFrames=enabled(args,"physicalActiveFrames");
         runId=args==null?null:args.getString("runtimeRunId");
         if(runId==null)runId=java.util.UUID.randomUUID().toString().replace("-","");
         foreground=enabled(args,"foreground");start();
@@ -38,13 +37,13 @@ public final class RuntimeAccessInstrumentation extends Instrumentation {
                 if(!before||carrier.carrierPid()!=Process.myPid())
                     throw new IllegalStateException("Foreground carrier did not resume in the instrumentation process");
             }
-            if(runtimeServices||nativeCache||jitReceivers||methodGuards||activeFrames||physicalActiveFrames){
+            if(runtimeServices||nativeCache||methodGuards){
                 phases.mark("public-jvmti.before");
                 com.github.ytlog.artdcevm.api.DcevmRuntime.attachPublicJvmti(getTargetContext());
                 phases.mark("public-jvmti.after");
             }
             phases.mark("suite.before");
-            report=new RuntimeAccessSuite().run(getTargetContext().getApplicationInfo().sourceDir,runtimeServices,exclusiveRoots,nativeCache,jitReceivers,methodGuards,fieldStorage,activeFrames,physicalActiveFrames,phases);
+            report=new RuntimeAccessSuite().run(getTargetContext().getApplicationInfo().sourceDir,runtimeServices,exclusiveRoots,nativeCache,methodGuards,fieldStorage,phases);
             phases.mark("suite.after");
         } catch(Throwable error) {
             put(report,"passed",false);put(report,"error",android.util.Log.getStackTraceString(error));

@@ -31,7 +31,7 @@ class Service {
  bool Prove(void* visitor,void** frame,const void* header,uintptr_t pc,const Oracle&o,
      const Witness*w,size_t count,const modern_field_metadata::ReadContext&context,Snapshot*out)const noexcept {
   if(!visitor||!frame||!header||!o.method||!o.registers||!w||!count||!out||!context.owner||!context.extent||
-     !Range(context,frame,8)||*frame!=o.method||owner_.Observe(o.method,pc,header,nullptr)!=native_frame_code_owner::Kind::Nterp)return false;
+     !Range(context,frame,8)||*frame!=o.method||owner_.Observe(o.method,pc,header)!=native_frame_code_owner::Kind::Nterp)return false;
   const auto info=info_(frame);const size_t spills=__builtin_popcount(info.core_spills)+__builtin_popcount(info.fp_spills);
   // Same fixed ARM64 source computation; no object field/assembly inference.
   const size_t source_size=(spills*8+size_t(o.registers)*8+24+size_t(o.outs)*4+15)&~size_t(15);
@@ -61,7 +61,7 @@ class Service {
   }
   // No JNI, allocation, mutation or cookie synthesis. Revoke on cursor, owner,
   // saved DexPc, native array or current stopped-context drift after readers.
-  if(!Range(context,frame,info.size)||*frame!=o.method||owner_.Observe(o.method,pc,header,nullptr)!=native_frame_code_owner::Kind::Nterp||
+  if(!Range(context,frame,info.size)||*frame!=o.method||owner_.Observe(o.method,pc,header)!=native_frame_code_owner::Kind::Nterp||
      refs_(frame)!=refs||regs_(frame)!=regs||dex_pc_(frame)!=o.invoke_dex_pc||visitor_pc_(visitor,false)!=o.invoke_dex_pc)return false;
   const auto refreshed=info_(frame);
   if(refreshed.size!=info.size||refreshed.core_spills!=info.core_spills||refreshed.fp_spills!=info.fp_spills)return false;

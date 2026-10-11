@@ -3,7 +3,6 @@
 #include "platform/common/native_class_lookup.h"
 #include "platform/common/native_source_dex_registry.h"
 
-namespace artdcevm::native_schema_run_state {struct Dependencies;}
 namespace artdcevm::native_production_schema_capabilities {
 // Persistent production services, calibrated through ordinary original source
 // operations. Hook installation and the first observed Handle are not readiness.
@@ -27,7 +26,6 @@ class Owner final {
  bool Prepared()const noexcept{return prepared_;}
  bool HooksInstalled()const noexcept{return installed_;}
  bool Ready()const noexcept;
- bool BindDependencies(native_schema_run_state::Dependencies*,std::string*);
  const char* Diagnostic()const noexcept;
  source_handle_roots::Service& Roots()noexcept{return roots_;}
  const source_handle_roots::Service& Roots()const noexcept{return roots_;}

@@ -2,7 +2,6 @@
 #include "platform/common/native_managed_stack_chain.h"
 #include "platform/common/source_commit.h"
 #include "support/named_symbol_extent.h"
-namespace artdcevm::whole_process_frames {class Service;}
 namespace artdcevm::native_exception_upcall_boundary {
 namespace detail {
 // Source FrameInfo's return-PC offset, never inferred from machine instructions.
@@ -29,7 +28,7 @@ class Proof final {
     (invoke_.ContainsReturnPc(last_lr_)||invoke_static_.ContainsReturnPc(last_lr_));
  }
  private:
- friend class whole_process_frames::Service;
+
  Proof()=default;
  bool Prepare(){prepared_=invoke_.Prepare("libart.so","art_quick_invoke_stub")&&
   invoke_static_.Prepare("libart.so","art_quick_invoke_static_stub");return prepared_;}

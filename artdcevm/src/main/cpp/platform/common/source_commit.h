@@ -16,6 +16,9 @@ struct Plan {
   std::vector<ClassRootOrigin> class_root_origins{};
 };
 // Version providers supply source-declared, behaviorally calibrated services.
+// Validate must prove the complete before/incoming call graph is interpreted,
+// active selected compiled frames are absent, and GC/publication obligations
+// hold. An installed-before-only report cannot authorize this mutation.
 // Run executes only under ART's final exclusive mutator/disabled-GC transaction
 // boundary. It never obtains those locks or establishes this capability itself.
 class Services {
@@ -37,7 +40,6 @@ class Services {
   virtual void* ObjectClass(void* object)const=0;
   virtual void MarkClassAndMethodsObsolete(void* old_class,void* new_class)const=0;
   virtual void UpdateReflectiveReferences(const Plan&)const=0;
-  virtual void ForceDeoptimizeFrames()const=0;
   virtual void ReplaceObjectReferences()const=0;
   // Fixed modern ART replaces native declaring-class GC roots as part of the
   // heap replacement. Restore old member owners before retaining old classes.
@@ -47,8 +49,6 @@ class Services {
   // ReplaceReferences rewrites Holder roots, so resolve the replacement again.
   virtual void* NewClassAfterReplacement(void* rooted_array,size_t index)const=0;
   virtual void RetainOldClass(void* new_class,void* old_class)const=0;
-  virtual void InvalidateCompiledCode()const=0;
-  virtual void DeoptimizeEverythingForAbstractTransition()const=0;
   virtual void ClearInterpreterCaches()const=0;
 };
 // Failure is returned only before mutation. Native service failures after commit

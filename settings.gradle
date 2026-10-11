@@ -2,6 +2,3 @@ pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal()
 dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
 rootProject.name = 'ArtDcevm'
 include ':artdcevm', ':app'
-
-// Isolated non-debuggable ART active-frame proof target.
-include ':frameproof'

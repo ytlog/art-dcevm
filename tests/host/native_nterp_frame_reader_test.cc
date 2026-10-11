@@ -19,7 +19,6 @@ uint32_t VisitorPc(const void*v,bool approximate){assert(v==&visitor&&!approxima
 uint32_t Value(void** f,uint16_t reg){uint32_t value;std::memcpy(&value,reinterpret_cast<void*>(Registers(f)+reg*4),4);return value;}
 uint32_t Reference(void** f,uint16_t reg){uint32_t value;std::memcpy(&value,reinterpret_cast<void*>(References(f)+reg*4),4);return value;}
 const void* MethodHeader(void*m,uintptr_t pc){return !bad_header&&m==&method&&pc==101?&header:nullptr;}
-bool Contains(const void*h,uintptr_t pc){return h==&header&&pc==101;}
 bool Nterp(const void*h){assert(h==&header);return true;}
 bool Debugger(const void*v,uint16_t,n::Kind,uint32_t*){assert(v==&visitor);return debug_override;}
 bool Canonical12(const void*v,void*m,uint16_t reg,n::Kind kind,uint32_t*out,abi::arm64::android11::frame_registers::OptionalLocation location){
@@ -37,7 +36,7 @@ struct Finder {
   if(missing&&!std::strcmp(s,missing))return nullptr;
 #define LEAF(name,fn) if(!std::strcmp(s,name))return Fn(fn)
   LEAF(n::Service::kReferences,References);LEAF(n::Service::kRegisters,Registers);LEAF(n::Service::kFrameInfo,Info);LEAF(n::Service::kDexPc,Pc);LEAF(n::Service::kValue,Value);LEAF(n::Service::kReference,Reference);
-  LEAF(native_frame_code_owner::Service::kMethodHeader,MethodHeader);LEAF(native_frame_code_owner::Service::kContains,Contains);LEAF(native_frame_code_owner::Service::kNterp,Nterp);
+  LEAF(native_frame_code_owner::Service::kMethodHeader,MethodHeader);LEAF(native_frame_code_owner::Service::kNterp,Nterp);
   LEAF("_ZNK3art12StackVisitor8GetDexPcEb",VisitorPc);LEAF(abi::arm64::android14::frame_registers::kDebuggerValue,Debugger);
   LEAF(abi::arm64::android12::frame_registers::kCanonical,Canonical12);LEAF(abi::arm64::android14::frame_registers::kCanonical,Canonical14);
 #undef LEAF

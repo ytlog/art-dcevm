@@ -13,9 +13,6 @@ class Engine {
   virtual std::string SourceStopDiagnostic()const{return "ordinary-source-lifecycle-not-observed";}
   virtual bool NativeScopeCalibrated()const{return false;}
   virtual bool SourceCapabilitiesCalibrated()const{return false;}
-  virtual bool FrameGeometryCalibrated()const{return false;}
-  virtual bool CompiledFramesCalibrated()const{return false;}
-  virtual std::string FrameCalibrationDiagnostic()const{return "compiled-frame-calibration-not-attempted";}
   virtual std::string SourceFactoryDiagnostic()const{return "production-schema-services-unprepared";}
   virtual bool InitializerEpisodeObserved()const{return false;}
   virtual std::string InitializerEpisodeDiagnostic()const{return "initializer-source-episode-not-observed";}
@@ -35,7 +32,9 @@ class Engine {
   virtual bool Activate(JNIEnv*,std::string*)=0;
   virtual int Apply(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,std::string*)=0;
 };
-// Only original installed APK DEX and public JVMTI/reflection observations may
-// construct this engine. A source-family label never authorizes any private ABI.
+// Private construction remains unavailable until the replacement transaction
+// callgraph/bootstrap proves execution safety. Preparation currently returns
+// nullptr with a diagnostic before any JNI, hooks, calibration or mutation.
+// Pure installed-DEX metadata helpers live in bootstrap_dex_oracle.h/.cc.
 std::unique_ptr<Engine> Prepare(JNIEnv*,jvmtiEnv*,jobject,std::string*);
 }

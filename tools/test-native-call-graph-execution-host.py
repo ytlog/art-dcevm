@@ -17,7 +17,7 @@ units=[r/'tests/host/native_call_graph_execution_test.cc']+[cpp/'platform/common
 flags=[os.environ.get('CXX','clang++'),'-std=c++17','-g','-O1','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(r/'tests/host'),'-I',str(java/'include'),'-I',str(java/'include'/platform)]
 # Keep Clang UBSan function prefixes with their functions on Mach-O: stripping
 # callback atoms otherwise leaves the wrong type hash immediately before entry.
-headers=b''.join(p.read_bytes() for p in sorted(cpp.rglob('*.h')))+b''.join(p.read_bytes() for p in sorted(out.glob('*.inc')))
+headers=b''.join(p.read_bytes() for p in sorted(cpp.rglob('*.h')))
 objects=out/'objects';objects.mkdir(exist_ok=True)
 manifest={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest() for p in units}
 manifest.update({str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest() for p in (r/'tests/host').glob('*call_graph*fixture.h')})

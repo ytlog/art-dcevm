@@ -1,9 +1,9 @@
 #pragma once
 #include <cstring>
-#include "platform/abi/arm64/android11/code_info.h"
-#include "platform/abi/arm64/android12/code_info.h"
-#include "platform/abi/arm64/android13/code_info.h"
-#include "platform/abi/arm64/android17/code_info.h"
+#include "platform/abi/arm64/android11/stack_storage.h"
+#include "platform/abi/arm64/android12/stack_storage.h"
+#include "platform/abi/arm64/android13/stack_storage.h"
+#include "platform/abi/arm64/android17/stack_storage.h"
 
 namespace artdcevm::abi::arm64::stack {
 enum class WalkKind : uint32_t { kIncludeInlined, kSkipInlined };

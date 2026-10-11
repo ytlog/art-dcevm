@@ -3,7 +3,6 @@
 #include "native_commit_fixture.inc"
 #pragma clang diagnostic pop
 #include "platform/common/native_abstract_instances.h"
-#include "platform/common/native_boot_aot_prefix.h"
 #include <new>
 static bool forbid_vtable_allocation=false;
 void* operator new(std::size_t n){if(forbid_vtable_allocation)throw std::bad_alloc();if(void* p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
@@ -82,36 +81,12 @@ int main(){
   {meta_class,sizeof(class_metadata::Class17)},{incomplete,160},{complete,160},{embedded_complete,160},
   {long_array_class,160},{primitive_long,160},{external_incomplete,24},{external_complete,24},
   {abstract_method,40},{concrete_method,40},{embedded_method,40}}};
- auto*boot_fields=static_cast<unsigned char*>(heap.New(20));Put32(boot_fields,0,1);auto*boot_field=reinterpret_cast<abi::arm64::Field*>(boot_fields+4);*boot_field=*old_fields[1];boot_field->declaring_class=uint32_t(uintptr_t(embedded_complete));boot_field->offset=12;auto*original_field=old_fields[1];old_fields[1]=boot_field;
- maps.regions[14]={boot_fields,20};maps.regions[15]={names[1],std::strlen(names[1])+1};maps.regions[16]={types[1],std::strlen(types[1])+1};
- static_cast<class_metadata::Class17*>(embedded_complete)->fields=uintptr_t(boot_fields);
  modern_field_metadata::ReadContext stopped_context{&maps,StoppedMappings::Extent};
  const int before_jni=jni_calls;Stop(nullptr,nullptr,false);
  native_abstract_instances::VTableView view;
  assert(service.ReadVTable(complete,metadata,&view,nullptr,&stopped_context)&&view.count==1&&view.table==external_complete&&view.payload==16);
  assert(service.ReadVTable(embedded_complete,metadata,&view,nullptr,&stopped_context)&&view.count==1&&view.table==embedded_complete&&view.payload==120);
  assert(!service.ReadVTable(complete,metadata,&view,nullptr,nullptr)&&!view.table);
- // An exact unchanged boot ancestor and identical *actual* dispatch prefix.
- // This is only layout evidence: no code/indirect-dependency permission follows.
- auto*old_prefix=static_cast<class_metadata::Class17*>(incomplete);auto*new_prefix=static_cast<class_metadata::Class17*>(complete);auto*boot_prefix=static_cast<class_metadata::Class17*>(embedded_complete);
- old_prefix->class_loader=new_prefix->class_loader=uint32_t(uintptr_t(meta_class));old_prefix->super_class=new_prefix->super_class=uint32_t(uintptr_t(embedded_complete));
- old_prefix->object_size=new_prefix->object_size=64;boot_prefix->object_size=16;
- const uint64_t prefix_entry=uintptr_t(embedded_method);std::memcpy(static_cast<char*>(external_incomplete)+16,&prefix_entry,8);std::memcpy(static_cast<char*>(external_complete)+16,&prefix_entry,8);
- source_commit::Plan prefix_plan;prefix_plan.old_classes={incomplete};prefix_plan.new_classes={complete};
- const auto prefix_queries=method_identity::MappingOsQueries();forbid_vtable_allocation=true;
- auto prefix_report=native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context);assert(prefix_report.preserved&&prefix_report.boot_classes==1&&prefix_report.fields==1&&prefix_report.slots==1);
- boot_field->offset=16;assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);boot_field->offset=12;
- boot_field->declaring_class=uint32_t(uintptr_t(incomplete));assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);boot_field->declaring_class=uint32_t(uintptr_t(embedded_complete));
- new_prefix->super_class=0;assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);new_prefix->super_class=old_prefix->super_class;
- new_prefix->object_size=8;assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);new_prefix->object_size=64;
- const uint64_t changed_entry=uintptr_t(concrete_method);std::memcpy(static_cast<char*>(external_complete)+16,&changed_entry,8);assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);std::memcpy(static_cast<char*>(external_complete)+16,&prefix_entry,8);
- old_prefix->class_loader=0;assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);old_prefix->class_loader=uint32_t(uintptr_t(meta_class));
- maps.denied=embedded_method;assert(!native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved);maps.denied=nullptr;
- assert(native_boot_aot_prefix::Observe(prefix_plan,0,metadata,service,stopped_context).preserved&&method_identity::MappingOsQueries()==prefix_queries);forbid_vtable_allocation=false;
- old_fields[1]=original_field;boot_prefix->fields=0;
- old_prefix->class_loader=new_prefix->class_loader=0;old_prefix->super_class=new_prefix->super_class=0;
- const uint64_t original_abstract=uintptr_t(abstract_method),original_concrete=uintptr_t(concrete_method);std::memcpy(static_cast<char*>(external_incomplete)+16,&original_abstract,8);std::memcpy(static_cast<char*>(external_complete)+16,&original_concrete,8);
-
  const auto stopped_os_queries=method_identity::MappingOsQueries();
  assert(!service.Validate(plan,0,metadata,&error,&stopped_context)&&error=="An actual migrated instance would inherit an abstract method");
  plan.old_instances.clear();plan.new_instances.clear();assert(service.Validate(plan,0,metadata,&error,&stopped_context));

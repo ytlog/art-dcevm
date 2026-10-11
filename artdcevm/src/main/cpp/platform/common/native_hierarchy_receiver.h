@@ -1,7 +1,6 @@
 #pragma once
 #include "platform/common/native_hierarchy_graph.h"
 namespace artdcevm::modern_field_metadata {class FieldMetadata;struct ReadContext;}
-namespace artdcevm::native_narrowing {class Authority;}
 namespace artdcevm::native_hierarchy_receiver {
 // Without an exact concrete narrowing owner, every preexisting class/interface
 // relation must survive the replacement graph. An attached owner may stage a
@@ -15,8 +14,6 @@ class Preservation final:public native_hierarchy_graph::ReceiverOwner {
  // Call between whole source operations, after graph authority cleanup. This
  // owner retains indices and declaration bytes, no independently managed roots.
  void Reset()noexcept;
- // Optional concrete per-operation owner; absence retains all old relations.
- bool UseNarrowing(native_narrowing::Authority&)noexcept;
  void UseReadContext(const modern_field_metadata::ReadContext&)noexcept;
  bool VerifyStaged(const native_hierarchy_graph::Graph&,
                    const std::vector<native_hierarchy_graph::Input>&,std::string*)const override;

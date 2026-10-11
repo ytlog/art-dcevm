@@ -28,10 +28,9 @@ bool CheckEvolutionSymbols(HookEngine& hooks, std::string* error) {
     if (!Require(hooks, Library::kJvmti, name, error)) return false;
   const char* art[]{::artdcevm::symbols::android13::kVerifyClass, ::artdcevm::symbols::android13::kVerifierResolve, ::artdcevm::symbols::android13::kFindClass,
                     ::artdcevm::symbols::android13::kLookupClass, ::artdcevm::symbols::android13::kDeleteClassLoader,
-                    ::artdcevm::symbols::android13::kIsAsyncDeoptimizeable, ::artdcevm::symbols::android13::kTestSuspendFromCode,
+                    ::artdcevm::symbols::android13::kTestSuspendFromCode,
                     ::artdcevm::symbols::android13::kReadBarrierMark,
-                    ::artdcevm::symbols::android13::kCheckedResolve,
-                    ::artdcevm::symbols::android13::kInvalidateAllCompiledCode};
+                    ::artdcevm::symbols::android13::kCheckedResolve};
   for (const char* name : art)
     if (!Require(hooks, Library::kArt, name, error)) return false;
   for (const char* name : ::artdcevm::symbols::android13::kRetiredMethodHooks)

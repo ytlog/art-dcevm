@@ -21,7 +21,6 @@ bool Run(const Plan& plan,const Services& services,CommitObserver observer){
   for(size_t i=0;i<plan.old_classes.size();++i)
     services.MarkClassAndMethodsObsolete(plan.old_classes[i],plan.new_classes[i]);
   services.UpdateReflectiveReferences(plan);
-  services.ForceDeoptimizeFrames();
   services.ReplaceObjectReferences();
   services.RestoreDeclaringClasses(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){
@@ -29,8 +28,6 @@ bool Run(const Plan& plan,const Services& services,CommitObserver observer){
     if(!replacement)std::abort();
     services.RetainOldClass(replacement,plan.old_classes[i]);
   }
-  services.InvalidateCompiledCode();
-  if(plan.abstract_instances)services.DeoptimizeEverythingForAbstractTransition();
   services.ClearInterpreterCaches();
   return true;
 }

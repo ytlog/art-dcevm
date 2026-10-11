@@ -53,7 +53,6 @@ std::string CapabilityBackend::Capabilities()const {
  if(!operation)return "{\"backend\":\"runtime-capabilities\",\"operationBusy\":true,\"evolutionError\":\"Runtime backend operation already in progress\"}";
  const std::string source_diagnostics=std::string(",\"sourceCapabilitiesCalibrated\":")+
    (ready_&&common_&&common_->SourceCapabilitiesCalibrated()?"true":"false")+
-   ",\"frameGeometryCalibrated\":"+(ready_&&common_&&common_->FrameGeometryCalibrated()?"true":"false")+
    ",\"sourceFactoryDiagnostic\":"+QuoteJsonMutf8(common_?common_->SourceFactoryDiagnostic():"production-source-owner-not-observed")+
    ",\"initializerEpisodeObserved\":"+(common_&&common_->InitializerEpisodeObserved()?"true":"false")+
    ",\"initializerEpisodeDiagnostic\":"+QuoteJsonMutf8(common_?common_->InitializerEpisodeDiagnostic():"initializer-source-owner-not-observed")+
@@ -69,9 +68,7 @@ std::string CapabilityBackend::Capabilities()const {
    ",\"rootProvenanceDiagnostic\":"+QuoteJsonMutf8(common_?common_->RootProvenanceDiagnostic():"runtime-root-observation-owner-not-observed")+
    ",\"rootProvenanceReport\":"+(common_?common_->RootProvenanceReport():"{}")+
    ",\"typedHeapCalibrated\":"+(common_&&common_->TypedHeapCalibrated()?"true":"false")+
-   ",\"typedHeapDiagnostic\":"+QuoteJsonMutf8(common_?common_->TypedHeapDiagnostic():"typed-heap-source-owner-not-observed")+
-   ",\"compiledFramesCalibrated\":"+(ready_&&common_&&common_->CompiledFramesCalibrated()?"true":"false")+
-   ",\"frameCalibrationDiagnostic\":"+QuoteJsonMutf8(common_?common_->FrameCalibrationDiagnostic():"compiled-frame-calibration-not-attempted");
+   ",\"typedHeapDiagnostic\":"+QuoteJsonMutf8(common_?common_->TypedHeapDiagnostic():"typed-heap-source-owner-not-observed");
  const std::string public_report=public_->Capabilities();
  auto supported=[&](const char* key){return public_report.find(std::string("\"")+key+"\":true")!=std::string::npos;};
  std::string result="{\"backend\":\"runtime-capabilities\",\"attached\":"+std::string(vm_?"true":"false")+
