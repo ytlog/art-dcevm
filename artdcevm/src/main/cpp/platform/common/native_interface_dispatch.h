@@ -8,6 +8,10 @@ struct Match {void* interface=nullptr;void* declaration=nullptr;void* target=nul
 // Fixed ARM64 PointerArray is mirror::LongArray: Object8, length4, padding4,
 // uint64 payload. A pure bounded reader; its result is not dispatch authority.
 bool ReadPointerSlot(const void*array,size_t extent,uint32_t slot,void**out)noexcept;
+// Shared bounded native DEX namespace reader. This is a read result, not a
+// declaration-resolution or dispatch permission.
+bool ReadCurrentNamespace(const modern_field_metadata::FieldMetadata&,void*,
+ const modern_field_metadata::ReadContext&,evolution::MappedDexMetadata*,field_copy::CopyClassView*)noexcept;
 // No resolving, JNI, allocation or OS mapping queries. All movable references
 // are borrowed from the same actual stopped walker/root window. Caller still
 // owns the adjacent-frame entry proof and complete continuation dependencies.

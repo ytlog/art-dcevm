@@ -89,7 +89,9 @@ bool BootNativeValue(const void*raw,abi::arm64::android12::frame_registers::Loca
 void CoverBootRootMaps(RunStateMappings&);
 bool BootRefreshMaps(void*raw,std::string*error){if(!RunStateMappings::Refresh(raw,error))return false;auto&s=*static_cast<RunStateMappings*>(raw);s.Cover(boot_header);s.Cover(boot_stack_map.data());s.Cover(&boot_dex_mask);s.Cover(&boot_dex_map);s.Cover(boot_location.data());s.Cover(&boot_quick);CoverBootRootMaps(s);auto*cache=reinterpret_cast<void*>(uintptr_t(Read32(BootCreatedClass(),offsetof(class_metadata::Class17,dex_cache))));void*file=nullptr;std::memcpy(&file,static_cast<char*>(cache)+16,8);s.Cover(static_cast<dex_mapping_abi::Prefix*>(file)->begin);return true;}
 void* BootResolve(void*,void*,uint32_t,void*,uint32_t){std::abort();}
+bool(*boot_extra_same)(void*,void*)=nullptr;
 bool BootSameSignature(void*a,void*b){
+ if(boot_extra_same)return boot_extra_same(a,b);
  if(a!=BootCreatedMethod()&&b!=BootCreatedMethod())return SameIndex(a,b);
  if(a==b)return true;void*other=a==BootCreatedMethod()?b:a;void*klass=Root(other);assert(klass);
  auto*cache=reinterpret_cast<void*>(uintptr_t(Read32(klass,offsetof(class_metadata::Class17,dex_cache))));void*file=nullptr;std::memcpy(&file,static_cast<char*>(cache)+16,8);assert(file);

@@ -15,6 +15,10 @@
 #include "platform/common/native_boot_dex_identity.h"
 #include "native_schema_run_state_boot_frames_fixture.h"
 #include "native_schema_run_state_managed_stack_fixture.h"
+#ifdef INTERFACE_DOMAIN_FIXTURE
+#include "native_interface_domain_public_fixture.h"
+#include "native_interface_domain_run_fixture.h"
+#endif
 #ifdef WHOLE_UPCALL_FIXTURE
 #include "native_upcall_entry_guards_fixture.h"
 #include "native_whole_managed_upcall_fixture.h"
@@ -61,14 +65,24 @@ int main(int argc,char**argv){
   for(void* klass:{static_cast<void*>(old_class),static_cast<void*>(new_class),static_cast<void*>(parent_class)}){Put32(klass,offsetof(class_metadata::Class17,vtable),uint32_t(uintptr_t(empty_vtable)));Put32(klass,offsetof(class_metadata::Class17,object_size),64);Put32(klass,offsetof(class_metadata::Class17,class_size),160);Put32(klass,sizeof(class_metadata::Class17),0);}
   receiver_guard::SourceProducer boot_source;assert(boot_source.Bind(owner_hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kTagged,*d.metadata,&linker,Current,&error));
   deps.mapping.refresh_stopped=BootRefreshMaps;
+#ifdef INTERFACE_DOMAIN_FIXTURE
+  deps.mapping.refresh_stopped=interface_domain_fixture::RefreshMaps;
+#endif
   native_typed_heap_walk::RootProvenance frame_provenance;assert(frame_provenance.Bind(owner_hooks,&::runtime,Current,&error));assert(frame_provenance.CalibrateLocks(aggregate_context,&error)&&frame_provenance.LocksCalibrated());deps.frame_roots=&frame_provenance;
   deps.boot_catalog=&boot_catalog;deps.boot_vtables=&vtables;deps.boot_code=&boot_source;
+#ifdef INTERFACE_DOMAIN_FIXTURE
+  const auto domain_inline=File((std::string(DOMAIN_DEX_DIR)+"/inline-safe.dex").c_str()),domain_dispatch=File((std::string(DOMAIN_DEX_DIR)+"/interface-dispatch.dex").c_str()),domain_receiver=File((std::string(DOMAIN_DEX_DIR)+"/receiver-call.dex").c_str()),domain_cloneable=File((std::string(DOMAIN_DEX_DIR)+"/cloneable.dex").c_str()),domain_serializable=File((std::string(DOMAIN_DEX_DIR)+"/serializable.dex").c_str()),domain_error=File((std::string(DOMAIN_DEX_DIR)+"/error.dex").c_str());
+  interface_domain_fixture::PreparePublic(domain_inline,domain_dispatch,domain_receiver,domain_cloneable,domain_serializable,domain_error,*d.metadata,&env,&ti,boot_catalog);boot_extra_same=interface_domain_fixture::Same;
+#endif
   native_schema_policy::Plan policy;assert(native_schema_policy::Plan::Prepare(proposal.before,proposal.after,&policy,&error));
   std::vector<native_schema_policy::Plan> policies{policy};
   deps.members.retirement.owner=&retired_records;deps.members.schemas=&policies;deps.members.expected_removal=native_member_provider::Removal::kSchemaEvolution;
   native_schema_guard_verifier::Verifier verifier;guard_expected_loader=app_loader;guard_base_class=base;auto* base_methods=static_cast<unsigned char*>(heap.New(40));Put32(base_methods,0,1);base->methods=uintptr_t(base_methods);auto* base_method=new(base_methods+8)abi::arm64::android12::Method12{};base_method->declaring_class=uint32_t(uintptr_t(base));base_method->access_flags=1;base_method->dex_method_index=1;guard_base_method=base_method;ConfigurePublicGuard(table,funcs);ConfigureSchemaTypedPublic(table,funcs);funcs.GetClassLoader=BootClassLoader;funcs.GetClassMethods=BootClassMethods;funcs.GetMethodName=BootMethodName;funcs.GetMethodModifiers=BootMethodFlags;
   native_schema_guard_verifier::Bindings guards;guards.vm=static_cast<JavaVM*>(aggregate_context.vm);guards.metadata=d.metadata;guards.methods=&method_model;
   guards.roots={nullptr,GuardScope,GuardOracle,GuardDecode,GuardElement};guards.decode_global=GuardDecode;guards.decode_method=BootGuardMethod;guards.decode_field=GuardField;guards.decode_native_field=GuardNativeField;guards.stage_field=GuardStageField;guards.method_class=GuardMethodClass;guards.same_method=BootGuardSame;guards.readable=GuardReadable;guards.writable=GuardReadable;guards.extent=GuardExtent;
+#ifdef INTERFACE_DOMAIN_FIXTURE
+  interface_domain_fixture::ConfigureGuards(table,funcs,guards);
+#endif
   if(!verifier.Stage(&env,&ti,{reinterpret_cast<jclass>(old_class)},guards,&error)){std::cerr<<"actual Stage: "<<error<<"\n";std::abort();}
   assert(verifier.MatchesAffected(&env,{reinterpret_cast<jclass>(old_class)},&error));
   deps.members.schema_guards=&verifier;deps.guards=&verifier;
@@ -147,11 +161,17 @@ int main(int argc,char**argv){
   auto facade=run->Finalize(&holder,&final_plan);assert(facade&&final_plan==&plan);assert(mappings.final_refreshes==snapshots_before_final+1);const auto final_os_queries=method_identity::MappingOsQueries();
   const size_t streams_before_final=boot_original_root_streams;assert(facade->Validate(plan));assert(boot_original_root_streams>streams_before_final);
   assert(run->Frames().unaffected_aot_frames==1&&run->Frames().aot_frames==1&&run->Frames().native_value_reads==1);
+#ifdef INTERFACE_DOMAIN_FIXTURE
+  interface_domain_fixture::TestFinalDomain(*run,*run->CurrentReadContext());
+#endif
   assert(source_commit::Run(plan,*facade,{run.get(),[](const source_commit::Plan& value,void* owner)noexcept{static_cast<native_schema_run_state::RunState*>(owner)->Commit(value);}}));
   assert(boot_runtime_root==plan.new_classes[0]&&boot_root_writebacks==writebacks_before_run+1);assert(method_identity::MappingOsQueries()==final_os_queries);forbid_provider_allocation=false;
   facade.reset();class_remove_proxy(&linker,&pauser);owner_resume_proxy(&carrier);OwnerRunnable(thread.data());owner_enable_proxy(&owner_heap,thread.data());
   assert(run->End(&actual_driver,true));run.reset();roots.Clear();verifier.Clear(&env);boot_catalog.Clear(&env);matched_plan=nullptr;assert(SchemaTypedGlobals()==typed_globals_before_begin);assert(schema_typed_walks>=4);
   assert(!gc&&!disabled&&!stopped&&replaced&&boot_quick.value==0&&Read32(boot_compiled_method,4)==9&&!BootFlag(boot_header));
+#ifdef INTERFACE_DOMAIN_FIXTURE
+  std::cout<<"Actual same-Plan InterfaceDomain final-window certificate + complete ERROR/array/marker census, namespace/PC/declaration/census refusals, revalidation noalloc/noOS PASS\n";
+#endif
   std::cout<<"Actual concrete Boot AOT owner, original async=false/unmarked header, full maps/value, unchanged Boot prefix, public/native source bytes and full RunState Stage+Seal+guard proofs, moving allocation, Collected, original publication, final native Validate+Commit+cleanup+End passed with no C++ allocation, explicit fresh final OS bounds capture, then zero OS mapping queries in Validate/Commit (publication has Android17 no-inner-GC semantics)\n";
   return true;
  };

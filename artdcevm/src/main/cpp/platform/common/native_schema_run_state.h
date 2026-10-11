@@ -9,6 +9,7 @@
 #include "platform/common/native_boot_method_catalog.h"
 #include "platform/common/native_boot_aot_source.h"
 #include "platform/common/native_hierarchy_typed_storage.h"
+#include "platform/common/native_interface_dispatch_domain.h"
 namespace artdcevm::native_schema_run_state {
 // Public independently warmed resolved entries. Indices come from the installed
 // DEX/public member oracle, never the candidate DexCache representation.
@@ -94,6 +95,10 @@ class RunState final:public native_schema_guard_verifier::HierarchyAuthority {
  bool VerifyHierarchy(const source_commit::Plan&,size_t,void* loader)const noexcept override;
  const modern_field_metadata::ReadContext* CurrentReadContext()const noexcept;
  const whole_process_frames::Report& Frames()const noexcept;
+ // Borrowed independent dispatch-dependency capability; it never grants an
+ // entered-callee or runtime-helper continuation. Every query rechecks owners.
+ const native_interface_dispatch_domain::Source* InterfaceDomain()const noexcept;
+ native_interface_dispatch_domain::Certificate* InterfaceDomainCertificate()noexcept;
  private:
  static void CompleteRefund(void*)noexcept;
  struct State;

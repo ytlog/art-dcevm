@@ -14,7 +14,7 @@ for name in ['native_managed_stack_source','native_jni_exception_calibration','n
 sys.path.insert(0,str(root/'tests/host'))
 from schema_run_state_dex_fixture import write_fixture,write_graph_fixture
 from schema_run_state_boot_dex_fixture import write_boot_fixture
-import struct,hashlib,zlib
+import struct,hashlib,zlib,os
 before=write_fixture(out/'matched-dex',True);after=write_fixture(out/'matched-dex',False);graph_dex=write_graph_fixture(out/'matched-dex',typed_probe=True)
 # Same original superclass: this is member schema evolution, not prefix-changing hierarchy.
 b=bytearray(after.read_bytes());types_at=struct.unpack_from('<I',b,68)[0];strings_at=struct.unpack_from('<I',b,60)[0]
@@ -27,12 +27,19 @@ struct.pack_into('<I',b,struct.unpack_from('<I',b,100)[0]+8,base_index);b[12:32]
 boot_dex=write_boot_fixture(out/'matched-boot')
 from managed_upcall_inline_dex_fixture import write as write_inline_fixture
 write_inline_fixture(out/'matched-inline')
+if os.environ.get('ART_DCEVM_INTERFACE_DOMAIN')=='1':
+ from interface_domain_dex_fixture import write as write_domain_fixture
+ write_domain_fixture(out/'matched-domain')
+ for name in ['native_interface_dispatch_domain']:
+  if name not in sources:sources.append(name)
 setup=(root/'tests/host/native_schema_run_state_test.cc').read_text().split('  // Additional actual owners',1)[1].split('  if(!cache_role_fixture.Prepare(',1)[0]
 (out/'aggregate_owner_setup.inc').write_text(('  // Additional actual owners'+setup).replace('OwnerHooks owner_hooks;','BootHooks owner_hooks;').replace('whole_process_frames::Service scanner;','boot_frame_binding=true;whole_process_frames::Service scanner;').replace('BindGeometryOnly(code_info_view::SourceFamily::kAndroid13','Bind(code_info_view::SourceFamily::kAndroid14'))
 # A moving-GC leaf must also update the actual Field/Method GcRoot<Class>
 # members, not just the native TLS handles. This is the named lookup boundary.
 prefix=(out/'pipeline_fixture.inc').read_text().replace('OriginalRoots(self,&mover,0);','OriginalRoots(self,&mover,0);for(auto* field:new_fields)field->declaring_class=uint32_t(uintptr_t(relocated_new));for(size_t n=0;n<3;++n)reinterpret_cast<abi::arm64::android12::Method12*>(uintptr_t(new_class->methods)+8+32*n)->declaring_class=uint32_t(uintptr_t(relocated_new));')
 prefix=prefix.replace('HierarchyInserted;','HierarchyBase;')
+if os.environ.get('ART_DCEVM_INTERFACE_DOMAIN')=='1':
+ prefix=prefix.replace('g.nodes.size()==public_classes.size()', "g.nodes.size()==size_t(std::count_if(public_classes.begin(),public_classes.end(),[](const auto&c){return !c.descriptor.empty()&&c.descriptor.front()=='L';}))")
 (out/'pipeline_fixture.inc').write_text(prefix)
 # HandleScopeVisitRoots is also an original GC visitor over a Native thread.
 # Preserve actual TLS/root traversal and accept the fixture's independently
@@ -50,6 +57,7 @@ elf=elfhelper.prepare(out/'upcall-real-elf');elfobj=out/'upcall-real-elf'/'mappe
 subprocess.run([os.environ.get('CC','clang'),'-x','c','-std=c11','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(root/'tests/host'),'-c',str(root/'tests/host/native_upcall_elf_extent_fixture.cc'),'-o',str(elfobj)],check=True)
 (out/'shadowhook.h').write_text('extern "C" void* shadowhook_dlopen(const char*);\nextern "C" void* shadowhook_dlsym(void*,const char*);\nextern "C" void shadowhook_dlclose(void*);\n')
 common=[namespace['os'].environ.get('CXX','clang++'),'-std=c++17','-g','-O0','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I',str(cpp),'-I',str(out),'-I',str(root/'tests/host'),'-I',str(java/'include'),'-I',str(java/'include'/platform),'-DRUN_STATE_BOOT_DEX_FIXTURE=\"'+str(boot_dex)+'\"','-DPIPELINE_DEX_FIXTURE="'+str(after)+'"','-DRUN_STATE_BEFORE_DEX_FIXTURE="'+str(before)+'"','-DRUN_STATE_GRAPH_DEX_FIXTURE="'+str(graph_dex)+'"']
+if os.environ.get('ART_DCEVM_INTERFACE_DOMAIN')=='1':common+=['-DINTERFACE_DOMAIN_FIXTURE','-DDOMAIN_DEX_DIR=\"'+str(out/'matched-domain')+'\"']
 if os.environ.get('ART_DCEVM_INLINE_UPCALL')=='1':common+=['-DWHOLE_INLINE_FIXTURE','-DINLINE_DEX_DIR="'+str(out/'matched-inline')+'"']
 if os.environ.get('ART_DCEVM_WHOLE_UPCALL')=='1':common+=['-DWHOLE_UPCALL_FIXTURE','-DUPCALL_ELF_FIXTURE="'+str(elf)+'"']
 units=[root/'tests/host/native_schema_run_state_boot_test.cc']+[cpp/'platform/common'/(s+'.cc') for s in sources]+[cpp/'evolution/dex_schema.cc',cpp/'evolution/migration_plan.cc',cpp/'platform/common/schema_snapshot.cc']
@@ -64,7 +72,8 @@ exe=out/'native_schema_run_state_boot_test';link=common+compiled+[str(elfobj)]
 if platform=='darwin':link+=['-Wl,-pagezero_size,0x10000']
 subprocess.run(link+['-o',str(exe)],check=True)
 reports=[]
-for case in ['', 'pc', 'value', 'mask', 'cursor', 'body', 'prefix', 'declaring']:
+cases=[''] if os.environ.get('ART_DCEVM_INTERFACE_DOMAIN')=='1' else ['', 'pc', 'value', 'mask', 'cursor', 'body', 'prefix', 'declaring']
+for case in cases:
  r=subprocess.run([str(exe)]+([case] if case else []),text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
  reports.append(r.stdout+r.stderr)
  (out/'boot-result.log').write_text('\n'.join(reports))

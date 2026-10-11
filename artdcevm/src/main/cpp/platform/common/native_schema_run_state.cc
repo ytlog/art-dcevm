@@ -26,6 +26,10 @@ void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noe
     frames.root_failure,frames.root_stream_failure,frames.root_frames,frames.root_slots,frames.root_callbacks,
     frames.upcall_threads,frames.upcall_closed,frames.upcall_fragments,frames.upcall_transitions,frames.upcall_failure,frames.failure_frame_bytes,frames.failure_stack_bit);
   __android_log_print(ANDROID_LOG_INFO,"artdcevm",
+    "Owned stopped logical frame kinds aot=%zu unaffectedAot=%zu shadow=%zu native=%zu runtime=%zu compiled=%zu inline=%zu transitions=%zu",
+    frames.aot_frames,frames.unaffected_aot_frames,frames.shadow_frames,frames.native_frames,
+    frames.runtime_frames,frames.compiled_frames,frames.inlined_frames,frames.transitions);
+  __android_log_print(ANDROID_LOG_INFO,"artdcevm",
     "Owned stopped callee diagnostics callerThread=%p callerMethod=%p callerQuick=%p callerPc=%p youngerPresent=%d previousKind=%u youngerMethod=%p youngerQuick=%p youngerPc=%p receiverState=%u registers=%u ins=%u thisIndex=%u mapFirst=%u mapCount=%u locationKind=%d locationValue=%u receiverSlot=%p receiverValue=%p",
     reinterpret_cast<void*>(frames.receiver_caller_thread),reinterpret_cast<void*>(frames.receiver_caller_method),reinterpret_cast<void*>(frames.receiver_caller_quick),reinterpret_cast<void*>(frames.receiver_caller_pc),
     int(frames.younger_present),frames.previous_kind,reinterpret_cast<void*>(frames.younger_method),reinterpret_cast<void*>(frames.younger_quick),reinterpret_cast<void*>(frames.younger_pc),
@@ -52,6 +56,8 @@ struct RunState::State {
  native_boot_method_catalog::Rooted boot_catalog;
  std::unique_ptr<native_boot_aot_unaffected::Source> boot_unaffected;
  std::unique_ptr<native_interface_dispatch::Source> interface_dispatch;
+ std::unique_ptr<native_interface_dispatch_domain::Source> interface_domain;
+ std::unique_ptr<native_interface_dispatch_domain::Certificate> domain_certificate;
  std::unique_ptr<native_frame_root_relocation::Proof> frame_roots;
  whole_process_frames::FrameRootBinding frame_root_binding;
  prepared_roots::Resolver frame_root_resolver;
@@ -64,7 +70,7 @@ struct RunState::State {
   frame_storage.frame_root_resolver=nullptr;frame_storage.boot_unaffected=nullptr;
   d.members.frame_root_proof=nullptr;d.members.frame_roots=nullptr;d.members.frame_root_binding=nullptr;
   frame_root_binding.Clear();frame_root_resolver={};
-  interface_dispatch.reset();frame_roots.reset();boot_unaffected.reset();
+  interface_domain.reset();domain_certificate.reset();interface_dispatch.reset();frame_roots.reset();boot_unaffected.reset();
  }
  whole_process_frames::Service::Prepared frame_storage;
  std::unique_ptr<native_source_stop::Session> stop;
@@ -253,6 +259,12 @@ bool RunState::Collected(const native_owned_removal::RootedGraph&g,source_commit
  if(s.d.boot_catalog&&s.d.boot_vtables&&s.d.boot_code&&s.d.members.method_model){
   s.boot_unaffected=std::make_unique<native_boot_aot_unaffected::Source>(p,*s.stop,s.context.self,s.boot_catalog,*s.ledger,*s.d.members.metadata,*s.d.members.method_model,*s.d.boot_vtables,*s.d.boot_code);
   s.frame_storage.boot_unaffected=s.boot_unaffected.get();
+  if(s.d.guards&&s.loading){
+   const auto layout=s.d.members.method_model->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+   s.interface_domain=std::make_unique<native_interface_dispatch_domain::Source>(s.authority,*s.d.guards,*s.loading,s.driver,
+    *s.stop,s.context.self,p,*s.d.boot_catalog,s.boot_catalog,*s.ledger,*s.d.members.metadata,layout,*s.d.boot_code);
+   s.domain_certificate=native_interface_dispatch_domain::Source::PrepareCertificate();
+  }
  }
  s.plan=&p;s.holder=g.holder;size_t publication_count=0;checkpoint("publication-plan-begin");
  if(!s.ledger->PreparePublication(*s.stop,&publication_count,e)||!s.stop->PrepareDexPublication(s.driver,s.holder,s.d.members.runtime.receivers.class_linker,publication_count,{this,MatchDexPublication},e))return false;
@@ -441,4 +453,10 @@ bool RunState::VerifyHierarchy(const source_commit::Plan& p,size_t pair,void* lo
 }
 const modern_field_metadata::ReadContext* RunState::CurrentReadContext()const noexcept{return !StoppedWindow()?nullptr:state_->inspection?&state_->inspection_context:state_->read_context.extent?&state_->read_context:nullptr;}
 const whole_process_frames::Report& RunState::Frames()const noexcept{Require(state_->cleanup!=nullptr);return state_->cleanup->Frames();}
+const native_interface_dispatch_domain::Source* RunState::InterfaceDomain()const noexcept{
+ return current==this?state_->interface_domain.get():nullptr;
+}
+native_interface_dispatch_domain::Certificate* RunState::InterfaceDomainCertificate()noexcept{
+ return current==this?state_->domain_certificate.get():nullptr;
+}
 }

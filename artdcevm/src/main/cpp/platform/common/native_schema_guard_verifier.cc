@@ -2,6 +2,8 @@
 #include "platform/common/bounded_root_cohort.h"
 #include <optional>
 #include "platform/common/native_schema_guard_verifier.h"
+#include "platform/common/native_hierarchy_graph.h"
+#include "platform/common/native_interface_domain_error_census.h"
 #include "platform/common/loaded_member_guards.h"
 #include "platform/common/jvmti_method_flags.h"
 #include "platform/common/jvmti_field_flags.h"
@@ -195,6 +197,8 @@ struct Verifier::State {
  const modern_field_metadata::ReadContext* stopped_context=nullptr;
  mutable size_t ordinary_mapping_queries=0;
  const HierarchyAuthority* hierarchy_authority=nullptr;
+ native_interface_dispatch_domain::detail::ErrorCensus error_census;
+ mutable std::vector<uint64_t> domain_seen;mutable uint64_t domain_epoch=0;
  Bindings bindings{};PublicClassIndex public_index;std::vector<Node> nodes;std::vector<bounded_managed_roots::Slot> inputs;bounded_managed_roots::Store roots;
  bool staged=false,verified=false,collected=false,sealed=false,interfaces_proven=false;
  source_commit::Plan expected{};
@@ -457,12 +461,17 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
   }};
  auto& staged_names=state_->public_index.buckets;
  for(;;){
- const size_t before=state_->nodes.size();size_t known=0;
+ const size_t before=state_->nodes.size()+state_->error_census.Size();size_t known=0;
  jint count=0;jclass* classes=nullptr;if(ti->GetLoadedClasses(&count,&classes)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Complete loaded caller graph unavailable");
  struct Classes {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Classes(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,classes};
  if(!cohort.Flush())return false;
  state_->nodes.reserve(state_->nodes.size()+size_t(count));
- for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
+ for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;
+  if(!CallerClass(status)){
+   if(!cohort.Flush())return false;bool existing=false;
+   if(!state_->error_census.Stage(env,ti,classes[i],status,state_->roots,&existing,error))return false;
+   if(existing)++known;continue;
+  }
   if(!PreparedCaller(status))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
   Strings identity{ti};if(ti->GetClassSignature(classes[i],&identity.signature,nullptr)!=JVMTI_ERROR_NONE||!identity.signature)return Fail(error,"Loaded Class signature unavailable while closing staging");
   bool existing=false;const auto candidates=staged_names.find(identity.signature);
@@ -508,7 +517,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  // finish after a complete fresh enumeration adds none. There is no SDK,
  // descriptor exemption, repeated mirror replay or arbitrary pass limit.
  if(known!=before)return Fail(error,"Loaded caller graph lost a rooted Class while closing staging");
- if(state_->nodes.size()==before)break;
+ if(state_->nodes.size()+state_->error_census.Size()==before)break;
  }
  if(state_->nodes.empty())return Fail(error,"Empty public Class graph");state_->staged=true;return true;
 }
@@ -523,8 +532,9 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
  if(!MatchesAffected(env,actual,error))return false;
  jint count=0;jclass* loaded=nullptr;if(ti->GetLoadedClasses(&count,&loaded)!=JVMTI_ERROR_NONE||count<0)return false;
  struct Loaded {JNIEnv* env;jvmtiEnv* ti;jint count;jclass* values;~Loaded(){for(jint i=0;i<count;++i)env->DeleteLocalRef(values[i]);if(values)ti->Deallocate(reinterpret_cast<unsigned char*>(values));}} release{env,ti,count,loaded};
- std::vector<uint8_t> seen(s.nodes.size(),0);
- size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;if(!CallerClass(status))continue;
+ std::vector<uint8_t> seen(s.nodes.size(),0);s.error_census.BeginCheck();
+ size_t live=0;for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(loaded[i],&status)!=JVMTI_ERROR_NONE)return false;
+  if(!CallerClass(status)){if(!s.error_census.Check(env,ti,loaded[i],status,s.roots,error))return false;continue;}
   if(!PreparedCaller(status)){
    Strings text{ti};ti->GetClassSignature(loaded[i],&text.signature,nullptr);
    return ClassWindowFailure(error,"Unprepared Class appeared before native schema sealing",text.signature,status);
@@ -543,7 +553,7 @@ bool Verifier::CheckWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& a
   auto parent=env->GetSuperclass(loaded[i]);const bool same_parent=s.roots.Same(env,node->parent,parent);if(parent)env->DeleteLocalRef(parent);if(!same_parent)return Fail(error,"Public superclass identity changed inside the source window");
   bool affects=false;for(auto input:s.inputs){auto ref=static_cast<jclass>(s.roots.LocalRef(env,input));if(!ref||env->ExceptionCheck())return false;affects|=env->IsAssignableFrom(loaded[i],ref);env->DeleteLocalRef(ref);}if(affects!=node->affected)return Fail(error,"Loaded Class assignability changed after staging");++live;
  }
- if(live!=s.nodes.size()||env->ExceptionCheck())return Fail(error,"Loaded caller graph lost staged Class identity");
+ if(live!=s.nodes.size()||!s.error_census.EndCheck()||env->ExceptionCheck())return Fail(error,"Loaded caller graph lost staged Class identity");
  if(window==Window::Verified)s.verified=true;else s.collected=true;return true;
 }
 bool Verifier::Seal(const source_commit::Plan& transaction,std::string* error){
@@ -732,7 +742,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
  const bool split=s.bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit;
  const auto& layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
  NativeOrdinals class_index;if(!IndexNativeClasses(s.frozen_snapshot.classes,&class_index,error))return false;
- s.class_proofs.resize(s.nodes.size());
+ s.class_proofs.resize(s.nodes.size());s.domain_seen.resize(s.nodes.size()+s.error_census.Size());
  for(size_t n=0;n<s.nodes.size();++n){void* klass=s.frozen_snapshot.classes[n];auto& proof=s.class_proofs[n];
   proof.methods=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,48)));proof.instances=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,40)));
   proof.statics=split?reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(klass,56))):proof.instances;
@@ -755,6 +765,7 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
    if(length%2||!s.bindings.readable(s.bindings.owner,proof.table,12+size_t(length)*4))return false;
    for(uint32_t n=0;n<length/2;++n)proof.values.push_back(s.bindings.metadata->Reference(proof.table,12+size_t(n)*8));}
   s.replacement_interfaces.push_back(std::move(proof));}
+ if(!s.error_census.Freeze(s.roots,registrar))return Fail(error,"Read-only erroneous Class census could not freeze its actual roots");
  if(!rooted_schema_plan::CollectBindings(&s.expected,registrar,&s.expected_roots))return false;
  for(auto* values:{&s.frozen_snapshot.classes,&s.frozen_snapshot.loaders})for(auto& value:*values)if(!s.frozen_roots.Add(&value,registrar))return false;
  for(auto& proof:s.class_proofs){if(!s.frozen_roots.Add(&proof.dex_cache,registrar)||!s.frozen_roots.Add(&proof.interfaces,registrar))return false;
@@ -766,16 +777,75 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
 }
 
 bool Verifier::CanRefreshManagedRoots(const prepared_roots::Resolver& resolver)const noexcept{
- const auto& s=*state_;return s.frozen&&s.sealed&&redefinition_gate::Owned(s.bindings.vm)&&s.expected_roots.CanRefresh(resolver)&&s.frozen_roots.CanRefresh(resolver);
+ const auto& s=*state_;return s.frozen&&s.sealed&&redefinition_gate::Owned(s.bindings.vm)&&s.expected_roots.CanRefresh(resolver)&&s.frozen_roots.CanRefresh(resolver)&&s.error_census.CanRefresh(resolver);
 }
 bool Verifier::RefreshManagedRoots(const source_commit::Plan& plan,const prepared_roots::Resolver& resolver) noexcept{
  auto& s=*state_;s.refreshed=false;if(!CanRefreshManagedRoots(resolver))return false;
- s.expected_roots.Refresh(resolver);s.frozen_roots.Refresh(resolver);
+ s.expected_roots.Refresh(resolver);s.frozen_roots.Refresh(resolver);s.error_census.Refresh(resolver);
  if(!SamePlan(plan,s.expected)||!s.FrozenProof())return false;
  if((s.final_fields_proven||s.aliases_proven)&&(!s.bindings.final_fields||
     !s.bindings.final_fields->RefreshPlan(plan,nullptr)||!s.bindings.final_fields->VerifyAliases(plan,nullptr)))return false;
  if(s.access_proven&&(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(plan,nullptr)))return false;
  s.refreshed=true;return true;
+}
+
+bool Verifier::VerifyHierarchyDomain(const source_commit::Plan&plan,
+ const native_hierarchy_graph::Graph&graph,void*interface,
+ const modern_field_metadata::ReadContext&read)const noexcept{
+ const auto&s=*state_;
+ if(!interface||!s.collected||!s.sealed||!s.frozen||!s.refreshed||!s.stopped_context||
+    s.stopped_context->owner!=read.owner||s.stopped_context->extent!=read.extent||
+    !SamePlan(plan,s.expected)||!s.FrozenProof()||!s.error_census.Fresh(s.roots))return false;
+ size_t ordinary=0;for(const auto&n:s.nodes)if(!n.schema.descriptor.empty()&&n.schema.descriptor.front()=='L')++ordinary;
+ if(graph.nodes.size()!=ordinary+s.error_census.Size()||s.domain_seen.size()!=s.nodes.size()+s.error_census.Size())return false;
+ if(++s.domain_epoch==0){std::fill(s.domain_seen.begin(),s.domain_seen.end(),0);s.domain_epoch=1;}
+ // Join two independently rooted censuses by current Class identity, never
+ // descriptor equality. Descriptor buckets only narrow the immutable search.
+ for(const auto&n:graph.nodes){
+  if(!n.klass||!n.RootedClass())return false;
+  if(n.resolved_error){
+   const native_interface_dispatch_domain::detail::ErrorCensus::Node*matched=nullptr;size_t matched_index=SIZE_MAX;
+   for(size_t i=0;i<s.error_census.Size();++i){const auto&error=s.error_census.Nodes()[i];if(error.klass==n.klass){if(matched)return false;matched=&error;matched_index=s.nodes.size()+i;}}
+   if(matched_index==SIZE_MAX||s.domain_seen[matched_index]==s.domain_epoch)return false;s.domain_seen[matched_index]=s.domain_epoch;
+   if(!matched||n.affected||n.replacement||matched->descriptor!=n.descriptor||matched->native_loader!=n.loader||
+      native_schema_policy::JavaFlags(matched->flags)!=native_schema_policy::JavaFlags(n.public_flags.value_or(n.flags)))return false;
+   const void*parent=n.parent==SIZE_MAX?nullptr:n.parent<graph.nodes.size()?graph.nodes[n.parent].klass:nullptr;
+   if((n.parent!=SIZE_MAX&&n.parent>=graph.nodes.size())||matched->native_parent!=parent||matched->native_interfaces.size()!=n.interfaces.size())return false;
+   for(size_t j=0;j<n.interfaces.size();++j)if(n.interfaces[j]>=graph.nodes.size()||matched->native_interfaces[j]!=graph.nodes[n.interfaces[j]].klass)return false;
+   continue;
+  }
+  size_t index=SIZE_MAX;
+  const auto found=s.public_index.Find(n.descriptor,[&](size_t candidate){return candidate<s.frozen_snapshot.classes.size()&&s.frozen_snapshot.classes[candidate]==n.klass;},&index);
+  if(found!=PublicClassIndex::Result::Unique||index>=s.nodes.size()||s.domain_seen[index]==s.domain_epoch)return false;
+  s.domain_seen[index]=s.domain_epoch;const auto&node=s.nodes[index];
+  if(node.affected!=n.affected||s.frozen_snapshot.loaders[index]!=n.loader||
+     node.schema.access!=native_schema_policy::JavaFlags(n.public_flags.value_or(n.flags)))return false;
+  const size_t parent=s.frozen_snapshot.parents[index];
+  if((parent==SIZE_MAX)!=(n.parent==SIZE_MAX)||
+     (parent!=SIZE_MAX&&(parent>=s.nodes.size()||n.parent>=graph.nodes.size()||s.frozen_snapshot.classes[parent]!=graph.nodes[n.parent].klass)))return false;
+  if(node.interfaces.size()!=n.interfaces.size())return false;
+  for(size_t j=0;j<node.interfaces.size();++j){void*value=nullptr;
+   if(n.interfaces[j]>=graph.nodes.size()||!s.roots.Read(node.interfaces[j],&value)||value!=graph.nodes[n.interfaces[j]].klass)return false;}
+ }
+ // Fixed ART class_linker.cc initializes the common array IfTable from the
+ // actual bootstrap Cloneable/Serializable Class roots (ed6c006, 920--932).
+ // Validate both current identities, empty marker ancestry and every observed
+ // array table. A marker itself cannot grant an interface-method domain.
+ void*markers[2]{};
+ for(const auto&n:graph.nodes)if(!n.loader&&(n.descriptor=="Ljava/lang/Cloneable;"||n.descriptor=="Ljava/io/Serializable;")){
+  const size_t index=n.descriptor=="Ljava/lang/Cloneable;"?0:1;
+  if(markers[index]||n.affected||n.resolved_error||!(n.flags&0x200u)||!n.interfaces.empty())return false;
+  field_copy::CopyClassView identity{};
+  if(!s.bindings.metadata->ClassIdentityVerified(n.klass,n.descriptor.c_str(),nullptr,nullptr,nullptr,&identity,nullptr,&read)||identity.loader)return false;
+  markers[index]=n.klass;
+ }
+ if(!markers[0]||!markers[1]||markers[0]==markers[1]||interface==markers[0]||interface==markers[1])return false;
+ for(size_t i=0;i<s.nodes.size();++i)if(!s.nodes[i].schema.descriptor.empty()&&s.nodes[i].schema.descriptor.front()=='['){
+  const auto&interfaces=s.class_proofs[i].interface_classes;
+  if(interfaces.size()!=2)return false;
+  if(!((interfaces[0]==markers[0]&&interfaces[1]==markers[1])||(interfaces[0]==markers[1]&&interfaces[1]==markers[0])))return false;
+ }
+ return true;
 }
 
 void Verifier::BeginCommit(const source_commit::Plan& transaction)const{

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 namespace artdcevm::modern_field_metadata { class FieldMetadata; struct ReadContext; }
+namespace artdcevm::native_interface_dispatch_domain {class Source;}
 namespace artdcevm::native_hierarchy_graph {
 struct Input { jclass strong_original=nullptr; evolution::ClassSchema before,after; };
 // Rooted public graph. Indices are stable throughout one operation. Proposed
@@ -140,6 +141,8 @@ class Authority final {
  void Clear(JNIEnv*);
  const Graph* Staged()const noexcept;
  private:
+ friend class native_interface_dispatch_domain::Source;
+ bool VerifyInterfaceDisjoint(const source_commit::Plan&,void*,const modern_field_metadata::ReadContext&)const noexcept;
  bool VerifyPlan(const source_commit::Plan&,size_t pair,bool final)const noexcept;
  struct State;std::unique_ptr<State> state_;
 };

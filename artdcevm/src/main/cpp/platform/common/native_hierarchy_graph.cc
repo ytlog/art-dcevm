@@ -398,6 +398,23 @@ bool Authority::VerifyPlan(const source_commit::Plan& p,size_t pair,bool final)c
 bool Authority::VerifyPrepared(const source_commit::Plan& p,size_t pair)const noexcept{return VerifyPlan(p,pair,false);}
 bool Authority::VerifyFinal(const source_commit::Plan& p,size_t pair)const noexcept{auto&s=*state_;s.final_validated=nullptr;if(!VerifyPlan(p,pair,true))return false;s.final_validated=&p;return true;}
 bool Authority::Verify(const source_commit::Plan& p,size_t pair)const noexcept{return VerifyFinal(p,pair);}
+bool Authority::VerifyInterfaceDisjoint(const source_commit::Plan&p,void*interface,
+ const modern_field_metadata::ReadContext&read)const noexcept{
+ const auto&s=*state_;
+ if(!interface||!s.collected||!s.contextual||!s.Context()||s.Context()->owner!=read.owner||
+    s.Context()->extent!=read.extent||p.old_classes.empty()||!VerifyPlan(p,0,false))return false;
+ size_t index=SIZE_MAX;
+ for(size_t i=0;i<s.graph.nodes.size();++i){const auto&n=s.graph.nodes[i];
+  if(!n.RootedClass()||(n.loader&&!n.RootedLoader()))return false;
+  if(n.klass==interface){if(index!=SIZE_MAX||n.affected||n.resolved_error||!(n.flags&0x200u))return false;index=i;}
+ }
+ if(index==SIZE_MAX||s.closure_before.size()!=s.graph.nodes.size()||s.closure_after.size()!=s.graph.nodes.size())return false;
+ for(size_t i=0;i<s.graph.nodes.size();++i)if(s.graph.nodes[i].affected){
+  for(const auto*relations:{&s.closure_before[i],&s.closure_after[i]})
+   if(std::find(relations->begin(),relations->end(),index)!=relations->end())return false;
+ }
+ return true;
+}
 bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.proxy_name,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
 bool Authority::CanRefresh(const prepared_roots::Resolver& r)const noexcept{return state_->collected&&state_->roots.CanRefresh(r);}
 void Authority::Refresh(const prepared_roots::Resolver& r)noexcept{assert(CanRefresh(r));state_->final_validated=nullptr;state_->roots.Refresh(r);}

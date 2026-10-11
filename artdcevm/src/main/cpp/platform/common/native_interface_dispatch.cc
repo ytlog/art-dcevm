@@ -26,7 +26,8 @@ static_assert(offsetof(class_metadata::Class16,dex_class_def_index)==offsetof(cl
 static_assert(offsetof(class_metadata::Class16,dex_type_index)==offsetof(class_metadata::Class17,dex_type_index));
 // Fixed ownership prefixes, with no parser allocation or mutable-size-slot
 // inference. Every namespace is read afresh through this exact stopped view.
-bool Namespace(const modern_field_metadata::FieldMetadata&m,void*klass,
+}
+bool ReadCurrentNamespace(const modern_field_metadata::FieldMetadata&m,void*klass,
  const modern_field_metadata::ReadContext&c,evolution::MappedDexMetadata*out,
  field_copy::CopyClassView*named)noexcept{
  if(!klass||!out||!named||!c.owner||!c.extent)return false;
@@ -48,7 +49,6 @@ bool Namespace(const modern_field_metadata::FieldMetadata&m,void*klass,
  uint32_t size=0;std::memcpy(&size,prefix.begin+32,4);
  if(size<112||size>header_extent||size>UINTPTR_MAX-uintptr_t(prefix.begin)||prefix.data_size>UINTPTR_MAX-uintptr_t(prefix.data_begin))return false;
  *out={prefix.begin,size,prefix.data_begin,prefix.data_size,uint32_t(identity.class_def_index)};return true;
-}
 }
 bool ReadPointerSlot(const void*array,size_t extent,uint32_t slot,void**out)noexcept{
  if(!array||!out||extent<16||extent>UINTPTR_MAX-uintptr_t(array)||uintptr_t(array)%8)return false;
@@ -102,10 +102,10 @@ bool Source::Verify(const receiver_guard::CodeView&caller,uint32_t pc,void*recei
    method_metadata::Identity identity{};
    if(!method_metadata::ReadIdentity(layout_,method,layout_.size,&identity)||identity.dex_method_index==UINT32_MAX||(identity.access_flags&0xffffu)!=(uint32_t(entry->modifiers)&0xffffu)||(identity.access_flags&0x40000u)||(identity.access_flags&0x81000000u)==0x01000000u)return deny("interface-edge-current-public-declaration-changed");
    evolution::MappedDexMetadata declaration_dex{},callee_dex{};field_copy::CopyClassView declaration_name{},callee_name{};
-   if(!Namespace(metadata_,interface,context,&declaration_dex,&declaration_name)||entry->declaring_signature!=declaration_name.descriptor||
+   if(!ReadCurrentNamespace(metadata_,interface,context,&declaration_dex,&declaration_name)||entry->declaring_signature!=declaration_name.descriptor||
       !native_boot_aot_unaffected::DexIdentity(declaration_dex).Matches(identity.dex_method_index,entry->declaring_signature,entry->name,entry->descriptor))return deny("interface-edge-native-declaration-DEX-role-mismatch");
    void*callee_owner=metadata_.MethodDeclaringClass(callee);
-   if(!Namespace(metadata_,callee_owner,context,&callee_dex,&callee_name)||
+   if(!ReadCurrentNamespace(metadata_,callee_owner,context,&callee_dex,&callee_name)||
       !native_boot_aot_unaffected::DexIdentity(callee_dex).Matches(callee_identity.dex_method_index,callee_name.descriptor,entry->name,entry->descriptor))return deny("interface-edge-native-callee-DEX-role-mismatch");
    const size_t slot_offset=layout_.size==sizeof(method_metadata::Method11)?offsetof(method_metadata::Method11,method_index):offsetof(method_metadata::Method12,method_index);
    uint16_t slot=0;std::memcpy(&slot,static_cast<const unsigned char*>(method)+slot_offset,2);

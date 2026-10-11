@@ -8,6 +8,8 @@
 #include <jni.h>
 #include <jvmti.h>
 #include <memory>
+namespace artdcevm::native_interface_dispatch_domain {class Source;}
+namespace artdcevm::native_hierarchy_graph {struct Graph;}
 namespace artdcevm::native_schema_guard_verifier {
 // A synchronous typed authority, owned by the exact original schema Run.
 // Binding this interface grants nothing; each hierarchy request must re-prove
@@ -110,6 +112,9 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // roots, public method-ID caches or loader retention survive an operation.
   void Clear(JNIEnv*);
  private:
+  friend class native_interface_dispatch_domain::Source;
+  bool VerifyHierarchyDomain(const source_commit::Plan&,const native_hierarchy_graph::Graph&,void*,
+      const modern_field_metadata::ReadContext&)const noexcept;
   struct State;std::unique_ptr<State> state_;
 };
 }

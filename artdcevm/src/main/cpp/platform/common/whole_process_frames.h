@@ -653,8 +653,10 @@ class Service {
        if(!r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery,&failure)){
         // Preserve the first Source rejection even if a later continuation
         // owner reports a different boundary. Diagnostic literals grant nothing.
-        r.report.aot_verify_failure=failure;r.report.aot_verify_thread=uintptr_t(target);
-        r.report.aot_verify_method=uintptr_t(method);r.report.aot_verify_dex_pc=pc;
+        if(!r.report.aot_verify_failure){
+         r.report.aot_verify_failure=failure;r.report.aot_verify_thread=uintptr_t(target);
+         r.report.aot_verify_method=uintptr_t(method);r.report.aot_verify_dex_pc=pc;
+        }
         if(!r.storage.continuation||!r.storage.frame_roots||!r.storage.root_provenance||!r.storage.dispatch)return Reject(failure?failure:"whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
         if(!physical||!has_younger||!younger.receiver||!younger_receiver_address)return Reject("whole-continuation-actual-younger-receiver-unproved");
         if(r.storage.pending.size()==r.storage.pending.capacity())return Reject("whole-continuation-frame-capacity-insufficient");
