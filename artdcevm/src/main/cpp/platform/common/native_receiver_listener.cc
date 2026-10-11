@@ -53,25 +53,29 @@ struct ListenerOwner::Listener final:ListenerDeclaration {
   auto*guard=consumer.load(std::memory_order_acquire);
   if(guard)guard->CheckBytecode(self,method,pc);
  }
- void Field(void*self,Handle receiver,void*method,void*field,bool write){
+ void Field(void*self,Handle receiver,void*method,void*field,bool write,bool reference=false){
   if(!self||!method||!field||!owner.current_||owner.current_()!=self||!owner.pending_||
-     !owner.fields_||!retirement::FieldEntryGuardsOwn(*owner.fields_))std::abort();
+     !owner.fields_||!owner.writer_||!retirement::FieldEntryGuardsOwn(*owner.fields_))std::abort();
   bool pending=false;if(!owner.pending_->Read(self,&pending))std::abort();
   if(pending)return; // Preserve a previous listener/original exception.
   if(retirement::RejectRetiredField(field,self,nullptr))return;
-  // ART's actual method argument is live in this source callback. Read only
-  // the fixed independently calibrated identity, without an OS query or JNI.
-  method_metadata::Identity identity;
-  if(!method_metadata::ReadIdentity(owner.methods_,method,owner.methods_.size,&identity))std::abort();
-  if(identity.access_flags&0x100u)return; // JNI's own entry already checks its receiver.
-  auto*guard=consumer.load(std::memory_order_acquire);if(!guard)return;
-  uint32_t reference=0;if(receiver.slot)std::memcpy(&reference,receiver.slot,sizeof(reference));
-  // The native Handle slot belongs to this event and tracks GC. No receiver
-  // pointer is cached; the sole Guard freshly decodes its compressed root.
-  guard->CheckCompressed(write?Path::BytecodeWrite:Path::BytecodeRead,self,field,reference,nullptr,true);
+  const auto source=owner.writer_->SourceOfEvent(self,method);
+  if(source!=final_write_guard::EventSource::Bytecode)return;
+  auto*guard=consumer.load(std::memory_order_acquire);
+  if(guard){
+   uint32_t receiver_reference=0;
+   if(receiver.slot)std::memcpy(&receiver_reference,receiver.slot,sizeof(receiver_reference));
+   // The event's Handle tracks GC; decode freshly in the sole receiver Guard.
+   if(guard->CheckCompressed(write?Path::BytecodeWrite:Path::BytecodeRead,
+       self,field,receiver_reference,nullptr,true))return;
+  }
+  if(!owner.pending_->Read(self,&pending))std::abort();if(pending)return;
+  // Receiver checking precedes permissions. Both write overloads reach this
+  // same owner, but only their exact overload can satisfy a staged writer proof.
+  if(write)owner.writer_->FieldWritten(self,method,field,reference);
  }
  void FieldRead(void*self,Handle receiver,void*method,uint32_t,void*field)override{Field(self,receiver,method,field,false);}
- void FieldWritten(void*self,Handle receiver,void*method,uint32_t,void*field,Handle)override{Field(self,receiver,method,field,true);}
+ void FieldWritten(void*self,Handle receiver,void*method,uint32_t,void*field,Handle)override{Field(self,receiver,method,field,true,true);}
  void FieldWritten(void*self,Handle receiver,void*method,uint32_t,void*field,const uint64_t&)override{Field(self,receiver,method,field,true);}
  void ExceptionThrown(void*,Handle)override{}
  void ExceptionHandled(void*,Handle)override{}
@@ -82,7 +86,7 @@ ListenerOwner::ListenerOwner(const SourceObservation&observer):observer_(observe
 ListenerOwner::~ListenerOwner(){if(claimed_||installed_)std::abort();}
 bool ListenerOwner::Bind(HookEngine&hooks,const runtime_services::Snapshot&runtime,
                          stack_visitor_service::Declaration declaration,const method_identity::Calibration&methods,
-                         retirement::RetiredFieldRegistry&fields,const native_pending_exception::Service&pending,std::string*error){
+                         retirement::RetiredFieldRegistry&fields,const native_pending_exception::Service&pending,final_write_guard::Guard&writer,std::string*error){
  if(bound_||declaration!=stack_visitor_service::Declaration::kAndroid13To16||
     !runtime.runtime||!runtime.instrumentation||!runtime.receivers.java_vm||!pending.Calibrated()||
     !retirement::FieldEntryGuardsOwn(fields)||methods.identities.size()<3||methods.readable_extents.size()!=methods.identities.size()||
@@ -95,8 +99,7 @@ bool ListenerOwner::Bind(HookEngine&hooks,const runtime_services::Snapshot&runti
   return Fail(error,"receiver-listener-named-fixed-source-or-runtime-slot-unavailable");
  auto listener=std::make_unique<Listener>(*this);
  add_=add;current_=current;runtime_=runtime.runtime;runtime_slot_=slot;instrumentation_=runtime.instrumentation;
- methods_=methods.model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
- fields_=&fields;pending_=&pending;
+ fields_=&fields;pending_=&pending;writer_=&writer;
  listener_=std::move(listener);bound_=true;return true;
 }
 bool ListenerOwner::Install(const native_source_stop::Session&stop,void*self,std::string*error){

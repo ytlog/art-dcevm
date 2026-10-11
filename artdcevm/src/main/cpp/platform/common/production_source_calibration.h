@@ -11,6 +11,7 @@
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_receiver_source_calibration.h"
 #include "platform/common/native_receiver_listener.h"
+#include "platform/common/native_final_write_access.h"
 #include <utility>
 namespace artdcevm::production_bootstrap {
 // Sole process-lifetime owner of metadata and original-source calibration
@@ -108,6 +109,7 @@ class SourceCalibration final {
  std::unique_ptr<receiver_guard::BytecodeSource>receiver_bytecode_;
  std::unique_ptr<receiver_guard::SourceCalibration>receiver_calibration_;
  std::unique_ptr<receiver_guard::ListenerOwner>receiver_listener_;
+ std::unique_ptr<final_write_guard::NativeAccess>final_writer_;
  native_pending_exception::Service pending_exception_;
  bool receiver_listener_bound_=false;
  bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;

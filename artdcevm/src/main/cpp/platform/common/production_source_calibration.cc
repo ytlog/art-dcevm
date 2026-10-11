@@ -386,13 +386,17 @@ bool SourceCalibration::PrepareReceiverEvents(JNIEnv*env,std::string*error){
  if(!receiver_code_calibrated_||!references_.Ready()||!stop_.Calibrated())
   return Fail(error,"source-receiver-listener-code-or-original-stop-dependencies-unavailable");
  if(!pending_exception_.Calibrated())return Fail(error,"source-receiver-listener-native-pending-reader-unavailable");
+ if(!final_writer_){
+  final_writer_=final_write_guard::NativeAccess::Create(hooks_,metadata_->Fields(),metadata_->Methods(),references_,error);
+  if(!final_writer_)return false;
+ }
  if(!receiver_frames_)receiver_frames_=std::make_unique<receiver_guard::FrameReader>(receiver_producer_.Frames());
  if(!receiver_bytecode_)receiver_bytecode_=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames_,receiver_producer_.Access());
  if(!receiver_calibration_)receiver_calibration_=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames_,*receiver_bytecode_,references_);
  if(!receiver_listener_)receiver_listener_=std::make_unique<receiver_guard::ListenerOwner>(receiver_calibration_->Observer());
  if(!receiver_listener_bound_){
   if(!receiver_listener_->Bind(hooks_,metadata_->Runtime(),stack_declaration_,metadata_->Methods(),
-     retired_fields_,pending_exception_,error))return false;
+     retired_fields_,pending_exception_,final_writer_->Writer(),error))return false;
   receiver_listener_bound_=true;
  }
  if(receiver_listener_->Installed())return true;

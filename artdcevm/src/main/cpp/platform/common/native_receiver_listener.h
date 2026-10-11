@@ -6,6 +6,7 @@
 #include "platform/common/stack_visitor_service.h"
 #include "platform/abi/arm64/android11/jni_current_thread.h"
 #include "platform/common/native_pending_exception.h"
+#include "platform/common/native_final_write_guard.h"
 #include "platform/common/retired_field_registry.h"
 #include "platform/common/method_identity_calibration.h"
 #include <memory>
@@ -20,7 +21,7 @@ class ListenerOwner final {
  ListenerOwner(const ListenerOwner&)=delete;ListenerOwner&operator=(const ListenerOwner&)=delete;
  bool Bind(HookEngine&,const runtime_services::Snapshot&,stack_visitor_service::Declaration,
            const method_identity::Calibration&,retirement::RetiredFieldRegistry&,
-           const native_pending_exception::Service&,std::string*);
+           const native_pending_exception::Service&,final_write_guard::Guard&,std::string*);
  bool Install(const native_source_stop::Session&,void*self,std::string*);
  bool Installed()const noexcept{return installed_;}
  private:
@@ -29,7 +30,7 @@ class ListenerOwner final {
  const SourceObservation&observer_;
  const native_pending_exception::Service*pending_=nullptr;
  retirement::RetiredFieldRegistry*fields_=nullptr;
- method_metadata::Layout methods_{};
+ final_write_guard::Guard*writer_=nullptr;
  std::unique_ptr<Listener>listener_;
  Add add_=nullptr;void*runtime_=nullptr;void**runtime_slot_=nullptr;void*instrumentation_=nullptr;
  abi::arm64::android11::CurrentThread current_=nullptr;
