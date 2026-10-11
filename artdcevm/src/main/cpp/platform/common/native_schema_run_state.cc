@@ -35,6 +35,9 @@ void LogFrameReport(const whole_process_frames::Report& frames,bool accepted)noe
     "Owned stopped runtime name status=%u thread=%p method=%p quick=%p name=%s",
     frames.runtime_name_status,reinterpret_cast<void*>(frames.runtime_name_thread),reinterpret_cast<void*>(frames.runtime_name_method),
     reinterpret_cast<void*>(frames.runtime_name_quick),frames.runtime_name);
+  if(frames.aot_verify_failure)
+    __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned stopped AOT Source rejection thread=%p method=%p dexPc=%u reason=%s",
+      reinterpret_cast<void*>(frames.aot_verify_thread),reinterpret_cast<void*>(frames.aot_verify_method),frames.aot_verify_dex_pc,frames.aot_verify_failure);
   if(frames.aot_declaring_class&&frames.aot_method&&frames.aot_descriptor)
     __android_log_print(ANDROID_LOG_INFO,"artdcevm","Owned stopped AOT identity owner=%s method=%s descriptor=%s",
       frames.aot_declaring_class,frames.aot_method,frames.aot_descriptor);

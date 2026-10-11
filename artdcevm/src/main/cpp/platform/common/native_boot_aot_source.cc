@@ -1,6 +1,38 @@
 #include "platform/common/native_boot_aot_source.h"
 #include <cstring>
 namespace artdcevm::native_boot_aot_unaffected {
+bool Source::ObserveSuffix(void*method,uint32_t pc,const modern_field_metadata::ReadContext&read,
+ native_boot_return_continuation::HandlerStorage handlers,native_boot_return_continuation::Scratch scratch,
+ SuffixReceipt*out,const char**failure)const noexcept{
+ if(failure)*failure=nullptr;
+ if(!out){if(failure)*failure="boot-suffix-receipt-storage-missing";return false;}
+ out->Clear();receiver_guard::CodeView code;native_boot_return_continuation::Shape shape;
+ if(!InspectContinuation(method,pc,read,handlers,scratch,&code,&shape,failure))return false;
+ const auto*entry=catalog_.Lookup(method,roots_,read);
+ if(!OwnsWindow()||!entry){if(failure)*failure="boot-suffix-current-rooted-window-changed";return false;}
+ out->owner_=this;out->plan_=&plan_;out->stop_=&stop_;out->catalog_=&catalog_;out->roots_=&roots_;out->self_=self_;out->method_=method;out->pc_=pc;out->entry_=entry;out->code_=code;out->shape_=shape;return true;
+}
+bool Source::ValidateSuffix(const SuffixReceipt&receipt,const modern_field_metadata::ReadContext&read,
+ native_boot_return_continuation::HandlerStorage handlers,native_boot_return_continuation::Scratch scratch,
+ const char**failure)const noexcept{
+ if(failure)*failure=nullptr;
+ if(receipt.owner_!=this||receipt.plan_!=&plan_||receipt.stop_!=&stop_||receipt.catalog_!=&catalog_||receipt.roots_!=&roots_||receipt.self_!=self_||!receipt.method_||!OwnsWindow()){
+  if(failure)*failure="boot-suffix-receipt-source-window-unproved";return false;
+ }
+ SuffixReceipt current;
+ if(!ObserveSuffix(receipt.method_,receipt.pc_,read,handlers,scratch,&current,failure))return false;
+ const auto&a=receipt.code_;const auto&b=current.code_;const auto&x=a.source_dex;const auto&y=b.source_dex;
+ if(receipt.entry_!=current.entry_||a.instructions!=b.instructions||a.units!=b.units||
+    a.registers!=b.registers||a.ins_size!=b.ins_size||a.tries_size!=b.tries_size||
+    a.method_ids!=b.method_ids||a.call_sites!=b.call_sites||a.code_item!=b.code_item||a.compact!=b.compact||
+    x.begin!=y.begin||x.size!=y.size||x.data_begin!=y.data_begin||x.data_size!=y.data_size||
+    x.class_def_index!=y.class_def_index||receipt.shape_.exception_escape!=current.shape_.exception_escape||
+    receipt.shape_.primitive_return!=current.shape_.primitive_return||receipt.shape_.backedge!=current.shape_.backedge||
+    receipt.shape_.reachable!=current.shape_.reachable||receipt.shape_.caught_entries!=current.shape_.caught_entries){
+  if(failure)*failure="boot-suffix-receipt-CodeItem-or-namespace-changed";return false;
+ }
+ return true;
+}
 bool Source::Verify(void*method,uint32_t pc,const code_info_view::View&view,uint32_t row,
  const decoded_frame_recovery::RegisterRange&range,const modern_field_metadata::ReadContext&context,const char**failure)const noexcept{
  auto deny=[&](const char*reason){if(failure)*failure=reason;return false;};if(failure)*failure=nullptr;

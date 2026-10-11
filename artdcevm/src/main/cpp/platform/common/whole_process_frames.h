@@ -85,6 +85,8 @@ struct Report {
  const char* aot_declaring_class=nullptr;const char* aot_method=nullptr;const char* aot_descriptor=nullptr;
  size_t registered_threads=0,walked_threads=0,empty_threads=0,frames=0,transitions=0,
    async_frames=0,aot_frames=0,unaffected_aot_frames=0,shadow_frames=0,native_frames=0,runtime_frames=0,compiled_frames=0,inlined_frames=0,map_locations=0,native_value_reads=0;
+ const char* aot_verify_failure=nullptr;
+ uintptr_t aot_verify_thread=0,aot_verify_method=0;uint32_t aot_verify_dex_pc=UINT32_MAX;
  const char* failure="not-scanned";
  size_t upcall_threads=0,upcall_closed=0,upcall_fragments=0,upcall_transitions=0;
  uint32_t upcall_failure=UINT32_MAX;
@@ -649,6 +651,10 @@ class Service {
           s.code_owner_.Observe(*this->quick_frame,this->pc,this->header,r.jit)!=native_frame_code_owner::Kind::Aot)return Reject("whole-AOT-current-code-owner-or-async-state-changed");
        const char*failure=nullptr;
        if(!r.storage.boot_unaffected->Verify(method,pc,view,map.row,range,*r.recovery,&failure)){
+        // Preserve the first Source rejection even if a later continuation
+        // owner reports a different boundary. Diagnostic literals grant nothing.
+        r.report.aot_verify_failure=failure;r.report.aot_verify_thread=uintptr_t(target);
+        r.report.aot_verify_method=uintptr_t(method);r.report.aot_verify_dex_pc=pc;
         if(!r.storage.continuation||!r.storage.frame_roots||!r.storage.root_provenance||!r.storage.dispatch)return Reject(failure?failure:"whole-AOT-current-body-prefix-map-or-dependency-closure-refused");
         if(!physical||!has_younger||!younger.receiver||!younger_receiver_address)return Reject("whole-continuation-actual-younger-receiver-unproved");
         if(r.storage.pending.size()==r.storage.pending.capacity())return Reject("whole-continuation-frame-capacity-insufficient");
