@@ -140,6 +140,13 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   field_var_handles_[n]=Own(env,handle.value);
   if(!field_var_handles_[n])return Fail(error,"calibration-input-field-VarHandle-unavailable");
  }
+ const char*method_handle_names[]{"instanceGetter","instanceSetter","staticGetter","staticSetter"};
+ for(size_t n=0;n<field_method_handles_.size();++n){
+  auto id=env->GetFieldID(static_cast<jclass>(type.value),method_handle_names[n],"Ljava/lang/invoke/MethodHandle;");
+  Local handle{env,id?env->GetObjectField(input_,id):nullptr};
+  field_method_handles_[n]=Own(env,handle.value);
+  if(!field_method_handles_[n])return Fail(error,"calibration-input-field-MethodHandle-unavailable");
+ }
  if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error)||
     !LoadReceiver(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
@@ -173,6 +180,17 @@ bool CalibrationInputs::ExerciseFieldHandles(JNIEnv*env,std::string*error)const{
  const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_)==JNI_TRUE;
  if(env->ExceptionCheck())return false;
  return matched||Fail(error,"calibration-input-field-handle-public-readback-differs");
+}
+bool CalibrationInputs::ExerciseFieldMethodHandle(JNIEnv*env,size_t index,std::string*error)const{
+ JavaVM*vm=nullptr;
+ if(index>=field_method_handles_.size()||!env||env->ExceptionCheck()||!bootstrap_||!input_||
+    env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||!redefinition_gate::Owned(vm))
+  return Fail(error,"calibration-input-field-MethodHandle-invalid-caller-or-index");
+ auto run=env->GetStaticMethodID(bootstrap_,"exerciseFieldMethodHandle","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z");
+ if(!run||env->ExceptionCheck())return false;
+ const bool matched=env->CallStaticBooleanMethod(bootstrap_,run,input_,jint(index))==JNI_TRUE;
+ if(env->ExceptionCheck())return false;
+ return matched||Fail(error,"calibration-input-field-MethodHandle-public-readback-differs");
 }
 bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  std::string ignored;if(!error)error=&ignored;

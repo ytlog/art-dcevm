@@ -54,6 +54,7 @@ class SourceCalibration final {
  bool PrepareRetirement(JNIEnv*,jvmtiEnv*,std::string*);
  bool PrepareFieldEntries(JNIEnv*,std::string*);
  bool PrepareFieldVarHandles(JNIEnv*,std::string*);
+ bool PrepareFieldMethodHandles(JNIEnv*,const std::array<jobject,2>&,std::string*);
  struct FieldHandles;
  static bool ObserveFieldHandles(const runnable_jni::Context&,void*);
  bool PrepareInterpretation(JNIEnv*,std::string*);

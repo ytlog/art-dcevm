@@ -38,6 +38,8 @@ class CalibrationInputs final {
  bool InvokeReceiver(JNIEnv*,size_t index,bool*matched,std::string*)const;
  const std::array<jobject,2>&FieldVarHandles()const noexcept{return field_var_handles_;}
  bool ExerciseFieldHandles(JNIEnv*,std::string*)const;
+ const std::array<jobject,4>&FieldMethodHandles()const noexcept{return field_method_handles_;}
+ bool ExerciseFieldMethodHandle(JNIEnv*,size_t,std::string*)const;
  // Isolated ordinary-source inputs share this sole JNI root owner. The DEX
  // copies are initial SDK inputs, not records of a completed redefinition.
  jclass OrdinaryClass()const noexcept{return ordinary_class_;}
@@ -66,6 +68,7 @@ class CalibrationInputs final {
  std::vector<modern_field_metadata::FieldOracle>fields_;
  jobject receiver_object_=nullptr;
  std::array<jobject,2>field_var_handles_{};
+ std::array<jobject,4>field_method_handles_{};
  std::array<ReceiverSample,10>receiver_samples_{};
  std::vector<unsigned char>receiver_dex_;
 };

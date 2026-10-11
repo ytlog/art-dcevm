@@ -6,6 +6,7 @@
 #include "platform/common/native_call_graph_incoming.h"
 #include "platform/common/production_receiver_invocation.h"
 #include "platform/common/modern_field_guards.h"
+#include "platform/common/modern_method_handle_guards.h"
 #include <cstring>
 #include <mutex>
 #include <new>
@@ -292,8 +293,39 @@ bool SourceCalibration::PrepareFieldVarHandles(JNIEnv*env,std::string*error){
     !request.completed||env->ExceptionCheck())return Fail(error,"source-field-VarHandle-original-target-collection-refused");
  if(!retirement::InstallFieldVarHandleGuards(hooks_,env,request.oracles,retired_fields_,error)||
     !inputs.ExerciseFieldHandles(env,error))return false;
- return retirement::FieldVarHandleGuardsReady(retired_fields_)||
-  Fail(error,"source-field-VarHandle-original-Access-targets-not-observed");
+ if(!retirement::FieldVarHandleGuardsReady(retired_fields_))
+  return Fail(error,"source-field-VarHandle-original-Access-targets-not-observed");
+ return PrepareFieldMethodHandles(env,request.fields,error);
+}
+bool SourceCalibration::PrepareFieldMethodHandles(JNIEnv*env,const std::array<jobject,2>&fields,std::string*error){
+ const auto&inputs=metadata_->Inputs();
+ struct Identities {
+  JNIEnv*env;std::array<std::shared_ptr<contextual_field_id::Proof>,2>proofs{};
+  ~Identities(){for(auto&proof:proofs)contextual_field_id::Release(env,&proof);}
+ }identities{env};
+ std::array<jfieldID,2>ids{};
+ for(size_t n=0;n<fields.size();++n){
+  ids[n]=env->FromReflectedField(fields[n]);
+  if(!ids[n]||env->ExceptionCheck())return false;
+  identities.proofs[n]=contextual_field_id::Prepare(env,fields[n],ids[n],error);
+  if(!identities.proofs[n]||contextual_field_id::IsStatic(identities.proofs[n])!=bool(n))return false;
+ }
+ std::vector<retirement::FieldMethodHandleOracle>oracles;oracles.reserve(inputs.FieldMethodHandles().size());
+ for(size_t n=0;n<inputs.FieldMethodHandles().size();++n){const size_t field=n/2;
+  oracles.push_back({inputs.FieldMethodHandles()[n],ids[field],identities.proofs[field],uint32_t(8+n)});
+ }
+ if(!retirement::InstallMethodHandleFieldGuards(hooks_,error)||
+    !retirement::PrepareMethodHandleFieldGuards(hooks_,env,metadata_->Runtime().receivers.jni_id_manager,
+     retired_fields_,oracles,error))return false;
+ for(size_t n=0;n<oracles.size();++n){
+  if(!retirement::BeginMethodHandleFieldTargetProof(env,oracles[n].strong_global,oracles[n].field,error))return false;
+  bool succeeded=false;
+  try{succeeded=inputs.ExerciseFieldMethodHandle(env,n,error);}
+  catch(...){retirement::EndMethodHandleFieldTargetProof(false,nullptr);throw;}
+  if(!retirement::EndMethodHandleFieldTargetProof(succeeded&&!env->ExceptionCheck(),error))return false;
+ }
+ return retirement::MethodHandleFieldGuardsReady(retired_fields_)||
+  Fail(error,"source-field-MethodHandle-four-original-kinds-not-observed");
 }
 bool SourceCalibration::InstallReceiverEvents(const runnable_jni::Context&actual,void*raw){
  auto&r=*static_cast<ReceiverEvents*>(raw);auto&owner=r.owner;size_t extent=0;

@@ -7,6 +7,7 @@
 #include "platform/abi/arm64/android11/method_handle.h"
 #include "platform/common/native_structural_reflection_visitor.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/exclusive_owned_roots.h"
 #include "platform/abi/common/suspend_all.h"
 #include <atomic>
 #include <cstring>
@@ -27,8 +28,7 @@ constexpr const char* kInvoke="_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11Sha
 constexpr const char* kExact="_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE";
 struct Binding {Visit visit=nullptr;Root root=nullptr;void*(*current)()=nullptr;
  DecodeMethod method=nullptr;uint32_t(*kind)(const void*)=nullptr;void* targets[2]{};
- abi::common::SuspendConstruct construct=nullptr;
- abi::common::SuspendDestroy destroy=nullptr;};
+ };
 struct State {Binding binding;void* manager=nullptr;RetiredMethodRegistry* methods=nullptr;
  RetiredFieldRegistry* fields=nullptr;bool methods_calibrated=false,fields_calibrated=false;
  bool installed=false,incomplete=false,method_observed=false,field_kinds_calibrated=false;Invoke originals[2]{};
@@ -36,7 +36,8 @@ struct State {Binding binding;void* manager=nullptr;RetiredMethodRegistry* metho
  std::vector<FieldMethodHandleOracle> field_oracles;
  std::vector<void*> field_targets;std::atomic<uint64_t> field_observed{0};};
 State state;
-struct Proof {void* self=nullptr;void* target=nullptr;size_t hits=0;bool field=false;uint64_t batch=0;size_t rejections=0,original_entries=0;bool constructor=false;};
+struct Proof {void* self=nullptr;void* target=nullptr;size_t hits=0;bool field=false;uint64_t batch=0;size_t rejections=0,original_entries=0;bool constructor=false;
+ size_t sample=SIZE_MAX;uint32_t kind=UINT32_MAX;};
 thread_local Proof proof;
 struct Member {void* value=nullptr;bool field=false,valid=false;const char* error=nullptr;uint32_t source_kind=0;size_t callbacks=0;};
 class Target final:public art::ReflectiveValueVisitor {
@@ -79,10 +80,12 @@ template<bool exact> bool Dispatch(void* self,void* frame,Handle handle,Handle t
  }
  if(receiver_guard::CheckHandle(self,object,target.value,target.field,frame,static_cast<const receiver_guard::InstructionOperands*>(operands),result))return false;
  // Forward every exported ABI argument unchanged, including both root slots.
- if(proof.self==self&&proof.target==target.value&&proof.field==target.field)++proof.original_entries;
+ const bool proof_match=proof.self==self&&proof.target==target.value&&proof.field==target.field&&
+  (!proof.field||proof.kind==UINT32_MAX||(state.binding.kind&&state.binding.kind(object)==proof.kind));
+ if(proof_match)++proof.original_entries;
  const bool success=state.originals[exact?1:0](self,frame,handle,type,operands,result);
  if(success&&self==state.binding.current()){
-  if(proof.self==self&&proof.target==target.value&&proof.field==target.field)++proof.hits;
+  if(proof_match)++proof.hits;
  }
  return success; // Original false/pending exception remains unchanged.
 }
@@ -95,27 +98,36 @@ bool Resolve(HookEngine& hooks,Binding* out,std::string* error){
  b.method=reinterpret_cast<DecodeMethod>(hooks.FindSymbol("libart.so","_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"));
  b.targets[0]=hooks.FindSymbol("libart.so",kInvoke);b.targets[1]=hooks.FindSymbol("libart.so",kExact);
  using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
- b.construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
- b.destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
- if(!b.visit||!b.root||!b.current||!b.method||!b.targets[0]||!b.targets[1]||!b.construct||!b.destroy){if(error)*error="Missing stable exported MethodHandle outer/visitor/root declarations";return false;}
+ if(!b.visit||!b.root||!b.current||!b.method||!b.targets[0]||!b.targets[1]){if(error)*error="Missing stable exported MethodHandle outer/visitor/root declarations";return false;}
  *out=b;return true;
 }
-bool Install(HookEngine& hooks,const Binding& b,std::string* error){
+bool Install(HookEngine& hooks,JNIEnv*env,jobject anchor,const Binding& b,std::string* error){
  if(state.incomplete){if(error)*error="Incomplete outer MethodHandle rollback";return false;}
  if(state.installed)return true;
- state.binding=b;
- using namespace abi::arm64::android_common; using namespace ::artdcevm::abi::common;
- SuspendAll stopped{};b.construct(&stopped,"artdcevm shared outer MethodHandle owner",false);
- void* tokens[2]{};
- tokens[0]=hooks.Install(b.targets[0],reinterpret_cast<void*>(Dispatch<false>),reinterpret_cast<void**>(&state.originals[0]),error);
- if(tokens[0])tokens[1]=hooks.Install(b.targets[1],reinterpret_cast<void*>(Dispatch<true>),reinterpret_cast<void**>(&state.originals[1]),error);
- if(!tokens[0]||!tokens[1]){
-  if(tokens[0]){std::string rollback;if(!hooks.Remove(tokens[0],&rollback)){state.incomplete=true;if(error)*error+="; "+rollback;}}
-  if(!state.incomplete){state.originals[0]=state.originals[1]=nullptr;state.binding={};}
-  b.destroy(&stopped);return false;
- }
- if(!state.originals[0]||!state.originals[1])std::abort();
- state.installed=true;b.destroy(&stopped);return true;
+ exclusive_owned_roots::Service exclusive;
+ if(!exclusive_owned_roots::Service::Bind(hooks,&exclusive,error))return false;
+ auto install=[&](const exclusive_owned_roots::Context&actual){
+  if(!actual.self||actual.self!=b.current()||actual.count!=1||!actual.roots||!actual.roots[0])return false;
+  state.binding=b;void*tokens[2]{};
+  try{
+   tokens[0]=hooks.Install(b.targets[0],reinterpret_cast<void*>(Dispatch<false>),reinterpret_cast<void**>(&state.originals[0]),error);
+   if(tokens[0])tokens[1]=hooks.Install(b.targets[1],reinterpret_cast<void*>(Dispatch<true>),reinterpret_cast<void**>(&state.originals[1]),error);
+  }catch(...){}
+  if(!tokens[0]||!tokens[1]){
+   for(size_t n=2;n>0;--n)if(tokens[n-1]){
+    try{std::string rollback;if(!hooks.Remove(tokens[n-1],&rollback))state.incomplete=true;}
+    catch(...){state.incomplete=true;}
+   }
+   if(!state.incomplete){state.originals[0]=state.originals[1]=nullptr;state.binding={};}
+   return false;
+  }
+  if(!state.originals[0]||!state.originals[1])std::abort();
+  state.installed=true;return true;
+ };
+ const jobject roots[]{anchor};
+ return exclusive.With(env,roots,1,[](const exclusive_owned_roots::Context&actual,void*raw){
+  return (*static_cast<decltype(install)*>(raw))(actual);
+ },&install,error)&&state.installed;
 }
 struct Calibration {const Binding* binding;void* manager;const std::vector<MethodHandleOracle>* methods=nullptr;
  const std::vector<FieldMethodHandleOracle>* fields=nullptr;std::vector<void*> targets;bool valid=false;std::string error;bool field_kinds_calibrated=false;uint32_t(*kind)(const void*)=nullptr;};
@@ -128,14 +140,21 @@ unsigned KindCandidates(const void* object,uint32_t expected,unsigned candidates
 bool Calibrate(const runnable_jni::Context& context,void* raw){
  auto& request=*static_cast<Calibration*>(raw);const auto& b=*request.binding;
  if(b.current()!=context.self){request.error="actual Thread differs from Runnable context";return false;}std::unordered_set<void*> seen;
- const auto observe=[&](jobject global,void* expected,bool field,jfieldID field_id=nullptr){void* object=nullptr;
+ std::vector<std::pair<void*,uint32_t>>field_samples;
+ const auto observe=[&](jobject global,void* expected,bool field,jfieldID field_id=nullptr,uint32_t kind=UINT32_MAX){void* object=nullptr;
   if(!global||!expected){request.error="missing root or independently decoded JNI target";return false;}
   if(!runnable_executor::DecodeStrongGlobal(context,global,&object)){request.error="strong MethodHandle root decoding failed";return false;}
   const auto target=TargetOf(b,object);
   if(!target.valid){request.error=std::string(target.error?target.error:"invalid native MethodHandle visitor")+" (source kind="+std::to_string(target.source_kind)+", callbacks="+std::to_string(target.callbacks)+")";return false;}
   if(target.field!=field){request.error="MethodHandle target family differs from independent JNI oracle";return false;}
   if(target.value!=expected){request.error="native MethodHandle target differs from independently decoded JNI ID"+(" [id="+std::to_string(uintptr_t(field_id))+", native="+std::to_string(uintptr_t(expected))+", handle="+std::to_string(uintptr_t(target.value))+"]");return false;}
-  if(!seen.insert(expected).second){request.error="duplicate independent native target";return false;}
+  if(field){
+   for(const auto&sample:field_samples)if(sample.first==expected&&
+      (kind==UINT32_MAX||sample.second==UINT32_MAX||sample.second==kind)){
+    request.error="duplicate or ambiguous independent field target/kind";return false;
+   }
+   field_samples.push_back({expected,kind});
+  }else if(!seen.insert(expected).second){request.error="duplicate independent native target";return false;}
   if(uintptr_t(object)>UINT32_MAX){request.error="managed MethodHandle exceeds fixed compressed-root declaration";return false;}
   const uint32_t root=uint32_t(uintptr_t(object));if(b.root(&root)!=object){request.error="named root barrier disagrees with independent strong root";return false;}
   request.targets.push_back(expected);return true;
@@ -144,7 +163,7 @@ bool Calibrate(const runnable_jni::Context& context,void* raw){
  if(request.fields){
   bool kinds=true;unsigned candidates=3;
   for(const auto& o:*request.fields){
-   if(!o.identity||contextual_field_id::Id(o.identity)!=o.field||!o.field||!observe(o.strong_global,contextual_field_id::NativeField(o.identity),true,o.field))return false;
+   if(!o.identity||contextual_field_id::Id(o.identity)!=o.field||!o.field||!observe(o.strong_global,contextual_field_id::NativeField(o.identity),true,o.field,o.expected_kind))return false;
    if(o.expected_kind==UINT32_MAX){kinds=false;continue;}
    void* object=nullptr;
    if(o.expected_kind<8||o.expected_kind>11||
@@ -169,17 +188,22 @@ bool Calibrate(const runnable_jni::Context& context,void* raw){
 struct Begin {jmethodID method=nullptr;jfieldID field=nullptr;bool valid=false;jobject root=nullptr;bool constructor=false;};
 bool Capture(const runnable_jni::Context& context,void* raw){auto& request=*static_cast<Begin*>(raw);
  if(context.self!=state.binding.current()||proof.self)return false;
- void* target=nullptr;
+ void* target=nullptr;size_t sample=SIZE_MAX;uint32_t kind=UINT32_MAX;
  if(request.field){void* object=nullptr;if(!request.root||!runnable_executor::DecodeStrongGlobal(context,request.root,&object))return false;
   const auto observed=TargetOf(state.binding,object);if(!observed.valid||!observed.field)return false;
-  for(const auto& oracle:state.field_oracles)if(oracle.field==request.field&&contextual_field_id::NativeField(oracle.identity)==observed.value){target=observed.value;break;}
+  for(size_t n=0;n<state.field_oracles.size();++n){const auto&oracle=state.field_oracles[n];
+   if(oracle.strong_global!=request.root||oracle.field!=request.field||contextual_field_id::NativeField(oracle.identity)!=observed.value)continue;
+   if(oracle.expected_kind!=UINT32_MAX&&(!state.binding.kind||state.binding.kind(object)!=oracle.expected_kind))return false;
+   target=observed.value;sample=n;kind=oracle.expected_kind;break;
+  }
  }else {target=state.binding.method(state.manager,request.method);
   if(request.constructor){void* object=nullptr;
    if(!state.field_kinds_calibrated||!state.binding.kind||!request.root||!runnable_executor::DecodeStrongGlobal(context,request.root,&object)||state.binding.kind(object)!=3)return false;
    const auto observed=TargetOf(state.binding,object);if(!observed.valid||observed.field||observed.value!=target)return false;
   }
  }if(!target)return false;
- proof={context.self,target,0,request.field!=nullptr,state.field_batch};proof.constructor=request.constructor;request.valid=true;return true;
+ proof={context.self,target,0,request.field!=nullptr,state.field_batch};proof.constructor=request.constructor;
+ if(request.field){proof.sample=sample;proof.kind=kind;}request.valid=true;return true;
 }
 }
 bool RegisterMethodHandleFieldOwner(RetiredFieldRegistry& registry,std::string* error){
@@ -195,7 +219,7 @@ bool PrepareMethodHandleGuards(HookEngine& hooks,JNIEnv* env,void* manager,
  Binding b;if(!Resolve(hooks,&b,error))return false;
  Calibration request{&b,manager,&oracles,nullptr,{},false,{}};
  if(runnable_executor::With(env,oracles.front().strong_global,Calibrate,&request)!=runnable_jni::Result::kSuccess||!request.valid)return fail(request.error.empty()?"Independent MethodHandle target/root oracle mismatch":request.error.c_str());
- if(!Install(hooks,b,error))return false;
+ if(!Install(hooks,env,oracles.front().strong_global,b,error))return false;
  state.manager=manager;state.methods=&registry;state.methods_calibrated=true;state.method_observed=false;return true;
 }
 bool PrepareMethodHandleFieldGuards(HookEngine& hooks,JNIEnv* env,void* manager,
@@ -208,9 +232,10 @@ bool PrepareMethodHandleFieldGuards(HookEngine& hooks,JNIEnv* env,void* manager,
  Calibration request{&b,manager,nullptr,&oracles,{},false,{}};
  if(runnable_executor::With(env,oracles.front().strong_global,Calibrate,&request)!=runnable_jni::Result::kSuccess||!request.valid)return fail(request.error.empty()?"Independent field MethodHandle target/root oracle mismatch":request.error.c_str());
  if(request.field_kinds_calibrated)b.kind=request.kind;
- if(!Install(hooks,b,error))return false;
+ auto owned_oracles=oracles; // Allocate before installing/publishing the new batch.
+ if(!Install(hooks,env,oracles.front().strong_global,b,error))return false;
  if(request.field_kinds_calibrated)state.binding.kind=request.kind;
- state.manager=manager;state.fields=&registry;state.field_targets=std::move(request.targets);state.field_oracles=oracles;state.field_observed.store(0);++state.field_batch;state.fields_calibrated=true;state.field_kinds_calibrated=state.field_kinds_calibrated||request.field_kinds_calibrated;return true;
+ state.manager=manager;state.fields=&registry;state.field_targets=std::move(request.targets);state.field_oracles=std::move(owned_oracles);state.field_observed.store(0);++state.field_batch;state.fields_calibrated=true;state.field_kinds_calibrated=state.field_kinds_calibrated||request.field_kinds_calibrated;return true;
 }
 bool BeginMethodHandleTargetProof(JNIEnv* env,jobject root,jmethodID method,std::string* error){
  if(!state.methods_calibrated||proof.self||!env||!root||!method){if(error)*error="Unprepared/active MethodHandle target proof";return false;}
@@ -231,15 +256,15 @@ bool EndMethodHandleTargetProof(bool invocation_succeeded,std::string* error){co
 bool BeginMethodHandleFieldTargetProof(JNIEnv* env,jobject root,jfieldID field,std::string* error){
  if(!state.fields_calibrated||proof.self||!env||!root||!field){if(error)*error="Unprepared/active field MethodHandle target proof";return false;}
  Begin request{nullptr,field,false,root};const bool valid=runnable_executor::With(env,root,Capture,&request)==runnable_jni::Result::kSuccess&&request.valid;
- if(valid)for(size_t i=0;i<state.field_targets.size();++i)if(state.field_targets[i]==proof.target)
-  state.field_observed.fetch_and(~(uint64_t{1}<<i),std::memory_order_relaxed);
+ if(valid&&proof.sample<state.field_targets.size())
+  state.field_observed.fetch_and(~(uint64_t{1}<<proof.sample),std::memory_order_relaxed);
  if(!valid&&error)*error="Field MethodHandle proof lacks actual Thread/JNI identity";return valid;
 }
 bool EndMethodHandleFieldTargetProof(bool invocation_succeeded,std::string* error){
  const bool valid=invocation_succeeded&&proof.self&&proof.hits>0&&proof.field&&proof.batch==state.field_batch;
  bool matched=false;
- if(valid)for(size_t i=0;i<state.field_targets.size();++i)if(state.field_targets[i]==proof.target){
-  state.field_observed.fetch_or(uint64_t{1}<<i,std::memory_order_relaxed);matched=true;
+ if(valid&&proof.sample<state.field_targets.size()&&state.field_targets[proof.sample]==proof.target){
+  state.field_observed.fetch_or(uint64_t{1}<<proof.sample,std::memory_order_relaxed);matched=true;
  }
  if(!matched&&error){
   if(!invocation_succeeded)*error="Independent Java field invocation result failed";

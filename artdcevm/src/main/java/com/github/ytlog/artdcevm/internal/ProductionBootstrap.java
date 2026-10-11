@@ -180,6 +180,18 @@ public final class ProductionBootstrap {
         return index == 0 ? (int) input.instanceGetter.invoke(input.storage)
                           : (int) input.staticGetter.invoke();
     }
+    static boolean exerciseFieldMethodHandle(Inputs input, int index) throws Throwable {
+        CalibrationFixture object = (CalibrationFixture) input.storage;
+        int instance = object.intValue, statik = CalibrationFixture.staticIntValue;
+        switch (index) {
+            case 0: if ((int) input.instanceGetter.invoke(object) != instance) return false; break;
+            case 1: input.instanceSetter.invoke(object, instance); break;
+            case 2: if ((int) input.staticGetter.invoke() != statik) return false; break;
+            case 3: input.staticSetter.invoke(statik); break;
+            default: throw new IllegalArgumentException("field MethodHandle sample index");
+        }
+        return object.intValue == instance && CalibrationFixture.staticIntValue == statik;
+    }
     static boolean exerciseFieldHandles(Inputs input) throws Throwable {
         CalibrationFixture object = (CalibrationFixture) input.storage;
         int instance = object.intValue, statik = CalibrationFixture.staticIntValue;

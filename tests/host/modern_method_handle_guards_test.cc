@@ -15,10 +15,13 @@ retirement::RetiredFieldRegistry field_registry,wrong_field_registry;
 void* current=reinterpret_cast<void*>(0x700010);bool stopped=false,normal_result=true,wrong_owner=false;
 size_t invoked=0,installed_count=0,private_lookups=0;uint32_t source_kind=3;int exception_kind=0;
 std::string missing;void* expected_self=current;bool duplicate_visit=false;
-uint32_t override_kind=UINT32_MAX;bool final_targets=false;
+uint32_t override_kind=UINT32_MAX;bool final_targets=false,paired_fields=false;
 void* Object(size_t n){return reinterpret_cast<void*>(0x10000+n*16);}
-void* Identity(void* object){return reinterpret_cast<void*>(uintptr_t(object)+uintptr_t{0x7000000000});}
+void* Identity(void* object){
+ if(paired_fields&&(object==Object(6)||object==Object(7)))object=Object(object==Object(6)?4:5);
+ return reinterpret_cast<void*>(uintptr_t(object)+uintptr_t{0x7000000000});}
 uint32_t Kind(const void* object){if(override_kind!=UINT32_MAX)return override_kind;
+ if(paired_fields&&(object==Object(6)||object==Object(7)))return object==Object(6)?9:11;
  return ((uintptr_t(object)-0x10000)/16)%2==0?8:10;}
 bool IsField(void* object){return uintptr_t(object)>=uintptr_t(Object(4));}
 void Visit(void* object,art::ReflectiveValueVisitor* visitor){art::ReflectionSourceInfo source;source.type=source_kind;source.object=wrong_owner?nullptr:object;
@@ -153,6 +156,28 @@ int main(){using namespace retirement;Hooks hooks;std::string error;JNIEnv* env=
  override_kind=10;assert(call(true)&&result==0x1234&&invoked==before_final+1);
  final_targets=false;override_kind=11;assert(call(false)&&result==0x1234&&invoked==before_final+2);
  override_kind=UINT32_MAX;
+ // Getter/setter pairs share targets but each actual operation needs its own
+ // independent kind and original-call bit. A setter cannot sign a getter.
+ paired_fields=true;
+ std::vector<FieldMethodHandleOracle>paired{fields[0],fields[0],fields[1],fields[1]};
+ paired[0].expected_kind=8;paired[1].expected_kind=9;
+ paired[2].expected_kind=10;paired[3].expected_kind=11;
+ paired[1].strong_global=reinterpret_cast<jobject>(Object(6));
+ paired[3].strong_global=reinterpret_cast<jobject>(Object(7));
+ assert(PrepareMethodHandleFieldGuards(hooks,env,manager,field_registry,paired,&error));
+ auto ambiguous=paired;ambiguous[1].expected_kind=UINT32_MAX;
+ assert(!PrepareMethodHandleFieldGuards(hooks,env,manager,field_registry,ambiguous,&error));
+ assert(BeginMethodHandleFieldTargetProof(env,paired[0].strong_global,paired[0].field,&error));
+ root=uint32_t(uintptr_t(Object(6)));assert(call(false));
+ assert(!EndMethodHandleFieldTargetProof(true,&error)&&state.field_observed.load()==0);
+ for(size_t n=0;n<paired.size();++n){
+  assert(BeginMethodHandleFieldTargetProof(env,paired[n].strong_global,paired[n].field,&error));
+  root=uint32_t(uintptr_t(paired[n].strong_global));assert(call(n%2));
+  assert(EndMethodHandleFieldTargetProof(true,&error));
+  assert(state.field_observed.load()==((uint64_t{1}<<(n+1))-1));
+  assert(MethodHandleFieldGuardsReady(field_registry)==(n==paired.size()-1));
+ }
+ paired_fields=false;
  // The actual same exported owner also proves constructor-specific positive
  // and negative dispatch, rather than borrowing general method readiness.
  root=uint32_t(uintptr_t(Object(2)));override_kind=3;
