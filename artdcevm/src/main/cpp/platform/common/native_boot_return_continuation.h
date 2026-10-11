@@ -11,9 +11,9 @@ namespace artdcevm::native_boot_return_continuation {
 // grants no stop, callee, GC-root, dependency, or reconstruction authority.
 struct Catch {uint32_t type,pc;};
 struct Try {uint32_t first,count;const Catch*handlers;size_t handler_count;bool catch_all;};
-struct Body {const uint16_t*units;uint32_t count;const Try*tries;size_t try_count;};
+struct Body {const uint16_t*units;uint32_t count;const Try*tries;size_t try_count;uint32_t registers=0;};
 struct Scratch {unsigned char*boundaries;unsigned char*seen;uint32_t*queue;size_t capacity;};
-struct Shape {bool complete=false,primitive_return=false,exception_escape=false,backedge=false;size_t reachable=0;const char*failure="not-read";};
+struct Shape {bool complete=false,primitive_return=false,exception_escape=false,backedge=false;size_t reachable=0,caught_entries=0;const char*failure="not-read";};
 enum class Entry {NormalAndExceptional,ExceptionalOnly};
 inline int32_t S16(uint16_t x){return static_cast<int16_t>(x);}
 inline int32_t S32(uint16_t lo,uint16_t hi){return static_cast<int32_t>(uint32_t(lo)|(uint32_t(hi)<<16));}
@@ -45,29 +45,63 @@ inline Shape Inspect(const Body&b,uint32_t invoke,Scratch s,Entry entry=Entry::N
   }
   if(t.catch_all&&t.handlers[t.handler_count-1].type!=UINT32_MAX)return deny("catch-all-missing");
  }
- size_t head=0,tail=0;bool primitive=true,returned=false;
- auto enqueue=[&](int64_t pc){if(pc<0||uint64_t(pc)>=b.count||!s.boundaries[pc])return false;if(!s.seen[pc]){s.seen[pc]=1;s.queue[tail++]=uint32_t(pc);}return true;};
- if(entry==Entry::NormalAndExceptional&&!enqueue(uint64_t(invoke)+width))return deny("normal-successor");
- // The paused invoke may return normally OR throw. Its complete active handler
- // set and uncaught escape are both included, never just a textual suffix.
+ // A move-exception definition anywhere in the immutable body must identify
+ // a real encoded handler start and a real CodeItem register, even when this
+ // particular paused invoke does not select it.
+ for(uint32_t pc=0;pc<b.count;++pc)if(s.boundaries[pc]&&(b.units[pc]&255u)==0x0d){
+  if((b.units[pc]>>8)>=b.registers)return deny("continuation-move-exception-register-outside-CodeItem");
+  bool handler=false;for(size_t i=0;i<b.try_count;++i)for(size_t j=0;j<b.tries[i].handler_count;++j)handler|=b.tries[i].handlers[j].pc==pc;
+  if(!handler)return deny("continuation-move-exception-not-handler-entry");
+ }
+ // A caught reference is issued only by a selected, fully validated encoded
+ // handler entry. This is a structural reference lifetime, not a Throwable
+ // identity/root permission: the enclosing scanner still needs its current
+ // Source/Plan/frame-root and closed JNI/native-entry owners.
+ struct CaughtReference {uint32_t entry,vreg;const Catch*handler;};
+ bool returned=false;
+ auto walk=[&](uint32_t first,const CaughtReference* caught)->const char* {
+  for(uint32_t i=0;i<b.count;++i)s.seen[i]=0;
+  size_t head=0,tail=0;
+  auto enqueue=[&](int64_t pc){if(pc<0||uint64_t(pc)>=b.count||!s.boundaries[pc])return false;if(!s.seen[pc]){s.seen[pc]=1;s.queue[tail++]=uint32_t(pc);}return true;};
+  if(!enqueue(first))return "continuation-entry-outside-body";
+  while(head<tail){const auto pc=s.queue[head++];++r.reachable;if(pc<=invoke)r.backedge=true;
+   const auto word=b.units[pc];const auto op=word&255u;const auto w=artdcevm::compiled_frame_dex_oracle::detail::Width(op);
+   // No normal edge or later exceptional edge can reissue a pending exception.
+   // A back edge to even this owner's entry is a repeated reference definition.
+   if(op==0x0d)return "continuation-move-exception-not-owned-entry";
+   if(op==0x0e){returned=true;continue;}
+   if(op==0&&word==0){if(!enqueue(uint64_t(pc)+w))return "falloff";continue;}
+   if(op==0x28){if(!enqueue(int64_t(pc)+static_cast<int8_t>(word>>8)))return "branch-target";continue;}
+   if(op==0x29){if(!enqueue(int64_t(pc)+S16(b.units[pc+1])))return "branch-target";continue;}
+   if(op==0x2a){if(!enqueue(int64_t(pc)+S32(b.units[pc+1],b.units[pc+2])))return "branch-target";continue;}
+   // This closed remainder never reads OR overwrites any vreg. Thus a bound
+   // caught reference remains an unused local until return; iget/invoke/throw,
+   // object moves, scalar overwrites and every other operand/type operation
+   // still require an independent owner and are not treated as nop.
+   if(caught&&(!caught->handler||caught->vreg>=b.registers||caught->entry>=b.count))return "continuation-caught-reference-owner-invalid";
+   return "continuation-dependency-owner-required";
+  }
+  return nullptr;
+ };
+ if(entry==Entry::NormalAndExceptional){
+  if(uint64_t(invoke)+width>=b.count)return deny("normal-successor");
+  if(const char*failure=walk(invoke+width,nullptr))return deny(failure);
+ }
+ // Validate each active entry independently. Shared catch PCs do not share a
+ // reusable receipt or visitation state, and cannot hide a later unsafe path.
  bool covered=false;
  for(size_t i=0;i<b.try_count;++i){const auto&t=b.tries[i];if(invoke<t.first||invoke-t.first>=t.count)continue;covered=true;
   if(!t.catch_all)r.exception_escape=true;
-  for(size_t j=0;j<t.handler_count;++j)if(!enqueue(t.handlers[j].pc))return deny("exception-successor");
+  for(size_t j=0;j<t.handler_count;++j){const auto&handler=t.handlers[j];uint32_t first=handler.pc;
+   if((b.units[first]&255u)==0x0d){
+    const uint32_t vreg=b.units[first]>>8;if(vreg>=b.registers)return deny("continuation-move-exception-register-outside-CodeItem");
+    const CaughtReference caught{first,vreg,&handler};++r.caught_entries;++r.reachable;
+    if(first+1>=b.count)return deny("exception-successor");
+    if(const char*failure=walk(first+1,&caught))return deny(failure);
+   }else if(const char*failure=walk(first,nullptr))return deny(failure);
+  }
  }
  if(!covered)r.exception_escape=true;
- while(head<tail){const auto pc=s.queue[head++];++r.reachable;if(pc<=invoke)r.backedge=true;
-  const auto word=b.units[pc];const auto op=word&255u;const auto w=artdcevm::compiled_frame_dex_oracle::detail::Width(op);
-  if(op==0x0e){returned=true;continue;}
-  if(op==0&&word==0){if(!enqueue(uint64_t(pc)+w))return deny("falloff");continue;}
-  if(op==0x28){if(!enqueue(int64_t(pc)+static_cast<int8_t>(word>>8)))return deny("branch-target");continue;}
-  if(op==0x29){if(!enqueue(int64_t(pc)+S16(b.units[pc+1])))return deny("branch-target");continue;}
-  if(op==0x2a){if(!enqueue(int64_t(pc)+S32(b.units[pc+1],b.units[pc+2])))return deny("branch-target");continue;}
-  // Closed scalar-return subset only. Any result/exception/reference/monitor,
-  // invoke/field/type/payload use needs a separate complete dependency owner.
-  primitive=false;
- }
- if(!primitive)return deny("continuation-dependency-owner-required");
  r.complete=true;r.primitive_return=returned||(entry==Entry::ExceptionalOnly&&r.exception_escape);r.failure="";return r;
 }
 // Ordinary caller-owned storage. The stopped reader never grows it.
@@ -171,6 +205,6 @@ inline Shape Read(const receiver_guard::CodeView&source,uint32_t pc,
    handlers_used+=needed;
   }
  }
- return Inspect({source.instructions,uint32_t(source.units),storage.tries,source.tries_size},pc,scratch,entry);
+ return Inspect({source.instructions,uint32_t(source.units),storage.tries,source.tries_size,source.registers},pc,scratch,entry);
 }
 }

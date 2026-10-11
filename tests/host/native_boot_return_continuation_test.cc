@@ -19,8 +19,30 @@ int main(){
  const uint16_t caught[]{0x0071,0,0,0x000e,0x000d,0x000e};
  const Catch typed[]{ {0,4} },all[]{ {UINT32_MAX,4} };
  const Try tt[]{ {0,3,typed,1,false} },ta[]{ {0,3,all,1,true} };
- r=Inspect({caught,6,tt,1},0,scratch);assert(!r.complete&&r.exception_escape);
- r=Inspect({caught,6,ta,1},0,scratch);assert(!r.complete&&!r.exception_escape);
+ r=Inspect({caught,6,tt,1,1},0,scratch);assert(r.complete&&r.exception_escape&&r.caught_entries==1);
+ r=Inspect({caught,6,ta,1,1},0,scratch);assert(r.complete&&!r.exception_escape&&r.caught_entries==1);
+ // A typed caught reference is bound to this active handler's exact first
+ // instruction and the source CodeItem register bound. It is never a nop.
+ r=Inspect({caught,6,ta,1,1},0,scratch);assert(r.complete&&r.primitive_return&&!r.exception_escape&&r.caught_entries==1);
+ r=Inspect({caught,6,ta,1,1},0,scratch,Entry::ExceptionalOnly);assert(r.complete&&r.caught_entries==1&&r.reachable==2);
+ const Catch shared[]{{0,4},{UINT32_MAX,4}};const Try shared_try[]{{0,3,shared,2,true}};
+ r=Inspect({caught,6,shared_try,1,1},0,scratch);assert(r.complete&&r.caught_entries==2);
+ const uint16_t normal_enters_handler[]{0x0071,0,0,0x0128,0x000d,0x000e};
+ r=Inspect({normal_enters_handler,6,ta,1,1},0,scratch);assert(!r.complete&&!std::strcmp(r.failure,"continuation-move-exception-not-owned-entry"));
+ const uint16_t bad_register[]{0x0071,0,0,0x000e,0x010d,0x000e};
+ r=Inspect({bad_register,6,ta,1,1},0,scratch);assert(!r.complete&&!std::strcmp(r.failure,"continuation-move-exception-register-outside-CodeItem"));
+ const uint16_t repeated[]{0x0071,0,0,0x000e,0x000d,0xff28};
+ r=Inspect({repeated,6,ta,1,1},0,scratch);assert(!r.complete&&!std::strcmp(r.failure,"continuation-move-exception-not-owned-entry"));
+ const uint16_t second_definition[]{0x0071,0,0,0x000e,0x000d,0x000d,0x000e};
+ assert(!Inspect({second_definition,7,ta,1,1},0,scratch).complete);
+ const uint16_t misplaced[]{0x0071,0,0,0x000e,0,0x000d,0x000e};
+ r=Inspect({misplaced,7,ta,1,1},0,scratch);assert(!r.complete&&!std::strcmp(r.failure,"continuation-move-exception-not-handler-entry"));
+ // No caught-reference read, escape, or overwrite is silently granted. Each
+ // requires its own operand/type owner even when a later return is safe.
+ for(uint16_t operation:{uint16_t(0x0052),uint16_t(0x0071),uint16_t(0x0027),uint16_t(0x0011),uint16_t(0x0007),uint16_t(0x0012)}){
+  const uint16_t dependent[]{0x0071,0,0,0x000e,0x000d,operation,0,0,0x000e};
+  r=Inspect({dependent,9,ta,1,1},0,scratch,Entry::ExceptionalOnly);assert(!r.complete&&!std::strcmp(r.failure,"continuation-dependency-owner-required"));
+ }
  const Try invalidall[]{ {0,3,typed,1,true} };
  r=Inspect({caught,6,invalidall,1},0,scratch);assert(!r.complete);
  const uint16_t swallowed[]{0x0071,0,0,0x000e,0x000e};
@@ -57,13 +79,33 @@ int main(){
  source.tries_size=1;source.units=6;std::memcpy(dex.data()+208,caught,sizeof(caught));
  Put<uint32_t>(dex.data(),220,0);Put<uint16_t>(dex.data(),224,3);Put<uint16_t>(dex.data(),226,1);
  dex[228]=1;dex[229]=1;dex[230]=0;dex[231]=4;
- r=Read(source,0,context,hs,scratch);assert(!r.complete&&r.exception_escape);
+ r=Read(source,0,context,hs,scratch);assert(r.complete&&r.exception_escape&&r.caught_entries==1);
  capacity=CountStorage(source,context);assert(capacity.complete&&capacity.tries==1&&capacity.handlers==1);
  Put<uint16_t>(dex.data(),226,2);assert(!Read(source,0,context,hs,scratch).complete);
  Put<uint16_t>(dex.data(),226,1);dex[229]=0;dex[230]=4;
- r=Read(source,0,context,hs,scratch);assert(!r.complete&&!r.exception_escape);
+ r=Read(source,0,context,hs,scratch);assert(r.complete&&!r.exception_escape&&r.caught_entries==1);
+ source.registers=0;r=Read(source,0,context,hs,scratch);assert(!r.complete&&!std::strcmp(r.failure,"continuation-move-exception-register-outside-CodeItem"));source.registers=1;
  assert(!Read(source,0,context,{parsed,0,parsed_handlers,8},scratch).complete);
  assert(!Read(source,0,context,{parsed,4,parsed_handlers,0},scratch).complete);
+ // A younger continuation may escape into an older inlined caller. Its
+ // current invoke handler must run before the outer physical caller's return.
+ // Build the actual bounded CodeItem handler bytes, with an unsafe reference
+ // load in the inline catch. Skipping this logical entry would miss it.
+ const uint16_t inline_unsafe[]{0x0071,0,0,0x000e,0x0052,0,0x000e};
+ source.units=7;std::memcpy(dex.data()+208,inline_unsafe,sizeof(inline_unsafe));
+ Put<uint32_t>(dex.data(),224,0);Put<uint16_t>(dex.data(),228,3);Put<uint16_t>(dex.data(),230,1);
+ dex[232]=1;dex[233]=0;dex[234]=4;
+ r=Read(source,0,context,hs,scratch,Entry::ExceptionalOnly);
+ assert(!r.complete&&!r.exception_escape&&!std::strcmp(r.failure,"continuation-dependency-owner-required"));
+ // Same logical source/PC and catch-all protocol, now a primitive return.
+ Put<uint16_t>(dex.data(),216,0x000e);
+ r=Read(source,0,context,hs,scratch,Entry::ExceptionalOnly);
+ assert(r.complete&&r.primitive_return&&!r.exception_escape&&r.reachable==1);
+ // An operand DexPc must not become a fabricated inline handler entry.
+ assert(!Read(source,1,context,hs,scratch,Entry::ExceptionalOnly).complete);
+ // Restore the ordinary handler-list census fixture.
+ source.units=6;std::memcpy(dex.data()+208,caught,sizeof(caught));
+ Put<uint32_t>(dex.data(),220,0);Put<uint16_t>(dex.data(),224,3);Put<uint16_t>(dex.data(),226,1);
  // Complete source handler census includes unused encoded entries; the count
  // can exceed instruction units, so no units-based capacity is assumed safe.
  dex[228]=8;for(unsigned i=0;i<8;++i){dex[229+i*3]=1;dex[230+i*3]=0;dex[231+i*3]=4;}
