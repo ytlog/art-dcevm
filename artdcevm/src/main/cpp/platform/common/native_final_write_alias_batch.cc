@@ -36,10 +36,10 @@ std::unique_ptr<AliasBatch>AliasBatch::Prepare(NativeAccess&access,JNIEnv*env,
  }
  return result;
 }
-bool AliasBatch::Bind(const runnable_jni::Context&context,const source_commit::Plan&plan,
+bool AliasBatch::Bind(const runnable_jni::Context&context,const native_source_stop::Session&stop,const source_commit::Plan&plan,
  const std::vector<modern_methods::Service*>&methods,
  const modern_field_metadata::ReadContext&read,std::string*error){
- if(phase_!=Phase::Prepared||context.env!=env_||context.vm!=vm_||context.self!=self_||
+ if(phase_!=Phase::Prepared||stop.Reserved()||!native_source_stop::Session::InspectionAvailable()||context.env!=env_||context.vm!=vm_||context.self!=self_||
     !runnable_jni::Bridge::BorrowOriginalScope(context)||!redefinition_gate::Owned(vm_)||
     !read.owner||!read.extent||!node_||plan.old_classes.size()!=handles_.size()||
     plan.new_classes.size()!=handles_.size()||methods.size()!=handles_.size()||
@@ -67,7 +67,7 @@ bool AliasBatch::Bind(const runnable_jni::Context&context,const source_commit::P
   Record record{i,m};if(!Member(alias,record,original,read))return Fail(error,"final-alias-native-member-anchor-refused");
   node_->aliases.push_back(alias);records_.push_back(record);
  }
- plan_=&plan;read_=&read;
+ context_=&context;stop_=&stop;plan_=&plan;read_=&read;
  storage_={plan.old_classes.data(),plan.new_classes.data(),plan.old_instances.data(),plan.new_instances.data(),plan.class_root_origins.data()};
  counts_={plan.old_classes.size(),plan.new_classes.size(),plan.old_instances.size(),plan.new_instances.size(),plan.class_root_origins.size()};
  phase_=Phase::Bound;return true;
@@ -106,20 +106,101 @@ bool AliasBatch::Match(const source_commit::Plan&plan,void*self,
   if(r.root>=handles_.size()||a.weak!=handles_[r.root].weak||a.retiring||a.readers||
      !Member(a,r,plan.old_classes[r.root],read))return false;
  }
- return true;
+ return Permissions(plan,read);
 }
 bool AliasBatch::Verify(const source_commit::Plan&plan,const native_source_stop::Session&stop,void*self,
  const modern_field_metadata::ReadContext&read)const noexcept{
- return stop.IsStopped(self)&&Match(plan,self,read)&&stop.IsStopped(self);
+ return &stop==stop_&&stop.IsStopped(self)&&Match(plan,self,read)&&stop.IsStopped(self);
 }
 void AliasBatch::Publish(const source_commit::Plan&plan,const native_source_stop::Session&stop,void*self,
- const modern_field_metadata::ReadContext&read)noexcept{
+ const modern_field_metadata::ReadContext&read)const noexcept{
  if(!stop.IsFinalWindow(self)||!Verify(plan,stop,self,read))std::abort();
  access_.writer_.CommitProof(proof_);
  if(!node_->aliases.empty())access_.aliases_.Publish(std::move(node_));
  // Empty native storage is disposed by Close in ordinary Native, not here.
  for(const auto&r:records_)handles_[r.root].transferred=true;
  published_=true;phase_=Phase::Published;
+}
+bool AliasBatch::Ordinary()const noexcept{
+ return context_&&stop_&&!stop_->Reserved()&&native_source_stop::Session::InspectionAvailable()&&
+  context_->env==env_&&context_->vm==vm_&&context_->self==self_&&
+  access_.current_()==self_&&redefinition_gate::Owned(vm_)&&
+  runnable_jni::Bridge::BorrowOriginalScope(*context_);
+}
+bool AliasBatch::Permissions(const source_commit::Plan&plan,
+ const modern_field_metadata::ReadContext&read)const noexcept{
+ for(const auto&p:permissions_){
+  if(p.pair>=plan.old_classes.size()||p.pair>=plan.new_classes.size())return false;
+  const auto member=[&](void*klass,void*field,uint32_t flags,uint32_t dex_index){
+   field_array::View fields;uint32_t index=0;
+   if(!access_.metadata_.Fields(klass,p.statics,&fields,nullptr,&read)||!fields.IndexOf(field,&index)||
+      access_.metadata_.FieldDeclaringClass(field)!=klass)return false;
+   const auto*native=static_cast<const field_array::Field*>(field);
+   return (native->access_flags&0xffffu)==flags&&native->dex_field_index==dex_index;
+  };
+  if(!member(plan.old_classes[p.pair],p.before,p.before_flags,p.before_index)||
+     !member(plan.new_classes[p.pair],p.after,p.after_flags,p.after_index)||
+     access_.metadata_.Reference(plan.old_classes[p.pair],offsetof(class_metadata::Class11,class_loader))!=
+     access_.metadata_.Reference(plan.new_classes[p.pair],offsetof(class_metadata::Class11,class_loader)))return false;
+ }
+ return true;
+}
+bool AliasBatch::VerifyAliases(const source_commit::Plan&plan,std::string*error)const{
+ if(!stop_||!read_||!redefinition_gate::Owned(vm_))return Fail(error,"final-alias-transaction-owner-unavailable");
+ if(stop_->IsStopped(self_)){
+  if(Verify(plan,*stop_,self_,*read_))return true;
+ }else if(Ordinary()&&Match(plan,self_,*read_)&&Ordinary())return true;
+ return Fail(error,"final-alias-exact-Plan-or-live-window-refused");
+}
+bool AliasBatch::RefreshPlan(const source_commit::Plan&plan,std::string*error)const{
+ if(!stop_||!read_||!stop_->IsStopped(self_)||!redefinition_gate::Owned(vm_)||
+    !Verify(plan,*stop_,self_,*read_))return Fail(error,"final-fields-stopped-root-refresh-refused");
+ return true;
+}
+bool AliasBatch::Verify(const source_commit::Plan&plan,size_t pair,void*loader,
+ const evolution::ClassSchema&before,const evolution::ClassSchema&after,
+ const native_schema_policy::Requirement&requirement,std::string*error)const{
+ if(!Ordinary()||!VerifyAliases(plan,error)||pair>=plan.old_classes.size()||
+    requirement.kind!=native_schema_policy::GuardKind::FinalFields||before.descriptor!=after.descriptor)
+  return Fail(error,"final-fields-ordinary-permission-owner-refused");
+ const auto declaration=[&](const evolution::ClassSchema&schema)->const evolution::Member*{
+  const evolution::Member*found=nullptr;
+  for(const auto&field:schema.fields)if(field.name==requirement.member_name&&field.descriptor==requirement.descriptor){
+   if(found)return nullptr;found=&field;
+  }
+  return found;
+ };
+ const auto*old=declaration(before);const auto*next=declaration(after);
+ if(!old||!next||old->IsStatic()!=next->IsStatic()||!(next->access&0x10u)||
+    !((old->access^next->access)&0x17u))return Fail(error,"final-fields-exact-declaration-change-refused");
+ const auto native=[&](void*klass,const evolution::Member&member)->void*{
+  field_copy::CopyClassView identity{};field_array::View fields;
+  if(!access_.metadata_.ClassIdentity(klass,&identity,error,read_)||identity.loader!=loader||
+     !identity.descriptor||before.descriptor!=identity.descriptor||
+     !access_.metadata_.Fields(klass,member.IsStatic(),&fields,error,read_))return nullptr;
+  void*found=nullptr;
+  for(uint32_t n=0;n<fields.selected_count;++n){auto*field=fields.AtSelected(n);field_copy::CopyFieldView text{};
+   if(!access_.metadata_.FieldIdentity(field,&text,error,read_))return nullptr;
+   if(!text.name||!text.descriptor||member.name!=text.name||member.descriptor!=text.descriptor)continue;
+   const auto*f=static_cast<const field_array::Field*>(field);
+   if(found||text.field!=field||access_.metadata_.FieldDeclaringClass(field)!=klass||
+      (f->access_flags&0xffffu)!=(member.access&0xffffu)||f->dex_field_index!=member.dex_index)return nullptr;
+   found=field;
+  }
+  return found;
+ };
+ void*old_field=native(plan.old_classes[pair],*old);if(!old_field)return Fail(error,"final-fields-native-original-declaration-refused");
+ void*new_field=native(plan.new_classes[pair],*next);if(!new_field)return Fail(error,"final-fields-native-replacement-declaration-refused");
+ Permission permission{pair,old_field,new_field,old->IsStatic(),old->access&0xffffu,next->access&0xffffu,old->dex_index,next->dex_index};
+ for(const auto&p:permissions_)if(p.pair==pair&&p.before==old_field&&p.after==new_field)
+  return p.statics==permission.statics&&p.before_flags==permission.before_flags&&p.after_flags==permission.after_flags&&
+   p.before_index==permission.before_index&&p.after_index==permission.after_index&&Ordinary();
+ if(!Ordinary())return Fail(error,"final-fields-original-scope-changed");
+ permissions_.push_back(permission);return true;
+}
+void AliasBatch::BeginCommit(const source_commit::Plan&plan)const{
+ if(!stop_||!read_||!redefinition_gate::Owned(vm_))std::abort();
+ Publish(plan,*stop_,self_,*read_);
 }
 bool AliasBatch::Cleanup(NativeAccess&access,JNIEnv*env,
  const source_handle_roots::Service&roots,std::string*error){
@@ -147,7 +228,7 @@ bool AliasBatch::Close()noexcept{
  if(phase_==Phase::Closed)return true;
  if(!Native())return false;
  // Native metadata is never touched after original Run destroys private data.
- node_.reset();records_.clear();plan_=nullptr;read_=nullptr;
+ node_.reset();records_.clear();permissions_.clear();plan_=nullptr;read_=nullptr;context_=nullptr;stop_=nullptr;
  for(auto&r:handles_){
   if(r.weak&&!r.transferred){if(r.weak_registered)access_.references_.Forget(r.weak);env_->DeleteWeakGlobalRef(r.weak);}
   if(r.strong){if(r.strong_registered)access_.references_.Forget(r.strong);env_->DeleteGlobalRef(r.strong);}

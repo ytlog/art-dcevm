@@ -70,6 +70,7 @@ bool Factory::Ready()const noexcept{
   bindings_.verifier.vm==run_.hierarchy.context->vm&&
   bindings_.verifier.metadata==run_.hierarchy.metadata&&
   bindings_.verifier.methods==bindings_.payload.method_model&&
+  bindings_.payload.final_fields&&bindings_.verifier.final_fields==bindings_.payload.final_fields&&
   bindings_.hierarchy.metadata==run_.hierarchy.metadata&&
   bindings_.hierarchy.allocation==run_.hierarchy.allocation&&
   bindings_.payload.commit.schema==bindings_.schema&&

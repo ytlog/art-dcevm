@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/common/native_call_graph_run.h"
 #include "platform/common/rooted_schema_plan.h"
+#include "platform/common/native_final_write_alias_batch.h"
 
 namespace artdcevm::native_call_graph_payload {
 struct Bindings {
@@ -14,6 +15,8 @@ struct Bindings {
  rooted_schema_plan::Reader reader{};
  native_hierarchy_graph::Authority*authority=nullptr;
  void*class_linker=nullptr;
+ // Prepared in ordinary Native; retained until the original executor returns.
+ final_write_guard::AliasBatch*final_fields=nullptr;
 };
 // Operation-owned storage: construct before preparation and retain through
 // original Run return, including failed/partial registration and end_run.

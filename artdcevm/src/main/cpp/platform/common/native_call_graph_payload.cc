@@ -18,7 +18,7 @@ bool Payload::Prepare(const runnable_jni::Context&context,
     !deps.metadata||!deps.metadata->Calibrated()||!deps.fields||!deps.fields->Calibrated()||
     !deps.schema||!deps.execution||!deps.interpretation||!deps.read||!deps.read->owner||!deps.read->extent||
     deps.reflection_plan||deps.initialization||!deps.methods.empty()||
-    !bindings.hooks||!bindings.method_model||bindings.method_model->identities.size()<3||
+    !bindings.final_fields||!bindings.final_fields->UsesMetadata(*deps.metadata)||!bindings.hooks||!bindings.method_model||bindings.method_model->identities.size()<3||
     !bindings.method_binding||!bindings.method_retired||
     !registry.NativeInsertionReady()||!bindings.authority||!bindings.class_linker||
     !run.Hierarchy()->OwnsAuthority(*bindings.authority)||
@@ -47,6 +47,7 @@ bool Payload::Prepare(const runnable_jni::Context&context,
   method_views_.push_back(method.get());deps.methods.push_back(method.get());
   methods_.push_back(std::move(method));policies_.push_back(std::move(policy));
  }
+ if(!bindings.final_fields->Bind(context,*run.Stop(),plan_,deps.methods,*deps.read,error))return false;
  std::vector<native_schema_policy::GuardRequest>requests;
  if(!native_schema_policy::InspectNative(plan_,*deps.metadata,*bindings.method_model,
       method_views_,policies_,&requests,error,deps.read)||
