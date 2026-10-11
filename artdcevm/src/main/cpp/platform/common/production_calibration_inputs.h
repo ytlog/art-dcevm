@@ -11,6 +11,11 @@ namespace artdcevm::production_bootstrap {
 // VM still has a current JNI attachment. Vectors are frozen before publication.
 class CalibrationInputs final {
  public:
+ struct ReceiverSample {
+  method_identity::Oracle caller{},target{};
+  jclass caller_class=nullptr,target_class=nullptr;
+  std::vector<unsigned char>instructions;
+ };
  static std::unique_ptr<CalibrationInputs>Create(JNIEnv*,jvmtiEnv*,jobject calibration,std::string*);
  ~CalibrationInputs();
  CalibrationInputs(const CalibrationInputs&)=delete;CalibrationInputs&operator=(const CalibrationInputs&)=delete;
@@ -24,6 +29,9 @@ class CalibrationInputs final {
  const evolution::MappedDexMemberCounts&MethodCounts()const noexcept{return method_counts_;}
  const std::vector<method_identity::Oracle>&Methods()const noexcept{return methods_;}
  const std::vector<modern_field_metadata::FieldOracle>&Fields()const noexcept{return fields_;}
+ jobject ReceiverObject()const noexcept{return receiver_object_;}
+ const std::array<ReceiverSample,10>&ReceiverSamples()const noexcept{return receiver_samples_;}
+ const std::vector<unsigned char>&ReceiverDex()const noexcept{return receiver_dex_;}
  // Isolated ordinary-source inputs share this sole JNI root owner. The DEX
  // copies are initial SDK inputs, not records of a completed redefinition.
  jclass OrdinaryClass()const noexcept{return ordinary_class_;}
@@ -37,6 +45,7 @@ class CalibrationInputs final {
  CalibrationInputs()=default;
  bool Load(JNIEnv*,jvmtiEnv*,jobject,std::string*);
  bool LoadOrdinary(JNIEnv*,jvmtiEnv*,jclass input_type,std::string*);
+ bool LoadReceiver(JNIEnv*,jvmtiEnv*,jclass input_type,std::string*);
  jobject Own(JNIEnv*,jobject);
  JavaVM*vm_=nullptr;std::vector<jobject>roots_;
  jobject input_=nullptr,storage_=nullptr;jclass anchor_=nullptr,storage_class_=nullptr;
@@ -49,5 +58,8 @@ class CalibrationInputs final {
  std::vector<method_identity::Oracle>methods_;
  std::vector<std::string>field_names_,field_types_;
  std::vector<modern_field_metadata::FieldOracle>fields_;
+ jobject receiver_object_=nullptr;
+ std::array<ReceiverSample,10>receiver_samples_{};
+ std::vector<unsigned char>receiver_dex_;
 };
 }

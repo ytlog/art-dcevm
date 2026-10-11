@@ -3,8 +3,11 @@
 #include "platform/common/ordinary_source_fixture.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/body_only_policy.h"
+#include "platform/common/native_receiver_public_sample.h"
+#include "platform/common/native_call_graph_incoming.h"
 #include <map>
 #include <cstdlib>
+#include <cstring>
 namespace artdcevm::production_bootstrap {
 namespace {
 constexpr char kAnchor[]="com/github/ytlog/artdcevm/internal/EvolutionCalibration";
@@ -130,7 +133,8 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   fields_.push_back({root,field_names_.back().c_str(),field_types_.back().c_str(),uint32_t(flags),found->second->dex_index});expected_fields.erase(found);
  }
  if(!expected_fields.empty()||env->ExceptionCheck())return false;
- if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error))return false;
+ if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error)||
+    !LoadReceiver(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
  for(const auto&method:methods_schema_.methods)
   if(method.name=="bootstrapNativeMarker"&&method.descriptor=="()V"&&
@@ -139,6 +143,85 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
  JNINativeMethod marker{const_cast<char*>("bootstrapNativeMarker"),const_cast<char*>("()V"),NativeMarker()};
  if(env->RegisterNatives(anchor_,&marker,1)!=JNI_OK||env->ExceptionCheck())return Fail(error,"calibration-input-native-marker-registration-failed");
  return true;
+}
+bool CalibrationInputs::LoadReceiver(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
+ std::string ignored;if(!error)error=&ignored;
+ if(receiver_guard::PreparePublicBytecodes(ti)!=JVMTI_ERROR_NONE)
+  return Fail(error,"calibration-input-receiver-public-bytecodes-capability-unavailable");
+ auto dex_id=env->GetFieldID(type,"receiverDex","[B");
+ if(!dex_id||env->ExceptionCheck())return false;
+ Local bytes{env,env->GetObjectField(input_,dex_id)};
+ if(!bytes.value||env->ExceptionCheck())return false;
+ const auto length=env->GetArrayLength(static_cast<jbyteArray>(bytes.value));
+ if(length<=0||length>64*1024*1024||env->ExceptionCheck())
+  return Fail(error,"calibration-input-receiver-DEX-size-refused");
+ receiver_dex_.resize(size_t(length));
+ env->GetByteArrayRegion(static_cast<jbyteArray>(bytes.value),0,length,reinterpret_cast<jbyte*>(receiver_dex_.data()));
+ if(env->ExceptionCheck())return false;
+ receiver_guard::PublicInputs input(env);
+ if(!input.Read(input_))return Fail(error,"calibration-input-receiver-public-samples-unavailable");
+ receiver_object_=Own(env,input.object);if(!receiver_object_)return false;
+ Local receiver_class{env,env->GetObjectClass(receiver_object_)};
+ jobject loader=nullptr;
+ if(!receiver_class.value||env->ExceptionCheck()||
+    ti->GetClassLoader(static_cast<jclass>(receiver_class.value),&loader)!=JVMTI_ERROR_NONE){
+  if(loader)env->DeleteLocalRef(loader);return false;
+ }
+ Local receiver_loader{env,loader};
+ if(!loader||env->ExceptionCheck())return Fail(error,"calibration-input-receiver-isolated-loader-unavailable");
+ // Public names/modifiers and bytecodes must match this separately copied
+ // fixture DEX, not an ArtMethod, DexCache or guessed source declaration.
+ const auto capture=[&](jobject mirror,jmethodID id,uint32_t flags,method_identity::Oracle*out,
+                        jclass*klass,std::vector<unsigned char>*instructions)->bool{
+  jclass declaring=nullptr;
+  if(ti->GetMethodDeclaringClass(id,&declaring)!=JVMTI_ERROR_NONE||!declaring){
+   if(declaring)env->DeleteLocalRef(declaring);return false;
+  }
+  Local owner{env,declaring};jobject member_loader=nullptr;
+  if(ti->GetClassLoader(declaring,&member_loader)!=JVMTI_ERROR_NONE){
+   if(member_loader)env->DeleteLocalRef(member_loader);return false;
+  }
+  Local owned_loader{env,member_loader};
+  if(env->ExceptionCheck()||!member_loader||!env->IsSameObject(loader,member_loader)||env->ExceptionCheck())
+   return Fail(error,"calibration-input-receiver-member-loader-differs");
+  Text signature{ti},name{ti},descriptor{ti};
+  if(ti->GetClassSignature(declaring,&signature.value,nullptr)!=JVMTI_ERROR_NONE||!signature.value||
+     ti->GetMethodName(id,&name.value,&descriptor.value,nullptr)!=JVMTI_ERROR_NONE||!name.value||!descriptor.value)
+   return false;
+  native_call_graph_incoming::Inventory inventory;
+  if(!inventory.Capture(receiver_dex_,signature.value,error))return false;
+  evolution::ClassSchema live;
+  if(!inventory.Schema()||live_schema::ReadLiveSchema(ti,env,declaring,&live,error)!=JVMTI_ERROR_NONE||
+     env->ExceptionCheck()||!body_only::SameDeclarations(live,*inventory.Schema()))
+   return Fail(error,"calibration-input-receiver-complete-live-declarations-differ-from-DEX");
+  const evolution::Member*found=nullptr;
+  for(const auto&method:inventory.Methods())if(method.declaration.name==name.value&&method.declaration.descriptor==descriptor.value){
+   if(found)return Fail(error,"calibration-input-receiver-method-DEX-identity-ambiguous");
+   found=&method.declaration;
+  }
+  if(!found||(found->access&0xffffu)!=(flags&0xffffu))
+   return Fail(error,"calibration-input-receiver-method-declaration-differs-from-DEX");
+  if(instructions){
+   const auto*code=inventory.InstructionBytes(found->dex_index);
+   if(!code||code->empty())return Fail(error,"calibration-input-receiver-caller-DEX-body-unavailable");
+   *instructions=*code;
+  }
+  auto root=Own(env,mirror);if(!root)return false;
+  *klass=static_cast<jclass>(Own(env,declaring));if(!*klass)return false;
+  *out={root,found->dex_index,flags};return true;
+ };
+ for(size_t n=0;n<receiver_samples_.size();++n){
+  receiver_guard::PublicSample sample(env,ti);
+  if(!sample.Read(input.callers,input.targets,jint(n)))
+   return Fail(error,"calibration-input-receiver-public-method-sample-unavailable");
+  auto&owned=receiver_samples_[n];
+  if(!capture(sample.caller,sample.caller_id,uint32_t(sample.caller_flags),&owned.caller,&owned.caller_class,&owned.instructions)||
+     !capture(sample.target,sample.target_id,uint32_t(sample.target_flags),&owned.target,&owned.target_class,nullptr))return false;
+  if(size_t(sample.bytes)!=owned.instructions.size()||
+     std::memcmp(sample.public_bytes,owned.instructions.data(),owned.instructions.size()))
+   return Fail(error,"calibration-input-receiver-public-bytecodes-differ-from-DEX");
+ }
+ return !env->ExceptionCheck();
 }
 bool CalibrationInputs::LoadOrdinary(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
  auto class_id=env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;");
