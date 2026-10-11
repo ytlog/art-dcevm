@@ -17,6 +17,7 @@ namespace artdcevm::bounded_managed_roots {class Store;}
 namespace artdcevm::native_source_compilation {class Service;}
 namespace artdcevm::runtime_services {struct Snapshot;}
 namespace artdcevm::retirement {struct Owners;}
+namespace artdcevm::source_handle_roots {class Service;}
 namespace artdcevm::native_call_graph_execution {class Execution;}
 namespace artdcevm::modern_field_metadata {class FieldMetadata;struct ReadContext;}
 namespace artdcevm::native_interpretation_registry {
@@ -51,14 +52,15 @@ class Registry final {
  // BindQuery must first complete at the actual ordinary Native JNI boundary;
  // its independently observed owner is shared with both temporary journals.
  // Synchronous original Runnable bootstrap over two independently rooted
- // managed fixture methods in one Class. The caller retains their Store and source
- // calibration throughout. Once any hook is installed this Registry must be
- // process-owned even if a later step refuses initialization.
+ // managed fixture methods in one independently owned Class. Initialization
+ // owns the retaining Store/HandleScope and exposes it only in its actual stop.
+ // The caller retains the public Class/mirror globals and source calibration.
+ // Once any hook is installed this Registry must be process-owned even if a
+ // later step refuses initialization.
  bool Initialize(HookEngine&,const runnable_jni::Context&,
      const method_identity::Calibration&,const modern_field_metadata::FieldMetadata&,
-     const bounded_managed_roots::Store&,
-     const native_selective_interpretation::Method&positive,
-     const native_selective_interpretation::Method&negative,
+     const source_handle_roots::Service&,jclass owned_fixture,
+     const method_identity::Oracle&positive,const method_identity::Oracle&negative,
      const runtime_services::Snapshot&,native_source_compilation::Service&,
      const native_source_stop::Service&,size_t self_extent,const retirement::Owners&,std::string*);
  // Ordinary preparation binds the independently observed runtime owner. Hook

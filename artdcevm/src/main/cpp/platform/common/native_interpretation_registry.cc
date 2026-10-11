@@ -12,6 +12,7 @@
 #include "platform/common/modern_retirement_cleanup.h"
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/native_source_compilation.h"
+#include "platform/common/source_handle_roots.h"
 
 namespace artdcevm::native_interpretation_registry {
 namespace {
@@ -159,18 +160,94 @@ Registry::~Registry(){if(pending_||query_token_||compilation_token_||code_token_
  std::any_of(update_tokens_.begin(),update_tokens_.end(),[](void*token){return token!=nullptr;})||
  retirement::HasInterpretationCleanup(*this))std::abort();}
 Registry::Reservation::~Reservation(){if(!committed_)owner_.Cancel(*this);}
+namespace {
+// Scoped bootstrap roots, distinct from durable opaque registry membership.
+// This class is private to the one initializer; callers cannot provide a
+// stopped reader or a Boolean in place of its actual Session.
+class FixtureRoots final:private source_handle_roots::StoppedReader {
+ public:
+ FixtureRoots(const runnable_jni::Context&context,const source_handle_roots::Service&service,
+              const modern_field_metadata::FieldMetadata&metadata)
+  :context_(context),service_(service),metadata_(metadata),pool_(service){
+  roots_.Bind({this,nullptr,Oracle,Decode,Element});
+ }
+ ~FixtureRoots(){if(stop_)std::abort();roots_.Clear(context_.env);}
+ FixtureRoots(const FixtureRoots&)=delete;FixtureRoots&operator=(const FixtureRoots&)=delete;
+ bool Prepare(jclass fixture,bounded_managed_roots::Slot*out,std::string*error){
+  if(!out||!service_.Calibrated()||!pool_.ReserveAnchor(error))return false;
+  std::vector<bounded_managed_roots::Slot>slots;
+  if(!roots_.StageMany(context_,{fixture},&slots,error)||slots.size()!=1||
+     !roots_.RetainArrays({this,Retain,Read,Release,Staging}))return false;
+  *out=slots[0];return true;
+ }
+ const bounded_managed_roots::Store&Store()const noexcept{return roots_;}
+ class Window final {
+  public:
+  Window(FixtureRoots&owner,const native_source_stop::Session&stop):owner_(owner){
+   if(owner_.stop_||!stop.IsStopped(owner_.context_.self))std::abort();owner_.stop_=&stop;
+  }
+  ~Window(){owner_.stop_=nullptr;}
+  Window(const Window&)=delete;Window&operator=(const Window&)=delete;
+  private:FixtureRoots&owner_;
+ };
+ private:
+ bool FinalRootWindow()const noexcept override{return stop_&&stop_->IsStopped(context_.self);}
+ bool ReadStoppedRoot(const void*slot,void**out)const noexcept override{return pool_.ReadStopped(*this,slot,out);}
+ static bool Oracle(void*raw,const runnable_jni::Context&context,jobject root,void**out){
+  auto&owner=*static_cast<FixtureRoots*>(raw);
+  return &context==&owner.context_&&runnable_jni::Bridge::BorrowOriginalScope(context)&&
+   owner.service_.BorrowOwnedStrongGlobal(context,root,out);
+ }
+ static bool Decode(void*raw,jobject root,void**out){
+  auto&owner=*static_cast<FixtureRoots*>(raw);
+  return !owner.stop_&&owner.service_.BorrowOwnedStrongGlobal(owner.context_,root,out);
+ }
+ static void*Element(void*raw,void*array,size_t index){
+  auto&owner=*static_cast<FixtureRoots*>(raw);
+  return index<size_t(bounded_managed_roots::Store::kChunkSize)?owner.metadata_.Reference(array,12+4*index):nullptr;
+ }
+ static void*Retain(void*raw,void*array){return static_cast<FixtureRoots*>(raw)->pool_.Add(array,nullptr);}
+ static bool Read(void*raw,const void*slot,void**out)noexcept{
+  auto&owner=*static_cast<FixtureRoots*>(raw);
+  return owner.stop_?owner.ReadStoppedRoot(slot,out):owner.pool_.Read(slot,out);
+ }
+ static void Release(void*,void*)noexcept{} // Pool owns all cells through teardown.
+ static bool Staging(void*raw)noexcept{
+  auto&owner=*static_cast<FixtureRoots*>(raw);return !owner.stop_&&owner.pool_.ReadyForSourceAccess();
+ }
+ const runnable_jni::Context&context_;const source_handle_roots::Service&service_;
+ const modern_field_metadata::FieldMetadata&metadata_;
+ source_handle_roots::Pool pool_;bounded_managed_roots::Store roots_;
+ const native_source_stop::Session*stop_=nullptr;
+};
+}
 bool Registry::Initialize(HookEngine&hooks,const runnable_jni::Context&context,
  const method_identity::Calibration&calibration,const modern_field_metadata::FieldMetadata&metadata,
- const bounded_managed_roots::Store&roots,const native_selective_interpretation::Method&yes,
- const native_selective_interpretation::Method&no,const runtime_services::Snapshot&runtime,
+ const source_handle_roots::Service&handles,jclass fixture,
+ const method_identity::Oracle&yes_oracle,const method_identity::Oracle&no_oracle,const runtime_services::Snapshot&runtime,
  native_source_compilation::Service&compilation,const native_source_stop::Service&source,
  size_t self_extent,const retirement::Owners&retired,std::string*error){
  const auto deny=[&](const char*why){if(error)*error=why;return false;};
  if(!context.env||!context.vm||!context.self||!self_extent||!runnable_jni::Bridge::BorrowOriginalScope(context)||
     context.env->ExceptionCheck()||!native_source_stop::Session::InspectionAvailable()||!source.Calibrated()||
-    !yes.method||!no.method||yes.method==no.method||query_token_||pending_||Count()||
+    !fixture||!context.original_leaf||!yes_oracle.strong_global_method||!no_oracle.strong_global_method||
+    !handles.Calibrated()||query_token_||pending_||Count()||
     !runtime_||!runtime_slot_||*runtime_slot_!=runtime_||!instrumentation_||!class_linker_)
   return deny("interpretation-bootstrap-needs-original-runnable-scope-and-fresh-rooted-fixture");
+ if(context.env->GetObjectRefType(fixture)!=JNIGlobalRefType||
+    context.env->GetObjectRefType(yes_oracle.strong_global_method)!=JNIGlobalRefType||
+    context.env->GetObjectRefType(no_oracle.strong_global_method)!=JNIGlobalRefType||context.env->ExceptionCheck())
+  return deny("interpretation-bootstrap-fixture-or-mirrors-are-not-owned-globals");
+ FixtureRoots fixture_roots(context,handles,metadata);bounded_managed_roots::Slot class_root;
+ if(!fixture_roots.Prepare(fixture,&class_root,error))return false;
+ const abi::common::RunnableJniScope original{context.self,context.env,context.vm};
+ native_selective_interpretation::Method yes{context.original_leaf(original,yes_oracle.strong_global_method),
+  class_root,class_root,yes_oracle.dex_method_index,yes_oracle.java_modifiers};
+ native_selective_interpretation::Method no{context.original_leaf(original,no_oracle.strong_global_method),
+  class_root,class_root,no_oracle.dex_method_index,no_oracle.java_modifiers};
+ if(!yes.method||!no.method||yes.method==no.method||context.env->ExceptionCheck())
+  return deny("interpretation-bootstrap-original-independent-methods-unavailable");
+ const auto&roots=fixture_roots.Store();
  native_selective_interpretation::Service positive,negative;
  retirement::CleanupBinding cleanup;
  // BindQuery independently calibrated these receivers at the ordinary
@@ -196,17 +273,18 @@ bool Registry::Initialize(HookEngine&hooks,const runnable_jni::Context&context,
  if(!mappings.Ready())return deny("interpretation-bootstrap-fresh-mappings-unavailable");
  const modern_field_metadata::ReadContext read{&mappings,method_identity::ScopedReadableMappings::ReadExtent};
  struct Request {
-  Registry&registry;HookEngine&hooks;void*self;
+  Registry&registry;HookEngine&hooks;void*self;FixtureRoots&roots;
   native_source_compilation::Service&compilation;
   const retirement::CleanupBinding&cleanup;const retirement::Owners&retired;
   const modern_field_metadata::FieldMetadata&metadata;
   native_selective_interpretation::Service&positive;const native_selective_interpretation::Service&negative;
   const modern_field_metadata::ReadContext&read;
   std::string error;bool completed=false;
- }request{*this,hooks,context.self,compilation,cleanup,retired,metadata,positive,negative,read,{},false};
+ }request{*this,hooks,context.self,fixture_roots,compilation,cleanup,retired,metadata,positive,negative,read,{},false};
  native_source_stop::Session stop(source);
  const bool inspected=stop.Inspect(context.self,self_extent,&request,[](void*raw,native_source_stop::Session&actual)noexcept{
   auto&r=*static_cast<Request*>(raw);
+  FixtureRoots::Window window(r.roots,actual);
   try{
    const char*failure=nullptr;
    if(!r.registry.InstallQuery(r.hooks,actual,r.self,&r.error))return false;

@@ -39,7 +39,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -236,6 +236,49 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  // no borrowed movable Class, JNI Context or Thread crosses this stop.
  const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
+}
+struct SourceCalibration::Interpretation {SourceCalibration&owner;std::string*error;};
+bool SourceCalibration::PrepareInterpretation(JNIEnv*env,std::string*error){
+ if(interpretation_ready_)return true;
+ if(interpretation_attempted_)return Fail(error,"source-interpretation-prior-bootstrap-refused-with-process-hooks-retained");
+ if(!interpretation_bound_||!membership_.matched||!schema_.Ready()||!stop_.Calibrated()||
+    !env||env->ExceptionCheck()||!BorrowFinalDexRecords(static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm)))
+  return Fail(error,"source-interpretation-bootstrap-dependencies-or-final-DEX-lease-unavailable");
+ Interpretation request{*this,error};
+ // The callback is the only path constructing the temporary methods/root
+ // cohort. A failed attempt retains the same hook/registry owners; never
+ // construct another Registry or repeat partially installed initialization.
+ const auto result=runnable_executor::WithOriginalScope(env,metadata_->Inputs().Anchor(),ObserveInterpretation,&request);
+ if(result!=runnable_jni::Result::kSuccess||env->ExceptionCheck()||!interpretation_ready_)
+  return error&&!error->empty()?false:Fail(error,"source-interpretation-original-bootstrap-did-not-complete");
+ return true;
+}
+bool SourceCalibration::ObserveInterpretation(const runnable_jni::Context&context,void*raw){
+ auto&request=*static_cast<Interpretation*>(raw);auto&owner=request.owner;auto*error=request.error;
+ // This is the sole preparation callback; no Context copy escapes.
+ if(owner.interpretation_attempted_||!runnable_jni::Bridge::BorrowOriginalScope(context)||
+    context.vm!=owner.metadata_->Runtime().receivers.java_vm||
+    !redefinition_gate::Owned(static_cast<JavaVM*>(context.vm)))
+  return Fail(error,"source-interpretation-exact-original-context-unavailable");
+ const auto&inputs=owner.metadata_->Inputs();
+ const auto oracle=[&](const char*name)->const method_identity::Oracle*{
+  const method_identity::Oracle*result=nullptr;
+  for(const auto&member:inputs.MethodsSchema().methods)if(member.name==name&&member.descriptor=="()I"){
+   for(const auto&candidate:inputs.Methods())if(candidate.dex_method_index==member.dex_index){
+    if(result||(candidate.java_modifiers&0x500u))return nullptr;result=&candidate;
+   }
+  }
+  return result;
+ };
+ const auto*positive=oracle("compute");const auto*negative=oracle("staticInvokeCalibration");
+ size_t extent=0;
+ if(!positive||!negative||positive==negative||!method_identity::ReadableMappingExtent(context.self,&extent))
+  return Fail(error,"source-interpretation-independent-managed-method-oracles-unavailable");
+ auto retired=owner.Retired();owner.interpretation_attempted_=true;
+ owner.interpretation_ready_=owner.interpretation_.Initialize(owner.hooks_,context,
+  owner.metadata_->Methods(),owner.metadata_->Fields(),owner.schema_.Roots(),inputs.Anchor(),*positive,*negative,
+  owner.metadata_->Runtime(),owner.compilation_,owner.stop_,extent,retired,error);
+ return owner.interpretation_ready_;
 }
 void SourceCalibration::Begin(void*driver,const runnable_jni::Context&context,void*raw)noexcept{
  auto&round=*static_cast<Round*>(raw);

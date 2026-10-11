@@ -38,6 +38,9 @@ class SourceCalibration final {
  bool PrepareCommitReaders(JNIEnv*,std::string*);
  bool PrepareTypedHeap(JNIEnv*,std::string*);
  bool PrepareRetirement(JNIEnv*,jvmtiEnv*,std::string*);
+ bool PrepareInterpretation(JNIEnv*,std::string*);
+ struct Interpretation;
+ static bool ObserveInterpretation(const runnable_jni::Context&,void*);
  struct Allocator;
  static bool CollectAllocator(const runnable_jni::Context&,void*);
  static bool ProveAllocator(const exclusive_owned_roots::Context&,void*);
@@ -63,7 +66,7 @@ class SourceCalibration final {
  retirement::RetiredFieldRegistry retired_fields_;
  retirement::RetiredMethodRegistry retired_methods_;
  native_interpretation_registry::Registry interpretation_;
- bool interpretation_bound_=false;
+ bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;
  bool exclusive_bound_=false;
  bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false;
  bool bound_=false,installed_=false,poisoned_=false;
