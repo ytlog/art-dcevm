@@ -39,7 +39,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -236,6 +236,12 @@ bool SourceCalibration::PrepareRetirement(JNIEnv*env,jvmtiEnv*ti,std::string*err
  // no borrowed movable Class, JNI Context or Thread crosses this stop.
  const jobject roots[]{global.loader,inputs.Anchor(),inputs.StorageClass(),global.boot,global.method};
  return exclusive_.With(env,roots,5,ProveAllocator,&request,error)&&membership_.matched;
+}
+bool SourceCalibration::PrepareStack(JNIEnv*env,std::string*error){
+ stack_visitor_service::Declaration observed;
+ if(!stack_visitor_calibration::Calibrate(hooks_,env,metadata_->Inputs().Anchor(),metadata_->Methods(),&observed,error))return false;
+ if(stack_calibrated_&&observed!=stack_declaration_)return Fail(error,"source-stack-constructor-declaration-changed");
+ stack_declaration_=observed;stack_calibrated_=true;return true;
 }
 void*SourceCalibration::ReferenceCurrent(void*raw){
  auto&owner=*static_cast<SourceCalibration*>(raw);

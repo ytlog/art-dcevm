@@ -59,10 +59,11 @@ inline constexpr size_t kThreadOffset=offsetof(Visitor13,thread);
 inline constexpr size_t kShadowOffset=offsetof(Visitor13,shadow_frame);
 inline constexpr size_t kQuickOffset=offsetof(Visitor13,quick_frame);
 inline constexpr size_t kQuickPcOffset=offsetof(Visitor13,pc);
-// Diagnostic only: compare the constructor's independently supplied Context at
-// each complete fixed source declaration. This never selects a new geometry or
-// permits walking a failed candidate; it identifies which declaration needs
-// source investigation without scanning or inferring an offset.
+// Constructor storage evidence only: compare an independently supplied native
+// Context at the four fixed source positions. A unique match can identify the
+// constructor's storage extent when joined to its exact named Walk signature
+// and independent ArtMethod model. It attests no decoded CodeInfo fields,
+// frame geometry or execution permission, and never walks a failed candidate.
 inline uint32_t ConstructorContextEchoMask(const void* storage,size_t extent,const void* expected) {
   if(!storage || !expected)return 0;
   const size_t offsets[]={offsetof(Visitor11,context),offsetof(Visitor12,context),
