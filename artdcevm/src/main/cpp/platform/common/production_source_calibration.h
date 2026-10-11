@@ -43,6 +43,8 @@ class SourceCalibration final {
  // its own stop and separately discharge native/compiled execution obligations.
  const native_call_graph_stack::Service*StackService()const noexcept{return stack_stream_.completed?&stack_service_:nullptr;}
  const native_exception_upcall_boundary::Service*UpcallService()const noexcept{return stack_stream_.completed?&upcall_service_:nullptr;}
+ const native_exception_entry_ownership::Proof*NativeEntries()const noexcept{return stack_stream_.completed?native_entries_.get():nullptr;}
+ const native_jni_exception_calibration::Service*JniReturnCalibration()const noexcept{return stack_stream_.completed?&jni_returns_:nullptr;}
  const StackStreamObservation&StackObservation()const noexcept{return stack_stream_;}
  // Constructor storage only; invocation events remain independently proven.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
@@ -69,6 +71,7 @@ class SourceCalibration final {
  bool PrepareFieldMethodHandles(JNIEnv*,const std::array<jobject,2>&,std::string*);
  struct FieldHandles;
  static bool ObserveFieldHandles(const runnable_jni::Context&,void*);
+ bool PrepareNativeEntries(JNIEnv*,std::string*);
  bool PrepareInterpretation(JNIEnv*,std::string*);
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
@@ -119,6 +122,8 @@ class SourceCalibration final {
  bool stack_calibrated_=false;
  native_call_graph_stack::Service stack_service_;
  native_exception_upcall_boundary::Service upcall_service_;
+ std::unique_ptr<native_exception_entry_ownership::Service>native_entries_;
+ native_jni_exception_calibration::Service jni_returns_;
  StackStreamObservation stack_stream_{};bool stack_service_bound_=false;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;

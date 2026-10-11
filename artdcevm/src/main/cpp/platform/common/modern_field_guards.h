@@ -17,6 +17,7 @@ bool InstallFieldEntryGuards(HookEngine&,JNIEnv*,jobject anchor_strong_global,
 // original invocations proven through PrepareMethodHandleFieldGuards.
 bool InstallMethodHandleFieldGuards(HookEngine&,std::string* error);
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry&);
+bool FieldEntryGuardsOwn(const RetiredFieldRegistry&,const void* observed_jni_id_manager);
 bool RejectRetiredField(void* field,void* self,void* result);
 // Called only by the sole outer MethodHandle owner after its independent kind
 // and target calibration. Native current flags decide cached setter permission.

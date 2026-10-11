@@ -146,6 +146,9 @@ inline std::unique_ptr<native_exception_entry_ownership::Service> Prepare(
   assert(!native_exception_entry_ownership::Service::Prepare(foreign_methods,fields,manager));
   assert(!native_exception_entry_ownership::Service::Prepare(methods,foreign_fields,manager));
   int foreign_manager;
+  assert(retirement::FieldEntryGuardsOwn(fields,manager));
+  assert(!retirement::FieldEntryGuardsOwn(fields,&foreign_manager));
+  assert(!retirement::FieldEntryGuardsOwn(fields,nullptr));
   assert(!native_exception_entry_ownership::Service::Prepare(methods,fields,&foreign_manager));
   assert(!native_exception_entry_ownership::Service::Prepare(methods,fields,nullptr));
   return proof;

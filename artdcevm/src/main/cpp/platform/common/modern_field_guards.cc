@@ -372,6 +372,9 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
   return stopped&&request.completed&&FieldEntryGuardsOwn(registry)&&!env->ExceptionCheck();
 }
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry){return installed&&state.registry==&registry;}
+bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry,const void*manager){
+ return manager&&FieldEntryGuardsOwn(registry)&&state.manager==manager;
+}
 bool RejectRetiredField(void* field,void* self,void* result){return GuardNativeField(self,field,result);}
 bool RejectFinalFieldSetter(void* field,void* self,void* result){
   const final_field_guard::Boundary boundary{&state,ReadFinalFlags,RaiseFinal};

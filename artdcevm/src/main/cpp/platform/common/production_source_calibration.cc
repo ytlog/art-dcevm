@@ -46,7 +46,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error)||!process->PrepareRetirement(env,ti,error)||!process->PrepareMethodEntries(env,error)||!process->PrepareFieldEntries(env,error)||!process->PrepareNativeEntries(env,error)||!process->PrepareInterpretation(env,error)||!process->PrepareReferences(env,error)||!process->PrepareStack(env,error)||!process->PrepareStackStream(env,error)||!process->PrepareReceiverClasses(env,error)||!process->PrepareReceiverCode(env,error)||!process->PrepareReceiverEvents(env,error)||!CalibrateReceiverInvocations(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,process->references_,*process->receiver_calibration_,error))return nullptr;
   if(!process->final_writer_calibrated_){
    if(!CalibrateFinalWrites(hooks,env,*process->metadata_,process->schema_.Roots(),process->stop_,
        process->final_writer_->Writer(),error))return nullptr;
@@ -501,8 +501,25 @@ bool SourceCalibration::PrepareReceiverCode(JNIEnv*env,std::string*error){
  if(!receiver_code_calibrated_&&error&&error->empty())*error="source-receiver-code-original-samples-did-not-complete";
  return receiver_code_calibrated_;
 }
+bool SourceCalibration::PrepareNativeEntries(JNIEnv*env,std::string*error){
+ const auto&runtime=metadata_->Runtime();JavaVM*vm=nullptr;
+ if(!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||vm!=runtime.receivers.java_vm||
+    !redefinition_gate::Owned(vm)||native_source_class_loading::Run::Current()||!membership_.matched||
+    !retirement::MethodEntryGuardsOwn(retired_methods_,runtime.receivers.jni_id_manager)||
+    !retirement::FieldEntryGuardsOwn(retired_fields_,runtime.receivers.jni_id_manager))
+  return Fail(error,"source-native-entry-ordinary-owner-or-installed-contract-unavailable");
+ if(!native_entries_){
+  native_entries_=native_exception_entry_ownership::Service::Prepare(
+    retired_methods_,retired_fields_,runtime.receivers.jni_id_manager);
+  if(!native_entries_)return Fail(error,"source-native-entry-original-guard-owners-differ");
+ }
+ // Ordinary original Java catch consumes its actual pending Throwable. This
+ // never clears/rethrows an exception and grants no native stack escape.
+ return jni_returns_.Calibrate(env,error)&&jni_returns_.MatchesVm(vm)&&!env->ExceptionCheck();
+}
 bool SourceCalibration::PrepareStackStream(JNIEnv*env,std::string*error){
- if(!stack_calibrated_||!references_.Ready()||!schema_.Ready())
+ if(!stack_calibrated_||!references_.Ready()||!schema_.Ready()||!native_entries_||
+    !jni_returns_.MatchesVm(static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm)))
   return Fail(error,"source-stack-stream-constructor-or-root-dependencies-unavailable");
  if(!stack_service_bound_){
   if(!stack_service_.Bind(hooks_,stack_declaration_,error))return false;
@@ -510,7 +527,7 @@ bool SourceCalibration::PrepareStackStream(JNIEnv*env,std::string*error){
  }
  if(stack_stream_.completed)return true;
  if(!upcall_service_.Prepare())return Fail(error,"source-stack-upcall-named-invoke-extents-unavailable");
- return ObserveStackStream(hooks_,env,*metadata_,schema_.Roots(),stop_,cache_,roots_,stack_service_,upcall_service_,&stack_stream_,error);
+ return ObserveStackStream(hooks_,env,*metadata_,schema_.Roots(),stop_,cache_,roots_,stack_service_,upcall_service_,*native_entries_,jni_returns_,&stack_stream_,error);
 }
 bool SourceCalibration::PrepareStack(JNIEnv*env,std::string*error){
  stack_visitor_service::Declaration observed;

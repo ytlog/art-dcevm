@@ -11,7 +11,8 @@ struct Request {
  const native_source_stop::Service&stop;const native_cache::Service&cache;
  const native_typed_heap_walk::RootProvenance&roots;const native_call_graph_stack::Service&stack;
  native_selective_interpretation::Service&selection;
- const native_exception_upcall_boundary::Service&upcall;StackStreamObservation observation{};
+ const native_exception_upcall_boundary::Service&upcall;
+ const native_exception_entry_ownership::Proof&entries;StackStreamObservation observation{};
  std::string*error;
 };
 bool Observe(const runnable_jni::Context&actual,void*raw){
@@ -35,6 +36,7 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
  const bool inspected=source_fixture_interpretation::Inspect(r.stop,actual,roots,&window,
   [](void*raw,native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)noexcept{
    auto&w=*static_cast<Window*>(raw);auto&r=w.request;
+   if(!r.entries.ValidateNativeEntries(stop,w.self))return false;
    const auto frames=r.stack.ScanForRefund(stop,w.self,r.cache,w.prepared,read);
    r.observation.frames=frames;
    if(!frames.walk_complete||!frames.registered_threads||frames.registered_threads!=frames.visited_threads||
@@ -57,8 +59,11 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
    if(!captured.complete)return false;
    const auto upcall=r.upcall.Observe(w.chain,r.stack,w.prepared,stop,w.self,read);
    r.observation.upcall=upcall;
-   if(!upcall.complete)return false;
-   r.observation={frames,roots,upcall,captured.fragments,upcall.transitions,true};return true;
+   if(!upcall.complete||!r.entries.ValidateNativeEntries(stop,w.self))return false;
+   r.observation.managed_fragments=captured.fragments;
+   r.observation.current_thread_transitions=upcall.transitions;
+   r.observation.native_entries_owned=true;r.observation.jni_return_calibrated=true;
+   r.observation.completed=true;return true;
   },r.error);
  return inspected&&r.observation.completed&&runnable_jni::Bridge::BorrowOriginalScope(actual)&&
      !actual.env->ExceptionCheck();
@@ -68,15 +73,16 @@ bool ObserveStackStream(HookEngine&hooks,JNIEnv*env,const MetadataCalibration&me
  const source_handle_roots::Service&handles,const native_source_stop::Service&stop,
  const native_cache::Service&cache,const native_typed_heap_walk::RootProvenance&roots,
  const native_call_graph_stack::Service&stack,const native_exception_upcall_boundary::Service&upcall,
+ const native_exception_entry_ownership::Proof&entries,const native_jni_exception_calibration::Service&jni_returns,
  StackStreamObservation*out,std::string*error){
  if(out)*out={};JavaVM*vm=nullptr;
  if(!out||!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||vm!=metadata.Runtime().receivers.java_vm||
     !redefinition_gate::Owned(vm)||!handles.Calibrated()||!stop.Calibrated()||
-    !cache.PreparedForCurrentThread()||!roots.LocksCalibrated()||!upcall.Prepared())
+    !cache.PreparedForCurrentThread()||!roots.LocksCalibrated()||!upcall.Prepared()||!jni_returns.MatchesVm(vm))
   return Fail(error,"source-stack-stream-ordinary-owner-or-source-dependencies-unavailable");
  native_selective_interpretation::Service selection;
  if(!selection.CalibrateOwner(hooks,env,error))return false;
- Request request{hooks,metadata,handles,stop,cache,roots,stack,selection,upcall,{},error};
+ Request request{hooks,metadata,handles,stop,cache,roots,stack,selection,upcall,entries,{},error};
  const auto result=runnable_executor::WithOriginalScope(env,metadata.Inputs().Anchor(),Observe,&request);
  if(selection.PendingRefund())std::abort();
  if(result!=runnable_jni::Result::kSuccess||!request.observation.completed||env->ExceptionCheck())
