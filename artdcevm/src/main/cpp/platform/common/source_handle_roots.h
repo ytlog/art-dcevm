@@ -118,6 +118,18 @@ class Pool final {
  public:
   explicit Pool(const Service& service):service_(service){}
   bool UsesService(const Service& service)const noexcept{return &service_==&service;}
+  // Establish the owned anchor before original Run pushes temporary scopes.
+  // Later source chunks link below this anchor and cannot save a previous link
+  // into a temporary scope that original Run will destroy before our teardown.
+  bool ReserveAnchor(std::string*error){
+    if(!ReadyForSourceAccess())return false;
+    if(!scopes_.empty())return true;
+    auto scope=service_.CreateScope(kChunk,error);if(!scope)return false;
+    scopes_.push_back(std::move(scope));used_=0;
+    try{ranges_.emplace(uintptr_t(scopes_.back()->Slot(0)),Range{scopes_.back().get(),0});}
+    catch(...){scopes_.pop_back();used_=kChunk;throw;}
+    return true;
+  }
   ~Pool(){while(!scopes_.empty())scopes_.pop_back();}
   bool ReadyForSourceAccess()const{return service_.ReadyForSourceAccess()&&(scopes_.empty()||scopes_.front()->ReadyForSourceAccess());}
   Pool(const Pool&)=delete;Pool& operator=(const Pool&)=delete;

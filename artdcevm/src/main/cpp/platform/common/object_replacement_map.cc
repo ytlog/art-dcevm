@@ -18,6 +18,7 @@ ObjectReplacementMap::ObjectReplacementMap(const std::vector<std::pair<void*,voi
   for(const auto& entry:entries)if(seen.insert(entry.first).second){
     entries_.push_back(entry);nodes_.push_back({{nullptr},HashReplacementPointer(entry.first),entry.first,entry.second});
   }
+  verification_keys_.resize(nodes_.size());
   if(nodes_.empty()){map_.max_load_factor=1.0f;return;}
   if(!count){count=2;while(count<nodes_.size()){if(count>std::numeric_limits<size_t>::max()/2)throw std::length_error("Object replacement map capacity");count*=2;}}
   // Power-of-two counts let our builder use the exact __constrain_hash reduction.
@@ -56,6 +57,14 @@ void ObjectReplacementMap::Rebuild()noexcept{
   object_map_abi::NodeBase* previous=&map_.sentinel;
   for(auto& node:nodes_){size_t bucket=node.hash&mask;if(!buckets_[bucket])buckets_[bucket]=previous;previous->next=&node;previous=&node;}
 }
+bool ObjectReplacementMap::Maps(void*source,void*destination)const noexcept{
+ if(!source||!destination||buckets_.empty())return false;
+ const size_t mask=buckets_.size()-1,bucket=HashReplacementPointer(source)&mask;
+ auto current=std::lower_bound(nodes_.begin(),nodes_.end(),bucket,[mask](const auto&node,size_t value){return (node.hash&mask)<value;});
+ for(;current!=nodes_.end()&&(current->hash&mask)==bucket;++current)
+  if(current->key==source)return current->value==destination;
+ return false;
+}
 bool VerifyObjectReplacementMap(const ObjectReplacementMap& map,std::string* error) {
   const auto& view=*static_cast<const object_map_abi::Map*>(map.BorrowedMap());
   auto fail=[&](const char* message){if(error)*error=message;return false;};
@@ -68,27 +77,32 @@ bool VerifyObjectReplacementMap(const ObjectReplacementMap& map,std::string* err
   }
   if(view.buckets!=map.buckets_.data() || !view.buckets || view.bucket_count<2 || (view.bucket_count&(view.bucket_count-1)))
     return fail("Object replacement map bucket storage is invalid");
-  std::vector<const object_map_abi::NodeBase*> predecessors(view.bucket_count,nullptr);
-  std::unordered_set<void*> keys;
+  if(map.verification_keys_.size()!=map.Size())return fail("Object replacement verification storage changed");
   const object_map_abi::NodeBase* previous=&view.sentinel;
   const object_map_abi::NodeBase* next=view.sentinel.next;
-  size_t last_bucket=0;
+  size_t last_bucket=0,checked_bucket=0;
   for(size_t i=0;i<map.Size();++i) {
-    // Validate membership before dereferencing a chain pointer. The owned node
-    // vector is in bucket order and must be visited exactly once in full.
     const auto* node=map.Nodes()+i;
-    if(next!=node) return fail("Object replacement map chain is inconsistent");
-    if(node->hash!=HashReplacementPointer(node->key) || !keys.insert(node->key).second)
-      return fail("Object replacement map contains invalid hashes or duplicate keys");
+    // Never dereference an unowned chain address.
+    if(next!=node)return fail("Object replacement map chain is inconsistent");
+    if(node->hash!=HashReplacementPointer(node->key))return fail("Object replacement map contains an invalid hash");
+    map.verification_keys_[i]=reinterpret_cast<uintptr_t>(node->key);
     const size_t bucket=node->hash&(view.bucket_count-1);
-    if(i && bucket<last_bucket) return fail("Object replacement map bucket order is inconsistent");
-    if(!predecessors[bucket]) predecessors[bucket]=previous;
+    if(i&&bucket<last_bucket)return fail("Object replacement map bucket order is inconsistent");
+    if(!i||bucket!=last_bucket){
+      while(checked_bucket<bucket)if(view.buckets[checked_bucket++])
+        return fail("Object replacement map empty bucket has a predecessor");
+      if(view.buckets[bucket]!=previous)return fail("Object replacement map bucket predecessor is inconsistent");
+      checked_bucket=bucket+1;
+    }
     previous=node;next=node->next;last_bucket=bucket;
   }
-  if(next) return fail("Object replacement map chain exceeds owned storage");
-  for(size_t bucket=0;bucket<view.bucket_count;++bucket)
-    if(view.buckets[bucket]!=predecessors[bucket])
-      return fail("Object replacement map bucket predecessor is inconsistent");
+  if(next)return fail("Object replacement map chain exceeds owned storage");
+  while(checked_bucket<view.bucket_count)if(view.buckets[checked_bucket++])
+    return fail("Object replacement map empty bucket has a predecessor");
+  std::sort(map.verification_keys_.begin(),map.verification_keys_.end());
+  for(size_t i=1;i<map.verification_keys_.size();++i)
+    if(map.verification_keys_[i]==map.verification_keys_[i-1])return fail("Object replacement map contains duplicate keys");
   return true;
 }
 }

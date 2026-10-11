@@ -15,9 +15,12 @@ int PlanEvolution(jvmtiEnv* env, JNIEnv* jni, const std::vector<Definition>& def
       }
     }
     evolution::ClassSchema before, after;
-    if (!evolution::ReadDexSchema(definition.dex, &after, error)) return JVMTI_ERROR_INVALID_CLASS_FORMAT;
     int result = live_schema::ReadLiveSchema(env, jni, definition.klass, &before, error);
     if (result) return result;
+    uint32_t selected=UINT32_MAX;
+    if(!evolution::FindDexClassDefinition(definition.dex,before.descriptor,&selected,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+    if(selected==UINT32_MAX){*error="Target class absent from patch DEX";return JVMTI_ERROR_NAMES_DONT_MATCH;}
+    if(!evolution::ReadDexClassSchema(definition.dex,selected,&after,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
     if (before.descriptor != after.descriptor) { *error = "Target and patch class names differ"; return JVMTI_ERROR_NAMES_DONT_MATCH; }
     evolution::MigrationPlan migration;
     if (!evolution::PlanMigration(before, after, &migration, error)) return JVMTI_ERROR_ILLEGAL_ARGUMENT;

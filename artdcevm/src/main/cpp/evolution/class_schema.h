@@ -113,6 +113,15 @@ bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::stri
 // Validation against original DEX declarations retains constructor and declared-sync bits.
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output,
                          std::string* error);
+// Select a unique descriptor in one complete standard DEX. A missing class
+// succeeds with UINT32_MAX, so multi-file APK lookup can continue. Duplicate
+// ClassDefs and malformed input fail without publishing an index.
+bool FindDexClassDefinition(const std::vector<unsigned char>&,std::string_view descriptor,
+                            uint32_t* class_def_index,std::string*);
+// Validate declarations for the actual target identity in a multi-class DEX.
+// Missing/ambiguous descriptors fail without changing the output.
+bool ReadDexDeclarations(const std::vector<unsigned char>&,std::string_view descriptor,
+                         ClassSchema*,std::string*);
 // Incoming transaction input, copied before any source pause. Selects one
 // ClassDef from a complete standard DEX (including a single-file v041 input).
 // Reuses declaration validation and retains every encoded method's original
@@ -126,6 +135,9 @@ struct DexMethodCode {
 bool ReadDexClassCode(const std::vector<unsigned char>&,uint32_t class_def_index,
                      ClassSchema*,std::vector<DexMethodCode>*,std::string*);
 bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error);
+// Public/JVMTI modifier view for an independently selected ClassDef.
+bool ReadDexClassSchema(const std::vector<unsigned char>&,uint32_t class_def_index,
+                        ClassSchema*,std::string*);
 bool IsTypeDescriptor(const std::string& value, bool allow_void);
 bool IsMethodDescriptor(const std::string& value);
 }

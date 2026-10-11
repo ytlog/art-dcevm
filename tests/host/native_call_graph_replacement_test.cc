@@ -9,7 +9,7 @@ int main(int argc,char**argv){
  receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kStandard,environment.metadata,&linker,Current,&error,&::runtime));
  assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
  native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
- assert(verifier.Stage(&env,&ti,affected,bindings,&error));
+ assert(execution_fixture::Stage(verifier,&ti,affected,bindings,&error));
  native_call_graph_execution::Execution operation(environment.source,environment.threads);
  struct Before {native_call_graph_execution::Execution&operation;execution_fixture::Hooks&hooks;jvmtiEnv&ti;std::vector<jclass>&affected;native_schema_guard_verifier::Verifier&verifier;receiver_guard::SourceProducer&source;drain_fixture::Environment&environment;std::string&error;}before{operation,hooks,ti,affected,verifier,source,environment,error};
  assert(execution_fixture::bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),[](const runnable_jni::Context&ctx,void*p){auto&r=*static_cast<Before*>(p);return r.operation.Prepare(r.hooks,&env,&r.ti,r.affected,ctx,r.verifier,r.source,r.environment.model,r.environment.metadata,stack_visitor_service::Declaration::kAndroid13To16,&r.error);},&before)==runnable_jni::Result::kSuccess);

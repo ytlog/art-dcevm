@@ -152,11 +152,26 @@ std::unique_ptr<ResolutionInvalidationPlan> PrepareResolution(const source_commi
 std::unique_ptr<Plan> Plan::Prepare(const source_commit::Plan& source,
     const modern_field_metadata::FieldMetadata& metadata,
     const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,HandleGuards guards,ResolutionBinding resolution,const std::vector<native_schema_policy::Plan>* schemas,const native_schema_policy::GuardVerifier* schema_guards,const modern_field_metadata::ReadContext* context) {
+  return PrepareImpl(source,metadata,methods,retirement,error,guards,resolution,schemas,schema_guards,context,true);
+}
+std::unique_ptr<Plan> Plan::PrepareImpl(const source_commit::Plan& source,
+    const modern_field_metadata::FieldMetadata& metadata,
+    const std::vector<const modern_methods::Service*>& methods,Retirement retirement,std::string* error,
+    HandleGuards guards,ResolutionBinding resolution,const std::vector<native_schema_policy::Plan>* schemas,
+    const native_schema_policy::GuardVerifier* schema_guards,const modern_field_metadata::ReadContext* context,bool verify_guards) {
   const auto fail=[&](const char* text)->std::unique_ptr<Plan>{if(error)*error=text;return nullptr;};
   if(!metadata.Calibrated()||source.old_classes.empty()||source.old_classes.size()!=source.new_classes.size()||
       methods.size()!=source.old_classes.size()||!retirement.owner||!retirement.method_retired||!retirement.retire_method)
     return fail("Missing rooted structural mapping and persistent method guards");
-  if(schemas&&(!resolution.method_model||!native_schema_policy::ValidateNative(source,metadata,*resolution.method_model,methods,*schemas,schema_guards,error,context)))return nullptr;
+  if(schemas){
+    if(!resolution.method_model)return fail("Schema preparation lacks independently calibrated method identities");
+    if(verify_guards){
+      if(!native_schema_policy::ValidateNative(source,metadata,*resolution.method_model,methods,*schemas,schema_guards,error,context))return nullptr;
+    }else{
+      std::vector<native_schema_policy::GuardRequest>requests;
+      if(!native_schema_policy::InspectNative(source,metadata,*resolution.method_model,methods,*schemas,&requests,error,context))return nullptr;
+    }
+  }
   auto result=std::unique_ptr<Plan>(new Plan);result->read_context_=context;result->retirement_=retirement;result->handle_guards_=guards;bool additions=false;
   for(size_t p=0;p<source.old_classes.size();++p){
     auto* service=methods[p];if(!service)return fail("Missing prepared native method pair");

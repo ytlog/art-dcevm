@@ -199,6 +199,21 @@ int main(){
    assert(!source_cache_writer_root::Import(s,invalid,writer_pool,reinterpret_cast<jobject>(old_class),&unchanged,&error)&&unchanged==old_class);
    assert(!source_cache_writer_root::Import(s,context,writer_pool,nullptr,&unchanged,&error)&&unchanged==old_class);
   }
+  // The first collected operand can arrive only after original Run has
+  // pushed its temporary scope. Reserve our empty anchor before that push;
+  // adding the first operand must never install a scope above the source.
+  const auto before_reserved_anchor=Top();
+  {source_handle_roots::Pool pool(s);const auto before=jni_calls;
+   assert(pool.ReserveAnchor(&error));const auto anchor=Top();assert(anchor!=before_reserved_anchor);
+   assert(pool.ReserveAnchor(&error)&&Top()==anchor&&jni_calls==before);
+   {auto temporary=s.CreateScope(1,&error);assert(temporary);temporary->Set(0,old_class);const auto source_top=Top();
+    auto*slot=pool.Add(old_class,&error);assert(slot&&Top()==source_top&&jni_calls==before);
+    MoveRoots move;move.old_value=uint32_t(uintptr_t(old_class));move.next_value=uint32_t(uintptr_t(new_class));OriginalRoots(thread.data(),&move,0);
+    void*live=nullptr;assert(pool.Read(slot,&live)&&live==new_class&&temporary->Get(0)==new_class);
+   }
+   assert(Top()==anchor);
+  }
+  assert(Top()==before_reserved_anchor);
   {source_handle_roots::Pool pool(s);std::array<void*,70> slots{};
    for(size_t i=0;i<32;++i){slots[i]=pool.Add(old_class,&error);assert(slots[i]);}
    void* anchor_top=Top();

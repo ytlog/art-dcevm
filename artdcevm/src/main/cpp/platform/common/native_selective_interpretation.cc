@@ -2,9 +2,11 @@
 #include "platform/common/class_metadata_abi.h"
 #include <cstring>
 #include "platform/common/runtime_service_calibration.h"
+#include "platform/common/native_interpretation_registry.h"
 #include <algorithm>
 #include <limits>
 #include <unordered_set>
+#include <new>
 namespace artdcevm::native_selective_interpretation {
 namespace {
 constexpr const char*kDeopt="_ZN3art15instrumentation15Instrumentation10DeoptimizeEPNS_9ArtMethodE";
@@ -38,9 +40,13 @@ bool Service::Prepare(HookEngine&hooks,
   return Fail(error,"selective-interpretation-exact-instrumentation-owner-unproved");
  if(!metadata.Calibrated()||methods.identities.size()<3||methods.identities.size()!=methods.readable_extents.size())
   return Fail(error,"selective-interpretation-method-source-not-calibrated");
- if(!selection||!count)return Fail(error,"selective-interpretation-empty-method-closure");
+ if(count&&!selection)return Fail(error,"selective-interpretation-method-closure-storage-missing");
  auto deopt=reinterpret_cast<Deopt>(hooks.FindSymbol("libart.so",kDeopt));
- auto query=reinterpret_cast<Query>(hooks.FindSymbol("libart.so",kQuery));
+ // Journal only ART's native set. The process query additionally reports
+ // persistent interpretation keys; confusing that answer with a foreign set
+ // entry would skip activation or make owned removal appear to have failed.
+ auto query=native_interpretation_registry::Registry::NativeQueryFor(runtime_,instrumentation_);
+ if(!query)query=reinterpret_cast<Query>(hooks.FindSymbol("libart.so",kQuery));
  if(!deopt||!query)return Fail(error,"selective-interpretation-named-method-deopt-query-unavailable");
  if(methods.model!=method_identity::Model::kMethod11&&methods.model!=method_identity::Model::kMethod12Onward)
   return Fail(error,"selective-interpretation-unknown-calibrated-method-layout");
@@ -49,7 +55,8 @@ bool Service::Prepare(HookEngine&hooks,
   if(!selection[i].method||selection[i].dex_index==UINT32_MAX||(selection[i].modifiers&0x500u))return Fail(error,"selective-interpretation-invalid-public-method");
   if(!unique.insert(selection[i].method).second)return Fail(error,"selective-interpretation-duplicate-method");
  }
- std::vector<Method>prepared_methods(selection,selection+count);
+ std::vector<Method>prepared_methods;
+ if(count)prepared_methods.assign(selection,selection+count);
  std::sort(prepared_methods.begin(),prepared_methods.end(),[](const Method&a,const Method&b){return reinterpret_cast<uintptr_t>(a.method)<reinterpret_cast<uintptr_t>(b.method);});
  std::vector<Entry>prepared_entries(count,Entry::Untouched);
  methods_=std::move(prepared_methods);entries_=std::move(prepared_entries);
@@ -61,11 +68,18 @@ bool Service::Window(const native_source_stop::Session&stop,void*self)const noex
  return phase_!=Phase::Empty&&stop.IsStopped(self)&&runtime_slot_&&*runtime_slot_==runtime_&&instrumentation_&&
   roots_&&roots_->Generation()==generation_&&metadata_&&metadata_->Calibrated();
 }
-bool Service::Check(const Method&m,const modern_field_metadata::ReadContext&read,const char**failure)const noexcept{
+bool Service::QueryNative(void*method)const noexcept{
+ // Resolve the original on each native query: a Service prepared before hook
+ // installation may still carry the subsequently intercepted symbol address.
+ auto query=native_interpretation_registry::Registry::NativeQueryFor(runtime_,instrumentation_);
+ if(!query)query=query_;
+ return query&&query(instrumentation_,method);
+}
+bool Service::Check(const Method&m,const modern_field_metadata::ReadContext&read,const char**failure,bool obsolete)const noexcept{
  if(!read.owner||!read.extent)return Deny(failure,"selective-interpretation-current-read-context-missing");
  void*klass=nullptr;size_t extent=0;
  if(!roots_->Read(m.declaring_root,&klass)||!klass||!read.extent(read.owner,m.method,&extent)||
-    !detail::Identity(layout_,m.method,extent,m.dex_index,m.modifiers))
+    !detail::Identity(layout_,m.method,extent,m.dex_index,m.modifiers,obsolete))
   return Deny(failure,"selective-interpretation-native-abstract-obsolete-or-public-identity-refused");
  if(metadata_->MethodDeclaringClass(m.method)!=klass)
   return Deny(failure,"selective-interpretation-current-declaring-root-unproved");
@@ -106,13 +120,17 @@ bool Service::Activate(const native_source_stop::Session&stop,void*self,const mo
  phase_=Phase::Activated;
  for(size_t i=0;i<methods_.size();++i){const auto&m=methods_[i];auto&entry=entries_[i];
   if(!Window(stop,self)){out->failure="selective-interpretation-owner-changed-during-activation";return false;}
-  if(query_(instrumentation_,m.method)){if(entry==Entry::Untouched)entry=Entry::Preexisting;++out->already_interpreted;continue;}
+  if(QueryNative(m.method)){if(entry==Entry::Untouched)entry=Entry::Preexisting;++out->already_interpreted;continue;}
   if(entry!=Entry::Untouched){out->failure="selective-interpretation-retained-entry-disappeared-during-reactivation";return false;}
   // Journal before the original call: if its postcondition fails, refund must
   // still query this exact rooted method before deciding whether to remove it.
   entry=Entry::Owned;
-  deopt_(instrumentation_,m.method);++out->activated;out->requires_stack_drain=true;
-  if(!query_(instrumentation_,m.method)){out->failure="selective-interpretation-original-deopt-did-not-retain-method";return false;}
+  out->requires_stack_drain=true;
+  try {deopt_(instrumentation_,m.method);}
+  catch(const std::bad_alloc&){out->failure="selective-interpretation-original-deopt-allocation-failed";return false;}
+  catch(...){out->failure="selective-interpretation-original-deopt-exception";return false;}
+  ++out->activated;
+  if(!QueryNative(m.method)){out->failure="selective-interpretation-original-deopt-did-not-retain-method";return false;}
  }
  out->requires_stack_drain=true;if(!Window(stop,self)){out->failure="selective-interpretation-owner-changed-after-activation";return false;}return true;
 }
@@ -120,7 +138,7 @@ bool Service::ValidateRetained(const native_source_stop::Session&stop,void*self,
  if(!out)return false;*out={};out->selected=methods_.size();out->requires_stack_drain=true;
  if(phase_==Phase::Refunded||!Window(stop,self)){out->failure="selective-interpretation-retained-owner-or-stop-unproved";return false;}
  for(const auto&m:methods_){if(!Check(m,read,&out->failure))return false;
-  if(!query_(instrumentation_,m.method)){out->failure="selective-interpretation-selected-method-left-deoptimized-set";return false;}
+  if(!QueryNative(m.method)){out->failure="selective-interpretation-selected-method-left-deoptimized-set";return false;}
   ++out->already_interpreted;
  }
  if(!Window(stop,self)){out->failure="selective-interpretation-owner-changed-after-retained-query";return false;}return true;
@@ -144,18 +162,26 @@ bool Service::PrepareRefund(HookEngine&hooks,std::string*error){
 }
 bool Service::Refund(const native_source_stop::Session&stop,void*self,
  const modern_field_metadata::ReadContext&read,RefundReport*out)noexcept{
+ return Release(stop,self,read,out,false);
+}
+bool Service::ReleaseCommitted(const native_source_stop::Session&stop,void*self,
+ const modern_field_metadata::ReadContext&read,RefundReport*out)noexcept{
+ return Release(stop,self,read,out,true);
+}
+bool Service::Release(const native_source_stop::Session&stop,void*self,
+ const modern_field_metadata::ReadContext&read,RefundReport*out,bool committed)noexcept{
  if(!out)return false;*out={};out->selected=methods_.size();out->pending=PendingRefund();
- if(!undeopt_||!Window(stop,self)){out->failure="selective-interpretation-refund-original-owner-or-stop-unproved";return false;}
+ if(!undeopt_||!Window(stop,self)||(committed&&(phase_!=Phase::Activated||!stop.IsFinalWindow(self)))){out->failure="selective-interpretation-refund-original-owner-or-stop-unproved";return false;}
  // Preflight every identity before the first original removal. No allocation,
  // JNI or OS lookup is needed for the journal or explicit mapping checks.
- for(const auto&m:methods_)if(!Check(m,read,&out->failure))return false;
+ for(const auto&m:methods_)if(!Check(m,read,&out->failure,committed))return false;
  for(size_t i=0;i<methods_.size();++i){const auto&m=methods_[i];auto&entry=entries_[i];
   if(!Window(stop,self)){out->failure="selective-interpretation-refund-owner-changed";return false;}
-  const bool present=query_(instrumentation_,m.method);
+  const bool present=QueryNative(m.method);
   if(entry!=Entry::Owned){if(present)++out->foreign_retained;continue;}
   if(present){
    undeopt_(instrumentation_,m.method);
-   if(!Window(stop,self)||query_(instrumentation_,m.method)){
+   if(!Window(stop,self)||QueryNative(m.method)){
     out->failure="selective-interpretation-original-undeoptimize-did-not-release-entry";return false;
    }
    ++out->removed;

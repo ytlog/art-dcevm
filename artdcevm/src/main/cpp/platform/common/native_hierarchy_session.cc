@@ -60,12 +60,14 @@ void LoadProxy(void*l,void*self,const void*d,const void*def,const void*h){
 bool IdsProxy(const void*h){return installed_service->EnsureInstanceIds(h);}
 }
 Session::Session(const Bindings&b):bindings_(b),previous_(current){
- if(current||!b.driver||!b.context.env||!b.context.self||!b.hooks||!b.metadata||!b.roots||!b.pool||!b.authority||!b.allocation||!b.access||!b.refuse||!native_hierarchy_source_checks::Ready(b.failure_observer)||
+ if(current||!b.driver||!b.context||!b.context->env||!b.context->self||!b.hooks||!b.metadata||!b.roots||!b.pool||!b.authority||!b.allocation||!b.access||!b.refuse||!b.refund_owner||!b.before_private_discard||!native_hierarchy_source_checks::Ready(b.failure_observer)||
+    !runnable_jni::Bridge::BorrowOriginalScope(*b.context)||
+    bool(b.private_roots_owner)!=bool(b.release_private_roots)||
     !b.authority->Staged()||!b.pool->UsesService(*b.roots)||!b.pool->ReadyForSourceAccess())return;
  if(!Mapped(b.driver,sizeof(abi::arm64::android_common::RedefinerPrefix)))return;
  abi::arm64::android_common::RedefinerPrefix driver;std::memcpy(&driver,b.driver,sizeof(driver));
- if(!driver.environment||driver.self!=b.context.self||driver.type!=0||driver.result!=JVMTI_ERROR_INTERNAL)return;
- checks_=std::make_unique<native_hierarchy_source_checks::Scope>(b.driver,b.context,*b.roots,*b.authority,b.refuse);
+ if(!driver.environment||driver.self!=b.context->self||driver.type!=0||driver.result!=JVMTI_ERROR_INTERNAL)return;
+ checks_=std::make_unique<native_hierarchy_source_checks::Scope>(b.driver,*b.context,*b.roots,*b.authority,b.refuse);
  ready_=true;current=this;
 }
 Session::~Session(){
@@ -74,6 +76,15 @@ Session::~Session(){
  if(ready_&&!released_)std::abort();
 }
 Session* Session::Current()noexcept{return current;}
+Session::RefundDeferral::RefundDeferral(Session&owner)noexcept{
+ if(!owner.Ready()||owner.committed_||owner.refunded_||owner.refund_deferrals_==SIZE_MAX)return;
+ ++owner.refund_deferrals_;owner_=&owner;
+}
+Session::RefundDeferral::~RefundDeferral(){
+ if(!owner_)return;
+ if(current!=owner_||owner_->released_||owner_->committed_||!owner_->refund_deferrals_)std::abort();
+ if(--owner_->refund_deferrals_==0&&owner_->failed_)owner_->Refund();
+}
 bool Session::Ready()const noexcept{return ready_&&!failed_&&!released_&&current==this;}
 bool Session::OwnsDriver(const void*d)const noexcept{return ready_&&!released_&&current==this&&d==bindings_.driver;}
 bool Session::OwnsClassOwner(const void*owner)const noexcept{
@@ -96,7 +107,7 @@ bool Session::Finish(void*owner,transaction_root::Holder*holder,void*iter,Finish
     Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source allocation Holder proof failed");Refund();return false;
    }
    holder_=holder;metadata_=snapshot.metadata;
-   batch_=std::make_unique<native_hierarchy_allocator::Batch>(*bindings_.allocation,bindings_.context,*bindings_.authority,*bindings_.pool);
+   batch_=std::make_unique<native_hierarchy_allocator::Batch>(*bindings_.allocation,*bindings_.context,*bindings_.authority,*bindings_.pool);
    if(bindings_.ledger)batch_->SetStoppedReader(bindings_.ledger);
    if(!batch_->Prepare(holder,error)||!(attached_=bindings_.access->Attach(*batch_))){
     Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source allocation Batch preparation failed");Refund();return false;
@@ -111,18 +122,33 @@ bool Session::Finish(void*owner,transaction_root::Holder*holder,void*iter,Finish
   if(observed&&!trace->BeforeFinish(owner,holder,iter)){
    Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Original source class-loading pause was not observed");Refund();return false;
   }
+  // The original leaf can unwind after allocating private metadata. Close
+  // both native views before either catch dispatches RecordFailure/refund.
+  // In particular a non-bad_alloc exception must not strand finishing_ and
+  // permanently defer disposal until after original Run destroys its DEX.
+  struct FinishWindow {
+   void*&finishing;native_source_class_loading::Run*trace;void*owner;bool observed,closed=false;
+   void Close(bool success)noexcept{
+    if(closed)std::abort();
+    finishing=nullptr;if(observed)trace->AfterFinish(owner,success);closed=true;
+   }
+   ~FinishWindow(){if(!closed)Close(false);}
+  }window{finishing_,trace,owner,observed};
   if(bindings_.ledger&&finish_next_==0&&!bindings_.ledger->AttachHolder(holder_,metadata_)){
-   if(observed)trace->AfterFinish(owner,false);
+   window.Close(false);
    Refuse(owner,JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,"Source private ledger lacks exact paused Holder");Refund();return false;
   }
   finishing_=owner;
-  bool result=false;
-  try{result=original(owner,holder,iter);}catch(...){if(observed)trace->AfterFinish(owner,false);throw;}
-  finishing_=nullptr;if(observed)trace->AfterFinish(owner,result);
+  const bool result=original(owner,holder,iter);
+  window.Close(result);
   if(!result||failed_){Refund();return false;}
   ++finish_next_;return true;
  }catch(const std::bad_alloc&){
   finishing_=nullptr;Refuse(owner,JVMTI_ERROR_OUT_OF_MEMORY,"Source hierarchy preparation exhausted native memory");Refund();return false;
+ }catch(...){
+  // Return through the original fallible bool boundary so its still-live
+  // source locals perform their normal failed-batch cleanup.
+  finishing_=nullptr;Refuse(owner,JVMTI_ERROR_INTERNAL,"Source hierarchy Finish threw");Refund();return false;
  }
 }
 void* Session::Allocate(void*owner,const void*old,const void*cache,uint16_t index,std::string*error){
@@ -159,7 +185,21 @@ void Session::Refund()noexcept{
  failed_=true;
  // RecordFailure may run under original Allocate Class monitor or verifier
  // views. Mark failure now; dispose private ownership only after it unwinds.
- if(finishing_||verification_owner_||refunded_)return;
+ if(finishing_||verification_owner_||refund_deferrals_||refunded_)return;
+ if(!execution_refunded_){
+  const char*refusal=nullptr;
+  if(!bindings_.before_private_discard(bindings_.refund_owner,&refusal)){
+#if defined(__ANDROID__)
+   __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Execution refund before private retirement refused: %s",refusal?refusal:"execution-refund-refused");
+#else
+   std::fprintf(stderr,"Execution refund before private retirement refused: %s\n",refusal?refusal:"execution-refund-refused");
+#endif
+   // Original Run is about to destroy its Holder/DEX. Continuing cleanup or
+   // returning a normal JVMTI failure would release still-referenced metadata.
+   std::abort();
+  }
+  execution_refunded_=true;
+ }
  if(batch_){
   const char* refusal=nullptr;
   const bool discarded=bindings_.ledger?batch_->DiscardPrivate(*bindings_.ledger,&refusal):batch_->Complete(false,nullptr);
@@ -173,22 +213,31 @@ void Session::Refund()noexcept{
    std::abort();
   }
  }
+ // All fallible source/registry identity queries are closed. Releasing roots
+ // sooner would invalidate those queries; releasing them after Run returned
+ // would retain Classes pointing into already destroyed private DEX storage.
+ if(bindings_.release_private_roots){
+  const char*refusal=nullptr;
+  if(!bindings_.release_private_roots(bindings_.private_roots_owner,&refusal))std::abort();
+ }
+ if(!bindings_.pool->DropManagedReferences())std::abort();
+ roots_released_=true;
  if(bindings_.ledger)bindings_.ledger->Refunded();
  refunded_=true;
  if(bindings_.refund_complete)bindings_.refund_complete(bindings_.refund_owner);
 }
 void Session::BeginCommit(const source_commit::Plan&p)noexcept{
- if(!Ready()||!sealed_||verification_owner_)std::abort();
+ if(!Ready()||!sealed_||verification_owner_||refund_deferrals_)std::abort();
  for(size_t i=0;i<p.old_classes.size();++i)if(!bindings_.authority->Verify(p,i))std::abort();
  bindings_.authority->BeginCommit(p);committed_=true;
 }
 bool Session::ReleaseAfterRun(bool success)noexcept{
  if(!ready_)return false;
- if(released_||current!=this||finishing_||verification_owner_)std::abort();
- // A Run failure before the first allocation has no private captured objects.
- // Closing this empty observer needs no source memory or retirement.
- if(!success&&!failed_&&!batch_){failed_=true;refunded_=true;}
- const bool valid=success?committed_:(failed_&&refunded_);
+ if(released_||current!=this||finishing_||verification_owner_||refund_deferrals_)std::abort();
+ // Even before the first private allocation, BEFORE activation can retain
+ // owned Instrumentation entries. An empty batch is not an execution refund.
+ // The real failure callback must close those entries while its roots survive.
+ const bool valid=success?committed_:(failed_&&refunded_&&execution_refunded_&&roots_released_);
  // No late refund is attempted. The original source already destroyed Holder.
  if(!valid)std::abort();
  if(committed_&&(!batch_||!batch_->Complete(true,nullptr)))std::abort();

@@ -59,12 +59,13 @@ int main(){
  JNIEnv env{&jni};jvmtiInterface_1_ ti{};ti.GetLoadedClasses=Enumerate;ti.Deallocate=Free;ti.GetClassStatus=Status;ti.GetClassSignature=Signature;ti.GetClassModifiers=ClassFlags;ti.GetClassMethods=Methods;ti.GetClassFields=Fields;ti.GetFieldName=FieldName;ti.GetFieldModifiers=FieldFlags;ti.GetClassLoader=Loader;ti.GetImplementedInterfaces=Interfaces;jvmtiEnv jvmti{&ti};
  using namespace artdcevm::native_schema_guard_verifier;
  Bindings bindings{};bindings.roots={nullptr,Scope,Oracle,Decode,Element};bindings.stage_field=StageField;
+ const artdcevm::runnable_jni::Context context{&env,&env,bindings.vm};
  for(bool descendant:{false,true}){
   for(int cycle=0;cycle<2;++cycle){
    loaded.clear();objects.clear();enumerations=0;staged_fields=0;peak=0;add_descendant=descendant;
    auto seed=Add("LSeed;");for(size_t i=0;i<2200;++i)Add(("LCold"+std::to_string(i)+";").c_str());
    Verifier verifier;std::string error;
-   assert(verifier.Stage(&env,&jvmti,{seed},bindings,&error));
+   assert(verifier.Stage(context,&jvmti,{seed},bindings,&error));
    assert(loaded.size()==2204&&staged_fields==loaded.size()&&enumerations==5);
    // Root chunks, not one permanent JNI global for each loaded identity.
    assert(globals==3&&peak<=5);
@@ -90,7 +91,7 @@ int main(){
  // a fresh operation can then establish the complete graph normally.
  loaded.clear();objects.clear();staged_fields=0;enumerations=0;reject_lazy=true;add_descendant=false;
  auto seed=Add("LSeed;");Verifier rejected;std::string error;
- assert(!rejected.Stage(&env,&jvmti,{seed},bindings,&error));
+ assert(!rejected.Stage(context,&jvmti,{seed},bindings,&error));
  assert(staged_fields==3&&enumerations==3&&globals==1);
  rejected.Clear(&env);assert(globals==0&&handles.empty());
  loaded.clear();objects.clear();reject_lazy=false;
@@ -98,7 +99,7 @@ int main(){
  auto array=Add("[I");Cast(array)->status=JVMTI_CLASS_STATUS_ARRAY;Cast(array)->component=primitive;
  auto proxy=Add("Lcustom/Generated;");Cast(proxy)->proxy=true;
  auto public_name=std::make_unique<Object>();public_name->descriptor="custom.Generated";Cast(proxy)->name=reinterpret_cast<jobject>(public_name.get());objects.push_back(std::move(public_name));
- Verifier kinds;assert(kinds.Stage(&env,&jvmti,{proxy},bindings,&error));
+ Verifier kinds;assert(kinds.Stage(context,&jvmti,{proxy},bindings,&error));
  assert(kinds.MatchesAffected(&env,{proxy},&error));
  assert(kinds.CheckWindow(&env,&jvmti,{proxy},Window::Verified,&error));
  assert(kinds.CheckWindow(&env,&jvmti,{proxy},Window::Collected,&error));

@@ -19,22 +19,23 @@ class ErrorCensus final {
  };
  size_t Size()const noexcept{return nodes_.size();}
  const std::vector<Node>& Nodes()const noexcept{return nodes_;}
- bool Stage(JNIEnv*env,jvmtiEnv*ti,jclass klass,jint status,bounded_managed_roots::Store&roots,
+ bool Stage(const runnable_jni::Context&context,jvmtiEnv*ti,jclass klass,jint status,bounded_managed_roots::Store&roots,
             bool*existing,std::string*error){
-  if(!existing||frozen_||(status&(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED))!=
+  auto*env=context.env;
+  if(!env||!context.self||!existing||frozen_||(status&(JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED))!=
       (JVMTI_CLASS_STATUS_ERROR|JVMTI_CLASS_STATUS_PREPARED))return Fail(error,"Unprepared erroneous Class lacks read-only domain census");
   if(!Bind(roots))return Fail(error,"Erroneous Class root store generation changed");
   *existing=false;for(const auto&node:nodes_)if(roots.Same(env,node.root,klass)){*existing=true;return !env->ExceptionCheck();}
   Node node;if(!Describe(env,ti,klass,&node,error))return false;
-  if(!roots.Stage(env,klass,&node.root,error))return false;
+  if(!roots.Stage(context,klass,&node.root,error))return false;
   jobject loader=nullptr;if(!Loader(ti,klass,&loader)||env->ExceptionCheck())return Fail(error,"Erroneous Class loader unavailable");
-  if(loader){const bool ok=roots.Stage(env,loader,&node.loader,error);env->DeleteLocalRef(loader);if(!ok)return false;}
+  if(loader){const bool ok=roots.Stage(context,loader,&node.loader,error);env->DeleteLocalRef(loader);if(!ok)return false;}
   auto parent=env->GetSuperclass(klass);if(env->ExceptionCheck())return false;
-  if(parent){const bool ok=roots.Stage(env,parent,&node.parent,error);env->DeleteLocalRef(parent);if(!ok)return false;}
+  if(parent){const bool ok=roots.Stage(context,parent,&node.parent,error);env->DeleteLocalRef(parent);if(!ok)return false;}
   jint count=0;jclass*interfaces=nullptr;
   if(ti->GetImplementedInterfaces(klass,&count,&interfaces)!=JVMTI_ERROR_NONE||count<0)return Fail(error,"Erroneous Class public interfaces unavailable");
   node.interfaces.resize(size_t(count));bool ok=true;
-  for(jint i=0;i<count;++i){if(ok)ok=roots.Stage(env,interfaces[i],&node.interfaces[size_t(i)],error);env->DeleteLocalRef(interfaces[i]);}
+  for(jint i=0;i<count;++i){if(ok)ok=roots.Stage(context,interfaces[i],&node.interfaces[size_t(i)],error);env->DeleteLocalRef(interfaces[i]);}
   if(interfaces)ti->Deallocate(reinterpret_cast<unsigned char*>(interfaces));
   if(!ok||env->ExceptionCheck())return false;nodes_.push_back(std::move(node));return true;
  }
@@ -63,10 +64,10 @@ class ErrorCensus final {
   }
   registered_.Seal();frozen_=true;return true;
  }
- bool CanRefresh(const prepared_roots::Resolver&r)const noexcept{return frozen_&&store_&&Matches(*store_)&&registered_.CanRefresh(r);}
+ bool CanRefresh(const prepared_roots::Resolver&r)const noexcept{return frozen_&&store_&&Matches(*store_)&&store_->CanRefreshManagedRoots(r)&&registered_.CanRefresh(r);}
  void Refresh(const prepared_roots::Resolver&r)noexcept{if(CanRefresh(r))registered_.Refresh(r);}
  bool Fresh(const bounded_managed_roots::Store&roots)const noexcept{
-  if(!frozen_||!Matches(roots))return false;for(const auto&node:nodes_){void*value=nullptr;
+  if(!frozen_||!Matches(roots)||!roots.RootsResolved())return false;for(const auto&node:nodes_){void*value=nullptr;
    if(!roots.Read(node.root,&value)||value!=node.klass||!roots.Read(node.loader,&value)||value!=node.native_loader||
       !roots.Read(node.parent,&value)||value!=node.native_parent)return false;
    for(size_t i=0;i<node.interfaces.size();++i)if(!roots.Read(node.interfaces[i],&value)||value!=node.native_interfaces[i])return false;

@@ -7,21 +7,72 @@ int main(){
  native_selective_interpretation::Service selection;assert(selection.CalibrateOwner(owner_hooks,&early_owner_fixture::jni,&error));
  native_selective_interpretation::Method selected[]{ {reinterpret_cast<char*>(old_method)+32,root,root,1,1},{reinterpret_cast<char*>(old_method)+64,root,root,2,9} };
  assert(selection.Prepare(owner_hooks,model,metadata,store,selected,2,&error));
+ boundary_geometry=true;
  native_call_graph_stack::Service scanner;assert(scanner.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,&error));native_call_graph_stack::Service::Prepared prepared;assert(scanner.Prepare(selection,&prepared,&error));assert(!scanner.Bind(hooks,stack_visitor_service::Declaration::kAndroid11,&error));
  native_selective_interpretation::Service unavailable;native_call_graph_stack::Service::Prepared rejected;assert(!scanner.Prepare(unavailable,&rejected,&error));
  abi::arm64::android12::Method12 runtime_method{};runtime_method.dex_method_index=UINT32_MAX;
  frames[0]={{selected[0].method,false},{selected[1].method,false},{&runtime_method,false},{old_method,false},{nullptr,false}};frames[1]={{selected[1].method,true}};frames[2]={{nullptr,false}};
- ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(&runtime_method);modern_field_metadata::ReadContext read{&maps,ExplicitMappings::Extent};
+ ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(&runtime_method);
+ for(const auto&frame:frames[0])maps.Cover(frame.words);modern_field_metadata::ReadContext read{&maps,ExplicitMappings::Extent};
  struct Work{native_call_graph_stack::Service&scanner;native_call_graph_stack::Service::Prepared&prepared;native_selective_interpretation::Service&selection;native_cache::Service&threads;modern_field_metadata::ReadContext&read;ExplicitMappings&maps;int scenario=0;native_call_graph_stack::Report report;}work{scanner,prepared,selection,threads,read,maps,0,{}};
  const auto inspect=[](void*p,native_source_stop::Session&stop)noexcept{auto&w=*static_cast<Work*>(p);native_selective_interpretation::Report activated;
   if(!w.scenario){w.report=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);assert(!w.report.walk_complete&&walk_calls==0);assert(w.selection.Activate(stop,thread.data(),w.read,&activated)&&activated.requires_stack_drain);}
   const auto os=method_identity::MappingOsQueries();forbid_provider_allocation=true;
-  w.report=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==os);return true;};
+  w.report=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
+  if(w.report.walk_complete){
+   assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+   const auto*stream=w.scanner.Frames(w.prepared);assert(stream);
+   for(const auto&frame:*stream)if(frame.physical_boundary){
+    assert(frame.geometry.size==64&&frame.return_pc==0x123450&&frame.return_slot==static_cast<uintptr_t*>(frame.quick)+7);
+    const auto saved=*frame.return_slot;*frame.return_slot^=16;
+    assert(!w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));*frame.return_slot=saved;
+    assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+    if(frame.return_carrier!=SIZE_MAX){
+     const auto&next=(*stream)[frame.return_carrier];auto*slot=static_cast<void**>(next.quick);
+     const auto outer=*slot;*slot=nullptr;
+     assert(!w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));*slot=outer;
+     assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+    }
+    break;
+   }
+  }
+  if(!w.scenario&&w.report.walk_complete){
+   // Original continuation addresses outside the frame, inside the method
+   // slot, or unaligned publish no physical evidence. The complete walk may
+   // still be inspected, but it cannot acquire a JNI continuation grant.
+   for(uintptr_t offset:{uintptr_t(64),uintptr_t(0),uintptr_t(57)}){
+    return_address_offset=offset;
+    const auto refused=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
+    assert(refused.walk_complete&&!refused.native_geometry&&!refused.runtime_geometry);
+    const auto*stream=w.scanner.Frames(w.prepared);assert(stream);
+    for(const auto&frame:*stream)assert(!frame.physical_boundary&&!frame.return_slot&&!frame.return_pc);
+   }
+   return_address_offset=56;
+   w.report=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
+   assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+  }
+  forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==os);return true;};
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
- assert(work.report.walk_complete&&work.report.registered_threads==3&&work.report.visited_threads==3&&work.report.selected_quick==2&&work.report.selected_shadow==1&&work.report.drain_required&&!work.report.selected_drained&&work.report.native_boundaries==1&&work.report.runtime_boundaries==1&&work.report.transitions==2&&work.report.boundary_owners_required);
+ assert(work.report.walk_complete&&work.report.registered_threads==3&&work.report.visited_threads==3&&work.report.selected_quick==2&&work.report.selected_shadow==1&&work.report.drain_required&&!work.report.selected_drained&&work.report.native_boundaries==1&&work.report.runtime_boundaries==1&&work.report.transitions==2&&work.report.boundary_owners_required&&work.report.native_geometry==1&&work.report.runtime_geometry==1);
  frames[0][0].shadow=frames[0][1].shadow=true;work.scenario=1;
  {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
  assert(work.report.walk_complete&&work.report.selected_drained&&!work.report.drain_required&&work.report.selected_shadow==3&&work.report.boundary_owners_required);
+ // Two adjacent physical frames model the original native return carrier.
+ // Matching PC alone cannot connect disjoint stack storage, and matching
+ // addresses alone cannot connect a different continuation PC.
+ alignas(16) uintptr_t carriers[24]{};maps.Cover(carriers);
+ frames[0][2].method=old_method;frames[0][2].carrier=carriers;
+ frames[0][3].method=&runtime_method;frames[0][3].carrier=carriers+8;frames[0][3].pc=0x123450;
+ work.scenario=2;
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
+ assert(work.report.walk_complete&&work.report.native_continuations==1&&!work.report.runtime_continuations);
+ frames[0][3].pc=0x123460;
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
+ assert(work.report.walk_complete&&!work.report.native_continuations);
+ frames[0][3].pc=0x123450;frames[0][3].carrier=carriers+16;
+ {native_source_stop::Session stop(source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}
+ assert(work.report.walk_complete&&!work.report.native_continuations);
+ frames[0][3].carrier=carriers+8;
  // Native Class relocation changes both independently retained roots and the
  // methods' declaring references. No old managed Class pointer may be cached.
  std::memcpy(new_class,old_class,160);Put32(root_carrier,12,uint32_t(uintptr_t(new_class)));

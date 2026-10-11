@@ -1,8 +1,13 @@
 #include "platform/common/native_owned_removal.h"
 #include "platform/common/native_removal_policy.h"
+#include "platform/common/redefinition_gate.h"
 #include "platform/common/owned_failure_diagnostic.h"
 #include "platform/common/native_schema_policy.h"
+#include "platform/common/native_source_class_loading.h"
+#include "platform/common/native_transformed_definitions.h"
+#include "platform/common/native_hierarchy_session.h"
 #include "platform/abi/arm64/common/class_redefinition_prefix.h"
+#include "platform/abi/arm64/common/transformed_definition.h"
 #include "platform/abi/arm64/common/redefinition_boundaries.h"
 #include "platform/abi/common/suspend_all.h"
 #include "platform/common/schema_snapshot.h"
@@ -17,6 +22,7 @@
 #include <mutex>
 #include <utility>
 #include <new>
+#include <optional>
 #include <cstdio>
 #include <android/log.h>
 namespace artdcevm::native_owned_removal {
@@ -38,8 +44,18 @@ struct Request {
  size_t completed_validated=0;
  void* verification_owner=nullptr;const transaction_root::Iterator* verification_iterator=nullptr;
  uint64_t collection_epoch=0;
+ // The schema provider's stable cleanup owner borrows this service through
+ // source publication and end_run. Update's local lifetime is too short.
+ std::unique_ptr<source_commit::Services> committed_services;
+ const std::vector<Definition>*submitted=nullptr;
+ std::vector<Definition> effective;
+ const void*transformed_vector=nullptr;
+ void*transform_self=nullptr;
+ bool transform_complete=false,transform_invalid=false,direct_entered=false;
 };
 thread_local Request* active=nullptr;
+using Transform=void(*)(void*,void*);
+Transform transform_original=nullptr;
 void Phase(const char* text) noexcept {if(active)active->phase=text;}
 void RememberFailure(const char* text) noexcept {
  if(!active||!text||active->rejection[0])return;
@@ -200,6 +216,92 @@ void PassiveWhole(transaction_root::Holder* holder,bool result) {
     r.leaf_header.redefinitions!=header.redefinitions||
     std::memcmp(&r.leaf_header.initialized,&header.initialized,3*sizeof(transaction_root::Bits))!=0)r.Refuse(11);
 }
+// Semantic validation consumes the final output of every transformation callback.
+// The original public extension still owns transformation order and DEX loading.
+jvmtiError ValidateEffective(Request&request,std::string*error){
+ auto*env=request.env;auto*jvmti=request.jvmti;const auto&provider=*request.provider;
+ const auto&definitions=request.effective;
+  bool removed=false;
+  struct Namespace {std::string descriptor;jobject loader;};std::vector<Namespace> names;
+  struct Loaders {JNIEnv* env;std::vector<Namespace>& names;~Loaders(){for(const auto& entry:names)if(entry.loader)env->DeleteLocalRef(entry.loader);}} release{env,names};
+  names.reserve(definitions.size());request.items.reserve(definitions.size());
+  for(const auto& definition:definitions){
+    // Submission uniqueness and the exact ordered Class bijection have already
+    // been checked. Semantic validation only consumes the copied final DEX.
+    evolution::ClassSchema next,old;
+    const int read=live_schema::ReadLiveSchema(jvmti,env,definition.klass,&old,error);
+    if(read!=JVMTI_ERROR_NONE)return static_cast<jvmtiError>(read);
+    if(definition.dex.empty()||definition.dex.size()>INT32_MAX||
+       !evolution::ReadDexDeclarations(definition.dex,old.descriptor,&next,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+    if(provider.schema_evolution){
+      native_schema_policy::Plan schema;
+      if(!provider.closed_graph||!native_schema_policy::Plan::Prepare(old,next,&schema,error))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
+      // Class final/abstract changes follow the same exact staged source owner
+      // as hierarchy changes; mandatory Plan guards run before publication.
+    }else if(!ValidateRemoval(old,next,provider.allow_field_removal,error,false))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
+    jobject loader=nullptr;const auto loader_error=jvmti->GetClassLoader(definition.klass,&loader);
+    if(loader_error!=JVMTI_ERROR_NONE)return loader_error;
+    bool duplicate=false;for(const auto& name:names)if(name.descriptor==old.descriptor&&env->IsSameObject(name.loader,loader))duplicate=true;
+    if(duplicate||env->ExceptionCheck()){if(loader)env->DeleteLocalRef(loader);if(error)*error="Duplicate class namespace in owned batch";return JVMTI_ERROR_ILLEGAL_ARGUMENT;}
+    // Capacity is reserved and string ownership moves: once JNI returns the
+    // loader, transferring its cleanup ownership cannot allocate or throw.
+    names.push_back({std::move(old.descriptor),loader});
+    removed|=old.methods.size()!=next.methods.size()||old.fields.size()!=next.fields.size();
+    Item item{&definition};item.has_virtuals=std::any_of(next.fields.begin(),next.fields.end(),[](const auto& member){return !member.IsStatic();})||
+      std::any_of(next.methods.begin(),next.methods.end(),[](const auto& member){return !(member.access&(0x8u|0x2u))&&member.name!="<init>"&&member.name!="<clinit>";});
+    request.items.push_back(item);
+  }
+  if(!removed&&!provider.schema_evolution){if(error)*error="Owned batch requires at least one actual member removal";return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;}
+  return JVMTI_ERROR_NONE;
+}
+void TransformStructural(void*self,void*definitions){
+ if(!active){transform_original(self,definitions);return;}
+ auto&request=*active;
+ if(request.transformed_vector||request.transform_complete||request.direct_entered){
+  request.transform_invalid=true;
+  RememberFailure("owned source repeated transformation boundary");
+ }else{
+  request.transformed_vector=definitions;request.transform_self=self;
+ }
+ // An agent can issue a nested redefinition from its transformation callback.
+ // That entire original invocation is foreign to this request, even if it
+ // targets the same Class. Restore ownership on every exceptional exit.
+ struct Foreign {
+  Request*saved;
+  explicit Foreign(Request&r):saved(&r){active=nullptr;}
+  ~Foreign(){active=saved;}
+ }foreign(request);
+ transform_original(self,definitions);
+ request.transform_complete=!request.transform_invalid;
+}
+jvmtiError PrepareDirect(void*,void*,void*self,const void*definitions,int32_t type){
+ if(!active)return JVMTI_ERROR_NONE;
+ auto&request=*active;
+ const auto refuse=[&](jvmtiError code,const char*reason){RememberFailure(reason);return code;};
+ if(type!=0||!request.transform_complete||request.transform_invalid||request.direct_entered||
+    request.transformed_vector!=definitions||!request.submitted||!self||
+    request.transform_self!=self||current_thread()!=self)
+  return refuse(JVMTI_ERROR_NOT_AVAILABLE,"owned final transformed input boundary mismatch");
+ request.direct_entered=true;
+ try{
+  std::string reason;
+  if(!native_transformed_definitions::Capture(definitions,request.submitted->size(),&request.effective,&reason))
+   return refuse(JVMTI_ERROR_NOT_AVAILABLE,reason.c_str());
+  // Native views and their fresh mappings have ended before the first JNI
+  // identity comparison, which can suspend this thread or trigger collection.
+  for(size_t n=0;n<request.submitted->size();++n){
+   if(!request.env->IsSameObject(request.effective[n].klass,(*request.submitted)[n].klass)||request.env->ExceptionCheck())
+    return refuse(JVMTI_ERROR_NOT_AVAILABLE,"owned final transformed Class identity mismatch");
+  }
+  auto result=ValidateEffective(request,&reason);
+  if(result!=JVMTI_ERROR_NONE)return refuse(result,reason.empty()?"owned final transformed semantic validation failed":reason.c_str());
+  if(request.provider->preflight&&
+     !request.provider->preflight(request.env,request.jvmti,request.effective,request.provider->state,&reason))
+   return refuse(JVMTI_ERROR_NOT_AVAILABLE,reason.empty()?"owned final transformed preflight failed":reason.c_str());
+ }catch(const std::bad_alloc&){return refuse(JVMTI_ERROR_OUT_OF_MEMORY,"owned final transformed preparation allocation failed");}
+ catch(...){return refuse(JVMTI_ERROR_INTERNAL,"owned final transformed preparation threw");}
+ return JVMTI_ERROR_NONE;
+}
 Item* Matches(void* owner){
   if(!active||!Mapped(owner,sizeof(NativeDefinition)))return nullptr;
   const auto definition=Read<NativeDefinition>(owner,0);
@@ -298,8 +400,26 @@ bool CaptureGraph(void* driver,transaction_root::Holder* raw,GraphWindow window)
  checkpoint("collected-partition-roots-ready");
  if(classes.empty())return reject("Affected Class graph has no rooted Classes");
  checkpoint("collected-provider-enter");
- const bool proven=request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error);
+ bool proven=false;
+ {
+  // A provider may enter a rejectable source-stop scope and observe original
+  // RecordFailure there. Keep private metadata alive until that callback's
+  // stop owner has unwound; its refund needs a fresh independent inspection.
+  // This scope also precedes the exception handler in GuardGraph, so throwing
+  // providers cannot leave a pending refund behind the original Run boundary.
+  auto* hierarchy=native_hierarchy_session::Session::Current();
+  std::optional<native_hierarchy_session::Session::RefundDeferral> deferred;
+  if(hierarchy){
+   if(!hierarchy->OwnsDriver(driver))return reject("Graph provider has a different hierarchy Run owner");
+   deferred.emplace(*hierarchy);
+   if(!deferred->Ready())return reject("Graph provider cannot defer private retirement");
+  }
+  proven=request.provider->closed_graph(request.env,request.jvmti,classes,graph,window,request.provider->state,&error);
+ }
  checkpoint("collected-provider-return");
+ if(request.refunded)return reject("Graph provider observed an original source failure");
+ if(auto* hierarchy=native_hierarchy_session::Session::Current();hierarchy&&!hierarchy->Ready())
+  return reject("Graph provider returned after hierarchy source failure");
  if(!proven)return reject(error.empty()?"Affected Class graph was not independently staged":error.c_str());
  if(request.provider->schema_evolution&&window==GraphWindow::Collected){
   request.holder=raw;request.remaining_owners.clear();
@@ -327,6 +447,23 @@ bool RejectBoundary(void* driver,const char* message){
  __android_log_print(ANDROID_LOG_ERROR,"artdcevm","Owned graph boundary refused: %s",message);
  android13::BorrowedPlatformString signature("OWNED BATCH"),text(message);
  failure(driver,JVMTI_ERROR_NOT_AVAILABLE,&signature,&text);Refund();return false;
+}
+template<class Call>
+bool RejectableOriginal(void*driver,const char*message,Call&&call){
+ // Passive/foreign source calls keep their original exception behavior. The
+ // owned path must translate before the original Run's local Holder unwinds.
+ if(!active||!active->provider->closed_graph)return call();
+ const auto reject=[&](jvmtiError code){
+  // Collected continuation has already handed publication to the original
+  // source. No ordinary exception can turn that into a refundable failure.
+  if(active->graph_sealed||active->publication_started)std::abort();
+  RememberFailure(message);CloseVerification(false);
+  android13::BorrowedPlatformString signature("OWNED BATCH"),text(message);
+  failure(driver,code,&signature,&text);Refund();return false;
+ };
+ try{return call();}
+ catch(const std::bad_alloc&){return reject(JVMTI_ERROR_OUT_OF_MEMORY);}
+ catch(...){return reject(JVMTI_ERROR_INTERNAL);}
 }
 // Both named leaf arguments are pointers: verification is const Iterator&,
 // collection is Iterator*. No value-aggregate ABI or wrapper execution assumed.
@@ -364,13 +501,20 @@ bool VerificationGraph(void* owner,const transaction_root::Iterator* iterator){
   if(!active->source_run_active||active->source_driver!=driver||active->verification_owner)
    return RejectBoundary(driver,"Verification lacks exact original Run lifetime");
   active->verification_owner=owner;active->verification_iterator=iterator;
-  std::string error;bool allowed=false;
-  try{allowed=active->provider->before_verification(owner,iterator,active->provider->state,&error);}
-  catch(const std::bad_alloc&){CloseVerification(false);RememberFailure("Verification preparation exhausted native memory");Refund();android13::BorrowedPlatformString sig("OWNED BATCH"),msg("Verification preparation exhausted native memory");failure(driver,JVMTI_ERROR_OUT_OF_MEMORY,&sig,&msg);return false;}
-  catch(...){CloseVerification(false);return RejectBoundary(driver,"Verification preparation threw before original leaf");}
-  if(!allowed){CloseVerification(false);return RejectBoundary(driver,error.empty()?"Verification view refused":error.c_str());}
+  std::string error;
+  const bool allowed=RejectableOriginal(driver,"Verification preparation threw before original leaf",
+   [&]{return active->provider->before_verification(owner,iterator,active->provider->state,&error);});
+  if(!allowed){
+   CloseVerification(false);
+   // A thrown callback or original RecordFailure already supplied the exact
+   // error and refunded. Do not overwrite OOM/internal/source errors with the
+   // generic NOT_AVAILABLE refusal below.
+   if(active->refunded)return false;
+   return RejectBoundary(driver,error.empty()?"Verification view refused":error.c_str());
+  }
  }
- const bool original_result=verification_leaf_original(owner,iterator);CloseVerification(original_result);
+ const bool original_result=RejectableOriginal(driver,"Original CheckVerification threw",
+  [&]{return verification_leaf_original(owner,iterator);});CloseVerification(original_result);
  if(!original_result){RememberFailure("Original CheckVerification returned false");Refund();return false;}
  if(++active->verified_count!=active->items.size())return true;
  return GuardGraph(driver,holder,GraphWindow::Verified);
@@ -382,7 +526,10 @@ bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
  // Missing/wrong earlier hooks refuse here BEFORE collection and its original
  // last bool. Update remains an invariant boundary, never the first refusal.
  if(!active->graph_verified||active->graph_sealed)return RejectBoundary(driver,"Collection lacks completed source verification witness");
- if(!CollectionOriginal(owner,iterator)){RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;}
+ if(!RejectableOriginal(driver,"Original CollectAndCreateNewInstances threw",
+     [&]{return CollectionOriginal(owner,iterator);})){
+  RememberFailure("Original CollectAndCreateNewInstances returned false");Refund();return false;
+ }
  if(++active->collected_count!=active->items.size())return true;
  CollectionDiagnostic("collected-graph-begin",driver,holder);
  const bool graph=GuardGraph(driver,holder,GraphWindow::Collected);
@@ -392,7 +539,10 @@ bool CollectionGraph(void* owner,transaction_root::Iterator* iterator){
 }
 bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole verification wrapper");if(active&&active->provider->closed_graph&&active->graph_verified)return RejectBoundary(driver,"Repeated verification boundary");
- if(!verified_original(driver,raw)){RememberFailure("Original CheckAllClassesAreVerified returned false");Refund();return false;}
+ if(!RejectableOriginal(driver,"Original CheckAllClassesAreVerified threw",
+     [&]{return verified_original(driver,raw);})){
+  RememberFailure("Original CheckAllClassesAreVerified returned false");Refund();return false;
+ }
  // A non-inlined wrapper may contain our leaf callbacks. Only one complete
  // proof is published; an inlined wrapper requires the last actual leaf.
  if(active&&active->provider->closed_graph&&active->graph_verified)return active->boundary_holder==raw||RejectBoundary(driver,"Wrapper/leaf verification Holder mismatch");
@@ -402,7 +552,8 @@ bool VerifiedGraph(void* driver,transaction_root::Holder* raw){
 bool CollectGraph(void* driver,transaction_root::Holder* raw){
  Phase("whole collection wrapper");if(active&&active->provider->closed_graph&&(!active->graph_verified||active->graph_sealed))return RejectBoundary(driver,"Invalid final rejectable boundary");
  CollectionDiagnostic("original-whole-enter",driver,raw);
- const bool original_result=collect_original(driver,raw);
+ const bool original_result=RejectableOriginal(driver,"Original batch CollectAndCreateNewInstances threw",
+  [&]{return collect_original(driver,raw);});
  CollectionDiagnostic("original-whole-return",driver,raw,original_result);
  PassiveWhole(raw,original_result);
  if(!original_result){RememberFailure("Original batch CollectAndCreateNewInstances returned false");Refund();return false;}
@@ -438,7 +589,11 @@ jvmtiError RunOwned(void* driver){
   if(result!=JVMTI_ERROR_NONE&&!r.refunded)std::abort();
  }else{RememberFailure(error.empty()?"Source Session creation refused":error.c_str());Refund();}
  if(r.verification_owner)std::abort(); // No late closure after original Holder cleanup.
+ if(r.provider->schema_evolution&&r.committed&&!r.committed_services)std::abort();
  r.provider->end_run(driver,result==JVMTI_ERROR_NONE,r.provider->state);
+ // No service operation or managed-root read follows end_run. Destruction
+ // releases only prepared native storage; the source owner has now closed.
+ r.committed_services.reset();
  r.source_run_active=false;r.source_driver=nullptr;
  // The original Run destroyed its private Holder. Keep diagnostics scalars,
  // never retain these borrowed addresses into the caller's next operation.
@@ -500,7 +655,9 @@ void Update(void* owner,const void* iterator){
     if(!active->provider->finalize||current.holder!=active->holder||found==active->remaining_owners.end())std::abort();
     const source_commit::Plan* plan=nullptr;
     auto services=active->provider->finalize(current.holder,&plan,active->provider->state);
-    if(!plan||!services||!source_commit::Run(*plan,*services,{active,NotifyCommit}))std::abort();
+    if(!plan||!services||active->committed_services)std::abort();
+    active->committed_services=std::move(services);
+    if(!source_commit::Run(*plan,*active->committed_services,{active,NotifyCommit}))std::abort();
     active->remaining_owners.erase(found);active->committed=true;return;
   }
   std::string error;owned_structural_transaction::StructuralTransaction first;
@@ -548,6 +705,7 @@ bool Install(HookEngine& hooks,std::string* error){
   if(!hooks.Initialize(error))return false;
   struct Entry {const char* symbol;void* proxy;void** original;void* target=nullptr;};
   Entry entries[]{
+    {abi::arm64::android_common::kTransformStructural,reinterpret_cast<void*>(TransformStructural),reinterpret_cast<void**>(&transform_original)},
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv",reinterpret_cast<void*>(Fields),&fields_original},
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv",reinterpret_cast<void*>(Methods),&methods_original},
     {"_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE",reinterpret_cast<void*>(Update),&commit_original},
@@ -570,9 +728,10 @@ bool Install(HookEngine& hooks,std::string* error){
      std::any_of(std::begin(entries),std::end(entries),[](const auto& entry){return !entry.target;})){
     if(error)*error="Missing named owned structural entry";return false;
   }
+  if(!redefinition_gate::InstallDirectPreparation(hooks,PrepareDirect,error))return false;
   SuspendAll stop{};construct(&stop,"artdcevm native source owner",false);
   std::vector<void*> tokens;bool okay=true;
-  for(auto& entry:entries){void* token=hooks.Install(entry.target,entry.proxy,entry.original,error);
+  for(auto& entry:entries){if(!okay)break;void* token=hooks.Install(entry.target,entry.proxy,entry.original,error);
     if(!token){okay=false;break;}tokens.push_back(token);if(!*entry.original)std::abort();}
   if(okay&&run_target){void* token=hooks.Install(run_target,reinterpret_cast<void*>(SourceRun),reinterpret_cast<void**>(&run_original),error);
    if(!token)okay=false;else{tokens.push_back(token);if(!run_original)std::abort();run_ready=true;}}
@@ -591,6 +750,7 @@ bool SetPassiveObserver(const PassiveObserver* observer) noexcept {
  passive_observer=*observer;return true;
 }
 void ObserveSourceFailure(void* driver,jvmtiError code) noexcept {
+ if(auto*loading=native_source_class_loading::Run::Current())loading->ObserveFailure(driver,code);
  if(!active||!active->source_run_active||active->source_driver!=driver||code==JVMTI_ERROR_NONE)return;
  RememberFailure("Original RecordFailure refused source Run");
  // RecordFailure may run INSIDE original CheckVerification/Finish while its
@@ -608,41 +768,19 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
   if(Lifecycle(provider)&&(!CompleteLifecycle(provider)||!provider.schema_evolution||!provider.closed_graph||!run_ready)){
     if(error)*error="Source Session requires complete lifecycle and installed original Run";return JVMTI_ERROR_NOT_AVAILABLE;
   }
-  Request request{&hooks,env,&provider,{},false,nullptr,{}};request.collection_epoch=collection_epochs.fetch_add(1,std::memory_order_relaxed)+1;bool removed=false;
+  Request request{&hooks,env,&provider,{},false,nullptr,{}};request.collection_epoch=collection_epochs.fetch_add(1,std::memory_order_relaxed)+1;
   request.jvmti=jvmti;
   if(provider.closed_graph&&(!window_ready||env->GetJavaVM(&request.vm)!=JNI_OK||!request.vm)){
     if(error)*error="Named rejectable graph window is not bound";return JVMTI_ERROR_NOT_AVAILABLE;
   }
-  struct Namespace {std::string descriptor;jobject loader;};std::vector<Namespace> names;
-  struct Loaders {JNIEnv* env;std::vector<Namespace>& names;~Loaders(){for(const auto& entry:names)if(entry.loader)env->DeleteLocalRef(entry.loader);}} release{env,names};
-  for(const auto& definition:definitions){
-    if(!definition.klass)return JVMTI_ERROR_INVALID_CLASS;
-    for(const auto& item:request.items)if(env->IsSameObject(item.definition->klass,definition.klass)){
-      if(error)*error="Same Class appears twice in the owned batch";return JVMTI_ERROR_ILLEGAL_ARGUMENT;
-    }
-    if(env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
-    evolution::ClassSchema next,old;
-    if(definition.dex.empty()||definition.dex.size()>INT32_MAX||!evolution::ReadDexDeclarations(definition.dex,&next,error))return JVMTI_ERROR_INVALID_CLASS_FORMAT;
-    const int read=live_schema::ReadLiveSchema(jvmti,env,definition.klass,&old,error);
-    if(read!=JVMTI_ERROR_NONE)return static_cast<jvmtiError>(read);
-    if(provider.schema_evolution){
-      native_schema_policy::Plan schema;
-      if(!provider.closed_graph||!native_schema_policy::Plan::Prepare(old,next,&schema,error))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
-      // Class final/abstract changes follow the same exact staged source owner
-      // as hierarchy changes; mandatory Plan guards run before publication.
-    }else if(!ValidateRemoval(old,next,provider.allow_field_removal,error,false))return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;
-    jobject loader=nullptr;const auto loader_error=jvmti->GetClassLoader(definition.klass,&loader);
-    if(loader_error!=JVMTI_ERROR_NONE)return loader_error;
-    bool duplicate=false;for(const auto& name:names)if(name.descriptor==old.descriptor&&env->IsSameObject(name.loader,loader))duplicate=true;
-    if(duplicate||env->ExceptionCheck()){if(loader)env->DeleteLocalRef(loader);if(error)*error="Duplicate class namespace in owned batch";return JVMTI_ERROR_ILLEGAL_ARGUMENT;}
-    names.push_back({old.descriptor,loader});
-    removed|=old.methods.size()!=next.methods.size()||old.fields.size()!=next.fields.size();
-    Item item{&definition};item.has_virtuals=std::any_of(next.fields.begin(),next.fields.end(),[](const auto& member){return !member.IsStatic();})||
-      std::any_of(next.methods.begin(),next.methods.end(),[](const auto& member){return !(member.access&(0x8u|0x2u))&&member.name!="<init>"&&member.name!="<clinit>";});
-    request.items.push_back(item);
+  request.submitted=&definitions;
+  for(size_t i=0;i<definitions.size();++i){const auto&definition=definitions[i];
+   if(!definition.klass)return JVMTI_ERROR_INVALID_CLASS;
+   if(definition.dex.empty()||definition.dex.size()>INT32_MAX)return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+   for(size_t j=0;j<i;++j)if(env->IsSameObject(definition.klass,definitions[j].klass))
+    return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+   if(env->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
   }
-  if(!removed&&!provider.schema_evolution){if(error)*error="Owned batch requires at least one actual member removal";return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED;}
-  if(provider.preflight&&!provider.preflight(env,jvmti,definitions,provider.state,error))return static_cast<jvmtiError>(owned_failure_diagnostic::Unavailable(error,"owned provider input preflight"));
   jint count=0;jvmtiExtensionFunctionInfo* functions=nullptr;Structural structural=nullptr;
   const auto extension_error=jvmti->GetExtensionFunctions(&count,&functions);
   if(extension_error!=JVMTI_ERROR_NONE)return extension_error;
@@ -664,6 +802,10 @@ jvmtiError RunBatch(HookEngine& hooks,JNIEnv* env,jvmtiEnv* jvmti,
   if(request.committed&&(result!=JVMTI_ERROR_NONE||!request.remaining_owners.empty()))std::abort();
   if(result==JVMTI_ERROR_NONE&&!request.committed){
     if(error)*error="Source entry did not consume every owned batch structural owner";return JVMTI_ERROR_INTERNAL;
+  }
+  if(result==JVMTI_ERROR_NONE&&provider.record_success){
+    if(request.source_run_active||request.source_driver||request.verification_owner)std::abort();
+    provider.record_success(provider.state);
   }
   if(result!=JVMTI_ERROR_NONE)CopyFailure(request,result,error);
   else if(error)error->clear();return result;

@@ -266,20 +266,21 @@ int main(){JNINativeInterface_ api{};api.GetObjectRefType=RefType;api.FindClass=
  auto input=static_cast<jclass>(Local(&objects.front()));
  globals=existing_class_roots;peak=globals;
  const auto stage_scopes=scope_calls;
- assert(verifier.Stage(&env,&ti,{input},bindings,&error));const auto graph_scopes=scope_calls-stage_scopes;assert(graph_scopes<root_count/16);assert(globals==existing_class_roots+(4*root_count+2+1023)/1024&&peak<51200);
+ const runnable_jni::Context stage_context{&thread,&env,bindings.vm};
+ assert(verifier.Stage(stage_context,&ti,{input},bindings,&error));const auto graph_scopes=scope_calls-stage_scopes;assert(graph_scopes==0);assert(globals==existing_class_roots+(4*root_count+2+1023)/1024&&peak<51200);
  assert(verifier.MatchesAffected(&env,{input},&error));
  auto unequal=static_cast<jclass>(Local(&objects[1]));
  assert(!verifier.MatchesAffected(&env,{unequal},&error));
  assert(!verifier.MatchesAffected(&env,{input,input},&error));Delete(&env,unequal);
  verifier.Clear(&env);assert(globals==existing_class_roots&&arrays==0);globals=0;
- fail_proxy=true;assert(!verifier.Stage(&env,&ti,{input},bindings,&error)&&pending_exception);
+ fail_proxy=true;assert(!verifier.Stage(stage_context,&ti,{input},bindings,&error)&&pending_exception);
  assert(error=="Public proxy Class classification failed");ClearException(&env);fail_proxy=false;
  verifier.Clear(&env);assert(globals==0&&arrays==0);
  // The complete public graph reports the exact unrelated declaration whose
  // public mirror leaf failed, without clearing its original JNI exception.
  declaration_failure=true;bindings.stage_field=DeclaringFailure;
  jvmti_api.GetFieldName=DeclarationName;jvmti_api.GetFieldModifiers=DeclarationFlags;
- assert(!verifier.Stage(&env,&ti,{input},bindings,&error)&&pending_exception);
+ assert(!verifier.Stage(stage_context,&ti,{input},bindings,&error)&&pending_exception);
  assert(error=="Public contextual Field stage [class=LTest0; field=optional type=Loptional/Missing;] Public contextual Field round trip unavailable");
  ClearException(&env);declaration_failure=false;verifier.Clear(&env);assert(globals==0&&arrays==0);Delete(&env,input);
  Delete(&env,ar);Delete(&env,br);Delete(&env,cr);

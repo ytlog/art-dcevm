@@ -1,5 +1,6 @@
 #include "platform/common/readable_mapping_scope.h"
 #include "platform/common/native_call_graph_inventory.h"
+#include "platform/common/native_call_graph_stack.h"
 #include "platform/common/native_call_graph_dispatch.h"
 #include "platform/common/native_interface_dispatch.h"
 #include "platform/common/native_dex_identity.h"
@@ -247,7 +248,7 @@ struct Verifier::State {
  struct ClassProof {void* methods=nullptr;void* instances=nullptr;void* statics=nullptr;void* dex_cache=nullptr;void* interfaces=nullptr;uint32_t flags=0,kind=0,primitive=0,instance_count=0,static_count=0;std::vector<void*> interface_classes;};
  struct MemberProof {void* member;size_t owner;uint32_t flags,index,offset;bool field;jfieldID field_id=nullptr;};
  struct InterfaceProof {void* klass=nullptr;void* table=nullptr;std::vector<void*> values;};
- Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<InterfaceProof> replacement_interfaces;
+ Snapshot frozen_snapshot;std::vector<ClassProof> class_proofs;std::vector<MemberProof> member_proofs;std::vector<std::pair<void*,size_t>> frozen_methods;std::vector<InterfaceProof> replacement_interfaces;
  mutable const Snapshot* batch_snapshot=nullptr;
  mutable const std::vector<native_schema_policy::GuardRequest>* preparing_requests=nullptr;
  mutable const source_commit::Plan* requirements_plan=nullptr;
@@ -478,6 +479,22 @@ struct Verifier::State {
  }
 };
 Verifier::Verifier():state_(new State){}
+bounded_managed_roots::Store*Verifier::CallGraphRoots()noexcept{return &state_->roots;}
+bool Verifier::CallGraphAffectedInputs(const runnable_jni::Context&context,
+ std::vector<IncomingClass>*out,std::string*error)const{
+ const auto&s=*state_;
+ if(!out||!context.env||context.env->ExceptionCheck()||!s.staged||s.frozen||s.stopped_context||
+    context.vm!=s.bindings.vm||!runnable_jni::Bridge::BorrowOriginalScope(context))
+  return Fail(error,"Incoming Class census requires the staged ordinary verifier");
+ std::vector<IncomingClass>candidate;
+ for(const auto&node:s.nodes)if(node.affected){
+  if(!s.roots.Valid(node.root)||node.schema.descriptor.empty())
+   return Fail(error,"Incoming affected Class lacks its independent root or descriptor");
+  candidate.push_back({node.root,node.schema.descriptor});
+ }
+ if(candidate.empty())return Fail(error,"Incoming affected Class census is empty");
+ *out=std::move(candidate);return true;
+}
 Verifier::~Verifier(){if(!state_->nodes.empty()||!state_->inputs.empty()||!state_->roots.Empty())std::abort();}
 void Verifier::Clear(JNIEnv* env){if(!env&&(!state_->nodes.empty()||!state_->inputs.empty()||!state_->roots.Empty()))std::abort();if(env)state_->roots.Clear(env);*state_=State{};}
 bool Verifier::CaptureCallGraph(const runnable_jni::Context&context,
@@ -499,6 +516,27 @@ bool Verifier::CaptureCallGraph(const runnable_jni::Context&context,
   if(!declarations.emplace(method,std::make_pair(n,i)).second||!read.extent(read.owner,method,&extent)||
      !method_metadata::ReadIdentity(layout,method,extent,&identity)||
      !dex_indices[n].emplace(identity.dex_method_index,i).second)return Fail(error,"Call graph declaration index is ambiguous");
+  const auto&node=s.nodes[n];
+  if(i>=node.schema.methods.size())return Fail(error,"Call graph canonical public declaration is absent");
+  out->canonical_.push_back({{method,node.root,node.root,identity.dex_method_index,
+    jvmti_method_flags::Public(identity.access_flags)},node.loader,node.schema.methods[i]});
+ }
+ // Keep the complete public class graph, including classes with no concrete
+ // executable method. They still contribute receivers and abstract declarations.
+ for(size_t n=0;n<s.nodes.size();++n){
+  native_call_graph_inventory::Inventory::Class record;
+  record.root=s.nodes[n].root;record.parent=s.nodes[n].parent;
+  record.interfaces=s.nodes[n].interfaces;record.access=s.nodes[n].schema.access;
+  out->classes_.push_back(std::move(record));
+  for(void*method:snapshot.all_methods[n]){
+   size_t extent=0;method_metadata::Identity identity{};
+   const auto owner=classes.find(s.bindings.method_class(s.bindings.owner,method));
+   if(owner==classes.end()||!read.extent(read.owner,method,&extent)||
+      !method_metadata::ReadIdentity(layout,method,extent,&identity))
+    return Fail(error,"Call graph rooted declaration prefix is unavailable");
+   out->declarations_.push_back({method,s.nodes[owner->second].root,s.nodes[n].root,
+    identity.dex_method_index,jvmti_method_flags::Public(identity.access_flags)});
+  }
  }
  std::map<std::pair<std::string,std::string>,std::vector<size_t>> signatures;
  std::set<std::pair<std::string,std::string>> affected_fields;
@@ -587,6 +625,32 @@ bool Verifier::CaptureCallGraph(const runnable_jni::Context&context,
  }
  out->roots_=&s.roots;out->generation_=s.roots.Generation();out->census_revision_=s.census_revision;return true;
 }
+bool Verifier::MatchCallGraphDeclaration(const native_call_graph_inventory::Inventory&inventory,
+ void*carrier,const native_selective_interpretation::Method&declaration,
+ const evolution::Member&member,const modern_field_metadata::ReadContext&read)const noexcept{
+ const auto&s=*state_;
+ if(inventory.verifier_!=this||inventory.roots_!=&s.roots||inventory.generation_!=s.roots.Generation()||
+    !redefinition_gate::Owned(s.bindings.vm)||!s.bindings.same_method||!s.bindings.methods||
+    !s.bindings.metadata||!read.owner||!read.extent)return false;
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?
+  method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ void*declaring=nullptr;void*containing=nullptr;size_t extent=0;method_metadata::Identity original{},copy{};
+ if(!s.roots.Read(declaration.declaring_root,&declaring)||!declaring||
+    !s.roots.Read(declaration.containing_root,&containing)||containing!=declaring||
+    !read.extent(read.owner,carrier,&extent)||!method_metadata::ReadIdentity(layout,carrier,extent,&copy)||
+    !read.extent(read.owner,declaration.method,&extent)||!method_metadata::ReadIdentity(layout,declaration.method,extent,&original)||
+    copy.dex_method_index!=declaration.dex_index||original.dex_method_index!=declaration.dex_index||
+    declaration.dex_index!=member.dex_index||((copy.access_flags|original.access_flags)&0x40000u)||
+    jvmti_method_flags::Public(copy.access_flags)!=jvmti_method_flags::Public(member.access)||
+    jvmti_method_flags::Public(original.access_flags)!=declaration.modifiers||
+    s.bindings.method_class(s.bindings.owner,carrier)!=declaring||
+    s.bindings.method_class(s.bindings.owner,declaration.method)!=declaring||
+    !read.extent(read.owner,declaring,&extent)||extent<56)return false;
+ auto*array=reinterpret_cast<void*>(uintptr_t(Read<uint64_t>(declaring,48)));
+ if(!array||!read.extent(read.owner,array,&extent)||
+    !native_selective_interpretation::detail::Member(array,extent,declaration.method,layout.size))return false;
+ return s.bindings.same_method(s.bindings.owner,carrier,declaration.method);
+}
 bool Verifier::ResolveCallGraphSuper(const runnable_jni::Context&context,receiver_guard::SourceProducer&source,
  const native_call_graph_super::Resolver&resolver,size_t caller,size_t site,void*declaration,
  native_call_graph_inventory::Inventory*inventory,std::string*error)const{
@@ -616,11 +680,9 @@ bool Verifier::ResolveCallGraphSuper(const runnable_jni::Context&context,receive
  for(auto n:candidates->second){if(!s.roots.Read(s.nodes[n].root,&actual))return false;
   if(actual==observed.referenced_class){referenced=s.nodes[n].root;++matches;}}
  if(matches!=1)return Fail(error,"Super referenced type outside current rooted census; needs-restage");
- // Interface default selection needs a full frozen conflict/override proof.
- // Its ordinary result alone cannot authorize a stopped publication.
- if(observed.interface_super)return true;
- if(m.declaring>=s.nodes.size()||!s.nodes[m.declaring].parent||
-   !s.roots.Read(s.nodes[m.declaring].parent,&actual)||actual!=observed.super_class)return Fail(error,"Super parent source changed; needs-restage");
+ if(m.declaring>=s.nodes.size())return false;
+ if(!observed.interface_super&&(!s.nodes[m.declaring].parent||
+   !s.roots.Read(s.nodes[m.declaring].parent,&actual)||actual!=observed.super_class))return Fail(error,"Super parent source changed; needs-restage");
  auto target=inventory->method_ordinals_.find(observed.target);
  if(target==inventory->method_ordinals_.end())return Fail(error,"Super target outside rooted method census; needs-restage");
  const auto&selected=inventory->methods_[target->second];void*containing=nullptr;
@@ -628,8 +690,16 @@ bool Verifier::ResolveCallGraphSuper(const runnable_jni::Context&context,receive
    actual!=s.bindings.metadata->MethodDeclaringClass(observed.target)||
    !s.roots.Read(selected.native.containing_root,&containing)||!containing)
   return Fail(error,"Super selected declaration/containing roots changed; needs-restage");
- inventory->supers_.push_back({caller,site,referenced,s.nodes[m.declaring].parent,
-  declaration,observed.target,observed.type_index,observed.slot,std::move(reference)});return true;
+ inventory->supers_.push_back({caller,site,referenced,observed.interface_super?bounded_managed_roots::Slot{}:s.nodes[m.declaring].parent,
+  declaration,observed.target,observed.type_index,observed.slot,observed.interface_super,std::move(reference)});return true;
+}
+std::unique_ptr<native_call_graph_dispatch::Reader>Verifier::CallGraphDispatchReader(
+ const native_call_graph_inventory::Inventory&inventory)const{
+ const auto&s=*state_;
+ if(inventory.verifier_!=this||inventory.roots_!=&s.roots||inventory.generation_!=s.roots.Generation()||
+    !s.bindings.metadata||!s.bindings.methods||!s.bindings.abstract_instances||!s.bindings.abstract_instances->Ready())return nullptr;
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ return std::make_unique<native_call_graph_dispatch::Reader>(*s.bindings.metadata,*s.bindings.abstract_instances,layout);
 }
 bool Verifier::ApplyCallGraphResolution(const runnable_jni::Context&context,
  const std::vector<native_call_graph_resolution::Result>&results,
@@ -741,7 +811,7 @@ bool Verifier::ValidateCallGraphOrdinary(const native_call_graph_inventory::Inve
  return ValidateCallGraphSource(inventory,read,false);
 }
 bool Verifier::ValidateCallGraphSource(const native_call_graph_inventory::Inventory&inventory,
- const modern_field_metadata::ReadContext&read,bool final,const native_source_stop::Session*stop)const noexcept{
+ const modern_field_metadata::ReadContext&read,bool final,const native_source_stop::Session*stop,const runnable_jni::Context*context)const noexcept{
  const auto&s=*state_;
  if(inventory.verifier_!=this||inventory.roots_!=&s.roots||inventory.generation_!=s.roots.Generation()||
    (inventory.resolved_&&s.census_revision<=inventory.census_revision_)||
@@ -780,25 +850,28 @@ bool Verifier::ValidateCallGraphSource(const native_call_graph_inventory::Invent
  }
 
  if(!inventory.supers_.empty()){
-  if(!stop||!inventory.super_resolver_||!inventory.source_)return false;
+  if((!stop&&!context)||!inventory.super_resolver_||!inventory.source_)return false;
   for(const auto&w:inventory.supers_){
    if(w.caller>=inventory.methods_.size())return false;const auto&m=inventory.methods_[w.caller];
    if(w.site>=m.calls.size())return false;
    void*caller=nullptr;void*referenced=nullptr;void*parent=nullptr;
    if(!s.roots.Read(m.native.declaring_root,&caller)||!s.roots.Read(w.referenced,&referenced)||
-     !s.roots.Read(w.parent,&parent))return false;
+     (!w.interface_super&&!s.roots.Read(w.parent,&parent)))return false;
    receiver_guard::CodeView code{};
    if(!inventory.source_->Code(inventory.self_,m.native.method,&code,read))return false;
    native_call_graph_super::Observation current{m.native.method,referenced,caller,parent,w.declaration,w.target,
-     m.code.source_dex.begin,m.calls[w.site].dex_pc,w.type_index,w.slot,false};
-   if(!inventory.super_resolver_->ValidateObserved(*stop,inventory.self_,code,m.bytes,m.calls[w.site],w.reference,current,read))return false;
+     m.code.source_dex.begin,m.calls[w.site].dex_pc,w.type_index,w.slot,w.interface_super};
+   if(stop){if(!inventory.super_resolver_->ValidateObserved(*stop,inventory.self_,code,m.bytes,m.calls[w.site],w.reference,current,read))return false;}
+   else if(!context||context->self!=inventory.self_||
+           !inventory.super_resolver_->ValidateObservedOrdinary(*context,*inventory.source_,code,m.bytes,m.calls[w.site],w.reference,current,read))return false;
   }
  }
  return true;
 }
-bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,const Bindings& bindings,std::string* error){
- if(!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");if(!EnsureCallGraphBytecodes(ti,error))return false;state_->bindings=bindings;state_->roots.Bind(bindings.roots);
- for(auto klass:inputs){bounded_managed_roots::Slot slot;if(!state_->roots.Stage(env,klass,&slot,error))return false;state_->inputs.push_back(slot);}
+bool Verifier::Stage(const runnable_jni::Context&context,jvmtiEnv* ti,const std::vector<jclass>& inputs,const Bindings& bindings,std::string* error){
+ auto*env=context.env;
+ if(!context.self||context.vm!=bindings.vm||!env||!ti||inputs.empty()||!redefinition_gate::Owned(bindings.vm)||env->ExceptionCheck()||!state_->nodes.empty())return Fail(error,"Invalid or repeated schema graph stage");if(!EnsureCallGraphBytecodes(ti,error))return false;state_->bindings=bindings;state_->roots.Bind(bindings.roots);
+ for(auto klass:inputs){bounded_managed_roots::Slot slot;if(!state_->roots.Stage(context,klass,&slot,error))return false;state_->inputs.push_back(slot);}
  struct NameMethods {JNIEnv* env;jclass proxy=nullptr,klass=nullptr;~NameMethods(){if(proxy)env->DeleteLocalRef(proxy);if(klass)env->DeleteLocalRef(klass);}} public_names{env};
  public_names.proxy=env->FindClass("java/lang/reflect/Proxy");public_names.klass=env->FindClass("java/lang/Class");
  if(!public_names.proxy||!public_names.klass||env->ExceptionCheck())return Fail(error,"Public Class kind/name service unavailable");
@@ -811,7 +884,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  // survive JNI calls; node/interface storage is reserved before queueing.
  using RootSlot=bounded_managed_roots::Slot;
  bounded_managed_roots::RootCohort<RootSlot*> cohort{
-  state_->roots,env,error,nullptr,[](void*,RootSlot* const& destination,RootSlot slot)noexcept{
+  state_->roots,context,error,nullptr,[](void*,RootSlot* const& destination,RootSlot slot)noexcept{
    if(!destination)return false;*destination=slot;return true;
   }};
  auto& staged_names=state_->public_index.buckets;
@@ -824,7 +897,7 @@ bool Verifier::Stage(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& inputs,
  for(jint i=0;i<count;++i){jint status=0;if(ti->GetClassStatus(classes[i],&status)!=JVMTI_ERROR_NONE)return false;
   if(!CallerClass(status)){
    if(!cohort.Flush())return false;bool existing=false;
-   if(!state_->error_census.Stage(env,ti,classes[i],status,state_->roots,&existing,error))return false;
+   if(!state_->error_census.Stage(context,ti,classes[i],status,state_->roots,&existing,error))return false;
    if(existing)++known;continue;
   }
   if(!PreparedCaller(status))return Fail(error,"Unprepared loaded Class prevents complete caller provenance");
@@ -888,6 +961,23 @@ bool Verifier::CheckWindow(JNIEnv*env,jvmtiEnv*ti,const std::vector<jclass>&actu
 bool Verifier::RefreshCallGraphCensus(JNIEnv*env,jvmtiEnv*ti,const std::vector<jclass>&inputs,std::string*error){
  if(native_source_class_loading::Run::Current())return Fail(error,"Call graph census requires ordinary pre-source JNI");
  return CheckCallerWindow(env,ti,inputs,std::nullopt,error);
+}
+bool Verifier::RefreshCallGraphCensus(const runnable_jni::Context&context,jvmtiEnv*ti,
+ const native_source_class_loading::Run&loading,const void*driver,const void*holder,size_t count,std::string*error){
+ auto&s=*state_;
+ if(!context.env||context.vm!=s.bindings.vm||!runnable_jni::Bridge::BorrowOriginalScope(context)||
+    native_source_class_loading::Run::Current()!=&loading||!loading.OwnsDriver(driver)||
+    !loading.OwnsFinishedHolder(holder,count)||s.frozen||s.stopped_context)
+  return Fail(error,"Incoming graph census requires same original finished loading Holder");
+ std::vector<jclass>inputs;inputs.reserve(s.inputs.size());
+ struct Locals {JNIEnv*env;std::vector<jclass>&inputs;~Locals(){for(auto klass:inputs)env->DeleteLocalRef(klass);}}locals{context.env,inputs};
+ for(auto root:s.inputs){auto klass=static_cast<jclass>(s.roots.LocalRef(context.env,root));
+  if(klass)inputs.push_back(klass);
+  if(!klass||context.env->ExceptionCheck())return Fail(error,"Incoming graph original input roots are unavailable");
+ }
+ if(!CheckCallerWindow(context.env,ti,inputs,std::nullopt,error))return false;
+ return (native_source_class_loading::Run::Current()==&loading&&loading.OwnsDriver(driver)&&
+         loading.OwnsFinishedHolder(holder,count))||Fail(error,"Incoming graph loading owner changed during public census");
 }
 bool Verifier::CheckCallerWindow(JNIEnv* env,jvmtiEnv* ti,const std::vector<jclass>& actual,std::optional<Window> window,std::string* error){
  auto& s=*state_;if(!s.staged||(window&&s.collected)||(!window&&(s.frozen||s.stopped_context))||(window==Window::Verified&&s.verified)||!redefinition_gate::Owned(s.bindings.vm)||!env||!ti||env->ExceptionCheck()||(window==Window::Collected&&!s.verified))return Fail(error,"Schema window order or context is invalid");
@@ -1012,7 +1102,7 @@ bool Verifier::Verify(const source_commit::Plan& transaction,size_t pair,void* l
   case Kind::InterfaceIdentities:return s.Interfaces(roots,transaction,error);
   case Kind::HierarchyGraph:return Fail(error,"Hierarchy changes require the owned rooted allocator/receiver/type-cache proof service");
   case Kind::AccessPermissions:{
-   if(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(transaction,error))return Fail(error,"Access permission changes require the proven process interpreter/deopt owner");
+   if(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(transaction,error))return Fail(error,"Access permission changes require the complete transaction interpretation policy");
    // A bootstrap ClassLinker lookup cannot resolve a Class defined only in
    // an application/custom defining-loader namespace. Its dynamic reflection,
    // JNI and handle consumers remain governed by their independent entry guards.
@@ -1076,6 +1166,19 @@ bool Verifier::UseHierarchyAuthority(const HierarchyAuthority* authority)noexcep
     (s.hierarchy_authority&&s.hierarchy_authority!=authority))return false;
  s.hierarchy_authority=authority;return true;
 }
+bool Verifier::VerifyFrozenGuards(const source_commit::Plan&transaction,
+ const modern_field_metadata::ReadContext&read)const noexcept {
+ const auto&s=*state_;
+ if(!s.sealed||!s.frozen||!s.refreshed||s.requirements_plan!=&transaction||
+    s.preparing_requests||s.batch_snapshot||s.stopped_context!=&read||
+    !read.owner||!read.extent||!SamePlan(transaction,s.expected)||!s.FrozenProof())return false;
+ // required_requests and their loader roots were prepared before registration.
+ // Verify's frozen branch only checks native receipts and the actual authority;
+ // it cannot add a grant or derive a new request from mutable declarations.
+ for(const auto&request:s.required_requests)
+  if(!Verify(transaction,request.class_pair,request.loader,request.requirement,nullptr))return false;
+ return true;
+}
 
 bool Verifier::VerifyBatch(const source_commit::Plan& transaction,const std::vector<native_schema_policy::GuardRequest>& requests,std::string* error)const {
  auto& s=*state_;
@@ -1127,6 +1230,13 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
    if(it==class_index.end()||!method_metadata::ReadIdentity(layout,method,layout.size,&identity))return false;
    s.member_proofs.push_back({method,it->second,jvmti_method_flags::Public(identity.access_flags),identity.dex_method_index,0,false});}
  }
+ // Index every opaque method identity before registration. Final lookup
+ // never allocates, decodes JNI IDs or substitutes member names for identity.
+ for(size_t index=0;index<s.member_proofs.size();++index){const auto& member=s.member_proofs[index];
+  if(!member.field)s.frozen_methods.emplace_back(member.member,index);}
+ std::sort(s.frozen_methods.begin(),s.frozen_methods.end(),[](const auto&a,const auto&b){return std::less<void*>{}(a.first,b.first);});
+ for(size_t index=1;index<s.frozen_methods.size();++index)
+  if(s.frozen_methods[index-1].first==s.frozen_methods[index].first)return Fail(error,"Frozen method identities are ambiguous");
  for(void* klass:s.expected.new_classes){State::InterfaceProof proof;proof.klass=klass;proof.table=s.bindings.metadata->Reference(klass,24);
   if(proof.table){if(!s.bindings.readable(s.bindings.owner,proof.table,12))return false;const uint32_t length=Read<uint32_t>(proof.table,8);
    if(length%2||!s.bindings.readable(s.bindings.owner,proof.table,12+size_t(length)*4))return false;
@@ -1140,20 +1250,58 @@ bool Verifier::CollectManagedRoots(const prepared_roots::Registrar& registrar,st
  for(auto& proof:s.replacement_interfaces){if(!s.frozen_roots.Add(&proof.klass,registrar)||!s.frozen_roots.Add(&proof.table,registrar))return false;for(auto& value:proof.values)if(!s.frozen_roots.Add(&value,registrar))return false;}
  for(auto& grant:s.grants)if(!s.frozen_roots.Add(&grant.loader,registrar))return false;
  for(auto& request:s.required_requests)if(!s.frozen_roots.Add(&request.loader,registrar))return false;
+ if(!s.roots.CollectManagedRoots(registrar))return Fail(error,"Schema retaining arrays could not register source roots");
  s.frozen_roots.Seal();s.frozen=true;return s.FrozenProof();
 }
 
 bool Verifier::CanRefreshManagedRoots(const prepared_roots::Resolver& resolver)const noexcept{
- const auto& s=*state_;return s.frozen&&s.sealed&&redefinition_gate::Owned(s.bindings.vm)&&s.expected_roots.CanRefresh(resolver)&&s.frozen_roots.CanRefresh(resolver)&&s.error_census.CanRefresh(resolver);
+ const auto& s=*state_;return s.frozen&&s.sealed&&redefinition_gate::Owned(s.bindings.vm)&&s.roots.CanRefreshManagedRoots(resolver)&&s.expected_roots.CanRefresh(resolver)&&s.frozen_roots.CanRefresh(resolver)&&s.error_census.CanRefresh(resolver);
 }
 bool Verifier::RefreshManagedRoots(const source_commit::Plan& plan,const prepared_roots::Resolver& resolver) noexcept{
  auto& s=*state_;s.refreshed=false;if(!CanRefreshManagedRoots(resolver))return false;
+ if(!s.roots.RefreshManagedRoots(resolver))return false;
  s.expected_roots.Refresh(resolver);s.frozen_roots.Refresh(resolver);s.error_census.Refresh(resolver);
  if(!SamePlan(plan,s.expected)||!s.FrozenProof())return false;
  if((s.final_fields_proven||s.aliases_proven)&&(!s.bindings.final_fields||
     !s.bindings.final_fields->RefreshPlan(plan,nullptr)||!s.bindings.final_fields->VerifyAliases(plan,nullptr)))return false;
  if(s.access_proven&&(!s.bindings.access_permissions||!s.bindings.access_permissions->Verify(plan,nullptr)))return false;
  s.refreshed=true;return true;
+}
+
+bool Verifier::VerifyFrozenBoundaryMembers(const source_commit::Plan&plan,
+ const std::vector<native_call_graph_stack::Frame>&frames,const modern_field_metadata::ReadContext&read)const noexcept{
+ const auto&s=*state_;
+ if(!s.frozen||!s.refreshed||s.stopped_context!=&read||!SamePlan(plan,s.expected)||!s.FrozenProof())return false;
+ const auto&layout=s.bindings.methods->model==method_identity::Model::kMethod11?method_metadata::kAndroid11:method_metadata::kAndroid12Onward;
+ // The native member and any Java return carrier use the same frozen census.
+ // A logical inline method cannot stand in for its outer quick-frame method.
+ const auto member_matches=[&](void*method,const native_call_graph_stack::Frame*logical)noexcept{
+  if(!method)return false;
+  const auto found=std::lower_bound(s.frozen_methods.begin(),s.frozen_methods.end(),method,
+   [](const auto&entry,void*value){return std::less<void*>{}(entry.first,value);});
+  if(found==s.frozen_methods.end()||found->first!=method||found->second>=s.member_proofs.size())return false;
+  const auto&member=s.member_proofs[found->second];
+  size_t extent=0;method_metadata::Identity identity;
+  if(member.field||member.owner>=s.frozen_snapshot.classes.size()||!read.extent||
+     !read.extent(read.owner,method,&extent)||!method_metadata::ReadIdentity(layout,method,extent,&identity)||
+     identity.dex_method_index!=member.index||jvmti_method_flags::Public(identity.access_flags)!=member.flags||
+     s.bindings.method_class(s.bindings.owner,method)!=s.frozen_snapshot.classes[member.owner])return false;
+  return !logical||(logical->method==method&&logical->index==identity.dex_method_index&&logical->flags==identity.access_flags);
+ };
+ for(size_t ordinal=0;ordinal<frames.size();++ordinal){const auto&frame=frames[ordinal];
+  if(frame.kind==native_call_graph_stack::FrameKind::Native&&
+     (!(frame.flags&0x100u)||frame.index==UINT32_MAX||!member_matches(frame.method,&frame)))return false;
+  if(frame.return_carrier==SIZE_MAX)continue;
+  if((frame.kind!=native_call_graph_stack::FrameKind::Native&&frame.kind!=native_call_graph_stack::FrameKind::Runtime)||
+     frame.return_carrier!=ordinal+1||frame.return_carrier>=frames.size())return false;
+  const auto&next=frames[frame.return_carrier];
+  // Runtime carriers require their independent original runtime-method owner.
+  // Only Java carriers can join the loaded Class/member census here; neither
+  // branch supplies the remaining native root, ingress or retirement proof.
+  if(next.kind==native_call_graph_stack::FrameKind::Managed&&
+     (!member_matches(next.method,&next)||!member_matches(next.carrier_method,nullptr)))return false;
+ }
+ return true;
 }
 
 bool Verifier::VerifyHierarchyDomain(const source_commit::Plan&plan,

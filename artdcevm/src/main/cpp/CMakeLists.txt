@@ -67,10 +67,12 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/resolution_invalidation_plan.cc
     platform/common/ordinary_source_fixture.cc
     platform/common/bootstrap_dex_oracle.cc
+    platform/common/production_installed_dex.cc
     platform/common/production_bootstrap.cc
     platform/common/rooted_field_identities.cc
     platform/common/capability_backend.cc
     platform/common/native_owned_removal.cc
+    platform/common/native_transformed_definitions.cc
     platform/common/redefinition_gate.cc
     platform/common/contextual_field_id.cc
     platform/common/modern_method_handle_guards.cc
@@ -107,8 +109,13 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_call_graph_dispatch.cc
     platform/common/native_call_graph_super.cc
     platform/common/native_selective_interpretation.cc
+    platform/common/native_interpretation_registry.cc
     platform/common/native_call_graph_stack.cc
     platform/common/native_call_graph_execution.cc
+    platform/common/native_call_graph_commit.cc
+    platform/common/native_call_graph_run.cc
+    platform/common/native_call_graph_payload.cc
+    platform/common/native_call_graph_windows.cc
     platform/common/native_receiver_class_source.cc
     platform/common/native_receiver_producer.cc
     platform/common/native_receiver_source_calibration.cc
@@ -119,6 +126,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_hierarchy_session.cc
     platform/common/native_production_schema_capabilities.cc
     platform/common/native_source_class_loading.cc
+    platform/common/native_source_compilation.cc
     platform/common/native_hierarchy_private_ledger.cc
     platform/common/native_source_dex_registry.cc
     platform/common/source_cache_resolution.cc

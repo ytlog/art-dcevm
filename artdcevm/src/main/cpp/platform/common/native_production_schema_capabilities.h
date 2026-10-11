@@ -15,9 +15,11 @@ class Owner final {
               const modern_field_metadata::FieldMetadata&,
               const runtime_services::Snapshot&,const runnable_jni::Context& actual_native,
               std::string*);
- // Caller is in independently calibrated ordinary Native JNI. Each hook
+ // Supply the installation call's actual Native context; preparation retains
+ // no JNIEnv or Thread across calls. Each hook
  // installer enters and leaves its actual named ScopedSuspendAll exactly once.
- bool InstallHooks(native_hierarchy_source_checks::FailureObserver,std::string*);
+ bool InstallHooks(const runnable_jni::Context& actual_native,
+                   native_hierarchy_source_checks::FailureObserver,std::string*);
  bool Begin(void* actual_driver,const runnable_jni::Context& actual_runnable,
             jobject owned_strong_original_class,std::string*);
  // Called in the original Run owner, after the original has returned. Drops
@@ -45,10 +47,7 @@ class Owner final {
  native_class_lookup::Service lookup_;
  native_hierarchy_source_checks::FailureObserver observer_=nullptr;
  std::unique_ptr<native_hierarchy_session::CalibrationScope> scope_;
- runnable_jni::Context context_{};
- runnable_jni::Context native_context_{};
- abi::arm64::android11::CurrentThread current_=nullptr;
- unsigned state_shift_=0;uint32_t native_state_=0;
+ const runnable_jni::Context*context_=nullptr;
  void* driver_=nullptr;jobject fixture_=nullptr;
  bool prepared_=false,installed_=false,completed_=false;
 };

@@ -2,6 +2,7 @@
 #include "platform/abi/arm64/common/redefiner_prefix.h"
 #include "platform/abi/arm64/common/class_redefinition_prefix.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/modern_field_metadata.h"
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -84,15 +85,27 @@ void Run::AfterFinish(void*owner,bool success)noexcept{
  if(!finish_owner_||finish_owner_!=owner)std::abort();
  finish_owner_=nullptr;if(success)++next_;else failed_=true;
 }
+void Run::ObserveFailure(void*driver,jvmtiError error)noexcept{
+ if(error!=JVMTI_ERROR_NONE&&OwnsDriver(driver))failed_=true;
+}
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
 bool Run::OwnsFinishedHolder(const void*holder,size_t count)const noexcept{
  return Paused()&&!finish_owner_&&holder&&holder==holder_&&count&&size_t(next_)==count;
 }
 bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}
 bool Run::RefundWindow()const noexcept{
- if(!active_||complete_||!added_||!wait_complete_||finish_owner_||removal_!=Removal::kNone||current!=this||!Mapped(pauser_,sizeof(PauserPrefix)))return false;
+ modern_field_metadata::ReadContext read{nullptr,[](void*,const void*p,size_t*extent){return method_identity::ReadableMappingExtent(p,extent);}};
+ return RefundWindow(read);
+}
+bool Run::RefundWindow(const modern_field_metadata::ReadContext&read)const noexcept{
+ size_t extent=0;
+ if(!active_||complete_||!added_||!wait_complete_||finish_owner_||removal_!=Removal::kNone||current!=this||
+    !pauser_||!read.extent||!read.extent(read.owner,pauser_,&extent)||extent<sizeof(PauserPrefix))return false;
  PauserPrefix p;std::memcpy(&p,pauser_,sizeof(p));
  return p.vtable==service_.vtable_&&p.self==context_.self&&p.running==1;
+}
+bool Run::OwnsRefundHolder(const void*holder,size_t count,const modern_field_metadata::ReadContext&read)const noexcept{
+ return holder&&holder==holder_&&count&&size_t(next_)==count&&RefundWindow(read);
 }
 bool Run::BeginCleanup(void* carrier)noexcept{
  if(!Paused()||finish_owner_||!carrier||cleanup_started_||!Mapped(pauser_,sizeof(PauserPrefix))){failed_=true;return false;}

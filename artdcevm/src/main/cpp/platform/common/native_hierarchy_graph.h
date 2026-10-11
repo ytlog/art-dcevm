@@ -113,6 +113,8 @@ class Authority final {
  Authority(const Authority&)=delete;Authority& operator=(const Authority&)=delete;
  // Caller is an actual ordinary Runnable JNI owner. Globals remain live until
  // Clear after the entire original source transaction and its cleanup finish.
+ // Borrow the exact Context object through Clear; copies of its fields cannot
+ // replace the original JNI scope for allocator/graph root reads.
  bool Stage(const runnable_jni::Context&,jvmtiEnv*,const std::vector<Input>&,const Bindings&,std::string*);
  // Exact original Class and immutable incoming declarations only. Allows the
  // hierarchy comparisons or final/abstract mismatch; CheckRedefinable remains

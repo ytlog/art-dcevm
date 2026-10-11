@@ -30,6 +30,19 @@ const evolution::ClassSchema*Inventory::Schema()const noexcept{return state_?&st
 const std::vector<Method>&Inventory::Methods()const noexcept{
  static const std::vector<Method>empty;return state_?state_->methods:empty;
 }
+bool Inventory::MatchesInput(const std::vector<unsigned char>&bytes)const noexcept{
+ return state_&&!bytes.empty()&&bytes.size()==state_->bytes.size()&&
+  !std::memcmp(bytes.data(),state_->bytes.data(),bytes.size());
+}
+bool Inventory::Capture(const std::vector<unsigned char>&bytes,const std::string&expected,std::string*error){
+ const auto deny=[&](const char*why){if(error)*error=why;return false;};
+ if(state_||!error||expected.empty()||bytes.size()<112||std::memcmp(bytes.data(),"dex\n",4)||bytes[7]||
+    Read<uint32_t>(bytes.data()+32)!=bytes.size())return deny("call-graph-incoming-complete-standard-DEX-required");
+ uint32_t selected=UINT32_MAX;
+ if(!evolution::FindDexClassDefinition(bytes,expected,&selected,error))return false;
+ if(selected==UINT32_MAX)return deny("call-graph-incoming-ClassDef-descriptor-absent");
+ return Capture(bytes,selected,expected,error);
+}
 bool Inventory::Capture(const std::vector<unsigned char>&bytes,uint32_t klass,
  const std::string&expected,std::string*error){
  const auto deny=[&](const char*why){if(error)*error=why;return false;};
@@ -46,6 +59,8 @@ bool Inventory::Capture(const std::vector<unsigned char>&bytes,uint32_t klass,
   if(method.code_offset){
    receiver_guard::CodeView code;
    if(!View(candidate->bytes,klass,method,&code))return deny("call-graph-incoming-CodeItem-geometry-refused");
+   const auto*instructions=reinterpret_cast<const unsigned char*>(code.instructions);
+   method.instruction_bytes.assign(instructions,instructions+size_t(code.units)*2);
    std::vector<native_call_graph::CallSite>sites;const char*failure=nullptr;
    if(!native_call_graph::ScanCode(code,&sites,&failure))return deny(failure?failure:"call-graph-incoming-callsite-scan-refused");
    for(const auto&site:sites){
@@ -70,6 +85,11 @@ bool Inventory::MatchesNamespace(const evolution::MappedDexMetadata&map)const no
  if(!state_||!map.begin||!map.data_begin||map.class_def_index!=state_->class_def_index||
     map.begin!=map.data_begin||map.size!=state_->bytes.size()||map.data_size<map.size)return false;
  return !std::memcmp(map.begin,state_->bytes.data(),map.size);
+}
+const std::vector<unsigned char>*Inventory::InstructionBytes(uint32_t index)const noexcept{
+ if(!state_)return nullptr;
+ for(const auto&m:state_->methods)if(m.declaration.dex_index==index&&m.code_offset)return &m.instruction_bytes;
+ return nullptr;
 }
 bool Inventory::MatchesCode(uint32_t index,const receiver_guard::CodeView&actual)const noexcept{
  receiver_guard::CodeView expected;

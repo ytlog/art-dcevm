@@ -83,13 +83,9 @@ std::string CapabilityBackend::Capabilities()const {
 }
 int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definitions){
  OperationScope operation(operation_);if(!operation)return JVMTI_ERROR_NOT_AVAILABLE;
- if(op!=Operation::kEvolve){
-  int result=public_->Apply(op,definitions);
-  if(result==JVMTI_ERROR_NONE&&common_){
-   JNIEnv* env=nullptr;if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)==JNI_OK&&env)common_->RecordDefinitions(env,definitions);
-  }
-  return result;
- }
+ // Raw public submissions are not installed-DEX provenance: transform agents
+ // can replace them. Recording belongs to the actual final-input source path.
+ if(op!=Operation::kEvolve)return public_->Apply(op,definitions);
  // A declaration-equivalent evolution request uses the already attached
  // public JVMTI body route. ART still validates code/annotations and applies
  // ordinary constructor/clinit/native semantics; schema readiness grants none
@@ -100,14 +96,11 @@ int CapabilityBackend::Apply(Operation op,const std::vector<Definition>& definit
    bool body=true;
    for(const auto& d:definitions){evolution::ClassSchema live,dex;std::string diagnostic;
     if(live_schema::ReadLiveSchema(env_,ordinary,d.klass,&live,&diagnostic)!=JVMTI_ERROR_NONE||
-       ordinary->ExceptionCheck()||!evolution::ReadDexDeclarations(d.dex,&dex,&diagnostic)||
+       ordinary->ExceptionCheck()||!evolution::ReadDexDeclarations(d.dex,live.descriptor,&dex,&diagnostic)||
        !body_only::SameDeclarations(live,dex)){body=false;break;}
    }
    if(ordinary->ExceptionCheck())return JVMTI_ERROR_INTERNAL;
-   if(body){const int result=public_->Apply(Operation::kBody,definitions);
-    if(result==JVMTI_ERROR_NONE&&common_)common_->RecordDefinitions(ordinary,definitions);
-    return result;
-   }
+   if(body)return public_->Apply(Operation::kBody,definitions);
   }
  }
  if(!ready_||!common_)return JVMTI_ERROR_NOT_AVAILABLE;

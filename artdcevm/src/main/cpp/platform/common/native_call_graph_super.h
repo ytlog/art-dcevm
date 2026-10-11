@@ -4,6 +4,7 @@
 #include "platform/common/native_receiver_producer.h"
 #include "platform/common/native_source_stop.h"
 #include "platform/abi/arm64/android17/checked_method_resolution.h"
+namespace artdcevm::native_source_class_loading {class Run;}
 namespace artdcevm::native_call_graph_super {
 // Ephemeral source facts, never a rooted census/graph completeness certificate.
 // Any later resolver or safepoint invalidates the movable Class addresses.
@@ -29,15 +30,40 @@ class Resolver final {
  void*caller,const receiver_guard::CodeView&,const std::vector<unsigned char>&,
  const native_call_graph::CallSite&,void*actual_resolved,
  const modern_field_metadata::ReadContext&,Observation*,std::string*)const;
+ // The original loading pauser permits its own redefining thread to resolve
+ // types. Only the exact completed Holder/Run can enter this incoming path;
+ // a generic paused flag or a stopped-world scope cannot replace that owner.
+ bool ResolveIncoming(const runnable_jni::Context&,receiver_guard::SourceProducer&,
+ const native_source_class_loading::Run&,const void*driver,const void*holder,size_t count,
+ void*caller,const receiver_guard::CodeView&,const std::vector<unsigned char>&,
+ const native_call_graph::CallSite&,void*actual_resolved,
+ const modern_field_metadata::ReadContext&,Observation*,std::string*)const;
+ // Native-only preparation reader in a genuine original Runnable callback.
+ // It shares the same rooted/table predicates as the stopped reader; it grants
+ // no exclusion, source continuation or mutation rights.
+ bool ValidateObservedOrdinary(const runnable_jni::Context&,const receiver_guard::SourceProducer&,
+ const receiver_guard::CodeView&,const std::vector<unsigned char>&,
+ const native_call_graph::CallSite&,const evolution::MappedDexMethodReference&,
+ const Observation&,const modern_field_metadata::ReadContext&,
+ const char**failure=nullptr)const noexcept;
  // Reader only: the Inventory's private consumer supplies current actual
  // Store.Read roots and the remembered immutable DEX reference. This does not
- // mint a root/census receipt. Interface-super remains explicitly unsupported.
+ // mint a root/census receipt. Interface-super replays the complete current
+ // method arrays and reverse topological IfTable selection without allocation.
  bool ValidateObserved(const native_source_stop::Session&,void*self,
  const receiver_guard::CodeView&,const std::vector<unsigned char>&,
  const native_call_graph::CallSite&,const evolution::MappedDexMethodReference&,
  const Observation&,const modern_field_metadata::ReadContext&,
  const char**failure=nullptr)const noexcept;
  private:
+ bool Resolve(const runnable_jni::Context&,receiver_guard::SourceProducer&,
+ const native_source_class_loading::Run*,const void*driver,const void*holder,size_t count,
+ void*,const receiver_guard::CodeView&,const std::vector<unsigned char>&,
+ const native_call_graph::CallSite&,void*,const modern_field_metadata::ReadContext&,
+ Observation*,std::string*)const;
+ bool ValidateObservedCore(const receiver_guard::CodeView&,const std::vector<unsigned char>&,
+ const native_call_graph::CallSite&,const evolution::MappedDexMethodReference&,
+ const Observation&,const modern_field_metadata::ReadContext&,const char**)const noexcept;
  using TypeResolver=abi::arm64::android17::ResolveMethodClass;
  using InterfaceSuper=void*(*)(void*,void*,abi::arm64::android17::MethodPointerSize);
  const modern_field_metadata::FieldMetadata&metadata_;method_metadata::Layout layout_;

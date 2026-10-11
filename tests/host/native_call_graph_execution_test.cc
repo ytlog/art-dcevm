@@ -6,7 +6,7 @@ int main(int argc,char**argv){
  execution_fixture::Configure(environment,functions,bindings,argv[1]);
  assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
  native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
- if(!verifier.Stage(&env,&ti,affected,bindings,&error)){std::cerr<<"Actual Stage: "<<error<<"\n";return 2;}
+ if(!execution_fixture::Stage(verifier,&ti,affected,bindings,&error)){std::cerr<<"Actual Stage: "<<error<<"\n";return 2;}
  receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,code_item_metadata::kStandard,environment.metadata,&linker,Current,&error,&::runtime));
  native_call_graph_execution::Execution operation(environment.source,environment.threads);
  struct Preparation {native_call_graph_execution::Execution&operation;execution_fixture::Hooks&hooks;jvmtiEnv&ti;std::vector<jclass>&affected;native_schema_guard_verifier::Verifier&verifier;receiver_guard::SourceProducer&source;drain_fixture::Environment&environment;std::string&error;}request{operation,hooks,ti,affected,verifier,source,environment,error};
@@ -18,7 +18,7 @@ int main(int argc,char**argv){
  ExplicitMappings maps;maps.Cover(heap.base);maps.Cover(execution_fixture::dex.data());modern_field_metadata::ReadContext read{&maps,ExplicitMappings::Extent};execution_fixture::stopped_read=&read;
  if(scenario=="flags")Put32(keep,4,Read32(keep,4)|0x100u);
  if(scenario=="body")execution_fixture::dex[reinterpret_cast<abi::arm64::android12::Method12*>(scalar)->data-uintptr_t(execution_fixture::dex.data())+16]^=1;
- if(scenario=="generation"){verifier.Clear(&env);assert(verifier.Stage(&env,&ti,affected,bindings,&error));}
+ if(scenario=="generation"){verifier.Clear(&env);assert(execution_fixture::Stage(verifier,&ti,affected,bindings,&error));}
  auto inspected=operation.InspectActivation(thread.size(),read);assert(!stopped&&!drain_fixture::gc&&!locked&&!operation.InspectionStopped());
  using S=native_call_graph_execution::Status;
  if(scenario=="compiled"){assert(inspected.status==S::UnsupportedActiveCompiled&&!inspected.compiled_drained);std::cout<<"Original selected quick refused after actual resume PASS\n";verifier.Clear(&env);environment.store.Clear(&env);return 0;}

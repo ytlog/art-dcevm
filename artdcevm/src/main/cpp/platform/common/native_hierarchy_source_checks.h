@@ -18,7 +18,7 @@ class Scope final {
  private:
  bool Proof(void*,jvmtiError* expected_failure=nullptr);
  bool Mark(void*);
- void* driver_;runnable_jni::Context context_;
+ void* driver_;const runnable_jni::Context&context_;
  source_handle_roots::Service& roots_;native_hierarchy_graph::Authority& authority_;
  Refuse refuse_;Scope* previous_;
 };

@@ -9,6 +9,15 @@ namespace execution_fixture {
 using namespace artdcevm;
 std::vector<unsigned char> dex;std::map<jfieldID,void*>field_aliases;
 runnable_jni::Bridge bridge;int proxy_id,name_id,component_id;size_t public_enumerations=0;
+bool Stage(native_schema_guard_verifier::Verifier&verifier,jvmtiEnv*ti,
+ const std::vector<jclass>&inputs,const native_schema_guard_verifier::Bindings&bindings,std::string*error){
+ struct Request{native_schema_guard_verifier::Verifier&verifier;jvmtiEnv*ti;
+  const std::vector<jclass>&inputs;const native_schema_guard_verifier::Bindings&bindings;std::string*error;
+ }request{verifier,ti,inputs,bindings,error};
+ return bridge.Invoke(&env,reinterpret_cast<jobject>(executable[1]),[](const runnable_jni::Context&context,void*raw){
+  auto&r=*static_cast<Request*>(raw);return r.verifier.Stage(context,r.ti,r.inputs,r.bindings,r.error);
+ },&request)==runnable_jni::Result::kSuccess;
+}
 void*parent_method=nullptr;
 void* MethodAt(size_t i){if(i==3)return parent_method;return reinterpret_cast<char*>(old_method)+32*i;}
 size_t MethodIndex(jmethodID id){for(size_t i=0;i<4;++i)if(id==reinterpret_cast<jmethodID>(uintptr_t(MethodAt(i))|1u))return i;std::abort();}

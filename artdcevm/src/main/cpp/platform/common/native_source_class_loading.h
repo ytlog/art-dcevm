@@ -5,6 +5,7 @@
 #include "platform/common/runnable_jni_bridge.h"
 #include "platform/common/runtime_services.h"
 #include "platform/common/transaction_root_view.h"
+namespace artdcevm::modern_field_metadata {struct ReadContext;}
 namespace artdcevm::native_source_class_loading {
 class Run;
 namespace detail {struct Hooks;}
@@ -29,10 +30,15 @@ class Run final {
  // provenance checks. Private allocation inside Finish needs the completed wait.
  bool BeforeFinish(void* actual_owner,const transaction_root::Holder*,const void* actual_iterator)noexcept;
  void AfterFinish(void* actual_owner,bool original_result)noexcept;
+ // Sole original RecordFailure observer forwards the exact driver/error.
+ // Closing forward access never removes the pauser or retires Holder storage.
+ void ObserveFailure(void* actual_driver,jvmtiError)noexcept;
  bool Paused()const noexcept;
  // A source error closes forward preparation but leaves its actual pauser
  // installed until original cleanup. Only unpublished-object refund uses this.
  bool RefundWindow()const noexcept;
+ // Supplied snapshot only: safe in an actual stopped window without OS lookup.
+ bool RefundWindow(const modern_field_metadata::ReadContext&)const noexcept;
  bool BeginCleanup(void* actual_carrier)noexcept;
  bool EndCleanup(void* actual_carrier)noexcept;
  bool CleanupCompleted()const noexcept;
@@ -40,6 +46,10 @@ class Run final {
  // The exact Holder whose complete original Finish leaf sequence returned.
  // This attests loading/allocation provenance only, never Collected/GC/commit.
  bool OwnsFinishedHolder(const void*,size_t owner_count)const noexcept;
+ // Failure closes forward permission, but a completely finished, still-live
+ // Holder remains available solely for refund before original Remove begins.
+ bool OwnsRefundHolder(const void*,size_t owner_count,
+                       const modern_field_metadata::ReadContext&)const noexcept;
  // Call only after the actual source Run returned; the original Remove must have returned
  // before Run's private Holder/DEX destruction. Unwind never proves success;
  // no source pointer is read here.
@@ -49,7 +59,7 @@ class Run final {
  void Added(void* actual_callbacks,void* actual_pauser)noexcept;
  bool Removing(void* actual_callbacks,void* actual_pauser)noexcept;
  void Removed(void* actual_callbacks,void* actual_pauser,bool returned)noexcept;
- Service&service_;void*driver_;runnable_jni::Context context_;Run*previous_=nullptr;
+ Service&service_;void*driver_;const runnable_jni::Context&context_;Run*previous_=nullptr;
  void*cleanup_carrier_=nullptr;bool cleanup_started_=false,cleanup_ended_=false;
  void*callbacks_=nullptr;void*pauser_=nullptr;void*finish_owner_=nullptr;
  const transaction_root::Holder*holder_=nullptr;int32_t next_=0;

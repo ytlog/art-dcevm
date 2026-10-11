@@ -117,6 +117,9 @@ class Observation final {
 // scope takes over the SAME reservation; nesting another SuspendAll deadlocks.
 class Session {
  public:
+  // Negative lifecycle guard only. Absence of another owned source window
+  // grants no Runnable, calibration, GC or exclusive-mutator permission.
+  static bool InspectionAvailable()noexcept;
   explicit Session(const Service& service):service_(service){}
   ~Session();
   Session(const Session&)=delete;Session& operator=(const Session&)=delete;
@@ -125,6 +128,10 @@ class Session {
   // exclusive ownership. It must return true only after ContinueSource. All
   // refusal/resume/FinishGC completes before original C++ restores Runnable.
   bool BeginOriginalWaiting(void* self,size_t mapped_extent,void* owner,
+      bool (*prepare)(void*,Session&) noexcept) noexcept;
+  // Same continuation contract for both independently calibrated mechanisms.
+  // Refusal always closes the reservation before returning to Runnable.
+  bool BeginPrepared(void* self,size_t mapped_extent,void* owner,
       bool (*prepare)(void*,Session&) noexcept) noexcept;
   // Scoped inspection: true means the callback completed while genuinely stopped.
   // This scope grants exclusion and root readability only. A separate exact
@@ -143,6 +150,9 @@ class Session {
   bool PrepareDexPublication(void* driver,const void* holder,void* linker,size_t count,
       native_source_gc_publication::Matcher,std::string* error);
   bool CanPublishDex(void* driver,const void* holder,void* linker)const noexcept;
+  // Staged bitmap/matcher identity only, before continuation. It grants no
+  // publication window and does not call the matcher outside its real scope.
+  bool PublicationPrepared(void*driver,const void*holder,void*linker)const noexcept;
   bool IsPublicationWindow(void* self)const noexcept;
   bool ContinueSource() noexcept;
   // Refund only before handing the reservation to original source. Restore

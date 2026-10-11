@@ -6,6 +6,8 @@ namespace artdcevm::production_bootstrap {
 struct InstalledClassIds {
  uint32_t type_index=UINT32_MAX,type_count=0,field_count=0,method_count=0;
 };
+struct InstalledClassLocation {size_t file_index=SIZE_MAX;uint32_t class_def_index=UINT32_MAX;};
 bool SelectInstalledClass(const std::vector<std::vector<unsigned char>>&,const char*,
-    evolution::ClassSchema*,evolution::MappedDexMemberCounts*,std::string*,InstalledClassIds* =nullptr);
+    evolution::ClassSchema*,evolution::MappedDexMemberCounts*,std::string*,InstalledClassIds* =nullptr,
+    InstalledClassLocation* =nullptr);
 }

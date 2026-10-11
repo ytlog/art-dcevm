@@ -11,11 +11,16 @@
 #include <optional>
 namespace artdcevm::native_interface_dispatch_domain {class Source;}
 namespace artdcevm::native_call_graph_inventory {class Inventory;}
+namespace artdcevm::native_call_graph_stack {struct Frame;}
 namespace artdcevm::receiver_guard {class SourceProducer;}
 namespace artdcevm::native_call_graph_resolution {struct Result;}
 namespace artdcevm::native_call_graph_super {class Resolver;}
+namespace artdcevm::native_call_graph_dispatch {class Reader;}
+namespace artdcevm::native_call_graph_windows {class Factory;}
 namespace artdcevm::native_source_stop {class Session;}
+namespace artdcevm::native_source_class_loading {class Run;}
 namespace artdcevm::native_hierarchy_graph {struct Graph;}
+namespace artdcevm::native_selective_interpretation {struct Method;}
 namespace artdcevm::native_schema_guard_verifier {
 // A synchronous typed authority, owned by the exact original schema Run.
 // Binding this interface grants nothing; each hierarchy request must re-prove
@@ -42,8 +47,9 @@ class FinalFields {
 class AccessPermissions {
  public:
   virtual ~AccessPermissions()=default;
-  // Proven process interpreter/deopt owner must cover future compiled/AOT
-  // dispatch as well as currently active frames; flags alone are insufficient.
+  // The complete rooted call graph and calibrated persistent interpretation
+  // policy must cover current and future dispatch. Final consumption rechecks
+  // the prepared publication in the actual source stop; flags alone do not.
   virtual bool Verify(const source_commit::Plan&,std::string*)const=0;
   virtual void BeginCommit(const source_commit::Plan&)const=0;
 };
@@ -82,10 +88,12 @@ class Verifier final:public native_schema_policy::GuardVerifier {
  public:
   Verifier();~Verifier();
   Verifier(const Verifier&)=delete;Verifier& operator=(const Verifier&)=delete;
-  // Public JNI stage before ART pauses definitions. All loaded caller Classes,
+  // Stage inside the actual original JNI callback before ART pauses definitions.
+  // Reuse its exact Context for every root/cohort; never nest an executor.
+  // All loaded caller Classes,
   // methods and direct interface identities are independently observed. Input
   // roots name the complete affected graph; caller supplies its existing lease.
-  bool Stage(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& input_roots,
+  bool Stage(const runnable_jni::Context&,jvmtiEnv*,const std::vector<jclass>& input_roots,
              const Bindings&,std::string*);
   // Closing public mirrors may load a descendant. The outer preflight graph
   // must contain every such affected identity before source Run starts.
@@ -97,6 +105,12 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // Ordinary public census refresh for graph preparation; never consumes the
   // original source Verified/Collected state transitions.
   bool RefreshCallGraphCensus(JNIEnv*,jvmtiEnv*,const std::vector<jclass>& inputs,std::string*);
+  // Same actual loading Run, after its complete original Finish sequence and
+  // all incoming resolvers. Re-enumerates public classes without consuming
+  // Verified/Collected source transitions; an added class requires restaging.
+  bool RefreshCallGraphCensus(const runnable_jni::Context&,jvmtiEnv*,
+      const native_source_class_loading::Run&,const void*driver,const void*holder,
+      size_t owner_count,std::string*);
   bool ValidateCallGraphOrdinary(const native_call_graph_inventory::Inventory&,
       const modern_field_metadata::ReadContext&)const noexcept;
   // Original rooted native-only window, after public checks and before the
@@ -107,7 +121,19 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // Hierarchy requests are deferred to the actual sealed native authority.
   bool PrepareGuardProofs(const source_commit::Plan&,
       const std::vector<native_schema_policy::GuardRequest>&,std::string*)const;
+  // Join actual native methods and their Java return carriers (including
+  // outer inline carriers) to the independently frozen public member census.
+  // This proves member ownership only; continuation/ingress/root and
+  // retirement coverage are separate continuation obligations.
+  bool VerifyFrozenBoundaryMembers(const source_commit::Plan&,
+      const std::vector<native_call_graph_stack::Frame>&,
+      const modern_field_metadata::ReadContext&)const noexcept;
   bool UseHierarchyAuthority(const HierarchyAuthority*)noexcept;
+  // Recheck the complete internally retained requirement set after root
+  // refresh. No caller-selected subset, JNI census or declaration allocation
+  // is allowed in the actual collected/final source stop.
+  bool VerifyFrozenGuards(const source_commit::Plan&,
+      const modern_field_metadata::ReadContext&)const noexcept;
   bool Verify(const source_commit::Plan&,size_t,void*,
               const native_schema_policy::Requirement&,std::string*)const override;
   bool VerifyBatch(const source_commit::Plan&,const std::vector<native_schema_policy::GuardRequest>&,std::string*)const override;
@@ -129,15 +155,28 @@ class Verifier final:public native_schema_policy::GuardVerifier {
   // roots, public method-ID caches or loader retention survive an operation.
   void Clear(JNIEnv*);
  private:
+  friend class native_call_graph_windows::Factory;
+  // Stable storage borrowed by the operation factory before public staging.
+  // The store grants no census/selection authority; every consumer separately
+  // checks its generation and this verifier's completed independent stage.
+  bounded_managed_roots::Store*CallGraphRoots()noexcept;
+  struct IncomingClass {bounded_managed_roots::Slot root{};std::string descriptor;};
+  bool CallGraphAffectedInputs(const runnable_jni::Context&,
+                              std::vector<IncomingClass>*,std::string*)const;
   friend class native_interface_dispatch_domain::Source;
   friend class native_call_graph_inventory::Inventory;
+  bool MatchCallGraphDeclaration(const native_call_graph_inventory::Inventory&,
+      void*carrier,const native_selective_interpretation::Method&,
+      const evolution::Member&,const modern_field_metadata::ReadContext&)const noexcept;
   bool CheckCallerWindow(JNIEnv*,jvmtiEnv*,const std::vector<jclass>&,
       std::optional<Window>,std::string*);
   bool ValidateCallGraphSource(const native_call_graph_inventory::Inventory&,
-      const modern_field_metadata::ReadContext&,bool final,const native_source_stop::Session* =nullptr)const noexcept;
+      const modern_field_metadata::ReadContext&,bool final,const native_source_stop::Session* =nullptr,const runnable_jni::Context* =nullptr)const noexcept;
   bool ResolveCallGraphSuper(const runnable_jni::Context&,receiver_guard::SourceProducer&,
       const native_call_graph_super::Resolver&,size_t caller,size_t site,void*declaration,
       native_call_graph_inventory::Inventory*,std::string*)const;
+  std::unique_ptr<native_call_graph_dispatch::Reader>CallGraphDispatchReader(
+      const native_call_graph_inventory::Inventory&)const;
   bool ApplyCallGraphResolution(const runnable_jni::Context&,
       const std::vector<native_call_graph_resolution::Result>&,
       native_call_graph_inventory::Inventory*,std::string*)const;

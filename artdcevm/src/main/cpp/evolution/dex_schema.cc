@@ -37,6 +37,16 @@ class Reader {
   explicit Reader(const MappedDexMetadata& view)
       : begin_(view.begin), size_(view.size), data_(view.data_begin), data_length_(view.data_size),
         declaration_flags_(true), mapped_(true), class_def_index_(view.class_def_index) {}
+  uint32_t FindClass(std::string_view descriptor) {
+    Initialize();
+    auto classes=Table(96,32);uint32_t selected=UINT32_MAX;
+    for(uint32_t index=0;index<classes.count;++index){
+      if(descriptor!=TypeView(U32(Item(classes,index))))continue;
+      if(selected!=UINT32_MAX)Fail("Ambiguous target descriptor in DEX ClassDefs");
+      selected=index;
+    }
+    return selected;
+  }
   ClassSchema Read(std::vector<DexMethodCode>* code=nullptr,uint32_t selected=UINT32_MAX) {
     if(selected!=UINT32_MAX)class_def_index_=selected;
     Initialize();
@@ -423,6 +433,26 @@ class Reader {
   }
 };
 }
+bool FindDexClassDefinition(const std::vector<unsigned char>&dex,std::string_view descriptor,
+                            uint32_t*out,std::string*error){
+  if(!out||!error)return false;
+  try{
+    if(descriptor.empty())throw std::runtime_error("Missing target DEX descriptor");
+    const auto selected=Reader(dex,true).FindClass(descriptor);
+    *out=selected;error->clear();return true;
+  }catch(const std::bad_alloc&){throw;}
+   catch(const std::exception&failure){*error=failure.what();return false;}
+}
+bool ReadDexDeclarations(const std::vector<unsigned char>&dex,std::string_view descriptor,
+                         ClassSchema*out,std::string*error){
+  if(!out||!error)return false;
+  try{
+    Reader reader(dex,true);const auto index=reader.FindClass(descriptor);
+    if(index==UINT32_MAX)throw std::runtime_error("Target Class absent from DEX");
+    auto schema=reader.Read(nullptr,index);*out=std::move(schema);error->clear();return true;
+  }catch(const std::bad_alloc&){throw;}
+   catch(const std::exception&failure){*error=failure.what();return false;}
+}
 bool ReadDexClassCode(const std::vector<unsigned char>&dex,uint32_t index,
                      ClassSchema*out,std::vector<DexMethodCode>*code,std::string*error){
   if(!out||!code||!error||index==UINT32_MAX)return false;
@@ -445,9 +475,9 @@ bool IsMethodDescriptor(const std::string& value) {
   return ReadType(value, &at, true) && at == value.size();
 }
 static bool ReadDex(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error,
-                    bool declaration_flags) {
+                    bool declaration_flags,uint32_t selected=UINT32_MAX) {
   try {
-    auto schema = Reader(dex, declaration_flags).Read();
+    auto schema = Reader(dex, declaration_flags).Read(nullptr,selected);
     *output = std::move(schema);
     error->clear();
     return true;
@@ -461,6 +491,12 @@ static bool ReadDex(const std::vector<unsigned char>& dex, ClassSchema* output, 
 }
 bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {
   return ReadDex(dex, output, error, false);
+}
+
+bool ReadDexClassSchema(const std::vector<unsigned char>&dex,uint32_t selected,
+                        ClassSchema*out,std::string*error){
+  if(!out||!error||selected==UINT32_MAX)return false;
+  return ReadDex(dex,out,error,false,selected);
 }
 
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error) {

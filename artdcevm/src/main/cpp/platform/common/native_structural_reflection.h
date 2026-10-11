@@ -11,6 +11,7 @@
 #include "platform/common/native_schema_policy.h"
 #include "platform/common/native_static_field_aliases.h"
 namespace artdcevm::native_required_cleanup {class Binding;}
+namespace artdcevm::native_call_graph_payload {class Payload;}
 namespace artdcevm::native_structural_reflection {
 // Callbacks check a process-lifetime guard owner and independently established
 // runtime proof. A missing callback preserves conservative handle rejection.
@@ -52,7 +53,15 @@ class Plan {
   bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return aliases_.CanRefresh(r)&&(!resolution_||resolution_->CanRefreshManagedRoots(r));}
   void RefreshManagedRoots(const prepared_roots::Resolver& r)noexcept{aliases_.Refresh(r);if(resolution_)resolution_->RefreshManagedRoots(r);}
  private:
+  friend class native_call_graph_payload::Payload;
   friend class Service;
+  // Only the call-graph payload may defer permissions while preparing native
+  // storage. Its commit adapter requires the complete frozen guard receipt.
+  static std::unique_ptr<Plan> PrepareImpl(const source_commit::Plan&,
+      const modern_field_metadata::FieldMetadata&,
+      const std::vector<const modern_methods::Service*>&,Retirement,std::string*,HandleGuards,
+      ResolutionBinding,const std::vector<native_schema_policy::Plan>*,
+      const native_schema_policy::GuardVerifier*,const modern_field_metadata::ReadContext*,bool);
   std::unique_ptr<resolution_invalidation::ResolutionInvalidationPlan> resolution_;
   const modern_field_metadata::ReadContext* read_context_=nullptr;
   native_static_field_aliases::Plan aliases_;

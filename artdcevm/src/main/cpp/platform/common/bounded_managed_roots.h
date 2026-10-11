@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/common/runnable_jni_bridge.h"
+#include "platform/common/prepared_root_bindings.h"
 #include <jni.h>
 #include <vector>
 #include <string>
@@ -20,7 +21,8 @@ struct Bindings {
 // Object[] retains every Class/loader/ancestor/interface, including repeated
 // identities. JNI table consumption grows by one global per 1024 references.
 // Every native slot is attested against public JNI before publication. Reads
-// use the existing calibrated barrier, with no JNI/allocation in final windows.
+// use the calibrated barrier. After transaction root refresh every consumer
+// reads the registered retaining array, with no JNI/allocation in final windows.
 class Store {
  public:
  static constexpr jsize kChunkSize=1024;
@@ -40,7 +42,7 @@ class Store {
  bool StageMany(const runnable_jni::Context& context,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error){return StageManyImpl(context.env,objects,out,error,&context);}
  private:
  bool StageManyImpl(JNIEnv* env,const std::vector<jobject>& objects,std::vector<Slot>* out,std::string* error,const runnable_jni::Context* context){
-  if(!env||!out||objects.empty()||objects.size()>kCohortSize||env->ExceptionCheck()||(!context&&!bindings_.scope)||(context&&!context->self)||!bindings_.oracle||!bindings_.decode||!bindings_.element)
+  if(frozen_||!env||!out||objects.empty()||objects.size()>kCohortSize||env->ExceptionCheck()||(!context&&!bindings_.scope)||(context&&!context->self)||!bindings_.oracle||!bindings_.decode||!bindings_.element)
    return Fail(error,"Managed root cohort lacks actual public/native owner");
   for(auto object:objects)if(!object)return Fail(error,"Managed root cohort contains null identity");
   Local type{env,env->FindClass("java/lang/Object")};if(!type.ref||env->ExceptionCheck())return false;
@@ -85,7 +87,7 @@ class Store {
  bool Stage(const runnable_jni::Context& context,jobject object,Slot* out,std::string* error){return StageImpl(context.env,object,out,error,&context);}
  private:
  bool StageImpl(JNIEnv* env,jobject object,Slot* out,std::string* error,const runnable_jni::Context* context){
-  if(!env||!object||!out||env->ExceptionCheck()||(!context&&!bindings_.scope)||!bindings_.oracle||!bindings_.decode||!bindings_.element)return Fail(error,"Shared managed root lacks calibrated public/native owner");
+  if(frozen_||!env||!object||!out||env->ExceptionCheck()||(!context&&!bindings_.scope)||!bindings_.oracle||!bindings_.decode||!bindings_.element)return Fail(error,"Shared managed root lacks calibrated public/native owner");
   Local type{env,env->FindClass("java/lang/Object")};if(!type.ref||env->ExceptionCheck())return false;
   Global object_root{env,env->NewGlobalRef(object)};if(!object_root.ref||env->ExceptionCheck())return false;
   try {
@@ -112,15 +114,82 @@ class Store {
  bool Valid(Slot slot)const noexcept{return slot.chunk<chunks_.size()&&slot.index>=0&&slot.index<chunks_[slot.chunk].used;}
  jobject LocalRef(JNIEnv* env,Slot slot)const {if(!Valid(slot))return nullptr;return env->GetObjectArrayElement(chunks_[slot.chunk].root,slot.index);}
  bool Same(JNIEnv* env,Slot slot,jobject value)const {if(!slot)return !value;Local local{env,LocalRef(env,slot)};return local.ref&&!env->ExceptionCheck()&&env->IsSameObject(local.ref,value);}
- bool Read(Slot slot,void** value)const noexcept {if(!value)return false;*value=nullptr;if(!slot)return true;if(!Valid(slot))return false;
-  void* array=nullptr;if(!bindings_.decode(bindings_.owner,chunks_[slot.chunk].root,&array)||!array)return false;
-  *value=bindings_.element(bindings_.owner,array,size_t(slot.index));return *value!=nullptr;}
- void Clear(JNIEnv* env){for(auto& chunk:chunks_)env->DeleteGlobalRef(chunk.root);chunks_.clear();generation_=NextGeneration();}
+ struct ArrayRoots {
+  void* owner=nullptr;
+  void* (*retain)(void*,void*)=nullptr;
+  bool (*read)(void*,const void*,void**)noexcept=nullptr;
+  void (*release)(void*,void*)noexcept=nullptr;
+  bool (*staging)(void*)noexcept=nullptr;
+ };
+ // Retain every current array in the operation's actual native HandleScope
+ // before inspection. Repeat after replacement staging adds more chunks.
+ bool RetainArrays(ArrayRoots access){
+  if(frozen_||!access.retain||!access.read||!access.release||!access.staging||!access.staging(access.owner))return false;
+  if(array_roots_.read&&(array_roots_.owner!=access.owner||array_roots_.retain!=access.retain||
+     array_roots_.read!=access.read||array_roots_.release!=access.release||array_roots_.staging!=access.staging))return false;
+  array_roots_=access;
+  for(auto& chunk:chunks_)if(!chunk.retained){void* array=nullptr;
+   if(!bindings_.decode||!bindings_.decode(bindings_.owner,chunk.root,&array)||!array)return false;
+   chunk.retained=access.retain(access.owner,array);if(!chunk.retained)return false;
+  }
+  return true;
+ }
+ bool Read(Slot slot,void** value)const noexcept {
+  if(!value)return false;*value=nullptr;if(!slot)return true;
+  if(!Valid(slot)||!bindings_.element)return false;
+  void* array=nullptr;if(!ReadArray(slot.chunk,&array))return false;
+  *value=bindings_.element(bindings_.owner,array,size_t(slot.index));return *value!=nullptr;
+ }
+
+ // Register the retaining arrays themselves, before the original source GC.
+ // Final validation joins the registered view to the retained native cells;
+ // neither view keeps a raw array address across a safepoint.
+ bool CollectManagedRoots(const prepared_roots::Registrar& registrar){
+  if(frozen_||!registrar.add||!bindings_.decode)return false;
+  frozen_=true; // A failed registration also seals staging until Clear.
+  chunk_roots_.reserve(chunks_.size());
+  for(size_t index=0;index<chunks_.size();++index){void* array=nullptr;size_t root=0;
+   if(!ReadArray(index,&array)||
+      !registrar.add(registrar.owner,array,&root))return false;
+   chunk_roots_.push_back(root);
+  }
+  return true;
+ }
+ bool CanRefreshManagedRoots(const prepared_roots::Resolver& resolver)const noexcept{
+  if(!frozen_||chunk_roots_.size()!=chunks_.size()||!resolver.get)return false;
+  for(size_t index=0;index<chunk_roots_.size();++index){
+   void* resolved=resolver.get(resolver.owner,chunk_roots_[index]);if(!resolved)return false;
+   if(array_roots_.read){void* native=nullptr;
+    if(!chunks_[index].retained||!array_roots_.read(array_roots_.owner,chunks_[index].retained,&native)||native!=resolved)return false;}
+  }
+  return true;
+ }
+ bool RefreshManagedRoots(const prepared_roots::Resolver& resolver)noexcept{
+  if(!CanRefreshManagedRoots(resolver))return false;
+  root_resolver_=resolver;return true;
+ }
+ bool RootsResolved()const noexcept{return CanRefreshManagedRoots(root_resolver_);}
+
+ void Clear(JNIEnv* env){for(auto& chunk:chunks_){if(chunk.retained)array_roots_.release(array_roots_.owner,chunk.retained);env->DeleteGlobalRef(chunk.root);}chunks_.clear();chunk_roots_.clear();root_resolver_={};array_roots_={};frozen_=false;generation_=NextGeneration();}
  bool Empty()const{return chunks_.empty();}
  private:
  struct Local {JNIEnv* env;jobject ref;~Local(){if(ref)env->DeleteLocalRef(ref);}};
  struct Global {JNIEnv* env;jobject ref;~Global(){if(ref)env->DeleteGlobalRef(ref);}};
- struct Chunk {jobjectArray root;jsize used;};
+ struct Chunk {jobjectArray root;jsize used;void* retained=nullptr;};
+ bool ReadArray(size_t index,void** out)const noexcept{
+  const auto& chunk=chunks_[index];
+  if(array_roots_.read){
+   if(chunk.retained)return array_roots_.read(array_roots_.owner,chunk.retained,out)&&*out;
+   // New replacement chunks may be borrowed only in their ordinary staging
+   // callback. They must be retained before entering any inspection stop.
+   if(!array_roots_.staging(array_roots_.owner))return false;
+  }
+  if(root_resolver_.get){
+   if(!frozen_||chunk_roots_.size()!=chunks_.size())return false;
+   *out=root_resolver_.get(root_resolver_.owner,chunk_roots_[index]);return *out!=nullptr;
+  }
+  return bindings_.decode&&bindings_.decode(bindings_.owner,chunk.root,out)&&*out;
+ }
  struct Cohort {Store* store;jobject source;const std::vector<Slot>* slots;};
  static bool ObserveMany(const runnable_jni::Context& context,void* raw){
   auto& r=*static_cast<Cohort*>(raw);const auto& b=r.store->bindings_;
@@ -145,5 +214,6 @@ class Store {
  static bool Fail(std::string* error,const char* text){if(error)try{*error=text;}catch(const std::bad_alloc&){}return false;}
  static uint64_t NextGeneration()noexcept{static std::atomic<uint64_t> next{1};return next.fetch_add(1,std::memory_order_relaxed);}
  uint64_t generation_=NextGeneration();Bindings bindings_{};std::vector<Chunk> chunks_;
+ std::vector<size_t> chunk_roots_;prepared_roots::Resolver root_resolver_{};ArrayRoots array_roots_{};bool frozen_=false;
 };
 }

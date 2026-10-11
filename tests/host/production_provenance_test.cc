@@ -24,18 +24,29 @@ int main(){
  JNINativeInterface_ functions{};functions.ExceptionCheck=Exception;functions.NewWeakGlobalRef=NewWeak;functions.DeleteWeakGlobalRef=DeleteWeak;functions.NewLocalRef=NewLocal;functions.DeleteLocalRef=DeleteLocal;functions.IsSameObject=Same;functions.NewGlobalRef=NewStrong;JNIEnv env{&functions};
  Class first{"Lsame/Name;",1},second{"Lsame/Name;",2};auto a=reinterpret_cast<jclass>(&first),b=reinterpret_cast<jclass>(&second);classes[a]=&first;classes[b]=&second;
  Provenance records;std::vector<unsigned char> bytes{99};
- assert(records.Store(&env,a,{1,2})&&records.Size()==1);
+ {auto pending=records.Prepare(&env,{{a,{1,2}}});assert(pending);pending->Commit();}
+ assert(records.Size()==1);
  assert(!records.Find(&env,b,&bytes)&&bytes==std::vector<unsigned char>{99});
- assert(records.Store(&env,b,{3,4})&&records.Size()==2);
+ {auto pending=records.Prepare(&env,{{b,{3,4}}});assert(pending);pending->Commit();}
+ assert(records.Size()==2);
  assert(records.Find(&env,a,&bytes)&&bytes==std::vector<unsigned char>({1,2}));
- assert(records.Store(&env,a,{5,6})&&records.Size()==2);
+ // Preparation and cancellation must leave both installed inputs unchanged.
+ {auto pending=records.Prepare(&env,{{a,{9,9}},{b,{8,8}}});assert(pending);
+  assert(records.Find(&env,a,&bytes)&&bytes==std::vector<unsigned char>({1,2}));
+  assert(!records.Prepare(&env,{{a,{7,7}}}));}
+ assert(records.Find(&env,b,&bytes)&&bytes==std::vector<unsigned char>({3,4}));
+ assert(!records.Prepare(&env,{{a,{9,9}},{a,{8,8}}}));
+ assert(records.Find(&env,a,&bytes)&&bytes==std::vector<unsigned char>({1,2}));
+ {auto pending=records.Prepare(&env,{{a,{5,6}}});assert(pending);pending->Commit();}
+ assert(records.Size()==2);
  assert(records.Find(&env,a,&bytes)&&bytes==std::vector<unsigned char>({5,6}));
  first.live=false;records.Sweep(&env);assert(records.Size()==1&&weak_deleted==1);
  assert(!records.Find(&env,a,&bytes)&&bytes==std::vector<unsigned char>({5,6}));
  // A newly loaded Class may reuse a collected object's address. Cleared weak
  // handles never identify that new generation or publish the previous DEX.
  first.generation++;first.live=true;
- assert(!records.Find(&env,a,&bytes));assert(records.Store(&env,a,{7,8}));
+ assert(!records.Find(&env,a,&bytes));
+ {auto pending=records.Prepare(&env,{{a,{7,8}}});assert(pending);pending->Commit();}
  assert(records.Find(&env,b,&bytes)&&bytes==std::vector<unsigned char>({3,4}));
  records.Clear(&env);assert(records.Size()==0&&references.empty());
  assert(weak_created==weak_deleted&&local_created==local_deleted&&strong_created==0);

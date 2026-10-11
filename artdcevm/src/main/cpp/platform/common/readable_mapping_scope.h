@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 namespace artdcevm::method_identity {
+class ReadableMappingSnapshot;
 // Ordinary-only explicit read view for ONE immediate native traversal. Construct
 // after the last JNI/safepoint and destroy before the next one. The caller must
 // independently own stable rooted allocations and mutator access; readable VMAs
@@ -41,11 +42,27 @@ class ScopedReadableMappings final {
   static bool ReadExtent(void*owner,const void*,size_t*)noexcept;
   bool Ready()const noexcept{return complete_;}
  private:
+  friend class ReadableMappingSnapshot;
   friend bool ReadableMappingExtent(const void*,size_t*);
   bool Find(uintptr_t,size_t*);
   ScopedReadableMappings* previous_=nullptr;
   std::vector<std::pair<uintptr_t,uintptr_t>> regions_;
   size_t os_queries_=0;
+  bool complete_=false;
+};
+// Explicit bounded VMA facts without an ambient/TLS lookup scope. Captured in
+// ordinary context; the caller separately gates every later read on its actual
+// GC-stable source window. It never lends stale mappings to unrelated callees,
+// and an extent miss never queries the OS or installs a fallback scope.
+class ReadableMappingSnapshot final {
+ public:
+  ReadableMappingSnapshot()noexcept;
+  ReadableMappingSnapshot(const ReadableMappingSnapshot&)=delete;
+  ReadableMappingSnapshot&operator=(const ReadableMappingSnapshot&)=delete;
+  bool Ready()const noexcept{return complete_;}
+  bool Extent(const void*,size_t*)const noexcept;
+ private:
+  std::vector<std::pair<uintptr_t,uintptr_t>>regions_;
   bool complete_=false;
 };
 }

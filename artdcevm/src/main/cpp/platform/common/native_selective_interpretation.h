@@ -6,6 +6,8 @@
 #include "platform/common/modern_field_metadata.h"
 #include <vector>
 #include <cstring>
+namespace artdcevm::native_call_graph_execution {class Execution;}
+namespace artdcevm::native_interpretation_registry {class Registry;}
 namespace artdcevm::native_selective_interpretation {
 // Ordinary producer supplies independent public/Dex identity and the retained
 // declaring and containing Class roots (distinct for copied/default methods).
@@ -15,10 +17,10 @@ namespace detail {
 // Bounded source predicates only: neither function grants mutator access,
 // lifetime, graph completeness or an Instrumentation owner.
 inline bool Identity(const method_metadata::Layout&layout,const void*method,size_t extent,
- uint32_t index,uint32_t modifiers)noexcept{
+ uint32_t index,uint32_t modifiers,bool obsolete=false)noexcept{
  method_metadata::Identity identity{};
  return method_metadata::ReadIdentity(layout,method,extent,&identity)&&index!=UINT32_MAX&&
-  identity.dex_method_index==index&&!(identity.access_flags&0x40500u)&&
+  identity.dex_method_index==index&&!(identity.access_flags&(obsolete?0x500u:0x40500u))&&
   (identity.access_flags&0xffffu)==(modifiers&0xffffu);
 }
 inline bool Member(const void*array,size_t extent,const void*method,size_t stride)noexcept{
@@ -37,6 +39,9 @@ struct RefundReport {
 class Service final {
  public:
   Service()=default;Service(const Service&)=delete;Service&operator=(const Service&)=delete;
+  // Native preparation state only. An empty interpreted closure still borrows
+  // the calibrated layout/owner for a complete stack walk and native obligations.
+  bool PreparedSelection()const noexcept{return phase_==Phase::Prepared||phase_==Phase::Activated;}
   // Ordinary JNI only; calls the existing original receiver calibration.
   // No raw receiver/witness or caller-supplied Boolean can sign this owner.
   bool CalibrateOwner(HookEngine&,JNIEnv*,std::string*);
@@ -68,11 +73,19 @@ class Service final {
   const std::vector<Method>& SelectedMethods()const noexcept{return methods_;}
   bool Contains(void* method)const noexcept;
  private:
+  friend class native_call_graph_execution::Execution;
+  friend class native_interpretation_registry::Registry;
+  // The execution owner publishes persistent union protection before release.
+  bool ReleaseCommitted(const native_source_stop::Session&,void*,
+      const modern_field_metadata::ReadContext&,RefundReport*)noexcept;
+  bool Release(const native_source_stop::Session&,void*,
+      const modern_field_metadata::ReadContext&,RefundReport*,bool committed)noexcept;
   using Deopt=void(*)(void*,void*);using Query=bool(*)(void*,void*);
   enum class Phase {Empty,Prepared,Activated,Refunded};
   enum class Entry {Untouched,Preexisting,Owned,Released};
   bool Window(const native_source_stop::Session&,void*)const noexcept;
-  bool Check(const Method&,const modern_field_metadata::ReadContext&,const char**)const noexcept;
+  bool QueryNative(void*)const noexcept;
+  bool Check(const Method&,const modern_field_metadata::ReadContext&,const char**,bool obsolete=false)const noexcept;
   void*runtime_=nullptr;void*instrumentation_=nullptr;void**runtime_slot_=nullptr;
   const modern_field_metadata::FieldMetadata*metadata_=nullptr;
   const bounded_managed_roots::Store*roots_=nullptr;uint64_t generation_=0;

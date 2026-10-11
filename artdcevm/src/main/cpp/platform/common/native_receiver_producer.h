@@ -24,6 +24,7 @@ class SourceProducer final:public StoppedCodeReader {
            const modern_field_metadata::FieldMetadata&,void*actual_class_linker,
            void*(*actual_current)(),std::string*,JavaVM* actual_vm=nullptr);
  BytecodeAccess Access()noexcept;
+ bool OwnsCurrentThread(void*self)const noexcept{return bound_&&self&&current_&&current_()==self;}
  FrameAccess Frames()noexcept;
  // Read bounded fixed Standard/Compact CodeItem under the same actual current
  // Runnable source callback. This never infers fields from machine code.

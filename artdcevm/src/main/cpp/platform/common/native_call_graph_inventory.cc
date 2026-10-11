@@ -9,6 +9,7 @@ namespace artdcevm::native_call_graph_inventory {
 bool Inventory::Prepare(const runnable_jni::Context&context,const native_schema_guard_verifier::Verifier&verifier,
  const receiver_guard::SourceProducer&source,const std::vector<void*>&changed,bool changed_fields,std::string*error){
  const auto deny=[&](const char*s){if(error)*error=s;return false;};
+ if(attempted_)return deny("call-graph-repeated-inventory-preparation");attempted_=true;
  if(prepared_||verifier_||!nodes_.empty()||!runnable_jni::Bridge::BorrowOriginalScope(context))return deny("call-graph-original-runnable-window-unavailable");
  source_=&source;self_=context.self;
  if(!verifier.CaptureCallGraph(context,source,this,error))return false;
@@ -61,15 +62,52 @@ bool Inventory::ValidateOrdinary(const modern_field_metadata::ReadContext&read)c
  return prepared_&&resolved_&&verifier_&&roots_&&roots_->Generation()==generation_&&
   verifier_->ValidateCallGraphOrdinary(*this,read);
 }
+bool Inventory::ValidateOrdinary(const runnable_jni::Context&context,const modern_field_metadata::ReadContext&read)const noexcept{
+ return prepared_&&resolved_&&verifier_&&roots_&&roots_->Generation()==generation_&&
+  context.self==self_&&runnable_jni::Bridge::BorrowOriginalScope(context)&&
+  verifier_->ValidateCallGraphSource(*this,read,false,nullptr,&context);
+}
 bool Inventory::ValidateOrdinary(const native_source_stop::Session&stop,const modern_field_metadata::ReadContext&read)const noexcept{
  return prepared_&&resolved_&&verifier_&&roots_&&roots_->Generation()==generation_&&
   verifier_->ValidateCallGraphSource(*this,read,false,&stop);
+}
+std::unique_ptr<native_call_graph_dispatch::Reader>Inventory::DispatchReader()const{
+ return prepared_&&resolved_&&verifier_?verifier_->CallGraphDispatchReader(*this):nullptr;
 }
 bool Inventory::VisitCalls(ResolutionVisitor visitor,void*owner)const{
  if(!prepared_||!visitor)return false;
  for(const auto&m:methods_)for(const auto&site:m.calls)
   if(!visitor(owner,{m.native.method,m.code,m.bytes,site}))return false;
  return true;
+}
+bool Inventory::BorrowDeclaration(void*carrier,const modern_field_metadata::ReadContext&read,
+ DeclarationSource*out)const noexcept{
+ if(!out)return false;*out={};
+ if(!prepared_||!carrier||!verifier_||!roots_||roots_->Generation()!=generation_)return false;
+ const Canonical*selected=nullptr;
+ for(const auto&candidate:canonical_)
+  if(verifier_->MatchCallGraphDeclaration(*this,carrier,candidate.native,candidate.member,read)){
+   if(selected)return false;selected=&candidate;
+  }
+ if(!selected)return false;
+ DeclarationSource source{&selected->native,selected->loader,&selected->member};
+ if(!(selected->member.access&0x400u)){
+  const Method*body=nullptr;
+  for(const auto&method:methods_)if(method.native.method==selected->native.method){
+   if(body)return false;body=&method;
+  }
+  if(!body)return false;
+  if(!(selected->member.access&0x100u)){
+   if(!body->code.code_item||body->code.units>SIZE_MAX/2||body->bytes.size()!=body->code.units*2)return false;
+   source.code=&body->code;source.bytes=&body->bytes;source.calls=&body->calls;
+  }else if(body->code.code_item||!body->calls.empty()||!body->bytes.empty())return false;
+ }
+ *out=source;return true;
+}
+bool Inventory::MatchesDeclaration(void*carrier,const native_selective_interpretation::Method&declaration,
+ const evolution::Member&member,const modern_field_metadata::ReadContext&read)const noexcept{
+ return prepared_&&verifier_&&roots_&&roots_->Generation()==generation_&&
+  verifier_->MatchCallGraphDeclaration(*this,carrier,declaration,member,read);
 }
 bool Inventory::ResolveCalls(const runnable_jni::Context&context,receiver_guard::SourceProducer&source,std::string*error){
  return ResolveCallsImpl(context,source,nullptr,error);
@@ -98,7 +136,7 @@ bool Inventory::ResolveCallsImpl(const runnable_jni::Context&context,receiver_gu
  plan_=native_call_graph::Build(nodes_,edges_,seeds_);
  if(plan_.failure!=native_call_graph::Failure::None)return deny("call-graph-resolved-inventory-invalid");
  selection_.clear();for(auto i:plan_.interpret)selection_.push_back(methods_[i].native);
- resolved_=true;return true;
+ resolutions_=std::move(results);resolved_=true;return true;
 }
 bool Inventory::SealLoading(const native_source_class_loading::Run&loading,const void*driver,
  const modern_field_metadata::ReadContext&read)noexcept{

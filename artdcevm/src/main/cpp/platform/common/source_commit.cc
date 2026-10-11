@@ -21,6 +21,7 @@ bool Run(const Plan& plan,const Services& services,CommitObserver observer){
   for(size_t i=0;i<plan.old_classes.size();++i)
     services.MarkClassAndMethodsObsolete(plan.old_classes[i],plan.new_classes[i]);
   services.UpdateReflectiveReferences(plan);
+  services.ReleaseExecutionEntries();
   services.ReplaceObjectReferences();
   services.RestoreDeclaringClasses(plan);
   for(size_t i=0;i<plan.old_classes.size();++i){

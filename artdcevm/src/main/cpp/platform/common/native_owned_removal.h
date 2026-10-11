@@ -23,8 +23,13 @@ struct Provider {
   const modern_field_metadata::FieldMetadata* metadata=nullptr;
   void* state=nullptr;
   bool allow_field_removal=false;
-  // Required for multiple targets. The production owner independently checks
-  // all original DEX provenance and stages every field alias before heap entry.
+  // Required for multiple targets. Called once at the actual RedefineClassesDirect
+  // entry AFTER every original transformation callback and BEFORE its source
+  // lock/JIT suspension/heap entry. Definitions are independent copies of the
+  // final ArtClassDefinition DEX, in public submission order. The owner captures
+  // these inventories and stages every alias here, rather than staging raw
+  // submitted bytes before agents can transform them. Borrowed JNI Class locals
+  // remain rooted by the original definitions until the extension returns.
   bool (*preflight)(JNIEnv*,jvmtiEnv*,const std::vector<Definition>&,void*,std::string*)=nullptr;
   // Called after every original Class verification / instance collection
   // boolean succeeds in the exact Holder order. Both named leaf and wholebatch
@@ -49,6 +54,10 @@ struct Provider {
   void (*after_verification)(void* owner,const transaction_root::Iterator*,bool original_result,void* state) noexcept=nullptr;
   void (*refund)(void* state) noexcept=nullptr;
   void (*commit)(const source_commit::Plan&,void* state) noexcept=nullptr;
+  // Ordinary post-return data bookkeeping, after actual whole-batch success
+  // and end_run/source cleanup. Candidate storage must already be allocated.
+  // Never called for a failed source batch; grants no transaction authority.
+  void (*record_success)(void*state)noexcept=nullptr;
 };
 // Default entry removes members with unchanged hierarchy and modifiers.
 // Schema mode requires the complete rooted provider in both source windows.

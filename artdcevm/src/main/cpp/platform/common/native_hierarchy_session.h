@@ -11,7 +11,9 @@ namespace artdcevm::native_hierarchy_session {
 // pause/GC lifetime: final proof remains with the independent source stop owner.
 struct Bindings {
  void* driver=nullptr;
- runnable_jni::Context context{};
+ // Borrow the actual synchronous Bridge callback object. A copy has matching
+ // fields but cannot borrow the original Runnable JNI scope.
+ const runnable_jni::Context*context=nullptr;
  HookEngine* hooks=nullptr;
  const modern_field_metadata::FieldMetadata* metadata=nullptr;
  source_handle_roots::Service* roots=nullptr;
@@ -23,10 +25,32 @@ struct Bindings {
  native_hierarchy_source_checks::FailureObserver failure_observer=nullptr;
  native_hierarchy_private_ledger::Ledger* ledger=nullptr;
  void* refund_owner=nullptr;
+ // Runs after original Finish/verification views unwind and before any private
+ // Class, native method array or DexCache is retired. The execution owner must
+ // remove its journaled entries and reject live replacement frames/foreign
+ // Instrumentation references while all source roots and DEX remain alive.
+ // This prerequisite is distinct from the notification after disposal below.
+ bool (*before_private_discard)(void*,const char**refusal)noexcept=nullptr;
+ // After every private record query, before original Holder/DEX destruction.
+ // Releases operation-owned roots only; scope headers remain linked until Run
+ // returns. This is not a substitute for external-reference/no-escape proof.
+ void* private_roots_owner=nullptr;
+ bool (*release_private_roots)(void*,const char**refusal)noexcept=nullptr;
  void (*refund_complete)(void*)noexcept=nullptr;
 };
 class Session final {
  public:
+ // Construct OUTSIDE the rejectable source-stop scope, so that the original
+ // WaitingGC/Runnable restoration and owned reservation rollback complete
+ // before destruction dispatches a pending refund. It grants no stop rights.
+ class RefundDeferral final {
+  public:
+  explicit RefundDeferral(Session&)noexcept;
+  ~RefundDeferral();
+  RefundDeferral(const RefundDeferral&)=delete;RefundDeferral&operator=(const RefundDeferral&)=delete;
+  bool Ready()const noexcept{return owner_!=nullptr;}
+  private:Session*owner_=nullptr;
+ };
  explicit Session(const Bindings&);
  ~Session();
  Session(const Session&)=delete;Session&operator=(const Session&)=delete;
@@ -48,7 +72,15 @@ class Session final {
  // Must follow the original Run return. Any failure must already have refunded
  // within a fallible source boundary, BEFORE Run destroys its DEX/Holder.
  bool ReleaseAfterRun(bool original_success)noexcept;
+ // Scalar cleanup receipt only. No source storage is inspected after Run.
+ bool ReleasedAfterFailure(const void*driver)const noexcept{
+  return ready_&&released_&&failed_&&refunded_&&execution_refunded_&&roots_released_&&!committed_&&
+   bindings_.driver==driver;
+ }
  bool OwnsDriver(const void*)const noexcept;
+ bool OwnsAuthority(const native_hierarchy_graph::Authority&authority)const noexcept{
+  return Ready()&&bindings_.authority==&authority;
+ }
  bool OwnsClassOwner(const void*)const noexcept;
  void LoadClass(void*,void*,const void*,const void*,const void*)noexcept;
  bool EnsureInstanceIds(const void*)noexcept;
@@ -64,7 +96,9 @@ class Session final {
  size_t finish_next_=0,verify_next_=0;
  void* finishing_=nullptr;void* verification_owner_=nullptr;
  const void* verification_iterator_=nullptr;
- bool attached_=false,refunded_=false;
+ bool attached_=false,refunded_=false,execution_refunded_=false;
+ bool roots_released_=false;
+ size_t refund_deferrals_=0;
  bool ready_=false,failed_=false,sealed_=false,committed_=false,released_=false;
 };
 // Ordinary unchanged-hierarchy fixture transaction, activated by the sole Run
@@ -83,7 +117,7 @@ class CalibrationScope final {
                 const void* cache_handle,uint16_t index,
                 abi::arm64::android_common::HierarchyAllocator original);
  private:
- void* driver_;runnable_jni::Context context_;jobject fixture_;
+ void* driver_;const runnable_jni::Context&context_;jobject fixture_;
  source_handle_roots::Service&roots_;native_hierarchy_allocator::Service&allocation_;
  CalibrationScope*previous_=nullptr;bool active_=false;
 };

@@ -138,10 +138,10 @@ struct Authority::State {
   ~OrdinaryRead(){owner.ordinary_context=previous;}
  };
  bool Extent(const void*p,size_t*out)const noexcept{return modern_field_metadata::ReadMappingExtent(Context(),p,out);}
- runnable_jni::Context root_context{};bounded_managed_roots::Store public_roots;
+ const runnable_jni::Context* root_context=nullptr;bounded_managed_roots::Store public_roots;
  std::vector<bounded_managed_roots::Slot> loaders;
  static bool RootOracle(void*raw,const runnable_jni::Context&c,jobject g,void**out){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_owned(s.bindings.decoder_owner,c,g,out);}
- static bool RootDecode(void*raw,jobject g,void**out){auto&s=*static_cast<State*>(raw);return RootOracle(raw,s.root_context,g,out);}
+ static bool RootDecode(void*raw,jobject g,void**out){auto&s=*static_cast<State*>(raw);return s.root_context&&RootOracle(raw,*s.root_context,g,out);}
  static bool RootPair(void*raw,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){auto&s=*static_cast<State*>(raw);return s.bindings.borrow_pair&&s.bindings.borrow_pair(s.bindings.decoder_owner,c,a,b,left,right);}
  static void* RootElement(void*raw,void*array,size_t index){auto&s=*static_cast<State*>(raw);return index<size_t(bounded_managed_roots::Store::kChunkSize)?s.bindings.metadata->Reference(array,12+index*4):nullptr;}
  Graph graph;std::vector<Input> inputs;
@@ -165,14 +165,28 @@ struct Authority::State {
  }
  bool Owners(const source_commit::Plan& p,bool final=false)const noexcept{return bindings.allocation->Verify(graph,p)&&(final?bindings.receivers->VerifyFinal(graph,p):bindings.receivers->Verify(graph,p))&&bindings.caches->Verify(graph,p);}
  bool Borrow(const runnable_jni::Context& c) {
-  root_context=c;for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader)||!public_roots.Read(n.proxy_name_root.slot,&n.proxy_name))return false;}
+  if(root_context!=&c)return false;
+  for(auto& n:graph.nodes){if(!public_roots.Read(n.class_root.slot,&n.klass)||!n.klass)return false;if(!public_roots.Read(n.loader_root.slot,&n.loader)||!public_roots.Read(n.proxy_name_root.slot,&n.proxy_name))return false;}
   if(!bindings.allocation->RefreshAllocations(&graph,&allocations))return false;
   for(size_t i=0;i<graph.nodes.size();++i){for(size_t j=0;j<native_before[i].size();++j)native_before[i][j]=graph.nodes[order_before[i][j]].klass;for(size_t j=0;j<native_after[i].size();++j){auto& n=graph.nodes[order_after[i][j]];native_after[i][j]=n.replacement?n.replacement:n.klass;}}return true;
  }
  bool Flags(void* klass,uint32_t flags)const {
   size_t extent=0;class_metadata::State state;const auto& layout=bindings.metadata->StorageModel()==modern_field_metadata::Model::kSplit?class_metadata::kLegacy:class_metadata::k17;return Extent(klass,&extent)&&class_metadata::ReadState(layout,klass,extent,&state)&&!state.IsPrimitive()&&(state.access_flags&0x7631u)==(flags&0x7631u);
  }
+ bool PublicRootsMatch()const noexcept{
+  if(!public_roots.RootsResolved())return false;
+  for(const auto& node:graph.nodes){void* value=nullptr;
+   if(node.class_root.owner!=&public_roots||!node.class_root.Valid()||
+      (node.loader&&(node.loader_root.owner!=&public_roots||!node.loader_root.Valid()))||
+      (node.proxy_name&&(node.proxy_name_root.owner!=&public_roots||!node.proxy_name_root.Valid())))return false;
+   if(!public_roots.Read(node.class_root.slot,&value)||value!=node.klass||
+      !public_roots.Read(node.loader_root.slot,&value)||value!=node.loader||
+      !public_roots.Read(node.proxy_name_root.slot,&value)||value!=node.proxy_name)return false;
+  }
+  return true;
+ }
  bool Native(bool replacements,std::string* error=nullptr)const{
+  if(collected&&!PublicRootsMatch())return Fail(error,"Refreshed hierarchy differs from independent public array roots");
   for(size_t n=0;n<graph.nodes.size();++n){const auto& node=graph.nodes[n];field_copy::CopyClassView view;
    const auto reject=[&](const char* reason){if(error)*error=std::string(reason)+": "+node.descriptor;return false;};
    void* original_parent=nullptr;
@@ -200,7 +214,7 @@ const Graph* Authority::Staged()const noexcept{return state_->staged?&state_->gr
 bool Authority::Stage(const runnable_jni::Context& context,jvmtiEnv* ti,const std::vector<Input>& inputs,const Bindings& bindings,std::string* error){
  JNIEnv* env=context.env;if(!env||!context.self||!ti||inputs.empty()||env->ExceptionCheck()||!state_->graph.nodes.empty()||!bindings.metadata||!bindings.metadata->Calibrated()||!bindings.borrow_owned||!bindings.allocation||!bindings.receivers||!bindings.caches)return Fail(error,"Hierarchy stage lacks exact public/native owners");
  StageTrace trace;trace.Mark("begin",0);
- state_->bindings=bindings;state_->inputs=inputs;auto& s=*state_;s.root_context=context;
+ state_->bindings=bindings;state_->inputs=inputs;auto& s=*state_;s.root_context=&context;
  s.public_roots.Bind({&s,nullptr,State::RootOracle,State::RootDecode,State::RootElement,bindings.borrow_pair?State::RootPair:nullptr});bool success=false;
  struct Cleanup{Authority* a;JNIEnv* e;bool& ok;~Cleanup(){if(!ok)a->Clear(e);}} cleanup{this,env,success};
  jclass type=env->FindClass("java/lang/Class");if(!type||env->ExceptionCheck())return Fail(error,"Class API unavailable");
@@ -356,7 +370,7 @@ bool Authority::PrepareRoots(const source_commit::Plan& p,std::string* error){
  // allocation verification. Reborrow both public Classes and the allocator
  // captured replacement roots in this same ordinary read interval before
  // comparing the fresh Holder Plan; raw graph addresses are not GC roots.
- if(!s.Borrow(s.root_context))return Fail(error,"Root preparation could not refresh actual public/allocated source roots");
+ if(!s.root_context||!s.Borrow(*s.root_context))return Fail(error,"Root preparation could not refresh actual public/allocated source roots");
  const size_t affected=std::count_if(s.graph.nodes.begin(),s.graph.nodes.end(),[](const auto& n){return n.affected;});
  for(size_t node=0;node<s.graph.nodes.size();++node){const auto& n=s.graph.nodes[node];if(!n.affected)continue;
   size_t pairs=0,old_matches=0,new_matches=0;
@@ -415,8 +429,25 @@ bool Authority::VerifyInterfaceDisjoint(const source_commit::Plan&p,void*interfa
  }
  return true;
 }
-bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;s.registration_started=true;for(auto& n:s.graph.nodes)if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||!s.roots.Add(&n.proxy_name,registrar)||!s.roots.Add(&n.replacement,registrar))return false;for(auto* vectors:{&s.native_before,&s.native_after})for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;for(auto& a:s.allocations)if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||!s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;s.roots.Seal();s.collected=true;return true;}
-bool Authority::CanRefresh(const prepared_roots::Resolver& r)const noexcept{return state_->collected&&state_->roots.CanRefresh(r);}
-void Authority::Refresh(const prepared_roots::Resolver& r)noexcept{assert(CanRefresh(r));state_->final_validated=nullptr;state_->roots.Refresh(r);}
+bool Authority::CollectManagedRoots(const prepared_roots::Registrar& registrar){
+ auto& s=*state_;if(!s.roots_prepared||s.registration_started)return false;
+ s.registration_started=true;
+ for(auto& n:s.graph.nodes)
+  if(!s.roots.Add(&n.klass,registrar)||!s.roots.Add(&n.loader,registrar)||
+     !s.roots.Add(&n.proxy_name,registrar)||!s.roots.Add(&n.replacement,registrar))return false;
+ for(auto* vectors:{&s.native_before,&s.native_after})
+  for(auto& values:*vectors)for(auto& value:values)if(!s.roots.Add(&value,registrar))return false;
+ for(auto& a:s.allocations)
+  if(!s.roots.Add(&a.old_class,registrar)||!s.roots.Add(&a.new_class,registrar)||
+     !s.roots.Add(&a.cache,registrar)||!s.roots.Add(&a.parent,registrar))return false;
+ if(!s.roots.Add(&s.mirror,registrar)||!s.roots.Add(&s.new_root,registrar))return false;
+ for(auto& origin:s.origins)if(!s.roots.Add(&origin.array,registrar))return false;
+ for(auto* values:{&s.old_classes,&s.new_classes,&s.old_instances,&s.new_instances})
+  for(auto& value:*values)if(!s.roots.Add(&value,registrar))return false;
+ if(!s.public_roots.CollectManagedRoots(registrar))return false;
+ s.roots.Seal();s.collected=true;return true;
+}
+bool Authority::CanRefresh(const prepared_roots::Resolver& r)const noexcept{return state_->collected&&state_->public_roots.CanRefreshManagedRoots(r)&&state_->roots.CanRefresh(r);}
+void Authority::Refresh(const prepared_roots::Resolver& r)noexcept{assert(CanRefresh(r));state_->final_validated=nullptr;state_->roots.Refresh(r);if(!state_->public_roots.RefreshManagedRoots(r))std::abort();}
 void Authority::BeginCommit(const source_commit::Plan& p)const noexcept{auto& s=*state_;if(s.final_validated!=&p||p.old_classes.empty()||!VerifyFinal(p,0))std::abort();s.final_validated=nullptr;s.committed=true;s.bindings.allocation->BeginCommit(s.graph,p);s.bindings.receivers->BeginCommit(s.graph,p);s.bindings.caches->BeginCommit(s.graph,p);}
 }

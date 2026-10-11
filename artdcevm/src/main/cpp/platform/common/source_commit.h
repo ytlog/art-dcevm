@@ -40,6 +40,10 @@ class Services {
   virtual void* ObjectClass(void* object)const=0;
   virtual void MarkClassAndMethodsObsolete(void* old_class,void* new_class)const=0;
   virtual void UpdateReflectiveReferences(const Plan&)const=0;
+  // Selective execution owners release their journaled entries while original
+  // containing/declaring roots still identify retained native method arrays.
+  // The real final stop remains held; no Java execution resumes here.
+  virtual void ReleaseExecutionEntries()const {}
   virtual void ReplaceObjectReferences()const=0;
   // Fixed modern ART replaces native declaring-class GC roots as part of the
   // heap replacement. Restore old member owners before retaining old classes.

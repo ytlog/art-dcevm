@@ -24,9 +24,17 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
         const native_source_dex_registry::Service&,const CleanupOwner*);
  ~Ledger();Ledger(const Ledger&)=delete;Ledger&operator=(const Ledger&)=delete;
  bool AttachHolder(const transaction_root::Holder*,const transaction_root::Metadata&)noexcept;
+ // Exact live native owner identity only, never a semantic/publication grant.
+ bool OwnsDriver(const void*)const noexcept;
+ // Construction failed before original Run entered: no captured source
+ // record, Holder, graph, publication or root registration may exist.
+ bool CloseBeforeRun()noexcept;
  bool CollectManagedRoots(const prepared_roots::Registrar&);
  bool CanRefresh(const prepared_roots::Resolver&)const noexcept;
  void Refresh(const prepared_roots::Resolver&)noexcept;
+ // End a borrowed native snapshot before releasing its GC reservation. Root
+ // registration remains owned; a later real stop must refresh it again.
+ void InvalidateRoots()noexcept;
  bool EnterSemanticInspection(const source_handle_roots::StoppedReader&)const noexcept override;
  void LeaveSemanticInspection()const noexcept override;
  bool FinalRootWindow()const noexcept override;
@@ -65,7 +73,7 @@ class Ledger final:public native_hierarchy_source_cache::RequiredServices {
  Entry* Publication(void* linker,void* cache,void* loader)noexcept;
  void Published(Entry*)noexcept;
  const Entry* Find(const native_hierarchy_cache::Source&)const noexcept;
- void*driver_;runnable_jni::Context context_;source_handle_roots::Pool&pool_;
+ void*driver_;const runnable_jni::Context&context_;source_handle_roots::Pool&pool_;
  const native_hierarchy_source_cache::BatchAccess&batch_;const modern_field_metadata::FieldMetadata&fields_;
  const native_source_dex_registry::Service&registry_;const CleanupOwner*cleanup_;
  mutable const source_handle_roots::StoppedReader*inspection_reader_=nullptr;

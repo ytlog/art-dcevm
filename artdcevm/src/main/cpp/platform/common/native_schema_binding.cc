@@ -36,10 +36,10 @@ bool ReadNativeDeclarations(const modern_field_metadata::FieldMetadata& metadata
  if(!output){if(error)*error="Missing native schema declarations output";return false;}
  *output=std::move(schema);if(table)*table=std::move(view);if(error)error->clear();return true;
 }
-bool ValidateNative(const source_commit::Plan& transaction,const modern_field_metadata::FieldMetadata& metadata,const method_identity::Calibration& model,const std::vector<const modern_methods::Service*>& methods,const std::vector<Plan>& policies,const GuardVerifier* guards,std::string* error,const modern_field_metadata::ReadContext* context){
+bool InspectNative(const source_commit::Plan& transaction,const modern_field_metadata::FieldMetadata& metadata,const method_identity::Calibration& model,const std::vector<const modern_methods::Service*>& methods,const std::vector<Plan>& policies,std::vector<GuardRequest>* output,std::string* error,const modern_field_metadata::ReadContext* context){
  std::string local_error;if(!error)error=&local_error;
  auto fail=[&](const char* text){if(error)*error=text;return false;};
- if(policies.size()!=transaction.old_classes.size()||methods.size()!=policies.size()||transaction.new_classes.size()!=policies.size()||policies.empty())return fail("Native schema policy lacks the complete rooted Class-pair set");
+ if(!output||policies.size()!=transaction.old_classes.size()||methods.size()!=policies.size()||transaction.new_classes.size()!=policies.size()||policies.empty())return fail("Native schema policy lacks the complete rooted Class-pair set");
  std::vector<GuardRequest> requests;
  for(size_t i=0;i<policies.size();++i){void* old=transaction.old_classes[i];void* next=transaction.new_classes[i];
   if(!methods[i]||old==next)return fail("Native schema pair lacks actual distinct Class tables");
@@ -56,11 +56,22 @@ bool ValidateNative(const source_commit::Plan& transaction,const modern_field_me
   }
   if(!policies[i].Matches(old_schema,next_schema))return fail("Prepared schema policy differs from actual complete native declarations");
   for(const auto& required:policies[i].Requirements()){
-   if(!guards)return fail("Native schema modifier requires independent loaded-Class/final-field proof");
    requests.push_back({i,before.loader,required});
   }
  }
- if(!requests.empty()&&(!guards||!guards->VerifyBatch(transaction,requests,error))){if(error->empty())*error="Native schema batch lacks complete native guard proof";return false;}
+ *output=std::move(requests);
  if(error)error->clear();return true;
+}
+bool ValidateNative(const source_commit::Plan&transaction,const modern_field_metadata::FieldMetadata&metadata,
+ const method_identity::Calibration&model,const std::vector<const modern_methods::Service*>&methods,
+ const std::vector<Plan>&policies,const GuardVerifier*guards,std::string*error,
+ const modern_field_metadata::ReadContext*context){
+ std::string local_error;if(!error)error=&local_error;
+ std::vector<GuardRequest>requests;
+ if(!InspectNative(transaction,metadata,model,methods,policies,&requests,error,context))return false;
+ if(!requests.empty()&&(!guards||!guards->VerifyBatch(transaction,requests,error))){
+  if(error->empty())*error="Native schema batch lacks complete native guard proof";return false;
+ }
+ error->clear();return true;
 }
 }

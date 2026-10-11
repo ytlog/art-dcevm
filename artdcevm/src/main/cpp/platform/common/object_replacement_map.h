@@ -19,6 +19,9 @@ class ObjectReplacementMap {
   const object_map_abi::Node* Nodes()const{return nodes_.data();}
   size_t Size()const{return nodes_.size();}
   size_t BucketCount()const{return buckets_.size();}
+  // Borrowed native-only lookup after verification; no allocation or platform
+  // STL call. Keys may have moved during the operation's preceding GC refresh.
+  bool Maps(void* source,void* destination)const noexcept;
   bool CollectManagedRoots(const prepared_roots::Registrar&);
   bool CanRefreshManagedRoots(const prepared_roots::Resolver& r)const noexcept{return roots_.CanRefresh(r);}
   void RefreshManagedRoots(const prepared_roots::Resolver&)noexcept;
@@ -30,6 +33,9 @@ class ObjectReplacementMap {
   object_map_abi::Map map_{};
   std::vector<object_map_abi::Node> nodes_;
   std::vector<object_map_abi::NodeBase*> buckets_;
+  // One synchronous owner, like RefreshManagedRoots. Reused in final native
+  // validation so duplicate-key detection never allocates during commit.
+  mutable std::vector<uintptr_t> verification_keys_;
 };
 // Validate owned storage before lending it to the matched platform ABI. The
 // loader verifies platform identities; host tests use an independent libc++

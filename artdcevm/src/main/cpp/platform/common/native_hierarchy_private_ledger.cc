@@ -40,6 +40,12 @@ Ledger::Ledger(void*d,const runnable_jni::Context&c,source_handle_roots::Pool&p,
  current=this;active_=true;
 }
 Ledger::~Ledger(){if(active_&&!released_)std::abort();}
+bool Ledger::OwnsDriver(const void*driver)const noexcept{return active_&&!released_&&current==this&&driver_==driver;}
+bool Ledger::CloseBeforeRun()noexcept{
+ if(!OwnsDriver(driver_)||holder_||graph_||!entries_.empty()||!root_entries_.empty()||
+    inspection_reader_||publication_stop_||registration_started_||collected_||committed_)return false;
+ released_=true;current=previous_;return true;
+}
 bool Ledger::Live()const noexcept{return active_&&!released_&&!failed_&&!refunded_&&current==this&&((inspection_reader_&&inspection_reader_->FinalRootWindow())||FinalRootWindow()||PublicationRootWindow()||pool_.ReadyForSourceAccess());}
 bool Ledger::EnterSemanticInspection(const source_handle_roots::StoppedReader& reader)const noexcept{
  if(inspection_reader_||!active_||released_||failed_||refunded_||current!=this||
@@ -72,6 +78,10 @@ bool Ledger::CollectManagedRoots(const prepared_roots::Registrar&r){
 }
 bool Ledger::CanRefresh(const prepared_roots::Resolver&r)const noexcept{return roots_registered_&&managed_roots_.CanRefresh(r);}
 void Ledger::Refresh(const prepared_roots::Resolver&r)noexcept{if(!CanRefresh(r)||!cleanup_||!cleanup_->IsStopped(driver_,holder_))std::abort();managed_roots_.Refresh(r);roots_refreshed_=true;}
+void Ledger::InvalidateRoots()noexcept{
+ roots_refreshed_=false;
+ for(auto&entry:root_entries_)entry.value=nullptr;
+}
 bool Ledger::Paused()const noexcept{auto*r=native_source_class_loading::Run::Current();return Live()&&r&&r->OwnsDriver(driver_)&&r->Paused();}
 bool Ledger::AttachHolder(const transaction_root::Holder*h,const transaction_root::Metadata&m)noexcept{
  if(!Paused()||holder_||!h||!m.count||!m.stride)return false;

@@ -106,7 +106,7 @@ class Mapper final:public native_hierarchy_cache::SourceMapper {
  modern_field_metadata::ReadContext prior_read_context_{};bool prior_contextual_=false;
  const modern_field_metadata::ReadContext* Context()const noexcept{return contextual_?&read_context_:nullptr;}
  bool Extent(const void*,size_t*)const noexcept;
- const runnable_jni::Context context_;source_handle_roots::Pool& pool_;
+ const runnable_jni::Context&context_;source_handle_roots::Pool& pool_;
  const modern_field_metadata::FieldMetadata& fields_;const modern_field_storage::Service& storage_;
  native_cache_semantic::Service* semantic_=nullptr;
  const BatchAccess& batch_;const RequiredServices* services_;mutable std::vector<std::unique_ptr<Entry>> entries_;mutable std::vector<RecordView> readonly_;mutable const native_hierarchy_graph::Graph* staged_graph_=nullptr;

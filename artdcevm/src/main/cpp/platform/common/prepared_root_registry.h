@@ -24,6 +24,11 @@ class Registry final {
    uint64_t (*epoch)(void*)=nullptr;
   };
   explicit Registry(Access access):access_(access){}
+  // A raw-pointer cohort may only register through independently staged,
+  // no-safepoint native storage. JNI-global registration is not such a window.
+  bool NativeInsertionReady()const noexcept {
+   return !frozen_&&access_.owner&&access_.insert&&access_.read&&access_.clear&&access_.epoch;
+  }
   Registry(const Registry&)=delete;Registry& operator=(const Registry&)=delete;
   bool BindNative(void* owner,bool (*insert)(void*,void*,size_t*),bool (*read)(void*,size_t,void**),void (*clear)(void*),uint64_t (*epoch)(void*)){
    if(frozen_||!roots_.empty()||!owner||!insert||!read||!clear||!epoch)return false;

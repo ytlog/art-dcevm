@@ -9,6 +9,17 @@ namespace artdcevm::native_dex_identity {
 class DexIdentity {
  public:
  explicit DexIdentity(const evolution::MappedDexMetadata& map):m_(map){}
+ bool MemberCounts(evolution::MappedDexMemberCounts*out)noexcept{
+  if(!out||!Initialize())return false;
+  size_t item=0;uint32_t data=0;
+  if(!Item(96,32,m_.class_def_index,&item)||!Read(ids_,id_size_,item+24,&data))return false;
+  evolution::MappedDexMemberCounts counts{};
+  if(data){size_t cursor=data;
+   if(!Uleb(&cursor,&counts.static_fields)||!Uleb(&cursor,&counts.instance_fields)||
+      !Uleb(&cursor,&counts.direct_methods)||!Uleb(&cursor,&counts.virtual_methods))return false;
+  }
+  *out=counts;return true;
+ }
  bool ReturnsVoid(uint32_t index)noexcept{
   if(!Initialize())return false;
   size_t method=0,proto=0;uint16_t prototype=0;uint32_t ret=0;std::string_view value;
@@ -31,6 +42,17 @@ class DexIdentity {
   return Type(ret,&value)&&consume(value)&&signature.empty();
  }
  private:
+ bool Uleb(size_t*cursor,uint32_t*out)const noexcept{
+  uint32_t value=0;
+  for(unsigned i=0;i<5;++i){
+   if(*cursor>=m_.data_size)return false;
+   const uint32_t byte=m_.data_begin[(*cursor)++];
+   if(i==4&&(byte&0xf0u))return false;
+   value|=(byte&0x7fu)<<(i*7);
+   if(!(byte&0x80u)){*out=value;return true;}
+  }
+  return false;
+ }
  template<class T>static bool Read(const unsigned char*p,size_t bytes,size_t offset,T*out)noexcept{if(!p||offset>bytes||sizeof(T)>bytes-offset)return false;std::memcpy(out,p+offset,sizeof(T));return true;}
  bool Initialize()noexcept{
   if(!m_.begin||!m_.data_begin||m_.size<112)return false;

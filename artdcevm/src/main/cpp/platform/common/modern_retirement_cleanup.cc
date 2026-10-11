@@ -1,6 +1,7 @@
 #include "platform/common/contextual_field_id.h"
 #include "platform/common/modern_retirement_cleanup.h"
-#include "platform/common/class_loader_cleanup.h"
+#include "platform/common/native_source_stop.h"
+#include "platform/common/native_interpretation_registry.h"
 #include "platform/common/method_identity_calibration.h"
 #include "platform/abi/arm64/android15/linear_alloc.h"
 #include "platform/abi/common/suspend_all.h"
@@ -10,18 +11,29 @@ namespace artdcevm::retirement {
 namespace {
 abi::arm64::android15::ArenaContains arena_contains=nullptr;
 RetiredFieldRegistry* fields=nullptr;RetiredMethodRegistry* methods=nullptr;
-class_loader_cleanup::Cleanup original=nullptr;
-class_loader_cleanup::Declaration declaration;
+native_interpretation_registry::Registry* interpreted=nullptr;
+using DestroyArena=void(*)(void*);
+DestroyArena original=nullptr;
+constexpr char kDestroyArena[]="_ZN3art14ArenaAllocatorD1Ev";
+constexpr char kDestroyArenaAlias[]="_ZN3art14ArenaAllocatorD2Ev";
 std::atomic<size_t> calls{0},field_count{0},method_count{0};
-bool Contains(const void* allocator,void* member) {
- return arena_contains(static_cast<const unsigned char*>(allocator)+abi::arm64::android15::kArenaOffset,member);
+std::atomic<size_t> interpreted_count{0};
+std::atomic<void*>cleanup_token{nullptr};
+bool Contains(const void* arena,void* member) {
+ return arena_contains(arena,member);
 }
-void Cleanup(void* linker,void* thread,const void* data,bool cleanup_cha) {
+void Cleanup(void* arena) {
  ++calls;
  try {
-  if(!class_loader_cleanup::Dispatch(declaration,original,linker,thread,data,cleanup_cha,
-      [](void* allocator){field_count+=fields->Prune(allocator,Contains);contextual_field_id::NativeNotifyPrune(*fields);method_count+=methods->Prune(allocator,Contains);}))std::abort();
- } catch(...) {std::abort();}
+  if(!arena||!original||!arena_contains||!fields||!methods)std::abort();
+  // LinearAlloc owns this ArenaAllocator as a native member. The actual
+  // destructor supplies its exact address; Contains needs no prefix arithmetic.
+  // Its original body frees the arena chain after the last possible lookup.
+  field_count+=fields->Prune(arena,Contains);contextual_field_id::NativeNotifyPrune(*fields);
+  method_count+=methods->Prune(arena,Contains);
+  if(interpreted)interpreted_count+=interpreted->Prune(arena,Contains);
+ }catch(...){std::abort();}
+ original(arena);
 }
 bool Fail(std::string* error,const char* value){if(error)*error=value;return false;}
 }
@@ -44,27 +56,56 @@ bool CalibrateAllocatorMembership(HookEngine& hooks,void* linker,
  int stack=0;if(contains(arena,&stack))return Fail(error,"Native stack incorrectly matches source arena");
  *output={allocator,owned.size(),foreign.size(),true};return true;
 }
-bool InstallRetirementCleanup(HookEngine& hooks,const Membership& proof,RetiredFieldRegistry& f,
-    RetiredMethodRegistry& m,std::string* error) {
- if(fields)return fields==&f&&methods==&m?true:Fail(error,"Loader cleanup already has different durable registry owners");
- if(!proof.matched||proof.owned<2||!proof.foreign)return Fail(error,"Loader cleanup needs actual owned/foreign allocator membership calibration");
- auto contains=reinterpret_cast<abi::arm64::android15::ArenaContains>(hooks.FindSymbol("libartbase.so",abi::arm64::android15::kArenaContains));
- // These are distinct fixed native declarations with the shared 24-byte
- // record prefix. Dispatch retains each original destruction schedule.
- auto selected=class_loader_cleanup::Declaration::kPrepareForBatchDelete;
- void* target=hooks.FindSymbol("libart.so",class_loader_cleanup::Symbol(selected));
- if(!target){selected=class_loader_cleanup::Declaration::kDeleteAndDestroy;target=hooks.FindSymbol("libart.so",class_loader_cleanup::Symbol(selected));}
+bool CleanupBinding::Bind(HookEngine&hooks,std::string*error){
+ auto target=hooks.FindSymbol("libartbase.so",kDestroyArena);
+ auto alias=hooks.FindSymbol("libartbase.so",kDestroyArenaAlias);
+ auto contains=reinterpret_cast<abi::arm64::android15::ArenaContains>(
+   hooks.FindSymbol("libartbase.so",abi::arm64::android15::kArenaContains));
+ if(!target||alias!=target||!contains)
+  return Fail(error,"Missing named allocation-arena destructor/alias/Contains declarations");
+ if(target_&&(target_!=target||contains_!=contains))
+  return Fail(error,"Allocation arena cleanup binding changed");
+ target_=target;contains_=contains;return true;
+}
+bool CleanupBinding::Install(HookEngine&hooks,const Membership&proof,RetiredFieldRegistry&f,
+ RetiredMethodRegistry&m,native_interpretation_registry::Registry*interpretation,std::string*error)const{
+ if(fields)return cleanup_token.load(std::memory_order_acquire)&&fields==&f&&methods==&m&&interpreted==interpretation?
+  true:Fail(error,"Arena cleanup already has different durable registry owners");
+ if(!target_||!contains_||!proof.matched||!proof.allocator||proof.owned<2||!proof.foreign)
+  return Fail(error,"Arena cleanup needs actual owned/foreign allocator membership calibration");
+ fields=&f;methods=&m;interpreted=interpretation;arena_contains=contains_;
+ struct Publication {
+  ~Publication(){if(!cleanup_token.load(std::memory_order_acquire)){
+   if(original)std::abort();
+   fields=nullptr;methods=nullptr;interpreted=nullptr;arena_contains=nullptr;
+  }}
+ }publication;
+ void*token=hooks.Install(target_,reinterpret_cast<void*>(Cleanup),reinterpret_cast<void**>(&original),error);
+ if(!token)return false;
+ if(!original||reinterpret_cast<void*>(original)==target_)std::abort();
+ cleanup_token.store(token,std::memory_order_release);return true;
+}
+bool CleanupBinding::InstallStopped(HookEngine&hooks,const native_source_stop::Session&stop,void*self,
+ const Membership&proof,RetiredFieldRegistry&f,RetiredMethodRegistry&m,
+ native_interpretation_registry::Registry*interpretation,std::string*error)const{
+ if(!stop.IsStopped(self))return Fail(error,"Arena cleanup installation requires the actual source stop");
+ const bool installed=Install(hooks,proof,f,m,interpretation,error);
+ if(!stop.IsStopped(self))std::abort();return installed;
+}
+bool InstallRetirementCleanup(HookEngine&hooks,const Membership&proof,RetiredFieldRegistry&f,
+ RetiredMethodRegistry&m,std::string*error,native_interpretation_registry::Registry*interpretation){
+ CleanupBinding binding;if(!binding.Bind(hooks,error))return false;
  using namespace abi::common;
  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
- if(!target||!contains||!construct||!destroy)return Fail(error,"Missing named native class-loader cleanup/stop declarations");
- SuspendAll stopped{};construct(&stopped,"artdcevm retirement loader cleanup installation",false);
- struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
- fields=&f;methods=&m;arena_contains=contains;declaration=selected;
- if(!hooks.Install(target,reinterpret_cast<void*>(Cleanup),reinterpret_cast<void**>(&original),error)) {
-  fields=nullptr;methods=nullptr;arena_contains=nullptr;return false;
- }
- return true;
+ if(!construct||!destroy)return Fail(error,"Missing named native cleanup installation stop declarations");
+ SuspendAll stopped{};construct(&stopped,"artdcevm retirement arena cleanup installation",false);
+ struct Stop {SuspendAll*value;SuspendDestroy destroy;~Stop(){destroy(value);}}stop{&stopped,destroy};
+ return binding.Install(hooks,proof,f,m,interpretation,error);
 }
 size_t CleanupCalls(){return calls.load();}size_t CleanupFields(){return field_count.load();}size_t CleanupMethods(){return method_count.load();}
+size_t CleanupInterpretedMethods(){return interpreted_count.load();}
+bool HasInterpretationCleanup(const native_interpretation_registry::Registry&owner)noexcept{
+ return cleanup_token.load(std::memory_order_acquire)&&interpreted==&owner&&fields&&methods&&arena_contains&&original;
+}
 }

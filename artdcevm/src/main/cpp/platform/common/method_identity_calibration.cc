@@ -27,6 +27,16 @@ uintptr_t LookupAddress(const void* address){
 #endif
   return pointer;
 }
+bool SnapshotExtent(const std::vector<std::pair<uintptr_t,uintptr_t>>&regions,
+ const void*address,size_t*extent)noexcept{
+ if(extent)*extent=0;
+ if(!address||!extent)return false;
+ const uintptr_t pointer=LookupAddress(address);
+ auto at=std::upper_bound(regions.begin(),regions.end(),pointer,[](uintptr_t p,const auto&r){return p<r.first;});
+ if(at==regions.begin())return false;--at;
+ if(pointer<at->first||pointer>=at->second)return false;
+ *extent=size_t(at->second-pointer);return true;
+}
 bool ReadRegion(uintptr_t pointer,std::pair<uintptr_t,uintptr_t>* region){
  ++mapping_os_queries;
 #if defined(__APPLE__)
@@ -114,10 +124,16 @@ ScopedReadableMappings::~ScopedReadableMappings(){if(active_mappings!=this)std::
 bool ScopedReadableMappings::Extent(const void* address,size_t* extent)const noexcept {
  if(extent)*extent=0;
  if(active_mappings!=this||!complete_||!address||!extent)return false;
- const uintptr_t pointer=LookupAddress(address);
- auto at=std::upper_bound(regions_.begin(),regions_.end(),pointer,[](uintptr_t p,const auto&r){return p<r.first;});
- if(at==regions_.begin())return false;--at;
- if(pointer<at->first||pointer>=at->second)return false;*extent=size_t(at->second-pointer);return true;
+ return SnapshotExtent(regions_,address,extent);
+}
+ReadableMappingSnapshot::ReadableMappingSnapshot()noexcept{
+ ScopedReadableMappings capture;
+ complete_=capture.Ready();
+ if(complete_)regions_.swap(capture.regions_);
+}
+bool ReadableMappingSnapshot::Extent(const void*address,size_t*extent)const noexcept{
+ if(extent)*extent=0;
+ return complete_&&SnapshotExtent(regions_,address,extent);
 }
 bool ScopedReadableMappings::Find(uintptr_t pointer,size_t* extent){
   auto at=std::upper_bound(regions_.begin(),regions_.end(),pointer,

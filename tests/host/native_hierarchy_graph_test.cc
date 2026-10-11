@@ -97,8 +97,9 @@ static jvmtiError JNICALL Signature(jvmtiEnv*,jclass c,char** out,char**){*out=s
 static jvmtiError JNICALL Status(jvmtiEnv*,jclass c,jint* out){auto*f=reinterpret_cast<Fake*>(c);*out=(f->prepared?JVMTI_CLASS_STATUS_PREPARED:0)|(f->initialized?JVMTI_CLASS_STATUS_INITIALIZED:0)|(f->erroneous?JVMTI_CLASS_STATUS_ERROR:0);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Modifiers(jvmtiEnv*,jclass c,jint* out){*out=jint(reinterpret_cast<Fake*>(c)->bytes.access_flags);return JVMTI_ERROR_NONE;}
 static jvmtiError JNICALL Deallocate(jvmtiEnv*,unsigned char* p){std::free(p);return JVMTI_ERROR_NONE;}
-static size_t root_borrows=0;
-static bool Borrow(void*,const runnable_jni::Context& c,jobject value,void** out){assert(c.self&&c.env);++root_borrows;auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
+static size_t root_borrows=0;static bool allow_root_borrows=true;
+static const runnable_jni::Context* borrowed_context=nullptr;
+static bool Borrow(void*,const runnable_jni::Context& c,jobject value,void** out){assert(allow_root_borrows&&c.self&&c.env);if(borrowed_context&&borrowed_context!=&c)return false;++root_borrows;auto it=moved_globals.find(value);*out=it==moved_globals.end()?static_cast<void*>(value):it->second;return value!=nullptr;}
 static size_t pair_reads=0;
 static bool PairBorrow(void*owner,const runnable_jni::Context&c,jobject a,jobject b,void**left,void**right){++pair_reads;return Borrow(owner,c,a,left)&&Borrow(owner,c,b,right);}
 struct FixtureOwner final:AllocationOwner,ReceiverOwner,CacheOwner {
@@ -124,9 +125,15 @@ static void Lifecycle(){
  Fake facade("Lboot/Facade;"),foreign_loader("Lloader/Foreign;");boot_facade=&facade;
  loaded={&object,&a,&b,&parent,&i};JNINativeInterface_ jni{};jni.FindClass=Find;jni.GetMethodID=Method;jni.GetStaticMethodID=StaticMethod;jni.NewGlobalRef=Global;jni.NewLocalRef=LocalRef;jni.DeleteGlobalRef=DeleteGlobal;jni.DeleteLocalRef=DeleteLocal;jni.ExceptionCheck=Exception;jni.CallObjectMethodV=Call;jni.CallStaticObjectMethodV=StaticCall;jni.CallStaticBooleanMethodA=IsProxy;jni.GetStringUTFChars=UtfChars;jni.ReleaseStringUTFChars=ReleaseUtf;jni.GetArrayLength=Length;jni.GetObjectArrayElement=Element;jni.NewObjectArray=NewArray;jni.SetObjectArrayElement=SetElement;jni.IsSameObject=SameObject;jni.NewStringUTF=String;jni.GetObjectRefType=RefType;JNIEnv env{&jni};
  jvmtiInterface_1 funcs{};funcs.GetLoadedClasses=Loaded;funcs.GetClassSignature=Signature;funcs.GetClassStatus=Status;funcs.GetClassModifiers=Modifiers;funcs.Deallocate=Deallocate;jvmtiEnv ti{&funcs};runnable_jni::Context context{&a,&env,&ti};
+ borrowed_context=&context;
+ struct CloseContext{~CloseContext(){borrowed_context=nullptr;}}close_context;
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Calibrate(context,nullptr,nullptr,nullptr,0,nullptr));FixtureOwner owner;owner.cache=&metadata;
  Bindings bindings{&metadata,nullptr,Borrow,&owner,&owner,&owner,PairBorrow};Input input;input.strong_original=reinterpret_cast<jclass>(&a);input.before={a.descriptor,object.descriptor,{},1,{},{}};input.after=input.before;input.after.superclass=parent.descriptor;input.after.interfaces={i.descriptor};input.after.access|=0x400u;
  Authority authority;std::string error;masquerade=&a;a.loader=&foreign_loader;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());assert(error.find("Native/public Class namespace differs")!=std::string::npos);masquerade=nullptr;a.loader=nullptr;i.parent=nullptr;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(!globals&&locals.empty());i.parent=&object;deny_snapshot=true;assert(!authority.Stage(context,&ti,{input},bindings,&error));deny_snapshot=false;assert(!globals&&locals.empty());deny_view=true;auto denied_queries=os_queries;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(os_queries==denied_queries+1);deny_view=false;assert(!globals&&locals.empty());assert(authority.Stage(context,&ti,{input},bindings,&error));assert(globals==2&&locals.empty());jvmtiError expected=JVMTI_ERROR_NONE;assert(authority.CheckClass(context,input.strong_original,input.after,&expected));assert(expected==JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);a.bytes.access_flags|=0x10u;assert(!authority.CheckClass(context,input.strong_original,input.after));a.bytes.access_flags&=~0x10u;auto wrong=input.after;wrong.methods.push_back({"x","()V",1,0});assert(!authority.CheckClass(context,input.strong_original,wrong));
+ // Matching fields in another object do not borrow this operation's scope.
+ auto copied_context=context;
+ assert(!authority.CheckClass(copied_context,input.strong_original,input.after));
+ assert(authority.CheckClass(context,input.strong_original,input.after));
  Fake moved_object=object,moved_a=a,moved_b=b,moved_parent=parent,moved_i=i;moved_a.parent=&moved_object;moved_b.parent=&moved_a;moved_parent.parent=&moved_object;moved_i.parent=&moved_object;
  moved_globals={{reinterpret_cast<jobject>(&object),&moved_object},{reinterpret_cast<jobject>(&a),&moved_a},{reinterpret_cast<jobject>(&b),&moved_b},{reinterpret_cast<jobject>(&parent),&moved_parent},{reinterpret_cast<jobject>(&i),&moved_i}};
  assert(authority.CheckClass(context,input.strong_original,input.after)); // Exact public globals survive GC; old raw pointers cannot authorize.
@@ -165,6 +172,8 @@ static void Lifecycle(){
  Fake final_object=collected_object,final_a=collected_a,final_b=collected_b,final_parent=collected_parent,final_i=collected_i,final_new_a=latest_new_a,final_new_b=latest_new_b;
  final_a.parent=&final_object;final_b.parent=&final_a;final_parent.parent=&final_object;final_i.parent=&final_object;final_new_a.parent=&final_parent;final_new_b.parent=&final_new_a;final_new_a.native_interfaces={&final_i};final_new_b.native_interfaces={&final_i};
  std::unordered_map<void*,void*> relocation{{&collected_object,&final_object},{&collected_a,&final_a},{&collected_b,&final_b},{&collected_parent,&final_parent},{&collected_i,&final_i},{&latest_new_a,&final_new_a},{&latest_new_b,&final_new_b}};
+ for(auto& entry:moved_globals){auto found=relocation.find(entry.second);if(found!=relocation.end())entry.second=found->second;}
+ allow_root_borrows=false;
  for(auto& value:root_values){auto it=relocation.find(value);if(it!=relocation.end())value=it->second;}plan.old_classes={&final_a,&final_b};plan.new_classes={&final_new_a,&final_new_b};
  bool mapping_allowed=true;modern_field_metadata::ReadContext read_context{&mapping_allowed,[](void*owner,const void*,size_t*out){++context_reads;if(!*static_cast<bool*>(owner))return false;*out=4096;return true;}};authority.UseReadContext(read_context);forbid_os=true;
  forbid_alloc=true;assert(authority.CanRefresh(resolver));authority.Refresh(resolver);assert(!authority.Verify(plan,0));assert(!authority.Seal(plan,nullptr));owner.granted=true;mapping_allowed=false;assert(!authority.Seal(plan,nullptr));mapping_allowed=true;assert(authority.Seal(plan,nullptr));assert(!authority.Seal(plan,nullptr));
@@ -174,9 +183,14 @@ static void Lifecycle(){
  forbid_alloc=false;auto foreign_plan=plan;forbid_alloc=true;assert(!authority.VerifyPrepared(foreign_plan,0));assert(!authority.VerifyFinal(foreign_plan,0));
  MustAbort([&]{authority.BeginCommit(plan);});
  owner.final_granted=true;assert(authority.VerifyFinal(plan,0));
+ // Pointer refresh alone is insufficient: the independent public array must
+ // still retain the exact Class, even when the native graph and Plan agree.
+ auto public_a=moved_globals.find(reinterpret_cast<jobject>(&a));assert(public_a!=moved_globals.end());
+ public_a->second=&final_b;assert(!authority.VerifyFinal(plan,0));public_a->second=&final_a;
+ assert(authority.VerifyFinal(plan,0));
  owner.final_granted=false;MustAbort([&]{authority.BeginCommit(plan);});
  owner.final_granted=true;assert(authority.Verify(plan,0));final_new_a.bytes.access_flags=1;assert(!authority.Verify(plan,0));final_new_a.bytes.access_flags=input.after.access;final_new_a.parent=&final_object;assert(!authority.Verify(plan,0));final_new_a.parent=&final_parent;owner.granted=false;assert(!authority.Verify(plan,0));owner.granted=true;assert(authority.Verify(plan,1));authority.BeginCommit(plan);assert(!authority.VerifyPrepared(plan,0));assert(!authority.VerifyFinal(plan,0));MustAbort([&]{authority.BeginCommit(plan);});forbid_alloc=false;forbid_os=false;assert(context_reads>0&&owner.commits==3);
- authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
+ allow_root_borrows=true;authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
  // A genuine public ERROR+PREPARED inventory Class retains all roots/edges
  // but never serves the affected or proposed hierarchy. Scalar native state
  // independently agrees with JVMTI; repeated native checks observe changes.
@@ -188,7 +202,7 @@ static void Lifecycle(){
  assert(authority.CheckClass(context,input.strong_original,input.after));
  moved_failure.bytes.status=3u<<28;assert(!authority.CheckClass(context,input.strong_original,input.after));
  moved_failure.bytes.status=2u<<28;assert(authority.CheckClass(context,input.strong_original,input.after));
- authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
+ allow_root_borrows=true;authority.Clear(&env);moved_globals.clear();assert(!globals&&locals.empty());
  failure.parent=&a;assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous affected Class")!=std::string::npos);assert(!globals&&locals.empty());failure.parent=&object;
  auto saved_parent=input.after.superclass;input.after.superclass=failure.descriptor;
  assert(!authority.Stage(context,&ti,{input},bindings,&error));assert(error.find("Erroneous proposed parent")!=std::string::npos);assert(!globals&&locals.empty());input.after.superclass=saved_parent;

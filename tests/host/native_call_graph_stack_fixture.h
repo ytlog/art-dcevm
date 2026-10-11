@@ -56,18 +56,25 @@ struct Context final:abi::arm64::context::Prefix{
  bool IsAccessibleFPR(uint32_t)override{return false;}uintptr_t GetFPR(uint32_t)override{return 0;}
 };
 abi::arm64::context::Prefix*Create(){assert(!forbid_provider_allocation);return new Context;}
-struct Frame{void*method=nullptr;bool shadow=false;};std::vector<Frame>frames[3];void*current_method=nullptr;
+bool boundary_geometry=false;
+struct Frame{void*method=nullptr;bool shadow=false;alignas(16) uintptr_t words[8]{};uintptr_t*carrier=nullptr;uintptr_t pc=0;};std::vector<Frame>frames[3];void*current_method=nullptr;
 void Construct(void*raw,void*target,void*context,stack_visitor_service::WalkKind kind,bool checked){assert(stopped&&locked&&context&&kind==stack_visitor_service::WalkKind::kIncludeInlined&&checked);auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);v->thread=target;v->kind=kind;v->context=context;v->shadow_frame=nullptr;v->quick_frame=nullptr;}
-void Walk(void*raw,bool transitions){assert(stopped&&locked&&transitions);++walk_calls;auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);size_t n=0;while(n<3&&registered[n]!=v->thread)++n;assert(n<3);for(const auto&f:frames[n]){current_method=f.method;v->shadow_frame=f.shadow?const_cast<Frame*>(&f):nullptr;v->quick_frame=f.method&&!f.shadow?&current_method:nullptr;if(!v->VisitFrame())break;}}
+void Walk(void*raw,bool transitions){assert(stopped&&locked&&transitions);++walk_calls;auto*v=static_cast<abi::arm64::stack::Visitor13*>(raw);size_t n=0;while(n<3&&registered[n]!=v->thread)++n;assert(n<3);size_t depth=0;for(const auto&f:frames[n]){v->depth=depth++;v->pc=f.pc;current_method=f.method;v->shadow_frame=f.shadow?const_cast<Frame*>(&f):nullptr;auto*words=f.carrier?f.carrier:const_cast<uintptr_t*>(f.words);words[0]=uintptr_t(f.method);words[7]=0x123450;
+ v->quick_frame=f.method&&!f.shadow?(boundary_geometry?reinterpret_cast<void**>(words):&current_method):nullptr;if(!v->VisitFrame())break;}}
 void*Method(const void*){assert(stopped&&locked);return current_method;}
 std::vector<void*>deoptimized;size_t queries=0,deopt_calls=0,undeopt_calls=0;
 size_t fail_deopt=SIZE_MAX,fail_undeopt=SIZE_MAX;
 void Deopt(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);if(deopt_calls++==fail_deopt)return;deoptimized.push_back(method);}
 void Undeopt(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);auto found=std::find(deoptimized.begin(),deoptimized.end(),method);assert(found!=deoptimized.end());if(undeopt_calls++==fail_undeopt)return;deoptimized.erase(found);}
 bool Query(void*owner,void*method){assert(owner==early_owner_fixture::instrumentation&&stopped);++queries;return std::find(deoptimized.begin(),deoptimized.end(),method)!=deoptimized.end();}
+native_runtime_frame::FrameInfo FrameInfo(const void*){assert(stopped&&locked);return {64,0x40000000u,0};}
+uintptr_t return_address_offset=56;
+uintptr_t ReturnAddress(const void*raw){assert(stopped&&locked);const auto*v=static_cast<const abi::arm64::stack::Visitor13*>(raw);return uintptr_t(v->quick_frame)+return_address_offset;}
 struct Hooks:HookEngine{
  RootHooks delegate;bool Initialize(std::string*)override{return true;}bool Remove(void*,std::string*)override{return false;}
  void*FindSymbol(const char*lib,const char*n)override{
+  if(boundary_geometry&&!std::strcmp(n,native_runtime_frame::Service::kFrameInfo))return reinterpret_cast<void*>(FrameInfo);
+  if(boundary_geometry&&!std::strcmp(n,native_runtime_frame::Service::kReturnAddress))return reinterpret_cast<void*>(ReturnAddress);
   using SS=stack_visitor_service::Service;
   if(!std::strcmp(n,SS::ConstructSymbol()))return reinterpret_cast<void*>(Construct);
   if(!std::strcmp(n,SS::WalkSymbol(stack_visitor_service::Declaration::kAndroid13To16)))return reinterpret_cast<void*>(Walk);

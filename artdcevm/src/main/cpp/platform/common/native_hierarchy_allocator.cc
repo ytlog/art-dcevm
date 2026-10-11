@@ -38,7 +38,7 @@ bool SameSchema(const evolution::ClassSchema& a,const evolution::ClassSchema& b)
  const auto same=[](const auto& x,const auto& y){for(size_t n=0;n<x.size();++n)if(x[n].name!=y[n].name||x[n].descriptor!=y[n].descriptor||x[n].access!=y[n].access||x[n].dex_index!=y[n].dex_index)return false;return true;};
  return same(a.fields,b.fields)&&same(a.methods,b.methods);
 }
-struct Capture {Service* service;source_handle_roots::Pool* pool;void* root;void* allocated;runnable_jni::Context context;Capture* previous;};
+struct Capture {Service* service;source_handle_roots::Pool* pool;void* root;void* allocated;const runnable_jni::Context&context;Capture* previous;};
 thread_local Capture* capture=nullptr;
 thread_local Batch* active_batch=nullptr;
 struct ScopedCapture {Capture value;ScopedCapture(Service* s,source_handle_roots::Pool* p,void* r,void* allocated,const runnable_jni::Context& c):value{s,p,r,allocated,c,capture}{capture=&value;}~ScopedCapture(){capture=value.previous;}};
@@ -233,7 +233,7 @@ bool Service::Retire(const runnable_jni::Context& c,source_handle_roots::Pool& p
  return retired;
 }
 struct Batch::State final:rooted_hierarchy::Access {
- Service& service;runnable_jni::Context context;native_hierarchy_graph::Authority& authority;
+ Service& service;const runnable_jni::Context&context;native_hierarchy_graph::Authority& authority;
  std::unique_ptr<source_handle_roots::Pool> owned_pool;source_handle_roots::Pool& pool;rooted_hierarchy::Allocator allocator;
  enum class Phase {Unallocated,Authorized,Captured,Linked};
  const source_handle_roots::StoppedReader*stopped_reader=nullptr;

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <algorithm>
 namespace artdcevm::native_source_stop {
 namespace {
 namespace a=abi::arm64::android_common;namespace s=a::source_stop;
@@ -319,6 +320,22 @@ bool Session::BeginOriginalWaiting(void* self,size_t extent,void* owner,
     bool (*prepare)(void*,Session&) noexcept) noexcept {
  return RunOriginalWaiting(self,extent,owner,prepare,false);
 }
+bool Session::BeginPrepared(void*self,size_t extent,void*owner,
+ bool(*prepare)(void*,Session&)noexcept)noexcept{
+ if(!owner||!prepare){failure_="source-preparation-callback-missing";return false;}
+ if(service_.RequiresOriginalWaiting())return BeginOriginalWaiting(self,extent,owner,prepare);
+ if(!Begin(self,extent))return false;
+ const bool accepted=prepare(owner,*this);
+ if(accepted){
+  if(phase_!=Phase::kContinuing||!IsPublicationWindow(self))std::abort();
+  return true;
+ }
+ if(!IsCollectedStop(self)||!RollbackBeforeSource())std::abort();
+ failure_="source-stopped-preparation-refused";return false;
+}
+bool Session::InspectionAvailable()noexcept{
+ return !active&&!finishing&&!borrowed&&!observation&&!waiting_invocation&&!publication;
+}
 bool Session::Inspect(void* self,size_t extent,void* owner,
     bool (*inspect)(void*,Session&) noexcept) noexcept {
  if(!owner||!inspect){failure_="source-inspection-callback-missing";return false;}
@@ -380,12 +397,19 @@ bool Session::CanPublishDex(void* driver,const void* holder,void* linker)const n
  return IsPublicationWindow(self_)&&publication_driver_==driver&&publication_holder_==holder&&
   publication_linker_==linker&&!publications_.empty()&&publication_matcher_.owner&&publication_matcher_.match;
 }
+bool Session::PublicationPrepared(void*driver,const void*holder,void*linker)const noexcept{
+ return (phase_==Phase::kEmpty||phase_==Phase::kStopped)&&service_.publication_calibrated_&&
+  driver&&holder&&linker&&publication_driver_==driver&&publication_holder_==holder&&
+  publication_linker_==linker&&linker==service_.publication_linker_&&!publications_.empty()&&
+  !publication_completed_&&publication_matcher_.owner&&publication_matcher_.match&&
+  std::all_of(publications_.begin(),publications_.end(),[](uint8_t state){return state==0;});
+}
 bool Session::MatchPublication(void* linker,void* cache,void* loader,size_t* index)const noexcept {
  return cache&&index&&CanPublishDex(publication_driver_,publication_holder_,linker)&&
   publication_matcher_.match(publication_matcher_.owner,publication_driver_,publication_holder_,linker,cache,loader,index);
 }
 bool Session::Begin(void* self,size_t extent) noexcept {
- if(phase_!=Phase::kEmpty||active||finishing||borrowed||observation||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
+ if(phase_!=Phase::kEmpty||!InspectionAvailable()||!service_.calibrated_||!service_.state_.CanTransitionRunnable()||!service_.heap_||!service_.mutator_||*service_.mutator_!=service_.mutator_identity_||!self||service_.current_()!=self){failure_="source-stop-owner-or-lifecycle-mismatch";return false;}
  self_=self;extent_=extent;uint32_t state=UINT32_MAX;
  if(!service_.state_.State(self_,extent_,&state)||state!=service_.state_.RunnableState()){failure_="source-stop-requires-calibrated-Runnable-owner";return false;}
  // StartGC really waits for the preceding owner, then excludes every GC until
