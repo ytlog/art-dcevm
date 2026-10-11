@@ -1,189 +1,51 @@
 # ART DCEVM
 
-ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运行期间替换 Java 类的方法实现，并在已适配的 ART 构建上修改字段、方法和继承关系。适合自有应用的开发调试、热重载工具和类演进实验。
+在非 root 的 Android 设备上，于应用进程内增强 ART 的类重定义能力，目标是 VM 级 DCEVM：运行期间增删字段和方法、修改类型与签名、修饰符和继承关系，存活对象保留兼容字段的值。适用于自有应用的开发调试和热重载工具。
 
-应用必须从进程启动时就处于可调试状态。无需 root，无需修改系统分区。初始化后，调用方通过自己的 JVMTI Agent 使用标准 `jvmtiEnv::RedefineClasses` 提交替换请求。
+**状态：开发中。** 引擎正在以 ART 自带的结构重定义事务为基础重写（见 [方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)），当前实施 Phase 1–2（标准入口路由、修饰符变化），尚未通过设备验证。旧实现保存在本地标签 `backup-call-graph-engine-20261012`。
 
-**当前为实验实现，正在重写调用图解释执行路径。** 旧 Android 13 专用引擎及旧公共 AOT/JIT 私有提交引擎已删除，新调用图组件正在接入完整事务。完整结构演进尚未调通，完整初始化不会把部分能力报告为成功；公开 JVMTI 路径仍可使用。下面的结构演进清单描述开发目标，历史验证结果见验证记录。
+## 原理
 
-## 功能
+Android 11 起，ART 的 `Redefiner::StructurallyRedefineClasses` 已经实现新类分配、堆遍历迁移实例、改写反射与 JNI 引用、全线程去优化和 JIT 失效，但只允许"只增不删"。本库在应用进程内用 ShadowHook 挂接它的几个决策函数（校验、成员映射、类分配和提交），用自己的策略替代 ART 的限制，其余工作全部交给 ART。私有能力只通过命名 ELF 符号访问，不从反汇编推算地址或偏移。
 
-- **方法体替换**：更新已加载类的方法实现。
-- **成员增删**：在已适配设备上新增、删除和重新添加字段、方法及构造器。
-- **成员结构变更**：修改字段类型、方法签名，切换成员的 static / 实例形式，以及方法的 native / Java 实现。
-- **修饰符变更**：支持已验证的访问权限、final、synchronized、volatile、abstract 变更及部分组合。
-- **继承关系演进**：在已验证范围内扩展、移除或替换父类关系，移除和恢复接口关系。
-- **存活对象处理**：保留兼容字段的已有值；已有对象新增字段使用零值或 `null`，不重新执行构造器。
-- **旧引用保护**：对已退役成员和失效接收者，在已覆盖的字节码、反射、JNI、MethodHandle 与 VarHandle 路径上拒绝访问。
-- **批量重定义**：通过一次 `RedefineClasses` 提交多个类，支持已验证的转换回调、并发请求及失败批次回滚。
+## 要求
 
-以上结构演进功能均受设备适配和具体语义边界限制。已验证范围与未支持场景见 [能力限制](docs/LIMITATIONS.md) 和 [验证记录](docs/VERIFICATION.md)。
+- Android 11–17（不含 12L），arm64-v8a。
+- 应用从进程启动时就是可调试的（`debuggable`）。ART 只在这种进程里开放类重定义能力。
+- 不需要 root。
 
-## Android 兼容性
+## 使用方式（目标接口）
 
-| 路径 | 环境 | 能力 |
-| --- | --- | --- |
-| 公开 JVMTI | Android 11 / API 30 及以上，当前构建仅支持 arm64-v8a | 方法体替换；ART 暴露结构扩展时可经扩展入口新增成员 |
-| 增强结构演进 | Android 11–17 / arm64 的共用引擎正在开发，排除 12L | 按真实校准逐项报告；完整初始化和完整 schema 验证尚未完成 |
+1. 初始化一次增强库：
 
-历史旧实现的完整演进结果来自 Android 13 Xiaomi CAS；它不证明当前重写版本可用。当前优先验证 Android 16，适配按实际运行库的命名符号和独立运行时校准进行，不以厂商或 Build ID 选择实现。
+   ```java
+   DcevmRuntime.initialize(context);  // 失败时抛异常，附诊断信息
+   ```
 
-Android 11–17 的公开路径验证和私有适配进展见 [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)。
+2. 用自己的 JVMTI Agent 申请 `can_redefine_classes`，并通过标准接口提交整批类定义（ART 接收 DEX 字节）：
 
-## 快速开始
+   ```cpp
+   jvmtiError error = jvmti->RedefineClasses(count, definitions);
+   ```
 
-示例应用位于 [app](app)，独立用户 Agent 示例位于 [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc)。
+   尚未支持的变化以 JVMTI 错误拒绝，整批不提交，旧定义保持可用。`DcevmRuntime.capabilities()` 返回当前已支持的变化类别。
 
-### 1. 构建与接入
+仓库中的 [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc) 是测试用的独立 Agent 示例，[fixtures](fixtures) 是测试补丁源码。
 
-发布到 Maven Central 后，在应用工程中配置仓库和依赖即可，**无需单独声明 ShadowHook**：
+## 构建
 
-```groovy
-// settings.gradle
-dependencyResolutionManagement {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-```
-
-```groovy
-// 应用模块 build.gradle；x.y.z 替换为已发布版本
-dependencies {
-    implementation 'com.github.ytlog:artdcevm:x.y.z'
-}
-```
-
-`com.github.ytlog:artdcevm` 是发布脚本默认坐标，当前尚未发布到 Maven Central。发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。发布包仅包含 arm64-v8a。发布者操作见 [Maven 发布指南](docs/MAVEN_PUBLISHING.md)。
-
-发布前可通过源码模块接入。仓库使用 Gradle Wrapper 9.4.1、AGP 9.2.0、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4；需准备兼容的 JDK（17 或以上），并在本机 `local.properties` 中配置 `sdk.dir`。
+需要 JDK 17+、Android SDK 37、NDK 27.2.12479018、CMake 4.3.4，并在 `local.properties` 中配置 `sdk.dir`。
 
 ```sh
-git clone https://github.com/ytlog/art-dcevm.git
-cd art-dcevm
-
-# 构建示例 APK 和可接入的 AAR，默认 arm64-v8a
 ./gradlew :app:assembleDebug :artdcevm:assembleRelease
 ```
 
-产物分别为 `app/build/outputs/apk/debug/app-debug.apk` 和 `artdcevm/build/outputs/aar/artdcevm-release.aar`。
-
-在同一 Gradle 工程中接入源码模块：
-
-```groovy
-// 应用模块 build.gradle；settings.gradle 需已包含 :artdcevm
-dependencies {
-    implementation project(':artdcevm')
-}
-```
-
-库的当前 `minSdk` 为 30。应用需打包对应 ABI 的 native 库，并从启动时就启用 `debuggable`；不能在进程启动后再开启调试状态。
-
-### 2. 初始化
-
-在自己的 Agent 第一次重定义类之前，调用一次：
-
-```java
-import com.github.ytlog.artdcevm.api.DcevmRuntime;
-
-// context 为应用 Context；附加或适配失败时抛出异常。
-DcevmRuntime.initialize(context);
-```
-
-该方法加载 `libartdcevm.so`、附加增强 Agent、检查设备适配并安装增强路由。同一进程中初始化成功后重复调用直接返回。初始化失败时不会自动降级，应处理异常后停止结构演进请求。
-
-如果只需要公开 JVMTI 能力，可显式选择：
-
-```java
-import org.json.JSONObject;
-
-JSONObject capabilities = DcevmRuntime.attachPublicJvmti(context);
-```
-
-返回的 JSON 用于查询当前后端能力。公开附加成功不代表完整结构演进初始化成功；公开 ART 结构扩展也不意味着标准 `RedefineClasses` 可以新增成员。
-
-### 3. 附加自己的 JVMTI Agent
-
-ART DCEVM 提供初始化入口；补丁加载与替换请求由调用方的 Agent 实现。自己的 Agent 需要取得 JVMTI 环境并申请重定义能力，例如：
-
-```cpp
-#include <jni.h>
-#include "jvmti.h"
-
-static jvmtiEnv* jvmti = nullptr;
-
-extern "C" JNIEXPORT jint JNICALL
-Agent_OnAttach(JavaVM* vm, char*, void*) {
-    if (vm->GetEnv(reinterpret_cast<void**>(&jvmti), JVMTI_VERSION_1_2) != JNI_OK)
-        return JNI_ERR;
-    jvmtiCapabilities capabilities{};
-    capabilities.can_redefine_classes = 1;
-    return jvmti->AddCapabilities(&capabilities) == JVMTI_ERROR_NONE
-        ? JNI_OK : JNI_ERR;
-}
-```
-
-将自己的 Agent 编译、打包为 native 库后，可在应用中附加：
-
-```java
-import android.os.Debug;
-
-Debug.attachJvmtiAgent("libmy_agent.so", null, context.getClassLoader());
-```
-
-`libmy_agent.so` 为调用方自行实现的库名，不是本仓库提供的库。Agent 构建需提供 JVMTI 头文件；仓库示例使用 [third_party/jvmti](third_party/jvmti)。
-
-### 4. 提交替换类
-
-Android ART 接收 **DEX 字节**。为目标类生成具有相同类名的新定义，将完整 DEX 数据与当前已加载的 `jclass` 交给自己的 Agent：
-
-```cpp
-// target：当前已加载的目标类。
-// dex / dex_size：包含目标类新定义的完整 DEX 数据及长度。
-// 调用线程已附加到 VM；jvmti 来自自己的 Agent。
-jvmtiClassDefinition definition{};
-definition.klass = target;
-definition.class_byte_count = dex_size;
-definition.class_bytes = dex;
-
-jvmtiError error = jvmti->RedefineClasses(1, &definition);
-if (error != JVMTI_ERROR_NONE) {
-    // 记录错误码并处理失败，不将此次请求视为已生效。
-}
-```
-
-多个相互依赖的类应组成同一个 `jvmtiClassDefinition[]`，一次提交完整批次。调用期间需保持类引用和 DEX 缓冲区有效。示例应用的 [补丁源码](fixtures) 与 [DEX 构建脚本](tools/build-fixtures.py) 展示了测试补丁的生成方式。
-
-## 使用注意
-
-- 对象新增字段初值为零或 `null`；新建对象仍按新定义执行构造器。字段类型或 static / 实例形式变化按旧成员退役、新成员创建处理。
-- 删除成员、收窄继承关系后，旧引用可能抛出链接或访问异常。业务代码需处理这些语义变化。
-- 已加载子类覆写将变为 final 的方法、存活实例将继承未实现抽象方法等冲突，会导致事务拒绝。
-- 新路径按调用图选择上下游方法进行解释执行。仍在栈上的选中编译帧会导致明确拒绝；常驻帧未必退出，不通过无限等待或全进程回退假装完成。
-- `RetransformClasses` 不属于增强结构演进入口。补丁分发、签名校验、访问控制和发布系统需由调用方实现。
-
-## 示例与验证
-
-```sh
-# 共用结构路径的开发验证（当前不代表完整演进已通过）
-python3 tools/run-production-schema.py --adb /path/to/sdk/platform-tools/adb \
-  --serial DEVICE --apk app/build/outputs/apk/debug/app-debug.apk \
-  --self-instrumentation --case field-types --scope common-owned
-
-# 在其他设备运行公开 JVMTI 回归；APK 需匹配设备 ABI
-python3 tools/run-public-jvmti.py --serial DEVICE
-```
-
-测试脚本操作示例应用 `dev.artdcevm.lab`，会结束其旧进程并从初始类定义开始运行。结构测试使用已安装且经过哈希核验的 APK。原始报告保存到本地 `build/evidence/`，不随仓库发布。旧 `run-source-probe.py` 及其专属引擎和测试已删除。
+ShadowHook 以官方 Maven 依赖（`com.bytedance.android:shadowhook`）引入。发布方式见 [MAVEN_PUBLISHING.md](docs/MAVEN_PUBLISHING.md)。
 
 ## 文档
 
-- [原理说明与接入示例（图示与动画）](docs/articles/art-dcevm.html)
-- [开发说明与语义细节](docs/README.md)
-- [Android 兼容性与适配进展](docs/ANDROID_COMPATIBILITY.md)
-- [未支持及未充分验证的能力](docs/LIMITATIONS.md)
-- [测试命令与验证结论](docs/VERIFICATION.md)
-- [标准 JVMTI 入口设计](docs/STANDARD_JVMTI_REDEFINE_DESIGN.md)
-
-项目使用 ShadowHook 安装命名符号 Hook，部分声明依据 AOSP ART 源码；第三方 JVMTI 头文件的来源与许可见 [ORIGIN.txt](third_party/jvmti/ORIGIN.txt)。
+- [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)
+- [能力限制](docs/LIMITATIONS.md)
+- [Android 兼容性](docs/ANDROID_COMPATIBILITY.md)
+- [验证记录](docs/VERIFICATION.md)
+- [真机 ART 运行库采集](docs/ART_DEVICE_COLLECTION.md)

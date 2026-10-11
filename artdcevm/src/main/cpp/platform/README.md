@@ -1,32 +1,12 @@
-# 原生平台代码目录
+# 平台代码分层
 
-当前仅支持 ARM64。版本运行时实现与版本 ABI 分层归属；公共路径通过源码声明、符号绑定和运行时校准复用，不按厂商复制实现。
+当前仅支持 ARM64。跨版本实现只有一份，版本差异只体现在固定源码声明上。
 
-| 目录 | 职责 |
+| 目录 | 内容 |
 | --- | --- |
-| `common/` | 跨版本能力、事务、校准、对象与字段迁移、缓存、帧和层级处理 |
-| `android13/`、`android17/` | 已有的版本专有运行时实现 |
-| `abi/arm64/android11/` … `android17/` | 各版本唯一的固定 ARM64 ABI 声明 |
-| `abi/common/` | 不依赖版本或指令集的固定 ART 调用声明，例如 Runnable JNI scope、SuspendAll、JNI ID query scope |
-| `abi/arm64/` | ARM64 公共布局与汇编；`common/` 保存跨版本 ARM64 ART 声明 |
-| `symbols/` | 跨版本符号选择与兼容性解析 |
-| `android13/symbols/` | Android 13 符号配置与已核对厂商符号定义 |
-| `jni_access/` | JNI 访问能力选择与独立校准入口 |
-| `jvmti/` | 公共 JVMTI 后端 |
-| `backend_factory.*` | 后端选择入口 |
+| `common/` | 跨版本实现：结构重定义引擎、校验策略、公开 JVMTI 结构读取 |
+| `abi/arm64/common/` | Android 11–17 共用的 ART 固定源码声明（附源码出处与 `static_assert`） |
+| `abi/arm64/androidNN/` | 只在某些版本存在差异时才创建，存放该版本的声明 |
+| `symbols/` | 命名 ELF 符号目录；`tools/check-structural-symbols.py` 对照设备库核对 |
 
-版本布局只有一个归属，例如 Android 14 的 ARM64 声明在 `abi/arm64/android14/`，不再同时维护 `android14/abi/`。Android 13 原先分散在运行时目录的 `*_abi.h` 也统一归入 `abi/arm64/android13/`。旧的 `arch/arm64/` 汇编也已并入 `abi/arm64/`。相同声明只保留一处：`abi/common/` 的 JNI 访问、SuspendAll 与 JNI ID query scope 不再在 `abi/arm64/common/` 建纯别名或重复结构；其调用者直接使用 `abi::common`。真正依赖 ARM64 的布局与调用声明仍在架构层。
-
-Android 11、12、14、15、16 目前主要通过 `common/` 实现行为，相应 ABI 目录包含实际不同的声明；没有创建空运行时目录或重复复制公共 `.cc` 文件。Android 13 保留其独有的完整后端和测试诊断；Android 17 保留实际不同的 Class 方法表校准。Runtime 服务、接收者、JIT 与结构事务直接复用 `common/`，不保留按版本包装的别名或转发入口。目录存在不表示真机全功能验证完成。Android 12L/API 32 当前不在支持目标中。
-
-新增代码规则：先确认是否确有版本或 ARM64 差异。跨版本算法放 `common/`；版本独有声明放 `abi/arm64/androidXX/`；版本独有行为放相应 `androidXX/`。保留代码命名空间，移动目录不改变运行时语义。厂商差异只有在真实符号/调用语义需要时加入，不能凭机型、SDK 或构建编号授予私有能力。
-
-设备采集库位于工程 assets/runtime_lib 的既有分类目录，不纳入源码提交；原始日志和逐次报告写入已忽略的 `build/evidence/`，验证摘要在 `docs/VERIFICATION.md`。
-
-Android 13 直接使用 `common/field_copy.h`、`common/object_replacement_map.h` 和 `common/retired_*_registry.h` 的公共命名空间；不再为这些公共算法保留版本转发头。`abi/arm64/android13/` 只保留真实的版本声明，不为公共 POD 视图或已有算法重新起版本别名。
-
-Android 13 的固定 Legacy DexCache 仍按 API33 的真实声明和独立校准读取，但直接使用公共 `method_cache::LegacyCache`，不增加别名头。FindClass 演化处理器也直接向公共 `runtime_receiver` 观察者登记和恢复；Android13 的完整 Runtime receiver 校准继续独立保留。
-
-Android 13 的字段、方法和 Class modifier 声明差异策略直接归入现有 `common/native_schema_policy`，final cached-setter 的单调发布状态归入 `common/modern_final_field_guard`，不保留版本转发或另建公共包装。完整后端的原始结构校验 Hook 仍使用自己的语义边界。其 allocator membership adapter 仍需平衡原 NativeObjectAccess 生命周期并核对 unsafe/locked/Arena 三个命名路径，因此保留有效校准与 fallback；不能仅因公共层也有 allocator 校准就删除不同作用域的实现。
-
-Android13 固定源码族的命名 ART/JVMTI 符号只在 `symbols/android13/source_symbols.h` 声明一次。调用者直接引用，不保留厂商路径或 profile 别名；采集机型是验证来源，不能作为能力白名单。符号存在仍需真实 ABI 与独立运行时校准。
+新增代码先确认是否确有版本差异：没有就放 `common/`，有就只把差异声明放进对应版本目录，不复制整套实现。能力由运行库的实际符号与声明一致性决定，不按机型、SDK 或构建编号放行。私有能力只通过命名符号访问，不从反汇编推算地址或偏移。

@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：方案已确定，Phase 1 实施中。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：方案已确定，旧代码已清除，Phase 1–2 实施中，尚未通过设备验证。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -63,28 +63,48 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ## 目录落点
 
-遵循现有分层，不新建版本后端：
+遵循现有分层，不新建版本后端。`artdcevm/src/main/cpp` 下：
 
 | 内容 | 位置 |
 | --- | --- |
-| 结构重定义接管点的命名符号（11–17 共用） | `platform/symbols/structural_redefine_symbols.h` |
-| 引擎：前提检查、Hook 安装、路由、策略和提交 | `platform/common/structural_redefine_engine.{h,cc}` 及后续 `platform/common/structural_*` |
-| 后端：公开 JVMTI 与引擎组合 | `platform/common/structural_backend.{h,cc}`，由 `platform/backend_factory.cc` 创建 |
-| 版本间确有差异的 `ClassRedefinition` 等声明 | 沿用 `platform/abi/arm64/androidNN/`，公共视图在 `platform/abi/arm64/common/` |
-| DEX 结构比较 | 沿用 `evolution/` |
+| JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
+| ShadowHook 封装（官方 Maven prefab，只查 `.dynsym`） | `hooks/shadow_hook.{h,cc}` |
+| 接管点命名符号（11–17 共用） | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
+| 11–17 共用的 `ClassRedefinition` / `Redefiner` / `DexFile` 前缀声明 | `platform/abi/arm64/common/redefinition.h`；确有版本差异的声明放 `platform/abi/arm64/androidNN/` |
+| 引擎：前提检查、Hook 安装、路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
+| 校验策略（纯函数，主机可测） | `platform/common/structural_policy.{h,cc}` |
+| 用公开 JVMTI 读取旧类结构 | `platform/common/schema_snapshot.{h,cc}` |
+| 读取 ART 已映射 DEX 中的类声明 | `evolution/class_schema.h`、`evolution/dex_schema.cc` |
+
+## Phase 2 校验规则
+
+`CheckClass` 时读取新 DEX（`self->dex_file_`，ClassDef 0）和旧类（公开 JVMTI），交给 `structural_policy` 评估；结果按 `ClassRedefinition*` 缓存在线程局部，供随后的 `CheckFields` / `CheckMethods` 使用。拒绝时只写 `driver_->result_` 并返回 false（`Redefiner::RecordFailure` 本身也只做这件事和格式化消息），原因写入引擎诊断和 logcat。接受且有新增成员或修饰符变化时调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，让 ART 走结构路径，新类采用新 DEX 的修饰符。
+
+成员身份：字段为（名称、类型、static），方法为（名称、描述符）。比较前把 DEX 原始标志规范化为 JVMTI 视图（与 `ti_method.cc`、`ti_field.cc`、`ti_class.cc` 一致：取 Java 标志位，方法的 declared-synchronized 映射为 synchronized，abstract 方法去掉 native）。
+
+| 变化 | Phase 2 结果 |
+| --- | --- |
+| 新增字段、方法 | 接受 |
+| 已有成员的访问级别、final、volatile、transient、synchronized 变化；Java → native | 接受 |
+| 方法新增 final，且已加载的子类覆写它 | 拒绝，`METHOD_MODIFIERS_CHANGED` |
+| native → Java，abstract 相关变化 | 拒绝，`METHOD_MODIFIERS_CHANGED` |
+| 删除字段，字段类型或 static 属性变化 | 拒绝，`SCHEMA_CHANGED`（Phase 3 支持） |
+| 删除方法，方法签名变化 | 拒绝，`METHOD_DELETED`（Phase 3 支持） |
+| 类修饰符变化 | 拒绝，`CLASS_MODIFIERS_CHANGED`（Phase 4 支持） |
+| 父类、接口变化 | 拒绝，`HIERARCHY_CHANGED`（Phase 4 支持） |
 
 ## 分阶段计划
 
 | 阶段 | 内容 | 完成判据 |
 | --- | --- | --- |
-| Phase 1 | 共用符号目录、符号核对工具、可调试前提检查、标准 `RedefineClasses` 路由到结构重定义；新后端接入工厂 | 主机构建通过；Android 16 设备上，独立 Agent 通过标准入口新增字段和方法成功，仅方法体变化行为不变 |
-| Phase 2 | 自有 `CheckClass` / `CheckFields` / `CheckMethods` 策略：修饰符变化 | 修饰符变化用例在 Android 16 上提交成功，冲突用例按原错误码拒绝 |
-| Phase 3 | 自有映射与提交：字段和方法删除、类型和签名变化、墓碑成员、JNI ID 解码检查 | fixtures 中成员删除和类型变化用例通过，退役引用在反射、JNI、MethodHandle、VarHandle 上抛出约定异常 |
-| Phase 4 | 继承关系变化与收窄检查 | 父类和接口的扩展、移除、恢复用例通过；持有受影响实例的 boot 帧导致拒绝且旧定义完整 |
-| Phase 5 | 删除调用图模块和启动门控（`native_call_graph*`、`native_selective_interpretation*`、`redefinition_gate`、`production_*` 等），收拢测试入口 | 构建与回归不再依赖这些模块 |
-| Phase 6 | Android 11、12、13、14、15、17 逐台回归 | 每台设备的结果、APK 哈希记录在 [VERIFICATION.md](VERIFICATION.md) |
+| 清理 | 删除调用图、选择性解释、启动门控等旧实现及其测试、工具和文档 | 已完成，旧代码见备份标签 |
+| Phase 1 | 可调试前提检查；标准 `RedefineClasses` 路由到 `StructurallyRedefineClasses` | Android 16 上，独立 Agent 经标准入口新增字段和方法成功；仅方法体变化的行为不变 |
+| Phase 2 | 上节的校验规则 | 修饰符变化用例提交成功并体现新语义；拒绝用例返回约定错误码且旧定义完整；无效批次整体不提交 |
+| Phase 3 | 自有映射与提交：成员删除、类型和签名变化、墓碑成员、JNI ID 解码检查 | 删除和类型变化用例通过；退役引用在反射、JNI、MethodHandle、VarHandle 上抛出约定异常 |
+| Phase 4 | 继承关系和类修饰符变化，收窄前的帧检查 | 父类和接口的扩展、移除、恢复用例通过；持有受影响实例的不可去优化帧导致拒绝且旧定义完整 |
+| Phase 5 | Android 11、12、13、14、15、17 逐台回归 | 每台设备的结果和 APK 哈希记录在 [VERIFICATION.md](VERIFICATION.md) |
 
-`DcevmRuntime.initialize()` 在 Phase 4 完成并通过设备验收之前继续返回不可用；阶段性能力通过 `capabilities()` 逐项报告，不把部分能力当作完整初始化成功。
+`DcevmRuntime.initialize()` 在 Hook 全部安装成功后返回成功；尚未支持的变化以 JVMTI 错误拒绝。`capabilities()` 逐项报告已支持的变化类别，`fullDcevmComplete` 在 Phase 4 通过设备验收前保持 false。
 
 ## 风险
 
