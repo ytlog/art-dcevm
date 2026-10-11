@@ -5,6 +5,12 @@
 #include "platform/common/native_typed_heap_calibration.h"
 #include <sys/wait.h>
 namespace {
+class StoppedTypedHooks final:public TypedHooks {
+ public:
+ void*Install(void*target,void*replacement,void**original,std::string*error)override{
+  assert(stopped);return TypedHooks::Install(target,replacement,original,error);
+ }
+};
 struct Count {jobject value=nullptr;int locals=0,globals=0;};
 std::array<Count,32> owned{};bool pending=false,missing=false,duplicate=false,array_exception=false,same_exception=false;
 int global_call=0,fail_global=0,set_call=0,fail_set=0,local_call=0,fail_local=0;
@@ -30,7 +36,7 @@ void Wrappers(){table.IsSameObject=SameOwned;table.ExceptionCheck=Pending;table.
 }
 int main(){
  InitJni();InitializeHeap();types[0]="Ljava/lang/Object;";Put32(old_instance,12,uint32_t(uintptr_t(old_instance)));Put32(old_class,128,uint32_t(uintptr_t(new_instance)));
- TypedHooks hooks;std::string error;exclusive_owned_roots::Service exclusive;assert(exclusive_owned_roots::Service::Bind(hooks,&exclusive,&error));
+ StoppedTypedHooks hooks;std::string error;exclusive_owned_roots::Service exclusive;assert(exclusive_owned_roots::Service::Bind(hooks,&exclusive,&error));
  modern_field_metadata::FieldMetadata metadata;assert(metadata.Bind(hooks,&error));
  std::array<modern_field_metadata::FieldOracle,4> oracle{};for(size_t i=0;i<4;++i)oracle[i]={reinterpret_cast<jobject>(&mirrors[i]),names[i],types[i],i==0?8u:1u};
  const auto cal=[](const runnable_jni::Context& c,void* raw){auto& p=*static_cast<std::pair<modern_field_metadata::FieldMetadata*,std::array<modern_field_metadata::FieldOracle,4>*>*>(raw);return p.first->Calibrate(c,reinterpret_cast<jobject>(old_class),"LFixture;",p.second->data(),4,nullptr);};

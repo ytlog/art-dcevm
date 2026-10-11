@@ -22,6 +22,7 @@ class SourceCalibration final {
  const native_call_graph_commit::Binding&CommitBinding()const noexcept{return commit_;}
  const native_structural_reflection::Service&Reflection()const noexcept{return reflection_;}
  const native_typed_heap_walk::RootProvenance&RootProvenance()const noexcept{return roots_;}
+ const native_typed_heap_walk::Service&Heap()const noexcept{return heap_;}
  // Prepare must be repeated from each transaction's actual ordinary Native
  // caller when OEM mutex arguments have a current-thread-specific oracle.
  native_cache::Service&Cache()noexcept{return cache_;}
@@ -32,6 +33,7 @@ class SourceCalibration final {
  bool Install(JNIEnv*,std::string*);
  bool Calibrate(JNIEnv*,jvmtiEnv*,std::string*);
  bool PrepareCommitReaders(JNIEnv*,std::string*);
+ bool PrepareTypedHeap(JNIEnv*,std::string*);
  struct RootLocks;
  static bool ObserveRootLocks(const runnable_jni::Context&,void*);
  struct Round;
@@ -48,6 +50,9 @@ class SourceCalibration final {
  native_typed_heap_walk::RootProvenance roots_;
  native_cache::Service cache_;
  native_source_compilation::Service compilation_;
+ exclusive_owned_roots::Service exclusive_;
+ native_typed_heap_walk::Service heap_;
+ bool exclusive_bound_=false;
  bool commit_bound_=false,reflection_bound_=false,roots_bound_=false,cache_bound_=false,compilation_bound_=false;
  bool bound_=false,installed_=false,poisoned_=false;
  size_t completed_=0;

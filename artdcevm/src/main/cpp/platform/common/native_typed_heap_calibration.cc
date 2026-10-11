@@ -7,8 +7,7 @@ struct Globals{JNIEnv*env;std::array<jobject,7> values{};~Globals(){for(auto r:v
 }
 bool Prepare(HookEngine& hooks,JNIEnv* env,jobject fixture,void* heap,void*(*current)(),const modern_field_metadata::FieldMetadata& metadata,const exclusive_owned_roots::Service& exclusive,native_typed_heap_walk::Service* service,std::string*error){
  if(!env||!fixture||!heap||!current||!service||!metadata.Calibrated()||env->ExceptionCheck())return Fail(error,"Typed heap calibration lacks independently owned runtime/fixture");
- if(!service->BoundTo(heap,current)&&!service->Bind(hooks,heap,current,error))return false;
- if(service->Calibrated())return true;
+ if(service->Calibrated())return service->BoundTo(heap,current)||Fail(error,"Typed heap calibrated owner differs");
  Locals local{env};Globals roots{env};
  local.values[0]=env->GetObjectClass(fixture);if(!local.values[0]||env->ExceptionCheck())return false;
  auto klass=static_cast<jclass>(local.values[0]);
@@ -31,6 +30,20 @@ bool Prepare(HookEngine& hooks,JNIEnv* env,jobject fixture,void* heap,void*(*cur
  env->SetObjectArrayElement(array,0,roots.values[4]);if(env->ExceptionCheck())return false;
  env->SetObjectArrayElement(array,1,roots.values[5]);if(env->ExceptionCheck())return false;
  roots.values[6]=env->NewGlobalRef(array);if(!roots.values[6]||env->ExceptionCheck())return false;
+ if(!service->BoundTo(heap,current)){
+  struct Binding {HookEngine&hooks;void*heap;void*(*current)();native_typed_heap_walk::Service*service;std::string*error;};
+  Binding binding{hooks,heap,current,service,error};
+  const auto install=[](const exclusive_owned_roots::Context&context,void*raw){
+   auto&request=*static_cast<Binding*>(raw);
+   return context.count==1&&context.roots[0]&&request.current()==context.self&&
+    request.service->Bind(request.hooks,request.heap,request.current,request.error);
+  };
+  // Public oracles and strong roots are complete before installing native
+  // observers. The sole original exclusive service owns the actual pause;
+  // the callback performs no JNI and retains no borrowed root or Thread.
+  const jobject binding_roots[]{roots.values[0]};
+  if(!exclusive.With(env,binding_roots,1,install,&binding,error))return false;
+ }
  if(!service->ArrayCalibrated()&&!service->Calibrate(env,static_cast<jobjectArray>(roots.values[6]),roots.values[4],roots.values[5],exclusive,error))return false;
  if(!service->FieldsCalibrated()&&!service->CalibrateFields(hooks,env,roots.values[0],static_cast<jclass>(roots.values[1]),roots.values[2],roots.values[3],roots.values[4],roots.values[5],metadata,exclusive,error))return false;
  return service->Calibrated();

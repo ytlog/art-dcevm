@@ -1,6 +1,7 @@
 #include "platform/common/production_source_calibration.h"
 #include "platform/common/production_final_dex.h"
 #include "platform/common/thread_state_calibration.h"
+#include "platform/common/native_typed_heap_calibration.h"
 #include "platform/common/runnable_executor.h"
 #include <mutex>
 #include <new>
@@ -38,7 +39,7 @@ SourceCalibration*SourceCalibration::Prepare(HookEngine&hooks,JNIEnv*env,jvmtiEn
   if(!anchor||env->ExceptionCheck()){Fail(error,"source-calibration-fixture-Class-differs");return nullptr;}
   redefinition_gate::Lease lease(vm);
   if(!lease.Acquired()||!BorrowFinalDexRecords(vm)){Fail(error,"source-calibration-final-DEX-history-or-lease-unavailable");return nullptr;}
-  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error))return nullptr;
+  if(!process->Install(env,error)||!process->Calibrate(env,ti,error)||!process->PrepareCommitReaders(env,error)||!process->PrepareTypedHeap(env,error))return nullptr;
   error->clear();return process;
  }catch(const std::bad_alloc&){Fail(error,"source-calibration-native-allocation-failed");return nullptr;}
 }
@@ -153,6 +154,19 @@ bool SourceCalibration::PrepareCommitReaders(JNIEnv*env,std::string*error){
  if(current()!=self||!state_.State(self,extent,&state)||state!=abi::arm64::android11::kNative||env->ExceptionCheck())
   return Fail(error,"source-commit-readers-did-not-return-to-original-Native-owner");
  return true;
+}
+bool SourceCalibration::PrepareTypedHeap(JNIEnv*env,std::string*error){
+ const auto&runtime=metadata_->Runtime();
+ if(!env||env->ExceptionCheck()||!schema_.Ready()||!stop_.Calibrated()||
+    !BorrowFinalDexRecords(static_cast<JavaVM*>(runtime.receivers.java_vm)))
+  return Fail(error,"source-typed-heap-needs-calibrated-source-and-actual-final-DEX-lease");
+ if(!exclusive_bound_){
+  if(!exclusive_owned_roots::Service::Bind(hooks_,&exclusive_,error))return false;
+  exclusive_bound_=true;
+ }
+ auto current=reinterpret_cast<abi::arm64::android11::CurrentThread>(hooks_.FindSymbol("libart.so",abi::arm64::android11::kCurrentThread));
+ return native_typed_heap_calibration::Prepare(hooks_,env,metadata_->Inputs().Storage(),
+  runtime.receivers.heap,current,metadata_->Fields(),exclusive_,&heap_,error);
 }
 void SourceCalibration::Begin(void*driver,const runnable_jni::Context&context,void*raw)noexcept{
  auto&round=*static_cast<Round*>(raw);
