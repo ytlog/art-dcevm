@@ -12,7 +12,6 @@ find_package(shadowhook REQUIRED CONFIG)
 add_library(artdcevm SHARED
   core/agent.cc
   evolution/dex_schema.cc
-  hooks/shadow_hook.cc
   platform/common/schema_snapshot.cc
   platform/common/structural_policy.cc
   platform/common/structural_redefine_engine.cc)

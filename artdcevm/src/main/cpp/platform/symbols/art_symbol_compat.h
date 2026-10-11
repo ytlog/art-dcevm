@@ -1,5 +1,5 @@
 #pragma once
-#include "hooks/shadow_hook.h"
+#include "shadowhook.h"
 
 namespace artdcevm::symbols {
 
@@ -16,6 +16,13 @@ struct NamedSymbol {
   const char* name;
 };
 
-inline void* Find(NamedSymbol symbol) { return hooks::FindSymbol(LibraryName(symbol.library), symbol.name); }
+// Official ShadowHook lookup restricted to .dynsym.
+inline void* Find(NamedSymbol symbol) {
+  void* handle = shadowhook_dlopen(LibraryName(symbol.library));
+  if (!handle) return nullptr;
+  void* address = shadowhook_dlsym_dynsym(handle, symbol.name);
+  shadowhook_dlclose(handle);
+  return address;
+}
 
 }  // namespace artdcevm::symbols

@@ -68,8 +68,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 | 内容 | 位置 |
 | --- | --- |
 | JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
-| ShadowHook 封装（官方 Maven prefab，只查 `.dynsym`） | `hooks/shadow_hook.{h,cc}` |
-| 接管点命名符号（11–17 共用） | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
+| 接管点命名符号（11–17 共用）；`Find()` 用官方 ShadowHook（Maven prefab）只查 `.dynsym` | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
 | 11–17 共用的 `ClassRedefinition` / `Redefiner` / `DexFile` 前缀声明 | `platform/abi/arm64/common/redefinition.h`；确有版本差异的声明放 `platform/abi/arm64/androidNN/` |
 | 引擎：前提检查、Hook 安装、路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
 | 校验策略（纯函数，主机可测） | `platform/common/structural_policy.{h,cc}` |
@@ -100,7 +99,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 1. **Install**（幂等，由 agent 的互斥锁串行化）：
    1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
    2. 通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：两个入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号。
-   3. 保存结构入口和三个校验点的原始地址；用 `hooks::Install()` 替换标准入口和三个校验点。任一步失败，用 `hooks::Remove()` 撤销已安装的部分。
+   3. 保存结构入口和三个校验点的原始地址；用 `shadowhook_hook_sym_addr` 替换标准入口和三个校验点（先 `shadowhook_init`，失败信息取 `shadowhook_to_errmsg`）。任一步失败，用 `shadowhook_unhook` 撤销已安装的部分。
 2. **标准入口**：
    1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）。
