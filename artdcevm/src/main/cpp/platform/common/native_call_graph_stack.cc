@@ -3,6 +3,25 @@
 #include <functional>
 namespace artdcevm::native_call_graph_stack {
 namespace {
+struct CursorKey {
+ void*thread;void*carrier;void*method;uintptr_t pc;bool shadow;
+};
+CursorKey Key(const Frame&frame)noexcept{
+ return {frame.thread,frame.shadow?frame.shadow:frame.quick,
+  frame.shadow?frame.method:frame.carrier_method,frame.shadow?0:frame.pc,bool(frame.shadow)};
+}
+bool KeyLess(const CursorKey&a,const CursorKey&b)noexcept{
+ const std::less<void*>less;
+ if(a.thread!=b.thread)return less(a.thread,b.thread);
+ if(a.carrier!=b.carrier)return less(a.carrier,b.carrier);
+ if(a.method!=b.method)return less(a.method,b.method);
+ if(a.pc!=b.pc)return a.pc<b.pc;
+ return a.shadow<b.shadow;
+}
+bool IndexedLess(const std::vector<Frame>&frames,size_t a,size_t b)noexcept{
+ const auto ka=Key(frames[a]),kb=Key(frames[b]);
+ return KeyLess(ka,kb)||(!KeyLess(kb,ka)&&a<b);
+}
 // Original ARM64 StackVisitor advances a quick cursor by FrameSizeInBytes
 // and reads its next PC from GetReturnPcAddr. Join only adjacent callbacks in
 // the same thread. Transitions, shadow fragments and missing geometry cannot
@@ -27,10 +46,10 @@ bool Service::Bind(HookEngine&hooks,stack_visitor_service::Declaration declarati
 }
 bool Service::Reserve(Prepared*out,std::string*error,size_t frame_capacity)const{
  auto fail=[&](const char*s){if(error)*error=s;return false;};
- if(!bound_||!out||!frame_capacity||frame_capacity>out->frames.max_size()||out->selection||(out->service&&out->service!=this))
+ if(!bound_||!out||!frame_capacity||frame_capacity>out->frames.max_size()||frame_capacity>out->root_index.max_size()||out->selection||(out->service&&out->service!=this))
   return fail("call-graph-stack-scratch-reservation-owner-refused");
  if(out->context)return (out->service==this&&out->frame_limit==frame_capacity)||fail("call-graph-stack-scratch-reservation-owner-or-capacity-changed");
- out->frames.reserve(frame_capacity);out->frame_limit=frame_capacity;
+ out->frames.reserve(frame_capacity);out->root_index.reserve(frame_capacity);out->frame_limit=frame_capacity;
  auto*context=create_();if(!context)return fail("call-graph-stack-original-context-creation-failed");
  out->context=context;out->service=this;return true;
 }
@@ -42,7 +61,7 @@ bool Service::Prepare(const native_selective_interpretation::Service&selection,P
  std::sort(methods.begin(),methods.end(),std::less<void*>{});
  if(std::adjacent_find(methods.begin(),methods.end())!=methods.end())return fail("call-graph-stack-source-selection-duplicate");
  if(!out->context&&!Reserve(out,error))return false;
- if(out->frames.capacity()<out->frame_limit||!out->frame_limit)return fail("call-graph-stack-frame-stream-reservation-unavailable");
+ if(out->frames.capacity()<out->frame_limit||out->root_index.capacity()<out->frame_limit||!out->frame_limit)return fail("call-graph-stack-frame-stream-reservation-unavailable");
  out->methods=std::move(methods);out->selection=&selection;return true;
 }
 bool Service::SelectionSame(const Prepared&p)const noexcept{
@@ -56,7 +75,13 @@ bool Service::ValidateStream(const Prepared&p,const native_source_stop::Session&
  const modern_field_metadata::ReadContext&read)const noexcept{
  if(!bound_||p.service!=this||!p.stream_complete||p.stream_stop!=&stop||p.stream_read!=&read||
     p.stream_self!=self||!stop.IsStopped(self)||!p.selection||!SelectionSame(p)||
-    p.frames.size()>p.frame_limit||!read.owner||!read.extent)return false;
+    p.frames.size()>p.frame_limit||p.root_index.size()!=p.frames.size()||!read.owner||!read.extent)return false;
+ // Strict ordering including the walk ordinal proves a full permutation:
+ // duplicates, missing entries and stale/out-of-range ordinals are refused.
+ for(size_t i=0;i<p.root_index.size();++i){
+  if(p.root_index[i]>=p.frames.size()||
+     (i&&!IndexedLess(p.frames,p.root_index[i-1],p.root_index[i])))return false;
+ }
  for(size_t ordinal=0;ordinal<p.frames.size();++ordinal){const auto&frame=p.frames[ordinal];
   if(!frame.thread||(frame.shadow&&frame.quick))return false;
   if(frame.carrier_method){size_t extent=0;void*current=nullptr;
@@ -107,17 +132,17 @@ bool Service::MatchFrameRoot(const Prepared&p,const modern_field_metadata::ReadC
  std::memcpy(&quick,bytes+abi::arm64::stack::kQuickOffset,sizeof(quick));
  std::memcpy(&pc,bytes+abi::arm64::stack::kQuickPcOffset,sizeof(pc));
  if(!thread||(shadow&&quick)||(!shadow&&!quick))return false;
- for(size_t ordinal=0;ordinal<p.frames.size();++ordinal){const auto&frame=p.frames[ordinal];
-  if(frame.thread!=thread||frame.kind==FrameKind::Transition)continue;
-  // ReferenceMapVisitor skips inline cursors; our complete walk includes them.
-  // Match its original outer method in the actual quick slot, never an inline
-  // logical method or a coincidentally equal descriptor/depth.
-  if(shadow){if(frame.shadow!=shadow||frame.quick||frame.method!=method)continue;}
-  else if(frame.shadow||frame.quick!=quick||frame.pc!=pc||frame.carrier_method!=method)continue;
-  if(root.vreg==kNativeReferenceArgumentVreg&&frame.kind!=FrameKind::Native)return false;
-  *out=ordinal;return p.stream_stop->IsStopped(p.stream_self);
- }
- return false;
+ // ReferenceMapVisitor skips inline cursors; match the original outer
+ // quick-slot method. Equal physical keys retain the first complete-walk
+ // ordinal, including inline cursors, just as the original census ordering.
+ const CursorKey key{thread,shadow?shadow:quick,method,shadow?0:pc,bool(shadow)};
+ const auto found=std::lower_bound(p.root_index.begin(),p.root_index.end(),key,
+  [&](size_t ordinal,const CursorKey&value){return KeyLess(Key(p.frames[ordinal]),value);});
+ if(found==p.root_index.end()||KeyLess(key,Key(p.frames[*found])))return false;
+ const auto&frame=p.frames[*found];
+ if(frame.kind==FrameKind::Transition||
+    (root.vreg==kNativeReferenceArgumentVreg&&frame.kind!=FrameKind::Native))return false;
+ *out=*found;return p.stream_stop->IsStopped(p.stream_self);
 }
 FrameRootReport Service::ObserveFrameRoots(const Prepared&p,const native_source_stop::Session&stop,void*self,
  const modern_field_metadata::ReadContext&read,const native_typed_heap_walk::RootProvenance&roots)const noexcept{
@@ -209,8 +234,10 @@ Report Service::ScanForRefund(const native_source_stop::Session&stop,void*self,c
 Report Service::ScanImpl(const native_source_stop::Session&stop,void*self,const native_cache::Service&threads,
  Prepared&prepared,const modern_field_metadata::ReadContext&read,bool require_retained)const noexcept{
  Report report;prepared.stream_complete=false;prepared.stream_stop=nullptr;
- prepared.stream_read=nullptr;prepared.stream_self=nullptr;prepared.frames.clear();
+ prepared.stream_read=nullptr;prepared.stream_self=nullptr;prepared.frames.clear();prepared.root_index.clear();
  auto deny=[&](const char*s){report.failure=s;return report;};
+ if(!prepared.frame_limit||prepared.frames.capacity()<prepared.frame_limit||
+    prepared.root_index.capacity()<prepared.frame_limit)return deny("call-graph-stack-frame-index-reservation-unavailable");
  if(!bound_||prepared.service!=this||!prepared.context||!prepared.selection||!stop.IsStopped(self)||!SelectionSame(prepared))return deny("call-graph-stack-original-stop-or-selection-unproved");
  native_selective_interpretation::Report retained;
  const auto validate=[&](){return require_retained?prepared.selection->ValidateRetained(stop,self,read,&retained):
@@ -238,6 +265,9 @@ Report Service::ScanImpl(const native_source_stop::Session&stop,void*self,const 
   if(frame.kind==FrameKind::Native)++report.native_continuations;
   else if(frame.kind==FrameKind::Runtime)++report.runtime_continuations;
  }
+ for(size_t ordinal=0;ordinal<prepared.frames.size();++ordinal)prepared.root_index.push_back(ordinal);
+ std::sort(prepared.root_index.begin(),prepared.root_index.end(),
+  [&](size_t a,size_t b){return IndexedLess(prepared.frames,a,b);});
  prepared.stream_stop=&stop;prepared.stream_read=&read;prepared.stream_self=self;prepared.stream_complete=true;
  report.walk_complete=true;report.selected_drained=!report.drain_required;
  if(report.drain_required)report.failure="call-graph-stack-selected-compiled-frame-drain-required";

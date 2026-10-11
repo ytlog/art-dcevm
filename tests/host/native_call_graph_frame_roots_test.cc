@@ -80,6 +80,19 @@ int main(){
   else{assert(!observed.completed);if(root_case==7)assert(std::strstr(observed.failure,"changed-after-original-visit"));}
   frames[0][0].words[0]=uintptr_t(old_method);
   assert(w.scanner.ValidateStream(w.prepared,stop,thread.data(),w.read));
+  if(!root_case){
+   // A failed fresh census must retire both the previous frames and index.
+   w.maps.denied=old_method;
+   const auto failed=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
+   w.maps.denied=nullptr;
+   assert(!failed.walk_complete&&!w.scanner.Frames(w.prepared));
+   const auto calls=original_root_calls;
+   assert(!w.scanner.ObserveFrameRoots(w.prepared,stop,thread.data(),w.read,w.roots).completed&&original_root_calls==calls);
+   const auto rebuilt=w.scanner.Scan(stop,thread.data(),w.threads,w.prepared,w.read);
+   assert(rebuilt.walk_complete&&rebuilt.selected_drained);
+   const auto joined=w.scanner.ObserveFrameRoots(w.prepared,stop,thread.data(),w.read,w.roots);
+   assert(joined.completed&&joined.native_roots==1&&joined.managed_roots==1);
+  }
   forbid_provider_allocation=false;assert(method_identity::MappingOsQueries()==before);return true;
  };
  for(root_case=0;root_case<9;++root_case){native_source_stop::Session stop(environment.source);assert(stop.Inspect(thread.data(),thread.size(),&work,inspect));}

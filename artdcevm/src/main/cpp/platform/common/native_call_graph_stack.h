@@ -53,6 +53,9 @@ class Service final {
   const Service*service=nullptr;const native_selective_interpretation::Service*selection=nullptr;
   std::vector<void*>methods;abi::arm64::context::Prefix*context=nullptr;
   std::vector<Frame>frames;size_t frame_limit=0;
+  // Ordinals sorted by the original physical cursor identity, then walk order.
+  // Reserved before Run; cleared together with every captured stream.
+  std::vector<size_t>root_index;
   const native_source_stop::Session*stream_stop=nullptr;
   const modern_field_metadata::ReadContext*stream_read=nullptr;void*stream_self=nullptr;
   bool stream_complete=false;
