@@ -9,7 +9,8 @@
 ## 当前架构
 
 - `platform/common/native_call_graph*`：已安装方法的真实 DEX 调用点、跨 DEX/loader 解析、完整动态 dispatch 域、上下游闭包及一次操作的执行检查。
-- `platform/common/native_call_graph_incoming*`：本次输入 DEX 的独立副本、全部 encoded methods、新增调用点与代码搬迁核验；尚待实际 Holder/new ArtMethod 根绑定及新旧调用图事务接入。
+- `platform/common/native_call_graph_incoming*`：本次输入 DEX 的独立副本、全部 encoded methods、新增调用点与代码搬迁核验；尚待与新类绑定组合、合并新旧调用图并接入完整事务。
+- `platform/common/native_call_graph_replacement*`：同一加载 Run 的实际 Holder 数组根、新 Class/loader/声明方法绑定及停止窗口重核；可把旧/新方法交给同一选择性解释服务，完整调用图合并和生产事务接入仍待完成。
 - `platform/common/native_selective_interpretation*`：通过 ART 命名 `Instrumentation::Deoptimize(ArtMethod*)` 切换选中方法的未来入口，并核验其 retained set。已经入栈的编译帧需要另外检查。
 - `platform/common/native_call_graph_stack*`：在真实停世界窗口枚举全部注册线程及 inline 帧，报告选中方法的 quick/shadow 状态和独立的原生边界。
 - `platform/common` 的其余模块：公共元数据校准、类层级、成员存储、根刷新、原始结构事务、发布和退款。已有提交路径的编译帧恢复部分仍在迁移，不能以新 stack 报告直接替代 GC 根替换证明。

@@ -1,5 +1,6 @@
 #include "platform/common/native_method_table.h"
 #include "platform/common/dex_mapping_abi.h"
+#include "platform/common/jvmti_method_flags.h"
 #include "platform/abi/arm64/android11/dex_cache.h"
 #include "platform/abi/arm64/android14/dex_cache.h"
 #include <cstring>
@@ -63,7 +64,7 @@ bool Read(const modern_field_metadata::FieldMetadata& fields,
     if(!method_metadata::ReadIdentity(layout,result.methods.At(n),layout.size,&native))
       return fail("Native declared method identity is not readable");
     const auto found=expected.find(native.dex_method_index);
-    if(found==expected.end()||(native.access_flags&0x11fu)!=(found->second->access&0x11fu))
+    if(found==expected.end()||jvmti_method_flags::Public(native.access_flags)!=jvmti_method_flags::Public(found->second->access))
       return fail("Native declared method disagrees with complete DEX index/flags oracle");
     expected.erase(found);direct+=result.methods.IsDirect(n);
   }

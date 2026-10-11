@@ -2,7 +2,7 @@
 from pathlib import Path
 import hashlib,struct,zlib
 
-def write(directory:Path,incoming_extra=False)->Path:
+def write(directory:Path,incoming_extra=False,abstract_keep=False)->Path:
     method_names=['gone','keep']+(['newKeep'] if incoming_extra else [])+['staticKeep']
     strings=sorted(['I','LFixture;','Ljava/lang/Object;','number','value','left','right']+method_names)
     types=sorted(['I','LFixture;','Ljava/lang/Object;']);sid={s:i for i,s in enumerate(strings)};tid={s:i for i,s in enumerate(types)}
@@ -33,8 +33,8 @@ def write(directory:Path,incoming_extra=False)->Path:
         for index,(_,_,flags) in group:b.extend(leb(index-previous)+leb(flags));previous=index
     if incoming_extra:b.extend(leb(2)+leb(9)+leb(extra)+leb(1)+leb(9)+leb(static))
     else:b.extend(leb(2)+leb(9)+leb(static))
-    b.extend(leb(0)+leb(0x101)+leb(0));b.extend(leb(1)+leb(1)+leb(keep))
-    struct.pack_into('<8I',b,ca,tid['LFixture;'],1,tid['Ljava/lang/Object;'],0,0xffffffff,0,cd,0)
+    b.extend(leb(0)+leb(0x101)+leb(0));b.extend(leb(1)+leb(0x401 if abstract_keep else 1)+leb(0 if abstract_keep else keep))
+    struct.pack_into('<8I',b,ca,tid['LFixture;'],0x401 if abstract_keep else 1,tid['Ljava/lang/Object;'],0,0xffffffff,0,cd,0)
     parent_cd=len(b);b.extend(bytes([0,0,0,1])+leb(len(method_names))+leb(1)+leb(parent_code))
     struct.pack_into('<8I',b,ca+32,tid['Ljava/lang/Object;'],1,0xffffffff,0,0xffffffff,0,parent_cd,0)
     b.extend(bytes((-len(b))%4));map_at=len(b);entries=[(0,1,0),(1,len(strings),sa),(2,len(types),ta),(3,1,pa),(4,4,fa),(5,len(method_names)+1,ma),(6,2,ca),(0x2002,len(strings),data),(0x2001,4 if incoming_extra else 3,keep),(0x2000,2,cd),(0x1000,1,map_at)]

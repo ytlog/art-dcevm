@@ -37,6 +37,9 @@ class Run final {
  bool EndCleanup(void* actual_carrier)noexcept;
  bool CleanupCompleted()const noexcept;
  bool OwnsDriver(const void*)const noexcept;
+ // The exact Holder whose complete original Finish leaf sequence returned.
+ // This attests loading/allocation provenance only, never Collected/GC/commit.
+ bool OwnsFinishedHolder(const void*,size_t owner_count)const noexcept;
  // Call only after the actual source Run returned; the original Remove must have returned
  // before Run's private Holder/DEX destruction. Unwind never proves success;
  // no source pointer is read here.

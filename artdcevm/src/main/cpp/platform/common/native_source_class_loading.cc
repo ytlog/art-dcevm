@@ -85,6 +85,9 @@ void Run::AfterFinish(void*owner,bool success)noexcept{
  finish_owner_=nullptr;if(success)++next_;else failed_=true;
 }
 bool Run::OwnsDriver(const void*driver)const noexcept{return active_&&!complete_&&current==this&&driver==driver_;}
+bool Run::OwnsFinishedHolder(const void*holder,size_t count)const noexcept{
+ return Paused()&&!finish_owner_&&holder&&holder==holder_&&count&&size_t(next_)==count;
+}
 bool Run::Paused()const noexcept{return active_&&!failed_&&added_&&wait_complete_&&removal_==Removal::kNone&&current==this;}
 bool Run::RefundWindow()const noexcept{
  if(!active_||complete_||!added_||!wait_complete_||finish_owner_||removal_!=Removal::kNone||current!=this||!Mapped(pauser_,sizeof(PauserPrefix)))return false;

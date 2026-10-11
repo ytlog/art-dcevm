@@ -102,6 +102,7 @@ add_library(artdcevm SHARED core/agent.cc platform/backend_factory.cc
     platform/common/native_call_graph.cc
     platform/common/native_call_graph_inventory.cc
     platform/common/native_call_graph_incoming.cc
+    platform/common/native_call_graph_replacement.cc
     platform/common/native_call_graph_resolution.cc
     platform/common/native_call_graph_dispatch.cc
     platform/common/native_call_graph_super.cc
