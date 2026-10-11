@@ -6,6 +6,7 @@
 #include "platform/abi/arm64/art_field.h"
 #include "platform/common/modern_method_handle_guards.h"
 #include "platform/common/runnable_executor.h"
+#include "platform/common/exclusive_owned_roots.h"
 #include "platform/common/var_handle_field_target.h"
 #include "platform/common/var_handle_access_mode.h"
 #include "platform/common/modern_field_metadata.h"
@@ -302,19 +303,20 @@ template<class T> struct ReflectionField {
 }
 bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* manager,
     const field_mirror::Calibration& mirror,RetiredFieldRegistry& registry,std::string* error) {
+  std::string ignored;if(!error)error=&ignored;
+  if(!env||!anchor||!manager||!mirror.matched||mirror.checked<2||!runnable_executor::Available()||env->ExceptionCheck()||
+     env->GetObjectRefType(anchor)!=JNIGlobalRefType||env->ExceptionCheck()) {
+    *error="Field entry guards require actual complete mirror/owned JNI calibration";return false;
+  }
   if(state.registry) {
     if(installed&&state.registry==&registry&&state.manager==manager&&state.anchor==anchor)return true;
     *error="Field entry guards already owned or rollback incomplete";return false;
   }
-  if(!env||!anchor||!manager||!mirror.matched||mirror.checked<2||!runnable_executor::Available()||env->ExceptionCheck()) {
-    *error="Field entry guards require actual complete mirror/owned JNI calibration";return false;
-  }
-  using namespace abi::common;
   State candidate{&registry,anchor,manager,
       reinterpret_cast<Throw>(hooks.FindSymbol("libart.so","_ZN3art6Thread17ThrowNewExceptionEPKcS2_"))};
-  auto construct=reinterpret_cast<SuspendConstruct>(hooks.FindSymbol("libart.so",kSuspendConstruct));
-  auto destroy=reinterpret_cast<SuspendDestroy>(hooks.FindSymbol("libart.so",kSuspendDestroy));
-  if(!contextual_field_id::Initialize(hooks,error)||!candidate.throw_exception||!construct||!destroy) {
+  exclusive_owned_roots::Service exclusive;
+  if(!contextual_field_id::Initialize(hooks,error)||!candidate.throw_exception||
+     !exclusive_owned_roots::Service::Bind(hooks,&exclusive,error)) {
     *error="Missing named field decoder/exception/exclusive hook installation declarations";return false;
   }
   ModeTemplate candidate_mode=nullptr;
@@ -336,25 +338,39 @@ bool InstallFieldEntryGuards(HookEngine& hooks,JNIEnv* env,jobject anchor,void* 
     entry.target=hooks.FindSymbol("libart.so",entry.symbol.c_str());
     if(!entry.target){*error="Missing field guard entry: "+entry.symbol;return false;}
   }
-  SuspendAll stopped{};construct(&stopped,"artdcevm field guard installation",false);
-  struct Stop {SuspendAll* value;SuspendDestroy destroy;~Stop(){destroy(value);}} stop{&stopped,destroy};
-  state=candidate;
-  std::vector<void*> tokens;
-  for(auto& entry:entries) {
-    void* token=hooks.Install(entry.target,entry.proxy,entry.original,error);
-    if(!token) {
-      bool removed=true;
-      for(auto it=tokens.rbegin();it!=tokens.rend();++it) {
-        std::string rollback;
-        if(!hooks.Remove(*it,&rollback)){removed=false;*error+="; "+rollback;}
+  // Reserve the rollback journal before entering the actual exclusive window.
+  // Publish the durable owner only after Native/Runnable and root calibration.
+  struct Install {
+    HookEngine& hooks;State candidate;std::vector<Entry>& entries;
+    std::vector<void*> tokens;ModeTemplate mode;std::string* error;bool completed=false;
+  }request{hooks,candidate,entries,{},candidate_mode,error};
+  request.tokens.reserve(entries.size());
+  const jobject roots[]{anchor};
+  const bool stopped=exclusive.With(env,roots,1,[](const exclusive_owned_roots::Context& actual,void*raw){
+    auto&r=*static_cast<Install*>(raw);
+    if(!actual.self||actual.count!=1||!actual.roots||!actual.roots[0])return false;
+    state=r.candidate;
+    try{
+      for(auto&entry:r.entries){
+        void*token=r.hooks.Install(entry.target,entry.proxy,entry.original,r.error);
+        if(!token)break;
+        r.tokens.push_back(token);
       }
-      if(removed)state={};
+    }catch(...){
+      // Roll back below while the original exclusive stop is still owned.
+    }
+    if(r.tokens.size()!=r.entries.size()){
+      bool removed=true;
+      for(auto it=r.tokens.rbegin();it!=r.tokens.rend();++it){
+        try{std::string rollback;if(!r.hooks.Remove(*it,&rollback))removed=false;}
+        catch(...){removed=false;}
+      }
+      if(removed)state={}; // Otherwise retain the durable owner and refuse retry.
       return false;
     }
-    tokens.push_back(token);
-  }
-  mode_template=candidate_mode;
-  installed=true;return true;
+    mode_template=r.mode;installed=true;r.completed=true;return true;
+  },&request,error);
+  return stopped&&request.completed&&FieldEntryGuardsOwn(registry)&&!env->ExceptionCheck();
 }
 bool FieldEntryGuardsOwn(const RetiredFieldRegistry& registry){return installed&&state.registry==&registry;}
 bool RejectRetiredField(void* field,void* self,void* result){return GuardNativeField(self,field,result);}

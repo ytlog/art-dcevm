@@ -52,6 +52,7 @@ class SourceCalibration final {
  bool PrepareCommitReaders(JNIEnv*,std::string*);
  bool PrepareTypedHeap(JNIEnv*,std::string*);
  bool PrepareRetirement(JNIEnv*,jvmtiEnv*,std::string*);
+ bool PrepareFieldEntries(JNIEnv*,std::string*);
  bool PrepareInterpretation(JNIEnv*,std::string*);
  bool PrepareReferences(JNIEnv*,std::string*);
  bool PrepareStack(JNIEnv*,std::string*);
