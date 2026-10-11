@@ -1,5 +1,8 @@
 #include "platform/common/production_calibration_inputs.h"
 #include "platform/common/production_final_dex.h"
+#include "platform/common/ordinary_source_fixture.h"
+#include "platform/common/schema_snapshot.h"
+#include "platform/common/body_only_policy.h"
 #include <map>
 #include <cstdlib>
 namespace artdcevm::production_bootstrap {
@@ -60,6 +63,7 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
  auto create=bootstrap.value?env->GetStaticMethodID(static_cast<jclass>(bootstrap.value),"create","()Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;"):nullptr;
  Local value{env,create?env->CallStaticObjectMethod(static_cast<jclass>(bootstrap.value),create):nullptr};
  input_=Own(env,value.value);if(!input_)return Fail(error,"calibration-input-public-bootstrap-unavailable");
+ bootstrap_=static_cast<jclass>(Own(env,bootstrap.value));if(!bootstrap_)return false;
  Local type{env,env->GetObjectClass(input_)};
  auto dex_id=type.value?env->GetFieldID(static_cast<jclass>(type.value),"dex","[[B"):nullptr;
  Local dex{env,dex_id?env->GetObjectField(input_,dex_id):nullptr};
@@ -126,6 +130,7 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
   fields_.push_back({root,field_names_.back().c_str(),field_types_.back().c_str(),uint32_t(flags),found->second->dex_index});expected_fields.erase(found);
  }
  if(!expected_fields.empty()||env->ExceptionCheck())return false;
+ if(!LoadOrdinary(env,ti,static_cast<jclass>(type.value),error))return false;
  bool native_marker=false;
  for(const auto&method:methods_schema_.methods)
   if(method.name=="bootstrapNativeMarker"&&method.descriptor=="()V"&&
@@ -135,4 +140,72 @@ bool CalibrationInputs::Load(JNIEnv*env,jvmtiEnv*ti,jobject fixture,std::string*
  if(env->RegisterNatives(anchor_,&marker,1)!=JNI_OK||env->ExceptionCheck())return Fail(error,"calibration-input-native-marker-registration-failed");
  return true;
 }
+bool CalibrationInputs::LoadOrdinary(JNIEnv*env,jvmtiEnv*ti,jclass type,std::string*error){
+ auto class_id=env->GetFieldID(type,"ordinarySourceClass","Ljava/lang/Class;");
+ auto object_id=env->ExceptionCheck()?nullptr:env->GetFieldID(type,"ordinarySourceObject","Ljava/lang/Object;");
+ auto dex_id=env->ExceptionCheck()?nullptr:env->GetFieldID(type,"ordinarySourceDex","[[B");
+ if(!class_id||!object_id||!dex_id||env->ExceptionCheck())return Fail(error,"calibration-input-ordinary-source-fields-unavailable");
+ Local klass{env,env->GetObjectField(input_,class_id)};
+ ordinary_class_=static_cast<jclass>(Own(env,klass.value));if(!ordinary_class_)return false;
+ Local object{env,env->GetObjectField(input_,object_id)};
+ ordinary_object_=Own(env,object.value);if(!ordinary_object_)return false;
+ Local actual{env,env->GetObjectClass(ordinary_object_)};
+ if(!actual.value||!env->IsSameObject(actual.value,ordinary_class_)||env->ExceptionCheck())
+  return Fail(error,"calibration-input-ordinary-object-Class-differs");
+ Local arrays{env,env->GetObjectField(input_,dex_id)};
+ if(!arrays.value||env->ExceptionCheck()||env->GetArrayLength(static_cast<jobjectArray>(arrays.value))!=3||env->ExceptionCheck())
+  return Fail(error,"calibration-input-ordinary-source-needs-three-DEX-inputs");
+ for(size_t n=0;n<ordinary_dex_.size();++n){
+  Local bytes{env,env->GetObjectArrayElement(static_cast<jobjectArray>(arrays.value),static_cast<jsize>(n))};
+  if(!bytes.value||env->ExceptionCheck())return Fail(error,"calibration-input-ordinary-source-DEX-unavailable");
+  const auto length=env->GetArrayLength(static_cast<jbyteArray>(bytes.value));
+  if(length<=0||length>64*1024*1024||env->ExceptionCheck())return Fail(error,"calibration-input-ordinary-source-DEX-size-refused");
+  auto&copy=ordinary_dex_[n];copy.resize(static_cast<size_t>(length));
+  env->GetByteArrayRegion(static_cast<jbyteArray>(bytes.value),0,length,reinterpret_cast<jbyte*>(copy.data()));
+  if(env->ExceptionCheck())return false;
+ }
+ evolution::ClassSchema live;
+ if(live_schema::ReadLiveSchema(ti,env,ordinary_class_,&live,error)!=JVMTI_ERROR_NONE||
+    env->ExceptionCheck()||!ordinary_source_fixture::Validate(live,ordinary_dex_,error))return false;
+ return VerifyOrdinary(env,ti,0,error);
+}
+bool CalibrationInputs::VerifyOrdinary(JNIEnv*env,jvmtiEnv*ti,size_t round,std::string*error)const{
+ if(!env||!ti||round>=ordinary_dex_.size()||!bootstrap_||!ordinary_class_||!ordinary_object_||env->ExceptionCheck())
+  return Fail(error,"calibration-input-ordinary-verification-invalid-caller-or-round");
+ JavaVM*vm=nullptr;JNIEnv*attached=nullptr;
+ if(env->GetJavaVM(&vm)!=JNI_OK||vm!=vm_||env->ExceptionCheck()||
+    vm_->GetEnv(reinterpret_cast<void**>(&attached),JNI_VERSION_1_6)!=JNI_OK||attached!=env)
+  return Fail(error,"calibration-input-ordinary-verification-JNI-attachment-differs");
+ auto*records=BorrowFinalDexRecords(vm_);
+ if(!records)return Fail(error,"calibration-input-ordinary-verification-final-DEX-history-or-lease-unavailable");
+ if(round){
+  std::vector<unsigned char>effective;
+  if(!records->Find(env,ordinary_class_,&effective)||env->ExceptionCheck()||effective!=ordinary_dex_[round])
+   return Fail(error,"calibration-input-ordinary-verification-final-transformed-DEX-differs");
+ }
+ evolution::ClassSchema live,expected;
+ if(live_schema::ReadLiveSchema(ti,env,ordinary_class_,&live,error)!=JVMTI_ERROR_NONE||env->ExceptionCheck()||
+    !evolution::ReadDexDeclarations(ordinary_dex_[round],&expected,error)||!body_only::SameDeclarations(live,expected))
+  return Fail(error,"calibration-input-ordinary-verification-live-declarations-differ");
+ Local type{env,env->GetObjectClass(input_)};
+ if(!type.value||env->ExceptionCheck())return Fail(error,"calibration-input-ordinary-input-owner-unavailable");
+ auto class_id=env->GetFieldID(static_cast<jclass>(type.value),"ordinarySourceClass","Ljava/lang/Class;");
+ auto object_id=env->ExceptionCheck()?nullptr:env->GetFieldID(static_cast<jclass>(type.value),"ordinarySourceObject","Ljava/lang/Object;");
+ if(!class_id||!object_id||env->ExceptionCheck())return false;
+ Local java_class{env,env->GetObjectField(input_,class_id)};
+ if(!java_class.value||env->ExceptionCheck())return false;
+ Local java_object{env,env->GetObjectField(input_,object_id)};
+ if(!java_object.value||env->ExceptionCheck()||!env->IsSameObject(java_class.value,ordinary_class_)||
+    !env->IsSameObject(java_object.value,ordinary_object_)||env->ExceptionCheck())
+  return Fail(error,"calibration-input-ordinary-Java-oracle-owners-differ");
+ // Resolve the public opaque JNI ID afresh. No native method/Class address or
+ // saved Runnable Context is retained across this Java oracle invocation.
+ auto verify=env->GetStaticMethodID(bootstrap_,"verifyOrdinarySource","(Lcom/github/ytlog/artdcevm/internal/ProductionBootstrap$Inputs;I)Z");
+ if(!verify||env->ExceptionCheck())return Fail(error,"calibration-input-ordinary-public-behavior-oracle-unavailable");
+ const auto accepted=env->CallStaticBooleanMethod(bootstrap_,verify,input_,static_cast<jint>(round));
+ if(env->ExceptionCheck()||accepted!=JNI_TRUE)
+  return Fail(error,"calibration-input-ordinary-retained-or-fresh-object-oracle-refused");
+ return true;
+}
+
 }
