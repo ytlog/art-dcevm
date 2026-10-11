@@ -108,6 +108,7 @@ class SourceCalibration final {
  std::unique_ptr<receiver_guard::BytecodeSource>receiver_bytecode_;
  std::unique_ptr<receiver_guard::SourceCalibration>receiver_calibration_;
  std::unique_ptr<receiver_guard::ListenerOwner>receiver_listener_;
+ native_pending_exception::Service pending_exception_;
  bool receiver_listener_bound_=false;
  bool interpretation_bound_=false,interpretation_attempted_=false,interpretation_ready_=false;
  bool exclusive_bound_=false;
