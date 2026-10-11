@@ -113,6 +113,18 @@ bool ReadMappedDexDeclarations(const MappedDexMetadata&, ClassSchema*, std::stri
 // Validation against original DEX declarations retains constructor and declared-sync bits.
 bool ReadDexDeclarations(const std::vector<unsigned char>& dex, ClassSchema* output,
                          std::string* error);
+// Incoming transaction input, copied before any source pause. Selects one
+// ClassDef from a complete standard DEX (including a single-file v041 input).
+// Reuses declaration validation and retains every encoded method's original
+// code offset, including zero for native/abstract declarations. ART must still
+// verify control flow, handlers, annotations and encoded values. Outputs remain
+// unchanged on format failure; allocation failures propagate.
+struct DexMethodCode {
+  uint32_t dex_index=UINT32_MAX,code_offset=0;
+  bool direct=false;
+};
+bool ReadDexClassCode(const std::vector<unsigned char>&,uint32_t class_def_index,
+                     ClassSchema*,std::vector<DexMethodCode>*,std::string*);
 bool ReadDexSchema(const std::vector<unsigned char>& dex, ClassSchema* output, std::string* error);
 bool IsTypeDescriptor(const std::string& value, bool allow_void);
 bool IsMethodDescriptor(const std::string& value);

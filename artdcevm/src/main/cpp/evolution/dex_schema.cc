@@ -37,10 +37,11 @@ class Reader {
   explicit Reader(const MappedDexMetadata& view)
       : begin_(view.begin), size_(view.size), data_(view.data_begin), data_length_(view.data_size),
         declaration_flags_(true), mapped_(true), class_def_index_(view.class_def_index) {}
-  ClassSchema Read() {
+  ClassSchema Read(std::vector<DexMethodCode>* code=nullptr,uint32_t selected=UINT32_MAX) {
+    if(selected!=UINT32_MAX)class_def_index_=selected;
     Initialize();
     auto classes = Table(96, 32);
-    if (!mapped_ && classes.count != 1) Fail("Redefinition requires exactly one class definition");
+    if (!mapped_ && selected==UINT32_MAX && classes.count != 1) Fail("Redefinition requires exactly one class definition");
     size_t def = Item(classes, class_def_index_);
     class_type_ = U32(def);
     ClassSchema result;
@@ -58,8 +59,8 @@ class Reader {
     const uint32_t direct_methods = counts.direct_methods, virtual_methods = counts.virtual_methods;
     ReadFields(&cursor, static_fields, true, &result.fields);
     ReadFields(&cursor, instance_fields, false, &result.fields);
-    ReadMethods(&cursor, direct_methods, true, &result.methods);
-    ReadMethods(&cursor, virtual_methods, false, &result.methods);
+    ReadMethods(&cursor, direct_methods, true, &result.methods,code);
+    ReadMethods(&cursor, virtual_methods, false, &result.methods,code);
     Unique(result.fields); Unique(result.methods);
     return result;
   }
@@ -390,7 +391,8 @@ class Reader {
       fields->push_back({std::move(name), std::move(type), access, index});
     }
   }
-  void ReadMethods(size_t* cursor, uint32_t count, bool direct, std::vector<Member>* methods) const {
+  void ReadMethods(size_t* cursor, uint32_t count, bool direct, std::vector<Member>* methods,
+                   std::vector<DexMethodCode>* bodies=nullptr) const {
     uint32_t index = 0;
     for (uint32_t i = 0; i < count; ++i) {
       uint32_t delta = Leb(cursor), access = Leb(cursor), code = Leb(cursor);
@@ -411,6 +413,7 @@ class Reader {
       if (access & kAbstract) java_access &= ~kNative;
       java_access &= 0xffff;
       methods->push_back({std::move(name), std::move(descriptor), declaration_flags_ ? access : java_access, index});
+      if(bodies)bodies->push_back({index,code,direct});
     }
   }
   static void Unique(const std::vector<Member>& members) {
@@ -419,6 +422,16 @@ class Reader {
       if (!keys.emplace(member.name, member.descriptor).second) Fail("Duplicate declared member");
   }
 };
+}
+bool ReadDexClassCode(const std::vector<unsigned char>&dex,uint32_t index,
+                     ClassSchema*out,std::vector<DexMethodCode>*code,std::string*error){
+  if(!out||!code||!error||index==UINT32_MAX)return false;
+  try{
+    std::vector<DexMethodCode> bodies;
+    auto schema=Reader(dex,true).Read(&bodies,index);
+    *out=std::move(schema);*code=std::move(bodies);error->clear();return true;
+  }catch(const std::bad_alloc&){throw;}
+   catch(const std::exception&failure){*error=failure.what();return false;}
 }
 bool IsTypeDescriptor(const std::string& value, bool allow_void) {
   size_t at = 0;

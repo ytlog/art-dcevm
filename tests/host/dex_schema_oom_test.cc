@@ -124,6 +124,32 @@ int main(int argc, char** argv) {
     }
   }
   assert(reference_failures>0);
+  using artdcevm::evolution::DexMethodCode;
+  using artdcevm::evolution::ReadDexClassCode;
+  ClassSchema declarations;
+  std::vector<DexMethodCode> bodies;
+  Arm(std::numeric_limits<size_t>::max());
+  const bool read_code=ReadDexClassCode(dex,0,&declarations,&bodies,&error);
+  allocation_armed=false;
+  const size_t code_allocations=allocations;
+  assert(read_code && bodies.size()==declarations.methods.size() && code_allocations>0);
+  const std::vector<DexMethodCode> code_sentinel{{77,123,true}};
+  for(size_t index=0;index<code_allocations;++index){
+    auto output=sentinel;auto code_output=code_sentinel;error="unchanged error sentinel";
+    bool propagated=false;Arm(index);
+    try{ReadDexClassCode(dex,0,&output,&code_output,&error);}
+    catch(const std::bad_alloc&){propagated=true;}
+    allocation_armed=false;
+    assert(failure_triggered && propagated && SameSchema(output,sentinel));
+    assert(code_output.size()==1 && code_output[0].dex_index==77 &&
+           code_output[0].code_offset==123 && code_output[0].direct);
+    assert(error=="unchanged error sentinel");
+    assert(ReadDexClassCode(dex,0,&output,&code_output,&error));
+    assert(SameSchema(output,declarations) && code_output.size()==bodies.size() && error.empty());
+    for(size_t i=0;i<bodies.size();++i)assert(code_output[i].dex_index==bodies[i].dex_index &&
+       code_output[i].code_offset==bodies[i].code_offset && code_output[i].direct==bodies[i].direct);
+  }
+  std::printf("Incoming class/code OOM: %zu allocation failures propagated; both outputs/error unchanged; retries passed\n",code_allocations);
   std::printf("DEX method references OOM: %zu allocation failures propagated; output/error unchanged; retries passed\n",reference_failures);
   std::printf("DEX parser OOM: %zu allocation failures propagated; output/error unchanged; retries passed\n",count);
 }
