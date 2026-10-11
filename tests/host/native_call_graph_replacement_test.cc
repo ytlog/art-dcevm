@@ -6,7 +6,7 @@ int main(int argc,char**argv){
  jvmtiInterface_1 functions{};jvmtiEnv ti{&functions};native_schema_guard_verifier::Bindings bindings{};
  execution_fixture::Configure(environment,functions,bindings,argv[1]);
  if(scenario=="outgoing-loader"){old_class->class_loader=uint32_t(uintptr_t(parent_class));execution_fixture::replacement_loader=reinterpret_cast<jobject>(parent_class);}
- receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,environment.model,environment.metadata,&linker,Current,&error,&::runtime));
+ receiver_guard::SourceProducer source;assert(source.Bind(hooks,stack_visitor_service::Declaration::kAndroid13To16,environment.model,environment.metadata,&linker,Current,&error));
  assert(redefinition_gate::InstallStartup(hooks,&::runtime,&ti,&error));redefinition_gate::Lease lease(&::runtime);assert(lease.Acquired());
  native_schema_guard_verifier::Verifier verifier;std::vector<jclass>affected{reinterpret_cast<jclass>(old_class)};
  assert(execution_fixture::Stage(verifier,&ti,affected,bindings,&error));

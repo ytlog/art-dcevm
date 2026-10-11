@@ -10,14 +10,15 @@
 #include <cstring>
 namespace artdcevm::receiver_guard {
 namespace {
-struct Resolution {const SourceProducer*owner=nullptr;void*self=nullptr;bool original_null=false;};
+struct Resolution {const SourceProducer*owner=nullptr;void*self=nullptr;bool original_exception=false;};
 thread_local Resolution resolution;
 bool Extent(const void*p,size_t*n)noexcept{return modern_field_metadata::ReadMappingExtent(nullptr,p,n);}
 uint32_t U32(uintptr_t p)noexcept{uint32_t n;std::memcpy(&n,reinterpret_cast<const void*>(p),4);return n;}
 }
-bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration declaration,const method_identity::Calibration&methods,const modern_field_metadata::FieldMetadata&metadata,void*linker,void*(*current)(),std::string*error,JavaVM*vm){
+bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration declaration,const method_identity::Calibration&methods,const modern_field_metadata::FieldMetadata&metadata,void*linker,void*(*current)(),std::string*error,const native_pending_exception::Service*pending){
  if(bound_||!metadata.Calibrated()||!linker||!current||methods.identities.empty()||
-    (methods.model!=method_identity::Model::kMethod11&&methods.model!=method_identity::Model::kMethod12Onward)){
+    (methods.model!=method_identity::Model::kMethod11&&methods.model!=method_identity::Model::kMethod12Onward)||
+    (pending&&!pending->Calibrated())){
   if(error)*error="Receiver producer needs exact calibrated method/field metadata/current Thread/ClassLinker";return false;
  }
  stack_visitor_service::Service stack;auto finder=[&](const char*n){return hooks.FindSymbol("libart.so",n);};
@@ -36,7 +37,7 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  auto checked=reinterpret_cast<CheckedNterpMethod>(finder(kCheckedNterpMethod));
  ResolutionSource source;const char* diagnostic=nullptr;
  if(!SelectResolutionSource(resolve!=nullptr,klass!=nullptr,member!=nullptr,
-                            checked!=nullptr,vm!=nullptr,&source,&diagnostic,resolve_current!=nullptr)){
+                            checked!=nullptr,pending&&pending->Calibrated(),&source,&diagnostic,resolve_current!=nullptr)){
   if(error)*error=diagnostic;return false;
  }
  // The one producer owns this selection. Callers supply the independent
@@ -44,15 +45,15 @@ bool SourceProducer::Bind(HookEngine&hooks,stack_visitor_service::Declaration de
  // a source candidate until original CodeItem/public DEX samples agree.
  const auto layout=methods.model==method_identity::Model::kMethod11?code_item_metadata::kOffset:
   source==ResolutionSource::Nterp?code_item_metadata::kStandard:code_item_metadata::kTagged;
- if(source==ResolutionSource::CheckedMethodCurrent){vm_=vm;resolve_current_=resolve_current;}
+ if(source==ResolutionSource::CheckedMethodCurrent)resolve_current_=resolve_current;
  if(source==ResolutionSource::Nterp){
   if(layout.storage!=code_item_metadata::Storage::StandardPointer||layout.method.size!=sizeof(method_metadata::Method12)||layout.method.dex_method_index!=offsetof(method_metadata::Method12,dex_method_index)||layout.method.data!=offsetof(method_metadata::Method12,data)){if(error)*error="Receiver Nterp source requires its calibrated Standard Method12 declaration";return false;}
   auto clear=reinterpret_cast<ClearCallerAccessChecks>(finder(kClearCallerAccessChecks));
   if(!clear){if(error)*error="Receiver source named Class::ClearSkipAccessChecksFlagOnAllMethods unavailable";return false;}
-  clear_caller17_=clear;vm_=vm;resolve_class17_=klass;find_method17_=member;checked_method17_=checked;
+  clear_caller17_=clear;resolve_class17_=klass;find_method17_=member;checked_method17_=checked;
  }
  obsolete_cache_=reinterpret_cast<void*(*)(void*)>(finder("_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv"));
- stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;root_reference_=root_reference;bound_=true;return true;
+ stack_=stack;declaration_=declaration;layout_=layout;metadata_=&metadata;linker_=linker;current_=current;resolve_=resolve;root_reference_=root_reference;pending_=pending;bound_=true;return true;
 }
 bool SourceProducer::Current(void*p,void*self)noexcept{auto&s=*static_cast<SourceProducer*>(p);return s.bound_&&self&&s.current_&&s.current_()==self;}
 bool SourceProducer::Code(void*self,void*method,CodeView*out)const noexcept{
@@ -84,20 +85,41 @@ template<class Base>bool SourceProducer::Walk(void*self,void*caller,uint32_t pc,
 bool SourceProducer::Frame(void*self,void*caller,uint32_t pc,const void**out)const noexcept{if(!out||!Current(const_cast<SourceProducer*>(this),self)||!caller)return false;switch(declaration_){case stack_visitor_service::Declaration::kAndroid11:return Walk<abi::arm64::stack::Visitor11>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid12:return Walk<abi::arm64::stack::Visitor12>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid13To16:return Walk<abi::arm64::stack::Visitor13>(self,caller,pc,out);case stack_visitor_service::Declaration::kAndroid17:return Walk<abi::arm64::stack::Visitor17>(self,caller,pc,out);}return false;}
 bool SourceProducer::GetFrame(void*p,void*self,void*caller,uint32_t pc,const void**out)noexcept{return static_cast<SourceProducer*>(p)->Frame(self,caller,pc,out);}
 bool SourceProducer::GetCode(void*p,void*self,void*caller,CodeView*out)noexcept{return static_cast<SourceProducer*>(p)->Code(self,caller,out);}
-bool SourceProducer::Resolve(void*p,void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**target,void**special)noexcept{auto&s=*static_cast<SourceProducer*>(p);resolution={};if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;constexpr uint32_t invoke_type[]={2,3,1,0,4};void*resolved=nullptr;if(s.resolve_current_){
- const CurrentCheckedAccess access{&s,Current,ReadPending,s.resolve_current_};
- const auto result=ResolveCurrentChecked(access,self,s.linker_,i.index,caller,i.kind);
- resolved=result.method;resolution={&s,self,result.original_exception};
- }else if(s.checked_method17_){const bool success=s.Resolve17(self,caller,pc,i,&resolved);bool pending=false;if(!s.Pending17(self,&pending))return false;resolution={&s,self,pending};if(!success&&!pending)return false;}else{resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);resolution={&s,self,resolved==nullptr};}if(!Current(p,self))return false;*target=resolved;*special=i.kind==InvokeKind::Super?s.root_reference_(caller):nullptr;return resolved!=nullptr;}
-bool SourceProducer::ReadPending(void*p,void*self,bool*out)noexcept{return static_cast<SourceProducer*>(p)->Pending17(self,out);}
-bool SourceProducer::Pending17(void*self,bool*out)const noexcept {
- if(!out||!vm_||!Current(const_cast<SourceProducer*>(this),self))return false;
- JNIEnv*env=nullptr;if(vm_->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_6)!=JNI_OK||!env)return false;
- const bool pending=env->ExceptionCheck();if(!Current(const_cast<SourceProducer*>(this),self))return false;*out=pending;return true;
+bool SourceProducer::Resolve(void*p,void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**target,void**special)noexcept{
+ auto&s=*static_cast<SourceProducer*>(p);resolution={};
+ if(!target||!special||!Current(p,self)||i.kind>InvokeKind::Interface)return false;
+ *target=nullptr;*special=nullptr;
+ if(s.pending_){bool pending=false;if(!s.ReadActualPending(self,&pending))return false;
+  if(pending){resolution={&s,self,true};return false;}}
+ constexpr uint32_t invoke_type[]={2,3,1,0,4};void*resolved=nullptr;
+ if(s.resolve_current_){
+  const CurrentCheckedAccess access{&s,Current,ReadPending,s.resolve_current_};
+  const auto result=ResolveCurrentChecked(access,self,s.linker_,i.index,caller,i.kind);
+  resolved=result.method;resolution={&s,self,result.original_exception};
+ }else if(s.checked_method17_){
+  const bool success=s.Resolve17(self,caller,pc,i,&resolved);bool pending=false;
+  if(!s.ReadActualPending(self,&pending))return false;
+  resolution={&s,self,pending};if(!success&&!pending)return false;
+ }else{
+  resolved=s.resolve_(s.linker_,self,i.index,caller,invoke_type[unsigned(i.kind)]);
+  // The complete checked Thread/referrer declaration itself guarantees an
+  // original exception on null. Production additionally checks its native slot.
+  resolution={&s,self,resolved==nullptr};
+ }
+ if(!Current(p,self))return false;
+ if(s.pending_){bool pending=false;if(!s.ReadActualPending(self,&pending))return false;
+  resolution={&s,self,pending};if(pending)return false;}
+ if(!resolved)return false;
+ *target=resolved;*special=i.kind==InvokeKind::Super?s.root_reference_(caller):nullptr;return true;
+}
+bool SourceProducer::ReadPending(void*p,void*self,bool*out)noexcept{return static_cast<SourceProducer*>(p)->ReadActualPending(self,out);}
+bool SourceProducer::ReadActualPending(void*self,bool*out)const noexcept {
+ return out&&pending_&&Current(const_cast<SourceProducer*>(this),self)&&
+  pending_->Read(self,out)&&Current(const_cast<SourceProducer*>(this),self);
 }
 bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeInstruction&i,void**out)const noexcept {
  if(!out||!checked_method17_||!resolve_class17_||!find_method17_||i.kind>InvokeKind::Interface)return false;
- bool pending=false;if(!Pending17(self,&pending)||pending)return false;
+ bool pending=false;if(!ReadActualPending(self,&pending)||pending)return false;
  const CheckedCallerAccess checks{const_cast<SourceProducer*>(this),Current,FrameExtent,CallerDeclaring,clear_caller17_};
  if(!EnsureCheckedCaller(checks,self,caller))return false;
  CodeView code;evolution::MappedDexMetadata map;InvokeInstruction actual;
@@ -117,12 +139,12 @@ bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeIns
  if(!cache||!modern_field_metadata::ReadMappingExtent(nullptr,owner,&extent)||extent<loader_offset+4)return false;
  void*loader=metadata_->Reference(owner,loader_offset);
  void*resolved=find_method17_(linker_,resolved_class,{uintptr_t(cache)},{uintptr_t(loader)},i.index);
- if(!Pending17(self,&pending)||pending)return false;
+ if(!ReadActualPending(self,&pending)||pending)return false;
  // The original source performs ICCE/IAE checking and super selection. Its
  // registers fast path is optional; nullptr selects its original caller/DEX
  // path. Do not synthesize a managed register array or bypass these checks.
  const uintptr_t carrier=checked_method17_(self,caller,code.instructions+pc,nullptr);
- if(!Pending17(self,&pending)||pending||!resolved)return false;
+ if(!ReadActualPending(self,&pending)||pending||!resolved)return false;
  method_metadata::Identity identity;if(!modern_field_metadata::ReadMappingExtent(nullptr,resolved,&extent)||!method_metadata::ReadIdentity(layout_.method,resolved,extent,&identity)||identity.dex_method_index==UINT32_MAX||extent<sizeof(method_metadata::Method12))return false;
  uint16_t index=0;std::memcpy(&index,static_cast<const char*>(resolved)+offsetof(method_metadata::Method12,method_index),2);
  void*declaring=root_reference_(resolved);field_copy::CopyClassView klass;
@@ -132,7 +154,7 @@ bool SourceProducer::Resolve17(void*self,void*caller,uint32_t pc,const InvokeIns
  if(!modern_field_metadata::ReadMappingExtent(nullptr,reinterpret_cast<void*>(selected),&extent)||!method_metadata::ReadIdentity(layout_.method,reinterpret_cast<void*>(selected),extent,&identity)||identity.dex_method_index==UINT32_MAX||!Current(const_cast<SourceProducer*>(this),self))return false;
  *out=reinterpret_cast<void*>(selected);return true;
 }
-bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_null;}
+bool SourceProducer::Pending(void*p,void*self)noexcept{return Current(p,self)&&resolution.owner==p&&resolution.self==self&&resolution.original_exception;}
 BytecodeAccess SourceProducer::Access()noexcept{return {this,Current,GetFrame,GetCode,Resolve,Pending};}
 void* SourceProducer::CallerDeclaring(void*p,void*self,void*method)noexcept{auto&s=*static_cast<SourceProducer*>(p);if(!method||!s.root_reference_||!Current(p,self))return nullptr;void*klass=s.root_reference_(method);return Current(p,self)?klass:nullptr;}
 bool SourceProducer::FrameExtent(void*p,void*self,const void*address,size_t*out)noexcept{return Current(p,self)&&Extent(address,out)&&Current(p,self);}

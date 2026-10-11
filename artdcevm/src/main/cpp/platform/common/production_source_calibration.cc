@@ -385,8 +385,7 @@ bool SourceCalibration::InstallReceiverEvents(const runnable_jni::Context&actual
 bool SourceCalibration::PrepareReceiverEvents(JNIEnv*env,std::string*error){
  if(!receiver_code_calibrated_||!references_.Ready()||!stop_.Calibrated())
   return Fail(error,"source-receiver-listener-code-or-original-stop-dependencies-unavailable");
- if(!pending_exception_.Calibrate(hooks_,env,static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm),
-    metadata_->Storage(),schema_.Roots(),error))return false;
+ if(!pending_exception_.Calibrated())return Fail(error,"source-receiver-listener-native-pending-reader-unavailable");
  if(!receiver_frames_)receiver_frames_=std::make_unique<receiver_guard::FrameReader>(receiver_producer_.Frames());
  if(!receiver_bytecode_)receiver_bytecode_=std::make_unique<receiver_guard::BytecodeSource>(*receiver_frames_,receiver_producer_.Access());
  if(!receiver_calibration_)receiver_calibration_=std::make_unique<receiver_guard::SourceCalibration>(*receiver_frames_,*receiver_bytecode_,references_);
@@ -448,10 +447,12 @@ bool SourceCalibration::ObserveReceiverCode(const runnable_jni::Context&actual,v
 bool SourceCalibration::PrepareReceiverCode(JNIEnv*env,std::string*error){
  if(!stack_calibrated_||!references_.Ready()||!reference_current_||!schema_.Ready())
   return Fail(error,"source-receiver-code-constructor-or-root-dependencies-unavailable");
+ if(!pending_exception_.Calibrate(hooks_,env,static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm),
+    metadata_->Storage(),schema_.Roots(),error))return false;
  if(!receiver_bound_){
   if(!receiver_producer_.Bind(hooks_,stack_declaration_,metadata_->Methods(),metadata_->Fields(),
        metadata_->Runtime().receivers.class_linker,reference_current_,error,
-       static_cast<JavaVM*>(metadata_->Runtime().receivers.java_vm)))return false;
+       &pending_exception_))return false;
   receiver_bound_=true;
  }
  receiver_code_calibrated_=false;ReceiverCode request{*this,error};

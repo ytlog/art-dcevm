@@ -6,15 +6,6 @@ namespace {
 bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}
 struct Local {JNIEnv*env;jobject value;~Local(){if(value)env->DeleteLocalRef(value);}};
 }
-bool Service::ReadCandidate(void*self,bool*out)const noexcept{
- if(!out||!self||!current_||current_()!=self||!offset_||
-    reinterpret_cast<uintptr_t>(self)%alignof(void*)||
-    offset_>UINTPTR_MAX-sizeof(void*)||reinterpret_cast<uintptr_t>(self)>UINTPTR_MAX-offset_-sizeof(void*))return false;
- uintptr_t exception=0;
- std::memcpy(&exception,static_cast<const unsigned char*>(self)+offset_,sizeof(exception));
- if(current_()!=self)return false;*out=exception!=0;return true;
-}
-bool Service::Read(void*self,bool*out)const noexcept{return ready_&&ReadCandidate(self,out);}
 bool Service::Calibrate(HookEngine&hooks,JNIEnv*env,JavaVM*expected_vm,
  const modern_field_storage::Service&storage,const source_handle_roots::Service&roots,std::string*error){
  JavaVM*vm=nullptr;

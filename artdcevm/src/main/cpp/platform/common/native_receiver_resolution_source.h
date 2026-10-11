@@ -11,15 +11,15 @@ enum class ResolutionSource {CheckedMethod,CheckedMethodCurrent,Nterp};
 // requires independent public caller/target/receiver episodes before use.
 // Scanner geometry intentionally does not participate in this decision.
 inline bool SelectResolutionSource(bool checked_method,bool resolve_type,
-                                   bool find_member,bool nterp,bool actual_vm,
+                                   bool find_member,bool nterp,bool native_pending,
                                    ResolutionSource*out,const char**error,bool checked_current=false)noexcept {
  if(!out)return false;
  if(checked_method){*out=ResolutionSource::CheckedMethod;return true;}
- if(checked_current){if(!actual_vm){if(error)*error="Receiver checked source actual JavaVM unavailable";return false;}*out=ResolutionSource::CheckedMethodCurrent;return true;}
+ if(checked_current){if(!native_pending){if(error)*error="Receiver checked source calibrated native pending reader unavailable";return false;}*out=ResolutionSource::CheckedMethodCurrent;return true;}
  const char* failure=!resolve_type?"Receiver source named DoResolveType<ArtMethod> unavailable":
                      !find_member?"Receiver source named FindResolvedMethod unavailable":
                      !nterp?"Receiver source named NterpGetMethod unavailable":
-                     !actual_vm?"Receiver source actual JavaVM unavailable":nullptr;
+                     !native_pending?"Receiver source calibrated native pending reader unavailable":nullptr;
  if(failure){if(error)*error=failure;return false;}
  *out=ResolutionSource::Nterp;return true;
 }

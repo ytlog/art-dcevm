@@ -8,6 +8,7 @@
 #include "platform/common/modern_field_metadata.h"
 #include "platform/common/stack_visitor_service.h"
 #include "platform/common/method_identity_calibration.h"
+#include "platform/common/native_pending_exception.h"
 namespace artdcevm::receiver_guard {
 // Native producer for the actual listener thread. Geometry and method identity
 // must have independent public source calibration before Bind; Bind itself
@@ -23,7 +24,7 @@ class SourceProducer final:public StoppedCodeReader {
  public:
  bool Bind(HookEngine&,stack_visitor_service::Declaration,const method_identity::Calibration&,
            const modern_field_metadata::FieldMetadata&,void*actual_class_linker,
-           void*(*actual_current)(),std::string*,JavaVM* actual_vm=nullptr);
+           void*(*actual_current)(),std::string*,const native_pending_exception::Service* pending=nullptr);
  BytecodeAccess Access()noexcept;
  bool OwnsCurrentThread(void*self)const noexcept{return bound_&&self&&current_&&current_()==self;}
  FrameAccess Frames()noexcept;
@@ -46,13 +47,13 @@ class SourceProducer final:public StoppedCodeReader {
  static bool FrameReference(void*,void*,uint32_t,void**)noexcept;
  bool CodeImpl(void*,void*,CodeView*,const modern_field_metadata::ReadContext*,evolution::MappedDexMetadata* mapping=nullptr)const noexcept;
  bool Resolve17(void*,void*,uint32_t,const InvokeInstruction&,void**)const noexcept;
- bool Pending17(void*,bool*)const noexcept;
+ bool ReadActualPending(void*,bool*)const noexcept;
  static bool ReadPending(void*,void*,bool*)noexcept;
  using ResolveMethod=void*(*)(void*,void*,uint32_t,void*,uint32_t);
  stack_visitor_service::Service stack_;stack_visitor_service::Declaration declaration_{};
  code_item_metadata::Layout layout_{};const modern_field_metadata::FieldMetadata*metadata_=nullptr;
  void*linker_=nullptr;void*(*current_)()=nullptr;ResolveMethod resolve_=nullptr;void*(*obsolete_cache_)(void*)=nullptr;
- JavaVM* vm_=nullptr;
+ const native_pending_exception::Service*pending_=nullptr;
  CheckedResolveMethodCurrent resolve_current_=nullptr;
  abi::arm64::android17::ResolveMethodClass resolve_class17_=nullptr;
  abi::arm64::android17::FindResolvedMethod find_method17_=nullptr;
