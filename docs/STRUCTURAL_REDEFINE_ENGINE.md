@@ -93,6 +93,29 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 | 类修饰符变化 | 拒绝，`CLASS_MODIFIERS_CHANGED`（Phase 4 支持） |
 | 父类、接口变化 | 拒绝，`HIERARCHY_CHANGED`（Phase 4 支持） |
 
+## MVP 引擎实现流程（`structural_redefine_engine.cc`）
+
+接口已在 `structural_redefine_engine.h` 定义：`Install(JavaVM*, jvmtiEnv*)` 与 `Capabilities()`，由 `core/agent.cc` 调用。
+
+1. **Install**（幂等，由 agent 的互斥锁串行化）：
+   1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
+   2. 通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：两个入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号。
+   3. 保存结构入口和三个校验点的原始地址；用 `hooks::Install()` 替换标准入口和三个校验点。任一步失败，用 `hooks::Remove()` 撤销已安装的部分。
+2. **标准入口**：
+   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
+   2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）。
+   3. 原样调用原始 `StructurallyRedefineClasses`，返回后清理上下文（RAII），返回 ART 的结果。
+
+   不在 `Check*` 中调用 JNI/JVMTI，因为它们运行在 ART 的 `ScopedObjectAccess` 内。
+3. **CheckClass**：
+   1. 按 `redefinition.h` 取出 `klass` 和 `dex_file`。上下文中找不到该类时，调用原函数。
+   2. 由 `DexFilePrefix` 构造 `DexView`（文件大小取自 DEX 头），用 `ReadClassDeclarations` 读取新类。读取失败或描述符不一致时，调用原函数。
+   3. 调用 `structural_policy::Evaluate`：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存决策，返回 true。
+4. **CheckFields / CheckMethods**：有对应决策时，按 `fields_structural` / `methods_structural` 调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，然后返回 true，`CheckMethods` 之后清除决策；没有决策时调用原函数。
+5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`；`memberDeletion`、`memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 为 false；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
+
+MVP 不接管映射、类分配和提交（Phase 3/4）。
+
 ## 分阶段计划
 
 | 阶段 | 内容 | 完成判据 |
