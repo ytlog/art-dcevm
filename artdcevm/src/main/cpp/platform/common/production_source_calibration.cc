@@ -509,7 +509,8 @@ bool SourceCalibration::PrepareStackStream(JNIEnv*env,std::string*error){
   stack_service_bound_=true;
  }
  if(stack_stream_.completed)return true;
- return ObserveStackStream(hooks_,env,*metadata_,schema_.Roots(),stop_,cache_,roots_,stack_service_,&stack_stream_,error);
+ if(!upcall_service_.Prepare())return Fail(error,"source-stack-upcall-named-invoke-extents-unavailable");
+ return ObserveStackStream(hooks_,env,*metadata_,schema_.Roots(),stop_,cache_,roots_,stack_service_,upcall_service_,&stack_stream_,error);
 }
 bool SourceCalibration::PrepareStack(JNIEnv*env,std::string*error){
  stack_visitor_service::Declaration observed;

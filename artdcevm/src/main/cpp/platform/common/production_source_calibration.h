@@ -42,6 +42,7 @@ class SourceCalibration final {
  // Actual complete stopped stream/root join; each transaction must rescan in
  // its own stop and separately discharge native/compiled execution obligations.
  const native_call_graph_stack::Service*StackService()const noexcept{return stack_stream_.completed?&stack_service_:nullptr;}
+ const native_exception_upcall_boundary::Service*UpcallService()const noexcept{return stack_stream_.completed?&upcall_service_:nullptr;}
  const StackStreamObservation&StackObservation()const noexcept{return stack_stream_;}
  // Constructor storage only; invocation events remain independently proven.
  const stack_visitor_service::Declaration*StackDeclaration()const noexcept{return stack_calibrated_?&stack_declaration_:nullptr;}
@@ -117,6 +118,7 @@ class SourceCalibration final {
  stack_visitor_service::Declaration stack_declaration_=stack_visitor_service::Declaration::kAndroid12;
  bool stack_calibrated_=false;
  native_call_graph_stack::Service stack_service_;
+ native_exception_upcall_boundary::Service upcall_service_;
  StackStreamObservation stack_stream_{};bool stack_service_bound_=false;
  receiver_guard::ClassSource receiver_classes_;
  bool receiver_classes_bound_=false,receiver_classes_calibrated_=false;

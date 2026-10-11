@@ -1,85 +1,105 @@
 #pragma once
 #include "platform/common/native_managed_stack_chain.h"
+#include "platform/common/native_managed_stack_stream.h"
 #include "platform/common/source_commit.h"
 #include "support/named_symbol_extent.h"
 namespace artdcevm::native_exception_upcall_boundary {
-namespace detail {
-// Source FrameInfo's return-PC offset, never inferred from machine instructions.
-inline bool SavedReturn(const modern_field_metadata::ReadContext&read,uintptr_t quick,
- size_t bytes,size_t return_offset,uintptr_t*out)noexcept {
- if(!out||!quick||quick%16||bytes<16||bytes%16||bytes>UINTPTR_MAX-quick||
-    return_offset!=bytes-sizeof(uintptr_t)||!read.owner||!read.extent)return false;
- size_t extent=0;if(!read.extent(read.owner,reinterpret_cast<const void*>(quick),&extent)||extent<bytes)return false;
- uintptr_t pc=0;std::memcpy(&pc,reinterpret_cast<const void*>(quick+return_offset),sizeof(pc));
- if(!pc)return false;*out=pc;return true;
-}
-}
-// This capability proves only the original managed-to-native upcall boundary.
-// Root relocation, JNI ownership, native consumers and retirement remain separate
-// same-Plan obligations. Only the concrete original-walker Service can produce it.
+struct Report {
+ size_t transitions=0,physical_frames=0,inline_frames=0,shadow_frames=0;
+ uintptr_t terminal_pc=0;
+ bool complete=false;const char*failure=nullptr;
+};
+class Service;
+// Same-stop, same-Plan original upcall boundary only. Native roots, receivers,
+// relocation and no-escape consumers remain independent commit obligations.
 class Proof final {
  public:
- enum class Failure:uint32_t {None,Unprepared,Geometry,Transition,Incomplete,SymbolExtent};
- Failure FailureCode()const noexcept{return failure_;}
- size_t Transitions()const noexcept{return fragment_;}
  Proof(const Proof&)=delete;Proof&operator=(const Proof&)=delete;
- bool Validate(const source_commit::Plan&plan)const noexcept {
-  return sealed_&&!failed_&&plan_==&plan&&chain_&&chain_->Validate()&&last_lr_==last_transition_&&
-    (invoke_.ContainsReturnPc(last_lr_)||invoke_static_.ContainsReturnPc(last_lr_));
+ bool Validate(const source_commit::Plan&)const noexcept;
+ private:
+ friend class Service;
+ Proof()=default;
+ const Service*service_=nullptr;
+ const native_managed_stack_chain::Chain*chain_=nullptr;
+ const native_call_graph_stack::Service*stack_=nullptr;
+ const native_call_graph_stack::Service::Prepared*stream_=nullptr;
+ const native_source_stop::Session*stop_=nullptr;
+ const modern_field_metadata::ReadContext*read_=nullptr;
+ const source_commit::Plan*plan_=nullptr;void*self_=nullptr;
+ Report report_{};
+};
+class Service final {
+ public:
+ Service()=default;Service(const Service&)=delete;Service&operator=(const Service&)=delete;
+ // Named ELF extents only, prepared before stopping. No instruction decoding.
+ bool Prepare(){
+  if(prepared_)return true;
+  prepared_=invoke_.Prepare("libart.so","art_quick_invoke_stub")&&
+    invoke_static_.Prepare("libart.so","art_quick_invoke_static_stub");return prepared_;
+ }
+ bool Prepared()const noexcept{return prepared_;}
+ // Source calibration observes scalars only; it never publishes a Plan proof.
+ Report Observe(const native_managed_stack_chain::Chain&chain,
+   const native_call_graph_stack::Service&stack,const native_call_graph_stack::Service::Prepared&stream,
+   const native_source_stop::Session&stop,void*self,const modern_field_metadata::ReadContext&read)const noexcept{
+  Report report;
+  const auto deny=[&](const char*why){report.failure=why;return report;};
+  if(!prepared_||chain.Thread()!=self||!chain.Fragments()||!chain.Validate()||
+     !stack.ValidateStream(stream,stop,self,read))return deny("upcall-original-chain-or-stream-unavailable");
+  const auto*frames=stack.Frames(stream);if(!frames)return deny("upcall-complete-stream-unavailable");
+  native_managed_stack_stream::Cursor cursor;bool first=true;
+  size_t physical=0,shadow=0;
+  for(const auto&frame:*frames){
+   if(frame.thread!=self)continue;
+   if(first){
+    const auto*head=chain.At(report.transitions);
+    if(!head||!cursor.Begin(*head))return deny("upcall-fragment-head-unavailable");
+    first=false;physical=shadow=0;
+   }
+   if(!cursor.Consume(frame,read))return deny("upcall-original-fragment-cursor-disconnected");
+   if(frame.kind==native_call_graph_stack::FrameKind::Transition){
+    if(!cursor.Complete())return deny("upcall-fragment-not-exhausted");
+    // The oldest nonempty fragment must end in the named invoke boundary.
+    // Empty tails retain that boundary; older shadow execution cannot borrow it.
+    if(physical)report.terminal_pc=frame.pc;
+    else if(shadow)report.terminal_pc=0;
+    ++report.transitions;first=true;
+   }else{
+    if(frame.physical_boundary){++physical;++report.physical_frames;}
+    if(frame.inline_depth)++report.inline_frames;
+    if(frame.shadow){++shadow;++report.shadow_frames;}
+   }
+  }
+  if(!first||report.transitions!=chain.Fragments()||!report.physical_frames||
+     !chain.Validate()||!stack.ValidateStream(stream,stop,self,read))
+   return deny("upcall-complete-chain-exhaustion-unproved");
+  if(!report.terminal_pc||!(invoke_.ContainsReturnPc(report.terminal_pc)||
+      invoke_static_.ContainsReturnPc(report.terminal_pc)))return deny("upcall-terminal-return-outside-named-invoke");
+  report.complete=true;return report;
+ }
+ struct CaptureStorage final {
+  CaptureStorage()=default;
+  CaptureStorage(const CaptureStorage&)=delete;CaptureStorage&operator=(const CaptureStorage&)=delete;
+  private:friend class Service;Proof proof_;
+ };
+ const Proof*Capture(CaptureStorage&storage,const source_commit::Plan&plan,
+   const native_managed_stack_chain::Chain&chain,const native_call_graph_stack::Service&stack,
+   const native_call_graph_stack::Service::Prepared&stream,const native_source_stop::Session&stop,
+   void*self,const modern_field_metadata::ReadContext&read)const noexcept{
+  auto&proof=storage.proof_;proof.service_=nullptr;
+  const auto report=Observe(chain,stack,stream,stop,self,read);if(!report.complete)return nullptr;
+  proof.chain_=&chain;proof.stack_=&stack;proof.stream_=&stream;proof.stop_=&stop;
+  proof.read_=&read;proof.plan_=&plan;proof.self_=self;proof.report_=report;proof.service_=this;
+  return &proof;
  }
  private:
-
- Proof()=default;
- bool Prepare(){prepared_=invoke_.Prepare("libart.so","art_quick_invoke_stub")&&
-  invoke_static_.Prepare("libart.so","art_quick_invoke_static_stub");return prepared_;}
- bool Begin(const native_managed_stack_chain::Chain&chain,const source_commit::Plan&plan)noexcept {
-  sealed_=false;chain_=&chain;plan_=&plan;fragment_=0;last_lr_=0;last_transition_=0;next_quick_=0;physical_=false;managed_terminal_=false;failed_=false;failure_=Failure::None;
-  if(!prepared_||!chain.Fragments())return Refuse(Failure::Unprepared);return true;
- }
- // Call for every physical frame, after the original named FrameInfo reader and
- // same-cursor method/quick provenance are already proved by the walker.
- bool Physical(uintptr_t quick,uintptr_t pc,size_t frame_bytes,size_t return_offset,
- const modern_field_metadata::ReadContext&read)noexcept {
-  if(failed_||sealed_||!chain_||fragment_>=chain_->Fragments())return Refuse();
-  const auto*fragment=chain_->At(fragment_);
-  if(!fragment||fragment->shadow||
-    (!physical_&&(quick!=(fragment->tagged_quick&~uintptr_t{3})||pc!=0))||
-    (physical_&&(quick!=next_quick_||pc!=last_lr_)))return Refuse();
-  uintptr_t lr=0;if(!detail::SavedReturn(read,quick,frame_bytes,return_offset,&lr))return Refuse();
-  next_quick_=quick+frame_bytes;last_lr_=lr;physical_=true;return true;
- }
- // The original walker emits a transition for every fragment, including empty
- // ones. Match its actual cursor, not an expected fragment pointer supplied by
- // the caller. No runtime/native/shadow callback may be discarded.
- bool Transition(uintptr_t actual_quick,uintptr_t actual_pc,
- const modern_field_metadata::ReadContext&read)noexcept {
-  if(failed_||sealed_||!chain_)return Refuse(Failure::Transition);
-  const auto*source=chain_->At(fragment_);
-  if(!source||source->shadow)return Refuse(Failure::Transition);
-  if(physical_){
-   if(last_lr_!=actual_pc||next_quick_!=actual_quick||!read.owner||!read.extent)return Refuse(Failure::Transition);
-   size_t extent=0;uintptr_t method=1;
-   if(!read.extent(read.owner,reinterpret_cast<const void*>(actual_quick),&extent)||extent<sizeof(method))return Refuse(Failure::Transition);
-   std::memcpy(&method,reinterpret_cast<const void*>(actual_quick),sizeof(method));if(method)return Refuse(Failure::Transition);
-   last_transition_=actual_pc;
-  }else if(source->tagged_quick||actual_quick||actual_pc)return Refuse(Failure::Transition);
-  // Verified empty tails reset the original cursor to null/zero. They add
-  // no older managed handler, but grant nothing about native caller behavior.
-  if(physical_)managed_terminal_=true;++fragment_;physical_=false;next_quick_=0;return true;
- }
- bool ExhaustedNormally()noexcept {
-  if(failed_)return false;
-  if(physical_||!managed_terminal_||!chain_||fragment_!=chain_->Fragments()||!last_lr_||
-    !last_transition_||last_lr_!=last_transition_)return Refuse(Failure::Incomplete);
-  const auto*terminal=chain_->At(fragment_-1);if(!terminal||terminal->link)return Refuse(Failure::Incomplete);
-  if(!(invoke_.ContainsReturnPc(last_lr_)||invoke_static_.ContainsReturnPc(last_lr_)))return Refuse(Failure::SymbolExtent);
-  sealed_=true;return true;
- }
- bool Refuse(Failure reason=Failure::Geometry)noexcept {if(!failed_)failure_=reason;failed_=true;sealed_=false;return false;}
- named_symbol_extent::Service invoke_,invoke_static_;
- const native_managed_stack_chain::Chain*chain_=nullptr;const source_commit::Plan*plan_=nullptr;
- size_t fragment_=0;uintptr_t last_lr_=0,last_transition_=0,next_quick_=0;
- Failure failure_=Failure::Unprepared;
- bool prepared_=false,sealed_=false,physical_=false,managed_terminal_=false,failed_=false;
+ named_symbol_extent::Service invoke_,invoke_static_;bool prepared_=false;
 };
+inline bool Proof::Validate(const source_commit::Plan&plan)const noexcept{
+ if(!service_||plan_!=&plan||!chain_||!stack_||!stream_||!stop_||!read_||!report_.complete)return false;
+ const auto current=service_->Observe(*chain_,*stack_,*stream_,*stop_,self_,*read_);
+ return current.complete&&current.terminal_pc==report_.terminal_pc&&current.transitions==report_.transitions&&
+   current.physical_frames==report_.physical_frames&&current.inline_frames==report_.inline_frames&&
+   current.shadow_frames==report_.shadow_frames;
+}
 }

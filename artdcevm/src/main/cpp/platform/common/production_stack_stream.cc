@@ -3,33 +3,15 @@
 #include "platform/common/runnable_executor.h"
 #include "platform/common/redefinition_gate.h"
 #include "platform/common/native_managed_stack_chain.h"
-#include "platform/common/native_managed_stack_stream.h"
 namespace artdcevm::production_bootstrap {
 namespace {
 bool Fail(std::string*error,const char*why){if(error)*error=why;return false;}
-// Match every logical/physical cursor, including the terminal transition,
-// against the same stopped fragment chain. This is not a native permission.
-bool MatchFragments(const native_managed_stack_chain::Chain&chain,
-    const std::vector<native_call_graph_stack::Frame>&frames,void*self,
-    const modern_field_metadata::ReadContext&read,size_t*out)noexcept{
- if(!out||chain.Thread()!=self||!chain.Fragments()||!chain.Validate())return false;
- size_t fragment=0;bool first=true;native_managed_stack_stream::Cursor cursor;
- for(const auto&frame:frames){
-  if(frame.thread!=self)continue;
-  if(first){const auto*head=chain.At(fragment);if(!head||!cursor.Begin(*head))return false;first=false;}
-  if(!cursor.Consume(frame,read))return false;
-  if(frame.kind==native_call_graph_stack::FrameKind::Transition){
-   if(!cursor.Complete())return false;++fragment;first=true;
-  }
- }
- if(!first||fragment!=chain.Fragments()||!chain.Validate())return false;
- *out=fragment;return true;
-}
 struct Request {
  HookEngine&hooks;const MetadataCalibration&metadata;const source_handle_roots::Service&handles;
  const native_source_stop::Service&stop;const native_cache::Service&cache;
  const native_typed_heap_walk::RootProvenance&roots;const native_call_graph_stack::Service&stack;
- native_selective_interpretation::Service&selection;StackStreamObservation observation{};
+ native_selective_interpretation::Service&selection;
+ const native_exception_upcall_boundary::Service&upcall;StackStreamObservation observation{};
  std::string*error;
 };
 bool Observe(const runnable_jni::Context&actual,void*raw){
@@ -72,10 +54,11 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
    }
    if(!native||!managed)return false;
    const auto captured=w.chain.Capture(r.handles,stop,w.self,w.self,r.cache,read);
-   size_t transitions=0;
-   if(!captured.complete||!MatchFragments(w.chain,*stream,w.self,read,&transitions)||
-      !r.stack.ValidateStream(w.prepared,stop,w.self,read))return false;
-   r.observation={frames,roots,captured.fragments,transitions,true};return true;
+   if(!captured.complete)return false;
+   const auto upcall=r.upcall.Observe(w.chain,r.stack,w.prepared,stop,w.self,read);
+   r.observation.upcall=upcall;
+   if(!upcall.complete)return false;
+   r.observation={frames,roots,upcall,captured.fragments,upcall.transitions,true};return true;
   },r.error);
  return inspected&&r.observation.completed&&runnable_jni::Bridge::BorrowOriginalScope(actual)&&
      !actual.env->ExceptionCheck();
@@ -84,19 +67,21 @@ bool Observe(const runnable_jni::Context&actual,void*raw){
 bool ObserveStackStream(HookEngine&hooks,JNIEnv*env,const MetadataCalibration&metadata,
  const source_handle_roots::Service&handles,const native_source_stop::Service&stop,
  const native_cache::Service&cache,const native_typed_heap_walk::RootProvenance&roots,
- const native_call_graph_stack::Service&stack,StackStreamObservation*out,std::string*error){
+ const native_call_graph_stack::Service&stack,const native_exception_upcall_boundary::Service&upcall,
+ StackStreamObservation*out,std::string*error){
  if(out)*out={};JavaVM*vm=nullptr;
  if(!out||!env||env->ExceptionCheck()||env->GetJavaVM(&vm)!=JNI_OK||vm!=metadata.Runtime().receivers.java_vm||
     !redefinition_gate::Owned(vm)||!handles.Calibrated()||!stop.Calibrated()||
-    !cache.PreparedForCurrentThread()||!roots.LocksCalibrated())
+    !cache.PreparedForCurrentThread()||!roots.LocksCalibrated()||!upcall.Prepared())
   return Fail(error,"source-stack-stream-ordinary-owner-or-source-dependencies-unavailable");
  native_selective_interpretation::Service selection;
  if(!selection.CalibrateOwner(hooks,env,error))return false;
- Request request{hooks,metadata,handles,stop,cache,roots,stack,selection,{},error};
+ Request request{hooks,metadata,handles,stop,cache,roots,stack,selection,upcall,{},error};
  const auto result=runnable_executor::WithOriginalScope(env,metadata.Inputs().Anchor(),Observe,&request);
  if(selection.PendingRefund())std::abort();
  if(result!=runnable_jni::Result::kSuccess||!request.observation.completed||env->ExceptionCheck())
-  return Fail(error,request.observation.roots.failure?request.observation.roots.failure:
+  return Fail(error,request.observation.upcall.failure?request.observation.upcall.failure:
+      request.observation.roots.failure?request.observation.roots.failure:
       request.observation.frames.failure?request.observation.frames.failure:
       "source-stack-stream-complete-walk-or-independent-root-join-not-observed");
  *out=request.observation;return true;
