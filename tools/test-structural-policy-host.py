@@ -178,6 +178,35 @@ int main(int argc, char** argv) {
       std::ifstream input(argv[argument], std::ios::binary);
       const std::vector<uint8_t> dex((std::istreambuf_iterator<char>(input)), {});
       Require(!dex.empty(), "missing DEX case");
+      const std::string name = argv[argument];
+      if (name.find("identity") != std::string::npos) {
+        // CompactDex keeps string data and type lists in a separate section.
+        std::ifstream data_input(name + ".data", std::ios::binary);
+        std::vector<uint8_t> data((std::istreambuf_iterator<char>(data_input)), {});
+        if (data.empty()) data = dex;
+        const evolution::DexView view{dex.data(), dex.size(), data.data(), data.size()};
+        Member identity;
+        std::string error;
+        if (name.find("invalid") != std::string::npos) {
+          Require(!evolution::ReadFieldIdentity(view, 0, &identity, &error) && !error.empty() &&
+                  !evolution::ReadMethodIdentity(view, 0, &identity, &error),
+                  "truncated DEX identity accepted");
+          continue;
+        }
+        Require(evolution::ReadFieldIdentity(view, 0, &identity, &error) &&
+                identity.name == "value" && identity.descriptor == "I",
+                "field identity not read");
+        Require(evolution::ReadMethodIdentity(view, 0, &identity, &error) &&
+                identity.name == "work" && identity.descriptor == "(I)J",
+                "method identity not read");
+        Require(!evolution::ReadFieldIdentity(view, 1, &identity, &error) && !error.empty() &&
+                !evolution::ReadMethodIdentity(view, 1, &identity, &error),
+                "out-of-range identity accepted");
+        ClassSchema schema;
+        Require(!evolution::ReadClassDeclarations(view, &schema, &error),
+                "multi-class or compact DEX accepted as a redefinition class");
+        continue;
+      }
       ClassSchema schema; schema.descriptor = "unchanged";
       std::string error;
       const bool valid = evolution::ReadClassDeclarations(
@@ -244,6 +273,38 @@ def dex_case(visibility=2):
     return data, directory, annotation_set, annotation
 
 
+def identity_case(compact=False):
+    """Two classes, one field_id A.value:I and one method_id B.work(I)J."""
+    strings = ['I', 'J', 'LA;', 'LB;', 'value', 'work', 'JI']
+    string_ids, type_ids, proto_ids = 0x70, 0x70 + 4 * 7, 0x70 + 4 * 7 + 4 * 4
+    field_ids = proto_ids + 12
+    method_ids = field_ids + 8
+    class_defs = method_ids + 8
+    main = bytearray(class_defs + 2 * 32)
+    data = bytearray() if compact else main
+    main[:8] = b'cdex001\0' if compact else b'dex\n035\0'
+    def put(buffer, offset, *values):
+        struct.pack_into('<' + 'I' * len(values), buffer, offset, *values)
+    put(main, 0x24, 0x70, 0x12345678)
+    put(main, 0x38, 7, string_ids, 4, type_ids, 1, proto_ids, 1, field_ids, 1, method_ids,
+        2, class_defs)
+    for index, text in enumerate(strings):
+        put(main, string_ids + 4 * index, len(data))
+        data.extend(bytes([len(text)]) + text.encode('ascii') + b'\0')
+    put(main, type_ids, 0, 1, 2, 3)
+    while len(data) % 4:
+        data.append(0)
+    type_list = len(data)
+    data.extend(struct.pack('<IH', 1, 0) + bytes(2))
+    put(main, proto_ids, 6, 1, type_list)
+    struct.pack_into('<HHI', main, field_ids, 2, 0, 4)
+    struct.pack_into('<HHI', main, method_ids, 3, 0, 5)
+    put(main, class_defs, 2)
+    put(main, class_defs + 32, 3)
+    put(main, 0x20, len(main))
+    return main, (data if compact else None)
+
+
 def java_home(requested):
     candidates = [requested, os.environ.get('JAVA_HOME')]
     if Path('/usr/libexec/java_home').exists():
@@ -294,6 +355,14 @@ def main():
         cases['invalid-set-offset.dex'] = malformed
         malformed = bytearray(valid); malformed[annotation_offset + 4] = 0x84
         cases['invalid-integer-width.dex'] = malformed
+        for compact in (False, True):
+            main, data = identity_case(compact)
+            name = 'identity-compact.dex' if compact else 'identity-standard.dex'
+            cases[name] = main
+            if data is not None:
+                (work / (name + '.data')).write_bytes(data)
+            truncated = bytearray(main[:-40]); struct.pack_into('<I', truncated, 0x20, len(truncated))
+            cases['invalid-' + name] = truncated
         paths = []
         for name, contents in cases.items():
             path = work / name; path.write_bytes(contents); paths.append(str(path))

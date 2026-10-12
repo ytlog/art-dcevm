@@ -42,7 +42,12 @@ SCENARIOS = (
     ("methods-restore", ["methods-original"], 0),
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
+    ("copied-default-add", ["copied-default-add"], 0),
 )
+# Scenarios whose acceptance depends on the engine's member mapping, which is
+# enabled only after the runtime probes selected a source-declared layout.
+MAPPED_SCENARIOS = {"methods-retire", "methods-restore", "methods-retire-again",
+                    "methods-restore-again", "copied-default-add"}
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
                    "newAddedMethod": 187, "oldValue": 10, "staticCounter": 7}
@@ -135,6 +140,8 @@ REQUIRED_CHECKS = {
     "methods-restore": METHOD_RESTORE_CHECKS,
     "methods-retire-again": METHOD_RETIRE_CHECKS,
     "methods-restore-again": METHOD_RESTORE_CHECKS,
+    "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
+                           "newChild": 92, "parentValue": 90},
 }
 UNCHANGED_CHECKS = {
     "hierarchy": ("unchangedMembers",),
@@ -201,6 +208,10 @@ def validate_report(report):
         if (scenario.get("completed") is not True or scenario.get("passed") is not True
                 or scenario.get("error")):
             raise RunFailure("Scenario " + name + " failed")
+        mapping = (scenario.get("capabilities") or {}).get("memberMapping")
+        if name in MAPPED_SCENARIOS and not (isinstance(mapping, str)
+                                             and mapping.startswith("verified: ")):
+            raise RunFailure("Scenario " + name + " ran without a runtime-verified member mapping")
         checks = scenario.get("checks")
         if not isinstance(checks, list) or not checks:
             raise RunFailure("Scenario " + name + " is missing behavior checks")

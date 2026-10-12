@@ -2691,13 +2691,24 @@
           }
         },
         "fixedDeclarations": [
-          "platform/abi/arm64/android36/method_retirement.h"
+          "platform/abi/arm64/common/runtime_objects.h",
+          "platform/abi/arm64/common/redefinition.h",
+          "platform/abi/arm64/common/reflective_value_visitor.h",
+          "platform/abi/arm64/common/libcpp_pointer_map.h",
+          "platform/abi/arm64/android11/art_method.h",
+          "platform/abi/arm64/android11/class.h",
+          "platform/abi/arm64/android12/class.h",
+          "platform/abi/arm64/android13/class.h",
+          "platform/abi/arm64/android14/class.h",
+          "platform/abi/arm64/android15/class.h",
+          "platform/abi/arm64/android16/class.h",
+          "platform/abi/arm64/android17/class.h"
         ],
         "profileSymbols": [
-          "platform/symbols/android36_method_retirement_symbols.h"
+          "platform/symbols/method_retirement_symbols.h"
         ]
       },
-      "note": "The base entry and validation services retain their Phase 1-2 role across releases. New method-retirement hooks use only the exact GNU-build-ID Android 16 profile and affect new invocations of explicit retired concrete class methods. Original allocation, UpdateClassStructurally and deoptimization resume remain native. Partial exact names are research rows, not universal catalog requirements."
+      "note": "The base entry and validation services retain their Phase 1-2 role across releases. Method-retirement hooks install only when every exact name resolves; runtime probes then select a source-declared class layout per transaction and affect new invocations of explicit retired concrete class methods. Original allocation, UpdateClassStructurally and deoptimization resume remain native. Partial exact names are research rows, not universal catalog requirements."
     }
   ],
   "commitOrder": [

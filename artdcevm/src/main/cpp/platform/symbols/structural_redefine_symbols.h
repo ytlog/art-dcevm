@@ -3,7 +3,7 @@
 
 // Named ART structural-redefinition decision points and services. The mangled
 // names are identical in every collected Android 11--17 arm64 runtime.
-// 55 entries require .dynsym; 10 allow any named table, including the public
+// 56 entries require .dynsym; 10 allow any named table, including the public
 // wrapper, CopyFields candidate and method-access guards. Each declares its scope.
 // This catalog proves exact-name presence, not source ABI or Phase 3/4 behavior.
 // tools/check-structural-symbols.py re-verifies this catalog
@@ -60,6 +60,7 @@ inline constexpr NamedSymbol kEnsureMethodIds{Library::kArt, "_ZN3art6mirror5Cla
 inline constexpr NamedSymbol kGetNewClassSize{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition15GetNewClassSizeERN3art13ClassAccessorE"};
 inline constexpr NamedSymbol kFindDeclaredStaticField{Library::kArt, "_ZN3art6mirror5Class23FindDeclaredStaticFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindDeclaredInstanceField{Library::kArt, "_ZN3art6mirror5Class25FindDeclaredInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
+inline constexpr NamedSymbol kFindInstanceField{Library::kArt, "_ZN3art6mirror5Class17FindInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindClassMethod{Library::kArt, "_ZN3art6mirror5Class15FindClassMethodENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEERKNS_9SignatureENS_11PointerSizeE"};
 inline constexpr NamedSymbol kHasSameNameAndSignature{Library::kArt, "_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"};
 inline constexpr NamedSymbol kSetNotIntrinsic{Library::kArt, "_ZN3art9ArtMethod15SetNotIntrinsicEv"};

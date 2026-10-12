@@ -237,6 +237,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   Batch batch;
   BatchScope scope(&batch);
+  method_retirement::TransactionScope retirement_scope;
   if (!batch.enclosing) {
     // lastRejection describes the latest standard-entry transaction only.
     std::lock_guard<std::mutex> lock(report_mutex);
@@ -302,14 +303,21 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   }
   if (incoming.descriptor != found->second.live.descriptor)
     return reinterpret_cast<Check>(original_class)(self);
-  auto decision = structural_policy::Evaluate(found->second.live, incoming,
-                                              found->second.hierarchy,
-                                              method_retirement::Available());
+  const auto& snapshot = found->second;
+  const bool owns_mapping =
+      method_retirement::VerifyTarget(self, snapshot.live, incoming.access);
+  auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
+                                              owns_mapping);
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
+  // ART's own mapping cannot commit this change; a later probe failure in
+  // this transaction must reject it before ART's no-failure point.
+  if (owns_mapping && structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy)
+                              .error != JVMTI_ERROR_NONE)
+    method_retirement::RequireMemberMapping();
   if (!decision.retired_methods.empty()) current_batch->retires_methods = true;
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
@@ -399,11 +407,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   record_method = reinterpret_cast<Record>(addresses[6]);
   using method_retirement::Hook;
   std::vector<Hook> replacements;
-  std::string retirement_failure;
-  if (!method_retirement::Prepare(&replacements, &retirement_failure)) {
-    Diagnose(retirement_failure);
-    return JVMTI_ERROR_NOT_AVAILABLE;
-  }
+  std::string retirement_note;
+  method_retirement::Prepare(&replacements, &retirement_note);
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -429,7 +434,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   diagnostic = method_retirement::Available()
       ? "ART structural transaction with Phase 3 method-retirement guards; fields cannot retire"
       : "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed";
-  if (!retirement_failure.empty()) diagnostic += "; " + retirement_failure;
+  if (!retirement_note.empty()) diagnostic += "; " + retirement_note;
   return JVMTI_ERROR_NONE;
 }
 
@@ -441,6 +446,7 @@ std::string Capabilities() {
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":false,\"fieldTypeChange\":false" +
+      ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
       ",\"checkJniRetirementGuards\":" +
           std::to_string(method_retirement::CheckJniRetirementGuardHits()) +
       ",\"memberDeletion\":false,\"memberTypeChange\":false,\"hierarchyChange\":false,"

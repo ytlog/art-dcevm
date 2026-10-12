@@ -40,6 +40,7 @@ def complete_report():
             "hierarchyChange": False, "fullDcevmComplete": False}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
+                       "capabilities": {"memberMapping": "verified: android16 class layout"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
                        "checks": [{"name": "returnCode", "expected": code, "actual": code,
                                    "passed": True},

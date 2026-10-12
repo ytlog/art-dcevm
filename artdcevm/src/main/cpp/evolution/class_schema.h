@@ -54,7 +54,9 @@ struct DexView {
 // malformed input fails with a message and leaves the output unchanged.
 bool ReadClassDeclarations(const DexView& dex, ClassSchema* output, std::string* error);
 
-// Reads field_ids[index] (name and type; no access flags) from a standard DEX
-// with any number of classes, with the same bounds checks.
+// Read field_ids[index] (name, type) or method_ids[index] (name, descriptor)
+// from a standard or compact DEX with any number of classes, with the same
+// bounds checks. The output carries no access flags.
 bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error);
+bool ReadMethodIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error);
 }  // namespace artdcevm::evolution

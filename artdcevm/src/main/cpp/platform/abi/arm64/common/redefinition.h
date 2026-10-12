@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <jni.h>
+#include "platform/abi/arm64/common/runtime_objects.h"
 
 // Fixed release arm64 declarations shared by Android 11--17, checked against
 // openjdkjvmti/ti_redefine.h and libdexfile/dex/dex_file.h of android-11.0.0_r1,
@@ -37,6 +38,23 @@ struct ClassRedefinitionPrefix {
 };
 static_assert(offsetof(ClassRedefinitionPrefix, klass) == 8 &&
               offsetof(ClassRedefinitionPrefix, dex_file) == 16);
+
+// RedefinitionDataHolder wraps one ObjectArray through its single Handle;
+// RedefinitionDataIter holds idx_ then RedefinitionDataHolder&. The DataSlot
+// numbers are identical in android-11.0.0_r1 through android-17.0.0_r1.
+struct RedefinitionDataHolderPrefix { Handle array; };
+struct RedefinitionDataIter {
+  int32_t index;
+  RedefinitionDataHolderPrefix* holder;
+  ObjectArray* Classes(bool old) const {
+    constexpr int32_t kNumSlots = 13;
+    constexpr int32_t kSlotOldClasses = 11;
+    constexpr int32_t kSlotNewClasses = 12;
+    return holder->array.Get<ObjectArray>()->Get<ObjectArray>(
+        kNumSlots * index + (old ? kSlotOldClasses : kSlotNewClasses));
+  }
+};
+static_assert(offsetof(RedefinitionDataIter, holder) == 8);
 
 // DexFile::Header::file_size_.
 inline constexpr size_t kDexHeaderFileSizeOffset = 0x20;

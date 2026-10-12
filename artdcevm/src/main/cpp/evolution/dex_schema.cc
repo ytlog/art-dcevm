@@ -32,7 +32,7 @@ class Reader {
   explicit Reader(const DexView& dex) : dex_(dex) {}
 
   ClassSchema Read() {
-    Header();
+    Header(false);
     if (classes_.count != 1) Fail("Redefinition DEX must contain exactly one class");
     const size_t def = Item(classes_, 0);
     class_type_ = U32(def);
@@ -65,22 +65,37 @@ class Reader {
   }
 
   Member FieldIdentity(uint32_t index) {
-    Header();
+    Header(true);
     const size_t item = Item(fields_, index);
     std::string type = Type(U16(item + 2));
     if (type == "V") Fail("Invalid field type");
     return {String(U32(item + 4)), std::move(type), 0};
   }
 
+  Member MethodIdentity(uint32_t index) {
+    Header(true);
+    const size_t item = Item(methods_, index);
+    std::string name = String(U32(item + 4));
+    if (name.empty()) Fail("Invalid method name");
+    return {std::move(name), Prototype(U16(item + 2)), 0};
+  }
+
  private:
   struct Table { uint32_t offset = 0, count = 0, width = 0; };
 
-  void Header() {
+  // CompactDex (libdexfile/dex/compact_dex_file.h, Android 11--15) extends the
+  // standard header and keeps the ID tables; strings and type lists live in
+  // its separate data section, which every reader here already addresses.
+  void Header(bool allow_compact) {
     if (!dex_.begin || !dex_.data || dex_.size < 0x70) Fail("Missing DEX mapping");
-    if (std::memcmp(dex_.begin, "dex\n", 4) != 0 || dex_.begin[7] != 0) Fail("Not a standard DEX");
-    const std::string_view version(reinterpret_cast<const char*>(dex_.begin + 4), 3);
-    if (version < "035" || version > "040") Fail("Unsupported DEX version");
-    if (U32(0x20) != dex_.size || U32(0x24) != 0x70 || U32(0x28) != 0x12345678)
+    const bool compact = allow_compact && std::memcmp(dex_.begin, "cdex001", 8) == 0;
+    if (!compact) {
+      if (std::memcmp(dex_.begin, "dex\n", 4) != 0 || dex_.begin[7] != 0) Fail("Not a standard DEX");
+      const std::string_view version(reinterpret_cast<const char*>(dex_.begin + 4), 3);
+      if (version < "035" || version > "040") Fail("Unsupported DEX version");
+    }
+    if (U32(0x20) != dex_.size || (compact ? U32(0x24) < 0x70 : U32(0x24) != 0x70) ||
+        U32(0x28) != 0x12345678)
       Fail("Invalid DEX size, header size or endianness");
     strings_ = Ids(0x38, 4);
     types_ = Ids(0x40, 4);
@@ -256,6 +271,17 @@ class Reader {
 bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
   try {
     *output = Reader(dex).FieldIdentity(index);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadMethodIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
+  try {
+    *output = Reader(dex).MethodIdentity(index);
     error->clear();
     return true;
   } catch (const std::runtime_error& failure) {
