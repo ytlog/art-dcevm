@@ -167,6 +167,11 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   Batch batch;
   BatchScope scope(&batch);
+  if (!batch.enclosing) {
+    // lastRejection describes the latest standard-entry transaction only.
+    std::lock_guard<std::mutex> lock(report_mutex);
+    last_rejection.clear();
+  }
   // ART retains responsibility for arguments, caller capabilities and the
   // ClassFileLoadHook. Snapshots precede its ScopedObjectAccess transition.
   if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions);

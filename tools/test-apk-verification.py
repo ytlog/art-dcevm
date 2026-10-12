@@ -22,6 +22,11 @@ spec.loader.exec_module(runner)
 
 
 def complete_report():
+    def rejection_check(code):
+        if code == 0:
+            return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
+        prefix = "Lcom/github/ytlog/artdcevm/fixture/Evolving;: "
+        return {"name": "rejectedByPolicy", "expected": prefix, "actual": prefix, "passed": True}
     return {
         "schemaVersion": 1, "completed": True, "failures": 0, "uid": 10123,
         "device": {"model": "Mock Android", "api": 36, "release": "16"},
@@ -38,7 +43,8 @@ def complete_report():
                                   *[{"name": key, "expected": value, "actual": value, "passed": True}
                                     for key, value in runner.REQUIRED_CHECKS[name].items()],
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
-                                     "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())]]}
+                                     "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
+                                  rejection_check(code)]}
                       for name, variants, code in runner.SCENARIOS],
     }
 
@@ -125,7 +131,8 @@ class ApkVerificationTests(unittest.TestCase):
                                  "incomplete", "behavior_failed", "lying_behavior", "wrong_return_code",
                                  "missing_scenario", "wrong_order", "missing_checks", "initialization_failed",
                                  "wrong_uid", "missing_capability", "boolean_return_code", "code_only",
-                                 "incomplete_scenario", "wrong_expected_behavior", "matching"]
+                                 "incomplete_scenario", "wrong_expected_behavior",
+                                 "missing_policy_rejection", "stale_policy_rejection", "matching"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             apk = directory / "fixture.apk"
@@ -166,6 +173,11 @@ class ApkVerificationTests(unittest.TestCase):
                         report["scenarios"][0]["checks"] = report["scenarios"][0]["checks"][:1]
                     elif mode == "incomplete_scenario":
                         report["scenarios"][0]["completed"] = False
+                    elif mode == "missing_policy_rejection":
+                        report["scenarios"][2]["checks"].pop()
+                    elif mode == "stale_policy_rejection":
+                        check = report["scenarios"][0]["checks"][-1]
+                        check["expected"] = check["actual"] = "Lcom/github/ytlog/artdcevm/fixture/FieldSubject;: stale"
                     elif mode == "wrong_expected_behavior":
                         check = report["scenarios"][0]["checks"][1]
                         check["expected"] = check["actual"] = 99

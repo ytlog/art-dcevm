@@ -16,7 +16,8 @@ namespace artdcevm::structural_redefine {
 // `env` is this library's own JVMTI environment. Idempotent.
 jvmtiError Install(JavaVM* vm, jvmtiEnv* env);
 
-// JSON capability report, including the last rejection reason.
+// JSON capability report. lastRejection is the validation rejection of the
+// latest outermost standard-entry transaction, empty when it was accepted.
 std::string Capabilities();
 
 }  // namespace artdcevm::structural_redefine

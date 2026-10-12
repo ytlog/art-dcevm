@@ -125,6 +125,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runScenario("atomic-modifier-public-field-delete", 64, scenario -> {
             scenario.check("modifierBefore", 42, modifier.throughPublic());
             scenario.check("passiveBefore", 42, passive.throughPublic());
+            scenario.expectRejectionBy(FieldSubject.class);
             scenario.redefine(new Class<?>[]{ModifierSubject.class, FieldSubject.class},
                     "modifier-public", "field-delete");
             scenario.check("unchangedModifierMembers", originalModifierSchema, memberSchema(ModifierSubject.class));
@@ -296,6 +297,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         final JSONObject result;
         final JSONArray checks = new JSONArray();
         final int expectedCode;
+        Class<?> rejectedClass;
         boolean passed = true;
 
         Scenario(String name, int code) throws Exception {
@@ -318,7 +320,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             int actualCode = StandardJvmtiClient.redefine(classes, dexes);
             result.put("actualCode", actualCode);
             check("returnCode", expectedCode, actualCode);
+            checkRejectionReason(classes);
             writeReport(false);
+        }
+
+        /** Names the batch member that the engine policy must reject. */
+        void expectRejectionBy(Class<?> klass) {
+            rejectedClass = klass;
+        }
+
+        // The engine resets lastRejection for each standard-entry transaction, so
+        // an expected rejection must come from its policy for the right class.
+        private void checkRejectionReason(Class<?>[] classes) throws Exception {
+            String reason = DcevmRuntime.capabilities().optString("lastRejection");
+            if (expectedCode == 0) {
+                check("lastRejection", "", reason);
+                return;
+            }
+            Class<?> rejected = rejectedClass != null ? rejectedClass : classes[0];
+            String prefix = "L" + rejected.getName().replace('.', '/') + ";: ";
+            result.put("lastRejection", reason);
+            check("rejectedByPolicy", prefix, reason.startsWith(prefix) ? prefix : reason);
         }
 
         void check(String name, Object expected, Object actual) throws Exception {

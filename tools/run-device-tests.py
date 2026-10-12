@@ -147,6 +147,17 @@ def validate_report(report):
             if (check is None or type(check["expected"]) is not type(expected)
                     or check["expected"] != expected):
                 raise RunFailure("Scenario " + name + " is missing a required behavior observation")
+        # Each transaction must report its own policy outcome, not a stale one.
+        if code == 0:
+            reason = observed.get("lastRejection")
+            if reason is None or reason["expected"] != "":
+                raise RunFailure("Scenario " + name + " does not prove an empty policy rejection")
+        else:
+            reason = observed.get("rejectedByPolicy")
+            prefix = reason and reason["expected"]
+            if (not isinstance(prefix, str) or not prefix.startswith("Lcom/github/ytlog/artdcevm/fixture/")
+                    or not prefix.endswith(";: ")):
+                raise RunFailure("Scenario " + name + " does not prove a policy rejection")
         for check_name in UNCHANGED_CHECKS.get(name, ()):
             check = observed.get(check_name)
             if check is None or not isinstance(check["expected"], str) or not check["expected"]:
