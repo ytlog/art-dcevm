@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "scope": "Direct operations and local helpers of four structural methods, JNI decode hooks, plus explicitly marked alternatives. Retained ART service internals and replaceable diagnostic/logging helpers are outside this inventory. Exact names only; no disassembly or addresses.",
+  "scope": "Direct operations and local helpers of four structural methods, JNI decode hooks, plus explicitly marked alternatives. Retained ART service internals and replaceable diagnostic/logging helpers are outside this inventory. Exact names only; no disassembly or addresses. Phase 3C adds explicitly cataloged standard entry, mapping and method-access services with fixed Android 16 declarations.",
   "sources": [
     {
       "ref": "android-11.0.0_r1",
@@ -2597,6 +2597,107 @@
         ]
       },
       "note": "Direct getter calls are inline source wrappers; GetClass/GetDexCache perform source-defined GC/read-barrier handling. Object::GetClass returns Class* in inspected source; names do not prove layout."
+    },
+    {
+      "id": "phase3c.method-access",
+      "classification": "named-plus-fixed-Android16-declarations",
+      "operations": [
+        "Phase3C.kJvmtiRedefineClasses",
+        "Phase3C.kStructurallyRedefineClasses",
+        "Phase3C.kCheckClass",
+        "Phase3C.kCheckFields",
+        "Phase3C.kCheckMethods",
+        "Phase3C.kRecordNewFieldAdded",
+        "Phase3C.kRecordNewMethodAdded",
+        "Phase3C.kAllocateNewClassObject",
+        "Phase3C.kFinishNewClassAllocations",
+        "Phase3C.kCollectAndCreateNewInstances",
+        "Phase3C.kUpdateClassStructurally",
+        "Phase3C.kArtMethodInvoke",
+        "Phase3C.kFromReflectedMethod",
+        "Phase3C.kThrowNewException",
+        "Phase3C.kThrowNewWrappedException",
+        "Phase3C.kInvokeObsoleteMethod",
+        "Phase3C.kDeliverPendingException",
+        "Phase3C.kMethodHandleInvoke",
+        "Phase3C.kMethodHandleInvokeExact",
+        "Phase3C.kInvokeWithJValuesId",
+        "Phase3C.kInvokeWithVarArgsId",
+        "Phase3C.kInvokeVirtualWithJValuesId",
+        "Phase3C.kInvokeVirtualWithVarArgsId",
+        "Phase3C.kEncodeMethodId",
+        "Phase3C.kEncodeMethodIdHandle",
+        "Phase3C.kGetCanonicalMethod",
+        "Phase3C.kClassRedefinitionGetMirrorClass",
+        "Phase3C.kInvokeReflection",
+        "Phase3C.kMethodHandleInvokeExactWithFrame",
+        "Phase3C.kEnterInterpreterFromInvoke",
+        "Phase3C.kCheckJniMethodAndSig",
+        "Phase3C.kInterpreterDoCall",
+        "Phase3C.kInterpreterDoCallRange"
+      ],
+      "declarations": {
+        "android16-release": {
+          "revision": "ed6c006bd06ae060bd9698fd2cb25c4865512ec3",
+          "files": [
+            "runtime/reflection.cc",
+            "runtime/reflection.h",
+            "runtime/reflection-inl.h",
+            "runtime/art_method.cc",
+            "runtime/art_method-inl.h",
+            "runtime/method_handles.cc",
+            "runtime/method_handles.h",
+            "runtime/entrypoints/quick/quick_throw_entrypoints.cc",
+            "runtime/interpreter/interpreter.cc",
+            "runtime/jni/jni_id_manager.cc",
+            "runtime/jni/check_jni.cc",
+            "runtime/thread.cc",
+            "runtime/reflective_value_visitor.h",
+            "openjdkjvmti/ti_redefine.cc",
+            "runtime/interpreter/interpreter_common.h",
+            "runtime/interpreter/interpreter_common.cc",
+            "openjdkjvmti/OpenjdkJvmTi.cc"
+          ],
+          "guardAnchors": {
+            "runtime/reflection.cc": [
+              "InvokeMethod:698",
+              "InvokeWithJValues/InvokeWithVarArgs ID overloads"
+            ],
+            "runtime/method_handles.cc": [
+              "MethodHandleInvoke",
+              "MethodHandleInvokeExact",
+              "MethodHandleInvokeExactWithFrame:916"
+            ],
+            "runtime/jni/check_jni.cc": [
+              "ScopedCheck::CheckMethodAndSig:407",
+              "CallMethodV:3140",
+              "CallMethodA:3323"
+            ],
+            "runtime/interpreter/interpreter_common.h": [
+              "DoCall<false/true>:117"
+            ],
+            "runtime/interpreter/interpreter_common.cc": [
+              "DoCall<false/true>:1358",
+              "DoCallCommon:1161",
+              "PerformCall"
+            ],
+            "runtime/entrypoints/quick/quick_throw_entrypoints.cc": [
+              "artInvokeObsoleteMethod",
+              "artDeliverPendingExceptionFromCode"
+            ],
+            "runtime/jni/jni_id_manager.h": [
+              "EncodeMethodId overloads:55-57"
+            ]
+          }
+        },
+        "fixedDeclarations": [
+          "platform/abi/arm64/android36/method_retirement.h"
+        ],
+        "profileSymbols": [
+          "platform/symbols/android36_method_retirement_symbols.h"
+        ]
+      },
+      "note": "The base entry and validation services retain their Phase 1-2 role across releases. New method-retirement hooks use only the exact GNU-build-ID Android 16 profile and affect new invocations of explicit retired concrete class methods. Original allocation, UpdateClassStructurally and deoptimization resume remain native. Partial exact names are research rows, not universal catalog requirements."
     }
   ],
   "commitOrder": [
@@ -4081,6 +4182,402 @@
         "Array::GetLength",
         "ArraySlice::Contains",
         "StackHandleScope NewHandle/root registration"
+      ]
+    },
+    {
+      "id": "Phase3C.kJvmtiRedefineClasses",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti14JvmtiFunctions15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kStructurallyRedefineClasses",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kCheckClass",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition10CheckClassEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kCheckFields",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition11CheckFieldsEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kCheckMethods",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition12CheckMethodsEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kRecordNewFieldAdded",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition19RecordNewFieldAddedEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kRecordNewMethodAdded",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition20RecordNewMethodAddedEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kAllocateNewClassObject",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition22AllocateNewClassObjectEN3art6HandleINS2_6mirror5ClassEEES6_NS3_INS4_8DexCacheEEEt"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kFinishNewClassAllocations",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kCollectAndCreateNewInstances",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition28CollectAndCreateNewInstancesEPNS_20RedefinitionDataIterE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kUpdateClassStructurally",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kArtMethodInvoke",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kFromReflectedMethod",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art9ArtMethod19FromReflectedMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobject"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kThrowNewException",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art6Thread17ThrowNewExceptionEPKcS2_"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kThrowNewWrappedException",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art6Thread24ThrowNewWrappedExceptionEPKcS2_"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeObsoleteMethod",
+      "library": "libart.so",
+      "names": [
+        "artInvokeObsoleteMethod"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kDeliverPendingException",
+      "library": "libart.so",
+      "names": [
+        "artDeliverPendingExceptionFromCode"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kMethodHandleInvoke",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kMethodHandleInvokeExact",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeWithJValuesId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeWithVarArgsId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeVirtualWithJValuesId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeVirtualWithVarArgsId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kEncodeMethodId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art3jni12JniIdManager14EncodeMethodIdEPNS_9ArtMethodE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kEncodeMethodIdHandle",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art3jni12JniIdManager14EncodeMethodIdENS_16ReflectiveHandleINS_9ArtMethodEEE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kGetCanonicalMethod",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kClassRedefinitionGetMirrorClass",
+      "library": "libopenjdkjvmti.so",
+      "names": [
+        "_ZN12openjdkjvmti9Redefiner17ClassRedefinition14GetMirrorClassEv"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInvokeReflection",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kMethodHandleInvokeExactWithFrame",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kEnterInterpreterFromInvoke",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art11interpreter26EnterInterpreterFromInvokeEPNS_6ThreadEPNS_9ArtMethodENS_6ObjPtrINS_6mirror6ObjectEEEPjPNS_6JValueEb"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kCheckJniMethodAndSig",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE.__uniq.99033978352804627313491551960229047428"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInterpreterDoCall",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art11interpreter6DoCallILb0EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kInterpreterDoCallRange",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art11interpreter6DoCallILb1EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
       ]
     }
   ]

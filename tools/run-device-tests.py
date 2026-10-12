@@ -23,7 +23,8 @@ REPORT_PATH = "files/structural-redefine.json"
 SCENARIOS = (
     ("body", ["body"], 0),
     ("add", ["add"], 0),
-    ("method-delete", ["method-delete"], 67),
+    ("method-delete", ["method-delete"], 0),
+    ("method-restore", ["add"], 0),
     ("hierarchy", ["hierarchy"], 66),
     ("atomic-modifier-public-field-delete", ["modifier-public", "field-delete"], 64),
     ("modifier-public", ["modifier-public"], 0),
@@ -33,6 +34,14 @@ SCENARIOS = (
     ("field-delete", ["field-delete"], 64),
     ("field-types", ["field-types"], 64),
     ("class-final", ["class-final"], 70),
+    ("atomic-method-retire-field-types", ["methods-delete", "field-types"], 64),
+    ("native-method-delete", ["methods-native-delete"], 67),
+    ("constructor-delete", ["methods-constructor-delete"], 67),
+    ("abstract-method-delete", ["methods-abstract-delete"], 67),
+    ("methods-retire", ["methods-delete"], 0),
+    ("methods-restore", ["methods-original"], 0),
+    ("methods-retire-again", ["methods-delete"], 0),
+    ("methods-restore-again", ["methods-original"], 0),
 )
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -44,10 +53,57 @@ MODIFIER_CHECKS = {"valueFlags": 1, "packageValueFlags": 1, "computePublic": Tru
                   "passiveThroughPublic": 43, "packageCompute": 13,
                   "passiveSuperclass": "com.github.ytlog.artdcevm.fixture.ModifierSubject",
                   "newPassiveThroughPublic": 43}
+METHOD_BASELINE_CHECKS = {"staticBefore": 82, "directBefore": 61, "virtualBefore": 63,
+                          "signatureBefore": 64, "parentBefore": 64, "interfaceBefore": 65,
+                          **{kind + "Before" + str(index): value
+                             for kind in ("reflection", "handle", "handleExact", "handleInvoke",
+                                          "jni", "jniA", "jniV", "reflectedJni", "reflectedJniA",
+                                          "reflectedJniV")
+                             for index, value in enumerate((61, 82, 63, 64))}}
+METHOD_FIELD_CHECKS = {"oldValue": 60, "oldKeep": 70, "staticKeep": 80,
+                       "instanceReferencePreserved": True, "staticReferencePreserved": True,
+                       "stableOldCall": 66, "newConstructorValue": 20}
+METHOD_CACHED_RETIRED_CHECKS = {kind + str(index): (
+                                  "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"
+                                  if kind == "cachedReflection" else "java.lang.NoSuchMethodError")
+                              for kind in ("cachedReflection", "cachedHandle", "cachedHandleExact",
+                                           "cachedHandleInvoke", "cachedJni", "cachedJniA", "cachedJniV",
+                                           "reflectedJni", "reflectedJniA", "reflectedJniV")
+                              for index in range(4)}
+METHOD_RETIRE_CHECKS = {
+    **METHOD_BASELINE_CHECKS, **METHOD_FIELD_CHECKS, **METHOD_CACHED_RETIRED_CHECKS,
+    **{name: "java.lang.NoSuchMethodError"
+       for name in ("cachedDirectCall", "cachedStaticCall", "cachedVirtualCall", "cachedSignatureCall")},
+    **{"removedLookup" + str(index): "java.lang.NoSuchMethodException" for index in range(4)},
+    **{"freshJniLookup" + str(index): "java.lang.NoSuchMethodError" for index in range(4)},
+    "inheritedVirtualDispatch": 71, "inheritedInterfaceDispatch": 81,
+    "newInheritedVirtualDispatch": 71, "newInheritedInterfaceDispatch": 81,
+    "newSignatureReturnType": "long", "newSignatureOldInstance": 164,
+    "newSignatureNewInstance": 124,
+    "activeMethodEntered": True, "activeMethodCompleted": True, "activeMethodError": "",
+    "activeMethodOldBody": 69, "removedActiveMethodLookup": "java.lang.NoSuchMethodException",
+    "cachedReflectionAfterGc": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+    "cachedHandleAfterGc": "java.lang.NoSuchMethodError", "cachedJniAfterGc": "java.lang.NoSuchMethodError",
+    "threadSingleStepEnable": 0, "threadSingleStepDisable": 0, "threadSingleStepCallbacksObserved": True,
+    **{name: "java.lang.NoSuchMethodError" for name in (
+        "threadInterpreterDirect", "threadInterpreterStatic", "threadInterpreterVirtual",
+        "threadInterpreterHandleExact", "threadInterpreterHandleInvoke", "threadInterpreterJni",
+        "threadInterpreterReflectedJni")},
+    "threadInterpreterReflection": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+}
+METHOD_RESTORE_CHECKS = {
+    **METHOD_FIELD_CHECKS, **METHOD_CACHED_RETIRED_CHECKS,
+    "restoredStaticCall": 82, "restoredDirectCall": 61, "restoredVirtualCall": 63, "restoredSignatureCall": 64,
+    "restoredParentCall": 64, "restoredInterfaceCall": 65, "freshReflection": 63,
+    "removedReplacementSignature": "java.lang.NoSuchMethodException",
+}
 REQUIRED_CHECKS = {
     "body": {"computeBefore": 11, "oldCompute": 12, "newCompute": 12},
     "add": EVOLVING_CHECKS,
-    "method-delete": EVOLVING_CHECKS,
+    "method-delete": {"oldCompute": 14, "newCompute": 14, "oldValue": 10,
+                       "staticCounter": 7, "removedLookup": "java.lang.NoSuchMethodException",
+                       "cachedMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "method-restore": EVOLVING_CHECKS,
     "hierarchy": {**EVOLVING_CHECKS, "superclass": "java.lang.Object", "interfaceCount": 0},
     "atomic-modifier-public-field-delete": {
         **FIELD_CHECKS, "modifierBefore": 42, "passiveBefore": 42,
@@ -66,14 +122,30 @@ REQUIRED_CHECKS = {
     "field-delete": FIELD_CHECKS,
     "field-types": FIELD_CHECKS,
     "class-final": {"classFlags": 1, "oldValue": 29, "newValue": 29},
+    "atomic-method-retire-field-types": {
+        **METHOD_BASELINE_CHECKS, **FIELD_CHECKS,
+        "unchangedStaticCall": 82, "unchangedVirtualCall": 63, "unchangedSignatureCall": 64},
+    "native-method-delete": {**METHOD_FIELD_CHECKS, "nativeStillDeclared": True,
+                              "unchangedDirectCall": 61, "unchangedVirtualCall": 63},
+    "constructor-delete": {**METHOD_FIELD_CHECKS, "constructorStillDeclared": True,
+                            "unchangedDirectCall": 61},
+    "abstract-method-delete": {"abstractStillDeclared": True, "oldConcreteValue": 17,
+                                "oldAbstractValue": 19, "newConcreteValue": 17, "staticMarker": 17},
+    "methods-retire": METHOD_RETIRE_CHECKS,
+    "methods-restore": METHOD_RESTORE_CHECKS,
+    "methods-retire-again": METHOD_RETIRE_CHECKS,
+    "methods-restore-again": METHOD_RESTORE_CHECKS,
 }
 UNCHANGED_CHECKS = {
-    "method-delete": ("unchangedMembers",),
     "hierarchy": ("unchangedMembers",),
     "atomic-modifier-public-field-delete": ("unchangedModifierMembers", "unchangedMembers", "unchangedValues"),
     "field-delete": ("unchangedMembers", "unchangedValues"),
     "field-types": ("unchangedMembers", "unchangedValues"),
     "class-final": ("unchangedMembers",),
+    "atomic-method-retire-field-types": ("unchangedMethodMembers", "unchangedMembers", "unchangedValues"),
+    "native-method-delete": ("unchangedMembers",),
+    "constructor-delete": ("unchangedMembers",),
+    "abstract-method-delete": ("unchangedMembers",),
 }
 
 
@@ -107,12 +179,14 @@ def validate_report(report):
     capabilities = initialization.get("capabilities")
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
-    for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange"):
+    for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
+                 "methodDeletion", "methodSignatureChange"):
         if capabilities.get(name) is not True:
-            raise RunFailure("The initialization report is missing a required MVP capability")
-    for name in ("memberDeletion", "memberTypeChange", "hierarchyChange", "fullDcevmComplete"):
+            raise RunFailure("The initialization report is missing a required capability")
+    for name in ("memberDeletion", "memberTypeChange", "fieldDeletion", "fieldTypeChange",
+                 "hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
-            raise RunFailure("The engine capabilities do not describe the requested MVP")
+            raise RunFailure("The engine capabilities do not describe the requested method-only scope")
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(SCENARIOS):
         raise RunFailure("The device report does not contain the complete scenario sequence")
@@ -147,6 +221,10 @@ def validate_report(report):
             if (check is None or type(check["expected"]) is not type(expected)
                     or check["expected"] != expected):
                 raise RunFailure("Scenario " + name + " is missing a required behavior observation")
+        if name in ("methods-retire", "methods-retire-again"):
+            callbacks = scenario.get("threadSingleStepCallbacks")
+            if type(callbacks) is not int or callbacks <= 0:
+                raise RunFailure("Scenario " + name + " does not prove current-thread single-step callbacks")
         # Each transaction must report its own policy outcome, not a stale one.
         if code == 0:
             reason = observed.get("lastRejection")

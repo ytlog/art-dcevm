@@ -3,8 +3,8 @@
 
 // Named ART structural-redefinition decision points and services. The mangled
 // names are identical in every collected Android 11--17 arm64 runtime.
-// The public-table wrapper and CopyFields candidate live in .gnu_debugdata;
-// the remaining entries are required in .dynsym.
+// 55 entries require .dynsym; 10 allow any named table, including the public
+// wrapper, CopyFields candidate and method-access guards. Each declares its scope.
 // This catalog proves exact-name presence, not source ABI or Phase 3/4 behavior.
 // tools/check-structural-symbols.py re-verifies this catalog
 // against assets/runtime_lib. Keep one declaration per line in this exact form,
@@ -81,5 +81,24 @@ inline constexpr NamedSymbol kObjectLockClassDestructor{Library::kArt, "_ZN3art1
 inline constexpr NamedSymbol kCopyFields{Library::kJvmti, "_ZN12openjdkjvmtiL10CopyFieldsEbN3art6ObjPtrINS0_6mirror6ObjectEEENS1_INS2_5ClassEEES4_S6_", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRedefinerRecordFailure{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner13RecordFailureE10jvmtiErrorRKNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEESA_"};
 inline constexpr NamedSymbol kAssertPendingOOMException{Library::kArt, "_ZNK3art6Thread25AssertPendingOOMExceptionEv"};
+
+// Method-retirement guards. These are exact names present in all 27 samples;
+// several inline/template entry helpers require the named local table.
+inline constexpr NamedSymbol kArtMethodInvoke{Library::kArt, "_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc"};
+inline constexpr NamedSymbol kFromReflectedMethod{Library::kArt, "_ZN3art9ArtMethod19FromReflectedMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobject"};
+inline constexpr NamedSymbol kThrowNewException{Library::kArt, "_ZN3art6Thread17ThrowNewExceptionEPKcS2_"};
+inline constexpr NamedSymbol kThrowNewWrappedException{Library::kArt, "_ZN3art6Thread24ThrowNewWrappedExceptionEPKcS2_"};
+inline constexpr NamedSymbol kInvokeObsoleteMethod{Library::kArt, "artInvokeObsoleteMethod", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDeliverPendingException{Library::kArt, "artDeliverPendingExceptionFromCode", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMethodHandleInvoke{Library::kArt, "_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMethodHandleInvokeExact{Library::kArt, "_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kInvokeWithJValuesId{Library::kArt, "_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kInvokeWithVarArgsId{Library::kArt, "_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kInvokeVirtualWithJValuesId{Library::kArt, "_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kInvokeVirtualWithVarArgsId{Library::kArt, "_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kEncodeMethodId{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdEPNS_9ArtMethodE"};
+inline constexpr NamedSymbol kEncodeMethodIdHandle{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdENS_16ReflectiveHandleINS_9ArtMethodEEE"};
+inline constexpr NamedSymbol kGetCanonicalMethod{Library::kArt, "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE"};
+inline constexpr NamedSymbol kClassRedefinitionGetMirrorClass{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition14GetMirrorClassEv"};
 
 }  // namespace artdcevm::symbols::structural

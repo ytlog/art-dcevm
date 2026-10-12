@@ -34,10 +34,13 @@ def complete_report():
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True,
+            "methodDeletion": True, "methodSignatureChange": True,
+            "fieldDeletion": False, "fieldTypeChange": False,
             "memberDeletion": False, "memberTypeChange": False,
             "hierarchyChange": False, "fullDcevmComplete": False}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
+                       "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
                        "checks": [{"name": "returnCode", "expected": code, "actual": code,
                                    "passed": True},
                                   *[{"name": key, "expected": value, "actual": value, "passed": True}
@@ -132,7 +135,10 @@ class ApkVerificationTests(unittest.TestCase):
                                  "missing_scenario", "wrong_order", "missing_checks", "initialization_failed",
                                  "wrong_uid", "missing_capability", "boolean_return_code", "code_only",
                                  "incomplete_scenario", "wrong_expected_behavior",
-                                 "missing_policy_rejection", "stale_policy_rejection", "matching"]
+                                 "missing_policy_rejection", "stale_policy_rejection",
+                                 "missing_cached_jni", "wrong_reflection_exception",
+                                 "field_deletion_claimed", "missing_method_capability",
+                                 "missing_single_step_count", "single_step_no_callbacks", "matching"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             apk = directory / "fixture.apk"
@@ -154,7 +160,7 @@ class ApkVerificationTests(unittest.TestCase):
                     elif mode == "lying_behavior":
                         report["scenarios"][1]["checks"][1]["actual"] = False
                     elif mode == "wrong_return_code":
-                        report["scenarios"][2]["actualCode"] = 0
+                        report["scenarios"][2]["actualCode"] = 67
                     elif mode == "missing_scenario":
                         report["scenarios"].pop()
                     elif mode == "wrong_order":
@@ -167,6 +173,27 @@ class ApkVerificationTests(unittest.TestCase):
                         report["uid"] = 2000
                     elif mode == "missing_capability":
                         del report["initialization"]["capabilities"]["standardRedefineRouted"]
+                    elif mode == "missing_method_capability":
+                        del report["initialization"]["capabilities"]["methodDeletion"]
+                    elif mode == "field_deletion_claimed":
+                        report["initialization"]["capabilities"]["fieldDeletion"] = True
+                    elif mode in ("missing_cached_jni", "wrong_reflection_exception"):
+                        scenario = next(item for item in report["scenarios"]
+                                        if item["name"] == "methods-retire")
+                        if mode == "missing_cached_jni":
+                            scenario["checks"] = [item for item in scenario["checks"]
+                                                  if not item["name"].startswith("cachedJni")]
+                        else:
+                            check = next(item for item in scenario["checks"]
+                                         if item["name"] == "cachedReflection0")
+                            check["expected"] = check["actual"] = "java.lang.NoSuchMethodError"
+                    elif mode in ("missing_single_step_count", "single_step_no_callbacks"):
+                        scenario = next(item for item in report["scenarios"]
+                                        if item["name"] == "methods-retire")
+                        if mode == "missing_single_step_count":
+                            del scenario["threadSingleStepCallbacks"]
+                        else:
+                            scenario["threadSingleStepCallbacks"] = 0
                     elif mode == "boolean_return_code":
                         report["scenarios"][0]["actualCode"] = False
                     elif mode == "code_only":
@@ -200,7 +227,7 @@ class ApkVerificationTests(unittest.TestCase):
                     if positive:
                         self.assertEqual(metadata["installedApkSha256"], digest)
                         self.assertEqual(metadata["apkSha256"], digest)
-                        self.assertEqual(metadata["scenarioCount"], 12)
+                        self.assertEqual(metadata["scenarioCount"], len(runner.SCENARIOS))
                         self.assertTrue(any(runner.COMPONENT in call for call in calls))
                         self.assertTrue(any(call[-1] == runner.REPORT_PATH and "cat" in call for call in calls))
                     if mode in guarded_modes[:9]:

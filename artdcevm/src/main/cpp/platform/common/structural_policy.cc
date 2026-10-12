@@ -36,7 +36,7 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const SubclassMethods& subclass_methods) {
+                  const SubclassMethods& subclass_methods, bool method_retirement_enabled) {
   if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "superclass or interfaces changed");
@@ -69,9 +69,15 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& m : incoming.methods) new_methods[{m.name, m.descriptor}] = MethodModifiers(m.access);
   for (const auto& old : live.methods) {
     auto it = new_methods.find({old.name, old.descriptor});
-    if (it == new_methods.end())
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-                    "method removed or its signature changed: " + Describe(old));
+    if (it == new_methods.end()) {
+      if (!method_retirement_enabled || (live.access & acc::kAccInterface) ||
+          (old.access & (acc::kAccNative | acc::kAccAbstract)) ||
+          old.name == "<init>" || old.name == "<clinit>")
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+                      "unsupported method retirement: " + Describe(old));
+      decision.methods_structural = true;
+      continue;
+    }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
     uint32_t unsupported = changed & ~kMethodAllowed;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and exercise Phase 2 policy and bounded InnerClass DEX decoding."""
+"""Exercise Phase 2/method-only Phase 3 policy and bounded InnerClass DEX decoding."""
 import argparse
 import os
 from pathlib import Path
@@ -82,6 +82,41 @@ int main(int argc, char** argv) {
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED);
     next = live; next.methods[0].descriptor = "(I)I";
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED);
+    for (bool signature : {false, true}) {
+      next = live;
+      if (signature) next.methods[0].descriptor = "(I)I";
+      else next.methods.erase(next.methods.begin());
+      const auto retirement = policy::Evaluate(live, next, {}, true);
+      Require(retirement.error == JVMTI_ERROR_NONE && retirement.methods_structural &&
+              !retirement.fields_structural, "method-only retirement did not take structural path");
+    }
+    next = live; next.fields[0].descriptor = "J";
+    Require(policy::Evaluate(live, next, {}, true).error ==
+            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+            "method retirement incorrectly enabled field type change");
+    next = live; next.methods.erase(next.methods.begin() + 1);
+    Require(policy::Evaluate(live, next, {}, true).error ==
+            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+            "constructor retirement must remain rejected");
+    for (uint32_t unsupported : {acc::kAccNative, acc::kAccAbstract}) {
+      auto restricted = live; restricted.methods[0].access |= unsupported;
+      next = restricted; next.methods.erase(next.methods.begin());
+      Require(policy::Evaluate(restricted, next, {}, true).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+              "native or abstract method retirement must remain rejected");
+    }
+    auto interface_schema = live;
+    interface_schema.access |= acc::kAccInterface;
+    next = interface_schema; next.methods.erase(next.methods.begin());
+    Require(policy::Evaluate(interface_schema, next, {}, true).error ==
+            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+            "interface declaration retirement must remain rejected");
+    auto initializer = live;
+    initializer.methods.push_back({"<clinit>", "()V", acc::kAccStatic});
+    next = initializer; next.methods.pop_back();
+    Require(policy::Evaluate(initializer, next, {}, true).error ==
+            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+            "class initializer retirement must remain rejected");
     next = live; next.superclass = "Lfixture/Parent;";
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
     next = live; next.interfaces.push_back("Lfixture/Interface;");
@@ -139,7 +174,7 @@ int main(int argc, char** argv) {
         Reject(nested_live, schema, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
     }
-    std::cout << "Phase 2 policy and bounded InnerClass DEX decoding PASS\n";
+    std::cout << "Phase 2/method-only Phase 3 policy and bounded InnerClass DEX decoding PASS\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

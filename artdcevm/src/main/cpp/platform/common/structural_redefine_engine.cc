@@ -1,6 +1,8 @@
 #include "platform/common/structural_redefine_engine.h"
 
 #include <android/log.h>
+#include <android/api-level.h>
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
@@ -12,6 +14,7 @@
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
+#include "platform/common/method_retirement.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "support/json.h"
 
@@ -31,7 +34,7 @@ void* original_entry = nullptr;
 void* original_class = nullptr;
 void* original_fields = nullptr;
 void* original_methods = nullptr;
-std::array<void*, 4> hook_tokens{};
+std::vector<void*> hook_tokens;
 // ART takes its own redefinition lock after our Native-state snapshots.
 // Keep snapshots and the transaction together so another routed batch cannot
 // validate against an older definition while waiting for ART's lock.
@@ -58,6 +61,12 @@ struct Batch {
   Batch* enclosing = nullptr;
   std::map<jclass, Snapshot> classes;
   std::map<ClassRedefinitionPrefix*, structural_policy::Decision> decisions;
+  JNIEnv* jni = nullptr;
+  std::vector<jobject> retirement_roots;
+  bool retires_methods = false;
+  ~Batch() {
+    if (jni) for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
+  }
 };
 thread_local Batch* current_batch = nullptr;
 
@@ -152,6 +161,10 @@ jvmtiError CollectSubclassMethods(JNIEnv* jni, jclass target, const LoadedClasse
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   const jvmtiError result = structural_entry(env, count, definitions);
   if (result == JVMTI_ERROR_NONE && count > 0) {
+    if (current_batch->retires_methods) {
+      method_retirement::RetainRoots(std::move(current_batch->retirement_roots));
+      current_batch->retirement_roots.clear();
+    }
     // A nested ClassFileLoadHook transaction may change the outer batch's
     // targets after its snapshots. Let ART's original validators handle that
     // outer batch rather than accepting a decision based on stale members.
@@ -159,6 +172,7 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
       batch->classes.clear();
       batch->decisions.clear();
     }
+    method_retirement::InvalidateEnclosingBatches();
   }
   return result;
 }
@@ -167,6 +181,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   Batch batch;
   BatchScope scope(&batch);
+  method_retirement::BatchScope retirement_scope;
   if (!batch.enclosing) {
     // lastRejection describes the latest standard-entry transaction only.
     std::lock_guard<std::mutex> lock(report_mutex);
@@ -178,6 +193,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   JNIEnv* jni = nullptr;
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
+  batch.jni = jni;
   LoadedClasses loaded(snapshot_env, jni);
   jvmtiError result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   if (result != JVMTI_ERROR_NONE) {
@@ -194,6 +210,25 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     result = CollectSubclassMethods(jni, definitions[i].klass, loaded, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
+  }
+  if (method_retirement::Available()) {
+    // Build the permanent roots while Native, before ART's no-failure point.
+    // Root all affected loaded subclasses: each replacement ClassExt retains
+    // its own obsolete chain, including native ArtMethod storage and DexCache.
+    for (jint i = 0; i < loaded.count; ++i) {
+      jclass candidate = loaded.classes[i];
+      bool affected = false;
+      for (jint j = 0; j < count && !affected; ++j)
+        affected = jni->IsAssignableFrom(candidate, definitions[j].klass);
+      if (!affected) continue;
+      if (method_retirement::Rooted(jni, candidate)) continue;
+      jobject root = jni->NewGlobalRef(candidate);
+      if (!root) {
+        if (jni->ExceptionCheck()) jni->ExceptionClear();
+        return JVMTI_ERROR_OUT_OF_MEMORY;
+      }
+      batch.retirement_roots.push_back(root);
+    }
   }
   return InvokeStructural(env, count, definitions);
 }
@@ -217,12 +252,22 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   if (incoming.descriptor != found->second.live.descriptor)
     return reinterpret_cast<Check>(original_class)(self);
   auto decision = structural_policy::Evaluate(found->second.live, incoming,
-                                              found->second.subclass_methods);
+                                              found->second.subclass_methods,
+                                              method_retirement::Available());
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
+  std::vector<evolution::Member> retired;
+  for (const auto& old : found->second.live.methods) {
+    const bool retained = std::any_of(incoming.methods.begin(), incoming.methods.end(),
+        [&](const auto& method) { return method.name == old.name &&
+                                       method.descriptor == old.descriptor; });
+    if (!retained) retired.push_back(old);
+  }
+  if (!retired.empty()) current_batch->retires_methods = true;
+  method_retirement::RegisterRetirements(self, std::move(retired));
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
 }
@@ -309,14 +354,23 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   structural_entry = reinterpret_cast<Entry>(addresses[1]);
   record_field = reinterpret_cast<Record>(addresses[5]);
   record_method = reinterpret_cast<Record>(addresses[6]);
-  struct Hook { void* target; void* replacement; void** original; const char* name; };
+  using method_retirement::Hook;
+  std::vector<Hook> replacements;
+  std::string retirement_failure;
+  if (!method_retirement::Prepare(android_get_device_api_level(), &replacements,
+                                   &retirement_failure)) {
+    Diagnose(retirement_failure);
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  }
   // Route last, so a routed batch can only see a complete set of validators.
-  const Hook replacements[] = {
+  const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
       {addresses[3], reinterpret_cast<void*>(CheckFields), &original_fields, names[3].name},
       {addresses[4], reinterpret_cast<void*>(CheckMethods), &original_methods, names[4].name},
       {addresses[0], reinterpret_cast<void*>(Route), &original_entry, names[0].name}};
-  for (size_t i = 0; i < hook_tokens.size(); ++i) {
+  replacements.insert(replacements.end(), std::begin(validators), std::end(validators));
+  hook_tokens.resize(replacements.size(), nullptr);
+  for (size_t i = 0; i < replacements.size(); ++i) {
     const Hook& hook = replacements[i];
     hook_tokens[i] = shadowhook_hook_sym_addr(hook.target, hook.replacement, hook.original);
     if (!hook_tokens[i]) {
@@ -330,15 +384,23 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   }
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
-  diagnostic = "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed";
+  diagnostic = method_retirement::Available()
+      ? "ART structural transaction with Phase 3 method-retirement guards; fields cannot retire"
+      : "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed";
+  if (!retirement_failure.empty()) diagnostic += "; " + retirement_failure;
   return JVMTI_ERROR_NONE;
 }
 
 std::string Capabilities() {
   std::lock_guard<std::mutex> lock(report_mutex);
   const std::string supported = installed ? "true" : "false";
+  const std::string retirement = installed && method_retirement::Available() ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
+      ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
+      ",\"fieldDeletion\":false,\"fieldTypeChange\":false" +
+      ",\"checkJniRetirementGuards\":" +
+          std::to_string(method_retirement::CheckJniRetirementGuardHits()) +
       ",\"memberDeletion\":false,\"memberTypeChange\":false,\"hierarchyChange\":false,"
       "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +
       ",\"lastRejection\":" + QuoteJsonMutf8(last_rejection) + "}";

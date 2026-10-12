@@ -14,6 +14,10 @@ import com.github.ytlog.artdcevm.fixture.FieldSubject;
 import com.github.ytlog.artdcevm.fixture.FinalFieldSubject;
 import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
+import com.github.ytlog.artdcevm.fixture.MethodCaller;
+import com.github.ytlog.artdcevm.fixture.MethodSubject;
+import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
+import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,12 +30,17 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
-/** Runs Phase 1/2 conformance through a separate agent's standard JVMTI entry point. */
+/** Runs conformance through a separate agent's standard JVMTI entry point. */
 public final class StructuralRedefineInstrumentation extends Instrumentation {
     private static final String REPORT_FILE = "structural-redefine.json";
     private final JSONObject report = new JSONObject();
@@ -50,6 +59,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         try {
             report.put("schemaVersion", 1);
             report.put("uid", Process.myUid());
+            report.put("pid", Process.myPid());
             report.put("device", new JSONObject().put("model", Build.MODEL)
                     .put("api", Build.VERSION.SDK_INT).put("release", Build.VERSION.RELEASE));
             report.put("scenarios", scenarios);
@@ -101,9 +111,20 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             checkAddedDefinition(scenario, evolving);
         });
         String addedSchema = memberSchema(Evolving.class);
-        runScenario("method-delete", 67, scenario -> {
+        Method deletedAdded = Evolving.class.getDeclaredMethod("addedMethod");
+        runScenario("method-delete", 0, scenario -> {
             scenario.redefine(new Class<?>[]{Evolving.class}, "method-delete");
-            scenario.check("unchangedMembers", addedSchema, memberSchema(Evolving.class));
+            scenario.check("oldCompute", 14, evolving.compute());
+            scenario.check("newCompute", 14, new Evolving(10).compute());
+            scenario.check("oldValue", 10, evolving.value);
+            scenario.check("staticCounter", 7, Evolving.counter);
+            scenario.expectError("removedLookup", NoSuchMethodException.class,
+                    () -> Evolving.class.getDeclaredMethod("addedMethod"));
+            scenario.expectReflectionError("cachedMethod",
+                    () -> deletedAdded.invoke(evolving));
+        });
+        runScenario("method-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{Evolving.class}, "add");
             checkAddedDefinition(scenario, evolving);
         });
         runScenario("hierarchy", 66, scenario -> {
@@ -202,6 +223,309 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("oldValue", 29, classFinal.value());
             scenario.check("newValue", 29, new ClassFinalSubject().value());
         });
+        runMethodScenarios(fields, originalFieldSchema, originalFieldValues,
+                originalObject, originalStaticObject);
+    }
+
+    private void runMethodScenarios(FieldSubject fields, String fieldSchema, String values,
+            Object object, Object staticObject) throws Exception {
+        MethodSubject subject = new MethodSubject();
+        subject.value = 60;
+        subject.keep = 70;
+        MethodSubject.staticKeep = 80;
+        Object reference = subject.object;
+        Object staticReference = MethodSubject.staticObject;
+        MethodTargets targets = new MethodTargets();
+        String schema = memberSchema(MethodSubject.class);
+        runScenario("atomic-method-retire-field-types", 64, scenario -> {
+            checkMethodBaseline(scenario, subject, targets);
+            scenario.expectRejectionBy(FieldSubject.class);
+            scenario.redefine(new Class<?>[]{MethodSubject.class, FieldSubject.class},
+                    "methods-delete", "field-types");
+            scenario.check("unchangedMethodMembers", schema, memberSchema(MethodSubject.class));
+            scenario.check("unchangedStaticCall", 82, MethodCaller.callStatic());
+            scenario.check("unchangedVirtualCall", 63, MethodCaller.callVirtual(subject));
+            scenario.check("unchangedSignatureCall", 64, MethodCaller.callSignature(subject));
+            checkFieldDefinition(scenario, fields, fieldSchema, values, object, staticObject);
+        });
+        runScenario("native-method-delete", 67, scenario -> {
+            scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-native-delete");
+            scenario.check("unchangedMembers", schema, memberSchema(MethodSubject.class));
+            scenario.check("nativeStillDeclared", true,
+                    Modifier.isNative(MethodSubject.class.getDeclaredMethod("nativeValue").getModifiers()));
+            scenario.check("unchangedDirectCall", 61, subject.throughDirect());
+            scenario.check("unchangedVirtualCall", 63, MethodCaller.callVirtual(subject));
+            checkMethodFields(scenario, subject, reference, staticReference);
+        });
+        runScenario("constructor-delete", 67, scenario -> {
+            scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-constructor-delete");
+            scenario.check("unchangedMembers", schema, memberSchema(MethodSubject.class));
+            scenario.check("constructorStillDeclared", true,
+                    MethodSubject.class.getDeclaredConstructor() != null);
+            scenario.check("unchangedDirectCall", 61, subject.throughDirect());
+            checkMethodFields(scenario, subject, reference, staticReference);
+        });
+        AbstractMethodChild abstractChild = new AbstractMethodChild();
+        String abstractSchema = memberSchema(AbstractMethodSubject.class);
+        runScenario("abstract-method-delete", 67, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractMethodSubject.class}, "methods-abstract-delete");
+            scenario.check("unchangedMembers", abstractSchema, memberSchema(AbstractMethodSubject.class));
+            scenario.check("abstractStillDeclared", true, Modifier.isAbstract(
+                    AbstractMethodSubject.class.getDeclaredMethod("abstractValue").getModifiers()));
+            scenario.check("oldConcreteValue", 17, abstractChild.concreteValue());
+            scenario.check("oldAbstractValue", 19, abstractChild.abstractValue());
+            scenario.check("newConcreteValue", 17, new AbstractMethodChild().concreteValue());
+            scenario.check("staticMarker", 17, AbstractMethodSubject.marker);
+        });
+        for (int cycle = 0; cycle < 2; cycle++) {
+            final MethodTargets cached = cycle == 0 ? targets : new MethodTargets();
+            String suffix = cycle == 0 ? "" : "-again";
+            runScenario("methods-retire" + suffix, 0, scenario -> {
+                checkMethodBaseline(scenario, subject, cached);
+                ActiveMethod active = new ActiveMethod(subject);
+                try {
+                    scenario.check("activeMethodEntered", true, active.start());
+                    scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-delete");
+                    System.gc();
+                    active.finish();
+                    scenario.check("activeMethodCompleted", true, !active.thread.isAlive());
+                    scenario.check("activeMethodError", "", active.error);
+                    scenario.check("activeMethodOldBody", 69, active.value);
+                } finally {
+                    active.finish();
+                }
+                scenario.expectError("removedActiveMethodLookup", NoSuchMethodException.class,
+                        () -> MethodSubject.class.getDeclaredMethod("waitThenRetire",
+                                CountDownLatch.class, CountDownLatch.class));
+                scenario.expectError("cachedDirectCall", NoSuchMethodError.class, subject::throughDirect);
+                scenario.expectError("cachedStaticCall", NoSuchMethodError.class, MethodCaller::callStatic);
+                scenario.expectError("cachedVirtualCall", NoSuchMethodError.class,
+                        () -> MethodCaller.callVirtual(subject));
+                scenario.expectError("cachedSignatureCall", NoSuchMethodError.class,
+                        () -> MethodCaller.callSignature(subject));
+                cached.checkRetired(scenario, subject, true);
+                System.gc();
+                scenario.expectReflectionError("cachedReflectionAfterGc",
+                        () -> cached.methods[2].invoke(subject));
+                scenario.expectError("cachedHandleAfterGc", NoSuchMethodError.class,
+                        () -> cached.invokeHandle(2, subject));
+                scenario.expectError("cachedJniAfterGc", NoSuchMethodError.class,
+                        () -> StandardJvmtiClient.callCachedMethod(subject, 2));
+                scenario.check("inheritedVirtualDispatch", 71, MethodCaller.callParent(subject));
+                scenario.check("inheritedInterfaceDispatch", 81, MethodCaller.callInterface(subject));
+                scenario.check("newInheritedVirtualDispatch", 71, MethodCaller.callParent(new MethodSubject()));
+                scenario.check("newInheritedInterfaceDispatch", 81, MethodCaller.callInterface(new MethodSubject()));
+                Method changed = MethodSubject.class.getDeclaredMethod("signatureValue", long.class);
+                scenario.check("newSignatureReturnType", "long", changed.getReturnType().getName());
+                scenario.check("newSignatureOldInstance", 164L, changed.invoke(subject, 4L));
+                scenario.check("newSignatureNewInstance", 124L, changed.invoke(new MethodSubject(), 4L));
+                checkMethodFields(scenario, subject, reference, staticReference);
+                checkRetiredInThreadInterpreter(scenario, subject, cached);
+            });
+            runScenario("methods-restore" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-original");
+                scenario.check("restoredStaticCall", 82, MethodCaller.callStatic());
+                scenario.check("restoredDirectCall", 61, subject.throughDirect());
+                scenario.check("restoredVirtualCall", 63, MethodCaller.callVirtual(subject));
+                scenario.check("restoredSignatureCall", 64, MethodCaller.callSignature(subject));
+                scenario.check("restoredParentCall", 64, MethodCaller.callParent(subject));
+                scenario.check("restoredInterfaceCall", 65, MethodCaller.callInterface(subject));
+                scenario.check("freshReflection", 63,
+                        MethodSubject.class.getDeclaredMethod("virtualValue").invoke(subject));
+                scenario.expectError("removedReplacementSignature", NoSuchMethodException.class,
+                        () -> MethodSubject.class.getDeclaredMethod("signatureValue", long.class));
+                cached.checkRetired(scenario, subject, false);
+                checkMethodFields(scenario, subject, reference, staticReference);
+            });
+        }
+    }
+
+    private void checkRetiredInThreadInterpreter(Scenario scenario, MethodSubject subject,
+            MethodTargets cached) throws Exception {
+        long before = StandardJvmtiClient.singleStepCount();
+        int enabled = StandardJvmtiClient.setThreadSingleStep(true);
+        try {
+            scenario.check("threadSingleStepEnable", 0, enabled);
+            scenario.expectError("threadInterpreterDirect", NoSuchMethodError.class, subject::throughDirect);
+            scenario.expectError("threadInterpreterStatic", NoSuchMethodError.class, MethodCaller::callStatic);
+            scenario.expectError("threadInterpreterVirtual", NoSuchMethodError.class,
+                    () -> MethodCaller.callVirtual(subject));
+            scenario.expectError("threadInterpreterHandleExact", NoSuchMethodError.class,
+                    () -> cached.invokeHandle(2, subject, 1));
+            scenario.expectError("threadInterpreterHandleInvoke", NoSuchMethodError.class,
+                    () -> cached.invokeHandle(0, subject, 2));
+            scenario.expectError("threadInterpreterJni", NoSuchMethodError.class,
+                    () -> StandardJvmtiClient.callCachedMethod(subject, 0));
+            scenario.expectError("threadInterpreterReflectedJni", NoSuchMethodError.class,
+                    () -> StandardJvmtiClient.callReflectedMethod(cached.methods[2], subject, 2));
+            scenario.expectReflectionError("threadInterpreterReflection",
+                    () -> cached.methods[2].invoke(subject));
+        } finally {
+            scenario.check("threadSingleStepDisable", 0, StandardJvmtiClient.setThreadSingleStep(false));
+        }
+        long callbacks = StandardJvmtiClient.singleStepCount() - before;
+        scenario.result.put("threadSingleStepCallbacks", callbacks);
+        scenario.check("threadSingleStepCallbacksObserved", true, callbacks > 0);
+    }
+
+    private static final class ActiveMethod {
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final Thread thread;
+        volatile int value;
+        volatile String error = "";
+
+        ActiveMethod(MethodSubject subject) {
+            thread = new Thread(() -> {
+                try {
+                    value = subject.waitThenRetire(entered, release);
+                } catch (Throwable failure) {
+                    error = failure.getClass().getName();
+                }
+            }, "retired-method-frame");
+        }
+
+        boolean start() throws InterruptedException {
+            thread.start();
+            return entered.await(10, TimeUnit.SECONDS);
+        }
+
+        void finish() throws InterruptedException {
+            release.countDown();
+            thread.join(10000);
+        }
+    }
+
+    private void checkMethodBaseline(Scenario scenario, MethodSubject subject,
+            MethodTargets targets) throws Exception {
+        // Warm caller resolutions and JIT code before each retirement.
+        for (int count = 0; count < 12000; count++) {
+            MethodCaller.callStatic();
+            MethodCaller.callVirtual(subject);
+            MethodCaller.callSignature(subject);
+            MethodCaller.callParent(subject);
+            MethodCaller.callInterface(subject);
+            subject.throughDirect();
+        }
+        scenario.check("staticBefore", 82, MethodCaller.callStatic());
+        scenario.check("directBefore", 61, subject.throughDirect());
+        scenario.check("virtualBefore", 63, MethodCaller.callVirtual(subject));
+        scenario.check("signatureBefore", 64, MethodCaller.callSignature(subject));
+        scenario.check("parentBefore", 64, MethodCaller.callParent(subject));
+        scenario.check("interfaceBefore", 65, MethodCaller.callInterface(subject));
+        int[] expected = {61, 82, 63, 64};
+        for (int index = 0; index < targets.methods.length; index++) {
+            final int method = index;
+            scenario.check("reflectionBefore" + index, expected[index],
+                    targets.methods[index].invoke(index == 1 ? null : subject,
+                            index == 3 ? new Object[]{4} : new Object[0]));
+            scenario.check("handleBefore" + index, expected[index],
+                    targets.invokeHandle(index, subject));
+            scenario.check("handleExactBefore" + index, expected[index],
+                    targets.invokeHandle(index, subject, 1));
+            scenario.check("handleInvokeBefore" + index, expected[index],
+                    targets.invokeHandle(index, subject, 2));
+            scenario.check("jniBefore" + index, expected[index],
+                    StandardJvmtiClient.callCachedMethod(subject, method));
+            scenario.check("reflectedJniBefore" + index, expected[index],
+                    StandardJvmtiClient.callReflectedMethod(targets.methods[index], subject, method));
+            for (int form = 1; form <= 2; form++) {
+                String suffix = form == 1 ? "A" : "V";
+                scenario.check("jni" + suffix + "Before" + index, expected[index],
+                        StandardJvmtiClient.callCachedMethodVariant(subject, method, form));
+                scenario.check("reflectedJni" + suffix + "Before" + index, expected[index],
+                        StandardJvmtiClient.callReflectedMethodVariant(
+                                targets.methods[index], subject, method, form));
+            }
+        }
+    }
+
+    private void checkMethodFields(Scenario scenario, MethodSubject subject,
+            Object object, Object staticObject) throws Exception {
+        scenario.check("oldValue", 60, subject.value);
+        scenario.check("oldKeep", 70L, subject.keep);
+        scenario.check("staticKeep", 80, MethodSubject.staticKeep);
+        scenario.check("instanceReferencePreserved", true, subject.object == object);
+        scenario.check("staticReferencePreserved", true, MethodSubject.staticObject == staticObject);
+        scenario.check("stableOldCall", 66, subject.stableValue());
+        scenario.check("newConstructorValue", 20, new MethodSubject().value);
+    }
+
+    private static final class MethodTargets {
+        final String[] names = {"directValue", "staticValue", "virtualValue", "signatureValue"};
+        final Method[] methods = new Method[4];
+        final MethodHandle[] handles = new MethodHandle[4];
+
+        MethodTargets() throws Exception {
+            for (int index = 0; index < names.length; index++) {
+                methods[index] = MethodSubject.class.getDeclaredMethod(names[index],
+                        index == 3 ? new Class<?>[]{int.class} : new Class<?>[0]);
+                methods[index].setAccessible(true);
+                handles[index] = MethodHandles.lookup().unreflect(methods[index]);
+            }
+            StandardJvmtiClient.cacheMethodIds(MethodSubject.class);
+        }
+
+        Object invokeHandle(int index, MethodSubject subject) throws Exception {
+            return invokeHandle(index, subject, 0);
+        }
+
+        Object invokeHandle(int index, MethodSubject subject, int form) throws Exception {
+            try {
+                if (form == 1) {
+                    if (index == 1) return (int) handles[index].invokeExact();
+                    if (index == 3) return (int) handles[index].invokeExact(subject, 4);
+                    return (int) handles[index].invokeExact(subject);
+                }
+                if (form == 2) {
+                    if (index == 1) return (int) handles[index].invoke();
+                    if (index == 3) return (int) handles[index].invoke(subject, 4);
+                    return (int) handles[index].invoke(subject);
+                }
+                if (index == 1) return handles[index].invokeWithArguments();
+                if (index == 3) return handles[index].invokeWithArguments(subject, 4);
+                return handles[index].invokeWithArguments(subject);
+            } catch (Throwable error) {
+                if (error instanceof Exception) throw (Exception) error;
+                if (error instanceof Error) throw (Error) error;
+                throw new RuntimeException(error);
+            }
+        }
+
+        void checkRetired(Scenario scenario, MethodSubject subject, boolean checkLookup) throws Exception {
+            for (int index = 0; index < methods.length; index++) {
+                final int method = index;
+                if (checkLookup) {
+                    scenario.expectError("removedLookup" + index, NoSuchMethodException.class,
+                            () -> MethodSubject.class.getDeclaredMethod(names[method],
+                                    method == 3 ? new Class<?>[]{int.class} : new Class<?>[0]));
+                    scenario.expectError("freshJniLookup" + index, NoSuchMethodError.class,
+                            () -> StandardJvmtiClient.lookupMethodId(MethodSubject.class, method));
+                }
+                scenario.expectReflectionError("cachedReflection" + index,
+                        () -> methods[method].invoke(method == 1 ? null : subject,
+                                method == 3 ? new Object[]{4} : new Object[0]));
+                scenario.expectError("cachedHandle" + index, NoSuchMethodError.class,
+                        () -> invokeHandle(method, subject));
+                scenario.expectError("cachedHandleExact" + index, NoSuchMethodError.class,
+                        () -> invokeHandle(method, subject, 1));
+                scenario.expectError("cachedHandleInvoke" + index, NoSuchMethodError.class,
+                        () -> invokeHandle(method, subject, 2));
+                scenario.expectError("cachedJni" + index, NoSuchMethodError.class,
+                        () -> StandardJvmtiClient.callCachedMethod(subject, method));
+                scenario.expectError("reflectedJni" + index, NoSuchMethodError.class,
+                        () -> StandardJvmtiClient.callReflectedMethod(methods[method], subject, method));
+                for (int form = 1; form <= 2; form++) {
+                    final int callForm = form;
+                    String suffix = form == 1 ? "A" : "V";
+                    scenario.expectError("cachedJni" + suffix + index, NoSuchMethodError.class,
+                            () -> StandardJvmtiClient.callCachedMethodVariant(subject, method, callForm));
+                    scenario.expectError("reflectedJni" + suffix + index, NoSuchMethodError.class,
+                            () -> StandardJvmtiClient.callReflectedMethodVariant(
+                                    methods[method], subject, method, callForm));
+                }
+            }
+        }
     }
 
     private void checkAddedDefinition(Scenario scenario, Evolving evolving) throws Exception {
@@ -277,6 +601,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         void run(Scenario scenario) throws Exception;
     }
 
+    private interface ThrowingAction {
+        void run() throws Throwable;
+    }
+
     private void runScenario(String name, int expectedCode, ScenarioBody body) throws Exception {
         Scenario scenario = new Scenario(name, expectedCode);
         scenarios.put(scenario.result);
@@ -348,6 +676,33 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             passed &= matches;
             checks.put(new JSONObject().put("name", name).put("expected", JSONObject.wrap(expected))
                     .put("actual", JSONObject.wrap(actual)).put("passed", matches));
+        }
+
+        void expectError(String name, Class<? extends Throwable> expected,
+                ThrowingAction action) throws Exception {
+            String actual = "completed without exception";
+            try {
+                action.run();
+            } catch (Throwable error) {
+                if (error instanceof InvocationTargetException && error.getCause() != null) {
+                    error = error.getCause();
+                }
+                actual = error.getClass().getName();
+            }
+            check(name, expected.getName(), actual);
+        }
+
+        void expectReflectionError(String name, ThrowingAction action) throws Exception {
+            String actual = "completed without exception";
+            try {
+                action.run();
+            } catch (Throwable error) {
+                actual = error.getClass().getName();
+                if (error instanceof InvocationTargetException && error.getCause() != null) {
+                    actual += ":" + error.getCause().getClass().getName();
+                }
+            }
+            check(name, "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError", actual);
         }
     }
 

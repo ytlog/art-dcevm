@@ -5,7 +5,7 @@
 #include <string>
 #include <utility>
 
-// Phase 2 validation rules (docs/STRUCTURAL_REDEFINE_ENGINE.md). Pure
+// Phase 2 and method-only Phase 3 rules (docs/STRUCTURAL_REDEFINE_ENGINE.md). Pure
 // functions over declarations; no ART or JNI access.
 namespace artdcevm::structural_policy {
 
@@ -21,7 +21,7 @@ struct SubclassMethods {
 struct Decision {
   jvmtiError error = JVMTI_ERROR_NONE;
   std::string reason;
-  // Any field/method addition or modifier change: ART must take its
+  // Any field/method addition, retirement or modifier change: ART must take its
   // structural path so the new Class carries the new declarations.
   bool fields_structural = false;
   bool methods_structural = false;
@@ -36,6 +36,7 @@ uint32_t MethodModifiers(uint32_t dex_access);
 // `live` carries JVMTI modifiers, `incoming` raw DEX flags. `subclass_methods`
 // lists possible overrides declared by every loaded subclass of the target.
 Decision Evaluate(const evolution::ClassSchema& live, const evolution::ClassSchema& incoming,
-                  const SubclassMethods& subclass_methods);
+                  const SubclassMethods& subclass_methods,
+                  bool method_retirement_enabled = false);
 
 }  // namespace artdcevm::structural_policy

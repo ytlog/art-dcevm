@@ -156,10 +156,198 @@ def publish(staged, out, state, name, fingerprint):
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def strip_class_methods(data, removals):
+    """Remove declared classfile methods while preserving caller bytecode verbatim.
+
+    This validates fixture identities and supports the standalone JVM probe.
+    DEX generation retains the original declarations until D8 has chosen its
+    invocation instructions. Every requested identity must occur exactly once.
+    """
+    offset = 0
+    def take(size):
+        nonlocal offset
+        if size < 0 or offset + size > len(data): raise ValueError('Truncated classfile')
+        start = offset; offset += size
+        return data[start:offset]
+    def number(size): return int.from_bytes(take(size), 'big')
+    if take(4) != b'\xca\xfe\xba\xbe': raise ValueError('Invalid classfile magic')
+    take(4)
+    pool = {}; count = number(2); index = 1
+    while index < count:
+        tag = number(1)
+        if tag == 1: pool[index] = take(number(2))
+        elif tag in (3, 4, 9, 10, 11, 12, 17, 18): take(4)
+        elif tag in (5, 6): take(8); index += 1
+        elif tag in (7, 8, 16, 19, 20): take(2)
+        elif tag == 15: take(3)
+        else: raise ValueError('Unknown classfile constant tag')
+        index += 1
+    def attributes():
+        for _ in range(number(2)):
+            name = number(2)
+            if name not in pool: raise ValueError('Invalid attribute name')
+            take(number(4))
+    def member():
+        start = offset
+        take(2); name = number(2); descriptor = number(2)
+        if name not in pool or descriptor not in pool: raise ValueError('Invalid member identity')
+        attributes()
+        return (pool[name], pool[descriptor]), data[start:offset]
+    take(6); take(number(2) * 2)
+    for _ in range(number(2)): member()
+    methods_offset = offset
+    methods = [member() for _ in range(number(2))]
+    trailing_offset = offset
+    attributes()
+    if offset != len(data): raise ValueError('Trailing classfile bytes')
+    wanted = [(name.encode('utf-8'), descriptor.encode('utf-8')) for name, descriptor in removals]
+    if len(set(wanted)) != len(wanted): raise ValueError('Duplicate method removal')
+    for identity in wanted:
+        if sum(candidate == identity for candidate, _ in methods) != 1:
+            raise ValueError('Method removal did not identify exactly one declaration')
+    kept = [raw for identity, raw in methods if identity not in wanted]
+    return data[:methods_offset] + struct.pack('>H', len(kept)) + b''.join(kept) + data[trailing_offset:]
+
+
+class FixtureDex:
+    """Read only the standard DEX metadata needed for fixture method removal."""
+    def __init__(self, data):
+        self.data = data
+        if (len(data) < 0x70 or data[:4] != b'dex\n' or data[7] != 0
+                or not b'035' <= data[4:7] <= b'040'
+                or self.u32(0x20) != len(data) or self.u32(0x24) != 0x70
+                or self.u32(0x28) != 0x12345678):
+            raise ValueError('Invalid fixture DEX header')
+        self.tables = {}
+        for name, at, width in (('strings', 0x38, 4), ('types', 0x40, 4),
+                                ('protos', 0x48, 12), ('methods', 0x58, 8), ('classes', 0x60, 32)):
+            count, offset = self.u32(at), self.u32(at + 4)
+            if (count == 0) != (offset == 0) or offset % 4:
+                raise ValueError('Invalid fixture DEX table')
+            self.range(offset, count * width)
+            self.tables[name] = (offset, count, width)
+        if self.tables['classes'][1] != 1:
+            raise ValueError('Method removal needs a single-class DEX')
+        definition = self.item('classes', 0)
+        self.owner = self.type(self.u32(definition))
+        self.class_data = self.u32(definition + 24)
+        if not self.class_data: raise ValueError('Missing fixture class data')
+        self.counts = []
+        cursor = self.class_data
+        for _ in range(4):
+            count, cursor = self.leb(cursor); self.counts.append(count)
+        fields_start = cursor
+        for _ in range(self.counts[0] + self.counts[1]):
+            _, cursor = self.leb(cursor); _, cursor = self.leb(cursor)
+        self.fields = data[fields_start:cursor]
+        self.groups = []
+        self.declarations = {}
+        for count in self.counts[2:]:
+            group = []; index = 0
+            for _ in range(count):
+                difference, cursor = self.leb(cursor); index += difference
+                access, cursor = self.leb(cursor); code, cursor = self.leb(cursor)
+                identity = self.method(index)
+                if identity in self.declarations: raise ValueError('Duplicate fixture method identity')
+                self.declarations[identity] = (index, access, code)
+                group.append((identity, index, access, code))
+            self.groups.append(group)
+        self.class_data_end = cursor
+
+    def range(self, offset, size):
+        if offset < 0 or size < 0 or offset + size > len(self.data):
+            raise ValueError('Fixture DEX range outside file')
+    def u16(self, at):
+        self.range(at, 2); return struct.unpack_from('<H', self.data, at)[0]
+    def u32(self, at):
+        self.range(at, 4); return struct.unpack_from('<I', self.data, at)[0]
+    def leb(self, at):
+        value = 0
+        for shift in range(0, 35, 7):
+            self.range(at, 1); byte = self.data[at]; at += 1
+            if shift == 28 and byte & 0xf0: raise ValueError('Invalid fixture ULEB128')
+            value |= (byte & 0x7f) << shift
+            if not byte & 0x80: return value, at
+        raise ValueError('Unterminated fixture ULEB128')
+    def item(self, name, index):
+        offset, count, width = self.tables[name]
+        if not 0 <= index < count: raise ValueError('Invalid fixture DEX index')
+        return offset + index * width
+    def string(self, index):
+        offset = self.u32(self.item('strings', index)); _, offset = self.leb(offset)
+        end = self.data.find(b'\0', offset)
+        if end == -1: raise ValueError('Unterminated fixture DEX string')
+        return self.data[offset:end].decode('utf-8')
+    def type(self, index): return self.string(self.u32(self.item('types', index)))
+    def method(self, index):
+        at = self.item('methods', index)
+        if self.type(self.u16(at)) != self.owner:
+            raise ValueError('Fixture declaration belongs to another class')
+        proto = self.item('protos', self.u16(at + 2))
+        parameters = self.u32(proto + 8)
+        types = []
+        if parameters:
+            for parameter in range(self.u32(parameters)):
+                types.append(self.type(self.u16(parameters + 4 + 2 * parameter)))
+        return self.string(self.u32(at + 4)), '(' + ''.join(types) + ')' + self.type(self.u32(proto + 4))
+
+
+def strip_dex_methods(data, removals):
+    """Remove class_data definitions after D8, preserving all emitted instructions.
+
+    D8 must see private declarations when it chooses invoke-direct. Removing a
+    declaration before D8 silently changes that opcode to invoke-virtual. The
+    shortened class_data item stays at its original offset; unused bytes/code
+    items remain in the DEX and all referenced offsets retain their meaning.
+    """
+    dex = FixtureDex(data)
+    wanted = [tuple(identity) for identity in removals]
+    if len(set(wanted)) != len(wanted): raise ValueError('Duplicate DEX method removal')
+    if any(identity not in dex.declarations for identity in wanted):
+        raise ValueError('DEX method removal did not identify a declaration')
+    groups = [[record for record in group if record[0] not in wanted] for group in dex.groups]
+    def leb(value):
+        result = bytearray()
+        while value >= 0x80:
+            result.append((value & 0x7f) | 0x80); value >>= 7
+        result.append(value)
+        return bytes(result)
+    replacement = b''.join(leb(count) for count in (*dex.counts[:2], *map(len, groups))) + dex.fields
+    for group in groups:
+        previous = 0
+        for _, index, access, code in group:
+            replacement += leb(index - previous) + leb(access) + leb(code)
+            previous = index
+    length = dex.class_data_end - dex.class_data
+    if len(replacement) > length: raise ValueError('Fixture class data unexpectedly grew')
+    result = bytearray(data)
+    result[dex.class_data:dex.class_data_end] = replacement + bytes(length - len(replacement))
+    result[12:32] = hashlib.sha1(result[32:]).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(result[12:]) & 0xffffffff)
+    return bytes(result)
+
+
 def compile_variant(variant, sources, java, sdk, env, staged, work):
     classes = work / 'classes'; classes.mkdir()
     subprocess.run([str(java / 'bin/javac'), *JAVAC_FLAGS, '-d', str(classes),
                     *map(str, sources)], check=True, env=env)
+    recipe = variant / 'remove-methods.json'
+    removals = {}
+    if recipe.exists():
+        removals = json.loads(recipe.read_text())
+        if not isinstance(removals, dict): raise ValueError('Invalid method removal recipe')
+        for relative, identities in removals.items():
+            path = Path(relative)
+            if (path.is_absolute() or '..' in path.parts or path.suffix != '.class'
+                    or not isinstance(identities, list)
+                    or any(not isinstance(identity, list) or len(identity) != 2
+                           or any(not isinstance(value, str) or not value for value in identity)
+                           for identity in identities)):
+                raise ValueError('Invalid method removal recipe entry')
+            klass = classes / path
+            # Validate exact classfile identities but feed the intact private
+            # declarations to D8 so its invocation opcode decisions stay valid.
+            strip_class_methods(klass.read_bytes(), identities)
     for index, klass in enumerate(sorted(classes.rglob('*.class'))):
         dexdir = work / ('dex-' + str(index)); dexdir.mkdir()
         subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), *D8_FLAGS, '--lib',
@@ -169,6 +357,8 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
         dest.parent.mkdir(parents=True, exist_ok=True)
         data = (dexdir / 'classes.dex').read_bytes()
         if not data: raise RuntimeError('Empty DEX for ' + str(klass))
+        identities = removals.get(klass.relative_to(classes).as_posix())
+        if identities: data = strip_dex_methods(data, identities)
         dest.write_bytes(data)
 
 
@@ -229,7 +419,9 @@ def build(sdk, java, out, fixtures=ROOT / 'fixtures'):
         for manifest in state.glob('*.json'):
             if manifest.stem not in live | {'hier-invalid'}: manifest.unlink()
         for variant, sources in variants:
-            fingerprint = key({'common': common, 'sources': [(p.relative_to(variant).as_posix(), digest(p)) for p in sources]})
+            recipe = variant / 'remove-methods.json'
+            inputs = sources + ([recipe] if recipe.exists() else [])
+            fingerprint = key({'common': common, 'sources': [(p.relative_to(variant).as_posix(), digest(p)) for p in inputs]})
             if hit(state, variant.name, fingerprint, out / variant.name):
                 print('CACHED ' + variant.name); continue
             try:

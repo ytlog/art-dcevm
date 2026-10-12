@@ -78,12 +78,22 @@ else:
     added = fixtures / 'gamma/pkg/Subject.java'; added.parent.mkdir(parents=True); added.write_text('package pkg; class Subject {}')
     calls = len(log.read_text().splitlines()); assert len(run()) == calls + 2
     shutil.rmtree(fixtures / 'gamma'); run(); assert not (out / 'gamma').exists()
+    # A recipe is a compiler input even when Java source bytes are unchanged.
+    # Empty recipes exercise cache identity without requiring valid fake classfiles.
+    recipe = fixtures / 'alpha/remove-methods.json'
+    beta_before = tree(out / 'beta')
+    calls = len(log.read_text().splitlines()); recipe.write_text('{}')
+    assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
+    calls = len(log.read_text().splitlines()); recipe.write_text('{\n}\n')
+    assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
+    calls = len(log.read_text().splitlines()); recipe.unlink()
+    assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
     shutil.rmtree(fixtures / 'beta'); run(); assert not (out / 'beta').exists() and not (temp / '.out-fixture-cache/beta.json').exists()
     calls = len(log.read_text().splitlines()); env['JAVA_OPTS'] = '-Dfixture.option=1'; assert len(run()) == calls + 2; assert len(run()) == calls + 4; env.pop('JAVA_OPTS'); run()
     cold = temp / 'cold'
     subprocess.run(['python3', str(ROOT / 'tools/build-fixtures.py'), '--java', str(java), '--sdk', str(sdk), '--fixtures', str(fixtures), '--out', str(cold)], env=env, cwd=temp, check=True, capture_output=True)
     assert tree(out) == tree(cold)
-    print('Fake compiler: per-variant/cache corruption/shared classpath/JDK/D8/library/deletion/failure/retry/cold equality PASS')
+    print('Fake compiler: per-variant/cache corruption/shared classpath/JDK/D8/library/recipe/deletion/failure/retry/cold equality PASS')
 
 
 def real(temp, sdk, java):
