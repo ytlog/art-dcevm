@@ -34,18 +34,19 @@ def _string(table, offset):
     return table[offset:end].decode('utf-8')
 
 
-def _defined_names(data):
+def symbol_table_inventory(data):
+    """Return defined names separately by ELF table, without reading symbol values."""
     sections, _ = _sections(data)
-    names = set()
+    tables = {'.dynsym': set(), '.symtab': set()}
     for section in sections:
         _, kind, _, _, at, size, link, _, _, stride = section
         if kind not in (2, 11):
             continue
         if stride != 24 or size % stride or link >= len(sections):
-            raise ValueError('Invalid mini symbol table')
+            raise ValueError('Invalid ELF symbol table')
         strings = sections[link]
         if strings[1] != 3:
-            raise ValueError('Mini symbols do not reference a string table')
+            raise ValueError('ELF symbols do not reference a string table')
         table = _range(data, strings[4], strings[5])
         symbols = _range(data, at, size)
         for offset in range(0, size, stride):
@@ -53,9 +54,15 @@ def _defined_names(data):
             name, _, _, index = struct.unpack_from('<IBBH', symbols, offset)
             if index == 0:
                 continue
-            names.add(_string(table, name))
-    names.discard('')
-    return sorted(names)
+            tables['.dynsym' if kind == 11 else '.symtab'].add(_string(table, name))
+    for names in tables.values():
+        names.discard('')
+    return {table: sorted(names) for table, names in tables.items()}
+
+
+def _defined_names(data):
+    tables = symbol_table_inventory(data)
+    return sorted(set().union(*tables.values()))
 
 
 def mini_symbol_inventory(data):

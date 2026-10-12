@@ -2,8 +2,10 @@
 #include "platform/symbols/art_symbol_compat.h"
 
 // Named ART structural-redefinition decision points and services. The mangled
-// names are identical in every collected Android 11--17 arm64 runtime. The
-// public-table wrapper lives in .gnu_debugdata; other entries live in .dynsym.
+// names are identical in every collected Android 11--17 arm64 runtime.
+// The public-table wrapper and CopyFields candidate live in .gnu_debugdata;
+// the remaining entries are required in .dynsym.
+// This catalog proves exact-name presence, not source ABI or Phase 3/4 behavior.
 // tools/check-structural-symbols.py re-verifies this catalog
 // against assets/runtime_lib. Keep one declaration per line in this exact form,
 // the tool parses it.
@@ -35,5 +37,49 @@ inline constexpr NamedSymbol kVisitReflectiveTargets{Library::kArt, "_ZN3art7Run
 inline constexpr NamedSymbol kDeoptimizeAllThreadFrames{Library::kArt, "_ZN3art15instrumentation15Instrumentation25DeoptimizeAllThreadFramesEv"};
 inline constexpr NamedSymbol kDecodeFieldId{Library::kArt, "_ZN3art3jni12JniIdManager13DecodeFieldIdEP9_jfieldID"};
 inline constexpr NamedSymbol kDecodeMethodId{Library::kArt, "_ZN3art3jni12JniIdManager14DecodeMethodIdEP10_jmethodID"};
+
+// Additional services audited for the owned commit/allocation plan. These are
+// declarations only; Phase 1/2 installation does not resolve or call them.
+// Version-specific and incomplete candidates stay in tools/structural-symbol-audit.json.
+// Keep the ART transaction, GC replacement, deoptimization and cache algorithms.
+inline constexpr NamedSymbol kInvalidateAllCompiledCode{Library::kArt, "_ZN3art3jit12JitCodeCache25InvalidateAllCompiledCodeEv"};
+inline constexpr NamedSymbol kThreadListForEach{Library::kArt, "_ZN3art10ThreadList7ForEachEPFvPNS_6ThreadEPvES3_"};
+inline constexpr NamedSymbol kInterpreterCacheClear{Library::kArt, "_ZN3art16InterpreterCache5ClearEPNS_6ThreadE"};
+inline constexpr NamedSymbol kSetEntryPointsForObsoleteMethod{Library::kArt, "_ZNK3art11ClassLinker31SetEntryPointsForObsoleteMethodEPNS_9ArtMethodE"};
+inline constexpr NamedSymbol kSetObsoleteClass{Library::kArt, "_ZN3art6mirror8ClassExt16SetObsoleteClassENS_6ObjPtrINS0_5ClassEEE"};
+inline constexpr NamedSymbol kSetStatusLocked{Library::kArt, "_ZN3art6mirror5Class15SetStatusLockedENS_11ClassStatusE"};
+inline constexpr NamedSymbol kSetStatus{Library::kArt, "_ZN3art6mirror5Class9SetStatusENS_6HandleIS1_EENS_11ClassStatusEPNS_6ThreadE"};
+inline constexpr NamedSymbol kAllocClass{Library::kArt, "_ZN3art11ClassLinker10AllocClassEPNS_6ThreadEj"};
+inline constexpr NamedSymbol kSetupClass{Library::kArt, "_ZN3art11ClassLinker10SetupClassERKNS_7DexFileERKNS_3dex8ClassDefENS_6HandleINS_6mirror5ClassEEENS_6ObjPtrINS9_11ClassLoaderEEE"};
+inline constexpr NamedSymbol kLoadClass{Library::kArt, "_ZN3art11ClassLinker9LoadClassEPNS_6ThreadERKNS_7DexFileERKNS_3dex8ClassDefENS_6HandleINS_6mirror5ClassEEE"};
+inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};
+inline constexpr NamedSymbol kForceClassInitialized{Library::kArt, "_ZN3art11ClassLinker21ForceClassInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEE"};
+inline constexpr NamedSymbol kEnsureInstanceFieldIds{Library::kArt, "_ZN3art6mirror5Class22EnsureInstanceFieldIdsENS_6HandleIS1_EE"};
+inline constexpr NamedSymbol kEnsureStaticFieldIds{Library::kArt, "_ZN3art6mirror5Class20EnsureStaticFieldIdsENS_6HandleIS1_EE"};
+inline constexpr NamedSymbol kEnsureMethodIds{Library::kArt, "_ZN3art6mirror5Class15EnsureMethodIdsENS_6HandleIS1_EE"};
+inline constexpr NamedSymbol kGetNewClassSize{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition15GetNewClassSizeERN3art13ClassAccessorE"};
+inline constexpr NamedSymbol kFindDeclaredStaticField{Library::kArt, "_ZN3art6mirror5Class23FindDeclaredStaticFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
+inline constexpr NamedSymbol kFindDeclaredInstanceField{Library::kArt, "_ZN3art6mirror5Class25FindDeclaredInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
+inline constexpr NamedSymbol kFindClassMethod{Library::kArt, "_ZN3art6mirror5Class15FindClassMethodENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEERKNS_9SignatureENS_11PointerSizeE"};
+inline constexpr NamedSymbol kHasSameNameAndSignature{Library::kArt, "_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"};
+inline constexpr NamedSymbol kSetNotIntrinsic{Library::kArt, "_ZN3art9ArtMethod15SetNotIntrinsicEv"};
+inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
+// ExclusiveLock is intentionally absent: one OEM has an unverified extra argument.
+// Unlock/ForEach/Clear presence does not resolve that locking ABI gap.
+inline constexpr NamedSymbol kMutexExclusiveUnlock{Library::kArt, "_ZN3art5Mutex15ExclusiveUnlockEPNS_6ThreadE"};
+inline constexpr NamedSymbol kThreadListLock{Library::kArt, "_ZN3art5Locks17thread_list_lock_E"};
+inline constexpr NamedSymbol kRuntimeInstance{Library::kArt, "_ZN3art7Runtime9instance_E"};
+inline constexpr NamedSymbol kCompareClasses{Library::kJvmti, "_ZN12openjdkjvmti14CompareClassesEN3art6ObjPtrINS0_6mirror5ClassEEES4_"};
+// Slow resolution may load classes; use before class-loading pause, with fixed ABI.
+inline constexpr NamedSymbol kDoResolveType{Library::kArt, "_ZN3art11ClassLinker13DoResolveTypeENS_3dex9TypeIndexENS_6HandleINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"};
+inline constexpr NamedSymbol kObjectLockClassConstructor{Library::kArt, "_ZN3art10ObjectLockINS_6mirror5ClassEEC1EPNS_6ThreadENS_6HandleIS2_EE"};
+inline constexpr NamedSymbol kObjectLockClassDestructor{Library::kArt, "_ZN3art10ObjectLockINS_6mirror5ClassEED1Ev"};
+
+// Audited local decision candidate, not an installed Hook. Recursive source does
+// not prove every optimized top-level copy reaches this symbol; test call coverage
+// before preferring this narrower hook over an owned UpdateClassStructurally.
+inline constexpr NamedSymbol kCopyFields{Library::kJvmti, "_ZN12openjdkjvmtiL10CopyFieldsEbN3art6ObjPtrINS0_6mirror6ObjectEEENS1_INS2_5ClassEEES4_S6_", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kRedefinerRecordFailure{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner13RecordFailureE10jvmtiErrorRKNSt3__112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEESA_"};
+inline constexpr NamedSymbol kAssertPendingOOMException{Library::kArt, "_ZNK3art6Thread25AssertPendingOOMExceptionEv"};
 
 }  // namespace artdcevm::symbols::structural

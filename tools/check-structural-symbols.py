@@ -1,98 +1,210 @@
 #!/usr/bin/env python3
-"""Verify the structural-redefinition symbol catalog against collected ART libraries.
+"""Check the strict catalog and optionally audit additional exact ART service names.
 
 Every NamedSymbol in platform/symbols/structural_redefine_symbols.h must be a
-defined name in its declared ELF symbol tables in each runtime set under
-assets/runtime_lib. No address or disassembly is used. Exit status is non-zero
-when any set misses a symbol.
+defined name in its declared ELF tables in every collected runtime set.
+--audit-spec accepts {"services": [{"id": ..., "library": ..., "names": [...]}]};
+additional source/inline metadata is retained in the report. Research candidates
+may be absent without weakening the catalog check. Empty names describe an
+inline-only service, not an available callable symbol. --report writes complete
+per-set name/table results and content hashes only under ignored build/evidence.
+No disassembly, symbol addresses, field offsets or loader resolution is used.
 """
 import argparse
+import hashlib
+import json
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
-from elf_mini_inventory import mini_symbol_inventory
+from elf_mini_inventory import mini_symbol_inventory, symbol_table_inventory
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h'
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
+AUDIT_LIBRARIES = {*LIBRARIES.values(), 'libdexfile.so', 'libartbase.so'}
+TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'
                    r'(?:,\s*SymbolTable::(k\w+))?\s*\}')
+SCOPE = 'Defined exact names only; no address, ABI, loader or callability proof'
 
 
-def find_nm(explicit):
-    if explicit:
-        return explicit
-    found = shutil.which('llvm-nm')
-    if found:
-        return Path(found)
-    sdk = None
-    properties = ROOT / 'local.properties'
-    if properties.exists():
-        for line in properties.read_text().splitlines():
-            if line.startswith('sdk.dir='):
-                sdk = Path(line.split('=', 1)[1].strip())
-    if sdk:
-        candidates = sorted(sdk.glob('ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-nm'))
-        if candidates:
-            return candidates[-1]
-    sys.exit('llvm-nm not found; pass --nm or set sdk.dir in local.properties')
+def read_catalog(path):
+    content = path.read_bytes()
+    source = content.decode('utf-8')
+    catalog = ENTRY.findall(source)
+    declarations = re.findall(r'\bNamedSymbol\s+k\w+\s*\{', source)
+    if not catalog or len(catalog) != len(declarations):
+        raise ValueError('Catalog has no entries or an unparsed NamedSymbol declaration')
+    if {library for _, library, _, _ in catalog} - LIBRARIES.keys():
+        raise ValueError('Catalog uses unsupported libraries')
+    if {table for _, _, _, table in catalog} - {'', 'kDynsym', 'kAnyNamed'}:
+        raise ValueError('Catalog uses unsupported symbol tables')
+    if len({entry[0] for entry in catalog}) != len(catalog):
+        raise ValueError('Catalog contains duplicate identifiers')
+    if len({(entry[1], entry[2]) for entry in catalog}) != len(catalog):
+        raise ValueError('Catalog contains duplicate exact names for a library')
+    return catalog, hashlib.sha256(content).hexdigest()
 
 
-def defined_symbols(nm, library, dynamic):
-    command = [str(nm), *(['-D'] if dynamic else []), '--defined-only', str(library)]
-    output = subprocess.run(command,
-                            check=True, capture_output=True, text=True).stdout
-    return {fields[-1] for fields in (line.split() for line in output.splitlines()) if fields}
+def read_audit_spec(path):
+    if path is None:
+        return {'services': []}, None
+    content = path.read_bytes()
+    try:
+        spec = json.loads(content)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise ValueError('Audit specification is not valid UTF-8 JSON') from error
+    if not isinstance(spec, dict) or not isinstance(spec.get('services'), list):
+        raise ValueError('Audit specification must contain a services array')
+    ids = set()
+    for service in spec['services']:
+        if not isinstance(service, dict):
+            raise ValueError('Audit service must be an object')
+        identifier = service.get('id')
+        if (not isinstance(identifier, str) or
+                not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*', identifier) or identifier in ids):
+            raise ValueError('Audit service identifier is invalid or duplicated')
+        ids.add(identifier)
+        library = service.get('library')
+        if not isinstance(library, str) or LIBRARIES.get(library, library) not in AUDIT_LIBRARIES:
+            raise ValueError('Audit service uses an unsupported library')
+        names = service.get('names')
+        if (not isinstance(names, list) or any(not isinstance(name, str) or not name or
+                len(name) > 4096 or any(character.isspace() or character == '\0' for character in name)
+                for name in names)):
+            raise ValueError('Audit service names must be an array of exact nonempty names')
+        if len(set(names)) != len(names):
+            raise ValueError('Audit service contains duplicate exact names')
+    return spec, hashlib.sha256(content).hexdigest()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--nm', type=Path)
-    parser.add_argument('--runtime-lib', type=Path, default=ROOT / 'assets/runtime_lib')
-    args = parser.parse_args()
+def report_destination(path):
+    if path is None:
+        return None
+    destination = path.resolve()
+    try:
+        relative = destination.relative_to(ROOT / 'build/evidence')
+    except ValueError as error:
+        raise ValueError('Report must be saved under ignored build/evidence') from error
+    if not relative.parts or destination.suffix != '.json':
+        raise ValueError('Report must be a JSON file under ignored build/evidence')
+    return destination
 
-    catalog = ENTRY.findall(CATALOG.read_text())
-    if not catalog:
-        sys.exit(f'no NamedSymbol entries parsed from {CATALOG.relative_to(ROOT)}')
-    unknown = {library for _, library, _, _ in catalog} - LIBRARIES.keys()
-    if unknown:
-        sys.exit(f'catalog uses unsupported libraries: {sorted(unknown)}')
-    tables = {table for _, _, _, table in catalog} - {'', 'kDynsym', 'kAnyNamed'}
-    if tables:
-        sys.exit(f'catalog uses unsupported symbol tables: {sorted(tables)}')
 
-    nm = find_nm(args.nm)
-    sets = sorted(path.parent for path in args.runtime_lib.rglob('libopenjdkjvmti.so'))
-    if not sets:
-        sys.exit(f'no runtime sets under {args.runtime_lib}')
+def library_inventory(path):
+    if not path.exists():
+        return {'present': False, 'sha256': None, 'tableCounts': dict.fromkeys(TABLES, 0)}, {
+            table: set() for table in TABLES}
+    data = path.read_bytes()
+    tables = symbol_table_inventory(data)
+    mini_names, provenance = mini_symbol_inventory(data)
+    tables['.gnu_debugdata'] = mini_names
+    tables = {table: set(names) for table, names in tables.items()}
+    metadata = {'present': True, 'sha256': hashlib.sha256(data).hexdigest(),
+                'tableCounts': {table: len(names) for table, names in tables.items()},
+                'miniProvenance': provenance}
+    return metadata, tables
 
-    failed = 0
-    for directory in sets:
-        label = directory.relative_to(args.runtime_lib).parts[:3]
-        missing = []
-        cache = {}
+
+def name_result(name, tables):
+    locations = [table for table in TABLES if name in tables[table]]
+    return {'name': name, 'tables': locations, 'present': bool(locations)}
+
+
+def summarize(sets, catalog, spec):
+    failed = sum(not all(entry['present'] for entry in runtime['catalog']) for runtime in sets)
+    any_named = sum(table == 'kAnyNamed' for _, _, _, table in catalog)
+    services = []
+    for index, service in enumerate(spec['services']):
+        results = [runtime['services'][index] for runtime in sets]
+        variants = []
+        for name_index, name in enumerate(service['names']):
+            matches = [result['names'][name_index] for result in results]
+            counts = {table: sum(table in match['tables'] for match in matches) for table in TABLES}
+            counts['missing'] = sum(not match['present'] for match in matches)
+            variants.append({'name': name, 'tableSetCounts': counts})
+        services.append({'id': service['id'], 'library': LIBRARIES.get(service['library'], service['library']),
+                         'totalSets': len(sets), 'availableSets': sum(result['available'] for result in results),
+                         'inlineOnly': not service['names'], 'variants': variants})
+    return {'catalog': {'totalSets': len(sets), 'passedSets': len(sets) - failed,
+                        'namedSymbols': len(catalog), 'dynsymOnly': len(catalog) - any_named,
+                        'anyNamed': any_named}, 'services': services}
+
+
+def collect_report(runtime_root, catalog, catalog_hash, spec, spec_hash):
+    directories = sorted(path.parent for path in runtime_root.rglob('libopenjdkjvmti.so'))
+    if not directories:
+        raise ValueError('No collected runtime sets found')
+    needed = set(LIBRARIES.values()) | {
+        LIBRARIES.get(service['library'], service['library']) for service in spec['services']}
+    sets = []
+    for number, directory in enumerate(directories, 1):
+        # The fourth component can contain private device/build identifiers.
+        # Set IDs and library hashes distinguish builds without publishing it.
+        identifier = f'set-{number:02d}'
+        label = '/'.join(directory.relative_to(runtime_root).parts[:3])
+        inventories, metadata = {}, {}
+        for library in sorted(needed):
+            try:
+                metadata[library], inventories[library] = library_inventory(directory / library)
+            except (ValueError, OSError) as error:
+                raise ValueError(f'{identifier}: unable to inventory {library}') from error
+        entries = []
         for name, library, symbol, table in catalog:
-            path = directory / LIBRARIES[library]
-            key = (library, table or 'kDynsym')
-            if key not in cache:
-                names = defined_symbols(nm, path, dynamic=True) if path.exists() else set()
-                if table == 'kAnyNamed' and path.exists():
-                    names.update(defined_symbols(nm, path, dynamic=False))
-                    mini_names, _ = mini_symbol_inventory(path.read_bytes())
-                    names.update(mini_names)
-                cache[key] = names
-            if symbol not in cache[key]:
-                missing.append(f'{LIBRARIES[library]}:{name}')
-        status = 'ok' if not missing else 'missing ' + ', '.join(missing)
-        print(f"{'/'.join(label)}: {status}")
-        failed += bool(missing)
+            filename = LIBRARIES[library]
+            result = name_result(symbol, inventories[filename])
+            required = list(TABLES) if table == 'kAnyNamed' else ['.dynsym']
+            entries.append({'id': name, 'library': filename, **result, 'requiredTables': required,
+                            'present': bool(set(result['tables']) & set(required))})
+        services = []
+        for service in spec['services']:
+            library = LIBRARIES.get(service['library'], service['library'])
+            names = [name_result(name, inventories[library]) for name in service['names']]
+            services.append({'id': service['id'], 'library': library, 'names': names,
+                             'available': any(name['present'] for name in names)})
+        sets.append({'id': identifier, 'label': label, 'libraries': metadata,
+                     'catalog': entries, 'services': services})
+    return {'schemaVersion': 1, 'scope': SCOPE, 'catalogSha256': catalog_hash,
+            'auditSpecSha256': spec_hash, 'auditSpec': spec, 'sets': sets,
+            'summary': summarize(sets, catalog, spec)}
 
-    local = sum(table == 'kAnyNamed' for _, _, _, table in catalog)
-    print(f'{len(sets) - failed}/{len(sets)} runtime sets provide all {len(catalog)} named symbols '
-          f'({len(catalog) - local} .dynsym-only, {local} any-named)')
-    return 1 if failed else 0
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--nm', type=Path, help='obsolete compatibility option; names are parsed directly from ELF')
+    parser.add_argument('--runtime-lib', type=Path, default=ROOT / 'assets/runtime_lib')
+    parser.add_argument('--audit-spec', type=Path, help='JSON exact-name research candidates and source metadata')
+    parser.add_argument('--report', type=Path, help='JSON result file under ignored build/evidence')
+    args = parser.parse_args(argv)
+    try:
+        destination = report_destination(args.report)
+        catalog, catalog_hash = read_catalog(CATALOG)
+        spec, spec_hash = read_audit_spec(args.audit_spec)
+        report = collect_report(args.runtime_lib, catalog, catalog_hash, spec, spec_hash)
+        if destination:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+    except (ValueError, OSError) as error:
+        # OSError messages contain user paths; keep diagnostics anonymous.
+        print(str(error) if isinstance(error, ValueError) else 'Unable to read inputs or write evidence report',
+              file=sys.stderr)
+        return 2
+
+    for runtime in report['sets']:
+        missing = [f"{entry['library']}:{entry['id']}" for entry in runtime['catalog'] if not entry['present']]
+        status = 'ok' if not missing else 'missing ' + ', '.join(missing)
+        print(f"{runtime['id']} {runtime['label']}: {status}")
+    summary = report['summary']['catalog']
+    print(f"{summary['passedSets']}/{summary['totalSets']} runtime sets provide all {summary['namedSymbols']} "
+          f"named symbols ({summary['dynsymOnly']} .dynsym-only, {summary['anyNamed']} any-named)")
+    for service in report['summary']['services']:
+        status = 'inline/source declaration; no standalone name requested' if service['inlineOnly'] else (
+            f"{service['availableSets']}/{service['totalSets']} sets with a listed exact name")
+        print(f"audit {service['id']}: {status}")
+        for variant in service['variants']:
+            counts = variant['tableSetCounts']
+            print(f"  {variant['name']}: " + ', '.join(f'{table}={count}' for table, count in counts.items()))
+    return 0 if summary['passedSets'] == summary['totalSets'] else 1
 
 
 if __name__ == '__main__':
