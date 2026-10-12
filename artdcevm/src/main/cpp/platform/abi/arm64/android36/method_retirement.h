@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/abi/arm64/common/redefinition.h"
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -7,8 +8,9 @@
 #include <map>
 
 // Fixed release arm64 declarations from AOSP ART android16-release,
-// ed6c006bd06ae060bd9698fd2cb25c4865512ec3. This backend is selected
-// only for the audited ELF build-ID profile on Android 16. No address or member
+// ed6c006bd06ae060bd9698fd2cb25c4865512ec3. MethodRetirementAbi below names the
+// audited libraries these declarations were checked against; the shared
+// method-retirement backend is instantiated with it. No address or member
 // layout is inferred from machine code.
 namespace artdcevm::abi::arm64::android36 {
 
@@ -131,8 +133,6 @@ struct JniMethodIdSourceInfo {
   jmethodID id;
 };
 static_assert(offsetof(JniMethodIdSourceInfo, id) == 16);
-inline constexpr int32_t kSourceJniMethodId = 7;
-inline constexpr int32_t kSourceDexCacheResolvedMethod = 8;
 class ReflectiveValueVisitor {
  public:
   virtual ~ReflectiveValueVisitor() = default;
@@ -187,4 +187,39 @@ template <typename T> struct LibcppV1PointerMap {
   }
 };
 #endif
+
+// Declaration profile consumed by platform/common/method_retirement.cc.
+struct MethodRetirementAbi {
+  using Class = android36::Class;
+  using DexCache = android36::DexCache;
+  using ArtField = android36::ArtField;
+  using ArtMethod = android36::ArtMethod;
+  template <typename T> using LengthPrefixedArray = android36::LengthPrefixedArray<T>;
+  using Handle = android36::Handle;
+  using RedefinitionDataIter = android36::RedefinitionDataIter;
+  using ScopedObjectAccess = android36::ScopedObjectAccess;
+  using MethodHandle = android36::MethodHandle;
+  using ReflectionSourceInfo = android36::ReflectionSourceInfo;
+  using JniMethodIdSourceInfo = android36::JniMethodIdSourceInfo;
+  using ReflectiveValueVisitor = android36::ReflectiveValueVisitor;
+  template <typename T> using PointerMap = LibcppV1PointerMap<T>;
+
+  // GNU build IDs of the audited device-01 libart and libopenjdkjvmti; their
+  // full SHA-256 values are recorded in docs/VERIFICATION.md.
+  static constexpr std::array<unsigned char, 16> kArtBuildId = {
+      0xea, 0x55, 0xd4, 0xac, 0x3d, 0xad, 0x73, 0x0a,
+      0xfc, 0xc0, 0xea, 0x0e, 0x88, 0x5a, 0xaa, 0x76};
+  static constexpr std::array<unsigned char, 16> kJvmtiBuildId = {
+      0x63, 0x42, 0x5f, 0xc0, 0x28, 0x7c, 0x8d, 0x7a,
+      0x95, 0x16, 0x3b, 0xa0, 0x8a, 0xa8, 0xaf, 0x85};
+  // mirror/class.h: enum class PointerSize : uint32_t, k64 = 8.
+  static constexpr uint32_t kPointerSize64 = 8;
+  // libdexfile/dex/modifiers.h; set by ART on every method of a replaced class.
+  static constexpr uint32_t kAccObsoleteMethod = 0x00040000;
+  // reflective_value_visitor.h ReflectionSourceType.
+  static constexpr int32_t kSourceJniMethodId = 7;
+  static constexpr int32_t kSourceDexCacheResolvedMethod = 8;
+  // mirror/method_handle_impl.h: kinds before kFirstAccessorKind invoke methods.
+  static constexpr uint32_t kFirstAccessorKind = 8;
+};
 }  // namespace artdcevm::abi::arm64::android36

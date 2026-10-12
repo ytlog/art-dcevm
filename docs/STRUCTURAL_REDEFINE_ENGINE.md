@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3 方案 C 已实现，在同一台 Android 16 设备上通过 21 个场景、613 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；字段退役、Phase 4 与其他构建设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3 方案 C 已实现，在同一台 Android 16 设备上通过 21 个场景、613 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；字段退役、Phase 4 与其他构建设备回归尚待实施。后续 profile/映射重构目前仅通过主机检查和构建，新增 copied-default 场景的设备复测尚待完成。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -142,7 +142,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 方案 C 支持普通类中 concrete Java 方法删除和签名替换；字段删除、类型变化、static/实例互换继续以 `SCHEMA_CHANGED`（64）拒绝。native、abstract、接口声明、构造器与类初始化器的退役暂以 `METHOD_DELETED`（67）拒绝。层级与类修饰符变化继续沿用 Phase 2 的拒绝码。它不是包含字段退役的完整 DCEVM。
 
-实现保留 ART `FinishNewClassAllocations`、`AllocateNewClassObject`、`CollectAndCreateNewInstances` 和 `UpdateClassStructurally`，不接管字段复制、锁字、实例迁移、引用遍历、去优化或缓存失效。`Update` Hook 只设置 visitor 的事务作用域并调用原函数；纯 Phase 2 批次也直接使用 ART 原成员映射。最终 DEX 校验策略记录显式删除的（名称、描述符），提交时只将这些属于有根批次类的真实旧 ArtMethod 标记为退役，映射到自身；不制造假的成员或偏移。
+实现保留 ART `FinishNewClassAllocations`、`AllocateNewClassObject`、`CollectAndCreateNewInstances` 和 `UpdateClassStructurally`，不接管字段复制、锁字、实例迁移、引用遍历、去优化或缓存失效。`Update` Hook 只设置 visitor 的事务作用域并调用原函数。已匹配 profile 的映射后端接管所有批次，以处理没有声明退役但子类 copied default/miranda 消失的情况；没有 profile 时仍使用 ART 原映射。最终 DEX 策略生成退役声明清单，提交映射以真实 declaring class 与同名同签名成员区分声明、继承及 copied 成员；被删除的真实旧声明映射到自身并退役，不制造假的成员或偏移。
 
 原 ART 对所有旧方法的 obsolete 标记、旧 declaring class 修复和 ClassExt 保活照常进行。visitor 代理先清除退役方法的 DexCache resolved-method 引用，让普通调用重新解析；删除覆写方法后可落到父类或接口默认实现。反射、JNI 与 MethodHandle 保留真实旧成员目标，并在新的访问/分派之前抛 `NoSuchMethodError`。缓存的反射 `Method.invoke` 按调用约定包装为 `InvocationTargetException`；恢复同名同签名方法会产生新成员，旧缓存目标仍退役。签名替换是旧签名退役与新签名新增。
 
@@ -167,6 +167,8 @@ ART/NDK 的指针 map 边界限定 libc++ ABI v1 specialization；固定节点�
 
 为避免 GC、class-loader 卸载或 native arena 地址复用让原生退役指针变成悬空键，Native 状态提前创建受影响类的 JNI global roots。失败或没有退役的批次释放新根；成功退役后保留、跨批次去重，ART 引用替换会更新根到新 Class，其 obsolete 链保护旧成员。**这些类及其 class loader 会保留到进程结束**；当前不承诺退役后的类卸载。根去重的 JNI 操作在 registry mutex 之外，最终提交中没有 JNI/JVMTI 分配或状态切换。新加载子类的 copied 成员不会进入永久退役集合；消失的 copied default 指向真正 canonical 成员并清除该次 DexCache 解析，不当作被删除的声明。
 
+后续重构将 ABI 类型、常量和已核对 build ID 收入版本声明 profile，由共享模板后端实例化；普通调用先检查是否有退役及 obsolete 标志，再进入共享读锁，保根另用 mutex。字段映射复用通用有界 DEX identity reader。尚未完成的复核包括旧 CompactDex identity 读取失败后映射 null 的安全性，以及新增 copied-default 场景与报告工具的一致性；既有 21 场景设备证据不涵盖这批后续重构。
+
 能力报告分别给出 `methodDeletion`、`methodSignatureChange`；`fieldDeletion`、`fieldTypeChange`、泛称 `memberDeletion/memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 仍为 false。Phase 3 方案 C 的完成判据是方法专项行为与字段拒绝/批次原子性通过，不再要求尚未实现的字段墓碑或 VarHandle 字段退役异常。
 
 复核命令：
@@ -190,7 +192,7 @@ python3 tools/test-elf-mini-inventory.py
 | `CheckClass` | 类修饰符、父类、接口不得变化 | 继续拒绝这些变化；解析最终 DEX，评估 Phase 2 与方法退役策略 |
 | `CheckFields` | 只增不删、修饰符不能变化 | 保留 Phase 2 增加/修饰符支持；删除、改类型或 storage 继续返回 64 |
 | `CheckMethods` | 只增不删、修饰符不能变化 | 已验证 profile 允许普通类 concrete Java 方法删除/签名替换；不支持的退役返回 67；结构变化调用 RecordNewMethodAdded |
-| `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK | 退役批次按显式声明身份映射；退役方法保留真实旧成员，其余保留兼容映射；无退役批次直接调用原映射 |
+| `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK | 匹配 profile 时所有批次由共享后端映射；声明退役保留真实旧成员，消失的 copied 方法映射 canonical 并清除解析缓存；未匹配 profile 使用 ART 原映射 |
 | `UpdateClassStructurally` | 原生字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只包裹 visitor 作用域，完整调用原提交；不 Hook CopyFields，不自行提交或重新实现失效 |
 | `Runtime::VisitReflectiveTargets` | 原成员映射与 shadowing 处理 | 在原 visitor 前清除退役 DexCache 方法；其余交给原 visitor；字段路径保持原生 |
 | 命名方法访问/调用入口、JNI Encode、CheckJNI 检查 | obsolete 新调用可能 InternalError，旧 virtual 索引可能变化 | 仅对显式退役目标在分派前报 NoSuchMethodError，其他调用转发；旧活动帧恢复路径保持 ART |
@@ -263,7 +265,7 @@ python3 tools/test-elf-mini-inventory.py
 3. **CheckClass**：
    1. 按 `redefinition.h` 取出 `klass` 和 `dex_file`。上下文中找不到该类时，调用原函数。
    2. 由 `DexFilePrefix` 构造 `DexView`（文件大小取自 DEX 头），用 `ReadClassDeclarations` 读取新类。读取失败或描述符不一致时，调用原函数。
-   3. 调用 `structural_policy::Evaluate`：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存决策及显式退役的名称/描述符，返回 true。
+   3. 调用 `structural_policy::Evaluate`：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存包含退役声明的决策，记录该批次是否需永久保根，返回 true。
 4. **CheckFields / CheckMethods**：有对应决策时，按 `fields_structural` / `methods_structural` 调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，然后返回 true，`CheckMethods` 之后清除决策；没有决策时调用原函数。
 5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange`；`fieldDeletion/fieldTypeChange`、泛称 `memberDeletion/memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 为 false。`checkJniRetirementGuards` 统计 CheckJNI 实际拒绝退役 ID 的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
 

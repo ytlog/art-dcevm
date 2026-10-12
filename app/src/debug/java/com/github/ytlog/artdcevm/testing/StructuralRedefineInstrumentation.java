@@ -9,6 +9,9 @@ import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.ClassFinalSubject;
+import com.github.ytlog.artdcevm.fixture.CopiedChild;
+import com.github.ytlog.artdcevm.fixture.CopiedDefault;
+import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
 import com.github.ytlog.artdcevm.fixture.FinalFieldSubject;
@@ -225,6 +228,22 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runMethodScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
+        runCopiedDefaultScenario();
+    }
+
+    // A loaded subclass owns a copied interface default until its superclass
+    // gains a public implementation; the re-linked subclass then has no copy.
+    private void runCopiedDefaultScenario() throws Exception {
+        CopiedChild child = new CopiedChild();
+        CopiedDefault viaInterface = child;
+        runScenario("copied-default-add", 0, scenario -> {
+            scenario.check("copiedBefore", 91, viaInterface.copiedValue());
+            scenario.redefine(new Class<?>[]{CopiedParent.class}, "copied-default-add");
+            scenario.check("oldChildInterface", 92, viaInterface.copiedValue());
+            scenario.check("oldChildVirtual", 92, child.copiedValue());
+            scenario.check("newChild", 92, new CopiedChild().copiedValue());
+            scenario.check("parentValue", 90, child.parentValue());
+        });
     }
 
     private void runMethodScenarios(FieldSubject fields, String fieldSchema, String values,

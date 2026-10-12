@@ -1,8 +1,10 @@
 #pragma once
-#include <string>
+#include <array>
 
 namespace artdcevm::method_retirement {
-// Match loaded ELF provenance before selecting the fixed Android 16 declarations.
-// This is a compatibility profile, not an address resolver or security boundary.
-bool MatchesRuntimeProfile(std::string* reason);
+using BuildId = std::array<unsigned char, 16>;
+// Whether the loaded libart and libopenjdkjvmti carry exactly these GNU build
+// IDs. Selects which fixed declarations apply; not an address resolver or a
+// security boundary.
+bool LoadedBuildIdsMatch(const BuildId& art, const BuildId& jvmti);
 }

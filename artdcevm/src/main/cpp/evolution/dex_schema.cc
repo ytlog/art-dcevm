@@ -33,6 +33,7 @@ class Reader {
 
   ClassSchema Read() {
     Header();
+    if (classes_.count != 1) Fail("Redefinition DEX must contain exactly one class");
     const size_t def = Item(classes_, 0);
     class_type_ = U32(def);
     ClassSchema result;
@@ -63,6 +64,14 @@ class Reader {
     return result;
   }
 
+  Member FieldIdentity(uint32_t index) {
+    Header();
+    const size_t item = Item(fields_, index);
+    std::string type = Type(U16(item + 2));
+    if (type == "V") Fail("Invalid field type");
+    return {String(U32(item + 4)), std::move(type), 0};
+  }
+
  private:
   struct Table { uint32_t offset = 0, count = 0, width = 0; };
 
@@ -79,7 +88,6 @@ class Reader {
     fields_ = Ids(0x50, 8);
     methods_ = Ids(0x58, 8);
     classes_ = Ids(0x60, 32);
-    if (classes_.count != 1) Fail("Redefinition DEX must contain exactly one class");
   }
   Table Ids(size_t header_offset, uint32_t width) const {
     const uint32_t count = U32(header_offset), offset = U32(header_offset + 4);
@@ -244,6 +252,17 @@ class Reader {
   uint32_t class_type_ = 0;
 };
 }  // namespace
+
+bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
+  try {
+    *output = Reader(dex).FieldIdentity(index);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
 
 bool ReadClassDeclarations(const DexView& dex, ClassSchema* output, std::string* error) {
   try {

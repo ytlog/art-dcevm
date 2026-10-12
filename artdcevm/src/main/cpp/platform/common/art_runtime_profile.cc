@@ -1,6 +1,5 @@
 #include "platform/common/art_runtime_profile.h"
 
-#include <array>
 #include <cstring>
 #include <elf.h>
 #include <link.h>
@@ -8,21 +7,15 @@
 
 namespace artdcevm::method_retirement {
 namespace {
-// The audited device-01 ART libraries, recorded with their full SHA-256 in
-// docs/VERIFICATION.md. Other API 36/Mainline/OEM builds keep Phase 2 only until
-// their source declarations and runtime behavior have been independently checked.
-constexpr std::array<unsigned char, 16> kArt = {
-    0xea, 0x55, 0xd4, 0xac, 0x3d, 0xad, 0x73, 0x0a,
-    0xfc, 0xc0, 0xea, 0x0e, 0x88, 0x5a, 0xaa, 0x76};
-constexpr std::array<unsigned char, 16> kJvmti = {
-    0x63, 0x42, 0x5f, 0xc0, 0x28, 0x7c, 0x8d, 0x7a,
-    0x95, 0x16, 0x3b, 0xa0, 0x8a, 0xa8, 0xaf, 0x85};
-
-struct Match { bool art = false; bool jvmti = false; };
+struct Match {
+  const BuildId& art_id;
+  const BuildId& jvmti_id;
+  bool art = false;
+  bool jvmti = false;
+};
 size_t Padded(uint32_t size) { return (static_cast<size_t>(size) + 3) & ~size_t{3}; }
 
-bool BuildIdMatches(const dl_phdr_info& library,
-                    const std::array<unsigned char, 16>& expected) {
+bool BuildIdMatches(const dl_phdr_info& library, const BuildId& expected) {
   for (ElfW(Half) i = 0; i < library.dlpi_phnum; ++i) {
     const auto& note = library.dlpi_phdr[i];
     if (note.p_type != PT_NOTE || note.p_memsz > 64 * 1024) continue;
@@ -63,17 +56,15 @@ int Inspect(dl_phdr_info* library, size_t, void* state) {
   const std::string_view path(library->dlpi_name ? library->dlpi_name : "");
   const size_t slash = path.rfind('/');
   const auto filename = path.substr(slash == std::string_view::npos ? 0 : slash + 1);
-  if (filename == "libart.so") match.art = BuildIdMatches(*library, kArt);
-  if (filename == "libopenjdkjvmti.so") match.jvmti = BuildIdMatches(*library, kJvmti);
+  if (filename == "libart.so") match.art = BuildIdMatches(*library, match.art_id);
+  if (filename == "libopenjdkjvmti.so") match.jvmti = BuildIdMatches(*library, match.jvmti_id);
   return 0;
 }
 }
 
-bool MatchesRuntimeProfile(std::string* reason) {
-  Match match;
+bool LoadedBuildIdsMatch(const BuildId& art, const BuildId& jvmti) {
+  Match match{art, jvmti};
   dl_iterate_phdr(Inspect, &match);
-  if (match.art && match.jvmti) return true;
-  *reason = "method retirement disabled: ART build IDs are outside the verified Android 16 profile";
-  return false;
+  return match.art && match.jvmti;
 }
 }

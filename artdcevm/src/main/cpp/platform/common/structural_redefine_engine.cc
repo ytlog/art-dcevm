@@ -1,17 +1,16 @@
 #include "platform/common/structural_redefine_engine.h"
 
 #include <android/log.h>
-#include <android/api-level.h>
-#include <algorithm>
 #include <array>
-#include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string_view>
 
 #include "evolution/class_schema.h"
 #include "shadowhook.h"
 #include "platform/abi/arm64/common/redefinition.h"
+#include "platform/common/art_dex_view.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/method_retirement.h"
@@ -54,7 +53,7 @@ void Diagnose(const std::string& text, bool rejection = false) {
 
 struct Snapshot {
   evolution::ClassSchema live;
-  structural_policy::SubclassMethods subclass_methods;
+  structural_policy::LoadedHierarchy hierarchy;
 };
 
 struct Batch {
@@ -69,6 +68,25 @@ struct Batch {
   }
 };
 thread_local Batch* current_batch = nullptr;
+
+// Owns one jvmtiEnv-allocated array of local class references.
+class LocalClasses {
+ public:
+  LocalClasses(jvmtiEnv* env, JNIEnv* jni) : env_(env), jni_(jni) {}
+  ~LocalClasses() {
+    if (!classes) return;
+    for (jint i = 0; i < count; ++i) jni_->DeleteLocalRef(classes[i]);
+    env_->Deallocate(reinterpret_cast<unsigned char*>(classes));
+  }
+  LocalClasses(const LocalClasses&) = delete;
+  LocalClasses& operator=(const LocalClasses&) = delete;
+  jint count = 0;
+  jclass* classes = nullptr;
+
+ private:
+  jvmtiEnv* env_;
+  JNIEnv* jni_;
+};
 
 // A ClassFileLoadHook can start a nested transaction on this same thread.
 class BatchScope {
@@ -97,31 +115,63 @@ class LocalReference {
   JNIEnv* jni_;
 };
 
-class LoadedClasses {
- public:
-  LoadedClasses(jvmtiEnv* env, JNIEnv* jni) : env_(env), jni_(jni) {}
-  ~LoadedClasses() {
-    if (!classes) return;
-    for (jint i = 0; i < count; ++i) jni_->DeleteLocalRef(classes[i]);
-    env_->Deallocate(reinterpret_cast<unsigned char*>(classes));
-  }
-  LoadedClasses(const LoadedClasses&) = delete;
-  LoadedClasses& operator=(const LoadedClasses&) = delete;
-  jint count = 0;
-  jclass* classes = nullptr;
-
- private:
-  jvmtiEnv* env_;
-  JNIEnv* jni_;
-};
-
 std::string_view Package(const std::string& descriptor) {
   const size_t end = descriptor.rfind('/');
   return end == std::string::npos ? std::string_view{} : std::string_view(descriptor.data(), end);
 }
 
-jvmtiError CollectSubclassMethods(JNIEnv* jni, jclass target, const LoadedClasses& loaded,
-                                  Snapshot* snapshot, std::string* error) {
+bool Virtual(const evolution::Member& method) {
+  return !method.IsStatic() && !(method.access & evolution::kAccPrivate) &&
+      method.name != "<init>" && method.name != "<clinit>";
+}
+
+// Instance methods of `klass`'s interfaces and their superinterfaces.
+jvmtiError CollectInterfaceMethods(JNIEnv* jni, jclass klass, std::set<std::string>* visited,
+                                   std::set<structural_policy::MemberKey>* output,
+                                   std::string* error) {
+  LocalClasses interfaces(snapshot_env, jni);
+  jvmtiError result = snapshot_env->GetImplementedInterfaces(klass, &interfaces.count,
+                                                             &interfaces.classes);
+  if (result != JVMTI_ERROR_NONE) { *error = "GetImplementedInterfaces failed"; return result; }
+  for (jint i = 0; i < interfaces.count; ++i) {
+    char* signature = nullptr;
+    result = snapshot_env->GetClassSignature(interfaces.classes[i], &signature, nullptr);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassSignature failed"; return result; }
+    const bool first = visited->insert(signature).second;
+    snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+    if (!first) continue;
+    std::vector<evolution::Member> methods;
+    const int read = live_schema::ReadLiveMethods(snapshot_env, interfaces.classes[i], &methods, error);
+    if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
+    for (const auto& method : methods)
+      if (Virtual(method)) output->insert({method.name, method.descriptor});
+    result = CollectInterfaceMethods(jni, interfaces.classes[i], visited, output, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+  }
+  return JVMTI_ERROR_NONE;
+}
+
+jvmtiError CollectInheritedPublic(JNIEnv* jni, jclass target, Snapshot* snapshot,
+                                  std::string* error) {
+  LocalReference current(jni);
+  current.value = jni->GetSuperclass(target);
+  while (current.value) {
+    jclass klass = static_cast<jclass>(current.value);
+    std::vector<evolution::Member> methods;
+    const int read = live_schema::ReadLiveMethods(snapshot_env, klass, &methods, error);
+    if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
+    for (const auto& method : methods)
+      if (Virtual(method) && (method.access & evolution::kAccPublic))
+        snapshot->hierarchy.inherited_public.insert({method.name, method.descriptor});
+    jclass next = jni->GetSuperclass(klass);
+    jni->DeleteLocalRef(current.value);
+    current.value = next;
+  }
+  return JVMTI_ERROR_NONE;
+}
+
+jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loaded,
+                             Snapshot* snapshot, std::string* error) {
   LocalReference target_loader(jni);
   jvmtiError result = snapshot_env->GetClassLoader(target, &target_loader.value);
   if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
@@ -147,15 +197,22 @@ jvmtiError CollectSubclassMethods(JNIEnv* jni, jclass target, const LoadedClasse
       if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
       same_runtime_package = jni->IsSameObject(target_loader.value, candidate_loader.value);
     }
+    std::set<structural_policy::MemberKey> declared;
     for (const auto& method : methods) {
-      if (method.IsStatic() || (method.access & evolution::kAccPrivate) ||
-          method.name == "<init>" || method.name == "<clinit>") continue;
+      if (!Virtual(method)) continue;
       const structural_policy::MemberKey key{method.name, method.descriptor};
-      snapshot->subclass_methods.visible.insert(key);
-      if (same_runtime_package) snapshot->subclass_methods.same_runtime_package.insert(key);
+      declared.insert(key);
+      snapshot->hierarchy.visible.insert(key);
+      if (same_runtime_package) snapshot->hierarchy.same_runtime_package.insert(key);
     }
+    std::set<std::string> visited;
+    std::set<structural_policy::MemberKey> interface_methods;
+    result = CollectInterfaceMethods(jni, candidate, &visited, &interface_methods, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+    for (const auto& key : interface_methods)
+      if (!declared.count(key)) snapshot->hierarchy.interface_copies.insert(key);
   }
-  return JVMTI_ERROR_NONE;
+  return CollectInheritedPublic(jni, target, snapshot, error);
 }
 
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
@@ -172,7 +229,6 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
       batch->classes.clear();
       batch->decisions.clear();
     }
-    method_retirement::InvalidateEnclosingBatches();
   }
   return result;
 }
@@ -181,7 +237,6 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   Batch batch;
   BatchScope scope(&batch);
-  method_retirement::BatchScope retirement_scope;
   if (!batch.enclosing) {
     // lastRejection describes the latest standard-entry transaction only.
     std::lock_guard<std::mutex> lock(report_mutex);
@@ -194,7 +249,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
-  LoadedClasses loaded(snapshot_env, jni);
+  LocalClasses loaded(snapshot_env, jni);
   jvmtiError result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   if (result != JVMTI_ERROR_NONE) {
     Diagnose("GetLoadedClasses failed while preparing structural validation");
@@ -207,7 +262,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
-    result = CollectSubclassMethods(jni, definitions[i].klass, loaded, &snapshot, &error);
+    result = CollectSubclasses(jni, definitions[i].klass, loaded, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
@@ -239,35 +294,23 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   const auto found = current_batch->classes.find(self->klass);
   if (found == current_batch->classes.end() || !self->dex_file || !self->dex_file->begin)
     return reinterpret_cast<Check>(original_class)(self);
-  const auto& dex = *self->dex_file;
-  uint32_t file_size = 0;
-  std::memcpy(&file_size, dex.begin + abi::arm64::kDexHeaderFileSizeOffset, sizeof(file_size));
   evolution::ClassSchema incoming;
   std::string error;
-  if (!evolution::ReadClassDeclarations({dex.begin, file_size, dex.data_begin, dex.data_size},
-                                       &incoming, &error)) {
+  if (!evolution::ReadClassDeclarations(DexViewOf(*self->dex_file), &incoming, &error)) {
     Diagnose("CheckClass DEX fallback: " + error);
     return reinterpret_cast<Check>(original_class)(self);
   }
   if (incoming.descriptor != found->second.live.descriptor)
     return reinterpret_cast<Check>(original_class)(self);
   auto decision = structural_policy::Evaluate(found->second.live, incoming,
-                                              found->second.subclass_methods,
+                                              found->second.hierarchy,
                                               method_retirement::Available());
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
-  std::vector<evolution::Member> retired;
-  for (const auto& old : found->second.live.methods) {
-    const bool retained = std::any_of(incoming.methods.begin(), incoming.methods.end(),
-        [&](const auto& method) { return method.name == old.name &&
-                                       method.descriptor == old.descriptor; });
-    if (!retained) retired.push_back(old);
-  }
-  if (!retired.empty()) current_batch->retires_methods = true;
-  method_retirement::RegisterRetirements(self, std::move(retired));
+  if (!decision.retired_methods.empty()) current_batch->retires_methods = true;
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
 }
@@ -357,8 +400,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   using method_retirement::Hook;
   std::vector<Hook> replacements;
   std::string retirement_failure;
-  if (!method_retirement::Prepare(android_get_device_api_level(), &replacements,
-                                   &retirement_failure)) {
+  if (!method_retirement::Prepare(&replacements, &retirement_failure)) {
     Diagnose(retirement_failure);
     return JVMTI_ERROR_NOT_AVAILABLE;
   }

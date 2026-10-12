@@ -23,6 +23,37 @@ Decision Reject(jvmtiError error, std::string reason) {
 }
 
 std::string Describe(const Member& m) { return m.name + m.descriptor; }
+
+bool Initializer(const std::string& name) { return name == "<init>" || name == "<clinit>"; }
+
+// Static and private methods never occupy a vtable or iftable slot.
+bool Virtual(uint32_t modifiers) { return !(modifiers & (acc::kAccStatic | acc::kAccPrivate)); }
+
+// ART links a subclass interface slot to a public superclass method in
+// preference to a default, and otherwise copies the default or a miranda into
+// that subclass. A new or re-leveled target method can therefore remove a
+// copied member that ART's own mapping must find in the re-linked subclass.
+Decision CheckCopiedMembers(const ClassSchema& live, const ClassSchema& incoming,
+                            const LoadedHierarchy& hierarchy) {
+  std::map<MemberKey, uint32_t> old_methods;
+  for (const auto& m : live.methods) old_methods[{m.name, m.descriptor}] = m.access;
+  for (const auto& m : incoming.methods) {
+    const uint32_t now = MethodModifiers(m.access);
+    const MemberKey key{m.name, m.descriptor};
+    if (!Virtual(now) || Initializer(m.name) || !hierarchy.interface_copies.count(key) ||
+        hierarchy.inherited_public.count(key)) continue;
+    const auto old = old_methods.find(key);
+    if (old == old_methods.end())
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                    "added method may replace a copied interface method of a loaded subclass: " +
+                        Describe(m));
+    if (!Virtual(old->second) || ((old->second ^ now) & kAccessLevel))
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                    "access change may replace a copied interface method of a loaded subclass: " +
+                        Describe(m));
+  }
+  return {};
+}
 }  // namespace
 
 uint32_t ClassModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
@@ -36,7 +67,7 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const SubclassMethods& subclass_methods, bool method_retirement_enabled) {
+                  const LoadedHierarchy& hierarchy, bool owns_member_mapping) {
   if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "superclass or interfaces changed");
@@ -70,12 +101,12 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& old : live.methods) {
     auto it = new_methods.find({old.name, old.descriptor});
     if (it == new_methods.end()) {
-      if (!method_retirement_enabled || (live.access & acc::kAccInterface) ||
-          (old.access & (acc::kAccNative | acc::kAccAbstract)) ||
-          old.name == "<init>" || old.name == "<clinit>")
+      if (!owns_member_mapping || (live.access & acc::kAccInterface) ||
+          (old.access & (acc::kAccNative | acc::kAccAbstract)) || Initializer(old.name))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported method retirement: " + Describe(old));
       decision.methods_structural = true;
+      decision.retired_methods.push_back(old);
       continue;
     }
     const uint32_t now = it->second;
@@ -86,10 +117,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "unsupported method modifier change: " + Describe(old));
     const auto& overrides = (now & (acc::kAccPublic | acc::kAccProtected))
-        ? subclass_methods.visible : subclass_methods.same_runtime_package;
-    if ((now & acc::kAccFinal) && !(old.access & acc::kAccFinal) &&
-        !(now & (acc::kAccPrivate | acc::kAccStatic)) &&
-        old.name != "<init>" && old.name != "<clinit>" &&
+        ? hierarchy.visible : hierarchy.same_runtime_package;
+    if ((now & acc::kAccFinal) && !(old.access & acc::kAccFinal) && Virtual(now) &&
+        !Initializer(old.name) &&
         overrides.count({old.name, old.descriptor}))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "method made final is overridden by a loaded subclass: " + Describe(old));
@@ -97,6 +127,11 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     new_methods.erase(it);
   }
   if (!new_methods.empty()) decision.methods_structural = true;
+  // With the engine's mapping, a vanished copy maps to its canonical method.
+  if (!owns_member_mapping) {
+    Decision copied = CheckCopiedMembers(live, incoming, hierarchy);
+    if (copied.error != JVMTI_ERROR_NONE) return copied;
+  }
   return decision;
 }
 }  // namespace artdcevm::structural_policy

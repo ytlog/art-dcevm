@@ -35,14 +35,14 @@ ClassSchema Base() {
   return schema;
 }
 void Accept(const ClassSchema& live, const ClassSchema& next,
-            bool fields, bool methods, const policy::SubclassMethods& subclasses = {}) {
+            bool fields, bool methods, const policy::LoadedHierarchy& subclasses = {}) {
   const auto result = policy::Evaluate(live, next, subclasses);
   Require(result.error == JVMTI_ERROR_NONE, "expected accepted evolution");
   Require(result.fields_structural == fields && result.methods_structural == methods,
           "wrong structural path decision");
 }
 void Reject(const ClassSchema& live, const ClassSchema& next, jvmtiError expected,
-            const policy::SubclassMethods& subclasses = {}) {
+            const policy::LoadedHierarchy& subclasses = {}) {
   const auto result = policy::Evaluate(live, next, subclasses);
   Require(result.error == expected && !result.reason.empty(), "wrong rejection code or missing reason");
 }
@@ -89,6 +89,34 @@ int main(int argc, char** argv) {
       const auto retirement = policy::Evaluate(live, next, {}, true);
       Require(retirement.error == JVMTI_ERROR_NONE && retirement.methods_structural &&
               !retirement.fields_structural, "method-only retirement did not take structural path");
+      Require(retirement.retired_methods.size() == 1 &&
+              retirement.retired_methods[0].name == "work" &&
+              retirement.retired_methods[0].descriptor == "()I",
+              "policy did not report the retired declaration");
+    }
+    Require(policy::Evaluate(live, live, {}, true).retired_methods.empty(),
+            "unchanged declarations reported as retired");
+    {
+      // A loaded subclass may own a copied default/miranda for copied()I.
+      policy::LoadedHierarchy copies;
+      copies.interface_copies.insert({"copied", "()I"});
+      next = live; next.methods.push_back({"copied", "()I", acc::kAccPublic});
+      Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED, copies);
+      Require(policy::Evaluate(live, next, copies, true).error == JVMTI_ERROR_NONE,
+              "owned member mapping must remap a vanished copied method");
+      for (uint32_t flags : {uint32_t{acc::kAccPrivate}, uint32_t{acc::kAccStatic}}) {
+        next = live; next.methods.push_back({"copied", "()I", flags});
+        Accept(live, next, false, true, copies);  // No vtable slot.
+      }
+      auto hidden = live; hidden.methods.push_back({"copied", "()I", acc::kAccPrivate});
+      next = hidden; next.methods.back().access = acc::kAccPublic;
+      Reject(hidden, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED, copies);
+      auto exposed = live; exposed.methods.push_back({"copied", "()I", acc::kAccPublic});
+      next = exposed; next.methods.back().access = acc::kAccPublic | acc::kAccFinal;
+      Accept(exposed, next, false, true, copies);  // Same access level keeps the slot owner.
+      copies.inherited_public.insert({"copied", "()I"});
+      next = live; next.methods.push_back({"copied", "()I", acc::kAccPublic});
+      Accept(live, next, false, true, copies);  // A superclass already implements the slot.
     }
     next = live; next.fields[0].descriptor = "J";
     Require(policy::Evaluate(live, next, {}, true).error ==
@@ -126,7 +154,7 @@ int main(int argc, char** argv) {
       next = live; next.access = flags;
       Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
     }
-    policy::SubclassMethods subclasses;
+    policy::LoadedHierarchy subclasses;
     subclasses.visible.insert({"work", "()I"});
     next = live; next.methods[0].access |= acc::kAccFinal;
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED, subclasses);
