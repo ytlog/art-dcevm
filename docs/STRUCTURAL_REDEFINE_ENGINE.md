@@ -26,14 +26,14 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ## 符号证据
 
-以下 17 个命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找：
+以下 16 个命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找：
 
-- `libopenjdkjvmti.so`：`Redefiner::RedefineClasses`、`Redefiner::StructurallyRedefineClasses`；`ClassRedefinition::CheckClass`、`CheckFields`、`CheckMethods`、`RecordNewFieldAdded`、`RecordNewMethodAdded`、`CollectNewFieldAndMethodMappings`、`AllocateNewClassObject`、`FinishNewClassAllocations`、`CollectAndCreateNewInstances`、`UpdateClassStructurally`；`HeapExtensions::ReplaceReferences`。
+- `libopenjdkjvmti.so`：`Redefiner::StructurallyRedefineClasses`；`ClassRedefinition::CheckClass`、`CheckFields`、`CheckMethods`、`RecordNewFieldAdded`、`RecordNewMethodAdded`、`CollectNewFieldAndMethodMappings`、`AllocateNewClassObject`、`FinishNewClassAllocations`、`CollectAndCreateNewInstances`、`UpdateClassStructurally`；`HeapExtensions::ReplaceReferences`。
 - `libart.so`：`Runtime::VisitReflectiveTargets`、`Instrumentation::DeoptimizeAllThreadFrames`、`jni::JniIdManager::DecodeFieldId`、`DecodeMethodId`。
 
-标准 JVMTI 表实际使用 `JvmtiFunctions::RedefineClasses` 包装器（`OpenjdkJvmTi.cc`），它在 27 套库中均位于 `.gnu_debugdata`，不在 `.dynsym`。Android 16 实测中，只 Hook 导出的 `Redefiner::RedefineClasses` 没有增强标准调用；优化后的包装器不能假设会经过该导出入口。因此直接按包装器的完整命名符号查找并 Hook，同时核对找到的地址与公开 JVMTI 表一致。`symbols::Find()` 对这个明确列出的符号使用官方 ShadowHook 的 `shadowhook_dlsym()`，其余符号只查 `.dynsym`；`.gnu_debugdata` 仍是命名 ELF 符号表，不涉及反汇编或地址推算。查找规则见 [ShadowHook 2.0.1 手册](https://github.com/bytedance/android-inline-hook/blob/v2.0.1/doc/manual.md)。
+标准 JVMTI 表实际使用 `JvmtiFunctions::RedefineClasses` 包装器（`OpenjdkJvmTi.cc`），它在 27 套库中均位于 `.gnu_debugdata`，不在 `.dynsym`。Android 16 实测中，只 Hook 导出的 `Redefiner::RedefineClasses` 没有增强标准调用；优化后的包装器不能假设会经过该导出入口。因此直接按包装器的完整命名符号查找并 Hook，同时核对找到的地址与公开 JVMTI 表一致；`Redefiner::RedefineClasses` 不再被使用，已从符号目录移除。`symbols::Find()` 对这个明确列出的符号使用官方 ShadowHook 的 `shadowhook_dlsym()`，其余符号只查 `.dynsym`；`.gnu_debugdata` 仍是命名 ELF 符号表，不涉及反汇编或地址推算。查找规则见 [ShadowHook 2.0.1 手册](https://github.com/bytedance/android-inline-hook/blob/v2.0.1/doc/manual.md)。
 
-复核命令：`python3 tools/check-structural-symbols.py`，共核对 18 个名称及各自的符号表范围。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少 MVP 所需任一符号时增强库初始化失败。
+复核命令：`python3 tools/check-structural-symbols.py`，共核对 17 个名称（16 个限定 `.dynsym`，1 个包装器允许 `.symtab` / `.gnu_debugdata`）。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少 MVP 所需任一符号时增强库初始化失败。
 
 ## 接管点
 

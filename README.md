@@ -14,7 +14,7 @@ Android 11 起，ART 的 `Redefiner::StructurallyRedefineClasses` 已经实现�
 - 应用从进程启动时就是可调试的（`debuggable`）。ART 只在这种进程里开放类重定义能力。
 - 不需要 root。
 
-## 使用方式（目标接口）
+## 使用方式
 
 1. 初始化一次增强库：
 

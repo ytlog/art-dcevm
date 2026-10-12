@@ -13,7 +13,6 @@ namespace artdcevm::symbols::structural {
 // OpenjdkJvmTi.cc places this wrapper in the public JVMTI function table.
 // Optimized wrappers can inline the exported Redefiner::RedefineClasses entry.
 inline constexpr NamedSymbol kJvmtiRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti14JvmtiFunctions15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner15RedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"};
 inline constexpr NamedSymbol kStructurallyRedefineClasses{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner27StructurallyRedefineClassesEP9_jvmtiEnviPK21_jvmtiClassDefinition"};
 
 // Validation policy.
