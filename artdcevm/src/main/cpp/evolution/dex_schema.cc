@@ -39,6 +39,7 @@ class Reader {
     result.descriptor = Type(class_type_);
     if (result.descriptor.front() != 'L') Fail("ClassDef does not name a class");
     result.access = U32(def + 4);
+    result.reflection_access = InnerClassAccess(U32(def + 20));
     if (const uint32_t super = U32(def + 8); super != UINT32_MAX) {
       result.superclass = Type(super);
       if (result.superclass.front() != 'L') Fail("Invalid superclass type");
@@ -156,6 +157,52 @@ class Reader {
     std::string result = "(";
     for (const auto& type : TypeList(U32(item + 8))) result += type;
     return result + ")" + Type(U32(item + 4));
+  }
+  std::optional<uint32_t> InnerClassAccess(uint32_t directory) const {
+    if (!directory) return std::nullopt;
+    if (directory % 4) Fail("Unaligned annotations directory");
+    Range(dex_.data_size, directory, 16);
+    const uint32_t set = DataU32(directory);
+    if (!set) return std::nullopt;
+    if (set % 4) Fail("Unaligned annotation set");
+    const uint32_t count = DataU32(set);
+    Range(dex_.data_size, size_t{set} + 4, size_t{count} * 4);
+    for (uint32_t i = 0; i < count; ++i) {
+      size_t cursor = DataU32(size_t{set} + 4 + size_t{i} * 4);
+      const uint8_t visibility = DataByte(cursor++);
+      const std::string type = Type(Leb(&cursor));
+      if (visibility != 2 || type != "Ldalvik/annotation/InnerClass;") continue;
+      const uint32_t elements = Leb(&cursor);
+      // Every element consumes at least its name index and value header.
+      Range(dex_.data_size, cursor, size_t{elements} * 2);
+      std::optional<uint32_t> access;
+      for (uint32_t n = 0; n < elements; ++n) {
+        const std::string name = String(Leb(&cursor));
+        const uint8_t header = DataByte(cursor++);
+        const uint8_t value_type = header & 0x1f, value_arg = header >> 5;
+        if (name == "accessFlags") {
+          if (value_type != 0x04 || value_arg > 3 || access)
+            Fail("Invalid InnerClass accessFlags");
+          uint32_t value = 0;
+          for (unsigned byte = 0; byte <= value_arg; ++byte)
+            value |= uint32_t{DataByte(cursor++)} << (byte * 8);
+          const unsigned bits = (value_arg + 1u) * 8;
+          if (bits < 32 && (value & (uint32_t{1} << (bits - 1)))) value |= UINT32_MAX << bits;
+          access = value;
+        } else if (name == "name") {
+          if (value_type == 0x1e && value_arg == 0) continue;  // anonymous class
+          if (value_type != 0x17 || value_arg > 3) Fail("Invalid InnerClass name");
+          uint32_t index = 0;
+          for (unsigned byte = 0; byte <= value_arg; ++byte)
+            index |= uint32_t{DataByte(cursor++)} << (byte * 8);
+          String(index);  // Validate the string index without retaining it.
+        } else {
+          Fail("Unexpected InnerClass annotation element");
+        }
+      }
+      return access;
+    }
+    return std::nullopt;
   }
   void Fields(size_t* cursor, uint32_t count, bool is_static, std::vector<Member>* out) const {
     uint32_t index = 0;

@@ -11,6 +11,13 @@ namespace artdcevm::structural_policy {
 
 using MemberKey = std::pair<std::string, std::string>;  // name, descriptor
 
+struct SubclassMethods {
+  // Non-private instance methods declared by loaded subclasses.
+  std::set<MemberKey> visible;
+  // The subset declared in the target's package by its class loader.
+  std::set<MemberKey> same_runtime_package;
+};
+
 struct Decision {
   jvmtiError error = JVMTI_ERROR_NONE;
   std::string reason;
@@ -27,8 +34,8 @@ uint32_t FieldModifiers(uint32_t dex_access);
 uint32_t MethodModifiers(uint32_t dex_access);
 
 // `live` carries JVMTI modifiers, `incoming` raw DEX flags. `subclass_methods`
-// lists the members declared by every loaded subclass of the target.
+// lists possible overrides declared by every loaded subclass of the target.
 Decision Evaluate(const evolution::ClassSchema& live, const evolution::ClassSchema& incoming,
-                  const std::set<MemberKey>& subclass_methods);
+                  const SubclassMethods& subclass_methods);
 
 }  // namespace artdcevm::structural_policy

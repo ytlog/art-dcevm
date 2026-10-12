@@ -1,17 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <application android:label="ART DCEVM Lab" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
-    <activity android:name="com.github.ytlog.artdcevm.MainActivity" android:exported="true">
-      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-    </activity>
-    <!-- Allows adb to foreground the inert debug carrier on devices that reject background starts. -->
-    <activity android:name="com.github.ytlog.artdcevm.testing.RuntimeAccessForegroundActivity" android:exported="true"/>
-    <activity android:name="com.github.ytlog.artdcevm.testing.ForegroundStressActivity" android:exported="true"/>
-  </application>
-  <instrumentation android:name="com.github.ytlog.artdcevm.ConformanceInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="DCEVM conformance" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.StandardJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Standard JVMTI Agent conformance" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.PublicJvmtiInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Public JVMTI compatibility" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.RuntimeAccessInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Owned JNI access calibration" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.ProductionSchemaInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Required production schema scenarios" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.ProductionPermissionInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Production final and access permission scenarios" android:functionalTest="true"/>
-  <instrumentation android:name="com.github.ytlog.artdcevm.testing.ProductionCapabilitiesInstrumentation" android:targetPackage="dev.artdcevm.lab" android:label="Production bootstrap and formal member scenarios" android:functionalTest="true"/>
+  <instrumentation
+      android:name="com.github.ytlog.artdcevm.testing.StructuralRedefineInstrumentation"
+      android:targetPackage="dev.artdcevm.lab"
+      android:label="Structural redefine conformance"
+      android:functionalTest="true"/>
 </manifest>

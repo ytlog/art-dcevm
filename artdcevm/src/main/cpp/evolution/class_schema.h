@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,9 @@ struct ClassSchema {
   uint32_t access = 0;
   std::vector<Member> fields;
   std::vector<Member> methods;
+  // DEX InnerClass.accessFlags, when present. JVMTI reports these rather than
+  // ClassDef flags for nested classes; `access` still retains the raw flags.
+  std::optional<uint32_t> reflection_access;
 };
 
 // A standard DEX (035--040) in memory. For an ART DexFile, begin is the

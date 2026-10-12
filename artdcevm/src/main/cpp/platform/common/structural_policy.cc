@@ -10,13 +10,10 @@ namespace acc = evolution;
 
 constexpr uint32_t kJavaFlags = 0xffff;
 constexpr uint32_t kAccessLevel = acc::kAccPublic | acc::kAccPrivate | acc::kAccProtected;
-// Class bits whose change alters instantiation, dispatch or the class kind.
-constexpr uint32_t kClassKind = acc::kAccFinal | acc::kAccInterface | acc::kAccAbstract | 0x2000 | 0x4000;
+constexpr uint32_t kClassDefinitionFlags = kJavaFlags & ~(kAccessLevel | acc::kAccStatic);
 constexpr uint32_t kFieldTransient = 0x0080;
 constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
-constexpr uint32_t kMethodVarargs = 0x0080, kMethodStrict = 0x0800;
-constexpr uint32_t kMethodAllowed = acc::kAccPublic | acc::kAccProtected | acc::kAccFinal |
-    acc::kAccSynchronized | kMethodVarargs | kMethodStrict;
+constexpr uint32_t kMethodAllowed = kAccessLevel | acc::kAccFinal | acc::kAccSynchronized;
 
 Decision Reject(jvmtiError error, std::string reason) {
   Decision decision;
@@ -39,15 +36,16 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const std::set<MemberKey>& subclass_methods) {
+                  const SubclassMethods& subclass_methods) {
   if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "superclass or interfaces changed");
-  // JVMTI reports InnerClass flags for nested classes, so only the class kind
-  // bits are comparable; a new access level is taken from the new ClassDef.
-  if ((live.access & kClassKind) != (ClassModifiers(incoming.access) & kClassKind))
+  // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
+  if (ClassModifiers(live.access) !=
+          ClassModifiers(incoming.reflection_access.value_or(incoming.access)) ||
+      (live.access & kClassDefinitionFlags) != (incoming.access & kClassDefinitionFlags))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
-                  "class final/abstract/interface/annotation/enum modifiers changed");
+                  "class modifiers changed");
 
   Decision decision;
   std::map<std::tuple<std::string, std::string, bool>, uint32_t> new_fields;
@@ -81,8 +79,12 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     if (unsupported)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "unsupported method modifier change: " + Describe(old));
+    const auto& overrides = (now & (acc::kAccPublic | acc::kAccProtected))
+        ? subclass_methods.visible : subclass_methods.same_runtime_package;
     if ((now & acc::kAccFinal) && !(old.access & acc::kAccFinal) &&
-        subclass_methods.count({old.name, old.descriptor}))
+        !(now & (acc::kAccPrivate | acc::kAccStatic)) &&
+        old.name != "<init>" && old.name != "<clinit>" &&
+        overrides.count({old.name, old.descriptor}))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "method made final is overridden by a loaded subclass: " + Describe(old));
     if (changed) decision.methods_structural = true;
