@@ -29,7 +29,7 @@
 ## 架构与修复
 
 - 结构演进以设备 ART 自带的结构重定义事务为引擎，增强库只接管其校验、成员映射和类分配等决策点，见 [docs/STRUCTURAL_REDEFINE_ENGINE.md](docs/STRUCTURAL_REDEFINE_ENGINE.md)。不要重新实现 ART 已提供的实例迁移、引用改写、去优化与缓存失效。
-- 保持现有目录分层：通用逻辑放 `platform/common`，版本声明差异放 `platform/abi/arm64/androidNN`，命名符号放 `platform/symbols`，Hook 机制放 `hooks`。不得复制整套后端到版本目录。
+- 保持现有目录分层：通用逻辑放 `platform/common`，版本声明差异放 `platform/abi/arm64/androidNN`，命名符号放 `platform/symbols`。不得复制整套后端到版本目录。
 - 先找出失败的根因和应有语义再修改。必要时重构错误的结构，删除过时实现；不要在已知错误的代码上堆叠特殊分支或临时补丁。
 - 优先复用清晰的公共路径，避免重复守卫、重复状态和冗长的条件链；补充能验证真实运行行为的回归证据。
 - ART 私有能力只通过命名 ELF 符号的 PLT 或 Inline Hook 与固定源码声明访问，不通过反汇编推算函数地址或对象字段偏移。
