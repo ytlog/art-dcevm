@@ -100,8 +100,8 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 1. **Install**（幂等，由 agent 的互斥锁串行化）：
    1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
-   2. 先通过 `hooks::Initialize()` 初始化官方 ShadowHook，再通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：公开表的 `JvmtiFunctions::RedefineClasses`、结构入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号；公开表与命名包装器不一致时也失败。
-   3. 保存结构入口和三个校验点的原始地址；通过 `hooks::Install()` 调用 `shadowhook_hook_sym_addr` 替换标准包装器和三个校验点，标准包装器最后安装。失败信息取 `shadowhook_to_errmsg`；任一步失败，通过 `hooks::Remove()` 调用 `shadowhook_unhook` 逆序撤销已安装的部分。
+   2. 直接调用官方 `shadowhook_init()` 初始化，再通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：公开表的 `JvmtiFunctions::RedefineClasses`、结构入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号；公开表与命名包装器不一致时也失败。
+   3. 保存结构入口和三个校验点的原始地址；直接调用官方 `shadowhook_hook_sym_addr()` 替换标准包装器和三个校验点，标准包装器最后安装。失败信息取 `shadowhook_get_errno()` / `shadowhook_to_errmsg()`；任一步失败，直接调用 `shadowhook_unhook()` 逆序撤销已安装的部分，不再另设 Hook API 封装。
 2. **标准入口**：
    1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）。

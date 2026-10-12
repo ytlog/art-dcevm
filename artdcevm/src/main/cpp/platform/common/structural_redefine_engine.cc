@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "evolution/class_schema.h"
-#include "hooks/shadow_hook.h"
+#include "shadowhook.h"
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
@@ -249,9 +249,12 @@ bool RollBack(std::string* failure) {
   bool removed_all = true;
   for (auto it = hook_tokens.rbegin(); it != hook_tokens.rend(); ++it) {
     if (!*it) continue;
-    std::string error;
-    if (hooks::Remove(*it, &error)) *it = nullptr;
-    else { *failure += "; rollback failed: " + error; removed_all = false; }
+    const int error = shadowhook_unhook(*it);
+    if (error == 0) *it = nullptr;
+    else {
+      *failure += std::string("; rollback failed: ") + shadowhook_to_errmsg(error);
+      removed_all = false;
+    }
   }
   return removed_all;
 }
@@ -272,9 +275,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
     Diagnose("can_redefine_classes unavailable; process must be Java-debuggable at startup");
     return result == JVMTI_ERROR_NONE ? JVMTI_ERROR_MUST_POSSESS_CAPABILITY : result;
   }
-  std::string error;
-  if (!hooks::Initialize(&error)) {
-    Diagnose("ShadowHook initialization failed: " + error);
+  const int initialization = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
+  if (initialization != 0) {
+    Diagnose(std::string("ShadowHook initialization failed: ") + shadowhook_to_errmsg(initialization));
     return JVMTI_ERROR_INTERNAL;
   }
   using namespace symbols::structural;
@@ -310,9 +313,11 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
       {addresses[0], reinterpret_cast<void*>(Route), &original_entry, names[0].name}};
   for (size_t i = 0; i < hook_tokens.size(); ++i) {
     const Hook& hook = replacements[i];
-    hook_tokens[i] = hooks::Install(hook.target, hook.replacement, hook.original, &error);
+    hook_tokens[i] = shadowhook_hook_sym_addr(hook.target, hook.replacement, hook.original);
     if (!hook_tokens[i]) {
-      std::string failure = std::string("hook installation failed: ") + hook.name + ": " + error;
+      const int error = shadowhook_get_errno();
+      std::string failure = std::string("hook installation failed: ") + hook.name + ": " +
+          shadowhook_to_errmsg(error);
       RollBack(&failure);
       Diagnose(failure);
       return JVMTI_ERROR_INTERNAL;
