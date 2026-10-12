@@ -9,7 +9,8 @@
 namespace artdcevm::structural_redefine {
 
 // Checks that the runtime was Java-debuggable at init, then installs:
-//  - Redefiner::RedefineClasses -> original StructurallyRedefineClasses, after
+//  - public-table JvmtiFunctions::RedefineClasses -> original
+//    Redefiner::StructurallyRedefineClasses, after
 //    reading each target's live declarations while the thread is still Native;
 //  - CheckClass/CheckFields/CheckMethods -> structural_policy decisions.
 // `env` is this library's own JVMTI environment. Idempotent.

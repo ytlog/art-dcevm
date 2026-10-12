@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：方案已确定，旧代码已清除，Phase 1–2 实施中，尚未通过设备验证。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3/4 与其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -26,18 +26,20 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ## 符号证据
 
-以下命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找，不依赖 `.gnu_debugdata`：
+以下 17 个命名符号在 `assets/runtime_lib` 采集的 27 份设备库中（API 30–37，涵盖 Pixel、小米、三星、vivo、荣耀、华为、一加）**全部位于 `.dynsym`**，可以按名称直接查找：
 
 - `libopenjdkjvmti.so`：`Redefiner::RedefineClasses`、`Redefiner::StructurallyRedefineClasses`；`ClassRedefinition::CheckClass`、`CheckFields`、`CheckMethods`、`RecordNewFieldAdded`、`RecordNewMethodAdded`、`CollectNewFieldAndMethodMappings`、`AllocateNewClassObject`、`FinishNewClassAllocations`、`CollectAndCreateNewInstances`、`UpdateClassStructurally`；`HeapExtensions::ReplaceReferences`。
 - `libart.so`：`Runtime::VisitReflectiveTargets`、`Instrumentation::DeoptimizeAllThreadFrames`、`jni::JniIdManager::DecodeFieldId`、`DecodeMethodId`。
 
-复核命令：`python3 tools/check-structural-symbols.py`。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少任一符号的 ART 构建只开放公开 JVMTI 能力。
+标准 JVMTI 表实际使用 `JvmtiFunctions::RedefineClasses` 包装器（`OpenjdkJvmTi.cc`），它在 27 套库中均位于 `.gnu_debugdata`，不在 `.dynsym`。Android 16 实测中，只 Hook 导出的 `Redefiner::RedefineClasses` 没有增强标准调用；优化后的包装器不能假设会经过该导出入口。因此直接按包装器的完整命名符号查找并 Hook，同时核对找到的地址与公开 JVMTI 表一致。`symbols::Find()` 对这个明确列出的符号使用官方 ShadowHook 的 `shadowhook_dlsym()`，其余符号只查 `.dynsym`；`.gnu_debugdata` 仍是命名 ELF 符号表，不涉及反汇编或地址推算。查找规则见 [ShadowHook 2.0.1 手册](https://github.com/bytedance/android-inline-hook/blob/v2.0.1/doc/manual.md)。
+
+复核命令：`python3 tools/check-structural-symbols.py`，共核对 18 个名称及各自的符号表范围。新的设备库加入 `assets/runtime_lib` 后先运行它；缺少 MVP 所需任一符号时增强库初始化失败。
 
 ## 接管点
 
 | ART 决策点 | ART 原行为 | 增强库行为 |
 | --- | --- | --- |
-| `Redefiner::RedefineClasses` | 普通重定义，结构变化一律拒绝 | 路由到原始 `StructurallyRedefineClasses`，保留调用者的 `jvmtiEnv*`、能力检查和 `ClassFileLoadHook`。仅方法体变化时 ART 仍走原地更新路径，行为不变 |
+| 公开表的 `JvmtiFunctions::RedefineClasses` | 经 `Redefiner::RedefineClasses` 的普通重定义，结构变化一律拒绝；导出入口可能被内联 | 路由到原始 `Redefiner::StructurallyRedefineClasses`，保留调用者的 `jvmtiEnv*`、能力检查和 `ClassFileLoadHook`。仅方法体变化时 ART 仍走原地更新路径，行为不变 |
 | `CheckClass` | 修饰符、父类、接口不得变化 | 自有策略：允许修饰符和继承关系变化，冲突时（加 final 与已加载子类冲突等）拒绝 |
 | `CheckFields` / `CheckMethods` | 只允许新增，修饰符不得变化 | 自有策略：允许删除、类型和签名变化、修饰符变化；有任何结构变化时调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，确保 ART 走结构路径 |
 | `CollectNewFieldAndMethodMappings` | 找不到同名同签名方法时 `CHECK` 失败 | 自有映射：按名称加类型或签名匹配；退役成员映射到**墓碑成员** |
@@ -68,7 +70,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 | 内容 | 位置 |
 | --- | --- |
 | JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
-| 接管点命名符号（11–17 共用）；`Find()` 用官方 ShadowHook（Maven prefab）只查 `.dynsym` | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
+| 接管点命名符号（11–17 共用）；`Find()` 用官方 ShadowHook（Maven prefab）按目录指定的 ELF 符号表范围查找 | `platform/symbols/structural_redefine_symbols.h`、`art_symbol_compat.h` |
 | 11–17 共用的 `ClassRedefinition` / `Redefiner` / `DexFile` 前缀声明 | `platform/abi/arm64/common/redefinition.h`；确有版本差异的声明放 `platform/abi/arm64/androidNN/` |
 | 引擎：前提检查、Hook 安装、路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
 | 校验策略（纯函数，主机可测） | `platform/common/structural_policy.{h,cc}` |
@@ -98,8 +100,8 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 1. **Install**（幂等，由 agent 的互斥锁串行化）：
    1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
-   2. 通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：两个入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号。
-   3. 保存结构入口和三个校验点的原始地址；用 `shadowhook_hook_sym_addr` 替换标准入口和三个校验点（先 `shadowhook_init`，失败信息取 `shadowhook_to_errmsg`）。任一步失败，用 `shadowhook_unhook` 撤销已安装的部分。
+   2. 先通过 `hooks::Initialize()` 初始化官方 ShadowHook，再通过 `symbols::Find()` 解析 MVP 用到的 7 个符号：公开表的 `JvmtiFunctions::RedefineClasses`、结构入口、三个校验点、两个 `RecordNew*Added`。任一缺失就失败，并写明缺失的符号；公开表与命名包装器不一致时也失败。
+   3. 保存结构入口和三个校验点的原始地址；通过 `hooks::Install()` 调用 `shadowhook_hook_sym_addr` 替换标准包装器和三个校验点，标准包装器最后安装。失败信息取 `shadowhook_to_errmsg`；任一步失败，通过 `hooks::Remove()` 调用 `shadowhook_unhook` 逆序撤销已安装的部分。
 2. **标准入口**：
    1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）。

@@ -272,8 +272,13 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
     Diagnose("can_redefine_classes unavailable; process must be Java-debuggable at startup");
     return result == JVMTI_ERROR_NONE ? JVMTI_ERROR_MUST_POSSESS_CAPABILITY : result;
   }
+  std::string error;
+  if (!hooks::Initialize(&error)) {
+    Diagnose("ShadowHook initialization failed: " + error);
+    return JVMTI_ERROR_INTERNAL;
+  }
   using namespace symbols::structural;
-  const symbols::NamedSymbol names[] = {kRedefineClasses, kStructurallyRedefineClasses,
+  const symbols::NamedSymbol names[] = {kJvmtiRedefineClasses, kStructurallyRedefineClasses,
       kCheckClass, kCheckFields, kCheckMethods, kRecordNewFieldAdded, kRecordNewMethodAdded};
   std::array<void*, 7> addresses{};
   for (size_t i = 0; i < addresses.size(); ++i) {
@@ -283,10 +288,11 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
   }
-  std::string error;
-  if (!hooks::Initialize(&error)) {
-    Diagnose("ShadowHook initialization failed: " + error);
-    return JVMTI_ERROR_INTERNAL;
+  // Verify the public table without using its address as a hook target.
+  // Installation still targets only the address returned by the named lookup.
+  if (reinterpret_cast<void*>(env->functions->RedefineClasses) != addresses[0]) {
+    Diagnose("standard JVMTI table does not use the named JvmtiFunctions::RedefineClasses wrapper");
+    return JVMTI_ERROR_NOT_AVAILABLE;
   }
   std::string rollback = "previous partial installation";
   if (!RollBack(&rollback)) { Diagnose(rollback); return JVMTI_ERROR_INTERNAL; }
@@ -314,7 +320,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   }
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
-  diagnostic = "ART structural transaction routed; Phase 1-2 validators installed";
+  diagnostic = "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed";
   return JVMTI_ERROR_NONE;
 }
 
