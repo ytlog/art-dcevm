@@ -62,7 +62,7 @@ struct Batch {
   std::map<ClassRedefinitionPrefix*, structural_policy::Decision> decisions;
   JNIEnv* jni = nullptr;
   std::vector<jobject> retirement_roots;
-  bool retires_methods = false;
+  bool retires_members = false;
   ~Batch() {
     if (jni) for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
   }
@@ -218,7 +218,7 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   const jvmtiError result = structural_entry(env, count, definitions);
   if (result == JVMTI_ERROR_NONE && count > 0) {
-    if (current_batch->retires_methods) {
+    if (current_batch->retires_members) {
       method_retirement::RetainRoots(std::move(current_batch->retirement_roots));
       current_batch->retirement_roots.clear();
     }
@@ -306,8 +306,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   const auto& snapshot = found->second;
   const bool owns_mapping =
       method_retirement::VerifyTarget(self, snapshot.live, incoming.access);
+  const bool retires_fields = owns_mapping && method_retirement::FieldRetirementAvailable();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
-                                              owns_mapping);
+                                              owns_mapping, retires_fields);
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -318,7 +319,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   if (owns_mapping && structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy)
                               .error != JVMTI_ERROR_NONE)
     method_retirement::RequireMemberMapping();
-  if (!decision.retired_methods.empty()) current_batch->retires_methods = true;
+  if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
+    current_batch->retires_members = true;
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
 }
@@ -361,7 +363,8 @@ bool RollBack(std::string* failure) {
 }
 }  // namespace
 
-jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
+jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
+                   const method_retirement::FieldPlaceholders& placeholders) {
   {
     std::lock_guard<std::mutex> lock(report_mutex);
     if (installed) return JVMTI_ERROR_NONE;
@@ -429,27 +432,37 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
       return JVMTI_ERROR_INTERNAL;
     }
   }
+  std::string field_note;
+  if (method_retirement::Available())
+    method_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
-  diagnostic = method_retirement::Available()
-      ? "ART structural transaction with Phase 3 method-retirement guards; fields cannot retire"
-      : "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed";
-  if (!retirement_note.empty()) diagnostic += "; " + retirement_note;
+  diagnostic = !method_retirement::Available()
+      ? "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed"
+      : method_retirement::FieldRetirementAvailable()
+          ? "ART structural transaction with method and field retirement"
+          : "ART structural transaction with method retirement; fields cannot retire";
+  for (const auto* note : {&retirement_note, &field_note})
+    if (!note->empty()) diagnostic += "; " + *note;
   return JVMTI_ERROR_NONE;
 }
 
 std::string Capabilities() {
   std::lock_guard<std::mutex> lock(report_mutex);
   const std::string supported = installed ? "true" : "false";
-  const std::string retirement = installed && method_retirement::Available() ? "true" : "false";
+  const bool methods = installed && method_retirement::Available();
+  const bool fields = methods && method_retirement::FieldRetirementAvailable();
+  const std::string retirement = methods ? "true" : "false";
+  const std::string field_retirement = fields ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
-      ",\"fieldDeletion\":false,\"fieldTypeChange\":false" +
+      ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
-      ",\"memberDeletion\":false,\"memberTypeChange\":false,\"hierarchyChange\":false,"
+      ",\"memberDeletion\":" + field_retirement + ",\"memberTypeChange\":" + field_retirement +
+      ",\"hierarchyChange\":false,"
       "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +
       ",\"lastRejection\":" + QuoteJsonMutf8(last_rejection) + "}";
 }

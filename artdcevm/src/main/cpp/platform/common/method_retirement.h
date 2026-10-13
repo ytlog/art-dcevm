@@ -22,6 +22,18 @@ struct Hook {
 void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note);
 // The retirement hooks are prepared; VerifyTarget decides per transaction.
 bool Available();
+// Classes whose fields stand in for retired fields in reflective Field objects
+// (com.github.ytlog.artdcevm.internal.RetiredField / RetiredStaticField).
+struct FieldPlaceholders {
+  JNIEnv* jni;
+  jclass instance_fields;
+  jclass static_fields;
+};
+// After the hooks are installed: resolve the placeholder ArtFields. Field
+// retirement stays off, with `note` explaining why, when they are unavailable.
+void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placeholders,
+                              std::string* note);
+bool FieldRetirementAvailable();
 // Probe the source-declared class layouts on a redefinition target against
 // ART's own lookups and the JVMTI view (`live`); `class_def_access` holds the
 // raw ClassDef flags. Runs in CheckClass, before ART can no longer fail. True

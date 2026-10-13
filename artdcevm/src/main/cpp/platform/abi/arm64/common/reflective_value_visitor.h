@@ -14,15 +14,29 @@ struct ReflectionSourceInfo {
   const void* vtable;
   int32_t type;
 };
-// JNIIdReflectiveSourceInfo<jmethodID>: the visited ID follows the base.
+// JniIdReflectiveSourceInfo<T>: the visited ID follows the base.
 struct JniMethodIdSourceInfo {
   ReflectionSourceInfo base;
   jmethodID id;
 };
-static_assert(offsetof(JniMethodIdSourceInfo, id) == 16);
+struct JniFieldIdSourceInfo {
+  ReflectionSourceInfo base;
+  jfieldID id;
+};
+// HeapReflectiveSourceInfo: the visited heap object (Field, MethodHandle, VarHandle).
+struct HeapSourceInfo {
+  ReflectionSourceInfo base;
+  const void* source;
+};
+static_assert(offsetof(JniMethodIdSourceInfo, id) == 16 && offsetof(JniFieldIdSourceInfo, id) == 16 &&
+              offsetof(HeapSourceInfo, source) == 16);
 // ReflectionSourceType.
+inline constexpr int32_t kSourceJavaLangReflectField = 2;
+inline constexpr int32_t kSourceJavaLangInvokeFieldVarHandle = 4;
+inline constexpr int32_t kSourceJniFieldId = 6;
 inline constexpr int32_t kSourceJniMethodId = 7;
 inline constexpr int32_t kSourceDexCacheResolvedMethod = 8;
+inline constexpr int32_t kSourceDexCacheResolvedField = 9;
 
 // Virtual functions in declaration order: destructor, VisitMethod, VisitField.
 class ReflectiveValueVisitor {

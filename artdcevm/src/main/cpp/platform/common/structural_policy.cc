@@ -67,7 +67,8 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, bool owns_member_mapping) {
+                  const LoadedHierarchy& hierarchy, bool owns_member_mapping,
+                  bool retires_fields) {
   if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "superclass or interfaces changed");
@@ -84,9 +85,14 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     new_fields[{f.name, f.descriptor, f.IsStatic()}] = FieldModifiers(f.access);
   for (const auto& old : live.fields) {
     auto it = new_fields.find({old.name, old.descriptor, old.IsStatic()});
-    if (it == new_fields.end())
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
-                    "field removed or its type/storage changed: " + old.name + ":" + old.descriptor);
+    if (it == new_fields.end()) {
+      if (!(owns_member_mapping && retires_fields))
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                      "field removed or its type/storage changed: " + old.name + ":" + old.descriptor);
+      decision.fields_structural = true;
+      decision.retired_fields.push_back(old);
+      continue;
+    }
     const uint32_t changed = old.access ^ it->second;
     if (changed & ~kFieldAllowed)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,

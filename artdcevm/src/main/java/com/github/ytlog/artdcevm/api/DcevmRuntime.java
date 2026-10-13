@@ -3,6 +3,8 @@ package com.github.ytlog.artdcevm.api;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.os.Debug;
+import com.github.ytlog.artdcevm.internal.RetiredField;
+import com.github.ytlog.artdcevm.internal.RetiredStaticField;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -30,7 +32,8 @@ public final class DcevmRuntime {
     public static synchronized void initialize(Context context) throws Exception {
         if (initialized) return;
         attach(context);
-        int code = nativeInitialize();
+        // Class literals do not initialize RetiredStaticField.
+        int code = nativeInitialize(RetiredField.class, RetiredStaticField.class);
         if (code != 0) {
             throw new IllegalStateException("ART DCEVM initialization failed: " + nativeErrorName(code)
                     + " (" + code + "); " + capabilities().optString("diagnostic"));
@@ -59,7 +62,7 @@ public final class DcevmRuntime {
         attached = true;
     }
 
-    private static native int nativeInitialize();
+    private static native int nativeInitialize(Class<?> retiredField, Class<?> retiredStaticField);
     private static native String nativeCapabilities();
     private static native String nativeErrorName(int code);
 }

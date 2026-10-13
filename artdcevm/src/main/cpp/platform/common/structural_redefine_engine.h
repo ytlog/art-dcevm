@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <jvmti.h>
 #include <string>
+#include "platform/common/method_retirement.h"
 
 // Process owner of the hooks on ART's own structural-redefinition transaction
 // (docs/STRUCTURAL_REDEFINE_ENGINE.md). Installed hooks stay for the process
@@ -13,8 +14,10 @@ namespace artdcevm::structural_redefine {
 //    Redefiner::StructurallyRedefineClasses, after
 //    reading each target's live declarations while the thread is still Native;
 //  - CheckClass/CheckFields/CheckMethods -> structural_policy decisions.
-// `env` is this library's own JVMTI environment. Idempotent.
-jvmtiError Install(JavaVM* vm, jvmtiEnv* env);
+// `env` is this library's own JVMTI environment; `placeholders` are the
+// library's RetiredField classes used for retired fields. Idempotent.
+jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
+                   const method_retirement::FieldPlaceholders& placeholders);
 
 // JSON capability report. lastRejection is the validation rejection of the
 // latest outermost standard-entry transaction, empty when it was accepted.

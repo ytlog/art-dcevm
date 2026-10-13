@@ -1,33 +1,48 @@
 # 能力限制
 
-Phase 1–2 已在一台 Android 16 / API 36、arm64 设备上通过指定的 12 次提交和行为检查：方法体、新增成员、成员修饰符变化、拒绝后的旧定义及批次原子性。其他设备和版本仍待回归，完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，各阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
+Phase 1–3 已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员修饰符变化、普通类 concrete Java 方法的删除与签名替换、字段删除、改类型与 static/实例互换，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
 
 ## 前提限制
 
 - 应用必须从进程启动时就是 Java 可调试的；release 进程中 ART 不开放 `can_redefine_classes`，本库无法工作。
-- 仅支持 arm64-v8a 的 Android 11–17，不含 12L。
-- 运行库缺少 MVP 所需任一命名符号，或公开 JVMTI 表与找到的命名包装器不一致时初始化失败。包装器通过官方 ShadowHook 按名称读取 `.gnu_debugdata`，其他符号只查 `.dynsym`。
+- 仅支持 arm64-v8a 的 Android 11–17。
+- 运行库缺少基础入口的任一命名符号，或公开 JVMTI 表与找到的命名包装器不一致时初始化失败。方法与字段退役另需各自的名称；缺少时只关闭相应能力，并在 `capabilities()` 的诊断中说明。
+- 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务按 Phase 2 规则拒绝退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
 ## 尚未支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 
 | 变化 | 错误码 | 计划 |
 | --- | --- | --- |
-| 删除字段，字段类型或 static 属性变化 | `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64） | Phase 3 |
-| 删除方法，方法签名变化 | `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67） | Phase 3 |
-| native → Java，abstract 相关的方法变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | Phase 3/4 |
+| 删除或改签名的方法是 native、abstract、接口声明、构造器或类初始化器 | `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67） | 待定 |
+| native → Java，abstract 相关的方法变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | Phase 4 |
 | 类修饰符变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | Phase 4 |
 | 父类、接口变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | Phase 4 |
+
+方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝。
 
 ## 语义冲突（各阶段都会拒绝）
 
 - 方法新增 final，而已加载的子类覆写了它。
 - 类新增 final，而已有已加载的子类。
 - 变为 abstract 后，存活实例或已加载子类将继承未实现的抽象方法。
+- 退役不可用时，新增或改变访问级别的方法可能顶替已加载子类的接口 default/miranda 拷贝。
+
+## 退役成员的语义
+
+- 删除的方法和签名替换前的方法退役：字节码、JNI、MethodHandle 再调用时抛 `NoSuchMethodError`，缓存的反射 `Method.invoke` 抛包装它的 `InvocationTargetException`；已在执行的旧方法帧继续执行旧方法体。
+- 退役字段：字节码、JNI、MethodHandle 访问抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`，访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。缓存的反射 `Field` 的名称与声明类会显示为库内占位类的字段。
+- 恢复同名成员会产生新成员，旧的缓存引用保持退役。
+- 发生过退役的类及其 class loader 保留到进程结束。
 
 ## ART 自身的限制
 
-结构重定义沿用 ART 的检查：接口、数组、基本类型、代理类、`java.lang.String`、mirror 类、`java.lang.Thread` 及其子类不可重定义；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
+- 结构重定义沿用 ART 的检查：接口、数组、基本类型、代理类、`java.lang.String`、mirror 类、`java.lang.Thread` 及其子类不可重定义；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
+- `sun.misc.Unsafe`、`Atomic*FieldUpdater` 等缓存的原始字段 offset 不经过 ART 的任何入口；任何改变实例布局的结构重定义（包括新增字段）都会使其失效。
+
+## 进程内的副作用
+
+- 方法退役启用时，库通过 JVMTI `SetJNIFunctionTable` 包装 JNI 调用与字段访问；ART 设置覆盖表后会关闭本进程的 Core Platform API 检查，该检查只约束平台模块的调用方。
 
 ## 语义说明
 

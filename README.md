@@ -2,11 +2,11 @@
 
 在非 root 的 Android 设备上，于应用进程内增强 ART 的类重定义能力，目标是 VM 级 DCEVM：运行期间增删字段和方法、修改类型与签名、修饰符和继承关系，存活对象保留兼容字段的值。适用于自有应用的开发调试和热重载工具。
 
-**状态：Phase 1–2 已在一台 Android 16 设备通过验证。** 标准 JVMTI 入口可执行方法体替换、新增字段和方法、成员修饰符变化；指定的 12 次提交及行为检查均通过，见 [验证记录](docs/VERIFICATION.md)。完整 DCEVM 的成员删除、类型变化和继承关系变化仍待 Phase 3/4 实现，其他 Android 版本尚待设备回归。旧实现保存在本地标签 `backup-call-graph-engine-20261012`。
+**状态：Phase 1–3 已在一台 Android 16 设备通过验证。** 标准 JVMTI 入口可执行方法体替换、新增字段和方法、成员修饰符变化、删除方法和改签名、删除字段、改字段类型与 static/实例互换；23 个场景、799 项检查通过，见 [验证记录](docs/VERIFICATION.md)。继承关系与类修饰符变化仍待 Phase 4，其他 Android 版本尚待设备回归。退役成员的语义与限制见 [能力限制](docs/LIMITATIONS.md)。旧实现保存在本地标签 `backup-call-graph-engine-20261012`。
 
 ## 原理
 
-Android 11 起，ART 的 `Redefiner::StructurallyRedefineClasses` 已经实现新类分配、堆遍历迁移实例、改写反射与 JNI 引用、全线程去优化和 JIT 失效，但只允许"只增不删"。本库目前用 ShadowHook 挂接标准 JVMTI 表入口与三个校验函数，路由到 ART 的结构事务并允许成员新增和修饰符变化；成员映射、类分配和提交策略的扩展属于后续 Phase 3/4。私有能力只通过命名 ELF 符号访问，不从反汇编推算地址或偏移。
+Android 11 起，ART 的 `Redefiner::StructurallyRedefineClasses` 已经实现新类分配、堆遍历迁移实例、改写反射与 JNI 引用、全线程去优化和 JIT 失效，但只允许"只增不删"。本库用 ShadowHook 挂接标准 JVMTI 表入口与校验函数，路由到 ART 的结构事务；接管成员映射以退役删除或改签名的方法与字段，并在缓存的反射、JNI、MethodHandle 与 VarHandle 入口拒绝访问退役成员。提交、迁移与失效仍由 ART 执行；类分配策略的扩展属于 Phase 4。私有能力只通过命名 ELF 符号访问，不从反汇编推算地址或偏移。
 
 ## 要求
 

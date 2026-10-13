@@ -28,6 +28,14 @@ final class StandardJvmtiClient {
     static native int callCachedMethodVariant(Object receiver, int method, int form);
     static native int callReflectedMethodVariant(Method method, Object receiver, int kind, int form);
     static native void lookupMethodId(Class<?> type, int method);
+    /**
+     * Resolve field IDs before redefinition: 0 = int i, 1 = long j, 2 = Object o,
+     * 3 = static int si, 4 = static Object so. Object reads return 1 when non-null.
+     */
+    static native void cacheFieldIds(Class<?> type);
+    static native long readCachedField(Object receiver, int field);
+    static native void writeCachedField(Object receiver, int field, long value);
+    static native long readReflectedField(java.lang.reflect.Field field, Object receiver, int kind);
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */
     static native int setThreadSingleStep(boolean enabled);
     static native long singleStepCount();

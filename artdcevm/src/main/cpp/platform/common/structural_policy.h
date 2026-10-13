@@ -32,8 +32,10 @@ struct Decision {
   // structural path so the new Class carries the new declarations.
   bool fields_structural = false;
   bool methods_structural = false;
-  // Old method declarations absent from the new class.
+  // Old declarations absent from the new class.
   std::vector<evolution::Member> retired_methods;
+  // Old fields without a new field of the same name, type and storage.
+  std::vector<evolution::Member> retired_fields;
 };
 
 // Raw DEX access flags mapped to what JVMTI Get*Modifiers reports
@@ -45,7 +47,10 @@ uint32_t MethodModifiers(uint32_t dex_access);
 // `live` carries JVMTI modifiers, `incoming` raw DEX flags. `owns_member_mapping`
 // means the engine replaces ART's member mapping for this runtime: it can retire
 // methods and remap copied members that disappear from re-linked subclasses.
+// `retires_fields` additionally allows removing a field or changing its type or
+// storage; the old field retires and the new one starts from its default value.
 Decision Evaluate(const evolution::ClassSchema& live, const evolution::ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, bool owns_member_mapping = false);
+                  const LoadedHierarchy& hierarchy, bool owns_member_mapping = false,
+                  bool retires_fields = false);
 
 }  // namespace artdcevm::structural_policy

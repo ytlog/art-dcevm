@@ -25,6 +25,6 @@ struct Class {
 static_assert(offsetof(Class, fields) == 40 && offsetof(Class, methods) == 48 &&
               offsetof(Class, access_flags) == 56);
 
-// Native field arrays holding every declared field of `klass`.
-inline std::array<uint64_t, 1> FieldArrays(const Class& klass) { return {klass.fields}; }
+// Slots of the native arrays holding every declared field of `klass`.
+inline std::array<uint64_t*, 1> FieldArraySlots(Class& klass) { return {&klass.fields}; }
 }  // namespace artdcevm::abi::arm64::android17

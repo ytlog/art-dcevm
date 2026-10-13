@@ -126,6 +126,33 @@ int main(int argc, char** argv) {
     Require(policy::Evaluate(live, next, {}, true).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
             "constructor retirement must remain rejected");
+    {
+      // Field retirement needs both the owned mapping and the field guards.
+      auto fields = live;
+      fields.fields.push_back({"total", "J", acc::kAccStatic | acc::kAccPrivate});
+      for (int change = 0; change < 3; ++change) {
+        next = fields;
+        if (change == 0) next.fields.erase(next.fields.begin());          // Removed.
+        if (change == 1) next.fields[0].descriptor = "J";                 // Type changed.
+        if (change == 2) next.fields[0].access |= acc::kAccStatic;        // Storage changed.
+        Require(policy::Evaluate(fields, next, {}, true, false).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                "field retirement enabled without field guards");
+        Require(policy::Evaluate(fields, next, {}, false, true).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                "field retirement enabled without the owned mapping");
+        const auto retired = policy::Evaluate(fields, next, {}, true, true);
+        Require(retired.error == JVMTI_ERROR_NONE && retired.fields_structural &&
+                retired.retired_fields.size() == 1 && retired.retired_fields[0].name == "value" &&
+                retired.retired_fields[0].descriptor == "I" && retired.retired_methods.empty(),
+                "field retirement not reported");
+      }
+      next = fields; next.fields.clear();
+      Require(policy::Evaluate(fields, next, {}, true, true).retired_fields.size() == 2,
+              "static field retirement not reported");
+      Require(policy::Evaluate(fields, fields, {}, true, true).retired_fields.empty(),
+              "unchanged fields reported as retired");
+    }
     for (uint32_t unsupported : {acc::kAccNative, acc::kAccAbstract}) {
       auto restricted = live; restricted.methods[0].access |= unsupported;
       next = restricted; next.methods.erase(next.methods.begin());

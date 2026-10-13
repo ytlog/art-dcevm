@@ -26,15 +26,13 @@ SCENARIOS = (
     ("method-delete", ["method-delete"], 0),
     ("method-restore", ["add"], 0),
     ("hierarchy", ["hierarchy"], 66),
-    ("atomic-modifier-public-field-delete", ["modifier-public", "field-delete"], 64),
+    ("atomic-modifier-public-class-final", ["modifier-public", "class-final"], 70),
     ("modifier-public", ["modifier-public"], 0),
     ("modifier-final", ["modifier-final"], 0),
     ("modifier-sync", ["modifier-sync"], 0),
     ("modifier-field-final", ["modifier-field-final"], 0),
-    ("field-delete", ["field-delete"], 64),
-    ("field-types", ["field-types"], 64),
     ("class-final", ["class-final"], 70),
-    ("atomic-method-retire-field-types", ["methods-delete", "field-types"], 64),
+    ("atomic-method-retire-class-final", ["methods-delete", "class-final"], 70),
     ("native-method-delete", ["methods-native-delete"], 67),
     ("constructor-delete", ["methods-constructor-delete"], 67),
     ("abstract-method-delete", ["methods-abstract-delete"], 67),
@@ -43,11 +41,17 @@ SCENARIOS = (
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
+    ("field-retire", ["field-delete"], 0),
+    ("field-restore", ["field-original"], 0),
+    ("field-types", ["field-types"], 0),
 )
 # Scenarios whose acceptance depends on the engine's member mapping, which is
 # enabled only after the runtime probes selected a source-declared layout.
 MAPPED_SCENARIOS = {"methods-retire", "methods-restore", "methods-retire-again",
-                    "methods-restore-again", "copied-default-add"}
+                    "methods-restore-again", "copied-default-add",
+                    "field-retire", "field-restore", "field-types"}
+# VarHandle field access exists from API 33; older devices report no such checks.
+VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
                    "newAddedMethod": 187, "oldValue": 10, "staticCounter": 7}
@@ -104,6 +108,30 @@ METHOD_RESTORE_CHECKS = {
     "restoredParentCall": 64, "restoredInterfaceCall": 65, "freshReflection": 63,
     "removedReplacementSignature": "java.lang.NoSuchMethodException",
 }
+CLASS_FINAL_CHECKS = {"classFlags": 1, "oldValue": 29, "newValue": 29}
+
+
+def field_live_checks(i, j, o, si, so):
+    """Observations through each access path while the cached fields exist."""
+    return {"reflectionLiveI": i, "reflectionLiveSi": si, "jniLiveI": i, "jniLiveJ": j,
+            "jniLiveO": o, "jniLiveSi": si, "jniLiveSo": so, "reflectedJniLiveI": i,
+            "handleLiveI": i, "handleLiveSi": si, "varHandleLiveI": i, "varHandleLiveSi": si}
+
+
+def field_retired_checks(suffix):
+    """Each cached access path to a retired field and the exception it reports."""
+    checks = {name + suffix: "java.lang.IllegalArgumentException"
+              for name in ("reflectionI", "reflectionJ", "reflectionO", "reflectionSetI")}
+    checks.update({name + suffix: "java.lang.NoClassDefFoundError"
+                   for name in ("reflectionSi", "reflectionSetSo")})
+    checks.update({name + suffix: "java.lang.NoSuchFieldError" for name in (
+        "jni0", "jni1", "jni2", "jni3", "jni4", "jniWriteJ", "reflectedJniI", "reflectedJniSi",
+        "handleGetI", "handleSetJ", "handleGetSi")})
+    checks.update({name + suffix: "java.lang.UnsupportedOperationException"
+                   for name in ("varHandleI", "varHandleSetI", "varHandleSi")})
+    return checks
+
+
 REQUIRED_CHECKS = {
     "body": {"computeBefore": 11, "oldCompute": 12, "newCompute": 12},
     "add": EVOLVING_CHECKS,
@@ -112,8 +140,8 @@ REQUIRED_CHECKS = {
                        "cachedMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "method-restore": EVOLVING_CHECKS,
     "hierarchy": {**EVOLVING_CHECKS, "superclass": "java.lang.Object", "interfaceCount": 0},
-    "atomic-modifier-public-field-delete": {
-        **FIELD_CHECKS, "modifierBefore": 42, "passiveBefore": 42,
+    "atomic-modifier-public-class-final": {
+        **CLASS_FINAL_CHECKS, "modifierBefore": 42, "passiveBefore": 42,
         "modifierThroughPublic": 42, "passiveThroughPublic": 42,
         "modifierFinalizable": 29, "passiveFinalizable": 29},
     "modifier-public": {**MODIFIER_CHECKS, "computeFlags": 1, "finalizableFlags": 1,
@@ -126,11 +154,9 @@ REQUIRED_CHECKS = {
                              "valueFlags": 17, "staticValueFlags": 25, "oldValue": 61,
                              "oldRead": 61, "staticValue": 72, "staticRead": 72,
                              "newConstructorValue": 41},
-    "field-delete": FIELD_CHECKS,
-    "field-types": FIELD_CHECKS,
-    "class-final": {"classFlags": 1, "oldValue": 29, "newValue": 29},
-    "atomic-method-retire-field-types": {
-        **METHOD_BASELINE_CHECKS, **FIELD_CHECKS,
+    "class-final": CLASS_FINAL_CHECKS,
+    "atomic-method-retire-class-final": {
+        **METHOD_BASELINE_CHECKS, **CLASS_FINAL_CHECKS,
         "unchangedStaticCall": 82, "unchangedVirtualCall": 63, "unchangedSignatureCall": 64},
     "native-method-delete": {**METHOD_FIELD_CHECKS, "nativeStillDeclared": True,
                               "unchangedDirectCall": 61, "unchangedVirtualCall": 63},
@@ -144,14 +170,30 @@ REQUIRED_CHECKS = {
     "methods-restore-again": METHOD_RESTORE_CHECKS,
     "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
                            "newChild": 92, "parentValue": 90},
+    "field-retire": {
+        **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
+        "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,
+        "remainingFields": "[keep, staticKeep]", "keptAfterGc": 43,
+        **{name: "java.lang.NoSuchFieldError" for name in (
+            "bytecodeReadI", "bytecodeWriteJ", "bytecodeReadO", "bytecodeReadSi", "bytecodeWriteSo")},
+        **field_retired_checks(""), **field_retired_checks("AfterGc")},
+    "field-restore": {
+        "restoredInstanceDefault": 0, "restoredReferenceDefault": True, "restoredBooleanDefault": False,
+        "restoredStaticDefault": 0, "restoredStaticReferenceDefault": True,
+        "keptInstance": 43, "keptStatic": 44, "freshReflection": 0,
+        **field_retired_checks("Cached"), **field_live_checks(17, 18, 1, 19, 1)},
+    "field-types": {
+        "typeChangedI": "long", "typeChangedDefault": 0, "storageChangedSi": "java.lang.Object",
+        "storageChangedDefault": True, "keptInstance": 43, "oldCompute": 45,
+        "bytecodeOldTypeI": "java.lang.NoSuchFieldError", "bytecodeOldTypeSi": "java.lang.NoSuchFieldError",
+        **field_retired_checks("Restored")},
 }
 UNCHANGED_CHECKS = {
     "hierarchy": ("unchangedMembers",),
-    "atomic-modifier-public-field-delete": ("unchangedModifierMembers", "unchangedMembers", "unchangedValues"),
-    "field-delete": ("unchangedMembers", "unchangedValues"),
-    "field-types": ("unchangedMembers", "unchangedValues"),
+    "atomic-modifier-public-class-final": ("unchangedModifierMembers", "unchangedMembers"),
     "class-final": ("unchangedMembers",),
-    "atomic-method-retire-field-types": ("unchangedMethodMembers", "unchangedMembers", "unchangedValues"),
+    "atomic-method-retire-class-final": ("unchangedMethodMembers", "unchangedMembers"),
+    "field-retire": ("unchangedMembers", "unchangedValues"),
     "native-method-delete": ("unchangedMembers",),
     "constructor-delete": ("unchangedMembers",),
     "abstract-method-delete": ("unchangedMembers",),
@@ -189,13 +231,13 @@ def validate_report(report):
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
     for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
-                 "methodDeletion", "methodSignatureChange"):
+                 "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
+                 "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")
-    for name in ("memberDeletion", "memberTypeChange", "fieldDeletion", "fieldTypeChange",
-                 "hierarchyChange", "fullDcevmComplete"):
+    for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
-            raise RunFailure("The engine capabilities do not describe the requested method-only scope")
+            raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(SCENARIOS):
         raise RunFailure("The device report does not contain the complete scenario sequence")
@@ -230,6 +272,8 @@ def validate_report(report):
                 raise RunFailure("Scenario " + name + " behavior check " + str(index + 1) + " failed")
         observed = {check["name"]: check for check in checks}
         for check_name, expected in {"returnCode": code, **REQUIRED_CHECKS[name]}.items():
+            if check_name.startswith("varHandle") and device["api"] < VAR_HANDLE_API:
+                continue
             check = observed.get(check_name)
             if (check is None or type(check["expected"]) is not type(expected)
                     or check["expected"] != expected):

@@ -13,6 +13,7 @@ import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.Evolving;
+import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
 import com.github.ytlog.artdcevm.fixture.FinalFieldSubject;
 import com.github.ytlog.artdcevm.fixture.ModifierPassive;
@@ -36,6 +37,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -146,19 +148,22 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         String originalFieldValues = fieldValues(fields);
         Object originalObject = fields.o;
         Object originalStaticObject = FieldSubject.so;
-        runScenario("atomic-modifier-public-field-delete", 64, scenario -> {
+        ClassFinalSubject classFinal = new ClassFinalSubject();
+        int originalClassFlags = ClassFinalSubject.class.getModifiers();
+        String originalClassSchema = memberSchema(ClassFinalSubject.class);
+        // A class modifier change is always rejected, so the whole batch must stay.
+        runScenario("atomic-modifier-public-class-final", 70, scenario -> {
             scenario.check("modifierBefore", 42, modifier.throughPublic());
             scenario.check("passiveBefore", 42, passive.throughPublic());
-            scenario.expectRejectionBy(FieldSubject.class);
-            scenario.redefine(new Class<?>[]{ModifierSubject.class, FieldSubject.class},
-                    "modifier-public", "field-delete");
+            scenario.expectRejectionBy(ClassFinalSubject.class);
+            scenario.redefine(new Class<?>[]{ModifierSubject.class, ClassFinalSubject.class},
+                    "modifier-public", "class-final");
             scenario.check("unchangedModifierMembers", originalModifierSchema, memberSchema(ModifierSubject.class));
             scenario.check("modifierThroughPublic", 42, modifier.throughPublic());
             scenario.check("passiveThroughPublic", 42, passive.throughPublic());
             scenario.check("modifierFinalizable", 29, modifier.finalizable());
             scenario.check("passiveFinalizable", 29, passive.finalizable());
-            checkFieldDefinition(scenario, fields, originalFieldSchema, originalFieldValues,
-                    originalObject, originalStaticObject);
+            checkClassFinalUnchanged(scenario, classFinal, originalClassFlags, originalClassSchema);
         });
         runScenario("modifier-public", 0, scenario -> {
             scenario.redefine(new Class<?>[]{ModifierSubject.class}, "modifier-public");
@@ -209,26 +214,204 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("staticRead", 72, FinalFieldSubject.readStatic());
             scenario.check("newConstructorValue", 41, new FinalFieldSubject().read());
         });
-        for (String variant : new String[]{"field-delete", "field-types"}) {
-            runScenario(variant, 64, scenario -> {
-                scenario.redefine(new Class<?>[]{FieldSubject.class}, variant);
-                checkFieldDefinition(scenario, fields, originalFieldSchema, originalFieldValues,
-                        originalObject, originalStaticObject);
-            });
-        }
-        ClassFinalSubject classFinal = new ClassFinalSubject();
-        int originalClassFlags = ClassFinalSubject.class.getModifiers();
-        String originalClassSchema = memberSchema(ClassFinalSubject.class);
         runScenario("class-final", 70, scenario -> {
             scenario.redefine(new Class<?>[]{ClassFinalSubject.class}, "class-final");
-            scenario.check("classFlags", originalClassFlags, ClassFinalSubject.class.getModifiers());
-            scenario.check("unchangedMembers", originalClassSchema, memberSchema(ClassFinalSubject.class));
-            scenario.check("oldValue", 29, classFinal.value());
-            scenario.check("newValue", 29, new ClassFinalSubject().value());
+            checkClassFinalUnchanged(scenario, classFinal, originalClassFlags, originalClassSchema);
         });
-        runMethodScenarios(fields, originalFieldSchema, originalFieldValues,
-                originalObject, originalStaticObject);
+        runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runCopiedDefaultScenario();
+        runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
+                originalObject, originalStaticObject);
+    }
+
+    // Field retirement: delete every field but keep/staticKeep, restore them,
+    // then change int i to long and static int si to Object.
+    private void runFieldScenarios(FieldSubject fields, String schema, String values,
+            Object object, Object staticObject) throws Exception {
+        FieldTargets original = new FieldTargets();
+        runScenario("field-retire", 0, scenario -> {
+            checkFieldDefinition(scenario, fields, schema, values, object, staticObject);
+            original.checkLive(scenario, fields, 7, 9_000_000_000L, 1, 7, 1);
+            fields.keep = 43;
+            FieldSubject.staticKeep = 44;
+            scenario.redefine(new Class<?>[]{FieldSubject.class}, "field-delete");
+            scenario.check("keptInstance", 43, FieldCaller.readKeep(fields));
+            scenario.check("keptStatic", 44, FieldSubject.staticKeep);
+            scenario.check("retiredOldCompute", 44, fields.compute());
+            scenario.check("retiredNewCompute", 42, new FieldSubject().compute());
+            scenario.check("remainingFields", "[keep, staticKeep]", fieldNames());
+            scenario.expectError("bytecodeReadI", NoSuchFieldError.class, () -> FieldCaller.readI(fields));
+            scenario.expectError("bytecodeWriteJ", NoSuchFieldError.class, () -> FieldCaller.writeJ(fields, 1));
+            scenario.expectError("bytecodeReadO", NoSuchFieldError.class, () -> FieldCaller.readO(fields));
+            scenario.expectError("bytecodeReadSi", NoSuchFieldError.class, FieldCaller::readSi);
+            scenario.expectError("bytecodeWriteSo", NoSuchFieldError.class, () -> FieldCaller.writeSo(null));
+            original.checkRetired(scenario, fields, "");
+            Runtime.getRuntime().gc();
+            System.runFinalization();
+            original.checkRetired(scenario, fields, "AfterGc");
+            scenario.check("keptAfterGc", 43, FieldCaller.readKeep(fields));
+        });
+        FieldTargets[] restored = new FieldTargets[1];
+        runScenario("field-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{FieldSubject.class}, "field-original");
+            // Restored fields are new fields: existing objects and statics start at defaults.
+            scenario.check("restoredInstanceDefault", 0, FieldCaller.readI(fields));
+            scenario.check("restoredReferenceDefault", true, FieldCaller.readO(fields) == null);
+            scenario.check("restoredBooleanDefault", false, fields.z);
+            scenario.check("restoredStaticDefault", 0, FieldCaller.readSi());
+            scenario.check("restoredStaticReferenceDefault", true, FieldSubject.so == null);
+            scenario.check("keptInstance", 43, fields.keep);
+            scenario.check("keptStatic", 44, FieldSubject.staticKeep);
+            scenario.check("freshReflection", 0,
+                    FieldSubject.class.getDeclaredField("i").getInt(fields));
+            original.checkRetired(scenario, fields, "Cached");
+            fields.i = 17;
+            fields.j = 18;
+            fields.o = new Object();
+            FieldSubject.si = 19;
+            FieldSubject.so = new Object();
+            restored[0] = new FieldTargets();
+            restored[0].checkLive(scenario, fields, 17, 18, 1, 19, 1);
+        });
+        runScenario("field-types", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{FieldSubject.class}, "field-types");
+            scenario.check("typeChangedI", "long", FieldSubject.class.getDeclaredField("i").getType().getName());
+            scenario.check("typeChangedDefault", 0L,
+                    FieldSubject.class.getDeclaredField("i").getLong(fields));
+            scenario.check("storageChangedSi", "java.lang.Object",
+                    FieldSubject.class.getDeclaredField("si").getType().getName());
+            scenario.check("storageChangedDefault", true,
+                    FieldSubject.class.getDeclaredField("si").get(null) == null);
+            scenario.check("keptInstance", 43, fields.keep);
+            scenario.check("oldCompute", 45, fields.compute());
+            scenario.expectError("bytecodeOldTypeI", NoSuchFieldError.class, () -> FieldCaller.readI(fields));
+            scenario.expectError("bytecodeOldTypeSi", NoSuchFieldError.class, FieldCaller::readSi);
+            restored[0].checkRetired(scenario, fields, "Restored");
+        });
+    }
+
+    private static String fieldNames() {
+        List<String> names = new ArrayList<>();
+        for (Field field : FieldSubject.class.getDeclaredFields()) names.add(field.getName());
+        Collections.sort(names);
+        return names.toString();
+    }
+
+    /** Field targets resolved while the fields exist, then used unchanged. */
+    private static final class FieldTargets {
+        final Field i, j, o, si, so;
+        final MethodHandle getI, setJ, getSi;
+        final Object varHandles;
+
+        FieldTargets() throws Exception {
+            i = FieldSubject.class.getDeclaredField("i");
+            j = FieldSubject.class.getDeclaredField("j");
+            o = FieldSubject.class.getDeclaredField("o");
+            si = FieldSubject.class.getDeclaredField("si");
+            so = FieldSubject.class.getDeclaredField("so");
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            getI = lookup.unreflectGetter(i);
+            setJ = lookup.unreflectSetter(j);
+            getSi = lookup.unreflectGetter(si);
+            varHandles = Build.VERSION.SDK_INT >= 33 ? new FieldVarHandles() : null;
+            StandardJvmtiClient.cacheFieldIds(FieldSubject.class);
+        }
+
+        void checkLive(Scenario scenario, FieldSubject fields, int iValue, long jValue,
+                int oPresent, int siValue, int soPresent) throws Exception {
+            scenario.check("reflectionLiveI", iValue, i.getInt(fields));
+            scenario.check("reflectionLiveSi", siValue, si.getInt(null));
+            scenario.check("jniLiveI", (long) iValue, StandardJvmtiClient.readCachedField(fields, 0));
+            scenario.check("jniLiveJ", jValue, StandardJvmtiClient.readCachedField(fields, 1));
+            scenario.check("jniLiveO", (long) oPresent, StandardJvmtiClient.readCachedField(fields, 2));
+            scenario.check("jniLiveSi", (long) siValue, StandardJvmtiClient.readCachedField(fields, 3));
+            scenario.check("jniLiveSo", (long) soPresent, StandardJvmtiClient.readCachedField(fields, 4));
+            scenario.check("reflectedJniLiveI", (long) iValue,
+                    StandardJvmtiClient.readReflectedField(i, fields, 0));
+            scenario.check("handleLiveI", iValue, invoke(() -> (int) getI.invokeExact(fields)));
+            scenario.check("handleLiveSi", siValue, invoke(() -> (int) getSi.invokeExact()));
+            if (varHandles != null) ((FieldVarHandles) varHandles).checkLive(scenario, fields, iValue, siValue);
+        }
+
+        void checkRetired(Scenario scenario, FieldSubject fields, String suffix) throws Exception {
+            scenario.expectError("reflectionI" + suffix, IllegalArgumentException.class, () -> i.getInt(fields));
+            scenario.expectError("reflectionJ" + suffix, IllegalArgumentException.class, () -> j.getLong(fields));
+            scenario.expectError("reflectionO" + suffix, IllegalArgumentException.class, () -> o.get(fields));
+            scenario.expectError("reflectionSetI" + suffix, IllegalArgumentException.class,
+                    () -> i.setInt(fields, 1));
+            scenario.expectError("reflectionSi" + suffix, NoClassDefFoundError.class, () -> si.getInt(null));
+            scenario.expectError("reflectionSetSo" + suffix, NoClassDefFoundError.class, () -> so.set(null, null));
+            for (int field = 0; field < 5; field++) {
+                final int index = field;
+                scenario.expectError("jni" + field + suffix, NoSuchFieldError.class,
+                        () -> StandardJvmtiClient.readCachedField(fields, index));
+            }
+            scenario.expectError("jniWriteJ" + suffix, NoSuchFieldError.class,
+                    () -> StandardJvmtiClient.writeCachedField(fields, 1, 5));
+            scenario.expectError("reflectedJniI" + suffix, NoSuchFieldError.class,
+                    () -> StandardJvmtiClient.readReflectedField(i, fields, 0));
+            scenario.expectError("reflectedJniSi" + suffix, NoSuchFieldError.class,
+                    () -> StandardJvmtiClient.readReflectedField(si, fields, 3));
+            scenario.expectError("handleGetI" + suffix, NoSuchFieldError.class, () -> {
+                int ignored = (int) getI.invokeExact(fields);
+            });
+            scenario.expectError("handleSetJ" + suffix, NoSuchFieldError.class,
+                    () -> setJ.invokeExact(fields, 5L));
+            scenario.expectError("handleGetSi" + suffix, NoSuchFieldError.class, () -> {
+                int ignored = (int) getSi.invokeExact();
+            });
+            if (varHandles != null) ((FieldVarHandles) varHandles).checkRetired(scenario, fields, suffix);
+        }
+
+        private interface IntCall {
+            int call() throws Throwable;
+        }
+
+        private static int invoke(IntCall call) throws Exception {
+            try {
+                return call.call();
+            } catch (Throwable error) {
+                if (error instanceof Exception) throw (Exception) error;
+                if (error instanceof Error) throw (Error) error;
+                throw new RuntimeException(error);
+            }
+        }
+    }
+
+    /** VarHandle field access exists from API 33. */
+    @android.annotation.TargetApi(33)
+    private static final class FieldVarHandles {
+        final VarHandle i, si;
+
+        FieldVarHandles() throws Exception {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            i = lookup.findVarHandle(FieldSubject.class, "i", int.class);
+            si = lookup.findStaticVarHandle(FieldSubject.class, "si", int.class);
+        }
+
+        void checkLive(Scenario scenario, FieldSubject fields, int iValue, int siValue) throws Exception {
+            scenario.check("varHandleLiveI", iValue, (int) i.get(fields));
+            scenario.check("varHandleLiveSi", siValue, (int) si.get());
+        }
+
+        void checkRetired(Scenario scenario, FieldSubject fields, String suffix) throws Exception {
+            scenario.expectError("varHandleI" + suffix, UnsupportedOperationException.class, () -> {
+                int ignored = (int) i.get(fields);
+            });
+            scenario.expectError("varHandleSetI" + suffix, UnsupportedOperationException.class,
+                    () -> i.set(fields, 1));
+            scenario.expectError("varHandleSi" + suffix, UnsupportedOperationException.class, () -> {
+                int ignored = (int) si.get();
+            });
+        }
+    }
+
+    private void checkClassFinalUnchanged(Scenario scenario, ClassFinalSubject classFinal,
+            int flags, String schema) throws Exception {
+        scenario.check("classFlags", flags, ClassFinalSubject.class.getModifiers());
+        scenario.check("unchangedMembers", schema, memberSchema(ClassFinalSubject.class));
+        scenario.check("oldValue", 29, classFinal.value());
+        scenario.check("newValue", 29, new ClassFinalSubject().value());
     }
 
     // A loaded subclass owns a copied interface default until its superclass
@@ -246,8 +429,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
     }
 
-    private void runMethodScenarios(FieldSubject fields, String fieldSchema, String values,
-            Object object, Object staticObject) throws Exception {
+    private void runMethodScenarios(ClassFinalSubject classFinal, int classFlags,
+            String classSchema) throws Exception {
         MethodSubject subject = new MethodSubject();
         subject.value = 60;
         subject.keep = 70;
@@ -256,16 +439,16 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         Object staticReference = MethodSubject.staticObject;
         MethodTargets targets = new MethodTargets();
         String schema = memberSchema(MethodSubject.class);
-        runScenario("atomic-method-retire-field-types", 64, scenario -> {
+        runScenario("atomic-method-retire-class-final", 70, scenario -> {
             checkMethodBaseline(scenario, subject, targets);
-            scenario.expectRejectionBy(FieldSubject.class);
-            scenario.redefine(new Class<?>[]{MethodSubject.class, FieldSubject.class},
-                    "methods-delete", "field-types");
+            scenario.expectRejectionBy(ClassFinalSubject.class);
+            scenario.redefine(new Class<?>[]{MethodSubject.class, ClassFinalSubject.class},
+                    "methods-delete", "class-final");
             scenario.check("unchangedMethodMembers", schema, memberSchema(MethodSubject.class));
             scenario.check("unchangedStaticCall", 82, MethodCaller.callStatic());
             scenario.check("unchangedVirtualCall", 63, MethodCaller.callVirtual(subject));
             scenario.check("unchangedSignatureCall", 64, MethodCaller.callSignature(subject));
-            checkFieldDefinition(scenario, fields, fieldSchema, values, object, staticObject);
+            checkClassFinalUnchanged(scenario, classFinal, classFlags, classSchema);
         });
         runScenario("native-method-delete", 67, scenario -> {
             scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-native-delete");

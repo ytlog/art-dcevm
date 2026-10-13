@@ -4410,6 +4410,32 @@
       ]
     },
     {
+      "id": "Phase3C.kEncodeFieldId",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art3jni12JniIdManager13EncodeFieldIdEPNS_8ArtFieldE",
+        "_ZN3art3jni12JniIdManager13EncodeFieldIdENS_6HandleINS_6mirror5ClassEEEPNS_8ArtFieldE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
+      "id": "Phase3C.kEncodeFieldIdHandle",
+      "library": "libart.so",
+      "names": [
+        "_ZN3art3jni12JniIdManager13EncodeFieldIdENS_16ReflectiveHandleINS_8ArtFieldEEE",
+        "_ZN3art3jni12JniIdManager13EncodeFieldIdENS_6HandleINS_6mirror5ClassEEENS_16ReflectiveHandleINS_8ArtFieldEEE"
+      ],
+      "kind": "named-source-profile",
+      "role": "cataloged-source-entry",
+      "sourceGroups": [
+        "phase3c.method-access"
+      ]
+    },
+    {
       "id": "Phase3C.kMethodHandleInvokeExactWithFrame",
       "library": "libart.so",
       "names": [

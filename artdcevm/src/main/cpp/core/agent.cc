@@ -25,10 +25,13 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_github_ytlog_artdcevm_api_DcevmRuntime_nativeInitialize(JNIEnv*, jclass) {
+Java_com_github_ytlog_artdcevm_api_DcevmRuntime_nativeInitialize(JNIEnv* jni, jclass,
+                                                                 jclass retired_field,
+                                                                 jclass retired_static_field) {
   std::lock_guard<std::mutex> lock(agent_mutex);
   if (!agent_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
-  return artdcevm::structural_redefine::Install(agent_vm, agent_env);
+  return artdcevm::structural_redefine::Install(agent_vm, agent_env,
+                                                {jni, retired_field, retired_static_field});
 }
 
 extern "C" JNIEXPORT jstring JNICALL

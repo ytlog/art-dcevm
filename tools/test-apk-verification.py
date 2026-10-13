@@ -35,8 +35,8 @@ def complete_report():
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True,
             "methodDeletion": True, "methodSignatureChange": True,
-            "fieldDeletion": False, "fieldTypeChange": False,
-            "memberDeletion": False, "memberTypeChange": False,
+            "fieldDeletion": True, "fieldTypeChange": True,
+            "memberDeletion": True, "memberTypeChange": True,
             "hierarchyChange": False, "fullDcevmComplete": False}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
@@ -138,7 +138,8 @@ class ApkVerificationTests(unittest.TestCase):
                                  "incomplete_scenario", "wrong_expected_behavior",
                                  "missing_policy_rejection", "stale_policy_rejection",
                                  "missing_cached_jni", "wrong_reflection_exception",
-                                 "field_deletion_claimed", "missing_method_capability",
+                                 "hierarchy_claimed", "missing_method_capability",
+                                 "missing_field_capability", "wrong_field_exception",
                                  "missing_single_step_count", "single_step_no_callbacks", "matching"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -176,8 +177,15 @@ class ApkVerificationTests(unittest.TestCase):
                         del report["initialization"]["capabilities"]["standardRedefineRouted"]
                     elif mode == "missing_method_capability":
                         del report["initialization"]["capabilities"]["methodDeletion"]
-                    elif mode == "field_deletion_claimed":
-                        report["initialization"]["capabilities"]["fieldDeletion"] = True
+                    elif mode == "hierarchy_claimed":
+                        report["initialization"]["capabilities"]["hierarchyChange"] = True
+                    elif mode == "missing_field_capability":
+                        del report["initialization"]["capabilities"]["fieldDeletion"]
+                    elif mode == "wrong_field_exception":
+                        scenario = next(item for item in report["scenarios"]
+                                        if item["name"] == "field-retire")
+                        check = next(item for item in scenario["checks"] if item["name"] == "jni0")
+                        check["expected"] = check["actual"] = "java.lang.IllegalArgumentException"
                     elif mode in ("missing_cached_jni", "wrong_reflection_exception"):
                         scenario = next(item for item in report["scenarios"]
                                         if item["name"] == "methods-retire")

@@ -169,3 +169,82 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_lookupMethodId(
     (void)jni->GetMethodID(type, names[method], method == 3 ? "(I)I" : "()I");
   }
 }
+
+// Field IDs resolved before a redefinition and used unchanged afterwards:
+// 0 = int i, 1 = long j, 2 = Object o, 3 = static int si, 4 = static Object so.
+namespace {
+jclass field_class = nullptr;
+jfieldID field_ids[5]{};
+
+bool StaticField(jint field) { return field >= 3; }
+
+jlong ReadField(JNIEnv* jni, jobject receiver, jfieldID id, jint field) {
+  switch (field) {
+    case 0: return jni->GetIntField(receiver, id);
+    case 1: return jni->GetLongField(receiver, id);
+    case 2: { jobject value = jni->GetObjectField(receiver, id); jlong present = value != nullptr;
+              if (value) jni->DeleteLocalRef(value); return present; }
+    case 3: return jni->GetStaticIntField(field_class, id);
+    default: { jobject value = jni->GetStaticObjectField(field_class, id); jlong present = value != nullptr;
+               if (value) jni->DeleteLocalRef(value); return present; }
+  }
+}
+
+void WriteField(JNIEnv* jni, jobject receiver, jfieldID id, jint field, jlong value) {
+  switch (field) {
+    case 0: jni->SetIntField(receiver, id, static_cast<jint>(value)); break;
+    case 1: jni->SetLongField(receiver, id, value); break;
+    case 2: jni->SetObjectField(receiver, id, nullptr); break;
+    case 3: jni->SetStaticIntField(field_class, id, static_cast<jint>(value)); break;
+    default: jni->SetStaticObjectField(field_class, id, nullptr); break;
+  }
+}
+
+bool CachedField(JNIEnv* jni, jint field) {
+  if (field >= 0 && field < 5 && field_class && field_ids[field]) return true;
+  jclass error = jni->FindClass("java/lang/IllegalStateException");
+  if (error) jni->ThrowNew(error, "Field IDs were not cached");
+  return false;
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheFieldIds(JNIEnv* jni, jclass,
+                                                                         jclass type) {
+  if (field_class) jni->DeleteGlobalRef(field_class);
+  field_class = static_cast<jclass>(jni->NewGlobalRef(type));
+  const char* names[] = {"i", "j", "o", "si", "so"};
+  const char* types[] = {"I", "J", "Ljava/lang/Object;", "I", "Ljava/lang/Object;"};
+  for (jint field = 0; field < 5; ++field) {
+    field_ids[field] = StaticField(field) ? jni->GetStaticFieldID(type, names[field], types[field])
+                                          : jni->GetFieldID(type, names[field], types[field]);
+    if (!field_ids[field]) return;
+  }
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_readCachedField(JNIEnv* jni, jclass,
+                                                                           jobject receiver,
+                                                                           jint field) {
+  return CachedField(jni, field) ? ReadField(jni, receiver, field_ids[field], field) : 0;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_writeCachedField(JNIEnv* jni, jclass,
+                                                                            jobject receiver,
+                                                                            jint field,
+                                                                            jlong value) {
+  if (CachedField(jni, field)) WriteField(jni, receiver, field_ids[field], field, value);
+}
+
+// A JNI ID obtained now from a Field object reflected before the redefinition.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_readReflectedField(JNIEnv* jni, jclass,
+                                                                              jobject reflected,
+                                                                              jobject receiver,
+                                                                              jint field) {
+  if (!CachedField(jni, field)) return 0;
+  jfieldID id = jni->FromReflectedField(reflected);
+  if (jni->ExceptionCheck() || !id) return 0;
+  return ReadField(jni, receiver, id, field);
+}

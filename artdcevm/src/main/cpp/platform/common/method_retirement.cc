@@ -9,6 +9,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <string_view>
@@ -58,6 +59,19 @@ std::set<jmethodID> retired_ids;
 std::mutex roots_mutex;
 std::vector<jobject> retained_roots;
 std::atomic<uint64_t> jni_retirement_guards{0};
+// Retired fields: real old ArtFields kept alive with their obsolete classes.
+// Reflective Field objects for them are remapped to the RetiredField /
+// RetiredStaticField placeholders, whose ArtFields count as retired for JNI.
+struct RetiredFieldInfo {
+  int kind;  // Index into kFieldKinds.
+  bool is_static;
+};
+std::atomic<bool> any_retired_field{false};
+std::map<const void*, RetiredFieldInfo> retired_fields;
+std::set<jfieldID> retired_field_ids;
+std::set<const void*> placeholder_fields;
+bool field_retirement_available = false;
+bool field_ids_hooked = false;
 std::mutex state_mutex;
 std::string mapping_state = "unavailable";
 bool available = false;
@@ -65,6 +79,10 @@ bool available = false;
 thread_local bool in_update = false;
 thread_local std::set<const void*> copied_resolution_changes;
 thread_local std::vector<const void*> retired_in_update;
+// Old classes' field-array slots swapped for the copy phase of one Update.
+thread_local std::vector<std::pair<uint64_t*, uint64_t>> swapped_field_arrays;
+// JVMTI-requested field IDs and their ArtFields, while resolving placeholders.
+thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
 
 void Report(std::string state) {
   std::lock_guard<std::mutex> lock(state_mutex);
@@ -95,6 +113,44 @@ void RecordId(const void* method, jmethodID id) {
   std::unique_lock<std::shared_mutex> lock(retired_mutex);
   if (retired_methods.count(method)) retired_ids.insert(id);
 }
+// Primitive kinds by descriptor; anything else is a reference.
+constexpr char kFieldKinds[] = {'Z', 'B', 'C', 'S', 'I', 'J', 'F', 'D', 'L'};
+constexpr size_t kFieldKindCount = sizeof(kFieldKinds);
+int FieldKind(std::string_view descriptor) {
+  for (size_t i = 0; i + 1 < kFieldKindCount; ++i)
+    if (descriptor.size() == 1 && descriptor[0] == kFieldKinds[i]) return static_cast<int>(i);
+  return kFieldKindCount - 1;
+}
+std::array<ArtField*, kFieldKindCount> placeholder_instance{};
+std::array<ArtField*, kFieldKindCount> placeholder_static{};
+
+bool AnyRetiredField() { return any_retired_field.load(std::memory_order_acquire); }
+std::optional<RetiredFieldInfo> FindRetiredField(const void* field) {
+  if (!AnyRetiredField()) return std::nullopt;
+  std::shared_lock<std::shared_mutex> lock(retired_mutex);
+  const auto found = retired_fields.find(field);
+  if (found == retired_fields.end()) return std::nullopt;
+  return found->second;
+}
+// Retired or placeholder field, by ID; never dereferences the ID.
+bool ContainsFieldId(jfieldID id) {
+  if (!AnyRetiredField()) return false;
+  std::shared_lock<std::shared_mutex> lock(retired_mutex);
+  if (retired_field_ids.count(id)) return true;
+  if (reinterpret_cast<uintptr_t>(id) & 1) return false;
+  return retired_fields.count(id) || placeholder_fields.count(id);
+}
+void RecordFieldId(const void* field, jfieldID id) {
+  if (field_capture) (*field_capture)[id] = field;
+  if (!AnyRetiredField()) return;
+  {
+    std::shared_lock<std::shared_mutex> lock(retired_mutex);
+    if (!retired_fields.count(field) && !placeholder_fields.count(field)) return;
+  }
+  std::unique_lock<std::shared_mutex> lock(retired_mutex);
+  retired_field_ids.insert(id);
+}
+
 // Every retired member is an old method that ART marks obsolete in the same
 // commit (checked after each Update), so live methods fail one relaxed read.
 bool Retired(const void* method) {
@@ -148,8 +204,22 @@ struct MethodMapping {
   void* replacement;
   Kind kind;
 };
+struct RetiredFieldPlan {
+  ArtField* field;
+  RetiredFieldInfo info;
+};
+// A copy of an old class's field array without its retired fields, used as
+// that class's array while ART copies and clears fields (Update), so ART never
+// looks for a retired field in the new class.
+struct FieldArraySwap {
+  int32_t class_index;
+  size_t slot;
+  std::vector<uint32_t> kept;  // LengthPrefixedArray<ArtField>: length, then 4 words each.
+};
 struct MappingPlan {
   std::vector<std::pair<ArtField*, ArtField*>> fields;
+  std::vector<RetiredFieldPlan> retired_fields;
+  std::vector<FieldArraySwap> field_swaps;
   std::vector<MethodMapping> methods;
 };
 
@@ -161,11 +231,21 @@ struct LayoutOps {
   bool (*verify_iter)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
+  uint64_t* (*field_slot)(void* klass, size_t slot);
 };
 
 template <typename Class, typename Method> struct Layout {
   template <typename T> static abi::LengthPrefixedArray<T>* Members(uint64_t address) {
     return Pointer<abi::LengthPrefixedArray<T>>(address);
+  }
+  static auto FieldArrays(Class& klass) {
+    const auto slots = FieldArraySlots(klass);
+    std::array<uint64_t, std::tuple_size_v<decltype(slots)>> arrays{};
+    for (size_t i = 0; i < slots.size(); ++i) arrays[i] = *slots[i];
+    return arrays;
+  }
+  static uint64_t* FieldSlot(void* klass, size_t slot) {
+    return FieldArraySlots(*static_cast<Class*>(klass))[slot];
   }
 
   // The class flags locate access_flags_, which follows the native member
@@ -286,26 +366,44 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  // Field deletion and type/storage changes are rejected, so every old field
-  // has a declared replacement found by name and type, as in ART's mapping.
-  static bool PlanFields(Class* old_class, Class* new_class, MappingPlan* plan, std::string* why) {
+  // Each old field maps to the new declaration of the same name, type and
+  // storage, as in ART's mapping. A field without one was accepted for
+  // retirement by the policy: it keeps its real old ArtField, and ART's copy
+  // phase sees a field array without it.
+  static bool PlanFields(int32_t class_index, Class* old_class, Class* new_class,
+                         MappingPlan* plan, std::string* why) {
     const DexFilePrefix* dex = DexOf(old_class->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "old class has no DexFile");
     const evolution::DexView view = DexViewOf(*dex);
-    for (uint64_t array : FieldArrays(*old_class)) {
-      auto* fields = Members<ArtField>(array);
+    const auto arrays = FieldArrays(*old_class);
+    for (size_t slot = 0; slot < arrays.size(); ++slot) {
+      auto* fields = Members<ArtField>(arrays[slot]);
+      FieldArraySwap swap{class_index, slot, {0}};
+      bool retires = false;
       for (uint32_t i = 0; fields && i < fields->length; ++i) {
         ArtField* field = fields->At(i);
         evolution::Member identity;
         std::string error;
         if (!evolution::ReadFieldIdentity(view, field->dex_field_index, &identity, &error))
           return Fail(why, "field identity unavailable: " + error);
-        ArtField* replacement = ((field->access_flags & evolution::kAccStatic)
-                                     ? find_static_field : find_declared_instance_field)(
+        const bool is_static = field->access_flags & evolution::kAccStatic;
+        ArtField* replacement = (is_static ? find_static_field : find_declared_instance_field)(
             new_class, identity.name, identity.descriptor);
-        if (!replacement) return Fail(why, "no replacement for field " + identity.name);
-        plan->fields.emplace_back(field, replacement);
+        if (replacement) {
+          plan->fields.emplace_back(field, replacement);
+          const auto* words = reinterpret_cast<const uint32_t*>(field);
+          swap.kept.insert(swap.kept.end(), words, words + sizeof(ArtField) / sizeof(uint32_t));
+          ++swap.kept[0];
+          continue;
+        }
+        if (field->declaring_class != Reference(old_class))
+          return Fail(why, "unexpected field without replacement: " + identity.name);
+        if (!field_retirement_available) return Fail(why, "field retirement unavailable");
+        plan->fields.emplace_back(field, field);
+        plan->retired_fields.push_back({field, {FieldKind(identity.descriptor), is_static}});
+        retires = true;
       }
+      if (retires) plan->field_swaps.push_back(std::move(swap));
     }
     return true;
   }
@@ -348,13 +446,15 @@ template <typename Class, typename Method> struct Layout {
     for (int32_t i = 0; i < old_classes->length; ++i) {
       auto* old_class = old_classes->template Get<Class>(i);
       auto* new_class = new_classes->template Get<Class>(i);
-      if (!PlanFields(old_class, new_class, plan, why)) return false;
+      if (!PlanFields(i, old_class, new_class, plan, why)) return false;
       PlanMethods(old_class, new_class, plan);
     }
     return true;
   }
 
-  static constexpr LayoutOps Ops(int android) { return {android, VerifyTarget, VerifyIter, Plan}; }
+  static constexpr LayoutOps Ops(int android) {
+    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot};
+  }
 };
 
 // One entry per AOSP release whose declarations are in platform/abi/arm64.
@@ -430,6 +530,13 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
   }
   for (const auto& [field, replacement] : plan->fields)
     abi::LibcppV1PointerMap<ArtField>::Set(field_map, field, replacement);
+  if (!plan->retired_fields.empty()) {
+    {
+      std::unique_lock<std::shared_mutex> lock(retired_mutex);
+      for (const auto& retired : plan->retired_fields) retired_fields[retired.field] = retired.info;
+    }
+    any_retired_field.store(true, std::memory_order_release);
+  }
   for (const auto& entry : plan->methods) {
     if (entry.kind == MethodMapping::kRetired) Retire(entry.old_method);
     if (entry.kind == MethodMapping::kCopied) copied_resolution_changes.insert(entry.old_method);
@@ -469,18 +576,49 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   return false;
 }
 
+// Puts the old classes' original field arrays back; called by the visitor
+// hook, which ART invokes after its copy phase, and again after Update.
+void RestoreFieldArrays() {
+  for (const auto& [slot, original] : swapped_field_arrays) *slot = original;
+  swapped_field_arrays.clear();
+}
+
 void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
   struct Scope {
     bool previous = in_update;
     std::set<const void*> previous_copied = std::move(copied_resolution_changes);
     Scope() { in_update = true; copied_resolution_changes.clear(); retired_in_update.clear(); }
     ~Scope() {
+      RestoreFieldArrays();
       in_update = previous;
       copied_resolution_changes = std::move(previous_copied);
     }
   } scope;
+  const MappingPlan* plan = nullptr;
+  if (transaction) {
+    const auto found = transaction->plans.find(data.index);
+    if (found != transaction->plans.end()) plan = &found->second;
+  }
+  // Every thread is suspended and moving GC is off: the old classes' native
+  // field-array slots can be swapped without barriers; ART only iterates them.
+  if (const LayoutOps* layout = plan ? Selected() : nullptr) {
+    auto* old_classes = data.Classes(true);
+    for (const auto& swap : plan->field_swaps) {
+      uint64_t* slot = layout->field_slot(old_classes->Get<void>(swap.class_index), swap.slot);
+      swapped_field_arrays.emplace_back(slot, *slot);
+      *slot = reinterpret_cast<uintptr_t>(swap.kept.data());
+    }
+  }
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   reinterpret_cast<Function>(original_update)(self, data);
+  RestoreFieldArrays();
+  // ART's ClearFields skipped the retired statics; drop their references so
+  // the retained obsolete class does not keep those objects alive.
+  for (const auto& retired : plan ? plan->retired_fields : std::vector<RetiredFieldPlan>{}) {
+    if (!retired.info.is_static || retired.info.kind != static_cast<int>(kFieldKindCount - 1)) continue;
+    auto* holder = Pointer<uint8_t>(retired.field->declaring_class);
+    std::memset(holder + retired.field->offset, 0, sizeof(uint32_t));
+  }
   // ART has now marked every old method obsolete; the guards' fast path
   // relies on that flag, so stop using it if this runtime disagrees.
   for (const void* method : retired_in_update) {
@@ -491,6 +629,28 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
     }
   }
   retired_in_update.clear();
+}
+
+// VarHandle accessors check accessModesBitMask before any field access
+// (VarHandleInvokeAccessorImpl and the JIT intrinsics), so a VarHandle for a
+// retired field throws UnsupportedOperationException. The offset comes from
+// ART's own field table.
+std::atomic<int64_t> var_handle_modes_offset{-1};
+void DisableVarHandle(const void* var_handle) {
+  const auto* object = static_cast<const Object*>(var_handle);
+  if (!object) return;
+  int64_t offset = var_handle_modes_offset.load(std::memory_order_relaxed);
+  if (offset < 0) {
+    const ArtField* field = find_instance_field(Pointer<void>(object->klass), "accessModesBitMask", "I");
+    if (!field) {
+      __android_log_write(ANDROID_LOG_ERROR, "ART-DCEVM", "VarHandle.accessModesBitMask not found");
+      return;
+    }
+    offset = field->offset;
+    var_handle_modes_offset.store(offset, std::memory_order_relaxed);
+  }
+  // A primitive store into an object under the commit's suspend-all.
+  std::memset(const_cast<uint8_t*>(static_cast<const uint8_t*>(var_handle)) + offset, 0, sizeof(int32_t));
 }
 
 class RetirementVisitor final : public ReflectiveValueVisitor {
@@ -505,7 +665,24 @@ class RetirementVisitor final : public ReflectiveValueVisitor {
     return original_->VisitMethod(method, info);
   }
   ArtField* VisitField(ArtField* field, const ReflectionSourceInfo& info) override {
-    return original_->VisitField(field, info);
+    const auto retired = FindRetiredField(field);
+    if (!retired) return original_->VisitField(field, info);
+    switch (info.type) {
+      case abi::kSourceDexCacheResolvedField:
+        return nullptr;  // Re-resolution throws NoSuchFieldError.
+      case abi::kSourceJniFieldId:
+        RecordFieldId(field, reinterpret_cast<const abi::JniFieldIdSourceInfo&>(info).id);
+        return field;
+      case abi::kSourceJavaLangReflectField:
+        // ReplaceReferences would retarget the Field's declaring class to the
+        // new class while its index and offset still describe the old field.
+        return (retired->is_static ? placeholder_static : placeholder_instance)[retired->kind];
+      case abi::kSourceJavaLangInvokeFieldVarHandle:
+        DisableVarHandle(reinterpret_cast<const abi::HeapSourceInfo&>(info).source);
+        return field;
+      default:
+        return field;  // MethodHandles are guarded; internal handles stay valid.
+    }
   }
  private:
   ReflectiveValueVisitor* original_;
@@ -513,34 +690,51 @@ class RetirementVisitor final : public ReflectiveValueVisitor {
 void Visit(void* runtime, ReflectiveValueVisitor* visitor) {
   using Function = void (*)(void*, ReflectiveValueVisitor*);
   if (!in_update) { reinterpret_cast<Function>(original_visit)(runtime, visitor); return; }
+  // ART's copy phase is over; its visitor and fix-ups need the real arrays.
+  RestoreFieldArrays();
   RetirementVisitor retirement(visitor);
   reinterpret_cast<Function>(original_visit)(runtime, &retirement);
 }
 
 // java.lang.invoke.MethodHandle.artFieldOrMethod, located through ART's own
-// field table. Transformer handles carry no ArtMethod, so it is only looked up.
+// field table: an ArtMethod for invoke kinds, an ArtField for accessor kinds.
+// Transformer handles carry neither, so the target is only looked up.
+enum class HandleTarget { kLive, kRetiredMethod, kRetiredField };
 std::atomic<int64_t> handle_target_offset{-1};
-bool RetiredHandle(Handle handle) {
-  if (!AnyRetired()) return false;
+HandleTarget RetiredHandle(Handle handle) {
+  if (!AnyRetired() && !AnyRetiredField()) return HandleTarget::kLive;
   const auto* object = handle.Get<Object>();
-  if (!object) return false;
+  if (!object) return HandleTarget::kLive;
   int64_t offset = handle_target_offset.load(std::memory_order_acquire);
   if (offset < 0) {
     const ArtField* field = find_instance_field(Pointer<void>(object->klass), "artFieldOrMethod", "J");
     if (!field) {
       __android_log_write(ANDROID_LOG_ERROR, "ART-DCEVM", "MethodHandle.artFieldOrMethod not found");
-      return false;
+      return HandleTarget::kLive;
     }
     offset = field->offset;
     handle_target_offset.store(offset, std::memory_order_release);
   }
   uint64_t target = 0;
   std::memcpy(&target, reinterpret_cast<const uint8_t*>(object) + offset, sizeof(target));
-  return ContainsMethod(Pointer<const void>(target));
+  if (ContainsMethod(Pointer<const void>(target))) return HandleTarget::kRetiredMethod;
+  if (FindRetiredField(Pointer<const void>(target))) return HandleTarget::kRetiredField;
+  return HandleTarget::kLive;
+}
+// Throws for a retired handle target; false when the handle may run.
+bool RejectHandle(void* self, Handle handle) {
+  switch (RetiredHandle(handle)) {
+    case HandleTarget::kRetiredMethod: ThrowRetired(self); return true;
+    case HandleTarget::kRetiredField:
+      throw_exception(self, "Ljava/lang/NoSuchFieldError;", "field retired by structural redefinition");
+      return true;
+    case HandleTarget::kLive: return false;
+  }
+  return false;
 }
 bool HandleCall(void* original, void* self, void* frame, Handle method, Handle type,
                 const void* operands, uint64_t* result) {
-  if (RetiredHandle(method)) { ThrowRetired(self); if (result) *result = 0; return false; }
+  if (RejectHandle(self, method)) { if (result) *result = 0; return false; }
   using Function = bool (*)(void*, void*, Handle, Handle, const void*, uint64_t*);
   return reinterpret_cast<Function>(original)(self, frame, method, type, operands, result);
 }
@@ -553,7 +747,7 @@ bool MethodHandleInvokeExact(void* self, void* frame, Handle method, Handle type
   return HandleCall(original_mh_exact, self, frame, method, type, operands, result);
 }
 void MethodHandleFrame(void* self, Handle method, Handle frame) {
-  if (RetiredHandle(method)) { ThrowRetired(self); return; }
+  if (RejectHandle(self, method)) return;
   using Function = void (*)(void*, Handle, Handle);
   reinterpret_cast<Function>(original_mh_frame)(self, method, frame);
 }
@@ -570,11 +764,39 @@ jmethodID EncodeHandle(void* manager, ReflectiveHandle method) {
   if (Retired(*method.reference)) RecordId(*method.reference, id);
   return id;
 }
+// JniIdManager::EncodeFieldId, in both ART spellings: record IDs encoded for
+// retired or placeholder fields (FromReflectedField on a remapped Field).
+void* original_encode_field = nullptr;
+void* original_encode_field_handle = nullptr;
+jfieldID EncodeField(void* manager, void* field) {
+  jfieldID id = reinterpret_cast<jfieldID (*)(void*, void*)>(original_encode_field)(manager, field);
+  RecordFieldId(field, id);
+  return id;
+}
+jfieldID EncodeFieldHandle(void* manager, ReflectiveHandle field) {
+  jfieldID id = reinterpret_cast<jfieldID (*)(void*, ReflectiveHandle)>(
+      original_encode_field_handle)(manager, field);
+  RecordFieldId(*field.reference, id);
+  return id;
+}
+jfieldID EncodeFieldWithClass(void* manager, Handle klass, void* field) {
+  jfieldID id = reinterpret_cast<jfieldID (*)(void*, Handle, void*)>(original_encode_field)(
+      manager, klass, field);
+  RecordFieldId(field, id);
+  return id;
+}
+jfieldID EncodeFieldHandleWithClass(void* manager, Handle klass, ReflectiveHandle field) {
+  jfieldID id = reinterpret_cast<jfieldID (*)(void*, Handle, ReflectiveHandle)>(
+      original_encode_field_handle)(manager, klass, field);
+  RecordFieldId(*field.reference, id);
+  return id;
+}
 // Reflection: Method.invoke's native entry, before ART checks the receiver
 // against the old declaring class. Only public JNI identifies the target.
 jobject (*original_method_invoke)(JNIEnv*, jobject, jobject, jobjectArray) = nullptr;
 const JNINativeInterface* jni = nullptr;  // The table in force before ours.
 jclass no_such_method_error = nullptr;
+jclass no_such_field_error = nullptr;
 jclass invocation_target_exception = nullptr;
 jmethodID no_such_method_init = nullptr;
 jmethodID invocation_target_init = nullptr;
@@ -599,6 +821,40 @@ jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray
     }
   }
   return original_method_invoke(env, method, receiver, args);
+}
+
+// JNI field access with a retired or placeholder field ID.
+bool RejectJniField(JNIEnv* env, jfieldID id) {
+  if (!ContainsFieldId(id) || jni->ExceptionCheck(env)) return false;
+  jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+  jni->ThrowNew(env, no_such_field_error, "field retired by structural redefinition");
+  return true;
+}
+#define ARTDCEVM_JNI_FIELDS(T, Name)                                                              \
+  T Get##Name##Field(JNIEnv* env, jobject object, jfieldID id) {                                 \
+    return RejectJniField(env, id) ? T() : jni->Get##Name##Field(env, object, id);               \
+  }                                                                                              \
+  void Set##Name##Field(JNIEnv* env, jobject object, jfieldID id, T value) {                     \
+    if (!RejectJniField(env, id)) jni->Set##Name##Field(env, object, id, value);                 \
+  }                                                                                              \
+  T GetStatic##Name##Field(JNIEnv* env, jclass klass, jfieldID id) {                             \
+    return RejectJniField(env, id) ? T() : jni->GetStatic##Name##Field(env, klass, id);          \
+  }                                                                                              \
+  void SetStatic##Name##Field(JNIEnv* env, jclass klass, jfieldID id, T value) {                 \
+    if (!RejectJniField(env, id)) jni->SetStatic##Name##Field(env, klass, id, value);            \
+  }
+ARTDCEVM_JNI_FIELDS(jobject, Object)
+ARTDCEVM_JNI_FIELDS(jboolean, Boolean)
+ARTDCEVM_JNI_FIELDS(jbyte, Byte)
+ARTDCEVM_JNI_FIELDS(jchar, Char)
+ARTDCEVM_JNI_FIELDS(jshort, Short)
+ARTDCEVM_JNI_FIELDS(jint, Int)
+ARTDCEVM_JNI_FIELDS(jlong, Long)
+ARTDCEVM_JNI_FIELDS(jfloat, Float)
+ARTDCEVM_JNI_FIELDS(jdouble, Double)
+#undef ARTDCEVM_JNI_FIELDS
+jobject ToReflectedField(JNIEnv* env, jclass klass, jfieldID id, jboolean is_static) {
+  return RejectJniField(env, id) ? nullptr : jni->ToReflectedField(env, klass, id, is_static);
 }
 
 // JNI Call*Method*: a JVMTI function-table override in front of the previous
@@ -738,7 +994,8 @@ bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
   };
   no_such_method_error = global_class("java/lang/NoSuchMethodError");
   invocation_target_exception = global_class("java/lang/reflect/InvocationTargetException");
-  if (!no_such_method_error || !invocation_target_exception)
+  no_such_field_error = global_class("java/lang/NoSuchFieldError");
+  if (!no_such_method_error || !invocation_target_exception || !no_such_field_error)
     return Fail(failure, "exception classes unavailable");
   no_such_method_init = env->GetMethodID(no_such_method_error, "<init>", "(Ljava/lang/String;)V");
   invocation_target_init = env->GetMethodID(invocation_target_exception, "<init>",
@@ -762,6 +1019,22 @@ bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
   ARTDCEVM_JNI_ENTRIES(Float)
   ARTDCEVM_JNI_ENTRIES(Double)
   ARTDCEVM_JNI_ENTRIES(Void)
+#define ARTDCEVM_JNI_FIELD_ENTRIES(Name)                                                          \
+  guarded_jni.Get##Name##Field = Get##Name##Field;                                               \
+  guarded_jni.Set##Name##Field = Set##Name##Field;                                               \
+  guarded_jni.GetStatic##Name##Field = GetStatic##Name##Field;                                   \
+  guarded_jni.SetStatic##Name##Field = SetStatic##Name##Field;
+  ARTDCEVM_JNI_FIELD_ENTRIES(Object)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Boolean)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Byte)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Char)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Short)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Int)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Long)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Float)
+  ARTDCEVM_JNI_FIELD_ENTRIES(Double)
+#undef ARTDCEVM_JNI_FIELD_ENTRIES
+  guarded_jni.ToReflectedField = ToReflectedField;
   if (jvmti->SetJNIFunctionTable(&guarded_jni) != JVMTI_ERROR_NONE)
     return Fail(failure, "SetJNIFunctionTable failed");
   return true;
@@ -818,6 +1091,28 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     return;
   }
   resolved.push_back({method_invoke, Fn(MethodInvoke), Out(&original_method_invoke), method_invoke_name});
+  // Field IDs: one of ART's two EncodeFieldId pairs. Without either, field
+  // retirement stays off and methods still retire.
+  struct EncodePair {
+    symbols::NamedSymbol plain, handle;
+    void* plain_replacement;
+    void* handle_replacement;
+  };
+  const EncodePair encode_pairs[] = {
+      {kEncodeFieldId, kEncodeFieldIdHandle, Fn(EncodeField), Fn(EncodeFieldHandle)},
+      {kEncodeFieldIdWithClass, kEncodeFieldIdHandleWithClass, Fn(EncodeFieldWithClass),
+       Fn(EncodeFieldHandleWithClass)}};
+  field_ids_hooked = false;
+  for (const auto& pair : encode_pairs) {
+    void* plain = symbols::Find(pair.plain);
+    void* handle = symbols::Find(pair.handle);
+    if (!plain || !handle) continue;
+    resolved.push_back({plain, pair.plain_replacement, &original_encode_field, pair.plain.name});
+    resolved.push_back({handle, pair.handle_replacement, &original_encode_field_handle,
+                        pair.handle.name});
+    field_ids_hooked = true;
+    break;
+  }
   if (void* frame = symbols::Find(kMethodHandleInvokeExactWithFrame))
     resolved.push_back({frame, Fn(MethodHandleFrame), &original_mh_frame,
                         kMethodHandleInvokeExactWithFrame.name});
@@ -832,6 +1127,75 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   Report("unverified");
 }
 bool Available() { return available; }
+bool FieldRetirementAvailable() { return field_retirement_available; }
+
+namespace {
+// ArtFields of one placeholder class, from JVMTI (which does not initialize
+// the class) and the IDs its encoding recorded.
+bool ResolvePlaceholders(jvmtiEnv* jvmti, jclass klass, const std::map<jfieldID, const void*>& ids,
+                         std::array<ArtField*, kFieldKindCount>* out, std::string* failure) {
+  jint count = 0;
+  jfieldID* fields = nullptr;
+  if (jvmti->GetClassFields(klass, &count, &fields) != JVMTI_ERROR_NONE)
+    return Fail(failure, "GetClassFields failed for a field placeholder class");
+  bool resolved = true;
+  for (jint i = 0; i < count && resolved; ++i) {
+    char* name = nullptr;
+    char* descriptor = nullptr;
+    if (jvmti->GetFieldName(klass, fields[i], &name, &descriptor, nullptr) != JVMTI_ERROR_NONE) {
+      resolved = false;
+      break;
+    }
+    const auto found = ids.find(fields[i]);
+    const void* field = found != ids.end() ? found->second
+        : (reinterpret_cast<uintptr_t>(fields[i]) & 1) ? nullptr : fields[i];
+    auto& slot = (*out)[FieldKind(descriptor)];
+    resolved = field && !slot;
+    slot = static_cast<ArtField*>(const_cast<void*>(field));
+    jvmti->Deallocate(reinterpret_cast<unsigned char*>(name));
+    jvmti->Deallocate(reinterpret_cast<unsigned char*>(descriptor));
+  }
+  jvmti->Deallocate(reinterpret_cast<unsigned char*>(fields));
+  for (ArtField* field : *out) resolved &= field != nullptr;
+  return resolved ? true : Fail(failure, "field placeholders unresolved");
+}
+}  // namespace
+
+void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placeholders,
+                              std::string* note) {
+  field_retirement_available = false;
+  if (!available || !field_ids_hooked) {
+    *note = "field retirement unavailable: no JniIdManager::EncodeFieldId pair";
+    return;
+  }
+  if (!placeholders.jni || !placeholders.instance_fields || !placeholders.static_fields) {
+    *note = "field retirement unavailable: placeholder classes missing";
+    return;
+  }
+  std::map<jfieldID, const void*> ids;
+  field_capture = &ids;
+  std::string failure;
+  const bool resolved =
+      ResolvePlaceholders(jvmti, placeholders.instance_fields, ids, &placeholder_instance, &failure) &&
+      ResolvePlaceholders(jvmti, placeholders.static_fields, ids, &placeholder_static, &failure);
+  field_capture = nullptr;
+  if (!resolved) {
+    *note = "field retirement unavailable: " + failure;
+    return;
+  }
+  {
+    std::unique_lock<std::shared_mutex> lock(retired_mutex);
+    for (const auto* table : {&placeholder_instance, &placeholder_static})
+      for (ArtField* field : *table) placeholder_fields.insert(field);
+    for (const auto& [id, field] : ids) retired_field_ids.insert(id);
+  }
+  // Fail RetiredStaticField's initializer once, so every reflective access to
+  // a retired static field reports the same NoClassDefFoundError.
+  JNIEnv* env = placeholders.jni;
+  if (!env->GetStaticFieldID(placeholders.static_fields, "retiredInt", "I") && env->ExceptionCheck())
+    env->ExceptionClear();
+  field_retirement_available = true;
+}
 
 bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live,
                   uint32_t class_def_access) {
