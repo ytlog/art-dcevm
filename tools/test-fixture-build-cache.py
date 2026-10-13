@@ -40,7 +40,7 @@ if name=='javac':
   if p.endswith('.java'):
    source=pathlib.Path(p); dest=out/source.parent.name/(source.stem+'.class');dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(payload)
 else:
- out=pathlib.Path(args[args.index('--output')+1]);(out/'classes.dex').write_bytes(b'dex'+hashlib.sha256(pathlib.Path(args[-1]).read_bytes()).digest())
+ out=pathlib.Path(args[args.index('--output')+1]);source=pathlib.Path(args[-1]);dest=out/source.parent.name/(source.stem+'.dex');dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(b'dex'+hashlib.sha256(source.read_bytes()).digest())
 '''
     for executable in (java / 'bin/javac', d8 / 'd8'):
         executable.write_text(script); executable.chmod(0o755)
@@ -121,8 +121,9 @@ def real(temp, sdk, java):
             subprocess.run([str(java / 'bin/javac'), '--release', '8', '-encoding', 'UTF-8', '-g', '-d', str(classes), *map(str, sorted(variant.rglob('*.java')))], env=dict(env, JAVA_HOME=str(java)), check=True, capture_output=True)
             for index, klass in enumerate(sorted(classes.rglob('*.class'))):
                 dex = work / str(index); dex.mkdir()
-                subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), '--min-api', '30', '--lib', str(sdk / 'platforms/android-35/android.jar'), '--output', str(dex), str(klass)], env=dict(env, JAVA_HOME=str(java)), check=True, capture_output=True)
-                target = reference / variant.name / klass.relative_to(classes).with_suffix('.dex'); target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes((dex / 'classes.dex').read_bytes())
+                subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), '--min-api', '30', '--file-per-class', '--lib', str(sdk / 'platforms/android-35/android.jar'), '--output', str(dex), str(klass)], env=dict(env, JAVA_HOME=str(java)), check=True, capture_output=True)
+                for produced in dex.rglob('*.dex'):
+                    target = reference / variant.name / produced.relative_to(dex); target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(produced.read_bytes())
     relative = 'com/github/ytlog/artdcevm/fixture/HierarchySubject.dex'
     invalid = reference / 'hier-invalid' / relative; invalid.parent.mkdir(parents=True); invalid.write_bytes(builder.invalid_hierarchy(reference / 'hier-parent' / relative))
     assert tree(reference) == before

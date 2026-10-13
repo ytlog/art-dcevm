@@ -134,6 +134,17 @@ if (error != JVMTI_ERROR_NONE) {
 
 Classes that depend on each other should go into one `jvmtiClassDefinition[]` and be submitted as a single batch. Keep the class references and DEX buffers valid for the duration of the call. The sample app's [patch sources](fixtures) and [DEX build script](tools/build-fixtures.py) show how test patches are produced.
 
+### 5. Add new classes
+
+`RedefineClasses` replaces loaded classes only. Classes that the APK lacks (new classes and synthetic ones such as new lambdas) reach the app through its class loader, supplied by the tool; this library does not define new classes, the same split as DCEVM and hot-reload tools on Java. For one update, the tool:
+
+1. Compiles each class to its own DEX (D8 `--file-per-class` emits a new lambda's synthetic class separately).
+2. Classifies with `Class.forName(name, false, appClassLoader)`: a class it finds exists, and an existing class nothing has used yet is loaded this way so it can be redefined; a class it cannot find is new.
+3. Packs the new classes into one jar, marks it read-only (since Android 14, apps targeting SDK 34 or higher cannot load writable DEX files) and appends it to the end of the app loader's (`BaseDexClassLoader`) path with ART's JVMTI extension `com.android.art.classloader.add_to_dex_class_loader`.
+4. Submits all existing classes in one `RedefineClasses` call. The library loads the appended classes the new definitions name, including new subclasses of redefined classes, before the transaction starts.
+
+Appending only adds to the end of the loader's path, cannot be undone and does not override loaded classes; a class added this way is redefined like any existing class when it changes again. A new class's static initializer runs on first use; a redefined class's static initializer does not run again. See [HotReloadTool.java](app/src/debug/java/com/github/ytlog/artdcevm/testing/HotReloadTool.java) for a sample implementation.
+
 ## Notes
 
 - Fields added to existing objects start as zero or `null`; newly created objects run the new constructors. A change of field type or of static / instance form retires the old member and creates a new one.

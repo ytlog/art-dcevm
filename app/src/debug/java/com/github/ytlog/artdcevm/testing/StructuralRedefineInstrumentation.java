@@ -35,6 +35,7 @@ import com.github.ytlog.artdcevm.fixture.PreloadSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
+import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
 
@@ -277,6 +278,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runInterfaceScenarios();
         runSuperclassScenarios();
         runPreloadScenarios();
+        runToolScenarios();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
     }
@@ -607,6 +609,43 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1) - retries);
             scenario.check("childLoadedAfter", true, StandardJvmtiClient.isLoaded(hookChild));
             scenario.check("childLayout", 435, PreloadHookSubject.probe());
+        });
+    }
+
+    // A hot update through the tool protocol (HotReloadTool): the tool appends
+    // the classes the APK lacks (a class, a subclass of a redefined class and a
+    // lambda), loads an APK class nothing has used and redefines the existing
+    // ones; a later update redefines a class the tool added.
+    private void runToolScenarios() throws Exception {
+        String fixture = "com/github/ytlog/artdcevm/fixture";
+        String added = "L" + fixture + "/ToolAdded;";
+        String dormant = "L" + fixture + "/ToolDormant;";
+        ToolHost old = new ToolHost();
+        runScenario("tool-add-classes", 0, scenario -> {
+            scenario.check("addedLoadedBefore", false, StandardJvmtiClient.isLoaded(added));
+            scenario.check("dormantLoadedBefore", false, StandardJvmtiClient.isLoaded(dormant));
+            HotReloadTool tool = new HotReloadTool(context).prepare("tool-v1", fixture);
+            scenario.check("classified", "added=ToolAdded,ToolChild,ToolHost$$ExternalSyntheticLambda0;"
+                    + "changed=ToolDormant,ToolHost", tool.classification());
+            scenario.check("appendCode", 0, tool.appendCode);
+            long retries = DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1);
+            scenario.redefine(tool.existingClasses(), "tool-v1", "tool-v1");
+            // The engine preloads ToolChild, which the submitted DEX names.
+            scenario.check("subclassLoadRetries", 0L,
+                    DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1) - retries);
+            scenario.check("run", 1443, ToolHost.run());
+            scenario.check("oldOwn", 6, old.own);
+            scenario.check("oldDescribe", 1, ToolHost.class.getMethod("describe").invoke(old));
+            Class<?> updated = Class.forName(fixture.replace('/', '.') + ".ToolDormant", false,
+                    context.getClassLoader());
+            scenario.check("dormantValue", 2, updated.getMethod("value").invoke(null));
+        });
+        runScenario("tool-redefine-added", 0, scenario -> {
+            HotReloadTool tool = new HotReloadTool(context).prepare("tool-v2", fixture);
+            scenario.check("classified", "added=;changed=ToolAdded", tool.classification());
+            scenario.check("appendCode", -1, tool.appendCode);
+            scenario.redefine(tool.existingClasses(), "tool-v2");
+            scenario.check("run", 1543, ToolHost.run());
         });
     }
 

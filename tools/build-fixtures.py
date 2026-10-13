@@ -18,7 +18,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVAC_FLAGS = ['--release', '8', '-encoding', 'UTF-8', '-g']
-D8_FLAGS = ['--min-api', '30']
+# One DEX per class: RedefineClasses takes exactly one class per DEX, and a
+# synthetic class (a new lambda) is a class to add, not part of its origin.
+D8_FLAGS = ['--min-api', '30', '--file-per-class']
 ENV_INPUTS = ['CLASSPATH', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS',
               'JDK_JAVAC_OPTIONS', 'JAVA_OPTS', 'LANG', 'LC_ALL', 'LC_CTYPE']
 
@@ -353,13 +355,18 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
         subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), *D8_FLAGS, '--lib',
                         str(sdk / 'platforms/android-35/android.jar'), '--output',
                         str(dexdir), str(klass)], check=True, env=env)
-        dest = staged / klass.relative_to(classes).with_suffix('.dex')
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        data = (dexdir / 'classes.dex').read_bytes()
-        if not data: raise RuntimeError('Empty DEX for ' + str(klass))
-        identities = removals.get(klass.relative_to(classes).as_posix())
-        if identities: data = strip_dex_methods(data, identities)
-        dest.write_bytes(data)
+        own = klass.relative_to(classes).with_suffix('.dex')
+        produced = sorted(path.relative_to(dexdir) for path in dexdir.rglob('*.dex'))
+        if own not in produced: raise RuntimeError('Missing DEX for ' + str(klass))
+        for relative in produced:
+            dest = staged / relative
+            if dest.exists(): raise RuntimeError('Duplicate DEX ' + relative.as_posix())
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            data = (dexdir / relative).read_bytes()
+            if not data: raise RuntimeError('Empty DEX ' + relative.as_posix())
+            identities = removals.get(klass.relative_to(classes).as_posix()) if relative == own else None
+            if identities: data = strip_dex_methods(data, identities)
+            dest.write_bytes(data)
 
 
 def invalid_hierarchy(source):

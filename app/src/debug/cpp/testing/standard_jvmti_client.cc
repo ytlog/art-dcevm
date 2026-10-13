@@ -152,6 +152,48 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_classFileReplacements
   return replacement_count.load(std::memory_order_relaxed);
 }
 
+namespace {
+void DeallocateExtension(jvmtiEnv* env, jvmtiExtensionFunctionInfo* info) {
+  auto release = [env](void* memory) { env->Deallocate(static_cast<unsigned char*>(memory)); };
+  release(info->id);
+  release(info->short_description);
+  for (jint i = 0; i < info->param_count; ++i) release(info->params[i].name);
+  release(info->params);
+  release(info->errors);
+}
+
+// ART's standard extension, as a hot-reload tool would find it.
+jvmtiExtensionFunction FindExtension(const char* id) {
+  jint count = 0;
+  jvmtiExtensionFunctionInfo* infos = nullptr;
+  if (client_env->GetExtensionFunctions(&count, &infos) != JVMTI_ERROR_NONE) return nullptr;
+  jvmtiExtensionFunction found = nullptr;
+  for (jint i = 0; i < count; ++i) {
+    if (std::strcmp(infos[i].id, id) == 0) found = infos[i].func;
+    DeallocateExtension(client_env, &infos[i]);
+  }
+  client_env->Deallocate(reinterpret_cast<unsigned char*>(infos));
+  return found;
+}
+}  // namespace
+
+// Append a DEX, jar or APK file to a BaseDexClassLoader's path, after its
+// existing entries, through com.android.art.classloader.add_to_dex_class_loader.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_addToClassLoader(
+    JNIEnv* jni, jclass, jobject loader, jstring path) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  if (!loader || !path) return JVMTI_ERROR_NULL_POINTER;
+  static const jvmtiExtensionFunction add =
+      FindExtension("com.android.art.classloader.add_to_dex_class_loader");
+  if (!add) return JVMTI_ERROR_NOT_AVAILABLE;
+  const char* segment = jni->GetStringUTFChars(path, nullptr);
+  if (!segment) return JVMTI_ERROR_OUT_OF_MEMORY;
+  const jvmtiError result = add(client_env, loader, segment);
+  jni->ReleaseStringUTFChars(path, segment);
+  return result;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
     JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {

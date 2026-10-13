@@ -17,6 +17,11 @@ final class StandardJvmtiClient {
         attached = true;
     }
 
+    /**
+     * ART's com.android.art.classloader.add_to_dex_class_loader: append a DEX,
+     * jar or APK file to the loader's path; returns the JVMTI error code.
+     */
+    static native int addToClassLoader(ClassLoader loader, String path);
     /** Standard JVMTI RedefineClasses on the whole batch; returns the JVMTI error code. */
     static native int redefine(Class<?>[] classes, byte[][] dexes);
 
