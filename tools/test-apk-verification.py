@@ -34,7 +34,7 @@ def complete_report():
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
-            "interfaceAddition": True,
+            "interfaceAddition": True, "interfaceRemoval": True,
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
@@ -142,6 +142,7 @@ class ApkVerificationTests(unittest.TestCase):
                                  "hierarchy_claimed", "missing_method_capability",
                                  "missing_field_capability", "wrong_field_exception",
                                  "missing_interface_capability", "interface_preloaded",
+                                 "missing_narrowing_location",
                                  "missing_single_step_count", "single_step_no_callbacks", "matching"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -185,6 +186,11 @@ class ApkVerificationTests(unittest.TestCase):
                         del report["initialization"]["capabilities"]["fieldDeletion"]
                     elif mode == "missing_interface_capability":
                         del report["initialization"]["capabilities"]["interfaceAddition"]
+                    elif mode == "missing_narrowing_location":
+                        scenario = next(item for item in report["scenarios"]
+                                        if item["name"] == "interface-remove-stack")
+                        scenario["checks"] = [item for item in scenario["checks"]
+                                              if item["name"] != "narrowedLocation"]
                     elif mode == "interface_preloaded":
                         scenario = next(item for item in report["scenarios"]
                                         if item["name"] == "interface-add")

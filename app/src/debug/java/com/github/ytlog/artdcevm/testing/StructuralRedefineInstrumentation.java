@@ -17,8 +17,8 @@ import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
 import com.github.ytlog.artdcevm.fixture.FinalFieldSubject;
-import com.github.ytlog.artdcevm.fixture.InterfaceCaller;
-import com.github.ytlog.artdcevm.fixture.InterfaceChild;
+import com.github.ytlog.artdcevm.fixture.ContractHolder;
+import com.github.ytlog.artdcevm.fixture.InterfaceHolder;
 import com.github.ytlog.artdcevm.fixture.InterfaceSubject;
 import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
@@ -462,61 +462,117 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
     }
 
-    // Interfaces added to a class with instances and a loaded subclass. AddedContract
-    // and NestedContract are not loaded before the redefinition: the engine
-    // must resolve them through the class loader before ART links the class.
+    // Interfaces added to and removed from a class with instances and a loaded
+    // subclass. AddedContract and NestedContract are not loaded before they are
+    // added: the engine must resolve them through the class loader before ART
+    // links the class. The instances live only in InterfaceHolder's Object
+    // fields, so no frame of this thread holds one when a removal is checked.
     private void runInterfaceScenarios() throws Exception {
-        InterfaceSubject subject = new InterfaceSubject();
-        InterfaceChild child = new InterfaceChild();
+        InterfaceHolder.create();
         String schema = memberSchema(InterfaceSubject.class);
-        String[][] invalid = {{"interface-hidden", "inaccessible"}, {"interface-class", "class"},
-                {"interface-missing", "missing"}};
-        for (String[] variant : invalid) {
-            runScenario(variant[0], 62, scenario -> {
-                scenario.redefine(new Class<?>[]{InterfaceSubject.class}, variant[0]);
+        String[] invalid = {"interface-hidden", "interface-class", "interface-missing"};
+        for (String variant : invalid) {
+            runScenario(variant, 62, scenario -> {
+                scenario.redefine(new Class<?>[]{InterfaceSubject.class}, variant);
                 scenario.check("interfaceCount", 0, InterfaceSubject.class.getInterfaces().length);
                 scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
-                scenario.check("contract", 51, subject.contract());
+                scenario.check("contract", 51, InterfaceHolder.contract());
             });
         }
         String contract = "Lcom/github/ytlog/artdcevm/fixture/AddedContract;";
         String nested = "Lcom/github/ytlog/artdcevm/fixture/other/ContractHost$NestedContract;";
-        String interfaces = "com.github.ytlog.artdcevm.fixture.AddedContract,"
-                + IntSupplier.class.getName()
-                + ",com.github.ytlog.artdcevm.fixture.other.ContractHost$NestedContract";
         runScenario("interface-add", 0, scenario -> {
             scenario.check("contractLoadedBefore", false, StandardJvmtiClient.isLoaded(contract));
             scenario.check("nestedLoadedBefore", false, StandardJvmtiClient.isLoaded(nested));
             scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-add");
-            checkAddedInterfaces(scenario, subject, child, interfaces);
+            checkAddedInterfaces(scenario);
             scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
             scenario.check("contractLoadedAfter", true, StandardJvmtiClient.isLoaded(contract));
-            scenario.check("newContractTwice", 102, InterfaceCaller.contractTwice(new InterfaceSubject()));
+            scenario.check("newContractTwice", 102, InterfaceHolder.newContractTwice());
         });
-        runScenario("interface-remove", 66, scenario -> {
+        // Each location below keeps the instance typed as AddedContract.
+        runScenario("interface-remove-field", 66, scenario -> {
+            ContractHolder.storeField();
             scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
-            checkAddedInterfaces(scenario, subject, child, interfaces);
+            scenario.checkRejectionDetail("static field Lcom/github/ytlog/artdcevm/fixture/ContractHolder;.field");
+            ContractHolder.clear();
+            checkAddedInterfaces(scenario);
+        });
+        runScenario("interface-remove-array", 66, scenario -> {
+            ContractHolder.storeArray();
+            scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
+            scenario.checkRejectionDetail("an element of [" + contract);
+            ContractHolder.clear();
+            checkAddedInterfaces(scenario);
+        });
+        runScenario("interface-remove-stack", 66, scenario -> {
+            CountDownLatch held = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            Thread holder = ContractHolder.holdOnStack(held, release);
+            try {
+                scenario.check("holderReady", true, held.await(10, TimeUnit.SECONDS));
+                scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
+                scenario.checkRejectionDetail("a stack frame");
+            } finally {
+                release.countDown();
+                holder.join(10_000);
+            }
+            // The suspended holder thread resumed and still sees the interface.
+            scenario.check("holderResult", 102, ContractHolder.stackResult());
+            checkAddedInterfaces(scenario);
+        });
+        // ART is held inside the transaction past the watchdog deadline, before
+        // it pauses class loading: the threads resume and the removal must fail.
+        runScenario("interface-remove-expired", 66, scenario -> {
+            scenario.check("delayHook", 0, StandardJvmtiClient.setRedefineDelay(3_500));
+            try {
+                scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
+            } finally {
+                StandardJvmtiClient.setRedefineDelay(0);
+            }
+            scenario.checkRejectionDetail("check expired");
+            checkAddedInterfaces(scenario);
+        });
+        runScenario("interface-remove", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
+            scenario.check("interfaces", "", interfaceNames());
+            scenario.check("oldIsContract", false, InterfaceHolder.isContract(false));
+            scenario.check("childIsContract", false, InterfaceHolder.isContract(true));
+            scenario.check("newIsContract", false, InterfaceHolder.newIsContract());
+            scenario.expectError("oldContractCast", ClassCastException.class,
+                    () -> InterfaceHolder.contractTwice(false));
+            scenario.expectError("oldIntSupplierCast", ClassCastException.class,
+                    InterfaceHolder::intSupplier);
+            scenario.check("contract", 51, InterfaceHolder.contract());
+            scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
+        });
+        runScenario("interface-readd", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-add");
+            checkAddedInterfaces(scenario);
         });
     }
 
-    private static void checkAddedInterfaces(Scenario scenario, InterfaceSubject subject,
-            InterfaceChild child, String interfaces) throws Exception {
+    private static String interfaceNames() {
         StringBuilder names = new StringBuilder();
         for (Class<?> type : InterfaceSubject.class.getInterfaces()) {
             if (names.length() > 0) names.append(',');
             names.append(type.getName());
         }
-        scenario.check("interfaces", interfaces, names.toString());
-        scenario.check("oldIsContract", true, InterfaceCaller.isContract(subject));
-        scenario.check("childIsContract", true, InterfaceCaller.isContract(child));
-        scenario.check("oldContractTwice", 102, InterfaceCaller.contractTwice(subject));
-        scenario.check("childContractTwice", 122, InterfaceCaller.contractTwice(child));
-        Object supplier = subject;
-        scenario.check("oldIntSupplier", 52, ((IntSupplier) supplier).getAsInt());
-        Method nestedMethod = InterfaceSubject.class.getInterfaces()[2].getMethod("nested");
-        nestedMethod.setAccessible(true);
-        scenario.check("oldNestedDefault", 7, nestedMethod.invoke(subject));
-        scenario.check("childNestedDefault", 7, nestedMethod.invoke(child));
+        return names.toString();
+    }
+
+    private static void checkAddedInterfaces(Scenario scenario) throws Exception {
+        scenario.check("interfaces", "com.github.ytlog.artdcevm.fixture.AddedContract,"
+                + IntSupplier.class.getName()
+                + ",com.github.ytlog.artdcevm.fixture.other.ContractHost$NestedContract",
+                interfaceNames());
+        scenario.check("oldIsContract", true, InterfaceHolder.isContract(false));
+        scenario.check("childIsContract", true, InterfaceHolder.isContract(true));
+        scenario.check("oldContractTwice", 102, InterfaceHolder.contractTwice(false));
+        scenario.check("childContractTwice", 122, InterfaceHolder.contractTwice(true));
+        scenario.check("oldIntSupplier", 52, InterfaceHolder.intSupplier());
+        scenario.check("oldNestedDefault", 7, InterfaceHolder.nested(false));
+        scenario.check("childNestedDefault", 7, InterfaceHolder.nested(true));
     }
 
     private void runMethodScenarios(ClassFinalSubject classFinal, int classFlags,
@@ -974,6 +1030,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             check("returnCode", expectedCode, actualCode);
             checkRejectionReason(classes);
             writeReport(false);
+        }
+
+        /** The rejection must name this location of a narrowed reference. */
+        void checkRejectionDetail(String location) throws Exception {
+            String reason = DcevmRuntime.capabilities().optString("lastRejection");
+            check("narrowedLocation", location, reason.contains(location) ? location : reason);
         }
 
         /** Names the batch member that the engine policy must reject. */

@@ -5,6 +5,7 @@
 #include <array>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string_view>
 
@@ -15,6 +16,7 @@
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/method_retirement.h"
+#include "platform/common/type_narrowing.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "support/json.h"
 
@@ -55,6 +57,8 @@ void Diagnose(const std::string& text, bool rejection = false) {
 struct Snapshot {
   evolution::ClassSchema live;
   structural_policy::LoadedHierarchy hierarchy;
+  // The submitted definition before any ClassFileLoadHook, when readable.
+  std::optional<evolution::ClassSchema> incoming;
   // Global references of hierarchy.added_interfaces, owned by the batch.
   std::map<std::string, jclass> interface_classes;
 };
@@ -236,6 +240,7 @@ jvmtiError ResolveAddedInterfaces(JNIEnv* jni, const jvmtiClassDefinition& defin
   const size_t size = definition.class_byte_count > 0 ? definition.class_byte_count : 0;
   const evolution::DexView view{definition.class_bytes, size, definition.class_bytes, size};
   if (!evolution::ReadClassDeclarations(view, &incoming, &unreadable)) return JVMTI_ERROR_NONE;
+  snapshot->incoming = incoming;
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)
@@ -282,6 +287,84 @@ jvmtiError ResolveAddedInterfaces(JNIEnv* jni, const jvmtiClassDefinition& defin
     snapshot->hierarchy.added_interfaces[descriptor] = type;
     snapshot->interface_classes[descriptor] = static_cast<jclass>(root);
   }
+  return JVMTI_ERROR_NONE;
+}
+
+// The target's direct interfaces after the submitted definition (kept and
+// added) and the old ones it drops.
+jvmtiError SplitInterfaces(jclass target, const Snapshot& snapshot,
+                           LocalClasses* current, std::vector<jclass>* removed,
+                           std::vector<jclass>* after) {
+  jvmtiError result = snapshot_env->GetImplementedInterfaces(target, &current->count,
+                                                             &current->classes);
+  if (result != JVMTI_ERROR_NONE) return result;
+  const auto& now = snapshot.incoming->interfaces;
+  for (jint i = 0; i < current->count; ++i) {
+    char* signature = nullptr;
+    result = snapshot_env->GetClassSignature(current->classes[i], &signature, nullptr);
+    if (result != JVMTI_ERROR_NONE) return result;
+    const bool kept = std::find(now.begin(), now.end(), signature) != now.end();
+    snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+    (kept ? after : removed)->push_back(current->classes[i]);
+  }
+  for (const auto& [descriptor, klass] : snapshot.interface_classes) after->push_back(klass);
+  return JVMTI_ERROR_NONE;
+}
+
+// Interface removal narrows the type of instances of the target and of its
+// loaded subclasses. With every other thread suspended until ART commits
+// (`world`), no location typed as a lost interface may hold such an instance.
+// Marks each checked snapshot; the policy rejects unchecked removals.
+jvmtiError CheckNarrowing(JNIEnv* jni, const LocalClasses& loaded, Batch* batch,
+                          std::optional<type_narrowing::SuspendedWorld>* world) {
+  type_narrowing::LostTypes lost;
+  std::vector<Snapshot*> narrowing;
+  std::string target;
+  for (auto& [klass, snapshot] : batch->classes) {
+    if (!snapshot.incoming || snapshot.incoming->superclass != snapshot.live.superclass) continue;
+    const auto& now = snapshot.incoming->interfaces;
+    if (std::all_of(snapshot.live.interfaces.begin(), snapshot.live.interfaces.end(),
+                    [&](const std::string& old) {
+                      return std::find(now.begin(), now.end(), old) != now.end();
+                    }))
+      continue;
+    LocalClasses current(snapshot_env, jni);
+    std::vector<jclass> removed, after;
+    std::string error;
+    jvmtiError result = SplitInterfaces(klass, snapshot, &current, &removed, &after);
+    if (result == JVMTI_ERROR_NONE)
+      result = type_narrowing::CollectLost(jni, klass, removed, after, loaded.count,
+                                           loaded.classes, &lost, &error);
+    if (result != JVMTI_ERROR_NONE) {
+      Diagnose("type narrowing preparation failed: " + error);
+      return result;
+    }
+    if (lost.count(snapshot.live.descriptor)) {
+      narrowing.push_back(&snapshot);
+      if (target.empty()) target = snapshot.live.descriptor;
+    } else {
+      snapshot.hierarchy.narrowing_checked = now;  // Every removed type stays inherited.
+    }
+  }
+  if (narrowing.empty() || !type_narrowing::Available()) return JVMTI_ERROR_NONE;
+  world->emplace(jni);
+  std::string error;
+  std::string violation;
+  if ((*world)->Suspend(&error) != JVMTI_ERROR_NONE ||
+      type_narrowing::FindViolation(jni, lost, &violation) != JVMTI_ERROR_NONE) {
+    Diagnose(target + ": interface removal could not be checked: " +
+                 (error.empty() ? "heap walk failed" : error), true);
+    return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+  }
+  if (!violation.empty()) {
+    Diagnose(target + ": interface removal would narrow a live reference: " + violation, true);
+    return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+  }
+  for (Snapshot* snapshot : narrowing)
+    snapshot->hierarchy.narrowing_checked = snapshot->incoming->interfaces;
+  // The check holds only while the world stays suspended up to ART's commit.
+  method_retirement::RequireBeforeCommit(type_narrowing::CommitCheck, target);
+  (*world)->Arm();
   return JVMTI_ERROR_NONE;
 }
 
@@ -347,6 +430,10 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     result = CollectSubclasses(jni, klass, loaded, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
   }
+  // Declared before the transaction so suspended threads resume after it.
+  std::optional<type_narrowing::SuspendedWorld> world;
+  result = CheckNarrowing(jni, loaded, &batch, &world);
+  if (result != JVMTI_ERROR_NONE) return result;
   if (method_retirement::Available()) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
@@ -505,6 +592,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::vector<Hook> replacements;
   std::string retirement_note;
   method_retirement::Prepare(vm, env, &replacements, &retirement_note);
+  std::string narrowing_note;
+  if (method_retirement::Available()) type_narrowing::Prepare(&replacements);
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -526,8 +615,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     }
   }
   std::string field_note;
-  if (method_retirement::Available())
+  if (method_retirement::Available()) {
     method_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
+    type_narrowing::Activate(env, &narrowing_note);
+  }
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
   diagnostic = !method_retirement::Available()
@@ -535,7 +626,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       : method_retirement::FieldRetirementAvailable()
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
-  for (const auto* note : {&retirement_note, &field_note})
+  for (const auto* note : {&retirement_note, &field_note, &narrowing_note})
     if (!note->empty()) diagnostic += "; " + *note;
   return JVMTI_ERROR_NONE;
 }
@@ -547,9 +638,11 @@ std::string Capabilities() {
   const bool fields = methods && method_retirement::FieldRetirementAvailable();
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
+  const std::string interface_removal = methods && type_narrowing::Available() ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement +
+      ",\"interfaceRemoval\":" + interface_removal +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +

@@ -193,6 +193,23 @@ int main(int argc, char** argv) {
       Accept(live, next, false, true, resolved);
       auto implementing = next;
       Reject(implementing, live, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+      policy::LoadedHierarchy checked;
+      checked.narrowing_checked = live.interfaces;
+      policy::Abilities mapping;
+      mapping.member_mapping = true;
+      Require(policy::Evaluate(implementing, live, checked, {}).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+              "interface removal needs the member mapping");
+      Require(policy::Evaluate(implementing, live, {}, mapping).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+              "interface removal needs the narrowing check");
+      const auto removal = policy::Evaluate(implementing, live, checked, mapping);
+      Require(removal.error == JVMTI_ERROR_NONE && removal.methods_structural,
+              "checked interface removal must take the structural path");
+      checked.narrowing_checked = next.interfaces;
+      Require(policy::Evaluate(implementing, live, checked, mapping).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+              "a check of another interface list must not count");
       auto duplicated = next; duplicated.interfaces.push_back("Lfixture/Interface;");
       Reject(live, duplicated, JVMTI_ERROR_FAILS_VERIFICATION, resolved);
       implementing.interfaces.push_back("Lfixture/Other;");

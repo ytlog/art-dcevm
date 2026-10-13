@@ -1,8 +1,10 @@
 #include <jni.h>
 #include "jvmti.h"
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 // A user agent as an app would write it: its own environment, the
@@ -12,9 +14,18 @@ jvmtiEnv* client_env = nullptr;
 jclass method_class = nullptr;
 jmethodID method_ids[4]{};
 std::atomic<jlong> single_step_count{0};
+std::atomic<jint> redefine_delay_ms{0};
 
 void JNICALL SingleStep(jvmtiEnv*, JNIEnv*, jthread, jmethodID, jlocation) {
   single_step_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Stalls this agent's ClassFileLoadHook for a redefinition, inside ART's
+// transaction before it pauses class loading.
+void JNICALL FileLoadHook(jvmtiEnv*, JNIEnv*, jclass redefined, jobject, const char*, jobject,
+                          jint, const unsigned char*, jint*, unsigned char**) {
+  const jint delay = redefine_delay_ms.load();
+  if (redefined && delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
 }
 
 jint InvokeMethodV(JNIEnv* jni, jobject receiver, jmethodID id, jint method, ...) {
@@ -73,9 +84,12 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   jvmtiCapabilities requested{};
   requested.can_redefine_classes = 1;
   requested.can_generate_single_step_events = 1;
+  // ART sends ClassFileLoadHook for redefinitions only to retransform-capable environments.
+  requested.can_retransform_classes = 1;
   if (client_env->AddCapabilities(&requested) != JVMTI_ERROR_NONE) return JNI_ERR;
   jvmtiEventCallbacks callbacks{};
   callbacks.SingleStep = SingleStep;
+  callbacks.ClassFileLoadHook = FileLoadHook;
   return client_env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE
       ? JNI_OK : JNI_ERR;
 }
@@ -274,4 +288,13 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_isLoaded(JNIEnv* jni,
   }
   jni->ReleaseStringUTFChars(signature, wanted);
   return found ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setRedefineDelay(JNIEnv*, jclass,
+                                                                             jint milliseconds) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  redefine_delay_ms.store(milliseconds);
+  return client_env->SetEventNotificationMode(milliseconds > 0 ? JVMTI_ENABLE : JVMTI_DISABLE,
+                                              JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
 }

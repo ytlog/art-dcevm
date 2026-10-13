@@ -506,6 +506,8 @@ struct Transaction {
   bool requires_mapping = false;
   std::map<int32_t, MappingPlan> plans;  // By RedefinitionDataIter index.
   std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
+  std::string (*before_commit)() = nullptr;
+  std::string before_commit_subject;
   std::string rejection;
 };
 thread_local Transaction* transaction = nullptr;
@@ -566,6 +568,13 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
   if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
   if (!transaction) return true;
+  if (auto* check = std::exchange(transaction->before_commit, nullptr)) {
+    if (std::string why = check(); !why.empty()) {
+      self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+      transaction->rejection = transaction->before_commit_subject + ": " + why;
+      return false;
+    }
+  }
   // A class made abstract must have no instances of its own (subclass
   // instances stay valid). Reads only the common holder and Object layouts.
   if (const auto found = transaction->no_instances.find(self); found != transaction->no_instances.end()) {
@@ -1279,6 +1288,11 @@ void RequireMemberMapping() {
 }
 void RequireNoInstances(ClassRedefinitionPrefix* self, const std::string& descriptor) {
   if (transaction) transaction->no_instances[self] = descriptor;
+}
+void RequireBeforeCommit(std::string (*check)(), const std::string& subject) {
+  if (!transaction) return;
+  transaction->before_commit = check;
+  transaction->before_commit_subject = subject;
 }
 std::string TakeRejection() {
   if (!transaction) return {};
