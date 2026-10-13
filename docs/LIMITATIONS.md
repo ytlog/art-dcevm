@@ -1,6 +1,6 @@
 # 能力限制
 
-Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类方法的删除与签名替换（含 native、abstract、构造器与类初始化器）、native 改 Java、abstract 与 concrete 互换、字段删除、改类型与 static/实例互换、新增接口、放宽的父类变化，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
+Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在 Android 16 / API 36 与 Android 13 / API 33 的各一台 arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类方法的删除与签名替换（含 native、abstract、构造器与类初始化器）、native 改 Java、abstract 与 concrete 互换、字段删除、改类型与 static/实例互换、新增接口、放宽的父类变化，以及拒绝后的旧定义与批次原子性。Android 11、12、14、15、17 的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
 
 ## 前提限制
 
@@ -33,7 +33,7 @@ Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父�
 
 - 只支持放宽：新父类必须扩展原父类。已有实例保留自身与原父类链的字段值，新父类的字段为零值，不执行新父类的构造器；新父类在重定义前加载但不初始化。
 - 虚方法按新层级分派，新父类覆写的方法对已有实例立即生效；已在执行的旧方法帧中的 `super` 调用仍按旧层级。
-- ART 13 起校验新类时按名称解析到旧类，引擎在校验期间改为返回新类。目前只有 Android 16 的设备证据；若某版本的校验器走其他解析路径，重定义以 62 拒绝，旧定义保持不变。
+- ART 13 起校验新类时按名称解析到旧类，引擎在校验期间改为返回新类。目前有 Android 13 与 16 的设备证据；若某版本的校验器走其他解析路径，重定义以 62 拒绝，旧定义保持不变。
 
 ## 类修饰符的语义
 

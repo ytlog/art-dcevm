@@ -2,7 +2,7 @@
 
 在非 root 的 Android 设备上，于应用进程内增强 ART 的类重定义能力，目标是 VM 级 DCEVM：运行期间增删字段和方法、修改类型与签名、修饰符和继承关系，存活对象保留兼容字段的值。适用于自有应用的开发调试和热重载工具。
 
-**状态：Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在一台 Android 16 设备通过验证。** 标准 JVMTI 入口可执行方法体替换、新增字段和方法、成员与类修饰符变化、删除方法和改签名、删除字段、改字段类型与 static/实例互换、新增接口与放宽的父类变化，见 [验证记录](docs/VERIFICATION.md)。移除接口与收窄父类不支持（已校验代码依赖旧类型关系），其他 Android 版本尚待设备回归。退役成员的语义与限制见 [能力限制](docs/LIMITATIONS.md)。旧实现保存在本地标签 `backup-call-graph-engine-20261012`。
+**状态：Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在 Android 16 与 Android 13 的各一台设备通过验证。** 标准 JVMTI 入口可执行方法体替换、新增字段和方法、成员与类修饰符变化、删除方法和改签名、删除字段、改字段类型与 static/实例互换、新增接口与放宽的父类变化，见 [验证记录](docs/VERIFICATION.md)。移除接口与收窄父类不支持（已校验代码依赖旧类型关系），Android 11、12、14、15、17 尚待设备回归。退役成员的语义与限制见 [能力限制](docs/LIMITATIONS.md)。旧实现保存在本地标签 `backup-call-graph-engine-20261012`。
 
 ## 原理
 

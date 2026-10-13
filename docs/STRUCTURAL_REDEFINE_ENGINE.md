@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3（方案 C 加字段退役）已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 23 个场景、799 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；Phase 4a（类修饰符）、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在同一设备通过；收窄（失去父类型）不支持，其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3（方案 C 加字段退役）已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 23 个场景、799 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；Phase 4a（类修饰符）、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在同一设备通过；收窄（失去父类型）不支持，Android 13 已通过同一设备套件，11、12、14、15、17 的设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -170,7 +170,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 - **提交期**：只把计划写入 ART 的 map，写入前确认它们是空的 libc++ 树。首次退役后确认 ART 已给退役方法设置 obsolete 标志，否则守卫改为直接查表。MethodHandle 的 `artFieldOrMethod` 偏移通过全套 D27 的 `Class::FindInstanceField` 从 ART 字段表取得，不写死布局。
 - **DEX 身份**：通用有界读取同时接受标准 DEX 与 Android 11–15 的 CompactDex（ID 表在主区，字符串与类型列表在独立数据区）；重定义输入仍只接受单类标准 DEX。
 
-共享控制、探测与候选表在 `platform/common/method_retirement.{h,cc}`。目前只有 Android 16 设备证据；其他版本的声明已按源码补齐，由探测决定是否启用，仍须逐台设备回归（Phase 5）。
+共享控制、探测与候选表在 `platform/common/method_retirement.{h,cc}`。目前有 Android 16 与 13 的设备证据；其他版本的声明已按源码补齐，由探测决定是否启用，仍须逐台设备回归（Phase 5）。
 
 公共命名目录现为 **57 个名称**（53 个限定 `.dynsym`、4 个允许任一命名表），在 27/27 套库全部通过。退役使用的 ThrowNewException、EncodeMethodId 两重载、GetCanonicalMethod、GetMirrorClass、HasSameNameAndSignature、FindDeclaredStatic/InstanceField 与运行时探测用的 `Class::FindInstanceField` 都为 D27；MethodHandle invoke/invokeExact 为 27/27（D15/S17/G10，同一套库可能同时含多表，不能相加）。删除守卫后不再使用的 ArtMethod Invoke、FromReflectedMethod、ThrowNewWrappedException、obsolete quick/异常投递与 JNI 四个 ID 调用助手已移出目录。这些名字证明可定位；固定声明由运行时探测核对，Hook 覆盖由设备验证确认。
 
@@ -244,7 +244,7 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
   - 没有自有成员映射或校验重定向：66。
   B 会让 T 中的 copied default/miranda 消失，所以需要自有映射。
 - **分配**：ART 的 `AllocateNewClassObject` 把旧父类放进调用方 handle scope 中的槽位，再交给 `LinkClass`。Hook 在该槽位写入 B（槽位仍是 GC 根），新类因此链接在 B 之下；已加载子类随后以新 T 为父类重建。`CollectAndCreateNewInstances` 在可失败阶段核对新类的父类确为 B，否则以 66 拒绝。
-- **校验**：自 Android 13 起，ART 的校验器按描述符经类加载器解析类本身，得到的仍是旧类（父类为 A），新构造器调用 B 的构造器就会校验失败。Android 11/12 的 ART 自己把新类写入新 DexCache。现在由引擎 Hook `ClassRedefinition::CheckVerification`（27/27）：在校验该类期间，本线程的 `ClassLinker::FindClass`（两种签名，每套库至少有一种）对该描述符返回 holder 中的新类对象（槽位 8，GC 根）。13–15 若走别的解析路径，校验会失败并以 62 拒绝，不会提交未校验的代码；目前只有 Android 16 的设备证据。
+- **校验**：自 Android 13 起，ART 的校验器按描述符经类加载器解析类本身，得到的仍是旧类（父类为 A），新构造器调用 B 的构造器就会校验失败。Android 11/12 的 ART 自己把新类写入新 DexCache。现在由引擎 Hook `ClassRedefinition::CheckVerification`（27/27）：在校验该类期间，本线程的 `ClassLinker::FindClass`（两种签名，每套库至少有一种）对该描述符返回 holder 中的新类对象（槽位 8，GC 根）。13–15 若走别的解析路径，校验会失败并以 62 拒绝，不会提交未校验的代码；Android 13 与 16 的设备上均已生效。
 - **字段复制**：ART 的 `CopyFields` 逐层配对新旧父类链，链长不同就会 `CHECK` 失败。由于 B 扩展 A，新 T 中 A 链各字段的偏移与旧 T 相同。提交时 Update Hook 暂时把新 T 的父类指针改回 A：ART 于是配对 (T', T)、(A, A) 等层级，复制 T 自身与全部继承字段；B 自己的字段保持零值。visitor 入口与 Update 结束时把指针恢复为 B。
 - **未做**：B 不在重定义时初始化，其静态初始化照常在首次需要时执行；已有实例不执行 B 的构造器。
 
