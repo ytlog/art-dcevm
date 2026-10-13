@@ -1,31 +1,31 @@
 # ART DCEVM
 
-[English](README.en.md) | 中文
+English | [中文](README.zh-CN.md)
 
-ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运行期间替换 Java 类的方法实现，并修改字段、方法、修饰符和继承关系。适合自有应用的开发调试、热重载工具和类演进实验。
+ART DCEVM is a class redefinition enhancement library for the Android runtime. It replaces Java method implementations while an app is running and lets you change fields, methods, modifiers and the class hierarchy. It is intended for developing and debugging your own apps, hot-reload tooling and class evolution experiments.
 
-应用必须从进程启动时就处于可调试状态。无需 root，无需修改系统分区。初始化后，调用方通过自己的 JVMTI Agent 使用标准 `jvmtiEnv::RedefineClasses` 提交替换请求。
+The app must be debuggable from process start. No root and no system partition changes are required. After initialization, callers submit redefinitions through the standard `jvmtiEnv::RedefineClasses` from their own JVMTI agent.
 
-## 功能
+## Features
 
-- **方法体替换**：更新已加载类的方法实现。
-- **成员增删**：新增、删除和重新添加字段、方法及构造器，包括 native、abstract 方法与类初始化器。
-- **成员结构变更**：修改字段类型、方法签名，切换字段的 static / 实例形式，以及方法的 native / Java、abstract / 具体实现。
-- **修饰符变更**：修改成员和类的访问权限、final、abstract、synchronized、volatile 等修饰符。
-- **继承关系演进**：新增接口，将父类替换为原父类的子类。
-- **存活对象处理**：保留兼容字段的已有值；已有对象新增字段使用零值或 `null`，不重新执行构造器。
-- **旧引用保护**：已删除或被替换的成员在字节码、反射、JNI、MethodHandle 与 VarHandle 路径上拒绝访问。
-- **批量重定义**：通过一次 `RedefineClasses` 提交多个类；不支持的变化以 JVMTI 错误拒绝，整批不生效，旧定义保持可用。
+- **Method body replacement**: update method implementations of loaded classes.
+- **Adding and removing members**: add, remove and re-add fields, methods and constructors, including native and abstract methods and class initializers.
+- **Member shape changes**: change field types and method signatures, switch fields between static and instance, and switch methods between native and Java or abstract and concrete.
+- **Modifier changes**: change access, final, abstract, synchronized, volatile and other modifiers on members and classes.
+- **Hierarchy evolution**: add interfaces, and replace the superclass with a subclass of the original superclass.
+- **Live objects**: existing values of compatible fields are kept; fields added to existing objects start as zero or `null`, and constructors are not re-run.
+- **Stale reference protection**: removed or replaced members reject access through bytecode, reflection, JNI, MethodHandle and VarHandle.
+- **Batch redefinition**: submit several classes in one `RedefineClasses` call; unsupported changes are rejected with a JVMTI error, nothing in the batch takes effect and the old definitions stay usable.
 
-实例迁移、引用改写、去优化和 JIT 失效均由设备 ART 自带的结构重定义事务完成，本库只接管其中的校验、成员映射和类分配决策，原理见 [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)。
+Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md) (Chinese).
 
-## 快速开始
+## Quick start
 
-示例应用位于 [app](app)，独立用户 Agent 示例位于 [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc)。
+The sample app is in [app](app), and a standalone user agent example is in [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc).
 
-### 1. 构建与接入
+### 1. Build and integrate
 
-通过 Maven 依赖接入，**无需单独声明 ShadowHook**：
+Integrate through the Maven dependency. **ShadowHook does not need to be declared separately:**
 
 ```groovy
 // settings.gradle
@@ -38,53 +38,53 @@ dependencyResolutionManagement {
 ```
 
 ```groovy
-// 应用模块 build.gradle；x.y.z 替换为已发布版本
+// app module build.gradle; replace x.y.z with a published version
 dependencies {
     implementation 'com.github.ytlog:artdcevm:x.y.z'
 }
 ```
 
-发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。发布与本地 Maven 仓库的用法见 [Maven 发布指南](docs/MAVEN_PUBLISHING.md)。
+The published metadata declares ShadowHook as a runtime dependency, so Gradle downloads and packages it automatically.
 
-也可以从源码构建。需要 JDK 17 或以上、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4，并在本机 `local.properties` 中配置 `sdk.dir`：
+You can also build from source. This requires JDK 17 or later, Android SDK 37, NDK 27.2.12479018 and CMake 4.3.4, with `sdk.dir` set in your local `local.properties`:
 
 ```sh
 git clone https://github.com/ytlog/art-dcevm.git
 cd art-dcevm
 
-# 构建示例 APK 和可接入的 AAR
+# Build the sample APK and the AAR for integration
 ./gradlew :app:assembleDebug :artdcevm:assembleRelease
 ```
 
-产物分别为 `app/build/outputs/apk/debug/app-debug.apk` 和 `artdcevm/build/outputs/aar/artdcevm-release.aar`。在同一 Gradle 工程中可直接依赖源码模块：
+The outputs are `app/build/outputs/apk/debug/app-debug.apk` and `artdcevm/build/outputs/aar/artdcevm-release.aar`. Within the same Gradle project you can depend on the source module directly:
 
 ```groovy
-// 应用模块 build.gradle；settings.gradle 需已包含 :artdcevm
+// app module build.gradle; settings.gradle must include :artdcevm
 dependencies {
     implementation project(':artdcevm')
 }
 ```
 
-库的 `minSdk` 为 30，打包 arm64-v8a 的 native 库。应用需从启动时就启用 `debuggable`；不能在进程启动后再开启调试状态。
+The library's `minSdk` is 30 and it ships arm64-v8a native libraries. The app must enable `debuggable` from startup; debugging cannot be turned on after the process has started.
 
-### 2. 初始化
+### 2. Initialize
 
-在自己的 Agent 第一次重定义类之前，调用一次：
+Call this once, before your own agent redefines any class:
 
 ```java
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 
-// context 为应用 Context；附加或安装失败时抛出异常并附带诊断信息。
+// context is the app Context; throws with diagnostics if attaching or installing fails.
 DcevmRuntime.initialize(context);
 ```
 
-该方法加载 `libartdcevm.so`、附加增强 Agent 并接管标准 JVMTI 入口。同一进程中初始化成功后重复调用直接返回。
+This loads `libartdcevm.so`, attaches the enhancement agent and takes over the standard JVMTI entry. Once initialization succeeds in a process, further calls return immediately.
 
-`DcevmRuntime.capabilities()` 返回 JSON，包含当前支持的变化类别、诊断信息和最近一次拒绝的原因。
+`DcevmRuntime.capabilities()` returns JSON with the supported change categories, diagnostics and the reason for the most recent rejection.
 
-### 3. 附加自己的 JVMTI Agent
+### 3. Attach your own JVMTI agent
 
-ART DCEVM 提供初始化入口；补丁加载与替换请求由调用方的 Agent 实现。自己的 Agent 需要取得 JVMTI 环境并申请重定义能力，例如：
+ART DCEVM provides the initialization entry; loading patches and issuing redefinitions is up to the caller's agent. Your agent needs a JVMTI environment with the redefinition capability, for example:
 
 ```cpp
 #include <jni.h>
@@ -103,7 +103,7 @@ Agent_OnAttach(JavaVM* vm, char*, void*) {
 }
 ```
 
-将自己的 Agent 编译、打包为 native 库后，可在应用中附加：
+After building and packaging your agent as a native library, attach it from the app:
 
 ```java
 import android.os.Debug;
@@ -111,16 +111,16 @@ import android.os.Debug;
 Debug.attachJvmtiAgent("libmy_agent.so", null, context.getClassLoader());
 ```
 
-`libmy_agent.so` 为调用方自行实现的库名，不是本仓库提供的库。Agent 构建需提供 JVMTI 头文件；仓库示例使用 [third_party/jvmti](third_party/jvmti)。
+`libmy_agent.so` stands for your own library; it is not provided by this repository. Building an agent requires the JVMTI header; the sample uses [third_party/jvmti](third_party/jvmti).
 
-### 4. 提交替换类
+### 4. Submit replacement classes
 
-Android ART 接收 **DEX 字节**。为目标类生成具有相同类名的新定义，将完整 DEX 数据与当前已加载的 `jclass` 交给自己的 Agent：
+Android ART takes **DEX bytes**. Produce a new definition of the target class with the same class name, and pass the complete DEX data together with the currently loaded `jclass` to your agent:
 
 ```cpp
-// target：当前已加载的目标类。
-// dex / dex_size：包含目标类新定义的完整 DEX 数据及长度。
-// 调用线程已附加到 VM；jvmti 来自自己的 Agent。
+// target: the currently loaded target class.
+// dex / dex_size: complete DEX data containing the new definition, and its length.
+// The calling thread is attached to the VM; jvmti comes from your own agent.
 jvmtiClassDefinition definition{};
 definition.klass = target;
 definition.class_byte_count = dex_size;
@@ -128,46 +128,47 @@ definition.class_bytes = dex;
 
 jvmtiError error = jvmti->RedefineClasses(1, &definition);
 if (error != JVMTI_ERROR_NONE) {
-    // 记录错误码并处理失败，不将此次请求视为已生效。
+    // Log the error code and handle the failure; the request did not take effect.
 }
 ```
 
-多个相互依赖的类应组成同一个 `jvmtiClassDefinition[]`，一次提交完整批次。调用期间需保持类引用和 DEX 缓冲区有效。示例应用的 [补丁源码](fixtures) 与 [DEX 构建脚本](tools/build-fixtures.py) 展示了测试补丁的生成方式。
+Classes that depend on each other should go into one `jvmtiClassDefinition[]` and be submitted as a single batch. Keep the class references and DEX buffers valid for the duration of the call. The sample app's [patch sources](fixtures) and [DEX build script](tools/build-fixtures.py) show how test patches are produced.
 
-### 5. 新增类
+### 5. Add new classes
 
-`RedefineClasses` 只替换已加载的类。补丁中 APK 没有的类（新类，以及新 lambda 等合成类）由工具经类加载器提供，本库不定义新类，这与 Java 上的 DCEVM 和热重载工具的分工相同。工具对一次更新按以下顺序处理：
+`RedefineClasses` replaces loaded classes only. Classes that the APK lacks (new classes and synthetic ones such as new lambdas) reach the app through its class loader, supplied by the tool; this library does not define new classes, the same split as DCEVM and hot-reload tools on Java. For one update, the tool:
 
-1. 每个类各编成一个 DEX（D8 `--file-per-class` 会把新 lambda 的合成类单独输出）。
-2. 用 `Class.forName(name, false, 应用类加载器)` 分类：找得到的是已有类，尚未使用过的已有类也会因此加载，之后才能重定义；找不到的是新类。
-3. 把新类打成一个 jar 并设为只读，再用 ART 的 JVMTI 扩展 `com.android.art.classloader.add_to_dex_class_loader` 把它追加到应用类加载器（`BaseDexClassLoader`）的路径末尾。Android 14 起，目标 SDK 为 34 及以上的应用不能加载可写的 DEX 文件。
-4. 用一次 `RedefineClasses` 提交全部已有类。新定义引用的追加类，包括被重定义类的新子类，由本库在事务开始前加载。
+1. Compiles each class to its own DEX (D8 `--file-per-class` emits a new lambda's synthetic class separately).
+2. Classifies with `Class.forName(name, false, appClassLoader)`: a class it finds exists, and an existing class nothing has used yet is loaded this way so it can be redefined; a class it cannot find is new.
+3. Packs the new classes into one jar, marks it read-only (since Android 14, apps targeting SDK 34 or higher cannot load writable DEX files) and appends it to the end of the app loader's (`BaseDexClassLoader`) path with ART's JVMTI extension `com.android.art.classloader.add_to_dex_class_loader`.
+4. Submits all existing classes in one `RedefineClasses` call. The library loads the appended classes the new definitions name, including new subclasses of redefined classes, before the transaction starts.
 
-追加只能加在加载器路径末尾，无法撤销，也不会覆盖已加载的类；追加过的类再次修改时，按已有类重定义。新类的静态初始化器在首次使用时执行，被重定义类的静态初始化器不会重新执行。示例实现见 [HotReloadTool.java](app/src/debug/java/com/github/ytlog/artdcevm/testing/HotReloadTool.java)。
+Appending only adds to the end of the loader's path, cannot be undone and does not override loaded classes; a class added this way is redefined like any existing class when it changes again. A new class's static initializer runs on first use; a redefined class's static initializer does not run again. See [HotReloadTool.java](app/src/debug/java/com/github/ytlog/artdcevm/testing/HotReloadTool.java) for a sample implementation.
 
-## 使用注意
+## Notes
 
-- 对象新增字段初值为零或 `null`；新建对象仍按新定义执行构造器。字段类型或 static / 实例形式变化按旧成员退役、新成员创建处理。
-- 删除或改签名的成员退役后，旧引用再访问会抛出 `NoSuchMethodError`、`NoSuchFieldError` 等异常；已在执行的旧方法帧继续执行旧方法体。业务代码需处理这些语义变化。
-- 移除接口或让类失去原有父类型的继承变化会被拒绝。已加载子类覆写将变为 final 的方法、自身仍有实例的类改为 abstract 等冲突，也会导致事务拒绝。
-- 结构变化会遍历堆迁移实例、去优化所有线程帧并清空 JIT 代码，耗时随堆大小增加，提交后需要重新预热。
-- `Unsafe`、`Atomic*FieldUpdater` 等缓存的字段偏移在实例布局变化后失效。
-- `RetransformClasses` 不属于增强范围。补丁分发、签名校验、访问控制和发布系统需由调用方实现。
+- Fields added to existing objects start as zero or `null`; newly created objects run the new constructors. A change of field type or of static / instance form retires the old member and creates a new one.
+- Once a removed or re-signatured member is retired, old references to it throw `NoSuchMethodError`, `NoSuchFieldError` and similar errors; method frames already executing keep running the old body. Application code must handle these semantic changes.
+- Removing an interface, or any hierarchy change that drops an existing supertype, is rejected. Conflicts such as a loaded subclass overriding a method that becomes final, or a class with its own live instances becoming abstract, also reject the transaction.
+- Structural changes walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
+- Raw field offsets cached by `Unsafe`, `Atomic*FieldUpdater` and similar APIs become invalid once the instance layout changes.
+- `RetransformClasses` is not covered. Patch delivery, signature verification, access control and release tooling are the caller's responsibility.
 
-完整的语义说明见 [能力限制](docs/LIMITATIONS.md)。
+Full semantics are described in [limitations](docs/LIMITATIONS.md) (Chinese).
 
-## 示例与验证
+## Sample and verification
 
 ```sh
-# 构建示例 APK 后，在连接的 arm64 设备上运行完整设备回归
+# After building the sample APK, run the full device regression on a connected arm64 device
 python3 tools/run-device-tests.py --serial DEVICE
 ```
 
-测试脚本安装并操作示例应用 `dev.artdcevm.lab`，会结束其旧进程并从初始类定义开始运行。原始报告保存到本地 `build/evidence/`，不随仓库发布。
+The script installs and drives the sample app `dev.artdcevm.lab`, kills any previous process and starts from the initial class definitions. Raw reports are saved locally under `build/evidence/` and are not published with the repository.
 
-## 文档
+## Documentation
 
-- [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)
-- [能力限制与语义细节](docs/LIMITATIONS.md)
-- [测试命令与验证结论](docs/VERIFICATION.md)
-- [Maven 发布指南](docs/MAVEN_PUBLISHING.md)
+The documents below are written in Chinese.
+
+- [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md)
+- [Limitations and semantics](docs/LIMITATIONS.md)
+- [Test commands and verification results](docs/VERIFICATION.md)
