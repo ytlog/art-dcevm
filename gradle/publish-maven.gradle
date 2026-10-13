@@ -2,7 +2,7 @@
 // component, retaining its runtime dependencies in the POM and module metadata.
 def publishGroup = providers.gradleProperty('publishGroupId').orElse('io.github.ytlog')
 def publishArtifact = providers.gradleProperty('publishArtifactId').orElse('artdcevm')
-def publishVersion = providers.gradleProperty('publishVersion').orElse('0.1.0-alpha')
+def publishVersion = providers.gradleProperty('publishVersion')
 def artifactName = publishArtifact.get()
 def centralEnabled = providers.gradleProperty('enableMavenCentral').orElse('false').get().toBoolean()
 

@@ -1,0 +1,113 @@
+name: Verify and publish to Maven Central
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve project version
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: python3 .github/scripts/resolve-publish-version.py
+
+      - uses: ./.github/actions/setup-android
+
+      - name: Host checks
+        run: |
+          python3 tools/test-structural-policy-host.py
+          python3 tools/test-structural-symbols.py
+
+      - name: Build and verify the library
+        env:
+          PROJECT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./gradlew --no-daemon :artdcevm:assembleRelease :artdcevm:generatePomFileForMavenPublication
+          python3 tools/check-native-page-alignment.py artdcevm/build/outputs/aar/artdcevm-release.aar
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          pom = ET.parse('artdcevm/build/publications/maven/pom-default.xml').getroot()
+          ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+          expected = {'groupId': 'io.github.ytlog', 'artifactId': 'artdcevm', 'version': os.environ['PROJECT_VERSION']}
+          for name, value in expected.items():
+              if pom.findtext(f'm:{name}', namespaces=ns) != value:
+                  raise SystemExit(f'Unexpected POM {name}')
+          PY
+          sha256sum artdcevm/build/outputs/aar/artdcevm-release.aar >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: verify
+    if: github.repository == 'ytlog/art-dcevm' && github.ref == 'refs/heads/main' && needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: maven-central
+    concurrency:
+      group: maven-central-${{ needs.verify.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check whether the version is already published
+        id: availability
+        env:
+          PROJECT_VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          url="https://repo.maven.apache.org/maven2/io/github/ytlog/artdcevm/$PROJECT_VERSION/artdcevm-$PROJECT_VERSION.pom"
+          status=$(curl --silent --show-error --location --retry 3 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' "$url")
+          case "$status" in
+            200)
+              echo 'available=false' >> "$GITHUB_OUTPUT"
+              echo "Version $PROJECT_VERSION is already published; skipped." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            404) echo 'available=true' >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Maven Central lookup failed (HTTP $status)"; exit 1 ;;
+          esac
+
+      - uses: ./.github/actions/setup-android
+        if: steps.availability.outputs.available == 'true'
+
+      - name: Publish the library
+        if: steps.availability.outputs.available == 'true'
+        env:
+          PROJECT_VERSION: ${{ needs.verify.outputs.version }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralDeploymentValidation: PUBLISHED
+        run: |
+          for name in ORG_GRADLE_PROJECT_mavenCentralUsername ORG_GRADLE_PROJECT_mavenCentralPassword \
+                      ORG_GRADLE_PROJECT_signingInMemoryKey ORG_GRADLE_PROJECT_signingInMemoryKeyPassword; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing publishing secret for $name"
+              exit 1
+            fi
+          done
+          ./gradlew --no-daemon :artdcevm:publishAndReleaseToMavenCentral \
+            -PenableMavenCentral=true -PpublishVersion="$PROJECT_VERSION"
+          echo "Published io.github.ytlog:artdcevm:$PROJECT_VERSION" >> "$GITHUB_STEP_SUMMARY"

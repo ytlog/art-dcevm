@@ -1,0 +1,49 @@
+name: Set up Android build tools
+description: Install the Android library toolchain on an Ubuntu 24.04 runner.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - uses: gradle/actions/setup-gradle@v5
+
+    - name: Install Android SDK packages
+      shell: bash
+      run: |
+        sdkmanager="${ANDROID_HOME:?ANDROID_HOME is required}/cmdline-tools/latest/bin/sdkmanager"
+        # yes receives SIGPIPE when sdkmanager finishes reading the licenses.
+        set +e
+        yes | "$sdkmanager" --licenses > /dev/null
+        license_status=${PIPESTATUS[1]}
+        set -e
+        if [ "$license_status" -ne 0 ]; then
+          exit "$license_status"
+        fi
+        "$sdkmanager" --install \
+          "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.2.12479018"
+
+    - name: Install CMake and Ninja
+      shell: bash
+      env:
+        CMAKE_VERSION: 4.3.4
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q ninja-build
+        base="https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION"
+        archive="cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
+        cd "$RUNNER_TEMP"
+        curl --fail --location --silent --show-error --retry 3 --remote-name "$base/$archive"
+        curl --fail --location --silent --show-error --retry 3 --remote-name "$base/cmake-$CMAKE_VERSION-SHA-256.txt"
+        awk -v archive="$archive" '$2 == archive { print }' "cmake-$CMAKE_VERSION-SHA-256.txt" \
+          | sha256sum --check --strict -
+        tar -xzf "$archive"
+        echo "CMAKE_DIR=$RUNNER_TEMP/cmake-$CMAKE_VERSION-linux-x86_64" >> "$GITHUB_ENV"
+
+    - name: Configure the Android toolchain
+      shell: bash
+      run: |
+        printf 'sdk.dir=%s\ncmake.dir=%s\n' "$ANDROID_HOME" "$CMAKE_DIR" > local.properties
