@@ -624,7 +624,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
   diagnostic = !method_retirement::Available()
-      ? "standard JVMTI wrapper routed to ART structural transaction; Phase 1-2 validators installed"
+      ? "ART structural transaction with additions and modifier changes; members cannot retire"
       : method_retirement::FieldRetirementAvailable()
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";

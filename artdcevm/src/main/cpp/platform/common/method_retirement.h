@@ -16,8 +16,8 @@ struct Hook {
 };
 // Resolve the retirement hooks by name and install the JNI Call*Method* guards
 // through JVMTI's function-table override. When a name is missing, the NDK map
-// layout differs or the override fails, no hook is added, the engine keeps
-// Phase 2 and `note` says why. Whether the fixed declarations fit this ART is
+// layout differs or the override fails, no hook is added, members cannot retire
+// and `note` says why. Whether the fixed declarations fit this ART is
 // decided later by probes.
 void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note);
 // The retirement hooks are prepared; VerifyTarget decides per transaction.

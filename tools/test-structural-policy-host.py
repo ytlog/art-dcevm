@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
         Reject(nested_live, schema, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
     }
-    std::cout << "Phase 2-4 policy and bounded DEX decoding PASS\n";
+    std::cout << "Structural policy and bounded DEX decoding PASS\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

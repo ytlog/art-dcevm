@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for strict table requirements and exact-name research reports."""
+"""Regression checks for the named-symbol catalog check."""
 import contextlib
 import hashlib
 import importlib.util
@@ -11,9 +11,9 @@ import struct
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location('symbol_audit', Path(__file__).with_name('check-structural-symbols.py'))
-audit = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(audit)
+spec = importlib.util.spec_from_file_location('symbol_check', Path(__file__).with_name('check-structural-symbols.py'))
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
 
 
 def elf(dynamic=(), local=(), mini=None):
@@ -47,14 +47,14 @@ def elf(dynamic=(), local=(), mini=None):
     return header + table + contents
 
 
-class SymbolAuditTest(unittest.TestCase):
+class SymbolCatalogTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
-        self.original_root, self.original_catalog = audit.ROOT, audit.CATALOG
-        audit.ROOT = self.root
-        audit.CATALOG = self.root / 'symbols.h'
-        audit.CATALOG.write_text(
+        self.original_root, self.original_catalog = check.ROOT, check.CATALOG
+        check.ROOT = self.root
+        check.CATALOG = self.root / 'symbols.h'
+        check.CATALOG.write_text(
             'NamedSymbol kExported{Library::kArt, "exported"};\n'
             'NamedSymbol kWrapper{Library::kJvmti, "wrapper", SymbolTable::kAnyNamed};\n')
         self.runtime = self.root / 'runtime'
@@ -68,23 +68,18 @@ class SymbolAuditTest(unittest.TestCase):
         self.jvmti.write_bytes(elf(mini=elf(local=[('wrapper', True)])))
 
     def tearDown(self):
-        audit.ROOT, audit.CATALOG = self.original_root, self.original_catalog
+        check.ROOT, check.CATALOG = self.original_root, self.original_catalog
         self.temporary.cleanup()
 
     def run_check(self, *extra):
         output = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-            result = audit.main(['--runtime-lib', str(self.runtime), *map(str, extra)])
+            result = check.main(['--runtime-lib', str(self.runtime), *map(str, extra)])
         return result, output.getvalue()
 
-    def test_research_names_preserve_each_table_and_do_not_weaken_catalog(self):
-        candidate = self.root / 'research.json'
-        candidate.write_text(json.dumps({'services': [
-            {'id': 'variants', 'library': 'kArt', 'names': ['local', 'mini', 'missing', 'undefined'],
-             'source': 'official source'},
-            {'id': 'inline', 'library': 'libart.so', 'names': [], 'inline': True}]}))
-        report = self.root / 'build/evidence/audit.json'
-        result, output = self.run_check('--audit-spec', candidate, '--report', report)
+    def test_report_keeps_each_table_without_private_paths(self):
+        report = self.root / 'build/evidence/symbols.json'
+        result, output = self.run_check('--report', report)
         self.assertEqual(result, 0)
         self.assertNotIn('private-device-build', output)
         content = report.read_text()
@@ -96,15 +91,8 @@ class SymbolAuditTest(unittest.TestCase):
         self.assertEqual(runtime['label'], 'api-30/OEM/model')
         self.assertEqual(runtime['catalog'][0]['tables'], ['.dynsym', '.symtab'])
         self.assertEqual(runtime['catalog'][1]['tables'], ['.gnu_debugdata'])
-        self.assertEqual([entry['tables'] for entry in runtime['services'][0]['names']],
-                         [['.symtab'], ['.gnu_debugdata'], [], []])
         self.assertEqual(runtime['libraries']['libart.so']['sha256'], hashlib.sha256(self.art.read_bytes()).hexdigest())
-        self.assertEqual(data['auditSpecSha256'], hashlib.sha256(candidate.read_bytes()).hexdigest())
-        self.assertEqual(data['auditSpec']['services'][0]['source'], 'official source')
-        self.assertTrue(runtime['services'][0]['available'])
-        self.assertFalse(runtime['services'][1]['available'])
-        self.assertTrue(data['summary']['services'][1]['inlineOnly'])
-        self.assertEqual(data['summary']['services'][0]['variants'][2]['tableSetCounts']['missing'], 1)
+        self.assertEqual(data['summary']['passedSets'], 1)
 
     def test_catalog_dynsym_requirement_rejects_a_local_only_name(self):
         self.art.write_bytes(elf(local=[('exported', True)]))
@@ -118,7 +106,7 @@ class SymbolAuditTest(unittest.TestCase):
         second.mkdir()
         (second / 'libopenjdkjvmti.so').write_bytes(self.jvmti.read_bytes())
         (second / 'libart.so').write_bytes(elf(dynamic=[('exported', True)]))
-        report = self.root / 'build/evidence/audit.json'
+        report = self.root / 'build/evidence/check.json'
         result, output = self.run_check('--report', report)
         self.assertEqual(result, 1)
         data = json.loads(report.read_text())
@@ -134,23 +122,8 @@ class SymbolAuditTest(unittest.TestCase):
                 'NamedSymbol kBad{Library::kArt, "bad"};\nNamedSymbol kOther{Library::kArt, "bad"};',
                 'NamedSymbol kBad{Library::kArt, "bad", malformed};'):
             with self.subTest(source=source):
-                audit.CATALOG.write_text(source)
+                check.CATALOG.write_text(source)
                 result, _ = self.run_check()
-                self.assertEqual(result, 2)
-
-    def test_spec_rejects_bad_exact_names_libraries_and_duplicate_ids(self):
-        candidate = self.root / 'research.json'
-        cases = [{'services': [service]} for service in (
-            {'id': 'valid', 'library': 'kArt', 'names': ['same', 'same']},
-            {'id': 'valid', 'library': 'kArt', 'names': ['not exact']},
-            {'id': 'valid', 'library': '../private.so', 'names': []},
-            {'id': 'valid', 'library': 'kArt', 'names': 'bad'},
-            {'id': 'bad id', 'library': 'kArt', 'names': []})]
-        cases += [{'services': [{'id': 'same', 'library': 'kArt', 'names': []}] * 2}, {}]
-        for content in cases:
-            with self.subTest(content=content):
-                candidate.write_text(json.dumps(content))
-                result, _ = self.run_check('--audit-spec', candidate)
                 self.assertEqual(result, 2)
 
     def test_report_rejects_paths_outside_ignored_evidence_and_symlink_escapes(self):
@@ -160,7 +133,7 @@ class SymbolAuditTest(unittest.TestCase):
         (self.root / 'build/evidence').mkdir(parents=True)
         (self.root / 'outside').mkdir()
         (self.root / 'build/evidence/link').symlink_to(self.root / 'outside', target_is_directory=True)
-        result, _ = self.run_check('--report', self.root / 'build/evidence/link/audit.json')
+        result, _ = self.run_check('--report', self.root / 'build/evidence/link/check.json')
         self.assertEqual(result, 2)
 
     def test_no_runtime_sets_and_bad_elf_fail_without_private_paths(self):
