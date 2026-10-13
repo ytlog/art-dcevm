@@ -16,7 +16,7 @@ Phase 1–3 已在一台 Android 16 / API 36、arm64 设备上通过设备套件
 | --- | --- | --- |
 | 删除或改签名的方法是 native、abstract、接口声明、构造器或类初始化器 | `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67） | 待定 |
 | native → Java，abstract 相关的方法变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | Phase 4 |
-| 类修饰符变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | Phase 4 |
+| 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | 不支持 |
 | 父类、接口变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | Phase 4 |
 
 方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝。
@@ -24,9 +24,14 @@ Phase 1–3 已在一台 Android 16 / API 36、arm64 设备上通过设备套件
 ## 语义冲突（各阶段都会拒绝）
 
 - 方法新增 final，而已加载的子类覆写了它。
-- 类新增 final，而已有已加载的子类。
+- 类新增 final，而已有已加载的子类（70）。
+- 类新增 abstract，而该类自身仍有实例（70）；子类的实例不受影响。
 - 变为 abstract 后，存活实例或已加载子类将继承未实现的抽象方法。
 - 退役不可用时，新增或改变访问级别的方法可能顶替已加载子类的接口 default/miranda 拷贝。
+
+## 类修饰符的语义
+
+- 可见性、final、abstract、synthetic 与嵌套类的 InnerClass 标志可以改变，新类使用新修饰符。已解析的调用点与类型引用保留，ART 不对它们重新做访问检查；新的解析按新修饰符检查。
 
 ## 退役成员的语义
 

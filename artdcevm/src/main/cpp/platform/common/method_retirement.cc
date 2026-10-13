@@ -14,6 +14,7 @@
 #include <shared_mutex>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "platform/abi/arm64/common/libcpp_pointer_map.h"
 #include "platform/abi/arm64/common/redefinition.h"
@@ -226,8 +227,7 @@ struct MappingPlan {
 // Operations over one source-declared class layout.
 struct LayoutOps {
   int android;
-  bool (*verify_target)(void* klass, const evolution::ClassSchema& live, uint32_t class_def_access,
-                        std::string* why);
+  bool (*verify_target)(void* klass, const evolution::ClassSchema& live, std::string* why);
   bool (*verify_iter)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
@@ -249,10 +249,18 @@ template <typename Class, typename Method> struct Layout {
   }
 
   // The class flags locate access_flags_, which follows the native member
-  // arrays, so a wrong array layout fails here before any array is read.
-  static bool VerifyAccess(const Class& klass, uint32_t class_def_access, std::string* why) {
+  // arrays, so a wrong array layout fails here before any array is read. The
+  // expected flags come from the class's current ClassDef in its own DEX
+  // (dex_cache_ precedes the arrays in every declared layout).
+  static bool VerifyAccess(const Class& klass, const std::string& descriptor, std::string* why) {
     constexpr uint32_t kValidClass = 0x0001 | 0x0010 | 0x0020 | 0x0400 | 0x1000 | 0x4000;
     constexpr uint32_t kValidInterface = 0x0001 | 0x0200 | 0x0400 | 0x1000 | 0x2000;
+    const DexFilePrefix* dex = DexOf(klass.dex_cache);
+    if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
+    uint32_t class_def_access = 0;
+    std::string error;
+    if (!evolution::ReadClassAccess(DexViewOf(*dex), descriptor, &class_def_access, &error))
+      return Fail(why, "class definition unavailable: " + error);
     const uint32_t expected = class_def_access &
         ((class_def_access & evolution::kAccInterface) ? kValidInterface : kValidClass);
     if ((klass.access_flags & kAccJavaFlagsMask) != expected)
@@ -333,10 +341,9 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  static bool VerifyTarget(void* klass, const evolution::ClassSchema& live,
-                           uint32_t class_def_access, std::string* why) {
+  static bool VerifyTarget(void* klass, const evolution::ClassSchema& live, std::string* why) {
     auto* declared = static_cast<Class*>(klass);
-    return declared && VerifyAccess(*declared, class_def_access, why) &&
+    return declared && VerifyAccess(*declared, live.descriptor, why) &&
         VerifyFields(declared, live, why) && VerifyMethods(declared, live, why);
   }
 
@@ -493,6 +500,8 @@ struct Transaction {
   bool probed = false;
   bool requires_mapping = false;
   std::map<int32_t, MappingPlan> plans;  // By RedefinitionDataIter index.
+  std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
+  std::string rejection;
 };
 thread_local Transaction* transaction = nullptr;
 
@@ -551,7 +560,21 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
   if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
-  if (!transaction || !transaction->probed) return true;
+  if (!transaction) return true;
+  // A class made abstract must have no instances of its own (subclass
+  // instances stay valid). Reads only the common holder and Object layouts.
+  if (const auto found = transaction->no_instances.find(self); found != transaction->no_instances.end()) {
+    const auto* instances = data->OldInstances();
+    const uint32_t target = Reference(mirror_class(self));
+    for (int32_t i = 0; instances && i < instances->length; ++i) {
+      const auto* instance = instances->Get<Object>(i);
+      if (!instance || instance->klass != target) continue;
+      self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
+      transaction->rejection = found->second + ": class made abstract has live instances";
+      return false;
+    }
+  }
+  if (!transaction->probed) return true;
   std::string why;
   for (size_t i = 0; i < kLayoutCount; ++i) {
     const LayoutMask bit = LayoutMask{1} << i;
@@ -1197,15 +1220,14 @@ void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placehol
   field_retirement_available = true;
 }
 
-bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live,
-                  uint32_t class_def_access) {
+bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
   if (!available || !transaction) return false;
   void* klass = mirror_class(self);
   LayoutMask accepted = 0;
   std::string why;
   for (size_t i : CandidateOrder()) {
     std::string reason;
-    if (kLayouts[i].verify_target(klass, live, class_def_access, &reason))
+    if (kLayouts[i].verify_target(klass, live, &reason))
       accepted |= LayoutMask{1} << i;
     else if (why.empty())  // The platform's own release is probed first.
       why = "android" + std::to_string(kLayouts[i].android) + ": " + reason;
@@ -1231,6 +1253,13 @@ TransactionScope::~TransactionScope() {
 }
 void RequireMemberMapping() {
   if (transaction) transaction->requires_mapping = true;
+}
+void RequireNoInstances(ClassRedefinitionPrefix* self, const std::string& descriptor) {
+  if (transaction) transaction->no_instances[self] = descriptor;
+}
+std::string TakeRejection() {
+  if (!transaction) return {};
+  return std::exchange(transaction->rejection, {});
 }
 
 void RetainRoots(std::vector<jobject> roots) {

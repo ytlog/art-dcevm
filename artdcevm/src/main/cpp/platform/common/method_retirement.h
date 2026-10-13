@@ -35,11 +35,10 @@ void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placehol
                               std::string* note);
 bool FieldRetirementAvailable();
 // Probe the source-declared class layouts on a redefinition target against
-// ART's own lookups and the JVMTI view (`live`); `class_def_access` holds the
-// raw ClassDef flags. Runs in CheckClass, before ART can no longer fail. True
-// when a layout matches every target probed in the current transaction.
-bool VerifyTarget(abi::arm64::ClassRedefinitionPrefix* self,
-                  const evolution::ClassSchema& live, uint32_t class_def_access);
+// ART's own lookups, the class's current DEX and the JVMTI view (`live`). Runs
+// in CheckClass, before ART can no longer fail. True when a layout matches
+// every target probed in the current transaction.
+bool VerifyTarget(abi::arm64::ClassRedefinitionPrefix* self, const evolution::ClassSchema& live);
 // One standard-entry transaction. A transaction whose policy decision needs
 // the engine's member mapping fails before ART's no-failure point when a later
 // probe disables that mapping.
@@ -53,6 +52,11 @@ class TransactionScope {
   void* state_;
 };
 void RequireMemberMapping();
+// The target becomes abstract: fail the transaction, before ART's no-failure
+// point, if instances of exactly that class exist. `descriptor` names it in
+// the rejection that TakeRejection then returns once.
+void RequireNoInstances(abi::arm64::ClassRedefinitionPrefix* self, const std::string& descriptor);
+std::string TakeRejection();
 // JNI globals are prepared before entering ART; ReplaceReferences updates them
 // to the replacement Class whose ClassExt roots the complete obsolete chain.
 void RetainRoots(std::vector<jobject> roots);

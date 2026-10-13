@@ -33,7 +33,7 @@ def complete_report():
         "initialization": {"passed": True, "runtimeInitialized": True, "clientAttached": True,
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
-            "memberAddition": True, "memberModifierChange": True,
+            "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,

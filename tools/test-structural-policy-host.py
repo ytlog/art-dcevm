@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
       next = live;
       if (signature) next.methods[0].descriptor = "(I)I";
       else next.methods.erase(next.methods.begin());
-      const auto retirement = policy::Evaluate(live, next, {}, true);
+      const auto retirement = policy::Evaluate(live, next, {}, {true});
       Require(retirement.error == JVMTI_ERROR_NONE && retirement.methods_structural &&
               !retirement.fields_structural, "method-only retirement did not take structural path");
       Require(retirement.retired_methods.size() == 1 &&
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
               retirement.retired_methods[0].descriptor == "()I",
               "policy did not report the retired declaration");
     }
-    Require(policy::Evaluate(live, live, {}, true).retired_methods.empty(),
+    Require(policy::Evaluate(live, live, {}, {true}).retired_methods.empty(),
             "unchanged declarations reported as retired");
     {
       // A loaded subclass may own a copied default/miranda for copied()I.
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
       copies.interface_copies.insert({"copied", "()I"});
       next = live; next.methods.push_back({"copied", "()I", acc::kAccPublic});
       Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED, copies);
-      Require(policy::Evaluate(live, next, copies, true).error == JVMTI_ERROR_NONE,
+      Require(policy::Evaluate(live, next, copies, {true}).error == JVMTI_ERROR_NONE,
               "owned member mapping must remap a vanished copied method");
       for (uint32_t flags : {uint32_t{acc::kAccPrivate}, uint32_t{acc::kAccStatic}}) {
         next = live; next.methods.push_back({"copied", "()I", flags});
@@ -119,11 +119,11 @@ int main(int argc, char** argv) {
       Accept(live, next, false, true, copies);  // A superclass already implements the slot.
     }
     next = live; next.fields[0].descriptor = "J";
-    Require(policy::Evaluate(live, next, {}, true).error ==
+    Require(policy::Evaluate(live, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
             "method retirement incorrectly enabled field type change");
     next = live; next.methods.erase(next.methods.begin() + 1);
-    Require(policy::Evaluate(live, next, {}, true).error ==
+    Require(policy::Evaluate(live, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
             "constructor retirement must remain rejected");
     {
@@ -135,51 +135,74 @@ int main(int argc, char** argv) {
         if (change == 0) next.fields.erase(next.fields.begin());          // Removed.
         if (change == 1) next.fields[0].descriptor = "J";                 // Type changed.
         if (change == 2) next.fields[0].access |= acc::kAccStatic;        // Storage changed.
-        Require(policy::Evaluate(fields, next, {}, true, false).error ==
+        Require(policy::Evaluate(fields, next, {}, {true, false}).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                 "field retirement enabled without field guards");
-        Require(policy::Evaluate(fields, next, {}, false, true).error ==
+        Require(policy::Evaluate(fields, next, {}, {false, true}).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                 "field retirement enabled without the owned mapping");
-        const auto retired = policy::Evaluate(fields, next, {}, true, true);
+        const auto retired = policy::Evaluate(fields, next, {}, {true, true});
         Require(retired.error == JVMTI_ERROR_NONE && retired.fields_structural &&
                 retired.retired_fields.size() == 1 && retired.retired_fields[0].name == "value" &&
                 retired.retired_fields[0].descriptor == "I" && retired.retired_methods.empty(),
                 "field retirement not reported");
       }
       next = fields; next.fields.clear();
-      Require(policy::Evaluate(fields, next, {}, true, true).retired_fields.size() == 2,
+      Require(policy::Evaluate(fields, next, {}, {true, true}).retired_fields.size() == 2,
               "static field retirement not reported");
-      Require(policy::Evaluate(fields, fields, {}, true, true).retired_fields.empty(),
+      Require(policy::Evaluate(fields, fields, {}, {true, true}).retired_fields.empty(),
               "unchanged fields reported as retired");
     }
     for (uint32_t unsupported : {acc::kAccNative, acc::kAccAbstract}) {
       auto restricted = live; restricted.methods[0].access |= unsupported;
       next = restricted; next.methods.erase(next.methods.begin());
-      Require(policy::Evaluate(restricted, next, {}, true).error ==
+      Require(policy::Evaluate(restricted, next, {}, {true}).error ==
               JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
               "native or abstract method retirement must remain rejected");
     }
     auto interface_schema = live;
     interface_schema.access |= acc::kAccInterface;
     next = interface_schema; next.methods.erase(next.methods.begin());
-    Require(policy::Evaluate(interface_schema, next, {}, true).error ==
+    Require(policy::Evaluate(interface_schema, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
             "interface declaration retirement must remain rejected");
     auto initializer = live;
     initializer.methods.push_back({"<clinit>", "()V", acc::kAccStatic});
     next = initializer; next.methods.pop_back();
-    Require(policy::Evaluate(initializer, next, {}, true).error ==
+    Require(policy::Evaluate(initializer, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
             "class initializer retirement must remain rejected");
     next = live; next.superclass = "Lfixture/Parent;";
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
     next = live; next.interfaces.push_back("Lfixture/Interface;");
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+    // Class modifiers: visibility, final, synthetic and (with an instance
+    // check) abstract may change; every change takes the structural path.
     for (uint32_t flags : {uint32_t{0}, acc::kAccPublic | acc::kAccFinal,
-                          acc::kAccPublic | acc::kAccAbstract, acc::kAccPublic | uint32_t{0x1000}}) {
+                          acc::kAccPublic | uint32_t{0x1000}}) {
       next = live; next.access = flags;
+      Accept(live, next, false, true);
+    }
+    {
+      policy::LoadedHierarchy extended;
+      extended.loaded_subclasses = true;
+      next = live; next.access |= acc::kAccFinal;
+      Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED, extended);
+      auto final_live = live; final_live.access |= acc::kAccFinal;
+      Accept(final_live, live, false, true, extended);  // Dropping final is always allowed.
+      next = live; next.access |= acc::kAccAbstract;
       Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
+      policy::Abilities checks;
+      checks.instance_check = true;
+      const auto abstract = policy::Evaluate(live, next, {}, checks);
+      Require(abstract.error == JVMTI_ERROR_NONE && abstract.requires_no_instances &&
+              abstract.methods_structural, "abstract class change without instance requirement");
+      Require(!policy::Evaluate(live, live, {}, checks).requires_no_instances,
+              "unchanged class requires an instance check");
+      for (uint32_t kind : {acc::kAccInterface | acc::kAccAbstract, uint32_t{0x4000}}) {
+        next = live; next.access |= kind;
+        Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
+      }
     }
     policy::LoadedHierarchy subclasses;
     subclasses.visible.insert({"work", "()I"});
@@ -252,13 +275,15 @@ int main(int argc, char** argv) {
         nested_live.access = *schema.reflection_access;
         Accept(nested_live, schema, false, false);
         schema.reflection_access = acc::kAccPublic | acc::kAccStatic;
-        Reject(nested_live, schema, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
+        Accept(nested_live, schema, false, true);  // InnerClass visibility may change.
         schema.reflection_access = nested_live.access;
         schema.access |= acc::kAccFinal;
+        Accept(nested_live, schema, false, true);
+        schema.access |= acc::kAccInterface;
         Reject(nested_live, schema, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
     }
-    std::cout << "Phase 2/method-only Phase 3 policy and bounded InnerClass DEX decoding PASS\n";
+    std::cout << "Phase 2-4 policy and bounded DEX decoding PASS\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

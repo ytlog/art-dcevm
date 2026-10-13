@@ -46,13 +46,16 @@ struct RedefinitionDataHolderPrefix { Handle array; };
 struct RedefinitionDataIter {
   int32_t index;
   RedefinitionDataHolderPrefix* holder;
-  ObjectArray* Classes(bool old) const {
-    constexpr int32_t kNumSlots = 13;
-    constexpr int32_t kSlotOldClasses = 11;
-    constexpr int32_t kSlotNewClasses = 12;
-    return holder->array.Get<ObjectArray>()->Get<ObjectArray>(
-        kNumSlots * index + (old ? kSlotOldClasses : kSlotNewClasses));
+  static constexpr int32_t kNumSlots = 13;
+  static constexpr int32_t kSlotOldInstanceObjects = 9;
+  static constexpr int32_t kSlotOldClasses = 11;
+  static constexpr int32_t kSlotNewClasses = 12;
+  ObjectArray* Slot(int32_t slot) const {
+    return holder->array.Get<ObjectArray>()->Get<ObjectArray>(kNumSlots * index + slot);
   }
+  ObjectArray* Classes(bool old) const { return Slot(old ? kSlotOldClasses : kSlotNewClasses); }
+  // Instances of the old classes collected by CollectAndCreateNewInstances.
+  ObjectArray* OldInstances() const { return Slot(kSlotOldInstanceObjects); }
 };
 static_assert(offsetof(RedefinitionDataIter, holder) == 8);
 

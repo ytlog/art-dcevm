@@ -26,13 +26,17 @@ SCENARIOS = (
     ("method-delete", ["method-delete"], 0),
     ("method-restore", ["add"], 0),
     ("hierarchy", ["hierarchy"], 66),
-    ("atomic-modifier-public-class-final", ["modifier-public", "class-final"], 70),
+    ("atomic-modifier-public-class-interface", ["modifier-public", "class-interface"], 70),
     ("modifier-public", ["modifier-public"], 0),
     ("modifier-final", ["modifier-final"], 0),
     ("modifier-sync", ["modifier-sync"], 0),
     ("modifier-field-final", ["modifier-field-final"], 0),
-    ("class-final", ["class-final"], 70),
-    ("atomic-method-retire-class-final", ["methods-delete", "class-final"], 70),
+    ("class-final", ["class-final"], 0),
+    ("class-nonfinal", ["class-nonfinal"], 0),
+    ("class-abstract-instances", ["class-abstract"], 70),
+    ("class-abstract", ["candidate-abstract"], 0),
+    ("class-final-subclassed", ["modifier-class-final"], 70),
+    ("atomic-method-retire-class-interface", ["methods-delete", "class-interface"], 70),
     ("native-method-delete", ["methods-native-delete"], 67),
     ("constructor-delete", ["methods-constructor-delete"], 67),
     ("abstract-method-delete", ["methods-abstract-delete"], 67),
@@ -140,7 +144,7 @@ REQUIRED_CHECKS = {
                        "cachedMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "method-restore": EVOLVING_CHECKS,
     "hierarchy": {**EVOLVING_CHECKS, "superclass": "java.lang.Object", "interfaceCount": 0},
-    "atomic-modifier-public-class-final": {
+    "atomic-modifier-public-class-interface": {
         **CLASS_FINAL_CHECKS, "modifierBefore": 42, "passiveBefore": 42,
         "modifierThroughPublic": 42, "passiveThroughPublic": 42,
         "modifierFinalizable": 29, "passiveFinalizable": 29},
@@ -154,8 +158,12 @@ REQUIRED_CHECKS = {
                              "valueFlags": 17, "staticValueFlags": 25, "oldValue": 61,
                              "oldRead": 61, "staticValue": 72, "staticRead": 72,
                              "newConstructorValue": 41},
-    "class-final": CLASS_FINAL_CHECKS,
-    "atomic-method-retire-class-final": {
+    "class-final": {"finalFlags": 17, "oldValue": 30, "newValue": 30},
+    "class-nonfinal": CLASS_FINAL_CHECKS,
+    "class-abstract-instances": CLASS_FINAL_CHECKS,
+    "class-abstract": {"candidateBefore": 33, "candidateFlags": 1024, "candidateAfter": 34},
+    "class-final-subclassed": {"subclassedFlags": 1, "passiveStillSubclass": True},
+    "atomic-method-retire-class-interface": {
         **METHOD_BASELINE_CHECKS, **CLASS_FINAL_CHECKS,
         "unchangedStaticCall": 82, "unchangedVirtualCall": 63, "unchangedSignatureCall": 64},
     "native-method-delete": {**METHOD_FIELD_CHECKS, "nativeStillDeclared": True,
@@ -190,9 +198,11 @@ REQUIRED_CHECKS = {
 }
 UNCHANGED_CHECKS = {
     "hierarchy": ("unchangedMembers",),
-    "atomic-modifier-public-class-final": ("unchangedModifierMembers", "unchangedMembers"),
-    "class-final": ("unchangedMembers",),
-    "atomic-method-retire-class-final": ("unchangedMethodMembers", "unchangedMembers"),
+    "atomic-modifier-public-class-interface": ("unchangedModifierMembers", "unchangedMembers"),
+    "class-nonfinal": ("unchangedMembers",),
+    "class-abstract-instances": ("unchangedMembers",),
+    "class-final-subclassed": ("unchangedMembers",),
+    "atomic-method-retire-class-interface": ("unchangedMethodMembers", "unchangedMembers"),
     "field-retire": ("unchangedMembers", "unchangedValues"),
     "native-method-delete": ("unchangedMembers",),
     "constructor-delete": ("unchangedMembers",),
@@ -231,7 +241,7 @@ def validate_report(report):
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
     for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
-                 "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
+                 "classModifierChange", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")

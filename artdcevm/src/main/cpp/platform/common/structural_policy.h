@@ -23,6 +23,19 @@ struct LoadedHierarchy {
   std::set<MemberKey> interface_copies;
   // Public instance methods declared by the target's superclasses.
   std::set<MemberKey> inherited_public;
+  // Whether any loaded, prepared class extends the target.
+  bool loaded_subclasses = false;
+};
+
+// What the engine can enforce for this transaction beyond ART's own rules.
+struct Abilities {
+  // The engine replaces ART's member mapping: methods can retire and copied
+  // members that disappear from re-linked subclasses are remapped.
+  bool member_mapping = false;
+  // Fields can retire (requires member_mapping): removal, type or storage change.
+  bool field_retirement = false;
+  // Instances of the target can be inspected before ART's no-failure point.
+  bool instance_check = false;
 };
 
 struct Decision {
@@ -36,6 +49,8 @@ struct Decision {
   std::vector<evolution::Member> retired_methods;
   // Old fields without a new field of the same name, type and storage.
   std::vector<evolution::Member> retired_fields;
+  // The class becomes abstract: the transaction must fail if instances exist.
+  bool requires_no_instances = false;
 };
 
 // Raw DEX access flags mapped to what JVMTI Get*Modifiers reports
@@ -44,13 +59,9 @@ uint32_t ClassModifiers(uint32_t dex_access);
 uint32_t FieldModifiers(uint32_t dex_access);
 uint32_t MethodModifiers(uint32_t dex_access);
 
-// `live` carries JVMTI modifiers, `incoming` raw DEX flags. `owns_member_mapping`
-// means the engine replaces ART's member mapping for this runtime: it can retire
-// methods and remap copied members that disappear from re-linked subclasses.
-// `retires_fields` additionally allows removing a field or changing its type or
-// storage; the old field retires and the new one starts from its default value.
+// `live` carries JVMTI modifiers, `incoming` raw DEX flags. A retired field's
+// replacement starts from its default value; a retired method throws on new access.
 Decision Evaluate(const evolution::ClassSchema& live, const evolution::ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, bool owns_member_mapping = false,
-                  bool retires_fields = false);
+                  const LoadedHierarchy& hierarchy, const Abilities& abilities = {});
 
 }  // namespace artdcevm::structural_policy

@@ -11,6 +11,13 @@ namespace acc = evolution;
 constexpr uint32_t kJavaFlags = 0xffff;
 constexpr uint32_t kAccessLevel = acc::kAccPublic | acc::kAccPrivate | acc::kAccProtected;
 constexpr uint32_t kClassDefinitionFlags = kJavaFlags & ~(kAccessLevel | acc::kAccStatic);
+constexpr uint32_t kAccSuper = 0x0020;
+constexpr uint32_t kAccSynthetic = 0x1000;
+// Class modifiers a structural redefinition may change: the new Class takes
+// its flags from the new ClassDef (and reflection from its InnerClass entry).
+// Interface, annotation and enum kinds stay fixed.
+constexpr uint32_t kClassAllowed = kAccessLevel | acc::kAccStatic | acc::kAccFinal | kAccSuper |
+    acc::kAccAbstract | kAccSynthetic;
 constexpr uint32_t kFieldTransient = 0x0080;
 constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
 constexpr uint32_t kMethodAllowed = kAccessLevel | acc::kAccFinal | acc::kAccSynchronized;
@@ -67,19 +74,34 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, bool owns_member_mapping,
-                  bool retires_fields) {
+                  const LoadedHierarchy& hierarchy, const Abilities& abilities) {
+  const bool owns_member_mapping = abilities.member_mapping;
+  const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "superclass or interfaces changed");
   // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
-  if (ClassModifiers(live.access) !=
-          ClassModifiers(incoming.reflection_access.value_or(incoming.access)) ||
-      (live.access & kClassDefinitionFlags) != (incoming.access & kClassDefinitionFlags))
+  const uint32_t class_changed =
+      (ClassModifiers(live.access) ^
+       ClassModifiers(incoming.reflection_access.value_or(incoming.access))) |
+      ((live.access ^ incoming.access) & kClassDefinitionFlags);
+  if (class_changed & ~kClassAllowed)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
-                  "class modifiers changed");
+                  "class kind changed (interface, annotation or enum)");
+  const bool becomes_final = (incoming.access & acc::kAccFinal) && !(live.access & acc::kAccFinal);
+  if (becomes_final && hierarchy.loaded_subclasses)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
+                  "class made final has loaded subclasses");
+  const bool becomes_abstract =
+      (incoming.access & acc::kAccAbstract) && !(live.access & acc::kAccAbstract);
+  if (becomes_abstract && !abilities.instance_check)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
+                  "class made abstract cannot be checked for instances");
 
   Decision decision;
+  decision.requires_no_instances = becomes_abstract;
+  // Only a new Class object carries the new flags: take ART's structural path.
+  if (class_changed & ~kAccSuper) decision.methods_structural = true;
   std::map<std::tuple<std::string, std::string, bool>, uint32_t> new_fields;
   for (const auto& f : incoming.fields)
     new_fields[{f.name, f.descriptor, f.IsStatic()}] = FieldModifiers(f.access);

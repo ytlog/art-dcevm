@@ -182,6 +182,7 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
     result = snapshot_env->GetClassStatus(candidate, &status);
     if (result != JVMTI_ERROR_NONE) { *error = "GetClassStatus failed"; return result; }
     if (!(status & JVMTI_CLASS_STATUS_PREPARED)) continue;
+    snapshot->hierarchy.loaded_subclasses = true;
     std::vector<evolution::Member> methods;
     const int read = live_schema::ReadLiveMethods(snapshot_env, candidate, &methods, error);
     if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
@@ -217,6 +218,8 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
 
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   const jvmtiError result = structural_entry(env, count, definitions);
+  // A rejection decided after allocation (CollectAndCreateNewInstances).
+  if (std::string late = method_retirement::TakeRejection(); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
     if (current_batch->retires_members) {
       method_retirement::RetainRoots(std::move(current_batch->retirement_roots));
@@ -304,11 +307,13 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   if (incoming.descriptor != found->second.live.descriptor)
     return reinterpret_cast<Check>(original_class)(self);
   const auto& snapshot = found->second;
-  const bool owns_mapping =
-      method_retirement::VerifyTarget(self, snapshot.live, incoming.access);
-  const bool retires_fields = owns_mapping && method_retirement::FieldRetirementAvailable();
+  structural_policy::Abilities abilities;
+  abilities.member_mapping = method_retirement::VerifyTarget(self, snapshot.live);
+  abilities.field_retirement =
+      abilities.member_mapping && method_retirement::FieldRetirementAvailable();
+  abilities.instance_check = method_retirement::Available();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
-                                              owns_mapping, retires_fields);
+                                              abilities);
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -316,9 +321,14 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   }
   // ART's own mapping cannot commit this change; a later probe failure in
   // this transaction must reject it before ART's no-failure point.
-  if (owns_mapping && structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy)
-                              .error != JVMTI_ERROR_NONE)
+  structural_policy::Abilities without_mapping;
+  without_mapping.instance_check = abilities.instance_check;
+  if (abilities.member_mapping &&
+      structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping)
+              .error != JVMTI_ERROR_NONE)
     method_retirement::RequireMemberMapping();
+  if (decision.requires_no_instances)
+    method_retirement::RequireNoInstances(self, incoming.descriptor);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     current_batch->retires_members = true;
   current_batch->decisions.emplace(self, std::move(decision));
@@ -456,6 +466,7 @@ std::string Capabilities() {
   const std::string field_retirement = fields ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
+      ",\"classModifierChange\":" + supported +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace artdcevm::evolution {
@@ -59,4 +60,8 @@ bool ReadClassDeclarations(const DexView& dex, ClassSchema* output, std::string*
 // bounds checks. The output carries no access flags.
 bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error);
 bool ReadMethodIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error);
+// Raw access flags of the ClassDef named `descriptor`, from any standard or
+// compact DEX, with the same bounds checks.
+bool ReadClassAccess(const DexView& dex, std::string_view descriptor, uint32_t* output,
+                     std::string* error);
 }  // namespace artdcevm::evolution

@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
+import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClassFinalSubject;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
@@ -151,13 +152,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         ClassFinalSubject classFinal = new ClassFinalSubject();
         int originalClassFlags = ClassFinalSubject.class.getModifiers();
         String originalClassSchema = memberSchema(ClassFinalSubject.class);
-        // A class modifier change is always rejected, so the whole batch must stay.
-        runScenario("atomic-modifier-public-class-final", 70, scenario -> {
+        // Turning a class into an interface is always rejected, so the whole batch must stay.
+        runScenario("atomic-modifier-public-class-interface", 70, scenario -> {
             scenario.check("modifierBefore", 42, modifier.throughPublic());
             scenario.check("passiveBefore", 42, passive.throughPublic());
             scenario.expectRejectionBy(ClassFinalSubject.class);
             scenario.redefine(new Class<?>[]{ModifierSubject.class, ClassFinalSubject.class},
-                    "modifier-public", "class-final");
+                    "modifier-public", "class-interface");
             scenario.check("unchangedModifierMembers", originalModifierSchema, memberSchema(ModifierSubject.class));
             scenario.check("modifierThroughPublic", 42, modifier.throughPublic());
             scenario.check("passiveThroughPublic", 42, passive.throughPublic());
@@ -214,9 +215,36 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("staticRead", 72, FinalFieldSubject.readStatic());
             scenario.check("newConstructorValue", 41, new FinalFieldSubject().read());
         });
-        runScenario("class-final", 70, scenario -> {
+        runScenario("class-final", 0, scenario -> {
             scenario.redefine(new Class<?>[]{ClassFinalSubject.class}, "class-final");
+            scenario.check("finalFlags", Modifier.PUBLIC | Modifier.FINAL, ClassFinalSubject.class.getModifiers());
+            scenario.check("oldValue", 30, classFinal.value());
+            scenario.check("newValue", 30, new ClassFinalSubject().value());
+        });
+        runScenario("class-nonfinal", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassFinalSubject.class}, "class-nonfinal");
             checkClassFinalUnchanged(scenario, classFinal, originalClassFlags, originalClassSchema);
+        });
+        runScenario("class-abstract-instances", 70, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassFinalSubject.class}, "class-abstract");
+            checkClassFinalUnchanged(scenario, classFinal, originalClassFlags, originalClassSchema);
+        });
+        runScenario("class-abstract", 0, scenario -> {
+            scenario.check("candidateBefore", 33, AbstractCandidate.marker());
+            scenario.redefine(new Class<?>[]{AbstractCandidate.class}, "candidate-abstract");
+            scenario.check("candidateFlags", Modifier.ABSTRACT, AbstractCandidate.class.getModifiers());
+            Method marker = AbstractCandidate.class.getDeclaredMethod("marker");
+            marker.setAccessible(true);
+            scenario.check("candidateAfter", 34, marker.invoke(null));
+        });
+        runScenario("class-final-subclassed", 70, scenario -> {
+            String before = memberSchema(ModifierSubject.class);
+            int flags = ModifierSubject.class.getModifiers();
+            scenario.redefine(new Class<?>[]{ModifierSubject.class}, "modifier-class-final");
+            scenario.check("subclassedFlags", flags, ModifierSubject.class.getModifiers());
+            scenario.check("unchangedMembers", before, memberSchema(ModifierSubject.class));
+            scenario.check("passiveStillSubclass", true,
+                    ModifierPassive.class.getSuperclass() == ModifierSubject.class);
         });
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runCopiedDefaultScenario();
@@ -439,11 +467,11 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         Object staticReference = MethodSubject.staticObject;
         MethodTargets targets = new MethodTargets();
         String schema = memberSchema(MethodSubject.class);
-        runScenario("atomic-method-retire-class-final", 70, scenario -> {
+        runScenario("atomic-method-retire-class-interface", 70, scenario -> {
             checkMethodBaseline(scenario, subject, targets);
             scenario.expectRejectionBy(ClassFinalSubject.class);
             scenario.redefine(new Class<?>[]{MethodSubject.class, ClassFinalSubject.class},
-                    "methods-delete", "class-final");
+                    "methods-delete", "class-interface");
             scenario.check("unchangedMethodMembers", schema, memberSchema(MethodSubject.class));
             scenario.check("unchangedStaticCall", 82, MethodCaller.callStatic());
             scenario.check("unchangedVirtualCall", 63, MethodCaller.callVirtual(subject));

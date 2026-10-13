@@ -72,6 +72,15 @@ class Reader {
     return {String(U32(item + 4)), std::move(type), 0};
   }
 
+  uint32_t ClassAccess(std::string_view descriptor) {
+    Header(true);
+    for (uint32_t i = 0; i < classes_.count; ++i) {
+      const size_t def = Item(classes_, i);
+      if (Type(U32(def)) == descriptor) return U32(def + 4);
+    }
+    Fail("Class not defined in DEX");
+  }
+
   Member MethodIdentity(uint32_t index) {
     Header(true);
     const size_t item = Item(methods_, index);
@@ -271,6 +280,18 @@ class Reader {
 bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
   try {
     *output = Reader(dex).FieldIdentity(index);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadClassAccess(const DexView& dex, std::string_view descriptor, uint32_t* output,
+                     std::string* error) {
+  try {
+    *output = Reader(dex).ClassAccess(descriptor);
     error->clear();
     return true;
   } catch (const std::runtime_error& failure) {
