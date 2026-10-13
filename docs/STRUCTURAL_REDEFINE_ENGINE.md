@@ -232,11 +232,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 - [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 24 个名称（21 个限定 `.dynsym`，标准 JVMTI 包装器与两个 MethodHandle 入口允许任一命名表）。
 - [method_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/method_retirement_symbols.h)：拼写因构建而异的名称，按顺序查找：`Method_invoke` 与 `Constructor_newInstance0` 各有无后缀和固定 `.__uniq` 后缀两种拼写；`EncodeFieldId` 新旧两组签名；`FindClass` 新旧两种签名；可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 
-```sh
-python3 tools/check-structural-symbols.py
-```
-
-该工具对 `assets/runtime_lib` 中采集的设备库逐套检查目录中的名称，结果见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)。名称存在只说明可以定位；固定声明由运行时探测核对，Hook 覆盖由设备回归确认。
+名称存在只说明可以定位；固定声明由运行时探测核对，Hook 覆盖由设备回归确认。
 
 ## 目录落点
 
