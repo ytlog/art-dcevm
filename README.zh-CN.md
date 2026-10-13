@@ -38,9 +38,9 @@ dependencyResolutionManagement {
 ```
 
 ```groovy
-// 应用模块 build.gradle；x.y.z 替换为已发布版本
+// 应用模块 build.gradle
 dependencies {
-    implementation 'com.github.ytlog:artdcevm:x.y.z'
+    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha'
 }
 ```
 

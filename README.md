@@ -38,9 +38,9 @@ dependencyResolutionManagement {
 ```
 
 ```groovy
-// app module build.gradle; replace x.y.z with a published version
+// app module build.gradle
 dependencies {
-    implementation 'com.github.ytlog:artdcevm:x.y.z'
+    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha'
 }
 ```
 

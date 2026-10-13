@@ -1,27 +1,23 @@
 // Applied by the Android library module. The publishing plugin uses the release
 // component, retaining its runtime dependencies in the POM and module metadata.
-def publishGroup = providers.gradleProperty('publishGroupId').orElse('com.github.ytlog')
+def publishGroup = providers.gradleProperty('publishGroupId').orElse('io.github.ytlog')
 def publishArtifact = providers.gradleProperty('publishArtifactId').orElse('artdcevm')
-def publishVersion = providers.gradleProperty('publishVersion').orElse('0.1.0-SNAPSHOT')
+def publishVersion = providers.gradleProperty('publishVersion').orElse('0.1.0-alpha')
 def artifactName = publishArtifact.get()
 def centralEnabled = providers.gradleProperty('enableMavenCentral').orElse('false').get().toBoolean()
-def licenseName = providers.gradleProperty('publishLicenseName')
-def licenseUrl = providers.gradleProperty('publishLicenseUrl')
 
 mavenPublishing {
     coordinates(publishGroup.get(), artifactName, publishVersion.get())
     pom {
         name = 'ART DCEVM'
-        description = 'Android ART class redefinition and experimental structural evolution library.'
+        description = 'Structural class redefinition for Android ART: add, remove and change members, modifiers and the class hierarchy at runtime.'
         inceptionYear = '2026'
         url = 'https://github.com/ytlog/art-dcevm'
-        if (licenseName.isPresent() && licenseUrl.isPresent()) {
-            licenses {
-                license {
-                    name = licenseName.get()
-                    url = licenseUrl.get()
-                    distribution = 'repo'
-                }
+        licenses {
+            license {
+                name = 'MIT License'
+                url = 'https://opensource.org/license/mit'
+                distribution = 'repo'
             }
         }
         developers {
@@ -38,9 +34,6 @@ mavenPublishing {
         }
     }
     if (centralEnabled) {
-        if (!licenseName.isPresent() || !licenseUrl.isPresent()) {
-            throw new GradleException('Maven Central requires publishLicenseName and publishLicenseUrl; choose the project license before publishing.')
-        }
         publishToMavenCentral()
         signAllPublications()
     }
