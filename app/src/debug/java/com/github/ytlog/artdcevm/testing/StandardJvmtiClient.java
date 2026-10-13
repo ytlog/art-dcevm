@@ -41,6 +41,12 @@ final class StandardJvmtiClient {
     static native Object newObjectCached(int value);
     /** Whether a class with this JVMTI signature is loaded; never loads it. */
     static native boolean isLoaded(String signature);
+    /**
+     * Replace the definition of the class with this internal name in every
+     * ClassFileLoadHook until cleared with nulls; returns the JVMTI error code.
+     */
+    static native int setClassFileReplacement(String name, byte[] dex);
+    static native long classFileReplacements();
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */
     static native int setThreadSingleStep(boolean enabled);
     static native long singleStepCount();

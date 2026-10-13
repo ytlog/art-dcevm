@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <jni.h>
 #include <jvmti.h>
@@ -58,6 +59,10 @@ class TransactionScope {
   void* state_;
 };
 void RequireMemberMapping();
+// Fail the transaction, before ART's no-failure point, once `*loaded` is set:
+// a subclass of a target was loaded after the engine's snapshot, so neither
+// ART's recreated subclasses nor the policy decision may include it.
+void WatchSubclassLoads(const std::atomic<bool>* loaded);
 // The target becomes abstract: fail the transaction, before ART's no-failure
 // point, if instances of exactly that class exist. `descriptor` names it in
 // the rejection that TakeRejection then returns once.

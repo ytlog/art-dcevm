@@ -61,6 +61,7 @@ SCENARIOS = (
     ("super-widen", ["super-widen"], 0),
     ("super-narrow", ["super-original"], 66),
     ("preload-subclass", ["preload-subclass"], 0),
+    ("preload-hook-subclass", ["preload-hook-original"], 0),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
@@ -238,6 +239,8 @@ REQUIRED_CHECKS = {
                     "newValue": 12},
     "super-narrow": SUPER_WIDENED_CHECKS,
     "preload-subclass": {"childLoadedBefore": False, "childLoadedAfter": True, "childLayout": 435},
+    "preload-hook-subclass": {"childLoadedBefore": False, "hookInstalled": 0, "hookReplacements": 2,
+                              "subclassLoadRetries": 1, "childLoadedAfter": True, "childLayout": 435},
     "field-retire": {
         **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
         "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,

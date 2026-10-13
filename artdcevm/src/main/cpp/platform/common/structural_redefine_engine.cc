@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <set>
@@ -75,6 +76,65 @@ struct Batch {
   }
 };
 thread_local Batch* current_batch = nullptr;
+
+// Targets of a routed transaction whose subclass the JVMTI ClassPrepare event
+// reports after the engine's snapshot, on any thread.
+struct Watch {
+  std::vector<jobject> targets;  // Global references.
+  std::atomic<bool> subclass_loaded{false};
+};
+std::mutex watch_mutex;
+std::vector<Watch*> watches;
+bool watch_available = false;
+std::atomic<uint64_t> subclass_retries{0};
+
+void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) {
+  std::lock_guard<std::mutex> lock(watch_mutex);
+  for (Watch* watch : watches)
+    for (jobject target : watch->targets)
+      if (!jni->IsSameObject(klass, target) &&
+          jni->IsAssignableFrom(klass, static_cast<jclass>(target)))
+        watch->subclass_loaded = true;
+}
+
+// Registers a watch for one transaction attempt. Attempts are serialized by
+// transaction_mutex (nested ones run on the same thread), so only the
+// outermost scope switches the event.
+class WatchScope {
+ public:
+  WatchScope(JNIEnv* jni, jint count, const jvmtiClassDefinition* definitions) : jni_(jni) {
+    if (!watch_available) return;
+    for (jint i = 0; i < count; ++i)
+      if (jobject target = jni->NewGlobalRef(definitions[i].klass)) watch_.targets.push_back(target);
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    bool first;
+    {
+      std::lock_guard<std::mutex> lock(watch_mutex);
+      first = watches.empty();
+      watches.push_back(&watch_);
+    }
+    if (first) snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    method_retirement::WatchSubclassLoads(&watch_.subclass_loaded);
+  }
+  ~WatchScope() {
+    if (!watch_available) return;
+    bool last;
+    {
+      std::lock_guard<std::mutex> lock(watch_mutex);
+      watches.erase(std::find(watches.begin(), watches.end(), &watch_));
+      last = watches.empty();
+    }
+    if (last) snapshot_env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    for (jobject target : watch_.targets) jni_->DeleteGlobalRef(target);
+  }
+  WatchScope(const WatchScope&) = delete;
+  WatchScope& operator=(const WatchScope&) = delete;
+  bool SubclassLoaded() const { return watch_.subclass_loaded; }
+
+ private:
+  JNIEnv* jni_;
+  Watch watch_;
+};
 
 // Owns one jvmtiEnv-allocated array of local class references.
 class LocalClasses {
@@ -406,8 +466,8 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
   return result;
 }
 
-jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
-  std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
+jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
+                     bool* subclass_loaded) {
   Batch batch;
   BatchScope scope(&batch);
   method_retirement::TransactionScope retirement_scope;
@@ -452,6 +512,9 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
            jni->IsAssignableFrom(snapshot.superclass_class, other)))
         snapshot.hierarchy.new_superclass->related_in_batch = true;
   }
+  // A subclass prepared from here on is missing from the snapshot and may be
+  // missing from ART's recreated subclasses: fail this attempt instead.
+  WatchScope watch(jni, count, definitions);
   LocalClasses loaded(snapshot_env, jni);
   result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   if (result != JVMTI_ERROR_NONE) {
@@ -482,7 +545,24 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
       batch.retirement_roots.push_back(root);
     }
   }
-  return InvokeStructural(env, count, definitions);
+  result = InvokeStructural(env, count, definitions);
+  *subclass_loaded = watch.SubclassLoaded();
+  return result;
+}
+
+// Preloading covers the classes the submitted DEX names. A ClassFileLoadHook
+// may name others, and another thread may load a subclass before ART pauses
+// class definition. Such an attempt fails before ART's no-failure point and
+// leaves the class loaded, so the next attempt includes it.
+jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+  std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
+  constexpr int kAttempts = 3;
+  for (int attempt = 1;; ++attempt) {
+    bool subclass_loaded = false;
+    const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded);
+    if (result == JVMTI_ERROR_NONE || !subclass_loaded || attempt == kAttempts) return result;
+    subclass_retries.fetch_add(1);
+  }
 }
 
 bool CheckClass(ClassRedefinitionPrefix* self) {
@@ -651,6 +731,11 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       return JVMTI_ERROR_INTERNAL;
     }
   }
+  // The engine's own environment carries no other events.
+  jvmtiEventCallbacks callbacks{};
+  callbacks.ClassPrepare = ClassPrepared;
+  watch_available = method_retirement::Available() &&
+      env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
   std::string field_note;
   if (method_retirement::Available())
     method_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
@@ -682,6 +767,7 @@ std::string Capabilities() {
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
+      ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
       ",\"memberDeletion\":" + field_retirement + ",\"memberTypeChange\":" + field_retirement +
       ",\"hierarchyChange\":false,"
       "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +

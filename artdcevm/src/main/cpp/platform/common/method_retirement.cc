@@ -535,6 +535,7 @@ struct Transaction {
   std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
   // New superclass (global reference) and descriptor by target.
   std::map<ClassRedefinitionPrefix*, std::pair<jclass, std::string>> superclasses;
+  const std::atomic<bool>* subclass_loaded = nullptr;
   std::string rejection;
 };
 thread_local Transaction* transaction = nullptr;
@@ -663,6 +664,11 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
 // every remaining layout, then plan the mapping with the selected one.
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
+  if (transaction && transaction->subclass_loaded && transaction->subclass_loaded->load()) {
+    self->driver->result = JVMTI_ERROR_INTERNAL;
+    transaction->rejection = "a subclass of a redefined class was loaded during the transaction";
+    return false;
+  }
   if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
   if (!transaction) return true;
   // A class made abstract must have no instances of its own (subclass
@@ -1463,6 +1469,9 @@ void RequireMemberMapping() {
 void ChangeSuperclass(ClassRedefinitionPrefix* self, jclass superclass,
                       const std::string& descriptor) {
   if (transaction) transaction->superclasses[self] = {superclass, descriptor};
+}
+void WatchSubclassLoads(const std::atomic<bool>* loaded) {
+  if (transaction) transaction->subclass_loaded = loaded;
 }
 void RequireNoInstances(ClassRedefinitionPrefix* self, const std::string& descriptor) {
   if (transaction) transaction->no_instances[self] = descriptor;

@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <vector>
 
 // A user agent as an app would write it: its own environment, the
@@ -15,6 +17,26 @@ std::atomic<jlong> single_step_count{0};
 
 void JNICALL SingleStep(jvmtiEnv*, JNIEnv*, jthread, jmethodID, jlocation) {
   single_step_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+// One class whose ClassFileLoadHook replaces the definition, as a
+// transforming agent would. Guarded because ART may call the hook on any thread.
+std::mutex replacement_mutex;
+std::string replacement_name;
+std::vector<unsigned char> replacement_bytes;
+std::atomic<jlong> replacement_count{0};
+
+void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv*, jclass, jobject, const char* name, jobject,
+                               jint, const unsigned char*, jint* new_length,
+                               unsigned char** new_data) {
+  std::lock_guard<std::mutex> lock(replacement_mutex);
+  if (!name || replacement_name != name || replacement_bytes.empty()) return;
+  unsigned char* copy = nullptr;
+  if (env->Allocate(static_cast<jlong>(replacement_bytes.size()), &copy) != JVMTI_ERROR_NONE) return;
+  std::memcpy(copy, replacement_bytes.data(), replacement_bytes.size());
+  *new_length = static_cast<jint>(replacement_bytes.size());
+  *new_data = copy;
+  replacement_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 jint InvokeMethodV(JNIEnv* jni, jobject receiver, jmethodID id, jint method, ...) {
@@ -73,9 +95,12 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnAttach(JavaVM* vm, char*, void*) {
   jvmtiCapabilities requested{};
   requested.can_redefine_classes = 1;
   requested.can_generate_single_step_events = 1;
+  // ART calls ClassFileLoadHook for redefinitions only in environments that can retransform.
+  requested.can_retransform_classes = 1;
   if (client_env->AddCapabilities(&requested) != JVMTI_ERROR_NONE) return JNI_ERR;
   jvmtiEventCallbacks callbacks{};
   callbacks.SingleStep = SingleStep;
+  callbacks.ClassFileLoadHook = ClassFileLoadHook;
   return client_env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE
       ? JNI_OK : JNI_ERR;
 }
@@ -98,6 +123,33 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setThreadSingleStep(
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_singleStepCount(JNIEnv*, jclass) {
   return single_step_count.load(std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplacement(
+    JNIEnv* jni, jclass, jstring name, jbyteArray bytes) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  {
+    std::lock_guard<std::mutex> lock(replacement_mutex);
+    replacement_name.clear();
+    replacement_bytes.clear();
+    if (name && bytes) {
+      const char* chars = jni->GetStringUTFChars(name, nullptr);
+      if (!chars) return JVMTI_ERROR_OUT_OF_MEMORY;
+      replacement_name = chars;
+      jni->ReleaseStringUTFChars(name, chars);
+      replacement_bytes.resize(jni->GetArrayLength(bytes));
+      jni->GetByteArrayRegion(bytes, 0, static_cast<jsize>(replacement_bytes.size()),
+                              reinterpret_cast<jbyte*>(replacement_bytes.data()));
+    }
+  }
+  return client_env->SetEventNotificationMode(bytes ? JVMTI_ENABLE : JVMTI_DISABLE,
+                                              JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_classFileReplacements(JNIEnv*, jclass) {
+  return replacement_count.load(std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT jint JNICALL

@@ -30,6 +30,7 @@ import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
 import com.github.ytlog.artdcevm.fixture.MethodCaller;
 import com.github.ytlog.artdcevm.fixture.MethodSubject;
+import com.github.ytlog.artdcevm.fixture.PreloadHookSubject;
 import com.github.ytlog.artdcevm.fixture.PreloadSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
@@ -275,7 +276,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runCopiedDefaultScenario();
         runInterfaceScenarios();
         runSuperclassScenarios();
-        runPreloadScenario();
+        runPreloadScenarios();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
     }
@@ -577,14 +578,35 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     // ART recreates the target's loaded subclasses before verifying the new
     // DEX, and lets this thread load classes while it verifies. A subclass that
-    // verification first loads must still be recreated under the new layout.
-    private void runPreloadScenario() throws Exception {
+    // verification first loads must still be recreated under the new layout:
+    // preloaded when the submitted DEX names it, otherwise (here named only by
+    // a ClassFileLoadHook replacement) detected and retried.
+    private void runPreloadScenarios() throws Exception {
         String child = "Lcom/github/ytlog/artdcevm/fixture/PreloadChild;";
         runScenario("preload-subclass", 0, scenario -> {
             scenario.check("childLoadedBefore", false, StandardJvmtiClient.isLoaded(child));
             scenario.redefine(new Class<?>[]{PreloadSubject.class}, "preload-subclass");
             scenario.check("childLoadedAfter", true, StandardJvmtiClient.isLoaded(child));
             scenario.check("childLayout", 435, PreloadSubject.probe());
+        });
+        String hookChild = "Lcom/github/ytlog/artdcevm/fixture/PreloadHookChild;";
+        runScenario("preload-hook-subclass", 0, scenario -> {
+            scenario.check("childLoadedBefore", false, StandardJvmtiClient.isLoaded(hookChild));
+            long retries = DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1);
+            long replacements = StandardJvmtiClient.classFileReplacements();
+            scenario.check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
+                    "com/github/ytlog/artdcevm/fixture/PreloadHookSubject",
+                    readAsset("preload-hook/com/github/ytlog/artdcevm/fixture/PreloadHookSubject.dex")));
+            try {
+                scenario.redefine(new Class<?>[]{PreloadHookSubject.class}, "preload-hook-original");
+            } finally {
+                StandardJvmtiClient.setClassFileReplacement(null, null);
+            }
+            scenario.check("hookReplacements", 2L, StandardJvmtiClient.classFileReplacements() - replacements);
+            scenario.check("subclassLoadRetries", 1L,
+                    DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1) - retries);
+            scenario.check("childLoadedAfter", true, StandardJvmtiClient.isLoaded(hookChild));
+            scenario.check("childLayout", 435, PreloadHookSubject.probe());
         });
     }
 

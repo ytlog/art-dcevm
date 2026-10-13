@@ -67,7 +67,15 @@ ART 的结构事务分两步处理子类：
 - 首次实例化时，校验器报告 `this` 不是新类的实例；
 - 若已跳过校验，它的字段偏移会与新类新增的字段重叠。
 
-因此标准入口在进入 ART 之前，先经目标类的定义加载器加载（不初始化）新 DEX 引用的每个类。校验器可能加载的类都在其中，堆遍历能看到所有子类，策略快照（`GetLoadedClasses`）也包含它们。加载器无法加载的类型交给校验器按原语义处理。提前加载只改变加载时机：不执行初始化器，加载失败只会把该类标记为错误，与校验器或首次使用时相同。快照基于提交给标准入口的字节；ClassFileLoadHook 改写后才引用的类不在其中。
+因此标准入口在进入 ART 之前，先经目标类的定义加载器加载（不初始化）新 DEX 引用的每个类。校验器可能加载的类都在其中，堆遍历能看到所有子类，策略快照（`GetLoadedClasses`）也包含它们。加载器无法加载的类型交给校验器按原语义处理。提前加载只改变加载时机：不执行初始化器，加载失败只会把该类标记为错误，与校验器或首次使用时相同。
+
+提前加载只覆盖提交给标准入口的字节。另有两种情况会漏掉子类：
+- ClassFileLoadHook 改写后才引用的类；
+- ART 暂停类定义之前，其他线程加载的子类。
+
+为此，引擎在自有 jvmtiEnv 上登记 JVMTI `ClassPrepare`，只在事务进行期间启用，覆盖所有线程。从读取已加载类开始，任何目标类的新子类完成准备，都会标记本次尝试。ART 替换用的类对象经 `LinkClass` 建立，不触发该事件。
+
+被标记的尝试在 `CollectAndCreateNewInstances`（ART 最后可失败的一步）以 `JVMTI_ERROR_INTERNAL` 失败，整批不提交。此时该子类已经加载，标准入口随即重新快照并重试，最多三次尝试；每次尝试都会再调用 ClassFileLoadHook。能力报告的 `subclassLoadRetries` 统计重试次数。没有方法退役 Hook 时没有这个失败点，只做提前加载。
 
 ### 校验
 
@@ -212,6 +220,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：收窄不支持，完整 DCEVM 尚未完成 |
 | `memberMapping` | 最近一次探测结果：`unavailable`、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因` |
 | `jniRetirementGuards` | JNI 与反射守卫实际拒绝退役目标的次数 |
+| `subclassLoadRetries` | 事务期间有目标类的子类加载而重试的次数（见[事务中的类加载](#事务中的类加载)） |
 | `diagnostic`、`lastRejection` | 安装诊断与最近一次拒绝原因 |
 
 每项能力仍由每次事务的探测决定是否可用；探测未通过时，相应变化以 JVMTI 错误拒绝。
