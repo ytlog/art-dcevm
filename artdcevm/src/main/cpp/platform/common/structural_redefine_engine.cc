@@ -223,13 +223,9 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
   return CollectInheritedPublic(jni, target, snapshot, error);
 }
 
-// ClassLinker::LoadSuperAndInterfaces resolves a class's superclass and
-// interfaces through its defining loader. AllocateNewClassObject skips that
-// step, and LinkClass only looks interfaces up in the loader's class table, so
-// resolve each new type first: Class.forName(name, false, loader) runs
-// ClassLinker::FindClass, which records the loader as an initiating loader of
-// the class it returns. A type left unresolved here is rejected by the policy
-// in CheckClass, which reads the DEX after any ClassFileLoadHook.
+// Class.forName(name, false, loader) through a target's defining loader. It
+// runs ClassLinker::FindClass, which records the loader as an initiating loader
+// of the class it returns, and loads without initializing.
 class TypeResolver {
  public:
   TypeResolver(JNIEnv* jni, jclass target) : jni_(jni), target_(target), loader_(jni),
@@ -246,22 +242,28 @@ class TypeResolver {
     *error = "Class.forName unavailable";
     return JVMTI_ERROR_INTERNAL;
   }
+  // A local reference, or null when the loader cannot load `descriptor`.
+  jobject Load(const std::string& descriptor) {
+    if (descriptor.size() <= 2 || descriptor.front() != 'L' || descriptor.back() != ';')
+      return nullptr;
+    std::string name = descriptor.substr(1, descriptor.size() - 2);
+    std::replace(name.begin(), name.end(), '/', '.');
+    LocalReference binary_name(jni_);
+    binary_name.value = jni_->NewStringUTF(name.c_str());
+    jobject loaded = binary_name.value
+        ? jni_->CallStaticObjectMethod(static_cast<jclass>(class_class_.value), for_name_,
+                                       binary_name.value, JNI_FALSE, loader_.value)
+        : nullptr;
+    if (jni_->ExceptionCheck()) jni_->ExceptionClear();
+    return loaded;
+  }
   // A global reference owned by `batch`, or null when the loader cannot resolve it.
   jvmtiError Resolve(const std::string& descriptor, const std::string& target_descriptor,
                      Batch* batch, jclass* resolved_class, bool* same_runtime_package,
                      std::string* error) {
     *resolved_class = nullptr;
-    if (descriptor.size() <= 2 || descriptor.front() != 'L' || descriptor.back() != ';')
-      return JVMTI_ERROR_NONE;
-    std::string name = descriptor.substr(1, descriptor.size() - 2);
-    std::replace(name.begin(), name.end(), '/', '.');
-    LocalReference binary_name(jni_), resolved(jni_), resolved_loader(jni_);
-    binary_name.value = jni_->NewStringUTF(name.c_str());
-    if (binary_name.value)
-      resolved.value = jni_->CallStaticObjectMethod(static_cast<jclass>(class_class_.value),
-                                                    for_name_, binary_name.value, JNI_FALSE,
-                                                    loader_.value);
-    if (jni_->ExceptionCheck()) jni_->ExceptionClear();
+    LocalReference resolved(jni_), resolved_loader(jni_);
+    resolved.value = Load(descriptor);
     if (!resolved.value) return JVMTI_ERROR_NONE;
     jvmtiError result = snapshot_env->GetClassLoader(static_cast<jclass>(resolved.value),
                                                      &resolved_loader.value);
@@ -319,14 +321,41 @@ jvmtiError DescribeSuperclass(JNIEnv* jni, jclass target, jclass superclass,
   return JVMTI_ERROR_NONE;
 }
 
+evolution::DexView SubmittedDex(const jvmtiClassDefinition& definition) {
+  const size_t size = definition.class_byte_count > 0 ? definition.class_byte_count : 0;
+  return {definition.class_bytes, size, definition.class_bytes, size};
+}
+
+// ART recreates the target's loaded subclasses (FinishNewClassAllocations)
+// before it verifies the new DEX, and its ClassDefinitionPauser lets this
+// thread define classes meanwhile. A subclass that verification loads first
+// would stay linked under the old class. Load, without initializing, every
+// class the submitted DEX names, as verification may, through the target's
+// defining loader. A type the loader cannot load is left to the verifier.
+void PreloadReferencedTypes(const jvmtiClassDefinition& definition, TypeResolver* resolver,
+                            const std::string& target_descriptor, JNIEnv* jni) {
+  std::vector<std::string> classes;
+  std::string unreadable;
+  if (!evolution::ReadReferencedClasses(SubmittedDex(definition), &classes, &unreadable)) return;
+  for (const auto& descriptor : classes) {
+    if (descriptor == target_descriptor) continue;
+    if (jobject loaded = resolver->Load(descriptor)) jni->DeleteLocalRef(loaded);
+  }
+}
+
 // Reads the submitted definition and resolves the types it newly names.
-jvmtiError ResolveNewTypes(JNIEnv* jni, const jvmtiClassDefinition& definition, Batch* batch,
-                           Snapshot* snapshot, std::string* error) {
+// ClassLinker::LoadSuperAndInterfaces resolves a class's superclass and
+// interfaces through its defining loader. AllocateNewClassObject skips that
+// step, and LinkClass only looks interfaces up in the loader's class table, so
+// each new type must be loaded through that loader first. A type left
+// unresolved here is rejected by the policy in CheckClass, which reads the DEX
+// after any ClassFileLoadHook.
+jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver* resolver,
+                           Batch* batch, Snapshot* snapshot, std::string* error) {
   evolution::ClassSchema incoming;
   std::string unreadable;
-  const size_t size = definition.class_byte_count > 0 ? definition.class_byte_count : 0;
-  const evolution::DexView view{definition.class_bytes, size, definition.class_bytes, size};
-  if (!evolution::ReadClassDeclarations(view, &incoming, &unreadable)) return JVMTI_ERROR_NONE;
+  if (!evolution::ReadClassDeclarations(SubmittedDex(definition), &incoming, &unreadable))
+    return JVMTI_ERROR_NONE;
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)
@@ -334,13 +363,11 @@ jvmtiError ResolveNewTypes(JNIEnv* jni, const jvmtiClassDefinition& definition, 
       added.push_back(descriptor);
   const bool new_superclass = incoming.superclass != snapshot->live.superclass;
   if (added.empty() && !new_superclass) return JVMTI_ERROR_NONE;
-  TypeResolver resolver(jni, definition.klass);
-  jvmtiError result = resolver.Init(error);
-  if (result != JVMTI_ERROR_NONE) return result;
+  jvmtiError result = JVMTI_ERROR_NONE;
   for (const auto& descriptor : added) {
     jclass resolved = nullptr;
     structural_policy::ResolvedType type;
-    result = resolver.Resolve(descriptor, snapshot->live.descriptor, batch, &resolved,
+    result = resolver->Resolve(descriptor, snapshot->live.descriptor, batch, &resolved,
                               &type.same_runtime_package, error);
     if (result != JVMTI_ERROR_NONE) return result;
     if (!resolved) continue;
@@ -349,10 +376,11 @@ jvmtiError ResolveNewTypes(JNIEnv* jni, const jvmtiClassDefinition& definition, 
   }
   if (!new_superclass) return JVMTI_ERROR_NONE;
   structural_policy::NewSuperclass superclass;
-  result = resolver.Resolve(incoming.superclass, snapshot->live.descriptor, batch,
+  result = resolver->Resolve(incoming.superclass, snapshot->live.descriptor, batch,
                             &snapshot->superclass_class, &superclass.same_runtime_package, error);
   if (result != JVMTI_ERROR_NONE || !snapshot->superclass_class) return result;
-  result = DescribeSuperclass(jni, definition.klass, snapshot->superclass_class, &superclass, error);
+  result = DescribeSuperclass(batch->jni, definition.klass, snapshot->superclass_class,
+                              &superclass, error);
   if (result != JVMTI_ERROR_NONE) return result;
   snapshot->hierarchy.new_superclass = std::move(superclass);
   return JVMTI_ERROR_NONE;
@@ -397,7 +425,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   batch.jni = jni;
   for (jint i = 0; i < count; ++i)
     if (!definitions[i].klass) return InvokeStructural(env, count, definitions);
-  // Resolving interfaces may load classes, so it precedes the loaded-class view.
+  // Loading types precedes the loaded-class view.
   jvmtiError result = JVMTI_ERROR_NONE;
   for (jint i = 0; i < count; ++i) {
     Snapshot snapshot;
@@ -405,7 +433,12 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
-    result = ResolveNewTypes(jni, definitions[i], &batch, &snapshot, &error);
+    TypeResolver resolver(jni, definitions[i].klass);
+    result = resolver.Init(&error);
+    if (result == JVMTI_ERROR_NONE) {
+      PreloadReferencedTypes(definitions[i], &resolver, snapshot.live.descriptor, jni);
+      result = ResolveNewTypes(definitions[i], &resolver, &batch, &snapshot, &error);
+    }
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }

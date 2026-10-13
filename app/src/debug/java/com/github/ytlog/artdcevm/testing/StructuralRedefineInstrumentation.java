@@ -30,6 +30,7 @@ import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
 import com.github.ytlog.artdcevm.fixture.MethodCaller;
 import com.github.ytlog.artdcevm.fixture.MethodSubject;
+import com.github.ytlog.artdcevm.fixture.PreloadSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
@@ -274,6 +275,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runCopiedDefaultScenario();
         runInterfaceScenarios();
         runSuperclassScenarios();
+        runPreloadScenario();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
     }
@@ -570,6 +572,19 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runScenario("super-narrow", 66, scenario -> {
             scenario.redefine(new Class<?>[]{SuperSubject.class}, "super-original");
             checkWidenedSuperclass(scenario, subject, child);
+        });
+    }
+
+    // ART recreates the target's loaded subclasses before verifying the new
+    // DEX, and lets this thread load classes while it verifies. A subclass that
+    // verification first loads must still be recreated under the new layout.
+    private void runPreloadScenario() throws Exception {
+        String child = "Lcom/github/ytlog/artdcevm/fixture/PreloadChild;";
+        runScenario("preload-subclass", 0, scenario -> {
+            scenario.check("childLoadedBefore", false, StandardJvmtiClient.isLoaded(child));
+            scenario.redefine(new Class<?>[]{PreloadSubject.class}, "preload-subclass");
+            scenario.check("childLoadedAfter", true, StandardJvmtiClient.isLoaded(child));
+            scenario.check("childLayout", 435, PreloadSubject.probe());
         });
     }
 

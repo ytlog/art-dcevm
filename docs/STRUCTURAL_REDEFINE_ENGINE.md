@@ -330,7 +330,7 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
    3. 方案 C 解析映射、探测、visitor 与访问守卫所需名称并做 NDK map 自检；任一缺失则不安装这些 Hook，继续 Phase 2，诊断写明原因。声明是否适用由每次事务的探测决定。
    4. 保存结构入口、校验点与方案 C 调用的原始地址；直接调用官方 `shadowhook_hook_sym_addr()` 替换三个校验点及已启用的方案 C Hook，标准包装器最后安装。失败信息取 `shadowhook_get_errno()` / `shadowhook_to_errmsg()`；任一步失败，直接调用 `shadowhook_unhook()` 逆序撤销已安装的部分，不再另设 Hook API 封装。
 2. **标准入口**：
-   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法、子类接口中子类未声明的方法，以及目标父类的 public 方法；在读取已加载类之前，用 `Class.forName(name, false, 目标类加载器)` 解析新 DEX 中新增的接口（见“新增接口”）。
+   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法、子类接口中子类未声明的方法，以及目标父类的 public 方法；在读取已加载类之前，用 `Class.forName(name, false, 目标类加载器)` 解析新 DEX 中新增的接口（见“新增接口”），并加载（不初始化）新 DEX `type_ids` 引用的全部类（见“事务中的类加载”）。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）；方案 C 在 Native 状态提前给受影响类和已加载子类创建全局根。外层递归事务锁把快照与原 ART 事务串行化；成功嵌套事务使外层快照失效，转回原校验。
    3. 原样调用原始 `StructurallyRedefineClasses`；成功退役保留根，失败或没有退役释放根；返回后清理上下文（RAII），返回 ART 的结果。
 
@@ -343,6 +343,18 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
 5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`、`classModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange/interfaceAddition`，校验重定向可用时的 `superclassWidening`；字段守卫可用时 `fieldDeletion/fieldTypeChange` 与泛称 `memberDeletion/memberTypeChange` 为 true；`hierarchyChange`、`fullDcevmComplete` 为 false。`memberMapping` 报告最近一次探测结果，`jniRetirementGuards` 统计 JNI 与 `Method.invoke` 实际拒绝退役目标的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
 
 映射、visitor 和方法访问守卫的事务语义见方案 C；类分配与原生提交算法继续由 ART 执行。
+
+#### 事务中的类加载
+
+ART 的结构事务分两步处理子类：
+- `FinishNewClassAllocations` 遍历堆，收集目标类已解析的子类，为它们在新类下重建类对象。
+- 随后 `CheckVerification` 才校验新 DEX。
+
+两步之间，`ClassDefinitionPauser` 暂停其他线程定义类，却放行发起事务的线程。校验器解析新代码引用的类型时，会经 `ClassLinker::FindClass` 定义尚未加载的类。这样定义出的子类不在重建列表中，提交后仍链接在旧类下：
+- 首次实例化时，校验器报告 `this` 不是新类的实例；
+- 若已跳过校验，它的字段偏移会与新类新增的字段重叠。
+
+因此标准入口在进入 ART 之前，先经目标类的定义加载器加载（不初始化）新 DEX 引用的每个类。校验器可能加载的类都在其中，堆遍历能看到所有子类，策略快照（`GetLoadedClasses`）也包含它们。加载器无法加载的类型交给校验器按原语义处理。提前加载只改变加载时机：不执行初始化器，加载失败只会把该类标记为错误，与校验器或首次使用时相同。快照基于提交给标准入口的字节；ClassFileLoadHook 改写后才引用的类不在其中。
 
 ## 分阶段计划
 

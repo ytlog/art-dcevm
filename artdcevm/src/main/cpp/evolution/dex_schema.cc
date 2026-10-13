@@ -81,6 +81,17 @@ class Reader {
     Fail("Class not defined in DEX");
   }
 
+  std::vector<std::string> ReferencedClasses() {
+    Header(true);
+    std::set<std::string> classes;
+    for (uint32_t i = 0; i < types_.count; ++i) {
+      const std::string type = Type(i);
+      const size_t element = type.find_first_not_of('[');
+      if (type[element] == 'L') classes.insert(type.substr(element));
+    }
+    return {classes.begin(), classes.end()};
+  }
+
   Member MethodIdentity(uint32_t index) {
     Header(true);
     const size_t item = Item(methods_, index);
@@ -303,6 +314,18 @@ bool ReadClassAccess(const DexView& dex, std::string_view descriptor, uint32_t* 
 bool ReadMethodIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
   try {
     *output = Reader(dex).MethodIdentity(index);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadReferencedClasses(const DexView& dex, std::vector<std::string>* output,
+                           std::string* error) {
+  try {
+    *output = Reader(dex).ReferencedClasses();
     error->clear();
     return true;
   } catch (const std::runtime_error& failure) {

@@ -64,4 +64,8 @@ bool ReadMethodIdentity(const DexView& dex, uint32_t index, Member* output, std:
 // compact DEX, with the same bounds checks.
 bool ReadClassAccess(const DexView& dex, std::string_view descriptor, uint32_t* output,
                      std::string* error);
+// Every class type_ids names, arrays reduced to their element class, sorted
+// and unique, from a standard or compact DEX with the same bounds checks.
+bool ReadReferencedClasses(const DexView& dex, std::vector<std::string>* output,
+                           std::string* error);
 }  // namespace artdcevm::evolution

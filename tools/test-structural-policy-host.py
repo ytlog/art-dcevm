@@ -314,6 +314,9 @@ int main(int argc, char** argv) {
           Require(!evolution::ReadFieldIdentity(view, 0, &identity, &error) && !error.empty() &&
                   !evolution::ReadMethodIdentity(view, 0, &identity, &error),
                   "truncated DEX identity accepted");
+          std::vector<std::string> classes;
+          Require(!evolution::ReadReferencedClasses(view, &classes, &error) && classes.empty(),
+                  "truncated DEX type list accepted");
           continue;
         }
         Require(evolution::ReadFieldIdentity(view, 0, &identity, &error) &&
@@ -325,6 +328,10 @@ int main(int argc, char** argv) {
         Require(!evolution::ReadFieldIdentity(view, 1, &identity, &error) && !error.empty() &&
                 !evolution::ReadMethodIdentity(view, 1, &identity, &error),
                 "out-of-range identity accepted");
+        std::vector<std::string> classes;
+        Require(evolution::ReadReferencedClasses(view, &classes, &error) &&
+                classes == std::vector<std::string>{"LA;", "LB;", "LC;"},
+                "referenced classes not read");
         ClassSchema schema;
         Require(!evolution::ReadClassDeclarations(view, &schema, &error),
                 "multi-class or compact DEX accepted as a redefinition class");
@@ -399,9 +406,9 @@ def dex_case(visibility=2):
 
 
 def identity_case(compact=False):
-    """Two classes, one field_id A.value:I and one method_id B.work(I)J."""
-    strings = ['I', 'J', 'LA;', 'LB;', 'value', 'work', 'JI']
-    string_ids, type_ids, proto_ids = 0x70, 0x70 + 4 * 7, 0x70 + 4 * 7 + 4 * 4
+    """Two classes, one field_id A.value:I, one method_id B.work(I)J and a [[LC; type."""
+    strings = ['I', 'J', 'LA;', 'LB;', 'value', 'work', 'JI', '[[LC;']
+    string_ids, type_ids, proto_ids = 0x70, 0x70 + 4 * 8, 0x70 + 4 * 8 + 4 * 5
     field_ids = proto_ids + 12
     method_ids = field_ids + 8
     class_defs = method_ids + 8
@@ -411,12 +418,12 @@ def identity_case(compact=False):
     def put(buffer, offset, *values):
         struct.pack_into('<' + 'I' * len(values), buffer, offset, *values)
     put(main, 0x24, 0x70, 0x12345678)
-    put(main, 0x38, 7, string_ids, 4, type_ids, 1, proto_ids, 1, field_ids, 1, method_ids,
+    put(main, 0x38, 8, string_ids, 5, type_ids, 1, proto_ids, 1, field_ids, 1, method_ids,
         2, class_defs)
     for index, text in enumerate(strings):
         put(main, string_ids + 4 * index, len(data))
         data.extend(bytes([len(text)]) + text.encode('ascii') + b'\0')
-    put(main, type_ids, 0, 1, 2, 3)
+    put(main, type_ids, 0, 1, 2, 3, 7)
     while len(data) % 4:
         data.append(0)
     type_list = len(data)
