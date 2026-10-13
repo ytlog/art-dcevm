@@ -1,6 +1,6 @@
 # 能力限制
 
-Phase 1–3、Phase 4a 与 Phase 4b 已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类 concrete Java 方法的删除与签名替换、字段删除、改类型与 static/实例互换、新增与移除接口，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
+Phase 1–3、Phase 4a 与 Phase 4b 的新增接口已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类 concrete Java 方法的删除与签名替换、字段删除、改类型与 static/实例互换、新增接口，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
 
 ## 前提限制
 
@@ -17,9 +17,10 @@ Phase 1–3、Phase 4a 与 Phase 4b 已在一台 Android 16 / API 36、arm64 设
 | 删除或改签名的方法是 native、abstract、接口声明、构造器或类初始化器 | `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67） | 待定 |
 | native → Java，abstract 相关的方法变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | Phase 4 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | 不支持 |
-| 父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | Phase 4c |
+| 放宽的父类变化（新父类是原父类的子类） | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | Phase 4c |
+| 移除接口，以及任何失去父类型的父类变化 | 66 | 不支持：已校验代码依赖旧类型关系，见设计文档“收窄不支持” |
 
-方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝；新增与移除接口在没有探测通过的类布局时以 66 拒绝，移除还需要收窄检查可用（`capabilities()` 的 `interfaceRemoval`）。
+方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝；新增接口在没有探测通过的类布局时以 66 拒绝。
 
 ## 语义冲突（各阶段都会拒绝）
 
@@ -27,8 +28,6 @@ Phase 1–3、Phase 4a 与 Phase 4b 已在一台 Android 16 / API 36、arm64 设
 - 类新增 final，而已有已加载的子类（70）。
 - 类新增 abstract，而该类自身仍有实例（70）；子类的实例不受影响。
 - 新增的接口无法经目标类的加载器解析、不是接口，或对目标不可访问（`JVMTI_ERROR_FAILS_VERIFICATION`，62）。
-- 移除接口后，仍有以丢失的接口类型声明的字段或数组元素持有目标类（或其子类）的实例，或任何线程的栈帧、JNI 局部或全局引用持有这样的实例（66）。栈帧与 JNI 引用没有静态类型，按保守规则处理；清除引用、让相关线程离开这些帧后可重试。
-- 移除接口的检查期间 ART 迟迟未越过类加载暂停（例如另一线程正在定义类）时，3 秒后其他线程恢复运行，事务以 66 拒绝，可重试。
 - 变为 abstract 后，存活实例或已加载子类将继承未实现的抽象方法。
 - 退役不可用时，新增或改变访问级别的方法可能顶替已加载子类的接口 default/miranda 拷贝。
 
@@ -39,12 +38,6 @@ Phase 1–3、Phase 4a 与 Phase 4b 已在一台 Android 16 / API 36、arm64 设
 ## 新增接口的语义
 
 - 已有实例与已加载子类的实例随即成为新接口的实例。新增的接口在重定义前经目标类的加载器加载但不初始化，其静态初始化照常在首次需要时执行；该加载器随之成为这个接口的发起加载器。
-
-## 移除接口的语义
-
-- 检查与提交期间，本进程其他 Java 线程保持挂起，期间新启动的线程停在执行 Java 代码之前；耗时随堆大小增加。
-- 提交后，已有实例与已加载子类的实例不再是被移除接口的实例，强制转换抛 `ClassCastException`；被移除接口的 default 方法在这些类中消失。
-- JNI 弱全局引用不在检查范围内；本机代码不应再以被移除接口的方法 ID 调用这些实例。
 
 ## 退役成员的语义
 

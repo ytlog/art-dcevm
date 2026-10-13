@@ -61,10 +61,6 @@ void RequireMemberMapping();
 // the rejection that TakeRejection then returns once.
 void RequireNoInstances(abi::arm64::ClassRedefinitionPrefix* self, const std::string& descriptor);
 std::string TakeRejection();
-// Run `check` once in CollectAndCreateNewInstances, ART's last failable step
-// (class loading and allocations paused). A non-empty result rejects the
-// transaction with HIERARCHY_CHANGED; `subject` prefixes the rejection.
-void RequireBeforeCommit(std::string (*check)(), const std::string& subject);
 // JNI globals are prepared before entering ART; ReplaceReferences updates them
 // to the replacement Class whose ClassExt roots the complete obsolete chain.
 void RetainRoots(std::vector<jobject> roots);

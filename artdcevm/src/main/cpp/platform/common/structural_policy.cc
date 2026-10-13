@@ -65,23 +65,17 @@ Decision CheckCopiedMembers(const ClassSchema& live, const ClassSchema& incoming
 // ART links the new class's direct interfaces by looking each up in its class
 // loader (ClassLinker::LookupResolvedType) and checks only that it is an
 // interface; the access check of LoadSuperAndInterfaces is not on that path.
-// Removing an interface narrows the type of live instances, and copied
-// default/miranda methods may disappear from the re-linked classes.
+// Removing an interface would narrow the type of live instances.
 Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
-                         const LoadedHierarchy& hierarchy, const Abilities& abilities) {
+                         const LoadedHierarchy& hierarchy) {
   const std::set<std::string> before(live.interfaces.begin(), live.interfaces.end());
   const std::set<std::string> after(incoming.interfaces.begin(), incoming.interfaces.end());
   if (after.size() != incoming.interfaces.size())
     return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "duplicate interface");
-  for (const auto& old : live.interfaces) {
-    if (after.count(old)) continue;
-    if (!abilities.member_mapping)
+  for (const auto& old : live.interfaces)
+    if (!after.count(old))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                    "interface removal requires the engine's member mapping: " + old);
-    if (hierarchy.narrowing_checked != incoming.interfaces)
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                    "interface removal was not checked against live references: " + old);
-  }
+                    "interface removed: " + old);
   for (const auto& added : incoming.interfaces) {
     if (before.count(added)) continue;
     const auto resolved = hierarchy.added_interfaces.find(added);
@@ -116,7 +110,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   if (live.superclass != incoming.superclass)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "superclass changed");
-  Decision interfaces = CheckInterfaces(live, incoming, hierarchy, abilities);
+  Decision interfaces = CheckInterfaces(live, incoming, hierarchy);
   if (interfaces.error != JVMTI_ERROR_NONE) return interfaces;
   // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
   const uint32_t class_changed =

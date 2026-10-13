@@ -49,12 +49,7 @@ SCENARIOS = (
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
     ("interface-add", ["interface-add"], 0),
-    ("interface-remove-field", ["interface-original"], 66),
-    ("interface-remove-array", ["interface-original"], 66),
-    ("interface-remove-stack", ["interface-original"], 66),
-    ("interface-remove-expired", ["interface-original"], 66),
-    ("interface-remove", ["interface-original"], 0),
-    ("interface-readd", ["interface-add"], 0),
+    ("interface-remove", ["interface-original"], 66),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
@@ -64,7 +59,6 @@ SCENARIOS = (
 # flags of an added interface.
 MAPPED_SCENARIOS = {"methods-retire", "methods-restore", "methods-retire-again",
                     "methods-restore-again", "copied-default-add", "interface-add",
-                    "interface-remove", "interface-readd",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -202,20 +196,7 @@ REQUIRED_CHECKS = {
     "interface-add": {**INTERFACE_ADDED_CHECKS, "contractLoadedBefore": False,
                       "nestedLoadedBefore": False, "contractLoadedAfter": True,
                       "newContractTwice": 102},
-    "interface-remove-field": {
-        **INTERFACE_ADDED_CHECKS,
-        "narrowedLocation": "static field Lcom/github/ytlog/artdcevm/fixture/ContractHolder;.field"},
-    "interface-remove-array": {
-        **INTERFACE_ADDED_CHECKS,
-        "narrowedLocation": "an element of [Lcom/github/ytlog/artdcevm/fixture/AddedContract;"},
-    "interface-remove-stack": {**INTERFACE_ADDED_CHECKS, "holderReady": True,
-                               "narrowedLocation": "a stack frame", "holderResult": 102},
-    "interface-remove-expired": {**INTERFACE_ADDED_CHECKS, "delayHook": 0,
-                                 "narrowedLocation": "check expired"},
-    "interface-remove": {"interfaces": "", "oldIsContract": False, "childIsContract": False,
-                         "newIsContract": False, "oldContractCast": "java.lang.ClassCastException",
-                         "oldIntSupplierCast": "java.lang.ClassCastException", "contract": 51},
-    "interface-readd": INTERFACE_ADDED_CHECKS,
+    "interface-remove": INTERFACE_ADDED_CHECKS,
     "field-retire": {
         **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
         "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,
@@ -249,7 +230,6 @@ UNCHANGED_CHECKS = {
     "interface-class": ("unchangedMembers",),
     "interface-missing": ("unchangedMembers",),
     "interface-add": ("unchangedMembers",),
-    "interface-remove": ("unchangedMembers",),
 }
 
 
@@ -284,7 +264,7 @@ def validate_report(report):
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
     for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
-                 "classModifierChange", "interfaceAddition", "interfaceRemoval", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
+                 "classModifierChange", "interfaceAddition", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")

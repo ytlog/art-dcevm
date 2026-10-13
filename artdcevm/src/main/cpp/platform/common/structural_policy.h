@@ -40,9 +40,6 @@ struct LoadedHierarchy {
   bool loaded_subclasses = false;
   // Added interfaces by descriptor; one absent here could not be resolved.
   std::map<std::string, ResolvedType> added_interfaces;
-  // The direct interface list whose removals the engine checked against live
-  // references (type narrowing) before the transaction.
-  std::optional<std::vector<std::string>> narrowing_checked;
 };
 
 // What the engine can enforce for this transaction beyond ART's own rules.
