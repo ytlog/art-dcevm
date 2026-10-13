@@ -80,7 +80,7 @@ DcevmRuntime.initialize(context);
 
 This loads `libartdcevm.so`, attaches the enhancement agent and takes over the standard JVMTI entry. Once initialization succeeds in a process, further calls return immediately.
 
-`DcevmRuntime.capabilities()` returns JSON with the supported change categories, diagnostics and the reason for the most recent rejection.
+`DcevmRuntime.capabilities()` returns a `JSONObject` with the supported change categories, diagnostics and the reason for the most recent rejection.
 
 ### 3. Attach your own JVMTI agent
 
@@ -148,7 +148,7 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 ## Notes
 
 - Fields added to existing objects start as zero or `null`; newly created objects run the new constructors. A change of field type or of static / instance form retires the old member and creates a new one.
-- Once a removed or re-signatured member is retired, old references to it throw `NoSuchMethodError`, `NoSuchFieldError` and similar errors; method frames already executing keep running the old body. Application code must handle these semantic changes.
+- A removed member, or one whose signature or type changed, is retired: old references to it throw `NoSuchMethodError`, `NoSuchFieldError` and similar errors; method frames already executing keep running the old body. Application code must handle these semantic changes.
 - Removing an interface, or any hierarchy change that drops an existing supertype, is rejected. Conflicts such as a loaded subclass overriding a method that becomes final, or a class with its own live instances becoming abstract, also reject the transaction.
 - Structural changes walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
 - Raw field offsets cached by `Unsafe`, `Atomic*FieldUpdater` and similar APIs become invalid once the instance layout changes.

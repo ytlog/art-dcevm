@@ -80,7 +80,7 @@ DcevmRuntime.initialize(context);
 
 该方法加载 `libartdcevm.so`、附加增强 Agent 并接管标准 JVMTI 入口。同一进程中初始化成功后重复调用直接返回。
 
-`DcevmRuntime.capabilities()` 返回 JSON，包含当前支持的变化类别、诊断信息和最近一次拒绝的原因。
+`DcevmRuntime.capabilities()` 返回 `JSONObject`，包含当前支持的变化类别、诊断信息和最近一次拒绝的原因。
 
 ### 3. 附加自己的 JVMTI Agent
 
