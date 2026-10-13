@@ -1,16 +1,29 @@
 #pragma once
 #include "evolution/class_schema.h"
 #include <jvmti.h>
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-// Phase 2 and method-only Phase 3 rules (docs/STRUCTURAL_REDEFINE_ENGINE.md). Pure
+// Structural redefinition rules (docs/STRUCTURAL_REDEFINE_ENGINE.md). Pure
 // functions over declarations; no ART or JNI access.
 namespace artdcevm::structural_policy {
 
 using MemberKey = std::pair<std::string, std::string>;  // name, descriptor
+
+// An interface the new definition adds, resolved through the target's class
+// loader before the transaction.
+struct ResolvedType {
+  // Java bits of the runtime Class flags: its ClassDef flags, not the InnerClass
+  // flags JVMTI reports, as ART's Class::CanAccess reads them. Empty when no
+  // verified class layout could read them.
+  std::optional<uint32_t> access;
+  // Same package name and defining class loader as the target.
+  bool same_runtime_package = false;
+};
 
 // Loaded classes related to a redefinition target, read through public JVMTI.
 struct LoadedHierarchy {
@@ -25,6 +38,8 @@ struct LoadedHierarchy {
   std::set<MemberKey> inherited_public;
   // Whether any loaded, prepared class extends the target.
   bool loaded_subclasses = false;
+  // Added interfaces by descriptor; one absent here could not be resolved.
+  std::map<std::string, ResolvedType> added_interfaces;
 };
 
 // What the engine can enforce for this transaction beyond ART's own rules.

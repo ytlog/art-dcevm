@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3（方案 C 加字段退役）已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 23 个场景、799 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；Phase 4 与其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3（方案 C 加字段退役）已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 23 个场景、799 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；Phase 4a（类修饰符）与 Phase 4b 的新增接口已在同一设备通过；接口移除、父类变化与其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -140,7 +140,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ### Phase 3 方案 C：方法先行，保留原生提交
 
-方案 C 支持普通类中 concrete Java 方法删除和签名替换；字段守卫可用时还支持字段删除、类型变化与 static/实例互换（见“字段退役”），否则这些变化以 `SCHEMA_CHANGED`（64）拒绝。native、abstract、接口声明、构造器与类初始化器的退役暂以 `METHOD_DELETED`（67）拒绝。层级与类修饰符变化继续沿用 Phase 2 的拒绝码。
+方案 C 支持普通类中 concrete Java 方法删除和签名替换；字段守卫可用时还支持字段删除、类型变化与 static/实例互换（见“字段退役”），否则这些变化以 `SCHEMA_CHANGED`（64）拒绝。native、abstract、接口声明、构造器与类初始化器的退役暂以 `METHOD_DELETED`（67）拒绝。类修饰符与层级变化的规则见“Phase 2 校验规则”。
 
 实现保留 ART `FinishNewClassAllocations`、`AllocateNewClassObject`、`CollectAndCreateNewInstances` 和 `UpdateClassStructurally`，不接管字段复制、锁字、实例迁移、引用遍历、去优化或缓存失效。`Update` Hook 只设置 visitor 的事务作用域并调用原函数。探测通过的事务一律使用自有映射，以处理没有声明退役、但子类 copied default/miranda 消失的情况；映射在 ART 仍可失败的 `CollectAndCreateNewInstances` 之后预先算好，提交时只写入 ART 的 map。探测未通过的事务使用 ART 原映射，策略已拒绝它无法处理的变化。最终 DEX 策略生成退役声明清单；映射以真实 declaring class 与同名同签名成员区分声明、继承及 copied 成员，被删除的真实旧声明映射到自身并退役，不制造假的成员或偏移。
 
@@ -178,7 +178,7 @@ ART/NDK 的指针 map 边界限定 libc++ ABI v1 specialization；固定节点�
 
 为避免 GC、class-loader 卸载或 native arena 地址复用让原生退役指针变成悬空键，Native 状态提前创建受影响类的 JNI global roots。失败或没有退役的批次释放新根；成功退役后保留、跨批次去重，ART 引用替换会更新根到新 Class，其 obsolete 链保护旧成员。**这些类及其 class loader 会保留到进程结束**；当前不承诺退役后的类卸载。根去重的 JNI 操作在 registry mutex 之外，最终提交中没有 JNI/JVMTI 分配或状态切换。新加载子类的 copied 成员不会进入永久退役集合；消失的 copied default 指向真正 canonical 成员并清除该次 DexCache 解析，不当作被删除的声明。
 
-能力报告分别给出 `methodDeletion`、`methodSignatureChange`（退役 Hook 已安装），`memberMapping` 报告最近一次探测结果（`unavailable`、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因`）；字段守卫可用时 `fieldDeletion`、`fieldTypeChange` 与泛称 `memberDeletion/memberTypeChange` 为 true；`hierarchyChange`、`fullDcevmComplete` 仍为 false。
+能力报告分别给出 `methodDeletion`、`methodSignatureChange`（退役 Hook 已安装），`memberMapping` 报告最近一次探测结果（`unavailable`、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因`）；字段守卫可用时 `fieldDeletion`、`fieldTypeChange` 与泛称 `memberDeletion/memberTypeChange` 为 true；`interfaceAddition` 在方案 C Hook 已安装时为 true；`hierarchyChange`、`fullDcevmComplete` 仍为 false。
 
 复核命令：
 
@@ -205,14 +205,24 @@ python3 tools/test-elf-mini-inventory.py
 
 字段守卫依赖已安装的方法退役 Hook、`EncodeFieldId` 与占位字段；任一缺失时字段变化仍以 `SCHEMA_CHANGED` 拒绝，方法退役不受影响。
 
+### 新增接口（Phase 4b）
+
+ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把新类直接置为 kLoaded 后调用 `LinkClass`。`LinkClass` 对新 DEX 接口列表中的每一项调用 `ClassLinker::LookupResolvedType`（[16: NonProxyInterfacesAccessor](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/class_linker.cc#7183)；11 为 [`Class::GetDirectInterface`](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/mirror/class.cc#1217)），它只在新类的类加载器的类表中查找。找不到时返回 null，`SetupInterfaceLookupTable` 对此只有 DCHECK，release 构建会解引用空指针；找到时只检查它是不是接口，不做 `LoadSuperAndInterfaces` 的可访问性检查。因此：
+
+- **预先解析**：进入 ART 之前（Native 状态），对新 DEX 中新增的每个接口调用 `Class.forName(name, false, 目标类的定义加载器)`。11–17 的 `Class.forName` 都调用 `ClassLinker::FindClass`，后者把返回的类插入发起加载器的类表，即使该类由父加载器定义（[16: class_linker.cc#3444](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/class_linker.cc#3444)）；`LinkClass` 随后就能查到。接口不在此初始化；全局引用保留到事务结束。这一步在读取已加载类之前执行，因为它可能加载类。`CheckClass` 读取的是 ClassFileLoadHook 之后的 DEX，那里出现的未解析接口按策略拒绝。
+- **标志读取**：`CheckClass` 用 `ClassRedefinition::GetMirrorClass`（11–17 都只读 `driver_->self_` 与 `klass_`，[16: ti_redefine.cc#743](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/openjdkjvmti/ti_redefine.cc#743)）解码每个已解析接口，再按本事务探测接受的每个布局读取 `Class::access_flags_` 的 Java 位；读数不一致或没有布局通过时不读取。这里要的是 ClassDef 标志：ART 的 `Class::CanAccess` 读它，而 JVMTI `GetClassModifiers` 报告 InnerClass 标志（例如 protected 嵌套接口的 ClassDef 标志为 public）。`Thread::DecodeJObject` 在 14/27 套库中没有动态符号，所以不用它。
+- **策略**：新增接口无法解析、不是接口、或既不是 public 又不在同一运行时包（同包名且同一定义加载器）时，拒绝 `FAILS_VERIFICATION`（62，与 HotSpot 对链接错误的映射一致）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66）。接口顺序变化接受。新增或调整接口一律走结构路径。
+- **映射与子类**：ART 的成员映射按名称与签名查找新方法；新增接口只会增加 copied default/miranda，或把旧 copy 变成冲突方法，不会让旧 copy 消失，因此不依赖自有映射。已加载子类由 `FinishNewClassAllocations` 重新链接，同样获得新接口。
+- **移除**：移除接口属于收窄，堆中以该接口类型声明的字段或数组元素可能仍引用该类的实例，仍以 66 拒绝，收窄检查待实施。
+
 ## 接管点
 
-下表为当前 Phase 3 方案 C 的行为；Phase 4 决策点仍待实施。
+下表为当前行为（Phase 3 方案 C、Phase 4a 与 Phase 4b 的新增接口）；父类变化与接口移除仍待实施。
 
 | ART 决策点 | ART 原行为 | 当前增强行为 |
 | --- | --- | --- |
-| 公开表的 `JvmtiFunctions::RedefineClasses` | 普通重定义拒绝结构变化；导出入口可能内联 | 路由到原始结构事务，保留参数、能力检查、ClassFileLoadHook 和普通方法体更新 |
-| `CheckClass` | 类修饰符、父类、接口不得变化 | 继续拒绝父类与接口变化（Phase 4b/4c）；允许可见性、final、abstract、synthetic 与 InnerClass 标志变化，类的种类（接口、注解、枚举）不变；解析最终 DEX，评估 Phase 2 与退役策略 |
+| 公开表的 `JvmtiFunctions::RedefineClasses` | 普通重定义拒绝结构变化；导出入口可能内联 | 路由到原始结构事务，保留参数、能力检查、ClassFileLoadHook 和普通方法体更新；进入 ART 前经目标类的加载器解析新增接口 |
+| `CheckClass` | 类修饰符、父类、接口不得变化 | 继续拒绝父类变化与接口移除；新增接口须已预先解析，并且是目标可访问的接口（标志由探测选中的布局从运行时 Class 读取）；允许可见性、final、abstract、synthetic 与 InnerClass 标志变化，类的种类（接口、注解、枚举）不变；解析最终 DEX，评估 Phase 2 与退役策略 |
 | `CheckFields` | 只增不删、修饰符不能变化 | 保留 Phase 2 增加/修饰符支持；字段守卫可用且探测通过时接受删除、改类型或 storage，否则返回 64 |
 | `CheckMethods` | 只增不删、修饰符不能变化 | 探测通过的事务允许普通类 concrete Java 方法删除/签名替换；不支持的退役返回 67；结构变化调用 RecordNewMethodAdded |
 | `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK，包括重链接子类的 copied default/miranda 消失时 | 写入预先算好的映射：消失的声明保留真实旧成员并退役，消失的 copied 方法映射 canonical 并清除解析缓存；没有计划的事务调用原映射 |
@@ -220,7 +230,7 @@ python3 tools/test-elf-mini-inventory.py
 | `UpdateClassStructurally` | 原生字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只包裹 visitor 作用域，完整调用原提交；有退役字段时在复制阶段换用不含退役项的旧类字段数组；不 Hook CopyFields，不自行提交或重新实现失效 |
 | `Runtime::VisitReflectiveTargets` | 原成员映射与 shadowing 处理 | 先换回旧类字段数组；清除退役方法/字段的 DexCache 项，记录退役 JNI ID，把退役字段的反射 `Field` 映射到占位字段并清零其 VarHandle 访问掩码；其余交给原 visitor |
 | JNI 函数表、`Method_invoke`、MethodHandle 入口、JNI Encode | 缓存的反射/JNI/句柄目标是旧声明类的 obsolete 方法：反射与 CheckJNI 报接收者类型错误，句柄与 JNI 按旧 vtable 索引可能分派到别的方法 | 仅对显式退役目标在分派前报 NoSuchMethodError，其他调用转发；字节码调用由 DexCache 清除后的重新解析报错；旧活动帧恢复路径保持 ART |
-| `AllocateNewClassObject` / `FinishNewClassAllocations` | 使用旧层级重建类和子类 | 方案 C 完全保留；改变新父类/接口的分配策略留待 Phase 4 |
+| `AllocateNewClassObject` / `FinishNewClassAllocations` | 使用旧层级重建类和子类 | 完全保留；新增接口由 `LinkClass` 在类加载器的类表中查到（已预先解析）；改变父类的分配策略留待 Phase 4c |
 
 ## 语义
 
@@ -229,7 +239,8 @@ python3 tools/test-elf-mini-inventory.py
 - **删除方法、改签名（方案 C）**：探测通过的事务中普通类 concrete Java 方法的旧目标退役，新访问抛 `NoSuchMethodError`，反射 invoke 包装异常；普通虚调用重新解析，删除覆写后按新 vtable/iftable 落到父类或默认实现。旧活动帧继续旧方法体；恢复只产生新目标。native、abstract、接口声明、构造器/初始化器退役仍拒绝。
 - **退役字段的引用**：字节码、JNI 与 MethodHandle 抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`、访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。恢复同名字段会产生新字段，旧的缓存引用保持退役。
 - **修饰符**：新类直接使用新 DEX 的修饰符。已解析的调用点与类型引用保留，ART 不对它们重新做访问检查；新的解析按新修饰符检查。
-- **继承关系变化（Phase 4 后续目标）**：父类和接口的变化由 ClassLinker 链接新类时处理。收窄（失去某个父类型）前检查：若有不可去优化的帧持有受影响类的实例，返回 `JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66）并保持旧定义，帧退出后可重试。
+- **新增接口**：已有实例和已加载子类的实例随即成为该接口的实例，可经字节码、反射调用接口方法与 default 方法。接口在重定义前加载但不初始化，其静态初始化照常在首次需要时执行。
+- **父类变化与接口移除（Phase 4 后续目标）**：父类和接口的变化由 ClassLinker 链接新类时处理。收窄（失去某个父类型）前检查：若有不可去优化的帧持有受影响类的实例，返回 `JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66）并保持旧定义，帧退出后可重试。
 - **冲突拒绝**：加 final 但已有子类覆写、存活实例将继承未实现的抽象方法等，沿用现有拒绝码，整批不提交。
 
 ## 活动帧策略
@@ -271,11 +282,13 @@ python3 tools/test-elf-mini-inventory.py
 | 删除方法，方法签名变化 | 方案 C 在探测通过的事务接受普通类 concrete Java 方法；其余拒绝 `METHOD_DELETED` |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 时有已加载子类则拒绝 `CLASS_MODIFIERS_CHANGED`；加 abstract 时若该类自身仍有实例，在 `CollectAndCreateNewInstances` 之后（仍可失败）拒绝，同一错误码 |
 | 类在接口、注解、枚举之间变化 | 拒绝，`CLASS_MODIFIERS_CHANGED` |
-| 父类、接口变化 | 拒绝，`HIERARCHY_CHANGED`（Phase 4 支持） |
+| 新增接口（可同时调整顺序） | 方案 C 探测通过时接受并走结构路径；无法经目标类的加载器解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局时拒绝 `HIERARCHY_CHANGED` |
+| 移除接口；重复接口 | 移除拒绝 `HIERARCHY_CHANGED`（收窄检查待实施）；重复拒绝 `FAILS_VERIFICATION` |
+| 父类变化 | 拒绝，`HIERARCHY_CHANGED`（Phase 4c） |
 
 ## 引擎安装与事务流程（`structural_redefine_engine.cc`）
 
-接口已在 `structural_redefine_engine.h` 定义：`Install(JavaVM*, jvmtiEnv*)` 与 `Capabilities()`，由 `core/agent.cc` 调用。
+接口已在 `structural_redefine_engine.h` 定义：`Install(JavaVM*, jvmtiEnv*, FieldPlaceholders)` 与 `Capabilities()`，由 `core/agent.cc` 调用。
 
 1. **Install**（幂等，由 agent 的互斥锁串行化）：
    1. 用自有 jvmtiEnv 的潜在能力确认 `can_redefine_classes`，否则失败。
@@ -283,7 +296,7 @@ python3 tools/test-elf-mini-inventory.py
    3. 方案 C 解析映射、探测、visitor 与访问守卫所需名称并做 NDK map 自检；任一缺失则不安装这些 Hook，继续 Phase 2，诊断写明原因。声明是否适用由每次事务的探测决定。
    4. 保存结构入口、校验点与方案 C 调用的原始地址；直接调用官方 `shadowhook_hook_sym_addr()` 替换三个校验点及已启用的方案 C Hook，标准包装器最后安装。失败信息取 `shadowhook_get_errno()` / `shadowhook_to_errmsg()`；任一步失败，直接调用 `shadowhook_unhook()` 逆序撤销已安装的部分，不再另设 Hook API 封装。
 2. **标准入口**：
-   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法、子类接口中子类未声明的方法，以及目标父类的 public 方法。
+   1. 进入 ART 之前，线程仍处于 Native 状态，此时对每个目标类：用 `live_schema::ReadLiveSchema` 读取旧声明，并用 JVMTI 收集已加载子类声明的方法、子类接口中子类未声明的方法，以及目标父类的 public 方法；在读取已加载类之前，用 `Class.forName(name, false, 目标类加载器)` 解析新 DEX 中新增的接口（见“新增接口”）。
    2. 按 `jclass` 存入线程局部批次上下文（ART 的 `ClassRedefinition::klass_` 就是同一个 `jclass` 值）；方案 C 在 Native 状态提前给受影响类和已加载子类创建全局根。外层递归事务锁把快照与原 ART 事务串行化；成功嵌套事务使外层快照失效，转回原校验。
    3. 原样调用原始 `StructurallyRedefineClasses`；成功退役保留根，失败或没有退役释放根；返回后清理上下文（RAII），返回 ART 的结果。
 
@@ -291,9 +304,9 @@ python3 tools/test-elf-mini-inventory.py
 3. **CheckClass**：
    1. 按 `redefinition.h` 取出 `klass` 和 `dex_file`。上下文中找不到该类时，调用原函数。
    2. 由 `DexFilePrefix` 构造 `DexView`（文件大小取自 DEX 头），用 `ReadClassDeclarations` 读取新类。读取失败或描述符不一致时，调用原函数。
-   3. 先运行类声明探测，再调用 `structural_policy::Evaluate`（探测结果决定是否允许退役与拷贝成员变化）：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存包含退役声明的决策，记录该批次是否需永久保根；若该决策离开自有映射就会被拒绝，则标记事务依赖映射，返回 true。
+   3. 先运行类声明探测，按通过的布局读取新增接口的运行时标志，再调用 `structural_policy::Evaluate`（探测结果决定是否允许退役与拷贝成员变化）：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存包含退役声明的决策，记录该批次是否需永久保根；若该决策离开自有映射就会被拒绝，则标记事务依赖映射，返回 true。
 4. **CheckFields / CheckMethods**：有对应决策时，按 `fields_structural` / `methods_structural` 调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，然后返回 true，`CheckMethods` 之后清除决策；没有决策时调用原函数。
-5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`、`classModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange`；字段守卫可用时 `fieldDeletion/fieldTypeChange` 与泛称 `memberDeletion/memberTypeChange` 为 true；`hierarchyChange`、`fullDcevmComplete` 为 false。`memberMapping` 报告最近一次探测结果，`jniRetirementGuards` 统计 JNI 与 `Method.invoke` 实际拒绝退役目标的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
+5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`、`classModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange/interfaceAddition`；字段守卫可用时 `fieldDeletion/fieldTypeChange` 与泛称 `memberDeletion/memberTypeChange` 为 true；`hierarchyChange`、`fullDcevmComplete` 为 false。`memberMapping` 报告最近一次探测结果，`jniRetirementGuards` 统计 JNI 与 `Method.invoke` 实际拒绝退役目标的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
 
 映射、visitor 和方法访问守卫的事务语义见方案 C；类分配与原生提交算法继续由 ART 执行。
 
@@ -306,7 +319,8 @@ python3 tools/test-elf-mini-inventory.py
 | Phase 2 | 上节的校验规则 | 修饰符变化用例提交成功并体现新语义；拒绝用例返回约定错误码且旧定义完整；无效批次整体不提交 |
 | Phase 3（方案 C 加字段退役） | 普通类 concrete Java 方法删除/签名替换；字段删除、改类型与 static/实例互换；保留 ART 原提交 | Android 16 设备、探测选中 android16 布局：方法与字段的新/缓存访问（字节码、反射、JNI 含 A/V 与 `FromReflected*`、MethodHandle 含组合句柄、VarHandle）退役异常正确，CheckJNI ON 与线程强制解释执行下同样通过；保留字段值、新字段默认值、恢复与改类型、GC、父类/default 回落与旧活动帧通过；不可支持的变化整批原子拒绝 |
 | Phase 4a | 类修饰符变化 | 已完成：加/去 final、改可见性、无实例时加 abstract 通过；有子类时加 final、有实例时加 abstract、类改接口均拒绝且旧定义完整 |
-| Phase 4b/4c | 接口与父类变化，收窄检查 | 父类和接口的扩展、移除、恢复用例通过；收窄会破坏现存引用类型安全时拒绝且旧定义完整 |
+| Phase 4b | 接口变化 | 新增接口已完成：未加载的应用接口、boot 接口与 protected 嵌套接口同时加入，旧实例、已加载子类与新实例经字节码和反射调用通过；不可访问、非接口、无法解析的接口以 62 拒绝，移除接口以 66 拒绝，旧定义完整。待做：移除接口的收窄检查 |
+| Phase 4c | 父类变化，收窄检查 | 父类的扩展、移除、恢复用例通过；收窄会破坏现存引用类型安全时拒绝且旧定义完整 |
 | Phase 5 | Android 11、12、13、14、15、17 逐台回归 | 每台设备的结果和 APK 哈希记录在 [VERIFICATION.md](VERIFICATION.md) |
 
 `DcevmRuntime.initialize()` 在 Hook 全部安装成功后返回成功；尚未支持的变化以 JVMTI 错误拒绝。`capabilities()` 逐项报告已支持的变化类别，`fullDcevmComplete` 在 Phase 4 通过设备验收前保持 false。

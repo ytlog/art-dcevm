@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Phase 2/method-only Phase 3 policy and bounded InnerClass DEX decoding."""
+"""Exercise the structural policy and bounded InnerClass DEX decoding."""
 import argparse
 import os
 from pathlib import Path
@@ -15,6 +15,7 @@ SOURCE = r'''
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <utility>
 using namespace artdcevm;
 using evolution::ClassSchema;
 using evolution::Member;
@@ -174,8 +175,31 @@ int main(int argc, char** argv) {
             "class initializer retirement must remain rejected");
     next = live; next.superclass = "Lfixture/Parent;";
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
-    next = live; next.interfaces.push_back("Lfixture/Interface;");
-    Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+    // Interfaces: additions need a type resolved through the target's loader
+    // and its runtime flags; removals and duplicates stay rejected.
+    {
+      next = live; next.interfaces.push_back("Lfixture/Interface;");
+      Reject(live, next, JVMTI_ERROR_FAILS_VERIFICATION);  // Not resolved.
+      policy::LoadedHierarchy resolved;
+      auto& added = resolved.added_interfaces["Lfixture/Interface;"];
+      Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, resolved);
+      added.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      Accept(live, next, false, true, resolved);
+      added.access = acc::kAccPublic;
+      Reject(live, next, JVMTI_ERROR_FAILS_VERIFICATION, resolved);  // A class.
+      added.access = acc::kAccInterface | acc::kAccAbstract;
+      Reject(live, next, JVMTI_ERROR_FAILS_VERIFICATION, resolved);  // Package-private.
+      added.same_runtime_package = true;
+      Accept(live, next, false, true, resolved);
+      auto implementing = next;
+      Reject(implementing, live, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+      auto duplicated = next; duplicated.interfaces.push_back("Lfixture/Interface;");
+      Reject(live, duplicated, JVMTI_ERROR_FAILS_VERIFICATION, resolved);
+      implementing.interfaces.push_back("Lfixture/Other;");
+      auto reordered = implementing;
+      std::swap(reordered.interfaces[0], reordered.interfaces[1]);
+      Accept(implementing, reordered, false, true);  // Order alone: no resolution needed.
+    }
     // Class modifiers: visibility, final, synthetic and (with an instance
     // check) abstract may change; every change takes the structural path.
     for (uint32_t flags : {uint32_t{0}, acc::kAccPublic | acc::kAccFinal,

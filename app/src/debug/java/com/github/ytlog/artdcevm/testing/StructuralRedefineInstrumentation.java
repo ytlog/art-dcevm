@@ -17,6 +17,9 @@ import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
 import com.github.ytlog.artdcevm.fixture.FinalFieldSubject;
+import com.github.ytlog.artdcevm.fixture.InterfaceCaller;
+import com.github.ytlog.artdcevm.fixture.InterfaceChild;
+import com.github.ytlog.artdcevm.fixture.InterfaceSubject;
 import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
 import com.github.ytlog.artdcevm.fixture.MethodCaller;
@@ -45,6 +48,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntSupplier;
 
 /** Runs conformance through a separate agent's standard JVMTI entry point. */
 public final class StructuralRedefineInstrumentation extends Instrumentation {
@@ -248,6 +252,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runCopiedDefaultScenario();
+        runInterfaceScenarios();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
     }
@@ -455,6 +460,63 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("newChild", 92, new CopiedChild().copiedValue());
             scenario.check("parentValue", 90, child.parentValue());
         });
+    }
+
+    // Interfaces added to a class with instances and a loaded subclass. AddedContract
+    // and NestedContract are not loaded before the redefinition: the engine
+    // must resolve them through the class loader before ART links the class.
+    private void runInterfaceScenarios() throws Exception {
+        InterfaceSubject subject = new InterfaceSubject();
+        InterfaceChild child = new InterfaceChild();
+        String schema = memberSchema(InterfaceSubject.class);
+        String[][] invalid = {{"interface-hidden", "inaccessible"}, {"interface-class", "class"},
+                {"interface-missing", "missing"}};
+        for (String[] variant : invalid) {
+            runScenario(variant[0], 62, scenario -> {
+                scenario.redefine(new Class<?>[]{InterfaceSubject.class}, variant[0]);
+                scenario.check("interfaceCount", 0, InterfaceSubject.class.getInterfaces().length);
+                scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
+                scenario.check("contract", 51, subject.contract());
+            });
+        }
+        String contract = "Lcom/github/ytlog/artdcevm/fixture/AddedContract;";
+        String nested = "Lcom/github/ytlog/artdcevm/fixture/other/ContractHost$NestedContract;";
+        String interfaces = "com.github.ytlog.artdcevm.fixture.AddedContract,"
+                + IntSupplier.class.getName()
+                + ",com.github.ytlog.artdcevm.fixture.other.ContractHost$NestedContract";
+        runScenario("interface-add", 0, scenario -> {
+            scenario.check("contractLoadedBefore", false, StandardJvmtiClient.isLoaded(contract));
+            scenario.check("nestedLoadedBefore", false, StandardJvmtiClient.isLoaded(nested));
+            scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-add");
+            checkAddedInterfaces(scenario, subject, child, interfaces);
+            scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
+            scenario.check("contractLoadedAfter", true, StandardJvmtiClient.isLoaded(contract));
+            scenario.check("newContractTwice", 102, InterfaceCaller.contractTwice(new InterfaceSubject()));
+        });
+        runScenario("interface-remove", 66, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
+            checkAddedInterfaces(scenario, subject, child, interfaces);
+        });
+    }
+
+    private static void checkAddedInterfaces(Scenario scenario, InterfaceSubject subject,
+            InterfaceChild child, String interfaces) throws Exception {
+        StringBuilder names = new StringBuilder();
+        for (Class<?> type : InterfaceSubject.class.getInterfaces()) {
+            if (names.length() > 0) names.append(',');
+            names.append(type.getName());
+        }
+        scenario.check("interfaces", interfaces, names.toString());
+        scenario.check("oldIsContract", true, InterfaceCaller.isContract(subject));
+        scenario.check("childIsContract", true, InterfaceCaller.isContract(child));
+        scenario.check("oldContractTwice", 102, InterfaceCaller.contractTwice(subject));
+        scenario.check("childContractTwice", 122, InterfaceCaller.contractTwice(child));
+        Object supplier = subject;
+        scenario.check("oldIntSupplier", 52, ((IntSupplier) supplier).getAsInt());
+        Method nestedMethod = InterfaceSubject.class.getInterfaces()[2].getMethod("nested");
+        nestedMethod.setAccessible(true);
+        scenario.check("oldNestedDefault", 7, nestedMethod.invoke(subject));
+        scenario.check("childNestedDefault", 7, nestedMethod.invoke(child));
     }
 
     private void runMethodScenarios(ClassFinalSubject classFinal, int classFlags,

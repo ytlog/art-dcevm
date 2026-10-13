@@ -45,14 +45,20 @@ SCENARIOS = (
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
+    ("interface-hidden", ["interface-hidden"], 62),
+    ("interface-class", ["interface-class"], 62),
+    ("interface-missing", ["interface-missing"], 62),
+    ("interface-add", ["interface-add"], 0),
+    ("interface-remove", ["interface-original"], 66),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
 )
-# Scenarios whose acceptance depends on the engine's member mapping, which is
-# enabled only after the runtime probes selected a source-declared layout.
+# Scenarios whose acceptance depends on a source-declared layout that the
+# runtime probes selected: the engine's member mapping, or the runtime class
+# flags of an added interface.
 MAPPED_SCENARIOS = {"methods-retire", "methods-restore", "methods-retire-again",
-                    "methods-restore-again", "copied-default-add",
+                    "methods-restore-again", "copied-default-add", "interface-add",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -113,6 +119,12 @@ METHOD_RESTORE_CHECKS = {
     "removedReplacementSignature": "java.lang.NoSuchMethodException",
 }
 CLASS_FINAL_CHECKS = {"classFlags": 1, "oldValue": 29, "newValue": 29}
+INTERFACE_REJECTED_CHECKS = {"interfaceCount": 0, "contract": 51}
+INTERFACE_ADDED_CHECKS = {
+    "interfaces": "com.github.ytlog.artdcevm.fixture.AddedContract,java.util.function.IntSupplier,"
+                  "com.github.ytlog.artdcevm.fixture.other.ContractHost$NestedContract",
+    "oldIsContract": True, "childIsContract": True, "oldContractTwice": 102,
+    "childContractTwice": 122, "oldIntSupplier": 52, "oldNestedDefault": 7, "childNestedDefault": 7}
 
 
 def field_live_checks(i, j, o, si, so):
@@ -178,6 +190,13 @@ REQUIRED_CHECKS = {
     "methods-restore-again": METHOD_RESTORE_CHECKS,
     "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
                            "newChild": 92, "parentValue": 90},
+    "interface-hidden": INTERFACE_REJECTED_CHECKS,
+    "interface-class": INTERFACE_REJECTED_CHECKS,
+    "interface-missing": INTERFACE_REJECTED_CHECKS,
+    "interface-add": {**INTERFACE_ADDED_CHECKS, "contractLoadedBefore": False,
+                      "nestedLoadedBefore": False, "contractLoadedAfter": True,
+                      "newContractTwice": 102},
+    "interface-remove": INTERFACE_ADDED_CHECKS,
     "field-retire": {
         **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
         "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,
@@ -207,6 +226,10 @@ UNCHANGED_CHECKS = {
     "native-method-delete": ("unchangedMembers",),
     "constructor-delete": ("unchangedMembers",),
     "abstract-method-delete": ("unchangedMembers",),
+    "interface-hidden": ("unchangedMembers",),
+    "interface-class": ("unchangedMembers",),
+    "interface-missing": ("unchangedMembers",),
+    "interface-add": ("unchangedMembers",),
 }
 
 
@@ -241,7 +264,7 @@ def validate_report(report):
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
     for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
-                 "classModifierChange", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
+                 "classModifierChange", "interfaceAddition", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")

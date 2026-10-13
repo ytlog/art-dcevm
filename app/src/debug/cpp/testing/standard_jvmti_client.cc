@@ -2,6 +2,7 @@
 #include "jvmti.h"
 #include <atomic>
 #include <cstdarg>
+#include <cstring>
 #include <vector>
 
 // A user agent as an app would write it: its own environment, the
@@ -247,4 +248,30 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_readReflectedField(JN
   jfieldID id = jni->FromReflectedField(reflected);
   if (jni->ExceptionCheck() || !id) return 0;
   return ReadField(jni, receiver, id, field);
+}
+
+// Whether any class table holds a class with this JVMTI signature; unlike
+// ClassLoader.findLoadedClass on ART, this never defines the class.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_isLoaded(JNIEnv* jni, jclass,
+                                                                     jstring signature) {
+  if (!client_env || !signature) return JNI_FALSE;
+  const char* wanted = jni->GetStringUTFChars(signature, nullptr);
+  if (!wanted) return JNI_FALSE;
+  jint count = 0;
+  jclass* classes = nullptr;
+  bool found = false;
+  if (client_env->GetLoadedClasses(&count, &classes) == JVMTI_ERROR_NONE) {
+    for (jint i = 0; i < count; ++i) {
+      char* name = nullptr;
+      if (!found && client_env->GetClassSignature(classes[i], &name, nullptr) == JVMTI_ERROR_NONE) {
+        found = std::strcmp(name, wanted) == 0;
+        client_env->Deallocate(reinterpret_cast<unsigned char*>(name));
+      }
+      jni->DeleteLocalRef(classes[i]);
+    }
+    client_env->Deallocate(reinterpret_cast<unsigned char*>(classes));
+  }
+  jni->ReleaseStringUTFChars(signature, wanted);
+  return found ? JNI_TRUE : JNI_FALSE;
 }

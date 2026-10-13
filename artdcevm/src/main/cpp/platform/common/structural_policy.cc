@@ -1,5 +1,6 @@
 #include "platform/common/structural_policy.h"
 #include <map>
+#include <set>
 #include <tuple>
 
 namespace artdcevm::structural_policy {
@@ -61,6 +62,36 @@ Decision CheckCopiedMembers(const ClassSchema& live, const ClassSchema& incoming
   }
   return {};
 }
+// ART links the new class's direct interfaces by looking each up in its class
+// loader (ClassLinker::LookupResolvedType) and checks only that it is an
+// interface; the access check of LoadSuperAndInterfaces is not on that path.
+// Removing an interface would narrow the type of live instances.
+Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
+                         const LoadedHierarchy& hierarchy) {
+  const std::set<std::string> before(live.interfaces.begin(), live.interfaces.end());
+  const std::set<std::string> after(incoming.interfaces.begin(), incoming.interfaces.end());
+  if (after.size() != incoming.interfaces.size())
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "duplicate interface");
+  for (const auto& old : live.interfaces)
+    if (!after.count(old))
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                    "interface removed: " + old);
+  for (const auto& added : incoming.interfaces) {
+    if (before.count(added)) continue;
+    const auto resolved = hierarchy.added_interfaces.find(added);
+    if (resolved == hierarchy.added_interfaces.end())
+      return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "added interface cannot be resolved: " + added);
+    if (!resolved->second.access)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                    "added interface cannot be checked without a verified class layout: " + added);
+    const uint32_t access = *resolved->second.access;
+    if (!(access & acc::kAccInterface))
+      return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "added type is not an interface: " + added);
+    if (!(access & acc::kAccPublic) && !resolved->second.same_runtime_package)
+      return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "added interface is inaccessible: " + added);
+  }
+  return {};
+}
 }  // namespace
 
 uint32_t ClassModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
@@ -77,9 +108,10 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                   const LoadedHierarchy& hierarchy, const Abilities& abilities) {
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
-  if (live.superclass != incoming.superclass || live.interfaces != incoming.interfaces)
-    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                  "superclass or interfaces changed");
+  if (live.superclass != incoming.superclass)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "superclass changed");
+  Decision interfaces = CheckInterfaces(live, incoming, hierarchy);
+  if (interfaces.error != JVMTI_ERROR_NONE) return interfaces;
   // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
   const uint32_t class_changed =
       (ClassModifiers(live.access) ^
@@ -100,8 +132,10 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
 
   Decision decision;
   decision.requires_no_instances = becomes_abstract;
-  // Only a new Class object carries the new flags: take ART's structural path.
-  if (class_changed & ~kAccSuper) decision.methods_structural = true;
+  // Only a new Class object carries the new flags or interface table: take
+  // ART's structural path.
+  if ((class_changed & ~kAccSuper) || live.interfaces != incoming.interfaces)
+    decision.methods_structural = true;
   std::map<std::tuple<std::string, std::string, bool>, uint32_t> new_fields;
   for (const auto& f : incoming.fields)
     new_fields[{f.name, f.descriptor, f.IsStatic()}] = FieldModifiers(f.access);

@@ -36,6 +36,8 @@ final class StandardJvmtiClient {
     static native long readCachedField(Object receiver, int field);
     static native void writeCachedField(Object receiver, int field, long value);
     static native long readReflectedField(java.lang.reflect.Field field, Object receiver, int kind);
+    /** Whether a class with this JVMTI signature is loaded; never loads it. */
+    static native boolean isLoaded(String signature);
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */
     static native int setThreadSingleStep(boolean enabled);
     static native long singleStepCount();

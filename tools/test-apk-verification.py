@@ -34,6 +34,7 @@ def complete_report():
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
+            "interfaceAddition": True,
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
@@ -140,6 +141,7 @@ class ApkVerificationTests(unittest.TestCase):
                                  "missing_cached_jni", "wrong_reflection_exception",
                                  "hierarchy_claimed", "missing_method_capability",
                                  "missing_field_capability", "wrong_field_exception",
+                                 "missing_interface_capability", "interface_preloaded",
                                  "missing_single_step_count", "single_step_no_callbacks", "matching"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -181,6 +183,14 @@ class ApkVerificationTests(unittest.TestCase):
                         report["initialization"]["capabilities"]["hierarchyChange"] = True
                     elif mode == "missing_field_capability":
                         del report["initialization"]["capabilities"]["fieldDeletion"]
+                    elif mode == "missing_interface_capability":
+                        del report["initialization"]["capabilities"]["interfaceAddition"]
+                    elif mode == "interface_preloaded":
+                        scenario = next(item for item in report["scenarios"]
+                                        if item["name"] == "interface-add")
+                        check = next(item for item in scenario["checks"]
+                                     if item["name"] == "contractLoadedBefore")
+                        check["expected"] = check["actual"] = True
                     elif mode == "wrong_field_exception":
                         scenario = next(item for item in report["scenarios"]
                                         if item["name"] == "field-retire")

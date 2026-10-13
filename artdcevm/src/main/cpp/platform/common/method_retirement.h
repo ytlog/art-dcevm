@@ -39,6 +39,10 @@ bool FieldRetirementAvailable();
 // in CheckClass, before ART can no longer fail. True when a layout matches
 // every target probed in the current transaction.
 bool VerifyTarget(abi::arm64::ClassRedefinitionPrefix* self, const evolution::ClassSchema& live);
+// Java bits of another loaded class's runtime flags (its ClassDef flags), read
+// in CheckClass with every layout VerifyTarget accepted for this transaction.
+// False when none is verified or the accepted layouts disagree.
+bool ClassAccess(abi::arm64::ClassRedefinitionPrefix* self, jclass klass, uint32_t* access);
 // One standard-entry transaction. A transaction whose policy decision needs
 // the engine's member mapping fails before ART's no-failure point when a later
 // probe disables that mapping.

@@ -232,6 +232,7 @@ struct LayoutOps {
                       std::string* why);
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
+  uint32_t (*access)(const void* klass);
 };
 
 template <typename Class, typename Method> struct Layout {
@@ -459,8 +460,12 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
+  static uint32_t Access(const void* klass) {
+    return static_cast<const Class*>(klass)->access_flags & kAccJavaFlagsMask;
+  }
+
   static constexpr LayoutOps Ops(int android) {
-    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot};
+    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot, Access};
   }
 };
 
@@ -1239,6 +1244,24 @@ bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& l
   Report(layout ? "verified: android" + std::to_string(layout->android) + " class layout"
                 : "rejected: " + why);
   return layout != nullptr;
+}
+
+bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
+  if (!available || !transaction || !transaction->probed) return false;
+  // GetMirrorClass reads only driver_->self_ and klass_ (ti_redefine.cc, 11--17).
+  ClassRedefinitionPrefix lookup{self->driver, klass, nullptr};
+  const void* mirror = mirror_class(&lookup);
+  if (!mirror) return false;
+  std::optional<uint32_t> agreed;
+  for (size_t i = 0; i < kLayoutCount; ++i) {
+    if (!(transaction->layouts & (LayoutMask{1} << i))) continue;
+    const uint32_t flags = kLayouts[i].access(mirror);
+    if (agreed && *agreed != flags) return false;
+    agreed = flags;
+  }
+  if (!agreed) return false;
+  *access = *agreed;
+  return true;
 }
 
 TransactionScope::TransactionScope() {

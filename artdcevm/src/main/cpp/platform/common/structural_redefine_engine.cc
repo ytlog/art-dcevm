@@ -1,6 +1,7 @@
 #include "platform/common/structural_redefine_engine.h"
 
 #include <android/log.h>
+#include <algorithm>
 #include <array>
 #include <map>
 #include <mutex>
@@ -54,6 +55,8 @@ void Diagnose(const std::string& text, bool rejection = false) {
 struct Snapshot {
   evolution::ClassSchema live;
   structural_policy::LoadedHierarchy hierarchy;
+  // Global references of hierarchy.added_interfaces, owned by the batch.
+  std::map<std::string, jclass> interface_classes;
 };
 
 struct Batch {
@@ -62,9 +65,12 @@ struct Batch {
   std::map<ClassRedefinitionPrefix*, structural_policy::Decision> decisions;
   JNIEnv* jni = nullptr;
   std::vector<jobject> retirement_roots;
+  std::vector<jobject> interface_roots;
   bool retires_members = false;
   ~Batch() {
-    if (jni) for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
+    if (!jni) return;
+    for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
+    for (jobject root : interface_roots) jni->DeleteGlobalRef(root);
   }
 };
 thread_local Batch* current_batch = nullptr;
@@ -216,6 +222,69 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
   return CollectInheritedPublic(jni, target, snapshot, error);
 }
 
+// ClassLinker::LoadSuperAndInterfaces resolves a class's interfaces through its
+// defining loader. AllocateNewClassObject skips that step, and LinkClass only
+// looks the interfaces up in the loader's class table, so resolve each added
+// interface first: Class.forName(name, false, loader) runs ClassLinker::FindClass,
+// which records the loader as an initiating loader of the class it returns.
+// An interface left unresolved here is rejected by the policy in CheckClass,
+// which reads the DEX after any ClassFileLoadHook.
+jvmtiError ResolveAddedInterfaces(JNIEnv* jni, const jvmtiClassDefinition& definition,
+                                  Batch* batch, Snapshot* snapshot, std::string* error) {
+  evolution::ClassSchema incoming;
+  std::string unreadable;
+  const size_t size = definition.class_byte_count > 0 ? definition.class_byte_count : 0;
+  const evolution::DexView view{definition.class_bytes, size, definition.class_bytes, size};
+  if (!evolution::ReadClassDeclarations(view, &incoming, &unreadable)) return JVMTI_ERROR_NONE;
+  const auto& before = snapshot->live.interfaces;
+  std::vector<std::string> added;
+  for (const auto& descriptor : incoming.interfaces)
+    if (std::find(before.begin(), before.end(), descriptor) == before.end() &&
+        descriptor.size() > 2 && descriptor.front() == 'L' && descriptor.back() == ';')
+      added.push_back(descriptor);
+  if (added.empty()) return JVMTI_ERROR_NONE;
+  LocalReference loader(jni);
+  jvmtiError result = snapshot_env->GetClassLoader(definition.klass, &loader.value);
+  if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
+  LocalReference class_class(jni);
+  class_class.value = jni->FindClass("java/lang/Class");
+  const jmethodID for_name = class_class.value ? jni->GetStaticMethodID(
+      static_cast<jclass>(class_class.value), "forName",
+      "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
+  if (!for_name) {
+    jni->ExceptionClear();
+    *error = "Class.forName unavailable";
+    return JVMTI_ERROR_INTERNAL;
+  }
+  for (const auto& descriptor : added) {
+    std::string name = descriptor.substr(1, descriptor.size() - 2);
+    std::replace(name.begin(), name.end(), '/', '.');
+    LocalReference binary_name(jni), resolved(jni), resolved_loader(jni);
+    binary_name.value = jni->NewStringUTF(name.c_str());
+    if (binary_name.value)
+      resolved.value = jni->CallStaticObjectMethod(static_cast<jclass>(class_class.value), for_name,
+                                                   binary_name.value, JNI_FALSE, loader.value);
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    if (!resolved.value) continue;
+    result = snapshot_env->GetClassLoader(static_cast<jclass>(resolved.value),
+                                          &resolved_loader.value);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
+    jobject root = jni->NewGlobalRef(resolved.value);
+    if (!root) {
+      jni->ExceptionClear();
+      *error = "cannot retain an added interface";
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    batch->interface_roots.push_back(root);
+    structural_policy::ResolvedType type;
+    type.same_runtime_package = Package(descriptor) == Package(snapshot->live.descriptor) &&
+        jni->IsSameObject(resolved_loader.value, loader.value);
+    snapshot->hierarchy.added_interfaces[descriptor] = type;
+    snapshot->interface_classes[descriptor] = static_cast<jclass>(root);
+  }
+  return JVMTI_ERROR_NONE;
+}
+
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   const jvmtiError result = structural_entry(env, count, definitions);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
@@ -253,22 +322,30 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
-  LocalClasses loaded(snapshot_env, jni);
-  jvmtiError result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
-  if (result != JVMTI_ERROR_NONE) {
-    Diagnose("GetLoadedClasses failed while preparing structural validation");
-    return result;
-  }
-  for (jint i = 0; i < count; ++i) {
+  for (jint i = 0; i < count; ++i)
     if (!definitions[i].klass) return InvokeStructural(env, count, definitions);
+  // Resolving interfaces may load classes, so it precedes the loaded-class view.
+  jvmtiError result = JVMTI_ERROR_NONE;
+  for (jint i = 0; i < count; ++i) {
     Snapshot snapshot;
     std::string error;
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
-    result = CollectSubclasses(jni, definitions[i].klass, loaded, &snapshot, &error);
+    result = ResolveAddedInterfaces(jni, definitions[i], &batch, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
+  }
+  LocalClasses loaded(snapshot_env, jni);
+  result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
+  if (result != JVMTI_ERROR_NONE) {
+    Diagnose("GetLoadedClasses failed while preparing structural validation");
+    return result;
+  }
+  for (auto& [klass, snapshot] : batch.classes) {
+    std::string error;
+    result = CollectSubclasses(jni, klass, loaded, &snapshot, &error);
+    if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
   }
   if (method_retirement::Available()) {
     // Build the permanent roots while Native, before ART's no-failure point.
@@ -306,9 +383,15 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   }
   if (incoming.descriptor != found->second.live.descriptor)
     return reinterpret_cast<Check>(original_class)(self);
-  const auto& snapshot = found->second;
+  auto& snapshot = found->second;
   structural_policy::Abilities abilities;
   abilities.member_mapping = method_retirement::VerifyTarget(self, snapshot.live);
+  for (auto& [descriptor, type] : snapshot.hierarchy.added_interfaces) {
+    uint32_t access = 0;
+    type.access.reset();
+    if (method_retirement::ClassAccess(self, snapshot.interface_classes.at(descriptor), &access))
+      type.access = access;
+  }
   abilities.field_retirement =
       abilities.member_mapping && method_retirement::FieldRetirementAvailable();
   abilities.instance_check = method_retirement::Available();
@@ -466,7 +549,7 @@ std::string Capabilities() {
   const std::string field_retirement = fields ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
-      ",\"classModifierChange\":" + supported +
+      ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
