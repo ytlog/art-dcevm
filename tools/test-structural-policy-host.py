@@ -173,8 +173,51 @@ int main(int argc, char** argv) {
     Require(policy::Evaluate(initializer, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
             "class initializer retirement must remain rejected");
-    next = live; next.superclass = "Lfixture/Parent;";
-    Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+    // Superclass: only a resolved, accessible, non-final class extending the
+    // old superclass, with the engine's member mapping.
+    {
+      next = live; next.superclass = "Lfixture/Parent;";
+      Reject(live, next, JVMTI_ERROR_FAILS_VERIFICATION);  // Not resolved.
+      policy::LoadedHierarchy widened;
+      auto& parent = widened.new_superclass.emplace();
+      policy::Abilities mapping;
+      mapping.member_mapping = true;
+      mapping.superclass_change = true;
+      auto expect = [&](jvmtiError code, const char* what) {
+        Require(policy::Evaluate(live, next, widened, mapping).error == code, what);
+      };
+      expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "unchecked superclass flags");
+      parent.access = acc::kAccPublic;
+      parent.extends_old_superclass = true;
+      const auto accepted = policy::Evaluate(live, next, widened, mapping);
+      Require(accepted.error == JVMTI_ERROR_NONE && accepted.superclass_changed &&
+              accepted.methods_structural, "widening superclass change must be accepted");
+      Require(policy::Evaluate(live, next, widened, {}).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "needs member mapping");
+      parent.extends_old_superclass = false;
+      expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "narrowing must be rejected");
+      parent.extends_old_superclass = true;
+      parent.extends_target = true;
+      expect(JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION, "circular superclass");
+      parent.extends_target = false;
+      parent.access = acc::kAccPublic | acc::kAccFinal;
+      expect(JVMTI_ERROR_FAILS_VERIFICATION, "final superclass");
+      parent.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      expect(JVMTI_ERROR_FAILS_VERIFICATION, "interface as superclass");
+      parent.access = 0;
+      expect(JVMTI_ERROR_FAILS_VERIFICATION, "inaccessible superclass");
+      parent.same_runtime_package = true;
+      expect(JVMTI_ERROR_NONE, "package-private superclass in the same runtime package");
+      parent.final_methods.insert({"work", "()I"});
+      expect(JVMTI_ERROR_FAILS_VERIFICATION, "override of a final method");
+      parent.final_methods.clear();
+      widened.visible.insert({"other", "()V"});
+      parent.final_methods.insert({"other", "()V"});
+      expect(JVMTI_ERROR_FAILS_VERIFICATION, "subclass override of a final method");
+      parent.final_methods.clear();
+      parent.related_in_batch = true;
+      expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "related class in batch");
+    }
     // Interfaces: additions need a type resolved through the target's loader
     // and its runtime flags; removals and duplicates stay rejected.
     {

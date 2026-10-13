@@ -3,7 +3,7 @@
 
 // Named ART structural-redefinition decision points and services. The mangled
 // names are identical in every collected Android 11--17 arm64 runtime.
-// 53 entries require .dynsym; 4 allow any named table, including the public
+// 54 entries require .dynsym; 4 allow any named table, including the public
 // wrapper, CopyFields candidate and method-access guards. Each declares its scope.
 // This catalog proves exact-name presence, not source ABI or Phase 3/4 behavior.
 // tools/check-structural-symbols.py re-verifies this catalog
@@ -92,5 +92,8 @@ inline constexpr NamedSymbol kEncodeMethodId{Library::kArt, "_ZN3art3jni12JniIdM
 inline constexpr NamedSymbol kEncodeMethodIdHandle{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdENS_16ReflectiveHandleINS_9ArtMethodEEE"};
 inline constexpr NamedSymbol kGetCanonicalMethod{Library::kArt, "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE"};
 inline constexpr NamedSymbol kClassRedefinitionGetMirrorClass{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition14GetMirrorClassEv"};
+// Verifies the new DEX against the new class object; a superclass change
+// redirects the verifier's lookup of the class's own descriptor meanwhile.
+inline constexpr NamedSymbol kCheckVerification{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition17CheckVerificationERKNS_20RedefinitionDataIterE"};
 
 }  // namespace artdcevm::symbols::structural

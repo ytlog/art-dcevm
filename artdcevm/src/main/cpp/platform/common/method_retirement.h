@@ -34,6 +34,8 @@ struct FieldPlaceholders {
 void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placeholders,
                               std::string* note);
 bool FieldRetirementAvailable();
+// The verifier redirect for superclass changes is installed.
+bool SuperclassChangeAvailable();
 // Probe the source-declared class layouts on a redefinition target against
 // ART's own lookups, the class's current DEX and the JVMTI view (`live`). Runs
 // in CheckClass, before ART can no longer fail. True when a layout matches
@@ -61,6 +63,11 @@ void RequireMemberMapping();
 // the rejection that TakeRejection then returns once.
 void RequireNoInstances(abi::arm64::ClassRedefinitionPrefix* self, const std::string& descriptor);
 std::string TakeRejection();
+// Link the target's new class under `superclass` (a global reference that
+// outlives the transaction), which extends the old superclass. Verified
+// before ART's no-failure point; `descriptor` names the target in a rejection.
+void ChangeSuperclass(abi::arm64::ClassRedefinitionPrefix* self, jclass superclass,
+                      const std::string& descriptor);
 // JNI globals are prepared before entering ART; ReplaceReferences updates them
 // to the replacement Class whose ClassExt roots the complete obsolete chain.
 void RetainRoots(std::vector<jobject> roots);

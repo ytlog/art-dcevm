@@ -25,7 +25,7 @@ SCENARIOS = (
     ("add", ["add"], 0),
     ("method-delete", ["method-delete"], 0),
     ("method-restore", ["add"], 0),
-    ("hierarchy", ["hierarchy"], 66),
+    ("hierarchy", ["hierarchy"], 0),
     ("atomic-modifier-public-class-interface", ["modifier-public", "class-interface"], 70),
     ("modifier-public", ["modifier-public"], 0),
     ("modifier-final", ["modifier-final"], 0),
@@ -50,6 +50,13 @@ SCENARIOS = (
     ("interface-missing", ["interface-missing"], 62),
     ("interface-add", ["interface-add"], 0),
     ("interface-remove", ["interface-original"], 66),
+    ("super-final", ["super-final"], 62),
+    ("super-interface", ["super-interface"], 62),
+    ("super-missing", ["super-missing"], 62),
+    ("super-final-override", ["super-final-override"], 62),
+    ("super-circular", ["super-circular"], 61),
+    ("super-widen", ["super-widen"], 0),
+    ("super-narrow", ["super-original"], 66),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
@@ -57,8 +64,8 @@ SCENARIOS = (
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
 # flags of an added interface.
-MAPPED_SCENARIOS = {"methods-retire", "methods-restore", "methods-retire-again",
-                    "methods-restore-again", "copied-default-add", "interface-add",
+MAPPED_SCENARIOS = {"hierarchy", "methods-retire", "methods-restore", "methods-retire-again",
+                    "methods-restore-again", "copied-default-add", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -120,6 +127,12 @@ METHOD_RESTORE_CHECKS = {
 }
 CLASS_FINAL_CHECKS = {"classFlags": 1, "oldValue": 29, "newValue": 29}
 INTERFACE_REJECTED_CHECKS = {"interfaceCount": 0, "contract": 51}
+SUPER_REJECTED_CHECKS = {"superclass": "com.github.ytlog.artdcevm.fixture.SuperBase", "value": 12}
+SUPER_WIDENED_CHECKS = {
+    "superclass": "com.github.ytlog.artdcevm.fixture.SuperMiddle", "oldIsMiddle": True,
+    "childIsMiddle": True, "oldOwn": 7, "oldBase": 5, "oldValue": 12, "oldMiddleValue": 0,
+    "oldMiddle": 40, "oldDescribe": "middle", "childValue": 9, "childOwn": 7, "childBase": 5,
+    "childDescribe": "middle"}
 INTERFACE_ADDED_CHECKS = {
     "interfaces": "com.github.ytlog.artdcevm.fixture.AddedContract,java.util.function.IntSupplier,"
                   "com.github.ytlog.artdcevm.fixture.other.ContractHost$NestedContract",
@@ -155,7 +168,10 @@ REQUIRED_CHECKS = {
                        "staticCounter": 7, "removedLookup": "java.lang.NoSuchMethodException",
                        "cachedMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "method-restore": EVOLVING_CHECKS,
-    "hierarchy": {**EVOLVING_CHECKS, "superclass": "java.lang.Object", "interfaceCount": 0},
+    "hierarchy": {"superclass": "java.util.ArrayList", "interfaces": "java.lang.Runnable",
+                  "oldValue": 10, "oldCompute": 16, "oldIsList": True, "oldListSize": 0,
+                  "oldRunnable": 11, "retiredField": "java.lang.NoSuchFieldException",
+                  "newCompute": 9, "staticCounter": 7},
     "atomic-modifier-public-class-interface": {
         **CLASS_FINAL_CHECKS, "modifierBefore": 42, "passiveBefore": 42,
         "modifierThroughPublic": 42, "passiveThroughPublic": 42,
@@ -197,6 +213,11 @@ REQUIRED_CHECKS = {
                       "nestedLoadedBefore": False, "contractLoadedAfter": True,
                       "newContractTwice": 102},
     "interface-remove": INTERFACE_ADDED_CHECKS,
+    **{name: SUPER_REJECTED_CHECKS for name in (
+        "super-final", "super-interface", "super-missing", "super-final-override", "super-circular")},
+    "super-widen": {**SUPER_WIDENED_CHECKS, "describeBefore": "base", "newMiddleValue": 11,
+                    "newValue": 12},
+    "super-narrow": SUPER_WIDENED_CHECKS,
     "field-retire": {
         **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
         "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,
@@ -216,7 +237,6 @@ REQUIRED_CHECKS = {
         **field_retired_checks("Restored")},
 }
 UNCHANGED_CHECKS = {
-    "hierarchy": ("unchangedMembers",),
     "atomic-modifier-public-class-interface": ("unchangedModifierMembers", "unchangedMembers"),
     "class-nonfinal": ("unchangedMembers",),
     "class-abstract-instances": ("unchangedMembers",),
@@ -230,6 +250,9 @@ UNCHANGED_CHECKS = {
     "interface-class": ("unchangedMembers",),
     "interface-missing": ("unchangedMembers",),
     "interface-add": ("unchangedMembers",),
+    **{name: ("unchangedMembers",) for name in (
+        "super-final", "super-interface", "super-missing", "super-final-override", "super-circular",
+        "super-widen")},
 }
 
 
@@ -264,7 +287,7 @@ def validate_report(report):
     if not isinstance(capabilities, dict):
         raise RunFailure("The initialization report is missing engine capabilities")
     for name in ("installed", "standardRedefineRouted", "memberAddition", "memberModifierChange",
-                 "classModifierChange", "interfaceAddition", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
+                 "classModifierChange", "interfaceAddition", "superclassWidening", "methodDeletion", "methodSignatureChange", "fieldDeletion", "fieldTypeChange",
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")

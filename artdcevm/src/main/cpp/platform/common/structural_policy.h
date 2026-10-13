@@ -25,6 +25,21 @@ struct ResolvedType {
   bool same_runtime_package = false;
 };
 
+// A new superclass, resolved through the target's class loader before the
+// transaction. Only widening is supported: it must extend the old superclass.
+struct NewSuperclass {
+  // As ResolvedType::access: runtime ClassDef flags, empty without a verified layout.
+  std::optional<uint32_t> access;
+  bool same_runtime_package = false;
+  bool extends_old_superclass = false;
+  bool extends_target = false;  // Circular.
+  // Final instance methods it and its superclasses below the old superclass
+  // declare, as far as the target's package may override them.
+  std::set<MemberKey> final_methods;
+  // Another class of the batch is a subclass or superclass of the target, or of the new superclass.
+  bool related_in_batch = false;
+};
+
 // Loaded classes related to a redefinition target, read through public JVMTI.
 struct LoadedHierarchy {
   // Non-private instance methods declared by loaded subclasses.
@@ -40,6 +55,8 @@ struct LoadedHierarchy {
   bool loaded_subclasses = false;
   // Added interfaces by descriptor; one absent here could not be resolved.
   std::map<std::string, ResolvedType> added_interfaces;
+  // Present when the new superclass differs and could be resolved.
+  std::optional<NewSuperclass> new_superclass;
 };
 
 // What the engine can enforce for this transaction beyond ART's own rules.
@@ -51,6 +68,8 @@ struct Abilities {
   bool field_retirement = false;
   // Instances of the target can be inspected before ART's no-failure point.
   bool instance_check = false;
+  // ART's verifier can be shown the new class under a new superclass.
+  bool superclass_change = false;
 };
 
 struct Decision {
@@ -66,6 +85,8 @@ struct Decision {
   std::vector<evolution::Member> retired_fields;
   // The class becomes abstract: the transaction must fail if instances exist.
   bool requires_no_instances = false;
+  // ART must link the new class under the new superclass.
+  bool superclass_changed = false;
 };
 
 // Raw DEX access flags mapped to what JVMTI Get*Modifiers reports

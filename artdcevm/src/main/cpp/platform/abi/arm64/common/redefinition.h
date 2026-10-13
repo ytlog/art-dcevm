@@ -47,6 +47,7 @@ struct RedefinitionDataIter {
   int32_t index;
   RedefinitionDataHolderPrefix* holder;
   static constexpr int32_t kNumSlots = 13;
+  static constexpr int32_t kSlotNewClassObject = 8;
   static constexpr int32_t kSlotOldInstanceObjects = 9;
   static constexpr int32_t kSlotOldClasses = 11;
   static constexpr int32_t kSlotNewClasses = 12;
@@ -54,6 +55,10 @@ struct RedefinitionDataIter {
     return holder->array.Get<ObjectArray>()->Get<ObjectArray>(kNumSlots * index + slot);
   }
   ObjectArray* Classes(bool old) const { return Slot(old ? kSlotOldClasses : kSlotNewClasses); }
+  // The redefined class's replacement, set by FinishNewClassAllocations.
+  void* NewClassObject() const {
+    return holder->array.Get<ObjectArray>()->Get<void>(kNumSlots * index + kSlotNewClassObject);
+  }
   // Instances of the old classes collected by CollectAndCreateNewInstances.
   ObjectArray* OldInstances() const { return Slot(kSlotOldInstanceObjects); }
 };

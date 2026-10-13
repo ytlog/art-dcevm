@@ -82,6 +82,7 @@ thread_local std::set<const void*> copied_resolution_changes;
 thread_local std::vector<const void*> retired_in_update;
 // Old classes' field-array slots swapped for the copy phase of one Update.
 thread_local std::vector<std::pair<uint64_t*, uint64_t>> swapped_field_arrays;
+thread_local std::vector<std::pair<uint32_t*, uint32_t>> swapped_superclasses;
 // JVMTI-requested field IDs and their ArtFields, while resolving placeholders.
 thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
 
@@ -187,6 +188,11 @@ void* (*canonical_method)(void*, uint32_t) = nullptr;
 void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
+void* original_allocate = nullptr;
+void* original_check_verification = nullptr;
+void* original_find_class = nullptr;
+void* original_find_class_with_length = nullptr;
+bool superclass_change_available = false;
 void* original_instances = nullptr;
 void* original_visit = nullptr;
 void* original_mh = nullptr;
@@ -218,6 +224,10 @@ struct FieldArraySwap {
   std::vector<uint32_t> kept;  // LengthPrefixedArray<ArtField>: length, then 4 words each.
 };
 struct MappingPlan {
+  // The target's new class links under a new superclass that extends the old
+  // one: while ART copies fields it pairs the old and new superclass chains
+  // level by level, so the new class temporarily names the old superclass.
+  bool superclass_changed = false;
   std::vector<std::pair<ArtField*, ArtField*>> fields;
   std::vector<RetiredFieldPlan> retired_fields;
   std::vector<FieldArraySwap> field_swaps;
@@ -233,6 +243,7 @@ struct LayoutOps {
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t (*access)(const void* klass);
+  uint32_t* (*superclass)(void* klass);
 };
 
 template <typename Class, typename Method> struct Layout {
@@ -463,9 +474,10 @@ template <typename Class, typename Method> struct Layout {
   static uint32_t Access(const void* klass) {
     return static_cast<const Class*>(klass)->access_flags & kAccJavaFlagsMask;
   }
+  static uint32_t* Superclass(void* klass) { return &static_cast<Class*>(klass)->super_class; }
 
   static constexpr LayoutOps Ops(int android) {
-    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot, Access};
+    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot, Access, Superclass};
   }
 };
 
@@ -506,6 +518,8 @@ struct Transaction {
   bool requires_mapping = false;
   std::map<int32_t, MappingPlan> plans;  // By RedefinitionDataIter index.
   std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
+  // New superclass (global reference) and descriptor by target.
+  std::map<ClassRedefinitionPrefix*, std::pair<jclass, std::string>> superclasses;
   std::string rejection;
 };
 thread_local Transaction* transaction = nullptr;
@@ -518,11 +532,81 @@ const LayoutOps* Selected() {
   return nullptr;
 }
 
+// GetMirrorClass reads only driver_->self_ and klass_ (ti_redefine.cc, 11--17),
+// so it decodes any class reference in a redefinition's thread.
+void* DecodeClass(ClassRedefinitionPrefix* self, jclass klass) {
+  ClassRedefinitionPrefix lookup{self->driver, klass, nullptr};
+  return mirror_class(&lookup);
+}
+
 template <typename F> void* Fn(F function) { return reinterpret_cast<void*>(function); }
 template <typename F> void** Out(F* function) { return reinterpret_cast<void**>(function); }
 
 void ThrowRetired(void* self) {
   throw_exception(self, "Ljava/lang/NoSuchMethodError;", "method retired by structural redefinition");
+}
+
+// ART links the target's new class under the old superclass it passes here
+// ("We know the interfaces and supers didn't change"). For a superclass change,
+// store the new superclass in that handle's slot: the slot belongs to the
+// caller's handle scope, so it stays a GC root. Subclasses are allocated through
+// the same redefinition with the target's new class as their superclass.
+void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Handle super_class,
+                             Handle cache, uint16_t index) {
+  if (transaction && super_class.reference) {
+    const auto found = transaction->superclasses.find(self);
+    if (found != transaction->superclasses.end() &&
+        old_class.Get<void>() == mirror_class(self)) {
+      if (void* superclass = DecodeClass(self, found->second.first))
+        *const_cast<uint32_t*>(super_class.reference) = Reference(superclass);
+    }
+  }
+  using Function = void* (*)(ClassRedefinitionPrefix*, Handle, Handle, Handle, uint16_t);
+  return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
+}
+
+// ART verifies the new DEX before the commit. Since Android 13 its verifier
+// resolves the class's own descriptor through the class loader, which still
+// yields the old class (old superclass), so a call to the new superclass's
+// constructor fails verification. While ART verifies a redefinition with a
+// superclass change, this thread's FindClass answers that descriptor with the
+// new class object, which the holder keeps rooted.
+struct Verifying {
+  const RedefinitionDataIter* data;
+  std::string_view descriptor;  // "Lpkg/Name;"
+};
+thread_local const Verifying* verifying = nullptr;
+
+bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
+  using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
+  const std::string* descriptor = nullptr;
+  if (transaction) {
+    const auto found = transaction->superclasses.find(self);
+    if (found != transaction->superclasses.end()) descriptor = &found->second.second;
+  }
+  if (!descriptor) return reinterpret_cast<Function>(original_check_verification)(self, data);
+  const Verifying scope{&data, *descriptor};
+  const Verifying* previous = std::exchange(verifying, &scope);
+  const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
+  verifying = previous;
+  return verified;
+}
+
+void* VerifiedClass(std::string_view descriptor) {
+  return verifying && descriptor == verifying->descriptor ? verifying->data->NewClassObject()
+                                                          : nullptr;
+}
+void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) {
+  if (void* klass = descriptor ? VerifiedClass(descriptor) : nullptr) return klass;
+  using Function = void* (*)(void*, void*, const char*, Handle);
+  return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
+}
+void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
+                          Handle loader) {
+  if (void* klass = descriptor ? VerifiedClass({descriptor, length}) : nullptr) return klass;
+  using Function = void* (*)(void*, void*, const char*, size_t, Handle);
+  return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
+                                                                     length, loader);
 }
 
 // Commit: apply the plan made before ART's no-failure point, or keep ART's
@@ -589,6 +673,18 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (const LayoutOps* layout = Selected()) {
     MappingPlan plan;
     if (layout->plan(*data, &plan, &why)) {
+      if (const auto found = transaction->superclasses.find(self);
+          found != transaction->superclasses.end()) {
+        // The allocation hook must have linked the new class under the new superclass.
+        void* new_class = data->Classes(false) ? data->Classes(false)->Get<void>(0) : nullptr;
+        void* superclass = DecodeClass(self, found->second.first);
+        if (!new_class || !superclass || *layout->superclass(new_class) != Reference(superclass)) {
+          self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+          transaction->rejection = found->second.second + ": the new superclass was not applied";
+          return false;
+        }
+        plan.superclass_changed = true;
+      }
       // Later redefinitions of this batch are planned with the same layout.
       transaction->layouts = LayoutMask{1} << (layout - kLayouts);
       transaction->plans[data->index] = std::move(plan);
@@ -609,6 +705,8 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
 void RestoreFieldArrays() {
   for (const auto& [slot, original] : swapped_field_arrays) *slot = original;
   swapped_field_arrays.clear();
+  for (const auto& [slot, original] : swapped_superclasses) *slot = original;
+  swapped_superclasses.clear();
 }
 
 void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
@@ -635,6 +733,15 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
       uint64_t* slot = layout->field_slot(old_classes->Get<void>(swap.class_index), swap.slot);
       swapped_field_arrays.emplace_back(slot, *slot);
       *slot = reinterpret_cast<uintptr_t>(swap.kept.data());
+    }
+    // ART's CopyFields pairs target_class->GetSuperClass() with the old
+    // class's superclass. The new superclass extends the old one and shares
+    // its field layout, so pairing the old superclass chain with itself copies
+    // every inherited field; the new superclass's own fields stay zero.
+    if (plan->superclass_changed) {
+      uint32_t* slot = layout->superclass(data.Classes(false)->Get<void>(0));
+      swapped_superclasses.emplace_back(slot, *slot);
+      *slot = *layout->superclass(data.Classes(true)->Get<void>(0));
     }
   }
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
@@ -1085,6 +1192,8 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
       {kCollectNewFieldAndMethodMappings, Fn(CollectMappings), &original_mapping},
       {kCollectAndCreateNewInstances, Fn(CollectAndCreateNewInstances), &original_instances},
       {kUpdateClassStructurally, Fn(Update), &original_update},
+      {kAllocateNewClassObject, Fn(AllocateNewClassObject), &original_allocate},
+      {kCheckVerification, Fn(CheckVerification), &original_check_verification},
       {kVisitReflectiveTargets, Fn(Visit), &original_visit},
       {kMethodHandleInvoke, Fn(MethodHandleInvoke), &original_mh},
       {kMethodHandleInvokeExact, Fn(MethodHandleInvokeExact), &original_mh_exact},
@@ -1141,6 +1250,17 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     field_ids_hooked = true;
     break;
   }
+  // Superclass changes need the verifier redirect through either FindClass.
+  superclass_change_available = false;
+  if (void* find = symbols::Find(kFindClass)) {
+    resolved.push_back({find, Fn(FindClass), &original_find_class, kFindClass.name});
+    superclass_change_available = true;
+  }
+  if (void* find = symbols::Find(kFindClassWithLength)) {
+    resolved.push_back({find, Fn(FindClassWithLength), &original_find_class_with_length,
+                        kFindClassWithLength.name});
+    superclass_change_available = true;
+  }
   if (void* frame = symbols::Find(kMethodHandleInvokeExactWithFrame))
     resolved.push_back({frame, Fn(MethodHandleFrame), &original_mh_frame,
                         kMethodHandleInvokeExactWithFrame.name});
@@ -1156,6 +1276,7 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
 }
 bool Available() { return available; }
 bool FieldRetirementAvailable() { return field_retirement_available; }
+bool SuperclassChangeAvailable() { return available && superclass_change_available; }
 
 namespace {
 // ArtFields of one placeholder class, from JVMTI (which does not initialize
@@ -1248,9 +1369,7 @@ bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& l
 
 bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
   if (!available || !transaction || !transaction->probed) return false;
-  // GetMirrorClass reads only driver_->self_ and klass_ (ti_redefine.cc, 11--17).
-  ClassRedefinitionPrefix lookup{self->driver, klass, nullptr};
-  const void* mirror = mirror_class(&lookup);
+  const void* mirror = DecodeClass(self, klass);
   if (!mirror) return false;
   std::optional<uint32_t> agreed;
   for (size_t i = 0; i < kLayoutCount; ++i) {
@@ -1276,6 +1395,10 @@ TransactionScope::~TransactionScope() {
 }
 void RequireMemberMapping() {
   if (transaction) transaction->requires_mapping = true;
+}
+void ChangeSuperclass(ClassRedefinitionPrefix* self, jclass superclass,
+                      const std::string& descriptor) {
+  if (transaction) transaction->superclasses[self] = {superclass, descriptor};
 }
 void RequireNoInstances(ClassRedefinitionPrefix* self, const std::string& descriptor) {
   if (transaction) transaction->no_instances[self] = descriptor;

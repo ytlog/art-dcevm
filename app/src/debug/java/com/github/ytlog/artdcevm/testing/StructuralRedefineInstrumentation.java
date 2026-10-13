@@ -24,6 +24,9 @@ import com.github.ytlog.artdcevm.fixture.ModifierPassive;
 import com.github.ytlog.artdcevm.fixture.ModifierSubject;
 import com.github.ytlog.artdcevm.fixture.MethodCaller;
 import com.github.ytlog.artdcevm.fixture.MethodSubject;
+import com.github.ytlog.artdcevm.fixture.SuperChild;
+import com.github.ytlog.artdcevm.fixture.SuperMiddle;
+import com.github.ytlog.artdcevm.fixture.SuperSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
 
@@ -120,7 +123,6 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(new Class<?>[]{Evolving.class}, "add");
             checkAddedDefinition(scenario, evolving);
         });
-        String addedSchema = memberSchema(Evolving.class);
         Method deletedAdded = Evolving.class.getDeclaredMethod("addedMethod");
         runScenario("method-delete", 0, scenario -> {
             scenario.redefine(new Class<?>[]{Evolving.class}, "method-delete");
@@ -137,12 +139,24 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(new Class<?>[]{Evolving.class}, "add");
             checkAddedDefinition(scenario, evolving);
         });
-        runScenario("hierarchy", 66, scenario -> {
+        // Widening to a boot superclass while adding an interface and retiring
+        // the members that "add" introduced, in one transaction.
+        runScenario("hierarchy", 0, scenario -> {
             scenario.redefine(new Class<?>[]{Evolving.class}, "hierarchy");
-            scenario.check("superclass", Object.class.getName(), Evolving.class.getSuperclass().getName());
-            scenario.check("interfaceCount", 0, Evolving.class.getInterfaces().length);
-            scenario.check("unchangedMembers", addedSchema, memberSchema(Evolving.class));
-            checkAddedDefinition(scenario, evolving);
+            Object widened = evolving;
+            scenario.check("superclass", java.util.ArrayList.class.getName(),
+                    Evolving.class.getSuperclass().getName());
+            scenario.check("interfaces", Runnable.class.getName(), Evolving.class.getInterfaces()[0].getName());
+            scenario.check("oldValue", 10, evolving.value);
+            scenario.check("oldCompute", 16, evolving.compute());
+            scenario.check("oldIsList", true, widened instanceof java.util.ArrayList);
+            scenario.check("oldListSize", 0, ((java.util.ArrayList<?>) widened).size());
+            ((Runnable) widened).run();
+            scenario.check("oldRunnable", 11, evolving.value);
+            scenario.expectError("retiredField", NoSuchFieldException.class,
+                    () -> Evolving.class.getDeclaredField("added"));
+            scenario.check("newCompute", 9, new Evolving(3).compute());
+            scenario.check("staticCounter", 7, Evolving.counter);
         });
 
         ModifierSubject modifier = new ModifierSubject();
@@ -253,6 +267,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runCopiedDefaultScenario();
         runInterfaceScenarios();
+        runSuperclassScenarios();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
     }
@@ -517,6 +532,59 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         nestedMethod.setAccessible(true);
         scenario.check("oldNestedDefault", 7, nestedMethod.invoke(subject));
         scenario.check("childNestedDefault", 7, nestedMethod.invoke(child));
+    }
+
+    // SuperSubject (with a loaded subclass and instances of both) moves from
+    // SuperBase to SuperMiddle, which extends SuperBase. Invalid superclasses
+    // and narrowing back to SuperBase are rejected with the definition intact.
+    private void runSuperclassScenarios() throws Exception {
+        SuperSubject subject = new SuperSubject();
+        SuperChild child = new SuperChild();
+        String schema = memberSchema(SuperSubject.class);
+        Object[][] invalid = {{"super-final", 62}, {"super-interface", 62}, {"super-missing", 62},
+                {"super-final-override", 62}, {"super-circular", 61}};
+        for (Object[] variant : invalid) {
+            runScenario((String) variant[0], (Integer) variant[1], scenario -> {
+                scenario.redefine(new Class<?>[]{SuperSubject.class}, (String) variant[0]);
+                scenario.check("superclass", "com.github.ytlog.artdcevm.fixture.SuperBase",
+                        SuperSubject.class.getSuperclass().getName());
+                scenario.check("unchangedMembers", schema, memberSchema(SuperSubject.class));
+                scenario.check("value", 12, subject.value());
+            });
+        }
+        runScenario("super-widen", 0, scenario -> {
+            scenario.check("describeBefore", "base", subject.describe());
+            scenario.redefine(new Class<?>[]{SuperSubject.class}, "super-widen");
+            checkWidenedSuperclass(scenario, subject, child);
+            scenario.check("unchangedMembers", schema, memberSchema(SuperSubject.class));
+            SuperSubject created = new SuperSubject();
+            scenario.check("newMiddleValue", 11, ((SuperMiddle) (Object) created).middleValue);
+            scenario.check("newValue", 12, created.value());
+        });
+        runScenario("super-narrow", 66, scenario -> {
+            scenario.redefine(new Class<?>[]{SuperSubject.class}, "super-original");
+            checkWidenedSuperclass(scenario, subject, child);
+        });
+    }
+
+    private static void checkWidenedSuperclass(Scenario scenario, SuperSubject subject,
+            SuperChild child) throws Exception {
+        scenario.check("superclass", SuperMiddle.class.getName(),
+                SuperSubject.class.getSuperclass().getName());
+        Object old = subject;
+        Object oldChild = child;
+        scenario.check("oldIsMiddle", true, old instanceof SuperMiddle);
+        scenario.check("childIsMiddle", true, oldChild instanceof SuperMiddle);
+        scenario.check("oldOwn", 7, subject.own);
+        scenario.check("oldBase", 5, subject.baseValue);
+        scenario.check("oldValue", 12, subject.value());
+        scenario.check("oldMiddleValue", 0, ((SuperMiddle) old).middleValue);
+        scenario.check("oldMiddle", 40, ((SuperMiddle) old).middle());
+        scenario.check("oldDescribe", "middle", subject.describe());
+        scenario.check("childValue", 9, child.childValue);
+        scenario.check("childOwn", 7, child.own);
+        scenario.check("childBase", 5, child.baseValue);
+        scenario.check("childDescribe", "middle", child.describe());
     }
 
     private void runMethodScenarios(ClassFinalSubject classFinal, int classFlags,

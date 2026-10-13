@@ -34,7 +34,7 @@ def complete_report():
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
-            "interfaceAddition": True,
+            "interfaceAddition": True, "superclassWidening": True,
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,

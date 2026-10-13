@@ -55,8 +55,9 @@ void Diagnose(const std::string& text, bool rejection = false) {
 struct Snapshot {
   evolution::ClassSchema live;
   structural_policy::LoadedHierarchy hierarchy;
-  // Global references of hierarchy.added_interfaces, owned by the batch.
+  // Global references of hierarchy.added_interfaces and new_superclass, owned by the batch.
   std::map<std::string, jclass> interface_classes;
+  jclass superclass_class = nullptr;
 };
 
 struct Batch {
@@ -65,12 +66,12 @@ struct Batch {
   std::map<ClassRedefinitionPrefix*, structural_policy::Decision> decisions;
   JNIEnv* jni = nullptr;
   std::vector<jobject> retirement_roots;
-  std::vector<jobject> interface_roots;
+  std::vector<jobject> type_roots;
   bool retires_members = false;
   ~Batch() {
     if (!jni) return;
     for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
-    for (jobject root : interface_roots) jni->DeleteGlobalRef(root);
+    for (jobject root : type_roots) jni->DeleteGlobalRef(root);
   }
 };
 thread_local Batch* current_batch = nullptr;
@@ -222,15 +223,105 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
   return CollectInheritedPublic(jni, target, snapshot, error);
 }
 
-// ClassLinker::LoadSuperAndInterfaces resolves a class's interfaces through its
-// defining loader. AllocateNewClassObject skips that step, and LinkClass only
-// looks the interfaces up in the loader's class table, so resolve each added
-// interface first: Class.forName(name, false, loader) runs ClassLinker::FindClass,
-// which records the loader as an initiating loader of the class it returns.
-// An interface left unresolved here is rejected by the policy in CheckClass,
-// which reads the DEX after any ClassFileLoadHook.
-jvmtiError ResolveAddedInterfaces(JNIEnv* jni, const jvmtiClassDefinition& definition,
-                                  Batch* batch, Snapshot* snapshot, std::string* error) {
+// ClassLinker::LoadSuperAndInterfaces resolves a class's superclass and
+// interfaces through its defining loader. AllocateNewClassObject skips that
+// step, and LinkClass only looks interfaces up in the loader's class table, so
+// resolve each new type first: Class.forName(name, false, loader) runs
+// ClassLinker::FindClass, which records the loader as an initiating loader of
+// the class it returns. A type left unresolved here is rejected by the policy
+// in CheckClass, which reads the DEX after any ClassFileLoadHook.
+class TypeResolver {
+ public:
+  TypeResolver(JNIEnv* jni, jclass target) : jni_(jni), target_(target), loader_(jni),
+                                             class_class_(jni) {}
+  jvmtiError Init(std::string* error) {
+    jvmtiError result = snapshot_env->GetClassLoader(target_, &loader_.value);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
+    class_class_.value = jni_->FindClass("java/lang/Class");
+    for_name_ = class_class_.value ? jni_->GetStaticMethodID(
+        static_cast<jclass>(class_class_.value), "forName",
+        "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
+    if (for_name_) return JVMTI_ERROR_NONE;
+    jni_->ExceptionClear();
+    *error = "Class.forName unavailable";
+    return JVMTI_ERROR_INTERNAL;
+  }
+  // A global reference owned by `batch`, or null when the loader cannot resolve it.
+  jvmtiError Resolve(const std::string& descriptor, const std::string& target_descriptor,
+                     Batch* batch, jclass* resolved_class, bool* same_runtime_package,
+                     std::string* error) {
+    *resolved_class = nullptr;
+    if (descriptor.size() <= 2 || descriptor.front() != 'L' || descriptor.back() != ';')
+      return JVMTI_ERROR_NONE;
+    std::string name = descriptor.substr(1, descriptor.size() - 2);
+    std::replace(name.begin(), name.end(), '/', '.');
+    LocalReference binary_name(jni_), resolved(jni_), resolved_loader(jni_);
+    binary_name.value = jni_->NewStringUTF(name.c_str());
+    if (binary_name.value)
+      resolved.value = jni_->CallStaticObjectMethod(static_cast<jclass>(class_class_.value),
+                                                    for_name_, binary_name.value, JNI_FALSE,
+                                                    loader_.value);
+    if (jni_->ExceptionCheck()) jni_->ExceptionClear();
+    if (!resolved.value) return JVMTI_ERROR_NONE;
+    jvmtiError result = snapshot_env->GetClassLoader(static_cast<jclass>(resolved.value),
+                                                     &resolved_loader.value);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
+    jobject root = jni_->NewGlobalRef(resolved.value);
+    if (!root) {
+      jni_->ExceptionClear();
+      *error = "cannot retain a resolved type";
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    batch->type_roots.push_back(root);
+    *resolved_class = static_cast<jclass>(root);
+    *same_runtime_package = Package(descriptor) == Package(target_descriptor) &&
+        jni_->IsSameObject(resolved_loader.value, loader_.value);
+    return JVMTI_ERROR_NONE;
+  }
+
+ private:
+  JNIEnv* jni_;
+  jclass target_;
+  LocalReference loader_;
+  LocalReference class_class_;
+  jmethodID for_name_ = nullptr;
+};
+
+// Facts about a new superclass that the policy needs: whether it extends the
+// old superclass (widening) or the target, and the final methods that classes
+// between it and the old superclass declare, as far as the target may override them.
+jvmtiError DescribeSuperclass(JNIEnv* jni, jclass target, jclass superclass,
+                              structural_policy::NewSuperclass* output, std::string* error) {
+  LocalReference old_superclass(jni);
+  old_superclass.value = jni->GetSuperclass(target);
+  output->extends_target = jni->IsAssignableFrom(superclass, target);
+  output->extends_old_superclass = old_superclass.value &&
+      jni->IsAssignableFrom(superclass, static_cast<jclass>(old_superclass.value)) &&
+      !jni->IsSameObject(superclass, old_superclass.value);
+  if (!output->extends_old_superclass || output->extends_target) return JVMTI_ERROR_NONE;
+  LocalReference current(jni);
+  current.value = jni->NewLocalRef(superclass);
+  while (current.value && !jni->IsSameObject(current.value, old_superclass.value)) {
+    jclass klass = static_cast<jclass>(current.value);
+    std::vector<evolution::Member> methods;
+    const int read = live_schema::ReadLiveMethods(snapshot_env, klass, &methods, error);
+    if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
+    for (const auto& method : methods) {
+      const bool overridable = (method.access & (evolution::kAccPublic | evolution::kAccProtected)) ||
+          output->same_runtime_package;
+      if (Virtual(method) && (method.access & evolution::kAccFinal) && overridable)
+        output->final_methods.insert({method.name, method.descriptor});
+    }
+    jclass next = jni->GetSuperclass(klass);
+    jni->DeleteLocalRef(current.value);
+    current.value = next;
+  }
+  return JVMTI_ERROR_NONE;
+}
+
+// Reads the submitted definition and resolves the types it newly names.
+jvmtiError ResolveNewTypes(JNIEnv* jni, const jvmtiClassDefinition& definition, Batch* batch,
+                           Snapshot* snapshot, std::string* error) {
   evolution::ClassSchema incoming;
   std::string unreadable;
   const size_t size = definition.class_byte_count > 0 ? definition.class_byte_count : 0;
@@ -239,49 +330,31 @@ jvmtiError ResolveAddedInterfaces(JNIEnv* jni, const jvmtiClassDefinition& defin
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)
-    if (std::find(before.begin(), before.end(), descriptor) == before.end() &&
-        descriptor.size() > 2 && descriptor.front() == 'L' && descriptor.back() == ';')
+    if (std::find(before.begin(), before.end(), descriptor) == before.end())
       added.push_back(descriptor);
-  if (added.empty()) return JVMTI_ERROR_NONE;
-  LocalReference loader(jni);
-  jvmtiError result = snapshot_env->GetClassLoader(definition.klass, &loader.value);
-  if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
-  LocalReference class_class(jni);
-  class_class.value = jni->FindClass("java/lang/Class");
-  const jmethodID for_name = class_class.value ? jni->GetStaticMethodID(
-      static_cast<jclass>(class_class.value), "forName",
-      "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
-  if (!for_name) {
-    jni->ExceptionClear();
-    *error = "Class.forName unavailable";
-    return JVMTI_ERROR_INTERNAL;
-  }
+  const bool new_superclass = incoming.superclass != snapshot->live.superclass;
+  if (added.empty() && !new_superclass) return JVMTI_ERROR_NONE;
+  TypeResolver resolver(jni, definition.klass);
+  jvmtiError result = resolver.Init(error);
+  if (result != JVMTI_ERROR_NONE) return result;
   for (const auto& descriptor : added) {
-    std::string name = descriptor.substr(1, descriptor.size() - 2);
-    std::replace(name.begin(), name.end(), '/', '.');
-    LocalReference binary_name(jni), resolved(jni), resolved_loader(jni);
-    binary_name.value = jni->NewStringUTF(name.c_str());
-    if (binary_name.value)
-      resolved.value = jni->CallStaticObjectMethod(static_cast<jclass>(class_class.value), for_name,
-                                                   binary_name.value, JNI_FALSE, loader.value);
-    if (jni->ExceptionCheck()) jni->ExceptionClear();
-    if (!resolved.value) continue;
-    result = snapshot_env->GetClassLoader(static_cast<jclass>(resolved.value),
-                                          &resolved_loader.value);
-    if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
-    jobject root = jni->NewGlobalRef(resolved.value);
-    if (!root) {
-      jni->ExceptionClear();
-      *error = "cannot retain an added interface";
-      return JVMTI_ERROR_OUT_OF_MEMORY;
-    }
-    batch->interface_roots.push_back(root);
+    jclass resolved = nullptr;
     structural_policy::ResolvedType type;
-    type.same_runtime_package = Package(descriptor) == Package(snapshot->live.descriptor) &&
-        jni->IsSameObject(resolved_loader.value, loader.value);
+    result = resolver.Resolve(descriptor, snapshot->live.descriptor, batch, &resolved,
+                              &type.same_runtime_package, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+    if (!resolved) continue;
     snapshot->hierarchy.added_interfaces[descriptor] = type;
-    snapshot->interface_classes[descriptor] = static_cast<jclass>(root);
+    snapshot->interface_classes[descriptor] = resolved;
   }
+  if (!new_superclass) return JVMTI_ERROR_NONE;
+  structural_policy::NewSuperclass superclass;
+  result = resolver.Resolve(incoming.superclass, snapshot->live.descriptor, batch,
+                            &snapshot->superclass_class, &superclass.same_runtime_package, error);
+  if (result != JVMTI_ERROR_NONE || !snapshot->superclass_class) return result;
+  result = DescribeSuperclass(jni, definition.klass, snapshot->superclass_class, &superclass, error);
+  if (result != JVMTI_ERROR_NONE) return result;
+  snapshot->hierarchy.new_superclass = std::move(superclass);
   return JVMTI_ERROR_NONE;
 }
 
@@ -332,9 +405,19 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
-    result = ResolveAddedInterfaces(jni, definitions[i], &batch, &snapshot, &error);
+    result = ResolveNewTypes(jni, definitions[i], &batch, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
+  }
+  // ART recreates a target's subclasses under its new class and treats each
+  // target's old subclasses as its own; a superclass change cannot share that.
+  for (auto& [klass, snapshot] : batch.classes) {
+    if (!snapshot.hierarchy.new_superclass) continue;
+    for (const auto& [other, ignored] : batch.classes)
+      if (!jni->IsSameObject(klass, other) &&
+          (jni->IsAssignableFrom(klass, other) || jni->IsAssignableFrom(other, klass) ||
+           jni->IsAssignableFrom(snapshot.superclass_class, other)))
+        snapshot.hierarchy.new_superclass->related_in_batch = true;
   }
   LocalClasses loaded(snapshot_env, jni);
   result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
@@ -392,9 +475,17 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
     if (method_retirement::ClassAccess(self, snapshot.interface_classes.at(descriptor), &access))
       type.access = access;
   }
+  if (auto& superclass = snapshot.hierarchy.new_superclass) {
+    uint32_t access = 0;
+    superclass->access.reset();
+    if (method_retirement::ClassAccess(self, snapshot.superclass_class, &access))
+      superclass->access = access;
+  }
   abilities.field_retirement =
       abilities.member_mapping && method_retirement::FieldRetirementAvailable();
   abilities.instance_check = method_retirement::Available();
+  abilities.superclass_change =
+      abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities);
   if (decision.error != JVMTI_ERROR_NONE) {
@@ -412,6 +503,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
     method_retirement::RequireMemberMapping();
   if (decision.requires_no_instances)
     method_retirement::RequireNoInstances(self, incoming.descriptor);
+  if (decision.superclass_changed)
+    method_retirement::ChangeSuperclass(self, snapshot.superclass_class, incoming.descriptor);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     current_batch->retires_members = true;
   current_batch->decisions.emplace(self, std::move(decision));
@@ -549,7 +642,8 @@ std::string Capabilities() {
   const std::string field_retirement = fields ? "true" : "false";
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
-      ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement +
+      ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
+          (methods && method_retirement::SuperclassChangeAvailable() ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +

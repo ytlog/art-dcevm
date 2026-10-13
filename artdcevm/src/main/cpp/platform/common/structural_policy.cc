@@ -92,6 +92,49 @@ Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
   }
   return {};
 }
+// AllocateNewClassObject links the new class under the superclass the engine
+// supplies; LinkClass alone would fail with a link error for a final or
+// inaccessible superclass. Narrowing is unsupported: verified code still
+// treats instances as every old supertype.
+Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
+                         const LoadedHierarchy& hierarchy, const Abilities& abilities) {
+  const std::string& name = incoming.superclass;
+  if (!hierarchy.new_superclass)
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "new superclass cannot be resolved: " + name);
+  const NewSuperclass& superclass = *hierarchy.new_superclass;
+  if (!superclass.access)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "new superclass cannot be checked without a verified class layout: " + name);
+  const uint32_t access = *superclass.access;
+  if (access & acc::kAccInterface)
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "new superclass is an interface: " + name);
+  if (access & acc::kAccFinal)
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "new superclass is final: " + name);
+  if (!(access & acc::kAccPublic) && !superclass.same_runtime_package)
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "new superclass is inaccessible: " + name);
+  if (superclass.extends_target)
+    return Reject(JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION, "new superclass extends the class: " + name);
+  if (!superclass.extends_old_superclass)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "new superclass does not extend " + live.superclass + " (narrowing unsupported)");
+  if (!abilities.member_mapping || !abilities.superclass_change)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "superclass change requires the engine's member mapping and verifier redirect");
+  if (superclass.related_in_batch)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "superclass change shares the batch with a related class");
+  for (const auto& m : incoming.methods)
+    if (Virtual(MethodModifiers(m.access)) && !Initializer(m.name) &&
+        superclass.final_methods.count({m.name, m.descriptor}))
+      return Reject(JVMTI_ERROR_FAILS_VERIFICATION,
+                    "method overrides a final method of the new superclass: " + Describe(m));
+  for (const auto& key : hierarchy.visible)
+    if (superclass.final_methods.count(key))
+      return Reject(JVMTI_ERROR_FAILS_VERIFICATION,
+                    "loaded subclass overrides a final method of the new superclass: " +
+                        key.first + key.second);
+  return {};
+}
 }  // namespace
 
 uint32_t ClassModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
@@ -108,8 +151,11 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                   const LoadedHierarchy& hierarchy, const Abilities& abilities) {
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
-  if (live.superclass != incoming.superclass)
-    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "superclass changed");
+  const bool superclass_changed = live.superclass != incoming.superclass;
+  if (superclass_changed) {
+    Decision superclass = CheckSuperclass(live, incoming, hierarchy, abilities);
+    if (superclass.error != JVMTI_ERROR_NONE) return superclass;
+  }
   Decision interfaces = CheckInterfaces(live, incoming, hierarchy);
   if (interfaces.error != JVMTI_ERROR_NONE) return interfaces;
   // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
@@ -132,9 +178,10 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
 
   Decision decision;
   decision.requires_no_instances = becomes_abstract;
+  decision.superclass_changed = superclass_changed;
   // Only a new Class object carries the new flags or interface table: take
   // ART's structural path.
-  if ((class_changed & ~kAccSuper) || live.interfaces != incoming.interfaces)
+  if ((class_changed & ~kAccSuper) || superclass_changed || live.interfaces != incoming.interfaces)
     decision.methods_structural = true;
   std::map<std::tuple<std::string, std::string, bool>, uint32_t> new_fields;
   for (const auto& f : incoming.fields)

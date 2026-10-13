@@ -20,4 +20,8 @@ inline constexpr NamedSymbol kEncodeFieldIdHandleWithClass{Library::kArt, "_ZN3a
 // guarded MethodHandleInvokeExact. Android 11/12 transformers use
 // invoke-polymorphic, so its absence leaves no unguarded path.
 inline constexpr NamedSymbol kMethodHandleInvokeExactWithFrame{Library::kArt, "_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE", SymbolTable::kAnyNamed};
+// ClassLinker::FindClass by descriptor. Android 16 added the length
+// parameter; every collected runtime has at least one of the two.
+inline constexpr NamedSymbol kFindClass{Library::kArt, "_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kFindClassWithLength{Library::kArt, "_ZN3art11ClassLinker9FindClassEPNS_6ThreadEPKcmNS_6HandleINS_6mirror11ClassLoaderEEE"};
 }  // namespace artdcevm::symbols::method_retirement
