@@ -83,6 +83,12 @@ thread_local std::vector<const void*> retired_in_update;
 // Old classes' field-array slots swapped for the copy phase of one Update.
 thread_local std::vector<std::pair<uint64_t*, uint64_t>> swapped_field_arrays;
 thread_local std::vector<std::pair<uint32_t*, uint32_t>> swapped_superclasses;
+// Old native methods whose new counterpart is gone or no longer native.
+struct HiddenNative {
+  std::atomic<uint32_t>* access_flags;
+  void** quick_entry;
+};
+thread_local std::vector<std::pair<HiddenNative, void*>> hidden_natives;
 // JVMTI-requested field IDs and their ArtFields, while resolving placeholders.
 thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
 
@@ -228,6 +234,11 @@ struct MappingPlan {
   // one: while ART copies fields it pairs the old and new superclass chains
   // level by level, so the new class temporarily names the old superclass.
   bool superclass_changed = false;
+  // For each old native method, UpdateClassStructurally copies the JNI entry
+  // into the new method found by name (ti_redefine.cc, 11--17): a deleted one
+  // finds nothing or an inherited method, a Java replacement keeps other data
+  // there. These old methods are shown as non-native for that copy only.
+  std::vector<HiddenNative> hidden_natives;
   std::vector<std::pair<ArtField*, ArtField*>> fields;
   std::vector<RetiredFieldPlan> retired_fields;
   std::vector<FieldArraySwap> field_swaps;
@@ -441,6 +452,10 @@ template <typename Class, typename Method> struct Layout {
         if (declared && candidate->declaring_class != Reference(new_class)) continue;
         if (same_method(old_method, candidate)) { replacement = candidate; break; }
       }
+      constexpr uint32_t kNative = evolution::kAccNative;
+      if ((old_method->access_flags.load() & kNative) &&
+          (!replacement || !(static_cast<Method*>(replacement)->access_flags.load() & kNative)))
+        plan->hidden_natives.push_back({&old_method->access_flags, &old_method->quick_entry});
       if (replacement) {
         plan->methods.push_back({old_method, replacement, MethodMapping::kKept});
       } else if (declared) {
@@ -707,6 +722,13 @@ void RestoreFieldArrays() {
   swapped_field_arrays.clear();
   for (const auto& [slot, original] : swapped_superclasses) *slot = original;
   swapped_superclasses.clear();
+  // ART skipped these in its JNI-entry copy, but also gave them the obsolete
+  // stub; a native method's entry sizes its active frames for stack walks.
+  for (const auto& [method, entry] : hidden_natives) {
+    method.access_flags->fetch_or(evolution::kAccNative);
+    *method.quick_entry = entry;
+  }
+  hidden_natives.clear();
 }
 
 void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
@@ -738,6 +760,10 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
     // class's superclass. The new superclass extends the old one and shares
     // its field layout, so pairing the old superclass chain with itself copies
     // every inherited field; the new superclass's own fields stay zero.
+    for (const HiddenNative& method : plan->hidden_natives) {
+      hidden_natives.emplace_back(method, *method.quick_entry);
+      method.access_flags->fetch_and(~evolution::kAccNative);
+    }
     if (plan->superclass_changed) {
       uint32_t* slot = layout->superclass(data.Classes(false)->Get<void>(0));
       swapped_superclasses.emplace_back(slot, *slot);
@@ -937,25 +963,33 @@ jmethodID no_such_method_init = nullptr;
 jmethodID invocation_target_init = nullptr;
 constexpr char kRetiredMessage[] = "method retired by structural redefinition";
 
+// A cached reflective Method or Constructor whose target retired: throw, as
+// for a failing target, InvocationTargetException wrapping NoSuchMethodError.
+bool RejectReflected(JNIEnv* env, jobject executable) {
+  if (!AnyRetired()) return false;
+  jmethodID id = jni->FromReflectedMethod(env, executable);
+  if (!id || !ContainsId(id)) return false;
+  jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+  jstring message = jni->NewStringUTF(env, kRetiredMessage);
+  jobject cause = message ? jni->NewObject(env, no_such_method_error, no_such_method_init, message)
+                          : nullptr;
+  jobject wrapped = cause ? jni->NewObject(env, invocation_target_exception,
+                                            invocation_target_init, cause)
+                          : nullptr;
+  if (wrapped) jni->Throw(env, static_cast<jthrowable>(wrapped));
+  for (jobject local : {static_cast<jobject>(message), cause, wrapped})
+    if (local) jni->DeleteLocalRef(env, local);
+  return true;
+}
 jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray args) {
-  if (AnyRetired()) {
-    jmethodID id = jni->FromReflectedMethod(env, method);
-    if (id && ContainsId(id)) {
-      jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
-      // Method.invoke reports a failing target as InvocationTargetException.
-      jstring message = jni->NewStringUTF(env, kRetiredMessage);
-      jobject cause = message ? jni->NewObject(env, no_such_method_error, no_such_method_init, message)
-                              : nullptr;
-      jobject wrapped = cause ? jni->NewObject(env, invocation_target_exception,
-                                                invocation_target_init, cause)
-                              : nullptr;
-      if (wrapped) jni->Throw(env, static_cast<jthrowable>(wrapped));
-      for (jobject local : {static_cast<jobject>(message), cause, wrapped})
-        if (local) jni->DeleteLocalRef(env, local);
-      return nullptr;
-    }
-  }
-  return original_method_invoke(env, method, receiver, args);
+  return RejectReflected(env, method) ? nullptr
+                                      : original_method_invoke(env, method, receiver, args);
+}
+// A retired constructor would run its old code on an object of the new class.
+jobject (*original_constructor_new_instance)(JNIEnv*, jobject, jobjectArray) = nullptr;
+jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) {
+  return RejectReflected(env, constructor) ? nullptr
+                                           : original_constructor_new_instance(env, constructor, args);
 }
 
 // JNI field access with a retired or placeholder field ID.
@@ -1058,6 +1092,21 @@ ARTDCEVM_JNI_RESULT_CALLS(jlong, Long)
 ARTDCEVM_JNI_RESULT_CALLS(jfloat, Float)
 ARTDCEVM_JNI_RESULT_CALLS(jdouble, Double)
 #undef ARTDCEVM_JNI_RESULT_CALLS
+
+jobject NewObject(JNIEnv* env, jclass klass, jmethodID id, ...) {
+  if (RejectJni(env, id)) return nullptr;
+  va_list args;
+  va_start(args, id);
+  jobject result = jni->NewObjectV(env, klass, id, args);
+  va_end(args);
+  return result;
+}
+jobject NewObjectV(JNIEnv* env, jclass klass, jmethodID id, va_list args) {
+  return RejectJni(env, id) ? nullptr : jni->NewObjectV(env, klass, id, args);
+}
+jobject NewObjectA(JNIEnv* env, jclass klass, jmethodID id, const jvalue* args) {
+  return RejectJni(env, id) ? nullptr : jni->NewObjectA(env, klass, id, args);
+}
 
 void CallVoidMethod(JNIEnv* env, jobject object, jmethodID id, ...) {
   if (RejectJni(env, id)) return;
@@ -1170,6 +1219,9 @@ bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
   ARTDCEVM_JNI_FIELD_ENTRIES(Double)
 #undef ARTDCEVM_JNI_FIELD_ENTRIES
   guarded_jni.ToReflectedField = ToReflectedField;
+  guarded_jni.NewObject = NewObject;
+  guarded_jni.NewObjectV = NewObjectV;
+  guarded_jni.NewObjectA = NewObjectA;
   if (jvmti->SetJNIFunctionTable(&guarded_jni) != JVMTI_ERROR_NONE)
     return Fail(failure, "SetJNIFunctionTable failed");
   return true;
@@ -1228,6 +1280,18 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     return;
   }
   resolved.push_back({method_invoke, Fn(MethodInvoke), Out(&original_method_invoke), method_invoke_name});
+  void* new_instance = nullptr;
+  const char* new_instance_name = nullptr;
+  for (const auto& symbol : kConstructorNewInstanceNative) {
+    if ((new_instance = symbols::Find(symbol))) { new_instance_name = symbol.name; break; }
+  }
+  if (!new_instance) {
+    *note = "method retirement unavailable: missing Constructor.newInstance0 native entry";
+    Report("unavailable");
+    return;
+  }
+  resolved.push_back({new_instance, Fn(ConstructorNewInstance),
+                      Out(&original_constructor_new_instance), new_instance_name});
   // Field IDs: one of ART's two EncodeFieldId pairs. Without either, field
   // retirement stays off and methods still retire.
   struct EncodePair {

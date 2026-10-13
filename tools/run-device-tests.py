@@ -37,9 +37,12 @@ SCENARIOS = (
     ("class-abstract", ["candidate-abstract"], 0),
     ("class-final-subclassed", ["modifier-class-final"], 70),
     ("atomic-method-retire-class-interface", ["methods-delete", "class-interface"], 70),
-    ("native-method-delete", ["methods-native-delete"], 67),
-    ("constructor-delete", ["methods-constructor-delete"], 67),
-    ("abstract-method-delete", ["methods-abstract-delete"], 67),
+    ("native-change", ["native-change"], 0),
+    ("constructor-delete", ["constructor-delete"], 0),
+    ("abstract-method-delete", ["methods-abstract-delete"], 0),
+    ("abstract-method-make-abstract", ["methods-abstract-concrete"], 0),
+    ("abstract-method-restore", ["methods-abstract-original"], 0),
+    ("clinit-delete", ["clinit-delete"], 0),
     ("methods-retire", ["methods-delete"], 0),
     ("methods-restore", ["methods-original"], 0),
     ("methods-retire-again", ["methods-delete"], 0),
@@ -64,7 +67,8 @@ SCENARIOS = (
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
 # flags of an added interface.
-MAPPED_SCENARIOS = {"hierarchy", "methods-retire", "methods-restore", "methods-retire-again",
+MAPPED_SCENARIOS = {"hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
+                    "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
                     "methods-restore-again", "copied-default-add", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
@@ -194,12 +198,26 @@ REQUIRED_CHECKS = {
     "atomic-method-retire-class-interface": {
         **METHOD_BASELINE_CHECKS, **CLASS_FINAL_CHECKS,
         "unchangedStaticCall": 82, "unchangedVirtualCall": 63, "unchangedSignatureCall": 64},
-    "native-method-delete": {**METHOD_FIELD_CHECKS, "nativeStillDeclared": True,
-                              "unchangedDirectCall": 61, "unchangedVirtualCall": 63},
-    "constructor-delete": {**METHOD_FIELD_CHECKS, "constructorStillDeclared": True,
-                            "unchangedDirectCall": 61},
-    "abstract-method-delete": {"abstractStillDeclared": True, "oldConcreteValue": 17,
-                                "oldAbstractValue": 19, "newConcreteValue": 17, "staticMarker": 17},
+    "native-change": {
+        "other": 6, "toJavaCall": 95, "toJavaCachedReflection": 95, "toJavaIsNative": False,
+        "removedNativeLookup": "java.lang.NoSuchMethodException",
+        "removedNativeCachedReflection":
+            "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "removedNativeCall": "java.lang.NoSuchMethodError"},
+    "constructor-delete": {
+        "jniBefore": 4, "oldValue": 9, "newDefault": 2,
+        "removedLookup": "java.lang.NoSuchMethodException",
+        "cachedConstructor": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "cachedJni": "java.lang.NoSuchMethodError", "bytecodeNew": "java.lang.NoSuchMethodError"},
+    "abstract-method-delete": {
+        "callBefore": 19, "ownValue": 19, "concreteValue": 18, "staticMarker": 17,
+        "removedLookup": "java.lang.NoSuchMethodException",
+        "cachedReflection": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "callThroughRemoved": "java.lang.NoSuchMethodError"},
+    "abstract-method-make-abstract": {"concreteIsAbstract": True,
+                                      "unimplemented": "java.lang.AbstractMethodError", "ownValue": 19},
+    "abstract-method-restore": {"concreteValue": 17, "callRestored": 19, "newChild": 17},
+    "clinit-delete": {"valueBefore": 41, "valueAfter": 41, "computeAfter": 41},
     "methods-retire": METHOD_RETIRE_CHECKS,
     "methods-restore": METHOD_RESTORE_CHECKS,
     "methods-retire-again": METHOD_RETIRE_CHECKS,
@@ -243,9 +261,6 @@ UNCHANGED_CHECKS = {
     "class-final-subclassed": ("unchangedMembers",),
     "atomic-method-retire-class-interface": ("unchangedMethodMembers", "unchangedMembers"),
     "field-retire": ("unchangedMembers", "unchangedValues"),
-    "native-method-delete": ("unchangedMembers",),
-    "constructor-delete": ("unchangedMembers",),
-    "abstract-method-delete": ("unchangedMembers",),
     "interface-hidden": ("unchangedMembers",),
     "interface-class": ("unchangedMembers",),
     "interface-missing": ("unchangedMembers",),

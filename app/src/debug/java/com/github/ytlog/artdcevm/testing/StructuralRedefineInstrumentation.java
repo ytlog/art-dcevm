@@ -8,7 +8,13 @@ import android.os.Bundle;
 import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
+import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
+import com.github.ytlog.artdcevm.fixture.ClinitSubject;
+import com.github.ytlog.artdcevm.fixture.ConstructorCaller;
+import com.github.ytlog.artdcevm.fixture.ConstructorSubject;
+import com.github.ytlog.artdcevm.fixture.NativeCaller;
+import com.github.ytlog.artdcevm.fixture.NativeSubject;
 import com.github.ytlog.artdcevm.fixture.ClassFinalSubject;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
@@ -587,6 +593,84 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         scenario.check("childDescribe", "middle", child.describe());
     }
 
+    // Native, constructor, abstract and initializer declarations retire like
+    // other methods; native -> Java and abstract <-> concrete change kinds.
+    private void runMethodKindScenarios() throws Exception {
+        NativeSubject natives = new NativeSubject();
+        Method cachedNative = NativeSubject.class.getDeclaredMethod("nativeValue");
+        Method cachedToJava = NativeSubject.class.getDeclaredMethod("nativeToJava");
+        runScenario("native-change", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NativeSubject.class}, "native-change");
+            scenario.check("other", 6, natives.other());
+            scenario.check("toJavaCall", 95, NativeCaller.nativeToJava(natives));
+            scenario.check("toJavaCachedReflection", 95, cachedToJava.invoke(natives));
+            scenario.check("toJavaIsNative", false, Modifier.isNative(
+                    NativeSubject.class.getDeclaredMethod("nativeToJava").getModifiers()));
+            scenario.expectError("removedNativeLookup", NoSuchMethodException.class,
+                    () -> NativeSubject.class.getDeclaredMethod("nativeValue"));
+            scenario.expectReflectionError("removedNativeCachedReflection",
+                    () -> cachedNative.invoke(natives));
+            scenario.expectError("removedNativeCall", NoSuchMethodError.class,
+                    () -> NativeCaller.nativeValue(natives));
+        });
+        ConstructorSubject constructed = new ConstructorSubject(9);
+        java.lang.reflect.Constructor<ConstructorSubject> cachedConstructor =
+                ConstructorSubject.class.getDeclaredConstructor(int.class);
+        StandardJvmtiClient.cacheConstructor(ConstructorSubject.class, "(I)V");
+        runScenario("constructor-delete", 0, scenario -> {
+            scenario.check("jniBefore", 4,
+                    ((ConstructorSubject) StandardJvmtiClient.newObjectCached(4)).value);
+            scenario.redefine(new Class<?>[]{ConstructorSubject.class}, "constructor-delete");
+            scenario.check("oldValue", 9, constructed.value);
+            scenario.check("newDefault", 2, new ConstructorSubject().value);
+            scenario.expectError("removedLookup", NoSuchMethodException.class,
+                    () -> ConstructorSubject.class.getDeclaredConstructor(int.class));
+            scenario.expectReflectionError("cachedConstructor", () -> cachedConstructor.newInstance(7));
+            scenario.expectError("cachedJni", NoSuchMethodError.class,
+                    () -> StandardJvmtiClient.newObjectCached(7));
+            scenario.expectError("bytecodeNew", NoSuchMethodError.class,
+                    () -> ConstructorCaller.create(5));
+        });
+        AbstractMethodChild abstractChild = new AbstractMethodChild();
+        Method cachedAbstract = AbstractMethodSubject.class.getDeclaredMethod("abstractValue");
+        runAbstractScenarios(abstractChild, cachedAbstract);
+        int initialized = ClinitSubject.value;
+        runScenario("clinit-delete", 0, scenario -> {
+            scenario.check("valueBefore", 41, initialized);
+            scenario.redefine(new Class<?>[]{ClinitSubject.class}, "clinit-delete");
+            scenario.check("valueAfter", 41, ClinitSubject.value);
+            scenario.check("computeAfter", 41, ClinitSubject.compute());
+        });
+    }
+
+    private void runAbstractScenarios(AbstractMethodChild child, Method cachedAbstract) throws Exception {
+        runScenario("abstract-method-delete", 0, scenario -> {
+            scenario.check("callBefore", 19, AbstractCaller.abstractValue(child));
+            scenario.redefine(new Class<?>[]{AbstractMethodSubject.class}, "methods-abstract-delete");
+            scenario.check("ownValue", 19, child.abstractValue());
+            scenario.check("concreteValue", 18, child.concreteValue());
+            scenario.check("staticMarker", 17, AbstractMethodSubject.marker);
+            scenario.expectError("removedLookup", NoSuchMethodException.class,
+                    () -> AbstractMethodSubject.class.getDeclaredMethod("abstractValue"));
+            scenario.expectReflectionError("cachedReflection", () -> cachedAbstract.invoke(child));
+            scenario.expectError("callThroughRemoved", NoSuchMethodError.class,
+                    () -> AbstractCaller.abstractValue(child));
+        });
+        runScenario("abstract-method-make-abstract", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractMethodSubject.class}, "methods-abstract-concrete");
+            scenario.check("concreteIsAbstract", true, Modifier.isAbstract(
+                    AbstractMethodSubject.class.getDeclaredMethod("concreteValue").getModifiers()));
+            scenario.expectError("unimplemented", AbstractMethodError.class, child::concreteValue);
+            scenario.check("ownValue", 19, child.abstractValue());
+        });
+        runScenario("abstract-method-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractMethodSubject.class}, "methods-abstract-original");
+            scenario.check("concreteValue", 17, child.concreteValue());
+            scenario.check("callRestored", 19, AbstractCaller.abstractValue(child));
+            scenario.check("newChild", 17, new AbstractMethodChild().concreteValue());
+        });
+    }
+
     private void runMethodScenarios(ClassFinalSubject classFinal, int classFlags,
             String classSchema) throws Exception {
         MethodSubject subject = new MethodSubject();
@@ -608,35 +692,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("unchangedSignatureCall", 64, MethodCaller.callSignature(subject));
             checkClassFinalUnchanged(scenario, classFinal, classFlags, classSchema);
         });
-        runScenario("native-method-delete", 67, scenario -> {
-            scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-native-delete");
-            scenario.check("unchangedMembers", schema, memberSchema(MethodSubject.class));
-            scenario.check("nativeStillDeclared", true,
-                    Modifier.isNative(MethodSubject.class.getDeclaredMethod("nativeValue").getModifiers()));
-            scenario.check("unchangedDirectCall", 61, subject.throughDirect());
-            scenario.check("unchangedVirtualCall", 63, MethodCaller.callVirtual(subject));
-            checkMethodFields(scenario, subject, reference, staticReference);
-        });
-        runScenario("constructor-delete", 67, scenario -> {
-            scenario.redefine(new Class<?>[]{MethodSubject.class}, "methods-constructor-delete");
-            scenario.check("unchangedMembers", schema, memberSchema(MethodSubject.class));
-            scenario.check("constructorStillDeclared", true,
-                    MethodSubject.class.getDeclaredConstructor() != null);
-            scenario.check("unchangedDirectCall", 61, subject.throughDirect());
-            checkMethodFields(scenario, subject, reference, staticReference);
-        });
-        AbstractMethodChild abstractChild = new AbstractMethodChild();
-        String abstractSchema = memberSchema(AbstractMethodSubject.class);
-        runScenario("abstract-method-delete", 67, scenario -> {
-            scenario.redefine(new Class<?>[]{AbstractMethodSubject.class}, "methods-abstract-delete");
-            scenario.check("unchangedMembers", abstractSchema, memberSchema(AbstractMethodSubject.class));
-            scenario.check("abstractStillDeclared", true, Modifier.isAbstract(
-                    AbstractMethodSubject.class.getDeclaredMethod("abstractValue").getModifiers()));
-            scenario.check("oldConcreteValue", 17, abstractChild.concreteValue());
-            scenario.check("oldAbstractValue", 19, abstractChild.abstractValue());
-            scenario.check("newConcreteValue", 17, new AbstractMethodChild().concreteValue());
-            scenario.check("staticMarker", 17, AbstractMethodSubject.marker);
-        });
+        runMethodKindScenarios();
         for (int cycle = 0; cycle < 2; cycle++) {
             final MethodTargets cached = cycle == 0 ? targets : new MethodTargets();
             String suffix = cycle == 0 ? "" : "-again";

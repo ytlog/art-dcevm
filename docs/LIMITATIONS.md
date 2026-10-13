@@ -1,6 +1,6 @@
 # 能力限制
 
-Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类 concrete Java 方法的删除与签名替换、字段删除、改类型与 static/实例互换、新增接口、放宽的父类变化，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
+Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在一台 Android 16 / API 36、arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类方法的删除与签名替换（含 native、abstract、构造器与类初始化器）、native 改 Java、abstract 与 concrete 互换、字段删除、改类型与 static/实例互换、新增接口、放宽的父类变化，以及拒绝后的旧定义与批次原子性。其他版本的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
 
 ## 前提限制
 
@@ -14,12 +14,11 @@ Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父�
 
 | 变化 | 错误码 | 计划 |
 | --- | --- | --- |
-| 删除或改签名的方法是 native、abstract、接口声明、构造器或类初始化器 | `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67） | 待定 |
-| native → Java，abstract 相关的方法变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | Phase 4 |
+| 方法在 static 与实例之间变化，或 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 待定（等价于删除旧方法并新增同名方法，可改用不同签名） |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | 不支持 |
 | 移除接口，以及任何失去父类型的父类变化 | 66 | 不支持：已校验代码依赖旧类型关系，见设计文档“收窄不支持” |
 
-方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向（`capabilities()` 的 `superclassWidening`）。
+方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向（`capabilities()` 的 `superclassWidening`）。
 
 ## 语义冲突（各阶段都会拒绝）
 
@@ -28,7 +27,6 @@ Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父�
 - 类新增 abstract，而该类自身仍有实例（70）；子类的实例不受影响。
 - 新增的接口无法经目标类的加载器解析、不是接口，或对目标不可访问（`JVMTI_ERROR_FAILS_VERIFICATION`，62）。
 - 新父类无法解析、是接口、是 final、不可访问，或新定义与已加载子类覆写了它的 final 方法（62）；新父类扩展了该类本身（`JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION`，61）；新父类不扩展原父类（66，收窄）；同一批次还重定义了该类的父类、子类或新父类链上的类（66）。
-- 变为 abstract 后，存活实例或已加载子类将继承未实现的抽象方法。
 - 退役不可用时，新增或改变访问级别的方法可能顶替已加载子类的接口 default/miranda 拷贝。
 
 ## 父类变化的语义
@@ -44,6 +42,13 @@ Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父�
 ## 新增接口的语义
 
 - 已有实例与已加载子类的实例随即成为新接口的实例。新增的接口在重定义前经目标类的加载器加载但不初始化，其静态初始化照常在首次需要时执行；该加载器随之成为这个接口的发起加载器。
+
+## 方法种类的语义
+
+- 删除的 native 方法与其他方法一样退役；正在执行它的线程继续执行。native 改为 Java 后，已有的调用点、缓存的反射对象与 JNI 方法 ID 执行新的 Java 方法体。
+- 方法变为 abstract 后，没有实现它的子类实例被调用时抛 `AbstractMethodError`。
+- 删除的构造器：字节码 `new`、JNI `NewObject*` 抛 `NoSuchMethodError`，缓存的 `Constructor.newInstance` 抛包装它的 `InvocationTargetException`。
+- 删除类初始化器不影响已初始化的类，静态字段保留原值。
 
 ## 退役成员的语义
 

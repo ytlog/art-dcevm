@@ -69,7 +69,12 @@ int main(int argc, char** argv) {
     }
     auto native = live; native.methods[0].access |= acc::kAccNative;
     Reject(native, live, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
-    for (uint32_t flags : {acc::kAccAbstract, acc::kAccStatic, uint32_t{0x80}, uint32_t{0x800}}) {
+    Require(policy::Evaluate(native, live, {}, {true}).error == JVMTI_ERROR_NONE,
+            "native -> Java needs the engine's commit");
+    next = live; next.methods[0].access |= acc::kAccAbstract;
+    Accept(live, next, false, true);  // Concrete -> abstract.
+    Accept(next, live, false, true);  // Abstract -> concrete.
+    for (uint32_t flags : {acc::kAccStatic, uint32_t{0x80}, uint32_t{0x800}}) {
       next = live; next.methods[0].access |= flags;
       Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
     }
@@ -123,10 +128,6 @@ int main(int argc, char** argv) {
     Require(policy::Evaluate(live, next, {}, {true}).error ==
             JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
             "method retirement incorrectly enabled field type change");
-    next = live; next.methods.erase(next.methods.begin() + 1);
-    Require(policy::Evaluate(live, next, {}, {true}).error ==
-            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-            "constructor retirement must remain rejected");
     {
       // Field retirement needs both the owned mapping and the field guards.
       auto fields = live;
@@ -154,12 +155,15 @@ int main(int argc, char** argv) {
       Require(policy::Evaluate(fields, fields, {}, {true, true}).retired_fields.empty(),
               "unchanged fields reported as retired");
     }
-    for (uint32_t unsupported : {acc::kAccNative, acc::kAccAbstract}) {
-      auto restricted = live; restricted.methods[0].access |= unsupported;
-      next = restricted; next.methods.erase(next.methods.begin());
-      Require(policy::Evaluate(restricted, next, {}, {true}).error ==
+    for (uint32_t kind : {acc::kAccNative, acc::kAccAbstract}) {
+      auto declared = live; declared.methods[0].access |= kind;
+      next = declared; next.methods.erase(next.methods.begin());
+      const auto retired = policy::Evaluate(declared, next, {}, {true});
+      Require(retired.error == JVMTI_ERROR_NONE && retired.retired_methods.size() == 1,
+              "native or abstract method retirement must be accepted with the mapping");
+      Require(policy::Evaluate(declared, next, {}).error ==
               JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-              "native or abstract method retirement must remain rejected");
+              "retirement still needs the mapping");
     }
     auto interface_schema = live;
     interface_schema.access |= acc::kAccInterface;
@@ -170,9 +174,11 @@ int main(int argc, char** argv) {
     auto initializer = live;
     initializer.methods.push_back({"<clinit>", "()V", acc::kAccStatic});
     next = initializer; next.methods.pop_back();
-    Require(policy::Evaluate(initializer, next, {}, {true}).error ==
-            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-            "class initializer retirement must remain rejected");
+    Require(policy::Evaluate(initializer, next, {}, {true}).error == JVMTI_ERROR_NONE,
+            "class initializer retirement must be accepted");
+    next = live; next.methods.pop_back();  // <init>()V
+    Require(policy::Evaluate(live, next, {}, {true}).retired_methods.size() == 1,
+            "constructor retirement must be accepted");
     // Superclass: only a resolved, accessible, non-final class extending the
     // old superclass, with the engine's member mapping.
     {

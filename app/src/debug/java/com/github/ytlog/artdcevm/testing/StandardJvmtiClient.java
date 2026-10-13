@@ -36,6 +36,9 @@ final class StandardJvmtiClient {
     static native long readCachedField(Object receiver, int field);
     static native void writeCachedField(Object receiver, int field, long value);
     static native long readReflectedField(java.lang.reflect.Field field, Object receiver, int kind);
+    /** Resolve one constructor ID before redefinition; newObjectCached(int) reuses it. */
+    static native void cacheConstructor(Class<?> type, String signature);
+    static native Object newObjectCached(int value);
     /** Whether a class with this JVMTI signature is loaded; never loads it. */
     static native boolean isLoaded(String signature);
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */

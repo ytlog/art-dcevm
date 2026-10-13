@@ -275,3 +275,32 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_isLoaded(JNIEnv* jni,
   jni->ReleaseStringUTFChars(signature, wanted);
   return found ? JNI_TRUE : JNI_FALSE;
 }
+
+namespace {
+jclass constructor_class = nullptr;
+jmethodID constructor_id = nullptr;
+}
+
+// Resolve a constructor ID before redefinition; NewObject later reuses it.
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheConstructor(JNIEnv* jni, jclass,
+                                                                             jclass type,
+                                                                             jstring signature) {
+  const char* descriptor = jni->GetStringUTFChars(signature, nullptr);
+  if (!descriptor) return;
+  if (!constructor_class) constructor_class = static_cast<jclass>(jni->NewGlobalRef(type));
+  constructor_id = jni->GetMethodID(type, "<init>", descriptor);
+  jni->ReleaseStringUTFChars(signature, descriptor);
+}
+
+// The table's varargs NewObject with the cached (int) constructor ID.
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_newObjectCached(JNIEnv* jni, jclass,
+                                                                            jint value) {
+  if (!constructor_class || !constructor_id) {
+    jclass error = jni->FindClass("java/lang/IllegalStateException");
+    if (error) jni->ThrowNew(error, "Constructor ID was not cached");
+    return nullptr;
+  }
+  return jni->functions->NewObject(jni, constructor_class, constructor_id, value);
+}

@@ -10,6 +10,11 @@ namespace artdcevm::symbols::method_retirement {
 inline constexpr NamedSymbol kMethodInvokeNative[] = {
     {Library::kArt, "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray", SymbolTable::kAnyNamed},
     {Library::kArt, "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray.__uniq.165753521025965369065708152063621506277", SymbolTable::kAnyNamed}};
+// Constructor.newInstance0's native implementation (java_lang_reflect_Constructor.cc),
+// spelled like Method_invoke above.
+inline constexpr NamedSymbol kConstructorNewInstanceNative[] = {
+    {Library::kArt, "_ZN3artL24Constructor_newInstance0EP7_JNIEnvP8_jobjectP13_jobjectArray", SymbolTable::kAnyNamed},
+    {Library::kArt, "_ZN3artL24Constructor_newInstance0EP7_JNIEnvP8_jobjectP13_jobjectArray.__uniq.114100828369361150012403296395805223021", SymbolTable::kAnyNamed}};
 // JniIdManager::EncodeFieldId overloads. Newer ART adds a Handle<Class>
 // parameter; a runtime has one of the two pairs.
 inline constexpr NamedSymbol kEncodeFieldId{Library::kArt, "_ZN3art3jni12JniIdManager13EncodeFieldIdEPNS_8ArtFieldE"};

@@ -210,8 +210,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& old : live.methods) {
     auto it = new_methods.find({old.name, old.descriptor});
     if (it == new_methods.end()) {
-      if (!owns_member_mapping || (live.access & acc::kAccInterface) ||
-          (old.access & (acc::kAccNative | acc::kAccAbstract)) || Initializer(old.name))
+      // Native, abstract, constructor and initializer declarations retire like
+      // any other; interfaces themselves cannot be redefined by ART.
+      if (!owns_member_mapping || (live.access & acc::kAccInterface))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported method retirement: " + Describe(old));
       decision.methods_structural = true;
@@ -220,8 +221,11 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
-    uint32_t unsupported = changed & ~kMethodAllowed;
-    if (unsupported == acc::kAccNative && (now & acc::kAccNative)) unsupported = 0;  // Java -> native
+    // Abstract <-> concrete and Java <-> native change the method's kind; the
+    // structural path creates the new kind. Native -> Java needs the engine's
+    // commit, which keeps ART from copying the old JNI entry into a Java method.
+    uint32_t unsupported = changed & ~(kMethodAllowed | acc::kAccAbstract);
+    if ((now & acc::kAccNative) || owns_member_mapping) unsupported &= ~acc::kAccNative;
     if (unsupported)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "unsupported method modifier change: " + Describe(old));

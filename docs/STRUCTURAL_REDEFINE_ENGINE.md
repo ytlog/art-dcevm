@@ -140,7 +140,7 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 ### Phase 3 方案 C：方法先行，保留原生提交
 
-方案 C 支持普通类中 concrete Java 方法删除和签名替换；字段守卫可用时还支持字段删除、类型变化与 static/实例互换（见“字段退役”），否则这些变化以 `SCHEMA_CHANGED`（64）拒绝。native、abstract、接口声明、构造器与类初始化器的退役暂以 `METHOD_DELETED`（67）拒绝。类修饰符与层级变化的规则见“Phase 2 校验规则”。
+方案 C 支持普通类中方法的删除和签名替换，包括 native、abstract、构造器与类初始化器（见“方法种类”）；字段守卫可用时还支持字段删除、类型变化与 static/实例互换（见“字段退役”），否则这些变化以 `SCHEMA_CHANGED`（64）拒绝。接口本身不能由 ART 重定义，接口声明的退役仍以 `METHOD_DELETED`（67）拒绝。类修饰符与层级变化的规则见“Phase 2 校验规则”。
 
 实现保留 ART `FinishNewClassAllocations`、`AllocateNewClassObject`、`CollectAndCreateNewInstances` 和 `UpdateClassStructurally`，不接管字段复制、锁字、实例迁移、引用遍历、去优化或缓存失效。`Update` Hook 只设置 visitor 的事务作用域并调用原函数。探测通过的事务一律使用自有映射，以处理没有声明退役、但子类 copied default/miranda 消失的情况；映射在 ART 仍可失败的 `CollectAndCreateNewInstances` 之后预先算好，提交时只写入 ART 的 map。探测未通过的事务使用 ART 原映射，策略已拒绝它无法处理的变化。最终 DEX 策略生成退役声明清单；映射以真实 declaring class 与同名同签名成员区分声明、继承及 copied 成员，被删除的真实旧声明映射到自身并退役，不制造假的成员或偏移。
 
@@ -148,8 +148,15 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 新调用的守卫只放在退役方法仍可能被直接拿到的入口，即缓存的反射对象、JNI ID 和 MethodHandle。普通字节码调用无需守卫：ART 在提交时访问堆中全部 DexCache（含旧类保留的），visitor 代理清除指向退役方法的解析项，重新解析找不到成员就抛 `NoSuchMethodError`；vtable/iftable 只含新方法，线程解释器缓存与 JIT 代码由 ART 清空。设备上逐个去掉 `DoCall<false/true>`、`ArtMethod::Invoke`、`EnterInterpreterFromInvoke` 与 obsolete quick 入口守卫后，包括线程强制解释执行在内的全部用例仍然通过，因此这些守卫已删除。保留的守卫：
 
-- **JNI**：用公开的 JVMTI `SetJNIFunctionTable` 在当前函数表前包装全部 `Call*Method*`（普通、非虚、静态，含 A/V）。退役 ID 只做查表、不解码，直接抛 `NoSuchMethodError`；其余调用转给原表，CheckJNI 开启时原表就是检查表，校验照常。ART 设置覆盖表时会关闭本进程的 Core Platform API 检查（`JNIEnvExt::SetTableOverride`），它只约束平台模块调用方。两个 `EncodeMethodId` 重载记录退役后新编码的索引 ID。
-- **反射**：Hook `Method.invoke` 的 native 实现 `Method_invoke`，在 ART 以旧声明类核对接收者之前，用 JNI `FromReflectedMethod` 识别退役目标，按调用约定抛出包装 `NoSuchMethodError` 的 `InvocationTargetException`。
+- **JNI**：用公开的 JVMTI `SetJNIFunctionTable` 在当前函数表前包装全部 `Call*Method*`（普通、非虚、静态，含 A/V）与 `NewObject`/`NewObjectV`/`NewObjectA`。退役 ID 只做查表、不解码，直接抛 `NoSuchMethodError`；其余调用转给原表，CheckJNI 开启时原表就是检查表，校验照常。ART 设置覆盖表时会关闭本进程的 Core Platform API 检查（`JNIEnvExt::SetTableOverride`），它只约束平台模块调用方。两个 `EncodeMethodId` 重载记录退役后新编码的索引 ID。
+- **反射**：Hook `Method.invoke` 与 `Constructor.newInstance` 的 native 实现（`Method_invoke`、`Constructor_newInstance0`，两种拼写之一存在于每套库），在 ART 以旧声明类核对接收者或为新类分配对象之前，用 JNI `FromReflectedMethod` 识别退役目标，按调用约定抛出包装 `NoSuchMethodError` 的 `InvocationTargetException`。退役构造器若被执行，会在新类的对象上运行旧代码，所以这两处都必须拦截。
+
+### 方法种类
+
+- **native**：ART 的 `UpdateClassStructurally` 对每个旧 native 方法按名称在新类中查找，并把 JNI 入口复制过去，同时假定找到的仍是 native（11–17 相同）。删除 native 方法时找不到（空指针），或找到父类的同名方法；native 改为 Java 时会覆盖 Java 方法的数据字段。计划阶段记下这些旧方法，提交时只在 ART 的复制循环期间去掉它们的 native 标志。同一循环还会把 obsolete 桩写入它们的入口，而 native 方法的入口决定活动帧的大小、供栈遍历使用，所以 visitor 入口处恢复 native 标志与原入口。Java → native 原本就受支持。
+- **abstract**：abstract 声明按普通方法退役；通过它的调用重新解析时抛 `NoSuchMethodError`，子类自己的实现不受影响。concrete ↔ abstract 走结构路径。变为 abstract 后，没有实现它的子类实例被调用时抛 `AbstractMethodError`，与 JVM 链接语义一致。
+- **构造器**：按普通方法退役；字节码 `new` 重新解析时抛 `NoSuchMethodError`，缓存的 `Constructor` 与 JNI 构造器 ID 由上述守卫拒绝。
+- **类初始化器**：已初始化的类不会再执行 `<clinit>`，删除它只是让旧方法退役，静态字段值照常复制。
 - **MethodHandle**：`MethodHandleInvoke`/`MethodHandleInvokeExact` 在分派前读取句柄的 `artFieldOrMethod`。组合句柄在 Android 11/12 经 invoke-polymorphic 回到这两个入口，13 起经 `MethodHandleInvokeExactWithFrame` 调用 `MethodHandleInvokeExact`；该函数存在时也加守卫，以防编译器内联。
 
 已有帧的去优化恢复/Execute 路径不接管，允许活动旧帧完成旧方法体。
@@ -263,7 +270,7 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
 
 - **新增字段**：已有对象取零值或 `null`，不重新执行构造器；新建对象执行新构造器。
 - **删除字段、改类型或 static/实例互换**：字段守卫可用且探测通过时，旧字段退役，新字段从零值或 `null` 开始，兼容字段由 ART 拷贝并保留原值。
-- **删除方法、改签名（方案 C）**：探测通过的事务中普通类 concrete Java 方法的旧目标退役，新访问抛 `NoSuchMethodError`，反射 invoke 包装异常；普通虚调用重新解析，删除覆写后按新 vtable/iftable 落到父类或默认实现。旧活动帧继续旧方法体；恢复只产生新目标。native、abstract、接口声明、构造器/初始化器退役仍拒绝。
+- **删除方法、改签名（方案 C）**：探测通过的事务中普通类 concrete Java 方法的旧目标退役，新访问抛 `NoSuchMethodError`，反射 invoke 包装异常；普通虚调用重新解析，删除覆写后按新 vtable/iftable 落到父类或默认实现。旧活动帧继续旧方法体；恢复只产生新目标。native、abstract、构造器与类初始化器同样退役（见“方法种类”），native 可改为 Java，方法可在 abstract 与 concrete 之间变化；接口声明的退役仍拒绝。
 - **退役字段的引用**：字节码、JNI 与 MethodHandle 抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`、访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。恢复同名字段会产生新字段，旧的缓存引用保持退役。
 - **修饰符**：新类直接使用新 DEX 的修饰符。已解析的调用点与类型引用保留，ART 不对它们重新做访问检查；新的解析按新修饰符检查。
 - **新增接口**：已有实例和已加载子类的实例随即成为该接口的实例，可经字节码、反射调用接口方法与 default 方法。接口在重定义前加载但不初始化，其静态初始化照常在首次需要时执行。
@@ -301,12 +308,12 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
 | 变化 | 当前 Phase 2 / Phase 3 方案 C 结果 |
 | --- | --- |
 | 新增字段、方法 | 接受 |
-| 已有成员的访问级别、final、volatile、transient、synchronized 变化；Java → native | 接受 |
+| 已有成员的访问级别、final、volatile、transient、synchronized 变化；Java → native；abstract ↔ concrete | 接受 |
 | 方法新增 final，且已加载的子类覆写它 | 拒绝，`METHOD_MODIFIERS_CHANGED` |
 | 新增或改变访问级别的实例方法，可能顶替已加载子类的 copied default/miranda（子类的接口声明它，子类本身与目标的父类都没有相应 public 实现） | 探测未通过时拒绝：新增为 `METHOD_ADDED`（63），访问级别变化为 `METHOD_MODIFIERS_CHANGED`；探测通过时接受，由自有映射处理 |
-| native → Java，abstract 相关变化 | 拒绝，`METHOD_MODIFIERS_CHANGED` |
+| native → Java | 探测通过时接受（引擎处理 JNI 入口复制）；否则拒绝 `METHOD_MODIFIERS_CHANGED` |
 | 删除字段，字段类型或 static 属性变化 | 字段守卫可用且探测通过时接受（旧字段退役）；否则拒绝 `SCHEMA_CHANGED` |
-| 删除方法，方法签名变化 | 方案 C 在探测通过的事务接受普通类 concrete Java 方法；其余拒绝 `METHOD_DELETED` |
+| 删除方法，方法签名变化 | 方案 C 在探测通过的事务接受普通类的任何方法，含 native、abstract、构造器与类初始化器；否则拒绝 `METHOD_DELETED` |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 时有已加载子类则拒绝 `CLASS_MODIFIERS_CHANGED`；加 abstract 时若该类自身仍有实例，在 `CollectAndCreateNewInstances` 之后（仍可失败）拒绝，同一错误码 |
 | 类在接口、注解、枚举之间变化 | 拒绝，`CLASS_MODIFIERS_CHANGED` |
 | 新增接口（可同时调整顺序） | 方案 C 探测通过时接受并走结构路径；无法经目标类的加载器解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局时拒绝 `HIERARCHY_CHANGED` |
@@ -344,7 +351,7 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
 | 清理 | 删除调用图、选择性解释、启动门控等旧实现及其测试、工具和文档 | 已完成，旧代码见备份标签 |
 | Phase 1 | 可调试前提检查；标准 `RedefineClasses` 路由到 `StructurallyRedefineClasses` | Android 16 上，独立 Agent 经标准入口新增字段和方法成功；仅方法体变化的行为不变 |
 | Phase 2 | 上节的校验规则 | 修饰符变化用例提交成功并体现新语义；拒绝用例返回约定错误码且旧定义完整；无效批次整体不提交 |
-| Phase 3（方案 C 加字段退役） | 普通类 concrete Java 方法删除/签名替换；字段删除、改类型与 static/实例互换；保留 ART 原提交 | Android 16 设备、探测选中 android16 布局：方法与字段的新/缓存访问（字节码、反射、JNI 含 A/V 与 `FromReflected*`、MethodHandle 含组合句柄、VarHandle）退役异常正确，CheckJNI ON 与线程强制解释执行下同样通过；保留字段值、新字段默认值、恢复与改类型、GC、父类/default 回落与旧活动帧通过；不可支持的变化整批原子拒绝 |
+| Phase 3（方案 C 加字段退役） | 普通类方法删除/签名替换（含 native、abstract、构造器、类初始化器，native → Java，abstract ↔ concrete）；字段删除、改类型与 static/实例互换；保留 ART 原提交 | Android 16 设备、探测选中 android16 布局：方法与字段的新/缓存访问（字节码、反射、JNI 含 A/V 与 `FromReflected*`、MethodHandle 含组合句柄、VarHandle）退役异常正确，CheckJNI ON 与线程强制解释执行下同样通过；保留字段值、新字段默认值、恢复与改类型、GC、父类/default 回落与旧活动帧通过；不可支持的变化整批原子拒绝 |
 | Phase 4a | 类修饰符变化 | 已完成：加/去 final、改可见性、无实例时加 abstract 通过；有子类时加 final、有实例时加 abstract、类改接口均拒绝且旧定义完整 |
 | Phase 4b | 接口变化 | 新增接口已完成：未加载的应用接口、boot 接口与 protected 嵌套接口同时加入，旧实例、已加载子类与新实例经字节码和反射调用通过；不可访问、非接口、无法解析的接口以 62 拒绝，移除接口以 66 拒绝（收窄不支持），旧定义完整 |
 | Phase 4c | 放宽的父类变化 | 已完成：插入中间父类后，旧实例与已加载子类实例保留自身与原父类的字段值，获得新父类的字段（零值）与覆写；改为 boot 父类 `ArrayList`、同时新增接口并退役成员的组合事务通过；final、接口、缺失、覆写 final 方法、循环与收窄均以约定错误码拒绝且旧定义完整 |
