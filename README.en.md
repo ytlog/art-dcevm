@@ -162,5 +162,3 @@ The documents below are written in Chinese.
 - [Limitations and semantics](docs/LIMITATIONS.md)
 - [Test commands and verification results](docs/VERIFICATION.md)
 - [Maven publishing guide](docs/MAVEN_PUBLISHING.md)
-
-The project uses ShadowHook to install hooks on named symbols, and some declarations follow the AOSP ART sources. The origin and license of the third-party JVMTI header are described in [ORIGIN.txt](third_party/jvmti/ORIGIN.txt).

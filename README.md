@@ -160,5 +160,3 @@ python3 tools/run-device-tests.py --serial DEVICE
 - [能力限制与语义细节](docs/LIMITATIONS.md)
 - [测试命令与验证结论](docs/VERIFICATION.md)
 - [Maven 发布指南](docs/MAVEN_PUBLISHING.md)
-
-项目使用 ShadowHook 安装命名符号 Hook，部分声明依据 AOSP ART 源码；第三方 JVMTI 头文件的来源与许可见 [ORIGIN.txt](third_party/jvmti/ORIGIN.txt)。
