@@ -1,26 +1,26 @@
 # 能力限制
 
-Phase 1–3、Phase 4a、Phase 4b（新增接口）与 Phase 4c（放宽的父类变化）已在 Android 16 / API 36 与 Android 13 / API 33 的各一台 arm64 设备上通过设备套件：方法体、新增成员、成员与类修饰符变化、普通类方法的删除与签名替换（含 native、abstract、构造器与类初始化器）、native 改 Java、abstract 与 concrete 互换、字段删除、改类型与 static/实例互换、新增接口、放宽的父类变化，以及拒绝后的旧定义与批次原子性。Android 11、12、14、15、17 的声明已按 AOSP 源码补齐并由运行时探测启用，但尚无设备证据；完整 DCEVM 尚未完成。设备与 APK 哈希见 [VERIFICATION.md](VERIFICATION.md)，设计与阶段计划见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
+本文汇总使用时需要知道的前提、会被拒绝的变化以及各类变化的语义。实现机制见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)，各版本的验证情况见 [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)。
 
 ## 前提限制
 
 - 应用必须从进程启动时就是 Java 可调试的；release 进程中 ART 不开放 `can_redefine_classes`，本库无法工作。
 - 仅支持 arm64-v8a 的 Android 11–17。
 - 运行库缺少基础入口的任一命名符号，或公开 JVMTI 表与找到的命名包装器不一致时初始化失败。方法与字段退役另需各自的名称；缺少时只关闭相应能力，并在 `capabilities()` 的诊断中说明。
-- 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务按 Phase 2 规则拒绝退役，`capabilities()` 的 `memberMapping` 给出原因。
+- 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务不允许退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
-## 尚未支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
+## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 
-| 变化 | 错误码 | 计划 |
+| 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 方法在 static 与实例之间变化，或 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 待定（等价于删除旧方法并新增同名方法，可改用不同签名） |
-| 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | 不支持 |
-| 移除接口，以及任何失去父类型的父类变化 | 66 | 不支持：已校验代码依赖旧类型关系，见设计文档“收窄不支持” |
+| 方法在 static 与实例之间变化，或 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 可改为删除旧方法、新增不同签名的方法 |
+| 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
+| 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 
-方法删除/改签名与字段删除/改类型/存储变化在退役不可用的运行时上分别以 67 与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向（`capabilities()` 的 `superclassWidening`）。
+方法删除/改签名与字段删除/改类型/存储变化在退役不可用时分别以 `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67）与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向（`capabilities()` 的 `superclassWidening`）。
 
-## 语义冲突（各阶段都会拒绝）
+## 语义冲突（会被拒绝）
 
 - 方法新增 final，而已加载的子类覆写了它。
 - 类新增 final，而已有已加载的子类（70）。

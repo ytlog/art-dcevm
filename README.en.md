@@ -158,7 +158,6 @@ The script installs and drives the sample app `dev.artdcevm.lab`, kills any prev
 
 The documents below are written in Chinese.
 
-- [Development notes](docs/README.md)
 - [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md)
 - [Limitations and semantics](docs/LIMITATIONS.md)
 - [Test commands and verification results](docs/VERIFICATION.md)
