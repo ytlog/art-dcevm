@@ -62,6 +62,7 @@ METHOD_BASELINE_CHECKS = {"staticBefore": 82, "directBefore": 61, "virtualBefore
                           "signatureBefore": 64, "parentBefore": 64, "interfaceBefore": 65,
                           **{kind + "Before" + str(index): value
                              for kind in ("reflection", "handle", "handleExact", "handleInvoke",
+                                          "handleBound", "handleAdapted",
                                           "jni", "jniA", "jniV", "reflectedJni", "reflectedJniA",
                                           "reflectedJniV")
                              for index, value in enumerate((61, 82, 63, 64))}}
@@ -72,7 +73,8 @@ METHOD_CACHED_RETIRED_CHECKS = {kind + str(index): (
                                   "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"
                                   if kind == "cachedReflection" else "java.lang.NoSuchMethodError")
                               for kind in ("cachedReflection", "cachedHandle", "cachedHandleExact",
-                                           "cachedHandleInvoke", "cachedJni", "cachedJniA", "cachedJniV",
+                                           "cachedHandleInvoke", "cachedHandleBound", "cachedHandleAdapted",
+                                           "cachedJni", "cachedJniA", "cachedJniV",
                                            "reflectedJni", "reflectedJniA", "reflectedJniV")
                               for index in range(4)}
 METHOD_RETIRE_CHECKS = {

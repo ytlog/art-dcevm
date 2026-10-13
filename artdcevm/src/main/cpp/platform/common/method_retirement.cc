@@ -2,6 +2,7 @@
 
 #include <android/api-level.h>
 #include <android/log.h>
+#include <jvmti.h>
 #include <array>
 #include <atomic>
 #include <cstdarg>
@@ -43,7 +44,6 @@ using abi::Object;
 using abi::RedefinitionDataIter;
 using abi::ReflectionSourceInfo;
 using abi::ReflectiveValueVisitor;
-using abi::ScopedObjectAccess;
 using abi::kAccJavaFlagsMask;
 using abi::kAccObsoleteMethod;
 
@@ -57,7 +57,7 @@ std::set<const void*> retired_methods;
 std::set<jmethodID> retired_ids;
 std::mutex roots_mutex;
 std::vector<jobject> retained_roots;
-std::atomic<uint64_t> check_jni_retirement_guards{0};
+std::atomic<uint64_t> jni_retirement_guards{0};
 std::mutex state_mutex;
 std::string mapping_state = "unavailable";
 bool available = false;
@@ -104,12 +104,6 @@ bool Retired(const void* method) {
         kAccObsoleteMethod)) return false;
   return ContainsMethod(method);
 }
-// For paths where ART itself dereferences a pointer ID after this guard.
-bool RetiredId(jmethodID id) {
-  if (!AnyRetired()) return false;
-  if (reinterpret_cast<uintptr_t>(id) & 1) return ContainsId(id);
-  return Retired(id);
-}
 
 uint32_t Reference(const void* object) {
   return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
@@ -128,35 +122,21 @@ bool Fail(std::string* why, std::string reason) {
 
 // ART services, resolved by name in Prepare.
 void (*throw_exception)(void*, const char*, const char*) = nullptr;
-void (*throw_wrapped)(void*, const char*, const char*) = nullptr;
-void* (*from_reflected)(const ScopedObjectAccess&, jobject) = nullptr;
 bool (*same_method)(void*, void*) = nullptr;
 ArtField* (*find_static_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_declared_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 void* (*canonical_method)(void*, uint32_t) = nullptr;
 void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
-void* deliver_pending = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_instances = nullptr;
 void* original_visit = nullptr;
-void* original_invoke = nullptr;
-void* original_reflection = nullptr;
 void* original_mh = nullptr;
 void* original_mh_exact = nullptr;
 void* original_mh_frame = nullptr;
-void* original_jvalues = nullptr;
-void* original_varargs = nullptr;
-void* original_virtual_jvalues = nullptr;
-void* original_virtual_varargs = nullptr;
 void* original_encode = nullptr;
 void* original_encode_handle = nullptr;
-void* original_obsolete = nullptr;
-void* original_interpreter = nullptr;
-void* original_do_call = nullptr;
-void* original_do_call_range = nullptr;
-void* original_check_method = nullptr;
 // mirror/class.h: PointerSize::k64 (enum class PointerSize : uint32_t).
 constexpr uint32_t kPointerSize64 = 8;
 
@@ -537,22 +517,6 @@ void Visit(void* runtime, ReflectiveValueVisitor* visitor) {
   reinterpret_cast<Function>(original_visit)(runtime, &retirement);
 }
 
-void Invoke(void* method, void* self, uint32_t* args, uint32_t size, uint64_t* result,
-            const char* shorty) {
-  if (Retired(method)) { ThrowRetired(self); if (result) *result = 0; return; }
-  using Function = void (*)(void*, void*, uint32_t*, uint32_t, uint64_t*, const char*);
-  reinterpret_cast<Function>(original_invoke)(method, self, args, size, result, shorty);
-}
-jobject Reflection(const ScopedObjectAccess& soa, jobject reflected, jobject receiver,
-                   jobject args, size_t frames) {
-  if (Retired(from_reflected(soa, reflected))) {
-    ThrowRetired(soa.self);
-    throw_wrapped(soa.self, "Ljava/lang/reflect/InvocationTargetException;", nullptr);
-    return nullptr;
-  }
-  using Function = jobject (*)(const ScopedObjectAccess&, jobject, jobject, jobject, size_t);
-  return reinterpret_cast<Function>(original_reflection)(soa, reflected, receiver, args, frames);
-}
 // java.lang.invoke.MethodHandle.artFieldOrMethod, located through ART's own
 // field table. Transformer handles carry no ArtMethod, so it is only looked up.
 std::atomic<int64_t> handle_target_offset{-1};
@@ -593,28 +557,6 @@ void MethodHandleFrame(void* self, Handle method, Handle frame) {
   using Function = void (*)(void*, Handle, Handle);
   reinterpret_cast<Function>(original_mh_frame)(self, method, frame);
 }
-template <typename Args>
-uint64_t JniCall(void* original, const ScopedObjectAccess& soa, jobject receiver,
-                 jmethodID method, Args args) {
-  if (RetiredId(method)) { ThrowRetired(soa.self); return 0; }
-  using Function = uint64_t (*)(const ScopedObjectAccess&, jobject, jmethodID, Args);
-  return reinterpret_cast<Function>(original)(soa, receiver, method, args);
-}
-uint64_t JValues(const ScopedObjectAccess& soa, jobject receiver, jmethodID method,
-                 const jvalue* args) {
-  return JniCall(original_jvalues, soa, receiver, method, args);
-}
-uint64_t VarArgs(const ScopedObjectAccess& soa, jobject receiver, jmethodID method, va_list args) {
-  return JniCall<va_list>(original_varargs, soa, receiver, method, args);
-}
-uint64_t VirtualJValues(const ScopedObjectAccess& soa, jobject receiver, jmethodID method,
-                        const jvalue* args) {
-  return JniCall(original_virtual_jvalues, soa, receiver, method, args);
-}
-uint64_t VirtualVarArgs(const ScopedObjectAccess& soa, jobject receiver, jmethodID method,
-                        va_list args) {
-  return JniCall<va_list>(original_virtual_varargs, soa, receiver, method, args);
-}
 jmethodID Encode(void* manager, void* method) {
   using Function = jmethodID (*)(void*, void*);
   jmethodID id = reinterpret_cast<Function>(original_encode)(manager, method);
@@ -628,54 +570,206 @@ jmethodID EncodeHandle(void* manager, ReflectiveHandle method) {
   if (Retired(*method.reference)) RecordId(*method.reference, id);
   return id;
 }
-void* Obsolete(void* method, void* self) {
-  if (Retired(method)) {
-    ThrowRetired(self);
-    return reinterpret_cast<void* (*)(void*)>(deliver_pending)(self);
+// Reflection: Method.invoke's native entry, before ART checks the receiver
+// against the old declaring class. Only public JNI identifies the target.
+jobject (*original_method_invoke)(JNIEnv*, jobject, jobject, jobjectArray) = nullptr;
+const JNINativeInterface* jni = nullptr;  // The table in force before ours.
+jclass no_such_method_error = nullptr;
+jclass invocation_target_exception = nullptr;
+jmethodID no_such_method_init = nullptr;
+jmethodID invocation_target_init = nullptr;
+constexpr char kRetiredMessage[] = "method retired by structural redefinition";
+
+jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray args) {
+  if (AnyRetired()) {
+    jmethodID id = jni->FromReflectedMethod(env, method);
+    if (id && ContainsId(id)) {
+      jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+      // Method.invoke reports a failing target as InvocationTargetException.
+      jstring message = jni->NewStringUTF(env, kRetiredMessage);
+      jobject cause = message ? jni->NewObject(env, no_such_method_error, no_such_method_init, message)
+                              : nullptr;
+      jobject wrapped = cause ? jni->NewObject(env, invocation_target_exception,
+                                                invocation_target_init, cause)
+                              : nullptr;
+      if (wrapped) jni->Throw(env, static_cast<jthrowable>(wrapped));
+      for (jobject local : {static_cast<jobject>(message), cause, wrapped})
+        if (local) jni->DeleteLocalRef(env, local);
+      return nullptr;
+    }
   }
-  using Function = void* (*)(void*, void*);
-  return reinterpret_cast<Function>(original_obsolete)(method, self);
+  return original_method_invoke(env, method, receiver, args);
 }
-void EnterInterpreter(void* self, void* method, uintptr_t receiver, uint32_t* args,
-                      uint64_t* result, bool stay) {
-  if (Retired(method)) { ThrowRetired(self); if (result) *result = 0; return; }
-  using Function = void (*)(void*, void*, uintptr_t, uint32_t*, uint64_t*, bool);
-  reinterpret_cast<Function>(original_interpreter)(self, method, receiver, args, result, stay);
+
+// JNI Call*Method*: a JVMTI function-table override in front of the previous
+// table (CheckJNI's when enabled), so live calls keep every original check.
+// The ID is only looked up, never decoded: CheckJNI still reports invalid IDs.
+bool RejectJni(JNIEnv* env, jmethodID id) {
+  if (!ContainsId(id) || jni->ExceptionCheck(env)) return false;
+  jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+  jni->ThrowNew(env, no_such_method_error, kRetiredMessage);
+  return true;
 }
-// Guard a new callee before PerformCall selects an interpreter-only bridge.
-// Existing Execute/EnterInterpreterFromDeopt frames keep their old bodies.
-bool InterpreterCall(void* original, void* method, void* self, void* frame,
-                     const void* instruction, uint16_t data, bool string_init, uint64_t* result) {
-  if (Retired(method)) { ThrowRetired(self); if (result) *result = 0; return false; }
-  using Function = bool (*)(void*, void*, void*, const void*, uint16_t, bool, uint64_t*);
-  return reinterpret_cast<Function>(original)(method, self, frame, instruction, data,
-                                              string_init, result);
-}
-bool DoCall(void* method, void* self, void* frame, const void* instruction, uint16_t data,
-            bool string_init, uint64_t* result) {
-  return InterpreterCall(original_do_call, method, self, frame, instruction, data,
-                         string_init, result);
-}
-bool DoCallRange(void* method, void* self, void* frame, const void* instruction, uint16_t data,
-                 bool string_init, uint64_t* result) {
-  return InterpreterCall(original_do_call_range, method, self, frame, instruction, data,
-                         string_init, result);
-}
-bool CheckMethod(void* check, const ScopedObjectAccess& soa, jobject receiver, jclass klass,
-                 jmethodID method, int32_t type, int32_t invoke) {
-  if (ContainsId(method)) {
-    check_jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
-    ThrowRetired(soa.self);
-    return false;
+#define ARTDCEVM_JNI_RESULT_CALLS(T, Name)                                                       \
+  T Call##Name##Method(JNIEnv* env, jobject object, jmethodID id, ...) {                         \
+    if (RejectJni(env, id)) return T();                                                          \
+    va_list args;                                                                                \
+    va_start(args, id);                                                                          \
+    T result = jni->Call##Name##MethodV(env, object, id, args);                                  \
+    va_end(args);                                                                                \
+    return result;                                                                               \
+  }                                                                                              \
+  T Call##Name##MethodV(JNIEnv* env, jobject object, jmethodID id, va_list args) {               \
+    return RejectJni(env, id) ? T() : jni->Call##Name##MethodV(env, object, id, args);           \
+  }                                                                                              \
+  T Call##Name##MethodA(JNIEnv* env, jobject object, jmethodID id, const jvalue* args) {         \
+    return RejectJni(env, id) ? T() : jni->Call##Name##MethodA(env, object, id, args);           \
+  }                                                                                              \
+  T CallNonvirtual##Name##Method(JNIEnv* env, jobject object, jclass klass, jmethodID id, ...) { \
+    if (RejectJni(env, id)) return T();                                                          \
+    va_list args;                                                                                \
+    va_start(args, id);                                                                          \
+    T result = jni->CallNonvirtual##Name##MethodV(env, object, klass, id, args);                 \
+    va_end(args);                                                                                \
+    return result;                                                                               \
+  }                                                                                              \
+  T CallNonvirtual##Name##MethodV(JNIEnv* env, jobject object, jclass klass, jmethodID id,       \
+                                  va_list args) {                                                \
+    return RejectJni(env, id) ? T()                                                              \
+                              : jni->CallNonvirtual##Name##MethodV(env, object, klass, id, args);\
+  }                                                                                              \
+  T CallNonvirtual##Name##MethodA(JNIEnv* env, jobject object, jclass klass, jmethodID id,       \
+                                  const jvalue* args) {                                          \
+    return RejectJni(env, id) ? T()                                                              \
+                              : jni->CallNonvirtual##Name##MethodA(env, object, klass, id, args);\
+  }                                                                                              \
+  T CallStatic##Name##Method(JNIEnv* env, jclass klass, jmethodID id, ...) {                     \
+    if (RejectJni(env, id)) return T();                                                          \
+    va_list args;                                                                                \
+    va_start(args, id);                                                                          \
+    T result = jni->CallStatic##Name##MethodV(env, klass, id, args);                             \
+    va_end(args);                                                                                \
+    return result;                                                                               \
+  }                                                                                              \
+  T CallStatic##Name##MethodV(JNIEnv* env, jclass klass, jmethodID id, va_list args) {           \
+    return RejectJni(env, id) ? T() : jni->CallStatic##Name##MethodV(env, klass, id, args);      \
+  }                                                                                              \
+  T CallStatic##Name##MethodA(JNIEnv* env, jclass klass, jmethodID id, const jvalue* args) {     \
+    return RejectJni(env, id) ? T() : jni->CallStatic##Name##MethodA(env, klass, id, args);      \
   }
-  using Function = bool (*)(void*, const ScopedObjectAccess&, jobject, jclass, jmethodID,
-                            int32_t, int32_t);
-  return reinterpret_cast<Function>(original_check_method)(check, soa, receiver, klass, method,
-                                                           type, invoke);
+ARTDCEVM_JNI_RESULT_CALLS(jobject, Object)
+ARTDCEVM_JNI_RESULT_CALLS(jboolean, Boolean)
+ARTDCEVM_JNI_RESULT_CALLS(jbyte, Byte)
+ARTDCEVM_JNI_RESULT_CALLS(jchar, Char)
+ARTDCEVM_JNI_RESULT_CALLS(jshort, Short)
+ARTDCEVM_JNI_RESULT_CALLS(jint, Int)
+ARTDCEVM_JNI_RESULT_CALLS(jlong, Long)
+ARTDCEVM_JNI_RESULT_CALLS(jfloat, Float)
+ARTDCEVM_JNI_RESULT_CALLS(jdouble, Double)
+#undef ARTDCEVM_JNI_RESULT_CALLS
+
+void CallVoidMethod(JNIEnv* env, jobject object, jmethodID id, ...) {
+  if (RejectJni(env, id)) return;
+  va_list args;
+  va_start(args, id);
+  jni->CallVoidMethodV(env, object, id, args);
+  va_end(args);
 }
+void CallVoidMethodV(JNIEnv* env, jobject object, jmethodID id, va_list args) {
+  if (!RejectJni(env, id)) jni->CallVoidMethodV(env, object, id, args);
+}
+void CallVoidMethodA(JNIEnv* env, jobject object, jmethodID id, const jvalue* args) {
+  if (!RejectJni(env, id)) jni->CallVoidMethodA(env, object, id, args);
+}
+void CallNonvirtualVoidMethod(JNIEnv* env, jobject object, jclass klass, jmethodID id, ...) {
+  if (RejectJni(env, id)) return;
+  va_list args;
+  va_start(args, id);
+  jni->CallNonvirtualVoidMethodV(env, object, klass, id, args);
+  va_end(args);
+}
+void CallNonvirtualVoidMethodV(JNIEnv* env, jobject object, jclass klass, jmethodID id,
+                               va_list args) {
+  if (!RejectJni(env, id)) jni->CallNonvirtualVoidMethodV(env, object, klass, id, args);
+}
+void CallNonvirtualVoidMethodA(JNIEnv* env, jobject object, jclass klass, jmethodID id,
+                               const jvalue* args) {
+  if (!RejectJni(env, id)) jni->CallNonvirtualVoidMethodA(env, object, klass, id, args);
+}
+void CallStaticVoidMethod(JNIEnv* env, jclass klass, jmethodID id, ...) {
+  if (RejectJni(env, id)) return;
+  va_list args;
+  va_start(args, id);
+  jni->CallStaticVoidMethodV(env, klass, id, args);
+  va_end(args);
+}
+void CallStaticVoidMethodV(JNIEnv* env, jclass klass, jmethodID id, va_list args) {
+  if (!RejectJni(env, id)) jni->CallStaticVoidMethodV(env, klass, id, args);
+}
+void CallStaticVoidMethodA(JNIEnv* env, jclass klass, jmethodID id, const jvalue* args) {
+  if (!RejectJni(env, id)) jni->CallStaticVoidMethodA(env, klass, id, args);
+}
+
+JNINativeInterface guarded_jni;
+#define ARTDCEVM_JNI_ENTRIES(Name)                                                                \
+  guarded_jni.Call##Name##Method = Call##Name##Method;                                           \
+  guarded_jni.Call##Name##MethodV = Call##Name##MethodV;                                         \
+  guarded_jni.Call##Name##MethodA = Call##Name##MethodA;                                         \
+  guarded_jni.CallNonvirtual##Name##Method = CallNonvirtual##Name##Method;                       \
+  guarded_jni.CallNonvirtual##Name##MethodV = CallNonvirtual##Name##MethodV;                     \
+  guarded_jni.CallNonvirtual##Name##MethodA = CallNonvirtual##Name##MethodA;                     \
+  guarded_jni.CallStatic##Name##Method = CallStatic##Name##Method;                               \
+  guarded_jni.CallStatic##Name##MethodV = CallStatic##Name##MethodV;                             \
+  guarded_jni.CallStatic##Name##MethodA = CallStatic##Name##MethodA;
+
+// Caches the exception classes, then overrides the JNI table. The override
+// also disables ART's Core Platform API checks (JNIEnvExt::SetTableOverride),
+// which apply to platform callers only. Our entries forward until a retirement.
+bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
+  JNIEnv* env = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env)
+    return Fail(failure, "no JNIEnv for the JNI guards");
+  auto global_class = [&](const char* name) -> jclass {
+    jclass local = env->FindClass(name);
+    if (!local) { env->ExceptionClear(); return nullptr; }
+    auto global = static_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    return global;
+  };
+  no_such_method_error = global_class("java/lang/NoSuchMethodError");
+  invocation_target_exception = global_class("java/lang/reflect/InvocationTargetException");
+  if (!no_such_method_error || !invocation_target_exception)
+    return Fail(failure, "exception classes unavailable");
+  no_such_method_init = env->GetMethodID(no_such_method_error, "<init>", "(Ljava/lang/String;)V");
+  invocation_target_init = env->GetMethodID(invocation_target_exception, "<init>",
+                                            "(Ljava/lang/Throwable;)V");
+  if (!no_such_method_init || !invocation_target_init) {
+    env->ExceptionClear();
+    return Fail(failure, "exception constructors unavailable");
+  }
+  jniNativeInterface* current = nullptr;
+  if (jvmti->GetJNIFunctionTable(&current) != JVMTI_ERROR_NONE || !current)
+    return Fail(failure, "GetJNIFunctionTable failed");
+  jni = current;  // Kept for the process lifetime; the override forwards to it.
+  guarded_jni = *current;
+  ARTDCEVM_JNI_ENTRIES(Object)
+  ARTDCEVM_JNI_ENTRIES(Boolean)
+  ARTDCEVM_JNI_ENTRIES(Byte)
+  ARTDCEVM_JNI_ENTRIES(Char)
+  ARTDCEVM_JNI_ENTRIES(Short)
+  ARTDCEVM_JNI_ENTRIES(Int)
+  ARTDCEVM_JNI_ENTRIES(Long)
+  ARTDCEVM_JNI_ENTRIES(Float)
+  ARTDCEVM_JNI_ENTRIES(Double)
+  ARTDCEVM_JNI_ENTRIES(Void)
+  if (jvmti->SetJNIFunctionTable(&guarded_jni) != JVMTI_ERROR_NONE)
+    return Fail(failure, "SetJNIFunctionTable failed");
+  return true;
+}
+#undef ARTDCEVM_JNI_ENTRIES
 }  // namespace
 
-void Prepare(std::vector<Hook>* hooks, std::string* note) {
+void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note) {
   available = false;
   if (!abi::LibcppV1PointerMap<abi::ArtMethod>::Compatible() ||
       !abi::LibcppV1PointerMap<ArtField>::Compatible()) {
@@ -691,32 +785,17 @@ void Prepare(std::vector<Hook>* hooks, std::string* note) {
       {kCollectAndCreateNewInstances, Fn(CollectAndCreateNewInstances), &original_instances},
       {kUpdateClassStructurally, Fn(Update), &original_update},
       {kVisitReflectiveTargets, Fn(Visit), &original_visit},
-      {kArtMethodInvoke, Fn(Invoke), &original_invoke},
-      {kInvokeReflection, Fn(Reflection), &original_reflection},
       {kMethodHandleInvoke, Fn(MethodHandleInvoke), &original_mh},
       {kMethodHandleInvokeExact, Fn(MethodHandleInvokeExact), &original_mh_exact},
-      {kMethodHandleInvokeExactWithFrame, Fn(MethodHandleFrame), &original_mh_frame},
-      {kInvokeWithJValuesId, Fn(JValues), &original_jvalues},
-      {kInvokeWithVarArgsId, Fn(VarArgs), &original_varargs},
-      {kInvokeVirtualWithJValuesId, Fn(VirtualJValues), &original_virtual_jvalues},
-      {kInvokeVirtualWithVarArgsId, Fn(VirtualVarArgs), &original_virtual_varargs},
       {kEncodeMethodId, Fn(Encode), &original_encode},
       {kEncodeMethodIdHandle, Fn(EncodeHandle), &original_encode_handle},
-      {kInvokeObsoleteMethod, Fn(Obsolete), &original_obsolete},
-      {kEnterInterpreterFromInvoke, Fn(EnterInterpreter), &original_interpreter},
-      {kInterpreterDoCall, Fn(DoCall), &original_do_call},
-      {kInterpreterDoCallRange, Fn(DoCallRange), &original_do_call_range},
-      {kCheckJniMethodAndSig, Fn(CheckMethod), &original_check_method},
       {kThrowNewException, nullptr, Out(&throw_exception)},
-      {kThrowNewWrappedException, nullptr, Out(&throw_wrapped)},
-      {kFromReflectedMethod, nullptr, Out(&from_reflected)},
       {kHasSameNameAndSignature, nullptr, Out(&same_method)},
       {kFindDeclaredStaticField, nullptr, Out(&find_static_field)},
       {kFindDeclaredInstanceField, nullptr, Out(&find_declared_instance_field)},
       {kFindInstanceField, nullptr, Out(&find_instance_field)},
       {kGetCanonicalMethod, nullptr, Out(&canonical_method)},
-      {kClassRedefinitionGetMirrorClass, nullptr, Out(&mirror_class)},
-      {kDeliverPendingException, nullptr, &deliver_pending}};
+      {kClassRedefinitionGetMirrorClass, nullptr, Out(&mirror_class)}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {
     void* address = symbols::Find(entry.symbol);
@@ -727,6 +806,26 @@ void Prepare(std::vector<Hook>* hooks, std::string* note) {
     }
     if (entry.replacement) resolved.push_back({address, entry.replacement, entry.original, entry.symbol.name});
     else *entry.original = address;
+  }
+  void* method_invoke = nullptr;
+  const char* method_invoke_name = nullptr;
+  for (const auto& symbol : kMethodInvokeNative) {
+    if ((method_invoke = symbols::Find(symbol))) { method_invoke_name = symbol.name; break; }
+  }
+  if (!method_invoke) {
+    *note = "method retirement unavailable: missing Method.invoke native entry";
+    Report("unavailable");
+    return;
+  }
+  resolved.push_back({method_invoke, Fn(MethodInvoke), Out(&original_method_invoke), method_invoke_name});
+  if (void* frame = symbols::Find(kMethodHandleInvokeExactWithFrame))
+    resolved.push_back({frame, Fn(MethodHandleFrame), &original_mh_frame,
+                        kMethodHandleInvokeExactWithFrame.name});
+  std::string failure;
+  if (!InstallJniGuards(vm, jvmti, &failure)) {
+    *note = "method retirement unavailable: " + failure;
+    Report("unavailable");
+    return;
   }
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
@@ -787,7 +886,7 @@ std::string MemberMappingState() {
   std::lock_guard<std::mutex> lock(state_mutex);
   return mapping_state;
 }
-uint64_t CheckJniRetirementGuardHits() {
-  return check_jni_retirement_guards.load(std::memory_order_relaxed);
+uint64_t JniRetirementGuardHits() {
+  return jni_retirement_guards.load(std::memory_order_relaxed);
 }
 }  // namespace artdcevm::method_retirement

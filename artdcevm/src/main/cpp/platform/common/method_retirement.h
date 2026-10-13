@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <jni.h>
+#include <jvmti.h>
 #include <string>
 #include <vector>
 #include "evolution/class_schema.h"
@@ -13,10 +14,12 @@ struct Hook {
   void** original;
   const char* name;
 };
-// Resolve the retirement hooks by name. When a name is missing or the NDK map
-// layout differs, nothing is added, the engine keeps Phase 2 and `note` says
-// why. Whether the fixed declarations fit this ART is decided later by probes.
-void Prepare(std::vector<Hook>* hooks, std::string* note);
+// Resolve the retirement hooks by name and install the JNI Call*Method* guards
+// through JVMTI's function-table override. When a name is missing, the NDK map
+// layout differs or the override fails, no hook is added, the engine keeps
+// Phase 2 and `note` says why. Whether the fixed declarations fit this ART is
+// decided later by probes.
+void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note);
 // The retirement hooks are prepared; VerifyTarget decides per transaction.
 bool Available();
 // Probe the source-declared class layouts on a redefinition target against
@@ -44,5 +47,6 @@ void RetainRoots(std::vector<jobject> roots);
 bool Rooted(JNIEnv* jni, jclass klass);
 // "unavailable", "unverified", "verified: <layout>" or "disabled: <reason>".
 std::string MemberMappingState();
-uint64_t CheckJniRetirementGuardHits();
+// JNI and Method.invoke calls rejected because their target was retired.
+uint64_t JniRetirementGuardHits();
 }  // namespace artdcevm::method_retirement

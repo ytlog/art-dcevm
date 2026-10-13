@@ -1,14 +1,17 @@
 #pragma once
 #include "platform/symbols/art_symbol_compat.h"
 
-// Method-retirement entry points absent from some runtimes (inlined, or a
-// build-specific .__uniq suffix). They stay out of the universal catalog; the
-// runtime resolves them by exact name and keeps Phase 2 when any is missing.
+// Method-retirement entry points that are not one universal .dynsym name.
+// They stay out of the strict catalog; the runtime resolves them by exact name.
 namespace artdcevm::symbols::method_retirement {
-inline constexpr NamedSymbol kInvokeReflection{Library::kArt, "_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m", SymbolTable::kAnyNamed};
+// Method.invoke's native implementation (java_lang_reflect_Method.cc). Builds
+// spell this local function plainly or with one fixed .__uniq suffix; one of
+// the two exists in every collected runtime.
+inline constexpr NamedSymbol kMethodInvokeNative[] = {
+    {Library::kArt, "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray", SymbolTable::kAnyNamed},
+    {Library::kArt, "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray.__uniq.165753521025965369065708152063621506277", SymbolTable::kAnyNamed}};
+// Optional: Android 13 added it for transformer handles; it forwards to the
+// guarded MethodHandleInvokeExact. Android 11/12 transformers use
+// invoke-polymorphic, so its absence leaves no unguarded path.
 inline constexpr NamedSymbol kMethodHandleInvokeExactWithFrame{Library::kArt, "_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kEnterInterpreterFromInvoke{Library::kArt, "_ZN3art11interpreter26EnterInterpreterFromInvokeEPNS_6ThreadEPNS_9ArtMethodENS_6ObjPtrINS_6mirror6ObjectEEEPjPNS_6JValueEb", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kCheckJniMethodAndSig{Library::kArt, "_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE.__uniq.99033978352804627313491551960229047428", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInterpreterDoCall{Library::kArt, "_ZN3art11interpreter6DoCallILb0EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInterpreterDoCallRange{Library::kArt, "_ZN3art11interpreter6DoCallILb1EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE", SymbolTable::kAnyNamed};
 }  // namespace artdcevm::symbols::method_retirement

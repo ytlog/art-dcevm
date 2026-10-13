@@ -2659,34 +2659,19 @@
             "openjdkjvmti/OpenjdkJvmTi.cc"
           ],
           "guardAnchors": {
-            "runtime/reflection.cc": [
-              "InvokeMethod:698",
-              "InvokeWithJValues/InvokeWithVarArgs ID overloads"
-            ],
             "runtime/method_handles.cc": [
               "MethodHandleInvoke",
               "MethodHandleInvokeExact",
               "MethodHandleInvokeExactWithFrame:916"
             ],
-            "runtime/jni/check_jni.cc": [
-              "ScopedCheck::CheckMethodAndSig:407",
-              "CallMethodV:3140",
-              "CallMethodA:3323"
-            ],
-            "runtime/interpreter/interpreter_common.h": [
-              "DoCall<false/true>:117"
-            ],
-            "runtime/interpreter/interpreter_common.cc": [
-              "DoCall<false/true>:1358",
-              "DoCallCommon:1161",
-              "PerformCall"
-            ],
-            "runtime/entrypoints/quick/quick_throw_entrypoints.cc": [
-              "artInvokeObsoleteMethod",
-              "artDeliverPendingExceptionFromCode"
-            ],
             "runtime/jni/jni_id_manager.h": [
               "EncodeMethodId overloads:55-57"
+            ],
+            "runtime/native/java_lang_reflect_Method.cc": [
+              "Method_invoke"
+            ],
+            "openjdkjvmti/ti_jni.cc": [
+              "SetJNIFunctionTable/GetJNIFunctionTable"
             ]
           }
         },
@@ -4328,70 +4313,10 @@
       ]
     },
     {
-      "id": "Phase3C.kArtMethodInvoke",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kFromReflectedMethod",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art9ArtMethod19FromReflectedMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobject"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
       "id": "Phase3C.kThrowNewException",
       "library": "libart.so",
       "names": [
         "_ZN3art6Thread17ThrowNewExceptionEPKcS2_"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kThrowNewWrappedException",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art6Thread24ThrowNewWrappedExceptionEPKcS2_"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInvokeObsoleteMethod",
-      "library": "libart.so",
-      "names": [
-        "artInvokeObsoleteMethod"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kDeliverPendingException",
-      "library": "libart.so",
-      "names": [
-        "artDeliverPendingExceptionFromCode"
       ],
       "kind": "named-source-profile",
       "role": "cataloged-source-entry",
@@ -4416,54 +4341,6 @@
       "library": "libart.so",
       "names": [
         "_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInvokeWithJValuesId",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInvokeWithVarArgsId",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInvokeVirtualWithJValuesId",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInvokeVirtualWithVarArgsId",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list"
       ],
       "kind": "named-source-profile",
       "role": "cataloged-source-entry",
@@ -4520,10 +4397,11 @@
       ]
     },
     {
-      "id": "Phase3C.kInvokeReflection",
+      "id": "Phase3C.kMethodInvokeNative",
       "library": "libart.so",
       "names": [
-        "_ZN3art12InvokeMethodILNS_11PointerSizeE8EEEP8_jobjectRKNS_33ScopedObjectAccessAlreadyRunnableES3_S3_S3_m"
+        "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray",
+        "_ZN3artL13Method_invokeEP7_JNIEnvP8_jobjectS3_P13_jobjectArray.__uniq.165753521025965369065708152063621506277"
       ],
       "kind": "named-source-profile",
       "role": "cataloged-source-entry",
@@ -4536,54 +4414,6 @@
       "library": "libart.so",
       "names": [
         "_ZN3art32MethodHandleInvokeExactWithFrameEPNS_6ThreadENS_6HandleINS_6mirror12MethodHandleEEENS2_INS3_18EmulatedStackFrameEEE"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kEnterInterpreterFromInvoke",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art11interpreter26EnterInterpreterFromInvokeEPNS_6ThreadEPNS_9ArtMethodENS_6ObjPtrINS_6mirror6ObjectEEEPjPNS_6JValueEb"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kCheckJniMethodAndSig",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art12_GLOBAL__N_111ScopedCheck17CheckMethodAndSigERNS_18ScopedObjectAccessEP8_jobjectP7_jclassP10_jmethodIDNS_9Primitive4TypeENS_10InvokeTypeE.__uniq.99033978352804627313491551960229047428"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInterpreterDoCall",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art11interpreter6DoCallILb0EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE"
-      ],
-      "kind": "named-source-profile",
-      "role": "cataloged-source-entry",
-      "sourceGroups": [
-        "phase3c.method-access"
-      ]
-    },
-    {
-      "id": "Phase3C.kInterpreterDoCallRange",
-      "library": "libart.so",
-      "names": [
-        "_ZN3art11interpreter6DoCallILb1EEEbPNS_9ArtMethodEPNS_6ThreadERNS_11ShadowFrameEPKNS_11InstructionEtbPNS_6JValueE"
       ],
       "kind": "named-source-profile",
       "role": "cataloged-source-entry",

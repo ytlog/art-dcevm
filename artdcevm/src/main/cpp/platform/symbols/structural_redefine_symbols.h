@@ -3,7 +3,7 @@
 
 // Named ART structural-redefinition decision points and services. The mangled
 // names are identical in every collected Android 11--17 arm64 runtime.
-// 56 entries require .dynsym; 10 allow any named table, including the public
+// 53 entries require .dynsym; 4 allow any named table, including the public
 // wrapper, CopyFields candidate and method-access guards. Each declares its scope.
 // This catalog proves exact-name presence, not source ABI or Phase 3/4 behavior.
 // tools/check-structural-symbols.py re-verifies this catalog
@@ -85,18 +85,9 @@ inline constexpr NamedSymbol kAssertPendingOOMException{Library::kArt, "_ZNK3art
 
 // Method-retirement guards. These are exact names present in all 27 samples;
 // several inline/template entry helpers require the named local table.
-inline constexpr NamedSymbol kArtMethodInvoke{Library::kArt, "_ZN3art9ArtMethod6InvokeEPNS_6ThreadEPjjPNS_6JValueEPKc"};
-inline constexpr NamedSymbol kFromReflectedMethod{Library::kArt, "_ZN3art9ArtMethod19FromReflectedMethodERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobject"};
 inline constexpr NamedSymbol kThrowNewException{Library::kArt, "_ZN3art6Thread17ThrowNewExceptionEPKcS2_"};
-inline constexpr NamedSymbol kThrowNewWrappedException{Library::kArt, "_ZN3art6Thread24ThrowNewWrappedExceptionEPKcS2_"};
-inline constexpr NamedSymbol kInvokeObsoleteMethod{Library::kArt, "artInvokeObsoleteMethod", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kDeliverPendingException{Library::kArt, "artDeliverPendingExceptionFromCode", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kMethodHandleInvoke{Library::kArt, "_ZN3art18MethodHandleInvokeEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kMethodHandleInvokeExact{Library::kArt, "_ZN3art23MethodHandleInvokeExactEPNS_6ThreadERNS_11ShadowFrameENS_6HandleINS_6mirror12MethodHandleEEENS4_INS5_10MethodTypeEEEPKNS_19InstructionOperandsEPNS_6JValueE", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInvokeWithJValuesId{Library::kArt, "_ZN3art17InvokeWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInvokeWithVarArgsId{Library::kArt, "_ZN3art17InvokeWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInvokeVirtualWithJValuesId{Library::kArt, "_ZN3art35InvokeVirtualOrInterfaceWithJValuesIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_PK6jvalue", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kInvokeVirtualWithVarArgsId{Library::kArt, "_ZN3art35InvokeVirtualOrInterfaceWithVarArgsIP10_jmethodIDEENS_6JValueERKNS_33ScopedObjectAccessAlreadyRunnableEP8_jobjectT_St9__va_list", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kEncodeMethodId{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdEPNS_9ArtMethodE"};
 inline constexpr NamedSymbol kEncodeMethodIdHandle{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdENS_16ReflectiveHandleINS_9ArtMethodEEE"};
 inline constexpr NamedSymbol kGetCanonicalMethod{Library::kArt, "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE"};

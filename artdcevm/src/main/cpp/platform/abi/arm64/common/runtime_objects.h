@@ -88,11 +88,4 @@ struct Handle {
   }
 };
 static_assert(sizeof(Handle) == 8);
-
-// scoped_thread_state_change.h ScopedObjectAccessAlreadyRunnable: self_, env_, vm_.
-struct ScopedObjectAccess {
-  void* self;
-  void* env;
-  void* vm;
-};
 }  // namespace artdcevm::abi::arm64

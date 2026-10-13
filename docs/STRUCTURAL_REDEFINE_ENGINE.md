@@ -1,6 +1,6 @@
 # 基于 ART 结构重定义事务的类演进引擎
 
-状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3 方案 C 已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 22 个场景、620 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；字段退役、Phase 4 与其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
+状态：Phase 1–2 已实现，并在 2026-10-12 的一台 Android 16 / API 36、arm64 设备上通过指定的 12 次标准 JVMTI 提交与行为检查，见 [VERIFICATION.md](VERIFICATION.md)。Phase 3 方案 C 已实现，固定声明由运行时探测选择，2026-10-13 在同一台 Android 16 设备上通过 22 个场景、676 项检查（含 CheckJNI 开启及线程强制解释执行），见 [VERIFICATION.md](VERIFICATION.md)；字段退役、Phase 4 与其他版本设备回归尚待实施。本文取代"调用图选择性解释执行"路线；该路线的代码已备份在本地分支 `backup/call-graph-engine-20261012` 和标签 `backup-call-graph-engine-20261012`。
 
 ## 目标与前提
 
@@ -146,11 +146,17 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 原 ART 对所有旧方法的 obsolete 标记、旧 declaring class 修复和 ClassExt 保活照常进行。visitor 代理先清除退役方法的 DexCache resolved-method 引用，让普通调用重新解析；删除覆写方法后可落到父类或接口默认实现。反射、JNI 与 MethodHandle 保留真实旧成员目标，并在新的访问/分派之前抛 `NoSuchMethodError`。缓存的反射 `Method.invoke` 按调用约定包装为 `InvocationTargetException`；恢复同名同签名方法会产生新成员，旧缓存目标仍退役。签名替换是旧签名退役与新签名新增。
 
-调用守卫使用命名的反射、JNI JValues/VarArgs（普通/非虚与虚/接口）、MethodHandle invoke/invokeExact/frame、ArtMethod Invoke、EnterInterpreterFromInvoke、DoCall<false/true> 和 obsolete quick 调用入口。DoCall 在新 callee 建帧前检查退役目标，覆盖 JVMTI 单步使线程强制解释执行的路径。两个 `EncodeMethodId` 重载记录退役后从旧反射对象获取的新索引 ID，指针 ID 同样检查；不在 decoder 返回 null 后让原调用方解引用。CheckJNI 的命名 `CheckMethodAndSig` 在旧 declaring class 类型检查前返回 false 并保留 NoSuchMethodError，使 A/V 原包装器跳过分派；不绕过普通调用的 CheckJNI 校验。已有帧的去优化恢复/Execute 路径不接管，允许活动旧帧完成旧方法体。
+新调用的守卫只放在退役方法仍可能被直接拿到的入口，即缓存的反射对象、JNI ID 和 MethodHandle。普通字节码调用无需守卫：ART 在提交时访问堆中全部 DexCache（含旧类保留的），visitor 代理清除指向退役方法的解析项，重新解析找不到成员就抛 `NoSuchMethodError`；vtable/iftable 只含新方法，线程解释器缓存与 JIT 代码由 ART 清空。设备上逐个去掉 `DoCall<false/true>`、`ArtMethod::Invoke`、`EnterInterpreterFromInvoke` 与 obsolete quick 入口守卫后，包括线程强制解释执行在内的全部用例仍然通过，因此这些守卫已删除。保留的守卫：
+
+- **JNI**：用公开的 JVMTI `SetJNIFunctionTable` 在当前函数表前包装全部 `Call*Method*`（普通、非虚、静态，含 A/V）。退役 ID 只做查表、不解码，直接抛 `NoSuchMethodError`；其余调用转给原表，CheckJNI 开启时原表就是检查表，校验照常。ART 设置覆盖表时会关闭本进程的 Core Platform API 检查（`JNIEnvExt::SetTableOverride`），它只约束平台模块调用方。两个 `EncodeMethodId` 重载记录退役后新编码的索引 ID。
+- **反射**：Hook `Method.invoke` 的 native 实现 `Method_invoke`，在 ART 以旧声明类核对接收者之前，用 JNI `FromReflectedMethod` 识别退役目标，按调用约定抛出包装 `NoSuchMethodError` 的 `InvocationTargetException`。
+- **MethodHandle**：`MethodHandleInvoke`/`MethodHandleInvokeExact` 在分派前读取句柄的 `artFieldOrMethod`。组合句柄在 Android 11/12 经 invoke-polymorphic 回到这两个入口，13 起经 `MethodHandleInvokeExactWithFrame` 调用 `MethodHandleInvokeExact`；该函数存在时也加守卫，以防编译器内联。
+
+已有帧的去优化恢复/Execute 路径不接管，允许活动旧帧完成旧方法体。
 
 固定声明不按构建编号放行，而由运行时探测选择：
 
-- **声明来源**：逐版核对 `android-11.0.0_r1` 至 `android-17.0.0_r1`（12 含 `12.1.0_r1`）的 AOSP 源码，标签提交记录在 VERIFICATION.md。一致的声明放 `platform/abi/arm64/common/`：Object/ObjectArray、DexCache 前缀、ArtField、12–17 的 ArtMethod、Handle、ScopedObjectAccess、RedefinitionDataHolder 槽位、反射 visitor 与来源类型、libc++ 指针 map。差异放各版本目录：`android11`–`android17/class.h` 的 Class 字段数组（11–15 为 `ifields_/sfields_`，16–17 为 `fields_`，`access_flags_` 随之移动），以及 `android11/art_method.h`（多 `dex_code_item_offset_`）。
+- **声明来源**：逐版核对 `android-11.0.0_r1` 至 `android-17.0.0_r1`（12 含 `12.1.0_r1`）的 AOSP 源码，标签提交记录在 VERIFICATION.md。一致的声明放 `platform/abi/arm64/common/`：Object/ObjectArray、DexCache 前缀、ArtField、12–17 的 ArtMethod、Handle、RedefinitionDataHolder 槽位、反射 visitor 与来源类型、libc++ 指针 map。差异放各版本目录：`android11`–`android17/class.h` 的 Class 字段数组（11–15 为 `ifields_/sfields_`，16–17 为 `fields_`，`access_flags_` 随之移动），以及 `android11/art_method.h`（多 `dex_code_item_offset_`）。
 - **安装**：方法退役所需名称（`platform/symbols/method_retirement_symbols.h` 中的非全套名称与公共目录服务）全部解析、NDK map 自检通过才安装 Hook；否则保持 Phase 2，诊断写明缺失项。
 - **CheckClass 探测**（ART 仍可失败）：对每个目标，用 `GetMirrorClass` 取 Class，按候选声明核对 `access_flags_` 与 ClassDef 标志。用 `FindDeclared*Field` 返回的 ArtField 先确认各字段数组的位置，再读取数组，逐项核对声明类、JVMTI 修饰符与 DEX 字段身份；按候选 ArtMethod 步长核对声明方法数、修饰符与 DEX 方法身份。确认位置前不解引用候选数组。候选只取不早于平台版本的版本（ART 模块不会比平台旧），与平台同名的版本优先。事务内所有目标都接受的候选才可用；没有可用候选时，该事务按 Phase 2 拒绝退役与拷贝成员变化。
 - **CollectAndCreateNewInstances 探测与计划**（ART 最后可失败的一步）：核对槽位中的旧类即目标、替换类使用传入 DEX，再用选中的布局为全部受影响类预先算出字段与方法映射（含 DEX 身份读取）。任何一步失败且该事务依赖自有映射时返回错误，整批不提交；不依赖时退回 ART 原映射。
@@ -159,18 +165,14 @@ ART 原生只允许"只增不删"，限制集中在少数几个决策函数里�
 
 共享控制、探测与候选表在 `platform/common/method_retirement.{h,cc}`。目前只有 Android 16 设备证据；其他版本的声明已按源码补齐，由探测决定是否启用，仍须逐台设备回归（Phase 5）。
 
-本次公共命名目录增至 **66 个名称**（56 个限定 `.dynsym`、10 个允许任一命名表），仍在 27/27 套库全部通过；运行时探测新增的 `Class::FindInstanceField` 为 D27。新增的 ArtMethod Invoke、FromReflectedMethod、ThrowNewException/ThrowNewWrappedException、EncodeMethodId 两重载、GetCanonicalMethod 与 GetMirrorClass 都为 D27；obsolete quick/异常投递、MethodHandle invoke/invokeExact、JNI 四个 ID 调用助手均为 27/27，具体表为 D15/S17/G10（同一套库可能同时含多表，不能相加）。这些名字证明可定位；固定声明由运行时探测核对，Hook 覆盖由设备验证确认。
+公共命名目录现为 **57 个名称**（53 个限定 `.dynsym`、4 个允许任一命名表），在 27/27 套库全部通过。退役使用的 ThrowNewException、EncodeMethodId 两重载、GetCanonicalMethod、GetMirrorClass、HasSameNameAndSignature、FindDeclaredStatic/InstanceField 与运行时探测用的 `Class::FindInstanceField` 都为 D27；MethodHandle invoke/invokeExact 为 27/27（D15/S17/G10，同一套库可能同时含多表，不能相加）。删除守卫后不再使用的 ArtMethod Invoke、FromReflectedMethod、ThrowNewWrappedException、obsolete quick/异常投递与 JNI 四个 ID 调用助手已移出目录。这些名字证明可定位；固定声明由运行时探测核对，Hook 覆盖由设备验证确认。
 
-六个非全套条目的逐库结果如下；名称与完整分表结果保存在审计清单/报告，部分存在的名称没有加入公共严格目录。缺少任一名称的运行库保持 Phase 2。
+非全套条目的逐库结果如下；名称与完整分表结果保存在审计清单/报告。`Method_invoke` 是局部函数，各构建拼写为无后缀或带一个固定 `.__uniq` 后缀，按两个精确名依次查找，27/27 至少有其一；frame 入口只在 13 起存在。
 
 | 非全套服务 | 任一表存在 / 27 | D / S / G / 缺失 | Android 16 设备库 |
 | --- | --- | --- | --- |
-| InvokeMethod<PointerSize::k64> | 23 | 11 / 13 / 10 / 4 | G |
-| MethodHandleInvokeExactWithFrame | 18 | 6 / 8 / 10 / 9 | G |
-| EnterInterpreterFromInvoke（ObjPtr 接收者） | 27 | 15 / 17 / 10 / 0 | G |
-| ScopedCheck::CheckMethodAndSig（固定 `.__uniq` 名称） | 16 | 0 / 6 / 10 / 11 | G |
-| DoCall<false> | 14 | 11 / 4 / 2 / 13 | D |
-| DoCall<true> | 14 | 11 / 4 / 2 / 13 | D |
+| `Method_invoke`（无后缀 / 固定 `.__uniq` 后缀） | 27（11 / 16） | 无后缀 0 / 11 / 0 / 16；带后缀 0 / 6 / 10 / 11 | 带后缀名 |
+| MethodHandleInvokeExactWithFrame（可选） | 18 | 6 / 8 / 10 / 9 | G |
 
 ART/NDK 的指针 map 边界限定 libc++ ABI v1 specialization；固定节点布局对照平台 libc++ 源码，编译时检查 NDK 类型大小，初始化时用增强库自己的 empty/one-node map 验证 sentinel、root、size 和 value 布局。这个检查没有读写 ART 私有对象以猜偏移；提交时另核对 ART 传入的 map 为空树。真实 ART map 遍历、替换与销毁已在 Android 16 设备的两轮方法退役/恢复用例中通过；其他构建仍须独立验证。
 
@@ -203,7 +205,7 @@ python3 tools/test-elf-mini-inventory.py
 | `CollectAndCreateNewInstances` | 为旧实例分配新实例 | 原函数成功后核对槽位声明并预算映射；依赖自有映射的事务在失败时返回错误 |
 | `UpdateClassStructurally` | 原生字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只包裹 visitor 作用域，完整调用原提交；不 Hook CopyFields，不自行提交或重新实现失效 |
 | `Runtime::VisitReflectiveTargets` | 原成员映射与 shadowing 处理 | 在原 visitor 前清除退役 DexCache 方法；其余交给原 visitor；字段路径保持原生 |
-| 命名方法访问/调用入口、JNI Encode、CheckJNI 检查 | obsolete 新调用可能 InternalError，旧 virtual 索引可能变化 | 仅对显式退役目标在分派前报 NoSuchMethodError，其他调用转发；旧活动帧恢复路径保持 ART |
+| JNI 函数表、`Method_invoke`、MethodHandle 入口、JNI Encode | 缓存的反射/JNI/句柄目标是旧声明类的 obsolete 方法：反射与 CheckJNI 报接收者类型错误，句柄与 JNI 按旧 vtable 索引可能分派到别的方法 | 仅对显式退役目标在分派前报 NoSuchMethodError，其他调用转发；字节码调用由 DexCache 清除后的重新解析报错；旧活动帧恢复路径保持 ART |
 | `AllocateNewClassObject` / `FinishNewClassAllocations` | 使用旧层级重建类和子类 | 方案 C 完全保留；改变新父类/接口的分配策略留待 Phase 4 |
 
 ## 语义
@@ -276,7 +278,7 @@ python3 tools/test-elf-mini-inventory.py
    2. 由 `DexFilePrefix` 构造 `DexView`（文件大小取自 DEX 头），用 `ReadClassDeclarations` 读取新类。读取失败或描述符不一致时，调用原函数。
    3. 先运行类声明探测，再调用 `structural_policy::Evaluate`（探测结果决定是否允许退役与拷贝成员变化）：拒绝时写 `driver->result`，记录 `lastRejection` 和 logcat，返回 false；接受时按 `ClassRedefinition*` 在线程局部保存包含退役声明的决策，记录该批次是否需永久保根；若该决策离开自有映射就会被拒绝，则标记事务依赖映射，返回 true。
 4. **CheckFields / CheckMethods**：有对应决策时，按 `fields_structural` / `methods_structural` 调用 `RecordNewFieldAdded` / `RecordNewMethodAdded`，然后返回 true，`CheckMethods` 之后清除决策；没有决策时调用原函数。
-5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange`；`fieldDeletion/fieldTypeChange`、泛称 `memberDeletion/memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 为 false。`checkJniRetirementGuards` 统计 CheckJNI 实际拒绝退役 ID 的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
+5. **Capabilities**：报告 `installed`、`standardRedefineRouted`、`memberAddition`、`memberModifierChange`，以及只在已安装方案 C 中为 true 的 `methodDeletion/methodSignatureChange`；`fieldDeletion/fieldTypeChange`、泛称 `memberDeletion/memberTypeChange`、`hierarchyChange`、`fullDcevmComplete` 为 false。`memberMapping` 报告最近一次探测结果，`jniRetirementGuards` 统计 JNI 与 `Method.invoke` 实际拒绝退役目标的次数；外加 `diagnostic` 和 `lastRejection`（用 `support/json.h` 转义）。
 
 映射、visitor 和方法访问守卫的事务语义见方案 C；类分配与原生提交算法继续由 ART 执行。
 
@@ -287,7 +289,7 @@ python3 tools/test-elf-mini-inventory.py
 | 清理 | 删除调用图、选择性解释、启动门控等旧实现及其测试、工具和文档 | 已完成，旧代码见备份标签 |
 | Phase 1 | 可调试前提检查；标准 `RedefineClasses` 路由到 `StructurallyRedefineClasses` | Android 16 上，独立 Agent 经标准入口新增字段和方法成功；仅方法体变化的行为不变 |
 | Phase 2 | 上节的校验规则 | 修饰符变化用例提交成功并体现新语义；拒绝用例返回约定错误码且旧定义完整；无效批次整体不提交 |
-| Phase 3（方案 C） | 普通类 concrete Java 方法删除/签名替换；保留 ART 原提交，字段退役继续拒绝 | Android 16 设备、探测选中 android16 布局：新/缓存普通调用、反射、JNI 普通/A/V、MethodHandle 退役异常正确，CheckJNI ON 与线程强制解释执行下同样通过；父类/default 回落、删除/恢复、GC 与旧活动帧通过；字段拒绝及整批原子性通过。不以字段墓碑或 VarHandle 字段退役作为本阶段完成判据 |
+| Phase 3（方案 C） | 普通类 concrete Java 方法删除/签名替换；保留 ART 原提交，字段退役继续拒绝 | Android 16 设备、探测选中 android16 布局：新/缓存普通调用、反射、JNI 普通/A/V、MethodHandle（含 bindTo/asType 组合句柄）退役异常正确，CheckJNI ON 与线程强制解释执行下同样通过；父类/default 回落、删除/恢复、GC 与旧活动帧通过；字段拒绝及整批原子性通过。不以字段墓碑或 VarHandle 字段退役作为本阶段完成判据 |
 | Phase 4 | 继承关系和类修饰符变化，收窄前的帧检查 | 父类和接口的扩展、移除、恢复用例通过；持有受影响实例的不可去优化帧导致拒绝且旧定义完整 |
 | Phase 5 | Android 11、12、13、14、15、17 逐台回归 | 每台设备的结果和 APK 哈希记录在 [VERIFICATION.md](VERIFICATION.md) |
 
@@ -296,5 +298,5 @@ python3 tools/test-elf-mini-inventory.py
 ## 风险
 
 - **Mainline 更新**：ART APEX 会随 Play 系统更新替换，平台版本与 ART 源码版本可能不同。候选声明覆盖 11–17 源码，由运行时探测在每次事务中核对；探测不通过时保持 Phase 2 语义。新的 ART 源码版本须补充核对，确有差异时新增版本目录。
-- **ART 服务语义漂移**：方案 C 保留原 Update。探测只能核对有 ART 服务或 JVMTI 作对照的声明（Class、ArtField、ArtMethod、DexCache、槽位、map、obsolete 标志、MethodHandle 偏移）；visitor 虚表顺序与来源类型、ScopedObjectAccess 与守卫签名依赖源码声明与精确符号名。扩展版本时核对源码与设备行为，差异只放 `platform/abi/arm64/androidNN/`，不复制后端。
+- **ART 服务语义漂移**：方案 C 保留原 Update。探测只能核对有 ART 服务或 JVMTI 作对照的声明（Class、ArtField、ArtMethod、DexCache、槽位、map、obsolete 标志、MethodHandle 偏移）；visitor 虚表顺序与来源类型、Handle 与守卫签名依赖源码声明与精确符号名；JNI 守卫只用公开 JVMTI/JNI。扩展版本时核对源码与设备行为，差异只放 `platform/abi/arm64/androidNN/`，不复制后端。
 - **退役访问边界**：方案 C 保留真实旧 ArtMethod 并守卫新调用；字段退役仍是后续目标，不能依赖假的成员自然抛异常。

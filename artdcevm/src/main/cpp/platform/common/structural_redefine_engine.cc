@@ -408,7 +408,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env) {
   using method_retirement::Hook;
   std::vector<Hook> replacements;
   std::string retirement_note;
-  method_retirement::Prepare(&replacements, &retirement_note);
+  method_retirement::Prepare(vm, env, &replacements, &retirement_note);
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -447,8 +447,8 @@ std::string Capabilities() {
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":false,\"fieldTypeChange\":false" +
       ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
-      ",\"checkJniRetirementGuards\":" +
-          std::to_string(method_retirement::CheckJniRetirementGuardHits()) +
+      ",\"jniRetirementGuards\":" +
+          std::to_string(method_retirement::JniRetirementGuardHits()) +
       ",\"memberDeletion\":false,\"memberTypeChange\":false,\"hierarchyChange\":false,"
       "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +
       ",\"lastRejection\":" + QuoteJsonMutf8(last_rejection) + "}";

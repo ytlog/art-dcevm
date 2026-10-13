@@ -417,6 +417,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private void checkMethodBaseline(Scenario scenario, MethodSubject subject,
             MethodTargets targets) throws Exception {
+        targets.adapt(subject);
         // Warm caller resolutions and JIT code before each retirement.
         for (int count = 0; count < 12000; count++) {
             MethodCaller.callStatic();
@@ -444,6 +445,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     targets.invokeHandle(index, subject, 1));
             scenario.check("handleInvokeBefore" + index, expected[index],
                     targets.invokeHandle(index, subject, 2));
+            scenario.check("handleBoundBefore" + index, expected[index],
+                    targets.invokeHandle(index, subject, 3));
+            scenario.check("handleAdaptedBefore" + index, expected[index],
+                    targets.invokeHandle(index, subject, 4));
             scenario.check("jniBefore" + index, expected[index],
                     StandardJvmtiClient.callCachedMethod(subject, method));
             scenario.check("reflectedJniBefore" + index, expected[index],
@@ -474,6 +479,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         final String[] names = {"directValue", "staticValue", "virtualValue", "signatureValue"};
         final Method[] methods = new Method[4];
         final MethodHandle[] handles = new MethodHandle[4];
+        // Transformer handles invoke their direct target through an emulated
+        // stack frame rather than invoke-polymorphic on it.
+        final MethodHandle[] bound = new MethodHandle[4];
+        final MethodHandle[] adapted = new MethodHandle[4];
 
         MethodTargets() throws Exception {
             for (int index = 0; index < names.length; index++) {
@@ -489,8 +498,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             return invokeHandle(index, subject, 0);
         }
 
+        /** Builds the transformer handles while every target is still live. */
+        void adapt(MethodSubject subject) {
+            for (int index = 0; index < handles.length; index++) {
+                bound[index] = index == 1
+                        ? MethodHandles.dropArguments(handles[index], 0, MethodSubject.class).bindTo(subject)
+                        : handles[index].bindTo(subject);
+                adapted[index] = handles[index].asType(handles[index].type().changeReturnType(Object.class));
+            }
+        }
+
         Object invokeHandle(int index, MethodSubject subject, int form) throws Exception {
             try {
+                if (form == 3) {
+                    if (index == 3) return (int) bound[index].invokeExact(4);
+                    return (int) bound[index].invokeExact();
+                }
+                if (form == 4) {
+                    if (index == 1) return (Object) adapted[index].invokeExact();
+                    if (index == 3) return (Object) adapted[index].invokeExact(subject, 4);
+                    return (Object) adapted[index].invokeExact(subject);
+                }
                 if (form == 1) {
                     if (index == 1) return (int) handles[index].invokeExact();
                     if (index == 3) return (int) handles[index].invokeExact(subject, 4);
@@ -530,6 +558,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         () -> invokeHandle(method, subject, 1));
                 scenario.expectError("cachedHandleInvoke" + index, NoSuchMethodError.class,
                         () -> invokeHandle(method, subject, 2));
+                scenario.expectError("cachedHandleBound" + index, NoSuchMethodError.class,
+                        () -> invokeHandle(method, subject, 3));
+                scenario.expectError("cachedHandleAdapted" + index, NoSuchMethodError.class,
+                        () -> invokeHandle(method, subject, 4));
                 scenario.expectError("cachedJni" + index, NoSuchMethodError.class,
                         () -> StandardJvmtiClient.callCachedMethod(subject, method));
                 scenario.expectError("reflectedJni" + index, NoSuchMethodError.class,
