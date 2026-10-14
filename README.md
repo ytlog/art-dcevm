@@ -17,7 +17,7 @@ The app must be debuggable from process start. No root and no system partition c
 - **Stale reference protection**: removed or replaced members reject access through bytecode, reflection, JNI, MethodHandle and VarHandle.
 - **Batch redefinition**: submit several classes in one `RedefineClasses` call; unsupported changes are rejected with a JVMTI error, nothing in the batch takes effect and the old definitions stay usable.
 
-Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md) (Chinese).
+Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md).
 
 ## Quick start
 
@@ -154,7 +154,7 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 - Raw field offsets cached by `Unsafe`, `Atomic*FieldUpdater` and similar APIs become invalid once the instance layout changes.
 - `RetransformClasses` is not covered. Patch delivery, signature verification, access control and release tooling are the caller's responsibility.
 
-Full semantics are described in [limitations](docs/LIMITATIONS.md) (Chinese).
+Full semantics are described in [limitations](docs/LIMITATIONS.en.md).
 
 ## Sample and verification
 
@@ -167,7 +167,5 @@ The script installs and drives the sample app `dev.artdcevm.lab`, kills any prev
 
 ## Documentation
 
-The documents below are written in Chinese.
-
-- [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md)
-- [Limitations and semantics](docs/LIMITATIONS.md)
+- [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md)
+- [Limitations and semantics](docs/LIMITATIONS.en.md)

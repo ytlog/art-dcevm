@@ -1,5 +1,7 @@
 # 能力限制
 
+[English](LIMITATIONS.en.md) | 中文
+
 本文汇总使用时需要知道的前提、会被拒绝的变化以及各类变化的语义。实现机制见 [STRUCTURAL_REDEFINE_ENGINE.md](STRUCTURAL_REDEFINE_ENGINE.md)。
 
 ## 前提限制

@@ -1,5 +1,7 @@
 # 结构重定义引擎
 
+[English](STRUCTURAL_REDEFINE_ENGINE.en.md) | 中文
+
 本文说明增强库如何在设备 ART 自带的结构重定义事务之上实现类演进：接管哪些决策点、每一步做什么，以及各类变化的语义。面向使用者的语义汇总见 [LIMITATIONS.md](LIMITATIONS.md)。
 
 ## 目标与前提
