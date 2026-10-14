@@ -215,6 +215,49 @@ class LocalReference {
   JNIEnv* jni_;
 };
 
+std::string Signature(jclass klass) {
+  char* signature = nullptr;
+  if (!klass || snapshot_env->GetClassSignature(klass, &signature, nullptr) != JVMTI_ERROR_NONE)
+    return "<invalid class>";
+  std::string result = signature;
+  snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+  return result;
+}
+
+std::string ErrorName(jvmtiError error) {
+  std::string name = "JVMTI_ERROR_" + std::to_string(error);
+  char* text = nullptr;
+  if (snapshot_env->GetErrorName(error, &text) == JVMTI_ERROR_NONE) {
+    name = text;
+    snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(text));
+  }
+  return name + " (" + std::to_string(error) + ")";
+}
+
+// The rejection of a failure that neither the policy nor the engine
+// explained. ART rejects an unmodifiable class, interfaces included, at its
+// entry before any hook or ClassFileLoadHook runs, and keeps its own message
+// in the log only.
+std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
+                            jvmtiError result) {
+  std::string classes;
+  for (jint i = 0; definitions && i < count; ++i) {
+    const jclass klass = definitions[i].klass;
+    const std::string signature = Signature(klass);
+    jboolean flag = JNI_FALSE;
+    if (result == JVMTI_ERROR_UNMODIFIABLE_CLASS && klass) {
+      if (snapshot_env->IsInterface(klass, &flag) == JVMTI_ERROR_NONE && flag)
+        return signature + ": ART redefines no interface, including default method bodies; " +
+            ErrorName(result);
+      if (snapshot_env->IsModifiableClass(klass, &flag) == JVMTI_ERROR_NONE && !flag)
+        return signature + ": ART reports the class as unmodifiable; " + ErrorName(result);
+    }
+    classes += (classes.empty() ? "" : ", ") + signature;
+  }
+  return (classes.empty() ? "" : classes + ": ") + "ART rejected the redefinition with " +
+      ErrorName(result) + "; its reason follows \"FAILURE TO REDEFINE\" in the log";
+}
+
 std::string_view Package(const std::string& descriptor) {
   const size_t end = descriptor.rfind('/');
   return end == std::string::npos ? std::string_view{} : std::string_view(descriptor.data(), end);
@@ -518,16 +561,26 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
-  for (jint i = 0; i < count; ++i)
-    if (!definitions[i].klass) return InvokeStructural(env, count, definitions);
+  // ART rejects a missing or unmodifiable target before any validator runs;
+  // do not load types for a batch it will not consider.
+  for (jint i = 0; i < count; ++i) {
+    jboolean modifiable = JNI_TRUE;
+    if (!definitions[i].klass ||
+        (snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
+         !modifiable))
+      return InvokeStructural(env, count, definitions);
+  }
   // Loading types precedes the loaded-class view.
   jvmtiError result = JVMTI_ERROR_NONE;
   for (jint i = 0; i < count; ++i) {
     Snapshot snapshot;
     std::string error;
+    const auto reject = [&](const std::string& reason) {
+      Diagnose(Signature(definitions[i].klass) + ": " + reason, true);
+    };
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
-    if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
+    if (read != JVMTI_ERROR_NONE) { reject(error); return static_cast<jvmtiError>(read); }
     if (const RetiredKinds* earlier = FindRetiredKinds(jni, definitions[i].klass))
       snapshot.retired = earlier->methods;
     TypeResolver resolver(jni, definitions[i].klass);
@@ -536,7 +589,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       PreloadReferencedTypes(definitions[i], &resolver, snapshot.live.descriptor, jni);
       result = ResolveNewTypes(definitions[i], &resolver, &batch, &snapshot, &error);
     }
-    if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
+    if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
   // ART recreates a target's subclasses under its new class and treats each
@@ -554,14 +607,15 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   WatchScope watch(jni, count, definitions);
   LocalClasses loaded(snapshot_env, jni);
   result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
-  if (result != JVMTI_ERROR_NONE) {
-    Diagnose("GetLoadedClasses failed while preparing structural validation");
-    return result;
-  }
+  // Failures without a reason here are described by Route.
+  if (result != JVMTI_ERROR_NONE) return result;
   for (auto& [klass, snapshot] : batch.classes) {
     std::string error;
     result = CollectSubclasses(jni, klass, loaded, &snapshot, &error);
-    if (result != JVMTI_ERROR_NONE) { Diagnose(error); return result; }
+    if (result != JVMTI_ERROR_NONE) {
+      Diagnose(snapshot.live.descriptor + ": " + error, true);
+      return result;
+    }
   }
   if (method_retirement::Available()) {
     // Build the permanent roots while Native, before ART's no-failure point.
@@ -597,8 +651,19 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   for (int attempt = 1;; ++attempt) {
     bool subclass_loaded = false;
     const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded);
-    if (result == JVMTI_ERROR_NONE || !subclass_loaded || attempt == kAttempts) return result;
-    subclass_retries.fetch_add(1);
+    if (result == JVMTI_ERROR_NONE) return result;
+    if (subclass_loaded && attempt < kAttempts) {
+      subclass_retries.fetch_add(1);
+      continue;
+    }
+    // Every failure names its classes, whichever check rejected it.
+    bool explained;
+    {
+      std::lock_guard<std::mutex> lock(report_mutex);
+      explained = !last_rejection.empty();
+    }
+    if (!explained) Diagnose(DescribeFailure(count, definitions, result), true);
+    return result;
   }
 }
 

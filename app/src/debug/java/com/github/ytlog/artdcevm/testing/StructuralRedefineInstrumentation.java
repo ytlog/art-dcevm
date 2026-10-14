@@ -483,6 +483,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private void runCopiedDefaultScenario() throws Exception {
         CopiedChild child = new CopiedChild();
         CopiedDefault viaInterface = child;
+        // ART rejects interfaces before any validator; the rejection still names the interface.
+        runScenario("interface-default-body", 79, scenario -> {
+            scenario.redefine(new Class<?>[]{CopiedDefault.class}, "interface-default-body");
+            scenario.check("interfaceReason", true, DcevmRuntime.capabilities()
+                    .optString("lastRejection").contains("ART redefines no interface"));
+            scenario.check("copiedUnchanged", 91, viaInterface.copiedValue());
+        });
         runScenario("copied-default-add", 0, scenario -> {
             scenario.check("copiedBefore", 91, viaInterface.copiedValue());
             scenario.redefine(new Class<?>[]{CopiedParent.class}, "copied-default-add");

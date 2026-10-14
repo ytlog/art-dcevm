@@ -19,8 +19,8 @@ namespace artdcevm::structural_redefine {
 jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
                    const method_retirement::FieldPlaceholders& placeholders);
 
-// JSON capability report. lastRejection is the validation rejection of the
-// latest outermost standard-entry transaction, empty when it was accepted.
+// JSON capability report. lastRejection names the class and reason of the
+// latest outermost standard-entry transaction's failure, empty when it succeeded.
 std::string Capabilities();
 
 }  // namespace artdcevm::structural_redefine

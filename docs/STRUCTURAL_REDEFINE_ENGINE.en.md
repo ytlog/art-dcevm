@@ -86,7 +86,7 @@ A marked attempt fails with `JVMTI_ERROR_INTERNAL` in `CollectAndCreateNewInstan
 
 `CheckClass` reads `klass` and `dex_file` according to `redefinition.h`, calling the original function if the class is absent from the context. It then reads the new declaration (ClassDef 0) through `DexView`, probes the layout, reads runtime flags of added interfaces and the new superclass, and calls `structural_policy::Evaluate`:
 
-- On rejection, write only `driver_->result_` and return false; `Redefiner::RecordFailure` itself does the same. Record the reason in diagnostics, `lastRejection` and logcat.
+- On rejection, write only `driver_->result_` and return false; `Redefiner::RecordFailure` itself does the same. Record the reason in `lastRejection` and logcat.
 - On acceptance, store the decision, including the retired-declaration list, in thread-local storage keyed by `ClassRedefinition*`. Mark the transaction as mapping-dependent if the decision would be rejected without custom mapping.
 
 `CheckFields` / `CheckMethods` call the appropriate `RecordNew*Added` according to `fields_structural` / `methods_structural`. The decision is cleared after `CheckMethods`.
@@ -238,7 +238,7 @@ The JSON returned by `DcevmRuntime.capabilities()` contains:
 | `memberMapping` | Latest probe result: `unavailable`, `unverified`, `verified: androidNN class layout`, or `rejected: reason` |
 | `jniRetirementGuards` | Count of actual JNI/reflection guard rejections of retired targets |
 | `subclassLoadRetries` | Count of retries caused by a subclass of a target loading during a transaction; see [class loading during transactions](#class-loading-during-transactions) |
-| `diagnostic`, `lastRejection` | Installation diagnostics and the most recent rejection reason |
+| `diagnostic`, `lastRejection` | Installation diagnostics; the classes and reason of the latest standard-entry transaction failure, empty on success. Rejections by the policy, the snapshots and the pre-commit checks state their own reason. When one of ART's own checks rejects the batch (an interface, for example, is rejected with 79 at its entry), the standard entry names the rejected interface or unmodifiable class, or otherwise lists the batch's classes and the error name; ART's own message appears only in logcat after `FAILURE TO REDEFINE` |
 
 Whether a capability is usable still depends on each transaction's probes. Failed probes reject the corresponding changes with JVMTI errors.
 

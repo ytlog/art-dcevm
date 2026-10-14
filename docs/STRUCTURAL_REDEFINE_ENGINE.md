@@ -83,7 +83,7 @@ ART 的结构事务分两步处理子类：
 
 `CheckClass` 按 `redefinition.h` 取出 `klass` 与 `dex_file`，上下文中找不到该类时调用原函数。随后由 `DexView` 读取新类声明（ClassDef 0），运行布局探测，读取新增接口与新父类的运行时标志，再调用 `structural_policy::Evaluate`：
 
-- 拒绝时只写 `driver_->result_` 并返回 false（`Redefiner::RecordFailure` 本身也只做这件事），原因写入诊断、`lastRejection` 和 logcat。
+- 拒绝时只写 `driver_->result_` 并返回 false（`Redefiner::RecordFailure` 本身也只做这件事），原因写入 `lastRejection` 和 logcat。
 - 接受时按 `ClassRedefinition*` 在线程局部保存决策（含退役声明清单）；该决策若离开自有映射就会被拒绝，则标记事务依赖映射。
 
 `CheckFields` / `CheckMethods` 按决策的 `fields_structural` / `methods_structural` 调用对应的 `RecordNew*Added`，`CheckMethods` 之后清除决策。
@@ -235,7 +235,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `memberMapping` | 最近一次探测结果：`unavailable`、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因` |
 | `jniRetirementGuards` | JNI 与反射守卫实际拒绝退役目标的次数 |
 | `subclassLoadRetries` | 事务期间有目标类的子类加载而重试的次数（见[事务中的类加载](#事务中的类加载)） |
-| `diagnostic`、`lastRejection` | 安装诊断与最近一次拒绝原因 |
+| `diagnostic`、`lastRejection` | 安装诊断；最近一次标准入口事务失败时的类与原因，成功时为空。策略、快照与提交前核对的拒绝写明各自原因；ART 自己的检查拒绝时（如接口在入口即以 79 拒绝），标准入口写明被拒的接口或不可修改的类，否则列出批次中的类与错误名，ART 的原文只在 logcat 的 `FAILURE TO REDEFINE` 之后 |
 
 每项能力仍由每次事务的探测决定是否可用；探测未通过时，相应变化以 JVMTI 错误拒绝。
 

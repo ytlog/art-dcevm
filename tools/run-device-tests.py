@@ -52,6 +52,7 @@ SCENARIOS = (
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 71),
     ("method-storage-restore", ["method-storage-original"], 0),
+    ("interface-default-body", ["interface-default-body"], 79),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
@@ -245,6 +246,7 @@ REQUIRED_CHECKS = {
     "method-storage-restore": {
         "combined": 40, "callerStatic": 32, "callerVirtual": 8,
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "interface-default-body": {"interfaceReason": True, "copiedUnchanged": 91},
     "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
                            "newChild": 92, "parentValue": 90},
     "interface-hidden": INTERFACE_REJECTED_CHECKS,
