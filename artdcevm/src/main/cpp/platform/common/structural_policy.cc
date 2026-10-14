@@ -37,6 +37,19 @@ bool Initializer(const std::string& name) { return name == "<init>" || name == "
 // Static and private methods never occupy a vtable or iftable slot.
 bool Virtual(uint32_t modifiers) { return !(modifiers & (acc::kAccStatic | acc::kAccPrivate)); }
 
+// Verified code resolves a method by name and signature without checking that
+// it still has the invoke kind it was verified against, then calls it as that
+// kind: a static method with a receiver argument or an instance method
+// without one, or a private method through the vtable index it lacks. A
+// method identity therefore keeps being static or not, and once virtual stays
+// virtual. A private method may become virtual: only the class's own code
+// invokes it directly, which stays valid.
+// Constructors and initializers are always invoked directly.
+bool BreaksVerifiedCallers(const std::string& name, uint32_t before, uint32_t after) {
+  if (Initializer(name)) return false;
+  return ((before ^ after) & acc::kAccStatic) || (Virtual(before) && !Virtual(after));
+}
+
 // ART links a subclass interface slot to a public superclass method in
 // preference to a default, and otherwise copies the default or a miranda into
 // that subclass. A new or re-leveled target method can therefore remove a
@@ -148,7 +161,8 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 }
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, const Abilities& abilities) {
+                  const LoadedHierarchy& hierarchy, const Abilities& abilities,
+                  const RetiredMethods& retired) {
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   const bool superclass_changed = live.superclass != incoming.superclass;
@@ -221,6 +235,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
+    if (BreaksVerifiedCallers(old.name, old.access, now))
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                    "verified callers may still invoke the old kind of " + Describe(old));
     // Abstract <-> concrete and Java <-> native change the method's kind; the
     // structural path creates the new kind. Native -> Java needs the engine's
     // commit, which keeps ART from copying the old JNI entry into a Java method.
@@ -238,6 +255,12 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                     "method made final is overridden by a loaded subclass: " + Describe(old));
     if (changed) decision.methods_structural = true;
     new_methods.erase(it);
+  }
+  for (const auto& [key, now] : new_methods) {
+    const auto before = retired.find(key);
+    if (before != retired.end() && BreaksVerifiedCallers(key.first, before->second, now))
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                    "verified callers may still invoke the retired kind of " + key.first + key.second);
   }
   if (!new_methods.empty()) decision.methods_structural = true;
   // With the engine's mapping, a vanished copy maps to its canonical method.

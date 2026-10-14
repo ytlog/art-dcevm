@@ -96,18 +96,19 @@ ART 的结构事务分两步处理子类：
 
 ## 校验规则
 
-`structural_policy` 是纯函数，可在主机测试。成员身份：字段为（名称、类型、static），方法为（名称、描述符）。比较前把 DEX 原始标志规范化为 JVMTI 视图（与 `ti_method.cc`、`ti_field.cc`、`ti_class.cc` 一致：取 Java 标志位，方法的 declared-synchronized 映射为 synchronized，abstract 方法去掉 native）。
+`structural_policy` 是纯函数，可在主机测试。成员身份：字段为（名称、类型、static），方法为（名称、描述符），方法的调用方式还受[调用方式不变](#调用方式不变)约束。比较前把 DEX 原始标志规范化为 JVMTI 视图（与 `ti_method.cc`、`ti_field.cc`、`ti_class.cc` 一致：取 Java 标志位，方法的 declared-synchronized 映射为 synchronized，abstract 方法去掉 native）。
 
 “可退役”指方法退役 Hook 已安装且本事务的布局探测通过；字段变化另需字段守卫可用。
 
 | 变化 | 结果 |
 | --- | --- |
 | 新增字段、方法 | 接受 |
-| 已有成员的访问级别、final、volatile、transient、synchronized 变化；Java → native；abstract ↔ concrete | 接受 |
+| 已有成员的访问级别、final、volatile、transient、synchronized 变化（实例方法改为 private 除外）；Java → native；abstract ↔ concrete | 接受 |
 | 方法新增 final，且已加载的子类覆写它 | 拒绝 `METHOD_MODIFIERS_CHANGED`（71） |
 | 新增或改变访问级别的实例方法，可能顶替已加载子类的 copied default/miranda | 可退役时接受，由自有映射处理；否则新增拒绝 `METHOD_ADDED`（63），访问级别变化拒绝 71 |
 | native → Java | 可退役时接受（引擎处理 JNI 入口复制）；否则拒绝 71 |
-| 方法在 static 与实例之间变化，varargs、strict 标志变化 | 拒绝 71 |
+| 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | 拒绝 71（见[调用方式不变](#调用方式不变)） |
+| 方法的 varargs、strict 标志变化 | 拒绝 71 |
 | 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则或方法声明在接口中时拒绝 `METHOD_DELETED`（67） |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |
@@ -203,6 +204,17 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 - 父类：已解析为父类 A 字段的访问，在解释器中同样不检查接收者类型，会按 A 的偏移读写 T 的实例。
 
 在提交时检查堆和栈只能覆盖已经存在的引用，覆盖不了之后才执行的这类代码。安全的收窄需要 ART 重新校验所有可能依赖旧类型关系的已加载类，目前没有可用的命名入口。
+
+## 调用方式不变
+
+已校验的代码按名称与签名解析方法，不检查方法是否仍是校验时的调用方式：跳过访问检查的方法使用不带检查的解析，Android 16 起这条路径（`ClassLinker::ResolveMethodId`）不再接收调用类型。解析结果随后按指令的调用类型执行：
+
+- `invoke-static` 解析到实例方法时，以缺少接收者的参数执行实例方法体。
+- `invoke-virtual` 解析到 static 方法或 private 方法时，按它们并不拥有的 vtable 索引分派到别的方法。
+
+调用方的 DexCache 项随旧方法退役而清除，之后的重新解析正是这条路径；引擎无法让它抛 `IncompatibleClassChangeError`，所以同一方法身份（名称、描述符）始终保持 static 或实例，虚方法不会变成 private。private 方法可以变成虚方法：直接调用它的只有该类自己的代码，仍然有效。构造器与类初始化器总是直接调用，不受此限制。
+
+引擎记录每个类在已提交事务中退役的方法及其修饰符，之后重新加入同一身份时按同样规则检查；记录随类保留到进程结束。字段的解析带有 static 属性，找不到另一种存储方式的同名字段，因此字段的 static 变化可以按退役处理。
 
 ## 活动帧
 

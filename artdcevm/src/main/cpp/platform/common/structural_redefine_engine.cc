@@ -56,6 +56,9 @@ void Diagnose(const std::string& text, bool rejection = false) {
 struct Snapshot {
   evolution::ClassSchema live;
   structural_policy::LoadedHierarchy hierarchy;
+  // Methods the class retired in earlier transactions, and those this one retires.
+  structural_policy::RetiredMethods retired;
+  std::vector<evolution::Member> retiring;
   // Global references of hierarchy.added_interfaces and new_superclass, owned by the batch.
   std::map<std::string, jclass> interface_classes;
   jclass superclass_class = nullptr;
@@ -76,6 +79,36 @@ struct Batch {
   }
 };
 thread_local Batch* current_batch = nullptr;
+
+// Methods each class retired in committed transactions, guarded by
+// transaction_mutex. ART's reference replacement keeps each global reference
+// on the class's current definition.
+struct RetiredKinds {
+  jobject klass;
+  structural_policy::RetiredMethods methods;
+};
+std::vector<RetiredKinds> retired_kinds;
+
+RetiredKinds* FindRetiredKinds(JNIEnv* jni, jclass klass) {
+  for (RetiredKinds& entry : retired_kinds)
+    if (jni->IsSameObject(entry.klass, klass)) return &entry;
+  return nullptr;
+}
+
+void RecordRetiredKinds(JNIEnv* jni, jclass klass, const std::vector<evolution::Member>& methods) {
+  RetiredKinds* entry = FindRetiredKinds(jni, klass);
+  if (!entry) {
+    jobject root = jni->NewGlobalRef(klass);
+    if (!root) {
+      // Without the record a later batch could give these methods another kind.
+      if (jni->ExceptionCheck()) jni->ExceptionClear();
+      Diagnose("cannot record the kinds of retired methods");
+      return;
+    }
+    entry = &retired_kinds.emplace_back(RetiredKinds{root, {}});
+  }
+  for (const auto& method : methods) entry->methods[{method.name, method.descriptor}] = method.access;
+}
 
 // Targets of a routed transaction whose subclass the JVMTI ClassPrepare event
 // reports after the engine's snapshot, on any thread.
@@ -455,6 +488,8 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
       method_retirement::RetainRoots(std::move(current_batch->retirement_roots));
       current_batch->retirement_roots.clear();
     }
+    for (const auto& [klass, snapshot] : current_batch->classes)
+      if (!snapshot.retiring.empty()) RecordRetiredKinds(current_batch->jni, klass, snapshot.retiring);
     // A nested ClassFileLoadHook transaction may change the outer batch's
     // targets after its snapshots. Let ART's original validators handle that
     // outer batch rather than accepting a decision based on stale members.
@@ -493,6 +528,8 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { Diagnose(error); return static_cast<jvmtiError>(read); }
+    if (const RetiredKinds* earlier = FindRetiredKinds(jni, definitions[i].klass))
+      snapshot.retired = earlier->methods;
     TypeResolver resolver(jni, definitions[i].klass);
     result = resolver.Init(&error);
     if (result == JVMTI_ERROR_NONE) {
@@ -600,7 +637,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   abilities.superclass_change =
       abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
-                                              abilities);
+                                              abilities, snapshot.retired);
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -611,8 +648,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   structural_policy::Abilities without_mapping;
   without_mapping.instance_check = abilities.instance_check;
   if (abilities.member_mapping &&
-      structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping)
-              .error != JVMTI_ERROR_NONE)
+      structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping,
+                                  snapshot.retired).error != JVMTI_ERROR_NONE)
     method_retirement::RequireMemberMapping();
   if (decision.requires_no_instances)
     method_retirement::RequireNoInstances(self, incoming.descriptor);
@@ -620,6 +657,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
     method_retirement::ChangeSuperclass(self, snapshot.superclass_class, incoming.descriptor);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     current_batch->retires_members = true;
+  snapshot.retiring = decision.retired_methods;
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
 }

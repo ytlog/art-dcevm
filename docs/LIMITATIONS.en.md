@@ -18,7 +18,8 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 
 | Change | Error code | Notes |
 | --- | --- | --- |
-| Switching a method between static and instance, or changing its varargs or strict flags | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Delete the old method and add a method with a different signature instead |
+| Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kinds stay fixed](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kinds-stay-fixed). Use a different name or signature instead |
+| Changing a method's varargs or strict flags | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
 | Removing an interface, or changing the superclass in a way that drops an existing supertype | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
 
@@ -60,7 +61,7 @@ The following conflicts reject the transaction:
 
 - Deleted methods and the old versions of methods whose signatures change are retired. Bytecode, JNI and MethodHandle calls to them throw `NoSuchMethodError`; a cached reflection `Method.invoke` throws `InvocationTargetException` wrapping that error. Old method frames already executing continue to run the old body.
 - Access to retired fields through bytecode, JNI or MethodHandle throws `NoSuchFieldError`. Cached reflection `Field` access throws `IllegalArgumentException` for instance fields and `NoClassDefFoundError` for static fields. VarHandle access throws `UnsupportedOperationException`. The name and declaring class of a cached reflection `Field` identify a field in a placeholder class inside the library.
-- Restoring a member with the same name creates a new member. Previously cached references remain retired.
+- Restoring a member with the same name creates a new member. Previously cached references remain retired. A restored method keeps its earlier static or instance form, and a method that was virtual cannot come back as private.
 - Classes that have retired members, and their class loaders, are kept alive until process exit.
 
 ## ART's own restrictions

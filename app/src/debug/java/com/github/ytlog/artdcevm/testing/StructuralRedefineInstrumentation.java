@@ -32,6 +32,10 @@ import com.github.ytlog.artdcevm.fixture.MethodCaller;
 import com.github.ytlog.artdcevm.fixture.MethodSubject;
 import com.github.ytlog.artdcevm.fixture.PreloadHookSubject;
 import com.github.ytlog.artdcevm.fixture.PreloadSubject;
+import com.github.ytlog.artdcevm.fixture.AccessCaller;
+import com.github.ytlog.artdcevm.fixture.AccessSubject;
+import com.github.ytlog.artdcevm.fixture.StorageCaller;
+import com.github.ytlog.artdcevm.fixture.StorageSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
@@ -274,6 +278,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     ModifierPassive.class.getSuperclass() == ModifierSubject.class);
         });
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
+        runMethodKindChangeScenarios();
         runCopiedDefaultScenario();
         runInterfaceScenarios();
         runSuperclassScenarios();
@@ -830,6 +835,55 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 checkMethodFields(scenario, subject, reference, staticReference);
             });
         }
+    }
+
+    // Verified callers resolve a method by name and signature without checking
+    // its invoke kind, so no change may make a method of that identity static
+    // where it was an instance method (or the reverse), or private where it was virtual.
+    private void runMethodKindChangeScenarios() throws Exception {
+        AccessSubject access = new AccessSubject();
+        runScenario("method-private", 71, scenario -> {
+            scenario.check("callerBefore", 7, AccessCaller.callTarget(access));
+            scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
+            scenario.check("targetIsPublic", true, Modifier.isPublic(
+                    AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+            scenario.check("callerAfter", 7, AccessCaller.callTarget(access));
+        });
+        StorageSubject subject = new StorageSubject();
+        Method cachedStatic = StorageSubject.class.getDeclaredMethod("staticValue");
+        runScenario("method-storage", 71, scenario -> {
+            scenario.check("callerStaticBefore", 32, StorageCaller.callStatic());
+            scenario.check("callerVirtualBefore", 8, StorageCaller.callVirtual(subject));
+            scenario.redefine(new Class<?>[]{StorageSubject.class}, "method-storage");
+            scenario.check("staticValueIsStatic", true, Modifier.isStatic(
+                    StorageSubject.class.getDeclaredMethod("staticValue").getModifiers()));
+            scenario.check("callerStatic", 32, StorageCaller.callStatic());
+            scenario.check("callerVirtual", 8, StorageCaller.callVirtual(subject));
+            scenario.check("combined", 40, subject.combined());
+        });
+        runScenario("method-storage-delete", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{StorageSubject.class}, "method-storage-delete");
+            scenario.check("combined", 35, subject.combined());
+            scenario.expectError("callerStatic", NoSuchMethodError.class, StorageCaller::callStatic);
+            scenario.expectError("callerVirtual", NoSuchMethodError.class,
+                    () -> StorageCaller.callVirtual(subject));
+            scenario.expectReflectionError("cachedReflectionStatic", () -> cachedStatic.invoke(null));
+        });
+        // The deleted methods come back only as the kinds their callers were verified against.
+        runScenario("method-storage-readd", 71, scenario -> {
+            scenario.redefine(new Class<?>[]{StorageSubject.class}, "method-storage");
+            scenario.check("combined", 35, subject.combined());
+            scenario.expectError("callerStatic", NoSuchMethodError.class, StorageCaller::callStatic);
+            scenario.expectError("callerVirtual", NoSuchMethodError.class,
+                    () -> StorageCaller.callVirtual(subject));
+        });
+        runScenario("method-storage-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{StorageSubject.class}, "method-storage-original");
+            scenario.check("combined", 40, subject.combined());
+            scenario.check("callerStatic", 32, StorageCaller.callStatic());
+            scenario.check("callerVirtual", 8, StorageCaller.callVirtual(subject));
+            scenario.expectReflectionError("cachedReflectionStatic", () -> cachedStatic.invoke(null));
+        });
     }
 
     private void checkRetiredInThreadInterpreter(Scenario scenario, MethodSubject subject,

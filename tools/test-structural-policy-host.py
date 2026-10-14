@@ -61,11 +61,27 @@ int main(int argc, char** argv) {
                           acc::kAccPublic | uint32_t{0x80}}) {
       next = live; next.fields[0].access = flags; Accept(live, next, true, false);
     }
-    for (uint32_t flags : {acc::kAccPrivate, acc::kAccProtected, uint32_t{0},
+    for (uint32_t flags : {acc::kAccProtected, uint32_t{0},
                           acc::kAccPublic | acc::kAccFinal,
                           acc::kAccPublic | acc::kAccDeclaredSynchronized,
-                          acc::kAccPrivate | acc::kAccNative}) {
+                          acc::kAccPublic | acc::kAccNative}) {
       next = live; next.methods[0].access = flags; Accept(live, next, false, true);
+    }
+    // Verified callers keep invoking a method as the kind they were verified
+    // against: virtual stays virtual and static stays static. Constructors and
+    // private methods are invoked directly and may change access.
+    for (uint32_t flags : {acc::kAccPrivate, acc::kAccPrivate | acc::kAccNative}) {
+      next = live; next.methods[0].access = flags;
+      Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
+    }
+    {
+      auto hidden = live; hidden.methods[0].access = acc::kAccPrivate;
+      Accept(hidden, live, false, true);
+      next = live; next.methods[1].access = acc::kAccPrivate;
+      Accept(live, next, false, true);
+      auto shared = live; shared.methods[0].access = acc::kAccPublic | acc::kAccStatic;
+      next = shared; next.methods[0].access = acc::kAccPrivate | acc::kAccStatic;
+      Accept(shared, next, false, true);
     }
     auto native = live; native.methods[0].access |= acc::kAccNative;
     Reject(native, live, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
@@ -102,6 +118,34 @@ int main(int argc, char** argv) {
     }
     Require(policy::Evaluate(live, live, {}, {true}).retired_methods.empty(),
             "unchanged declarations reported as retired");
+    {
+      // A method retired earlier comes back only as a kind its verified callers expect.
+      auto removed = live; removed.methods.erase(removed.methods.begin());
+      const policy::RetiredMethods virtual_work{{{"work", "()I"}, acc::kAccPublic}};
+      const policy::RetiredMethods static_work{{{"work", "()I"}, acc::kAccPublic | acc::kAccStatic}};
+      const policy::RetiredMethods private_work{{{"work", "()I"}, acc::kAccPrivate}};
+      for (uint32_t flags : {acc::kAccPublic | acc::kAccStatic, uint32_t{acc::kAccPrivate}}) {
+        next = removed; next.methods.push_back({"work", "()I", flags});
+        Require(policy::Evaluate(removed, next, {}, {true}, virtual_work).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                "retired virtual method came back with another kind");
+      }
+      for (uint32_t flags : {acc::kAccPublic, uint32_t{acc::kAccPrivate}}) {
+        next = removed; next.methods.push_back({"work", "()I", flags});
+        Require(policy::Evaluate(removed, next, {}, {true}, static_work).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                "retired static method came back as an instance method");
+      }
+      next = removed; next.methods.push_back({"work", "()I", acc::kAccProtected | acc::kAccFinal});
+      Require(policy::Evaluate(removed, next, {}, {true}, virtual_work).error == JVMTI_ERROR_NONE,
+              "retired virtual method could not come back with another access level");
+      next = removed; next.methods.push_back({"work", "()I", acc::kAccPublic});
+      Require(policy::Evaluate(removed, next, {}, {true}, private_work).error == JVMTI_ERROR_NONE,
+              "retired private method could not come back as a virtual method");
+      next = removed; next.methods.push_back({"work", "(I)I", acc::kAccPublic | acc::kAccStatic});
+      Require(policy::Evaluate(removed, next, {}, {true}, virtual_work).error == JVMTI_ERROR_NONE,
+              "another signature was checked against a retired method");
+    }
     {
       // A loaded subclass may own a copied default/miranda for copied()I.
       policy::LoadedHierarchy copies;

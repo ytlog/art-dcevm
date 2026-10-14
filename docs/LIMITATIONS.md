@@ -16,7 +16,8 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 方法在 static 与实例之间变化，或 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 可改为删除旧方法、新增不同签名的方法 |
+| 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式不变](STRUCTURAL_REDEFINE_ENGINE.md#调用方式不变)；可改用不同的名称或签名 |
+| 方法的 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 
@@ -56,7 +57,7 @@
 
 - 删除的方法和签名替换前的方法退役：字节码、JNI、MethodHandle 再调用时抛 `NoSuchMethodError`，缓存的反射 `Method.invoke` 抛包装它的 `InvocationTargetException`；已在执行的旧方法帧继续执行旧方法体。
 - 退役字段：字节码、JNI、MethodHandle 访问抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`，访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。缓存的反射 `Field` 的名称与声明类会显示为库内占位类的字段。
-- 恢复同名成员会产生新成员，旧的缓存引用保持退役。
+- 恢复同名成员会产生新成员，旧的缓存引用保持退役。恢复的方法须保持原来的 static 或实例形式，原为虚方法的不能恢复为 private。
 - 发生过退役的类及其 class loader 保留到进程结束。
 
 ## ART 自身的限制

@@ -95,9 +95,14 @@ uint32_t ClassModifiers(uint32_t dex_access);
 uint32_t FieldModifiers(uint32_t dex_access);
 uint32_t MethodModifiers(uint32_t dex_access);
 
+// Methods of the target that earlier transactions retired, with their JVMTI
+// modifiers. Verified callers may still invoke them as that kind.
+using RetiredMethods = std::map<MemberKey, uint32_t>;
+
 // `live` carries JVMTI modifiers, `incoming` raw DEX flags. A retired field's
 // replacement starts from its default value; a retired method throws on new access.
 Decision Evaluate(const evolution::ClassSchema& live, const evolution::ClassSchema& incoming,
-                  const LoadedHierarchy& hierarchy, const Abilities& abilities = {});
+                  const LoadedHierarchy& hierarchy, const Abilities& abilities = {},
+                  const RetiredMethods& retired = {});
 
 }  // namespace artdcevm::structural_policy

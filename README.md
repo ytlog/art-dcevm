@@ -11,7 +11,7 @@ The app must be debuggable from process start. No root and no system partition c
 - **Method body replacement**: update method implementations of loaded classes.
 - **Adding and removing members**: add, remove and re-add fields, methods and constructors, including native and abstract methods and class initializers.
 - **Member shape changes**: change field types and method signatures, switch fields between static and instance, and switch methods between native and Java or abstract and concrete.
-- **Modifier changes**: change access, final, abstract, synchronized, volatile and other modifiers on members and classes.
+- **Modifier changes**: change access, final, abstract, synchronized, volatile and other modifiers on members and classes; an instance method cannot become private.
 - **Hierarchy evolution**: add interfaces, and replace the superclass with a subclass of the original superclass.
 - **Live objects**: existing values of compatible fields are kept; fields added to existing objects start as zero or `null`, and constructors are not re-run.
 - **Stale reference protection**: removed or replaced members reject access through bytecode, reflection, JNI, MethodHandle and VarHandle.
@@ -149,6 +149,7 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 
 - Fields added to existing objects start as zero or `null`; newly created objects run the new constructors. A change of field type or of static / instance form retires the old member and creates a new one.
 - A removed member, or one whose signature or type changed, is retired: old references to it throw `NoSuchMethodError`, `NoSuchFieldError` and similar errors; method frames already executing keep running the old body. Application code must handle these semantic changes.
+- A method keeps its invoke kind: switching it between static and instance, making an instance method private, or re-adding a deleted method as the other kind is rejected, because verified callers would still invoke it as the old kind.
 - Removing an interface, or any hierarchy change that drops an existing supertype, is rejected. Conflicts such as a loaded subclass overriding a method that becomes final, or a class with its own live instances becoming abstract, also reject the transaction.
 - Structural changes walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
 - Raw field offsets cached by `Unsafe`, `Atomic*FieldUpdater` and similar APIs become invalid once the instance layout changes.

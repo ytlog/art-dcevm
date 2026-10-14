@@ -47,6 +47,11 @@ SCENARIOS = (
     ("methods-restore", ["methods-original"], 0),
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
+    ("method-private", ["method-private"], 71),
+    ("method-storage", ["method-storage"], 71),
+    ("method-storage-delete", ["method-storage-delete"], 0),
+    ("method-storage-readd", ["method-storage"], 71),
+    ("method-storage-restore", ["method-storage-original"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
@@ -73,7 +78,8 @@ SCENARIOS = (
 # flags of an added interface.
 MAPPED_SCENARIOS = {"hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
                     "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
-                    "methods-restore-again", "copied-default-add", "interface-add", "super-widen",
+                    "methods-restore-again", "method-storage-delete", "method-storage-restore",
+                    "copied-default-add", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -226,6 +232,19 @@ REQUIRED_CHECKS = {
     "methods-restore": METHOD_RESTORE_CHECKS,
     "methods-retire-again": METHOD_RETIRE_CHECKS,
     "methods-restore-again": METHOD_RESTORE_CHECKS,
+    "method-private": {"callerBefore": 7, "targetIsPublic": True, "callerAfter": 7},
+    "method-storage": {"callerStaticBefore": 32, "callerVirtualBefore": 8, "staticValueIsStatic": True,
+                       "callerStatic": 32, "callerVirtual": 8, "combined": 40},
+    "method-storage-delete": {
+        "combined": 35, "callerStatic": "java.lang.NoSuchMethodError",
+        "callerVirtual": "java.lang.NoSuchMethodError",
+        "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "method-storage-readd": {
+        "combined": 35, "callerStatic": "java.lang.NoSuchMethodError",
+        "callerVirtual": "java.lang.NoSuchMethodError"},
+    "method-storage-restore": {
+        "combined": 40, "callerStatic": 32, "callerVirtual": 8,
+        "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
                            "newChild": 92, "parentValue": 90},
     "interface-hidden": INTERFACE_REJECTED_CHECKS,
