@@ -10,7 +10,7 @@
 ## 验证记录
 
 - 测试原始日志和逐次设备报告写入已忽略的 `build/evidence/`，不提交。
-- 在 `docs/VERIFICATION.md` 记录本次改动必要的测试命令、结论、设备与 APK 哈希；仅在确有复核需要时另行提交精简证据。
+- 在已忽略的 `local/verification/VERIFICATION.md` 记录本次改动必要的测试命令、结论、设备与 APK 哈希；兼容性验证说明保存在 `local/verification/ANDROID_COMPATIBILITY.md`。这两份文档只保留本地，不纳入 Git；仅经明确授权时另行提交必要的脱敏精简证据。
 
 ## 隐私
 

@@ -171,4 +171,3 @@ The documents below are written in Chinese.
 
 - [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.md)
 - [Limitations and semantics](docs/LIMITATIONS.md)
-- [Test commands and verification results](docs/VERIFICATION.md)

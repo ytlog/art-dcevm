@@ -8,3 +8,6 @@ local/
 *.hprof
 __pycache__/
 /assets/runtime_lib/
+/docs/ANDROID_COMPATIBILITY.md
+/docs/VERIFICATION.md
+/VERIFICATION.md

@@ -169,4 +169,3 @@ python3 tools/run-device-tests.py --serial DEVICE
 
 - [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)
 - [能力限制与语义细节](docs/LIMITATIONS.md)
-- [测试命令与验证结论](docs/VERIFICATION.md)
