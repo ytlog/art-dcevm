@@ -22,7 +22,7 @@ android {
         externalNativeBuild { cmake { arguments '-DARTDCEVM_INTERFACE_ABORT_TESTS=ON' } }
     } }
     buildFeatures { prefab true }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_11; targetCompatibility JavaVersion.VERSION_11 }
     externalNativeBuild { cmake { path file('src/debug/cpp/CMakeLists.txt'); version '4.3.4' } }
     packaging { jniLibs {
         useLegacyPackaging true

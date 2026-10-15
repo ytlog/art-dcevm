@@ -41,7 +41,11 @@ public final class DcevmRuntime {
         initialized = true;
     }
 
-    /** Supported change categories, diagnostics and the last rejection reason. */
+    /**
+     * Supported change categories, probe diagnostics and the last rejection reason.
+     * {@code interfaceRedefinition} stays false until an interface transaction
+     * verifies the runtime declarations; it does not permit interface member changes.
+     */
     public static synchronized JSONObject capabilities() {
         if (!attached) return new JSONObject();
         try {

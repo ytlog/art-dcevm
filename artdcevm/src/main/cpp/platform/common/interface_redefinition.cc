@@ -1,6 +1,7 @@
 #include "platform/common/interface_redefinition.h"
 
 #include <android/log.h>
+#include <android/api-level.h>
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -978,8 +979,17 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   available = false;
   disabled_reason.store(nullptr);
   verified_release.store(0);
+  const auto reject = [&](const char* reason) {
+    disabled_reason.store(reason);
+    *note = reason;
+  };
+  const int api = android_get_device_api_level();
+  if (api != 33 && api != 36) {
+    reject("interface redefinition is device-verified only on Android 13/API 33 and Android 16/API 36");
+    return;
+  }
   if (!method_retirement::SuperclassChangeAvailable()) {
-    *note = "interface redefinition requires verifier hooks and runtime-probed declarations";
+    reject("interface redefinition requires verifier hooks and runtime-probed declarations");
     return;
   }
   using namespace symbols::interface_redefinition;
@@ -1007,7 +1017,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   if (!current_thread || !visit_handle_roots || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
       !allocate_cache || !allocate_array || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) || !mark ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
-    *note = "interface redefinition named services unavailable";
+    reject("interface redefinition named services unavailable");
     return;
   }
   std::vector<method_retirement::Hook> resolved;
@@ -1021,7 +1031,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
       modes[i / 2] = true;
     }
   }
-  if (!modes[0] || !modes[1]) { *note = "interface redefinition admission names unavailable"; return; }
+  if (!modes[0] || !modes[1]) { reject("interface redefinition admission names unavailable"); return; }
   resolved.push_back({finish, reinterpret_cast<void*>(Finish), &original_finish, kFinishNewClassAllocations.name});
   resolved.push_back({run, reinterpret_cast<void*>(Run), &original_run, kRun.name});
   resolved.push_back({link_class, reinterpret_cast<void*>(LinkClass), &original_link_class, kLinkClass.name});

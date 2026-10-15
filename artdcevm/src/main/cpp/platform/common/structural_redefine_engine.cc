@@ -570,9 +570,13 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
     jint access = 0;
-    if (interface_redefinition::Available() && definitions[i].klass &&
+    if (definitions[i].klass &&
         snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
-        (access & evolution::kAccInterface)) continue;
+        (access & evolution::kAccInterface)) {
+      if (interface_redefinition::Available()) continue;
+      Diagnose(Signature(definitions[i].klass) + ": " + interface_redefinition::RuntimeState(), true);
+      return JVMTI_ERROR_NOT_AVAILABLE;
+    }
     jboolean modifiable = JNI_TRUE;
     if (!definitions[i].klass ||
         (snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
@@ -906,6 +910,8 @@ std::string Capabilities() {
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
   const auto interface_timing = interface_redefinition::LastTiming();
+  // Both capability fields describe the same probe snapshot, including disablement.
+  const std::string interface_state = interface_redefinition::RuntimeState();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
@@ -916,7 +922,8 @@ std::string Capabilities() {
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
-      ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_redefinition::RuntimeState()) +
+      ",\"interfaceRedefinition\":" + (installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
+      ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
       ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +

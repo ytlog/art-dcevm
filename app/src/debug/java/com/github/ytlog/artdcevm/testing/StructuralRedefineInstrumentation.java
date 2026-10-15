@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
+import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -824,6 +825,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         NestedInterfaceHost.Implementation instance = new NestedInterfaceHost.Implementation();
         NestedInterfaceHost.Contract contract = instance;
         instance.marker = 73;
+        InterfaceMethodFixture.Implementation bodies = new InterfaceMethodFixture.Implementation();
+        bodies.marker = 73;
+        runScenario("interface-method-bodies", 0, scenario -> {
+            scenario.check("defaultBefore", 32, bodies.value());
+            scenario.check("staticBefore", 41, InterfaceMethodFixture.Contract.staticValue());
+            Method before = InterfaceMethodFixture.Contract.class.getDeclaredMethod("hidden");
+            before.setAccessible(true);
+            scenario.check("privateBefore", 31, before.invoke(bodies));
+            scenario.redefine(new Class<?>[]{InterfaceMethodFixture.Contract.class}, "interface-method-bodies");
+            scenario.check("oldDefault", 34, bodies.value());
+            scenario.check("newDefault", 34, new InterfaceMethodFixture.Implementation().value());
+            scenario.check("staticAfter", 42, InterfaceMethodFixture.Contract.staticValue());
+            Method after = InterfaceMethodFixture.Contract.class.getDeclaredMethod("hidden");
+            after.setAccessible(true);
+            scenario.check("privateAfter", 32, after.invoke(bodies));
+            scenario.check("marker", 73, bodies.marker);
+            scenario.check("interfaceCapability", true,
+                    DcevmRuntime.capabilities().getBoolean("interfaceRedefinition"));
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 34, bodies.value());
+        });
         runScenario("nested-interface-body", 0, scenario -> {
             scenario.check("innerStatic", true, Modifier.isStatic(NestedInterfaceHost.Contract.class.getModifiers()));
             scenario.check("before", 41, contract.value());
@@ -852,6 +874,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 scenario.check("unchangedVirtual", 42, instance.value());
                 scenario.check("unchangedNew", 42, new NestedInterfaceHost.Implementation().value());
                 scenario.check("marker", 73, instance.marker);
+                scenario.check("interfaceCapability", true,
+                        DcevmRuntime.capabilities().getBoolean("interfaceRedefinition"));
                 scenario.check("runtimeAvailable", true,
                         DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: "));
             });
@@ -874,6 +898,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         CopiedDefault viaInterface = child;
         runScenario("interface-default-body", 0, scenario -> {
             scenario.redefine(new Class<?>[]{CopiedDefault.class}, "interface-default-body");
+            scenario.check("interfaceCapability", true,
+                    DcevmRuntime.capabilities().getBoolean("interfaceRedefinition"));
             scenario.check("oldChildInterface", 93, viaInterface.copiedValue());
             scenario.check("oldChildVirtual", 93, child.copiedValue());
             scenario.check("newChild", 93, new CopiedChild().copiedValue());

@@ -35,13 +35,16 @@ def complete_report():
             "installed": True, "standardRedefineRouted": True,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
             "interfaceAddition": True, "superclassWidening": True,
+            "interfaceRedefinition": False, "interfaceRuntime": "unverified: interface runtime declarations",
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
             "hierarchyChange": False, "fullDcevmComplete": False}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
-                       "capabilities": {"memberMapping": "verified: android16 class layout"},
+                       "capabilities": {"memberMapping": "verified: android16 class layout",
+                                        "interfaceRedefinition": True,
+                                        "interfaceRuntime": "verified: android16 Class/Thread/HandleScope/holder probes"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
                        "interfaceTiming": {"types": 207, "snapshotNanos": 1000, "allocationNanos": 2000}
                            if name == "interface-stress" else None,
@@ -124,6 +127,21 @@ class ApkVerificationTests(unittest.TestCase):
                 scenario["interfaceTiming"][key] = value
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report)
+
+    def test_interface_capability_requires_probe_evidence(self):
+        for state in ("unavailable", "unverified: interface runtime declarations", "disabled: probe mismatch"):
+            report = complete_report()
+            report["scenarios"][0]["capabilities"].update(interfaceRuntime=state, interfaceRedefinition=True)
+            with self.subTest(state=state), self.assertRaises(runner.RunFailure):
+                runner.validate_report(report)
+        report = complete_report()
+        report["initialization"]["capabilities"]["interfaceRedefinition"] = True
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
+        report = complete_report()
+        report["scenarios"][0]["capabilities"]["interfaceRedefinition"] = False
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
 
     def test_install_and_artifact_helpers(self):
         for code, out, err in [(0, "Failure [INSTALL_FAILED_ABORTED]", ""),

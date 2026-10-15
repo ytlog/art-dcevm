@@ -12,6 +12,27 @@ This document summarizes the prerequisites, rejected changes and runtime semanti
 - Retirement requires runtime probes to confirm the ART class-layout declarations. A transaction whose probes fail cannot retire members; `memberMapping` in `capabilities()` gives the reason.
 - The enhanced entry is the standard `RedefineClasses`. Batch inspection and execution through this entry are serialized. Concurrent transactions that call ART's structural redefinition extension directly do not participate in this protection.
 
+## Redefining interface method bodies
+
+Interface targets support body edits to default, static and private methods, for both top-level and nested interfaces. A batch may include interfaces alongside implementations, their subclasses or unrelated classes; multiple interfaces and parent/child interfaces are also supported. Implementations in the batch can evolve members under the ordinary class rules. The whole batch is atomic: failure of any target leaves all old definitions in place.
+
+This capability is available only on Android 13 (API 33) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
+
+| Rejection for interface targets | JVMTI error code |
+| --- | --- |
+| Adding methods | `METHOD_ADDED` (63) |
+| Deleting methods or changing signatures | `METHOD_DELETED` (67) |
+| Changing fields | `SCHEMA_CHANGED` (64) |
+| Changing method modifiers | `METHOD_MODIFIERS_CHANGED` (71) |
+| Changing parent interfaces | `HIERARCHY_CHANGED` (66) |
+| Changing class modifiers | `CLASS_MODIFIERS_CHANGED` (70) |
+| Unrelated interfaces share an implementation or another subtype, without a common interface ancestor in the batch | `HIERARCHY_CHANGED` (66) |
+| An implementation's superclass outside the interface rebuild group changes structurally in the batch | `HIERARCHY_CHANGED` (66); body-only edits are accepted |
+| A boot interface, a Proxy implementation, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
+| Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
+
+`lastRejection` names the rejected class and reason; failure preserves old behavior. Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
+
 ## Unsupported changes
 
 These changes are rejected with a JVMTI error, leaving the old definitions intact.
@@ -66,7 +87,7 @@ The following conflicts reject the transaction:
 
 ## ART's own restrictions
 
-- Structural redefinition retains ART's checks: interfaces, arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, `java.lang.Thread` and its subclasses cannot be redefined. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
+- Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, `java.lang.Thread` and its subclasses cannot be redefined. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
 - Raw field offsets cached by `sun.misc.Unsafe`, `Atomic*FieldUpdater` and similar APIs bypass ART's entry points. Any structural redefinition that changes the instance layout, including adding fields, invalidates those offsets.
 
 ## Process-wide effects

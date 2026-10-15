@@ -54,6 +54,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             }
             DcevmRuntime.initialize(getTargetContext());
             StandardJvmtiClient.attach(getTargetContext());
+            expect("interface capability initially unverified", 0,
+                    DcevmRuntime.capabilities().getBoolean("interfaceRedefinition") ? 1 : 0);
             if (arguments != null && arguments.containsKey("runtimeProbe")) {
                 int stage = Integer.parseInt(arguments.getString("runtimeProbe"));
                 if (stage < 13 || stage > 15) throw new AssertionError("Unknown runtime probe");
@@ -67,9 +69,21 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                         stage == 13 ? "Thread" : stage == 14 ? "HandleScope" : "holder"))
                     throw new AssertionError("Missing runtime probe rejection: " + reason);
                 ++checks;
+                expect("interface capability disabled by probe", 0,
+                        DcevmRuntime.capabilities().getBoolean("interfaceRedefinition") ? 1 : 0);
+                String firstRejection = DcevmRuntime.capabilities().getString("lastRejection");
+                if (!firstRejection.contains("CopiedDefault;") || !firstRejection.contains("probe rejected"))
+                    throw new AssertionError("Missing first probe rejection class/reason");
+                ++checks;
                 expect("old dispatch after probe rejection", 91, unchanged.copiedValue());
-                expect("disabled interface stays rejected", 79, redefine(CopiedDefault.class,
+                expect("disabled interface stays rejected", 98, redefine(CopiedDefault.class,
                         asset("interface-default-body", CopiedDefault.class)));
+                String laterRejection = DcevmRuntime.capabilities().getString("lastRejection");
+                if (!laterRejection.contains("CopiedDefault;") || !laterRejection.contains("probe rejected"))
+                    throw new AssertionError("Missing disabled runtime rejection class/reason");
+                ++checks;
+                expect("old dispatch after disabled rejection", 91, unchanged.copiedValue());
+                expect("new dispatch after disabled rejection", 91, new CopiedChild().copiedValue());
                 expect("class transactions remain available", 0, redefine(CopiedParent.class,
                         asset("copied-default-add", CopiedParent.class)));
                 System.gc(); System.runFinalization(); System.gc();
@@ -275,6 +289,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             expect("nested unchanged after rejection", 42, nestedContract.value());
             expect("top-level after nested transactions", 0, redefine(CopiedDefault.class, patch));
             expect("top-level dispatch after nested transactions", 93, throughInterface.copiedValue());
+            expect("interface capability verified after target rejection", 1,
+                    DcevmRuntime.capabilities().getBoolean("interfaceRedefinition") ? 1 : 0);
             expect("runtime available after target rejection", 1,
                     DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: ") ? 1 : 0);
             System.gc(); System.runFinalization(); System.gc();

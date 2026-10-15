@@ -17,7 +17,9 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-JAVAC_FLAGS = ['--release', '8', '-encoding', 'UTF-8', '-g']
+# Java 9 supports private interface methods without Java 11 nest-host attributes,
+# so independently compiled single-class DEX fixtures keep their existing boundary.
+JAVAC_FLAGS = ['--release', '9', '-encoding', 'UTF-8', '-g']
 # One DEX per class: RedefineClasses takes exactly one class per DEX, and a
 # synthetic class (a new lambda) is a class to add, not part of its origin.
 D8_FLAGS = ['--min-api', '30', '--file-per-class']

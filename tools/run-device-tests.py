@@ -52,6 +52,7 @@ SCENARIOS = (
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 71),
     ("method-storage-restore", ["method-storage-original"], 0),
+    ("interface-method-bodies", ["interface-method-bodies"], 0),
     ("nested-interface-body", ["nested-interface-body"], 0),
     ("nested-interface-add", ["nested-interface-add"], 63),
     ("nested-interface-delete", ["nested-interface-delete"], 67),
@@ -110,7 +111,7 @@ SCENARIOS = (
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
 # flags of an added interface.
-MAPPED_SCENARIOS = {"interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
+MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-after-shared","interface-overlap-body", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
                     "interface-implementation-child", "interface-implementation-child-only",
                     "interface-implementation-retire", "interface-implementation-recovery","hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
@@ -215,6 +216,9 @@ def field_retired_checks(suffix):
 
 
 REQUIRED_CHECKS = {
+    "interface-method-bodies": {"defaultBefore": 32, "staticBefore": 41, "privateBefore": 31,
+        "oldDefault": 34, "newDefault": 34, "staticAfter": 42, "privateAfter": 32,
+        "marker": 73, "interfaceCapability": True, "afterGc": 34},
     **{"interface-pointer-" + kind: {"arm": 0, "rejectionReason": True, "old": 51,
         "child": 51, "new": 51, "marker": 73} for kind in ("target", "subtype")},
     "interface-pointer-recovery": {"old": 52, "child": 52, "new": 52, "marker": 73},
@@ -447,6 +451,9 @@ def validate_report(report):
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")
+    if (capabilities.get("interfaceRedefinition") is not False or
+            capabilities.get("interfaceRuntime") != "unverified: interface runtime declarations"):
+        raise RunFailure("Interface capability must stay false until runtime probes pass")
     for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
             raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
@@ -470,6 +477,10 @@ def validate_report(report):
                     or timing["types"] != 207 or any(type(timing.get(key)) is not int
                     or timing[key] <= 0 for key in ("snapshotNanos", "allocationNanos"))):
                 raise RunFailure("Interface stress is missing measured phase timing or the complete type count")
+        scenario_capabilities = scenario.get("capabilities") or {}
+        verified_interface = str(scenario_capabilities.get("interfaceRuntime", "")).startswith("verified: ")
+        if scenario_capabilities.get("interfaceRedefinition") is not verified_interface:
+            raise RunFailure("Interface capability disagrees with runtime probe state")
         mapping = (scenario.get("capabilities") or {}).get("memberMapping")
         if name in MAPPED_SCENARIOS and not (isinstance(mapping, str)
                                              and mapping.startswith("verified: ")):

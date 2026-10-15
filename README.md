@@ -19,6 +19,14 @@ The app must be debuggable from process start. No root and no system partition c
 
 Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md).
 
+## Interface method bodies
+
+Android 13 (API 33) and Android 16 (API 36) arm64 devices support body edits to default, static and private methods of top-level and nested interfaces. Interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces. Other Android versions disable the capability with a reason; runtime probes must still pass.
+
+Interface member and parent-interface evolution is unsupported: adding methods returns 63, deleting or changing signatures 67, field changes 64, method-modifier changes 71, and parent-interface changes 66. Unrelated interfaces sharing an implementation without a common batch interface ancestor, and structural superclass changes outside the interface rebuild group, return 66. Proxy implementations, boot interfaces and pointer-id markers return 79; unavailable runtime capabilities or failed probes return 98.
+
+Even a body-only interface edit reallocates all instances of implementations and their subclasses, preserving compatible fields. Read `DcevmRuntime.capabilities()` before integration; see [limitations](docs/LIMITATIONS.en.md#redefining-interface-method-bodies) for the full scope and error semantics.
+
 ## Quick start
 
 The sample app is in [app](app), and a standalone user agent example is in [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc).

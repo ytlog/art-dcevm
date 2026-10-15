@@ -310,10 +310,16 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `fieldDeletion`、`fieldTypeChange`、`memberDeletion`、`memberTypeChange` | 字段守卫也可用 |
 | `superclassWidening` | 方法退役 Hook 与校验重定向均已安装 |
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：收窄不支持，完整 DCEVM 尚未完成 |
+| `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
+| `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；可用版本仅 API 33/36，其他版本禁用并说明原因 |
+| `interfaceSnapshotTypes` | 当前事务线程最近一次接口快照的类型数（目标、子接口、实现类及其子类） |
+| `interfaceSnapshotNanos`、`interfaceAllocationNanos` | 同一线程最近一次快照（含 GetLoadedClasses）和接口分配的单调时钟耗时，单位纳秒；仅供诊断，无接口事务时可为零 |
 | `memberMapping` | 最近一次探测结果：`unavailable`、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因` |
 | `jniRetirementGuards` | JNI 与反射守卫实际拒绝退役目标的次数 |
 | `subclassLoadRetries` | 事务期间有目标类的子类加载而重试的次数（见[事务中的类加载](#事务中的类加载)） |
-| `diagnostic`、`lastRejection` | 安装诊断；最近一次标准入口事务失败时的类与原因，成功时为空。策略、快照与提交前核对的拒绝写明各自原因；ART 自己的检查拒绝时（如接口在入口即以 79 拒绝），标准入口写明被拒的接口或不可修改的类，否则列出批次中的类与错误名，ART 的原文只在 logcat 的 `FAILURE TO REDEFINE` 之后 |
+| `diagnostic`、`lastRejection` | 安装诊断；最近一次标准入口事务失败时的类与原因，成功时为空。策略、快照与提交前核对的拒绝写明各自原因；ART 自己的检查拒绝时（如 boot 接口在入口即以 79 拒绝），标准入口写明被拒的接口或不可修改的类，否则列出批次中的类与错误名，ART 的原文只在 logcat 的 `FAILURE TO REDEFINE` 之后 |
+
+设备端工具应把 `interfaceAddition`（给普通类新增接口）与 `interfaceRedefinition`（修改接口自身）分开判断。初始化后的 false 表示尚未获得声明证据，不能仅凭 SDK 放开拦截。工具可在同一进程内，对自己控制的应用加载器测试接口提交一次不改变语义的方法体重定义以取得探测结果；随后重新读取能力，只有 `installed`、`standardRedefineRouted`、`interfaceRedefinition` 全为 true 才放开上述受支持的方法体修改。其他状态保留拦截，显示 `interfaceRuntime`／`diagnostic`，并在每次失败后读取 `lastRejection`。此布尔值不是接口成员演进许可，也不保证任意目标或批次都可提交；每次事务仍做策略与探测检查。
 
 每项能力仍由每次事务的探测决定是否可用；探测未通过时，相应变化以 JVMTI 错误拒绝。
 
