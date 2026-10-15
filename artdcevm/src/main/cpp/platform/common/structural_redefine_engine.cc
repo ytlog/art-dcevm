@@ -312,8 +312,80 @@ jvmtiError CollectInheritedPublic(JNIEnv* jni, jclass target, Snapshot* snapshot
   return JVMTI_ERROR_NONE;
 }
 
+// Virtual methods an interface target inherits from its superinterfaces and
+// java.lang.Object (LoadedHierarchy::inherited_interface).
+jvmtiError CollectInheritedInterface(JNIEnv* jni, jclass target, Snapshot* snapshot,
+                                     std::string* error) {
+  auto& inherited = snapshot->hierarchy.inherited_interface;
+  std::set<std::string> visited;
+  jvmtiError result = CollectInterfaceMethods(jni, target, &visited, &inherited, error);
+  if (result != JVMTI_ERROR_NONE) return result;
+  LocalReference object(jni);
+  object.value = jni->FindClass("java/lang/Object");
+  if (!object.value) {
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    *error = "java.lang.Object unavailable";
+    return JVMTI_ERROR_INTERNAL;
+  }
+  std::vector<evolution::Member> methods;
+  const int read = live_schema::ReadLiveMethods(snapshot_env, static_cast<jclass>(object.value),
+                                                &methods, error);
+  if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
+  for (const auto& method : methods)
+    if (Virtual(method) && (method.access & evolution::kAccPublic))
+      inherited.insert({method.name, method.descriptor});
+  return JVMTI_ERROR_NONE;
+}
+
+// Static and non-public instance methods of `methods`, declared by
+// `descriptor` (LoadedHierarchy::subtype_shadows). The first declarer names
+// the shadow in a rejection.
+void AddShadows(const std::vector<evolution::Member>& methods, const std::string& descriptor,
+                Snapshot* snapshot) {
+  for (const auto& method : methods)
+    if (method.name != "<init>" && method.name != "<clinit>" &&
+        (method.IsStatic() || !(method.access & evolution::kAccPublic)))
+      snapshot->hierarchy.subtype_shadows.emplace(
+          structural_policy::MemberKey{method.name, method.descriptor}, descriptor);
+}
+
+// Shadows declared by the superclasses of an interface target's loaded
+// implementation, up to the first superclass that is itself a subtype (the
+// caller visits that one). Boot classes have unique descriptors, so each is
+// read once per transaction; other loaders may reuse a name.
+jvmtiError CollectSuperclassShadows(JNIEnv* jni, jclass target, jclass implementation,
+                                    std::set<std::string>* boot_visited, Snapshot* snapshot,
+                                    std::string* error) {
+  LocalReference current(jni);
+  current.value = jni->GetSuperclass(implementation);
+  while (current.value) {
+    jclass klass = static_cast<jclass>(current.value);
+    if (jni->IsAssignableFrom(klass, target)) break;
+    LocalReference loader(jni);
+    jvmtiError result = snapshot_env->GetClassLoader(klass, &loader.value);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
+    char* signature = nullptr;
+    result = snapshot_env->GetClassSignature(klass, &signature, nullptr);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassSignature failed"; return result; }
+    const std::string descriptor = signature;
+    snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+    if (loader.value || boot_visited->insert(descriptor).second) {
+      std::vector<evolution::Member> methods;
+      const int read = live_schema::ReadLiveMethods(snapshot_env, klass, &methods, error);
+      if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
+      AddShadows(methods, descriptor, snapshot);
+    }
+    jclass next = jni->GetSuperclass(klass);
+    jni->DeleteLocalRef(current.value);
+    current.value = next;
+  }
+  return JVMTI_ERROR_NONE;
+}
+
 jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loaded,
                              Snapshot* snapshot, std::string* error) {
+  const bool interface_target = snapshot->live.access & evolution::kAccInterface;
+  std::set<std::string> boot_visited;
   LocalReference target_loader(jni);
   jvmtiError result = snapshot_env->GetClassLoader(target, &target_loader.value);
   if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
@@ -331,8 +403,9 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
     char* signature = nullptr;
     result = snapshot_env->GetClassSignature(candidate, &signature, nullptr);
     if (result != JVMTI_ERROR_NONE) { *error = "GetClassSignature failed"; return result; }
-    const bool same_package = Package(snapshot->live.descriptor) == Package(signature);
+    const std::string descriptor = signature;
     snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+    const bool same_package = Package(snapshot->live.descriptor) == Package(descriptor);
     bool same_runtime_package = false;
     if (same_package) {
       LocalReference candidate_loader(jni);
@@ -354,7 +427,16 @@ jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loa
     if (result != JVMTI_ERROR_NONE) return result;
     for (const auto& key : interface_methods)
       if (!declared.count(key)) snapshot->hierarchy.interface_copies.insert(key);
+    if (!interface_target) continue;
+    AddShadows(methods, descriptor, snapshot);
+    jboolean is_interface = JNI_FALSE;
+    result = snapshot_env->IsInterface(candidate, &is_interface);
+    if (result != JVMTI_ERROR_NONE) { *error = "IsInterface failed"; return result; }
+    if (is_interface) continue;
+    result = CollectSuperclassShadows(jni, target, candidate, &boot_visited, snapshot, error);
+    if (result != JVMTI_ERROR_NONE) return result;
   }
+  if (interface_target) return CollectInheritedInterface(jni, target, snapshot, error);
   return CollectInheritedPublic(jni, target, snapshot, error);
 }
 

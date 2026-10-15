@@ -75,14 +75,14 @@
 
 - **原因**：已校验的 `invoke-interface I.m` 会在重新解析时找到这个 direct 方法，并按 IMT/iftable 分派，见引擎文档[调用方式不变](STRUCTURAL_REDEFINE_ENGINE.md#调用方式不变)。引擎无法让这条路径抛出 `IncompatibleClassChangeError`。
 - **javac/kotlinc 的行为**：两者都不会为这种源码生成代码，这种情况只会出现在手写字节码或不一致的增量产物中。
-- **快照新增事实**：`LoadedHierarchy::inherited_interface`，即目标从父接口和 `java.lang.Object` 继承的虚方法。父接口部分复用 `CollectInterfaceMethods(jni, target, ...)`。接口的 `GetSuperclass` 为空，现有的 `CollectInheritedPublic` 拿不到这些方法。
+- **快照新增事实**：`LoadedHierarchy::inherited_interface`，即目标从父接口和 `java.lang.Object` 继承的虚方法。由 `CollectInheritedInterface` 收集：父接口部分复用 `CollectInterfaceMethods(jni, target, ...)`，再加上 `java.lang.Object` 的 public 实例方法。接口的 `GetSuperclass` 为空，现有的 `CollectInheritedPublic` 拿不到这些方法，所以接口目标改走这条路径。
 
 ### 冲突检查二：新增 default 不得改变已有调用的解析结果
 
 已加载实现类或其父类链上，声明了同名同描述符的 static 方法或非 public 实例方法时，拒绝 63，并在原因里写出该类。
 
 - **原因**：此时 ClassLinker 会把新 default 拷贝进实现类的方法数组。之后 `invoke-virtual C.m` 重新解析时，结果可能从父类的包内方法或 static 方法变成 copied default，已有调用因此改变语义，或触发调用方式不一致。
-- **快照**：`LoadedHierarchy::subtype_shadows`。在 `CollectSubclasses` 遍历已加载子类型（子接口和实现类）时，收集它们自身以及实现类父类链上这类方法的身份，按类去重，并记录第一个声明它的类描述符。只对新增 default 检查；新增 static/private 方法不经过虚分派，不受影响。
+- **快照**：`LoadedHierarchy::subtype_shadows`。在 `CollectSubclasses` 遍历已加载子类型（子接口和实现类）时，收集它们自身以及实现类父类链上这类方法的身份，并记录第一个声明它的类描述符（`AddShadows`）。父类链由 `CollectSuperclassShadows` 遍历，遇到本身也是子类型的父类就停下，因为该类会作为子类型单独收集；boot 类的描述符唯一，每个事务只读一次，其他加载器的类可能重名，不按描述符去重。只对新增 default 检查；新增 static/private 方法不经过虚分派，不受影响。
 - **不受影响的情况**：类链上有 public 实例方法（不论是否 abstract）时，类方法优先于 default，链接结果与修改前一致，可以接受。
 
 ### 冲突检查三：链接后不得新增 default 冲突
@@ -153,7 +153,7 @@
 基线：成员探测接受共享空字段数组（`a8a427a3`）已合入 main。它在 Android 16 QPR2 OEM 设备上的修复版重跑仍待完成，那次重跑也是本设计设备验证的前提。
 
 1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。**已完成**，规则由 `Abilities::interface_members` 控制，默认关闭。
-2. 快照事实：在 `structural_redefine_engine.cc` 填充 `inherited_interface` 与 `subtype_shadows`。
+2. 快照事实：在 `structural_redefine_engine.cc` 填充 `inherited_interface` 与 `subtype_shadows`。**已完成**，只对接口目标收集；能力关闭时策略不读取它们。
 3. 链接后冲突检查：在 `method_retirement.cc` 的 `PlanMethods` 中实现，并声明 flag 常量。
 4. 接口 direct 方法退役：核对保活与守卫，然后打开 `interface_members`。
 5. fixture、设备套件与失败仪器。
