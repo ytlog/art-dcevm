@@ -238,9 +238,8 @@ std::string ErrorName(jvmtiError error) {
 }
 
 // The rejection of a failure that neither the policy nor the engine
-// explained. ART rejects an unmodifiable class, interfaces included, at its
-// entry before any hook or ClassFileLoadHook runs, and keeps its own message
-// in the log only.
+// explained. ART can reject an unmodifiable class at its entry before policy
+// validation or ClassFileLoadHook runs, and keeps its own message in the log only.
 std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
                             jvmtiError result) {
   std::string classes;
@@ -249,9 +248,6 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
     const std::string signature = Signature(klass);
     jboolean flag = JNI_FALSE;
     if (result == JVMTI_ERROR_UNMODIFIABLE_CLASS && klass) {
-      if (snapshot_env->IsInterface(klass, &flag) == JVMTI_ERROR_NONE && flag)
-        return signature + ": ART redefines no interface, including default method bodies; " +
-            ErrorName(result);
       if (snapshot_env->IsModifiableClass(klass, &flag) == JVMTI_ERROR_NONE && !flag)
         return signature + ": ART reports the class as unmodifiable; " + ErrorName(result);
     }

@@ -684,7 +684,6 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   if (++allocated_groups == 2 && Inject(18))
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after multiple interface groups allocation");
 #endif
-  __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "interface redefinition allocated %zu types with private link caches", old_types.size());
   // Run owns cleanup for every subsequent failure, including verification,
   // instance allocation, mapping probes and the subclass-load retry guard.
   return true;
@@ -796,7 +795,6 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
   set(vm, enabled);
   void* version = reinterpret_cast<void*>(jni->functions->GetVersion);
   const bool checked = version != plain[0] && version != plain[1];
-  __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "test JNI mode: checked=%d requested=%d", checked, enabled != 0);
   return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
 }
 bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <string>
 
 namespace artdcevm::interface_redefinition {
 // Borrowed references from the standard entry's GetLoadedClasses result.
