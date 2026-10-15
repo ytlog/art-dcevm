@@ -3,6 +3,7 @@
 #include <jvmti.h>
 #include <vector>
 #include <cstdint>
+#include <string_view>
 #include "platform/common/method_retirement.h"
 
 namespace artdcevm::interface_redefinition {
@@ -29,6 +30,11 @@ class Scope {
   void* state_;
 };
 bool IsTarget(abi::arm64::ClassRedefinitionPrefix* self);
+bool IsAffected(abi::arm64::ClassRedefinitionPrefix* self);
+bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self);
+// Current-thread verification only: lookup by loader without cache writes.
+void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept;
+jvmtiError VerificationError() noexcept;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 // Debug APK fault injection; no test entry points are built into release AARs.
 bool InjectInstanceFailure(abi::arm64::ClassRedefinitionPrefix* self,

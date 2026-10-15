@@ -20,6 +20,9 @@ import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
+import com.github.ytlog.artdcevm.fixture.InterfaceBatchFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture;
+import com.github.ytlog.artdcevm.fixture.MultiInterfaceFixture;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
@@ -294,6 +297,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runMethodKindChangeScenarios();
         runNestedInterfaceScenarios();
+        runInterfaceBatchScenarios();
+        runInterfaceImplementationScenarios();
+        runInterfaceOverlapScenarios();
+        runMultiInterfaceScenarios();
         runCopiedDefaultScenario();
         runInterfaceStressScenario();
         runInterfaceScenarios();
@@ -492,6 +499,296 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         scenario.check("unchangedMembers", schema, memberSchema(ClassFinalSubject.class));
         scenario.check("oldValue", 29, classFinal.value());
         scenario.check("newValue", 29, new ClassFinalSubject().value());
+    }
+
+    private void runMultiInterfaceScenarios() throws Exception {
+        MultiInterfaceFixture.LeftImpl left = new MultiInterfaceFixture.LeftImpl();
+        MultiInterfaceFixture.RightImpl right = new MultiInterfaceFixture.RightImpl();
+        left.marker = 73; right.marker = 79;
+        runScenario("multi-interface-unrelated", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
+                    "multi-interface-body", "multi-interface-body");
+            scenario.check("left", 12, left.leftValue());
+            scenario.check("right", 22, right.rightValue());
+            scenario.check("newLeft", 12, new MultiInterfaceFixture.LeftImpl().leftValue());
+            scenario.check("newRight", 22, new MultiInterfaceFixture.RightImpl().rightValue());
+            scenario.check("leftMarker", 73, left.marker);
+            scenario.check("rightMarker", 79, right.marker);
+            scenario.check("allocatedOnce", 4, InterfaceAbortInstrumentation.allocatedTypes());
+        });
+        runScenario("multi-interface-invalid", 63, scenario -> {
+            scenario.expectRejectionBy(MultiInterfaceFixture.Right.class);
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
+                    "multi-interface-next", "multi-interface-invalid");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("added methods"));
+            scenario.check("leftUnchanged", 12, left.leftValue());
+            scenario.check("rightUnchanged", 22, right.rightValue());
+            scenario.check("newLeftUnchanged", 12, new MultiInterfaceFixture.LeftImpl().leftValue());
+            scenario.check("newRightUnchanged", 22, new MultiInterfaceFixture.RightImpl().rightValue());
+            scenario.check("leftMarker", 73, left.marker);
+            scenario.check("rightMarker", 79, right.marker);
+        });
+        runScenario("multi-interface-recovery", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Right.class, MultiInterfaceFixture.Left.class},
+                    "multi-interface-next", "multi-interface-next");
+            scenario.check("left", 13, left.leftValue());
+            scenario.check("right", 23, right.rightValue());
+            scenario.check("allocatedOnce", 4, InterfaceAbortInstrumentation.allocatedTypes());
+        });
+        MultiInterfaceFixture.FamilyImpl family = new MultiInterfaceFixture.FamilyImpl();
+        MultiInterfaceFixture.FamilyChild child = new MultiInterfaceFixture.FamilyChild();
+        MultiInterfaceFixture.Parent parentView = family;
+        MultiInterfaceFixture.Child childView = family;
+        family.marker = 83; child.marker = 89; child.childMarker = 97;
+        runScenario("multi-interface-family", 0, scenario -> {
+            // Child precedes parent in the input and ART's equal-depth sort.
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Child.class, MultiInterfaceFixture.Parent.class},
+                    "multi-interface-body", "multi-interface-body");
+            scenario.check("childArrivedFirst", 1, InterfaceAbortInstrumentation.allocationOrder());
+            scenario.check("parent", 32, parentView.parentValue());
+            scenario.check("child", 42, childView.childValue());
+            scenario.check("virtualParent", 32, family.parentValue());
+            scenario.check("virtualChild", 42, family.childValue());
+            scenario.check("subclassParent", 32, child.parentValue());
+            scenario.check("subclassChild", 42, child.childValue());
+            scenario.check("newParent", 32, new MultiInterfaceFixture.FamilyImpl().parentValue());
+            scenario.check("newChild", 42, new MultiInterfaceFixture.FamilyChild().childValue());
+            scenario.check("marker", 83, family.marker);
+            scenario.check("subclassMarker", 89, child.marker);
+            scenario.check("childMarker", 97, child.childMarker);
+            scenario.check("allocatedOnce", 4, InterfaceAbortInstrumentation.allocatedTypes());
+            scenario.check("snapshotOnce", 4L, DcevmRuntime.capabilities().getLong("interfaceSnapshotTypes"));
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("parentAfterGc", 32, parentView.parentValue());
+            scenario.check("childAfterGc", 42, childView.childValue());
+        });
+        // Keep this type out of verifier type_ids until the disjoint-group checks finish.
+        Object shared = Class.forName("com.github.ytlog.artdcevm.fixture.MultiInterfaceFixture$SharedImpl")
+                .getConstructor().newInstance();
+        MultiInterfaceFixture.Left sharedLeft = (MultiInterfaceFixture.Left) shared;
+        MultiInterfaceFixture.Right sharedRight = (MultiInterfaceFixture.Right) shared;
+        runScenario("multi-interface-shared-reject", 66, scenario -> {
+            scenario.expectRejectionBy(MultiInterfaceFixture.Right.class);
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
+                    "multi-interface-body", "multi-interface-body");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("share a subtype"));
+            scenario.check("leftUnchanged", 13, left.leftValue());
+            scenario.check("rightUnchanged", 23, right.rightValue());
+            scenario.check("sharedLeft", 13, sharedLeft.leftValue());
+            scenario.check("sharedRight", 23, sharedRight.rightValue());
+            scenario.check("newSharedLeft", 13, ((MultiInterfaceFixture.Left) shared.getClass().getConstructor().newInstance()).leftValue());
+            scenario.check("newSharedRight", 23, ((MultiInterfaceFixture.Right) shared.getClass().getConstructor().newInstance()).rightValue());
+        });
+        runScenario("multi-interface-after-shared", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class}, "multi-interface-body");
+            scenario.check("left", 12, left.leftValue());
+            scenario.check("rightUnchanged", 23, right.rightValue());
+            scenario.check("sharedLeft", 12, sharedLeft.leftValue());
+            scenario.check("sharedRight", 23, sharedRight.rightValue());
+        });
+    }
+
+    private void runInterfaceOverlapScenarios() throws Exception {
+        InterfaceOverlapFixture.Implementation instance = new InterfaceOverlapFixture.Implementation();
+        InterfaceOverlapFixture.Contract contract = instance;
+        instance.marker = 73;
+        runScenario("interface-overlap-body", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Parent.class, InterfaceOverlapFixture.Contract.class},
+                    "interface-overlap-body", "interface-overlap-body");
+            scenario.check("interfaceAfter", 32, contract.value());
+            scenario.check("parentAfter", 22, instance.parentValue());
+            scenario.check("newInterface", 32, new InterfaceOverlapFixture.Implementation().value());
+            scenario.check("newParent", 22, new InterfaceOverlapFixture.Implementation().parentValue());
+            scenario.check("marker", 73, instance.marker);
+        });
+        String schema = memberSchema(InterfaceOverlapFixture.Parent.class);
+        runScenario("interface-overlap-structural", 66, scenario -> {
+            scenario.expectRejectionBy(InterfaceOverlapFixture.Parent.class);
+            scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
+                    "interface-overlap-structural", "interface-overlap-structural");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("overlaps"));
+            scenario.check("unchangedParent", schema, memberSchema(InterfaceOverlapFixture.Parent.class));
+            scenario.check("interfaceUnchanged", 32, contract.value());
+            scenario.check("parentUnchanged", 22, instance.parentValue());
+            scenario.check("newInterfaceUnchanged", 32, new InterfaceOverlapFixture.Implementation().value());
+            scenario.check("newParentUnchanged", 22, new InterfaceOverlapFixture.Implementation().parentValue());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("interface-overlap-recovery", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class}, "interface-overlap-next");
+            scenario.check("interfaceAfter", 34, contract.value());
+            scenario.check("parentUnchanged", 22, instance.parentValue());
+            scenario.check("marker", 73, instance.marker);
+        });
+    }
+
+    private void runInterfaceImplementationScenarios() throws Exception {
+        InterfaceBatchFixture.Implementation instance = new InterfaceBatchFixture.Implementation();
+        InterfaceBatchFixture.Contract contract = instance;
+        InterfaceBatchFixture.Child child = new InterfaceBatchFixture.Child();
+        InterfaceBatchFixture.Contract childContract = child;
+        instance.marker = 73; child.marker = 79; child.childMarker = 83;
+        runScenario("interface-implementation-body", 0, scenario -> {
+            scenario.check("interfaceBefore", 12, contract.value());
+            scenario.check("ownBefore", 104, instance.ownValue());
+            // Equal depth, two entries: ART's two-element sort keeps this order.
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                    "interface-implementation-body", "interface-implementation-body");
+            scenario.check("implementationAllocatedFirst", 1, InterfaceAbortInstrumentation.allocationOrder());
+            scenario.check("interfaceAfter", 14, contract.value());
+            scenario.check("ownAfter", 114, instance.ownValue());
+            scenario.check("childInterface", 14, childContract.value());
+            scenario.check("childOwn", 120, child.ownValue());
+            scenario.check("newInterface", 14, new InterfaceBatchFixture.Implementation().value());
+            scenario.check("newOwn", 58, new InterfaceBatchFixture.Implementation().ownValue());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("interface-implementation-add", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Contract.class, InterfaceBatchFixture.Implementation.class},
+                    "interface-implementation-add", "interface-implementation-add");
+            scenario.check("interfaceAfter", 15, contract.value());
+            scenario.check("ownAfter", 115, instance.ownValue());
+            scenario.check("marker", 73, instance.marker);
+            Field field = InterfaceBatchFixture.Implementation.class.getDeclaredField("added");
+            Method method = InterfaceBatchFixture.Implementation.class.getDeclaredMethod("addedValue");
+            InterfaceBatchFixture.Implementation fresh = new InterfaceBatchFixture.Implementation();
+            scenario.check("oldAdded", 0, field.getInt(instance));
+            scenario.check("childAdded", 0, field.getInt(child));
+            scenario.check("newAdded", 23, field.getInt(fresh));
+            scenario.check("oldAddedMethod", 124, method.invoke(instance));
+            scenario.check("newAddedMethod", 91, method.invoke(fresh));
+        });
+        runScenario("interface-implementation-child", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Child.class, InterfaceBatchFixture.Implementation.class,
+                            InterfaceBatchFixture.Contract.class},
+                    "interface-implementation-child", "interface-implementation-child", "interface-implementation-child");
+            scenario.check("implementationAllocatedFirst", 1, InterfaceAbortInstrumentation.allocationOrder());
+            scenario.check("interfaceAfter", 16, contract.value());
+            scenario.check("ownAfter", 116, instance.ownValue());
+            scenario.check("childInterface", 16, childContract.value());
+            scenario.check("childOwn", 122, child.ownValue());
+            scenario.check("childBody", 154, child.childValue());
+            InterfaceBatchFixture.Child freshChild = new InterfaceBatchFixture.Child();
+            scenario.check("newChildBody", 100, freshChild.childValue());
+            scenario.check("newChildInterface", 16, freshChild.value());
+            scenario.check("newChildOwn", 60, freshChild.ownValue());
+            scenario.check("marker", 73, instance.marker);
+            scenario.check("childMarker", 79, child.marker);
+            scenario.check("ownChildMarker", 83, child.childMarker);
+            scenario.check("childAdded", 0, InterfaceBatchFixture.Implementation.class.getDeclaredField("added").getInt(child));
+        });
+        runScenario("interface-implementation-child-only", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Contract.class, InterfaceBatchFixture.Child.class},
+                    "interface-implementation-child-only", "interface-implementation-child-only");
+            scenario.check("childBody", 155, child.childValue());
+            scenario.check("childInterface", 16, childContract.value());
+            scenario.check("ownAfter", 116, instance.ownValue());
+            scenario.check("childMarker", 79, child.marker);
+            scenario.check("ownChildMarker", 83, child.childMarker);
+        });
+        Method cached = InterfaceBatchFixture.Implementation.class.getDeclaredMethod("addedValue");
+        Field cachedField = InterfaceBatchFixture.Implementation.class.getDeclaredField("added");
+        runScenario("interface-implementation-retire", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                    "interface-implementation-retire", "interface-implementation-retire");
+            scenario.check("interfaceAfter", 17, contract.value());
+            scenario.check("ownAfter", 119, instance.ownValue());
+            scenario.check("methodModifiers", 33, InterfaceBatchFixture.Implementation.class.getDeclaredMethod("ownValue").getModifiers());
+            scenario.expectError("removedMethod", NoSuchMethodException.class,
+                    () -> InterfaceBatchFixture.Implementation.class.getDeclaredMethod("addedValue"));
+            scenario.expectReflectionError("cachedMethod", () -> cached.invoke(instance));
+            scenario.expectError("removedField", NoSuchFieldException.class,
+                    () -> InterfaceBatchFixture.Implementation.class.getDeclaredField("added"));
+            scenario.expectError("cachedField", IllegalArgumentException.class, () -> cachedField.getInt(instance));
+            scenario.check("marker", 73, instance.marker);
+            scenario.check("childInterface", 17, childContract.value());
+        });
+        String contractSchema = memberSchema(InterfaceBatchFixture.Contract.class);
+        String implementationSchema = memberSchema(InterfaceBatchFixture.Implementation.class);
+        String[] failures = {"invalid", "abstract"};
+        int[] codes = {71, 70};
+        for (int i = 0; i < failures.length; ++i) {
+            String variant = "interface-implementation-" + failures[i];
+            String reason = i == 0 ? "old kind" : "live instances";
+            runScenario(variant, codes[i], scenario -> {
+                scenario.expectRejectionBy(InterfaceBatchFixture.Implementation.class);
+                scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                        variant, variant);
+                scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains(reason));
+                scenario.check("unchangedInterface", contractSchema, memberSchema(InterfaceBatchFixture.Contract.class));
+                scenario.check("unchangedImplementation", implementationSchema, memberSchema(InterfaceBatchFixture.Implementation.class));
+                scenario.check("interfaceUnchanged", 17, contract.value());
+                scenario.check("ownUnchanged", 119, instance.ownValue());
+                scenario.check("childUnchanged", 17, childContract.value());
+                scenario.check("marker", 73, instance.marker);
+                scenario.check("newInterfaceUnchanged", 17, new InterfaceBatchFixture.Implementation().value());
+            });
+        }
+        runScenario("interface-implementation-recovery", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Contract.class}, "interface-implementation-next");
+            scenario.check("interfaceAfter", 18, contract.value());
+            scenario.check("ownAfter", 119, instance.ownValue());
+            scenario.check("childInterface", 18, childContract.value());
+            scenario.check("marker", 73, instance.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 18, contract.value());
+        });
+    }
+
+    private void runInterfaceBatchScenarios() throws Exception {
+        InterfaceBatchFixture.Implementation implementation = new InterfaceBatchFixture.Implementation();
+        InterfaceBatchFixture.Contract contract = implementation;
+        InterfaceBatchFixture.Unrelated unrelated = new InterfaceBatchFixture.Unrelated();
+        implementation.marker = 73;
+        unrelated.marker = 79;
+        runScenario("interface-batch-unrelated", 0, scenario -> {
+            scenario.check("interfaceBefore", 11, contract.value());
+            scenario.check("unrelatedBefore", 21, unrelated.value());
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Contract.class, InterfaceBatchFixture.Unrelated.class},
+                    "interface-batch-body", "interface-batch-body");
+            scenario.check("interfaceAfter", 12, contract.value());
+            scenario.check("virtualAfter", 12, implementation.value());
+            scenario.check("unrelatedAfter", 22, unrelated.value());
+            scenario.check("newInterface", 12, new InterfaceBatchFixture.Implementation().value());
+            scenario.check("newUnrelated", 22, new InterfaceBatchFixture.Unrelated().value());
+            scenario.check("interfaceMarker", 73, implementation.marker);
+            scenario.check("unrelatedMarker", 79, unrelated.marker);
+        });
+        String interfaceSchema = memberSchema(InterfaceBatchFixture.Contract.class);
+        String unrelatedSchema = memberSchema(InterfaceBatchFixture.Unrelated.class);
+        runScenario("interface-batch-unrelated-invalid", 71, scenario -> {
+            scenario.expectRejectionBy(InterfaceBatchFixture.Unrelated.class);
+            // Reverse input order checks rejection independently of target position.
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Unrelated.class, InterfaceBatchFixture.Contract.class},
+                    "interface-batch-invalid", "interface-batch-next");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("old kind"));
+            scenario.check("unchangedInterface", interfaceSchema, memberSchema(InterfaceBatchFixture.Contract.class));
+            scenario.check("unchangedUnrelated", unrelatedSchema, memberSchema(InterfaceBatchFixture.Unrelated.class));
+            scenario.check("interfaceUnchanged", 12, contract.value());
+            scenario.check("unrelatedUnchanged", 22, unrelated.value());
+            scenario.check("newInterfaceUnchanged", 12, new InterfaceBatchFixture.Implementation().value());
+            scenario.check("newUnrelatedUnchanged", 22, new InterfaceBatchFixture.Unrelated().value());
+            scenario.check("interfaceMarker", 73, implementation.marker);
+            scenario.check("unrelatedMarker", 79, unrelated.marker);
+        });
+        runScenario("interface-batch-after-rejection", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Contract.class}, "interface-batch-next");
+            scenario.check("interfaceAfter", 13, contract.value());
+            scenario.check("unrelatedUnchanged", 22, unrelated.value());
+            scenario.check("interfaceMarker", 73, implementation.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 13, contract.value());
+        });
+        runScenario("interface-batch-unrelated-reverse", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Unrelated.class, InterfaceBatchFixture.Contract.class},
+                    "interface-batch-body", "interface-batch-body");
+            scenario.check("interfaceAfter", 12, contract.value());
+            scenario.check("unrelatedAfter", 22, unrelated.value());
+            scenario.check("interfaceMarker", 73, implementation.marker);
+            scenario.check("unrelatedMarker", 79, unrelated.marker);
+        });
     }
 
     private void runNestedInterfaceScenarios() throws Exception {

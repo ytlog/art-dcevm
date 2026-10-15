@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <jni.h>
+#include <string>
 #include "platform/abi/arm64/common/runtime_objects.h"
 
 // Fixed release arm64 declarations shared by Android 11--17, checked against
@@ -42,6 +43,19 @@ struct ClassRedefinitionPrefix {
 };
 static_assert(offsetof(ClassRedefinitionPrefix, klass) == 8 &&
               offsetof(ClassRedefinitionPrefix, dex_file) == 16);
+
+// Full element layout, checked against android-13.0.0_r1 and
+// android-16.0.0_r1 ti_redefine.h. Used only to validate/traverse the private
+// holder vector; never construct, mutate or destroy its owning members.
+template <size_t FlagCount> struct ClassRedefinitionLayout {
+  RedefinerPrefix* driver;
+  jclass klass;
+  const DexFilePrefix* dex_file;
+  std::string class_sig;
+  struct { const unsigned char* data; size_t size; } original_dex_file;
+  bool flags[FlagCount];
+};
+static_assert(sizeof(std::string) == 24);
 
 // RedefinitionDataHolder wraps one ObjectArray through its single Handle;
 // RedefinitionDataIter holds idx_ then RedefinitionDataHolder&. The DataSlot

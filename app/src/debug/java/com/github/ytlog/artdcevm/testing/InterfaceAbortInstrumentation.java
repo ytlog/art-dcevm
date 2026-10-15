@@ -8,6 +8,8 @@ import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
+import com.github.ytlog.artdcevm.fixture.InterfaceBatchFixture;
+import com.github.ytlog.artdcevm.fixture.MultiInterfaceFixture;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -18,6 +20,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int armFailure(int stage);
     private static native int discardedClasses();
     private static native int failureHits();
+    static native int allocationOrder();
+    static native int allocatedTypes();
     private static native int configureCheckJni(boolean enabled);
     private Bundle arguments;
     private int checks;
@@ -64,6 +68,145 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK, result);
                 return;
             }
+            InterfaceBatchFixture.Implementation batchInstance = new InterfaceBatchFixture.Implementation();
+            InterfaceBatchFixture.Contract batchContract = batchInstance;
+            InterfaceBatchFixture.Unrelated unrelated = new InterfaceBatchFixture.Unrelated();
+            batchInstance.marker = 73; unrelated.marker = 79;
+            byte[] batchBody = asset("interface-batch-body", InterfaceBatchFixture.Contract.class);
+            byte[] batchNext = asset("interface-batch-next", InterfaceBatchFixture.Contract.class);
+            byte[] unrelatedBody = asset("interface-batch-body", InterfaceBatchFixture.Unrelated.class);
+            expect("batch baseline commit", 0, StandardJvmtiClient.redefine(
+                    new Class<?>[]{InterfaceBatchFixture.Contract.class, InterfaceBatchFixture.Unrelated.class},
+                    new byte[][]{batchBody, unrelatedBody}));
+            expect("batch baseline interface", 12, batchContract.value());
+            expect("batch baseline unrelated", 22, unrelated.value());
+            expect("reset batch cleanup counters", 0, armFailure(0));
+            expect("batch unrelated verifier failure", 62, StandardJvmtiClient.redefine(
+                    new Class<?>[]{InterfaceBatchFixture.Unrelated.class, InterfaceBatchFixture.Contract.class},
+                    new byte[][]{invalidReturn(unrelatedBody), batchNext}));
+            String batchReason = DcevmRuntime.capabilities().getString("lastRejection");
+            if (!batchReason.contains("InterfaceBatchFixture$Unrelated;") || !batchReason.contains("FAILS_VERIFICATION"))
+                throw new AssertionError("Missing batch verifier rejection reason");
+            ++checks;
+            if (discardedClasses() < 2) throw new AssertionError("Failed batch did not discard interface replacements");
+            ++checks;
+            expect("failed batch interface", 12, batchContract.value());
+            expect("failed batch virtual", 12, batchInstance.value());
+            expect("failed batch unrelated", 22, unrelated.value());
+            expect("failed batch new interface", 12, new InterfaceBatchFixture.Implementation().value());
+            expect("failed batch new unrelated", 22, new InterfaceBatchFixture.Unrelated().value());
+            expect("failed batch interface field", 73, batchInstance.marker);
+            expect("failed batch unrelated field", 79, unrelated.marker);
+            expect("interface after failed batch", 0, redefine(InterfaceBatchFixture.Contract.class, batchNext));
+            expect("interface dispatch after failed batch", 13, batchContract.value());
+            System.gc(); System.runFinalization(); System.gc();
+            expect("batch interface after GC", 13, batchContract.value());
+            InterfaceBatchFixture.Child batchChild = new InterfaceBatchFixture.Child();
+            batchChild.marker = 79; batchChild.childMarker = 83;
+            byte[] implementationBody = asset("interface-implementation-body", InterfaceBatchFixture.Implementation.class);
+            byte[] interfaceBody = asset("interface-implementation-body", InterfaceBatchFixture.Contract.class);
+            byte[] implementationAdd = asset("interface-implementation-add", InterfaceBatchFixture.Implementation.class);
+            byte[] interfaceAdd = asset("interface-implementation-add", InterfaceBatchFixture.Contract.class);
+            expect("implementation first batch", 0, StandardJvmtiClient.redefine(
+                    new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                    new byte[][]{implementationBody, interfaceBody}));
+            expect("observed implementation before interface", 1, allocationOrder());
+            expect("implementation body updated", 114, batchInstance.ownValue());
+            expect("interface body updated", 14, batchContract.value());
+            expect("unsubmitted child relinked", 14, batchChild.value());
+            for (int stage : new int[]{1, 2, 3, 4, 17}) {
+                expect("arm implementation batch failure", 0, armFailure(stage));
+                expect("implementation batch injected rejection", stage == 1 || stage == 4 ? 113 : 110,
+                        StandardJvmtiClient.redefine(
+                                new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                                new byte[][]{implementationAdd, interfaceAdd}));
+                expect("implementation batch injection hit", 1, failureHits());
+                if (discardedClasses() < 2) throw new AssertionError("Missing implementation batch cleanup");
+                ++checks;
+                String reason = DcevmRuntime.capabilities().getString("lastRejection");
+                String detail = stage == 2 ? "injected failure after interface allocation"
+                        : stage == 3 ? "injected instance allocation failure"
+                        : stage == 17 ? "OUT_OF_MEMORY" : "INTERNAL";
+                if (!reason.contains("InterfaceBatchFixture$Contract;") || !reason.contains(detail))
+                    throw new AssertionError("Missing implementation batch rejection class/reason");
+                ++checks;
+                expect("failed implementation batch interface", 14, batchContract.value());
+                expect("failed implementation batch body", 114, batchInstance.ownValue());
+                expect("failed implementation batch child", 14, batchChild.value());
+                expect("failed implementation batch field", 73, batchInstance.marker);
+                expect("failed implementation batch new", 14, new InterfaceBatchFixture.Implementation().value());
+                expect("implementation batch recovery", 0, StandardJvmtiClient.redefine(
+                        new Class<?>[]{InterfaceBatchFixture.Contract.class, InterfaceBatchFixture.Implementation.class},
+                        new byte[][]{interfaceBody, implementationBody}));
+            }
+            expect("arm implementation verifier test", 0, armFailure(0));
+            expect("implementation actual DEX verification failure", 62, StandardJvmtiClient.redefine(
+                    new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
+                    new byte[][]{invalidReturn(implementationBody), interfaceAdd}));
+            String implementationReason = DcevmRuntime.capabilities().getString("lastRejection");
+            if (!implementationReason.contains("InterfaceBatchFixture$Implementation;") ||
+                    !implementationReason.contains("FAILS_VERIFICATION"))
+                throw new AssertionError("Missing implementation DEX rejection reason");
+            ++checks;
+            if (discardedClasses() < 3) throw new AssertionError("Verifier failure did not discard full implementation group");
+            ++checks;
+            expect("implementation verifier preserved interface", 14, batchContract.value());
+            expect("implementation verifier preserved body", 114, batchInstance.ownValue());
+            expect("implementation verifier preserved field", 73, batchInstance.marker);
+            expect("implementation verifier preserved child", 14, batchChild.value());
+            System.gc(); System.runFinalization(); System.gc();
+            expect("interface after implementation verifier failure", 0,
+                    redefine(InterfaceBatchFixture.Contract.class, interfaceBody));
+            expect("implementation after verifier recovery", 114, batchInstance.ownValue());
+            MultiInterfaceFixture.LeftImpl multiLeft = new MultiInterfaceFixture.LeftImpl();
+            MultiInterfaceFixture.RightImpl multiRight = new MultiInterfaceFixture.RightImpl();
+            byte[] multiLeftDex = asset("multi-interface-body", MultiInterfaceFixture.Left.class);
+            byte[] multiRightDex = asset("multi-interface-body", MultiInterfaceFixture.Right.class);
+            expect("arm second group failure", 0, armFailure(18));
+            expect("second group allocation rejection", 110, StandardJvmtiClient.redefine(
+                    new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
+                    new byte[][]{multiLeftDex, multiRightDex}));
+            expect("second group failure hit", 1, failureHits());
+            expect("both groups discarded", 4, discardedClasses());
+            String multiReason = DcevmRuntime.capabilities().getString("lastRejection");
+            if (!multiReason.contains("MultiInterfaceFixture$Right;") || !multiReason.contains("multiple interface groups"))
+                throw new AssertionError("Missing multi-group class/reason");
+            ++checks;
+            expect("failed group left unchanged", 11, multiLeft.leftValue());
+            expect("failed group right unchanged", 21, multiRight.rightValue());
+            expect("failed group new left unchanged", 11, new MultiInterfaceFixture.LeftImpl().leftValue());
+            expect("failed group new right unchanged", 21, new MultiInterfaceFixture.RightImpl().rightValue());
+            expect("multi-group recovery", 0, StandardJvmtiClient.redefine(
+                    new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
+                    new byte[][]{multiLeftDex, multiRightDex}));
+            expect("multi-group old left", 12, multiLeft.leftValue());
+            expect("multi-group old right", 22, multiRight.rightValue());
+            expect("multi-group count", 4, allocatedTypes());
+            MultiInterfaceFixture.FamilyImpl multiFamily = new MultiInterfaceFixture.FamilyImpl();
+            MultiInterfaceFixture.FamilyChild multiChild = new MultiInterfaceFixture.FamilyChild();
+            byte[] multiParentDex = asset("multi-interface-body", MultiInterfaceFixture.Parent.class);
+            byte[] multiChildDex = asset("multi-interface-body", MultiInterfaceFixture.Child.class);
+            expect("arm family verifier failure", 0, armFailure(0));
+            expect("family child real verifier failure", 62, StandardJvmtiClient.redefine(
+                    new Class<?>[]{MultiInterfaceFixture.Child.class, MultiInterfaceFixture.Parent.class},
+                    new byte[][]{invalidReturn(multiChildDex), multiParentDex}));
+            expect("family discarded once", 4, discardedClasses());
+            expect("family old parent unchanged", 31, multiFamily.parentValue());
+            expect("family old child unchanged", 41, multiFamily.childValue());
+            expect("family subclass unchanged", 41, multiChild.childValue());
+            String familyReason = DcevmRuntime.capabilities().getString("lastRejection");
+            if (!familyReason.contains("MultiInterfaceFixture$Child;") || !familyReason.contains("FAILS_VERIFICATION"))
+                throw new AssertionError("Missing family verifier rejection class/reason");
+            ++checks;
+            expect("family recovery", 0, StandardJvmtiClient.redefine(
+                    new Class<?>[]{MultiInterfaceFixture.Child.class, MultiInterfaceFixture.Parent.class},
+                    new byte[][]{multiChildDex, multiParentDex}));
+            expect("family count once", 4, allocatedTypes());
+            expect("family parent new body", 32, multiFamily.parentValue());
+            expect("family child new body", 42, multiFamily.childValue());
+            expect("family subclass new dispatch", 42, multiChild.childValue());
+            System.gc(); System.runFinalization(); System.gc();
+            expect("family after GC", 42, multiChild.childValue());
             CopiedChild child = new CopiedChild();
             CopiedDefault throughInterface = child;
             byte[] patch = asset("interface-default-body", CopiedDefault.class);
@@ -236,9 +379,12 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         int[] counts = new int[4];
         for (int i = 0; i < 4; ++i) counts[i] = uleb(bytes, cursor);
         for (int i = 0; i < counts[0] + counts[1]; ++i) { uleb(bytes, cursor); uleb(bytes, cursor); }
-        if (counts[2] + counts[3] != 1) throw new AssertionError("Expected one interface default method");
-        uleb(bytes, cursor); uleb(bytes, cursor);
-        int code = uleb(bytes, cursor);
+        if (counts[2] + counts[3] < 1) throw new AssertionError("Expected a method to invalidate");
+        // The final encoded method is the fixture's int-returning virtual/default method.
+        int code = 0;
+        for (int i = 0; i < counts[2] + counts[3]; ++i) {
+            uleb(bytes, cursor); uleb(bytes, cursor); code = uleb(bytes, cursor);
+        }
         int instruction = code + 16 + u32(bytes, code + 12) * 2 - 2;
         if (code == 0 || bytes[instruction] != 0x0f) throw new AssertionError("Expected return-int");
         bytes[instruction] = 0x11; // return-object in an int method: real ART verifier failure.

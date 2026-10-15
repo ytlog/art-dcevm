@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <utility>
+#include <unordered_map>
 #include <string_view>
 #include "platform/abi/arm64/android13/interface_runtime.h"
 #include "platform/abi/arm64/android16/interface_runtime.h"
@@ -76,8 +77,8 @@ void Disable(const char* reason) noexcept {
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
 }
 
-struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; };
-struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; const Target* rejected_target = nullptr; const char* rejection = nullptr; };
+struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; };
+struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; const Target* rejected_target = nullptr; const char* rejection = nullptr; const jvmtiClassDefinition* definitions = nullptr; std::vector<jclass> shared_ancestors{}; };
 thread_local State* state = nullptr;
 thread_local Timing timing;
 struct JniFailure {};
@@ -93,6 +94,9 @@ class LocalRef {
 thread_local int failure_stage = 0;
 thread_local int discarded_classes = 0;
 thread_local int failure_hits = 0;
+thread_local int allocation_order = 0;
+thread_local int allocated_types = 0;
+thread_local int allocated_groups = 0;
 bool Inject(int stage) {
   if (failure_stage != stage) return false;
   failure_stage = 0;
@@ -309,8 +313,11 @@ void SetSlot(const RedefinitionDataIter& data, int32_t slot, void* object) {
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
-struct Attempt { RedefinerPrefix* driver; Handle replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
+struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
 thread_local Attempt* attempt = nullptr;
+Handle ReplacementRoot(const Target& target) {
+  return attempt->replacements[&target - state->targets.data()];
+}
 void DiscardClass(void* klass) {
   if (!klass) return;
   const ClassStatus status = Status(klass);
@@ -328,9 +335,11 @@ void Discard(const Attempt& next) {
   if (next.committed) return;
   // A linked class can outlive a failed allocator without reaching its array.
   DiscardClass(next.pending.Get<void>());
-  auto* classes = next.replacements.Get<ObjectArray>();
-  for (int32_t i = 0; classes && i < classes->length; ++i)
-    DiscardClass(Read(classes->elements[i]));
+  for (Handle root : next.replacements) {
+    auto* classes = root.Get<ObjectArray>();
+    for (int32_t i = 0; classes && i < classes->length; ++i)
+      DiscardClass(Read(classes->elements[i]));
+  }
 }
 
 class AttemptScope {
@@ -356,8 +365,9 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     return JVMTI_ERROR_NOT_AVAILABLE;
   }
   try {
-    Roots roots(driver->self, 2);
-    Attempt next{driver, roots.Add(nullptr), roots.Add(nullptr)};
+    Roots roots(driver->self, state->targets.size() + 1);
+    Attempt next{driver, {}, roots.Add(nullptr)};
+    for (size_t i = 0; i < state->targets.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
     AttemptScope scope(&next);
     const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
@@ -447,7 +457,61 @@ bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char*
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", why);
   return false;
 }
-bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
+struct HolderView {
+  uint8_t* begin = nullptr;
+  std::vector<bool>* initialized = nullptr;
+  std::vector<bool>* structural = nullptr;
+  std::vector<bool>* initial = nullptr;
+  ClassRedefinitionPrefix* Definition(int32_t index) const {
+    return reinterpret_cast<ClassRedefinitionPrefix*>(begin + index * runtime->redefinition_size);
+  }
+};
+bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
+  const auto reject_holder = [&](const char* reason) {
+    Disable(reason);
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
+  };
+  if (!data->holder || !data->holder->array.reference ||
+      !data->holder->array.Get<ObjectArray>() ||
+      data->holder->array.Get<ObjectArray>()->length != state->batch_size * RedefinitionDataIter::kNumSlots)
+    return reject_holder("interface holder array declaration mismatch");
+  auto* definitions = Field<void**>(data->holder, runtime->redefinitions);
+  if (!definitions || !definitions[0] || data->index < 0 || data->index >= state->batch_size ||
+      reinterpret_cast<uintptr_t>(definitions[1]) != reinterpret_cast<uintptr_t>(definitions[0]) +
+          state->batch_size * runtime->redefinition_size ||
+      reinterpret_cast<uintptr_t>(definitions[2]) < reinterpret_cast<uintptr_t>(definitions[1]) ||
+      reinterpret_cast<uintptr_t>(self) != reinterpret_cast<uintptr_t>(definitions[0]) +
+          data->index * runtime->redefinition_size ||
+      Slot(*data, 4) != mirror_class(self))
+    return reject_holder("interface holder redefinitions declaration mismatch");
+  auto& initialized = Field<std::vector<bool>>(data->holder, runtime->initialized);
+  auto& structural = Field<std::vector<bool>>(data->holder, runtime->actually_structural);
+  auto& initial = Field<std::vector<bool>>(data->holder, runtime->initial_structural);
+  if (initialized.size() != static_cast<size_t>(state->batch_size) ||
+      structural.size() != initialized.size() || initial.size() != initialized.size())
+    return reject_holder("interface holder flag declarations mismatch");
+  output->begin = static_cast<uint8_t*>(definitions[0]);
+  output->initialized = &initialized;
+  output->structural = &structural;
+  output->initial = &initial;
+  for (jint i = 0; i < state->batch_size; ++i) {
+    auto* context = output->Definition(i);
+    bool known = false;
+    for (jint j = 0; j < state->batch_size; ++j)
+      known |= context->klass == state->definitions[j].klass;
+    // Never decode an unverified candidate jclass from a guessed element.
+    if (!known || context->driver != self->driver)
+      return reject_holder("interface holder element prefix declaration mismatch");
+    RedefinitionDataIter item{i, data->holder};
+    auto* cache = static_cast<DexCache*>(Slot(item, 3));
+    if (Slot(item, 4) != mirror_class(context) || !cache ||
+        cache->dex_file != reinterpret_cast<uintptr_t>(context->dex_file))
+      return reject_holder("interface holder Class/DEX-cache slots declaration mismatch");
+  }
+  return true;
+}
+bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+                       const HolderView& holder) {
   struct AllocationTimer {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     ~AllocationTimer() {
@@ -455,8 +519,8 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
           std::chrono::steady_clock::now() - start).count();
     }
   } allocation_timer;
-  if (state->batch_size != 1 || !state->array_class || !attempt || attempt->driver != self->driver)
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition requires one target and array root");
+  if (!state->array_class || !attempt || attempt->driver != self->driver)
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition requires private array roots");
   const auto reject_holder = [&](const char* reason) {
     Disable(reason);
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
@@ -464,24 +528,10 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (Inject(15)) return reject_holder("interface holder probe rejected injected mismatch");
 #endif
-  if (!data->holder || !data->holder->array.reference ||
-      !data->holder->array.Get<ObjectArray>() ||
-      data->holder->array.Get<ObjectArray>()->length != RedefinitionDataIter::kNumSlots)
-    return reject_holder("interface holder array declaration mismatch");
-  auto* definitions = Field<void**>(data->holder, runtime->redefinitions);
-  if (!definitions || definitions[0] != self || !definitions[1] ||
-      reinterpret_cast<uintptr_t>(definitions[1]) <= reinterpret_cast<uintptr_t>(definitions[0]) ||
-      reinterpret_cast<uintptr_t>(definitions[2]) < reinterpret_cast<uintptr_t>(definitions[1]))
-    return reject_holder("interface holder redefinitions declaration mismatch");
-  auto* new_cache = static_cast<DexCache*>(Slot(*data, 3));
-  if (!new_cache || new_cache->dex_file != reinterpret_cast<uintptr_t>(self->dex_file))
-    return reject_holder("interface holder DEX-cache slot declaration mismatch");
-  auto& initialized = Field<std::vector<bool>>(data->holder, runtime->initialized);
-  auto& structural = Field<std::vector<bool>>(data->holder, runtime->actually_structural);
-  auto& initial = Field<std::vector<bool>>(data->holder, runtime->initial_structural);
-  if (initialized.size() != 1 || structural.size() != 1 || initial.size() != 1)
-    return reject_holder("interface holder flag declarations mismatch");
-  if (data->index != 0 || initialized[0] || !structural[0] || !initial[0])
+  auto& initialized = *holder.initialized;
+  auto& structural = *holder.structural;
+  auto& initial = *holder.initial;
+  if (initialized[data->index] || !structural[data->index] || !initial[data->index])
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface target requires an unallocated structural transaction");
   verified_release.store(state->selected_release);
   const Target* target = Find(mirror_class(self));
@@ -505,11 +555,25 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   if (!old_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition old array allocation failed");
   Handle new_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
   if (!new_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition new array allocation failed");
-  Assign(attempt->replacements, new_array.Get<void>());
+  Assign(ReplacementRoot(*target), new_array.Get<void>());
   for (Handle array : {old_array, new_array})
     if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
       return reject_holder("interface private array declaration mismatch");
   Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr), loader = roots.Add(nullptr);
+  std::vector<int32_t> batch_indices(old_types.size(), -1);
+  for (size_t i = 0; i < old_types.size(); ++i) {
+    for (jint j = 0; j < state->batch_size; ++j) {
+      RedefinitionDataIter item{j, data->holder};
+      if (Slot(item, 4) != old_types[i].Get<void>()) continue;
+      if (initialized[j])
+        return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface group was allocated before its owner");
+      batch_indices[i] = j;
+      // ti_redefine.cc setup_single_redefinition: only the owner collects and
+      // commits the group's instances/mappings; child entries retain their DEX.
+      structural[j] = true;
+      initial[j] = j == data->index;
+    }
+  }
   for (size_t i = 0; i < old_types.size(); ++i) {
     void* old = old_types[i].Get<void>();
     Store(old_array.Get<ObjectArray>(), static_cast<int32_t>(i), old);
@@ -522,8 +586,11 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     }
     Assign(superclass, super);
     Assign(original_cache, Read(Field<uint32_t>(old, runtime->dex_cache)));
-    if (i == 0) {
-      Assign(cache, Slot(*data, 3));  // kSlotNewDexCache, rooted by ART's holder.
+    const int32_t batch_index = batch_indices[i];
+    RedefinitionDataIter item{batch_index, data->holder};
+    auto* allocator = batch_index >= 0 ? holder.Definition(batch_index) : self;
+    if (batch_index >= 0) {
+      Assign(cache, Slot(item, 3));  // Incoming DEX, rooted by ART's holder.
     } else {
       const auto* dex = reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
       Assign(loader, Read(Field<uint32_t>(old, runtime->class_loader)));
@@ -533,7 +600,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
       Assign(cache, allocate_cache(&context, loader));
     }
     if (!cache.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition private DexCache allocation failed");
-    const DexFilePrefix* expected_dex = i == 0 ? self->dex_file
+    const DexFilePrefix* expected_dex = batch_index >= 0 ? allocator->dex_file
         : reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
     if (cache.Get<DexCache>()->dex_file != reinterpret_cast<uintptr_t>(expected_dex) ||
         Read(cache.Get<DexCache>()->class_loader) != Read(Field<uint32_t>(old_types[i].Get<void>(), runtime->class_loader)) ||
@@ -543,40 +610,69 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     void* replacement;
     {
       LinkingScope active(&scope);
-      replacement = allocate_class(self, old_types[i], superclass, cache,
-          i == 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime->dex_class_def_index)));
+      replacement = allocate_class(allocator, old_types[i], superclass, cache,
+          batch_index >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime->dex_class_def_index)));
     }
     if (attempt->error != JVMTI_ERROR_NONE)
       return FailAllocation(self, attempt->error, "interface linking hook failed");
     if (!replacement) return false;  // ART has recorded the error and cleared its exception.
-    if (i != 0) set_cache(replacement, original_cache.Get<void>());
+    if (batch_index < 0) set_cache(replacement, original_cache.Get<void>());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
     // Transfer failure after linking, now outside the callback and its locks.
     if (Inject(12)) throw JniFailure{};
 #endif
     Store(new_array.Get<ObjectArray>(), static_cast<int32_t>(i), replacement);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    ++allocated_types;
+#endif
     Assign(attempt->pending, nullptr);
-    if (i == 0) SetSlot(*data, RedefinitionDataIter::kSlotNewClassObject, replacement);
+    if (batch_index >= 0) {
+      SetSlot(item, RedefinitionDataIter::kSlotNewClassObject, replacement);
+      initialized[batch_index] = true;
+    }
   }
   SetSlot(*data, RedefinitionDataIter::kSlotOldClasses, old_array.Get<void>());
   SetSlot(*data, RedefinitionDataIter::kSlotNewClasses, new_array.Get<void>());
-  initialized[0] = true;
+  initialized[data->index] = true;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (Inject(2)) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after interface allocation");
+  if (++allocated_groups == 2 && Inject(18))
+    return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after multiple interface groups allocation");
 #endif
   __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "interface redefinition allocated %zu types with private link caches", old_types.size());
   // Run owns cleanup for every subsequent failure, including verification,
   // instance allocation, mapping probes and the subclass-load retry guard.
   return true;
 }
-bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
+const Target* AffectedTarget(void* klass) {
+  if (!state) return nullptr;
+  for (const auto& target : state->targets)
+    for (jclass type : target.snapshot.types)
+      if (Decode(type) == klass) return &target;
+  return nullptr;
+}
+bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage,
             RedefinitionDataIter* data) noexcept {
-  if (!IsTarget(self)) {
-    using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
-    return reinterpret_cast<Function>(original_finish)(self, holder, data);
-  }
-  try { return AllocateInterface(self, data); }
-  catch (const std::bad_alloc&) {
+  using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
+  try {
+    const Target* target = Available() ? AffectedTarget(mirror_class(self)) : nullptr;
+    if (!target) return reinterpret_cast<Function>(original_finish)(self, storage, data);
+    HolderView holder;
+    if (!VerifyHolder(self, data, &holder)) return false;
+    if ((*holder.initialized)[data->index]) return true;
+    // ART sorts by superclass depth, not interface dependencies. The first
+    // affected entry delegates the complete group to its interface owner.
+    for (jint i = 0; i < state->batch_size; ++i) {
+      auto* owner = holder.Definition(i);
+      if (owner->klass != target->klass) continue;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+      allocation_order = data->index < i ? 1 : 0;
+#endif
+      RedefinitionDataIter owner_data{i, data->holder};
+      return AllocateInterface(owner, &owner_data, holder);
+    }
+    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface group owner is missing from the batch");
+  } catch (const std::bad_alloc&) {
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition native allocation failed");
   } catch (...) {
     return FailAllocation(self, ArtHookExceptionError(), "interface allocation hook failed");
@@ -602,6 +698,39 @@ std::string TakeRejection() {
   return target ? target->live.descriptor + ": " + reason : std::string(reason);
 }
 bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(mirror_class(self)); }
+bool IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(mirror_class(self)); }
+bool SharesImplementationGroup(ClassRedefinitionPrefix* self) {
+  if (!state) return false;
+  for (jclass ancestor : state->shared_ancestors)
+    if (Decode(ancestor) == mirror_class(self)) return true;
+  return false;
+}
+void* VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
+  if (!attempt || !state || state->targets.empty()) return nullptr;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  if (Inject(17)) throw std::bad_alloc{};
+#endif
+  // LookupClass observes the loader's table without publishing replacements or
+  // caching them in any old DEX. The caller limits this to CheckVerification.
+  void* old;
+  if (lookup_view) {
+    old = lookup_view(linker, current_thread(), descriptor, loader.Get<void>());
+  } else {
+    const std::string name(descriptor);
+    old = lookup_chars(linker, current_thread(), name.c_str(), loader.Get<void>());
+  }
+  for (const auto& target : state->targets) {
+    auto* replacements = ReplacementRoot(target).Get<ObjectArray>();
+    const auto& types = target.snapshot.types;
+    for (size_t i = 0; replacements && i < types.size(); ++i)
+      if (Decode(types[i]) == old) return Read(replacements->elements[i]);
+  }
+  return nullptr;
+} catch (...) {
+  attempt->error = ArtHookExceptionError();
+  return nullptr;
+}
+jvmtiError VerificationError() noexcept { return attempt ? attempt->error : JVMTI_ERROR_NONE; }
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCheckJni(
@@ -625,7 +754,8 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
   return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
 }
 bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {
-  if (!attempt || attempt->driver != self->driver || !IsTarget(self)) return false;
+  const Target* owner = Find(mirror_class(self));
+  if (!attempt || attempt->driver != self->driver || !owner || owner->snapshot.types.empty()) return false;
   if (!allocated && Inject(3)) {
     FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected instance allocation failure");
     return true;
@@ -649,6 +779,14 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_discardedCl
   return discarded_classes;
 }
 extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_allocatedTypes(JNIEnv*, jclass) {
+  return allocated_types;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_allocationOrder(JNIEnv*, jclass) {
+  return allocation_order;
+}
+extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits(JNIEnv*, jclass) {
   return failure_hits;
 }
@@ -658,6 +796,7 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
   auto* next = static_cast<State*>(state_);
   try {
     state = next;
+    next->definitions = definitions;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
     if (Inject(16)) throw std::bad_alloc{};
 #endif
@@ -682,7 +821,7 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
       const bool boot = !loader;
       if (loader) jni->DeleteLocalRef(loader);
       if (status_result != JVMTI_ERROR_NONE) continue;
-      next->targets.push_back({klass, boot, status, {}, {}});
+      next->targets.push_back({klass, boot, status, {}, {}, nullptr});
     }
     if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
       jclass class_class = jni->FindClass("java/lang/Class");
@@ -708,12 +847,59 @@ void Scope::Describe(jclass klass, const evolution::ClassSchema& live) {
 jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
   const auto start = std::chrono::steady_clock::now();
   timing = {};
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  allocation_order = 0;
+  allocated_types = 0;
+  allocated_groups = 0;
+#endif
   auto* next = static_cast<State*>(state_);
+  // A batch child interface belongs to its highest batch ancestor. Only roots
+  // capture a group, so each child interface/implementation is rebuilt once.
   for (auto& target : next->targets) {
+    target.owner = target.klass;
+    for (const auto& other : next->targets)
+      if (next->jni->IsAssignableFrom(target.owner, other.klass)) target.owner = other.klass;
+    if (next->jni->ExceptionCheck()) {
+      next->jni->ExceptionClear();
+      *error = target.live.descriptor + ": interface batch ownership check failed";
+      return JVMTI_ERROR_INTERNAL;
+    }
+  }
+  for (auto& target : next->targets) {
+    if (!next->jni->IsSameObject(target.owner, target.klass)) continue;
     jvmtiError result = SnapshotTypes(next->jni, next->env, target.klass,
                                       count, loaded, &target.snapshot, error);
     if (result != JVMTI_ERROR_NONE) return result;
     timing.types += target.snapshot.types.size();
+  }
+  // SnapshotTypes borrows the exact GetLoadedClasses references. Identity
+  // keys here detect overlap in one pass without pairwise type comparisons.
+  std::unordered_map<jclass, const Target*> owners;
+  for (const auto& target : next->targets) {
+    for (jclass type : target.snapshot.types) {
+      if (!owners.emplace(type, &target).second) {
+        *error = target.live.descriptor + ": unrelated interface groups share a subtype";
+        return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+      }
+    }
+  }
+  for (const auto& target : next->targets) {
+    for (jint i = 0; i < next->batch_size; ++i) {
+      jclass other = next->definitions[i].klass;
+      if (next->jni->IsAssignableFrom(other, target.klass)) continue;
+      // A class outside the interface's type relation can still share its
+      // implementation subtree. Two structural owners would rebuild it twice.
+      for (jclass type : target.snapshot.types) {
+        if (!next->jni->IsAssignableFrom(type, other)) continue;
+        next->shared_ancestors.push_back(other);
+        break;
+      }
+      if (next->jni->ExceptionCheck()) {
+        next->jni->ExceptionClear();
+        *error = target.live.descriptor + ": interface batch group-overlap check failed";
+        return JVMTI_ERROR_INTERNAL;
+      }
+    }
   }
   if (!next->targets.empty() && next->jni->EnsureLocalCapacity(8) != JNI_OK) {
     if (next->jni->ExceptionCheck()) next->jni->ExceptionClear();

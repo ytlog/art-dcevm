@@ -6,7 +6,12 @@ namespace artdcevm::abi::arm64::android13 {
 // openjdkjvmti/ti_redefine.cc, android-13.0.0_r1. The holder is private
 // to the current transaction. libc++ ABI v1 vector<bool> matches ART's
 // declaration; no ART object is constructed or destroyed here.
+// ti_redefine.h: added_fields_, added_methods_, has_virtuals_, lock_acquired_.
+using ClassRedefinition = ClassRedefinitionLayout<4>;
+static_assert(sizeof(ClassRedefinition) == 72);
+static_assert(offsetof(ClassRedefinition, original_dex_file) == 48);
 struct RedefinitionDataHolder {
+  using Redefinition = ClassRedefinition;
   Handle array;
   void* redefinitions;
   std::vector<bool> initialized;

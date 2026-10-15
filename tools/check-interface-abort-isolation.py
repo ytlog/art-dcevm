@@ -14,7 +14,7 @@ from evidence_paths import new_evidence_directory
 ROOT = Path(__file__).resolve().parents[1]
 TOKENS = ('InterfaceAbortInstrumentation', 'InjectInstanceFailure', 'failure_stage',
           'failure_hits', 'discarded_classes', 'Inject(int)')
-EXPORTS = ('configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits')
+EXPORTS = ('configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes')
 
 
 def ndk_bin():

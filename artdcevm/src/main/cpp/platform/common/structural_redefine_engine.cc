@@ -734,6 +734,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     // Even a body edit must relink copied default methods in implementation classes.
     decision.methods_structural = true;
   }
+  if (decision.error == JVMTI_ERROR_NONE &&
+      (decision.methods_structural || decision.fields_structural) &&
+      interface_redefinition::SharesImplementationGroup(self)) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    decision.reason = "structural class target overlaps the interface implementation group";
+  }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -751,7 +757,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     method_retirement::RequireNoInstances(self, incoming.descriptor);
   if (decision.superclass_changed)
     method_retirement::ChangeSuperclass(self, snapshot.superclass_class, incoming.descriptor);
-  if (interface_target)
+  if (interface_redefinition::IsAffected(self))
     method_retirement::RedirectVerification(self, incoming.descriptor);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     current_batch->retires_members = true;

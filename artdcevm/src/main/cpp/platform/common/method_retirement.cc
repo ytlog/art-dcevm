@@ -625,6 +625,7 @@ void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Ha
 struct Verifying {
   const RedefinitionDataIter* data;
   std::string_view descriptor;  // "Lpkg/Name;"
+  bool interface_group;
 };
 thread_local const Verifying* verifying = nullptr;
 
@@ -636,27 +637,33 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
     if (found != transaction->link_targets.end()) descriptor = &found->second.second;
   }
   if (!descriptor) return reinterpret_cast<Function>(original_check_verification)(self, data);
-  const Verifying scope{&data, *descriptor};
+  const Verifying scope{&data, *descriptor, interface_redefinition::IsAffected(self)};
   const Verifying* previous = std::exchange(verifying, &scope);
   const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
   verifying = previous;
+  if (const auto error = interface_redefinition::VerificationError(); error != JVMTI_ERROR_NONE) {
+    self->driver->result = error;
+    return false;
+  }
   return verified;
 }
 
-void* VerifiedClass(std::string_view descriptor) {
-  return verifying && descriptor == verifying->descriptor ? verifying->data->NewClassObject()
-                                                          : nullptr;
+void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
+  if (!verifying) return nullptr;
+  if (verifying->interface_group)
+    return interface_redefinition::VerificationClass(linker, descriptor, loader);
+  return descriptor == verifying->descriptor ? verifying->data->NewClassObject() : nullptr;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
   interface_redefinition::ObserveClassLinker(linker);
-  if (void* klass = descriptor ? VerifiedClass(descriptor) : nullptr) return klass;
+  if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
   return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) noexcept {
   interface_redefinition::ObserveClassLinker(linker);
-  if (void* klass = descriptor ? VerifiedClass({descriptor, length}) : nullptr) return klass;
+  if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
   return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
                                                                      length, loader);
@@ -716,14 +723,17 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (!transaction) return true;
   // A class made abstract must have no instances of its own (subclass
   // instances stay valid). Reads only the common holder and Object layouts.
-  if (const auto found = transaction->no_instances.find(self); found != transaction->no_instances.end()) {
+  // One structural owner may recreate another batch target's instances (ART
+  // superclass groups or interface groups). Check every target against the
+  // owner's collected instances rather than the empty dependent entry.
+  for (const auto& [target, descriptor] : transaction->no_instances) {
     const auto* instances = data->OldInstances();
-    const uint32_t target = Reference(mirror_class(self));
+    const uint32_t reference = Reference(mirror_class(target));
     for (int32_t i = 0; instances && i < instances->length; ++i) {
       const auto* instance = instances->Get<Object>(i);
-      if (!instance || instance->klass != target) continue;
+      if (!instance || instance->klass != reference) continue;
       self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
-      transaction->rejection = found->second + ": class made abstract has live instances";
+      transaction->rejection = descriptor + ": class made abstract has live instances";
       return false;
     }
   }
