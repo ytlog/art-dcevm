@@ -7,7 +7,7 @@
 // android-11.0.0_r1 through android-17.0.0_r1 unless noted. The default
 // build has ART_HEAP_POISONING=false, so heap references are 32-bit addresses.
 // Uses that depend on a declaration are enabled only after the runtime probes
-// in platform/common/method_retirement.cc confirm it against ART's own services.
+// in platform/common/class_layout.cc confirm it against ART's own services.
 namespace artdcevm::abi::arm64 {
 
 // mirror/object.h: klass_, monitor_.
