@@ -382,15 +382,17 @@ jvmtiError CollectSuperclassShadows(JNIEnv* jni, jclass target, jclass implement
   return JVMTI_ERROR_NONE;
 }
 
-jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const LocalClasses& loaded,
+// `candidates` are the loaded classes, or for an interface target the types of
+// the group that rebuilds it, so the policy sees exactly what ART relinks.
+jvmtiError CollectSubclasses(JNIEnv* jni, jclass target, const jclass* candidates, jint count,
                              Snapshot* snapshot, std::string* error) {
   const bool interface_target = snapshot->live.access & evolution::kAccInterface;
   std::set<std::string> boot_visited;
   LocalReference target_loader(jni);
   jvmtiError result = snapshot_env->GetClassLoader(target, &target_loader.value);
   if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
-  for (jint n = 0; n < loaded.count; ++n) {
-    jclass candidate = loaded.classes[n];
+  for (jint n = 0; n < count; ++n) {
+    jclass candidate = candidates[n];
     if (jni->IsSameObject(candidate, target) || !jni->IsAssignableFrom(candidate, target)) continue;
     jint status = 0;
     result = snapshot_env->GetClassStatus(candidate, &status);
@@ -712,7 +714,18 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   for (auto& [klass, snapshot] : batch.classes) {
     std::string error;
-    result = CollectSubclasses(jni, klass, loaded, &snapshot, &error);
+    const jclass* candidates = loaded.classes;
+    jint candidate_count = loaded.count;
+    if (snapshot.live.access & evolution::kAccInterface) {
+      const std::vector<jclass>* group = interface_scope.GroupTypes(klass);
+      if (!group) {
+        Diagnose(snapshot.live.descriptor + ": interface subtype group was not captured", true);
+        return JVMTI_ERROR_INTERNAL;
+      }
+      candidates = group->data();
+      candidate_count = static_cast<jint>(group->size());
+    }
+    result = CollectSubclasses(jni, klass, candidates, candidate_count, &snapshot, &error);
     if (result != JVMTI_ERROR_NONE) {
       Diagnose(snapshot.live.descriptor + ": " + error, true);
       return result;

@@ -82,7 +82,7 @@
 已加载实现类或其父类链上，声明了同名同描述符的 static 方法或非 public 实例方法时，拒绝 63，并在原因里写出该类。
 
 - **原因**：此时 ClassLinker 会把新 default 拷贝进实现类的方法数组。之后 `invoke-virtual C.m` 重新解析时，结果可能从父类的包内方法或 static 方法变成 copied default，已有调用因此改变语义，或触发调用方式不一致。
-- **快照**：`LoadedHierarchy::subtype_shadows`。在 `CollectSubclasses` 遍历已加载子类型（子接口和实现类）时，收集它们自身以及实现类父类链上这类方法的身份，并记录第一个声明它的类描述符（`AddShadows`）。父类链由 `CollectSuperclassShadows` 遍历，遇到本身也是子类型的父类就停下，因为该类会作为子类型单独收集；boot 类的描述符唯一，每个事务只读一次，其他加载器的类可能重名，不按描述符去重。只对新增 default 检查；新增 static/private 方法不经过虚分派，不受影响。
+- **快照**：`LoadedHierarchy::subtype_shadows`。接口目标的子类型不再从全部已加载类中另行筛选，而是取自重建该接口的组（`interface_redefinition::Scope::GroupTypes`，只含已准备、非错误状态的类），保证策略检查的集合与 ART 重新链接的集合一致；拿不到该组时以 `INTERNAL` 拒绝。`CollectSubclasses` 遍历这些子类型（子接口和实现类）时，收集它们自身以及实现类父类链上这类方法的身份，并记录第一个声明它的类描述符（`AddShadows`）。父类链由 `CollectSuperclassShadows` 遍历，遇到本身也是子类型的父类就停下，因为该类会作为子类型单独收集；boot 类的描述符唯一，每个事务只读一次，其他加载器的类可能重名，不按描述符去重。只对新增 default 检查；新增 static/private 方法不经过虚分派，不受影响。
 - **不受影响的情况**：类链上有 public 实例方法（不论是否 abstract）时，类方法优先于 default，链接结果与修改前一致，可以接受。
 
 ### 冲突检查三：链接后不得新增 default 冲突

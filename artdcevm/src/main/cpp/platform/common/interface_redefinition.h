@@ -24,6 +24,10 @@ class Scope {
   ~Scope();
   void Describe(jclass klass, const evolution::ClassSchema& live);
   jvmtiError Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error);
+  // After Capture: the types of the group that rebuilds interface target
+  // `klass` (its owner first, then every prepared subtype), or nullptr when
+  // `klass` is not a captured interface target. Borrowed until the scope ends.
+  const std::vector<jclass>* GroupTypes(jclass klass) const;
   Scope(const Scope&) = delete;
   Scope& operator=(const Scope&) = delete;
  private:

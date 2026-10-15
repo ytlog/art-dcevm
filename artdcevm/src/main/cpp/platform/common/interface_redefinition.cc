@@ -894,6 +894,15 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
     throw;  // Still Native: Route converts this after restoring both TLS values.
   }
 }
+const std::vector<jclass>* Scope::GroupTypes(jclass klass) const {
+  const auto* current = static_cast<const State*>(state_);
+  for (const auto& target : current->targets) {
+    if (!target.owner || !current->jni->IsSameObject(target.klass, klass)) continue;
+    for (const auto& owner : current->targets)
+      if (current->jni->IsSameObject(owner.klass, target.owner)) return &owner.snapshot.types;
+  }
+  return nullptr;
+}
 void Scope::Describe(jclass klass, const evolution::ClassSchema& live) {
   auto* next = static_cast<State*>(state_);
   for (auto& target : next->targets)
