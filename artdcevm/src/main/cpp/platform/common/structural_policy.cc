@@ -163,9 +163,13 @@ uint32_t MethodModifiers(uint32_t dex_access) {
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                   const LoadedHierarchy& hierarchy, const Abilities& abilities,
                   const RetiredMethods& retired) {
+  const bool interface_target = live.access & acc::kAccInterface;
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   const bool superclass_changed = live.superclass != incoming.superclass;
+  if (interface_target && (superclass_changed || live.interfaces != incoming.interfaces))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "interface redefinition does not support parent changes");
   if (superclass_changed) {
     Decision superclass = CheckSuperclass(live, incoming, hierarchy, abilities);
     if (superclass.error != JVMTI_ERROR_NONE) return superclass;
@@ -177,6 +181,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       (ClassModifiers(live.access) ^
        ClassModifiers(incoming.reflection_access.value_or(incoming.access))) |
       ((live.access ^ incoming.access) & kClassDefinitionFlags);
+  if (interface_target && (class_changed & ~kAccSuper))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
+                  "interface redefinition does not support class modifier changes");
   if (class_changed & ~kClassAllowed)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                   "class kind changed (interface, annotation or enum)");
@@ -203,7 +210,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& old : live.fields) {
     auto it = new_fields.find({old.name, old.descriptor, old.IsStatic()});
     if (it == new_fields.end()) {
-      if (!(owns_member_mapping && retires_fields))
+      if (interface_target || !(owns_member_mapping && retires_fields))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                       "field removed or its type/storage changed: " + old.name + ":" + old.descriptor);
       decision.fields_structural = true;
@@ -211,21 +218,25 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       continue;
     }
     const uint32_t changed = old.access ^ it->second;
-    if (changed & ~kFieldAllowed)
+    if (changed && (interface_target || (changed & ~kFieldAllowed)))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                     "unsupported field modifier change: " + old.name);
     if (changed) decision.fields_structural = true;
     new_fields.erase(it);
   }
-  if (!new_fields.empty()) decision.fields_structural = true;
+  if (!new_fields.empty()) {
+    if (interface_target)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                    "interface redefinition does not support added fields");
+    decision.fields_structural = true;
+  }
 
   std::map<MemberKey, uint32_t> new_methods;
   for (const auto& m : incoming.methods) new_methods[{m.name, m.descriptor}] = MethodModifiers(m.access);
   for (const auto& old : live.methods) {
     auto it = new_methods.find({old.name, old.descriptor});
     if (it == new_methods.end()) {
-      // Native, abstract, constructor and initializer declarations retire like
-      // any other; interfaces themselves cannot be redefined by ART.
+      // Interface targets currently support method-body updates only.
       if (!owns_member_mapping || (live.access & acc::kAccInterface))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported method retirement: " + Describe(old));
@@ -235,6 +246,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
+    if (interface_target && changed)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                    "interface redefinition does not support method modifier changes: " + Describe(old));
     if (BreaksVerifiedCallers(old.name, old.access, now))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the old kind of " + Describe(old));
@@ -262,7 +276,13 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the retired kind of " + key.first + key.second);
   }
-  if (!new_methods.empty()) decision.methods_structural = true;
+  if (!new_methods.empty()) {
+    if (interface_target)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                    "interface redefinition does not support added methods: " +
+                        new_methods.begin()->first.first + new_methods.begin()->first.second);
+    decision.methods_structural = true;
+  }
   // With the engine's mapping, a vanished copy maps to its canonical method.
   if (!owns_member_mapping) {
     Decision copied = CheckCopiedMembers(live, incoming, hierarchy);

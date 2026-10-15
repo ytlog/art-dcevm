@@ -209,12 +209,40 @@ int main(int argc, char** argv) {
               JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
               "retirement still needs the mapping");
     }
-    auto interface_schema = live;
-    interface_schema.access |= acc::kAccInterface;
-    next = interface_schema; next.methods.erase(next.methods.begin());
-    Require(policy::Evaluate(interface_schema, next, {}, {true}).error ==
-            JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-            "interface declaration retirement must remain rejected");
+    {
+      auto contract = live;
+      contract.access |= acc::kAccInterface | acc::kAccAbstract;
+      for (bool mapped : {false, true}) {
+        const policy::Abilities abilities{mapped, mapped, true, mapped};
+        auto expect = [&](ClassSchema candidate, jvmtiError code) {
+          auto result = policy::Evaluate(contract, candidate, {}, abilities);
+          Require(result.error == code && !result.reason.empty(), "interface error code or reason");
+        };
+        Require(policy::Evaluate(contract, contract, {}, abilities).error == JVMTI_ERROR_NONE,
+                "interface body update must be accepted");
+        next = contract; next.methods.push_back({"added", "()I", acc::kAccPublic});
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED);
+        next = contract; next.methods.erase(next.methods.begin());
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED);
+        next = contract; next.methods[0].descriptor = "(I)I";
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED);
+        next = contract; next.methods[0].access |= acc::kAccAbstract;
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
+        next = contract; next.fields.push_back({"added", "I", acc::kAccPublic | acc::kAccStatic});
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED);
+        next = contract; next.fields.clear();
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED);
+        next = contract; next.fields[0].access |= acc::kAccFinal;
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED);
+        next = contract; next.interfaces.push_back("Lfixture/Parent;");
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+        auto parent = contract; parent.interfaces.push_back("Lfixture/Parent;");
+        Require(policy::Evaluate(parent, contract, {}, abilities).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal");
+        next = contract; next.access |= acc::kAccSynthetic;
+        expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
+      }
+    }
     auto initializer = live;
     initializer.methods.push_back({"<clinit>", "()V", acc::kAccStatic});
     next = initializer; next.methods.pop_back();

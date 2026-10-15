@@ -7,6 +7,7 @@ import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
+import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -68,6 +69,31 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             byte[] patch = asset("interface-default-body", CopiedDefault.class);
             byte[] parent = asset("copied-default-add", CopiedParent.class);
             byte[] invalidInvoke = asset("interface-invalid-invoke", CopiedDefault.class);
+            NestedInterfaceHost.Implementation nested = new NestedInterfaceHost.Implementation();
+            NestedInterfaceHost.Contract nestedContract = nested;
+            nested.marker = 73;
+            expect("nested baseline", 41, nestedContract.value());
+            expect("nested InnerClass static flag", 1, java.lang.reflect.Modifier.isStatic(
+                    NestedInterfaceHost.Contract.class.getModifiers()) ? 1 : 0);
+            expect("nested body update", 0, redefine(NestedInterfaceHost.Contract.class,
+                    asset("nested-interface-body", NestedInterfaceHost.Contract.class)));
+            expect("nested old interface dispatch", 42, nestedContract.value());
+            expect("nested old virtual dispatch", 42, nested.value());
+            expect("nested new dispatch", 42, new NestedInterfaceHost.Implementation().value());
+            expect("nested instance field", 73, nested.marker);
+            expect("unsupported nested transaction", 63, redefine(NestedInterfaceHost.Contract.class,
+                    asset("nested-interface-add", NestedInterfaceHost.Contract.class)));
+            String rejection = DcevmRuntime.capabilities().getString("lastRejection");
+            if (!rejection.startsWith("Lcom/github/ytlog/artdcevm/fixture/NestedInterfaceHost$Contract;: ")
+                    || !rejection.contains("added methods")) throw new AssertionError("Missing nested rejection reason");
+            ++checks;
+            expect("nested unchanged after rejection", 42, nestedContract.value());
+            expect("top-level after nested transactions", 0, redefine(CopiedDefault.class, patch));
+            expect("top-level dispatch after nested transactions", 93, throughInterface.copiedValue());
+            expect("runtime available after target rejection", 1,
+                    DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: ") ? 1 : 0);
+            System.gc(); System.runFinalization(); System.gc();
+            expect("nested dispatch after GC", 42, nestedContract.value());
             // Repeat in the same process: successful redefinitions make each
             // following failed attempt own a different DexFile and obsolete chain.
             for (int cycle = 0; cycle < 3; ++cycle) {

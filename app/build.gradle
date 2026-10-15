@@ -17,11 +17,18 @@ android {
             arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
         } }
     }
-    buildTypes { debug { debuggable true; jniDebuggable true; minifyEnabled false } }
+    buildTypes { debug {
+        debuggable true; jniDebuggable true; minifyEnabled false
+        externalNativeBuild { cmake { arguments '-DARTDCEVM_INTERFACE_ABORT_TESTS=ON' } }
+    } }
+    buildFeatures { prefab true }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
     externalNativeBuild { cmake { path file('src/debug/cpp/CMakeLists.txt'); version '4.3.4' } }
     packaging { jniLibs {
         useLegacyPackaging true
+        // Prefer the app-owned test engine over the dependency's normal engine.
+        // check-interface-abort-isolation.py verifies the packaged ELF origin.
+        pickFirsts += ['**/libartdcevm.so']
         // Dependencies may ship other ABIs even though native builds are ARM64 only.
         excludes += ['**/armeabi/**', '**/armeabi-v7a/**', '**/x86/**', '**/x86_64/**']
     } }
@@ -29,6 +36,8 @@ android {
 }
 dependencies {
     implementation project(':artdcevm')
+    // Native test-engine compilation consumes the same pinned prefab dependency.
+    implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
 def patchTask = tasks.register('compilePatchFixtures', Exec) {
     inputs.dir rootProject.file('fixtures')

@@ -6,3 +6,8 @@ add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm_client_test SHARED testing/standard_jvmti_client.cc)
 target_compile_features(artdcevm_client_test PRIVATE cxx_std_17)
 target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/jvmti)
+
+# The lab compiles the shared engine sources with an explicit Debug-only flag.
+# Library-owned Debug/Release builds keep the CMake option OFF.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../artdcevm/src/main/cpp"
+                 "${CMAKE_CURRENT_BINARY_DIR}/test-engine")

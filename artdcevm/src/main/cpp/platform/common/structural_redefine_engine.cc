@@ -527,6 +527,7 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
 
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
   const jvmtiError result = structural_entry(env, count, definitions);
+  if (std::string reason = interface_redefinition::TakeRejection(); !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
   if (std::string late = method_retirement::TakeRejection(); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
@@ -725,14 +726,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
                                               abilities, snapshot.retired);
   const bool interface_target = interface_redefinition::IsTarget(self);
   if (interface_target) {
-    if (decision.error == JVMTI_ERROR_NONE &&
-        (decision.methods_structural || decision.fields_structural)) {
-      decision.error = JVMTI_ERROR_NOT_AVAILABLE;
-      decision.reason = "interface spike supports body edits only";
-    }
     if (decision.error == JVMTI_ERROR_NONE && !abilities.member_mapping) {
       decision.error = JVMTI_ERROR_NOT_AVAILABLE;
-      decision.reason = "interface spike requires verified member mapping";
+      decision.reason = "interface redefinition requires verified member mapping";
     }
     method_retirement::RequireMemberMapping();
     // Even a body edit must relink copied default methods in implementation classes.

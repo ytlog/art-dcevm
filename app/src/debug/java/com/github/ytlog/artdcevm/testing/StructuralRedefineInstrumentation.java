@@ -19,6 +19,7 @@ import com.github.ytlog.artdcevm.fixture.ClassFinalSubject;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
+import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
@@ -292,6 +293,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runMethodKindChangeScenarios();
+        runNestedInterfaceScenarios();
         runCopiedDefaultScenario();
         runInterfaceStressScenario();
         runInterfaceScenarios();
@@ -490,6 +492,53 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         scenario.check("unchangedMembers", schema, memberSchema(ClassFinalSubject.class));
         scenario.check("oldValue", 29, classFinal.value());
         scenario.check("newValue", 29, new ClassFinalSubject().value());
+    }
+
+    private void runNestedInterfaceScenarios() throws Exception {
+        NestedInterfaceHost.Implementation instance = new NestedInterfaceHost.Implementation();
+        NestedInterfaceHost.Contract contract = instance;
+        instance.marker = 73;
+        runScenario("nested-interface-body", 0, scenario -> {
+            scenario.check("innerStatic", true, Modifier.isStatic(NestedInterfaceHost.Contract.class.getModifiers()));
+            scenario.check("before", 41, contract.value());
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-body");
+            scenario.check("oldInterface", 42, contract.value());
+            scenario.check("oldVirtual", 42, instance.value());
+            scenario.check("newInstance", 42, new NestedInterfaceHost.Implementation().value());
+            scenario.check("marker", 73, instance.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 42, contract.value());
+        });
+        String[] rejectedVariants = {"add", "delete", "signature", "field", "modifiers", "parents"};
+        int[] rejectedCodes = {63, 67, 67, 64, 71, 66};
+        String[] reasons = {"added methods", "method retirement", "method retirement",
+                "added fields", "method modifier changes", "parent changes"};
+        String schema = memberSchema(NestedInterfaceHost.Contract.class);
+        for (int i = 0; i < rejectedVariants.length; ++i) {
+            String variant = "nested-interface-" + rejectedVariants[i];
+            String reason = reasons[i];
+            runScenario(variant, rejectedCodes[i], scenario -> {
+                scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, variant);
+                scenario.check("rejectionReason", true,
+                        DcevmRuntime.capabilities().getString("lastRejection").contains(reason));
+                scenario.check("unchangedMembers", schema, memberSchema(NestedInterfaceHost.Contract.class));
+                scenario.check("unchanged", 42, contract.value());
+                scenario.check("unchangedVirtual", 42, instance.value());
+                scenario.check("unchangedNew", 42, new NestedInterfaceHost.Implementation().value());
+                scenario.check("marker", 73, instance.marker);
+                scenario.check("runtimeAvailable", true,
+                        DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: "));
+            });
+        }
+        CopiedChild child = new CopiedChild();
+        CopiedDefault topLevel = child;
+        runScenario("interface-after-nested", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{CopiedDefault.class}, "interface-default-body");
+            scenario.check("topLevelDispatch", 93, topLevel.copiedValue());
+            scenario.check("nestedDispatch", 42, contract.value());
+            scenario.check("runtimeAvailable", true,
+                    DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: "));
+        });
     }
 
     // A loaded subclass owns a copied interface default until its superclass

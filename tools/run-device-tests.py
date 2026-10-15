@@ -52,6 +52,14 @@ SCENARIOS = (
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 71),
     ("method-storage-restore", ["method-storage-original"], 0),
+    ("nested-interface-body", ["nested-interface-body"], 0),
+    ("nested-interface-add", ["nested-interface-add"], 63),
+    ("nested-interface-delete", ["nested-interface-delete"], 67),
+    ("nested-interface-signature", ["nested-interface-signature"], 67),
+    ("nested-interface-field", ["nested-interface-field"], 64),
+    ("nested-interface-modifiers", ["nested-interface-modifiers"], 71),
+    ("nested-interface-parents", ["nested-interface-parents"], 66),
+    ("interface-after-nested", ["interface-default-body"], 0),
     ("interface-default-body", ["interface-default-body"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-stress", ["interface-stress"], 0),
@@ -81,6 +89,7 @@ SCENARIOS = (
 MAPPED_SCENARIOS = {"hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
                     "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
                     "methods-restore-again", "method-storage-delete", "method-storage-restore",
+                    "nested-interface-body", "interface-after-nested",
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
@@ -253,6 +262,12 @@ REQUIRED_CHECKS = {
     "method-storage-restore": {
         "combined": 40, "callerStatic": 32, "callerVirtual": 8,
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "nested-interface-body": {"innerStatic": True, "before": 41, "oldInterface": 42,
+                              "oldVirtual": 42, "newInstance": 42, "marker": 73, "afterGc": 42},
+    **{"nested-interface-" + variant: {"unchanged": 42, "unchangedVirtual": 42,
+        "unchangedNew": 42, "marker": 73, "rejectionReason": True, "runtimeAvailable": True}
+       for variant in ("add", "delete", "signature", "field", "modifiers", "parents")},
+    "interface-after-nested": {"topLevelDispatch": 93, "nestedDispatch": 42, "runtimeAvailable": True},
     "interface-default-body": {"oldChildInterface": 93, "oldChildVirtual": 93,
                                "newChild": 93, "parentValue": 90},
     "copied-default-add": {"copiedBefore": 93, "oldChildInterface": 92, "oldChildVirtual": 92,
@@ -297,6 +312,8 @@ REQUIRED_CHECKS = {
         **field_retired_checks("Restored")},
 }
 UNCHANGED_CHECKS = {
+    **{"nested-interface-" + variant: ("unchangedMembers",)
+       for variant in ("add", "delete", "signature", "field", "modifiers", "parents")},
     "atomic-modifier-public-class-interface": ("unchangedModifierMembers", "unchangedMembers"),
     "class-nonfinal": ("unchangedMembers",),
     "class-abstract-instances": ("unchangedMembers",),

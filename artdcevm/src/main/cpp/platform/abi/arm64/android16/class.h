@@ -3,12 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include "platform/abi/arm64/common/runtime_objects.h"
+#include "platform/abi/arm64/common/class_status.h"
 
 // mirror/class.h of android-16.0.0_r1 (ed6c006bd06ae060bd9698fd2cb25c4865512ec3):
 // static and instance fields share one fields_ array;
 // access_flags_ follows the native member arrays.
 namespace artdcevm::abi::arm64::android16 {
-enum class ClassStatus : uint8_t { kErrorResolved = 2, kErrorUnresolved = 3, kResolved = 7 };
+using ClassStatus = abi::arm64::ClassStatus;
 struct Class {
   Object object;
   uint32_t class_loader;

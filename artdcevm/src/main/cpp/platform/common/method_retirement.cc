@@ -274,8 +274,10 @@ template <typename Class, typename Method> struct Layout {
   // expected flags come from the class's current ClassDef in its own DEX
   // (dex_cache_ precedes the arrays in every declared layout).
   static bool VerifyAccess(const Class& klass, const std::string& descriptor, std::string* why) {
-    constexpr uint32_t kValidClass = 0x0001 | 0x0010 | 0x0020 | 0x0400 | 0x1000 | 0x4000;
-    constexpr uint32_t kValidInterface = 0x0001 | 0x0200 | 0x0400 | 0x1000 | 0x2000;
+    constexpr uint32_t kValidClass = evolution::kAccPublic | evolution::kAccFinal |
+        evolution::kAccSuper | evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccEnum;
+    constexpr uint32_t kValidInterface = evolution::kAccPublic | evolution::kAccInterface |
+        evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccAnnotation;
     const DexFilePrefix* dex = DexOf(klass.dex_cache);
     if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
     uint32_t class_def_access = 0;

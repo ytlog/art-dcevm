@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "platform/abi/arm64/common/runtime_objects.h"
+#include "platform/abi/arm64/common/class_status.h"
 
 // mirror/class.h of android-13.0.0_r1 (88baac34da072b41917b4adc1987c55546266b33):
 // instance and static fields are in separate ifields_ and sfields_ arrays;
@@ -10,7 +11,7 @@
 namespace artdcevm::abi::arm64::android13 {
 // runtime/class_status.h. kErrorResolved still satisfies Class::IsResolved;
 // unpublished, discarded replacements must use kErrorUnresolved instead.
-enum class ClassStatus : uint8_t { kErrorResolved = 2, kErrorUnresolved = 3, kResolved = 7 };
+using ClassStatus = abi::arm64::ClassStatus;
 struct Class {
   Object object;
   uint32_t class_loader;

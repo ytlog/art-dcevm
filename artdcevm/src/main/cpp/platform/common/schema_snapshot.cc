@@ -39,7 +39,7 @@ int ReadLiveClassMetadata(jvmtiEnv* jvmti, JNIEnv* jni, jclass klass,
   if (superclass.value) {
     result = Signature(jvmti, superclass.value, &schema.superclass);
     if (result) return fail(result, "Superclass signature failed");
-  } else if (access & 0x0200) {
+  } else if (access & evolution::kAccInterface) {
     // DEX encodes Object as the superclass of interfaces, whereas JNI returns null.
     schema.superclass = "Ljava/lang/Object;";
   }

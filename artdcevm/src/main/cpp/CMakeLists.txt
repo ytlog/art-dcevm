@@ -19,7 +19,11 @@ add_library(artdcevm SHARED
   platform/common/interface_redefinition.cc
   platform/common/structural_redefine_engine.cc)
 target_compile_features(artdcevm PRIVATE cxx_std_17)
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+option(ARTDCEVM_INTERFACE_ABORT_TESTS "Build app-owned interface abort tests" OFF)
+if(ARTDCEVM_INTERFACE_ABORT_TESTS)
+  if(PROJECT_IS_TOP_LEVEL OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(FATAL_ERROR "Interface abort tests require the app Debug subproject")
+  endif()
   target_compile_definitions(artdcevm PRIVATE ARTDCEVM_INTERFACE_ABORT_TESTS)
 endif()
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)

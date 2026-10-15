@@ -13,10 +13,14 @@ inline constexpr uint32_t kAccProtected = 0x0004;
 inline constexpr uint32_t kAccStatic = 0x0008;
 inline constexpr uint32_t kAccFinal = 0x0010;
 inline constexpr uint32_t kAccSynchronized = 0x0020;
+inline constexpr uint32_t kAccSuper = 0x0020;  // Class flag, distinct from the method flag above.
 inline constexpr uint32_t kAccVolatile = 0x0040;
 inline constexpr uint32_t kAccNative = 0x0100;
 inline constexpr uint32_t kAccInterface = 0x0200;
 inline constexpr uint32_t kAccAbstract = 0x0400;
+inline constexpr uint32_t kAccSynthetic = 0x1000;
+inline constexpr uint32_t kAccAnnotation = 0x2000;
+inline constexpr uint32_t kAccEnum = 0x4000;
 inline constexpr uint32_t kAccConstructor = 0x10000;
 inline constexpr uint32_t kAccDeclaredSynchronized = 0x20000;
 

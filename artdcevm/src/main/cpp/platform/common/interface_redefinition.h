@@ -12,6 +12,8 @@ struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 // Diagnostics for the latest capture on the calling transaction thread.
 Timing LastTiming();
 std::string RuntimeState();
+// Format a saved static hook rejection only after returning to Native state.
+std::string TakeRejection();
 // Called by the existing named FindClass hooks. ClassLinker is process-lived.
 void ObserveClassLinker(void* linker);
 // References remain owned by the caller throughout the routed batch.
