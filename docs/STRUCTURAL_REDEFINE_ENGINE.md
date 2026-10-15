@@ -92,6 +92,8 @@ ART 的结构事务分两步处理子类：
 
 `CollectAndCreateNewInstances` 是 ART 最后可失败的一步。原函数成功后，引擎核对槽位中的旧类即目标、替换类使用传入的 DEX、新父类正确，再用探测选中的布局为全部受影响类算出字段与方法映射，并准备退役字段的数组副本。任何一步失败且事务依赖自有映射时返回错误，整批不提交；不依赖时退回 ART 原映射。
 
+`PlanMethods` 在所有布局和结构事务中共用，包括普通类事务。它从方法真实声明类的 DEX 和 `dex_method_index` 读取名称与完整描述符，再按（名称、描述符）配对；不同 DEX 的原始索引不能相互比较。消失的 copied default/miranda 按原声明类中的真实成员映射并清除解析缓存，不将生成的存储项退役。此公共路径不再依赖 `HasSameNameAndSignature` 或 `GetCanonicalMethod` 的 obsolete DexCache 查找。
+
 此后进入不可失败的提交：`CollectNewFieldAndMethodMappings` 只把计划写入 ART 的 map（写入前确认它们是空的 libc++ 树）；`UpdateClassStructurally` 完整调用原函数，引擎只在复制阶段前后换入、换回字段数组与父类指针，并在 visitor 中处理退役成员。提交段内没有 JNI/JVMTI 调用或 Java 对象分配。
 
 ## 校验规则
@@ -243,7 +245,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 
 ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook 按目录声明的表范围查找；`.gnu_debugdata` 也是命名符号表，不涉及反汇编或地址推算。
 
-- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 24 个名称（21 个限定 `.dynsym`，标准 JVMTI 包装器与两个 MethodHandle 入口允许任一命名表）。
+- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 22 个当前使用的名称（19 个限定 `.dynsym`，标准 JVMTI 包装器与两个 MethodHandle 入口允许任一命名表）。
 - [method_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/method_retirement_symbols.h)：拼写因构建而异的名称，按顺序查找：`Method_invoke` 与 `Constructor_newInstance0` 各有无后缀和固定 `.__uniq` 后缀两种拼写；`EncodeFieldId` 新旧两组签名；`FindClass` 新旧两种签名；可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 
 名称存在只说明可以定位；固定声明由运行时探测核对，Hook 覆盖由设备回归确认。

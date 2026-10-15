@@ -2,7 +2,7 @@
 #include "platform/symbols/art_symbol_compat.h"
 
 // Named ART symbols the engine resolves on every runtime. The mangled names are
-// identical in every collected Android 11--17 arm64 runtime; 21 entries require
+// identical in every collected Android 11--17 arm64 runtime; 19 entries require
 // .dynsym and 3 allow any named table. Presence proves the name only, not the
 // source declarations or runtime behavior. tools/check-structural-symbols.py
 // re-verifies this catalog against assets/runtime_lib. Keep one declaration per
@@ -37,8 +37,6 @@ inline constexpr NamedSymbol kVisitReflectiveTargets{Library::kArt, "_ZN3art7Run
 inline constexpr NamedSymbol kFindDeclaredStaticField{Library::kArt, "_ZN3art6mirror5Class23FindDeclaredStaticFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindDeclaredInstanceField{Library::kArt, "_ZN3art6mirror5Class25FindDeclaredInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindInstanceField{Library::kArt, "_ZN3art6mirror5Class17FindInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
-inline constexpr NamedSymbol kHasSameNameAndSignature{Library::kArt, "_ZN3art9ArtMethod23HasSameNameAndSignatureEPS0_"};
-inline constexpr NamedSymbol kGetCanonicalMethod{Library::kArt, "_ZN3art9ArtMethod18GetCanonicalMethodENS_11PointerSizeE"};
 inline constexpr NamedSymbol kEncodeMethodId{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdEPNS_9ArtMethodE"};
 inline constexpr NamedSymbol kEncodeMethodIdHandle{Library::kArt, "_ZN3art3jni12JniIdManager14EncodeMethodIdENS_16ReflectiveHandleINS_9ArtMethodEEE"};
 inline constexpr NamedSymbol kThrowNewException{Library::kArt, "_ZN3art6Thread17ThrowNewExceptionEPKcS2_"};

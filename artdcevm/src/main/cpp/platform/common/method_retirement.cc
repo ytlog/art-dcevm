@@ -186,11 +186,9 @@ bool Fail(std::string* why, std::string reason) {
 
 // ART services, resolved by name in Prepare.
 void (*throw_exception)(void*, const char*, const char*) = nullptr;
-bool (*same_method)(void*, void*) = nullptr;
 ArtField* (*find_static_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_declared_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
-void* (*canonical_method)(void*, uint32_t) = nullptr;
 void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
@@ -206,8 +204,6 @@ void* original_mh_exact = nullptr;
 void* original_mh_frame = nullptr;
 void* original_encode = nullptr;
 void* original_encode_handle = nullptr;
-// mirror/class.h: PointerSize::k64 (enum class PointerSize : uint32_t).
-constexpr uint32_t kPointerSize64 = 8;
 
 // Member mapping of one redefinition, planned while ART may still fail and
 // applied at commit without reading DEX data or calling lookups.
@@ -438,11 +434,31 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  static void PlanMethods(Class* old_class, Class* new_class, MappingPlan* plan) {
+  // Map array members from their real declaring class's DEX. ART's
+  // HasSameNameAndSignature/GetCanonicalMethod call GetObsoleteDexCache,
+  // which assumes an obsolete method lives in its declaring class's array.
+  // A copied method lives in the implementation class's array instead; after
+  // redefining its interface that assumption no longer holds.
+  static bool DexMethodIdentity(Method* method, evolution::Member* identity, std::string* why) {
+    auto* declaring = Pointer<Class>(method->declaring_class);
+    const auto* dex = declaring ? DexOf(declaring->dex_cache) : nullptr;
+    if (!dex || !dex->begin) return Fail(why, "mapped method has no declaring DEX");
+    return evolution::ReadMethodIdentity(DexViewOf(*dex), method->dex_method_index, identity, why);
+  }
+
+  // Shared by every structural transaction/layout, including ordinary classes.
+  // Identity is the declaring DEX's name + prototype, not a runtime canonical
+  // lookup or a raw method index (indices are local to different DEX files).
+  static bool PlanMethods(Class* old_class, Class* new_class, MappingPlan* plan, std::string* why) {
     auto* old_methods = Members<Method>(old_class->methods);
     auto* new_methods = Members<Method>(new_class->methods);
+    std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
+    for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
+      if (!DexMethodIdentity(new_methods->At(j), &identities[j], why)) return false;
     for (uint32_t i = 0; old_methods && i < old_methods->length; ++i) {
       Method* old_method = old_methods->At(i);
+      evolution::Member identity;
+      if (!DexMethodIdentity(old_method, &identity, why)) return false;
       const bool declared = old_method->declaring_class == Reference(old_class);
       void* replacement = nullptr;
       for (uint32_t j = 0; new_methods && j < new_methods->length; ++j) {
@@ -450,7 +466,10 @@ template <typename Class, typename Method> struct Layout {
         // Removing an override may expose an inherited/default copied member
         // with the same identity. That does not preserve the old declaration.
         if (declared && candidate->declaring_class != Reference(new_class)) continue;
-        if (same_method(old_method, candidate)) { replacement = candidate; break; }
+        if (identity.name == identities[j].name && identity.descriptor == identities[j].descriptor) {
+          replacement = candidate;
+          break;
+        }
       }
       constexpr uint32_t kNative = evolution::kAccNative;
       if ((old_method->access_flags.load() & kNative) &&
@@ -467,10 +486,22 @@ template <typename Class, typename Method> struct Layout {
         // public implementation of its slot. The interface declaration still
         // exists: map to ART's canonical method and clear cached resolutions
         // rather than retiring generated child storage.
-        plan->methods.push_back({old_method, canonical_method(old_method, kPointerSize64),
-                                 MethodMapping::kCopied});
+        auto* declaring = Pointer<Class>(old_method->declaring_class);
+        auto* canonical = Members<Method>(declaring->methods);
+        Method* original = nullptr;
+        for (uint32_t j = 0; canonical && j < canonical->length; ++j) {
+          Method* candidate = canonical->At(j);
+          if (candidate->declaring_class == old_method->declaring_class &&
+              candidate->dex_method_index == old_method->dex_method_index) {
+            original = candidate;
+            break;
+          }
+        }
+        if (!original) return Fail(why, "copied method has no canonical declaration");
+        plan->methods.push_back({old_method, original, MethodMapping::kCopied});
       }
     }
+    return true;
   }
 
   static bool Plan(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why) {
@@ -481,7 +512,7 @@ template <typename Class, typename Method> struct Layout {
       auto* old_class = old_classes->template Get<Class>(i);
       auto* new_class = new_classes->template Get<Class>(i);
       if (!PlanFields(i, old_class, new_class, plan, why)) return false;
-      PlanMethods(old_class, new_class, plan);
+      if (!PlanMethods(old_class, new_class, plan, why)) return false;
     }
     return true;
   }
@@ -1258,11 +1289,9 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
       {kEncodeMethodId, Fn(Encode), &original_encode},
       {kEncodeMethodIdHandle, Fn(EncodeHandle), &original_encode_handle},
       {kThrowNewException, nullptr, Out(&throw_exception)},
-      {kHasSameNameAndSignature, nullptr, Out(&same_method)},
       {kFindDeclaredStaticField, nullptr, Out(&find_static_field)},
       {kFindDeclaredInstanceField, nullptr, Out(&find_declared_instance_field)},
       {kFindInstanceField, nullptr, Out(&find_instance_field)},
-      {kGetCanonicalMethod, nullptr, Out(&canonical_method)},
       {kClassRedefinitionGetMirrorClass, nullptr, Out(&mirror_class)}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {

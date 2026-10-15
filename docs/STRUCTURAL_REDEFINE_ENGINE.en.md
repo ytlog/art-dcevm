@@ -95,6 +95,8 @@ A marked attempt fails with `JVMTI_ERROR_INTERNAL` in `CollectAndCreateNewInstan
 
 `CollectAndCreateNewInstances` is ART's last fallible step. After the original succeeds, the engine checks that the slots identify the target's old class, that the replacement uses the supplied DEX, and that the new superclass is correct. It then computes field and method mappings for all affected classes using the selected layout and prepares replacement arrays for retired fields. If any step fails and the transaction depends on custom mapping, return an error without committing the batch; otherwise fall back to ART's original mapping.
 
+`PlanMethods` is shared by all layouts and structural transactions, including ordinary classes. It reads each method's name and full descriptor from its real declaring class DEX and `dex_method_index`, then pairs by (name, descriptor); raw indices from different DEX files cannot be compared. A disappearing copied default/miranda maps to the real member in its original declaring class and clears cached resolutions, without retiring generated storage. This common path no longer depends on obsolete-DexCache lookups through `HasSameNameAndSignature` or `GetCanonicalMethod`.
+
 The remaining commit cannot fail. `CollectNewFieldAndMethodMappings` only writes the plan into ART's maps, after confirming they are empty libc++ trees. `UpdateClassStructurally` calls the original in full. The engine only swaps field arrays and superclass pointers around the copying phase and handles retired members in the visitor. The commit section performs no JNI/JVMTI calls or Java-object allocation.
 
 ## Validation rules
@@ -246,7 +248,7 @@ Whether a capability is usable still depends on each transaction's probes. Faile
 
 Private ART capabilities are accessed only through named ELF symbols. The official ShadowHook resolves them at runtime within the table scope declared in the catalog. `.gnu_debugdata` is also a named symbol table; no disassembly or address derivation is involved.
 
-- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h): 24 names provided by every runtime. Of these, 21 require `.dynsym`; the standard JVMTI wrapper and two MethodHandle entries allow any named table.
+- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h): 22 currently used names provided by every runtime. Of these, 19 require `.dynsym`; the standard JVMTI wrapper and two MethodHandle entries allow any named table.
 - [method_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/method_retirement_symbols.h): names whose spellings vary across builds, tried in order. `Method_invoke` and `Constructor_newInstance0` each have a spelling without a suffix and one with a fixed `.__uniq` suffix. `EncodeFieldId` and `FindClass` each have old and new signatures. `MethodHandleInvokeExactWithFrame` is optional, from Android 13 onward.
 
 A symbol's presence proves only that it can be located. Runtime probes check the fixed declarations; device regression checks hook coverage.
