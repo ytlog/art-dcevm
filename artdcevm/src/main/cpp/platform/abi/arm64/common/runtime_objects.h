@@ -62,6 +62,17 @@ struct ArtMethod {
   void* quick_entry;
 };
 static_assert(sizeof(ArtMethod) == 32);
+// art_method.h IsDefaultConflicting of android-12.0.0_r1 through
+// android-17.0.0_r1, with libdexfile/dex/modifiers.h values: a copied method
+// marked both abstract and default, never an intrinsic. Calls through it throw
+// IncompatibleClassChangeError. Android 11 has its own flag (android11/art_method.h).
+inline bool IsDefaultConflicting(const ArtMethod& method) {
+  constexpr uint32_t kAccAbstract = 0x0400, kAccDefault = 0x00400000, kAccCopied = 0x01000000,
+                     kAccIntrinsic = 0x80000000;
+  constexpr uint32_t kMask = kAccIntrinsic | kAccCopied | kAccAbstract | kAccDefault;
+  return (method.access_flags.load(std::memory_order_relaxed) & kMask) ==
+      (kAccCopied | kAccAbstract | kAccDefault);
+}
 // libdexfile/dex/modifiers.h; ART sets it on each method of a replaced class.
 inline constexpr uint32_t kAccObsoleteMethod = 0x00040000;
 inline constexpr uint32_t kAccJavaFlagsMask = 0xffff;

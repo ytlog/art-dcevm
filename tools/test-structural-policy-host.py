@@ -14,6 +14,8 @@ SOURCE = r'''
 #include "platform/common/field_array_probe.h"
 #include "platform/abi/arm64/android13/class.h"
 #include "platform/abi/arm64/android16/class.h"
+#include "platform/abi/arm64/android11/art_method.h"
+#include "platform/abi/arm64/common/runtime_objects.h"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -83,6 +85,31 @@ int main(int argc, char** argv) {
               abi::android13::kFieldArrayNames[1] == std::string_view("sFields") &&
               abi::android16::kFieldArrayNames[0] == std::string_view("fields"),
               "Class.java field array slot names differ");
+    }
+    {
+      // ART's own default-conflict marks, which the member mapping reads after
+      // linking. Android 12-17 combine copied/abstract/default; 11 has its own flag.
+      namespace abi = artdcevm::abi::arm64;
+      const auto modern = [](uint32_t flags) {
+        abi::ArtMethod method{};
+        method.access_flags = flags;
+        return abi::IsDefaultConflicting(method);
+      };
+      const auto legacy = [](uint32_t flags) {
+        abi::android11::ArtMethod method{};
+        method.access_flags = flags;
+        return abi::android11::IsDefaultConflicting(method);
+      };
+      constexpr uint32_t kAbstract = 0x0400, kDefault = 0x00400000, kCopied = 0x01000000,
+                         kIntrinsic = 0x80000000;
+      Require(modern(kCopied | kAbstract | kDefault | acc::kAccPublic),
+              "Android 12-17 default conflict was not recognized");
+      Require(!modern(kCopied | kAbstract) && !modern(kCopied | kDefault) &&
+              !modern(kAbstract | kDefault) && !modern(kIntrinsic | kCopied | kAbstract | kDefault),
+              "Android 12-17 miranda, copied default, declared method or intrinsic taken as a conflict");
+      Require(legacy(kCopied) && legacy(kCopied | kAbstract) && !legacy(kIntrinsic | kCopied) &&
+              !legacy(0x00100000 | kAbstract | kDefault),
+              "Android 11 default conflict flag differs");
     }
     const auto live = Base();
     Accept(live, live, false, false);  // Method bodies do not alter declarations.

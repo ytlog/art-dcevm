@@ -91,11 +91,16 @@
 
 这项检查放在 `PlanMethods`，读取 ART 自己的链接结果，不在引擎内重新实现 default 方法选择：
 
-- 新类方法数组中满足 `IsDefaultConflicting` 的方法，即 `kAccIntrinsic | kAccCopied | kAccAbstract | kAccDefault` 这几位与 `kAccCopied | kAccAbstract | kAccDefault` 相等的方法，如果在旧类中没有同身份的冲突方法，则映射失败。失败返回 63，原因写明实现类与方法。
-- 这时仍处于 `CollectAndCreateNewInstances` 之后、ART 不可失败点之前，现有清理路径负责回滚。
-- 标志值取自固定源码声明：`kAccCopied = 0x01000000`、`kAccDefault = 0x00400000`、`kAccAbstract = 0x0400`，Android 13 与 16 相同（[13 modifiers.h](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/libdexfile/dex/modifiers.h)、[16 modifiers.h](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/libdexfile/dex/modifiers.h)；判定式见各版本 `art_method.h` 的 `IsDefaultConflicting`）。`kAccIntrinsic = 0x80000000` 同源。这些常量放在 `platform/abi/arm64/common`，不新增任何对象偏移，`access_flags` 已经由现有布局读取。
+- 新类方法数组中满足 ART `IsDefaultConflicting` 判定的方法，如果在旧类中没有同身份的冲突方法，`PlanMethods` 就把“类: 方法”记入 `MappingPlan::default_conflict`。`CollectAndCreateNewInstances` 在映射计划成功后看到这一项，即以 63 拒绝，`lastRejection` 写明实现类与方法。
+- 这是语义拒绝，不走 `Fail()`：`Fail()` 表示布局探测失败，会清空候选布局，事务不要求自有映射时还会退回 ART 原映射，冲突就会被放过。
+- 这时仍处于 ART 不可失败点之前，现有清理路径负责回滚。
+- 判定按版本声明，取自各版本 `art_method.h` 与 `modifiers.h`：
+  - Android 12–17：`kAccIntrinsic | kAccCopied | kAccAbstract | kAccDefault` 这几位等于 `kAccCopied | kAccAbstract | kAccDefault`，其中 `kAccCopied = 0x01000000`、`kAccDefault = 0x00400000`、`kAccAbstract = 0x0400`、`kAccIntrinsic = 0x80000000`，放在 `platform/abi/arm64/common/runtime_objects.h`。
+  - Android 11：独立的 `kAccDefaultConflict = 0x01000000`，且不是 intrinsic（该版本的 `kAccCopied` 是 `0x00100000`），放在 `platform/abi/arm64/android11/art_method.h`。
+  - `Layout` 模板按 ArtMethod 类型的重载选择判定，不新增对象偏移；`access_flags` 已经由现有布局读取。
 - 方法数组按 `PlanMethods` 现有的 `Members` 与长度遍历，不以数组指针非空推断存在成员。较新的 ART 模块已对无字段的类使用地址非空、长度为零的共享字段数组（见引擎文档“运行时探测”），方法数组按同一假设处理。
-- 这项检查对所有结构事务生效，包括“给普通类新增接口”。那条路径今天也可能产生同样的冲突，属于同一个根因，不另加一套接口专用分支。
+- 只有使用自有映射计划的事务才会做这项检查。接口成员演进始终要求自有映射；不要求映射、且探测失败而退回 ART 原映射的普通类事务不在此列。
+- 在使用自有映射的结构事务中，这项检查对所有类生效，包括“给普通类新增接口”。那条路径今天也可能产生同样的冲突，属于同一个根因，不另加一套接口专用分支。
 
 以下情况都接受：
 
@@ -154,7 +159,7 @@
 
 1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。**已完成**，规则由 `Abilities::interface_members` 控制，默认关闭。
 2. 快照事实：在 `structural_redefine_engine.cc` 填充 `inherited_interface` 与 `subtype_shadows`。**已完成**，只对接口目标收集；能力关闭时策略不读取它们。
-3. 链接后冲突检查：在 `method_retirement.cc` 的 `PlanMethods` 中实现，并声明 flag 常量。
+3. 链接后冲突检查：在 `method_retirement.cc` 的 `PlanMethods` 中实现，并声明 flag 常量。**已完成**，对所有使用自有映射的结构事务生效。
 4. 接口 direct 方法退役：核对保活与守卫，然后打开 `interface_members`。
 5. fixture、设备套件与失败仪器。
 6. 文档：中英文版本的 LIMITATIONS、引擎文档、README，并删除本文。

@@ -242,6 +242,9 @@ struct MappingPlan {
   std::vector<RetiredFieldPlan> retired_fields;
   std::vector<FieldArraySwap> field_swaps;
   std::vector<MethodMapping> methods;
+  // "class: method" that a re-linked class newly links as a default conflict.
+  // Not a probe failure: the transaction must be rejected.
+  std::string default_conflict;
 };
 
 // Operations over one source-declared class layout.
@@ -465,10 +468,12 @@ template <typename Class, typename Method> struct Layout {
     std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
     for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
       if (!DexMethodIdentity(new_methods->At(j), &identities[j], why)) return false;
+    std::set<std::pair<std::string, std::string>> old_conflicts;
     for (uint32_t i = 0; old_methods && i < old_methods->length; ++i) {
       Method* old_method = old_methods->At(i);
       evolution::Member identity;
       if (!DexMethodIdentity(old_method, &identity, why)) return false;
+      if (IsDefaultConflicting(*old_method)) old_conflicts.emplace(identity.name, identity.descriptor);
       const bool declared = old_method->declaring_class == Reference(old_class);
       void* replacement = nullptr;
       for (uint32_t j = 0; new_methods && j < new_methods->length; ++j) {
@@ -511,7 +516,25 @@ template <typename Class, typename Method> struct Layout {
         plan->methods.push_back({old_method, original, MethodMapping::kCopied});
       }
     }
+    // ClassLinker links a conflict when a class inherits one identity as the
+    // default of two unrelated interfaces. A conflict the old class did not
+    // have would make calls that reached a default throw from now on.
+    for (uint32_t j = 0; new_methods && j < new_methods->length && plan->default_conflict.empty(); ++j)
+      if (IsDefaultConflicting(*new_methods->At(j)) &&
+          !old_conflicts.count({identities[j].name, identities[j].descriptor}))
+        plan->default_conflict = Descriptor(*new_class) + ": " + identities[j].name + identities[j].descriptor;
     return true;
+  }
+
+  // The class's own type descriptor from its DexCache, for rejection messages.
+  static std::string Descriptor(const Class& klass) {
+    const DexFilePrefix* dex = DexOf(klass.dex_cache);
+    std::string descriptor, error;
+    if (!dex || !dex->begin || klass.dex_type_index < 0 ||
+        !evolution::ReadTypeDescriptor(DexViewOf(*dex), static_cast<uint32_t>(klass.dex_type_index),
+                                       &descriptor, &error))
+      return "<unnamed class>";
+    return descriptor;
   }
 
   static bool Plan(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why) {
@@ -764,6 +787,12 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
           return false;
         }
         plan.superclass_changed = true;
+      }
+      if (!plan.default_conflict.empty()) {
+        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
+        transaction->rejection =
+            plan.default_conflict + " would become a conflict between unrelated interface defaults";
+        return false;
       }
       // Later redefinitions of this batch are planned with the same layout.
       transaction->layouts = LayoutMask{1} << (layout - kLayouts);
