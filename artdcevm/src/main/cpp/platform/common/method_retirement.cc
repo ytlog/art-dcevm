@@ -23,6 +23,7 @@
 #include "platform/abi/arm64/common/reflective_value_visitor.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/common/art_dex_view.h"
+#include "platform/common/field_array_probe.h"
 #include "platform/common/structural_policy.h"
 #include "platform/symbols/method_retirement_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -246,7 +247,7 @@ struct MappingPlan {
 // Operations over one source-declared class layout.
 struct LayoutOps {
   int android;
-  bool (*verify_target)(void* klass, const evolution::ClassSchema& live, std::string* why);
+  bool (*verify_target)(void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
   bool (*verify_iter)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
@@ -291,11 +292,24 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  // Fields ART finds by name must lie in this layout's arrays before any
-  // array length is read; each array then holds exactly the JVMTI fields.
-  static bool VerifyFields(Class* klass, const evolution::ClassSchema& live, std::string* why) {
+  // ART's Class.java field table confirms each slot before reading any array,
+  // including the shared nonnull empty arrays used by newer ART modules.
+  // Named target fields must then lie in arrays containing exactly the JVMTI fields.
+  static bool VerifyFields(Class* klass, void* class_type,
+                           const evolution::ClassSchema& live, std::string* why) {
     const auto arrays = FieldArrays(*klass);
-    std::array<bool, std::tuple_size_v<decltype(arrays)>> confirmed{};
+    const auto slots = FieldArraySlots(*klass);
+    size_t count = 0;
+    for (size_t i = 0; i < arrays.size(); ++i) {
+      uint32_t length = 0;
+      const auto offset = static_cast<uint32_t>(
+          reinterpret_cast<uintptr_t>(slots[i]) - reinterpret_cast<uintptr_t>(klass));
+      if (!ProbeFieldArray(class_type, FieldArrayName(*klass, i), offset, arrays[i],
+                           find_declared_instance_field, &length))
+        return Fail(why, "field array slot differs: " + std::string(FieldArrayName(*klass, i)));
+      count += length;
+    }
+    if (count != live.fields.size()) return Fail(why, "field count differs");
     std::vector<std::pair<ArtField*, const evolution::Member*>> found;
     for (const auto& member : live.fields) {
       ArtField* field = (member.IsStatic() ? find_static_field : find_declared_instance_field)(
@@ -307,19 +321,10 @@ template <typename Class, typename Method> struct Layout {
         const uintptr_t at = reinterpret_cast<uintptr_t>(field);
         placed = arrays[i] && at >= first && at - first < size_t{UINT16_MAX} * sizeof(ArtField) &&
             (at - first) % sizeof(ArtField) == 0;
-        if (placed) confirmed[i] = true;
       }
       if (!placed) return Fail(why, "field " + member.name + " is outside the declared arrays");
       found.emplace_back(field, &member);
     }
-    // An unconfirmed array must be absent: its slot may be another member.
-    size_t count = 0;
-    for (size_t i = 0; i < arrays.size(); ++i) {
-      if (!arrays[i]) continue;
-      if (!confirmed[i]) return Fail(why, "unconfirmed field array");
-      count += Members<ArtField>(arrays[i])->length;
-    }
-    if (count != live.fields.size()) return Fail(why, "field count differs");
     const DexFilePrefix* dex = DexOf(klass->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
     const evolution::DexView view = DexViewOf(*dex);
@@ -364,10 +369,11 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  static bool VerifyTarget(void* klass, const evolution::ClassSchema& live, std::string* why) {
+  static bool VerifyTarget(void* klass, void* class_type,
+                           const evolution::ClassSchema& live, std::string* why) {
     auto* declared = static_cast<Class*>(klass);
     return declared && VerifyAccess(*declared, live.descriptor, why) &&
-        VerifyFields(declared, live, why) && VerifyMethods(declared, live, why);
+        VerifyFields(declared, class_type, live, why) && VerifyMethods(declared, live, why);
   }
 
   // After ART allocated the replacement classes: the holder's class slots
@@ -1018,6 +1024,7 @@ jfieldID EncodeFieldHandleWithClass(void* manager, Handle klass, ReflectiveHandl
 // against the old declaring class. Only public JNI identifies the target.
 jobject (*original_method_invoke)(JNIEnv*, jobject, jobject, jobjectArray) = nullptr;
 const JNINativeInterface* jni = nullptr;  // The table in force before ours.
+jclass class_type_root = nullptr;
 jclass no_such_method_error = nullptr;
 jclass no_such_field_error = nullptr;
 jclass invocation_target_exception = nullptr;
@@ -1238,10 +1245,11 @@ bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
     env->DeleteLocalRef(local);
     return global;
   };
+  class_type_root = global_class("java/lang/Class");
   no_such_method_error = global_class("java/lang/NoSuchMethodError");
   invocation_target_exception = global_class("java/lang/reflect/InvocationTargetException");
   no_such_field_error = global_class("java/lang/NoSuchFieldError");
-  if (!no_such_method_error || !invocation_target_exception || !no_such_field_error)
+  if (!class_type_root || !no_such_method_error || !invocation_target_exception || !no_such_field_error)
     return Fail(failure, "exception classes unavailable");
   no_such_method_init = env->GetMethodID(no_such_method_error, "<init>", "(Ljava/lang/String;)V");
   invocation_target_init = env->GetMethodID(invocation_target_exception, "<init>",
@@ -1482,11 +1490,13 @@ std::vector<int> CandidateReleases(bool verified_only) {
 bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
   if (!available || !transaction) return false;
   void* klass = mirror_class(self);
+  void* class_type = DecodeClass(self, class_type_root);
+  if (!class_type) return false;
   LayoutMask accepted = 0;
   std::string why;
   for (size_t i : CandidateOrder()) {
     std::string reason;
-    if (kLayouts[i].verify_target(klass, live, &reason))
+    if (kLayouts[i].verify_target(klass, class_type, live, &reason))
       accepted |= LayoutMask{1} << i;
     else if (why.empty())  // The platform's own release is probed first.
       why = "android" + std::to_string(kLayouts[i].android) + ": " + reason;
