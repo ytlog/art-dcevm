@@ -278,6 +278,123 @@ int main(int argc, char** argv) {
         expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
     }
+    {
+      // Interface members, shaped as Kotlin 2.3 + D8 emit them: a default
+      // whose lambda lives in a private static method with a public static
+      // $r8$lambda$ bridge, and a private instance helper.
+      ClassSchema contract;
+      contract.descriptor = "Lfixture/Contract;";
+      contract.superclass = "Ljava/lang/Object;";
+      contract.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      const std::string text = "Ljava/lang/String;";
+      const std::string lambda = "(Lfixture/Contract;)" + text;
+      contract.methods = {{"name", "()" + text, acc::kAccPublic | acc::kAccAbstract},
+                          {"label", "()" + text, acc::kAccPublic},
+                          {"label$lambda$0", lambda, acc::kAccPrivate | acc::kAccStatic},
+                          {"$r8$lambda$old", lambda,
+                           acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic},
+                          {"helper", "()I", acc::kAccPrivate}};
+      const policy::Abilities members{true, true, true, true, true};
+      const policy::Abilities body_only{true, true, true, true, false};
+      const policy::Abilities unmapped{false, false, true, false, true};
+      policy::LoadedHierarchy hierarchy;
+      hierarchy.inherited_interface = {{"parent", "()I"}, {"hashCode", "()I"}};
+      hierarchy.subtype_shadows[{"hidden", "()I"}] = "Lfixture/Base;";
+      const auto accept = [&](const ClassSchema& candidate, size_t retired, jvmtiError former,
+                              const char* what) {
+        const auto result = policy::Evaluate(contract, candidate, hierarchy, members);
+        Require(result.error == JVMTI_ERROR_NONE && result.methods_structural &&
+                result.retired_methods.size() == retired, what);
+        for (const auto& abilities : {body_only, unmapped}) {
+          const auto off = policy::Evaluate(contract, candidate, hierarchy, abilities);
+          Require(off.error == former && !off.reason.empty(),
+                  "interface member change must keep its rejection without the ability");
+        }
+      };
+      const auto reject = [&](const ClassSchema& candidate, jvmtiError code, const char* what,
+                              const policy::RetiredMethods& retired = {}) {
+        const auto result = policy::Evaluate(contract, candidate, hierarchy, members, retired);
+        Require(result.error == code && !result.reason.empty(), what);
+        return result.reason;
+      };
+      const auto with = [&](std::vector<Member> added) {
+        auto candidate = contract;
+        candidate.methods.insert(candidate.methods.end(), added.begin(), added.end());
+        return candidate;
+      };
+      constexpr auto kAdded = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
+      constexpr auto kDeleted = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED;
+      constexpr auto kModifiers = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+      Require(policy::Evaluate(contract, contract, hierarchy, members).error == JVMTI_ERROR_NONE,
+              "interface body update must stay accepted");
+
+      // A new function with a body and a lambda appended after the existing one.
+      accept(with({{"extra", "()" + text, acc::kAccPublic},
+                   {"access$extra$jd", lambda, acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic},
+                   {"label$lambda$1", "()" + text, acc::kAccPrivate | acc::kAccStatic},
+                   {"$r8$lambda$new", "()" + text,
+                    acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic},
+                   {"helper2", "()I", acc::kAccPrivate}}),
+             0, kAdded, "interface default, static and private additions must be accepted");
+      // A lambda inserted before the existing one renumbers and re-signatures
+      // the direct lambda methods: retire the old ones, add the new ones.
+      {
+        auto inserted = contract;
+        inserted.methods[2].descriptor = "()" + text;
+        inserted.methods[3].name = "$r8$lambda$first";
+        inserted.methods[3].descriptor = "()" + text;
+        inserted.methods.push_back({"label$lambda$1", "(Lfixture/Contract;Lkotlin/jvm/functions/Function0;)" + text,
+                                    acc::kAccPrivate | acc::kAccStatic});
+        inserted.methods.push_back({"$r8$lambda$second", "(Lfixture/Contract;Lkotlin/jvm/functions/Function0;)" + text,
+                                    acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic});
+        accept(inserted, 2, kDeleted, "interface lambda insertion must retire and add direct methods");
+      }
+      {
+        auto removed = contract; removed.methods.pop_back();
+        accept(removed, 1, kDeleted, "interface private instance method retirement must be accepted");
+      }
+      // Virtual interface methods own iftable slots and still cannot retire.
+      for (size_t index : {size_t{0}, size_t{1}}) {
+        auto removed = contract; removed.methods.erase(removed.methods.begin() + index);
+        reject(removed, kDeleted, "interface virtual method retirement must be rejected");
+        auto resigned = contract; resigned.methods[index].descriptor = "(I)" + text;
+        reject(resigned, kDeleted, "interface virtual method signature change must be rejected");
+      }
+      reject(with({{"more", "()I", acc::kAccPublic | acc::kAccAbstract}}), kAdded,
+             "abstract interface method addition must be rejected");
+      reject(with({{"bound", "()I", acc::kAccPublic | acc::kAccStatic | acc::kAccNative}}), kAdded,
+             "native interface method addition must be rejected");
+      reject(with({{"<clinit>", "()V", acc::kAccStatic}}), kAdded,
+             "interface initializer addition must be rejected");
+      reject(with({{"packaged", "()I", 0}}), kAdded,
+             "package-private interface instance method addition must be rejected");
+      // Direct methods must not hide inherited interface or Object methods.
+      reject(with({{"parent", "()I", acc::kAccPublic | acc::kAccStatic}}), kAdded,
+             "static method hiding a superinterface method must be rejected");
+      reject(with({{"hashCode", "()I", acc::kAccPrivate}}), kAdded,
+             "private method hiding an Object method must be rejected");
+      accept(with({{"parent", "()I", acc::kAccPublic}}), 0, kAdded,
+             "default overriding a superinterface method must be accepted");
+      // A default must not take over calls resolved by a static or non-public
+      // method of a subtype; a direct addition cannot be resolved through them.
+      const auto shadow = reject(with({{"hidden", "()I", acc::kAccPublic}}), kAdded,
+                                 "default shadowing a subtype method must be rejected");
+      Require(shadow.find("Lfixture/Base;") != std::string::npos,
+              "shadow rejection must name the declaring class");
+      accept(with({{"hidden", "()I", acc::kAccPublic | acc::kAccStatic}}), 0, kAdded,
+             "static addition unrelated to virtual dispatch must be accepted");
+      // Kept methods still keep their modifiers, and a retired identity keeps its kind.
+      {
+        auto widened = contract; widened.methods[2].access = acc::kAccPublic | acc::kAccStatic;
+        reject(widened, kModifiers, "interface method modifier change must be rejected");
+        const policy::RetiredMethods retired{{{"gone", "()I"}, acc::kAccPrivate | acc::kAccStatic}};
+        reject(with({{"gone", "()I", acc::kAccPrivate}}), kModifiers,
+               "retired static interface method must not return as an instance method", retired);
+        Require(policy::Evaluate(contract, with({{"gone", "()I", acc::kAccPrivate | acc::kAccStatic}}),
+                                 hierarchy, members, retired).error == JVMTI_ERROR_NONE,
+                "retired static interface method may return as static");
+      }
+    }
     auto initializer = live;
     initializer.methods.push_back({"<clinit>", "()V", acc::kAccStatic});
     next = initializer; next.methods.pop_back();

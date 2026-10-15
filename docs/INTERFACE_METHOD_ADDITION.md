@@ -67,7 +67,7 @@
 - 父接口变化仍拒绝 66。
 - “已退役方法以另一种调用方式重新加入”仍拒绝 71。例如 `label$lambda$0(Labels)` 退役后，以实例方法身份重新加入同一名称和描述符时拒绝。
 - 只要新增或退役了方法，`methods_structural` 就为真。接口目标本来就始终走结构路径，这一点只是保持一致。
-- 只有自有成员映射可用时才接受，沿用接口目标现有的 `RequireMemberMapping`。
+- 只有自有成员映射可用、且 `Abilities::interface_members` 为真时才接受；否则新增仍拒绝 63，删除仍拒绝 67。引擎在第 2–4 步全部完成后才打开这个能力，所以在此之前设备上的行为不变。
 
 ### 冲突检查一：新增 direct 方法不得遮蔽继承的接口方法
 
@@ -75,14 +75,14 @@
 
 - **原因**：已校验的 `invoke-interface I.m` 会在重新解析时找到这个 direct 方法，并按 IMT/iftable 分派，见引擎文档[调用方式不变](STRUCTURAL_REDEFINE_ENGINE.md#调用方式不变)。引擎无法让这条路径抛出 `IncompatibleClassChangeError`。
 - **javac/kotlinc 的行为**：两者都不会为这种源码生成代码，这种情况只会出现在手写字节码或不一致的增量产物中。
-- **快照新增事实**：`LoadedHierarchy` 新增目标父接口的虚方法集合。复用 `CollectInterfaceMethods(jni, target, ...)` 即可。接口的 `GetSuperclass` 为空，现有的 `CollectInheritedPublic` 拿不到这些方法。
+- **快照新增事实**：`LoadedHierarchy::inherited_interface`，即目标从父接口和 `java.lang.Object` 继承的虚方法。父接口部分复用 `CollectInterfaceMethods(jni, target, ...)`。接口的 `GetSuperclass` 为空，现有的 `CollectInheritedPublic` 拿不到这些方法。
 
 ### 冲突检查二：新增 default 不得改变已有调用的解析结果
 
 已加载实现类或其父类链上，声明了同名同描述符的 static 方法或非 public 实例方法时，拒绝 63，并在原因里写出该类。
 
 - **原因**：此时 ClassLinker 会把新 default 拷贝进实现类的方法数组。之后 `invoke-virtual C.m` 重新解析时，结果可能从父类的包内方法或 static 方法变成 copied default，已有调用因此改变语义，或触发调用方式不一致。
-- **快照**：在 `CollectSubclasses` 遍历实现类时，顺着父类链用 `ReadLiveMethods` 收集这类身份，按类去重，并记录第一个声明它的类描述符。
+- **快照**：`LoadedHierarchy::subtype_shadows`。在 `CollectSubclasses` 遍历已加载子类型（子接口和实现类）时，收集它们自身以及实现类父类链上这类方法的身份，按类去重，并记录第一个声明它的类描述符。只对新增 default 检查；新增 static/private 方法不经过虚分派，不受影响。
 - **不受影响的情况**：类链上有 public 实例方法（不论是否 abstract）时，类方法优先于 default，链接结果与修改前一致，可以接受。
 
 ### 冲突检查三：链接后不得新增 default 冲突
@@ -152,10 +152,10 @@
 
 基线：成员探测接受共享空字段数组（`a8a427a3`）已合入 main。它在 Android 16 QPR2 OEM 设备上的修复版重跑仍待完成，那次重跑也是本设计设备验证的前提。
 
-1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。
-2. 快照事实：在 `structural_redefine_engine.cc` 收集父接口虚方法和实现类链上的 static/非 public 身份。
+1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。**已完成**，规则由 `Abilities::interface_members` 控制，默认关闭。
+2. 快照事实：在 `structural_redefine_engine.cc` 填充 `inherited_interface` 与 `subtype_shadows`。
 3. 链接后冲突检查：在 `method_retirement.cc` 的 `PlanMethods` 中实现，并声明 flag 常量。
-4. 接口 direct 方法退役：放开策略，核对保活与守卫。
+4. 接口 direct 方法退役：核对保活与守卫，然后打开 `interface_members`。
 5. fixture、设备套件与失败仪器。
 6. 文档：中英文版本的 LIMITATIONS、引擎文档、README，并删除本文。
 

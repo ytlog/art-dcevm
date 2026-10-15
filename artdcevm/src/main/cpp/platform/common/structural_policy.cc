@@ -148,6 +148,42 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
                         key.first + key.second);
   return {};
 }
+// Only new code invokes an added static or private interface method. An added
+// default fills a new iftable slot that ART links into every re-linked
+// subtype; an abstract one would leave existing implementations a miranda
+// that throws. `modifiers` is the JVMTI view of the new declaration.
+Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
+                                const LoadedHierarchy& hierarchy, bool supported) {
+  const std::string method = key.first + key.second;
+  if (!supported)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "interface redefinition does not support added methods: " + method);
+  if (Initializer(key.first))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "an initialized interface never runs an added initializer: " + method);
+  if (modifiers & acc::kAccNative)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "interface redefinition does not support added native methods: " + method);
+  if (modifiers & acc::kAccAbstract)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "added abstract interface method has no implementation in loaded classes: " + method);
+  if (!Virtual(modifiers)) {
+    // Verified invoke-interface callers would resolve the direct method and
+    // dispatch it as the virtual method it is not.
+    if (hierarchy.inherited_interface.count(key))
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                    "added static or private method hides an inherited interface method: " + method);
+    return {};
+  }
+  if (!(modifiers & acc::kAccPublic))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "added interface instance method is neither public nor private: " + method);
+  const auto shadow = hierarchy.subtype_shadows.find(key);
+  if (shadow != hierarchy.subtype_shadows.end())
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                  "added default method may change calls resolved by " + shadow->second + ": " + method);
+  return {};
+}
 }  // namespace
 
 uint32_t ClassModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
@@ -166,6 +202,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   const bool interface_target = live.access & acc::kAccInterface;
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
+  const bool interface_members = abilities.member_mapping && abilities.interface_members;
   const bool superclass_changed = live.superclass != incoming.superclass;
   if (interface_target && (superclass_changed || live.interfaces != incoming.interfaces))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
@@ -236,10 +273,13 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& old : live.methods) {
     auto it = new_methods.find({old.name, old.descriptor});
     if (it == new_methods.end()) {
-      // Interface targets currently support method-body updates only.
-      if (!owns_member_mapping || (live.access & acc::kAccInterface))
+      if (!owns_member_mapping)
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported method retirement: " + Describe(old));
+      // An interface's virtual methods own iftable slots in every implementation.
+      if (interface_target && (!interface_members || Virtual(old.access)))
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
+                      "interface redefinition does not support retiring " + Describe(old));
       decision.methods_structural = true;
       decision.retired_methods.push_back(old);
       continue;
@@ -276,13 +316,13 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the retired kind of " + key.first + key.second);
   }
-  if (!new_methods.empty()) {
-    if (interface_target)
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                    "interface redefinition does not support added methods: " +
-                        new_methods.begin()->first.first + new_methods.begin()->first.second);
-    decision.methods_structural = true;
+  if (interface_target) {
+    for (const auto& [key, now] : new_methods) {
+      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members);
+      if (added.error != JVMTI_ERROR_NONE) return added;
+    }
   }
+  if (!new_methods.empty()) decision.methods_structural = true;
   // With the engine's mapping, a vanished copy maps to its canonical method.
   if (!owns_member_mapping) {
     Decision copied = CheckCopiedMembers(live, incoming, hierarchy);

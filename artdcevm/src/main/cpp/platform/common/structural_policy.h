@@ -57,6 +57,15 @@ struct LoadedHierarchy {
   std::map<std::string, ResolvedType> added_interfaces;
   // Present when the new superclass differs and could be resolved.
   std::optional<NewSuperclass> new_superclass;
+  // Interface targets: virtual methods the target inherits from its
+  // superinterfaces and java.lang.Object. An added direct method with one of
+  // these identities would be resolved by verified invoke-interface callers.
+  std::set<MemberKey> inherited_interface;
+  // Interface targets: static or non-public instance methods declared by loaded
+  // subtypes or the superclasses of loaded implementations, each with the first
+  // declaring class. An added default with one of these identities can change
+  // what existing calls on those classes resolve to.
+  std::map<MemberKey, std::string> subtype_shadows;
 };
 
 // What the engine can enforce for this transaction beyond ART's own rules.
@@ -70,6 +79,11 @@ struct Abilities {
   bool instance_check = false;
   // ART's verifier can be shown the new class under a new superclass.
   bool superclass_change = false;
+  // Interface targets may add default, static and private methods and retire
+  // static and private ones (requires member_mapping): the hierarchy carries
+  // inherited_interface and subtype_shadows, and the mapping rejects default
+  // conflicts that re-linked subtypes newly gain.
+  bool interface_members = false;
 };
 
 struct Decision {
