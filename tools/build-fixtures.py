@@ -366,7 +366,33 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
             if not data: raise RuntimeError('Empty DEX ' + relative.as_posix())
             identities = removals.get(klass.relative_to(classes).as_posix()) if relative == own else None
             if identities: data = strip_dex_methods(data, identities)
+            if variant.name == 'interface-invalid-invoke' and relative == own:
+                data = invalid_interface_invoke(data)
             dest.write_bytes(data)
+
+
+def invalid_interface_invoke(data):
+    """Keep a valid DEX encoding but give String.length() an integer receiver."""
+    dex = FixtureDex(data)
+    _, _, code = dex.declarations[('copiedValue', '()I')]
+    start = code + 16
+    # D8 emits const-string vN, string@X; invoke-virtual {vN}, String.length.
+    # Both const-string and const/16 occupy two code units. Fail closed if the
+    # compiler changes this fixture rather than corrupting arbitrary code.
+    dex.range(start, 10)
+    if (dex.u32(code + 12) < 5 or data[start] != 0x1a or data[start + 4] != 0x6e
+            or data[start + 5] != 0x10 or dex.u16(start + 8) != data[start + 1]):
+        raise ValueError('Unexpected invalid-invoke fixture instructions')
+    method = dex.item('methods', dex.u16(start + 6))
+    if (dex.type(dex.u16(method)) != 'Ljava/lang/String;'
+            or dex.string(dex.u32(method + 4)) != 'length'):
+        raise ValueError('Unexpected invalid-invoke receiver method')
+    result = bytearray(data)
+    result[start] = 0x13  # const/16 vN, #1 instead of const-string vN.
+    struct.pack_into('<H', result, start + 2, 1)
+    result[12:32] = hashlib.sha1(result[32:]).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(result[12:]) & 0xffffffff)
+    return bytes(result)
 
 
 def invalid_hierarchy(source):

@@ -53,10 +53,24 @@ std::atomic<void*> class_linker{nullptr};
 void* original_normal[2]{};
 void* original_structural[2]{};
 void* original_finish = nullptr;
+void* original_run = nullptr;
+void* original_link_class = nullptr;
+void (*set_status_internal)(void*, android13::ClassStatus) = nullptr;
 bool available = false;
 struct Target { jclass klass; bool boot; jint access; jint status; };
 struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; bool thread_verified; jclass array_class; jint batch_size; };
 thread_local State* state = nullptr;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+thread_local int failure_stage = 0;
+thread_local int discarded_classes = 0;
+thread_local int failure_hits = 0;
+bool Inject(int stage) {
+  if (failure_stage != stage) return false;
+  failure_stage = 0;
+  ++failure_hits;
+  return true;
+}
+#endif
 
 void* Decode(jclass klass) {
   RedefinerPrefix driver{nullptr, 0, nullptr, current_thread()};
@@ -175,12 +189,78 @@ void* Slot(const RedefinitionDataIter& data, int32_t slot) {
 void SetSlot(const RedefinitionDataIter& data, int32_t slot, void* object) {
   Store(data.holder->array.Get<ObjectArray>(), data.index * RedefinitionDataIter::kNumSlots + slot, object);
 }
+// Run's caller owns the DexFiles. This root outlives Run's holder and keeps
+// every linked replacement reachable until the result is known, including
+// partially completed allocations that never reach the holder's new_classes.
+struct Attempt { RedefinerPrefix* driver; Handle replacements; bool committed = false; };
+thread_local Attempt* attempt = nullptr;
+void Discard(const Attempt& next) {
+  if (next.committed) return;
+  auto* classes = next.replacements.Get<ObjectArray>();
+  for (int32_t i = 0; classes && i < classes->length; ++i) {
+    auto* klass = static_cast<Class*>(Read(classes->elements[i]));
+    if (!klass) continue;
+    const uint32_t status = Status(klass);
+    if (status >= static_cast<uint32_t>(android13::ClassStatus::kResolved) ||
+        status == static_cast<uint32_t>(android13::ClassStatus::kErrorResolved)) {
+      // Private classes were never published or executed; no static fields
+      // have been copied. ART's writer preserves subtype bits without allocating.
+      // SetStatus's exception/initialization/waiter protocol does not apply;
+      // kErrorResolved would still enter the next heap subtype scan.
+      set_status_internal(klass, android13::ClassStatus::kErrorUnresolved);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+      ++discarded_classes;
+#endif
+    }
+  }
+}
+class AttemptScope {
+ public:
+  explicit AttemptScope(Attempt* next) : previous_(std::exchange(attempt, next)) {}
+  ~AttemptScope() { Discard(*attempt); attempt = previous_; }
+ private:
+  Attempt* previous_;
+};
+jvmtiError Run(RedefinerPrefix* driver) {
+  using Function = jvmtiError (*)(RedefinerPrefix*);
+  if (!state || !state->thread_verified || state->targets.empty())
+    return reinterpret_cast<Function>(original_run)(driver);
+  try {
+    Roots roots(static_cast<Thread*>(driver->self), 1);
+    Attempt next{driver, roots.Add(nullptr)};
+    AttemptScope scope(&next);
+    const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
+    next.committed = result == JVMTI_ERROR_NONE;
+    return result;
+  } catch (const std::bad_alloc&) {
+    // Scope cleanup also runs if a native allocation in a hook throws.
+    driver->result = JVMTI_ERROR_OUT_OF_MEMORY;
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+}
 struct Linking {
   const std::vector<Handle>* old_types;
   Handle new_types;
   Handle private_cache;
+  int32_t index;
 };
 thread_local const Linking* linking = nullptr;
+bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
+               Handle interfaces, Handle* output) {
+  using Function = bool (*)(void*, void*, const char*, Handle, Handle, Handle*);
+  const bool result = reinterpret_cast<Function>(original_link_class)(
+      linker, thread, descriptor, klass, interfaces, output);
+  // Capture the resolved class before AllocateNewClassObject's JNI-ID array
+  // allocations. Those can fail after linking and return nullptr to Finish.
+  if (linking && !descriptor && output && output->Get<void>())
+    Store(linking->new_types.Get<ObjectArray>(), linking->index, output->Get<void>());
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  // A link failure after producing the class exercises the allocator's null
+  // return path, before Finish has recorded this replacement in the holder.
+  if (result && linking && linking->index == 1 && Inject(1)) return false;
+#endif
+  return result;
+}
 class LinkingScope {
  public:
   explicit LinkingScope(const Linking* scope) : previous_(std::exchange(linking, scope)) {}
@@ -233,7 +313,7 @@ bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char*
   return false;
 }
 bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
-  if (state->batch_size != 1 || !state->array_class)
+  if (state->batch_size != 1 || !state->array_class || !attempt || attempt->driver != self->driver)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface spike requires one target and array root");
   auto* holder = reinterpret_cast<android13::RedefinitionDataHolder*>(data->holder);
   if (data->index != 0 || holder->initialized.size() != 1 ||
@@ -272,6 +352,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   if (!old_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike old array allocation failed");
   Handle new_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
   if (!new_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike new array allocation failed");
+  Assign(attempt->replacements, new_array.Get<void>());
   Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr);
   for (size_t i = 0; i < old_types.size(); ++i) {
     auto* old = old_types[i].Get<Class>();
@@ -288,7 +369,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
       Assign(cache, allocate_cache(linker, thread, *dex, Read(old->class_loader)));
     }
     if (!cache.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike private DexCache allocation failed");
-    const Linking scope{&old_types, new_array, cache};
+    const Linking scope{&old_types, new_array, cache, static_cast<int32_t>(i)};
     void* replacement;
     {
       LinkingScope active(&scope);
@@ -303,10 +384,12 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   SetSlot(*data, RedefinitionDataIter::kSlotOldClasses, old_array.Get<void>());
   SetSlot(*data, RedefinitionDataIter::kSlotNewClasses, new_array.Get<void>());
   holder->initialized[0] = true;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  if (Inject(2)) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after interface allocation");
+#endif
   __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "interface spike allocated %zu types with private link caches", old_types.size());
-  // Once replacement classes are resolved, continue through ART's transaction.
-  // Rejecting here leaves resolved heap objects referring to a DexFile that
-  // ClassRedefinition frees on failure; a later heap subtype walk can see them.
+  // Run owns cleanup for every subsequent failure, including verification,
+  // instance allocation, mapping probes and the subclass-load retry guard.
   return true;
 }
 bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
@@ -326,6 +409,57 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
 void ObserveClassLinker(void* linker) { class_linker.store(linker); }
 bool Available() { return available; }
 bool IsTarget(ClassRedefinitionPrefix* self) { return available && Find(mirror_class(self)); }
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCheckJni(
+    JNIEnv* jni, jclass, jboolean enabled) {
+  // Test-only process configuration, before InstallJniGuards captures a table.
+  // No private runtime layout or unchecked object access is needed here.
+  using namespace symbols;
+  constexpr NamedSymbol toggle{Library::kArt, "_ZN3art9JavaVMExt18SetCheckJniEnabledEb", SymbolTable::kAnyNamed};
+  constexpr NamedSymbol versions[] = {
+      {Library::kArt, "_ZN3art3JNIILb0EE10GetVersionEP7_JNIEnv", SymbolTable::kAnyNamed},
+      {Library::kArt, "_ZN3art3JNIILb1EE10GetVersionEP7_JNIEnv", SymbolTable::kAnyNamed}};
+  auto set = reinterpret_cast<void (*)(JavaVM*, bool)>(Find(toggle));
+  void* plain[] = {Find(versions[0]), Find(versions[1])};
+  JavaVM* vm = nullptr;
+  if (!set || !plain[0] || !plain[1] || jni->GetJavaVM(&vm) != JNI_OK)
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  set(vm, enabled);
+  void* version = reinterpret_cast<void*>(jni->functions->GetVersion);
+  const bool checked = version != plain[0] && version != plain[1];
+  __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "test JNI mode: checked=%d requested=%d", checked, enabled != 0);
+  return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
+}
+bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {
+  if (!attempt || attempt->driver != self->driver || !IsTarget(self)) return false;
+  if (!allocated && Inject(3)) {
+    FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected instance allocation failure");
+    return true;
+  }
+  if (allocated && Inject(4)) {
+    // Force the actual mapping probe to reject the holder, after ART has
+    // created new instances. Cleanup roots are independent of the holder.
+    SetSlot(*data, RedefinitionDataIter::kSlotNewClasses, nullptr);
+  }
+  return false;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_armFailure(JNIEnv*, jclass, jint stage) {
+  failure_stage = stage;
+  failure_hits = 0;
+  discarded_classes = 0;
+  return available ? 0 : JVMTI_ERROR_NOT_AVAILABLE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_discardedClasses(JNIEnv*, jclass) {
+  return discarded_classes;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits(JNIEnv*, jclass) {
+  return failure_hits;
+}
+#endif
 Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
     : state_(new State{state, {}, jni, false, nullptr, count}) {
   auto* next = static_cast<State*>(state_);
@@ -381,9 +515,12 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   void* referrer_lookup = symbols::Find(kLookupReferrer);
   void* cache_lookup = symbols::Find(kLookupCache);
   void* finish = symbols::Find(kFinishNewClassAllocations);
+  void* run = symbols::Find(kRun);
+  void* link_class = symbols::Find(kLinkClass);
+  set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
   if (!current_thread || !mirror_class || !ensure_initialized || !visit_classes || !assignable || !finish ||
       !allocate_cache || !allocate_array || !set_cache || !allocate_class || !lookup_descriptor || !mark ||
-      !referrer_lookup || !cache_lookup) {
+      !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     *note = "interface spike named services unavailable";
     return;
   }
@@ -400,6 +537,8 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   }
   if (!modes[0] || !modes[1]) { *note = "interface spike admission names unavailable"; return; }
   resolved.push_back({finish, reinterpret_cast<void*>(Finish), &original_finish, kFinishNewClassAllocations.name});
+  resolved.push_back({run, reinterpret_cast<void*>(Run), &original_run, kRun.name});
+  resolved.push_back({link_class, reinterpret_cast<void*>(LinkClass), &original_link_class, kLinkClass.name});
   resolved.push_back({referrer_lookup, reinterpret_cast<void*>(LookupByReferrer), &original_lookup_referrer, kLookupReferrer.name});
   resolved.push_back({cache_lookup, reinterpret_cast<void*>(LookupByCache), &original_lookup_cache, kLookupCache.name});
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());

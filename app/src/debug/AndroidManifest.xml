@@ -4,4 +4,9 @@
       android:targetPackage="dev.artdcevm.lab"
       android:label="Structural redefine conformance"
       android:functionalTest="true"/>
+  <instrumentation
+      android:name="com.github.ytlog.artdcevm.testing.InterfaceAbortInstrumentation"
+      android:targetPackage="dev.artdcevm.lab"
+      android:label="Interface abort regression"
+      android:functionalTest="true"/>
 </manifest>

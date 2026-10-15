@@ -21,4 +21,7 @@ inline constexpr NamedSymbol kLookupDescriptor{Library::kArt, "_ZN3art11ClassLin
 inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
 inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kReadBarrierMark{Library::kArt, "_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kRun{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner3RunEv"};
+inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};
+inline constexpr NamedSymbol kSetStatusInternal{Library::kArt, "_ZN3art6mirror5Class17SetStatusInternalENS_11ClassStatusE"};
 }  // namespace artdcevm::symbols::interface_redefinition

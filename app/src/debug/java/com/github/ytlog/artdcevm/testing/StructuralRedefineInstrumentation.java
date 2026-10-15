@@ -73,9 +73,11 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private final JSONArray scenarios = new JSONArray();
     private Context context;
     private int failures;
+    private Bundle arguments;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        this.arguments = arguments;
         start();
     }
 
@@ -93,6 +95,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             JSONObject initialization = new JSONObject().put("passed", false);
             report.put("initialization", initialization);
             writeReport(false);
+            InterfaceAbortInstrumentation.configureRuntime(arguments);
+            if (arguments != null && arguments.containsKey("checkjni"))
+                initialization.put("checkJni", Boolean.parseBoolean(arguments.getString("checkjni")));
             DcevmRuntime.initialize(context);
             initialization.put("runtimeInitialized", true);
             writeReport(false);
@@ -483,15 +488,16 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private void runCopiedDefaultScenario() throws Exception {
         CopiedChild child = new CopiedChild();
         CopiedDefault viaInterface = child;
-        // Stage 1 admits the interface and stops safely before structural allocation.
-        runScenario("interface-default-body", 98, scenario -> {
+        runScenario("interface-default-body", 0, scenario -> {
             scenario.redefine(new Class<?>[]{CopiedDefault.class}, "interface-default-body");
-            scenario.check("interfaceReason", true, DcevmRuntime.capabilities()
-                    .optString("lastRejection").contains("JVMTI_ERROR_NOT_AVAILABLE"));
-            scenario.check("copiedUnchanged", 91, viaInterface.copiedValue());
+            scenario.check("oldChildInterface", 93, viaInterface.copiedValue());
+            scenario.check("oldChildVirtual", 93, child.copiedValue());
+            scenario.check("newChild", 93, new CopiedChild().copiedValue());
+            scenario.check("parentValue", 90, child.parentValue());
         });
         runScenario("copied-default-add", 0, scenario -> {
-            scenario.check("copiedBefore", 91, viaInterface.copiedValue());
+            // The preceding interface transaction changed the copied body to 93.
+            scenario.check("copiedBefore", 93, viaInterface.copiedValue());
             scenario.redefine(new Class<?>[]{CopiedParent.class}, "copied-default-add");
             scenario.check("oldChildInterface", 92, viaInterface.copiedValue());
             scenario.check("oldChildVirtual", 92, child.copiedValue());

@@ -18,5 +18,8 @@ add_library(artdcevm SHARED
   platform/common/interface_redefinition.cc
   platform/common/structural_redefine_engine.cc)
 target_compile_features(artdcevm PRIVATE cxx_std_17)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  target_compile_definitions(artdcevm PRIVATE ARTDCEVM_INTERFACE_ABORT_TESTS)
+endif()
 target_include_directories(artdcevm PRIVATE . ../../../../third_party/jvmti)
 target_link_libraries(artdcevm PRIVATE shadowhook::shadowhook log)

@@ -82,6 +82,18 @@ The engine therefore registers JVMTI `ClassPrepare` on its own jvmtiEnv and enab
 
 A marked attempt fails with `JVMTI_ERROR_INTERNAL` in `CollectAndCreateNewInstances`, ART's last fallible step, without committing the batch. The subclass is now loaded, so the standard entry takes a fresh snapshot and retries, up to three attempts. Each attempt calls ClassFileLoadHook again. `subclassLoadRetries` counts retries in the capability report. Without the method-retirement hooks, this failure point is unavailable and only preloading is performed.
 
+### Interface prototype failure cleanup
+
+The API 33 interface prototype accepts single-target method-body edits. It rebuilds loaded implementations by interface assignability; some replacements retain their original superclass. On failure ART frees the new DEX, so a later superclass redefinition could collect these abandoned classes from the heap.
+
+A named `Redefiner::Run` hook roots the replacement array in a separate ART HandleScope until the result is known. A named `ClassLinker::LinkClass` hook records each linked replacement before the allocator can fail while creating JNI ID arrays, including classes not yet stored in the holder. Failed returns and native allocation exceptions discard the private replacements before their DEX is freed; successful returns preserve their status.
+
+Cleanup uses the named, allocation-free `Class::SetStatusInternal` writer to set only unpublished replacements to `kErrorUnresolved`, preserving subtype bits. In Android 13, `kErrorResolved` still satisfies `IsResolved()` and cannot exclude them from heap scans. The ordinary `SetStatus` initialization, locking, exception and notification protocol does not apply to these discarded private classes. GC still visits Class instance references and native roots; skipping static references is safe because failure precedes the commit's static-field copy and private replacements never execute initializers.
+
+`InterfaceAbortInstrumentation` exercises real DEX verification failures (an invalid return instruction and calling `String.length()` with an integer receiver, both returning 62), failure after linking, after full allocation, during instance allocation, and from the actual mapping probe in one process. Each failure is followed by superclass and interface redefinition, behavior checks and GC. The incompatible invocation is followed by explicit GC before further transactions. A transforming ClassFileLoadHook also tests a real retry after a late implementation loads. Fault injection and cleanup counters are compiled only into Debug builds.
+
+These behaviors have been verified on Android 13 / API 33 in normal and CheckJNI modes; the control APK with cleanup disabled crashes in the failure test. Prototype limits: actual Java/native memory exhaustion, other ART module revisions, and other Android versions remain unverified. Injected allocation failures do not establish behavior under real memory exhaustion.
+
 ### Validation
 
 `CheckClass` reads `klass` and `dex_file` according to `redefinition.h`, calling the original function if the class is absent from the context. It then reads the new declaration (ClassDef 0) through `DexView`, probes the layout, reads runtime flags of added interfaces and the new superclass, and calls `structural_policy::Evaluate`:

@@ -143,7 +143,9 @@ class ApkVerificationTests(unittest.TestCase):
                                  "missing_field_capability", "wrong_field_exception",
                                  "missing_interface_capability", "interface_preloaded",
                                  "missing_single_step_count", "single_step_no_callbacks", "matching"]
-        with tempfile.TemporaryDirectory() as temporary:
+        evidence = ROOT / "build/evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="apk-verification-", dir=evidence) as temporary:
             directory = Path(temporary)
             apk = directory / "fixture.apk"
             apk.write_bytes(b"frozen artifact for runner regression checks")
@@ -231,7 +233,8 @@ class ApkVerificationTests(unittest.TestCase):
                                        APK_TEST_SHA=digest, APK_TEST_REPORT=json.dumps(report))
                     command = [sys.executable, str(RUNNER), "--serial", "private-device-selector",
                                "--device-id", "android-test-device", "--adb", str(fake_adb),
-                               "--apk", str(apk), "--timeout", "1"]
+                               "--apk", str(apk), "--timeout", "1",
+                               "--evidence-root", str(work / "build/evidence/runs")]
                     result = subprocess.run(command, cwd=work, env=environment,
                                             capture_output=True, text=True, timeout=15)
                     positive = mode == "matching"

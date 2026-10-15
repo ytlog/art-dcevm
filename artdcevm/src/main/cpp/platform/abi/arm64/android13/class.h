@@ -8,6 +8,9 @@
 // instance and static fields are in separate ifields_ and sfields_ arrays;
 // access_flags_ follows the native member arrays.
 namespace artdcevm::abi::arm64::android13 {
+// runtime/class_status.h. kErrorResolved still satisfies Class::IsResolved;
+// unpublished, discarded replacements must use kErrorUnresolved instead.
+enum class ClassStatus : uint8_t { kErrorResolved = 2, kErrorUnresolved = 3, kResolved = 7 };
 struct Class {
   Object object;
   uint32_t class_loader;

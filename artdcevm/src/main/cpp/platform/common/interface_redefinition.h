@@ -20,4 +20,9 @@ class Scope {
   void* state_;
 };
 bool IsTarget(abi::arm64::ClassRedefinitionPrefix* self);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+// Debug APK fault injection; no test entry points are built into release AARs.
+bool InjectInstanceFailure(abi::arm64::ClassRedefinitionPrefix* self,
+                           abi::arm64::RedefinitionDataIter* data, bool allocated);
+#endif
 }  // namespace artdcevm::interface_redefinition

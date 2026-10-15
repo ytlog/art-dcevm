@@ -52,7 +52,7 @@ SCENARIOS = (
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 71),
     ("method-storage-restore", ["method-storage-original"], 0),
-    ("interface-default-body", ["interface-default-body"], 98),
+    ("interface-default-body", ["interface-default-body"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
@@ -80,7 +80,7 @@ SCENARIOS = (
 MAPPED_SCENARIOS = {"hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
                     "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
                     "methods-restore-again", "method-storage-delete", "method-storage-restore",
-                    "copied-default-add", "interface-add", "super-widen",
+                    "interface-default-body", "copied-default-add", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -246,8 +246,9 @@ REQUIRED_CHECKS = {
     "method-storage-restore": {
         "combined": 40, "callerStatic": 32, "callerVirtual": 8,
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
-    "interface-default-body": {"interfaceReason": True, "copiedUnchanged": 91},
-    "copied-default-add": {"copiedBefore": 91, "oldChildInterface": 92, "oldChildVirtual": 92,
+    "interface-default-body": {"oldChildInterface": 93, "oldChildVirtual": 93,
+                               "newChild": 93, "parentValue": 90},
+    "copied-default-add": {"copiedBefore": 93, "oldChildInterface": 92, "oldChildVirtual": 92,
                            "newChild": 92, "parentValue": 90},
     "interface-hidden": INTERFACE_REJECTED_CHECKS,
     "interface-class": INTERFACE_REJECTED_CHECKS,
@@ -457,6 +458,8 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=180, help="Instrumentation timeout in seconds")
+    parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
+                        help="Select and verify the Debug process JNI mode before engine installation")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",
                         help="Evidence directory under ignored build/evidence")
     args = parser.parse_args(argv)
@@ -520,7 +523,8 @@ def main(argv=None):
             raise RunFailure("The previous device report could not be removed")
         instrumentation_error = None
         try:
-            test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", COMPONENT,
+            mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
+            test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", *mode_args, COMPONENT,
                        timeout=args.timeout)
             meta["instrumentationExitCode"] = test.returncode
         except RunFailure as error:
@@ -559,7 +563,7 @@ def main(argv=None):
         meta["error"] = str(error)
     (out / "run.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(safe_console(json.dumps(meta, ensure_ascii=False, indent=2), args.serial))
-    print("Evidence: " + str(out.relative_to(Path.cwd())))
+    print("Evidence: " + str(out.relative_to(ROOT)))
     return 0 if meta["passed"] else 1
 
 
