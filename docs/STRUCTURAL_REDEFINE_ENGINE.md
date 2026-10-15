@@ -81,7 +81,7 @@ ART 的结构事务分两步处理子类：
 
 ### 接口原型的失败清理
 
-API 33 的接口原型目前只接受单目标的方法体更新。它按接口可赋值关系重建已加载实现类；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
+API 33/36 的接口原型目前只接受单目标的方法体更新。它按接口可赋值关系重建已加载实现类；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
 
 原型在命名 `Redefiner::Run` 入口建立事务作用域，把替换类数组单独放入 ART HandleScope。命名 `ClassLinker::LinkClass` Hook 在链接成功时登记替换类，因此也覆盖 `AllocateNewClassObject` 随后的 JNI ID 数组分配失败、尚未写入 holder 的类。任意失败返回或本机分配异常退出都会在释放 DEX 之前清理；成功返回则保留新类状态。
 
@@ -89,7 +89,11 @@ API 33 的接口原型目前只接受单目标的方法体更新。它按接口�
 
 `InterfaceAbortInstrumentation` 在同一进程中验证真实 DEX 校验失败（错误的返回指令，以及以整数为接收者调用 `String.length()`，均返回 62）、链接产生类之后返回失败、完整分配后失败、实例分配失败和实际映射探测拒绝，再重定义原父类、成功更新接口并 GC。类型不兼容的调用失败后先显式 GC，再执行后续事务。ClassFileLoadHook 引入晚加载实现类的场景另外验证引擎真实失败重试。故障注入和清理计数仅编译进 Debug，不进入 Release AAR。
 
-这些行为已在 Android 13 / API 33 的普通模式和 CheckJNI 下验证；关闭清理的对照 APK 在失败测试中崩溃。原型限制：实际耗尽 Java/native 内存的异常、其他 ART 模块版本，以及其他 Android 版本尚未验证；分配故障注入不能替代真实内存耗尽验证。
+这些行为已在 Android 13 / API 33 和 Android 16 / API 36 的普通模式和 CheckJNI 下验证；API 33 关闭清理的对照 APK 在失败测试中崩溃。原型限制：实际耗尽 Java/native 内存的异常、其他 ART 模块版本，以及其他 Android 版本尚未验证；分配故障注入不能替代真实内存耗尽验证。
+
+私有实现类缓存直接复用命名 `ClassRedefinition::CreateNewDexCache`：用当前 driver 和原 DEX 的非 owning 前缀调用，不修改原 DexCache，也不注册新缓存。该入口自身负责分配、根管理、location、dex lock 与初始化。描述符重定向使用不填充缓存的命名 `LookupClass`（API 33 为 `const char*`，API 36 为 `string_view`）；可赋值比较使用 JNI `IsAssignableFrom`。通过命名 `JNIEnvExt::NewLocalRef/DeleteLocalRef` 创建真实局部引用后，私有数组写入使用 JNI `SetObjectArrayElement`，由 ART 执行写屏障。
+
+线程、Class 与 HandleScope 的差异只放在 `platform/abi/arm64/androidNN/`，公共路径按固定声明生成的布局访问，不复制后端。API 36 的 HandleScope 包含 `size_`，根位置与 API 33 不同。进入事务前核对线程的 JNI env 与 OS tid、目标类的 JVMTI 修饰符与初始化状态；分配后核对数组长度、缓存 DEX 与 loader，成员映射再核对实现类的真实声明。读屏障仍使用命名 ART Mark 服务与源码声明的当前线程标记条件；HandleScope 的 push/pop 为内联路径，仍需固定声明。Android 17 目前只有源码与符号分析，没有设备验证，入口保持禁用。
 
 ### 校验
 

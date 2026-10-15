@@ -8,6 +8,7 @@
 // static and instance fields share one fields_ array;
 // access_flags_ follows the native member arrays.
 namespace artdcevm::abi::arm64::android16 {
+enum class ClassStatus : uint8_t { kErrorResolved = 2, kErrorUnresolved = 3, kResolved = 7 };
 struct Class {
   Object object;
   uint32_t class_loader;
@@ -21,9 +22,15 @@ struct Class {
   uint64_t fields;
   uint64_t methods;
   uint32_t access_flags;
+  uint32_t class_flags, class_size;
+  int32_t clinit_thread_id, dex_class_def_index, dex_type_index;
+  uint32_t num_reference_instance_fields, num_reference_static_fields;
+  uint32_t object_size, object_size_alloc_fast_path, primitive_type;
+  uint32_t reference_instance_offsets, status;
 };
 static_assert(offsetof(Class, fields) == 40 && offsetof(Class, methods) == 48 &&
               offsetof(Class, access_flags) == 56);
+static_assert(offsetof(Class, status) == 104);
 
 // Slots of the native arrays holding every declared field of `klass`.
 inline std::array<uint64_t*, 1> FieldArraySlots(Class& klass) { return {&klass.fields}; }

@@ -12,14 +12,16 @@ inline constexpr NamedSymbol kFinishNewClassAllocations{Library::kJvmti, "_ZN12o
 inline constexpr NamedSymbol kCurrentThread{Library::kArt, "_ZN3art6Thread14CurrentFromGdbEv"};
 inline constexpr NamedSymbol kEnsureInitialized{Library::kArt, "_ZN3art11ClassLinker17EnsureInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEEbb"};
 inline constexpr NamedSymbol kVisitClasses{Library::kArt, "_ZN3art11ClassLinker12VisitClassesEPNS_12ClassVisitorE"};
-inline constexpr NamedSymbol kAssignable{Library::kArt, "artIsAssignableFromCode"};
-// API 33 allocation/linking declarations; partial coverage is deliberate.
-inline constexpr NamedSymbol kAllocAndInitializeDexCache{Library::kArt, "_ZN3art11ClassLinker26AllocAndInitializeDexCacheEPNS_6ThreadERKNS_7DexFileENS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kNewLocalRef{Library::kArt, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE"};
+inline constexpr NamedSymbol kDeleteLocalRef{Library::kArt, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject"};
+inline constexpr NamedSymbol kCreateNewDexCache{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition17CreateNewDexCacheEN3art6HandleINS2_6mirror11ClassLoaderEEE"};
 inline constexpr NamedSymbol kLookupReferrer{Library::kArt, "_ZN3art11ClassLinker20DoLookupResolvedTypeENS_3dex9TypeIndexENS_6ObjPtrINS_6mirror5ClassEEE"};
 inline constexpr NamedSymbol kLookupCache{Library::kArt, "_ZN3art11ClassLinker20DoLookupResolvedTypeENS_3dex9TypeIndexENS_6ObjPtrINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"};
-inline constexpr NamedSymbol kLookupDescriptor{Library::kArt, "_ZN3art11ClassLinker18LookupResolvedTypeEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kLookupClassChars{Library::kArt, "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kLookupClassView{Library::kArt, "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadENSt3__117basic_string_viewIcNS3_11char_traitsIcEEEENS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
 inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
 inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kClassArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_5ClassEE5AllocEPNS_6ThreadENS_6ObjPtrIS2_EEi", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kReadBarrierMark{Library::kArt, "_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRun{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner3RunEv"};
 inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};

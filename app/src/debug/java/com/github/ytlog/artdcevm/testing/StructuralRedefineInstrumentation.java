@@ -130,6 +130,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runScenarios() throws Exception {
+        if (arguments != null && arguments.containsKey("scenario")) {
+            if (!"interface-default-body".equals(arguments.getString("scenario")))
+                throw new IllegalArgumentException("Unsupported isolated scenario");
+            runCopiedDefaultScenario();
+            return;
+        }
         Evolving evolving = new Evolving(10);
         runScenario("body", 0, scenario -> {
             scenario.check("computeBefore", 11, evolving.compute());
@@ -495,6 +501,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("newChild", 93, new CopiedChild().copiedValue());
             scenario.check("parentValue", 90, child.parentValue());
         });
+        if (arguments != null && "interface-default-body".equals(arguments.getString("scenario"))) return;
         runScenario("copied-default-add", 0, scenario -> {
             // The preceding interface transaction changed the copied body to 93.
             scenario.check("copiedBefore", 93, viaInterface.copiedValue());

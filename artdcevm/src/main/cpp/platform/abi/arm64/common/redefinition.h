@@ -24,8 +24,8 @@ static_assert(offsetof(DexFilePrefix, begin) == 8 && offsetof(DexFilePrefix, dat
 
 // openjdkjvmti::Redefiner, a non-polymorphic class: env_, result_, ...
 // RecordFailure only formats *error_msg_ and stores result_.
-// runtime_/self_ follow result_ in android-13.0.0_r1 ti_redefine.h; only the
-// API 33 interface prototype reads those trailing members.
+// runtime_/self_ follow result_ in android-13.0.0_r1 and android-16.0.0_r1
+// ti_redefine.h; the API 33/36 interface prototype reads these trailing members.
 struct RedefinerPrefix {
   void* env;
   int32_t result;
