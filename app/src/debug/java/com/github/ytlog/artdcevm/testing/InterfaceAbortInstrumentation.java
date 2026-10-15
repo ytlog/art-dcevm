@@ -77,6 +77,19 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                     expect("new child after GC", 92, new CopiedChild().copiedValue());
                 }
             }
+            // Exceptions injected at the exact callback/hook boundary must
+            // return through ART normally, including before cleanup roots exist.
+            for (int stage = 6; stage <= 12; ++stage) {
+                expect("arm hook exception", 0, armFailure(stage));
+                expect("hook exception " + stage, stage == 7 || stage == 10 || stage == 12 ? 113 : 110,
+                        redefine(CopiedDefault.class, patch));
+                expect("hook exception hit", 1, failureHits());
+                expect("old dispatch after hook exception", 92, throughInterface.copiedValue());
+                expect("parent after hook exception", 0, redefine(CopiedParent.class, parent));
+                expect("interface after hook exception", 0, redefine(CopiedDefault.class, patch));
+                System.gc(); System.runFinalization(); System.gc();
+                expect("new dispatch after hook exception and GC", 92, new CopiedChild().copiedValue());
+            }
             // The submitted bytes do not reference LateCopiedChild. A real
             // ClassFileLoadHook introduces it only after the loaded-class
             // snapshot; verification prepares it and the engine must retry.

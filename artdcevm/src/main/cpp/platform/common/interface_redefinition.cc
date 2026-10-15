@@ -18,6 +18,7 @@
 #include "platform/abi/arm64/android13/thread.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
+#include "platform/common/art_hook.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::interface_redefinition {
@@ -116,13 +117,21 @@ jvmtiError Reject(std::string* message, jvmtiError error, const char* why) {
 struct ProxyVisitor final : ClassVisitor {
   void* target;
   bool found = false;
+  jvmtiError error = JVMTI_ERROR_NONE;
   explicit ProxyVisitor(void* klass) : target(klass) {}
-  bool operator()(void* klass) override {
+  bool operator()(void* klass) noexcept override try {
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (Inject(6)) throw std::bad_alloc{};
+    if (Inject(7)) throw JniFailure{};
+#endif
     if ((Flags(klass) & 0x00040000u) && Assignable(target, klass)) { found = true; return false; }
     return true;
+  } catch (...) {
+    error = ArtHookExceptionError();
+    return false;  // VisitClasses must return normally through ART's frames.
   }
 };
-jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) {
+jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
   void* original = structural ? original_structural[spelling] : original_normal[spelling];
   void* object = klass.Get<void>();
   const Target* target = Find(object);
@@ -140,8 +149,15 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   void* linker = class_linker.load();
   if (!linker)
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, "interface spike ClassLinker unavailable");
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  if (Inject(8)) throw std::bad_alloc{};
+#endif
   ProxyVisitor proxies(object);
   visit_classes(linker, &proxies);
+  if (proxies.error != JVMTI_ERROR_NONE) {
+    Field<void*>(current_thread(), runtime->exception) = nullptr;
+    return proxies.error;
+  }
   if (proxies.found)
     return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike rejects Proxy implementations");
   if (structural) {
@@ -155,11 +171,15 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
     }
   }
   return JVMTI_ERROR_NONE;
+} catch (...) {
+  // Even writing the diagnostic string can allocate. Do not write one here.
+  Field<void*>(current_thread(), runtime->exception) = nullptr;
+  return ArtHookExceptionError();
 }
-jvmtiError NormalCan(Handle klass, std::string* message) { return Admit(klass, message, false, 0); }
-jvmtiError NormalGet(Handle klass, std::string* message) { return Admit(klass, message, false, 1); }
-jvmtiError StructuralCan(Handle klass, std::string* message) { return Admit(klass, message, true, 0); }
-jvmtiError StructuralGet(Handle klass, std::string* message) { return Admit(klass, message, true, 1); }
+jvmtiError NormalCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 0); }
+jvmtiError NormalGet(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 1); }
+jvmtiError StructuralCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, true, 0); }
+jvmtiError StructuralGet(Handle klass, std::string* message) noexcept { return Admit(klass, message, true, 1); }
 // Match HandleScope::Create/Thread::PushHandleScope rather than borrowing
 // unrooted raw pointers across ART allocations. No Java allocation occurs while
 // gathering the Class objects or constructing this C++ storage.
@@ -196,8 +216,13 @@ void* Read(uint32_t reference) {
   return object && Field<uint32_t>(thread, runtime->is_gc_marking) ? mark(object) : object;
 }
 void Store(ObjectArray* array, int32_t index, void* value) {
-  // JNI performs the store and ART's collector-specific write barrier. Both
-  // references are real JNI locals; destinations are private arrays/holder.
+  // The only JNI operation permitted inside our ART allocation hook: the
+  // current thread writes transaction-private arrays/holder, outside callbacks
+  // and ART locks. ART 13/16 ScopedThreadStateChange is a no-op for Runnable ->
+  // Runnable. SetObjectArrayElement performs ART's store and GC write barrier,
+  // with no managed allocation or suspension point. The named local-reference
+  // helpers only bridge these rooted objects; capacity is reserved while Native.
+  // Never use this helper from LinkClass, a class visitor, or a locked region.
   LocalRef destination(array), element(value);
   state->jni->SetObjectArrayElement(static_cast<jobjectArray>(destination.Get()), index, element.Get());
   if (state->jni->ExceptionCheck()) throw JniFailure{};
@@ -211,28 +236,30 @@ void SetSlot(const RedefinitionDataIter& data, int32_t slot, void* object) {
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
-struct Attempt { RedefinerPrefix* driver; Handle replacements; bool committed = false; };
+struct Attempt { RedefinerPrefix* driver; Handle replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
 thread_local Attempt* attempt = nullptr;
-void Discard(const Attempt& next) {
-  if (next.committed) return;
-  auto* classes = next.replacements.Get<ObjectArray>();
-  for (int32_t i = 0; classes && i < classes->length; ++i) {
-    void* klass = Read(classes->elements[i]);
-    if (!klass) continue;
-    const uint32_t status = Status(klass);
-    if (status >= static_cast<uint32_t>(android13::ClassStatus::kResolved) ||
-        status == static_cast<uint32_t>(android13::ClassStatus::kErrorResolved)) {
-      // Private classes were never published or executed; no static fields
-      // have been copied. ART's writer preserves subtype bits without allocating.
-      // SetStatus's exception/initialization/waiter protocol does not apply;
-      // kErrorResolved would still enter the next heap subtype scan.
-      set_status_internal(klass, android13::ClassStatus::kErrorUnresolved);
+void DiscardClass(void* klass) {
+  if (!klass) return;
+  const uint32_t status = Status(klass);
+  if (status >= static_cast<uint32_t>(android13::ClassStatus::kResolved) ||
+      status == static_cast<uint32_t>(android13::ClassStatus::kErrorResolved)) {
+    // Unpublished classes have no copied statics or initializer to preserve.
+    // kErrorResolved would still enter the next heap subtype scan.
+    set_status_internal(klass, android13::ClassStatus::kErrorUnresolved);
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-      ++discarded_classes;
+    ++discarded_classes;
 #endif
-    }
   }
 }
+void Discard(const Attempt& next) {
+  if (next.committed) return;
+  // A linked class can outlive a failed allocator without reaching its array.
+  DiscardClass(next.pending.Get<void>());
+  auto* classes = next.replacements.Get<ObjectArray>();
+  for (int32_t i = 0; classes && i < classes->length; ++i)
+    DiscardClass(Read(classes->elements[i]));
+}
+
 class AttemptScope {
  public:
   explicit AttemptScope(Attempt* next) : previous_(std::exchange(attempt, next)) {}
@@ -240,25 +267,26 @@ class AttemptScope {
  private:
   Attempt* previous_;
 };
-jvmtiError Run(RedefinerPrefix* driver) {
+jvmtiError Run(RedefinerPrefix* driver) noexcept {
   using Function = jvmtiError (*)(RedefinerPrefix*);
   if (!state || !state->thread_verified || state->targets.empty())
     return reinterpret_cast<Function>(original_run)(driver);
   try {
-    Roots roots(driver->self, 1);
-    Attempt next{driver, roots.Add(nullptr)};
+    Roots roots(driver->self, 2);
+    Attempt next{driver, roots.Add(nullptr), roots.Add(nullptr)};
     AttemptScope scope(&next);
     const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
     return result;
   } catch (const std::bad_alloc&) {
-    // Scope cleanup also runs if a native allocation in a hook throws.
+    // Only this hook's root allocation may throw here; deeper hooks catch
+    // at their own boundary, before returning through ART.
     driver->result = JVMTI_ERROR_OUT_OF_MEMORY;
     return JVMTI_ERROR_OUT_OF_MEMORY;
-  } catch (const JniFailure&) {
+  } catch (...) {
     Field<void*>(driver->self, runtime->exception) = nullptr;
-    driver->result = JVMTI_ERROR_INTERNAL;
-    return JVMTI_ERROR_INTERNAL;
+    driver->result = ArtHookExceptionError();
+    return static_cast<jvmtiError>(driver->result);
   }
 }
 struct Linking {
@@ -269,14 +297,16 @@ struct Linking {
 };
 thread_local const Linking* linking = nullptr;
 bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
-               Handle interfaces, Handle* output) {
+               Handle interfaces, Handle* output) noexcept {
   using Function = bool (*)(void*, void*, const char*, Handle, Handle, Handle*);
   const bool result = reinterpret_cast<Function>(original_link_class)(
       linker, thread, descriptor, klass, interfaces, output);
   // Capture the resolved class before AllocateNewClassObject's JNI-ID array
   // allocations. Those can fail after linking and return nullptr to Finish.
+  // This callback may run with ClassLinker locks held. Only assign an existing
+  // HandleScope root: no JNI/local-table growth, heap store or allocation here.
   if (linking && !descriptor && output && output->Get<void>())
-    Store(linking->new_types.Get<ObjectArray>(), linking->index, output->Get<void>());
+    Assign(attempt->pending, output->Get<void>());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   // A link failure after producing the class exercises the allocator's null
   // return path, before Finish has recorded this replacement in the holder.
@@ -291,9 +321,12 @@ class LinkingScope {
  private:
   const Linking* previous_;
 };
-void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) {
+void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcept try {
   if (!linking || cache != linking->private_cache.Get<void>()) return nullptr;
   const auto* dex = reinterpret_cast<const DexFilePrefix*>(static_cast<DexCache*>(cache)->dex_file);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  if (Inject(11)) throw std::bad_alloc{};
+#endif
   std::string type, error;
   if (!dex || !evolution::ReadTypeDescriptor(DexViewOf(*dex), index.index, &type, &error)) return nullptr;
   // Unlike DoLookupResolvedType, descriptor lookup does not write the cache.
@@ -305,12 +338,17 @@ void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) {
     if ((*linking->old_types)[i].Get<void>() == old)
       return Read(linking->new_types.Get<ObjectArray>()->elements[i]);
   return nullptr;
+} catch (...) {
+  // Lookup cannot return a JVMTI error. Retain it until Finish regains control;
+  // the result of this link will never be committed.
+  attempt->error = ArtHookExceptionError();
+  return nullptr;
 }
-void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) {
+void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) noexcept {
   if (void* object = Redirect(linker, index, cache, loader)) return object;
   return reinterpret_cast<LookupCache>(original_lookup_cache)(linker, index, cache, loader);
 }
-void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) {
+void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
   if (linking) {
     if (void* object = Redirect(linker, index, Read(Field<uint32_t>(referrer, runtime->dex_cache)),
                                Read(Field<uint32_t>(referrer, runtime->class_loader)))) return object;
@@ -321,16 +359,24 @@ struct Subtypes final : ClassVisitor {
   void* target;
   std::vector<void*> classes;
   bool proxy = false;
+  jvmtiError error = JVMTI_ERROR_NONE;
   explicit Subtypes(void* klass) : target(klass) {}
-  bool operator()(void* klass) override {
+  bool operator()(void* klass) noexcept override try {
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (Inject(9)) throw std::bad_alloc{};
+    if (Inject(10)) throw JniFailure{};
+#endif
     if (Status(klass) >= 7 && Assignable(target, klass)) {
       proxy |= (Flags(klass) & 0x00040000u) != 0;
       classes.push_back(klass);
     }
     return true;
+  } catch (...) {
+    error = ArtHookExceptionError();
+    return false;
   }
 };
-bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) {
+bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) noexcept {
   Field<void*>(current_thread(), runtime->exception) = nullptr;
   self->driver->result = error;
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", why);
@@ -348,6 +394,8 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   void* linker = class_linker.load();
   Subtypes subtypes(mirror_class(self));
   visit_classes(linker, &subtypes);
+  if (subtypes.error != JVMTI_ERROR_NONE)
+    return FailAllocation(self, subtypes.error, "interface subtype traversal failed");
   if (subtypes.proxy)
     return FailAllocation(self, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike found a Proxy after class loading paused");
   // Kahn order over assignability: superclass and superinterfaces precede each
@@ -380,12 +428,9 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   Handle new_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
   if (!new_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike new array allocation failed");
   Assign(attempt->replacements, new_array.Get<void>());
-  for (Handle array : {old_array, new_array}) {
-    LocalRef local(array.Get<void>());
-    if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()) ||
-        state->jni->GetArrayLength(static_cast<jarray>(local.Get())) != static_cast<int32_t>(ordered.size()))
+  for (Handle array : {old_array, new_array})
+    if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
       return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private array prefix mismatch");
-  }
   Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr), loader = roots.Add(nullptr);
   for (size_t i = 0; i < old_types.size(); ++i) {
     void* old = old_types[i].Get<void>();
@@ -419,9 +464,16 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
       replacement = allocate_class(self, old_types[i], superclass, cache,
           i == 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime->dex_class_def_index)));
     }
+    if (attempt->error != JVMTI_ERROR_NONE)
+      return FailAllocation(self, attempt->error, "interface linking hook failed");
     if (!replacement) return false;  // ART has recorded the error and cleared its exception.
     if (i != 0) set_cache(replacement, original_cache.Get<void>());
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    // Transfer failure after linking, now outside the callback and its locks.
+    if (Inject(12)) throw JniFailure{};
+#endif
     Store(new_array.Get<ObjectArray>(), static_cast<int32_t>(i), replacement);
+    Assign(attempt->pending, nullptr);
     if (i == 0) SetSlot(*data, RedefinitionDataIter::kSlotNewClassObject, replacement);
   }
   SetSlot(*data, RedefinitionDataIter::kSlotOldClasses, old_array.Get<void>());
@@ -436,7 +488,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   return true;
 }
 bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
-            RedefinitionDataIter* data) {
+            RedefinitionDataIter* data) noexcept {
   if (!IsTarget(self)) {
     using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
     return reinterpret_cast<Function>(original_finish)(self, holder, data);
@@ -444,8 +496,8 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
   try { return AllocateInterface(self, data); }
   catch (const std::bad_alloc&) {
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike native allocation failed");
-  } catch (const JniFailure&) {
-    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface private array JNI store failed");
+  } catch (...) {
+    return FailAllocation(self, ArtHookExceptionError(), "interface allocation hook failed");
   }
 }
 
@@ -524,7 +576,7 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
     next->targets.push_back({klass, !loader, access, status});
     if (loader) jni->DeleteLocalRef(loader);
   }
-  if (!next->targets.empty() && next->thread_verified) {
+  if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
     jclass class_class = jni->FindClass("java/lang/Class");
     jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
     if (array) next->array_class = jni->GetObjectClass(array);

@@ -57,7 +57,7 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 2. 批次上下文按 `jclass` 存入线程局部（ART 的 `ClassRedefinition::klass_` 就是同一个值），并为受影响类和已加载子类提前创建 JNI 全局根。外层递归事务锁把快照与 ART 事务串行化；ClassFileLoadHook 引发的嵌套事务成功后使外层快照失效。
 3. 原样调用 `StructurallyRedefineClasses`；成功退役时保留全局根，否则释放；返回后清理上下文并返回 ART 的结果。
 
-`Check*` 运行在 ART 的 `ScopedObjectAccess` 内，不在其中调用 JNI/JVMTI。
+`Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。唯一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
 
 ### 事务中的类加载
 
@@ -83,15 +83,19 @@ ART 的结构事务分两步处理子类：
 
 API 33/36 的接口原型目前只接受单目标的方法体更新。它按接口可赋值关系重建已加载实现类；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
 
-原型在命名 `Redefiner::Run` 入口建立事务作用域，把替换类数组单独放入 ART HandleScope。命名 `ClassLinker::LinkClass` Hook 在链接成功时登记替换类，因此也覆盖 `AllocateNewClassObject` 随后的 JNI ID 数组分配失败、尚未写入 holder 的类。任意失败返回或本机分配异常退出都会在释放 DEX 之前清理；成功返回则保留新类状态。
+原型在命名 `Redefiner::Run` 入口建立事务作用域，把替换类数组单独放入 ART HandleScope。命名 `ClassLinker::LinkClass` Hook 只把替换类赋入预留的 pending HandleScope 根，不调用 JNI 或写入堆数组；分配入口返回后才在无锁位置写入私有替换数组，因此也覆盖 `AllocateNewClassObject` 随后的 JNI ID 数组分配失败、尚未写入 holder 的类。任意失败返回或本机分配异常退出都会在释放 DEX 之前清理；成功返回则保留新类状态。
 
 清理调用命名 `Class::SetStatusInternal`，仅把本事务未发布的替换类变为 `kErrorUnresolved`，不做 Java 分配或 JNI/JVMTI 调用，也不改变旧类。依据 `android-13.0.0_r1` 的 `mirror/class.h`，`kErrorResolved` **仍满足 `IsResolved()`**，不能排除后续堆扫描。普通 `SetStatus` 的初始化状态转换、锁、异常与通知协议也不适用于这些私有废弃类。内部写入路径保留 subtype bits；`class-refvisitor-inl.h` 的 GC 仍扫描 Class 的实例引用与 native roots，跳过静态字段扫描是安全的，因为失败发生在提交复制静态字段之前，私有类也没有执行初始化器。
 
 `InterfaceAbortInstrumentation` 在同一进程中验证真实 DEX 校验失败（错误的返回指令，以及以整数为接收者调用 `String.length()`，均返回 62）、链接产生类之后返回失败、完整分配后失败、实例分配失败和实际映射探测拒绝，再重定义原父类、成功更新接口并 GC。类型不兼容的调用失败后先显式 GC，再执行后续事务。ClassFileLoadHook 引入晚加载实现类的场景另外验证引擎真实失败重试。故障注入和清理计数仅编译进 Debug，不进入 Release AAR。
 
+ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。`ProxyVisitor`、`Subtypes` 在回调内捕获失败，记录 JVMTI 错误并返回 `false` 终止 `VisitClasses`；准入、类校验、分配及实例/映射准备入口在本层转换为 `OUT_OF_MEMORY` 或 `INTERNAL`，错误转换不分配诊断字符串。私有数组转存失败时，pending 根保证尚未入数组的替换类仍会清理；解析重定向失败则登记事务错误，在分配入口重新获得控制时拒绝事务。不能依赖外层 `Run` 捕获异常，因为异常到达它之前已经穿过 ART 栈帧。
+
+公共 Hook 也按可失败阶段与不可失败阶段核对：提交映射、更新、反射 visitor 和 ID 编码入口显式为 `noexcept`。ART 的提交阶段没有可恢复的错误返回协议，发生本机分配失败时仍是致命失败，不能通过吞掉异常继续部分提交；这不等同于证明真实内存耗尽可以恢复。失败仪器另注入七个回调/Hook 边界异常，验证错误码、旧实例、后续父类与接口事务及 GC；两台设备的两种 JNI 模式均执行这些检查。
+
 这些行为已在 Android 13 / API 33 和 Android 16 / API 36 的普通模式和 CheckJNI 下验证；API 33 关闭清理的对照 APK 在失败测试中崩溃。原型限制：实际耗尽 Java/native 内存的异常、其他 ART 模块版本，以及其他 Android 版本尚未验证；分配故障注入不能替代真实内存耗尽验证。
 
-私有实现类缓存直接复用命名 `ClassRedefinition::CreateNewDexCache`：用当前 driver 和原 DEX 的非 owning 前缀调用，不修改原 DexCache，也不注册新缓存。该入口自身负责分配、根管理、location、dex lock 与初始化。描述符重定向使用不填充缓存的命名 `LookupClass`（API 33 为 `const char*`，API 36 为 `string_view`）；可赋值比较使用 JNI `IsAssignableFrom`。通过命名 `JNIEnvExt::NewLocalRef/DeleteLocalRef` 创建真实局部引用后，私有数组写入使用 JNI `SetObjectArrayElement`，由 ART 执行写屏障。
+私有实现类缓存直接复用命名 `ClassRedefinition::CreateNewDexCache`：用当前 driver 和原 DEX 的非 owning 前缀调用，不修改原 DexCache，也不注册新缓存。该入口自身负责分配、根管理、location、dex lock 与初始化。描述符重定向使用不填充缓存的命名 `LookupClass`（API 33 为 `const char*`，API 36 为 `string_view`）；可赋值比较使用 JNI `IsAssignableFrom`。通过命名 `JNIEnvExt::NewLocalRef/DeleteLocalRef` 创建真实局部引用后，私有数组写入仅在分配入口的非回调、无 ART 锁位置使用 JNI `SetObjectArrayElement`，由 ART 执行写屏障；`LinkClass` 只写 pending 根，清理同时覆盖该根与替换数组。
 
 线程、Class 与 HandleScope 的差异只放在 `platform/abi/arm64/androidNN/`，公共路径按固定声明生成的布局访问，不复制后端。API 36 的 HandleScope 包含 `size_`，根位置与 API 33 不同。进入事务前核对线程的 JNI env 与 OS tid、目标类的 JVMTI 修饰符与初始化状态；分配后核对数组长度、缓存 DEX 与 loader，成员映射再核对实现类的真实声明。读屏障仍使用命名 ART Mark 服务与源码声明的当前线程标记条件；HandleScope 的 push/pop 为内联路径，仍需固定声明。Android 17 目前只有源码与符号分析，没有设备验证，入口保持禁用。
 

@@ -17,6 +17,7 @@
 #include "platform/common/structural_policy.h"
 #include "platform/common/method_retirement.h"
 #include "platform/common/interface_redefinition.h"
+#include "platform/common/art_hook.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "support/json.h"
 
@@ -122,7 +123,7 @@ std::vector<Watch*> watches;
 bool watch_available = false;
 std::atomic<uint64_t> subclass_retries{0};
 
-void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) {
+void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexcept {
   std::lock_guard<std::mutex> lock(watch_mutex);
   for (Watch* watch : watches)
     for (jobject target : watch->targets)
@@ -651,7 +652,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
 // may name others, and another thread may load a subclass before ART pauses
 // class definition. Such an attempt fails before ART's no-failure point and
 // leaves the class loaded, so the next attempt includes it.
-jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept try {
   std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   constexpr int kAttempts = 3;
   for (int attempt = 1;; ++attempt) {
@@ -671,9 +672,11 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     if (!explained) Diagnose(DescribeFailure(count, definitions, result), true);
     return result;
   }
+} catch (...) {
+  return ArtHookExceptionError();
 }
 
-bool CheckClass(ClassRedefinitionPrefix* self) {
+bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   if (!current_batch) return reinterpret_cast<Check>(original_class)(self);
   current_batch->decisions.erase(self);
   const auto found = current_batch->classes.find(self->klass);
@@ -748,9 +751,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
   snapshot.retiring = decision.retired_methods;
   current_batch->decisions.emplace(self, std::move(decision));
   return true;
+} catch (...) {
+  self->driver->result = ArtHookExceptionError();
+  return false;
 }
 
-bool CheckFields(ClassRedefinitionPrefix* self) {
+bool CheckFields(ClassRedefinitionPrefix* self) noexcept {
   if (current_batch) {
     const auto found = current_batch->decisions.find(self);
     if (found != current_batch->decisions.end()) {
@@ -761,7 +767,7 @@ bool CheckFields(ClassRedefinitionPrefix* self) {
   return reinterpret_cast<Check>(original_fields)(self);
 }
 
-bool CheckMethods(ClassRedefinitionPrefix* self) {
+bool CheckMethods(ClassRedefinitionPrefix* self) noexcept {
   if (current_batch) {
     const auto found = current_batch->decisions.find(self);
     if (found != current_batch->decisions.end()) {

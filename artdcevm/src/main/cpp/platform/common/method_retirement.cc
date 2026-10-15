@@ -1,5 +1,6 @@
 #include "platform/common/method_retirement.h"
 #include "platform/common/interface_redefinition.h"
+#include "platform/common/art_hook.h"
 
 #include <android/api-level.h>
 #include <android/log.h>
@@ -600,7 +601,7 @@ void ThrowRetired(void* self) {
 // caller's handle scope, so it stays a GC root. Subclasses are allocated through
 // the same redefinition with the target's new class as their superclass.
 void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Handle super_class,
-                             Handle cache, uint16_t index) {
+                             Handle cache, uint16_t index) noexcept {
   if (transaction && super_class.reference) {
     const auto found = transaction->link_targets.find(self);
     if (found != transaction->link_targets.end() && found->second.first &&
@@ -625,7 +626,7 @@ struct Verifying {
 };
 thread_local const Verifying* verifying = nullptr;
 
-bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
+bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   const std::string* descriptor = nullptr;
   if (transaction) {
@@ -644,14 +645,14 @@ void* VerifiedClass(std::string_view descriptor) {
   return verifying && descriptor == verifying->descriptor ? verifying->data->NewClassObject()
                                                           : nullptr;
 }
-void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) {
+void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
   interface_redefinition::ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(descriptor) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
   return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
-                          Handle loader) {
+                          Handle loader) noexcept {
   interface_redefinition::ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass({descriptor, length}) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
@@ -662,7 +663,7 @@ void* FindClassWithLength(void* linker, void* thread, const char* descriptor, si
 // Commit: apply the plan made before ART's no-failure point, or keep ART's
 // own mapping for a transaction that has none.
 void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
-                     void* method_map, void* field_map) {
+                     void* method_map, void* field_map) noexcept {
   const MappingPlan* plan = nullptr;
   if (transaction) {
     const auto found = transaction->plans.find(data.index);
@@ -696,7 +697,7 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
 
 // Last ART step that may fail the transaction: confirm the holder slots with
 // every remaining layout, then plan the mapping with the selected one.
-bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
+bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (interface_redefinition::InjectInstanceFailure(self, data, false)) return false;
@@ -759,6 +760,9 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   self->driver->result = JVMTI_ERROR_INTERNAL;
   __android_log_print(ANDROID_LOG_ERROR, "ART-DCEVM", "member mapping probe failed: %s", why.c_str());
   return false;
+} catch (...) {
+  self->driver->result = ArtHookExceptionError();
+  return false;
 }
 
 // Puts the old classes' original field arrays back; called by the visitor
@@ -777,7 +781,7 @@ void RestoreFieldArrays() {
   hidden_natives.clear();
 }
 
-void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
+void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
   struct Scope {
     bool previous = in_update;
     std::set<const void*> previous_copied = std::move(copied_resolution_changes);
@@ -863,7 +867,7 @@ void DisableVarHandle(const void* var_handle) {
 class RetirementVisitor final : public ReflectiveValueVisitor {
  public:
   explicit RetirementVisitor(ReflectiveValueVisitor* original) : original_(original) {}
-  abi::ArtMethod* VisitMethod(abi::ArtMethod* method, const ReflectionSourceInfo& info) override {
+  abi::ArtMethod* VisitMethod(abi::ArtMethod* method, const ReflectionSourceInfo& info) noexcept override {
     const bool retired = ContainsMethod(method);
     if (info.type == abi::kSourceDexCacheResolvedMethod &&
         (retired || copied_resolution_changes.count(method))) return nullptr;
@@ -871,7 +875,7 @@ class RetirementVisitor final : public ReflectiveValueVisitor {
       RecordId(method, reinterpret_cast<const abi::JniMethodIdSourceInfo&>(info).id);
     return original_->VisitMethod(method, info);
   }
-  ArtField* VisitField(ArtField* field, const ReflectionSourceInfo& info) override {
+  ArtField* VisitField(ArtField* field, const ReflectionSourceInfo& info) noexcept override {
     const auto retired = FindRetiredField(field);
     if (!retired) return original_->VisitField(field, info);
     switch (info.type) {
@@ -894,7 +898,7 @@ class RetirementVisitor final : public ReflectiveValueVisitor {
  private:
   ReflectiveValueVisitor* original_;
 };
-void Visit(void* runtime, ReflectiveValueVisitor* visitor) {
+void Visit(void* runtime, ReflectiveValueVisitor* visitor) noexcept {
   using Function = void (*)(void*, ReflectiveValueVisitor*);
   if (!in_update) { reinterpret_cast<Function>(original_visit)(runtime, visitor); return; }
   // ART's copy phase is over; its visitor and fix-ups need the real arrays.
@@ -946,26 +950,26 @@ bool HandleCall(void* original, void* self, void* frame, Handle method, Handle t
   return reinterpret_cast<Function>(original)(self, frame, method, type, operands, result);
 }
 bool MethodHandleInvoke(void* self, void* frame, Handle method, Handle type,
-                        const void* operands, uint64_t* result) {
+                        const void* operands, uint64_t* result) noexcept {
   return HandleCall(original_mh, self, frame, method, type, operands, result);
 }
 bool MethodHandleInvokeExact(void* self, void* frame, Handle method, Handle type,
-                             const void* operands, uint64_t* result) {
+                             const void* operands, uint64_t* result) noexcept {
   return HandleCall(original_mh_exact, self, frame, method, type, operands, result);
 }
-void MethodHandleFrame(void* self, Handle method, Handle frame) {
+void MethodHandleFrame(void* self, Handle method, Handle frame) noexcept {
   if (RejectHandle(self, method)) return;
   using Function = void (*)(void*, Handle, Handle);
   reinterpret_cast<Function>(original_mh_frame)(self, method, frame);
 }
-jmethodID Encode(void* manager, void* method) {
+jmethodID Encode(void* manager, void* method) noexcept {
   using Function = jmethodID (*)(void*, void*);
   jmethodID id = reinterpret_cast<Function>(original_encode)(manager, method);
   if (Retired(method)) RecordId(method, id);
   return id;
 }
 struct ReflectiveHandle { void** reference; };
-jmethodID EncodeHandle(void* manager, ReflectiveHandle method) {
+jmethodID EncodeHandle(void* manager, ReflectiveHandle method) noexcept {
   using Function = jmethodID (*)(void*, ReflectiveHandle);
   jmethodID id = reinterpret_cast<Function>(original_encode_handle)(manager, method);
   if (Retired(*method.reference)) RecordId(*method.reference, id);
@@ -975,24 +979,24 @@ jmethodID EncodeHandle(void* manager, ReflectiveHandle method) {
 // retired or placeholder fields (FromReflectedField on a remapped Field).
 void* original_encode_field = nullptr;
 void* original_encode_field_handle = nullptr;
-jfieldID EncodeField(void* manager, void* field) {
+jfieldID EncodeField(void* manager, void* field) noexcept {
   jfieldID id = reinterpret_cast<jfieldID (*)(void*, void*)>(original_encode_field)(manager, field);
   RecordFieldId(field, id);
   return id;
 }
-jfieldID EncodeFieldHandle(void* manager, ReflectiveHandle field) {
+jfieldID EncodeFieldHandle(void* manager, ReflectiveHandle field) noexcept {
   jfieldID id = reinterpret_cast<jfieldID (*)(void*, ReflectiveHandle)>(
       original_encode_field_handle)(manager, field);
   RecordFieldId(*field.reference, id);
   return id;
 }
-jfieldID EncodeFieldWithClass(void* manager, Handle klass, void* field) {
+jfieldID EncodeFieldWithClass(void* manager, Handle klass, void* field) noexcept {
   jfieldID id = reinterpret_cast<jfieldID (*)(void*, Handle, void*)>(original_encode_field)(
       manager, klass, field);
   RecordFieldId(field, id);
   return id;
 }
-jfieldID EncodeFieldHandleWithClass(void* manager, Handle klass, ReflectiveHandle field) {
+jfieldID EncodeFieldHandleWithClass(void* manager, Handle klass, ReflectiveHandle field) noexcept {
   jfieldID id = reinterpret_cast<jfieldID (*)(void*, Handle, ReflectiveHandle)>(
       original_encode_field_handle)(manager, klass, field);
   RecordFieldId(*field.reference, id);
@@ -1027,13 +1031,13 @@ bool RejectReflected(JNIEnv* env, jobject executable) {
     if (local) jni->DeleteLocalRef(env, local);
   return true;
 }
-jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray args) {
+jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray args) noexcept {
   return RejectReflected(env, method) ? nullptr
                                       : original_method_invoke(env, method, receiver, args);
 }
 // A retired constructor would run its old code on an object of the new class.
 jobject (*original_constructor_new_instance)(JNIEnv*, jobject, jobjectArray) = nullptr;
-jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) {
+jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) noexcept {
   return RejectReflected(env, constructor) ? nullptr
                                            : original_constructor_new_instance(env, constructor, args);
 }
