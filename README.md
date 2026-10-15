@@ -19,13 +19,13 @@ The app must be debuggable from process start. No root and no system partition c
 
 Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md).
 
-## Interface method bodies
+## Interface redefinition
 
-Android 13 (API 33) and Android 16 (API 36) arm64 devices support body edits to default, static and private methods of top-level and nested interfaces. Interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces. Other Android versions disable the capability with a reason; runtime probes must still pass.
+Android 13 (API 33) and Android 16 (API 36) arm64 devices support body edits to default, static and private methods of top-level and nested interfaces, new default/static methods and private instance methods, and deletion or signature changes of static/private methods (including synthetic lambda helpers and bridges). Static additions may have any access level. Interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces. Other Android versions disable the capability with a reason; runtime probes must still pass.
 
-Interface member and parent-interface evolution is unsupported: adding methods returns 63, deleting or changing signatures 67, field changes 64, method-modifier changes 71, and parent-interface changes 66. Unrelated interfaces sharing an implementation without a common batch interface ancestor, and structural superclass changes outside the interface rebuild group, return 66. Proxy implementations, boot interfaces and pointer-id markers return 79; unavailable runtime capabilities or failed probes return 98.
+Adding abstract/native/`<clinit>` methods, unsafe inherited-method hiding or new default conflicts returns 63; deleting or changing default/abstract signatures returns 67; field changes return 64, method-modifier changes 71, and parent-interface changes 66. New defaults reach existing instances and implementations without submitted DEX. For lambda changes, the reload tool must append new classes and submit changed existing synthetic classes and implementation bridges with the interface. Unrelated interfaces sharing an implementation without a common batch interface ancestor, and structural superclass changes outside the interface rebuild group, return 66. Proxy implementations, boot interfaces and pointer-id markers return 79; unavailable runtime capabilities or failed probes return 98.
 
-Even a body-only interface edit reallocates all instances of implementations and their subclasses, preserving compatible fields. Read `DcevmRuntime.capabilities()` before integration; see [limitations](docs/LIMITATIONS.en.md#redefining-interface-method-bodies) for the full scope and error semantics.
+Even a body-only interface edit reallocates all instances of implementations and their subclasses, preserving compatible fields. Read `DcevmRuntime.capabilities()` before integration; see [limitations](docs/LIMITATIONS.en.md#redefining-interfaces) for the full scope and error semantics.
 
 ## Quick start
 

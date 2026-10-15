@@ -81,7 +81,7 @@ ART 的结构事务分两步处理子类：
 
 ### 接口事务的失败清理
 
-API 33/36 的接口引擎接受多个接口目标的方法体更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；互不相交的接口各自拥有一组。没有批次共同祖先却共享子类型的接口组以 66 拒绝，以避免重复实例迁移和提交。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 拒绝 Proxy；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
+API 33/36 的接口引擎接受多个接口目标受支持的方法体与成员更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；互不相交的接口各自拥有一组。没有批次共同祖先却共享子类型的接口组以 66 拒绝，以避免重复实例迁移和提交。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 拒绝 Proxy；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
 
 同批实现类与子类按它们自己的新 DEX 和 holder 的新 DexCache 分配；未提交 DEX 的受影响类型仍用原 DEX 的私有链接缓存。`FinishNewClassAllocations` 的第一个受影响条目先完成接口整组分配，与 ART 按父类深度生成的条目顺序无关。固定 holder 声明经全批探测后，只在事务私有的 `initialized_`、`actually_structural_`、`initial_structural_` 中标记整组：接口为唯一初始结构条目，同批实现类条目已分配且不是初始结构条目，后续分配跳过。与 ART 的 `setup_single_redefinition` 一样，各条目保留自己的新类槽位用于 DEX 校验，但只有接口条目携带整组新旧类及实例数组，原 `CollectAndCreateNewInstances`、公共映射计划和 `UpdateClassStructurally` 因而仅处理整组一次。“类加 abstract”对整组收集的实例检查各目标，避免从属条目的空实例数组漏检。实现类的新增、退役与修饰符仍由现有策略评估。实现类的外部父类若同批只改方法体可以接受；其结构变化以 66 拒绝，因为 ART 父类事务与接口事务会共享并重复重建实现子树。Native 快照记录重叠关系，最终 DEX 策略只在该外部父类确需结构路径时拒绝，并写明类与重叠原因。校验重定向也覆盖本事务整组的新类，按命名 `LookupClass` 和类加载器身份匹配原类，仅本线程的 `CheckVerification` 返回替换类；旧类表和旧 DexCache 不写入替换类。
 
@@ -132,6 +132,30 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 
 此后进入不可失败的提交：`CollectNewFieldAndMethodMappings` 只把计划写入 ART 的 map（写入前确认它们是空的 libc++ 树）；`UpdateClassStructurally` 完整调用原函数，引擎只在复制阶段前后换入、换回字段数组与父类指针，并在 visitor 中处理退役成员。提交段内没有 JNI/JVMTI 调用或 Java 对象分配。
 
+## 接口成员演进
+
+Android 13/API 33 与 Android 16/API 36 的 arm64 接口目标在运行时与成员映射探测通过后，支持新增 default、static（任意访问级别，含 synthetic）、private 实例方法，以及删除或改签名 static/private 方法。新增 abstract、native 或 `<clinit>` 以 63 拒绝；删除或改签名 default/abstract 以 67 拒绝。字段、父接口与方法修饰符变化仍分别拒绝 64、66、71。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
+
+这复用接口现有的重建组：接口、已加载子接口、实现类及其子类按新接口重新 `LinkClass`，未提交 DEX 的实现类使用原 DEX 与私有 DexCache，同样获得 copied default。新方法没有旧对应项，不进入旧方法映射。类链上的 public 实现优先于 default；更具体的子接口覆盖父接口，原 miranda 可变为 default 拷贝。实例迁移、引用改写、去优化与缓存失效仍全部由 ART 完成。
+
+新增方法还须满足三项检查：
+
+1. 新增 static/private 方法不得遮蔽从父接口继承的虚方法或 Object 的 public 实例方法，否则拒绝 63。`CollectInheritedInterface` 将这些身份记录到 `LoadedHierarchy::inherited_interface`。已校验的旧 `invoke-interface` 可能仍按 IMT 分派，引擎不能靠新声明使它安全地抛调用方式错误。
+2. 新增 default 不得与实现类自身或其父类链上的同签名 static/非 public 方法重叠，否则拒绝 63，并写明该声明类。`subtype_shadows` 来自 `interface_redefinition::Scope::GroupTypes`，与 ART 实际重建的准备完成且非错误类型一致。实现类父类链也纳入检查，boot 类可按唯一描述符去重，其他加载器不按名称去重；public 实例实现不拒绝。
+3. `PlanMethods` 读取 ART 链接结果，发现新出现的 `IsDefaultConflicting` 方法时，记录实现类和方法。`CollectAndCreateNewInstances` 在 ART 不可失败点之前以 63 拒绝，`lastRejection` 写明实现类及名称、描述符；旧定义保留。它不走表示布局探测失败的 `Fail()` 路径，防止退回 ART 原映射而放过冲突。此检查共享于所有使用自有映射的结构事务，也覆盖普通类新增接口。
+
+`IsDefaultConflicting` 使用固定源码声明：12–17 在 common/runtime_objects.h 中判定 `intrinsic | copied | abstract | default` 相关位等于 `copied | abstract | default`（分别为 `0x80000000`、`0x01000000`、`0x0400`、`0x00400000`）；11 在 android11/art_method.h 中判定独立的 `0x01000000` default-conflict 位且非 intrinsic。按 ArtMethod 类型选择重载，不增加字段偏移。方法数组按现有长度遍历；地址非空不表示存在成员。API 36 的共享空字段数组也必须通过现有布局探测。
+
+接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符仍拒绝 71。接口不需要新的访问守卫。
+
+### 接口 default 中的 lambda
+
+Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的本地编译检查表明：在 default 方法中追加 lambda 会新增 private static 实现方法、public static synthetic `$r8$lambda$` 桥和合成类；在已有 lambda 前插入，还可能改变旧实现方法的签名并删除旧桥。新增有函数体的接口方法还可能在 `DefaultImpls` 和实现类增加桥方法。因此热重载端须将接口与发生变化的已有合成类、实现类 bridge 放在同一批，先把新类追加到加载器。引擎不负责补丁分发或新增类的加载协议。
+
+序号改变会让旧 lambda 实例所属的合成类改为另一个 lambda 的实现；函数接口变化仍可能被 66 拒绝。热重载端须按普通类 lambda 的规则隔离旧闭包，或保留旧桥并只追加新桥。支持 direct 方法退役不保证旧闭包保持原来的业务含义。
+
+`InterfaceEvolutionFixture` 与 `interfacelambda` fixture 覆盖新增与退役、copied default、子接口优先、miranda、桥批次和 lambda 插入；`interface-stress-add` 覆盖 200 个实现类。`InterfaceAbortInstrumentation` 验证链接冲突拒绝后，旧行为、后续父类事务、接口事务与 GC 均正常。原始设备日志与逐次验证记录仅存本地忽略目录。
+
 ## 校验规则
 
 `structural_policy` 是纯函数，可在主机测试。成员身份：字段为（名称、类型、static），方法为（名称、描述符），方法的调用方式还受[调用方式不变](#调用方式不变)约束。比较前把 DEX 原始标志规范化为 JVMTI 视图（与 `ti_method.cc`、`ti_field.cc`、`ti_class.cc` 一致：取 Java 标志位，方法的 declared-synchronized 映射为 synchronized，abstract 方法去掉 native）。
@@ -141,7 +165,9 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 | 变化 | 结果 |
 | --- | --- |
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
-| 接口目标新增方法；删除方法或改签名 | 分别拒绝 `METHOD_ADDED`（63）、`METHOD_DELETED`（67） |
+| 接口目标新增 default/static/private 实例方法；删除或改签名 static/private 方法 | 成员映射与接口运行时可用、且继承／遮蔽／default 冲突检查通过时接受 |
+| 接口目标新增 abstract/native/`<clinit>`；direct 遮蔽或 default 冲突 | 拒绝 `METHOD_ADDED`（63） |
+| 接口目标删除或改签名 default/abstract 方法 | 拒绝 `METHOD_DELETED`（67） |
 | 接口目标字段变化；方法修饰符变化；父接口变化；类修饰符变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
@@ -151,11 +177,11 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 | native → Java | 可退役时接受（引擎处理 JNI 入口复制）；否则拒绝 71 |
 | 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | 拒绝 71（见[调用方式不变](#调用方式不变)） |
 | 方法的 varargs、strict 标志变化 | 拒绝 71 |
-| 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则或方法声明在接口中时拒绝 `METHOD_DELETED`（67） |
+| 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则拒绝 `METHOD_DELETED`（67）；接口 default/abstract 始终拒绝 |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |
 | 类在接口、注解、枚举之间变化 | 拒绝 70 |
-| 新增接口（可同时调整顺序） | 可退役时接受；无法解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66） |
+| 新增接口（可同时调整顺序） | 可退役时接受；无法解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66）；使用自有映射时新产生的 default 冲突拒绝 63 |
 | 移除接口；重复接口 | 移除拒绝 66（见[收窄不支持](#收窄不支持)）；重复拒绝 62 |
 | 父类变化 | 新父类扩展原父类时接受；其余按[放宽的父类变化](#放宽的父类变化)中的条件以 62、61 或 66 拒绝 |
 
@@ -319,7 +345,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `subclassLoadRetries` | 事务期间有目标类的子类加载而重试的次数（见[事务中的类加载](#事务中的类加载)） |
 | `diagnostic`、`lastRejection` | 安装诊断；最近一次标准入口事务失败时的类与原因，成功时为空。策略、快照与提交前核对的拒绝写明各自原因；ART 自己的检查拒绝时（如 boot 接口在入口即以 79 拒绝），标准入口写明被拒的接口或不可修改的类，否则列出批次中的类与错误名，ART 的原文只在 logcat 的 `FAILURE TO REDEFINE` 之后 |
 
-设备端工具应区分 `interfaceAddition`（给普通类新增接口）与 `interfaceRedefinition`（接口运行时探测状态）。在 Android 13/API 33 和 Android 16/API 36 上，直接提交受支持的接口方法体修改，并按返回码处理：0 表示成功；98 表示运行时不可用，提示重启应用进程后重试；其他标准 JVMTI 错误码显示 `lastRejection` 中的类名和原因。`interfaceRedefinition`、`interfaceRuntime` 仅供参考，不作为放开接口修改拦截的前提，也不要求先提交一次不改变语义的重定义。每次实际事务都会完成策略与运行时探测检查；这些参考状态不代表允许接口成员演进，也不保证任意目标或批次都能提交。
+设备端工具应区分 `interfaceAddition`（给普通类新增接口）与 `interfaceRedefinition`（接口运行时探测状态）。在 Android 13/API 33 和 Android 16/API 36 上，直接提交受支持的接口方法体与成员修改，并按返回码处理：0 表示成功；98 表示运行时不可用，提示重启应用进程后重试；其他标准 JVMTI 错误码显示 `lastRejection` 中的类名和原因。`interfaceRedefinition`、`interfaceRuntime` 仅供参考，不作为放开接口修改拦截的前提，也不要求先提交一次不改变语义的重定义。每次实际事务都会完成策略与运行时探测检查；这些参考状态描述运行时探测，成员变化与批次准入仍按每次事务检查。
 
 每项能力仍由每次事务的探测决定是否可用；探测未通过时，相应变化以 JVMTI 错误拒绝。
 
@@ -343,8 +369,9 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | --- | --- |
 | JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
 | 引擎：前提检查、Hook 安装、标准入口路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
-| 校验策略（纯函数，主机可测） | `platform/common/structural_policy.{h,cc}` |
-| 成员映射、退役、访问守卫、运行时探测与候选布局表 | `platform/common/method_retirement.{h,cc}` |
+| 校验策略（含接口新增与继承／遮蔽事实，纯函数、主机可测） | `platform/common/structural_policy.{h,cc}` |
+| 成员映射、新出现的 default 冲突、退役、访问守卫、运行时探测与候选布局表 | `platform/common/method_retirement.{h,cc}` |
+| 接口重建组、分配、解析重定向与失败清理 | `platform/common/interface_redefinition.{h,cc}` |
 | 用公开 JVMTI 读取旧类结构 | `platform/common/schema_snapshot.{h,cc}` |
 | 读取 ART 已映射 DEX 中的类声明 | `platform/common/art_dex_view.h`、`evolution/class_schema.h`、`evolution/dex_schema.cc` |
 | 11–17 一致的固定声明 | `platform/abi/arm64/common/` |

@@ -12,16 +12,16 @@
 - 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务不允许退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
-## 接口方法体重定义
+## 接口重定义
 
-接口目标支持默认方法、静态方法和私有方法的函数体修改，覆盖顶层接口与嵌套接口。接口可与实现类、实现类的子类或无关类同批提交；也支持多个接口及父子接口同批。实现类在同批中仍可按普通类规则演进成员。整批为一个原子事务，任一目标失败时全部保持旧定义。
+接口目标支持 default、static、private 方法体修改，新增 default、static（任意访问级别，含 synthetic）、private 实例方法，以及删除或改签名 static/private 方法。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
 此能力仅在 Android 13（API 33）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增方法 | `METHOD_ADDED`（63） |
-| 删除方法或改签名 | `METHOD_DELETED`（67） |
+| 新增 abstract、native、`<clinit>`；direct 方法遮蔽继承的接口／Object 方法；default 遮蔽类链 static／非 public 方法或产生 default 冲突 | `METHOD_ADDED`（63） |
+| 删除或改签名 default/abstract 方法 | `METHOD_DELETED`（67） |
 | 字段变化 | `SCHEMA_CHANGED`（64） |
 | 方法修饰符变化 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 父接口变化 | `HIERARCHY_CHANGED`（66） |
@@ -31,7 +31,9 @@
 | boot 接口、有 Proxy 实现类，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
-`lastRejection` 给出被拒类名和原因；失败不改变旧行为。接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
+`lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义，default 冲突原因写明实现类和方法。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
+
+接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 

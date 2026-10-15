@@ -12,16 +12,16 @@ This document summarizes the prerequisites, rejected changes and runtime semanti
 - Retirement requires runtime probes to confirm the ART class-layout declarations. A transaction whose probes fail cannot retire members; `memberMapping` in `capabilities()` gives the reason.
 - The enhanced entry is the standard `RedefineClasses`. Batch inspection and execution through this entry are serialized. Concurrent transactions that call ART's structural redefinition extension directly do not participate in this protection.
 
-## Redefining interface method bodies
+## Redefining interfaces
 
-Interface targets support body edits to default, static and private methods, for both top-level and nested interfaces. A batch may include interfaces alongside implementations, their subclasses or unrelated classes; multiple interfaces and parent/child interfaces are also supported. Implementations in the batch can evolve members under the ordinary class rules. The whole batch is atomic: failure of any target leaves all old definitions in place.
+Interface targets support body edits to default, static and private methods, new default/static methods and private instance methods, and deletion or signature changes of static/private methods. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
 
 This capability is available only on Android 13 (API 33) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
 
 | Rejection for interface targets | JVMTI error code |
 | --- | --- |
-| Adding methods | `METHOD_ADDED` (63) |
-| Deleting methods or changing signatures | `METHOD_DELETED` (67) |
+| Adding abstract, native or `<clinit>` methods; hiding an inherited interface/Object method with a direct method; a default shadowing static/non-public class-chain methods or introducing a default conflict | `METHOD_ADDED` (63) |
+| Deleting or changing signatures of default/abstract methods | `METHOD_DELETED` (67) |
 | Changing fields | `SCHEMA_CHANGED` (64) |
 | Changing method modifiers | `METHOD_MODIFIERS_CHANGED` (71) |
 | Changing parent interfaces | `HIERARCHY_CHANGED` (66) |
@@ -31,7 +31,9 @@ This capability is available only on Android 13 (API 33) and Android 16 (API 36)
 | A boot interface, a Proxy implementation, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
 
-`lastRejection` names the rejected class and reason; failure preserves old behavior. Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
+`lastRejection` names the rejected class and reason; failure preserves old behavior. A new default is available to existing instances, even when no implementation DEX was submitted; public class methods and more specific subinterfaces retain precedence. Static/private retirement uses the same bytecode, JNI, reflection and MethodHandle semantics as ordinary classes. Conflict rejections name the implementation and method. Inserting lambdas may renumber synthetic classes; the reload tool must isolate old closures or retain their old bridges, as for ordinary classes. See [interface member evolution](STRUCTURAL_REDEFINE_ENGINE.en.md#interface-member-evolution).
+
+Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
 
 ## Unsupported changes
 
