@@ -2,7 +2,6 @@
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
 
-#include <android/api-level.h>
 #include <android/log.h>
 #include <jvmti.h>
 #include <array>
@@ -15,7 +14,6 @@
 #include <set>
 #include <shared_mutex>
 #include <string_view>
-#include <tuple>
 #include <utility>
 
 #include "platform/abi/arm64/common/libcpp_pointer_map.h"
@@ -23,20 +21,11 @@
 #include "platform/abi/arm64/common/reflective_value_visitor.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/common/art_dex_view.h"
-#include "platform/common/field_array_probe.h"
-#include "platform/common/structural_policy.h"
+#include "platform/common/class_layout.h"
+#include "platform/common/class_layout_table.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/method_retirement_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
-// Source-declared class layouts; runtime probes select among them (kLayouts).
-#include "platform/abi/arm64/android11/art_method.h"
-#include "platform/abi/arm64/android11/class.h"
-#include "platform/abi/arm64/android12/class.h"
-#include "platform/abi/arm64/android13/class.h"
-#include "platform/abi/arm64/android14/class.h"
-#include "platform/abi/arm64/android15/class.h"
-#include "platform/abi/arm64/android16/class.h"
-#include "platform/abi/arm64/android17/class.h"
 
 namespace artdcevm::method_retirement {
 namespace {
@@ -77,8 +66,6 @@ std::set<jfieldID> retired_field_ids;
 std::set<const void*> placeholder_fields;
 bool field_retirement_available = false;
 bool field_ids_hooked = false;
-std::mutex state_mutex;
-std::string mapping_state = "unavailable";
 bool available = false;
 // Written by the mapping hook and read by the visitor within one Update call.
 thread_local bool in_update = false;
@@ -96,10 +83,7 @@ thread_local std::vector<std::pair<HiddenNative, void*>> hidden_natives;
 // JVMTI-requested field IDs and their ArtFields, while resolving placeholders.
 thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
 
-void Report(std::string state) {
-  std::lock_guard<std::mutex> lock(state_mutex);
-  mapping_state = std::move(state);
-}
+using class_layout::Report;
 bool AnyRetired() { return any_retired.load(std::memory_order_acquire); }
 bool ContainsMethod(const void* method) {
   if (!AnyRetired()) return false;
@@ -173,20 +157,11 @@ bool Retired(const void* method) {
   return ContainsMethod(method);
 }
 
-uint32_t Reference(const void* object) {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
-}
-template <typename T> T* Pointer(uint64_t address) {
-  return reinterpret_cast<T*>(static_cast<uintptr_t>(address));
-}
-const DexFilePrefix* DexOf(uint32_t dex_cache) {
-  const auto* cache = Pointer<abi::DexCache>(dex_cache);
-  return cache ? Pointer<const DexFilePrefix>(cache->dex_file) : nullptr;
-}
-bool Fail(std::string* why, std::string reason) {
-  *why = std::move(reason);
-  return false;
-}
+using class_layout::DexOf;
+using class_layout::Members;
+using class_layout::Fail;
+using class_layout::Pointer;
+using class_layout::Reference;
 
 // ART services, resolved by name in Prepare.
 void (*throw_exception)(void*, const char*, const char*) = nullptr;
@@ -248,163 +223,15 @@ struct MappingPlan {
   std::string default_conflict;
 };
 
-// Operations over one source-declared class layout.
-struct LayoutOps {
-  int android;
-  bool (*verify_target)(void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
-  bool (*verify_iter)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
-                      std::string* why);
+// Mapping operations over one source-declared class layout.
+struct PlanOps {
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
-  uint32_t (*access)(const void* klass);
   uint32_t* (*superclass)(void* klass);
 };
 
-template <typename Class, typename Method> struct Layout {
-  template <typename T> static abi::LengthPrefixedArray<T>* Members(uint64_t address) {
-    return Pointer<abi::LengthPrefixedArray<T>>(address);
-  }
-  static auto FieldArrays(Class& klass) {
-    const auto slots = FieldArraySlots(klass);
-    std::array<uint64_t, std::tuple_size_v<decltype(slots)>> arrays{};
-    for (size_t i = 0; i < slots.size(); ++i) arrays[i] = *slots[i];
-    return arrays;
-  }
-  static uint64_t* FieldSlot(void* klass, size_t slot) {
-    return FieldArraySlots(*static_cast<Class*>(klass))[slot];
-  }
-
-  // The class flags locate access_flags_, which follows the native member
-  // arrays, so a wrong array layout fails here before any array is read. The
-  // expected flags come from the class's current ClassDef in its own DEX
-  // (dex_cache_ precedes the arrays in every declared layout).
-  static bool VerifyAccess(const Class& klass, const std::string& descriptor, std::string* why) {
-    constexpr uint32_t kValidClass = evolution::kAccPublic | evolution::kAccFinal |
-        evolution::kAccSuper | evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccEnum;
-    constexpr uint32_t kValidInterface = evolution::kAccPublic | evolution::kAccInterface |
-        evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccAnnotation;
-    const DexFilePrefix* dex = DexOf(klass.dex_cache);
-    if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
-    uint32_t class_def_access = 0;
-    std::string error;
-    if (!evolution::ReadClassAccess(DexViewOf(*dex), descriptor, &class_def_access, &error))
-      return Fail(why, "class definition unavailable: " + error);
-    const uint32_t expected = class_def_access &
-        ((class_def_access & evolution::kAccInterface) ? kValidInterface : kValidClass);
-    if ((klass.access_flags & kAccJavaFlagsMask) != expected)
-      return Fail(why, "class access flags differ");
-    return true;
-  }
-
-  // ART's Class.java field table confirms each slot before reading any array,
-  // including the shared nonnull empty arrays used by newer ART modules.
-  // Named target fields must then lie in arrays containing exactly the JVMTI fields.
-  static bool VerifyFields(Class* klass, void* class_type,
-                           const evolution::ClassSchema& live, std::string* why) {
-    const auto arrays = FieldArrays(*klass);
-    const auto slots = FieldArraySlots(*klass);
-    size_t count = 0;
-    for (size_t i = 0; i < arrays.size(); ++i) {
-      uint32_t length = 0;
-      const auto offset = static_cast<uint32_t>(
-          reinterpret_cast<uintptr_t>(slots[i]) - reinterpret_cast<uintptr_t>(klass));
-      if (!ProbeFieldArray(class_type, FieldArrayName(*klass, i), offset, arrays[i],
-                           find_declared_instance_field, &length))
-        return Fail(why, "field array slot differs: " + std::string(FieldArrayName(*klass, i)));
-      count += length;
-    }
-    if (count != live.fields.size()) return Fail(why, "field count differs");
-    std::vector<std::pair<ArtField*, const evolution::Member*>> found;
-    for (const auto& member : live.fields) {
-      ArtField* field = (member.IsStatic() ? find_static_field : find_declared_instance_field)(
-          klass, member.name, member.descriptor);
-      if (!field) return Fail(why, "ART did not find field " + member.name);
-      bool placed = false;
-      for (size_t i = 0; i < arrays.size() && !placed; ++i) {
-        const uintptr_t first = static_cast<uintptr_t>(arrays[i]) + sizeof(uint32_t);
-        const uintptr_t at = reinterpret_cast<uintptr_t>(field);
-        placed = arrays[i] && at >= first && at - first < size_t{UINT16_MAX} * sizeof(ArtField) &&
-            (at - first) % sizeof(ArtField) == 0;
-      }
-      if (!placed) return Fail(why, "field " + member.name + " is outside the declared arrays");
-      found.emplace_back(field, &member);
-    }
-    const DexFilePrefix* dex = DexOf(klass->dex_cache);
-    if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
-    const evolution::DexView view = DexViewOf(*dex);
-    for (const auto& [field, member] : found) {
-      bool inside = false;
-      for (uint64_t array : arrays) inside |= array && Members<ArtField>(array)->Contains(field);
-      evolution::Member identity;
-      std::string error;
-      if (!inside || field->declaring_class != Reference(klass) ||
-          (field->access_flags & kAccJavaFlagsMask) != member->access ||
-          !evolution::ReadFieldIdentity(view, field->dex_field_index, &identity, &error) ||
-          identity.name != member->name || identity.descriptor != member->descriptor)
-        return Fail(why, "field declaration differs: " + member->name);
-    }
-    return true;
-  }
-
-  static bool VerifyMethods(Class* klass, const evolution::ClassSchema& live, std::string* why) {
-    std::set<std::tuple<std::string, std::string, uint32_t>> expected;
-    for (const auto& member : live.methods)
-      expected.emplace(member.name, member.descriptor, member.access);
-    auto* methods = Members<Method>(klass->methods);
-    if (!methods) return expected.empty() ? true : Fail(why, "class has no methods array");
-    const DexFilePrefix* dex = DexOf(klass->dex_cache);
-    if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
-    const evolution::DexView view = DexViewOf(*dex);
-    size_t declared = 0;
-    for (uint32_t i = 0; i < methods->length; ++i) {
-      Method* method = methods->At(i);
-      if (method->declaring_class != Reference(klass)) continue;
-      const uint32_t flags = method->access_flags.load(std::memory_order_relaxed);
-      evolution::Member identity;
-      std::string error;
-      if ((flags & kAccObsoleteMethod) ||
-          !evolution::ReadMethodIdentity(view, method->dex_method_index, &identity, &error) ||
-          !expected.count({identity.name, identity.descriptor,
-                           structural_policy::MethodModifiers(flags)}))
-        return Fail(why, "method declaration differs");
-      ++declared;
-    }
-    if (declared != expected.size()) return Fail(why, "method count differs");
-    return true;
-  }
-
-  static bool VerifyTarget(void* klass, void* class_type,
-                           const evolution::ClassSchema& live, std::string* why) {
-    auto* declared = static_cast<Class*>(klass);
-    return declared && VerifyAccess(*declared, live.descriptor, why) &&
-        VerifyFields(declared, class_type, live, why) && VerifyMethods(declared, live, why);
-  }
-
-  // After ART allocated the replacement classes: the holder's class slots
-  // must name the target and a class loaded from the incoming DEX.
-  static bool VerifyIter(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
-                         std::string* why) {
-    const auto* old_classes = data.Classes(true);
-    const auto* new_classes = data.Classes(false);
-    // A non-structural redefinition keeps its class and fills neither slot.
-    if (!old_classes && !new_classes) return true;
-    if (!old_classes || !new_classes || old_classes->length < 1 ||
-        old_classes->length != new_classes->length)
-      return Fail(why, "redefinition class slots are malformed");
-    if (old_classes->Get<void>(0) != mirror_class(self))
-      return Fail(why, "redefinition slot does not hold the target class");
-    for (int32_t i = 0; i < new_classes->length; ++i) {
-      auto* old_class = old_classes->Get<Class>(i);
-      auto* new_class = new_classes->Get<Class>(i);
-      if (!old_class || !new_class) return Fail(why, "redefinition class slot is empty");
-      if (i == 0 && DexOf(new_class->dex_cache) != self->dex_file)
-        return Fail(why, "replacement class does not use the incoming DEX");
-      auto* methods = Members<Method>(new_class->methods);
-      for (uint32_t j = 0; methods && j < methods->length; ++j)
-        if (!methods->At(j)->declaring_class) return Fail(why, "replacement method is unlinked");
-    }
-    return true;
-  }
+template <typename Class, typename Method> struct Planner : class_layout::View<Class, Method> {
+  using class_layout::View<Class, Method>::FieldArrays;
 
   // Each old field maps to the new declaration of the same name, type and
   // storage, as in ART's mapping. A field without one was accepted for
@@ -551,45 +378,13 @@ template <typename Class, typename Method> struct Layout {
     return true;
   }
 
-  static uint32_t Access(const void* klass) {
-    return static_cast<const Class*>(klass)->access_flags & kAccJavaFlagsMask;
-  }
-  static uint32_t* Superclass(void* klass) { return &static_cast<Class*>(klass)->super_class; }
-
-  static constexpr LayoutOps Ops(int android) {
-    return {android, VerifyTarget, VerifyIter, Plan, FieldSlot, Access, Superclass};
+  static constexpr PlanOps Make(int) {
+    return {Plan, Planner::FieldSlot, Planner::Superclass};
   }
 };
 
-// One entry per AOSP release whose declarations are in platform/abi/arm64.
-const LayoutOps kLayouts[] = {
-    Layout<abi::android11::Class, abi::android11::ArtMethod>::Ops(11),
-    Layout<abi::android12::Class, abi::ArtMethod>::Ops(12),
-    Layout<abi::android13::Class, abi::ArtMethod>::Ops(13),
-    Layout<abi::android14::Class, abi::ArtMethod>::Ops(14),
-    Layout<abi::android15::Class, abi::ArtMethod>::Ops(15),
-    Layout<abi::android16::Class, abi::ArtMethod>::Ops(16),
-    Layout<abi::android17::Class, abi::ArtMethod>::Ops(17)};
-constexpr size_t kLayoutCount = sizeof(kLayouts) / sizeof(kLayouts[0]);
-using LayoutMask = uint32_t;
-static_assert(kLayoutCount <= 32);
-
-// The ART module is never older than the platform release, so older layouts
-// are not candidates. The platform's own release is tried first, then newer
-// ones; all of them share the ArtMethod stride a wrong guess could over-read.
-int PlatformRelease() {
-  const int api = android_get_device_api_level();
-  return api <= 30 ? 11 : api <= 32 ? 12 : api - 20;
-}
-std::vector<size_t> CandidateOrder() {
-  const int platform = PlatformRelease();
-  std::vector<size_t> order;
-  for (size_t i = 0; i < kLayoutCount; ++i)
-    if (kLayouts[i].android == platform) order.push_back(i);
-  for (size_t i = 0; i < kLayoutCount; ++i)
-    if (kLayouts[i].android > platform) order.push_back(i);
-  return order;
-}
+// Indexed like class_layout's probes.
+const auto kPlanners = class_layout::Table<Planner, PlanOps>();
 
 // This transaction's mapping plans, by RedefinitionDataIter index.
 struct Plans final : transaction::Part {
@@ -602,19 +397,9 @@ const MappingPlan* PlanOf(const transaction::Context* context, int32_t index) {
   return found == plans->by_index.end() ? nullptr : &found->second;
 }
 
-// The first layout in candidate order that every probe of this transaction accepted.
-const LayoutOps* Selected(const transaction::Context* context) {
-  if (!context || !context->probed) return nullptr;
-  for (size_t i : CandidateOrder())
-    if (context->layouts & (LayoutMask{1} << i)) return &kLayouts[i];
-  return nullptr;
-}
 
-// GetMirrorClass reads only driver_->self_ and klass_ (ti_redefine.cc, 11--17),
-// so it decodes any class reference in a redefinition's thread.
 void* DecodeClass(ClassRedefinitionPrefix* self, jclass klass) {
-  ClassRedefinitionPrefix lookup{self->driver, klass, nullptr};
-  return mirror_class(&lookup);
+  return class_layout::DecodeClass(mirror_class, self, klass);
 }
 
 template <typename F> void* Fn(F function) { return reinterpret_cast<void*>(function); }
@@ -762,12 +547,8 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   }
   if (!context->probed) return true;
   std::string why;
-  for (size_t i = 0; i < kLayoutCount; ++i) {
-    const LayoutMask bit = LayoutMask{1} << i;
-    if ((context->layouts & bit) && !kLayouts[i].verify_iter(self, *data, &why))
-      context->layouts &= ~bit;
-  }
-  if (const LayoutOps* layout = Selected(context)) {
+  if (const int selected = class_layout::VerifyReplacements(self, *data, &why); selected >= 0) {
+    const PlanOps* layout = &kPlanners[selected];
     MappingPlan plan;
     if (layout->plan(*data, &plan, &why)) {
       if (const transaction::Requirements* target = context->Find(self); target && target->superclass) {
@@ -788,12 +569,12 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         return false;
       }
       // Later redefinitions of this batch are planned with the same layout.
-      context->layouts = LayoutMask{1} << (layout - kLayouts);
+      class_layout::Select(selected);
       if (!context->mapping) context->mapping = std::make_unique<Plans>();
       static_cast<Plans*>(context->mapping.get())->by_index[data->index] = std::move(plan);
       return true;
     }
-    context->layouts = 0;
+    class_layout::Select(-1);
     context->mapping.reset();
   }
   Report("rejected: " + why);
@@ -837,7 +618,7 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
   const MappingPlan* plan = PlanOf(context, data.index);
   // Every thread is suspended and moving GC is off: the old classes' native
   // field-array slots can be swapped without barriers; ART only iterates them.
-  if (const LayoutOps* layout = plan ? Selected(context) : nullptr) {
+  if (const PlanOps* layout = plan ? &kPlanners[class_layout::Selected()] : nullptr) {
     auto* old_classes = data.Classes(true);
     for (const auto& swap : plan->field_swaps) {
       uint64_t* slot = layout->field_slot(old_classes->Get<void>(swap.class_index), swap.slot);
@@ -1424,6 +1205,7 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   }
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
+  class_layout::Enable({find_static_field, find_declared_instance_field, mirror_class, class_type_root});
   Report("unverified");
 }
 bool Available() { return available; }
@@ -1498,56 +1280,6 @@ void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placehol
   field_retirement_available = true;
 }
 
-std::vector<int> CandidateReleases(bool verified_only) {
-  const transaction::Context* context = transaction::Current();
-  std::vector<int> releases;
-  for (size_t i : CandidateOrder())
-    if (!verified_only || (context && context->probed && (context->layouts & (LayoutMask{1} << i))))
-      releases.push_back(kLayouts[i].android);
-  return releases;
-}
-
-bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
-  transaction::Context* context = transaction::Current();
-  if (!available || !context) return false;
-  void* klass = mirror_class(self);
-  void* class_type = DecodeClass(self, class_type_root);
-  if (!class_type) return false;
-  LayoutMask accepted = 0;
-  std::string why;
-  for (size_t i : CandidateOrder()) {
-    std::string reason;
-    if (kLayouts[i].verify_target(klass, class_type, live, &reason))
-      accepted |= LayoutMask{1} << i;
-    else if (why.empty())  // The platform's own release is probed first.
-      why = "android" + std::to_string(kLayouts[i].android) + ": " + reason;
-  }
-  if (why.empty()) why = "no candidate layout for this platform";
-  context->probed = true;
-  context->layouts &= accepted;
-  const LayoutOps* layout = Selected(context);
-  Report(layout ? "verified: android" + std::to_string(layout->android) + " class layout"
-                : "rejected: " + why);
-  return layout != nullptr;
-}
-
-bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
-  const transaction::Context* context = transaction::Current();
-  if (!available || !context || !context->probed) return false;
-  const void* mirror = DecodeClass(self, klass);
-  if (!mirror) return false;
-  std::optional<uint32_t> agreed;
-  for (size_t i = 0; i < kLayoutCount; ++i) {
-    if (!(context->layouts & (LayoutMask{1} << i))) continue;
-    const uint32_t flags = kLayouts[i].access(mirror);
-    if (agreed && *agreed != flags) return false;
-    agreed = flags;
-  }
-  if (!agreed) return false;
-  *access = *agreed;
-  return true;
-}
-
 void RetainRoots(std::vector<jobject> roots) {
   std::lock_guard<std::mutex> lock(roots_mutex);
   retained_roots.insert(retained_roots.end(), roots.begin(), roots.end());
@@ -1560,10 +1292,6 @@ bool Rooted(JNIEnv* jni, jclass klass) {
   }
   for (jobject root : roots) if (jni->IsSameObject(root, klass)) return true;
   return false;
-}
-std::string MemberMappingState() {
-  std::lock_guard<std::mutex> lock(state_mutex);
-  return mapping_state;
 }
 uint64_t JniRetirementGuardHits() {
   return jni_retirement_guards.load(std::memory_order_relaxed);

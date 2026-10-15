@@ -15,6 +15,7 @@
 #include "shadowhook.h"
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/art_dex_view.h"
+#include "platform/common/class_layout.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/method_retirement.h"
@@ -794,17 +795,17 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     return reinterpret_cast<Check>(original_class)(self);
   auto& snapshot = found->second;
   structural_policy::Abilities abilities;
-  abilities.member_mapping = method_retirement::VerifyTarget(self, snapshot.live);
+  abilities.member_mapping = class_layout::VerifyTarget(self, snapshot.live);
   for (auto& [descriptor, type] : snapshot.hierarchy.added_interfaces) {
     uint32_t access = 0;
     type.access.reset();
-    if (method_retirement::ClassAccess(self, snapshot.interface_classes.at(descriptor), &access))
+    if (class_layout::ClassAccess(self, snapshot.interface_classes.at(descriptor), &access))
       type.access = access;
   }
   if (auto& superclass = snapshot.hierarchy.new_superclass) {
     uint32_t access = 0;
     superclass->access.reset();
-    if (method_retirement::ClassAccess(self, snapshot.superclass_class, &access))
+    if (class_layout::ClassAccess(self, snapshot.superclass_class, &access))
       superclass->access = access;
   }
   abilities.field_retirement =
@@ -1009,7 +1010,7 @@ std::string Capabilities() {
           (methods && method_retirement::SuperclassChangeAvailable() ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
-      ",\"memberMapping\":" + QuoteJsonMutf8(method_retirement::MemberMappingState()) +
+      ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +

@@ -22,6 +22,7 @@
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/art_hook.h"
+#include "platform/common/class_layout.h"
 #include "platform/common/interface_snapshot.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -231,11 +232,11 @@ const char* SelectRuntime(Handle klass, const Target& target) {
   }
   RedefinerPrefix driver{nullptr, 0, nullptr, current_thread()};
   ClassRedefinitionPrefix context{&driver, target.klass, nullptr};
-  if (!method_retirement::VerifyTarget(&context, target.live)) {
+  if (!class_layout::VerifyTarget(&context, target.live)) {
     return "interface target is unsupported by Class member probes";
   }
   bool supported_candidate = false;
-  for (int release : method_retirement::CandidateReleases(true)) {
+  for (int release : class_layout::CandidateReleases(true)) {
     const InterfaceRuntime* candidate = RuntimeFor(release);
     if (!candidate) continue;
     supported_candidate = true;
@@ -909,7 +910,7 @@ void Begin(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* d
 #endif
   if (!Available() || count <= 0 || !definitions) return;
   void* thread = current_thread();
-  for (int release : method_retirement::CandidateReleases(false)) {
+  for (int release : class_layout::CandidateReleases(false)) {
     const auto* candidate = RuntimeFor(release);
     if (candidate && VerifyThread(*candidate, thread, jni)) {
       next->runtime = candidate;

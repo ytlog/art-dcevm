@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
       abi::LengthPrefixedArray<abi::ArtField> empty{0}, populated{2};
       uint32_t length = 99;
       const auto probe = [&](uint64_t array) {
-        return method_retirement::ProbeFieldArray(type, "fields", 40, array, lookup, &length);
+        return class_layout::ProbeFieldArray(type, "fields", 40, array, lookup, &length);
       };
       Require(probe(reinterpret_cast<uintptr_t>(&empty)) && length == 0,
               "ART shared nonnull empty field array was rejected");
@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
       Require(!probe(1), "static field was accepted as a Class instance slot");
       slot.access_flags = acc::kAccPrivate; slot.declaring_class = 0x2000;
       Require(!probe(1), "field slot from a different class was accepted");
-      Require(!method_retirement::ProbeFieldArray(type, "missing", 40, 1, lookup, &length),
+      Require(!class_layout::ProbeFieldArray(type, "missing", 40, 1, lookup, &length),
               "missing Class slot was accepted");
       Require(abi::android13::kFieldArrayNames[0] == std::string_view("iFields") &&
               abi::android13::kFieldArrayNames[1] == std::string_view("sFields") &&

@@ -14,6 +14,7 @@ add_library(artdcevm SHARED
   evolution/dex_schema.cc
   platform/common/schema_snapshot.cc
   platform/common/structural_policy.cc
+  platform/common/class_layout.cc
   platform/common/transaction_context.cc
   platform/common/method_retirement.cc
   platform/common/interface_snapshot.cc
