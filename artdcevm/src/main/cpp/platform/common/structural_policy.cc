@@ -279,7 +279,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       // An interface's virtual methods own iftable slots in every implementation.
       if (interface_target && (!interface_members || Virtual(old.access)))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
-                      "interface redefinition does not support retiring " + Describe(old));
+                      "unsupported interface method retirement: " + Describe(old));
       decision.methods_structural = true;
       decision.retired_methods.push_back(old);
       continue;
