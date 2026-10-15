@@ -982,7 +982,7 @@ Scope::~Scope() {
   runtime = old->previous_runtime;
   delete old;
 }
-void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
+void Prepare(std::vector<Hook>* hooks, std::string* note) {
   available = false;
   disabled_reason.store(nullptr);
   verified_release.store(0);
@@ -1027,7 +1027,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
     reject("interface redefinition named services unavailable");
     return;
   }
-  std::vector<method_retirement::Hook> resolved;
+  std::vector<Hook> resolved;
   const symbols::NamedSymbol names[] = {kCanNormal, kGetNormal, kCanStructural, kGetStructural};
   void* replacements[] = {reinterpret_cast<void*>(NormalCan), reinterpret_cast<void*>(NormalGet),
       reinterpret_cast<void*>(StructuralCan), reinterpret_cast<void*>(StructuralGet)};

@@ -6,15 +6,10 @@
 #include <string>
 #include <vector>
 #include "evolution/class_schema.h"
+#include "platform/common/art_hook.h"
 #include "platform/abi/arm64/common/redefinition.h"
 
 namespace artdcevm::method_retirement {
-struct Hook {
-  void* target;
-  void* replacement;
-  void** original;
-  const char* name;
-};
 // Resolve the retirement hooks by name and install the JNI Call*Method* guards
 // through JVMTI's function-table override. When a name is missing, the NDK map
 // layout differs or the override fails, no hook is added, members cannot retire

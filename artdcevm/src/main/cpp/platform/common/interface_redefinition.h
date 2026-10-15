@@ -7,7 +7,7 @@
 #include "platform/common/method_retirement.h"
 
 namespace artdcevm::interface_redefinition {
-void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note);
+void Prepare(std::vector<Hook>* hooks, std::string* note);
 bool Available();
 struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 // Diagnostics for the latest capture on the calling transaction thread.

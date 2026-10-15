@@ -951,7 +951,6 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   structural_entry = reinterpret_cast<Entry>(addresses[1]);
   record_field = reinterpret_cast<Record>(addresses[5]);
   record_method = reinterpret_cast<Record>(addresses[6]);
-  using method_retirement::Hook;
   std::vector<Hook> replacements;
   std::string retirement_note;
   method_retirement::Prepare(vm, env, &replacements, &retirement_note);
