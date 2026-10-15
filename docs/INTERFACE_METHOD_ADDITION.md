@@ -137,7 +137,6 @@
 设备侧（API 33 与 API 36，普通模式与 CheckJNI 模式）：
 
 - API 36 须同时覆盖使用共享空字段数组的 ART 模块（Android 16 QPR2）。本设计的 fixture 接口都没有字段，这类设备上的接口准入依赖成员探测接受共享空数组（提交 `a8a427a3`）。
-
 - 新增 fixture 变体，用 javac 编译的 lambda 产生 `$r8$lambda$` 桥：
   - 追加 default、追加 private static、追加 private 实例方法。
   - 在 default 方法里追加 lambda、在已有 lambda 之前插入 lambda（同批重定义合成 lambda 类并新增类）。
@@ -151,7 +150,7 @@
 
 ## 实施顺序
 
-前置：提交 `a8a427a3`（成员探测接受共享空字段数组）先合入 main，后续步骤以它为基线。
+基线：成员探测接受共享空字段数组（`a8a427a3`）已合入 main。它在 Android 16 QPR2 OEM 设备上的修复版重跑仍待完成，那次重跑也是本设计设备验证的前提。
 
 1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。
 2. 快照事实：在 `structural_redefine_engine.cc` 收集父接口虚方法和实现类链上的 static/非 public 身份。
