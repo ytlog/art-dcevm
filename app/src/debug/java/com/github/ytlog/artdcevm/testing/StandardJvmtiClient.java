@@ -27,6 +27,9 @@ final class StandardJvmtiClient {
 
     /** Resolve IDs before redefinition; invocation deliberately retains those exact IDs. */
     static native void cacheMethodIds(Class<?> type);
+    /** Capture interface lambda bridges taking exactly one interface receiver. */
+    static native void cacheInterfaceStaticMethods(Class<?> type, Method[] methods);
+    static native int callInterfaceStatic(Object receiver, int method);
     static native int callCachedMethod(Object receiver, int method);
     static native int callReflectedMethod(Method method, Object receiver, int kind);
     /** form 1 passes a jvalue array; form 2 passes an explicitly constructed va_list. */

@@ -9,6 +9,7 @@ import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -306,6 +307,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runPointerIdScenarios();
         runCopiedDefaultScenario();
         runInterfaceStressScenario();
+        runInterfaceEvolutionScenarios();
+        runInterfaceStressAdditionScenario();
         runInterfaceScenarios();
         runSuperclassScenarios();
         runPreloadScenarios();
@@ -914,6 +917,365 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("oldChildVirtual", 92, child.copiedValue());
             scenario.check("newChild", 92, new CopiedChild().copiedValue());
             scenario.check("parentValue", 90, child.parentValue());
+        });
+    }
+
+    private void runInterfaceEvolutionScenarios() throws Exception {
+        InterfaceEvolutionFixture.Implementation instance = new InterfaceEvolutionFixture.Implementation();
+        instance.marker = 73;
+        InterfaceDirectTargets signature = new InterfaceDirectTargets(InterfaceEvolutionFixture.Contract.class, instance);
+        runScenario("interface-members-add", 0, scenario -> {
+            signature.checkLive(scenario);
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Contract.class}, "interface-members-add");
+            scenario.check("oldAdded", 110, InterfaceEvolutionFixture.Contract.class.getMethod("added").invoke(instance));
+            scenario.check("newAdded", 110, InterfaceEvolutionFixture.Contract.class.getMethod("added")
+                    .invoke(new InterfaceEvolutionFixture.Implementation()));
+            scenario.check("oldDispatch", 63, instance.virtualValue());
+            scenario.check("marker", 73, instance.marker);
+            String[] methods = {"staticAdded", "publicAdded", "packageAdded", "protectedAdded", "syntheticAdded"};
+            int[] values = {10, 12, 13, 14, 15};
+            int[] flags = {10, 9, 8, 12, 0x1009};
+            for (int i = 0; i < methods.length; ++i) {
+                Method method = InterfaceEvolutionFixture.Contract.class.getDeclaredMethod(methods[i]);
+                method.setAccessible(true);
+                scenario.check(methods[i], values[i], method.invoke(null));
+                scenario.check(methods[i] + "Flags", flags[i], method.getModifiers());
+            }
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 110, InterfaceEvolutionFixture.Contract.class.getMethod("added").invoke(instance));
+        });
+        runScenario("interface-members-signature", 0, scenario -> {
+            signature.checkLive(scenario);
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Contract.class}, "interface-members-signature");
+            signature.checkRetired(scenario, "");
+            scenario.expectError("bytecodeDirect", NoSuchMethodError.class, instance::throughDirect);
+            scenario.expectError("bytecodeStatic", NoSuchMethodError.class, instance::throughStatic);
+            Method direct = InterfaceEvolutionFixture.Contract.class.getDeclaredMethod("directValue", int.class);
+            direct.setAccessible(true);
+            scenario.check("newDirect", 161, direct.invoke(instance, 1));
+            scenario.check("newStatic", 182, InterfaceEvolutionFixture.Contract.class
+                    .getDeclaredMethod("staticValue", int.class).invoke(null, 2));
+            scenario.check("oldDispatch", 63, instance.virtualValue());
+            scenario.check("marker", 73, instance.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            signature.checkRetired(scenario, "AfterGc");
+            scenario.check("afterGc", 63, instance.virtualValue());
+        });
+        InterfaceEvolutionFixture.DeleteImpl deleted = new InterfaceEvolutionFixture.DeleteImpl();
+        InterfaceDirectTargets deletion = new InterfaceDirectTargets(InterfaceEvolutionFixture.Deletion.class, deleted);
+        runScenario("interface-members-delete", 0, scenario -> {
+            deletion.checkLive(scenario);
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Deletion.class}, "interface-members-delete");
+            deletion.checkRetired(scenario, "");
+            scenario.expectError("bytecodeDirect", NoSuchMethodError.class, deleted::throughDirect);
+            scenario.expectError("bytecodeStatic", NoSuchMethodError.class, deleted::throughStatic);
+            scenario.check("oldDispatch", 63, deleted.virtualValue());
+            scenario.check("newDispatch", 63, new InterfaceEvolutionFixture.DeleteImpl().virtualValue());
+            System.gc(); System.runFinalization(); System.gc();
+            deletion.checkRetired(scenario, "AfterGc");
+            scenario.check("afterGc", 63, deleted.virtualValue());
+        });
+        InterfaceEvolutionFixture.RootImpl root = new InterfaceEvolutionFixture.RootImpl();
+        InterfaceEvolutionFixture.ChildImpl child = new InterfaceEvolutionFixture.ChildImpl();
+        InterfaceEvolutionFixture.PublicImpl publicImpl = new InterfaceEvolutionFixture.PublicImpl();
+        root.marker = 79; child.marker = 83;
+        runScenario("interface-default-add", 0, scenario -> {
+            scenario.check("before", 20, root.inherited());
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Root.class}, "interface-default-add");
+            Method added = InterfaceEvolutionFixture.Root.class.getMethod("added");
+            scenario.check("copiedDefault", 60, added.invoke(root));
+            scenario.check("newCopiedDefault", 60, added.invoke(new InterfaceEvolutionFixture.RootImpl()));
+            scenario.check("subinterfaceWins", 70, added.invoke(child));
+            scenario.check("publicClassWins", 80, added.invoke(publicImpl));
+            scenario.check("overridesParent", 50, root.inherited());
+            scenario.check("oldDispatch", 1, root.value());
+            scenario.check("marker", 79, root.marker);
+            scenario.check("childMarker", 83, child.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 60, added.invoke(root));
+            scenario.check("childAfterGc", 70, added.invoke(child));
+        });
+        InterfaceEvolutionFixture.MirandaImpl miranda = new InterfaceEvolutionFixture.MirandaImpl();
+        InterfaceEvolutionFixture.MirandaRoot viaMiranda = miranda;
+        runScenario("interface-miranda-prepare", 0, scenario -> {
+            scenario.check("before", 9, viaMiranda.miranda());
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.MirandaImpl.class}, "interface-miranda-prepare");
+            scenario.expectError("miranda", AbstractMethodError.class, viaMiranda::miranda);
+            scenario.check("stable", 7, viaMiranda.stable());
+        });
+        runScenario("interface-miranda-add", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.MirandaRoot.class}, "interface-miranda-add");
+            scenario.check("oldMiranda", 99, viaMiranda.miranda());
+            scenario.check("newMiranda", 99, new InterfaceEvolutionFixture.MirandaImpl().miranda());
+            scenario.check("stable", 7, viaMiranda.stable());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 99, viaMiranda.miranda());
+        });
+        InterfaceEvolutionFixture.Diamond diamond = new InterfaceEvolutionFixture.Diamond();
+        diamond.marker = 89;
+        String leftSchema = memberSchema(InterfaceEvolutionFixture.Left.class);
+        String diamondSchema = memberSchema(InterfaceEvolutionFixture.Diamond.class);
+        runScenario("interface-default-conflict", 63, scenario -> {
+            scenario.check("before", 21, diamond.conflict());
+            scenario.expectRejectionBy(InterfaceEvolutionFixture.Diamond.class);
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Left.class}, "interface-default-conflict");
+            String reason = DcevmRuntime.capabilities().getString("lastRejection");
+            scenario.check("rejectionReason", true, reason.contains("Diamond;: conflict()I")
+                    && reason.contains("conflict between unrelated interface defaults"));
+            scenario.check("unchangedInterface", leftSchema, memberSchema(InterfaceEvolutionFixture.Left.class));
+            scenario.check("unchangedImplementation", diamondSchema, memberSchema(InterfaceEvolutionFixture.Diamond.class));
+            scenario.check("oldDispatch", 21, diamond.conflict());
+            scenario.check("oldLeft", 11, diamond.left());
+            scenario.check("newDispatch", 21, new InterfaceEvolutionFixture.Diamond().conflict());
+            scenario.check("marker", 89, diamond.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 21, diamond.conflict());
+        });
+        InterfaceEvolutionFixture.HidingImpl hiding = new InterfaceEvolutionFixture.HidingImpl();
+        for (String kind : new String[]{"static", "private"}) {
+            String name = "interface-hide-parent-" + kind;
+            String schema = memberSchema(InterfaceEvolutionFixture.Hiding.class);
+            runScenario(name, 63, scenario -> {
+                scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Hiding.class}, name);
+                scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                        .contains("hides an inherited interface method: clash()I"));
+                scenario.check("unchangedMembers", schema, memberSchema(InterfaceEvolutionFixture.Hiding.class));
+                scenario.check("oldDispatch", 31, hiding.clash());
+                scenario.check("newDispatch", 31, new InterfaceEvolutionFixture.HidingImpl().clash());
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", 31, hiding.clash());
+            });
+        }
+        InterfaceEvolutionFixture.ObjectImpl object = new InterfaceEvolutionFixture.ObjectImpl();
+        int oldHash = object.hashCode();
+        runScenario("interface-hide-object", 63, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.ObjectHiding.class}, "interface-hide-object");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                    .contains("hides an inherited interface method: hashCode()I"));
+            scenario.check("oldHash", oldHash, object.hashCode());
+            scenario.check("oldDispatch", 41, object.stable());
+            scenario.check("newDispatch", 41, new InterfaceEvolutionFixture.ObjectImpl().stable());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 41, object.stable());
+        });
+        Object[] shadows = {new InterfaceEvolutionFixture.StaticImpl(), new InterfaceEvolutionFixture.PrivateImpl(),
+                new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl()};
+        Class<?>[] contracts = {InterfaceEvolutionFixture.StaticShadow.class, InterfaceEvolutionFixture.PrivateShadow.class,
+                InterfaceEvolutionFixture.ProtectedShadow.class, InterfaceEvolutionFixture.PackageShadow.class};
+        String[] kinds = {"static", "private", "protected", "package"};
+        String[] owners = {"StaticBase", "PrivateImpl", "ProtectedBase", "PackageBase"};
+        for (int i = 0; i < kinds.length; ++i) {
+            final int index = i;
+            String name = "interface-shadow-" + kinds[i];
+            Class<?> type = contracts[i]; Object receiver = shadows[i];
+            Method stable = type.getMethod("stable");
+            String schema = memberSchema(type);
+            runScenario(name, 63, scenario -> {
+                scenario.redefine(new Class<?>[]{type}, name);
+                scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                        .contains("InterfaceEvolutionFixture$" + owners[index] + ";: shadow()I"));
+                scenario.check("unchangedMembers", schema, memberSchema(type));
+                scenario.check("oldDispatch", 51 + 10 * index, stable.invoke(receiver));
+                Object fresh = receiver.getClass().getConstructor().newInstance();
+                scenario.check("newDispatch", 51 + 10 * index, stable.invoke(fresh));
+                scenario.check("oldShadow", 52 + 10 * index, index == 0
+                        ? InterfaceEvolutionFixture.StaticBase.shadow()
+                        : receiver.getClass().getMethod("oldCall").invoke(receiver));
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", 51 + 10 * index, stable.invoke(receiver));
+            });
+        }
+        InterfaceEvolutionFixture.BridgeImpl bridge = new InterfaceEvolutionFixture.BridgeImpl();
+        InterfaceEvolutionFixture.BridgeParent<Integer> erased = bridge;
+        runScenario("interface-bridge-add", 0, scenario -> {
+            scenario.check("before", 90, erased.result());
+            scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.BridgeImpl.class,
+                    InterfaceEvolutionFixture.BridgeContract.class}, "interface-bridge-add", "interface-bridge-add");
+            scenario.check("oldBridge", 90, erased.result());
+            scenario.check("newBridge", 90, new InterfaceEvolutionFixture.BridgeImpl().result());
+            Method added = InterfaceEvolutionFixture.BridgeContract.class.getMethod("added");
+            scenario.check("oldAdded", 91, added.invoke(bridge));
+            scenario.check("newAdded", 91, added.invoke(new InterfaceEvolutionFixture.BridgeImpl()));
+            boolean found = false;
+            for (Method method : InterfaceEvolutionFixture.BridgeImpl.class.getDeclaredMethods())
+                if (method.getName().equals("result") && method.getReturnType() == Object.class && method.isBridge()) found = true;
+            scenario.check("hasBridge", true, found);
+            scenario.check("addedBridge", true, InterfaceEvolutionFixture.BridgeImpl.class
+                    .getDeclaredMethod("added").isBridge());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("afterGc", 91, added.invoke(bridge));
+        });
+        runInterfaceLambdaScenarios();
+    }
+
+    /** The same JNI call forms as ordinary retirement, against interface IDs. */
+    private static final class InterfaceDirectTargets {
+        final Class<?> type;
+        final Object receiver;
+        final Method[] methods = new Method[2];
+        final MethodHandle[] handles = new MethodHandle[2];
+        InterfaceDirectTargets(Class<?> type, Object receiver) throws Exception {
+            this.type = type; this.receiver = receiver;
+            for (int i = 0; i < 2; ++i) {
+                methods[i] = type.getDeclaredMethod(i == 0 ? "directValue" : "staticValue");
+                methods[i].setAccessible(true);
+                handles[i] = MethodHandles.lookup().unreflect(methods[i]);
+            }
+            StandardJvmtiClient.cacheMethodIds(type);
+        }
+        void checkLive(Scenario scenario) throws Exception {
+            for (int i = 0; i < 2; ++i) {
+                scenario.check("reflectionBefore" + i, i == 0 ? 61 : 82, methods[i].invoke(i == 0 ? receiver : null));
+                for (int form = 0; form < 3; ++form)
+                    scenario.check("jniBefore" + i + form, i == 0 ? 61 : 82,
+                            StandardJvmtiClient.callCachedMethodVariant(receiver, i, form));
+            }
+        }
+        void checkRetired(Scenario scenario, String suffix) throws Exception {
+            for (int i = 0; i < 2; ++i) {
+                final int index = i;
+                scenario.expectError("lookup" + i + suffix, NoSuchMethodException.class,
+                        () -> type.getDeclaredMethod(index == 0 ? "directValue" : "staticValue"));
+                scenario.expectError("jniLookup" + i + suffix, NoSuchMethodError.class,
+                        () -> StandardJvmtiClient.lookupMethodId(type, index));
+                scenario.expectReflectionError("reflection" + i + suffix,
+                        () -> methods[index].invoke(index == 0 ? receiver : null));
+                scenario.expectError("handle" + i + suffix, NoSuchMethodError.class,
+                        () -> { if (index == 0) handles[index].invokeWithArguments(receiver);
+                                else handles[index].invokeWithArguments(); });
+                for (int form = 0; form < 3; ++form) {
+                    final int callForm = form;
+                    scenario.expectError("jni" + i + form + suffix, NoSuchMethodError.class,
+                            () -> StandardJvmtiClient.callCachedMethodVariant(receiver, index, callForm));
+                    scenario.expectError("reflectedJni" + i + form + suffix, NoSuchMethodError.class,
+                            () -> StandardJvmtiClient.callReflectedMethodVariant(methods[index], receiver, index, callForm));
+                }
+            }
+        }
+    }
+
+    private void runInterfaceLambdaScenarios() throws Exception {
+        com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaImpl instance =
+                new com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaImpl();
+        instance.marker = 97;
+        String path = "com/github/ytlog/artdcevm/fixture/interfacelambda";
+        String[] kinds = {"first", "append", "insert"};
+        int[] values = {5, 11, 111};
+        Method[] bytecodeCaller = new Method[1];
+        for (int i = 0; i < kinds.length; ++i) {
+            final int index = i;
+            String name = "interface-lambda-" + kinds[i];
+            List<Method> retired = new ArrayList<>();
+            List<MethodHandle> handles = new ArrayList<>();
+            if (i == 2) {
+                for (Method method : com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaContract.class.getDeclaredMethods()) {
+                    if (Modifier.isStatic(method.getModifiers()) && method.getParameterTypes().length == 1) {
+                        method.setAccessible(true); retired.add(method);
+                        handles.add(MethodHandles.lookup().unreflect(method));
+                    }
+                }
+                StandardJvmtiClient.cacheInterfaceStaticMethods(
+                        com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaContract.class, retired.toArray(new Method[0]));
+            }
+            runScenario(name, 0, scenario -> {
+                if (index == 2) {
+                    scenario.check("bytecodeBefore", 5, bytecodeCaller[0].invoke(null, instance));
+                    scenario.check("cachedStaticTargets", 4, retired.size());
+                    for (int target = 0; target < retired.size(); ++target) {
+                        int value = (Integer) retired.get(target).invoke(null, instance);
+                        scenario.check("liveStaticTarget" + target, true, value == 5 || value == 6);
+                        scenario.check("jniStaticBefore" + target, value,
+                                StandardJvmtiClient.callInterfaceStatic(instance, target));
+                    }
+                }
+                HotReloadTool tool = new HotReloadTool(context).prepare(name, path);
+                scenario.result.put("classification", tool.classification());
+                scenario.check("appendCode", 0, tool.appendCode);
+                scenario.check("redefinedTypes", index + 1, tool.existingClasses().length);
+                scenario.redefine(tool.existingClasses(), java.util.Collections.nCopies(index + 1, name).toArray(new String[0]));
+                scenario.check("oldDispatch", values[index], instance.value());
+                scenario.check("newDispatch", values[index],
+                        new com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaImpl().value());
+                scenario.check("marker", 97, instance.marker);
+                if (index == 1) {
+                    HotReloadTool caller = new HotReloadTool(context).prepare("interface-lambda-caller", path);
+                    scenario.check("callerAppendCode", 0, caller.appendCode);
+                    scenario.check("callerExistingTypes", 1, caller.existingClasses().length);
+                    // The fixture's interface is only a compile-time stub. Append
+                    // the new caller; keep the actual interface definition.
+                    bytecodeCaller[0] = Class.forName(path.replace('/', '.') + ".LambdaRetiredCaller")
+                            .getMethod("call", com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaContract.class);
+                    scenario.check("bytecodeBridge", 5, bytecodeCaller[0].invoke(null, instance));
+                }
+                if (index == 2) scenario.expectReflectionError("bytecodeBridge",
+                        () -> bytecodeCaller[0].invoke(null, instance));
+                int removed = 0;
+                for (int j = 0; j < retired.size(); ++j) {
+                    Method method = retired.get(j);
+                    try {
+                        com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaContract.class
+                                .getDeclaredMethod(method.getName(), method.getParameterTypes());
+                        continue;
+                    } catch (NoSuchMethodException expected) { ++removed; }
+                }
+                if (index == 2) scenario.check("retiredMethods", 2, removed);
+                checkRetiredLambdaMethods(scenario, instance, retired, handles, "");
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", values[index], instance.value());
+                checkRetiredLambdaMethods(scenario, instance, retired, handles, "AfterGc");
+                if (index == 2) scenario.expectReflectionError("bytecodeBridgeAfterGc",
+                        () -> bytecodeCaller[0].invoke(null, instance));
+            });
+        }
+    }
+
+    private static void checkRetiredLambdaMethods(Scenario scenario, Object instance,
+            List<Method> methods, List<MethodHandle> handles, String suffix) throws Exception {
+        int privateCount = 0, bridgeCount = 0;
+        for (int i = 0; i < methods.size(); ++i) {
+            Method method = methods.get(i);
+            try {
+                com.github.ytlog.artdcevm.fixture.interfacelambda.LambdaContract.class
+                        .getDeclaredMethod(method.getName(), method.getParameterTypes());
+                continue;
+            } catch (NoSuchMethodException expected) { /* The cached target was retired. */ }
+            String kind = Modifier.isPrivate(method.getModifiers()) ? "Private" : "Synthetic";
+            if (kind.equals("Private")) ++privateCount; else ++bridgeCount;
+            final int target = i;
+            scenario.expectReflectionError("retiredReflection" + kind + suffix, () -> method.invoke(null, instance));
+            scenario.expectError("retiredHandle" + kind + suffix, NoSuchMethodError.class,
+                    () -> handles.get(target).invokeWithArguments(instance));
+            scenario.expectError("retiredJni" + kind + suffix, NoSuchMethodError.class,
+                    () -> StandardJvmtiClient.callInterfaceStatic(instance, target));
+        }
+        if (!methods.isEmpty()) {
+            scenario.check("retiredPrivate" + suffix, 1, privateCount);
+            scenario.check("retiredSynthetic" + suffix, 1, bridgeCount);
+        }
+    }
+
+    private void runInterfaceStressAdditionScenario() throws Exception {
+        InterfaceStressTypes.Child[] instances = new InterfaceStressTypes.Child[200];
+        Class<?>[] types = new Class<?>[200];
+        for (int i = 0; i < instances.length; ++i) {
+            types[i] = Class.forName(InterfaceStressTypes.class.getName() + "$C"
+                    + String.format(java.util.Locale.ROOT, "%03d", i));
+            instances[i] = (InterfaceStressTypes.Child) types[i].getConstructor().newInstance();
+            instances[i].marker = i;
+        }
+        runScenario("interface-stress-add", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{StressContract.class}, "interface-stress-add");
+            Method added = StressContract.class.getMethod("added");
+            scenario.check("snapshotTypes", 207L, DcevmRuntime.capabilities().getLong("interfaceSnapshotTypes"));
+            for (int i = 0; i < instances.length; ++i) {
+                scenario.check("oldAdded" + i, 18, added.invoke(instances[i]));
+                scenario.check("oldDispatch" + i, 8, instances[i].value());
+                scenario.check("oldMarker" + i, i, instances[i].marker);
+                scenario.check("newAdded" + i, 18, added.invoke(types[i].getConstructor().newInstance()));
+            }
+            System.gc(); System.runFinalization(); System.gc();
+            for (int i = 0; i < instances.length; ++i)
+                scenario.check("afterGc" + i, 18, added.invoke(instances[i]));
         });
     }
 

@@ -160,7 +160,7 @@ def publish(staged, out, state, name, fingerprint):
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def strip_class_methods(data, removals):
+def strip_class_methods(data, removals, access_changes=(), renames=None):
     """Remove declared classfile methods while preserving caller bytecode verbatim.
 
     This validates fixture identities and supports the standalone JVM probe.
@@ -176,10 +176,11 @@ def strip_class_methods(data, removals):
     def number(size): return int.from_bytes(take(size), 'big')
     if take(4) != b'\xca\xfe\xba\xbe': raise ValueError('Invalid classfile magic')
     take(4)
-    pool = {}; count = number(2); index = 1
+    pool = {}; string_offsets = {}; count = number(2); index = 1
     while index < count:
         tag = number(1)
-        if tag == 1: pool[index] = take(number(2))
+        if tag == 1:
+            length = number(2); string_offsets[index] = (offset, length); pool[index] = take(length)
         elif tag in (3, 4, 9, 10, 11, 12, 17, 18): take(4)
         elif tag in (5, 6): take(8); index += 1
         elif tag in (7, 8, 16, 19, 20): take(2)
@@ -209,8 +210,25 @@ def strip_class_methods(data, removals):
     for identity in wanted:
         if sum(candidate == identity for candidate, _ in methods) != 1:
             raise ValueError('Method removal did not identify exactly one declaration')
-    kept = [raw for identity, raw in methods if identity not in wanted]
-    return data[:methods_offset] + struct.pack('>H', len(kept)) + b''.join(kept) + data[trailing_offset:]
+    changes = {(name.encode('utf-8'), descriptor.encode('utf-8')): access
+               for name, descriptor, access in access_changes}
+    if len(changes) != len(access_changes): raise ValueError('Duplicate classfile access change')
+    if any(identity in wanted or sum(candidate == identity for candidate, _ in methods) != 1
+           for identity in changes): raise ValueError('Classfile access change has no retained declaration')
+    if any(type(access) is not int or not 0 <= access <= 0xffff for access in changes.values()):
+        raise ValueError('Invalid classfile method access flags')
+    kept = [(struct.pack('>H', changes[identity]) + raw[2:] if identity in changes else raw)
+            for identity, raw in methods if identity not in wanted]
+    prefix = bytearray(data[:methods_offset])
+    for old, new in (renames or {}).items():
+        if not isinstance(old, str) or not isinstance(new, str) or not old.isascii() or not new.isascii() or len(old) != len(new):
+            raise ValueError('Classfile fixture names must have equal ASCII width')
+        found = [index for index in string_offsets if pool[index] == old.encode('ascii')]
+        if len(found) != 1 or new.encode('ascii') in pool.values():
+            raise ValueError('Classfile rename must identify one unique constant')
+        start, length = string_offsets[found[0]]
+        prefix[start:start + length] = new.encode('ascii')
+    return bytes(prefix) + struct.pack('>H', len(kept)) + b''.join(kept) + data[trailing_offset:]
 
 
 class FixtureDex:
@@ -296,8 +314,8 @@ class FixtureDex:
         return self.string(self.u32(at + 4)), '(' + ''.join(types) + ')' + self.type(self.u32(proto + 4))
 
 
-def strip_dex_methods(data, removals):
-    """Remove class_data definitions after D8, preserving all emitted instructions.
+def strip_dex_methods(data, removals, access_changes=()):
+    """Remove definitions or set fixture access flags after D8.
 
     D8 must see private declarations when it chooses invoke-direct. Removing a
     declaration before D8 silently changes that opcode to invoke-virtual. The
@@ -309,7 +327,27 @@ def strip_dex_methods(data, removals):
     if len(set(wanted)) != len(wanted): raise ValueError('Duplicate DEX method removal')
     if any(identity not in dex.declarations for identity in wanted):
         raise ValueError('DEX method removal did not identify a declaration')
-    groups = [[record for record in group if record[0] not in wanted] for group in dex.groups]
+    overrides = {(name, descriptor): access for name, descriptor, access in access_changes}
+    if len(overrides) != len(access_changes): raise ValueError('Duplicate DEX access change')
+    if any(identity not in dex.declarations or identity in wanted for identity in overrides):
+        raise ValueError('DEX access change did not identify a retained declaration')
+    if any(type(access) is not int or access < 0 or access > 0xffff for access in overrides.values()):
+        raise ValueError('Invalid DEX method access flags')
+    groups = [[], []]
+    result = bytearray(data)
+    for group in dex.groups:
+        for identity, index, access, code in group:
+            if identity in wanted: continue
+            replacement_access = overrides.get(identity, access)
+            if (replacement_access ^ access) & 8 and code:
+                # These fixtures change only an unused receiver to/from static.
+                # Keep register/code offsets, adjusting incoming argument words.
+                count = dex.u16(code + 2) + (-1 if replacement_access & 8 else 1)
+                if count < 0: raise ValueError('Invalid fixture receiver word count')
+                struct.pack_into('<H', result, code + 2, count)
+            direct = bool(replacement_access & (8 | 2)) or identity[0] in ('<init>', '<clinit>')
+            groups[0 if direct else 1].append((identity, index, replacement_access, code))
+    for group in groups: group.sort(key=lambda record: record[1])
     def leb(value):
         result = bytearray()
         while value >= 0x80:
@@ -324,8 +362,30 @@ def strip_dex_methods(data, removals):
             previous = index
     length = dex.class_data_end - dex.class_data
     if len(replacement) > length: raise ValueError('Fixture class data unexpectedly grew')
-    result = bytearray(data)
     result[dex.class_data:dex.class_data_end] = replacement + bytes(length - len(replacement))
+    result[12:32] = hashlib.sha1(result[32:]).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(result[12:]) & 0xffffffff)
+    return bytes(result)
+
+
+def rename_dex_strings(data, renames):
+    """Craft inherited/Object hiding that javac correctly refuses to express.
+
+    Equal-width spelling changes preserve every offset; enforce DEX's sorted
+    unique string table as well as its checksums instead of emitting a corrupt
+    file that would be rejected before the policy under test.
+    """
+    dex = FixtureDex(data)
+    strings = [dex.string(index) for index in range(dex.u32(56))]
+    replacements = [renames.get(value, value) for value in strings]
+    if replacements != sorted(set(replacements)): raise ValueError('Renamed strings are not sorted/unique')
+    result = bytearray(data)
+    for old, new in renames.items():
+        if old not in strings or not old.isascii() or not new.isascii() or len(old) != len(new):
+            raise ValueError('Invalid equal-width DEX string replacement')
+        offset = dex.u32(dex.item('strings', strings.index(old)))
+        _, offset = dex.leb(offset)
+        result[offset:offset + len(old)] = new.encode('ascii')
     result[12:32] = hashlib.sha1(result[32:]).digest()
     struct.pack_into('<I', result, 8, zlib.adler32(result[12:]) & 0xffffffff)
     return bytes(result)
@@ -337,6 +397,17 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
                     *map(str, sources)], check=True, env=env)
     recipe = variant / 'remove-methods.json'
     removals = {}
+    access_recipe = variant / 'method-access.json'
+    access_changes = json.loads(access_recipe.read_text()) if access_recipe.exists() else {}
+    rename_recipe = variant / 'rename-strings.json'
+    renames = json.loads(rename_recipe.read_text()) if rename_recipe.exists() else {}
+    if not isinstance(access_changes, dict) or not isinstance(renames, dict):
+        raise ValueError('Invalid DEX fixture recipe')
+    for relative, changes in access_changes.items():
+        if not isinstance(relative, str) or not (classes / relative).is_file() or not isinstance(changes, list):
+            raise ValueError('Access recipe must name a compiled class and method list')
+        if any(not isinstance(change, list) or len(change) != 3 for change in changes):
+            raise ValueError('Invalid access recipe entry')
     if recipe.exists():
         removals = json.loads(recipe.read_text())
         if not isinstance(removals, dict): raise ValueError('Invalid method removal recipe')
@@ -352,6 +423,21 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
             # Validate exact classfile identities but feed the intact private
             # declarations to D8 so its invocation opcode decisions stay valid.
             strip_class_methods(klass.read_bytes(), identities)
+    class_recipe = variant / 'class-method-access.json'
+    class_changes = json.loads(class_recipe.read_text()) if class_recipe.exists() else {}
+    if not isinstance(class_changes, dict): raise ValueError('Invalid classfile access recipe')
+    for relative, changes in class_changes.items():
+        path = Path(relative)
+        if path.is_absolute() or '..' in path.parts or path.suffix != '.class' or not isinstance(changes, list):
+            raise ValueError('Invalid classfile access recipe entry')
+        if any(not isinstance(change, list) or len(change) not in (3, 4) for change in changes):
+            raise ValueError('Invalid classfile method access/name entry')
+        # The optional fourth value gives a same-width constant-pool spelling.
+        # D8 recognizes javac's lambda$ naming and widens those helpers; Kotlin
+        # uses value$lambda$ and keeps them private behind generated bridges.
+        class_renames = {change[0]: change[3] for change in changes if len(change) == 4}
+        klass = classes / path
+        klass.write_bytes(strip_class_methods(klass.read_bytes(), [], [change[:3] for change in changes], class_renames))
     for index, klass in enumerate(sorted(classes.rglob('*.class'))):
         dexdir = work / ('dex-' + str(index)); dexdir.mkdir()
         subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), *D8_FLAGS, '--lib',
@@ -367,7 +453,11 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
             data = (dexdir / relative).read_bytes()
             if not data: raise RuntimeError('Empty DEX ' + relative.as_posix())
             identities = removals.get(klass.relative_to(classes).as_posix()) if relative == own else None
-            if identities: data = strip_dex_methods(data, identities)
+            changes = access_changes.get(klass.relative_to(classes).as_posix(), []) if relative == own else []
+            if identities or changes: data = strip_dex_methods(data, identities or [], changes)
+            if renames and any(old.encode('ascii') + b'\0' in data for old in renames):
+                data = rename_dex_strings(data, {old: new for old, new in renames.items()
+                                                if old.encode('ascii') + b'\0' in data})
             if variant.name == 'interface-invalid-invoke' and relative == own:
                 data = invalid_interface_invoke(data)
             dest.write_bytes(data)
@@ -454,8 +544,8 @@ def build(sdk, java, out, fixtures=ROOT / 'fixtures'):
         for manifest in state.glob('*.json'):
             if manifest.stem not in live | {'hier-invalid'}: manifest.unlink()
         for variant, sources in variants:
-            recipe = variant / 'remove-methods.json'
-            inputs = sources + ([recipe] if recipe.exists() else [])
+            recipes = [variant / name for name in ('remove-methods.json', 'method-access.json', 'rename-strings.json', 'class-method-access.json')]
+            inputs = sources + [recipe for recipe in recipes if recipe.exists()]
             fingerprint = key({'common': common, 'sources': [(p.relative_to(variant).as_posix(), digest(p)) for p in inputs]})
             if hit(state, variant.name, fingerprint, out / variant.name):
                 print('CACHED ' + variant.name); continue

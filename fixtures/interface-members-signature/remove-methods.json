@@ -1,0 +1,16 @@
+{
+  "com/github/ytlog/artdcevm/fixture/InterfaceEvolutionFixture$Contract.class": [
+    [
+      "directValue",
+      "()I"
+    ],
+    [
+      "staticValue",
+      "()I"
+    ],
+    [
+      "recipePadding",
+      "()I"
+    ]
+  ]
+}

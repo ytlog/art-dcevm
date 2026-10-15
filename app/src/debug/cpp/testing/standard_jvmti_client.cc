@@ -13,6 +13,8 @@ namespace {
 jvmtiEnv* client_env = nullptr;
 jclass method_class = nullptr;
 jmethodID method_ids[4]{};
+jclass interface_static_class = nullptr;
+std::vector<jmethodID> interface_static_methods;
 std::atomic<jlong> single_step_count{0};
 
 void JNICALL SingleStep(jvmtiEnv*, JNIEnv*, jthread, jmethodID, jlocation) {
@@ -214,6 +216,33 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
     batch.push_back({klass, size, buffers[i].data()});
   }
   return client_env->RedefineClasses(count, batch.data());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheInterfaceStaticMethods(
+    JNIEnv* jni, jclass, jclass type, jobjectArray methods) {
+  if (interface_static_class) jni->DeleteGlobalRef(interface_static_class);
+  interface_static_class = static_cast<jclass>(jni->NewGlobalRef(type));
+  interface_static_methods.clear();
+  for (jsize i = 0; i < jni->GetArrayLength(methods); ++i) {
+    jobject method = jni->GetObjectArrayElement(methods, i);
+    jmethodID id = jni->FromReflectedMethod(method);
+    jni->DeleteLocalRef(method);
+    if (jni->ExceptionCheck()) return;
+    interface_static_methods.push_back(id);
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceStatic(
+    JNIEnv* jni, jclass, jobject receiver, jint method) {
+  if (method < 0 || static_cast<size_t>(method) >= interface_static_methods.size()) {
+    jclass error = jni->FindClass("java/lang/IllegalStateException");
+    if (error) jni->ThrowNew(error, "Interface method ID was not cached");
+    return 0;
+  }
+  return jni->functions->CallStaticIntMethod(
+      jni, interface_static_class, interface_static_methods[method], receiver);
 }
 
 extern "C" JNIEXPORT void JNICALL

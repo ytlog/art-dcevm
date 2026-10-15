@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify missing direct targets without changing JVM or D8 invocation instructions."""
+"""Verify fixture recipes, missing direct targets and actual D8 lambda bridges."""
 import argparse
 import hashlib
 import importlib.util
@@ -58,6 +58,14 @@ def main():
             try: builder.strip_class_methods(data, removals)
             except ValueError: pass
             else: raise AssertionError('Invalid method stripping input was accepted')
+        renamed_class = builder.strip_class_methods(original, [], [['directValue', '()I', 0x1002]],
+                                                       {'directValue': 'directValuf'})
+        renamed_removed = builder.strip_class_methods(renamed_class, [['directValuf', '()I']])
+        assert renamed_removed != renamed_class
+        for renames in ({'missing': 'missinh'}, {'directValue': 'short'}, {'directValue': 'nativeValue'}):
+            try: builder.strip_class_methods(original, [], [], renames)
+            except ValueError: pass
+            else: raise AssertionError('Invalid classfile rename accepted')
         klass.write_bytes(removed)
         subprocess.run([java, '-cp', str(directory), 'Probe'], check=True, capture_output=True)
         if args.sdk:
@@ -91,11 +99,55 @@ def main():
                 try: builder.strip_dex_methods(bad_data, identities)
                 except ValueError: pass
                 else: raise AssertionError('Invalid DEX removal recipe was accepted')
+            changed = builder.strip_dex_methods(data, [['nativeValue', '()I']],
+                                                 [['directValue', '()I', 0x1002],
+                                                  ['throughDirect', '()I', 2]])
+            decoded = builder.FixtureDex(changed)
+            assert decoded.declarations[('directValue', '()I')][1] == 0x1002
+            assert decoded.declarations[('throughDirect', '()I')][1] == 2
+            assert len(decoded.groups[1]) == 0, 'Access edit did not move method to direct group'
+            assert changed[wrapper:end] == data[wrapper:end], 'Access recipe changed caller code'
+            renamed = builder.FixtureDex(builder.rename_dex_strings(data, {'nativeValue': 'nativeValuf'}))
+            assert ('nativeValuf', '()I') in renamed.declarations
+            assert ('nativeValue', '()I') not in renamed.declarations
+            for changes in ([['missing', '()I', 9]], [['directValue', '()I', -1]],
+                            [['directValue', '()I', 2], ['directValue', '()I', 2]]):
+                try: builder.strip_dex_methods(data, [], changes)
+                except ValueError: pass
+                else: raise AssertionError('Invalid access recipe accepted')
+            for renames in ({'missing': 'missinh'}, {'nativeValue': 'short'}, {'nativeValue': 'zzzzzzzzzzz'}):
+                try: builder.rename_dex_strings(data, renames)
+                except ValueError: pass
+                else: raise AssertionError('Invalid rename recipe accepted')
             constructor_removed = builder.FixtureDex(
                     builder.strip_dex_methods(data, [['<init>', '()V']]))
             assert ('<init>', '()V') not in constructor_removed.declarations
             assert ('throughDirect', '()I') in constructor_removed.declarations
-            print('Actual D8: removed definition, original invoke-direct target/code, constructor recipe and invalid inputs PASS')
+            source = directory / 'LambdaProbe.java'
+            source.write_text("""public interface LambdaProbe {
+                default int seed() { return 5; }
+                default int value() {
+                    LambdaProbe self = this;
+                    java.util.function.IntSupplier f = () -> self.seed();
+                    return f.getAsInt();
+                }
+            }""")
+            subprocess.run([javac, '--release', '9', '-d', str(directory), str(source)],
+                           check=True, capture_output=True)
+            klass = directory / 'LambdaProbe.class'
+            klass.write_bytes(builder.strip_class_methods(klass.read_bytes(), [],
+                    [['lambda$value$0', '(LLambdaProbe;)I', 10]], {'lambda$value$0': 'value$lambda$0'}))
+            output = directory / 'lambda-dex'; output.mkdir()
+            subprocess.run([str(args.sdk / 'build-tools/35.0.0/d8'), '--min-api', '30', '--file-per-class',
+                            '--lib', str(args.sdk / 'platforms/android-35/android.jar'), '--output',
+                            str(output), str(klass)], check=True, capture_output=True,
+                           env=dict(os.environ, JAVA_HOME=str(args.java)) if args.java else None)
+            decoded = builder.FixtureDex((output / 'LambdaProbe.dex').read_bytes())
+            assert decoded.declarations[('value$lambda$0', '(LLambdaProbe;)I')][1] == 10
+            bridges = [entry for (name, _), entry in decoded.declarations.items() if name.startswith('$r8$lambda$')]
+            assert len(bridges) == 1 and bridges[0][1] == 0x1009
+            assert len(list(output.glob('*ExternalSyntheticLambda*.dex'))) == 1
+            print('Actual D8: missing direct targets, access groups, Kotlin-shaped helpers, generated bridges and invalid recipes PASS')
     print('Classfile stripping: actual missing direct target, preserved declarations and malformed inputs PASS')
 
 

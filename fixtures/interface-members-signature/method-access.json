@@ -1,0 +1,19 @@
+{
+  "com/github/ytlog/artdcevm/fixture/InterfaceEvolutionFixture$Contract.class": [
+    [
+      "packageAdded",
+      "()I",
+      8
+    ],
+    [
+      "protectedAdded",
+      "()I",
+      12
+    ],
+    [
+      "syntheticAdded",
+      "()I",
+      4105
+    ]
+  ]
+}

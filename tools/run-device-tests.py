@@ -88,6 +88,25 @@ SCENARIOS = (
     ("interface-default-body", ["interface-default-body"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-stress", ["interface-stress"], 0),
+    ('interface-members-add', ['interface-members-add'], 0),
+    ('interface-members-signature', ['interface-members-signature'], 0),
+    ('interface-members-delete', ['interface-members-delete'], 0),
+    ('interface-default-add', ['interface-default-add'], 0),
+    ('interface-miranda-prepare', ['interface-miranda-prepare'], 0),
+    ('interface-miranda-add', ['interface-miranda-add'], 0),
+    ('interface-default-conflict', ['interface-default-conflict'], 63),
+    ('interface-hide-parent-static', ['interface-hide-parent-static'], 63),
+    ('interface-hide-parent-private', ['interface-hide-parent-private'], 63),
+    ('interface-hide-object', ['interface-hide-object'], 63),
+    ('interface-shadow-static', ['interface-shadow-static'], 63),
+    ('interface-shadow-private', ['interface-shadow-private'], 63),
+    ('interface-shadow-protected', ['interface-shadow-protected'], 63),
+    ('interface-shadow-package', ['interface-shadow-package'], 63),
+    ('interface-bridge-add', ['interface-bridge-add', 'interface-bridge-add'], 0),
+    ('interface-lambda-first', ['interface-lambda-first'], 0),
+    ('interface-lambda-append', ['interface-lambda-append', 'interface-lambda-append'], 0),
+    ('interface-lambda-insert', ['interface-lambda-insert', 'interface-lambda-insert', 'interface-lambda-insert'], 0),
+    ('interface-stress-add', ['interface-stress-add'], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
@@ -122,6 +141,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
+MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
 VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -393,7 +413,64 @@ REQUIRED_CHECKS = {
         "bytecodeOldTypeI": "java.lang.NoSuchFieldError", "bytecodeOldTypeSi": "java.lang.NoSuchFieldError",
         **field_retired_checks("Restored")},
 }
+# Interface direct targets retain exact old reflection objects, handles and
+# JNI IDs, and old bytecode wrappers still name the removed declarations.
+INTERFACE_DIRECT_RETIRED = {
+    **{kind + str(i) + suffix: error
+       for i in range(2) for suffix in ("", "AfterGc")
+       for kind, error in (("lookup", "java.lang.NoSuchMethodException"),
+                           ("jniLookup", "java.lang.NoSuchMethodError"),
+                           ("reflection", "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"),
+                           ("handle", "java.lang.NoSuchMethodError"))},
+    **{kind + str(i) + str(form) + suffix: "java.lang.NoSuchMethodError"
+       for i in range(2) for form in range(3) for suffix in ("", "AfterGc")
+       for kind in ("jni", "reflectedJni")},
+    "bytecodeDirect": "java.lang.NoSuchMethodError", "bytecodeStatic": "java.lang.NoSuchMethodError",
+    "oldDispatch": 63, "afterGc": 63,
+}
+REQUIRED_CHECKS.update({
+    "interface-members-add": {"oldAdded": 110, "newAdded": 110, "oldDispatch": 63, "marker": 73,
+        "afterGc": 110, "staticAdded": 10, "publicAdded": 12, "packageAdded": 13,
+        "protectedAdded": 14, "syntheticAdded": 15, "staticAddedFlags": 10,
+        "publicAddedFlags": 9, "packageAddedFlags": 8, "protectedAddedFlags": 12,
+        "syntheticAddedFlags": 0x1009},
+    "interface-members-signature": {**INTERFACE_DIRECT_RETIRED, "newDirect": 161, "newStatic": 182, "marker": 73},
+    "interface-members-delete": {**INTERFACE_DIRECT_RETIRED, "newDispatch": 63},
+    "interface-default-add": {"before": 20, "copiedDefault": 60, "newCopiedDefault": 60,
+        "subinterfaceWins": 70, "publicClassWins": 80, "overridesParent": 50, "oldDispatch": 1,
+        "marker": 79, "childMarker": 83, "afterGc": 60, "childAfterGc": 70},
+    "interface-miranda-prepare": {"before": 9, "miranda": "java.lang.AbstractMethodError", "stable": 7},
+    "interface-miranda-add": {"oldMiranda": 99, "newMiranda": 99, "stable": 7, "afterGc": 99},
+    "interface-default-conflict": {"before": 21, "rejectionReason": True, "oldDispatch": 21,
+        "oldLeft": 11, "newDispatch": 21, "marker": 89, "afterGc": 21},
+    **{"interface-hide-parent-" + kind: {"rejectionReason": True, "oldDispatch": 31,
+        "newDispatch": 31, "afterGc": 31} for kind in ("static", "private")},
+    "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
+    **{"interface-shadow-" + kind: {"rejectionReason": True, "oldDispatch": 51 + 10 * i,
+        "newDispatch": 51 + 10 * i, "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
+        for i, kind in enumerate(("static", "private", "protected", "package"))},
+    "interface-bridge-add": {"before": 90, "oldBridge": 90, "newBridge": 90,
+        "oldAdded": 91, "newAdded": 91, "hasBridge": True, "addedBridge": True, "afterGc": 91},
+    **{"interface-lambda-" + kind: {"appendCode": 0, "redefinedTypes": i + 1,
+        "oldDispatch": value, "newDispatch": value, "marker": 97, "afterGc": value,
+        **({"callerAppendCode": 0, "callerExistingTypes": 1, "bytecodeBridge": 5} if i == 1 else {}),
+        **({"retiredMethods": 2, "cachedStaticTargets": 4, "bytecodeBefore": 5,
+            "bytecodeBridge": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+            "bytecodeBridgeAfterGc": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+            **{"liveStaticTarget" + str(target): True for target in range(4)}, **{kind + suffix: 1
+            for kind in ("retiredPrivate", "retiredSynthetic") for suffix in ("", "AfterGc")},
+            **{"retired" + access + kind + suffix: ("java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"
+                if access == "Reflection" else "java.lang.NoSuchMethodError")
+                for access in ("Reflection", "Handle", "Jni") for kind in ("Private", "Synthetic")
+                for suffix in ("", "AfterGc")}} if i == 2 else {})}
+        for i, (kind, value) in enumerate((("first", 5), ("append", 11), ("insert", 111)))},
+    "interface-stress-add": {"snapshotTypes": 207,
+        **{kind + str(i): (i if kind == "oldMarker" else 8 if kind == "oldDispatch" else 18)
+            for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
+})
 UNCHANGED_CHECKS = {
+    "interface-default-conflict": ("unchangedInterface", "unchangedImplementation"),
+    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-structural": ("unchangedParent",),
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
@@ -580,7 +657,7 @@ def main(argv=None):
     parser.add_argument("--adb", default=find_adb())
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
-    parser.add_argument("--timeout", type=int, default=180, help="Instrumentation timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",

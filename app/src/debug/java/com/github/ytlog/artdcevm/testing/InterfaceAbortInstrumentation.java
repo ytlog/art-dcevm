@@ -5,6 +5,7 @@ import android.app.Instrumentation;
 import android.os.Bundle;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
+import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
@@ -26,6 +27,43 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int primePointerId(Class<?> klass, int kind);
     private static native int configureCheckJni(boolean enabled);
     static int armPointerFailure(int stage) { return armFailure(stage); }
+    private void checkDefaultConflictRollback() throws Exception {
+        InterfaceEvolutionFixture.Diamond instance = new InterfaceEvolutionFixture.Diamond();
+        instance.marker = 101;
+        expect("conflict baseline", 21, instance.conflict());
+        expect("left baseline", 11, instance.left());
+        expect("default conflict rejection", 63, redefine(InterfaceEvolutionFixture.Left.class,
+                asset("interface-default-conflict", InterfaceEvolutionFixture.Left.class)));
+        String reason = DcevmRuntime.capabilities().getString("lastRejection");
+        if (!reason.contains("InterfaceEvolutionFixture$Diamond;: conflict()I")
+                || !reason.contains("conflict between unrelated interface defaults"))
+            throw new AssertionError("Missing linked default conflict reason");
+        ++checks;
+        expect("old interface schema", 1, InterfaceEvolutionFixture.Left.class.getDeclaredMethods().length);
+        expect("old default after conflict", 21, instance.conflict());
+        expect("old left after conflict", 11, instance.left());
+        expect("old parent after conflict", 30, instance.base());
+        expect("old field after conflict", 101, instance.marker);
+        expect("new object after conflict", 21, new InterfaceEvolutionFixture.Diamond().conflict());
+        System.gc(); System.runFinalization(); System.gc();
+        expect("default after conflict GC", 21, instance.conflict());
+        expect("parent transaction after conflict", 0, redefine(InterfaceEvolutionFixture.ConflictBase.class,
+                asset("interface-conflict-recovery", InterfaceEvolutionFixture.ConflictBase.class)));
+        expect("parent behavior after conflict", 32, instance.base());
+        expect("parent addition after conflict", 33, (Integer) InterfaceEvolutionFixture.ConflictBase.class
+                .getMethod("added").invoke(instance));
+        expect("interface transaction after conflict", 0, redefine(InterfaceEvolutionFixture.Left.class,
+                asset("interface-conflict-recovery", InterfaceEvolutionFixture.Left.class)));
+        expect("interface behavior after conflict", 13, instance.left());
+        expect("other default preserved", 21, instance.conflict());
+        expect("field after recovery", 101, instance.marker);
+        System.gc(); System.runFinalization(); System.gc();
+        expect("interface after recovery GC", 13, instance.left());
+        expect("parent after recovery GC", 32, instance.base());
+        expect("parent addition after recovery GC", 33, (Integer) InterfaceEvolutionFixture.ConflictBase.class
+                .getMethod("added").invoke(instance));
+    }
+
     private Bundle arguments;
     private int checks;
 
@@ -93,6 +131,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK, result);
                 return;
             }
+            checkDefaultConflictRollback();
             PointerIdFixture.Implementation pointerInstance = new PointerIdFixture.Implementation();
             byte[] pointerDex = asset("interface-pointer-body", PointerIdFixture.Contract.class);
             int naturalCode = redefine(PointerIdFixture.Contract.class, pointerDex);

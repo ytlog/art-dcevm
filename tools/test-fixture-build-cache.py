@@ -88,6 +88,14 @@ else:
     assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
     calls = len(log.read_text().splitlines()); recipe.unlink()
     assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
+    for name in ('method-access.json', 'rename-strings.json', 'class-method-access.json'):
+        recipe = fixtures / 'alpha' / name
+        calls = len(log.read_text().splitlines()); recipe.write_text('{}')
+        assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
+        calls = len(log.read_text().splitlines()); recipe.write_text('{\n}\n')
+        assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
+        calls = len(log.read_text().splitlines()); recipe.unlink()
+        assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
     shutil.rmtree(fixtures / 'beta'); run(); assert not (out / 'beta').exists() and not (temp / '.out-fixture-cache/beta.json').exists()
     calls = len(log.read_text().splitlines()); env['JAVA_OPTS'] = '-Dfixture.option=1'; assert len(run()) == calls + 2; assert len(run()) == calls + 4; env.pop('JAVA_OPTS'); run()
     cold = temp / 'cold'

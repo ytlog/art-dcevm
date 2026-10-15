@@ -1,0 +1,10 @@
+{
+  "com/github/ytlog/artdcevm/fixture/interfacelambda/LambdaContract.class": [
+    [
+      "lambda$value$0",
+      "(Lcom/github/ytlog/artdcevm/fixture/interfacelambda/LambdaContract;)I",
+      10,
+      "value$lambda$0"
+    ]
+  ]
+}
