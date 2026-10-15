@@ -2,8 +2,8 @@
 #include <cstdint>
 
 namespace artdcevm::abi::arm64 {
-// Identical fixed runtime/class_status.h declarations in android-13.0.0_r1
-// and android-16.0.0_r1. These are ART states, not JVMTI class-status masks.
+// Identical fixed runtime/class_status.h declarations in android-11.0.0_r1
+// through android-17.0.0_r1. These are ART states, not JVMTI class-status masks.
 enum class ClassStatus : uint8_t {
   kNotReady = 0,
   kRetired = 1,

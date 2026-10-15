@@ -172,6 +172,40 @@ Fixed source declarations are selected by probes on each transaction, rather tha
 - **NDK map**: the pointer-map boundary between ART and the NDK is restricted to libc++ ABI v1. Check NDK type sizes at compile time and verify sentinel, root, size and value layouts at initialization using the library's own empty and one-node maps.
 - **DEX identity**: the bounded reader accepts both standard DEX and Android 11–15 CompactDex, where ID tables are in the main region and strings and type lists are in a separate data region. Redefinition input accepts only single-class standard DEX.
 
+### Fixed interface declarations for other releases
+
+The declarations follow fixed AOSP tags from Android 11 through 17, including Android 12L. Differences stay in `platform/abi/arm64/androidNN/`; identical Thread pointer and statistics prefixes share `common/interface_thread_prefix.h`. No backend is copied. Offsets below come from source declarations and arm64 `offsetof`/`sizeof` assertions, without disassembly or memory-derived offsets.
+
+| Version | Thread tls32 size / tls_ptr start | tid / GC mark offsets | JNI env / top HandleScope offsets | HandleScope header | Final ClassRedefinition flags |
+| --- | --- | --- | --- | --- | --- |
+| 11 / API 30 | 92 / 160 | 16 / 52 | 216 / 296 | 12, no size | Four, ending in needs_reverify |
+| 12, 12L / API 31–32 | 88 / 152 | 12 / 48 | 208 / 288 | 12, no size | Four, ending in needs_reverify |
+| 13 / API 33, verified | 80 / 144 | 12 / 36 | 200 / 280 | 12, no size | Four, ending in lock_acquired |
+| 14 / API 34 | 84 / 152 | 12 / 36 | 208 / 288 | 12, no size | Four, ending in lock_acquired |
+| 15 / API 35 | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+| 16 / API 36, verified | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+| 17 / API 37 | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+
+The Class declaration includes its Object header and reference/native fields through status. Android 11–15 separate ifields/sfields, with access_flags at 64 and status at 112; 16–17 merge fields, with offsets 56 and 104. RootVisitor's virtual destructor and two VisitRoots overloads have the same order in all seven versions. RootInfo is passed by reference and its fields are never read. ClassStatus has the same complete 0–15 enum, also in 12L. kErrorResolved remains resolved; discarded classes must use kErrorUnresolved.
+
+Android 17 uses an atomic 32-bit clinit_thread_id_or_hash slot. GetClinitThreadId distinguishes a thread ID from a descriptor hash using the upper ten bits. Its fixed declaration retains the real name and source-defined DecodeClinitThreadId; the prepared profile explicitly passes its offsetof. Sources: [class.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class.h), [class-inl.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class-inl.h).
+
+All holder declarations contain a Handle array, a redefinitions-vector pointer, and initialized/actually_structural/initial_structural vector<bool> fields at offsets 0, 8, 16, 40 and 64. libc++ ABI v1 vector<bool> occupies 24 bytes. ClassRedefinition is 72 bytes with the same driver/klass/DEX prefix and ArrayRef at 48 following std::string. The thirteen Java holder slots agree. Android 11's root traversal takes pid_t/int; 12 onward takes uint32_t. The differing name is an offline declaration only.
+
+The shared function declarations cover admission Handle/Class and string*, Run's RedefinerPrefix*, Finish's ClassRedefinitionPrefix*/holder/iterator, AllocateNewClassObject's three Handles and uint16 class-def index, CreateNewDexCache's loader Handle, LinkClass's Thread/descriptor/Handles, LookupClass's char* or string_view, DoLookupResolvedType's TypeIndex/referrer or DexCache/loader, SetDexCache, JNIEnvExt local-reference bridges, internal ClassStatus writes, Mark, and FindInstanceField's two string_views. ClassExt and array-type fields are found by name through ART's field table, without fixed offsets. Mapping and verification redirection reuse the existing structural and FindClass declarations.
+
+Runtime selection remains android13/android16, verified on API 33/36 devices. The android11/12/14/15/17 kPreparedInterfaceRuntime profiles only declare and compile fixed ABIs; the engine does not resolve, hook or call their offline symbols. Compilation does not prove device behavior.
+
+| Version | Preparation and activation | Required validation before activation |
+| --- | --- | --- |
+| Android 11 / API 30 | Prepared, inactive | An arm64 device running a debuggable application; establish a named service that safely obtains ART's allocator or a three-argument array wrapper, then verify signed root traversal, scope/holder, full transactions and cleanup |
+| Android 12, 12L / API 31–32 | Prepared, inactive | Separate API 31 and 32 arm64 devices; establish required named allocation services, then verify the old Thread layout and complete transactions |
+| Android 14 / API 34 | Prepared, inactive | An API 34 arm64 device; verify Thread deopt fields, 12-byte scopes, four redefinition flags and full transactions |
+| Android 15 / API 35 | Prepared, inactive | An API 35 arm64 device; verify 16-byte scopes, three redefinition flags, separate Class field arrays and full transactions |
+| Android 17 / API 37 | Prepared, inactive | An API 37 arm64 device; verify the tid/hash slot, merged Class field arrays, mapping and cleanup |
+
+All device validation must cover normal and CheckJNI modes, every probe, batch updates and recovery after failure. A platform API does not prove the ART module's source version; Mainline updates still require declaration and service review. Per-runtime symbol tables, coverage counts and collection details stay only in the local ignored assets/runtime_lib/README.md; raw reports stay in build/evidence/.
+
 ## Member mapping and method retirement
 
 Keep ART's `FinishNewClassAllocations`, `AllocateNewClassObject`, `CollectAndCreateNewInstances` and `UpdateClassStructurally`. Every transaction whose probes pass uses custom mapping, including cases where disappearing subclass copied default/miranda methods would CHECK in ART's original mapping. Mapping uses the actual declaring class and members with the same name and signature to distinguish declared, inherited and copied members:

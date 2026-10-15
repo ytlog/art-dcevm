@@ -14,10 +14,11 @@ struct InterfaceRuntime {
   static constexpr size_t kAbsent = static_cast<size_t>(-1);
 };
 template <class Class, class Thread, class Header, class Holder>
-constexpr InterfaceRuntime InterfaceRuntimeFor(size_t scope_size) {
+constexpr InterfaceRuntime InterfaceRuntimeFor(
+    size_t scope_size, size_t clinit_offset = offsetof(Class, clinit_thread_id)) {
   return {offsetof(Class, access_flags), offsetof(Class, class_loader),
       offsetof(Class, dex_cache), offsetof(Class, super_class),
-      offsetof(Class, clinit_thread_id), offsetof(Class, dex_class_def_index), offsetof(Class, status),
+      clinit_offset, offsetof(Class, dex_class_def_index), offsetof(Class, status),
       offsetof(Thread, tls32.tid), offsetof(Thread, tls_ptr.jni_env),
       offsetof(Thread, tls32.is_gc_marking), offsetof(Thread, tls_ptr.exception),
       offsetof(Thread, tls_ptr.top_handle_scope), sizeof(Header), offsetof(Header, link),
