@@ -319,7 +319,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `subclassLoadRetries` | 事务期间有目标类的子类加载而重试的次数（见[事务中的类加载](#事务中的类加载)） |
 | `diagnostic`、`lastRejection` | 安装诊断；最近一次标准入口事务失败时的类与原因，成功时为空。策略、快照与提交前核对的拒绝写明各自原因；ART 自己的检查拒绝时（如 boot 接口在入口即以 79 拒绝），标准入口写明被拒的接口或不可修改的类，否则列出批次中的类与错误名，ART 的原文只在 logcat 的 `FAILURE TO REDEFINE` 之后 |
 
-设备端工具应把 `interfaceAddition`（给普通类新增接口）与 `interfaceRedefinition`（修改接口自身）分开判断。初始化后的 false 表示尚未获得声明证据，不能仅凭 SDK 放开拦截。工具可在同一进程内，对自己控制的应用加载器测试接口提交一次不改变语义的方法体重定义以取得探测结果；随后重新读取能力，只有 `installed`、`standardRedefineRouted`、`interfaceRedefinition` 全为 true 才放开上述受支持的方法体修改。其他状态保留拦截，显示 `interfaceRuntime`／`diagnostic`，并在每次失败后读取 `lastRejection`。此布尔值不是接口成员演进许可，也不保证任意目标或批次都可提交；每次事务仍做策略与探测检查。
+设备端工具应区分 `interfaceAddition`（给普通类新增接口）与 `interfaceRedefinition`（接口运行时探测状态）。在 Android 13/API 33 和 Android 16/API 36 上，直接提交受支持的接口方法体修改，并按返回码处理：0 表示成功；98 表示运行时不可用，提示重启应用进程后重试；其他标准 JVMTI 错误码显示 `lastRejection` 中的类名和原因。`interfaceRedefinition`、`interfaceRuntime` 仅供参考，不作为放开接口修改拦截的前提，也不要求先提交一次不改变语义的重定义。每次实际事务都会完成策略与运行时探测检查；这些参考状态不代表允许接口成员演进，也不保证任意目标或批次都能提交。
 
 每项能力仍由每次事务的探测决定是否可用；探测未通过时，相应变化以 JVMTI 错误拒绝。
 
