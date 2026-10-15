@@ -9,6 +9,7 @@
 #include <mutex>
 #include <set>
 #include <string_view>
+#include <utility>
 
 #include "evolution/class_schema.h"
 #include "shadowhook.h"
@@ -19,6 +20,7 @@
 #include "platform/common/method_retirement.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
+#include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "support/json.h"
 
@@ -67,21 +69,23 @@ struct Snapshot {
   jclass superclass_class = nullptr;
 };
 
-struct Batch {
-  Batch* enclosing = nullptr;
+// The engine's part of a transaction context.
+struct Batch final : transaction::Part {
   std::map<jclass, Snapshot> classes;
   std::map<ClassRedefinitionPrefix*, structural_policy::Decision> decisions;
   JNIEnv* jni = nullptr;
   std::vector<jobject> retirement_roots;
   std::vector<jobject> type_roots;
   bool retires_members = false;
-  ~Batch() {
+  ~Batch() override {
     if (!jni) return;
     for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
     for (jobject root : type_roots) jni->DeleteGlobalRef(root);
   }
 };
-thread_local Batch* current_batch = nullptr;
+Batch* BatchOf(const transaction::Context* context) {
+  return transaction::PartOf<Batch>(context, &transaction::Context::batch);
+}
 
 // Methods each class retired in committed transactions, guarded by
 // transaction_mutex. ART's reference replacement keeps each global reference
@@ -138,7 +142,8 @@ void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexce
 // outermost scope switches the event.
 class WatchScope {
  public:
-  WatchScope(JNIEnv* jni, jint count, const jvmtiClassDefinition* definitions) : jni_(jni) {
+  WatchScope(transaction::Context* context, JNIEnv* jni, jint count,
+             const jvmtiClassDefinition* definitions) : jni_(jni) {
     if (!watch_available) return;
     for (jint i = 0; i < count; ++i)
       if (jobject target = jni->NewGlobalRef(definitions[i].klass)) watch_.targets.push_back(target);
@@ -150,7 +155,7 @@ class WatchScope {
       watches.push_back(&watch_);
     }
     if (first) snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
-    method_retirement::WatchSubclassLoads(&watch_.subclass_loaded);
+    context->subclass_loaded = &watch_.subclass_loaded;
   }
   ~WatchScope() {
     if (!watch_available) return;
@@ -189,21 +194,6 @@ class LocalClasses {
  private:
   jvmtiEnv* env_;
   JNIEnv* jni_;
-};
-
-// A ClassFileLoadHook can start a nested transaction on this same thread.
-class BatchScope {
- public:
-  explicit BatchScope(Batch* batch) : previous_(current_batch) {
-    batch->enclosing = previous_;
-    current_batch = batch;
-  }
-  ~BatchScope() { current_batch = previous_; }
-  BatchScope(const BatchScope&) = delete;
-  BatchScope& operator=(const BatchScope&) = delete;
-
- private:
-  Batch* previous_;
 };
 
 class LocalReference {
@@ -605,24 +595,26 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   return JVMTI_ERROR_NONE;
 }
 
-jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
+                            transaction::Context* context) {
   const jvmtiError result = structural_entry(env, count, definitions);
   if (std::string reason = interface_redefinition::TakeRejection(); !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
-  if (std::string late = method_retirement::TakeRejection(); !late.empty()) Diagnose(late, true);
+  if (std::string late = std::exchange(context->rejection, {}); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
-    if (current_batch->retires_members) {
-      method_retirement::RetainRoots(std::move(current_batch->retirement_roots));
-      current_batch->retirement_roots.clear();
+    Batch* batch = BatchOf(context);
+    if (batch->retires_members) {
+      method_retirement::RetainRoots(std::move(batch->retirement_roots));
+      batch->retirement_roots.clear();
     }
-    for (const auto& [klass, snapshot] : current_batch->classes)
-      if (!snapshot.retiring.empty()) RecordRetiredKinds(current_batch->jni, klass, snapshot.retiring);
+    for (const auto& [klass, snapshot] : batch->classes)
+      if (!snapshot.retiring.empty()) RecordRetiredKinds(batch->jni, klass, snapshot.retiring);
     // A nested ClassFileLoadHook transaction may change the outer batch's
     // targets after its snapshots. Let ART's original validators handle that
     // outer batch rather than accepting a decision based on stale members.
-    for (Batch* batch = current_batch->enclosing; batch; batch = batch->enclosing) {
-      batch->classes.clear();
-      batch->decisions.clear();
+    for (transaction::Context* outer = context->enclosing; outer; outer = outer->enclosing) {
+      BatchOf(outer)->classes.clear();
+      BatchOf(outer)->decisions.clear();
     }
   }
   return result;
@@ -630,22 +622,23 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
 
 jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                      bool* subclass_loaded) {
-  Batch batch;
-  BatchScope scope(&batch);
-  method_retirement::TransactionScope retirement_scope;
-  if (!batch.enclosing) {
+  transaction::Scope scope;
+  transaction::Context* context = &scope.context();
+  context->batch = std::make_unique<Batch>();
+  Batch& batch = *BatchOf(context);
+  if (!context->enclosing) {
     // lastRejection describes the latest standard-entry transaction only.
     std::lock_guard<std::mutex> lock(report_mutex);
     last_rejection.clear();
   }
   // ART retains responsibility for arguments, caller capabilities and the
   // ClassFileLoadHook. Snapshots precede its ScopedObjectAccess transition.
-  if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions);
+  if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions, context);
   JNIEnv* jni = nullptr;
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
-  interface_redefinition::Scope interface_scope(jni, snapshot_env, count, definitions);
+  interface_redefinition::Begin(jni, snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
@@ -661,7 +654,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (!definitions[i].klass ||
         (snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
          !modifiable))
-      return InvokeStructural(env, count, definitions);
+      return InvokeStructural(env, count, definitions, context);
   }
   // Loading types precedes the loaded-class view.
   jvmtiError result = JVMTI_ERROR_NONE;
@@ -683,7 +676,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       result = ResolveNewTypes(definitions[i], &resolver, &batch, &snapshot, &error);
     }
     if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
-    interface_scope.Describe(definitions[i].klass, snapshot.live);
+    interface_redefinition::Describe(definitions[i].klass, snapshot.live);
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
   // ART recreates a target's subclasses under its new class and treats each
@@ -698,7 +691,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   // A subclass prepared from here on is missing from the snapshot and may be
   // missing from ART's recreated subclasses: fail this attempt instead.
-  WatchScope watch(jni, count, definitions);
+  WatchScope watch(context, jni, count, definitions);
   LocalClasses loaded(snapshot_env, jni);
   const auto loaded_start = std::chrono::steady_clock::now();
   result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
@@ -707,7 +700,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   std::string interface_error;
   const uint64_t loaded_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - loaded_start).count();
-  result = interface_scope.Capture(loaded.count, loaded.classes, loaded_ns, &interface_error);
+  result = interface_redefinition::Capture(loaded.count, loaded.classes, loaded_ns, &interface_error);
   if (result != JVMTI_ERROR_NONE) {
     Diagnose(interface_error, true);
     return result;
@@ -717,7 +710,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     const jclass* candidates = loaded.classes;
     jint candidate_count = loaded.count;
     if (snapshot.live.access & evolution::kAccInterface) {
-      const std::vector<jclass>* group = interface_scope.GroupTypes(klass);
+      const std::vector<jclass>* group = interface_redefinition::GroupTypes(klass);
       if (!group) {
         Diagnose(snapshot.live.descriptor + ": interface subtype group was not captured", true);
         return JVMTI_ERROR_INTERNAL;
@@ -750,7 +743,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       batch.retirement_roots.push_back(root);
     }
   }
-  result = InvokeStructural(env, count, definitions);
+  result = InvokeStructural(env, count, definitions, context);
   *subclass_loaded = watch.SubclassLoaded();
   return result;
 }
@@ -784,10 +777,12 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
 }
 
 bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
-  if (!current_batch) return reinterpret_cast<Check>(original_class)(self);
-  current_batch->decisions.erase(self);
-  const auto found = current_batch->classes.find(self->klass);
-  if (found == current_batch->classes.end() || !self->dex_file || !self->dex_file->begin)
+  transaction::Context* context = transaction::Current();
+  Batch* batch = BatchOf(context);
+  if (!batch) return reinterpret_cast<Check>(original_class)(self);
+  batch->decisions.erase(self);
+  const auto found = batch->classes.find(self->klass);
+  if (found == batch->classes.end() || !self->dex_file || !self->dex_file->begin)
     return reinterpret_cast<Check>(original_class)(self);
   evolution::ClassSchema incoming;
   std::string error;
@@ -829,7 +824,6 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       decision.error = JVMTI_ERROR_NOT_AVAILABLE;
       decision.reason = "interface redefinition requires verified member mapping";
     }
-    method_retirement::RequireMemberMapping();
     // Even a body edit must relink copied default methods in implementation classes.
     decision.methods_structural = true;
   }
@@ -844,24 +838,27 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
-  // ART's own mapping cannot commit this change; a later probe failure in
-  // this transaction must reject it before ART's no-failure point.
+  // Hand the accepted decision to the hooks on ART's transaction. When ART's
+  // own mapping cannot commit the change, a later probe failure in this
+  // transaction must reject it before ART's no-failure point.
   structural_policy::Abilities without_mapping;
   without_mapping.instance_check = abilities.instance_check;
-  if (abilities.member_mapping &&
-      structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping,
-                                  snapshot.retired).error != JVMTI_ERROR_NONE)
-    method_retirement::RequireMemberMapping();
-  if (decision.requires_no_instances)
-    method_retirement::RequireNoInstances(self, incoming.descriptor);
-  if (decision.superclass_changed)
-    method_retirement::ChangeSuperclass(self, snapshot.superclass_class, incoming.descriptor);
-  if (interface_redefinition::IsAffected(self))
-    method_retirement::RedirectVerification(self, incoming.descriptor);
+  transaction::Requirements& requirements = context->targets[self];
+  requirements.descriptor = incoming.descriptor;
+  requirements.member_mapping = interface_target ||
+      (abilities.member_mapping &&
+       structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping,
+                                   snapshot.retired).error != JVMTI_ERROR_NONE);
+  requirements.no_instances = decision.requires_no_instances;
+  // The policy rejects a superclass change related to another batch target,
+  // so an interface group member never also changes its superclass.
+  requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
+  requirements.redirect_verification =
+      decision.superclass_changed || interface_redefinition::IsAffected(self);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
-    current_batch->retires_members = true;
+    batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;
-  current_batch->decisions.emplace(self, std::move(decision));
+  batch->decisions.emplace(self, std::move(decision));
   return true;
 } catch (...) {
   self->driver->result = ArtHookExceptionError();
@@ -869,9 +866,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
 }
 
 bool CheckFields(ClassRedefinitionPrefix* self) noexcept {
-  if (current_batch) {
-    const auto found = current_batch->decisions.find(self);
-    if (found != current_batch->decisions.end()) {
+  if (Batch* batch = BatchOf(transaction::Current())) {
+    const auto found = batch->decisions.find(self);
+    if (found != batch->decisions.end()) {
       if (found->second.fields_structural) record_field(self);
       return true;
     }
@@ -880,11 +877,11 @@ bool CheckFields(ClassRedefinitionPrefix* self) noexcept {
 }
 
 bool CheckMethods(ClassRedefinitionPrefix* self) noexcept {
-  if (current_batch) {
-    const auto found = current_batch->decisions.find(self);
-    if (found != current_batch->decisions.end()) {
+  if (Batch* batch = BatchOf(transaction::Current())) {
+    const auto found = batch->decisions.find(self);
+    if (found != batch->decisions.end()) {
       if (found->second.methods_structural) record_method(self);
-      current_batch->decisions.erase(found);
+      batch->decisions.erase(found);
       return true;
     }
   }

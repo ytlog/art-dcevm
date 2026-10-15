@@ -45,37 +45,6 @@ bool VerifyTarget(abi::arm64::ClassRedefinitionPrefix* self, const evolution::Cl
 // in CheckClass with every layout VerifyTarget accepted for this transaction.
 // False when none is verified or the accepted layouts disagree.
 bool ClassAccess(abi::arm64::ClassRedefinitionPrefix* self, jclass klass, uint32_t* access);
-// One standard-entry transaction. A transaction whose policy decision needs
-// the engine's member mapping fails before ART's no-failure point when a later
-// probe disables that mapping.
-class TransactionScope {
- public:
-  TransactionScope();
-  ~TransactionScope();
-  TransactionScope(const TransactionScope&) = delete;
-  TransactionScope& operator=(const TransactionScope&) = delete;
- private:
-  void* state_;
-};
-void RequireMemberMapping();
-// Fail the transaction, before ART's no-failure point, once `*loaded` is set:
-// a subclass of a target was loaded after the engine's snapshot, so neither
-// ART's recreated subclasses nor the policy decision may include it.
-void WatchSubclassLoads(const std::atomic<bool>* loaded);
-// The target becomes abstract: fail the transaction, before ART's no-failure
-// point, if instances of exactly that class exist. `descriptor` names it in
-// the rejection that TakeRejection then returns once.
-void RequireNoInstances(abi::arm64::ClassRedefinitionPrefix* self, const std::string& descriptor);
-std::string TakeRejection();
-// Link the target's new class under `superclass` (a global reference that
-// outlives the transaction), which extends the old superclass. Verified
-// before ART's no-failure point; `descriptor` names the target in a rejection.
-void ChangeSuperclass(abi::arm64::ClassRedefinitionPrefix* self, jclass superclass,
-                      const std::string& descriptor);
-// During ART verification, resolve this target's descriptor to its holder's
-// replacement. Interface body edits need the same redirect as superclass edits.
-void RedirectVerification(abi::arm64::ClassRedefinitionPrefix* self,
-                          const std::string& descriptor);
 // JNI globals are prepared before entering ART; ReplaceReferences updates them
 // to the replacement Class whose ClassExt roots the complete obsolete chain.
 void RetainRoots(std::vector<jobject> roots);

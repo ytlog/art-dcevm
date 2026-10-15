@@ -25,6 +25,7 @@
 #include "platform/common/art_dex_view.h"
 #include "platform/common/field_array_probe.h"
 #include "platform/common/structural_policy.h"
+#include "platform/common/transaction_context.h"
 #include "platform/symbols/method_retirement_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 // Source-declared class layouts; runtime probes select among them (kLayouts).
@@ -590,25 +591,22 @@ std::vector<size_t> CandidateOrder() {
   return order;
 }
 
-struct Transaction {
-  Transaction* previous = nullptr;
-  LayoutMask layouts = ~LayoutMask{0};
-  bool probed = false;
-  bool requires_mapping = false;
-  std::map<int32_t, MappingPlan> plans;  // By RedefinitionDataIter index.
-  std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
-  // Optional new superclass (global reference) and verifier descriptor by target.
-  std::map<ClassRedefinitionPrefix*, std::pair<jclass, std::string>> link_targets;
-  const std::atomic<bool>* subclass_loaded = nullptr;
-  std::string rejection;
+// This transaction's mapping plans, by RedefinitionDataIter index.
+struct Plans final : transaction::Part {
+  std::map<int32_t, MappingPlan> by_index;
 };
-thread_local Transaction* transaction = nullptr;
+const MappingPlan* PlanOf(const transaction::Context* context, int32_t index) {
+  auto* plans = transaction::PartOf<Plans>(context, &transaction::Context::mapping);
+  if (!plans) return nullptr;
+  const auto found = plans->by_index.find(index);
+  return found == plans->by_index.end() ? nullptr : &found->second;
+}
 
 // The first layout in candidate order that every probe of this transaction accepted.
-const LayoutOps* Selected() {
-  if (!transaction || !transaction->probed) return nullptr;
+const LayoutOps* Selected(const transaction::Context* context) {
+  if (!context || !context->probed) return nullptr;
   for (size_t i : CandidateOrder())
-    if (transaction->layouts & (LayoutMask{1} << i)) return &kLayouts[i];
+    if (context->layouts & (LayoutMask{1} << i)) return &kLayouts[i];
   return nullptr;
 }
 
@@ -633,13 +631,12 @@ void ThrowRetired(void* self) {
 // the same redefinition with the target's new class as their superclass.
 void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Handle super_class,
                              Handle cache, uint16_t index) noexcept {
-  if (transaction && super_class.reference) {
-    const auto found = transaction->link_targets.find(self);
-    if (found != transaction->link_targets.end() && found->second.first &&
-        old_class.Get<void>() == mirror_class(self)) {
-      if (void* superclass = DecodeClass(self, found->second.first))
-        *const_cast<uint32_t*>(super_class.reference) = Reference(superclass);
-    }
+  const transaction::Context* context = transaction::Current();
+  const transaction::Requirements* target = context ? context->Find(self) : nullptr;
+  if (target && target->superclass && super_class.reference &&
+      old_class.Get<void>() == mirror_class(self)) {
+    if (void* superclass = DecodeClass(self, target->superclass))
+      *const_cast<uint32_t*>(super_class.reference) = Reference(superclass);
   }
   using Function = void* (*)(ClassRedefinitionPrefix*, Handle, Handle, Handle, uint16_t);
   return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
@@ -660,13 +657,11 @@ thread_local const Verifying* verifying = nullptr;
 
 bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
-  const std::string* descriptor = nullptr;
-  if (transaction) {
-    const auto found = transaction->link_targets.find(self);
-    if (found != transaction->link_targets.end()) descriptor = &found->second.second;
-  }
-  if (!descriptor) return reinterpret_cast<Function>(original_check_verification)(self, data);
-  const Verifying scope{&data, *descriptor, interface_redefinition::IsAffected(self)};
+  const transaction::Context* context = transaction::Current();
+  const transaction::Requirements* target = context ? context->Find(self) : nullptr;
+  if (!target || !target->redirect_verification)
+    return reinterpret_cast<Function>(original_check_verification)(self, data);
+  const Verifying scope{&data, target->descriptor, interface_redefinition::IsAffected(self)};
   const Verifying* previous = std::exchange(verifying, &scope);
   const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
   verifying = previous;
@@ -702,14 +697,11 @@ void* FindClassWithLength(void* linker, void* thread, const char* descriptor, si
 // own mapping for a transaction that has none.
 void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                      void* method_map, void* field_map) noexcept {
-  const MappingPlan* plan = nullptr;
-  if (transaction) {
-    const auto found = transaction->plans.find(data.index);
-    if (found != transaction->plans.end()) plan = &found->second;
-  }
+  const transaction::Context* context = transaction::Current();
+  const MappingPlan* plan = PlanOf(context, data.index);
   if (!plan || !abi::LibcppV1PointerMap<abi::ArtMethod>::Empty(method_map) ||
       !abi::LibcppV1PointerMap<ArtField>::Empty(field_map)) {
-    if (transaction && transaction->requires_mapping)
+    if (context && context->RequiresMemberMapping())
       __android_log_write(ANDROID_LOG_ERROR, "ART-DCEVM", "member mapping unavailable at commit");
     using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&, void*, void*);
     reinterpret_cast<Function>(original_mapping)(self, data, method_map, field_map);
@@ -740,70 +732,72 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (interface_redefinition::InjectInstanceFailure(self, data, false)) return false;
 #endif
-  if (transaction && transaction->subclass_loaded && transaction->subclass_loaded->load()) {
+  transaction::Context* context = transaction::Current();
+  if (context && context->subclass_loaded && context->subclass_loaded->load()) {
     self->driver->result = JVMTI_ERROR_INTERNAL;
-    transaction->rejection = "a subclass of a redefined class was loaded during the transaction";
+    context->rejection = "a subclass of a redefined class was loaded during the transaction";
     return false;
   }
   if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   interface_redefinition::InjectInstanceFailure(self, data, true);
 #endif
-  if (!transaction) return true;
+  if (!context) return true;
   // A class made abstract must have no instances of its own (subclass
   // instances stay valid). Reads only the common holder and Object layouts.
   // One structural owner may recreate another batch target's instances (ART
   // superclass groups or interface groups). Check every target against the
   // owner's collected instances rather than the empty dependent entry.
-  for (const auto& [target, descriptor] : transaction->no_instances) {
+  for (const auto& [target, requirements] : context->targets) {
+    if (!requirements.no_instances) continue;
     const auto* instances = data->OldInstances();
     const uint32_t reference = Reference(mirror_class(target));
     for (int32_t i = 0; instances && i < instances->length; ++i) {
       const auto* instance = instances->Get<Object>(i);
       if (!instance || instance->klass != reference) continue;
       self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
-      transaction->rejection = descriptor + ": class made abstract has live instances";
+      context->rejection = requirements.descriptor + ": class made abstract has live instances";
       return false;
     }
   }
-  if (!transaction->probed) return true;
+  if (!context->probed) return true;
   std::string why;
   for (size_t i = 0; i < kLayoutCount; ++i) {
     const LayoutMask bit = LayoutMask{1} << i;
-    if ((transaction->layouts & bit) && !kLayouts[i].verify_iter(self, *data, &why))
-      transaction->layouts &= ~bit;
+    if ((context->layouts & bit) && !kLayouts[i].verify_iter(self, *data, &why))
+      context->layouts &= ~bit;
   }
-  if (const LayoutOps* layout = Selected()) {
+  if (const LayoutOps* layout = Selected(context)) {
     MappingPlan plan;
     if (layout->plan(*data, &plan, &why)) {
-      if (const auto found = transaction->link_targets.find(self);
-          found != transaction->link_targets.end() && found->second.first) {
+      if (const transaction::Requirements* target = context->Find(self); target && target->superclass) {
         // The allocation hook must have linked the new class under the new superclass.
         void* new_class = data->Classes(false) ? data->Classes(false)->Get<void>(0) : nullptr;
-        void* superclass = DecodeClass(self, found->second.first);
+        void* superclass = DecodeClass(self, target->superclass);
         if (!new_class || !superclass || *layout->superclass(new_class) != Reference(superclass)) {
           self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-          transaction->rejection = found->second.second + ": the new superclass was not applied";
+          context->rejection = target->descriptor + ": the new superclass was not applied";
           return false;
         }
         plan.superclass_changed = true;
       }
       if (!plan.default_conflict.empty()) {
         self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
-        transaction->rejection =
+        context->rejection =
             plan.default_conflict + " would become a conflict between unrelated interface defaults";
         return false;
       }
       // Later redefinitions of this batch are planned with the same layout.
-      transaction->layouts = LayoutMask{1} << (layout - kLayouts);
-      transaction->plans[data->index] = std::move(plan);
+      context->layouts = LayoutMask{1} << (layout - kLayouts);
+      if (!context->mapping) context->mapping = std::make_unique<Plans>();
+      static_cast<Plans*>(context->mapping.get())->by_index[data->index] = std::move(plan);
       return true;
     }
-    transaction->layouts = 0;
-    transaction->plans.clear();
+    context->layouts = 0;
+    context->mapping.reset();
   }
   Report("rejected: " + why);
-  if (!transaction->requires_mapping) return true;
+  if (!context->RequiresMemberMapping()) return true;
   self->driver->result = JVMTI_ERROR_INTERNAL;
   __android_log_print(ANDROID_LOG_ERROR, "ART-DCEVM", "member mapping probe failed: %s", why.c_str());
   return false;
@@ -839,14 +833,11 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
       copied_resolution_changes = std::move(previous_copied);
     }
   } scope;
-  const MappingPlan* plan = nullptr;
-  if (transaction) {
-    const auto found = transaction->plans.find(data.index);
-    if (found != transaction->plans.end()) plan = &found->second;
-  }
+  const transaction::Context* context = transaction::Current();
+  const MappingPlan* plan = PlanOf(context, data.index);
   // Every thread is suspended and moving GC is off: the old classes' native
   // field-array slots can be swapped without barriers; ART only iterates them.
-  if (const LayoutOps* layout = plan ? Selected() : nullptr) {
+  if (const LayoutOps* layout = plan ? Selected(context) : nullptr) {
     auto* old_classes = data.Classes(true);
     for (const auto& swap : plan->field_swaps) {
       uint64_t* slot = layout->field_slot(old_classes->Get<void>(swap.class_index), swap.slot);
@@ -1508,16 +1499,17 @@ void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placehol
 }
 
 std::vector<int> CandidateReleases(bool verified_only) {
+  const transaction::Context* context = transaction::Current();
   std::vector<int> releases;
   for (size_t i : CandidateOrder())
-    if (!verified_only || (transaction && transaction->probed &&
-                           (transaction->layouts & (LayoutMask{1} << i))))
+    if (!verified_only || (context && context->probed && (context->layouts & (LayoutMask{1} << i))))
       releases.push_back(kLayouts[i].android);
   return releases;
 }
 
 bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
-  if (!available || !transaction) return false;
+  transaction::Context* context = transaction::Current();
+  if (!available || !context) return false;
   void* klass = mirror_class(self);
   void* class_type = DecodeClass(self, class_type_root);
   if (!class_type) return false;
@@ -1531,21 +1523,22 @@ bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& l
       why = "android" + std::to_string(kLayouts[i].android) + ": " + reason;
   }
   if (why.empty()) why = "no candidate layout for this platform";
-  transaction->probed = true;
-  transaction->layouts &= accepted;
-  const LayoutOps* layout = Selected();
+  context->probed = true;
+  context->layouts &= accepted;
+  const LayoutOps* layout = Selected(context);
   Report(layout ? "verified: android" + std::to_string(layout->android) + " class layout"
                 : "rejected: " + why);
   return layout != nullptr;
 }
 
 bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
-  if (!available || !transaction || !transaction->probed) return false;
+  const transaction::Context* context = transaction::Current();
+  if (!available || !context || !context->probed) return false;
   const void* mirror = DecodeClass(self, klass);
   if (!mirror) return false;
   std::optional<uint32_t> agreed;
   for (size_t i = 0; i < kLayoutCount; ++i) {
-    if (!(transaction->layouts & (LayoutMask{1} << i))) continue;
+    if (!(context->layouts & (LayoutMask{1} << i))) continue;
     const uint32_t flags = kLayouts[i].access(mirror);
     if (agreed && *agreed != flags) return false;
     agreed = flags;
@@ -1553,37 +1546,6 @@ bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) 
   if (!agreed) return false;
   *access = *agreed;
   return true;
-}
-
-TransactionScope::TransactionScope() {
-  auto* state = new Transaction;
-  state->previous = transaction;
-  state_ = transaction = state;
-}
-TransactionScope::~TransactionScope() {
-  auto* state = static_cast<Transaction*>(state_);
-  transaction = state->previous;
-  delete state;
-}
-void RequireMemberMapping() {
-  if (transaction) transaction->requires_mapping = true;
-}
-void ChangeSuperclass(ClassRedefinitionPrefix* self, jclass superclass,
-                      const std::string& descriptor) {
-  if (transaction) transaction->link_targets[self] = {superclass, descriptor};
-}
-void RedirectVerification(ClassRedefinitionPrefix* self, const std::string& descriptor) {
-  if (transaction) transaction->link_targets[self] = {nullptr, descriptor};
-}
-void WatchSubclassLoads(const std::atomic<bool>* loaded) {
-  if (transaction) transaction->subclass_loaded = loaded;
-}
-void RequireNoInstances(ClassRedefinitionPrefix* self, const std::string& descriptor) {
-  if (transaction) transaction->no_instances[self] = descriptor;
-}
-std::string TakeRejection() {
-  if (!transaction) return {};
-  return std::exchange(transaction->rejection, {});
 }
 
 void RetainRoots(std::vector<jobject> roots) {

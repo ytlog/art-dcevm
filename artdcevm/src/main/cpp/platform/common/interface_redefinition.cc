@@ -23,12 +23,12 @@
 #include "platform/common/art_dex_view.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/interface_snapshot.h"
+#include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::interface_redefinition {
 namespace {
 using namespace abi::arm64;
-thread_local const InterfaceRuntime* runtime = nullptr;
 template <class T> T& Field(void* object, size_t offset) {
   return *reinterpret_cast<T*>(static_cast<uint8_t*>(object) + offset);
 }
@@ -80,14 +80,50 @@ void Disable(const char* reason) noexcept {
 }
 
 struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; };
-struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; const Target* rejected_target = nullptr; const char* rejection = nullptr; const jvmtiClassDefinition* definitions = nullptr; std::vector<jclass> shared_ancestors{}; const std::string* rejection_class = nullptr; };
-thread_local State* state = nullptr;
+// Run's caller owns the DexFiles. This root outlives Run's holder and keeps
+// every linked replacement reachable until the result is known, including
+// partially completed allocations that never reach the holder's new_classes.
+struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
+struct Linking {
+  const std::vector<Handle>* old_types;
+  Handle new_types;
+  Handle private_cache;
+  int32_t index;
+};
+// This module's part of a transaction context.
+struct State final : transaction::Part {
+  State(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
+      : jni(jni), env(env), batch_size(count), definitions(definitions) {}
+  ~State() override { if (array_class) jni->DeleteLocalRef(array_class); }
+  std::vector<Target> targets;
+  JNIEnv* jni;
+  jvmtiEnv* env;
+  jint batch_size;
+  const jvmtiClassDefinition* definitions;
+  // Runtime declarations selected for this transaction's thread and targets.
+  const InterfaceRuntime* runtime = nullptr;
+  bool thread_verified = false;
+  bool runtime_verified = false;
+  int selected_release = 0;
+  jclass array_class = nullptr;
+  std::vector<jclass> shared_ancestors;
+  const Target* rejected_target = nullptr;
+  const char* rejection = nullptr;
+  const std::string* rejection_class = nullptr;
+  // ART's Run of this transaction, and the class it is linking for a group.
+  Attempt* attempt = nullptr;
+  const Linking* linking = nullptr;
+};
+State* CurrentState() {
+  return transaction::PartOf<State>(transaction::Current(), &transaction::Context::interfaces);
+}
+const InterfaceRuntime& Runtime() { return *CurrentState()->runtime; }
 thread_local Timing timing;
 struct JniFailure {};
 class LocalRef {
  public:
-  explicit LocalRef(void* object) : reference_(new_local_ref(state->jni, object)) {}
-  ~LocalRef() { delete_local_ref(state->jni, reference_); }
+  explicit LocalRef(void* object) : reference_(new_local_ref(CurrentState()->jni, object)) {}
+  ~LocalRef() { delete_local_ref(CurrentState()->jni, reference_); }
   jobject Get() const { return reference_; }
  private:
   jobject reference_;
@@ -113,6 +149,7 @@ void* Decode(jclass klass) {
   return mirror_class(&lookup);
 }
 const Target* Find(void* klass) {
+  const State* state = CurrentState();
   if (!state) return nullptr;
   for (const auto& target : state->targets)
     if (Decode(target.klass) == klass) return &target;
@@ -120,11 +157,11 @@ const Target* Find(void* klass) {
 }
 ClassStatus Status(void* klass) {
   // mirror/class.h: status occupies the four most significant bits.
-  return static_cast<ClassStatus>(__atomic_load_n(&Field<uint32_t>(klass, runtime->status),
+  return static_cast<ClassStatus>(__atomic_load_n(&Field<uint32_t>(klass, Runtime().status),
                                                 __ATOMIC_ACQUIRE) >> kClassStatusShift);
 }
 jvmtiError Reject(std::string* message, jvmtiError error, const char* why) {
-  state->rejection = why;  // Static reason; formatting waits until Native return.
+  CurrentState()->rejection = why;  // Static reason; formatting waits until Native return.
   *message = why;
   return error;
 }
@@ -187,6 +224,7 @@ bool VerifyScopes(const InterfaceRuntime& layout, void* thread, Handle target) {
 // Only a failed independent declaration probe disables the process. A target
 // that cannot supply the required member evidence rejects this transaction.
 const char* SelectRuntime(Handle klass, const Target& target) {
+  State* state = CurrentState();
   if (!state->thread_verified) {
     Disable("interface Thread declaration did not match JNI environment/tid");
     return disabled_reason.load();
@@ -209,7 +247,7 @@ const char* SelectRuntime(Handle klass, const Target& target) {
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
     if (Inject(14)) { Disable("interface HandleScope probe rejected injected mismatch"); return disabled_reason.load(); }
 #endif
-    runtime = candidate;
+    state->runtime = candidate;
     state->runtime_verified = true;
     state->selected_release = release;
     return nullptr;
@@ -250,6 +288,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   void* object = klass.Get<void>();
   const Target* target = Find(object);
   if (!target) return reinterpret_cast<Admission>(original)(klass, message);
+  State* state = CurrentState();
   state->rejected_target = target;
   state->rejection_class = nullptr;
   if (!Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
@@ -283,18 +322,19 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
                                                       : "interface pointer-id field table is unavailable");
     }
     void* thread = current_thread();
-    if (Status(object) == ClassStatus::kInitializing && Field<uint32_t>(object, runtime->clinit_thread_id) == Field<uint32_t>(thread, runtime->tid))
+    if (Status(object) == ClassStatus::kInitializing && Field<uint32_t>(object, state->runtime->clinit_thread_id) == Field<uint32_t>(thread, state->runtime->tid))
       return Reject(message, JVMTI_ERROR_INTERNAL, "interface redefinition rejects redefinition during initialization");
     if (!ensure_initialized(linker, thread, klass, true, true)) {
       // Thread::ClearException() in runtime/thread.h is this assignment.
-      Field<void*>(thread, runtime->exception) = nullptr;
+      Field<void*>(thread, state->runtime->exception) = nullptr;
       return Reject(message, JVMTI_ERROR_INVALID_CLASS, "interface redefinition target failed initialization");
     }
   }
   return JVMTI_ERROR_NONE;
 } catch (...) {
   // Even writing the diagnostic string can allocate. Do not write one here.
-  if (runtime) Field<void*>(current_thread(), runtime->exception) = nullptr;
+  if (const State* state = CurrentState(); state && state->runtime)
+    Field<void*>(current_thread(), state->runtime->exception) = nullptr;
   return ArtHookExceptionError();
 }
 jvmtiError NormalCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 0); }
@@ -306,23 +346,25 @@ jvmtiError StructuralGet(Handle klass, std::string* message) noexcept { return A
 // gathering the Class objects or constructing this C++ storage.
 class Roots {
  public:
-  Roots(void* thread, size_t count) : thread_(thread), storage_(new uint8_t[runtime->scope_header_size + 4 * count]{}) {
-    Field<void*>(storage_.get(), runtime->scope_link) = Field<void*>(thread_, runtime->top_handle_scope);
-    Field<int32_t>(storage_.get(), runtime->scope_capacity) = static_cast<int32_t>(count);
-    Field<void*>(thread_, runtime->top_handle_scope) = storage_.get();
+  Roots(void* thread, size_t count)
+      : thread_(thread), runtime_(Runtime()), storage_(new uint8_t[runtime_.scope_header_size + 4 * count]{}) {
+    Field<void*>(storage_.get(), runtime_.scope_link) = Field<void*>(thread_, runtime_.top_handle_scope);
+    Field<int32_t>(storage_.get(), runtime_.scope_capacity) = static_cast<int32_t>(count);
+    Field<void*>(thread_, runtime_.top_handle_scope) = storage_.get();
   }
-  ~Roots() { Field<void*>(thread_, runtime->top_handle_scope) = Field<void*>(storage_.get(), runtime->scope_link); }
+  ~Roots() { Field<void*>(thread_, runtime_.top_handle_scope) = Field<void*>(storage_.get(), runtime_.scope_link); }
   Roots(const Roots&) = delete;
   Roots& operator=(const Roots&) = delete;
   Handle Add(void* object) {
-    auto* slot = reinterpret_cast<uint32_t*>(storage_.get() + runtime->scope_header_size) + used_++;
+    auto* slot = reinterpret_cast<uint32_t*>(storage_.get() + runtime_.scope_header_size) + used_++;
     *slot = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
-    if (runtime->scope_size != InterfaceRuntime::kAbsent)
-      Field<uint32_t>(storage_.get(), runtime->scope_size) = static_cast<uint32_t>(used_);
+    if (runtime_.scope_size != InterfaceRuntime::kAbsent)
+      Field<uint32_t>(storage_.get(), runtime_.scope_size) = static_cast<uint32_t>(used_);
     return {slot};
   }
  private:
   void* thread_;
+  const InterfaceRuntime& runtime_;
   std::unique_ptr<uint8_t[]> storage_;
   size_t used_ = 0;
 };
@@ -334,7 +376,7 @@ void* Read(uint32_t reference) {
   void* thread = current_thread();
   // Source read barriers run only while this mutator is marking. Mark performs
   // the ART collector operation; this module does not implement a collector.
-  return object && Field<uint32_t>(thread, runtime->is_gc_marking) ? mark(object) : object;
+  return object && Field<uint32_t>(thread, Runtime().is_gc_marking) ? mark(object) : object;
 }
 void Store(ObjectArray* array, int32_t index, void* value) {
   // The only JNI operation permitted inside our ART allocation hook: the
@@ -345,8 +387,9 @@ void Store(ObjectArray* array, int32_t index, void* value) {
   // helpers only bridge these rooted objects; capacity is reserved while Native.
   // Never use this helper from LinkClass, a class visitor, or a locked region.
   LocalRef destination(array), element(value);
-  state->jni->SetObjectArrayElement(static_cast<jobjectArray>(destination.Get()), index, element.Get());
-  if (state->jni->ExceptionCheck()) throw JniFailure{};
+  JNIEnv* jni = CurrentState()->jni;
+  jni->SetObjectArrayElement(static_cast<jobjectArray>(destination.Get()), index, element.Get());
+  if (jni->ExceptionCheck()) throw JniFailure{};
 }
 void* Slot(const RedefinitionDataIter& data, int32_t slot) {
   return Read(data.holder->array.Get<ObjectArray>()->elements[data.index * RedefinitionDataIter::kNumSlots + slot]);
@@ -354,13 +397,9 @@ void* Slot(const RedefinitionDataIter& data, int32_t slot) {
 void SetSlot(const RedefinitionDataIter& data, int32_t slot, void* object) {
   Store(data.holder->array.Get<ObjectArray>(), data.index * RedefinitionDataIter::kNumSlots + slot, object);
 }
-// Run's caller owns the DexFiles. This root outlives Run's holder and keeps
-// every linked replacement reachable until the result is known, including
-// partially completed allocations that never reach the holder's new_classes.
-struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
-thread_local Attempt* attempt = nullptr;
 Handle ReplacementRoot(const Target& target) {
-  return attempt->replacements[&target - state->targets.data()];
+  const State* state = CurrentState();
+  return state->attempt->replacements[&target - state->targets.data()];
 }
 void DiscardClass(void* klass) {
   if (!klass) return;
@@ -388,13 +427,15 @@ void Discard(const Attempt& next) {
 
 class AttemptScope {
  public:
-  explicit AttemptScope(Attempt* next) : previous_(std::exchange(attempt, next)) {}
-  ~AttemptScope() { Discard(*attempt); attempt = previous_; }
+  AttemptScope(State* state, Attempt* next) : state_(state), previous_(std::exchange(state->attempt, next)) {}
+  ~AttemptScope() { Discard(*state_->attempt); state_->attempt = previous_; }
  private:
+  State* state_;
   Attempt* previous_;
 };
 jvmtiError Run(RedefinerPrefix* driver) noexcept {
   using Function = jvmtiError (*)(RedefinerPrefix*);
+  State* state = CurrentState();
   if (!state || state->targets.empty())
     return reinterpret_cast<Function>(original_run)(driver);
   if (!state->thread_verified || !state->runtime_verified) {
@@ -412,7 +453,7 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     Roots roots(driver->self, state->targets.size() + 1);
     Attempt next{driver, {}, roots.Add(nullptr)};
     for (size_t i = 0; i < state->targets.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
-    AttemptScope scope(&next);
+    AttemptScope scope(state, &next);
     const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
     return result;
@@ -422,18 +463,11 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     driver->result = JVMTI_ERROR_OUT_OF_MEMORY;
     return JVMTI_ERROR_OUT_OF_MEMORY;
   } catch (...) {
-    Field<void*>(driver->self, runtime->exception) = nullptr;
+    Field<void*>(driver->self, state->runtime->exception) = nullptr;
     driver->result = ArtHookExceptionError();
     return static_cast<jvmtiError>(driver->result);
   }
 }
-struct Linking {
-  const std::vector<Handle>* old_types;
-  Handle new_types;
-  Handle private_cache;
-  int32_t index;
-};
-thread_local const Linking* linking = nullptr;
 bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
                Handle interfaces, Handle* output) noexcept {
   using Function = bool (*)(void*, void*, const char*, Handle, Handle, Handle*);
@@ -443,8 +477,10 @@ bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
   // allocations. Those can fail after linking and return nullptr to Finish.
   // This callback may run with ClassLinker locks held. Only assign an existing
   // HandleScope root: no JNI/local-table growth, heap store or allocation here.
+  const State* state = CurrentState();
+  const Linking* linking = state ? state->linking : nullptr;
   if (linking && !descriptor && output && output->Get<void>())
-    Assign(attempt->pending, output->Get<void>());
+    Assign(state->attempt->pending, output->Get<void>());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   // A link failure after producing the class exercises the allocator's null
   // return path, before Finish has recorded this replacement in the holder.
@@ -454,12 +490,15 @@ bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
 }
 class LinkingScope {
  public:
-  explicit LinkingScope(const Linking* scope) : previous_(std::exchange(linking, scope)) {}
-  ~LinkingScope() { linking = previous_; }
+  LinkingScope(State* state, const Linking* scope) : state_(state), previous_(std::exchange(state->linking, scope)) {}
+  ~LinkingScope() { state_->linking = previous_; }
  private:
+  State* state_;
   const Linking* previous_;
 };
 void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcept try {
+  const State* state = CurrentState();
+  const Linking* linking = state ? state->linking : nullptr;
   if (!linking || cache != linking->private_cache.Get<void>()) return nullptr;
   const auto* dex = reinterpret_cast<const DexFilePrefix*>(static_cast<DexCache*>(cache)->dex_file);
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
@@ -479,7 +518,7 @@ void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcep
 } catch (...) {
   // Lookup cannot return a JVMTI error. Retain it until Finish regains control;
   // the result of this link will never be committed.
-  attempt->error = ArtHookExceptionError();
+  CurrentState()->attempt->error = ArtHookExceptionError();
   return nullptr;
 }
 void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) noexcept {
@@ -487,17 +526,18 @@ void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) no
   return reinterpret_cast<LookupCache>(original_lookup_cache)(linker, index, cache, loader);
 }
 void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
-  if (linking) {
-    if (void* object = Redirect(linker, index, Read(Field<uint32_t>(referrer, runtime->dex_cache)),
-                               Read(Field<uint32_t>(referrer, runtime->class_loader)))) return object;
+  if (const State* state = CurrentState(); state && state->linking) {
+    if (void* object = Redirect(linker, index, Read(Field<uint32_t>(referrer, state->runtime->dex_cache)),
+                               Read(Field<uint32_t>(referrer, state->runtime->class_loader)))) return object;
   }
   return reinterpret_cast<LookupReferrer>(original_lookup_referrer)(linker, index, referrer);
 }
 bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) noexcept {
+  State* state = CurrentState();
   state->rejected_target = Find(mirror_class(self));
   state->rejection_class = nullptr;
   state->rejection = why;
-  Field<void*>(current_thread(), runtime->exception) = nullptr;
+  Field<void*>(current_thread(), state->runtime->exception) = nullptr;
   self->driver->result = error;
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", why);
   return false;
@@ -508,10 +548,12 @@ struct HolderView {
   std::vector<bool>* structural = nullptr;
   std::vector<bool>* initial = nullptr;
   ClassRedefinitionPrefix* Definition(int32_t index) const {
-    return reinterpret_cast<ClassRedefinitionPrefix*>(begin + index * runtime->redefinition_size);
+    return reinterpret_cast<ClassRedefinitionPrefix*>(begin + index * Runtime().redefinition_size);
   }
 };
 bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
+  const State* state = CurrentState();
+  const InterfaceRuntime& runtime = *state->runtime;
   const auto reject_holder = [&](const char* reason) {
     Disable(reason);
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
@@ -520,18 +562,18 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
       !data->holder->array.Get<ObjectArray>() ||
       data->holder->array.Get<ObjectArray>()->length != state->batch_size * RedefinitionDataIter::kNumSlots)
     return reject_holder("interface holder array declaration mismatch");
-  auto* definitions = Field<void**>(data->holder, runtime->redefinitions);
+  auto* definitions = Field<void**>(data->holder, runtime.redefinitions);
   if (!definitions || !definitions[0] || data->index < 0 || data->index >= state->batch_size ||
       reinterpret_cast<uintptr_t>(definitions[1]) != reinterpret_cast<uintptr_t>(definitions[0]) +
-          state->batch_size * runtime->redefinition_size ||
+          state->batch_size * runtime.redefinition_size ||
       reinterpret_cast<uintptr_t>(definitions[2]) < reinterpret_cast<uintptr_t>(definitions[1]) ||
       reinterpret_cast<uintptr_t>(self) != reinterpret_cast<uintptr_t>(definitions[0]) +
-          data->index * runtime->redefinition_size ||
+          data->index * runtime.redefinition_size ||
       Slot(*data, 4) != mirror_class(self))
     return reject_holder("interface holder redefinitions declaration mismatch");
-  auto& initialized = Field<std::vector<bool>>(data->holder, runtime->initialized);
-  auto& structural = Field<std::vector<bool>>(data->holder, runtime->actually_structural);
-  auto& initial = Field<std::vector<bool>>(data->holder, runtime->initial_structural);
+  auto& initialized = Field<std::vector<bool>>(data->holder, runtime.initialized);
+  auto& structural = Field<std::vector<bool>>(data->holder, runtime.actually_structural);
+  auto& initial = Field<std::vector<bool>>(data->holder, runtime.initial_structural);
   if (initialized.size() != static_cast<size_t>(state->batch_size) ||
       structural.size() != initialized.size() || initial.size() != initialized.size())
     return reject_holder("interface holder flag declarations mismatch");
@@ -564,6 +606,9 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
           std::chrono::steady_clock::now() - start).count();
     }
   } allocation_timer;
+  State* state = CurrentState();
+  const InterfaceRuntime& runtime = *state->runtime;
+  Attempt* attempt = state->attempt;
   if (!state->array_class || !attempt || attempt->driver != self->driver)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition requires private array roots");
   const auto reject_holder = [&](const char* reason) {
@@ -622,7 +667,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   for (size_t i = 0; i < old_types.size(); ++i) {
     void* old = old_types[i].Get<void>();
     Store(old_array.Get<ObjectArray>(), static_cast<int32_t>(i), old);
-    void* super = Read(Field<uint32_t>(old, runtime->super_class));
+    void* super = Read(Field<uint32_t>(old, runtime.super_class));
     const int32_t parent = target->snapshot.superclass[i];
     if (parent >= 0) {
       if (static_cast<size_t>(parent) >= i || old_types[parent].Get<void>() != super)
@@ -630,7 +675,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
       super = Read(new_array.Get<ObjectArray>()->elements[parent]);
     }
     Assign(superclass, super);
-    Assign(original_cache, Read(Field<uint32_t>(old, runtime->dex_cache)));
+    Assign(original_cache, Read(Field<uint32_t>(old, runtime.dex_cache)));
     const int32_t batch_index = batch_indices[i];
     RedefinitionDataIter item{batch_index, data->holder};
     auto* allocator = batch_index >= 0 ? holder.Definition(batch_index) : self;
@@ -638,7 +683,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
       Assign(cache, Slot(item, 3));  // Incoming DEX, rooted by ART's holder.
     } else {
       const auto* dex = reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
-      Assign(loader, Read(Field<uint32_t>(old, runtime->class_loader)));
+      Assign(loader, Read(Field<uint32_t>(old, runtime.class_loader)));
       // CreateNewDexCache reads only driver_ and dex_file_. This non-owning
       // source prefix does not swap or destroy ART's owning DexFile pointer.
       ClassRedefinitionPrefix context{self->driver, nullptr, dex};
@@ -648,15 +693,15 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     const DexFilePrefix* expected_dex = batch_index >= 0 ? allocator->dex_file
         : reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
     if (cache.Get<DexCache>()->dex_file != reinterpret_cast<uintptr_t>(expected_dex) ||
-        Read(cache.Get<DexCache>()->class_loader) != Read(Field<uint32_t>(old_types[i].Get<void>(), runtime->class_loader)) ||
+        Read(cache.Get<DexCache>()->class_loader) != Read(Field<uint32_t>(old_types[i].Get<void>(), runtime.class_loader)) ||
         cache.Get<void>() == original_cache.Get<void>())
       return reject_holder("interface private DexCache declaration mismatch");
     const Linking scope{&old_types, new_array, cache, static_cast<int32_t>(i)};
     void* replacement;
     {
-      LinkingScope active(&scope);
+      LinkingScope active(state, &scope);
       replacement = allocate_class(allocator, old_types[i], superclass, cache,
-          batch_index >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime->dex_class_def_index)));
+          batch_index >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime.dex_class_def_index)));
     }
     if (attempt->error != JVMTI_ERROR_NONE)
       return FailAllocation(self, attempt->error, "interface linking hook failed");
@@ -689,6 +734,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   return true;
 }
 const Target* AffectedTarget(void* klass) {
+  const State* state = CurrentState();
   if (!state) return nullptr;
   for (const auto& target : state->targets)
     for (jclass type : target.snapshot.types)
@@ -706,7 +752,7 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
     if ((*holder.initialized)[data->index]) return true;
     // ART sorts by superclass depth, not interface dependencies. The first
     // affected entry delegates the complete group to its interface owner.
-    for (jint i = 0; i < state->batch_size; ++i) {
+    for (jint i = 0; i < CurrentState()->batch_size; ++i) {
       auto* owner = holder.Definition(i);
       if (owner->klass != target->klass) continue;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
@@ -736,6 +782,7 @@ std::string RuntimeState() {
 }
 Timing LastTiming() { return timing; }
 std::string TakeRejection() {
+  State* state = CurrentState();
   if (!state || !state->rejection) return {};
   const char* reason = std::exchange(state->rejection, nullptr);
   const Target* target = state->rejected_target;
@@ -745,13 +792,15 @@ std::string TakeRejection() {
 bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(mirror_class(self)); }
 bool IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(mirror_class(self)); }
 bool SharesImplementationGroup(ClassRedefinitionPrefix* self) {
+  const State* state = CurrentState();
   if (!state) return false;
   for (jclass ancestor : state->shared_ancestors)
     if (Decode(ancestor) == mirror_class(self)) return true;
   return false;
 }
 void* VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
-  if (!attempt || !state || state->targets.empty()) return nullptr;
+  const State* state = CurrentState();
+  if (!state || !state->attempt || state->targets.empty()) return nullptr;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (Inject(17)) throw std::bad_alloc{};
 #endif
@@ -772,10 +821,13 @@ void* VerificationClass(void* linker, std::string_view descriptor, Handle loader
   }
   return nullptr;
 } catch (...) {
-  attempt->error = ArtHookExceptionError();
+  CurrentState()->attempt->error = ArtHookExceptionError();
   return nullptr;
 }
-jvmtiError VerificationError() noexcept { return attempt ? attempt->error : JVMTI_ERROR_NONE; }
+jvmtiError VerificationError() noexcept {
+  const State* state = CurrentState();
+  return state && state->attempt ? state->attempt->error : JVMTI_ERROR_NONE;
+}
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCheckJni(
@@ -799,7 +851,8 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
 }
 bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {
   const Target* owner = Find(mirror_class(self));
-  if (!attempt || attempt->driver != self->driver || !owner || owner->snapshot.types.empty()) return false;
+  const State* state = CurrentState();
+  if (!state || !state->attempt || state->attempt->driver != self->driver || !owner || owner->snapshot.types.empty()) return false;
   if (!allocated && Inject(3)) {
     FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected instance allocation failure");
     return true;
@@ -846,56 +899,48 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits
   return failure_hits;
 }
 #endif
-Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
-    : state_(new State{state, {}, jni, env, false, nullptr, count, runtime}) {
-  auto* next = static_cast<State*>(state_);
-  try {
-    state = next;
-    next->definitions = definitions;
+void Begin(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+  transaction::Context* context = transaction::Current();
+  if (!context) return;
+  context->interfaces = std::make_unique<State>(jni, env, count, definitions);
+  auto* next = static_cast<State*>(context->interfaces.get());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-    if (Inject(16)) throw std::bad_alloc{};
+  if (Inject(16)) throw std::bad_alloc{};
 #endif
-    if (!Available() || count <= 0 || !definitions) return;
-    runtime = nullptr;
-    void* thread = current_thread();
-    for (int release : method_retirement::CandidateReleases(false)) {
-      const auto* candidate = RuntimeFor(release);
-      if (candidate && VerifyThread(*candidate, thread, jni)) {
-        runtime = candidate;
-        next->thread_verified = true;
-        break;
-      }
+  if (!Available() || count <= 0 || !definitions) return;
+  void* thread = current_thread();
+  for (int release : method_retirement::CandidateReleases(false)) {
+    const auto* candidate = RuntimeFor(release);
+    if (candidate && VerifyThread(*candidate, thread, jni)) {
+      next->runtime = candidate;
+      next->thread_verified = true;
+      break;
     }
-    for (jint i = 0; i < count; ++i) {
-      jint access = 0, status = 0;
-      jobject loader = nullptr;
-      jclass klass = definitions[i].klass;
-      if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & evolution::kAccInterface)) continue;
-      if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE) continue;
-      const auto status_result = env->GetClassStatus(klass, &status);
-      const bool boot = !loader;
-      if (loader) jni->DeleteLocalRef(loader);
-      if (status_result != JVMTI_ERROR_NONE) continue;
-      next->targets.push_back({klass, boot, status, {}, {}, nullptr});
-    }
-    if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
-      jclass class_class = jni->FindClass("java/lang/Class");
-      jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
-      if (array) next->array_class = jni->GetObjectClass(array);
-      if (array) jni->DeleteLocalRef(array);
-      if (class_class) jni->DeleteLocalRef(class_class);
-      if (jni->ExceptionCheck()) jni->ExceptionClear();
-    }
-  } catch (...) {
-    if (next->array_class) jni->DeleteLocalRef(next->array_class);
-    state = next->previous;
-    runtime = next->previous_runtime;
-    delete next;
-    throw;  // Still Native: Route converts this after restoring both TLS values.
+  }
+  for (jint i = 0; i < count; ++i) {
+    jint access = 0, status = 0;
+    jobject loader = nullptr;
+    jclass klass = definitions[i].klass;
+    if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & evolution::kAccInterface)) continue;
+    if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE) continue;
+    const auto status_result = env->GetClassStatus(klass, &status);
+    const bool boot = !loader;
+    if (loader) jni->DeleteLocalRef(loader);
+    if (status_result != JVMTI_ERROR_NONE) continue;
+    next->targets.push_back({klass, boot, status, {}, {}, nullptr});
+  }
+  if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
+    jclass class_class = jni->FindClass("java/lang/Class");
+    jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
+    if (array) next->array_class = jni->GetObjectClass(array);
+    if (array) jni->DeleteLocalRef(array);
+    if (class_class) jni->DeleteLocalRef(class_class);
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
 }
-const std::vector<jclass>* Scope::GroupTypes(jclass klass) const {
-  const auto* current = static_cast<const State*>(state_);
+const std::vector<jclass>* GroupTypes(jclass klass) {
+  const State* current = CurrentState();
+  if (!current) return nullptr;
   for (const auto& target : current->targets) {
     if (!target.owner || !current->jni->IsSameObject(target.klass, klass)) continue;
     for (const auto& owner : current->targets)
@@ -903,12 +948,13 @@ const std::vector<jclass>* Scope::GroupTypes(jclass klass) const {
   }
   return nullptr;
 }
-void Scope::Describe(jclass klass, const evolution::ClassSchema& live) {
-  auto* next = static_cast<State*>(state_);
+void Describe(jclass klass, const evolution::ClassSchema& live) {
+  State* next = CurrentState();
+  if (!next) return;
   for (auto& target : next->targets)
     if (next->jni->IsSameObject(target.klass, klass)) target.live = live;
 }
-jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
+jvmtiError Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
   const auto start = std::chrono::steady_clock::now();
   timing = {};
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
@@ -916,7 +962,8 @@ jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, 
   allocated_types = 0;
   allocated_groups = 0;
 #endif
-  auto* next = static_cast<State*>(state_);
+  State* next = CurrentState();
+  if (!next) return JVMTI_ERROR_NONE;
   // A batch child interface belongs to its highest batch ancestor. Only roots
   // capture a group, so each child interface/implementation is rebuilt once.
   for (auto& target : next->targets) {
@@ -974,13 +1021,6 @@ jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, 
     timing.snapshot_ns = loaded_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count();
   return JVMTI_ERROR_NONE;
-}
-Scope::~Scope() {
-  auto* old = static_cast<State*>(state_);
-  if (old->array_class) old->jni->DeleteLocalRef(old->array_class);
-  state = old->previous;
-  runtime = old->previous_runtime;
-  delete old;
 }
 void Prepare(std::vector<Hook>* hooks, std::string* note) {
   available = false;
