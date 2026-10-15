@@ -11,6 +11,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_policy.h"
+#include "platform/common/field_array_probe.h"
+#include "platform/abi/arm64/android13/class.h"
+#include "platform/abi/arm64/android16/class.h"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -49,6 +52,38 @@ void Reject(const ClassSchema& live, const ClassSchema& next, jvmtiError expecte
 }
 int main(int argc, char** argv) {
   try {
+    {
+      // Exercise the same probe used by CheckClass. A failed slot declaration
+      // must reject before dereferencing the deliberately invalid array.
+      namespace abi = artdcevm::abi::arm64;
+      void* type = reinterpret_cast<void*>(uintptr_t{0x1000});
+      abi::ArtField slot{0x1000, acc::kAccPrivate, 0, 40};
+      const auto lookup = [&](void* owner, std::string_view name, std::string_view descriptor) {
+        return owner == type && name == "fields" && descriptor == "J" ? &slot : nullptr;
+      };
+      abi::LengthPrefixedArray<abi::ArtField> empty{0}, populated{2};
+      uint32_t length = 99;
+      const auto probe = [&](uint64_t array) {
+        return method_retirement::ProbeFieldArray(type, "fields", 40, array, lookup, &length);
+      };
+      Require(probe(reinterpret_cast<uintptr_t>(&empty)) && length == 0,
+              "ART shared nonnull empty field array was rejected");
+      Require(probe(0) && length == 0, "older ART null field array was rejected");
+      Require(probe(reinterpret_cast<uintptr_t>(&populated)) && length == 2,
+              "populated field array count differs");
+      slot.offset = 48;
+      Require(!probe(1), "wrong field slot offset was accepted");
+      slot.offset = 40; slot.access_flags |= acc::kAccStatic;
+      Require(!probe(1), "static field was accepted as a Class instance slot");
+      slot.access_flags = acc::kAccPrivate; slot.declaring_class = 0x2000;
+      Require(!probe(1), "field slot from a different class was accepted");
+      Require(!method_retirement::ProbeFieldArray(type, "missing", 40, 1, lookup, &length),
+              "missing Class slot was accepted");
+      Require(abi::android13::kFieldArrayNames[0] == std::string_view("iFields") &&
+              abi::android13::kFieldArrayNames[1] == std::string_view("sFields") &&
+              abi::android16::kFieldArrayNames[0] == std::string_view("fields"),
+              "Class.java field array slot names differ");
+    }
     const auto live = Base();
     Accept(live, live, false, false);  // Method bodies do not alter declarations.
     auto next = live;

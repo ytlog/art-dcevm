@@ -43,6 +43,11 @@ static_assert(offsetof(Class, ifields) == 40 && offsetof(Class, methods) == 48 &
               offsetof(Class, sfields) == 56 && offsetof(Class, access_flags) == 64);
 static_assert(offsetof(Class, status) == 112);
 
+// Class.java names used to probe the fixed native slots through ART.
+inline constexpr std::array<const char*, 2> kFieldArrayNames{"iFields", "sFields"};
+
+inline const char* FieldArrayName(const Class&, size_t slot) { return kFieldArrayNames[slot]; }
+
 // Slots of the native arrays holding every declared field of `klass`.
 inline std::array<uint64_t*, 2> FieldArraySlots(Class& klass) {
   return {&klass.ifields, &klass.sfields};
