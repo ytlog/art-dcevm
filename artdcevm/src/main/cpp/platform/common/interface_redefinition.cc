@@ -1023,7 +1023,7 @@ jvmtiError Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::st
         std::chrono::steady_clock::now() - start).count();
   return JVMTI_ERROR_NONE;
 }
-void Prepare(std::vector<Hook>* hooks, std::string* note) {
+void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note) {
   available = false;
   disabled_reason.store(nullptr);
   verified_release.store(0);
@@ -1036,7 +1036,7 @@ void Prepare(std::vector<Hook>* hooks, std::string* note) {
     reject("interface redefinition is device-verified only on Android 13/API 33 and Android 16/API 36");
     return;
   }
-  if (!method_retirement::SuperclassChangeAvailable()) {
+  if (!verifier_redirect) {
     reject("interface redefinition requires verifier hooks and runtime-probed declarations");
     return;
   }

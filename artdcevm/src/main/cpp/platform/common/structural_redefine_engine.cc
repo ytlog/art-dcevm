@@ -19,7 +19,7 @@
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/member_retirement.h"
-#include "platform/common/method_retirement.h"
+#include "platform/common/member_mapping.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/transaction_context.h"
@@ -726,7 +726,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       return result;
     }
   }
-  if (method_retirement::Available()) {
+  if (member_mapping::Available()) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
     // its own obsolete chain, including native ArtMethod storage and DexCache.
@@ -811,9 +811,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   abilities.field_retirement =
       abilities.member_mapping && member_retirement::FieldRetirementAvailable();
-  abilities.instance_check = method_retirement::Available();
+  abilities.instance_check = member_mapping::Available();
   abilities.superclass_change =
-      abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
+      abilities.member_mapping && member_mapping::SuperclassChangeAvailable();
   // The snapshot carries the interface group's facts, the mapping rejects new
   // default conflicts, and retirement roots cover the group: an interface
   // target may evolve its members whenever the engine owns the mapping.
@@ -952,9 +952,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   record_method = reinterpret_cast<Record>(addresses[6]);
   std::vector<Hook> replacements;
   std::string retirement_note;
-  method_retirement::Prepare(vm, env, &replacements, &retirement_note);
+  member_mapping::Prepare(vm, env, &replacements, &retirement_note);
   std::string interface_note;
-  interface_redefinition::Prepare(&replacements, &interface_note);
+  interface_redefinition::Prepare(member_mapping::SuperclassChangeAvailable(), &replacements,
+                                  &interface_note);
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -978,14 +979,14 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;
-  watch_available = method_retirement::Available() &&
+  watch_available = member_mapping::Available() &&
       env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
   std::string field_note;
-  if (method_retirement::Available())
+  if (member_mapping::Available())
     member_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
-  diagnostic = !method_retirement::Available()
+  diagnostic = !member_mapping::Available()
       ? "ART structural transaction with additions and modifier changes; members cannot retire"
       : member_retirement::FieldRetirementAvailable()
           ? "ART structural transaction with method and field retirement"
@@ -998,7 +999,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
 std::string Capabilities() {
   std::lock_guard<std::mutex> lock(report_mutex);
   const std::string supported = installed ? "true" : "false";
-  const bool methods = installed && method_retirement::Available();
+  const bool methods = installed && member_mapping::Available();
   const bool fields = methods && member_retirement::FieldRetirementAvailable();
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
@@ -1008,7 +1009,7 @@ std::string Capabilities() {
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
-          (methods && method_retirement::SuperclassChangeAvailable() ? "true" : "false") +
+          (methods && member_mapping::SuperclassChangeAvailable() ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +

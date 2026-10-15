@@ -1,4 +1,4 @@
-#include "platform/common/method_retirement.h"
+#include "platform/common/member_mapping.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
 
@@ -19,10 +19,10 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/transaction_context.h"
+#include "platform/common/verification_redirect.h"
 #include "platform/symbols/structural_redefine_symbols.h"
-#include "platform/symbols/verification_redirect_symbols.h"
 
-namespace artdcevm::method_retirement {
+namespace artdcevm::member_mapping {
 namespace {
 namespace abi = artdcevm::abi::arm64;
 using abi::ArtField;
@@ -64,10 +64,6 @@ void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_allocate = nullptr;
-void* original_check_verification = nullptr;
-void* original_find_class = nullptr;
-void* original_find_class_with_length = nullptr;
-bool superclass_change_available = false;
 void* original_instances = nullptr;
 void* original_visit = nullptr;
 
@@ -304,57 +300,6 @@ void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Ha
   return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
 }
 
-// ART verifies the new DEX before the commit. Since Android 13 its verifier
-// resolves the class's own descriptor through the class loader, which still
-// yields the old class (old superclass), so a call to the new superclass's
-// constructor fails verification. While ART verifies a redefinition with a
-// superclass change, this thread's FindClass answers that descriptor with the
-// new class object, which the holder keeps rooted.
-struct Verifying {
-  const RedefinitionDataIter* data;
-  std::string_view descriptor;  // "Lpkg/Name;"
-  bool interface_group;
-};
-thread_local const Verifying* verifying = nullptr;
-
-bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
-  using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
-  const transaction::Context* context = transaction::Current();
-  const transaction::Requirements* target = context ? context->Find(self) : nullptr;
-  if (!target || !target->redirect_verification)
-    return reinterpret_cast<Function>(original_check_verification)(self, data);
-  const Verifying scope{&data, target->descriptor, interface_redefinition::IsAffected(self)};
-  const Verifying* previous = std::exchange(verifying, &scope);
-  const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
-  verifying = previous;
-  if (const auto error = interface_redefinition::VerificationError(); error != JVMTI_ERROR_NONE) {
-    self->driver->result = error;
-    return false;
-  }
-  return verified;
-}
-
-void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
-  if (!verifying) return nullptr;
-  if (verifying->interface_group)
-    return interface_redefinition::VerificationClass(linker, descriptor, loader);
-  return descriptor == verifying->descriptor ? verifying->data->NewClassObject() : nullptr;
-}
-void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
-  interface_redefinition::ObserveClassLinker(linker);
-  if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
-  using Function = void* (*)(void*, void*, const char*, Handle);
-  return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
-}
-void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
-                          Handle loader) noexcept {
-  interface_redefinition::ObserveClassLinker(linker);
-  if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
-  using Function = void* (*)(void*, void*, const char*, size_t, Handle);
-  return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
-                                                                     length, loader);
-}
-
 // Commit: apply the plan made before ART's no-failure point, or keep ART's
 // own mapping for a transaction that has none.
 void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
@@ -551,14 +496,12 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     Report("unavailable");
   };
   using namespace symbols::structural;
-  using namespace symbols::verification_redirect;
   struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
   const Required required[] = {
       {kCollectNewFieldAndMethodMappings, HookAddress(CollectMappings), &original_mapping},
       {kCollectAndCreateNewInstances, HookAddress(CollectAndCreateNewInstances), &original_instances},
       {kUpdateClassStructurally, HookAddress(Update), &original_update},
       {kAllocateNewClassObject, HookAddress(AllocateNewClassObject), &original_allocate},
-      {kCheckVerification, HookAddress(CheckVerification), &original_check_verification},
       {kVisitReflectiveTargets, HookAddress(Visit), &original_visit},
       {kFindDeclaredStaticField, nullptr, HookSlot(&find_static_field)},
       {kFindDeclaredInstanceField, nullptr, HookSlot(&find_declared_instance_field)},
@@ -570,17 +513,8 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     if (entry.replacement) resolved.push_back({address, entry.replacement, entry.original, entry.symbol.name});
     else *entry.original = address;
   }
-  // Superclass changes need the verifier redirect through either FindClass.
-  superclass_change_available = false;
-  if (void* find = symbols::Find(kFindClass)) {
-    resolved.push_back({find, HookAddress(FindClass), &original_find_class, kFindClass.name});
-    superclass_change_available = true;
-  }
-  if (void* find = symbols::Find(kFindClassWithLength)) {
-    resolved.push_back({find, HookAddress(FindClassWithLength), &original_find_class_with_length,
-                        kFindClassWithLength.name});
-    superclass_change_available = true;
-  }
+  std::string failure;
+  if (!verification_redirect::Prepare(&resolved, &failure)) return unavailable(failure);
   // The layout probes decode java.lang.Class through this global reference.
   JNIEnv* env = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env)
@@ -593,7 +527,6 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     return unavailable("exception classes unavailable");
   }
   // The guards come last: their JNI table override cannot be undone.
-  std::string failure;
   if (!member_retirement::Prepare(vm, jvmti, &resolved, &failure)) return unavailable(failure);
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
@@ -601,6 +534,6 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   Report("unverified");
 }
 bool Available() { return available; }
-bool SuperclassChangeAvailable() { return available && superclass_change_available; }
+bool SuperclassChangeAvailable() { return available && verification_redirect::ResolvesClasses(); }
 
-}  // namespace artdcevm::method_retirement
+}  // namespace artdcevm::member_mapping

@@ -7,6 +7,10 @@
 #include <string>
 #include "platform/abi/arm64/common/redefinition.h"
 
+namespace artdcevm::verification_redirect {
+struct Verification;
+}
+
 // State of the standard-entry transactions on this thread. A ClassFileLoadHook
 // can start a nested transaction on the same thread, so contexts form a stack;
 // everything one transaction keeps is pushed and popped with its context.
@@ -54,6 +58,8 @@ struct Context {
   const std::atomic<bool>* subclass_loaded = nullptr;
   // A rejection decided after ART allocated the new classes, taken once.
   std::string rejection;
+  // The target ART is verifying, while verification is redirected.
+  const verification_redirect::Verification* verifying = nullptr;
 
   const Requirements* Find(abi::arm64::ClassRedefinitionPrefix* self) const;
   bool RequiresMemberMapping() const;

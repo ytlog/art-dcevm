@@ -3,11 +3,16 @@
 #include <jvmti.h>
 #include <vector>
 #include <cstdint>
+#include <string>
 #include <string_view>
-#include "platform/common/method_retirement.h"
+#include "evolution/class_schema.h"
+#include "platform/abi/arm64/common/redefinition.h"
+#include "platform/common/art_hook.h"
 
 namespace artdcevm::interface_redefinition {
-void Prepare(std::vector<Hook>* hooks, std::string* note);
+// `verifier_redirect`: verification_redirect can show ART's verifier the
+// group's replacements (member_mapping::SuperclassChangeAvailable).
+void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note);
 bool Available();
 struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 // Diagnostics for the latest capture on the calling transaction thread.
@@ -15,7 +20,7 @@ Timing LastTiming();
 std::string RuntimeState();
 // Format a saved static hook rejection only after returning to Native state.
 std::string TakeRejection();
-// Called by the existing named FindClass hooks. ClassLinker is process-lived.
+// Called by verification_redirect's named FindClass hooks. ClassLinker is process-lived.
 void ObserveClassLinker(void* linker);
 // The interface groups of the current transaction context. References remain
 // owned by the caller throughout the routed batch.

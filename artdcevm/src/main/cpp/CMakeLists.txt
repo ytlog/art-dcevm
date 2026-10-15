@@ -17,7 +17,8 @@ add_library(artdcevm SHARED
   platform/common/class_layout.cc
   platform/common/transaction_context.cc
   platform/common/member_retirement.cc
-  platform/common/method_retirement.cc
+  platform/common/member_mapping.cc
+  platform/common/verification_redirect.cc
   platform/common/interface_snapshot.cc
   platform/common/interface_redefinition.cc
   platform/common/structural_redefine_engine.cc)
