@@ -73,6 +73,10 @@ std::string TakeRejection();
 // before ART's no-failure point; `descriptor` names the target in a rejection.
 void ChangeSuperclass(abi::arm64::ClassRedefinitionPrefix* self, jclass superclass,
                       const std::string& descriptor);
+// During ART verification, resolve this target's descriptor to its holder's
+// replacement. Interface body edits need the same redirect as superclass edits.
+void RedirectVerification(abi::arm64::ClassRedefinitionPrefix* self,
+                          const std::string& descriptor);
 // JNI globals are prepared before entering ART; ReplaceReferences updates them
 // to the replacement Class whose ClassExt roots the complete obsolete chain.
 void RetainRoots(std::vector<jobject> roots);

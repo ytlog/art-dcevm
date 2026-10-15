@@ -1,4 +1,5 @@
 #include "platform/common/method_retirement.h"
+#include "platform/common/interface_redefinition.h"
 
 #include <android/api-level.h>
 #include <android/log.h>
@@ -564,8 +565,8 @@ struct Transaction {
   bool requires_mapping = false;
   std::map<int32_t, MappingPlan> plans;  // By RedefinitionDataIter index.
   std::map<ClassRedefinitionPrefix*, std::string> no_instances;  // Descriptor by target.
-  // New superclass (global reference) and descriptor by target.
-  std::map<ClassRedefinitionPrefix*, std::pair<jclass, std::string>> superclasses;
+  // Optional new superclass (global reference) and verifier descriptor by target.
+  std::map<ClassRedefinitionPrefix*, std::pair<jclass, std::string>> link_targets;
   const std::atomic<bool>* subclass_loaded = nullptr;
   std::string rejection;
 };
@@ -601,8 +602,8 @@ void ThrowRetired(void* self) {
 void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Handle super_class,
                              Handle cache, uint16_t index) {
   if (transaction && super_class.reference) {
-    const auto found = transaction->superclasses.find(self);
-    if (found != transaction->superclasses.end() &&
+    const auto found = transaction->link_targets.find(self);
+    if (found != transaction->link_targets.end() && found->second.first &&
         old_class.Get<void>() == mirror_class(self)) {
       if (void* superclass = DecodeClass(self, found->second.first))
         *const_cast<uint32_t*>(super_class.reference) = Reference(superclass);
@@ -628,8 +629,8 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
   using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   const std::string* descriptor = nullptr;
   if (transaction) {
-    const auto found = transaction->superclasses.find(self);
-    if (found != transaction->superclasses.end()) descriptor = &found->second.second;
+    const auto found = transaction->link_targets.find(self);
+    if (found != transaction->link_targets.end()) descriptor = &found->second.second;
   }
   if (!descriptor) return reinterpret_cast<Function>(original_check_verification)(self, data);
   const Verifying scope{&data, *descriptor};
@@ -644,12 +645,14 @@ void* VerifiedClass(std::string_view descriptor) {
                                                           : nullptr;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) {
+  interface_redefinition::ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(descriptor) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
   return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) {
+  interface_redefinition::ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass({descriptor, length}) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
   return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
@@ -725,8 +728,8 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (const LayoutOps* layout = Selected()) {
     MappingPlan plan;
     if (layout->plan(*data, &plan, &why)) {
-      if (const auto found = transaction->superclasses.find(self);
-          found != transaction->superclasses.end()) {
+      if (const auto found = transaction->link_targets.find(self);
+          found != transaction->link_targets.end() && found->second.first) {
         // The allocation hook must have linked the new class under the new superclass.
         void* new_class = data->Classes(false) ? data->Classes(false)->Get<void>(0) : nullptr;
         void* superclass = DecodeClass(self, found->second.first);
@@ -1497,7 +1500,10 @@ void RequireMemberMapping() {
 }
 void ChangeSuperclass(ClassRedefinitionPrefix* self, jclass superclass,
                       const std::string& descriptor) {
-  if (transaction) transaction->superclasses[self] = {superclass, descriptor};
+  if (transaction) transaction->link_targets[self] = {superclass, descriptor};
+}
+void RedirectVerification(ClassRedefinitionPrefix* self, const std::string& descriptor) {
+  if (transaction) transaction->link_targets[self] = {nullptr, descriptor};
 }
 void WatchSubclassLoads(const std::atomic<bool>* loaded) {
   if (transaction) transaction->subclass_loaded = loaded;

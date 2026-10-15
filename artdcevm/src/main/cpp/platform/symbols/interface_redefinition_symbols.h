@@ -1,0 +1,24 @@
+#pragma once
+#include "platform/symbols/art_symbol_compat.h"
+
+// Prototype catalog. Admission spellings are alternatives, not universal names.
+// check-structural-symbols.py reports coverage in each declared named table.
+namespace artdcevm::symbols::interface_redefinition {
+inline constexpr NamedSymbol kCanNormal{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner16CanRedefineClassILNS_16RedefinitionTypeE0EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
+inline constexpr NamedSymbol kCanStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner16CanRedefineClassILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
+inline constexpr NamedSymbol kGetNormal{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE0EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
+inline constexpr NamedSymbol kGetStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
+inline constexpr NamedSymbol kFinishNewClassAllocations{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE"};
+inline constexpr NamedSymbol kCurrentThread{Library::kArt, "_ZN3art6Thread14CurrentFromGdbEv"};
+inline constexpr NamedSymbol kEnsureInitialized{Library::kArt, "_ZN3art11ClassLinker17EnsureInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEEbb"};
+inline constexpr NamedSymbol kVisitClasses{Library::kArt, "_ZN3art11ClassLinker12VisitClassesEPNS_12ClassVisitorE"};
+inline constexpr NamedSymbol kAssignable{Library::kArt, "artIsAssignableFromCode"};
+// API 33 allocation/linking declarations; partial coverage is deliberate.
+inline constexpr NamedSymbol kAllocAndInitializeDexCache{Library::kArt, "_ZN3art11ClassLinker26AllocAndInitializeDexCacheEPNS_6ThreadERKNS_7DexFileENS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kLookupReferrer{Library::kArt, "_ZN3art11ClassLinker20DoLookupResolvedTypeENS_3dex9TypeIndexENS_6ObjPtrINS_6mirror5ClassEEE"};
+inline constexpr NamedSymbol kLookupCache{Library::kArt, "_ZN3art11ClassLinker20DoLookupResolvedTypeENS_3dex9TypeIndexENS_6ObjPtrINS_6mirror8DexCacheEEENS3_INS4_11ClassLoaderEEE"};
+inline constexpr NamedSymbol kLookupDescriptor{Library::kArt, "_ZN3art11ClassLinker18LookupResolvedTypeEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
+inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
+inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kReadBarrierMark{Library::kArt, "_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", SymbolTable::kAnyNamed};
+}  // namespace artdcevm::symbols::interface_redefinition

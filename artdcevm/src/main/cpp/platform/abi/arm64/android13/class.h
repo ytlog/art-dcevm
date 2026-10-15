@@ -22,6 +22,18 @@ struct Class {
   uint64_t methods;
   uint64_t sfields;
   uint32_t access_flags;
+  uint32_t class_flags;
+  uint32_t class_size;
+  int32_t clinit_thread_id;
+  int32_t dex_class_def_index;
+  int32_t dex_type_index;
+  uint32_t num_reference_instance_fields;
+  uint32_t num_reference_static_fields;
+  uint32_t object_size;
+  uint32_t object_size_alloc_fast_path;
+  uint32_t primitive_type;
+  uint32_t reference_instance_offsets;
+  uint32_t status;
 };
 static_assert(offsetof(Class, ifields) == 40 && offsetof(Class, methods) == 48 &&
               offsetof(Class, sfields) == 56 && offsetof(Class, access_flags) == 64);

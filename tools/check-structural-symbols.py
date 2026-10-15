@@ -17,6 +17,7 @@ from elf_mini_inventory import mini_symbol_inventory, symbol_table_inventory
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h'
+PROTOTYPE_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h'
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'
@@ -119,6 +120,12 @@ def main(argv=None):
         destination = report_destination(args.report)
         catalog, catalog_hash = read_catalog(CATALOG)
         report = collect_report(args.runtime_lib, catalog, catalog_hash)
+        # Prototype services and spelling alternatives have partial coverage.
+        # Report each exact name independently; they are not universal requirements.
+        if CATALOG.parent == PROTOTYPE_CATALOG.parent and PROTOTYPE_CATALOG.exists():
+            prototype, prototype_hash = read_catalog(PROTOTYPE_CATALOG)
+            optional = collect_report(args.runtime_lib, prototype, prototype_hash)
+            report['interfacePrototype'] = optional
         if destination:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
@@ -135,6 +142,12 @@ def main(argv=None):
     summary = report['summary']
     print(f"{summary['passedSets']}/{summary['totalSets']} runtime sets provide all {summary['namedSymbols']} "
           f"named symbols ({summary['dynsymOnly']} .dynsym-only, {summary['anyNamed']} any-named)")
+    if 'interfacePrototype' in report:
+        optional = report['interfacePrototype']
+        for index, entry in enumerate(optional['sets'][0]['catalog']):
+            count = sum(runtime['catalog'][index]['present'] for runtime in optional['sets'])
+            table = '.dynsym' if entry['requiredTables'] == ['.dynsym'] else 'any-named'
+            print(f"Interface prototype {entry['id']}: {count}/{len(optional['sets'])} {table}")
     return 0 if summary['passedSets'] == summary['totalSets'] else 1
 
 

@@ -52,7 +52,7 @@ SCENARIOS = (
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 71),
     ("method-storage-restore", ["method-storage-original"], 0),
-    ("interface-default-body", ["interface-default-body"], 79),
+    ("interface-default-body", ["interface-default-body"], 98),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
@@ -440,6 +440,16 @@ def safe_console(text, serial):
     return text
 
 
+def safe_report(value, serial):
+    if isinstance(value, str):
+        return safe_console(value, serial)
+    if isinstance(value, list):
+        return [safe_report(item, serial) for item in value]
+    if isinstance(value, dict):
+        return {key: safe_report(item, serial) for key, item in value.items()}
+    return value
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True, help="ADB device selector (kept only in raw evidence)")
@@ -447,6 +457,8 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=180, help="Instrumentation timeout in seconds")
+    parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",
+                        help="Evidence directory under ignored build/evidence")
     args = parser.parse_args(argv)
     if not args.adb:
         parser.error("Use --adb or set the SDK path in local.properties")
@@ -457,24 +469,26 @@ def main(argv=None):
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = new_evidence_directory(Path.cwd() / "build/evidence/runs", timestamp)
+    if not args.evidence_root.resolve().is_relative_to((ROOT / "build/evidence").resolve()):
+        parser.error("Evidence must remain under ignored build/evidence")
+    out = new_evidence_directory(args.evidence_root.resolve(), timestamp)
     meta = {"deviceId": args.device_id, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
             "startedUtc": timestamp, "passed": False}
-    # Device selectors and local command paths never leave ignored evidence.
-    (out / "selection.json").write_text(json.dumps({"serial": args.serial, "apk": str(args.apk.resolve())}, indent=2))
+    (out / "selection.json").write_text(json.dumps({"deviceId": args.device_id,
+        "apk": args.apk.name}, indent=2))
 
     def adb(label, *command, timeout=120):
         try:
             result = subprocess.run([args.adb, "-s", args.serial, *command], capture_output=True,
                                     text=True, timeout=timeout)
         except subprocess.TimeoutExpired as error:
-            (out / (label + ".txt")).write_text(raw_text(error.stdout) + raw_text(error.stderr))
+            (out / (label + ".txt")).write_text(safe_console(raw_text(error.stdout) + raw_text(error.stderr), args.serial))
             (out / (label + ".json")).write_text(json.dumps({"timedOut": True, "timeout": timeout}))
             raise RunFailure("The " + label + " command timed out") from error
         except OSError as error:
-            (out / (label + ".txt")).write_text(str(error))
+            (out / (label + ".txt")).write_text(safe_console(str(error), args.serial))
             raise RunFailure("The " + label + " command could not start") from error
-        (out / (label + ".txt")).write_text(result.stdout + result.stderr)
+        (out / (label + ".txt")).write_text(safe_console(result.stdout + result.stderr, args.serial))
         (out / (label + ".json")).write_text(json.dumps({"returncode": result.returncode}))
         return result
 
@@ -516,7 +530,11 @@ def main(argv=None):
         # Read the report even when Android reports failure so diagnostics are retained.
         try:
             report = adb("report-read", "exec-out", "run-as", PACKAGE, "cat", REPORT_PATH)
-            (out / "structural-redefine.json").write_text(report.stdout)
+            try:
+                saved_report = json.dumps(safe_report(json.loads(report.stdout), args.serial), indent=2)
+            except (ValueError, TypeError):
+                saved_report = safe_console(report.stdout, args.serial)
+            (out / "structural-redefine.json").write_text(saved_report)
             meta["reportReadExitCode"] = report.returncode
         except RunFailure:
             if instrumentation_error:

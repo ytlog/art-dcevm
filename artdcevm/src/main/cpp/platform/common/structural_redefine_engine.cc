@@ -16,6 +16,7 @@
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/method_retirement.h"
+#include "platform/common/interface_redefinition.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "support/json.h"
 
@@ -561,9 +562,14 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
+  interface_redefinition::Scope interface_scope(jni, snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
+    jint access = 0;
+    if (interface_redefinition::Available() && definitions[i].klass &&
+        snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
+        (access & evolution::kAccInterface)) continue;
     jboolean modifiable = JNI_TRUE;
     if (!definitions[i].klass ||
         (snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
@@ -703,6 +709,21 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
       abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
+  const bool interface_target = interface_redefinition::IsTarget(self);
+  if (interface_target) {
+    if (decision.error == JVMTI_ERROR_NONE &&
+        (decision.methods_structural || decision.fields_structural)) {
+      decision.error = JVMTI_ERROR_NOT_AVAILABLE;
+      decision.reason = "interface spike supports body edits only";
+    }
+    if (decision.error == JVMTI_ERROR_NONE && !abilities.member_mapping) {
+      decision.error = JVMTI_ERROR_NOT_AVAILABLE;
+      decision.reason = "interface spike requires verified member mapping";
+    }
+    method_retirement::RequireMemberMapping();
+    // Even a body edit must relink copied default methods in implementation classes.
+    decision.methods_structural = true;
+  }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -720,6 +741,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) {
     method_retirement::RequireNoInstances(self, incoming.descriptor);
   if (decision.superclass_changed)
     method_retirement::ChangeSuperclass(self, snapshot.superclass_class, incoming.descriptor);
+  if (interface_target)
+    method_retirement::RedirectVerification(self, incoming.descriptor);
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     current_batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;
@@ -814,6 +837,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::vector<Hook> replacements;
   std::string retirement_note;
   method_retirement::Prepare(vm, env, &replacements, &retirement_note);
+  std::string interface_note;
+  interface_redefinition::Prepare(&replacements, &interface_note);
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -849,7 +874,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       : method_retirement::FieldRetirementAvailable()
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
-  for (const auto* note : {&retirement_note, &field_note})
+  for (const auto* note : {&retirement_note, &field_note, &interface_note})
     if (!note->empty()) diagnostic += "; " + *note;
   return JVMTI_ERROR_NONE;
 }

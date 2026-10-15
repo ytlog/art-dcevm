@@ -68,4 +68,7 @@ bool ReadClassAccess(const DexView& dex, std::string_view descriptor, uint32_t* 
 // and unique, from a standard or compact DEX with the same bounds checks.
 bool ReadReferencedClasses(const DexView& dex, std::vector<std::string>* output,
                            std::string* error);
+// The exact type_ids entry, including array descriptors.
+bool ReadTypeDescriptor(const DexView& dex, uint32_t index, std::string* output,
+                        std::string* error);
 }  // namespace artdcevm::evolution

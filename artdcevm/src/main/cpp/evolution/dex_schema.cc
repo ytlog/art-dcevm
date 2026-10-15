@@ -72,6 +72,11 @@ class Reader {
     return {String(U32(item + 4)), std::move(type), 0};
   }
 
+  std::string TypeDescriptor(uint32_t index) {
+    Header(true);
+    return Type(index);
+  }
+
   uint32_t ClassAccess(std::string_view descriptor) {
     Header(true);
     for (uint32_t i = 0; i < classes_.count; ++i) {
@@ -326,6 +331,18 @@ bool ReadReferencedClasses(const DexView& dex, std::vector<std::string>* output,
                            std::string* error) {
   try {
     *output = Reader(dex).ReferencedClasses();
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadTypeDescriptor(const DexView& dex, uint32_t index, std::string* output,
+                        std::string* error) {
+  try {
+    *output = Reader(dex).TypeDescriptor(index);
     error->clear();
     return true;
   } catch (const std::runtime_error& failure) {
