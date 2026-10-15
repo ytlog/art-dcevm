@@ -117,7 +117,7 @@
 - 退役记录进入按类保存的 `RetiredMethods`，供之后的事务检查调用方式。
 - 活动旧帧继续执行旧方法体。
 
-需要逐项核对的点：退役保活的 JNI 全局根要包含接口类（实现中确认 `RetainRoots` 的类集合）；`hidden_natives` 不涉及接口。
+已核对：标准入口为每个可赋值给目标的已加载类创建 JNI 全局根，接口本身和整组子类型都在其中，有退役时经 `RetainRoots` 保留到进程结束；`hidden_natives` 不涉及接口（新增 native 方法已被拒绝）。
 
 ## 语义与代价
 
@@ -160,7 +160,7 @@
 1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。**已完成**，规则由 `Abilities::interface_members` 控制，默认关闭。
 2. 快照事实：在 `structural_redefine_engine.cc` 填充 `inherited_interface` 与 `subtype_shadows`。**已完成**，只对接口目标收集；能力关闭时策略不读取它们。
 3. 链接后冲突检查：在 `method_retirement.cc` 的 `PlanMethods` 中实现，并声明 flag 常量。**已完成**，对所有使用自有映射的结构事务生效。
-4. 接口 direct 方法退役：核对保活与守卫，然后打开 `interface_members`。
+4. 接口 direct 方法退役：核对保活与守卫，然后打开 `interface_members`。**已完成**：保活根覆盖所有可赋值给目标的已加载类（含接口本身及整组子类型），`RecordRetiredKinds` 对每个目标记录，访问守卫按方法与 ID 判断、与声明类无关，因此无需新增守卫；引擎在拥有成员映射时打开能力。原先以“新增 default”作为不支持示例的 `nested-interface-add` 与 `multi-interface-invalid` 改为新增 abstract 方法，仍以 63 拒绝。面向使用者的文档在第 6 步更新。
 5. fixture、设备套件与失败仪器。
 6. 文档：中英文版本的 LIMITATIONS、引擎文档、README，并删除本文。
 

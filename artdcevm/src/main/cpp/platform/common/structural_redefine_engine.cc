@@ -817,6 +817,10 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   abilities.instance_check = method_retirement::Available();
   abilities.superclass_change =
       abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
+  // The snapshot carries the interface group's facts, the mapping rejects new
+  // default conflicts, and retirement roots cover the group: an interface
+  // target may evolve its members whenever the engine owns the mapping.
+  abilities.interface_members = abilities.member_mapping;
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
   const bool interface_target = interface_redefinition::IsTarget(self);

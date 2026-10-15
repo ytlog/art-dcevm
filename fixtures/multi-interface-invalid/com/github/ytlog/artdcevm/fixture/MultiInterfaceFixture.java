@@ -6,7 +6,7 @@ public final class MultiInterfaceFixture {
     }
     public interface Right {
         default int rightValue() { return 22; }
-        default int added() { return 99; }
+        int added();
     }
     public interface Parent {
         default int parentValue() { return 32; }

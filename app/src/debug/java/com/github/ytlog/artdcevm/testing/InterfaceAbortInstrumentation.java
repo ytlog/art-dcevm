@@ -284,7 +284,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                     asset("nested-interface-add", NestedInterfaceHost.Contract.class)));
             String rejection = DcevmRuntime.capabilities().getString("lastRejection");
             if (!rejection.startsWith("Lcom/github/ytlog/artdcevm/fixture/NestedInterfaceHost$Contract;: ")
-                    || !rejection.contains("added methods")) throw new AssertionError("Missing nested rejection reason");
+                    || !rejection.contains("added abstract interface method")) throw new AssertionError("Missing nested rejection reason");
             ++checks;
             expect("nested unchanged after rejection", 42, nestedContract.value());
             expect("top-level after nested transactions", 0, redefine(CopiedDefault.class, patch));

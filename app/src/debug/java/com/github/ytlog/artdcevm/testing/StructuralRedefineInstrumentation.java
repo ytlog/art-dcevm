@@ -550,7 +550,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.expectRejectionBy(MultiInterfaceFixture.Right.class);
             scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
                     "multi-interface-next", "multi-interface-invalid");
-            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("added methods"));
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("added abstract interface method"));
             scenario.check("leftUnchanged", 12, left.leftValue());
             scenario.check("rightUnchanged", 22, right.rightValue());
             scenario.check("newLeftUnchanged", 12, new MultiInterfaceFixture.LeftImpl().leftValue());
@@ -859,7 +859,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         String[] rejectedVariants = {"add", "delete", "signature", "field", "modifiers", "parents"};
         int[] rejectedCodes = {63, 67, 67, 64, 71, 66};
-        String[] reasons = {"added methods", "method retirement", "method retirement",
+        String[] reasons = {"added abstract interface method", "method retirement", "method retirement",
                 "added fields", "method modifier changes", "parent changes"};
         String schema = memberSchema(NestedInterfaceHost.Contract.class);
         for (int i = 0; i < rejectedVariants.length; ++i) {
