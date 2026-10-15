@@ -1,10 +1,9 @@
 #include "platform/common/interface_redefinition.h"
 
-#include <android/api-level.h>
 #include <android/log.h>
 #include <atomic>
+#include <array>
 #include <chrono>
-#include <algorithm>
 #include <memory>
 #include <limits>
 #include <sys/syscall.h>
@@ -15,6 +14,7 @@
 #include "platform/abi/arm64/android16/interface_runtime.h"
 #include "platform/abi/arm64/android13/class.h"
 #include "platform/abi/arm64/common/class_linker.h"
+#include "platform/abi/arm64/common/root_visitor.h"
 #include "platform/abi/arm64/android13/redefinition.h"
 #include "platform/abi/arm64/android13/thread.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
@@ -26,7 +26,7 @@
 namespace artdcevm::interface_redefinition {
 namespace {
 using namespace abi::arm64;
-const InterfaceRuntime* runtime = nullptr;
+thread_local const InterfaceRuntime* runtime = nullptr;
 template <class T> T& Field(void* object, size_t offset) {
   return *reinterpret_cast<T*>(static_cast<uint8_t*>(object) + offset);
 }
@@ -64,8 +64,21 @@ void* original_run = nullptr;
 void* original_link_class = nullptr;
 void (*set_status_internal)(void*, android13::ClassStatus) = nullptr;
 bool available = false;
-struct Target { jclass klass; bool boot; jint access; jint status; TypeSnapshot snapshot; };
-struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; };
+std::atomic<const char*> disabled_reason{nullptr};
+std::atomic<int> verified_release{0};
+void (*visit_handle_roots)(void*, RootVisitor*, uint32_t) = nullptr;
+const InterfaceRuntime* RuntimeFor(int release) {
+  if (release == 13) return &android13::kInterfaceRuntime;
+  if (release == 16) return &android16::kInterfaceRuntime;
+  return nullptr;
+}
+void Disable(const char* reason) noexcept {
+  disabled_reason.store(reason);
+  __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
+}
+
+struct Target { jclass klass; bool boot; jint access; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; };
+struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; };
 thread_local State* state = nullptr;
 thread_local Timing timing;
 struct JniFailure {};
@@ -95,7 +108,7 @@ void* Decode(jclass klass) {
   return mirror_class(&lookup);
 }
 const Target* Find(void* klass) {
-  if (!state || !state->thread_verified) return nullptr;
+  if (!state) return nullptr;
   for (const auto& target : state->targets)
     if (Decode(target.klass) == klass) return &target;
   return nullptr;
@@ -108,6 +121,88 @@ jvmtiError Reject(std::string* message, jvmtiError error, const char* why) {
   *message = why;
   return error;
 }
+bool VerifyThread(const InterfaceRuntime& layout, void* thread, JNIEnv* jni) {
+  return thread && Field<void*>(thread, layout.jni_env) == jni &&
+      Field<uint32_t>(thread, layout.tid) == static_cast<uint32_t>(syscall(__NR_gettid)) &&
+      Field<uint32_t>(thread, layout.is_gc_marking) <= 1;
+}
+// Observe ART's existing scope chain. No candidate root is installed, no object
+// is dereferenced, and the callback only records addresses into fixed storage.
+class ScopeRoots final : public RootVisitor {
+ public:
+  static constexpr size_t kMaxRoots = 64;
+  static constexpr size_t kMaxHeader = sizeof(android16::HandleScopeHeader);
+  explicit ScopeRoots(void* scope, size_t capacity)
+      : begin(reinterpret_cast<uintptr_t>(scope)), end(begin + kMaxHeader + 4 * capacity) {}
+  void VisitRoots(void***, size_t, const RootInfo&) noexcept override { unexpected = true; }
+  void VisitRoots(uint32_t** roots, size_t count, const RootInfo&) noexcept override {
+    for (size_t i = 0; i < count; ++i) {
+      const uintptr_t address = reinterpret_cast<uintptr_t>(roots[i]);
+      if (address >= begin && address < end && (address - begin) % 4 == 0)
+        observed[(address - begin) / 4] = true;
+    }
+  }
+  bool Matches(const InterfaceRuntime& layout, void* scope, const uint32_t* target,
+               uint32_t size) const {
+    const auto* start = static_cast<uint8_t*>(scope) + layout.scope_header_size;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(target);
+    if (unexpected || address < reinterpret_cast<uintptr_t>(start) ||
+        address >= reinterpret_cast<uintptr_t>(start + 4 * size)) return false;
+    for (size_t offset = 0; begin + offset < end; offset += 4) {
+      const bool expected = offset >= layout.scope_header_size &&
+          offset < layout.scope_header_size + 4 * size &&
+          Field<uint32_t>(scope, offset) != 0;
+      if (observed[offset / 4] != expected) return false;
+    }
+    return observed[(address - begin) / 4];
+  }
+ private:
+  uintptr_t begin, end;
+  std::array<bool, kMaxRoots + kMaxHeader / 4> observed{};
+  bool unexpected = false;
+};
+bool VerifyScopes(const InterfaceRuntime& layout, void* thread, Handle target) {
+  void* scope = Field<void*>(thread, layout.top_handle_scope);
+  // Both fixed sources create a StackHandleScope<1> immediately around the
+  // admission call. Check its known root address BEFORE reading the candidate
+  // header: a mismatched Thread slot must never be followed as a pointer.
+  if (!scope || reinterpret_cast<uintptr_t>(scope) + layout.scope_header_size !=
+                    reinterpret_cast<uintptr_t>(target.reference)) return false;
+  const int32_t capacity = Field<int32_t>(scope, layout.scope_capacity);
+  const uint32_t size = layout.scope_size == InterfaceRuntime::kAbsent
+      ? capacity : Field<uint32_t>(scope, layout.scope_size);
+  if (capacity != 1 || size != 1) return false;
+  ScopeRoots observed(scope, capacity);
+  visit_handle_roots(thread, &observed, Field<uint32_t>(thread, layout.tid));
+  return observed.Matches(layout, scope, target.reference, size);
+}
+
+bool SelectRuntime(Handle klass, const Target& target) {
+  if (!state->thread_verified) { Disable("interface Thread declaration did not match JNI environment/tid"); return false; }
+  RedefinerPrefix driver{nullptr, 0, nullptr, current_thread()};
+  ClassRedefinitionPrefix context{&driver, target.klass, nullptr};
+  if (!method_retirement::VerifyTarget(&context, target.live)) {
+    Disable("interface Class declarations failed runtime member probes");
+    return false;
+  }
+  for (int release : method_retirement::CandidateReleases(true)) {
+    const InterfaceRuntime* candidate = RuntimeFor(release);
+    if (!candidate || !VerifyThread(*candidate, driver.self, state->jni)) continue;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (Inject(13)) { Disable("interface Thread probe rejected injected mismatch"); return false; }
+#endif
+    if (!VerifyScopes(*candidate, driver.self, klass)) continue;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (Inject(14)) { Disable("interface HandleScope probe rejected injected mismatch"); return false; }
+#endif
+    runtime = candidate;
+    state->runtime_verified = true;
+    state->selected_release = release;
+    return true;
+  }
+  Disable("interface HandleScope/Thread declarations did not match verified Class candidates");
+  return false;
+}
 jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
   void* original = structural ? original_structural[spelling] : original_normal[spelling];
   void* object = klass.Get<void>();
@@ -115,12 +210,17 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   if (state && !state->targets.empty())
     __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM", "interface admission hook: structural=%d target=%d", structural, target != nullptr);
   if (!target) return reinterpret_cast<Admission>(original)(klass, message);
+  if (!Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
+  if (!SelectRuntime(klass, *target))
+    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
   // Check this source prefix against the public snapshot before using its tail.
   // Nested interfaces with different InnerClass flags are outside this spike.
   if ((Flags(object) & kAccJavaFlagsMask) !=
           (static_cast<uint32_t>(target->access) & kAccJavaFlagsMask) ||
-      ((Status(object) >= 14) != ((target->status & JVMTI_CLASS_STATUS_INITIALIZED) != 0)))
-    return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike class prefix mismatch");
+      ((Status(object) >= 14) != ((target->status & JVMTI_CLASS_STATUS_INITIALIZED) != 0))) {
+    Disable("interface Class prefix differs from the public snapshot");
+    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
+  }
   if (target->boot)
     return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike rejects boot interfaces");
   void* linker = class_linker.load();
@@ -142,7 +242,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   return JVMTI_ERROR_NONE;
 } catch (...) {
   // Even writing the diagnostic string can allocate. Do not write one here.
-  Field<void*>(current_thread(), runtime->exception) = nullptr;
+  if (runtime) Field<void*>(current_thread(), runtime->exception) = nullptr;
   return ArtHookExceptionError();
 }
 jvmtiError NormalCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 0); }
@@ -238,8 +338,13 @@ class AttemptScope {
 };
 jvmtiError Run(RedefinerPrefix* driver) noexcept {
   using Function = jvmtiError (*)(RedefinerPrefix*);
-  if (!state || !state->thread_verified || state->targets.empty())
+  if (!state || state->targets.empty())
     return reinterpret_cast<Function>(original_run)(driver);
+  if (!state->thread_verified || !state->runtime_verified || driver->self != current_thread()) {
+    Disable("interface runtime probes were not completed before Run");
+    driver->result = JVMTI_ERROR_NOT_AVAILABLE;
+    return JVMTI_ERROR_NOT_AVAILABLE;
+  }
   try {
     Roots roots(driver->self, 2);
     Attempt next{driver, roots.Add(nullptr), roots.Add(nullptr)};
@@ -340,12 +445,32 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   } allocation_timer;
   if (state->batch_size != 1 || !state->array_class || !attempt || attempt->driver != self->driver)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface spike requires one target and array root");
+  const auto reject_holder = [&](const char* reason) {
+    Disable(reason);
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
+  };
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  if (Inject(15)) return reject_holder("interface holder probe rejected injected mismatch");
+#endif
+  if (!data->holder || !data->holder->array.reference ||
+      !data->holder->array.Get<ObjectArray>() ||
+      data->holder->array.Get<ObjectArray>()->length != RedefinitionDataIter::kNumSlots)
+    return reject_holder("interface holder array declaration mismatch");
+  auto* definitions = Field<void**>(data->holder, runtime->redefinitions);
+  if (!definitions || definitions[0] != self || !definitions[1] ||
+      reinterpret_cast<uintptr_t>(definitions[1]) <= reinterpret_cast<uintptr_t>(definitions[0]) ||
+      reinterpret_cast<uintptr_t>(definitions[2]) < reinterpret_cast<uintptr_t>(definitions[1]))
+    return reject_holder("interface holder redefinitions declaration mismatch");
+  auto* new_cache = static_cast<DexCache*>(Slot(*data, 3));
+  if (!new_cache || new_cache->dex_file != reinterpret_cast<uintptr_t>(self->dex_file))
+    return reject_holder("interface holder DEX-cache slot declaration mismatch");
   auto& initialized = Field<std::vector<bool>>(data->holder, runtime->initialized);
   auto& structural = Field<std::vector<bool>>(data->holder, runtime->actually_structural);
   auto& initial = Field<std::vector<bool>>(data->holder, runtime->initial_structural);
   if (data->index != 0 || initialized.size() != 1 || structural.size() != 1 || initial.size() != 1 ||
       initialized[0] || !structural[0] || !initial[0])
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface spike holder flags mismatch");
+    return reject_holder("interface holder flag declarations mismatch");
+  verified_release.store(state->selected_release);
   const Target* target = Find(mirror_class(self));
   if (!target) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target unavailable");
   const auto& ordered = target->snapshot.types;
@@ -370,7 +495,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   Assign(attempt->replacements, new_array.Get<void>());
   for (Handle array : {old_array, new_array})
     if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
-      return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private array prefix mismatch");
+      return reject_holder("interface private array declaration mismatch");
   Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr), loader = roots.Add(nullptr);
   for (size_t i = 0; i < old_types.size(); ++i) {
     void* old = old_types[i].Get<void>();
@@ -400,7 +525,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     if (cache.Get<DexCache>()->dex_file != reinterpret_cast<uintptr_t>(expected_dex) ||
         Read(cache.Get<DexCache>()->class_loader) != Read(Field<uint32_t>(old_types[i].Get<void>(), runtime->class_loader)) ||
         cache.Get<void>() == original_cache.Get<void>())
-      return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private DexCache prefix mismatch");
+      return reject_holder("interface private DexCache declaration mismatch");
     const Linking scope{&old_types, new_array, cache, static_cast<int32_t>(i)};
     void* replacement;
     {
@@ -448,9 +573,16 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
 }  // namespace
 
 void ObserveClassLinker(void* linker) { class_linker.store(linker); }
-bool Available() { return available; }
+bool Available() { return available && disabled_reason.load() == nullptr; }
+std::string RuntimeState() {
+  if (const char* reason = disabled_reason.load()) return std::string("disabled: ") + reason;
+  if (!available) return "unavailable";
+  const int release = verified_release.load();
+  return release ? "verified: android" + std::to_string(release) + " Class/Thread/HandleScope/holder probes"
+                 : "unverified: interface runtime declarations";
+}
 Timing LastTiming() { return timing; }
-bool IsTarget(ClassRedefinitionPrefix* self) { return available && Find(mirror_class(self)); }
+bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(mirror_class(self)); }
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCheckJni(
@@ -503,32 +635,56 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits
 }
 #endif
 Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
-    : state_(new State{state, {}, jni, env, false, nullptr, count}) {
+    : state_(new State{state, {}, jni, env, false, nullptr, count, runtime}) {
   auto* next = static_cast<State*>(state_);
-  state = next;
-  if (!available || count <= 0 || !definitions) return;
-  void* thread = current_thread();
-  // tlsPtr_.self is not populated on arm64; CurrentFromGdb supplies self.
-  next->thread_verified = thread && Field<void*>(thread, runtime->jni_env) == jni &&
-      Field<uint32_t>(thread, runtime->tid) == static_cast<uint32_t>(syscall(__NR_gettid));
-  for (jint i = 0; i < count; ++i) {
-    jint access = 0, status = 0;
-    jobject loader = nullptr;
-    jclass klass = definitions[i].klass;
-    if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & 0x0200)) continue;
-    if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE ||
-        env->GetClassStatus(klass, &status) != JVMTI_ERROR_NONE) continue;
-    next->targets.push_back({klass, !loader, access, status, {}});
-    if (loader) jni->DeleteLocalRef(loader);
+  try {
+    state = next;
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (Inject(16)) throw std::bad_alloc{};
+#endif
+    if (!Available() || count <= 0 || !definitions) return;
+    runtime = nullptr;
+    void* thread = current_thread();
+    for (int release : method_retirement::CandidateReleases(false)) {
+      const auto* candidate = RuntimeFor(release);
+      if (candidate && VerifyThread(*candidate, thread, jni)) {
+        runtime = candidate;
+        next->thread_verified = true;
+        break;
+      }
+    }
+    for (jint i = 0; i < count; ++i) {
+      jint access = 0, status = 0;
+      jobject loader = nullptr;
+      jclass klass = definitions[i].klass;
+      if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & 0x0200)) continue;
+      if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE) continue;
+      const auto status_result = env->GetClassStatus(klass, &status);
+      const bool boot = !loader;
+      if (loader) jni->DeleteLocalRef(loader);
+      if (status_result != JVMTI_ERROR_NONE) continue;
+      next->targets.push_back({klass, boot, access, status, {}, {}});
+    }
+    if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
+      jclass class_class = jni->FindClass("java/lang/Class");
+      jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
+      if (array) next->array_class = jni->GetObjectClass(array);
+      if (array) jni->DeleteLocalRef(array);
+      if (class_class) jni->DeleteLocalRef(class_class);
+      if (jni->ExceptionCheck()) jni->ExceptionClear();
+    }
+  } catch (...) {
+    if (next->array_class) jni->DeleteLocalRef(next->array_class);
+    state = next->previous;
+    runtime = next->previous_runtime;
+    delete next;
+    throw;  // Still Native: Route converts this after restoring both TLS values.
   }
-  if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
-    jclass class_class = jni->FindClass("java/lang/Class");
-    jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
-    if (array) next->array_class = jni->GetObjectClass(array);
-    if (array) jni->DeleteLocalRef(array);
-    if (class_class) jni->DeleteLocalRef(class_class);
-    if (jni->ExceptionCheck()) jni->ExceptionClear();
-  }
+}
+void Scope::Describe(jclass klass, const evolution::ClassSchema& live) {
+  auto* next = static_cast<State*>(state_);
+  for (auto& target : next->targets)
+    if (next->jni->IsSameObject(target.klass, klass)) target.live = live;
 }
 jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
   const auto start = std::chrono::steady_clock::now();
@@ -554,18 +710,20 @@ Scope::~Scope() {
   auto* old = static_cast<State*>(state_);
   if (old->array_class) old->jni->DeleteLocalRef(old->array_class);
   state = old->previous;
+  runtime = old->previous_runtime;
   delete old;
 }
 void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   available = false;
-  const int api = android_get_device_api_level();
-  runtime = api == 33 ? &android13::kInterfaceRuntime : api == 36 ? &android16::kInterfaceRuntime : nullptr;
-  if (!runtime || !method_retirement::SuperclassChangeAvailable()) {
-    *note = "interface spike requires tested API 33/36 declarations and verifier hooks";
+  disabled_reason.store(nullptr);
+  verified_release.store(0);
+  if (!method_retirement::SuperclassChangeAvailable()) {
+    *note = "interface redefinition requires verifier hooks and runtime-probed declarations";
     return;
   }
   using namespace symbols::interface_redefinition;
   current_thread = reinterpret_cast<decltype(current_thread)>(symbols::Find(kCurrentThread));
+  visit_handle_roots = reinterpret_cast<decltype(visit_handle_roots)>(symbols::Find(kHandleScopeVisitRoots));
   mirror_class = reinterpret_cast<Mirror>(symbols::Find(symbols::structural::kClassRedefinitionGetMirrorClass));
   ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
   new_local_ref = reinterpret_cast<decltype(new_local_ref)>(symbols::Find(kNewLocalRef));
@@ -584,7 +742,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   void* run = symbols::Find(kRun);
   void* link_class = symbols::Find(kLinkClass);
   set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
-  if (!current_thread || !mirror_class || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
+  if (!current_thread || !visit_handle_roots || !mirror_class || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
       !allocate_cache || !allocate_array || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) || !mark ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     *note = "interface spike named services unavailable";
@@ -609,6 +767,6 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   resolved.push_back({cache_lookup, reinterpret_cast<void*>(LookupByCache), &original_lookup_cache, kLookupCache.name});
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
-  *note = "interface spike private allocation enabled with source-declared runtime layout";
+  *note = "interface redefinition prepared; Class/Thread/HandleScope/holder runtime probes required";
 }
 }  // namespace artdcevm::interface_redefinition

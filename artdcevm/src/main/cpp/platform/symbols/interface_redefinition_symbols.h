@@ -1,17 +1,17 @@
 #pragma once
 #include "platform/symbols/art_symbol_compat.h"
 
-// Prototype catalog. Admission spellings are alternatives, not universal names.
-// check-structural-symbols.py reports coverage in each declared named table.
+// Active interface service catalog. Admission spellings are alternatives, not universal names.
+// check-structural-symbols.py checks implementation references and named-table coverage.
 namespace artdcevm::symbols::interface_redefinition {
 inline constexpr NamedSymbol kCanNormal{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner16CanRedefineClassILNS_16RedefinitionTypeE0EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kCanStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner16CanRedefineClassILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kGetNormal{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE0EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kGetStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kFinishNewClassAllocations{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE"};
+inline constexpr NamedSymbol kHandleScopeVisitRoots{Library::kArt, "_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEj", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kCurrentThread{Library::kArt, "_ZN3art6Thread14CurrentFromGdbEv"};
 inline constexpr NamedSymbol kEnsureInitialized{Library::kArt, "_ZN3art11ClassLinker17EnsureInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEEbb"};
-inline constexpr NamedSymbol kVisitClasses{Library::kArt, "_ZN3art11ClassLinker12VisitClassesEPNS_12ClassVisitorE"};
 inline constexpr NamedSymbol kNewLocalRef{Library::kArt, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE"};
 inline constexpr NamedSymbol kDeleteLocalRef{Library::kArt, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject"};
 inline constexpr NamedSymbol kCreateNewDexCache{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition17CreateNewDexCacheEN3art6HandleINS2_6mirror11ClassLoaderEEE"};

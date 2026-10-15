@@ -38,6 +38,31 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             configureRuntime(arguments);
             DcevmRuntime.initialize(getTargetContext());
             StandardJvmtiClient.attach(getTargetContext());
+            if (arguments != null && arguments.containsKey("runtimeProbe")) {
+                int stage = Integer.parseInt(arguments.getString("runtimeProbe"));
+                if (stage < 13 || stage > 15) throw new AssertionError("Unknown runtime probe");
+                CopiedChild unchanged = new CopiedChild();
+                expect("arm runtime probe", 0, armFailure(stage));
+                expect("runtime probe rejection", 98, redefine(CopiedDefault.class,
+                        asset("interface-default-body", CopiedDefault.class)));
+                expect("runtime probe hit", 1, failureHits());
+                String reason = DcevmRuntime.capabilities().getString("interfaceRuntime");
+                if (!reason.startsWith("disabled: ") || !reason.contains(
+                        stage == 13 ? "Thread" : stage == 14 ? "HandleScope" : "holder"))
+                    throw new AssertionError("Missing runtime probe rejection: " + reason);
+                ++checks;
+                expect("old dispatch after probe rejection", 91, unchanged.copiedValue());
+                expect("disabled interface stays rejected", 79, redefine(CopiedDefault.class,
+                        asset("interface-default-body", CopiedDefault.class)));
+                expect("class transactions remain available", 0, redefine(CopiedParent.class,
+                        asset("copied-default-add", CopiedParent.class)));
+                System.gc(); System.runFinalization(); System.gc();
+                expect("class dispatch after probe rejection", 92, unchanged.copiedValue());
+                result.putInt("checks", checks);
+                result.putBoolean("completed", true);
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             CopiedChild child = new CopiedChild();
             CopiedDefault throughInterface = child;
             byte[] patch = asset("interface-default-body", CopiedDefault.class);
@@ -79,7 +104,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             }
             // Exceptions injected at the exact callback/hook boundary must
             // return through ART normally, including before cleanup roots exist.
-            for (int stage : new int[]{8, 11, 12}) {
+            for (int stage : new int[]{8, 11, 12, 16}) {
                 expect("arm hook exception", 0, armFailure(stage));
                 expect("hook exception " + stage, stage == 12 ? 113 : 110,
                         redefine(CopiedDefault.class, patch));

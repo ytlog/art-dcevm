@@ -77,6 +77,28 @@ class SymbolCatalogTest(unittest.TestCase):
             result = check.main(['--runtime-lib', str(self.runtime), *map(str, extra)])
         return result, output.getvalue()
 
+    def test_active_catalog_rejects_unused_services_and_comment_only_references(self):
+        implementation = self.root / 'interface.cc'
+        implementation.write_text('Find(kExported); // kWrapper was removed\n')
+        with self.assertRaisesRegex(ValueError, 'unused services: kWrapper'):
+            check.read_active_catalog(check.CATALOG, implementation)
+        implementation.write_text('Find(kExported); Find(kWrapper);\n')
+        catalog, catalog_hash, source_hash = check.read_active_catalog(check.CATALOG, implementation)
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual(catalog_hash, hashlib.sha256(check.CATALOG.read_bytes()).hexdigest())
+        self.assertEqual(source_hash, hashlib.sha256(implementation.read_bytes()).hexdigest())
+
+    def test_active_catalog_accepts_multiple_implementation_sources(self):
+        first, second = self.root / 'engine.cc', self.root / 'mapping.cc'
+        first.write_text('Find(kExported);')
+        second.write_text('Find(kWrapper);')
+        catalog, _, source_hash = check.read_active_catalog(check.CATALOG, (first, second), "Structural")
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual(source_hash, hashlib.sha256(first.read_bytes() + b"\n" + second.read_bytes()).hexdigest())
+        second.write_text('/* kWrapper is obsolete */')
+        with self.assertRaisesRegex(ValueError, 'Structural catalog contains unused services: kWrapper'):
+            check.read_active_catalog(check.CATALOG, (first, second), "Structural")
+
     def test_report_keeps_each_table_without_private_paths(self):
         report = self.root / 'build/evidence/symbols.json'
         result, output = self.run_check('--report', report)

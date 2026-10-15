@@ -23,6 +23,9 @@ struct Hook {
 void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note);
 // The retirement hooks are prepared; VerifyTarget decides per transaction.
 bool Available();
+// Source releases in CandidateOrder; verified_only intersects the current
+// transaction's VerifyTarget probes. Native callers use false for ordering.
+std::vector<int> CandidateReleases(bool verified_only);
 // Classes whose fields stand in for retired fields in reflective Field objects
 // (com.github.ytlog.artdcevm.internal.RetiredField / RetiredStaticField).
 struct FieldPlaceholders {
@@ -39,7 +42,8 @@ bool FieldRetirementAvailable();
 bool SuperclassChangeAvailable();
 // Probe the source-declared class layouts on a redefinition target against
 // ART's own lookups, the class's current DEX and the JVMTI view (`live`). Runs
-// in CheckClass, before ART can no longer fail. True when a layout matches
+// in a Runnable validation/admission hook, before ART can no longer fail.
+// True when a layout matches
 // every target probed in the current transaction.
 bool VerifyTarget(abi::arm64::ClassRedefinitionPrefix* self, const evolution::ClassSchema& live);
 // Java bits of another loaded class's runtime flags (its ClassDef flags), read

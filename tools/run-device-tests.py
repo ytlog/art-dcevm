@@ -180,7 +180,7 @@ def field_retired_checks(suffix):
 REQUIRED_CHECKS = {
     "interface-stress": {
         "baseline": 1400, "snapshotTypes": 207, "snapshotMeasured": True,
-        "allocationMeasured": True,
+        "allocationMeasured": True, "runtimeProbed": True,
         **{f"{kind}{i}": (i if kind == "oldMarker" else 17 if kind == "newMarker" else 8)
            for i in range(200) for kind in ("oldDispatch", "oldMarker", "newDispatch", "newMarker", "dispatchAfterGc")},
     },

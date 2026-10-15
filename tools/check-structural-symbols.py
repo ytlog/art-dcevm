@@ -18,6 +18,9 @@ from elf_mini_inventory import mini_symbol_inventory, symbol_table_inventory
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h'
 PROTOTYPE_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h'
+PROTOTYPE_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/interface_redefinition.cc'
+STRUCTURAL_IMPLEMENTATIONS = tuple(PROTOTYPE_IMPLEMENTATION.with_name(name) for name in
+    ('structural_redefine_engine.cc', 'method_retirement.cc', 'interface_redefinition.cc'))
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'
@@ -41,6 +44,19 @@ def read_catalog(path):
     if len({(entry[1], entry[2]) for entry in catalog}) != len(catalog):
         raise ValueError('Catalog contains duplicate exact names for a library')
     return catalog, hashlib.sha256(content).hexdigest()
+
+
+def read_active_catalog(path, implementation, label="Interface"):
+    """Reject stale optional services without claiming their ABI is callable."""
+    catalog, catalog_hash = read_catalog(path)
+    paths = (implementation,) if isinstance(implementation, Path) else implementation
+    content = b"\n".join(source.read_bytes() for source in paths)
+    source = re.sub(r'/\*.*?\*/|//[^\n]*', '', content.decode('utf-8'), flags=re.S)
+    references = set(re.findall(r'\bk[A-Z]\w*\b', source))
+    unused = [name for name, *_ in catalog if name not in references]
+    if unused:
+        raise ValueError(label + ' catalog contains unused services: ' + ', '.join(unused))
+    return catalog, catalog_hash, hashlib.sha256(content).hexdigest()
 
 
 def report_destination(path):
@@ -118,13 +134,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         destination = report_destination(args.report)
-        catalog, catalog_hash = read_catalog(CATALOG)
+        implementation_hash = None
+        if CATALOG.parent == PROTOTYPE_CATALOG.parent:
+            catalog, catalog_hash, implementation_hash = read_active_catalog(
+                CATALOG, STRUCTURAL_IMPLEMENTATIONS, "Structural")
+        else:  # Standalone synthetic catalogs used by the ELF/parser regression tests.
+            catalog, catalog_hash = read_catalog(CATALOG)
         report = collect_report(args.runtime_lib, catalog, catalog_hash)
+        if implementation_hash:
+            report['implementationSha256'] = implementation_hash
         # Prototype services and spelling alternatives have partial coverage.
         # Report each exact name independently; they are not universal requirements.
         if CATALOG.parent == PROTOTYPE_CATALOG.parent and PROTOTYPE_CATALOG.exists():
-            prototype, prototype_hash = read_catalog(PROTOTYPE_CATALOG)
+            prototype, prototype_hash, implementation_hash = read_active_catalog(
+                PROTOTYPE_CATALOG, PROTOTYPE_IMPLEMENTATION)
             optional = collect_report(args.runtime_lib, prototype, prototype_hash)
+            optional['implementationSha256'] = implementation_hash
             report['interfacePrototype'] = optional
         if destination:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +169,7 @@ def main(argv=None):
           f"named symbols ({summary['dynsymOnly']} .dynsym-only, {summary['anyNamed']} any-named)")
     if 'interfacePrototype' in report:
         optional = report['interfacePrototype']
+        print(f"Interface prototype catalog: {optional['summary']['namedSymbols']} implementation-referenced names; alternatives are reported separately")
         for index, entry in enumerate(optional['sets'][0]['catalog']):
             count = sum(runtime['catalog'][index]['present'] for runtime in optional['sets'])
             table = '.dynsym' if entry['requiredTables'] == ['.dynsym'] else 'any-named'

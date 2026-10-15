@@ -540,6 +540,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     .put("snapshotNanos", snapshot).put("allocationNanos", allocation));
             // Root + four subinterfaces + two superclasses + 200 implementations.
             scenario.check("snapshotTypes", 207L, capabilities.getLong("interfaceSnapshotTypes"));
+            scenario.check("runtimeProbed", true,
+                    capabilities.getString("interfaceRuntime").startsWith("verified: "));
             scenario.check("snapshotMeasured", true, snapshot > 0);
             scenario.check("allocationMeasured", true, allocation > 0);
             scenario.check("noUnexpectedRetry", retries, capabilities.getLong("subclassLoadRetries"));

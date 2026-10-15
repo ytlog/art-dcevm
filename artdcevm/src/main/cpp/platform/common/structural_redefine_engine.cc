@@ -598,6 +598,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       result = ResolveNewTypes(definitions[i], &resolver, &batch, &snapshot, &error);
     }
     if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
+    interface_scope.Describe(definitions[i].klass, snapshot.live);
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
   // ART recreates a target's subclasses under its new class and treats each
@@ -913,6 +914,7 @@ std::string Capabilities() {
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
+      ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_redefinition::RuntimeState()) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
       ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +

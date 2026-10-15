@@ -1458,6 +1458,15 @@ void ResolveFieldPlaceholders(jvmtiEnv* jvmti, const FieldPlaceholders& placehol
   field_retirement_available = true;
 }
 
+std::vector<int> CandidateReleases(bool verified_only) {
+  std::vector<int> releases;
+  for (size_t i : CandidateOrder())
+    if (!verified_only || (transaction && transaction->probed &&
+                           (transaction->layouts & (LayoutMask{1} << i))))
+      releases.push_back(kLayouts[i].android);
+  return releases;
+}
+
 bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
   if (!available || !transaction) return false;
   void* klass = mirror_class(self);
