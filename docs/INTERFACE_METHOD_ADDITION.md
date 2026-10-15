@@ -94,6 +94,7 @@
 - 新类方法数组中满足 `IsDefaultConflicting` 的方法，即 `kAccIntrinsic | kAccCopied | kAccAbstract | kAccDefault` 这几位与 `kAccCopied | kAccAbstract | kAccDefault` 相等的方法，如果在旧类中没有同身份的冲突方法，则映射失败。失败返回 63，原因写明实现类与方法。
 - 这时仍处于 `CollectAndCreateNewInstances` 之后、ART 不可失败点之前，现有清理路径负责回滚。
 - 标志值取自固定源码声明：`kAccCopied = 0x01000000`、`kAccDefault = 0x00400000`、`kAccAbstract = 0x0400`，Android 13 与 16 相同（[13 modifiers.h](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/libdexfile/dex/modifiers.h)、[16 modifiers.h](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/libdexfile/dex/modifiers.h)；判定式见各版本 `art_method.h` 的 `IsDefaultConflicting`）。`kAccIntrinsic = 0x80000000` 同源。这些常量放在 `platform/abi/arm64/common`，不新增任何对象偏移，`access_flags` 已经由现有布局读取。
+- 方法数组按 `PlanMethods` 现有的 `Members` 与长度遍历，不以数组指针非空推断存在成员。较新的 ART 模块已对无字段的类使用地址非空、长度为零的共享字段数组（见引擎文档“运行时探测”），方法数组按同一假设处理。
 - 这项检查对所有结构事务生效，包括“给普通类新增接口”。那条路径今天也可能产生同样的冲突，属于同一个根因，不另加一套接口专用分支。
 
 以下情况都接受：
@@ -135,6 +136,8 @@
 
 设备侧（API 33 与 API 36，普通模式与 CheckJNI 模式）：
 
+- API 36 须同时覆盖使用共享空字段数组的 ART 模块（Android 16 QPR2）。本设计的 fixture 接口都没有字段，这类设备上的接口准入依赖成员探测接受共享空数组（提交 `a8a427a3`）。
+
 - 新增 fixture 变体，用 javac 编译的 lambda 产生 `$r8$lambda$` 桥：
   - 追加 default、追加 private static、追加 private 实例方法。
   - 在 default 方法里追加 lambda、在已有 lambda 之前插入 lambda（同批重定义合成 lambda 类并新增类）。
@@ -147,6 +150,8 @@
 - `interface-stress` 增加新增 default 的版本，核对 200 个实现类的 copied 方法与 GC 后行为。
 
 ## 实施顺序
+
+前置：提交 `a8a427a3`（成员探测接受共享空字段数组）先合入 main，后续步骤以它为基线。
 
 1. 策略与主机测试：修改 `structural_policy` 和 `LoadedHierarchy`，纯函数，可以独立提交。
 2. 快照事实：在 `structural_redefine_engine.cc` 收集父接口虚方法和实现类链上的 static/非 public 身份。
