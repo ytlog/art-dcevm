@@ -23,6 +23,7 @@ import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
 import com.github.ytlog.artdcevm.fixture.InterfaceBatchFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture;
 import com.github.ytlog.artdcevm.fixture.MultiInterfaceFixture;
+import com.github.ytlog.artdcevm.fixture.PointerIdFixture;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.FieldCaller;
 import com.github.ytlog.artdcevm.fixture.FieldSubject;
@@ -301,6 +302,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runInterfaceImplementationScenarios();
         runInterfaceOverlapScenarios();
         runMultiInterfaceScenarios();
+        runPointerIdScenarios();
         runCopiedDefaultScenario();
         runInterfaceStressScenario();
         runInterfaceScenarios();
@@ -499,6 +501,33 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         scenario.check("unchangedMembers", schema, memberSchema(ClassFinalSubject.class));
         scenario.check("oldValue", 29, classFinal.value());
         scenario.check("newValue", 29, new ClassFinalSubject().value());
+    }
+
+    private void runPointerIdScenarios() throws Exception {
+        PointerIdFixture.Implementation instance = new PointerIdFixture.Implementation();
+        PointerIdFixture.Child child = new PointerIdFixture.Child();
+        instance.marker = 73;
+        int[] stages = {19, 20};
+        for (int stage : stages) {
+            runScenario(stage == 19 ? "interface-pointer-target" : "interface-pointer-subtype", 79, scenario -> {
+                scenario.expectRejectionBy(stage == 19 ? PointerIdFixture.Contract.class : PointerIdFixture.Implementation.class);
+                scenario.check("arm", 0, InterfaceAbortInstrumentation.armPointerFailure(stage));
+                scenario.redefine(new Class<?>[]{PointerIdFixture.Contract.class}, "interface-pointer-body");
+                scenario.check("rejectionReason", true,
+                        DcevmRuntime.capabilities().getString("lastRejection").contains("active pointer JNI IDs"));
+                scenario.check("old", 51, instance.pointerValue());
+                scenario.check("child", 51, child.pointerValue());
+                scenario.check("new", 51, new PointerIdFixture.Implementation().pointerValue());
+                scenario.check("marker", 73, instance.marker);
+            });
+        }
+        runScenario("interface-pointer-recovery", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{PointerIdFixture.Contract.class}, "interface-pointer-body");
+            scenario.check("old", 52, instance.pointerValue());
+            scenario.check("child", 52, child.pointerValue());
+            scenario.check("new", 52, new PointerIdFixture.Implementation().pointerValue());
+            scenario.check("marker", 73, instance.marker);
+        });
     }
 
     private void runMultiInterfaceScenarios() throws Exception {

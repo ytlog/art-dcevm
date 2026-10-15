@@ -53,6 +53,7 @@ void* original_lookup_referrer = nullptr;
 void* original_lookup_cache = nullptr;
 void* (*current_thread)() = nullptr;
 Mirror mirror_class = nullptr;
+ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 Ensure ensure_initialized = nullptr;
 jobject (*new_local_ref)(JNIEnv*, void*) = nullptr;
 void (*delete_local_ref)(JNIEnv*, jobject) = nullptr;
@@ -78,7 +79,7 @@ void Disable(const char* reason) noexcept {
 }
 
 struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; };
-struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; const Target* rejected_target = nullptr; const char* rejection = nullptr; const jvmtiClassDefinition* definitions = nullptr; std::vector<jclass> shared_ancestors{}; };
+struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; const InterfaceRuntime* previous_runtime; bool runtime_verified = false; int selected_release = 0; const Target* rejected_target = nullptr; const char* rejection = nullptr; const jvmtiClassDefinition* definitions = nullptr; std::vector<jclass> shared_ancestors{}; const std::string* rejection_class = nullptr; };
 thread_local State* state = nullptr;
 thread_local Timing timing;
 struct JniFailure {};
@@ -217,12 +218,39 @@ const char* SelectRuntime(Handle klass, const Target& target) {
   return disabled_reason.load();
 }
 void* Read(uint32_t reference);
+enum class PointerMarker { kClear, kMarked, kUnavailable };
+bool NamedReference(void* object, std::string_view name, std::string_view descriptor, void** value) {
+  void* type = Read(static_cast<Object*>(object)->klass);
+  const auto* field = find_instance_field(type, name, descriptor);
+  if (!field) return false;
+  *value = Read(__atomic_load_n(&Field<uint32_t>(object, field->offset), __ATOMIC_ACQUIRE));
+  return true;
+}
+PointerMarker CheckPointerMarker(void* klass) {
+  // ClassExt::Has*PointerIdMarker in both fixed sources: nonnull and not array.
+  // Every managed reference offset comes from ART's named field table.
+  void* ext = nullptr;
+  if (!NamedReference(klass, "extData", "Ldalvik/system/ClassExt;", &ext))
+    return PointerMarker::kUnavailable;
+  if (!ext) return PointerMarker::kClear;
+  for (const auto name : {"instanceJfieldIDs", "jmethodIDs", "staticJfieldIDs"}) {
+    void* ids = nullptr;
+    if (!NamedReference(ext, name, "Ljava/lang/Object;", &ids)) return PointerMarker::kUnavailable;
+    if (!ids) continue;
+    void* component = nullptr;
+    if (!NamedReference(Read(static_cast<Object*>(ids)->klass), "componentType", "Ljava/lang/Class;", &component))
+      return PointerMarker::kUnavailable;
+    if (!component) return PointerMarker::kMarked;
+  }
+  return PointerMarker::kClear;
+}
 jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
   void* original = structural ? original_structural[spelling] : original_normal[spelling];
   void* object = klass.Get<void>();
   const Target* target = Find(object);
   if (!target) return reinterpret_cast<Admission>(original)(klass, message);
   state->rejected_target = target;
+  state->rejection_class = nullptr;
   if (!Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
   if (const char* reason = SelectRuntime(klass, *target))
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, reason);
@@ -238,6 +266,21 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   if (Inject(8)) throw std::bad_alloc{};
 #endif
   if (structural) {
+    const Target* owner = Find(Decode(target->owner));
+    if (!owner) return Reject(message, JVMTI_ERROR_INTERNAL, "interface pointer-id snapshot owner unavailable");
+    for (size_t i = 0; i < owner->snapshot.types.size(); ++i) {
+      PointerMarker marker = CheckPointerMarker(Decode(owner->snapshot.types[i]));
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+      // Test the semantic result, never write a marker into a published ClassExt.
+      if ((i == 0 && Inject(19)) || (i > 0 && Inject(20))) marker = PointerMarker::kMarked;
+#endif
+      if (marker == PointerMarker::kClear) continue;
+      state->rejection_class = &owner->snapshot.descriptors[i];
+      return Reject(message, marker == PointerMarker::kMarked ? JVMTI_ERROR_UNMODIFIABLE_CLASS
+                                                             : JVMTI_ERROR_NOT_AVAILABLE,
+                    marker == PointerMarker::kMarked ? "active pointer JNI IDs prevent structural redefinition"
+                                                      : "interface pointer-id field table is unavailable");
+    }
     void* thread = current_thread();
     if (Status(object) == ClassStatus::kInitializing && Field<uint32_t>(object, runtime->clinit_thread_id) == Field<uint32_t>(thread, runtime->tid))
       return Reject(message, JVMTI_ERROR_INTERNAL, "interface redefinition rejects redefinition during initialization");
@@ -451,6 +494,7 @@ void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
 }
 bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) noexcept {
   state->rejected_target = Find(mirror_class(self));
+  state->rejection_class = nullptr;
   state->rejection = why;
   Field<void*>(current_thread(), runtime->exception) = nullptr;
   self->driver->result = error;
@@ -695,6 +739,7 @@ std::string TakeRejection() {
   if (!state || !state->rejection) return {};
   const char* reason = std::exchange(state->rejection, nullptr);
   const Target* target = state->rejected_target;
+  if (state->rejection_class) return *state->rejection_class + ": " + reason;
   return target ? target->live.descriptor + ": " + reason : std::string(reason);
 }
 bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(mirror_class(self)); }
@@ -766,6 +811,17 @@ bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* 
     SetSlot(*data, RedefinitionDataIter::kSlotNewClasses, nullptr);
   }
   return false;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_primePointerId(
+    JNIEnv* jni, jclass, jclass klass, jint kind) {
+  // Called before agent initialization. ART may create its own marker when
+  // still in swapable-pointer mode; no private heap field is written here.
+  uintptr_t id = kind == 0 ? reinterpret_cast<uintptr_t>(jni->GetMethodID(klass, "pointerValue", "()I"))
+      : kind == 1 ? reinterpret_cast<uintptr_t>(jni->GetFieldID(klass, "marker", "I"))
+                  : reinterpret_cast<uintptr_t>(jni->GetStaticFieldID(klass, "staticMarker", "I"));
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); return -1; }
+  return id ? static_cast<jint>((id & 1) == 0) : -1;
 }
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_armFailure(JNIEnv*, jclass, jint stage) {
@@ -930,6 +986,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   current_thread = reinterpret_cast<decltype(current_thread)>(symbols::Find(kCurrentThread));
   visit_handle_roots = reinterpret_cast<decltype(visit_handle_roots)>(symbols::Find(kHandleScopeVisitRoots));
   mirror_class = reinterpret_cast<Mirror>(symbols::Find(symbols::structural::kClassRedefinitionGetMirrorClass));
+  find_instance_field = reinterpret_cast<decltype(find_instance_field)>(symbols::Find(symbols::structural::kFindInstanceField));
   ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
   new_local_ref = reinterpret_cast<decltype(new_local_ref)>(symbols::Find(kNewLocalRef));
   delete_local_ref = reinterpret_cast<decltype(delete_local_ref)>(symbols::Find(kDeleteLocalRef));
@@ -947,7 +1004,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   void* run = symbols::Find(kRun);
   void* link_class = symbols::Find(kLinkClass);
   set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
-  if (!current_thread || !visit_handle_roots || !mirror_class || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
+  if (!current_thread || !visit_handle_roots || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
       !allocate_cache || !allocate_array || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) || !mark ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     *note = "interface redefinition named services unavailable";

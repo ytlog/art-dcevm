@@ -81,6 +81,9 @@ SCENARIOS = (
     ("multi-interface-family", ["multi-interface-body", "multi-interface-body"], 0),
     ("multi-interface-shared-reject", ["multi-interface-body", "multi-interface-body"], 66),
     ("multi-interface-after-shared", ["multi-interface-body"], 0),
+    ("interface-pointer-target", ["interface-pointer-body"], 79),
+    ("interface-pointer-subtype", ["interface-pointer-body"], 79),
+    ("interface-pointer-recovery", ["interface-pointer-body"], 0),
     ("interface-default-body", ["interface-default-body"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
     ("interface-stress", ["interface-stress"], 0),
@@ -107,7 +110,7 @@ SCENARIOS = (
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
 # flags of an added interface.
-MAPPED_SCENARIOS = {"multi-interface-unrelated", "multi-interface-recovery",
+MAPPED_SCENARIOS = {"interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-after-shared","interface-overlap-body", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
                     "interface-implementation-child", "interface-implementation-child-only",
                     "interface-implementation-retire", "interface-implementation-recovery","hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
@@ -212,6 +215,9 @@ def field_retired_checks(suffix):
 
 
 REQUIRED_CHECKS = {
+    **{"interface-pointer-" + kind: {"arm": 0, "rejectionReason": True, "old": 51,
+        "child": 51, "new": 51, "marker": 73} for kind in ("target", "subtype")},
+    "interface-pointer-recovery": {"old": 52, "child": 52, "new": 52, "marker": 73},
     "multi-interface-unrelated": {"left": 12, "right": 22, "newLeft": 12, "newRight": 22,
         "leftMarker": 73, "rightMarker": 79, "allocatedOnce": 4},
     "multi-interface-invalid": {"rejectionReason": True, "leftUnchanged": 12, "rightUnchanged": 22,

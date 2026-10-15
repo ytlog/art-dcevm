@@ -133,6 +133,16 @@ jvmtiError SnapshotTypes(JNIEnv* jni, jvmtiEnv* env, jclass target, jint count,
   std::vector<int32_t> positions(types.size());
   for (size_t i = 0; i < order.size(); ++i) positions[order[i]] = static_cast<int32_t>(i);
   for (size_t original : order) {
+    char* descriptor = nullptr;
+    const auto result = env->GetClassSignature(types[original], &descriptor, nullptr);
+    if (result != JVMTI_ERROR_NONE || !descriptor)
+      return fail(result == JVMTI_ERROR_NONE ? JVMTI_ERROR_INTERNAL : result,
+                  "interface snapshot class name unavailable");
+    struct Signature {
+      jvmtiEnv* env; char* value;
+      ~Signature() { env->Deallocate(reinterpret_cast<unsigned char*>(value)); }
+    } signature{env, descriptor};
+    next.descriptors.emplace_back(descriptor);
     next.types.push_back(types[original]);
     next.superclass.push_back(superclass[original] < 0 ? -1 : positions[superclass[original]]);
   }

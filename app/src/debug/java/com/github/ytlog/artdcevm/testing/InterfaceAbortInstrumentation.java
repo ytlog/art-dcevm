@@ -10,6 +10,7 @@ import com.github.ytlog.artdcevm.fixture.CopiedParent;
 import com.github.ytlog.artdcevm.fixture.NestedInterfaceHost;
 import com.github.ytlog.artdcevm.fixture.InterfaceBatchFixture;
 import com.github.ytlog.artdcevm.fixture.MultiInterfaceFixture;
+import com.github.ytlog.artdcevm.fixture.PointerIdFixture;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -22,7 +23,9 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int failureHits();
     static native int allocationOrder();
     static native int allocatedTypes();
+    private static native int primePointerId(Class<?> klass, int kind);
     private static native int configureCheckJni(boolean enabled);
+    static int armPointerFailure(int stage) { return armFailure(stage); }
     private Bundle arguments;
     private int checks;
 
@@ -41,6 +44,14 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             configureRuntime(arguments);
+            int primedPointerIds = 0;
+            if (arguments == null || !arguments.containsKey("runtimeProbe")) {
+                int methodId = primePointerId(PointerIdFixture.Contract.class, 0);
+                int instanceId = primePointerId(PointerIdFixture.Implementation.class, 1);
+                int staticId = primePointerId(PointerIdFixture.Implementation.class, 2);
+                if (methodId < 0 || instanceId < 0 || staticId < 0) throw new AssertionError("Cannot prepare JNI IDs");
+                primedPointerIds = methodId + instanceId + staticId;
+            }
             DcevmRuntime.initialize(getTargetContext());
             StandardJvmtiClient.attach(getTargetContext());
             if (arguments != null && arguments.containsKey("runtimeProbe")) {
@@ -67,6 +78,23 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 result.putBoolean("completed", true);
                 finish(Activity.RESULT_OK, result);
                 return;
+            }
+            PointerIdFixture.Implementation pointerInstance = new PointerIdFixture.Implementation();
+            byte[] pointerDex = asset("interface-pointer-body", PointerIdFixture.Contract.class);
+            int naturalCode = redefine(PointerIdFixture.Contract.class, pointerDex);
+            boolean naturalMarker = naturalCode == 79;
+            result.putInt("primedPointerIds", primedPointerIds);
+            result.putBoolean("naturalPointerMarker", naturalMarker);
+            if (naturalMarker) {
+                String reason = DcevmRuntime.capabilities().getString("lastRejection");
+                if (!reason.contains("PointerIdFixture$") || !reason.contains("active pointer JNI IDs"))
+                    throw new AssertionError("Missing natural pointer-id marker rejection class/reason");
+                ++checks;
+                expect("natural marker preserves dispatch", 51, pointerInstance.pointerValue());
+                expect("natural marker preserves new dispatch", 51, new PointerIdFixture.Implementation().pointerValue());
+            } else {
+                expect("natural marker not produced", 0, naturalCode);
+                expect("indexed IDs remain admissible", 52, pointerInstance.pointerValue());
             }
             InterfaceBatchFixture.Implementation batchInstance = new InterfaceBatchFixture.Implementation();
             InterfaceBatchFixture.Contract batchContract = batchInstance;
@@ -207,6 +235,20 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             expect("family subclass new dispatch", 42, multiChild.childValue());
             System.gc(); System.runFinalization(); System.gc();
             expect("family after GC", 42, multiChild.childValue());
+            MultiInterfaceFixture.FamilyImpl markerFamily = new MultiInterfaceFixture.FamilyImpl();
+            for (int stage : new int[]{19, 20}) {
+                expect("arm pointer marker result", 0, armFailure(stage));
+                expect("pointer marker result rejected", 79, redefine(MultiInterfaceFixture.Parent.class, multiParentDex));
+                expect("pointer marker injection hit", 1, failureHits());
+                String reason = DcevmRuntime.capabilities().getString("lastRejection");
+                if (!reason.contains("MultiInterfaceFixture$") || !reason.contains("active pointer JNI IDs"))
+                    throw new AssertionError("Missing injected pointer-id class/reason");
+                ++checks;
+                expect("marker result old parent", 32, markerFamily.parentValue());
+                expect("marker result old child", 42, markerFamily.childValue());
+                expect("marker result new dispatch", 32, new MultiInterfaceFixture.FamilyImpl().parentValue());
+                expect("marker result recovery", 0, redefine(MultiInterfaceFixture.Parent.class, multiParentDex));
+            }
             CopiedChild child = new CopiedChild();
             CopiedDefault throughInterface = child;
             byte[] patch = asset("interface-default-body", CopiedDefault.class);
