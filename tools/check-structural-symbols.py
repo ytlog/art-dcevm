@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h'
 INTERFACE_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h'
 INTERFACE_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/interface_redefinition.cc'
-STRUCTURAL_IMPLEMENTATIONS = tuple(INTERFACE_IMPLEMENTATION.with_name(name) for name in
-    ('structural_redefine_engine.cc', 'method_retirement.cc', 'interface_redefinition.cc'))
+# Every engine module may name structural services.
+STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(INTERFACE_IMPLEMENTATION.parent.glob('*.cc')))
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'

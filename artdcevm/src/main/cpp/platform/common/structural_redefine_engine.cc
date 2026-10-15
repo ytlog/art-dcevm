@@ -18,6 +18,7 @@
 #include "platform/common/class_layout.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
+#include "platform/common/member_retirement.h"
 #include "platform/common/method_retirement.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
@@ -605,7 +606,7 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
   if (result == JVMTI_ERROR_NONE && count > 0) {
     Batch* batch = BatchOf(context);
     if (batch->retires_members) {
-      method_retirement::RetainRoots(std::move(batch->retirement_roots));
+      member_retirement::RetainRoots(std::move(batch->retirement_roots));
       batch->retirement_roots.clear();
     }
     for (const auto& [klass, snapshot] : batch->classes)
@@ -735,7 +736,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       for (jint j = 0; j < count && !affected; ++j)
         affected = jni->IsAssignableFrom(candidate, definitions[j].klass);
       if (!affected) continue;
-      if (method_retirement::Rooted(jni, candidate)) continue;
+      if (member_retirement::Rooted(jni, candidate)) continue;
       jobject root = jni->NewGlobalRef(candidate);
       if (!root) {
         if (jni->ExceptionCheck()) jni->ExceptionClear();
@@ -809,7 +810,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       superclass->access = access;
   }
   abilities.field_retirement =
-      abilities.member_mapping && method_retirement::FieldRetirementAvailable();
+      abilities.member_mapping && member_retirement::FieldRetirementAvailable();
   abilities.instance_check = method_retirement::Available();
   abilities.superclass_change =
       abilities.member_mapping && method_retirement::SuperclassChangeAvailable();
@@ -905,7 +906,7 @@ bool RollBack(std::string* failure) {
 }  // namespace
 
 jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
-                   const method_retirement::FieldPlaceholders& placeholders) {
+                   const member_retirement::FieldPlaceholders& placeholders) {
   {
     std::lock_guard<std::mutex> lock(report_mutex);
     if (installed) return JVMTI_ERROR_NONE;
@@ -981,12 +982,12 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
   std::string field_note;
   if (method_retirement::Available())
-    method_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
+    member_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
   std::lock_guard<std::mutex> lock(report_mutex);
   installed = true;
   diagnostic = !method_retirement::Available()
       ? "ART structural transaction with additions and modifier changes; members cannot retire"
-      : method_retirement::FieldRetirementAvailable()
+      : member_retirement::FieldRetirementAvailable()
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
   for (const auto* note : {&retirement_note, &field_note, &interface_note})
@@ -998,7 +999,7 @@ std::string Capabilities() {
   std::lock_guard<std::mutex> lock(report_mutex);
   const std::string supported = installed ? "true" : "false";
   const bool methods = installed && method_retirement::Available();
-  const bool fields = methods && method_retirement::FieldRetirementAvailable();
+  const bool fields = methods && member_retirement::FieldRetirementAvailable();
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
   const auto interface_timing = interface_redefinition::LastTiming();
@@ -1012,7 +1013,7 @@ std::string Capabilities() {
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
       ",\"jniRetirementGuards\":" +
-          std::to_string(method_retirement::JniRetirementGuardHits()) +
+          std::to_string(member_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
       ",\"interfaceRedefinition\":" + (installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +

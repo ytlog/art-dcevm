@@ -12,6 +12,9 @@ struct Hook {
   const char* name;
 };
 
+template <typename F> void* HookAddress(F function) { return reinterpret_cast<void*>(function); }
+template <typename F> void** HookSlot(F* function) { return reinterpret_cast<void**>(function); }
+
 // Call only from a catch handler. Error conversion must not itself allocate.
 inline jvmtiError ArtHookExceptionError() noexcept {
   try { throw; }
