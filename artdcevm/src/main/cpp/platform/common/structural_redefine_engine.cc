@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <set>
@@ -613,9 +614,18 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   // missing from ART's recreated subclasses: fail this attempt instead.
   WatchScope watch(jni, count, definitions);
   LocalClasses loaded(snapshot_env, jni);
+  const auto loaded_start = std::chrono::steady_clock::now();
   result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   // Failures without a reason here are described by Route.
   if (result != JVMTI_ERROR_NONE) return result;
+  std::string interface_error;
+  const uint64_t loaded_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - loaded_start).count();
+  result = interface_scope.Capture(loaded.count, loaded.classes, loaded_ns, &interface_error);
+  if (result != JVMTI_ERROR_NONE) {
+    Diagnose(interface_error, true);
+    return result;
+  }
   for (auto& [klass, snapshot] : batch.classes) {
     std::string error;
     result = CollectSubclasses(jni, klass, loaded, &snapshot, &error);
@@ -892,6 +902,7 @@ std::string Capabilities() {
   const bool fields = methods && method_retirement::FieldRetirementAvailable();
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
+  const auto interface_timing = interface_redefinition::LastTiming();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
@@ -902,6 +913,9 @@ std::string Capabilities() {
       ",\"jniRetirementGuards\":" +
           std::to_string(method_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
+      ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
+      ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
+      ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +
       ",\"memberDeletion\":" + field_retirement + ",\"memberTypeChange\":" + field_retirement +
       ",\"hierarchyChange\":false,"
       "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +

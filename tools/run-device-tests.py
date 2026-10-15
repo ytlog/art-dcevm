@@ -54,6 +54,7 @@ SCENARIOS = (
     ("method-storage-restore", ["method-storage-original"], 0),
     ("interface-default-body", ["interface-default-body"], 0),
     ("copied-default-add", ["copied-default-add"], 0),
+    ("interface-stress", ["interface-stress"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
@@ -80,7 +81,7 @@ SCENARIOS = (
 MAPPED_SCENARIOS = {"hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
                     "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
                     "methods-restore-again", "method-storage-delete", "method-storage-restore",
-                    "interface-default-body", "copied-default-add", "interface-add", "super-widen",
+                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 VAR_HANDLE_API = 33
@@ -177,6 +178,12 @@ def field_retired_checks(suffix):
 
 
 REQUIRED_CHECKS = {
+    "interface-stress": {
+        "baseline": 1400, "snapshotTypes": 207, "snapshotMeasured": True,
+        "allocationMeasured": True,
+        **{f"{kind}{i}": (i if kind == "oldMarker" else 17 if kind == "newMarker" else 8)
+           for i in range(200) for kind in ("oldDispatch", "oldMarker", "newDispatch", "newMarker", "dispatchAfterGc")},
+    },
     "body": {"computeBefore": 11, "oldCompute": 12, "newCompute": 12},
     "add": EVOLVING_CHECKS,
     "method-delete": {"oldCompute": 14, "newCompute": 14, "oldValue": 10,
@@ -358,6 +365,12 @@ def validate_report(report):
         if (scenario.get("completed") is not True or scenario.get("passed") is not True
                 or scenario.get("error")):
             raise RunFailure("Scenario " + name + " failed")
+        if name == "interface-stress":
+            timing = scenario.get("interfaceTiming")
+            if (not isinstance(timing, dict) or type(timing.get("types")) is not int
+                    or timing["types"] != 207 or any(type(timing.get(key)) is not int
+                    or timing[key] <= 0 for key in ("snapshotNanos", "allocationNanos"))):
+                raise RunFailure("Interface stress is missing measured phase timing or the complete type count")
         mapping = (scenario.get("capabilities") or {}).get("memberMapping")
         if name in MAPPED_SCENARIOS and not (isinstance(mapping, str)
                                              and mapping.startswith("verified: ")):

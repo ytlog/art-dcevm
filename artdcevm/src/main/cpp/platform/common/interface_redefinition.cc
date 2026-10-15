@@ -3,6 +3,7 @@
 #include <android/api-level.h>
 #include <android/log.h>
 #include <atomic>
+#include <chrono>
 #include <algorithm>
 #include <memory>
 #include <limits>
@@ -19,6 +20,7 @@
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/art_hook.h"
+#include "platform/common/interface_snapshot.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::interface_redefinition {
@@ -32,7 +34,6 @@ uint32_t Flags(void* klass) { return Field<uint32_t>(klass, runtime->access_flag
 using Admission = jvmtiError (*)(Handle, std::string*);
 using Mirror = void* (*)(ClassRedefinitionPrefix*);
 using Ensure = bool (*)(void*, void*, Handle, bool, bool);
-using Visit = void (*)(void*, ClassVisitor*);
 using LookupReferrer = void* (*)(void*, TypeIndex, void*);
 using LookupCache = void* (*)(void*, TypeIndex, void*, void*);
 using LookupChars = void* (*)(void*, void*, const char*, void*);
@@ -55,7 +56,6 @@ Mirror mirror_class = nullptr;
 Ensure ensure_initialized = nullptr;
 jobject (*new_local_ref)(JNIEnv*, void*) = nullptr;
 void (*delete_local_ref)(JNIEnv*, jobject) = nullptr;
-Visit visit_classes = nullptr;
 std::atomic<void*> class_linker{nullptr};
 void* original_normal[2]{};
 void* original_structural[2]{};
@@ -64,9 +64,10 @@ void* original_run = nullptr;
 void* original_link_class = nullptr;
 void (*set_status_internal)(void*, android13::ClassStatus) = nullptr;
 bool available = false;
-struct Target { jclass klass; bool boot; jint access; jint status; };
-struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; bool thread_verified; jclass array_class; jint batch_size; };
+struct Target { jclass klass; bool boot; jint access; jint status; TypeSnapshot snapshot; };
+struct State { State* previous; std::vector<Target> targets; JNIEnv* jni; jvmtiEnv* env; bool thread_verified; jclass array_class; jint batch_size; };
 thread_local State* state = nullptr;
+thread_local Timing timing;
 struct JniFailure {};
 class LocalRef {
  public:
@@ -76,13 +77,6 @@ class LocalRef {
  private:
   jobject reference_;
 };
-bool Assignable(void* target, void* candidate) {
-  LocalRef super(target), sub(candidate);
-  const bool result = state->jni->IsAssignableFrom(
-      static_cast<jclass>(sub.Get()), static_cast<jclass>(super.Get()));
-  if (state->jni->ExceptionCheck()) throw JniFailure{};
-  return result;
-}
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 thread_local int failure_stage = 0;
 thread_local int discarded_classes = 0;
@@ -114,23 +108,6 @@ jvmtiError Reject(std::string* message, jvmtiError error, const char* why) {
   *message = why;
   return error;
 }
-struct ProxyVisitor final : ClassVisitor {
-  void* target;
-  bool found = false;
-  jvmtiError error = JVMTI_ERROR_NONE;
-  explicit ProxyVisitor(void* klass) : target(klass) {}
-  bool operator()(void* klass) noexcept override try {
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-    if (Inject(6)) throw std::bad_alloc{};
-    if (Inject(7)) throw JniFailure{};
-#endif
-    if ((Flags(klass) & 0x00040000u) && Assignable(target, klass)) { found = true; return false; }
-    return true;
-  } catch (...) {
-    error = ArtHookExceptionError();
-    return false;  // VisitClasses must return normally through ART's frames.
-  }
-};
 jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
   void* original = structural ? original_structural[spelling] : original_normal[spelling];
   void* object = klass.Get<void>();
@@ -152,14 +129,6 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
   if (Inject(8)) throw std::bad_alloc{};
 #endif
-  ProxyVisitor proxies(object);
-  visit_classes(linker, &proxies);
-  if (proxies.error != JVMTI_ERROR_NONE) {
-    Field<void*>(current_thread(), runtime->exception) = nullptr;
-    return proxies.error;
-  }
-  if (proxies.found)
-    return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike rejects Proxy implementations");
   if (structural) {
     void* thread = current_thread();
     if (Status(object) == 13 && Field<uint32_t>(object, runtime->clinit_thread_id) == Field<uint32_t>(thread, runtime->tid))
@@ -355,27 +324,6 @@ void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
   }
   return reinterpret_cast<LookupReferrer>(original_lookup_referrer)(linker, index, referrer);
 }
-struct Subtypes final : ClassVisitor {
-  void* target;
-  std::vector<void*> classes;
-  bool proxy = false;
-  jvmtiError error = JVMTI_ERROR_NONE;
-  explicit Subtypes(void* klass) : target(klass) {}
-  bool operator()(void* klass) noexcept override try {
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-    if (Inject(9)) throw std::bad_alloc{};
-    if (Inject(10)) throw JniFailure{};
-#endif
-    if (Status(klass) >= 7 && Assignable(target, klass)) {
-      proxy |= (Flags(klass) & 0x00040000u) != 0;
-      classes.push_back(klass);
-    }
-    return true;
-  } catch (...) {
-    error = ArtHookExceptionError();
-    return false;
-  }
-};
 bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) noexcept {
   Field<void*>(current_thread(), runtime->exception) = nullptr;
   self->driver->result = error;
@@ -383,6 +331,13 @@ bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char*
   return false;
 }
 bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) {
+  struct AllocationTimer {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~AllocationTimer() {
+      timing.allocation_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count();
+    }
+  } allocation_timer;
   if (state->batch_size != 1 || !state->array_class || !attempt || attempt->driver != self->driver)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface spike requires one target and array root");
   auto& initialized = Field<std::vector<bool>>(data->holder, runtime->initialized);
@@ -391,29 +346,14 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   if (data->index != 0 || initialized.size() != 1 || structural.size() != 1 || initial.size() != 1 ||
       initialized[0] || !structural[0] || !initial[0])
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface spike holder flags mismatch");
-  void* linker = class_linker.load();
-  Subtypes subtypes(mirror_class(self));
-  visit_classes(linker, &subtypes);
-  if (subtypes.error != JVMTI_ERROR_NONE)
-    return FailAllocation(self, subtypes.error, "interface subtype traversal failed");
-  if (subtypes.proxy)
-    return FailAllocation(self, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface spike found a Proxy after class loading paused");
-  // Kahn order over assignability: superclass and superinterfaces precede each
-  // subtype. A partial-order comparator cannot safely be used with std::sort.
-  std::vector<void*> ordered;
-  while (!subtypes.classes.empty()) {
-    auto ready = std::find_if(subtypes.classes.begin(), subtypes.classes.end(), [&](void* candidate) {
-      for (void* other : subtypes.classes)
-        if (other != candidate && Assignable(other, candidate)) return false;
-      return true;
-    });
-    if (ready == subtypes.classes.end())
-      return FailAllocation(self, JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION, "interface spike subtype order is cyclic");
-    ordered.push_back(*ready);
-    subtypes.classes.erase(ready);
-  }
-  if (ordered.empty() || ordered.front() != mirror_class(self))
-    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface spike target is missing from subtype order");
+  const Target* target = Find(mirror_class(self));
+  if (!target) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target unavailable");
+  const auto& ordered = target->snapshot.types;
+  if (ordered.empty() || Decode(ordered.front()) != mirror_class(self))
+    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
+  for (jclass klass : ordered)
+    if (Status(Decode(klass)) < static_cast<uint32_t>(android13::ClassStatus::kResolved))
+      return FailAllocation(self, JVMTI_ERROR_INVALID_CLASS, "interface snapshot contains an unresolved class");
   if (ordered.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max() - 7))
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike has too many types to root");
   void* thread = self->driver->self;
@@ -421,7 +361,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface transaction thread mismatch");
   Roots roots(thread, ordered.size() + 7);
   std::vector<Handle> old_types;
-  for (void* object : ordered) old_types.push_back(roots.Add(object));
+  for (jclass klass : ordered) old_types.push_back(roots.Add(Decode(klass)));
   Handle array_class = roots.Add(Decode(state->array_class));
   Handle old_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
   if (!old_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface spike old array allocation failed");
@@ -436,8 +376,12 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     void* old = old_types[i].Get<void>();
     Store(old_array.Get<ObjectArray>(), static_cast<int32_t>(i), old);
     void* super = Read(Field<uint32_t>(old, runtime->super_class));
-    for (size_t j = 0; j < i; ++j)
-      if (old_types[j].Get<void>() == super) { super = Read(new_array.Get<ObjectArray>()->elements[j]); break; }
+    const int32_t parent = target->snapshot.superclass[i];
+    if (parent >= 0) {
+      if (static_cast<size_t>(parent) >= i || old_types[parent].Get<void>() != super)
+        return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot superclass changed");
+      super = Read(new_array.Get<ObjectArray>()->elements[parent]);
+    }
     Assign(superclass, super);
     Assign(original_cache, Read(Field<uint32_t>(old, runtime->dex_cache)));
     if (i == 0) {
@@ -505,6 +449,7 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& holder,
 
 void ObserveClassLinker(void* linker) { class_linker.store(linker); }
 bool Available() { return available; }
+Timing LastTiming() { return timing; }
 bool IsTarget(ClassRedefinitionPrefix* self) { return available && Find(mirror_class(self)); }
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 extern "C" JNIEXPORT jint JNICALL
@@ -558,7 +503,7 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits
 }
 #endif
 Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
-    : state_(new State{state, {}, jni, false, nullptr, count}) {
+    : state_(new State{state, {}, jni, env, false, nullptr, count}) {
   auto* next = static_cast<State*>(state_);
   state = next;
   if (!available || count <= 0 || !definitions) return;
@@ -573,7 +518,7 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
     if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & 0x0200)) continue;
     if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE ||
         env->GetClassStatus(klass, &status) != JVMTI_ERROR_NONE) continue;
-    next->targets.push_back({klass, !loader, access, status});
+    next->targets.push_back({klass, !loader, access, status, {}});
     if (loader) jni->DeleteLocalRef(loader);
   }
   if (!next->targets.empty() && next->thread_verified && jni->EnsureLocalCapacity(8) == JNI_OK) {
@@ -584,6 +529,26 @@ Scope::Scope(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition*
     if (class_class) jni->DeleteLocalRef(class_class);
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
+}
+jvmtiError Scope::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
+  const auto start = std::chrono::steady_clock::now();
+  timing = {};
+  auto* next = static_cast<State*>(state_);
+  for (auto& target : next->targets) {
+    jvmtiError result = SnapshotTypes(next->jni, next->env, target.klass,
+                                      count, loaded, &target.snapshot, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+    timing.types += target.snapshot.types.size();
+  }
+  if (!next->targets.empty() && next->jni->EnsureLocalCapacity(8) != JNI_OK) {
+    if (next->jni->ExceptionCheck()) next->jni->ExceptionClear();
+    *error = "interface snapshot local reference reservation failed";
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+  if (!next->targets.empty())
+    timing.snapshot_ns = loaded_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+  return JVMTI_ERROR_NONE;
 }
 Scope::~Scope() {
   auto* old = static_cast<State*>(state_);
@@ -603,7 +568,6 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   current_thread = reinterpret_cast<decltype(current_thread)>(symbols::Find(kCurrentThread));
   mirror_class = reinterpret_cast<Mirror>(symbols::Find(symbols::structural::kClassRedefinitionGetMirrorClass));
   ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
-  visit_classes = reinterpret_cast<Visit>(symbols::Find(kVisitClasses));
   new_local_ref = reinterpret_cast<decltype(new_local_ref)>(symbols::Find(kNewLocalRef));
   delete_local_ref = reinterpret_cast<decltype(delete_local_ref)>(symbols::Find(kDeleteLocalRef));
   allocate_cache = reinterpret_cast<CacheAlloc>(symbols::Find(kCreateNewDexCache));
@@ -620,7 +584,7 @@ void Prepare(std::vector<method_retirement::Hook>* hooks, std::string* note) {
   void* run = symbols::Find(kRun);
   void* link_class = symbols::Find(kLinkClass);
   set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
-  if (!current_thread || !mirror_class || !ensure_initialized || !visit_classes || !new_local_ref || !delete_local_ref || !finish ||
+  if (!current_thread || !mirror_class || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
       !allocate_cache || !allocate_array || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) || !mark ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     *note = "interface spike named services unavailable";

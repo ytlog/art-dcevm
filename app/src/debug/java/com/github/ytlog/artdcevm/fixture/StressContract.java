@@ -1,0 +1,5 @@
+package com.github.ytlog.artdcevm.fixture;
+
+public interface StressContract {
+    default int value() { return 7; }
+}

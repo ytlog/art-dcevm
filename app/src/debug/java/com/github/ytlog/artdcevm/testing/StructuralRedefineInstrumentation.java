@@ -57,6 +57,8 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import com.github.ytlog.artdcevm.fixture.InterfaceStressTypes;
+import com.github.ytlog.artdcevm.fixture.StressContract;
 import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -291,6 +293,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runMethodKindChangeScenarios();
         runCopiedDefaultScenario();
+        runInterfaceStressScenario();
         runInterfaceScenarios();
         runSuperclassScenarios();
         runPreloadScenarios();
@@ -510,6 +513,46 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("oldChildVirtual", 92, child.copiedValue());
             scenario.check("newChild", 92, new CopiedChild().copiedValue());
             scenario.check("parentValue", 90, child.parentValue());
+        });
+    }
+
+    private void runInterfaceStressScenario() throws Exception {
+        InterfaceStressTypes.Child[] instances = new InterfaceStressTypes.Child[200];
+        Class<?>[] types = new Class<?>[instances.length];
+        int baseline = 0;
+        for (int i = 0; i < instances.length; ++i) {
+            String name = InterfaceStressTypes.class.getName() + "$C" + String.format(java.util.Locale.ROOT, "%03d", i);
+            types[i] = Class.forName(name);
+            instances[i] = (InterfaceStressTypes.Child) types[i].getConstructor().newInstance();
+            instances[i].marker = i;
+            baseline += instances[i].value();
+        }
+        final int before = baseline;
+        runScenario("interface-stress", 0, scenario -> {
+            scenario.check("baseline", 1400, before);
+            long retries = DcevmRuntime.capabilities().getLong("subclassLoadRetries");
+            scenario.redefine(new Class<?>[]{StressContract.class}, "interface-stress");
+            JSONObject capabilities = DcevmRuntime.capabilities();
+            long snapshot = capabilities.getLong("interfaceSnapshotNanos");
+            long allocation = capabilities.getLong("interfaceAllocationNanos");
+            scenario.result.put("interfaceTiming", new JSONObject()
+                    .put("types", capabilities.getLong("interfaceSnapshotTypes"))
+                    .put("snapshotNanos", snapshot).put("allocationNanos", allocation));
+            // Root + four subinterfaces + two superclasses + 200 implementations.
+            scenario.check("snapshotTypes", 207L, capabilities.getLong("interfaceSnapshotTypes"));
+            scenario.check("snapshotMeasured", true, snapshot > 0);
+            scenario.check("allocationMeasured", true, allocation > 0);
+            scenario.check("noUnexpectedRetry", retries, capabilities.getLong("subclassLoadRetries"));
+            for (int i = 0; i < instances.length; ++i) {
+                scenario.check("oldDispatch" + i, 8, instances[i].value());
+                scenario.check("oldMarker" + i, i, instances[i].marker);
+                InterfaceStressTypes.Child fresh = (InterfaceStressTypes.Child) types[i].getConstructor().newInstance();
+                scenario.check("newDispatch" + i, 8, fresh.value());
+                scenario.check("newMarker" + i, 17, fresh.marker);
+            }
+            System.gc(); System.runFinalization(); System.gc();
+            for (int i = 0; i < instances.length; ++i)
+                scenario.check("dispatchAfterGc" + i, 8, instances[i].value());
         });
     }
 

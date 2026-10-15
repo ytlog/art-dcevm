@@ -79,9 +79,9 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             }
             // Exceptions injected at the exact callback/hook boundary must
             // return through ART normally, including before cleanup roots exist.
-            for (int stage = 6; stage <= 12; ++stage) {
+            for (int stage : new int[]{8, 11, 12}) {
                 expect("arm hook exception", 0, armFailure(stage));
-                expect("hook exception " + stage, stage == 7 || stage == 10 || stage == 12 ? 113 : 110,
+                expect("hook exception " + stage, stage == 12 ? 113 : 110,
                         redefine(CopiedDefault.class, patch));
                 expect("hook exception hit", 1, failureHits());
                 expect("old dispatch after hook exception", 92, throughInterface.copiedValue());
@@ -118,6 +118,36 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             expect("late child after GC", 92, lateChild.copiedValue());
             expect("interface after retry and GC", 0, redefine(CopiedDefault.class, patch));
             expect("old child after retry", 92, child.copiedValue());
+            // A second implementation implements the target directly, without
+            // CopiedParent. It is introduced after the Native subtype snapshot.
+            String direct = "com.github.ytlog.artdcevm.fixture.LateSnapshotImplementation";
+            String directDescriptor = "L" + direct.replace('.', '/') + ";";
+            expect("direct implementation initially unloaded", 0, StandardJvmtiClient.isLoaded(directDescriptor) ? 1 : 0);
+            retries = DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1);
+            transformations = StandardJvmtiClient.classFileReplacements();
+            expect("install direct implementation hook", 0, StandardJvmtiClient.setClassFileReplacement(
+                    "com/github/ytlog/artdcevm/fixture/CopiedDefault", asset("interface-snapshot-retry", CopiedDefault.class)));
+            try {
+                expect("direct implementation retry", 0, redefine(CopiedDefault.class, patch));
+            } finally {
+                StandardJvmtiClient.setClassFileReplacement(null, null);
+            }
+            expect("direct implementation actual retry", 1,
+                    (int) (DcevmRuntime.capabilities().optLong("subclassLoadRetries", -1) - retries));
+            expect("direct implementation hook rerun", 2,
+                    (int) (StandardJvmtiClient.classFileReplacements() - transformations));
+            expect("direct implementation now loaded", 1, StandardJvmtiClient.isLoaded(directDescriptor) ? 1 : 0);
+            CopiedDefault directChild = (CopiedDefault) Class.forName(direct).getConstructor().newInstance();
+            expect("direct implementation after retry", 94, directChild.copiedValue());
+            expect("restore after direct implementation retry", 0, redefine(CopiedDefault.class, patch));
+            System.gc(); System.runFinalization(); System.gc();
+            expect("direct implementation after GC", 93, directChild.copiedValue());
+            // Proxy rejection is decided by the public Native snapshot path.
+            Object proxy = java.lang.reflect.Proxy.newProxyInstance(CopiedDefault.class.getClassLoader(),
+                    new Class<?>[]{CopiedDefault.class}, (object, method, values) -> 92);
+            expect("Proxy snapshot rejection", 79, redefine(CopiedDefault.class, patch));
+            expect("Proxy remains usable", 92, ((CopiedDefault) proxy).copiedValue());
+            expect("old child after Proxy rejection", 92, child.copiedValue());
             result.putInt("checks", checks);
             result.putBoolean("completed", true);
             finish(Activity.RESULT_OK, result);

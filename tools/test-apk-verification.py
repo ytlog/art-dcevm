@@ -43,6 +43,8 @@ def complete_report():
                        "actualCode": code, "completed": True, "passed": True,
                        "capabilities": {"memberMapping": "verified: android16 class layout"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
+                       "interfaceTiming": {"types": 207, "snapshotNanos": 1000, "allocationNanos": 2000}
+                           if name == "interface-stress" else None,
                        "checks": [{"name": "returnCode", "expected": code, "actual": code,
                                    "passed": True},
                                   *[{"name": key, "expected": value, "actual": value, "passed": True}
@@ -112,6 +114,17 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_stress_requires_complete_type_count_and_positive_phase_measurements(self):
+        runner.validate_report(complete_report())
+        for key, value in (("types", 206), ("snapshotNanos", 0), ("allocationNanos", -1),
+                           ("snapshotNanos", True), ("allocationNanos", "unknown")):
+            with self.subTest(key=key, value=value):
+                report = complete_report()
+                scenario = next(item for item in report["scenarios"] if item["name"] == "interface-stress")
+                scenario["interfaceTiming"][key] = value
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report)
+
     def test_install_and_artifact_helpers(self):
         for code, out, err in [(0, "Failure [INSTALL_FAILED_ABORTED]", ""),
                                (0, "Success", "Failure [INSTALL_FAILED_ABORTED]"),
