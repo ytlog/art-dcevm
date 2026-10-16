@@ -1,0 +1,8 @@
+{
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/Bridge.class": [
+    [
+      "required",
+      "()Ljava/lang/Object;"
+    ]
+  ]
+}

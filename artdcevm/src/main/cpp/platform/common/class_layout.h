@@ -18,9 +18,13 @@ struct Services {
   abi::arm64::ArtField* (*find_declared_instance_field)(void*, std::string_view, std::string_view);
   void* (*mirror_class)(abi::arm64::ClassRedefinitionPrefix*);
   jclass class_type;  // java.lang.Class, a global reference.
+  void* (*read_reference)(uint32_t);  // Named ART read barrier when the runtime is probed.
 };
 // Called once the member mapping hooks are prepared; until then no layout verifies.
 void Enable(const Services& services);
+
+// Read a heap reference through the configured runtime read barrier.
+void* ReadReference(uint32_t reference);
 
 // Source releases in candidate order; verified_only intersects the current
 // transaction's VerifyTarget probes. Native callers use false for ordering.

@@ -26,6 +26,17 @@ struct ObjectArray {
 };
 static_assert(offsetof(ObjectArray, elements) == 12);
 
+// mirror/array.h (android-13.0.0_r1 and android-16.0.0_r1):
+// PointerArray uses Array::DataOffset(8) and 64-bit elements on arm64.
+// IfTable is ObjectArray<Object>, storing (interface, PointerArray) pairs.
+struct PointerArray {
+  Object object;
+  int32_t length;
+  uint32_t padding;
+  uint64_t elements[1];
+};
+static_assert(offsetof(PointerArray, elements) == 16);
+
 // mirror/dex_cache.h: class_loader_, location_, then the native DexFile*.
 struct DexCache {
   Object object;

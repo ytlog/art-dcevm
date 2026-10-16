@@ -1,0 +1,9 @@
+{
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/Implementation.class": [
+    [
+      "required",
+      "()Ljava/lang/String;",
+      9
+    ]
+  ]
+}

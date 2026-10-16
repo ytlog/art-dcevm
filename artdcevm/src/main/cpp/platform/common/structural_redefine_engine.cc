@@ -818,6 +818,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // default conflicts, and retirement roots cover the group: an interface
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
+  abilities.interface_abstract_methods =
+      (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
+      member_mapping::InterfaceDispatchAvailable(self);
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
   const bool interface_target = interface_redefinition::IsTarget(self);
@@ -837,6 +840,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
+    if (decision.reason.find("requires a verified IfTable accessor") != std::string::npos)
+      decision.reason += ": " + member_mapping::InterfaceDispatchState();
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
@@ -852,6 +857,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
        structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy, without_mapping,
                                    snapshot.retired).error != JVMTI_ERROR_NONE);
   requirements.no_instances = decision.requires_no_instances;
+  for (const auto& [name, descriptor] : decision.interface_obligations)
+    context->interface_obligations.push_back({self, name, descriptor});
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
@@ -1018,6 +1025,7 @@ std::string Capabilities() {
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
       ",\"interfaceRedefinition\":" + (installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
+      ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(member_mapping::InterfaceDispatchState()) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
       ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +

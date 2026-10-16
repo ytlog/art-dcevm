@@ -150,10 +150,10 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
 }
 // Only new code invokes an added static or private interface method. An added
 // default fills a new iftable slot that ART links into every re-linked
-// subtype; an abstract one would leave existing implementations a miranda
-// that throws. `modifiers` is the JVMTI view of the new declaration.
+// subtype. Abstract additions require checking the actual linked dispatch
+// of every concrete implementation. `modifiers` is the JVMTI view.
 Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
-                                const LoadedHierarchy& hierarchy, bool supported) {
+                                const LoadedHierarchy& hierarchy, bool supported, bool abstract_dispatch) {
   const std::string method = key.first + key.second;
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -164,9 +164,6 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
   if (modifiers & acc::kAccNative)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "interface redefinition does not support added native methods: " + method);
-  if (modifiers & acc::kAccAbstract)
-    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                  "added abstract interface method has no implementation in loaded classes: " + method);
   if (!Virtual(modifiers)) {
     // Verified invoke-interface callers would resolve the direct method and
     // dispatch it as the virtual method it is not.
@@ -178,6 +175,14 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
   if (!(modifiers & acc::kAccPublic))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "added interface instance method is neither public nor private: " + method);
+  if (modifiers & acc::kAccAbstract) {
+    if (!abstract_dispatch)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                    "added abstract interface method requires a verified IfTable accessor: " + method);
+    Decision pending;
+    pending.interface_obligations.push_back(key);
+    return pending;
+  }
   const auto shadow = hierarchy.subtype_shadows.find(key);
   if (shadow != hierarchy.subtype_shadows.end())
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -318,8 +323,11 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   }
   if (interface_target) {
     for (const auto& [key, now] : new_methods) {
-      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members);
+      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members,
+                                              abilities.interface_abstract_methods);
       if (added.error != JVMTI_ERROR_NONE) return added;
+      decision.interface_obligations.insert(decision.interface_obligations.end(),
+          added.interface_obligations.begin(), added.interface_obligations.end());
     }
   }
   if (!new_methods.empty()) decision.methods_structural = true;

@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
                           {"$r8$lambda$old", lambda,
                            acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic},
                           {"helper", "()I", acc::kAccPrivate}};
-      const policy::Abilities members{true, true, true, true, true};
+      const policy::Abilities members{true, true, true, true, true, true};
       const policy::Abilities body_only{true, true, true, true, false};
       const policy::Abilities unmapped{false, false, true, false, true};
       policy::LoadedHierarchy hierarchy;
@@ -387,8 +387,19 @@ int main(int argc, char** argv) {
         auto resigned = contract; resigned.methods[index].descriptor = "(I)" + text;
         reject(resigned, kDeleted, "interface virtual method signature change must be rejected");
       }
-      reject(with({{"more", "()I", acc::kAccPublic | acc::kAccAbstract}}), kAdded,
-             "abstract interface method addition must be rejected");
+      for (const auto& name : {"more", "hidden"}) {
+        auto candidate = with({{name, "()I", acc::kAccPublic | acc::kAccAbstract}});
+        const auto pending = policy::Evaluate(contract, candidate, hierarchy, members);
+        Require(pending.error == JVMTI_ERROR_NONE && pending.methods_structural &&
+                pending.interface_obligations == std::vector<policy::MemberKey>{{name, "()I"}},
+                "abstract addition must carry a full-descriptor obligation, bypassing default shadows");
+        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
+        const auto denied = policy::Evaluate(contract, candidate, hierarchy, no_dispatch);
+        Require(denied.error == kAdded && denied.reason.find("IfTable accessor") != std::string::npos,
+                "abstract addition must fail closed without the dispatch probe");
+      }
+      reject(with({{"packagedAbstract", "()I", acc::kAccAbstract}}), kAdded,
+             "nonpublic abstract instance method must be rejected");
       reject(with({{"bound", "()I", acc::kAccPublic | acc::kAccStatic | acc::kAccNative}}), kAdded,
              "native interface method addition must be rejected");
       reject(with({{"<clinit>", "()V", acc::kAccStatic}}), kAdded,

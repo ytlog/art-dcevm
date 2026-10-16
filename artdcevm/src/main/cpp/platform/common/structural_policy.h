@@ -84,6 +84,9 @@ struct Abilities {
   // inherited_interface and subtype_shadows, and the mapping rejects default
   // conflicts that re-linked subtypes newly gain.
   bool interface_members = false;
+  // Additionally accept public abstract additions as pending conditions,
+  // validated through a probed read-only IfTable accessor before commit.
+  bool interface_abstract_methods = false;
 };
 
 struct Decision {
@@ -101,6 +104,8 @@ struct Decision {
   bool requires_no_instances = false;
   // ART must link the new class under the new superclass.
   bool superclass_changed = false;
+  // Added public abstract interface declarations, checked on the linked group.
+  std::vector<MemberKey> interface_obligations;
 };
 
 // Raw DEX access flags mapped to what JVMTI Get*Modifiers reports

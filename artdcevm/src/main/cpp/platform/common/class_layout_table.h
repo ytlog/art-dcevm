@@ -19,6 +19,8 @@
 #include "platform/abi/arm64/android16/class.h"
 #include "platform/abi/arm64/android17/class.h"
 
+#include "platform/common/class_layout.h"
+
 // The table of source-declared class layouts, shared by the layout probes
 // (class_layout.cc) and the member mapping plans (member_mapping.cc). Both
 // build their per-layout operations from Table, so an index names the same
@@ -31,11 +33,17 @@ inline uint32_t Reference(const void* object) {
 template <typename T> T* Pointer(uint64_t address) {
   return reinterpret_cast<T*>(static_cast<uintptr_t>(address));
 }
+template <typename T> T* Heap(uint32_t reference) {
+  return static_cast<T*>(ReadReference(reference));
+}
+template <typename T> T* Element(const abi::arm64::ObjectArray* array, int32_t index) {
+  return Heap<T>(array->elements[index]);
+}
 template <typename T> abi::arm64::LengthPrefixedArray<T>* Members(uint64_t address) {
   return Pointer<abi::arm64::LengthPrefixedArray<T>>(address);
 }
 inline const abi::arm64::DexFilePrefix* DexOf(uint32_t dex_cache) {
-  const auto* cache = Pointer<abi::arm64::DexCache>(dex_cache);
+  const auto* cache = Heap<abi::arm64::DexCache>(dex_cache);
   return cache ? Pointer<const abi::arm64::DexFilePrefix>(cache->dex_file) : nullptr;
 }
 inline bool Fail(std::string* why, std::string reason) {

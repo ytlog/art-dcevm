@@ -774,6 +774,11 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
 
 void ObserveClassLinker(void* linker) { class_linker.store(linker); }
 bool Available() { return available && disabled_reason.load() == nullptr; }
+void* ReadReference(uint32_t reference) {
+  const State* state = CurrentState();
+  return state && state->thread_verified ? Read(reference)
+      : reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
+}
 std::string RuntimeState() {
   if (const char* reason = disabled_reason.load()) return std::string("disabled: ") + reason;
   if (!available) return "unavailable";
@@ -850,6 +855,7 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
   const bool checked = version != plain[0] && version != plain[1];
   return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
 }
+bool InjectDispatchProbeFailure() { return Inject(21); }
 bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {
   const Target* owner = Find(mirror_class(self));
   const State* state = CurrentState();

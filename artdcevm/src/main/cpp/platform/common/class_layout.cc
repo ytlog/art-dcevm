@@ -102,7 +102,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
       for (uint64_t array : arrays) inside |= array && Members<ArtField>(array)->Contains(field);
       evolution::Member identity;
       std::string error;
-      if (!inside || field->declaring_class != Reference(klass) ||
+      if (!inside || Heap<Class>(field->declaring_class) != klass ||
           (field->access_flags & kAccJavaFlagsMask) != member->access ||
           !evolution::ReadFieldIdentity(view, field->dex_field_index, &identity, &error) ||
           identity.name != member->name || identity.descriptor != member->descriptor)
@@ -123,7 +123,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     size_t declared = 0;
     for (uint32_t i = 0; i < methods->length; ++i) {
       Method* method = methods->At(i);
-      if (method->declaring_class != Reference(klass)) continue;
+      if (Heap<Class>(method->declaring_class) != klass) continue;
       const uint32_t flags = method->access_flags.load(std::memory_order_relaxed);
       evolution::Member identity;
       std::string error;
@@ -156,11 +156,11 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     if (!old_classes || !new_classes || old_classes->length < 1 ||
         old_classes->length != new_classes->length)
       return Fail(why, "redefinition class slots are malformed");
-    if (old_classes->Get<void>(0) != art.mirror_class(self))
+    if (Element<void>(old_classes, 0) != art.mirror_class(self))
       return Fail(why, "redefinition slot does not hold the target class");
     for (int32_t i = 0; i < new_classes->length; ++i) {
-      auto* old_class = old_classes->Get<Class>(i);
-      auto* new_class = new_classes->Get<Class>(i);
+      auto* old_class = Element<Class>(old_classes, i);
+      auto* new_class = Element<Class>(new_classes, i);
       if (!old_class || !new_class) return Fail(why, "redefinition class slot is empty");
       if (i == 0 && DexOf(new_class->dex_cache) != self->dex_file)
         return Fail(why, "replacement class does not use the incoming DEX");
@@ -205,6 +205,11 @@ int Selected(const transaction::Context* context) {
   return -1;
 }
 }  // namespace
+
+void* ReadReference(uint32_t reference) {
+  return art.read_reference ? art.read_reference(reference)
+      : reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
+}
 
 void Enable(const Services& services) {
   art = services;

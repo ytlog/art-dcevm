@@ -1,0 +1,2 @@
+package com.github.ytlog.artdcevm.fixture.abstractaddition;
+public interface Contract { default int oldValue() { return 12; } Object required(); }

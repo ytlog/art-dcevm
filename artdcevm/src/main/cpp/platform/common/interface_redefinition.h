@@ -14,6 +14,9 @@ namespace artdcevm::interface_redefinition {
 // group's replacements (member_mapping::SuperclassChangeAvailable).
 void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note);
 bool Available();
+// Use the probed runtime's named read barrier; without a matching runtime,
+// retain the existing raw-reference behavior for ordinary class probes.
+void* ReadReference(uint32_t reference);
 struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 // Diagnostics for the latest capture on the calling transaction thread.
 Timing LastTiming();
@@ -38,6 +41,7 @@ bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self);
 void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept;
 jvmtiError VerificationError() noexcept;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+bool InjectDispatchProbeFailure();
 // Debug APK fault injection; no test entry points are built into release AARs.
 bool InjectInstanceFailure(abi::arm64::ClassRedefinitionPrefix* self,
                            abi::arm64::RedefinitionDataIter* data, bool allocated);

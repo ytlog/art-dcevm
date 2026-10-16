@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 #include "platform/abi/arm64/common/redefinition.h"
 
 namespace artdcevm::verification_redirect {
@@ -40,6 +41,13 @@ struct Requirements {
   bool redirect_verification = false;
 };
 
+// Batch-wide: an input interface may be a dependent of another group owner.
+struct InterfaceObligation {
+  abi::arm64::ClassRedefinitionPrefix* interface;
+  std::string name;
+  std::string descriptor;
+};
+
 struct Context {
   Context* enclosing = nullptr;
   // Module state: the engine's snapshots and decisions, the member mapping
@@ -53,6 +61,7 @@ struct Context {
   uint32_t layouts = ~uint32_t{0};
   bool probed = false;
   std::map<abi::arm64::ClassRedefinitionPrefix*, Requirements> targets;
+  std::vector<InterfaceObligation> interface_obligations;
   // Set once a subclass of a target is loaded after the engine's snapshot:
   // neither ART's recreated subclasses nor the policy decision include it.
   const std::atomic<bool>* subclass_loaded = nullptr;

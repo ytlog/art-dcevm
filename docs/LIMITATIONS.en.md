@@ -14,13 +14,13 @@ This document summarizes the prerequisites, rejected changes and runtime semanti
 
 ## Redefining interfaces
 
-Interface targets support body edits to default, static and private methods, new default/static methods and private instance methods, and deletion or signature changes of static/private methods. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
+Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, and deletion or signature changes of static/private methods. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
 
 This capability is available only on Android 13 (API 33) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
 
 | Rejection for interface targets | JVMTI error code |
 | --- | --- |
-| Adding abstract, native or `<clinit>` methods; hiding an inherited interface/Object method with a direct method; a default shadowing static/non-public class-chain methods or introducing a default conflict | `METHOD_ADDED` (63) |
+| Adding native or `<clinit>` methods; abstract additions without a valid implementation or with an unverified IfTable accessor; hiding an inherited interface/Object method with a direct method; a default shadowing static/non-public class-chain methods or introducing a default conflict | `METHOD_ADDED` (63) |
 | Deleting or changing signatures of default/abstract methods | `METHOD_DELETED` (67) |
 | Changing fields | `SCHEMA_CHANGED` (64) |
 | Changing method modifiers | `METHOD_MODIFIERS_CHANGED` (71) |
@@ -32,6 +32,10 @@ This capability is available only on Android 13 (API 33) and Android 16 (API 36)
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
 
 `lastRejection` names the rejected class and reason; failure preserves old behavior. A new default is available to existing instances, even when no implementation DEX was submitted; public class methods and more specific subinterfaces retain precedence. Static/private retirement uses the same bytecode, JNI, reflection and MethodHandle semantics as ordinary classes. Conflict rejections name the implementation and method. Inserting lambdas may renumber synthetic classes; the reload tool must isolate old closures or retain their old bridges, as for ordinary classes. See [interface member evolution](STRUCTURAL_REDEFINE_ENGINE.en.md#interface-member-evolution).
+
+A new public abstract method requires **every loaded concrete implementation** in the interface group to dispatch through ART's actual IfTable to a public concrete instance method with the exact name and complete descriptor. This includes classes with no instances and no submitted DEX. A same-batch implementation may appear in either input order. Existing or inherited implementations and a more specific default actually selected by ART are accepted. Missing implementations, abstract/miranda targets, static/private/non-public targets and default conflicts reject the whole batch with 63 before commit, rather than deferring `AbstractMethodError` to invocation. Generic and covariant returns require real bridges; a name match or a different return descriptor is insufficient. Class-loader identities distinguish same-named types. `lastRejection` names the interface method and incomplete implementation; withdrawing or correcting the change permits retry.
+
+The read-only IfTable accessor probes the Class field, interface method indices and arm64 PointerArray declaration. `capabilities().interfaceAbstractDispatch` reports `unavailable`, `unverified: ...`, `verified: ...` or `rejected: reason`. If it does not match, abstract additions retain rejection code 63 with a reason. Unsupported interface runtimes retain the errors in the table above.
 
 Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
 
