@@ -1,3 +1,4 @@
+#include "platform/common/runtime_thread.h"
 #include "platform/common/class_layout.h"
 
 #include <android/api-level.h>
@@ -206,11 +207,6 @@ int Selected(const transaction::Context* context) {
 }
 }  // namespace
 
-void* ReadReference(uint32_t reference) {
-  return art.read_reference ? art.read_reference(reference)
-      : reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
-}
-
 void Enable(const Services& services) {
   art = services;
   enabled = true;
@@ -228,6 +224,12 @@ std::vector<int> CandidateReleases(bool verified_only) {
 bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
   transaction::Context* context = transaction::Current();
   if (!enabled || !context) return false;
+  if (!runtime_thread::Ready()) {
+    context->probed = true;
+    context->layouts = 0;
+    Report(std::string("rejected: ") + runtime_thread::Rejection());
+    return false;
+  }
   void* klass = art.mirror_class(self);
   void* class_type = DecodeClass(art.mirror_class, self, art.class_type);
   if (!class_type) return false;

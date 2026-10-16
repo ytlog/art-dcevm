@@ -55,6 +55,7 @@ struct Context {
   std::unique_ptr<Part> batch;
   std::unique_ptr<Part> mapping;
   std::unique_ptr<Part> interfaces;
+  std::unique_ptr<Part> thread;  // Native-probed runtime thread services.
   // Source-declared class layouts (class_layout.h) that every probe of this
   // transaction accepted, as a mask over the layout table; `probed` once any
   // probe ran.

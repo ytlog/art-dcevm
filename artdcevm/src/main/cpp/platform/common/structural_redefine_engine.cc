@@ -20,6 +20,7 @@
 #include "platform/common/structural_policy.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/runtime_thread.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
@@ -641,6 +642,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
+  runtime_thread::Probe(jni);
   interface_redefinition::Begin(jni, snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.

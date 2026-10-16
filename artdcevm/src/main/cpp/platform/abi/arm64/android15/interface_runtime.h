@@ -8,6 +8,6 @@
 namespace artdcevm::abi::arm64::android15 {
 // Source preparation only. RuntimeFor deliberately does not select this profile.
 inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
-    InterfaceRuntimeFor<Class, Thread, HandleScopeHeader, RedefinitionDataHolder>(offsetof(HandleScopeHeader, size));
+    InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(offsetof(HandleScopeHeader, size));
 inline constexpr bool kHandleScopeThreadIdSigned = false;
 }  // namespace artdcevm::abi::arm64::android15

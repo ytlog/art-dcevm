@@ -15,6 +15,7 @@ add_library(artdcevm SHARED
   platform/common/schema_snapshot.cc
   platform/common/structural_policy.cc
   platform/common/class_layout.cc
+  platform/common/runtime_thread.cc
   platform/common/transaction_context.cc
   platform/common/member_retirement.cc
   platform/common/member_mapping.cc

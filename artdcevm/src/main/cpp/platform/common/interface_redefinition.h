@@ -16,9 +16,6 @@ void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note
 bool Available();
 // ART 13 needs its named early-link error service to diagnose non-public targets.
 bool AbstractLinkErrorsAvailable();
-// Use the probed runtime's named read barrier; without a matching runtime,
-// retain the existing raw-reference behavior for ordinary class probes.
-void* ReadReference(uint32_t reference);
 struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 // Diagnostics for the latest capture on the calling transaction thread.
 Timing LastTiming();

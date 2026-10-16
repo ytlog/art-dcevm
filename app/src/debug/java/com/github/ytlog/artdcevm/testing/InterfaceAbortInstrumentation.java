@@ -3,6 +3,14 @@ package com.github.ytlog.artdcevm.testing;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Bundle;
+import android.os.Debug;
+import android.os.SystemClock;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import com.github.ytlog.artdcevm.fixture.RuntimeThreadFixture;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
@@ -65,6 +73,100 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         expect("parent after recovery GC", 32, instance.base());
         expect("parent addition after recovery GC", 33, (Integer) InterfaceEvolutionFixture.ConflictBase.class
                 .getMethod("added").invoke(instance));
+    }
+
+    private static native void rejectRuntimeThreadProbe();
+    private static native long runtimeReferenceReads();
+    private static native long runtimeMarkingReads();
+
+    // Runs before any interface transaction: the ordinary-class path must
+    // provide its own Thread probe and barrier, including after a rejected probe.
+    private void checkRuntimeThread(Bundle result) throws Exception {
+        RuntimeThreadFixture instance = new RuntimeThreadFixture();
+        Object reference = new Object();
+        instance.kept = 137;
+        instance.reference = reference;
+        byte[][] patches = {asset("runtime-thread-one", RuntimeThreadFixture.class),
+                asset("runtime-thread-two", RuntimeThreadFixture.class)};
+        long beforeRejectedRead = runtimeReferenceReads();
+        rejectRuntimeThreadProbe();
+        expect("unverified ordinary mapping rejected", 67,
+                redefine(RuntimeThreadFixture.class, patches[0]));
+        if (!DcevmRuntime.capabilities().getString("memberMapping").contains(
+                "runtime Thread probe rejected injected mismatch"))
+            throw new AssertionError("Missing shared Thread rejection diagnostic");
+        ++checks;
+        if (runtimeReferenceReads() != beforeRejectedRead)
+            throw new AssertionError("Rejected Thread probe read heap references");
+        ++checks;
+        expect("failed ordinary transaction preserves method", 11, instance.value());
+        expect("failed ordinary transaction preserves fields", 137, instance.kept);
+        if (instance.reference != reference) throw new AssertionError("Rejected transaction changed reference");
+        ++checks;
+        AtomicBoolean stop = new AtomicBoolean();
+        AtomicLong allocations = new AtomicLong();
+        AtomicReference<Throwable> workerError = new AtomicReference<>();
+        CountDownLatch started = new CountDownLatch(1);
+        Thread allocator = new Thread(() -> {
+            try {
+                Object[] retained = new Object[256];
+                started.countDown();
+                while (!stop.get()) {
+                    for (int i = 0; i < retained.length; ++i) {
+                        byte[] bytes = new byte[16384];
+                        bytes[0] = (byte) i;
+                        retained[i] = bytes;
+                        allocations.incrementAndGet();
+                    }
+                    System.gc();
+                }
+            } catch (Throwable error) { workerError.set(error); }
+        }, "runtime-thread-gc");
+        long gcBefore = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count"));
+        long markingBefore = runtimeMarkingReads();
+        allocator.start();
+        try {
+            if (!started.await(10, TimeUnit.SECONDS)) throw new AssertionError("GC worker did not start");
+            long deadline = SystemClock.uptimeMillis() + 10000;
+            while (allocations.get() < 256 && workerError.get() == null
+                    && SystemClock.uptimeMillis() < deadline) Thread.yield();
+            if (allocations.get() < 256) throw new AssertionError("GC worker did not allocate");
+            for (int cycle = 0; cycle < 32; ++cycle) {
+                int version = 12 + cycle % 2;
+                expect("ordinary transaction under GC", 0,
+                        redefine(RuntimeThreadFixture.class, patches[cycle % 2]));
+                expect("ordinary new body under GC", version, instance.value());
+                expect("ordinary preserved primitive under GC", 137, instance.kept);
+                if (instance.reference != reference) throw new AssertionError("GC changed reference identity");
+                ++checks;
+                expect("ordinary added field starts at zero", 0, RuntimeThreadFixture.class
+                        .getField(cycle % 2 == 0 ? "one" : "two").getInt(instance));
+                expect("ordinary added method under GC", version, (Integer) RuntimeThreadFixture.class
+                        .getMethod(cycle % 2 == 0 ? "one" : "two").invoke(instance));
+                if (!DcevmRuntime.capabilities().getString("memberMapping").startsWith("verified: "))
+                    throw new AssertionError("Ordinary mapping did not verify under GC");
+                ++checks;
+            }
+        } finally {
+            stop.set(true);
+            allocator.join(15000);
+        }
+        if (allocator.isAlive()) throw new AssertionError("GC worker did not stop");
+        if (workerError.get() != null) throw new AssertionError("GC worker failed", workerError.get());
+        long gcCycles = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count")) - gcBefore;
+        if (gcCycles <= 0 || allocations.get() <= 256 || runtimeReferenceReads() <= beforeRejectedRead)
+            throw new AssertionError("Missing GC/allocation/shared-reader observations");
+        ++checks;
+        System.gc();
+        expect("ordinary body after GC", 13, instance.value());
+        expect("ordinary primitive after GC", 137, instance.kept);
+        if (instance.reference != reference) throw new AssertionError("Reference lost after GC");
+        ++checks;
+        result.putLong("ordinaryGcCycles", gcCycles);
+        result.putLong("ordinaryAllocations", allocations.get());
+        result.putLong("ordinaryReferenceReads", runtimeReferenceReads() - beforeRejectedRead);
+        // CC can report marking reads; userfaultfd CMC intentionally reports zero.
+        result.putLong("ordinaryMarkingReads", runtimeMarkingReads() - markingBefore);
     }
 
     private Bundle arguments;
@@ -134,6 +236,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK, result);
                 return;
             }
+            checkRuntimeThread(result);
             checkDefaultConflictRollback();
             PointerIdFixture.Implementation pointerInstance = new PointerIdFixture.Implementation();
             byte[] pointerDex = asset("interface-pointer-body", PointerIdFixture.Contract.class);

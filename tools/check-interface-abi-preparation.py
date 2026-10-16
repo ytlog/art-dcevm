@@ -36,6 +36,7 @@ def main():
     compiler = next(path / 'bin/aarch64-linux-android30-clang++' for path in prebuilt.iterdir()
                     if (path / 'bin/aarch64-linux-android30-clang++').is_file())
     lines = [f'#include "platform/abi/arm64/android{v}/interface_runtime.h"' for v in VERSIONS]
+    lines.append('#include "platform/abi/arm64/common/runtime_thread.h"')
     lines.append('using namespace artdcevm::abi::arm64;')
     expected = {11: (16, 52, 216, 296, 12), 12: (12, 48, 208, 288, 12),
                 13: (12, 36, 200, 280, 12), 14: (12, 36, 208, 288, 12),
@@ -43,8 +44,9 @@ def main():
                 17: (12, 32, 200, 280, 16)}
     for v, offsets in expected.items():
         name = 'kInterfaceRuntime' if v in (13, 16) else 'kPreparedInterfaceRuntime'
-        for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope', 'scope_header_size'), offsets):
-            lines.append(f'static_assert(android{v}::{name}.{member} == {value});')
+        for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):
+            lines.append(f'static_assert(RuntimeThreadFor<android{v}::Thread>().{member} == {value});')
+        lines.append(f'static_assert(android{v}::{name}.scope_header_size == {offsets[4]});')
         lines.append(f'static_assert(android{v}::{name}.redefinition_size == 72);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(123) == 123);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(0xff000123) == 0);')
@@ -66,8 +68,10 @@ def main():
     spec.loader.exec_module(audit)
     catalog, catalog_hash = audit.read_catalog(SYMBOLS / 'interface_redefinition_symbols.h')
     extra, extra_hash = audit.read_catalog(SYMBOLS / 'interface_abi_preparation_symbols.h')
-    combined_hash = hashlib.sha256((catalog_hash + extra_hash).encode('ascii')).hexdigest()
-    report = audit.collect_report(args.runtime_lib.resolve(), catalog + extra, combined_hash)
+    shared, shared_hash, _ = audit.read_active_catalog(SYMBOLS / 'runtime_thread_symbols.h',
+        CPP / 'platform/common/runtime_thread.cc', 'Runtime thread')
+    combined_hash = hashlib.sha256((catalog_hash + extra_hash + shared_hash).encode('ascii')).hexdigest()
+    report = audit.collect_report(args.runtime_lib.resolve(), catalog + extra + shared, combined_hash)
     alternatives = [('kCanNormal', 'kGetNormal'), ('kCanStructural', 'kGetStructural'),
                     ('kLookupClassChars', 'kLookupClassView'),
                     ('kObjectArrayAlloc', 'kClassArrayAlloc', 'kObjectArrayAllocWithAllocator',
@@ -78,6 +82,7 @@ def main():
     # Its absence must not make unrelated interface services look unavailable.
     non_public = ('kThrowNonPublicGlobal', 'kThrowNonPublicLocal', 'kThrowNonPublicUnique')
     optional.update(non_public)
+    optional.add('kUseReadBarrier')
     rows = {}
     for runtime in report['sets']:
         api = int(runtime['label'].split('/')[0].split('-')[1])

@@ -1,3 +1,4 @@
+#include "platform/common/runtime_thread.h"
 #include "platform/common/interface_dispatch.h"
 #include <mutex>
 #include "platform/common/art_method_identity.h"
@@ -42,7 +43,7 @@ template <typename Class, typename Method> struct Verifier {
   }
 
   static Class* ReadClass(uint32_t reference) {
-    return static_cast<Class*>(class_layout::ReadReference(reference));
+    return static_cast<Class*>(runtime_thread::Read(reference));
   }
   // An interface's declared virtual methods occupy consecutive method indices.
   // Probe these indices against its validated ArtMethod array rather than
@@ -131,8 +132,8 @@ template <typename Class, typename Method> struct Verifier {
       for (int32_t i = 0; i < new_classes->length; ++i) {
         Class* klass = class_layout::Element<Class>(new_classes, i);
         if (klass->access_flags & (evolution::kAccInterface | evolution::kAccAbstract)) continue;
-        auto* table = static_cast<abi::ObjectArray*>(class_layout::ReadReference(klass->iftable));
-        if (!table || class_layout::ReadReference(table->object.klass) != object_array_type ||
+        auto* table = static_cast<abi::ObjectArray*>(runtime_thread::Read(klass->iftable));
+        if (!table || runtime_thread::Read(table->object.klass) != object_array_type ||
             table->length < 0 || table->length % 2) return unavailable("IfTable array declaration differs");
         Method* implementation = nullptr;
         bool found = false;
@@ -141,8 +142,8 @@ template <typename Class, typename Method> struct Verifier {
           if (found) return unavailable("IfTable has duplicate interface identities");
           found = true;
           auto* methods = static_cast<abi::PointerArray*>(
-              class_layout::ReadReference(table->elements[entry + 1]));
-          if (!methods || class_layout::ReadReference(methods->object.klass) != pointer_array_type ||
+              runtime_thread::Read(table->elements[entry + 1]));
+          if (!methods || runtime_thread::Read(methods->object.klass) != pointer_array_type ||
               methods->length != static_cast<int32_t>(declarations.size()))
             return unavailable("IfTable PointerArray declaration differs");
           implementation = Pointer<Method>(methods->elements[required->method_index]);
@@ -153,12 +154,12 @@ template <typename Class, typename Method> struct Verifier {
         // whose actual IfTable contains this candidate identity implement it.
         if (!found) {
           auto* old = class_layout::Element<Class>(old_classes, i);
-          auto* old_table = static_cast<abi::ObjectArray*>(class_layout::ReadReference(old->iftable));
-          if (!old_table || class_layout::ReadReference(old_table->object.klass) != object_array_type ||
+          auto* old_table = static_cast<abi::ObjectArray*>(runtime_thread::Read(old->iftable));
+          if (!old_table || runtime_thread::Read(old_table->object.klass) != object_array_type ||
               old_table->length < 0 || old_table->length % 2)
             return unavailable("old IfTable array declaration differs");
           for (int32_t entry = 0; entry < old_table->length; entry += 2)
-            if (class_layout::ReadReference(old_table->elements[entry]) == original)
+            if (runtime_thread::Read(old_table->elements[entry]) == original)
               return unavailable("candidate IfTable is missing an implemented interface");
           continue;
         }

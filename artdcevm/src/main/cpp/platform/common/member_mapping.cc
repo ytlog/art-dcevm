@@ -1,3 +1,4 @@
+#include "platform/common/runtime_thread.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/interface_dispatch.h"
@@ -512,6 +513,7 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
     if (entry.replacement) resolved.push_back({address, entry.replacement, entry.original, entry.symbol.name});
     else *entry.original = address;
   }
+  runtime_thread::Prepare();
   std::string failure;
   if (!verification_redirect::Prepare(&resolved, &failure)) return unavailable(failure);
   // The layout probes decode java.lang.Class through this global reference.
@@ -536,7 +538,7 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
   class_layout::Enable({find_static_field, find_declared_instance_field, mirror_class,
-                        class_type_root, interface_redefinition::ReadReference});
+                        class_type_root});
   Report("unverified");
 }
 bool Available() { return available; }

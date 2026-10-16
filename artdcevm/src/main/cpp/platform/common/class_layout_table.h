@@ -1,4 +1,5 @@
 #pragma once
+#include "platform/common/runtime_thread.h"
 #include <jni.h>
 #include <array>
 #include <cstdint>
@@ -34,7 +35,7 @@ template <typename T> T* Pointer(uint64_t address) {
   return reinterpret_cast<T*>(static_cast<uintptr_t>(address));
 }
 template <typename T> T* Heap(uint32_t reference) {
-  return static_cast<T*>(ReadReference(reference));
+  return static_cast<T*>(runtime_thread::Read(reference));
 }
 template <typename T> T* Element(const abi::arm64::ObjectArray* array, int32_t index) {
   return Heap<T>(array->elements[index]);

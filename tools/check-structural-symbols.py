@@ -18,6 +18,8 @@ from elf_mini_inventory import mini_symbol_inventory, symbol_table_inventory
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h'
 INTERFACE_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h'
+RUNTIME_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/runtime_thread_symbols.h'
+RUNTIME_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/runtime_thread.cc'
 INTERFACE_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/interface_redefinition.cc'
 # Every engine module may name structural services.
 STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(INTERFACE_IMPLEMENTATION.parent.glob('*.cc')))
@@ -151,6 +153,11 @@ def main(argv=None):
             optional = collect_report(args.runtime_lib, interface_catalog, interface_hash)
             optional['implementationSha256'] = implementation_hash
             report['interfaceServices'] = optional
+            runtime_catalog, runtime_hash, runtime_source_hash = read_active_catalog(
+                RUNTIME_CATALOG, RUNTIME_IMPLEMENTATION, 'Runtime thread')
+            shared = collect_report(args.runtime_lib, runtime_catalog, runtime_hash)
+            shared['implementationSha256'] = runtime_source_hash
+            report['runtimeThreadServices'] = shared
         if destination:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
@@ -174,7 +181,15 @@ def main(argv=None):
             count = sum(runtime['catalog'][index]['present'] for runtime in optional['sets'])
             table = '.dynsym' if entry['requiredTables'] == ['.dynsym'] else 'any-named'
             print(f"Interface service {entry['id']}: {count}/{len(optional['sets'])} {table}")
-    return 0 if summary['passedSets'] == summary['totalSets'] else 1
+    shared_ok = True
+    if 'runtimeThreadServices' in report:
+        shared = report['runtimeThreadServices']
+        for index, entry in enumerate(shared['sets'][0]['catalog']):
+            count = sum(runtime['catalog'][index]['present'] for runtime in shared['sets'])
+            print(f"Runtime thread service {entry['id']}: {count}/{len(shared['sets'])}")
+            if entry['id'] != 'kUseReadBarrier':
+                shared_ok &= count == len(shared['sets'])
+    return 0 if shared_ok and summary['passedSets'] == summary['totalSets'] else 1
 
 
 if __name__ == '__main__':

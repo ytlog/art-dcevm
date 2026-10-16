@@ -10,7 +10,6 @@ inline constexpr NamedSymbol kGetNormal{Library::kJvmti, "_ZN12openjdkjvmti9Rede
 inline constexpr NamedSymbol kGetStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kFinishNewClassAllocations{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE"};
 inline constexpr NamedSymbol kHandleScopeVisitRoots{Library::kArt, "_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEj", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kCurrentThread{Library::kArt, "_ZN3art6Thread14CurrentFromGdbEv"};
 inline constexpr NamedSymbol kEnsureInitialized{Library::kArt, "_ZN3art11ClassLinker17EnsureInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEEbb"};
 inline constexpr NamedSymbol kNewLocalRef{Library::kArt, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE"};
 inline constexpr NamedSymbol kDeleteLocalRef{Library::kArt, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject"};
@@ -22,7 +21,6 @@ inline constexpr NamedSymbol kLookupClassView{Library::kArt, "_ZN3art11ClassLink
 inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
 inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kClassArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_5ClassEE5AllocEPNS_6ThreadENS_6ObjPtrIS2_EEi", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kReadBarrierMark{Library::kArt, "_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRun{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner3RunEv"};
 inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};
 // ART 13 rejects a non-public implementation while linking (NO_INLINE in

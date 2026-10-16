@@ -1,8 +1,8 @@
 #pragma once
-#include "platform/abi/arm64/common/interface_thread_prefix.h"
+#include "platform/abi/arm64/common/thread_prefix.h"
 
 // Prepared from android-15.0.0_r1 runtime/thread.h and handle_scope.h.
-// Not runtime-enabled; only the initiating thread would be accessed.
+// Shared thread probes access only the initiating thread; interface admission is separate.
 namespace artdcevm::abi::arm64::android15 {
 struct ThreadTls32 {
   uint32_t state_and_flags;
@@ -26,8 +26,8 @@ struct ThreadTls32 {
   uint32_t num_name_readers;
   uint32_t shared_method_hotness;
 };
-using ThreadTls64 = InterfaceThreadTls64;
-using ThreadTlsPtr = InterfaceThreadTlsPtr;
+using ThreadTls64 = ThreadTls64Prefix;
+using ThreadTlsPtr = ThreadTlsPtrPrefix;
 struct Thread { ThreadTls32 tls32; ThreadTls64 tls64; ThreadTlsPtr tls_ptr; };
 #pragma pack(push, 4)
 struct HandleScopeHeader { void* link; int32_t number_of_references; uint32_t size; };

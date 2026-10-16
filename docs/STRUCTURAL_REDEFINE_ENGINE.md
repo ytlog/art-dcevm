@@ -53,8 +53,8 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 ### 标准入口
 
-1. 进入 ART 之前，线程仍处于 Native 状态。对每个目标类：用 `Class.forName(name, false, 目标类加载器)` 加载（不初始化）新 DEX `type_ids` 引用的全部类（数组取元素类，见下文“事务中的类加载”），其中新增的接口与新父类留作策略输入。这一步可能加载类，所以最先执行。随后用公开 JVMTI 读取旧声明、已加载子类声明的方法、子类接口中子类未声明的方法，以及父类的 public 方法。
-2. `transaction::Scope` 为每次事务建立一个上下文，统一持有引擎批次、映射计划、接口状态、已探测布局和每个目标的 `Requirements`；嵌套事务整体压入并恢复该上下文。批次快照按 `jclass` 索引（ART 的 `ClassRedefinition::klass_` 就是同一个值），并为受影响类和已加载子类提前创建 JNI 全局根。外层递归事务锁把快照与 ART 事务串行化；ClassFileLoadHook 引发的嵌套事务成功后使外层快照失效。
+1. 进入 ART 之前，线程仍处于 Native 状态。事务上下文先通过共享线程服务核对当前线程，再对每个目标类：用 `Class.forName(name, false, 目标类加载器)` 加载（不初始化）新 DEX `type_ids` 引用的全部类（数组取元素类，见下文“事务中的类加载”），其中新增的接口与新父类留作策略输入。这一步可能加载类，所以先于声明快照执行。随后用公开 JVMTI 读取旧声明、已加载子类声明的方法、子类接口中子类未声明的方法，以及父类的 public 方法。
+2. `transaction::Scope` 为每次事务建立一个上下文，统一持有引擎批次、映射计划、接口状态、Native 阶段探测的线程服务、已探测布局和每个目标的 `Requirements`；嵌套事务整体压入并恢复该上下文。批次快照按 `jclass` 索引（ART 的 `ClassRedefinition::klass_` 就是同一个值），并为受影响类和已加载子类提前创建 JNI 全局根。外层递归事务锁把快照与 ART 事务串行化；ClassFileLoadHook 引发的嵌套事务成功后使外层快照失效。
 3. 原样调用 `StructurallyRedefineClasses`；成功退役时保留全局根，否则释放；返回后清理上下文并返回 ART 的结果。
 
 `Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。唯一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
@@ -146,7 +146,7 @@ Android 13/API 33 与 Android 16/API 36 的 arm64 接口目标在运行时与成
 
 4. 新增 public abstract 不走 default 的 `subtype_shadows` 拒绝，而由策略决策记录（名称、完整 descriptor）的待验证条件。`CheckClass` 连同 `ClassRedefinition*` 的接口身份写入批次 `Context::interface_obligations`，条件不依赖该输入是否拥有重建组。映射计划对当前 owner 的新旧类数组按旧接口身份定位候选接口，检查其中所有具体类的实际 IfTable；未提交 DEX、没有实例的类也在数组内。父接口 owner 可验收子接口输入的条件，其他接口组或加载器的同名类不混淆。
 
-只读访问器复刻固定源码 `mirror/class-inl.h::FindVirtualMethodForInterface` 的读取语义：以候选声明类身份选择 IfTable 的接口项，以候选方法的 `method_index` 读取 PointerArray 的目标。先通过命名 `FindDeclaredInstanceField` 核对 `java.lang.Class.ifTable` 的声明、类型、实例存储与固定偏移；再核对 ObjectArray/long[] 的运行时类别、成对长度、接口声明虚方法的连续索引、分派数组长度，以及目标指针属于已知的方法数组，最后才读标志和 DEX 身份。`PointerArray` 的固定声明来自 `android-13.0.0_r1` 与 `android-16.0.0_r1` 的 `mirror/array.h`（arm64 数据起点按 8 字节对齐），IfTable 来自两版 `mirror/iftable.h`。堆引用使用接口运行时的命名 Mark 读屏障；Class 探测与成员计划读取声明类、DexCache 和数组元素也复用此读取路径，避免并发 GC 的转发引用被误判为其他类。此访问器不写入分派表，不解析或模拟方法选择。
+只读访问器复刻固定源码 `mirror/class-inl.h::FindVirtualMethodForInterface` 的读取语义：以候选声明类身份选择 IfTable 的接口项，以候选方法的 `method_index` 读取 PointerArray 的目标。先通过命名 `FindDeclaredInstanceField` 核对 `java.lang.Class.ifTable` 的声明、类型、实例存储与固定偏移；再核对 ObjectArray/long[] 的运行时类别、成对长度、接口声明虚方法的连续索引、分派数组长度，以及目标指针属于已知的方法数组，最后才读标志和 DEX 身份。`PointerArray` 的固定声明来自 `android-13.0.0_r1` 与 `android-16.0.0_r1` 的 `mirror/array.h`（arm64 数据起点按 8 字节对齐），IfTable 来自两版 `mirror/iftable.h`。堆引用使用共享 `runtime_thread::Read` 的命名 Mark 读屏障；Class 探测与成员计划读取声明类、DexCache 和数组元素也复用此读取路径，避免并发 GC 的转发引用被误判为其他类。此访问器不写入分派表，不解析或模拟方法选择。
 
 合法分派必须为 public、非 static/private/abstract、非冲突、非 obsolete／已退役目标，且真实 DEX 名称与完整 descriptor 相同。已有／同批实现、继承实现与 ART 选中的更具体 default 可接受；bridge 必须真实存在。失败以 63 整批拒绝，`lastRejection` 写出接口方法和具体类；访问器不匹配也以 63 拒绝并报告探测原因。验收紧邻 default 冲突检查，位于 `CollectAndCreateNewInstances` 的计划阶段、不可失败边界之前，沿用现有废弃类清理和重试路径。`interfaceAbstractDispatch` 报告最近的访问器探测状态；每次事务重新检查。
 
@@ -205,9 +205,30 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的本地
 - **NDK map**：ART 与 NDK 的指针 map 边界限定 libc++ ABI v1；编译时检查 NDK 类型大小，初始化时用增强库自己的 empty/one-node map 验证 sentinel、root、size 和 value 布局。
 - **DEX 身份**：有界读取同时接受标准 DEX 与 Android 11–15 的 CompactDex（ID 表在主区，字符串与类型列表在独立数据区）；重定义输入只接受单类标准 DEX。
 
+### 共享线程服务与 GC 读屏障
+
+`runtime_thread` 在每次标准入口事务的 Native 阶段探测当前线程：安装时按名称解析 `Thread::CurrentFromGdb`、`ReadBarrier::Mark` 和可选的 `gUseReadBarrier`，事务中按 `class_layout::CandidateReleases(false)` 的顺序，用 `android11`–`android17/thread.h` 的固定声明核对 `jni_env`、Linux tid 和 `is_gc_marking` 的 0/1 范围。所有通过的候选与首选声明、线程指针属于 `transaction::Context::thread`，嵌套事务随上下文恢复。接口模块只复用这些结果，不重复探测线程；它仍自行核对 Class、HandleScope 与 holder，接口版本开关仍仅 API 33/36。
+
+以下结论逐一核对了本地 `build/evidence/abi-sources/` 中的固定 AOSP 标签：`android-11.0.0_r1`–`android-17.0.0_r1`，以及 `android-12.1.0_r1`。补齐的源码与哈希仅保存在本地证据中。
+
+| 源码版本 | 引用读取与标记语义 |
+| --- | --- |
+| 11、12/12L、13 | `read_barrier_config.h` 的 `kUseReadBarrier` 是编译期选择。`thread.h` 明确将 `is_gc_marking` 定义为 **CC 专用**；`concurrent_copying.cc` 的根翻转回调开启该标志，关闭标记的 checkpoint 将其清除。`ReadBarrier::BarrierForRoot` 在标志为真时调用 `Mark`，否则返回原引用。`Mark` 进入 `ConcurrentCopying::MarkFromReadBarrier`，由 ART 完成标记／转发；该入口也自行检查当前线程的标志。这里没有 CMC/userfaultfd 收集器。 |
+| 14、15、16、17 | `is_gc_marking` 的上述含义保持不变，**不是 CMC 的并发标记状态**。`read_barrier_config.h` 允许编译期强制 CC、无读屏障配置或运行时选择；后者由 `mark_compact.cc` 的 `ShouldUseUserfaultfd` 设置 `gUseUserfaultfd`，并令 `gUseReadBarrier = !gUseUserfaultfd`。运行时选择 CC 时仍需 `Mark`；CMC 时 `BarrierForField`／`BarrierForRoot` 跳过 CC 读屏障。CMC 的 `CompactionPause`／线程根翻转更新根，`KernelPreparation` 与缺页处理协调压缩页，不通过 CC 的 `Mark`。 |
+
+源码依据：[11 读屏障](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/read_barrier-inl.h)、[12L 线程声明](https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r1/runtime/thread.h)、[13 Mark 入口](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/gc/collector/concurrent_copying-inl.h)、[14 收集器选择与压缩](https://android.googlesource.com/platform/art/+/refs/tags/android-14.0.0_r1/runtime/gc/collector/mark_compact.cc)、[15 读屏障配置](https://android.googlesource.com/platform/art/+/refs/tags/android-15.0.0_r1/runtime/read_barrier_config.h)、[16 收集器约束](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/gc/heap.cc)、[17 线程与 Mark 语义](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/gc/collector/concurrent_copying-inl.h)。
+
+共享 `Read` 只允许已探测的事务调用。存在命名 `gUseReadBarrier` 时，false 按上述 CMC 源码直接读取；true 将非空引用交给命名 `Mark`，由 ART 自己检查实际线程的标记状态，也避免 Mainline 更新后相同 JNI/tid 前缀的标记槽位歧义。没有该导出时，遵循固定线程声明与 `BarrierForRoot` 的标志快路径：仅在 `is_gc_marking` 为真时调用 `Mark`。这也适用于编译期强制 CC 的构建。每次读取重新检查标志，不把 Native 阶段的标志值缓存到 Runnable 阶段。
+
+线程探测或必需符号失败时，在任何布局引用读取前令本事务的布局／成员映射探测失败，`memberMapping` 报告 `rejected: runtime Thread...`；策略与已有最后可失败路径继续决定错误码。没有未验证线程的原始引用回退；内部越过该前置条件属于致命不变量错误。JSON 键与接口准入范围不变。
+
+`InterfaceAbortInstrumentation` 在首次接口事务之前注入普通类线程探测失败，验证错误码 67、`memberMapping` 原因、零共享引用读取与旧定义保留；随后在其他线程持续分配并请求 GC 时交替进行 32 次普通类结构重定义，覆盖字段和方法增删、旧实例的基本值／引用身份、新字段零值和后续 GC。报告记录实际 GC 次数、分配次数、共享引用读取及 CC 标记期间的读取次数；CMC 的最后一项允许为零，GC 压力本身不等同于每次事务都与 CC 标记重叠。
+
+`python3 tools/test-runtime-thread-host.py` 编译生产线程服务与事务上下文，以命名服务替身覆盖七版 Thread、JNI/tid/标记位拒绝、缺失 Mark、Native 探测后标记位变化、嵌套上下文恢复及 CC/CMC 调用边界；该主机测试不模拟收集器算法。
+
 ### 其他版本的接口固定声明
 
-声明来自 `build/evidence/abi-sources/` 中固定 AOSP 标签的 thread.h、managed_stack.h、runtime_stats.h、handle_scope.h、mirror/class.h、class_status.h、ti_redefine.h/cc；Android 12L 另外核对 android-12.1.0_r1。源码原文、编译输出和逐套运行库报告只在本地忽略目录保存。版本差异只在 `platform/abi/arm64/androidNN/`；相同的 Thread 指针前缀与统计字段复用 common/interface_thread_prefix.h，没有复制后端。
+声明来自 `build/evidence/abi-sources/` 中固定 AOSP 标签的 thread.h、managed_stack.h、runtime_stats.h、handle_scope.h、mirror/class.h、class_status.h、ti_redefine.h/cc；Android 12L 另外核对 android-12.1.0_r1。源码原文、编译输出和逐套运行库报告只在本地忽略目录保存。版本差异只在 `platform/abi/arm64/androidNN/`；相同的 Thread 指针前缀与统计字段复用 common/thread_prefix.h，没有复制后端。
 
 | 版本 | Thread tls32 大小 / tls_ptr 起点 | tid / GC 标记偏移 | JNI env / 顶部 HandleScope 偏移 | HandleScope 头 | ClassRedefinition 末尾标志 |
 | --- | --- | --- | --- | --- | --- |
@@ -229,7 +250,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 
 接口模块的函数 ABI 仍来自公共固定声明：准入 Handle/Class + string*；Run 的 RedefinerPrefix*；Finish 的 ClassRedefinitionPrefix*、holder&、iter*；AllocateNewClassObject 的三个 Handle 与 uint16 class-def index；CreateNewDexCache 的 loader Handle；LinkClass 的 Thread、descriptor、Class/array Handle 与输出 Handle；LookupClass 的 char* 或 string_view；DoLookupResolvedType 的 TypeIndex/referrer 或 DexCache/loader；SetDexCache 的 Class/DexCache；JNIEnvExt 局部引用桥；ClassStatus 内部写入及 Mark；FindInstanceField 的两个 string_view。ClassExt/数组类别字段继续按 ART 字段表取得，未新增固定偏移。成员映射与校验重定向继续依赖已存在的结构目录和 FindClass 候选声明。
 
-运行时仍只选择已在 API 33/36 设备上验证的 android13/android16。android11/12/14/15/17 的 `kPreparedInterfaceRuntime` 只做固定声明与 arm64 编译核对，引擎不解析、Hook 或调用其离线符号；编译通过不能替代设备验证。
+接口运行时仍只选择已在 API 33/36 设备上验证的 android13/android16；共享 Thread 探测独立覆盖普通类的 11–17。android11/12/14/15/17 的 `kPreparedInterfaceRuntime` 只做固定声明与 arm64 编译核对，引擎不解析、Hook 或调用其离线符号；编译通过不能替代设备验证。
 
 | 版本 | 准备与启用状态 | 启用前需要的验证 |
 | --- | --- | --- |
@@ -369,7 +390,8 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 - [member_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/member_retirement_symbols.h)：退役访问守卫使用的可变拼写：`Method_invoke` 与 `Constructor_newInstance0` 的无后缀和固定 `.__uniq` 后缀两种拼写、`EncodeFieldId` 新旧两组签名，以及可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 - [verification_redirect_symbols.h](../artdcevm/src/main/cpp/platform/symbols/verification_redirect_symbols.h)：验证重定向使用的 `FindClass` 新旧两种签名。
 
-- [interface_redefinition_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h)：接口路径的活动目录。包含普通／结构准入的 `CanRedefineClass`／`GetClassRedefinitionError` 候选、`FinishNewClassAllocations`、`Run`、`CurrentFromGdb`、`HandleScopeVisitRoots`、`EnsureInitialized`、`NewLocalRef`／`DeleteLocalRef`、`CreateNewDexCache`、两个 `DoLookupResolvedType`、两种 `LookupClass`、`SetDexCache`、两种三参数 `ObjectArray::Alloc`、`ReadBarrier::Mark`、`LinkClass`、`SetStatusInternal`，以及可选的 `ThrowIllegalAccessErrorForImplementingMethod` 命名候选。沿用结构目录的 `GetMirrorClass`、`AllocateNewClassObject` 和 `FindInstanceField`。
+- [runtime_thread_symbols.h](../artdcevm/src/main/cpp/platform/symbols/runtime_thread_symbols.h)：普通类与接口共用的 `CurrentFromGdb`、`ReadBarrier::Mark` 与可选 `gUseReadBarrier`。
+- [interface_redefinition_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h)：接口路径的活动目录。包含普通／结构准入的 `CanRedefineClass`／`GetClassRedefinitionError` 候选、`FinishNewClassAllocations`、`Run`、`HandleScopeVisitRoots`、`EnsureInitialized`、`NewLocalRef`／`DeleteLocalRef`、`CreateNewDexCache`、两个 `DoLookupResolvedType`、两种 `LookupClass`、`SetDexCache`、两种三参数 `ObjectArray::Alloc`、`LinkClass`、`SetStatusInternal`，以及可选的 `ThrowIllegalAccessErrorForImplementingMethod` 命名候选。沿用结构目录的 `GetMirrorClass`、`AllocateNewClassObject` 和 `FindInstanceField`。
 - [interface_abi_preparation_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_abi_preparation_symbols.h)：仅供离线核对的 signed-tid 根遍历与两个带 AllocatorType 的数组分配名称；运行时未解析或调用。
 
 名称存在只说明可以定位；固定声明由运行时探测核对，Hook 覆盖由设备回归确认。
@@ -384,6 +406,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 引擎：前提检查、Hook 安装、标准入口路由、校验 Hook、能力报告 | `platform/common/structural_redefine_engine.{h,cc}` |
 | 校验策略（含接口新增与继承／遮蔽事实，纯函数、主机可测） | `platform/common/structural_policy.{h,cc}` |
 | 事务上下文、嵌套事务作用域与每个目标的策略要求 | `platform/common/transaction_context.{h,cc}` |
+| 普通类与接口共用的 Native 线程探测、命名 GC 读屏障 | `platform/common/runtime_thread.{h,cc}` |
 | Class 布局探测、候选顺序与事务内布局选择 | `platform/common/class_layout.{h,cc}` |
 | 探测与映射共用的固定源码声明表及字段数组探测 | `platform/common/class_layout_table.h`、`platform/common/field_array_probe.h` |
 | 成员映射计划、提交与新出现的 default 冲突检查 | `platform/common/member_mapping.{h,cc}` |
@@ -399,7 +422,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 确有版本差异的声明 | `platform/abi/arm64/android11`–`android17/` |
 | 命名符号与 ShadowHook 查找 | `platform/symbols/` |
 
-依赖由引擎向下组织：`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者复用布局探测、接口快照、分派诊断和事务上下文。独立的 `interface_dispatch` 只读取候选元数据、事务义务及退役状态，不调用引擎或成员映射。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
+依赖由引擎向下组织：`class_layout`、`member_mapping`、`interface_dispatch` 与 `interface_redefinition` 共用 `runtime_thread` 的引用读取和 Native 线程探测结果；该服务仅复用 `class_layout` 的候选顺序与报告接口、事务上下文、固定 ABI 声明及自己的命名符号目录，不依赖接口模块。`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者复用布局探测、接口快照、分派诊断和事务上下文。独立的 `interface_dispatch` 只读取候选元数据、事务义务及退役状态，不调用引擎或成员映射。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
 
 退役字段的反射占位类在 `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`。
 

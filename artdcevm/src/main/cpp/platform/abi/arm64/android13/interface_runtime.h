@@ -5,5 +5,5 @@
 #include "platform/abi/arm64/android13/redefinition.h"
 namespace artdcevm::abi::arm64::android13 {
 inline constexpr InterfaceRuntime kInterfaceRuntime =
-    InterfaceRuntimeFor<Class, Thread, HandleScopeHeader, RedefinitionDataHolder>(InterfaceRuntime::kAbsent);
+    InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(InterfaceRuntime::kAbsent);
 }  // namespace artdcevm::abi::arm64::android13
