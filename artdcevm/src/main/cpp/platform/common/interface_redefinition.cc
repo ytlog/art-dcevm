@@ -11,13 +11,10 @@
 #include <utility>
 #include <unordered_map>
 #include <string_view>
-#include "platform/abi/arm64/android13/interface_runtime.h"
-#include "platform/abi/arm64/android16/interface_runtime.h"
-#include "platform/abi/arm64/android13/class.h"
+#include "platform/abi/arm64/interface_runtime_table.h"
+#include "platform/abi/arm64/common/class_status.h"
 #include "platform/abi/arm64/common/class_linker.h"
 #include "platform/abi/arm64/common/root_visitor.h"
-#include "platform/abi/arm64/android13/redefinition.h"
-#include "platform/abi/arm64/android13/thread.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/art_hook.h"
@@ -64,16 +61,11 @@ void* original_finish = nullptr;
 void* original_run = nullptr;
 void* original_link_class = nullptr;
 void* original_non_public = nullptr;
-void (*set_status_internal)(void*, android13::ClassStatus) = nullptr;
+void (*set_status_internal)(void*, ClassStatus) = nullptr;
 bool available = false;
 std::atomic<const char*> disabled_reason{nullptr};
 std::atomic<int> verified_release{0};
 void (*visit_handle_roots)(void*, RootVisitor*, uint32_t) = nullptr;
-const InterfaceRuntime* RuntimeFor(int release) {
-  if (release == 13) return &android13::kInterfaceRuntime;
-  if (release == 16) return &android16::kInterfaceRuntime;
-  return nullptr;
-}
 void Disable(const char* reason) noexcept {
   disabled_reason.store(reason);
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
@@ -170,7 +162,7 @@ jvmtiError Reject(std::string* message, jvmtiError error, const char* why) {
 class ScopeRoots final : public RootVisitor {
  public:
   static constexpr size_t kMaxRoots = 64;
-  static constexpr size_t kMaxHeader = sizeof(android16::HandleScopeHeader);
+  static constexpr size_t kMaxHeader = kMaxInterfaceScopeHeader;
   explicit ScopeRoots(void* scope, size_t capacity)
       : begin(reinterpret_cast<uintptr_t>(scope)), end(begin + kMaxHeader + 4 * capacity) {}
   void VisitRoots(void***, size_t, const RootInfo&) noexcept override { unexpected = true; }
@@ -396,7 +388,7 @@ void DiscardClass(void* klass) {
       status == ClassStatus::kErrorResolved) {
     // Unpublished classes have no copied statics or initializer to preserve.
     // kErrorResolved would still enter the next heap subtype scan.
-    set_status_internal(klass, android13::ClassStatus::kErrorUnresolved);
+    set_status_internal(klass, ClassStatus::kErrorUnresolved);
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
     ++discarded_classes;
 #endif
@@ -1040,7 +1032,7 @@ void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note
     *note = reason;
   };
   const int api = android_get_device_api_level();
-  if (api != 33 && api != 36) {
+  if (!IsDeviceVerifiedInterfaceApi(api)) {
     reject("interface redefinition is device-verified only on Android 13/API 33 and Android 16/API 36");
     return;
   }

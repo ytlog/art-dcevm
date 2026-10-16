@@ -99,7 +99,7 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 
 私有实现类缓存直接复用命名 `ClassRedefinition::CreateNewDexCache`：用当前 driver 和原 DEX 的非 owning 前缀调用，不修改原 DexCache，也不注册新缓存。该入口自身负责分配、根管理、location、dex lock 与初始化。描述符重定向使用不填充缓存的命名 `LookupClass`（API 33 为 `const char*`，API 36 为 `string_view`）；可赋值比较只在 Native 快照阶段使用 JNI `IsAssignableFrom`。以 Class 身份为键的 `IdentityHashMap` 保证不同加载器的同名类不混淆，直接父类/父接口构成边，Kahn 遍历一次生成顺序及父类索引，预期复杂度为 O(已加载类数 + 受影响类型数 + 直接继承边数)。ART 分配阶段只解码这些根、核对已解析状态及目标位于首项，并按父类索引使用替换父类，不再遍历类或进行两两可赋值比较。快照之后的新子类型仍由 `ClassPrepare` 标记，在实例分配前拒绝并由标准入口重试。失败仪器分别覆盖晚加载的父类子类和直接实现类，并验证重新快照后的成功分派与 GC。通过命名 `JNIEnvExt::NewLocalRef/DeleteLocalRef` 创建真实局部引用后，私有数组写入仅在分配入口的非回调、无 ART 锁位置使用 JNI `SetObjectArrayElement`，由 ART 执行写屏障；`LinkClass` 只写 pending 根，清理同时覆盖该根与替换数组。
 
-线程、Class 与 HandleScope 的差异只放在 `platform/abi/arm64/androidNN/`，公共路径访问固定源码声明。接口路径不再精确匹配 API 33/36：复用 `class_layout::CandidateReleases` 的发布版本顺序，并在准入时使用同一个 `VerifyTarget` 的成员探测结果筛选接口声明候选。Native 阶段先核对当前线程 JNI env、OS tid 和标记位范围；准入 Hook 在建立任何自有 HandleScope 之前，再用命名 `Thread::HandleScopeVisitRoots` 观察 ART 已有的根槽位。观察回调只记录地址，不分配、不调用 JNI、不解引用根对象，也不改作用域。两版准入调用方的单根作用域必须与候选 header/capacity/size、传入 Handle 的实际根位置及 ART 的根遍历结果一致；线程槽位若不指向已知根邻近的 header，就不解引用该候选指针。
+线程、Class 与 HandleScope 的差异只放在 `platform/abi/arm64/androidNN/`，公共路径访问固定源码声明。安装时的平台 API 准入由接口运行时登记表限制为已验证的 API 33/36；准入后的声明选择复用 `class_layout::CandidateReleases` 的发布版本顺序，并在准入时使用同一个 `VerifyTarget` 的成员探测结果筛选接口声明候选。Native 阶段先核对当前线程 JNI env、OS tid 和标记位范围；准入 Hook 在建立任何自有 HandleScope 之前，再用命名 `Thread::HandleScopeVisitRoots` 观察 ART 已有的根槽位。观察回调只记录地址，不分配、不调用 JNI、不解引用根对象，也不改作用域。两版准入调用方的单根作用域必须与候选 header/capacity/size、传入 Handle 的实际根位置及 ART 的根遍历结果一致；线程槽位若不指向已知根邻近的 header，就不解引用该候选指针。
 
 进入 `Run` 必须已有通过的声明；当前事务线程独立保存并在嵌套事务退出时恢复候选。分配前再核对 holder 数组长度、vector 的目标对象与 begin/end/capacity、三份布尔 vector 的长度及新 DEX 缓存槽位。声明核对失败才禁用接口重定义，`interfaceRuntime` 记录明确原因，普通类事务仍可使用。通过全部探测后才报告 `verified`。读屏障仍由 ART 命名 Mark 服务处理；JNI 私有数组写入例外范围不变。设备验证仍限于 Android 13/API33 和 Android16/API36，不据此声明其他平台或 ART 模块受支持。失败仪器另用独立进程核对 Thread、HandleScope、holder 三种探测拒绝后的禁用与类事务可用性。
 
@@ -113,7 +113,7 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 
 接口命名服务目录随实现维护：已删除 `VisitClasses` 及不再使用的 ClassVisitor 声明。`tools/check-structural-symbols.py` 拒绝没有被实现引用的接口目录项，报告目录及实现哈希，并按每个名称及其声明的 ELF 表报告覆盖率。准入拼写和数组分配重载是候选项，目录总数不代表每台设备必须同时具备的名称数量。
 
-类状态使用 ART 13/16 相同的完整 `ClassStatus` 固定枚举，集中声明后由版本头引用；状态读取返回该枚举类型，初始化与清理比较不再使用裸数字，也不与 JVMTI 状态掩码混用。Java/DEX 访问位使用命名常量，包含接口、类的 super、synthetic、annotation、enum 标志。Proxy 判断仍使用 Native 阶段的公开 API，不读取内部 Proxy 标志位。
+类状态使用 `platform/abi/arm64/common/class_status.h` 中 11–17 一致的完整 `abi::arm64::ClassStatus` 固定枚举，公共实现直接使用该声明；状态读取返回该枚举类型，初始化与清理比较不再使用裸数字，也不与 JVMTI 状态掩码混用。Java/DEX 访问位使用命名常量，包含接口、类的 super、synthetic、annotation、enum 标志。Proxy 判断仍使用 Native 阶段的公开 API，不读取内部 Proxy 标志位。
 
 ### 校验
 
@@ -228,6 +228,8 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的本地
 
 ### 其他版本的接口固定声明
 
+接口版本统一登记在 [`platform/abi/arm64/interface_runtime_table.h`](../artdcevm/src/main/cpp/platform/abi/arm64/interface_runtime_table.h)：每项包含 Android 源码版本、平台 API 范围、`InterfaceRuntime` 声明及「已设备验证／仅准备」标记。`RuntimeFor` 的候选筛选和安装时的平台 API 开关都只读取此表；只有 13／API 33 与 16／API 36 标记为已设备验证。HandleScope 头最大尺寸也由表中声明计算。`tools/check-interface-abi-preparation.py` 从此表读取版本与声明，核对所有已准备版本、实际候选选择及 API 准入范围。
+
 声明来自 `build/evidence/abi-sources/` 中固定 AOSP 标签的 thread.h、managed_stack.h、runtime_stats.h、handle_scope.h、mirror/class.h、class_status.h、ti_redefine.h/cc；Android 12L 另外核对 android-12.1.0_r1。源码原文、编译输出和逐套运行库报告只在本地忽略目录保存。版本差异只在 `platform/abi/arm64/androidNN/`；相同的 Thread 指针前缀与统计字段复用 common/thread_prefix.h，没有复制后端。
 
 | 版本 | Thread tls32 大小 / tls_ptr 起点 | tid / GC 标记偏移 | JNI env / 顶部 HandleScope 偏移 | HandleScope 头 | ClassRedefinition 末尾标志 |
@@ -250,7 +252,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 
 接口模块的函数 ABI 仍来自公共固定声明：准入 Handle/Class + string*；Run 的 RedefinerPrefix*；Finish 的 ClassRedefinitionPrefix*、holder&、iter*；AllocateNewClassObject 的三个 Handle 与 uint16 class-def index；CreateNewDexCache 的 loader Handle；LinkClass 的 Thread、descriptor、Class/array Handle 与输出 Handle；LookupClass 的 char* 或 string_view；DoLookupResolvedType 的 TypeIndex/referrer 或 DexCache/loader；SetDexCache 的 Class/DexCache；JNIEnvExt 局部引用桥；ClassStatus 内部写入及 Mark；FindInstanceField 的两个 string_view。ClassExt/数组类别字段继续按 ART 字段表取得，未新增固定偏移。成员映射与校验重定向继续依赖已存在的结构目录和 FindClass 候选声明。
 
-接口运行时仍只选择已在 API 33/36 设备上验证的 android13/android16；共享 Thread 探测独立覆盖普通类的 11–17。android11/12/14/15/17 的 `kPreparedInterfaceRuntime` 只做固定声明与 arm64 编译核对，引擎不解析、Hook 或调用其离线符号；编译通过不能替代设备验证。
+表中的接口运行时仍只选择已在 API 33/36 设备上验证的 android13/android16；共享 Thread 探测独立覆盖普通类的 11–17。android11/12/14/15/17 的 `kPreparedInterfaceRuntime` 以仅准备标记登记，参与固定声明与 arm64 编译核对，不进入运行时候选或 API 准入；引擎不解析、Hook 或调用其离线符号，编译通过不能替代设备验证。
 
 | 版本 | 准备与启用状态 | 启用前需要的验证 |
 | --- | --- | --- |
@@ -418,11 +420,12 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 接口受影响类型、继承边与重建顺序的 Native 快照 | `platform/common/interface_snapshot.{h,cc}` |
 | 用公开 JVMTI 读取旧类结构 | `platform/common/schema_snapshot.{h,cc}` |
 | 读取 ART 已映射 DEX 中的类声明 | `platform/common/art_dex_view.h`、`evolution/class_schema.h`、`evolution/dex_schema.cc` |
+| 接口运行时登记表、设备验证标记、API 准入与 HandleScope 头最大尺寸 | `platform/abi/arm64/interface_runtime_table.h` |
 | 11–17 一致的固定声明 | `platform/abi/arm64/common/` |
 | 确有版本差异的声明 | `platform/abi/arm64/android11`–`android17/` |
 | 命名符号与 ShadowHook 查找 | `platform/symbols/` |
 
-依赖由引擎向下组织：`class_layout`、`member_mapping`、`interface_dispatch` 与 `interface_redefinition` 共用 `runtime_thread` 的引用读取和 Native 线程探测结果；该服务仅复用 `class_layout` 的候选顺序与报告接口、事务上下文、固定 ABI 声明及自己的命名符号目录，不依赖接口模块。`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者复用布局探测、接口快照、分派诊断和事务上下文。独立的 `interface_dispatch` 只读取候选元数据、事务义务及退役状态，不调用引擎或成员映射。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
+依赖由引擎向下组织：`class_layout`、`member_mapping`、`interface_dispatch` 与 `interface_redefinition` 共用 `runtime_thread` 的引用读取和 Native 线程探测结果；该服务仅复用 `class_layout` 的候选顺序与报告接口、事务上下文、固定 ABI 声明及自己的命名符号目录，不依赖接口模块。`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者复用布局探测、接口快照、分派诊断和事务上下文。独立的 `interface_dispatch` 只读取候选元数据、事务义务及退役状态，不调用引擎或成员映射。`interface_redefinition` 通过 arm64 接口运行时登记表访问各版本声明，直接使用 common 的 `ClassStatus`，不包含任何 androidNN 头或引用具体版本类型；登记表只依赖固定 ABI 声明，不依赖公共实现或命名符号。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
 
 退役字段的反射占位类在 `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`。
 

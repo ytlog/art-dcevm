@@ -19,7 +19,31 @@ ROOT = Path(__file__).resolve().parents[1]
 CPP = ROOT / 'artdcevm/src/main/cpp'
 ABI = CPP / 'platform/abi/arm64'
 SYMBOLS = CPP / 'platform/symbols'
-VERSIONS = (11, 12, 13, 14, 15, 16, 17)
+RUNTIME_TABLE = ABI / 'interface_runtime_table.h'
+
+
+def read_runtime_table():
+    table = RUNTIME_TABLE.read_text()
+    entries = re.findall(
+        r'\{(\d+),\s*(\d+),\s*(\d+),\s*&android(\d+)::(\w+),\s*'
+        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified)\}', table)
+    versions = [int(entry[0]) for entry in entries]
+    declared = sorted(int(path.parent.name.removeprefix('android'))
+                      for path in ABI.glob('android*/interface_runtime.h'))
+    if versions != declared:
+        raise ValueError('Interface runtime table must register every prepared declaration once')
+    for release, first, last, namespace, name, status in entries:
+        if release != namespace or int(first) > int(last):
+            raise ValueError('Interface runtime table has an invalid release/API entry')
+        if name not in ('kInterfaceRuntime', 'kPreparedInterfaceRuntime'):
+            raise ValueError('Interface runtime table must reference a fixed runtime declaration')
+    active = [int(release) for release, _, _, _, _, status in entries
+              if status == 'kDeviceVerified']
+    active_apis = [api for _, first, last, _, _, status in entries if status == 'kDeviceVerified'
+                   for api in range(int(first), int(last) + 1)]
+    if active != [13, 16] or active_apis != [33, 36]:
+        raise ValueError('Unverified source preparation was added to runtime selection')
+    return entries, versions, active
 
 
 def main():
@@ -30,24 +54,37 @@ def main():
     if not args.evidence_root.resolve().is_relative_to((ROOT / 'build/evidence').resolve()):
         parser.error('Evidence must stay under ignored build/evidence')
     out = new_evidence_directory(args.evidence_root.resolve())
+    entries, versions, active = read_runtime_table()
     properties = dict(line.split('=', 1) for line in (ROOT / 'local.properties').read_text().splitlines()
                       if '=' in line and not line.startswith('#'))
     prebuilt = Path(properties['sdk.dir']) / 'ndk/27.2.12479018/toolchains/llvm/prebuilt'
     compiler = next(path / 'bin/aarch64-linux-android30-clang++' for path in prebuilt.iterdir()
                     if (path / 'bin/aarch64-linux-android30-clang++').is_file())
-    lines = [f'#include "platform/abi/arm64/android{v}/interface_runtime.h"' for v in VERSIONS]
+    lines = ['#include "platform/abi/arm64/interface_runtime_table.h"']
     lines.append('#include "platform/abi/arm64/common/runtime_thread.h"')
     lines.append('using namespace artdcevm::abi::arm64;')
     expected = {11: (16, 52, 216, 296, 12), 12: (12, 48, 208, 288, 12),
                 13: (12, 36, 200, 280, 12), 14: (12, 36, 208, 288, 12),
                 15: (12, 32, 200, 280, 16), 16: (12, 32, 200, 280, 16),
                 17: (12, 32, 200, 280, 16)}
-    for v, offsets in expected.items():
-        name = 'kInterfaceRuntime' if v in (13, 16) else 'kPreparedInterfaceRuntime'
+    for index, (release, _, _, _, name, status) in enumerate(entries):
+        v = int(release)
+        offsets = expected[v]
+        profile = f'kInterfaceRuntimes[{index}]'
+        lines.append(f'static_assert({profile}.runtime == &android{v}::{name});')
+        selected = f'{profile}.runtime' if status == 'kDeviceVerified' else 'nullptr'
+        lines.append(f'static_assert(RuntimeFor({v}) == {selected});')
         for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):
             lines.append(f'static_assert(RuntimeThreadFor<android{v}::Thread>().{member} == {value});')
-        lines.append(f'static_assert(android{v}::{name}.scope_header_size == {offsets[4]});')
-        lines.append(f'static_assert(android{v}::{name}.redefinition_size == 72);')
+        lines.append(f'static_assert({profile}.runtime->scope_header_size == {offsets[4]});')
+        lines.append(f'static_assert({profile}.runtime->redefinition_size == 72);')
+        lines.append(f'static_assert(kMaxInterfaceScopeHeader >= {profile}.runtime->scope_header_size);')
+    lines.append('static_assert(kMaxInterfaceScopeHeader == 16);')
+    for release in (-1, 0, 10, 18, 99):
+        lines.append(f'static_assert(RuntimeFor({release}) == nullptr);')
+    for api in range(-1, 41):
+        lines.append(f'static_assert(IsDeviceVerifiedInterfaceApi({api}) == '
+                     f'{str(api in (33, 36)).lower()});')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(123) == 123);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(0xff000123) == 0);')
     source = out / 'profiles.cc'
@@ -58,10 +95,8 @@ def main():
     if result.returncode:
         raise ValueError('Prepared profile compilation failed; see ignored compiler evidence')
     engine = (CPP / 'platform/common/interface_redefinition.cc').read_text()
-    selection = engine[engine.index('const InterfaceRuntime* RuntimeFor('):engine.index('void Disable(')]
-    active = sorted(map(int, re.findall(r'release == (\d+)', selection)))
-    if active != [13, 16] or 'kPreparedInterfaceRuntime' in engine:
-        raise ValueError('Unverified source preparation was added to runtime selection')
+    if re.search(r'#include\s+"[^"\n]*/android\d+/', engine) or re.search(r'android\d+::', engine):
+        raise ValueError('Shared interface implementation must not reference version-specific types')
 
     spec = importlib.util.spec_from_file_location('symbol_audit', ROOT / 'tools/check-structural-symbols.py')
     audit = importlib.util.module_from_spec(spec)
@@ -95,12 +130,12 @@ def main():
         row['sets'] += 1
         row['coveredSets'] += not missing
     report['sourcePreparation'] = {
-        'compiledVersions': list(VERSIONS), 'activeRuntimeCandidates': active,
+        'compiledVersions': versions, 'activeRuntimeCandidates': active,
         'apiCoverage': rows, 'scope': 'Source declarations and named-table coverage only; no device ABI proof',
         'headerSha256': {str(p.relative_to(CPP)): hashlib.sha256(p.read_bytes()).hexdigest()
                          for p in sorted(ABI.rglob('*.h'))}}
     (out / 'report.json').write_text(json.dumps(report, indent=2))
-    print(json.dumps({'compiledVersions': list(VERSIONS), 'activeRuntimeCandidates': active,
+    print(json.dumps({'compiledVersions': versions, 'activeRuntimeCandidates': active,
                       'apiCoverage': rows}, indent=2))
     print('Evidence: ' + str(out.relative_to(ROOT)))
     return 0
