@@ -21,11 +21,13 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 
 ## 接口重定义
 
-Android 13（API 33）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 default/static/private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。
+Android 13（API 33）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 public abstract/default/static 方法与 private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。
 
-新增 abstract/native/`<clinit>`、不安全的继承方法遮蔽或新 default 冲突返回 63；删除／改签名 default/abstract 返回 67；字段变化 64、方法修饰符变化 71、父接口变化 66。已有实例和未提交 DEX 的实现类也获得新 default。涉及 lambda 变化时，热重载端须先追加新类，再将发生变化的已有合成类、实现类 bridge 与接口同批提交。无共同批次接口祖先却共享实现类的两个接口，以及接口重建组之外的实现类父类同批结构变化，以 66 拒绝；Proxy 实现类、boot 接口和 pointer-id 标记以 79 拒绝；运行时能力或探测不可用以 98 拒绝。
+新增 native/`<clinit>`、不安全的继承方法遮蔽或新 default 冲突返回 63。新增 public abstract 要求所有已加载具体实现类均可合法分派，缺少实现或分派探测不可用时也返回 63。删除／改签名 default/abstract 返回 67；字段变化 64、方法修饰符变化 71、父接口变化 66。已有实例和未提交 DEX 的实现类也获得新 default。涉及 lambda 变化时，热重载端须先追加新类，再将发生变化的已有合成类、实现类 bridge 与接口同批提交。无共同批次接口祖先却共享实现类的两个接口，以及接口重建组之外的实现类父类同批结构变化，以 66 拒绝；Proxy 实现类、boot 接口和 pointer-id 标记以 79 拒绝；`interfaceRuntime` 为 `unavailable` 或 `disabled: 原因` 时，接口目标以 98 拒绝。
 
-即使只修改接口方法体，也会重新分配所有实现类及其子类的实例；兼容字段值保留。接入前请读取 `DcevmRuntime.capabilities()`，完整范围与错误语义见[能力限制](docs/LIMITATIONS.md#接口重定义)。
+即使只修改接口方法体，也会重新分配所有实现类及其子类的实例；兼容字段值保留。
+
+接入时可读取 `DcevmRuntime.capabilities()` 查看探测状态，读取本身不触发探测。`interfaceRuntime` 的 `unavailable` 表示接口运行时不可用，`disabled: 原因` 表示已停用，`unverified: …` 表示尚未完成事务内探测，`verified: …` 表示探测已通过。首次接口事务完成运行时探测前，`interfaceRedefinition` 为 false；新增 abstract 的分派探测由 `interfaceAbstractDispatch` 单独报告：尚待相关事务探测时为 `unverified: …`，也可为 `unavailable`（可附原因）、`verified: …` 或 `rejected: 原因`；后者表示分派探测或所需服务检查未通过，新增 abstract 以 63 拒绝。接口运行时与分派探测均通过、必要链接错误服务可用之前，`interfaceAbstractMethodAddition` 为 false。`unverified` 不等于不支持，不应据此拦截首次事务；最终以具体事务结果和 `lastRejection` 为准。完整范围与错误语义见[能力限制](docs/LIMITATIONS.md#接口重定义)。
 
 ## 快速开始
 
