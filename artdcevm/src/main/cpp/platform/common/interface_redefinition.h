@@ -14,6 +14,8 @@ namespace artdcevm::interface_redefinition {
 // group's replacements (member_mapping::SuperclassChangeAvailable).
 void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note);
 bool Available();
+// ART 13 needs its named early-link error service to diagnose non-public targets.
+bool AbstractLinkErrorsAvailable();
 // Use the probed runtime's named read barrier; without a matching runtime,
 // retain the existing raw-reference behavior for ordinary class probes.
 void* ReadReference(uint32_t reference);
@@ -42,6 +44,7 @@ void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::H
 jvmtiError VerificationError() noexcept;
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 bool InjectDispatchProbeFailure();
+bool InjectMappingPlanFailure();
 // Debug APK fault injection; no test entry points are built into release AARs.
 bool InjectInstanceFailure(abi::arm64::ClassRedefinitionPrefix* self,
                            abi::arm64::RedefinitionDataIter* data, bool allocated);

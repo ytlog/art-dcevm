@@ -25,5 +25,11 @@ inline constexpr NamedSymbol kClassArrayAlloc{Library::kArt, "_ZN3art6mirror11Ob
 inline constexpr NamedSymbol kReadBarrierMark{Library::kArt, "_ZN3art11ReadBarrier4MarkEPNS_6mirror6ObjectE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRun{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner3RunEv"};
 inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};
+// ART 13 rejects a non-public implementation while linking (NO_INLINE in
+// class_linker.cc). These exact named spellings cover the fixed source and
+// collected release binaries; ART 16 instead links an invalid dispatch target.
+inline constexpr NamedSymbol kThrowNonPublicGlobal{Library::kArt, "_ZN3art44ThrowIllegalAccessErrorForImplementingMethodENS_6ObjPtrINS_6mirror5ClassEEEPNS_9ArtMethodES5_", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kThrowNonPublicLocal{Library::kArt, "_ZN3artL44ThrowIllegalAccessErrorForImplementingMethodENS_6ObjPtrINS_6mirror5ClassEEEPNS_9ArtMethodES5_", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kThrowNonPublicUnique{Library::kArt, "_ZN3artL44ThrowIllegalAccessErrorForImplementingMethodENS_6ObjPtrINS_6mirror5ClassEEEPNS_9ArtMethodES5_.__uniq.330882092359962340741142722423575617320", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kSetStatusInternal{Library::kArt, "_ZN3art6mirror5Class17SetStatusInternalENS_11ClassStatusE"};
 }  // namespace artdcevm::symbols::interface_redefinition

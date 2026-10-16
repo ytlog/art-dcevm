@@ -20,6 +20,7 @@
 #include "platform/common/structural_policy.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/interface_dispatch.h"
 #include "platform/common/interface_redefinition.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/transaction_context.h"
@@ -820,7 +821,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
-      member_mapping::InterfaceDispatchAvailable(self);
+      interface_dispatch::Available(self);
+  if (!abilities.interface_abstract_methods)
+    abilities.interface_abstract_unavailable_reason = interface_dispatch::State();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
   const bool interface_target = interface_redefinition::IsTarget(self);
@@ -840,8 +843,6 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
-    if (decision.reason.find("requires a verified IfTable accessor") != std::string::npos)
-      decision.reason += ": " + member_mapping::InterfaceDispatchState();
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
@@ -1013,6 +1014,7 @@ std::string Capabilities() {
   const auto interface_timing = interface_redefinition::LastTiming();
   // Both capability fields describe the same probe snapshot, including disablement.
   const std::string interface_state = interface_redefinition::RuntimeState();
+  const std::string dispatch_state = interface_dispatch::State();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
@@ -1025,7 +1027,11 @@ std::string Capabilities() {
       ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
       ",\"interfaceRedefinition\":" + (installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
-      ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(member_mapping::InterfaceDispatchState()) +
+      ",\"interfaceAbstractMethodAddition\":" +
+          (installed && interface_state.rfind("verified: ", 0) == 0 &&
+           dispatch_state.rfind("verified: ", 0) == 0 && interface_redefinition::AbstractLinkErrorsAvailable()
+               ? "true" : "false") +
+      ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
       ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +

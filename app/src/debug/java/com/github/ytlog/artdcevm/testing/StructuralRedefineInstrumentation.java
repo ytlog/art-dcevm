@@ -140,9 +140,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private void runScenarios() throws Exception {
         if (arguments != null && arguments.containsKey("scenario")) {
-            if (!"interface-default-body".equals(arguments.getString("scenario")))
-                throw new IllegalArgumentException("Unsupported isolated scenario");
-            runCopiedDefaultScenario();
+            String isolated = arguments.getString("scenario");
+            if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
+            else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
+            else if (isolated.startsWith("interface-abstract-reject-"))
+                runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
+            else throw new IllegalArgumentException("Unsupported isolated scenario");
             return;
         }
         Evolving evolving = new Evolving(10);
@@ -929,7 +932,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         AbstractGroup() throws Exception {
             String[] names = {"Contract", "Implementation", "Other", "Existing", "Parent", "Inherited",
                     "ChildContract", "DefaultImplementation", "AbstractImplementation", "Wrong", "Caller",
-                    "Generic", "Bridge", "InheritedContract", "Dependent", "Left", "Right", "Conflicting"};
+                    "Generic", "Bridge", "InheritedContract", "Dependent", "Left", "Right", "Conflicting",
+                    "DistantDefault", "Reabstract", "ReabstractImplementation", "DefaultCaller", "StableCaller",
+                    "Removable", "LateOne", "LateTwo", "LateThree", "BatchCaller"};
             java.nio.ByteBuffer[] dexes = new java.nio.ByteBuffer[names.length];
             for (int i = 0; i < names.length; ++i)
                 dexes[i] = java.nio.ByteBuffer.wrap(readAsset("interface-abstract-original/"
@@ -962,16 +967,23 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             // Keep an abstract implementor in the group: only concrete classes
             // have the obligation, including concrete classes with no instances.
             group.load("AbstractImplementation");
+            AbstractWitness witness = new AbstractWitness(group, instance, 0);
+            Class<?> batchCaller = group.load("BatchCaller");
+            Method cachedCaller = batchCaller.getMethod("call", group.contract);
+            if (!"old/11".equals(cachedCaller.invoke(null, instance))) throw new AssertionError("Old caller failed");
             runScenario("interface-abstract-batch-" + (reverse ? "reverse" : "forward"), 0, scenario -> {
-                Class<?>[] batch = reverse ? new Class<?>[]{implementation, group.contract}
-                        : new Class<?>[]{group.contract, implementation};
-                scenario.redefine(batch, "interface-abstract-add", "interface-abstract-add");
+                Class<?>[] batch = reverse ? new Class<?>[]{batchCaller, implementation, group.contract}
+                        : new Class<?>[]{group.contract, implementation, batchCaller};
+                scenario.redefine(batch, "interface-abstract-add", "interface-abstract-add", "interface-abstract-add");
+                scenario.check("sameBatchCaller", "new/12", cachedCaller.invoke(null, instance));
                 scenario.check("newCaller", "new", group.call(instance));
                 scenario.check("singleton", true, instance == implementation.getField("singleton").get(null));
                 scenario.check("marker", 73, implementation.getField("marker").getInt(instance));
                 scenario.check("counter", 79, implementation.getField("counter").getInt(null));
                 scenario.check("bodyUpdated", "new", implementation.getMethod("version").invoke(instance));
                 scenario.check("dispatchProbe", true, DcevmRuntime.capabilities().getString("interfaceAbstractDispatch").startsWith("verified: "));
+                scenario.check("abstractCapability", true, DcevmRuntime.capabilities().getBoolean("interfaceAbstractMethodAddition"));
+                witness.check(scenario, "cached", 12);
                 System.gc(); System.runFinalization(); System.gc();
                 scenario.check("afterGc", "new", group.call(instance));
             });
@@ -1027,22 +1039,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("other", "other", partial.call(partial.instance("Other")));
         });
         for (String kind : new String[]{"signature", "wrong-return", "private", "package", "protected", "static", "bridge-missing", "conflict"}) {
-            AbstractGroup group = new AbstractGroup();
-            String type = kind.equals("signature") || kind.equals("wrong-return") ? "Wrong"
-                    : kind.equals("bridge-missing") ? "Bridge" : kind.equals("conflict") ? "Conflicting" : "Implementation";
-            Object old = group.instance(type);
-            String variant = "interface-abstract-" + kind;
-            boolean signature = kind.equals("signature") || kind.equals("conflict");
-            runScenario("interface-abstract-reject-" + kind, 63, scenario -> {
-                if (signature) scenario.redefine(new Class<?>[]{group.contract}, "interface-abstract-add");
-                else scenario.redefine(new Class<?>[]{group.contract, group.load(type)},
-                        kind.equals("bridge-missing") ? variant : "interface-abstract-add", variant);
-                String reason = DcevmRuntime.capabilities().getString("lastRejection");
-                scenario.check("classNamed", true, reason.contains(type + ";"));
-                scenario.check("missingImplementation", true, reason.contains("has no concrete public implementation"));
-                scenario.check("oldBody", 11, group.contract.getMethod("oldValue").invoke(old));
-                scenario.expectError("noDeclaration", NoSuchMethodException.class, () -> group.contract.getMethod("required"));
-            });
+            runAbstractRejectionScenario(kind);
         }
         AbstractGroup dependent = new AbstractGroup();
         Object receiver = dependent.instance("Dependent");
@@ -1086,6 +1083,195 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("otherLoaderOldBody", 11, isolated.contract.getMethod("oldValue").invoke(isolatedOld));
             scenario.expectError("otherLoaderNoDeclaration", NoSuchMethodException.class, () -> isolated.contract.getMethod("required"));
         });
+        runAbstractBoundaryScenarios();
+    }
+
+    private static Object invokeCachedHandle(MethodHandle handle, Object receiver) throws Exception {
+        try { return handle.invokeWithArguments(receiver); }
+        catch (Throwable error) {
+            if (error instanceof Exception) throw (Exception) error;
+            if (error instanceof Error) throw (Error) error;
+            throw new RuntimeException(error);
+        }
+    }
+
+    private final class AbstractWitness {
+        final Object receiver;
+        final Method reflected, bytecode;
+        final MethodHandle handle;
+        final int slot;
+        AbstractWitness(AbstractGroup group, Object receiver, int slot) throws Exception {
+            this.receiver = receiver; this.slot = slot;
+            reflected = group.contract.getMethod("oldValue");
+            handle = MethodHandles.lookup().unreflect(reflected);
+            Class<?> caller = group.load("StableCaller");
+            bytecode = caller.getMethod("call", group.contract);
+            if (!Integer.valueOf(11).equals(caller.getMethod("warm", group.contract).invoke(null, receiver)))
+                throw new AssertionError("Old invoke-interface warmup failed");
+            StandardJvmtiClient.cacheInterfaceDispatch(slot, reflected);
+        }
+        void check(Scenario scenario, String prefix, int expected) throws Exception {
+            scenario.check(prefix + "Reflection", expected, reflected.invoke(receiver));
+            scenario.check(prefix + "Handle", expected, invokeCachedHandle(handle, receiver));
+            scenario.check(prefix + "Bytecode", expected, bytecode.invoke(null, receiver));
+            scenario.check(prefix + "Jni", expected, StandardJvmtiClient.callInterfaceDispatchInt(receiver, slot));
+        }
+    }
+
+    private void runAbstractBoundaryScenarios() throws Exception {
+        AbstractGroup reabstract = new AbstractGroup();
+        Object descendant = reabstract.instance("ReabstractImplementation");
+        Class<?> narrow = reabstract.load("Reabstract");
+        Class.forName(narrow.getName(), true, reabstract.loader);
+        Method oldDefault = reabstract.load("DistantDefault").getMethod("required");
+        Method oldCaller = reabstract.load("DefaultCaller").getMethod("call", reabstract.load("DistantDefault"));
+        reabstract.load("DefaultCaller").getMethod("warm", reabstract.load("DistantDefault")).invoke(null, descendant);
+        StandardJvmtiClient.cacheInterfaceDispatch(0, oldDefault);
+        runScenario("interface-abstract-reabstract-reject", 63, scenario -> {
+            scenario.redefine(new Class<?>[]{narrow}, "interface-abstract-reabstract");
+            reabstract.missing(scenario, "ReabstractImplementation");
+            scenario.check("oldDefault", "distant", oldCaller.invoke(null, descendant));
+            scenario.check("oldJni", "distant", StandardJvmtiClient.callInterfaceDispatchString(descendant, 0));
+        });
+        runScenario("interface-abstract-reabstract-retry", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{narrow, reabstract.load("ReabstractImplementation")},
+                    "interface-abstract-reabstract", "interface-abstract-reabstract");
+            scenario.check("newImplementation", "implemented", narrow.getMethod("required").invoke(descendant));
+            scenario.check("cachedDefaultCall", "implemented", oldCaller.invoke(null, descendant));
+            scenario.check("cachedDefaultReflection", "implemented", oldDefault.invoke(descendant));
+            scenario.check("cachedDefaultJni", "implemented", StandardJvmtiClient.callInterfaceDispatchString(descendant, 0));
+        });
+
+        AbstractGroup remove = new AbstractGroup();
+        Object removable = remove.instance("Removable");
+        Method implementation = remove.load("Removable").getMethod("required");
+        StandardJvmtiClient.cacheInterfaceDispatch(0, implementation);
+        runScenario("interface-abstract-remove-last", 63, scenario -> {
+            scenario.redefine(new Class<?>[]{remove.contract, remove.load("Removable")},
+                    "interface-abstract-remove", "interface-abstract-remove");
+            remove.missing(scenario, "Removable");
+            scenario.check("oldReflection", "removable", implementation.invoke(removable));
+            scenario.check("oldJni", "removable", StandardJvmtiClient.callInterfaceDispatchString(removable, 0));
+        });
+        runScenario("interface-abstract-remove-withdraw", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{remove.contract}, "interface-abstract-add");
+            scenario.check("newCaller", "removable", remove.call(removable));
+            scenario.check("cachedJni", "removable", StandardJvmtiClient.callInterfaceDispatchString(removable, 0));
+        });
+
+        AbstractGroup good = new AbstractGroup(), bad = new AbstractGroup();
+        Object goodInstance = good.instance("Existing"), badInstance = bad.instance("Implementation");
+        AbstractWitness first = new AbstractWitness(good, goodInstance, 0);
+        AbstractWitness second = new AbstractWitness(bad, badInstance, 1);
+        runScenario("interface-abstract-multi-group-reject", 63, scenario -> {
+            scenario.expectRejectionBy(bad.contract);
+            scenario.redefine(new Class<?>[]{good.contract, bad.contract}, "interface-abstract-add", "interface-abstract-add");
+            bad.missing(scenario, "Implementation");
+            scenario.check("earlierGroupValidated", true, InterfaceAbortInstrumentation.validatedInterfaceGroups() >= 1);
+            first.check(scenario, "first", 11); second.check(scenario, "second", 11);
+            scenario.expectError("firstUnchanged", NoSuchMethodException.class, () -> good.contract.getMethod("required"));
+        });
+        runScenario("interface-abstract-multi-group-retry", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{good.contract, bad.contract, bad.load("Implementation")},
+                    "interface-abstract-add", "interface-abstract-add", "interface-abstract-add");
+            first.check(scenario, "first", 12); second.check(scenario, "second", 12);
+            scenario.check("firstNewCaller", "existing", good.call(goodInstance));
+            scenario.check("secondNewCaller", "new", bad.call(badInstance));
+        });
+
+        AbstractGroup planned = new AbstractGroup();
+        Object plannedInstance = planned.instance("Implementation");
+        AbstractWitness planWitness = new AbstractWitness(planned, plannedInstance, 0);
+        runScenario("interface-abstract-after-plan-failure", 110, scenario -> {
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.redefine(new Class<?>[]{planned.contract, planned.load("Implementation")},
+                    "interface-abstract-add", "interface-abstract-add");
+            scenario.check("planned", true, InterfaceAbortInstrumentation.validatedInterfaceGroups() >= 1);
+            scenario.check("planFailure", true, DcevmRuntime.capabilities().getString("lastRejection").contains("after interface mapping plan"));
+            planWitness.check(scenario, "old", 11);
+            scenario.check("oldImplementation", "old", planned.load("Implementation").getMethod("version").invoke(plannedInstance));
+        });
+        runScenario("interface-abstract-after-plan-retry", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{planned.contract, planned.load("Implementation")},
+                    "interface-abstract-add", "interface-abstract-add");
+            planWitness.check(scenario, "new", 12);
+            scenario.check("newCaller", "new", planned.call(plannedInstance));
+        });
+
+        AbstractGroup late = new AbstractGroup();
+        Object existing = late.instance("Existing");
+        AbstractWitness lateWitness = new AbstractWitness(late, existing, 0);
+        long retries = DcevmRuntime.capabilities().getLong("subclassLoadRetries");
+        runScenario("interface-abstract-late-missing", 63, scenario -> {
+            scenario.check("hook", 0, StandardJvmtiClient.setClassFileLoads(late.contract.getName().replace('.', '/'),
+                    late.loader, new String[]{"com.github.ytlog.artdcevm.fixture.abstractaddition.Other"}));
+            try { scenario.redefine(new Class<?>[]{late.contract}, "interface-abstract-add"); }
+            finally { StandardJvmtiClient.setClassFileLoads(null, null, null); }
+            late.missing(scenario, "Other");
+            scenario.check("retried", 1L, DcevmRuntime.capabilities().getLong("subclassLoadRetries") - retries);
+            lateWitness.check(scenario, "old", 11);
+        });
+        runScenario("interface-abstract-late-retry", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{late.contract, late.load("Other")}, "interface-abstract-add", "interface-abstract-add");
+            lateWitness.check(scenario, "new", 12);
+            scenario.check("existing", "existing", late.call(existing));
+            scenario.check("other", "other", late.call(late.instance("Other")));
+        });
+
+        AbstractGroup exhausted = new AbstractGroup();
+        Object exhaustedInstance = exhausted.instance("Existing");
+        AbstractWitness exhaustedWitness = new AbstractWitness(exhausted, exhaustedInstance, 0);
+        long beforeExhaustion = DcevmRuntime.capabilities().getLong("subclassLoadRetries");
+        runScenario("interface-abstract-retries-exhausted", 113, scenario -> {
+            String base = "com.github.ytlog.artdcevm.fixture.abstractaddition.";
+            scenario.check("hook", 0, StandardJvmtiClient.setClassFileLoads(exhausted.contract.getName().replace('.', '/'),
+                    exhausted.loader, new String[]{base + "LateOne", base + "LateTwo", base + "LateThree"}));
+            try { scenario.redefine(new Class<?>[]{exhausted.contract}, "interface-abstract-add"); }
+            finally { StandardJvmtiClient.setClassFileLoads(null, null, null); }
+            scenario.check("boundedRetries", 2L, DcevmRuntime.capabilities().getLong("subclassLoadRetries") - beforeExhaustion);
+            scenario.check("reason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("loaded during the transaction"));
+            exhaustedWitness.check(scenario, "old", 11);
+        });
+        runScenario("interface-abstract-exhausted-withdraw", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{exhausted.contract}, "interface-abstract-original");
+            exhaustedWitness.check(scenario, "old", 11);
+        });
+        runScenario("interface-abstract-exhausted-retry", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{exhausted.contract, exhausted.load("LateOne"), exhausted.load("LateTwo"), exhausted.load("LateThree")},
+                    "interface-abstract-add", "interface-abstract-add", "interface-abstract-add", "interface-abstract-add");
+            exhaustedWitness.check(scenario, "new", 12);
+            scenario.check("existing", "existing", exhausted.call(exhaustedInstance));
+            scenario.check("lateOne", "late-one", exhausted.call(exhausted.instance("LateOne")));
+        });
+    }
+
+    private void runAbstractRejectionScenario(String kind) throws Exception {
+        if (!java.util.Arrays.asList("signature", "wrong-return", "private", "package", "protected",
+                "static", "bridge-missing", "conflict").contains(kind))
+            throw new IllegalArgumentException("Unknown abstract rejection scenario");
+        AbstractGroup group = new AbstractGroup();
+        String type = kind.equals("signature") || kind.equals("wrong-return") ? "Wrong"
+                : kind.equals("bridge-missing") ? "Bridge" : kind.equals("conflict") ? "Conflicting" : "Implementation";
+        Object old = group.instance(type);
+        String variant = "interface-abstract-" + kind;
+        boolean signature = kind.equals("signature") || kind.equals("conflict");
+        runScenario("interface-abstract-reject-" + kind, 63, scenario -> {
+            if (signature) scenario.redefine(new Class<?>[]{group.contract}, "interface-abstract-add");
+            else scenario.redefine(new Class<?>[]{group.contract, group.load(type)},
+                    kind.equals("bridge-missing") ? variant : "interface-abstract-add", variant);
+            String reason = DcevmRuntime.capabilities().getString("lastRejection");
+            scenario.check("classNamed", true, reason.contains(type + ";"));
+            scenario.check("missingImplementation", true, reason.contains("has no concrete public implementation"));
+            scenario.check("oldBody", 11, group.contract.getMethod("oldValue").invoke(old));
+            scenario.expectError("noDeclaration", NoSuchMethodException.class, () -> group.contract.getMethod("required"));
+        });
+        if (type.equals("Implementation")) {
+            runScenario("interface-abstract-retry-" + kind, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{group.contract, group.load(type)},
+                        "interface-abstract-add", "interface-abstract-add");
+                scenario.check("newCaller", "new", group.call(old));
+            });
+        }
     }
 
     private void runInterfaceEvolutionScenarios() throws Exception {

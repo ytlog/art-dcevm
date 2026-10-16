@@ -35,7 +35,9 @@
 
 新增 public abstract 方法要求重定义后，接口组内**每个已加载的具体实现类**都能通过 ART 的实际 IfTable 分派到同名、完整 descriptor 相同的 public 具体实例方法，包括没有实例、没有提交 DEX 的类。同批补齐实现不要求提交顺序；已有实现、父类继承的实现和 ART 实际选中的更具体 default 均可接受。缺少实现、abstract/miranda、static/private/非 public 方法或 default 冲突均整批拒绝 63，不推迟到调用时抛 `AbstractMethodError`。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现；同名类型按类加载器身份分别判断。`lastRejection` 写出接口方法及缺实现的类，撤回或补齐后可重试。
 
-IfTable 只读访问器须通过 Class 字段、接口方法索引和 arm64 PointerArray 探测，`capabilities().interfaceAbstractDispatch` 报告 `unavailable`、`unverified: ...`、`verified: ...` 或 `rejected: 原因`。访问器不匹配时新增 abstract 仍以 63 拒绝并说明原因；不支持接口的运行时继续按上表拒绝。
+IfTable 只读访问器须通过 Class 字段、接口方法索引和 arm64 PointerArray 探测，`capabilities().interfaceAbstractDispatch` 报告 `unavailable`、`unverified: ...`、`verified: ...` 或 `rejected: 原因`。`interfaceAbstractMethodAddition` 仅在接口运行时、分派访问器及必要的链接错误服务均可用并通过探测后为 true，仍须逐事务检查全部实现类。ART 13 在生成可用 IfTable 前即拒绝非 public 实现；增强库通过命名错误服务观察 ART 实际选中的方法对，将匹配待验证条件的错误沿原事务转换为 63。访问器不匹配或必要服务缺失时，新增 abstract 仍以 63 拒绝并说明原因；不支持接口的运行时继续按上表拒绝。
+
+更具体的 abstract 重声明不能由远处的 default 补足；同批移除最后一个有效实现也拒绝。多个接口组在全部验收后才共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 

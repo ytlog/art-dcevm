@@ -24,6 +24,7 @@
 #include "platform/common/art_hook.h"
 #include "platform/common/class_layout.h"
 #include "platform/common/interface_snapshot.h"
+#include "platform/common/interface_dispatch.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
@@ -65,6 +66,7 @@ void* original_structural[2]{};
 void* original_finish = nullptr;
 void* original_run = nullptr;
 void* original_link_class = nullptr;
+void* original_non_public = nullptr;
 void (*set_status_internal)(void*, android13::ClassStatus) = nullptr;
 bool available = false;
 std::atomic<const char*> disabled_reason{nullptr};
@@ -84,7 +86,8 @@ struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evo
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
-struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; };
+struct NonPublicFailure { interface_dispatch::NonPublicSelection selection; int32_t index = -1; };
+struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; NonPublicFailure non_public; };
 struct Linking {
   const std::vector<Handle>* old_types;
   Handle new_types;
@@ -452,9 +455,12 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
   }
   try {
     Roots roots(driver->self, state->targets.size() + 1);
-    Attempt next{driver, {}, roots.Add(nullptr)};
+    Attempt next{driver, {}, roots.Add(nullptr), false, JVMTI_ERROR_NONE, {}};
     for (size_t i = 0; i < state->targets.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
     AttemptScope scope(state, &next);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    interface_dispatch::ResetValidationCounters();
+#endif
     const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
     return result;
@@ -469,17 +475,28 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     return static_cast<jvmtiError>(driver->result);
   }
 }
+// Observe ART's actual selected pair, preserving the original exception. No
+// formatting, JNI, allocation or method lookup is allowed in this callback.
+void NonPublicImplementation(void* klass, ArtMethod* implementation, ArtMethod* declaration) noexcept {
+  State* state = CurrentState();
+  if (state && state->linking && state->attempt && state->attempt->pending.Get<void>() == klass)
+    state->attempt->non_public = {{implementation, declaration}, state->linking->index};
+  using Function = void (*)(void*, ArtMethod*, ArtMethod*);
+  reinterpret_cast<Function>(original_non_public)(klass, implementation, declaration);
+}
+
 bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
                Handle interfaces, Handle* output) noexcept {
   using Function = bool (*)(void*, void*, const char*, Handle, Handle, Handle*);
+  State* state = CurrentState();
+  const Linking* linking = state ? state->linking : nullptr;
+  if (linking && !descriptor) Assign(state->attempt->pending, klass.Get<void>());
   const bool result = reinterpret_cast<Function>(original_link_class)(
       linker, thread, descriptor, klass, interfaces, output);
   // Capture the resolved class before AllocateNewClassObject's JNI-ID array
   // allocations. Those can fail after linking and return nullptr to Finish.
   // This callback may run with ClassLinker locks held. Only assign an existing
   // HandleScope root: no JNI/local-table growth, heap store or allocation here.
-  const State* state = CurrentState();
-  const Linking* linking = state ? state->linking : nullptr;
   if (linking && !descriptor && output && output->Get<void>())
     Assign(state->attempt->pending, output->Get<void>());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
@@ -706,7 +723,16 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
     }
     if (attempt->error != JVMTI_ERROR_NONE)
       return FailAllocation(self, attempt->error, "interface linking hook failed");
-    if (!replacement) return false;  // ART has recorded the error and cleared its exception.
+    if (!replacement) {
+      // ART 13 may fail before any usable candidate IfTable exists. Convert
+      // only its exact selected non-public pair for a pending obligation.
+      const auto& failure = attempt->non_public;
+      if (failure.index == static_cast<int32_t>(i) && interface_dispatch::DescribeNonPublicSelection(
+              self, old_types, new_array, static_cast<int32_t>(i), failure.selection,
+              target->snapshot.descriptors[i], batch_index >= 0, &transaction::Current()->rejection))
+        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
+      return false;  // ART recorded its error and cleared the Java exception.
+    }
     if (batch_index < 0) set_cache(replacement, original_cache.Get<void>());
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
     // Transfer failure after linking, now outside the callback and its locks.
@@ -774,6 +800,11 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
 
 void ObserveClassLinker(void* linker) { class_linker.store(linker); }
 bool Available() { return available && disabled_reason.load() == nullptr; }
+bool AbstractLinkErrorsAvailable() {
+  const State* state = CurrentState();
+  const int release = state ? state->selected_release : verified_release.load();
+  return release == 16 || original_non_public != nullptr;
+}
 void* ReadReference(uint32_t reference) {
   const State* state = CurrentState();
   return state && state->thread_verified ? Read(reference)
@@ -856,6 +887,7 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
   return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
 }
 bool InjectDispatchProbeFailure() { return Inject(21); }
+bool InjectMappingPlanFailure() { return Inject(22); }
 bool InjectInstanceFailure(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, bool allocated) {
   const Target* owner = Find(mirror_class(self));
   const State* state = CurrentState();
@@ -1091,6 +1123,12 @@ void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note
   resolved.push_back({link_class, reinterpret_cast<void*>(LinkClass), &original_link_class, kLinkClass.name});
   resolved.push_back({referrer_lookup, reinterpret_cast<void*>(LookupByReferrer), &original_lookup_referrer, kLookupReferrer.name});
   resolved.push_back({cache_lookup, reinterpret_cast<void*>(LookupByCache), &original_lookup_cache, kLookupCache.name});
+  for (const auto& name : {kThrowNonPublicGlobal, kThrowNonPublicLocal, kThrowNonPublicUnique}) {
+    if (void* address = symbols::Find(name)) {
+      resolved.push_back({address, reinterpret_cast<void*>(NonPublicImplementation), &original_non_public, name.name});
+      break;
+    }
+  }
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   available = true;
   *note = "interface redefinition prepared; Class/Thread/HandleScope/holder runtime probes required";

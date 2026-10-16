@@ -55,6 +55,12 @@ final class StandardJvmtiClient {
      */
     static native int setClassFileReplacement(String name, byte[] dex);
     static native long classFileReplacements();
+    /** Load one named class per matching hook, after the engine's snapshot. */
+    static native int setClassFileLoads(String target, ClassLoader loader, String[] names);
+    /** Retain exactly these JNI IDs across successful and rejected interface batches. */
+    static native void cacheInterfaceDispatch(int slot, Method method);
+    static native int callInterfaceDispatchInt(Object receiver, int slot);
+    static native String callInterfaceDispatchString(Object receiver, int slot);
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */
     static native int setThreadSingleStep(boolean enabled);
     static native long singleStepCount();

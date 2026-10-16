@@ -34,5 +34,35 @@
       "required",
       "()Ljava/lang/String;"
     ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/Reabstract.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/ReabstractImplementation.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/LateOne.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/LateTwo.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/LateThree.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
   ]
 }

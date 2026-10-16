@@ -106,8 +106,8 @@ SCENARIOS = (
     ('interface-lambda-first', ['interface-lambda-first'], 0),
     ('interface-lambda-append', ['interface-lambda-append', 'interface-lambda-append'], 0),
     ('interface-lambda-insert', ['interface-lambda-insert', 'interface-lambda-insert', 'interface-lambda-insert'], 0),
-    ('interface-abstract-batch-forward', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-batch-reverse', ['interface-abstract-add', 'interface-abstract-add'], 0),
+    ('interface-abstract-batch-forward', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
+    ('interface-abstract-batch-reverse', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-existing', ['interface-abstract-add'], 0),
     ('interface-abstract-inherited', ['interface-abstract-add'], 0),
     ('interface-abstract-defaultimplementation', ['interface-abstract-add'], 0),
@@ -120,9 +120,13 @@ SCENARIOS = (
     ('interface-abstract-reject-signature', ['interface-abstract-add'], 63),
     ('interface-abstract-reject-wrong-return', ['interface-abstract-add', 'interface-abstract-wrong-return'], 63),
     ('interface-abstract-reject-private', ['interface-abstract-add', 'interface-abstract-private'], 63),
+    ('interface-abstract-retry-private', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-reject-package', ['interface-abstract-add', 'interface-abstract-package'], 63),
+    ('interface-abstract-retry-package', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-reject-protected', ['interface-abstract-add', 'interface-abstract-protected'], 63),
+    ('interface-abstract-retry-protected', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-reject-static', ['interface-abstract-add', 'interface-abstract-static'], 63),
+    ('interface-abstract-retry-static', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-reject-bridge-missing', ['interface-abstract-bridge-missing', 'interface-abstract-bridge-missing'], 63),
     ('interface-abstract-reject-conflict', ['interface-abstract-add'], 63),
     ('interface-abstract-dependent-missing', ['interface-abstract-dependent', 'interface-abstract-dependent'], 63),
@@ -130,6 +134,19 @@ SCENARIOS = (
     ('interface-abstract-probe-reject', ['interface-abstract-add'], 63),
     ('interface-abstract-probe-retry', ['interface-abstract-add'], 0),
     ('interface-abstract-loader-identity', ['interface-abstract-add'], 0),
+    ('interface-abstract-reabstract-reject', ['interface-abstract-reabstract'], 63),
+    ('interface-abstract-reabstract-retry', ['interface-abstract-reabstract', 'interface-abstract-reabstract'], 0),
+    ('interface-abstract-remove-last', ['interface-abstract-remove', 'interface-abstract-remove'], 63),
+    ('interface-abstract-remove-withdraw', ['interface-abstract-add'], 0),
+    ('interface-abstract-multi-group-reject', ['interface-abstract-add', 'interface-abstract-add'], 63),
+    ('interface-abstract-multi-group-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
+    ('interface-abstract-after-plan-failure', ['interface-abstract-add', 'interface-abstract-add'], 110),
+    ('interface-abstract-after-plan-retry', ['interface-abstract-add', 'interface-abstract-add'], 0),
+    ('interface-abstract-late-missing', ['interface-abstract-add'], 63),
+    ('interface-abstract-late-retry', ['interface-abstract-add', 'interface-abstract-add'], 0),
+    ('interface-abstract-retries-exhausted', ['interface-abstract-add'], 113),
+    ('interface-abstract-exhausted-withdraw', ['interface-abstract-original'], 0),
+    ('interface-abstract-exhausted-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-stress-add', ['interface-stress-add'], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
@@ -602,8 +619,121 @@ REQUIRED_CHECKS.update({'interface-abstract-dependent-missing': {'methodNamed': 
  'interface-abstract-loader-identity': {'newCaller': 'existing',
                                         'otherLoaderOldBody': 11,
                                         'otherLoaderNoDeclaration': 'java.lang.NoSuchMethodException'}})
+REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': True,
+                                          'classNamed': True,
+                                          'missingImplementation': True,
+                                          'oldDefault': 'distant',
+                                          'oldJni': 'distant'},
+ 'interface-abstract-reabstract-retry': {'newImplementation': 'implemented',
+                                         'cachedDefaultCall': 'implemented',
+                                         'cachedDefaultReflection': 'implemented',
+                                         'cachedDefaultJni': 'implemented'},
+ 'interface-abstract-remove-last': {'methodNamed': True,
+                                    'classNamed': True,
+                                    'missingImplementation': True,
+                                    'oldReflection': 'removable',
+                                    'oldJni': 'removable'},
+ 'interface-abstract-remove-withdraw': {'newCaller': 'removable', 'cachedJni': 'removable'},
+ 'interface-abstract-multi-group-reject': {'methodNamed': True,
+                                           'classNamed': True,
+                                           'missingImplementation': True,
+                                           'earlierGroupValidated': True,
+                                           'firstReflection': 11,
+                                           'firstHandle': 11,
+                                           'firstBytecode': 11,
+                                           'firstJni': 11,
+                                           'secondReflection': 11,
+                                           'secondHandle': 11,
+                                           'secondBytecode': 11,
+                                           'secondJni': 11,
+                                           'firstUnchanged': 'java.lang.NoSuchMethodException'},
+ 'interface-abstract-multi-group-retry': {'firstReflection': 12,
+                                          'firstHandle': 12,
+                                          'firstBytecode': 12,
+                                          'firstJni': 12,
+                                          'secondReflection': 12,
+                                          'secondHandle': 12,
+                                          'secondBytecode': 12,
+                                          'secondJni': 12,
+                                          'firstNewCaller': 'existing',
+                                          'secondNewCaller': 'new'},
+ 'interface-abstract-after-plan-failure': {'armed': 0,
+                                           'planned': True,
+                                           'planFailure': True,
+                                           'oldReflection': 11,
+                                           'oldHandle': 11,
+                                           'oldBytecode': 11,
+                                           'oldJni': 11,
+                                           'oldImplementation': 'old'},
+ 'interface-abstract-after-plan-retry': {'newReflection': 12,
+                                         'newHandle': 12,
+                                         'newBytecode': 12,
+                                         'newJni': 12,
+                                         'newCaller': 'new'},
+ 'interface-abstract-late-missing': {'hook': 0,
+                                     'methodNamed': True,
+                                     'classNamed': True,
+                                     'missingImplementation': True,
+                                     'retried': 1,
+                                     'oldReflection': 11,
+                                     'oldHandle': 11,
+                                     'oldBytecode': 11,
+                                     'oldJni': 11},
+ 'interface-abstract-late-retry': {'newReflection': 12,
+                                   'newHandle': 12,
+                                   'newBytecode': 12,
+                                   'newJni': 12,
+                                   'existing': 'existing',
+                                   'other': 'other'},
+ 'interface-abstract-retries-exhausted': {'hook': 0,
+                                          'boundedRetries': 2,
+                                          'reason': True,
+                                          'oldReflection': 11,
+                                          'oldHandle': 11,
+                                          'oldBytecode': 11,
+                                          'oldJni': 11},
+ 'interface-abstract-exhausted-withdraw': {'oldReflection': 11,
+                                           'oldHandle': 11,
+                                           'oldBytecode': 11,
+                                           'oldJni': 11},
+ 'interface-abstract-exhausted-retry': {'newReflection': 12,
+                                        'newHandle': 12,
+                                        'newBytecode': 12,
+                                        'newJni': 12,
+                                        'existing': 'existing',
+                                        'lateOne': 'late-one'},
+ 'interface-abstract-retry-private': {'newCaller': 'new'},
+ 'interface-abstract-retry-package': {'newCaller': 'new'},
+ 'interface-abstract-retry-protected': {'newCaller': 'new'},
+ 'interface-abstract-retry-static': {'newCaller': 'new'},
+ 'interface-abstract-batch-forward': {'newCaller': 'new',
+                                      'singleton': True,
+                                      'marker': 73,
+                                      'counter': 79,
+                                      'bodyUpdated': 'new',
+                                      'dispatchProbe': True,
+                                      'afterGc': 'new',
+                                      'abstractCapability': True,
+                                           'sameBatchCaller': 'new/12',
+                                      'cachedReflection': 12,
+                                      'cachedHandle': 12,
+                                      'cachedBytecode': 12,
+                                      'cachedJni': 12},
+ 'interface-abstract-batch-reverse': {'newCaller': 'new',
+                                      'singleton': True,
+                                      'marker': 73,
+                                      'counter': 79,
+                                      'bodyUpdated': 'new',
+                                      'dispatchProbe': True,
+                                      'afterGc': 'new',
+                                      'abstractCapability': True,
+                                           'sameBatchCaller': 'new/12',
+                                      'cachedReflection': 12,
+                                      'cachedHandle': 12,
+                                      'cachedBytecode': 12,
+                                      'cachedJni': 12}})
 
-def validate_report(report):
+def validate_report(report, scenario_group="full"):
     """Require every requested return code and an actual behavior observation."""
     if (not isinstance(report, dict) or type(report.get("schemaVersion")) is not int
             or report["schemaVersion"] != 1):
@@ -640,10 +770,14 @@ def validate_report(report):
     for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
             raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
+    if scenario_group not in ("full", "interface-abstract"):
+        raise RunFailure("Unsupported scenario group")
+    expected_scenarios = SCENARIOS if scenario_group == "full" else tuple(
+        item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     scenarios = report.get("scenarios")
-    if not isinstance(scenarios, list) or len(scenarios) != len(SCENARIOS):
+    if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
-    for scenario, (name, variants, code) in zip(scenarios, SCENARIOS):
+    for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:
@@ -764,6 +898,8 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
+    parser.add_argument("--scenario-group", choices=("full", "interface-abstract"), default="full",
+                        help="Run the complete suite or only abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",
@@ -830,6 +966,7 @@ def main(argv=None):
         instrumentation_error = None
         try:
             mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
+            if args.scenario_group != "full": mode_args += ["-e", "scenario", args.scenario_group]
             test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", *mode_args, COMPONENT,
                        timeout=args.timeout)
             meta["instrumentationExitCode"] = test.returncode
@@ -859,7 +996,7 @@ def main(argv=None):
             result = json.loads(report.stdout)
         except (ValueError, TypeError) as error:
             raise RunFailure("The device report is not valid JSON") from error
-        validate_report(result)
+        validate_report(result, scenario_group=args.scenario_group)
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])
         meta["passed"] = True

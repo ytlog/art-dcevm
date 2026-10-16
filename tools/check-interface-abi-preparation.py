@@ -74,10 +74,15 @@ def main():
                      'kClassArrayAllocWithAllocator'),
                     ('kHandleScopeVisitRoots', 'kHandleScopeVisitRootsSigned')]
     optional = {name for group in alternatives for name in group}
+    # Only abstract additions on ART 13 need this early link-error service.
+    # Its absence must not make unrelated interface services look unavailable.
+    non_public = ('kThrowNonPublicGlobal', 'kThrowNonPublicLocal', 'kThrowNonPublicUnique')
+    optional.update(non_public)
     rows = {}
     for runtime in report['sets']:
         api = int(runtime['label'].split('/')[0].split('-')[1])
         entries = {entry['id']: entry['present'] for entry in runtime['catalog']}
+        runtime['nonPublicImplementationLinkError'] = any(entries.get(name) for name in non_public)
         missing = [name for name in entries if name not in optional and not entries[name]]
         missing += ['/'.join(group) for group in alternatives if not any(entries.get(name) for name in group)]
         runtime['sourcePreparationMissingServices'] = missing

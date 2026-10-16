@@ -27,18 +27,48 @@ std::mutex replacement_mutex;
 std::string replacement_name;
 std::vector<unsigned char> replacement_bytes;
 std::atomic<jlong> replacement_count{0};
+std::string load_target;
+jobject load_loader = nullptr;
+jobjectArray load_names = nullptr;
+jsize load_index = 0;
+jclass dispatch_classes[2]{};
+jmethodID dispatch_methods[2]{};
 
-void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv*, jclass, jobject, const char* name, jobject,
+void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv* jni, jclass, jobject, const char* name, jobject,
                                jint, const unsigned char*, jint* new_length,
                                unsigned char** new_data) {
-  std::lock_guard<std::mutex> lock(replacement_mutex);
-  if (!name || replacement_name != name || replacement_bytes.empty()) return;
-  unsigned char* copy = nullptr;
-  if (env->Allocate(static_cast<jlong>(replacement_bytes.size()), &copy) != JVMTI_ERROR_NONE) return;
-  std::memcpy(copy, replacement_bytes.data(), replacement_bytes.size());
-  *new_length = static_cast<jint>(replacement_bytes.size());
-  *new_data = copy;
-  replacement_count.fetch_add(1, std::memory_order_relaxed);
+  jobject loader = nullptr;
+  jstring class_name = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(replacement_mutex);
+    if (!name) return;
+    if (replacement_name == name && !replacement_bytes.empty()) {
+      unsigned char* copy = nullptr;
+      if (env->Allocate(static_cast<jlong>(replacement_bytes.size()), &copy) != JVMTI_ERROR_NONE) return;
+      std::memcpy(copy, replacement_bytes.data(), replacement_bytes.size());
+      *new_length = static_cast<jint>(replacement_bytes.size());
+      *new_data = copy;
+      replacement_count.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (load_target == name && load_names && load_index < jni->GetArrayLength(load_names)) {
+      loader = jni->NewLocalRef(load_loader);
+      class_name = static_cast<jstring>(jni->GetObjectArrayElement(load_names, load_index++));
+    }
+  }
+  // Loading can recursively invoke this callback: never keep the native test
+  // mutex across Java class loading. Locals protect the configured globals.
+  if (loader && class_name && !jni->ExceptionCheck()) {
+    jclass type = jni->FindClass("java/lang/Class");
+    jmethodID for_name = type ? jni->GetStaticMethodID(type, "forName",
+        "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
+    if (for_name) {
+      jobject loaded = jni->CallStaticObjectMethod(type, for_name, class_name, JNI_FALSE, loader);
+      if (loaded) jni->DeleteLocalRef(loaded);
+    }
+    if (type) jni->DeleteLocalRef(type);
+  }
+  if (class_name) jni->DeleteLocalRef(class_name);
+  if (loader) jni->DeleteLocalRef(loader);
 }
 
 jint InvokeMethodV(JNIEnv* jni, jobject receiver, jmethodID id, jint method, ...) {
@@ -131,6 +161,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplacement(
     JNIEnv* jni, jclass, jstring name, jbyteArray bytes) {
   if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  bool enabled;
   {
     std::lock_guard<std::mutex> lock(replacement_mutex);
     replacement_name.clear();
@@ -144,9 +175,61 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplaceme
       jni->GetByteArrayRegion(bytes, 0, static_cast<jsize>(replacement_bytes.size()),
                               reinterpret_cast<jbyte*>(replacement_bytes.data()));
     }
+    enabled = !replacement_bytes.empty() || load_names;
   }
-  return client_env->SetEventNotificationMode(bytes ? JVMTI_ENABLE : JVMTI_DISABLE,
+  return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
                                               JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileLoads(
+    JNIEnv* jni, jclass, jstring target, jobject loader, jobjectArray names) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  bool enabled;
+  {
+    std::lock_guard<std::mutex> lock(replacement_mutex);
+    if (load_loader) jni->DeleteGlobalRef(load_loader);
+    if (load_names) jni->DeleteGlobalRef(load_names);
+    load_loader = nullptr; load_names = nullptr; load_target.clear(); load_index = 0;
+    if (target && loader && names) {
+      const char* chars = jni->GetStringUTFChars(target, nullptr);
+      if (!chars) return JVMTI_ERROR_OUT_OF_MEMORY;
+      load_target = chars;
+      jni->ReleaseStringUTFChars(target, chars);
+      load_loader = jni->NewGlobalRef(loader);
+      load_names = static_cast<jobjectArray>(jni->NewGlobalRef(names));
+      if (!load_loader || !load_names) return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    enabled = !replacement_bytes.empty() || load_names;
+  }
+  return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
+                                              JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheInterfaceDispatch(
+    JNIEnv* jni, jclass, jint slot, jobject reflected) {
+  if (slot < 0 || slot >= 2 || !client_env) return;
+  jmethodID method = jni->FromReflectedMethod(reflected);
+  jclass owner = nullptr;
+  if (!method || client_env->GetMethodDeclaringClass(method, &owner) != JVMTI_ERROR_NONE) return;
+  jclass root = static_cast<jclass>(jni->NewGlobalRef(owner));
+  jni->DeleteLocalRef(owner);
+  if (!root) return;
+  if (dispatch_classes[slot]) jni->DeleteGlobalRef(dispatch_classes[slot]);
+  dispatch_classes[slot] = root; dispatch_methods[slot] = method;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceDispatchInt(
+    JNIEnv* jni, jclass, jobject receiver, jint slot) {
+  if (slot < 0 || slot >= 2 || !dispatch_methods[slot]) return -1;
+  return jni->CallIntMethod(receiver, dispatch_methods[slot]);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceDispatchString(
+    JNIEnv* jni, jclass, jobject receiver, jint slot) {
+  if (slot < 0 || slot >= 2 || !dispatch_methods[slot]) return nullptr;
+  return static_cast<jstring>(jni->CallObjectMethod(receiver, dispatch_methods[slot]));
 }
 
 extern "C" JNIEXPORT jlong JNICALL

@@ -148,7 +148,11 @@ Android 13/API 33 与 Android 16/API 36 的 arm64 接口目标在运行时与成
 
 只读访问器复刻固定源码 `mirror/class-inl.h::FindVirtualMethodForInterface` 的读取语义：以候选声明类身份选择 IfTable 的接口项，以候选方法的 `method_index` 读取 PointerArray 的目标。先通过命名 `FindDeclaredInstanceField` 核对 `java.lang.Class.ifTable` 的声明、类型、实例存储与固定偏移；再核对 ObjectArray/long[] 的运行时类别、成对长度、接口声明虚方法的连续索引、分派数组长度，以及目标指针属于已知的方法数组，最后才读标志和 DEX 身份。`PointerArray` 的固定声明来自 `android-13.0.0_r1` 与 `android-16.0.0_r1` 的 `mirror/array.h`（arm64 数据起点按 8 字节对齐），IfTable 来自两版 `mirror/iftable.h`。堆引用使用接口运行时的命名 Mark 读屏障；Class 探测与成员计划读取声明类、DexCache 和数组元素也复用此读取路径，避免并发 GC 的转发引用被误判为其他类。此访问器不写入分派表，不解析或模拟方法选择。
 
-合法分派必须为 public、非 static/private/abstract、非冲突，且真实 DEX 名称与完整 descriptor 相同。已有／同批实现、继承实现与 ART 选中的更具体 default 可接受；bridge 必须真实存在。失败以 63 整批拒绝，`lastRejection` 写出接口方法和具体类；访问器不匹配也以 63 拒绝并报告探测原因。验收紧邻 default 冲突检查，位于 `CollectAndCreateNewInstances` 的计划阶段、不可失败边界之前，沿用现有废弃类清理和重试路径。`interfaceAbstractDispatch` 报告最近的访问器探测状态；每次事务重新检查。
+合法分派必须为 public、非 static/private/abstract、非冲突、非 obsolete／已退役目标，且真实 DEX 名称与完整 descriptor 相同。已有／同批实现、继承实现与 ART 选中的更具体 default 可接受；bridge 必须真实存在。失败以 63 整批拒绝，`lastRejection` 写出接口方法和具体类；访问器不匹配也以 63 拒绝并报告探测原因。验收紧邻 default 冲突检查，位于 `CollectAndCreateNewInstances` 的计划阶段、不可失败边界之前，沿用现有废弃类清理和重试路径。`interfaceAbstractDispatch` 报告最近的访问器探测状态；每次事务重新检查。
+
+分派验证独立放在 `interface_dispatch`：它持有只读布局探测、逐条件验收和错误格式化；`member_mapping` 仅在计划阶段调用，不承担接口链接或分派模拟。两者复用 `art_method_identity.h` 的有界 DEX 身份读取。ART 13 的 `LinkInterfaceMethods` 对非 public 实现在 IfTable 形成之前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`。`interface_redefinition` 通过该命名 NO_INLINE 服务观察实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配返回失败、离开锁后，验证模块按候选接口身份和完整 descriptor 生成 63 的拒绝原因。不截取异常文本、不按名称猜实现，也不放宽 ART 链接。该服务在 ART 13 不可定位时仅禁用新增 abstract，并在能力与拒绝原因中说明；ART 16 使用已链接 IfTable 验收。
+
+专项回归还覆盖更具体的 abstract 遮住远处 default、同批移除最后实现、多组中后一组拒绝、映射计划后故障，以及快照后晚加载缺失实现与连续加载耗尽重试。失败前后分别调用缓存的反射、MethodHandle、JNI ID 和预热字节码；修正或撤回后再次提交。`interfaceAbstractMethodAddition` 是细分探测状态，不能替代逐事务验收。
 
 `IsDefaultConflicting` 使用固定源码声明：12–17 在 common/runtime_objects.h 中判定 `intrinsic | copied | abstract | default` 相关位等于 `copied | abstract | default`（分别为 `0x80000000`、`0x01000000`、`0x0400`、`0x00400000`）；11 在 android11/art_method.h 中判定独立的 `0x01000000` default-conflict 位且非 intrinsic。按 ArtMethod 类型选择重载，不增加字段偏移。方法数组按现有长度遍历；地址非空不表示存在成员。API 36 的共享空字段数组也必须通过现有布局探测。
 
@@ -344,6 +348,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：收窄不支持，完整 DCEVM 尚未完成 |
 | `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
 | `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；可用版本仅 API 33/36，其他版本禁用并说明原因 |
+| `interfaceAbstractMethodAddition` | 接口运行时与分派探测均通过、必要链接错误服务可用时为 true；每次事务仍须全部实现类验收 |
 | `interfaceAbstractDispatch` | 新增 abstract 的只读 IfTable 访问器：`unavailable`、`unverified: ...`、`verified: ...` 或 `rejected: 原因`；方法实际可分派性仍逐事务验收 |
 | `interfaceSnapshotTypes` | 当前事务线程最近一次接口快照的类型数（目标、子接口、实现类及其子类） |
 | `interfaceSnapshotNanos`、`interfaceAllocationNanos` | 同一线程最近一次快照（含 GetLoadedClasses）和接口分配的单调时钟耗时，单位纳秒；仅供诊断，无接口事务时可为零 |
@@ -364,7 +369,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 - [member_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/member_retirement_symbols.h)：退役访问守卫使用的可变拼写：`Method_invoke` 与 `Constructor_newInstance0` 的无后缀和固定 `.__uniq` 后缀两种拼写、`EncodeFieldId` 新旧两组签名，以及可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 - [verification_redirect_symbols.h](../artdcevm/src/main/cpp/platform/symbols/verification_redirect_symbols.h)：验证重定向使用的 `FindClass` 新旧两种签名。
 
-- [interface_redefinition_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h)：接口路径的活动目录。包含普通／结构准入的 `CanRedefineClass`／`GetClassRedefinitionError` 候选、`FinishNewClassAllocations`、`Run`、`CurrentFromGdb`、`HandleScopeVisitRoots`、`EnsureInitialized`、`NewLocalRef`／`DeleteLocalRef`、`CreateNewDexCache`、两个 `DoLookupResolvedType`、两种 `LookupClass`、`SetDexCache`、两种三参数 `ObjectArray::Alloc`、`ReadBarrier::Mark`、`LinkClass`、`SetStatusInternal`。沿用结构目录的 `GetMirrorClass`、`AllocateNewClassObject` 和 `FindInstanceField`。
+- [interface_redefinition_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h)：接口路径的活动目录。包含普通／结构准入的 `CanRedefineClass`／`GetClassRedefinitionError` 候选、`FinishNewClassAllocations`、`Run`、`CurrentFromGdb`、`HandleScopeVisitRoots`、`EnsureInitialized`、`NewLocalRef`／`DeleteLocalRef`、`CreateNewDexCache`、两个 `DoLookupResolvedType`、两种 `LookupClass`、`SetDexCache`、两种三参数 `ObjectArray::Alloc`、`ReadBarrier::Mark`、`LinkClass`、`SetStatusInternal`，以及可选的 `ThrowIllegalAccessErrorForImplementingMethod` 命名候选。沿用结构目录的 `GetMirrorClass`、`AllocateNewClassObject` 和 `FindInstanceField`。
 - [interface_abi_preparation_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_abi_preparation_symbols.h)：仅供离线核对的 signed-tid 根遍历与两个带 AllocatorType 的数组分配名称；运行时未解析或调用。
 
 名称存在只说明可以定位；固定声明由运行时探测核对，Hook 覆盖由设备回归确认。
@@ -385,6 +390,8 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 退役登记、旧类保活、字段占位与 JNI／反射／MethodHandle 访问守卫 | `platform/common/member_retirement.{h,cc}` |
 | 验证期间的 CheckVerification／FindClass 重定向 | `platform/common/verification_redirect.{h,cc}` |
 | 接口重建组、分配、解析重定向与失败清理 | `platform/common/interface_redefinition.{h,cc}` |
+| 候选 IfTable 只读探测、抽象义务验收及实际链接选择的诊断 | `platform/common/interface_dispatch.{h,cc}` |
+| 映射与分派共用的有界 DEX 方法身份读取 | `platform/common/art_method_identity.h` |
 | 接口受影响类型、继承边与重建顺序的 Native 快照 | `platform/common/interface_snapshot.{h,cc}` |
 | 用公开 JVMTI 读取旧类结构 | `platform/common/schema_snapshot.{h,cc}` |
 | 读取 ART 已映射 DEX 中的类声明 | `platform/common/art_dex_view.h`、`evolution/class_schema.h`、`evolution/dex_schema.cc` |
@@ -392,7 +399,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 确有版本差异的声明 | `platform/abi/arm64/android11`–`android17/` |
 | 命名符号与 ShadowHook 查找 | `platform/symbols/` |
 
-依赖由引擎向下组织：`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者只依赖布局探测、接口快照和事务上下文。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
+依赖由引擎向下组织：`structural_redefine_engine` 组合事务上下文、布局探测、成员映射、退役守卫和接口重建；`member_mapping` 使用 `class_layout`、`member_retirement`、`verification_redirect` 与接口查询，`verification_redirect` 将接口组查询交给 `interface_redefinition`，后者复用布局探测、接口快照、分派诊断和事务上下文。独立的 `interface_dispatch` 只读取候选元数据、事务义务及退役状态，不调用引擎或成员映射。底层模块不反向调用引擎或成员映射。事务上下文只持有模块私有状态与策略要求，ART 继续负责实例迁移、引用改写、去优化和缓存失效。
 
 退役字段的反射占位类在 `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`。
 

@@ -20,9 +20,6 @@ namespace artdcevm::member_mapping {
 void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note);
 // The hooks are prepared; class_layout::VerifyTarget decides per transaction.
 bool Available();
-// Check Class.ifTable against ART's field table before accepting obligations.
-bool InterfaceDispatchAvailable(abi::arm64::ClassRedefinitionPrefix* self);
-std::string InterfaceDispatchState();
 // The verifier redirect for superclass changes is installed.
 bool SuperclassChangeAvailable();
 }  // namespace artdcevm::member_mapping

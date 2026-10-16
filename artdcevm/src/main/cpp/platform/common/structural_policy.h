@@ -87,6 +87,7 @@ struct Abilities {
   // Additionally accept public abstract additions as pending conditions,
   // validated through a probed read-only IfTable accessor before commit.
   bool interface_abstract_methods = false;
+  std::string interface_abstract_unavailable_reason = {};
 };
 
 struct Decision {

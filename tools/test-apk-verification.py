@@ -117,6 +117,19 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_abstract_group_requires_all_focused_scenarios(self):
+        report = complete_report()
+        report["scenarios"] = [item for item in report["scenarios"]
+                               if item["name"].startswith("interface-abstract-")]
+        runner.validate_report(report, scenario_group="interface-abstract")
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="unknown")
+        report["scenarios"].pop()
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="interface-abstract")
+
     def test_stress_requires_complete_type_count_and_positive_phase_measurements(self):
         runner.validate_report(complete_report())
         for key, value in (("types", 206), ("snapshotNanos", 0), ("allocationNanos", -1),

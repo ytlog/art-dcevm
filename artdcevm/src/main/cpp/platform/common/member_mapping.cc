@@ -1,12 +1,13 @@
 #include "platform/common/member_mapping.h"
 #include "platform/common/interface_redefinition.h"
+#include "platform/common/interface_dispatch.h"
+#include "platform/common/art_method_identity.h"
 #include "platform/common/art_hook.h"
 
 #include <android/log.h>
 #include <jvmti.h>
 #include <cstring>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -36,13 +37,6 @@ using abi::ReflectiveValueVisitor;
 using member_retirement::RetiredField;
 
 bool available = false;
-jclass class_type_root = nullptr, object_array_root = nullptr, pointer_array_root = nullptr;
-std::mutex dispatch_mutex;
-std::string dispatch_state = "unavailable";
-void ReportDispatch(std::string state) {
-  std::lock_guard<std::mutex> lock(dispatch_mutex);
-  dispatch_state = std::move(state);
-}
 // Written by the mapping hook and read by the visitor within one Update call.
 thread_local bool in_update = false;
 thread_local std::set<const void*> copied_resolution_changes;
@@ -113,9 +107,6 @@ struct MappingPlan {
 // Mapping operations over one source-declared class layout.
 struct PlanOps {
   bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
-  bool (*dispatch_probe)(ClassRedefinitionPrefix* self);
-  bool (*check_interfaces)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
-                           std::string* rejection);
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
 };
@@ -171,13 +162,6 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   // which assumes an obsolete method lives in its declaring class's array.
   // A copied method lives in the implementation class's array instead; after
   // redefining its interface that assumption no longer holds.
-  static bool DexMethodIdentity(Method* method, evolution::Member* identity, std::string* why) {
-    auto* declaring = class_layout::Heap<Class>(method->declaring_class);
-    const auto* dex = declaring ? DexOf(declaring->dex_cache) : nullptr;
-    if (!dex || !dex->begin) return Fail(why, "mapped method has no declaring DEX");
-    return evolution::ReadMethodIdentity(DexViewOf(*dex), method->dex_method_index, identity, why);
-  }
-
   // Shared by every structural transaction/layout, including ordinary classes.
   // Identity is the declaring DEX's name + prototype, not a runtime canonical
   // lookup or a raw method index (indices are local to different DEX files).
@@ -186,12 +170,12 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     auto* new_methods = Members<Method>(new_class->methods);
     std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
     for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
-      if (!DexMethodIdentity(new_methods->At(j), &identities[j], why)) return false;
+      if (!class_layout::MethodIdentity<Class>(new_methods->At(j), &identities[j], why)) return false;
     std::set<std::pair<std::string, std::string>> old_conflicts;
     for (uint32_t i = 0; old_methods && i < old_methods->length; ++i) {
       Method* old_method = old_methods->At(i);
       evolution::Member identity;
-      if (!DexMethodIdentity(old_method, &identity, why)) return false;
+      if (!class_layout::MethodIdentity<Class>(old_method, &identity, why)) return false;
       if (IsDefaultConflicting(*old_method)) old_conflicts.emplace(identity.name, identity.descriptor);
       const bool declared = class_layout::Heap<Class>(old_method->declaring_class) == old_class;
       void* replacement = nullptr;
@@ -241,19 +225,8 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     for (uint32_t j = 0; new_methods && j < new_methods->length && plan->default_conflict.empty(); ++j)
       if (IsDefaultConflicting(*new_methods->At(j)) &&
           !old_conflicts.count({identities[j].name, identities[j].descriptor}))
-        plan->default_conflict = Descriptor(*new_class) + ": " + identities[j].name + identities[j].descriptor;
+        plan->default_conflict = class_layout::ClassDescriptor(*new_class) + ": " + identities[j].name + identities[j].descriptor;
     return true;
-  }
-
-  // The class's own type descriptor from its DexCache, for rejection messages.
-  static std::string Descriptor(const Class& klass) {
-    const DexFilePrefix* dex = DexOf(klass.dex_cache);
-    std::string descriptor, error;
-    if (!dex || !dex->begin || klass.dex_type_index < 0 ||
-        !evolution::ReadTypeDescriptor(DexViewOf(*dex), static_cast<uint32_t>(klass.dex_type_index),
-                                       &descriptor, &error))
-      return "<unnamed class>";
-    return descriptor;
   }
 
   static bool Plan(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why) {
@@ -269,139 +242,8 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     return true;
   }
 
-  static bool DispatchProbe(ClassRedefinitionPrefix* self) {
-    // Validate the slot before following any candidate pointer. The array
-    // headers are the same fixed ObjectArray/Array declarations already used
-    // by the holder probes; CheckInterfaces also checks their runtime classes.
-    void* type = class_layout::DecodeClass(mirror_class, self, class_type_root);
-    ArtField* slot = type ? find_declared_instance_field(type, "ifTable", "[Ljava/lang/Object;") : nullptr;
-    return slot && slot->declaring_class == Reference(type) &&
-        !(slot->access_flags & evolution::kAccStatic) && slot->offset == offsetof(Class, iftable);
-  }
-
-  static Class* ReadClass(uint32_t reference) {
-    return static_cast<Class*>(interface_redefinition::ReadReference(reference));
-  }
-  // An interface's declared virtual methods occupy consecutive method indices.
-  // Probe these indices against its validated ArtMethod array rather than
-  // interpreting a DEX index as an IfTable slot (DEX indices are file-local).
-  static bool InterfaceMethods(Class* interface, std::vector<Method*>* methods) {
-    auto* array = Members<Method>(interface->methods);
-    for (uint32_t i = 0; array && i < array->length; ++i) {
-      Method* method = array->At(i);
-      const uint32_t flags = method->access_flags.load(std::memory_order_relaxed);
-      if (ReadClass(method->declaring_class) != interface ||
-          (flags & (evolution::kAccStatic | evolution::kAccPrivate))) continue;
-      evolution::Member identity;
-      std::string why;
-      if (!DexMethodIdentity(method, &identity, &why)) return false;
-      if (identity.name == "<init>" || identity.name == "<clinit>") continue;
-      if (method->method_index != methods->size()) return false;
-      methods->push_back(method);
-    }
-    return true;
-  }
-  // A native method pointer must belong to one of the known method arrays
-  // before its flags or DEX identity can be read. ART may choose an inherited
-  // method or a copied default/miranda owned by the concrete class.
-  static bool OwnsMethod(Class* klass, Method* method) {
-    for (Class* at = klass; at; at = ReadClass(at->super_class)) {
-      auto* methods = Members<Method>(at->methods);
-      if (methods && methods->Contains(method)) return true;
-    }
-    return false;
-  }
-  static bool CheckInterfaces(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
-                               std::string* rejection) {
-    const auto* context = transaction::Current();
-    const auto* old_classes = data.Classes(true);
-    const auto* new_classes = data.Classes(false);
-    if (context->interface_obligations.empty() || !old_classes) return true;
-    for (const auto& obligation : context->interface_obligations) {
-      void* original = mirror_class(obligation.interface);
-      Class* interface = nullptr;
-      for (int32_t i = 0; i < old_classes->length; ++i)
-        if (class_layout::Element<void>(old_classes, i) == original)
-          interface = class_layout::Element<Class>(new_classes, i);
-      if (!interface) continue;  // This obligation belongs to another structural owner.
-      const auto unavailable = [&](const std::string& why) {
-        ReportDispatch("rejected: " + why);
-        *rejection = Descriptor(*interface) + ": " + obligation.name + obligation.descriptor +
-            " requires a verified IfTable accessor: " + why;
-        return false;
-      };
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-      if (interface_redefinition::InjectDispatchProbeFailure())
-        return unavailable("injected IfTable probe mismatch");
-#endif
-      if (!DispatchProbe(self)) return unavailable("Class.ifTable field declaration differs");
-      std::vector<Method*> declarations;
-      if (!InterfaceMethods(interface, &declarations))
-        return unavailable("interface method indices differ");
-      Method* required = nullptr;
-      for (Method* method : declarations) {
-        evolution::Member identity;
-        std::string why;
-        if (!DexMethodIdentity(method, &identity, &why)) return unavailable(why);
-        if (identity.name == obligation.name && identity.descriptor == obligation.descriptor) required = method;
-      }
-      if (!required) return unavailable("candidate interface declaration is absent");
-      void* object_array_type = class_layout::DecodeClass(mirror_class, self, object_array_root);
-      void* pointer_array_type = class_layout::DecodeClass(mirror_class, self, pointer_array_root);
-      for (int32_t i = 0; i < new_classes->length; ++i) {
-        Class* klass = class_layout::Element<Class>(new_classes, i);
-        if (klass->access_flags & (evolution::kAccInterface | evolution::kAccAbstract)) continue;
-        auto* table = static_cast<abi::ObjectArray*>(interface_redefinition::ReadReference(klass->iftable));
-        if (!table || interface_redefinition::ReadReference(table->object.klass) != object_array_type ||
-            table->length < 0 || table->length % 2) return unavailable("IfTable array declaration differs");
-        Method* implementation = nullptr;
-        bool found = false;
-        for (int32_t entry = 0; entry < table->length; entry += 2) {
-          if (ReadClass(table->elements[entry]) != interface) continue;
-          if (found) return unavailable("IfTable has duplicate interface identities");
-          found = true;
-          auto* methods = static_cast<abi::PointerArray*>(
-              interface_redefinition::ReadReference(table->elements[entry + 1]));
-          if (!methods || interface_redefinition::ReadReference(methods->object.klass) != pointer_array_type ||
-              methods->length != static_cast<int32_t>(declarations.size()))
-            return unavailable("IfTable PointerArray declaration differs");
-          implementation = Pointer<Method>(methods->elements[required->method_index]);
-          if (implementation && !OwnsMethod(klass, implementation) && !OwnsMethod(interface, implementation))
-            return unavailable("IfTable target is outside known method arrays");
-        }
-        // A group can contain siblings of a dependent interface; only types
-        // whose actual IfTable contains this candidate identity implement it.
-        if (!found) {
-          auto* old = class_layout::Element<Class>(old_classes, i);
-          auto* old_table = static_cast<abi::ObjectArray*>(interface_redefinition::ReadReference(old->iftable));
-          if (!old_table || interface_redefinition::ReadReference(old_table->object.klass) != object_array_type ||
-              old_table->length < 0 || old_table->length % 2)
-            return unavailable("old IfTable array declaration differs");
-          for (int32_t entry = 0; entry < old_table->length; entry += 2)
-            if (interface_redefinition::ReadReference(old_table->elements[entry]) == original)
-              return unavailable("candidate IfTable is missing an implemented interface");
-          continue;
-        }
-        ReportDispatch("verified: Class.ifTable, interface indices and arm64 PointerArray");
-        evolution::Member identity;
-        std::string why;
-        const uint32_t flags = implementation ? implementation->access_flags.load(std::memory_order_relaxed) : 0;
-        if (!implementation || !(flags & evolution::kAccPublic) ||
-            (flags & (evolution::kAccAbstract | evolution::kAccStatic | evolution::kAccPrivate)) ||
-            IsDefaultConflicting(*implementation) ||
-            !DexMethodIdentity(implementation, &identity, &why) ||
-            identity.name != obligation.name || identity.descriptor != obligation.descriptor) {
-          *rejection = Descriptor(*interface) + ": " + obligation.name + obligation.descriptor +
-              " has no concrete public implementation in loaded class " + Descriptor(*klass);
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-
   static constexpr PlanOps Make(int) {
-    return {Plan, DispatchProbe, CheckInterfaces, Planner::FieldSlot, Planner::Superclass};
+    return {Plan, Planner::FieldSlot, Planner::Superclass};
   }
 };
 
@@ -481,7 +323,9 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   transaction::Context* context = transaction::Current();
   if (context && context->subclass_loaded && context->subclass_loaded->load()) {
     self->driver->result = JVMTI_ERROR_INTERNAL;
-    context->rejection = "a subclass of a redefined class was loaded during the transaction";
+    const auto* target = context->Find(self);
+    context->rejection = (target ? target->descriptor + ": " : "") +
+        "a subtype of a redefined class was loaded during the transaction";
     return false;
   }
   if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
@@ -523,7 +367,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         }
         plan.superclass_changed = true;
       }
-      if (!layout->check_interfaces(self, *data, &context->rejection)) {
+      if (!interface_dispatch::Check(self, *data, &context->rejection)) {
         self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
         return false;
       }
@@ -537,6 +381,15 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
       class_layout::Select(selected);
       if (!context->mapping) context->mapping = std::make_unique<Plans>();
       static_cast<Plans*>(context->mapping.get())->by_index[data->index] = std::move(plan);
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+      if (interface_redefinition::InjectMappingPlanFailure()) {
+        self->driver->result = JVMTI_ERROR_OUT_OF_MEMORY;
+        const auto* target = context->Find(self);
+        context->rejection = (target ? target->descriptor + ": " : "") +
+            "injected failure after interface mapping plan";
+        return false;
+      }
+#endif
       return true;
     }
     class_layout::Select(-1);
@@ -666,22 +519,18 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env)
     return unavailable("no JNIEnv for the JNI guards");
   jclass class_type = env->FindClass("java/lang/Class");
-  class_type_root = class_type ? static_cast<jclass>(env->NewGlobalRef(class_type)) : nullptr;
+  jclass class_type_root = class_type ? static_cast<jclass>(env->NewGlobalRef(class_type)) : nullptr;
   if (class_type) env->DeleteLocalRef(class_type);
   if (!class_type_root) {
     env->ExceptionClear();
     return unavailable("exception classes unavailable");
   }
-  for (auto [name, root] : {std::pair{"[Ljava/lang/Object;", &object_array_root},
-                            std::pair{"[J", &pointer_array_root}}) {
-    jclass type = env->FindClass(name);
-    *root = type ? static_cast<jclass>(env->NewGlobalRef(type)) : nullptr;
-    if (type) env->DeleteLocalRef(type);
-    if (!*root) {
-      env->ExceptionClear();
-      return unavailable("interface dispatch array classes unavailable");
-    }
-  }
+  interface_dispatch::Services dispatch{find_declared_instance_field, mirror_class,
+      class_type_root, interface_redefinition::AbstractLinkErrorsAvailable};
+#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+  dispatch.inject_probe_failure = interface_redefinition::InjectDispatchProbeFailure;
+#endif
+  interface_dispatch::Prepare(env, dispatch);
   // The guards come last: their JNI table override cannot be undone.
   if (!member_retirement::Prepare(vm, jvmti, &resolved, &failure)) return unavailable(failure);
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
@@ -689,20 +538,8 @@ void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   class_layout::Enable({find_static_field, find_declared_instance_field, mirror_class,
                         class_type_root, interface_redefinition::ReadReference});
   Report("unverified");
-  ReportDispatch("unverified: IfTable declarations");
 }
 bool Available() { return available; }
-bool InterfaceDispatchAvailable(ClassRedefinitionPrefix* self) {
-  const int selected = class_layout::Selected();
-  if (!available || !object_array_root || !pointer_array_root || selected < 0) return false;
-  if (kPlanners[selected].dispatch_probe(self)) return true;
-  ReportDispatch("rejected: Class.ifTable field declaration differs");
-  return false;
-}
-std::string InterfaceDispatchState() {
-  std::lock_guard<std::mutex> lock(dispatch_mutex);
-  return dispatch_state;
-}
 bool SuperclassChangeAvailable() { return available && verification_redirect::ResolvesClasses(); }
 
 }  // namespace artdcevm::member_mapping

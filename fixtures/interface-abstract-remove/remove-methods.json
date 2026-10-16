@@ -1,0 +1,8 @@
+{
+  "com/github/ytlog/artdcevm/fixture/abstractaddition/Removable.class": [
+    [
+      "required",
+      "()Ljava/lang/String;"
+    ]
+  ]
+}

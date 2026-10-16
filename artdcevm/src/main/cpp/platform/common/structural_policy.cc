@@ -153,7 +153,7 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
 // subtype. Abstract additions require checking the actual linked dispatch
 // of every concrete implementation. `modifiers` is the JVMTI view.
 Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
-                                const LoadedHierarchy& hierarchy, bool supported, bool abstract_dispatch) {
+                                const LoadedHierarchy& hierarchy, bool supported, const Abilities& abilities) {
   const std::string method = key.first + key.second;
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -176,9 +176,11 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "added interface instance method is neither public nor private: " + method);
   if (modifiers & acc::kAccAbstract) {
-    if (!abstract_dispatch)
+    if (!abilities.interface_abstract_methods)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                    "added abstract interface method requires a verified IfTable accessor: " + method);
+                    "added abstract interface method requires a verified IfTable accessor: " + method +
+                        (abilities.interface_abstract_unavailable_reason.empty() ? ""
+                         : "; " + abilities.interface_abstract_unavailable_reason));
     Decision pending;
     pending.interface_obligations.push_back(key);
     return pending;
@@ -324,7 +326,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   if (interface_target) {
     for (const auto& [key, now] : new_methods) {
       Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members,
-                                              abilities.interface_abstract_methods);
+                                              abilities);
       if (added.error != JVMTI_ERROR_NONE) return added;
       decision.interface_obligations.insert(decision.interface_obligations.end(),
           added.interface_obligations.begin(), added.interface_obligations.end());

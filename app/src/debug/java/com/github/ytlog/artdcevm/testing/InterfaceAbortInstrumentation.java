@@ -26,6 +26,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     static native int allocatedTypes();
     private static native int primePointerId(Class<?> klass, int kind);
     private static native int configureCheckJni(boolean enabled);
+    static native int validatedInterfaceGroups();
+    static int armMappingPlanFailure() { return armFailure(22); }
     static int armDispatchFailure() { return armFailure(21); }
     static int armPointerFailure(int stage) { return armFailure(stage); }
     private void checkDefaultConflictRollback() throws Exception {
