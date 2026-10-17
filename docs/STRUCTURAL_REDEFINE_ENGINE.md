@@ -232,7 +232,9 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的本地
 
 线程探测或必需符号失败时，在任何布局引用读取前令本事务的布局／成员映射探测失败，已准备的映射通过 `class_layout::VerifyTarget` 报告 `rejected: runtime Thread...`；映射本身不可用时保留原始安装原因，线程探测不改写它。策略与引擎最后可失败点继续决定错误码。没有未验证线程的原始引用回退；内部越过该前置条件属于致命不变量错误。JSON 键与接口准入范围不变。
 
-`InterfaceAbortInstrumentation` 在首次接口事务之前注入普通类线程探测失败，验证错误码 67、`memberMapping` 原因、零共享引用读取与旧定义保留；随后在其他线程保留约 19.7 万个存活对象、持续分配并请求 GC 时交替进行至少 32 次普通类结构重定义；未观测到标记期间读取时有界重试至最多 512 次或 120 秒，覆盖字段和方法增删、旧实例的基本值／引用身份、新字段零值和后续 GC。报告记录实际 GC 次数、分配次数、共享引用读取及 CC 标记期间的读取次数；CMC 的最后一项允许为零，GC 压力本身不等同于每次事务都与 CC 标记重叠。
+`InterfaceAbortInstrumentation` 在首次接口事务之前注入普通类线程探测失败，验证错误码 67、`memberMapping` 原因、零共享引用读取与旧定义保留；随后在其他线程保留约 19.7 万个存活对象、持续分配并请求 GC 时交替进行至少 32 次普通类结构重定义；未观测到标记期间读取时有界重试至最多 512 次或 120 秒，覆盖字段和方法增删、旧实例的基本值／引用身份、新字段零值和后续 GC。报告记录 GC 总次数、分配次数、共享引用读取及 CC 标记期间的读取次数；CMC 的最后一项允许为零，GC 压力本身不等同于每次事务都与 CC 标记重叠。`ordinaryGcCycles` 包含 ART 结构事务自身的 GC，不能单独证明后台压力生效。后台通过公开 `Runtime.getRuntime().gc()` 请求 GC；先等待一次调用返回并确认尚未开始事务的区间内 GC 计数增长，再进入重定义循环。`ordinaryPressureGcRequests`／`ordinaryPressureGcReturns` 记录后台请求／返回次数，`ordinaryPressureReadyGcCycles` 记录该准备区间的 GC 增量；请求返回不是独立收集次数，也不是标记重叠证明。
+
+固定 Android 17 的 [System.gc](https://android.googlesource.com/platform/libcore/+/refs/tags/android-17.0.0_r1/ojluni/src/main/java/java/lang/System.java) 对 targetSdk ≤ 34 合并请求，单独调用可能只设置等待 finalization 的标志；[Runtime.gc](https://android.googlesource.com/platform/libcore/+/refs/tags/android-17.0.0_r1/ojluni/src/main/java/java/lang/Runtime.java) 直接进入公开的 native 请求。[Redefiner::Run](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/openjdkjvmti/ti_redefine.cc) 在实例收集与主要映射准备前，通过 `ScopedSuspendAllocations` 主动 GC，并在最终更新前等待、禁止并发移动 GC。因此旧夹具的总 GC 数与零次标记读取不足以认定 Thread 偏移错误。`python3 tools/analyze-runtime-gc-log.py --logcat <raw-log> --device-id <anonymous-id>` 可离线核对已有 CC/CMC 完成日志的进程／线程归属与快照顺序，报告不输出原始进程／线程编号；完成日志仍不能证明标记区间或对象转发。修正后的压力夹具尚待 API 37 真机执行，旧的零重叠结论保留。
 
 `python3 tools/test-runtime-thread-host.py` 编译生产线程服务与事务上下文，以命名服务替身覆盖七版 Thread、JNI/tid/标记位拒绝、缺失 Mark、Native 探测后标记位变化、嵌套上下文恢复及 CC/CMC 调用边界；另覆盖 `VerifiedThread` 的编译期约束、`LayoutFor`、相同 JNI 前缀的正反断言，以及映射不可用原因不被线程探测覆盖；该主机测试不模拟收集器算法。
 
@@ -272,7 +274,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 | Android 12、12L / API 31–32 | 两 API 的普通类及 Thread 已真机验证；接口未启用 | Pixel 6/API 31、Pixel 6a/API 32 的两模式第一阶段均通过；Native JNI 预分配消除私有数组分配符号的依赖。仍需旧 Thread 排列所关联的 scope/holder、完整接口事务和失败清理的真机验证 |
 | Android 14 / API 34 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、声明探测与 abort 恢复；Pixel 8 的 Compose `interface abstract batch` 通过。保持已验证的保守配置 `linked_iftable_acceptance=false` 及可用命名错误服务，非 public 实现场景返回 63 |
 | Android 15 / API 35 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、16 字节 scope、holder 与三标志探测及 abort 恢复；Pixel 8 Pro 的 Compose `interface abstract batch` 通过。`linked_iftable_acceptance=true` 验收 ART 已链接的分派数组 |
-| Android 17 / API 37 | 普通类 CC／分代 CMC 已运行；接口未启用 | Pixel 11 的两收集器、普通／CheckJNI 第一阶段通过，Galaxy Z Fold8 补充分代 CMC 证据；Pixel 11 CC 压力未观测到标记重叠。接口候选在缓存 JNI 调用处失败，API 33 已复现 pointer 模式问题并验证拒绝保护，离线测试工具已修正 JNI ID 与早期 GC 启动参数；仍需在正确 JNI ID 模式下完成 API 37 全量接口、abort 恢复和 Compose 验证 |
+| Android 17 / API 37 | 普通类 CC／分代 CMC 已运行；接口未启用 | Pixel 11 的两收集器、普通／CheckJNI 第一阶段通过，Galaxy Z Fold8 补充分代 CMC 证据；Pixel 11 CC 压力未观测到标记重叠；旧夹具的 GC 请求合并问题已按固定源码修正，新夹具尚待真机执行。接口候选在缓存 JNI 调用处失败，API 33 已复现 pointer 模式问题并验证拒绝保护，离线测试工具已修正 JNI ID 与早期 GC 启动参数；仍需在正确 JNI ID 模式下完成 API 37 全量接口、abort 恢复和 Compose 验证 |
 
 上述设备验证均须覆盖普通与 CheckJNI 模式及全部探测、同批更新和失败恢复。平台 API 不能证明 ART 模块源码版本；Mainline 更新后的声明与服务仍须核对。逐套运行库的符号表、覆盖统计和采集细节仅保存在本地被忽略的 `assets/runtime_lib/README.md`；原始报告保存在 `build/evidence/`。
 

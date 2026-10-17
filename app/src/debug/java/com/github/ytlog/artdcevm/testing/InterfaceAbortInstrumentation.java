@@ -140,6 +140,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         ++checks;
         AtomicBoolean stop = new AtomicBoolean();
         AtomicLong allocations = new AtomicLong();
+        AtomicLong gcRequests = new AtomicLong();
+        AtomicLong gcReturns = new AtomicLong();
         AtomicReference<Throwable> workerError = new AtomicReference<>();
         CountDownLatch started = new CountDownLatch(1);
         Thread allocator = new Thread(() -> {
@@ -150,7 +152,6 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 for (int i = 0; i < graph.length; ++i)
                     graph[i] = new Object[] {new Object(), new Object(), reference};
                 Object[] retained = new Object[2048];
-                started.countDown();
                 while (!stop.get()) {
                     for (int i = 0; i < retained.length; ++i) {
                         byte[] bytes = new byte[4096];
@@ -160,20 +161,32 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                     }
                     if (graph[(int) (allocations.get() % graph.length)][2] != reference)
                         throw new AssertionError("GC pressure graph lost its root");
-                    System.gc();
+                    // System.gc() coalesces requests for targetSdk <= 34.
+                    // Runtime.gc() reaches the public native request directly.
+                    gcRequests.incrementAndGet();
+                    Runtime.getRuntime().gc();
+                    gcReturns.incrementAndGet();
+                    started.countDown();
                 }
-            } catch (Throwable error) { workerError.set(error); }
+            } catch (Throwable error) {
+                workerError.set(error);
+            } finally {
+                started.countDown();
+            }
         }, "runtime-thread-gc");
         long gcBefore = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count"));
         long markingBefore = runtimeMarkingReads();
         int transactions = 0;
+        long pressureReadyGcCycles;
         allocator.start();
         try {
-            if (!started.await(10, TimeUnit.SECONDS)) throw new AssertionError("GC worker did not start");
-            long deadline = SystemClock.uptimeMillis() + 10000;
-            while (allocations.get() < 256 && workerError.get() == null
-                    && SystemClock.uptimeMillis() < deadline) Thread.yield();
-            if (allocations.get() < 256) throw new AssertionError("GC worker did not allocate");
+            if (!started.await(30, TimeUnit.SECONDS)) throw new AssertionError("GC worker did not finish a request");
+            if (workerError.get() != null) throw new AssertionError("GC worker failed", workerError.get());
+            pressureReadyGcCycles = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count")) - gcBefore;
+            // No transaction has started in this interval: ART's structural
+            // transaction GC cannot satisfy worker readiness.
+            if (gcReturns.get() == 0 || allocations.get() <= 256 || pressureReadyGcCycles <= 0)
+                throw new AssertionError("Missing independent GC pressure before transactions");
             // Retry for at most 512 transactions / 120 seconds. CMC may never
             // report CC marking; a zero result is recorded, never called overlap.
             long overlapDeadline = SystemClock.uptimeMillis() + 120000;
@@ -204,10 +217,10 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         if (allocator.isAlive()) throw new AssertionError("GC worker did not stop");
         if (workerError.get() != null) throw new AssertionError("GC worker failed", workerError.get());
         long gcCycles = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count")) - gcBefore;
-        if (gcCycles <= 0 || allocations.get() <= 256 || runtimeReferenceReads() <= beforeRejectedRead)
-            throw new AssertionError("Missing GC/allocation/shared-reader observations");
+        if (runtimeReferenceReads() <= beforeRejectedRead)
+            throw new AssertionError("Missing shared-reader observations");
         ++checks;
-        System.gc();
+        Runtime.getRuntime().gc();
         expect("ordinary body after GC", 13, instance.value());
         expect("ordinary primitive after GC", 137, instance.kept);
         if (instance.reference != reference) throw new AssertionError("Reference lost after GC");
@@ -215,6 +228,11 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         result.putInt("ordinaryTransactions", transactions);
         result.putBoolean("ordinaryMarkingOverlap", runtimeMarkingReads() > markingBefore);
         result.putLong("ordinaryGcCycles", gcCycles);
+        // Requests/returns are not counts of distinct collections or overlap.
+        // ordinaryGcCycles also includes ART's own structural-transaction GC.
+        result.putLong("ordinaryPressureGcRequests", gcRequests.get());
+        result.putLong("ordinaryPressureGcReturns", gcReturns.get());
+        result.putLong("ordinaryPressureReadyGcCycles", pressureReadyGcCycles);
         result.putLong("ordinaryAllocations", allocations.get());
         result.putLong("ordinaryReferenceReads", runtimeReferenceReads() - beforeRejectedRead);
         // CC can report marking reads; userfaultfd CMC intentionally reports zero.
