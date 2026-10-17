@@ -44,6 +44,8 @@ struct Backend {
   virtual const std::vector<jclass>* GroupTypes(jclass klass) = 0;
   virtual bool IsTarget(abi::arm64::ClassRedefinitionPrefix* self) = 0;
   virtual bool IsAffected(abi::arm64::ClassRedefinitionPrefix* self) = 0;
+  // A batch class outside every interface target's type relation that is a
+  // superclass of a group member. A structural one joins that group's rebuild.
   virtual bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self) = 0;
   // Current-thread verification only: lookup by loader without cache writes.
   virtual void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept = 0;

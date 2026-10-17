@@ -35,12 +35,13 @@ std::string RuntimeBackend::TakeRejection() {
   return target ? target->live.descriptor + ": " + reason : std::string(reason);
 }
 bool RuntimeBackend::IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(process->mirror_class(self)); }
-bool RuntimeBackend::IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(process->mirror_class(self)); }
+bool RuntimeBackend::IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedGroup(process->mirror_class(self)); }
 bool RuntimeBackend::SharesImplementationGroup(ClassRedefinitionPrefix* self) {
   const State* state = CurrentState();
   if (!state) return false;
-  for (jclass ancestor : state->shared_ancestors)
-    if (Decode(ancestor) == process->mirror_class(self)) return true;
+  for (const auto& group : state->groups)
+    for (jclass ancestor : group.ancestors)
+      if (Decode(ancestor) == process->mirror_class(self)) return true;
   return false;
 }
 void* RuntimeBackend::VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
@@ -58,9 +59,11 @@ ARTDCEVM_TEST(
     const std::string name(descriptor);
     old = process->lookup_chars(linker, runtime_thread::Current(Thread()), name.c_str(), loader.Get<void>());
   }
-  for (const auto& target : state->targets) {
-    auto* replacements = ReplacementRoot(target).Get<ObjectArray>();
-    const auto& types = target.snapshot.types;
+  for (const auto& group : state->groups) {
+    auto* replacements = ReplacementRoot(group).Get<ObjectArray>();
+    const TypeSnapshot* allocated = group.Allocated();
+    if (!allocated) continue;
+    const auto& types = allocated->types;
     for (size_t i = 0; replacements && i < types.size(); ++i)
       if (Decode(types[i]) == old) return runtime_thread::Read(Thread(), replacements->elements[i]);
   }

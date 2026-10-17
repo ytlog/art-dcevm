@@ -18,4 +18,13 @@ public final class MultiInterfaceFixture {
     public static class FamilyImpl implements Child { public int marker = 23; }
     public static class FamilyChild extends FamilyImpl { public int childMarker = 29; }
     public static class SharedImpl implements Left, Right { public int marker = 31; }
+    // Every CoveredRight implementation also implements CoveredLeft.
+    public interface CoveredLeft {
+        default int coveredLeft() { return 51; }
+    }
+    public interface CoveredRight {
+        default int coveredRight() { return 61; }
+    }
+    public static class CoveredLeftOnly implements CoveredLeft { public int marker = 41; }
+    public static class CoveredBoth implements CoveredLeft, CoveredRight { public int marker = 43; }
 }

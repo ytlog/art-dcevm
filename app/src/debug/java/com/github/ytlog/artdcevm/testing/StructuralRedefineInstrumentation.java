@@ -609,9 +609,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         MultiInterfaceFixture.Left sharedLeft = (MultiInterfaceFixture.Left) shared;
         MultiInterfaceFixture.Right sharedRight = (MultiInterfaceFixture.Right) shared;
         runScenario("multi-interface-shared-reject", 66, scenario -> {
-            scenario.expectRejectionBy(MultiInterfaceFixture.Right.class);
+            scenario.expectRejectionBy(MultiInterfaceFixture.Left.class);
             scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
                     "multi-interface-body", "multi-interface-body");
+            // ART collects only the owner's instances; RightImpl is not a Left.
             scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("share a subtype"));
             scenario.check("leftUnchanged", 13, left.leftValue());
             scenario.check("rightUnchanged", 23, right.rightValue());
@@ -626,6 +627,25 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("rightUnchanged", 23, right.rightValue());
             scenario.check("sharedLeft", 12, sharedLeft.leftValue());
             scenario.check("sharedRight", 23, sharedRight.rightValue());
+        });
+        MultiInterfaceFixture.CoveredLeftOnly coveredOnly = new MultiInterfaceFixture.CoveredLeftOnly();
+        MultiInterfaceFixture.CoveredBoth coveredBoth = new MultiInterfaceFixture.CoveredBoth();
+        MultiInterfaceFixture.CoveredRight coveredRight = coveredBoth;
+        coveredOnly.marker = 47; coveredBoth.marker = 53;
+        runScenario("multi-interface-covered", 0, scenario -> {
+            // CoveredRight leads the batch, but only CoveredLeft covers both instances.
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.CoveredRight.class, MultiInterfaceFixture.CoveredLeft.class},
+                    "multi-interface-covered", "multi-interface-covered");
+            scenario.check("leftOnly", 52, coveredOnly.coveredLeft());
+            scenario.check("bothLeft", 52, coveredBoth.coveredLeft());
+            scenario.check("bothRight", 62, coveredRight.coveredRight());
+            scenario.check("newBothRight", 62, new MultiInterfaceFixture.CoveredBoth().coveredRight());
+            scenario.check("leftOnlyMarker", 47, coveredOnly.marker);
+            scenario.check("bothMarker", 53, coveredBoth.marker);
+            scenario.check("allocatedOnce", 4, InterfaceAbortInstrumentation.allocatedTypes());
+            scenario.check("snapshotOnce", 4L, DcevmRuntime.capabilities().getLong("interfaceSnapshotTypes"));
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("bothRightAfterGc", 62, coveredRight.coveredRight());
         });
     }
 
@@ -643,23 +663,57 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("marker", 73, instance.marker);
         });
         String schema = memberSchema(InterfaceOverlapFixture.Parent.class);
-        runScenario("interface-overlap-structural", 66, scenario -> {
-            scenario.expectRejectionBy(InterfaceOverlapFixture.Parent.class);
+        runScenario("interface-overlap-structural", 0, scenario -> {
+            // Parent is outside Contract's type relation but rebuilds Implementation too.
             scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
                     "interface-overlap-structural", "interface-overlap-structural");
-            scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("overlaps"));
-            scenario.check("unchangedParent", schema, memberSchema(InterfaceOverlapFixture.Parent.class));
-            scenario.check("interfaceUnchanged", 32, contract.value());
-            scenario.check("parentUnchanged", 22, instance.parentValue());
-            scenario.check("newInterfaceUnchanged", 32, new InterfaceOverlapFixture.Implementation().value());
-            scenario.check("newParentUnchanged", 22, new InterfaceOverlapFixture.Implementation().parentValue());
+            scenario.check("parentChanged", true, !schema.equals(memberSchema(InterfaceOverlapFixture.Parent.class)));
+            scenario.check("interfaceAfter", 33, contract.value());
+            scenario.check("parentAfter", 23, instance.parentValue());
+            scenario.check("existingAdded", 0, InterfaceOverlapFixture.Parent.class.getField("added").getInt(instance));
+            InterfaceOverlapFixture.Implementation created = new InterfaceOverlapFixture.Implementation();
+            scenario.check("newAdded", 19, InterfaceOverlapFixture.Parent.class.getField("added").getInt(created));
+            scenario.check("newInterface", 33, created.value());
+            scenario.check("newParent", 23, created.parentValue());
             scenario.check("marker", 73, instance.marker);
+            scenario.check("allocatedOnce", 3, InterfaceAbortInstrumentation.allocatedTypes());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("interfaceAfterGc", 33, contract.value());
         });
         runScenario("interface-overlap-recovery", 0, scenario -> {
             scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class}, "interface-overlap-next");
             scenario.check("interfaceAfter", 34, contract.value());
-            scenario.check("parentUnchanged", 22, instance.parentValue());
+            scenario.check("parentAfter", 23, instance.parentValue());
+            scenario.check("existingAdded", 0, InterfaceOverlapFixture.Parent.class.getField("added").getInt(instance));
+            scenario.check("marker", 73, instance.marker);
+        });
+        String superclassSchema = memberSchema(InterfaceOverlapFixture.Parent.class);
+        runScenario("interface-overlap-superclass", 66, scenario -> {
+            scenario.expectRejectionBy(InterfaceOverlapFixture.Parent.class);
+            scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
+                    "interface-overlap-superclass", "interface-overlap-superclass");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("superclass change overlaps"));
+            scenario.check("unchangedParent", superclassSchema, memberSchema(InterfaceOverlapFixture.Parent.class));
+            scenario.check("superclassUnchanged", "java.lang.Object",
+                    InterfaceOverlapFixture.Parent.class.getSuperclass().getName());
+            scenario.check("interfaceUnchanged", 34, contract.value());
+            scenario.check("parentUnchanged", 23, instance.parentValue());
+            scenario.check("marker", 73, instance.marker);
+        });
+        Object other = Class.forName("com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture$OtherImplementation")
+                .getConstructor().newInstance();
+        InterfaceOverlapFixture.Contract otherContract = (InterfaceOverlapFixture.Contract) other;
+        runScenario("interface-overlap-uncovered", 66, scenario -> {
+            scenario.expectRejectionBy(InterfaceOverlapFixture.Contract.class);
+            scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
+                    "interface-overlap-uncovered", "interface-overlap-uncovered");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("cover every member"));
+            scenario.check("unchangedParent", superclassSchema, memberSchema(InterfaceOverlapFixture.Parent.class));
+            scenario.check("interfaceUnchanged", 34, contract.value());
+            scenario.check("otherUnchanged", 34, otherContract.value());
+            scenario.check("parentUnchanged", 23, instance.parentValue());
             scenario.check("marker", 73, instance.marker);
         });
     }

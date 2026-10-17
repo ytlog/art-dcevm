@@ -145,16 +145,18 @@ ARTDCEVM_TEST(
   if (ARTDCEVM_FAULT(8)) throw std::bad_alloc{};
 )
   if (structural) {
-    const Target* owner = Find(Decode(target->owner));
-    if (!owner) return Reject(message, JVMTI_ERROR_INTERNAL, "interface pointer-id snapshot owner unavailable");
-    for (size_t i = 0; i < owner->snapshot.types.size(); ++i) {
-      PointerMarker marker = CheckPointerMarker(Decode(owner->snapshot.types[i]));
+    if (target->group >= state->groups.size())
+      return Reject(message, JVMTI_ERROR_INTERNAL, "interface pointer-id snapshot owner unavailable");
+    // ART's own admission of a structural ancestor checks that ancestor's subtypes.
+    const TypeSnapshot& snapshot = state->groups[target->group].core.snapshot;
+    for (size_t i = 0; i < snapshot.types.size(); ++i) {
+      PointerMarker marker = CheckPointerMarker(Decode(snapshot.types[i]));
 ARTDCEVM_TEST(
       // Test the semantic result, never write a marker into a published ClassExt.
       if ((i == 0 && ARTDCEVM_FAULT(19)) || (i > 0 && ARTDCEVM_FAULT(20))) marker = PointerMarker::kMarked;
 )
       if (marker == PointerMarker::kClear) continue;
-      state->rejection_class = &owner->snapshot.descriptors[i];
+      state->rejection_class = &snapshot.descriptors[i];
       return Reject(message, marker == PointerMarker::kMarked ? JVMTI_ERROR_UNMODIFIABLE_CLASS
                                                              : JVMTI_ERROR_NOT_AVAILABLE,
                     marker == PointerMarker::kMarked ? "active pointer JNI IDs prevent structural redefinition"

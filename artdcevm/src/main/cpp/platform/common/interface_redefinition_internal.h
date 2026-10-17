@@ -9,6 +9,7 @@
 #include <chrono>
 #include <memory>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <unordered_map>
 #include <string_view>
@@ -95,7 +96,36 @@ namespace detail {
 // Created by the first Prepare and kept for the process lifetime: installed
 // hooks may still be on an ART stack after Install rolls back or degrades.
 extern Process* process;
-struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; std::unique_ptr<ClassArrayRoots> arrays; };
+struct Target { jclass klass; bool boot; jint status; evolution::ClassSchema live; size_t group = 0; };
+// One rebuild's types (leader first) and their Native-created private arrays.
+// ART's CollectAndCreateNewInstances collects only instances of the owner
+// entry's class, so each owner covers every concrete member; owners holds the
+// order that puts each such candidate first, as ART's holder slots require.
+struct Members {
+  TypeSnapshot snapshot;
+  std::vector<std::pair<jclass, TypeSnapshot>> owners;
+  std::unique_ptr<ClassArrayRoots> arrays;
+};
+// One interface rebuild: every interface target whose loaded subtypes overlap
+// another's. Batch classes outside those type relations that are superclasses
+// of a member are ancestors. ART would rebuild a structural ancestor's subtree
+// itself, so the group then absorbs that subtree and rebuilds everything once.
+struct Group {
+  size_t leader;                 // The first interface root in batch order.
+  std::vector<jclass> ancestors;
+  Members core;                  // The interface roots' subtypes.
+  Members extended;              // With ancestor subtrees; empty without ancestors.
+  std::optional<bool> uses_extended;  // Fixed by the group's allocation.
+  int32_t owner = -1;                 // Index into the chosen members' owners.
+  // Before allocation chooses, the widest candidate membership.
+  const Members& Current() const {
+    return uses_extended ? (*uses_extended ? extended : core) : ancestors.empty() ? core : extended;
+  }
+  // After allocation: the array order of the chosen owner.
+  const TypeSnapshot* Allocated() const {
+    return owner < 0 ? nullptr : &Current().owners[owner].second;
+  }
+};
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
@@ -113,6 +143,7 @@ struct State final : transaction::Part {
       : jni(jni), env(env), batch_size(count), definitions(definitions) {}
   ~State() override { if (class_class) jni->DeleteLocalRef(class_class); }
   std::vector<Target> targets;
+  std::vector<Group> groups;
   JNIEnv* jni;
   jvmtiEnv* env;
   jint batch_size;
@@ -125,7 +156,6 @@ struct State final : transaction::Part {
   int selected_release = 0;
   JavaVM* vm = nullptr;
   jclass class_class = nullptr;
-  std::vector<jclass> shared_ancestors;
   const Target* rejected_target = nullptr;
   const char* rejection = nullptr;
   const std::string* rejection_class = nullptr;
@@ -175,8 +205,9 @@ inline jvmtiError Reject(std::string* message, jvmtiError error, const char* why
 void Disable(const char*) noexcept;
 // Named services are prepared and no runtime probe disabled the backend.
 bool RuntimeAvailable();
-Handle ReplacementRoot(const Target&);
-const Target* AffectedTarget(void*);
+Handle ReplacementRoot(const Group&);
+// The group whose current membership contains `klass`.
+const Group* AffectedGroup(void*);
 jvmtiError NormalCan(Handle, std::string*) noexcept;
 jvmtiError NormalGet(Handle, std::string*) noexcept;
 jvmtiError StructuralCan(Handle, std::string*) noexcept;

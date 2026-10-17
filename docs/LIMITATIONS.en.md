@@ -34,8 +34,8 @@ This capability is available only on Android 13 (API 33), Android 14 (API 34), A
 | Changing method modifiers | `METHOD_MODIFIERS_CHANGED` (71) |
 | Changing parent interfaces | `HIERARCHY_CHANGED` (66) |
 | Changing class modifiers | `CLASS_MODIFIERS_CHANGED` (70) |
-| Unrelated interfaces share an implementation or another subtype, without a common interface ancestor in the batch | `HIERARCHY_CHANGED` (66) |
-| An implementation's superclass outside the interface rebuild group changes structurally in the batch | `HIERARCHY_CHANGED` (66); body-only edits are accepted |
+| Interface groups with intersecting subtypes (including unrelated interfaces sharing an implementation), or a structurally edited superclass outside the group, merge into one rebuild in which no structural target's instances cover every concrete member | `HIERARCHY_CHANGED` (66) |
+| An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, a Proxy implementation, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
 
@@ -48,6 +48,8 @@ A new public abstract method requires **every loaded concrete implementation** i
 Abstract additions require actual dispatch validation on every transaction. An unavailable dispatch accessor or required link-error service rejects abstract additions with 63; other interface edits retain their own rules. ART 13 rejects non-public implementations before producing a usable IfTable; the library observes ART’s selected pair and converts only errors matching pending obligations to 63 through the original transaction. ART 14 also requires that named link-error service; ART 15 and 16 validate linked dispatch arrays.
 
 A distant default cannot satisfy a more specific abstract redeclaration. Removing the last valid implementation in the same batch also rejects. Multiple interface groups commit only after all pass validation. Relevant types loaded after the snapshot trigger the existing bounded retries; exhaustion rejects the whole batch with 113, permitting a later corrected or withdrawn retry. Failure preserves old definitions, cached reflection/MethodHandle/JNI method IDs and warmed call sites.
+
+Interface groups whose subtypes intersect, and a structurally edited class outside them that is a superclass of a member, merge into one rebuild that replaces and migrates each type once, independently of submission order. ART collects only instances of the owner entry's class, so one structural target (an interface or that superclass) must have instances covering every concrete member: for example every implementation of the interface extends that superclass, or every implementation of another interface also implements this one. Otherwise the whole batch is rejected with 66. A body-only edit of such a superclass does not join the rebuild and is still updated in place.
 
 Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
 

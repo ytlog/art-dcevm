@@ -30,7 +30,7 @@ API 34 的既有完整回归覆盖每次 146 个场景及旧式 HandleScope/hold
 ## 已覆盖的场景
 
 - 普通类：字段与方法增删/恢复、类型与签名、native/Java 和 abstract/具体实现、修饰符、父类放宽、旧实例值与引用身份、新字段零值、缓存引用和后续 GC；Thread 拒绝后旧定义仍可用并可执行后续事务。
-- 接口：顶层与嵌套接口的方法体与受支持成员变化；父子接口、多个组、同批实现类/子类/无关类；copied default、miranda、子接口优先、真实 bridge、lambda 与大实现组。`InterfaceEvolutionFixture`、`interfacelambda`、`interface-stress` 和 `interface-stress-add` 提供相应覆盖；压力样例含 200 个实现类。
+- 接口：顶层与嵌套接口的方法体与受支持成员变化；父子接口、多个组、同批实现类/子类/无关类；copied default、miranda、子接口优先、真实 bridge、lambda 与大实现组。`InterfaceEvolutionFixture`、`interfacelambda`、`interface-stress` 和 `interface-stress-add` 提供相应覆盖；压力样例含 200 个实现类。合并重建组覆盖由一个接口覆盖全部实例的相交接口组（拥有者不是批次首个接口）、并入同批结构修改的组外父类，以及无覆盖拥有者与父类变化的 66 拒绝。
 - 抽象方法：更具体的 abstract 遮住远处 default、移除最后实现、缺 bridge、多加载器身份、后一组拒绝及原子回滚；失败前后检查缓存反射、MethodHandle、JNI ID 和已预热字节码，修正或撤回后可重试。
 - 失败恢复：真实 DEX 校验错误（62）、链接后/分配后/实例分配/映射检查失败、Native 作用域构造失败、Thread/HandleScope/holder 拒绝，以及晚加载实现类/子类的重试与耗尽。失败后继续检查父类和接口事务、旧实例与 GC；API 33 关闭清理的对照 APK 在失败测试中崩溃，支持私有替换类必须清理的设计要求。
 - JNI ID：API 33 已复现 pointer 模式的缓存调用风险，并验证方法接口与仅字段接口在 pointer 模式下拒绝 79、在 index 模式下成功的对照；拒绝后旧 JNI 调用、GC 和普通类事务仍可用。这个保护不构成 API 37 接口验收。
@@ -42,6 +42,7 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的已有
 ## 尚未证明的范围
 
 - Android 11、12/12L 的完整接口事务、实际根遍历、scope/holder 与失败清理仍待设备验证；Native JNI 数组预分配和准确签名适配只移除了相应准备障碍。
+- 合并重建组（相交接口组与并入的结构父类）只在 API 33/36 设备验证；API 34/35 使用同一公共实现，尚未在这两个版本复测。
 - Android 17 在正确 JNI ID 模式下的完整接口套件、abort 恢复和 Compose 尚未完成，继续保持接口未启用。
 - API 37 旧压力夹具的 `System.gc()` 请求可能合并，总 GC 数还包含 ART 事务自身的 GC，不能证明独立后台压力或 CC 标记重叠。改用直接 GC 请求并核对事务前增量的夹具尚待该版本真机执行；已有零重叠结果不能据此归因为 Thread 偏移错误。
 - GC 完成日志不证明标记区间或对象转发；CMC 的 CC 标记读取计数为零也不构成失败或 CMC 覆盖证据。不能由压力运行推断每次事务都与标记重叠。

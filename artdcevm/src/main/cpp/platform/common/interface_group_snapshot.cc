@@ -1,5 +1,9 @@
 #include "platform/common/interface_redefinition_internal.h"
 
+#include <algorithm>
+#include <iterator>
+#include <optional>
+
 namespace artdcevm::interface_redefinition {
 using namespace detail;
 void RuntimeBackend::Begin(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
@@ -21,7 +25,7 @@ ARTDCEVM_TEST(
     const bool boot = !loader;
     if (loader) jni->DeleteLocalRef(loader);
     if (status_result != JVMTI_ERROR_NONE) continue;
-    next->targets.push_back({klass, boot, status, {}, {}, nullptr, nullptr});
+    next->targets.push_back({klass, boot, status, {}, 0});
   }
   if (!next->targets.empty() && jni->EnsureLocalCapacity(8) == JNI_OK) {
     if (jni->GetJavaVM(&next->vm) == JNI_OK)
@@ -35,11 +39,9 @@ ARTDCEVM_TEST(
 const std::vector<jclass>* RuntimeBackend::GroupTypes(jclass klass) {
   const State* current = CurrentState();
   if (!current) return nullptr;
-  for (const auto& target : current->targets) {
-    if (!target.owner || !current->jni->IsSameObject(target.klass, klass)) continue;
-    for (const auto& owner : current->targets)
-      if (current->jni->IsSameObject(owner.klass, target.owner)) return &owner.snapshot.types;
-  }
+  for (const auto& target : current->targets)
+    if (current->jni->IsSameObject(target.klass, klass) && target.group < current->groups.size())
+      return &current->groups[target.group].Current().snapshot.types;
   return nullptr;
 }
 void RuntimeBackend::Describe(jclass klass, const evolution::ClassSchema& live) {
@@ -81,6 +83,58 @@ jvmtiError VerifyJniIdMode(jvmtiEnv* env, const TypeSnapshot& snapshot,
   return JVMTI_ERROR_NONE;
 }
 
+namespace {
+// Union-find over rebuild candidates: interface roots, then batch ancestors.
+struct Sets {
+  std::vector<size_t> parent;
+  size_t Find(size_t item) {
+    while (parent[item] != item) item = parent[item] = parent[parent[item]];
+    return item;
+  }
+  void Join(size_t left, size_t right) {
+    left = Find(left), right = Find(right);
+    if (left != right) parent[std::max(left, right)] = std::min(left, right);
+  }
+};
+// ART collects only instances of the owner entry's class: an owner must be a
+// supertype of every concrete member, or a member's instances keep the old class.
+// members->snapshot already leads with candidates[0], the group leader.
+jvmtiError FindOwners(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, const std::vector<jint>& positions,
+                      const std::vector<jclass>& candidates, Members* members, std::string* error) {
+  std::vector<jclass> concrete;
+  for (jclass type : members->snapshot.types) {
+    jint access = 0;
+    const jvmtiError result = env->GetClassModifiers(type, &access);
+    if (result != JVMTI_ERROR_NONE) { *error = "interface snapshot member modifiers unavailable"; return result; }
+    if (!(access & (evolution::kAccInterface | evolution::kAccAbstract))) concrete.push_back(type);
+  }
+  for (jclass candidate : candidates) {
+    bool covers = true;
+    for (size_t i = 0; covers && i < concrete.size(); ++i) covers = jni->IsAssignableFrom(concrete[i], candidate);
+    if (jni->ExceptionCheck()) {
+      jni->ExceptionClear();
+      *error = "interface rebuild owner check failed";
+      return JVMTI_ERROR_INTERNAL;
+    }
+    if (!covers) continue;
+    if (candidate == candidates.front()) {
+      members->owners.emplace_back(candidate, members->snapshot);
+      continue;
+    }
+    members->owners.emplace_back(candidate, TypeSnapshot{});
+    const jvmtiError result = OrderTypes(jni, env, candidate, loaded, positions, &members->owners.back().second, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+  }
+  return JVMTI_ERROR_NONE;
+}
+std::vector<jint> Union(std::vector<jint> left, const std::vector<jint>& right) {
+  std::vector<jint> merged;
+  merged.reserve(left.size() + right.size());
+  std::set_union(left.begin(), left.end(), right.begin(), right.end(), std::back_inserter(merged));
+  return merged;
+}
+}  // namespace
+
 jvmtiError RuntimeBackend::Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
   const auto start = std::chrono::steady_clock::now();
   timing = {};
@@ -91,86 +145,147 @@ ARTDCEVM_TEST(
 )
   State* next = CurrentState();
   if (!next) return JVMTI_ERROR_NONE;
-  // A batch child interface belongs to its highest batch ancestor. Only roots
-  // capture a group, so each child interface/implementation is rebuilt once.
-  for (auto& target : next->targets) {
-    target.owner = target.klass;
-    for (const auto& other : next->targets)
-      if (next->jni->IsAssignableFrom(target.owner, other.klass)) target.owner = other.klass;
-    if (next->jni->ExceptionCheck()) {
-      next->jni->ExceptionClear();
-      *error = target.live.descriptor + ": interface batch ownership check failed";
-      return JVMTI_ERROR_INTERNAL;
-    }
+  JNIEnv* jni = next->jni;
+  const auto failed = [&](std::string reason) {
+    jni->ExceptionClear();
+    *error = std::move(reason);
+    return JVMTI_ERROR_INTERNAL;
+  };
+  // A batch child interface belongs to its highest batch ancestor; only roots
+  // select subtypes, which already contain every child's subtypes.
+  std::vector<size_t> owners(next->targets.size());
+  std::vector<size_t> roots;
+  for (size_t i = 0; i < next->targets.size(); ++i) {
+    owners[i] = i;
+    for (size_t j = 0; j < next->targets.size(); ++j)
+      if (jni->IsAssignableFrom(next->targets[owners[i]].klass, next->targets[j].klass)) owners[i] = j;
+    if (jni->ExceptionCheck())
+      return failed(next->targets[i].live.descriptor + ": interface batch ownership check failed");
+    if (owners[i] == i) roots.push_back(i);
   }
-  bool indexed_jni_ids = false;
-  for (auto& target : next->targets) {
-    if (!next->jni->IsSameObject(target.owner, target.klass)) continue;
-    jvmtiError result = SnapshotTypes(next->jni, next->env, target.klass,
-                                      count, loaded, &target.snapshot, error);
+  // Roots whose subtypes intersect share one rebuild: ART must replace each
+  // type once. SelectTypes positions index the exact GetLoadedClasses
+  // references, so identity needs no pairwise type comparisons.
+  std::vector<std::vector<jint>> selected(roots.size());
+  Sets sets;
+  std::unordered_map<jint, size_t> claimed;
+  for (size_t r = 0; r < roots.size(); ++r) {
+    sets.parent.push_back(r);
+    jvmtiError result = SelectTypes(jni, next->env, next->targets[roots[r]].klass, count, loaded,
+                                    &selected[r], error);
     if (result != JVMTI_ERROR_NONE) return result;
-    if (!target.boot) {
-      result = VerifyJniIdMode(next->env, target.snapshot, &jvmtiEnv::GetClassMethods,
-                              &indexed_jni_ids, error);
-      if (result == JVMTI_ERROR_NONE && !indexed_jni_ids)
-        result = VerifyJniIdMode(next->env, target.snapshot, &jvmtiEnv::GetClassFields,
-                                &indexed_jni_ids, error);
-      if (result != JVMTI_ERROR_NONE) return result;
-    }
-    timing.types += target.snapshot.types.size();
-  }
-  // SnapshotTypes borrows the exact GetLoadedClasses references. Identity
-  // keys here detect overlap in one pass without pairwise type comparisons.
-  std::unordered_map<jclass, const Target*> owners;
-  for (const auto& target : next->targets) {
-    for (jclass type : target.snapshot.types) {
-      if (!owners.emplace(type, &target).second) {
-        *error = target.live.descriptor + ": unrelated interface groups share a subtype";
-        return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-      }
+    for (jint position : selected[r]) {
+      const auto [found, inserted] = claimed.emplace(position, r);
+      if (!inserted) sets.Join(found->second, r);
     }
   }
-  for (const auto& target : next->targets) {
-    for (jint i = 0; i < next->batch_size; ++i) {
-      jclass other = next->definitions[i].klass;
-      if (next->jni->IsAssignableFrom(other, target.klass)) continue;
-      // A class outside the interface's type relation can still share its
-      // implementation subtree. Two structural owners would rebuild it twice.
-      for (jclass type : target.snapshot.types) {
-        if (!next->jni->IsAssignableFrom(type, other)) continue;
-        next->shared_ancestors.push_back(other);
+  // A batch class outside every root's type relation can still be a
+  // superclass of a selected type; ART would rebuild its subtree too.
+  std::vector<jclass> ancestors;
+  for (jint i = 0; i < next->batch_size; ++i) {
+    jclass other = next->definitions[i].klass;
+    bool related = false;
+    for (const auto& target : next->targets) related |= jni->IsSameObject(target.klass, other);
+    for (size_t r = 0; !related && r < roots.size(); ++r)
+      related = jni->IsAssignableFrom(other, next->targets[roots[r]].klass);
+    if (jni->ExceptionCheck()) return failed("interface batch group-overlap check failed");
+    if (related) continue;
+    std::optional<size_t> item;
+    for (size_t r = 0; r < roots.size(); ++r) {
+      for (jint position : selected[r]) {
+        if (!jni->IsAssignableFrom(loaded[position], other)) continue;
+        if (!item) {
+          item = sets.parent.size();
+          sets.parent.push_back(*item);
+          ancestors.push_back(other);
+        }
+        sets.Join(*item, r);
         break;
       }
-      if (next->jni->ExceptionCheck()) {
-        next->jni->ExceptionClear();
-        *error = target.live.descriptor + ": interface batch group-overlap check failed";
-        return JVMTI_ERROR_INTERNAL;
-      }
+      if (jni->ExceptionCheck()) return failed("interface batch group-overlap check failed");
     }
   }
-  if (!next->targets.empty() && next->jni->EnsureLocalCapacity(8) != JNI_OK) {
-    if (next->jni->ExceptionCheck()) next->jni->ExceptionClear();
+  std::unordered_map<size_t, size_t> group_of;
+  for (size_t r = 0; r < roots.size(); ++r) {
+    const size_t set = sets.Find(r);
+    auto [found, inserted] = group_of.emplace(set, next->groups.size());
+    if (inserted) next->groups.push_back(Group{roots[r], {}, {}, {}, std::nullopt, -1});
+    next->targets[roots[r]].group = found->second;
+  }
+  std::vector<std::vector<jint>> core(next->groups.size()), extended(next->groups.size());
+  for (size_t r = 0; r < roots.size(); ++r) {
+    const size_t group = next->targets[roots[r]].group;
+    core[group] = Union(std::move(core[group]), selected[r]);
+  }
+  for (size_t i = 0; i < next->targets.size(); ++i) next->targets[i].group = next->targets[owners[i]].group;
+  for (size_t a = 0; a < ancestors.size(); ++a) {
+    const size_t group = group_of.at(sets.Find(roots.size() + a));
+    std::vector<jint> subtree;
+    jvmtiError result = SelectTypes(jni, next->env, ancestors[a], count, loaded, &subtree, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+    if (next->groups[group].ancestors.empty()) extended[group] = core[group];
+    next->groups[group].ancestors.push_back(ancestors[a]);
+    extended[group] = Union(std::move(extended[group]), subtree);
+  }
+  bool indexed_jni_ids = false;
+  for (size_t g = 0; g < next->groups.size(); ++g) {
+    Group& group = next->groups[g];
+    const Target& leader = next->targets[group.leader];
+    std::vector<jclass> candidates;
+    for (size_t root : roots)
+      if (next->targets[root].group == g) candidates.push_back(next->targets[root].klass);
+    jvmtiError result = OrderTypes(jni, next->env, leader.klass, loaded, core[g], &group.core.snapshot, error);
+    if (result == JVMTI_ERROR_NONE)
+      result = FindOwners(jni, next->env, loaded, core[g], candidates, &group.core, error);
+    if (result == JVMTI_ERROR_NONE && !group.ancestors.empty()) {
+      result = OrderTypes(jni, next->env, leader.klass, loaded, extended[g], &group.extended.snapshot, error);
+      candidates.insert(candidates.end(), group.ancestors.begin(), group.ancestors.end());
+      if (result == JVMTI_ERROR_NONE)
+        result = FindOwners(jni, next->env, loaded, extended[g], candidates, &group.extended, error);
+    }
+    if (result != JVMTI_ERROR_NONE) return result;
+    // Without an ancestor no structural owner can join at allocation.
+    if (group.ancestors.empty() && group.core.owners.empty()) {
+      *error = leader.live.descriptor +
+          ": unrelated interface groups share a subtype, and no target's instances cover every member";
+      return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    }
+    if (!leader.boot) {
+      result = VerifyJniIdMode(next->env, group.core.snapshot, &jvmtiEnv::GetClassMethods,
+                               &indexed_jni_ids, error);
+      if (result == JVMTI_ERROR_NONE && !indexed_jni_ids)
+        result = VerifyJniIdMode(next->env, group.core.snapshot, &jvmtiEnv::GetClassFields,
+                                 &indexed_jni_ids, error);
+      if (result != JVMTI_ERROR_NONE) return result;
+    }
+    timing.types += group.core.snapshot.types.size();
+  }
+  if (!next->groups.empty() && jni->EnsureLocalCapacity(8) != JNI_OK) {
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
     *error = "interface snapshot local reference reservation failed";
     return JVMTI_ERROR_OUT_OF_MEMORY;
   }
-  for (auto& target : next->targets) {
-    if (!next->jni->IsSameObject(target.owner, target.klass)) continue;
-    if (!next->vm || !next->class_class) {
-      *error = target.live.descriptor + ": interface private array JNI services unavailable";
-      return JVMTI_ERROR_NOT_AVAILABLE;
-    }
-    if (target.snapshot.types.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
-      *error = target.live.descriptor + ": interface private arrays are too large";
-      return JVMTI_ERROR_OUT_OF_MEMORY;
-    }
-    target.arrays = ClassArrayRoots::Create(next->jni, next->vm, next->class_class,
-                                           static_cast<jsize>(target.snapshot.types.size()));
-    if (!target.arrays) {
-      *error = target.live.descriptor + ": interface private array allocation failed while Native";
-      return JVMTI_ERROR_OUT_OF_MEMORY;
+  for (auto& group : next->groups) {
+    const std::string& descriptor = next->targets[group.leader].live.descriptor;
+    for (Members* members : {&group.core, &group.extended}) {
+      if (members->snapshot.types.empty()) continue;
+      if (!next->vm || !next->class_class) {
+        *error = descriptor + ": interface private array JNI services unavailable";
+        return JVMTI_ERROR_NOT_AVAILABLE;
+      }
+      if (members->snapshot.types.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+        *error = descriptor + ": interface private arrays are too large";
+        return JVMTI_ERROR_OUT_OF_MEMORY;
+      }
+      members->arrays = ClassArrayRoots::Create(jni, next->vm, next->class_class,
+                                                static_cast<jsize>(members->snapshot.types.size()));
+      if (!members->arrays) {
+        *error = descriptor + ": interface private array allocation failed while Native";
+        return JVMTI_ERROR_OUT_OF_MEMORY;
+      }
     }
   }
-  if (!next->targets.empty())
+  if (!next->groups.empty())
     timing.snapshot_ns = loaded_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count();
   return JVMTI_ERROR_NONE;

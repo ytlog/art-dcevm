@@ -52,9 +52,9 @@ void* Slot(const RedefinitionDataIter& data, int32_t slot) {
 void SetSlot(const RedefinitionDataIter& data, int32_t slot, void* object) {
   Store(data.holder->array.Get<ObjectArray>(), data.index * RedefinitionDataIter::kNumSlots + slot, object);
 }
-Handle ReplacementRoot(const Target& target) {
+Handle ReplacementRoot(const Group& group) {
   const State* state = CurrentState();
-  return state->attempt->replacements[&target - state->targets.data()];
+  return state->attempt->replacements[&group - state->groups.data()];
 }
 void DiscardClass(void* klass) {
   if (!klass) return;
@@ -105,9 +105,9 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     return JVMTI_ERROR_NOT_AVAILABLE;
   }
   try {
-    Roots roots(driver->self, state->targets.size() + 1);
+    Roots roots(driver->self, state->groups.size() + 1);
     Attempt next{driver, {}, roots.Add(nullptr), false, JVMTI_ERROR_NONE, {}};
-    for (size_t i = 0; i < state->targets.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
+    for (size_t i = 0; i < state->groups.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
     AttemptScope scope(state, &next);
 ARTDCEVM_TEST(
     fault_injection::Set(fault_injection::Counter::kValidatedGroups, 0);
@@ -266,7 +266,7 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
   }
   return true;
 }
-bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+bool AllocateInterface(const Group& group, ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
                        const HolderView& holder) {
   struct AllocationTimer {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -293,11 +293,12 @@ ARTDCEVM_TEST(
   if (initialized[data->index] || !structural[data->index] || !initial[data->index])
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface target requires an unallocated structural transaction");
   process->verified_release.store(state->selected_release);
-  const Target* target = Find(process->mirror_class(self));
-  if (!target) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target unavailable");
-  if (!target->arrays)
+  const Members& members = group.Current();
+  const TypeSnapshot* snapshot = group.Allocated();
+  if (!snapshot) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild owner unavailable");
+  if (!members.arrays)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private arrays were not prepared while Native");
-  const auto& ordered = target->snapshot.types;
+  const auto& ordered = snapshot->types;
   if (ordered.empty() || Decode(ordered.front()) != process->mirror_class(self))
     return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
   for (jclass klass : ordered)
@@ -312,11 +313,11 @@ ARTDCEVM_TEST(
   Roots roots(thread, ordered.size() + kExtraRoots);
   std::vector<Handle> old_types;
   for (jclass klass : ordered) old_types.push_back(roots.Add(Decode(klass)));
-  Handle old_array = roots.Add(target->arrays->Old(process->decode_global));
-  Handle new_array = roots.Add(target->arrays->New(process->decode_global));
+  Handle old_array = roots.Add(members.arrays->Old(process->decode_global));
+  Handle new_array = roots.Add(members.arrays->New(process->decode_global));
   if (!old_array.Get<void>() || !new_array.Get<void>())
     return reject_holder("interface private array global reference decode failed");
-  Assign(ReplacementRoot(*target), new_array.Get<void>());
+  Assign(ReplacementRoot(group), new_array.Get<void>());
   for (Handle array : {old_array, new_array})
     if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
       return reject_holder("interface private array declaration mismatch");
@@ -339,7 +340,7 @@ ARTDCEVM_TEST(
     void* old = old_types[i].Get<void>();
     Store(old_array.Get<ObjectArray>(), static_cast<int32_t>(i), old);
     void* super = runtime_thread::Read(Thread(), Field<uint32_t>(old, runtime.super_class));
-    const int32_t parent = target->snapshot.superclass[i];
+    const int32_t parent = snapshot->superclass[i];
     if (parent >= 0) {
       if (static_cast<size_t>(parent) >= i || old_types[parent].Get<void>() != super)
         return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot superclass changed");
@@ -382,7 +383,7 @@ ARTDCEVM_TEST(
       const auto& failure = attempt->non_public;
       if (failure.index == static_cast<int32_t>(i) && interface_dispatch::DescribeNonPublicSelection(
               Thread(), self, old_types, new_array, static_cast<int32_t>(i), failure.selection,
-              target->snapshot.descriptors[i], batch_index >= 0, &transaction::Current()->rejection))
+              snapshot->descriptors[i], batch_index >= 0, &transaction::Current()->rejection))
         self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
       return false;  // ART recorded its error and cleared the Java exception.
     }
@@ -413,35 +414,66 @@ ARTDCEVM_TEST(
   // instance allocation, mapping probes and the subclass-load retry guard.
   return true;
 }
-const Target* AffectedTarget(void* klass) {
+const Group* AffectedGroup(void* klass) {
   const State* state = CurrentState();
   if (!state) return nullptr;
-  for (const auto& target : state->targets)
-    for (jclass type : target.snapshot.types)
-      if (Decode(type) == klass) return &target;
+  for (const auto& group : state->groups)
+    for (jclass type : group.Current().snapshot.types)
+      if (Decode(type) == klass) return &group;
   return nullptr;
+}
+// A structural ancestor joins the rebuild with its whole subtree; otherwise ART
+// keeps updating every ancestor in place. MarkStructuralChanges has already set
+// the holder flags from each entry's own decision, before any group allocation.
+int32_t Entry(const HolderView& holder, jclass klass) {
+  for (jint i = 0; i < CurrentState()->batch_size; ++i)
+    if (holder.Definition(i)->klass == klass) return i;
+  return -1;
+}
+void ChooseMembers(Group& group, const HolderView& holder) {
+  bool extended = false;
+  for (jclass ancestor : group.ancestors) {
+    const int32_t entry = Entry(holder, ancestor);
+    extended |= entry >= 0 && (*holder.structural)[entry];
+  }
+  group.uses_extended = extended;
+  // ART's initial structural entries are the ones it collects instances for.
+  const auto& owners = group.Current().owners;
+  for (size_t i = 0; group.owner < 0 && i < owners.size(); ++i) {
+    const int32_t entry = Entry(holder, owners[i].first);
+    if (entry >= 0 && (*holder.structural)[entry] && (*holder.initial)[entry] && !(*holder.initialized)[entry])
+      group.owner = static_cast<int32_t>(i);
+  }
 }
 bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage,
             RedefinitionDataIter* data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
   try {
-    const Target* target = RuntimeAvailable() ? AffectedTarget(process->mirror_class(self)) : nullptr;
-    if (!target) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
+    void* klass = process->mirror_class(self);
+    const Group* affected = RuntimeAvailable() ? AffectedGroup(klass) : nullptr;
+    if (!affected) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
     HolderView holder;
     if (!VerifyHolder(self, data, &holder)) return false;
     if ((*holder.initialized)[data->index]) return true;
-    // ART sorts by superclass depth, not interface dependencies. The first
-    // affected entry delegates the complete group to its interface owner.
-    for (jint i = 0; i < CurrentState()->batch_size; ++i) {
-      auto* owner = holder.Definition(i);
-      if (owner->klass != target->klass) continue;
-ARTDCEVM_TEST(
-      fault_injection::Set(fault_injection::Counter::kAllocationOrder, data->index < i ? 1 : 0);
-)
-      RedefinitionDataIter owner_data{i, data->holder};
-      return AllocateInterface(owner, &owner_data, holder);
+    State* state = CurrentState();
+    Group& group = state->groups[affected - state->groups.data()];
+    if (!group.uses_extended) ChooseMembers(group, holder);
+    if (AffectedGroup(klass) != &group)
+      return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
+    if (group.owner < 0) {
+      FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                     "interface rebuild has no structural target whose instances cover every member");
+      state->rejection_class = &state->targets[group.leader].live.descriptor;
+      return false;
     }
-    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface group owner is missing from the batch");
+    // ART sorts by superclass depth, not interface dependencies. The first
+    // affected entry delegates the complete group to its owner.
+    const int32_t entry = Entry(holder, group.Current().owners[group.owner].first);
+ARTDCEVM_TEST(
+    fault_injection::Set(fault_injection::Counter::kAllocationOrder, data->index < entry ? 1 : 0);
+)
+    RedefinitionDataIter owner_data{entry, data->holder};
+    return AllocateInterface(group, holder.Definition(entry), &owner_data, holder);
   } catch (const std::bad_alloc&) {
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition native allocation failed");
   } catch (...) {

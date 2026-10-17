@@ -69,11 +69,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     // Even a body edit must relink copied default methods in implementation classes.
     decision.methods_structural = true;
   }
-  if (decision.error == JVMTI_ERROR_NONE &&
-      (decision.methods_structural || decision.fields_structural) &&
+  // A structural ancestor of an interface group's subtypes joins that group's
+  // rebuild, which links every member under its unchanged superclass.
+  if (decision.error == JVMTI_ERROR_NONE && decision.superclass_changed &&
       (interfaces && interfaces->SharesImplementationGroup(self))) {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    decision.reason = "structural class target overlaps the interface implementation group";
+    decision.reason = "superclass change overlaps the interface implementation group";
   }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;

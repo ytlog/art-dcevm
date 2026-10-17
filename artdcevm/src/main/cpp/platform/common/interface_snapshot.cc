@@ -1,5 +1,6 @@
 #include "platform/common/interface_snapshot.h"
 #include <limits>
+#include "evolution/class_schema.h"
 
 namespace artdcevm::interface_redefinition {
 namespace {
@@ -14,8 +15,49 @@ class LocalFrame {
 };
 }
 
-jvmtiError SnapshotTypes(JNIEnv* jni, jvmtiEnv* env, jclass target, jint count,
-                         const jclass* loaded, TypeSnapshot* output, std::string* error) {
+jvmtiError SelectTypes(JNIEnv* jni, jvmtiEnv* env, jclass root, jint count, const jclass* loaded,
+                       std::vector<jint>* selected, std::string* error) {
+  const auto fail = [&](jvmtiError code, const char* reason) {
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    *error = reason;
+    return code;
+  };
+  LocalFrame frame(jni);
+  if (!frame.valid) return fail(JVMTI_ERROR_OUT_OF_MEMORY, "interface snapshot local frame allocation failed");
+  jint access = 0;
+  jvmtiError result = env->GetClassModifiers(root, &access);
+  if (result != JVMTI_ERROR_NONE) return fail(result, "interface snapshot root modifiers unavailable");
+  // java.lang.reflect.Proxy subclasses never extend an application class.
+  jclass proxy = nullptr;
+  jmethodID is_proxy = nullptr;
+  if (access & evolution::kAccInterface) {
+    proxy = jni->FindClass("java/lang/reflect/Proxy");
+    if (!proxy) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy unavailable");
+    is_proxy = jni->GetStaticMethodID(proxy, "isProxyClass", "(Ljava/lang/Class;)Z");
+    if (!is_proxy) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy check unavailable");
+  }
+  selected->clear();
+  for (jint i = 0; i < count; ++i) {
+    jclass candidate = loaded[i];
+    jint status = 0;
+    result = env->GetClassStatus(candidate, &status);
+    if (result != JVMTI_ERROR_NONE) return fail(result, "interface snapshot class status unavailable");
+    if (!(status & JVMTI_CLASS_STATUS_PREPARED) || (status & JVMTI_CLASS_STATUS_ERROR)) continue;
+    const bool assignable = jni->IsAssignableFrom(candidate, root);
+    if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot assignability failed");
+    if (!assignable) continue;
+    if (proxy) {
+      const bool generated_proxy = jni->CallStaticBooleanMethod(proxy, is_proxy, candidate);
+      if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy check failed");
+      if (generated_proxy) return fail(JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects Proxy implementations");
+    }
+    selected->push_back(i);
+  }
+  return JVMTI_ERROR_NONE;
+}
+
+jvmtiError OrderTypes(JNIEnv* jni, jvmtiEnv* env, jclass first, const jclass* loaded,
+                      const std::vector<jint>& selected, TypeSnapshot* output, std::string* error) {
   const auto fail = [&](jvmtiError code, const char* reason) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     *error = reason;
@@ -39,28 +81,11 @@ jvmtiError SnapshotTypes(JNIEnv* jni, jvmtiEnv* env, jclass target, jint count,
   if (!box) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot boxing unavailable");
   jmethodID unbox = jni->GetMethodID(integer, "intValue", "()I");
   if (!unbox) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot unboxing unavailable");
-  jclass proxy = jni->FindClass("java/lang/reflect/Proxy");
-  if (!proxy) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy unavailable");
-  jmethodID is_proxy = jni->GetStaticMethodID(proxy, "isProxyClass", "(Ljava/lang/Class;)Z");
-  if (!is_proxy) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy check unavailable");
   jobject index = jni->NewObject(map_class, construct);
   if (!index) return fail(JVMTI_ERROR_OUT_OF_MEMORY, "interface snapshot identity map allocation failed");
 
   std::vector<jclass> types;
-  for (jint i = 0; i < count; ++i) {
-    jclass candidate = loaded[i];
-    jint status = 0;
-    jvmtiError result = env->GetClassStatus(candidate, &status);
-    if (result != JVMTI_ERROR_NONE) return fail(result, "interface snapshot class status unavailable");
-    if (!(status & JVMTI_CLASS_STATUS_PREPARED) || (status & JVMTI_CLASS_STATUS_ERROR)) continue;
-    const bool selected = jni->IsAssignableFrom(candidate, target);
-    if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot assignability failed");
-    if (!selected) continue;
-    const bool generated_proxy = jni->CallStaticBooleanMethod(proxy, is_proxy, candidate);
-    if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy check failed");
-    if (generated_proxy) return fail(JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects Proxy implementations");
-    types.push_back(candidate);
-  }
+  for (jint position : selected) types.push_back(loaded[position]);
   if (types.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
     return fail(JVMTI_ERROR_OUT_OF_MEMORY, "interface snapshot has too many classes");
   for (size_t i = 0; i < types.size(); ++i) {
@@ -119,15 +144,18 @@ jvmtiError SnapshotTypes(JNIEnv* jni, jvmtiEnv* env, jclass target, jint count,
   }
   // Kahn traversal over direct edges: each affected superclass and interface
   // is processed before its descendants. No pairwise assignability ordering.
+  // The leading type is a root and owns the group in ART's holder.
   std::vector<size_t> order;
   for (size_t i = 0; i < types.size(); ++i)
-    if (incoming[i] == 0) order.push_back(i);
+    if (incoming[i] == 0 && jni->IsSameObject(types[i], first)) order.push_back(i);
+  for (size_t i = 0; i < types.size(); ++i)
+    if (incoming[i] == 0 && !jni->IsSameObject(types[i], first)) order.push_back(i);
   for (size_t head = 0; head < order.size(); ++head)
     for (size_t child : children[order[head]])
       if (--incoming[child] == 0) order.push_back(child);
   if (order.size() != types.size())
     return fail(JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION, "interface snapshot hierarchy is cyclic");
-  if (order.empty() || !jni->IsSameObject(types[order.front()], target))
+  if (order.empty() || !jni->IsSameObject(types[order.front()], first))
     return fail(JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
   TypeSnapshot next;
   std::vector<int32_t> positions(types.size());
