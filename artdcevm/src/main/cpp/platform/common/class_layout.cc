@@ -11,7 +11,7 @@
 #include "platform/common/art_dex_view.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/field_array_probe.h"
-#include "platform/common/structural_policy.h"
+#include "evolution/modifiers.h"
 #include "platform/common/transaction_context.h"
 
 namespace artdcevm::class_layout {
@@ -133,7 +133,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
       if ((flags & kAccObsoleteMethod) ||
           !evolution::ReadMethodIdentity(view, method->dex_method_index, &identity, &error) ||
           !expected.count({identity.name, identity.descriptor,
-                           structural_policy::MethodModifiers(flags)}))
+                           evolution::MethodModifiers(flags)}))
         return Fail(why, "method declaration differs");
       ++declared;
     }

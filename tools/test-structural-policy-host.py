@@ -11,6 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_policy.h"
+#include "evolution/modifiers.h"
 #include "platform/common/field_array_probe.h"
 #include "platform/abi/arm64/android13/class.h"
 #include "platform/abi/arm64/android16/class.h"
@@ -659,10 +660,13 @@ int main(int argc, char** argv) {
     Accept(private_method, next, false, true, subclasses);
     next.methods[0].access = acc::kAccPublic | acc::kAccFinal;
     Reject(private_method, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED, subclasses);
-    Require(policy::MethodModifiers(acc::kAccAbstract | acc::kAccNative | acc::kAccConstructor) ==
+    Require(evolution::ClassModifiers(0xffffffff) == 0xffff &&
+            evolution::FieldModifiers(0xffffffff) == 0xffff,
+            "class/field flags not normalized");
+    Require(evolution::MethodModifiers(acc::kAccAbstract | acc::kAccNative | acc::kAccConstructor) ==
             acc::kAccAbstract, "abstract/native/constructor flags not normalized");
-    Require(policy::MethodModifiers(acc::kAccSynchronized) == 0 &&
-            policy::MethodModifiers(acc::kAccDeclaredSynchronized) == acc::kAccSynchronized,
+    Require(evolution::MethodModifiers(acc::kAccSynchronized) == 0 &&
+            evolution::MethodModifiers(acc::kAccDeclaredSynchronized) == acc::kAccSynchronized,
             "declared synchronized not normalized");
 
     for (int argument = 1; argument < argc; ++argument) {

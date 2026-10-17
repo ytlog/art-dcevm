@@ -1,4 +1,5 @@
 #include "platform/common/structural_policy.h"
+#include "evolution/modifiers.h"
 #include <map>
 #include <set>
 #include <tuple>
@@ -7,6 +8,9 @@ namespace artdcevm::structural_policy {
 namespace {
 using evolution::ClassSchema;
 using evolution::Member;
+using evolution::ClassModifiers;
+using evolution::FieldModifiers;
+using evolution::MethodModifiers;
 namespace acc = evolution;
 
 constexpr uint32_t kJavaFlags = 0xffff;
@@ -193,15 +197,6 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
 }
 }  // namespace
 
-uint32_t ClassModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
-uint32_t FieldModifiers(uint32_t dex_access) { return dex_access & kJavaFlags; }
-uint32_t MethodModifiers(uint32_t dex_access) {
-  uint32_t modifiers = dex_access;
-  if (modifiers & acc::kAccAbstract) modifiers &= ~acc::kAccNative;
-  modifiers &= ~acc::kAccSynchronized;
-  if (modifiers & acc::kAccDeclaredSynchronized) modifiers |= acc::kAccSynchronized;
-  return modifiers & kJavaFlags;
-}
 
 Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                   const LoadedHierarchy& hierarchy, const Abilities& abilities,

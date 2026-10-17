@@ -112,12 +112,6 @@ struct Decision {
   std::vector<MemberKey> interface_obligations;
 };
 
-// Raw DEX access flags mapped to what JVMTI Get*Modifiers reports
-// (openjdkjvmti ti_class.cc, ti_field.cc, ti_method.cc).
-uint32_t ClassModifiers(uint32_t dex_access);
-uint32_t FieldModifiers(uint32_t dex_access);
-uint32_t MethodModifiers(uint32_t dex_access);
-
 // Methods of the target that earlier transactions retired, with their JVMTI
 // modifiers. Verified callers may still invoke them as that kind.
 using RetiredMethods = std::map<MemberKey, uint32_t>;
