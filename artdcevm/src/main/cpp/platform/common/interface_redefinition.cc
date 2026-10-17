@@ -16,6 +16,7 @@
 #include "platform/abi/arm64/common/class_status.h"
 #include "platform/abi/arm64/common/class_linker.h"
 #include "platform/abi/arm64/common/root_visitor.h"
+#include "platform/abi/arm64/common/jni_ids.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/art_hook.h"
@@ -130,10 +131,10 @@ void* Decode(jclass klass) {
   ClassRedefinitionPrefix lookup{&driver, klass, nullptr};
   return mirror_class(&lookup);
 }
-const Target* Find(void* klass) {
-  const State* state = CurrentState();
+Target* Find(void* klass) {
+  State* state = CurrentState();
   if (!state) return nullptr;
-  for (const auto& target : state->targets)
+  for (auto& target : state->targets)
     if (Decode(target.klass) == klass) return &target;
   return nullptr;
 }
@@ -268,7 +269,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
   }
   void* object = klass.Get<void>();
-  const Target* target = Find(object);
+  Target* target = Find(object);
   if (!target) return reinterpret_cast<Admission>(original)(klass, message);
   State* state = CurrentState();
   state->rejected_target = target;
@@ -311,6 +312,8 @@ ARTDCEVM_TEST(
       Field<void*>(thread, ThreadLayout().exception) = nullptr;
       return Reject(message, JVMTI_ERROR_INVALID_CLASS, "interface redefinition target failed initialization");
     }
+    // ART can ask admission again after this hook initialized the target.
+    target->status |= JVMTI_CLASS_STATUS_INITIALIZED;
   }
   return JVMTI_ERROR_NONE;
 } catch (...) {
@@ -877,6 +880,39 @@ void Describe(jclass klass, const evolution::ClassSchema& live) {
   for (auto& target : next->targets)
     if (next->jni->IsSameObject(target.klass, klass)) target.live = live;
 }
+// A fresh app_process can use plain pointer IDs without ClassExt markers.
+// Probe one existing member ID while Native; an indexed ID establishes the
+// runtime mode. Per-class legacy markers are still checked by ART admission.
+template <class Id>
+jvmtiError VerifyJniIdMode(jvmtiEnv* env, const TypeSnapshot& snapshot,
+                         jvmtiError (jvmtiEnv::*get_ids)(jclass, jint*, Id**),
+                         bool* verified, std::string* error) {
+  for (size_t i = 0; !*verified && i < snapshot.types.size(); ++i) {
+    jint count = 0;
+    Id* ids = nullptr;
+    const auto result = (env->*get_ids)(snapshot.types[i], &count, &ids);
+    const auto release = [env](Id* ids) {
+      if (ids) env->Deallocate(reinterpret_cast<unsigned char*>(ids));
+    };
+    std::unique_ptr<Id[], decltype(release)> allocation(ids, release);
+    if (result != JVMTI_ERROR_NONE) {
+      *error = snapshot.descriptors[i] + ": interface JNI ID representation probe failed";
+      return result;
+    }
+    if (count == 0) continue;
+    if (!ids || !ids[0]) {
+      *error = snapshot.descriptors[i] + ": interface JNI member ID is unavailable";
+      return JVMTI_ERROR_INTERNAL;
+    }
+    if (!IsIndexedJniId(ids[0])) {
+      *error = snapshot.descriptors[i] + ": active pointer JNI IDs prevent structural redefinition";
+      return JVMTI_ERROR_UNMODIFIABLE_CLASS;
+    }
+    *verified = true;
+  }
+  return JVMTI_ERROR_NONE;
+}
+
 jvmtiError Capture(jint count, const jclass* loaded, uint64_t loaded_ns, std::string* error) {
   const auto start = std::chrono::steady_clock::now();
   timing = {};
@@ -899,11 +935,20 @@ ARTDCEVM_TEST(
       return JVMTI_ERROR_INTERNAL;
     }
   }
+  bool indexed_jni_ids = false;
   for (auto& target : next->targets) {
     if (!next->jni->IsSameObject(target.owner, target.klass)) continue;
     jvmtiError result = SnapshotTypes(next->jni, next->env, target.klass,
                                       count, loaded, &target.snapshot, error);
     if (result != JVMTI_ERROR_NONE) return result;
+    if (!target.boot) {
+      result = VerifyJniIdMode(next->env, target.snapshot, &jvmtiEnv::GetClassMethods,
+                              &indexed_jni_ids, error);
+      if (result == JVMTI_ERROR_NONE && !indexed_jni_ids)
+        result = VerifyJniIdMode(next->env, target.snapshot, &jvmtiEnv::GetClassFields,
+                                &indexed_jni_ids, error);
+      if (result != JVMTI_ERROR_NONE) return result;
+    }
     timing.types += target.snapshot.types.size();
   }
   // SnapshotTypes borrows the exact GetLoadedClasses references. Identity

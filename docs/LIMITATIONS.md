@@ -12,7 +12,7 @@
 - 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务不允许退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
-普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。除既有 Android 13/API 33、Android 16/API 36 证据外，Android 11/API 30、Android 12/API 31、12L/API 32、Android 14/API 34、Android 15/API 35 和 Android 17/API 37 的 arm64 真机均已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，成员映射分别选择对应声明。Android 14、15 已分别覆盖实际 CC 和 CMC 配置；Android 17 已覆盖分代 CMC，CC 仍待验证。普通类结果本身不构成接口准入，也不代表所有 OEM 或 ART Mainline 模块均兼容；接口可用版本见下文。
+普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。除既有 Android 13/API 33、Android 16/API 36 证据外，Android 11/API 30、Android 12/API 31、12L/API 32、Android 14/API 34、Android 15/API 35 和 Android 17/API 37 的 arm64 真机均已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，成员映射分别选择对应声明。Android 14、15 已分别覆盖实际 CC 和 CMC 配置；Android 17 也已分别运行 CC 和分代 CMC，但其 CC 压力检查未观测到标记期间读取，不能据此声称覆盖了标记重叠。普通类结果本身不构成接口准入，也不代表所有 OEM 或 ART Mainline 模块均兼容；接口可用版本见下文。
 
 其他版本先通过 `tools/run-device-tests.py --scenario-group ordinary` 的完整普通类场景，以及 `InterfaceAbortInstrumentation` 的 `-e scenario ordinary` Thread 拒绝探测和 GC 压力检查；两者均须覆盖普通与 CheckJNI 模式。该模式保留普通类新增接口的场景，只跳过以接口为重定义目标的测试，不需要先开放接口准入。Android 14 及以上还须分别确认 CC 和 CMC 收集器的实际配置与运行结果；GC 次数或零次标记期间读取不能单独证明 CMC 覆盖。
 
@@ -34,10 +34,12 @@
 | 类修饰符变化 | `CLASS_MODIFIERS_CHANGED`（70） |
 | 两个无关接口共享实现类或其他子类型，且批次中没有共同接口祖先 | `HIERARCHY_CHANGED`（66） |
 | 接口重建组之外的实现类父类在同批做结构修改 | `HIERARCHY_CHANGED`（66）；仅改方法体可接受 |
-| boot 接口、有 Proxy 实现类，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
+| boot 接口、有 Proxy 实现类、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义，default 冲突原因写明实现类和方法。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
+
+接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。不能仅切换模式来修复此前缓存的指针 ID。普通类仍按其原有规则验收。
 
 新增 public abstract 方法要求重定义后，接口组内**每个已加载的具体实现类**都能通过 ART 的实际 IfTable 分派到同名、完整 descriptor 相同的 public 具体实例方法，包括没有实例、没有提交 DEX 的类。同批补齐实现不要求提交顺序；已有实现、父类继承的实现和 ART 实际选中的更具体 default 均可接受。缺少实现、abstract/miranda、static/private/非 public 方法或 default 冲突均整批拒绝 63，不推迟到调用时抛 `AbstractMethodError`。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现；同名类型按类加载器身份分别判断。`lastRejection` 写出接口方法及缺实现的类，撤回或补齐后可重试。
 

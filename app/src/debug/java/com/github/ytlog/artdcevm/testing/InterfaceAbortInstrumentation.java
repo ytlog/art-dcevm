@@ -79,6 +79,41 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native long runtimeReferenceReads();
     private static native long runtimeMarkingReads();
 
+    private void checkJniIdRuntime(Bundle result, boolean pointerMode) throws Exception {
+        PointerIdFixture.Implementation instance = new PointerIdFixture.Implementation();
+        StandardJvmtiClient.cacheInterfaceDispatch(0,
+                PointerIdFixture.Contract.class.getMethod("pointerValue"));
+        expect("JNI ID mode interface admission", pointerMode ? 79 : 0, redefine(PointerIdFixture.Contract.class,
+                asset("interface-pointer-body", PointerIdFixture.Contract.class)));
+        String reason = DcevmRuntime.capabilities().getString("lastRejection");
+        if (pointerMode ? !reason.contains("active pointer JNI IDs") : !reason.isEmpty())
+            throw new AssertionError("Unexpected JNI ID mode rejection reason");
+        ++checks;
+        expect("JNI ID mode interface dispatch", pointerMode ? 51 : 52, instance.pointerValue());
+        expect("JNI ID mode cached JNI dispatch", pointerMode ? 51 : 52,
+                StandardJvmtiClient.callInterfaceDispatchInt(instance, 0));
+        RuntimeThreadFixture ordinary = new RuntimeThreadFixture();
+        ordinary.kept = 137;
+        expect("pointer runtime preserves class admission", 0, redefine(RuntimeThreadFixture.class,
+                asset("runtime-thread-one", RuntimeThreadFixture.class)));
+        expect("pointer runtime class body", 12, ordinary.value());
+        expect("pointer runtime class field", 137, ordinary.kept);
+        System.gc(); System.runFinalization(); System.gc();
+        expect("JNI ID mode cached JNI after GC", pointerMode ? 51 : 52,
+                StandardJvmtiClient.callInterfaceDispatchInt(instance, 0));
+        expect("JNI ID mode field-only interface admission", pointerMode ? 79 : 0,
+                redefine(PointerIdFixture.FieldsOnly.class,
+                        asset("interface-pointer-body", PointerIdFixture.FieldsOnly.class)));
+        expect("field-only interface method count", pointerMode ? 0 : 1,
+                PointerIdFixture.FieldsOnly.class.getDeclaredMethods().length);
+        expect("field-only interface preserves field", 53,
+                PointerIdFixture.FieldsOnly.class.getField("VALUE").getInt(null));
+        if (!pointerMode) expect("field-only interface addition", 54,
+                (Integer) PointerIdFixture.FieldsOnly.class.getMethod("added").invoke(null));
+        result.putInt("checks", checks);
+        result.putBoolean("completed", true);
+    }
+
     // Runs before any interface transaction: the ordinary-class path must
     // provide its own Thread probe and barrier, including after a rejected probe.
     private void checkRuntimeThread(Bundle result) throws Exception {
@@ -205,8 +240,10 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         try {
             configureRuntime(arguments);
             boolean ordinaryOnly = arguments != null && "ordinary".equals(arguments.getString("scenario"));
+            boolean pointerRuntime = arguments != null && "interface-pointer-runtime".equals(arguments.getString("scenario"));
+            boolean indexRuntime = arguments != null && "interface-index-runtime".equals(arguments.getString("scenario"));
             int primedPointerIds = 0;
-            if (!ordinaryOnly && (arguments == null || !arguments.containsKey("runtimeProbe"))) {
+            if (!ordinaryOnly && !pointerRuntime && !indexRuntime && (arguments == null || !arguments.containsKey("runtimeProbe"))) {
                 int methodId = primePointerId(PointerIdFixture.Contract.class, 0);
                 int instanceId = primePointerId(PointerIdFixture.Implementation.class, 1);
                 int staticId = primePointerId(PointerIdFixture.Implementation.class, 2);
@@ -217,6 +254,11 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             StandardJvmtiClient.attach(getTargetContext());
             expect("interface capability initially unverified", 0,
                     DcevmRuntime.capabilities().getBoolean("interfaceRedefinition") ? 1 : 0);
+            if (pointerRuntime || indexRuntime) {
+                checkJniIdRuntime(result, pointerRuntime);
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             if (arguments != null && arguments.containsKey("runtimeProbe")) {
                 int stage = Integer.parseInt(arguments.getString("runtimeProbe"));
                 if (stage < 13 || stage > 15) throw new AssertionError("Unknown runtime probe");

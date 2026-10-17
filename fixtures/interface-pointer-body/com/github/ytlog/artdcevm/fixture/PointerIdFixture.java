@@ -1,6 +1,10 @@
 package com.github.ytlog.artdcevm.fixture;
 
 public final class PointerIdFixture {
+    public interface FieldsOnly {
+        int VALUE = 53;
+        static int added() { return 54; }
+    }
     public interface Contract {
         default int pointerValue() { return 52; }
     }

@@ -105,6 +105,10 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 
 接口准入复用 ART 的 pointer-id marker 语义：在结构准入时检查接口组快照中的全部类型，`ClassExt` 的 instanceJfieldIDs、jmethodIDs、staticJfieldIDs 任一非空且不是数组便以 79 拒绝，`lastRejection` 指明实际带标记的类。Class.extData、三个 JNI ID 字段和 Class.componentType 均经命名 `FindInstanceField` 按名称与描述符查找，所有引用使用 ART 读屏障；不写死偏移、不改旧 ClassExt。标记由 ART 在 swapable-pointer 模式首次创建 JNI ID 槽位时存入；切换 indices 后仍保留，不能把旧 pointer ID 当作可改写的 index ID。测试在安装 Agent 前使用正常 JNI ID API 尝试生成真实标记，并另外注入校验结果来覆盖目标和子类型拒绝，不向已发布对象写入假标记。源码依据：[ClassExt](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/mirror/class_ext-inl.h)、[JNI ID manager](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/jni/jni_id_manager.cc)。
 
+纯 pointer 模式会直接返回 ArtMethod／ArtField 指针，不一定建立上述标记。Native 快照阶段通过公开 `GetClassMethods` 取得一个现有方法 ID；组内没有方法时通过 `GetClassFields` 检查字段 ID。按固定 11–17 源码的 `IndexToId`／`DecodeGenericId` 规则检查最低位：奇数为 index ID，偶数为指针。发现指针时以 79 拒绝，避免接口重建成功后缓存 JNI 调用仍指向旧成员。一次快照只需确认一次 index 模式；结构准入仍逐类检查历史 pointer-id 标记。没有读取 JNI ID 指向的内存或切换运行时模式。Debug `InterfaceAbortInstrumentation` 的 `interface-pointer-runtime` 场景在显式 pointer 模式验证方法／仅字段接口拒绝、旧 JNI 调用及 GC 后行为，并验证普通类事务仍可成功；`interface-index-runtime` 对照场景验证两类接口可以成功更新。
+
+ART 可能在同一事务内多次检查结构准入。准入 Hook 成功调用 ART `EnsureInitialized` 后更新该目标在事务内的预期初始化状态，避免下一次准入把自身完成的初始化误判为快照外变化。仅字段接口的 index 模式对照同时覆盖此前尚未初始化的目标。
+
 接口准入的访问位基准是目标当前 DEX 的 ClassDef，经 `evolution::ReadClassAccess` 读取，并使用与 `class_layout` 的访问位探测相同的接口有效位掩码。不能用 JVMTI `GetClassModifiers` 作基准：它优先报告 InnerClass 标志，成员接口包含 `static`，而 ClassDef 与运行时 Class 不包含该位。嵌套接口与顶层接口遵循同一准入规则。
 
 永久禁用点逐项限于声明证据：Thread 的 env/tid/标记位、已接受 Class 候选下的 HandleScope 根遍历、Redefiner 的当前线程，以及 holder/私有数组/私有 DexCache 的结构与身份探测；测试注入的 Thread/HandleScope/holder 探测失败也属于这一类。单个目标无法提供成员探测证据、没有支持的 Class 候选、缺少 ClassDef、初始化状态在快照后变化、事务尚未完成准入，或 holder 的索引/分配状态/结构事务标志不适用，都只拒绝本次事务并说明原因，不写入进程级禁用原因。holder 的 vector 长度用于核对声明，其元素值用于核对本次事务，两者分开处理。Hook 只保存静态拒绝原因，返回 Native 后才按目标描述符格式化为 `lastRejection`。嵌套接口回归核对已有实例默认方法更新、GC、拒绝不支持的新增方法，以及随后顶层接口成功更新；完整套件与失败仪器都执行该顺序。
@@ -264,7 +268,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 | Android 12、12L / API 31–32 | 两 API 的普通类及 Thread 已真机验证；接口未启用 | Pixel 6/API 31、Pixel 6a/API 32 的两模式第一阶段均通过；仍需确认必需命名分配服务，验证旧 Thread 排列所关联的 scope/holder 和完整接口事务 |
 | Android 14 / API 34 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、声明探测与 abort 恢复；Pixel 8 的 Compose `interface abstract batch` 通过。保持已验证的保守配置 `linked_iftable_acceptance=false` 及可用命名错误服务，非 public 实现场景返回 63 |
 | Android 15 / API 35 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、16 字节 scope、holder 与三标志探测及 abort 恢复；Pixel 8 Pro 的 Compose `interface abstract batch` 通过。`linked_iftable_acceptance=true` 验收 ART 已链接的分派数组 |
-| Android 17 / API 37 | 普通类分代 CMC 已验证；CC 与接口待验，未启用 | Pixel 11、Galaxy Z Fold8 的分代 CMC 两模式第一阶段均通过；仍需实际 CC 配置，以及 tid/hash 复用槽、合并 Class 字段数组、映射和接口失败清理验证 |
+| Android 17 / API 37 | 普通类 CC／分代 CMC 已运行；接口未启用 | Pixel 11 的两收集器、普通／CheckJNI 第一阶段通过，Galaxy Z Fold8 补充分代 CMC 证据；Pixel 11 CC 压力未观测到标记重叠。接口候选在缓存 JNI 调用处失败，API 33 已复现 pointer 模式问题并验证拒绝保护；仍需在正确 JNI ID 模式下完成 API 37 全量接口、abort 恢复和 Compose 验证 |
 
 上述设备验证均须覆盖普通与 CheckJNI 模式及全部探测、同批更新和失败恢复。平台 API 不能证明 ART 模块源码版本；Mainline 更新后的声明与服务仍须核对。逐套运行库的符号表、覆盖统计和采集细节仅保存在本地被忽略的 `assets/runtime_lib/README.md`；原始报告保存在 `build/evidence/`。
 
