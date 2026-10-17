@@ -21,6 +21,7 @@ struct Obligation {
   ClassRedefinitionPrefix* interface;
   std::string name;
   std::string descriptor;
+  jclass declaring;  // Null for the target's own declaration.
 };
 struct Pending final : transaction::Part { std::vector<Obligation> entries; };
 const std::vector<Obligation>& Obligations() {
@@ -115,10 +116,19 @@ template <typename Class, typename Method> struct Verifier {
         if (class_layout::Element<void>(thread, old_classes, i) == original)
           interface = class_layout::Element<Class>(thread, new_classes, i);
       if (!interface) continue;  // This obligation belongs to another structural owner.
+      // The submitted interface names the rejection; an added parent's method
+      // is named with its declaring interface.
+      const std::string target = class_layout::ClassDescriptor(thread, *interface);
+      std::string method = obligation.name;
+      // An unchanged parent keeps its Class in both the old and new IfTables.
+      if (obligation.declaring) {
+        interface = static_cast<Class*>(class_layout::DecodeClass(art.mirror_class, self, obligation.declaring));
+        original = interface;
+        method = "added parent " + class_layout::ClassDescriptor(thread, *interface) + "." + obligation.name;
+      }
       const auto unavailable = [&](const std::string& why) {
         Report("rejected: " + why);
-        *rejection = class_layout::ClassDescriptor(thread, *interface) + ": " + obligation.name + obligation.descriptor +
-            " requires a verified IfTable accessor: " + why;
+        *rejection = target + ": " + method + obligation.descriptor + " requires a verified IfTable accessor: " + why;
         return false;
       };
       if (ARTDCEVM_FAULT(21)) return unavailable("injected IfTable probe mismatch");
@@ -180,8 +190,7 @@ template <typename Class, typename Method> struct Verifier {
             IsDefaultConflicting(*implementation) ||
             !class_layout::MethodIdentity<Class>(thread, implementation, &identity, &why) ||
             identity.name != obligation.name || identity.descriptor != obligation.descriptor) {
-          *rejection = MissingImplementation(thread, class_layout::ClassDescriptor(thread, *interface),
-              obligation.name, obligation.descriptor, class_layout::ClassDescriptor(thread, *klass),
+          *rejection = MissingImplementation(thread, target, method, obligation.descriptor, class_layout::ClassDescriptor(thread, *klass),
               Submitted(class_layout::Element<Class>(thread, old_classes, i)), implementation);
           return false;
         }
@@ -190,7 +199,7 @@ template <typename Class, typename Method> struct Verifier {
     return true;
   }
 
-  static bool NonPublic(const VerifiedThread& thread, ClassRedefinitionPrefix*, const std::vector<abi::Handle>& originals,
+  static bool NonPublic(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const std::vector<abi::Handle>& originals,
       abi::Handle candidates, int32_t index, NonPublicSelection selection,
       const std::string& concrete_descriptor, bool submitted, std::string* rejection) {
     auto* declaration = reinterpret_cast<Method*>(selection.declaration);
@@ -206,14 +215,20 @@ template <typename Class, typename Method> struct Verifier {
     for (const auto& obligation : Obligations()) {
       if (obligation.name != required.name || obligation.descriptor != required.descriptor) continue;
       void* original = art.mirror_class(obligation.interface);
+      void* declaring = obligation.declaring ? class_layout::DecodeClass(art.mirror_class, self, obligation.declaring)
+                                             : nullptr;
       bool candidate = false;
       for (int32_t i = 0; i < index; ++i)
         if (originals[i].Get<void>() == original &&
-            class_layout::Element<Class>(thread, candidates.Get<abi::ObjectArray>(), i) == owner) candidate = true;
+            (declaring ? declaring == owner
+                       : class_layout::Element<Class>(thread, candidates.Get<abi::ObjectArray>(), i) == owner))
+          candidate = true;
       if (!candidate) continue;
       const auto* requirement = context->Find(obligation.interface);
       if (!requirement) return false;
-      *rejection = MissingImplementation(thread, requirement->descriptor, required.name, required.descriptor,
+      *rejection = MissingImplementation(thread, requirement->descriptor,
+          declaring ? "added parent " + class_layout::ClassDescriptor(thread, *owner) + "." + required.name
+                    : required.name, required.descriptor,
           concrete_descriptor, submitted, implementation, "ART rejected non-public selection during linking;");
       return true;
     }
@@ -258,11 +273,11 @@ std::string State() {
   std::lock_guard<std::mutex> lock(state_mutex);
   return state;
 }
-void Require(ClassRedefinitionPrefix* interface, std::string name, std::string descriptor) {
+void Require(ClassRedefinitionPrefix* interface, std::string name, std::string descriptor, jclass declaring) {
   auto* context = transaction::Current();
   if (!context->dispatch) context->dispatch = std::make_unique<Pending>();
   auto* pending = transaction::PartOf<Pending>(context, &transaction::Context::dispatch);
-  pending->entries.push_back({interface, std::move(name), std::move(descriptor)});
+  pending->entries.push_back({interface, std::move(name), std::move(descriptor), declaring});
 }
 bool Check(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection) {
   const auto* context = transaction::Current();

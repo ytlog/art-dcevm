@@ -91,6 +91,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   else batch->no_instances.erase(self);
   for (const auto& [name, descriptor] : decision.interface_obligations)
     interface_dispatch::Require(self, name, descriptor);
+  for (const auto& [declaring, key] : decision.parent_obligations)
+    interface_dispatch::Require(self, key.first, key.second, snapshot.parent_interfaces.at(declaring));
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;

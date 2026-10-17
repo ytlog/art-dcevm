@@ -19,8 +19,11 @@ void Prepare(JNIEnv* jni, const Services& services);
 bool Available(const runtime_thread::VerifiedThread& thread,
                abi::arm64::ClassRedefinitionPrefix* self, bool early_link_errors_available);
 std::string State();
-// Record a policy obligation in this module's transaction Part.
-void Require(abi::arm64::ClassRedefinitionPrefix*, std::string name, std::string descriptor);
+// Record a policy obligation in this module's transaction Part: the target
+// interface's own declaration, or one of an unchanged interface `declaring`
+// that the target newly extends. `declaring` is a root the caller retains.
+void Require(abi::arm64::ClassRedefinitionPrefix*, std::string name, std::string descriptor,
+             jclass declaring = nullptr);
 // Linked groups: validate every pending obligation owned by this data item.
 bool Check(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
            const abi::arm64::RedefinitionDataIter& data, std::string* rejection);

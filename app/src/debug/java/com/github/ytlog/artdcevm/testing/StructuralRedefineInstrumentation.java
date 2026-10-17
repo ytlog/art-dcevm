@@ -11,6 +11,7 @@ import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -924,15 +925,19 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("afterGc", 42, contract.value());
         });
         String[] rejectedVariants = {"add", "modifiers", "parents"};
-        int[] rejectedCodes = {63, 63, 66};
-        // Implementation inherits value(): an abstract value() lacks its implementation.
+        int[] rejectedCodes = {63, 63, 63};
+        // Implementation inherits value(), and implements neither added() nor Runnable.run().
         String[] reasons = {"has no concrete public implementation", "has no concrete public implementation",
-                "parent changes"};
+                "has no concrete public implementation"};
+        Class<?>[] rejectedBy = {NestedInterfaceHost.Contract.class, NestedInterfaceHost.Contract.class,
+                NestedInterfaceHost.Contract.class};
         String schema = memberSchema(NestedInterfaceHost.Contract.class);
         for (int i = 0; i < rejectedVariants.length; ++i) {
             String variant = "nested-interface-" + rejectedVariants[i];
             String reason = reasons[i];
+            Class<?> rejecting = rejectedBy[i];
             runScenario(variant, rejectedCodes[i], scenario -> {
+                scenario.expectRejectionBy(rejecting);
                 scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, variant);
                 scenario.check("rejectionReason", true,
                         DcevmRuntime.capabilities().getString("lastRejection").contains(reason));
@@ -1045,6 +1050,66 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("marker", 7, concrete.marker);
             System.gc(); System.runFinalization(); System.gc();
             scenario.check("optionalAfterGc", 51, contract.optional());
+        });
+        runInterfaceParentScenarios();
+    }
+
+    // An interface may newly extend an unchanged interface.
+    private void runInterfaceParentScenarios() throws Exception {
+        InterfaceParentFixture.Implementation implementation = new InterfaceParentFixture.Implementation();
+        InterfaceParentFixture.Complete complete = new InterfaceParentFixture.Complete();
+        InterfaceParentFixture.Contract contract = implementation;
+        Object plain = new InterfaceParentFixture.Plain();
+        implementation.marker = 9;
+        String schema = memberSchema(InterfaceParentFixture.Contract.class);
+        runScenario("interface-parent-missing", 63, scenario -> {
+            // Implementation would inherit Parent.parentRequired() without a body.
+            scenario.redefine(new Class<?>[]{InterfaceParentFixture.Contract.class}, "interface-parent-missing");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                    .contains("added parent Lcom/github/ytlog/artdcevm/fixture/InterfaceParentFixture$Parent;.parentRequired()I"
+                            + " has no concrete public implementation in loaded class"
+                            + " Lcom/github/ytlog/artdcevm/fixture/InterfaceParentFixture$Implementation;"));
+            scenario.check("unchangedMembers", schema, memberSchema(InterfaceParentFixture.Contract.class));
+            scenario.check("notParent", false, InterfaceParentFixture.Parent.class.isAssignableFrom(InterfaceParentFixture.Contract.class));
+            scenario.check("value", 11, contract.value());
+            scenario.check("marker", 9, implementation.marker);
+        });
+        runScenario("interface-parent-add", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceParentFixture.Implementation.class, InterfaceParentFixture.Contract.class},
+                    "interface-parent-add", "interface-parent-add");
+            scenario.check("contractExtends", true, InterfaceParentFixture.Parent.class.isAssignableFrom(InterfaceParentFixture.Contract.class));
+            scenario.check("instanceIsParent", true, ((Object) implementation) instanceof InterfaceParentFixture.Parent);
+            InterfaceParentFixture.Parent parent = (InterfaceParentFixture.Parent) (Object) implementation;
+            scenario.check("parentRequired", 41, parent.parentRequired());
+            scenario.check("parentDefault", 21, parent.parentValue());
+            InterfaceParentFixture.Parent completeParent = (InterfaceParentFixture.Parent) (Object) complete;
+            scenario.check("completeRequired", 31, completeParent.parentRequired());
+            scenario.check("completeDefault", 21, completeParent.parentValue());
+            scenario.check("newRequired", 41,
+                    ((InterfaceParentFixture.Parent) (Object) new InterfaceParentFixture.Implementation()).parentRequired());
+            scenario.check("value", 12, contract.value());
+            scenario.check("marker", 9, implementation.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("parentAfterGc", 41, parent.parentRequired());
+        });
+        String parentedSchema = memberSchema(InterfaceParentFixture.Contract.class);
+        runScenario("interface-parent-remove", 66, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceParentFixture.Contract.class}, "interface-parent-original");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("interface removed"));
+            scenario.check("unchangedMembers", parentedSchema, memberSchema(InterfaceParentFixture.Contract.class));
+            scenario.check("stillParent", true, ((Object) implementation) instanceof InterfaceParentFixture.Parent);
+            scenario.check("value", 12, contract.value());
+        });
+        runScenario("interface-parent-batch", 66, scenario -> {
+            // Plain would link the Parent published before this batch replaces it.
+            scenario.expectRejectionBy(InterfaceParentFixture.Plain.class);
+            scenario.redefine(new Class<?>[]{InterfaceParentFixture.Parent.class, InterfaceParentFixture.Plain.class},
+                    "interface-parent-batch", "interface-parent-batch");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("redefined in the same batch"));
+            scenario.check("plainNotParent", false, plain instanceof InterfaceParentFixture.Parent);
+            scenario.check("parentDefaultUnchanged", 21,
+                    ((InterfaceParentFixture.Parent) (Object) implementation).parentValue());
         });
     }
 

@@ -93,6 +93,11 @@ Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
     if (!after.count(old))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                     "interface removed: " + old);
+  // The new class links the added interface's published Class: one the batch
+  // also replaces would leave its copied defaults and slots on the old version.
+  if (hierarchy.added_interface_in_batch)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "added interface is redefined in the same batch: " + *hierarchy.added_interface_in_batch);
   for (const auto& added : incoming.interfaces) {
     if (before.count(added)) continue;
     const auto resolved = hierarchy.added_interfaces.find(added);
@@ -195,6 +200,43 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
                   "added default method may change calls resolved by " + shadow->second + ": " + method);
   return {};
 }
+// An added parent interface brings its virtual methods, and those of its
+// superinterfaces the target did not inherit, to every implementation: like
+// added members, a direct method of the target must not hide one, a default
+// must not shadow a subtype method, and an abstract one needs implementations.
+Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy,
+                               const Abilities& abilities) {
+  std::set<MemberKey> direct, defaults;
+  for (const auto& m : incoming.methods) {
+    const uint32_t now = MethodModifiers(m.access);
+    if (!Virtual(now)) direct.insert({m.name, m.descriptor});
+    else if (!(now & acc::kAccAbstract)) defaults.insert({m.name, m.descriptor});
+  }
+  Decision pending;
+  for (const auto& [declaring, methods] : hierarchy.parent_methods) {
+    for (const auto& method : methods) {
+      const std::string name = declaring + "." + method.key.first + method.key.second;
+      if (direct.count(method.key))
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                      "a static or private method hides an added parent interface method: " + name);
+      if (!method.is_abstract) {
+        const auto shadow = hierarchy.subtype_shadows.find(method.key);
+        if (shadow != hierarchy.subtype_shadows.end())
+          return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                        "added parent interface default may change calls resolved by " + shadow->second + ": " + name);
+        continue;
+      }
+      if (defaults.count(method.key)) continue;
+      if (!abilities.interface_abstract_methods)
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                      "added parent interface abstract method requires a verified IfTable accessor: " + name +
+                          (abilities.interface_abstract_unavailable_reason.empty() ? ""
+                           : "; " + abilities.interface_abstract_unavailable_reason));
+      pending.parent_obligations.emplace_back(declaring, method.key);
+    }
+  }
+  return pending;
+}
 // A public interface instance method may switch between abstract and default.
 // A new default is an added default for every implementation; a new abstract
 // declaration needs a concrete implementation in every loaded implementation.
@@ -231,7 +273,8 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   const bool interface_members = abilities.member_mapping && abilities.interface_members;
   const bool superclass_changed = live.superclass != incoming.superclass;
-  if (interface_target && (superclass_changed || live.interfaces != incoming.interfaces))
+  const bool parents_changed = live.interfaces != incoming.interfaces;
+  if (interface_target && (superclass_changed || (parents_changed && !interface_members)))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "interface redefinition does not support parent changes");
   if (superclass_changed) {
@@ -265,6 +308,13 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   decision.requires_no_instances = becomes_abstract;
   decision.superclass_changed = superclass_changed;
   decision.requires_member_mapping = superclass_changed;
+  if (interface_target && parents_changed) {
+    // CheckInterfaces already rejected removed or unresolvable parents.
+    Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities);
+    if (parents.error != JVMTI_ERROR_NONE) return parents;
+    decision.requires_member_mapping = true;
+    decision.parent_obligations = std::move(parents.parent_obligations);
+  }
   // Only a new Class object carries the new flags or interface table: take
   // ART's structural path.
   if ((class_changed & ~kAccSuper) || superclass_changed || live.interfaces != incoming.interfaces)

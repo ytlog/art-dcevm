@@ -55,6 +55,8 @@ struct LoadedHierarchy {
   bool loaded_subclasses = false;
   // Added interfaces by descriptor; one absent here could not be resolved.
   std::map<std::string, ResolvedType> added_interfaces;
+  // An added interface that is, or extends, another target of the batch.
+  std::optional<std::string> added_interface_in_batch;
   // Present when the new superclass differs and could be resolved.
   std::optional<NewSuperclass> new_superclass;
   // Interface targets: virtual methods the target inherits from its
@@ -66,6 +68,14 @@ struct LoadedHierarchy {
   // declaring class. An added default with one of these identities can change
   // what existing calls on those classes resolve to.
   std::map<MemberKey, std::string> subtype_shadows;
+  // Interface targets: the virtual methods that added parent interfaces bring,
+  // read from each parent and those of its superinterfaces the target does not
+  // already inherit. Keyed by declaring interface descriptor.
+  struct ParentMethod {
+    MemberKey key;
+    bool is_abstract;
+  };
+  std::map<std::string, std::vector<ParentMethod>> parent_methods;
 };
 
 // What the engine can enforce for this transaction beyond ART's own rules.
@@ -110,6 +120,9 @@ struct Decision {
   bool superclass_changed = false;
   // Added public abstract interface declarations, checked on the linked group.
   std::vector<MemberKey> interface_obligations;
+  // Abstract methods of added parent interfaces, by declaring interface
+  // descriptor, that every loaded implementation must now implement.
+  std::vector<std::pair<std::string, MemberKey>> parent_obligations;
 };
 
 // Methods of the target that earlier transactions retired, with their JVMTI

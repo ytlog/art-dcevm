@@ -241,6 +241,13 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (interfaces) interfaces->Describe(definitions[i].klass, snapshot.live);
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
+  // An added interface links as the Class published before the batch commits.
+  for (auto& [klass, snapshot] : batch.classes) {
+    for (const auto& [descriptor, added] : snapshot.interface_classes)
+      for (const auto& [other, ignored] : batch.classes)
+        if (!jni->IsSameObject(klass, other) && jni->IsAssignableFrom(added, other))
+          snapshot.hierarchy.added_interface_in_batch = descriptor;
+  }
   // ART recreates a target's subclasses under its new class and treats each
   // target's old subclasses as its own; a superclass change cannot share that.
   for (auto& [klass, snapshot] : batch.classes) {

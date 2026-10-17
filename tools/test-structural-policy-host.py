@@ -107,7 +107,7 @@ void MappingRequirements() {
           case 16: next.methods[0].access |= acc::kAccSynchronized; break;
           case 17: next.interfaces.push_back("Lfixture/Added;");
             hierarchy.added_interfaces["Lfixture/Added;"].access = acc::kAccPublic | acc::kAccInterface;
-            break;
+            mapping_change = interface_target; break;
           case 18: next.access |= acc::kAccAbstract; break;
           case 19: next.methods.push_back({"copied", "()I", acc::kAccPublic});
             hierarchy.interface_copies.insert({"copied", "()I"});
@@ -526,6 +526,48 @@ int main(int argc, char** argv) {
                 "abstract made default must not shadow a subtype method");
         auto packaged = contract; packaged.methods[1].access = acc::kAccAbstract;
         reject(packaged, kModifiers, "default made package-private abstract must be rejected");
+      }
+      // An added parent brings its virtual methods to every implementation.
+      {
+        auto parented = contract; parented.interfaces.push_back("Lfixture/Parent;");
+        auto facts = hierarchy;
+        facts.added_interfaces["Lfixture/Parent;"].access = acc::kAccPublic | acc::kAccInterface;
+        facts.parent_methods["Lfixture/Parent;"] = {{{"required", "()I"}, true}, {{"provided", "()I"}, false}};
+        facts.parent_methods["Lfixture/Grand;"] = {{{"grand", "()I"}, true}};
+        const auto added = policy::Evaluate(contract, parented, facts, members);
+        const std::vector<std::pair<std::string, policy::MemberKey>> expected{
+            {"Lfixture/Grand;", {"grand", "()I"}}, {"Lfixture/Parent;", {"required", "()I"}}};
+        Require(added.error == JVMTI_ERROR_NONE && added.methods_structural && added.requires_member_mapping &&
+                added.parent_obligations == expected,
+                "added parent interface must carry implementation obligations for its abstract methods");
+        auto covered = parented; covered.methods.push_back({"required", "()I", acc::kAccPublic});
+        Require(policy::Evaluate(contract, covered, facts, members).parent_obligations.size() == 1,
+                "a target default for a parent abstract method needs no obligation");
+        constexpr auto kHierarchy = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
+        const auto denied = policy::Evaluate(contract, parented, facts, no_dispatch);
+        Require(denied.error == kHierarchy && denied.reason.find("IfTable accessor") != std::string::npos,
+                "parent abstract methods must fail closed without the dispatch probe");
+        auto hiding = parented; hiding.methods.push_back({"provided", "()I", acc::kAccPrivate | acc::kAccStatic});
+        Require(policy::Evaluate(contract, hiding, facts, members).error == kHierarchy,
+                "a direct method hiding an added parent method must be rejected");
+        auto shadowing = facts; shadowing.parent_methods["Lfixture/Parent;"].push_back({{"hidden", "()I"}, false});
+        const auto shadow = policy::Evaluate(contract, parented, shadowing, members);
+        Require(shadow.error == kHierarchy && shadow.reason.find("Lfixture/Base;") != std::string::npos,
+                "a parent default shadowing a subtype method must be rejected");
+        auto batched = facts; batched.added_interface_in_batch = "Lfixture/Parent;";
+        Require(policy::Evaluate(contract, parented, batched, members).error == kHierarchy,
+                "a parent redefined in the same batch must be rejected");
+        const auto klass = Base();
+        auto implementing = klass; implementing.interfaces.push_back("Lfixture/Parent;");
+        Require(policy::Evaluate(klass, implementing, facts, members).error == JVMTI_ERROR_NONE &&
+                policy::Evaluate(klass, implementing, batched, members).error == kHierarchy,
+                "a class adding an interface redefined in the same batch must be rejected");
+        Require(policy::Evaluate(parented, contract, facts, members).error == kHierarchy,
+                "parent interface removal must be rejected");
+        for (const auto& abilities : {body_only, unmapped})
+          Require(policy::Evaluate(contract, parented, facts, abilities).error == kHierarchy,
+                  "parent addition must keep its rejection without the ability");
       }
       // Interface statics evolve like class statics with the engine's mapping.
       {

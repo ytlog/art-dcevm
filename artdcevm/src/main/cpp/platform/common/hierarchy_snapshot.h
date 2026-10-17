@@ -11,6 +11,8 @@ struct Snapshot {
   structural_policy::LoadedHierarchy hierarchy;
   // Global references owned by the caller's roots vector.
   std::map<std::string, jclass> interface_classes;
+  // Interface targets: each declaring interface of hierarchy.parent_methods.
+  std::map<std::string, jclass> parent_interfaces;
   jclass superclass_class = nullptr;
 };
 struct LoadedType {

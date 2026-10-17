@@ -338,6 +338,63 @@ void PreloadReferencedTypes(const jvmtiClassDefinition& definition, TypeResolver
   }
 }
 
+// Interface targets: the virtual methods each added parent brings. A parent
+// the target already inherits contributes nothing new, nor do its own parents.
+jvmtiError DescribeParentMethods(jvmtiEnv* env, JNIEnv* jni, jclass target, std::vector<jclass> pending,
+                                 std::vector<jobject>* roots, Snapshot* snapshot, std::string* error) {
+  std::vector<jclass> visited;
+  while (!pending.empty()) {
+    jclass parent = pending.back();
+    pending.pop_back();
+    bool seen = jni->IsAssignableFrom(target, parent);
+    for (jclass other : visited) seen = seen || jni->IsSameObject(other, parent);
+    if (seen) continue;
+    visited.push_back(parent);
+    char* signature = nullptr;
+    jvmtiError result = env->GetClassSignature(parent, &signature, nullptr);
+    if (result != JVMTI_ERROR_NONE || !signature) { *error = "GetClassSignature failed"; return result ? result : JVMTI_ERROR_INTERNAL; }
+    const std::string descriptor(signature);
+    env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+    jint count = 0;
+    jmethodID* methods = nullptr;
+    result = env->GetClassMethods(parent, &count, &methods);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetClassMethods failed"; return result; }
+    auto& described = snapshot->hierarchy.parent_methods[descriptor];
+    for (jint i = 0; i < count && result == JVMTI_ERROR_NONE; ++i) {
+      jint modifiers = 0;
+      char* name = nullptr;
+      char* method_signature = nullptr;
+      result = env->GetMethodModifiers(methods[i], &modifiers);
+      if (result == JVMTI_ERROR_NONE) result = env->GetMethodName(methods[i], &name, &method_signature, nullptr);
+      if (result == JVMTI_ERROR_NONE && !(modifiers & (evolution::kAccStatic | evolution::kAccPrivate)))
+        described.push_back({{name, method_signature}, (modifiers & evolution::kAccAbstract) != 0});
+      env->Deallocate(reinterpret_cast<unsigned char*>(name));
+      env->Deallocate(reinterpret_cast<unsigned char*>(method_signature));
+    }
+    env->Deallocate(reinterpret_cast<unsigned char*>(methods));
+    if (result != JVMTI_ERROR_NONE) { *error = "parent interface method description failed"; return result; }
+    jobject root = jni->NewGlobalRef(parent);
+    if (!root) { jni->ExceptionClear(); *error = "cannot retain a parent interface"; return JVMTI_ERROR_OUT_OF_MEMORY; }
+    roots->push_back(root);
+    snapshot->parent_interfaces[descriptor] = static_cast<jclass>(root);
+    jint interface_count = 0;
+    jclass* interfaces = nullptr;
+    result = env->GetImplementedInterfaces(parent, &interface_count, &interfaces);
+    if (result != JVMTI_ERROR_NONE) { *error = "GetImplementedInterfaces failed"; return result; }
+    // Retain superinterfaces with the rest of the transaction's roots.
+    for (jint i = 0; i < interface_count; ++i) {
+      jobject next = jni->NewGlobalRef(interfaces[i]);
+      jni->DeleteLocalRef(interfaces[i]);
+      if (!next) { jni->ExceptionClear(); result = JVMTI_ERROR_OUT_OF_MEMORY; continue; }
+      roots->push_back(next);
+      pending.push_back(static_cast<jclass>(next));
+    }
+    env->Deallocate(reinterpret_cast<unsigned char*>(interfaces));
+    if (result != JVMTI_ERROR_NONE) { *error = "cannot retain a parent interface"; return result; }
+  }
+  return JVMTI_ERROR_NONE;
+}
+
 // Reads the submitted definition and resolves the types it newly names.
 // ClassLinker::LoadSuperAndInterfaces resolves a class's superclass and
 // interfaces through its defining loader. AllocateNewClassObject skips that
@@ -359,6 +416,7 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   const bool new_superclass = incoming.superclass != snapshot->live.superclass;
   if (added.empty() && !new_superclass) return JVMTI_ERROR_NONE;
   jvmtiError result = JVMTI_ERROR_NONE;
+  std::vector<jclass> parents;
   for (const auto& descriptor : added) {
     jclass resolved = nullptr;
     structural_policy::ResolvedType type;
@@ -368,6 +426,11 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
     if (!resolved) continue;
     snapshot->hierarchy.added_interfaces[descriptor] = type;
     snapshot->interface_classes[descriptor] = resolved;
+    parents.push_back(resolved);
+  }
+  if (snapshot->live.access & evolution::kAccInterface) {
+    result = DescribeParentMethods(env, jni, definition.klass, std::move(parents), roots, snapshot, error);
+    if (result != JVMTI_ERROR_NONE) return result;
   }
   if (!new_superclass) return JVMTI_ERROR_NONE;
   structural_policy::NewSuperclass superclass;
