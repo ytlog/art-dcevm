@@ -262,7 +262,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 | --- | --- | --- |
 | Android 11 / API 30 | 已准备，未启用；缺少 Thread 与接口设备验证 | arm64 可调试应用设备；先验证普通类，再确认安全取得 ART allocator 的命名服务或三参数数组分配包装器，验证 signed 根遍历、scope/holder、完整事务和失败清理 |
 | Android 12、12L / API 31–32 | 已准备，未启用；两 API 均缺少设备验证 | 分别需要 API 31、32 arm64 设备；先验证普通类，再确认必需命名分配服务可用，验证旧 Thread 排列和完整事务 |
-| Android 14 / API 34 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 34 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整事务 |
+| Android 14 / API 34 | 普通类 CMC 已验证；CC 与接口待验，未启用 | Pixel 8 的 CMC 普通／CheckJNI 普通类场景、Thread 拒绝及 GC 压力通过，成员映射选择 android14；先补齐 CC，再验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整接口事务 |
 | Android 15 / API 35 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 35 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整事务 |
 | Android 17 / API 37 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 37 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 tid/hash 复用槽、合并 Class 字段数组、映射与失败清理 |
 
