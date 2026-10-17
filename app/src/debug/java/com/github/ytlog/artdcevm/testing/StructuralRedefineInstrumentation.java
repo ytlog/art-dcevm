@@ -139,7 +139,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runScenarios() throws Exception {
-        if (arguments != null && arguments.containsKey("scenario")) {
+        boolean ordinaryOnly = arguments != null && "ordinary".equals(arguments.getString("scenario"));
+        if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
             if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
@@ -303,17 +304,19 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runMethodScenarios(classFinal, originalClassFlags, originalClassSchema);
         runMethodKindChangeScenarios();
-        runNestedInterfaceScenarios();
-        runInterfaceBatchScenarios();
-        runInterfaceImplementationScenarios();
-        runInterfaceOverlapScenarios();
-        runMultiInterfaceScenarios();
-        runPointerIdScenarios();
-        runCopiedDefaultScenario();
-        runInterfaceStressScenario();
-        runInterfaceEvolutionScenarios();
-        runAbstractInterfaceScenarios();
-        runInterfaceStressAdditionScenario();
+        if (!ordinaryOnly) {
+            runNestedInterfaceScenarios();
+            runInterfaceBatchScenarios();
+            runInterfaceImplementationScenarios();
+            runInterfaceOverlapScenarios();
+            runMultiInterfaceScenarios();
+            runPointerIdScenarios();
+            runCopiedDefaultScenario();
+            runInterfaceStressScenario();
+            runInterfaceEvolutionScenarios();
+            runAbstractInterfaceScenarios();
+            runInterfaceStressAdditionScenario();
+        }
         runInterfaceScenarios();
         runSuperclassScenarios();
         runPreloadScenarios();

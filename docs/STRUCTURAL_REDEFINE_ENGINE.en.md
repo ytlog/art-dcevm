@@ -263,13 +263,17 @@ The table still selects only android13/android16, verified on API 33/36 devices;
 
 | Version | Preparation and activation | Required validation before activation |
 | --- | --- | --- |
-| Android 11 / API 30 | Prepared, inactive | An arm64 device running a debuggable application; establish a named service that safely obtains ART's allocator or a three-argument array wrapper, then verify signed root traversal, scope/holder, full transactions and cleanup |
-| Android 12, 12L / API 31–32 | Prepared, inactive | Separate API 31 and 32 arm64 devices; establish required named allocation services, then verify the old Thread layout and complete transactions |
-| Android 14 / API 34 | Prepared, inactive | An API 34 arm64 device; verify Thread deopt fields, 12-byte scopes, four redefinition flags and full transactions |
-| Android 15 / API 35 | Prepared, inactive | An API 35 arm64 device; verify 16-byte scopes, three redefinition flags, separate Class field arrays and full transactions |
-| Android 17 / API 37 | Prepared, inactive | An API 37 arm64 device; verify the tid/hash slot, merged Class field arrays, mapping and cleanup |
+| Android 11 / API 30 | Prepared, inactive; Thread and interface device proof missing | An arm64 device running a debuggable application; verify ordinary classes first, establish a named service that safely obtains ART's allocator or a three-argument array wrapper, then verify signed root traversal, scope/holder, full transactions and cleanup |
+| Android 12, 12L / API 31–32 | Prepared, inactive; device proof missing for both APIs | Separate API 31 and 32 arm64 devices; verify ordinary classes first, establish required named allocation services, then verify the old Thread layout and complete transactions |
+| Android 14 / API 34 | Prepared, inactive; Thread and interface device proof missing | An API 34 arm64 device; verify ordinary classes under CC and CMC separately, then Thread deopt fields, 12-byte scopes, four redefinition flags and full transactions |
+| Android 15 / API 35 | Prepared, inactive; Thread and interface device proof missing | An API 35 arm64 device; verify ordinary classes under CC and CMC separately, then 16-byte scopes, three redefinition flags, separate Class field arrays and full transactions |
+| Android 17 / API 37 | Prepared, inactive; Thread and interface device proof missing | An API 37 arm64 device; verify ordinary classes under CC and CMC separately, then the tid/hash slot, merged Class field arrays, mapping and cleanup |
 
 All device validation must cover normal and CheckJNI modes, every probe, batch updates and recovery after failure. A platform API does not prove the ART module's source version; Mainline updates still require declaration and service review. Per-runtime symbol tables, coverage counts and collection details stay only in the local ignored assets/runtime_lib/README.md; raw reports stay in build/evidence/.
+
+For the first stage, run the complete ordinary-class suite with `tools/run-device-tests.py --scenario-group ordinary`, then independently run Thread rejection, recovery and GC pressure with `am instrument -w -r -e scenario ordinary -e checkjni <false|true> dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.InterfaceAbortInstrumentation`. Ordinary classes adding interfaces remain in this stage; interface targets run in the second stage. Retirement scenarios must report verified `memberMapping`. For Android 14 and later, record actual CC and CMC configurations separately; zero marking-period reads do not identify CMC.
+
+After obtaining first-stage device evidence, review and activate one release at a time: fixed Class, HandleScope, holder, ClassRedefinition flags, IfTable/PointerArray and named-symbol declarations, including `linked_iftable_acceptance`. Commit that release separately only after the complete interface suite, abort recovery and android-compose-hotreload's `interface abstract batch` pass. A cloud catalog entry, offline symbols or successful compilation do not replace device execution; entries without complete evidence remain `kPreparedOnly`.
 
 ## Member mapping and method retirement
 

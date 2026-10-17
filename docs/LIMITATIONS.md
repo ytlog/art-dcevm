@@ -14,6 +14,8 @@
 
 普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 13/API 33 和 Android 16/API 36 上做设备验证；Android 11、12、14、15、17 只有源码声明与主机核对，尚无这项探测的设备验证。
 
+其他版本先通过 `tools/run-device-tests.py --scenario-group ordinary` 的完整普通类场景，以及 `InterfaceAbortInstrumentation` 的 `-e scenario ordinary` Thread 拒绝探测和 GC 压力检查；两者均须覆盖普通与 CheckJNI 模式。该模式保留普通类新增接口的场景，只跳过以接口为重定义目标的测试，不需要先开放接口准入。Android 14 及以上还须分别确认 CC 和 CMC 收集器的实际配置与运行结果；GC 次数或零次标记期间读取不能单独证明 CMC 覆盖。
+
 ## 接口重定义
 
 接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，以及删除或改签名 static/private 方法。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。

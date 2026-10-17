@@ -117,6 +117,29 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_ordinary_group_requires_retirement_without_interface_admission(self):
+        report = complete_report()
+        names = {item[0] for item in runner.scenario_sequence("ordinary")}
+        self.assertTrue({"methods-retire", "field-retire", "field-types", "interface-add"} <= names)
+        self.assertFalse({"interface-method-bodies", "interface-abstract-batch-forward"} & names)
+        report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+        capabilities = report["initialization"]["capabilities"]
+        capabilities["interfaceRuntime"] = "disabled: interface runtime not device-verified"
+        for item in report["scenarios"]:
+            item["capabilities"].update(interfaceRedefinition=False,
+                                        interfaceRuntime=capabilities["interfaceRuntime"])
+        runner.validate_report(report, scenario_group="ordinary")
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
+        retired = next(item for item in report["scenarios"] if item["name"] == "methods-retire")
+        retired["capabilities"]["memberMapping"] = "unverified"
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="ordinary")
+        retired["capabilities"]["memberMapping"] = "verified: android16 class layout"
+        report["scenarios"].pop()
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="ordinary")
+
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()
         report["scenarios"] = [item for item in report["scenarios"]

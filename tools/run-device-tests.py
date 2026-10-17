@@ -733,6 +733,19 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                       'cachedBytecode': 12,
                                       'cachedJni': 12}})
 
+def scenario_sequence(scenario_group):
+    if scenario_group == "full":
+        return SCENARIOS
+    if scenario_group == "interface-abstract":
+        return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
+    if scenario_group == "ordinary":
+        # Match the contiguous interface-target block in runScenarios. Ordinary
+        # classes adding interfaces remain part of the ordinary suite.
+        names = [item[0] for item in SCENARIOS]
+        return SCENARIOS[:names.index("interface-method-bodies")] + SCENARIOS[names.index("interface-hidden"):]
+    raise RunFailure("Unsupported scenario group")
+
+
 def validate_report(report, scenario_group="full"):
     """Require every requested return code and an actual behavior observation."""
     if (not isinstance(report, dict) or type(report.get("schemaVersion")) is not int
@@ -764,16 +777,17 @@ def validate_report(report, scenario_group="full"):
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")
+    interface_runtime = capabilities.get("interfaceRuntime")
+    interface_pending = interface_runtime == "unverified: interface runtime declarations"
+    interface_disabled = (scenario_group == "ordinary" and isinstance(interface_runtime, str)
+                          and interface_runtime.startswith("disabled: "))
     if (capabilities.get("interfaceRedefinition") is not False or
-            capabilities.get("interfaceRuntime") != "unverified: interface runtime declarations"):
+            not (interface_pending or interface_disabled)):
         raise RunFailure("Interface capability must stay false until runtime probes pass")
     for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
             raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
-    if scenario_group not in ("full", "interface-abstract"):
-        raise RunFailure("Unsupported scenario group")
-    expected_scenarios = SCENARIOS if scenario_group == "full" else tuple(
-        item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
+    expected_scenarios = scenario_sequence(scenario_group)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
@@ -898,8 +912,8 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "interface-abstract"), default="full",
-                        help="Run the complete suite or only abstract interface transactions")
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract"), default="full",
+                        help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",
@@ -918,7 +932,7 @@ def main(argv=None):
         parser.error("Evidence must remain under ignored build/evidence")
     out = new_evidence_directory(args.evidence_root.resolve(), timestamp)
     meta = {"deviceId": args.device_id, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
-            "startedUtc": timestamp, "passed": False}
+            "startedUtc": timestamp, "scenarioGroup": args.scenario_group, "passed": False}
     (out / "selection.json").write_text(json.dumps({"deviceId": args.device_id,
         "apk": args.apk.name}, indent=2))
 

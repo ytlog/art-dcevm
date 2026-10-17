@@ -204,8 +204,9 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             configureRuntime(arguments);
+            boolean ordinaryOnly = arguments != null && "ordinary".equals(arguments.getString("scenario"));
             int primedPointerIds = 0;
-            if (arguments == null || !arguments.containsKey("runtimeProbe")) {
+            if (!ordinaryOnly && (arguments == null || !arguments.containsKey("runtimeProbe"))) {
                 int methodId = primePointerId(PointerIdFixture.Contract.class, 0);
                 int instanceId = primePointerId(PointerIdFixture.Implementation.class, 1);
                 int staticId = primePointerId(PointerIdFixture.Implementation.class, 2);
@@ -254,6 +255,13 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 return;
             }
             checkRuntimeThread(result);
+            if (ordinaryOnly) {
+                result.putString("memberMapping", DcevmRuntime.capabilities().getString("memberMapping"));
+                result.putInt("checks", checks);
+                result.putBoolean("completed", true);
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             checkDefaultConflictRollback();
             PointerIdFixture.Implementation pointerInstance = new PointerIdFixture.Implementation();
             byte[] pointerDex = asset("interface-pointer-body", PointerIdFixture.Contract.class);

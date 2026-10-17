@@ -260,13 +260,17 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 
 | 版本 | 准备与启用状态 | 启用前需要的验证 |
 | --- | --- | --- |
-| Android 11 / API 30 | 已准备，未启用 | arm64 可调试应用设备；确认安全取得 ART allocator 的命名服务或三参数数组分配包装器，验证 signed 根遍历、scope/holder、完整事务和失败清理 |
-| Android 12、12L / API 31–32 | 已准备，未启用 | 分别需要 API 31、32 arm64 设备；确认必需命名分配服务可用，验证旧 Thread 排列和完整事务 |
-| Android 14 / API 34 | 已准备，未启用 | API 34 arm64 设备；验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整事务 |
-| Android 15 / API 35 | 已准备，未启用 | API 35 arm64 设备；验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整事务 |
-| Android 17 / API 37 | 已准备，未启用 | API 37 arm64 设备；验证 tid/hash 复用槽、合并 Class 字段数组、映射与失败清理 |
+| Android 11 / API 30 | 已准备，未启用；缺少 Thread 与接口设备验证 | arm64 可调试应用设备；先验证普通类，再确认安全取得 ART allocator 的命名服务或三参数数组分配包装器，验证 signed 根遍历、scope/holder、完整事务和失败清理 |
+| Android 12、12L / API 31–32 | 已准备，未启用；两 API 均缺少设备验证 | 分别需要 API 31、32 arm64 设备；先验证普通类，再确认必需命名分配服务可用，验证旧 Thread 排列和完整事务 |
+| Android 14 / API 34 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 34 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整事务 |
+| Android 15 / API 35 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 35 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整事务 |
+| Android 17 / API 37 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 37 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 tid/hash 复用槽、合并 Class 字段数组、映射与失败清理 |
 
 上述设备验证均须覆盖普通与 CheckJNI 模式及全部探测、同批更新和失败恢复。平台 API 不能证明 ART 模块源码版本；Mainline 更新后的声明与服务仍须核对。逐套运行库的符号表、覆盖统计和采集细节仅保存在本地被忽略的 `assets/runtime_lib/README.md`；原始报告保存在 `build/evidence/`。
+
+第一阶段使用 `tools/run-device-tests.py --scenario-group ordinary` 执行完整普通类场景，再以 `am instrument -w -r -e scenario ordinary -e checkjni <false|true> dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.InterfaceAbortInstrumentation` 独立验证 Thread 拒绝、恢复和 GC 压力。普通类新增接口仍在第一阶段；接口目标场景留到第二阶段。报告必须证明退役场景的 `memberMapping` 已 verified；Android 14 及以上分别记录实际 CC/CMC 配置，不能从零次标记读取推断 CMC。
+
+取得第一阶段设备证据后，每次只核对并开放一个版本；逐项确认固定 Class、HandleScope、holder、ClassRedefinition 标志、IfTable/PointerArray 和命名符号声明，以及 `linked_iftable_acceptance` 的取值。完整接口场景、abort 恢复和 android-compose-hotreload 的 `interface abstract batch` 全部通过后，才为该版本单独提交。云端设备目录、离线符号和编译成功均不能代替实际设备执行结果；未取得完整证据的项保持 `kPreparedOnly`。
 
 ## 成员映射与方法退役
 
