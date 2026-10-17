@@ -26,13 +26,18 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 ## 接管点
 
+唯一组装入口位于 `structural_redefine_engine.cc`；标准入口的 Native 阶段位于 `structural_redefine_route.cc`，ART 校验、分配决策与提交前检查位于 `structural_redefine_hooks.cc`，能力报告位于 `structural_redefine_capabilities.cc`。接口后端通过 `interface_redefinition.h` 的显式 `Backend` 接口供引擎与校验重定向调用；准入探测、Native 组快照、组分配与失败清理分别位于 `interface_admission.cc`、`interface_group_snapshot.cc`、`interface_allocation.cc`，组装与报告保留在 `interface_redefinition.cc`。
+
+“只接管决策点”原则的唯一例外是接口后端：为弥补 `FinishNewClassAllocations` 只收集子类、不会收集接口实现类的缺口，后端自行准备重建组分配和失败清理。提交、实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
+
 | ART 决策点 | ART 原行为 | 增强行为 |
 | --- | --- | --- |
 | 公开表的 `JvmtiFunctions::RedefineClasses` | 普通重定义拒绝结构变化；导出入口可能内联 | 路由到原始结构事务，保留参数、能力检查、ClassFileLoadHook 和普通方法体更新；进入 ART 前经目标类的加载器加载新 DEX 引用的类（含新增的接口与父类），并读取旧声明 |
 | `CheckClass` | 类修饰符、父类、接口不得变化 | 解析最终 DEX，运行布局探测，按[校验规则](#校验规则)评估并缓存决策 |
 | `CheckFields` / `CheckMethods` | 只增不删、修饰符不能变化 | 按决策调用 `RecordNewFieldAdded` / `RecordNewMethodAdded` 让 ART 走结构路径；没有决策时调用原函数 |
+| `FinishNewClassAllocations` / `Run` / `LinkClass` | 只收集目标类的子类；执行事务并链接新类 | 接口后端准备接口及实现类型的组分配，在 Run 作用域保活替换类，失败时清理未发布的新类（`interface_allocation.cc`） |
 | `AllocateNewClassObject` | 使用旧层级重建类和子类 | 父类变化时把新父类写入调用方的父类 handle 槽位 |
-| `CheckVerification` | 校验器按描述符解析到旧类 | 父类变化时，校验期间本线程的 `FindClass` 对该类描述符返回新类对象 |
+| `CheckVerification` | 校验器按描述符解析到旧类 | 父类变化或接口组校验期间，本线程的 `FindClass` 经校验重定向或接口后端返回对应替换类；接口组按加载器身份匹配 |
 | `CollectAndCreateNewInstances` | 为旧实例分配新实例 | 原函数成功后核对槽位声明并预先算好成员映射；依赖自有映射的事务在失败时返回错误 |
 | `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK，包括重链接子类的 copied default/miranda 消失时 | 写入预先算好的映射；没有计划的事务调用原映射 |
 | `UpdateClassStructurally` | 字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只设置 visitor 的事务作用域并完整调用原函数；复制阶段换用不含退役项的旧类字段数组，父类变化时让新类暂指原父类 |
@@ -130,7 +135,7 @@ Thread 布局表位于 `platform/abi/arm64/runtime_thread_table.h`，编译期�
 `CheckClass` 按 `redefinition.h` 取出 `klass` 与 `dex_file`，上下文中找不到该类时调用原函数。随后由 `DexView` 读取新类声明（ClassDef 0），运行布局探测，读取新增接口与新父类的运行时标志，再调用 `structural_policy::Evaluate`：
 
 - 拒绝时只写 `driver_->result_` 并返回 false（`Redefiner::RecordFailure` 本身也只做这件事），原因写入 `lastRejection` 和 logcat。
-- 接受时在事务上下文的引擎批次中按 `ClassRedefinition*` 保存决策（含退役声明清单），并把映射、实例和校验要求记录到每个目标的 `Requirements`；策略在接受依赖映射能力的分支时直接设置 `Decision::requires_member_mapping`，引擎不再用关闭映射能力的第二次评估推导要求。对成功决策，该标志等价于“保留 `instance_check`、关闭映射及其衍生能力后会被拒绝”：包括字段退役、方法退役／改签名、native 改 Java、接口新增成员（含 abstract）、父类变化，以及无自有映射时会被拒绝的 copied/miranda 变化。新增接口本身、普通类新增成员、修饰符或方法体修改不因此依赖映射；改为 abstract 只依赖实例检查。接口目标仍无条件标记依赖映射，包括仅修改方法体。拒绝决策不携带该要求。
+- 接受时在事务上下文的引擎批次中按 `ClassRedefinition*` 保存决策（含退役声明清单），把映射和校验要求记录到每个目标的共享 `Requirements`，实例检查要求记录到引擎批次 Part；策略在接受依赖映射能力的分支时直接设置 `Decision::requires_member_mapping`，引擎不再用关闭映射能力的第二次评估推导要求。对成功决策，该标志等价于“保留 `instance_check`、关闭映射及其衍生能力后会被拒绝”：包括字段退役、方法退役／改签名、native 改 Java、接口新增成员（含 abstract）、父类变化，以及无自有映射时会被拒绝的 copied/miranda 变化。新增接口本身、普通类新增成员、修饰符或方法体修改不因此依赖映射；改为 abstract 只依赖实例检查。接口目标仍无条件标记依赖映射，包括仅修改方法体。拒绝决策不携带该要求。
 
 `CheckFields` / `CheckMethods` 按决策的 `fields_structural` / `methods_structural` 调用对应的 `RecordNew*Added`，`CheckMethods` 之后清除决策。
 
@@ -151,16 +156,16 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 新增方法还须满足以下检查：
 
 1. 新增 static/private 方法不得遮蔽从父接口继承的虚方法或 Object 的 public 实例方法，否则拒绝 63。`CollectInheritedInterface` 将这些身份记录到 `LoadedHierarchy::inherited_interface`。已校验的旧 `invoke-interface` 可能仍按 IMT 分派，引擎不能靠新声明使它安全地抛调用方式错误。
-2. 新增 default 不得与实现类自身或其父类链上的同签名 static/非 public 方法重叠，否则拒绝 63，并写明该声明类。`subtype_shadows` 来自 `interface_redefinition::Scope::GroupTypes`，与 ART 实际重建的准备完成且非错误类型一致。实现类父类链也纳入检查，boot 类可按唯一描述符去重，其他加载器不按名称去重；public 实例实现不拒绝。
+2. 新增 default 不得与实现类自身或其父类链上的同签名 static/非 public 方法重叠，否则拒绝 63，并写明该声明类。`subtype_shadows` 来自 `interface_redefinition::Backend::GroupTypes`，与 ART 实际重建的准备完成且非错误类型一致。实现类父类链也纳入检查，boot 类可按唯一描述符去重，其他加载器不按名称去重；public 实例实现不拒绝。
 3. `PlanMethods` 读取 ART 链接结果，发现新出现的 `IsDefaultConflicting` 方法时，记录实现类和方法。`CollectAndCreateNewInstances` 在 ART 不可失败点之前以 63 拒绝，`lastRejection` 写明实现类及名称、描述符；旧定义保留。它不走表示布局探测失败的 `Fail()` 路径，防止退回 ART 原映射而放过冲突。此检查共享于所有使用自有映射的结构事务，也覆盖普通类新增接口。
 
-4. 新增 public abstract 不走 default 的 `subtype_shadows` 拒绝，而由策略决策记录（名称、完整 descriptor）的待验证条件。`CheckClass` 连同 `ClassRedefinition*` 的接口身份写入批次 `Context::interface_obligations`，条件不依赖该输入是否拥有重建组。分派验收器对当前 owner 的新旧类数组按旧接口身份定位候选接口，检查其中所有具体类的实际 IfTable；未提交 DEX、没有实例的类也在数组内。父接口 owner 可验收子接口输入的条件，其他接口组或加载器的同名类不混淆。
+4. 新增 public abstract 不走 default 的 `subtype_shadows` 拒绝，而由策略决策记录（名称、完整 descriptor）的待验证条件。`CheckClass` 连同 `ClassRedefinition*` 的接口身份写入`interface_dispatch` 的批次 Part，条件不依赖该输入是否拥有重建组。分派验收器对当前 owner 的新旧类数组按旧接口身份定位候选接口，检查其中所有具体类的实际 IfTable；未提交 DEX、没有实例的类也在数组内。父接口 owner 可验收子接口输入的条件，其他接口组或加载器的同名类不混淆。
 
 只读访问器复刻固定源码 `mirror/class-inl.h::FindVirtualMethodForInterface` 的读取语义：以候选声明类身份选择 IfTable 的接口项，以候选方法的 `method_index` 读取 PointerArray 的目标。先通过命名 `FindDeclaredInstanceField` 核对 `java.lang.Class.ifTable` 的声明、类型、实例存储与固定偏移；再核对 ObjectArray/long[] 的运行时类别、成对长度、接口声明虚方法的连续索引、分派数组长度，以及目标指针属于已知的方法数组，最后才读标志和 DEX 身份。`PointerArray` 的固定声明来自 `android-13.0.0_r1`、`android-14.0.0_r1`、`android-15.0.0_r1` 与 `android-16.0.0_r1` 的 `mirror/array.h`（arm64 数据起点按 8 字节对齐），IfTable 来自这四版 `mirror/iftable.h`。堆引用使用共享 `runtime_thread::Read` 的命名 Mark 读屏障；Class 探测与成员计划读取声明类、DexCache 和数组元素也复用此读取路径，避免并发 GC 的转发引用被误判为其他类。此访问器不写入分派表，不解析或模拟方法选择。
 
 合法分派必须为 public、非 static/private/abstract、非冲突、非 obsolete／已退役目标，且真实 DEX 名称与完整 descriptor 相同。已有／同批实现、继承实现与 ART 选中的更具体 default 可接受；bridge 必须真实存在。失败以 63 整批拒绝，`lastRejection` 写出接口方法和具体类；访问器不匹配也以 63 拒绝并报告探测原因。验收紧邻 default 冲突检查，位于 `CollectAndCreateNewInstances` 的计划阶段、不可失败边界之前，沿用现有废弃类清理和重试路径。`interfaceAbstractDispatch` 报告最近的访问器探测状态；每次事务重新检查。
 
-分派验证独立放在 `interface_dispatch`：它持有只读布局探测、逐条件验收和错误格式化；`structural_redefine_engine` 在成员计划之后的提交前检查中调度它，映射模块不依赖分派模块。两者复用 `art_method_identity.h` 的有界 DEX 身份读取。ART 13 的 `LinkInterfaceMethods` 对非 public 实现在 IfTable 形成之前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`。`interface_redefinition` 通过该命名 NO_INLINE 服务观察实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配返回失败、离开锁后，验证模块按候选接口身份和完整 descriptor 生成 63 的拒绝原因。不截取异常文本、不按名称猜实现，也不放宽 ART 链接。该服务在 ART 13 不可定位时仅禁用新增 abstract，并在能力与拒绝原因中说明。ART 14 的 `AssignVTableIndexes` 筛选非 public 类方法；`FindCopiedMethodsForInterface` 的早期错误调用只用于接口声明，不能泛化为具体类选择。其已验证配置保守保留命名服务要求；ART 15、16 使用已链接 IfTable 验收；ART 15 的 `AssignVTableIndexes` 仅选择 public 类方法，由 `FinalizeIfTable` 安装分派数组。
+分派验证独立放在 `interface_dispatch`：它持有只读布局探测、逐条件验收和错误格式化；`structural_redefine_hooks` 在成员计划之后通过可选接口后端的 `Check` 调度它，映射模块不依赖分派模块。两者复用 `art_method_identity.h` 的有界 DEX 身份读取。ART 13 的 `LinkInterfaceMethods` 对非 public 实现在 IfTable 形成之前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`。`interface_redefinition` 通过该命名 NO_INLINE 服务观察实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配返回失败、离开锁后，验证模块按候选接口身份和完整 descriptor 生成 63 的拒绝原因。不截取异常文本、不按名称猜实现，也不放宽 ART 链接。该服务在 ART 13 不可定位时仅禁用新增 abstract，并在能力与拒绝原因中说明。ART 14 的 `AssignVTableIndexes` 筛选非 public 类方法；`FindCopiedMethodsForInterface` 的早期错误调用只用于接口声明，不能泛化为具体类选择。其已验证配置保守保留命名服务要求；ART 15、16 使用已链接 IfTable 验收；ART 15 的 `AssignVTableIndexes` 仅选择 public 类方法，由 `FinalizeIfTable` 安装分派数组。
 
 专项回归还覆盖更具体的 abstract 遮住远处 default、同批移除最后实现、多组中后一组拒绝、映射计划后故障，以及快照后晚加载缺失实现与连续加载耗尽重试。失败前后分别调用缓存的反射、MethodHandle、JNI ID 和预热字节码；修正或撤回后再次提交。`interfaceAbstractMethodAddition` 是细分探测状态，不能替代逐事务验收。
 
@@ -423,7 +428,12 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 内容 | 位置 |
 | --- | --- |
 | JVMTI Agent 入口与 `DcevmRuntime` 的 JNI 导出 | `core/agent.cc` |
-| 引擎：前提检查、唯一安装入口、标准入口路由、提交前检查与进程级能力 | `platform/common/structural_redefine_engine.{h,cc}` |
+| 引擎公开入口、前提检查、唯一安装组装与回滚 | `platform/common/structural_redefine_engine.{h,cc}` |
+| 标准入口 Native 阶段：声明/层级快照、保活、监视与重试 | `platform/common/structural_redefine_route.cc` |
+| ART 阶段 Hook：策略、分配决策、实例/布局/映射/分派提交前检查 | `platform/common/structural_redefine_hooks.cc` |
+| 能力与诊断 JSON 报告 | `platform/common/structural_redefine_capabilities.cc` |
+| 引擎进程状态与批次 Part 的私有声明 | `platform/common/structural_redefine_internal.h` |
+| DEX 访问位到 JVMTI 修饰符的公共映射 | `evolution/modifiers.h` |
 | 校验策略（含接口新增与继承／遮蔽事实，纯函数、主机可测） | `platform/common/structural_policy.{h,cc}` |
 | 事务上下文、嵌套事务作用域与每个目标的策略要求 | `platform/common/transaction_context.{h,cc}` |
 | 普通类与接口共用的 Native 线程探测、命名 GC 读屏障 | `platform/common/runtime_thread.{h,cc}` |
@@ -432,7 +442,11 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 成员映射计划、提交与新出现的 default 冲突检查 | `platform/common/member_mapping.{h,cc}` |
 | 退役登记、旧类保活、字段占位与 JNI／反射／MethodHandle 访问守卫 | `platform/common/member_retirement.{h,cc}` |
 | 验证期间的 CheckVerification／FindClass 重定向 | `platform/common/verification_redirect.{h,cc}` |
-| 接口重建组、分配、解析重定向与失败清理 | `platform/common/interface_redefinition.{h,cc}` |
+| 可选接口后端契约、组装、状态报告与校验查找 | `platform/common/interface_redefinition.{h,cc}` |
+| 接口准入、Thread/Class/HandleScope 探测 | `platform/common/interface_admission.cc` |
+| 接口组的 Native 快照、描述与查询类型准备 | `platform/common/interface_group_snapshot.cc` |
+| 接口组分配、链接观察、解析重定向、Run 保活与失败清理 | `platform/common/interface_allocation.cc` |
+| 接口进程/事务状态与共享助手的私有声明 | `platform/common/interface_redefinition_internal.h` |
 | 候选 IfTable 只读探测、抽象义务验收及实际链接选择的诊断 | `platform/common/interface_dispatch.{h,cc}` |
 | 映射与分派共用的有界 DEX 方法身份读取 | `platform/common/art_method_identity.h` |
 | 接口受影响类型、继承边与重建顺序的 Native 快照 | `platform/common/interface_snapshot.{h,cc}` |
@@ -446,11 +460,15 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 确有版本差异的声明 | `platform/abi/arm64/android11`–`android17/` |
 | 命名符号与 ShadowHook 查找 | `platform/symbols/` |
 
-依赖由引擎向下组成有向无环图。`hierarchy_snapshot` 与 `schema_snapshot` 同属公开 JNI/JVMTI 层：前者只依赖后者、策略类型与 `evolution`，通过参数接收环境和根容器，不读取引擎全局状态，也不依赖布局、线程、映射或接口内部实现。目标清单独立于可能被嵌套预加载事务清空的声明快照，保活仍覆盖原始提交批次。每次尝试在 `GetLoadedClasses` 之后只遍历一次已加载类，用 JNI `IsAssignableFrom` 判断每个普通目标的子类型（含目标），同时产出全部状态的受影响类型并集供保活使用。可赋值关系按类身份区分不同加载器的同名类，无需对全部已加载类取 identity hash 或建立父类图。子类型列表保留已加载顺序和 PREPARED 标记，重叠目标共用一次类状态读取，策略只读取已准备的子类。接口策略继续接收原 `GroupTypes`，保活并集仍包含可赋值给接口的全部已加载类型。`Probe`、`Begin`、监视器建立及失败重试时序不变。`Install` 组装服务与能力，提交前检查调用布局、映射和分派检查；`verification_redirect` 通过显式服务接收接口查询。`interface_redefinition` 使用分派诊断、快照、布局和运行时登记表；映射使用布局读取与退役守卫，不调用接口模块。布局与分派读取依赖 `runtime_thread`，后者只依赖事务上下文、底层 ABI 表、命名服务与生产构建为空的故障接口。版本顺序与 ABI 表不依赖公共实现或符号。事务上下文只持有模块私有状态与要求，不调用任何模块。故障实现、计数器及全部 `InterfaceAbortInstrumentation` JNI 导出位于 app Debug 源文件，生产模块只有会被擦除的故障／计数宏。实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
+依赖由引擎向下组成有向无环图。`hierarchy_snapshot` 与 `schema_snapshot` 同属公开 JNI/JVMTI 层：前者只依赖后者、策略类型与 `evolution`，通过参数接收环境和根容器，不读取引擎全局状态，也不依赖布局、线程、映射或接口内部实现。目标清单独立于可能被嵌套预加载事务清空的声明快照，保活仍覆盖原始提交批次。每次尝试在 `GetLoadedClasses` 之后只遍历一次已加载类，用 JNI `IsAssignableFrom` 判断每个普通目标的子类型（含目标），同时产出全部状态的受影响类型并集供保活使用。可赋值关系按类身份区分不同加载器的同名类，无需对全部已加载类取 identity hash 或建立父类图。子类型列表保留已加载顺序和 PREPARED 标记，重叠目标共用一次类状态读取，策略只读取已准备的子类。接口策略继续接收原 `GroupTypes`，保活并集仍包含可赋值给接口的全部已加载类型。`Probe`、`Begin`、监视器建立及失败重试时序不变。`Install` 组装服务与能力，提交前检查调用布局、映射和分派检查；`verification_redirect` 在安装时绑定同一个可空接口后端，通过它查询接口组的校验替换类。`interface_redefinition` 使用分派诊断、快照、布局和运行时登记表；映射使用布局读取与退役守卫，不调用接口模块。布局与分派读取依赖 `runtime_thread`，后者只依赖事务上下文、底层 ABI 表、命名服务与生产构建为空的故障接口。版本顺序与 ABI 表不依赖公共实现或符号。事务上下文只持有模块 Part 槽位和跨模块要求，不调用任何模块。故障实现、计数器及全部 `InterfaceAbortInstrumentation` JNI 导出位于 app Debug 源文件，生产模块只有会被擦除的故障／计数宏。实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
+
+`Install` 唯一构造并持有引擎、退役与接口模块的进程状态，按依赖顺序准备服务；Hook 借用同一份状态。接口运行时命名服务可用时才创建 `Backend`，引擎持有一个可空后端指针，缺失后端时保留原有能力与拒绝诊断。后端一旦创建便随进程状态保留；安装回滚或降级只撤销引擎的可用视图，不销毁已被 ART 栈上 Hook 借用的对象。原函数指针、Hook 令牌、进程能力和诊断不再各自散落为文件级全局状态；线程局部的字段 ID 捕获与接口计时仍保持原生命周期。
+
+`Context` 的模块专属内容已归回 Part：`interface_dispatch` 持有批次接口义务，`verification_redirect` 持有当前校验作用域，引擎批次持有实例检查要求与子类监视指针。Native 阶段预先创建校验 Part，ART Hook 不为它分配内存；嵌套事务随整个上下文恢复各 Part。`targets`、拒绝原因、`layouts/probed` 与嵌套关系继续共享。`Requirements::superclass` 保留，因为引擎负责分配与提交前父类验收，成员映射还需据它准备字段复制时的父类配对；移入引擎 Part 会使映射反向依赖引擎，移入映射 Part 又会让分配决策依赖映射内部。`descriptor`、`member_mapping` 与 `redirect_verification` 同样在引擎、映射或校验模块间传递约束，不强行私有化。布局与策略共用 `evolution/modifiers.h`，布局不再依赖策略。
 
 ```mermaid
 flowchart TD
-    engine[structural_redefine_engine] --> mapping[member_mapping]
+    engine[Install / Native route / ART hooks / capabilities] --> mapping[member_mapping]
     engine --> verify[verification_redirect]
     engine --> interface[interface_redefinition]
     engine --> dispatch[interface_dispatch]
@@ -459,6 +477,8 @@ flowchart TD
     hierarchy --> schema[schema_snapshot]
     hierarchy --> policy[structural_policy types]
     hierarchy --> evolution[evolution]
+    verify --> interface
+    layout --> evolution
     interface --> dispatch
     interface --> layout
     mapping --> layout
