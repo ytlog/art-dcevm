@@ -173,11 +173,12 @@ Backend* Prepare(Process& state, const Services& services, std::vector<Hook>* ho
     *unavailable_report = std::string("disabled: ") + reason;
   else
     *unavailable_report = "unavailable";
-  if (state.available && state.disabled_reason.load() == nullptr)
-    state.backend = std::make_unique<RuntimeBackend>(state);
-  else
-    state.backend.reset();
-  return state.backend.get();
+  const bool ready = state.available && state.disabled_reason.load() == nullptr;
+  // Hooks already on an ART stack may still hold the published backend while
+  // Install rolls back or degrades. Keep its identity for the process lifetime;
+  // only the engine's optional view becomes null when services are unavailable.
+  if (ready && !state.backend) state.backend = std::make_unique<RuntimeBackend>(state);
+  return ready ? state.backend.get() : nullptr;
 }
 
 }  // namespace artdcevm::interface_redefinition

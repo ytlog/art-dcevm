@@ -21,6 +21,7 @@ from evidence_paths import new_evidence_directory
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_redefine_engine.h"
+#include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/class_layout.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/verification_redirect.h"
@@ -38,6 +39,7 @@ SOURCE = r'''
 using namespace artdcevm;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 bool route_hooked = false;
+interface_redefinition::Backend* prepared_interface = nullptr;
 using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Route routed = nullptr;
 bool nested_preload = false;
@@ -134,6 +136,7 @@ jvmtiError JNICALL GetJni(jvmtiEnv*, jniNativeInterface** table) {
 }
 jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
   ++set_calls;
+  prepared_interface = interface_redefinition::detail::process->backend.get();
   Require(route_hooked, "JNI table changed before the final inline hook");
   hooks_at_set = hook_calls;
   return mode == 2 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
@@ -264,6 +267,14 @@ int main(int argc, char** argv) {
         Require(reason.find(mode == 2 ? "SetJNIFunctionTable failed" : "missing ") != std::string::npos,
                 "Mapping diagnosis lost the original failure");
         Require(set_calls == (mode == 2 ? 1 : 0), "Mapping failure attempted JNI override");
+        if (mode == 2) {
+          Require(prepared_interface &&
+                  prepared_interface == interface_redefinition::detail::process->backend.get(),
+                  "JNI rollback destroyed a backend still borrowed by an ART hook");
+          Require(!prepared_interface->Available() &&
+                  prepared_interface->RuntimeState().find("disabled: ") == 0,
+                  "A retained backend did not observe unavailable process services");
+        }
         Require(runtime_thread::Available(), "Mapping failure prevented Thread preparation");
         transaction::Scope transaction;
         runtime_thread::Probe(&jni);
