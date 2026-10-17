@@ -15,6 +15,12 @@ struct Snapshot {
   std::map<std::string, jclass> parent_interfaces;
   // A superclass of this target changes its own superclass in the batch.
   bool moved_ancestor = false;
+  // The submitted definition changes a method's invoke kind (static <->
+  // instance, virtual -> private); ClassFileLoadHook output is checked again.
+  bool changes_invoke_kind = false;
+  // Ordinary targets: loaded subtypes, including the target, borrowed from the
+  // standard entry's index for the transaction.
+  const std::vector<struct LoadedType>* subtypes = nullptr;
   jclass superclass_class = nullptr;
 };
 struct LoadedType {

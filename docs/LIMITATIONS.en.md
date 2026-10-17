@@ -61,7 +61,7 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 
 | Change | Error code | Notes |
 | --- | --- | --- |
-| Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kinds stay fixed](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kinds-stay-fixed). Use a different name or signature instead |
+| Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
 | Removing an interface, or changing the superclass in a way that drops an existing supertype | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
 

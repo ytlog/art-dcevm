@@ -2,6 +2,7 @@
 #include <set>
 #include <atomic>
 #include <map>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -89,6 +90,13 @@ struct Batch final : transaction::Part {
   bool retires_members = false;
   std::set<ClassRedefinitionPrefix*> no_instances;
   const std::atomic<bool>* subclass_loaded = nullptr;
+  // The standard entry's GetLoadedClasses result, borrowed for the
+  // transaction: invoke-kind changes scan the code of loaded classes.
+  const jclass* loaded = nullptr;
+  jint loaded_count = 0;
+  // A batch class with a frame on some thread when the batch changes an
+  // invoke kind: that old code may still invoke the old kind.
+  std::optional<std::string> active_frame;
   ~Batch() override {
     if (!jni) return;
     for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);

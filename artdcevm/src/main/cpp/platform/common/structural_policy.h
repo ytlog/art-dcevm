@@ -97,6 +97,10 @@ struct Abilities {
   // Additionally accept public abstract additions as pending conditions,
   // validated through a probed read-only IfTable accessor before commit.
   bool interface_abstract_methods = false;
+  // A class method may change its invoke kind (static <-> instance, virtual ->
+  // private) when no loaded code outside the batch still invokes its old kind;
+  // the engine checks that before accepting (requires member_mapping).
+  bool kind_changes = false;
   std::string interface_abstract_unavailable_reason = {};
 };
 
@@ -123,6 +127,9 @@ struct Decision {
   // Abstract methods of added parent interfaces, by declaring interface
   // descriptor, that every loaded implementation must now implement.
   std::vector<std::pair<std::string, MemberKey>> parent_obligations;
+  // Methods whose old invoke kind loaded code outside the batch must not still
+  // use, with that old kind's modifiers. The old declarations retire.
+  std::vector<std::pair<MemberKey, uint32_t>> kind_changes;
 };
 
 // Methods of the target that earlier transactions retired, with their JVMTI

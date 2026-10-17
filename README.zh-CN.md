@@ -18,7 +18,7 @@ ART DCEVM 是 Android 运行时类重定义增强库，用于在应用运行期�
 - 保留已有对象的兼容字段值；新增字段为零值或 `null`，不重跑已有对象的构造器。
 - 多类同批原子提交；不支持的变化拒绝整批，旧定义保留。退役成员的缓存引用继续遵循退役语义。
 
-不支持失去原有父类型、方法 static/实例调用方式切换、虚方法改为 private 或类/接口/注解/枚举种类切换。`RetransformClasses` 不在增强范围，缓存的原始字段偏移不受保护。完整限制、拒绝码与运行语义见 [LIMITATIONS.md](docs/LIMITATIONS.md)。
+不支持失去原有父类型或类/接口/注解/枚举种类切换；方法 static/实例调用方式切换或虚方法改为 private 时，已加载的调用方须同批提交。`RetransformClasses` 不在增强范围，缓存的原始字段偏移不受保护。完整限制、拒绝码与运行语义见 [LIMITATIONS.md](docs/LIMITATIONS.md)。
 
 接口目标在 Android 13–16 / API 33–36 上支持 default/static/private 方法体更新、新增 public abstract/default/static 与 private 实例方法，任一方法的删除或改签名，abstract 与 default 互换，静态字段变化，以及新增父接口；可与相关实现类、子类或无关类原子提交。每次事务仍会检查支持条件；即使只改方法体也会重建受影响实例并保留兼容字段值。详见[接口重定义](docs/LIMITATIONS.md#接口重定义)。
 

@@ -39,6 +39,12 @@ bool ClassAccess(const runtime_thread::VerifiedThread& thread, abi::arm64::Class
 // After ART allocated a redefinition's replacement classes: drop the layouts
 // whose holder slots do not name the target and a class of the incoming DEX.
 // Returns the selected layout's table index, or -1 with `why`.
+// The DexFile, ClassDef index, boot-ness and descriptor of another loaded
+// class, read with every layout VerifyTarget accepted for this transaction.
+// False when none is verified, the accepted layouts disagree, or the class
+// has no DexFile (arrays, primitives, proxies).
+bool ClassOrigin(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self, jclass klass,
+                 const abi::arm64::DexFilePrefix** dex, int32_t* class_def, bool* boot, std::string* descriptor);
 int VerifyReplacements(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
                        const abi::arm64::RedefinitionDataIter& data, std::string* why);
 bool SuperclassMatches(const runtime_thread::VerifiedThread& thread,

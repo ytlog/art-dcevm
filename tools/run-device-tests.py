@@ -181,6 +181,10 @@ SCENARIOS = (
     ("super-batch-moving", ["super-batch-moving", "super-batch-moving"], 66),
     ("super-batch-child", ["super-batch-child", "super-batch-child"], 0),
     ("method-descriptive-flags", ["method-descriptive-flags"], 0),
+    ("kind-instance", ["kind-instance"], 71),
+    ("kind-instance-batch", ["kind-instance", "kind-instance"], 0),
+    ("kind-private", ["kind-private"], 0),
+    ("kind-static-rejected", ["kind-static"], 71),
     ("preload-subclass", ["preload-subclass"], 0),
     ("preload-hook-subclass", ["preload-hook-original"], 0),
     ("tool-add-classes", ["tool-v1", "tool-v1"], 0),
@@ -205,6 +209,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "nested-interface-initializer", "nested-interface-restore-initializer",
                     "interface-kind-default", "interface-kind-abstract", "interface-parent-add",
                     "interface-access", "interface-access-restore", "method-descriptive-flags",
+                    "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child",
                     "field-retire", "field-restore", "field-types"}
@@ -492,6 +497,11 @@ REQUIRED_CHECKS = {
     **{"super-batch-" + variant: {"rejectionReason": True,
         "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13}
        for variant in ("parent", "moving")},
+    "kind-instance": {"rejectionReason": True, "callerUnchanged": 2, "staticUnchanged": 2},
+    "kind-instance-batch": {"instanceKind": False, "caller": 3, "instanceCall": 4,
+        "retiredStatic": "java.lang.NoSuchMethodError", "marker": 9, "callerAfterGc": 3},
+    "kind-private": {"privateKind": True, "useHelper": 6, "marker": 9},
+    "kind-static-rejected": {"rejectionReason": True, "callerUnchanged": 3},
     "method-descriptive-flags": {"varargsBefore": True, "varargsAfter": False, "strictAfter": False,
         "sum": 7, "half": 2.5},
     "interface-access": {"publicAfter": False, "value": 2, "marker": 3},
@@ -585,6 +595,7 @@ UNCHANGED_CHECKS = {
     "interface-default-conflict": ("unchangedInterface", "unchangedImplementation"),
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
+    **{name: ("unchangedSubject",) for name in ("kind-instance", "kind-static-rejected")},
     **{"super-batch-" + variant: ("unchangedSubject",) for variant in ("parent", "moving")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},

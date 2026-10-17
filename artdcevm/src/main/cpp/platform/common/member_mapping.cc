@@ -93,6 +93,8 @@ struct MappingPlan {
   std::string default_conflict;
 };
 
+bool Initializer(const std::string& name) { return name == "<init>" || name == "<clinit>"; }
+
 // Mapping operations over one source-declared class layout.
 struct PlanOps {
   bool (*plan)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
@@ -177,6 +179,13 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
           replacement = candidate;
           break;
         }
+      }
+      // An accepted invoke-kind change retires the old declaration: the new
+      // method of the other kind is a new member, never its mapping target.
+      if (replacement && declared && !Initializer(identity.name)) {
+        const uint32_t before = old_method->access_flags.load(), after = static_cast<Method*>(replacement)->access_flags.load();
+        constexpr uint32_t kStatic = evolution::kAccStatic, kPrivate = evolution::kAccPrivate;
+        if (((before ^ after) & kStatic) || (!(before & (kStatic | kPrivate)) && (after & kPrivate))) replacement = nullptr;
       }
       constexpr uint32_t kNative = evolution::kAccNative;
       if ((old_method->access_flags.load() & kNative) &&

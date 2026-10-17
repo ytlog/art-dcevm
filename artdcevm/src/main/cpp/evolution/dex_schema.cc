@@ -1,4 +1,6 @@
 #include "evolution/class_schema.h"
+#include <optional>
+#include <algorithm>
 #include <cstring>
 #include <set>
 #include <stdexcept>
@@ -95,6 +97,44 @@ class Reader {
       if (type[element] == 'L') classes.insert(type.substr(element));
     }
     return {classes.begin(), classes.end()};
+  }
+
+  std::vector<uint32_t> MethodIds(const std::set<std::string>& classes, std::string_view name,
+                                  std::string_view descriptor) {
+    Header(true);
+    std::vector<uint32_t> found;
+    for (uint32_t i = 0; i < methods_.count; ++i) {
+      const size_t item = Item(methods_, i);
+      if (String(U32(item + 4)) != name) continue;
+      if (!classes.count(Type(U16(item))) || Prototype(U16(item + 2)) != descriptor) continue;
+      found.push_back(i);
+    }
+    return found;
+  }
+
+  std::optional<uint32_t> ClassDefOf(std::string_view descriptor) {
+    Header(true);
+    for (uint32_t i = 0; i < classes_.count; ++i)
+      if (Type(U32(Item(classes_, i))) == descriptor) return i;
+    return std::nullopt;
+  }
+
+  bool CodeReferences(uint32_t class_def, const std::vector<uint32_t>& methods) {
+    Header(true);
+    const size_t def = Item(classes_, class_def);
+    const uint32_t data = U32(def + 24);
+    if (!data || methods.empty()) return false;
+    const auto handles = MethodHandles();
+    size_t cursor = data;
+    const uint32_t static_fields = Leb(&cursor), instance_fields = Leb(&cursor);
+    const uint32_t direct_methods = Leb(&cursor), virtual_methods = Leb(&cursor);
+    for (uint32_t i = 0; i < size_t{static_fields} + instance_fields; ++i) { Leb(&cursor); Leb(&cursor); }
+    for (uint32_t i = 0; i < size_t{direct_methods} + virtual_methods; ++i) {
+      Leb(&cursor); Leb(&cursor);
+      const uint32_t code = Leb(&cursor);
+      if (code && Code(code, methods, handles)) return true;
+    }
+    return false;
   }
 
   Member MethodIdentity(uint32_t index) {
@@ -281,6 +321,87 @@ class Reader {
       out->push_back({std::move(name), Prototype(U16(item + 2)), access});
     }
   }
+  // (offset, count) of the map list's method handle items, or none.
+  std::pair<uint32_t, uint32_t> MethodHandles() const {
+    const uint32_t map = U32(0x34);
+    if (!map) return {0, 0};
+    if (map % 4) Fail("Unaligned map list");
+    const uint32_t count = DataU32(map);
+    Range(dex_.data_size, size_t{map} + 4, size_t{count} * 12);
+    for (uint32_t i = 0; i < count; ++i) {
+      const size_t item = size_t{map} + 4 + size_t{i} * 12;
+      if (DataU16(item) == 0x0008) return {DataU32(item + 8), DataU32(item + 4)};
+    }
+    return {0, 0};
+  }
+  // dex_instruction_list.h widths in code units; payloads have their own size.
+  static uint32_t Width(uint8_t opcode) {
+    if (opcode <= 0x01 || opcode == 0x04 || opcode == 0x07 ||
+        (opcode >= 0x0a && opcode <= 0x12) || opcode == 0x1d || opcode == 0x1e || opcode == 0x21 ||
+        opcode == 0x27 || opcode == 0x28 || (opcode >= 0x3e && opcode <= 0x43) ||
+        opcode == 0x73 || opcode == 0x79 || opcode == 0x7a || (opcode >= 0x7b && opcode <= 0x8f) ||
+        (opcode >= 0xb0 && opcode <= 0xcf) || (opcode >= 0xe3 && opcode <= 0xf9)) return 1;
+    if (opcode == 0x02 || opcode == 0x05 || opcode == 0x08 || opcode == 0x13 || opcode == 0x15 ||
+        opcode == 0x16 || opcode == 0x19 || opcode == 0x1a || opcode == 0x1c || opcode == 0x1f ||
+        opcode == 0x20 || opcode == 0x22 || opcode == 0x23 || opcode == 0x29 ||
+        (opcode >= 0x2d && opcode <= 0x3d) || (opcode >= 0x44 && opcode <= 0x6d) ||
+        (opcode >= 0x90 && opcode <= 0xaf) || (opcode >= 0xd0 && opcode <= 0xe2) ||
+        opcode == 0xfe || opcode == 0xff) return 2;
+    if (opcode == 0x18) return 5;
+    if (opcode == 0xfa || opcode == 0xfb) return 4;
+    return 3;  // 03 06 09 14 17 1b 24-26 2a-2c 6e-72 74-78 fc fd
+  }
+  bool Code(uint32_t code, const std::vector<uint32_t>& methods, std::pair<uint32_t, uint32_t> handles) const {
+    uint32_t units;
+    size_t insns;
+    const bool compact = std::memcmp(dex_.begin, "cdex001", 8) == 0;
+    // Standard code items are 4-byte aligned; compact ones 2-byte aligned.
+    if (code % (compact ? 2 : 4)) Fail("Unaligned code item");
+    if (compact) {
+      // compact_dex_file.h CodeItem: fields_, insns_count_and_flags_, insns_;
+      // an instruction count overflow precedes the item as two preheader units.
+      const uint16_t flags = DataU16(size_t{code} + 2);
+      units = flags >> 5;
+      if (flags & 0x10) {
+        if (code < 4) Fail("Invalid code item preheader");
+        units += DataU16(size_t{code} - 2) + (uint32_t{DataU16(size_t{code} - 4)} << 16);
+      }
+      insns = size_t{code} + 4;
+    } else {
+      units = DataU32(size_t{code} + 12);
+      insns = size_t{code} + 16;
+    }
+    Range(dex_.data_size, insns, size_t{units} * 2);
+    const auto named = [&](uint32_t index) { return std::binary_search(methods.begin(), methods.end(), index); };
+    for (uint32_t at = 0; at < units;) {
+      const uint16_t unit = DataU16(insns + size_t{at} * 2);
+      const uint8_t opcode = unit & 0xff;
+      uint32_t width = Width(opcode);
+      if (opcode == 0x00 && (unit >> 8)) {
+        if (at + 2 > units) Fail("Truncated payload");
+        const uint32_t size = DataU16(insns + size_t{at + 1} * 2);
+        if (unit == 0x0100) width = 4 + size * 2;
+        else if (unit == 0x0200) width = 2 + size * 4;
+        else if (unit == 0x0300) {
+          if (at + 4 > units) Fail("Truncated payload");
+          const uint64_t count = DataU32(insns + size_t{at + 2} * 2);
+          width = static_cast<uint32_t>(4 + (count * size + 1) / 2);
+          if (count * size > uint64_t{UINT32_MAX}) Fail("Oversized array payload");
+        } else Fail("Unknown payload");
+      }
+      if (width > units - at) Fail("Truncated instruction");
+      const uint32_t operand = width > 1 ? DataU16(insns + size_t{at + 1} * 2) : 0;
+      if (((opcode >= 0x6e && opcode <= 0x72) || (opcode >= 0x74 && opcode <= 0x78) ||
+           opcode == 0xfa || opcode == 0xfb) && named(operand)) return true;
+      if (opcode == 0xfe) {
+        if (operand >= handles.second) Fail("Invalid method handle index");
+        const size_t item = size_t{handles.first} + size_t{operand} * 8;
+        if (DataU16(item) >= 4 && DataU16(item) <= 8 && named(DataU16(item + 4))) return true;
+      }
+      at += width;
+    }
+    return false;
+  }
   static void Unique(const std::vector<Member>& members) {
     std::set<std::pair<std::string, std::string>> keys;
     for (const auto& m : members)
@@ -345,6 +466,41 @@ bool ReadTypeDescriptor(const DexView& dex, uint32_t index, std::string* output,
     *output = Reader(dex).TypeDescriptor(index);
     error->clear();
     return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+bool FindMethodIds(const DexView& dex, const std::set<std::string>& classes, std::string_view name,
+                   std::string_view descriptor, std::vector<uint32_t>* output, std::string* error) {
+  try {
+    *output = Reader(dex).MethodIds(classes, name, descriptor);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool CodeReferencesMethods(const DexView& dex, uint32_t class_def, const std::vector<uint32_t>& methods,
+                           bool* output, std::string* error) {
+  try {
+    *output = Reader(dex).CodeReferences(class_def, methods);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool FindClassDef(const DexView& dex, std::string_view descriptor, uint32_t* output, std::string* error) {
+  try {
+    const auto found = Reader(dex).ClassDefOf(descriptor);
+    error->clear();
+    if (found) *output = *found;
+    return found.has_value();
   } catch (const std::runtime_error& failure) {
     *error = failure.what();
     return false;

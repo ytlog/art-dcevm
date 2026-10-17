@@ -264,6 +264,27 @@ int main(int argc, char** argv) {
     Accept(next, live, false, true);  // Abstract -> concrete.
     next = live; next.methods[0].access |= acc::kAccStatic;
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
+    {
+      // With the loaded-caller check, the old kind retires and a scan is pending.
+      policy::Abilities kinds;
+      kinds.member_mapping = true;
+      kinds.kind_changes = true;
+      const auto changed = policy::Evaluate(live, next, {}, kinds);
+      Require(changed.error == JVMTI_ERROR_NONE && changed.methods_structural && changed.requires_member_mapping &&
+              changed.retired_methods.size() == 1 && changed.kind_changes.size() == 1 &&
+              changed.kind_changes[0].second == live.methods[0].access,
+              "invoke-kind change must retire the old kind and request a caller scan");
+      auto hidden = live; hidden.methods[0].access = acc::kAccPrivate;
+      Require(policy::Evaluate(live, hidden, {}, kinds).kind_changes.size() == 1,
+              "virtual made private must request a caller scan");
+      auto readded = live; readded.methods.push_back({"gone", "()I", acc::kAccPublic});
+      const policy::RetiredMethods gone{{{"gone", "()I"}, acc::kAccPublic | acc::kAccStatic}};
+      Require(policy::Evaluate(live, readded, {}, kinds, gone).kind_changes.size() == 1,
+              "re-adding a retired identity as another kind must request a caller scan");
+      kinds.member_mapping = false;
+      Require(policy::Evaluate(live, next, {}, kinds).error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+              "invoke-kind change needs the engine's mapping");
+    }
     // Bridge, varargs, strict and synthetic describe the method to reflection.
     for (uint32_t flags : {uint32_t{0x40}, uint32_t{0x80}, uint32_t{0x800}, uint32_t{0x1000}}) {
       next = live; next.methods[0].access |= flags;

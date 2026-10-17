@@ -376,9 +376,18 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       decision.interface_obligations.insert(decision.interface_obligations.end(),
           kind.interface_obligations.begin(), kind.interface_obligations.end());
     }
-    if (BreaksVerifiedCallers(old.name, old.access, now))
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
-                    "verified callers may still invoke the old kind of " + Describe(old));
+    if (BreaksVerifiedCallers(old.name, old.access, now)) {
+      if (interface_target || !owns_member_mapping || !abilities.kind_changes)
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                      "verified callers may still invoke the old kind of " + Describe(old));
+      // The old kind retires; the declaration of the new kind is a new member.
+      decision.kind_changes.push_back({{old.name, old.descriptor}, old.access});
+      decision.retired_methods.push_back(old);
+      decision.methods_structural = true;
+      decision.requires_member_mapping = true;
+      new_methods.erase(it);
+      continue;
+    }
     // Abstract <-> concrete and Java <-> native change the method's kind; the
     // structural path creates the new kind. Native -> Java needs the engine's
     // commit, which keeps ART from copying the old JNI entry into a Java method.
@@ -401,9 +410,12 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   }
   for (const auto& [key, now] : new_methods) {
     const auto before = retired.find(key);
-    if (before != retired.end() && BreaksVerifiedCallers(key.first, before->second, now))
+    if (before == retired.end() || !BreaksVerifiedCallers(key.first, before->second, now)) continue;
+    if (interface_target || !owns_member_mapping || !abilities.kind_changes)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the retired kind of " + key.first + key.second);
+    decision.kind_changes.push_back({key, before->second});
+    decision.requires_member_mapping = true;
   }
   if (interface_target) {
     for (const auto& [key, now] : new_methods) {

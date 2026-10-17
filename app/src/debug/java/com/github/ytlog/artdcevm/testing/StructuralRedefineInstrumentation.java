@@ -14,6 +14,7 @@ import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
+import com.github.ytlog.artdcevm.fixture.KindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -2045,6 +2046,57 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runSuperBatchScenarios();
         runDescriptiveFlagScenarios();
+        runKindChangeScenarios();
+    }
+
+    // A method may change its invoke kind when no loaded code outside the batch
+    // still invokes the old kind. This class names the methods only reflectively.
+    private void runKindChangeScenarios() throws Exception {
+        KindFixture.Subject subject = new KindFixture.Subject();
+        subject.marker = 9;
+        scenarioCheckCaller(KindFixture.Caller.call());
+        Method staticConvert = KindFixture.Subject.class.getMethod("convert", int.class);
+        String schema = memberSchema(KindFixture.Subject.class);
+        runScenario("kind-instance", 71, scenario -> {
+            scenario.redefine(new Class<?>[]{KindFixture.Subject.class}, "kind-instance");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                    .contains("loaded class Lcom/github/ytlog/artdcevm/fixture/KindFixture$Caller; still invokes the old kind"));
+            scenario.check("unchangedSubject", schema, memberSchema(KindFixture.Subject.class));
+            scenario.check("callerUnchanged", 2, KindFixture.Caller.call());
+            scenario.check("staticUnchanged", 2, staticConvert.invoke(null, 1));
+        });
+        runScenario("kind-instance-batch", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{KindFixture.Subject.class, KindFixture.Caller.class},
+                    "kind-instance", "kind-instance");
+            Method convert = KindFixture.Subject.class.getMethod("convert", int.class);
+            scenario.check("instanceKind", false, Modifier.isStatic(convert.getModifiers()));
+            scenario.check("caller", 3, KindFixture.Caller.call());
+            scenario.check("instanceCall", 4, convert.invoke(subject, 2));
+            scenario.expectError("retiredStatic", NoSuchMethodError.class, () -> staticConvert.invoke(null, 1));
+            scenario.check("marker", 9, subject.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("callerAfterGc", 3, KindFixture.Caller.call());
+        });
+        runScenario("kind-private", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{KindFixture.Subject.class}, "kind-private");
+            scenario.check("privateKind", true, Modifier.isPrivate(
+                    KindFixture.Subject.class.getDeclaredMethod("helper").getModifiers()));
+            scenario.check("useHelper", 6, subject.useHelper());
+            scenario.check("marker", 9, subject.marker);
+        });
+        String instanceSchema = memberSchema(KindFixture.Subject.class);
+        runScenario("kind-static-rejected", 71, scenario -> {
+            // The new Caller now invokes convert as an instance method.
+            scenario.redefine(new Class<?>[]{KindFixture.Subject.class}, "kind-static");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
+                    .contains("loaded class Lcom/github/ytlog/artdcevm/fixture/KindFixture$Caller; still invokes the old kind"));
+            scenario.check("unchangedSubject", instanceSchema, memberSchema(KindFixture.Subject.class));
+            scenario.check("callerUnchanged", 3, KindFixture.Caller.call());
+        });
+    }
+
+    private static void scenarioCheckCaller(int value) {
+        if (value != 2) throw new AssertionError("KindFixture.Caller precondition: " + value);
     }
 
     // Bridge, varargs, strict and synthetic flags only describe a method.

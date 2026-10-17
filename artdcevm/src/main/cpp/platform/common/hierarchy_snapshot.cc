@@ -1,4 +1,5 @@
 #include "platform/common/hierarchy_snapshot.h"
+#include "evolution/modifiers.h"
 #include "platform/common/schema_snapshot.h"
 #include <algorithm>
 #include <string_view>
@@ -408,6 +409,14 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   std::string unreadable;
   if (!evolution::ReadClassDeclarations(SubmittedDex(definition), &incoming, &unreadable))
     return JVMTI_ERROR_NONE;
+  for (const auto& old : snapshot->live.methods)
+    for (const auto& next : incoming.methods) {
+      if (old.name != next.name || old.descriptor != next.descriptor) continue;
+      const uint32_t now = evolution::MethodModifiers(next.access);
+      constexpr uint32_t kDirect = evolution::kAccStatic | evolution::kAccPrivate;
+      if (((old.access ^ now) & evolution::kAccStatic) || (!(old.access & kDirect) && (now & evolution::kAccPrivate)))
+        snapshot->changes_invoke_kind = true;
+    }
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)

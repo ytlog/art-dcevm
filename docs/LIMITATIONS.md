@@ -59,7 +59,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式不变](STRUCTURAL_REDEFINE_ENGINE.md#调用方式不变)；可改用不同的名称或签名 |
+| 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 

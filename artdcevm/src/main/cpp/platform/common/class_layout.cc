@@ -37,6 +37,7 @@ struct ProbeOps {
                       std::string* why);
   uint32_t (*access)(const void* klass);
   uint32_t (*superclass)(const void* klass);
+  void (*origin)(const void* klass, uint32_t* dex_cache, uint32_t* class_loader, int32_t* class_def, int32_t* type);
 };
 
 template <typename Class, typename Method> struct Probe : View<Class, Method> {
@@ -179,8 +180,15 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
   }
 
   static uint32_t Superclass(const void* klass) { return static_cast<const Class*>(klass)->super_class; }
+  static void Origin(const void* klass, uint32_t* dex_cache, uint32_t* class_loader, int32_t* class_def, int32_t* type) {
+    const auto* declared = static_cast<const Class*>(klass);
+    *dex_cache = declared->dex_cache;
+    *class_loader = declared->class_loader;
+    *class_def = declared->dex_class_def_index;
+    *type = declared->dex_type_index;
+  }
   static constexpr ProbeOps Make(int android) {
-    return {android, VerifyTarget, VerifyIter, Access, Superclass};
+    return {android, VerifyTarget, VerifyIter, Access, Superclass, Origin};
   }
 };
 
@@ -260,6 +268,31 @@ bool ClassAccess(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass kl
   }
   if (!agreed) return false;
   *access = *agreed;
+  return true;
+}
+
+bool ClassOrigin(const VerifiedThread& thread, ClassRedefinitionPrefix* self, jclass klass,
+                 const DexFilePrefix** dex, int32_t* class_def, bool* boot, std::string* descriptor) {
+  const transaction::Context* context = transaction::Current();
+  if (!enabled || !context || !context->probed) return false;
+  const void* mirror = DecodeClass(art.mirror_class, self, klass);
+  if (!mirror) return false;
+  std::optional<std::tuple<uint32_t, uint32_t, int32_t, int32_t>> agreed;
+  for (size_t i = 0; i < kLayoutCount; ++i) {
+    if (!(context->layouts & (LayoutMask{1} << i))) continue;
+    std::tuple<uint32_t, uint32_t, int32_t, int32_t> origin;
+    kProbes[i].origin(mirror, &std::get<0>(origin), &std::get<1>(origin), &std::get<2>(origin), &std::get<3>(origin));
+    if (agreed && *agreed != origin) return false;
+    agreed = origin;
+  }
+  if (!agreed) return false;
+  *dex = DexOf(thread, std::get<0>(*agreed));
+  *boot = std::get<1>(*agreed) == 0;
+  *class_def = std::get<2>(*agreed);
+  std::string error;
+  if (!*dex || !(*dex)->begin || std::get<3>(*agreed) < 0 ||
+      !evolution::ReadTypeDescriptor(DexViewOf(**dex), static_cast<uint32_t>(std::get<3>(*agreed)), descriptor, &error))
+    return false;
   return true;
 }
 

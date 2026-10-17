@@ -10,6 +10,62 @@
 #include "platform/common/runtime_thread.h"
 
 namespace artdcevm::structural_redefine::detail {
+namespace {
+// Verified code re-resolves a method by name and runs it as the kind it was
+// verified against. A kind change is accepted only when no loaded class
+// outside the batch has code naming the old method through the target or a
+// loaded subclass; classes loaded later verify against the new kind. Boot
+// code cannot name application classes.
+std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
+                        const Snapshot& snapshot, const Batch& batch,
+                        const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes) {
+  const std::string method = changes.front().first.first + changes.front().first.second;
+  if (batch.active_frame)
+    return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
+  if (!batch.loaded || !snapshot.subtypes) return "loaded code cannot be checked for the old kind of " + method;
+  std::set<std::string> classes{snapshot.live.descriptor};
+  for (const auto& type : *snapshot.subtypes) {
+    const abi::arm64::DexFilePrefix* dex = nullptr;
+    int32_t class_def = -1;
+    bool boot = false;
+    std::string descriptor;
+    if (class_layout::ClassOrigin(thread, self, type.klass, &dex, &class_def, &boot, &descriptor))
+      classes.insert(std::move(descriptor));
+  }
+  std::set<void*> submitted;
+  for (const auto& [klass, ignored] : batch.classes)
+    submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
+  for (const auto& [key, access] : changes) {
+    std::map<const abi::arm64::DexFilePrefix*, std::vector<uint32_t>> ids;
+    for (jint i = 0; i < batch.loaded_count; ++i) {
+      if (submitted.count(class_layout::DecodeClass(process->layout_services.mirror_class, self, batch.loaded[i]))) continue;
+      const abi::arm64::DexFilePrefix* dex = nullptr;
+      int32_t class_def = -1;
+      bool boot = false;
+      std::string caller;
+      if (!class_layout::ClassOrigin(thread, self, batch.loaded[i], &dex, &class_def, &boot, &caller) || boot ||
+          class_def < 0)
+        continue;
+      const evolution::DexView view = DexViewOf(*dex);
+      std::string error;
+      auto found = ids.find(dex);
+      if (found == ids.end()) {
+        std::vector<uint32_t> matching;
+        if (!evolution::FindMethodIds(view, classes, key.first, key.second, &matching, &error))
+          return "loaded DEX cannot be checked for the old kind of " + method + ": " + error;
+        found = ids.emplace(dex, std::move(matching)).first;
+      }
+      if (found->second.empty()) continue;
+      bool invokes = false;
+      if (!evolution::CodeReferencesMethods(view, static_cast<uint32_t>(class_def), found->second, &invokes, &error))
+        return "loaded code cannot be checked for the old kind of " + key.first + key.second + ": " + error;
+      if (invokes) return "loaded class " + caller + " still invokes the old kind of " + key.first + key.second;
+    }
+  }
+  return {};
+}
+}  // namespace
+
 bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   transaction::Context* context = transaction::Current();
@@ -53,6 +109,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // default conflicts, and retirement roots cover the group: an interface
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
+  abilities.kind_changes = abilities.member_mapping && batch->loaded;
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
       interface_dispatch::Available(*thread, self, (interfaces && interfaces->AbstractLinkErrorsAvailable()));
@@ -75,6 +132,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       (interfaces && interfaces->SharesImplementationGroup(self))) {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
     decision.reason = "superclass change overlaps the interface implementation group";
+  }
+  if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
+    if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
+      decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+      decision.reason = std::move(callers);
+    }
   }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;

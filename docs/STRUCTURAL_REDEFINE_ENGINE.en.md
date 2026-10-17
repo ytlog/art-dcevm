@@ -180,7 +180,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 
 ## Validation rules
 
-`structural_policy` is a pure function that can be tested on the host. Field identity is (name, type, static); method identity is (name, descriptor), and a method's invoke kind is further constrained by [invoke kinds stay fixed](#invoke-kinds-stay-fixed). Before comparison, raw DEX flags are normalized to the JVMTI view, consistently with `ti_method.cc`, `ti_field.cc` and `ti_class.cc`: retain Java flag bits, map a method's declared-synchronized flag to synchronized, and remove native from abstract methods.
+`structural_policy` is a pure function that can be tested on the host. Field identity is (name, type, static); method identity is (name, descriptor), and a method's invoke kind is further constrained by [invoke kind changes](#invoke-kind-changes). Before comparison, raw DEX flags are normalized to the JVMTI view, consistently with `ti_method.cc`, `ti_field.cc` and `ti_class.cc`: retain Java flag bits, map a method's declared-synchronized flag to synchronized, and remove native from abstract methods.
 
 “Retirement available” means the method-retirement hooks are installed and this transaction's layout probes pass. Field changes also require field guards.
 
@@ -196,7 +196,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Make a method final when a loaded subclass overrides it | Reject with `METHOD_MODIFIERS_CHANGED` (71) |
 | Add an instance method or change its access level when it may displace a loaded subclass's copied default/miranda method | Accept through custom mapping when retirement is available; otherwise reject additions with `METHOD_ADDED` (63) and access changes with 71 |
 | native → Java | Accept when retirement is available; the engine handles JNI-entry copying. Otherwise reject with 71 |
-| Switch a method between static and instance, make an instance method private, or re-add a retired method as another invoke kind | Reject with 71; see [invoke kinds stay fixed](#invoke-kinds-stay-fixed) |
+| Switch a method between static and instance, make an instance method private, or re-add a retired method as another invoke kind | Accept when no loaded class outside the batch still names it with the old kind and no batch class has an active frame: the old declaration retires and the new-kind declaration is a new member; otherwise reject with 71 (see [invoke kind changes](#invoke-kind-changes)) |
 | Change a method's bridge, varargs, strict or synthetic flags | Accept through the structural path; the new method carries the new flags, which only describe it to reflection and linking |
 | Delete methods or change signatures, including native, abstract, constructors and class initializers | Accept when retirement is available; otherwise reject with `METHOD_DELETED` (67) |
 | Delete fields or change their types or static flags | Accept when retirement and field guards are available; otherwise reject with `SCHEMA_CHANGED` (64) |
@@ -312,16 +312,16 @@ Any loss of a supertype, whether removing an interface or omitting an old superc
 
 Checking the heap and stacks at commit covers only existing references, not this code when it executes later. Safe narrowing would require ART to reverify every loaded class that may depend on the old type relationships. No usable named entry exists for that operation.
 
-## Invoke kinds stay fixed
+## Invoke kind changes
 
 Verified code resolves a method by name and signature without checking that it still has the invoke kind it was verified against. Methods that skip access checks use unchecked resolution, and from Android 16 that path (`ClassLinker::ResolveMethodId`) no longer receives the invoke type. The instruction then invokes the result as its own invoke type:
 
 - `invoke-static` that resolves to an instance method runs the instance body without a receiver argument.
 - `invoke-virtual` that resolves to a static or private method dispatches through a vtable index the method does not own, reaching another method.
 
-Retiring the old method clears the callers' DexCache entries, so the next call takes exactly this path. The engine cannot make it throw `IncompatibleClassChangeError`. A method identity (name, descriptor) therefore stays static or instance, and a virtual method never becomes private. A private method may become virtual: only the class's own code invokes it directly, and that remains valid. Constructors and class initializers are always invoked directly and are not restricted.
+Retiring the old method clears the callers' DexCache entries, so the next call takes exactly this path. The engine cannot make it throw `IncompatibleClassChangeError`, so an invoke-kind change is accepted only when no such caller exists: for every loaded non-boot class outside the batch, `CheckClass` reads its DexFile and ClassDef through the layout, finds the method_ids naming the old identity through the target or a loaded subclass, and walks all of that class's code with bounds checks for invokes (35c, 3rc, 45cc, 4rcc) and method-kind const-method-handle; a match rejects with 71 and names the caller. Classes loaded later verify against the new kind, and boot code cannot name application classes. When the batch may change an invoke kind, the Native phase checks for active frames of batch classes with `GetAllStackTraces`: an old frame keeps running old code whose next call re-resolves by name too. Once accepted, the old declaration retires (the mapping never maps it to the new method of the other kind) and the new declaration is a new member. A private method may become virtual: only the class's own code invokes it directly, and that remains valid. Constructors and class initializers are always invoked directly and are not restricted.
 
-The engine records the methods each class retired in committed transactions, with their modifiers, and checks a later re-addition of the same identity by the same rule. The record lasts as long as the process. Field resolution includes the static flag and cannot find a field with the other storage, so a field's static change can retire like any other.
+The engine records the methods each class retired in committed transactions, with their modifiers, and scans callers the same way when the identity is re-added as another invoke kind. The record lasts as long as the process. Field resolution includes the static flag and cannot find a field with the other storage, so a field's static change can retire like any other.
 
 ## Active frames
 

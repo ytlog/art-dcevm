@@ -173,6 +173,28 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
   return result;
 }
 
+// An obsolete method keeps running old code after the batch commits, and its
+// next call re-resolves by name: with an invoke-kind change, that code could
+// invoke the new member as the old kind. Record any batch class on a stack.
+jvmtiError FindActiveBatchFrame(jvmtiEnv* env, JNIEnv* jni, Batch& batch) {
+  jvmtiStackInfo* stacks = nullptr;
+  jint threads = 0;
+  const jvmtiError result = env->GetAllStackTraces(1024, &stacks, &threads);
+  if (result != JVMTI_ERROR_NONE) return result;
+  for (jint t = 0; t < threads && !batch.active_frame; ++t) {
+    for (jint f = 0; f < stacks[t].frame_count && !batch.active_frame; ++f) {
+      jclass declaring = nullptr;
+      if (env->GetMethodDeclaringClass(stacks[t].frame_buffer[f].method, &declaring) != JVMTI_ERROR_NONE) continue;
+      for (const auto& [klass, snapshot] : batch.classes)
+        if (jni->IsSameObject(klass, declaring)) batch.active_frame = snapshot.live.descriptor;
+      jni->DeleteLocalRef(declaring);
+    }
+  }
+  for (jint t = 0; t < threads; ++t) jni->DeleteLocalRef(stacks[t].thread);
+  env->Deallocate(reinterpret_cast<unsigned char*>(stacks));
+  return JVMTI_ERROR_NONE;
+}
+
 jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                      bool* subclass_loaded) {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
@@ -272,6 +294,14 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   result = process->snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   // Failures without a reason here are described by Route.
   if (result != JVMTI_ERROR_NONE) return result;
+  batch.loaded = loaded.classes;
+  batch.loaded_count = loaded.count;
+  bool changes_invoke_kind = false;
+  for (const auto& [klass, snapshot] : batch.classes) changes_invoke_kind |= snapshot.changes_invoke_kind;
+  if (changes_invoke_kind) {
+    result = FindActiveBatchFrame(process->snapshot_env, jni, batch);
+    if (result != JVMTI_ERROR_NONE) return result;
+  }
   std::string interface_error;
   const uint64_t loaded_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - loaded_start).count();
@@ -298,8 +328,9 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       result = hierarchy_snapshot::CollectInterfaceSubclasses(process->snapshot_env, jni, klass, *group,
                                                                 &snapshot, &error);
     } else {
+      snapshot.subtypes = &index.subtypes[ordinary_indices.at(klass)];
       result = hierarchy_snapshot::CollectSubclasses(process->snapshot_env, jni, klass,
-                                                      index.subtypes[ordinary_indices.at(klass)], &snapshot, &error);
+                                                      *snapshot.subtypes, &snapshot, &error);
     }
     if (result != JVMTI_ERROR_NONE) {
       Diagnose(snapshot.live.descriptor + ": " + error, true);

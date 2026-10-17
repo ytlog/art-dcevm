@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -75,4 +76,15 @@ bool ReadReferencedClasses(const DexView& dex, std::vector<std::string>* output,
 // The exact type_ids entry, including array descriptors.
 bool ReadTypeDescriptor(const DexView& dex, uint32_t index, std::string* output,
                         std::string* error);
+// Sorted method_ids indices whose class is one of `classes` and whose name and
+// prototype are `name` and `descriptor`, from a standard or compact DEX.
+bool FindMethodIds(const DexView& dex, const std::set<std::string>& classes, std::string_view name,
+                   std::string_view descriptor, std::vector<uint32_t>* output, std::string* error);
+// Whether the code of ClassDef `class_def` names one of the sorted method_ids
+// `methods`: through an invoke (35c, 3rc, 45cc, 4rcc) or a const-method-handle
+// of a method kind. Every code item is walked with bounds-checked widths.
+bool CodeReferencesMethods(const DexView& dex, uint32_t class_def, const std::vector<uint32_t>& methods,
+                           bool* output, std::string* error);
+// The ClassDef index of `descriptor`, or false when the DEX does not define it.
+bool FindClassDef(const DexView& dex, std::string_view descriptor, uint32_t* output, std::string* error);
 }  // namespace artdcevm::evolution
