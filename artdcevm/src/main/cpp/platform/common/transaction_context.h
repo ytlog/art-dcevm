@@ -1,5 +1,6 @@
 #pragma once
 #include <jni.h>
+#include <jvmti.h>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -73,6 +74,8 @@ struct Context {
 
   const Requirements* Find(abi::arm64::ClassRedefinitionPrefix* self) const;
   bool RequiresMemberMapping() const;
+  // One path for the engine's final checks to reject ART's whole transaction.
+  bool Reject(abi::arm64::ClassRedefinitionPrefix* self, jvmtiError error, std::string reason);
 };
 
 // The innermost transaction on this thread, or null outside one.

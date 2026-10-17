@@ -1,5 +1,6 @@
 #pragma once
 #include <jni.h>
+#include "platform/common/runtime_thread.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,19 +14,13 @@ struct Services {
   abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view);
   void* (*mirror_class)(abi::arm64::ClassRedefinitionPrefix*);
   jclass class_type;  // Borrowed process-lived global root.
-  bool (*early_link_errors_available)();
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  bool (*inject_probe_failure)() = nullptr;
-#endif
 };
 void Prepare(JNIEnv* jni, const Services& services);
-bool Available(abi::arm64::ClassRedefinitionPrefix* self);
+bool Available(const runtime_thread::VerifiedThread& thread,
+               abi::arm64::ClassRedefinitionPrefix* self, bool early_link_errors_available);
 std::string State();
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-void ResetValidationCounters();
-#endif
 // Linked groups: validate every pending obligation owned by this data item.
-bool Check(abi::arm64::ClassRedefinitionPrefix* self,
+bool Check(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
            const abi::arm64::RedefinitionDataIter& data, std::string* rejection);
 
 // ART 13's named NO_INLINE error service reports this actual selected pair.
@@ -36,7 +31,7 @@ struct NonPublicSelection {
 };
 // Format only an observed selection matching a pending candidate interface.
 // Called outside LinkClass locks, after ART has preserved/cleared its exception.
-bool DescribeNonPublicSelection(abi::arm64::ClassRedefinitionPrefix* self,
+bool DescribeNonPublicSelection(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
     const std::vector<abi::arm64::Handle>& originals, abi::arm64::Handle candidates,
     int32_t index, NonPublicSelection selection, const std::string& concrete_descriptor,
     bool submitted, std::string* rejection);

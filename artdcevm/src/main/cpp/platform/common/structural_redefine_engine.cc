@@ -16,6 +16,9 @@
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/class_layout.h"
+#include "platform/common/class_layout_table.h"
+#include "platform/common/verification_redirect.h"
+#include "platform/common/fault_injection.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/structural_policy.h"
 #include "platform/common/member_retirement.h"
@@ -31,6 +34,7 @@
 namespace artdcevm::structural_redefine {
 namespace {
 using abi::arm64::ClassRedefinitionPrefix;
+using abi::arm64::RedefinitionDataIter;
 using Entry = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 using Check = bool (*)(ClassRedefinitionPrefix*);
 using Record = void (*)(ClassRedefinitionPrefix*);
@@ -44,6 +48,21 @@ void* original_entry = nullptr;
 void* original_class = nullptr;
 void* original_fields = nullptr;
 void* original_methods = nullptr;
+void* original_instances = nullptr;
+void* original_allocate = nullptr;
+class_layout::Services layout_services{};
+// Filled only by Install. Per-transaction probes further restrict these abilities.
+struct ProcessCapabilities {
+  bool runtime_thread = false;
+  bool member_mapping = false;
+  bool retirement = false;
+  bool field_retirement = false;
+  bool superclass_change = false;
+  bool interface_runtime = false;
+  bool instance_check = false;
+  bool subclass_watch = false;
+};
+ProcessCapabilities capabilities;
 std::vector<void*> hook_tokens;
 // ART takes its own redefinition lock after our Native-state snapshots.
 // Keep snapshots and the transaction together so another routed batch cannot
@@ -129,7 +148,6 @@ struct Watch {
 };
 std::mutex watch_mutex;
 std::vector<Watch*> watches;
-bool watch_available = false;
 std::atomic<uint64_t> subclass_retries{0};
 
 void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexcept {
@@ -148,7 +166,7 @@ class WatchScope {
  public:
   WatchScope(transaction::Context* context, JNIEnv* jni, jint count,
              const jvmtiClassDefinition* definitions) : jni_(jni) {
-    if (!watch_available) return;
+    if (!capabilities.subclass_watch) return;
     for (jint i = 0; i < count; ++i)
       if (jobject target = jni->NewGlobalRef(definitions[i].klass)) watch_.targets.push_back(target);
     if (jni->ExceptionCheck()) jni->ExceptionClear();
@@ -162,7 +180,7 @@ class WatchScope {
     context->subclass_loaded = &watch_.subclass_loaded;
   }
   ~WatchScope() {
-    if (!watch_available) return;
+    if (!capabilities.subclass_watch) return;
     bool last;
     {
       std::lock_guard<std::mutex> lock(watch_mutex);
@@ -651,7 +669,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (definitions[i].klass &&
         snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
         (access & evolution::kAccInterface)) {
-      if (interface_redefinition::Available()) continue;
+      if (capabilities.interface_runtime && interface_redefinition::Available()) continue;
       Diagnose(Signature(definitions[i].klass) + ": " + interface_redefinition::RuntimeState(), true);
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
@@ -729,7 +747,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       return result;
     }
   }
-  if (member_mapping::Available()) {
+  if (capabilities.retirement) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
     // its own obsolete chain, including native ArtMethod storage and DexCache.
@@ -799,31 +817,33 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     return reinterpret_cast<Check>(original_class)(self);
   auto& snapshot = found->second;
   structural_policy::Abilities abilities;
-  abilities.member_mapping = class_layout::VerifyTarget(self, snapshot.live);
+  const auto thread = runtime_thread::Ready();
+  abilities.member_mapping = capabilities.member_mapping &&
+      class_layout::VerifyTarget(thread, self, snapshot.live);
   for (auto& [descriptor, type] : snapshot.hierarchy.added_interfaces) {
     uint32_t access = 0;
     type.access.reset();
-    if (class_layout::ClassAccess(self, snapshot.interface_classes.at(descriptor), &access))
+    if (thread && class_layout::ClassAccess(*thread, self, snapshot.interface_classes.at(descriptor), &access))
       type.access = access;
   }
   if (auto& superclass = snapshot.hierarchy.new_superclass) {
     uint32_t access = 0;
     superclass->access.reset();
-    if (class_layout::ClassAccess(self, snapshot.superclass_class, &access))
+    if (thread && class_layout::ClassAccess(*thread, self, snapshot.superclass_class, &access))
       superclass->access = access;
   }
   abilities.field_retirement =
-      abilities.member_mapping && member_retirement::FieldRetirementAvailable();
-  abilities.instance_check = member_mapping::Available();
+      abilities.member_mapping && capabilities.field_retirement;
+  abilities.instance_check = capabilities.instance_check && thread.has_value();
   abilities.superclass_change =
-      abilities.member_mapping && member_mapping::SuperclassChangeAvailable();
+      abilities.member_mapping && capabilities.superclass_change;
   // The snapshot carries the interface group's facts, the mapping rejects new
   // default conflicts, and retirement roots cover the group: an interface
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
-      interface_dispatch::Available(self);
+      interface_dispatch::Available(*thread, self, interface_redefinition::AbstractLinkErrorsAvailable());
   if (!abilities.interface_abstract_methods)
     abilities.interface_abstract_unavailable_reason = interface_dispatch::State();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
@@ -900,12 +920,121 @@ bool CheckMethods(ClassRedefinitionPrefix* self) noexcept {
   return reinterpret_cast<Check>(original_methods)(self);
 }
 
-bool RollBack(std::string* failure) {
+// ART links the target's new class under the old superclass it passes here
+// ("We know the interfaces and supers didn't change"). For a superclass change,
+// store the new superclass in that handle's slot: the slot belongs to the
+// caller's handle scope, so it stays a GC root. Subclasses are allocated through
+// the same redefinition with the target's new class as their superclass.
+void* AllocateNewClassObject(ClassRedefinitionPrefix* self, abi::arm64::Handle old_class, abi::arm64::Handle super_class,
+                             abi::arm64::Handle cache, uint16_t index) noexcept {
+  const transaction::Context* context = transaction::Current();
+  const transaction::Requirements* target = context ? context->Find(self) : nullptr;
+  if (target && target->superclass && super_class.reference &&
+      old_class.Get<void>() == layout_services.mirror_class(self)) {
+    if (void* superclass = class_layout::DecodeClass(layout_services.mirror_class, self, target->superclass))
+      *const_cast<uint32_t*>(super_class.reference) = class_layout::Reference(superclass);
+  }
+  using Function = void* (*)(ClassRedefinitionPrefix*, abi::arm64::Handle, abi::arm64::Handle, abi::arm64::Handle, uint16_t);
+  return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
+}
+
+bool CheckInstances(const runtime_thread::VerifiedThread& thread,
+                    ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
+  auto* context = transaction::Current();
+  for (const auto& [target, requirements] : context->targets) {
+    if (!requirements.no_instances) continue;
+    const auto* instances = data.OldInstances();
+    const uint32_t reference = class_layout::Reference(layout_services.mirror_class(target));
+    for (int32_t i = 0; instances && i < instances->length; ++i) {
+      const auto* instance = class_layout::Element<abi::arm64::Object>(thread, instances, i);
+      if (instance && instance->klass == reference)
+        return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
+            requirements.descriptor + ": class made abstract has live instances");
+    }
+  }
+  return true;
+}
+bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
+  auto* context = transaction::Current();
+  const auto* target = context ? context->Find(self) : nullptr;
+  const auto named = [&](const char* reason) {
+    return (target ? target->descriptor + ": " : "") + reason;
+  };
+  if (ARTDCEVM_FAULT_IF(3, interface_redefinition::IsTarget(self) && data->Classes(true)))
+    return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
+  if (context && context->subclass_loaded && context->subclass_loaded->load())
+    return context->Reject(self, JVMTI_ERROR_INTERNAL,
+        named("a subtype of a redefined class was loaded during the transaction"));
+  using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
+  if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
+  // Corrupt only the transaction-private holder; cleanup roots are independent.
+  ARTDCEVM_TEST(
+    if (ARTDCEVM_FAULT_IF(4, interface_redefinition::IsTarget(self) && data->Classes(true))) {
+      fault_injection::CorruptHolder(*data);
+    }
+  )
+  if (!context) return true;
+  const auto thread = runtime_thread::Ready();
+  if (thread && !CheckInstances(*thread, self, *data)) return false;
+  if (!context->probed) return true;
+  std::string why = thread ? "" : runtime_thread::Rejection();
+  const int selected = thread ? class_layout::VerifyReplacements(*thread, self, *data, &why) : -1;
+  if (selected >= 0 && member_mapping::Plan(*thread, self, *data, selected, &why)) {
+    if (target && target->superclass &&
+        !class_layout::SuperclassMatches(*thread, self, *data, target->superclass, selected))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+          named("the new superclass was not applied"));
+    std::string rejection;
+    if (!interface_dispatch::Check(*thread, self, *data, &rejection) ||
+        !member_mapping::CheckDefaultConflicts(*data, &rejection))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+                             std::move(rejection));
+    class_layout::Select(selected);
+    if (ARTDCEVM_FAULT(22))
+      return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY,
+                            named("injected failure after interface mapping plan"));
+    return true;
+  }
+  if (selected >= 0) class_layout::Select(-1);
+  class_layout::Report("rejected: " + why);
+  if (!context->RequiresMemberMapping()) return true;
+  __android_log_print(ANDROID_LOG_ERROR, "ART-DCEVM", "member mapping probe failed: %s", why.c_str());
+  return context->Reject(self, JVMTI_ERROR_INTERNAL, {});
+} catch (...) {
+  self->driver->result = ArtHookExceptionError();
+  return false;
+}
+
+// Named source declarations and java.lang.Class root shared by lower modules.
+bool PrepareLayoutServices(JNIEnv* jni, std::string* failure) {
+  using namespace symbols::structural;
+  struct Required { symbols::NamedSymbol name; void** address; };
+  const Required required[] = {
+      {kFindDeclaredStaticField, HookSlot(&layout_services.find_static_field)},
+      {kFindDeclaredInstanceField, HookSlot(&layout_services.find_declared_instance_field)},
+      {kClassRedefinitionGetMirrorClass, HookSlot(&layout_services.mirror_class)},
+      {kFindInstanceField, HookSlot(&layout_services.find_instance_field)}};
+  for (const auto& entry : required) {
+    *entry.address = symbols::Find(entry.name);
+    if (!*entry.address) { *failure = std::string("missing ") + entry.name.name; return false; }
+  }
+  if (!jni) { *failure = "no JNIEnv for the JNI guards"; return false; }
+  if (layout_services.class_type) return true;
+  jclass local = jni->FindClass("java/lang/Class");
+  layout_services.class_type = local ? static_cast<jclass>(jni->NewGlobalRef(local)) : nullptr;
+  if (local) jni->DeleteLocalRef(local);
+  if (layout_services.class_type) return true;
+  jni->ExceptionClear();
+  *failure = "exception classes unavailable";
+  return false;
+}
+
+bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
   bool removed_all = true;
-  for (auto it = hook_tokens.rbegin(); it != hook_tokens.rend(); ++it) {
-    if (!*it) continue;
-    const int error = shadowhook_unhook(*it);
-    if (error == 0) *it = nullptr;
+  for (size_t i = std::min(count, hook_tokens.size()); i-- > 0;) {
+    if (!hook_tokens[i]) continue;
+    const int error = shadowhook_unhook(hook_tokens[i]);
+    if (error == 0) hook_tokens[i] = nullptr;
     else {
       *failure += std::string("; rollback failed: ") + shadowhook_to_errmsg(error);
       removed_all = false;
@@ -917,6 +1046,8 @@ bool RollBack(std::string* failure) {
 
 jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
                    const member_retirement::FieldPlaceholders& placeholders) {
+  // Route cannot observe hooks until their final JNI table and capabilities publish.
+  std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   {
     std::lock_guard<std::mutex> lock(report_mutex);
     if (installed) return JVMTI_ERROR_NONE;
@@ -961,11 +1092,55 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   record_field = reinterpret_cast<Record>(addresses[5]);
   record_method = reinterpret_cast<Record>(addresses[6]);
   std::vector<Hook> replacements;
-  std::string retirement_note;
-  member_mapping::Prepare(vm, env, &replacements, &retirement_note);
-  std::string interface_note;
-  interface_redefinition::Prepare(member_mapping::SuperclassChangeAvailable(), &replacements,
-                                  &interface_note);
+  ProcessCapabilities prepared;
+  runtime_thread::Prepare();
+  prepared.runtime_thread = runtime_thread::Available();
+  class_layout::Prepare({});
+  std::string retirement_note, interface_note, failure;
+  JNIEnv* jni = nullptr;
+  vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
+  std::vector<Hook> retirement_hooks;
+  bool mapping_ready = PrepareLayoutServices(jni, &failure);
+  if (mapping_ready) mapping_ready = member_retirement::Prepare({layout_services.find_instance_field}, &retirement_hooks, &failure);
+  if (mapping_ready) mapping_ready = member_mapping::Prepare(layout_services, &retirement_hooks, &failure);
+  if (mapping_ready) mapping_ready = verification_redirect::Prepare(
+      {interface_redefinition::IsAffected, interface_redefinition::VerificationClass,
+       interface_redefinition::VerificationError, interface_redefinition::ObserveClassLinker},
+      &retirement_hooks, &failure);
+  if (mapping_ready) {
+    struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
+    const Required decisions[] = {
+        {kCollectAndCreateNewInstances, HookAddress(CollectAndCreateNewInstances), &original_instances},
+        {kAllocateNewClassObject, HookAddress(AllocateNewClassObject), &original_allocate}};
+    for (const auto& decision : decisions) {
+      void* address = symbols::Find(decision.symbol);
+      if (!address) {
+        failure = std::string("missing ") + decision.symbol.name;
+        mapping_ready = false;
+        break;
+      }
+      retirement_hooks.push_back({address, decision.replacement, decision.original, decision.symbol.name});
+    }
+  }
+  if (mapping_ready) {
+    class_layout::Prepare(layout_services);
+    interface_dispatch::Prepare(jni, {layout_services.find_declared_instance_field,
+                                      layout_services.mirror_class, layout_services.class_type});
+    prepared.member_mapping = true;
+    prepared.retirement = true;
+    prepared.instance_check = true;
+    prepared.superclass_change = verification_redirect::ResolvesClasses();
+    replacements = std::move(retirement_hooks);
+    class_layout::Report("unverified");
+  } else {
+    retirement_note = "method retirement unavailable: " + failure;
+    // Native Thread probing never overwrites this installation failure.
+    class_layout::Report("unavailable: " + failure);
+  }
+  interface_redefinition::Prepare({prepared.superclass_change, prepared.runtime_thread,
+      layout_services.mirror_class, layout_services.find_instance_field}, &replacements, &interface_note);
+  prepared.interface_runtime = interface_redefinition::Available();
+  const size_t retirement_hook_count = replacements.size();
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
@@ -986,19 +1161,40 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       return JVMTI_ERROR_INTERNAL;
     }
   }
+  // This process override cannot be undone; no later inline hook may fail.
+  if (prepared.retirement && !member_retirement::InstallJniGuards(vm, env, &failure)) {
+    std::string reason = "JNI guard installation failed: " + failure;
+    if (!RollBack(&reason, retirement_hook_count)) {
+      RollBack(&reason);
+      Diagnose(reason);
+      return JVMTI_ERROR_INTERNAL;
+    }
+    // Preserve the existing optional-retirement failure semantics: the base
+    // validators/route stay installed, and additions/body edits remain usable.
+    prepared = {};
+    prepared.runtime_thread = runtime_thread::Available();
+    retirement_note = "method retirement unavailable: " + failure;
+    class_layout::Prepare({});
+    class_layout::Report("unavailable: " + failure);
+    interface_redefinition::Prepare({false, prepared.runtime_thread,
+        layout_services.mirror_class, layout_services.find_instance_field},
+        &replacements, &interface_note);
+  }
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;
-  watch_available = member_mapping::Available() &&
+  prepared.subclass_watch = prepared.instance_check &&
       env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
   std::string field_note;
-  if (member_mapping::Available())
+  if (prepared.retirement)
     member_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
   std::lock_guard<std::mutex> lock(report_mutex);
+  prepared.field_retirement = prepared.retirement && member_retirement::FieldRetirementAvailable();
+  capabilities = prepared;
   installed = true;
-  diagnostic = !member_mapping::Available()
+  diagnostic = !capabilities.retirement
       ? "ART structural transaction with additions and modifier changes; members cannot retire"
-      : member_retirement::FieldRetirementAvailable()
+      : capabilities.field_retirement
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
   for (const auto* note : {&retirement_note, &field_note, &interface_note})
@@ -1009,8 +1205,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
 std::string Capabilities() {
   std::lock_guard<std::mutex> lock(report_mutex);
   const std::string supported = installed ? "true" : "false";
-  const bool methods = installed && member_mapping::Available();
-  const bool fields = methods && member_retirement::FieldRetirementAvailable();
+  const bool methods = installed && capabilities.retirement;
+  const bool fields = methods && capabilities.field_retirement;
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
   const auto interface_timing = interface_redefinition::LastTiming();
@@ -1020,7 +1216,7 @@ std::string Capabilities() {
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
-          (methods && member_mapping::SuperclassChangeAvailable() ? "true" : "false") +
+          (methods && capabilities.superclass_change ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +

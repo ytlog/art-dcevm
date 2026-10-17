@@ -475,7 +475,7 @@ JNINativeInterface guarded_jni;
 // Caches the exception classes, then overrides the JNI table. The override
 // also disables ART's Core Platform API checks (JNIEnvExt::SetTableOverride),
 // which apply to platform callers only. Our entries forward until a retirement.
-bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
+bool InstallJniTable(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
   JNIEnv* env = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env)
     return Fail(failure, "no JNIEnv for the JNI guards");
@@ -568,8 +568,9 @@ ArtField* Visitor::VisitField(ArtField* field, const ReflectionSourceInfo& info)
   }
 }
 
-bool Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* failure) {
+bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure) {
   prepared = false;
+  find_instance_field = services.find_instance_field;
   using namespace symbols::structural;
   using namespace symbols::member_retirement;
   struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
@@ -578,8 +579,7 @@ bool Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
       {kMethodHandleInvokeExact, HookAddress(MethodHandleInvokeExact), &original_mh_exact},
       {kEncodeMethodId, HookAddress(Encode), &original_encode},
       {kEncodeMethodIdHandle, HookAddress(EncodeHandle), &original_encode_handle},
-      {kThrowNewException, nullptr, HookSlot(&throw_exception)},
-      {kFindInstanceField, nullptr, HookSlot(&find_instance_field)}};
+      {kThrowNewException, nullptr, HookSlot(&throw_exception)}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {
     void* address = symbols::Find(entry.symbol);
@@ -628,10 +628,12 @@ bool Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string*
   if (void* frame = symbols::Find(kMethodHandleInvokeExactWithFrame))
     resolved.push_back({frame, HookAddress(MethodHandleFrame), &original_mh_frame,
                         kMethodHandleInvokeExactWithFrame.name});
-  if (!InstallJniGuards(vm, jvmti, failure)) return false;
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
   prepared = true;
   return true;
+}
+bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
+  return prepared && InstallJniTable(vm, jvmti, failure);
 }
 bool FieldRetirementAvailable() { return field_retirement_available; }
 

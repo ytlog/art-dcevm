@@ -1,23 +1,33 @@
 #pragma once
 #include <jni.h>
 #include <cstdint>
+#include <optional>
 #include "platform/abi/arm64/common/runtime_thread.h"
 
-// Shared by ordinary-class and interface transactions. No interface dependency.
+namespace artdcevm::transaction { struct Part; }
 namespace artdcevm::runtime_thread {
-// Resolve named ART services once; no hook or collector is implemented here.
 void Prepare();
 bool Available();
-// Native phase of every routed transaction, before ART's Runnable hooks.
-// Results belong to transaction::Context, including across nested transactions.
 void Probe(JNIEnv* jni);
-bool Ready() noexcept;
 const char* Rejection() noexcept;
-// Only a Native-probed declaration can be used by interface HandleScope probes.
-bool Supports(int release) noexcept;
-void* Current() noexcept;
-const abi::arm64::RuntimeThread& Layout() noexcept;
-// Runnable phase only; callers must check Ready before probing metadata.
-// A nonnull read without a verified thread is an invariant failure, never raw.
-void* Read(uint32_t reference) noexcept;
+
+// Only Ready can construct this transaction-scoped proof. Passing an outer or
+// expired proof is still a fatal invariant failure; it never permits raw reads.
+class VerifiedThread {
+ public:
+  VerifiedThread(const VerifiedThread&) = default;
+  VerifiedThread& operator=(const VerifiedThread&) = default;
+ private:
+  explicit VerifiedThread(const transaction::Part* state) : state_(state) {}
+  const transaction::Part* state_;
+  friend std::optional<VerifiedThread> Ready() noexcept;
+  friend void* Current(const VerifiedThread&) noexcept;
+};
+std::optional<VerifiedThread> Ready() noexcept;
+void* Current(const VerifiedThread& thread) noexcept;
+const abi::arm64::RuntimeThread& Layout(const VerifiedThread& thread) noexcept;
+// Only candidates accepted by this thread's Native probe can be selected.
+const abi::arm64::RuntimeThread* LayoutFor(const VerifiedThread& thread, int release) noexcept;
+// Runnable phase only. Every caller must carry its Native probe's proof.
+void* Read(const VerifiedThread& thread, uint32_t reference) noexcept;
 }  // namespace artdcevm::runtime_thread

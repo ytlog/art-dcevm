@@ -1,7 +1,5 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/member_mapping.h"
-#include "platform/common/interface_redefinition.h"
-#include "platform/common/interface_dispatch.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/art_hook.h"
 
@@ -22,7 +20,6 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/transaction_context.h"
-#include "platform/common/verification_redirect.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::member_mapping {
@@ -31,13 +28,10 @@ namespace abi = artdcevm::abi::arm64;
 using abi::ArtField;
 using abi::ClassRedefinitionPrefix;
 using abi::DexFilePrefix;
-using abi::Handle;
-using abi::Object;
 using abi::RedefinitionDataIter;
 using abi::ReflectiveValueVisitor;
 using member_retirement::RetiredField;
 
-bool available = false;
 // Written by the mapping hook and read by the visitor within one Update call.
 thread_local bool in_update = false;
 thread_local std::set<const void*> copied_resolution_changes;
@@ -52,22 +46,16 @@ struct HiddenNative {
 };
 thread_local std::vector<std::pair<HiddenNative, void*>> hidden_natives;
 
-using class_layout::Report;
-
 using class_layout::DexOf;
 using class_layout::Members;
 using class_layout::Fail;
 using class_layout::Pointer;
-using class_layout::Reference;
 
 // ART services, resolved by name in Prepare.
 ArtField* (*find_static_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_declared_instance_field)(void*, std::string_view, std::string_view) = nullptr;
-void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
-void* original_allocate = nullptr;
-void* original_instances = nullptr;
 void* original_visit = nullptr;
 
 // Member mapping of one redefinition, planned while ART may still fail and
@@ -107,7 +95,7 @@ struct MappingPlan {
 
 // Mapping operations over one source-declared class layout.
 struct PlanOps {
-  bool (*plan)(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
+  bool (*plan)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
 };
@@ -119,9 +107,9 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   // storage, as in ART's mapping. A field without one was accepted for
   // retirement by the policy: it keeps its real old ArtField, and ART's copy
   // phase sees a field array without it.
-  static bool PlanFields(int32_t class_index, Class* old_class, Class* new_class,
+  static bool PlanFields(const runtime_thread::VerifiedThread& thread, int32_t class_index, Class* old_class, Class* new_class,
                          MappingPlan* plan, std::string* why) {
-    const DexFilePrefix* dex = DexOf(old_class->dex_cache);
+    const DexFilePrefix* dex = DexOf(thread, old_class->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "old class has no DexFile");
     const evolution::DexView view = DexViewOf(*dex);
     const auto arrays = FieldArrays(*old_class);
@@ -145,7 +133,7 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
           ++swap.kept[0];
           continue;
         }
-        if (class_layout::Heap<Class>(field->declaring_class) != old_class)
+        if (class_layout::Heap<Class>(thread, field->declaring_class) != old_class)
           return Fail(why, "unexpected field without replacement: " + identity.name);
         if (!member_retirement::FieldRetirementAvailable())
           return Fail(why, "field retirement unavailable");
@@ -166,25 +154,25 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   // Shared by every structural transaction/layout, including ordinary classes.
   // Identity is the declaring DEX's name + prototype, not a runtime canonical
   // lookup or a raw method index (indices are local to different DEX files).
-  static bool PlanMethods(Class* old_class, Class* new_class, MappingPlan* plan, std::string* why) {
+  static bool PlanMethods(const runtime_thread::VerifiedThread& thread, Class* old_class, Class* new_class, MappingPlan* plan, std::string* why) {
     auto* old_methods = Members<Method>(old_class->methods);
     auto* new_methods = Members<Method>(new_class->methods);
     std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
     for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
-      if (!class_layout::MethodIdentity<Class>(new_methods->At(j), &identities[j], why)) return false;
+      if (!class_layout::MethodIdentity<Class>(thread, new_methods->At(j), &identities[j], why)) return false;
     std::set<std::pair<std::string, std::string>> old_conflicts;
     for (uint32_t i = 0; old_methods && i < old_methods->length; ++i) {
       Method* old_method = old_methods->At(i);
       evolution::Member identity;
-      if (!class_layout::MethodIdentity<Class>(old_method, &identity, why)) return false;
+      if (!class_layout::MethodIdentity<Class>(thread, old_method, &identity, why)) return false;
       if (IsDefaultConflicting(*old_method)) old_conflicts.emplace(identity.name, identity.descriptor);
-      const bool declared = class_layout::Heap<Class>(old_method->declaring_class) == old_class;
+      const bool declared = class_layout::Heap<Class>(thread, old_method->declaring_class) == old_class;
       void* replacement = nullptr;
       for (uint32_t j = 0; new_methods && j < new_methods->length; ++j) {
         Method* candidate = new_methods->At(j);
         // Removing an override may expose an inherited/default copied member
         // with the same identity. That does not preserve the old declaration.
-        if (declared && class_layout::Heap<Class>(candidate->declaring_class) != new_class) continue;
+        if (declared && class_layout::Heap<Class>(thread, candidate->declaring_class) != new_class) continue;
         if (identity.name == identities[j].name && identity.descriptor == identities[j].descriptor) {
           replacement = candidate;
           break;
@@ -205,12 +193,12 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
         // public implementation of its slot. The interface declaration still
         // exists: map to ART's canonical method and clear cached resolutions
         // rather than retiring generated child storage.
-        auto* declaring = class_layout::Heap<Class>(old_method->declaring_class);
+        auto* declaring = class_layout::Heap<Class>(thread, old_method->declaring_class);
         auto* canonical = Members<Method>(declaring->methods);
         Method* original = nullptr;
         for (uint32_t j = 0; canonical && j < canonical->length; ++j) {
           Method* candidate = canonical->At(j);
-          if (class_layout::Heap<Class>(candidate->declaring_class) == declaring &&
+          if (class_layout::Heap<Class>(thread, candidate->declaring_class) == declaring &&
               candidate->dex_method_index == old_method->dex_method_index) {
             original = candidate;
             break;
@@ -226,19 +214,19 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     for (uint32_t j = 0; new_methods && j < new_methods->length && plan->default_conflict.empty(); ++j)
       if (IsDefaultConflicting(*new_methods->At(j)) &&
           !old_conflicts.count({identities[j].name, identities[j].descriptor}))
-        plan->default_conflict = class_layout::ClassDescriptor(*new_class) + ": " + identities[j].name + identities[j].descriptor;
+        plan->default_conflict = class_layout::ClassDescriptor(thread, *new_class) + ": " + identities[j].name + identities[j].descriptor;
     return true;
   }
 
-  static bool Plan(const RedefinitionDataIter& data, MappingPlan* plan, std::string* why) {
+  static bool Plan(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data, MappingPlan* plan, std::string* why) {
     auto* old_classes = data.Classes(true);
     auto* new_classes = data.Classes(false);
     if (!old_classes || !new_classes) return true;  // Non-structural: ART keeps the class.
     for (int32_t i = 0; i < old_classes->length; ++i) {
-      auto* old_class = class_layout::Element<Class>(old_classes, i);
-      auto* new_class = class_layout::Element<Class>(new_classes, i);
-      if (!PlanFields(i, old_class, new_class, plan, why)) return false;
-      if (!PlanMethods(old_class, new_class, plan, why)) return false;
+      auto* old_class = class_layout::Element<Class>(thread, old_classes, i);
+      auto* new_class = class_layout::Element<Class>(thread, new_classes, i);
+      if (!PlanFields(thread, i, old_class, new_class, plan, why)) return false;
+      if (!PlanMethods(thread, old_class, new_class, plan, why)) return false;
     }
     return true;
   }
@@ -262,28 +250,6 @@ const MappingPlan* PlanOf(const transaction::Context* context, int32_t index) {
   return found == plans->by_index.end() ? nullptr : &found->second;
 }
 
-
-void* DecodeClass(ClassRedefinitionPrefix* self, jclass klass) {
-  return class_layout::DecodeClass(mirror_class, self, klass);
-}
-
-// ART links the target's new class under the old superclass it passes here
-// ("We know the interfaces and supers didn't change"). For a superclass change,
-// store the new superclass in that handle's slot: the slot belongs to the
-// caller's handle scope, so it stays a GC root. Subclasses are allocated through
-// the same redefinition with the target's new class as their superclass.
-void* AllocateNewClassObject(ClassRedefinitionPrefix* self, Handle old_class, Handle super_class,
-                             Handle cache, uint16_t index) noexcept {
-  const transaction::Context* context = transaction::Current();
-  const transaction::Requirements* target = context ? context->Find(self) : nullptr;
-  if (target && target->superclass && super_class.reference &&
-      old_class.Get<void>() == mirror_class(self)) {
-    if (void* superclass = DecodeClass(self, target->superclass))
-      *const_cast<uint32_t*>(super_class.reference) = Reference(superclass);
-  }
-  using Function = void* (*)(ClassRedefinitionPrefix*, Handle, Handle, Handle, uint16_t);
-  return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
-}
 
 // Commit: apply the plan made before ART's no-failure point, or keep ART's
 // own mapping for a transaction that has none.
@@ -312,98 +278,6 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
         method_map, static_cast<abi::ArtMethod*>(entry.old_method),
         static_cast<abi::ArtMethod*>(entry.replacement));
   }
-}
-
-// Last ART step that may fail the transaction: confirm the holder slots with
-// every remaining layout, then plan the mapping with the selected one.
-bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
-  using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  if (interface_redefinition::InjectInstanceFailure(self, data, false)) return false;
-#endif
-  transaction::Context* context = transaction::Current();
-  if (context && context->subclass_loaded && context->subclass_loaded->load()) {
-    self->driver->result = JVMTI_ERROR_INTERNAL;
-    const auto* target = context->Find(self);
-    context->rejection = (target ? target->descriptor + ": " : "") +
-        "a subtype of a redefined class was loaded during the transaction";
-    return false;
-  }
-  if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  interface_redefinition::InjectInstanceFailure(self, data, true);
-#endif
-  if (!context) return true;
-  // A class made abstract must have no instances of its own (subclass
-  // instances stay valid). Reads only the common holder and Object layouts.
-  // One structural owner may recreate another batch target's instances (ART
-  // superclass groups or interface groups). Check every target against the
-  // owner's collected instances rather than the empty dependent entry.
-  for (const auto& [target, requirements] : context->targets) {
-    if (!requirements.no_instances) continue;
-    const auto* instances = data->OldInstances();
-    const uint32_t reference = Reference(mirror_class(target));
-    for (int32_t i = 0; instances && i < instances->length; ++i) {
-      const auto* instance = instances->Get<Object>(i);
-      if (!instance || instance->klass != reference) continue;
-      self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
-      context->rejection = requirements.descriptor + ": class made abstract has live instances";
-      return false;
-    }
-  }
-  if (!context->probed) return true;
-  std::string why;
-  if (const int selected = class_layout::VerifyReplacements(self, *data, &why); selected >= 0) {
-    const PlanOps* layout = &kPlanners[selected];
-    MappingPlan plan;
-    if (layout->plan(*data, &plan, &why)) {
-      if (const transaction::Requirements* target = context->Find(self); target && target->superclass) {
-        // The allocation hook must have linked the new class under the new superclass.
-        void* new_class = data->Classes(false) ? data->Classes(false)->Get<void>(0) : nullptr;
-        void* superclass = DecodeClass(self, target->superclass);
-        if (!new_class || !superclass || *layout->superclass(new_class) != Reference(superclass)) {
-          self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-          context->rejection = target->descriptor + ": the new superclass was not applied";
-          return false;
-        }
-        plan.superclass_changed = true;
-      }
-      if (!interface_dispatch::Check(self, *data, &context->rejection)) {
-        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
-        return false;
-      }
-      if (!plan.default_conflict.empty()) {
-        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
-        context->rejection =
-            plan.default_conflict + " would become a conflict between unrelated interface defaults";
-        return false;
-      }
-      // Later redefinitions of this batch are planned with the same layout.
-      class_layout::Select(selected);
-      if (!context->mapping) context->mapping = std::make_unique<Plans>();
-      static_cast<Plans*>(context->mapping.get())->by_index[data->index] = std::move(plan);
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-      if (interface_redefinition::InjectMappingPlanFailure()) {
-        self->driver->result = JVMTI_ERROR_OUT_OF_MEMORY;
-        const auto* target = context->Find(self);
-        context->rejection = (target ? target->descriptor + ": " : "") +
-            "injected failure after interface mapping plan";
-        return false;
-      }
-#endif
-      return true;
-    }
-    class_layout::Select(-1);
-    context->mapping.reset();
-  }
-  Report("rejected: " + why);
-  if (!context->RequiresMemberMapping()) return true;
-  self->driver->result = JVMTI_ERROR_INTERNAL;
-  __android_log_print(ANDROID_LOG_ERROR, "ART-DCEVM", "member mapping probe failed: %s", why.c_str());
-  return false;
-} catch (...) {
-  self->driver->result = ArtHookExceptionError();
-  return false;
 }
 
 // Puts the old classes' original field arrays back; called by the visitor
@@ -483,65 +357,46 @@ void Visit(void* runtime, ReflectiveValueVisitor* visitor) noexcept {
 
 }  // namespace
 
-void Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* note) {
-  available = false;
+bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, std::string* failure) {
   if (!abi::LibcppV1PointerMap<abi::ArtMethod>::Compatible() ||
-      !abi::LibcppV1PointerMap<ArtField>::Compatible()) {
-    *note = "method retirement unavailable: NDK pointer-map layout differs from libc++ ABI v1";
-    Report("unavailable");
-    return;
-  }
-  const auto unavailable = [&](const std::string& failure) {
-    *note = "method retirement unavailable: " + failure;
-    Report("unavailable");
-  };
+      !abi::LibcppV1PointerMap<ArtField>::Compatible())
+    return Fail(failure, "NDK pointer-map layout differs from libc++ ABI v1");
+  find_static_field = services.find_static_field;
+  find_declared_instance_field = services.find_declared_instance_field;
   using namespace symbols::structural;
   struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
   const Required required[] = {
       {kCollectNewFieldAndMethodMappings, HookAddress(CollectMappings), &original_mapping},
-      {kCollectAndCreateNewInstances, HookAddress(CollectAndCreateNewInstances), &original_instances},
       {kUpdateClassStructurally, HookAddress(Update), &original_update},
-      {kAllocateNewClassObject, HookAddress(AllocateNewClassObject), &original_allocate},
-      {kVisitReflectiveTargets, HookAddress(Visit), &original_visit},
-      {kFindDeclaredStaticField, nullptr, HookSlot(&find_static_field)},
-      {kFindDeclaredInstanceField, nullptr, HookSlot(&find_declared_instance_field)},
-      {kClassRedefinitionGetMirrorClass, nullptr, HookSlot(&mirror_class)}};
+      {kVisitReflectiveTargets, HookAddress(Visit), &original_visit}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {
     void* address = symbols::Find(entry.symbol);
-    if (!address) return unavailable(std::string("missing ") + entry.symbol.name);
-    if (entry.replacement) resolved.push_back({address, entry.replacement, entry.original, entry.symbol.name});
-    else *entry.original = address;
+    if (!address) return Fail(failure, std::string("missing ") + entry.symbol.name);
+    resolved.push_back({address, entry.replacement, entry.original, entry.symbol.name});
   }
-  runtime_thread::Prepare();
-  std::string failure;
-  if (!verification_redirect::Prepare(&resolved, &failure)) return unavailable(failure);
-  // The layout probes decode java.lang.Class through this global reference.
-  JNIEnv* env = nullptr;
-  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK || !env)
-    return unavailable("no JNIEnv for the JNI guards");
-  jclass class_type = env->FindClass("java/lang/Class");
-  jclass class_type_root = class_type ? static_cast<jclass>(env->NewGlobalRef(class_type)) : nullptr;
-  if (class_type) env->DeleteLocalRef(class_type);
-  if (!class_type_root) {
-    env->ExceptionClear();
-    return unavailable("exception classes unavailable");
-  }
-  interface_dispatch::Services dispatch{find_declared_instance_field, mirror_class,
-      class_type_root, interface_redefinition::AbstractLinkErrorsAvailable};
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  dispatch.inject_probe_failure = interface_redefinition::InjectDispatchProbeFailure;
-#endif
-  interface_dispatch::Prepare(env, dispatch);
-  // The guards come last: their JNI table override cannot be undone.
-  if (!member_retirement::Prepare(vm, jvmti, &resolved, &failure)) return unavailable(failure);
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
-  available = true;
-  class_layout::Enable({find_static_field, find_declared_instance_field, mirror_class,
-                        class_type_root});
-  Report("unverified");
+  return true;
 }
-bool Available() { return available; }
-bool SuperclassChangeAvailable() { return available && verification_redirect::ResolvesClasses(); }
 
+bool Plan(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
+          const RedefinitionDataIter& data, int selected, std::string* why) {
+  auto* context = transaction::Current();
+  MappingPlan plan;
+  if (!kPlanners[selected].plan(thread, data, &plan, why)) {
+    context->mapping.reset();
+    return false;
+  }
+  const auto* target = context->Find(self);
+  plan.superclass_changed = target && target->superclass;
+  if (!context->mapping) context->mapping = std::make_unique<Plans>();
+  static_cast<Plans*>(context->mapping.get())->by_index[data.index] = std::move(plan);
+  return true;
+}
+bool CheckDefaultConflicts(const RedefinitionDataIter& data, std::string* rejection) {
+  const auto* plan = PlanOf(transaction::Current(), data.index);
+  if (!plan || plan->default_conflict.empty()) return true;
+  *rejection = plan->default_conflict + " would become a conflict between unrelated interface defaults";
+  return false;
+}
 }  // namespace artdcevm::member_mapping

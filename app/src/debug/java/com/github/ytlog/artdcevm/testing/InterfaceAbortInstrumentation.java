@@ -109,21 +109,29 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         CountDownLatch started = new CountDownLatch(1);
         Thread allocator = new Thread(() -> {
             try {
-                Object[] retained = new Object[256];
+                // Keep a reachable graph alive so CC has actual marking work;
+                // byte-array churn alone often finishes marking between probes.
+                Object[][] graph = new Object[65536][];
+                for (int i = 0; i < graph.length; ++i)
+                    graph[i] = new Object[] {new Object(), new Object(), reference};
+                Object[] retained = new Object[2048];
                 started.countDown();
                 while (!stop.get()) {
                     for (int i = 0; i < retained.length; ++i) {
-                        byte[] bytes = new byte[16384];
+                        byte[] bytes = new byte[4096];
                         bytes[0] = (byte) i;
                         retained[i] = bytes;
                         allocations.incrementAndGet();
                     }
+                    if (graph[(int) (allocations.get() % graph.length)][2] != reference)
+                        throw new AssertionError("GC pressure graph lost its root");
                     System.gc();
                 }
             } catch (Throwable error) { workerError.set(error); }
         }, "runtime-thread-gc");
         long gcBefore = Long.parseLong(Debug.getRuntimeStat("art.gc.gc-count"));
         long markingBefore = runtimeMarkingReads();
+        int transactions = 0;
         allocator.start();
         try {
             if (!started.await(10, TimeUnit.SECONDS)) throw new AssertionError("GC worker did not start");
@@ -131,7 +139,10 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             while (allocations.get() < 256 && workerError.get() == null
                     && SystemClock.uptimeMillis() < deadline) Thread.yield();
             if (allocations.get() < 256) throw new AssertionError("GC worker did not allocate");
-            for (int cycle = 0; cycle < 32; ++cycle) {
+            // Retry for at most 512 transactions / 120 seconds. CMC may never
+            // report CC marking; a zero result is recorded, never called overlap.
+            long overlapDeadline = SystemClock.uptimeMillis() + 120000;
+            for (int cycle = 0; cycle < 512; ++cycle) {
                 int version = 12 + cycle % 2;
                 expect("ordinary transaction under GC", 0,
                         redefine(RuntimeThreadFixture.class, patches[cycle % 2]));
@@ -146,6 +157,10 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 if (!DcevmRuntime.capabilities().getString("memberMapping").startsWith("verified: "))
                     throw new AssertionError("Ordinary mapping did not verify under GC");
                 ++checks;
+                transactions = cycle + 1;
+                if (transactions >= 32 && transactions % 2 == 0 &&
+                        (runtimeMarkingReads() > markingBefore ||
+                         SystemClock.uptimeMillis() >= overlapDeadline)) break;
             }
         } finally {
             stop.set(true);
@@ -162,6 +177,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         expect("ordinary primitive after GC", 137, instance.kept);
         if (instance.reference != reference) throw new AssertionError("Reference lost after GC");
         ++checks;
+        result.putInt("ordinaryTransactions", transactions);
+        result.putBoolean("ordinaryMarkingOverlap", runtimeMarkingReads() > markingBefore);
         result.putLong("ordinaryGcCycles", gcCycles);
         result.putLong("ordinaryAllocations", allocations.get());
         result.putLong("ordinaryReferenceReads", runtimeReferenceReads() - beforeRejectedRead);

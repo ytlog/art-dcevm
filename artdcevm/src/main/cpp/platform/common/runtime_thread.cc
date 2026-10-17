@@ -1,18 +1,13 @@
 #include "platform/common/runtime_thread.h"
 
 #include <android/log.h>
-#include <array>
+#include <android/api-level.h>
 #include <cstdlib>
 #include <sys/syscall.h>
 #include <unistd.h>
-#include "platform/abi/arm64/android11/thread.h"
-#include "platform/abi/arm64/android12/thread.h"
-#include "platform/abi/arm64/android13/thread.h"
-#include "platform/abi/arm64/android14/thread.h"
-#include "platform/abi/arm64/android15/thread.h"
-#include "platform/abi/arm64/android16/thread.h"
-#include "platform/abi/arm64/android17/thread.h"
-#include "platform/common/class_layout.h"
+#include "platform/abi/arm64/release_order.h"
+#include "platform/abi/arm64/runtime_thread_table.h"
+#include "platform/common/fault_injection.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/runtime_thread_symbols.h"
 
@@ -22,18 +17,9 @@ using namespace abi::arm64;
 void* (*current_thread)() = nullptr;
 void* (*mark)(void*) = nullptr;
 const bool* use_read_barrier = nullptr;
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-thread_local bool reject_next_probe = false;
-thread_local uint64_t reads = 0, marking_reads = 0;
-#endif
 template <class T> T Load(void* thread, size_t offset) noexcept {
   return *reinterpret_cast<const T*>(static_cast<const uint8_t*>(thread) + offset);
 }
-constexpr std::array<RuntimeThread, 7> kLayouts = {{
-    RuntimeThreadFor<android11::Thread>(), RuntimeThreadFor<android12::Thread>(),
-    RuntimeThreadFor<android13::Thread>(), RuntimeThreadFor<android14::Thread>(),
-    RuntimeThreadFor<android15::Thread>(), RuntimeThreadFor<android16::Thread>(),
-    RuntimeThreadFor<android17::Thread>()}};
 struct State final : transaction::Part {
   void* thread = nullptr;
   const RuntimeThread* layout = nullptr;
@@ -64,8 +50,8 @@ void Probe(JNIEnv* jni) {
   } else {
     next->thread = current_thread();
     const uint32_t tid = static_cast<uint32_t>(syscall(__NR_gettid));
-    for (int release : class_layout::CandidateReleases(false)) {
-      const auto& candidate = kLayouts[release - 11];
+    for (int release : CandidateReleases(android_get_device_api_level())) {
+      const auto& candidate = *ThreadLayoutFor(release);
       if (!next->thread || Load<void*>(next->thread, candidate.jni_env) != jni ||
           Load<uint32_t>(next->thread, candidate.tid) != tid ||
           Load<uint32_t>(next->thread, candidate.is_gc_marking) > 1) continue;
@@ -74,40 +60,40 @@ void Probe(JNIEnv* jni) {
     }
     if (next->layout) next->rejection = nullptr;
   }
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  if (reject_next_probe) {
-    reject_next_probe = false;
+  if (ARTDCEVM_REJECT_THREAD_PROBE()) {
     next->layout = nullptr;
     next->accepted = 0;
     next->rejection = "runtime Thread probe rejected injected mismatch";
   }
-#endif
   context->thread = std::move(next);
-  if (!Ready()) class_layout::Report(std::string("rejected: ") + Rejection());
 }
-bool Ready() noexcept { const auto* state = Get(); return state && state->layout; }
+std::optional<VerifiedThread> Ready() noexcept {
+  const auto* state = Get();
+  return state && state->layout ? std::optional<VerifiedThread>(VerifiedThread(state)) : std::nullopt;
+}
 const char* Rejection() noexcept {
   const auto* state = Get();
   return state ? state->rejection : "runtime Thread was not probed in Native state";
 }
-bool Supports(int release) noexcept {
+void* Current(const VerifiedThread& thread) noexcept {
   const auto* state = Get();
-  return state && release >= 11 && release <= 17 &&
-      (state->accepted & (uint32_t{1} << (release - 11)));
+  if (!state || state != thread.state_ || !state->layout) UnverifiedRead();
+  return state->thread;
 }
-void* Current() noexcept { const auto* state = Get(); return state ? state->thread : nullptr; }
-const RuntimeThread& Layout() noexcept {
-  if (!Ready()) UnverifiedRead();
+const RuntimeThread& Layout(const VerifiedThread& thread) noexcept {
+  Current(thread);
   return *Get()->layout;
 }
-void* Read(uint32_t reference) noexcept {
+const RuntimeThread* LayoutFor(const VerifiedThread& thread, int release) noexcept {
+  Current(thread);
+  return release >= 11 && release <= 17 &&
+      (Get()->accepted & (uint32_t{1} << (release - 11))) ? ThreadLayoutFor(release) : nullptr;
+}
+void* Read(const VerifiedThread& thread, uint32_t reference) noexcept {
+  Current(thread);
   if (!reference) return nullptr;
-  if (!Ready()) UnverifiedRead();
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-  ++reads;
-  if ((!use_read_barrier || *use_read_barrier) &&
-      Load<uint32_t>(Get()->thread, Get()->layout->is_gc_marking)) ++marking_reads;
-#endif
+  ARTDCEVM_TEST(fault_injection::ReferenceRead((!use_read_barrier || *use_read_barrier) &&
+      Load<uint32_t>(Get()->thread, Get()->layout->is_gc_marking));)
   auto* object = reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
   // ART 14--17 read_barrier_config.h / mark_compact.cc: gUseReadBarrier
   // excludes userfaultfd CMC. CMC updates roots at its pause and resolves
@@ -122,18 +108,4 @@ void* Read(uint32_t reference) noexcept {
   const auto* state = Get();
   return Load<uint32_t>(state->thread, state->layout->is_gc_marking) ? mark(object) : object;
 }
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-extern "C" JNIEXPORT void JNICALL
-Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_rejectRuntimeThreadProbe(JNIEnv*, jclass) {
-  reject_next_probe = true;
-}
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_runtimeReferenceReads(JNIEnv*, jclass) {
-  return static_cast<jlong>(reads);
-}
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_runtimeMarkingReads(JNIEnv*, jclass) {
-  return static_cast<jlong>(marking_reads);
-}
-#endif
 }  // namespace artdcevm::runtime_thread

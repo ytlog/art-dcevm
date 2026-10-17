@@ -10,15 +10,7 @@
 
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
-// Source-declared class layouts; runtime probes select among them.
-#include "platform/abi/arm64/android11/art_method.h"
-#include "platform/abi/arm64/android11/class.h"
-#include "platform/abi/arm64/android12/class.h"
-#include "platform/abi/arm64/android13/class.h"
-#include "platform/abi/arm64/android14/class.h"
-#include "platform/abi/arm64/android15/class.h"
-#include "platform/abi/arm64/android16/class.h"
-#include "platform/abi/arm64/android17/class.h"
+#include "platform/abi/arm64/class_layout_table.h"
 
 #include "platform/common/class_layout.h"
 
@@ -27,6 +19,7 @@
 // build their per-layout operations from Table, so an index names the same
 // layout in either.
 namespace artdcevm::class_layout {
+using runtime_thread::VerifiedThread;
 
 inline uint32_t Reference(const void* object) {
   return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
@@ -34,17 +27,17 @@ inline uint32_t Reference(const void* object) {
 template <typename T> T* Pointer(uint64_t address) {
   return reinterpret_cast<T*>(static_cast<uintptr_t>(address));
 }
-template <typename T> T* Heap(uint32_t reference) {
-  return static_cast<T*>(runtime_thread::Read(reference));
+template <typename T> T* Heap(const VerifiedThread& thread, uint32_t reference) {
+  return static_cast<T*>(runtime_thread::Read(thread, reference));
 }
-template <typename T> T* Element(const abi::arm64::ObjectArray* array, int32_t index) {
-  return Heap<T>(array->elements[index]);
+template <typename T> T* Element(const VerifiedThread& thread, const abi::arm64::ObjectArray* array, int32_t index) {
+  return Heap<T>(thread, array->elements[index]);
 }
 template <typename T> abi::arm64::LengthPrefixedArray<T>* Members(uint64_t address) {
   return Pointer<abi::arm64::LengthPrefixedArray<T>>(address);
 }
-inline const abi::arm64::DexFilePrefix* DexOf(uint32_t dex_cache) {
-  const auto* cache = Heap<abi::arm64::DexCache>(dex_cache);
+inline const abi::arm64::DexFilePrefix* DexOf(const VerifiedThread& thread, uint32_t dex_cache) {
+  const auto* cache = Heap<abi::arm64::DexCache>(thread, dex_cache);
   return cache ? Pointer<const abi::arm64::DexFilePrefix>(cache->dex_file) : nullptr;
 }
 inline bool Fail(std::string* why, std::string reason) {
@@ -74,20 +67,7 @@ template <typename Class, typename Method> struct View {
   static uint32_t* Superclass(void* klass) { return &static_cast<Class*>(klass)->super_class; }
 };
 
-constexpr size_t kLayoutCount = 7;
-using LayoutMask = uint32_t;
-static_assert(kLayoutCount <= 32);
-
-// One entry per AOSP release whose declarations are in platform/abi/arm64:
-// Ops<Class, Method>::Make(release) for each, in release order.
-template <template <typename, typename> class Ops, typename Entry>
-constexpr std::array<Entry, kLayoutCount> Table() {
-  return {{Ops<abi::arm64::android11::Class, abi::arm64::android11::ArtMethod>::Make(11),
-           Ops<abi::arm64::android12::Class, abi::arm64::ArtMethod>::Make(12),
-           Ops<abi::arm64::android13::Class, abi::arm64::ArtMethod>::Make(13),
-           Ops<abi::arm64::android14::Class, abi::arm64::ArtMethod>::Make(14),
-           Ops<abi::arm64::android15::Class, abi::arm64::ArtMethod>::Make(15),
-           Ops<abi::arm64::android16::Class, abi::arm64::ArtMethod>::Make(16),
-           Ops<abi::arm64::android17::Class, abi::arm64::ArtMethod>::Make(17)}};
-}
+using abi::arm64::kLayoutCount;
+using abi::arm64::LayoutMask;
+using abi::arm64::Table;
 }  // namespace artdcevm::class_layout

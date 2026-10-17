@@ -26,7 +26,7 @@ def read_runtime_table():
     table = RUNTIME_TABLE.read_text()
     entries = re.findall(
         r'\{(\d+),\s*(\d+),\s*(\d+),\s*&android(\d+)::(\w+),\s*'
-        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified)\}', table)
+        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified),\s*(?:true|false)\}', table)
     versions = [int(entry[0]) for entry in entries]
     declared = sorted(int(path.parent.name.removeprefix('android'))
                       for path in ABI.glob('android*/interface_runtime.h'))
@@ -61,7 +61,7 @@ def main():
     compiler = next(path / 'bin/aarch64-linux-android30-clang++' for path in prebuilt.iterdir()
                     if (path / 'bin/aarch64-linux-android30-clang++').is_file())
     lines = ['#include "platform/abi/arm64/interface_runtime_table.h"']
-    lines.append('#include "platform/abi/arm64/common/runtime_thread.h"')
+    lines.append('#include "platform/abi/arm64/runtime_thread_table.h"')
     lines.append('using namespace artdcevm::abi::arm64;')
     expected = {11: (16, 52, 216, 296, 12), 12: (12, 48, 208, 288, 12),
                 13: (12, 36, 200, 280, 12), 14: (12, 36, 208, 288, 12),
@@ -72,6 +72,7 @@ def main():
         offsets = expected[v]
         profile = f'kInterfaceRuntimes[{index}]'
         lines.append(f'static_assert({profile}.runtime == &android{v}::{name});')
+        lines.append(f'static_assert(UsesLinkedIfTable({v}) == {str(v == 16).lower()});')
         selected = f'{profile}.runtime' if status == 'kDeviceVerified' else 'nullptr'
         lines.append(f'static_assert(RuntimeFor({v}) == {selected});')
         for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):

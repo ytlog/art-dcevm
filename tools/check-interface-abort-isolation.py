@@ -12,8 +12,9 @@ import zipfile
 from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKENS = ('InterfaceAbortInstrumentation', 'InjectInstanceFailure', 'InjectDispatchProbeFailure', 'InjectMappingPlanFailure', 'failure_stage',
-          'failure_hits', 'discarded_classes', 'Inject(int)')
+TOKENS = ('InterfaceAbortInstrumentation', 'artdcevm::fault_injection::',
+          'RejectThreadProbe()', 'ReferenceRead(bool)', 'failure_stage', 'failure_hits',
+          'counters', 'Inject(int)')
 EXPORTS = ('configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'validatedInterfaceGroups', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
 
 

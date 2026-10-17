@@ -12,6 +12,8 @@ This document summarizes the prerequisites, rejected changes and runtime semanti
 - Retirement requires runtime probes to confirm the ART class-layout declarations. A transaction whose probes fail cannot retire members; `memberMapping` in `capabilities()` gives the reason.
 - The enhanced entry is the standard `RedefineClasses`. Batch inspection and execution through this entry are serialized. Concurrent transactions that call ART's structural redefinition extension directly do not participate in this protection.
 
+Ordinary-class member retirement also requires a Native-phase probe of the current ART Thread declaration and named read-barrier services. `memberMapping` may therefore reject because of Thread probing, as well as Class layout probing; an unavailable mapping keeps its original installation reason. The Thread probe has device coverage on Android 13/API 33 and Android 16/API 36. Android 11, 12, 14, 15 and 17 have source declarations and host checks but no device validation of this probe.
+
 ## Redefining interfaces
 
 Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, and deletion or signature changes of static/private methods. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.

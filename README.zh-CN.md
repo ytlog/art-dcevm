@@ -19,6 +19,8 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 
 实例迁移、引用改写、去优化和 JIT 失效均由设备 ART 自带的结构重定义事务完成，本库只接管其中的校验、成员映射和类分配决策，原理见 [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)。
 
+普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 13/API 33 和 Android 16/API 36 上做设备验证；Android 11、12、14、15、17 只有源码声明与主机核对，尚无这项探测的设备验证。
+
 ## 接口重定义
 
 Android 13（API 33）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 public abstract/default/static 方法与 private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。

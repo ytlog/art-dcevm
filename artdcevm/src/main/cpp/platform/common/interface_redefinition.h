@@ -10,9 +10,13 @@
 #include "platform/common/art_hook.h"
 
 namespace artdcevm::interface_redefinition {
-// `verifier_redirect`: verification_redirect can show ART's verifier the
-// group's replacements (member_mapping::SuperclassChangeAvailable).
-void Prepare(bool verifier_redirect, std::vector<Hook>* hooks, std::string* note);
+struct Services {
+  bool verifier_redirect;
+  bool runtime_thread;
+  void* (*mirror_class)(abi::arm64::ClassRedefinitionPrefix*);
+  abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view);
+};
+void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* note);
 bool Available();
 // ART 13 needs its named early-link error service to diagnose non-public targets.
 bool AbstractLinkErrorsAvailable();
@@ -39,11 +43,4 @@ bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self);
 // Current-thread verification only: lookup by loader without cache writes.
 void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept;
 jvmtiError VerificationError() noexcept;
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-bool InjectDispatchProbeFailure();
-bool InjectMappingPlanFailure();
-// Debug APK fault injection; no test entry points are built into release AARs.
-bool InjectInstanceFailure(abi::arm64::ClassRedefinitionPrefix* self,
-                           abi::arm64::RedefinitionDataIter* data, bool allocated);
-#endif
 }  // namespace artdcevm::interface_redefinition

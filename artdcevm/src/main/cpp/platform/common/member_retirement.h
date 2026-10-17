@@ -16,11 +16,13 @@
 // MethodHandle or VarHandle.
 namespace artdcevm::member_retirement {
 
-// Resolve the guard hooks by name, then install the JNI Call*Method* and field
-// guards through JVMTI's function-table override, which cannot be undone and
-// so comes last. False with `failure` when a name is missing or the override
-// fails; `hooks` is then unchanged.
-bool Prepare(JavaVM* vm, jvmtiEnv* jvmti, std::vector<Hook>* hooks, std::string* failure);
+struct Services {
+  abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view);
+};
+// Resolve guard hooks without changing the process JNI table.
+bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure);
+// Irreversible final installation step, after every inline hook succeeds.
+bool InstallJniGuards(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure);
 
 // Classes whose fields stand in for retired fields in reflective Field objects
 // (com.github.ytlog.artdcevm.internal.RetiredField / RetiredStaticField).

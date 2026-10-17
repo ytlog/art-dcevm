@@ -2,6 +2,7 @@
 #include "platform/common/class_layout.h"
 
 #include <android/api-level.h>
+#include "platform/abi/arm64/release_order.h"
 #include <mutex>
 #include <optional>
 #include <set>
@@ -31,10 +32,11 @@ std::string probe_state = "unavailable";
 // Probes over one source-declared class layout.
 struct ProbeOps {
   int android;
-  bool (*verify_target)(void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
-  bool (*verify_iter)(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
+  bool (*verify_target)(const VerifiedThread&, void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
+  bool (*verify_iter)(const VerifiedThread&, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
   uint32_t (*access)(const void* klass);
+  uint32_t (*superclass)(const void* klass);
 };
 
 template <typename Class, typename Method> struct Probe : View<Class, Method> {
@@ -44,12 +46,12 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
   // arrays, so a wrong array layout fails here before any array is read. The
   // expected flags come from the class's current ClassDef in its own DEX
   // (dex_cache_ precedes the arrays in every declared layout).
-  static bool VerifyAccess(const Class& klass, const std::string& descriptor, std::string* why) {
+  static bool VerifyAccess(const VerifiedThread& thread, const Class& klass, const std::string& descriptor, std::string* why) {
     constexpr uint32_t kValidClass = evolution::kAccPublic | evolution::kAccFinal |
         evolution::kAccSuper | evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccEnum;
     constexpr uint32_t kValidInterface = evolution::kAccPublic | evolution::kAccInterface |
         evolution::kAccAbstract | evolution::kAccSynthetic | evolution::kAccAnnotation;
-    const DexFilePrefix* dex = DexOf(klass.dex_cache);
+    const DexFilePrefix* dex = DexOf(thread, klass.dex_cache);
     if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
     uint32_t class_def_access = 0;
     std::string error;
@@ -65,7 +67,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
   // ART's Class.java field table confirms each slot before reading any array,
   // including the shared nonnull empty arrays used by newer ART modules.
   // Named target fields must then lie in arrays containing exactly the JVMTI fields.
-  static bool VerifyFields(Class* klass, void* class_type,
+  static bool VerifyFields(const VerifiedThread& thread, Class* klass, void* class_type,
                            const evolution::ClassSchema& live, std::string* why) {
     const auto arrays = FieldArrays(*klass);
     const auto slots = FieldArraySlots(*klass);
@@ -95,7 +97,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
       if (!placed) return Fail(why, "field " + member.name + " is outside the declared arrays");
       found.emplace_back(field, &member);
     }
-    const DexFilePrefix* dex = DexOf(klass->dex_cache);
+    const DexFilePrefix* dex = DexOf(thread, klass->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
     const evolution::DexView view = DexViewOf(*dex);
     for (const auto& [field, member] : found) {
@@ -103,7 +105,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
       for (uint64_t array : arrays) inside |= array && Members<ArtField>(array)->Contains(field);
       evolution::Member identity;
       std::string error;
-      if (!inside || Heap<Class>(field->declaring_class) != klass ||
+      if (!inside || Heap<Class>(thread, field->declaring_class) != klass ||
           (field->access_flags & kAccJavaFlagsMask) != member->access ||
           !evolution::ReadFieldIdentity(view, field->dex_field_index, &identity, &error) ||
           identity.name != member->name || identity.descriptor != member->descriptor)
@@ -112,19 +114,19 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     return true;
   }
 
-  static bool VerifyMethods(Class* klass, const evolution::ClassSchema& live, std::string* why) {
+  static bool VerifyMethods(const VerifiedThread& thread, Class* klass, const evolution::ClassSchema& live, std::string* why) {
     std::set<std::tuple<std::string, std::string, uint32_t>> expected;
     for (const auto& member : live.methods)
       expected.emplace(member.name, member.descriptor, member.access);
     auto* methods = Members<Method>(klass->methods);
     if (!methods) return expected.empty() ? true : Fail(why, "class has no methods array");
-    const DexFilePrefix* dex = DexOf(klass->dex_cache);
+    const DexFilePrefix* dex = DexOf(thread, klass->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "class has no DexFile");
     const evolution::DexView view = DexViewOf(*dex);
     size_t declared = 0;
     for (uint32_t i = 0; i < methods->length; ++i) {
       Method* method = methods->At(i);
-      if (Heap<Class>(method->declaring_class) != klass) continue;
+      if (Heap<Class>(thread, method->declaring_class) != klass) continue;
       const uint32_t flags = method->access_flags.load(std::memory_order_relaxed);
       evolution::Member identity;
       std::string error;
@@ -139,16 +141,16 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     return true;
   }
 
-  static bool VerifyTarget(void* klass, void* class_type,
+  static bool VerifyTarget(const VerifiedThread& thread, void* klass, void* class_type,
                            const evolution::ClassSchema& live, std::string* why) {
     auto* declared = static_cast<Class*>(klass);
-    return declared && VerifyAccess(*declared, live.descriptor, why) &&
-        VerifyFields(declared, class_type, live, why) && VerifyMethods(declared, live, why);
+    return declared && VerifyAccess(thread, *declared, live.descriptor, why) &&
+        VerifyFields(thread, declared, class_type, live, why) && VerifyMethods(thread, declared, live, why);
   }
 
   // After ART allocated the replacement classes: the holder's class slots
   // must name the target and a class loaded from the incoming DEX.
-  static bool VerifyIter(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
+  static bool VerifyIter(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                          std::string* why) {
     const auto* old_classes = data.Classes(true);
     const auto* new_classes = data.Classes(false);
@@ -157,13 +159,13 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     if (!old_classes || !new_classes || old_classes->length < 1 ||
         old_classes->length != new_classes->length)
       return Fail(why, "redefinition class slots are malformed");
-    if (Element<void>(old_classes, 0) != art.mirror_class(self))
+    if (Element<void>(thread, old_classes, 0) != art.mirror_class(self))
       return Fail(why, "redefinition slot does not hold the target class");
     for (int32_t i = 0; i < new_classes->length; ++i) {
-      auto* old_class = Element<Class>(old_classes, i);
-      auto* new_class = Element<Class>(new_classes, i);
+      auto* old_class = Element<Class>(thread, old_classes, i);
+      auto* new_class = Element<Class>(thread, new_classes, i);
       if (!old_class || !new_class) return Fail(why, "redefinition class slot is empty");
-      if (i == 0 && DexOf(new_class->dex_cache) != self->dex_file)
+      if (i == 0 && DexOf(thread, new_class->dex_cache) != self->dex_file)
         return Fail(why, "replacement class does not use the incoming DEX");
       auto* methods = Members<Method>(new_class->methods);
       for (uint32_t j = 0; methods && j < methods->length; ++j)
@@ -176,25 +178,18 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     return static_cast<const Class*>(klass)->access_flags & kAccJavaFlagsMask;
   }
 
-  static constexpr ProbeOps Make(int android) { return {android, VerifyTarget, VerifyIter, Access}; }
+  static uint32_t Superclass(const void* klass) { return static_cast<const Class*>(klass)->super_class; }
+  static constexpr ProbeOps Make(int android) {
+    return {android, VerifyTarget, VerifyIter, Access, Superclass};
+  }
 };
 
 const auto kProbes = Table<Probe, ProbeOps>();
 
-// The ART module is never older than the platform release, so older layouts
-// are not candidates. The platform's own release is tried first, then newer
-// ones; all of them share the ArtMethod stride a wrong guess could over-read.
-int PlatformRelease() {
-  const int api = android_get_device_api_level();
-  return api <= 30 ? 11 : api <= 32 ? 12 : api - 20;
-}
 std::vector<size_t> CandidateOrder() {
-  const int platform = PlatformRelease();
   std::vector<size_t> order;
-  for (size_t i = 0; i < kLayoutCount; ++i)
-    if (kProbes[i].android == platform) order.push_back(i);
-  for (size_t i = 0; i < kLayoutCount; ++i)
-    if (kProbes[i].android > platform) order.push_back(i);
+  for (int release : abi::CandidateReleases(android_get_device_api_level()))
+    order.push_back(static_cast<size_t>(release - 11));
   return order;
 }
 
@@ -207,9 +202,9 @@ int Selected(const transaction::Context* context) {
 }
 }  // namespace
 
-void Enable(const Services& services) {
+void Prepare(const Services& services) {
   art = services;
-  enabled = true;
+  enabled = art.find_static_field && art.find_declared_instance_field && art.mirror_class && art.class_type;
 }
 
 std::vector<int> CandidateReleases(bool verified_only) {
@@ -221,10 +216,10 @@ std::vector<int> CandidateReleases(bool verified_only) {
   return releases;
 }
 
-bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
+bool VerifyTarget(const std::optional<VerifiedThread>& thread, ClassRedefinitionPrefix* self, const evolution::ClassSchema& live) {
   transaction::Context* context = transaction::Current();
   if (!enabled || !context) return false;
-  if (!runtime_thread::Ready()) {
+  if (!thread) {
     context->probed = true;
     context->layouts = 0;
     Report(std::string("rejected: ") + runtime_thread::Rejection());
@@ -237,7 +232,7 @@ bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& l
   std::string why;
   for (size_t i : CandidateOrder()) {
     std::string reason;
-    if (kProbes[i].verify_target(klass, class_type, live, &reason))
+    if (kProbes[i].verify_target(*thread, klass, class_type, live, &reason))
       accepted |= LayoutMask{1} << i;
     else if (why.empty())  // The platform's own release is probed first.
       why = "android" + std::to_string(kProbes[i].android) + ": " + reason;
@@ -251,7 +246,7 @@ bool VerifyTarget(ClassRedefinitionPrefix* self, const evolution::ClassSchema& l
   return layout >= 0;
 }
 
-bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
+bool ClassAccess(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
   const transaction::Context* context = transaction::Current();
   if (!enabled || !context || !context->probed) return false;
   const void* mirror = DecodeClass(art.mirror_class, self, klass);
@@ -268,15 +263,22 @@ bool ClassAccess(ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) 
   return true;
 }
 
-int VerifyReplacements(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
+int VerifyReplacements(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                        std::string* why) {
   transaction::Context* context = transaction::Current();
   for (size_t i = 0; context && i < kLayoutCount; ++i) {
     const LayoutMask bit = LayoutMask{1} << i;
-    if ((context->layouts & bit) && !kProbes[i].verify_iter(self, data, why))
+    if ((context->layouts & bit) && !kProbes[i].verify_iter(thread, self, data, why))
       context->layouts &= ~bit;
   }
   return Selected(context);
+}
+
+bool SuperclassMatches(const VerifiedThread& thread, ClassRedefinitionPrefix* self,
+                       const RedefinitionDataIter& data, jclass superclass, int selected) {
+  void* replacement = data.Classes(false) ? Element<void>(thread, data.Classes(false), 0) : nullptr;
+  void* expected = DecodeClass(art.mirror_class, self, superclass);
+  return replacement && expected && kProbes[selected].superclass(replacement) == Reference(expected);
 }
 
 int Selected() { return Selected(transaction::Current()); }

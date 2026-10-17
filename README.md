@@ -19,6 +19,8 @@ The app must be debuggable from process start. No root and no system partition c
 
 Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md).
 
+Ordinary-class member retirement also requires a Native-phase probe of the current ART Thread declaration and named read-barrier services. `memberMapping` may therefore reject because of Thread probing, as well as Class layout probing; an unavailable mapping keeps its original installation reason. The Thread probe has device coverage on Android 13/API 33 and Android 16/API 36. Android 11, 12, 14, 15 and 17 have source declarations and host checks but no device validation of this probe.
+
 ## Interface redefinition
 
 Android 13 (API 33) and Android 16 (API 36) arm64 devices support body edits to default, static and private methods of top-level and nested interfaces, new public abstract/default/static methods and private instance methods, and deletion or signature changes of static/private methods (including synthetic lambda helpers and bridges). Static additions may have any access level. Interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces. Other Android versions disable the capability with a reason; runtime probes must still pass.

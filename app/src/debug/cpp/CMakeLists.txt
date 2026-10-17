@@ -11,3 +11,7 @@ target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/
 # Library-owned Debug/Release builds keep the CMake option OFF.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../artdcevm/src/main/cpp"
                  "${CMAKE_CURRENT_BINARY_DIR}/test-engine")
+
+if(ARTDCEVM_INTERFACE_ABORT_TESTS)
+  target_sources(artdcevm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/testing/fault_injection.cc")
+endif()

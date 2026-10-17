@@ -16,6 +16,12 @@ bool Context::RequiresMemberMapping() const {
   return false;
 }
 
+bool Context::Reject(abi::arm64::ClassRedefinitionPrefix* self, jvmtiError error, std::string reason) {
+  rejection = std::move(reason);
+  self->driver->result = error;
+  return false;
+}
+
 Context* Current() noexcept { return current; }
 
 Scope::Scope() noexcept {

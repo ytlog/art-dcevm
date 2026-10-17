@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <jvmti.h>
+#include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/art_hook.h"
 
 // ART verifies the new DEX before the commit. Since Android 13 its verifier
@@ -13,9 +15,15 @@
 // replacements instead.
 namespace artdcevm::verification_redirect {
 
+struct Services {
+  bool (*is_affected)(abi::arm64::ClassRedefinitionPrefix*);
+  void* (*verification_class)(void*, std::string_view, abi::arm64::Handle) noexcept;
+  jvmtiError (*verification_error)() noexcept;
+  void (*observe_class_linker)(void*);
+};
 // Resolve the CheckVerification and FindClass hooks by name. False with
 // `failure` when CheckVerification is missing; `hooks` is then unchanged.
-bool Prepare(std::vector<Hook>* hooks, std::string* failure);
+bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure);
 // Either FindClass spelling is hooked, so verification can be redirected.
 bool ResolvesClasses();
 }  // namespace artdcevm::verification_redirect

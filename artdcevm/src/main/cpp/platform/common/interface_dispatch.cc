@@ -1,6 +1,7 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/interface_dispatch.h"
 #include <mutex>
+#include "platform/common/fault_injection.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/transaction_context.h"
@@ -8,6 +9,7 @@
 namespace artdcevm::interface_dispatch {
 namespace {
 namespace abi = artdcevm::abi::arm64;
+using runtime_thread::VerifiedThread;
 using abi::ArtField;
 using abi::ClassRedefinitionPrefix;
 using abi::RedefinitionDataIter;
@@ -15,9 +17,6 @@ using class_layout::Members;
 using class_layout::Pointer;
 using class_layout::Reference;
 Services art{};
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-thread_local int validated_groups = 0;
-#endif
 jclass object_array_root = nullptr, pointer_array_root = nullptr;
 std::mutex state_mutex;
 std::string state = "unavailable";
@@ -26,13 +25,13 @@ void Report(std::string value) {
   state = std::move(value);
 }
 struct Ops {
-  bool (*probe)(ClassRedefinitionPrefix*);
-  bool (*check)(ClassRedefinitionPrefix*, const RedefinitionDataIter&, std::string*);
-  bool (*non_public)(ClassRedefinitionPrefix*, const std::vector<abi::Handle>&, abi::Handle,
+  bool (*probe)(const VerifiedThread&, ClassRedefinitionPrefix*);
+  bool (*check)(const VerifiedThread&, ClassRedefinitionPrefix*, const RedefinitionDataIter&, std::string*);
+  bool (*non_public)(const VerifiedThread&, ClassRedefinitionPrefix*, const std::vector<abi::Handle>&, abi::Handle,
                      int32_t, NonPublicSelection, const std::string&, bool, std::string*);
 };
 template <typename Class, typename Method> struct Verifier {
-  static bool DispatchProbe(ClassRedefinitionPrefix* self) {
+  static bool DispatchProbe(const VerifiedThread&, ClassRedefinitionPrefix* self) {
     // Validate the slot before following any candidate pointer. The array
     // headers are the same fixed ObjectArray/Array declarations already used
     // by the holder probes; CheckInterfaces also checks their runtime classes.
@@ -42,22 +41,22 @@ template <typename Class, typename Method> struct Verifier {
         !(slot->access_flags & evolution::kAccStatic) && slot->offset == offsetof(Class, iftable);
   }
 
-  static Class* ReadClass(uint32_t reference) {
-    return static_cast<Class*>(runtime_thread::Read(reference));
+  static Class* ReadClass(const VerifiedThread& thread, uint32_t reference) {
+    return static_cast<Class*>(runtime_thread::Read(thread, reference));
   }
   // An interface's declared virtual methods occupy consecutive method indices.
   // Probe these indices against its validated ArtMethod array rather than
   // interpreting a DEX index as an IfTable slot (DEX indices are file-local).
-  static bool InterfaceMethods(Class* interface, std::vector<Method*>* methods) {
+  static bool InterfaceMethods(const VerifiedThread& thread, Class* interface, std::vector<Method*>* methods) {
     auto* array = Members<Method>(interface->methods);
     for (uint32_t i = 0; array && i < array->length; ++i) {
       Method* method = array->At(i);
       const uint32_t flags = method->access_flags.load(std::memory_order_relaxed);
-      if (ReadClass(method->declaring_class) != interface ||
+      if (ReadClass(thread, method->declaring_class) != interface ||
           (flags & (evolution::kAccStatic | evolution::kAccPrivate))) continue;
       evolution::Member identity;
       std::string why;
-      if (!class_layout::MethodIdentity<Class>(method, &identity, &why)) return false;
+      if (!class_layout::MethodIdentity<Class>(thread, method, &identity, &why)) return false;
       if (identity.name == "<init>" || identity.name == "<clinit>") continue;
       if (method->method_index != methods->size()) return false;
       methods->push_back(method);
@@ -67,20 +66,20 @@ template <typename Class, typename Method> struct Verifier {
   // A native method pointer must belong to one of the known method arrays
   // before its flags or DEX identity can be read. ART may choose an inherited
   // method or a copied default/miranda owned by the concrete class.
-  static bool OwnsMethod(Class* klass, Method* method) {
-    for (Class* at = klass; at; at = ReadClass(at->super_class)) {
+  static bool OwnsMethod(const VerifiedThread& thread, Class* klass, Method* method) {
+    for (Class* at = klass; at; at = ReadClass(thread, at->super_class)) {
       auto* methods = Members<Method>(at->methods);
       if (methods && methods->Contains(method)) return true;
     }
     return false;
   }
-  static std::string MissingImplementation(const std::string& interface_descriptor,
+  static std::string MissingImplementation(const VerifiedThread& thread, const std::string& interface_descriptor,
       const std::string& name, const std::string& descriptor, const std::string& concrete,
       bool submitted, Method* selected, const char* stage = "selected") {
     std::string detail = submitted ? " (submitted; " : " (not submitted; ";
     detail += stage;
     if (selected) {
-      detail += " owner=" + class_layout::ClassDescriptor(*ReadClass(selected->declaring_class)) +
+      detail += " owner=" + class_layout::ClassDescriptor(thread, *ReadClass(thread, selected->declaring_class)) +
           "; flags=" + std::to_string(selected->access_flags.load(std::memory_order_relaxed));
     } else detail += " no dispatch target";
     return interface_descriptor + ": " + name + descriptor +
@@ -92,7 +91,7 @@ template <typename Class, typename Method> struct Verifier {
     return false;
   }
 
-  static bool CheckInterfaces(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
+  static bool CheckInterfaces(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                                std::string* rejection) {
     const auto* context = transaction::Current();
     const auto* old_classes = data.Classes(true);
@@ -102,64 +101,61 @@ template <typename Class, typename Method> struct Verifier {
       void* original = art.mirror_class(obligation.interface);
       Class* interface = nullptr;
       for (int32_t i = 0; i < old_classes->length; ++i)
-        if (class_layout::Element<void>(old_classes, i) == original)
-          interface = class_layout::Element<Class>(new_classes, i);
+        if (class_layout::Element<void>(thread, old_classes, i) == original)
+          interface = class_layout::Element<Class>(thread, new_classes, i);
       if (!interface) continue;  // This obligation belongs to another structural owner.
       const auto unavailable = [&](const std::string& why) {
         Report("rejected: " + why);
-        *rejection = class_layout::ClassDescriptor(*interface) + ": " + obligation.name + obligation.descriptor +
+        *rejection = class_layout::ClassDescriptor(thread, *interface) + ": " + obligation.name + obligation.descriptor +
             " requires a verified IfTable accessor: " + why;
         return false;
       };
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-      if (art.inject_probe_failure && art.inject_probe_failure())
-        return unavailable("injected IfTable probe mismatch");
-#endif
-      if (!DispatchProbe(self)) return unavailable("Class.ifTable field declaration differs");
+      if (ARTDCEVM_FAULT(21)) return unavailable("injected IfTable probe mismatch");
+      if (!DispatchProbe(thread, self)) return unavailable("Class.ifTable field declaration differs");
       std::vector<Method*> declarations;
-      if (!InterfaceMethods(interface, &declarations))
+      if (!InterfaceMethods(thread, interface, &declarations))
         return unavailable("interface method indices differ");
       Method* required = nullptr;
       for (Method* method : declarations) {
         evolution::Member identity;
         std::string why;
-        if (!class_layout::MethodIdentity<Class>(method, &identity, &why)) return unavailable(why);
+        if (!class_layout::MethodIdentity<Class>(thread, method, &identity, &why)) return unavailable(why);
         if (identity.name == obligation.name && identity.descriptor == obligation.descriptor) required = method;
       }
       if (!required) return unavailable("candidate interface declaration is absent");
       void* object_array_type = class_layout::DecodeClass(art.mirror_class, self, object_array_root);
       void* pointer_array_type = class_layout::DecodeClass(art.mirror_class, self, pointer_array_root);
       for (int32_t i = 0; i < new_classes->length; ++i) {
-        Class* klass = class_layout::Element<Class>(new_classes, i);
+        Class* klass = class_layout::Element<Class>(thread, new_classes, i);
         if (klass->access_flags & (evolution::kAccInterface | evolution::kAccAbstract)) continue;
-        auto* table = static_cast<abi::ObjectArray*>(runtime_thread::Read(klass->iftable));
-        if (!table || runtime_thread::Read(table->object.klass) != object_array_type ||
+        auto* table = static_cast<abi::ObjectArray*>(runtime_thread::Read(thread, klass->iftable));
+        if (!table || runtime_thread::Read(thread, table->object.klass) != object_array_type ||
             table->length < 0 || table->length % 2) return unavailable("IfTable array declaration differs");
         Method* implementation = nullptr;
         bool found = false;
         for (int32_t entry = 0; entry < table->length; entry += 2) {
-          if (ReadClass(table->elements[entry]) != interface) continue;
+          if (ReadClass(thread, table->elements[entry]) != interface) continue;
           if (found) return unavailable("IfTable has duplicate interface identities");
           found = true;
           auto* methods = static_cast<abi::PointerArray*>(
-              runtime_thread::Read(table->elements[entry + 1]));
-          if (!methods || runtime_thread::Read(methods->object.klass) != pointer_array_type ||
+              runtime_thread::Read(thread, table->elements[entry + 1]));
+          if (!methods || runtime_thread::Read(thread, methods->object.klass) != pointer_array_type ||
               methods->length != static_cast<int32_t>(declarations.size()))
             return unavailable("IfTable PointerArray declaration differs");
           implementation = Pointer<Method>(methods->elements[required->method_index]);
-          if (implementation && !OwnsMethod(klass, implementation) && !OwnsMethod(interface, implementation))
+          if (implementation && !OwnsMethod(thread, klass, implementation) && !OwnsMethod(thread, interface, implementation))
             return unavailable("IfTable target is outside known method arrays");
         }
         // A group can contain siblings of a dependent interface; only types
         // whose actual IfTable contains this candidate identity implement it.
         if (!found) {
-          auto* old = class_layout::Element<Class>(old_classes, i);
-          auto* old_table = static_cast<abi::ObjectArray*>(runtime_thread::Read(old->iftable));
-          if (!old_table || runtime_thread::Read(old_table->object.klass) != object_array_type ||
+          auto* old = class_layout::Element<Class>(thread, old_classes, i);
+          auto* old_table = static_cast<abi::ObjectArray*>(runtime_thread::Read(thread, old->iftable));
+          if (!old_table || runtime_thread::Read(thread, old_table->object.klass) != object_array_type ||
               old_table->length < 0 || old_table->length % 2)
             return unavailable("old IfTable array declaration differs");
           for (int32_t entry = 0; entry < old_table->length; entry += 2)
-            if (runtime_thread::Read(old_table->elements[entry]) == original)
+            if (runtime_thread::Read(thread, old_table->elements[entry]) == original)
               return unavailable("candidate IfTable is missing an implemented interface");
           continue;
         }
@@ -171,11 +167,11 @@ template <typename Class, typename Method> struct Verifier {
             (flags & (evolution::kAccAbstract | evolution::kAccStatic | evolution::kAccPrivate)) ||
             (flags & abi::kAccObsoleteMethod) || member_retirement::IsRetiredMethod(implementation) ||
             IsDefaultConflicting(*implementation) ||
-            !class_layout::MethodIdentity<Class>(implementation, &identity, &why) ||
+            !class_layout::MethodIdentity<Class>(thread, implementation, &identity, &why) ||
             identity.name != obligation.name || identity.descriptor != obligation.descriptor) {
-          *rejection = MissingImplementation(class_layout::ClassDescriptor(*interface),
-              obligation.name, obligation.descriptor, class_layout::ClassDescriptor(*klass),
-              Submitted(class_layout::Element<Class>(old_classes, i)), implementation);
+          *rejection = MissingImplementation(thread, class_layout::ClassDescriptor(thread, *interface),
+              obligation.name, obligation.descriptor, class_layout::ClassDescriptor(thread, *klass),
+              Submitted(class_layout::Element<Class>(thread, old_classes, i)), implementation);
           return false;
         }
       }
@@ -183,17 +179,17 @@ template <typename Class, typename Method> struct Verifier {
     return true;
   }
 
-  static bool NonPublic(ClassRedefinitionPrefix*, const std::vector<abi::Handle>& originals,
+  static bool NonPublic(const VerifiedThread& thread, ClassRedefinitionPrefix*, const std::vector<abi::Handle>& originals,
       abi::Handle candidates, int32_t index, NonPublicSelection selection,
       const std::string& concrete_descriptor, bool submitted, std::string* rejection) {
     auto* declaration = reinterpret_cast<Method*>(selection.declaration);
     auto* implementation = reinterpret_cast<Method*>(selection.implementation);
     if (!declaration || !implementation) return false;
-    Class* owner = ReadClass(declaration->declaring_class);
+    Class* owner = ReadClass(thread, declaration->declaring_class);
     evolution::Member required, selected;
     std::string why;
-    if (!class_layout::MethodIdentity<Class>(declaration, &required, &why) ||
-        !class_layout::MethodIdentity<Class>(implementation, &selected, &why) ||
+    if (!class_layout::MethodIdentity<Class>(thread, declaration, &required, &why) ||
+        !class_layout::MethodIdentity<Class>(thread, implementation, &selected, &why) ||
         required.name != selected.name || required.descriptor != selected.descriptor) return false;
     const auto* context = transaction::Current();
     for (const auto& obligation : context->interface_obligations) {
@@ -202,11 +198,11 @@ template <typename Class, typename Method> struct Verifier {
       bool candidate = false;
       for (int32_t i = 0; i < index; ++i)
         if (originals[i].Get<void>() == original &&
-            class_layout::Element<Class>(candidates.Get<abi::ObjectArray>(), i) == owner) candidate = true;
+            class_layout::Element<Class>(thread, candidates.Get<abi::ObjectArray>(), i) == owner) candidate = true;
       if (!candidate) continue;
       const auto* requirement = context->Find(obligation.interface);
       if (!requirement) return false;
-      *rejection = MissingImplementation(requirement->descriptor, required.name, required.descriptor,
+      *rejection = MissingImplementation(thread, requirement->descriptor, required.name, required.descriptor,
           concrete_descriptor, submitted, implementation, "ART rejected non-public selection during linking;");
       return true;
     }
@@ -236,14 +232,14 @@ void Prepare(JNIEnv* jni, const Services& services) {
   }
   Report("unverified: IfTable declarations");
 }
-bool Available(ClassRedefinitionPrefix* self) {
+bool Available(const VerifiedThread& thread, ClassRedefinitionPrefix* self, bool early_link_errors_available) {
   const int selected = class_layout::Selected();
   if (!object_array_root || !pointer_array_root || selected < 0) return false;
-  if (!art.early_link_errors_available()) {
+  if (!early_link_errors_available) {
     Report("rejected: ART non-public implementation link-error service unavailable");
     return false;
   }
-  if (kVerifiers[selected].probe(self)) return true;
+  if (kVerifiers[selected].probe(thread, self)) return true;
   Report("rejected: Class.ifTable field declaration differs");
   return false;
 }
@@ -251,37 +247,30 @@ std::string State() {
   std::lock_guard<std::mutex> lock(state_mutex);
   return state;
 }
-bool Check(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection) {
+bool Check(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection) {
   const auto* context = transaction::Current();
   if (!context || context->interface_obligations.empty()) return true;
   const int selected = class_layout::Selected();
   if (selected >= 0) {
-    if (!kVerifiers[selected].check(self, data, rejection)) return false;
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
+    if (!kVerifiers[selected].check(thread, self, data, rejection)) return false;
+    ARTDCEVM_TEST(
     bool owns_condition = false;
     const auto* originals = data.Classes(true);
     for (const auto& obligation : context->interface_obligations)
       for (int32_t i = 0; originals && i < originals->length; ++i)
-        owns_condition |= class_layout::Element<void>(originals, i) == art.mirror_class(obligation.interface);
-    if (owns_condition) ++validated_groups;
-#endif
+        owns_condition |= class_layout::Element<void>(thread, originals, i) == art.mirror_class(obligation.interface);
+    if (owns_condition) fault_injection::Increment(fault_injection::Counter::kValidatedGroups);
+    )
     return true;
   }
   *rejection = "added abstract interface methods require a verified IfTable accessor";
   return false;
 }
-bool DescribeNonPublicSelection(ClassRedefinitionPrefix* self,
+bool DescribeNonPublicSelection(const VerifiedThread& thread, ClassRedefinitionPrefix* self,
     const std::vector<abi::Handle>& originals, abi::Handle candidates, int32_t index,
     NonPublicSelection selection, const std::string& descriptor, bool submitted, std::string* rejection) {
   const int selected = class_layout::Selected();
   return selected >= 0 && kVerifiers[selected].non_public(
-      self, originals, candidates, index, selection, descriptor, submitted, rejection);
+      thread, self, originals, candidates, index, selection, descriptor, submitted, rejection);
 }
-#ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
-void ResetValidationCounters() { validated_groups = 0; }
-extern "C" JNIEXPORT jint JNICALL
-Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_validatedInterfaceGroups(JNIEnv*, jclass) {
-  return validated_groups;
-}
-#endif
 }  // namespace artdcevm::interface_dispatch
