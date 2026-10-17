@@ -10,6 +10,8 @@ inline constexpr NamedSymbol kGetNormal{Library::kJvmti, "_ZN12openjdkjvmti9Rede
 inline constexpr NamedSymbol kGetStructural{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner25GetClassRedefinitionErrorILNS_16RedefinitionTypeE1EEE10jvmtiErrorN3art6HandleINS4_6mirror5ClassEEEPNSt3__112basic_stringIcNS9_11char_traitsIcEENS9_9allocatorIcEEEE"};
 inline constexpr NamedSymbol kFinishNewClassAllocations{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition25FinishNewClassAllocationsERNS_22RedefinitionDataHolderEPNS_20RedefinitionDataIterE"};
 inline constexpr NamedSymbol kHandleScopeVisitRoots{Library::kArt, "_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEj", SymbolTable::kAnyNamed};
+// android-11.0.0_r1 thread.h declares pid_t; Android 12 onward uses uint32_t.
+inline constexpr NamedSymbol kHandleScopeVisitRootsSigned{Library::kArt, "_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEi", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kEnsureInitialized{Library::kArt, "_ZN3art11ClassLinker17EnsureInitializedEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEEbb"};
 inline constexpr NamedSymbol kNewLocalRef{Library::kArt, "_ZN3art9JNIEnvExt11NewLocalRefEPNS_6mirror6ObjectE"};
 inline constexpr NamedSymbol kDeleteLocalRef{Library::kArt, "_ZN3art9JNIEnvExt14DeleteLocalRefEP8_jobject"};

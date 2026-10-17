@@ -109,6 +109,8 @@ ART 调用的入口与 visitor 不允许向调用方传播 C++ 异常。接口�
 
 纯 pointer 模式会直接返回 ArtMethod／ArtField 指针，不一定建立上述标记。Native 快照阶段通过公开 `GetClassMethods` 取得一个现有方法 ID；组内没有方法时通过 `GetClassFields` 检查字段 ID。按固定 11–17 源码的 `IndexToId`／`DecodeGenericId` 规则检查最低位：奇数为 index ID，偶数为指针。发现指针时以 79 拒绝，避免接口重建成功后缓存 JNI 调用仍指向旧成员。一次快照只需确认一次 index 模式；结构准入仍逐类检查历史 pointer-id 标记。没有读取 JNI ID 指向的内存或切换运行时模式。Debug `InterfaceAbortInstrumentation` 的 `interface-pointer-runtime` 场景在显式 pointer 模式验证方法／仅字段接口拒绝、旧 JNI 调用及 GC 后行为，并验证普通类事务仍可成功；`interface-index-runtime` 对照场景验证两类接口可以成功更新。
 
+收集器测试 APK 可用 `python3 tools/prepare-collector-apk.py --apk <debug.apk> --collector <CC|CMC>` 离线准备，结果与哈希写入 `build/evidence/`。包装脚本默认显式指定 index JNI IDs，移除冲突的 VM 选项及 `--nice-name`：固定 Android 17 的 [app_main.cpp](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-17.0.0_r1/cmds/app_process/app_main.cpp) 在 ART 加载前设置进程名，而 [AndroidRuntime.cpp](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-17.0.0_r1/core/jni/AndroidRuntime.cpp) 会清零参数区，导致早期收集器选择读不到 `-Xgc`。工具保留原始 APK 载荷和签名证书，不安装或预约设备。运行后仍须按引擎进程核对实际 GC 启动日志，不能仅凭包装参数认定收集器。
+
 ART 可能在同一事务内多次检查结构准入。准入 Hook 成功调用 ART `EnsureInitialized` 后更新该目标在事务内的预期初始化状态，避免下一次准入把自身完成的初始化误判为快照外变化。仅字段接口的 index 模式对照同时覆盖此前尚未初始化的目标。
 
 接口准入的访问位基准是目标当前 DEX 的 ClassDef，经 `evolution::ReadClassAccess` 读取，并使用与 `class_layout` 的访问位探测相同的接口有效位掩码。不能用 JVMTI `GetClassModifiers` 作基准：它优先报告 InnerClass 标志，成员接口包含 `static`，而 ClassDef 与运行时 Class 不包含该位。嵌套接口与顶层接口遵循同一准入规则。
@@ -258,19 +260,19 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的本地
 
 17 的 clinit_thread_id_or_hash 是 atomic 32 位复用槽位：GetClinitThreadId 以高十位是否为零区分 tid 与描述符哈希。android17/Class 声明保留真实槽位名称和按源码定义的 DecodeClinitThreadId；prepared profile 显式传入该字段的 offsetof。没有把它冒充普通 clinit_thread_id，也没有启用该版本。依据：[17 class.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class.h)、[17 class-inl.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class-inl.h)。
 
-holder 所有版本都是 Handle array、redefinitions vector 指针、initialized/actually_structural/initial_structural 三个 vector<bool>，对应偏移 0、8、16、40、64；libc++ ABI v1 的 vector<bool> 为 24 字节。ClassRedefinition 元素都是 72 字节，driver/klass/DEX 前缀一致，std::string 后 ArrayRef 起点为 48。十三个 Java holder 槽位一致。11 的根遍历线程 ID 参数为 pid_t/int，12 起为 uint32_t；该签名差异仅有离线符号声明，运行时未引用。
+holder 所有版本都是 Handle array、redefinitions vector 指针、initialized/actually_structural/initial_structural 三个 vector<bool>，对应偏移 0、8、16、40、64；libc++ ABI v1 的 vector<bool> 为 24 字节。ClassRedefinition 元素都是 72 字节，driver/klass/DEX 前缀一致，std::string 后 ArrayRef 起点为 48。十三个 Java holder 槽位一致。11 的根遍历线程 ID 参数为 pid_t/int，12 起为 uint32_t；android11 的接口声明记录该差异，公共路径按声明选择两个独立的准确函数原型，缺少对应命名服务时探测失败，不转换到另一种签名。主机测试覆盖两类调用与缺失服务，arm64 编译断言和已有 SO 逐版本核对；Android 11 的实际根遍历仍待真机验证。
 
 接口模块的函数 ABI 仍来自公共固定声明：准入 Handle/Class + string*；Run 的 RedefinerPrefix*；Finish 的 ClassRedefinitionPrefix*、holder&、iter*；AllocateNewClassObject 的三个 Handle 与 uint16 class-def index；CreateNewDexCache 的 loader Handle；LinkClass 的 Thread、descriptor、Class/array Handle 与输出 Handle；LookupClass 的 char* 或 string_view；DoLookupResolvedType 的 TypeIndex/referrer 或 DexCache/loader；SetDexCache 的 Class/DexCache；JNIEnvExt 局部引用桥与 JavaVMExt 的全局根解码；ClassStatus 内部写入及 Mark；FindInstanceField 的两个 string_view。ClassExt/数组类别字段继续按 ART 字段表取得，未新增固定偏移。成员映射与校验重定向继续依赖已存在的结构目录和 FindClass 候选声明。
 
-表中的接口运行时仍只选择已在 API 33–36 设备上验证的 android13/android14/android15/android16；共享 Thread 探测独立覆盖普通类的 11–17。android11/12/17 的 `kPreparedInterfaceRuntime` 以仅准备标记登记，参与固定声明与 arm64 编译核对，不进入运行时候选或 API 准入；引擎不解析、Hook 或调用其离线符号，编译通过不能替代设备验证。
+表中的接口运行时仍只选择已在 API 33–36 设备上验证的 android13/android14/android15/android16；共享 Thread 探测独立覆盖普通类的 11–17。android11/12/17 的 `kPreparedInterfaceRuntime` 以仅准备标记登记，参与固定声明与 arm64 编译核对，不进入运行时候选或 API 准入；这些平台的接口安装在解析和 Hook 服务前即拒绝。公共签名适配与编译通过不能替代设备验证。
 
 | 版本 | 准备与启用状态 | 启用前需要的验证 |
 | --- | --- | --- |
-| Android 11 / API 30 | 普通类及 Thread 已真机验证；接口未启用 | Motorola G20 的两模式第一阶段通过；公共路径已改为 Native JNI 预分配私有数组，已有 SO 包含所需全局根解码服务。仍需 signed 根遍历、scope/holder、完整接口事务和失败清理的真机验证 |
+| Android 11 / API 30 | 普通类及 Thread 已真机验证；接口未启用 | Motorola G20 的两模式第一阶段通过；公共路径已改为 Native JNI 预分配私有数组，已有 SO 包含所需全局根解码服务；signed 根遍历已按声明适配并通过主机核对。仍需实际根遍历、scope/holder、完整接口事务和失败清理的真机验证 |
 | Android 12、12L / API 31–32 | 两 API 的普通类及 Thread 已真机验证；接口未启用 | Pixel 6/API 31、Pixel 6a/API 32 的两模式第一阶段均通过；Native JNI 预分配消除私有数组分配符号的依赖。仍需旧 Thread 排列所关联的 scope/holder、完整接口事务和失败清理的真机验证 |
 | Android 14 / API 34 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、声明探测与 abort 恢复；Pixel 8 的 Compose `interface abstract batch` 通过。保持已验证的保守配置 `linked_iftable_acceptance=false` 及可用命名错误服务，非 public 实现场景返回 63 |
 | Android 15 / API 35 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、16 字节 scope、holder 与三标志探测及 abort 恢复；Pixel 8 Pro 的 Compose `interface abstract batch` 通过。`linked_iftable_acceptance=true` 验收 ART 已链接的分派数组 |
-| Android 17 / API 37 | 普通类 CC／分代 CMC 已运行；接口未启用 | Pixel 11 的两收集器、普通／CheckJNI 第一阶段通过，Galaxy Z Fold8 补充分代 CMC 证据；Pixel 11 CC 压力未观测到标记重叠。接口候选在缓存 JNI 调用处失败，API 33 已复现 pointer 模式问题并验证拒绝保护；仍需在正确 JNI ID 模式下完成 API 37 全量接口、abort 恢复和 Compose 验证 |
+| Android 17 / API 37 | 普通类 CC／分代 CMC 已运行；接口未启用 | Pixel 11 的两收集器、普通／CheckJNI 第一阶段通过，Galaxy Z Fold8 补充分代 CMC 证据；Pixel 11 CC 压力未观测到标记重叠。接口候选在缓存 JNI 调用处失败，API 33 已复现 pointer 模式问题并验证拒绝保护，离线测试工具已修正 JNI ID 与早期 GC 启动参数；仍需在正确 JNI ID 模式下完成 API 37 全量接口、abort 恢复和 Compose 验证 |
 
 上述设备验证均须覆盖普通与 CheckJNI 模式及全部探测、同批更新和失败恢复。平台 API 不能证明 ART 模块源码版本；Mainline 更新后的声明与服务仍须核对。逐套运行库的符号表、覆盖统计和采集细节仅保存在本地被忽略的 `assets/runtime_lib/README.md`；原始报告保存在 `build/evidence/`。
 

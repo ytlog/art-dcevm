@@ -79,6 +79,7 @@ def main():
             lines.append(f'static_assert(RuntimeThreadFor<android{v}::Thread>().{member} == {value});')
         lines.append(f'static_assert({profile}.runtime->scope_header_size == {offsets[4]});')
         lines.append(f'static_assert({profile}.runtime->redefinition_size == 72);')
+        lines.append(f'static_assert({profile}.runtime->scope_thread_id_signed == {str(v == 11).lower()});')
         lines.append(f'static_assert(kMaxInterfaceScopeHeader >= {profile}.runtime->scope_header_size);')
     lines.append('static_assert(kMaxInterfaceScopeHeader == 16);')
     for release in (-1, 0, 10, 18, 99):
@@ -109,9 +110,9 @@ def main():
     combined_hash = hashlib.sha256((catalog_hash + extra_hash + shared_hash).encode('ascii')).hexdigest()
     report = audit.collect_report(args.runtime_lib.resolve(), catalog + extra + shared, combined_hash)
     alternatives = [('kCanNormal', 'kGetNormal'), ('kCanStructural', 'kGetStructural'),
-                    ('kLookupClassChars', 'kLookupClassView'),
-                    ('kHandleScopeVisitRoots', 'kHandleScopeVisitRootsSigned')]
+                    ('kLookupClassChars', 'kLookupClassView')]
     optional = {name for group in alternatives for name in group}
+    optional.update(('kHandleScopeVisitRoots', 'kHandleScopeVisitRootsSigned'))
     # Only abstract additions on ART 13/14 need this early link-error service.
     # Its absence must not make unrelated interface services look unavailable.
     non_public = ('kThrowNonPublicGlobal', 'kThrowNonPublicLocal', 'kThrowNonPublicUnique')
@@ -132,6 +133,12 @@ def main():
             'allocatorSelectionRequired': False}
         missing = [name for name in entries if name not in optional and not entries[name]]
         missing += ['/'.join(group) for group in alternatives if not any(entries.get(name) for name in group)]
+        scope_service = 'kHandleScopeVisitRootsSigned' if api == 30 else 'kHandleScopeVisitRoots'
+        runtime['handleScopeTraversal'] = {
+            'threadIdType': 'pid_t/int32_t' if api == 30 else 'uint32_t',
+            'requiredService': scope_service, 'available': entries[scope_service]}
+        if not entries[scope_service]:
+            missing.append(scope_service)
         runtime['sourcePreparationMissingServices'] = missing
         row = rows.setdefault(api, {'sets': 0, 'coveredSets': 0})
         row['sets'] += 1

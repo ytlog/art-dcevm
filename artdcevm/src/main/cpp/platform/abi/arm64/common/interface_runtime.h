@@ -10,9 +10,10 @@ struct InterfaceRuntime {
   size_t dex_class_def_index, status;
   size_t scope_header_size, scope_link, scope_capacity, scope_size;
   size_t redefinitions, initialized, actually_structural, initial_structural, redefinition_size;
+  bool scope_thread_id_signed;
   static constexpr size_t kAbsent = static_cast<size_t>(-1);
 };
-template <class Class, class Header, class Holder>
+template <class Class, class Header, class Holder, bool SignedThreadId = false>
 constexpr InterfaceRuntime InterfaceRuntimeFor(
     size_t scope_size, size_t clinit_offset = offsetof(Class, clinit_thread_id)) {
   return {offsetof(Class, access_flags), offsetof(Class, class_loader),
@@ -21,6 +22,6 @@ constexpr InterfaceRuntime InterfaceRuntimeFor(
       sizeof(Header), offsetof(Header, link),
       offsetof(Header, number_of_references), scope_size, offsetof(Holder, redefinitions), offsetof(Holder, initialized),
       offsetof(Holder, actually_structural), offsetof(Holder, initial_structural),
-      sizeof(typename Holder::Redefinition)};
+      sizeof(typename Holder::Redefinition), SignedThreadId};
 }
 }  // namespace artdcevm::abi::arm64

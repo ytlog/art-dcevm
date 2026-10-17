@@ -11,6 +11,5 @@ namespace artdcevm::abi::arm64::android11 {
 using ArrayAllocWithAllocator = ObjectArray* (*)(void*, void*, int32_t, int32_t);
 // Source preparation only. RuntimeFor deliberately does not select this profile.
 inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
-    InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(InterfaceRuntime::kAbsent);
-inline constexpr bool kHandleScopeThreadIdSigned = true;
+    InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder, true>(InterfaceRuntime::kAbsent);
 }  // namespace artdcevm::abi::arm64::android11

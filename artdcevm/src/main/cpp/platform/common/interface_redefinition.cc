@@ -16,6 +16,7 @@
 #include "platform/abi/arm64/common/class_status.h"
 #include "platform/abi/arm64/common/class_linker.h"
 #include "platform/abi/arm64/common/root_visitor.h"
+#include "platform/abi/arm64/common/handle_scope_visitor.h"
 #include "platform/abi/arm64/common/jni_ids.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/art_dex_view.h"
@@ -67,7 +68,7 @@ void (*set_status_internal)(void*, ClassStatus) = nullptr;
 bool available = false;
 std::atomic<const char*> disabled_reason{nullptr};
 std::atomic<int> verified_release{0};
-void (*visit_handle_roots)(void*, RootVisitor*, uint32_t) = nullptr;
+HandleScopeVisitors visit_handle_roots;
 void Disable(const char* reason) noexcept {
   disabled_reason.store(reason);
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
@@ -196,7 +197,8 @@ bool VerifyScopes(const InterfaceRuntime& layout, const RuntimeThread& thread_la
       ? capacity : Field<uint32_t>(scope, layout.scope_size);
   if (capacity != 1 || size != 1) return false;
   ScopeRoots observed(scope, capacity);
-  visit_handle_roots(thread, &observed, Field<uint32_t>(thread, thread_layout.tid));
+  if (!visit_handle_roots.Visit(layout.scope_thread_id_signed, thread, &observed,
+                               Field<uint32_t>(thread, thread_layout.tid))) return false;
   return observed.Matches(layout, scope, target.reference, size);
 }
 
@@ -1042,7 +1044,8 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
     return;
   }
   using namespace symbols::interface_redefinition;
-  visit_handle_roots = reinterpret_cast<decltype(visit_handle_roots)>(symbols::Find(kHandleScopeVisitRoots));
+  visit_handle_roots.unsigned_ids = reinterpret_cast<HandleScopeVisitors::Unsigned>(symbols::Find(kHandleScopeVisitRoots));
+  visit_handle_roots.signed_ids = reinterpret_cast<HandleScopeVisitors::Signed>(symbols::Find(kHandleScopeVisitRootsSigned));
   mirror_class = services.mirror_class;
   find_instance_field = services.find_instance_field;
   ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
@@ -1060,7 +1063,7 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
   void* run = symbols::Find(kRun);
   void* link_class = symbols::Find(kLinkClass);
   set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
-  if (!services.runtime_thread || !visit_handle_roots || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
+  if (!services.runtime_thread || !visit_handle_roots.Available() || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
       !allocate_cache || !decode_global || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     reject("interface redefinition named services unavailable");
