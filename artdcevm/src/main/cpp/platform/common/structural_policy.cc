@@ -157,7 +157,8 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
                         key.first + key.second);
   return {};
 }
-// Only new code invokes an added static or private interface method. An added
+// Only new code invokes an added static or private interface method; as for a
+// class, ART never runs an initializer added to an initialized interface. An added
 // default fills a new iftable slot that ART links into every re-linked
 // subtype. Abstract additions require checking the actual linked dispatch
 // of every concrete implementation. `modifiers` is the JVMTI view.
@@ -167,9 +168,6 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "interface redefinition does not support added methods: " + method);
-  if (Initializer(key.first))
-    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                  "an initialized interface never runs an added initializer: " + method);
   if (modifiers & acc::kAccNative)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "interface redefinition does not support added native methods: " + method);

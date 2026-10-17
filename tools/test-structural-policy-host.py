@@ -601,8 +601,8 @@ int main(int argc, char** argv) {
              "nonpublic abstract instance method must be rejected");
       reject(with({{"bound", "()I", acc::kAccPublic | acc::kAccStatic | acc::kAccNative}}), kAdded,
              "native interface method addition must be rejected");
-      reject(with({{"<clinit>", "()V", acc::kAccStatic}}), kAdded,
-             "interface initializer addition must be rejected");
+      accept(with({{"<clinit>", "()V", acc::kAccStatic}}), 0, kAdded,
+             "interface initializer addition must be accepted");
       reject(with({{"packaged", "()I", 0}}), kAdded,
              "package-private interface instance method addition must be rejected");
       // Direct methods must not hide inherited interface or Object methods.

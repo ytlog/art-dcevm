@@ -1002,6 +1002,19 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("restored", 42, contract.value());
             scenario.check("marker", 73, instance.marker);
         });
+        runScenario("nested-interface-initializer", 0, scenario -> {
+            // As for a class, an initializer added to an initialized interface never runs.
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-initializer");
+            scenario.check("initializerNotRun", true, NestedInterfaceHost.Contract.class.getField("NAMES").get(null) == null);
+            scenario.check("value", 47, contract.value());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("nested-interface-restore-initializer", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-body");
+            scenario.check("fieldRetired", 0, NestedInterfaceHost.Contract.class.getFields().length);
+            scenario.check("restored", 42, contract.value());
+            scenario.check("marker", 73, instance.marker);
+        });
         CopiedChild child = new CopiedChild();
         CopiedDefault topLevel = child;
         runScenario("interface-after-nested", 0, scenario -> {
