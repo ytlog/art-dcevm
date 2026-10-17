@@ -12,7 +12,7 @@
 - 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务不允许退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
-普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。除既有 Android 13/API 33、Android 16/API 36 证据外，Android 11/API 30、Android 12/API 31、12L/API 32、Android 14/API 34、Android 15/API 35 和 Android 17/API 37 的 arm64 真机均已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，成员映射分别选择对应声明。Android 14、15 已分别覆盖实际 CC 和 CMC 配置；Android 17 已覆盖分代 CMC，CC 仍待验证。这些普通类结果未开放其他版本的接口重定义，也不代表所有 OEM 或 ART Mainline 模块均兼容。
+普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。除既有 Android 13/API 33、Android 16/API 36 证据外，Android 11/API 30、Android 12/API 31、12L/API 32、Android 14/API 34、Android 15/API 35 和 Android 17/API 37 的 arm64 真机均已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，成员映射分别选择对应声明。Android 14、15 已分别覆盖实际 CC 和 CMC 配置；Android 17 已覆盖分代 CMC，CC 仍待验证。普通类结果本身不构成接口准入，也不代表所有 OEM 或 ART Mainline 模块均兼容；接口可用版本见下文。
 
 其他版本先通过 `tools/run-device-tests.py --scenario-group ordinary` 的完整普通类场景，以及 `InterfaceAbortInstrumentation` 的 `-e scenario ordinary` Thread 拒绝探测和 GC 压力检查；两者均须覆盖普通与 CheckJNI 模式。该模式保留普通类新增接口的场景，只跳过以接口为重定义目标的测试，不需要先开放接口准入。Android 14 及以上还须分别确认 CC 和 CMC 收集器的实际配置与运行结果；GC 次数或零次标记期间读取不能单独证明 CMC 覆盖。
 
@@ -20,7 +20,7 @@
 
 接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，以及删除或改签名 static/private 方法。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
-此能力仅在 Android 13（API 33）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
+此能力仅在 Android 13（API 33）、Android 14（API 34）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
 
 `capabilities()` 只读取最近的探测状态，不触发探测。`interfaceRuntime` 的 `unavailable` 表示接口运行时不可用；`disabled: 原因` 表示已停用，例如版本、必需服务或运行时声明不匹配；这两种状态下接口目标以 98 拒绝。`unverified: …` 表示事务内探测尚未完成，`verified: …` 表示探测已通过。初始化后、首次接口事务完成运行时探测前，`interfaceRedefinition` 为 false；`unverified` 不等于不支持，不应据此拦截首次事务。探测通过也不保证每种修改都被接受，最终以具体事务结果和 `lastRejection` 为准。
 
@@ -41,7 +41,7 @@
 
 新增 public abstract 方法要求重定义后，接口组内**每个已加载的具体实现类**都能通过 ART 的实际 IfTable 分派到同名、完整 descriptor 相同的 public 具体实例方法，包括没有实例、没有提交 DEX 的类。同批补齐实现不要求提交顺序；已有实现、父类继承的实现和 ART 实际选中的更具体 default 均可接受。缺少实现、abstract/miranda、static/private/非 public 方法或 default 冲突均整批拒绝 63，不推迟到调用时抛 `AbstractMethodError`。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现；同名类型按类加载器身份分别判断。`lastRejection` 写出接口方法及缺实现的类，撤回或补齐后可重试。
 
-IfTable 只读访问器须通过 Class 字段、接口方法索引和 arm64 PointerArray 探测。`interfaceAbstractDispatch` 报告 `unavailable`（可附原因）、`unverified: …`、`verified: …` 或 `rejected: 原因`，含义分别为访问器不可用、尚未完成分派探测、分派探测已通过，以及探测或所需服务检查未通过。尚待新增 abstract 事务的分派探测时，状态为 `unverified: …`，`interfaceAbstractMethodAddition` 为 false；这也不等于不支持。该布尔值仅在接口运行时、分派访问器及必要的链接错误服务均可用并通过探测后为 true，仍须逐事务检查全部实现类。仅分派访问器不可用或被拒绝时，新增 abstract 以 63 拒绝；其余接口修改继续按各自规则验收。ART 13 在生成可用 IfTable 前即拒绝非 public 实现；增强库通过命名错误服务观察 ART 实际选中的方法对，将匹配待验证条件的错误沿原事务转换为 63。
+IfTable 只读访问器须通过 Class 字段、接口方法索引和 arm64 PointerArray 探测。`interfaceAbstractDispatch` 报告 `unavailable`（可附原因）、`unverified: …`、`verified: …` 或 `rejected: 原因`，含义分别为访问器不可用、尚未完成分派探测、分派探测已通过，以及探测或所需服务检查未通过。尚待新增 abstract 事务的分派探测时，状态为 `unverified: …`，`interfaceAbstractMethodAddition` 为 false；这也不等于不支持。该布尔值仅在接口运行时、分派访问器及必要的链接错误服务均可用并通过探测后为 true，仍须逐事务检查全部实现类。仅分派访问器不可用或被拒绝时，新增 abstract 以 63 拒绝；其余接口修改继续按各自规则验收。ART 13、14 在生成可用 IfTable 前即拒绝非 public 实现；增强库通过命名错误服务观察 ART 实际选中的方法对，将匹配待验证条件的错误沿原事务转换为 63。
 
 更具体的 abstract 重声明不能由远处的 default 补足；同批移除最后一个有效实现也拒绝。多个接口组在全部验收后才共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 

@@ -19,11 +19,11 @@ ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运�
 
 实例迁移、引用改写、去优化和 JIT 失效均由设备 ART 自带的结构重定义事务完成，本库只接管其中的校验、成员映射和类分配决策，原理见 [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)。
 
-普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 13/API 33 和 Android 16/API 36 上做设备验证；Android 11、12、14、15、17 只有源码声明与主机核对，尚无这项探测的设备验证。
+普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 11/API 30、Android 12/API 31、12L/API 32、Android 13/API 33、Android 14/API 34、Android 15/API 35、Android 16/API 36 和 Android 17/API 37 上做真机验证。Android 14、15 已覆盖 CC 和 CMC；Android 17 已覆盖分代 CMC，CC 仍待验证。
 
 ## 接口重定义
 
-Android 13（API 33）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 public abstract/default/static 方法与 private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。
+Android 13（API 33）、Android 14（API 34）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 public abstract/default/static 方法与 private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。
 
 新增 native/`<clinit>`、不安全的继承方法遮蔽或新 default 冲突返回 63。新增 public abstract 要求所有已加载具体实现类均可合法分派，缺少实现或分派探测不可用时也返回 63。删除／改签名 default/abstract 返回 67；字段变化 64、方法修饰符变化 71、父接口变化 66。已有实例和未提交 DEX 的实现类也获得新 default。涉及 lambda 变化时，热重载端须先追加新类，再将发生变化的已有合成类、实现类 bridge 与接口同批提交。无共同批次接口祖先却共享实现类的两个接口，以及接口重建组之外的实现类父类同批结构变化，以 66 拒绝；Proxy 实现类、boot 接口和 pointer-id 标记以 79 拒绝；`interfaceRuntime` 为 `unavailable` 或 `disabled: 原因` 时，接口目标以 98 拒绝。
 

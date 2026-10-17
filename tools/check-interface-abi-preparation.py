@@ -41,7 +41,7 @@ def read_runtime_table():
               if status == 'kDeviceVerified']
     active_apis = [api for _, first, last, _, _, status in entries if status == 'kDeviceVerified'
                    for api in range(int(first), int(last) + 1)]
-    if active != [13, 16] or active_apis != [33, 36]:
+    if active != [13, 14, 16] or active_apis != [33, 34, 36]:
         raise ValueError('Unverified source preparation was added to runtime selection')
     return entries, versions, active
 
@@ -85,7 +85,7 @@ def main():
         lines.append(f'static_assert(RuntimeFor({release}) == nullptr);')
     for api in range(-1, 41):
         lines.append(f'static_assert(IsDeviceVerifiedInterfaceApi({api}) == '
-                     f'{str(api in (33, 36)).lower()});')
+                     f'{str(api in (33, 34, 36)).lower()});')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(123) == 123);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(0xff000123) == 0);')
     source = out / 'profiles.cc'
@@ -114,7 +114,7 @@ def main():
                      'kClassArrayAllocWithAllocator'),
                     ('kHandleScopeVisitRoots', 'kHandleScopeVisitRootsSigned')]
     optional = {name for group in alternatives for name in group}
-    # Only abstract additions on ART 13 need this early link-error service.
+    # Only abstract additions on ART 13/14 need this early link-error service.
     # Its absence must not make unrelated interface services look unavailable.
     non_public = ('kThrowNonPublicGlobal', 'kThrowNonPublicLocal', 'kThrowNonPublicUnique')
     optional.update(non_public)

@@ -6,8 +6,8 @@
 #include "platform/abi/arm64/android14/redefinition.h"
 
 namespace artdcevm::abi::arm64::android14 {
-// Source preparation only. RuntimeFor deliberately does not select this profile.
-inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
+// Android 14 uses the packed HandleScope header without a size field.
+inline constexpr InterfaceRuntime kInterfaceRuntime =
     InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(InterfaceRuntime::kAbsent);
 inline constexpr bool kHandleScopeThreadIdSigned = false;
 }  // namespace artdcevm::abi::arm64::android14

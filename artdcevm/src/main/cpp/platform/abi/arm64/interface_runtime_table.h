@@ -21,7 +21,7 @@ inline constexpr InterfaceRuntimeEntry kInterfaceRuntimes[] = {
     {11, 30, 30, &android11::kPreparedInterfaceRuntime, InterfaceRuntimeStatus::kPreparedOnly, false},
     {12, 31, 32, &android12::kPreparedInterfaceRuntime, InterfaceRuntimeStatus::kPreparedOnly, false},
     {13, 33, 33, &android13::kInterfaceRuntime, InterfaceRuntimeStatus::kDeviceVerified, false},
-    {14, 34, 34, &android14::kPreparedInterfaceRuntime, InterfaceRuntimeStatus::kPreparedOnly, false},
+    {14, 34, 34, &android14::kInterfaceRuntime, InterfaceRuntimeStatus::kDeviceVerified, false},
     {15, 35, 35, &android15::kPreparedInterfaceRuntime, InterfaceRuntimeStatus::kPreparedOnly, false},
     {16, 36, 36, &android16::kInterfaceRuntime, InterfaceRuntimeStatus::kDeviceVerified, true},
     {17, 37, 37, &android17::kPreparedInterfaceRuntime, InterfaceRuntimeStatus::kPreparedOnly, false},
