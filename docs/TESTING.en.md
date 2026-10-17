@@ -1,0 +1,172 @@
+# Testing and diagnostics
+
+English | [中文](TESTING.md)
+
+This page covers builds, test execution and diagnostic checks. See [COMPATIBILITY.en.md](COMPATIBILITY.en.md) for existing public conclusions and [LIMITATIONS.en.md](LIMITATIONS.en.md) for rejection rules. Post-test diagnostics establish coverage; integrators must not turn them into pre-submission switches.
+
+## Preparation and host checks
+
+Source builds require JDK 17 or later, Android SDK 37, NDK 27.2.12479018, CMake 4.3.4 and `sdk.dir` in local `local.properties`. Build the sample app, library Debug and library Release separately to check test isolation:
+
+```sh
+mkdir -p build/evidence/documentation-check
+./gradlew :app:assembleDebug :artdcevm:assembleDebug :artdcevm:assembleRelease
+python3 tools/check-interface-abort-isolation.py
+python3 tools/check-doc-links.py
+for test in tools/test-*.py; do
+  python3 "$test" > "build/evidence/documentation-check/$(basename "$test" .py).log" 2>&1 || exit 1
+done
+```
+
+Host substitutes execute no ART objects, real hooks or collector and cannot replace device ABI checks.
+
+`python3 tools/test-runtime-thread-host.py` compiles the production thread service and transaction context with fake named services, covering all seven Thread declarations, JNI/tid/flag rejection, missing Mark, marking changes after the Native probe, nested context restoration and CC/CMC call boundaries. It also covers compile-time `VerifiedThread` constraints, `LayoutFor`, positive/negative assertions for shared JNI prefixes, and preservation of unavailable mapping reasons. It does not simulate collector algorithms.
+
+`python3 tools/test-structural-install-host.py` compiles shared production modules with fake public JNI/JVMTI tables and ShadowHook services. It checks installation order, idempotence, no JNI override attempt after inline-hook failure, base-capability fallback after JNI-table failure, and independent Thread preparation/diagnostic preservation when mapping names are missing. It executes no ART objects, collector or real hooks and does not replace device ABI validation.
+
+## Device regression
+
+Replace the `DEVICE_SELECTOR` placeholder and use an anonymous `--device-id`. The runner installs the requested APK, stops the previous sample process, removes its report and starts from initial definitions. It verifies the installed APK SHA-256 and complete scenario order, operating on the sample package `dev.artdcevm.lab`.
+
+```sh
+python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 \
+  --apk app/build/outputs/apk/debug/app-debug.apk \
+  --scenario-group full --checkjni-mode normal
+python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 \
+  --apk app/build/outputs/apk/debug/app-debug.apk \
+  --scenario-group full --checkjni-mode checkjni
+```
+
+`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and does not replace full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
+
+## Recovery and fault isolation
+
+Full instrumentation checks old behavior, subsequent superclass/interface transactions and GC after failures in the same process:
+
+```sh
+adb -s DEVICE_SELECTOR shell am instrument -w -r -e checkjni false \
+  dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.InterfaceAbortInstrumentation \
+  > build/evidence/documentation-check/abort-normal.log 2>&1
+adb -s DEVICE_SELECTOR shell am instrument -w -r -e checkjni true \
+  dev.artdcevm.lab/com.github.ytlog.artdcevm.testing.InterfaceAbortInstrumentation \
+  > build/evidence/documentation-check/abort-checkjni.log 2>&1
+```
+
+Add `-e scenario ordinary` for ordinary classes only. `-e runtimeProbe 13`, `14` and `15` use separate processes for Thread, HandleScope and holder rejection. Fault numbers are defined by [fault_injection.cc](../app/src/debug/cpp/testing/fault_injection.cc) and [InterfaceAbortInstrumentation.java](../app/src/debug/java/com/github/ytlog/artdcevm/testing/InterfaceAbortInstrumentation.java); removing traversal callbacks also removed 6, 7, 9 and 10.
+
+Recovery checks also cover admission/lookup/array-transfer hook-boundary exceptions, Native scope-construction failure and nested context restoration. The pending root must cover replacements not yet stored in private arrays. Injected allocation failure does not establish recovery from real memory exhaustion.
+
+`InterfaceAbortInstrumentation` exercises real DEX verification failures (an invalid return instruction and calling `String.length()` with an integer receiver, both returning 62), failure after linking, after full allocation, during instance allocation, and from the actual mapping probe in one process. Each failure is followed by superclass and interface redefinition, behavior checks and GC. The incompatible invocation is followed by explicit GC before further transactions. A transforming ClassFileLoadHook also tests a real retry after a late implementation loads. Only the app test module explicitly enables fault injection and test JNI exports through its Debug CMake arguments. It builds a test copy from the same engine source directory. Library-owned Debug and Release builds default to OFF and reject an enabled option in a standalone library build. The test APK selects the app copy. `tools/check-interface-abort-isolation.py` uses `llvm-nm` to check both AARs and their Build-ID-matched unstripped libraries for absent injection symbols, and confirms the APK Build ID belongs to the app test engine.
+
+## Thread and GC pressure
+
+Select and verify normal/CheckJNI mode before installation. See [compatibility](COMPATIBILITY.en.md#covered-scenarios) for late loading, nested interfaces and instance/mapping failures. `interface-stress` must capture exactly 207 types from 200 implementations, four diamond subinterfaces and two affected superclasses; `interface-stress-add` also covers member additions.
+
+Before the first interface transaction, `InterfaceAbortInstrumentation` injects an ordinary-class Thread probe failure and verifies code 67, the `memberMapping` reason, zero shared reference reads and preservation of the old definition. It then alternates at least 32 ordinary-class structural redefinitions while another thread retains about 197,000 live objects, continuously allocates and requests GC. If marking reads remain zero, retries are bounded by 512 transactions or 120 seconds. Checks cover field/method additions and removals, primitive values/reference identity in old instances, zero-initialized new fields and subsequent GC. Reports include total GC cycles, allocations, shared reference reads and reads during CC marking. CMC may report zero for the last metric; GC pressure alone does not prove that every transaction overlaps CC marking. `ordinaryGcCycles` includes GC initiated by ART structural transactions and cannot alone establish independent pressure. The worker calls public `Runtime.getRuntime().gc()`, waits for one return and checks that the GC count advanced before starting transactions. `ordinaryPressureGcRequests`/`ordinaryPressureGcReturns` count worker calls/returns; `ordinaryPressureReadyGcCycles` records that preparation interval. A returned request is neither a distinct-collection count nor marking-overlap evidence.
+
+Fixed Android 17 [System.gc](https://android.googlesource.com/platform/libcore/+/refs/tags/android-17.0.0_r1/ojluni/src/main/java/java/lang/System.java) coalesces requests for targetSdk ≤ 34: a standalone call can only set a flag awaiting finalization. [Runtime.gc](https://android.googlesource.com/platform/libcore/+/refs/tags/android-17.0.0_r1/ojluni/src/main/java/java/lang/Runtime.java) enters the public native request directly. [Redefiner::Run](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/openjdkjvmti/ti_redefine.cc) uses ScopedSuspendAllocations to collect before instance collection and the main mapping preparation, and waits for/disables concurrent moving GC before final updates. The old fixture’s GC total and zero marking reads therefore do not establish a Thread-offset error. Run `python3 tools/analyze-runtime-gc-log.py --logcat <raw-log> --device-id <anonymous-id>` offline to check CC/CMC completion process/thread provenance and snapshot order without reporting raw process/thread IDs. Completion logs do not establish marking intervals or forwarding. The corrected pressure fixture still needs API 37 device execution; earlier zero-overlap observations stand.
+
+## Collector and JNI ID test APKs
+
+```sh
+python3 tools/prepare-collector-apk.py --apk app/build/outputs/apk/debug/app-debug.apk --collector CC
+python3 tools/prepare-collector-apk.py --apk app/build/outputs/apk/debug/app-debug.apk --collector CMC
+```
+
+The offline tool neither installs, connects to, nor reserves a device. Input must be a Debug APK with debuggable/extractNativeLibs enabled and no ARM64 wrapper, signed with the matching debug keystore; use `--keystore` to select it. Pass the generated `app.apk` to device runs with `--apk` and record both original and wrapped hashes.
+
+Prepare a collector test APK offline with `python3 tools/prepare-collector-apk.py --apk <debug.apk> --collector <CC|CMC>`; output and hashes stay in `build/evidence/`. The wrapper explicitly selects index JNI IDs by default and removes conflicting VM flags and `--nice-name`. Fixed Android 17 [app_main.cpp](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-17.0.0_r1/cmds/app_process/app_main.cpp) sets that name before ART loads, while [AndroidRuntime.cpp](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-17.0.0_r1/core/jni/AndroidRuntime.cpp) clears the argument block, hiding `-Xgc` from early collector selection. The tool preserves the original APK payload and signing certificate, without installation or reservations. Actual collector startup logs must still be matched to the engine process; wrapper flags alone do not establish collector selection.
+
+The default is `--jni-id-mode indices`. Use `--jni-id-mode pointer` only for explicit rejection tests. On that APK, `-e scenario interface-pointer-runtime` checks rejection 79 for method/field-only interfaces, cached JNI calls and behavior after GC. An index APK with `-e scenario interface-index-runtime` supplies the successful control, including an initially uninitialized field-only interface. Run both JNI checking modes. Tests attempt historical marker creation through normal JNI APIs before installation and inject admission results for targets/subtypes without writing fake markers into published objects.
+
+Run `python3 tools/analyze-runtime-gc-log.py --logcat RAW_LOG --device-id android-device-1` to inspect engine-process identity, snapshot order and completion logs. It does not prove marking intervals or forwarding and cannot attribute zero marking reads to a Thread-offset error.
+
+## Fixed declaration checks
+
+```sh
+python3 tools/check-interface-abi-preparation.py
+```
+
+This script reads [interface_runtime_table.h](../artdcevm/src/main/cpp/platform/abi/arm64/interface_runtime_table.h) and checks fixed declarations, arm64 assertions, candidate selection and API admission. The following tables describe source/compile-time layouts, not device passes; see [compatibility](COMPATIBILITY.en.md#platform-coverage) for actual conclusions.
+
+The declarations follow fixed AOSP tags from Android 11 through 17, including Android 12L. Differences stay in `platform/abi/arm64/androidNN/`; identical Thread pointer and statistics prefixes share `common/thread_prefix.h`. No backend is copied. Offsets below come from source declarations and arm64 `offsetof`/`sizeof` assertions, without disassembly or memory-derived offsets.
+
+| Version | Thread tls32 size / tls_ptr start | tid / GC mark offsets | JNI env / top HandleScope offsets | HandleScope header | Final ClassRedefinition flags |
+| --- | --- | --- | --- | --- | --- |
+| 11 / API 30 | 92 / 160 | 16 / 52 | 216 / 296 | 12, no size | Four, ending in needs_reverify |
+| 12, 12L / API 31–32 | 88 / 152 | 12 / 48 | 208 / 288 | 12, no size | Four, ending in needs_reverify |
+| 13 / API 33 | 80 / 144 | 12 / 36 | 200 / 280 | 12, no size | Four, ending in lock_acquired |
+| 14 / API 34 | 84 / 152 | 12 / 36 | 208 / 288 | 12, no size | Four, ending in lock_acquired |
+| 15 / API 35 | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+| 16 / API 36 | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+| 17 / API 37 | 80 / 144 | 12 / 32 | 200 / 280 | 16, with size | Three, ending in has_virtuals |
+
+The Class declaration includes its Object header and reference/native fields through status. Android 11–15 separate ifields/sfields, with access_flags at 64 and status at 112; 16–17 merge fields, with offsets 56 and 104. RootVisitor's virtual destructor and two VisitRoots overloads have the same order in all seven versions. RootInfo is passed by reference and its fields are never read. ClassStatus has the same complete 0–15 enum, also in 12L. kErrorResolved remains resolved; discarded classes must use kErrorUnresolved.
+
+Android 17 uses an atomic 32-bit clinit_thread_id_or_hash slot. GetClinitThreadId distinguishes a thread ID from a descriptor hash using the upper ten bits. Its fixed declaration retains the real name and source-defined DecodeClinitThreadId; the prepared profile explicitly passes its offsetof. Sources: [class.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class.h), [class-inl.h](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/mirror/class-inl.h).
+
+All holder declarations contain a Handle array, a redefinitions-vector pointer, and initialized/actually_structural/initial_structural vector<bool> fields at offsets 0, 8, 16, 40 and 64. libc++ ABI v1 vector<bool> occupies 24 bytes. ClassRedefinition is 72 bytes with the same driver/klass/DEX prefix and ArrayRef at 48 following std::string. The thirteen Java holder slots agree. Android 11's root traversal takes pid_t/int; 12 onward takes uint32_t. The android11 profile records that difference, and the shared path selects two separately typed services by declaration. A missing matching name fails the probe, without calling the other prototype. Host tests exercise both calls and missing services; arm64 compilation and collected SOs check the declaration and name for each release. See the compatibility document for actual device coverage.
+
+The shared function declarations cover admission Handle/Class and string*, Run's RedefinerPrefix*, Finish's ClassRedefinitionPrefix*/holder/iterator, AllocateNewClassObject's three Handles and uint16 class-def index, CreateNewDexCache's loader Handle, LinkClass's Thread/descriptor/Handles, LookupClass's char* or string_view, DoLookupResolvedType's TypeIndex/referrer or DexCache/loader, SetDexCache, JNIEnvExt local-reference bridges and JavaVMExt global-reference decoding, internal ClassStatus writes, Mark, and FindInstanceField's two string_views. ClassExt and array-type fields are found by name through ART's field table, without fixed offsets. Mapping and verification redirection reuse the existing structural and FindClass declarations.
+
+| Source releases | Reference reading and marking semantics |
+| --- | --- |
+| 11, 12/12L, 13 | `kUseReadBarrier` in `read_barrier_config.h` is a compile-time choice. `thread.h` explicitly defines `is_gc_marking` as **CC-only**. The root-flip callback in `concurrent_copying.cc` enables it, and the marking-disable checkpoint clears it. `ReadBarrier::BarrierForRoot` calls `Mark` when the flag is true and returns the reference otherwise. `Mark` enters `ConcurrentCopying::MarkFromReadBarrier`; ART performs marking/forwarding, and this entry also checks the current thread's flag. These releases do not contain the CMC/userfaultfd collector. |
+| 14, 15, 16, 17 | The meaning of `is_gc_marking` stays the same; it **does not describe CMC concurrent marking**. `read_barrier_config.h` allows forced compile-time CC, configurations without read barriers, or runtime selection. For runtime selection, `ShouldUseUserfaultfd` in `mark_compact.cc` sets `gUseUserfaultfd` and `gUseReadBarrier = !gUseUserfaultfd`. Selected CC still needs `Mark`; CMC makes `BarrierForField`/`BarrierForRoot` skip the CC read barrier. CMC updates roots through `CompactionPause`/thread root flipping, and coordinates compacted pages through `KernelPreparation` and page faults, without CC's `Mark`. |
+
+Source references: [11 read barriers](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/read_barrier-inl.h), [12L Thread](https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r1/runtime/thread.h), [13 Mark entry](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/gc/collector/concurrent_copying-inl.h), [14 collector selection and compaction](https://android.googlesource.com/platform/art/+/refs/tags/android-14.0.0_r1/runtime/gc/collector/mark_compact.cc), [15 read-barrier configuration](https://android.googlesource.com/platform/art/+/refs/tags/android-15.0.0_r1/runtime/read_barrier_config.h), [16 collector constraints](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/gc/heap.cc), [17 Thread/Mark semantics](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/gc/collector/concurrent_copying-inl.h).
+
+## Named-service audit
+
+```sh
+python3 tools/check-structural-symbols.py --report build/evidence/documentation-check/symbols.json
+```
+
+The checker audits implementation references, named ELF tables and catalog/implementation hashes, without disassembly or address/offset derivation. Admission spellings are alternatives; the catalog total is not a count of names simultaneously required on one device.
+
+Private ART capabilities are accessed only through named ELF symbols. The official ShadowHook resolves them at runtime within the table scope declared in the catalog. `.gnu_debugdata` is also a named symbol table; no disassembly or address derivation is involved.
+
+- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h): 22 currently used names provided by every runtime. Of these, 19 require `.dynsym`; the standard JVMTI wrapper and two MethodHandle entries allow any named table.
+- [member_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/member_retirement_symbols.h): variable spellings used by retirement guards: `Method_invoke` and `Constructor_newInstance0` without a suffix or with a fixed `.__uniq` suffix, old and new `EncodeFieldId` signatures, and optional `MethodHandleInvokeExactWithFrame` from Android 13 onward.
+- [verification_redirect_symbols.h](../artdcevm/src/main/cpp/platform/symbols/verification_redirect_symbols.h): old and new `FindClass` signatures used by verification redirection.
+
+- [runtime_thread_symbols.h](../artdcevm/src/main/cpp/platform/symbols/runtime_thread_symbols.h): shared `CurrentFromGdb`, `ReadBarrier::Mark` and optional `gUseReadBarrier` for ordinary classes and interfaces.
+- [interface_redefinition_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h): the active interface catalog covers normal/structural `CanRedefineClass`/`GetClassRedefinitionError` alternatives, `FinishNewClassAllocations`, `Run`, `HandleScopeVisitRoots`, `EnsureInitialized`, `NewLocalRef`/`DeleteLocalRef`, `CreateNewDexCache`, two `DoLookupResolvedType` overloads, two `LookupClass` signatures, `SetDexCache`, `JavaVMExt::DecodeGlobal`, `LinkClass` and `SetStatusInternal`, plus optional named alternatives for `ThrowIllegalAccessErrorForImplementingMethod`. It reuses `GetMirrorClass`, `AllocateNewClassObject` and `FindInstanceField` from the structural catalog.
+- [interface_abi_preparation_symbols.h](../artdcevm/src/main/cpp/platform/symbols/interface_abi_preparation_symbols.h): four historical array-allocation names for offline checks, including two AllocatorType overloads. Runtime code neither resolves nor calls them; exact signed/unsigned root traversal names live in the active interface catalog.
+
+A symbol's presence proves only that it can be located. Runtime probes check the fixed declarations; device regression checks hook coverage.
+
+## Diagnostic report reference
+
+`DcevmRuntime.capabilities()` reads diagnostics without running probes or deciding whether a request may be submitted. Call standard `RedefineClasses` directly: `0` means success; otherwise read the code and `lastRejection`. The following table preserves the existing JSON keys and value descriptions for troubleshooting and post-test coverage checks. `interfaceAddition` means adding an interface to an ordinary class; `interfaceRedefinition` describes interface runtime probes. Do not build an integrator admission switch from these booleans or strings.
+
+| Key | Meaning |
+| --- | --- |
+| `installed`, `standardRedefineRouted` | Base entries are installed, and standard `RedefineClasses` is routed to the structural transaction |
+| `memberAddition`, `memberModifierChange`, `classModifierChange` | Member additions and member/class modifier changes; true after installation |
+| `methodDeletion`, `methodSignatureChange`, `interfaceAddition` | Method-retirement hooks are installed |
+| `fieldDeletion`, `fieldTypeChange`, `memberDeletion`, `memberTypeChange` | Field guards are also available |
+| `superclassWidening` | Method-retirement hooks and verification redirection are both installed |
+| `hierarchyChange`, `fullDcevmComplete` | Always false: narrowing is unsupported and full DCEVM is not complete |
+| `interfaceRedefinition` | Boolean: true only after installation and all Class/Thread/HandleScope/holder probes pass. False before probing, when versions/services are unavailable, or after process-wide probe disablement. A target-specific rejection does not clear it |
+| `interfaceRuntime` | `unavailable`, `unverified: interface runtime declarations`, `verified: androidNN Class/Thread/HandleScope/holder probes`, or `disabled: reason`. Only API 33–36 are allowed; other versions are disabled with a reason |
+| `interfaceAbstractMethodAddition` | True after interface runtime and dispatch probes pass and required link-error services are available; all implementations are still checked per transaction |
+| `interfaceAbstractDispatch` | Read-only IfTable accessor for abstract additions: `unavailable`, `unverified: ...`, `verified: ...` or `rejected: reason`; actual dispatch is still validated per transaction |
+| `interfaceSnapshotTypes` | Type count in the calling transaction thread's latest interface snapshot: targets, subinterfaces, implementations and their subclasses |
+| `interfaceSnapshotNanos`, `interfaceAllocationNanos` | That thread's latest snapshot (including GetLoadedClasses) and interface allocation durations in monotonic nanoseconds; diagnostic only, potentially zero without an interface transaction |
+| `memberMapping` | Installation-unavailability reason or latest probe result (including Native Thread failures): `unavailable`, `unverified`, `verified: androidNN class layout`, or `rejected: reason` |
+| `jniRetirementGuards` | Count of actual JNI/reflection guard rejections of retired targets |
+| `subclassLoadRetries` | Count of retries caused by a subclass of a target loading during a transaction; see [class loading during transactions](STRUCTURAL_REDEFINE_ENGINE.en.md#class-loading-during-transactions) |
+| `diagnostic`, `lastRejection` | Installation diagnostics; the classes and reason of the latest standard-entry transaction failure, empty on success. Rejections by the policy, the snapshots and the pre-commit checks state their own reason. When one of ART's own checks rejects the batch (a boot interface, for example, is rejected with 79 at its entry), the standard entry names the rejected interface or unmodifiable class, or otherwise lists the batch's classes and the error name; ART's own message appears only in logcat after `FAILURE TO REDEFINE` |
+
+## New-release validation order
+
+1. Run `--scenario-group ordinary` and abort instrumentation’s `-e scenario ordinary` in both JNI modes. After retirement scenarios, confirm completed `memberMapping` probes so fallback is not counted as a pass. On Android 14 and later, confirm actual CC and CMC configurations separately.
+2. Review one release at a time: fixed Class, Thread, HandleScope, holder, ClassRedefinition flags, IfTable/PointerArray and named prototypes, including the registry’s `linked_iftable_acceptance`. Begin with declarations/offline checks; compilation or a cloud device catalog entry is not execution evidence.
+3. Commit activation of that release separately only after the complete interface suite, abort recovery and android-compose-hotreload’s `interface abstract batch` pass on real devices. Entries lacking complete evidence remain `kPreparedOnly`.
+
+## Evidence and public conclusions
+
+Raw logs and per-run device reports stay under ignored `build/evidence/`. Record commands, conclusions, anonymous devices, models, OS/API versions and APK hashes in local `local/verification/VERIFICATION.md`; compatibility notes go in `local/verification/ANDROID_COMPATIBILITY.md`. Neither document is committed. Per-runtime inventories and raw source/hashes also remain local.
+
+Public [COMPATIBILITY.en.md](COMPATIBILITY.en.md) contains only concise sanitized conclusions, naming JNI modes, GC evidence and unverified scope. Exclude raw logs, device serials, connection addresses, personal paths and email. Do not infer compatibility beyond GC totals, zero marking reads, offline symbol inventories or fault injection evidence.

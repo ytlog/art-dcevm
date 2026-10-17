@@ -2,34 +2,25 @@
 
 English | [中文](README.zh-CN.md)
 
-ART DCEVM is a class redefinition enhancement library for the Android runtime. It replaces Java method implementations while an app is running and lets you change fields, methods, modifiers and the class hierarchy. It is intended for developing and debugging your own apps, hot-reload tooling and class evolution experiments.
+ART DCEVM enhances class redefinition on Android. It replaces Java method implementations while an app runs and changes fields, methods, modifiers and supported inheritance relationships. It is intended for development/debugging of your own apps, hot-reload tools and class-evolution experiments, without root or system partition changes.
 
-The app must be debuggable from process start. No root and no system partition changes are required. After initialization, callers submit redefinitions through the standard `jvmtiEnv::RedefineClasses` from their own JVMTI agent.
+## Prerequisites
 
-## Features
+- Android 11–17, arm64-v8a (`minSdk` 30). Actual transaction checks validate each change; see [compatibility](docs/COMPATIBILITY.en.md) for existing device coverage.
+- The app must enable `debuggable` from process startup; it cannot be enabled afterwards.
+- Initialize this library first. Your own JVMTI agent requests `can_redefine_classes` and submits standard `RedefineClasses`. Patch generation/distribution and providing new classes belong to the caller.
 
-- **Method body replacement**: update method implementations of loaded classes.
-- **Adding and removing members**: add, remove and re-add fields, methods and constructors, including native and abstract methods and class initializers.
-- **Member shape changes**: change field types and method signatures, switch fields between static and instance, and switch methods between native and Java or abstract and concrete.
-- **Modifier changes**: change access, final, abstract, synchronized, volatile and other modifiers on members and classes; an instance method cannot become private.
-- **Hierarchy evolution**: add interfaces, and replace the superclass with a subclass of the original superclass.
-- **Live objects**: existing values of compatible fields are kept; fields added to existing objects start as zero or `null`, and constructors are not re-run.
-- **Stale reference protection**: removed or replaced members reject access through bytecode, reflection, JNI, MethodHandle and VarHandle.
-- **Batch redefinition**: submit several classes in one `RedefineClasses` call; unsupported changes are rejected with a JVMTI error, nothing in the batch takes effect and the old definitions stay usable.
+## Supported and unsupported changes
 
-Instance migration, reference rewriting, deoptimization and JIT invalidation are all performed by the structural redefinition transaction built into the device's ART. This library only takes over its verification, member mapping and class allocation decisions; see the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md).
+- Ordinary-class body replacement; addition, retirement and restoration of fields/methods/constructors; field types and method signatures.
+- Supported ordinary member/class modifier changes and native/Java or abstract/concrete transitions.
+- Adding interfaces to ordinary classes and widening a superclass to a proper subclass of the original superclass.
+- Preserving compatible field values in live objects; new fields start at zero or `null`, without rerunning existing objects’ constructors.
+- Atomic multi-class batches: unsupported changes reject the batch and preserve old definitions. Cached references to retired members retain retirement semantics.
 
-Ordinary-class member retirement also requires a Native-phase probe of the current ART Thread declaration and named read-barrier services. `memberMapping` may therefore reject because of Thread probing, as well as Class layout probing; an unavailable mapping keeps its original installation reason. The Thread probe has physical-device coverage on Android 11/API 30, Android 12/API 31, 12L/API 32, Android 13/API 33, Android 14/API 34, Android 15/API 35, Android 16/API 36 and Android 17/API 37. Android 14 and 15 cover both CC and CMC; Android 17 covers generational CMC, with CC still pending.
+Dropping existing supertypes, switching a method’s static/instance invoke kind, making a virtual method private, and changing class/interface/annotation/enum kind are unsupported. `RetransformClasses` is outside scope, and cached raw field offsets are not protected. See [LIMITATIONS.en.md](docs/LIMITATIONS.en.md) for complete restrictions, rejection codes and semantics.
 
-## Interface redefinition
-
-Android 13 (API 33), Android 14 (API 34), Android 15 (API 35) and Android 16 (API 36) arm64 devices support body edits to default, static and private methods of top-level and nested interfaces, new public abstract/default/static methods and private instance methods, and deletion or signature changes of static/private methods (including synthetic lambda helpers and bridges). Static additions may have any access level. Interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces. Other Android versions disable the capability with a reason; runtime probes must still pass.
-
-Adding native/`<clinit>` methods, unsafe inherited-method hiding or new default conflicts returns 63. A new public abstract method requires every loaded concrete implementation to dispatch legally, with missing implementations or unavailable dispatch probes also returning 63. Deleting or changing default/abstract signatures returns 67; field changes return 64, method-modifier changes 71, and parent-interface changes 66. New defaults reach existing instances and implementations without submitted DEX. For lambda changes, the reload tool must append new classes and submit changed existing synthetic classes and implementation bridges with the interface. Unrelated interfaces sharing an implementation without a common batch interface ancestor, and structural superclass changes outside the interface rebuild group, return 66. Proxy implementations, boot interfaces and pointer-id markers return 79; interface targets return 98 when `interfaceRuntime` is `unavailable` or `disabled: reason`.
-
-Even a body-only interface edit reallocates all instances of implementations and their subclasses, preserving compatible fields.
-
-Read `DcevmRuntime.capabilities()` for probe status during integration; reading it does not run probes. For `interfaceRuntime`, `unavailable` means the interface runtime is unavailable, `disabled: reason` means it has been disabled, `unverified: …` means transaction-time probes have not completed, and `verified: …` means they have passed. `interfaceRedefinition` remains false until an interface transaction completes the runtime probes. `interfaceAbstractDispatch` separately reports dispatch probes for abstract additions: `unverified: …` while awaiting the relevant transaction probes, or `unavailable` (optionally with a reason), `verified: …` or `rejected: reason`. The latter means dispatch probes or required-service checks failed, rejecting abstract additions with 63. `interfaceAbstractMethodAddition` remains false until both runtime and dispatch probes pass and the required link-error services are available. `unverified` does not mean unsupported and should not block the first transaction. Use the actual transaction result and `lastRejection` as the final authority. See [limitations](docs/LIMITATIONS.en.md#redefining-interfaces) for the full scope and error semantics.
+On Android 13–16 / API 33–36, interface targets support default/static/private body edits, new public abstract/default/static methods and private instance methods, and static/private deletion or signature changes. They can share atomic batches with related implementations, subclasses or unrelated classes. Every transaction checks its conditions; even body-only edits rebuild affected instances while retaining compatible fields. See [redefining interfaces](docs/LIMITATIONS.en.md#redefining-interfaces).
 
 ## Quick start
 
@@ -92,7 +83,7 @@ DcevmRuntime.initialize(context);
 
 This loads `libartdcevm.so`, attaches the enhancement agent and takes over the standard JVMTI entry. Once initialization succeeds in a process, further calls return immediately.
 
-`DcevmRuntime.capabilities()` returns a `JSONObject` with the supported change categories, diagnostics and the reason for the most recent rejection.
+`DcevmRuntime.capabilities()` returns a diagnostic snapshot; submission and error handling follow the contract below.
 
 ### 3. Attach your own JVMTI agent
 
@@ -140,45 +131,23 @@ definition.class_bytes = dex;
 
 jvmtiError error = jvmti->RedefineClasses(1, &definition);
 if (error != JVMTI_ERROR_NONE) {
-    // Log the error code and handle the failure; the request did not take effect.
+    // Return the code to the caller and read lastRejection (below); the batch did not take effect.
 }
 ```
 
-Classes that depend on each other should go into one `jvmtiClassDefinition[]` and be submitted as a single batch. Keep the class references and DEX buffers valid for the duration of the call. The sample app's [patch sources](fixtures) and [DEX build script](tools/build-fixtures.py) show how test patches are produced.
+Classes that depend on each other should go into one `jvmtiClassDefinition[]` and be submitted as a single batch. Keep the class references and DEX buffers valid for the duration of the call. New classes and new lambda synthetic classes must first be provided through the loader; see [providing new classes](docs/LIMITATIONS.en.md#providing-new-classes) for the order.
 
-### 5. Add new classes
+## Error handling
 
-`RedefineClasses` replaces loaded classes only. Classes that the APK lacks (new classes and synthetic ones such as new lambdas) reach the app through its class loader, supplied by the tool; this library does not define new classes, the same split as DCEVM and hot-reload tools on Java. For one update, the tool:
+After successful initialization, **submit standard `RedefineClasses` directly**. Return `0` (`JVMTI_ERROR_NONE`) means success. For a nonzero return, read the error code (JVMTI `GetErrorName` supplies its name) and `lastRejection`; do not treat the failed request as applied:
 
-1. Compiles each class to its own DEX (D8 `--file-per-class` emits a new lambda's synthetic class separately).
-2. Classifies with `Class.forName(name, false, appClassLoader)`: a class it finds exists, and an existing class nothing has used yet is loaded this way so it can be redefined; a class it cannot find is new.
-3. Packs the new classes into one jar, marks it read-only (since Android 14, apps targeting SDK 34 or higher cannot load writable DEX files) and appends it to the end of the app loader's (`BaseDexClassLoader`) path with ART's JVMTI extension `com.android.art.classloader.add_to_dex_class_loader`.
-4. Submits all existing classes in one `RedefineClasses` call. The library loads the appended classes the new definitions name, including new subclasses of redefined classes, before the transaction starts.
-
-Appending only adds to the end of the loader's path, cannot be undone and does not override loaded classes; a class added this way is redefined like any existing class when it changes again. A new class's static initializer runs on first use; a redefined class's static initializer does not run again. See [HotReloadTool.java](app/src/debug/java/com/github/ytlog/artdcevm/testing/HotReloadTool.java) for a sample implementation.
-
-## Notes
-
-- Fields added to existing objects start as zero or `null`; newly created objects run the new constructors. A change of field type or of static / instance form retires the old member and creates a new one.
-- A removed member, or one whose signature or type changed, is retired: old references to it throw `NoSuchMethodError`, `NoSuchFieldError` and similar errors; method frames already executing keep running the old body. Application code must handle these semantic changes.
-- A method keeps its invoke kind: switching it between static and instance, making an instance method private, or re-adding a deleted method as the other kind is rejected, because verified callers would still invoke it as the old kind.
-- Removing an interface, or any hierarchy change that drops an existing supertype, is rejected. Conflicts such as a loaded subclass overriding a method that becomes final, or a class with its own live instances becoming abstract, also reject the transaction.
-- Structural changes walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
-- Raw field offsets cached by `Unsafe`, `Atomic*FieldUpdater` and similar APIs become invalid once the instance layout changes.
-- `RetransformClasses` is not covered. Patch delivery, signature verification, access control and release tooling are the caller's responsibility.
-
-Full semantics are described in [limitations](docs/LIMITATIONS.en.md).
-
-## Sample and verification
-
-```sh
-# After building the sample APK, run the full device regression on a connected arm64 device
-python3 tools/run-device-tests.py --serial DEVICE
+```java
+// Read after the caller’s agent returns a nonzero error code.
+String reason = DcevmRuntime.capabilities().optString("lastRejection", "");
 ```
 
-The script installs and drives the sample app `dev.artdcevm.lab`, kills any previous process and starts from the initial class definitions. Raw reports are saved locally under `build/evidence/` and are not published with the repository.
+`lastRejection` describes the latest standard-entry transaction failure and is cleared on success. Code 98 means the interface runtime is unavailable; restart the app process before retrying. See [LIMITATIONS.en.md](docs/LIMITATIONS.en.md) for other rejection rules and codes.
 
-## Documentation
+**`capabilities()` is diagnostic only, never a pre-submission admission check. Do not block submission based on its booleans or state strings; handle the actual transaction code and `lastRejection`.**
 
-- [Engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md)
-- [Limitations and semantics](docs/LIMITATIONS.en.md)
+See the [engine design](docs/STRUCTURAL_REDEFINE_ENGINE.en.md), [public compatibility conclusions](docs/COMPATIBILITY.en.md), and [testing guide](docs/TESTING.en.md) for mechanisms, validation scope and build/test commands.

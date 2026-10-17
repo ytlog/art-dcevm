@@ -11,10 +11,17 @@ import org.json.JSONObject;
 /**
  * Entry point of the structural redefinition engine.
  *
- * <p>After {@link #initialize(Context)} succeeds, the standard JVMTI
- * {@code RedefineClasses} of any agent in this process accepts the changes
- * listed by {@link #capabilities()}; other changes are rejected with a JVMTI
- * error and leave the loaded classes unchanged.
+ * <p>After {@link #initialize(Context)} succeeds, submit the caller agent's standard
+ * JVMTI {@code RedefineClasses} directly. Return {@code 0} ({@code JVMTI_ERROR_NONE})
+ * means success. Otherwise, handle the returned JVMTI error code and read
+ * {@code lastRejection} from {@link #capabilities()}; rejected batches leave the
+ * old definitions unchanged.
+ * {@code capabilities()} is diagnostic only, never a pre-submission admission check.
+ * Do not use its booleans or state strings to allow or block submission.
+ *
+ * <p>初始化成功后，直接提交调用方 Agent 的标准 {@code RedefineClasses}。
+ * 返回 {@code 0} 表示成功；否则读取错误码及 {@code lastRejection}，旧定义保持不变。
+ * {@code capabilities()} 只用于诊断，不作为提交前的准入判断。
  */
 public final class DcevmRuntime {
     private static boolean attached;
@@ -42,37 +49,22 @@ public final class DcevmRuntime {
     }
 
     /**
-     * Supported change categories, probe diagnostics and the last rejection reason.
-     * Interface targets support default/static/private body edits, new public abstract,
-     * default and static methods and private instance methods, and deletion or signature
-     * changes of static/private methods, subject to transaction checks.
+     * Returns installation/probe diagnostics and the latest standard-entry rejection.
+     * Reading the report does not run probes. Its fields do not decide whether a
+     * request may be submitted: call standard JVMTI {@code RedefineClasses} directly.
+     * Return {@code 0} means success; otherwise read the error code and
+     * {@code lastRejection}. The latter is cleared after a successful transaction.
      *
-     * <p>Reading this report does not run probes. Runtime declarations are probed during
-     * interface transactions; the additional IfTable dispatch probes run for abstract
-     * additions. {@code interfaceRedefinition} stays false until the runtime probes pass.
-     * {@code interfaceAbstractMethodAddition} also requires verified dispatch probes and
-     * the required link-error services. A false value while probes are
-     * {@code unverified} does not mean unsupported and should not block the first transaction.
+     * <p>This method is diagnostic only, never a pre-submission admission check.
+     * Do not use report booleans or state strings to block submission. Supported
+     * changes and errors are defined by the transaction's checks and the project's
+     * limitations documentation, not by interpreting this snapshot.
      *
-     * <p>{@code interfaceRuntime} and {@code interfaceAbstractDispatch} describe the
-     * runtime and dispatch-accessor probe states, respectively:
-     * <ul>
-     * <li>{@code unavailable} (optionally with a reason): the named facility is unavailable.</li>
-     * <li>{@code disabled: reason}: the interface runtime has been disabled, for example
-     * because the version, required services or runtime declarations do not match.</li>
-     * <li>{@code unverified: ...}: transaction-time probes have not completed.</li>
-     * <li>{@code verified: ...}: the relevant probes have passed; individual edits
-     * still require transaction checks.</li>
-     * <li>{@code rejected: reason}: dispatch-accessor probes or required-service checks
-     * failed. This state is reported by {@code interfaceAbstractDispatch}.</li>
-     * </ul>
+     * <p>本方法只用于诊断，不作为提交前的准入判断；读取本身不触发探测。
+     * 直接提交 {@code RedefineClasses}，以 {@code 0} 判断成功；非零时读取错误码和
+     * {@code lastRejection}，不要用报告中的布尔值或状态字符串拦截提交。
      *
-     * <p>When {@code interfaceRuntime} is unavailable or disabled, interface targets
-     * reject with JVMTI {@code NOT_AVAILABLE} (98). If only the dispatch accessor is
-     * unavailable or rejected, abstract additions reject with {@code METHOD_ADDED} (63).
-     * The actual transaction result and {@code lastRejection} are the final authority.
-     *
-     * @return the current report, or an empty object before the library is attached
+     * @return the current diagnostic report, or an empty object before attachment
      */
     public static synchronized JSONObject capabilities() {
         if (!attached) return new JSONObject();

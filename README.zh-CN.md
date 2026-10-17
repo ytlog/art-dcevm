@@ -2,34 +2,25 @@
 
 [English](README.md) | 中文
 
-ART DCEVM 是一个 Android 运行时类重定义增强库，用于在应用运行期间替换 Java 类的方法实现，并修改字段、方法、修饰符和继承关系。适合自有应用的开发调试、热重载工具和类演进实验。
+ART DCEVM 是 Android 运行时类重定义增强库，用于在应用运行期间替换 Java 方法实现，并修改字段、方法、修饰符和受支持的继承关系。适用于自有应用的开发调试、热重载工具与类演进实验，无需 root 或修改系统分区。
 
-应用必须从进程启动时就处于可调试状态。无需 root，无需修改系统分区。初始化后，调用方通过自己的 JVMTI Agent 使用标准 `jvmtiEnv::RedefineClasses` 提交替换请求。
+## 前提
 
-## 功能
+- Android 11–17、arm64-v8a（库的 `minSdk` 为 30）；各项变化按实际事务检查验收，已有设备覆盖见[兼容性结论](docs/COMPATIBILITY.md)。
+- 应用从进程启动时就启用 `debuggable`，不能事后开启调试状态。
+- 先初始化本库，再由自己的 JVMTI Agent 申请 `can_redefine_classes` 并提交标准 `RedefineClasses`。补丁生成、分发与新类提供由调用方负责。
 
-- **方法体替换**：更新已加载类的方法实现。
-- **成员增删**：新增、删除和重新添加字段、方法及构造器，包括 native、abstract 方法与类初始化器。
-- **成员结构变更**：修改字段类型、方法签名，切换字段的 static / 实例形式，以及方法的 native / Java、abstract / 具体实现。
-- **修饰符变更**：修改成员和类的访问权限、final、abstract、synchronized、volatile 等修饰符；实例方法不能改为 private。
-- **继承关系演进**：新增接口，将父类替换为原父类的子类。
-- **存活对象处理**：保留兼容字段的已有值；已有对象新增字段使用零值或 `null`，不重新执行构造器。
-- **旧引用保护**：已删除或被替换的成员在字节码、反射、JNI、MethodHandle 与 VarHandle 路径上拒绝访问。
-- **批量重定义**：通过一次 `RedefineClasses` 提交多个类；不支持的变化以 JVMTI 错误拒绝，整批不生效，旧定义保持可用。
+## 支持与不支持的变化
 
-实例迁移、引用改写、去优化和 JIT 失效均由设备 ART 自带的结构重定义事务完成，本库只接管其中的校验、成员映射和类分配决策，原理见 [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)。
+- 普通类的方法体替换，字段/方法/构造器的新增、退役与恢复，字段类型及方法签名变化。
+- 普通类成员与类修饰符，以及方法 native/Java、abstract/具体实现的受支持转换。
+- 普通类新增接口，以及将父类放宽为原父类的真子类。
+- 保留已有对象的兼容字段值；新增字段为零值或 `null`，不重跑已有对象的构造器。
+- 多类同批原子提交；不支持的变化拒绝整批，旧定义保留。退役成员的缓存引用继续遵循退役语义。
 
-普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 11/API 30、Android 12/API 31、12L/API 32、Android 13/API 33、Android 14/API 34、Android 15/API 35、Android 16/API 36 和 Android 17/API 37 上做真机验证。Android 14、15 已覆盖 CC 和 CMC；Android 17 已覆盖分代 CMC，CC 仍待验证。
+不支持失去原有父类型、方法 static/实例调用方式切换、虚方法改为 private 或类/接口/注解/枚举种类切换。`RetransformClasses` 不在增强范围，缓存的原始字段偏移不受保护。完整限制、拒绝码与运行语义见 [LIMITATIONS.md](docs/LIMITATIONS.md)。
 
-## 接口重定义
-
-Android 13（API 33）、Android 14（API 34）、Android 15（API 35）和 Android 16（API 36）的 arm64 设备支持顶层与嵌套接口的 default、static、private 方法体修改，新增 public abstract/default/static 方法与 private 实例方法，以及删除或改签名 static/private 方法（含 lambda helper 与 synthetic 桥）；新增 static 可为任意访问级别。接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；整批原子提交。其他 Android 版本自动停用并报告原因，运行时探测仍须通过。
-
-新增 native/`<clinit>`、不安全的继承方法遮蔽或新 default 冲突返回 63。新增 public abstract 要求所有已加载具体实现类均可合法分派，缺少实现或分派探测不可用时也返回 63。删除／改签名 default/abstract 返回 67；字段变化 64、方法修饰符变化 71、父接口变化 66。已有实例和未提交 DEX 的实现类也获得新 default。涉及 lambda 变化时，热重载端须先追加新类，再将发生变化的已有合成类、实现类 bridge 与接口同批提交。无共同批次接口祖先却共享实现类的两个接口，以及接口重建组之外的实现类父类同批结构变化，以 66 拒绝；Proxy 实现类、boot 接口和 pointer-id 标记以 79 拒绝；`interfaceRuntime` 为 `unavailable` 或 `disabled: 原因` 时，接口目标以 98 拒绝。
-
-即使只修改接口方法体，也会重新分配所有实现类及其子类的实例；兼容字段值保留。
-
-接入时可读取 `DcevmRuntime.capabilities()` 查看探测状态，读取本身不触发探测。`interfaceRuntime` 的 `unavailable` 表示接口运行时不可用，`disabled: 原因` 表示已停用，`unverified: …` 表示尚未完成事务内探测，`verified: …` 表示探测已通过。首次接口事务完成运行时探测前，`interfaceRedefinition` 为 false；新增 abstract 的分派探测由 `interfaceAbstractDispatch` 单独报告：尚待相关事务探测时为 `unverified: …`，也可为 `unavailable`（可附原因）、`verified: …` 或 `rejected: 原因`；后者表示分派探测或所需服务检查未通过，新增 abstract 以 63 拒绝。接口运行时与分派探测均通过、必要链接错误服务可用之前，`interfaceAbstractMethodAddition` 为 false。`unverified` 不等于不支持，不应据此拦截首次事务；最终以具体事务结果和 `lastRejection` 为准。完整范围与错误语义见[能力限制](docs/LIMITATIONS.md#接口重定义)。
+接口目标在 Android 13–16 / API 33–36 上支持 default/static/private 方法体更新、新增 public abstract/default/static 与 private 实例方法，以及 static/private 方法的删除或改签名；可与相关实现类、子类或无关类原子提交。每次事务仍会检查支持条件；即使只改方法体也会重建受影响实例并保留兼容字段值。详见[接口重定义](docs/LIMITATIONS.md#接口重定义)。
 
 ## 快速开始
 
@@ -92,7 +83,7 @@ DcevmRuntime.initialize(context);
 
 该方法加载 `libartdcevm.so`、附加增强 Agent 并接管标准 JVMTI 入口。同一进程中初始化成功后重复调用直接返回。
 
-`DcevmRuntime.capabilities()` 返回 `JSONObject`，包含当前支持的变化类别、诊断信息和最近一次拒绝的原因。
+`DcevmRuntime.capabilities()` 返回诊断快照；提交与错误处理遵循下文的统一契约。
 
 ### 3. 附加自己的 JVMTI Agent
 
@@ -140,45 +131,23 @@ definition.class_bytes = dex;
 
 jvmtiError error = jvmti->RedefineClasses(1, &definition);
 if (error != JVMTI_ERROR_NONE) {
-    // 记录错误码并处理失败，不将此次请求视为已生效。
+    // 将错误码交给调用方，并读取 lastRejection（见下文）；整批未生效。
 }
 ```
 
-多个相互依赖的类应组成同一个 `jvmtiClassDefinition[]`，一次提交完整批次。调用期间需保持类引用和 DEX 缓冲区有效。示例应用的 [补丁源码](fixtures) 与 [DEX 构建脚本](tools/build-fixtures.py) 展示了测试补丁的生成方式。
+多个相互依赖的类应组成同一个 `jvmtiClassDefinition[]`，一次提交完整批次。调用期间需保持类引用和 DEX 缓冲区有效。新类与新 lambda 的合成类须由调用方先提供给加载器，具体顺序见[提供新类](docs/LIMITATIONS.md#提供新类)。
 
-### 5. 新增类
+## 错误处理
 
-`RedefineClasses` 只替换已加载的类。补丁中 APK 没有的类（新类，以及新 lambda 等合成类）由工具经类加载器提供，本库不定义新类，这与 Java 上的 DCEVM 和热重载工具的分工相同。工具对一次更新按以下顺序处理：
+初始化成功后，**直接提交标准 `RedefineClasses`**。返回 `0`（`JVMTI_ERROR_NONE`）表示成功；非零时读取返回错误码（可用 JVMTI `GetErrorName` 取得名称）和 `lastRejection`，不要将失败请求视为已生效：
 
-1. 每个类各编成一个 DEX（D8 `--file-per-class` 会把新 lambda 的合成类单独输出）。
-2. 用 `Class.forName(name, false, 应用类加载器)` 分类：找得到的是已有类，尚未使用过的已有类也会因此加载，之后才能重定义；找不到的是新类。
-3. 把新类打成一个 jar 并设为只读，再用 ART 的 JVMTI 扩展 `com.android.art.classloader.add_to_dex_class_loader` 把它追加到应用类加载器（`BaseDexClassLoader`）的路径末尾。Android 14 起，目标 SDK 为 34 及以上的应用不能加载可写的 DEX 文件。
-4. 用一次 `RedefineClasses` 提交全部已有类。新定义引用的追加类，包括被重定义类的新子类，由本库在事务开始前加载。
-
-追加只能加在加载器路径末尾，无法撤销，也不会覆盖已加载的类；追加过的类再次修改时，按已有类重定义。新类的静态初始化器在首次使用时执行，被重定义类的静态初始化器不会重新执行。示例实现见 [HotReloadTool.java](app/src/debug/java/com/github/ytlog/artdcevm/testing/HotReloadTool.java)。
-
-## 使用注意
-
-- 对象新增字段初值为零或 `null`；新建对象仍按新定义执行构造器。字段类型或 static / 实例形式变化按旧成员退役、新成员创建处理。
-- 删除或改签名的成员退役后，旧引用再访问会抛出 `NoSuchMethodError`、`NoSuchFieldError` 等异常；已在执行的旧方法帧继续执行旧方法体。业务代码需处理这些语义变化。
-- 方法保持原有的调用方式：在 static 与实例之间切换、实例方法改为 private，或把删除的方法以另一种形式加回，都会被拒绝，因为已校验的调用方仍会按旧方式调用它。
-- 移除接口或让类失去原有父类型的继承变化会被拒绝。已加载子类覆写将变为 final 的方法、自身仍有实例的类改为 abstract 等冲突，也会导致事务拒绝。
-- 结构变化会遍历堆迁移实例、去优化所有线程帧并清空 JIT 代码，耗时随堆大小增加，提交后需要重新预热。
-- `Unsafe`、`Atomic*FieldUpdater` 等缓存的字段偏移在实例布局变化后失效。
-- `RetransformClasses` 不属于增强范围。补丁分发、签名校验、访问控制和发布系统需由调用方实现。
-
-完整的语义说明见 [能力限制](docs/LIMITATIONS.md)。
-
-## 示例与验证
-
-```sh
-# 构建示例 APK 后，在连接的 arm64 设备上运行完整设备回归
-python3 tools/run-device-tests.py --serial DEVICE
+```java
+// 在调用方的 Agent 返回非零错误码后读取。
+String reason = DcevmRuntime.capabilities().optString("lastRejection", "");
 ```
 
-测试脚本安装并操作示例应用 `dev.artdcevm.lab`，会结束其旧进程并从初始类定义开始运行。原始报告保存到本地 `build/evidence/`，不随仓库发布。
+`lastRejection` 描述最近一次标准入口事务的失败原因，成功时清空。98 表示接口运行时不可用，可提示重启应用进程后重试；其他拒绝规则与错误码见 [LIMITATIONS.md](docs/LIMITATIONS.md)。
 
-## 文档
+**`capabilities()` 只用于诊断，不作为提交前的准入判断。不要根据其中的布尔值或状态字符串拦截提交；以实际事务的错误码与 `lastRejection` 处理结果。**
 
-- [引擎方案](docs/STRUCTURAL_REDEFINE_ENGINE.md)
-- [能力限制与语义细节](docs/LIMITATIONS.md)
+机制见[引擎设计](docs/STRUCTURAL_REDEFINE_ENGINE.md)，公开验证范围见[兼容性结论](docs/COMPATIBILITY.md)，构建与测试命令见[测试指南](docs/TESTING.md)。

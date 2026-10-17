@@ -1,0 +1,50 @@
+# 兼容性结论
+
+[English](COMPATIBILITY.en.md) | 中文
+
+本页汇总已有验证记录中可以公开的精简结论，不是逐次报告，也不表示当前提交已在所有设备上重新测试。技术语义与拒绝规则见 [LIMITATIONS.md](LIMITATIONS.md)，执行方法见 [TESTING.md](TESTING.md)，实现不变式见[引擎设计](STRUCTURAL_REDEFINE_ENGINE.md)。
+
+## 证据范围
+
+结论限于已测 arm64 设备及其 ART 配置，不能推广到所有 OEM 或 ART Mainline 模块。平台 API 不等于 ART 模块源码版本；源码声明、离线符号和编译通过不能代替设备执行。普通类结果不构成接口目标的兼容性证据。
+
+调用方仍应在初始化后直接提交 `RedefineClasses`：`0` 表示成功，非零时读取错误码与 `lastRejection`。兼容性表和仅供诊断的 `capabilities()` 都不作为提交前的准入判断。
+
+## 平台覆盖
+
+下表的“通过”均覆盖普通模式与 CheckJNI；“接口”包括完整接口套件、声明检查和失败恢复。收集器列只记录已有明确结论，不从默认配置、GC 次数或零次标记读取推断额外覆盖。
+
+| Android / API | 普通类与 Thread | 接口目标 | 收集器证据与边界 |
+| --- | --- | --- | --- |
+| 11 / 30 | 普通类完整场景、Thread 拒绝与恢复检查通过 | 未启用；固定声明已准备 | 不据普通类结果推断接口 scope/holder 或失败清理可用 |
+| 12 / 31 | 普通类完整场景、Thread 拒绝与恢复检查通过 | 未启用；固定声明已准备 | 同上 |
+| 12L / 32 | 普通类完整场景、Thread 拒绝与恢复检查通过 | 未启用；沿用 12 的准备声明 | 同上 |
+| 13 / 33 | 通过 | 完整套件与失败恢复通过；已启用 | 已测配置；本表不额外声明 CC/CMC 双配置覆盖 |
+| 14 / 34 | 通过 | 完整套件与失败恢复通过；已启用 | CC 和 CMC 分别覆盖；Compose `interface abstract batch` 通过 |
+| 15 / 35 | 通过 | 完整套件与失败恢复通过；已启用 | CC 和 CMC 分别覆盖；Compose `interface abstract batch` 通过 |
+| 16 / 36 | 通过 | 完整套件与失败恢复通过；已启用 | 已测配置；本表不额外声明 CC/CMC 双配置覆盖 |
+| 17 / 37 | 既有普通类第一阶段在两种收集器、两种 JNI 模式下通过；修正压力夹具后待复测 | 未启用；固定声明已准备 | CC 与分代 CMC 已运行；CC 未取得标记重叠证据 |
+
+API 34 的既有完整回归覆盖每次 146 个场景及旧式 HandleScope/holder；API 35 覆盖相同完整场景、16 字节 HandleScope 与三个 holder 标志。其抽象方法验收分别保留命名链接错误服务要求与使用已链接分派数组的配置；这里不改变运行时登记表。
+
+## 已覆盖的场景
+
+- 普通类：字段与方法增删/恢复、类型与签名、native/Java 和 abstract/具体实现、修饰符、父类放宽、旧实例值与引用身份、新字段零值、缓存引用和后续 GC；Thread 拒绝后旧定义仍可用并可执行后续事务。
+- 接口：顶层与嵌套接口的方法体与受支持成员变化；父子接口、多个组、同批实现类/子类/无关类；copied default、miranda、子接口优先、真实 bridge、lambda 与大实现组。`InterfaceEvolutionFixture`、`interfacelambda`、`interface-stress` 和 `interface-stress-add` 提供相应覆盖；压力样例含 200 个实现类。
+- 抽象方法：更具体的 abstract 遮住远处 default、移除最后实现、缺 bridge、多加载器身份、后一组拒绝及原子回滚；失败前后检查缓存反射、MethodHandle、JNI ID 和已预热字节码，修正或撤回后可重试。
+- 失败恢复：真实 DEX 校验错误（62）、链接后/分配后/实例分配/映射检查失败、Native 作用域构造失败、Thread/HandleScope/holder 拒绝，以及晚加载实现类/子类的重试与耗尽。失败后继续检查父类和接口事务、旧实例与 GC；API 33 关闭清理的对照 APK 在失败测试中崩溃，支持私有替换类必须清理的设计要求。
+- JNI ID：API 33 已复现 pointer 模式的缓存调用风险，并验证方法接口与仅字段接口在 pointer 模式下拒绝 79、在 index 模式下成功的对照；拒绝后旧 JNI 调用、GC 和普通类事务仍可用。这个保护不构成 API 37 接口验收。
+
+## 编译器样例
+
+Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的已有编译检查表明：接口 default 中追加 lambda 会生成 private static 实现方法、public static synthetic `$r8$lambda$` 桥与合成类；插入 lambda 还可能改签名或删除旧桥。新增接口方法体也可能生成 `DefaultImpls` 与实现类 bridge。该结论限于此编译样例；新类提供、同批提交与旧闭包语义见[接口 lambda 设计](STRUCTURAL_REDEFINE_ENGINE.md#接口-default-中的-lambda)。
+
+## 尚未证明的范围
+
+- Android 11、12/12L 的完整接口事务、实际根遍历、scope/holder 与失败清理仍待设备验证；Native JNI 数组预分配和准确签名适配只移除了相应准备障碍。
+- Android 17 在正确 JNI ID 模式下的完整接口套件、abort 恢复和 Compose 尚未完成，继续保持接口未启用。
+- API 37 旧压力夹具的 `System.gc()` 请求可能合并，总 GC 数还包含 ART 事务自身的 GC，不能证明独立后台压力或 CC 标记重叠。改用直接 GC 请求并核对事务前增量的夹具尚待该版本真机执行；已有零重叠结果不能据此归因为 Thread 偏移错误。
+- GC 完成日志不证明标记区间或对象转发；CMC 的 CC 标记读取计数为零也不构成失败或 CMC 覆盖证据。不能由压力运行推断每次事务都与标记重叠。
+- 注入分配失败不证明真实 Java/native 内存耗尽可以恢复；其他 ART 模块更新、未测 OEM 与版本仍需独立验证。Compose 的一个已通过场景不代表完整应用或所有热重载行为。
+
+原始日志、APK 哈希、逐设备报告与逐次验证记录只保存在本地忽略目录。公开结论不包含设备标识、连接信息或本机路径；更新结论前按[测试指南](TESTING.md#新增版本的验证顺序)取得对应证据。
