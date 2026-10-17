@@ -96,7 +96,9 @@ def main():
     (out / 'compiler-raw.log').write_text(result.stdout + result.stderr)
     if result.returncode:
         raise ValueError('Prepared profile compilation failed; see ignored compiler evidence')
-    engine = (CPP / 'platform/common/interface_redefinition.cc').read_text()
+    engine = '\n'.join((CPP / 'platform/common' / name).read_text() for name in (
+        'interface_redefinition.cc', 'interface_admission.cc', 'interface_group_snapshot.cc',
+        'interface_allocation.cc', 'interface_redefinition_internal.h'))
     if re.search(r'#include\s+"[^"\n]*/android\d+/', engine) or re.search(r'android\d+::', engine):
         raise ValueError('Shared interface implementation must not reference version-specific types')
 

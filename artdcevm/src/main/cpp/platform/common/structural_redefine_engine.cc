@@ -44,7 +44,6 @@ struct ProcessCapabilities {
   bool retirement = false;
   bool field_retirement = false;
   bool superclass_change = false;
-  bool interface_runtime = false;
   bool instance_check = false;
   bool subclass_watch = false;
 };
@@ -85,6 +84,8 @@ struct Process {
 
   member_retirement::ProcessOwner retirement;
   interface_redefinition::ProcessOwner interfaces;
+  interface_redefinition::Backend* interface_backend = nullptr;
+  std::string interface_runtime = "unavailable";
 };
 // Serializes first construction and reports before Install creates process state.
 std::mutex installation_mutex;
@@ -262,7 +263,7 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                             transaction::Context* context) {
   const jvmtiError result = process->structural_entry(env, count, definitions);
-  if (std::string reason = interface_redefinition::TakeRejection(); !reason.empty()) Diagnose(reason, true);
+  if (std::string reason = process->interface_backend ? process->interface_backend->TakeRejection() : std::string{}; !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
   if (std::string late = std::exchange(context->rejection, {}); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
@@ -303,7 +304,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
   runtime_thread::Probe(jni);
-  interface_redefinition::Begin(jni, process->snapshot_env, count, definitions);
+  if (process->interface_backend) process->interface_backend->Begin(jni, process->snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
@@ -311,8 +312,8 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (definitions[i].klass &&
         process->snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
         (access & evolution::kAccInterface)) {
-      if (process->capabilities.interface_runtime && interface_redefinition::Available()) continue;
-      Diagnose(Signature(definitions[i].klass) + ": " + interface_redefinition::RuntimeState(), true);
+      if (process->interface_backend && process->interface_backend->Available()) continue;
+      Diagnose(Signature(definitions[i].klass) + ": " + (process->interface_backend ? process->interface_backend->RuntimeState() : process->interface_runtime), true);
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
     jboolean modifiable = JNI_TRUE;
@@ -347,7 +348,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     result = hierarchy_snapshot::Prepare(process->snapshot_env, jni, definitions[i], &snapshot,
                                           &batch.type_roots, &error);
     if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
-    interface_redefinition::Describe(definitions[i].klass, snapshot.live);
+    if (process->interface_backend) process->interface_backend->Describe(definitions[i].klass, snapshot.live);
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
   // ART recreates a target's subclasses under its new class and treats each
@@ -371,7 +372,8 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   std::string interface_error;
   const uint64_t loaded_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - loaded_start).count();
-  result = interface_redefinition::Capture(loaded.count, loaded.classes, loaded_ns, &interface_error);
+  result = process->interface_backend ?
+      process->interface_backend->Capture(loaded.count, loaded.classes, loaded_ns, &interface_error) : JVMTI_ERROR_NONE;
   if (result != JVMTI_ERROR_NONE) {
     Diagnose(interface_error, true);
     return result;
@@ -385,7 +387,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   for (auto& [klass, snapshot] : batch.classes) {
     std::string error;
     if (snapshot.live.access & evolution::kAccInterface) {
-      const std::vector<jclass>* group = interface_redefinition::GroupTypes(klass);
+      const std::vector<jclass>* group = process->interface_backend ? process->interface_backend->GroupTypes(klass) : nullptr;
       if (!group) {
         Diagnose(snapshot.live.descriptor + ": interface subtype group was not captured", true);
         return JVMTI_ERROR_INTERNAL;
@@ -493,12 +495,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
-      interface_dispatch::Available(*thread, self, interface_redefinition::AbstractLinkErrorsAvailable());
+      interface_dispatch::Available(*thread, self, (process->interface_backend && process->interface_backend->AbstractLinkErrorsAvailable()));
   if (!abilities.interface_abstract_methods)
     abilities.interface_abstract_unavailable_reason = interface_dispatch::State();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
-  const bool interface_target = interface_redefinition::IsTarget(self);
+  const bool interface_target = (process->interface_backend && process->interface_backend->IsTarget(self));
   if (interface_target) {
     if (decision.error == JVMTI_ERROR_NONE && !abilities.member_mapping) {
       decision.error = JVMTI_ERROR_NOT_AVAILABLE;
@@ -509,7 +511,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   if (decision.error == JVMTI_ERROR_NONE &&
       (decision.methods_structural || decision.fields_structural) &&
-      interface_redefinition::SharesImplementationGroup(self)) {
+      (process->interface_backend && process->interface_backend->SharesImplementationGroup(self))) {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
     decision.reason = "structural class target overlaps the interface implementation group";
   }
@@ -531,7 +533,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
   requirements.redirect_verification =
-      decision.superclass_changed || interface_redefinition::IsAffected(self);
+      decision.superclass_changed || (process->interface_backend && process->interface_backend->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;
@@ -605,7 +607,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   const auto named = [&](const char* reason) {
     return (target ? target->descriptor + ": " : "") + reason;
   };
-  if (ARTDCEVM_FAULT_IF(3, interface_redefinition::IsTarget(self) && data->Classes(true)))
+  if (ARTDCEVM_FAULT_IF(3, (process->interface_backend && process->interface_backend->IsTarget(self)) && data->Classes(true)))
     return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
   if (context && context->subclass_loaded && context->subclass_loaded->load())
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
@@ -614,7 +616,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (!reinterpret_cast<Function>(process->original_instances)(self, data)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
-    if (ARTDCEVM_FAULT_IF(4, interface_redefinition::IsTarget(self) && data->Classes(true))) {
+    if (ARTDCEVM_FAULT_IF(4, (process->interface_backend && process->interface_backend->IsTarget(self)) && data->Classes(true))) {
       fault_injection::CorruptHolder(*data);
     }
   )
@@ -630,7 +632,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
           named("the new superclass was not applied"));
     std::string rejection;
-    if (!interface_dispatch::Check(*thread, self, *data, &rejection) ||
+    if ((process->interface_backend && !process->interface_backend->Check(*thread, self, *data, &rejection)) ||
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));
@@ -755,8 +757,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   if (mapping_ready) mapping_ready = member_retirement::Prepare({process->layout_services.find_instance_field}, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = member_mapping::Prepare(process->layout_services, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = verification_redirect::Prepare(
-      {interface_redefinition::IsAffected, interface_redefinition::VerificationClass,
-       interface_redefinition::VerificationError, interface_redefinition::ObserveClassLinker},
+      {},
       &retirement_hooks, &failure);
   if (mapping_ready) {
     struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
@@ -789,9 +790,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     class_layout::Report("unavailable: " + failure);
   }
   if (!process->interfaces) process->interfaces = interface_redefinition::CreateProcess();
-  interface_redefinition::Prepare({prepared.superclass_change, prepared.runtime_thread,
-      process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note);
-  prepared.interface_runtime = interface_redefinition::Available();
+  process->interface_backend = interface_redefinition::Prepare(*process->interfaces,
+      {prepared.superclass_change, prepared.runtime_thread,
+      process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note, &process->interface_runtime);
+  verification_redirect::BindInterfaceBackend(process->interface_backend);
   const size_t retirement_hook_count = replacements.size();
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
@@ -828,9 +830,11 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     retirement_note = "method retirement unavailable: " + failure;
     class_layout::Prepare({});
     class_layout::Report("unavailable: " + failure);
-    interface_redefinition::Prepare({false, prepared.runtime_thread,
+    process->interface_backend = interface_redefinition::Prepare(*process->interfaces,
+        {false, prepared.runtime_thread,
         process->layout_services.mirror_class, process->layout_services.find_instance_field},
-        &replacements, &interface_note);
+        &replacements, &interface_note, &process->interface_runtime);
+    verification_redirect::BindInterfaceBackend(process->interface_backend);
   }
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
@@ -868,9 +872,9 @@ std::string Capabilities() {
   const bool fields = methods && state.capabilities.field_retirement;
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
-  const auto interface_timing = interface_redefinition::LastTiming();
+  const auto interface_timing = state.interface_backend ? state.interface_backend->LastTiming() : interface_redefinition::Timing{};
   // Both capability fields describe the same probe snapshot, including disablement.
-  const std::string interface_state = interface_redefinition::RuntimeState();
+  const std::string interface_state = state.interface_backend ? state.interface_backend->RuntimeState() : state.interface_runtime;
   const std::string dispatch_state = interface_dispatch::State();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
@@ -886,7 +890,7 @@ std::string Capabilities() {
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
       ",\"interfaceAbstractMethodAddition\":" +
           (state.installed && interface_state.rfind("verified: ", 0) == 0 &&
-           dispatch_state.rfind("verified: ", 0) == 0 && interface_redefinition::AbstractLinkErrorsAvailable()
+           dispatch_state.rfind("verified: ", 0) == 0 && (state.interface_backend && state.interface_backend->AbstractLinkErrorsAvailable())
                ? "true" : "false") +
       ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +

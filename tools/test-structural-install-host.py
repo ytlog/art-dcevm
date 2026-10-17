@@ -3,10 +3,14 @@
 
 No ART object, hook trampoline or collector executes on the host. Failures cover
 installation ordering, rollback, optional-retirement fallback and diagnostics.
+The contract fixture records the pre-refactor capability JSON and hook/rollback
+order for these fake services, including an unsupported interface runtime.
 A routed Native transaction also checks retention after nested snapshot
 invalidation; its ART transaction entry is a fake.
 """
 from pathlib import Path
+import hashlib
+import json
 import runpy
 import shutil
 import subprocess
@@ -60,7 +64,7 @@ jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*
   }
   return JVMTI_ERROR_NONE;
 }
-extern "C" int android_get_device_api_level() { return 33; }
+extern "C" int android_get_device_api_level() { return mode == 5 ? 32 : 33; }
 extern "C" int __android_log_write(int, const char*, const char*) { return 0; }
 extern "C" int __android_log_print(int, const char*, const char*, ...) { return 0; }
 void* Current() { return nullptr; }
@@ -88,6 +92,14 @@ extern "C" int shadowhook_get_errno() { return 1; }
 extern "C" const char* shadowhook_to_errmsg(int) { return "injected hook error"; }
 extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
   ++hook_calls;
+  if (target == reinterpret_cast<void*>(Redefine)) std::cout << "HOOK public-redefine\n";
+  else {
+    bool found = false;
+    for (const auto& [name, address] : addresses) {
+      if (&address == target) { std::cout << "HOOK " << name << '\n'; found = true; break; }
+    }
+    Require(found, "Hook target was not resolved by name");
+  }
   if (mode == 1 && hook_calls == 2) return nullptr;
   *original = target;
   if (target == reinterpret_cast<void*>(Redefine)) {
@@ -98,6 +110,7 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
   return token;
 }
 extern "C" int shadowhook_unhook(void* token) {
+  std::cout << "UNHOOK " << reinterpret_cast<uintptr_t>(token) << '\n';
   Require(active.erase(token) == 1, "Rollback used an unknown token");
   return 0;
 }
@@ -198,6 +211,7 @@ int main(int argc, char** argv) {
     tooling.GetClassStatus = Status; tooling.Deallocate = Deallocate;
     tooling.SetEventNotificationMode = Events;
     const auto cold = structural_redefine::Capabilities();
+    std::cout << "COLD " << cold << '\n';
     Require(cold.find("\"installed\":false") != std::string::npos &&
             cold.find("engine not installed") != std::string::npos,
             "Cold capability report requires constructed hook state");
@@ -211,10 +225,13 @@ int main(int argc, char** argv) {
       Require(result == JVMTI_ERROR_NONE, "Optional retirement failure changed initialization error");
       const auto caps = structural_redefine::Capabilities();
       Require(caps.find("\"installed\":true") != std::string::npos, "Base engine was not installed");
-      if (mode == 0 || mode == 4) {
+      if (mode == 0 || mode == 4 || mode == 5) {
         Require(set_calls == 1 && hooks_at_set == hook_calls && active.size() > 4,
                 "JNI installation was not the final hook operation");
         Require(caps.find("\"methodDeletion\":true") != std::string::npos, "Retirement disabled");
+        Require(caps.find(mode == 5 ? "disabled: interface redefinition is device-verified only on "
+                                    : "unverified: interface runtime declarations") != std::string::npos,
+                "Optional interface backend changed the runtime report");
         Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,
                 "Idempotent Install changed the JNI table twice");
       } else {
@@ -238,6 +255,7 @@ int main(int argc, char** argv) {
       Require(global_refs[child_type] == 0, "Native route leaked the descendant root");
       Require(child_method_reads == 0, "A surviving snapshot collected facts from the invalidated target subtree");
     }
+    std::cout << "CAPABILITIES " << structural_redefine::Capabilities() << '\n';
     std::cout << "Installer case " << mode << " PASS\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
@@ -289,12 +307,21 @@ def main():
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
-        for case in range(5):
+        contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
+        for case in range(6):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError(f'Installer case {case} failed; inspect ignored evidence')
-            print(result.stdout.strip())
+            lines = result.stdout.splitlines()
+            contract = {
+                'cold': json.loads(next(line[5:] for line in lines if line.startswith('COLD '))),
+                'capabilities': json.loads(next(line[13:] for line in lines if line.startswith('CAPABILITIES '))),
+                'hooksSha256': hashlib.sha256('\n'.join(line[5:] for line in lines if line.startswith('HOOK ')).encode()).hexdigest(),
+                'unhooks': [int(line[7:]) for line in lines if line.startswith('UNHOOK ')]}
+            if contract != contracts[str(case)]:
+                raise RuntimeError(f'Installer case {case} changed capabilities, hook order or rollback order')
+            print(next(line for line in lines if line.startswith('Installer case ')))
         print('Evidence: ' + str(evidence.relative_to(ROOT)))
 
 

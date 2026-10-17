@@ -1,4 +1,5 @@
 #include "platform/common/verification_redirect.h"
+#include "platform/common/interface_redefinition.h"
 
 #include <string_view>
 #include <utility>
@@ -33,11 +34,11 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
   const transaction::Requirements* target = context ? context->Find(self) : nullptr;
   if (!target || !target->redirect_verification)
     return reinterpret_cast<Function>(original_check_verification)(self, data);
-  const Verification scope{&data, target->descriptor, art.is_affected(self)};
+  const Verification scope{&data, target->descriptor, (art.interfaces && art.interfaces->IsAffected(self))};
   const Verification* previous = std::exchange(context->verifying, &scope);
   const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
   context->verifying = previous;
-  if (const auto error = art.verification_error(); error != JVMTI_ERROR_NONE) {
+  if (const auto error = (art.interfaces ? art.interfaces->VerificationError() : JVMTI_ERROR_NONE); error != JVMTI_ERROR_NONE) {
     self->driver->result = error;
     return false;
   }
@@ -49,18 +50,18 @@ void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
   const Verification* verifying = context ? context->verifying : nullptr;
   if (!verifying) return nullptr;
   if (verifying->interface_group)
-    return art.verification_class(linker, descriptor, loader);
+    return art.interfaces->VerificationClass(linker, descriptor, loader);
   return descriptor == verifying->descriptor ? verifying->data->NewClassObject() : nullptr;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
-  art.observe_class_linker(linker);
+  if (art.interfaces) art.interfaces->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
   return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) noexcept {
-  art.observe_class_linker(linker);
+  if (art.interfaces) art.interfaces->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
   return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
@@ -91,6 +92,8 @@ bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* fa
   }
   return true;
 }
+
+void BindInterfaceBackend(interface_redefinition::Backend* backend) { art.interfaces = backend; }
 
 bool ResolvesClasses() { return resolves_classes; }
 }  // namespace artdcevm::verification_redirect

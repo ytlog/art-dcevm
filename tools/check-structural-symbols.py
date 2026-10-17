@@ -20,9 +20,12 @@ CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/structural_redefine_sym
 INTERFACE_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/interface_redefinition_symbols.h'
 RUNTIME_CATALOG = ROOT / 'artdcevm/src/main/cpp/platform/symbols/runtime_thread_symbols.h'
 RUNTIME_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/runtime_thread.cc'
-INTERFACE_IMPLEMENTATION = ROOT / 'artdcevm/src/main/cpp/platform/common/interface_redefinition.cc'
+COMMON = ROOT / 'artdcevm/src/main/cpp/platform/common'
+INTERFACE_IMPLEMENTATIONS = tuple(COMMON / name for name in (
+    'interface_redefinition.cc', 'interface_admission.cc',
+    'interface_group_snapshot.cc', 'interface_allocation.cc', 'interface_redefinition_internal.h'))
 # Every engine module may name structural services.
-STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(INTERFACE_IMPLEMENTATION.parent.glob('*.cc')))
+STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'
@@ -149,7 +152,7 @@ def main(argv=None):
         # Report each exact name independently; they are not universal requirements.
         if CATALOG.parent == INTERFACE_CATALOG.parent and INTERFACE_CATALOG.exists():
             interface_catalog, interface_hash, implementation_hash = read_active_catalog(
-                INTERFACE_CATALOG, INTERFACE_IMPLEMENTATION)
+                INTERFACE_CATALOG, INTERFACE_IMPLEMENTATIONS)
             optional = collect_report(args.runtime_lib, interface_catalog, interface_hash)
             optional['implementationSha256'] = implementation_hash
             report['interfaceServices'] = optional

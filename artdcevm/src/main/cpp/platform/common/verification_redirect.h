@@ -13,14 +13,11 @@
 // descriptor with the new class object, which the holder keeps rooted. For an
 // interface group, interface_redefinition answers with the group's
 // replacements instead.
+namespace artdcevm::interface_redefinition { struct Backend; }
 namespace artdcevm::verification_redirect {
 
-struct Services {
-  bool (*is_affected)(abi::arm64::ClassRedefinitionPrefix*);
-  void* (*verification_class)(void*, std::string_view, abi::arm64::Handle) noexcept;
-  jvmtiError (*verification_error)() noexcept;
-  void (*observe_class_linker)(void*);
-};
+struct Services { interface_redefinition::Backend* interfaces = nullptr; };
+void BindInterfaceBackend(interface_redefinition::Backend*);
 // Resolve the CheckVerification and FindClass hooks by name. False with
 // `failure` when CheckVerification is missing; `hooks` is then unchanged.
 bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure);
